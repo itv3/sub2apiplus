@@ -6,6 +6,7 @@ import copy
 import hashlib
 import json
 import unittest
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -330,12 +331,20 @@ def validate_transition(document: dict[str, Any]) -> None:
         predecessors = EXPECTED_PREDECESSORS.get(path_value, [])
         expected_change = "modified" if predecessors else "added"
         current = ROOT / path_value
+        current_digest = sha256(current.read_bytes()) if current.is_file() else ""
         if (
             entry["change"] != expected_change
             or entry["predecessor_sha256s"] != predecessors
             or current.is_symlink()
             or not current.is_file()
-            or entry["to_sha256"] != sha256(current.read_bytes())
+            or (
+                entry["to_sha256"] != current_digest
+                and not r9_recovery_transition_supersedes(
+                    path_value,
+                    entry["to_sha256"],
+                    current_digest,
+                )
+            )
             or not isinstance(entry["reason"], str)
             or not entry["reason"].strip()
         ):
@@ -350,24 +359,65 @@ def validate_transition(document: dict[str, Any]) -> None:
         raise ValueError("r4 候选 Catalog 后继覆盖了历史 content-addressed ReleaseGraph")
 
 
+def r9_recovery_transition_supersedes(
+    path: str,
+    prior_digest: str,
+    current_digest: str,
+) -> bool:
+    """延迟加载 r9 恢复模块，避免候选门禁模块初始化形成循环依赖。"""
+
+    from tools.official_client_capture.tests import (
+        test_codex_01491_r9_contamination_recovery_transition as r9_recovery,
+    )
+
+    return r9_recovery.transition_supersedes(path, prior_digest, current_digest)
+
+
+@lru_cache(maxsize=None)
 def transition_chain_supersedes(
     path: str,
     prior_digest: str,
     current_digest: str,
 ) -> bool:
-    """只承认 r4 收据中的精确 path/from/to 边。"""
+    """重放 r4、模型目录 H1 与 r9 污染恢复的追加式摘要链。"""
 
     try:
+        from tools.official_client_capture.tests import (
+            test_codex_01491_r9_contamination_recovery_transition as r9_recovery,
+        )
+
         document = load_transition()
         validate_transition(document)
+        h1_document = r9_recovery.load_h1_transition()
+        recovery_document = r9_recovery.load_transition()
+        r9_recovery.validate_transition(recovery_document)
     except (OSError, ValueError, json.JSONDecodeError):
         return False
-    return any(
-        entry.get("path") == path
-        and prior_digest in entry.get("predecessor_sha256s", [])
-        and entry.get("to_sha256") == current_digest
-        for entry in document["transitions"]
-    )
+
+    edges: dict[str, list[str]] = {}
+    for receipt in (document, h1_document, recovery_document):
+        for entry in receipt["transitions"]:
+            if entry.get("path") != path:
+                continue
+            target = entry.get("to_sha256")
+            predecessors = entry.get("predecessor_sha256s")
+            if not isinstance(target, str) or not isinstance(predecessors, list):
+                return False
+            for predecessor in predecessors:
+                if isinstance(predecessor, str):
+                    edges.setdefault(predecessor, []).append(target)
+
+    queue = [prior_digest]
+    visited: set[str] = set()
+    while queue:
+        digest = queue.pop(0)
+        if digest == current_digest:
+            return True
+        if digest in visited:
+            continue
+        visited.add(digest)
+        queue.extend(edges.get(digest, []))
+    return False
 
 
 class Codex01491R4CatalogSuccessorTransitionTests(unittest.TestCase):

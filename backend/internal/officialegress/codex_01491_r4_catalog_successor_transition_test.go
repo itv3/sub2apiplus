@@ -243,7 +243,13 @@ func validateCodex01491R4CatalogSuccessorTransition(
 			return errors.New("Codex 0.149.1 r4 Catalog 后继 transition 条目非法：" + expectedPath)
 		}
 		current, readErr := codex01491RepoFile(entry.Path)
-		if readErr != nil || upstreamMergeFrameworkDigest(current) != entry.ToSHA256 {
+		currentDigest := upstreamMergeFrameworkDigest(current)
+		if readErr != nil || (currentDigest != entry.ToSHA256 &&
+			!codex01491R9ContaminationRecoverySupersedes(
+				entry.Path,
+				entry.ToSHA256,
+				currentDigest,
+			)) {
 			return errors.New("Codex 0.149.1 r4 Catalog 后继 transition 当前摘要不一致：" + entry.Path)
 		}
 		paths = append(paths, entry.Path)
@@ -259,7 +265,7 @@ func validateCodex01491R4CatalogSuccessorTransition(
 	return nil
 }
 
-// codex01491R4CatalogSuccessorSupersedes 只承认 r4 收据中的精确 path/from/to 边。
+// codex01491R4CatalogSuccessorSupersedes 重放 r4 与 r9 污染恢复的追加式摘要链。
 func codex01491R4CatalogSuccessorSupersedes(
 	path string,
 	priorDigest string,
@@ -269,11 +275,42 @@ func codex01491R4CatalogSuccessorSupersedes(
 	if err != nil {
 		return false
 	}
-	for _, entry := range receipt.Transitions {
-		if entry.Path == path && entry.ToSHA256 == currentDigest &&
-			slices.Contains(entry.PredecessorSHA256s, priorDigest) {
+	recovery, err := loadCodex01491R9ContaminationRecoveryTransition()
+	if err != nil {
+		return false
+	}
+	h1Transitions, err := loadCodex01491ModelCatalogH1SuccessorTransitions()
+	if err != nil {
+		return false
+	}
+	edges := make(map[string][]string)
+	for _, transitions := range [][]codex01491CandidateSourceTransitionEntry{
+		receipt.Transitions,
+		h1Transitions,
+		recovery.Transitions,
+	} {
+		for _, entry := range transitions {
+			if entry.Path != path {
+				continue
+			}
+			for _, predecessor := range entry.PredecessorSHA256s {
+				edges[predecessor] = append(edges[predecessor], entry.ToSHA256)
+			}
+		}
+	}
+	queue := []string{priorDigest}
+	visited := make(map[string]bool)
+	for len(queue) > 0 {
+		digest := queue[0]
+		queue = queue[1:]
+		if digest == currentDigest {
 			return true
 		}
+		if visited[digest] {
+			continue
+		}
+		visited[digest] = true
+		queue = append(queue, edges[digest]...)
 	}
 	return false
 }

@@ -24,6 +24,34 @@ fi
 run_id_prefix=${RUN_ID_PREFIX:-p0-p2-review-fix-direct-0.1.165-3}
 run_id=${RUN_ID:-"$run_id_prefix-$(date -u +%Y%m%dT%H%M%SZ)"}
 
+for account_id in "$claude_account_id" "$codex_account_id" "$api_key_id"; do
+  if [[ ! $account_id =~ ^[1-9][0-9]*$ ]]; then
+    echo "验收账号与 API Key ID 必须是正整数。" >&2
+    exit 2
+  fi
+done
+
+# 只启用本轮 subjects 实际需要的账号，Codex-only 验收不得触碰 Claude 账号。
+declare -A selected_account_set=()
+for subject in $subjects; do
+  case "$subject" in
+    claude-*) selected_account_set["$claude_account_id"]=1 ;;
+    codex-*) selected_account_set["$codex_account_id"]=1 ;;
+    *)
+      echo "未知主体：$subject" >&2
+      exit 2
+      ;;
+  esac
+done
+mapfile -t selected_account_ids < <(
+  printf '%s\n' "${!selected_account_set[@]}" | sort -n
+)
+if ((${#selected_account_ids[@]} == 0)); then
+  echo "本轮没有可验收主体。" >&2
+  exit 2
+fi
+account_ids_csv=$(IFS=,; printf '%s' "${selected_account_ids[*]}")
+
 db_user=$(
   docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$postgres_container" |
     sed -n 's/^POSTGRES_USER=//p'
@@ -63,6 +91,7 @@ active_subject=""
 direct_started=0
 ingress_started=0
 original_schedulable_state=""
+original_proxy_state=""
 restore_failed=0
 
 stop_pair() {
@@ -96,15 +125,14 @@ restore_environment() {
   restart_service || restore_failed=1
 
   current_schedulable_state=$(
-    db_query "select id || ':' || schedulable::text from accounts where id in ($claude_account_id,$codex_account_id) order by id"
+    db_query "select id || ':' || schedulable::text from accounts where id in ($account_ids_csv) order by id"
   )
   [[ $current_schedulable_state == "$original_schedulable_state" ]] || restore_failed=1
 
   current_proxy_state=$(
-    db_query "select id || ':' || coalesce(proxy_id::text,'NULL') from accounts where id in ($claude_account_id,$codex_account_id) order by id"
+    db_query "select id || ':' || coalesce(proxy_id::text,'NULL') || ':' || coalesce(proxy_fallback_origin_id::text,'NULL') from accounts where id in ($account_ids_csv) order by id"
   )
-  expected_proxy_state=$(printf '%s\n%s' "$claude_account_id:NULL" "$codex_account_id:NULL")
-  [[ $current_proxy_state == "$expected_proxy_state" ]] || restore_failed=1
+  [[ $current_proxy_state == "$original_proxy_state" ]] || restore_failed=1
 
   if [[ $restore_failed != 0 ]]; then
     echo "direct 验收环境恢复失败，请人工检查账号调度状态。" >&2
@@ -117,15 +145,15 @@ restore_environment() {
 trap restore_environment EXIT ERR INT TERM
 
 original_schedulable_state=$(
-  db_query "select id || ':' || schedulable::text from accounts where id in ($claude_account_id,$codex_account_id) order by id"
+  db_query "select id || ':' || schedulable::text from accounts where id in ($account_ids_csv) order by id"
 )
 account_state_count=$(printf '%s\n' "$original_schedulable_state" | awk 'NF { count++ } END { print count + 0 }')
-if [[ $account_state_count != 2 ]]; then
-  echo "未能精确读取两个 OAuth 验收账号的初始调度状态，拒绝继续。" >&2
+if [[ $account_state_count != "${#selected_account_ids[@]}" ]]; then
+  echo "未能精确读取本轮 OAuth 验收账号的初始调度状态，拒绝继续。" >&2
   exit 1
 fi
 
-for account_id in "$claude_account_id" "$codex_account_id"; do
+for account_id in "${selected_account_ids[@]}"; do
   current_proxy=$(db_query "select coalesce(proxy_id::text,'NULL') from accounts where id = $account_id")
   current_fallback=$(db_query "select coalesce(proxy_fallback_origin_id::text,'NULL') from accounts where id = $account_id")
   if [[ $current_proxy != NULL || $current_fallback != NULL ]]; then
@@ -133,6 +161,9 @@ for account_id in "$claude_account_id" "$codex_account_id"; do
     exit 1
   fi
 done
+original_proxy_state=$(
+  db_query "select id || ':' || coalesce(proxy_id::text,'NULL') || ':' || coalesce(proxy_fallback_origin_id::text,'NULL') from accounts where id in ($account_ids_csv) order by id"
+)
 
 api_key=$(db_query "select key from api_keys where id = $api_key_id")
 if [[ -z $api_key ]]; then
@@ -140,8 +171,8 @@ if [[ -z $api_key ]]; then
   exit 1
 fi
 
-# 两个固定 OAuth 验收账号在抓包窗口保持启用，退出钩子按运行前原值精确恢复。
-db_query "update accounts set schedulable = true where id in ($claude_account_id,$codex_account_id)" >/dev/null
+# 只有本轮主体所需 OAuth 账号在抓包窗口保持启用，退出钩子按运行前原值精确恢复。
+db_query "update accounts set schedulable = true where id in ($account_ids_csv)" >/dev/null
 restart_service
 started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 

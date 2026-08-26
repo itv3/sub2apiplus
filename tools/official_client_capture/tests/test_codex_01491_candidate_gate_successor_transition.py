@@ -8,6 +8,7 @@ import json
 import subprocess
 import unittest
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -125,6 +126,7 @@ def commit_blob(path: str) -> bytes | None:
     return result.stdout if result.returncode == 0 else None
 
 
+@lru_cache(maxsize=None)
 def transition_chain_supersedes(
     path: str,
     prior_digest: str,
@@ -132,7 +134,18 @@ def transition_chain_supersedes(
 ) -> bool:
     """只承认候选源码与门禁后继登记的可达摘要链。"""
 
+    if r4_catalog.transition_chain_supersedes(
+        path,
+        prior_digest,
+        current_digest,
+    ):
+        return True
+
     try:
+        from tools.official_client_capture.tests import (
+            test_codex_01491_r9_contamination_recovery_transition as r9_recovery,
+        )
+
         predecessor = load_document(PREDECESSOR_PATH, "候选源码 transition")
         candidate_gate = load_transition()
         surface_successor = load_document(
@@ -141,6 +154,8 @@ def transition_chain_supersedes(
         )
         r4_successor = r4_catalog.load_transition()
         r4_catalog.validate_transition(r4_successor)
+        h1_successor = r9_recovery.load_h1_transition()
+        recovery_successor = r9_recovery.load_validated_transition()
         ledger.validate_candidate_surface_successor(
             surface_successor,
             ledger.INVENTORY.read_bytes(),
@@ -155,6 +170,8 @@ def transition_chain_supersedes(
         (candidate_gate, "transitions"),
         (surface_successor, "implementation_transitions"),
         (r4_successor, "transitions"),
+        (h1_successor, "transitions"),
+        (recovery_successor, "transitions"),
     ):
         transitions = document.get(field)
         if not isinstance(transitions, list):

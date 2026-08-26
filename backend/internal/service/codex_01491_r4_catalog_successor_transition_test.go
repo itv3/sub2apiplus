@@ -204,7 +204,13 @@ func validateCodex01491R4CatalogSuccessorServiceTransition(
 			return errors.New("Codex 0.149.1 service r4 Catalog 后继 transition 条目非法：" + expectedPath)
 		}
 		current, readErr := os.ReadFile(filepath.Join("../../..", filepath.FromSlash(entry.Path)))
-		if readErr != nil || upstreamMergeFrameworkServiceDigest(current) != entry.ToSHA256 {
+		currentDigest := upstreamMergeFrameworkServiceDigest(current)
+		if readErr != nil || (currentDigest != entry.ToSHA256 &&
+			!codex01491R9ContaminationRecoverySupersedesService(
+				entry.Path,
+				entry.ToSHA256,
+				currentDigest,
+			)) {
 			return errors.New("Codex 0.149.1 service r4 Catalog 后继 transition 当前摘要不一致：" + entry.Path)
 		}
 		paths = append(paths, entry.Path)
@@ -229,11 +235,42 @@ func codex01491R4CatalogSuccessorSupersedesService(
 	if err != nil {
 		return false
 	}
-	for _, entry := range receipt.Transitions {
-		if entry.Path == path && entry.ToSHA256 == currentDigest &&
-			slices.Contains(entry.PredecessorSHA256s, priorDigest) {
+	recovery, err := loadCodex01491R9ContaminationRecoveryServiceTransition()
+	if err != nil {
+		return false
+	}
+	h1Transitions, err := loadCodex01491ModelCatalogH1SuccessorServiceTransitions()
+	if err != nil {
+		return false
+	}
+	edges := make(map[string][]string)
+	for _, transitions := range [][]codex01491CandidateSourceServiceEntry{
+		receipt.Transitions,
+		h1Transitions,
+		recovery.Transitions,
+	} {
+		for _, entry := range transitions {
+			if entry.Path != path {
+				continue
+			}
+			for _, predecessor := range entry.PredecessorSHA256s {
+				edges[predecessor] = append(edges[predecessor], entry.ToSHA256)
+			}
+		}
+	}
+	queue := []string{priorDigest}
+	visited := make(map[string]bool)
+	for len(queue) > 0 {
+		digest := queue[0]
+		queue = queue[1:]
+		if digest == currentDigest {
 			return true
 		}
+		if visited[digest] {
+			continue
+		}
+		visited[digest] = true
+		queue = append(queue, edges[digest]...)
 	}
 	return false
 }
