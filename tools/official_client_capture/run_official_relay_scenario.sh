@@ -1295,6 +1295,7 @@ if [[ $require_model_receipt == 1 ]]; then
     --run-id "$run_id" \
     --track "$model_track" \
     --model "$model" \
+    --model-catalog-prewarm "$work_dir/model-catalog-prewarm.json" \
     --expect-use-responses-lite "$expect_lite"
 fi
 
