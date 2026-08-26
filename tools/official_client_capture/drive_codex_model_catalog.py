@@ -36,6 +36,54 @@ class ModelCatalogPrewarmError(RuntimeError):
     """模型目录 RPC 或对应原始在线证据不完整。"""
 
 
+def wait_for_mitm_model_catalog(
+    path: Path,
+    *,
+    expected_model: str,
+    expected_lite: bool,
+    deadline: float,
+) -> dict[str, Any]:
+    """保持 app-server 存活，直到 MITM 刷盘完整的目标模型目录响应。"""
+
+    while time.monotonic() < deadline:
+        if path.is_file() and not path.is_symlink():
+            try:
+                records = [
+                    json.loads(line)
+                    for line in path.read_text(encoding="utf-8").splitlines()
+                    if line.strip()
+                ]
+            except (OSError, json.JSONDecodeError):
+                records = []
+            for record in records:
+                request = record.get("request") or {}
+                response = record.get("response") or {}
+                payload = (response.get("body") or {}).get("json") or {}
+                models = payload.get("models") or []
+                matches = [
+                    item
+                    for item in models
+                    if isinstance(item, dict)
+                    and item.get("slug") == expected_model
+                    and item.get("use_responses_lite") is expected_lite
+                ]
+                if (
+                    request.get("method") == "GET"
+                    and str(request.get("path", "")).split("?", 1)[0]
+                    == "/backend-api/codex/models"
+                    and response.get("status") == 200
+                    and matches
+                ):
+                    return {
+                        "source": "mitm_models_http",
+                        "path": str(path),
+                        "sha256": file_sha256(path),
+                        "use_responses_lite": expected_lite,
+                    }
+        time.sleep(0.05)
+    raise ModelCatalogPrewarmError("等待 MITM 模型目录 HTTP 200 超时。")
+
+
 def find_captured_model_catalog(
     relay_dir: Path,
     *,
@@ -106,6 +154,7 @@ def run_prewarm(
     relay_dir: Path,
     output: Path,
     timeout: int,
+    mitm_models_http: Path | None = None,
 ) -> dict[str, Any]:
     """执行阻塞式 model/list，并把 RPC 结果与 relay 原始字节交叉核验。"""
 
@@ -123,6 +172,7 @@ def run_prewarm(
     )
     deadline = time.monotonic() + timeout
     response: dict[str, Any] | None = None
+    mitm_capture: dict[str, Any] | None = None
     try:
         client.send(
             {
@@ -148,6 +198,16 @@ def run_prewarm(
             }
         )
         response = client.wait_response(2, deadline)
+        if mitm_models_http is not None:
+            # app-server 的 model/list 可以先返回内存目录，真正的在线刷新仍在后台。
+            # 必须等 MITM 看到完整 200 后再关闭进程，否则关闭动作会向 HTTP/2
+            # stream 发送 CANCEL，留下只有请求、没有响应的伪完整证据。
+            mitm_capture = wait_for_mitm_model_catalog(
+                mitm_models_http,
+                expected_model=model,
+                expected_lite=expected_lite,
+                deadline=deadline,
+            )
     except BaseException as error:
         raise ModelCatalogPrewarmError(
             f"model/list 未完成：{type(error).__name__}。"
@@ -162,10 +222,8 @@ def run_prewarm(
     ):
         raise ModelCatalogPrewarmError("model/list 结果未包含目标模型。")
 
-    captured = find_captured_model_catalog(
-        relay_dir,
-        expected_model=model,
-        expected_lite=expected_lite,
+    captured = mitm_capture or find_captured_model_catalog(
+        relay_dir, expected_model=model, expected_lite=expected_lite
     )
     summary = {
         "schema_version": SCHEMA_VERSION,
@@ -188,6 +246,11 @@ def main() -> None:
     parser.add_argument("--model", required=True)
     parser.add_argument("--expect-use-responses-lite", choices=("true", "false"), required=True)
     parser.add_argument("--relay-dir", type=Path, required=True)
+    parser.add_argument(
+        "--mitm-models-http",
+        type=Path,
+        help="等待该 MITM JSONL 出现目标模型 HTTP 200 后再关闭 app-server。",
+    )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--timeout", type=int, default=120)
     arguments = parser.parse_args()
@@ -199,6 +262,7 @@ def main() -> None:
         relay_dir=arguments.relay_dir,
         output=arguments.output,
         timeout=arguments.timeout,
+        mitm_models_http=arguments.mitm_models_http,
     )
     print(json.dumps(summary, ensure_ascii=False, sort_keys=True))
 

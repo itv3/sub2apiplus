@@ -6,6 +6,8 @@ import json
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -15,6 +17,7 @@ from tools.official_client_capture.capturelib.identity import (
 from tools.official_client_capture.drive_codex_model_catalog import (
     ModelCatalogPrewarmError,
     find_captured_model_catalog,
+    wait_for_mitm_model_catalog,
 )
 
 
@@ -37,6 +40,26 @@ def h1_response(*, lite: bool) -> bytes:
 
 
 class ModelCatalogPrewarmTest(unittest.TestCase):
+    def test_01491_正式场景固定容器_H1_与_MITM_完成等待(self) -> None:
+        """补采必须在抓包容器内执行，并避开代理 HTTP/2 大响应不稳定。"""
+
+        scenario_path = (
+            Path(__file__).parents[1] / "codex_upgrade_scenarios_0_149_1.json"
+        )
+        payload = json.loads(scenario_path.read_text(encoding="utf-8"))
+        job = next(
+            item for item in payload["capture_jobs"] if item["id"] == "official-core"
+        )
+        self.assertEqual(len(job["steps"]), 2)
+        supplement = job["steps"][1]
+        self.assertEqual(
+            supplement["argv"][:5],
+            ["docker", "exec", "{capture_container}", "bash", "-c"],
+        )
+        source = supplement["argv"][5]
+        self.assertIn("--set http2=false", source)
+        self.assertIn('--mitm-models-http "$models_file"', source)
+
     def test_预热脚本绑定隔离_HOME_与_relay_原文(self) -> None:
         """模型条件任务必须先取得在线 200，不能依赖退出前的后台竞速请求。"""
 
@@ -125,6 +148,57 @@ class ModelCatalogPrewarmTest(unittest.TestCase):
                     relay,
                     expected_model="gpt-5.6-luna",
                     expected_lite=True,
+                )
+
+    def test_等待_MITM_完整响应后才允许关闭_app_server(self) -> None:
+        """后台刷新晚于 model/list 返回时，驱动必须等待真实 HTTP 200。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            models_http = Path(directory) / "models-http.jsonl"
+            payload = {
+                "request": {
+                    "method": "GET",
+                    "path": "/backend-api/codex/models?client_version=0.149.1",
+                },
+                "response": {
+                    "status": 200,
+                    "body": {
+                        "json": {
+                            "models": [
+                                {
+                                    "slug": "gpt-5.5",
+                                    "use_responses_lite": False,
+                                }
+                            ]
+                        }
+                    },
+                },
+            }
+
+            def delayed_write() -> None:
+                time.sleep(0.05)
+                models_http.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+            writer = threading.Thread(target=delayed_write)
+            writer.start()
+            result = wait_for_mitm_model_catalog(
+                models_http,
+                expected_model="gpt-5.5",
+                expected_lite=False,
+                deadline=time.monotonic() + 1,
+            )
+            writer.join()
+            self.assertEqual(result["source"], "mitm_models_http")
+            self.assertEqual(result["path"], str(models_http))
+
+    def test_等待_MITM_响应超时后失败关闭(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(ModelCatalogPrewarmError, "等待 MITM"):
+                wait_for_mitm_model_catalog(
+                    Path(directory) / "models-http.jsonl",
+                    expected_model="gpt-5.5",
+                    expected_lite=False,
+                    deadline=time.monotonic() + 0.01,
                 )
 
 
