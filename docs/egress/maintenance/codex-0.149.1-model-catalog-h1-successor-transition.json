@@ -1,0 +1,100 @@
+{
+  "schema_version": "official-client-codex-0.149.1-model-catalog-h1-successor-transition/v1",
+  "issued_at_utc": "2026-08-26T17:42:42Z",
+  "base_commit": "93d179469b0e6f4643242a1340b7f2aff6e7113c",
+  "target_commit": "edaa717252a2e7eceb47529e0fa34f9bd0d9f922",
+  "scope": "codex-0.149.1-model-catalog-h1-successor",
+  "framework_stage": "VC-0/P0-MODEL-CATALOG-H1-SUCCESSOR",
+  "predecessor_transition": {
+    "path": "docs/egress/maintenance/codex-0.149.1-r4-catalog-successor-transition.json",
+    "file_sha256": "1ca85eca56f479754d4953c19bd3e0c7a4a1e37fed9bd5b5be67102dd7aed9db",
+    "identity_sha256": "92e6f38458eef3f4cedae266b30ae95191f04486c74876c1d63841de5552d450"
+  },
+  "boundaries": {
+    "api_key_ref": "#4",
+    "capture_account_ref": "#21",
+    "historical_evidence_preserved_read_only": true,
+    "official_request_origin": "codex-cli-0.149.1",
+    "production_selector_changed": false,
+    "proxy_http2_disabled_for_models_only": true,
+    "sub2api_candidate_deployed": false,
+    "vircs_accessed": false
+  },
+  "execution_facts": {
+    "root_cause": "mitm_http2_models_response_reset_before_complete_http_200",
+    "failed_campaigns": [
+      {
+        "campaign_id": "codex-01491-r6",
+        "attempt_id": "20260826T170952Z-5ebbcfaf88f05964",
+        "status": "failed",
+        "restoration_status": "restored",
+        "restoration_all_checks_passed": true,
+        "restoration_report_sha256": "ecc158555b9898fee68c195a1237c6e7736e32e2dbe25423a08a4e348442b82f"
+      },
+      {
+        "campaign_id": "codex-01491-r7",
+        "attempt_id": "20260826T171941Z-647bf48593ce5033",
+        "status": "failed",
+        "restoration_status": "restored",
+        "restoration_all_checks_passed": true,
+        "restoration_report_sha256": "9e0ce06eabc5d0ad7a8f08a630ba19264385bd9a6369bb6bdea2422561764d7e"
+      }
+    ],
+    "diagnostic": {
+      "root": "/root/oauth-capture/diagnostics/codex-01491-model-prewarm-h1-20260826T1747Z",
+      "driver_status": 0,
+      "valid_models_http_200": 1,
+      "model_id": "gpt-5.5",
+      "use_responses_lite": false,
+      "mitm_upstream_protocol": "http1",
+      "driver_log_sha256": "1114f3f0ba6f5e191ef2e60d9db44b1865cab3ca54dd59a00dc575325a92ffac",
+      "mitmdump_log_sha256": "c8f0638db2594f1f2fa513175041024e9a2dc458e878aa317b3e2f8182497efd",
+      "models_http_bytes": 729880,
+      "models_http_sha256": "27a78dc80bbd2b2e62c7bf782dc3d0a25537ec6db7442744266817c3a571b62f"
+    }
+  },
+  "transitions": [
+    {
+      "path": "tools/official_client_capture/codex_upgrade_scenarios_0_149_1.json",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "d251847a616b13e694dc70069e361e1cbee7a798eeacb0f71af115489fb29114"
+      ],
+      "to_sha256": "b7ae0e37ab4bcb79182bbd2d005e52f515b21fa659211cab9ef96db24c85e4e5",
+      "reason": "把缺失的模型目录补采纳入目标正式场景，显式在 capture-cli 内执行，并仅对该 MITM 补采关闭 HTTP/2。"
+    },
+    {
+      "path": "tools/official_client_capture/drive_codex_model_catalog.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "5973fea3e4f2ab100bc826ad699b140abcde39a12e5baaffbff6c5cf936f88da"
+      ],
+      "to_sha256": "5487e87a4159222eb91d748e5cda44ce4d336b28d96d7a667e14fb2cfb325f1a",
+      "reason": "在关闭官方 app-server 前等待同一 MITM 根刷盘目标模型的完整 HTTP 200，拒绝 request-only 证据。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_model_catalog_h1_successor_transition.py",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "b87aa9ba42eba7789334181a06036f81a988a22b967f4b0c054415543f67d0ab",
+      "reason": "新增可独立重放的 transition、账号约束、生产边界、ARM64 诊断事实与文件闭集门禁。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_model_catalog_prewarm.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "8e078245db49c1a2cdaf2c3414690a59a4f0e28bc860b951ed704007c12cae7a"
+      ],
+      "to_sha256": "7e9e9fc3b00b3b3d3576dd8a232f9699c997df5edbd5d8b877cc64dc58ee95e7",
+      "reason": "覆盖延迟刷盘、超时失败、容器执行、MITM H1 与完成等待合同。"
+    }
+  ],
+  "verification": {
+    "arm64_h1_diagnostic_passed": true,
+    "campaign_restoration_passed": true,
+    "json_schema_load_passed": true,
+    "targeted_python_tests_passed": true
+  },
+  "result": "model_catalog_h1_successor_ready_for_p0",
+  "identity_sha256": "688aa12024280bda592e54694a539ee32ac79a1db393a69032e212c8fc1b3217"
+}
