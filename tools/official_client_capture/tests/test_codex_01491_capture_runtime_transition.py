@@ -13,6 +13,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[3]
 BASE_COMMIT = "20158443533827c0d809c269267135ce3b7d9678"
+TARGET_COMMIT = "ecd794c2fa13881db7be0ac8c0d728a2d8ab9490"
 TRANSITION_PATH = (
     ROOT
     / "docs/egress/maintenance/codex-0.149.1-capture-runtime-repair-transition.json"
@@ -78,11 +79,11 @@ def load_json(path: Path, label: str) -> dict[str, Any]:
     return value
 
 
-def commit_blob(path: str) -> bytes | None:
-    """读取修复基线提交中的文件；新增文件返回 None。"""
+def commit_blob(commit: str, path: str) -> bytes | None:
+    """读取指定提交中的文件；该提交不存在此文件时返回 None。"""
 
     result = subprocess.run(
-        ["git", "show", f"{BASE_COMMIT}:{path}"],
+        ["git", "show", f"{commit}:{path}"],
         cwd=ROOT,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
@@ -200,16 +201,15 @@ def validate_transition(document: dict[str, Any]) -> None:
         }:
             raise ValueError("抓包运行时 transition 条目字段非法")
         path = entry["path"]
-        before = commit_blob(path)
+        before = commit_blob(BASE_COMMIT, path)
         expected_change = "added" if before is None else "modified"
         expected_predecessors = [] if before is None else [sha256(before)]
-        current = ROOT / path
+        target = commit_blob(TARGET_COMMIT, path)
         if (
             entry["change"] != expected_change
             or entry["predecessor_sha256s"] != expected_predecessors
-            or not current.is_file()
-            or current.is_symlink()
-            or entry["to_sha256"] != sha256(current.read_bytes())
+            or target is None
+            or entry["to_sha256"] != sha256(target)
             or not isinstance(entry["reason"], str)
             or not entry["reason"].strip()
         ):

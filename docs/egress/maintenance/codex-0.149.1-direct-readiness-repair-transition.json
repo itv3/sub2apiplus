@@ -1,0 +1,72 @@
+{
+  "schema_version": "official-client-codex-0.149.1-direct-readiness-repair-transition/v1",
+  "issued_at_utc": "2026-08-26T01:38:22Z",
+  "base_commit": "ecd794c2fa13881db7be0ac8c0d728a2d8ab9490",
+  "scope": "codex-0.149.1-direct-readiness-repair",
+  "framework_stage": "VC-0/P0-RUNTIME-REPAIR-SUCCESSOR",
+  "predecessor_transition": {
+    "path": "docs/egress/maintenance/codex-0.149.1-capture-runtime-repair-transition.json",
+    "file_sha256": "9a7063f19d46da83a8356bf2a581f4e01fb3fa7208a16aa631541c87c805dc2c",
+    "identity_sha256": "94cecb6342f5b581807a8627a927a4b2eb477d756653194b7dfd4bd008994389"
+  },
+  "boundaries": {
+    "direct_ready_requires_tcpdump_listening": true,
+    "failed_offline_validation_preserved_read_only": true,
+    "historical_transitions_preserved_read_only": true,
+    "production_selector_changed": false,
+    "runtime_rebuild_required": true,
+    "vircs_accessed": false
+  },
+  "execution_facts": {
+    "arm64_capture_image_rebuilt": false,
+    "failed_validation_run_id": "codex-0_149_1-runtime-offline-20260826T013200Z-ecd794c2f",
+    "failed_validation_runtime_restored": true,
+    "live_official_requests_sent": false,
+    "sub2api_candidate_deployed": false,
+    "vircs_accessed": false
+  },
+  "transitions": [
+    {
+      "path": "tools/official_client_capture/runtime_scripts/start_direct.sh",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "f775a6c312552fb5b965a2069f53f48c24e852c3810e145b5cebc1eeae516b79"
+      ],
+      "to_sha256": "62890896e8cc229a92f2263065664374acc8987d93fcb83b3ccb1ebb20a64bfe",
+      "reason": "等待 tcpdump 日志明确进入 listening 后才放行场景，消除首个 ClientHello 被就绪竞态漏采的风险。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_capture_runtime_scripts.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "cfde357a75b9ef40c763f5d0dddb0818763331f1b1e513f536d000d891a56063"
+      ],
+      "to_sha256": "b02ee627c43286b21a913828491a99dbc71365684b2c27930034a809c24b2ab5",
+      "reason": "冻结 direct 就绪必须同时满足 pcap 已创建和 tcpdump 已监听，拒绝退回仅检查文件存在。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_capture_runtime_transition.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "58e66dd5e03b8fa6e9591fcafe9b4719f533e53a9cf5eb317d0c8df43f67331f"
+      ],
+      "to_sha256": "f235301e3ea5bb74489b591badf263c2467c3e747e220dc84bcc902c9ffd9b65",
+      "reason": "历史运行时 transition 改为复算其冻结目标提交，不因合法后继修改而要求覆盖历史收据。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_direct_readiness_transition.py",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "7de5edbccb9552f89e11c727d65465cf52bf7185422ed345f8d8126053735d2f",
+      "reason": "独立重放 direct 就绪后继的前序身份、文件闭集、自摘要、失败样本只读与生产隔离边界。"
+    }
+  ],
+  "verification": {
+    "bash_syntax_passed": true,
+    "failed_run_cleanup_verified": true,
+    "predecessor_transition_replayed": true,
+    "targeted_tests_passed": true
+  },
+  "result": "direct_readiness_repair_ready_for_runtime_rebuild",
+  "identity_sha256": "7906a79e29297214ca45ea6128df13f118afd9718b9eb112492168d43f168e52"
+}

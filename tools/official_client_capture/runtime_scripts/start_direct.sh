@@ -135,14 +135,18 @@ for _ in $(seq 1 100); do
     echo "direct sidecar 在就绪前退出。" >&2
     exit 1
   fi
-  if [[ -e $output_dir/egress.pcap ]]; then
+  # tcpdump 会先创建 pcap，随后才完成抓包接口与 BPF filter 的装配。只看文件
+  # 存在会让调用方过早发出首个请求，造成首个 ClientHello 随机丢失。必须等
+  # 容器日志明确进入 listening 状态，才把 sidecar 交给场景驱动。
+  if [[ -e $output_dir/egress.pcap ]] &&
+    [[ $(docker logs "$sidecar_name" 2>&1 || true) == *"listening on "* ]]; then
     ready=1
     break
   fi
   sleep 0.1
 done
 if [[ $ready != 1 ]]; then
-  echo "direct sidecar 未在 10 秒内创建 pcap。" >&2
+  echo "direct sidecar 未在 10 秒内进入监听状态。" >&2
   exit 1
 fi
 
