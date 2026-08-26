@@ -248,6 +248,22 @@ class ModelConditionReceiptTest(unittest.TestCase):
             self.assertTrue(receipt["use_responses_lite"])
             self.assertFalse(receipt["model_fallback"])
             self.assertEqual(receipt["observed_request_models"], ["gpt-5.6-luna"])
+            roles_by_path = {
+                item["path"]: item["roles"]
+                for item in receipt["evidence_bindings"]
+            }
+            self.assertEqual(
+                roles_by_path["relay/conn001.client_to_upstream.bin"],
+                ["models_request"],
+            )
+            self.assertEqual(
+                roles_by_path["relay/conn001.upstream_to_client.bin"],
+                ["models_response"],
+            )
+            self.assertEqual(
+                roles_by_path["relay/conn002.client_to_upstream.bin"],
+                ["responses_request"],
+            )
             validate_receipt(
                 receipt,
                 root=root,
@@ -256,6 +272,36 @@ class ModelConditionReceiptTest(unittest.TestCase):
                 model_id="gpt-5.6-luna",
                 use_responses_lite=True,
             )
+
+    def test_角色被改绑到错误请求时失败关闭(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(Path(directory) / "run")
+            receipt = build_receipt(
+                root=root,
+                job_id="official-lite-http-response",
+                run_id="campaign-lite-http",
+                track="lite",
+                expected_model="gpt-5.6-luna",
+                expected_lite=True,
+            )
+            by_path = {
+                item["path"]: item for item in receipt["evidence_bindings"]
+            }
+            by_path["relay/conn001.client_to_upstream.bin"]["roles"] = [
+                "responses_request"
+            ]
+            by_path["relay/conn002.client_to_upstream.bin"]["roles"] = [
+                "models_request"
+            ]
+            with self.assertRaisesRegex(ModelConditionReceiptError, "models_request"):
+                validate_receipt(
+                    receipt,
+                    root=root,
+                    job_id="official-lite-http-response",
+                    track="lite",
+                    model_id="gpt-5.6-luna",
+                    use_responses_lite=True,
+                )
 
     def test_accepts_multiple_consistent_models_responses(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

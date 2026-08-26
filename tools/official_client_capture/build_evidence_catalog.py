@@ -15,10 +15,11 @@ capture manifest 一直由执行者临时手写。本工具把编目变成确定
     - capture manifest 草案（artifact 的 path／kind／parser／scenario_ids／labels，
       sha256 由收口后回填）。
 
-**本工具只做路径匹配，不打开任何证据文件**：标签一律来自声明。这条边界是判据独立性
-的前提——若标签由被它选中的判据所验证的属性反推（例如看到 `content-encoding: zstd`
-就贴 `compression=zstd`，而判据正是验 zstd），判据即退化为同义反复。声明本身要求
-每条规则给出 `rationale`，说明该标签如何由采集参数或场景 precondition 得出。
+标签一律来自声明，禁止读取被测内容反推标签。这条边界是判据独立性的前提——若看到
+`content-encoding: zstd` 才贴 `compression=zstd`，而判据正是验 zstd，判据即退化为
+同义反复。唯一允许读取原件的路径是 ``receipt_role``：编目器重放采集阶段已经生成的
+模型条件收据，验证其角色、路径、字节数与 SHA-256，再按 ``models_request``／
+``responses_request`` 选择文件；标签本身仍只由声明及收据已冻结的采集条件给出。
 
 同一原始文件在 manifest 中二选一：直接以原生 parser 解析，或以 `opaque_bound_source`
 登记并由派生器产出结构化观测（声明中的 `derive`）。该互斥由 ACC-03 seal 门禁强制。
@@ -30,6 +31,7 @@ import argparse
 import fnmatch
 import hashlib
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -41,6 +43,10 @@ from tools.official_client_capture.build_assertion_bundle import (  # noqa: E402
     AssertionBundleError,
     validate_relative_path,
 )
+from tools.official_client_capture.model_condition_receipts import (  # noqa: E402
+    ModelConditionReceiptError,
+    validate_receipt as validate_model_condition_receipt,
+)
 
 LABELS_SCHEMA = "codex-upgrade-evidence-labels/v1"
 CAPTURE_MANIFEST_SCHEMA = "codex-candidate-capture-manifest/v1"
@@ -50,6 +56,8 @@ SIDES = frozenset({"official", "candidate"})
 # 与 derive_official_observations.ALLOWED_TARGET_KINDS 一致；一致性由离线测试锁定。
 DERIVABLE_KINDS = frozenset({"process_trace", "websocket_trace"})
 DERIVE_PARSERS = frozenset({"h1_request_stream", "mitm_http_jsonl", "h1_wire_probe"})
+RECEIPT_SELECTABLE_ROLES = frozenset({"models_request", "responses_request"})
+VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 
 
 class EvidenceCatalogError(RuntimeError):
@@ -62,7 +70,9 @@ def _require_str(value: Any, label: str) -> str:
     return value
 
 
-def load_label_declaration(path: Path) -> dict[str, Any]:
+def load_label_declaration(
+    path: Path, *, expected_codex_version: str | None = None
+) -> dict[str, Any]:
     try:
         document = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
@@ -72,6 +82,14 @@ def load_label_declaration(path: Path) -> dict[str, Any]:
     if document.get("schema_version") != LABELS_SCHEMA:
         raise EvidenceCatalogError(
             f"证据标签声明 schema_version 必须是 {LABELS_SCHEMA}"
+        )
+    codex_version = document.get("codex_version")
+    if not isinstance(codex_version, str) or not VERSION_RE.fullmatch(codex_version):
+        raise EvidenceCatalogError("证据标签声明 codex_version 非法")
+    if expected_codex_version is not None and codex_version != expected_codex_version:
+        raise EvidenceCatalogError(
+            f"证据标签声明版本 {codex_version} 与 Campaign 目标版本 "
+            f"{expected_codex_version} 不一致"
         )
     entries = document.get("entries")
     if not isinstance(entries, list) or not entries:
@@ -89,14 +107,14 @@ def load_label_declaration(path: Path) -> dict[str, Any]:
         rules = entry.get("rules")
         if not isinstance(rules, list) or not rules:
             raise EvidenceCatalogError(f"job {job_id} 的 rules 必须非空")
-        seen_globs: set[tuple[str, str]] = set()
+        seen_globs: set[tuple[str, ...]] = set()
         for rule in rules:
             _validate_rule(rule, job_id, seen_globs)
     return document
 
 
 def _validate_rule(
-    rule: Any, job_id: str, seen_globs: set[tuple[str, str]]
+    rule: Any, job_id: str, seen_globs: set[tuple[str, ...]]
 ) -> None:
     if not isinstance(rule, dict):
         raise EvidenceCatalogError(f"job {job_id} 的 rule 必须是对象")
@@ -109,6 +127,7 @@ def _validate_rule(
         "labels",
         "frame_labels",
         "derive",
+        "receipt_role",
         "rationale",
     }
     if set(rule) - allowed:
@@ -124,7 +143,13 @@ def _validate_rule(
     if root_suffix is not None:
         _require_str(root_suffix, f"job {job_id} 的 root_suffix")
     derive_kind = (rule.get("derive") or {}).get("kind", "")
+    receipt_role = rule.get("receipt_role")
+    if receipt_role is not None and receipt_role not in RECEIPT_SELECTABLE_ROLES:
+        raise EvidenceCatalogError(
+            f"job {job_id} 的 receipt_role 非法：{receipt_role!r}"
+        )
     key = (root_suffix or "", glob, rule.get("kind", ""), derive_kind,
+           receipt_role or "",
            ",".join(sorted(rule.get("scenario_ids") or [])))
     if key in seen_globs:
         raise EvidenceCatalogError(
@@ -219,6 +244,42 @@ def _relative_files(root: Path) -> list[str]:
     return files
 
 
+def _receipt_role_paths(root: Path, job_id: str) -> dict[str, set[str]]:
+    """重放模型条件收据，并返回经过摘要、大小和角色语义验证的相对路径。"""
+
+    receipt_path = root / "model-condition-receipt.json"
+    if receipt_path.is_symlink() or not receipt_path.is_file():
+        raise EvidenceCatalogError(
+            f"job {job_id} 使用 receipt_role，但缺少模型条件成功收据"
+        )
+    try:
+        payload = json.loads(receipt_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise EvidenceCatalogError(
+            f"job {job_id} 的模型条件收据不可读：{error}"
+        ) from error
+    if not isinstance(payload, dict):
+        raise EvidenceCatalogError(f"job {job_id} 的模型条件收据必须是对象")
+    try:
+        validated = validate_model_condition_receipt(
+            payload,
+            root=root,
+            job_id=job_id,
+            track=payload.get("track"),
+            model_id=payload.get("model_id"),
+            use_responses_lite=payload.get("use_responses_lite"),
+        )
+    except ModelConditionReceiptError as error:
+        raise EvidenceCatalogError(
+            f"job {job_id} 的模型条件收据验证失败：{error}"
+        ) from error
+    paths = {role: set() for role in RECEIPT_SELECTABLE_ROLES}
+    for binding in validated["evidence_bindings"]:
+        for role in set(binding["roles"]) & RECEIPT_SELECTABLE_ROLES:
+            paths[role].add(binding["path"])
+    return paths
+
+
 def build_catalog(
     declaration: Mapping[str, Any],
     job_roots: Mapping[str, list[tuple[str, Path]]],
@@ -249,6 +310,7 @@ def build_catalog(
     derive_entries: list[dict[str, str]] = []
     artifacts: list[dict[str, Any]] = []
     claimed_targets: set[str] = set()
+    receipt_paths: dict[tuple[str, str], dict[str, set[str]]] = {}
 
     for job_id in sorted(job_roots):
         matched_any = False
@@ -267,13 +329,28 @@ def build_catalog(
                 )
             for rule in applicable:
                 glob = rule["glob"]
+                receipt_role = rule.get("receipt_role")
+                allowed_by_receipt: set[str] | None = None
+                if receipt_role is not None:
+                    cache_key = (job_id, str(root.resolve(strict=True)))
+                    if cache_key not in receipt_paths:
+                        receipt_paths[cache_key] = _receipt_role_paths(root, job_id)
+                    allowed_by_receipt = receipt_paths[cache_key][receipt_role]
                 hits = sorted(
-                    name for name in available if fnmatch.fnmatch(name, glob)
+                    name
+                    for name in available
+                    if fnmatch.fnmatch(name, glob)
+                    and (allowed_by_receipt is None or name in allowed_by_receipt)
                 )
                 if not hits:
+                    selector = (
+                        f"{glob}（receipt_role={receipt_role}）"
+                        if receipt_role is not None
+                        else glob
+                    )
                     raise EvidenceCatalogError(
                         f"job {job_id} 根 {root_name} 的声明 glob 未命中任何证据，"
-                        f"编目不完整：{glob}"
+                        f"编目不完整：{selector}"
                     )
                 matched_any = True
                 for relative in hits:
@@ -413,6 +490,7 @@ def main() -> int:
         description="按冻结证据标签声明编目断言证据（ACC-07）"
     )
     parser.add_argument("--declaration", type=Path, required=True)
+    parser.add_argument("--expected-codex-version", required=True)
     parser.add_argument("--side", choices=sorted(SIDES), required=True)
     parser.add_argument(
         "--job-root",
@@ -424,7 +502,10 @@ def main() -> int:
     parser.add_argument("--output-dir", type=Path, required=True)
     arguments = parser.parse_args()
     try:
-        declaration = load_label_declaration(arguments.declaration)
+        declaration = load_label_declaration(
+            arguments.declaration,
+            expected_codex_version=arguments.expected_codex_version,
+        )
         catalog = build_catalog(
             declaration,
             parse_job_roots(arguments.job_root),
