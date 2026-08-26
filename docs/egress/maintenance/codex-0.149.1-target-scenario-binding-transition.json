@@ -1,0 +1,121 @@
+{
+  "schema_version": "official-client-codex-0.149.1-target-scenario-binding-transition/v1",
+  "issued_at_utc": "2026-08-26T07:26:07Z",
+  "base_commit": "0566654268ba060f3549869169ef21e9d7828bc7",
+  "scope": "codex-0.149.1-target-scenario-binding-repair",
+  "framework_stage": "VC-0/P0-TARGET-SCENARIO-BINDING-REPAIR",
+  "predecessor_transition": {
+    "path": "docs/egress/maintenance/codex-0.149.1-egress-gate-chain-repair-transition.json",
+    "file_sha256": "303cdab13eb9be5b594add4f46c7c39a19a9cb8138c6a84c14552fbaaf5953f2",
+    "identity_sha256": "0a36fc7dd2adbb15e4160af01f3d3f8b0654cb4241715766dbbe6d1b82dfafb9"
+  },
+  "failed_attempt": {
+    "campaign_id": "codex-0_149_1-formal-production-replacement-20260826T062203Z-056665426",
+    "attempt_id": "20260826T062314Z-490f44ec6127782b",
+    "attempt_digest": "96bd3faaa1f645fe02dac32f46e0f46b6a1dba94d3f8aa7d31ce79fc522ed1bf",
+    "scenario_version": "0.147.0",
+    "target_version": "0.149.1",
+    "jobs_total": 28,
+    "jobs_complete": 26,
+    "jobs_failed": 2,
+    "failed_job_ids": [
+      "official-relay-realtime-webrtc",
+      "official-wham-safe"
+    ],
+    "status": "failed_frozen_read_only"
+  },
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/codex_01491_p0_transition_chain_repair_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "5ca1c10a58cff601e34d6b8241a710ede4477c1110b77bd92870e5c67f107dd6"
+      ],
+      "to_sha256": "a0274e42793e3a84dc16e25dddca7551e3eae285a7fe7dd93855e87d35dca62c",
+      "reason": "把 target 场景绑定后继加入 Go transition 传递闭包，并独立拒绝身份、安全边界和摘要 mutation。"
+    },
+    {
+      "path": "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "e0ae32d4124e25d5a5f895b8d9af055d40ef967b0606a53d5ac19cd8edd4b580"
+      ],
+      "to_sha256": "2a72327aa8210d2163073a9bc656b5578fbb7c1aa4197deb88343a5a156a6646",
+      "reason": "明确 baseline 场景仅用于差异分析，目标官方 CLI 必须执行 target 场景，且批准清单不得漂移 official 执行契约。"
+    },
+    {
+      "path": "tools/official_client_capture/codex_upgrade.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "2580721d6d940f41153f55d630f4dd597f796632f8c014bddb3b863de261e5f8"
+      ],
+      "to_sha256": "ca8af9d63169a8781c5ad278bb7e31fec02a5ea040aa6d3aeb76a2f794bde401",
+      "reason": "plan 同时冻结 baseline 与 target 场景，Formal official jobs 只从 target 清单生成，并把批准场景的执行契约绑定回冻结输入。"
+    },
+    {
+      "path": "tools/official_client_capture/codex_upgrade_campaign.schema.json",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "75642a60d2f229affa434b86ddb4bcb93275e5a7b4f143263d118a19c747b1d3"
+      ],
+      "to_sha256": "b9d479b82068454e2df1a08b4b278004b34e1bfcbdd95772401abdef8dfbdf03",
+      "reason": "Campaign 输入 Schema 登记 target_discovery_scenarios 摘要绑定，同时保留历史 v2 Campaign 的只读兼容。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_doc_pre_transition.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "06e726c136440909b70c35986c61e1e0482cb2f3d946feafb88d7e854155e752"
+      ],
+      "to_sha256": "52e2af97136f30680aaa07d37e902e56bd6ecb3265181dc88754259edacd2f15",
+      "reason": "让 DOC-PRE 与 Campaign 边界重放器把本次追加后继纳入摘要传递闭包，历史 transition 原文保持只读。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_egress_gate_chain_repair_transition.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "b737112d8d55e5e02d4f8255bb5a6643ffd0a1bad8d31c125e7589a50d358a13"
+      ],
+      "to_sha256": "1b48d824cdba2997603bbc0789865d9a158fbfd103a48aa7734b2208dc1d70ca",
+      "reason": "出站门禁链重放器只通过本后继登记的精确摘要边承认当前适配文件，不覆盖旧收据。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_target_scenario_binding_transition.py",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "fe037949dfe4c24a07092572c3edb7678d13ec34e0c1243db532a25c6a1bf4df",
+      "reason": "独立重放失败 Formal Attempt、源码提交、前序 transition、文件闭集、安全边界及精确后继三元组。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_upgrade.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "dc382c9854459ef5f58d20886129d8d2f82f1321cf23d7e7acddaa7d4ea23c21"
+      ],
+      "to_sha256": "c8dfa5332dfb395f91e4e950dabbdcdf86270bf8a5e70b9ec671f122f0535f5a",
+      "reason": "证明 0.149.1 Formal jobs 含 WHAM entrypoint 与 A11 双分支装配，拒绝 baseline 冒充 target 及批准阶段执行契约漂移。"
+    }
+  ],
+  "verification": {
+    "capture_tool_tests_passed": true,
+    "egress_spec_passed": true,
+    "formal_transition_replayed": true,
+    "independent_replay_passed": true,
+    "mutation_tests_passed": true,
+    "transition_closure_replayed": true
+  },
+  "safety": {
+    "active_previous_changed": false,
+    "arm64_read_only_diagnostics_performed": true,
+    "arm64_tooling_synchronized": false,
+    "catalog_promoted": false,
+    "deployment_performed": false,
+    "formal_campaign_created": false,
+    "historical_receipts_modified": false,
+    "live_request_sent": false,
+    "production_selector_changed": false,
+    "vircs_accessed": false
+  },
+  "result": "target_scenario_binding_repair_ready_for_new_campaign",
+  "identity_sha256": "2ff8f511ae026918ded7f43f737ef122c4e7f4dfede1b77d4aa0a741f71fc009"
+}

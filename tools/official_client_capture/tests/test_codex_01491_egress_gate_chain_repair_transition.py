@@ -10,6 +10,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from tools.official_client_capture.tests.test_codex_01491_target_scenario_binding_transition import (
+    load_transition as load_target_scenario_binding_transition,
+    transition_supersedes as target_scenario_binding_transition_supersedes,
+)
+
 
 ROOT = Path(__file__).resolve().parents[3]
 BASE_COMMIT = "540fd460bf68d936ac8039d403a1035d21919897"
@@ -89,14 +94,34 @@ def transition_supersedes(
     prior_digest: str,
     current_digest: str,
 ) -> bool:
-    """只承认本次追加式后继登记的精确摘要边。"""
+    """重放出站门禁修复及 target 场景绑定后继的传递边。"""
 
-    return any(
+    if any(
         entry["path"] == path
         and entry["to_sha256"] == current_digest
         and prior_digest in entry["predecessor_sha256s"]
         for entry in document["transitions"]
-    )
+    ):
+        return True
+    successor = load_target_scenario_binding_transition()
+    if target_scenario_binding_transition_supersedes(
+        successor,
+        path,
+        prior_digest,
+        current_digest,
+    ):
+        return True
+    for entry in document["transitions"]:
+        if entry["path"] != path or prior_digest not in entry["predecessor_sha256s"]:
+            continue
+        if target_scenario_binding_transition_supersedes(
+            successor,
+            path,
+            entry["to_sha256"],
+            current_digest,
+        ):
+            return True
+    return False
 
 
 def identity_sha256(document: dict[str, Any]) -> str:
@@ -207,7 +232,16 @@ def validate_transition(document: dict[str, Any]) -> None:
         current = ROOT / path
         if current.is_symlink() or not current.is_file():
             raise ValueError(f"出站门禁链修复文件不可读：{path}")
-        if sha256(current.read_bytes()) != entry["to_sha256"]:
+        current_digest = sha256(current.read_bytes())
+        if (
+            current_digest != entry["to_sha256"]
+            and not transition_supersedes(
+                document,
+                path,
+                entry["to_sha256"],
+                current_digest,
+            )
+        ):
             raise ValueError(f"出站门禁链修复当前摘要不一致：{path}")
 
 

@@ -18,6 +18,9 @@ from tools.official_client_capture.tests.test_codex_01491_egress_gate_chain_repa
     load_transition as load_egress_gate_chain_repair_transition,
     transition_supersedes as egress_gate_chain_repair_transition_supersedes,
 )
+from tools.official_client_capture.tests.test_codex_01491_target_scenario_binding_transition import (
+    load_transition as load_target_scenario_binding_transition,
+)
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -516,11 +519,13 @@ def maintenance_transition_chain_supersedes(
     edges: dict[str, list[str]] = {}
     formal_attempt_repair = load_formal_attempt_repair_transition()
     egress_gate_chain_repair = load_egress_gate_chain_repair_transition()
+    target_scenario_binding = load_target_scenario_binding_transition()
     for document in (
         hardening,
         recovery,
         formal_attempt_repair,
         egress_gate_chain_repair,
+        target_scenario_binding,
     ):
         for entry in document["transitions"]:
             if entry["path"] != path:
