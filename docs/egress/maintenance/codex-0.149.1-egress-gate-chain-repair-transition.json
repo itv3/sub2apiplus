@@ -1,0 +1,70 @@
+{
+  "schema_version": "official-client-codex-0.149.1-egress-gate-chain-repair-transition/v1",
+  "issued_at_utc": "2026-08-26T06:06:35Z",
+  "base_commit": "540fd460bf68d936ac8039d403a1035d21919897",
+  "scope": "codex-0.149.1-egress-gate-chain-repair",
+  "framework_stage": "VC-0/P0-GATE-REPAIR",
+  "predecessor_transition": {
+    "path": "docs/egress/maintenance/codex-0.149.1-formal-attempt-repair-transition.json",
+    "file_sha256": "dad96aaf67f0dad4d629c79b16efa46d1ebd7481a4d3bc2976873197f3cbde0d",
+    "identity_sha256": "699d42ad2b95794fbce04e6722710816a614942f45df5f1a5dedf41f1397edac"
+  },
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/codex_01491_p0_transition_chain_repair_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "5ed34ff83310270ea18233dce7cde2e4184aefa59fe672bf08dc1bd566eccef7"
+      ],
+      "to_sha256": "5ca1c10a58cff601e34d6b8241a710ede4477c1110b77bd92870e5c67f107dd6",
+      "reason": "把失败证据恢复、Formal Attempt 修复和本次追加式后继按传递闭包重放，避免直连判断使整条历史链装载失败。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_doc_pre_transition.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "a0a8726f97d2a4fda8632c717a36b4fcfed386ca014344aad73b7614aec82781"
+      ],
+      "to_sha256": "06e726c136440909b70c35986c61e1e0482cb2f3d946feafb88d7e854155e752",
+      "reason": "让 DOC-PRE 独立重放器按 Formal 与本次后继的传递边解释当前链适配文件，旧 transition 原文保持只读。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_egress_gate_chain_repair_transition.py",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "b737112d8d55e5e02d4f8255bb5a6643ffd0a1bad8d31c125e7589a50d358a13",
+      "reason": "独立重放新后继的身份、前序、文件闭集、安全边界和 mutation 拒绝语义。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_formal_attempt_repair_transition.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "eceae05e02a11aac51c6de750633a434fc44a36e2f2b035e5f9669d9f23f65d8"
+      ],
+      "to_sha256": "c930a5ca730a040eaa1240b14ebc8579d0d719c6fbb0db788e7e7f4237bf1ce4",
+      "reason": "让 Formal Attempt 独立重放器仅通过本次精确后继承认链适配文件的新摘要。"
+    }
+  ],
+  "verification": {
+    "capture_tool_tests_passed": true,
+    "egress_spec_passed": true,
+    "formal_transition_replayed": true,
+    "independent_replay_passed": true,
+    "mutation_tests_passed": true,
+    "transition_closure_replayed": true
+  },
+  "safety": {
+    "active_previous_changed": false,
+    "arm64_read_only_diagnostics_performed": true,
+    "arm64_tooling_synchronized": true,
+    "catalog_promoted": false,
+    "deployment_performed": false,
+    "formal_campaign_created": false,
+    "historical_receipts_modified": false,
+    "live_request_sent": false,
+    "production_selector_changed": false,
+    "vircs_accessed": false
+  },
+  "result": "egress_gate_chain_repair_complete",
+  "identity_sha256": "0a36fc7dd2adbb15e4160af01f3d3f8b0654cb4241715766dbbe6d1b82dfafb9"
+}

@@ -14,6 +14,10 @@ from tools.official_client_capture.tests.test_codex_01491_formal_attempt_repair_
     load_transition as load_formal_attempt_repair_transition,
     transition_supersedes as formal_attempt_repair_transition_supersedes,
 )
+from tools.official_client_capture.tests.test_codex_01491_egress_gate_chain_repair_transition import (
+    load_transition as load_egress_gate_chain_repair_transition,
+    transition_supersedes as egress_gate_chain_repair_transition_supersedes,
+)
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -435,8 +439,7 @@ def load_recovery_transition() -> dict[str, Any]:
             or current.is_symlink()
             or (
                 entry["to_sha256"] != sha256(current.read_bytes())
-                and not formal_attempt_repair_transition_supersedes(
-                    load_formal_attempt_repair_transition(),
+                and not formal_attempt_repair_chain_supersedes(
                     path,
                     entry["to_sha256"],
                     sha256(current.read_bytes()),
@@ -467,6 +470,40 @@ def recovery_transition_supersedes(
     )
 
 
+def formal_attempt_repair_chain_supersedes(
+    path: str,
+    prior_digest: str,
+    current_digest: str,
+) -> bool:
+    """重放 Formal Attempt 修复及其出站门禁链后继。"""
+
+    formal = load_formal_attempt_repair_transition()
+    egress_gate = load_egress_gate_chain_repair_transition()
+    if formal_attempt_repair_transition_supersedes(
+        formal,
+        path,
+        prior_digest,
+        current_digest,
+    ) or egress_gate_chain_repair_transition_supersedes(
+        egress_gate,
+        path,
+        prior_digest,
+        current_digest,
+    ):
+        return True
+    for entry in formal["transitions"]:
+        if entry["path"] != path or prior_digest not in entry["predecessor_sha256s"]:
+            continue
+        if egress_gate_chain_repair_transition_supersedes(
+            egress_gate,
+            path,
+            entry["to_sha256"],
+            current_digest,
+        ):
+            return True
+    return False
+
+
 def maintenance_transition_chain_supersedes(
     hardening: dict[str, Any],
     recovery: dict[str, Any],
@@ -478,7 +515,13 @@ def maintenance_transition_chain_supersedes(
 
     edges: dict[str, list[str]] = {}
     formal_attempt_repair = load_formal_attempt_repair_transition()
-    for document in (hardening, recovery, formal_attempt_repair):
+    egress_gate_chain_repair = load_egress_gate_chain_repair_transition()
+    for document in (
+        hardening,
+        recovery,
+        formal_attempt_repair,
+        egress_gate_chain_repair,
+    ):
         for entry in document["transitions"]:
             if entry["path"] != path:
                 continue

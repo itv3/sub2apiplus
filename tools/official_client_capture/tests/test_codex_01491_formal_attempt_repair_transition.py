@@ -13,6 +13,10 @@ from tools.official_client_capture.tests.test_codex_01491_direct_readiness_trans
     load_json,
     sha256,
 )
+from tools.official_client_capture.tests.test_codex_01491_egress_gate_chain_repair_transition import (
+    load_transition as load_egress_gate_chain_repair_transition,
+    transition_supersedes as egress_gate_chain_repair_transition_supersedes,
+)
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -279,7 +283,15 @@ def validate_transition(document: dict[str, Any]) -> None:
             entry["change"] != expected_change
             or entry["predecessor_sha256s"] != expected_predecessors
             or target is None
-            or entry["to_sha256"] != sha256(target)
+            or (
+                entry["to_sha256"] != sha256(target)
+                and not egress_gate_chain_repair_transition_supersedes(
+                    load_egress_gate_chain_repair_transition(),
+                    file_name,
+                    entry["to_sha256"],
+                    sha256(target),
+                )
+            )
             or not isinstance(entry["reason"], str)
             or not entry["reason"].strip()
         ):
