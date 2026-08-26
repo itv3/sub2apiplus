@@ -1048,6 +1048,26 @@ def _upstream_alpn_offer(
     return [selected_protocol] if selected_protocol else None
 
 
+def _should_synthesize_realtime_call(
+    *,
+    immediate: bool,
+    after_live_attempts: int | None,
+    attempt: int,
+) -> bool:
+    """判断本次 realtime 第一跳是否应由中继受控应答。
+
+    旧开关保持「第一次立即合成」的兼容语义；延迟开关只允许先把指定次数的请求
+    原样转发生产上游，再对紧随其后的那一次请求合成响应。A11 正式场景固定先转发
+    一次自然请求，只有确认自然分支失败后才运行第二次驱动。
+    """
+
+    if attempt < 1:
+        raise ValueError("realtime attempt 必须从 1 开始")
+    if immediate:
+        return attempt == 1
+    return after_live_attempts is not None and attempt == after_live_attempts + 1
+
+
 class ByteRecorder:
     """按方向分别落盘原始字节，并记录分片边界与哈希。
 
@@ -1178,6 +1198,8 @@ class Relay:
         self._turn_state_injected = False
         self._ws_turn_state_injected = False
         self._synthesized_realtime_call = False
+        self._realtime_call_attempts = 0
+        self._realtime_call_lock = asyncio.Lock()
         self._core_http_responses = 0
         self._core_ws_handshakes = 0
         self._core_ws_response_creates = 0
@@ -1227,6 +1249,24 @@ class Relay:
             value = int(getattr(self, attribute)) + 1
             setattr(self, attribute, value)
             return value
+
+    async def _claim_realtime_call_attempt(self) -> tuple[int, bool]:
+        """原子分配 realtime 第一跳序号，避免并发连接抢占受控分支。"""
+
+        async with self._realtime_call_lock:
+            self._realtime_call_attempts += 1
+            attempt = self._realtime_call_attempts
+            synthesize = (
+                not self._synthesized_realtime_call
+                and _should_synthesize_realtime_call(
+                    immediate=self.args.synthesize_realtime_call,
+                    after_live_attempts=self.args.synthesize_realtime_call_after,
+                    attempt=attempt,
+                )
+            )
+            if synthesize:
+                self._synthesized_realtime_call = True
+        return attempt, synthesize
 
     def _log_synthetic_core(
         self,
@@ -1715,6 +1755,7 @@ class Relay:
                 or self.args.inject_turn_state
                 or self.args.inject_ws_turn_state
                 or self.args.synthesize_realtime_call
+                or self.args.synthesize_realtime_call_after is not None
                 or self.args.retry_probe
                 or self.args.synthetic_profile
             )
@@ -2079,9 +2120,21 @@ class Relay:
                 is_realtime_call = request_line.startswith(
                     "POST /backend-api/codex/realtime/calls?"
                 )
-                if (self.args.synthesize_realtime_call and is_realtime_call
-                        and not self._synthesized_realtime_call):
-                    self._synthesized_realtime_call = True
+                synthesize_realtime = False
+                if is_realtime_call and (
+                    self.args.synthesize_realtime_call
+                    or self.args.synthesize_realtime_call_after is not None
+                ):
+                    realtime_attempt, synthesize_realtime = (
+                        await self._claim_realtime_call_attempt()
+                    )
+                    meta["realtime_call_attempt"] = realtime_attempt
+                    meta["realtime_call_action"] = (
+                        "synthetic_response"
+                        if synthesize_realtime
+                        else "forward_to_production"
+                    )
+                if synthesize_realtime:
                     rec.write("client_to_upstream", initial_head)
                     length_match = re.search(
                         rb"\r\ncontent-length:\s*(\d+)\r\n",
@@ -2105,11 +2158,17 @@ class Relay:
                     writer.write(response)
                     await writer.drain()
                     meta["valid"] = True
-                    meta["intervention"] = "synthesize_realtime_call"
+                    intervention = (
+                        "synthesize_realtime_call"
+                        if self.args.synthesize_realtime_call
+                        else "synthesize_realtime_call_after_live_failure"
+                    )
+                    meta["intervention"] = intervention
                     self._log_intervention({
-                        "type": "synthesize_realtime_call",
+                        "type": intervention,
                         "connection_id": conn_id,
                         "call_id": "rtc_probe",
+                        "realtime_call_attempt": realtime_attempt,
                         "request_line": request_line,
                     })
                     return
@@ -2292,8 +2351,20 @@ def main() -> None:
                     help="仅一次：向首个 HTTP /responses 的 200 响应注入该 turn-state")
     ap.add_argument("--inject-ws-turn-state", default="",
                     help="仅一次：在 responses WS 首个 response.create 后注入 response.metadata")
-    ap.add_argument("--synthesize-realtime-call", action="store_true",
-                    help="仅一次：合成 realtime/calls 200，用于触发 sideband 派生请求")
+    realtime_synthesis = ap.add_mutually_exclusive_group()
+    realtime_synthesis.add_argument(
+        "--synthesize-realtime-call",
+        action="store_true",
+        help="兼容模式，仅第一次：合成 realtime/calls 200，用于触发 sideband 派生请求",
+    )
+    realtime_synthesis.add_argument(
+        "--synthesize-realtime-call-after",
+        type=int,
+        choices=(1,),
+        default=None,
+        metavar="LIVE_ATTEMPTS",
+        help="先真实转发一次 realtime/calls，再仅对下一次请求合成 200",
+    )
     ap.add_argument(
         "--synthetic-profile",
         choices=(
@@ -2384,6 +2455,7 @@ def main() -> None:
         args.inject_turn_state,
         args.inject_ws_turn_state,
         args.synthesize_realtime_call,
+        args.synthesize_realtime_call_after is not None,
         args.retry_probe,
     )):
         ap.error("候选合成模式不能与其他受控干预混用")

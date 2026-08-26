@@ -264,6 +264,26 @@ class CodexUpgradeTest(unittest.TestCase):
             self.assertEqual(
                 core["steps"][0]["environment"]["LITE_MODEL"], "{lite_model}"
             )
+            if version == "0.149.1":
+                wham_job = next(
+                    job
+                    for job in scenario["capture_jobs"]
+                    if job["id"] == "official-wham-safe"
+                )
+                wham_command = wham_job["steps"][1]["argv"][2]
+                self.assertIn("--entrypoint python3", wham_command)
+                self.assertNotIn("{runtime_image} python3 ", wham_command)
+                realtime_job = next(
+                    job
+                    for job in scenario["capture_jobs"]
+                    if job["id"] == "official-relay-realtime-webrtc"
+                )
+                self.assertEqual(
+                    realtime_job["steps"][0]["environment"][
+                        "RELAY_SYNTHESIZE_REALTIME_CALL_AFTER"
+                    ],
+                    "1",
+                )
 
     def test_campaign_capture_scripts_bind_frozen_tool_root(self) -> None:
         tool_root = Path(__file__).resolve().parents[1]

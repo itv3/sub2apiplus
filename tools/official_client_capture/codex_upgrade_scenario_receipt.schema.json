@@ -48,6 +48,7 @@
     "final_state": {
       "enum": [
         "sideband_established",
+        "sideband_branch_verified_with_live_regression",
         "token_refreshed",
         "upload_chain_complete"
       ]
@@ -264,14 +265,35 @@
             ]
           },
           "then": {
-            "properties": {
-              "final_state": {
-                "const": "sideband_established"
+            "oneOf": [
+              {
+                "properties": {
+                  "final_state": {
+                    "const": "sideband_established"
+                  },
+                  "facts": {
+                    "oneOf": [
+                      {
+                        "$ref": "#/$defs/factsA11LegacyLive"
+                      },
+                      {
+                        "$ref": "#/$defs/factsA11Live"
+                      }
+                    ]
+                  }
+                }
               },
-              "facts": {
-                "$ref": "#/$defs/factsA11"
+              {
+                "properties": {
+                  "final_state": {
+                    "const": "sideband_branch_verified_with_live_regression"
+                  },
+                  "facts": {
+                    "$ref": "#/$defs/factsA11Controlled"
+                  }
+                }
               }
-            }
+            ]
           }
         },
         {
@@ -321,6 +343,19 @@
       ]
     },
     "factsA11": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/factsA11LegacyLive"
+        },
+        {
+          "$ref": "#/$defs/factsA11Live"
+        },
+        {
+          "$ref": "#/$defs/factsA11Controlled"
+        }
+      ]
+    },
+    "factsA11LegacyLive": {
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -340,6 +375,110 @@
         },
         "call_id_sha256": {
           "$ref": "#/$defs/sha256"
+        },
+        "sdp_or_started_event": {
+          "enum": [
+            "sdp_answer",
+            "thread_realtime_started"
+          ]
+        },
+        "async_error_count": {
+          "const": 0
+        },
+        "sideband_sni": {
+          "const": "api.openai.com"
+        },
+        "sideband_call_id_linked": {
+          "const": true
+        },
+        "teardown_error_count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "factsA11Live": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "observation_mode",
+        "call_create_status",
+        "call_id_sha256",
+        "sdp_or_started_event",
+        "async_error_count",
+        "teardown_error_count",
+        "sideband_sni",
+        "sideband_call_id_linked"
+      ],
+      "properties": {
+        "observation_mode": {
+          "const": "live_success"
+        },
+        "call_create_status": {
+          "type": "integer",
+          "minimum": 200,
+          "maximum": 299
+        },
+        "call_id_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "sdp_or_started_event": {
+          "enum": [
+            "sdp_answer",
+            "thread_realtime_started"
+          ]
+        },
+        "async_error_count": {
+          "const": 0
+        },
+        "sideband_sni": {
+          "const": "api.openai.com"
+        },
+        "sideband_call_id_linked": {
+          "const": true
+        },
+        "teardown_error_count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "factsA11Controlled": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "observation_mode",
+        "live_failure_status",
+        "live_failure_message_sha256",
+        "controlled_call_create_status",
+        "controlled_call_id_sha256",
+        "controlled_intervention",
+        "sdp_or_started_event",
+        "async_error_count",
+        "teardown_error_count",
+        "sideband_sni",
+        "sideband_call_id_linked"
+      ],
+      "properties": {
+        "observation_mode": {
+          "const": "live_failure_plus_controlled_branch"
+        },
+        "live_failure_status": {
+          "const": 400
+        },
+        "live_failure_message_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "controlled_call_create_status": {
+          "type": "integer",
+          "minimum": 200,
+          "maximum": 299
+        },
+        "controlled_call_id_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "controlled_intervention": {
+          "const": "synthesize_realtime_call_after_live_failure"
         },
         "sdp_or_started_event": {
           "enum": [

@@ -39,6 +39,9 @@ FINAL_STATES = {
     "A13": "token_refreshed",
     "A14": "upload_chain_complete",
 }
+A11_CONTROLLED_FINAL_STATE = "sideband_branch_verified_with_live_regression"
+A11_LIVE_MODE = "live_success"
+A11_CONTROLLED_MODE = "live_failure_plus_controlled_branch"
 # R0 §4.3 只为三个已证实失效的目标场景定义收据，其余场景不引入真实性收据。
 SUPPORTED_SCENARIOS = tuple(sorted(FINAL_STATES))
 # A13 的两条合法触发路径，都由官方 CLI 自己发出刷新请求；伪造 last_refresh 不在其中。
@@ -85,9 +88,18 @@ def _rfc3339(value: Any, label: str) -> str:
 
 
 def _facts_a11(facts: Any) -> dict[str, Any]:
-    expected = {
+    live_fields = {
         "call_create_status",
         "call_id_sha256",
+    }
+    controlled_fields = {
+        "live_failure_status",
+        "live_failure_message_sha256",
+        "controlled_call_create_status",
+        "controlled_call_id_sha256",
+        "controlled_intervention",
+    }
+    common_fields = {
         "sdp_or_started_event",
         "async_error_count",
         # 收尾阶段的连接重置次数：目标事实全部达成后上游未走优雅关闭握手的次数。
@@ -96,14 +108,54 @@ def _facts_a11(facts: Any) -> dict[str, Any]:
         "sideband_sni",
         "sideband_call_id_linked",
     }
-    _expect_exact(facts, expected, "A11 facts")
+    if not isinstance(facts, dict):
+        raise ScenarioReceiptError("A11 facts 必须是对象。")
+    mode = facts.get("observation_mode")
+    if mode == A11_LIVE_MODE:
+        _expect_exact(facts, {"observation_mode", *live_fields, *common_fields}, "A11 facts")
+    elif mode == A11_CONTROLLED_MODE:
+        _expect_exact(
+            facts,
+            {"observation_mode", *controlled_fields, *common_fields},
+            "A11 facts",
+        )
+    elif mode is None:
+        # 兼容已经冻结的 v1 自然成功收据；新产物必须显式写 observation_mode。
+        _expect_exact(facts, live_fields | common_fields, "A11 facts")
+    else:
+        raise ScenarioReceiptError(f"A11 observation_mode 非法：{mode!r}")
+
+    status_field = (
+        "controlled_call_create_status"
+        if mode == A11_CONTROLLED_MODE
+        else "call_create_status"
+    )
     if (
-        not isinstance(facts["call_create_status"], int)
-        or isinstance(facts["call_create_status"], bool)
-        or not 200 <= facts["call_create_status"] <= 299
+        not isinstance(facts[status_field], int)
+        or isinstance(facts[status_field], bool)
+        or not 200 <= facts[status_field] <= 299
     ):
-        raise ScenarioReceiptError("A11 call_create_status 必须是 2xx。")
-    _sha256(facts["call_id_sha256"], "A11 call_id_sha256")
+        raise ScenarioReceiptError(f"A11 {status_field} 必须是 2xx。")
+    if mode == A11_CONTROLLED_MODE:
+        if facts["live_failure_status"] != 400 or isinstance(
+            facts["live_failure_status"], bool
+        ):
+            raise ScenarioReceiptError("A11 live_failure_status 必须是自然 400。")
+        _sha256(
+            facts["live_failure_message_sha256"],
+            "A11 live_failure_message_sha256",
+        )
+        _sha256(
+            facts["controlled_call_id_sha256"],
+            "A11 controlled_call_id_sha256",
+        )
+        if (
+            facts["controlled_intervention"]
+            != "synthesize_realtime_call_after_live_failure"
+        ):
+            raise ScenarioReceiptError("A11 受控分支干预类型不匹配。")
+    else:
+        _sha256(facts["call_id_sha256"], "A11 call_id_sha256")
     if facts["sdp_or_started_event"] not in {
         "sdp_answer",
         "thread_realtime_started",
@@ -119,6 +171,17 @@ def _facts_a11(facts: Any) -> dict[str, Any]:
     if facts["sideband_call_id_linked"] is not True:
         raise ScenarioReceiptError("A11 sideband 未绑定 call_id。")
     return dict(facts)
+
+
+def _final_state_for(scenario_id: str, facts: Mapping[str, Any]) -> str | None:
+    """按事实模式选择最终态；受控 A11 不得伪装成纯自然 sideband 成功。"""
+
+    if (
+        scenario_id == "A11"
+        and facts.get("observation_mode") == A11_CONTROLLED_MODE
+    ):
+        return A11_CONTROLLED_FINAL_STATE
+    return FINAL_STATES.get(scenario_id)
 
 
 def _facts_a13(facts: Any) -> dict[str, Any]:
@@ -340,10 +403,10 @@ def validate_facts_document(
     _safe_id(payload["run_id"], "scenario_facts run_id")
     if run_id is not None and payload["run_id"] != run_id:
         raise ScenarioReceiptError("scenario_facts run 身份不匹配。")
-    if payload["final_state"] != FINAL_STATES.get(observed_scenario):
-        raise ScenarioReceiptError("scenario_facts final_state 不匹配。")
     _rfc3339(payload["observed_at_utc"], "scenario_facts observed_at_utc")
     facts = validate_facts(observed_scenario, payload["facts"])
+    if payload["final_state"] != _final_state_for(observed_scenario, facts):
+        raise ScenarioReceiptError("scenario_facts final_state 不匹配。")
     bindings = _validate_evidence_bindings(payload["evidence_bindings"], approved_roots)
     return {**payload, "facts": facts, "evidence_bindings": bindings}
 
@@ -392,9 +455,9 @@ def validate_receipt(
     _sha256(payload["run_nonce"], "run_nonce")
     _safe_id(payload["run_id"], "run_id")
     _rfc3339(payload["observed_at_utc"], "observed_at_utc")
-    if payload["final_state"] != FINAL_STATES.get(scenario_id):
-        raise ScenarioReceiptError("scenario_receipt final_state 不匹配。")
     facts = validate_facts(scenario_id, payload["facts"])
+    if payload["final_state"] != _final_state_for(scenario_id, facts):
+        raise ScenarioReceiptError("scenario_receipt final_state 不匹配。")
     _validate_evidence_bindings(payload["evidence_bindings"], approved_roots)
     producer = payload["producer"]
     _expect_exact(
@@ -469,7 +532,7 @@ def build_facts_document(
         "scenario_id": scenario_id,
         "job_id": job_id,
         "run_id": run_id,
-        "final_state": FINAL_STATES[scenario_id],
+        "final_state": _final_state_for(scenario_id, facts),
         "observed_at_utc": observed_at_utc,
         "evidence_bindings": evidence_bindings,
         "facts": dict(facts),
@@ -512,7 +575,7 @@ def build_receipt(
         "run_nonce": run_nonce,
         "run_id": run_id,
         "status": "success",
-        "final_state": FINAL_STATES[scenario_id],
+        "final_state": _final_state_for(scenario_id, normalized_facts),
         "observed_at_utc": observed_at_utc,
         "evidence_bindings": evidence_bindings,
         "facts": normalized_facts,

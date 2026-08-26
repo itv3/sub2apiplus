@@ -424,7 +424,7 @@
     {
       "scenario_id": "A11",
       "description": "realtime 第一跳、sideband WS 与终止清理",
-      "trigger": "Realtime sideband 会话真实建立，并留下可关联的 call_id 与 api.openai.com SNI。",
+      "trigger": "优先验证 Realtime 自然第一跳；若上游已知回归仍返回 400，则在同一证据根明确记录自然失败，并仅对第二次官方请求受控返回 call_id，以验证官方 CLI 派生的 sideband 与 api.openai.com SNI。",
       "preconditions": [
         "第一跳和第二跳可用同一 call_id 哈希关联",
         "api.openai.com SNI 抓包开启",
@@ -446,12 +446,13 @@
       ],
       "side_triggers": {
         "official": {
-          "trigger": "官方 CLI 走 V3／quicksilver=v2 路径发起 realtime，等待异步 started 或 SDP 最终事件；不手工拼 sideband。",
+          "trigger": "官方 CLI 先走 V3／quicksilver=v2 自然路径；自然 2xx 直接形成 live_success。若自然第一跳为已知 400，则同一中继只对第二次官方请求合成 200，由官方 CLI 自己派生 sideband，并形成 live_failure_plus_controlled_branch。",
           "preconditions": [
-            "call-create 返回 2xx 并取得 call_id",
-            "sideband 请求与 call_id 可哈希关联",
+            "自然请求必须先真实转发上游并绑定请求、响应与 app-server error",
+            "受控 200 必须明确标记 synthesize_realtime_call_after_live_failure",
+            "sideband 请求只与第二次受控响应的 call_id 可哈希关联",
             "api.openai.com SNI 由 -i any 抓包取得",
-            "不接受受控第二跳合成的 call_id"
+            "复合模式最终态不得写成纯自然 sideband_established"
           ]
         },
         "candidate": {
@@ -1812,6 +1813,7 @@
             "RUN_ID": "{campaign_id}-official-realtime-webrtc",
             "SCENARIO": "realtime-webrtc",
             "RELAY_HOSTS": "chatgpt.com api.openai.com",
+            "RELAY_SYNTHESIZE_REALTIME_CALL_AFTER": "1",
             "CAPTURE_CLIENT_HELLO": "1"
           },
           "timeout_seconds": 1800
@@ -2135,7 +2137,7 @@
           "argv": [
             "bash",
             "-c",
-            "set -Eeuo pipefail\nrun_root={capture_root}/runs/{campaign_id}-official-wham-safe\nruntime_root={capture_root}/runtime/{campaign_id}-official-wham-safe\ntest ! -e \"$run_root\"\ninstall -d -m 0700 \"$run_root\" \"$runtime_root\"\ncleanup() {{ rm -f -- \"$runtime_root/request.bin\" \"$runtime_root/ca.key\" \"$runtime_root/ca.crt\" \"$runtime_root/ca.srl\" \"$runtime_root/server.key\" \"$runtime_root/server.csr\" \"$runtime_root/server.ext\" \"$runtime_root/server.crt\"; rmdir -- \"$runtime_root\" 2>/dev/null || true; }}\ntrap cleanup EXIT INT TERM\nopenssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=Codex-Wham-Probe-CA -addext basicConstraints=critical,CA:TRUE -addext keyUsage=critical,keyCertSign,cRLSign -keyout \"$runtime_root/ca.key\" -out \"$runtime_root/ca.crt\"\nopenssl req -newkey rsa:2048 -nodes -subj /CN=chatgpt.com -keyout \"$runtime_root/server.key\" -out \"$runtime_root/server.csr\"\nprintf 'subjectAltName=DNS:chatgpt.com\\nbasicConstraints=critical,CA:FALSE\\nkeyUsage=critical,digitalSignature,keyEncipherment\\nextendedKeyUsage=serverAuth\\n' > \"$runtime_root/server.ext\"\nopenssl x509 -req -in \"$runtime_root/server.csr\" -CA \"$runtime_root/ca.crt\" -CAkey \"$runtime_root/ca.key\" -CAcreateserial -days 1 -sha256 -extfile \"$runtime_root/server.ext\" -out \"$runtime_root/server.crt\"\nchmod 0600 \"$runtime_root\"/*\ndocker run --rm --network none --add-host chatgpt.com:127.0.0.1 --cap-drop ALL --cap-add NET_BIND_SERVICE --security-opt no-new-privileges -v {capture_root}:/capture -v {repo_root}:{repo_root}:ro -v {relay_codex_bin}:/usr/local/bin/codex:ro -e SSL_CERT_FILE=/capture/runtime/{campaign_id}-official-wham-safe/ca.crt {runtime_image} python3 {repo_root}/tools/official_client_capture/drive_codex_wham_consume.py --codex-bin /usr/local/bin/codex --codex-version {target_version} --cert /capture/runtime/{campaign_id}-official-wham-safe/server.crt --key /capture/runtime/{campaign_id}-official-wham-safe/server.key --output /capture/runtime/{campaign_id}-official-wham-safe/request.bin --metadata /capture/runs/{campaign_id}-official-wham-safe/metadata.json\npython3 {repo_root}/tools/official_client_capture/scrub_raw_bytes.py --src \"$runtime_root\" --dst \"$run_root\" --verify"
+            "set -Eeuo pipefail\nrun_root={capture_root}/runs/{campaign_id}-official-wham-safe\nruntime_root={capture_root}/runtime/{campaign_id}-official-wham-safe\ntest ! -e \"$run_root\"\ninstall -d -m 0700 \"$run_root\" \"$runtime_root\"\ncleanup() {{ rm -f -- \"$runtime_root/request.bin\" \"$runtime_root/ca.key\" \"$runtime_root/ca.crt\" \"$runtime_root/ca.srl\" \"$runtime_root/server.key\" \"$runtime_root/server.csr\" \"$runtime_root/server.ext\" \"$runtime_root/server.crt\"; rmdir -- \"$runtime_root\" 2>/dev/null || true; }}\ntrap cleanup EXIT INT TERM\nopenssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=Codex-Wham-Probe-CA -addext basicConstraints=critical,CA:TRUE -addext keyUsage=critical,keyCertSign,cRLSign -keyout \"$runtime_root/ca.key\" -out \"$runtime_root/ca.crt\"\nopenssl req -newkey rsa:2048 -nodes -subj /CN=chatgpt.com -keyout \"$runtime_root/server.key\" -out \"$runtime_root/server.csr\"\nprintf 'subjectAltName=DNS:chatgpt.com\\nbasicConstraints=critical,CA:FALSE\\nkeyUsage=critical,digitalSignature,keyEncipherment\\nextendedKeyUsage=serverAuth\\n' > \"$runtime_root/server.ext\"\nopenssl x509 -req -in \"$runtime_root/server.csr\" -CA \"$runtime_root/ca.crt\" -CAkey \"$runtime_root/ca.key\" -CAcreateserial -days 1 -sha256 -extfile \"$runtime_root/server.ext\" -out \"$runtime_root/server.crt\"\nchmod 0600 \"$runtime_root\"/*\ndocker run --rm --network none --add-host chatgpt.com:127.0.0.1 --cap-drop ALL --cap-add NET_BIND_SERVICE --security-opt no-new-privileges --entrypoint python3 -v {capture_root}:/capture -v {repo_root}:{repo_root}:ro -v {relay_codex_bin}:/usr/local/bin/codex:ro -e SSL_CERT_FILE=/capture/runtime/{campaign_id}-official-wham-safe/ca.crt {runtime_image} {repo_root}/tools/official_client_capture/drive_codex_wham_consume.py --codex-bin /usr/local/bin/codex --codex-version {target_version} --cert /capture/runtime/{campaign_id}-official-wham-safe/server.crt --key /capture/runtime/{campaign_id}-official-wham-safe/server.key --output /capture/runtime/{campaign_id}-official-wham-safe/request.bin --metadata /capture/runs/{campaign_id}-official-wham-safe/metadata.json\npython3 {repo_root}/tools/official_client_capture/scrub_raw_bytes.py --src \"$runtime_root\" --dst \"$run_root\" --verify"
           ],
           "environment": {},
           "timeout_seconds": 1800

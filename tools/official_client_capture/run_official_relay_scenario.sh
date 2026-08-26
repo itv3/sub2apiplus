@@ -102,6 +102,14 @@ if [[ ! $compact_token_limit =~ ^[0-9]+$ ]]; then
   exit 2
 fi
 
+# 中继必须覆盖整条最长场景。原固定 300 秒会在 compact 第七轮左右先行退出，
+# wrapper 继续运行却只留下半截字节。上限防止调用方误把拼写错误变成超长驻留进程。
+relay_timeout=${RELAY_TIMEOUT:-1800}
+if [[ ! $relay_timeout =~ ^[0-9]+$ ]] || (( relay_timeout < 60 || relay_timeout > 7200 )); then
+  echo "RELAY_TIMEOUT 必须是 60..7200 秒的整数。" >&2
+  exit 2
+fi
+
 require_model_receipt=${REQUIRE_MODEL_CONDITION_RECEIPT:-0}
 model_track=${MODEL_TRACK:-}
 expect_lite=${EXPECT_USE_RESPONSES_LITE:-}
@@ -554,8 +562,21 @@ if [[ -n ${RELAY_INJECT_WS_TURN_STATE:-} ]]; then
   fi
   relay_intervention_args+=(--inject-ws-turn-state "$RELAY_INJECT_WS_TURN_STATE")
 fi
+if [[ ${RELAY_SYNTHESIZE_REALTIME_CALL:-0} == 1 && -n ${RELAY_SYNTHESIZE_REALTIME_CALL_AFTER:-} ]]; then
+  echo "realtime 立即合成与延迟合成开关不能同时启用。" >&2
+  exit 2
+fi
 if [[ ${RELAY_SYNTHESIZE_REALTIME_CALL:-0} == 1 ]]; then
   relay_intervention_args+=(--synthesize-realtime-call)
+fi
+if [[ -n ${RELAY_SYNTHESIZE_REALTIME_CALL_AFTER:-} ]]; then
+  if [[ ${RELAY_SYNTHESIZE_REALTIME_CALL_AFTER} != 1 ]]; then
+    echo "RELAY_SYNTHESIZE_REALTIME_CALL_AFTER 当前只允许 1。" >&2
+    exit 2
+  fi
+  relay_intervention_args+=(
+    --synthesize-realtime-call-after "$RELAY_SYNTHESIZE_REALTIME_CALL_AFTER"
+  )
 fi
 if [[ -n ${RELAY_RETRY_PROBE:-} ]]; then
   case "$RELAY_RETRY_PROBE" in
@@ -595,7 +616,7 @@ docker exec -d "$capture_container" python3 \
   --mode direct --port "$relay_port" \
   --upstream-host chatgpt.com --upstream-ip "$upstream_ip" \
   --upstream-map "$upstream_map" \
-  --output "/capture/runs/$run_id/relay" --timeout 300 \
+  --output "/capture/runs/$run_id/relay" --timeout "$relay_timeout" \
   "${relay_intervention_args[@]}"
 relay_started=1
 sleep 2
@@ -836,7 +857,9 @@ case "$scenario" in
   model-downshift)
     # ModelDownshift 需旧窗口 > 新窗口且当前 token 已超新模型阈值。默认阈值约
     # 115k，纯为触发灌入该体量会造成数十万 input token。这里把两个 hash 设成
-    # 相同，并把受控目录的旧／新模型阈值明确冻结为 16000 -> 8000。
+    # 相同，并把受控目录的旧／新模型窗口冻结为 272000 -> 128000、自动压缩
+    # 阈值冻结为 16000 -> 8000。两类字段缺一不可：官方实现先要求旧窗口严格大于
+    # 新窗口，随后才用新模型阈值判断是否需要 ModelDownshift 压缩。
     # 先导样本中首轮约 9089 token、降档压缩后约 7249，故 8000 能触发降档且不会
     # 立刻再触发 ContextLimit；最终仍由提取器拒绝任何额外压缩原因。
     # 这是明确记录的 I 类触发干预；官方 CLI、OAuth、V2 压缩实现与出站均不替换。
@@ -855,8 +878,10 @@ case "$scenario" in
           $selected[]
           | .comp_hash = "downshift-probe"
           | if .slug == $first
-            then .auto_compact_token_limit = 16000
-            else .auto_compact_token_limit = 8000
+            then .context_window = 272000
+              | .auto_compact_token_limit = 16000
+            else .context_window = 128000
+              | .auto_compact_token_limit = 8000
             end
         ]}
         end' /root/.codex/models_cache.json > "$work_dir/model-downshift-catalog.json"
@@ -933,9 +958,17 @@ fi
 
 echo "=== 场景 $scenario，$turns 轮 ==="
 if [[ $prompt == "__REALTIME__" ]]; then
-  # A11 目标路径：退出码不再被 `| tail -N || true` 吞掉。驱动落一份原始事件流，
-  # 由 build_scenario_facts.py 判定 started/SDP 与异步 error；这里只如实记录成败。
+  # A11 先跑一次完整自然请求。若当前上游仍以 session.model 拒绝，再由同一个中继
+  # 对第二次官方请求受控返回 200，让官方 CLI 自己派生 sideband。两次事件分别落盘，
+  # build_scenario_facts.py 必须把自然 400 与受控 200 同时写入复合收据，绝不把后者
+  # 冒充自然成功。若未来自然分支恢复，第一轮成功后不会再运行受控分支。
   realtime_status=0
+  realtime_events="/capture/runs/$run_id/scenario-observations/A11-realtime-events.json"
+  realtime_log="$work_dir/realtime-driver.log"
+  if [[ -n ${RELAY_SYNTHESIZE_REALTIME_CALL_AFTER:-} ]]; then
+    realtime_events="/capture/runs/$run_id/scenario-observations/A11-realtime-live-events.json"
+    realtime_log="$work_dir/realtime-live-driver.log"
+  fi
   # shellcheck disable=SC2086
   docker exec "$capture_container" timeout 120 python3 \
     "$capture_tool_root/drive_codex_realtime.py" \
@@ -944,11 +977,45 @@ if [[ $prompt == "__REALTIME__" ]]; then
     --model "$model" --transport webrtc --output-modality audio \
     --realtime-version "${REALTIME_VERSION:-v3}" \
     ${DISABLE_FEATURES:+$(for f in $DISABLE_FEATURES; do printf -- '--disable %s ' "$f"; done)} \
-    --events-output "/capture/runs/$run_id/scenario-observations/A11-realtime-events.json" \
-    --hold "${REALTIME_HOLD:-20}" > "$work_dir/realtime-driver.log" 2>&1 || realtime_status=$?
-  tail -10 "$work_dir/realtime-driver.log" || true
+    --events-output "$realtime_events" \
+    --hold "${REALTIME_HOLD:-20}" > "$realtime_log" 2>&1 || realtime_status=$?
+  tail -10 "$realtime_log" || true
   if (( realtime_status != 0 )); then
-    echo "⚠ realtime 驱动以 $realtime_status 退出，A11 目标分支未成立。" >&2
+    echo "⚠ realtime 自然驱动以 $realtime_status 退出，交由证据构建器判定。" >&2
+  fi
+
+  if [[ -n ${RELAY_SYNTHESIZE_REALTIME_CALL_AFTER:-} ]]; then
+    live_events_host="$work_dir/scenario-observations/A11-realtime-live-events.json"
+    live_success=0
+    if jq -e '
+      [.notifications[].method] as $methods
+      | ([range(0; $methods | length)
+          | select($methods[.] == "thread/realtime/started"
+                   or $methods[.] == "thread/realtime/sdp")] | max) as $target
+      | ($target != null)
+        and ([range(0; $target + 1)
+              | select($methods[.] == "thread/realtime/error")] | length == 0)
+    ' "$live_events_host" >/dev/null 2>&1; then
+      live_success=1
+      echo "realtime 自然分支已成立，不运行受控分支。"
+    fi
+    if (( live_success == 0 )); then
+      realtime_status=0
+      # shellcheck disable=SC2086
+      docker exec "$capture_container" timeout 120 python3 \
+        "$capture_tool_root/drive_codex_realtime.py" \
+        --codex-bin "$codex_bin" \
+        --codex-version "$codex_version" \
+        --model "$model" --transport webrtc --output-modality audio \
+        --realtime-version "${REALTIME_VERSION:-v3}" \
+        ${DISABLE_FEATURES:+$(for f in $DISABLE_FEATURES; do printf -- '--disable %s ' "$f"; done)} \
+        --events-output "/capture/runs/$run_id/scenario-observations/A11-realtime-events.json" \
+        --hold "${REALTIME_HOLD:-20}" > "$work_dir/realtime-controlled-driver.log" 2>&1 || realtime_status=$?
+      tail -10 "$work_dir/realtime-controlled-driver.log" || true
+      if (( realtime_status != 0 )); then
+        echo "⚠ realtime 受控分支驱动以 $realtime_status 退出，交由证据构建器判定。" >&2
+      fi
+    fi
   fi
 elif [[ $prompt == "__AUTH_REFRESH__" ]]; then
   # A13 目标路径：由官方 CLI 自己发出 OAuth token 刷新，退出码不吞。

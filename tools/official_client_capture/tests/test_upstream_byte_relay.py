@@ -35,6 +35,7 @@ from tools.official_client_capture.upstream_byte_relay import (
     _decode_client_text_frame,
     _encode_server_text_frame,
     _redact_oauth_refresh_body,
+    _should_synthesize_realtime_call,
     _synthetic_claude_response,
     _synthetic_aux_response,
     _synthetic_core_response,
@@ -96,6 +97,45 @@ def _fragmented_compressed_text_frames(
 
 
 class UpstreamByteRelayWebSocketTest(unittest.TestCase):
+    def test_realtime_延迟合成先放行一次自然请求(self) -> None:
+        self.assertFalse(
+            _should_synthesize_realtime_call(
+                immediate=False,
+                after_live_attempts=1,
+                attempt=1,
+            )
+        )
+        self.assertTrue(
+            _should_synthesize_realtime_call(
+                immediate=False,
+                after_live_attempts=1,
+                attempt=2,
+            )
+        )
+        self.assertFalse(
+            _should_synthesize_realtime_call(
+                immediate=False,
+                after_live_attempts=1,
+                attempt=3,
+            )
+        )
+
+    def test_realtime_旧开关仍只合成第一次(self) -> None:
+        self.assertTrue(
+            _should_synthesize_realtime_call(
+                immediate=True,
+                after_live_attempts=None,
+                attempt=1,
+            )
+        )
+        self.assertFalse(
+            _should_synthesize_realtime_call(
+                immediate=True,
+                after_live_attempts=None,
+                attempt=2,
+            )
+        )
+
     def test_relay_stop_marks_only_exact_client_only_valid_connection(self) -> None:
         metadata = {
             "valid": True,

@@ -171,6 +171,27 @@ class ScenarioFixtureBase(unittest.TestCase):
             encoding="utf-8",
         )
 
+    def _connection_meta(self, root: Path, index: int, **extra) -> dict:
+        request_path = root / "relay" / f"conn{index:03d}.client_to_upstream.bin"
+        response_path = root / "relay" / f"conn{index:03d}.upstream_to_client.bin"
+        request = request_path.read_bytes()
+        response = response_path.read_bytes()
+        return {
+            "connection_id": index,
+            "request_line": request.split(b"\r\n", 1)[0].decode("latin-1"),
+            "valid": True,
+            "bytes": {
+                "client_to_upstream": len(request),
+                "upstream_to_client": len(response),
+            },
+            "sha256": {
+                "client_to_upstream": hashlib.sha256(request).hexdigest(),
+                "upstream_to_client": hashlib.sha256(response).hexdigest(),
+            },
+            "opened_at_unix_ms": index * 1000,
+            **extra,
+        }
+
     def _write_observation(self, root: Path, name: str, payload: dict) -> None:
         (root / "scenario-observations" / name).write_text(
             json.dumps(payload, ensure_ascii=False), encoding="utf-8"
@@ -232,16 +253,31 @@ class ScenarioReceiptSchemaTest(unittest.TestCase):
 
     def test_逐场景_facts_闭合且钉死成功值(self) -> None:
         defs = self.schema["$defs"]
-        for name in ("factsA11", "factsA13", "factsA14"):
+        for name in (
+            "factsA11LegacyLive",
+            "factsA11Live",
+            "factsA11Controlled",
+            "factsA13",
+            "factsA14",
+        ):
             self.assertFalse(defs[name]["additionalProperties"], name)
         # 会话期错误恒为 0；收尾阶段的连接重置单列，允许非负整数。
-        self.assertEqual(defs["factsA11"]["properties"]["async_error_count"]["const"], 0)
+        self.assertEqual(defs["factsA11Live"]["properties"]["async_error_count"]["const"], 0)
         self.assertEqual(
-            defs["factsA11"]["properties"]["teardown_error_count"],
+            defs["factsA11Live"]["properties"]["teardown_error_count"],
             {"type": "integer", "minimum": 0},
         )
         self.assertEqual(
-            defs["factsA11"]["properties"]["sideband_sni"]["const"], "api.openai.com"
+            defs["factsA11Controlled"]["properties"]["sideband_sni"]["const"],
+            "api.openai.com",
+        )
+        self.assertEqual(
+            defs["factsA11Controlled"]["properties"]["live_failure_status"]["const"],
+            400,
+        )
+        self.assertIn(
+            "sideband_branch_verified_with_live_regression",
+            self.schema["properties"]["final_state"]["enum"],
         )
         self.assertEqual(
             defs["factsA13"]["properties"]["oauth_sni"]["const"], "auth.openai.com"
@@ -310,6 +346,7 @@ class ScenarioFactsPassTest(ScenarioFixtureBase):
             _ws_upgrade(sideband_target or "/v1/live/rtc_u0_EBE4oHU6FYPaFejVfBpPW"),
             _response(101, b""),
         )
+        self._write_relay_manifest(root, [self._connection_meta(root, 1)])
         (root / "direct" / "traffic.pcap").write_bytes(
             _pcap([(1_780_000_000.0, "api.openai.com")])
         )
@@ -341,7 +378,106 @@ class ScenarioFactsPassTest(ScenarioFixtureBase):
             hashlib.sha256(b"rtc_u0_EBE4oHU6FYPaFejVfBpPW").hexdigest(),
         )
         self.assertEqual(document["facts"]["async_error_count"], 0)
+        self.assertEqual(document["facts"]["observation_mode"], "live_success")
         self.assertTrue(document["facts"]["sideband_call_id_linked"])
+
+    def test_A11_自然400加受控分支产出明确复合事实(self) -> None:
+        root = self._run_root()
+        error_payload = {
+            "detail": "Field `session.model` is not allowed for this Codex realtime session"
+        }
+        error_body = json.dumps(error_payload, separators=(",", ":")).encode("utf-8")
+        self._write_relay(
+            root,
+            1,
+            _request(
+                "POST",
+                "/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas",
+                b"{}",
+            ),
+            _response(400, error_body),
+        )
+        self._write_relay(
+            root,
+            2,
+            _request(
+                "POST",
+                "/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas",
+                b"{}",
+            ),
+            _call_create_response("rtc_probe"),
+        )
+        self._write_relay(
+            root,
+            3,
+            _ws_upgrade("/v1/live/rtc_probe"),
+            _response(101, b""),
+        )
+        self._write_relay_manifest(
+            root,
+            [
+                self._connection_meta(
+                    root,
+                    1,
+                    realtime_call_attempt=1,
+                    realtime_call_action="forward_to_production",
+                ),
+                self._connection_meta(
+                    root,
+                    2,
+                    realtime_call_attempt=2,
+                    realtime_call_action="synthetic_response",
+                    intervention="synthesize_realtime_call_after_live_failure",
+                ),
+            ],
+        )
+        (root / "direct" / "traffic.pcap").write_bytes(
+            _pcap([(1_780_000_000.0, "api.openai.com")])
+        )
+        self._write_observation(
+            root,
+            "A11-realtime-live-events.json",
+            {
+                "notifications": [
+                    {
+                        "method": "thread/realtime/error",
+                        "params": {"message": error_body.decode("utf-8")},
+                    }
+                ]
+            },
+        )
+        self._write_observation(
+            root,
+            "A11-realtime-events.json",
+            {
+                "notifications": [
+                    {"method": "thread/realtime/started", "params": {"version": "v3"}},
+                    {"method": "thread/realtime/sdp", "params": {}},
+                ]
+            },
+        )
+
+        document = facts_builder.build(
+            "A11",
+            "official-relay-realtime-webrtc",
+            RUN_ID,
+            root,
+        )
+
+        self.assertEqual(
+            document["final_state"],
+            "sideband_branch_verified_with_live_regression",
+        )
+        self.assertEqual(
+            document["facts"]["observation_mode"],
+            "live_failure_plus_controlled_branch",
+        )
+        self.assertEqual(document["facts"]["live_failure_status"], 400)
+        self.assertEqual(document["facts"]["controlled_call_create_status"], 201)
+        self.assertEqual(
+            document["facts"]["controlled_intervention"],
+            "synthesize_realtime_call_after_live_failure",
+        )
 
     def test_A11_容忍收尾阶段的连接重置(self) -> None:
         """目标事实达成后上游未走优雅关闭：证据等价，判据不得因此失败。
@@ -474,6 +610,50 @@ class ScenarioFactsNegativeTest(ScenarioFixtureBase):
             {"notifications": [{"method": "thread/realtime/error"}], "sideband_call_id": ""},
         )
         with self.assertRaises(facts_builder.ScenarioFactsError):
+            facts_builder.build("A11", "official-relay-realtime-webrtc", RUN_ID, root)
+        self._assert_no_facts(root, "A11")
+
+    def test_A11_立即合成200不能冒充自然成功(self) -> None:
+        root = self._run_root()
+        self._write_relay(
+            root,
+            1,
+            _request(
+                "POST",
+                "/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas",
+                b"{}",
+            ),
+            _call_create_response("rtc_probe"),
+        )
+        self._write_relay(
+            root,
+            2,
+            _ws_upgrade("/v1/live/rtc_probe"),
+            _response(101, b""),
+        )
+        self._write_relay_manifest(
+            root,
+            [
+                self._connection_meta(
+                    root,
+                    1,
+                    intervention="synthesize_realtime_call",
+                )
+            ],
+        )
+        (root / "direct" / "traffic.pcap").write_bytes(
+            _pcap([(1_780_000_000.0, "api.openai.com")])
+        )
+        self._write_observation(
+            root,
+            "A11-realtime-events.json",
+            {"notifications": [{"method": "thread/realtime/started", "params": {}}]},
+        )
+
+        with self.assertRaisesRegex(
+            facts_builder.ScenarioFactsError,
+            "未受控的自然 2xx",
+        ):
             facts_builder.build("A11", "official-relay-realtime-webrtc", RUN_ID, root)
         self._assert_no_facts(root, "A11")
 
@@ -1335,6 +1515,18 @@ class OfficialCaptureScriptTest(unittest.TestCase):
         """R2：WebRTC 不传版本会默认 v1，header quicksilver=v1 已被上游拒绝。"""
 
         self.assertIn('--realtime-version "${REALTIME_VERSION:-v3}"', self.source)
+
+    def test_realtime_先自然请求再按需运行受控分支(self) -> None:
+        self.assertIn("RELAY_SYNTHESIZE_REALTIME_CALL_AFTER", self.source)
+        self.assertIn("--synthesize-realtime-call-after", self.source)
+        self.assertIn("A11-realtime-live-events.json", self.source)
+        self.assertIn("A11-realtime-events.json", self.source)
+        self.assertIn("realtime 自然分支已成立，不运行受控分支", self.source)
+
+    def test_中继超时覆盖最长场景(self) -> None:
+        self.assertIn("relay_timeout=${RELAY_TIMEOUT:-1800}", self.source)
+        self.assertIn('--timeout "$relay_timeout"', self.source)
+        self.assertNotIn("--timeout 300", self.source)
 
     def test_R8_中继脚本默认模型是主线非_Lite(self) -> None:
         """默认值是没传 MODEL 时的权威坐标，不能落回 Lite 模型。"""

@@ -677,6 +677,7 @@
               "final_state": {
                 "enum": [
                   "sideband_established",
+                  "sideband_branch_verified_with_live_regression",
                   "token_refreshed",
                   "upload_chain_complete"
                 ]

@@ -66,6 +66,12 @@ class CompactionScenarioModelTest(unittest.TestCase):
         """ModelDownshift 要的是窗口差异，hash 必须相同，免得先触发 CompHashChanged。"""
 
         self.assertIn('.comp_hash = "downshift-probe"', self.source)
+        self.assertIn('.context_window = 272000', self.source)
+        self.assertIn('.context_window = 128000', self.source)
+        self.assertLess(
+            self.source.index('.context_window = 272000'),
+            self.source.index('.context_window = 128000'),
+        )
         self.assertIn('.auto_compact_token_limit = 16000', self.source)
         self.assertIn('.auto_compact_token_limit = 8000', self.source)
 
