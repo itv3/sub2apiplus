@@ -18,6 +18,7 @@ const (
 	codex01491DocPreTransitionPath           = "docs/egress/maintenance/codex-0.149.1-doc-pre-tooling-transition.json"
 	codex01491P0ChainRepairPath              = "docs/egress/maintenance/codex-0.149.1-p0-transition-chain-repair.json"
 	codex01491CampaignBoundaryTransitionPath = "docs/egress/maintenance/codex-0.149.1-campaign-boundary-hardening-transition.json"
+	codex01491FailedEvidenceRecoveryPath     = "docs/egress/maintenance/codex-0.149.1-failed-evidence-recovery-transition.json"
 )
 
 var codex01491DocPreExpectedPaths = []string{
@@ -85,6 +86,13 @@ var codex01491CampaignBoundaryExpectedPaths = []string{
 	"tools/official_client_capture/tests/test_codex_upgrade_capture_lifecycle.py",
 	"tools/official_client_capture/tests/test_codex_upgrade_gate_receipt.py",
 	"tools/official_client_capture/tests/test_production_activation_receipt.py",
+}
+
+var codex01491FailedEvidenceRecoveryExpectedPaths = []string{
+	"backend/internal/officialegress/codex_01491_p0_transition_chain_repair_test.go",
+	"tools/official_client_capture/codex_upgrade.py",
+	"tools/official_client_capture/tests/test_codex_01491_doc_pre_transition.py",
+	"tools/official_client_capture/tests/test_job_retry_within_attempt.py",
 }
 
 type codex01491DocPreTransitionEntry struct {
@@ -210,6 +218,44 @@ type codex01491CampaignBoundaryTransitionReceipt struct {
 	IdentitySHA256 string `json:"identity_sha256"`
 }
 
+type codex01491FailedEvidenceRecoveryReceipt struct {
+	SchemaVersion         string `json:"schema_version"`
+	IssuedAtUTC           string `json:"issued_at_utc"`
+	BaseCommit            string `json:"base_commit"`
+	Scope                 string `json:"scope"`
+	FrameworkStage        string `json:"framework_stage"`
+	PredecessorTransition struct {
+		Path           string `json:"path"`
+		FileSHA256     string `json:"file_sha256"`
+		IdentitySHA256 string `json:"identity_sha256"`
+	} `json:"predecessor_transition"`
+	Boundaries struct {
+		FailedReceiptPathsRebased           bool `json:"failed_receipt_paths_rebased"`
+		FinalFailureEvidenceArchived        bool `json:"final_failure_evidence_archived"`
+		FixedEvidenceRootReleased           bool `json:"fixed_evidence_root_released"`
+		HistoricalFailureEvidenceReplayable bool `json:"historical_failure_evidence_replayable"`
+	} `json:"boundaries"`
+	Transitions  []codex01491P0ChainRepairEntry `json:"transitions"`
+	Verification struct {
+		CaptureToolTestsPassed  bool `json:"capture_tool_tests_passed"`
+		EgressSpecPassed        bool `json:"egress_spec_passed"`
+		TargetedTestsPassed     bool `json:"targeted_tests_passed"`
+		TransitionChainReplayed bool `json:"transition_chain_replayed"`
+	} `json:"verification"`
+	Safety struct {
+		ActivePreviousChanged      bool `json:"active_previous_changed"`
+		CatalogPromoted            bool `json:"catalog_promoted"`
+		DeploymentPerformed        bool `json:"deployment_performed"`
+		FormalCampaignCreated      bool `json:"formal_campaign_created"`
+		HistoricalReceiptsModified bool `json:"historical_receipts_modified"`
+		LiveRequestSent            bool `json:"live_request_sent"`
+		ProductionSelectorChanged  bool `json:"production_selector_changed"`
+		ServerAccessed             bool `json:"server_accessed"`
+	} `json:"safety"`
+	Result         string `json:"result"`
+	IdentitySHA256 string `json:"identity_sha256"`
+}
+
 var (
 	codex01491DocPreOnce              sync.Once
 	codex01491DocPreCached            codex01491DocPreTransitionReceipt
@@ -220,6 +266,9 @@ var (
 	codex01491CampaignBoundaryOnce    sync.Once
 	codex01491CampaignBoundaryCached  codex01491CampaignBoundaryTransitionReceipt
 	codex01491CampaignBoundaryLoadErr error
+	codex01491FailedRecoveryOnce      sync.Once
+	codex01491FailedRecoveryCached    codex01491FailedEvidenceRecoveryReceipt
+	codex01491FailedRecoveryLoadErr   error
 )
 
 func codex01491RepoFile(path string) ([]byte, error) {
@@ -531,7 +580,11 @@ func validateCodex01491CampaignBoundaryTransition(
 			}
 		}
 		current, readErr := codex01491RepoFile(entry.Path)
-		if readErr != nil || upstreamMergeFrameworkDigest(current) != entry.ToSHA256 {
+		currentDigest := upstreamMergeFrameworkDigest(current)
+		if readErr != nil || (currentDigest != entry.ToSHA256 &&
+			!codex01491FailedEvidenceRecoverySupersedes(
+				entry.Path, entry.ToSHA256, currentDigest,
+			)) {
 			return errors.New("Codex 0.149.1 Campaign 边界 transition 当前摘要不一致：" + entry.Path)
 		}
 		paths = append(paths, entry.Path)
@@ -540,6 +593,137 @@ func validateCodex01491CampaignBoundaryTransition(
 		return errors.New("Codex 0.149.1 Campaign 边界 transition 路径闭集非法")
 	}
 	return nil
+}
+
+func loadCodex01491FailedEvidenceRecovery() (
+	codex01491FailedEvidenceRecoveryReceipt,
+	error,
+) {
+	codex01491FailedRecoveryOnce.Do(func() {
+		raw, err := codex01491RepoFile(codex01491FailedEvidenceRecoveryPath)
+		if err != nil {
+			codex01491FailedRecoveryLoadErr = err
+			return
+		}
+		if err := decodeCodex01491Transition(raw, &codex01491FailedRecoveryCached); err != nil {
+			codex01491FailedRecoveryLoadErr = err
+			return
+		}
+		if err := codex01491VerifyIdentity(
+			raw,
+			codex01491FailedRecoveryCached.IdentitySHA256,
+		); err != nil {
+			codex01491FailedRecoveryLoadErr = err
+			return
+		}
+		codex01491FailedRecoveryLoadErr = validateCodex01491FailedEvidenceRecovery(
+			codex01491FailedRecoveryCached,
+		)
+	})
+	return codex01491FailedRecoveryCached, codex01491FailedRecoveryLoadErr
+}
+
+func validateCodex01491FailedEvidenceRecovery(
+	receipt codex01491FailedEvidenceRecoveryReceipt,
+) error {
+	if receipt.SchemaVersion != "official-client-codex-0.149.1-failed-evidence-recovery-transition/v1" ||
+		receipt.BaseCommit != "d9d4db88fb9a8dfdcba21ab9612b2eb4b6a0d7a3" ||
+		receipt.Scope != "codex-0.149.1-failed-evidence-recovery" ||
+		receipt.FrameworkStage != "VC-0/P0-RECOVERY" ||
+		receipt.Result != "failed_evidence_recovery_complete" {
+		return errors.New("Codex 0.149.1 失败证据恢复 transition 顶层事实非法")
+	}
+	if _, err := time.Parse(time.RFC3339, receipt.IssuedAtUTC); err != nil {
+		return errors.New("Codex 0.149.1 失败证据恢复 transition 时间非法")
+	}
+	predecessorRaw, err := codex01491RepoFile(codex01491CampaignBoundaryTransitionPath)
+	if err != nil {
+		return err
+	}
+	var predecessor codex01491CampaignBoundaryTransitionReceipt
+	if err := decodeCodex01491Transition(predecessorRaw, &predecessor); err != nil {
+		return err
+	}
+	if err := codex01491VerifyIdentity(predecessorRaw, predecessor.IdentitySHA256); err != nil {
+		return err
+	}
+	if predecessor.SchemaVersion != "official-client-codex-0.149.1-campaign-boundary-hardening-transition/v1" ||
+		predecessor.BaseCommit != "f0ec0ea0cb235d4a6845558f11d74ed067919fd2" ||
+		predecessor.Scope != "codex-0.149.1-campaign-boundary-hardening" ||
+		predecessor.Result != "campaign_boundary_hardening_complete" ||
+		receipt.PredecessorTransition.Path != codex01491CampaignBoundaryTransitionPath ||
+		receipt.PredecessorTransition.FileSHA256 != upstreamMergeFrameworkDigest(predecessorRaw) ||
+		receipt.PredecessorTransition.IdentitySHA256 != predecessor.IdentitySHA256 {
+		return errors.New("Codex 0.149.1 失败证据恢复 transition 前序绑定非法")
+	}
+	if !receipt.Boundaries.FailedReceiptPathsRebased ||
+		!receipt.Boundaries.FinalFailureEvidenceArchived ||
+		!receipt.Boundaries.FixedEvidenceRootReleased ||
+		!receipt.Boundaries.HistoricalFailureEvidenceReplayable {
+		return errors.New("Codex 0.149.1 失败证据恢复 transition 能力事实未闭合")
+	}
+	if !receipt.Verification.CaptureToolTestsPassed ||
+		!receipt.Verification.EgressSpecPassed ||
+		!receipt.Verification.TargetedTestsPassed ||
+		!receipt.Verification.TransitionChainReplayed {
+		return errors.New("Codex 0.149.1 失败证据恢复 transition 门禁未闭合")
+	}
+	if receipt.Safety.ActivePreviousChanged || receipt.Safety.CatalogPromoted ||
+		receipt.Safety.DeploymentPerformed || receipt.Safety.FormalCampaignCreated ||
+		receipt.Safety.HistoricalReceiptsModified || receipt.Safety.LiveRequestSent ||
+		receipt.Safety.ProductionSelectorChanged || receipt.Safety.ServerAccessed {
+		return errors.New("Codex 0.149.1 失败证据恢复 transition 安全边界非法")
+	}
+
+	paths := make([]string, 0, len(receipt.Transitions))
+	for _, entry := range receipt.Transitions {
+		if strings.TrimSpace(entry.Path) == "" || entry.Change != "modified" ||
+			len(entry.ToSHA256) != 64 || strings.TrimSpace(entry.Reason) == "" ||
+			len(entry.PredecessorSHA256s) != 1 || !slices.IsSorted(entry.PredecessorSHA256s) {
+			return errors.New("Codex 0.149.1 失败证据恢复 transition 条目非法")
+		}
+		predecessorDigest := entry.PredecessorSHA256s[0]
+		if len(predecessorDigest) != 64 || predecessorDigest == entry.ToSHA256 {
+			return errors.New("Codex 0.149.1 失败证据恢复 transition 前序摘要非法")
+		}
+		for _, prefix := range []string{
+			"backend/internal/officialegress/catalogdata/",
+			"backend/internal/officialegress/profilecontract/testdata/",
+			"backend/internal/officialegress/releasecontract/testdata/",
+			"docs/egress/lifecycle/migration-artifacts/",
+		} {
+			if strings.HasPrefix(entry.Path, prefix) {
+				return errors.New("Codex 0.149.1 失败证据恢复 transition 命中历史只读路径")
+			}
+		}
+		current, readErr := codex01491RepoFile(entry.Path)
+		if readErr != nil || upstreamMergeFrameworkDigest(current) != entry.ToSHA256 {
+			return errors.New("Codex 0.149.1 失败证据恢复 transition 当前摘要不一致：" + entry.Path)
+		}
+		paths = append(paths, entry.Path)
+	}
+	if !slices.Equal(paths, codex01491FailedEvidenceRecoveryExpectedPaths) {
+		return errors.New("Codex 0.149.1 失败证据恢复 transition 路径闭集非法")
+	}
+	return nil
+}
+
+func codex01491FailedEvidenceRecoverySupersedes(
+	path string,
+	priorDigest string,
+	currentDigest string,
+) bool {
+	receipt, err := loadCodex01491FailedEvidenceRecovery()
+	if err != nil {
+		return false
+	}
+	for _, entry := range receipt.Transitions {
+		if entry.Path == path && entry.ToSHA256 == currentDigest &&
+			slices.Contains(entry.PredecessorSHA256s, priorDigest) {
+			return true
+		}
+	}
+	return false
 }
 
 func codex01491CampaignBoundaryTransitionSupersedes(
@@ -551,11 +735,40 @@ func codex01491CampaignBoundaryTransitionSupersedes(
 	if err != nil {
 		return false
 	}
+	recovery, recoveryErr := loadCodex01491FailedEvidenceRecovery()
+	if recoveryErr != nil {
+		return false
+	}
+	edges := make(map[string][]string)
 	for _, entry := range receipt.Transitions {
-		if entry.Path == path && entry.ToSHA256 == currentDigest &&
-			slices.Contains(entry.PredecessorSHA256s, priorDigest) {
+		if entry.Path != path {
+			continue
+		}
+		for _, predecessor := range entry.PredecessorSHA256s {
+			edges[predecessor] = append(edges[predecessor], entry.ToSHA256)
+		}
+	}
+	for _, entry := range recovery.Transitions {
+		if entry.Path != path {
+			continue
+		}
+		for _, predecessor := range entry.PredecessorSHA256s {
+			edges[predecessor] = append(edges[predecessor], entry.ToSHA256)
+		}
+	}
+	queue := []string{priorDigest}
+	visited := map[string]bool{}
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+		if current == currentDigest {
 			return true
 		}
+		if visited[current] {
+			continue
+		}
+		visited[current] = true
+		queue = append(queue, edges[current]...)
 	}
 	return false
 }
@@ -596,7 +809,8 @@ func codex01491MaintenanceTransitionChainSupersedes(
 	docReceipt, docErr := loadCodex01491DocPreTransition()
 	repairReceipt, repairErr := loadCodex01491P0ChainRepair()
 	boundaryReceipt, boundaryErr := loadCodex01491CampaignBoundaryTransition()
-	if docErr != nil || repairErr != nil || boundaryErr != nil {
+	recoveryReceipt, recoveryErr := loadCodex01491FailedEvidenceRecovery()
+	if docErr != nil || repairErr != nil || boundaryErr != nil || recoveryErr != nil {
 		return false
 	}
 
@@ -609,6 +823,7 @@ func codex01491MaintenanceTransitionChainSupersedes(
 	for _, receipt := range [][]codex01491P0ChainRepairEntry{
 		repairReceipt.Transitions,
 		boundaryReceipt.Transitions,
+		recoveryReceipt.Transitions,
 	} {
 		for _, entry := range receipt {
 			if entry.Path != path {
@@ -645,6 +860,9 @@ func TestCodex01491MaintenanceTransitionsAreFrozen(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := loadCodex01491CampaignBoundaryTransition(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadCodex01491FailedEvidenceRecovery(); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -719,16 +937,20 @@ func TestCodex01491MaintenanceTransitionRejectsMutations(t *testing.T) {
 	}
 
 	var docUpgradeEntry codex01491DocPreTransitionEntry
-	var boundaryUpgradeEntry codex01491P0ChainRepairEntry
+	var recoveryUpgradeEntry codex01491P0ChainRepairEntry
 	for _, entry := range docReceipt.Transitions {
 		if entry.Path == "tools/official_client_capture/codex_upgrade.py" {
 			docUpgradeEntry = entry
 			break
 		}
 	}
-	for _, entry := range boundaryReceipt.Transitions {
+	recoveryReceipt, err := loadCodex01491FailedEvidenceRecovery()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range recoveryReceipt.Transitions {
 		if entry.Path == "tools/official_client_capture/codex_upgrade.py" {
-			boundaryUpgradeEntry = entry
+			recoveryUpgradeEntry = entry
 			break
 		}
 	}
@@ -736,9 +958,9 @@ func TestCodex01491MaintenanceTransitionRejectsMutations(t *testing.T) {
 		!codex01491MaintenanceTransitionChainSupersedes(
 			docUpgradeEntry.Path,
 			*docUpgradeEntry.FromSHA256,
-			boundaryUpgradeEntry.ToSHA256,
+			recoveryUpgradeEntry.ToSHA256,
 		) {
-		t.Fatal("Campaign 边界 transition 未形成 DOC-PRE 到当前摘要的可重放链")
+		t.Fatal("失败证据恢复 transition 未形成 DOC-PRE 到当前摘要的可重放链")
 	}
 
 	mutatedBoundary := boundaryReceipt
@@ -754,5 +976,35 @@ func TestCodex01491MaintenanceTransitionRejectsMutations(t *testing.T) {
 	mutatedBoundary.Safety.LiveRequestSent = true
 	if validateCodex01491CampaignBoundaryTransition(mutatedBoundary) == nil {
 		t.Fatal("Campaign 边界 transition 未拒绝 live request mutation")
+	}
+
+	recoveryEntry := recoveryReceipt.Transitions[0]
+	if !codex01491MaintenanceTransitionChainSupersedes(
+		recoveryEntry.Path,
+		recoveryEntry.PredecessorSHA256s[0],
+		recoveryEntry.ToSHA256,
+	) {
+		t.Fatal("失败证据恢复 transition 的精确三元组未被承认")
+	}
+	if codex01491MaintenanceTransitionChainSupersedes(
+		recoveryEntry.Path,
+		strings.Repeat("0", 64),
+		recoveryEntry.ToSHA256,
+	) {
+		t.Fatal("失败证据恢复 transition 接受了未知前序摘要")
+	}
+	mutatedRecovery := recoveryReceipt
+	mutatedRecovery.Transitions = append(
+		[]codex01491P0ChainRepairEntry(nil),
+		recoveryReceipt.Transitions...,
+	)
+	mutatedRecovery.Transitions[0].ToSHA256 = strings.Repeat("0", 64)
+	if validateCodex01491FailedEvidenceRecovery(mutatedRecovery) == nil {
+		t.Fatal("失败证据恢复 transition 未拒绝当前摘要 mutation")
+	}
+	mutatedRecovery = recoveryReceipt
+	mutatedRecovery.Safety.LiveRequestSent = true
+	if validateCodex01491FailedEvidenceRecovery(mutatedRecovery) == nil {
+		t.Fatal("失败证据恢复 transition 未拒绝 live request mutation")
 	}
 }

@@ -1930,9 +1930,17 @@ JOB_RETRY_DELAY_SECONDS = 30
 
 
 def _archive_failed_job_evidence(result: dict[str, Any], attempt_index: int) -> None:
-    """把失败那次的证据目录整体挪走，让补跑从干净状态开始。"""
+    """把失败证据整体归档，并同步重定位收据里的路径。
 
-    for value in result.get("evidence_roots") or []:
+    场景清单为同一个 Campaign 固定证据根。若最后一次内部重试失败后仍把目录留在
+    原路径，下一次 ``resume --rerun-failed`` 会在任何请求前触发“拒绝覆盖”，形成
+    永远无法恢复的失败环。归档既要清出固定路径，也必须更新失败任务收据；否则
+    attempt 会引用一个已经被移动、无法独立重放的旧地址。
+    """
+
+    replacements: dict[str, str] = {}
+
+    for value in list(result.get("evidence_roots") or []):
         root = Path(value)
         if not root.exists() or root.is_symlink():
             continue
@@ -1948,6 +1956,33 @@ def _archive_failed_job_evidence(result: dict[str, Any], attempt_index: int) -> 
         except OSError:
             # 归档失败不能吞掉：证据残留会让补跑在旧样本上得出结论。
             raise ConfigurationError(f"无法归档失败任务的证据目录：{root}")
+        replacements[str(root)] = str(archived)
+
+    if not replacements:
+        return
+
+    def rebase(value: Any) -> Any:
+        """递归更新证据根及其内部文件引用，不改动其他任务事实。"""
+
+        if isinstance(value, str):
+            for before, after in sorted(
+                replacements.items(), key=lambda item: len(item[0]), reverse=True
+            ):
+                if value == before:
+                    return after
+                prefix = before + os.sep
+                if value.startswith(prefix):
+                    return after + value[len(before) :]
+            return value
+        if isinstance(value, list):
+            return [rebase(item) for item in value]
+        if isinstance(value, dict):
+            return {key: rebase(item) for key, item in value.items()}
+        return value
+
+    rebased = rebase(result)
+    result.clear()
+    result.update(rebased)
 
 
 def _run_job_with_retry(
@@ -1963,6 +1998,9 @@ def _run_job_with_retry(
         if result.get("status") == "complete":
             return result
         if not job.required or attempt_index > JOB_RETRY_LIMIT:
+            # 最后一份失败证据也必须归档。否则跨 attempt 的显式 resume 会使用
+            # 同一固定证据根并被“禁止覆盖”门禁永久卡死。
+            _archive_failed_job_evidence(result, attempt_index)
             return result
         _archive_failed_job_evidence(result, attempt_index)
         attempt_index += 1

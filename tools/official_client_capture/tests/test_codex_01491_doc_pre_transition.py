@@ -26,6 +26,11 @@ HARDENING_TRANSITION_PATH = (
     ROOT
     / "docs/egress/maintenance/codex-0.149.1-campaign-boundary-hardening-transition.json"
 )
+RECOVERY_BASE_COMMIT = "d9d4db88fb9a8dfdcba21ab9612b2eb4b6a0d7a3"
+RECOVERY_TRANSITION_PATH = (
+    ROOT
+    / "docs/egress/maintenance/codex-0.149.1-failed-evidence-recovery-transition.json"
+)
 EXPECTED_PATHS = {
     ".gitignore",
     "Makefile",
@@ -84,6 +89,12 @@ HARDENING_EXPECTED_PATHS = {
     "tools/official_client_capture/tests/test_codex_upgrade_capture_lifecycle.py",
     "tools/official_client_capture/tests/test_codex_upgrade_gate_receipt.py",
     "tools/official_client_capture/tests/test_production_activation_receipt.py",
+}
+RECOVERY_EXPECTED_PATHS = {
+    "backend/internal/officialegress/codex_01491_p0_transition_chain_repair_test.go",
+    "tools/official_client_capture/codex_upgrade.py",
+    "tools/official_client_capture/tests/test_codex_01491_doc_pre_transition.py",
+    "tools/official_client_capture/tests/test_job_retry_within_attempt.py",
 }
 FORBIDDEN_TRANSITION_PREFIXES = (
     "backend/internal/officialegress/catalogdata/",
@@ -269,7 +280,15 @@ def load_hardening_transition() -> dict[str, Any]:
             or entry["predecessor_sha256s"] != [sha256(before)]
             or not current.is_file()
             or current.is_symlink()
-            or entry["to_sha256"] != sha256(current.read_bytes())
+            or (
+                entry["to_sha256"] != sha256(current.read_bytes())
+                and not recovery_transition_supersedes(
+                    load_recovery_transition(),
+                    path,
+                    entry["to_sha256"],
+                    sha256(current.read_bytes()),
+                )
+            )
             or not isinstance(entry["reason"], str)
             or not entry["reason"].strip()
         ):
@@ -295,10 +314,180 @@ def hardening_transition_supersedes(
     )
 
 
+def load_recovery_transition() -> dict[str, Any]:
+    """读取并完整重放最终失败证据恢复后继 transition。"""
+
+    document = load_json_document(RECOVERY_TRANSITION_PATH, "失败证据恢复 transition")
+    expected_keys = {
+        "schema_version",
+        "issued_at_utc",
+        "base_commit",
+        "scope",
+        "framework_stage",
+        "predecessor_transition",
+        "boundaries",
+        "transitions",
+        "verification",
+        "safety",
+        "result",
+        "identity_sha256",
+    }
+    if set(document) != expected_keys:
+        raise ValueError("失败证据恢复 transition 顶层字段非法")
+    if (
+        document["schema_version"]
+        != "official-client-codex-0.149.1-failed-evidence-recovery-transition/v1"
+        or document["base_commit"] != RECOVERY_BASE_COMMIT
+        or document["scope"] != "codex-0.149.1-failed-evidence-recovery"
+        or document["framework_stage"] != "VC-0/P0-RECOVERY"
+        or document["result"] != "failed_evidence_recovery_complete"
+    ):
+        raise ValueError("失败证据恢复 transition 顶层事实非法")
+    try:
+        datetime.fromisoformat(document["issued_at_utc"].replace("Z", "+00:00"))
+    except (AttributeError, ValueError) as error:
+        raise ValueError("失败证据恢复 transition 时间非法") from error
+
+    identity = dict(document)
+    recorded_identity = identity.pop("identity_sha256")
+    canonical = (
+        json.dumps(
+            identity,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+        + b"\n"
+    )
+    if recorded_identity != sha256(canonical):
+        raise ValueError("失败证据恢复 transition 自摘要不一致")
+
+    predecessor = load_json_document(HARDENING_TRANSITION_PATH, "Campaign 边界 transition")
+    expected_predecessor = {
+        "path": HARDENING_TRANSITION_PATH.relative_to(ROOT).as_posix(),
+        "file_sha256": sha256(HARDENING_TRANSITION_PATH.read_bytes()),
+        "identity_sha256": predecessor.get("identity_sha256"),
+    }
+    if document["predecessor_transition"] != expected_predecessor:
+        raise ValueError("失败证据恢复 transition 前序绑定非法")
+    if (
+        predecessor.get("schema_version")
+        != "official-client-codex-0.149.1-campaign-boundary-hardening-transition/v1"
+        or predecessor.get("scope") != "codex-0.149.1-campaign-boundary-hardening"
+        or predecessor.get("result") != "campaign_boundary_hardening_complete"
+    ):
+        raise ValueError("失败证据恢复 transition 前序身份非法")
+
+    if document["boundaries"] != {
+        "failed_receipt_paths_rebased": True,
+        "final_failure_evidence_archived": True,
+        "fixed_evidence_root_released": True,
+        "historical_failure_evidence_replayable": True,
+    }:
+        raise ValueError("失败证据恢复 transition 能力事实非法")
+    if set(document["verification"]) != {
+        "capture_tool_tests_passed",
+        "egress_spec_passed",
+        "targeted_tests_passed",
+        "transition_chain_replayed",
+    } or not all(document["verification"].values()):
+        raise ValueError("失败证据恢复 transition 门禁未闭合")
+    if set(document["safety"]) != {
+        "active_previous_changed",
+        "catalog_promoted",
+        "deployment_performed",
+        "formal_campaign_created",
+        "historical_receipts_modified",
+        "live_request_sent",
+        "production_selector_changed",
+        "server_accessed",
+    } or any(document["safety"].values()):
+        raise ValueError("失败证据恢复 transition 安全边界非法")
+
+    entries = document["transitions"]
+    paths = [entry.get("path") for entry in entries]
+    if paths != sorted(RECOVERY_EXPECTED_PATHS) or len(paths) != len(set(paths)):
+        raise ValueError("失败证据恢复 transition 路径闭集非法")
+    for entry in entries:
+        if set(entry) != {
+            "path",
+            "change",
+            "predecessor_sha256s",
+            "to_sha256",
+            "reason",
+        }:
+            raise ValueError("失败证据恢复 transition 条目字段非法")
+        path = entry["path"]
+        before = commit_blob(path, RECOVERY_BASE_COMMIT)
+        current = ROOT / path
+        if (
+            before is None
+            or entry["change"] != "modified"
+            or entry["predecessor_sha256s"] != [sha256(before)]
+            or not current.is_file()
+            or current.is_symlink()
+            or entry["to_sha256"] != sha256(current.read_bytes())
+            or not isinstance(entry["reason"], str)
+            or not entry["reason"].strip()
+        ):
+            raise ValueError(f"失败证据恢复 transition 条目非法：{path}")
+        if path.startswith(FORBIDDEN_TRANSITION_PREFIXES):
+            raise ValueError(f"失败证据恢复 transition 命中历史只读路径：{path}")
+    return document
+
+
+def recovery_transition_supersedes(
+    document: dict[str, Any],
+    path: str,
+    prior_digest: str,
+    current_digest: str,
+) -> bool:
+    """只承认恢复 transition 中登记的精确三元组。"""
+
+    return any(
+        entry["path"] == path
+        and entry["to_sha256"] == current_digest
+        and prior_digest in entry["predecessor_sha256s"]
+        for entry in document["transitions"]
+    )
+
+
+def maintenance_transition_chain_supersedes(
+    hardening: dict[str, Any],
+    recovery: dict[str, Any],
+    path: str,
+    prior_digest: str,
+    current_digest: str,
+) -> bool:
+    """重放 Campaign 边界与失败证据恢复的传递闭包。"""
+
+    edges: dict[str, list[str]] = {}
+    for document in (hardening, recovery):
+        for entry in document["transitions"]:
+            if entry["path"] != path:
+                continue
+            for predecessor in entry["predecessor_sha256s"]:
+                edges.setdefault(predecessor, []).append(entry["to_sha256"])
+
+    queue = [prior_digest]
+    visited: set[str] = set()
+    while queue:
+        digest = queue.pop(0)
+        if digest == current_digest:
+            return True
+        if digest in visited:
+            continue
+        visited.add(digest)
+        queue.extend(edges.get(digest, []))
+    return False
+
+
 class Codex01491DocPreTransitionTest(unittest.TestCase):
     def test_transition_identity_and_file_closure_are_frozen(self) -> None:
         document = load_transition()
         hardening = load_hardening_transition()
+        recovery = load_recovery_transition()
         self.assertEqual(
             set(document),
             {
@@ -363,8 +552,9 @@ class Codex01491DocPreTransitionTest(unittest.TestCase):
             current_digest = sha256(current.read_bytes())
             self.assertTrue(
                 entry["to_sha256"] == current_digest
-                or hardening_transition_supersedes(
+                or maintenance_transition_chain_supersedes(
                     hardening,
+                    recovery,
                     path,
                     entry["to_sha256"],
                     current_digest,
@@ -457,6 +647,26 @@ class Codex01491DocPreTransitionTest(unittest.TestCase):
         )
         self.assertFalse(
             hardening_transition_supersedes(
+                document,
+                entry["path"],
+                "0" * 64,
+                entry["to_sha256"],
+            )
+        )
+
+    def test_failed_evidence_recovery_transition_is_frozen(self) -> None:
+        document = load_recovery_transition()
+        entry = document["transitions"][0]
+        self.assertTrue(
+            recovery_transition_supersedes(
+                document,
+                entry["path"],
+                entry["predecessor_sha256s"][0],
+                entry["to_sha256"],
+            )
+        )
+        self.assertFalse(
+            recovery_transition_supersedes(
                 document,
                 entry["path"],
                 "0" * 64,

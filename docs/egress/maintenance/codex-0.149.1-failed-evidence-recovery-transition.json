@@ -1,0 +1,74 @@
+{
+  "schema_version": "official-client-codex-0.149.1-failed-evidence-recovery-transition/v1",
+  "issued_at_utc": "2026-08-26T00:11:36Z",
+  "base_commit": "d9d4db88fb9a8dfdcba21ab9612b2eb4b6a0d7a3",
+  "scope": "codex-0.149.1-failed-evidence-recovery",
+  "framework_stage": "VC-0/P0-RECOVERY",
+  "predecessor_transition": {
+    "path": "docs/egress/maintenance/codex-0.149.1-campaign-boundary-hardening-transition.json",
+    "file_sha256": "13357bfd285b4a5ba50a2381c2c973f51cea05067dbfeec725f41bd992b0cbfd",
+    "identity_sha256": "a6333959127274ec091e6007b89a53d548a87436b4f8de3933cb06b2a6a8666f"
+  },
+  "boundaries": {
+    "failed_receipt_paths_rebased": true,
+    "final_failure_evidence_archived": true,
+    "fixed_evidence_root_released": true,
+    "historical_failure_evidence_replayable": true
+  },
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/codex_01491_p0_transition_chain_repair_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "8ec9acd6b3507e9bde91b130915dc519f44c2debcc62e3e36d4afe4d3a569a5e"
+      ],
+      "to_sha256": "820d78f8dc3a05ea39da69b5167bd2d5fbbde820b68e2636bb982108b945db30",
+      "reason": "追加失败证据恢复后继 transition 校验，并把该后继纳入 maintenance transition 传递闭包。"
+    },
+    {
+      "path": "tools/official_client_capture/codex_upgrade.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "681b40075e8aa1c42dded69d73a87607654b0b6df61adfb2029609782937149f"
+      ],
+      "to_sha256": "2580721d6d940f41153f55d630f4dd597f796632f8c014bddb3b863de261e5f8",
+      "reason": "最终失败时也归档固定证据根，并递归重定位失败收据中的根目录及内部文件引用，使跨 attempt 补跑可恢复。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_doc_pre_transition.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "7a7f082b666176ebb02813d8d7ee8041f083237022e1373b3198f99389237f39"
+      ],
+      "to_sha256": "cde5d34a1d56a55bfbcfcd9061eceb3129218fa1f57c033ea999111ee6d1ac48",
+      "reason": "保持既有 transition 原文只读，并严格重放失败证据恢复后继的身份、路径闭集和摘要三元组。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_job_retry_within_attempt.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "02256acc43f456911a95720a40e1e3c83b677eaefa634039ed9901c11c16f7c8"
+      ],
+      "to_sha256": "833e0a92f6f39f1ff65f554c1f607522987f7ac7c0ce4720b20bba23877ab22f",
+      "reason": "覆盖最终失败证据归档、固定路径释放和失败收据路径重定位，确保下一次显式 resume 可重新创建证据根。"
+    }
+  ],
+  "verification": {
+    "capture_tool_tests_passed": true,
+    "egress_spec_passed": true,
+    "targeted_tests_passed": true,
+    "transition_chain_replayed": true
+  },
+  "safety": {
+    "active_previous_changed": false,
+    "catalog_promoted": false,
+    "deployment_performed": false,
+    "formal_campaign_created": false,
+    "historical_receipts_modified": false,
+    "live_request_sent": false,
+    "production_selector_changed": false,
+    "server_accessed": false
+  },
+  "result": "failed_evidence_recovery_complete",
+  "identity_sha256": "80ed8e1735eb43e035436cd1f32c1dfc3ed5ae79d0003fdc8fa1154bdf2b9324"
+}
