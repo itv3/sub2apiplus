@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 import tempfile
@@ -239,7 +240,7 @@ class ModelConditionReceiptTest(unittest.TestCase):
                 expected_model="gpt-5.6-luna",
                 expected_lite=True,
             )
-            self.assertEqual(len(receipt["evidence_bindings"]), 5)
+            self.assertEqual(len(receipt["evidence_bindings"]), 6)
             validate_receipt(
                 receipt,
                 root=root,
@@ -277,6 +278,91 @@ class ModelConditionReceiptTest(unittest.TestCase):
                 expected_lite=True,
             )
             self.assertEqual(receipt["observed_request_models"], ["gpt-5.6-luna"])
+            bound_paths = {item["path"] for item in receipt["evidence_bindings"]}
+            self.assertIn("relay/relay.json", bound_paths)
+            self.assertNotIn("relay/conn003.client_to_upstream.bin", bound_paths)
+
+    def test_允许受_manifest_约束的单向_models_失败尝试(self) -> None:
+        """已有完整 200 时，额外单向请求是上游零响应事实，不是文件丢失。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(Path(directory) / "run")
+            request = (
+                b"GET /backend-api/codex/models?client_version=0.149.1 HTTP/1.1\r\n"
+                b"host: chatgpt.com\r\n\r\n"
+            )
+            request_path = root / "relay" / "conn003.client_to_upstream.bin"
+            request_path.write_bytes(request)
+            relay_path = root / "relay" / "relay.json"
+            relay = json.loads(relay_path.read_text(encoding="utf-8"))
+            relay["connections"].append(
+                {
+                    "connection_id": 3,
+                    "valid": True,
+                    "bytes": {"client_to_upstream": len(request)},
+                    "sha256": {
+                        "client_to_upstream": hashlib.sha256(request).hexdigest()
+                    },
+                    "segments": [
+                        {
+                            "direction": "client_to_upstream",
+                            "offset": 0,
+                            "length": len(request),
+                        }
+                    ],
+                }
+            )
+            relay_path.write_text(json.dumps(relay), encoding="utf-8")
+
+            receipt = build_receipt(
+                root=root,
+                job_id="official-lite-http-response",
+                run_id="campaign-lite-http",
+                track="lite",
+                expected_model="gpt-5.6-luna",
+                expected_lite=True,
+            )
+            self.assertEqual(receipt["observed_request_models"], ["gpt-5.6-luna"])
+            bound_paths = {item["path"] for item in receipt["evidence_bindings"]}
+            self.assertIn("relay/relay.json", bound_paths)
+            self.assertIn("relay/conn003.client_to_upstream.bin", bound_paths)
+
+    def test_单向_models_的_manifest_摘要漂移仍失败关闭(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(Path(directory) / "run")
+            request = (
+                b"GET /backend-api/codex/models?client_version=0.149.1 HTTP/1.1\r\n"
+                b"host: chatgpt.com\r\n\r\n"
+            )
+            (root / "relay" / "conn003.client_to_upstream.bin").write_bytes(request)
+            relay_path = root / "relay" / "relay.json"
+            relay = json.loads(relay_path.read_text(encoding="utf-8"))
+            relay["connections"].append(
+                {
+                    "connection_id": 3,
+                    "valid": True,
+                    "bytes": {"client_to_upstream": len(request)},
+                    "sha256": {"client_to_upstream": "0" * 64},
+                    "segments": [
+                        {
+                            "direction": "client_to_upstream",
+                            "offset": 0,
+                            "length": len(request),
+                        }
+                    ],
+                }
+            )
+            relay_path.write_text(json.dumps(relay), encoding="utf-8")
+
+            with self.assertRaisesRegex(ModelConditionReceiptError, "缺少连接 3"):
+                build_receipt(
+                    root=root,
+                    job_id="official-lite-http-response",
+                    run_id="campaign-lite-http",
+                    track="lite",
+                    expected_model="gpt-5.6-luna",
+                    expected_lite=True,
+                )
 
     def test_rejects_missing_bytes_for_nonempty_connection(self) -> None:
         """只豁免严格空连接；声称有 segment 的连接仍须存在原始字节。"""

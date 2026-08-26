@@ -21,6 +21,7 @@ CAPTURE_SOURCE_RELATIVE_PATHS = (
     "claude_fw_e_runtime_snapshot.py",
     "claude_fw_f_complete_runner.py",
     "drive_claude_tui.py",
+    "drive_codex_model_catalog.py",
     "runtime_host_receipt.py",
     "upstream_byte_relay.py",
     "scrub_raw_bytes.py",

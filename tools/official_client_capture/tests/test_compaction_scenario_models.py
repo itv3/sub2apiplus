@@ -25,16 +25,24 @@ class CompactionScenarioModelTest(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_压缩场景不依赖_luna(self) -> None:
-        """任何 compaction_*_model 都不得再指向 gpt-5.6-luna。"""
+    def test_首模型跟随_Campaign_且不再硬编码不受支持模型(self) -> None:
+        """两条换模链都必须从 MODEL 取得首模型，不能再写死 gpt-5.4。"""
 
-        assigned = re.findall(
-            r"compaction_(?:first|second)_model='([^']*)'", self.source
+        self.assertIn("compaction_first_model=$model", self.source)
+        self.assertEqual(self.source.count("configure_compaction_models"), 3)
+        self.assertNotRegex(
+            self.source,
+            r"compaction_first_model=['\"]gpt-",
         )
-        self.assertTrue(assigned, "未找到换模对赋值")
-        for model in assigned:
-            with self.subTest(model=model):
-                self.assertNotIn("luna", model)
+        self.assertNotIn("gpt-5.3-codex-spark", self.source)
+
+    def test_第二模型可冻结覆盖且默认使用非_Lite_mini(self) -> None:
+        self.assertIn(
+            "local secondary=${COMPACTION_SECOND_MODEL:-gpt-5.4-mini}",
+            self.source,
+        )
+        self.assertIn("compaction_second_model=$secondary", self.source)
+        self.assertIn(".use_responses_lite != false", self.source)
 
     def test_两个压缩场景都用受控目录(self) -> None:
         """受控目录让触发条件来自目录本身，而不是生产目录的当期状态。"""
@@ -58,6 +66,8 @@ class CompactionScenarioModelTest(unittest.TestCase):
         """ModelDownshift 要的是窗口差异，hash 必须相同，免得先触发 CompHashChanged。"""
 
         self.assertIn('.comp_hash = "downshift-probe"', self.source)
+        self.assertIn('.auto_compact_token_limit = 16000', self.source)
+        self.assertIn('.auto_compact_token_limit = 8000', self.source)
 
 
 if __name__ == "__main__":

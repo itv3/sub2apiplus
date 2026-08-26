@@ -44,6 +44,23 @@ compaction_first_model=""
 compaction_second_model=""
 compaction_catalog=""
 
+configure_compaction_models() {
+  # 首模型必须跟随 Campaign 冻结的主模型，不能再写死成某个可能已被账号禁用的
+  # 历史模型。第二模型默认选当前 0.149.1 目录中的非 Lite mini 变体；调用方如需
+  # 替换，仍必须给出合法且不同的模型 slug，目录生成阶段会再次核验它真实存在。
+  local secondary=${COMPACTION_SECOND_MODEL:-gpt-5.4-mini}
+  if [[ ! $model =~ ^[A-Za-z0-9._-]+$ || ! $secondary =~ ^[A-Za-z0-9._-]+$ ]]; then
+    echo "压缩场景模型只能包含字母、数字、点、下划线和连字符。" >&2
+    exit 2
+  fi
+  if [[ $model == "$secondary" ]]; then
+    echo "压缩场景的首模型与第二模型必须不同。" >&2
+    exit 2
+  fi
+  compaction_first_model=$model
+  compaction_second_model=$secondary
+}
+
 # **必须关掉的非必要流量**（§1.5.4）。不关的后果是实测的：一次三轮对话 58 个请求里
 # 49 个是 ps/plugins/* 与 ps/mcp，真业务请求只有 6 个——连接数、请求数这类统计
 # 全被污染，而这些流量按 §1.5.4 本就不构成必须复刻的形态。
@@ -122,6 +139,7 @@ requirements_changed=0
 requirements_backup="/tmp/codex-requirements-$run_id.toml"
 memgen_home=""
 file_upload_home=""
+model_catalog_home=""
 auth_backup=""
 auth_before_sha256=""
 # SCN-REALITY-01：目标场景的原始观测落在这里，供 build_scenario_facts.py 解析。
@@ -386,6 +404,37 @@ restore_auth_json() {
   auth_backup=""
 }
 
+prewarm_model_catalog() {
+  # 需要模型条件收据的任务必须先取得一份阻塞式在线目录响应。codex exec 会并发
+  # 刷新目录，但进程可能在后台请求返回前退出；把这种竞速当成模型条件成功会削弱
+  # 证据，把它一律当成原始字节丢失又会随机作废完整 Responses 样本。这里使用隔离
+  # CODEX_HOME 强制 OnlineIfUncached，并由驱动同时核验 app-server RPC 与 relay 原文。
+  model_catalog_home="/tmp/codex-model-catalog-$run_id"
+  docker exec "$capture_container" sh -c \
+    "rm -rf '$model_catalog_home' && install -d -m 0700 '$model_catalog_home'"
+  local attempt home
+  for attempt in 1 2 3; do
+    home="$model_catalog_home/$attempt"
+    docker exec "$capture_container" sh -c \
+      "install -d -m 0700 '$home' && install -m 0600 /root/.codex/auth.json '$home/auth.json'"
+    if docker exec -e CODEX_HOME="$home" "$capture_container" timeout 150 \
+      python3 "$capture_tool_root/drive_codex_model_catalog.py" \
+      --codex-bin "$codex_bin" \
+      --codex-version "$codex_version" \
+      --model "$model" \
+      --expect-use-responses-lite "$expect_lite" \
+      --relay-dir "/capture/runs/$run_id/relay" \
+      --output "/capture/runs/$run_id/model-catalog-prewarm.json" \
+      --timeout 120; then
+      return 0
+    fi
+    echo "⚠ 在线模型目录预热第 $attempt 次未形成完整原始响应。" >&2
+    sleep 2
+  done
+  echo "❌ 三次在线模型目录预热均未形成完整 /models HTTP 200 原始响应。" >&2
+  return 1
+}
+
 cleanup() {
   local status=$?
   # ⚠ 清理函数必须在 set +e 下跑。脚本顶部是 `set -Eeuo pipefail`，而 EXIT trap 里
@@ -421,6 +470,9 @@ cleanup() {
   fi
   if [[ -n $file_upload_home ]]; then
     docker exec "$capture_container" rm -rf -- "$file_upload_home" >/dev/null 2>&1 || true
+  fi
+  if [[ -n $model_catalog_home ]]; then
+    docker exec "$capture_container" rm -rf -- "$model_catalog_home" >/dev/null 2>&1 || true
   fi
   restore_auth_json
   docker exec "$capture_container" rm -f /tmp/codex-guardian-probe.txt >/dev/null 2>&1 || true
@@ -757,48 +809,57 @@ case "$scenario" in
     # maybe_run_previous_model_inline_compact 触发。
     #
     # 原先直接借生产目录里 gpt-5.6-luna -> gpt-5.4 的自然跨组（3000 -> 2911），
-    # 但那让本场景的成败绑死在某个特定模型的上游可用性上——实测 gpt-5.6-luna
-    # 间歇性连第一轮 turn 都跑不完（turn/completed 状态 failed、压缩事件为 0），
-    # 整轮 official 采集因此反复作废。改为与 model-downshift 同样的受控目录：
-    # 只把两个 hash 设成不同，模型固定用采集主模型及其 mini 变体。
+    # 但那让本场景的成败绑死在某个特定模型的上游可用性上——实测旧账号不支持
+    # gpt-5.4，第一轮直接失败。改为与 model-downshift 同样的受控目录：首模型
+    # 跟随 Campaign 的 MODEL，第二模型使用目录中已核验的非 Lite mini 变体。
     # 这是明确记录的 I 类触发干预；官方 CLI、OAuth、V2 压缩实现与出站均不替换。
     prompt='__COMPACTION_REASON__'
     compaction_reason='comp_hash_changed'
-    compaction_first_model='gpt-5.4'
-    compaction_second_model='gpt-5.4-mini'
+    configure_compaction_models
     compaction_catalog="/capture/runs/$run_id/comp-hash-catalog.json"
-    docker exec "$capture_container" jq '
-      {models: [
-        .models[]
-        | select(.slug == "gpt-5.4" or .slug == "gpt-5.4-mini")
-        | if .slug == "gpt-5.4"
-          then .comp_hash = "comp-hash-probe-first"
-          else .comp_hash = "comp-hash-probe-second"
-          end
-      ]}' /root/.codex/models_cache.json > "$work_dir/comp-hash-catalog.json"
+    docker exec "$capture_container" jq \
+      --arg first "$compaction_first_model" \
+      --arg second "$compaction_second_model" '
+      [.models[] | select(.slug == $first or .slug == $second)] as $selected
+      | if (($selected | length) != 2)
+          or any($selected[]; .use_responses_lite != false)
+        then error("压缩场景模型目录缺少两个唯一的非 Lite 模型")
+        else {models: [
+          $selected[]
+          | if .slug == $first
+            then .comp_hash = "comp-hash-probe-first"
+            else .comp_hash = "comp-hash-probe-second"
+            end
+        ]}
+        end' /root/.codex/models_cache.json > "$work_dir/comp-hash-catalog.json"
     chmod 600 "$work_dir/comp-hash-catalog.json" ;;
   model-downshift)
     # ModelDownshift 需旧窗口 > 新窗口且当前 token 已超新模型阈值。默认阈值约
-    # 115k，纯为触发灌入该体量会造成数十万 input token。这里保留生产模型的
-    # 272k -> 128k 窗口关系，只把两个 hash 设成相同、把新模型阈值降为 8000。
+    # 115k，纯为触发灌入该体量会造成数十万 input token。这里把两个 hash 设成
+    # 相同，并把受控目录的旧／新模型阈值明确冻结为 16000 -> 8000。
     # 先导样本中首轮约 9089 token、降档压缩后约 7249，故 8000 能触发降档且不会
     # 立刻再触发 ContextLimit；最终仍由提取器拒绝任何额外压缩原因。
     # 这是明确记录的 I 类触发干预；官方 CLI、OAuth、V2 压缩实现与出站均不替换。
     prompt='__COMPACTION_REASON__'
     compaction_reason='model_downshift'
-    compaction_first_model='gpt-5.4'
-    compaction_second_model='gpt-5.3-codex-spark'
+    configure_compaction_models
     compaction_catalog="/capture/runs/$run_id/model-downshift-catalog.json"
-    docker exec "$capture_container" jq '
-      {models: [
-        .models[]
-        | select(.slug == "gpt-5.4" or .slug == "gpt-5.3-codex-spark")
-        | .comp_hash = "downshift-probe"
-        | if .slug == "gpt-5.3-codex-spark"
-          then .auto_compact_token_limit = 8000
-          else .
-          end
-      ]}' /root/.codex/models_cache.json > "$work_dir/model-downshift-catalog.json"
+    docker exec "$capture_container" jq \
+      --arg first "$compaction_first_model" \
+      --arg second "$compaction_second_model" '
+      [.models[] | select(.slug == $first or .slug == $second)] as $selected
+      | if (($selected | length) != 2)
+          or any($selected[]; .use_responses_lite != false)
+        then error("压缩场景模型目录缺少两个唯一的非 Lite 模型")
+        else {models: [
+          $selected[]
+          | .comp_hash = "downshift-probe"
+          | if .slug == $first
+            then .auto_compact_token_limit = 16000
+            else .auto_compact_token_limit = 8000
+            end
+        ]}
+        end' /root/.codex/models_cache.json > "$work_dir/model-downshift-catalog.json"
     chmod 600 "$work_dir/model-downshift-catalog.json" ;;
   oauth-refresh)
     # 采 SPEC-EP-002 的 auth-sni：官方 CLI 的 OAuth token 刷新走 auth.openai.com。
@@ -864,6 +925,11 @@ case "$scenario" in
     prompt="这是经过授权的官方客户端出站采集。目标：调用一次内置 Sites 的 ${A14_TOOL_NAME:-save_site_version} 工具。如果该工具尚未在当前会话中直接暴露，请先执行必要的工具检索或加载步骤把它取出来——这些检索调用是允许且必要的。取到后只调用它一次，参数必须是：project_id=ep002-probe-do-not-exist，commit_sha=0000000000000000000000000000000000000000，archive=$file_upload_home/ep002-probe.tar.gz。即使工具报错也立即停止，不要重试、不要创建站点、不要发布或部署。" ;;
   *) echo "未知 SCENARIO: $scenario" >&2; exit 2 ;;
 esac
+
+if [[ $require_model_receipt == 1 ]]; then
+  echo "=== 在线模型目录预热（$model_track / $model）==="
+  prewarm_model_catalog
+fi
 
 echo "=== 场景 $scenario，$turns 轮 ==="
 if [[ $prompt == "__REALTIME__" ]]; then

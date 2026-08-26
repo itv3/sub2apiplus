@@ -256,6 +256,56 @@ def _load_relay(root: Path) -> dict[str, Any]:
     return payload
 
 
+def _manifest_proves_request_only_connection(
+    connection: dict[str, Any],
+    *,
+    request_path: Path,
+    response_path: Path,
+) -> bool:
+    """确认单向请求是 relay 明确记录的零响应事实，而不是原始文件丢失。"""
+
+    if (
+        connection.get("valid") is not True
+        or "error" in connection
+        or request_path.is_symlink()
+        or not request_path.is_file()
+        or response_path.exists()
+        or response_path.is_symlink()
+    ):
+        return False
+    byte_counts = connection.get("bytes")
+    digests = connection.get("sha256")
+    segments = connection.get("segments")
+    if (
+        not isinstance(byte_counts, dict)
+        or set(byte_counts) != {"client_to_upstream"}
+        or not isinstance(digests, dict)
+        or set(digests) != {"client_to_upstream"}
+        or not isinstance(segments, list)
+        or not segments
+    ):
+        return False
+    expected_offset = 0
+    for segment in segments:
+        if (
+            not isinstance(segment, dict)
+            or segment.get("direction") != "client_to_upstream"
+            or isinstance(segment.get("offset"), bool)
+            or not isinstance(segment.get("offset"), int)
+            or segment["offset"] != expected_offset
+            or isinstance(segment.get("length"), bool)
+            or not isinstance(segment.get("length"), int)
+            or segment["length"] <= 0
+        ):
+            return False
+        expected_offset += segment["length"]
+    return (
+        byte_counts["client_to_upstream"] == expected_offset
+        and request_path.stat().st_size == expected_offset
+        and digests["client_to_upstream"] == _sha256(request_path)
+    )
+
+
 def build_receipt(
     *,
     root: Path,
@@ -279,7 +329,7 @@ def build_receipt(
         raise ModelConditionReceiptError("expected_lite 必须是布尔值。")
 
     relay = _load_relay(root)
-    model_connections: list[tuple[int, Path]] = []
+    model_connections: list[tuple[int, Path, dict[str, Any]]] = []
     connection_ids: set[int] = set()
     for connection in relay["connections"]:
         connection_id = connection.get("connection_id") if isinstance(connection, dict) else None
@@ -313,15 +363,31 @@ def build_receipt(
         for request in _iter_messages(request_path.read_bytes(), response=False):
             path = request["target"].split("?", 1)[0]
             if request["method"] == "GET" and path == "/backend-api/codex/models":
-                model_connections.append((connection_id, request_path))
+                model_connections.append((connection_id, request_path, connection))
     if not model_connections:
         raise ModelConditionReceiptError("至少需要一条 /models 原始连接。")
-    bindings: list[dict[str, Any]] = []
+    # relay manifest 是单向连接排除判据的一部分，必须和原始请求一起进入收据绑定；
+    # 否则生成时虽然验过大小／摘要／segment，重放时却无法证明当时依据的 manifest。
+    bindings: list[dict[str, Any]] = [_bind(root, root / "relay" / "relay.json")]
     models_response_paths: list[Path] = []
     actual_lites: list[bool] = []
-    for connection_id, models_request_path in sorted(model_connections):
+    for connection_id, models_request_path, connection in sorted(
+        model_connections,
+        key=lambda item: item[0],
+    ):
         response_path = root / "relay" / f"conn{connection_id:03d}.upstream_to_client.bin"
         if response_path.is_symlink() or not response_path.is_file():
+            # 官方客户端可能并发拉取模型目录，并在另一条请求已经完成或进程退出时
+            # 放弃其中一条连接。只有 relay manifest 精确证明请求字节完整、上游方向
+            # 实际为零，且本轮稍后仍取得至少一份完整 HTTP 200，才把该连接视为失败
+            # 尝试而非证据丢失；任何大小、摘要或 segment 漂移继续失败关闭。
+            if _manifest_proves_request_only_connection(
+                connection,
+                request_path=models_request_path,
+                response_path=response_path,
+            ):
+                bindings.append(_bind(root, models_request_path))
+                continue
             raise ModelConditionReceiptError(f"缺少连接 {connection_id} 的原始响应字节。")
         responses = list(_iter_messages(response_path.read_bytes(), response=True))
         if len(responses) != 1 or responses[0]["status"] != 200:
@@ -338,6 +404,8 @@ def build_receipt(
         actual_lites.append(matches[0]["use_responses_lite"])
         models_response_paths.append(response_path)
         bindings.extend((_bind(root, models_request_path), _bind(root, response_path)))
+    if not models_response_paths:
+        raise ModelConditionReceiptError("没有取得完整的 /models HTTP 200 原始响应。")
     if any(actual_lite is not expected_lite for actual_lite in actual_lites):
         raise ModelConditionReceiptError(
             f"目标模型 use_responses_lite={sorted(set(actual_lites))}，预期为 {expected_lite}。"
