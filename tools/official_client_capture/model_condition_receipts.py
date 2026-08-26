@@ -293,6 +293,22 @@ def build_receipt(
         connection_ids.add(connection_id)
         request_path = root / "relay" / f"conn{connection_id:03d}.client_to_upstream.bin"
         if request_path.is_symlink() or not request_path.is_file():
+            # 客户端会短暂建立后立即放弃一条 TLS 连接；中继仍会登记连接的打开／
+            # 关闭时间，但没有任何方向的字节、摘要或 segment，因此不会生成 .bin。
+            # 这种严格意义上的空连接不承载模型条件事实，应从分母中排除。此前把它
+            # 当成“原始请求丢失”，导致同一份完整 Responses 样本随机失败。
+            response_path = (
+                root / "relay" / f"conn{connection_id:03d}.upstream_to_client.bin"
+            )
+            if (
+                isinstance(connection, dict)
+                and connection.get("bytes") == {}
+                and connection.get("sha256") == {}
+                and connection.get("segments") == []
+                and not response_path.exists()
+                and not response_path.is_symlink()
+            ):
+                continue
             raise ModelConditionReceiptError(f"缺少连接 {connection_id} 的原始请求字节。")
         for request in _iter_messages(request_path.read_bytes(), response=False):
             path = request["target"].split("?", 1)[0]

@@ -10,6 +10,7 @@ codex_account_id=${CODEX_ACCOUNT_ID:-90}
 api_key_id=${API_KEY_ID:-1}
 capture_root=${CAPTURE_ROOT:-/root/oauth-capture}
 capture_tool_root=${CAPTURE_TOOL_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)}
+capture_runtime_root=${CAPTURE_RUNTIME_ROOT:-$capture_tool_root/runtime_scripts}
 subjects=${SUBJECTS:-"codex-http codex-ws"}
 # 与 direct 矩阵保持同一四场景覆盖，避免 A02 只落三份 WS pcap。
 scenarios=${SCENARIOS:-"s1 s2 s3 s4"}
@@ -77,7 +78,7 @@ stop_pair() {
     ingress_started=0
   fi
   if [[ $mitm_started == 1 ]]; then
-    docker exec "$capture_container" /opt/oauth-capture/scripts/stop_mitm.sh || true
+    docker exec "$capture_container" "$capture_runtime_root/stop_mitm.sh" || true
     mitm_started=0
   fi
 }
@@ -171,14 +172,20 @@ proxy_created=1
 
 # setup 样本隔离安装 CA、绑定代理和重启造成的伴随流量。
 setup_run="$run_id_prefix-setup-$window_id"
-docker exec "$capture_container" /opt/oauth-capture/scripts/start_mitm.sh "$setup_run" sub2api-setup
+docker exec \
+  -e CAPTURE_TASK=api \
+  -e CAPTURE_BOUNDARY=official_cli_to_sub2api \
+  -e CAPTURE_SCENARIO=setup \
+  -e CAPTURE_TARGET_HOSTS=chatgpt.com \
+  -e CAPTURE_HOST_SCOPE=targets \
+  "$capture_container" "$capture_runtime_root/start_mitm.sh" "$setup_run" sub2api-setup
 mitm_started=1
 db_query "update accounts set proxy_id = $proxy_id, proxy_fallback_origin_id = null where id = $codex_account_id" >/dev/null
 docker cp "$ca_source" "$service_container:$custom_ca_path"
 docker exec "$service_container" update-ca-certificates >/dev/null
 ca_installed=1
 restart_service
-docker exec "$capture_container" /opt/oauth-capture/scripts/stop_mitm.sh
+docker exec "$capture_container" "$capture_runtime_root/stop_mitm.sh"
 mitm_started=0
 
 for subject in $subjects; do
@@ -190,7 +197,13 @@ for subject in $subjects; do
   esac
   run_id="$run_id_prefix-$subject-$window_id"
   run_ids+=("$run_id")
-  docker exec "$capture_container" /opt/oauth-capture/scripts/start_mitm.sh "$run_id" "$subject"
+  docker exec \
+    -e CAPTURE_TASK=api \
+    -e CAPTURE_BOUNDARY=official_cli_to_sub2api \
+    -e CAPTURE_SCENARIO=matrix \
+    -e CAPTURE_TARGET_HOSTS=chatgpt.com \
+    -e CAPTURE_HOST_SCOPE=targets \
+    "$capture_container" "$capture_runtime_root/start_mitm.sh" "$run_id" "$subject"
   mitm_started=1
   docker exec "$capture_container" /capture/scripts/start_ingress.sh "$run_id" "$subject"
   ingress_started=1

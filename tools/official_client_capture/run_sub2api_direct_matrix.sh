@@ -10,6 +10,7 @@ codex_account_id=${CODEX_ACCOUNT_ID:-90}
 api_key_id=${API_KEY_ID:-1}
 capture_root=${CAPTURE_ROOT:-/root/oauth-capture}
 capture_tool_root=${CAPTURE_TOOL_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)}
+capture_runtime_root=${CAPTURE_RUNTIME_ROOT:-$capture_tool_root/runtime_scripts}
 subjects=${SUBJECTS:-"codex-http codex-ws"}
 # A02 的 TLS 扩展多样性需要四份独立 WS pcap；s3 不是可选样本。
 scenarios=${SCENARIOS:-"s1 s2 s3 s4"}
@@ -70,7 +71,7 @@ stop_pair() {
     ingress_started=0
   fi
   if [[ $direct_started == 1 && -n $active_subject ]]; then
-    docker exec "$capture_container" /opt/oauth-capture/scripts/stop_direct.sh \
+    docker exec "$capture_container" "$capture_runtime_root/stop_direct.sh" \
       "$active_subject" || true
     direct_started=0
   fi
@@ -154,7 +155,7 @@ run_case() {
   # 确保该 pcap 自己包含可归因的 ClientHello，而不是只记录旧连接上的数据帧。
   restart_service
   active_subject=$case_id
-  docker exec "$capture_container" /opt/oauth-capture/scripts/start_direct.sh \
+  docker exec "$capture_container" "$capture_runtime_root/start_direct.sh" \
     "$run_id" "$case_id" "$service_container"
   direct_started=1
   docker exec "$capture_container" /capture/scripts/start_ingress.sh \

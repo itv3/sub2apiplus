@@ -1,0 +1,166 @@
+{
+  "schema_version": "official-client-codex-0.149.1-capture-runtime-repair-transition/v1",
+  "issued_at_utc": "2026-08-26T01:12:26Z",
+  "base_commit": "20158443533827c0d809c269267135ce3b7d9678",
+  "scope": "codex-0.149.1-capture-runtime-repair",
+  "framework_stage": "VC-0/P0-RUNTIME-REPAIR",
+  "predecessor_transition": {
+    "path": "docs/egress/maintenance/codex-0.149.1-failed-evidence-recovery-transition.json",
+    "file_sha256": "7cf7c65b4c61008e5dbe4af2251d73cfa938fd79d2a33bdb011697f5ae417fd5",
+    "identity_sha256": "80ed8e1735eb43e035436cd1f32c1dfc3ed5ae79d0003fdc8fa1154bdf2b9324"
+  },
+  "boundaries": {
+    "empty_connections_fail_closed_unless_manifest_zero_byte": true,
+    "failed_campaign_preserved_read_only": true,
+    "model_receipts_use_frozen_runtime": true,
+    "official_binary_exec_root_outside_root": true,
+    "sidecar_lifecycle_state_bound": true,
+    "zstd_dependency_frozen": true
+  },
+  "execution_facts": {
+    "active_previous_changed": false,
+    "catalog_promoted": false,
+    "capture_image_deployed": false,
+    "historical_artifacts_modified": false,
+    "production_selector_changed": false,
+    "server_diagnostics_performed_on_arm64": true,
+    "vircs_accessed": false
+  },
+  "transitions": [
+    {
+      "path": "tools/official_client_capture/capturelib/identity.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "b2da2ed4949bd764994270e5dc62a0de3a0a546aea179ff215bcdafb45131a39"
+      ],
+      "to_sha256": "d51070d345d58cefa09629f0287e8e4f76a65264c3d6bd8eb0af4c7f8d872199",
+      "reason": "把四个 direct／MITM 生命周期脚本纳入正式抓包执行源身份。"
+    },
+    {
+      "path": "tools/official_client_capture/model_condition_receipts.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "ada9b95918056fa1e3278bc490a2abfe3e8fb30d8f1dc82bed4cf1f7a55ac419"
+      ],
+      "to_sha256": "0e7d449bb0405106a472396b8f1701cf086ca0fe2e605c6b573a56ebe3eb159b",
+      "reason": "只排除 relay manifest 明确声明的双向零字节空连接，非空连接缺失原始字节继续失败关闭。"
+    },
+    {
+      "path": "tools/official_client_capture/run_official_codex_compact_capture.sh",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "ec4719b560b39fc811a7b925f74c8c07d6be45c3a5dce7c37584106a363483b0"
+      ],
+      "to_sha256": "8e6eae6c46d0a0cb141bb5381474461709c906394b7b50d6da01ffa13e8a6591",
+      "reason": "official compact 改用仓库内受管 direct／MITM 脚本，并显式传入 MITM 证据边界。"
+    },
+    {
+      "path": "tools/official_client_capture/run_official_relay_scenario.sh",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "60b47a3215393f3ceeec40c4c66d4c0d17c6ff283cb159a29b7fe1162299dc6a"
+      ],
+      "to_sha256": "cc8c0c2d039d0601dd307d25d8d25ceb9e871f3aa82a26e87d0024bf01c90022",
+      "reason": "模型条件收据改在 Campaign 绑定的抓包镜像内生成，消除 ARM64 宿主 Python 依赖漂移。"
+    },
+    {
+      "path": "tools/official_client_capture/run_sub2api_direct_matrix.sh",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "5a962b3f3f533084eae4da3ee09497e8e9c1e4d3015ed37f6476fddf503c5d2b"
+      ],
+      "to_sha256": "9747ca92e20b9cdaf36f115f7d37d9a675c9e92a9ee56760ee314314bda31158",
+      "reason": "candidate direct 矩阵改用按状态文件绑定身份的独占 sidecar。"
+    },
+    {
+      "path": "tools/official_client_capture/run_sub2api_openai_mitm_matrix.sh",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "cdb3e20c6dfc07bf4ea051d3f19f6b2a49603c15a9ae3778ca6c520417ad9145"
+      ],
+      "to_sha256": "337f5d775ffbe6535acf279cb71ab72462013385248e9a03f81f974ebbc9ec8a",
+      "reason": "candidate MITM 矩阵改用受管进程组，并为 setup 与正式窗口显式冻结证据标签。"
+    },
+    {
+      "path": "tools/official_client_capture/runtime_image/Dockerfile",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "389c4f2d270dce1ba4ef5dff0a2bb66e907ff38ba79b0e7a95dffb6b99a0e00a",
+      "reason": "新增 ARM64 官方客户端抓包镜像配方，显式安装 bubblewrap、抓包工具与 python3-zstandard。"
+    },
+    {
+      "path": "tools/official_client_capture/runtime_image/README.md",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "2762b9fb89e2df3d24c49f54e4b2559e0acb517c0971891d6112dd8fd634ab9a",
+      "reason": "记录固定 RepoDigest、只读官方包挂载及 /root 不可遍历导致 bwrap 自执行失败的约束。"
+    },
+    {
+      "path": "tools/official_client_capture/runtime_image/capture-entrypoint",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "6f9157a47c789d11c5cd8464ee594fca90ef6e2f20f92a5dad2eedc8a3332db0",
+      "reason": "抓包容器启动时验证 capture-network 地址范围，离线自检只允许显式豁免。"
+    },
+    {
+      "path": "tools/official_client_capture/runtime_scripts/start_direct.sh",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "f775a6c312552fb5b965a2069f53f48c24e852c3810e145b5cebc1eeae516b79",
+      "reason": "用同镜像、同网络命名空间的独占 sidecar 启动 direct pcap，并冻结容器与输出身份。"
+    },
+    {
+      "path": "tools/official_client_capture/runtime_scripts/start_mitm.sh",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "9e612cb93ad104c18d971a57fe6dcfd3af9e65f2118cf67adda40b95fe5f6b78",
+      "reason": "用独立进程组启动 mitmdump，并记录 PID、启动时钟、端口和证据坐标。"
+    },
+    {
+      "path": "tools/official_client_capture/runtime_scripts/stop_direct.sh",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "c10d6814a4a932d3d66b31f26ccf0e7b32707ee6e093cdcfa01bdef056c234be",
+      "reason": "只停止与状态文件和 Docker 标签精确匹配的 direct sidecar，并验证最终 pcap。"
+    },
+    {
+      "path": "tools/official_client_capture/runtime_scripts/stop_mitm.sh",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "bc308546c95b509f9b12447224ee4695b78ebc37edc2d1f3bec1935625321d40",
+      "reason": "核对 /proc 启动时钟后才终止受管 MITM 进程组，并确认监听端口已释放。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_capture_runtime_scripts.py",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "cfde357a75b9ef40c763f5d0dddb0818763331f1b1e513f536d000d891a56063",
+      "reason": "覆盖运行脚本语法、身份绑定、进程回收、镜像依赖和调用方装配契约。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_capture_runtime_transition.py",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "58e66dd5e03b8fa6e9591fcafe9b4719f533e53a9cf5eb317d0c8df43f67331f",
+      "reason": "独立重放本后继 transition 的前序身份、文件闭集、自摘要和生产只读边界。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_model_condition_receipt.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "dcc3ed7db36552d9c008802a1066f1f5b97484c0ea8acfada91838e2ec6da0d6"
+      ],
+      "to_sha256": "afd64db7dce82ce61fb2e472467f59b29bd3892d2c4877f0c00b444c038fc477",
+      "reason": "覆盖严格零字节空连接豁免与非空连接原始字节缺失失败关闭。"
+    }
+  ],
+  "verification": {
+    "bash_syntax_passed": true,
+    "capture_tool_tests_passed": true,
+    "egress_spec_passed": true,
+    "targeted_tests_passed": true,
+    "transition_chain_replayed": true
+  },
+  "result": "capture_runtime_repair_ready_for_p0",
+  "identity_sha256": "94cecb6342f5b581807a8627a927a4b2eb477d756653194b7dfd4bd008994389"
+}

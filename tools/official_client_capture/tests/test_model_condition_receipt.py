@@ -249,6 +249,68 @@ class ModelConditionReceiptTest(unittest.TestCase):
                 use_responses_lite=True,
             )
 
+    def test_ignores_manifest_declared_zero_byte_connection(self) -> None:
+        """中继登记但未传输任何字节的竞速连接不属于证据丢失。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(Path(directory) / "run")
+            relay_path = root / "relay" / "relay.json"
+            relay = json.loads(relay_path.read_text(encoding="utf-8"))
+            relay["connections"].append(
+                {
+                    "connection_id": 3,
+                    "bytes": {},
+                    "sha256": {},
+                    "segments": [],
+                    "opened_at_unix_ms": 1,
+                    "closed_at_unix_ms": 2,
+                }
+            )
+            relay_path.write_text(json.dumps(relay), encoding="utf-8")
+
+            receipt = build_receipt(
+                root=root,
+                job_id="official-lite-http-response",
+                run_id="campaign-lite-http",
+                track="lite",
+                expected_model="gpt-5.6-luna",
+                expected_lite=True,
+            )
+            self.assertEqual(receipt["observed_request_models"], ["gpt-5.6-luna"])
+
+    def test_rejects_missing_bytes_for_nonempty_connection(self) -> None:
+        """只豁免严格空连接；声称有 segment 的连接仍须存在原始字节。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(Path(directory) / "run")
+            relay_path = root / "relay" / "relay.json"
+            relay = json.loads(relay_path.read_text(encoding="utf-8"))
+            relay["connections"].append(
+                {
+                    "connection_id": 3,
+                    "bytes": {"client_to_upstream": 10},
+                    "sha256": {"client_to_upstream": "0" * 64},
+                    "segments": [
+                        {
+                            "direction": "client_to_upstream",
+                            "offset": 0,
+                            "length": 10,
+                        }
+                    ],
+                }
+            )
+            relay_path.write_text(json.dumps(relay), encoding="utf-8")
+
+            with self.assertRaisesRegex(ModelConditionReceiptError, "缺少连接 3"):
+                build_receipt(
+                    root=root,
+                    job_id="official-lite-http-response",
+                    run_id="campaign-lite-http",
+                    track="lite",
+                    expected_model="gpt-5.6-luna",
+                    expected_lite=True,
+                )
+
     def test_rejects_models_metadata_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = self._fixture(Path(directory) / "run", lite=False)

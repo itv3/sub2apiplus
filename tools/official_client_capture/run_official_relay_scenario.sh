@@ -873,6 +873,7 @@ if [[ $prompt == "__REALTIME__" ]]; then
   # shellcheck disable=SC2086
   docker exec "$capture_container" timeout 120 python3 \
     "$capture_tool_root/drive_codex_realtime.py" \
+    --codex-bin "$codex_bin" \
     --codex-version "$codex_version" \
     --model "$model" --transport webrtc --output-modality audio \
     --realtime-version "${REALTIME_VERSION:-v3}" \
@@ -903,6 +904,7 @@ elif [[ $prompt == "__COMPACT_TUI__" ]]; then
   # shellcheck disable=SC2086
   docker exec "$capture_container" python3 \
     "$capture_tool_root/drive_codex_tui.py" \
+    --codex-bin "$codex_bin" \
     --model "$model" --cwd /tmp/tui-probe $ctx_opt \
     --warmup "${TUI_WARMUP:-请用一段话介绍什么是 TCP 三次握手。}" \
     --slash "${TUI_SLASH:-/compact}" \
@@ -915,6 +917,7 @@ elif [[ $prompt == "__COMPACT_TUI__" ]]; then
 elif [[ $prompt == "__PROMPT_TUI_IMAGE__" ]]; then
   docker exec "$capture_container" python3 \
     "$capture_tool_root/drive_codex_tui.py" \
+    --codex-bin "$codex_bin" \
     --model "$model" --cwd /tmp/tui-probe \
     --prompt '请调用图片生成工具生成一张红色狐狸的简单插画；必须实际调用工具。' \
     --prompt '请再次调用图片生成工具生成一张蓝色鲸鱼的简单插画；必须实际调用工具。' \
@@ -924,6 +927,7 @@ elif [[ $prompt == "__PROMPT_TUI_IMAGE__" ]]; then
 elif [[ $prompt == "__PROMPT_TUI_SEARCH__" ]]; then
   docker exec "$capture_container" python3 \
     "$capture_tool_root/drive_codex_tui.py" \
+    --codex-bin "$codex_bin" \
     --model "$model" --cwd /tmp/tui-probe \
     --prompt '请联网搜索 Rust 1.90 的发布日期；必须实际调用联网搜索工具，只回复日期。' \
     --prompt '请再次联网搜索 Python 3.14 的发布日期；必须实际调用联网搜索工具，只回复日期。' \
@@ -933,6 +937,7 @@ elif [[ $prompt == "__PROMPT_TUI_SEARCH__" ]]; then
 elif [[ $prompt == "__GUARDIAN_TUI__" ]]; then
   docker exec "$capture_container" python3 \
     "$capture_tool_root/drive_codex_tui.py" \
+    --codex-bin "$codex_bin" \
     --model "$model" --cwd /work --no-bypass \
     --approval-policy on-request --sandbox-mode workspace-write \
     --config 'approvals_reviewer="auto_review"' \
@@ -948,6 +953,7 @@ elif [[ $prompt == "__MEMGEN__" ]]; then
      cp /root/.codex/config.toml '$memgen_home/config.toml'"
   docker exec -e CODEX_HOME="$memgen_home" "$capture_container" timeout 540 python3 \
     "$capture_tool_root/drive_codex_memgen.py" \
+    --codex-bin "$codex_bin" \
     --codex-version "$codex_version" \
     --model "$model" --cwd /tmp/memgen-probe \
     --relay-dir "/capture/runs/$run_id/relay" --hold "${MEMGEN_HOLD:-360}" \
@@ -1034,6 +1040,7 @@ elif [[ $prompt == "__REVIEW_TUI__" ]]; then
   # shellcheck disable=SC2086
   docker exec "$capture_container" python3 \
     "$capture_tool_root/drive_codex_tui.py" \
+    --codex-bin "$codex_bin" \
     --model "$model" --cwd "$work" \
     --warmup "${TUI_WARMUP:-请只回复 READY，不要做任何其他事。}" \
     --warmup-ready "${TUI_READY:-READY}" \
@@ -1210,7 +1217,12 @@ mv -- "$scrubbed_relay" "$work_dir/relay"
 # 预期坐标，不能根据 job 退出码补写 model、Lite 或 fallback 状态。
 if [[ $require_model_receipt == 1 ]]; then
   echo "=== 模型条件收据（$model_track / $model）==="
-  python3 "$capture_tool_root/model_condition_receipts.py" \
+  # 收据解析与抓包运行时属于同一个冻结环境。Responses 请求可能使用 zstd；若在
+  # ARM64 宿主机直接运行，会把宿主 Python 的偶然依赖状态混入 Campaign，并在宿主
+  # 未安装 zstandard 时让完整样本失败。受管镜像显式提供 python3-zstandard，且仓库
+  # 与 evidence root 均以相同绝对路径挂载，因此在 capture-cli 内生成最终收据。
+  docker exec "$capture_container" \
+    python3 "$capture_tool_root/model_condition_receipts.py" \
     --run-root "$work_dir" \
     --output "$work_dir/model-condition-receipt.json" \
     --job-id "${SCENARIO_JOB_ID:?模型收据要求 SCENARIO_JOB_ID}" \
