@@ -1,0 +1,62 @@
+{
+  "schema_version": "official-client-codex-0.149.1-shell-home-repair-transition/v1",
+  "issued_at_utc": "2026-08-26T02:03:08Z",
+  "base_commit": "cb846068a9b3f2504f7e6bdb8506af7a260a3753",
+  "scope": "codex-0.149.1-shell-home-repair",
+  "framework_stage": "VC-0/P0-RUNTIME-REPAIR-SUCCESSOR",
+  "predecessor_transition": {
+    "path": "docs/egress/maintenance/codex-0.149.1-direct-readiness-repair-transition.json",
+    "file_sha256": "a6ccfa760ec3c3a085e4c3e304a9a9b5d0f4567a632ffcbd173b7ace83bad846",
+    "identity_sha256": "7906a79e29297214ca45ea6128df13f118afd9718b9eb112492168d43f168e52"
+  },
+  "boundaries": {
+    "failed_campaign_preserved_read_only": true,
+    "oauth_codex_home_unchanged": true,
+    "production_selector_changed": false,
+    "shell_home_outside_root": true,
+    "sub2api_candidate_deployed": false,
+    "vircs_accessed": false
+  },
+  "execution_facts": {
+    "campaign_id": "codex-0_149_1-formal-production-replacement-20260826T014757Z-cb846068a",
+    "failed_attempt_id": "20260826T015035Z-7a1a062177c07b42",
+    "live_official_requests_sent": true,
+    "restoration_report_passed": true,
+    "runtime_image_changed": false,
+    "vircs_accessed": false
+  },
+  "transitions": [
+    {
+      "path": "tools/official_client_capture/capturelib/scenarios.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "6adfb091f2621bf5ad7c6d5f2961d23d639d4280b4b99bb07d836b1ea04f9e60"
+      ],
+      "to_sha256": "5bd0d9141fcd79b7f7ccb5a860bda023980db27620bd7e25e59f2886275818ab",
+      "reason": "只为受控工具 shell 显式设置 HOME=/work，避免沙箱读取拒绝目录 /root 下的启动文件，同时不改变 OAuth CODEX_HOME。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_shell_home_transition.py",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "0ec7a959c1d1d3cb0d79a5612b2b65342c8f37a1f6e14c9e87b637c66d5e1001",
+      "reason": "独立重放失败 Attempt、恢复收据、前序身份、文件闭集及生产隔离边界。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_commands.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "40e832835553e6195fee19dced5b44326592b6855b6e7798888dce123f35f049"
+      ],
+      "to_sha256": "c3f49e849161efd0a31ed9d6ebde18c3c03e03b1b13ade9722feee1893f0aca9",
+      "reason": "冻结 shell_environment_policy 的 HOME=/work，并继续逐项解析所有 TOML 配置覆盖值。"
+    }
+  ],
+  "verification": {
+    "command_toml_parse_passed": true,
+    "predecessor_transition_replayed": true,
+    "targeted_tests_passed": true
+  },
+  "result": "shell_home_repair_ready_for_p0",
+  "identity_sha256": "543fec0e88473b06fa81c008900b1f850eafe4dc286c7b83a0bd2d6f3c72dffc"
+}

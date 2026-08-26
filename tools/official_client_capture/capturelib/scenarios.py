@@ -958,7 +958,7 @@ def _codex_config_args(
         'shell_environment_policy.inherit="none"',
         (
             'shell_environment_policy.set={PATH="/usr/bin:/bin",'
-            'LANG="C.UTF-8",LC_ALL="C.UTF-8"}'
+            'HOME="/work",LANG="C.UTF-8",LC_ALL="C.UTF-8"}'
         ),
         'default_permissions="capture-tool"',
         'permissions.capture-tool.extends=":read-only"',
