@@ -103,6 +103,48 @@ class MainTrackModelTests(unittest.TestCase):
         hardcoded = sorted({b for b in bodies if not b.startswith('"$')})
         self.assertFalse(hardcoded, f"仍有硬编码模型：{hardcoded}")
 
+    def test_h1_probe_path_filter_ignores_startup_models(self) -> None:
+        """images 证据槽不能被服务启动期 models 请求抢占。"""
+
+        prefix = "/backend-api/codex/images/"
+        self.assertFalse(
+            h1_wire_probe.record_matches_path_prefix(
+                {
+                    "request_line": (
+                        "GET /backend-api/codex/models?client_version=0.149.1 "
+                        "HTTP/1.1"
+                    )
+                },
+                prefix,
+            )
+        )
+        self.assertTrue(
+            h1_wire_probe.record_matches_path_prefix(
+                {
+                    "request_line": (
+                        "POST /backend-api/codex/images/generations HTTP/1.1"
+                    )
+                },
+                prefix,
+            )
+        )
+        self.assertTrue(
+            h1_wire_probe.record_matches_path_prefix(
+                {"request_line": "GET /anything HTTP/1.1"}, ""
+            )
+        )
+
+    def test_images_script_enables_image_path_filter(self) -> None:
+        """images runner 必须显式启用端点过滤。"""
+
+        script = (
+            Path(__file__).resolve().parents[1] / "run_images_wire_probe.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "--record-path-prefix /backend-api/codex/images/",
+            script,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

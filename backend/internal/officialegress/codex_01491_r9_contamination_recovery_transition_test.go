@@ -14,6 +14,7 @@ import (
 const (
 	codex01491R9ContaminationRecoveryPath = "docs/egress/maintenance/codex-0.149.1-r9-contamination-recovery-transition.json"
 	codex01491ModelCatalogH1SuccessorPath = "docs/egress/maintenance/codex-0.149.1-model-catalog-h1-successor-transition.json"
+	codex01491R11AHarnessRepairPath       = "docs/egress/maintenance/codex-0.149.1-r11a-harness-repair-transition.json"
 )
 
 type codex01491R9ContaminationRecoveryReceipt struct {
@@ -74,6 +75,78 @@ type codex01491R9ContaminationRecoveryReceipt struct {
 	IdentitySHA256 string `json:"identity_sha256"`
 }
 
+type codex01491R11AHarnessRepairReceipt struct {
+	SchemaVersion         string `json:"schema_version"`
+	IssuedAtUTC           string `json:"issued_at_utc"`
+	BaseCommit            string `json:"base_commit"`
+	Scope                 string `json:"scope"`
+	FrameworkStage        string `json:"framework_stage"`
+	PredecessorTransition struct {
+		Path           string `json:"path"`
+		FileSHA256     string `json:"file_sha256"`
+		IdentitySHA256 string `json:"identity_sha256"`
+	} `json:"predecessor_transition"`
+	FailedCandidateAttempt struct {
+		CampaignID     string `json:"campaign_id"`
+		CandidateID    string `json:"candidate_id"`
+		AttemptID      string `json:"attempt_id"`
+		Status         string `json:"status"`
+		ReuseForbidden bool   `json:"reuse_forbidden"`
+	} `json:"failed_candidate_attempt"`
+	Boundaries struct {
+		APIKeyRef                           string `json:"api_key_ref"`
+		CaptureAccountRef                   string `json:"capture_account_ref"`
+		CaptureAccount20Allowed             bool   `json:"capture_account_20_allowed"`
+		CaptureAccount20Used                bool   `json:"capture_account_20_used"`
+		ServicePrivateIP                    string `json:"service_private_ip"`
+		ServiceDefaultGateway               string `json:"service_default_gateway"`
+		CapturePrivateIP                    string `json:"capture_private_ip"`
+		CaptureDefaultGateway               string `json:"capture_default_gateway"`
+		RequiredPublicEgress                string `json:"required_public_egress"`
+		DockerNetworkChanged                bool   `json:"docker_network_changed"`
+		RouteNATIPTablesChanged             bool   `json:"route_nat_iptables_changed"`
+		ProxyOrComposeNetworkChanged        bool   `json:"proxy_or_compose_network_changed"`
+		ProductionSelectorChanged           bool   `json:"production_selector_changed"`
+		HistoricalEvidencePreservedReadOnly bool   `json:"historical_evidence_preserved_read_only"`
+		VircsAccessed                       bool   `json:"vircs_accessed"`
+	} `json:"boundaries"`
+	RepairFacts struct {
+		PublishedPortAcceptsNonLoopbackBinding bool `json:"published_port_accepts_non_loopback_binding"`
+		SharedProbeAddressResolvedFromService  bool `json:"shared_probe_address_resolved_from_service_container"`
+		HostsWrittenImmediatelyAfterRestart    bool `json:"hosts_written_immediately_after_restart"`
+		APIKeyGroupSingleAccountGate           bool `json:"api_key_group_single_account_gate"`
+		APIKeyGroupSingleKeyGate               bool `json:"api_key_group_single_key_gate"`
+		ImagePermissionTemporarilyEnabled      bool `json:"image_permission_temporarily_enabled_and_restored"`
+		ImageProbeFiltersStartupModels         bool `json:"image_probe_filters_startup_models"`
+		AccountGateRestored                    bool `json:"account_gate_restored"`
+		KeeperHostsCAAndModelMappingRestored   bool `json:"keeper_hosts_ca_and_model_mapping_restored"`
+		NewCampaignRequired                    bool `json:"new_campaign_required"`
+	} `json:"repair_facts"`
+	PreflightEvidence struct {
+		H1RunID                    string `json:"h1_run_id"`
+		H1RequestCount             int    `json:"h1_request_count"`
+		H1WireSHA256               string `json:"h1_wire_sha256"`
+		ImagesRunID                string `json:"images_run_id"`
+		ImagesRequestCount         int    `json:"images_request_count"`
+		ImagesWireSHA256           string `json:"images_wire_sha256"`
+		CapturedCodexVersion       string `json:"captured_codex_version"`
+		PreAndPostEgressVerified   bool   `json:"pre_and_post_egress_verified"`
+		PostRunRestorationVerified bool   `json:"post_run_restoration_verified"`
+	} `json:"preflight_evidence"`
+	Transitions  []codex01491CandidateSourceTransitionEntry `json:"transitions"`
+	Verification struct {
+		BashSyntaxPassed           bool `json:"bash_syntax_passed"`
+		TargetedPythonTestsPassed  bool `json:"targeted_python_tests_passed"`
+		CaptureToolTestsPassed     bool `json:"capture_tool_tests_passed"`
+		EgressSpecPassed           bool `json:"egress_spec_passed"`
+		ARM64H1PreflightPassed     bool `json:"arm64_h1_preflight_passed"`
+		ARM64ImagesPreflightPassed bool `json:"arm64_images_preflight_passed"`
+		NetworkGatePassed          bool `json:"network_gate_passed"`
+	} `json:"verification"`
+	Result         string `json:"result"`
+	IdentitySHA256 string `json:"identity_sha256"`
+}
+
 func codex01491R9ContaminationRecoveryExpectedPaths() []string {
 	return []string{
 		"backend/internal/officialegress/codex_01491_r4_catalog_successor_transition_test.go",
@@ -85,6 +158,20 @@ func codex01491R9ContaminationRecoveryExpectedPaths() []string {
 		"tools/official_client_capture/tests/test_codex_01491_r4_catalog_successor_transition.py",
 		"tools/official_client_capture/tests/test_codex_01491_r9_contamination_recovery_transition.py",
 		"tools/official_client_capture/tests/test_direct_matrix_account_selection.py",
+	}
+}
+
+func codex01491R11AHarnessRepairExpectedPaths() []string {
+	return []string{
+		"backend/internal/officialegress/codex_01491_r9_contamination_recovery_transition_test.go",
+		"backend/internal/service/codex_01491_r9_contamination_recovery_transition_test.go",
+		"tools/official_client_capture/h1_wire_probe.py",
+		"tools/official_client_capture/run_h1_wire_probe.sh",
+		"tools/official_client_capture/run_images_wire_probe.sh",
+		"tools/official_client_capture/tests/test_account_gate_restoration.py",
+		"tools/official_client_capture/tests/test_codex_01491_r11a_harness_transition.py",
+		"tools/official_client_capture/tests/test_codex_01491_r9_contamination_recovery_transition.py",
+		"tools/official_client_capture/tests/test_main_track_models.py",
 	}
 }
 
@@ -119,6 +206,158 @@ func loadCodex01491ModelCatalogH1SuccessorTransitions() (
 	return receipt.Transitions, nil
 }
 
+func loadCodex01491R11AHarnessRepairTransition() (
+	codex01491R11AHarnessRepairReceipt,
+	error,
+) {
+	var receipt codex01491R11AHarnessRepairReceipt
+	raw, err := codex01491RepoFile(codex01491R11AHarnessRepairPath)
+	if err != nil {
+		return receipt, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&receipt); err != nil {
+		return receipt, err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return receipt, errors.New("Codex 0.149.1 r11a 脚手架 transition 尾部存在额外 JSON")
+	}
+	if err := codex01491VerifyIdentity(raw, receipt.IdentitySHA256); err != nil {
+		return receipt, err
+	}
+	return receipt, validateCodex01491R11AHarnessRepairTransition(receipt)
+}
+
+func validateCodex01491R11AHarnessRepairTransition(
+	receipt codex01491R11AHarnessRepairReceipt,
+) error {
+	if receipt.SchemaVersion != "official-client-codex-0.149.1-r11a-harness-repair-transition/v1" ||
+		receipt.BaseCommit != "3421eabbaea96dcdba25808281fc9804c87af70e" ||
+		receipt.Scope != "codex-0.149.1-r11a-harness-repair" ||
+		receipt.FrameworkStage != "VC-0/P0-R11A-HARNESS-REPAIR" ||
+		receipt.Result != "r11a_campaign_required_with_repaired_harness" {
+		return errors.New("Codex 0.149.1 r11a 脚手架 transition 顶层事实非法")
+	}
+	if _, err := time.Parse(time.RFC3339, receipt.IssuedAtUTC); err != nil {
+		return errors.New("Codex 0.149.1 r11a 脚手架 transition 时间非法")
+	}
+	predecessorRaw, err := codex01491RepoFile(codex01491R9ContaminationRecoveryPath)
+	if err != nil {
+		return err
+	}
+	var predecessor struct {
+		IdentitySHA256 string `json:"identity_sha256"`
+	}
+	if err := json.Unmarshal(predecessorRaw, &predecessor); err != nil {
+		return err
+	}
+	if receipt.PredecessorTransition.Path != codex01491R9ContaminationRecoveryPath ||
+		receipt.PredecessorTransition.FileSHA256 != upstreamMergeFrameworkDigest(predecessorRaw) ||
+		receipt.PredecessorTransition.IdentitySHA256 != predecessor.IdentitySHA256 {
+		return errors.New("Codex 0.149.1 r11a 脚手架 transition 前序绑定非法")
+	}
+	if receipt.FailedCandidateAttempt.CampaignID != "codex-01491-r10a" ||
+		receipt.FailedCandidateAttempt.CandidateID != "codex-01491-r10a-93d179469-arm64-21" ||
+		receipt.FailedCandidateAttempt.AttemptID != "20260826T204300Z-98b0048acd77b1a4" ||
+		receipt.FailedCandidateAttempt.Status != "failed" ||
+		!receipt.FailedCandidateAttempt.ReuseForbidden {
+		return errors.New("Codex 0.149.1 r11a 脚手架 transition 失败 Attempt 事实非法")
+	}
+	if receipt.Boundaries.APIKeyRef != "#4" || receipt.Boundaries.CaptureAccountRef != "#21" ||
+		receipt.Boundaries.CaptureAccount20Allowed || receipt.Boundaries.CaptureAccount20Used ||
+		receipt.Boundaries.ServicePrivateIP != "172.25.0.3" ||
+		receipt.Boundaries.ServiceDefaultGateway != "172.25.0.1" ||
+		receipt.Boundaries.CapturePrivateIP != "172.30.0.10" ||
+		receipt.Boundaries.CaptureDefaultGateway != "172.30.0.1" ||
+		receipt.Boundaries.RequiredPublicEgress != "179.255.100.158" ||
+		receipt.Boundaries.DockerNetworkChanged || receipt.Boundaries.RouteNATIPTablesChanged ||
+		receipt.Boundaries.ProxyOrComposeNetworkChanged || receipt.Boundaries.ProductionSelectorChanged ||
+		!receipt.Boundaries.HistoricalEvidencePreservedReadOnly || receipt.Boundaries.VircsAccessed {
+		return errors.New("Codex 0.149.1 r11a 脚手架 transition 账号或网络边界非法")
+	}
+	if !receipt.RepairFacts.PublishedPortAcceptsNonLoopbackBinding ||
+		!receipt.RepairFacts.SharedProbeAddressResolvedFromService ||
+		!receipt.RepairFacts.HostsWrittenImmediatelyAfterRestart ||
+		!receipt.RepairFacts.APIKeyGroupSingleAccountGate ||
+		!receipt.RepairFacts.APIKeyGroupSingleKeyGate ||
+		!receipt.RepairFacts.ImagePermissionTemporarilyEnabled ||
+		!receipt.RepairFacts.ImageProbeFiltersStartupModels ||
+		!receipt.RepairFacts.AccountGateRestored ||
+		!receipt.RepairFacts.KeeperHostsCAAndModelMappingRestored ||
+		!receipt.RepairFacts.NewCampaignRequired {
+		return errors.New("Codex 0.149.1 r11a 脚手架 transition 修复事实非法")
+	}
+	if receipt.PreflightEvidence.H1RunID != "codex-01491-r10b-preflight-h1-final" ||
+		receipt.PreflightEvidence.H1RequestCount != 3 ||
+		receipt.PreflightEvidence.H1WireSHA256 != "8466f16f736ea077d34ae22e8232d04e685551f824175ab8bbb5500c7f59a1da" ||
+		receipt.PreflightEvidence.ImagesRunID != "codex-01491-r10b-preflight-images-final2" ||
+		receipt.PreflightEvidence.ImagesRequestCount != 1 ||
+		receipt.PreflightEvidence.ImagesWireSHA256 != "45243c9d53b41a8cb6b9cd77d2ce2095efe1a8423c1ba056afa5fb24aaadcf28" ||
+		receipt.PreflightEvidence.CapturedCodexVersion != "0.149.1" ||
+		!receipt.PreflightEvidence.PreAndPostEgressVerified ||
+		!receipt.PreflightEvidence.PostRunRestorationVerified {
+		return errors.New("Codex 0.149.1 r11a 脚手架 transition 预检事实非法")
+	}
+	if !receipt.Verification.BashSyntaxPassed || !receipt.Verification.TargetedPythonTestsPassed ||
+		!receipt.Verification.CaptureToolTestsPassed || !receipt.Verification.EgressSpecPassed ||
+		!receipt.Verification.ARM64H1PreflightPassed ||
+		!receipt.Verification.ARM64ImagesPreflightPassed || !receipt.Verification.NetworkGatePassed {
+		return errors.New("Codex 0.149.1 r11a 脚手架 transition 验证事实非法")
+	}
+
+	expectedPaths := codex01491R11AHarnessRepairExpectedPaths()
+	expectedPredecessors := map[string][]string{
+		"backend/internal/officialegress/codex_01491_r9_contamination_recovery_transition_test.go":     {"f63ad881b9b9e2fccf036b113b0a3cbedf347179943045a2b290ff500300f26a"},
+		"backend/internal/service/codex_01491_r9_contamination_recovery_transition_test.go":            {"d16ed5a263c53cd5302692139036a7d5649e530de6baa605b8acd3d8ee123a14"},
+		"tools/official_client_capture/h1_wire_probe.py":                                               {"9f4eab19e8321b67185246884d449f55f61855de81099a93807e0057154c81b2"},
+		"tools/official_client_capture/run_h1_wire_probe.sh":                                           {"a4018f3c9ccc34867e197d13a335ca0a193818e96fae5c1129f3633c41304471"},
+		"tools/official_client_capture/run_images_wire_probe.sh":                                       {"af14cca8f84b7784c5841190e4c70a81b7e707f71074ca1fe4bcfae22623f4f1"},
+		"tools/official_client_capture/tests/test_account_gate_restoration.py":                         {"f6f143701b65a3cfe14ccdeee90a215ee6e2118b7491b4b9ca6918999baa8583"},
+		"tools/official_client_capture/tests/test_codex_01491_r9_contamination_recovery_transition.py": {"663c46e41ef9cbac5daad39aad051f06312f6177a80e27290e9fb80bb68837d8"},
+		"tools/official_client_capture/tests/test_main_track_models.py":                                {"5ecc7627c4b4ee8a674a3c99289423e45cea534f8bdd5b2da286ee0d080d0cac"},
+	}
+	if len(receipt.Transitions) != len(expectedPaths) {
+		return errors.New("Codex 0.149.1 r11a 脚手架 transition 路径数量非法")
+	}
+	for index, entry := range receipt.Transitions {
+		expectedPath := expectedPaths[index]
+		predecessors := expectedPredecessors[expectedPath]
+		expectedChange := "added"
+		if len(predecessors) > 0 {
+			expectedChange = "modified"
+		}
+		if entry.Path != expectedPath || entry.Change != expectedChange ||
+			!slices.Equal(entry.PredecessorSHA256s, predecessors) || len(entry.ToSHA256) != 64 ||
+			strings.TrimSpace(entry.Reason) == "" {
+			return errors.New("Codex 0.149.1 r11a 脚手架 transition 条目非法：" + expectedPath)
+		}
+		current, readErr := codex01491RepoFile(entry.Path)
+		if readErr != nil || upstreamMergeFrameworkDigest(current) != entry.ToSHA256 {
+			return errors.New("Codex 0.149.1 r11a 脚手架 transition 当前摘要不一致：" + entry.Path)
+		}
+	}
+	return nil
+}
+
+func codex01491R11AHarnessRepairSupersedes(
+	path string,
+	priorDigest string,
+	currentDigest string,
+) bool {
+	receipt, err := loadCodex01491R11AHarnessRepairTransition()
+	if err != nil {
+		return false
+	}
+	for _, entry := range receipt.Transitions {
+		if entry.Path == path && entry.ToSHA256 == currentDigest &&
+			slices.Contains(entry.PredecessorSHA256s, priorDigest) {
+			return true
+		}
+	}
+	return false
+}
+
 func loadCodex01491R9ContaminationRecoveryTransition() (
 	codex01491R9ContaminationRecoveryReceipt,
 	error,
@@ -139,7 +378,15 @@ func loadCodex01491R9ContaminationRecoveryTransition() (
 	if err := codex01491VerifyIdentity(raw, receipt.IdentitySHA256); err != nil {
 		return receipt, err
 	}
-	return receipt, validateCodex01491R9ContaminationRecoveryTransition(receipt)
+	if err := validateCodex01491R9ContaminationRecoveryTransition(receipt); err != nil {
+		return receipt, err
+	}
+	successor, err := loadCodex01491R11AHarnessRepairTransition()
+	if err != nil {
+		return receipt, err
+	}
+	receipt.Transitions = append(receipt.Transitions, successor.Transitions...)
+	return receipt, nil
 }
 
 func validateCodex01491R9ContaminationRecoveryTransition(
@@ -226,7 +473,13 @@ func validateCodex01491R9ContaminationRecoveryTransition(
 			return errors.New("Codex 0.149.1 r9 污染恢复 transition 条目非法：" + expectedPath)
 		}
 		current, readErr := codex01491RepoFile(entry.Path)
-		if readErr != nil || upstreamMergeFrameworkDigest(current) != entry.ToSHA256 {
+		currentDigest := upstreamMergeFrameworkDigest(current)
+		if readErr != nil || (currentDigest != entry.ToSHA256 &&
+			!codex01491R11AHarnessRepairSupersedes(
+				entry.Path,
+				entry.ToSHA256,
+				currentDigest,
+			)) {
 			return errors.New("Codex 0.149.1 r9 污染恢复 transition 当前摘要不一致：" + entry.Path)
 		}
 	}
@@ -260,5 +513,22 @@ func TestCodex01491R9ContaminationRecoveryTransitionIsFrozen(t *testing.T) {
 	mutated.Boundaries.CaptureAccountRef = "#20"
 	if err := validateCodex01491R9ContaminationRecoveryTransition(mutated); err == nil {
 		t.Fatal("Codex 0.149.1 r9 污染恢复 transition 接受了账号 #20")
+	}
+}
+
+func TestCodex01491R11AHarnessRepairTransitionIsFrozen(t *testing.T) {
+	receipt, err := loadCodex01491R11AHarnessRepairTransition()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutated := receipt
+	mutated.Boundaries.CaptureAccountRef = "#20"
+	if err := validateCodex01491R11AHarnessRepairTransition(mutated); err == nil {
+		t.Fatal("Codex 0.149.1 r11a 脚手架 transition 接受了账号 #20")
+	}
+	mutated = receipt
+	mutated.Boundaries.DockerNetworkChanged = true
+	if err := validateCodex01491R11AHarnessRepairTransition(mutated); err == nil {
+		t.Fatal("Codex 0.149.1 r11a 脚手架 transition 接受了 Docker 网络变更")
 	}
 }

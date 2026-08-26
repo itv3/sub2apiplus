@@ -19,6 +19,7 @@ model=${MODEL:-gpt-5.6-luna}
 capture_container=${CAPTURE_CONTAINER:-capture-cli}
 capture_root=${CAPTURE_ROOT:-/root/oauth-capture}
 capture_tool_root=${CAPTURE_TOOL_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)}
+service_port=${SERVICE_PORT:-}
 run_id=${RUN_ID:?必须提供 RUN_ID}
 window_id=$(date -u +%Y%m%dT%H%M%SZ)
 
@@ -109,9 +110,40 @@ if [[ $current_proxy != NULL ]]; then
   echo "账号 #$account_id 已绑定代理，探针要求直连画像，拒绝继续。" >&2
   exit 1
 fi
+account_shape=$(db_query \
+  "select platform || '|' || type || '|' || coalesce(parent_account_id::text,'NULL') from accounts where id = $account_id")
+if [[ $account_shape != "openai|oauth|NULL" ]]; then
+  echo "账号 #$account_id 不是非影子的 OpenAI OAuth 专用账号，拒绝继续。" >&2
+  exit 1
+fi
 account_gate_before=$(account_gate_state)
 if [[ ! $account_gate_before =~ ^[0-9a-f]*\|[0-9a-f]*$ ]]; then
   echo "无法读取账号 #$account_id 的调度门状态，拒绝继续。" >&2
+  exit 1
+fi
+
+# 触发请求使用 API Key 的分组调度；只校验 ACCOUNT_ID 不足以保证实际出站仍由该账号
+# 承担。这里在任何环境变更前验证分组里恰好只有目标账号一个可调度 OAuth 账号，防止
+# 验收流量落到其他账号（包括已经停用、不得参与验收的账号）。
+api_key=$(db_query "select key from api_keys where id = $api_key_id")
+group_id=$(db_query "select group_id from api_keys where id = $api_key_id")
+token_present=$(db_query \
+  "select case when length(coalesce(credentials->>'access_token','')) > 0 then 'true' else 'false' end from accounts where id = $account_id")
+if [[ -z $api_key || ! $group_id =~ ^[0-9]+$ || $token_present != true ]]; then
+  echo "API Key/分组不存在，或账号 #$account_id 缺少当前 access token。" >&2
+  exit 1
+fi
+eligible_shape=$(db_query "
+select count(*)::text || '|' || count(*) filter (where a.id = $account_id)::text
+from account_groups ag
+join accounts a on a.id = ag.account_id
+where ag.group_id = $group_id
+  and a.platform = 'openai'
+  and a.type = 'oauth'
+  and a.status = 'active'
+  and a.schedulable = true")
+if [[ $eligible_shape != "1|1" ]]; then
+  echo "API Key #$api_key_id 的分组不是账号 #$account_id 的单账号隔离分组，拒绝继续。" >&2
   exit 1
 fi
 
@@ -133,11 +165,13 @@ openssl req -x509 -newkey rsa:2048 -sha256 -days 1 -nodes \
 }
 chmod 600 "$tls_dir"/*
 
-# 探针跑在 capture-cli 容器内：宿主机 443 已被占用，而 capture-cli 与 Sub2API 同网络，
-# 容器内 443 空闲，hosts 指向它即可让 Sub2API 以为在直连 chatgpt.com。
-probe_ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' "$capture_container" | awk '{print $1}')
-if [[ -z $probe_ip ]]; then
-  echo "无法解析 $capture_container 的容器地址。" >&2
+# 探针跑在 capture-cli 容器内：宿主机 443 已被占用，而 capture-cli 与 Sub2API 共享
+# 业务网络。capture-cli 可能同时加入抓包专网，不能按 Docker map 的迭代顺序取第一个
+# IP；必须从 Sub2API 容器内解析别名，得到两者真正可达的共享网络地址。
+probe_ip=$(docker exec "$service_container" getent ahostsv4 "$capture_container" 2>/dev/null \
+  | awk 'NR == 1 {print $1}' || true)
+if [[ ! $probe_ip =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+  echo "无法从 $service_container 解析 $capture_container 的共享网络 IPv4 地址。" >&2
   exit 1
 fi
 
@@ -163,25 +197,31 @@ docker cp "$ca_cert" "$service_container:$custom_ca_path" >/dev/null
 docker exec "$service_container" update-ca-certificates >/dev/null 2>&1
 ca_installed=1
 
-# 先重启让 CA 进入进程的根证书池，再改 hosts——docker restart 会重新生成
-# /etc/hosts，顺序反了 hosts 会被冲掉。Go 的 resolver 每次解析都读该文件，
-# 因此改完无需再次重启即可生效。
+# 先重启让 CA 进入进程的根证书池。docker restart 会重新生成 /etc/hosts，因此必须
+# 在 restart 返回后立即写入探针地址，不能等健康检查结束；启动期的模型刷新会抢先解析
+# chatgpt.com 并建立真实上游连接，晚写 hosts 会让后续请求复用该连接、绕过探针。
 docker restart "$service_container" >/dev/null
+docker exec "$service_container" sh -c 'grep -v " chatgpt.com$" /etc/hosts > /tmp/.hosts.pre && cat /tmp/.hosts.pre > /etc/hosts && rm -f /tmp/.hosts.pre'
+docker exec "$service_container" sh -c "printf '%s chatgpt.com\n' '$probe_ip' >> /etc/hosts"
+hosts_patched=1
 for _ in $(seq 1 90); do
   health=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$service_container")
   [[ $health == healthy ]] && break
   sleep 1
 done
 
-docker exec "$service_container" sh -c 'grep -v " chatgpt.com$" /etc/hosts > /tmp/.hosts.pre && cat /tmp/.hosts.pre > /etc/hosts && rm -f /tmp/.hosts.pre'
-docker exec "$service_container" sh -c "printf '%s chatgpt.com\n' '$probe_ip' >> /etc/hosts"
-hosts_patched=1
 docker exec "$service_container" sh -c "grep chatgpt.com /etc/hosts" >/dev/null
 clear_account_gate
 
-api_key=$(db_query "select key from api_keys where id = $api_key_id")
-port=$(docker port "$service_container" | sed -n 's/.*127.0.0.1:\([0-9]*\)/\1/p' | head -1)
-curl -s -m 60 -o /dev/null -X POST "http://127.0.0.1:${port:-3001}/v1/responses" \
+if [[ -z $service_port ]]; then
+  service_port=$(docker port "$service_container" 2>/dev/null \
+    | sed -n 's/.*:\([0-9][0-9]*\)$/\1/p' | head -1)
+fi
+if [[ ! $service_port =~ ^[0-9]+$ ]]; then
+  echo "无法解析 $service_container 的宿主机发布端口；可显式设置 SERVICE_PORT。" >&2
+  exit 1
+fi
+curl -s -m 60 -o /dev/null -X POST "http://127.0.0.1:$service_port/v1/responses" \
   -H "Authorization: Bearer $api_key" \
   -H "Content-Type: application/json" \
   -H "User-Agent: h1-wire-probe/1.0" \

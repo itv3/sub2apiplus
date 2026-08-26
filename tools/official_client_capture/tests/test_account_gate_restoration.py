@@ -101,8 +101,9 @@ class AccountGateRestorationTest(unittest.TestCase):
                         r"request_with_token\(\) \{[\s\S]{0,400}?clear_account_gate[\s\S]{0,120}?curl",
                     )
                 else:
-                    # 探针类在 hosts 劫持生效后清一次。
-                    self.assertRegex(source, r"hosts_patched=1[\s\S]{0,200}?clear_account_gate")
+                    # 探针类在 hosts 劫持生效、服务恢复健康后清一次。健康等待循环位于
+                    # 两者之间，因此窗口要覆盖完整循环，但仍锁定清除操作不得提前。
+                    self.assertRegex(source, r"hosts_patched=1[\s\S]{0,800}?clear_account_gate")
 
 
 if __name__ == "__main__":
@@ -152,3 +153,90 @@ class ImagesWireModelMappingTest(unittest.TestCase):
     def test_模型名参数化且做字符校验(self) -> None:
         self.assertIn("image_model=${IMAGE_MODEL:-gpt-image-1}", self.source)
         self.assertIn("^[A-Za-z0-9._-]+$", self.source)
+
+    def test_分组图片权限只在双重隔离后临时启用(self) -> None:
+        """专用分组必须同时只有目标账号和目标 API Key。"""
+
+        self.assertIn("active_api_key_shape=$(db_query", self.source)
+        self.assertIn('active_api_key_shape != "1|1"', self.source)
+        self.assertIn("group_image_restore_armed=1", self.source)
+        self.assertIn(
+            "update groups set allow_image_generation = true",
+            self.source,
+        )
+
+    def test_分组图片权限在最终重启前按原值恢复(self) -> None:
+        """认证缓存不得在退出后保留临时图片权限。"""
+
+        restore = self.source.index(
+            "update groups set allow_image_generation = "
+            "$original_group_allow_image_generation"
+        )
+        cleanup_restart = self.source.index(
+            'docker restart "$service_container" >/dev/null 2>&1 || true',
+            restore,
+        )
+        self.assertLess(restore, cleanup_restart)
+        self.assertIn("图片权限未能按原值恢复", self.source)
+
+
+class WireProbeRuntimeSelectionTest(unittest.TestCase):
+    """H1 与 images 探针必须选中真实可达网络、发布端口和唯一验收账号。"""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        root = Path(__file__).parents[1]
+        cls.sources = {
+            name: (root / name).read_text(encoding="utf-8")
+            for name in ("run_h1_wire_probe.sh", "run_images_wire_probe.sh")
+        }
+
+    def test_shared_network_ip_is_resolved_from_service_container(self) -> None:
+        """双网络容器不能依赖 Docker map 的非确定迭代顺序。"""
+
+        for name, source in self.sources.items():
+            with self.subTest(script=name):
+                self.assertIn(
+                    'docker exec "$service_container" getent ahostsv4 "$capture_container"',
+                    source,
+                )
+                self.assertNotIn(
+                    "{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}",
+                    source,
+                )
+
+    def test_hosts_is_patched_before_health_wait(self) -> None:
+        """启动期模型刷新前必须完成劫持，不能等健康检查后才写 hosts。"""
+
+        for name, source in self.sources.items():
+            with self.subTest(script=name):
+                main_restart = source.rindex(
+                    'docker restart "$service_container" >/dev/null\n'
+                )
+                hosts_write = source.index(
+                    "printf '%s chatgpt.com\\n' '$probe_ip'", main_restart
+                )
+                health_wait = source.index("for _ in $(seq 1 90); do", main_restart)
+                self.assertLess(main_restart, hosts_write)
+                self.assertLess(hosts_write, health_wait)
+                self.assertIn("hosts_patched=1", source[hosts_write:health_wait])
+
+    def test_published_port_accepts_non_loopback_bindings(self) -> None:
+        """0.0.0.0:28080 等发布形式必须被解析，不能静默回退到旧端口。"""
+
+        for name, source in self.sources.items():
+            with self.subTest(script=name):
+                self.assertIn("service_port=${SERVICE_PORT:-}", source)
+                self.assertIn("s/.*:\\([0-9][0-9]*\\)$/\\1/p", source)
+                self.assertNotIn("${port:-3001}", source)
+                self.assertIn("可显式设置 SERVICE_PORT", source)
+
+    def test_api_key_group_is_single_account_only(self) -> None:
+        """触发请求必须失败关闭到 ACCOUNT_ID，不能调度同组其他账号。"""
+
+        for name, source in self.sources.items():
+            with self.subTest(script=name):
+                self.assertIn("eligible_shape=$(db_query", source)
+                self.assertIn("count(*) filter (where a.id = $account_id)", source)
+                self.assertIn('eligible_shape != "1|1"', source)
+                self.assertIn("单账号隔离分组", source)

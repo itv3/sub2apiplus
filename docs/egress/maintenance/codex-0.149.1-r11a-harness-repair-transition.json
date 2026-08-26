@@ -1,0 +1,151 @@
+{
+  "schema_version": "official-client-codex-0.149.1-r11a-harness-repair-transition/v1",
+  "issued_at_utc": "2026-08-26T23:48:24Z",
+  "base_commit": "3421eabbaea96dcdba25808281fc9804c87af70e",
+  "scope": "codex-0.149.1-r11a-harness-repair",
+  "framework_stage": "VC-0/P0-R11A-HARNESS-REPAIR",
+  "predecessor_transition": {
+    "path": "docs/egress/maintenance/codex-0.149.1-r9-contamination-recovery-transition.json",
+    "file_sha256": "44bcc4c258c28b58c807de49fb23db5e038f981564ae69bee26c8bc29b36c5a1",
+    "identity_sha256": "1b2916c441a9bbb405db2c190f8df944d9acc978a54683a04fbb9ff8391592f8"
+  },
+  "failed_candidate_attempt": {
+    "campaign_id": "codex-01491-r10a",
+    "candidate_id": "codex-01491-r10a-93d179469-arm64-21",
+    "attempt_id": "20260826T204300Z-98b0048acd77b1a4",
+    "status": "failed",
+    "reuse_forbidden": true
+  },
+  "boundaries": {
+    "api_key_ref": "#4",
+    "capture_account_ref": "#21",
+    "capture_account_20_allowed": false,
+    "capture_account_20_used": false,
+    "service_private_ip": "172.25.0.3",
+    "service_default_gateway": "172.25.0.1",
+    "capture_private_ip": "172.30.0.10",
+    "capture_default_gateway": "172.30.0.1",
+    "required_public_egress": "179.255.100.158",
+    "docker_network_changed": false,
+    "route_nat_iptables_changed": false,
+    "proxy_or_compose_network_changed": false,
+    "production_selector_changed": false,
+    "historical_evidence_preserved_read_only": true,
+    "vircs_accessed": false
+  },
+  "repair_facts": {
+    "published_port_accepts_non_loopback_binding": true,
+    "shared_probe_address_resolved_from_service_container": true,
+    "hosts_written_immediately_after_restart": true,
+    "api_key_group_single_account_gate": true,
+    "api_key_group_single_key_gate": true,
+    "image_permission_temporarily_enabled_and_restored": true,
+    "image_probe_filters_startup_models": true,
+    "account_gate_restored": true,
+    "keeper_hosts_ca_and_model_mapping_restored": true,
+    "new_campaign_required": true
+  },
+  "preflight_evidence": {
+    "h1_run_id": "codex-01491-r10b-preflight-h1-final",
+    "h1_request_count": 3,
+    "h1_wire_sha256": "8466f16f736ea077d34ae22e8232d04e685551f824175ab8bbb5500c7f59a1da",
+    "images_run_id": "codex-01491-r10b-preflight-images-final2",
+    "images_request_count": 1,
+    "images_wire_sha256": "45243c9d53b41a8cb6b9cd77d2ce2095efe1a8423c1ba056afa5fb24aaadcf28",
+    "captured_codex_version": "0.149.1",
+    "pre_and_post_egress_verified": true,
+    "post_run_restoration_verified": true
+  },
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/codex_01491_r9_contamination_recovery_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "f63ad881b9b9e2fccf036b113b0a3cbedf347179943045a2b290ff500300f26a"
+      ],
+      "to_sha256": "c3bd9cf1c56ebb3e5d752bbaa29288e0f9744a93f99508af1545120fe9f98f48",
+      "reason": "让 Go 侧统一摘要入口独立验证并合并 r11a 后继边，避免合法工具修复被误报为全仓冻结摘要漂移。"
+    },
+    {
+      "path": "backend/internal/service/codex_01491_r9_contamination_recovery_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "d16ed5a263c53cd5302692139036a7d5649e530de6baa605b8acd3d8ee123a14"
+      ],
+      "to_sha256": "b1642b50bb6199c5bafcaaef19aed6e07e080c53e2aab2370ad28a18ee7b2184",
+      "reason": "让 service 镜像摘要入口复用同一 r11a 追加链，并锁定账号与网络边界 mutation。"
+    },
+    {
+      "path": "tools/official_client_capture/h1_wire_probe.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "9f4eab19e8321b67185246884d449f55f61855de81099a93807e0057154c81b2"
+      ],
+      "to_sha256": "c999e82eb67a85089c2ec52841a57b8b885d21453c757953e0cf5a2666f04a17",
+      "reason": "保留两版模型政策并集，并让 images 探针只封存目标端点，避免启动期 models 请求占用证据槽。"
+    },
+    {
+      "path": "tools/official_client_capture/run_h1_wire_probe.sh",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "a4018f3c9ccc34867e197d13a335ca0a193818e96fae5c1129f3633c41304471"
+      ],
+      "to_sha256": "043e29d0bde9fcefea323b9db4028920b638308dc689e56dbca3135c12862957",
+      "reason": "修复发布端口解析、共享网络选址、hosts 时序与 #21 单账号调度门。"
+    },
+    {
+      "path": "tools/official_client_capture/run_images_wire_probe.sh",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "af14cca8f84b7784c5841190e4c70a81b7e707f71074ca1fe4bcfae22623f4f1"
+      ],
+      "to_sha256": "3fe235e1843ad50d561cda2a347ef01ba90b02b09800a91e5b7c1a3d3e938a13",
+      "reason": "在 H1 修复基础上增加单 Key 隔离、临时图片权限及逐项恢复门禁。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_account_gate_restoration.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "f6f143701b65a3cfe14ccdeee90a215ee6e2118b7491b4b9ca6918999baa8583"
+      ],
+      "to_sha256": "69cc524ed5f57cd9aae2096688337c4f096ad6b10eeeb91b3bfbddd809161355",
+      "reason": "锁定账号调度门、双网络选址、端口、hosts 时序和图片权限恢复合同。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_r11a_harness_transition.py",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "d2cd1ee825a2feed1a6bfccd8229f6b791d1d731dc33953a24f5b86b320f8a64",
+      "reason": "独立重放 r10a 失败 Attempt、#21/#4、固定 DMIT 出口、Go/Python 统一后继入口、修复事实和文件闭集。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_r9_contamination_recovery_transition.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "663c46e41ef9cbac5daad39aad051f06312f6177a80e27290e9fb80bb68837d8"
+      ],
+      "to_sha256": "b166afdfb5332caf6a8996a6b06eebd5e041f9f23b70c73f1fa24e3bb35f1427",
+      "reason": "在 r9 的既有统一摘要入口追加经 r11a 独立验证的后继边，保持历史 Candidate Gate 文件只读。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_main_track_models.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "5ecc7627c4b4ee8a674a3c99289423e45cea534f8bdd5b2da286ee0d080d0cac"
+      ],
+      "to_sha256": "1c01dd26e947c8a05551de25a425be6c75e3d22aa2c81d423be53291b86b4c55",
+      "reason": "锁定两版模型并集、images 路径过滤与正式场景的模型轨道合同。"
+    }
+  ],
+  "verification": {
+    "bash_syntax_passed": true,
+    "targeted_python_tests_passed": true,
+    "capture_tool_tests_passed": true,
+    "egress_spec_passed": true,
+    "arm64_h1_preflight_passed": true,
+    "arm64_images_preflight_passed": true,
+    "network_gate_passed": true
+  },
+  "result": "r11a_campaign_required_with_repaired_harness",
+  "identity_sha256": "1104fbc1742b2a8e0985e96e0cb2902bc5a9e28fed914546c74b37abe1917469"
+}

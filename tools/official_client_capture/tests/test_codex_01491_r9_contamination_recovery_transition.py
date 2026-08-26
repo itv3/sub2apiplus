@@ -12,6 +12,12 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from tools.official_client_capture.tests.test_codex_01491_r11a_harness_transition import (
+    load_validated_transition as load_r11a_harness_transition,
+    transition_supersedes as r11a_harness_transition_supersedes,
+)
+
+
 
 ROOT = Path(__file__).resolve().parents[3]
 BASE_COMMIT = "620c3c8d1f7e7dd6734cb961cdb2b2904799974e"
@@ -242,12 +248,24 @@ def validate_transition(document: dict[str, Any]) -> None:
         expected_change = "added" if before is None else "modified"
         expected_predecessors = [] if before is None else [sha256(before)]
         current = ROOT / path
+        current_digest = (
+            sha256(current.read_bytes())
+            if current.is_file() and not current.is_symlink()
+            else ""
+        )
         if (
             entry["change"] != expected_change
             or entry["predecessor_sha256s"] != expected_predecessors
             or current.is_symlink()
             or not current.is_file()
-            or entry["to_sha256"] != sha256(current.read_bytes())
+            or (
+                entry["to_sha256"] != current_digest
+                and not r11a_harness_transition_supersedes(
+                    path,
+                    entry["to_sha256"],
+                    current_digest,
+                )
+            )
             or not isinstance(entry["reason"], str)
             or not entry["reason"].strip()
         ):
@@ -277,11 +295,17 @@ def transition_supersedes(
 
 @lru_cache(maxsize=1)
 def load_validated_transition() -> dict[str, Any]:
-    """只验证一次当前不可变恢复收据，避免摘要链重放重复派生 Git blob。"""
+    """验证 r9 收据，并向统一摘要链追加已验证的 r11a 后继边。"""
 
     document = load_transition()
     validate_transition(document)
-    return document
+    successor = load_r11a_harness_transition()
+    replay = copy.deepcopy(document)
+    replay["transitions"] = [
+        *document["transitions"],
+        *successor["transitions"],
+    ]
+    return replay
 
 
 class Codex01491R9ContaminationRecoveryTransitionTest(unittest.TestCase):
