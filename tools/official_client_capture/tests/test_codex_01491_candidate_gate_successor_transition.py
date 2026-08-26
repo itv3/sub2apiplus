@@ -12,6 +12,9 @@ from pathlib import Path
 from typing import Any
 
 from tools import check_ledger_completeness as ledger
+from tools.official_client_capture.tests import (
+    test_codex_01491_r4_catalog_successor_transition as r4_catalog,
+)
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -136,6 +139,8 @@ def transition_chain_supersedes(
             ledger.CANDIDATE_SURFACE_SUCCESSOR,
             "候选出站面后继 transition",
         )
+        r4_successor = r4_catalog.load_transition()
+        r4_catalog.validate_transition(r4_successor)
         ledger.validate_candidate_surface_successor(
             surface_successor,
             ledger.INVENTORY.read_bytes(),
@@ -149,6 +154,7 @@ def transition_chain_supersedes(
         (predecessor, "transitions"),
         (candidate_gate, "transitions"),
         (surface_successor, "implementation_transitions"),
+        (r4_successor, "transitions"),
     ):
         transitions = document.get(field)
         if not isinstance(transitions, list):
@@ -270,9 +276,15 @@ def validate_transition(document: dict[str, Any]) -> None:
     ):
         path = ROOT / document["staged_catalog"][key]
         digest_key = key.removesuffix("_path") + "_sha256"
-        if path.is_symlink() or not path.is_file() or sha256(path.read_bytes()) != document[
-            "staged_catalog"
-        ][digest_key]:
+        current_digest = sha256(path.read_bytes()) if path.is_file() else ""
+        if path.is_symlink() or not path.is_file() or (
+            current_digest != document["staged_catalog"][digest_key]
+            and not r4_catalog.transition_chain_supersedes(
+                path.relative_to(ROOT).as_posix(),
+                document["staged_catalog"][digest_key],
+                current_digest,
+            )
+        ):
             raise ValueError(f"候选门禁后继 transition 暂存 Catalog 漂移：{key}")
 
     if document["verification"] != {

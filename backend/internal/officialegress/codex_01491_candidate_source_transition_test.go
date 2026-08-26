@@ -281,7 +281,13 @@ func loadCodex01491CandidateSurfaceSuccessorTransition() (
 				return
 			}
 			current, currentErr := codex01491RepoFile(entry.Path)
-			if currentErr != nil || upstreamMergeFrameworkDigest(current) != entry.ToSHA256 {
+			currentDigest := upstreamMergeFrameworkDigest(current)
+			if currentErr != nil || (currentDigest != entry.ToSHA256 &&
+				!codex01491R4CatalogSuccessorSupersedes(
+					entry.Path,
+					entry.ToSHA256,
+					currentDigest,
+				)) {
 				codex01491CandidateSurfaceLoadErr = errors.New("Codex 0.149.1 出站面后继 transition 当前摘要不一致：" + entry.Path)
 				return
 			}
@@ -295,6 +301,9 @@ func codex01491CandidateSurfaceSuccessorSupersedes(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if codex01491R4CatalogSuccessorSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	receipt, err := loadCodex01491CandidateSurfaceSuccessorTransition()
 	if err != nil {
 		return false
@@ -326,7 +335,11 @@ func codex01491CandidateSurfaceSuccessorSupersedes(
 	for len(queue) > 0 {
 		digest := queue[0]
 		queue = queue[1:]
-		if digest == currentDigest {
+		if digest == currentDigest || codex01491R4CatalogSuccessorSupersedes(
+			path,
+			digest,
+			currentDigest,
+		) {
 			return true
 		}
 		if visited[digest] {
@@ -423,7 +436,13 @@ func validateCodex01491CandidateGateSuccessorTransition(
 		{receipt.StagedCatalog.ContractReleaseGraphPath, receipt.StagedCatalog.ContractReleaseGraphSHA256},
 	} {
 		raw, readErr := codex01491RepoFile(binding.path)
-		if readErr != nil || upstreamMergeFrameworkDigest(raw) != binding.digest {
+		currentDigest := upstreamMergeFrameworkDigest(raw)
+		if readErr != nil || (currentDigest != binding.digest &&
+			!codex01491R4CatalogSuccessorSupersedes(
+				binding.path,
+				binding.digest,
+				currentDigest,
+			)) {
 			return errors.New("Codex 0.149.1 candidate gate transition 暂存 Catalog 摘要不一致")
 		}
 	}
@@ -496,7 +515,11 @@ func validateCodex01491CandidateGateSuccessorTransition(
 				entry.Path,
 				entry.ToSHA256,
 				currentDigest,
-			)) {
+			) && !codex01491R4CatalogSuccessorSupersedes(
+			entry.Path,
+			entry.ToSHA256,
+			currentDigest,
+		)) {
 			return errors.New("Codex 0.149.1 candidate gate transition 当前摘要不一致：" + entry.Path)
 		}
 		paths = append(paths, entry.Path)
@@ -517,6 +540,9 @@ func codex01491CandidateGateSuccessorSupersedes(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if codex01491R4CatalogSuccessorSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	receipt, err := loadCodex01491CandidateGateSuccessorTransition()
 	if err != nil {
 		return false
@@ -648,6 +674,10 @@ func validateCodex01491CandidateSourceTransition(
 			entry.Path,
 			entry.ToSHA256,
 			currentDigest,
+		) && !codex01491R4CatalogSuccessorSupersedes(
+			entry.Path,
+			entry.ToSHA256,
+			currentDigest,
 		)) {
 			return errors.New("Codex 0.149.1 candidate transition 当前摘要不一致：" + entry.Path)
 		}
@@ -674,6 +704,9 @@ func codex01491CandidateSourceTransitionSupersedes(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if codex01491R4CatalogSuccessorSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	receipt, err := loadCodex01491CandidateSourceTransition()
 	if err != nil {
 		return false
@@ -701,6 +734,10 @@ func codex01491CandidateSourceTransitionSupersedes(
 			entry.ToSHA256,
 			currentDigest,
 		) || codex01491CandidateSurfaceSuccessorSupersedes(
+			path,
+			entry.ToSHA256,
+			currentDigest,
+		) || codex01491R4CatalogSuccessorSupersedes(
 			path,
 			entry.ToSHA256,
 			currentDigest,

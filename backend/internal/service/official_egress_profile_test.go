@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -427,22 +426,6 @@ func activeOpenAICodexTransportIDForTest(endpointID string) string {
 		panic(err)
 	}
 	return endpoint.TransportID
-}
-
-func openAICodexReleaseModeForVersionForTest(version string) officialegress.ReleaseMode {
-	for _, mode := range []officialegress.ReleaseMode{
-		officialegress.ReleaseModeActive,
-		officialegress.ReleaseModePrevious,
-	} {
-		release, err := officialegress.DefaultReleaseCatalog().Resolve(mode)
-		if err != nil {
-			panic(err)
-		}
-		if release.Version() == version {
-			return mode
-		}
-	}
-	panic("ReleaseCatalog 缺少测试版本：" + version)
 }
 
 func mustOfficialEgressField(

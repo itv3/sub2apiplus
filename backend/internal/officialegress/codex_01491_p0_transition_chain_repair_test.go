@@ -1442,34 +1442,6 @@ func codex01491CampaignBoundaryTransitionSupersedes(
 	return false
 }
 
-func codex01491DocPreTransitionSupersedes(path, priorDigest, currentDigest string) bool {
-	receipt, err := loadCodex01491DocPreTransition()
-	if err != nil {
-		return false
-	}
-	for _, entry := range receipt.Transitions {
-		if entry.Path == path && entry.FromSHA256 != nil &&
-			*entry.FromSHA256 == priorDigest && entry.ToSHA256 == currentDigest {
-			return true
-		}
-	}
-	return false
-}
-
-func codex01491P0ChainRepairSupersedes(path, priorDigest, currentDigest string) bool {
-	receipt, err := loadCodex01491P0ChainRepair()
-	if err != nil {
-		return false
-	}
-	for _, entry := range receipt.Transitions {
-		if entry.Path == path && entry.ToSHA256 == currentDigest &&
-			slices.Contains(entry.PredecessorSHA256s, priorDigest) {
-			return true
-		}
-	}
-	return false
-}
-
 func codex01491MaintenanceTransitionChainSupersedes(
 	path string,
 	priorDigest string,

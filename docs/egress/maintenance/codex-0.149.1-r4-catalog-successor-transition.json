@@ -1,0 +1,185 @@
+{
+  "schema_version": "official-client-codex-0.149.1-r4-catalog-successor-transition/v1",
+  "issued_at_utc": "2026-08-26T15:12:00Z",
+  "base_commit": "6d773d01aa5c81ec949355976568c770d1977207",
+  "scope": "codex-0.149.1-r4-catalog-successor",
+  "framework_stage": "VC-3/CANDIDATE-CATALOG-SUCCESSOR",
+  "predecessor_transition": {
+    "path": "docs/egress/maintenance/codex-0.149.1-egress-surface-successor-transition.json",
+    "file_sha256": "2eb9981fcf6d813bc3bcdd24ca5cb39648d93d40d4445519998270dd5306abd0",
+    "identity_sha256": "3b1f765ced2d288e4bad7eb3eabcd0c093bf653e6cd83c0e00abf788763148a4"
+  },
+  "campaign": {
+    "id": "codex-0_149_1-formal-production-replacement-20260826T140949Z-2c1ab3b9e-r4",
+    "official_attempt_id": "20260826T141046Z-90545b2a079aa94a",
+    "purpose": "production_replacement",
+    "target_version": "0.149.1",
+    "target_profile_sha256": "8e59b38e2ad90a1fd4eb7520c2c54f01fc62f802690d45a2cdab5f91f249fb60",
+    "classification_sha256": "058bb9a2d78ba64ecda1a2a8025158b6cf64f0183a931a2fd1b519146838a599",
+    "review_sha256": "a72a22ef4ec9d8d78329d313175c4cbff97e0537b19eafde0aebadbf83f436bd",
+    "required_rule_count": 42,
+    "discovery_count": 2090,
+    "capture_account_ref": "#21",
+    "api_key_ref": "#4"
+  },
+  "staged_catalog": {
+    "active_version": "0.147.0",
+    "previous_version": "0.149.1",
+    "active_unchanged": true,
+    "production_selector_changed": false,
+    "release_catalog": {
+      "path": "backend/internal/officialegress/catalogdata/runtime/release-catalog.json",
+      "predecessor_sha256": "f7d4c7b6f6ab045c4c4cec1ca87f29928366199c16f1838717dd02dc91a50259",
+      "sha256": "c26b274a5942eee249ae4755aa60c399745f03212077e798fb5d582f0ce6c81e"
+    },
+    "release_graph": {
+      "path": "backend/internal/officialegress/catalogdata/runtime/release-graphs/9824eee0200ea1be1136a1a87ea5accc9a8e5a7c48855b4f0c06587eeab17ca4.json",
+      "sha256": "9824eee0200ea1be1136a1a87ea5accc9a8e5a7c48855b4f0c06587eeab17ca4"
+    },
+    "contract_release_graph": {
+      "path": "backend/internal/officialegress/releasecontract/testdata/release-graph.json",
+      "predecessor_sha256": "591347d95b380bdb789a0c05f76796e61c8f7e7bdd8f0eb39442c0c4f3716f25",
+      "sha256": "9824eee0200ea1be1136a1a87ea5accc9a8e5a7c48855b4f0c06587eeab17ca4"
+    },
+    "inventory_sha256": "f00545f1296175c1a60f51ec770bf050832dbf80bbc61569fbfe9ec78759111b"
+  },
+  "path_set_sha256": "411e118ef0049c49235e6793a10781626882c7c4beb7654335b380d76130553f",
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/catalogdata/runtime/release-catalog.json",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "f7d4c7b6f6ab045c4c4cec1ca87f29928366199c16f1838717dd02dc91a50259"
+      ],
+      "to_sha256": "c26b274a5942eee249ae4755aa60c399745f03212077e798fb5d582f0ce6c81e",
+      "reason": "把候选 Catalog 从作废的早期正式 Campaign 追加绑定到 r4 正式分类，Active 仍保持 0.147.0。"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/runtime/release-graphs/9824eee0200ea1be1136a1a87ea5accc9a8e5a7c48855b4f0c06587eeab17ca4.json",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "9824eee0200ea1be1136a1a87ea5accc9a8e5a7c48855b4f0c06587eeab17ca4",
+      "reason": "追加 r4 正式分类对应的 content-addressed ReleaseGraph，不覆盖 591347d9 历史制品。"
+    },
+    {
+      "path": "backend/internal/officialegress/codex_01491_candidate_source_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "84df55efad07da2e5efa3b150fe1eb1745817aff12956ee2b6ff3763d3a0dcfe"
+      ],
+      "to_sha256": "8a3696c51f90d240c180a3556c0ff9f2542366d1ad17a87dffab6a19cffede30",
+      "reason": "让历史候选源码、门禁及出站面链只通过本 r4 收据的精确摘要边承接新 Catalog。"
+    },
+    {
+      "path": "backend/internal/officialegress/codex_01491_p0_transition_chain_repair_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "e5983e782e6875937ae82e4271f3406ef745b1dbd0d07985afd9172bcb86475c"
+      ],
+      "to_sha256": "8c8a544b0050c9118810172ed38e9a1574ab6e4986904a3b89e4d1b5d2ac094a",
+      "reason": "删除已被统一传递闭包取代的两个未使用测试辅助函数，使固定 CI lint 版本可重放。"
+    },
+    {
+      "path": "backend/internal/officialegress/codex_01491_r4_catalog_successor_transition_test.go",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "1d2cec832db7fc457516a70863431f5207cf31dea6b9cd5e9dabb8f379ac2206",
+      "reason": "新增 r4 Campaign、Catalog、账号边界、历史只读和精确摘要链的 Go 独立重放器。"
+    },
+    {
+      "path": "backend/internal/officialegress/releasecontract/testdata/release-graph.json",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "591347d95b380bdb789a0c05f76796e61c8f7e7bdd8f0eb39442c0c4f3716f25"
+      ],
+      "to_sha256": "9824eee0200ea1be1136a1a87ea5accc9a8e5a7c48855b4f0c06587eeab17ca4",
+      "reason": "同步 release contract fixture 到 r4 候选图，保持 Active 0.147.0 与 Previous 0.149.1。"
+    },
+    {
+      "path": "backend/internal/service/codex_01491_candidate_source_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "d870c8d511544e7ea81e0153fa722f00fa8ca1e98b70144bea071f3c95a426fb"
+      ],
+      "to_sha256": "14adcc0c3ab4826dab7f0edf13bb94e4a2f6661651a802fe5c27a8770365cb54",
+      "reason": "让 service 层独立重放同一 r4 精确摘要链，拒绝未登记的 Catalog 漂移。"
+    },
+    {
+      "path": "backend/internal/service/codex_01491_r4_catalog_successor_transition_test.go",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "ac51a0742fef4ac120705a91bdbf5267180ce4c6e913314e6311239d0825fd6e",
+      "reason": "新增 service 层 r4 Campaign、账号 #21/#4 与 Catalog 摘要闭包的独立重放器。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_changeset5_final_wire_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "687a27153325f0d242f8bbd363ac4cf2bde249c92b9396bd98ef35de5b4c05b9"
+      ],
+      "to_sha256": "09dccb7151b2c900213cdb350a9495377686754de58779d84dda60cf23dce5ef",
+      "reason": "删除 selector 已退休后不再可调用的 0.145 final-wire 构造辅助函数，历史 final-wire 制品保持只读。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_profile_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "f1a744dc697603b5983cf7c94c4af900238fe633068701636f0ddfb0ead18591"
+      ],
+      "to_sha256": "d42d70661c8909a4a5fcd962ea0835ab94f8527d0802b94796c300b177d3c84f",
+      "reason": "删除仅被退休构造器引用的 ReleaseMode 测试辅助函数及无效 import，不改变生产选择器。"
+    },
+    {
+      "path": "tools/check_ledger_completeness.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "3eea18d00402462c4652f58f9d7d482523acb52c38bf6ed192bc8a53a20d1685"
+      ],
+      "to_sha256": "52396775e035fa48a00e3d8d462c6c251d8099cd41e84ca781bc4e49b1230877",
+      "reason": "让 §3.5 台账门禁通过 r4 追加式后继承接实现摘要，旧出站面收据原文保持只读。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_candidate_gate_successor_transition.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "2c364f6f6221c38a89c06b0b6aaf30d0fd067956e43b2f33575c134410e29696"
+      ],
+      "to_sha256": "96482eee11a088a5c7f41127cd2c7f331e78cf198661fc6ebe00e46eafa81e94",
+      "reason": "让 Python 候选门禁把 r4 摘要边纳入传递闭包，并继续拒绝未知前序。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_r4_catalog_successor_transition.py",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "c6ddc9a5c89e191a0b6896da681f17696c4055fcc33a23305187b0bd3d3d0874",
+      "reason": "新增 r4 正式分类、Catalog、#21/#4 账号约束和 mutation 的 Python 独立重放器。"
+    }
+  ],
+  "verification": {
+    "official_attempt_sealed": true,
+    "classification_approved": true,
+    "all_rules_mapped": true,
+    "all_discoveries_mapped": true,
+    "secret_scan_clean": true,
+    "catalog_inventory_verified": true,
+    "historical_transition_chain_replayed": true,
+    "mutation_tests_passed": true
+  },
+  "safety": {
+    "active_remained_0_147_0": true,
+    "previous_staged_0_149_1": true,
+    "candidate_catalog_staged": true,
+    "production_selector_changed": false,
+    "historical_content_addressed_artifacts_overwritten": false,
+    "historical_receipts_modified": false,
+    "historical_transitions_modified": false,
+    "deployment_performed": false,
+    "live_request_sent": false,
+    "arm64_accessed_for_this_transition": false,
+    "vircs_accessed": false,
+    "capture_account_20_used": false,
+    "capture_account_21_used": true
+  },
+  "result": "r4_candidate_catalog_successor_frozen",
+  "identity_sha256": "92e6f38458eef3f4cedae266b30ae95191f04486c74876c1d63841de5552d450"
+}

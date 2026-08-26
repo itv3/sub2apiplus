@@ -403,63 +403,6 @@ func TestChangeset5HistoricalFinalWireRemainsFrozenAfterRuntimeRetirement(t *tes
 	}
 }
 
-func changeset5BuildCurrent0145FinalWireCaptures(t *testing.T) []finalwirecapture.Capture {
-	t.Helper()
-	mode := openAICodexReleaseModeForVersionForTest(officialCodexVersion0145)
-	release, err := officialegress.DefaultReleaseCatalog().Resolve(mode)
-	if err != nil {
-		t.Fatal(err)
-	}
-	anchors := map[officialegress.SinkID]bool{
-		officialegress.SinkCodexAdminTestCompact:       true,
-		officialegress.SinkCodexAdminTestResponses:     true,
-		officialegress.SinkCodexAlphaSearchPATFallback: true,
-		officialegress.SinkCodexUsageProbe:             true,
-	}
-	var captures []finalwirecapture.Capture
-	for _, binding := range officialegress.DefaultSinkCatalog().Bindings() {
-		if binding.Persona() != officialegress.PersonaCodexCLI ||
-			binding.EndpointEvidence() != officialegress.EndpointEvidenceCodexProfile ||
-			!binding.RuntimeBindable() || binding.EnforcementState() != officialegress.SinkStateEnforced {
-			continue
-		}
-		for routeIndex, route := range binding.Routes() {
-			matches := 0
-			for _, endpoint := range release.Profile().Endpoints() {
-				protocol := officialegress.WireProtocolHTTP
-				if endpoint.Upgrade != "" {
-					protocol = officialegress.WireProtocolWebSocket
-				}
-				pathMatches := endpoint.Path == route.Key.Path ||
-					strings.TrimPrefix(endpoint.Path, "/") == strings.TrimPrefix(route.Key.Path, "/")
-				if endpoint.Method == route.Key.Method && endpoint.Host == route.Key.Host &&
-					pathMatches && protocol == route.Protocol {
-					matches++
-				}
-			}
-			if matches > 1 {
-				t.Fatalf("Active route 非唯一：%s matches=%d", route.Key.String(), matches)
-			}
-			if matches == 0 {
-				continue
-			}
-			capture := changeset3CaptureProductionRoute(
-				t, mode, binding, route, anchors[binding.ID()], routeIndex,
-			)
-			// selector 交换不属于历史 wire 漂移；冻结证据的键仍使用当年的 Active。
-			capture.ReleaseMode = officialegress.ReleaseModeActive
-			captures = append(captures, capture)
-		}
-	}
-	sort.Slice(captures, func(i, j int) bool {
-		return changeset3ProductionCaptureKey(captures[i]) < changeset3ProductionCaptureKey(captures[j])
-	})
-	if len(captures) != 28 {
-		t.Fatalf("变更集 5 当前 0.145 final-wire 范围错误：captures=%d", len(captures))
-	}
-	return captures
-}
-
 func TestChangeset5CurrentFinalWireComparatorRejectsWireDrift(t *testing.T) {
 	normalized := changeset5ReadFinalWireManifest(
 		t, "../../../docs/egress/consolidation/normalized-pre-refactor-final-wire/manifest.json",

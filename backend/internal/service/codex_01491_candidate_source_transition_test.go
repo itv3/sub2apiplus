@@ -252,7 +252,13 @@ func loadCodex01491CandidateSurfaceSuccessorServiceTransition() (
 			return receipt, candidateGate, errors.New("Codex 0.149.1 service 出站面后继 transition 修改条目非法")
 		}
 		current, currentErr := os.ReadFile(filepath.Join("../../..", filepath.FromSlash(entry.Path)))
-		if currentErr != nil || upstreamMergeFrameworkServiceDigest(current) != entry.ToSHA256 {
+		currentDigest := upstreamMergeFrameworkServiceDigest(current)
+		if currentErr != nil || (currentDigest != entry.ToSHA256 &&
+			!codex01491R4CatalogSuccessorSupersedesService(
+				entry.Path,
+				entry.ToSHA256,
+				currentDigest,
+			)) {
 			return receipt, candidateGate, errors.New("Codex 0.149.1 service 出站面后继 transition 当前摘要不一致：" + entry.Path)
 		}
 	}
@@ -264,6 +270,9 @@ func codex01491CandidateSurfaceSuccessorSupersedesService(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if codex01491R4CatalogSuccessorSupersedesService(path, priorDigest, currentDigest) {
+		return true
+	}
 	receipt, candidateGate, err := loadCodex01491CandidateSurfaceSuccessorServiceTransition()
 	if err != nil {
 		return false
@@ -287,7 +296,11 @@ func codex01491CandidateSurfaceSuccessorSupersedesService(
 	for len(queue) > 0 {
 		digest := queue[0]
 		queue = queue[1:]
-		if digest == currentDigest {
+		if digest == currentDigest || codex01491R4CatalogSuccessorSupersedesService(
+			path,
+			digest,
+			currentDigest,
+		) {
 			return true
 		}
 		if visited[digest] {
@@ -408,7 +421,13 @@ func validateCodex01491CandidateGateSuccessorServiceTransition(
 		{receipt.StagedCatalog.ContractReleaseGraphPath, receipt.StagedCatalog.ContractReleaseGraphSHA256},
 	} {
 		raw, readErr := os.ReadFile(filepath.Join("../../..", filepath.FromSlash(binding.path)))
-		if readErr != nil || upstreamMergeFrameworkServiceDigest(raw) != binding.digest {
+		currentDigest := upstreamMergeFrameworkServiceDigest(raw)
+		if readErr != nil || (currentDigest != binding.digest &&
+			!codex01491R4CatalogSuccessorSupersedesService(
+				binding.path,
+				binding.digest,
+				currentDigest,
+			)) {
 			return errors.New("Codex 0.149.1 service candidate gate transition 暂存 Catalog 摘要不一致")
 		}
 	}
@@ -481,7 +500,11 @@ func validateCodex01491CandidateGateSuccessorServiceTransition(
 				entry.Path,
 				entry.ToSHA256,
 				currentDigest,
-			)) {
+			) && !codex01491R4CatalogSuccessorSupersedesService(
+			entry.Path,
+			entry.ToSHA256,
+			currentDigest,
+		)) {
 			return errors.New("Codex 0.149.1 service candidate gate transition 当前摘要不一致：" + entry.Path)
 		}
 		paths = append(paths, entry.Path)
@@ -502,6 +525,9 @@ func codex01491CandidateGateSuccessorSupersedesService(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if codex01491R4CatalogSuccessorSupersedesService(path, priorDigest, currentDigest) {
+		return true
+	}
 	receipt, err := loadCodex01491CandidateGateSuccessorServiceTransition()
 	if err != nil {
 		return false
@@ -618,6 +644,10 @@ func validateCodex01491CandidateSourceServiceTransition(
 			entry.Path,
 			entry.ToSHA256,
 			currentDigest,
+		) && !codex01491R4CatalogSuccessorSupersedesService(
+			entry.Path,
+			entry.ToSHA256,
+			currentDigest,
 		)) {
 			return errors.New("Codex 0.149.1 service candidate transition 当前摘要不一致：" + entry.Path)
 		}
@@ -643,6 +673,9 @@ func codex01491CandidateSourceTransitionSupersedesService(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if codex01491R4CatalogSuccessorSupersedesService(path, priorDigest, currentDigest) {
+		return true
+	}
 	receipt, err := loadCodex01491CandidateSourceServiceTransition()
 	if err != nil {
 		return false
@@ -670,6 +703,10 @@ func codex01491CandidateSourceTransitionSupersedesService(
 			entry.ToSHA256,
 			currentDigest,
 		) || codex01491CandidateSurfaceSuccessorSupersedesService(
+			path,
+			entry.ToSHA256,
+			currentDigest,
+		) || codex01491R4CatalogSuccessorSupersedesService(
 			path,
 			entry.ToSHA256,
 			currentDigest,

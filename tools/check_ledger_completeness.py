@@ -30,6 +30,13 @@ from pathlib import PurePosixPath
 from typing import Callable
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from tools.official_client_capture.tests import (  # noqa: E402
+    test_codex_01491_r4_catalog_successor_transition as r4_catalog,
+)
+
 SPEC = ROOT / "docs" / "CODEX_CLI_CLIENT_EMULATION_GUIDE.md"
 SCAN_ROOT = ROOT / "backend"
 INVENTORY = ROOT / "docs" / "egress" / "consolidation" / "egress-surface-inventory.json"
@@ -438,11 +445,17 @@ def validate_human_ledger(ledger: str) -> None:
 def current_upstream_merge_entries(
     surface: list[str],
     upstream_commit: str,
+    post_upstream_paths: set[str] | None = None,
 ) -> list[dict[str, object]]:
-    """生成相对当前 upstream 基线的 Codex 出站 overlay 精确闭集。"""
+    """生成 upstream 合并时点的 Codex 出站 overlay 精确闭集。
+
+    后续候选 Campaign 新增的出站面由独立 successor transition 冻结，不能倒灌并改写
+    已经封存的 upstream overlay 台账。
+    """
 
     strict_surface = set(surface) - set(SCOPE_EXCLUSIONS)
     candidates = strict_surface | REQUIRED_REVIEW_TOUCHPOINTS | IDENTITY_BOUNDARY_TOUCHPOINTS
+    candidates -= post_upstream_paths or set()
     entries: list[dict[str, object]] = []
     for path in sorted(candidates):
         if not (ROOT / path).is_file():
@@ -730,6 +743,11 @@ def validate_candidate_surface_successor(
         }:
             raise RuntimeError("候选出站面后继 transition 实现条目字段非法")
         implementation_path = ROOT / expected_path
+        current_digest = (
+            sha256(implementation_path.read_bytes())
+            if implementation_path.is_file()
+            else ""
+        )
         if (
             entry.get("path") != expected_path
             or entry.get("change") != expected_change
@@ -738,7 +756,14 @@ def validate_candidate_surface_successor(
             or not entry["reason"].strip()
             or implementation_path.is_symlink()
             or not implementation_path.is_file()
-            or entry.get("to_sha256") != sha256(implementation_path.read_bytes())
+            or (
+                entry.get("to_sha256") != current_digest
+                and not r4_catalog.transition_chain_supersedes(
+                    expected_path,
+                    entry.get("to_sha256", ""),
+                    current_digest,
+                )
+            )
         ):
             raise RuntimeError(
                 f"候选出站面后继 transition 实现摘要非法：{expected_path}"
@@ -843,9 +868,14 @@ def main() -> int:
     try:
         plan = load_upstream_merge_plan(args.upstream_merge_plan.resolve())
         validate_human_ledger(ledger)
+        candidate_successor_paths = {
+            item["path"]
+            for item in candidate_surface_additions(INVENTORY.read_bytes())
+        }
         upstream_entries = current_upstream_merge_entries(
             surface,
             plan.upstream_commit,
+            candidate_successor_paths,
         )
         upstream_payload = upstream_merge_ledger_payload(upstream_entries, plan)
     except RuntimeError as exc:
