@@ -1,0 +1,111 @@
+{
+  "schema_version": "official-client-codex-0.149.1-model-catalog-repair-transition/v1",
+  "issued_at_utc": "2026-08-26T03:20:18Z",
+  "base_commit": "ae9d7e10a52ff792cea0b881dc4248af2749d417",
+  "target_commit": "650a15d7c16b6518bb07c97a25d13598489281b9",
+  "scope": "codex-0.149.1-model-catalog-repair",
+  "framework_stage": "VC-0/P0-MODEL-CONDITION-REPAIR-SUCCESSOR",
+  "predecessor_transition": {
+    "path": "docs/egress/maintenance/codex-0.149.1-shell-home-repair-transition.json",
+    "file_sha256": "fc055b000d2259cbb7f4b8a40e94325a4936345451136016f29544842018548c",
+    "identity_sha256": "543fec0e88473b06fa81c008900b1f850eafe4dc286c7b83a0bd2d6f3c72dffc"
+  },
+  "boundaries": {
+    "compaction_primary_model_campaign_bound": true,
+    "historical_campaigns_preserved_read_only": true,
+    "model_receipt_requires_complete_http_200": true,
+    "production_selector_changed": false,
+    "request_only_exclusion_manifest_bound": true,
+    "sub2api_candidate_deployed": false,
+    "vircs_accessed": false
+  },
+  "execution_facts": {
+    "interrupted_attempt_id": "20260826T021733Z-f35fd27a31f17b7c",
+    "interrupted_attempt_status": "failed",
+    "interrupted_campaign_id": "codex-0_149_1-formal-production-replacement-20260826T021655Z-ae9d7e10a",
+    "new_capture_account_login_verified": true,
+    "post_switch_capture_started": false,
+    "restoration_report_sha256": "3fa92e3eb8a32fc052861c6781163e0752fc8b7f6dc8fc98161911d4b114aed9",
+    "restoration_status": "restored",
+    "runtime_image_changed": false,
+    "vircs_accessed": false
+  },
+  "transitions": [
+    {
+      "path": "tools/official_client_capture/capturelib/identity.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "d51070d345d58cefa09629f0287e8e4f76a65264c3d6bd8eb0af4c7f8d872199"
+      ],
+      "to_sha256": "bb502ffe21a62ec221a1510ac03c62d4c28675cbf61b6b4c6513004761fed725",
+      "reason": "把在线模型目录预热驱动纳入 Campaign 工具源码身份，禁止服务器使用未冻结脚本。"
+    },
+    {
+      "path": "tools/official_client_capture/drive_codex_model_catalog.py",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "5973fea3e4f2ab100bc826ad699b140abcde39a12e5baaffbff6c5cf936f88da",
+      "reason": "通过隔离 CODEX_HOME 阻塞执行 model/list，并交叉核验 RPC 结果与 relay 中完整的 /models HTTP 200 原始响应。"
+    },
+    {
+      "path": "tools/official_client_capture/model_condition_receipts.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "0e7d449bb0405106a472396b8f1701cf086ca0fe2e605c6b573a56ebe3eb159b"
+      ],
+      "to_sha256": "a406d78a0cc79554565e9966130ce33b01ecbf19fbfa11d42fd27f1d77e3a894",
+      "reason": "只排除由 manifest 的大小、摘要与连续 segment 严格证明的单向失败请求，同时继续要求至少一份完整成功响应并绑定排除依据。"
+    },
+    {
+      "path": "tools/official_client_capture/run_official_relay_scenario.sh",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "cc8c0c2d039d0601dd307d25d8d25ceb9e871f3aa82a26e87d0024bf01c90022"
+      ],
+      "to_sha256": "3bdc889a077da9d4998a48bc0e38483766d57a9646691b569487163be95a15e3",
+      "reason": "在模型条件场景前预热在线目录；压缩链首模型跟随 Campaign MODEL，并拒绝缺失、重复或 Lite 的第二模型。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_model_catalog_transition.py",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "b45f961d46432484dc2824f7cb6b9d8b3239979adad17d82d7383f6d3e4bd603",
+      "reason": "独立重放前序 transition、停止与恢复事实、文件闭集、门禁结论及生产隔离边界。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_compaction_scenario_models.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "66d03c81581cade7b7a0bafcf7bca1194787a74dbe0cb62ed2a4585a1fda5da3"
+      ],
+      "to_sha256": "85fdd3e82ad93147f103c29209bf4e1f2cc238c10c9602c0c416a8701e19324d",
+      "reason": "冻结 Campaign 主模型绑定、非 Lite 第二模型约束以及 model-downshift 的受控阈值关系。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_model_catalog_prewarm.py",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "abacfe7473b718605906839e1bdcbcd99d7a26687698aa41590f4bd3d592ebaf",
+      "reason": "覆盖完整在线目录、仅单向请求、Lite 条件漂移、绝对路径执行及 shell 接线约束。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_model_condition_receipt.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "afd64db7dce82ce61fb2e472467f59b29bd3892d2c4877f0c00b444c038fc477"
+      ],
+      "to_sha256": "480cb47de1075b99f734925d2182fd09bb1523e5744bf5c3666360df29982eff",
+      "reason": "验证受 manifest 约束的单向失败请求可排除，但摘要漂移与零完整响应继续失败关闭。"
+    }
+  ],
+  "verification": {
+    "arm64_source_reference_gate_passed": true,
+    "bash_syntax_passed": true,
+    "capture_tool_tests_passed": true,
+    "egress_spec_ci_passed": true,
+    "predecessor_transition_replayed": true,
+    "targeted_tests_passed": true
+  },
+  "result": "model_catalog_and_compaction_repair_ready_for_p0",
+  "identity_sha256": "2c1f8f1a0ec90ca26781f28f124f03674698139a4794ece732bf7fac6f36ffe5"
+}
