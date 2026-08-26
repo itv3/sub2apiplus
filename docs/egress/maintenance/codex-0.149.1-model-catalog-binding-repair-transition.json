@@ -1,0 +1,100 @@
+{
+  "schema_version": "official-client-codex-0.149.1-model-catalog-binding-repair-transition/v1",
+  "issued_at_utc": "2026-08-26T03:57:33Z",
+  "base_commit": "0a09b60d33cfbeb139aff75e605f3bb2d4aabdfa",
+  "target_commit": "9da0cc904b338bfc5a3c2ac1980d2fdc0f66a6bd",
+  "scope": "codex-0.149.1-model-catalog-binding-repair",
+  "framework_stage": "VC-0/P0-MODEL-CATALOG-BINDING-REPAIR-SUCCESSOR",
+  "predecessor_transition": {
+    "path": "docs/egress/maintenance/codex-0.149.1-model-catalog-repair-transition.json",
+    "file_sha256": "d9e3680a3738a112bcf0546f19c3d138beb013ad0d35ed100083b0bb0642cae8",
+    "identity_sha256": "2c1f8f1a0ec90ca26781f28f124f03674698139a4794ece732bf7fac6f36ffe5"
+  },
+  "boundaries": {
+    "complete_models_http_200_required": true,
+    "failed_campaign_preserved_read_only": true,
+    "historical_artifacts_modified": false,
+    "prewarm_capture_coordinate_bound": true,
+    "production_selector_changed": false,
+    "scrubbed_manifest_integrity_required": true,
+    "sub2api_candidate_deployed": false,
+    "vircs_accessed": false
+  },
+  "execution_facts": {
+    "failed_attempt_id": "20260826T033217Z-7dbe49d6e95db310",
+    "failed_attempt_status": "failed",
+    "failed_campaign_id": "codex-0_149_1-formal-production-replacement-20260826T033113Z-0a09b60d3",
+    "failed_sample_replay": {
+      "job_id": "official-relay-http-response-plain",
+      "model_id": "gpt-5.5",
+      "models_response_sha256": "2ba6c2c23c0a3186a1e790ad010788563418063c1cb64f80ae7cc2b82b1fa4d1",
+      "status": "success",
+      "use_responses_lite": false
+    },
+    "observed_model_conditions": {
+      "gpt-5.4-mini": false,
+      "gpt-5.5": false,
+      "gpt-5.6-luna": true
+    },
+    "post_repair_capture_started": false,
+    "restoration_report_sha256": "7eade97b7b20991f34fe016afb2e32a7c659a439570f0e9eabf92d68e668aa9c",
+    "restoration_status": "restored",
+    "vircs_accessed": false
+  },
+  "transitions": [
+    {
+      "path": "tools/official_client_capture/model_condition_receipts.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "a406d78a0cc79554565e9966130ce33b01ecbf19fbfa11d42fd27f1d77e3a894"
+      ],
+      "to_sha256": "bfccf48b5c839f3775bc8df98e8e39a48c492e93dd585339a340abb45b01a13e",
+      "reason": "把最终模型条件收据绑定到预热摘要指定的唯一完整 /models HTTP 200，并重放模型与 Lite 条件。"
+    },
+    {
+      "path": "tools/official_client_capture/run_official_relay_scenario.sh",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "3bdc889a077da9d4998a48bc0e38483766d57a9646691b569487163be95a15e3"
+      ],
+      "to_sha256": "7ff121e1e9030de0f7b637d5a26c676b03e4c71f39f847bbd5181bc3f651505b",
+      "reason": "正式场景显式传入本轮 model-catalog-prewarm.json，禁止收据重新猜测并发目录连接。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_model_catalog_binding_transition.py",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "584390c4c7a09229460b7278b63a666686d989809870a0597bd4d6b95e3767e3",
+      "reason": "独立重放修复提交、前序 transition、失败 Campaign 恢复事实、文件闭集和生产隔离边界。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_model_catalog_prewarm.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "abacfe7473b718605906839e1bdcbcd99d7a26687698aa41590f4bd3d592ebaf"
+      ],
+      "to_sha256": "8e078245db49c1a2cdaf2c3414690a59a4f0e28bc860b951ed704007c12cae7a",
+      "reason": "冻结预热摘要必须传入最终收据生成器的 shell 装配契约。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_model_condition_receipt.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "480cb47de1075b99f734925d2182fd09bb1523e5744bf5c3666360df29982eff"
+      ],
+      "to_sha256": "b7f94e192671990bb87382be6ee5a3419e23132c4eaa6b33801c20969afdc2b5",
+      "reason": "覆盖完整预热响应、并发半响应排除、摘要漂移失败关闭及 manifest 证明的等长脱敏。"
+    }
+  ],
+  "verification": {
+    "actual_failed_sample_replay_passed": true,
+    "arm64_restoration_verified": true,
+    "bash_syntax_passed": true,
+    "capture_tool_tests_passed": true,
+    "egress_spec_ci_passed": true,
+    "predecessor_transition_replayed": true,
+    "targeted_tests_passed": true
+  },
+  "result": "prewarm_catalog_binding_repair_ready_for_p0",
+  "identity_sha256": "04332a347918252a9521f5e2ae9ddbbeaa6a12ce32e2632194201be2cb96b2f7"
+}
