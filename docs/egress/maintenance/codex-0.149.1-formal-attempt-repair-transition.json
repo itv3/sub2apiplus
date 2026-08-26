@@ -1,0 +1,206 @@
+{
+  "schema_version": "official-client-codex-0.149.1-formal-attempt-repair-transition/v1",
+  "issued_at_utc": "2026-08-26T05:45:47Z",
+  "base_commit": "4080277cef28515fc737cc7f3dcde072efd50936",
+  "target_commit": "032366cc8a696480c61f079b7fa2fed992810a7a",
+  "scope": "codex-0.149.1-formal-attempt-repair",
+  "framework_stage": "VC-0/P0-FORMAL-ATTEMPT-REPAIR-SUCCESSOR",
+  "predecessor_transition": {
+    "path": "docs/egress/maintenance/codex-0.149.1-model-catalog-binding-repair-transition.json",
+    "file_sha256": "22c4ad53662f2f8f081e7cf11615fc1ae24b0ba1d2738afb5bc4562de2c69ef9",
+    "identity_sha256": "04332a347918252a9521f5e2ae9ddbbeaa6a12ce32e2632194201be2cb96b2f7"
+  },
+  "boundaries": {
+    "arm64_read_only_diagnostics_performed": true,
+    "failed_attempt_preserved_read_only": true,
+    "historical_artifacts_modified": false,
+    "new_campaign_required": true,
+    "production_selector_changed": false,
+    "sub2api_candidate_deployed": false,
+    "vircs_accessed": false
+  },
+  "failed_attempt": {
+    "attempt_digest": "4b2b87ee7506629d318cbf275585e8b0a3b82473f42d4ba7120374586006eab4",
+    "attempt_id": "20260826T040807Z-b1f8789e6e8bd937",
+    "campaign_id": "codex-0_149_1-formal-production-replacement-20260826T040733Z-4080277ce",
+    "failed_job_ids": [
+      "official-relay-model-downshift",
+      "official-relay-realtime-webrtc",
+      "official-wham-safe"
+    ],
+    "jobs_complete": 25,
+    "jobs_failed": 3,
+    "jobs_total": 28,
+    "restoration_report": {
+      "path": "/root/oauth-capture/campaigns/codex-0_149_1-formal-production-replacement-20260826T040733Z-4080277ce/official/attempts/20260826T040807Z-b1f8789e6e8bd937/evidence/receipts/restoration-report.json",
+      "sha256": "5c443e1d8d03571f3f193f7cf315fa925c8f3816e66d4f5c4c49d3e345e7a0f6",
+      "status": "restored"
+    },
+    "status": "failed_frozen"
+  },
+  "repairs": {
+    "a11": {
+      "controlled_final_state": "sideband_branch_verified_with_live_regression",
+      "controlled_intervention": "synthesize_realtime_call_after_live_failure",
+      "live_failure_message_sha256": "6361dfb1ded718a34bf4c83d728df084d6f68be022e7a25ef34c3ff7fc35bb51",
+      "live_failure_status": 400,
+      "observation_modes": [
+        "live_failure_plus_controlled_branch",
+        "live_success"
+      ],
+      "post_switch_diagnostic_run": "/root/oauth-capture/runs/codex-0_149_1-post-switch-a11-diag-20260826T051415Z"
+    },
+    "model_downshift": {
+      "first_context_window": 272000,
+      "first_token_limit": 16000,
+      "same_comp_hash_required": true,
+      "second_context_window": 128000,
+      "second_token_limit": 8000
+    },
+    "relay_timeout_seconds": 1800,
+    "wham_safe": {
+      "container_entrypoint": "python3",
+      "network_mode": "none",
+      "request_path": "/backend-api/wham/rate-limit-reset-credits/consume"
+    }
+  },
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/codex_01491_p0_transition_chain_repair_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "820d78f8dc3a05ea39da69b5167bd2d5fbbde820b68e2636bb982108b945db30"
+      ],
+      "to_sha256": "5ed34ff83310270ea18233dce7cde2e4184aefa59fe672bf08dc1bd566eccef7",
+      "reason": "把 Formal Attempt 修复后继加入 Go transition 传递闭包，使旧收据保持只读且能解释 schema 的合法后继摘要。"
+    },
+    {
+      "path": "tools/official_client_capture/build_scenario_facts.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "ee44de895e659419c2f866fa00aef494068d6872c419351f1dcdaa2b16be7baf"
+      ],
+      "to_sha256": "411d22144b07ef26c1aa208452fe966692b6e3ef87fe500865f99bae4aaf3c3d",
+      "reason": "A11 同根绑定自然 400、受控 2xx、精确 intervention、官方 sideband call_id 与 api.openai.com SNI，拒绝受控 200 冒充自然成功。"
+    },
+    {
+      "path": "tools/official_client_capture/codex_upgrade_capture_attempt.schema.json",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "efdce23f7e70b681ae8c07286970348a99618021c5dfe22a6dd3d9c70747ad79"
+      ],
+      "to_sha256": "c3c0a952bc1f2ba7e80fafb505e6395a7933512c8371dcb891a6e7a2cc03a14d",
+      "reason": "Attempt job 摘要允许明示的 A11 复合最终态，避免把 live regression 隐藏为 sideband_established。"
+    },
+    {
+      "path": "tools/official_client_capture/codex_upgrade_scenario_receipt.schema.json",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "1f6d38812d19fd0cef28aeb66026df55bd5c098950ce7783866efb9c6081e044"
+      ],
+      "to_sha256": "046db28b8d86222b6613ff8692ee73e240fb91ea675fe4b3ee708ec5138410f2",
+      "reason": "以互斥 schema 分支区分 live_success、历史兼容形态与 live_failure_plus_controlled_branch。"
+    },
+    {
+      "path": "tools/official_client_capture/codex_upgrade_scenarios_0_149_1.json",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "cd677141b20a500370c392ba47c01ed3b4f34abb0bc1f91a3cd1e874dfb90c0c"
+      ],
+      "to_sha256": "d251847a616b13e694dc70069e361e1cbee7a798eeacb0f71af115489fb29114",
+      "reason": "正式 A11 先走一次自然上游，失败后才允许第二次受控 first-hop；wham 离线容器显式覆盖镜像 entrypoint。"
+    },
+    {
+      "path": "tools/official_client_capture/run_official_relay_scenario.sh",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "7ff121e1e9030de0f7b637d5a26c676b03e4c71f39f847bbd5181bc3f651505b"
+      ],
+      "to_sha256": "668e5ea4059270218f4982ece6d6e2dc2a51912418e880ad8d9abff2b0de71ae",
+      "reason": "中继寿命覆盖最长场景；A11 分离自然与受控事件；ModelDownshift 同时冻结严格递减的 context window 与 token limit。"
+    },
+    {
+      "path": "tools/official_client_capture/scenario_receipts.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "c467e66cacfc9951696e8ab402c5e8011bced1c0b9a81476f7b63b53aad6f533"
+      ],
+      "to_sha256": "b8e34ed888440dfde743ac3babf24ae9104fa129520b73abe17b24a3c2ff5e39",
+      "reason": "运行时校验按 A11 观测模式选择最终态，同时继续接受已经冻结的 v1 自然成功收据。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_doc_pre_transition.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "cde5d34a1d56a55bfbcfcd9061eceb3129218fa1f57c033ea999111ee6d1ac48"
+      ],
+      "to_sha256": "a0a8726f97d2a4fda8632c717a36b4fcfed386ca014344aad73b7614aec82781",
+      "reason": "旧 DOC-PRE 与 Campaign 边界 transition 只通过本后继登记的精确摘要边承认当前文件，历史原文保持不变。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_formal_attempt_repair_transition.py",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "eceae05e02a11aac51c6de750633a434fc44a36e2f2b035e5f9669d9f23f65d8",
+      "reason": "独立重放失败 Attempt、修复提交、前序 transition、文件闭集、ARM64 只读诊断与 Vircs 隔离边界。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_upgrade.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "ae5b7ca72b6681c0678892dabd806ddd00a45430461948ceefb0b6e38f986157"
+      ],
+      "to_sha256": "dc382c9854459ef5f58d20886129d8d2f82f1321cf23d7e7acddaa7d4ea23c21",
+      "reason": "冻结 0.149.1 wham entrypoint 覆盖与 A11 延迟合成环境装配，且不反向改变 0.145.0 历史清单。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_compaction_scenario_models.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "85fdd3e82ad93147f103c29209bf4e1f2cc238c10c9602c0c416a8701e19324d"
+      ],
+      "to_sha256": "ac5320dd61ec5a27ad00003e1db584a693454df1b2ac80a608c4c5bdd12c18b4",
+      "reason": "回归测试明确要求 ModelDownshift 的旧 context_window 严格大于新窗口。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_scenario_receipt.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "acd4da4126c35bba36cb83bd7f350d0de9a3d80fe35e80b38004c8a8d35477c0"
+      ],
+      "to_sha256": "3ed76d36ec298f71e0de0f7303474a9d49419f39a7ffc2f9516ed52f0e03393d",
+      "reason": "覆盖自然成功、自然 400 加受控分支、即时合成拒绝、证据 manifest 字节绑定与新最终态。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_upstream_byte_relay.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "e62b81ff20666b24b4b420750b752d2668caa65108d86bdf4446ffa294cee01b"
+      ],
+      "to_sha256": "a305671d383299d435320e012140237592a77489ed5450fc7c646adfafeac70a",
+      "reason": "冻结旧即时合成只命中第一次、延迟模式先放行一次自然请求再只合成第二次。"
+    },
+    {
+      "path": "tools/official_client_capture/upstream_byte_relay.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "c1ee880e4276d3e9c24db642586431cac41dd8cfed801ba7fe0c8f2606d0129b"
+      ],
+      "to_sha256": "c98b456bf592fb2c7c66ce13e7ffeb4c6cb31e79d70a701b92310583d21e6a2e",
+      "reason": "新增并发安全的 realtime 请求序号与延迟合成开关，在 relay manifest 中分别标记生产转发和受控响应。"
+    }
+  ],
+  "verification": {
+    "bash_syntax_passed": true,
+    "capture_tool_tests_passed": true,
+    "global_egress_spec_ci_blocker": "pre_existing_repository_wide_transition_digest_drift",
+    "global_egress_spec_ci_blocker_recorded": true,
+    "global_egress_spec_ci_passed": false,
+    "repair_commit_replayed": true,
+    "schema_json_parse_passed": true,
+    "targeted_tests_passed": true,
+    "transition_chain_replayed": true
+  },
+  "result": "formal_attempt_repairs_frozen_pending_new_campaign",
+  "identity_sha256": "699d42ad2b95794fbce04e6722710816a614942f45df5f1a5dedf41f1397edac"
+}

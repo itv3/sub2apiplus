@@ -19,6 +19,8 @@ const (
 	codex01491P0ChainRepairPath              = "docs/egress/maintenance/codex-0.149.1-p0-transition-chain-repair.json"
 	codex01491CampaignBoundaryTransitionPath = "docs/egress/maintenance/codex-0.149.1-campaign-boundary-hardening-transition.json"
 	codex01491FailedEvidenceRecoveryPath     = "docs/egress/maintenance/codex-0.149.1-failed-evidence-recovery-transition.json"
+	codex01491FormalAttemptRepairPath        = "docs/egress/maintenance/codex-0.149.1-formal-attempt-repair-transition.json"
+	codex01491ModelCatalogBindingPath        = "docs/egress/maintenance/codex-0.149.1-model-catalog-binding-repair-transition.json"
 )
 
 var codex01491DocPreExpectedPaths = []string{
@@ -93,6 +95,23 @@ var codex01491FailedEvidenceRecoveryExpectedPaths = []string{
 	"tools/official_client_capture/codex_upgrade.py",
 	"tools/official_client_capture/tests/test_codex_01491_doc_pre_transition.py",
 	"tools/official_client_capture/tests/test_job_retry_within_attempt.py",
+}
+
+var codex01491FormalAttemptRepairExpectedPaths = []string{
+	"backend/internal/officialegress/codex_01491_p0_transition_chain_repair_test.go",
+	"tools/official_client_capture/build_scenario_facts.py",
+	"tools/official_client_capture/codex_upgrade_capture_attempt.schema.json",
+	"tools/official_client_capture/codex_upgrade_scenario_receipt.schema.json",
+	"tools/official_client_capture/codex_upgrade_scenarios_0_149_1.json",
+	"tools/official_client_capture/run_official_relay_scenario.sh",
+	"tools/official_client_capture/scenario_receipts.py",
+	"tools/official_client_capture/tests/test_codex_01491_doc_pre_transition.py",
+	"tools/official_client_capture/tests/test_codex_01491_formal_attempt_repair_transition.py",
+	"tools/official_client_capture/tests/test_codex_upgrade.py",
+	"tools/official_client_capture/tests/test_compaction_scenario_models.py",
+	"tools/official_client_capture/tests/test_scenario_receipt.py",
+	"tools/official_client_capture/tests/test_upstream_byte_relay.py",
+	"tools/official_client_capture/upstream_byte_relay.py",
 }
 
 type codex01491DocPreTransitionEntry struct {
@@ -256,19 +275,61 @@ type codex01491FailedEvidenceRecoveryReceipt struct {
 	IdentitySHA256 string `json:"identity_sha256"`
 }
 
+type codex01491FormalAttemptRepairReceipt struct {
+	SchemaVersion         string `json:"schema_version"`
+	IssuedAtUTC           string `json:"issued_at_utc"`
+	BaseCommit            string `json:"base_commit"`
+	TargetCommit          string `json:"target_commit"`
+	Scope                 string `json:"scope"`
+	FrameworkStage        string `json:"framework_stage"`
+	PredecessorTransition struct {
+		Path           string `json:"path"`
+		FileSHA256     string `json:"file_sha256"`
+		IdentitySHA256 string `json:"identity_sha256"`
+	} `json:"predecessor_transition"`
+	Boundaries struct {
+		ARM64ReadOnlyDiagnosticsPerformed bool `json:"arm64_read_only_diagnostics_performed"`
+		FailedAttemptPreservedReadOnly    bool `json:"failed_attempt_preserved_read_only"`
+		HistoricalArtifactsModified       bool `json:"historical_artifacts_modified"`
+		NewCampaignRequired               bool `json:"new_campaign_required"`
+		ProductionSelectorChanged         bool `json:"production_selector_changed"`
+		Sub2APICandidateDeployed          bool `json:"sub2api_candidate_deployed"`
+		VircsAccessed                     bool `json:"vircs_accessed"`
+	} `json:"boundaries"`
+	FailedAttempt json.RawMessage                `json:"failed_attempt"`
+	Repairs       json.RawMessage                `json:"repairs"`
+	Transitions   []codex01491P0ChainRepairEntry `json:"transitions"`
+	Verification  struct {
+		BashSyntaxPassed                  bool   `json:"bash_syntax_passed"`
+		CaptureToolTestsPassed            bool   `json:"capture_tool_tests_passed"`
+		GlobalEgressSpecCIBlocker         string `json:"global_egress_spec_ci_blocker"`
+		GlobalEgressSpecCIBlockerRecorded bool   `json:"global_egress_spec_ci_blocker_recorded"`
+		GlobalEgressSpecCIPassed          bool   `json:"global_egress_spec_ci_passed"`
+		RepairCommitReplayed              bool   `json:"repair_commit_replayed"`
+		SchemaJSONParsePassed             bool   `json:"schema_json_parse_passed"`
+		TargetedTestsPassed               bool   `json:"targeted_tests_passed"`
+		TransitionChainReplayed           bool   `json:"transition_chain_replayed"`
+	} `json:"verification"`
+	Result         string `json:"result"`
+	IdentitySHA256 string `json:"identity_sha256"`
+}
+
 var (
-	codex01491DocPreOnce              sync.Once
-	codex01491DocPreCached            codex01491DocPreTransitionReceipt
-	codex01491DocPreLoadErr           error
-	codex01491P0RepairOnce            sync.Once
-	codex01491P0RepairCached          codex01491P0ChainRepairReceipt
-	codex01491P0RepairLoadErr         error
-	codex01491CampaignBoundaryOnce    sync.Once
-	codex01491CampaignBoundaryCached  codex01491CampaignBoundaryTransitionReceipt
-	codex01491CampaignBoundaryLoadErr error
-	codex01491FailedRecoveryOnce      sync.Once
-	codex01491FailedRecoveryCached    codex01491FailedEvidenceRecoveryReceipt
-	codex01491FailedRecoveryLoadErr   error
+	codex01491DocPreOnce                 sync.Once
+	codex01491DocPreCached               codex01491DocPreTransitionReceipt
+	codex01491DocPreLoadErr              error
+	codex01491P0RepairOnce               sync.Once
+	codex01491P0RepairCached             codex01491P0ChainRepairReceipt
+	codex01491P0RepairLoadErr            error
+	codex01491CampaignBoundaryOnce       sync.Once
+	codex01491CampaignBoundaryCached     codex01491CampaignBoundaryTransitionReceipt
+	codex01491CampaignBoundaryLoadErr    error
+	codex01491FailedRecoveryOnce         sync.Once
+	codex01491FailedRecoveryCached       codex01491FailedEvidenceRecoveryReceipt
+	codex01491FailedRecoveryLoadErr      error
+	codex01491FormalAttemptRepairOnce    sync.Once
+	codex01491FormalAttemptRepairCached  codex01491FormalAttemptRepairReceipt
+	codex01491FormalAttemptRepairLoadErr error
 )
 
 func codex01491RepoFile(path string) ([]byte, error) {
@@ -697,7 +758,13 @@ func validateCodex01491FailedEvidenceRecovery(
 			}
 		}
 		current, readErr := codex01491RepoFile(entry.Path)
-		if readErr != nil || upstreamMergeFrameworkDigest(current) != entry.ToSHA256 {
+		currentDigest := upstreamMergeFrameworkDigest(current)
+		if readErr != nil || (currentDigest != entry.ToSHA256 &&
+			!codex01491FormalAttemptRepairSupersedes(
+				entry.Path,
+				entry.ToSHA256,
+				currentDigest,
+			)) {
 			return errors.New("Codex 0.149.1 失败证据恢复 transition 当前摘要不一致：" + entry.Path)
 		}
 		paths = append(paths, entry.Path)
@@ -708,12 +775,154 @@ func validateCodex01491FailedEvidenceRecovery(
 	return nil
 }
 
+func loadCodex01491FormalAttemptRepair() (
+	codex01491FormalAttemptRepairReceipt,
+	error,
+) {
+	codex01491FormalAttemptRepairOnce.Do(func() {
+		raw, err := codex01491RepoFile(codex01491FormalAttemptRepairPath)
+		if err != nil {
+			codex01491FormalAttemptRepairLoadErr = err
+			return
+		}
+		if err := decodeCodex01491Transition(
+			raw,
+			&codex01491FormalAttemptRepairCached,
+		); err != nil {
+			codex01491FormalAttemptRepairLoadErr = err
+			return
+		}
+		if err := codex01491VerifyIdentity(
+			raw,
+			codex01491FormalAttemptRepairCached.IdentitySHA256,
+		); err != nil {
+			codex01491FormalAttemptRepairLoadErr = err
+			return
+		}
+		codex01491FormalAttemptRepairLoadErr = validateCodex01491FormalAttemptRepair(
+			codex01491FormalAttemptRepairCached,
+		)
+	})
+	return codex01491FormalAttemptRepairCached, codex01491FormalAttemptRepairLoadErr
+}
+
+func validateCodex01491FormalAttemptRepair(
+	receipt codex01491FormalAttemptRepairReceipt,
+) error {
+	if receipt.SchemaVersion != "official-client-codex-0.149.1-formal-attempt-repair-transition/v1" ||
+		receipt.BaseCommit != "4080277cef28515fc737cc7f3dcde072efd50936" ||
+		receipt.TargetCommit != "032366cc8a696480c61f079b7fa2fed992810a7a" ||
+		receipt.Scope != "codex-0.149.1-formal-attempt-repair" ||
+		receipt.FrameworkStage != "VC-0/P0-FORMAL-ATTEMPT-REPAIR-SUCCESSOR" ||
+		receipt.Result != "formal_attempt_repairs_frozen_pending_new_campaign" {
+		return errors.New("Codex 0.149.1 Formal Attempt 修复 transition 顶层事实非法")
+	}
+	if _, err := time.Parse(time.RFC3339, receipt.IssuedAtUTC); err != nil {
+		return errors.New("Codex 0.149.1 Formal Attempt 修复 transition 时间非法")
+	}
+	predecessorRaw, err := codex01491RepoFile(codex01491ModelCatalogBindingPath)
+	if err != nil {
+		return err
+	}
+	var predecessor struct {
+		SchemaVersion  string `json:"schema_version"`
+		Scope          string `json:"scope"`
+		Result         string `json:"result"`
+		IdentitySHA256 string `json:"identity_sha256"`
+	}
+	if err := json.Unmarshal(predecessorRaw, &predecessor); err != nil {
+		return err
+	}
+	if predecessor.SchemaVersion != "official-client-codex-0.149.1-model-catalog-binding-repair-transition/v1" ||
+		predecessor.Scope != "codex-0.149.1-model-catalog-binding-repair" ||
+		predecessor.Result != "prewarm_catalog_binding_repair_ready_for_p0" ||
+		receipt.PredecessorTransition.Path != codex01491ModelCatalogBindingPath ||
+		receipt.PredecessorTransition.FileSHA256 != upstreamMergeFrameworkDigest(predecessorRaw) ||
+		receipt.PredecessorTransition.IdentitySHA256 != predecessor.IdentitySHA256 {
+		return errors.New("Codex 0.149.1 Formal Attempt 修复 transition 前序绑定非法")
+	}
+	if !receipt.Boundaries.ARM64ReadOnlyDiagnosticsPerformed ||
+		!receipt.Boundaries.FailedAttemptPreservedReadOnly ||
+		receipt.Boundaries.HistoricalArtifactsModified ||
+		!receipt.Boundaries.NewCampaignRequired ||
+		receipt.Boundaries.ProductionSelectorChanged ||
+		receipt.Boundaries.Sub2APICandidateDeployed ||
+		receipt.Boundaries.VircsAccessed {
+		return errors.New("Codex 0.149.1 Formal Attempt 修复 transition 安全边界非法")
+	}
+	if len(receipt.FailedAttempt) == 0 || len(receipt.Repairs) == 0 ||
+		!receipt.Verification.BashSyntaxPassed ||
+		!receipt.Verification.CaptureToolTestsPassed ||
+		receipt.Verification.GlobalEgressSpecCIBlocker != "pre_existing_repository_wide_transition_digest_drift" ||
+		!receipt.Verification.GlobalEgressSpecCIBlockerRecorded ||
+		receipt.Verification.GlobalEgressSpecCIPassed ||
+		!receipt.Verification.RepairCommitReplayed ||
+		!receipt.Verification.SchemaJSONParsePassed ||
+		!receipt.Verification.TargetedTestsPassed ||
+		!receipt.Verification.TransitionChainReplayed {
+		return errors.New("Codex 0.149.1 Formal Attempt 修复 transition 门禁事实非法")
+	}
+
+	paths := make([]string, 0, len(receipt.Transitions))
+	for _, entry := range receipt.Transitions {
+		if strings.TrimSpace(entry.Path) == "" || len(entry.ToSHA256) != 64 ||
+			strings.TrimSpace(entry.Reason) == "" || !slices.IsSorted(entry.PredecessorSHA256s) ||
+			len(entry.PredecessorSHA256s) != len(slices.Compact(append([]string(nil), entry.PredecessorSHA256s...))) {
+			return errors.New("Codex 0.149.1 Formal Attempt 修复 transition 条目非法")
+		}
+		if entry.Change == "added" {
+			if len(entry.PredecessorSHA256s) != 0 {
+				return errors.New("Codex 0.149.1 Formal Attempt 修复新增条目存在前序摘要")
+			}
+		} else if entry.Change != "modified" || len(entry.PredecessorSHA256s) != 1 {
+			return errors.New("Codex 0.149.1 Formal Attempt 修复修改条目前序摘要非法")
+		}
+		for _, prefix := range []string{
+			"backend/internal/officialegress/catalogdata/",
+			"backend/internal/officialegress/profilecontract/testdata/",
+			"backend/internal/officialegress/releasecontract/testdata/",
+			"docs/egress/lifecycle/migration-artifacts/",
+		} {
+			if strings.HasPrefix(entry.Path, prefix) {
+				return errors.New("Codex 0.149.1 Formal Attempt 修复命中历史只读路径")
+			}
+		}
+		current, readErr := codex01491RepoFile(entry.Path)
+		if readErr != nil || upstreamMergeFrameworkDigest(current) != entry.ToSHA256 {
+			return errors.New("Codex 0.149.1 Formal Attempt 修复当前摘要不一致：" + entry.Path)
+		}
+		paths = append(paths, entry.Path)
+	}
+	if !slices.Equal(paths, codex01491FormalAttemptRepairExpectedPaths) {
+		return errors.New("Codex 0.149.1 Formal Attempt 修复路径闭集非法")
+	}
+	return nil
+}
+
 func codex01491FailedEvidenceRecoverySupersedes(
 	path string,
 	priorDigest string,
 	currentDigest string,
 ) bool {
 	receipt, err := loadCodex01491FailedEvidenceRecovery()
+	if err != nil {
+		return false
+	}
+	for _, entry := range receipt.Transitions {
+		if entry.Path == path && entry.ToSHA256 == currentDigest &&
+			slices.Contains(entry.PredecessorSHA256s, priorDigest) {
+			return true
+		}
+	}
+	return codex01491FormalAttemptRepairSupersedes(path, priorDigest, currentDigest)
+}
+
+func codex01491FormalAttemptRepairSupersedes(
+	path string,
+	priorDigest string,
+	currentDigest string,
+) bool {
+	receipt, err := loadCodex01491FormalAttemptRepair()
 	if err != nil {
 		return false
 	}
@@ -739,6 +948,10 @@ func codex01491CampaignBoundaryTransitionSupersedes(
 	if recoveryErr != nil {
 		return false
 	}
+	formalAttemptRepair, formalAttemptRepairErr := loadCodex01491FormalAttemptRepair()
+	if formalAttemptRepairErr != nil {
+		return false
+	}
 	edges := make(map[string][]string)
 	for _, entry := range receipt.Transitions {
 		if entry.Path != path {
@@ -749,6 +962,14 @@ func codex01491CampaignBoundaryTransitionSupersedes(
 		}
 	}
 	for _, entry := range recovery.Transitions {
+		if entry.Path != path {
+			continue
+		}
+		for _, predecessor := range entry.PredecessorSHA256s {
+			edges[predecessor] = append(edges[predecessor], entry.ToSHA256)
+		}
+	}
+	for _, entry := range formalAttemptRepair.Transitions {
 		if entry.Path != path {
 			continue
 		}
@@ -810,7 +1031,9 @@ func codex01491MaintenanceTransitionChainSupersedes(
 	repairReceipt, repairErr := loadCodex01491P0ChainRepair()
 	boundaryReceipt, boundaryErr := loadCodex01491CampaignBoundaryTransition()
 	recoveryReceipt, recoveryErr := loadCodex01491FailedEvidenceRecovery()
-	if docErr != nil || repairErr != nil || boundaryErr != nil || recoveryErr != nil {
+	formalAttemptRepairReceipt, formalAttemptRepairErr := loadCodex01491FormalAttemptRepair()
+	if docErr != nil || repairErr != nil || boundaryErr != nil || recoveryErr != nil ||
+		formalAttemptRepairErr != nil {
 		return false
 	}
 
@@ -824,6 +1047,7 @@ func codex01491MaintenanceTransitionChainSupersedes(
 		repairReceipt.Transitions,
 		boundaryReceipt.Transitions,
 		recoveryReceipt.Transitions,
+		formalAttemptRepairReceipt.Transitions,
 	} {
 		for _, entry := range receipt {
 			if entry.Path != path {
@@ -863,6 +1087,9 @@ func TestCodex01491MaintenanceTransitionsAreFrozen(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := loadCodex01491FailedEvidenceRecovery(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadCodex01491FormalAttemptRepair(); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -1006,5 +1233,30 @@ func TestCodex01491MaintenanceTransitionRejectsMutations(t *testing.T) {
 	mutatedRecovery.Safety.LiveRequestSent = true
 	if validateCodex01491FailedEvidenceRecovery(mutatedRecovery) == nil {
 		t.Fatal("失败证据恢复 transition 未拒绝 live request mutation")
+	}
+}
+
+func TestCodex01491FormalAttemptRepairTransitionIsFrozen(t *testing.T) {
+	receipt, err := loadCodex01491FormalAttemptRepair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(receipt.Transitions) == 0 {
+		t.Fatal("Formal Attempt 修复 transition 没有文件闭集")
+	}
+	entry := receipt.Transitions[0]
+	if len(entry.PredecessorSHA256s) != 1 || !codex01491FormalAttemptRepairSupersedes(
+		entry.Path,
+		entry.PredecessorSHA256s[0],
+		entry.ToSHA256,
+	) {
+		t.Fatal("Formal Attempt 修复 transition 的精确三元组未被承认")
+	}
+	if codex01491FormalAttemptRepairSupersedes(
+		entry.Path,
+		strings.Repeat("0", 64),
+		entry.ToSHA256,
+	) {
+		t.Fatal("Formal Attempt 修复 transition 接受了篡改前序摘要")
 	}
 }

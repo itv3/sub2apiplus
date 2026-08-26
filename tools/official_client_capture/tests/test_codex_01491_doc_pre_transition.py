@@ -10,6 +10,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from tools.official_client_capture.tests.test_codex_01491_formal_attempt_repair_transition import (
+    load_transition as load_formal_attempt_repair_transition,
+    transition_supersedes as formal_attempt_repair_transition_supersedes,
+)
+
 
 ROOT = Path(__file__).resolve().parents[3]
 BASE_COMMIT = "3d6082f44f289ec80e0e29eb2643cda78113eef0"
@@ -282,7 +287,8 @@ def load_hardening_transition() -> dict[str, Any]:
             or current.is_symlink()
             or (
                 entry["to_sha256"] != sha256(current.read_bytes())
-                and not recovery_transition_supersedes(
+                and not maintenance_transition_chain_supersedes(
+                    document,
                     load_recovery_transition(),
                     path,
                     entry["to_sha256"],
@@ -427,7 +433,15 @@ def load_recovery_transition() -> dict[str, Any]:
             or entry["predecessor_sha256s"] != [sha256(before)]
             or not current.is_file()
             or current.is_symlink()
-            or entry["to_sha256"] != sha256(current.read_bytes())
+            or (
+                entry["to_sha256"] != sha256(current.read_bytes())
+                and not formal_attempt_repair_transition_supersedes(
+                    load_formal_attempt_repair_transition(),
+                    path,
+                    entry["to_sha256"],
+                    sha256(current.read_bytes()),
+                )
+            )
             or not isinstance(entry["reason"], str)
             or not entry["reason"].strip()
         ):
@@ -460,10 +474,11 @@ def maintenance_transition_chain_supersedes(
     prior_digest: str,
     current_digest: str,
 ) -> bool:
-    """重放 Campaign 边界与失败证据恢复的传递闭包。"""
+    """重放 Campaign 边界、失败恢复与 Formal Attempt 修复的传递闭包。"""
 
     edges: dict[str, list[str]] = {}
-    for document in (hardening, recovery):
+    formal_attempt_repair = load_formal_attempt_repair_transition()
+    for document in (hardening, recovery, formal_attempt_repair):
         for entry in document["transitions"]:
             if entry["path"] != path:
                 continue
