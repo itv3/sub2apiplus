@@ -40,6 +40,7 @@ class CodexUpgradeTest(unittest.TestCase):
         actions = {action.dest: action for action in plan_parser._actions}
         self.assertTrue(actions["rule_manifest"].required)
         self.assertTrue(actions["scenario_manifest"].required)
+        self.assertTrue(actions["target_scenario_manifest"].required)
         self.assertTrue(actions["model"].required)
         self.assertTrue(actions["lite_model"].required)
         self.assertTrue(actions["campaign_mode"].required)
@@ -284,6 +285,92 @@ class CodexUpgradeTest(unittest.TestCase):
                     ],
                     "1",
                 )
+
+    def test_01491_plan_jobs_execute_target_scenario_instead_of_baseline(self) -> None:
+        """目标 CLI 的 official jobs 必须来自 0.149.1 清单。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            arguments = self._campaign_arguments(Path(directory))
+            tool_root = Path(__file__).resolve().parents[1]
+            arguments.baseline_version = "0.147.0"
+            arguments.target_version = "0.149.1"
+            arguments.rule_manifest = tool_root / "codex_upgrade_rules_0_147_0.json"
+            arguments.scenario_manifest = (
+                tool_root / "codex_upgrade_scenarios_0_147_0.json"
+            )
+            arguments.target_scenario_manifest = (
+                tool_root / "codex_upgrade_scenarios_0_149_1.json"
+            )
+            arguments.output = arguments.campaign_dir
+            arguments.model = "gpt-5.5"
+            arguments.lite_model = "gpt-5.6-terra"
+            rules = load_rule_manifest(arguments.rule_manifest, "0.147.0")
+
+            jobs, baseline_path, target_path = codex_upgrade._load_plan_jobs(
+                arguments, rules
+            )
+
+            self.assertEqual(baseline_path, arguments.scenario_manifest)
+            self.assertEqual(target_path, arguments.target_scenario_manifest)
+            wham_job = next(
+                job for job in jobs if job.job_id == "official-wham-safe"
+            )
+            self.assertIn("--entrypoint python3", wham_job.steps[1]["argv"][2])
+            realtime_job = next(
+                job
+                for job in jobs
+                if job.job_id == "official-relay-realtime-webrtc"
+            )
+            self.assertEqual(
+                realtime_job.steps[0]["environment"][
+                    "RELAY_SYNTHESIZE_REALTIME_CALL_AFTER"
+                ],
+                "1",
+            )
+
+    def test_plan_freezes_target_scenario_and_official_reloads_same_jobs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            arguments = self._campaign_arguments(root)
+            target_payload = json.loads(
+                arguments.target_scenario_manifest.read_text(encoding="utf-8")
+            )
+            official_job = next(
+                job
+                for job in target_payload["capture_jobs"]
+                if job["id"] == "official-test"
+            )
+            official_job["steps"][0]["argv"] = ["printf", "target-scenario"]
+            self._write_json(arguments.target_scenario_manifest, target_payload)
+
+            manifest = codex_upgrade.create_campaign(arguments)
+            target_reference = manifest["inputs"]["target_discovery_scenarios"]
+            frozen_target = root / "campaign" / target_reference["path"]
+            self.assertEqual(
+                json.loads(frozen_target.read_text(encoding="utf-8"))[
+                    "codex_version"
+                ],
+                "0.146.0",
+            )
+            jobs = codex_upgrade._campaign_jobs(
+                root / "campaign", manifest, "official"
+            )
+            reloaded = next(job for job in jobs if job.job_id == "official-test")
+            self.assertEqual(reloaded.steps[0]["argv"], ["printf", "target-scenario"])
+
+    def test_plan_rejects_baseline_manifest_as_target_scenario(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            arguments = self._campaign_arguments(Path(directory))
+            arguments.target_scenario_manifest = arguments.scenario_manifest
+            arguments.output = arguments.campaign_dir
+            rules = load_rule_manifest(
+                arguments.rule_manifest, arguments.baseline_version
+            )
+            with self.assertRaisesRegex(
+                codex_upgrade.ConfigurationError,
+                "codex_version 与当前阶段不一致",
+            ):
+                codex_upgrade._load_plan_jobs(arguments, rules)
 
     def test_campaign_capture_scripts_bind_frozen_tool_root(self) -> None:
         tool_root = Path(__file__).resolve().parents[1]
@@ -609,6 +696,22 @@ class CodexUpgradeTest(unittest.TestCase):
             version="0.145.0",
             name="scenarios.json",
         )
+        target_rule_manifest = root / "target-rules.json"
+        self._write_json(
+            target_rule_manifest,
+            {
+                "schema_version": codex_upgrade.RULE_SCHEMA,
+                "codex_version": "0.146.0",
+                "required_rules": required_rules,
+            },
+        )
+        target_scenario_manifest = self._write_scenario_manifest(
+            root,
+            target_rule_manifest,
+            tuple(required_rules),
+            version="0.146.0",
+            name="target-scenarios.json",
+        )
         package_path = root / "codex-package-x86_64-unknown-linux-musl.tar.gz"
         binary_bytes = b"codex-cli-test-binary"
         code_mode_host_bytes = b"codex-code-mode-host-test-binary"
@@ -658,6 +761,7 @@ class CodexUpgradeTest(unittest.TestCase):
             runtime_image=f"capture-runtime@sha256:{'b' * 64}",
             rule_manifest=baseline_rule_manifest,
             scenario_manifest=scenario_manifest,
+            target_scenario_manifest=target_scenario_manifest,
             extra_jobs=None,
             suite="full",
             campaign_id=campaign_id,
@@ -2008,6 +2112,8 @@ class CodexUpgradeTest(unittest.TestCase):
                     str(arguments.rule_manifest),
                     "--scenario-manifest",
                     str(arguments.scenario_manifest),
+                    "--target-scenario-manifest",
+                    str(arguments.target_scenario_manifest),
                     "--campaign-id",
                     arguments.campaign_id,
                     "--model",
@@ -2102,6 +2208,33 @@ class CodexUpgradeTest(unittest.TestCase):
             )
             status = codex_upgrade.campaign_status(campaign_dir)
             self.assertEqual(status["stages"]["classify"], "complete")
+
+    def test_classify_rejects_target_scenario_execution_contract_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            campaign_dir, manifest = self._create_campaign(root)
+            self._seal_official_stage(root, campaign_dir, manifest)
+            target, migration, scenario, profile, assertion_profile, _ = (
+                self._write_classification_manifests(root)
+            )
+            scenario_payload = json.loads(scenario.read_text(encoding="utf-8"))
+            official_job = next(
+                job
+                for job in scenario_payload["capture_jobs"]
+                if job["id"] == "official-test"
+            )
+            official_job["steps"][0]["argv"] = ["false"]
+            self._write_json(scenario, scenario_payload)
+
+            return_code, _, stderr = self._run_main(
+                self._classification_arguments(
+                    campaign_dir,
+                    (target, migration, scenario, profile, assertion_profile),
+                )
+            )
+
+            self.assertEqual(return_code, 1)
+            self.assertIn("official 执行契约", stderr)
 
     def test_classify_requires_exact_dynamic_discovery_classification(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

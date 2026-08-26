@@ -2263,7 +2263,21 @@ def _build_parser() -> argparse.ArgumentParser:
         type=Path,
         required=True,
     )
-    plan.add_argument("--scenario-manifest", type=Path, required=True)
+    plan.add_argument(
+        "--scenario-manifest",
+        type=Path,
+        required=True,
+        help="当前 baseline 版本的发现场景清单，只用于基线差异分析。",
+    )
+    plan.add_argument(
+        "--target-scenario-manifest",
+        type=Path,
+        required=True,
+        help=(
+            "目标版本的正式采集场景清单；Formal official Attempt 必须逐摘要执行"
+            "该清单，不得回退到 baseline 命令模板。"
+        ),
+    )
     plan.add_argument("--extra-jobs", type=Path)
     plan.add_argument("--suite", choices=("core", "full"), default="full")
     plan.add_argument(
@@ -3121,24 +3135,58 @@ def _validate_phase_coverage(jobs: list[Job], rules: tuple[str, ...]) -> None:
 def _load_plan_jobs(
     arguments: argparse.Namespace,
     rules: tuple[str, ...],
-) -> tuple[list[Job], Path]:
+) -> tuple[list[Job], Path, Path]:
+    """同时冻结 baseline 分析场景与 target 正式执行场景。
+
+    baseline 清单只描述升级前已经成立的发现与规则坐标；真正运行目标 CLI 的 official
+    Attempt 必须使用 target 清单。两份清单分别校验且都不可缺省，避免目标版本需要的
+    entrypoint、分支触发或恢复契约被旧命令模板静默吞掉。
+    """
+
     scenario_manifest = arguments.scenario_manifest
-    if not scenario_manifest.is_file() or scenario_manifest.is_symlink():
-        raise ConfigurationError(f"场景清单不存在或不可信：{scenario_manifest}")
+    target_scenario_manifest = arguments.target_scenario_manifest
+    for label, path in (
+        ("baseline 场景清单", scenario_manifest),
+        ("target 场景清单", target_scenario_manifest),
+    ):
+        if not path.is_file() or path.is_symlink():
+            raise ConfigurationError(f"{label}不存在或不可信：{path}")
     context = _job_context(arguments)
-    jobs = load_scenario_jobs(
+    baseline_jobs = load_scenario_jobs(
         scenario_manifest,
         context,
         expected_version=arguments.baseline_version,
         expected_rule_sha256=file_sha256(arguments.rule_manifest),
         require_bindings=True,
     )
-    jobs.extend(load_extra_jobs(arguments.extra_jobs, context))
-    jobs = [job for job in jobs if arguments.suite in job.suites]
-    _validate_jobs(jobs, rules)
+    target_payload = _read_json(target_scenario_manifest, "target 场景清单")
+    target_rule_binding = target_payload.get("rule_manifest")
+    if (
+        not isinstance(target_rule_binding, dict)
+        or target_rule_binding.get("rule_count") != len(rules)
+    ):
+        raise ConfigurationError(
+            "target 场景清单的规则数量与当前升级规则全集不一致。"
+        )
+    target_jobs = load_scenario_jobs(
+        target_scenario_manifest,
+        context,
+        expected_version=arguments.target_version,
+        require_bindings=True,
+    )
+    extra_jobs = load_extra_jobs(arguments.extra_jobs, context)
+    baseline_jobs = [
+        job for job in [*baseline_jobs, *extra_jobs] if arguments.suite in job.suites
+    ]
+    target_jobs = [
+        job for job in [*target_jobs, *extra_jobs] if arguments.suite in job.suites
+    ]
+    _validate_jobs(baseline_jobs, rules)
+    _validate_jobs(target_jobs, rules)
     if arguments.suite == "full":
-        _validate_phase_coverage(jobs, rules)
-    return jobs, scenario_manifest
+        _validate_phase_coverage(baseline_jobs, rules)
+        _validate_phase_coverage(target_jobs, rules)
+    return target_jobs, scenario_manifest, target_scenario_manifest
 
 
 def create_campaign(arguments: argparse.Namespace) -> dict[str, Any]:
@@ -3146,7 +3194,9 @@ def create_campaign(arguments: argparse.Namespace) -> dict[str, Any]:
 
     _validate_arguments(arguments)
     rules = load_rule_manifest(arguments.rule_manifest, arguments.baseline_version)
-    jobs, scenario_manifest = _load_plan_jobs(arguments, rules)
+    jobs, scenario_manifest, target_scenario_manifest = _load_plan_jobs(
+        arguments, rules
+    )
     baseline_identity, baseline_source = _source_identity(
         arguments.baseline_source, arguments.baseline_version
     )
@@ -3163,9 +3213,15 @@ def create_campaign(arguments: argparse.Namespace) -> dict[str, Any]:
     inputs_root = ensure_private_directory(campaign_dir / "inputs", campaign_dir)
     analysis_root = ensure_private_directory(campaign_dir / "analysis", campaign_dir)
     baseline_rules_payload = _read_json(arguments.rule_manifest, "基线规则清单")
-    scenario_payload = _read_json(scenario_manifest, "官方发现场景清单")
+    scenario_payload = _read_json(scenario_manifest, "baseline 发现场景清单")
+    target_scenario_payload = _read_json(
+        target_scenario_manifest, "target 正式采集场景清单"
+    )
     secure_write_json(inputs_root / "baseline-rules.json", baseline_rules_payload)
     secure_write_json(inputs_root / "discovery-scenarios.json", scenario_payload)
+    secure_write_json(
+        inputs_root / "target-discovery-scenarios.json", target_scenario_payload
+    )
     extra_jobs_reference: dict[str, Any] | None = None
     if arguments.extra_jobs is not None:
         extra_payload = _read_json(arguments.extra_jobs, "附加任务清单")
@@ -3227,6 +3283,12 @@ def create_campaign(arguments: argparse.Namespace) -> dict[str, Any]:
             "discovery_scenarios": {
                 "path": "inputs/discovery-scenarios.json",
                 "sha256": file_sha256(inputs_root / "discovery-scenarios.json"),
+            },
+            "target_discovery_scenarios": {
+                "path": "inputs/target-discovery-scenarios.json",
+                "sha256": file_sha256(
+                    inputs_root / "target-discovery-scenarios.json"
+                ),
             },
             "extra_jobs": extra_jobs_reference,
         },
@@ -4418,7 +4480,14 @@ def _campaign_arguments(
     run_id = manifest["campaign_id"]
     if candidate_id:
         run_id = f"{run_id}-{candidate_id}"
-    extra_reference = manifest.get("inputs", {}).get("extra_jobs")
+    inputs = manifest.get("inputs", {})
+    extra_reference = inputs.get("extra_jobs")
+    # v2 历史 Campaign 没有双清单坐标，仍允许只读重放其冻结事实；新 Campaign
+    # 一律由 plan 写入 target_discovery_scenarios，并以它生成 official jobs。
+    target_scenario_reference = inputs.get("target_discovery_scenarios")
+    execution_scenario_reference = (
+        target_scenario_reference or inputs["discovery_scenarios"]
+    )
     return argparse.Namespace(
         command="capture-candidate" if candidate_id else "capture-official",
         baseline_version=manifest["baseline_version"],
@@ -4439,10 +4508,15 @@ def _campaign_arguments(
         output=campaign_dir,
         campaign_dir=campaign_dir,
         rule_manifest=_campaign_file(
-            campaign_dir, manifest["inputs"]["baseline_rules"]["path"]
+            campaign_dir, inputs["baseline_rules"]["path"]
         ),
         scenario_manifest=_campaign_file(
-            campaign_dir, manifest["inputs"]["discovery_scenarios"]["path"]
+            campaign_dir, execution_scenario_reference["path"]
+        ),
+        target_scenario_manifest=(
+            _campaign_file(campaign_dir, target_scenario_reference["path"])
+            if target_scenario_reference
+            else None
         ),
         extra_jobs=(
             _campaign_file(campaign_dir, extra_reference["path"])
@@ -4565,12 +4639,15 @@ def _campaign_jobs(
             raise ConfigurationError("目标场景清单摘要不一致。")
         arguments.scenario_manifest = scenario_path
     context = _job_context(arguments)
+    uses_frozen_target_scenario = (
+        manifest.get("inputs", {}).get("target_discovery_scenarios") is not None
+    )
     jobs = load_scenario_jobs(
         arguments.scenario_manifest,
         context,
         expected_version=(
             manifest["target_version"]
-            if approved_target
+            if approved_target or uses_frozen_target_scenario
             else manifest["baseline_version"]
         ),
         require_bindings=True,
@@ -7457,12 +7534,23 @@ def _write_classification_draft(
         "codex_version": manifest["target_version"],
         "required_rules": list(rules),
     }
+    target_scenario_reference = manifest.get("inputs", {}).get(
+        "target_discovery_scenarios"
+    )
     discovery_scenarios = _read_json(
         _campaign_file(
             campaign_dir,
-            manifest["inputs"]["discovery_scenarios"]["path"],
+            (
+                target_scenario_reference["path"]
+                if target_scenario_reference
+                else manifest["inputs"]["discovery_scenarios"]["path"]
+            ),
         ),
-        "基线发现场景清单",
+        (
+            "冻结的 target 正式采集场景清单"
+            if target_scenario_reference
+            else "基线发现场景清单"
+        ),
     )
     scenario = json.loads(json.dumps(discovery_scenarios, ensure_ascii=False))
     draft_profile_id = f"codex-{manifest['target_version']}-draft"
@@ -7671,6 +7759,40 @@ def _normalized_json_sha256(payload: dict[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _official_scenario_execution_contract(
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """提取会改变 official Attempt 实际字节或封存判定的目标场景字段。
+
+    分类阶段允许在人工复核后调整规则归属、场景说明和 coverage；这些变化不应伪装成
+    已执行过的新命令。真正影响进程、环境、证据根和必须收据的字段必须与 plan 冻结值
+    完全一致，否则只能新建 Campaign。
+    """
+
+    execution_fields = {
+        "id",
+        "phase",
+        "suites",
+        "required",
+        "steps",
+        "evidence_roots",
+        "required_scenario_receipts",
+        "track",
+        "model_id",
+        "expected_use_responses_lite",
+        "required_model_receipt",
+    }
+    return {
+        "schema_version": payload.get("schema_version"),
+        "codex_version": payload.get("codex_version"),
+        "official_jobs": [
+            {key: value for key, value in job.items() if key in execution_fields}
+            for job in payload.get("capture_jobs", [])
+            if isinstance(job, dict) and job.get("phase") == "official"
+        ],
+    }
+
+
 def _approved_reference(
     campaign_dir: Path,
     destination: Path,
@@ -7733,6 +7855,23 @@ def classify_campaign(
     scenario_payload = _approved_manifest_payload(
         scenario_manifest, "目标场景清单"
     )
+    target_scenario_reference = manifest.get("inputs", {}).get(
+        "target_discovery_scenarios"
+    )
+    if target_scenario_reference is not None:
+        frozen_target_scenario = _read_json(
+            _campaign_file(campaign_dir, target_scenario_reference["path"]),
+            "Formal 冻结的 target 场景清单",
+        )
+        if _fingerprint(
+            _official_scenario_execution_contract(scenario_payload)
+        ) != _fingerprint(
+            _official_scenario_execution_contract(frozen_target_scenario)
+        ):
+            raise ConfigurationError(
+                "批准的目标场景 official 执行契约与 Formal Attempt 冻结值不一致；"
+                "命令或证据身份变化必须新建 Campaign。"
+            )
     profile_payload = _approved_manifest_payload(profile_manifest, "目标画像清单")
     if profile_payload.get("schema_version") != PROFILE_SCHEMA:
         raise ConfigurationError("目标画像清单 schema_version 不受支持。")

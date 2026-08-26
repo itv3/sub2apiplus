@@ -1311,14 +1311,20 @@ python3 tools/official_client_capture/codex_upgrade.py --help
 
 | 输入 | 内容 |
 |---|---|
-| 基线 | 当前第二部分规则、官方源码／证据和场景清单 |
-| 目标 | Codex CLI 版本、官方源码、Cargo.lock／依赖、二进制及 SHA-256 |
+| 基线 | 当前第二部分规则、官方源码／证据和 `--scenario-manifest` 场景清单 |
+| 目标 | Codex CLI 版本、官方源码、Cargo.lock／依赖、二进制、SHA-256 及 `--target-scenario-manifest` 正式采集场景清单 |
 | 条件 | 平台、运行镜像、默认 feature、模型、账号、代理和 TLS 条件 |
 | 坐标 | 持久 Campaign 目录、采集机、证据目录和环境恢复坐标 |
 
 Campaign 目录必须是持久、绝对、尚不存在且不经过符号链接的路径，不得位于临时目录。普通、
 Lite 等互斥条件使用独立 track、job、evidence root 和 receipt；只有两侧模型及其他取证条件
 相同时，差异才能归因于版本。
+
+`plan` 必须同时冻结 baseline 与 target 两份场景清单：baseline 清单只用于升级前规则和差异分析，
+运行目标官方 CLI 的 `capture-official` 只从 target 清单生成 Job。批准 `scenarios.json` 时允许调整
+规则归属、coverage 和人工说明，但 official 的命令、环境、证据根、必需收据及模型轨道必须与
+Formal Campaign 冻结的 target 执行契约逐摘要一致；不一致时必须新建 Campaign，不得借 baseline
+命令模板执行目标版本。
 
 | 顺序 | 命令 | 机器产物 |
 |---:|---|---|

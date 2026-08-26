@@ -378,6 +378,9 @@
         "discovery_scenarios": {
           "$ref": "#/$defs/fileBinding"
         },
+        "target_discovery_scenarios": {
+          "$ref": "#/$defs/fileBinding"
+        },
         "extra_jobs": {
           "$ref": "#/$defs/nullableFileBinding"
         }
