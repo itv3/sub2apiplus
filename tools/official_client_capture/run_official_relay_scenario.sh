@@ -37,7 +37,8 @@ codex_version=${CODEX_VERSION:-0.145.0}
 # 无 NET_ADMIN 的容器里不可用。
 relay_port=${RELAY_PORT:-443}
 turns=${TURNS:-1}
-scenario=${SCENARIO:?必须提供 SCENARIO: tool|conn-retry|turnstate-compact|legacy-compact-default|legacy-compact-beta|ws-default|ws-optional-missing|http-response|http-response-plain|residency-us|image|image-edit|image-repeat-tui|search|search-repeat-tui|compact|compact-exec-negative|compact-tui|comp-hash-changed|model-downshift|review-tui|guardian-tui|memgen|realtime-webrtc|runtime-metrics|ws-special-headers|oauth-refresh|file-upload}
+scenario=${SCENARIO:-}
+model_catalog_only=${MODEL_CATALOG_ONLY:-0}
 extra_args=""
 compaction_reason=""
 compaction_first_model=""
@@ -83,6 +84,14 @@ if [[ ! $codex_version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   echo "CODEX_VERSION 必须是三段数字。" >&2
   exit 2
 fi
+if [[ $model_catalog_only != 0 && $model_catalog_only != 1 ]]; then
+  echo "MODEL_CATALOG_ONLY 必须是 0 或 1。" >&2
+  exit 2
+fi
+if [[ $model_catalog_only == 0 && -z $scenario ]]; then
+  echo "必须提供 SCENARIO。" >&2
+  exit 2
+fi
 # 与 capturelib/scenarios.py 的 UPSTREAM_CAPACITY_* 保持同一语义与量级；那边覆盖
 # official-core 路径，这里覆盖中继路径。两处都只认这一条错误消息。
 UPSTREAM_CAPACITY_MESSAGE="Selected model is at capacity"
@@ -122,6 +131,10 @@ if [[ $require_model_receipt == 1 ]]; then
     echo "EXPECT_USE_RESPONSES_LITE 必须是 true 或 false。" >&2
     exit 2
   fi
+fi
+if [[ $model_catalog_only == 1 && $require_model_receipt != 1 ]]; then
+  echo "MODEL_CATALOG_ONLY=1 必须同时启用 REQUIRE_MODEL_CONDITION_RECEIPT=1。" >&2
+  exit 2
 fi
 
 work_dir="$capture_root/runs/$run_id"
@@ -413,10 +426,10 @@ restore_auth_json() {
 }
 
 prewarm_model_catalog() {
-  # 需要模型条件收据的任务必须先取得一份阻塞式在线目录响应。codex exec 会并发
-  # 刷新目录，但进程可能在后台请求返回前退出；把这种竞速当成模型条件成功会削弱
-  # 证据，把它一律当成原始字节丢失又会随机作废完整 Responses 样本。这里使用隔离
-  # CODEX_HOME 强制 OnlineIfUncached，并由驱动同时核验 app-server RPC 与 relay 原文。
+  # 需要模型条件收据的任务必须先取得一份阻塞式在线目录响应。codex exec 与
+  # app-server model/list 都可能先返回内存目录，再在后台刷新；进程退出会取消尚未
+  # 完成的 /models 流。这里使用隔离 CODEX_HOME 调用官方 `codex debug models`，让
+  # OnlineIfUncached 同步完成，并由驱动交叉核验命令 JSON 与 relay 原文。
   model_catalog_home="/tmp/codex-model-catalog-$run_id"
   docker exec "$capture_container" sh -c \
     "rm -rf '$model_catalog_home' && install -d -m 0700 '$model_catalog_home'"
@@ -441,6 +454,18 @@ prewarm_model_catalog() {
   done
   echo "❌ 三次在线模型目录预热均未形成完整 /models HTTP 200 原始响应。" >&2
   return 1
+}
+
+scrub_relay_bytes() {
+  # 中继原文含真实认证信息；即使只是模型目录诊断，也必须在离开采集机前等长脱敏。
+  local scrubbed_relay="$work_dir/relay-scrubbed"
+  rm -rf -- "$scrubbed_relay"
+  python3 "$scrub_tool" \
+    --src "$work_dir/relay" \
+    --dst "$scrubbed_relay" \
+    --verify
+  rm -rf -- "$work_dir/relay"
+  mv -- "$scrubbed_relay" "$work_dir/relay"
 }
 
 cleanup() {
@@ -627,6 +652,20 @@ for h in $RELAY_HOSTS; do
     "grep -v \" $h\$\" /etc/hosts > /tmp/.hp && cat /tmp/.hp > /etc/hosts && rm -f /tmp/.hp"
   docker exec "$capture_container" sh -c "printf '127.0.0.1 $h\n' >> /etc/hosts"
 done
+
+if [[ $model_catalog_only == 1 ]]; then
+  echo "=== 仅采集在线模型目录（$model_track / $model）==="
+  prewarm_model_catalog
+  # 目录命令已经关闭连接；先停止中继并刷盘 relay.json，再封存脱敏产物。
+  stop_relay
+  scrub_relay_bytes
+  docker exec "$capture_container" jq \
+    '{schema_version, mode, upstream_host, connection_count: (.connections | length),
+      valid_count: ([.connections[] | select(.valid == true)] | length)}' \
+    "/capture/runs/$run_id/relay/relay.json"
+  printf 'run_id=%s\n' "$run_id"
+  exit 0
+fi
 
 case "$scenario" in
   tool)
@@ -1337,14 +1376,7 @@ fi
 
 # 中继原始字节包含真实 Authorization/Cookie；在证据离开采集机前必须等长脱敏。
 # 先写入新目录并复扫，再替换原目录，避免留下未脱敏副本；字节长度和偏移保持不变。
-scrubbed_relay="$work_dir/relay-scrubbed"
-rm -rf -- "$scrubbed_relay"
-python3 "$scrub_tool" \
-  --src "$work_dir/relay" \
-  --dst "$scrubbed_relay" \
-  --verify
-rm -rf -- "$work_dir/relay"
-mv -- "$scrubbed_relay" "$work_dir/relay"
+scrub_relay_bytes
 
 # 双轨模型条件收据：字段全部从脱敏后的最终 relay 原始字节提取。编排器只声明
 # 预期坐标，不能根据 job 退出码补写 model、Lite 或 fallback 状态。

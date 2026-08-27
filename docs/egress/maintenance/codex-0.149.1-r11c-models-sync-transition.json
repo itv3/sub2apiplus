@@ -1,0 +1,236 @@
+{
+  "schema_version": "official-client-codex-0.149.1-r11c-models-sync-transition/v1",
+  "issued_at_utc": "2026-08-27T02:59:19Z",
+  "base_commit": "87de87becf648148e02fe44ec5d9d91afdc1a708",
+  "scope": "codex-0.149.1-r11c-models-sync",
+  "framework_stage": "VC-0/P0-R11C-MODELS-SYNC",
+  "predecessor_transition": {
+    "path": "docs/egress/maintenance/codex-0.149.1-r11b-relay-completion-transition.json",
+    "file_sha256": "207bc45953007446a24ddd385fd3533102a2fa60ef95e3c31ce1238a885222d6",
+    "identity_sha256": "f52ba06b86b756b6a3e4c89e043e41f1210e8c43614859af9fb8ecf39d5c49b6"
+  },
+  "boundaries": {
+    "api_key_ref": "#4",
+    "capture_account_ref": "#21",
+    "capture_account_20_allowed": false,
+    "capture_account_20_used": false,
+    "service_private_ip": "172.25.0.3",
+    "service_default_gateway": "172.25.0.1",
+    "capture_private_ip": "172.30.0.10",
+    "capture_default_gateway": "172.30.0.1",
+    "required_public_egress": "179.255.100.158",
+    "docker_network_changed": false,
+    "route_nat_iptables_changed": false,
+    "proxy_or_compose_network_changed": false,
+    "production_selector_changed": false,
+    "historical_evidence_preserved_read_only": true,
+    "vircs_accessed": false
+  },
+  "failure_facts": {
+    "mitmproxy_upstream_tls_handshake_failed": true,
+    "direct_tls_control_passed": true,
+    "mitm_http1_and_http2_both_failed": true,
+    "failure_segment": "mitmproxy_to_chatgpt.com",
+    "client_to_mitm_tls_failed": false,
+    "complete_recapture_required": false
+  },
+  "repair_facts": {
+    "official_debug_models_used": true,
+    "isolated_codex_home_used": true,
+    "bundled_catalog_forbidden": true,
+    "built_in_openai_provider_preserved": true,
+    "raw_models_http_200_required": true,
+    "model_catalog_only_mode": true,
+    "responses_requests_sent": false,
+    "byte_relay_upstream_tls_used": true,
+    "incomplete_response_fails_closed": true,
+    "system_package_installed": false,
+    "network_configuration_changed": false
+  },
+  "online_verification": {
+    "run_id": "codex-01491-r11c-models-sync-20260827T025700Z",
+    "started_at_utc": "2026-08-27T02:56:38Z",
+    "finished_at_utc": "2026-08-27T02:58:47Z",
+    "duration_seconds": 129,
+    "attempt_count": 2,
+    "first_attempt_response_bytes": 1369,
+    "successful_connection_id": 2,
+    "request_method": "GET",
+    "request_path": "/backend-api/codex/models?client_version=0.149.1",
+    "response_status": 200,
+    "response_content_length": 360785,
+    "response_total_bytes": 362553,
+    "catalog_model_count": 9,
+    "model_conditions": [
+      {
+        "model": "gpt-5.5",
+        "use_responses_lite": false
+      },
+      {
+        "model": "gpt-5.6-luna",
+        "use_responses_lite": true
+      }
+    ],
+    "relay_connection_count": 2,
+    "relay_valid_connection_count": 2,
+    "credential_replacement_count": 16,
+    "residual_credential_count": 0,
+    "artifacts": [
+      {
+        "role": "model_catalog_prewarm",
+        "path": "/root/oauth-capture/runs/codex-01491-r11c-models-sync-20260827T025700Z/model-catalog-prewarm.json",
+        "sha256": "9b2b195ca303e04070088e482087bb0206fd71f620edcdd32c2021457a3553d4",
+        "bytes": 594
+      },
+      {
+        "role": "relay_manifest",
+        "path": "/root/oauth-capture/runs/codex-01491-r11c-models-sync-20260827T025700Z/relay/relay.json",
+        "sha256": "a0f6784afee87abb41299ce822a6819cf15832a4902b3a5ea23e2a1e01dd626f",
+        "bytes": 13864
+      },
+      {
+        "role": "models_request_scrubbed",
+        "path": "/root/oauth-capture/runs/codex-01491-r11c-models-sync-20260827T025700Z/relay/conn002.client_to_upstream.bin",
+        "sha256": "65b4cf4bf030ad023bbbe51b623f31a803c5b24ad4ad8133ce555c22a85acb6c",
+        "bytes": 1967
+      },
+      {
+        "role": "models_response_scrubbed",
+        "path": "/root/oauth-capture/runs/codex-01491-r11c-models-sync-20260827T025700Z/relay/conn002.upstream_to_client.bin",
+        "sha256": "468faa78f994964ddaa5ad7b427f8501d5183d9f42bc6d25c0d3eeaea0845788",
+        "bytes": 362553
+      },
+      {
+        "role": "run_log",
+        "path": "/root/oauth-capture/diagnostics/codex-01491-r11c-models-sync-20260827T025700Z/run.log",
+        "sha256": "981da85f19fb81f54f6f6c475d7c0d5ee902fddd1ef1d7ae806dd61d6e1ef57e",
+        "bytes": 2952
+      },
+      {
+        "role": "timing_log",
+        "path": "/root/oauth-capture/diagnostics/codex-01491-r11c-models-sync-20260827T025700Z/timing.log",
+        "sha256": "7504dcffe3708c417fec9e9e29cf265fda1571ee82338b299ae55ac7b21805a1",
+        "bytes": 85
+      }
+    ]
+  },
+  "restoration": {
+    "capture_hosts_sha256_before": "658a0f13912d524aaf3e682eedfbd2fe1e75f10e0edd2c3292468429ad2bfd23",
+    "capture_hosts_sha256_after": "658a0f13912d524aaf3e682eedfbd2fe1e75f10e0edd2c3292468429ad2bfd23",
+    "capture_ca_sha256_before": "9481fcd95f41b221f02f14d896535fe500bec539bc563c4cdca1acee483a8bdd",
+    "capture_ca_sha256_after": "9481fcd95f41b221f02f14d896535fe500bec539bc563c4cdca1acee483a8bdd",
+    "capture_public_egress_after": "179.255.100.158",
+    "service_public_egress_after": "179.255.100.158",
+    "temporary_ca_absent": true,
+    "chatgpt_hosts_override_absent": true,
+    "relay_process_absent": true,
+    "relay_port_443_free": true,
+    "login_status_preserved": true
+  },
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/codex_01491_r11c_models_sync_transition_test.go",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "fa230dae124a282236f7af33de820c8b7a9d2524ab5ed85e03edf2f874b8a684",
+      "reason": "在 officialegress 入口独立重放 r11c 在线目录、固定网络、环境恢复与文件闭集。"
+    },
+    {
+      "path": "backend/internal/officialegress/codex_01491_r9_contamination_recovery_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "cb7f69d38e6cdc2c6e2884b4553dc1af384e7205b762c73370cd0d88083ae56e"
+      ],
+      "to_sha256": "2365e7156a029136127c76d591b48c1334af191ef8ad93d799f8d6419e08e64c",
+      "reason": "把 r11c 精确摘要边追加到 r11b 与 r11a 的 Go 统一后继链。"
+    },
+    {
+      "path": "backend/internal/service/codex_01491_r11c_models_sync_transition_test.go",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "f0d94437a73fa4ad59e639bb270b06d60d9aef1e8d6cf514b3bcfd950c2ffc49",
+      "reason": "在 service 镜像入口重放同一 r11c 收据及严格章节摘要。"
+    },
+    {
+      "path": "backend/internal/service/codex_01491_r9_contamination_recovery_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "2b58acc2459a9bc80ddc5296729eae07473520ce4ed145e6d7d768b36c6f9ccf"
+      ],
+      "to_sha256": "8812b2f4e2d74a95d4220267ef2bf669c47e141a432ec7dc31bb760bae75f353",
+      "reason": "把 r11c 精确摘要边追加到 service 的 r11b 与 r11a 统一后继链。"
+    },
+    {
+      "path": "tools/official_client_capture/codex_upgrade_scenarios_0_149_1.json",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "b7ae0e37ab4bcb79182bbd2d005e52f515b21fa659211cab9ef96db24c85e4e5"
+      ],
+      "to_sha256": "f82d566c7f203db446110b7a9aca7cf9f5daaf9a0d4df769d0cefc12c95af553",
+      "reason": "把 official-core 目录补采切到不带 bundled 的官方 debug models 同步命令。"
+    },
+    {
+      "path": "tools/official_client_capture/drive_codex_model_catalog.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "d2a7e3c81054a370913da4fe369075e7196dfa1e8a8eacd6ef3ab3f03ac776f4"
+      ],
+      "to_sha256": "579ce12a9cde1ba7d3bc3ed7d273c9dff8907998a05840890493ffa8be27aba5",
+      "reason": "使用官方 debug models，并把命令 JSON 与原始 /models HTTP 200 双重失败关闭。"
+    },
+    {
+      "path": "tools/official_client_capture/run_official_relay_scenario.sh",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "668e5ea4059270218f4982ece6d6e2dc2a51912418e880ad8d9abff2b0de71ae"
+      ],
+      "to_sha256": "b775367d4f6ea02f2cc577d290c4e495f8334c42e7e0a7d3e79b379c7645b77c",
+      "reason": "新增只采模型目录的最小路径，并在退出前停止中继、等长脱敏及恢复 hosts 与 CA。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_r11a_harness_transition.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "9209136f80c163bdfa21191be8e118291b1cd6a1db2592739f8c32e2ecd19a7e"
+      ],
+      "to_sha256": "42204642364e1c89656143b20238424a73c38746f306064741e105544a19044d",
+      "reason": "让 r11a Python 统一摘要入口保留中间节点可达性并继续承认 r11c 后继。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_r11b_relay_completion_transition.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "77d7d069aaf99d27b8d25abcf2801b3f09065abab85eabb21fbea8e55f073fb8"
+      ],
+      "to_sha256": "2248e2bdef9bee500ac7e6c091ac3d321d6cf62e15cc7cadf3f4306ff98f6026",
+      "reason": "向 r11b Python 统一摘要入口追加经独立验证的 r11c 后继边。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_r11c_models_sync_transition.py",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "202416a36f9c6344c2645a06063cfdea462b16a32112f688d9c5d03830978d38",
+      "reason": "独立重放 TLS 根因、在线双模型条件、脱敏证据、环境恢复及文件闭集。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_model_catalog_prewarm.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "cb1c7cf907883286a14e9d873b867942b9d1c7ab7593b5c9888dad2b1db07362"
+      ],
+      "to_sha256": "aed3bdfc614ea6e68499ee64929835682c8c67b4167b055c3041dcf91ed51e10",
+      "reason": "覆盖 debug models、原始 HTTP 200 失败关闭和 MODEL_CATALOG_ONLY 生命周期。"
+    }
+  ],
+  "verification": {
+    "targeted_python_tests_passed": true,
+    "capture_tool_tests_passed": true,
+    "egress_spec_passed": true,
+    "go_transition_tests_passed": true,
+    "network_gate_passed": true,
+    "online_models_http_200_passed": true,
+    "historical_artifacts_unchanged": true
+  },
+  "result": "r11c_models_sync_repair_verified",
+  "identity_sha256": "916041cf4e953b21a44a693b5941681046265dd849294daecb6801a3ea6e0245"
+}

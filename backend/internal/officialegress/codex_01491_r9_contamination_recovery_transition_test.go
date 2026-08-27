@@ -303,7 +303,15 @@ func loadCodex01491R11BRelayCompletionTransition() (
 	if err := codex01491VerifyIdentity(raw, receipt.IdentitySHA256); err != nil {
 		return receipt, err
 	}
-	return receipt, validateCodex01491R11BRelayCompletionTransition(receipt)
+	if err := validateCodex01491R11BRelayCompletionTransition(receipt); err != nil {
+		return receipt, err
+	}
+	successor, err := loadCodex01491R11CModelsSyncTransition()
+	if err != nil {
+		return receipt, err
+	}
+	receipt.Transitions = append(receipt.Transitions, successor.Transitions...)
+	return receipt, nil
 }
 
 func validateCodex01491R11BRelayCompletionTransition(
@@ -401,7 +409,13 @@ func validateCodex01491R11BRelayCompletionTransition(
 			return errors.New("Codex 0.149.1 r11b relay transition 条目非法：" + expectedPath)
 		}
 		current, readErr := codex01491RepoFile(entry.Path)
-		if readErr != nil || upstreamMergeFrameworkDigest(current) != entry.ToSHA256 {
+		currentDigest := upstreamMergeFrameworkDigest(current)
+		if readErr != nil || (currentDigest != entry.ToSHA256 &&
+			!codex01491R11CModelsSyncSupersedes(
+				entry.Path,
+				entry.ToSHA256,
+				currentDigest,
+			)) {
 			return errors.New("Codex 0.149.1 r11b relay transition 当前摘要不一致：" + entry.Path)
 		}
 	}
@@ -417,10 +431,16 @@ func codex01491R11BRelayCompletionSupersedes(
 	if err != nil {
 		return false
 	}
+	cursor := priorDigest
+	if cursor == currentDigest {
+		return true
+	}
 	for _, entry := range receipt.Transitions {
-		if entry.Path == path && entry.ToSHA256 == currentDigest &&
-			slices.Contains(entry.PredecessorSHA256s, priorDigest) {
-			return true
+		if entry.Path == path && slices.Contains(entry.PredecessorSHA256s, cursor) {
+			cursor = entry.ToSHA256
+			if cursor == currentDigest {
+				return true
+			}
 		}
 	}
 	return false

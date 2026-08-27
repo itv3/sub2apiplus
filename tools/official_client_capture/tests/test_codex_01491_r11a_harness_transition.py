@@ -281,7 +281,7 @@ def validate_transition(document: dict[str, Any]) -> None:
 
 
 def load_validated_transition() -> dict[str, Any]:
-    """验证 r11a 收据，并向统一摘要链追加 r11b 后继边。"""
+    """验证 r11a 收据，并向统一摘要链追加 r11b/r11c 后继边。"""
 
     document = load_transition()
     validate_transition(document)
@@ -307,10 +307,14 @@ def transition_supersedes(
     except (OSError, RuntimeError, ValueError, json.JSONDecodeError):
         return False
     cursor = prior_digest
+    if cursor == current_digest:
+        return True
     for entry in document["transitions"]:
         if entry["path"] == path and cursor in entry["predecessor_sha256s"]:
             cursor = entry["to_sha256"]
-    return cursor == current_digest
+            if cursor == current_digest:
+                return True
+    return False
 
 
 class Codex01491R11AHarnessTransitionTest(unittest.TestCase):

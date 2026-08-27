@@ -10,13 +10,17 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from tools.official_client_capture.capturelib.identity import (
     CAPTURE_SOURCE_RELATIVE_PATHS,
 )
 from tools.official_client_capture.drive_codex_model_catalog import (
     ModelCatalogPrewarmError,
+    build_debug_models_command,
     find_captured_model_catalog,
+    parse_debug_models_catalog,
+    run_prewarm,
     wait_for_mitm_model_catalog,
     wait_for_relay_model_catalog,
 )
@@ -41,8 +45,8 @@ def h1_response(*, lite: bool) -> bytes:
 
 
 class ModelCatalogPrewarmTest(unittest.TestCase):
-    def test_01491_正式场景固定容器_H1_与_MITM_完成等待(self) -> None:
-        """补采必须在抓包容器内执行，并避开代理 HTTP/2 大响应不稳定。"""
+    def test_01491_正式场景固定容器_H2_同步_MITM_完成等待(self) -> None:
+        """同步命令必须保留 rustls/H2，并在抓包容器内等待完整响应。"""
 
         scenario_path = (
             Path(__file__).parents[1] / "codex_upgrade_scenarios_0_149_1.json"
@@ -58,8 +62,9 @@ class ModelCatalogPrewarmTest(unittest.TestCase):
             ["docker", "exec", "{capture_container}", "bash", "-c"],
         )
         source = supplement["argv"][5]
-        self.assertIn("--set http2=false", source)
+        self.assertNotIn("--set http2=false", source)
         self.assertIn('--mitm-models-http "$models_file"', source)
+        self.assertIn("debug_models_driver_status", source)
 
     def test_预热脚本绑定隔离_HOME_与_relay_原文(self) -> None:
         """模型条件任务必须先取得在线 200，不能依赖退出前的后台竞速请求。"""
@@ -79,6 +84,27 @@ class ModelCatalogPrewarmTest(unittest.TestCase):
         )
         self.assertIn("for attempt in 1 2 3", source)
         self.assertIn('rm -rf -- "$model_catalog_home"', source)
+        self.assertIn("model_catalog_only=${MODEL_CATALOG_ONLY:-0}", source)
+        self.assertIn(
+            "MODEL_CATALOG_ONLY=1 必须同时启用 "
+            "REQUIRE_MODEL_CONDITION_RECEIPT=1",
+            source,
+        )
+        model_only_start = source.index(
+            'if [[ $model_catalog_only == 1 ]]; then',
+            source.index("for h in $RELAY_HOSTS"),
+        )
+        model_only_end = source.index("\nfi", model_only_start)
+        model_only = source[model_only_start:model_only_end]
+        self.assertIn("prewarm_model_catalog", model_only)
+        self.assertIn("stop_relay", model_only)
+        self.assertIn("scrub_relay_bytes", model_only)
+        self.assertIn("exit 0", model_only)
+        self.assertNotIn("codex exec", model_only)
+        self.assertLess(
+            model_only_start,
+            source.index('case "$scenario" in'),
+        )
         result = subprocess.run(
             ["bash", "-n", str(tool_root / "run_official_relay_scenario.sh")],
             text=True,
@@ -86,6 +112,46 @@ class ModelCatalogPrewarmTest(unittest.TestCase):
             check=False,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_驱动固定使用在线_debug_models_且禁止_bundled(self) -> None:
+        """冷 HOME 必须同步刷新在线目录，不能显式选择内置目录。"""
+
+        command = build_debug_models_command(
+            "/opt/codex-0.149.1/bin/codex",
+            "0.149.1",
+        )
+        self.assertEqual(
+            command[:3],
+            ["/opt/codex-0.149.1/bin/codex", "debug", "models"],
+        )
+        self.assertNotIn("--bundled", command)
+        self.assertFalse(
+            any("model_provider" in argument for argument in command),
+            "debug models 必须保留内置 openai provider",
+        )
+
+    def test_debug_models_JSON_同时核验目标模型与_Lite(self) -> None:
+        raw = json.dumps(
+            {
+                "models": [
+                    {"slug": "gpt-5.5", "use_responses_lite": False},
+                    {"slug": "gpt-5.6-luna", "use_responses_lite": True},
+                ]
+            }
+        )
+        models = parse_debug_models_catalog(
+            raw,
+            expected_model="gpt-5.6-luna",
+            expected_lite=True,
+        )
+        self.assertEqual(len(models), 2)
+
+        with self.assertRaisesRegex(ModelCatalogPrewarmError, "预期 Lite"):
+            parse_debug_models_catalog(
+                raw,
+                expected_model="gpt-5.6-luna",
+                expected_lite=False,
+            )
 
     def test_驱动可从仓库外直接执行(self) -> None:
         """容器通过绝对路径启动脚本，不能依赖仓库根目录恰好在 sys.path。"""
@@ -120,7 +186,7 @@ class ModelCatalogPrewarmTest(unittest.TestCase):
             self.assertEqual(result["connection_id"], 1)
             self.assertTrue(result["use_responses_lite"])
 
-    def test_只有单向请求时不能把_RPC_结果冒充在线证据(self) -> None:
+    def test_只有单向请求时不能把命令结果冒充在线证据(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             relay = Path(directory) / "relay"
             relay.mkdir()
@@ -151,8 +217,8 @@ class ModelCatalogPrewarmTest(unittest.TestCase):
                     expected_lite=True,
                 )
 
-    def test_等待_MITM_完整响应后才允许关闭_app_server(self) -> None:
-        """后台刷新晚于 model/list 返回时，驱动必须等待真实 HTTP 200。"""
+    def test_等待_MITM_完整响应后才允许写成功摘要(self) -> None:
+        """debug models 完成后仍必须等待 MITM 刷盘真实 HTTP 200。"""
 
         with tempfile.TemporaryDirectory() as directory:
             models_http = Path(directory) / "models-http.jsonl"
@@ -202,7 +268,7 @@ class ModelCatalogPrewarmTest(unittest.TestCase):
                     deadline=time.monotonic() + 0.01,
                 )
 
-    def test_等待_relay_完整响应后才允许关闭_app_server(self) -> None:
+    def test_等待_relay_完整响应后才允许写成功摘要(self) -> None:
         """普通字节中继也必须等待完整 body，不能只封存 HTTP 200 响应头。"""
 
         with tempfile.TemporaryDirectory() as directory:
@@ -233,13 +299,101 @@ class ModelCatalogPrewarmTest(unittest.TestCase):
             self.assertEqual(result["connection_id"], 1)
             self.assertEqual(result["response_path"], "relay/conn001.upstream_to_client.bin")
 
-            source = (
-                Path(__file__).parents[1] / "drive_codex_model_catalog.py"
-            ).read_text(encoding="utf-8")
-            self.assertLess(
-                source.index("relay_capture = wait_for_relay_model_catalog("),
-                source.index("finally:\n        client.close()"),
+    def test_debug_models_成功且原始_HTTP_200_完整时才写摘要(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            relay = root / "relay"
+            relay.mkdir()
+            (relay / "conn001.client_to_upstream.bin").write_bytes(
+                b"GET /backend-api/codex/models HTTP/1.1\r\n"
+                b"host: chatgpt.com\r\n\r\n"
             )
+            (relay / "conn001.upstream_to_client.bin").write_bytes(
+                h1_response(lite=True)
+            )
+            completed = subprocess.CompletedProcess(
+                args=["codex", "debug", "models"],
+                returncode=0,
+                stdout=json.dumps(
+                    {
+                        "models": [
+                            {
+                                "slug": "gpt-5.6-luna",
+                                "use_responses_lite": True,
+                            }
+                        ]
+                    }
+                ),
+                stderr="",
+            )
+            output = root / "model-catalog-prewarm.json"
+            with mock.patch(
+                "tools.official_client_capture.drive_codex_model_catalog."
+                "subprocess.run",
+                return_value=completed,
+            ) as runner:
+                summary = run_prewarm(
+                    codex_bin="/opt/codex-0.149.1/bin/codex",
+                    codex_version="0.149.1",
+                    model="gpt-5.6-luna",
+                    expected_lite=True,
+                    relay_dir=relay,
+                    output=output,
+                    timeout=1,
+                )
+            command = runner.call_args.args[0]
+            self.assertEqual(command[1:3], ["debug", "models"])
+            self.assertNotIn("--bundled", command)
+            self.assertEqual(summary["protocol_record_count"], 1)
+            self.assertEqual(summary["model_count"], 1)
+            self.assertTrue(output.is_file())
+
+    def test_debug_models_即使返回内置目录也不能绕过原始响应门禁(self) -> None:
+        """网络失败回退到内置目录时，缺少 HTTP 200 必须失败关闭。"""
+
+        completed = subprocess.CompletedProcess(
+            args=["codex", "debug", "models"],
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "models": [
+                        {
+                            "slug": "gpt-5.6-luna",
+                            "use_responses_lite": True,
+                        }
+                    ]
+                }
+            ),
+            stderr="",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            relay = root / "relay"
+            relay.mkdir()
+            output = root / "model-catalog-prewarm.json"
+            with (
+                mock.patch(
+                    "tools.official_client_capture.drive_codex_model_catalog."
+                    "subprocess.run",
+                    return_value=completed,
+                ),
+                mock.patch(
+                    "tools.official_client_capture.drive_codex_model_catalog."
+                    "wait_for_relay_model_catalog",
+                    side_effect=ModelCatalogPrewarmError("缺少原始 HTTP 200"),
+                ),
+            ):
+                with self.assertRaisesRegex(ModelCatalogPrewarmError, "缺少原始"):
+                    run_prewarm(
+                        codex_bin="/opt/codex-0.149.1/bin/codex",
+                        codex_version="0.149.1",
+                        model="gpt-5.6-luna",
+                        expected_lite=True,
+                        relay_dir=relay,
+                        output=output,
+                        timeout=1,
+                    )
+            self.assertFalse(output.exists())
 
     def test_等待_relay_响应超时后失败关闭(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

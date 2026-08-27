@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""通过官方 Codex app-server 预热并核验一次在线模型目录。"""
+"""通过官方 Codex debug models 预热并核验一次在线模型目录。"""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -21,11 +22,7 @@ from tools.official_client_capture.model_condition_receipts import (
     _iter_messages,
     _json_body,
 )
-from tools.official_client_capture.run_codex_compact_scenario import (
-    AppServerClient,
-    build_app_server_command,
-    secure_write,
-)
+from tools.official_client_capture.run_codex_compact_scenario import secure_write
 
 
 SCHEMA_VERSION = "codex-model-catalog-prewarm/v1"
@@ -33,7 +30,60 @@ MODEL_REQUEST = re.compile(r"^conn(?P<connection_id>[0-9]{3})\.client_to_upstrea
 
 
 class ModelCatalogPrewarmError(RuntimeError):
-    """模型目录 RPC 或对应原始在线证据不完整。"""
+    """模型目录命令或对应原始在线证据不完整。"""
+
+
+def build_debug_models_command(codex_bin: str, codex_version: str) -> list[str]:
+    """构造不带 bundled 回退的官方在线模型目录命令。"""
+
+    if not re.fullmatch(r"\d+\.\d+\.\d+", codex_version):
+        raise ModelCatalogPrewarmError("Codex 版本必须是三段数字。")
+    values = (
+        "check_for_update_on_startup=false",
+        "analytics.enabled=false",
+        "feedback.enabled=false",
+        'otel.exporter="none"',
+        "otel.log_user_prompt=false",
+    )
+    # debug models 必须保留 CLI 内置的 openai provider。自定义 provider 会改变
+    # ModelsEndpointClient 的 Codex backend 判定，OnlineIfUncached 可能只返回内置
+    # 目录而不发出 /models；版本由 0.149.1 二进制自身写入 client_version。
+    command = [codex_bin, "debug", "models"]
+    for value in values:
+        command.extend(["-c", value])
+    return command
+
+
+def parse_debug_models_catalog(
+    raw: str,
+    *,
+    expected_model: str,
+    expected_lite: bool,
+) -> list[dict[str, Any]]:
+    """严格解析 debug models JSON，并核验目标模型的 Lite 条件。"""
+
+    try:
+        payload = json.loads(raw)
+    except (TypeError, json.JSONDecodeError) as error:
+        raise ModelCatalogPrewarmError("codex debug models 未输出合法 JSON。") from error
+    if not isinstance(payload, dict) or set(payload) != {"models"}:
+        raise ModelCatalogPrewarmError("codex debug models 输出字段不闭合。")
+    models = payload.get("models")
+    if not isinstance(models, list) or not models:
+        raise ModelCatalogPrewarmError("codex debug models 未输出模型目录。")
+    matches = [
+        item
+        for item in models
+        if isinstance(item, dict) and item.get("slug") == expected_model
+    ]
+    if (
+        len(matches) != 1
+        or matches[0].get("use_responses_lite") is not expected_lite
+    ):
+        raise ModelCatalogPrewarmError(
+            "codex debug models 未给出目标模型及预期 Lite 条件。"
+        )
+    return [item for item in models if isinstance(item, dict)]
 
 
 def wait_for_mitm_model_catalog(
@@ -181,7 +231,7 @@ def run_prewarm(
     timeout: int,
     mitm_models_http: Path | None = None,
 ) -> dict[str, Any]:
-    """执行阻塞式 model/list，并把 RPC 结果与 relay 原始字节交叉核验。"""
+    """执行阻塞式 debug models，并把 JSON 结果与原始字节交叉核验。"""
 
     if not re.fullmatch(r"\d+\.\d+\.\d+", codex_version):
         raise ModelCatalogPrewarmError("Codex 版本必须是三段数字。")
@@ -191,83 +241,54 @@ def run_prewarm(
     environment = dict(os.environ)
     environment.pop("OPENAI_API_KEY", None)
     environment.pop("SUB2API_API_KEY", None)
-    client = AppServerClient(
-        build_app_server_command(codex_bin, "official-http", codex_version),
-        environment,
-    )
     deadline = time.monotonic() + timeout
-    response: dict[str, Any] | None = None
-    mitm_capture: dict[str, Any] | None = None
-    relay_capture: dict[str, Any] | None = None
     try:
-        client.send(
-            {
-                "id": 1,
-                "method": "initialize",
-                "params": {
-                    "clientInfo": {
-                        "name": "sub2api-model-catalog-capture",
-                        "title": "Sub2API Model Catalog Capture",
-                        "version": "1.0.0",
-                    },
-                    "capabilities": {"experimentalApi": True},
-                },
-            }
+        completed = subprocess.run(
+            build_debug_models_command(codex_bin, codex_version),
+            env=environment,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=timeout,
+            check=False,
         )
-        client.wait_response(1, deadline)
-        client.send({"method": "initialized", "params": {}})
-        client.send(
-            {
-                "id": 2,
-                "method": "model/list",
-                "params": {"limit": 1000, "includeHidden": True},
-            }
-        )
-        response = client.wait_response(2, deadline)
-        if mitm_models_http is not None:
-            # app-server 的 model/list 可以先返回内存目录，真正的在线刷新仍在后台。
-            # 必须等 MITM 看到完整 200 后再关闭进程，否则关闭动作会向 HTTP/2
-            # stream 发送 CANCEL，留下只有请求、没有响应的伪完整证据。
-            mitm_capture = wait_for_mitm_model_catalog(
-                mitm_models_http,
-                expected_model=model,
-                expected_lite=expected_lite,
-                deadline=deadline,
-            )
-        else:
-            # 字节中继同样会在 app-server 提前退出时只留下响应头和部分 body。
-            # 必须在 finally 关闭进程前等待 Content-Length 对应的完整响应可重放。
-            relay_capture = wait_for_relay_model_catalog(
-                relay_dir,
-                expected_model=model,
-                expected_lite=expected_lite,
-                deadline=deadline,
-            )
-    except BaseException as error:
+    except subprocess.TimeoutExpired as error:
+        raise ModelCatalogPrewarmError("codex debug models 执行超时。") from error
+    if completed.returncode != 0:
         raise ModelCatalogPrewarmError(
-            f"model/list 未完成：{type(error).__name__}。"
-        ) from error
-    finally:
-        client.close()
+            f"codex debug models 以 {completed.returncode} 退出。"
+        )
+    models = parse_debug_models_catalog(
+        completed.stdout,
+        expected_model=model,
+        expected_lite=expected_lite,
+    )
 
-    result = response.get("result") if isinstance(response, dict) else None
-    data = result.get("data") if isinstance(result, dict) else None
-    if not isinstance(data, list) or not any(
-        isinstance(item, dict) and item.get("model") == model for item in data
-    ):
-        raise ModelCatalogPrewarmError("model/list 结果未包含目标模型。")
-
-    captured = mitm_capture or relay_capture
-    if captured is None:
-        raise ModelCatalogPrewarmError("模型目录在线证据未完成。")
+    # debug models 在冷缓存上同步等待 OnlineIfUncached 完成；命令成功仍不能单独
+    # 证明它没有回退到内置目录，必须再看到同一轮原始 HTTP 200 才允许成功。
+    if mitm_models_http is not None:
+        captured = wait_for_mitm_model_catalog(
+            mitm_models_http,
+            expected_model=model,
+            expected_lite=expected_lite,
+            deadline=deadline,
+        )
+    else:
+        captured = wait_for_relay_model_catalog(
+            relay_dir,
+            expected_model=model,
+            expected_lite=expected_lite,
+            deadline=deadline,
+        )
     summary = {
         "schema_version": SCHEMA_VERSION,
         "status": "success",
         "codex_version": codex_version,
         "model_id": model,
         "use_responses_lite": expected_lite,
-        "protocol_record_count": len(client.records),
-        "model_count": len(data),
+        # 保留 v1 收据字段名；一次完整 debug models JSON 输出记为一条驱动记录。
+        "protocol_record_count": 1,
+        "model_count": len(models),
         "capture": captured,
     }
     secure_write(output, json.dumps(summary, ensure_ascii=False, indent=2) + "\n")
