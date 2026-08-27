@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""通过官方 Codex app-server 线程初始化并核验一次在线模型目录。"""
+"""保持官方 Codex app-server 存活并核验一次在线模型目录。"""
 
 from __future__ import annotations
 
@@ -23,7 +23,6 @@ from tools.official_client_capture.model_condition_receipts import (
 )
 from tools.official_client_capture.run_codex_compact_scenario import (
     AppServerClient,
-    extract_thread_id,
     protocol_requests,
     secure_write,
 )
@@ -54,33 +53,30 @@ def build_online_model_catalog_command(
         'approval_policy="never"',
         'sandbox_mode="read-only"',
         'shell_environment_policy.inherit="none"',
-        "features.responses_websockets_v2=false",
         "features.plugins=false",
         "features.apps=false",
     )
     # 内置 openai provider 是保留 ID，不能用配置覆盖。自定义 provider 会让
-    # ModelsEndpointClient 把当前后端判为非 Codex backend，thread/start 只返回
-    # 内置目录而不发送 /models。client_version 由目标二进制自身写入请求。
+    # ModelsEndpointClient 把当前后端判为非 Codex backend，启动刷新只返回内置
+    # 目录而不发送 /models。client_version 由目标二进制自身写入请求。
     command = [codex_bin, "app-server", "--strict-config", "--stdio"]
     for value in values:
         command.extend(["-c", value])
     return command
 
 
-def start_online_model_catalog_refresh(
+def initialize_online_model_catalog_refresh(
     client: AppServerClient,
     *,
     model: str,
     deadline: float,
-) -> str:
-    """只启动线程以触发 OnlineIfUncached，不发送任何模型 turn。"""
+) -> None:
+    """只初始化 app-server；启动刷新 worker 负责请求在线目录。"""
 
     requests = protocol_requests(model)
     client.send(requests["initialize"])
     client.wait_response(1, deadline)
     client.send(requests["initialized"])
-    client.send(requests["thread_start"])
-    return extract_thread_id(client.wait_response(2, deadline))
 
 
 def wait_for_mitm_model_catalog(
@@ -234,7 +230,7 @@ def run_prewarm(
     timeout: int,
     mitm_models_http: Path | None = None,
 ) -> dict[str, Any]:
-    """以 thread/start 触发在线刷新，并与原始 HTTP 200 交叉核验。"""
+    """保持启动刷新 worker 存活，并与原始 HTTP 200 交叉核验。"""
 
     if not re.fullmatch(r"\d+\.\d+\.\d+", codex_version):
         raise ModelCatalogPrewarmError("Codex 版本必须是三段数字。")
@@ -250,14 +246,14 @@ def run_prewarm(
         environment,
     )
     try:
-        start_online_model_catalog_refresh(
+        initialize_online_model_catalog_refresh(
             client,
             model=model,
             deadline=deadline,
         )
-        # thread/start 本身不发送 Responses turn，只让内置 provider 的
-        # OnlineIfUncached 启动在线刷新。app-server 必须保持存活到完整 body 刷盘，
-        # 否则关闭进程会取消尚未完成的 HTTP/2 stream。
+        # app-server 的 ModelsRefreshWorker 会在启动时立刻执行在线刷新；这里不创建
+        # thread，从而避免无关的 Responses WebSocket 预热。进程必须保持存活到完整
+        # body 刷盘，否则关闭进程会取消尚未完成的 HTTP/2 stream。
         if mitm_models_http is not None:
             captured, model_count = wait_for_mitm_model_catalog(
                 mitm_models_http,
@@ -276,7 +272,7 @@ def run_prewarm(
         raise
     except BaseException as error:
         raise ModelCatalogPrewarmError(
-            f"app-server thread/start 未完成：{type(error).__name__}。"
+            f"app-server initialize 未完成：{type(error).__name__}。"
         ) from error
     finally:
         client.close()

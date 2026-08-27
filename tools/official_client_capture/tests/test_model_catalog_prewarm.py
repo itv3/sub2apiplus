@@ -20,8 +20,8 @@ from tools.official_client_capture.drive_codex_model_catalog import (
     ModelCatalogPrewarmError,
     build_online_model_catalog_command,
     find_captured_model_catalog,
+    initialize_online_model_catalog_refresh,
     run_prewarm,
-    start_online_model_catalog_refresh,
     wait_for_mitm_model_catalog,
     wait_for_relay_model_catalog,
 )
@@ -66,7 +66,7 @@ class ModelCatalogPrewarmTest(unittest.TestCase):
         self.assertNotIn("--set http2=false", source)
         self.assertIn('CAPTURE_OUTPUT_DIR="$candidate_output_dir"', source)
         self.assertIn('--mitm-models-http "$candidate_models_file"', source)
-        self.assertIn("thread_start_driver_status", source)
+        self.assertIn("initialize_driver_status", source)
         self.assertIn('HOME="$home"', source)
         self.assertIn('CODEX_HOME="$home"', source)
         self.assertIn(
@@ -78,6 +78,8 @@ class ModelCatalogPrewarmTest(unittest.TestCase):
         self.assertNotIn('CAPTURE_OUTPUT_DIR="$output_dir"', source)
         self.assertNotIn('>"$output_dir/model-prewarm-mitmdump.log"', source)
         self.assertNotIn('>>"$output_dir/model-prewarm-driver.log"', source)
+        self.assertIn("timeout 30 python3", source)
+        self.assertIn("--timeout 20", source)
         rendered = source.format(
             capture_root="/capture",
             campaign_id="c1491-r14-contract",
@@ -115,6 +117,8 @@ class ModelCatalogPrewarmTest(unittest.TestCase):
             source,
         )
         self.assertIn("for attempt in 1 2 3", source)
+        self.assertIn('"$capture_container" timeout 30', source)
+        self.assertIn("--timeout 20", source)
         self.assertIn("--preconnect-upstream --preconnect-timeout 15", source)
         self.assertIn('relay/preconnect-ready.json', source)
         self.assertIn("模型目录上游 TLS 预连接未在 20 秒内就绪", source)
@@ -172,21 +176,18 @@ class ModelCatalogPrewarmTest(unittest.TestCase):
         self.assertIn("features.apps=false", command)
         self.assertNotIn("turn/start", command)
 
-    def test_驱动只执行_thread_start_且不发送_turn(self) -> None:
+    def test_驱动只执行_initialize_且不创建_thread_或_turn(self) -> None:
         client = mock.Mock()
-        client.wait_response.side_effect = [
-            {"id": 1, "result": {}},
-            {"id": 2, "result": {"thread": {"id": "thread-1"}}},
-        ]
-        thread_id = start_online_model_catalog_refresh(
+        client.wait_response.return_value = {"id": 1, "result": {}}
+        initialize_online_model_catalog_refresh(
             client,
             model="gpt-5.5",
             deadline=time.monotonic() + 1,
         )
         methods = [call.args[0]["method"] for call in client.send.call_args_list]
-        self.assertEqual(methods, ["initialize", "initialized", "thread/start"])
+        self.assertEqual(methods, ["initialize", "initialized"])
+        self.assertNotIn("thread/start", methods)
         self.assertNotIn("turn/start", methods)
-        self.assertEqual(thread_id, "thread-1")
 
     def test_驱动可从仓库外直接执行(self) -> None:
         """容器通过绝对路径启动脚本，不能依赖仓库根目录恰好在 sys.path。"""
@@ -254,7 +255,7 @@ class ModelCatalogPrewarmTest(unittest.TestCase):
                 )
 
     def test_等待_MITM_完整响应后才允许写成功摘要(self) -> None:
-        """thread/start 完成后仍必须等待 MITM 刷盘真实 HTTP 200。"""
+        """initialize 完成后仍必须等待 MITM 刷盘真实 HTTP 200。"""
 
         with tempfile.TemporaryDirectory() as directory:
             models_http = Path(directory) / "models-http.jsonl"
@@ -337,7 +338,7 @@ class ModelCatalogPrewarmTest(unittest.TestCase):
             self.assertEqual(result["response_path"], "relay/conn001.upstream_to_client.bin")
             self.assertEqual(model_count, 1)
 
-    def test_thread_start_成功且原始_HTTP_200_完整时才写摘要(self) -> None:
+    def test_initialize_成功且原始_HTTP_200_完整时才写摘要(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             relay = root / "relay"
@@ -352,13 +353,8 @@ class ModelCatalogPrewarmTest(unittest.TestCase):
             client = mock.Mock()
             client.records = [
                 {"id": 1, "result": {}},
-                {"method": "thread/started"},
-                {"id": 2, "result": {"thread": {"id": "thread-1"}}},
             ]
-            client.wait_response.side_effect = [
-                client.records[0],
-                client.records[2],
-            ]
+            client.wait_response.return_value = client.records[0]
             output = root / "model-catalog-prewarm.json"
             with (
                 mock.patch.dict(
@@ -385,15 +381,16 @@ class ModelCatalogPrewarmTest(unittest.TestCase):
             self.assertNotIn("OPENAI_API_KEY", environment)
             self.assertNotIn("SUB2API_API_KEY", environment)
             methods = [call.args[0]["method"] for call in client.send.call_args_list]
-            self.assertEqual(methods, ["initialize", "initialized", "thread/start"])
+            self.assertEqual(methods, ["initialize", "initialized"])
+            self.assertNotIn("thread/start", methods)
             self.assertNotIn("turn/start", methods)
-            self.assertEqual(summary["protocol_record_count"], 3)
+            self.assertEqual(summary["protocol_record_count"], 1)
             self.assertEqual(summary["model_count"], 1)
             self.assertTrue(output.is_file())
             client.close.assert_called_once_with()
 
-    def test_thread_start_不能绕过原始响应门禁(self) -> None:
-        """即使线程创建成功，缺少 /models HTTP 200 也必须失败关闭。"""
+    def test_initialize_不能绕过原始响应门禁(self) -> None:
+        """即使初始化成功，缺少 /models HTTP 200 也必须失败关闭。"""
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -403,9 +400,8 @@ class ModelCatalogPrewarmTest(unittest.TestCase):
             client = mock.Mock()
             client.records = [
                 {"id": 1, "result": {}},
-                {"id": 2, "result": {"thread": {"id": "thread-1"}}},
             ]
-            client.wait_response.side_effect = client.records
+            client.wait_response.return_value = client.records[0]
             with (
                 mock.patch(
                     "tools.official_client_capture.drive_codex_model_catalog."

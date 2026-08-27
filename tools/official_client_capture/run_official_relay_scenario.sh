@@ -428,8 +428,8 @@ restore_auth_json() {
 prewarm_model_catalog() {
   # 需要模型条件收据的任务必须先取得一份完整在线目录响应。codex exec、
   # debug models 与单独 model/list 都可能只返回内置目录；这里用隔离 HOME 和
-  # CODEX_HOME 启动官方 app-server，仅执行 initialize + thread/start 来触发
-  # OnlineIfUncached，并保持进程存活到 relay 原文中的 /models HTTP 200 刷盘。
+  # CODEX_HOME 启动官方 app-server，仅执行 initialize，并保持启动刷新 worker
+  # 存活到 relay 原文中的 /models HTTP 200 刷盘，且不创建 thread 或 turn。
   model_catalog_home="/tmp/codex-model-catalog-$run_id"
   docker exec "$capture_container" sh -c \
     "rm -rf '$model_catalog_home' && install -d -m 0700 '$model_catalog_home'"
@@ -439,7 +439,7 @@ prewarm_model_catalog() {
     docker exec "$capture_container" sh -c \
       "install -d -m 0700 '$home' && install -m 0600 /root/.codex/auth.json '$home/auth.json'"
     if docker exec -e HOME="$home" -e CODEX_HOME="$home" \
-      "$capture_container" timeout 150 \
+      "$capture_container" timeout 30 \
       python3 "$capture_tool_root/drive_codex_model_catalog.py" \
       --codex-bin "$codex_bin" \
       --codex-version "$codex_version" \
@@ -447,7 +447,7 @@ prewarm_model_catalog() {
       --expect-use-responses-lite "$expect_lite" \
       --relay-dir "/capture/runs/$run_id/relay" \
       --output "/capture/runs/$run_id/model-catalog-prewarm.json" \
-      --timeout 120; then
+      --timeout 20; then
       return 0
     fi
     echo "⚠ 在线模型目录预热第 $attempt 次未形成完整原始响应。" >&2
