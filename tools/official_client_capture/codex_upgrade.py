@@ -3483,6 +3483,8 @@ _CLASSIFICATION_APPROVAL_FIELDS = (
     "assertion_profile_manifest",
 )
 
+_SUCCESSOR_OFFICIAL_SURFACE_PATH = "imports/official/surface.json"
+
 
 def _copy_successor_binding(
     predecessor_dir: Path,
@@ -3491,34 +3493,48 @@ def _copy_successor_binding(
     *,
     kind: str,
     copied_files: dict[str, dict[str, Any]],
+    target_relative: str | None = None,
 ) -> dict[str, str]:
-    """把一个前序 Campaign 文件按原相对路径逐字节复制到后继目录。"""
+    """把一个前序 Campaign 文件逐字节复制到后继受管路径。"""
 
     _require_file_binding(reference, f"后继 Campaign {kind}")
-    relative = str(reference["path"])
-    source = _campaign_file(predecessor_dir, relative)
+    source_relative = str(reference["path"])
+    destination_relative = target_relative or source_relative
+    source = _campaign_file(predecessor_dir, source_relative)
     if source.is_symlink() or not source.is_file():
-        raise ConfigurationError(f"前序 Campaign 文件不存在或不可信：{relative}")
+        raise ConfigurationError(
+            f"前序 Campaign 文件不存在或不可信：{source_relative}"
+        )
     expected_sha256 = str(reference["sha256"])
     if file_sha256(source) != expected_sha256:
-        raise ConfigurationError(f"前序 Campaign 文件摘要漂移：{relative}")
-    existing = copied_files.get(relative)
+        raise ConfigurationError(
+            f"前序 Campaign 文件摘要漂移：{source_relative}"
+        )
+    existing = copied_files.get(destination_relative)
     if existing is not None:
-        if existing["sha256"] != expected_sha256:
-            raise ConfigurationError(f"后继 Campaign 复制目标发生摘要冲突：{relative}")
-        return {"path": relative, "sha256": expected_sha256}
-    destination = _campaign_file(staging_dir, relative)
+        if (
+            existing["source_path"] != source_relative
+            or existing["sha256"] != expected_sha256
+        ):
+            raise ConfigurationError(
+                "后继 Campaign 复制目标发生摘要冲突："
+                + destination_relative
+            )
+        return {"path": destination_relative, "sha256": expected_sha256}
+    destination = _campaign_file(staging_dir, destination_relative)
     copied = _secure_copy_file_once(source, destination)
     if copied["sha256"] != expected_sha256:
-        raise ConfigurationError(f"后继 Campaign 复制摘要与绑定不一致：{relative}")
-    copied_files[relative] = {
+        raise ConfigurationError(
+            f"后继 Campaign 复制摘要与绑定不一致：{source_relative}"
+        )
+    copied_files[destination_relative] = {
         "kind": kind,
-        "source_path": relative,
-        "target_path": relative,
+        "source_path": source_relative,
+        "target_path": destination_relative,
         "sha256": expected_sha256,
         "bytes": copied["bytes"],
     }
-    return {"path": relative, "sha256": expected_sha256}
+    return {"path": destination_relative, "sha256": expected_sha256}
 
 
 def _rebuild_successor_plan(
@@ -3680,6 +3696,7 @@ def create_successor_campaign(arguments: argparse.Namespace) -> dict[str, Any]:
             official.get("surface"),
             kind="official_surface",
             copied_files=copied_files,
+            target_relative=_SUCCESSOR_OFFICIAL_SURFACE_PATH,
         )
 
         predecessor_manifest_sha256 = file_sha256(
@@ -4244,26 +4261,38 @@ def _successor_copy_expectations(
 
     expected: dict[str, dict[str, Any]] = {}
 
-    def add(reference: Any, kind: str) -> None:
+    def add(
+        reference: Any,
+        kind: str,
+        *,
+        target_relative: str | None = None,
+    ) -> None:
         _require_file_binding(reference, f"前序 {kind}")
-        relative = str(reference["path"])
-        source = _campaign_file(predecessor_dir, relative)
+        source_relative = str(reference["path"])
+        destination_relative = target_relative or source_relative
+        source = _campaign_file(predecessor_dir, source_relative)
         if source.is_symlink() or not source.is_file():
-            raise ConfigurationError(f"前序复制源不存在或不可信：{relative}")
+            raise ConfigurationError(
+                f"前序复制源不存在或不可信：{source_relative}"
+            )
         digest = file_sha256(source)
         if digest != reference["sha256"]:
-            raise ConfigurationError(f"前序复制源摘要漂移：{relative}")
+            raise ConfigurationError(
+                f"前序复制源摘要漂移：{source_relative}"
+            )
         row = {
             "kind": kind,
-            "source_path": relative,
-            "target_path": relative,
+            "source_path": source_relative,
+            "target_path": destination_relative,
             "sha256": digest,
             "bytes": source.stat().st_size,
         }
-        previous = expected.get(relative)
-        if previous is not None and previous["sha256"] != digest:
-            raise ConfigurationError(f"前序复制闭集出现路径摘要冲突：{relative}")
-        expected.setdefault(relative, row)
+        previous = expected.get(destination_relative)
+        if previous is not None and previous != row:
+            raise ConfigurationError(
+                "前序复制闭集出现路径摘要冲突：" + destination_relative
+            )
+        expected.setdefault(destination_relative, row)
 
     for group_name in ("inputs", "analysis"):
         for reference in predecessor_manifest[group_name].values():
@@ -4271,7 +4300,11 @@ def _successor_copy_expectations(
                 add(reference, f"plan_{group_name}")
     for field in _CLASSIFICATION_APPROVAL_FIELDS:
         add(classification.get(field), "approved_classification")
-    add(official.get("surface"), "official_surface")
+    add(
+        official.get("surface"),
+        "official_surface",
+        target_relative=_SUCCESSOR_OFFICIAL_SURFACE_PATH,
+    )
     return expected
 
 
@@ -4445,7 +4478,7 @@ def _validate_predecessor_import_receipt(
                 "sha256",
                 "bytes",
             }
-            or row.get("source_path") != row.get("target_path")
+            or not isinstance(row.get("source_path"), str)
             or not isinstance(row.get("target_path"), str)
             or row["target_path"] in copied_index
         ):

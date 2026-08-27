@@ -2078,6 +2078,11 @@ class CodexUpgradeTest(unittest.TestCase):
             )
             self.assertIn("predecessor_import", stored_official)
             self.assertNotIn("attempt", stored_official)
+            self.assertEqual(
+                stored_official["surface"]["path"],
+                "imports/official/surface.json",
+            )
+            self.assertFalse((successor_dir / "official" / "attempts").exists())
 
             official = codex_upgrade._load_stage_result(
                 successor_dir, "capture-official"
