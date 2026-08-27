@@ -70,8 +70,8 @@
       "predecessor_sha256s": [
         "7a7dacfd26698136ef8b8714be9122077cb7728bc8e8a5907c4c6fe96c485754"
       ],
-      "to_sha256": "bd2dd521f2fa5bdd4c5fe45a099b91d658067269a31a2443c3caa2ef3528856f",
-      "reason": "新增失败关闭的 successor 命令、前序导入收据和官方／分类事实逐次重放。"
+      "to_sha256": "bd27a7495ca6cf2dedf3ee2147ba78dab240ba6384597c00158b8e4ef2fe27ca",
+      "reason": "新增失败关闭的 successor 命令、前序导入收据和官方／分类阶段封印逐次重放；历史机器收据保留原 finalizer 身份。"
     },
     {
       "path": "tools/official_client_capture/codex_upgrade_campaign.schema.json",
@@ -138,10 +138,10 @@
       "predecessor_sha256s": [
         "c8dfa5332dfb395f91e4e950dabbdcdf86270bf8a5e70b9ec671f122f0535f5a"
       ],
-      "to_sha256": "bd6163617561ee3f9571889132554272bedb5ad726a6c1f0af82fe88e6106bf4",
-      "reason": "覆盖后继创建、漂移失败关闭以及 candidate compare／accept 全链重放。"
+      "to_sha256": "2c8fdbb7e2ea129b882b447d672805c776392ea642cb8cfae7053d7b5b4811aa",
+      "reason": "覆盖后继创建、历史 finalizer 路径不重绑、漂移失败关闭以及 candidate compare／accept 全链重放。"
     }
   ],
   "result": "successor_carry_forward_tooling_frozen",
-  "identity_sha256": "e06500248843fbe92b6fa6260c9317b4b3b4836fdb616b49c6e368ed01ca4037"
+  "identity_sha256": "ec51a74b1969fbae5fdf56699b2964d9d3cd42c502e49e3fb4cfd418948ade6d"
 }

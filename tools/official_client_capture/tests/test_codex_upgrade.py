@@ -2155,6 +2155,45 @@ class CodexUpgradeTest(unittest.TestCase):
                 "ready",
             )
 
+    def test_successor_replays_historical_stage_without_rebinding_finalizer(
+        self,
+    ) -> None:
+        """历史机器收据保留原 finalizer 身份，后继只重放阶段封印。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            predecessor_dir, _, _ = self._create_classified_campaign(
+                root / "predecessor"
+            )
+            successor_dir = root / "successor"
+            with mock.patch.object(
+                codex_upgrade,
+                "_replay_capture_stage_receipts",
+                side_effect=codex_upgrade.ConfigurationError(
+                    "历史 finalizer 不得被当前路径重新绑定"
+                ),
+            ) as replay:
+                return_code, stdout, stderr = self._run_main(
+                    [
+                        "successor",
+                        "--predecessor-campaign-dir",
+                        str(predecessor_dir),
+                        "--campaign-dir",
+                        str(successor_dir),
+                        "--campaign-id",
+                        "upgrade-0146-successor-historical-finalizer",
+                        "--reason",
+                        "candidate_runtime_identity_correction",
+                    ]
+                )
+                self.assertEqual(return_code, 0, stderr)
+                self.assertEqual(json.loads(stdout)["status"], "profile_approved")
+                self.assertEqual(
+                    codex_upgrade.campaign_status(successor_dir)["status"],
+                    "profile_approved",
+                )
+            replay.assert_not_called()
+
     def test_successor_replay_fails_closed_on_local_or_predecessor_drift(
         self,
     ) -> None:

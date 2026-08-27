@@ -3615,7 +3615,15 @@ def create_successor_campaign(arguments: argparse.Namespace) -> dict[str, Any]:
     predecessor_manifest = _require_formal_campaign(predecessor_dir)
     if arguments.campaign_id == predecessor_manifest["campaign_id"]:
         raise ConfigurationError("后继 Campaign 必须使用新的 campaign-id。")
-    official = _load_stage_result(predecessor_dir, "capture-official")
+    # 后继承接只重放前序阶段封印、证据 inventory/security 与批准清单。
+    # 历史机器收据绑定的是当时 finalizer 的绝对路径和摘要；用当前 finalizer
+    # 强行重放会把合法的只读历史路径迁移误判为篡改。当前后继不会借用这些
+    # 收据生成新事实，因此保留阶段级逐字节校验，但不重新绑定历史 finalizer。
+    official = _load_stage_result(
+        predecessor_dir,
+        "capture-official",
+        _replay_machine_receipts=False,
+    )
     classification = _load_stage_result(predecessor_dir, "classify")
     if official.get("status") != "complete":
         raise ConfigurationError("前序 Campaign 官方阶段尚未完整封存。")
@@ -4369,6 +4377,7 @@ def _validate_predecessor_import_receipt(
         predecessor_dir,
         "capture-official",
         _import_chain=next_chain,
+        _replay_machine_receipts=False,
     )
     predecessor_classification = _load_stage_result(
         predecessor_dir,
@@ -4575,6 +4584,7 @@ def _load_stage_result(
     candidate_id: str | None = None,
     *,
     _import_chain: frozenset[Path] | None = None,
+    _replay_machine_receipts: bool = True,
 ) -> dict[str, Any]:
     campaign_manifest = _require_formal_campaign(campaign_dir)
     canonical, path = _stage_path(campaign_dir, stage, candidate_id)
@@ -4624,7 +4634,8 @@ def _load_stage_result(
             campaign_dir, payload.get("seal_preview"), "seal 预览"
         )
         _verify_capture_seal_preview(campaign_dir, payload, canonical)
-        _replay_capture_stage_receipts(campaign_dir, payload, canonical)
+        if _replay_machine_receipts:
+            _replay_capture_stage_receipts(campaign_dir, payload, canonical)
         _verify_stage_evidence(
             payload,
             "官方" if canonical == "capture-official" else "候选",
