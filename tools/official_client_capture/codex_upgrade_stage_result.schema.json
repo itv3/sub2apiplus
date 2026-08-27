@@ -241,18 +241,35 @@
     },
     "production_state": {
       "const": "accepted_not_activated"
+    },
+    "predecessor_import": {
+      "$ref": "#/$defs/fileBinding"
+    },
+    "predecessor_package_digest": {
+      "$ref": "#/$defs/sha256"
     }
   },
   "allOf": [
     {
       "if": {
-        "properties": {
-          "stage": {
-            "const": "capture-official"
+        "allOf": [
+          {
+            "properties": {
+              "stage": {
+                "const": "capture-official"
+              }
+            },
+            "required": [
+              "stage"
+            ]
+          },
+          {
+            "not": {
+              "required": [
+                "predecessor_import"
+              ]
+            }
           }
-        },
-        "required": [
-          "stage"
         ]
       },
       "then": {
@@ -277,16 +294,27 @@
     },
     {
       "if": {
-        "properties": {
-          "stage": {
-            "enum": [
-              "capture-official",
-              "capture-candidate"
+        "allOf": [
+          {
+            "properties": {
+              "stage": {
+                "enum": [
+                  "capture-official",
+                  "capture-candidate"
+                ]
+              }
+            },
+            "required": [
+              "stage"
             ]
+          },
+          {
+            "not": {
+              "required": [
+                "predecessor_import"
+              ]
+            }
           }
-        },
-        "required": [
-          "stage"
         ]
       },
       "then": {
@@ -303,6 +331,58 @@
           "assertion_gate",
           "restoration",
           "security"
+        ]
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "predecessor_import"
+        ]
+      },
+      "then": {
+        "required": [
+          "predecessor_package_digest"
+        ],
+        "properties": {
+          "stage": {
+            "enum": [
+              "capture-official",
+              "classify"
+            ]
+          },
+          "status": {
+            "const": "complete"
+          },
+          "candidate_purpose": {
+            "const": null
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "allOf": [
+          {
+            "required": [
+              "predecessor_import"
+            ]
+          },
+          {
+            "properties": {
+              "stage": {
+                "const": "capture-official"
+              }
+            },
+            "required": [
+              "stage"
+            ]
+          }
+        ]
+      },
+      "then": {
+        "required": [
+          "surface"
         ]
       }
     },

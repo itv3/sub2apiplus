@@ -1,0 +1,246 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-predecessor-import-v1.json",
+  "title": "Codex 同版本后继 Campaign 前序导入收据",
+  "description": "只读绑定前序 Campaign 的官方封存证据、批准分类、逐字复制闭集和可选放弃 attempt。每次 status、compare 与 accept 都必须从原始路径重放这些绑定。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "created_at_utc",
+    "reason",
+    "successor_campaign_id",
+    "successor_campaign_manifest_sha256",
+    "predecessor_campaign",
+    "stages",
+    "copied_files",
+    "abandoned_candidate_attempt",
+    "receipt_digest"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "codex-upgrade-predecessor-import/v1"
+    },
+    "created_at_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "reason": {
+      "const": "candidate_runtime_identity_correction"
+    },
+    "successor_campaign_id": {
+      "$ref": "#/$defs/safeId"
+    },
+    "successor_campaign_manifest_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "predecessor_campaign": {
+      "$ref": "#/$defs/predecessorCampaign"
+    },
+    "stages": {
+      "$ref": "#/$defs/stages"
+    },
+    "copied_files": {
+      "type": "array",
+      "minItems": 10,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/copiedFile"
+      }
+    },
+    "abandoned_candidate_attempt": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/abandonedAttempt"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "receipt_digest": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "safeId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$"
+    },
+    "absolutePath": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "predecessorCampaign": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "campaign_dir",
+        "campaign_id",
+        "campaign_manifest_sha256"
+      ],
+      "properties": {
+        "campaign_dir": {
+          "$ref": "#/$defs/absolutePath"
+        },
+        "campaign_id": {
+          "$ref": "#/$defs/safeId"
+        },
+        "campaign_manifest_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "officialStage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256",
+        "package_digest",
+        "evidence_inventory_digest",
+        "security_sha256"
+      ],
+      "properties": {
+        "path": {
+          "const": "official/result.json"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "package_digest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "evidence_inventory_digest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "security_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "classificationStage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256",
+        "package_digest",
+        "joint_manifest_sha256"
+      ],
+      "properties": {
+        "path": {
+          "const": "classification/result.json"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "package_digest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "joint_manifest_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "stages": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "capture-official",
+        "classify"
+      ],
+      "properties": {
+        "capture-official": {
+          "$ref": "#/$defs/officialStage"
+        },
+        "classify": {
+          "$ref": "#/$defs/classificationStage"
+        }
+      }
+    },
+    "copiedFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "source_path",
+        "target_path",
+        "sha256",
+        "bytes"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "plan_inputs",
+            "plan_analysis",
+            "approved_classification",
+            "official_surface"
+          ]
+        },
+        "source_path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "target_path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "abandonedAttempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidate_id",
+        "attempt_id",
+        "path",
+        "sha256",
+        "attempt_digest",
+        "identity_sha256",
+        "status"
+      ],
+      "properties": {
+        "candidate_id": {
+          "$ref": "#/$defs/safeId"
+        },
+        "attempt_id": {
+          "$ref": "#/$defs/safeId"
+        },
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "attempt_digest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "identity_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "status": {
+          "enum": [
+            "awaiting_receipts",
+            "failed",
+            "environment_contaminated"
+          ]
+        }
+      }
+    }
+  }
+}

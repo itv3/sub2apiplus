@@ -11,6 +11,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import signal
 import stat
 import string
@@ -133,6 +134,7 @@ SEAL_FAILURE_SCHEMA = "codex-upgrade-seal-failure/v2"
 SEAL_PREVIEW_SCHEMA = "codex-upgrade-seal-preview/v2"
 SCENARIO_SCHEMA = "codex-upgrade-scenarios/v1"
 STAGE_SCHEMA = "codex-upgrade-stage-result/v2"
+PREDECESSOR_IMPORT_SCHEMA = "codex-upgrade-predecessor-import/v1"
 COMPARISON_SCHEMA = "codex-upgrade-comparison/v2"
 ACCEPTANCE_SCHEMA = "codex-upgrade-acceptance/v2"
 CAMPAIGN_MODES = frozenset({"preflight_only", "formal"})
@@ -147,6 +149,7 @@ MIGRATION_CLASSIFICATIONS = {
 }
 ASSERTION_STATUSES = {"pass", "fail", "blocked", "not_applicable"}
 REQUIRED_CLIENT_BINDINGS = frozenset({"kilo-compatible", "kilo-responses"})
+SUCCESSOR_REASONS = frozenset({"candidate_runtime_identity_correction"})
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 CODEX_USER_AGENT_VERSION_RE = re.compile(
     r"(?:codex_exec|codex-tui|codex_cli_rs)/(\d+\.\d+\.\d+)"
@@ -2336,6 +2339,33 @@ def _build_parser() -> argparse.ArgumentParser:
     add_capture_receipts(official, candidate=False)
     official.add_argument("--acknowledge-live-requests", action="store_true")
 
+    successor = subparsers.add_parser(
+        "successor",
+        help="创建同版本后继 Campaign，并只读承接官方证据与批准分类",
+    )
+    successor.add_argument(
+        "--predecessor-campaign-dir",
+        type=Path,
+        required=True,
+        help="已封存官方阶段和批准分类的只读前序 Campaign 目录。",
+    )
+    add_campaign_reference(successor)
+    successor.add_argument("--campaign-id", required=True)
+    successor.add_argument(
+        "--reason",
+        choices=sorted(SUCCESSOR_REASONS),
+        required=True,
+        help="触发同版本后继 Campaign 的受管原因。",
+    )
+    successor.add_argument(
+        "--predecessor-candidate-id",
+        help="可选：绑定前序 Campaign 中已放弃的 candidate。",
+    )
+    successor.add_argument(
+        "--predecessor-attempt-id",
+        help="可选：绑定前序 candidate 中无法继续封存的 attempt。",
+    )
+
     classify = subparsers.add_parser(
         "classify", help="生成差异草案或封存已审核的目标规则迁移"
     )
@@ -2676,6 +2706,45 @@ def _secure_write_json_once(path: Path, payload: dict[str, Any]) -> None:
         path.chmod(0o600)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def _secure_copy_file_once(source: Path, destination: Path) -> dict[str, Any]:
+    """逐字节复制普通文件，并以不可覆盖方式发布目标。"""
+
+    if source.is_symlink() or not source.is_file():
+        raise ConfigurationError(f"后继 Campaign 复制源不是可信普通文件：{source}")
+    ensure_private_directory(destination.parent)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent
+    )
+    temporary = Path(temporary_name)
+    try:
+        os.fchmod(descriptor, 0o600)
+        with source.open("rb") as source_stream, os.fdopen(
+            descriptor, "wb"
+        ) as destination_stream:
+            shutil.copyfileobj(source_stream, destination_stream)
+            destination_stream.flush()
+            os.fsync(destination_stream.fileno())
+        descriptor = -1
+        try:
+            os.link(temporary, destination)
+        except FileExistsError as error:
+            raise ConfigurationError(
+                f"不可变文件已经存在，禁止覆盖：{destination}"
+            ) from error
+        destination.chmod(0o600)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        temporary.unlink(missing_ok=True)
+    source_digest = file_sha256(source)
+    if file_sha256(destination) != source_digest:
+        raise ConfigurationError(f"后继 Campaign 文件复制后摘要不一致：{destination}")
+    return {
+        "sha256": source_digest,
+        "bytes": destination.stat().st_size,
+    }
 
 
 @contextmanager
@@ -3406,6 +3475,330 @@ def create_campaign(arguments: argparse.Namespace) -> dict[str, Any]:
     return manifest
 
 
+_CLASSIFICATION_APPROVAL_FIELDS = (
+    "target_rule_manifest",
+    "migration_manifest",
+    "scenario_manifest",
+    "profile_manifest",
+    "assertion_profile_manifest",
+)
+
+
+def _copy_successor_binding(
+    predecessor_dir: Path,
+    staging_dir: Path,
+    reference: Any,
+    *,
+    kind: str,
+    copied_files: dict[str, dict[str, Any]],
+) -> dict[str, str]:
+    """把一个前序 Campaign 文件按原相对路径逐字节复制到后继目录。"""
+
+    _require_file_binding(reference, f"后继 Campaign {kind}")
+    relative = str(reference["path"])
+    source = _campaign_file(predecessor_dir, relative)
+    if source.is_symlink() or not source.is_file():
+        raise ConfigurationError(f"前序 Campaign 文件不存在或不可信：{relative}")
+    expected_sha256 = str(reference["sha256"])
+    if file_sha256(source) != expected_sha256:
+        raise ConfigurationError(f"前序 Campaign 文件摘要漂移：{relative}")
+    existing = copied_files.get(relative)
+    if existing is not None:
+        if existing["sha256"] != expected_sha256:
+            raise ConfigurationError(f"后继 Campaign 复制目标发生摘要冲突：{relative}")
+        return {"path": relative, "sha256": expected_sha256}
+    destination = _campaign_file(staging_dir, relative)
+    copied = _secure_copy_file_once(source, destination)
+    if copied["sha256"] != expected_sha256:
+        raise ConfigurationError(f"后继 Campaign 复制摘要与绑定不一致：{relative}")
+    copied_files[relative] = {
+        "kind": kind,
+        "source_path": relative,
+        "target_path": relative,
+        "sha256": expected_sha256,
+        "bytes": copied["bytes"],
+    }
+    return {"path": relative, "sha256": expected_sha256}
+
+
+def _rebuild_successor_plan(
+    staging_dir: Path,
+    final_dir: Path,
+    manifest: dict[str, Any],
+) -> None:
+    """用新 Campaign ID 重算计划坐标，证据与批准输入保持逐字不变。"""
+
+    arguments = _campaign_arguments(staging_dir, manifest)
+    arguments.output = final_dir
+    arguments.campaign_dir = final_dir
+    context = _job_context(arguments)
+    scenario_reference = manifest["inputs"].get("target_discovery_scenarios")
+    if not isinstance(scenario_reference, dict):
+        raise ConfigurationError(
+            "同版本后继 Campaign 要求前序已冻结 target 场景清单。"
+        )
+    scenario_path = _campaign_file(staging_dir, scenario_reference["path"])
+    jobs = load_scenario_jobs(
+        scenario_path,
+        context,
+        expected_version=manifest["target_version"],
+        require_bindings=True,
+    )
+    extra_reference = manifest["inputs"].get("extra_jobs")
+    if extra_reference is not None:
+        jobs.extend(
+            load_extra_jobs(
+                _campaign_file(staging_dir, extra_reference["path"]),
+                context,
+            )
+        )
+    jobs = [job for job in jobs if manifest["suite"] in job.suites]
+    rules = load_rule_manifest(
+        _campaign_file(staging_dir, manifest["inputs"]["baseline_rules"]["path"]),
+        manifest["baseline_version"],
+    )
+    _validate_jobs(jobs, rules)
+    if manifest["suite"] == "full":
+        _validate_phase_coverage(jobs, rules)
+    plan = _safe_plan(arguments, jobs, rules)
+    manifest["coverage_plan"] = plan["coverage_plan"]
+    manifest["jobs"] = plan["jobs"]
+
+
+def _successor_abandoned_attempt(
+    predecessor_dir: Path,
+    candidate_id: str | None,
+    attempt_id: str | None,
+) -> dict[str, Any] | None:
+    """可选绑定前序中因不可变时间窗口而放弃的 candidate attempt。"""
+
+    if bool(candidate_id) != bool(attempt_id):
+        raise ConfigurationError(
+            "--predecessor-candidate-id 与 --predecessor-attempt-id 必须同时提供。"
+        )
+    if candidate_id is None or attempt_id is None:
+        return None
+    if not SAFE_ID_RE.fullmatch(candidate_id) or not SAFE_ID_RE.fullmatch(attempt_id):
+        raise ConfigurationError("前序 candidate-id 或 attempt-id 格式非法。")
+    attempt_root, attempt = _load_capture_attempt(
+        predecessor_dir,
+        "candidate",
+        candidate_id,
+        attempt_id,
+    )
+    attempt_path = attempt_root / "attempt.json"
+    return {
+        "candidate_id": candidate_id,
+        "attempt_id": attempt_id,
+        "path": attempt_path.relative_to(predecessor_dir).as_posix(),
+        "sha256": file_sha256(attempt_path),
+        "attempt_digest": attempt["attempt_digest"],
+        "identity_sha256": _fingerprint(attempt["identity"]),
+        "status": attempt["status"],
+    }
+
+
+def create_successor_campaign(arguments: argparse.Namespace) -> dict[str, Any]:
+    """创建同版本后继 Campaign；官方证据与批准分类只读承接并逐次重放。"""
+
+    predecessor_dir = arguments.predecessor_campaign_dir
+    successor_dir = arguments.campaign_dir
+    _validate_existing_campaign_path(predecessor_dir)
+    _validate_output_path(successor_dir)
+    if predecessor_dir.resolve() == successor_dir.resolve(strict=False):
+        raise ConfigurationError("后继 Campaign 目录不得等于前序 Campaign。")
+    if not SAFE_ID_RE.fullmatch(str(arguments.campaign_id)):
+        raise ConfigurationError("--campaign-id 格式非法。")
+    if arguments.reason not in SUCCESSOR_REASONS:
+        raise ConfigurationError("--reason 不是受管的同版本后继原因。")
+
+    predecessor_manifest = _require_formal_campaign(predecessor_dir)
+    if arguments.campaign_id == predecessor_manifest["campaign_id"]:
+        raise ConfigurationError("后继 Campaign 必须使用新的 campaign-id。")
+    official = _load_stage_result(predecessor_dir, "capture-official")
+    classification = _load_stage_result(predecessor_dir, "classify")
+    if official.get("status") != "complete":
+        raise ConfigurationError("前序 Campaign 官方阶段尚未完整封存。")
+    if (
+        classification.get("status") != "complete"
+        or classification.get("migration", {}).get("unclassified_count") != 0
+    ):
+        raise ConfigurationError("前序 Campaign 分类未完整批准或仍有阻断。")
+    abandoned_attempt = _successor_abandoned_attempt(
+        predecessor_dir,
+        arguments.predecessor_candidate_id,
+        arguments.predecessor_attempt_id,
+    )
+
+    if successor_dir.parent.exists():
+        if successor_dir.parent.is_symlink() or not successor_dir.parent.is_dir():
+            raise ConfigurationError("后继 Campaign 的父目录不可信。")
+    else:
+        ensure_private_directory(successor_dir.parent)
+    staging_dir = Path(
+        tempfile.mkdtemp(
+            prefix=f".{successor_dir.name}.successor-",
+            dir=successor_dir.parent,
+        )
+    )
+    staging_dir.chmod(0o700)
+    published = False
+    try:
+        copied_files: dict[str, dict[str, Any]] = {}
+        for group_name in ("inputs", "analysis"):
+            for reference in predecessor_manifest[group_name].values():
+                if reference is None:
+                    continue
+                _copy_successor_binding(
+                    predecessor_dir,
+                    staging_dir,
+                    reference,
+                    kind=f"plan_{group_name}",
+                    copied_files=copied_files,
+                )
+
+        classification_bindings: dict[str, dict[str, str]] = {}
+        for field in _CLASSIFICATION_APPROVAL_FIELDS:
+            classification_bindings[field] = _copy_successor_binding(
+                predecessor_dir,
+                staging_dir,
+                classification.get(field),
+                kind="approved_classification",
+                copied_files=copied_files,
+            )
+        surface_binding = _copy_successor_binding(
+            predecessor_dir,
+            staging_dir,
+            official.get("surface"),
+            kind="official_surface",
+            copied_files=copied_files,
+        )
+
+        predecessor_manifest_sha256 = file_sha256(
+            predecessor_dir / "campaign.json"
+        )
+        successor_manifest = json.loads(
+            json.dumps(predecessor_manifest, ensure_ascii=False)
+        )
+        successor_manifest.update(
+            {
+                "campaign_id": arguments.campaign_id,
+                "created_at_utc": _utc_now(),
+                "tool_identity": _tool_identity(),
+                "predecessor": {
+                    "campaign_dir": str(predecessor_dir.resolve()),
+                    "campaign_id": predecessor_manifest["campaign_id"],
+                    "campaign_manifest_sha256": predecessor_manifest_sha256,
+                    "reason": arguments.reason,
+                },
+            }
+        )
+        _rebuild_successor_plan(staging_dir, successor_dir, successor_manifest)
+        manifest_path = staging_dir / "campaign.json"
+        _secure_write_json_once(manifest_path, successor_manifest)
+        secure_write_text(
+            staging_dir / "campaign.sha256", file_sha256(manifest_path) + "\n"
+        )
+
+        official_path = _stage_path(
+            predecessor_dir, "capture-official"
+        )[1]
+        classification_path = _stage_path(predecessor_dir, "classify")[1]
+        import_receipt: dict[str, Any] = {
+            "schema_version": PREDECESSOR_IMPORT_SCHEMA,
+            "created_at_utc": _utc_now(),
+            "reason": arguments.reason,
+            "successor_campaign_id": arguments.campaign_id,
+            "successor_campaign_manifest_sha256": file_sha256(manifest_path),
+            "predecessor_campaign": {
+                "campaign_dir": str(predecessor_dir.resolve()),
+                "campaign_id": predecessor_manifest["campaign_id"],
+                "campaign_manifest_sha256": predecessor_manifest_sha256,
+            },
+            "stages": {
+                "capture-official": {
+                    "path": official_path.relative_to(predecessor_dir).as_posix(),
+                    "sha256": file_sha256(official_path),
+                    "package_digest": official["package_digest"],
+                    "evidence_inventory_digest": official[
+                        "evidence_inventory"
+                    ]["digest"],
+                    "security_sha256": _fingerprint(official["security"]),
+                },
+                "classify": {
+                    "path": classification_path.relative_to(
+                        predecessor_dir
+                    ).as_posix(),
+                    "sha256": file_sha256(classification_path),
+                    "package_digest": classification["package_digest"],
+                    "joint_manifest_sha256": classification[
+                        "joint_manifest_sha256"
+                    ],
+                },
+            },
+            "copied_files": sorted(
+                copied_files.values(), key=lambda item: item["target_path"]
+            ),
+            "abandoned_candidate_attempt": abandoned_attempt,
+        }
+        import_receipt["receipt_digest"] = _fingerprint(import_receipt)
+        import_path = staging_dir / "predecessor-import.json"
+        _secure_write_json_once(import_path, import_receipt)
+        import_binding = {
+            "path": import_path.relative_to(staging_dir).as_posix(),
+            "sha256": file_sha256(import_path),
+        }
+
+        save_stage_result(
+            staging_dir,
+            "capture-official",
+            {
+                "status": "complete",
+                "predecessor_import": import_binding,
+                "predecessor_package_digest": official["package_digest"],
+                "surface": surface_binding,
+            },
+        )
+        imported_classification = {
+            "status": "complete",
+            "predecessor_import": import_binding,
+            "predecessor_package_digest": classification["package_digest"],
+            **classification_bindings,
+        }
+        for field in (
+            "joint_manifest_sha256",
+            "baseline_rule_count",
+            "target_rule_count",
+            "migration",
+            "source_diff_sha256",
+            "official_diff_sha256",
+        ):
+            imported_classification[field] = classification[field]
+        save_stage_result(staging_dir, "classify", imported_classification)
+
+        if successor_dir.exists():
+            raise ConfigurationError("后继 Campaign 目录在发布前已被占用。")
+        os.rename(staging_dir, successor_dir)
+        published = True
+    finally:
+        if not published:
+            shutil.rmtree(staging_dir, ignore_errors=True)
+
+    status = campaign_status(successor_dir)
+    return {
+        "status": status["status"],
+        "campaign_id": arguments.campaign_id,
+        "campaign_dir": str(successor_dir),
+        "predecessor_campaign_id": predecessor_manifest["campaign_id"],
+        "predecessor_campaign_dir": str(predecessor_dir.resolve()),
+        "reason": arguments.reason,
+        "official_imported": True,
+        "classification_imported": True,
+        "official_recapture_required": False,
+        "next_command": status["next_command"],
+    }
+
+
 def load_campaign_manifest(path: Path) -> dict[str, Any]:
     """加载 Campaign，并验证核心清单及其计划期输入未被改写。"""
 
@@ -3422,6 +3815,26 @@ def load_campaign_manifest(path: Path) -> dict[str, Any]:
     if manifest.get("schema_version") != CAMPAIGN_SCHEMA:
         raise ConfigurationError("Campaign schema_version 不受支持。")
     _campaign_coordinates(manifest)
+    predecessor = manifest.get("predecessor")
+    if predecessor is not None:
+        if (
+            not isinstance(predecessor, dict)
+            or set(predecessor)
+            != {
+                "campaign_dir",
+                "campaign_id",
+                "campaign_manifest_sha256",
+                "reason",
+            }
+            or not isinstance(predecessor.get("campaign_dir"), str)
+            or not Path(predecessor["campaign_dir"]).is_absolute()
+            or not SAFE_ID_RE.fullmatch(str(predecessor.get("campaign_id", "")))
+            or not SHA256_RE.fullmatch(
+                str(predecessor.get("campaign_manifest_sha256", ""))
+            )
+            or predecessor.get("reason") not in SUCCESSOR_REASONS
+        ):
+            raise ConfigurationError("Campaign 前序绑定非法。")
     for group_name in ("inputs", "analysis"):
         for reference in manifest.get(group_name, {}).values():
             if reference is None:
@@ -3527,6 +3940,20 @@ def _validate_stage_contract(document: dict[str, Any]) -> None:
     )
     if document.get("candidate_purpose") != expected_candidate_purpose:
         raise ConfigurationError("阶段收据 candidate purpose 与阶段／Campaign 不一致。")
+    predecessor_import = document.get("predecessor_import")
+    if predecessor_import is not None:
+        if stage not in {"capture-official", "classify"} or status != "complete":
+            raise ConfigurationError("前序导入只允许完整的官方或分类阶段。")
+        _require_file_binding(predecessor_import, "前序导入收据")
+        if not SHA256_RE.fullmatch(
+            str(document.get("predecessor_package_digest", ""))
+        ):
+            raise ConfigurationError("前序导入缺少原阶段 package digest。")
+        if stage == "capture-official":
+            _require_file_binding(document.get("surface"), "导入的官方表面")
+            return
+    elif "predecessor_package_digest" in document:
+        raise ConfigurationError("阶段收据不得携带未绑定收据的前序摘要。")
     if stage in {"capture-official", "capture-candidate"} and status == "complete":
         required = {
             "identity",
@@ -3799,10 +4226,355 @@ def save_stage_result(
     return path
 
 
+def _successor_copy_expectations(
+    predecessor_dir: Path,
+    predecessor_manifest: dict[str, Any],
+    official: dict[str, Any],
+    classification: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    """重建后继 Campaign 必须逐字复制的完整文件闭集。"""
+
+    expected: dict[str, dict[str, Any]] = {}
+
+    def add(reference: Any, kind: str) -> None:
+        _require_file_binding(reference, f"前序 {kind}")
+        relative = str(reference["path"])
+        source = _campaign_file(predecessor_dir, relative)
+        if source.is_symlink() or not source.is_file():
+            raise ConfigurationError(f"前序复制源不存在或不可信：{relative}")
+        digest = file_sha256(source)
+        if digest != reference["sha256"]:
+            raise ConfigurationError(f"前序复制源摘要漂移：{relative}")
+        row = {
+            "kind": kind,
+            "source_path": relative,
+            "target_path": relative,
+            "sha256": digest,
+            "bytes": source.stat().st_size,
+        }
+        previous = expected.get(relative)
+        if previous is not None and previous["sha256"] != digest:
+            raise ConfigurationError(f"前序复制闭集出现路径摘要冲突：{relative}")
+        expected.setdefault(relative, row)
+
+    for group_name in ("inputs", "analysis"):
+        for reference in predecessor_manifest[group_name].values():
+            if reference is not None:
+                add(reference, f"plan_{group_name}")
+    for field in _CLASSIFICATION_APPROVAL_FIELDS:
+        add(classification.get(field), "approved_classification")
+    add(official.get("surface"), "official_surface")
+    return expected
+
+
+def _validate_predecessor_import_receipt(
+    campaign_dir: Path,
+    manifest: dict[str, Any],
+    stage_payload: dict[str, Any],
+    canonical: str,
+    import_chain: frozenset[Path],
+) -> dict[str, Any]:
+    """重放前序 Campaign、官方证据、安全门禁和批准五件套。"""
+
+    import_binding = stage_payload.get("predecessor_import")
+    _verify_campaign_binding(campaign_dir, import_binding, "前序导入收据")
+    import_path = _campaign_file(campaign_dir, import_binding["path"])
+    receipt = _read_json(import_path, "前序导入收据")
+    expected_receipt_fields = {
+        "schema_version",
+        "created_at_utc",
+        "reason",
+        "successor_campaign_id",
+        "successor_campaign_manifest_sha256",
+        "predecessor_campaign",
+        "stages",
+        "copied_files",
+        "abandoned_candidate_attempt",
+        "receipt_digest",
+    }
+    unsigned_receipt = dict(receipt)
+    receipt_digest = unsigned_receipt.pop("receipt_digest", None)
+    if (
+        set(receipt) != expected_receipt_fields
+        or receipt.get("schema_version") != PREDECESSOR_IMPORT_SCHEMA
+        or not _is_rfc3339_timestamp(receipt.get("created_at_utc"))
+        or receipt.get("reason") not in SUCCESSOR_REASONS
+        or receipt.get("successor_campaign_id") != manifest["campaign_id"]
+        or receipt.get("successor_campaign_manifest_sha256")
+        != file_sha256(campaign_dir / "campaign.json")
+        or not SHA256_RE.fullmatch(str(receipt_digest))
+        or _fingerprint(unsigned_receipt) != receipt_digest
+    ):
+        raise ConfigurationError("前序导入收据身份、时间或摘要非法。")
+
+    manifest_predecessor = manifest.get("predecessor")
+    predecessor_binding = receipt.get("predecessor_campaign")
+    if (
+        not isinstance(manifest_predecessor, dict)
+        or not isinstance(predecessor_binding, dict)
+        or set(predecessor_binding)
+        != {"campaign_dir", "campaign_id", "campaign_manifest_sha256"}
+        or manifest_predecessor
+        != {
+            **predecessor_binding,
+            "reason": receipt["reason"],
+        }
+    ):
+        raise ConfigurationError("前序导入收据与 Campaign 前序绑定不一致。")
+    predecessor_dir = Path(str(predecessor_binding["campaign_dir"]))
+    if (
+        not predecessor_dir.is_absolute()
+        or str(predecessor_dir.resolve()) != str(predecessor_dir)
+        or predecessor_dir.resolve() in import_chain
+        or predecessor_dir.resolve() == campaign_dir.resolve()
+    ):
+        raise ConfigurationError("前序 Campaign 路径不可信或导入链形成循环。")
+    _validate_existing_campaign_path(predecessor_dir)
+    predecessor_manifest = _require_formal_campaign(predecessor_dir)
+    if (
+        predecessor_binding.get("campaign_id")
+        != predecessor_manifest.get("campaign_id")
+        or predecessor_binding.get("campaign_manifest_sha256")
+        != file_sha256(predecessor_dir / "campaign.json")
+    ):
+        raise ConfigurationError("前序 Campaign 清单身份或摘要漂移。")
+
+    invariant_fields = (
+        "campaign_mode",
+        "campaign_purpose",
+        "baseline_version",
+        "target_version",
+        "target_sha256",
+        "suite",
+        "official_identity",
+        "baseline_identity",
+        "inputs",
+        "analysis",
+        "configuration",
+        "required_rules",
+    )
+    mismatches = [
+        field
+        for field in invariant_fields
+        if manifest.get(field) != predecessor_manifest.get(field)
+    ]
+    if mismatches:
+        raise ConfigurationError(
+            "同版本后继 Campaign 改变了禁止承接的前序坐标："
+            + "、".join(mismatches)
+        )
+
+    next_chain = frozenset({*import_chain, campaign_dir.resolve()})
+    predecessor_official = _load_stage_result(
+        predecessor_dir,
+        "capture-official",
+        _import_chain=next_chain,
+    )
+    predecessor_classification = _load_stage_result(
+        predecessor_dir,
+        "classify",
+        _import_chain=next_chain,
+    )
+    if (
+        predecessor_official.get("status") != "complete"
+        or predecessor_classification.get("status") != "complete"
+        or predecessor_classification.get("migration", {}).get(
+            "unclassified_count"
+        )
+        != 0
+    ):
+        raise ConfigurationError("前序官方阶段或批准分类已不满足完整承接条件。")
+
+    stage_receipts = receipt.get("stages")
+    if not isinstance(stage_receipts, dict) or set(stage_receipts) != {
+        "capture-official",
+        "classify",
+    }:
+        raise ConfigurationError("前序导入收据阶段闭集非法。")
+    stage_expectations = {
+        "capture-official": {
+            "path": "official/result.json",
+            "sha256": file_sha256(predecessor_dir / "official" / "result.json"),
+            "package_digest": predecessor_official["package_digest"],
+            "evidence_inventory_digest": predecessor_official[
+                "evidence_inventory"
+            ]["digest"],
+            "security_sha256": _fingerprint(predecessor_official["security"]),
+        },
+        "classify": {
+            "path": "classification/result.json",
+            "sha256": file_sha256(
+                predecessor_dir / "classification" / "result.json"
+            ),
+            "package_digest": predecessor_classification["package_digest"],
+            "joint_manifest_sha256": predecessor_classification[
+                "joint_manifest_sha256"
+            ],
+        },
+    }
+    if stage_receipts != stage_expectations:
+        raise ConfigurationError("前序导入收据的阶段摘要或证据门禁发生漂移。")
+
+    copied = receipt.get("copied_files")
+    if not isinstance(copied, list):
+        raise ConfigurationError("前序导入收据缺少复制文件闭集。")
+    expected_copies = _successor_copy_expectations(
+        predecessor_dir,
+        predecessor_manifest,
+        predecessor_official,
+        predecessor_classification,
+    )
+    copied_index: dict[str, dict[str, Any]] = {}
+    for row in copied:
+        if (
+            not isinstance(row, dict)
+            or set(row)
+            != {
+                "kind",
+                "source_path",
+                "target_path",
+                "sha256",
+                "bytes",
+            }
+            or row.get("source_path") != row.get("target_path")
+            or not isinstance(row.get("target_path"), str)
+            or row["target_path"] in copied_index
+        ):
+            raise ConfigurationError("前序导入复制文件条目非法或重复。")
+        copied_index[row["target_path"]] = row
+    if copied_index != expected_copies:
+        raise ConfigurationError("前序导入复制文件闭集不完整或摘要漂移。")
+    for relative, row in copied_index.items():
+        target = _campaign_file(campaign_dir, relative)
+        if (
+            target.is_symlink()
+            or not target.is_file()
+            or file_sha256(target) != row["sha256"]
+            or target.stat().st_size != row["bytes"]
+        ):
+            raise ConfigurationError(f"后继 Campaign 复制文件漂移：{relative}")
+
+    abandoned = receipt.get("abandoned_candidate_attempt")
+    if abandoned is not None:
+        if (
+            not isinstance(abandoned, dict)
+            or set(abandoned)
+            != {
+                "candidate_id",
+                "attempt_id",
+                "path",
+                "sha256",
+                "attempt_digest",
+                "identity_sha256",
+                "status",
+            }
+        ):
+            raise ConfigurationError("前序放弃 attempt 绑定结构非法。")
+        attempt_root, attempt = _load_capture_attempt(
+            predecessor_dir,
+            "candidate",
+            str(abandoned.get("candidate_id", "")),
+            str(abandoned.get("attempt_id", "")),
+        )
+        expected_abandoned = {
+            "candidate_id": attempt["candidate_id"],
+            "attempt_id": attempt["attempt_id"],
+            "path": (attempt_root / "attempt.json")
+            .relative_to(predecessor_dir)
+            .as_posix(),
+            "sha256": file_sha256(attempt_root / "attempt.json"),
+            "attempt_digest": attempt["attempt_digest"],
+            "identity_sha256": _fingerprint(attempt["identity"]),
+            "status": attempt["status"],
+        }
+        if abandoned != expected_abandoned:
+            raise ConfigurationError("前序放弃 attempt 身份或摘要漂移。")
+
+    # 前序结果必须按其原始预约坐标重放。不能用后继路径重新展开 job：同一物理
+    # Campaign 可能经 /var 与 /private/var 等等价路径访问，路径规范化会改变
+    # evidence_root，从而制造并不存在的 execution_sha256 漂移。
+    attempt_reference = predecessor_official.get("attempt")
+    _require_file_binding(attempt_reference, "前序官方 attempt")
+    attempt_path = _campaign_file(predecessor_dir, attempt_reference["path"])
+    attempt_root, attempt = _load_capture_attempt(
+        predecessor_dir,
+        "official",
+        None,
+        attempt_path.parent.name,
+    )
+    reservation = _load_capture_reservation(
+        predecessor_dir,
+        attempt_root,
+        phase="official",
+        candidate_id=None,
+    )
+    planned = {
+        item["id"]: item
+        for item in reservation["planned_jobs"]
+        if item["required"]
+    }
+    completed = {
+        item.get("id"): item
+        for item in predecessor_official.get("results", [])
+        if isinstance(item, dict)
+    }
+    if any(
+        job_id not in completed
+        or completed[job_id].get("status") != "complete"
+        or completed[job_id].get("execution_sha256")
+        != planned_job["execution_sha256"]
+        for job_id, planned_job in planned.items()
+    ) or attempt.get("results") != predecessor_official.get("results"):
+        raise ConfigurationError("前序官方任务未按原子预约完整执行或结果漂移。")
+
+    predecessor_stage = (
+        predecessor_official
+        if canonical == "capture-official"
+        else predecessor_classification
+    )
+    if stage_payload.get("predecessor_package_digest") != predecessor_stage.get(
+        "package_digest"
+    ):
+        raise ConfigurationError("导入阶段未绑定前序阶段 package digest。")
+    projected = dict(predecessor_stage)
+    for field in (
+        "schema_version",
+        "stage",
+        "campaign_id",
+        "campaign_mode",
+        "campaign_purpose",
+        "candidate_purpose",
+        "campaign_manifest_sha256",
+        "sealed_at_utc",
+        "package_digest",
+        "status",
+        "predecessor_import",
+        "predecessor_package_digest",
+    ):
+        projected[field] = stage_payload[field]
+    if canonical == "capture-official":
+        projected["surface"] = stage_payload["surface"]
+    else:
+        for field in (
+            *_CLASSIFICATION_APPROVAL_FIELDS,
+            "joint_manifest_sha256",
+            "baseline_rule_count",
+            "target_rule_count",
+            "migration",
+            "source_diff_sha256",
+            "official_diff_sha256",
+        ):
+            projected[field] = stage_payload[field]
+    _validate_stage_contract(projected)
+    return projected
+
+
 def _load_stage_result(
     campaign_dir: Path,
     stage: str,
     candidate_id: str | None = None,
+    *,
+    _import_chain: frozenset[Path] | None = None,
 ) -> dict[str, Any]:
     campaign_manifest = _require_formal_campaign(campaign_dir)
     canonical, path = _stage_path(campaign_dir, stage, candidate_id)
@@ -3838,6 +4610,14 @@ def _load_stage_result(
     if payload.get("candidate_purpose") != expected_candidate_purpose:
         raise ConfigurationError(f"{canonical} candidate purpose 与 Campaign 不一致。")
     _validate_stage_contract(payload)
+    if payload.get("predecessor_import") is not None:
+        return _validate_predecessor_import_receipt(
+            campaign_dir,
+            campaign_manifest,
+            payload,
+            canonical,
+            _import_chain or frozenset(),
+        )
     if canonical in {"capture-official", "capture-candidate"}:
         _verify_campaign_binding(campaign_dir, payload.get("attempt"), "抓包 attempt")
         _verify_campaign_binding(
@@ -8461,11 +9241,15 @@ def compare_campaign(campaign_dir: Path, candidate_id: str) -> dict[str, Any]:
         source_tree_sha256=str(candidate_identity.get("source_tree_sha256", "")),
         candidate_purpose=str(candidate_identity.get("candidate_purpose", "")),
     )
-    _validate_capture_job_results(
-        official_jobs,
-        official.get("results"),
-        phase="official",
-    )
+    # 后继 Campaign 的官方结果仍属于前序 Campaign 的原始执行坐标；导入门禁已用
+    # 前序 ID 和冻结场景逐项重放 execution_sha256。这里不能把它伪装成新 ID 下执行，
+    # 只继续用同一场景／规则集合计算覆盖。
+    if official.get("predecessor_import") is None:
+        _validate_capture_job_results(
+            official_jobs,
+            official.get("results"),
+            phase="official",
+        )
     _validate_capture_job_results(
         candidate_jobs,
         candidate.get("results"),
@@ -9724,6 +10508,7 @@ def accept_campaign(
 def _normalize_legacy_argv(argv: list[str]) -> tuple[list[str], str | None]:
     commands = {
         "plan",
+        "successor",
         "capture-official",
         "classify",
         "prepare-profile",
@@ -9905,6 +10690,9 @@ def main(argv: list[str] | None = None) -> int:
                 "required_rule_count": len(manifest["required_rules"]),
                 "job_count": len(manifest["jobs"]),
             }
+            return_code = 0
+        elif command == "successor":
+            result = create_successor_campaign(arguments)
             return_code = 0
         elif command == "capture-official":
             if arguments.capture_action == "run":

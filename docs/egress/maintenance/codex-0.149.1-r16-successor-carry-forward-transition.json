@@ -1,0 +1,147 @@
+{
+  "schema_version": "official-client-codex-0.149.1-r16-successor-carry-forward-transition/v1",
+  "issued_at_utc": "2026-08-27T15:48:27Z",
+  "base_commit": "972c7e6e3fd2e9577cb8d1a3e7660b776d8a6ecd",
+  "scope": "codex-0.149.1-r16-successor-carry-forward",
+  "framework_stage": "VC-3/VC-4/SAME-VERSION-SUCCESSOR",
+  "predecessor_transition": {
+    "path": "docs/egress/maintenance/codex-0.149.1-r15-formal-classification-transition.json",
+    "file_sha256": "206b3a7e6e25bf408d6b3c4fbdbaf6e420d1cf500cb132a8e830d5163a274048",
+    "identity_sha256": "79996daa098909ace8b2332fd6c0bb5803087ff2585e6c482ae6a1ae7ac8ee36"
+  },
+  "carry_forward_contract": {
+    "reason": "candidate_runtime_identity_correction",
+    "official_recapture_required": false,
+    "classification_reapproval_required": false,
+    "candidate_recapture_required": true,
+    "kilo_revalidation_required": true,
+    "replay_on": [
+      "accept",
+      "compare",
+      "status"
+    ],
+    "replayed_facts": [
+      "approved_classification_five_files",
+      "official_evidence_inventory",
+      "official_security_gate",
+      "official_stage_seal",
+      "predecessor_campaign_manifest"
+    ]
+  },
+  "safety": {
+    "historical_artifacts_overwritten": false,
+    "historical_receipts_modified": false,
+    "network_configuration_changed": false,
+    "deployment_performed": false,
+    "production_selector_changed": false,
+    "production_activated": false,
+    "vircs_accessed": false
+  },
+  "path_set_sha256": "d824026552388d41c4f2b4115d575fc5eb4040bab4b4520331b00ca504e2a15e",
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/codex_01491_r15_formal_classification_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "3de301e41adb26edd5eaf41cbdfd620dddcb88af916f6adb788178dbf25a47d8"
+      ],
+      "to_sha256": "76620fd13186d476e38908b57542ec1cb5d2b00dda11cfa252bf761d47a28789",
+      "reason": "把 r16 精确后继边接入 Go 侧 r15 校验和可达摘要链。"
+    },
+    {
+      "path": "backend/internal/officialegress/codex_01491_r16_successor_carry_forward_transition_test.go",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "4a54523ce90d483372bb63917368dd60ff24e10023939aac9a643e762c5f7d33",
+      "reason": "新增 Go 侧 r16 身份、承接合同、安全边界、文件闭集和摘要后继门禁。"
+    },
+    {
+      "path": "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "a4ef0596a4026c8b914dfea4aa45fc0fd542000e44d84b7960e3a3ce8e86a168"
+      ],
+      "to_sha256": "77e2222cf79f8c8ef44236cb4427aceac3d557ab03d4996eea9506f8c8baf724",
+      "reason": "补充同版本后继 Campaign 的适用边界、命令和逐次重放要求。"
+    },
+    {
+      "path": "tools/official_client_capture/codex_upgrade.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "7a7dacfd26698136ef8b8714be9122077cb7728bc8e8a5907c4c6fe96c485754"
+      ],
+      "to_sha256": "bd2dd521f2fa5bdd4c5fe45a099b91d658067269a31a2443c3caa2ef3528856f",
+      "reason": "新增失败关闭的 successor 命令、前序导入收据和官方／分类事实逐次重放。"
+    },
+    {
+      "path": "tools/official_client_capture/codex_upgrade_campaign.schema.json",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "b9d479b82068454e2df1a08b4b278004b34e1bfcbdd95772401abdef8dfbdf03"
+      ],
+      "to_sha256": "7bf49249f31861d2a38c1c2896539373671ede9e3b8671ed8bf1a80da4b2255a",
+      "reason": "允许 Campaign 核心清单冻结唯一、受管的前序 Campaign 绑定。"
+    },
+    {
+      "path": "tools/official_client_capture/codex_upgrade_predecessor_import.schema.json",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "b5ff29faedb4615259773aae5eaccebdf4fece72a96518c1e8d614d2fa89e595",
+      "reason": "新增前序 manifest、阶段 package、复制闭集和可选放弃 attempt 的不可变收据 Schema。"
+    },
+    {
+      "path": "tools/official_client_capture/codex_upgrade_stage_result.schema.json",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "e443ad697d8be1eef9e8536f66e316d2e79571527db33c27acaacfd52b357d02"
+      ],
+      "to_sha256": "fb7b63f3008850e24f19c15c02b9d990341aeae6b9a0da4ca36de24fb45fdb94",
+      "reason": "区分原生阶段与前序导入阶段，并绑定原阶段 package digest。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_candidate_gate_successor_transition.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "5239ccce15191c69626d417cc6757de05d9c8c5107968a09c1cd76461e1f2d5b"
+      ],
+      "to_sha256": "045ca94b8d603eaf12e3aca38296cde846b9bd055e5fb26c3b8d70dca3f81216",
+      "reason": "把 r16 后继摘要边接入候选门禁聚合图，使 DOC-PRE 可重放完整传递闭包。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_r15_formal_classification_transition.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "3c3372c7026e91faba633cef03596b6798144bcb53bbe8e54795f72e36a1ec29"
+      ],
+      "to_sha256": "fef932b7d48cfef64342e42771f90f0f8a719a50ec06c176d03f76ee2cd9fbbe",
+      "reason": "把 r16 精确后继边接入既有 0.149.1 maintenance 多跳链。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_r16_successor_carry_forward_transition.py",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "a99c054177c6ca78198613ce1b0e3367cd9d24f4aed299cd6dc5e349411de00a",
+      "reason": "新增可独立重放 r16 身份、合同、安全边界和文件闭集的离线门禁。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_r4_catalog_successor_transition.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "6d2503f190421720bdefaeff3027f6759726ae87e51258e0bb3929017e422c45"
+      ],
+      "to_sha256": "11b74eb00698ed72b4d0c821875228a9acc4c7b0e08076c9118ee95175a48690",
+      "reason": "把 r16 精确后继边加入 maintenance 摘要图，使旧边可传递到当前工具摘要。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_upgrade.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "c8dfa5332dfb395f91e4e950dabbdcdf86270bf8a5e70b9ec671f122f0535f5a"
+      ],
+      "to_sha256": "bd6163617561ee3f9571889132554272bedb5ad726a6c1f0af82fe88e6106bf4",
+      "reason": "覆盖后继创建、漂移失败关闭以及 candidate compare／accept 全链重放。"
+    }
+  ],
+  "result": "successor_carry_forward_tooling_frozen",
+  "identity_sha256": "e06500248843fbe92b6fa6260c9317b4b3b4836fdb616b49c6e368ed01ca4037"
+}

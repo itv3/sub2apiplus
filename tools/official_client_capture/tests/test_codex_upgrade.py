@@ -1848,10 +1848,12 @@ class CodexUpgradeTest(unittest.TestCase):
         profile_digest: str | None = None,
         first_rule_status: str = "pass",
         first_rule_evidence_level: str = "full",
+        campaign_dir: Path | None = None,
+        official_evidence: Path | None = None,
     ) -> Path:
         assertions_path = root / f"{candidate_id}-assertions.json"
         selected_rules = rules[:-1] if omit_last else rules
-        campaign_dir = root / "campaign"
+        campaign_dir = campaign_dir or root / "campaign"
         manifest = codex_upgrade.load_campaign_manifest(campaign_dir)
         official = codex_upgrade._load_stage_result(
             campaign_dir, "capture-official"
@@ -1865,7 +1867,9 @@ class CodexUpgradeTest(unittest.TestCase):
         comparison = codex_upgrade._load_stage_result(
             campaign_dir, "compare", candidate_id
         )
-        official_evidence = root / "official-evidence" / "surface.json"
+        official_evidence = (
+            official_evidence or root / "official-evidence" / "surface.json"
+        )
         candidate_evidence = root / f"{candidate_id}-evidence" / "surface.json"
         official_relative = "official-evidence/surface.json"
         candidate_relative = f"{candidate_id}-evidence/surface.json"
@@ -2011,6 +2015,7 @@ class CodexUpgradeTest(unittest.TestCase):
             set(subparsers[0].choices),
             {
                 "plan",
+                "successor",
                 "capture-official",
                 "classify",
                 "prepare-profile",
@@ -2023,6 +2028,197 @@ class CodexUpgradeTest(unittest.TestCase):
                 "resume",
             },
         )
+
+    def test_successor_carries_forward_official_and_classification_read_only(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            predecessor_dir, predecessor_manifest, _ = (
+                self._create_classified_campaign(root / "predecessor")
+            )
+            predecessor_official = codex_upgrade._load_stage_result(
+                predecessor_dir, "capture-official"
+            )
+            predecessor_classification = codex_upgrade._load_stage_result(
+                predecessor_dir, "classify"
+            )
+            successor_dir = root / "successor"
+            return_code, stdout, stderr = self._run_main(
+                [
+                    "successor",
+                    "--predecessor-campaign-dir",
+                    str(predecessor_dir),
+                    "--campaign-dir",
+                    str(successor_dir),
+                    "--campaign-id",
+                    "upgrade-0146-successor",
+                    "--reason",
+                    "candidate_runtime_identity_correction",
+                ]
+            )
+            self.assertEqual(return_code, 0, stderr)
+            result = json.loads(stdout)
+            self.assertEqual(result["status"], "profile_approved")
+            self.assertFalse(result["official_recapture_required"])
+
+            successor_manifest = codex_upgrade.load_campaign_manifest(successor_dir)
+            self.assertEqual(
+                successor_manifest["predecessor"]["campaign_id"],
+                predecessor_manifest["campaign_id"],
+            )
+            self.assertEqual(
+                successor_manifest["official_identity"],
+                predecessor_manifest["official_identity"],
+            )
+            stored_official = json.loads(
+                (successor_dir / "official" / "result.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertIn("predecessor_import", stored_official)
+            self.assertNotIn("attempt", stored_official)
+
+            official = codex_upgrade._load_stage_result(
+                successor_dir, "capture-official"
+            )
+            classification = codex_upgrade._load_stage_result(
+                successor_dir, "classify"
+            )
+            self.assertEqual(official["identity"], predecessor_official["identity"])
+            self.assertEqual(
+                official["evidence_inventory"],
+                predecessor_official["evidence_inventory"],
+            )
+            self.assertNotEqual(
+                official["package_digest"],
+                predecessor_official["package_digest"],
+            )
+            self.assertEqual(
+                classification["joint_manifest_sha256"],
+                predecessor_classification["joint_manifest_sha256"],
+            )
+            self.assertNotEqual(
+                classification["package_digest"],
+                predecessor_classification["package_digest"],
+            )
+            self.assertFalse((successor_dir / "official" / "attempts").exists())
+
+    def test_successor_replays_predecessor_through_compare_and_accept(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            predecessor_root = root / "predecessor"
+            predecessor_dir, _, rules = self._create_classified_campaign(
+                predecessor_root
+            )
+            successor_dir = root / "campaign"
+            return_code, _, stderr = self._run_main(
+                [
+                    "successor",
+                    "--predecessor-campaign-dir",
+                    str(predecessor_dir),
+                    "--campaign-dir",
+                    str(successor_dir),
+                    "--campaign-id",
+                    "upgrade-0146-successor-accept",
+                    "--reason",
+                    "candidate_runtime_identity_correction",
+                ]
+            )
+            self.assertEqual(return_code, 0, stderr)
+            _, identity = self._seal_candidate_stage(root, successor_dir)
+            comparison = codex_upgrade.compare_campaign(
+                successor_dir, "candidate-a"
+            )
+            self.assertTrue(comparison["equal"])
+            assertions = self._write_assertions(
+                root,
+                rules,
+                identity,
+                campaign_dir=successor_dir,
+                official_evidence=(
+                    predecessor_root / "official-evidence" / "surface.json"
+                ),
+            )
+            with mock.patch.object(codex_upgrade, "_rerun_machine_assertion"):
+                acceptance = self._accept_campaign(
+                    root,
+                    successor_dir,
+                    "candidate-a",
+                    assertions,
+                )
+            self.assertTrue(acceptance["accepted"])
+            self.assertEqual(
+                codex_upgrade.campaign_status(
+                    successor_dir, "candidate-a"
+                )["status"],
+                "ready",
+            )
+
+    def test_successor_replay_fails_closed_on_local_or_predecessor_drift(
+        self,
+    ) -> None:
+        for drift_side in ("successor", "predecessor"):
+            with self.subTest(drift_side=drift_side), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                predecessor_dir, _, _ = self._create_classified_campaign(
+                    root / "predecessor"
+                )
+                successor_dir = root / "successor"
+                return_code, _, stderr = self._run_main(
+                    [
+                        "successor",
+                        "--predecessor-campaign-dir",
+                        str(predecessor_dir),
+                        "--campaign-dir",
+                        str(successor_dir),
+                        "--campaign-id",
+                        f"upgrade-0146-successor-{drift_side}",
+                        "--reason",
+                        "candidate_runtime_identity_correction",
+                    ]
+                )
+                self.assertEqual(return_code, 0, stderr)
+                target = (
+                    successor_dir / "classification" / "approved" / "profile.json"
+                    if drift_side == "successor"
+                    else predecessor_dir / "official" / "surface.json"
+                )
+                target.write_bytes(target.read_bytes() + b"\n")
+                with self.assertRaises(codex_upgrade.ConfigurationError):
+                    codex_upgrade.campaign_status(successor_dir)
+
+    def test_successor_requires_new_id_and_paired_abandoned_attempt_coordinates(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            predecessor_dir, predecessor_manifest, _ = (
+                self._create_classified_campaign(root / "predecessor")
+            )
+            base = [
+                "successor",
+                "--predecessor-campaign-dir",
+                str(predecessor_dir),
+                "--campaign-dir",
+                str(root / "successor"),
+                "--campaign-id",
+                predecessor_manifest["campaign_id"],
+                "--reason",
+                "candidate_runtime_identity_correction",
+            ]
+            return_code, _, stderr = self._run_main(base)
+            self.assertEqual(return_code, 1)
+            self.assertIn("新的 campaign-id", stderr)
+
+            paired = list(base)
+            paired[paired.index(predecessor_manifest["campaign_id"])] = (
+                "upgrade-0146-successor-paired"
+            )
+            paired.extend(["--predecessor-candidate-id", "candidate-a"])
+            return_code, _, stderr = self._run_main(paired)
+            self.assertEqual(return_code, 1)
+            self.assertIn("必须同时提供", stderr)
 
     def test_campaign_manifest_is_immutable_and_stage_is_write_once(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

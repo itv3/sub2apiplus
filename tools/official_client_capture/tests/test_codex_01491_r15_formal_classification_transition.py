@@ -11,6 +11,10 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from tools.official_client_capture.tests.test_codex_01491_r16_successor_carry_forward_transition import (
+    r16_supersedes,
+)
+
 
 ROOT = Path(__file__).resolve().parents[3]
 BASE_COMMIT = "165666267c07bafff6a2c04077a82187e157968e"
@@ -260,7 +264,14 @@ def validate_transition(document: dict[str, Any]) -> None:
             )
             or current.is_symlink()
             or not current.is_file()
-            or sha256(current.read_bytes()) != entry["to_sha256"]
+            or (
+                sha256(current.read_bytes()) != entry["to_sha256"]
+                and not r16_supersedes(
+                    path,
+                    entry["to_sha256"],
+                    sha256(current.read_bytes()),
+                )
+            )
             or not isinstance(entry["reason"], str)
             or not entry["reason"].strip()
         ):
@@ -288,10 +299,15 @@ def r15_supersedes(
         document = load_validated_transition()
     except (OSError, TypeError, ValueError, json.JSONDecodeError):
         return False
+    if r16_supersedes(path, prior_digest, current_digest):
+        return True
     return any(
         entry["path"] == path
         and prior_digest in entry["predecessor_sha256s"]
-        and entry["to_sha256"] == current_digest
+        and (
+            entry["to_sha256"] == current_digest
+            or r16_supersedes(path, entry["to_sha256"], current_digest)
+        )
         for entry in document["transitions"]
     )
 

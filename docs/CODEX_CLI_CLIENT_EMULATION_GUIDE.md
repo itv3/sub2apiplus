@@ -1222,6 +1222,28 @@ Campaign、candidate 与 attempt 的规范身份边界以 Framework §3.3、§5.
 | 同 Campaign 新 candidate | Sub2API 源码树、测试树、构建 ID、部署版本、OCI digest、image ID 或 profile ID／digest 变化 |
 | 同 candidate 新 attempt | 冻结身份不变，仅因网络、配额或临时运行失败重试；新 attempt 不覆盖旧记录 |
 
+当同版本 Campaign 的官方阶段与五份分类清单已经完整封存，但 candidate 的冻结运行时身份、
+执行副本或环境恢复窗口错误时，使用 `successor` 建立后继 Campaign，不得重写旧 attempt，也不得
+把旧 candidate 的 Kilo 收据改绑到新 Campaign：
+
+~~~bash
+python3 tools/official_client_capture/codex_upgrade.py successor \
+  --predecessor-campaign-dir /absolute/path/to/predecessor \
+  --campaign-dir /absolute/path/to/new-campaign \
+  --campaign-id <new-id> \
+  --reason candidate_runtime_identity_correction \
+  --predecessor-candidate-id <old-candidate-id> \
+  --predecessor-attempt-id <old-attempt-id>
+~~~
+
+最后两项可同时省略；提供时必须成对绑定。该命令只逐字复制计划期 inputs／analysis、五份批准
+清单和规范化 official surface，并生成 `predecessor-import.json`。原始官方 evidence、attempt、
+inventory 与安全收据继续位于前序 Campaign，保持只读；后继的 `status`、`compare`、`accept`
+每次都从前序路径重放 Campaign manifest、官方 stage seal、证据 inventory／security、批准五件套
+及其联合摘要，任一路径、文件摘要、package digest 或原始证据漂移均失败关闭。后继 Campaign
+只能新跑 candidate 与第三方客户端验证；目标版本、官方身份、规则、场景、画像、断言或官方证据
+语义发生变化时不允许使用该入口，必须按版本 Campaign 重新执行相应阶段。
+
 采集、探针、relay、脱敏、收据生成、环境快照和编排等产出侧工具变化会改变证据字节，必须
 新建 Campaign。评估侧工具只有在显式白名单内才允许漂移，并须登记摘要、重放全部受影响门禁；
 新增或未分类工具默认属于产出侧。被校验的工具树必须就是实际执行的工具树。

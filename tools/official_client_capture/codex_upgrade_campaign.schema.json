@@ -72,6 +72,9 @@
     "tool_identity": {
       "$ref": "#/$defs/toolIdentity"
     },
+    "predecessor": {
+      "$ref": "#/$defs/predecessor"
+    },
     "inputs": {
       "$ref": "#/$defs/inputs"
     },
@@ -187,6 +190,30 @@
           "type": "null"
         }
       ]
+    },
+    "predecessor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "campaign_dir",
+        "campaign_id",
+        "campaign_manifest_sha256",
+        "reason"
+      ],
+      "properties": {
+        "campaign_dir": {
+          "$ref": "#/$defs/absolutePath"
+        },
+        "campaign_id": {
+          "$ref": "#/$defs/safeId"
+        },
+        "campaign_manifest_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "reason": {
+          "const": "candidate_runtime_identity_correction"
+        }
+      }
     },
     "sourceIdentity": {
       "type": "object",

@@ -13,6 +13,9 @@ from typing import Any
 from tools.official_client_capture.tests.test_codex_01491_r15_formal_classification_transition import (
     r15_supersedes,
 )
+from tools.official_client_capture.tests.test_codex_01491_r16_successor_carry_forward_transition import (
+    load_validated_transition as load_r16_successor_transition,
+)
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -434,11 +437,12 @@ def transition_chain_supersedes(
         validate_transition(document)
         h1_document = r9_recovery.load_h1_transition()
         recovery_document = r9_recovery.load_validated_transition()
+        r16_document = load_r16_successor_transition()
     except (OSError, ValueError, json.JSONDecodeError):
         return False
 
     edges: dict[str, list[str]] = {}
-    for receipt in (document, h1_document, recovery_document):
+    for receipt in (document, h1_document, recovery_document, r16_document):
         for entry in receipt["transitions"]:
             if entry.get("path") != path:
                 continue
