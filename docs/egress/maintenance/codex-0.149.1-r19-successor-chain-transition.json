@@ -1,0 +1,105 @@
+{
+  "schema_version": "official-client-codex-0.149.1-r19-successor-chain-transition/v1",
+  "issued_at_utc": "2026-08-27T23:08:22Z",
+  "base_commit": "0be1e9c115fc5da8ef8b216ed3b8b0521ace5924",
+  "scope": "codex-0.149.1-r19-successor-chain",
+  "framework_stage": "VC-3/VC-4/SAME-VERSION-SUCCESSOR",
+  "predecessor_transition": {
+    "path": "docs/egress/maintenance/codex-0.149.1-r18-successor-account-transition.json",
+    "file_sha256": "0d3fe228ab2fe418e07a31e2f60e8fcf0a72d23b3b2033e6b248117d694de361",
+    "identity_sha256": "39ab82fad57031021db3dd7e4a8dfb355317935cd4aac069b17554df593bdef8"
+  },
+  "successor_chain_contract": {
+    "reason": "successor_chain_origin_resolution",
+    "official_recapture_required": false,
+    "classification_reapproval_required": false,
+    "candidate_recapture_required": true,
+    "kilo_revalidation_required": true,
+    "recursive_predecessor_replay_required": true,
+    "original_attempt_directory_required": true,
+    "relative_path_reinterpretation_allowed": false,
+    "account_transition_contract_preserved": true
+  },
+  "safety": {
+    "historical_artifacts_overwritten": false,
+    "historical_receipts_modified": false,
+    "network_configuration_changed": false,
+    "deployment_performed": false,
+    "production_selector_changed": false,
+    "production_activated": false,
+    "vircs_accessed": false
+  },
+  "path_set_sha256": "4a64746568a55016e1c08c96a3cb1c90a193e1eaf6b488531c8a26ec1df9810c",
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/codex_01491_r18_successor_account_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "dca86ce2b3ae9804b012a8d41bf1efe00e8e57ab1a07152e27f03a99456cf6eb"
+      ],
+      "to_sha256": "18bc4ea3ca7ecd44659a4d869cbc8d05b047b4d3d6e2d0ee9a68cbdc5ee5d5b5",
+      "reason": "把 r19 精确后继边接入 Go 侧 r18 校验和传递摘要链。"
+    },
+    {
+      "path": "backend/internal/officialegress/codex_01491_r19_successor_chain_transition_test.go",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "30095fe495f0670bd034040d025016212f13d5b6bf3601ba88dd914efbdb8930",
+      "reason": "新增 Go 侧 r19 身份、递归路径合同、安全边界和文件闭集门禁。"
+    },
+    {
+      "path": "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "e45e0e5912e305af46e1d1a10dbd65eebc02b1e28dabac53e61a68b43daf1dc5"
+      ],
+      "to_sha256": "532a17b7f277a2406d1ea0ac110348dd1b466becca1e9cf90eccedc55bcb9183",
+      "reason": "明确多级后继必须在最初官方 attempt 的原始绝对目录递归重放。"
+    },
+    {
+      "path": "tools/official_client_capture/codex_upgrade.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "db90848958f061cb8140ba54b0adc62aaa3875c7485159e0c5d4c19747b9a2ec"
+      ],
+      "to_sha256": "8b1a971f4e898e5e68a970c4269c483faa8f4f861bd65d0e649f84d9434509cf",
+      "reason": "修复 import 前序上游相对 attempt 路径被错误拼接到中间 Campaign 的问题。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_candidate_gate_successor_transition.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "797fcab0be3e177ac4558e79fabe578658cfba7d8f4930063f656a99b1ad4bfb"
+      ],
+      "to_sha256": "5750ef065b8c07fdcbdaa3824257d6cf95086d566cfcd9c2f306f7ce5a6a7d0d",
+      "reason": "把 r19 精确后继边加入 maintenance 摘要图。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_r18_successor_account_transition.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "040643dd72e81a7e594db9a75495bda6c3d55cbb76b7bc9e38b7546efa9f98f7"
+      ],
+      "to_sha256": "5c1fef74903f96d6e42aaed7384ea90041262800beddb2531b2fc8233e830072",
+      "reason": "把 r19 精确后继边接入 Python 侧 r18 校验和传递摘要链。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_r19_successor_chain_transition.py",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "9e5cff827ab094b835aedcd7acdf32a41388e4250b3127966021c6afc3824d4a",
+      "reason": "新增可独立重放的 r19 多级后继 transition 门禁。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_upgrade.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "992d07d3aad5327ae4cc399ede9746dbd4ee9f7d2e8f9269b0fe8fe78c33b471"
+      ],
+      "to_sha256": "b00a94ec4102cb7d1119010e9ff8e490c131ccede9bf6977478d7a04b1b215f3",
+      "reason": "新增二级 successor 在原始 attempt 目录递归重放的回归覆盖。"
+    }
+  ],
+  "result": "successor_chain_replay_tooling_frozen",
+  "identity_sha256": "6bf51f5a27d288833ba862ef6f91782aba17a2d6e6afdc8da200678b240ef14e"
+}

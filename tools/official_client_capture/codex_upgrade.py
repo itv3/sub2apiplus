@@ -4337,6 +4337,52 @@ def _successor_copy_expectations(
     return expected
 
 
+def _validate_direct_predecessor_official_attempt(
+    predecessor_dir: Path,
+    predecessor_official: dict[str, Any],
+) -> None:
+    """重放直接前序的官方 attempt 与原子预约。
+
+    若前序 official 自身来自更早 Campaign，调用方已通过递归
+    ``_load_stage_result`` 在其原始绝对目录完成相同校验；不得把投影结果中保留的
+    上游相对 attempt 路径再次拼到当前前序目录。
+    """
+
+    attempt_reference = predecessor_official.get("attempt")
+    _require_file_binding(attempt_reference, "前序官方 attempt")
+    attempt_path = _campaign_file(predecessor_dir, attempt_reference["path"])
+    attempt_root, attempt = _load_capture_attempt(
+        predecessor_dir,
+        "official",
+        None,
+        attempt_path.parent.name,
+    )
+    reservation = _load_capture_reservation(
+        predecessor_dir,
+        attempt_root,
+        phase="official",
+        candidate_id=None,
+    )
+    planned = {
+        item["id"]: item
+        for item in reservation["planned_jobs"]
+        if item["required"]
+    }
+    completed = {
+        item.get("id"): item
+        for item in predecessor_official.get("results", [])
+        if isinstance(item, dict)
+    }
+    if any(
+        job_id not in completed
+        or completed[job_id].get("status") != "complete"
+        or completed[job_id].get("execution_sha256")
+        != planned_job["execution_sha256"]
+        for job_id, planned_job in planned.items()
+    ) or attempt.get("results") != predecessor_official.get("results"):
+        raise ConfigurationError("前序官方任务未按原子预约完整执行或结果漂移。")
+
+
 def _validate_predecessor_import_receipt(
     campaign_dir: Path,
     manifest: dict[str, Any],
@@ -4604,42 +4650,13 @@ def _validate_predecessor_import_receipt(
         if abandoned != expected_abandoned:
             raise ConfigurationError("前序放弃 attempt 身份或摘要漂移。")
 
-    # 前序结果必须按其原始预约坐标重放。不能用后继路径重新展开 job：同一物理
-    # Campaign 可能经 /var 与 /private/var 等等价路径访问，路径规范化会改变
-    # evidence_root，从而制造并不存在的 execution_sha256 漂移。
-    attempt_reference = predecessor_official.get("attempt")
-    _require_file_binding(attempt_reference, "前序官方 attempt")
-    attempt_path = _campaign_file(predecessor_dir, attempt_reference["path"])
-    attempt_root, attempt = _load_capture_attempt(
-        predecessor_dir,
-        "official",
-        None,
-        attempt_path.parent.name,
-    )
-    reservation = _load_capture_reservation(
-        predecessor_dir,
-        attempt_root,
-        phase="official",
-        candidate_id=None,
-    )
-    planned = {
-        item["id"]: item
-        for item in reservation["planned_jobs"]
-        if item["required"]
-    }
-    completed = {
-        item.get("id"): item
-        for item in predecessor_official.get("results", [])
-        if isinstance(item, dict)
-    }
-    if any(
-        job_id not in completed
-        or completed[job_id].get("status") != "complete"
-        or completed[job_id].get("execution_sha256")
-        != planned_job["execution_sha256"]
-        for job_id, planned_job in planned.items()
-    ) or attempt.get("results") != predecessor_official.get("results"):
-        raise ConfigurationError("前序官方任务未按原子预约完整执行或结果漂移。")
+    # 直接前序必须按其原始预约坐标重放；import 前序已经在递归加载时于自身
+    # 原始绝对目录完成相同校验，不能把上游相对路径重新解释到当前目录。
+    if predecessor_official.get("predecessor_import") is None:
+        _validate_direct_predecessor_official_attempt(
+            predecessor_dir,
+            predecessor_official,
+        )
 
     predecessor_stage = (
         predecessor_official

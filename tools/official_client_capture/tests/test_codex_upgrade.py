@@ -2300,6 +2300,60 @@ class CodexUpgradeTest(unittest.TestCase):
                 )
             replay.assert_not_called()
 
+    def test_successor_chain_replays_original_attempt_in_original_directory(
+        self,
+    ) -> None:
+        """二级后继递归重放最初 attempt，不按中间 Campaign 误解相对路径。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            predecessor_dir, _, _ = self._create_classified_campaign(
+                root / "predecessor"
+            )
+            first_successor = root / "successor-one"
+            second_successor = root / "successor-two"
+            for source, target, campaign_id, account_id in (
+                (
+                    predecessor_dir,
+                    first_successor,
+                    "upgrade-0146-successor-level-one",
+                    "90",
+                ),
+                (
+                    first_successor,
+                    second_successor,
+                    "upgrade-0146-successor-level-two",
+                    "91",
+                ),
+            ):
+                return_code, _, stderr = self._run_main(
+                    [
+                        "successor",
+                        "--predecessor-campaign-dir",
+                        str(source),
+                        "--campaign-dir",
+                        str(target),
+                        "--campaign-id",
+                        campaign_id,
+                        "--codex-account-id",
+                        account_id,
+                        "--reason",
+                        "candidate_runtime_identity_correction",
+                    ]
+                )
+                self.assertEqual(return_code, 0, stderr)
+
+            self.assertEqual(
+                codex_upgrade.campaign_status(second_successor)["status"],
+                "profile_approved",
+            )
+            self.assertEqual(
+                codex_upgrade.load_campaign_manifest(second_successor)[
+                    "configuration"
+                ]["codex_account_id"],
+                91,
+            )
+
     def test_successor_replay_fails_closed_on_local_or_predecessor_drift(
         self,
     ) -> None:

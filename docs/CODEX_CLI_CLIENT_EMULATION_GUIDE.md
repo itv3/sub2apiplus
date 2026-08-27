@@ -1244,7 +1244,8 @@ python3 tools/official_client_capture/codex_upgrade.py successor \
 清单和规范化 official surface，并生成 `predecessor-import.json`。原始官方 evidence、attempt、
 inventory 与安全收据继续位于前序 Campaign，保持只读；后继的 `status`、`compare`、`accept`
 每次都从前序路径重放 Campaign manifest、官方 stage seal、证据 inventory／security、批准五件套
-及其联合摘要，任一路径、文件摘要、package digest 或原始证据漂移均失败关闭。后继 Campaign
+及其联合摘要；多级后继必须递归回到最初官方 attempt 的原始绝对 Campaign 目录校验，禁止把上游
+相对 attempt 路径重新解释到中间后继目录。任一路径、文件摘要、package digest 或原始证据漂移均失败关闭。后继 Campaign
 只能新跑 candidate 与第三方客户端验证；目标版本、官方身份、规则、场景、画像、断言或官方证据
 语义发生变化时不允许使用该入口，必须按版本 Campaign 重新执行相应阶段。
 
