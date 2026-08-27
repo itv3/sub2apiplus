@@ -286,15 +286,26 @@ def transition_supersedes(
     prior_digest: str,
     current_digest: str,
 ) -> bool:
-    """只承认 r13 收据登记的精确追加边。"""
+    """按登记路径图重放 r13 及其后继的精确摘要链。"""
 
-    return any(
-        entry.get("path") == path
-        and entry.get("to_sha256") == current_digest
-        and prior_digest in entry.get("predecessor_sha256s", [])
-        for entry in document.get("transitions", [])
-        if isinstance(entry, dict)
-    )
+    edges: dict[str, list[str]] = {}
+    for entry in document.get("transitions", []):
+        if not isinstance(entry, dict) or entry.get("path") != path:
+            continue
+        for predecessor in entry.get("predecessor_sha256s", []):
+            edges.setdefault(predecessor, []).append(entry.get("to_sha256", ""))
+
+    queue = [prior_digest]
+    visited: set[str] = set()
+    while queue:
+        digest = queue.pop(0)
+        if digest == current_digest:
+            return True
+        if digest in visited:
+            continue
+        visited.add(digest)
+        queue.extend(edges.get(digest, []))
+    return False
 
 
 def validate_transition(document: dict[str, Any]) -> None:
@@ -421,13 +432,25 @@ def validate_transition(document: dict[str, Any]) -> None:
             )
         )
         current = ROOT / path_value
+        current_digest = (
+            sha256(current.read_bytes())
+            if current.is_file() and not current.is_symlink()
+            else ""
+        )
         if (
             path_value.startswith(FORBIDDEN_PREFIXES)
             or entry["change"] != expected_change
             or entry["predecessor_sha256s"] != expected_predecessors
             or current.is_symlink()
             or not current.is_file()
-            or entry["to_sha256"] != sha256(current.read_bytes())
+            or (
+                entry["to_sha256"] != current_digest
+                and not r14_model_prewarm_supersedes(
+                    path_value,
+                    entry["to_sha256"],
+                    current_digest,
+                )
+            )
             or not isinstance(entry["reason"], str)
             or not entry["reason"].strip()
         ):
@@ -447,11 +470,45 @@ def validate_transition(document: dict[str, Any]) -> None:
 
 @lru_cache(maxsize=1)
 def load_validated_transition() -> dict[str, Any]:
-    """读取并完整重放 r13 transition。"""
+    """读取并完整重放 r13 与 r14 后继 transition。"""
 
     document = load_transition()
     validate_transition(document)
-    return document
+    from tools.official_client_capture.tests import (
+        test_codex_01491_r14_model_prewarm_transition as r14_prewarm,
+    )
+
+    successor = r14_prewarm.load_validated_transition()
+    return {
+        **document,
+        "transitions": [
+            *document["transitions"],
+            *successor["transitions"],
+        ],
+    }
+
+
+def r14_model_prewarm_supersedes(
+    path: str,
+    prior_digest: str,
+    current_digest: str,
+) -> bool:
+    """延迟加载 r14，避免维护链模块初始化形成循环依赖。"""
+
+    from tools.official_client_capture.tests import (
+        test_codex_01491_r14_model_prewarm_transition as r14_prewarm,
+    )
+
+    try:
+        successor = r14_prewarm.load_validated_transition()
+    except (OSError, RuntimeError, ValueError, json.JSONDecodeError):
+        return False
+    return r14_prewarm.transition_supersedes(
+        successor,
+        path,
+        prior_digest,
+        current_digest,
+    )
 
 
 class Codex01491R13CandidateCoordinateTransitionTest(unittest.TestCase):

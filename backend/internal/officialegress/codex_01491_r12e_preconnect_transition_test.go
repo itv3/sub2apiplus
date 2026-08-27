@@ -219,11 +219,28 @@ func codex01491R12EPreconnectSupersedes(
 	if err != nil {
 		return false
 	}
+	edges := make(map[string][]string)
 	for _, entry := range receipt.Transitions {
-		if entry.Path == path && entry.ToSHA256 == currentDigest &&
-			slices.Contains(entry.PredecessorSHA256s, priorDigest) {
+		if entry.Path != path {
+			continue
+		}
+		for _, predecessor := range entry.PredecessorSHA256s {
+			edges[predecessor] = append(edges[predecessor], entry.ToSHA256)
+		}
+	}
+	queue := []string{priorDigest}
+	visited := make(map[string]bool)
+	for len(queue) > 0 {
+		digest := queue[0]
+		queue = queue[1:]
+		if digest == currentDigest {
 			return true
 		}
+		if visited[digest] {
+			continue
+		}
+		visited[digest] = true
+		queue = append(queue, edges[digest]...)
 	}
 	return false
 }

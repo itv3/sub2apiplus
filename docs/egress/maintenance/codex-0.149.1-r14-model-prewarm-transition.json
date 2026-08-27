@@ -1,0 +1,309 @@
+{
+  "schema_version": "official-client-codex-0.149.1-r14-model-prewarm-transition/v1",
+  "issued_at_utc": "2026-08-27T10:29:42Z",
+  "base_commit": "e697ef456ddc9cd54bac79f4126af938ab445be5",
+  "scope": "codex-0.149.1-r14-model-prewarm",
+  "framework_stage": "VC-4/P0-R14-MODEL-PREWARM",
+  "predecessor_transition": {
+    "path": "docs/egress/maintenance/codex-0.149.1-r13-candidate-coordinate-transition.json",
+    "file_sha256": "ff6eccbc50f80aac1e3956ff4e6de1df7bd99740d53b896ecc28bcc1e86ad393",
+    "identity_sha256": "5a0fca1636910ab01d308585de17ba39a132e5e1f4efdf8633222dbe11267a8c"
+  },
+  "boundaries": {
+    "api_key_ref": "#4",
+    "capture_account_ref": "#21",
+    "capture_account_20_allowed": false,
+    "capture_account_20_used": false,
+    "service_private_ip": "172.25.0.3",
+    "service_default_gateway": "172.25.0.1",
+    "capture_private_ip": "172.30.0.10",
+    "capture_default_gateway": "172.30.0.1",
+    "required_public_egress": "179.255.100.158",
+    "docker_network_changed": false,
+    "route_nat_iptables_changed": false,
+    "proxy_or_compose_network_changed": false,
+    "production_selector_changed": false,
+    "historical_evidence_preserved_read_only": true,
+    "vircs_accessed": false
+  },
+  "formal_failure": {
+    "campaign_directory": "/root/oauth-capture/campaigns/c1491-r13-f",
+    "attempt_id": "20260827T081742Z-3239096bbd87dada",
+    "official_job_count": 28,
+    "completed_job_count": 27,
+    "failed_job_ids": [
+      "official-core"
+    ],
+    "primary_capture_complete": true,
+    "supplement_attempt_count": 3,
+    "missing_artifact": "mitm/codex-http/s1/models-http.jsonl",
+    "failed_attempt_preserved_read_only": true,
+    "reuse_forbidden": true
+  },
+  "diagnosis": {
+    "debug_models_sent_proxy_request": false,
+    "custom_provider_preserved_codex_backend_identity": false,
+    "standalone_model_list_triggered_online_refresh": false,
+    "app_server_startup_worker_triggers_online_refresh": true,
+    "thread_start_required_for_model_refresh": false,
+    "thread_start_schedules_unrelated_responses_websocket_prewarm": true,
+    "dmit_tls_slow_path_exposed_five_second_client_budget": true,
+    "account_or_quota_root_cause": false,
+    "network_configuration_root_cause": false,
+    "complete_official_recapture_required": false,
+    "new_tool_identity_requires_new_campaign": true
+  },
+  "repair_facts": {
+    "source_commits": [
+      "85478e0e99f2456e1da896264cc8706b24001bf1",
+      "861fa731f84e0779f606f8f666aaea6a05caef48"
+    ],
+    "source_paths": [
+      "tools/official_client_capture/codex_upgrade_scenarios_0_149_1.json",
+      "tools/official_client_capture/drive_codex_model_catalog.py",
+      "tools/official_client_capture/run_official_relay_scenario.sh",
+      "tools/official_client_capture/tests/test_model_catalog_prewarm.py"
+    ],
+    "builtin_openai_provider_preserved": true,
+    "app_server_initialize_sent": true,
+    "thread_start_sent": false,
+    "turn_start_sent": false,
+    "responses_websocket_prewarm_sent": false,
+    "startup_models_refresh_worker_kept_alive": true,
+    "plugins_and_apps_disabled": true,
+    "home_equals_codex_home": true,
+    "per_attempt_timeout_seconds": 20,
+    "maximum_attempt_count": 3,
+    "formal_attempts_use_independent_temporary_mitm_roots": true,
+    "only_validated_models_http_promoted": true,
+    "atomic_no_overwrite_install": true,
+    "temporary_misc_and_lifecycle_not_promoted": true,
+    "request_or_response_bytes_modified": false
+  },
+  "timing": [
+    {
+      "step": "原 r13 Formal 官方场景运行并冻结失败 attempt",
+      "started_at_utc": "2026-08-27T08:17:42Z",
+      "finished_at_utc": "2026-08-27T09:17:00Z",
+      "duration_seconds": 3557.332,
+      "result": "failed_official_core_only_27_of_28_complete"
+    },
+    {
+      "step": "在线模型目录入口与 provider／app-server／turn／thread 行为诊断",
+      "started_at_utc": "2026-08-27T09:19:40Z",
+      "finished_at_utc": "2026-08-27T09:31:40Z",
+      "duration_seconds": 719.588,
+      "result": "passed_startup_worker_identified"
+    },
+    {
+      "step": "首次 app-server 线程初始化补采修复提交落点",
+      "started_at_utc": "2026-08-27T09:45:15Z",
+      "finished_at_utc": "2026-08-27T09:45:15Z",
+      "duration_seconds": 0,
+      "result": "committed_85478e0e9"
+    },
+    {
+      "step": "ARM64 验证 thread/start 会启动无关 Responses WebSocket 预热",
+      "started_at_utc": "2026-08-27T09:53:18Z",
+      "finished_at_utc": "2026-08-27T09:55:13Z",
+      "duration_seconds": 114.857,
+      "result": "failed_unrelated_responses_websocket_observed"
+    },
+    {
+      "step": "ARM64 initialize-only 模型目录刷新根因验证",
+      "started_at_utc": "2026-08-27T09:58:58Z",
+      "finished_at_utc": "2026-08-27T09:59:18Z",
+      "duration_seconds": 19.406,
+      "result": "passed_second_attempt_models_only"
+    },
+    {
+      "step": "隔离模型刷新与 thread／Responses 预热的最终修复提交落点",
+      "started_at_utc": "2026-08-27T10:01:30Z",
+      "finished_at_utc": "2026-08-27T10:01:30Z",
+      "duration_seconds": 0,
+      "result": "committed_861fa731f"
+    },
+    {
+      "step": "ARM64 使用正式驱动执行最终模型目录验证",
+      "started_at_utc": "2026-08-27T10:02:38Z",
+      "finished_at_utc": "2026-08-27T10:02:57Z",
+      "duration_seconds": 19.106,
+      "result": "passed_second_attempt_9_models_1_protocol_0_responses_0_ws"
+    },
+    {
+      "step": "r14 三端 maintenance transition 实现、摘要冻结与 r4→r14 级联修复",
+      "started_at_utc": "2026-08-27T10:05:46Z",
+      "finished_at_utc": "2026-08-27T10:27:40Z",
+      "duration_seconds": 1314,
+      "result": "passed_python_26_officialegress_and_service_r4_r14"
+    },
+    {
+      "step": "抓包工具全量门禁",
+      "started_at_utc": "2026-08-27T10:27:41Z",
+      "finished_at_utc": "2026-08-27T10:28:05Z",
+      "duration_seconds": 24.062,
+      "result": "passed_1050_skipped_18"
+    },
+    {
+      "step": "0.147／0.149.1 双源码树完整 egress 规范门禁",
+      "started_at_utc": "2026-08-27T10:28:13Z",
+      "finished_at_utc": "2026-08-27T10:29:18Z",
+      "duration_seconds": 65.3,
+      "result": "passed_0_147_136_refs_140_anchors_0_149_1_139_refs_148_anchors"
+    }
+  ],
+  "path_set_sha256": "100031f86034a8cf4f25c5ad6d70435c5e960bab2de6bf4d26d4b247cd293348",
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/codex_01491_r12e_preconnect_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "0774e56498c6ea87146708a0e48568e448603045d04fe8bcec8b6c15ab729c25"
+      ],
+      "to_sha256": "b41a0e8eb13fff4695178bec1e6d32efd0c99429244e8415fa805691a79e616f",
+      "reason": "让 officialegress 的 r12e 后继判定精确遍历 r11c→r12e→r14 多跳摘要链。"
+    },
+    {
+      "path": "backend/internal/officialegress/codex_01491_r13_candidate_coordinate_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "2316818b0eb69f782fd60f23793afec9fe496a312a1e1b2a322add20680e7dc0"
+      ],
+      "to_sha256": "b0a1467075d66a2257b8970e155d43f0cc0472bbf282a7b7ad723aba6ba6de88",
+      "reason": "让 officialegress 的 r13 最新链追加 r14，并只承认已登记的精确后继边。"
+    },
+    {
+      "path": "backend/internal/officialegress/codex_01491_r14_model_prewarm_transition_test.go",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "c0f6614c7a007c37c28a6ac146daf8dee6fbfbd7b3fe28bd258777ad0ba58ac9",
+      "reason": "在 officialegress 入口独立重放 Formal 失败、模型刷新根因、ARM64 验证和安全闭集。"
+    },
+    {
+      "path": "backend/internal/service/codex_01491_r12e_preconnect_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "f9ded5a4bb97b1bba69ca4be82777a44423a6daf0b150eb8ddb1b0ab07538b48"
+      ],
+      "to_sha256": "4a63e683a31398e6d4236253c8ea6d8d78670bd4219b2a114ce6d89e7f48c81c",
+      "reason": "让 service 的 r12e 后继判定精确遍历 r11c→r12e→r14 多跳摘要链。"
+    },
+    {
+      "path": "backend/internal/service/codex_01491_r13_candidate_coordinate_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "655f1afbdd214575d393b0b8508dec3bf76d3434f5c77dca2a9c7841a5e7bbaf"
+      ],
+      "to_sha256": "65293b04327ab212fbc20b28294f25718af378a022e334ff231783a54d7a5bb2",
+      "reason": "让 service 的 r13 最新链追加 r14，并只承认已登记的精确后继边。"
+    },
+    {
+      "path": "backend/internal/service/codex_01491_r14_model_prewarm_transition_test.go",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "ec23dc46bdd44b6bb87597bdb96b7889abb2e800d42fdf630c7df11f9d09629c",
+      "reason": "在 service 入口以独立章节摘要重放同一 r14 后继收据。"
+    },
+    {
+      "path": "tools/official_client_capture/codex_upgrade_scenarios_0_149_1.json",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "f82d566c7f203db446110b7a9aca7cf9f5daaf9a0d4df769d0cefc12c95af553"
+      ],
+      "to_sha256": "3eb6a5fe0a2066c4e365330f362186bdd557ebd9594a640985cd26fcd508c0fc",
+      "reason": "把模型目录补采切到 initialize-only 驱动，并保留每轮独立失败关闭重试。"
+    },
+    {
+      "path": "tools/official_client_capture/drive_codex_model_catalog.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "579ce12a9cde1ba7d3bc3ed7d273c9dff8907998a05840890493ffa8be27aba5"
+      ],
+      "to_sha256": "0d7dc732143fcc7908c2f6c60cbd0228454a820a4663900d926a7755f83446ea",
+      "reason": "仅发送 app-server initialize 并等待 ModelsRefreshWorker，不触发 thread／turn 或 Responses 预热。"
+    },
+    {
+      "path": "tools/official_client_capture/run_official_relay_scenario.sh",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "c51daf313c5710659fbca0d22ebe5bb60a47c8d0181d448a966becae7ec8822a"
+      ],
+      "to_sha256": "f7fbe312381cc373332f0809ba23eeeecb4cbed6c63baaf33ac23333c1ed3e8c",
+      "reason": "为 Formal 模型目录补采提供独立临时 MITM 根、20 秒失败关闭和最多三轮重试。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_r12e_preconnect_transition.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "47d3b9a876c700ffb5f23fd276e8790e000af10fa7c8f845b51dd2234bb53e49"
+      ],
+      "to_sha256": "667f548d57fed426f10733b60fc54aac0696bd94b82f1a4e9b771ff84d9b39cc",
+      "reason": "让 Python r12e 后继判定精确遍历 r11c→r12e→r14 多跳摘要链。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_r13_candidate_coordinate_transition.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "0372fca217cbefd2c5dcfe9001e8583a23709a0b6ab04fab6c83119f328d002b"
+      ],
+      "to_sha256": "3a5f73e50d6f776d914884bf010ee65a49368f41c5ddd8bb88d4a87756ffef7a",
+      "reason": "让 Python r13 最新链追加并验证 r14 精确后继边。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_r14_model_prewarm_transition.py",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "9d965753e5479b042c10d357600177d56c16a21fa66ebc6977f55b7b281fbe51",
+      "reason": "独立重放账号网络边界、失败事实、根因、修复提交、ARM64 结果和文件闭集。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_model_catalog_prewarm.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "9501f7228b3c1176d76b33a9b0b13087a834a5b710fb79c74d7d6a1bd5cce015"
+      ],
+      "to_sha256": "55ef9c9aff721356d687b57e551fe2b9cf6c5978596decca62e2afee0f9e2610",
+      "reason": "冻结 initialize-only、三轮独立重试、原子补装以及禁止 Responses／WS 的行为。"
+    }
+  ],
+  "verification": {
+    "python_compile_passed": true,
+    "bash_syntax_passed": true,
+    "targeted_model_catalog_test_count": 14,
+    "targeted_upgrade_test_count": 78,
+    "targeted_python_tests_passed": true,
+    "arm64_container_model_catalog_test_count": 14,
+    "arm64_tool_hashes_matched": true,
+    "arm64_final_attempt_count": 2,
+    "arm64_successful_attempt_duration_seconds": 2,
+    "arm64_model_count": 9,
+    "arm64_protocol_record_count": 1,
+    "arm64_responses_http_record_count": 0,
+    "arm64_websocket_record_count": 0,
+    "arm64_models_http_sha256": "65951e19e96a41c27504061991b1c9edbc1bcf73a0b6314afb807b704bbc8a2e",
+    "arm64_public_egress": "179.255.100.158",
+    "capture_tool_tests_passed": true,
+    "egress_spec_passed": true,
+    "officialegress_go_tests_passed": true,
+    "service_go_tests_passed": true,
+    "historical_artifacts_unchanged": true,
+    "new_campaign_required": true
+  },
+  "safety": {
+    "active_remained_0_147_0": true,
+    "previous_staged_0_149_1": true,
+    "catalog_promoted": false,
+    "production_activated": false,
+    "sub2api_deployment_performed": false,
+    "capture_tool_sync_performed": true,
+    "live_models_requests_sent": true,
+    "live_responses_or_turn_requests_sent": false,
+    "historical_content_addressed_artifacts_overwritten": false,
+    "historical_receipts_modified": false,
+    "historical_transitions_modified": false,
+    "network_configuration_changed": false,
+    "vircs_accessed": false
+  },
+  "result": "r14_model_prewarm_verified_new_campaign_required",
+  "identity_sha256": "4a854398c8ccb079cd45856690f1b99d26a0dc4f9839c931c0a694bec59298a9"
+}

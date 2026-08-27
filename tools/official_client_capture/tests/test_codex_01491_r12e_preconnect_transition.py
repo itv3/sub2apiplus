@@ -517,18 +517,30 @@ def transition_supersedes(
     prior_digest: str,
     current_digest: str,
 ) -> bool:
-    """只承认 r12e transition 登记的精确摘要边。"""
+    """按登记路径图重放 r12e 及其后继的精确摘要链。"""
 
     try:
         document = load_validated_transition()
     except (OSError, RuntimeError, ValueError, json.JSONDecodeError):
         return False
-    return any(
-        entry["path"] == path
-        and prior_digest in entry["predecessor_sha256s"]
-        and current_digest == entry["to_sha256"]
-        for entry in document["transitions"]
-    )
+    edges: dict[str, list[str]] = {}
+    for entry in document["transitions"]:
+        if entry["path"] != path:
+            continue
+        for predecessor in entry["predecessor_sha256s"]:
+            edges.setdefault(predecessor, []).append(entry["to_sha256"])
+
+    queue = [prior_digest]
+    visited: set[str] = set()
+    while queue:
+        digest = queue.pop(0)
+        if digest == current_digest:
+            return True
+        if digest in visited:
+            continue
+        visited.add(digest)
+        queue.extend(edges.get(digest, []))
+    return False
 
 
 class Codex01491R12EPreconnectTransitionTest(unittest.TestCase):

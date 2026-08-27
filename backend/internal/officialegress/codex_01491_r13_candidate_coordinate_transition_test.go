@@ -105,7 +105,15 @@ func loadCodex01491R13CandidateCoordinateTransitionUncached() (
 	if err := codex01491VerifyIdentity(raw, receipt.IdentitySHA); err != nil {
 		return receipt, err
 	}
-	return receipt, validateCodex01491R13CandidateCoordinateTransition(receipt)
+	if err := validateCodex01491R13CandidateCoordinateTransition(receipt); err != nil {
+		return receipt, err
+	}
+	successor, err := loadCodex01491R14ModelPrewarmTransition()
+	if err != nil {
+		return receipt, err
+	}
+	receipt.Transitions = append(receipt.Transitions, successor.Transitions...)
+	return receipt, nil
 }
 
 func validateCodex01491R13CandidateCoordinateTransition(
@@ -194,7 +202,13 @@ func validateCodex01491R13CandidateCoordinateTransition(
 			return errors.New("Codex 0.149.1 r13 候选坐标 transition 条目非法：" + expectedPath)
 		}
 		current, readErr := codex01491RepoFile(entry.Path)
-		if readErr != nil || upstreamMergeFrameworkDigest(current) != entry.ToSHA256 {
+		currentDigest := upstreamMergeFrameworkDigest(current)
+		if readErr != nil || (currentDigest != entry.ToSHA256 &&
+			!codex01491R14ModelPrewarmSupersedes(
+				entry.Path,
+				entry.ToSHA256,
+				currentDigest,
+			)) {
 			return errors.New("Codex 0.149.1 r13 候选坐标 transition 当前摘要不一致：" + entry.Path)
 		}
 		paths = append(paths, entry.Path)
@@ -219,11 +233,28 @@ func codex01491R13CandidateCoordinateSupersedes(
 	if err != nil {
 		return false
 	}
+	edges := make(map[string][]string)
 	for _, entry := range receipt.Transitions {
-		if entry.Path == path && entry.ToSHA256 == currentDigest &&
-			slices.Contains(entry.PredecessorSHA256s, priorDigest) {
+		if entry.Path != path {
+			continue
+		}
+		for _, predecessor := range entry.PredecessorSHA256s {
+			edges[predecessor] = append(edges[predecessor], entry.ToSHA256)
+		}
+	}
+	queue := []string{priorDigest}
+	visited := make(map[string]bool)
+	for len(queue) > 0 {
+		digest := queue[0]
+		queue = queue[1:]
+		if digest == currentDigest {
 			return true
 		}
+		if visited[digest] {
+			continue
+		}
+		visited[digest] = true
+		queue = append(queue, edges[digest]...)
 	}
 	return false
 }
