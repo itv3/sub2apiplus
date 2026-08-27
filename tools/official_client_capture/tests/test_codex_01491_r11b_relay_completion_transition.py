@@ -1,8 +1,7 @@
-"""冻结 Codex CLI 0.149.1 r11a 候选脚手架修复后继 transition。"""
+"""冻结 Codex CLI 0.149.1 r11b relay 完整响应等待后继 transition。"""
 
 from __future__ import annotations
 
-import copy
 import hashlib
 import json
 import subprocess
@@ -12,27 +11,22 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from tools.official_client_capture.tests.test_codex_01491_r11b_relay_completion_transition import (
-    load_validated_transition as load_r11b_relay_transition,
-    transition_supersedes as r11b_relay_transition_supersedes,
-)
-
 
 ROOT = Path(__file__).resolve().parents[3]
-BASE_COMMIT = "3421eabbaea96dcdba25808281fc9804c87af70e"
+BASE_COMMIT = "7fa29213ef50e7d2efb81efe1aeeabcdcd749426"
 TRANSITION_PATH = (
     ROOT
     / "docs/egress/maintenance/"
-    "codex-0.149.1-r11a-harness-repair-transition.json"
+    "codex-0.149.1-r11b-relay-completion-transition.json"
 )
 PREDECESSOR_PATH = (
     ROOT
     / "docs/egress/maintenance/"
-    "codex-0.149.1-r9-contamination-recovery-transition.json"
+    "codex-0.149.1-r11a-harness-repair-transition.json"
 )
 SELF_PATH = (
     "tools/official_client_capture/tests/"
-    "test_codex_01491_r11a_harness_transition.py"
+    "test_codex_01491_r11b_relay_completion_transition.py"
 )
 EXPECTED_PATHS = sorted(
     {
@@ -40,14 +34,11 @@ EXPECTED_PATHS = sorted(
         "codex_01491_r9_contamination_recovery_transition_test.go",
         "backend/internal/service/"
         "codex_01491_r9_contamination_recovery_transition_test.go",
-        "tools/official_client_capture/h1_wire_probe.py",
-        "tools/official_client_capture/run_h1_wire_probe.sh",
-        "tools/official_client_capture/run_images_wire_probe.sh",
-        "tools/official_client_capture/tests/test_account_gate_restoration.py",
+        "tools/official_client_capture/drive_codex_model_catalog.py",
         "tools/official_client_capture/tests/"
-        "test_codex_01491_r9_contamination_recovery_transition.py",
+        "test_codex_01491_r11a_harness_transition.py",
         SELF_PATH,
-        "tools/official_client_capture/tests/test_main_track_models.py",
+        "tools/official_client_capture/tests/test_model_catalog_prewarm.py",
     }
 )
 FORBIDDEN_PREFIXES = (
@@ -83,12 +74,12 @@ def canonical_identity(document: dict[str, Any]) -> str:
 
 
 def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    """拒绝会覆盖脚手架修复事实的重复 JSON 字段。"""
+    """拒绝会覆盖 relay 修复事实的重复 JSON 字段。"""
 
     result: dict[str, Any] = {}
     for key, value in pairs:
         if key in result:
-            raise ValueError(f"r11a 脚手架 transition 包含重复字段：{key}")
+            raise ValueError(f"r11b relay transition 包含重复字段：{key}")
         result[key] = value
     return result
 
@@ -109,7 +100,7 @@ def load_document(path: Path, label: str) -> dict[str, Any]:
 
 @lru_cache(maxsize=None)
 def commit_blob(path: str) -> bytes | None:
-    """读取 r11a 基线提交中的普通 Git blob；不存在时返回 None。"""
+    """读取 r11b 基线提交中的普通 Git blob；不存在时返回 None。"""
 
     result = subprocess.run(
         ["git", "show", f"{BASE_COMMIT}:{path}"],
@@ -122,13 +113,13 @@ def commit_blob(path: str) -> bytes | None:
 
 
 def load_transition() -> dict[str, Any]:
-    """读取 r11a 候选脚手架修复 transition。"""
+    """读取 r11b relay 完整响应等待 transition。"""
 
-    return load_document(TRANSITION_PATH, "r11a 脚手架 transition")
+    return load_document(TRANSITION_PATH, "r11b relay transition")
 
 
 def validate_transition(document: dict[str, Any]) -> None:
-    """重放脚手架根因、网络硬边界、预检事实和文件摘要闭集。"""
+    """重放失败响应、固定网络、离线依赖与文件摘要闭集。"""
 
     if set(document) != {
         "schema_version",
@@ -137,51 +128,52 @@ def validate_transition(document: dict[str, Any]) -> None:
         "scope",
         "framework_stage",
         "predecessor_transition",
-        "failed_candidate_attempt",
+        "failed_official_attempt",
         "boundaries",
+        "failure_facts",
         "repair_facts",
-        "preflight_evidence",
         "transitions",
         "verification",
         "result",
         "identity_sha256",
     }:
-        raise ValueError("r11a 脚手架 transition 顶层字段非法")
+        raise ValueError("r11b relay transition 顶层字段非法")
     if (
         document["schema_version"]
-        != "official-client-codex-0.149.1-r11a-harness-repair-transition/v1"
+        != "official-client-codex-0.149.1-r11b-relay-completion-transition/v1"
         or document["base_commit"] != BASE_COMMIT
-        or document["scope"] != "codex-0.149.1-r11a-harness-repair"
-        or document["framework_stage"] != "VC-0/P0-R11A-HARNESS-REPAIR"
-        or document["result"] != "r11a_campaign_required_with_repaired_harness"
+        or document["scope"] != "codex-0.149.1-r11b-relay-completion"
+        or document["framework_stage"] != "VC-0/P0-R11B-RELAY-COMPLETION"
+        or document["result"]
+        != "r11b_campaign_required_with_repaired_relay_completion"
         or document["identity_sha256"] != canonical_identity(document)
     ):
-        raise ValueError("r11a 脚手架 transition 身份非法")
+        raise ValueError("r11b relay transition 身份非法")
     try:
         datetime.fromisoformat(document["issued_at_utc"].replace("Z", "+00:00"))
     except (AttributeError, ValueError) as error:
-        raise ValueError("r11a 脚手架 transition 时间非法") from error
+        raise ValueError("r11b relay transition 时间非法") from error
 
-    predecessor = load_document(PREDECESSOR_PATH, "r9 污染恢复 transition")
+    predecessor = load_document(PREDECESSOR_PATH, "r11a 脚手架 transition")
     if document["predecessor_transition"] != {
         "path": PREDECESSOR_PATH.relative_to(ROOT).as_posix(),
-        "file_sha256": "44bcc4c258c28b58c807de49fb23db5e038f981564ae69bee26c8bc29b36c5a1",
-        "identity_sha256": "1b2916c441a9bbb405db2c190f8df944d9acc978a54683a04fbb9ff8391592f8",
+        "file_sha256": "c348b081fdf4357a2dd87aab6e23b571d8578e62d710a9bdd85623c5cd2bda11",
+        "identity_sha256": "1104fbc1742b2a8e0985e96e0cb2902bc5a9e28fed914546c74b37abe1917469",
     }:
-        raise ValueError("r11a 脚手架 transition 前序绑定非法")
+        raise ValueError("r11b relay transition 前序绑定非法")
     if predecessor.get("identity_sha256") != document["predecessor_transition"][
         "identity_sha256"
     ]:
-        raise ValueError("r11a 脚手架 transition 前序自摘要非法")
+        raise ValueError("r11b relay transition 前序自摘要非法")
 
-    if document["failed_candidate_attempt"] != {
-        "campaign_id": "codex-01491-r10a",
-        "candidate_id": "codex-01491-r10a-93d179469-arm64-21",
-        "attempt_id": "20260826T204300Z-98b0048acd77b1a4",
+    if document["failed_official_attempt"] != {
+        "campaign_id": "codex-01491-r11a",
+        "attempt_id": "20260827T000102Z-a792726deea258ed",
         "status": "failed",
+        "restoration_status": "restored",
         "reuse_forbidden": True,
     }:
-        raise ValueError("r11a 脚手架 transition 失败 Attempt 事实非法")
+        raise ValueError("r11b relay transition 失败 Attempt 事实非法")
     if document["boundaries"] != {
         "api_key_ref": "#4",
         "capture_account_ref": "#21",
@@ -199,47 +191,43 @@ def validate_transition(document: dict[str, Any]) -> None:
         "historical_evidence_preserved_read_only": True,
         "vircs_accessed": False,
     }:
-        raise ValueError("r11a 脚手架 transition 账号或网络边界非法")
+        raise ValueError("r11b relay transition 账号或网络边界非法")
+    if document["failure_facts"] != {
+        "relay_attempt_count": 3,
+        "models_http_status": 200,
+        "models_content_length": 360785,
+        "captured_response_bytes_each_attempt": [1369, 1369, 1369],
+        "app_server_closed_before_response_complete": True,
+        "host_python_version": "3.12.3",
+        "host_python_zstandard_missing": True,
+        "offline_zstandard_runtime": (
+            "/root/oauth-capture/runtime/"
+            "codex-upgrade-pydeps-zstandard-0.22.0"
+        ),
+    }:
+        raise ValueError("r11b relay transition 失败根因事实非法")
     if document["repair_facts"] != {
-        "published_port_accepts_non_loopback_binding": True,
-        "shared_probe_address_resolved_from_service_container": True,
-        "hosts_written_immediately_after_restart": True,
-        "api_key_group_single_account_gate": True,
-        "api_key_group_single_key_gate": True,
-        "image_permission_temporarily_enabled_and_restored": True,
-        "image_probe_filters_startup_models": True,
-        "account_gate_restored": True,
-        "keeper_hosts_ca_and_model_mapping_restored": True,
+        "wait_for_complete_relay_response_inside_app_server_lifetime": True,
+        "relay_poll_interval_seconds": 0.05,
+        "incomplete_response_fails_closed": True,
+        "system_package_installed": False,
+        "network_configuration_changed": False,
         "new_campaign_required": True,
     }:
-        raise ValueError("r11a 脚手架 transition 修复事实非法")
-    if document["preflight_evidence"] != {
-        "h1_run_id": "codex-01491-r10b-preflight-h1-final",
-        "h1_request_count": 3,
-        "h1_wire_sha256": "8466f16f736ea077d34ae22e8232d04e685551f824175ab8bbb5500c7f59a1da",
-        "images_run_id": "codex-01491-r10b-preflight-images-final2",
-        "images_request_count": 1,
-        "images_wire_sha256": "45243c9d53b41a8cb6b9cd77d2ce2095efe1a8423c1ba056afa5fb24aaadcf28",
-        "captured_codex_version": "0.149.1",
-        "pre_and_post_egress_verified": True,
-        "post_run_restoration_verified": True,
-    }:
-        raise ValueError("r11a 脚手架 transition 预检证据非法")
+        raise ValueError("r11b relay transition 修复事实非法")
     if document["verification"] != {
-        "bash_syntax_passed": True,
+        "failed_attempt_restoration_verified": True,
         "targeted_python_tests_passed": True,
         "capture_tool_tests_passed": True,
         "egress_spec_passed": True,
-        "arm64_h1_preflight_passed": True,
-        "arm64_images_preflight_passed": True,
         "network_gate_passed": True,
     }:
-        raise ValueError("r11a 脚手架 transition 门禁未闭合")
+        raise ValueError("r11b relay transition 门禁未闭合")
 
     entries = document["transitions"]
     paths = [entry.get("path") for entry in entries]
     if paths != EXPECTED_PATHS or len(paths) != len(set(paths)):
-        raise ValueError("r11a 脚手架 transition 路径闭集非法")
+        raise ValueError("r11b relay transition 路径闭集非法")
     for entry in entries:
         if set(entry) != {
             "path",
@@ -248,76 +236,59 @@ def validate_transition(document: dict[str, Any]) -> None:
             "to_sha256",
             "reason",
         }:
-            raise ValueError("r11a 脚手架 transition 条目字段非法")
+            raise ValueError("r11b relay transition 条目字段非法")
         path = entry["path"]
         before = commit_blob(path)
         expected_change = "added" if before is None else "modified"
         expected_predecessors = [] if before is None else [sha256(before)]
         current = ROOT / path
-        current_digest = (
-            sha256(current.read_bytes())
-            if current.is_file() and not current.is_symlink()
-            else ""
-        )
         if (
             entry["change"] != expected_change
             or entry["predecessor_sha256s"] != expected_predecessors
             or current.is_symlink()
             or not current.is_file()
-            or (
-                entry["to_sha256"] != current_digest
-                and not r11b_relay_transition_supersedes(
-                    path,
-                    entry["to_sha256"],
-                    current_digest,
-                )
-            )
+            or entry["to_sha256"] != sha256(current.read_bytes())
             or not isinstance(entry["reason"], str)
             or not entry["reason"].strip()
         ):
-            raise ValueError(f"r11a 脚手架 transition 条目非法：{path}")
+            raise ValueError(f"r11b relay transition 条目非法：{path}")
         if path.startswith(FORBIDDEN_PREFIXES):
-            raise ValueError(f"r11a 脚手架 transition 命中历史只读路径：{path}")
+            raise ValueError(f"r11b relay transition 命中历史只读路径：{path}")
 
 
+@lru_cache(maxsize=1)
 def load_validated_transition() -> dict[str, Any]:
-    """验证 r11a 收据，并向统一摘要链追加 r11b 后继边。"""
+    """加载并完整重放 r11b relay transition。"""
 
     document = load_transition()
     validate_transition(document)
-    successor = load_r11b_relay_transition()
-    replay = copy.deepcopy(document)
-    replay["transitions"] = [
-        *document["transitions"],
-        *successor["transitions"],
-    ]
-    return replay
+    return document
 
 
-@lru_cache(maxsize=None)
 def transition_supersedes(
     path: str,
     prior_digest: str,
     current_digest: str,
 ) -> bool:
-    """只承认 r11a 及其已验证后继登记的精确摘要链。"""
+    """只承认 r11b transition 登记的精确摘要边。"""
 
     try:
         document = load_validated_transition()
     except (OSError, RuntimeError, ValueError, json.JSONDecodeError):
         return False
-    cursor = prior_digest
-    for entry in document["transitions"]:
-        if entry["path"] == path and cursor in entry["predecessor_sha256s"]:
-            cursor = entry["to_sha256"]
-    return cursor == current_digest
+    return any(
+        entry["path"] == path
+        and prior_digest in entry["predecessor_sha256s"]
+        and current_digest == entry["to_sha256"]
+        for entry in document["transitions"]
+    )
 
 
-class Codex01491R11AHarnessTransitionTest(unittest.TestCase):
+class Codex01491R11BRelayCompletionTransitionTest(unittest.TestCase):
     def test_transition_身份与文件闭集可独立重放(self) -> None:
         validate_transition(load_transition())
 
-    def test_transition_拒绝账号与网络边界篡改(self) -> None:
+    def test_transition_拒绝账号网络与不完整响应篡改(self) -> None:
         document = load_transition()
         document["boundaries"]["capture_account_ref"] = "#20"
         document["identity_sha256"] = canonical_identity(document)
@@ -325,18 +296,19 @@ class Codex01491R11AHarnessTransitionTest(unittest.TestCase):
             validate_transition(document)
 
         document = load_transition()
-        document["boundaries"]["docker_network_changed"] = True
+        document["boundaries"]["route_nat_iptables_changed"] = True
         document["identity_sha256"] = canonical_identity(document)
         with self.assertRaisesRegex(ValueError, "账号或网络边界"):
             validate_transition(document)
 
-    def test_transition_承认_h1_产出侧精确摘要边(self) -> None:
         document = load_transition()
-        entry = next(
-            item
-            for item in document["transitions"]
-            if item["path"] == "tools/official_client_capture/h1_wire_probe.py"
-        )
+        document["repair_facts"]["incomplete_response_fails_closed"] = False
+        document["identity_sha256"] = canonical_identity(document)
+        with self.assertRaisesRegex(ValueError, "修复事实"):
+            validate_transition(document)
+
+    def test_transition_只承认精确后继边(self) -> None:
+        entry = load_transition()["transitions"][0]
         self.assertTrue(
             transition_supersedes(
                 entry["path"],
@@ -349,27 +321,6 @@ class Codex01491R11AHarnessTransitionTest(unittest.TestCase):
                 entry["path"],
                 "0" * 64,
                 entry["to_sha256"],
-            )
-        )
-
-    def test_transition_承认_r9_r11a_r11b_精确摘要链(self) -> None:
-        path = (
-            "backend/internal/officialegress/"
-            "codex_01491_r9_contamination_recovery_transition_test.go"
-        )
-        r11a_entry = next(
-            item for item in load_transition()["transitions"] if item["path"] == path
-        )
-        r11b_entry = next(
-            item
-            for item in load_r11b_relay_transition()["transitions"]
-            if item["path"] == path
-        )
-        self.assertTrue(
-            transition_supersedes(
-                path,
-                r11a_entry["predecessor_sha256s"][0],
-                r11b_entry["to_sha256"],
             )
         )
 

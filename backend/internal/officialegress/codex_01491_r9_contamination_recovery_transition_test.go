@@ -15,6 +15,7 @@ const (
 	codex01491R9ContaminationRecoveryPath = "docs/egress/maintenance/codex-0.149.1-r9-contamination-recovery-transition.json"
 	codex01491ModelCatalogH1SuccessorPath = "docs/egress/maintenance/codex-0.149.1-model-catalog-h1-successor-transition.json"
 	codex01491R11AHarnessRepairPath       = "docs/egress/maintenance/codex-0.149.1-r11a-harness-repair-transition.json"
+	codex01491R11BRelayCompletionPath     = "docs/egress/maintenance/codex-0.149.1-r11b-relay-completion-transition.json"
 )
 
 type codex01491R9ContaminationRecoveryReceipt struct {
@@ -147,6 +148,71 @@ type codex01491R11AHarnessRepairReceipt struct {
 	IdentitySHA256 string `json:"identity_sha256"`
 }
 
+type codex01491R11BRelayCompletionReceipt struct {
+	SchemaVersion         string `json:"schema_version"`
+	IssuedAtUTC           string `json:"issued_at_utc"`
+	BaseCommit            string `json:"base_commit"`
+	Scope                 string `json:"scope"`
+	FrameworkStage        string `json:"framework_stage"`
+	PredecessorTransition struct {
+		Path           string `json:"path"`
+		FileSHA256     string `json:"file_sha256"`
+		IdentitySHA256 string `json:"identity_sha256"`
+	} `json:"predecessor_transition"`
+	FailedOfficialAttempt struct {
+		CampaignID        string `json:"campaign_id"`
+		AttemptID         string `json:"attempt_id"`
+		Status            string `json:"status"`
+		RestorationStatus string `json:"restoration_status"`
+		ReuseForbidden    bool   `json:"reuse_forbidden"`
+	} `json:"failed_official_attempt"`
+	Boundaries struct {
+		APIKeyRef                           string `json:"api_key_ref"`
+		CaptureAccountRef                   string `json:"capture_account_ref"`
+		CaptureAccount20Allowed             bool   `json:"capture_account_20_allowed"`
+		CaptureAccount20Used                bool   `json:"capture_account_20_used"`
+		ServicePrivateIP                    string `json:"service_private_ip"`
+		ServiceDefaultGateway               string `json:"service_default_gateway"`
+		CapturePrivateIP                    string `json:"capture_private_ip"`
+		CaptureDefaultGateway               string `json:"capture_default_gateway"`
+		RequiredPublicEgress                string `json:"required_public_egress"`
+		DockerNetworkChanged                bool   `json:"docker_network_changed"`
+		RouteNATIPTablesChanged             bool   `json:"route_nat_iptables_changed"`
+		ProxyOrComposeNetworkChanged        bool   `json:"proxy_or_compose_network_changed"`
+		ProductionSelectorChanged           bool   `json:"production_selector_changed"`
+		HistoricalEvidencePreservedReadOnly bool   `json:"historical_evidence_preserved_read_only"`
+		VircsAccessed                       bool   `json:"vircs_accessed"`
+	} `json:"boundaries"`
+	FailureFacts struct {
+		RelayAttemptCount                int    `json:"relay_attempt_count"`
+		ModelsHTTPStatus                 int    `json:"models_http_status"`
+		ModelsContentLength              int    `json:"models_content_length"`
+		CapturedResponseBytesEachAttempt []int  `json:"captured_response_bytes_each_attempt"`
+		AppServerClosedBeforeResponse    bool   `json:"app_server_closed_before_response_complete"`
+		HostPythonVersion                string `json:"host_python_version"`
+		HostPythonZstandardMissing       bool   `json:"host_python_zstandard_missing"`
+		OfflineZstandardRuntime          string `json:"offline_zstandard_runtime"`
+	} `json:"failure_facts"`
+	RepairFacts struct {
+		WaitInsideAppServerLifetime  bool    `json:"wait_for_complete_relay_response_inside_app_server_lifetime"`
+		RelayPollIntervalSeconds     float64 `json:"relay_poll_interval_seconds"`
+		IncompleteResponseFailsClose bool    `json:"incomplete_response_fails_closed"`
+		SystemPackageInstalled       bool    `json:"system_package_installed"`
+		NetworkConfigurationChanged  bool    `json:"network_configuration_changed"`
+		NewCampaignRequired          bool    `json:"new_campaign_required"`
+	} `json:"repair_facts"`
+	Transitions  []codex01491CandidateSourceTransitionEntry `json:"transitions"`
+	Verification struct {
+		FailedAttemptRestorationVerified bool `json:"failed_attempt_restoration_verified"`
+		TargetedPythonTestsPassed        bool `json:"targeted_python_tests_passed"`
+		CaptureToolTestsPassed           bool `json:"capture_tool_tests_passed"`
+		EgressSpecPassed                 bool `json:"egress_spec_passed"`
+		NetworkGatePassed                bool `json:"network_gate_passed"`
+	} `json:"verification"`
+	Result         string `json:"result"`
+	IdentitySHA256 string `json:"identity_sha256"`
+}
+
 func codex01491R9ContaminationRecoveryExpectedPaths() []string {
 	return []string{
 		"backend/internal/officialegress/codex_01491_r4_catalog_successor_transition_test.go",
@@ -172,6 +238,17 @@ func codex01491R11AHarnessRepairExpectedPaths() []string {
 		"tools/official_client_capture/tests/test_codex_01491_r11a_harness_transition.py",
 		"tools/official_client_capture/tests/test_codex_01491_r9_contamination_recovery_transition.py",
 		"tools/official_client_capture/tests/test_main_track_models.py",
+	}
+}
+
+func codex01491R11BRelayCompletionExpectedPaths() []string {
+	return []string{
+		"backend/internal/officialegress/codex_01491_r9_contamination_recovery_transition_test.go",
+		"backend/internal/service/codex_01491_r9_contamination_recovery_transition_test.go",
+		"tools/official_client_capture/drive_codex_model_catalog.py",
+		"tools/official_client_capture/tests/test_codex_01491_r11a_harness_transition.py",
+		"tools/official_client_capture/tests/test_codex_01491_r11b_relay_completion_transition.py",
+		"tools/official_client_capture/tests/test_model_catalog_prewarm.py",
 	}
 }
 
@@ -206,6 +283,149 @@ func loadCodex01491ModelCatalogH1SuccessorTransitions() (
 	return receipt.Transitions, nil
 }
 
+func loadCodex01491R11BRelayCompletionTransition() (
+	codex01491R11BRelayCompletionReceipt,
+	error,
+) {
+	var receipt codex01491R11BRelayCompletionReceipt
+	raw, err := codex01491RepoFile(codex01491R11BRelayCompletionPath)
+	if err != nil {
+		return receipt, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&receipt); err != nil {
+		return receipt, err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return receipt, errors.New("Codex 0.149.1 r11b relay transition 尾部存在额外 JSON")
+	}
+	if err := codex01491VerifyIdentity(raw, receipt.IdentitySHA256); err != nil {
+		return receipt, err
+	}
+	return receipt, validateCodex01491R11BRelayCompletionTransition(receipt)
+}
+
+func validateCodex01491R11BRelayCompletionTransition(
+	receipt codex01491R11BRelayCompletionReceipt,
+) error {
+	if receipt.SchemaVersion != "official-client-codex-0.149.1-r11b-relay-completion-transition/v1" ||
+		receipt.BaseCommit != "7fa29213ef50e7d2efb81efe1aeeabcdcd749426" ||
+		receipt.Scope != "codex-0.149.1-r11b-relay-completion" ||
+		receipt.FrameworkStage != "VC-0/P0-R11B-RELAY-COMPLETION" ||
+		receipt.Result != "r11b_campaign_required_with_repaired_relay_completion" {
+		return errors.New("Codex 0.149.1 r11b relay transition 顶层事实非法")
+	}
+	if _, err := time.Parse(time.RFC3339, receipt.IssuedAtUTC); err != nil {
+		return errors.New("Codex 0.149.1 r11b relay transition 时间非法")
+	}
+	predecessorRaw, err := codex01491RepoFile(codex01491R11AHarnessRepairPath)
+	if err != nil {
+		return err
+	}
+	var predecessor struct {
+		IdentitySHA256 string `json:"identity_sha256"`
+	}
+	if err := json.Unmarshal(predecessorRaw, &predecessor); err != nil {
+		return err
+	}
+	if receipt.PredecessorTransition.Path != codex01491R11AHarnessRepairPath ||
+		receipt.PredecessorTransition.FileSHA256 != "c348b081fdf4357a2dd87aab6e23b571d8578e62d710a9bdd85623c5cd2bda11" ||
+		receipt.PredecessorTransition.FileSHA256 != upstreamMergeFrameworkDigest(predecessorRaw) ||
+		receipt.PredecessorTransition.IdentitySHA256 != "1104fbc1742b2a8e0985e96e0cb2902bc5a9e28fed914546c74b37abe1917469" ||
+		receipt.PredecessorTransition.IdentitySHA256 != predecessor.IdentitySHA256 {
+		return errors.New("Codex 0.149.1 r11b relay transition 前序绑定非法")
+	}
+	if receipt.FailedOfficialAttempt.CampaignID != "codex-01491-r11a" ||
+		receipt.FailedOfficialAttempt.AttemptID != "20260827T000102Z-a792726deea258ed" ||
+		receipt.FailedOfficialAttempt.Status != "failed" ||
+		receipt.FailedOfficialAttempt.RestorationStatus != "restored" ||
+		!receipt.FailedOfficialAttempt.ReuseForbidden {
+		return errors.New("Codex 0.149.1 r11b relay transition 失败 Attempt 事实非法")
+	}
+	if receipt.Boundaries.APIKeyRef != "#4" || receipt.Boundaries.CaptureAccountRef != "#21" ||
+		receipt.Boundaries.CaptureAccount20Allowed || receipt.Boundaries.CaptureAccount20Used ||
+		receipt.Boundaries.ServicePrivateIP != "172.25.0.3" ||
+		receipt.Boundaries.ServiceDefaultGateway != "172.25.0.1" ||
+		receipt.Boundaries.CapturePrivateIP != "172.30.0.10" ||
+		receipt.Boundaries.CaptureDefaultGateway != "172.30.0.1" ||
+		receipt.Boundaries.RequiredPublicEgress != "179.255.100.158" ||
+		receipt.Boundaries.DockerNetworkChanged || receipt.Boundaries.RouteNATIPTablesChanged ||
+		receipt.Boundaries.ProxyOrComposeNetworkChanged || receipt.Boundaries.ProductionSelectorChanged ||
+		!receipt.Boundaries.HistoricalEvidencePreservedReadOnly || receipt.Boundaries.VircsAccessed {
+		return errors.New("Codex 0.149.1 r11b relay transition 账号或网络边界非法")
+	}
+	if receipt.FailureFacts.RelayAttemptCount != 3 || receipt.FailureFacts.ModelsHTTPStatus != 200 ||
+		receipt.FailureFacts.ModelsContentLength != 360785 ||
+		!slices.Equal(receipt.FailureFacts.CapturedResponseBytesEachAttempt, []int{1369, 1369, 1369}) ||
+		!receipt.FailureFacts.AppServerClosedBeforeResponse ||
+		receipt.FailureFacts.HostPythonVersion != "3.12.3" ||
+		!receipt.FailureFacts.HostPythonZstandardMissing ||
+		receipt.FailureFacts.OfflineZstandardRuntime != "/root/oauth-capture/runtime/codex-upgrade-pydeps-zstandard-0.22.0" {
+		return errors.New("Codex 0.149.1 r11b relay transition 失败根因事实非法")
+	}
+	if !receipt.RepairFacts.WaitInsideAppServerLifetime ||
+		receipt.RepairFacts.RelayPollIntervalSeconds != 0.05 ||
+		!receipt.RepairFacts.IncompleteResponseFailsClose || receipt.RepairFacts.SystemPackageInstalled ||
+		receipt.RepairFacts.NetworkConfigurationChanged || !receipt.RepairFacts.NewCampaignRequired {
+		return errors.New("Codex 0.149.1 r11b relay transition 修复事实非法")
+	}
+	if !receipt.Verification.FailedAttemptRestorationVerified ||
+		!receipt.Verification.TargetedPythonTestsPassed ||
+		!receipt.Verification.CaptureToolTestsPassed || !receipt.Verification.EgressSpecPassed ||
+		!receipt.Verification.NetworkGatePassed {
+		return errors.New("Codex 0.149.1 r11b relay transition 验证事实非法")
+	}
+
+	expectedPaths := codex01491R11BRelayCompletionExpectedPaths()
+	expectedPredecessors := map[string][]string{
+		"backend/internal/officialegress/codex_01491_r9_contamination_recovery_transition_test.go": {"c3bd9cf1c56ebb3e5d752bbaa29288e0f9744a93f99508af1545120fe9f98f48"},
+		"backend/internal/service/codex_01491_r9_contamination_recovery_transition_test.go":        {"b1642b50bb6199c5bafcaaef19aed6e07e080c53e2aab2370ad28a18ee7b2184"},
+		"tools/official_client_capture/drive_codex_model_catalog.py":                               {"5487e87a4159222eb91d748e5cda44ce4d336b28d96d7a667e14fb2cfb325f1a"},
+		"tools/official_client_capture/tests/test_codex_01491_r11a_harness_transition.py":          {"d2cd1ee825a2feed1a6bfccd8229f6b791d1d731dc33953a24f5b86b320f8a64"},
+		"tools/official_client_capture/tests/test_model_catalog_prewarm.py":                        {"7e9e9fc3b00b3b3d3576dd8a232f9699c997df5edbd5d8b877cc64dc58ee95e7"},
+	}
+	if len(receipt.Transitions) != len(expectedPaths) {
+		return errors.New("Codex 0.149.1 r11b relay transition 路径数量非法")
+	}
+	for index, entry := range receipt.Transitions {
+		expectedPath := expectedPaths[index]
+		predecessors := expectedPredecessors[expectedPath]
+		expectedChange := "added"
+		if len(predecessors) > 0 {
+			expectedChange = "modified"
+		}
+		if entry.Path != expectedPath || entry.Change != expectedChange ||
+			!slices.Equal(entry.PredecessorSHA256s, predecessors) || len(entry.ToSHA256) != 64 ||
+			strings.TrimSpace(entry.Reason) == "" {
+			return errors.New("Codex 0.149.1 r11b relay transition 条目非法：" + expectedPath)
+		}
+		current, readErr := codex01491RepoFile(entry.Path)
+		if readErr != nil || upstreamMergeFrameworkDigest(current) != entry.ToSHA256 {
+			return errors.New("Codex 0.149.1 r11b relay transition 当前摘要不一致：" + entry.Path)
+		}
+	}
+	return nil
+}
+
+func codex01491R11BRelayCompletionSupersedes(
+	path string,
+	priorDigest string,
+	currentDigest string,
+) bool {
+	receipt, err := loadCodex01491R11BRelayCompletionTransition()
+	if err != nil {
+		return false
+	}
+	for _, entry := range receipt.Transitions {
+		if entry.Path == path && entry.ToSHA256 == currentDigest &&
+			slices.Contains(entry.PredecessorSHA256s, priorDigest) {
+			return true
+		}
+	}
+	return false
+}
+
 func loadCodex01491R11AHarnessRepairTransition() (
 	codex01491R11AHarnessRepairReceipt,
 	error,
@@ -226,7 +446,15 @@ func loadCodex01491R11AHarnessRepairTransition() (
 	if err := codex01491VerifyIdentity(raw, receipt.IdentitySHA256); err != nil {
 		return receipt, err
 	}
-	return receipt, validateCodex01491R11AHarnessRepairTransition(receipt)
+	if err := validateCodex01491R11AHarnessRepairTransition(receipt); err != nil {
+		return receipt, err
+	}
+	successor, err := loadCodex01491R11BRelayCompletionTransition()
+	if err != nil {
+		return receipt, err
+	}
+	receipt.Transitions = append(receipt.Transitions, successor.Transitions...)
+	return receipt, nil
 }
 
 func validateCodex01491R11AHarnessRepairTransition(
@@ -333,7 +561,13 @@ func validateCodex01491R11AHarnessRepairTransition(
 			return errors.New("Codex 0.149.1 r11a 脚手架 transition 条目非法：" + expectedPath)
 		}
 		current, readErr := codex01491RepoFile(entry.Path)
-		if readErr != nil || upstreamMergeFrameworkDigest(current) != entry.ToSHA256 {
+		currentDigest := upstreamMergeFrameworkDigest(current)
+		if readErr != nil || (currentDigest != entry.ToSHA256 &&
+			!codex01491R11BRelayCompletionSupersedes(
+				entry.Path,
+				entry.ToSHA256,
+				currentDigest,
+			)) {
 			return errors.New("Codex 0.149.1 r11a 脚手架 transition 当前摘要不一致：" + entry.Path)
 		}
 	}
@@ -349,13 +583,13 @@ func codex01491R11AHarnessRepairSupersedes(
 	if err != nil {
 		return false
 	}
+	cursor := priorDigest
 	for _, entry := range receipt.Transitions {
-		if entry.Path == path && entry.ToSHA256 == currentDigest &&
-			slices.Contains(entry.PredecessorSHA256s, priorDigest) {
-			return true
+		if entry.Path == path && slices.Contains(entry.PredecessorSHA256s, cursor) {
+			cursor = entry.ToSHA256
 		}
 	}
-	return false
+	return cursor == currentDigest
 }
 
 func loadCodex01491R9ContaminationRecoveryTransition() (
@@ -530,5 +764,22 @@ func TestCodex01491R11AHarnessRepairTransitionIsFrozen(t *testing.T) {
 	mutated.Boundaries.DockerNetworkChanged = true
 	if err := validateCodex01491R11AHarnessRepairTransition(mutated); err == nil {
 		t.Fatal("Codex 0.149.1 r11a 脚手架 transition 接受了 Docker 网络变更")
+	}
+}
+
+func TestCodex01491R11BRelayCompletionTransitionIsFrozen(t *testing.T) {
+	receipt, err := loadCodex01491R11BRelayCompletionTransition()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutated := receipt
+	mutated.Boundaries.CaptureAccountRef = "#20"
+	if err := validateCodex01491R11BRelayCompletionTransition(mutated); err == nil {
+		t.Fatal("Codex 0.149.1 r11b relay transition 接受了账号 #20")
+	}
+	mutated = receipt
+	mutated.RepairFacts.IncompleteResponseFailsClose = false
+	if err := validateCodex01491R11BRelayCompletionTransition(mutated); err == nil {
+		t.Fatal("Codex 0.149.1 r11b relay transition 接受了不完整响应")
 	}
 }

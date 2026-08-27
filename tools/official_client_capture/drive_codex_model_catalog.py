@@ -145,6 +145,31 @@ def find_captured_model_catalog(
     raise ModelCatalogPrewarmError("尚未捕获完整的 /models HTTP 200 原始响应。")
 
 
+def wait_for_relay_model_catalog(
+    relay_dir: Path,
+    *,
+    expected_model: str,
+    expected_lite: bool,
+    deadline: float,
+) -> dict[str, Any]:
+    """保持 app-server 存活，直到字节中继刷盘完整的模型目录响应。"""
+
+    last_error: ModelCatalogPrewarmError | None = None
+    while time.monotonic() < deadline:
+        try:
+            return find_captured_model_catalog(
+                relay_dir,
+                expected_model=expected_model,
+                expected_lite=expected_lite,
+            )
+        except ModelCatalogPrewarmError as error:
+            last_error = error
+        time.sleep(0.05)
+    raise ModelCatalogPrewarmError(
+        "等待 relay 模型目录 HTTP 200 超时。"
+    ) from last_error
+
+
 def run_prewarm(
     *,
     codex_bin: str,
@@ -173,6 +198,7 @@ def run_prewarm(
     deadline = time.monotonic() + timeout
     response: dict[str, Any] | None = None
     mitm_capture: dict[str, Any] | None = None
+    relay_capture: dict[str, Any] | None = None
     try:
         client.send(
             {
@@ -208,6 +234,15 @@ def run_prewarm(
                 expected_lite=expected_lite,
                 deadline=deadline,
             )
+        else:
+            # 字节中继同样会在 app-server 提前退出时只留下响应头和部分 body。
+            # 必须在 finally 关闭进程前等待 Content-Length 对应的完整响应可重放。
+            relay_capture = wait_for_relay_model_catalog(
+                relay_dir,
+                expected_model=model,
+                expected_lite=expected_lite,
+                deadline=deadline,
+            )
     except BaseException as error:
         raise ModelCatalogPrewarmError(
             f"model/list 未完成：{type(error).__name__}。"
@@ -222,9 +257,9 @@ def run_prewarm(
     ):
         raise ModelCatalogPrewarmError("model/list 结果未包含目标模型。")
 
-    captured = mitm_capture or find_captured_model_catalog(
-        relay_dir, expected_model=model, expected_lite=expected_lite
-    )
+    captured = mitm_capture or relay_capture
+    if captured is None:
+        raise ModelCatalogPrewarmError("模型目录在线证据未完成。")
     summary = {
         "schema_version": SCHEMA_VERSION,
         "status": "success",

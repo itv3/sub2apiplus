@@ -1,0 +1,121 @@
+{
+  "schema_version": "official-client-codex-0.149.1-r11b-relay-completion-transition/v1",
+  "issued_at_utc": "2026-08-27T00:23:38Z",
+  "base_commit": "7fa29213ef50e7d2efb81efe1aeeabcdcd749426",
+  "scope": "codex-0.149.1-r11b-relay-completion",
+  "framework_stage": "VC-0/P0-R11B-RELAY-COMPLETION",
+  "predecessor_transition": {
+    "path": "docs/egress/maintenance/codex-0.149.1-r11a-harness-repair-transition.json",
+    "file_sha256": "c348b081fdf4357a2dd87aab6e23b571d8578e62d710a9bdd85623c5cd2bda11",
+    "identity_sha256": "1104fbc1742b2a8e0985e96e0cb2902bc5a9e28fed914546c74b37abe1917469"
+  },
+  "failed_official_attempt": {
+    "campaign_id": "codex-01491-r11a",
+    "attempt_id": "20260827T000102Z-a792726deea258ed",
+    "status": "failed",
+    "restoration_status": "restored",
+    "reuse_forbidden": true
+  },
+  "boundaries": {
+    "api_key_ref": "#4",
+    "capture_account_ref": "#21",
+    "capture_account_20_allowed": false,
+    "capture_account_20_used": false,
+    "service_private_ip": "172.25.0.3",
+    "service_default_gateway": "172.25.0.1",
+    "capture_private_ip": "172.30.0.10",
+    "capture_default_gateway": "172.30.0.1",
+    "required_public_egress": "179.255.100.158",
+    "docker_network_changed": false,
+    "route_nat_iptables_changed": false,
+    "proxy_or_compose_network_changed": false,
+    "production_selector_changed": false,
+    "historical_evidence_preserved_read_only": true,
+    "vircs_accessed": false
+  },
+  "failure_facts": {
+    "relay_attempt_count": 3,
+    "models_http_status": 200,
+    "models_content_length": 360785,
+    "captured_response_bytes_each_attempt": [
+      1369,
+      1369,
+      1369
+    ],
+    "app_server_closed_before_response_complete": true,
+    "host_python_version": "3.12.3",
+    "host_python_zstandard_missing": true,
+    "offline_zstandard_runtime": "/root/oauth-capture/runtime/codex-upgrade-pydeps-zstandard-0.22.0"
+  },
+  "repair_facts": {
+    "wait_for_complete_relay_response_inside_app_server_lifetime": true,
+    "relay_poll_interval_seconds": 0.05,
+    "incomplete_response_fails_closed": true,
+    "system_package_installed": false,
+    "network_configuration_changed": false,
+    "new_campaign_required": true
+  },
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/codex_01491_r9_contamination_recovery_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "c3bd9cf1c56ebb3e5d752bbaa29288e0f9744a93f99508af1545120fe9f98f48"
+      ],
+      "to_sha256": "cb7f69d38e6cdc2c6e2884b4553dc1af384e7205b762c73370cd0d88083ae56e",
+      "reason": "让 Go 侧统一入口验证并合并 r11b relay 完整响应后继边。"
+    },
+    {
+      "path": "backend/internal/service/codex_01491_r9_contamination_recovery_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "b1642b50bb6199c5bafcaaef19aed6e07e080c53e2aab2370ad28a18ee7b2184"
+      ],
+      "to_sha256": "2b58acc2459a9bc80ddc5296729eae07473520ce4ed145e6d7d768b36c6f9ccf",
+      "reason": "让 service 镜像入口验证同一 r11b 后继链及网络边界 mutation。"
+    },
+    {
+      "path": "tools/official_client_capture/drive_codex_model_catalog.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "5487e87a4159222eb91d748e5cda44ce4d336b28d96d7a667e14fb2cfb325f1a"
+      ],
+      "to_sha256": "d2a7e3c81054a370913da4fe369075e7196dfa1e8a8eacd6ef3ab3f03ac776f4",
+      "reason": "在关闭官方 app-server 前等待字节中继落盘完整 Content-Length 响应，拒绝仅有 HTTP 200 响应头的证据。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_r11a_harness_transition.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "d2cd1ee825a2feed1a6bfccd8229f6b791d1d731dc33953a24f5b86b320f8a64"
+      ],
+      "to_sha256": "9209136f80c163bdfa21191be8e118291b1cd6a1db2592739f8c32e2ecd19a7e",
+      "reason": "在 r11a 的统一 Python 摘要入口追加经独立验证的 r11b 后继边。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_r11b_relay_completion_transition.py",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "77d7d069aaf99d27b8d25abcf2801b3f09065abab85eabb21fbea8e55f073fb8",
+      "reason": "独立重放失败 Attempt、完整响应根因、离线 zstandard 依赖、固定网络和文件闭集。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_model_catalog_prewarm.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "7e9e9fc3b00b3b3d3576dd8a232f9699c997df5edbd5d8b877cc64dc58ee95e7"
+      ],
+      "to_sha256": "cb1c7cf907883286a14e9d873b867942b9d1c7ab7593b5c9888dad2b1db07362",
+      "reason": "覆盖 relay 延迟完整写入、超时失败关闭及 app-server 生命周期顺序。"
+    }
+  ],
+  "verification": {
+    "failed_attempt_restoration_verified": true,
+    "targeted_python_tests_passed": true,
+    "capture_tool_tests_passed": true,
+    "egress_spec_passed": true,
+    "network_gate_passed": true
+  },
+  "result": "r11b_campaign_required_with_repaired_relay_completion",
+  "identity_sha256": "f52ba06b86b756b6a3e4c89e043e41f1210e8c43614859af9fb8ecf39d5c49b6"
+}

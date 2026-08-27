@@ -18,6 +18,7 @@ from tools.official_client_capture.drive_codex_model_catalog import (
     ModelCatalogPrewarmError,
     find_captured_model_catalog,
     wait_for_mitm_model_catalog,
+    wait_for_relay_model_catalog,
 )
 
 
@@ -196,6 +197,57 @@ class ModelCatalogPrewarmTest(unittest.TestCase):
             with self.assertRaisesRegex(ModelCatalogPrewarmError, "等待 MITM"):
                 wait_for_mitm_model_catalog(
                     Path(directory) / "models-http.jsonl",
+                    expected_model="gpt-5.5",
+                    expected_lite=False,
+                    deadline=time.monotonic() + 0.01,
+                )
+
+    def test_等待_relay_完整响应后才允许关闭_app_server(self) -> None:
+        """普通字节中继也必须等待完整 body，不能只封存 HTTP 200 响应头。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            relay = Path(directory) / "relay"
+            relay.mkdir()
+            request_path = relay / "conn001.client_to_upstream.bin"
+            response_path = relay / "conn001.upstream_to_client.bin"
+            request_path.write_bytes(
+                b"GET /backend-api/codex/models HTTP/1.1\r\n"
+                b"host: chatgpt.com\r\n\r\n"
+            )
+            complete = h1_response(lite=True)
+            response_path.write_bytes(complete[:80])
+
+            def delayed_completion() -> None:
+                time.sleep(0.05)
+                response_path.write_bytes(complete)
+
+            writer = threading.Thread(target=delayed_completion)
+            writer.start()
+            result = wait_for_relay_model_catalog(
+                relay,
+                expected_model="gpt-5.6-luna",
+                expected_lite=True,
+                deadline=time.monotonic() + 1,
+            )
+            writer.join()
+            self.assertEqual(result["connection_id"], 1)
+            self.assertEqual(result["response_path"], "relay/conn001.upstream_to_client.bin")
+
+            source = (
+                Path(__file__).parents[1] / "drive_codex_model_catalog.py"
+            ).read_text(encoding="utf-8")
+            self.assertLess(
+                source.index("relay_capture = wait_for_relay_model_catalog("),
+                source.index("finally:\n        client.close()"),
+            )
+
+    def test_等待_relay_响应超时后失败关闭(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            relay = Path(directory) / "relay"
+            relay.mkdir()
+            with self.assertRaisesRegex(ModelCatalogPrewarmError, "等待 relay"):
+                wait_for_relay_model_catalog(
+                    relay,
                     expected_model="gpt-5.5",
                     expected_lite=False,
                     deadline=time.monotonic() + 0.01,
