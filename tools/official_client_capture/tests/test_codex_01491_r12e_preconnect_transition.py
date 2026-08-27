@@ -453,7 +453,14 @@ def validate_transition(document: dict[str, Any]) -> None:
             or entry["predecessor_sha256s"] != expected_predecessors
             or current.is_symlink()
             or not current.is_file()
-            or entry["to_sha256"] != sha256(current.read_bytes())
+            or (
+                entry["to_sha256"] != sha256(current.read_bytes())
+                and not r13_candidate_coordinate_supersedes(
+                    path,
+                    entry["to_sha256"],
+                    sha256(current.read_bytes()),
+                )
+            )
             or not isinstance(entry["reason"], str)
             or not entry["reason"].strip()
         ):
@@ -464,11 +471,45 @@ def validate_transition(document: dict[str, Any]) -> None:
 
 @lru_cache(maxsize=1)
 def load_validated_transition() -> dict[str, Any]:
-    """加载并完整重放 r12e 预连接 transition。"""
+    """加载并完整重放 r12e 与 r13 后继 transition。"""
 
     document = load_transition()
     validate_transition(document)
-    return document
+    from tools.official_client_capture.tests import (
+        test_codex_01491_r13_candidate_coordinate_transition as r13_coordinate,
+    )
+
+    successor = r13_coordinate.load_validated_transition()
+    return {
+        **document,
+        "transitions": [
+            *document["transitions"],
+            *successor["transitions"],
+        ],
+    }
+
+
+def r13_candidate_coordinate_supersedes(
+    path: str,
+    prior_digest: str,
+    current_digest: str,
+) -> bool:
+    """延迟加载 r13，避免维护链模块初始化形成循环依赖。"""
+
+    from tools.official_client_capture.tests import (
+        test_codex_01491_r13_candidate_coordinate_transition as r13_coordinate,
+    )
+
+    try:
+        successor = r13_coordinate.load_validated_transition()
+    except (OSError, RuntimeError, ValueError, json.JSONDecodeError):
+        return False
+    return r13_coordinate.transition_supersedes(
+        successor,
+        path,
+        prior_digest,
+        current_digest,
+    )
 
 
 def transition_supersedes(

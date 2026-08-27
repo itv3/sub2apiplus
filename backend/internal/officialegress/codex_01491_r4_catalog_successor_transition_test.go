@@ -249,7 +249,11 @@ func validateCodex01491R4CatalogSuccessorTransition(
 				entry.Path,
 				entry.ToSHA256,
 				currentDigest,
-			)) {
+			) && !codex01491R13CandidateCoordinateSupersedes(
+			entry.Path,
+			entry.ToSHA256,
+			currentDigest,
+		)) {
 			return errors.New("Codex 0.149.1 r4 Catalog 后继 transition 当前摘要不一致：" + entry.Path)
 		}
 		paths = append(paths, entry.Path)
@@ -283,11 +287,16 @@ func codex01491R4CatalogSuccessorSupersedes(
 	if err != nil {
 		return false
 	}
+	r13, err := loadCodex01491R13CandidateCoordinateTransition()
+	if err != nil {
+		return false
+	}
 	edges := make(map[string][]string)
 	for _, transitions := range [][]codex01491CandidateSourceTransitionEntry{
 		receipt.Transitions,
 		h1Transitions,
 		recovery.Transitions,
+		r13.Transitions,
 	} {
 		for _, entry := range transitions {
 			if entry.Path != path {

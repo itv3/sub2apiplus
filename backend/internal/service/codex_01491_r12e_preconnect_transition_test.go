@@ -107,7 +107,15 @@ func loadCodex01491R12EPreconnectServiceTransitionUncached() (
 	if err := codex01491VerifyCandidateGateServiceIdentity(raw, receipt.IdentitySHA256); err != nil {
 		return receipt, err
 	}
-	return receipt, validateCodex01491R12EPreconnectServiceTransition(receipt)
+	if err := validateCodex01491R12EPreconnectServiceTransition(receipt); err != nil {
+		return receipt, err
+	}
+	successor, err := loadCodex01491R13CandidateCoordinateServiceTransition()
+	if err != nil {
+		return receipt, err
+	}
+	receipt.Transitions = append(receipt.Transitions, successor.Transitions...)
+	return receipt, nil
 }
 
 func validateCodex01491R12EPreconnectServiceTransition(
@@ -197,7 +205,13 @@ func validateCodex01491R12EPreconnectServiceTransition(
 			return errors.New("Codex 0.149.1 service r12e 预连接 transition 条目非法：" + expectedPath)
 		}
 		current, readErr := os.ReadFile(filepath.Join("../../..", filepath.FromSlash(entry.Path)))
-		if readErr != nil || upstreamMergeFrameworkServiceDigest(current) != entry.ToSHA256 {
+		currentDigest := upstreamMergeFrameworkServiceDigest(current)
+		if readErr != nil || (currentDigest != entry.ToSHA256 &&
+			!codex01491R13CandidateCoordinateSupersedesService(
+				entry.Path,
+				entry.ToSHA256,
+				currentDigest,
+			)) {
 			return errors.New("Codex 0.149.1 service r12e 预连接 transition 当前摘要不一致：" + entry.Path)
 		}
 	}

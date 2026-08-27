@@ -370,7 +370,23 @@ def r9_recovery_transition_supersedes(
         test_codex_01491_r9_contamination_recovery_transition as r9_recovery,
     )
 
-    return r9_recovery.transition_supersedes(path, prior_digest, current_digest)
+    if r9_recovery.transition_supersedes(path, prior_digest, current_digest):
+        return True
+
+    from tools.official_client_capture.tests import (
+        test_codex_01491_r13_candidate_coordinate_transition as r13_coordinate,
+    )
+
+    try:
+        successor = r13_coordinate.load_validated_transition()
+    except (OSError, ValueError, json.JSONDecodeError):
+        return False
+    return r13_coordinate.transition_supersedes(
+        successor,
+        path,
+        prior_digest,
+        current_digest,
+    )
 
 
 @lru_cache(maxsize=None)
@@ -389,8 +405,7 @@ def transition_chain_supersedes(
         document = load_transition()
         validate_transition(document)
         h1_document = r9_recovery.load_h1_transition()
-        recovery_document = r9_recovery.load_transition()
-        r9_recovery.validate_transition(recovery_document)
+        recovery_document = r9_recovery.load_validated_transition()
     except (OSError, ValueError, json.JSONDecodeError):
         return False
 
