@@ -1258,13 +1258,22 @@ class Relay:
                     self._dns_cache[h.strip()] = i.strip()
         self.ctx.sni_callback = self._on_sni
 
+    def _default_upstream_ip(self, target_host: str) -> str:
+        """返回未发生 SNI 切换时实际使用的默认上游地址。"""
+
+        # run_official_relay_scenario.sh 会分别生成 --upstream-ip 与
+        # --upstream-map；Cloudflare 轮询 DNS 时，两次解析可能得到不同地址。
+        # handle() 的默认路由历史上以 --upstream-ip 为准，预连接必须复用同一
+        # 选址，否则严格匹配会静默失败并重新执行一次慢 TLS 握手。
+        return self.args.upstream_ip or target_host
+
     async def _prepare_preconnected_upstream(self) -> None:
         """预建一次真实上游 TLS，避开官方模型目录请求的 5 秒硬超时。"""
 
         if not self.args.preconnect_upstream:
             return
         target_host = self.args.upstream_host
-        target_ip = await self._resolve(target_host)
+        target_ip = self._default_upstream_ip(target_host)
         target_port = 443
         offered = tuple(self.args.assume_alpn.split(",")) if self.args.assume_alpn else None
         context = ssl.create_default_context()
@@ -1858,9 +1867,9 @@ class Relay:
                         target_ip = await self._resolve(sni)
                         meta["upstream_ip_used"] = target_ip
                 else:
-                    target_ip = self.args.upstream_ip or target_host
+                    target_ip = self._default_upstream_ip(target_host)
             else:
-                target_ip = self.args.upstream_ip or target_host
+                target_ip = self._default_upstream_ip(target_host)
 
             # 受控干预只支持未协商 ALPN 的 HTTP/1.1。默认路径不预读，仍保持原来的
             # 全透明字节泵；开启干预时只缓冲首部，用于识别 WS 握手或 HTTP POST。

@@ -11,6 +11,8 @@ import tempfile
 import unittest
 import zlib
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from tools.official_client_capture.candidate_evidence_guard import scan_files_for_secrets
 from tools.official_client_capture.relay_extract import parse_ws_frames
@@ -100,6 +102,46 @@ def _fragmented_compressed_text_frames(
 
 
 class UpstreamByteRelayWebSocketTest(unittest.TestCase):
+    def test_preconnect_uses_the_same_default_upstream_ip_as_client_route(self) -> None:
+        """Cloudflare 轮询 DNS 不得让预连接与客户端连接选中不同 IP。"""
+
+        class Writer:
+            def get_extra_info(self, name: str):
+                self.assert_name = name
+                return None
+
+        relay = object.__new__(Relay)
+        relay.args = SimpleNamespace(
+            preconnect_upstream=True,
+            upstream_host="chatgpt.com",
+            upstream_ip="198.51.100.23",
+            assume_alpn="",
+            preconnect_timeout=15,
+        )
+        relay._preconnected_upstream = None
+        relay._preconnect_duration_ms = None
+        reader = object()
+        writer = Writer()
+
+        async def exercise() -> None:
+            open_connection = AsyncMock(return_value=(reader, writer))
+            with patch(
+                "tools.official_client_capture.upstream_byte_relay."
+                "asyncio.open_connection",
+                new=open_connection,
+            ):
+                await relay._prepare_preconnected_upstream()
+            self.assertEqual(
+                open_connection.await_args.kwargs["host"],
+                relay._default_upstream_ip("chatgpt.com"),
+            )
+            self.assertEqual(
+                relay._preconnected_upstream.target_ip,
+                "198.51.100.23",
+            )
+
+        asyncio.run(exercise())
+
     def test_preconnected_upstream_is_consumed_once_only_on_exact_route(self) -> None:
         class Reader:
             def at_eof(self) -> bool:
