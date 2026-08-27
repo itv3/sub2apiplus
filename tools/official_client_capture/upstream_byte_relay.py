@@ -1128,6 +1128,20 @@ class ByteRecorder:
         }
 
 
+@dataclass
+class PreconnectedUpstream:
+    """在官方客户端 5 秒模型目录超时开始前建好的真实上游 TLS 连接。"""
+
+    reader: asyncio.StreamReader
+    writer: asyncio.StreamWriter
+    target_host: str
+    target_ip: str
+    target_port: int
+    alpn_offer: tuple[str, ...] | None
+    selected_alpn: str | None
+    connect_duration_ms: float
+
+
 def _annotate_relay_stop_after_client_request(
     metadata: dict,
     *,
@@ -1217,6 +1231,9 @@ class Relay:
         # 主动断开、attempt 2 落到新连接。锁用于避免两个并发连接抢到同一编号。
         self._retry_probe_attempts = 0
         self._retry_probe_lock = asyncio.Lock()
+        self._preconnected_upstream: PreconnectedUpstream | None = None
+        self._preconnected_upstream_lock = asyncio.Lock()
+        self._preconnect_duration_ms: float | None = None
 
         self.ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         self.ctx.load_cert_chain(certfile=args.cert, keyfile=args.key)
@@ -1240,6 +1257,108 @@ class Relay:
                 if h.strip() and i.strip():
                     self._dns_cache[h.strip()] = i.strip()
         self.ctx.sni_callback = self._on_sni
+
+    async def _prepare_preconnected_upstream(self) -> None:
+        """预建一次真实上游 TLS，避开官方模型目录请求的 5 秒硬超时。"""
+
+        if not self.args.preconnect_upstream:
+            return
+        target_host = self.args.upstream_host
+        target_ip = await self._resolve(target_host)
+        target_port = 443
+        offered = tuple(self.args.assume_alpn.split(",")) if self.args.assume_alpn else None
+        context = ssl.create_default_context()
+        if offered:
+            context.set_alpn_protocols(list(offered))
+        started = time.monotonic()
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(
+                host=target_ip,
+                port=target_port,
+                ssl=context,
+                server_hostname=target_host,
+            ),
+            timeout=self.args.preconnect_timeout,
+        )
+        duration_ms = round((time.monotonic() - started) * 1000, 3)
+        ssl_object = writer.get_extra_info("ssl_object")
+        selected_alpn = ssl_object.selected_alpn_protocol() if ssl_object else None
+        self._preconnected_upstream = PreconnectedUpstream(
+            reader=reader,
+            writer=writer,
+            target_host=target_host,
+            target_ip=target_ip,
+            target_port=target_port,
+            alpn_offer=offered,
+            selected_alpn=selected_alpn,
+            connect_duration_ms=duration_ms,
+        )
+        self._preconnect_duration_ms = duration_ms
+
+    async def _take_preconnected_upstream(
+        self,
+        *,
+        target_host: str,
+        target_ip: str,
+        target_port: int,
+        alpn_offer: list[str] | None,
+    ) -> PreconnectedUpstream | None:
+        """只把预建连接交给主机、IP、端口与 ALPN 完全一致的首个客户端连接。"""
+
+        async with self._preconnected_upstream_lock:
+            candidate = self._preconnected_upstream
+            if candidate is None:
+                return None
+            expected_offer = tuple(alpn_offer) if alpn_offer else None
+            if (
+                candidate.target_host != target_host
+                or candidate.target_ip != target_ip
+                or candidate.target_port != target_port
+                or candidate.alpn_offer != expected_offer
+                or candidate.writer.is_closing()
+                or candidate.reader.at_eof()
+            ):
+                return None
+            self._preconnected_upstream = None
+            return candidate
+
+    def _write_preconnect_ready(self) -> None:
+        """在监听端口与预建 TLS 都就绪后写入无凭据就绪收据。"""
+
+        if not self.args.preconnect_upstream:
+            return
+        path = self.out / "preconnect-ready.json"
+        descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(
+                {
+                    "schema_version": "byte-relay-preconnect-ready/v1",
+                    "status": "ready",
+                    "upstream_host": self.args.upstream_host,
+                    "connect_duration_ms": self._preconnect_duration_ms,
+                },
+                stream,
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+            stream.write("\n")
+
+    async def _close_unused_preconnected_upstream(self) -> None:
+        """关闭未被客户端连接消费的预建上游，避免 relay 退出后遗留 TLS 会话。"""
+
+        async with self._preconnected_upstream_lock:
+            candidate = self._preconnected_upstream
+            self._preconnected_upstream = None
+        if candidate is None:
+            return
+        candidate.writer.close()
+        try:
+            await asyncio.wait_for(candidate.writer.wait_closed(), timeout=0.5)
+        except (asyncio.TimeoutError, ConnectionError, ssl.SSLError, OSError):
+            try:
+                candidate.writer.transport.abort()
+            except (AttributeError, OSError, RuntimeError):
+                pass
 
     async def _claim_core_counter(self, name: str) -> int:
         """为并发核心连接分配稳定序号。"""
@@ -2181,12 +2300,27 @@ class Relay:
                 mirror_selected=self.args.mirror_selected_alpn,
             )
             meta["upstream_alpn_offer"] = upstream_offer
-            if upstream_offer:
-                up_ctx.set_alpn_protocols(upstream_offer)
-            up_r, up_w = await asyncio.open_connection(
-                host=target_ip, port=target_port,
-                ssl=up_ctx, server_hostname=target_host)
-            up_alpn = up_w.get_extra_info("ssl_object").selected_alpn_protocol()
+            preconnected = await self._take_preconnected_upstream(
+                target_host=target_host,
+                target_ip=target_ip,
+                target_port=target_port,
+                alpn_offer=upstream_offer,
+            )
+            if preconnected is not None:
+                up_r, up_w = preconnected.reader, preconnected.writer
+                up_alpn = preconnected.selected_alpn
+                meta["upstream_preconnected"] = True
+                meta["upstream_preconnect_duration_ms"] = (
+                    preconnected.connect_duration_ms
+                )
+            else:
+                if upstream_offer:
+                    up_ctx.set_alpn_protocols(upstream_offer)
+                up_r, up_w = await asyncio.open_connection(
+                    host=target_ip, port=target_port,
+                    ssl=up_ctx, server_hostname=target_host)
+                up_alpn = up_w.get_extra_info("ssl_object").selected_alpn_protocol()
+                meta["upstream_preconnected"] = False
             meta["upstream_alpn"] = up_alpn
             if cli_alpn != up_alpn:
                 # 两侧不一致即污染：中继会把客户端逼上它本不走的协议。
@@ -2264,7 +2398,9 @@ class Relay:
     async def serve(self) -> None:
         # 始终以明文接受：TLS 握手必须发生在窥探 ClientHello 之后，
         # 否则 asyncio 会在回调前就完成握手，拿不到客户端的 ALPN offer。
+        await self._prepare_preconnected_upstream()
         server = await asyncio.start_server(self.handle, "0.0.0.0", self.args.port)
+        self._write_preconnect_ready()
         self._stop_event = asyncio.Event()
         if self._stop_requested:
             self._stop_event.set()
@@ -2290,6 +2426,7 @@ class Relay:
         finally:
             if loop_signal_registered:
                 loop.remove_signal_handler(signal.SIGTERM)
+            await self._close_unused_preconnected_upstream()
         self._stop_event = None
 
     def dump(self) -> None:
@@ -2312,6 +2449,8 @@ class Relay:
                        ),
                        "production_forwarding_enabled": not bool(self.args.synthetic_profile),
                        "mirror_selected_alpn": self.args.mirror_selected_alpn,
+                       "upstream_preconnect_enabled": self.args.preconnect_upstream,
+                       "upstream_preconnect_duration_ms": self._preconnect_duration_ms,
                        "connections": self.records},
                       f, ensure_ascii=False, indent=2)
         print(json.dumps({"connections": len(self.records),
@@ -2334,6 +2473,18 @@ def main() -> None:
                          "**必须在劫持 hosts 之前解析好**")
     ap.add_argument("--upstream-ip", default="",
                     help="direct 模式必填：上游真实 IP，绕开被劫持的 hosts")
+    ap.add_argument(
+        "--preconnect-upstream",
+        action="store_true",
+        help=("在开始监听客户端前预建一次真实上游 TLS；仅供模型目录前置采集"
+              "规避官方客户端的 5 秒硬超时，不修改任何应用字节"),
+    )
+    ap.add_argument(
+        "--preconnect-timeout",
+        type=float,
+        default=15.0,
+        help="预建真实上游 TLS 的独立超时秒数",
+    )
     ap.add_argument("--output", required=True)
     ap.add_argument("--assume-alpn", default="",
                     help="客户端 ALPN offer（逗号分隔）。asyncio 无法窥探 ClientHello，"
@@ -2450,6 +2601,17 @@ def main() -> None:
         ap.error("候选合成画像必须提供 --codex-version")
     if args.synthetic_profile and (args.upstream_ip or args.upstream_map):
         ap.error("候选合成模式禁止配置任何生产上游 IP/map")
+    if args.preconnect_timeout <= 0:
+        ap.error("--preconnect-timeout 必须大于 0")
+    if args.preconnect_upstream and (
+        args.mode != "direct"
+        or args.synthetic_profile
+        or args.mirror_selected_alpn
+        or not args.upstream_ip
+    ):
+        ap.error(
+            "--preconnect-upstream 只允许 direct 真实上游、固定 ALPN 的模型目录采集"
+        )
     if args.synthetic_profile and any((
         args.force_ws_fallback_426,
         args.inject_turn_state,

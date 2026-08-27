@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import struct
 import subprocess
@@ -20,6 +21,8 @@ from tools.official_client_capture.scrub_raw_bytes import (
     scrub,
 )
 from tools.official_client_capture.upstream_byte_relay import (
+    PreconnectedUpstream,
+    Relay,
     _SYNTHETIC_CLAUDE_PLANS,
     _synthetic_aux_response,
     _SYNTHETIC_AUX_CFUV_COOKIE,
@@ -97,6 +100,53 @@ def _fragmented_compressed_text_frames(
 
 
 class UpstreamByteRelayWebSocketTest(unittest.TestCase):
+    def test_preconnected_upstream_is_consumed_once_only_on_exact_route(self) -> None:
+        class Reader:
+            def at_eof(self) -> bool:
+                return False
+
+        class Writer:
+            def is_closing(self) -> bool:
+                return False
+
+        relay = object.__new__(Relay)
+        relay._preconnected_upstream_lock = asyncio.Lock()
+        relay._preconnected_upstream = PreconnectedUpstream(
+            reader=Reader(),
+            writer=Writer(),
+            target_host="chatgpt.com",
+            target_ip="203.0.113.10",
+            target_port=443,
+            alpn_offer=None,
+            selected_alpn=None,
+            connect_duration_ms=4875.0,
+        )
+
+        async def exercise() -> None:
+            mismatch = await relay._take_preconnected_upstream(
+                target_host="api.openai.com",
+                target_ip="203.0.113.10",
+                target_port=443,
+                alpn_offer=None,
+            )
+            self.assertIsNone(mismatch)
+            matched = await relay._take_preconnected_upstream(
+                target_host="chatgpt.com",
+                target_ip="203.0.113.10",
+                target_port=443,
+                alpn_offer=None,
+            )
+            self.assertIsNotNone(matched)
+            consumed = await relay._take_preconnected_upstream(
+                target_host="chatgpt.com",
+                target_ip="203.0.113.10",
+                target_port=443,
+                alpn_offer=None,
+            )
+            self.assertIsNone(consumed)
+
+        asyncio.run(exercise())
+
     def test_realtime_延迟合成先放行一次自然请求(self) -> None:
         self.assertFalse(
             _should_synthesize_realtime_call(

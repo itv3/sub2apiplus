@@ -83,6 +83,9 @@ class ModelCatalogPrewarmTest(unittest.TestCase):
             source,
         )
         self.assertIn("for attempt in 1 2 3", source)
+        self.assertIn("--preconnect-upstream --preconnect-timeout 15", source)
+        self.assertIn('relay/preconnect-ready.json', source)
+        self.assertIn("模型目录上游 TLS 预连接未在 20 秒内就绪", source)
         self.assertIn('rm -rf -- "$model_catalog_home"', source)
         self.assertIn("model_catalog_only=${MODEL_CATALOG_ONLY:-0}", source)
         self.assertIn(
