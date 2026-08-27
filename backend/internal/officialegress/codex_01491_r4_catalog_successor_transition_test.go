@@ -253,6 +253,10 @@ func validateCodex01491R4CatalogSuccessorTransition(
 			entry.Path,
 			entry.ToSHA256,
 			currentDigest,
+		) && !codex01491R15FormalClassificationSupersedes(
+			entry.Path,
+			entry.ToSHA256,
+			currentDigest,
 		)) {
 			return errors.New("Codex 0.149.1 r4 Catalog 后继 transition 当前摘要不一致：" + entry.Path)
 		}
@@ -279,6 +283,15 @@ func codex01491R4CatalogSuccessorSupersedes(
 	if err != nil {
 		return false
 	}
+	for _, entry := range receipt.Transitions {
+		if entry.Path == path && entry.ToSHA256 == currentDigest &&
+			slices.Contains(entry.PredecessorSHA256s, priorDigest) {
+			return true
+		}
+	}
+	if codex01491R15FormalClassificationSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	recovery, err := loadCodex01491R9ContaminationRecoveryTransition()
 	if err != nil {
 		return false
@@ -291,12 +304,17 @@ func codex01491R4CatalogSuccessorSupersedes(
 	if err != nil {
 		return false
 	}
+	r15, err := loadCodex01491R15FormalClassificationTransition()
+	if err != nil {
+		return false
+	}
 	edges := make(map[string][]string)
 	for _, transitions := range [][]codex01491CandidateSourceTransitionEntry{
 		receipt.Transitions,
 		h1Transitions,
 		recovery.Transitions,
 		r13.Transitions,
+		r15.Transitions,
 	} {
 		for _, entry := range transitions {
 			if entry.Path != path {

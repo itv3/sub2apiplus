@@ -194,7 +194,13 @@ func validateCodex01491R14ModelPrewarmTransition(
 			return errors.New("Codex 0.149.1 r14 模型预热 transition 条目非法：" + expectedPath)
 		}
 		current, readErr := codex01491RepoFile(entry.Path)
-		if readErr != nil || upstreamMergeFrameworkDigest(current) != entry.ToSHA256 {
+		currentDigest := upstreamMergeFrameworkDigest(current)
+		if readErr != nil || (currentDigest != entry.ToSHA256 &&
+			!codex01491R15FormalClassificationSupersedes(
+				entry.Path,
+				entry.ToSHA256,
+				currentDigest,
+			)) {
 			return errors.New("Codex 0.149.1 r14 模型预热 transition 当前摘要不一致：" + entry.Path)
 		}
 		paths = append(paths, entry.Path)

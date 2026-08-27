@@ -237,6 +237,11 @@ func codex01491R13CandidateCoordinateSupersedesService(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if codex01491R15FormalClassificationSupersedesService(
+		path, priorDigest, currentDigest,
+	) {
+		return true
+	}
 	receipt, err := loadCodex01491R13CandidateCoordinateServiceTransition()
 	if err != nil {
 		return false

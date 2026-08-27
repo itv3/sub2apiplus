@@ -206,6 +206,11 @@ func validateCodex01491R4CatalogSuccessorServiceTransition(
 		current, readErr := os.ReadFile(filepath.Join("../../..", filepath.FromSlash(entry.Path)))
 		currentDigest := upstreamMergeFrameworkServiceDigest(current)
 		if readErr != nil || (currentDigest != entry.ToSHA256 &&
+			!codex01491R15FormalClassificationSupersedesService(
+				entry.Path,
+				entry.ToSHA256,
+				currentDigest,
+			) &&
 			!codex01491R9ContaminationRecoverySupersedesService(
 				entry.Path,
 				entry.ToSHA256,
@@ -235,6 +240,11 @@ func codex01491R4CatalogSuccessorSupersedesService(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if codex01491R15FormalClassificationSupersedesService(
+		path, priorDigest, currentDigest,
+	) {
+		return true
+	}
 	receipt, err := loadCodex01491R4CatalogSuccessorServiceTransition()
 	if err != nil {
 		return false

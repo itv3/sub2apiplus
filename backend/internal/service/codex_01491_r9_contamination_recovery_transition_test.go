@@ -438,6 +438,11 @@ func codex01491R11BRelayCompletionSupersedesService(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if codex01491R15FormalClassificationSupersedesService(
+		path, priorDigest, currentDigest,
+	) {
+		return true
+	}
 	receipt, err := loadCodex01491R11BRelayCompletionServiceTransition()
 	if err != nil {
 		return false
@@ -616,6 +621,11 @@ func codex01491R11AHarnessRepairSupersedesService(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if codex01491R15FormalClassificationSupersedesService(
+		path, priorDigest, currentDigest,
+	) {
+		return true
+	}
 	receipt, err := loadCodex01491R11AHarnessRepairServiceTransition()
 	if err != nil {
 		return false
@@ -764,6 +774,11 @@ func codex01491R9ContaminationRecoverySupersedesService(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if codex01491R15FormalClassificationSupersedesService(
+		path, priorDigest, currentDigest,
+	) {
+		return true
+	}
 	receipt, err := loadCodex01491R9ContaminationRecoveryServiceTransition()
 	if err != nil {
 		return false

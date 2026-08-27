@@ -12,6 +12,10 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from tools.official_client_capture.tests.test_codex_01491_r15_formal_classification_transition import (
+    r15_supersedes,
+)
+
 
 ROOT = Path(__file__).resolve().parents[3]
 BASE_COMMIT = "e697ef456ddc9cd54bac79f4126af938ab445be5"
@@ -249,7 +253,10 @@ def transition_supersedes(
     prior_digest: str,
     current_digest: str,
 ) -> bool:
-    """只承认 r14 收据登记的精确追加边。"""
+    """只承认 r14 或 r15 收据登记的精确追加边。"""
+
+    if r15_supersedes(path, prior_digest, current_digest):
+        return True
 
     return any(
         entry.get("path") == path
@@ -375,13 +382,25 @@ def validate_transition(document: dict[str, Any]) -> None:
         expected_change = "added" if before is None else "modified"
         expected_predecessors = [] if before is None else [sha256(before)]
         current = ROOT / path_value
+        current_digest = (
+            sha256(current.read_bytes())
+            if current.is_file() and not current.is_symlink()
+            else ""
+        )
         if (
             path_value.startswith(FORBIDDEN_PREFIXES)
             or entry["change"] != expected_change
             or entry["predecessor_sha256s"] != expected_predecessors
             or current.is_symlink()
             or not current.is_file()
-            or entry["to_sha256"] != sha256(current.read_bytes())
+            or (
+                entry["to_sha256"] != current_digest
+                and not r15_supersedes(
+                    path_value,
+                    entry["to_sha256"],
+                    current_digest,
+                )
+            )
             or not isinstance(entry["reason"], str)
             or not entry["reason"].strip()
         ):

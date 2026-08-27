@@ -301,6 +301,9 @@ func codex01491CandidateSurfaceSuccessorSupersedes(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if codex01491R15FormalClassificationSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	if codex01491R4CatalogSuccessorSupersedes(path, priorDigest, currentDigest) {
 		return true
 	}

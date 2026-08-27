@@ -118,6 +118,11 @@ func readUpstreamMergeFrameworkTransition() (
 		))
 		currentDigest := upstreamMergeFrameworkDigest(current)
 		if readErr != nil || (currentDigest != transition.ToSHA256 &&
+			!codex01491R15FormalClassificationSupersedes(
+				transition.Path,
+				transition.ToSHA256,
+				currentDigest,
+			) &&
 			!codex01491CandidateSurfaceSuccessorSupersedes(
 				transition.Path,
 				transition.ToSHA256,
@@ -159,6 +164,9 @@ func upstreamMergeFrameworkTransitionSupersedes(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if codex01491R15FormalClassificationSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	if codex01491MaintenanceTransitionChainSupersedes(path, priorDigest, currentDigest) {
 		return true
 	}
@@ -183,6 +191,11 @@ func upstreamMergeFrameworkTransitionSupersedes(
 	for _, transition := range receipt.Transitions {
 		if transition.Path == path && slices.Contains(transition.PredecessorSHA256s, priorDigest) &&
 			(transition.ToSHA256 == currentDigest ||
+				codex01491R15FormalClassificationSupersedes(
+					path,
+					transition.ToSHA256,
+					currentDigest,
+				) ||
 				codex01491MaintenanceTransitionChainSupersedes(
 					path,
 					transition.ToSHA256,

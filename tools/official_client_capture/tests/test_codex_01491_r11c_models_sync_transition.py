@@ -11,6 +11,10 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from tools.official_client_capture.tests.test_codex_01491_r15_formal_classification_transition import (
+    r15_supersedes,
+)
+
 from tools.official_client_capture.tests.test_codex_01491_r12e_preconnect_transition import (
     load_validated_transition as load_r12e_preconnect_transition,
     transition_supersedes as r12e_preconnect_transition_supersedes,
@@ -418,6 +422,9 @@ def transition_supersedes(
     current_digest: str,
 ) -> bool:
     """只承认 r11c 及其已验证后继登记的精确摘要链。"""
+
+    if r15_supersedes(path, prior_digest, current_digest):
+        return True
 
     try:
         document = load_validated_transition()

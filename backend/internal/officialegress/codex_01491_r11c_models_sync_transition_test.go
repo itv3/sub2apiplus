@@ -320,6 +320,11 @@ func validateCodex01491R11CModelsSyncTransition(
 		current, readErr := codex01491RepoFile(entry.Path)
 		currentDigest := upstreamMergeFrameworkDigest(current)
 		if readErr != nil || (currentDigest != entry.ToSHA256 &&
+			!codex01491R15FormalClassificationSupersedes(
+				entry.Path,
+				entry.ToSHA256,
+				currentDigest,
+			) &&
 			!codex01491R12EPreconnectSupersedes(
 				entry.Path,
 				entry.ToSHA256,

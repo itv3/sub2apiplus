@@ -12,6 +12,10 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from tools.official_client_capture.tests.test_codex_01491_r15_formal_classification_transition import (
+    r15_supersedes,
+)
+
 from tools.official_client_capture.tests.test_codex_01491_r11a_harness_transition import (
     load_validated_transition as load_r11a_harness_transition,
     transition_supersedes as r11a_harness_transition_supersedes,
@@ -280,6 +284,9 @@ def transition_supersedes(
     current_digest: str,
 ) -> bool:
     """只承认 r9 污染恢复收据登记的精确追加边。"""
+
+    if r15_supersedes(path, prior_digest, current_digest):
+        return True
 
     try:
         document = load_validated_transition()

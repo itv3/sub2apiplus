@@ -219,6 +219,11 @@ func codex01491R11CModelsSyncSupersedesService(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if codex01491R15FormalClassificationSupersedesService(
+		path, priorDigest, currentDigest,
+	) {
+		return true
+	}
 	receipt, err := loadCodex01491R11CModelsSyncServiceTransition()
 	if err != nil {
 		return false

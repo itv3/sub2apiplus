@@ -202,7 +202,13 @@ func validateCodex01491R14ModelPrewarmServiceTransition(
 			return errors.New("Codex 0.149.1 service r14 模型预热 transition 条目非法：" + expectedPath)
 		}
 		current, readErr := os.ReadFile(filepath.Join("../../..", filepath.FromSlash(entry.Path)))
-		if readErr != nil || upstreamMergeFrameworkServiceDigest(current) != entry.ToSHA256 {
+		currentDigest := upstreamMergeFrameworkServiceDigest(current)
+		if readErr != nil || (currentDigest != entry.ToSHA256 &&
+			!codex01491R15FormalClassificationSupersedesService(
+				entry.Path,
+				entry.ToSHA256,
+				currentDigest,
+			)) {
 			return errors.New("Codex 0.149.1 service r14 模型预热 transition 当前摘要不一致：" + entry.Path)
 		}
 		paths = append(paths, entry.Path)
@@ -223,6 +229,11 @@ func codex01491R14ModelPrewarmSupersedesService(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if codex01491R15FormalClassificationSupersedesService(
+		path, priorDigest, currentDigest,
+	) {
+		return true
+	}
 	receipt, err := loadCodex01491R14ModelPrewarmServiceTransition()
 	if err != nil {
 		return false

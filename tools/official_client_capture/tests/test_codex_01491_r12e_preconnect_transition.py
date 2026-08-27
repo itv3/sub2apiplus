@@ -11,6 +11,10 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from tools.official_client_capture.tests.test_codex_01491_r15_formal_classification_transition import (
+    r15_supersedes,
+)
+
 
 ROOT = Path(__file__).resolve().parents[3]
 BASE_COMMIT = "48f851d415442b59d53d507e7a8a23218572439a"
@@ -518,6 +522,9 @@ def transition_supersedes(
     current_digest: str,
 ) -> bool:
     """按登记路径图重放 r12e 及其后继的精确摘要链。"""
+
+    if r15_supersedes(path, prior_digest, current_digest):
+        return True
 
     try:
         document = load_validated_transition()

@@ -10,6 +10,10 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from tools.official_client_capture.tests.test_codex_01491_r15_formal_classification_transition import (
+    r15_supersedes,
+)
+
 
 ROOT = Path(__file__).resolve().parents[3]
 TRANSITION_PATH = (
@@ -255,20 +259,30 @@ def validate_transition(document: dict[str, Any]) -> None:
     for binding_name in ("release_catalog", "release_graph", "contract_release_graph"):
         binding = expected_catalog[binding_name]
         path = ROOT / binding["path"]
-        if path.is_symlink() or not path.is_file() or sha256(path.read_bytes()) != binding[
-            "sha256"
-        ]:
+        current_digest = sha256(path.read_bytes()) if path.is_file() else ""
+        if (
+            path.is_symlink()
+            or not path.is_file()
+            or (
+                current_digest != binding["sha256"]
+                and not r15_supersedes(
+                    binding["path"],
+                    binding["sha256"],
+                    current_digest,
+                )
+            )
+        ):
             raise ValueError(f"r4 候选 Catalog 后继 transition 摘要漂移：{binding_name}")
 
     release_catalog = load_document(
         ROOT / expected_catalog["release_catalog"]["path"],
         "r4 release-catalog",
     )
-    if release_catalog.get("source") != (
+    legacy_catalog_bound = release_catalog.get("source") == (
         "campaign:codex-0_149_1-formal-production-replacement-"
         "20260826T140949Z-2c1ab3b9e-r4/classification:"
         "058bb9a2d78ba64ecda1a2a8025158b6cf64f0183a931a2fd1b519146838a599"
-    ) or release_catalog.get("release_graph") != {
+    ) and release_catalog.get("release_graph") == {
         "path": (
             "catalogdata/runtime/release-graphs/"
             "9824eee0200ea1be1136a1a87ea5accc9a8e5a7c48855b4f0c06587eeab17ca4.json"
@@ -276,7 +290,15 @@ def validate_transition(document: dict[str, Any]) -> None:
         "sha256": (
             "9824eee0200ea1be1136a1a87ea5accc9a8e5a7c48855b4f0c06587eeab17ca4"
         ),
-    }:
+    }
+    release_catalog_current_digest = sha256(
+        (ROOT / expected_catalog["release_catalog"]["path"]).read_bytes()
+    )
+    if not legacy_catalog_bound and not r15_supersedes(
+        expected_catalog["release_catalog"]["path"],
+        expected_catalog["release_catalog"]["sha256"],
+        release_catalog_current_digest,
+    ):
         raise ValueError("r4 release-catalog 未精确绑定正式分类")
 
     if document["verification"] != {
@@ -366,6 +388,9 @@ def r9_recovery_transition_supersedes(
 ) -> bool:
     """延迟加载 r9 恢复模块，避免候选门禁模块初始化形成循环依赖。"""
 
+    if r15_supersedes(path, prior_digest, current_digest):
+        return True
+
     from tools.official_client_capture.tests import (
         test_codex_01491_r9_contamination_recovery_transition as r9_recovery,
     )
@@ -396,6 +421,9 @@ def transition_chain_supersedes(
     current_digest: str,
 ) -> bool:
     """重放 r4、模型目录 H1 与 r9 污染恢复的追加式摘要链。"""
+
+    if r15_supersedes(path, prior_digest, current_digest):
+        return True
 
     try:
         from tools.official_client_capture.tests import (

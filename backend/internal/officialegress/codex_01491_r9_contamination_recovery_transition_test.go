@@ -411,6 +411,11 @@ func validateCodex01491R11BRelayCompletionTransition(
 		current, readErr := codex01491RepoFile(entry.Path)
 		currentDigest := upstreamMergeFrameworkDigest(current)
 		if readErr != nil || (currentDigest != entry.ToSHA256 &&
+			!codex01491R15FormalClassificationSupersedes(
+				entry.Path,
+				entry.ToSHA256,
+				currentDigest,
+			) &&
 			!codex01491R11CModelsSyncSupersedes(
 				entry.Path,
 				entry.ToSHA256,
@@ -583,6 +588,11 @@ func validateCodex01491R11AHarnessRepairTransition(
 		current, readErr := codex01491RepoFile(entry.Path)
 		currentDigest := upstreamMergeFrameworkDigest(current)
 		if readErr != nil || (currentDigest != entry.ToSHA256 &&
+			!codex01491R15FormalClassificationSupersedes(
+				entry.Path,
+				entry.ToSHA256,
+				currentDigest,
+			) &&
 			!codex01491R11BRelayCompletionSupersedes(
 				entry.Path,
 				entry.ToSHA256,
@@ -729,6 +739,11 @@ func validateCodex01491R9ContaminationRecoveryTransition(
 		current, readErr := codex01491RepoFile(entry.Path)
 		currentDigest := upstreamMergeFrameworkDigest(current)
 		if readErr != nil || (currentDigest != entry.ToSHA256 &&
+			!codex01491R15FormalClassificationSupersedes(
+				entry.Path,
+				entry.ToSHA256,
+				currentDigest,
+			) &&
 			!codex01491R11AHarnessRepairSupersedes(
 				entry.Path,
 				entry.ToSHA256,

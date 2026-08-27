@@ -537,6 +537,11 @@ func validateCodex01491DocPreEntries(entries []codex01491DocPreTransitionEntry) 
 		current, err := codex01491RepoFile(entry.Path)
 		currentDigest := upstreamMergeFrameworkDigest(current)
 		if err != nil || (currentDigest != entry.ToSHA256 &&
+			!codex01491R15FormalClassificationSupersedes(
+				entry.Path,
+				entry.ToSHA256,
+				currentDigest,
+			) &&
 			!codex01491CandidateSourceTransitionSupersedes(
 				entry.Path, entry.ToSHA256, currentDigest,
 			) &&
@@ -627,6 +632,11 @@ func validateCodex01491P0ChainRepair(receipt codex01491P0ChainRepairReceipt) err
 		current, readErr := codex01491RepoFile(entry.Path)
 		currentDigest := upstreamMergeFrameworkDigest(current)
 		if readErr != nil || (currentDigest != entry.ToSHA256 &&
+			!codex01491R15FormalClassificationSupersedes(
+				entry.Path,
+				entry.ToSHA256,
+				currentDigest,
+			) &&
 			!codex01491CandidateSourceTransitionSupersedes(
 				entry.Path, entry.ToSHA256, currentDigest,
 			) &&
@@ -748,6 +758,11 @@ func validateCodex01491CampaignBoundaryTransition(
 		current, readErr := codex01491RepoFile(entry.Path)
 		currentDigest := upstreamMergeFrameworkDigest(current)
 		if readErr != nil || (currentDigest != entry.ToSHA256 &&
+			!codex01491R15FormalClassificationSupersedes(
+				entry.Path,
+				entry.ToSHA256,
+				currentDigest,
+			) &&
 			!codex01491CandidateSourceTransitionSupersedes(
 				entry.Path, entry.ToSHA256, currentDigest,
 			) &&
@@ -868,6 +883,11 @@ func validateCodex01491FailedEvidenceRecovery(
 		current, readErr := codex01491RepoFile(entry.Path)
 		currentDigest := upstreamMergeFrameworkDigest(current)
 		if readErr != nil || (currentDigest != entry.ToSHA256 &&
+			!codex01491R15FormalClassificationSupersedes(
+				entry.Path,
+				entry.ToSHA256,
+				currentDigest,
+			) &&
 			!codex01491CandidateSourceTransitionSupersedes(
 				entry.Path, entry.ToSHA256, currentDigest,
 			) &&
@@ -1001,6 +1021,11 @@ func validateCodex01491FormalAttemptRepair(
 		current, readErr := codex01491RepoFile(entry.Path)
 		currentDigest := upstreamMergeFrameworkDigest(current)
 		if readErr != nil || (currentDigest != entry.ToSHA256 &&
+			!codex01491R15FormalClassificationSupersedes(
+				entry.Path,
+				entry.ToSHA256,
+				currentDigest,
+			) &&
 			!codex01491CandidateSourceTransitionSupersedes(
 				entry.Path, entry.ToSHA256, currentDigest,
 			) &&
@@ -1127,6 +1152,11 @@ func validateCodex01491EgressGateChainRepair(
 		current, readErr := codex01491RepoFile(entry.Path)
 		currentDigest := upstreamMergeFrameworkDigest(current)
 		if readErr != nil || (currentDigest != entry.ToSHA256 &&
+			!codex01491R15FormalClassificationSupersedes(
+				entry.Path,
+				entry.ToSHA256,
+				currentDigest,
+			) &&
 			!codex01491CandidateSourceTransitionSupersedes(
 				entry.Path, entry.ToSHA256, currentDigest,
 			) &&
@@ -1257,6 +1287,11 @@ func validateCodex01491TargetScenarioBinding(
 		current, readErr := codex01491RepoFile(entry.Path)
 		currentDigest := upstreamMergeFrameworkDigest(current)
 		if readErr != nil || (currentDigest != entry.ToSHA256 &&
+			!codex01491R15FormalClassificationSupersedes(
+				entry.Path,
+				entry.ToSHA256,
+				currentDigest,
+			) &&
 			!codex01491CandidateSourceTransitionSupersedes(
 				entry.Path, entry.ToSHA256, currentDigest,
 			)) {
@@ -1447,6 +1482,9 @@ func codex01491MaintenanceTransitionChainSupersedes(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if codex01491R15FormalClassificationSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	if codex01491CandidateSourceTransitionSupersedes(
 		path, priorDigest, currentDigest,
 	) {

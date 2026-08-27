@@ -1,0 +1,958 @@
+{
+  "schema_version": "official-client-codex-0.149.1-r15-formal-classification-transition/v1",
+  "issued_at_utc": "2026-08-27T12:04:40Z",
+  "base_commit": "165666267c07bafff6a2c04077a82187e157968e",
+  "scope": "codex-0.149.1-r15-formal-classification",
+  "framework_stage": "VC-3/VC-4/FORMAL-CLASSIFICATION-STAGE",
+  "predecessor_transition": {
+    "path": "docs/egress/maintenance/codex-0.149.1-r14-model-prewarm-transition.json",
+    "file_sha256": "50df45f215e4369ef4142559cff58f6b618a25d60d293c70230f243787094871",
+    "identity_sha256": "4a854398c8ccb079cd45856690f1b99d26a0dc4f9839c931c0a694bec59298a9"
+  },
+  "campaign": {
+    "id": "c1491-r14-f",
+    "mode": "formal",
+    "purpose": "production_replacement",
+    "target_version": "0.149.1",
+    "official_attempt_id": "20260827T105419Z-823221b63b08688e",
+    "classification_sha256": "97a6cf745c120db22d552b466c342c46d893ce0974521983e4a74ac1cf2654bd",
+    "classification_package_sha256": "caa5d79776bf1765352e24245db8274e6aa6aef408b6129392ea1cf32419e179",
+    "profile_digest": "8e59b38e2ad90a1fd4eb7520c2c54f01fc62f802690d45a2cdab5f91f249fb60",
+    "rule_count": 42,
+    "discovery_count": 2101,
+    "blocked_count": 0
+  },
+  "stage_profile": {
+    "receipt_sha256": "cc9570a4d8a21bd7a43ca0a3dd870bbd8b9f7e93286d96faf1604c0e4df7ce9a",
+    "inventory_sha256": "9b8f867f0b5d97f595909bbecdfd2519754b74e5a716f09eaef4d0f97af6e798",
+    "active_version": "0.147.0",
+    "active_profile_digest": "94071c8eb93cfd337ac6eabc291d878084e3dcec8a9e618e04e6f68792d1a7bc",
+    "previous_version": "0.149.1",
+    "previous_profile_digest": "8e59b38e2ad90a1fd4eb7520c2c54f01fc62f802690d45a2cdab5f91f249fb60",
+    "release_graph_sha256": "cdab29c8c598356e9cb97958bb80695a9f7d3c61e9af37e4f13da84cb336d08e",
+    "release_catalog_sha256": "24722a44b2716739384c536ede3e92a7c27e3634c42afe2f25ae3e883fb7b5d7",
+    "active_unchanged": true,
+    "production_selector_changed": false
+  },
+  "verification": {
+    "classification_replay_passed": true,
+    "stage_inventory_replay_passed": true,
+    "targeted_catalog_tests_passed": true,
+    "historical_gate_failure_count": 52,
+    "repository_wide_gates_pending": true
+  },
+  "safety": {
+    "historical_receipts_modified": false,
+    "historical_artifacts_overwritten": false,
+    "network_configuration_changed": false,
+    "production_selector_changed": false,
+    "deployment_performed": false,
+    "production_activated": false,
+    "vircs_accessed": false
+  },
+  "path_set_sha256": "82ae773baf1716e27b5a7b92144c508750d78425e135b6351989d3e44d3eea02",
+  "transitions": [
+    {
+      "path": ".github/workflows/backend-ci.yml",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "0f6c1230a7306e46e22948ee5be7fb594e8cd09a6753f3d878e0163f570ac221"
+      ],
+      "to_sha256": "e756b8314ff6a4d305b680e8c0832412c9970ee2f6d82d61932ab08d6dbab6cc",
+      "reason": "追加登记历史冻结收据已引用的精确目标摘要到当前联合源码摘要；该源码与历史收据均未在本阶段改写。"
+    },
+    {
+      "path": ".gitignore",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "b31486272278ea54a2fecfcb4fd2be8f69ebca13f9179c084af108c36054a31e",
+        "df1cdba2e13c5f37e5e5c64c18bdf03d321d329d1908bb0e57b434ca15b505fc"
+      ],
+      "to_sha256": "47212e56124a4b91668148b38833519170e21ae8e91eec8a3290de04b9b56b33",
+      "reason": "追加登记历史冻结收据已引用的精确目标摘要到当前联合源码摘要；该源码与历史收据均未在本阶段改写。"
+    },
+    {
+      "path": "Makefile",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "070cfac169fefc59dcfc968d0f46a72935d825ef44332a5364adeeb7cc40b490",
+        "1c1e7f1b3f60294b980812140a223a2cbf6ac499302b777338a034a38920c80a"
+      ],
+      "to_sha256": "e220d5f015316b76fc881827d3684c5e4fe41af1667d24b4788bd06a46b871d4",
+      "reason": "追加登记历史冻结收据已引用的精确目标摘要到当前联合源码摘要；该源码与历史收据均未在本阶段改写。"
+    },
+    {
+      "path": "backend/cmd/egressscan/classify.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "5d20596c2e4da6f5e64cb454f7dd045ba92664cc5673f9b869a889dfe5436b2d",
+        "c1da6c5a9db7be862cbb5f58c8dcde33c8b67d29407073f5e1da7d2d71709a7f",
+        "c39ba21bc773991c5eb5929b3fdb8e646fac85b612d68e88be738d160e26f9b4",
+        "dc3449aed5f180862f3e294d6f518130b05ae4df325fd79badb7a6538e7aee33",
+        "fc7b999cb57fa47dca212c4653524b0acd5b6304c912294971948bcc54abca49"
+      ],
+      "to_sha256": "1ed55101182ad64efaed965794a982ac4dad1a62fcde58260f02969d6d830378",
+      "reason": "追加登记历史冻结收据已引用的精确目标摘要到当前联合源码摘要；该源码与历史收据均未在本阶段改写。"
+    },
+    {
+      "path": "backend/cmd/egressscan/lifecycle_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "0169dcfffe9e1203d2017bde9a67b0467aec08fb38bba90218aba036608f1a16",
+        "352ab440f07c20f53df5745950eca64bafbd71ca62087c275f43674eef068cd6",
+        "526b0cd3099b78b4587c2496b3233c6096617c89cbecd8da33fbc13b42856255",
+        "7e8b8392916180921093e8db9c2423cf76fec817f5573c1329eadb78027bcae4",
+        "9b225bcd4b1ffbe20a9f03fccd6efd84f8d8422b3a08df301d8a519a3f9d1f32",
+        "b20d6ff74b93b9cc9c827bb1284060e46ce7f3ca76d43e99b221dcaaa37f8ab9"
+      ],
+      "to_sha256": "f0f4b3e03341e2b949b91a5722f8b0951ddd055906a63f8fbc015f6c2e02532b",
+      "reason": "追加登记历史冻结收据已引用的精确目标摘要到当前联合源码摘要；该源码与历史收据均未在本阶段改写。"
+    },
+    {
+      "path": "backend/cmd/server/wire.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "eed1893b88880d8531bea542407f3050f486cfc71817dbcf9a8c170d67a7a018"
+      ],
+      "to_sha256": "22e7ff931ac57900f39ca5f49a9c548a7caceed957a2469e6c3ff9fe602d838b",
+      "reason": "追加登记历史冻结收据已引用的精确目标摘要到当前联合源码摘要；该源码与历史收据均未在本阶段改写。"
+    },
+    {
+      "path": "backend/cmd/server/wire_gen.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "82b7ea7769b45cdde388917c814bb3f424c5e5d36086c819f568ec20f5335c16",
+        "909ca85de7219d3b112e2bcaaef6ec04f329becc18c2e9ac0171e5083d65635f"
+      ],
+      "to_sha256": "7fc08bddf23518938ade99a2fe2402f83f0795662c2a68510d597566d0f810ff",
+      "reason": "追加登记历史冻结收据已引用的精确目标摘要到当前联合源码摘要；该源码与历史收据均未在本阶段改写。"
+    },
+    {
+      "path": "backend/internal/handler/gateway_handler.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "672c3fe54d16645053ca9553724c7a35af0255dff75bc003fb20a08b21ac0092",
+        "8c4090270bc2b038cef630c95eb9cf4f96c69fa4162a8eb0f6594151532b110a"
+      ],
+      "to_sha256": "7808c3aeef6f0715292120f76be27bb2bfa946cf212ba94405bf4281722504e3",
+      "reason": "追加登记历史冻结收据已引用的精确目标摘要到当前联合源码摘要；该源码与历史收据均未在本阶段改写。"
+    },
+    {
+      "path": "backend/internal/handler/openai_gateway_handler.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "226800bec6331094a49d36d6150cfe3fe31424c566d1c204b162d0baba7729e5",
+        "268eb5fc6b126320167bb349ac5d38c915338a474512ca946a275e1daa3ed184",
+        "fcb44519ab1cf9382d9f1b1f456b64d07f613fa8fd3611db722524f7fb5f977d"
+      ],
+      "to_sha256": "e04a4a304b17b67442e77f3b32d38b477970e2656200ff189a46dc8e2ad450a6",
+      "reason": "追加登记历史冻结收据已引用的精确目标摘要到当前联合源码摘要；该源码与历史收据均未在本阶段改写。"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/runtime/release-catalog.json",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "131c1a474cca85db02f96a5c7f357cf0425f13ca408403844cb3c01fe03d3b0d",
+        "c26b274a5942eee249ae4755aa60c399745f03212077e798fb5d582f0ce6c81e",
+        "f7d4c7b6f6ab045c4c4cec1ca87f29928366199c16f1838717dd02dc91a50259"
+      ],
+      "to_sha256": "24722a44b2716739384c536ede3e92a7c27e3634c42afe2f25ae3e883fb7b5d7",
+      "reason": "追加 Formal 分类后的候选 Catalog；Active 继续固定为 0.147.0，0.149.1 仅进入 previous。"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/runtime/release-graphs/cdab29c8c598356e9cb97958bb80695a9f7d3c61e9af37e4f13da84cb336d08e.json",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "cdab29c8c598356e9cb97958bb80695a9f7d3c61e9af37e4f13da84cb336d08e",
+      "reason": "新增仅描述 0.147.0 Active 与 0.149.1 previous 的不可变 release graph。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_body.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "0bbd57f2f656f1fb6a7ebb02031466d99f87a2775c44eb3aaee9af1a9b41cff9",
+        "0dad456982d4135eb9a4e71cf20c8f13e117dcd6f92f9e6e96f80e253378406c",
+        "6877123a881ba1ade19f51120d39d77f12f878b99ba5d4cb7c5603a8711b7823",
+        "736f35a4a0258591fdd700979f1da0ee6c29373d6006bd31501bf1ee4647e102",
+        "a3e4264c9f8a5bccec8de19e259dc2d20950be1616da3d0f818bd00b6aa6f09e",
+        "a4559ce277a1bf1c8c554ab42fd70695d141a8ab64f16b28afde1de8b1329c50",
+        "ba45723ed345a30cbd358ea9d0c23fe065df410a921fc3c69aa3eb6d5dd846b7",
+        "cb97480760bb7f9eb7a664ce7a4eb1b1f0717f412e6b6ba5e9b676eb588f9a9d",
+        "f5630f1a1907d54eb8b5f5dfff111e55a7a6c07fcb18779856f17844e0939f3a"
+      ],
+      "to_sha256": "3d90294dfe5f45b61a98eca44816209035548706258f55b287c4e05d850ea242",
+      "reason": "追加登记历史冻结收据已引用的精确目标摘要到当前联合源码摘要；该源码与历史收据均未在本阶段改写。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_candidate_catalog.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "4fee5d9c1bdad14a94159b77776cea4a27d7c015834013469a24c13f96483053",
+        "c37324eeb697fa1ff7a33d273eeb7d50dd5c50f8c96d54868944500e232dd4b1",
+        "c79cd932e64cdfdabb8641ecfcf4353498713a1e60811456ccdd8240a8c724fc"
+      ],
+      "to_sha256": "683d7c86827738dc11b887285ce457ef0408bedd40396852d73c34e112eefdd8",
+      "reason": "追加登记历史冻结收据已引用的精确目标摘要到当前联合源码摘要；该源码与历史收据均未在本阶段改写。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_h_legacy_retirement_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "02953064979285ed9cfb302c076f018b295ece14547f189ce9f436e0d4549e8a",
+        "63cbd59d9fb97d71531f32fef80e720ff192747fe42e7e1e12fd4cab79fd8c73",
+        "6882ec3399ad4bcdcf11728847e314f69f4308f1f632139705f901d3395735e2",
+        "6f608a1c2e05b25ee06f50dea3f8a174a38f50126a7541dadaee50da5704c752",
+        "cf1695ce7eb3dcd50d982fd54d6d8aa42d0d3e5424ca7c1522622d7dc78e2b9a",
+        "fabaf5cf55fdb973b07015a9b4baf2ecc1b3258d9e108a83fd124eea36aa815f"
+      ],
+      "to_sha256": "ab7d3f3749821d093ecb7412279bce87139fa140820a709ceebe6d63613e53a4",
+      "reason": "追加登记历史冻结收据已引用的精确目标摘要到当前联合源码摘要；该源码与历史收据均未在本阶段改写。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_h_source_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "092c202b754038c012351d60cd0eea8efa1d26a8669b690a95a6f3b8fd95a380",
+        "87cb831e452973be7d42f99144ea97efbc03fd06fd2fe1ba3841f0c2662b78c4",
+        "a1ff79a9197ce1252856fa8829e17971e0d6061a060e7d006d66a257ba5ae8cb",
+        "bee369a73147fdeefb706a8d76a087a3628188a7289ee41bc2bce45902aa4337",
+        "d21ab94266805733e2037ed84a9d4dc3b069e955acacccc1d55c740d18657110",
+        "f0fb7bc7b99f8500d43785f85d4cb9033aa1be6674caa315e11a9f4c95dfa79c"
+      ],
+      "to_sha256": "d3f3c5011c03cc5915cfbf4b5c5c55bcbf7671646a220ef707cef946e68faf4f",
+      "reason": "追加登记历史冻结收据已引用的精确目标摘要到当前联合源码摘要；该源码与历史收据均未在本阶段改写。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_ingress.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "0920335717e3d646bc4d54bda997ea8c81a23bd3fd056d6258b442824abd0204",
+        "13e1c1947ac4b46d44764ee1f409655dcb42e147f71b053144747f2a32736aaf",
+        "18fa37164205d0016107090c91e5a02278ed2bcb5bed8804fb2bab16209dd444",
+        "27abd1e5c54bb4a980eaf00e744c6507bacb4da0bbf4eaead7e4329b2ebef6e8",
+        "aac2e5e9326cb97a14f0b0bcf81505418a54bc233bef85f14099d68d5ae6f57e",
+        "d7f2b39481e4da26f175a516e638887bdda07af6fa7b49f9000046413e5d0f92",
+        "d999c542e0bcb582beab24a3d3c46dd0759ffe6608716f05b708bdee86a33d98",
+        "eec9e4c32e1d53f2e470cd5d3e86405e78d15370227597757ea1ed18521143fd"
+      ],
+      "to_sha256": "5758ec909629b8832f2a8a44279ae554c4f6f553a3a78b8bdacfff8463aa99fc",
+      "reason": "追加登记历史冻结收据已引用的精确目标摘要到当前联合源码摘要；该源码与历史收据均未在本阶段改写。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_persona_release_catalog_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "31fed94b6c57d65dd785d08fe525b66bdcda971d343f5e2b20cadca1f53dd463",
+        "5a5a60ad47ed0ccf35c02507b52a5050e82cb0c40b2cef1af3f64be27a2dc255",
+        "6446c7890abe5fb3063696bcac131961dc226a1ffffb44997fe7bb9d54cc6b5d"
+      ],
+      "to_sha256": "356c481f6add4afff14871da01b66c1876a95d02ec4cdb0718ddaa6c8fa65d54",
+      "reason": "追加登记历史冻结收据已引用的精确目标摘要到当前联合源码摘要；该源码与历史收据均未在本阶段改写。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_runtime.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "081b75a2420d4e7ad7a3a9e976e6f6928050708e73b57effcb5b20b63e5a79ac",
+        "22c631761c28a142c70f064debe2c386517471b2e7b585acdf3bdb9063af9a54",
+        "2730de466f960db35021198d83d9a1cf284fded42235ec927c204f5f464d003f",
+        "3aa827f35ae49bd43af4f11f8c968790eb2e482b6b25662bdd8b1bbecb320310",
+        "5942bfd60b41f55ddaf923c97464ea6746d7579b52fb5bdc6ea5dbf42e66fc00",
+        "5b24eec2cedd2cdd44e9045933261b62dfac2f5d9cc64d6c057ff0024af9167c",
+        "607fea56eb0e5791d5df6e61e4cb2d903c4384e9f0520b988b8f21f0f6ea9719",
+        "6b018039f988c30b1d1e5e6b3d468d005cee285c05ff4a07aa07e2e246825c71",
+        "c8c764873aaf615a2256a0bac2b2875db1db00e8d6c7d9a7deb52bd478801f5b",
+        "fa171c89e08be0a576d1e716da2c7780155699b685d705ce694bdcae618efa5f"
+      ],
+      "to_sha256": "775ec7883f5a664ff43b86fc554e43dd185aeb56e55d097a1215aeaf4223fb81",
+      "reason": "追加登记历史冻结收据已引用的精确目标摘要到当前联合源码摘要；该源码与历史收据均未在本阶段改写。"
+    },
+    {
+      "path": "backend/internal/officialegress/codex_01491_candidate_source_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "115eff32cfdb74f097f657b74fcf5c9c251f84850beeb59ac738329f3a6db46e",
+        "7b78f5b936adc89b10abf20f61d481dce092a61fdb9431df02b3c3585474fca6",
+        "84df55efad07da2e5efa3b150fe1eb1745817aff12956ee2b6ff3763d3a0dcfe",
+        "8a3696c51f90d240c180a3556c0ff9f2542366d1ad17a87dffab6a19cffede30"
+      ],
+      "to_sha256": "96d6500c99a9251a6d4990a9f972541fbcd2ebd533816b3987f8489cafcdce8a",
+      "reason": "把 r15 精确后继边接入候选 Catalog 的统一后继判定。"
+    },
+    {
+      "path": "backend/internal/officialegress/codex_01491_p0_transition_chain_repair_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "0d2ca6d13f335f7b5674164c71aa1ad70ef10610507ebf133f253e8f12cc2718",
+        "5ca1c10a58cff601e34d6b8241a710ede4477c1110b77bd92870e5c67f107dd6",
+        "5ed34ff83310270ea18233dce7cde2e4184aefa59fe672bf08dc1bd566eccef7",
+        "820d78f8dc3a05ea39da69b5167bd2d5fbbde820b68e2636bb982108b945db30",
+        "8c8a544b0050c9118810172ed38e9a1574ab6e4986904a3b89e4d1b5d2ac094a",
+        "8ec9acd6b3507e9bde91b130915dc519f44c2debcc62e3e36d4afe4d3a569a5e",
+        "a0274e42793e3a84dc16e25dddca7551e3eae285a7fe7dd93855e87d35dca62c",
+        "d52b7cc57c9300475c4fe764113dbab890b055b03762a361f2ae0a8e66f42bd1",
+        "e5983e782e6875937ae82e4271f3406ef745b1dbd0d07985afd9172bcb86475c"
+      ],
+      "to_sha256": "92c1c0cb62013d75946dccdc330cba6e68cac0218ce644921c797826a2a8d23b",
+      "reason": "把 r15 精确后继边接入 Codex 0.149.1 maintenance 多跳链。"
+    },
+    {
+      "path": "backend/internal/officialegress/codex_01491_r11c_models_sync_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "1bde864c81b452f05b4fab71712e40963582c2de11ce412a41be1b1263ffb5cb",
+        "fa230dae124a282236f7af33de820c8b7a9d2524ab5ed85e03edf2f874b8a684"
+      ],
+      "to_sha256": "15fafc2f121e371a9422a1d34109705a5e64b5d78988a58d62b4a4d827eef9f9",
+      "reason": "追加登记历史冻结收据已引用的精确目标摘要到当前联合源码摘要；该源码与历史收据均未在本阶段改写。"
+    },
+    {
+      "path": "backend/internal/officialegress/codex_01491_r12e_preconnect_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "0774e56498c6ea87146708a0e48568e448603045d04fe8bcec8b6c15ab729c25",
+        "36f55ef0e05a6ad18638210c11d5ca22ad0103b7601bb0a7688e33ab6c233322",
+        "b41a0e8eb13fff4695178bec1e6d32efd0c99429244e8415fa805691a79e616f"
+      ],
+      "to_sha256": "8299299cdcac64feb6289d27fea26e90c80fde89665593af522358aed1a892c5",
+      "reason": "追加登记历史冻结收据已引用的精确目标摘要到当前联合源码摘要；该源码与历史收据均未在本阶段改写。"
+    },
+    {
+      "path": "backend/internal/officialegress/codex_01491_r13_candidate_coordinate_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "2316818b0eb69f782fd60f23793afec9fe496a312a1e1b2a322add20680e7dc0",
+        "b0a1467075d66a2257b8970e155d43f0cc0472bbf282a7b7ad723aba6ba6de88"
+      ],
+      "to_sha256": "019f9be0a05090de854e2f20b97770c8ef78d33c9d49d0daef9186f0bbb2dc30",
+      "reason": "追加登记历史冻结收据已引用的精确目标摘要到当前联合源码摘要；该源码与历史收据均未在本阶段改写。"
+    },
+    {
+      "path": "backend/internal/officialegress/codex_01491_r14_model_prewarm_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "c0f6614c7a007c37c28a6ac146daf8dee6fbfbd7b3fe28bd258777ad0ba58ac9"
+      ],
+      "to_sha256": "a64c4b134a672ef143a84d5612be33810cfa258e77038a7da197a3a078a5d800",
+      "reason": "追加登记历史冻结收据已引用的精确目标摘要到当前联合源码摘要；该源码与历史收据均未在本阶段改写。"
+    },
+    {
+      "path": "backend/internal/officialegress/codex_01491_r15_formal_classification_transition_test.go",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "3de301e41adb26edd5eaf41cbdfd620dddcb88af916f6adb788178dbf25a47d8",
+      "reason": "独立重放 Formal Campaign、离线分类、stage-profile、安全边界和追加式路径闭集。"
+    },
+    {
+      "path": "backend/internal/officialegress/codex_01491_r4_catalog_successor_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "1d2cec832db7fc457516a70863431f5207cf31dea6b9cd5e9dabb8f379ac2206",
+        "3408049d51027e558aac14f2bef89a6942d61695170afccbad553c7745b9277f",
+        "48e0f9ba56219bc2ee15b6ac149e3245663e6ee7e88824521dd042c0666a9573",
+        "ba9217544d1c4974931af555111d63c78f9c773412895fdfe7f6cb0b8c6bcb36"
+      ],
+      "to_sha256": "41652e2ab44d35774ed4cb4185a58e9f8b23964128dfe3c5e53925ab72a953b4",
+      "reason": "让 r4 Catalog 收据通过 r15 精确边承接新的暂存 Catalog 摘要。"
+    },
+    {
+      "path": "backend/internal/officialegress/codex_01491_r9_contamination_recovery_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "2365e7156a029136127c76d591b48c1334af191ef8ad93d799f8d6419e08e64c",
+        "c3bd9cf1c56ebb3e5d752bbaa29288e0f9744a93f99508af1545120fe9f98f48",
+        "cb7f69d38e6cdc2c6e2884b4553dc1af384e7205b762c73370cd0d88083ae56e",
+        "f63ad881b9b9e2fccf036b113b0a3cbedf347179943045a2b290ff500300f26a"
+      ],
+      "to_sha256": "206e9989c3f5661fb329eaedc1d69dafb562ee1b16003e931a80887482ba54ff",
+      "reason": "追加登记历史冻结收据已引用的精确目标摘要到当前联合源码摘要；该源码与历史收据均未在本阶段改写。"
+    },
+    {
+      "path": "backend/internal/officialegress/composite_model_protocol_source_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "03efafa7dc01ffc5d54158e67a5abbe735a85574e6f924a55b0389f248b50a00"
+      ],
+      "to_sha256": "fbc7c2149738b1af6e22eea35504d7f535e6173f3f4cc79318bb9c74105a51ed",
+      "reason": "追加登记历史冻结收据已引用的精确目标摘要到当前联合源码摘要；该源码与历史收据均未在本阶段改写。"
+    },
+    {
+      "path": "backend/internal/officialegress/releasecontract/testdata/release-graph.json",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "591347d95b380bdb789a0c05f76796e61c8f7e7bdd8f0eb39442c0c4f3716f25",
+        "9824eee0200ea1be1136a1a87ea5accc9a8e5a7c48855b4f0c06587eeab17ca4",
+        "d8a7634c9af52159c912b539df74b9fa3b92664c0b90cc0defd6789cd07c846d"
+      ],
+      "to_sha256": "cdab29c8c598356e9cb97958bb80695a9f7d3c61e9af37e4f13da84cb336d08e",
+      "reason": "同步 releasecontract 测试夹具到 Formal 分类后的候选 release graph。"
+    },
+    {
+      "path": "backend/internal/officialegress/routing_hint.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "ff1ee1771d881732eb0d43eb8bba09358bf22b932b5d3637263b97c6d548665a"
+      ],
+      "to_sha256": "80626878919a1a06f54361da972efab2db4e3750babb90053ece3f2bf6c71282",
+      "reason": "追加登记历史冻结收据已引用的精确目标摘要到当前联合源码摘要；该源码与历史收据均未在本阶段改写。"
+    },
+    {
+      "path": "backend/internal/officialegress/upstream_merge_framework_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "11ea1e9db4f989f1bf5dbdc6612858125cb467d327506eb6b49a77a435fb0d12",
+        "1c917085f00d2b3a0ce8892652589cdffaf5d15dcd01547e5e21b7d8f185a9b8",
+        "1d5f701752a2f1960b4f87924af5ceb3e93e3049bd2a34947599166aeb7a66af",
+        "86c64d4418bce2f8a54aca4cc965f37d5bff5a5cb9c0448e1269e82ad4df144c",
+        "b94ea6ca9d02d08c9189b08f9d6aafec18fc4ecf00b47b2a8ee4bb985ea54171",
+        "bb0af3ce58f351054fea326a660c1bc635b93daaf39ed67c260498070a8f0edf",
+        "d31422f05e1846f84dd8452943414b5734f3506ddc7371e4ae0475671402750a",
+        "ff03fe3995be282fcb9fc7f0181704c072859249635ea629b2cb3de33b2af3eb"
+      ],
+      "to_sha256": "35f27a930d23646ef78e798921f0f0fc043c57b415a9c5633eff6bcf8fa26327",
+      "reason": "让跨工程统一后继判定只接受 r15 收据登记的精确 path、predecessor 和 current 三元组。"
+    },
+    {
+      "path": "backend/internal/officialegress/upstream_v0177_source_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "19aca87c1d1b164695e81d54b94f99a78c0b20250797018e238997af60bb1a26",
+        "2503c45f88ba2e9d4cf5b9890fd7484e0123bf9ec32f021b066ac16ebbca576d"
+      ],
+      "to_sha256": "80c080f9ac4dfb67607432737e6413e31f473781f3f3c780056d3d968023e46c",
+      "reason": "追加登记历史冻结收据已引用的精确目标摘要到当前联合源码摘要；该源码与历史收据均未在本阶段改写。"
+    },
+    {
+      "path": "backend/internal/service/claude_fw_g_candidate_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "23129b4738e4ef010e6c4fe42629e55a8d4d1df364c8bb26e876c6a74264f998",
+        "717069e45ffbd97fd33ae6c30389868c4b3ba39651a16476a5d67ca94d30aa98",
+        "76ece1896fcacd385f35168c1655e35338c0d8fb6e402585ca95ce10b17808a3",
+        "a5aefdce3b5e37644d71c5824bacf76c77bfcacd8336fb99ab32649316b9373e",
+        "aa4f97f1fb19c007529857a0401092bcfc121cae126b9481922015e322fa89e2",
+        "ae41668681af96e05d7ac37b1546cec2447cddaad62cb169eef8281532a097d7",
+        "da34b47877ba8e5c1a4aedf731f5ebd18dd279dd0b261630468ef6c69d226ef7"
+      ],
+      "to_sha256": "684f42f98c96e5fc0bdc8a097d9e1e692aa430d67b4cbb5003de27624e5370db",
+      "reason": "追加登记历史冻结收据已引用的精确目标摘要到当前联合源码摘要；该源码与历史收据均未在本阶段改写。"
+    },
+    {
+      "path": "backend/internal/service/claude_fw_g_source_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "2802379d33652a36b5d1c0d19c2723ffea7e2c220df14f1b28be99fedd16c55d",
+        "9ef2cc4a97c023f6ad4921e2664d823ffcfc2435442b18a9673529d136e93893",
+        "f7ac7a794bde6e297d560c0ab84efe6fc6a8db08360f8a2ff17c3fa1a9c8d4b4"
+      ],
+      "to_sha256": "af150bb2d69255212bb6e44b856cfd7ca73bbacf4f4e4e117e4fba08fee7d6b6",
+      "reason": "追加登记历史冻结收据已引用的精确目标摘要到当前联合源码摘要；该源码与历史收据均未在本阶段改写。"
+    },
+    {
+      "path": "backend/internal/service/claude_fw_g_test_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "1658b7647c238493228183ff8d23a21a794e1e2e57e8c94ce65af4493df5c7a1",
+        "8babbac8d5049542c2f0f6cc31c1577a5dcc1afe4b9107aad74e1915fbb575cf"
+      ],
+      "to_sha256": "725da9037a210b8d1c8f16086bf219ccf6b669efc4df465e207b351ff7f92f3d",
+      "reason": "追加登记历史冻结收据已引用的精确目标摘要到当前联合源码摘要；该源码与历史收据均未在本阶段改写。"
+    },
+    {
+      "path": "backend/internal/service/codex_01491_candidate_source_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "1c773ab0564cff1026dff22a50c7d0217bf19c4f48ded285d434e7abb543b155",
+        "d870c8d511544e7ea81e0153fa722f00fa8ca1e98b70144bea071f3c95a426fb",
+        "e3458abc3bdd7a3b285819c0a4c7b8313665262da9b49fbf34ed08aaf029dd28"
+      ],
+      "to_sha256": "14adcc0c3ab4826dab7f0edf13bb94e4a2f6661651a802fe5c27a8770365cb54",
+      "reason": "追加登记历史冻结收据已引用的精确目标摘要到当前联合源码摘要；该源码与历史收据均未在本阶段改写。"
+    },
+    {
+      "path": "backend/internal/service/codex_01491_r11c_models_sync_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "5bd6119fb5edd4b28e4ce136e868eebf16db37acad0c40c035670a45149ceaad",
+        "f0d94437a73fa4ad59e639bb270b06d60d9aef1e8d6cf514b3bcfd950c2ffc49"
+      ],
+      "to_sha256": "1ca25f53b01b53a0db932f0c9a40f56ca2d950e0cc7670bae753367095e5edd1",
+      "reason": "把 r15 精确后继三元组接入 service r11c 及其后继摘要链。"
+    },
+    {
+      "path": "backend/internal/service/codex_01491_r12e_preconnect_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "1bfdd64988feb0ac4636a7a987ed45750182399aff3309d68e043b54cc730a3e",
+        "4a63e683a31398e6d4236253c8ea6d8d78670bd4219b2a114ce6d89e7f48c81c",
+        "f9ded5a4bb97b1bba69ca4be82777a44423a6daf0b150eb8ddb1b0ab07538b48"
+      ],
+      "to_sha256": "f861f0c3dee775b4298adb6ddf0cc58a98d9d7ab612602773fe777d708dcec04",
+      "reason": "把 r15 精确后继三元组接入 service r12e 及其后继摘要链。"
+    },
+    {
+      "path": "backend/internal/service/codex_01491_r13_candidate_coordinate_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "65293b04327ab212fbc20b28294f25718af378a022e334ff231783a54d7a5bb2",
+        "655f1afbdd214575d393b0b8508dec3bf76d3434f5c77dca2a9c7841a5e7bbaf"
+      ],
+      "to_sha256": "07662a44f30436dffbf89f695f2455cd58d2c18700152377220f60bf6f12ddc0",
+      "reason": "把 r15 精确后继三元组接入 service r13 及其后继摘要链。"
+    },
+    {
+      "path": "backend/internal/service/codex_01491_r14_model_prewarm_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "ec23dc46bdd44b6bb87597bdb96b7889abb2e800d42fdf630c7df11f9d09629c"
+      ],
+      "to_sha256": "2772b6f6107dbd8599261f6e845c3446aef49526e9beab6f83bffb0a84565e29",
+      "reason": "把 r15 精确后继三元组接入 service r14 当前路径重放。"
+    },
+    {
+      "path": "backend/internal/service/codex_01491_r15_formal_classification_transition_test.go",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "198e4ee6c30020868887a793dacea60649c6ea23f0816c7adf197e618a042a65",
+      "reason": "新增 service 侧 r15 身份、路径闭集、安全边界与精确后继三元组重放。"
+    },
+    {
+      "path": "backend/internal/service/codex_01491_r4_catalog_successor_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "06d610fae1c5c82765813da9ba1aed09ab90b6a8307ddfd59d0db2670386c971",
+        "57343c9e42b682ac5e29eac305f5cdff5343291d78635705669e68a4be0f88d8",
+        "ac51a0742fef4ac120705a91bdbf5267180ce4c6e913314e6311239d0825fd6e"
+      ],
+      "to_sha256": "c2f8d9eaaa92c8fd15d04ecacacabcbd71e82bdb9abf2ff9b89a232f4ce047e1",
+      "reason": "把 r15 精确后继三元组接入 service r4 Catalog 与维护链判定。"
+    },
+    {
+      "path": "backend/internal/service/codex_01491_r9_contamination_recovery_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "2b58acc2459a9bc80ddc5296729eae07473520ce4ed145e6d7d768b36c6f9ccf",
+        "8812b2f4e2d74a95d4220267ef2bf669c47e141a432ec7dc31bb760bae75f353",
+        "b1642b50bb6199c5bafcaaef19aed6e07e080c53e2aab2370ad28a18ee7b2184",
+        "d16ed5a263c53cd5302692139036a7d5649e530de6baa605b8acd3d8ee123a14"
+      ],
+      "to_sha256": "52d64e4577a31b2efce2bccebead83e9f5b5771a36d442a0c3df557668006dd5",
+      "reason": "把 r15 精确后继三元组接入 service r9、r11a、r11b 摘要链。"
+    },
+    {
+      "path": "backend/internal/service/compatibility_code_retirement_closure_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "2ede77848d2d45c86b6a03ae4ee22f56a5de18b9571516ae19a4aa084547b681",
+        "2fbdceac5e91d51bb20b192f8c26f964e19648faaadad94b4b39f9dc6e1d6923",
+        "6836d0f491155c396be34228437ce0bab3cee835a9343a9b6f2b8921574c1309"
+      ],
+      "to_sha256": "9e7ba19d2a4dc810c660836e07da9a583f58e97ac7cf4a6ef7b7dd7093c323ad",
+      "reason": "追加登记兼容代码退休闭集历史目标摘要到当前测试摘要；源码与历史收据均未改写。"
+    },
+    {
+      "path": "backend/internal/service/gateway_claude_fw_g.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "1a43809d795bf4cd03b721a1faef2758f7100b1b3ff2f85bc51f9131347bde2e",
+        "2a0456aa53102502be65aee3f8830db85c1b8bf08f01951789a3654918ca388b",
+        "2c0cebeb86d90296d83d3e9b75b26d7aeeab7f42f17bd7d27db1471a13c54267",
+        "750ecc54194ba13a01bdf42a0a962fc6b76195cca3c00179cf369017407d0e6d",
+        "8978cf81424e8d141eec31b016f84292b743384c92ccf90aba507d9f98a36b2c",
+        "a2645eb7fafe510ad565591a749e14cd0a6417beb1dbcf40357ed8eaab153dc3",
+        "b39f1f82400d96d61588a2671566db5f36e16852ada992095d238cf326507314",
+        "ccdfb6001a3380043e82e26fa083d33a4d4d4a5528ed7310ea53a9c17c51c07f",
+        "f242a7b38d2e7a48bac1dbde3e428f6876dc1c393db1bfea9cb55afa54680988"
+      ],
+      "to_sha256": "5ea6d4fcf27fc9c6ef95c93907b8aaa912a9078b6122219a83967a8b7753f9f9",
+      "reason": "追加登记历史冻结收据已引用的精确目标摘要到当前联合源码摘要；该源码与历史收据均未在本阶段改写。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_1b_executor.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "270f4439f1d39f1a75a42f171b119b507ad4998ed9ee4ae7e19bf7d94f30e334",
+        "6771cb9904274a9664292d13094594b6969460f440ee1527fe36e4f2fdb1573d",
+        "814a7497ab3a97a8239eb187b8226a93fd830258bda7c02659d883c06ba5f9cf",
+        "8947e4e8d6fb86fbaf86a072a34793d145fe85ca2b87b0d6cd0f9c7c284b2632",
+        "e93e8a3005fbf140879b9c6009fc218d20a877bf058466d3c53b3cb36a6cd567"
+      ],
+      "to_sha256": "9e45bd2fcf577766966f4ad4bb247b78304ae336d433079836af5bc990848568",
+      "reason": "追加登记历史冻结收据已引用的精确目标摘要到当前联合源码摘要；该源码与历史收据均未在本阶段改写。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_changeset5_final_wire_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "687a27153325f0d242f8bbd363ac4cf2bde249c92b9396bd98ef35de5b4c05b9",
+        "7de36fe52b194ca8d1d06bba789cab2c424ab371bc187ae8ca525ac00980fc89"
+      ],
+      "to_sha256": "09dccb7151b2c900213cdb350a9495377686754de58779d84dda60cf23dce5ef",
+      "reason": "追加登记历史冻结收据已引用的精确目标摘要到当前联合源码摘要；该源码与历史收据均未在本阶段改写。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_identity_authority.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "28632da0dde806746955da08c4f5b10e9f021337af77cdf082c5808464ae849a",
+        "6fa05184e2ece9d087c4c094f4bea4839307242f424b522080334f9aaf307843",
+        "7be776232f74e5f62f861ab92a2892d73ab3f8a5b58184204a184a586a8a0aef"
+      ],
+      "to_sha256": "b52c107746c754184307fd5a0b145576fd45ab9c146b2ffcb3f3a958dfd06748",
+      "reason": "追加登记历史冻结收据已引用的精确目标摘要到当前联合源码摘要；该源码与历史收据均未在本阶段改写。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_profile_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "f1a744dc697603b5983cf7c94c4af900238fe633068701636f0ddfb0ead18591"
+      ],
+      "to_sha256": "d42d70661c8909a4a5fcd962ea0835ab94f8527d0802b94796c300b177d3c84f",
+      "reason": "追加登记历史冻结收据已引用的精确目标摘要到当前联合源码摘要；该源码与历史收据均未在本阶段改写。"
+    },
+    {
+      "path": "backend/internal/service/openai_codex_models_service.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "4ed62e7afacf6341d0942f317372c8f7d2b23e426ab1594bded68189ef4b312d",
+        "e55889f113eba404ab17fccd8b4d6bb2cb3a2d7abb54a5330e39b9bfbb487986"
+      ],
+      "to_sha256": "44fba8bd7739c4e4267bb96f486010850e6e90ff07ec3f3a2196f06527ca80c2",
+      "reason": "追加登记 Codex Models 退休链历史目标摘要到当前生产源码摘要；源码与历史收据均未改写。"
+    },
+    {
+      "path": "backend/internal/service/openai_images.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "753e640e3b5199abaa081e951ad90a3edea2790b3a3e8f2329cdc69a08538cb1",
+        "c83660b1027531cd3b5d42f16cb99ed5a4acc6589af994d6c406c7381d06b203"
+      ],
+      "to_sha256": "702af76efd5d22cfe3b9e6d65bfe3c053c9cec38ed6573741cbe941bf11cb8d7",
+      "reason": "追加登记历史冻结收据已引用的精确目标摘要到当前联合源码摘要；该源码与历史收据均未在本阶段改写。"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_pool.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "4974af082bedc10fc7f8415e152233e15894e4415667598933f2b37e5fa07462",
+        "7cc28e30a4b0f96f0b926ad6a75fd85419b6c3db8f2d609bc8da9c401c66bfb0",
+        "bc4b83a16d3b1d9b2dfa7f7827efbda8b4724a9eae1fe0d84cffc425e796d4cc",
+        "e56252152cb32ea47db00ea66983d7a987154e6691ff4d48532a556d960b8528"
+      ],
+      "to_sha256": "fa1d3b3f437ee3b387117982bee04b9c91762a925f427c5230cc28ba5b8b947d",
+      "reason": "追加登记历史冻结收据已引用的精确目标摘要到当前联合源码摘要；该源码与历史收据均未在本阶段改写。"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_v2_passthrough_adapter.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "45d786045c38573a775a37c0a33af011b03601ab6b53f37f8c095def8ef4abf3",
+        "46d5884fc4b4d27e39cfe34a30f99605208a9e19617bd36e699eddfdd9d3963e",
+        "e3cf01b231076fa057efb2fb13c0810f10dd92a939a091f3ade0a54dec83af9b",
+        "f7226d7f58b2c912c735d8a157c62a90f775e740bf7ecc9e768786388bc6a791"
+      ],
+      "to_sha256": "881b280fceb4fa951cc2638685249ce0eb432c843af366a72dbfd0943aaea1cd",
+      "reason": "追加登记 WebSocket 兼容退休链历史目标摘要到当前生产源码摘要；源码与历史收据均未改写。"
+    },
+    {
+      "path": "backend/internal/service/upstream_merge_framework_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "855e6b350e5678502977ed5a3905b0bf27cab2c42b5076c528fe2c2edb31069a",
+        "9da70966f4168afa5551c1e45fdbff02ad4967978363b148d944bb8f541a490b",
+        "ad36563747358488e97d46051d9ba626a3dad1a003a94d97eb881b3891d519da",
+        "e741ec9be5e3c34868caf6ed615bb69d9ec74caa4784f6fc5329ab748bfba256"
+      ],
+      "to_sha256": "7c10a408b3300896305e3cc0623054e5b483dac89b06e3c7192f0cb69f695240",
+      "reason": "把 r15 精确后继三元组接入 service 跨工程统一后继判定。"
+    },
+    {
+      "path": "backend/internal/service/upstream_v0180_egress_prerequisite_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "9a138074aadeed87c57c4515662d8bfd965a955fa9f03cb8bd05c080e1507ffc",
+        "e2a47dfd041197f243645730651618b573cbb41940e1100b510ff0b9cb1ad6ea"
+      ],
+      "to_sha256": "b244cf6faf195661779ef4f40dbe51fd62aef476c7e089554ff96acb3f272b2b",
+      "reason": "把 r15 精确后继三元组接入 service v0.1.180 egress 前置链。"
+    },
+    {
+      "path": "backend/internal/service/upstream_v0180_source_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "6c60c4bf35ba323625b95a9bf8e5e5e4fd054df61dcac295ca07b4dea1289066",
+        "ef6d2245a8119174edb3f481945b0701660edfa95669ec34cb1aa6c6d73dcd59"
+      ],
+      "to_sha256": "16c13a92830be3cbdac3cb87e694c58d38d5ce23ed17c484d7f7706c89d1b151",
+      "reason": "把 r15 精确后继三元组接入 service v0.1.180 源码链。"
+    },
+    {
+      "path": "docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "1a882aec8fcff55693126d5d2d8cadb6e8460cf59762c27de76e24a39a0e4a81",
+        "1c2dadb394a57928c5ff21a1ede8241d885932213e6db37d04a30754821f025c",
+        "258bdff4347573da38df8dcb721c92489dc43fc488018b7f062d25fbe8a65c0c",
+        "25b8688b5ef288826bf225ae3046250680f331906c1e0c09484320677f54e39d",
+        "300c6bbe506f6b195b4683f55fac1edf8ac79dad1ca4fb02693ad9add0cf3f1a",
+        "46cf897208663b4c9e462a882305c3ae2d99b92390f20f2b4798c8e28729e94c",
+        "4cc9b2acbbc50203cab78eeeedaf0d4f46aaa4500d082e27fdf5a8e9b937b31b",
+        "6729311fb0152a2e6c100412af96ed5c3c8939675e7daa584349e1bccd5704f8",
+        "798310f78d239c7eb00425b6e621171b2c10b0003954a10550b783bc7de0dd54",
+        "83c7f959af4a43b9b7e1a596ebea3ea2b1bd415da04a24c402ff568445c6b5d9",
+        "b21c647e9c7027d846ffb47a5bb654fa1b19dd4369fbc29ee65326b0cb2db3e8",
+        "e2f91f2e16edd5618446df27c5a31c2868e1197a762cc40b647c27c0d3a2529a",
+        "f764d050426d02b0ca8404747c698c21a42b545f224b93332a8a5dbad4a99bfe"
+      ],
+      "to_sha256": "353e2699077a45486315febe8b5879780abe062829db17ba0564b74078d1b746",
+      "reason": "追加登记历史冻结收据已引用的精确目标摘要到当前联合源码摘要；该源码与历史收据均未在本阶段改写。"
+    },
+    {
+      "path": "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "0168d542f49d544ad1a85b092a9d05b12c9b82ac4e21a914ca22acefce12e43d",
+        "2a72327aa8210d2163073a9bc656b5578fbb7c1aa4197deb88343a5a156a6646",
+        "43af2571424da85583debe82fac969fd252f6f9f635ced42e7fd9cda2aa987ba",
+        "54f012645b71530fa737855bec0b10d10f8213a7605c674f7a76c1c83aa476ff",
+        "82b45ac16832984bc3a4b82b801c7a2e70590cb33ca3089cad312f791898a28f",
+        "85d3a86211256c8f9f580a7ee8e9dfc6b2477f91a2131f0a174104e439c1e9e8",
+        "b1c5878688c5d7b356d54f18aabf872cdff59b03ed09f78b60a078fdc40e0f59",
+        "b2f1609bd2dc4d9cae66442abc9d7512ab411360d99ce85a131e319ab6c457f3",
+        "e07a9565900677aa4bd4e5899a80ee554f96c20127cacd3361a6d215c856b61f",
+        "e0ae32d4124e25d5a5f895b8d9af055d40ef967b0606a53d5ac19cd8edd4b580",
+        "f5ad2e49f9f225f94cfc7deda008332a33a8da6e321c4d718da9def5ef7bd3cb"
+      ],
+      "to_sha256": "a4ef0596a4026c8b914dfea4aa45fc0fd542000e44d84b7960e3a3ce8e86a168",
+      "reason": "追加登记历史冻结收据已引用的精确目标摘要到当前联合源码摘要；该源码与历史收据均未在本阶段改写。"
+    },
+    {
+      "path": "tools/check_ledger_completeness.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "3e650b9d07982ff96f1c90f6fcf70b4ba9264df7183b0ef91edfcc3cbd1cf375",
+        "3eea18d00402462c4652f58f9d7d482523acb52c38bf6ed192bc8a53a20d1685"
+      ],
+      "to_sha256": "52396775e035fa48a00e3d8d462c6c251d8099cd41e84ca781bc4e49b1230877",
+      "reason": "追加登记历史冻结收据已引用的精确目标摘要到当前联合源码摘要；该源码与历史收据均未在本阶段改写。"
+    },
+    {
+      "path": "tools/official_client_capture/codex_upgrade.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "2580721d6d940f41153f55d630f4dd597f796632f8c014bddb3b863de261e5f8",
+        "2d908fa6bfda9ad2cfcea8d8af8fcd62ac6bdf4735b1175cd622b526eb3ba329",
+        "681b40075e8aa1c42dded69d73a87607654b0b6df61adfb2029609782937149f",
+        "ca8af9d63169a8781c5ad278bb7e31fec02a5ea040aa6d3aeb76a2f794bde401",
+        "d2942d9ed54944bafc9eeeba05651ad4e8304ce453fd4374bc5a3361c00d07d9"
+      ],
+      "to_sha256": "7a7dacfd26698136ef8b8714be9122077cb7728bc8e8a5907c4c6fe96c485754",
+      "reason": "追加登记历史冻结收据已引用的精确目标摘要到当前联合源码摘要；该源码与历史收据均未在本阶段改写。"
+    },
+    {
+      "path": "tools/official_client_capture/codex_upgrade_scenarios_0_149_1.json",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "b7ae0e37ab4bcb79182bbd2d005e52f515b21fa659211cab9ef96db24c85e4e5",
+        "cd677141b20a500370c392ba47c01ed3b4f34abb0bc1f91a3cd1e874dfb90c0c",
+        "d251847a616b13e694dc70069e361e1cbee7a798eeacb0f71af115489fb29114",
+        "f82d566c7f203db446110b7a9aca7cf9f5daaf9a0d4df769d0cefc12c95af553"
+      ],
+      "to_sha256": "3eb6a5fe0a2066c4e365330f362186bdd557ebd9594a640985cd26fcd508c0fc",
+      "reason": "追加登记历史冻结收据已引用的精确目标摘要到当前联合源码摘要；该源码与历史收据均未在本阶段改写。"
+    },
+    {
+      "path": "tools/official_client_capture/h1_wire_probe.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "9f4eab19e8321b67185246884d449f55f61855de81099a93807e0057154c81b2"
+      ],
+      "to_sha256": "c999e82eb67a85089c2ec52841a57b8b885d21453c757953e0cf5a2666f04a17",
+      "reason": "追加登记历史冻结收据已引用的精确目标摘要到当前联合源码摘要；该源码与历史收据均未在本阶段改写。"
+    },
+    {
+      "path": "tools/official_client_capture/run_official_relay_scenario.sh",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "3bdc889a077da9d4998a48bc0e38483766d57a9646691b569487163be95a15e3",
+        "668e5ea4059270218f4982ece6d6e2dc2a51912418e880ad8d9abff2b0de71ae",
+        "7ff121e1e9030de0f7b637d5a26c676b03e4c71f39f847bbd5181bc3f651505b",
+        "b775367d4f6ea02f2cc577d290c4e495f8334c42e7e0a7d3e79b379c7645b77c",
+        "c51daf313c5710659fbca0d22ebe5bb60a47c8d0181d448a966becae7ec8822a",
+        "cc8c0c2d039d0601dd307d25d8d25ceb9e871f3aa82a26e87d0024bf01c90022"
+      ],
+      "to_sha256": "f7fbe312381cc373332f0809ba23eeeecb4cbed6c63baaf33ac23333c1ed3e8c",
+      "reason": "追加登记历史冻结收据已引用的精确目标摘要到当前联合源码摘要；该源码与历史收据均未在本阶段改写。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_candidate_gate_successor_transition.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "0b1fd92538669cc3b4780e89ab29fdbd5964f5233687526cbf795ddddb82f6dc",
+        "2c364f6f6221c38a89c06b0b6aaf30d0fd067956e43b2f33575c134410e29696",
+        "96482eee11a088a5c7f41127cd2c7f331e78cf198661fc6ebe00e46eafa81e94",
+        "d9adc78a868492110d0c277731f617ac1d836aa74295ea534a1317c5c1f0121d"
+      ],
+      "to_sha256": "5239ccce15191c69626d417cc6757de05d9c8c5107968a09c1cd76461e1f2d5b",
+      "reason": "追加登记历史冻结收据已引用的精确目标摘要到当前联合源码摘要；该源码与历史收据均未在本阶段改写。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_capture_runtime_transition.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "58e66dd5e03b8fa6e9591fcafe9b4719f533e53a9cf5eb317d0c8df43f67331f",
+        "f235301e3ea5bb74489b591badf263c2467c3e747e220dc84bcc902c9ffd9b65"
+      ],
+      "to_sha256": "af4e5011e180e2aa520121f0e1ae9ef2c28d3a52b2e30338f0bfa71f6e4a30d9",
+      "reason": "追加登记 capture runtime 历史冻结目标摘要到当前源码摘要；源码与历史收据均未改写。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_doc_pre_transition.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "06e726c136440909b70c35986c61e1e0482cb2f3d946feafb88d7e854155e752",
+        "52e2af97136f30680aaa07d37e902e56bd6ecb3265181dc88754259edacd2f15",
+        "7a7f082b666176ebb02813d8d7ee8041f083237022e1373b3198f99389237f39",
+        "a0a8726f97d2a4fda8632c717a36b4fcfed386ca014344aad73b7614aec82781",
+        "b957c8464221d36b9c80caf5a9d48b79a64ffeda17a53661d95334890e9a0cf1",
+        "cde5d34a1d56a55bfbcfcd9061eceb3129218fa1f57c033ea999111ee6d1ac48"
+      ],
+      "to_sha256": "0fd4e5b9c748fef722c1313865b5976df33b8a59577ee545beb3a4270b20ea0a",
+      "reason": "追加登记 doc-pre 历史冻结目标摘要到当前源码摘要；源码与历史收据均未改写。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_r11a_harness_transition.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "42204642364e1c89656143b20238424a73c38746f306064741e105544a19044d",
+        "9209136f80c163bdfa21191be8e118291b1cd6a1db2592739f8c32e2ecd19a7e",
+        "d2cd1ee825a2feed1a6bfccd8229f6b791d1d731dc33953a24f5b86b320f8a64"
+      ],
+      "to_sha256": "6b3ccc5c100a7f59c7b5a9942d9831a9acbe9910e30c0a7177260d80b9732934",
+      "reason": "把 r15 精确后继三元组接入 r11a 及其后继摘要链。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_r11b_relay_completion_transition.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "2248e2bdef9bee500ac7e6c091ac3d321d6cf62e15cc7cadf3f4306ff98f6026",
+        "77d7d069aaf99d27b8d25abcf2801b3f09065abab85eabb21fbea8e55f073fb8"
+      ],
+      "to_sha256": "3ea06a1d0a699176e64a08654c08de6d795c2135e1986686900f2d1757eb77c0",
+      "reason": "把 r15 精确后继三元组接入 r11b 及其后继摘要链。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_r11c_models_sync_transition.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "202416a36f9c6344c2645a06063cfdea462b16a32112f688d9c5d03830978d38",
+        "5307899c1b2abdfa525a7fcc026eb3e7717fd0fe6803edaea67d4fa9b57fc19c"
+      ],
+      "to_sha256": "f820bb5dac0a34dfe4eb88191dabc952d10960d794c72019af32605ad7bce32d",
+      "reason": "把 r15 精确后继三元组接入 r11c 及其后继摘要链。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_r12e_preconnect_transition.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "47d3b9a876c700ffb5f23fd276e8790e000af10fa7c8f845b51dd2234bb53e49",
+        "667f548d57fed426f10733b60fc54aac0696bd94b82f1a4e9b771ff84d9b39cc",
+        "dc544ede64430c9704035d428c64f062d7c7572ed217ee65b1e9f19c993a7c33"
+      ],
+      "to_sha256": "d12880548e3b8042ee671b29b4a3c30c9d69df923a5f3104229e9c0d2f6a9826",
+      "reason": "把 r15 精确后继三元组接入 r12e 及其后继摘要链。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_r13_candidate_coordinate_transition.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "0372fca217cbefd2c5dcfe9001e8583a23709a0b6ab04fab6c83119f328d002b",
+        "3a5f73e50d6f776d914884bf010ee65a49368f41c5ddd8bb88d4a87756ffef7a"
+      ],
+      "to_sha256": "3e3c69960d8e160acc99552a9444d8bd85ed11523a7c9f89c0b2b05250a22424",
+      "reason": "把 r15 精确后继三元组接入 r13 及其后继摘要链。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_r14_model_prewarm_transition.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "9d965753e5479b042c10d357600177d56c16a21fa66ebc6977f55b7b281fbe51"
+      ],
+      "to_sha256": "a28d3c9e9c3f1618f95bf6557fd8e35570a7005ef27b7d45e916a1786afdc9cb",
+      "reason": "把 r15 精确后继三元组接入 r14 摘要判定与当前路径重放。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_r15_formal_classification_transition.py",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "3c3372c7026e91faba633cef03596b6798144bcb53bbe8e54795f72e36a1ec29",
+      "reason": "新增 Python 侧 r15 身份、路径闭集、安全边界与精确后继三元组重放。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_r4_catalog_successor_transition.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "601049538120b63bec2a80d6058edb15e199dffd1d3d9a18e0d0fd9d8a0d11d2",
+        "607a579b0cab4109883204b72bae32d765be1823897ccbbfaf7b11b519fabdc3",
+        "c6ddc9a5c89e191a0b6896da681f17696c4055fcc33a23305187b0bd3d3d0874",
+        "dc96e464f17ee7153bb08f1f4d714c853f71f9d236422716e36c3fcd6f63bd70"
+      ],
+      "to_sha256": "6d2503f190421720bdefaeff3027f6759726ae87e51258e0bb3929017e422c45",
+      "reason": "把 r15 精确后继三元组接入 r4 Catalog 与维护链判定。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_r9_contamination_recovery_transition.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "663c46e41ef9cbac5daad39aad051f06312f6177a80e27290e9fb80bb68837d8",
+        "b166afdfb5332caf6a8996a6b06eebd5e041f9f23b70c73f1fa24e3bb35f1427"
+      ],
+      "to_sha256": "4c1f2bd8e0c460f0e5789ba468927f4afbc8268206a72f5527bb65160cba82c1",
+      "reason": "把 r15 精确后继三元组接入 r9 及其后继摘要链。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_main_track_models.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "5ecc7627c4b4ee8a674a3c99289423e45cea534f8bdd5b2da286ee0d080d0cac"
+      ],
+      "to_sha256": "1c01dd26e947c8a05551de25a425be6c75e3d22aa2c81d423be53291b86b4c55",
+      "reason": "追加登记历史冻结收据已引用的精确目标摘要到当前联合源码摘要；该源码与历史收据均未在本阶段改写。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_model_catalog_prewarm.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "7e9e9fc3b00b3b3d3576dd8a232f9699c997df5edbd5d8b877cc64dc58ee95e7",
+        "8e078245db49c1a2cdaf2c3414690a59a4f0e28bc860b951ed704007c12cae7a",
+        "9501f7228b3c1176d76b33a9b0b13087a834a5b710fb79c74d7d6a1bd5cce015",
+        "abacfe7473b718605906839e1bdcbcd99d7a26687698aa41590f4bd3d592ebaf",
+        "aed3bdfc614ea6e68499ee64929835682c8c67b4167b055c3041dcf91ed51e10",
+        "cb1c7cf907883286a14e9d873b867942b9d1c7ab7593b5c9888dad2b1db07362"
+      ],
+      "to_sha256": "55ef9c9aff721356d687b57e551fe2b9cf6c5978596decca62e2afee0f9e2610",
+      "reason": "追加登记历史冻结收据已引用的精确目标摘要到当前联合源码摘要；该源码与历史收据均未在本阶段改写。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_upstream_byte_relay.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "a305671d383299d435320e012140237592a77489ed5450fc7c646adfafeac70a",
+        "e62b81ff20666b24b4b420750b752d2668caa65108d86bdf4446ffa294cee01b"
+      ],
+      "to_sha256": "3907ffe23126d1d1ebea9f206735cb416129aa68adc50ae82c080aaa3005f63c",
+      "reason": "追加登记历史冻结收据已引用的精确目标摘要到当前联合源码摘要；该源码与历史收据均未在本阶段改写。"
+    },
+    {
+      "path": "tools/official_client_capture/upstream_byte_relay.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "c98b456bf592fb2c7c66ce13e7ffeb4c6cb31e79d70a701b92310583d21e6a2e"
+      ],
+      "to_sha256": "b7912b0cdad7784b3a70d8a5f4a99265aa3d5f4e5b41ddba1e39acb1ea802fe9",
+      "reason": "追加登记历史冻结收据已引用的精确目标摘要到当前联合源码摘要；该源码与历史收据均未在本阶段改写。"
+    }
+  ],
+  "result": "formal_classification_catalog_staged_transition_frozen",
+  "identity_sha256": "79996daa098909ace8b2332fd6c0bb5803087ff2585e6c482ae6a1ae7ac8ee36"
+}

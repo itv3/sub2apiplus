@@ -223,6 +223,11 @@ func codex01491R12EPreconnectSupersedesService(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if codex01491R15FormalClassificationSupersedesService(
+		path, priorDigest, currentDigest,
+	) {
+		return true
+	}
 	receipt, err := loadCodex01491R12EPreconnectServiceTransition()
 	if err != nil {
 		return false
