@@ -7,6 +7,7 @@ import (
 	"io"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -122,6 +123,12 @@ type codex01491R11CModelsSyncReceipt struct {
 	IdentitySHA256 string `json:"identity_sha256"`
 }
 
+var (
+	codex01491R11CModelsSyncOnce   sync.Once
+	codex01491R11CModelsSyncCached codex01491R11CModelsSyncReceipt
+	codex01491R11CModelsSyncError  error
+)
+
 func codex01491R11CModelsSyncExpectedPaths() []string {
 	return []string{
 		"backend/internal/officialegress/codex_01491_r11c_models_sync_transition_test.go",
@@ -142,6 +149,17 @@ func loadCodex01491R11CModelsSyncTransition() (
 	codex01491R11CModelsSyncReceipt,
 	error,
 ) {
+	codex01491R11CModelsSyncOnce.Do(func() {
+		codex01491R11CModelsSyncCached, codex01491R11CModelsSyncError =
+			loadCodex01491R11CModelsSyncTransitionUncached()
+	})
+	return codex01491R11CModelsSyncCached, codex01491R11CModelsSyncError
+}
+
+func loadCodex01491R11CModelsSyncTransitionUncached() (
+	codex01491R11CModelsSyncReceipt,
+	error,
+) {
 	var receipt codex01491R11CModelsSyncReceipt
 	raw, err := codex01491RepoFile(codex01491R11CModelsSyncPath)
 	if err != nil {
@@ -158,7 +176,15 @@ func loadCodex01491R11CModelsSyncTransition() (
 	if err := codex01491VerifyIdentity(raw, receipt.IdentitySHA256); err != nil {
 		return receipt, err
 	}
-	return receipt, validateCodex01491R11CModelsSyncTransition(receipt)
+	if err := validateCodex01491R11CModelsSyncTransition(receipt); err != nil {
+		return receipt, err
+	}
+	successor, err := loadCodex01491R12EPreconnectTransition()
+	if err != nil {
+		return receipt, err
+	}
+	receipt.Transitions = append(receipt.Transitions, successor.Transitions...)
+	return receipt, nil
 }
 
 func validateCodex01491R11CModelsSyncTransition(
@@ -292,7 +318,13 @@ func validateCodex01491R11CModelsSyncTransition(
 			return errors.New("Codex 0.149.1 r11c 模型目录 transition 条目非法：" + expectedPath)
 		}
 		current, readErr := codex01491RepoFile(entry.Path)
-		if readErr != nil || upstreamMergeFrameworkDigest(current) != entry.ToSHA256 {
+		currentDigest := upstreamMergeFrameworkDigest(current)
+		if readErr != nil || (currentDigest != entry.ToSHA256 &&
+			!codex01491R12EPreconnectSupersedes(
+				entry.Path,
+				entry.ToSHA256,
+				currentDigest,
+			)) {
 			return errors.New("Codex 0.149.1 r11c 模型目录 transition 当前摘要不一致：" + entry.Path)
 		}
 	}
@@ -308,10 +340,16 @@ func codex01491R11CModelsSyncSupersedes(
 	if err != nil {
 		return false
 	}
+	cursor := priorDigest
+	if cursor == currentDigest {
+		return true
+	}
 	for _, entry := range receipt.Transitions {
-		if entry.Path == path && entry.ToSHA256 == currentDigest &&
-			slices.Contains(entry.PredecessorSHA256s, priorDigest) {
-			return true
+		if entry.Path == path && slices.Contains(entry.PredecessorSHA256s, cursor) {
+			cursor = entry.ToSHA256
+			if cursor == currentDigest {
+				return true
+			}
 		}
 	}
 	return false

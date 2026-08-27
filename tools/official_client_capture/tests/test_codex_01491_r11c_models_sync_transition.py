@@ -11,6 +11,11 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from tools.official_client_capture.tests.test_codex_01491_r12e_preconnect_transition import (
+    load_validated_transition as load_r12e_preconnect_transition,
+    transition_supersedes as r12e_preconnect_transition_supersedes,
+)
+
 
 ROOT = Path(__file__).resolve().parents[3]
 BASE_COMMIT = "87de87becf648148e02fe44ec5d9d91afdc1a708"
@@ -369,12 +374,20 @@ def validate_transition(document: dict[str, Any]) -> None:
         expected_change = "added" if before is None else "modified"
         expected_predecessors = [] if before is None else [sha256(before)]
         current = ROOT / path
+        current_digest = sha256(current.read_bytes()) if current.is_file() else ""
         if (
             entry["change"] != expected_change
             or entry["predecessor_sha256s"] != expected_predecessors
             or current.is_symlink()
             or not current.is_file()
-            or entry["to_sha256"] != sha256(current.read_bytes())
+            or (
+                entry["to_sha256"] != current_digest
+                and not r12e_preconnect_transition_supersedes(
+                    path,
+                    entry["to_sha256"],
+                    current_digest,
+                )
+            )
             or not isinstance(entry["reason"], str)
             or not entry["reason"].strip()
         ):
@@ -385,11 +398,18 @@ def validate_transition(document: dict[str, Any]) -> None:
 
 @lru_cache(maxsize=1)
 def load_validated_transition() -> dict[str, Any]:
-    """加载并完整重放 r11c 在线模型目录 transition。"""
+    """验证 r11c 收据，并向统一摘要链追加 r12e 后继边。"""
 
     document = load_transition()
     validate_transition(document)
-    return document
+    successor = load_r12e_preconnect_transition()
+    return {
+        **document,
+        "transitions": [
+            *document["transitions"],
+            *successor["transitions"],
+        ],
+    }
 
 
 def transition_supersedes(
@@ -397,18 +417,21 @@ def transition_supersedes(
     prior_digest: str,
     current_digest: str,
 ) -> bool:
-    """只承认 r11c transition 登记的精确摘要边。"""
+    """只承认 r11c 及其已验证后继登记的精确摘要链。"""
 
     try:
         document = load_validated_transition()
     except (OSError, RuntimeError, ValueError, json.JSONDecodeError):
         return False
-    return any(
-        entry["path"] == path
-        and prior_digest in entry["predecessor_sha256s"]
-        and current_digest == entry["to_sha256"]
-        for entry in document["transitions"]
-    )
+    cursor = prior_digest
+    if cursor == current_digest:
+        return True
+    for entry in document["transitions"]:
+        if entry["path"] == path and cursor in entry["predecessor_sha256s"]:
+            cursor = entry["to_sha256"]
+            if cursor == current_digest:
+                return True
+    return False
 
 
 class Codex01491R11CModelsSyncTransitionTest(unittest.TestCase):
@@ -460,6 +483,24 @@ class Codex01491R11CModelsSyncTransitionTest(unittest.TestCase):
                 entry["path"],
                 "0" * 64,
                 entry["to_sha256"],
+            )
+        )
+
+    def test_transition_承认_r11c_到_r12e_精确摘要链(self) -> None:
+        path = "tools/official_client_capture/run_official_relay_scenario.sh"
+        r11c_entry = next(
+            item for item in load_transition()["transitions"] if item["path"] == path
+        )
+        r12e_entry = next(
+            item
+            for item in load_r12e_preconnect_transition()["transitions"]
+            if item["path"] == path
+        )
+        self.assertTrue(
+            transition_supersedes(
+                path,
+                r11c_entry["predecessor_sha256s"][0],
+                r12e_entry["to_sha256"],
             )
         )
 

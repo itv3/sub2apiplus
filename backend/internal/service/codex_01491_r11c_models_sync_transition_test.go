@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -36,6 +37,12 @@ type codex01491R11CModelsSyncServiceReceipt struct {
 	Result             string                                  `json:"result"`
 	IdentitySHA256     string                                  `json:"identity_sha256"`
 }
+
+var (
+	codex01491R11CModelsSyncServiceOnce   sync.Once
+	codex01491R11CModelsSyncServiceCached codex01491R11CModelsSyncServiceReceipt
+	codex01491R11CModelsSyncServiceError  error
+)
 
 func codex01491R11CModelsSyncExpectedServicePaths() []string {
 	return []string{
@@ -69,6 +76,17 @@ func loadCodex01491R11CModelsSyncServiceTransition() (
 	codex01491R11CModelsSyncServiceReceipt,
 	error,
 ) {
+	codex01491R11CModelsSyncServiceOnce.Do(func() {
+		codex01491R11CModelsSyncServiceCached, codex01491R11CModelsSyncServiceError =
+			loadCodex01491R11CModelsSyncServiceTransitionUncached()
+	})
+	return codex01491R11CModelsSyncServiceCached, codex01491R11CModelsSyncServiceError
+}
+
+func loadCodex01491R11CModelsSyncServiceTransitionUncached() (
+	codex01491R11CModelsSyncServiceReceipt,
+	error,
+) {
 	var receipt codex01491R11CModelsSyncServiceReceipt
 	raw, err := os.ReadFile(filepath.Join(
 		"../../..",
@@ -88,7 +106,15 @@ func loadCodex01491R11CModelsSyncServiceTransition() (
 	if err := codex01491VerifyCandidateGateServiceIdentity(raw, receipt.IdentitySHA256); err != nil {
 		return receipt, err
 	}
-	return receipt, validateCodex01491R11CModelsSyncServiceTransition(receipt)
+	if err := validateCodex01491R11CModelsSyncServiceTransition(receipt); err != nil {
+		return receipt, err
+	}
+	successor, err := loadCodex01491R12EPreconnectServiceTransition()
+	if err != nil {
+		return receipt, err
+	}
+	receipt.Transitions = append(receipt.Transitions, successor.Transitions...)
+	return receipt, nil
 }
 
 func validateCodex01491R11CModelsSyncServiceTransition(
@@ -175,7 +201,13 @@ func validateCodex01491R11CModelsSyncServiceTransition(
 			return errors.New("Codex 0.149.1 service r11c 模型目录 transition 条目非法：" + expectedPath)
 		}
 		current, readErr := os.ReadFile(filepath.Join("../../..", filepath.FromSlash(entry.Path)))
-		if readErr != nil || upstreamMergeFrameworkServiceDigest(current) != entry.ToSHA256 {
+		currentDigest := upstreamMergeFrameworkServiceDigest(current)
+		if readErr != nil || (currentDigest != entry.ToSHA256 &&
+			!codex01491R12EPreconnectSupersedesService(
+				entry.Path,
+				entry.ToSHA256,
+				currentDigest,
+			)) {
 			return errors.New("Codex 0.149.1 service r11c 模型目录 transition 当前摘要不一致：" + entry.Path)
 		}
 	}
@@ -191,10 +223,16 @@ func codex01491R11CModelsSyncSupersedesService(
 	if err != nil {
 		return false
 	}
+	cursor := priorDigest
+	if cursor == currentDigest {
+		return true
+	}
 	for _, entry := range receipt.Transitions {
-		if entry.Path == path && entry.ToSHA256 == currentDigest &&
-			slices.Contains(entry.PredecessorSHA256s, priorDigest) {
-			return true
+		if entry.Path == path && slices.Contains(entry.PredecessorSHA256s, cursor) {
+			cursor = entry.ToSHA256
+			if cursor == currentDigest {
+				return true
+			}
 		}
 	}
 	return false
