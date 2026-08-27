@@ -884,6 +884,121 @@ class CaptureLifecycleTest(unittest.TestCase):
                         jobs=[job],
                     )
 
+    def test_candidate_failure_only_blocks_the_same_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            campaign_dir, _, _, manifest = self._fixture(root)
+            job = codex_upgrade.Job(
+                job_id="candidate-job",
+                phase="candidate",
+                suites=("full",),
+                description="候选失败隔离测试",
+                steps=(
+                    {
+                        "argv": ["true"],
+                        "environment": {"RUN_ID": "candidate-new-run"},
+                        "timeout": 60,
+                    },
+                ),
+                evidence_roots=(str(root / "candidate-evidence"),),
+                covers=(),
+            )
+            identity = {"candidate_purpose": "production_replacement"}
+            with (
+                mock.patch.object(
+                    codex_upgrade,
+                    "load_campaign_manifest",
+                    return_value=manifest,
+                ),
+                mock.patch.object(
+                    codex_upgrade,
+                    "_failed_capture_attempts",
+                    return_value=["candidate-old:attempt-failed"],
+                ),
+            ):
+                attempt_root, reservation = codex_upgrade._reserve_capture_attempt(
+                    campaign_dir,
+                    phase="candidate",
+                    candidate_id="candidate-new",
+                    identity=identity,
+                    jobs=[job],
+                )
+
+            self.assertTrue((attempt_root / "reservation.json").is_file())
+            self.assertEqual(reservation["candidate_id"], "candidate-new")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            campaign_dir, _, _, manifest = self._fixture(root)
+            with (
+                mock.patch.object(
+                    codex_upgrade,
+                    "load_campaign_manifest",
+                    return_value=manifest,
+                ),
+                mock.patch.object(
+                    codex_upgrade,
+                    "_failed_capture_attempts",
+                    return_value=["candidate-new:attempt-failed"],
+                ),
+                self.assertRaisesRegex(
+                    codex_upgrade.ConfigurationError,
+                    "只能显式使用 resume --rerun-failed",
+                ),
+            ):
+                codex_upgrade._reserve_capture_attempt(
+                    campaign_dir,
+                    phase="candidate",
+                    candidate_id="candidate-new",
+                    identity=identity,
+                    jobs=[job],
+                )
+
+    def test_runtime_id_projection_rejects_overflow_before_attempt(self) -> None:
+        def job(environment: dict[str, str]) -> codex_upgrade.Job:
+            return codex_upgrade.Job(
+                job_id="candidate-coordinate",
+                phase="candidate",
+                suites=("full",),
+                description="候选运行坐标测试",
+                steps=(
+                    {
+                        "argv": ["true"],
+                        "environment": environment,
+                        "timeout": 60,
+                    },
+                ),
+                evidence_roots=("/tmp/candidate-coordinate",),
+                covers=(),
+            )
+
+        codex_upgrade._validate_capture_runtime_ids(
+            [job({"RUN_ID": "r" * 128})]
+        )
+        codex_upgrade._validate_capture_runtime_ids(
+            [
+                job(
+                    {
+                        "RUN_ID_PREFIX": "p" * 97,
+                        "SUBJECTS": "codex-compact",
+                    }
+                )
+            ]
+        )
+
+        for environment in (
+            {"RUN_ID": "r" * 129},
+            {
+                "RUN_ID_PREFIX": "p" * 98,
+                "SUBJECTS": "codex-compact",
+            },
+        ):
+            with self.assertRaisesRegex(
+                codex_upgrade.ConfigurationError,
+                "128 字符安全边界",
+            ):
+                codex_upgrade._validate_capture_runtime_ids([job(environment)])
+
     def test_contaminated_attempt_blocks_even_when_marker_write_fails(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

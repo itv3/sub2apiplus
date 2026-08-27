@@ -1471,6 +1471,12 @@ python3 tools/official_client_capture/codex_upgrade.py capture-candidate run \
 image／OCI 和 profile 身份，并生成 `attempt_id` 与 `run_nonce`。attempt、activation fact、
 镜像构建证明和实测源码摘要必须指向同一源码树。
 
+Campaign 与 candidate ID 还会和场景后缀、主体及 16 字符 UTC 窗口拼成 direct／mitm
+运行坐标，最终值不得超过 128 字符。编排器必须在创建 reservation 前复算完整坐标并失败关闭；
+不得等脚本启动后才留下必败 attempt。若某 candidate 已形成恢复完整的失败 attempt，同一
+candidate 仍只能显式 `resume --rerun-failed`；身份或坐标需要变化时必须换新 candidate ID，
+旧 candidate 只读保留且不能把整个 Campaign 永久锁死。
+
 ### 4.4.2 场景与第三方入口
 
 `scenarios.json` 是任务、规则覆盖和必需客户端的事实源。每条规则必须有真实触发场景；每个

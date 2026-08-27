@@ -155,6 +155,7 @@ CODEX_USER_AGENT_VERSION_RE = re.compile(
 SHA256_RE = re.compile(r"^[a-f0-9]{64}$")
 RUN_NONCE_RE = SHA256_RE
 SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+RUNTIME_WINDOW_ID_PLACEHOLDER = "20000101T000000Z"
 SAFE_ABSOLUTE_PATH_RE = re.compile(r"^/[A-Za-z0-9._/+:-]+$")
 IMMUTABLE_IMAGE_RE = re.compile(
     r"^[A-Za-z0-9][A-Za-z0-9._/:+-]*@sha256:[a-f0-9]{64}$"
@@ -3111,6 +3112,68 @@ def _validate_jobs(jobs: list[Job], rules: tuple[str, ...]) -> None:
             "只有版本化场景清单中的任务可以声明规则覆盖；"
             f"未绑定场景的任务={unbound_jobs}"
         )
+    _validate_capture_runtime_ids(jobs)
+
+
+def _validate_capture_runtime_ids(jobs: Iterable[Job]) -> None:
+    """在创建 attempt 前复算 direct／mitm 最终运行 ID 的长度边界。
+
+    场景清单中的 ``RUN_ID_PREFIX`` 不是最终值；mitm 矩阵还会追加主体和
+    16 字符 UTC 窗口。只检查 Campaign 或 candidate ID 会把超长坐标拖到
+    真实任务启动后才暴露，既浪费时间又留下必败 attempt，因此这里按脚本
+    的确定性拼接规则提前失败关闭。
+    """
+
+    invalid: list[str] = []
+    for job in jobs:
+        for step_index, step in enumerate(job.steps, start=1):
+            environment = step.get("environment", {})
+            if not isinstance(environment, dict):
+                raise ConfigurationError(
+                    f"{job.job_id} 第 {step_index} 步的环境变量结构非法。"
+                )
+
+            projected: list[tuple[str, str]] = []
+            run_id = environment.get("RUN_ID")
+            if run_id:
+                projected.append(("RUN_ID", str(run_id)))
+
+            run_id_prefix = environment.get("RUN_ID_PREFIX")
+            if run_id_prefix:
+                subjects = str(environment.get("SUBJECTS", "")).split()
+                if not subjects:
+                    raise ConfigurationError(
+                        f"{job.job_id} 使用 RUN_ID_PREFIX 时必须冻结 SUBJECTS。"
+                    )
+                window_id = str(
+                    environment.get("WINDOW_ID", "")
+                    or RUNTIME_WINDOW_ID_PLACEHOLDER
+                )
+                prefix = str(run_id_prefix)
+                projected.append(
+                    ("RUN_ID_PREFIX/setup", f"{prefix}-setup-{window_id}")
+                )
+                projected.extend(
+                    (
+                        f"RUN_ID_PREFIX/{subject}",
+                        f"{prefix}-{subject}-{window_id}",
+                    )
+                    for subject in subjects
+                )
+
+            for coordinate, value in projected:
+                if not SAFE_ID_RE.fullmatch(value):
+                    invalid.append(
+                        f"{job.job_id}:step-{step_index}:{coordinate}="
+                        f"{len(value)}字符"
+                    )
+
+    if invalid:
+        raise ConfigurationError(
+            "抓包运行坐标超过 direct／mitm 的 128 字符安全边界；必须缩短 "
+            "Campaign／candidate ID 后重新生成坐标，禁止先创建必败 attempt："
+            + "、".join(invalid)
+        )
 
 
 def _validate_phase_coverage(jobs: list[Job], rules: tuple[str, ...]) -> None:
@@ -5595,6 +5658,15 @@ def _reserve_capture_attempt(
                 f"Campaign 存在未封存预约或 attempt，禁止并行 run：{active}"
             )
         failed = _failed_capture_attempts(campaign_dir, phase)
+        if phase == "candidate":
+            # candidate 身份变化必须新建 candidate，但旧 candidate 的失败事实仍须
+            # 只读保留。失败门只阻止同一 candidate 绕过显式 resume；其他 candidate
+            # 仍受全局并发预约门约束，却不能被无关失败永久锁死。
+            failed = [
+                item
+                for item in failed
+                if item.partition(":")[0] == candidate_id
+            ]
         if failed and not allow_failed_rerun:
             raise ConfigurationError(
                 "存在失败 attempt；只能显式使用 resume --rerun-failed，禁止直接 "
