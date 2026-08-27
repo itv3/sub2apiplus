@@ -30,6 +30,23 @@ from tools.official_client_capture.codex_upgrade import Job
 
 
 class CodexUpgradeTest(unittest.TestCase):
+    def test_third_party_client_model_uses_lite_track_and_preserves_history(self) -> None:
+        self.assertEqual(
+            codex_upgrade._third_party_client_model(
+                {"model": "gpt-5.5", "lite_model": "gpt-5.6-luna"}
+            ),
+            "gpt-5.6-luna",
+        )
+        self.assertEqual(
+            codex_upgrade._third_party_client_model({"model": "gpt-5.5"}),
+            "gpt-5.5",
+        )
+        with self.assertRaisesRegex(
+            codex_upgrade.ConfigurationError,
+            "第三方客户端冻结模型",
+        ):
+            codex_upgrade._third_party_client_model({"model": ""})
+
     def test_plan_requires_all_versioned_policy_inputs(self) -> None:
         parser = codex_upgrade._build_parser()
         plan_parser = next(

@@ -1,0 +1,115 @@
+{
+  "schema_version": "official-client-codex-0.149.1-r17-kilo-model-contract-transition/v1",
+  "issued_at_utc": "2026-08-27T22:38:23Z",
+  "base_commit": "c09a88fc4fe82b54995f79fc9e60c5abc0042d9f",
+  "scope": "codex-0.149.1-r17-kilo-model-contract",
+  "framework_stage": "VC-3/VC-4/SAME-VERSION-SUCCESSOR",
+  "predecessor_transition": {
+    "path": "docs/egress/maintenance/codex-0.149.1-r16-successor-carry-forward-transition.json",
+    "file_sha256": "97286f9cfec8fe2e0c4c60b7ea962bfa7e98bdaa3b083fe736628e68719ef222",
+    "identity_sha256": "bc8dd8444a5ba65ff30d0439a3e8937c4bf4ea9e2f0362a12b540789af1670c5"
+  },
+  "carry_forward_contract": {
+    "reason": "candidate_runtime_identity_correction",
+    "official_recapture_required": false,
+    "classification_reapproval_required": false,
+    "candidate_recapture_required": true,
+    "kilo_revalidation_required": true,
+    "kilo_model_source": "lite_model",
+    "historical_fallback_model_source": "model",
+    "replay_on": [
+      "accept",
+      "compare",
+      "status"
+    ],
+    "replayed_facts": [
+      "approved_classification_five_files",
+      "official_evidence_inventory",
+      "official_security_gate",
+      "official_stage_seal",
+      "predecessor_campaign_manifest"
+    ]
+  },
+  "safety": {
+    "historical_artifacts_overwritten": false,
+    "historical_receipts_modified": false,
+    "network_configuration_changed": false,
+    "deployment_performed": false,
+    "production_selector_changed": false,
+    "production_activated": false,
+    "vircs_accessed": false
+  },
+  "path_set_sha256": "9ef05ee1350d856070a8b3d8eda8f6b7e04fe660b1d560c0574980fde9c58f4a",
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/codex_01491_r16_successor_carry_forward_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "4a54523ce90d483372bb63917368dd60ff24e10023939aac9a643e762c5f7d33"
+      ],
+      "to_sha256": "13cefea6c8ecfd4f0df118549091b8ad8e2596d8b22d67ba35aa6a0e7b55ebde",
+      "reason": "把 r17 精确后继边接入 Go 侧 r16 校验和传递摘要链。"
+    },
+    {
+      "path": "backend/internal/officialegress/codex_01491_r17_kilo_model_contract_transition_test.go",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "e4957029b64964a717b8d1d61045bcf88347cf8ba53f0dac52f8414aaa621781",
+      "reason": "新增 Go 侧 r17 身份、Kilo 模型合同、安全边界和文件闭集门禁。"
+    },
+    {
+      "path": "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "77e2222cf79f8c8ef44236cb4427aceac3d557ab03d4996eea9506f8c8baf724"
+      ],
+      "to_sha256": "c8d00d7abb36e043363b3f6104aaa44ab995a5f37d89ea6374686d1400f93e50",
+      "reason": "明确 Kilo 双入口使用 Campaign 冻结 lite_model，历史制品仅在缺失字段时回退主轨。"
+    },
+    {
+      "path": "tools/official_client_capture/codex_upgrade.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "960f22e7970815d284eeccac01d211f3ab566c4be8e89e5bc7259f07c9aa4013"
+      ],
+      "to_sha256": "0d4a26dcc264cdda40c05994cc09f884b1734e5f925e10e2eb4357ecf045a715",
+      "reason": "让 seal、阶段重放和 accept 统一按冻结 lite_model 校验 Kilo 收据。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_candidate_gate_successor_transition.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "045ca94b8d603eaf12e3aca38296cde846b9bd055e5fb26c3b8d70dca3f81216"
+      ],
+      "to_sha256": "0e3bb980813985be92bead11d1476c982177474650f03e3d257a8c67fa9957d5",
+      "reason": "把 r17 精确后继边加入 maintenance 摘要图，使旧边可传递到当前 Kilo 模型合同。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_r16_successor_carry_forward_transition.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "a99c054177c6ca78198613ce1b0e3367cd9d24f4aed299cd6dc5e349411de00a"
+      ],
+      "to_sha256": "c0dc29c8b8a604100fc6ab09b5d8757f8c9672a46d1c65e0d2407c77724887c9",
+      "reason": "把 r17 精确后继边接入 Python 侧 r16 校验和传递摘要链。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_r17_kilo_model_contract_transition.py",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "cbee3d07d82f6c0169915e62827eeaca67fdfb551472d95457536dc9b4e0da5a",
+      "reason": "新增可独立重放的 r17 Kilo 模型合同 transition 门禁。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_upgrade.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "e7a801964d6744b651bdd30f9688a9c81d390265d47c19d6fe4830734972c005"
+      ],
+      "to_sha256": "9fba87103504496039e84a55a56cac9688a0d024d4f75e8f80a50b0a52a5cb0c",
+      "reason": "覆盖第三方客户端模型选择、历史回退和非法空模型的回归测试。"
+    }
+  ],
+  "result": "kilo_model_contract_tooling_frozen",
+  "identity_sha256": "b7b7534f89f9d79e66970d54a5124b82e795693e75b32c26f9bd7a926169396c"
+}

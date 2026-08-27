@@ -6281,6 +6281,21 @@ def _validate_observed_profile_receipt(
     return binding, receipt
 
 
+def _third_party_client_model(configuration: Mapping[str, Any]) -> str:
+    """返回第三方客户端验证使用的冻结模型。
+
+    Kilo 双入口用于验证兼容客户端经 HTTP／Responses 进入同一候选画像，模型坐标
+    应与 Campaign 的 Lite 轨一致；主轨 ``model`` 属于官方／候选场景任务，不能
+    再被隐式复用于第三方客户端。历史 Campaign 尚无 ``lite_model`` 时才回退主轨，
+    以便只读重放既有制品。
+    """
+
+    model = configuration.get("lite_model") or configuration.get("model")
+    if not isinstance(model, str) or not model.strip():
+        raise ConfigurationError("Campaign 缺少第三方客户端冻结模型。")
+    return model
+
+
 def _parse_client_evidence(
     values: Iterable[str],
     evidence_roots: list[Path],
@@ -7901,7 +7916,7 @@ def _seal_capture_attempt(
             client_checkpoint_at_utc=client_checkpoint_at,
             candidate_id=str(candidate_id),
             target_version=manifest["target_version"],
-            model=manifest["configuration"]["model"],
+            model=_third_party_client_model(manifest["configuration"]),
             identity=identity,
         )
         required_clients = _required_client_bindings(campaign_dir, classification)
@@ -9728,7 +9743,7 @@ def _replay_capture_stage_receipts(
         client_checkpoint_at_utc=client_checkpoint_at,
         candidate_id=str(candidate_id),
         target_version=campaign["target_version"],
-        model=campaign["configuration"]["model"],
+        model=_third_party_client_model(campaign["configuration"]),
         identity=identity,
     )
     if _fingerprint({"items": replayed}) != _fingerprint(
@@ -10397,7 +10412,7 @@ def accept_campaign(
         client_checkpoint_at_utc=client_checkpoint_at,
         candidate_id=candidate_id,
         target_version=manifest["target_version"],
-        model=manifest["configuration"]["model"],
+        model=_third_party_client_model(manifest["configuration"]),
         identity=identity,
     )
     observed_clients = {item.get("client_id") for item in client_bindings if isinstance(item, dict)}
@@ -10405,7 +10420,8 @@ def accept_campaign(
     client_bindings_valid = all(
         isinstance(item, dict)
         and item.get("status", "success") == "success"
-        and item.get("model") == manifest["configuration"]["model"]
+        and item.get("model")
+        == _third_party_client_model(manifest["configuration"])
         and item.get("profile_id") == identity.get("profile_id")
         and item.get("profile_digest") == identity.get("profile_digest")
         and item.get("protocol")

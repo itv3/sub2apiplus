@@ -1523,7 +1523,9 @@ realtime sideband、A13 OAuth refresh、A14 Files 三跳等高风险场景只有
 
 `run` 完成后、首次 `seal` 前，必须完成两条真实 Kilo 请求；其 ingress、runtime、response 和
 usage 必须绑定本次 Campaign／attempt／`run_nonce`，并位于 attempt 开始与 client checkpoint
-之间。两条请求之后不得再发送本 attempt 的客户端验证请求。
+之间。两条入口统一使用 Campaign 已冻结的 `lite_model`；主轨 `model` 只用于官方／候选场景任务，
+不得被 seal 隐式复用于 Kilo。历史 Campaign 未记录 `lite_model` 时只读重放才允许回退主轨模型。
+两条请求之后不得再发送本 attempt 的客户端验证请求。
 
 ### 4.4.3 四阶段封存
 
