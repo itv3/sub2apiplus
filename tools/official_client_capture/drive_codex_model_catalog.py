@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""通过官方 Codex debug models 预热并核验一次在线模型目录。"""
+"""通过官方 Codex app-server 线程初始化并核验一次在线模型目录。"""
 
 from __future__ import annotations
 
@@ -7,7 +7,6 @@ import argparse
 import json
 import os
 import re
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -22,7 +21,12 @@ from tools.official_client_capture.model_condition_receipts import (
     _iter_messages,
     _json_body,
 )
-from tools.official_client_capture.run_codex_compact_scenario import secure_write
+from tools.official_client_capture.run_codex_compact_scenario import (
+    AppServerClient,
+    extract_thread_id,
+    protocol_requests,
+    secure_write,
+)
 
 
 SCHEMA_VERSION = "codex-model-catalog-prewarm/v1"
@@ -33,8 +37,11 @@ class ModelCatalogPrewarmError(RuntimeError):
     """模型目录命令或对应原始在线证据不完整。"""
 
 
-def build_debug_models_command(codex_bin: str, codex_version: str) -> list[str]:
-    """构造不带 bundled 回退的官方在线模型目录命令。"""
+def build_online_model_catalog_command(
+    codex_bin: str,
+    codex_version: str,
+) -> list[str]:
+    """构造保留内置 OpenAI provider 的最小 app-server 命令。"""
 
     if not re.fullmatch(r"\d+\.\d+\.\d+", codex_version):
         raise ModelCatalogPrewarmError("Codex 版本必须是三段数字。")
@@ -44,46 +51,36 @@ def build_debug_models_command(codex_bin: str, codex_version: str) -> list[str]:
         "feedback.enabled=false",
         'otel.exporter="none"',
         "otel.log_user_prompt=false",
+        'approval_policy="never"',
+        'sandbox_mode="read-only"',
+        'shell_environment_policy.inherit="none"',
+        "features.responses_websockets_v2=false",
+        "features.plugins=false",
+        "features.apps=false",
     )
-    # debug models 必须保留 CLI 内置的 openai provider。自定义 provider 会改变
-    # ModelsEndpointClient 的 Codex backend 判定，OnlineIfUncached 可能只返回内置
-    # 目录而不发出 /models；版本由 0.149.1 二进制自身写入 client_version。
-    command = [codex_bin, "debug", "models"]
+    # 内置 openai provider 是保留 ID，不能用配置覆盖。自定义 provider 会让
+    # ModelsEndpointClient 把当前后端判为非 Codex backend，thread/start 只返回
+    # 内置目录而不发送 /models。client_version 由目标二进制自身写入请求。
+    command = [codex_bin, "app-server", "--strict-config", "--stdio"]
     for value in values:
         command.extend(["-c", value])
     return command
 
 
-def parse_debug_models_catalog(
-    raw: str,
+def start_online_model_catalog_refresh(
+    client: AppServerClient,
     *,
-    expected_model: str,
-    expected_lite: bool,
-) -> list[dict[str, Any]]:
-    """严格解析 debug models JSON，并核验目标模型的 Lite 条件。"""
+    model: str,
+    deadline: float,
+) -> str:
+    """只启动线程以触发 OnlineIfUncached，不发送任何模型 turn。"""
 
-    try:
-        payload = json.loads(raw)
-    except (TypeError, json.JSONDecodeError) as error:
-        raise ModelCatalogPrewarmError("codex debug models 未输出合法 JSON。") from error
-    if not isinstance(payload, dict) or set(payload) != {"models"}:
-        raise ModelCatalogPrewarmError("codex debug models 输出字段不闭合。")
-    models = payload.get("models")
-    if not isinstance(models, list) or not models:
-        raise ModelCatalogPrewarmError("codex debug models 未输出模型目录。")
-    matches = [
-        item
-        for item in models
-        if isinstance(item, dict) and item.get("slug") == expected_model
-    ]
-    if (
-        len(matches) != 1
-        or matches[0].get("use_responses_lite") is not expected_lite
-    ):
-        raise ModelCatalogPrewarmError(
-            "codex debug models 未给出目标模型及预期 Lite 条件。"
-        )
-    return [item for item in models if isinstance(item, dict)]
+    requests = protocol_requests(model)
+    client.send(requests["initialize"])
+    client.wait_response(1, deadline)
+    client.send(requests["initialized"])
+    client.send(requests["thread_start"])
+    return extract_thread_id(client.wait_response(2, deadline))
 
 
 def wait_for_mitm_model_catalog(
@@ -92,7 +89,7 @@ def wait_for_mitm_model_catalog(
     expected_model: str,
     expected_lite: bool,
     deadline: float,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], int]:
     """保持 app-server 存活，直到 MITM 刷盘完整的目标模型目录响应。"""
 
     while time.monotonic() < deadline:
@@ -124,12 +121,15 @@ def wait_for_mitm_model_catalog(
                     and response.get("status") == 200
                     and matches
                 ):
-                    return {
-                        "source": "mitm_models_http",
-                        "path": str(path),
-                        "sha256": file_sha256(path),
-                        "use_responses_lite": expected_lite,
-                    }
+                    return (
+                        {
+                            "source": "mitm_models_http",
+                            "path": str(path),
+                            "sha256": file_sha256(path),
+                            "use_responses_lite": expected_lite,
+                        },
+                        len(models),
+                    )
         time.sleep(0.05)
     raise ModelCatalogPrewarmError("等待 MITM 模型目录 HTTP 200 超时。")
 
@@ -139,7 +139,7 @@ def find_captured_model_catalog(
     *,
     expected_model: str,
     expected_lite: bool,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], int]:
     """从已刷盘的 relay 字节中定位一份完整且匹配的模型目录响应。"""
 
     if relay_dir.is_symlink() or not relay_dir.is_dir():
@@ -180,14 +180,17 @@ def find_captured_model_catalog(
             len(matches) == 1
             and matches[0].get("use_responses_lite") is expected_lite
         ):
-            return {
-                "connection_id": connection_id,
-                "request_path": f"relay/{request_path.name}",
-                "request_sha256": file_sha256(request_path),
-                "response_path": f"relay/{response_path.name}",
-                "response_sha256": file_sha256(response_path),
-                "use_responses_lite": expected_lite,
-            }
+            return (
+                {
+                    "connection_id": connection_id,
+                    "request_path": f"relay/{request_path.name}",
+                    "request_sha256": file_sha256(request_path),
+                    "response_path": f"relay/{response_path.name}",
+                    "response_sha256": file_sha256(response_path),
+                    "use_responses_lite": expected_lite,
+                },
+                len(models or []),
+            )
     if completed_responses:
         raise ModelCatalogPrewarmError(
             "完整 /models 响应未给出目标模型及预期 Lite 条件。"
@@ -201,7 +204,7 @@ def wait_for_relay_model_catalog(
     expected_model: str,
     expected_lite: bool,
     deadline: float,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], int]:
     """保持 app-server 存活，直到字节中继刷盘完整的模型目录响应。"""
 
     last_error: ModelCatalogPrewarmError | None = None
@@ -231,7 +234,7 @@ def run_prewarm(
     timeout: int,
     mitm_models_http: Path | None = None,
 ) -> dict[str, Any]:
-    """执行阻塞式 debug models，并把 JSON 结果与原始字节交叉核验。"""
+    """以 thread/start 触发在线刷新，并与原始 HTTP 200 交叉核验。"""
 
     if not re.fullmatch(r"\d+\.\d+\.\d+", codex_version):
         raise ModelCatalogPrewarmError("Codex 版本必须是三段数字。")
@@ -242,53 +245,49 @@ def run_prewarm(
     environment.pop("OPENAI_API_KEY", None)
     environment.pop("SUB2API_API_KEY", None)
     deadline = time.monotonic() + timeout
-    try:
-        completed = subprocess.run(
-            build_debug_models_command(codex_bin, codex_version),
-            env=environment,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=timeout,
-            check=False,
-        )
-    except subprocess.TimeoutExpired as error:
-        raise ModelCatalogPrewarmError("codex debug models 执行超时。") from error
-    if completed.returncode != 0:
-        raise ModelCatalogPrewarmError(
-            f"codex debug models 以 {completed.returncode} 退出。"
-        )
-    models = parse_debug_models_catalog(
-        completed.stdout,
-        expected_model=model,
-        expected_lite=expected_lite,
+    client = AppServerClient(
+        build_online_model_catalog_command(codex_bin, codex_version),
+        environment,
     )
-
-    # debug models 在冷缓存上同步等待 OnlineIfUncached 完成；命令成功仍不能单独
-    # 证明它没有回退到内置目录，必须再看到同一轮原始 HTTP 200 才允许成功。
-    if mitm_models_http is not None:
-        captured = wait_for_mitm_model_catalog(
-            mitm_models_http,
-            expected_model=model,
-            expected_lite=expected_lite,
+    try:
+        start_online_model_catalog_refresh(
+            client,
+            model=model,
             deadline=deadline,
         )
-    else:
-        captured = wait_for_relay_model_catalog(
-            relay_dir,
-            expected_model=model,
-            expected_lite=expected_lite,
-            deadline=deadline,
-        )
+        # thread/start 本身不发送 Responses turn，只让内置 provider 的
+        # OnlineIfUncached 启动在线刷新。app-server 必须保持存活到完整 body 刷盘，
+        # 否则关闭进程会取消尚未完成的 HTTP/2 stream。
+        if mitm_models_http is not None:
+            captured, model_count = wait_for_mitm_model_catalog(
+                mitm_models_http,
+                expected_model=model,
+                expected_lite=expected_lite,
+                deadline=deadline,
+            )
+        else:
+            captured, model_count = wait_for_relay_model_catalog(
+                relay_dir,
+                expected_model=model,
+                expected_lite=expected_lite,
+                deadline=deadline,
+            )
+    except ModelCatalogPrewarmError:
+        raise
+    except BaseException as error:
+        raise ModelCatalogPrewarmError(
+            f"app-server thread/start 未完成：{type(error).__name__}。"
+        ) from error
+    finally:
+        client.close()
     summary = {
         "schema_version": SCHEMA_VERSION,
         "status": "success",
         "codex_version": codex_version,
         "model_id": model,
         "use_responses_lite": expected_lite,
-        # 保留 v1 收据字段名；一次完整 debug models JSON 输出记为一条驱动记录。
-        "protocol_record_count": 1,
-        "model_count": len(models),
+        "protocol_record_count": len(client.records),
+        "model_count": model_count,
         "capture": captured,
     }
     secure_write(output, json.dumps(summary, ensure_ascii=False, indent=2) + "\n")

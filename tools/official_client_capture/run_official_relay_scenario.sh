@@ -426,10 +426,10 @@ restore_auth_json() {
 }
 
 prewarm_model_catalog() {
-  # 需要模型条件收据的任务必须先取得一份阻塞式在线目录响应。codex exec 与
-  # app-server model/list 都可能先返回内存目录，再在后台刷新；进程退出会取消尚未
-  # 完成的 /models 流。这里使用隔离 CODEX_HOME 调用官方 `codex debug models`，让
-  # OnlineIfUncached 同步完成，并由驱动交叉核验命令 JSON 与 relay 原文。
+  # 需要模型条件收据的任务必须先取得一份完整在线目录响应。codex exec、
+  # debug models 与单独 model/list 都可能只返回内置目录；这里用隔离 HOME 和
+  # CODEX_HOME 启动官方 app-server，仅执行 initialize + thread/start 来触发
+  # OnlineIfUncached，并保持进程存活到 relay 原文中的 /models HTTP 200 刷盘。
   model_catalog_home="/tmp/codex-model-catalog-$run_id"
   docker exec "$capture_container" sh -c \
     "rm -rf '$model_catalog_home' && install -d -m 0700 '$model_catalog_home'"
@@ -438,7 +438,8 @@ prewarm_model_catalog() {
     home="$model_catalog_home/$attempt"
     docker exec "$capture_container" sh -c \
       "install -d -m 0700 '$home' && install -m 0600 /root/.codex/auth.json '$home/auth.json'"
-    if docker exec -e CODEX_HOME="$home" "$capture_container" timeout 150 \
+    if docker exec -e HOME="$home" -e CODEX_HOME="$home" \
+      "$capture_container" timeout 150 \
       python3 "$capture_tool_root/drive_codex_model_catalog.py" \
       --codex-bin "$codex_bin" \
       --codex-version "$codex_version" \
