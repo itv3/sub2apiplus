@@ -1231,12 +1231,16 @@ python3 tools/official_client_capture/codex_upgrade.py successor \
   --predecessor-campaign-dir /absolute/path/to/predecessor \
   --campaign-dir /absolute/path/to/new-campaign \
   --campaign-id <new-id> \
+  --codex-account-id <当前可用账号-id> \
   --reason candidate_runtime_identity_correction \
   --predecessor-candidate-id <old-candidate-id> \
   --predecessor-attempt-id <old-attempt-id>
 ~~~
 
-最后两项可同时省略；提供时必须成对绑定。该命令只逐字复制计划期 inputs／analysis、五份批准
+最后两项可同时省略；提供时必须成对绑定。Codex 账号属于 Candidate 的运行前提，不属于可承接的
+官方／分类事实；每个后继 Campaign 必须通过 `--codex-account-id` 重新显式选择当前可用账号。
+工具只允许这一项运行配置改变，并在 v2 `predecessor-import.json` 中冻结前序值、后继值和原因；
+历史 v1 收据仍按“配置逐字不变”只读重放。该命令只逐字复制计划期 inputs／analysis、五份批准
 清单和规范化 official surface，并生成 `predecessor-import.json`。原始官方 evidence、attempt、
 inventory 与安全收据继续位于前序 Campaign，保持只读；后继的 `status`、`compare`、`accept`
 每次都从前序路径重放 Campaign manifest、官方 stage seal、证据 inventory／security、批准五件套

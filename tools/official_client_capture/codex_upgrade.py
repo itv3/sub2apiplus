@@ -134,7 +134,8 @@ SEAL_FAILURE_SCHEMA = "codex-upgrade-seal-failure/v2"
 SEAL_PREVIEW_SCHEMA = "codex-upgrade-seal-preview/v2"
 SCENARIO_SCHEMA = "codex-upgrade-scenarios/v1"
 STAGE_SCHEMA = "codex-upgrade-stage-result/v2"
-PREDECESSOR_IMPORT_SCHEMA = "codex-upgrade-predecessor-import/v1"
+PREDECESSOR_IMPORT_SCHEMA_V1 = "codex-upgrade-predecessor-import/v1"
+PREDECESSOR_IMPORT_SCHEMA = "codex-upgrade-predecessor-import/v2"
 COMPARISON_SCHEMA = "codex-upgrade-comparison/v2"
 ACCEPTANCE_SCHEMA = "codex-upgrade-acceptance/v2"
 CAMPAIGN_MODES = frozenset({"preflight_only", "formal"})
@@ -2352,6 +2353,12 @@ def _build_parser() -> argparse.ArgumentParser:
     add_campaign_reference(successor)
     successor.add_argument("--campaign-id", required=True)
     successor.add_argument(
+        "--codex-account-id",
+        type=int,
+        required=True,
+        help="后继 Candidate 运行必须显式冻结的可用 Codex 账号 ID。",
+    )
+    successor.add_argument(
         "--reason",
         choices=sorted(SUCCESSOR_REASONS),
         required=True,
@@ -3625,10 +3632,21 @@ def create_successor_campaign(arguments: argparse.Namespace) -> dict[str, Any]:
         raise ConfigurationError("后继 Campaign 目录不得等于前序 Campaign。")
     if not SAFE_ID_RE.fullmatch(str(arguments.campaign_id)):
         raise ConfigurationError("--campaign-id 格式非法。")
+    if arguments.codex_account_id <= 0:
+        raise ConfigurationError("--codex-account-id 必须为正整数。")
     if arguments.reason not in SUCCESSOR_REASONS:
         raise ConfigurationError("--reason 不是受管的同版本后继原因。")
 
     predecessor_manifest = _require_formal_campaign(predecessor_dir)
+    predecessor_account_id = predecessor_manifest.get("configuration", {}).get(
+        "codex_account_id"
+    )
+    if (
+        isinstance(predecessor_account_id, bool)
+        or not isinstance(predecessor_account_id, int)
+        or predecessor_account_id <= 0
+    ):
+        raise ConfigurationError("前序 Campaign 的 Codex 账号坐标非法。")
     if arguments.campaign_id == predecessor_manifest["campaign_id"]:
         raise ConfigurationError("后继 Campaign 必须使用新的 campaign-id。")
     # 后继承接只重放前序阶段封印、证据 inventory/security 与批准清单。
@@ -3705,6 +3723,9 @@ def create_successor_campaign(arguments: argparse.Namespace) -> dict[str, Any]:
         successor_manifest = json.loads(
             json.dumps(predecessor_manifest, ensure_ascii=False)
         )
+        successor_manifest["configuration"]["codex_account_id"] = (
+            arguments.codex_account_id
+        )
         successor_manifest.update(
             {
                 "campaign_id": arguments.campaign_id,
@@ -3764,6 +3785,13 @@ def create_successor_campaign(arguments: argparse.Namespace) -> dict[str, Any]:
             "copied_files": sorted(
                 copied_files.values(), key=lambda item: item["target_path"]
             ),
+            "configuration_transition": {
+                "codex_account_id": {
+                    "predecessor": predecessor_account_id,
+                    "successor": arguments.codex_account_id,
+                    "reason": "operator_selected_active_account",
+                }
+            },
             "abandoned_candidate_attempt": abandoned_attempt,
         }
         import_receipt["receipt_digest"] = _fingerprint(import_receipt)
@@ -3820,6 +3848,7 @@ def create_successor_campaign(arguments: argparse.Namespace) -> dict[str, Any]:
         "official_imported": True,
         "classification_imported": True,
         "official_recapture_required": False,
+        "codex_account_id": arguments.codex_account_id,
         "next_command": status["next_command"],
     }
 
@@ -4321,6 +4350,7 @@ def _validate_predecessor_import_receipt(
     _verify_campaign_binding(campaign_dir, import_binding, "前序导入收据")
     import_path = _campaign_file(campaign_dir, import_binding["path"])
     receipt = _read_json(import_path, "前序导入收据")
+    receipt_schema = receipt.get("schema_version")
     expected_receipt_fields = {
         "schema_version",
         "created_at_utc",
@@ -4333,11 +4363,14 @@ def _validate_predecessor_import_receipt(
         "abandoned_candidate_attempt",
         "receipt_digest",
     }
+    if receipt_schema == PREDECESSOR_IMPORT_SCHEMA:
+        expected_receipt_fields.add("configuration_transition")
     unsigned_receipt = dict(receipt)
     receipt_digest = unsigned_receipt.pop("receipt_digest", None)
     if (
         set(receipt) != expected_receipt_fields
-        or receipt.get("schema_version") != PREDECESSOR_IMPORT_SCHEMA
+        or receipt_schema
+        not in {PREDECESSOR_IMPORT_SCHEMA_V1, PREDECESSOR_IMPORT_SCHEMA}
         or not _is_rfc3339_timestamp(receipt.get("created_at_utc"))
         or receipt.get("reason") not in SUCCESSOR_REASONS
         or receipt.get("successor_campaign_id") != manifest["campaign_id"]
@@ -4391,7 +4424,6 @@ def _validate_predecessor_import_receipt(
         "baseline_identity",
         "inputs",
         "analysis",
-        "configuration",
         "required_rules",
     )
     mismatches = [
@@ -4404,6 +4436,46 @@ def _validate_predecessor_import_receipt(
             "同版本后继 Campaign 改变了禁止承接的前序坐标："
             + "、".join(mismatches)
         )
+
+    predecessor_configuration = predecessor_manifest.get("configuration")
+    successor_configuration = manifest.get("configuration")
+    if not isinstance(predecessor_configuration, dict) or not isinstance(
+        successor_configuration, dict
+    ):
+        raise ConfigurationError("同版本后继 Campaign 配置不是对象。")
+    predecessor_account_id = predecessor_configuration.get("codex_account_id")
+    successor_account_id = successor_configuration.get("codex_account_id")
+    predecessor_configuration_without_account = dict(predecessor_configuration)
+    successor_configuration_without_account = dict(successor_configuration)
+    predecessor_configuration_without_account.pop("codex_account_id", None)
+    successor_configuration_without_account.pop("codex_account_id", None)
+    if (
+        predecessor_configuration_without_account
+        != successor_configuration_without_account
+    ):
+        raise ConfigurationError("同版本后继 Campaign 改变了账号以外的运行配置。")
+    if receipt_schema == PREDECESSOR_IMPORT_SCHEMA_V1:
+        if successor_account_id != predecessor_account_id:
+            raise ConfigurationError("历史 v1 后继收据不允许改变 Codex 账号。")
+    else:
+        configuration_transition = receipt.get("configuration_transition")
+        if (
+            isinstance(predecessor_account_id, bool)
+            or not isinstance(predecessor_account_id, int)
+            or predecessor_account_id <= 0
+            or isinstance(successor_account_id, bool)
+            or not isinstance(successor_account_id, int)
+            or successor_account_id <= 0
+            or configuration_transition
+            != {
+                "codex_account_id": {
+                    "predecessor": predecessor_account_id,
+                    "successor": successor_account_id,
+                    "reason": "operator_selected_active_account",
+                }
+            }
+        ):
+            raise ConfigurationError("后继 Campaign 的 Codex 账号过渡收据非法。")
 
     next_chain = frozenset({*import_chain, campaign_dir.resolve()})
     predecessor_official = _load_stage_result(

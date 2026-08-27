@@ -2070,6 +2070,8 @@ class CodexUpgradeTest(unittest.TestCase):
                     str(successor_dir),
                     "--campaign-id",
                     "upgrade-0146-successor",
+                    "--codex-account-id",
+                    "91",
                     "--reason",
                     "candidate_runtime_identity_correction",
                 ]
@@ -2078,11 +2080,37 @@ class CodexUpgradeTest(unittest.TestCase):
             result = json.loads(stdout)
             self.assertEqual(result["status"], "profile_approved")
             self.assertFalse(result["official_recapture_required"])
+            self.assertEqual(result["codex_account_id"], 91)
 
             successor_manifest = codex_upgrade.load_campaign_manifest(successor_dir)
             self.assertEqual(
                 successor_manifest["predecessor"]["campaign_id"],
                 predecessor_manifest["campaign_id"],
+            )
+            self.assertEqual(
+                predecessor_manifest["configuration"]["codex_account_id"], 90
+            )
+            self.assertEqual(
+                successor_manifest["configuration"]["codex_account_id"], 91
+            )
+            import_receipt = json.loads(
+                (successor_dir / "predecessor-import.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(
+                import_receipt["schema_version"],
+                codex_upgrade.PREDECESSOR_IMPORT_SCHEMA,
+            )
+            self.assertEqual(
+                import_receipt["configuration_transition"],
+                {
+                    "codex_account_id": {
+                        "predecessor": 90,
+                        "successor": 91,
+                        "reason": "operator_selected_active_account",
+                    }
+                },
             )
             self.assertEqual(
                 successor_manifest["official_identity"],
@@ -2143,6 +2171,8 @@ class CodexUpgradeTest(unittest.TestCase):
                     str(successor_dir),
                     "--campaign-id",
                     "upgrade-0146-successor-accept",
+                    "--codex-account-id",
+                    "90",
                     "--reason",
                     "candidate_runtime_identity_correction",
                 ]
@@ -2177,6 +2207,58 @@ class CodexUpgradeTest(unittest.TestCase):
                 "ready",
             )
 
+    def test_successor_replays_historical_v1_account_invariant_receipt(self) -> None:
+        """历史 v1 收据没有账号过渡字段，只允许原账号逐字承接。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            predecessor_dir, _, _ = self._create_classified_campaign(
+                root / "predecessor"
+            )
+            successor_dir = root / "successor"
+            return_code, _, stderr = self._run_main(
+                [
+                    "successor",
+                    "--predecessor-campaign-dir",
+                    str(predecessor_dir),
+                    "--campaign-dir",
+                    str(successor_dir),
+                    "--campaign-id",
+                    "upgrade-0146-successor-v1-replay",
+                    "--codex-account-id",
+                    "90",
+                    "--reason",
+                    "candidate_runtime_identity_correction",
+                ]
+            )
+            self.assertEqual(return_code, 0, stderr)
+
+            import_path = successor_dir / "predecessor-import.json"
+            receipt = json.loads(import_path.read_text(encoding="utf-8"))
+            receipt["schema_version"] = codex_upgrade.PREDECESSOR_IMPORT_SCHEMA_V1
+            receipt.pop("configuration_transition")
+            receipt.pop("receipt_digest")
+            receipt["receipt_digest"] = codex_upgrade._fingerprint(receipt)
+            self._write_json(import_path, receipt)
+
+            manifest = codex_upgrade.load_campaign_manifest(successor_dir)
+            stage_payload = json.loads(
+                (successor_dir / "official" / "result.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            stage_payload["predecessor_import"]["sha256"] = (
+                codex_upgrade.file_sha256(import_path)
+            )
+            replayed = codex_upgrade._validate_predecessor_import_receipt(
+                successor_dir,
+                manifest,
+                stage_payload,
+                "capture-official",
+                frozenset(),
+            )
+            self.assertEqual(replayed["status"], "complete")
+
     def test_successor_replays_historical_stage_without_rebinding_finalizer(
         self,
     ) -> None:
@@ -2204,6 +2286,8 @@ class CodexUpgradeTest(unittest.TestCase):
                         str(successor_dir),
                         "--campaign-id",
                         "upgrade-0146-successor-historical-finalizer",
+                        "--codex-account-id",
+                        "90",
                         "--reason",
                         "candidate_runtime_identity_correction",
                     ]
@@ -2235,6 +2319,8 @@ class CodexUpgradeTest(unittest.TestCase):
                         str(successor_dir),
                         "--campaign-id",
                         f"upgrade-0146-successor-{drift_side}",
+                        "--codex-account-id",
+                        "90",
                         "--reason",
                         "candidate_runtime_identity_correction",
                     ]
@@ -2265,6 +2351,8 @@ class CodexUpgradeTest(unittest.TestCase):
                 str(root / "successor"),
                 "--campaign-id",
                 predecessor_manifest["campaign_id"],
+                "--codex-account-id",
+                "90",
                 "--reason",
                 "candidate_runtime_identity_correction",
             ]

@@ -154,6 +154,9 @@ def transition_chain_supersedes(
         from tools.official_client_capture.tests import (
             test_codex_01491_r17_kilo_model_contract_transition as r17_successor,
         )
+        from tools.official_client_capture.tests import (
+            test_codex_01491_r18_successor_account_transition as r18_successor,
+        )
 
         predecessor = load_document(PREDECESSOR_PATH, "候选源码 transition")
         candidate_gate = load_transition()
@@ -168,6 +171,7 @@ def transition_chain_supersedes(
         r13_successor = r13_coordinate.load_validated_transition()
         r16_successor_document = r16_successor.load_validated_transition()
         r17_successor_document = r17_successor.load_validated_transition()
+        r18_successor_document = r18_successor.load_validated_transition()
         ledger.validate_candidate_surface_successor(
             surface_successor,
             ledger.INVENTORY.read_bytes(),
@@ -187,6 +191,7 @@ def transition_chain_supersedes(
         (r13_successor, "transitions"),
         (r16_successor_document, "transitions"),
         (r17_successor_document, "transitions"),
+        (r18_successor_document, "transitions"),
     ):
         transitions = document.get(field)
         if not isinstance(transitions, list):
