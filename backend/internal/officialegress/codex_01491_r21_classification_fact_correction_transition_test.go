@@ -33,6 +33,8 @@ type codex01491R21ClassificationFactCorrectionReceipt struct {
 		OfficialEvidenceReplayRequired   bool   `json:"official_evidence_replay_required"`
 		ApprovedClassificationImported   bool   `json:"approved_classification_imported"`
 		ClassificationReapprovalRequired bool   `json:"classification_reapproval_required"`
+		HistoricalScenarioBindingScope   string `json:"historical_scenario_source_binding_scope"`
+		ApprovedScenarioRebindRequired   bool   `json:"approved_scenario_rebind_required"`
 		CandidateRecaptureRequired       bool   `json:"candidate_recapture_required"`
 		KiloRevalidationRequired         bool   `json:"kilo_revalidation_required"`
 	} `json:"classification_fact_correction_contract"`
@@ -157,6 +159,8 @@ func validateCodex01491R21ClassificationFactCorrectionTransition(
 		!contract.OfficialEvidenceReplayRequired ||
 		contract.ApprovedClassificationImported ||
 		!contract.ClassificationReapprovalRequired ||
+		contract.HistoricalScenarioBindingScope != "successor_plan_rebuild_only" ||
+		!contract.ApprovedScenarioRebindRequired ||
 		!contract.CandidateRecaptureRequired ||
 		!contract.KiloRevalidationRequired {
 		return errors.New("Codex 0.149.1 r21 分类事实纠正承接合同非法")

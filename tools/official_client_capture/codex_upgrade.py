@@ -1364,8 +1364,21 @@ def load_scenario_jobs(
     expected_version: str | None = None,
     expected_rule_sha256: str | None = None,
     require_bindings: bool = False,
+    allow_historical_source_spec_binding: bool = False,
 ) -> list[Job]:
-    """从版本化场景清单生成任务，避免在编排器中加入版本分支。"""
+    """从版本化场景清单生成任务，避免在编排器中加入版本分支。
+
+    分类事实纠正后继在重建新 Campaign 坐标时，会逐字读取前序已封存的
+    场景清单；该清单的源码章节摘要可能正是本轮要纠正的历史事实。调用方
+    只能在这一处显式允许旧摘要，后续新分类批准仍必须绑定当前章节摘要。
+    """
+
+    if allow_historical_source_spec_binding and (
+        not require_bindings or expected_version is None
+    ):
+        raise ConfigurationError(
+            "历史场景规格绑定只能用于有版本约束的正式后继计划重建。"
+        )
 
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -1403,10 +1416,14 @@ def load_scenario_jobs(
         ):
             raise ConfigurationError("场景清单规格摘要绑定非法。")
         resolved_source = Path(__file__).resolve().parents[2] / source_path
+        if not resolved_source.is_file() or resolved_source.is_symlink():
+            raise ConfigurationError("场景清单规格第二章摘要不一致。")
+        current_source_sha = source_spec_section_sha256(
+            resolved_source, fragment
+        )
         if (
-            not resolved_source.is_file()
-            or resolved_source.is_symlink()
-            or source_spec_section_sha256(resolved_source, fragment) != source_sha
+            current_source_sha != source_sha
+            and not allow_historical_source_spec_binding
         ):
             raise ConfigurationError("场景清单规格第二章摘要不一致。")
     raw_scenarios = payload.get("evidence_scenarios")
@@ -3562,6 +3579,8 @@ def _rebuild_successor_plan(
     staging_dir: Path,
     final_dir: Path,
     manifest: dict[str, Any],
+    *,
+    allow_historical_source_spec_binding: bool = False,
 ) -> None:
     """用新 Campaign ID 重算计划坐标，证据与批准输入保持逐字不变。"""
 
@@ -3580,6 +3599,9 @@ def _rebuild_successor_plan(
         context,
         expected_version=manifest["target_version"],
         require_bindings=True,
+        allow_historical_source_spec_binding=(
+            allow_historical_source_spec_binding
+        ),
     )
     extra_reference = manifest["inputs"].get("extra_jobs")
     if extra_reference is not None:
@@ -3762,7 +3784,12 @@ def create_successor_campaign(arguments: argparse.Namespace) -> dict[str, Any]:
                 },
             }
         )
-        _rebuild_successor_plan(staging_dir, successor_dir, successor_manifest)
+        _rebuild_successor_plan(
+            staging_dir,
+            successor_dir,
+            successor_manifest,
+            allow_historical_source_spec_binding=reclassification_successor,
+        )
         manifest_path = staging_dir / "campaign.json"
         _secure_write_json_once(manifest_path, successor_manifest)
         secure_write_text(

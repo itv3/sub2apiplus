@@ -17,6 +17,8 @@
     "official_evidence_replay_required": true,
     "approved_classification_imported": false,
     "classification_reapproval_required": true,
+    "historical_scenario_source_binding_scope": "successor_plan_rebuild_only",
+    "approved_scenario_rebind_required": true,
     "candidate_recapture_required": true,
     "kilo_revalidation_required": true
   },
@@ -66,7 +68,7 @@
       "path": "backend/internal/officialegress/codex_01491_r21_classification_fact_correction_transition_test.go",
       "change": "added",
       "predecessor_sha256s": [],
-      "to_sha256": "bc9427654eb6b483af8e87010ba26d25536990513bf277e9e31bb960e65235d8",
+      "to_sha256": "7dd3240bb9997350445ff7b454a4e96cab2f73a41fa74611573f4aa0bce66745",
       "reason": "新增 Go 侧 r21 身份、分类事实纠正合同、安全边界和文件闭集门禁。"
     },
     {
@@ -84,8 +86,8 @@
       "predecessor_sha256s": [
         "5a248c4815cd44ac865e16d28814082d1c03d2d314e54e12c37188e972ee5267"
       ],
-      "to_sha256": "7b4ec62edac95bd6e91b2c085cc48ad65a5cbad7439bf293d957b748e941afa0",
-      "reason": "新增同版本官方阶段只读承接、旧批准不继承和重新分类的操作路径。"
+      "to_sha256": "d98b2c8a4474ee4fe0c2439192255fb2053a4eeb316f1947d598138c3b93ff97",
+      "reason": "新增同版本官方阶段只读承接、旧批准不继承、重新分类及历史场景绑定的计划重建边界。"
     },
     {
       "path": "docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md",
@@ -120,8 +122,8 @@
       "predecessor_sha256s": [
         "8b1a971f4e898e5e68a970c4269c483faa8f4f861bd65d0e649f84d9434509cf"
       ],
-      "to_sha256": "97e0f0febd7880773b830c869dcc00e91aaeb03c07e52d4e4354ac0b3297f061",
-      "reason": "新增 v3 official-only reclassification 后继收据和旧批准五件套隔离门禁。"
+      "to_sha256": "8b9210ccceb1931e8dd9eae0eb4014e910da279a86bb5202dee846af52e029a7",
+      "reason": "新增 v3 official-only reclassification、旧批准五件套隔离及仅限计划重建的历史章节摘要豁免。"
     },
     {
       "path": "tools/official_client_capture/codex_upgrade_evidence_labels_0_149_1.json",
@@ -190,7 +192,7 @@
       "path": "tools/official_client_capture/tests/test_codex_01491_r21_classification_fact_correction_transition.py",
       "change": "added",
       "predecessor_sha256s": [],
-      "to_sha256": "6682dfbbe495191ee0f5a9a98952cdebb8d95158fb15c7397bf8fdcdab3f834e",
+      "to_sha256": "020bac623bfc717012b34d49acec89a4d26a3129a17edaa482e886a172e991dd",
       "reason": "新增可独立重放的 r21 分类事实纠正 transition 门禁。"
     },
     {
@@ -199,8 +201,8 @@
       "predecessor_sha256s": [
         "b00a94ec4102cb7d1119010e9ff8e490c131ccede9bf6977478d7a04b1b215f3"
       ],
-      "to_sha256": "0811e24cd6a41e88522d5205aa1ea7653dc9ce6be56da8446313388a79bbbf8d",
-      "reason": "覆盖只承接官方阶段、拒绝复制旧批准五件套和重新分类状态机。"
+      "to_sha256": "68b59f4a58d6c68cf15742ac27d06585c605d08c3a6e5060e22ffe45e00ec673",
+      "reason": "覆盖只承接官方阶段、拒绝复制旧批准五件套、重新分类状态机及历史场景绑定窄豁免。"
     },
     {
       "path": "tools/spec_ref_anchors_0_149_1.json",
@@ -213,5 +215,5 @@
     }
   ],
   "result": "classification_fact_correction_tooling_frozen",
-  "identity_sha256": "f0a9dbbba4f24b17c1659b493286bdb22391bbc93895cbd63f7388d43850d321"
+  "identity_sha256": "780a82aa4c542eee0343295080130e0b83fbfc720a2f693050efe5ad23c6132a"
 }

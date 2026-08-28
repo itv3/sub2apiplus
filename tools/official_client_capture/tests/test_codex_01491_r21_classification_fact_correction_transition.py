@@ -53,6 +53,8 @@ EXPECTED_CONTRACT = {
     "official_evidence_replay_required": True,
     "approved_classification_imported": False,
     "classification_reapproval_required": True,
+    "historical_scenario_source_binding_scope": "successor_plan_rebuild_only",
+    "approved_scenario_rebind_required": True,
     "candidate_recapture_required": True,
     "kilo_revalidation_required": True,
 }

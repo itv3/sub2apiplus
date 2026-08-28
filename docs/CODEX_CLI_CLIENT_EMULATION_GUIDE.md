@@ -1255,6 +1255,10 @@ official surface；旧分类结果只作为被纠正事实绑定摘要，不复�
 重新发送官方 CLI 请求；若原始官方证据缺失必要事实、身份不可信或 evidence 语义本身需要
 改变，则本入口失败关闭，必须建立新的正式官方取证 Campaign。
 
+重建新 Campaign 坐标时，工具只允许逐字继承的前序场景清单保留历史章节摘要；该豁免仅限
+`classification_fact_correction` 的计划重建调用。新批准场景必须重新绑定当前章节摘要，普通
+后继、Candidate 执行和分类批准路径均不得使用历史摘要豁免。
+
 最后两项可同时省略；提供时必须成对绑定。Codex 账号属于 Candidate 的运行前提，不属于可承接的
 官方／分类事实；每个后继 Campaign 必须通过 `--codex-account-id` 重新显式选择当前可用账号。
 工具只允许这一项运行配置改变，并在 v2 `predecessor-import.json` 中冻结前序值、后继值和原因；

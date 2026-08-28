@@ -345,6 +345,50 @@ class CodexUpgradeTest(unittest.TestCase):
                 "1",
             )
 
+    def test_historical_scenario_source_binding_is_plan_rebuild_only(self) -> None:
+        """历史章节摘要豁免必须显式绑定版本化正式计划重建。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            arguments = self._campaign_arguments(Path(directory))
+            arguments.campaign_dir = Path(directory).resolve() / "campaign"
+            arguments.output = arguments.campaign_dir
+            scenario_path = arguments.target_scenario_manifest
+            scenario = json.loads(scenario_path.read_text(encoding="utf-8"))
+            scenario["source_spec"]["sha256"] = "0" * 64
+            self._write_json(scenario_path, scenario)
+            context = codex_upgrade._job_context(arguments)
+
+            with self.assertRaisesRegex(
+                codex_upgrade.ConfigurationError,
+                "规格第二章摘要不一致",
+            ):
+                codex_upgrade.load_scenario_jobs(
+                    scenario_path,
+                    context,
+                    expected_version="0.146.0",
+                    require_bindings=True,
+                )
+            with self.assertRaisesRegex(
+                codex_upgrade.ConfigurationError,
+                "正式后继计划重建",
+            ):
+                codex_upgrade.load_scenario_jobs(
+                    scenario_path,
+                    context,
+                    allow_historical_source_spec_binding=True,
+                )
+            jobs = codex_upgrade.load_scenario_jobs(
+                scenario_path,
+                context,
+                expected_version="0.146.0",
+                require_bindings=True,
+                allow_historical_source_spec_binding=True,
+            )
+            self.assertEqual(
+                {job.job_id for job in jobs},
+                {"official-test", "candidate-test"},
+            )
+
     def test_plan_freezes_target_scenario_and_official_reloads_same_jobs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -2166,22 +2210,34 @@ class CodexUpgradeTest(unittest.TestCase):
                 predecessor_dir, "capture-official"
             )
             successor_dir = root / "successor"
-            return_code, stdout, stderr = self._run_main(
-                [
-                    "successor",
-                    "--predecessor-campaign-dir",
-                    str(predecessor_dir),
-                    "--campaign-dir",
-                    str(successor_dir),
-                    "--campaign-id",
-                    "upgrade-0146-reclassification-successor",
-                    "--codex-account-id",
-                    "92",
-                    "--reason",
-                    "classification_fact_correction",
-                ]
-            )
+            with mock.patch.object(
+                codex_upgrade,
+                "load_scenario_jobs",
+                wraps=codex_upgrade.load_scenario_jobs,
+            ) as load_scenario_jobs:
+                return_code, stdout, stderr = self._run_main(
+                    [
+                        "successor",
+                        "--predecessor-campaign-dir",
+                        str(predecessor_dir),
+                        "--campaign-dir",
+                        str(successor_dir),
+                        "--campaign-id",
+                        "upgrade-0146-reclassification-successor",
+                        "--codex-account-id",
+                        "92",
+                        "--reason",
+                        "classification_fact_correction",
+                    ]
+                )
             self.assertEqual(return_code, 0, stderr)
+            self.assertTrue(
+                any(
+                    call.kwargs.get("allow_historical_source_spec_binding")
+                    is True
+                    for call in load_scenario_jobs.call_args_list
+                )
+            )
             result = json.loads(stdout)
             self.assertEqual(result["status"], "official_sealed")
             self.assertFalse(result["official_recapture_required"])
