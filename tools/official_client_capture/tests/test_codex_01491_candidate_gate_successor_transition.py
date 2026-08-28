@@ -16,6 +16,9 @@ from tools import check_ledger_completeness as ledger
 from tools.official_client_capture.tests import (
     test_codex_01491_r4_catalog_successor_transition as r4_catalog,
 )
+from tools.official_client_capture.tests import (
+    test_codex_01491_service_successor_replay_transition as service_successor_replay,
+)
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -133,6 +136,13 @@ def transition_chain_supersedes(
     current_digest: str,
 ) -> bool:
     """只承认候选源码与门禁后继登记的可达摘要链。"""
+
+    if service_successor_replay.transition_supersedes(
+        path,
+        prior_digest,
+        current_digest,
+    ):
+        return True
 
     if r4_catalog.transition_chain_supersedes(
         path,
@@ -346,7 +356,7 @@ def validate_transition(document: dict[str, Any]) -> None:
         current_digest = sha256(path.read_bytes()) if path.is_file() else ""
         if path.is_symlink() or not path.is_file() or (
             current_digest != document["staged_catalog"][digest_key]
-            and not r4_catalog.transition_chain_supersedes(
+            and not transition_chain_supersedes(
                 path.relative_to(ROOT).as_posix(),
                 document["staged_catalog"][digest_key],
                 current_digest,

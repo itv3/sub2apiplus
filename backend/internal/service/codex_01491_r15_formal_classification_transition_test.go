@@ -220,7 +220,16 @@ func validateCodex01491R15FormalClassificationServiceTransition(
 			return errors.New("Codex 0.149.1 service r15 Formal 分类 transition 禁止修改历史收据：" + entry.Path)
 		}
 		current, readErr := os.ReadFile(filepath.Join("../../..", filepath.FromSlash(entry.Path)))
-		if readErr != nil || upstreamMergeFrameworkServiceDigest(current) != entry.ToSHA256 {
+		if readErr != nil {
+			return errors.New("Codex 0.149.1 service r15 Formal 分类 transition 当前文件不可读：" + entry.Path)
+		}
+		currentDigest := upstreamMergeFrameworkServiceDigest(current)
+		if currentDigest != entry.ToSHA256 &&
+			!codex01491ServiceSuccessorReplaySupersedes(
+				entry.Path,
+				entry.ToSHA256,
+				currentDigest,
+			) {
 			return errors.New("Codex 0.149.1 service r15 Formal 分类 transition 当前摘要不一致：" + entry.Path)
 		}
 		paths = append(paths, entry.Path)
@@ -256,8 +265,20 @@ func codex01491R15FormalClassificationSupersedesService(
 		return false
 	}
 	for _, entry := range receipt.Transitions {
-		if entry.Path == path && entry.ToSHA256 == currentDigest &&
+		if entry.Path != path {
+			continue
+		}
+		if entry.ToSHA256 == currentDigest &&
 			slices.Contains(entry.PredecessorSHA256s, priorDigest) {
+			return true
+		}
+		if (priorDigest == entry.ToSHA256 ||
+			slices.Contains(entry.PredecessorSHA256s, priorDigest)) &&
+			codex01491ServiceSuccessorReplaySupersedes(
+				path,
+				entry.ToSHA256,
+				currentDigest,
+			) {
 			return true
 		}
 	}

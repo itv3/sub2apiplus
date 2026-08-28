@@ -648,6 +648,10 @@ func validateCodex01491CandidateSourceServiceTransition(
 			entry.Path,
 			entry.ToSHA256,
 			currentDigest,
+		) && !codex01491ServiceSuccessorReplaySupersedes(
+			entry.Path,
+			entry.ToSHA256,
+			currentDigest,
 		)) {
 			return errors.New("Codex 0.149.1 service candidate transition 当前摘要不一致：" + entry.Path)
 		}
@@ -673,6 +677,9 @@ func codex01491CandidateSourceTransitionSupersedesService(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if codex01491ServiceSuccessorReplaySupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	if codex01491R4CatalogSuccessorSupersedesService(path, priorDigest, currentDigest) {
 		return true
 	}
@@ -707,6 +714,10 @@ func codex01491CandidateSourceTransitionSupersedesService(
 			entry.ToSHA256,
 			currentDigest,
 		) || codex01491R4CatalogSuccessorSupersedesService(
+			path,
+			entry.ToSHA256,
+			currentDigest,
+		) || codex01491ServiceSuccessorReplaySupersedes(
 			path,
 			entry.ToSHA256,
 			currentDigest,

@@ -1,0 +1,173 @@
+{
+  "schema_version": "official-client-codex-0.149.1-service-successor-replay-transition/v1",
+  "issued_at_utc": "2026-08-28T10:09:28Z",
+  "base_commit": "cd6adf31b510ab47e08386cedfa19b6eaad978f0",
+  "scope": "codex-0.149.1-service-successor-replay",
+  "framework_stage": "VC-3/VC-4/HISTORICAL-VALIDATOR-CLOSURE",
+  "successor_chain": [
+    {
+      "path": "docs/egress/maintenance/codex-0.149.1-r16-successor-carry-forward-transition.json",
+      "file_sha256": "97286f9cfec8fe2e0c4c60b7ea962bfa7e98bdaa3b083fe736628e68719ef222",
+      "identity_sha256": "bc8dd8444a5ba65ff30d0439a3e8937c4bf4ea9e2f0362a12b540789af1670c5",
+      "schema_version": "official-client-codex-0.149.1-r16-successor-carry-forward-transition/v1",
+      "scope": "codex-0.149.1-r16-successor-carry-forward",
+      "result": "successor_carry_forward_tooling_frozen"
+    },
+    {
+      "path": "docs/egress/maintenance/codex-0.149.1-r17-kilo-model-contract-transition.json",
+      "file_sha256": "67b78fc1f4db41dad476e3de3c83ea2ebabf3c33ff676502d1dda293ab8a3555",
+      "identity_sha256": "b7b7534f89f9d79e66970d54a5124b82e795693e75b32c26f9bd7a926169396c",
+      "schema_version": "official-client-codex-0.149.1-r17-kilo-model-contract-transition/v1",
+      "scope": "codex-0.149.1-r17-kilo-model-contract",
+      "result": "kilo_model_contract_tooling_frozen"
+    },
+    {
+      "path": "docs/egress/maintenance/codex-0.149.1-r18-successor-account-transition.json",
+      "file_sha256": "0d3fe228ab2fe418e07a31e2f60e8fcf0a72d23b3b2033e6b248117d694de361",
+      "identity_sha256": "39ab82fad57031021db3dd7e4a8dfb355317935cd4aac069b17554df593bdef8",
+      "schema_version": "official-client-codex-0.149.1-r18-successor-account-transition/v1",
+      "scope": "codex-0.149.1-r18-successor-account",
+      "result": "successor_account_transition_tooling_frozen"
+    },
+    {
+      "path": "docs/egress/maintenance/codex-0.149.1-r19-successor-chain-transition.json",
+      "file_sha256": "34a6ced196f49fd38a940969662f8292d3417dbad5da6a15c5cc38f1421e0226",
+      "identity_sha256": "6bf51f5a27d288833ba862ef6f91782aba17a2d6e6afdc8da200678b240ef14e",
+      "schema_version": "official-client-codex-0.149.1-r19-successor-chain-transition/v1",
+      "scope": "codex-0.149.1-r19-successor-chain",
+      "result": "successor_chain_replay_tooling_frozen"
+    },
+    {
+      "path": "docs/egress/maintenance/codex-0.149.1-r20-candidate-aux-transition.json",
+      "file_sha256": "d35fda7dd6a9250286821b5ce96a741ff650ded48a6005a78209008615db3d2d",
+      "identity_sha256": "6b928fec7aebf5424b48b86bda21aa6e1f5fd5429f41c09bb7d5b72b2d370c06",
+      "schema_version": "official-client-codex-0.149.1-r20-candidate-aux-transition/v1",
+      "scope": "codex-0.149.1-r20-candidate-aux",
+      "result": "candidate_aux_capture_tooling_frozen"
+    },
+    {
+      "path": "docs/egress/maintenance/codex-0.149.1-r21-classification-fact-correction-transition.json",
+      "file_sha256": "6d4195f248c12538363df71aefcd9ac4c1b98220effaa1024ff3c3c46515abc9",
+      "identity_sha256": "aa67d69ff36b6bf8ff01fcbbf36779fdb18d28d2e882ae82ee332498f3e4be33",
+      "schema_version": "official-client-codex-0.149.1-r21-classification-fact-correction-transition/v1",
+      "scope": "codex-0.149.1-r21-classification-fact-correction",
+      "result": "classification_fact_correction_tooling_frozen"
+    },
+    {
+      "path": "docs/egress/maintenance/codex-0.149.1-r22-candidate-catalog-transition.json",
+      "file_sha256": "e24ad2b2b956bfaa985ead30850623e99428a0ea0a5b84a3e90b84843c94a292",
+      "identity_sha256": "777fc13ced7f8a1ebb66d44864147dd4a86511bf4f0f76bd8fe2c336cbf05ad3",
+      "schema_version": "official-client-codex-0.149.1-r22-candidate-catalog-transition/v1",
+      "scope": "codex-0.149.1-r22-candidate-catalog",
+      "result": "r22_candidate_catalog_staged"
+    },
+    {
+      "path": "docs/egress/maintenance/codex-0.149.1-r23-runtime-coordinate-transition.json",
+      "file_sha256": "7b2b3cc09dd56d095230243c0e77c3f38c97b256bbaca43fb50bd61d51fdb1b9",
+      "identity_sha256": "c07a935f50e022a2469e234c71bf76d3e59272ac121698df7f33e6bf70106356",
+      "schema_version": "official-client-codex-0.149.1-r23-runtime-coordinate-transition/v1",
+      "scope": "codex-0.149.1-r23-runtime-coordinate",
+      "result": "runtime_coordinate_successor_tooling_frozen"
+    },
+    {
+      "path": "docs/egress/maintenance/codex-0.149.1-r24-selector-lite-coordinate-transition.json",
+      "file_sha256": "9d78ecb8851935f40be42866f46f83d097b974a8deba0abe44ab46d242fc39b4",
+      "identity_sha256": "3fd50b27cd48f8a9df0b61e697cdf09f36673f765aa9ef81aed611c09fbed96d",
+      "schema_version": "official-client-codex-0.149.1-r24-selector-lite-coordinate-transition/v1",
+      "scope": "codex-0.149.1-r24-selector-lite-coordinate",
+      "result": "selector_lite_coordinate_successor_tooling_frozen"
+    }
+  ],
+  "path_set_sha256": "124674d6ec8e50b71c68e85ad9951f3a55a787f6fbd9f0ffce3a5b8755010d27",
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/codex_01491_r24_selector_lite_coordinate_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "ab35846c004138b441e9e1b2a1045e78f09755c8ce0089f6eb4f5c222c62a4a9"
+      ],
+      "to_sha256": "5b5f5374841c698822308277c72f1c991a631d55f6e1c434be1b7efad5538280",
+      "reason": "把 service 门禁闭合收据接入 r24 的精确后继判据，使 officialegress 可重放本次测试文件摘要变化。"
+    },
+    {
+      "path": "backend/internal/officialegress/codex_01491_service_successor_replay_transition_test.go",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "23e71227b1332676b58cfd919695fe672294b7380bd56574e54f0161b3758feb",
+      "reason": "新增 officialegress 侧收据身份、r15-r24 连续前序绑定、精确后继边与防篡改门禁。"
+    },
+    {
+      "path": "backend/internal/service/codex_01491_candidate_source_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "14adcc0c3ab4826dab7f0edf13bb94e4a2f6661651a802fe5c27a8770365cb54"
+      ],
+      "to_sha256": "be09271ff25e897f883b97568aca1ffe8e6b5e8b7d551f2fb1c07cdc68585ab8",
+      "reason": "把 r15-r24 精确后继图接入 Candidate 源收据校验和传递判据，历史 Candidate 收据原文保持不变。"
+    },
+    {
+      "path": "backend/internal/service/codex_01491_r15_formal_classification_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "198e4ee6c30020868887a793dacea60649c6ea23f0816c7adf197e618a042a65"
+      ],
+      "to_sha256": "4b6b242127c4d80da684f44163ae7002692186279e70d9c7586251c3f0a9a25e",
+      "reason": "允许 r15 历史校验器沿 r16-r24 精确后继图重放到当前摘要，r15 收据原文保持不变。"
+    },
+    {
+      "path": "backend/internal/service/codex_01491_service_successor_replay_transition_test.go",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "756ba7b034d916be8cb530ac53a967d79bf2c3abfc8999a899686fe4e659814a",
+      "reason": "新增 service 侧 r15-r24 收据身份、连续前序链、精确摘要图、多跳重放与防篡改门禁。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_candidate_gate_successor_transition.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "23fe94c453166c079e5c1f1df8bfde7b0beba7e7bfec0c47118795b004c28948"
+      ],
+      "to_sha256": "bb162972ded26c2ec15c0c3e724e59f6f5e6d82a42fabfcc425e5b2f9cc315cb",
+      "reason": "把 service 后继摘要图接入 Python Candidate 总图和 Catalog 重放判据。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_r24_selector_lite_coordinate_transition.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "7f995f92d901d0f9d587242ca4ae7fabc2d6b0eaf937f06b6f4bcd68cad54099"
+      ],
+      "to_sha256": "60d948135f0bff1ab96aa00ac392ac2a399f83df3f1658adc348f45910197032",
+      "reason": "把本次闭合收据接入 r24 的当前摘要校验和精确后继判据。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_service_successor_replay_transition.py",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "c5229424b1806a3a3015ed545b8281dbd7986f01b7db12c7d0b5aad6a540bec6",
+      "reason": "新增 Python 侧收据身份、r15-r24 连续前序、精确摘要图和防篡改独立重放。"
+    }
+  ],
+  "verification": {
+    "r15_receipt_identity_verified": true,
+    "successor_receipt_identity_verified": true,
+    "predecessor_chain_verified": true,
+    "transition_graph_replayed": true,
+    "multi_hop_replay_tested": true,
+    "mutation_tests_required": true
+  },
+  "safety": {
+    "historical_artifacts_overwritten": false,
+    "historical_receipts_modified": false,
+    "official_recapture_performed": false,
+    "candidate_capture_performed": false,
+    "deployment_performed": false,
+    "network_configuration_changed": false,
+    "production_selector_changed": false,
+    "production_activated": false,
+    "arm64_accessed": false,
+    "vircs_accessed": false,
+    "dmit_server_accessed": false
+  },
+  "result": "service_successor_replay_transition_frozen",
+  "identity_sha256": "7db2e0f598a4b4b53a7dcb4e7c4c47e05aecb149352793b5516e92d94912a430"
+}
