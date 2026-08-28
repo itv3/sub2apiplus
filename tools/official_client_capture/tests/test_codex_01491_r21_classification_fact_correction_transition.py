@@ -160,6 +160,18 @@ def load_transition() -> dict[str, Any]:
     return load_document(TRANSITION_PATH, "r21 分类事实纠正 transition")
 
 
+def r22_supersedes(path: str, prior_digest: str, current_digest: str) -> bool:
+    """延迟加载 r22，避免前序校验与候选 Catalog 后继形成导入环。"""
+
+    try:
+        from tools.official_client_capture.tests.test_codex_01491_r22_candidate_catalog_transition import (
+            r22_supersedes as successor,
+        )
+    except (ImportError, OSError, TypeError, ValueError, json.JSONDecodeError):
+        return False
+    return successor(path, prior_digest, current_digest)
+
+
 def base_blob(path: str) -> bytes | None:
     """读取 r20 最终提交中的普通 Git blob；不存在时返回 None。"""
 
@@ -274,7 +286,14 @@ def validate_transition(document: dict[str, Any]) -> None:
             or entry["predecessor_sha256s"] != previous_sha256s
             or current.is_symlink()
             or not current.is_file()
-            or entry["to_sha256"] != sha256(current.read_bytes())
+            or (
+                entry["to_sha256"] != sha256(current.read_bytes())
+                and not r22_supersedes(
+                    path,
+                    entry["to_sha256"],
+                    sha256(current.read_bytes()),
+                )
+            )
             or not isinstance(entry["reason"], str)
             or not entry["reason"].strip()
         ):
@@ -298,10 +317,15 @@ def r21_supersedes(path: str, prior_digest: str, current_digest: str) -> bool:
         document = load_validated_transition()
     except (OSError, TypeError, ValueError, json.JSONDecodeError):
         return False
+    if r22_supersedes(path, prior_digest, current_digest):
+        return True
     return any(
         entry["path"] == path
         and prior_digest in entry["predecessor_sha256s"]
-        and entry["to_sha256"] == current_digest
+        and (
+            entry["to_sha256"] == current_digest
+            or r22_supersedes(path, entry["to_sha256"], current_digest)
+        )
         for entry in document["transitions"]
     )
 

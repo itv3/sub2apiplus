@@ -250,7 +250,13 @@ func validateCodex01491R21ClassificationFactCorrectionTransition(
 			return errors.New("Codex 0.149.1 r21 分类事实纠正 transition 越过历史只读边界：" + entry.Path)
 		}
 		current, readErr := codex01491RepoFile(entry.Path)
-		if readErr != nil || upstreamMergeFrameworkDigest(current) != entry.ToSHA256 {
+		currentDigest := upstreamMergeFrameworkDigest(current)
+		if readErr != nil || (currentDigest != entry.ToSHA256 &&
+			!codex01491R22CandidateCatalogSupersedes(
+				entry.Path,
+				entry.ToSHA256,
+				currentDigest,
+			)) {
 			return errors.New("Codex 0.149.1 r21 分类事实纠正 transition 当前摘要不一致：" + entry.Path)
 		}
 		paths = append(paths, entry.Path)
@@ -275,9 +281,17 @@ func codex01491R21ClassificationFactCorrectionSupersedes(
 	if err != nil {
 		return false
 	}
+	if codex01491R22CandidateCatalogSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	for _, entry := range receipt.Transitions {
-		if entry.Path == path && entry.ToSHA256 == currentDigest &&
-			slices.Contains(entry.PredecessorSHA256s, priorDigest) {
+		if entry.Path == path && slices.Contains(entry.PredecessorSHA256s, priorDigest) &&
+			(entry.ToSHA256 == currentDigest ||
+				codex01491R22CandidateCatalogSupersedes(
+					path,
+					entry.ToSHA256,
+					currentDigest,
+				)) {
 			return true
 		}
 	}

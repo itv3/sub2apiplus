@@ -1,0 +1,168 @@
+{
+  "schema_version": "official-client-codex-0.149.1-r22-candidate-catalog-transition/v1",
+  "issued_at_utc": "2026-08-28T03:35:42Z",
+  "base_commit": "b37e16dd03fe92a5f0e32fd2e0291a5bcb9d3de8",
+  "scope": "codex-0.149.1-r22-candidate-catalog",
+  "framework_stage": "VC-3/CANDIDATE-CATALOG",
+  "predecessor_transition": {
+    "path": "docs/egress/maintenance/codex-0.149.1-r21-classification-fact-correction-transition.json",
+    "file_sha256": "6d4195f248c12538363df71aefcd9ac4c1b98220effaa1024ff3c3c46515abc9",
+    "identity_sha256": "aa67d69ff36b6bf8ff01fcbbf36779fdb18d28d2e882ae82ee332498f3e4be33"
+  },
+  "campaign": {
+    "id": "c1491-r22-s8",
+    "predecessor_campaign_id": "c1491-r20-s6",
+    "purpose": "production_replacement",
+    "target_version": "0.149.1",
+    "classification_sha256": "62dd45d20c0fded5441b987fef0b913898fca98986b8705f3f42e0f83e221aca",
+    "target_profile_id": "codex-0.149.1-official-r1491-v2",
+    "target_profile_digest": "8c22d3b18b16d249ac041a97efad1b6703c11ef290622b0b1642679a3c010ec3",
+    "profile_payload_sha256": "61d1db4b41ba97b9667678cb3cf219326d9ccb47c58c9ea2cae9e0e6160000d8",
+    "required_rule_count": 42,
+    "discovery_count": 2101,
+    "unclassified_count": 0,
+    "codex_account_ref": "#22",
+    "api_key_ref": "#4"
+  },
+  "catalog_stage": {
+    "receipt_schema": "official-egress-catalog-stage/v1",
+    "receipt_sha256": "30374ad355cee7e79100172ef577ee9536dbdb861649c17ca1eb0a804443a0fb",
+    "inventory_sha256": "55d5493bd02073cbc69d4854e6821d64ad72ec5b132038858f96373dce3fb2a5",
+    "active_version": "0.147.0",
+    "active_profile_digest": "94071c8eb93cfd337ac6eabc291d878084e3dcec8a9e618e04e6f68792d1a7bc",
+    "active_release_digest": "caa1948405136feaf159cbfdf3c164c056c1ea38cac6f87a007cfe69ead38707",
+    "active_unchanged": true,
+    "production_selector_changed": false,
+    "candidate_release_mode": "previous",
+    "candidate_release_digest": "ebf5947e7630e4b70efe48d5b52435a1a8b54c4c8675ebc134519b22a9175e2f",
+    "release_graph_sha256": "071362d48ff01553ba4ffb44371cf04c88f6224361090e62ee5e6ff03a619cfc",
+    "snapshot_catalog_sha256": "33c7840f95d32677e4189c57d8ee8d3b18fce040ed91c1a707f120e76ce6f905",
+    "runtime_profile_file_sha256": "a8ec3ccf43748bd225a9bd753fb2a240d3f5667da76ccd344e370294178ec2df",
+    "contract_snapshot_catalog_sha256": "f2a38b220a5edb0ee3c2e4f734da7a9d4d91bf80d0d5c2f7805f8dbfb5d87c37"
+  },
+  "path_set_sha256": "0ff748472521d9053def0dd339e256e9d6250c860fae677f89ea693b585c647b",
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/catalogdata/runtime/profiles/0.149.1/8c22d3b18b16d249ac041a97efad1b6703c11ef290622b0b1642679a3c010ec3.json",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "a8ec3ccf43748bd225a9bd753fb2a240d3f5667da76ccd344e370294178ec2df",
+      "reason": "追加经 r22 分类批准的 0.149.1 v2 Runtime Profile，不覆盖既有 8e59 画像。"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/runtime/release-catalog.json",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "24722a44b2716739384c536ede3e92a7c27e3634c42afe2f25ae3e883fb7b5d7"
+      ],
+      "to_sha256": "424fd3d83af8a3b169a2194847a6d64c8ec27e91e6bd1188cde7ff4fe9cdfacf",
+      "reason": "把 Previous 候选指向 r22 v2 ReleaseGraph，Active 仍保持 0.147.0。"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/runtime/release-graphs/071362d48ff01553ba4ffb44371cf04c88f6224361090e62ee5e6ff03a619cfc.json",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "071362d48ff01553ba4ffb44371cf04c88f6224361090e62ee5e6ff03a619cfc",
+      "reason": "追加 r22 分类对应的内容寻址 ReleaseGraph，不删除任何历史图。"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/runtime/snapshot-catalogs/33c7840f95d32677e4189c57d8ee8d3b18fce040ed91c1a707f120e76ce6f905.json",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "33c7840f95d32677e4189c57d8ee8d3b18fce040ed91c1a707f120e76ce6f905",
+      "reason": "追加同时保留旧画像和 v2 画像的内容寻址 SnapshotCatalog。"
+    },
+    {
+      "path": "backend/internal/officialegress/codex_01491_r21_classification_fact_correction_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "7dd3240bb9997350445ff7b454a4e96cab2f73a41fa74611573f4aa0bce66745"
+      ],
+      "to_sha256": "19b274fb89392b1f2f40868252ec9f3e16a2cd336b0e640a90a2f646967c7771",
+      "reason": "让 Go 侧 r21 只通过 r22 精确 path/from/to 三元组承认候选 Catalog 后继。"
+    },
+    {
+      "path": "backend/internal/officialegress/codex_01491_r22_candidate_catalog_transition_test.go",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "5de84b918bc1091e4e139904c50fb3aea52ffb89e39e8a72255a5c33f46e81ce",
+      "reason": "新增 Go 侧 r22 Campaign、Catalog、历史只读和安全边界独立重放门禁。"
+    },
+    {
+      "path": "backend/internal/officialegress/profilecontract/testdata/snapshot-catalog.json",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "4e22b13e6a3c6a4a2b7285c2b84b00c8e07415090d261e39ffbbfe457bbec239"
+      ],
+      "to_sha256": "f2a38b220a5edb0ee3c2e4f734da7a9d4d91bf80d0d5c2f7805f8dbfb5d87c37",
+      "reason": "在契约 SnapshotCatalog 中追加 v2，同时保留 0.145、0.147 和旧 0.149.1。"
+    },
+    {
+      "path": "backend/internal/officialegress/profilecontract/testdata/snapshots/0.149.1/8c22d3b18b16d249ac041a97efad1b6703c11ef290622b0b1642679a3c010ec3.json",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "a8ec3ccf43748bd225a9bd753fb2a240d3f5667da76ccd344e370294178ec2df",
+      "reason": "追加与 Runtime Profile 字节一致的 v2 契约 Snapshot。"
+    },
+    {
+      "path": "backend/internal/officialegress/releasecontract/testdata/release-graph.json",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "cdab29c8c598356e9cb97958bb80695a9f7d3c61e9af37e4f13da84cb336d08e"
+      ],
+      "to_sha256": "071362d48ff01553ba4ffb44371cf04c88f6224361090e62ee5e6ff03a619cfc",
+      "reason": "同步契约 fixture 到 r22 候选图，保持 Active 0.147.0 与 Previous 0.149.1 v2。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_candidate_gate_successor_transition.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "33170592b18675c7d590cb644b15ab6e09e60d57b25960a52047f24fc018e00b"
+      ],
+      "to_sha256": "e402b05692bbfc2bed56ebd5b7ba75a3c211c130ad68795c438cbed0f2c56b53",
+      "reason": "把中央 Python 历史摘要传递图追加到 r22，不放宽任何未知摘要边。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_r21_classification_fact_correction_transition.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "020bac623bfc717012b34d49acec89a4d26a3129a17edaa482e886a172e991dd"
+      ],
+      "to_sha256": "ae61d95b7b9f1c0e4250bf9665fdc38746d8c36270457ad58217b7988eb892e0",
+      "reason": "让 Python 侧 r21 只通过 r22 精确 path/from/to 三元组承认候选 Catalog 后继。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_r22_candidate_catalog_transition.py",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "f4dca65be19d26bb75f227d769c652c9e049b9fb23ea80666f541eee83f77641",
+      "reason": "新增 Python 侧 r22 Catalog inventory、精确摘要边和 mutation 独立重放门禁。"
+    }
+  ],
+  "verification": {
+    "official_evidence_replayed": true,
+    "classification_approved": true,
+    "all_rules_mapped": true,
+    "all_discoveries_mapped": true,
+    "catalog_inventory_verified": true,
+    "historical_profiles_rehashed": true,
+    "active_selector_unchanged": true,
+    "mutation_tests_required": true
+  },
+  "safety": {
+    "historical_content_addressed_artifacts_overwritten": false,
+    "historical_profile_8e59_preserved": true,
+    "historical_0_145_profiles_preserved": true,
+    "historical_receipts_modified": false,
+    "historical_transitions_modified": false,
+    "network_configuration_changed": false,
+    "deployment_performed": false,
+    "production_selector_changed": false,
+    "production_activated": false,
+    "official_recapture_performed": false,
+    "codex_account_request_sent": false,
+    "vircs_accessed": false
+  },
+  "result": "r22_candidate_catalog_staged",
+  "identity_sha256": "777fc13ced7f8a1ebb66d44864147dd4a86511bf4f0f76bd8fe2c336cbf05ad3"
+}
