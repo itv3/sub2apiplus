@@ -1,0 +1,115 @@
+{
+  "schema_version": "official-client-codex-0.149.1-r20-candidate-aux-transition/v1",
+  "issued_at_utc": "2026-08-28T00:10:37Z",
+  "base_commit": "ad081359a294319f1e6c4c4a436d48a56d520d08",
+  "scope": "codex-0.149.1-r20-candidate-aux",
+  "framework_stage": "VC-0/VC-4/SAME-VERSION-SUCCESSOR",
+  "predecessor_transition": {
+    "path": "docs/egress/maintenance/codex-0.149.1-r19-successor-chain-transition.json",
+    "file_sha256": "34a6ced196f49fd38a940969662f8292d3417dbad5da6a15c5cc38f1421e0226",
+    "identity_sha256": "6bf51f5a27d288833ba862ef6f91782aba17a2d6e6afdc8da200678b240ef14e"
+  },
+  "candidate_aux_contract": {
+    "reason": "candidate_aux_runtime_contract_correction",
+    "official_recapture_required": false,
+    "classification_reapproval_required": false,
+    "candidate_recapture_required": true,
+    "kilo_revalidation_required": true,
+    "compose_file_arguments_normalized": true,
+    "shell_eval_allowed": false,
+    "live_preflight_required": true,
+    "image_generation_preflight_required": true,
+    "restoration_armed_after_snapshot": true
+  },
+  "safety": {
+    "historical_artifacts_overwritten": false,
+    "historical_receipts_modified": false,
+    "network_configuration_changed": false,
+    "deployment_performed": false,
+    "production_selector_changed": false,
+    "production_activated": false,
+    "vircs_accessed": false
+  },
+  "path_set_sha256": "d4aa907bbf8c277bcb53af76398394b164ea78cab4baaa031fd516c8b7234c0b",
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/codex_01491_r19_successor_chain_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "30095fe495f0670bd034040d025016212f13d5b6bf3601ba88dd914efbdb8930"
+      ],
+      "to_sha256": "8d0b4232c256869e7044cb017ae24d33d53ac775cc3e0915231bcd9cf7653485",
+      "reason": "把 r20 精确后继边接入 Go 侧 r19 校验和传递摘要链。"
+    },
+    {
+      "path": "backend/internal/officialegress/codex_01491_r20_candidate_aux_transition_test.go",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "ae01475c48632679d6c2f0e31f8d6e2e77b4d0ca17a16aed94c539e6380742dd",
+      "reason": "新增 Go 侧 r20 身份、aux 运行合同、安全边界和文件闭集门禁。"
+    },
+    {
+      "path": "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "532a17b7f277a2406d1ea0ac110348dd1b466becca1e9cf90eccedc55bcb9183"
+      ],
+      "to_sha256": "5a248c4815cd44ac865e16d28814082d1c03d2d314e54e12c37188e972ee5267",
+      "reason": "明确 aux 分组能力前检、compose 文件参数和恢复武装时序。"
+    },
+    {
+      "path": "tools/official_client_capture/run_candidate_aux_capture.sh",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "aeda674cc698af56b9a496f1ef50a725765c5db0eadbafd7bdf0169c949bc567"
+      ],
+      "to_sha256": "3af73b725243de71109ab51910d8b5d4e919dd53112c7a42622761d191944fae",
+      "reason": "规范化 compose 文件数组、移除 eval，并把能力前检和恢复武装移到正确时序。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_candidate_aux_capture.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "8b13bb11934e33164e87cf39945151e0d7dcdf4803edd59e5c43753e1bcecf83"
+      ],
+      "to_sha256": "6cf6aeb2b6b68d2a5de9efdf1dcf5f5c2c05ffe6b410a31b3955394c444b9527",
+      "reason": "冻结只读前检、图片权限和恢复 trap 的相对时序。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_candidate_gate_successor_transition.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "5750ef065b8c07fdcbdaa3824257d6cf95086d566cfcd9c2f306f7ce5a6a7d0d"
+      ],
+      "to_sha256": "59e3bfeee6a565cd96d528197716687b7fb24cb327a6fa5a563ee33c7fede86a",
+      "reason": "把 r20 精确后继边加入 maintenance 摘要图。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_r19_successor_chain_transition.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "9e5cff827ab094b835aedcd7acdf32a41388e4250b3127966021c6afc3824d4a"
+      ],
+      "to_sha256": "2248dbead43433076e468b883593616ec5751e45f2d445ff4acd85f2110f92dd",
+      "reason": "把 r20 精确后继边接入 Python 侧 r19 校验和传递摘要链。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_r20_candidate_aux_transition.py",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "b8946d6fdc926d601b64c15c38d7f0ab51f2853af02e45178246e785eafaec90",
+      "reason": "新增可独立重放的 r20 Candidate aux transition 门禁。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_live_attestation_capture_wiring.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "e7676115f6efc6a0323485376256dc49e75b883a515a1fcef79156ef3cbcd002"
+      ],
+      "to_sha256": "3a142c71b8c69e5dacdca40af3c22cc815e36effce2f6ac1feb9a8d48f857a23",
+      "reason": "冻结 compose 裸路径兼容、数组执行和禁止 shell eval。"
+    }
+  ],
+  "result": "candidate_aux_capture_tooling_frozen",
+  "identity_sha256": "6b928fec7aebf5424b48b86bda21aa6e1f5fd5429f41c09bb7d5b72b2d370c06"
+}

@@ -166,10 +166,53 @@ restart_service() {
 # 都不改动，且必须逐项匹配本轮的 api_key／group／account／临时代理四元组才生效。
 # 该 provider 只读进程环境，因此要重建容器而不是 docker restart；恢复时按原 compose 拉回。
 live_attestation_armed=0
+declare -a live_attestation_compose_args=()
+
+prepare_live_attestation_compose_args() {
+  local token
+  local expect_file=0
+  local -a tokens=()
+
+  live_attestation_compose_args=()
+  read -r -a tokens <<<"${LIVE_ATTESTATION_COMPOSE_FILES:-}"
+  for token in "${tokens[@]}"; do
+    if [[ $expect_file == 1 ]]; then
+      if [[ $token != /* || ! -f $token || -L $token ]]; then
+        echo "Live attestation compose 文件必须是可信的绝对路径：$token" >&2
+        return 1
+      fi
+      live_attestation_compose_args+=("-f" "$token")
+      expect_file=0
+      continue
+    fi
+    case "$token" in
+      -f | --file)
+        expect_file=1
+        ;;
+      -*)
+        echo "Live attestation compose 参数只允许 -f/--file：$token" >&2
+        return 1
+        ;;
+      *)
+        if [[ $token != /* || ! -f $token || -L $token ]]; then
+          echo "Live attestation compose 文件必须是可信的绝对路径：$token" >&2
+          return 1
+        fi
+        # 兼容早期 Campaign 冻结的“首个裸路径 -f 第二路径”格式，并统一转成数组。
+        live_attestation_compose_args+=("-f" "$token")
+        ;;
+    esac
+  done
+  if [[ $expect_file == 1 || ${#live_attestation_compose_args[@]} == 0 ]]; then
+    echo "Live attestation compose -f 参数串不完整。" >&2
+    return 1
+  fi
+}
 
 deploy_with_live_attestation() {
   local expires_at
   [[ -n ${LIVE_ATTESTATION_COMPOSE_DIR:-} && -n ${LIVE_ATTESTATION_COMPOSE_FILES:-} ]] || return 0
+  prepare_live_attestation_compose_args || return 1
   group_id=$(db_query "select group_id from api_keys where id = $api_key_id")
   [[ $group_id =~ ^[0-9]+$ ]] || { echo "无法读取 API Key 分组，跳过 Live attestation 注入。" >&2; return 1; }
   expires_at=$(( $(date -u +%s) + 900 ))
@@ -190,7 +233,7 @@ services:
 YML
   chmod 600 "$capture_root/runtime/live-attestation/$run_id.override.yml"
   live_attestation_armed=1
-  (cd "$LIVE_ATTESTATION_COMPOSE_DIR" && eval docker compose $LIVE_ATTESTATION_COMPOSE_FILES \
+  (cd "$LIVE_ATTESTATION_COMPOSE_DIR" && docker compose "${live_attestation_compose_args[@]}" \
     -f "$capture_root/runtime/live-attestation/$run_id.override.yml" up -d sub2api) >/dev/null || return 1
   wait_healthy || return 1
   # compose 重建的是全新容器，之前 docker cp 进去的抓包 CA 随旧容器一起消失；
@@ -203,7 +246,8 @@ YML
 restore_deploy_without_live_attestation() {
   [[ $live_attestation_armed == 1 ]] || return 0
   live_attestation_armed=0
-  (cd "$LIVE_ATTESTATION_COMPOSE_DIR" && eval docker compose $LIVE_ATTESTATION_COMPOSE_FILES up -d sub2api) >/dev/null || return 1
+  (cd "$LIVE_ATTESTATION_COMPOSE_DIR" && docker compose \
+    "${live_attestation_compose_args[@]}" up -d sub2api) >/dev/null || return 1
   wait_healthy || return 1
   # 恢复部署同样是新容器：CA 由 EXIT 钩子按基线清理，这里只需保证服务已就绪。
   rm -f "$capture_root/runtime/live-attestation/$run_id.override.yml"
@@ -665,8 +709,6 @@ PY
   exit "$original_exit_code"
 }
 
-trap restore_environment EXIT ERR INT TERM
-
 original_proxy_state=$(db_query \
   "select coalesce(proxy_id::text,'NULL') || '|' || coalesce(proxy_fallback_origin_id::text,'NULL') from accounts where id = $account_id")
 if [[ ! $original_proxy_state =~ ^(NULL|[0-9]+)\|(NULL|[0-9]+)$ ]]; then
@@ -737,6 +779,12 @@ if [[ $allow_live != true ]]; then
   echo "API Key 分组未启用 Live，无法执行 A11。" >&2
   exit 1
 fi
+allow_image_generation=$(db_query \
+  "select allow_image_generation::text from groups where id = $group_id")
+if [[ $allow_image_generation != true ]]; then
+  echo "API Key 分组未启用图片生成，无法执行 A09。" >&2
+  exit 1
+fi
 
 service_port=${SERVICE_PORT:-}
 if [[ -z $service_port ]]; then
@@ -778,6 +826,9 @@ if docker exec "$service_container" test -e "$custom_ca_path"; then
 fi
 custom_ca_baseline_absent=1
 keeper_was_running=$(docker inspect -f '{{.State.Running}}' "$keeper_container")
+# 从这里开始才会修改 keeper、账号、代理、hosts 或 CA。所有只读前检与恢复快照已经完成，
+# 因此前置失败不会再把不存在的 hosts.before/CA 快照误报成 restoration_failed。
+trap restore_environment EXIT ERR INT TERM
 if [[ $keeper_was_running == true ]]; then
   docker stop "$keeper_container" >/dev/null
 fi
