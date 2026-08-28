@@ -122,8 +122,8 @@
       "predecessor_sha256s": [
         "8b1a971f4e898e5e68a970c4269c483faa8f4f861bd65d0e649f84d9434509cf"
       ],
-      "to_sha256": "8b9210ccceb1931e8dd9eae0eb4014e910da279a86bb5202dee846af52e029a7",
-      "reason": "新增 v3 official-only reclassification、旧批准五件套隔离及仅限计划重建的历史章节摘要豁免。"
+      "to_sha256": "70ebfc64d69b004b731bd23c783454f70cb4645d57d6e9031e8a804711f90cf7",
+      "reason": "新增 v3 official-only reclassification、旧批准五件套隔离、仅限计划重建的历史章节摘要豁免，并避免用后继坐标误判已完整重放的前序 official 执行哈希。"
     },
     {
       "path": "tools/official_client_capture/codex_upgrade_evidence_labels_0_149_1.json",
@@ -201,8 +201,8 @@
       "predecessor_sha256s": [
         "b00a94ec4102cb7d1119010e9ff8e490c131ccede9bf6977478d7a04b1b215f3"
       ],
-      "to_sha256": "68b59f4a58d6c68cf15742ac27d06585c605d08c3a6e5060e22ffe45e00ec673",
-      "reason": "覆盖只承接官方阶段、拒绝复制旧批准五件套、重新分类状态机及历史场景绑定窄豁免。"
+      "to_sha256": "91457388e664c7269ae1bc086aafc635471bbe113665459695ea4f98eecc996b",
+      "reason": "覆盖只承接官方阶段、拒绝复制旧批准五件套、重新分类状态机、历史场景绑定窄豁免及后继坐标重绑定后的联合摘要审核。"
     },
     {
       "path": "tools/spec_ref_anchors_0_149_1.json",
@@ -215,5 +215,5 @@
     }
   ],
   "result": "classification_fact_correction_tooling_frozen",
-  "identity_sha256": "780a82aa4c542eee0343295080130e0b83fbfc720a2f693050efe5ad23c6132a"
+  "identity_sha256": "aa67d69ff36b6bf8ff01fcbbf36779fdb18d28d2e882ae82ee332498f3e4be33"
 }

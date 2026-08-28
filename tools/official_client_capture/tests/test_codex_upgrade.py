@@ -2286,6 +2286,17 @@ class CodexUpgradeTest(unittest.TestCase):
             self.assertEqual(
                 replayed["security"], predecessor_official["security"]
             )
+            approval_request = codex_upgrade.classify_campaign(
+                successor_dir,
+                target_rule_manifest=predecessor_dir.parent / "target-rules.json",
+                migration_manifest=predecessor_dir.parent / "rule-migration.json",
+                scenario_manifest=predecessor_dir.parent / "target-scenarios.json",
+                profile_manifest=predecessor_dir.parent / "profile.json",
+                assertion_profile_manifest=(
+                    predecessor_dir.parent / "assertion-profile.json"
+                ),
+            )
+            self.assertEqual(approval_request["status"], "approval_required")
             with self.assertRaises(codex_upgrade.ConfigurationError):
                 codex_upgrade._load_stage_result(successor_dir, "classify")
 

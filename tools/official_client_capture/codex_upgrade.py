@@ -8999,11 +8999,17 @@ def classify_campaign(
     _validate_jobs(scenario_jobs, target_rules)
     if manifest["suite"] == "full":
         _validate_phase_coverage(scenario_jobs, target_rules)
-    _validate_capture_job_results(
-        [job for job in scenario_jobs if job.phase == "official"],
-        official.get("results"),
-        phase="official",
-    )
+    # 后继 Campaign 承接的 official 结果仍绑定前序 Campaign 的原始执行坐标。
+    # ``_load_stage_result`` 已沿不可变导入链在原始目录逐项重放预约、结果和
+    # execution_sha256；这里若再用后继 campaign-id、仓库路径和证据根重算哈希，
+    # 会把合法的坐标重绑定误报成执行定义漂移。批准场景仍在上方与当前 Formal
+    # 冻结的 target 执行契约逐摘要一致，只有非导入 official 才需再次精确比对。
+    if official.get("predecessor_import") is None:
+        _validate_capture_job_results(
+            [job for job in scenario_jobs if job.phase == "official"],
+            official.get("results"),
+            phase="official",
+        )
     approved_root = campaign_dir / "classification" / "approved"
     target_destination = approved_root / "target-rules.json"
     migration_destination = approved_root / "rule-migration.json"
