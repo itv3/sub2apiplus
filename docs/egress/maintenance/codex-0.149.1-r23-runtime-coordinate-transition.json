@@ -1,0 +1,110 @@
+{
+  "schema_version": "official-client-codex-0.149.1-r23-runtime-coordinate-transition/v1",
+  "issued_at_utc": "2026-08-28T04:41:28Z",
+  "base_commit": "f7c3521bc80e350ae529496e9f0656079cdad78c",
+  "scope": "codex-0.149.1-r23-runtime-coordinate",
+  "framework_stage": "VC-0/RUNTIME-COORDINATE-REBINDING",
+  "predecessor_transition": {
+    "path": "docs/egress/maintenance/codex-0.149.1-r22-candidate-catalog-transition.json",
+    "file_sha256": "e24ad2b2b956bfaa985ead30850623e99428a0ea0a5b84a3e90b84843c94a292",
+    "identity_sha256": "777fc13ced7f8a1ebb66d44864147dd4a86511bf4f0f76bd8fe2c336cbf05ad3"
+  },
+  "runtime_contract": {
+    "receipt_schema": "codex-upgrade-predecessor-import/v4",
+    "reason": "candidate_runtime_identity_correction",
+    "configuration_fields": [
+      "codex_account_id",
+      "live_attestation_compose_dir",
+      "live_attestation_compose_files"
+    ],
+    "compose_coordinates_required_together": true,
+    "compose_directory_must_be_canonical": true,
+    "compose_files_must_exist_and_be_regular": true,
+    "unlisted_configuration_changes_denied": true,
+    "official_recapture_required": false,
+    "classification_reapproval_required": false
+  },
+  "path_set_sha256": "a20780f875ef58bfa41c46654079474e1890f7500b7e7c67c960c44ae94e61d6",
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/codex_01491_r22_candidate_catalog_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "5de84b918bc1091e4e139904c50fb3aea52ffb89e39e8a72255a5c33f46e81ce"
+      ],
+      "to_sha256": "6a83c8dc01016309b4780d42937c34e13e44e784498d8098bb97fc0f4535f892",
+      "reason": "让 Go 侧 r22 只通过 r23 精确摘要边承认运行时坐标后继。"
+    },
+    {
+      "path": "backend/internal/officialegress/codex_01491_r23_runtime_coordinate_transition_test.go",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "7236cd06a5a014b007477e1bd1ca27e9b8a83665264c3bcd9852039c9790fe09",
+      "reason": "新增 Go 侧 v4 收据、配置闭集、前序身份和 mutation 独立重放门禁。"
+    },
+    {
+      "path": "tools/official_client_capture/codex_upgrade.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "70ebfc64d69b004b731bd23c783454f70cb4645d57d6e9031e8a804711f90cf7"
+      ],
+      "to_sha256": "659ed8b0fa05992d9eba9bc8e757f41f54f69dbea8be5abfecc53de06e721e94",
+      "reason": "仅为运行时身份纠正后继增加受管 compose 目录与文件过渡，并签发 v4 收据。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_candidate_gate_successor_transition.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "e402b05692bbfc2bed56ebd5b7ba75a3c211c130ad68795c438cbed0f2c56b53"
+      ],
+      "to_sha256": "ff8d4fc171863a3d2ef589765bf2237f3e724f537f3d4455b1eb607e89182ac9",
+      "reason": "把中央 Python 摘要传递图追加到 r23，保证全部历史 transition 可达。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_r22_candidate_catalog_transition.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "f4dca65be19d26bb75f227d769c652c9e049b9fb23ea80666f541eee83f77641"
+      ],
+      "to_sha256": "d1e5d26da04007fddd57b4825e95f7f05c71028237918a8feb7c4d308ad54f81",
+      "reason": "让 Python 侧 r22 只通过 r23 精确摘要边承认运行时坐标后继。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_r23_runtime_coordinate_transition.py",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "409d96410fee5907df7d895a1306299a6e14806f9118d1fd7eab65c7e52da69c",
+      "reason": "新增 Python 侧 v4 合同、路径闭集、安全边界和精确摘要独立重放门禁。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_upgrade.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "91457388e664c7269ae1bc086aafc635471bbe113665459695ea4f98eecc996b"
+      ],
+      "to_sha256": "a5ac31bb97a6f4a20ae36fafd939dd20f07642843d36a36f30100c6e964a6ff0",
+      "reason": "覆盖 v4 正向重放、不完整坐标拒绝及分类纠正越权拒绝。"
+    }
+  ],
+  "verification": {
+    "legacy_v1_v2_v3_receipts_replayed": true,
+    "v4_positive_path_replayed": true,
+    "partial_coordinates_rejected": true,
+    "reclassification_rebinding_rejected": true,
+    "mutation_tests_required": true
+  },
+  "safety": {
+    "historical_campaigns_modified": false,
+    "historical_compose_files_overwritten": false,
+    "official_recapture_performed": false,
+    "candidate_capture_performed": false,
+    "deployment_performed": false,
+    "network_configuration_changed": false,
+    "production_selector_changed": false,
+    "production_activated": false,
+    "vircs_accessed": false,
+    "dmit_server_accessed": false
+  },
+  "result": "runtime_coordinate_successor_tooling_frozen",
+  "identity_sha256": "280df78298e3911c4c9b6d9c3b645f091ef630e539fe6f7b94a4a65d4643398d"
+}

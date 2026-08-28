@@ -139,6 +139,7 @@ PREDECESSOR_IMPORT_SCHEMA = "codex-upgrade-predecessor-import/v2"
 PREDECESSOR_RECLASSIFICATION_IMPORT_SCHEMA = (
     "codex-upgrade-predecessor-import/v3"
 )
+PREDECESSOR_RUNTIME_IMPORT_SCHEMA = "codex-upgrade-predecessor-import/v4"
 COMPARISON_SCHEMA = "codex-upgrade-comparison/v2"
 ACCEPTANCE_SCHEMA = "codex-upgrade-acceptance/v2"
 CAMPAIGN_MODES = frozenset({"preflight_only", "formal"})
@@ -2403,6 +2404,21 @@ def _build_parser() -> argparse.ArgumentParser:
         "--predecessor-attempt-id",
         help="可选：绑定前序 candidate 中无法继续封存的 attempt。",
     )
+    successor.add_argument(
+        "--live-attestation-compose-dir",
+        type=Path,
+        help=(
+            "可选：为运行时身份纠正后继冻结新的 compose 工作目录；"
+            "必须与 --live-attestation-compose-files 同时提供。"
+        ),
+    )
+    successor.add_argument(
+        "--live-attestation-compose-files",
+        help=(
+            "可选：为运行时身份纠正后继冻结新的 compose -f 参数串；"
+            "旧 Campaign 的外部部署文件保持只读。"
+        ),
+    )
 
     classify = subparsers.add_parser(
         "classify", help="生成差异草案或封存已审核的目标规则迁移"
@@ -3657,6 +3673,90 @@ def _successor_abandoned_attempt(
     }
 
 
+def _successor_runtime_configuration(
+    arguments: argparse.Namespace,
+    predecessor_configuration: dict[str, Any],
+) -> dict[str, str] | None:
+    """校验并返回后继 Campaign 的新 Live attestation compose 坐标。
+
+    compose 文件属于 Candidate 运行身份。历史路径已经被前序 Campaign 和
+    attempt 引用，不能原位覆盖；只有运行时身份纠正后继可以通过 v4 收据
+    冻结一组全新的可信绝对路径。其余配置仍由前序 Campaign 逐字承接。
+    """
+
+    compose_dir = getattr(arguments, "live_attestation_compose_dir", None)
+    compose_files = str(
+        getattr(arguments, "live_attestation_compose_files", "") or ""
+    ).strip()
+    if (compose_dir is None) != (not compose_files):
+        raise ConfigurationError(
+            "后继 compose 工作目录与 -f 参数串必须同时提供。"
+        )
+    if compose_dir is None:
+        return None
+    if arguments.reason != "candidate_runtime_identity_correction":
+        raise ConfigurationError(
+            "只有 candidate_runtime_identity_correction 后继可以改变 compose 坐标。"
+        )
+
+    resolved_dir = compose_dir.resolve(strict=False)
+    if (
+        not compose_dir.is_absolute()
+        or str(resolved_dir) != str(compose_dir)
+        or not SAFE_ABSOLUTE_PATH_RE.fullmatch(str(compose_dir))
+        or compose_dir.is_symlink()
+        or not compose_dir.is_dir()
+    ):
+        raise ConfigurationError(
+            "--live-attestation-compose-dir 必须是可信的规范绝对目录。"
+        )
+
+    tokens = compose_files.split()
+    compose_paths: list[str] = []
+    expect_file = False
+    for token in tokens:
+        if expect_file:
+            compose_paths.append(token)
+            expect_file = False
+            continue
+        if token in {"-f", "--file"}:
+            expect_file = True
+            continue
+        if token.startswith("-"):
+            raise ConfigurationError(
+                "--live-attestation-compose-files 只允许 -f/--file 参数。"
+            )
+        compose_paths.append(token)
+    if expect_file or not compose_paths:
+        raise ConfigurationError(
+            "--live-attestation-compose-files 的 -f 参数串不完整。"
+        )
+    for raw_path in compose_paths:
+        path = Path(raw_path)
+        if (
+            not path.is_absolute()
+            or str(path.resolve(strict=False)) != raw_path
+            or not SAFE_ABSOLUTE_PATH_RE.fullmatch(raw_path)
+            or path.is_symlink()
+            or not path.is_file()
+        ):
+            raise ConfigurationError(
+                "后继 compose 参数必须引用存在、非符号链接的规范绝对文件："
+                + raw_path
+            )
+
+    successor = {
+        "live_attestation_compose_dir": str(compose_dir),
+        "live_attestation_compose_files": compose_files,
+    }
+    if all(
+        str(predecessor_configuration.get(field, "") or "") == value
+        for field, value in successor.items()
+    ):
+        raise ConfigurationError("后继 compose 坐标没有发生变化。")
+    return successor
+
+
 def create_successor_campaign(arguments: argparse.Namespace) -> dict[str, Any]:
     """创建同版本后继 Campaign，并按原因选择承接边界。
 
@@ -3682,9 +3782,10 @@ def create_successor_campaign(arguments: argparse.Namespace) -> dict[str, Any]:
     )
 
     predecessor_manifest = _require_formal_campaign(predecessor_dir)
-    predecessor_account_id = predecessor_manifest.get("configuration", {}).get(
-        "codex_account_id"
-    )
+    predecessor_configuration = predecessor_manifest.get("configuration")
+    if not isinstance(predecessor_configuration, dict):
+        raise ConfigurationError("前序 Campaign 的运行配置不是对象。")
+    predecessor_account_id = predecessor_configuration.get("codex_account_id")
     if (
         isinstance(predecessor_account_id, bool)
         or not isinstance(predecessor_account_id, int)
@@ -3693,6 +3794,10 @@ def create_successor_campaign(arguments: argparse.Namespace) -> dict[str, Any]:
         raise ConfigurationError("前序 Campaign 的 Codex 账号坐标非法。")
     if arguments.campaign_id == predecessor_manifest["campaign_id"]:
         raise ConfigurationError("后继 Campaign 必须使用新的 campaign-id。")
+    runtime_configuration = _successor_runtime_configuration(
+        arguments,
+        predecessor_configuration,
+    )
     # 后继承接只重放前序阶段封印、证据 inventory/security 与批准清单。
     # 历史机器收据绑定的是当时 finalizer 的绝对路径和摘要；用当前 finalizer
     # 强行重放会把合法的只读历史路径迁移误判为篡改。当前后继不会借用这些
@@ -3771,6 +3876,8 @@ def create_successor_campaign(arguments: argparse.Namespace) -> dict[str, Any]:
         successor_manifest["configuration"]["codex_account_id"] = (
             arguments.codex_account_id
         )
+        if runtime_configuration is not None:
+            successor_manifest["configuration"].update(runtime_configuration)
         successor_manifest.update(
             {
                 "campaign_id": arguments.campaign_id,
@@ -3804,7 +3911,11 @@ def create_successor_campaign(arguments: argparse.Namespace) -> dict[str, Any]:
             "schema_version": (
                 PREDECESSOR_RECLASSIFICATION_IMPORT_SCHEMA
                 if reclassification_successor
-                else PREDECESSOR_IMPORT_SCHEMA
+                else (
+                    PREDECESSOR_RUNTIME_IMPORT_SCHEMA
+                    if runtime_configuration is not None
+                    else PREDECESSOR_IMPORT_SCHEMA
+                )
             ),
             "created_at_utc": _utc_now(),
             "reason": arguments.reason,
@@ -3848,6 +3959,19 @@ def create_successor_campaign(arguments: argparse.Namespace) -> dict[str, Any]:
             },
             "abandoned_candidate_attempt": abandoned_attempt,
         }
+        if runtime_configuration is not None:
+            import_receipt["configuration_transition"].update(
+                {
+                    field: {
+                        "predecessor": str(
+                            predecessor_configuration.get(field, "") or ""
+                        ),
+                        "successor": value,
+                        "reason": "candidate_runtime_identity_correction",
+                    }
+                    for field, value in runtime_configuration.items()
+                }
+            )
         if reclassification_successor:
             import_receipt["import_mode"] = "official_only_reclassification"
         import_receipt["receipt_digest"] = _fingerprint(import_receipt)
@@ -3907,6 +4031,7 @@ def create_successor_campaign(arguments: argparse.Namespace) -> dict[str, Any]:
         "classification_reapproval_required": reclassification_successor,
         "official_recapture_required": False,
         "codex_account_id": arguments.codex_account_id,
+        "runtime_configuration_rebound": runtime_configuration is not None,
         "next_command": status["next_command"],
     }
 
@@ -4473,6 +4598,7 @@ def _validate_predecessor_import_receipt(
     if receipt_schema in {
         PREDECESSOR_IMPORT_SCHEMA,
         PREDECESSOR_RECLASSIFICATION_IMPORT_SCHEMA,
+        PREDECESSOR_RUNTIME_IMPORT_SCHEMA,
     }:
         expected_receipt_fields.add("configuration_transition")
     if receipt_schema == PREDECESSOR_RECLASSIFICATION_IMPORT_SCHEMA:
@@ -4486,6 +4612,7 @@ def _validate_predecessor_import_receipt(
             PREDECESSOR_IMPORT_SCHEMA_V1,
             PREDECESSOR_IMPORT_SCHEMA,
             PREDECESSOR_RECLASSIFICATION_IMPORT_SCHEMA,
+            PREDECESSOR_RUNTIME_IMPORT_SCHEMA,
         }
         or not _is_rfc3339_timestamp(receipt.get("created_at_utc"))
         or receipt.get("reason") not in SUCCESSOR_REASONS
@@ -4574,20 +4701,74 @@ def _validate_predecessor_import_receipt(
         raise ConfigurationError("同版本后继 Campaign 配置不是对象。")
     predecessor_account_id = predecessor_configuration.get("codex_account_id")
     successor_account_id = successor_configuration.get("codex_account_id")
-    predecessor_configuration_without_account = dict(predecessor_configuration)
-    successor_configuration_without_account = dict(successor_configuration)
-    predecessor_configuration_without_account.pop("codex_account_id", None)
-    successor_configuration_without_account.pop("codex_account_id", None)
-    if (
-        predecessor_configuration_without_account
-        != successor_configuration_without_account
-    ):
-        raise ConfigurationError("同版本后继 Campaign 改变了账号以外的运行配置。")
+    runtime_fields = (
+        "live_attestation_compose_dir",
+        "live_attestation_compose_files",
+    )
+    allowed_configuration_fields = {"codex_account_id"}
+    if receipt_schema == PREDECESSOR_RUNTIME_IMPORT_SCHEMA:
+        allowed_configuration_fields.update(runtime_fields)
+    predecessor_fixed_configuration = dict(predecessor_configuration)
+    successor_fixed_configuration = dict(successor_configuration)
+    for field in allowed_configuration_fields:
+        predecessor_fixed_configuration.pop(field, None)
+        successor_fixed_configuration.pop(field, None)
+    if predecessor_fixed_configuration != successor_fixed_configuration:
+        raise ConfigurationError("同版本后继 Campaign 改变了未授权的运行配置。")
     if receipt_schema == PREDECESSOR_IMPORT_SCHEMA_V1:
         if successor_account_id != predecessor_account_id:
             raise ConfigurationError("历史 v1 后继收据不允许改变 Codex 账号。")
     else:
         configuration_transition = receipt.get("configuration_transition")
+        expected_transition: dict[str, Any] = {
+            "codex_account_id": {
+                "predecessor": predecessor_account_id,
+                "successor": successor_account_id,
+                "reason": "operator_selected_active_account",
+            }
+        }
+        if receipt_schema == PREDECESSOR_RUNTIME_IMPORT_SCHEMA:
+            if receipt.get("reason") != "candidate_runtime_identity_correction":
+                raise ConfigurationError("v4 后继收据原因不是运行时身份纠正。")
+            successor_runtime_configuration = {
+                field: str(successor_configuration.get(field, "") or "")
+                for field in runtime_fields
+            }
+            try:
+                validated_runtime_configuration = _successor_runtime_configuration(
+                    argparse.Namespace(
+                        live_attestation_compose_dir=Path(
+                            successor_runtime_configuration[
+                                "live_attestation_compose_dir"
+                            ]
+                        ),
+                        live_attestation_compose_files=(
+                            successor_runtime_configuration[
+                                "live_attestation_compose_files"
+                            ]
+                        ),
+                        reason="candidate_runtime_identity_correction",
+                    ),
+                    predecessor_configuration,
+                )
+            except ConfigurationError as error:
+                raise ConfigurationError(
+                    "v4 后继 Campaign 的 compose 坐标非法。"
+                ) from error
+            if validated_runtime_configuration != successor_runtime_configuration:
+                raise ConfigurationError("v4 后继 Campaign 的 compose 坐标漂移。")
+            expected_transition.update(
+                {
+                    field: {
+                        "predecessor": str(
+                            predecessor_configuration.get(field, "") or ""
+                        ),
+                        "successor": value,
+                        "reason": "candidate_runtime_identity_correction",
+                    }
+                    for field, value in successor_runtime_configuration.items()
+                }
+            )
         if (
             isinstance(predecessor_account_id, bool)
             or not isinstance(predecessor_account_id, int)
@@ -4595,16 +4776,9 @@ def _validate_predecessor_import_receipt(
             or isinstance(successor_account_id, bool)
             or not isinstance(successor_account_id, int)
             or successor_account_id <= 0
-            or configuration_transition
-            != {
-                "codex_account_id": {
-                    "predecessor": predecessor_account_id,
-                    "successor": successor_account_id,
-                    "reason": "operator_selected_active_account",
-                }
-            }
+            or configuration_transition != expected_transition
         ):
-            raise ConfigurationError("后继 Campaign 的 Codex 账号过渡收据非法。")
+            raise ConfigurationError("后继 Campaign 的运行配置过渡收据非法。")
 
     next_chain = frozenset({*import_chain, campaign_dir.resolve()})
     predecessor_official = _load_stage_result(

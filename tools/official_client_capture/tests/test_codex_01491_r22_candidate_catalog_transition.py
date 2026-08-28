@@ -208,6 +208,18 @@ def expected_catalog_stage() -> dict[str, Any]:
     }
 
 
+def r23_supersedes(path: str, prior_digest: str, current_digest: str) -> bool:
+    """延迟加载 r23，避免前序校验与运行时坐标后继形成导入环。"""
+
+    try:
+        from tools.official_client_capture.tests.test_codex_01491_r23_runtime_coordinate_transition import (
+            r23_supersedes as successor,
+        )
+    except (ImportError, OSError, TypeError, ValueError, json.JSONDecodeError):
+        return False
+    return successor(path, prior_digest, current_digest)
+
+
 def validate_catalog_semantics() -> None:
     """验证 Active/Previous、画像并存和历史内容寻址文件。"""
 
@@ -414,7 +426,14 @@ def validate_transition(document: dict[str, Any]) -> None:
             or entry["predecessor_sha256s"] != expected_predecessors
             or current.is_symlink()
             or not current.is_file()
-            or entry["to_sha256"] != sha256(current.read_bytes())
+            or (
+                entry["to_sha256"] != sha256(current.read_bytes())
+                and not r23_supersedes(
+                    path,
+                    entry["to_sha256"],
+                    sha256(current.read_bytes()),
+                )
+            )
             or not isinstance(entry["reason"], str)
             or not entry["reason"].strip()
         ):
@@ -439,12 +458,16 @@ def r22_supersedes(path: str, prior_digest: str, current_digest: str) -> bool:
         document = load_validated_transition()
     except (OSError, TypeError, ValueError, json.JSONDecodeError):
         return False
-    return any(
-        entry["path"] == path
-        and entry["to_sha256"] == current_digest
-        and prior_digest in entry["predecessor_sha256s"]
-        for entry in document["transitions"]
-    )
+    for entry in document["transitions"]:
+        if entry["path"] != path or prior_digest not in entry["predecessor_sha256s"]:
+            continue
+        if entry["to_sha256"] == current_digest or r23_supersedes(
+            path,
+            entry["to_sha256"],
+            current_digest,
+        ):
+            return True
+    return r23_supersedes(path, prior_digest, current_digest)
 
 
 class Codex01491R22CandidateCatalogTransitionTest(unittest.TestCase):

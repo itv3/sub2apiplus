@@ -2198,6 +2198,161 @@ class CodexUpgradeTest(unittest.TestCase):
             )
             self.assertFalse((successor_dir / "official" / "attempts").exists())
 
+    def test_successor_rebinds_live_attestation_compose_coordinates_immutably(
+        self,
+    ) -> None:
+        """运行时纠正后继必须冻结新 compose 路径，并保留前序配置。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            predecessor_dir, predecessor_manifest, _ = (
+                self._create_classified_campaign(root / "predecessor")
+            )
+            compose_dir = root / "compose"
+            compose_dir.mkdir(mode=0o700)
+            compose_dir = compose_dir.resolve()
+            base_compose = compose_dir / "docker-compose.yml"
+            candidate_override = compose_dir / "candidate-r23.override.yml"
+            base_compose.write_text("services: {}\n", encoding="utf-8")
+            candidate_override.write_text("services: {}\n", encoding="utf-8")
+            base_compose.chmod(0o600)
+            candidate_override.chmod(0o600)
+            compose_files = f"{base_compose} -f {candidate_override}"
+            successor_dir = root / "successor"
+
+            return_code, stdout, stderr = self._run_main(
+                [
+                    "successor",
+                    "--predecessor-campaign-dir",
+                    str(predecessor_dir),
+                    "--campaign-dir",
+                    str(successor_dir),
+                    "--campaign-id",
+                    "upgrade-0146-runtime-rebound",
+                    "--codex-account-id",
+                    "91",
+                    "--reason",
+                    "candidate_runtime_identity_correction",
+                    "--live-attestation-compose-dir",
+                    str(compose_dir),
+                    "--live-attestation-compose-files",
+                    compose_files,
+                ]
+            )
+            self.assertEqual(return_code, 0, stderr)
+            self.assertTrue(json.loads(stdout)["runtime_configuration_rebound"])
+
+            successor_manifest = codex_upgrade.load_campaign_manifest(successor_dir)
+            self.assertEqual(
+                predecessor_manifest["configuration"].get(
+                    "live_attestation_compose_files", ""
+                ),
+                "",
+            )
+            self.assertEqual(
+                successor_manifest["configuration"][
+                    "live_attestation_compose_dir"
+                ],
+                str(compose_dir),
+            )
+            self.assertEqual(
+                successor_manifest["configuration"][
+                    "live_attestation_compose_files"
+                ],
+                compose_files,
+            )
+            import_receipt = json.loads(
+                (successor_dir / "predecessor-import.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(
+                import_receipt["schema_version"],
+                codex_upgrade.PREDECESSOR_RUNTIME_IMPORT_SCHEMA,
+            )
+            self.assertEqual(
+                import_receipt["configuration_transition"],
+                {
+                    "codex_account_id": {
+                        "predecessor": 90,
+                        "successor": 91,
+                        "reason": "operator_selected_active_account",
+                    },
+                    "live_attestation_compose_dir": {
+                        "predecessor": "",
+                        "successor": str(compose_dir),
+                        "reason": "candidate_runtime_identity_correction",
+                    },
+                    "live_attestation_compose_files": {
+                        "predecessor": "",
+                        "successor": compose_files,
+                        "reason": "candidate_runtime_identity_correction",
+                    },
+                },
+            )
+
+    def test_successor_rejects_partial_or_reclassification_compose_rebinding(
+        self,
+    ) -> None:
+        """不完整坐标及分类纠正后继均不得改变 Candidate 部署路径。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            predecessor_dir, _, _ = self._create_classified_campaign(
+                root / "predecessor"
+            )
+            compose_dir = root / "compose"
+            compose_dir.mkdir(mode=0o700)
+            compose_dir = compose_dir.resolve()
+            compose_file = compose_dir / "docker-compose.yml"
+            compose_file.write_text("services: {}\n", encoding="utf-8")
+            compose_file.chmod(0o600)
+            common = [
+                "successor",
+                "--predecessor-campaign-dir",
+                str(predecessor_dir),
+                "--codex-account-id",
+                "91",
+            ]
+
+            partial_dir = root / "partial"
+            return_code, _, stderr = self._run_main(
+                [
+                    *common,
+                    "--campaign-dir",
+                    str(partial_dir),
+                    "--campaign-id",
+                    "upgrade-0146-partial-runtime",
+                    "--reason",
+                    "candidate_runtime_identity_correction",
+                    "--live-attestation-compose-dir",
+                    str(compose_dir),
+                ]
+            )
+            self.assertEqual(return_code, 1)
+            self.assertIn("必须同时提供", stderr)
+            self.assertFalse(partial_dir.exists())
+
+            reclassification_dir = root / "reclassification"
+            return_code, _, stderr = self._run_main(
+                [
+                    *common,
+                    "--campaign-dir",
+                    str(reclassification_dir),
+                    "--campaign-id",
+                    "upgrade-0146-reclassification-runtime",
+                    "--reason",
+                    "classification_fact_correction",
+                    "--live-attestation-compose-dir",
+                    str(compose_dir),
+                    "--live-attestation-compose-files",
+                    str(compose_file),
+                ]
+            )
+            self.assertEqual(return_code, 1)
+            self.assertIn("只有 candidate_runtime_identity_correction", stderr)
+            self.assertFalse(reclassification_dir.exists())
+
     def test_reclassification_successor_imports_only_official_stage(self) -> None:
         """批准事实纠正必须复用官方证据，但不得复制旧批准五件套。"""
 
