@@ -283,6 +283,15 @@ class CodexUpgradeTest(unittest.TestCase):
                 core["steps"][0]["environment"]["LITE_MODEL"], "{lite_model}"
             )
             if version == "0.149.1":
+                auxiliary = next(
+                    job
+                    for job in scenario["capture_jobs"]
+                    if job["id"] == "candidate-frozen-aux"
+                )
+                self.assertEqual(auxiliary["track"], "lite")
+                self.assertEqual(auxiliary["model_id"], "{lite_model}")
+                self.assertTrue(auxiliary["expected_use_responses_lite"])
+                self.assertFalse(auxiliary["required_model_receipt"])
                 wham_job = next(
                     job
                     for job in scenario["capture_jobs"]
@@ -344,6 +353,13 @@ class CodexUpgradeTest(unittest.TestCase):
                 ],
                 "1",
             )
+            auxiliary_job = next(
+                job for job in jobs if job.job_id == "candidate-frozen-aux"
+            )
+            self.assertEqual(auxiliary_job.track, "lite")
+            self.assertEqual(auxiliary_job.model_id, "gpt-5.6-terra")
+            self.assertTrue(auxiliary_job.expected_use_responses_lite)
+            self.assertFalse(auxiliary_job.required_model_receipt)
 
     def test_historical_scenario_source_binding_is_plan_rebuild_only(self) -> None:
         """历史章节摘要豁免必须显式绑定版本化正式计划重建。"""

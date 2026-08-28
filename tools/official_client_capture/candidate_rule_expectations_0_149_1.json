@@ -1426,6 +1426,14 @@
                 "operator": "equal",
                 "path": "data.method",
                 "value": "POST"
+              },
+              {
+                "operator": "in",
+                "path": "data.path",
+                "value": [
+                  "/backend-api/codex/responses",
+                  "/backend-api/codex/responses/compact"
+                ]
               }
             ]
           }
@@ -1450,6 +1458,14 @@
                 "operator": "equal",
                 "path": "data.method",
                 "value": "POST"
+              },
+              {
+                "operator": "in",
+                "path": "data.path",
+                "value": [
+                  "/backend-api/codex/responses",
+                  "/backend-api/codex/responses/compact"
+                ]
               }
             ]
           }

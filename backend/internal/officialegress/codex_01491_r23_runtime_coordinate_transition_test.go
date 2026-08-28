@@ -207,7 +207,13 @@ func validateCodex01491R23RuntimeCoordinateTransition(
 			return errors.New("Codex 0.149.1 r23 运行时坐标 transition 条目非法：" + expectedPath)
 		}
 		current, readErr := codex01491RepoFile(entry.Path)
-		if readErr != nil || upstreamMergeFrameworkDigest(current) != entry.ToSHA256 {
+		currentDigest := upstreamMergeFrameworkDigest(current)
+		if readErr != nil || (currentDigest != entry.ToSHA256 &&
+			!codex01491R24SelectorLiteCoordinateSupersedes(
+				entry.Path,
+				entry.ToSHA256,
+				currentDigest,
+			)) {
 			return errors.New("Codex 0.149.1 r23 运行时坐标 transition 当前摘要不一致：" + entry.Path)
 		}
 		paths = append(paths, entry.Path)
@@ -224,13 +230,21 @@ func validateCodex01491R23RuntimeCoordinateTransition(
 }
 
 func codex01491R23RuntimeCoordinateSupersedes(path, priorDigest, currentDigest string) bool {
+	if codex01491R24SelectorLiteCoordinateSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	receipt, err := loadCodex01491R23RuntimeCoordinateTransition()
 	if err != nil {
 		return false
 	}
 	for _, entry := range receipt.Transitions {
-		if entry.Path == path && entry.ToSHA256 == currentDigest &&
-			slices.Contains(entry.PredecessorSHA256s, priorDigest) {
+		if entry.Path == path && slices.Contains(entry.PredecessorSHA256s, priorDigest) &&
+			(entry.ToSHA256 == currentDigest ||
+				codex01491R24SelectorLiteCoordinateSupersedes(
+					path,
+					entry.ToSHA256,
+					currentDigest,
+				)) {
 			return true
 		}
 	}

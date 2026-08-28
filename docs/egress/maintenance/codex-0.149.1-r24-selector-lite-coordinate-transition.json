@@ -1,0 +1,141 @@
+{
+  "schema_version": "official-client-codex-0.149.1-r24-selector-lite-coordinate-transition/v1",
+  "issued_at_utc": "2026-08-28T09:44:02Z",
+  "base_commit": "8d8252c519663a7165a0258ee1e97c4159751282",
+  "scope": "codex-0.149.1-r24-selector-lite-coordinate",
+  "framework_stage": "VC-3/VC-4/SAME-VERSION-SUCCESSOR",
+  "predecessor_transition": {
+    "path": "docs/egress/maintenance/codex-0.149.1-r23-runtime-coordinate-transition.json",
+    "file_sha256": "7b2b3cc09dd56d095230243c0e77c3f38c97b256bbaca43fb50bd61d51fdb1b9",
+    "identity_sha256": "c07a935f50e022a2469e234c71bf76d3e59272ac121698df7f33e6bf70106356"
+  },
+  "correction_contract": {
+    "reason": "classification_fact_correction",
+    "predecessor_import_schema": "codex-upgrade-predecessor-import/v3",
+    "import_mode": "official_only_reclassification",
+    "official_recapture_required": false,
+    "official_evidence_replay_required": true,
+    "approved_classification_imported": false,
+    "classification_reapproval_required": true,
+    "approved_scenario_rebind_required": true,
+    "candidate_recapture_required": true,
+    "kilo_revalidation_required": true
+  },
+  "corrected_coordinates": {
+    "auxiliary_job_id": "candidate-frozen-aux",
+    "auxiliary_track": "lite",
+    "auxiliary_model_id": "{lite_model}",
+    "auxiliary_expected_use_responses_lite": true,
+    "auxiliary_required_model_receipt": false,
+    "session_header_rule_id": "SPEC-HDR-007",
+    "session_header_check_ids": [
+      "responses-session-id",
+      "responses-thread-id"
+    ],
+    "session_header_allowed_paths": [
+      "/backend-api/codex/responses",
+      "/backend-api/codex/responses/compact"
+    ],
+    "auxiliary_posts_excluded_from_session_header_scope": true
+  },
+  "path_set_sha256": "3e1672016ae50654fd690484e9fb2d0b9876d516218387781efd82a84d4707f2",
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/codex_01491_r23_runtime_coordinate_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "7236cd06a5a014b007477e1bd1ca27e9b8a83665264c3bcd9852039c9790fe09"
+      ],
+      "to_sha256": "64f42873be2ffacf91614ebcb27b095131e2ee2f0538469e78d04788e49b1eb8",
+      "reason": "把 r24 精确后继边接入 r23 校验和传递摘要链，r23 收据原文保持不变。"
+    },
+    {
+      "path": "backend/internal/officialegress/codex_01491_r24_selector_lite_coordinate_transition_test.go",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "ab35846c004138b441e9e1b2a1045e78f09755c8ce0089f6eb4f5c222c62a4a9",
+      "reason": "新增 Go 侧 r24 身份、纠正合同、受管语义、路径闭集与防篡改门禁。"
+    },
+    {
+      "path": "tools/official_client_capture/candidate_rule_expectations_0_149_1.json",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "824f481187b788e510d25064cb204bb7ad051ad9f7ecd8119eb082f62ba98ac4"
+      ],
+      "to_sha256": "2aa98c9529be6748e692382c60f9c719860ebccb063c25634cea173a2371a865",
+      "reason": "将 SPEC-HDR-007 会话头选样严格限制为 Responses 与 compact，排除同制品中的辅助 POST。"
+    },
+    {
+      "path": "tools/official_client_capture/codex_upgrade_scenarios_0_149_1.json",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "578753152bf4d86a799df39dc14b3d5ea3c623612cfacc4c43180375538b5df2"
+      ],
+      "to_sha256": "4852bb85360fb3ccad112f426fc7313b7aaa715a8035928f4a3f428cfd02ee25",
+      "reason": "为 candidate-frozen-aux 显式冻结 Lite 轨道、Lite 模型占位符与 Responses Lite 期望坐标。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_candidate_rule_assertion.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "7903954d793b1ea450e4b3dea6f0cbab21737308529de6ff9a7e72abe4afca94"
+      ],
+      "to_sha256": "a88f2a00b93afeaff836f93f66b01cc13204459e93ad037f1a3d1519ea1353ce",
+      "reason": "新增辅助 POST 不得进入 SPEC-HDR-007 会话头选择器的回归测试。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_candidate_gate_successor_transition.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "ff8d4fc171863a3d2ef589765bf2237f3e724f537f3d4455b1eb607e89182ac9"
+      ],
+      "to_sha256": "23fe94c453166c079e5c1f1df8bfde7b0beba7e7bfec0c47118795b004c28948",
+      "reason": "把 r24 精确后继边加入候选维护摘要图，供历史只读 transition 连续重放。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_r23_runtime_coordinate_transition.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "409d96410fee5907df7d895a1306299a6e14806f9118d1fd7eab65c7e52da69c"
+      ],
+      "to_sha256": "c0e8aa47bb52735aec38403b05691ae47f6fbcd8eaa2d01203c79e5d270caa16",
+      "reason": "把 r24 精确后继边接入 Python 侧 r23 校验和传递摘要链，r23 收据原文保持不变。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_r24_selector_lite_coordinate_transition.py",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "7f995f92d901d0f9d587242ca4ae7fabc2d6b0eaf937f06b6f4bcd68cad54099",
+      "reason": "新增 Python 侧 r24 身份、前序、纠正语义、文件摘要和 mutation 独立重放。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_upgrade.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "960505d49d080bca01a3bb9753e40bd931371e0e727d6cfee845608ab3fc48a6"
+      ],
+      "to_sha256": "944f7bf20742fa8afc830e55cb30d3fcd57056003e122a7e1b421b893931bc02",
+      "reason": "冻结 auxiliary job 的 Lite 坐标及模板展开后模型身份，防止再次默认落入 main/gpt-5.5。"
+    }
+  ],
+  "verification": {
+    "scenario_coordinate_tested": true,
+    "selector_scope_tested": true,
+    "analytics_exclusion_tested": true,
+    "mutation_tests_required": true
+  },
+  "safety": {
+    "historical_artifacts_overwritten": false,
+    "historical_receipts_modified": false,
+    "official_recapture_performed": false,
+    "candidate_capture_performed": false,
+    "deployment_performed": false,
+    "network_configuration_changed": false,
+    "production_selector_changed": false,
+    "production_activated": false,
+    "vircs_accessed": false,
+    "dmit_server_accessed": false
+  },
+  "result": "selector_lite_coordinate_successor_tooling_frozen",
+  "identity_sha256": "3fd50b27cd48f8a9df0b61e697cdf09f36673f765aa9ef81aed611c09fbed96d"
+}

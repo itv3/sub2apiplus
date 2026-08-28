@@ -2229,6 +2229,10 @@
       ],
       "description": "Sub2API A09/A11/A12/A13/A14 受控辅助端点场景；管理凭据只允许由进程环境或只读文件注入",
       "required": true,
+      "track": "lite",
+      "model_id": "{lite_model}",
+      "expected_use_responses_lite": true,
+      "required_model_receipt": false,
       "steps": [
         {
           "argv": [

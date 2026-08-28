@@ -133,6 +133,18 @@ def expected_runtime_contract() -> dict[str, Any]:
     }
 
 
+def r24_supersedes(path: str, prior_digest: str, current_digest: str) -> bool:
+    """延迟加载 r24，避免前序校验与分类事实后继形成导入环。"""
+
+    try:
+        from tools.official_client_capture.tests.test_codex_01491_r24_selector_lite_coordinate_transition import (
+            r24_supersedes as successor,
+        )
+    except (ImportError, OSError, TypeError, ValueError, json.JSONDecodeError):
+        return False
+    return successor(path, prior_digest, current_digest)
+
+
 def validate_transition(document: dict[str, Any]) -> None:
     """重放 r23 身份、前序、运行时合同、文件闭集和安全边界。"""
 
@@ -225,12 +237,20 @@ def validate_transition(document: dict[str, Any]) -> None:
         expected_predecessors = [] if previous is None else [sha256(previous)]
         expected_change = "added" if previous is None else "modified"
         current = ROOT / path
+        current_digest = sha256(current.read_bytes()) if current.is_file() else ""
         if (
             entry["change"] != expected_change
             or entry["predecessor_sha256s"] != expected_predecessors
             or current.is_symlink()
             or not current.is_file()
-            or entry["to_sha256"] != sha256(current.read_bytes())
+            or (
+                entry["to_sha256"] != current_digest
+                and not r24_supersedes(
+                    path,
+                    entry["to_sha256"],
+                    current_digest,
+                )
+            )
             or not isinstance(entry["reason"], str)
             or not entry["reason"].strip()
         ):
@@ -249,14 +269,19 @@ def load_validated_transition() -> dict[str, Any]:
 def r23_supersedes(path: str, prior_digest: str, current_digest: str) -> bool:
     """只承认 r23 收据登记的精确 path/from/to 三元组。"""
 
+    if r24_supersedes(path, prior_digest, current_digest):
+        return True
     try:
         document = load_validated_transition()
     except (OSError, TypeError, ValueError, json.JSONDecodeError):
         return False
     return any(
         entry["path"] == path
-        and entry["to_sha256"] == current_digest
         and prior_digest in entry["predecessor_sha256s"]
+        and (
+            entry["to_sha256"] == current_digest
+            or r24_supersedes(path, entry["to_sha256"], current_digest)
+        )
         for entry in document["transitions"]
     )
 

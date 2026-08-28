@@ -111,6 +111,31 @@ class CandidateRuleExpectationTest(unittest.TestCase):
             profile["source_spec_sha256"],
         )
 
+    def test_01491_session_header_selector_excludes_auxiliary_posts(self) -> None:
+        """会话头选择器只能覆盖 Responses 与 compact，不能吸入 analytics。"""
+
+        profile = json.loads(
+            (TOOL_ROOT / "candidate_rule_expectations_0_149_1.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        rule = next(
+            item for item in profile["rules"] if item["rule_id"] == "SPEC-HDR-007"
+        )
+        expected_paths = [
+            "/backend-api/codex/responses",
+            "/backend-api/codex/responses/compact",
+        ]
+        for check_id in ("responses-session-id", "responses-thread-id"):
+            check = next(item for item in rule["checks"] if item["id"] == check_id)
+            path_condition = next(
+                condition
+                for condition in check["select"]["where"]
+                if condition["path"] == "data.path"
+            )
+            self.assertEqual(path_condition["operator"], "in")
+            self.assertEqual(path_condition["value"], expected_paths)
+
     def test_profile_is_independent_from_candidate_go_profile(self) -> None:
         checker_source = (TOOL_ROOT / "candidate_rule_assertion.py").read_text(
             encoding="utf-8"
