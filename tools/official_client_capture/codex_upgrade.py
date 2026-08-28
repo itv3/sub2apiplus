@@ -3591,6 +3591,95 @@ def _copy_successor_binding(
     return {"path": destination_relative, "sha256": expected_sha256}
 
 
+def _successor_uses_reclassified_historical_plan_binding(
+    staging_dir: Path,
+    manifest: dict[str, Any],
+    classification_bindings: dict[str, dict[str, str]],
+) -> bool:
+    """判定已完成分类纠正的后继是否仍需重放历史 Formal 摘要。
+
+    分类事实纠正只会追加批准五件套，不会改写 Formal 时冻结的 target 场景
+    清单。因此后续运行时坐标后继可能同时看到：历史 Formal 清单仍绑定旧章节
+    摘要，而批准场景已经绑定当前章节摘要。只有批准场景可按当前源码重验、
+    且两份清单的官方执行合同完全一致时，才允许计划重建读取历史摘要。
+    """
+
+    scenario_reference = manifest.get("inputs", {}).get(
+        "target_discovery_scenarios"
+    )
+    if not isinstance(scenario_reference, dict):
+        raise ConfigurationError(
+            "同版本后继 Campaign 要求前序已冻结 target 场景清单。"
+        )
+    _require_file_binding(scenario_reference, "后继 Formal target 场景清单")
+    frozen_path = _campaign_file(staging_dir, scenario_reference["path"])
+    if (
+        frozen_path.is_symlink()
+        or not frozen_path.is_file()
+        or file_sha256(frozen_path) != scenario_reference["sha256"]
+    ):
+        raise ConfigurationError("后继 Formal target 场景清单摘要不一致。")
+    frozen = _read_json(frozen_path, "后继 Formal target 场景清单")
+    _validate_scenario_manifest_shape(frozen)
+    if frozen.get("codex_version") != manifest.get("target_version"):
+        raise ConfigurationError("后继 Formal target 场景版本不一致。")
+    frozen_source = frozen.get("source_spec")
+    if not isinstance(frozen_source, dict):
+        raise ConfigurationError("后继 Formal target 场景缺少规格摘要绑定。")
+    source_path_text = frozen_source.get("path")
+    fragment = frozen_source.get("fragment")
+    frozen_sha256 = frozen_source.get("sha256")
+    if (
+        not isinstance(source_path_text, str)
+        or Path(source_path_text).is_absolute()
+        or ".." in Path(source_path_text).parts
+        or not isinstance(fragment, str)
+        or not fragment
+        or not SHA256_RE.fullmatch(str(frozen_sha256))
+    ):
+        raise ConfigurationError("后继 Formal target 场景规格摘要绑定非法。")
+    current_source = Path(__file__).resolve().parents[2] / source_path_text
+    if not current_source.is_file() or current_source.is_symlink():
+        raise ConfigurationError("后继 Formal target 场景规格文件不可信。")
+    current_sha256 = source_spec_section_sha256(current_source, fragment)
+    if frozen_sha256 == current_sha256:
+        return False
+
+    approved_reference = classification_bindings.get("scenario_manifest")
+    if not isinstance(approved_reference, dict):
+        raise ConfigurationError(
+            "历史 Formal 摘要只能由已导入的当前批准场景承接。"
+        )
+    _require_file_binding(approved_reference, "后继批准场景清单")
+    approved_path = _campaign_file(staging_dir, approved_reference["path"])
+    if (
+        approved_path.is_symlink()
+        or not approved_path.is_file()
+        or file_sha256(approved_path) != approved_reference["sha256"]
+    ):
+        raise ConfigurationError("后继批准场景清单摘要不一致。")
+    approved = _read_json(approved_path, "后继批准场景清单")
+    _validate_scenario_manifest_shape(approved)
+    approved_source = approved.get("source_spec")
+    if (
+        approved.get("codex_version") != manifest.get("target_version")
+        or not isinstance(approved_source, dict)
+        or approved_source.get("path") != source_path_text
+        or approved_source.get("fragment") != fragment
+        or approved_source.get("sha256") != current_sha256
+    ):
+        raise ConfigurationError(
+            "历史 Formal 摘要对应的批准场景未绑定当前规格摘要。"
+        )
+    if _fingerprint(_official_scenario_execution_contract(frozen)) != _fingerprint(
+        _official_scenario_execution_contract(approved)
+    ):
+        raise ConfigurationError(
+            "历史 Formal 场景与当前批准场景的官方执行合同不一致。"
+        )
+    return True
+
+
 def _rebuild_successor_plan(
     staging_dir: Path,
     final_dir: Path,
@@ -3891,11 +3980,22 @@ def create_successor_campaign(arguments: argparse.Namespace) -> dict[str, Any]:
                 },
             }
         )
+        allow_historical_source_spec_binding = reclassification_successor
+        if not reclassification_successor:
+            allow_historical_source_spec_binding = (
+                _successor_uses_reclassified_historical_plan_binding(
+                    staging_dir,
+                    successor_manifest,
+                    classification_bindings,
+                )
+            )
         _rebuild_successor_plan(
             staging_dir,
             successor_dir,
             successor_manifest,
-            allow_historical_source_spec_binding=reclassification_successor,
+            allow_historical_source_spec_binding=(
+                allow_historical_source_spec_binding
+            ),
         )
         manifest_path = staging_dir / "campaign.json"
         _secure_write_json_once(manifest_path, successor_manifest)

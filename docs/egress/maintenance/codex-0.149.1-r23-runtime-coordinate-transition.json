@@ -1,6 +1,6 @@
 {
   "schema_version": "official-client-codex-0.149.1-r23-runtime-coordinate-transition/v1",
-  "issued_at_utc": "2026-08-28T04:41:28Z",
+  "issued_at_utc": "2026-08-28T05:24:11Z",
   "base_commit": "f7c3521bc80e350ae529496e9f0656079cdad78c",
   "scope": "codex-0.149.1-r23-runtime-coordinate",
   "framework_stage": "VC-0/RUNTIME-COORDINATE-REBINDING",
@@ -48,8 +48,8 @@
       "predecessor_sha256s": [
         "70ebfc64d69b004b731bd23c783454f70cb4645d57d6e9031e8a804711f90cf7"
       ],
-      "to_sha256": "659ed8b0fa05992d9eba9bc8e757f41f54f69dbea8be5abfecc53de06e721e94",
-      "reason": "仅为运行时身份纠正后继增加受管 compose 目录与文件过渡，并签发 v4 收据。"
+      "to_sha256": "4f45ecf5f87f16a9e3379335d0f06c02b3c7058dce54ee08ae7d7bed960a847d",
+      "reason": "为运行时身份纠正后继增加受管 compose 过渡；分类纠正后的历史 Formal 摘要只可由当前批准场景和相同执行合同承接。"
     },
     {
       "path": "tools/official_client_capture/tests/test_codex_01491_candidate_gate_successor_transition.py",
@@ -82,8 +82,8 @@
       "predecessor_sha256s": [
         "91457388e664c7269ae1bc086aafc635471bbe113665459695ea4f98eecc996b"
       ],
-      "to_sha256": "a5ac31bb97a6f4a20ae36fafd939dd20f07642843d36a36f30100c6e964a6ff0",
-      "reason": "覆盖 v4 正向重放、不完整坐标拒绝及分类纠正越权拒绝。"
+      "to_sha256": "960505d49d080bca01a3bb9753e40bd931371e0e727d6cfee845608ab3fc48a6",
+      "reason": "覆盖 v4 正向重放、不完整坐标拒绝、分类纠正越权拒绝及历史 Formal 摘要的窄承接门禁。"
     }
   ],
   "verification": {
@@ -106,5 +106,5 @@
     "dmit_server_accessed": false
   },
   "result": "runtime_coordinate_successor_tooling_frozen",
-  "identity_sha256": "280df78298e3911c4c9b6d9c3b645f091ef630e539fe6f7b94a4a65d4643398d"
+  "identity_sha256": "c07a935f50e022a2469e234c71bf76d3e59272ac121698df7f33e6bf70106356"
 }

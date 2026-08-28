@@ -389,6 +389,81 @@ class CodexUpgradeTest(unittest.TestCase):
                 {"official-test", "candidate-test"},
             )
 
+    def test_runtime_successor_only_bridges_reclassified_historical_plan(self) -> None:
+        """运行时后继只能用当前批准场景承接历史 Formal 摘要。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            arguments = self._campaign_arguments(root / "inputs")
+            current = json.loads(
+                arguments.target_scenario_manifest.read_text(encoding="utf-8")
+            )
+            frozen = json.loads(json.dumps(current, ensure_ascii=False))
+            frozen["source_spec"]["sha256"] = "0" * 64
+            frozen["profile_id"] = "codex-0.146.0-historical"
+            approved = json.loads(json.dumps(current, ensure_ascii=False))
+            approved["profile_id"] = "codex-0.146.0-approved"
+
+            staging = root / "staging"
+            frozen_path = staging / "inputs/target-discovery-scenarios.json"
+            approved_path = staging / "classification/approved/scenarios.json"
+            self._write_json(frozen_path, frozen)
+            self._write_json(approved_path, approved)
+            manifest = {
+                "target_version": "0.146.0",
+                "inputs": {
+                    "target_discovery_scenarios": {
+                        "path": frozen_path.relative_to(staging).as_posix(),
+                        "sha256": codex_upgrade.file_sha256(frozen_path),
+                    }
+                },
+            }
+            classification_bindings = {
+                "scenario_manifest": {
+                    "path": approved_path.relative_to(staging).as_posix(),
+                    "sha256": codex_upgrade.file_sha256(approved_path),
+                }
+            }
+            self.assertTrue(
+                codex_upgrade._successor_uses_reclassified_historical_plan_binding(
+                    staging,
+                    manifest,
+                    classification_bindings,
+                )
+            )
+
+            stale_approval = json.loads(json.dumps(approved, ensure_ascii=False))
+            stale_approval["source_spec"]["sha256"] = "1" * 64
+            self._write_json(approved_path, stale_approval)
+            classification_bindings["scenario_manifest"]["sha256"] = (
+                codex_upgrade.file_sha256(approved_path)
+            )
+            with self.assertRaisesRegex(
+                codex_upgrade.ConfigurationError,
+                "批准场景未绑定当前规格摘要",
+            ):
+                codex_upgrade._successor_uses_reclassified_historical_plan_binding(
+                    staging,
+                    manifest,
+                    classification_bindings,
+                )
+
+            changed_execution = json.loads(json.dumps(approved, ensure_ascii=False))
+            changed_execution["capture_jobs"][0]["steps"][0]["argv"] = ["false"]
+            self._write_json(approved_path, changed_execution)
+            classification_bindings["scenario_manifest"]["sha256"] = (
+                codex_upgrade.file_sha256(approved_path)
+            )
+            with self.assertRaisesRegex(
+                codex_upgrade.ConfigurationError,
+                "官方执行合同不一致",
+            ):
+                codex_upgrade._successor_uses_reclassified_historical_plan_binding(
+                    staging,
+                    manifest,
+                    classification_bindings,
+                )
+
     def test_plan_freezes_target_scenario_and_official_reloads_same_jobs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
