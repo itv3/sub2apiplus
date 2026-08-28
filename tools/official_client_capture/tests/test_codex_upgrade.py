@@ -3159,14 +3159,33 @@ class CodexUpgradeTest(unittest.TestCase):
                 for check in rule["checks"]
                 if check["id"] == check_id
             )
-            self.assertIn("x-codex-routing-hint", check["assertion"]["value"])
             if (rule_id, check_id) == ("SPEC-H1-004", "responses-order"):
                 header_order = check["assertion"]["value"]
+                self.assertIn("x-codex-routing-hint", header_order)
                 self.assertLess(
                     header_order.index("x-openai-internal-codex-responses-lite"),
                     header_order.index("x-codex-routing-hint"),
                 )
                 self.assertNotIn("cookie", header_order)
+            elif (rule_id, check_id) == (
+                "SPEC-EP-014",
+                "legacy-default-headers",
+            ):
+                assertion = check["assertion"]
+                self.assertEqual(
+                    assertion["operator"], "all_ordered_subset_of"
+                )
+                self.assertIn("x-codex-routing-hint", assertion["required"])
+                self.assertIn(
+                    "x-openai-internal-codex-responses-lite",
+                    assertion["required"],
+                )
+                self.assertIn("cookie", assertion["allowed"])
+                self.assertNotIn("cookie", assertion["required"])
+            else:
+                self.assertIn(
+                    "x-codex-routing-hint", check["assertion"]["value"]
+                )
 
     def test_wham_get_paths_保持_0145_原期望(self) -> None:
         """防回归：不得再把 usage 换成 settings/user。"""

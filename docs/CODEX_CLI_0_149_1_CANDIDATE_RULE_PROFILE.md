@@ -706,19 +706,26 @@ images、alpha-search、legacy compact、realtime 和条件 header 等只在各�
 ### SPEC-EP-014 legacy compact 的 header 集合
 
 - **范围**：内置 OpenAI OAuth；legacy compact。
-- **规则**：默认线序为
+- **规则**：默认 Lite 线序的允许全集为
   `version, x-codex-installation-id, x-codex-window-id, x-codex-turn-metadata,
   session-id, thread-id, x-codex-routing-hint, x-openai-internal-codex-responses-lite, authorization,
   chatgpt-account-id, content-type, accept, originator, user-agent, cookie, host,
-  content-length`。条件头位于 `x-codex-installation-id` 之后、
+  content-length`。除 `cookie` 外各项必须存在且顺序固定；`cookie` 仅在 Cookie jar
+  已建立时出现，并固定在 `user-agent` 与 `host` 之间。条件头位于
+  `x-codex-installation-id` 之后、
   `x-codex-window-id` 之前：分别触发时，`x-codex-beta-features` 或
   `x-codex-turn-state` 占第 3 个 header 槽。
 - **源码**：[L1] `core/src/client.rs:613-638`、`core/src/client.rs:1954-1971`、
   `codex-api/src/endpoint/responses.rs:89`。
-- **实测**：`clean-legacy-20260728T132509Z`（默认）、
+- **实测**：`c1491-r14-f-lite-legacy-compact-default/relay/conn006.client_to_upstream.bin`
+  证明冷启动 Lite 默认请求携带 Lite 头但没有 Cookie；
+  `c1491-r14-f-official-legacy-compact-default/relay/conn007.client_to_upstream.bin`
+  证明 Cookie jar 建立后的 main 默认请求在同一固定槽携带 Cookie。两份 R 证据分别
+  冻结模型条件与 Cookie 条件，不要求把两个独立条件合并到同一官方请求。
   `audit-ep014-beta-legacy-20260730a`（beta）、
   `audit-ep014-turnstate-compact-20260730a`（turn-state），均为 R。
-- **实现**：按条件和固定插槽生成；不得把缺失条件头简单追加到末尾。
+- **实现**：按模型、Cookie jar 和条件头事实分别决定是否出现，并按固定插槽生成；
+  不得把缺失条件头简单追加到末尾，也不得把 Cookie 错误提升为 Lite 请求必选头。
 - **状态**：✅ 源码部分；抓包充分。
 
 ### SPEC-EP-015 alpha-search 的 header 与 body

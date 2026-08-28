@@ -136,6 +136,60 @@ class CandidateRuleExpectationTest(unittest.TestCase):
             self.assertEqual(path_condition["operator"], "in")
             self.assertEqual(path_condition["value"], expected_paths)
 
+    def test_01491_ep014_cookie_is_optional_only_in_its_fixed_slot(self) -> None:
+        """冷启动缺 Cookie 与暖会话携带 Cookie 都应通过，其他缺项或错序失败。"""
+
+        profile = json.loads(
+            (TOOL_ROOT / "candidate_rule_expectations_0_149_1.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        rule = next(
+            item for item in profile["rules"] if item["rule_id"] == "SPEC-EP-014"
+        )
+        check = next(
+            item
+            for item in rule["checks"]
+            if item["id"] == "legacy-default-headers"
+        )
+        assertion = check["assertion"]
+        cold = list(assertion["required"])
+        warm = list(cold)
+        warm.insert(warm.index("host"), "cookie")
+
+        def observation(record_id: str, headers: list[str]) -> Observation:
+            return Observation(
+                record_id=record_id,
+                scenario_id="A09",
+                record_type="http_request",
+                artifact_path=f"{record_id}.bin",
+                evidence_paths=(f"{record_id}.bin",),
+                labels={"track": "lite", "variant": "default"},
+                data={"header_names_in_order": headers},
+            )
+
+        passed, _ = _evaluate_assertion(
+            [observation("cold", cold), observation("warm", warm)], assertion
+        )
+        self.assertTrue(passed)
+
+        without_lite = [
+            header
+            for header in cold
+            if header != "x-openai-internal-codex-responses-lite"
+        ]
+        passed, _ = _evaluate_assertion(
+            [observation("missing-lite", without_lite)], assertion
+        )
+        self.assertFalse(passed)
+
+        misplaced_cookie = list(cold)
+        misplaced_cookie.insert(misplaced_cookie.index("content-length"), "cookie")
+        passed, _ = _evaluate_assertion(
+            [observation("misplaced-cookie", misplaced_cookie)], assertion
+        )
+        self.assertFalse(passed)
+
     def test_profile_is_independent_from_candidate_go_profile(self) -> None:
         checker_source = (TOOL_ROOT / "candidate_rule_assertion.py").read_text(
             encoding="utf-8"

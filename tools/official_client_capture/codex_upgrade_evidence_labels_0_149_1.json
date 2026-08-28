@@ -439,12 +439,13 @@
             "track": "main",
             "mode": "non_lite",
             "variant": "default",
+            "cookie_state": "present",
             "session_header_scope": "responses_or_compact",
             "compression": "zstd",
             "body_length": "automatic",
             "provider": "openai_oauth"
           },
-          "rationale": "主线 gpt-5.4 的 legacy compact 默认槽位样本；模型条件收据必须证明 use_responses_lite=false，本样本不进入 Lite-only selector。"
+          "rationale": "主线 gpt-5.4 的 legacy compact 默认槽位样本；模型条件收据必须证明 use_responses_lite=false，Cookie jar 已建立并在固定槽携带 cookie，本样本不进入 Lite-only selector。"
         }
       ]
     },
@@ -468,12 +469,13 @@
             "track": "lite",
             "mode": "lite",
             "variant": "default",
+            "cookie_state": "absent",
             "session_header_scope": "responses_or_compact",
             "compression": "zstd",
             "body_length": "automatic",
             "provider": "openai_oauth"
           },
-          "rationale": "Lite 专项固定 gpt-5.6-luna，模型条件收据证明 use_responses_lite=true；仅本 track 可命中 EP-014 默认头序与 EP-020 默认 body 子集。"
+          "rationale": "Lite 专项固定 gpt-5.6-luna，模型条件收据证明 use_responses_lite=true；冷启动时 Cookie jar 尚未建立，因此 EP-014 默认线序允许固定槽 cookie 缺席。"
         }
       ]
     },
@@ -1806,11 +1808,12 @@
             "transport": "http",
             "track": "lite",
             "mode": "lite",
+            "cookie_state": "absent",
             "session_header_scope": "responses_or_compact",
             "body_length": "automatic",
             "provider": "openai_oauth"
           },
-          "rationale": "A09 compact 驱动序列第 1 轮是 prime（为 turn-state 闭环准备受控状态），不属于任何官方变体，不标 variant；compact 端点属 session_header_scope=responses_or_compact。"
+          "rationale": "A09 compact 驱动序列第 1 轮是冷启动 prime（为 turn-state 闭环准备受控状态），Cookie jar 尚未建立；不属于任何官方变体，不标 variant。"
         },
         {
           "glob": "scenarios/A09/relay/conn003.client_to_upstream.bin",
@@ -1828,11 +1831,12 @@
             "track": "lite",
             "mode": "lite",
             "variant": "default",
+            "cookie_state": "present",
             "session_header_scope": "responses_or_compact",
             "body_length": "automatic",
             "provider": "openai_oauth"
           },
-          "rationale": "compact 驱动序列第 2 轮是 default：不注入条件头，构成 EP-014/EP-020 legacy compact 默认槽位样本；track=lite 由 job 冻结模型坐标（gpt-5.6-luna，use_responses_lite=true）推出。"
+          "rationale": "compact 驱动序列第 2 轮是暖会话 default：不注入条件头，prime 响应已建立 Cookie jar，因此在固定槽携带 cookie；track=lite 由 job 冻结模型坐标（gpt-5.6-luna，use_responses_lite=true）推出。"
         },
         {
           "glob": "scenarios/A09/relay/conn004.client_to_upstream.bin",

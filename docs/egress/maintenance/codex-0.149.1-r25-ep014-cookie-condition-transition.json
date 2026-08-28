@@ -1,0 +1,259 @@
+{
+  "schema_version": "official-client-codex-0.149.1-r25-ep014-cookie-condition-transition/v1",
+  "issued_at_utc": "2026-08-28T22:02:19Z",
+  "base_commit": "1369078cecee21296978bae23a151206d250acfb",
+  "scope": "codex-0.149.1-r25-ep014-cookie-condition",
+  "framework_stage": "VC-3/VC-4/SAME-VERSION-SUCCESSOR",
+  "predecessor_transition": {
+    "path": "docs/egress/maintenance/codex-0.149.1-r24-selector-lite-coordinate-transition.json",
+    "file_sha256": "9d78ecb8851935f40be42866f46f83d097b974a8deba0abe44ab46d242fc39b4",
+    "identity_sha256": "3fd50b27cd48f8a9df0b61e697cdf09f36673f765aa9ef81aed611c09fbed96d"
+  },
+  "tooling_closure": {
+    "path": "docs/egress/maintenance/codex-0.149.1-service-successor-replay-transition.json",
+    "file_sha256": "0b1e6726050984f6a1f50386d07a198d02d89d1b007c981b8039da9ae5748fcf",
+    "identity_sha256": "7db2e0f598a4b4b53a7dcb4e7c4c47e05aecb149352793b5516e92d94912a430"
+  },
+  "correction_contract": {
+    "reason": "classification_fact_correction",
+    "predecessor_import_schema": "codex-upgrade-predecessor-import/v3",
+    "import_mode": "official_only_reclassification",
+    "official_recapture_required": false,
+    "official_evidence_replay_required": true,
+    "approved_classification_imported": false,
+    "classification_reapproval_required": true,
+    "approved_scenario_rebind_required": true,
+    "candidate_recapture_required": true,
+    "kilo_revalidation_required": true
+  },
+  "corrected_fact": {
+    "rule_id": "SPEC-EP-014",
+    "check_id": "legacy-default-headers",
+    "selector": {
+      "path": "/backend-api/codex/responses/compact",
+      "variant": "default",
+      "track": "lite"
+    },
+    "official_evidence": [
+      {
+        "path": "c1491-r14-f-lite-legacy-compact-default/relay/conn006.client_to_upstream.bin",
+        "track": "lite",
+        "lite_header_present": true,
+        "cookie_present": false
+      },
+      {
+        "path": "c1491-r14-f-official-legacy-compact-default/relay/conn007.client_to_upstream.bin",
+        "track": "main",
+        "lite_header_present": false,
+        "cookie_present": true
+      }
+    ],
+    "assertion": {
+      "allowed": [
+        "version",
+        "x-codex-installation-id",
+        "x-codex-window-id",
+        "x-codex-turn-metadata",
+        "session-id",
+        "thread-id",
+        "x-codex-routing-hint",
+        "x-openai-internal-codex-responses-lite",
+        "authorization",
+        "chatgpt-account-id",
+        "content-type",
+        "accept",
+        "originator",
+        "user-agent",
+        "cookie",
+        "host",
+        "content-length"
+      ],
+      "operator": "all_ordered_subset_of",
+      "path": "data.header_names_in_order",
+      "required": [
+        "version",
+        "x-codex-installation-id",
+        "x-codex-window-id",
+        "x-codex-turn-metadata",
+        "session-id",
+        "thread-id",
+        "x-codex-routing-hint",
+        "x-openai-internal-codex-responses-lite",
+        "authorization",
+        "chatgpt-account-id",
+        "content-type",
+        "accept",
+        "originator",
+        "user-agent",
+        "host",
+        "content-length"
+      ]
+    },
+    "cookie_condition": {
+      "present_when": "cookie_jar_established",
+      "absent_when": "cold_start_without_cookie_jar",
+      "slot_after": "user-agent",
+      "slot_before": "host"
+    }
+  },
+  "model_coordinates": {
+    "main_track": "main",
+    "main_model": "gpt-5.5",
+    "lite_track": "lite",
+    "lite_model": "gpt-5.6-luna",
+    "whole_main_switched_to_luna": false
+  },
+  "path_set_sha256": "56082bc8ed24cb89af7f3f574d78765808fc680253a88abf1d6e31392ed61d31",
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/codex_01491_r25_ep014_cookie_condition_transition_test.go",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "f807a9ab4064f68649e7fb7a27d6a1d6885d5230b707c1d94ae4e84c5dd4d018",
+      "reason": "新增 Go 侧 r25 身份、前序、双证据条件事实、模型坐标和精确摘要门禁。"
+    },
+    {
+      "path": "backend/internal/officialegress/codex_01491_service_successor_replay_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "23e71227b1332676b58cfd919695fe672294b7380bd56574e54f0161b3758feb"
+      ],
+      "to_sha256": "36c9f481f5ac34bff9736ec349c94826101ea31cf4739fbb255d46cd6fbe5c60",
+      "reason": "把 r25 精确后继边接入 Go 侧历史闭合摘要图，旧收据原文保持不变。"
+    },
+    {
+      "path": "backend/internal/service/codex_01491_r25_ep014_cookie_condition_transition_test.go",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "6ade89d37d7d2d5f49f4124a228bb31225fa658603b76652e84a13cf87e11ed7",
+      "reason": "新增 service 侧 r25 身份、前序、条件事实、模型坐标和精确摘要门禁。"
+    },
+    {
+      "path": "backend/internal/service/codex_01491_service_successor_replay_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "756ba7b034d916be8cb530ac53a967d79bf2c3abfc8999a899686fe4e659814a"
+      ],
+      "to_sha256": "e6010ec200830971461fc5f6ec4365e8ab7ee423c6da2c91db18dd216c6f42d0",
+      "reason": "把 r25 精确后继边接入 service 历史闭合摘要图，旧收据原文保持不变。"
+    },
+    {
+      "path": "docs/CODEX_CLI_0_149_1_CANDIDATE_RULE_PROFILE.md",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "978b27a8fe7948e8a6623d4013f7b2034758b748221d6a67c0be0e682f6223fb"
+      ],
+      "to_sha256": "9bbc2737866344c0e349170ada596a3844a4487ef4ab02516f560689ae4b5f01",
+      "reason": "按两份既有官方 R 原始请求纠正 EP-014 的 Cookie jar 条件与固定槽位语义。"
+    },
+    {
+      "path": "tools/official_client_capture/candidate_rule_expectation_overrides_0_149_1.json",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "e6c81e1e739ea95414fa412dde460430047798f7af182cdd38293de57f2a0dfa"
+      ],
+      "to_sha256": "3c457f8186be79582111e74b36b330f1cafecb9a24c7ddcadd0771389fde5ffa",
+      "reason": "升级为完整断言对象替换，并把 EP-014 冻结为 Cookie 单槽位可选的有序闭集。"
+    },
+    {
+      "path": "tools/official_client_capture/candidate_rule_expectations_0_149_1.json",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "2aa98c9529be6748e692382c60f9c719860ebccb063c25634cea173a2371a865"
+      ],
+      "to_sha256": "eaa4037d2f332435d00d1295138fe69d27a7d723c5f179a0d2e523c180a545b1",
+      "reason": "同步生成画像的 EP-014 允许全集、必选集合及规则正文摘要。"
+    },
+    {
+      "path": "tools/official_client_capture/codex_upgrade.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "4f45ecf5f87f16a9e3379335d0f06c02b3c7058dce54ee08ae7d7bed960a847d"
+      ],
+      "to_sha256": "467dceec1f41776798b3b87879a3b0a99aa155e7091f367fbf1b3ba133d22d46",
+      "reason": "让 classify 以 before 精确匹配后原子替换完整断言对象，支持运算符级事实纠正。"
+    },
+    {
+      "path": "tools/official_client_capture/codex_upgrade_evidence_labels_0_149_1.json",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "685a892e57224a3af3edc5abeb22279ccbb91624ff76972027248070113ef8bd"
+      ],
+      "to_sha256": "c2218d92602442885ad394f9c095e0476fc3124c0c995b4bc8d740b7fb6587d9",
+      "reason": "显式冻结 official 与 candidate 的冷启动 absent、暖会话 present Cookie 条件。"
+    },
+    {
+      "path": "tools/official_client_capture/codex_upgrade_scenarios_0_149_1.json",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "4852bb85360fb3ccad112f426fc7313b7aaa715a8035928f4a3f428cfd02ee25"
+      ],
+      "to_sha256": "7559e1fa6669263a1cbb6b714270df63f1a534d6db3041b9adce91b4427d4c36",
+      "reason": "同步重绑纠正后的 0.149.1 规则正文第二章摘要。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_candidate_rule_assertion.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "a88f2a00b93afeaff836f93f66b01cc13204459e93ad037f1a3d1519ea1353ce"
+      ],
+      "to_sha256": "c2aa59d387844fd38dddd901f9981f7d035e43488486bf9d7ec37265a3e38ee5",
+      "reason": "新增冷启动、暖会话、Lite 缺失与 Cookie 错槽四类断言回归。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_candidate_gate_successor_transition.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "bb162972ded26c2ec15c0c3e724e59f6f5e6d82a42fabfcc425e5b2f9cc315cb"
+      ],
+      "to_sha256": "50fe5cdfbdfbd4f88403b5eadc19980f164c21aab8b3d402c442922dc2aa0107",
+      "reason": "把 r25 精确后继加入候选门禁的多阶段可达摘要图。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_r25_ep014_cookie_condition_transition.py",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "f6764293a4b2375498c925281d78b859c0c0c8622c35177bea1d3c6344c139b8",
+      "reason": "新增 Python 侧 r25 独立重放、受管语义、摘要闭集及 Cookie/Luna mutation 门禁。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_service_successor_replay_transition.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "c5229424b1806a3a3015ed545b8281dbd7986f01b7db12c7d0b5aad6a540bec6"
+      ],
+      "to_sha256": "0b765373db90b735d0472d49cbd26b496caaeb7b14d9b6e093b19fb45e9c4dc6",
+      "reason": "把 r25 精确后继边接入 Python 侧历史闭合摘要图，旧收据原文保持不变。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_upgrade.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "944f7bf20742fa8afc830e55cb30d3fcd57056003e122a7e1b421b893931bc02"
+      ],
+      "to_sha256": "e1a72eb12eff8a06b13ef9d64e62c86c44f3cb774b1fdf3e83ec002b2dc278e8",
+      "reason": "冻结 v2 完整断言覆盖生成及 EP-014 Cookie 非必选语义。"
+    }
+  ],
+  "verification": {
+    "official_raw_headers_replayed": true,
+    "cold_and_warm_cookie_conditions_tested": true,
+    "override_generation_tested": true,
+    "mutation_tests_required": true
+  },
+  "safety": {
+    "historical_artifacts_overwritten": false,
+    "historical_receipts_modified": false,
+    "official_recapture_performed": false,
+    "candidate_capture_performed": false,
+    "deployment_performed": false,
+    "network_configuration_changed": false,
+    "production_selector_changed": false,
+    "production_activated": false,
+    "arm64_read_only_evidence_accessed": true,
+    "vircs_accessed": false,
+    "dmit_server_accessed": false
+  },
+  "result": "ep014_cookie_condition_successor_tooling_frozen",
+  "identity_sha256": "c97744e7649dcfa70dcaf49278556a193cc2449cec273ddb8b346bf8b54d7f5e"
+}

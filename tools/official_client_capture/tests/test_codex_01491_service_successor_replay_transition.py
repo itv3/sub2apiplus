@@ -174,6 +174,18 @@ def canonical_identity(document: dict[str, Any]) -> str:
     return sha256(raw)
 
 
+def r25_supersedes(path: str, prior_digest: str, current_digest: str) -> bool:
+    """延迟接入 r25，避免历史闭合收据与后继校验器形成导入环。"""
+
+    try:
+        from tools.official_client_capture.tests import (
+            test_codex_01491_r25_ep014_cookie_condition_transition as r25,
+        )
+    except (ImportError, OSError, TypeError, ValueError, json.JSONDecodeError):
+        return False
+    return r25.r25_supersedes(path, prior_digest, current_digest)
+
+
 def validate_transition(document: dict[str, Any]) -> list[dict[str, Any]]:
     """重放收据身份、r15-r24 连续前序、文件闭集和安全边界。"""
 
@@ -304,7 +316,14 @@ def validate_transition(document: dict[str, Any]) -> list[dict[str, Any]]:
             or entry["predecessor_sha256s"] != expected_predecessors
             or current.is_symlink()
             or not current.is_file()
-            or entry["to_sha256"] != sha256(current.read_bytes())
+            or (
+                entry["to_sha256"] != sha256(current.read_bytes())
+                and not r25_supersedes(
+                    path_value,
+                    entry["to_sha256"],
+                    sha256(current.read_bytes()),
+                )
+            )
             or not isinstance(entry["reason"], str)
             or not entry["reason"].strip()
         ):
@@ -331,6 +350,8 @@ def transition_supersedes(
 
     if prior_digest == current_digest:
         return False
+    if r25_supersedes(path, prior_digest, current_digest):
+        return True
     try:
         document = load_validated_transition()
         historical_documents = validate_transition(document)
@@ -356,6 +377,8 @@ def transition_supersedes(
     while queue:
         digest = queue.pop(0)
         if digest == current_digest:
+            return True
+        if r25_supersedes(path, digest, current_digest):
             return True
         if digest in visited:
             continue

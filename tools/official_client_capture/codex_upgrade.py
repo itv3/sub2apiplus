@@ -8833,7 +8833,7 @@ def _apply_assertion_profile_overrides(
     }
     if not isinstance(payload, dict) or set(payload) != required:
         raise ConfigurationError("目标版本断言期望覆盖清单字段不闭合。")
-    if payload["schema_version"] != "codex-candidate-rule-expectation-overrides/v1":
+    if payload["schema_version"] != "codex-candidate-rule-expectation-overrides/v2":
         raise ConfigurationError("目标版本断言期望覆盖清单 schema_version 不受支持。")
     if payload["base_codex_version"] != profile.get("codex_version"):
         raise ConfigurationError("目标版本断言期望覆盖清单基线版本不一致。")
@@ -8869,10 +8869,23 @@ def _apply_assertion_profile_overrides(
         ]
         if len(matches) != 1:
             raise ConfigurationError(f"断言期望覆盖操作 {index} 未唯一命中 check。")
+        before = operation["before"]
+        after = operation["after"]
+        if (
+            not isinstance(before, dict)
+            or not before
+            or not isinstance(after, dict)
+            or not after
+        ):
+            raise ConfigurationError(
+                f"断言期望覆盖操作 {index} 的 before/after 必须是非空断言对象。"
+            )
         assertion = matches[0].get("assertion")
-        if not isinstance(assertion, dict) or assertion.get("value") != operation["before"]:
+        if not isinstance(assertion, dict) or assertion != before:
             raise ConfigurationError(f"断言期望覆盖操作 {index} 的 before 不匹配。")
-        assertion["value"] = operation["after"]
+        matches[0]["assertion"] = json.loads(
+            json.dumps(after, ensure_ascii=False)
+        )
     return updated, len(operations)
 
 

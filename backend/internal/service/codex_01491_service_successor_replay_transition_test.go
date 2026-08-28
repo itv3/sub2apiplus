@@ -398,7 +398,13 @@ func buildCodex01491ServiceSuccessorReplayGraph(
 			"../../..",
 			filepath.FromSlash(entry.Path),
 		))
-		if readErr != nil || upstreamMergeFrameworkServiceDigest(current) != entry.ToSHA256 {
+		currentDigest := upstreamMergeFrameworkServiceDigest(current)
+		if readErr != nil || (currentDigest != entry.ToSHA256 &&
+			!codex01491R25EP014CookieConditionSupersedesService(
+				entry.Path,
+				entry.ToSHA256,
+				currentDigest,
+			)) {
 			return nil, errors.New("Codex 0.149.1 service 后继重放当前摘要不一致：" + entry.Path)
 		}
 		paths = append(paths, entry.Path)
@@ -467,6 +473,13 @@ func codex01491ServiceSuccessorReplaySupersedes(
 	if priorDigest == currentDigest || len(priorDigest) != 64 || len(currentDigest) != 64 {
 		return false
 	}
+	if codex01491R25EP014CookieConditionSupersedesService(
+		path,
+		priorDigest,
+		currentDigest,
+	) {
+		return true
+	}
 	if _, err := loadCodex01491ServiceSuccessorReplayTransition(); err != nil {
 		return false
 	}
@@ -479,6 +492,13 @@ func codex01491ServiceSuccessorReplaySupersedes(
 	for len(queue) > 0 {
 		current := queue[0]
 		queue = queue[1:]
+		if codex01491R25EP014CookieConditionSupersedesService(
+			path,
+			current,
+			currentDigest,
+		) {
+			return true
+		}
 		for _, successor := range edges[current] {
 			if successor == currentDigest {
 				return true

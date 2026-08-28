@@ -2,7 +2,7 @@
   "schema_version": "codex-candidate-rule-expectations/v1",
   "codex_version": "0.149.1",
   "source_spec": "docs/CODEX_CLI_0_149_1_CANDIDATE_RULE_PROFILE.md#第二章",
-  "source_spec_sha256": "b5e2d14766991dcb727c6e2e1c7419d494794aa1f4837eada0b72a6f9391079b",
+  "source_spec_sha256": "e13cd81c0ffff023bce945226c51f8fc08df8cffc7518781d421c0b7aa9e2c87",
   "scenarios": [
     {
       "description": "默认系统 CA 的 HTTP ClientHello 与 models 请求",
@@ -2639,9 +2639,7 @@
       "checks": [
         {
           "assertion": {
-            "operator": "all_equal",
-            "path": "data.header_names_in_order",
-            "value": [
+            "allowed": [
               "version",
               "x-codex-installation-id",
               "x-codex-window-id",
@@ -2657,6 +2655,26 @@
               "originator",
               "user-agent",
               "cookie",
+              "host",
+              "content-length"
+            ],
+            "operator": "all_ordered_subset_of",
+            "path": "data.header_names_in_order",
+            "required": [
+              "version",
+              "x-codex-installation-id",
+              "x-codex-window-id",
+              "x-codex-turn-metadata",
+              "session-id",
+              "thread-id",
+              "x-codex-routing-hint",
+              "x-openai-internal-codex-responses-lite",
+              "authorization",
+              "chatgpt-account-id",
+              "content-type",
+              "accept",
+              "originator",
+              "user-agent",
               "host",
               "content-length"
             ]

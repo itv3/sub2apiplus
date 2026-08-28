@@ -253,7 +253,13 @@ func buildCodex01491ServiceSuccessorReplayEdges(
 			return nil, errors.New("Codex 0.149.1 officialegress service 后继重放条目非法：" + entry.Path)
 		}
 		current, err := codex01491RepoFile(entry.Path)
-		if err != nil || upstreamMergeFrameworkDigest(current) != entry.ToSHA256 {
+		currentDigest := upstreamMergeFrameworkDigest(current)
+		if err != nil || (currentDigest != entry.ToSHA256 &&
+			!codex01491R25EP014CookieConditionSupersedes(
+				entry.Path,
+				entry.ToSHA256,
+				currentDigest,
+			)) {
 			return nil, errors.New("Codex 0.149.1 officialegress service 后继重放当前摘要不一致：" + entry.Path)
 		}
 		if len(expectedFrom) > 0 {
@@ -285,6 +291,9 @@ func codex01491ServiceSuccessorReplaySupersedes(
 	if priorDigest == currentDigest || len(priorDigest) != 64 || len(currentDigest) != 64 {
 		return false
 	}
+	if codex01491R25EP014CookieConditionSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	if _, err := loadCodex01491ServiceSuccessorReplayTransition(); err != nil {
 		return false
 	}
@@ -294,6 +303,13 @@ func codex01491ServiceSuccessorReplaySupersedes(
 	for len(queue) > 0 {
 		current := queue[0]
 		queue = queue[1:]
+		if codex01491R25EP014CookieConditionSupersedes(
+			path,
+			current,
+			currentDigest,
+		) {
+			return true
+		}
 		for _, successor := range edges[current] {
 			if successor == currentDigest {
 				return true
