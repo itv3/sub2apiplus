@@ -136,6 +136,9 @@ SCENARIO_SCHEMA = "codex-upgrade-scenarios/v1"
 STAGE_SCHEMA = "codex-upgrade-stage-result/v2"
 PREDECESSOR_IMPORT_SCHEMA_V1 = "codex-upgrade-predecessor-import/v1"
 PREDECESSOR_IMPORT_SCHEMA = "codex-upgrade-predecessor-import/v2"
+PREDECESSOR_RECLASSIFICATION_IMPORT_SCHEMA = (
+    "codex-upgrade-predecessor-import/v3"
+)
 COMPARISON_SCHEMA = "codex-upgrade-comparison/v2"
 ACCEPTANCE_SCHEMA = "codex-upgrade-acceptance/v2"
 CAMPAIGN_MODES = frozenset({"preflight_only", "formal"})
@@ -150,7 +153,15 @@ MIGRATION_CLASSIFICATIONS = {
 }
 ASSERTION_STATUSES = {"pass", "fail", "blocked", "not_applicable"}
 REQUIRED_CLIENT_BINDINGS = frozenset({"kilo-compatible", "kilo-responses"})
-SUCCESSOR_REASONS = frozenset({"candidate_runtime_identity_correction"})
+SUCCESSOR_REASONS = frozenset(
+    {
+        "candidate_runtime_identity_correction",
+        "classification_fact_correction",
+    }
+)
+RECLASSIFICATION_SUCCESSOR_REASONS = frozenset(
+    {"classification_fact_correction"}
+)
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 CODEX_USER_AGENT_VERSION_RE = re.compile(
     r"(?:codex_exec|codex-tui|codex_cli_rs)/(\d+\.\d+\.\d+)"
@@ -2342,7 +2353,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     successor = subparsers.add_parser(
         "successor",
-        help="创建同版本后继 Campaign，并只读承接官方证据与批准分类",
+        help="创建同版本后继 Campaign，并按受管原因只读承接官方事实",
     )
     successor.add_argument(
         "--predecessor-campaign-dir",
@@ -2362,7 +2373,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "--reason",
         choices=sorted(SUCCESSOR_REASONS),
         required=True,
-        help="触发同版本后继 Campaign 的受管原因。",
+        help=(
+            "触发同版本后继 Campaign 的受管原因；分类事实纠正只承接官方阶段，"
+            "不会复制旧批准五件套。"
+        ),
     )
     successor.add_argument(
         "--predecessor-candidate-id",
@@ -3622,7 +3636,12 @@ def _successor_abandoned_attempt(
 
 
 def create_successor_campaign(arguments: argparse.Namespace) -> dict[str, Any]:
-    """创建同版本后继 Campaign；官方证据与批准分类只读承接并逐次重放。"""
+    """创建同版本后继 Campaign，并按原因选择承接边界。
+
+    普通运行时纠正会承接官方阶段和批准分类；若现有批准事实与原始官方
+    证据冲突，分类纠正后继只承接官方阶段，并要求在新 Campaign 内重新
+    生成、审核和批准五件套。两种模式都不会复制或改写历史 attempt。
+    """
 
     predecessor_dir = arguments.predecessor_campaign_dir
     successor_dir = arguments.campaign_dir
@@ -3636,6 +3655,9 @@ def create_successor_campaign(arguments: argparse.Namespace) -> dict[str, Any]:
         raise ConfigurationError("--codex-account-id 必须为正整数。")
     if arguments.reason not in SUCCESSOR_REASONS:
         raise ConfigurationError("--reason 不是受管的同版本后继原因。")
+    reclassification_successor = (
+        arguments.reason in RECLASSIFICATION_SUCCESSOR_REASONS
+    )
 
     predecessor_manifest = _require_formal_campaign(predecessor_dir)
     predecessor_account_id = predecessor_manifest.get("configuration", {}).get(
@@ -3700,14 +3722,15 @@ def create_successor_campaign(arguments: argparse.Namespace) -> dict[str, Any]:
                 )
 
         classification_bindings: dict[str, dict[str, str]] = {}
-        for field in _CLASSIFICATION_APPROVAL_FIELDS:
-            classification_bindings[field] = _copy_successor_binding(
-                predecessor_dir,
-                staging_dir,
-                classification.get(field),
-                kind="approved_classification",
-                copied_files=copied_files,
-            )
+        if not reclassification_successor:
+            for field in _CLASSIFICATION_APPROVAL_FIELDS:
+                classification_bindings[field] = _copy_successor_binding(
+                    predecessor_dir,
+                    staging_dir,
+                    classification.get(field),
+                    kind="approved_classification",
+                    copied_files=copied_files,
+                )
         surface_binding = _copy_successor_binding(
             predecessor_dir,
             staging_dir,
@@ -3751,7 +3774,11 @@ def create_successor_campaign(arguments: argparse.Namespace) -> dict[str, Any]:
         )[1]
         classification_path = _stage_path(predecessor_dir, "classify")[1]
         import_receipt: dict[str, Any] = {
-            "schema_version": PREDECESSOR_IMPORT_SCHEMA,
+            "schema_version": (
+                PREDECESSOR_RECLASSIFICATION_IMPORT_SCHEMA
+                if reclassification_successor
+                else PREDECESSOR_IMPORT_SCHEMA
+            ),
             "created_at_utc": _utc_now(),
             "reason": arguments.reason,
             "successor_campaign_id": arguments.campaign_id,
@@ -3794,6 +3821,8 @@ def create_successor_campaign(arguments: argparse.Namespace) -> dict[str, Any]:
             },
             "abandoned_candidate_attempt": abandoned_attempt,
         }
+        if reclassification_successor:
+            import_receipt["import_mode"] = "official_only_reclassification"
         import_receipt["receipt_digest"] = _fingerprint(import_receipt)
         import_path = staging_dir / "predecessor-import.json"
         _secure_write_json_once(import_path, import_receipt)
@@ -3812,22 +3841,23 @@ def create_successor_campaign(arguments: argparse.Namespace) -> dict[str, Any]:
                 "surface": surface_binding,
             },
         )
-        imported_classification = {
-            "status": "complete",
-            "predecessor_import": import_binding,
-            "predecessor_package_digest": classification["package_digest"],
-            **classification_bindings,
-        }
-        for field in (
-            "joint_manifest_sha256",
-            "baseline_rule_count",
-            "target_rule_count",
-            "migration",
-            "source_diff_sha256",
-            "official_diff_sha256",
-        ):
-            imported_classification[field] = classification[field]
-        save_stage_result(staging_dir, "classify", imported_classification)
+        if not reclassification_successor:
+            imported_classification = {
+                "status": "complete",
+                "predecessor_import": import_binding,
+                "predecessor_package_digest": classification["package_digest"],
+                **classification_bindings,
+            }
+            for field in (
+                "joint_manifest_sha256",
+                "baseline_rule_count",
+                "target_rule_count",
+                "migration",
+                "source_diff_sha256",
+                "official_diff_sha256",
+            ):
+                imported_classification[field] = classification[field]
+            save_stage_result(staging_dir, "classify", imported_classification)
 
         if successor_dir.exists():
             raise ConfigurationError("后继 Campaign 目录在发布前已被占用。")
@@ -3846,7 +3876,8 @@ def create_successor_campaign(arguments: argparse.Namespace) -> dict[str, Any]:
         "predecessor_campaign_dir": str(predecessor_dir.resolve()),
         "reason": arguments.reason,
         "official_imported": True,
-        "classification_imported": True,
+        "classification_imported": not reclassification_successor,
+        "classification_reapproval_required": reclassification_successor,
         "official_recapture_required": False,
         "codex_account_id": arguments.codex_account_id,
         "next_command": status["next_command"],
@@ -4285,6 +4316,8 @@ def _successor_copy_expectations(
     predecessor_manifest: dict[str, Any],
     official: dict[str, Any],
     classification: dict[str, Any],
+    *,
+    include_classification: bool = True,
 ) -> dict[str, dict[str, Any]]:
     """重建后继 Campaign 必须逐字复制的完整文件闭集。"""
 
@@ -4327,8 +4360,9 @@ def _successor_copy_expectations(
         for reference in predecessor_manifest[group_name].values():
             if reference is not None:
                 add(reference, f"plan_{group_name}")
-    for field in _CLASSIFICATION_APPROVAL_FIELDS:
-        add(classification.get(field), "approved_classification")
+    if include_classification:
+        for field in _CLASSIFICATION_APPROVAL_FIELDS:
+            add(classification.get(field), "approved_classification")
     add(
         official.get("surface"),
         "official_surface",
@@ -4409,14 +4443,23 @@ def _validate_predecessor_import_receipt(
         "abandoned_candidate_attempt",
         "receipt_digest",
     }
-    if receipt_schema == PREDECESSOR_IMPORT_SCHEMA:
+    if receipt_schema in {
+        PREDECESSOR_IMPORT_SCHEMA,
+        PREDECESSOR_RECLASSIFICATION_IMPORT_SCHEMA,
+    }:
         expected_receipt_fields.add("configuration_transition")
+    if receipt_schema == PREDECESSOR_RECLASSIFICATION_IMPORT_SCHEMA:
+        expected_receipt_fields.add("import_mode")
     unsigned_receipt = dict(receipt)
     receipt_digest = unsigned_receipt.pop("receipt_digest", None)
     if (
         set(receipt) != expected_receipt_fields
         or receipt_schema
-        not in {PREDECESSOR_IMPORT_SCHEMA_V1, PREDECESSOR_IMPORT_SCHEMA}
+        not in {
+            PREDECESSOR_IMPORT_SCHEMA_V1,
+            PREDECESSOR_IMPORT_SCHEMA,
+            PREDECESSOR_RECLASSIFICATION_IMPORT_SCHEMA,
+        }
         or not _is_rfc3339_timestamp(receipt.get("created_at_utc"))
         or receipt.get("reason") not in SUCCESSOR_REASONS
         or receipt.get("successor_campaign_id") != manifest["campaign_id"]
@@ -4426,6 +4469,19 @@ def _validate_predecessor_import_receipt(
         or _fingerprint(unsigned_receipt) != receipt_digest
     ):
         raise ConfigurationError("前序导入收据身份、时间或摘要非法。")
+    reclassification_import = (
+        receipt_schema == PREDECESSOR_RECLASSIFICATION_IMPORT_SCHEMA
+    )
+    if reclassification_import:
+        if (
+            receipt.get("reason") not in RECLASSIFICATION_SUCCESSOR_REASONS
+            or receipt.get("import_mode")
+            != "official_only_reclassification"
+            or canonical != "capture-official"
+        ):
+            raise ConfigurationError("分类纠正后继的导入模式或阶段边界非法。")
+    elif receipt.get("reason") in RECLASSIFICATION_SUCCESSOR_REASONS:
+        raise ConfigurationError("分类纠正后继必须使用 official-only v3 收据。")
 
     manifest_predecessor = manifest.get("predecessor")
     predecessor_binding = receipt.get("predecessor_campaign")
@@ -4583,6 +4639,7 @@ def _validate_predecessor_import_receipt(
         predecessor_manifest,
         predecessor_official,
         predecessor_classification,
+        include_classification=not reclassification_import,
     )
     copied_index: dict[str, dict[str, Any]] = {}
     for row in copied:

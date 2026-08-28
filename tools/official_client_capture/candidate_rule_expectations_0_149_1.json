@@ -2,7 +2,7 @@
   "schema_version": "codex-candidate-rule-expectations/v1",
   "codex_version": "0.149.1",
   "source_spec": "docs/CODEX_CLI_0_149_1_CANDIDATE_RULE_PROFILE.md#第二章",
-  "source_spec_sha256": "f70482d5ded3f7a876e6fadbbf2a55743ae8dfa6294f7bc5cc0c60382313bfb0",
+  "source_spec_sha256": "b5e2d14766991dcb727c6e2e1c7419d494794aa1f4837eada0b72a6f9391079b",
   "scenarios": [
     {
       "description": "默认系统 CA 的 HTTP ClientHello 与 models 请求",
@@ -682,8 +682,8 @@
               "x-codex-beta-features",
               "x-codex-window-id",
               "x-codex-turn-metadata",
-              "x-codex-routing-hint",
               "x-openai-internal-codex-responses-lite",
+              "x-codex-routing-hint",
               "x-client-request-id",
               "session-id",
               "thread-id",
@@ -694,7 +694,6 @@
               "chatgpt-account-id",
               "originator",
               "user-agent",
-              "cookie",
               "host",
               "content-length"
             ]

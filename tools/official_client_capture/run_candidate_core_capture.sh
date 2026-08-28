@@ -1004,11 +1004,12 @@ run_response_ws_session() {
     3< <(printf '%s' "$api_key")
 }
 
-# A03：先用非 Lite zstd prime 建立冷 Cookie jar，再抓默认非 Lite 样本；
-# 随后执行两轮 Lite zstd，由首轮 Lite 响应建立 turn-state 闭环。
+# A03：先用 Lite zstd 冷请求建立 Cookie jar；该请求与官方 Lite 专项的
+# 冷启动前提一致。随后抓默认非 Lite 样本，并用两轮 Lite zstd 建立
+# turn-state 闭环。
 start_capture A03
 trigger_root="$work_dir/scenarios/A03/trigger"
-write_request_body "$trigger_root/prime.json" "$main_model" non_lite a03-cookie-prime
+write_request_body "$trigger_root/prime.json" "$lite_model" lite a03-cookie-prime
 compress_zstd "$trigger_root/prime.json" "$trigger_root/prime.zst"
 run_response_request A03 prime "$trigger_root/prime.zst" \
   "$exec_ua" codex_exec -H 'Content-Encoding: zstd'

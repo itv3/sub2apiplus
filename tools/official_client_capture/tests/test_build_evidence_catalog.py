@@ -555,6 +555,27 @@ class Repository01491DeclarationTest(unittest.TestCase):
         declared = {entry["job_id"] for entry in self.declaration["entries"]}
         self.assertTrue(declared <= known)
 
+    def test_a03_cold_lite_prime_matches_official_default_precondition(self) -> None:
+        entry = next(
+            item
+            for item in self.declaration["entries"]
+            if item["job_id"] == "candidate-frozen-core"
+        )
+        by_glob = {rule["glob"]: rule for rule in entry["rules"]}
+        prime = by_glob[
+            "scenarios/A03/relay/conn002.client_to_upstream.bin"
+        ]
+        later_lite = by_glob[
+            "scenarios/A03/relay/conn004.client_to_upstream.bin"
+        ]
+
+        self.assertEqual(prime["labels"]["mode"], "lite")
+        self.assertEqual(prime["labels"]["track"], "lite")
+        self.assertEqual(prime["labels"]["compression"], "zstd")
+        self.assertEqual(prime["labels"]["variant"], "http_default")
+        self.assertEqual(later_lite["labels"]["mode"], "lite")
+        self.assertNotIn("variant", later_lite["labels"])
+
     def test_http_model_jobs_use_receipt_roles_without_connection_numbers(self) -> None:
         by_job = {entry["job_id"]: entry for entry in self.declaration["entries"]}
         expected_roles = {

@@ -2154,6 +2154,85 @@ class CodexUpgradeTest(unittest.TestCase):
             )
             self.assertFalse((successor_dir / "official" / "attempts").exists())
 
+    def test_reclassification_successor_imports_only_official_stage(self) -> None:
+        """批准事实纠正必须复用官方证据，但不得复制旧批准五件套。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            predecessor_dir, predecessor_manifest, _ = (
+                self._create_classified_campaign(root / "predecessor")
+            )
+            predecessor_official = codex_upgrade._load_stage_result(
+                predecessor_dir, "capture-official"
+            )
+            successor_dir = root / "successor"
+            return_code, stdout, stderr = self._run_main(
+                [
+                    "successor",
+                    "--predecessor-campaign-dir",
+                    str(predecessor_dir),
+                    "--campaign-dir",
+                    str(successor_dir),
+                    "--campaign-id",
+                    "upgrade-0146-reclassification-successor",
+                    "--codex-account-id",
+                    "92",
+                    "--reason",
+                    "classification_fact_correction",
+                ]
+            )
+            self.assertEqual(return_code, 0, stderr)
+            result = json.loads(stdout)
+            self.assertEqual(result["status"], "official_sealed")
+            self.assertFalse(result["official_recapture_required"])
+            self.assertFalse(result["classification_imported"])
+            self.assertTrue(result["classification_reapproval_required"])
+            self.assertEqual(result["codex_account_id"], 92)
+
+            successor_manifest = codex_upgrade.load_campaign_manifest(successor_dir)
+            self.assertEqual(
+                successor_manifest["predecessor"]["campaign_id"],
+                predecessor_manifest["campaign_id"],
+            )
+            self.assertEqual(
+                successor_manifest["configuration"]["codex_account_id"], 92
+            )
+            self.assertFalse((successor_dir / "classification" / "result.json").exists())
+            self.assertFalse((successor_dir / "classification" / "approved").exists())
+
+            import_receipt = json.loads(
+                (successor_dir / "predecessor-import.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(
+                import_receipt["schema_version"],
+                codex_upgrade.PREDECESSOR_RECLASSIFICATION_IMPORT_SCHEMA,
+            )
+            self.assertEqual(
+                import_receipt["import_mode"],
+                "official_only_reclassification",
+            )
+            self.assertFalse(
+                any(
+                    item["kind"] == "approved_classification"
+                    for item in import_receipt["copied_files"]
+                )
+            )
+
+            replayed = codex_upgrade._load_stage_result(
+                successor_dir, "capture-official"
+            )
+            self.assertEqual(
+                replayed["evidence_inventory"],
+                predecessor_official["evidence_inventory"],
+            )
+            self.assertEqual(
+                replayed["security"], predecessor_official["security"]
+            )
+            with self.assertRaises(codex_upgrade.ConfigurationError):
+                codex_upgrade._load_stage_result(successor_dir, "classify")
+
     def test_successor_replays_predecessor_through_compare_and_accept(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -2768,6 +2847,13 @@ class CodexUpgradeTest(unittest.TestCase):
                 if check["id"] == check_id
             )
             self.assertIn("x-codex-routing-hint", check["assertion"]["value"])
+            if (rule_id, check_id) == ("SPEC-H1-004", "responses-order"):
+                header_order = check["assertion"]["value"]
+                self.assertLess(
+                    header_order.index("x-openai-internal-codex-responses-lite"),
+                    header_order.index("x-codex-routing-hint"),
+                )
+                self.assertNotIn("cookie", header_order)
 
     def test_wham_get_paths_保持_0145_原期望(self) -> None:
         """防回归：不得再把 usage 换成 settings/user。"""

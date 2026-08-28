@@ -1,0 +1,217 @@
+{
+  "schema_version": "official-client-codex-0.149.1-r21-classification-fact-correction-transition/v1",
+  "issued_at_utc": "2026-08-28T02:17:29Z",
+  "base_commit": "3825f879b39e5f9aeb3e175d59cfc781b3f25ecf",
+  "scope": "codex-0.149.1-r21-classification-fact-correction",
+  "framework_stage": "VC-3/VC-4/SAME-VERSION-SUCCESSOR",
+  "predecessor_transition": {
+    "path": "docs/egress/maintenance/codex-0.149.1-r20-candidate-aux-transition.json",
+    "file_sha256": "d35fda7dd6a9250286821b5ce96a741ff650ded48a6005a78209008615db3d2d",
+    "identity_sha256": "6b928fec7aebf5424b48b86bda21aa6e1f5fd5429f41c09bb7d5b72b2d370c06"
+  },
+  "classification_fact_correction_contract": {
+    "reason": "classification_fact_correction",
+    "predecessor_import_schema": "codex-upgrade-predecessor-import/v3",
+    "import_mode": "official_only_reclassification",
+    "official_recapture_required": false,
+    "official_evidence_replay_required": true,
+    "approved_classification_imported": false,
+    "classification_reapproval_required": true,
+    "candidate_recapture_required": true,
+    "kilo_revalidation_required": true
+  },
+  "corrected_fact": {
+    "rule_id": "SPEC-H1-004",
+    "transport": "responses_http",
+    "official_evidence": "c1491-r14-f-lite-http-response/relay/conn005.client_to_upstream.bin",
+    "cold_start_cookie_present": false,
+    "lite_header_slot": 60,
+    "routing_hint_slot": 65,
+    "required_order": [
+      "x-codex-turn-metadata",
+      "x-openai-internal-codex-responses-lite",
+      "x-codex-routing-hint",
+      "x-client-request-id"
+    ]
+  },
+  "profile_transition": {
+    "target_version": "0.149.1",
+    "predecessor_profile_digest": "8e59b38e2ad90a1fd4eb7520c2c54f01fc62f802690d45a2cdab5f91f249fb60",
+    "successor_profile_id": "codex-0.149.1-official-r1491-v2",
+    "successor_profile_digest": "8c22d3b18b16d249ac041a97efad1b6703c11ef290622b0b1642679a3c010ec3",
+    "historical_profile_overwritten": false,
+    "catalog_activation_performed": false
+  },
+  "safety": {
+    "historical_artifacts_overwritten": false,
+    "historical_receipts_modified": false,
+    "network_configuration_changed": false,
+    "deployment_performed": false,
+    "production_selector_changed": false,
+    "production_activated": false,
+    "vircs_accessed": false
+  },
+  "path_set_sha256": "86513b9668b0dea011d7d803832bc2e857b4454958ebf1d87bc00de85b92881e",
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/codex_01491_r20_candidate_aux_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "ae01475c48632679d6c2f0e31f8d6e2e77b4d0ca17a16aed94c539e6380742dd"
+      ],
+      "to_sha256": "50c2315c7710c376511da5d33bfe21f2f3af1d019c85d3dbe6bf2523577e5709",
+      "reason": "把 r21 精确后继边接入 Go 侧 r20 校验和传递摘要链。"
+    },
+    {
+      "path": "backend/internal/officialegress/codex_01491_r21_classification_fact_correction_transition_test.go",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "bc9427654eb6b483af8e87010ba26d25536990513bf277e9e31bb960e65235d8",
+      "reason": "新增 Go 侧 r21 身份、分类事实纠正合同、安全边界和文件闭集门禁。"
+    },
+    {
+      "path": "docs/CODEX_CLI_0_149_1_CANDIDATE_RULE_PROFILE.md",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "0973663c92a3abb56593a80ca3a06ae9ed3de7403111098e12b44ae95d068ebe"
+      ],
+      "to_sha256": "978b27a8fe7948e8a6623d4013f7b2034758b748221d6a67c0be0e682f6223fb",
+      "reason": "按官方冷启动 Lite 原始请求和 0.149.1 源码纠正 SPEC-H1-004 头序与 Cookie 条件事实。"
+    },
+    {
+      "path": "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "5a248c4815cd44ac865e16d28814082d1c03d2d314e54e12c37188e972ee5267"
+      ],
+      "to_sha256": "7b4ec62edac95bd6e91b2c085cc48ad65a5cbad7439bf293d957b748e941afa0",
+      "reason": "新增同版本官方阶段只读承接、旧批准不继承和重新分类的操作路径。"
+    },
+    {
+      "path": "docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "4ebd8481d0d8df18cb9da60b5ae5ba4853a009026c8109d19f6060b0bf4a19c9"
+      ],
+      "to_sha256": "216bf9d84aa21a7f1da791eced859e83d5eaca6991ac6c167aa83dbd44416a22",
+      "reason": "明确既有官方证据充分时禁止重复取证并要求新 Campaign 重新批准分类。"
+    },
+    {
+      "path": "tools/official_client_capture/candidate_rule_expectation_overrides_0_149_1.json",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "69dad495d31380267c78f4b786c8e0e4914b90cf007f5b94e26c6cc8ed6f71a6"
+      ],
+      "to_sha256": "e6c81e1e739ea95414fa412dde460430047798f7af182cdd38293de57f2a0dfa",
+      "reason": "纠正 Lite 头先于 routing hint 且冷启动样本不要求 Cookie 的批准覆盖。"
+    },
+    {
+      "path": "tools/official_client_capture/candidate_rule_expectations_0_149_1.json",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "52e01054111a54086a76256832b9a126fa307e261de993573365640f05611b23"
+      ],
+      "to_sha256": "824f481187b788e510d25064cb204bb7ad051ad9f7ecd8119eb082f62ba98ac4",
+      "reason": "同步生成后的 42 条候选规则期望中的 SPEC-H1-004 精确断言。"
+    },
+    {
+      "path": "tools/official_client_capture/codex_upgrade.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "8b1a971f4e898e5e68a970c4269c483faa8f4f861bd65d0e649f84d9434509cf"
+      ],
+      "to_sha256": "97e0f0febd7880773b830c869dcc00e91aaeb03c07e52d4e4354ac0b3297f061",
+      "reason": "新增 v3 official-only reclassification 后继收据和旧批准五件套隔离门禁。"
+    },
+    {
+      "path": "tools/official_client_capture/codex_upgrade_evidence_labels_0_149_1.json",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "8b48ec57d7f4350e99a2a2bf24f061045f031e3a800be0868473bc3c4a30a33e"
+      ],
+      "to_sha256": "685a892e57224a3af3edc5abeb22279ccbb91624ff76972027248070113ef8bd",
+      "reason": "把 A03 冷启动 Lite prime 绑定为 http_default，并隔离后续带 Cookie 的 Lite 轮次。"
+    },
+    {
+      "path": "tools/official_client_capture/codex_upgrade_scenarios_0_149_1.json",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "3eb6a5fe0a2066c4e365330f362186bdd557ebd9594a640985cd26fcd508c0fc"
+      ],
+      "to_sha256": "578753152bf4d86a799df39dc14b3d5ea3c623612cfacc4c43180375538b5df2",
+      "reason": "同步重绑已纠正规则正文第二章的场景清单摘要。"
+    },
+    {
+      "path": "tools/official_client_capture/run_candidate_core_capture.sh",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "21120eda6dcee740b256780baf1d3c491665e20938b4896ec9e34e99aea05cb5"
+      ],
+      "to_sha256": "829e7ef95c35040a84311d38fad220a2d46428ec0af7055c923e02ca2a77d8a4",
+      "reason": "将 A03 prime 改为与官方前置条件一致的 Lite 冷启动请求。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_build_evidence_catalog.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "a0d3ceed229aeb78ae8ac2b428c89c3b4318e4011943c376a937ddb9aa964d30"
+      ],
+      "to_sha256": "124f87834a3a045d7e3419ec9347123ebe5bdb17ef1915cb4b099a8b826e6074",
+      "reason": "冻结 A03 冷启动与后续 Cookie 分支的证据标签边界。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_candidate_core_capture.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "e661352cacfe5f36d52d2657fb1fa87ca387700fc48edbbc1fda68155b5a671c"
+      ],
+      "to_sha256": "2e809a3668412694199addad59344a6209b72785e11ad32f78c88d0cc81f7b9a",
+      "reason": "冻结 A03 先执行 Lite 冷启动再进入 Cookie 重放的脚本时序。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_candidate_gate_successor_transition.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "59e3bfeee6a565cd96d528197716687b7fb24cb327a6fa5a563ee33c7fede86a"
+      ],
+      "to_sha256": "33170592b18675c7d590cb644b15ab6e09e60d57b25960a52047f24fc018e00b",
+      "reason": "把 r21 精确后继边加入 maintenance 摘要图，供历史只读 transition 传递重放。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_r20_candidate_aux_transition.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "b8946d6fdc926d601b64c15c38d7f0ab51f2853af02e45178246e785eafaec90"
+      ],
+      "to_sha256": "fe66be4371f2f1a4eb12e60d366743f4721fae85a61c1a85247b3140f1d92db7",
+      "reason": "把 r21 精确后继边接入 Python 侧 r20 校验和传递摘要链。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_r21_classification_fact_correction_transition.py",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "6682dfbbe495191ee0f5a9a98952cdebb8d95158fb15c7397bf8fdcdab3f834e",
+      "reason": "新增可独立重放的 r21 分类事实纠正 transition 门禁。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_upgrade.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "b00a94ec4102cb7d1119010e9ff8e490c131ccede9bf6977478d7a04b1b215f3"
+      ],
+      "to_sha256": "0811e24cd6a41e88522d5205aa1ea7653dc9ce6be56da8446313388a79bbbf8d",
+      "reason": "覆盖只承接官方阶段、拒绝复制旧批准五件套和重新分类状态机。"
+    },
+    {
+      "path": "tools/spec_ref_anchors_0_149_1.json",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "e83ea5ebd1d40291c31768507188dadfa7c56af9b62d7264d40d662bad4fa006"
+      ],
+      "to_sha256": "d3e783f310e12adfa8d1687d8507578befa141e4309ad55c28fdac6971cede02",
+      "reason": "新增 HTTP Responses 在共享 Lite 头后插入 routing hint 的 0.149.1 源码锚点。"
+    }
+  ],
+  "result": "classification_fact_correction_tooling_frozen",
+  "identity_sha256": "f0a9dbbba4f24b17c1659b493286bdb22391bbc93895cbd63f7388d43850d321"
+}

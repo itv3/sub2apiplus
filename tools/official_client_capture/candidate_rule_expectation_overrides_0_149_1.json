@@ -32,8 +32,8 @@
         "x-codex-beta-features",
         "x-codex-window-id",
         "x-codex-turn-metadata",
-        "x-codex-routing-hint",
         "x-openai-internal-codex-responses-lite",
+        "x-codex-routing-hint",
         "x-client-request-id",
         "session-id",
         "thread-id",
@@ -44,11 +44,10 @@
         "chatgpt-account-id",
         "originator",
         "user-agent",
-        "cookie",
         "host",
         "content-length"
       ],
-      "rationale": "0.149.1 在最终语义 Body 确定后追加可信 OAuth routing hint。"
+      "rationale": "0.149.1 的 HTTP Responses 先在共享 options 中加入 Lite 头，再在最终语义 Body 确定后追加可信 OAuth routing hint；官方冷启动 Lite 原始请求没有 Cookie。"
     },
     {
       "rule_id": "SPEC-WS-002",

@@ -135,9 +135,9 @@ class CandidateCoreCaptureScriptTest(unittest.TestCase):
         self.assertIn("resp_candidate_core_a06_0003", self.source)
         self.assertIn('scenario in {"A03", "A06", "A07"}', self.source)
 
-    def test_a03_primes_cookie_before_two_lite_turns_and_requires_four(self) -> None:
+    def test_a03_uses_cold_lite_prime_before_cookie_replay(self) -> None:
         prime = self.source.index(
-            'write_request_body "$trigger_root/prime.json" "$main_model" non_lite'
+            'write_request_body "$trigger_root/prime.json" "$lite_model" lite'
         )
         default = self.source.index(
             'write_request_body "$trigger_root/default.json" "$main_model" non_lite'

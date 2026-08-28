@@ -215,13 +215,16 @@ images、alpha-search、legacy compact、realtime 和条件 header 等只在各�
 - **范围**：内置 OpenAI OAuth；普通 HTTP。
 - **规则**：用户 header 按 `HeaderMap.entries` 迭代序输出，不按字典序；发生
   `swap_remove` 时也不能把结果简化为原始插入序。0.149.1 的 Responses 中，
-  `x-codex-routing-hint` 位于 `x-codex-turn-metadata` 之后、
-  `x-openai-internal-codex-responses-lite`（若有）与 `x-client-request-id` 之前。
+  `x-openai-internal-codex-responses-lite`（若有）位于 `x-codex-turn-metadata` 之后，
+  `x-codex-routing-hint` 随后追加并位于 `x-client-request-id` 之前。`cookie` 仅在
+  Cookie jar 已建立时出现；冷启动 Lite 样本不强制该头。
 - **源码**：[L2] `tools/spec_source_deps/http-1.4.0/src/header/map.rs:923-928`、
   `tools/spec_source_deps/http-1.4.0/src/header/map.rs:1572-1602`；各端点的构造顺序由
-  L1 `core/src/client.rs:1187-1211`、`core/src/client.rs:1974-1980` 调用链决定。
-- **实测**：`audit-h1raw-20260730a`、`audit-ep014-turnstate-echo-20260730a`（R）
-  验证 models、responses 及条件 turn-state 插槽。
+  L1 `core/src/client.rs:1187-1211`、`core/src/client.rs:1491-1498`、
+  `core/src/client.rs:1974-1980` 调用链决定。
+- **实测**：`c1491-r14-f-lite-http-response/relay/conn005.client_to_upstream.bin`（R）
+  验证冷启动 Lite Responses 的最终原始线序；models 与条件 turn-state 由同 Campaign
+  其他受管样本覆盖。
 - **实现**：逐端点复刻最终线序，不得使用统一字典排序或一份 header 并集。
 - **状态**：✅ 源码充分；抓包充分。
 

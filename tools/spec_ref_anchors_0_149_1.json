@@ -184,6 +184,13 @@
       },
       {
         "path": "core/src/client.rs",
+        "start": 1491,
+        "end": 1498,
+        "context_sha256": "683d1e6d2f4ed2aba49d1760a3025d3f3bc5679eafcccf6e88da7ff09cf7b4b4",
+        "anchor": "if let Some(header_value) = self.client.build_routing_hint_header("
+      },
+      {
+        "path": "core/src/client.rs",
         "start": 1974,
         "end": 1980,
         "context_sha256": "af5ee349e142bbc6a974f48d201eb389b4825eabfb2be9d31b522f04485ffc0a",

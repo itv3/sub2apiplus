@@ -1237,6 +1237,24 @@ python3 tools/official_client_capture/codex_upgrade.py successor \
   --predecessor-attempt-id <old-attempt-id>
 ~~~
 
+若逐规则断言证明旧批准画像或断言与已封存的官方原始字节冲突，而官方 attempt、
+inventory、安全扫描和原始证据本身仍完整，则使用分类事实纠正后继：
+
+~~~bash
+python3 tools/official_client_capture/codex_upgrade.py successor \
+  --predecessor-campaign-dir /absolute/path/to/predecessor \
+  --campaign-dir /absolute/path/to/new-campaign \
+  --campaign-id <new-id> \
+  --codex-account-id <当前可用账号-id> \
+  --reason classification_fact_correction
+~~~
+
+该入口签发 v3 `predecessor-import.json`，只复制计划期 inputs／analysis 和规范化
+official surface；旧分类结果只作为被纠正事实绑定摘要，不复制批准五件套。新 Campaign
+回到 `official_sealed`，必须重新执行 `prepare-profile`、五件套审核和 `classify`。它不会
+重新发送官方 CLI 请求；若原始官方证据缺失必要事实、身份不可信或 evidence 语义本身需要
+改变，则本入口失败关闭，必须建立新的正式官方取证 Campaign。
+
 最后两项可同时省略；提供时必须成对绑定。Codex 账号属于 Candidate 的运行前提，不属于可承接的
 官方／分类事实；每个后继 Campaign 必须通过 `--codex-account-id` 重新显式选择当前可用账号。
 工具只允许这一项运行配置改变，并在 v2 `predecessor-import.json` 中冻结前序值、后继值和原因；
@@ -1246,8 +1264,9 @@ inventory 与安全收据继续位于前序 Campaign，保持只读；后继的 
 每次都从前序路径重放 Campaign manifest、官方 stage seal、证据 inventory／security、批准五件套
 及其联合摘要；多级后继必须递归回到最初官方 attempt 的原始绝对 Campaign 目录校验，禁止把上游
 相对 attempt 路径重新解释到中间后继目录。任一路径、文件摘要、package digest 或原始证据漂移均失败关闭。后继 Campaign
-只能新跑 candidate 与第三方客户端验证；目标版本、官方身份、规则、场景、画像、断言或官方证据
-语义发生变化时不允许使用该入口，必须按版本 Campaign 重新执行相应阶段。
+普通运行时纠正后继只能新跑 candidate 与第三方客户端验证；分类事实纠正后继允许重新批准规则、
+场景、画像和断言，但仍不得改变目标版本、官方身份或已封存官方证据语义。后面三项发生变化时
+必须按版本 Campaign 重新执行相应阶段。
 
 采集、探针、relay、脱敏、收据生成、环境快照和编排等产出侧工具变化会改变证据字节，必须
 新建 Campaign。评估侧工具只有在显式白名单内才允许漂移，并须登记摘要、重放全部受影响门禁；

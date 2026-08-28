@@ -1265,14 +1265,15 @@
           },
           "labels": {
             "transport": "http",
-            "track": "main",
-            "mode": "non_lite",
+            "track": "lite",
+            "mode": "lite",
+            "variant": "http_default",
             "compression": "zstd",
             "body_length": "automatic",
             "session_header_scope": "responses_or_compact",
             "provider": "openai_oauth"
           },
-          "rationale": "驱动序列第 2 个连接是 prime 轮 POST：非 Lite 模型（MAIN_MODEL）、zstd 压缩（脚本显式 -H Content-Encoding: zstd），用于建立冷 cookie jar，故不标 variant（cookie 缺席使其不属于任何官方变体）。"
+          "rationale": "驱动序列第 2 个连接是冷启动 Lite prime 轮 POST：Lite 模型、zstd 压缩、尚未建立 cookie jar，与官方 Lite 专项 responses_request 的前置条件一致，故标记 variant=http_default。"
         },
         {
           "glob": "scenarios/A03/relay/conn003.client_to_upstream.bin",
@@ -1311,13 +1312,12 @@
             "transport": "http",
             "track": "lite",
             "mode": "lite",
-            "variant": "http_default",
             "compression": "zstd",
             "body_length": "automatic",
             "session_header_scope": "responses_or_compact",
             "provider": "openai_oauth"
           },
-          "rationale": "驱动序列第 3 个 POST 是首轮 Lite turn：Lite 模型、zstd、cookie jar 已建立、尚未注入 turn-state，是 A03 场景（precondition use_responses_lite=true）的默认完整 HTTP Responses 形态，故 variant=http_default。若连接顺序漂移，H1-004 的精确头序断言会失败关闭。"
+          "rationale": "驱动序列第 3 个 POST 是后续 Lite turn：Lite 模型、zstd、cookie jar 已建立、尚未注入 turn-state；它保留 Cookie 条件分支证据，但不与官方冷启动 http_default 样本混为同一前置条件。"
         },
         {
           "glob": "scenarios/A03/relay/conn005.client_to_upstream.bin",
