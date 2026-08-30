@@ -444,6 +444,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 
 	usage := &OpenAIUsage{}
 	imageCounter := newOpenAIImageOutputCounter()
+	responseDoneItems := newResponsesStreamOutputItems()
 	var firstTokenMs *int
 	responseID := ""
 	var finalResponse []byte
@@ -667,6 +668,16 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 				}
 			}
 			message = restoreCodexToolNamesFromContext(c, message)
+		}
+		// WS V2 上游可能只在 output_item.done 中给出完整输出，而在
+		// response.completed 中返回空 output。复用 SSE 路径的收集器补齐终态，
+		// 让流式聚合客户端和非流式客户端获得一致的最终响应。
+		responseDoneItems.Observe(message)
+		if isTerminalEvent && responseDoneItems.HasItems() {
+			if normalized, changed := normalizeResponsesStreamingTerminalOutput(message, nil, responseDoneItems, nil); changed {
+				message = normalized
+				_, _, responseField = parseOpenAIWSEventEnvelope(message)
+			}
 		}
 		if openAIWSMessageShouldParseUsage(eventType, message) {
 			parseOpenAIWSResponseUsageFromCompletedEvent(message, usage)

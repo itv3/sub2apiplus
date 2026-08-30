@@ -1,0 +1,51 @@
+{
+  "schema_version": "sub2apiplus-openai-ws-empty-terminal-output-repair-source-transition/v1",
+  "issued_at_utc": "2026-08-30T11:20:00Z",
+  "base_commit": "1f6711a4d8fd5f9627f09cdbee202b507b892c15",
+  "scope": "openai-ws-empty-terminal-output-repair",
+  "predecessor": {
+    "kind": "openai_ws_compatibility_guard_repair_source_transition",
+    "path": "docs/egress/maintenance/openai-ws-compatibility-guard-repair-source-transition.json",
+    "sha256": "34c027bc85f7fc9216c9c865c1cde7077260286e25ace09d5c9d80a725064f32"
+  },
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/codex_01491_terminal_state_test.go",
+      "from_sha256": "5ab22cae59bd1ae783db38fefdeefe6526f55469019ec4bc49cc56ec72c281b0",
+      "to_sha256": "9c887f3d5bf77fe32a7acfcac1c6b60b46f02e5eebe0758fd9badc433811fef2",
+      "reason": "让 officialegress 终态门禁只接受 WS 兼容守卫收据到空终态输出修复的精确后继，并独立验证收据身份、源码摘要与安全边界。"
+    },
+    {
+      "path": "backend/internal/service/codex_01491_terminal_state_test.go",
+      "from_sha256": "53aea197dcb2493cd5f91bd8366e0e7190729fbd5e1496dca089f990bef5cc17",
+      "to_sha256": "07da47741683fcbdd833e73b3eb433f9c568ba5625ef9dfc59eb96718f855b67",
+      "reason": "让 service 终态门禁独立承接相同的精确后继，既有 0.149.1 终态、OOM 修复与 WS 守卫收据原文保持不变。"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_forwarder_v2.go",
+      "from_sha256": "eee97f4ad1b054b3db0481d4e47225abd1dd066079670f8aec66fbe5f874cf68",
+      "to_sha256": "62d2bf763e84c55a0fcd9a1463021fb91c14959fbafd1af9acea80bf578be616",
+      "reason": "收集 response.output_item.done 的完整输出项，并在 response.completed.output 为空时复用现有 SSE 终态规范化逻辑补齐输出。"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_forwarder_v2_test.go",
+      "from_sha256": "419088cdcf39dff8079ac79c3181568e4308f15d9e0918b6f2f0114a94ffb738",
+      "to_sha256": "07342b281486ee76fa5a456e0cefd2165bb43fff2dbe34b703f21b9bf393a816",
+      "reason": "补充流式与非流式回归，证明上游 completed.output 为空时仍从 output_item.done 保留完整 assistant message。"
+    }
+  ],
+  "verification": [
+    "go test ./internal/service -run 'TestForwardOpenAIWSV2_RepairsEmptyTerminalOutputFromDoneItem' -count=1",
+    "go test -race ./internal/service -run 'TestForwardOpenAIWSV2_RepairsEmptyTerminalOutputFromDoneItem' -count=1",
+    "go test ./internal/officialegress ./internal/service -run 'TestCodex01491Terminal(State|ServiceState)IsFrozen|TestOpenAIWSEmptyTerminalOutputRepairSourceTransition(Service)?IsFrozen' -count=1",
+    "EGRESS_SEAL_BASE_REF=origin/main make check-egress-spec-ci"
+  ],
+  "safety": {
+    "live_account_used": false,
+    "online_acceptance_performed": false,
+    "production_config_changed": false,
+    "official_egress_profile_changed": false
+  },
+  "result": "passed_openai_ws_empty_terminal_output_repair",
+  "identity_sha256": "1c6f47befe24490b4e2e617e1f51dc976a97941813f97f792ae8dff84fddc7c5"
+}
