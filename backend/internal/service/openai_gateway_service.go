@@ -478,6 +478,11 @@ type OpenAIGatewayService struct {
 	openaiCookieJars                    sync.Map // key: "accountID:proxyID", value: http.CookieJar
 	openaiCompatSessionResponses        sync.Map
 	openaiCompatAnthropicDigestSessions sync.Map
+	// openaiInvalidEncryptedAccounts 保存已被上游判定无效的加密内容摘要。
+	// 缓存按账号隔离，覆盖 store=false 且没有 previous_response_id 的无状态请求；
+	// 具体容量与过期淘汰由 openai_invalid_encrypted_content_state.go 统一约束。
+	openaiInvalidEncryptedAccountsMu sync.Mutex
+	openaiInvalidEncryptedAccounts   map[int64]openAIInvalidEncryptedAccountBinding
 	// openaiCodexTurnStateOrigins: 下游会话 seed → openAICodexTurnStateOrigin，
 	// 记录最近一次向该会话下发 x-codex-turn-state 的铸造账号，供出站守卫
 	// 剥离跨账号回带（openai_codex_turn_state.go）。

@@ -24,6 +24,19 @@ type openAIWSRejectedFieldRetryError struct {
 	reason string
 }
 
+const openAIWSReplayRestartMessage = "websocket replay history is unavailable; please restart the conversation"
+
+func newOpenAIWSReplayUnavailableCloseError(cause error) error {
+	if cause == nil {
+		cause = errors.New("websocket replay history is unavailable")
+	}
+	return NewOpenAIWSClientCloseError(
+		coderws.StatusPolicyViolation,
+		openAIWSReplayRestartMessage,
+		cause,
+	)
+}
+
 func (e *openAIWSRejectedFieldRetryError) Error() string {
 	if e == nil || strings.TrimSpace(e.reason) == "" {
 		return "retry websocket turn after rejected field normalization"
@@ -660,10 +673,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		// is resolved again for each turn below so an in-connection model switch
 		// cannot reuse another model's upstream cache identity.
 		grokCacheSeedPayload := firstPayload.payloadRaw
-		var bridgeReplayInput []json.RawMessage
-		bridgeReplayInputExists := false
-		var bridgeAccountFailoverInput []json.RawMessage
-		bridgeAccountFailoverInputExists := false
+		replayLimits := s.openAIWSReplayInputLimits()
+		bridgeReplayState := openAIWSReplayInputState{}
+		bridgeAccountFailoverState := openAIWSReplayInputState{}
 		for turn := 1; ; turn++ {
 			if turn > 1 && hooks != nil && hooks.BeforeRequest != nil {
 				if err := hooks.BeforeRequest(turn, currentBridgePayload.payloadRaw, currentBridgePayload.originalModel); err != nil {
@@ -680,28 +692,52 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			toolOutputCoverage := AnalyzeToolCallOutputContextCoverageBytes(currentBridgePayload.payloadRaw)
 			needsBridgeReplay := currentBridgePayload.previousResponseID != "" ||
 				(toolOutputCoverage.HasFunctionCallOutput && !toolOutputCoverage.ContextCoversAllCallIDs)
-			turnReplayInput, turnReplayInputExists, replayInputErr := buildOpenAIWSReplayInputSequence(
-				bridgeReplayInput,
-				bridgeReplayInputExists,
+			currentInputItems, currentInputExists, currentInputErr := openAIWSExtractNormalizedInputSequence(
 				currentBridgePayload.payloadRaw,
+			)
+			if currentInputErr != nil {
+				return fmt.Errorf("extract websocket http bridge replay input: %w", currentInputErr)
+			}
+			turnReplayState, replayInputErr := buildOpenAIWSReplayInputState(
+				bridgeReplayState,
+				currentInputItems,
+				currentInputExists,
 				needsBridgeReplay,
+				replayLimits,
 			)
 			if replayInputErr != nil {
-				return fmt.Errorf("build websocket http bridge replay input: %w", replayInputErr)
+				logOpenAIWSModeInfo(
+					"ingress_ws_replay_input_limit account_id=%d turn=%d mode=http_bridge scope=continuation action=disable_replay cause=%s",
+					account.ID,
+					turn,
+					truncateOpenAIWSLogValue(replayInputErr.Error(), openAIWSLogValueMaxLen),
+				)
 			}
-			turnAccountFailoverInput, turnAccountFailoverInputExists, failoverInputErr := buildOpenAIWSReplayInputSequence(
-				bridgeAccountFailoverInput,
-				bridgeAccountFailoverInputExists,
-				currentBridgePayload.payloadRaw,
+			if needsBridgeReplay && turnReplayState.unavailable {
+				return newOpenAIWSReplayUnavailableCloseError(replayInputErr)
+			}
+			// 两份状态共享不可变的 RawMessage 正文，但使用独立的切片头数组，
+			// 避免后续 append 互相覆盖。
+			failoverCurrentItems := append([]json.RawMessage(nil), currentInputItems...)
+			turnAccountFailoverState, failoverInputErr := buildOpenAIWSReplayInputState(
+				bridgeAccountFailoverState,
+				failoverCurrentItems,
+				currentInputExists,
 				needsBridgeReplay,
+				replayLimits,
 			)
 			if failoverInputErr != nil {
-				return fmt.Errorf("build websocket account failover input: %w", failoverInputErr)
+				logOpenAIWSModeInfo(
+					"ingress_ws_replay_input_limit account_id=%d turn=%d mode=http_bridge scope=account_failover action=disable_replay cause=%s",
+					account.ID,
+					turn,
+					truncateOpenAIWSLogValue(failoverInputErr.Error(), openAIWSLogValueMaxLen),
+				)
 			}
-			if needsBridgeReplay && turnReplayInputExists {
+			if needsBridgeReplay && turnReplayState.exists {
 				updatedPayload, setInputErr := setOpenAIWSPayloadInputSequence(
 					currentBridgePayload.payloadRaw,
-					turnReplayInput,
+					turnReplayState.items,
 					true,
 				)
 				if setInputErr != nil {
@@ -713,7 +749,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					"ingress_ws_http_bridge_replay_input account_id=%d turn=%d input_items=%d previous_response_id_present=%v has_tool_output=%v",
 					account.ID,
 					turn,
-					len(turnReplayInput),
+					len(turnReplayState.items),
 					currentBridgePayload.previousResponseID != "",
 					openAIWSRawPayloadHasToolCallOutput(currentBridgePayload.payloadRaw),
 				)
@@ -757,8 +793,8 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				if turn > 1 && errors.As(bridgeErr, &failoverErr) && failoverErr != nil {
 					retryPayload, retrySafe, retryPayloadErr := buildOpenAIWSCurrentTurnRetryPayload(
 						currentBridgePayload.accountIdentitySourceRaw,
-						turnAccountFailoverInput,
-						turnAccountFailoverInputExists,
+						turnAccountFailoverState.items,
+						turnAccountFailoverState.exists && !turnAccountFailoverState.unavailable,
 						currentBridgePayload.originalModel,
 					)
 					if retryPayloadErr != nil {
@@ -774,20 +810,39 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			if result == nil {
 				return errors.New("websocket http bridge turn result is nil")
 			}
-			bridgeReplayInput = cloneOpenAIWSRawMessages(turnReplayInput)
-			bridgeReplayInputExists = turnReplayInputExists
+			bridgeReplayState = turnReplayState
 			if result.wsReplayInputExists {
-				bridgeReplayInput = append(bridgeReplayInput, cloneOpenAIWSRawMessages(result.wsReplayInput)...)
-				bridgeReplayInputExists = true
-			}
-			bridgeAccountFailoverInput = cloneOpenAIWSRawMessages(turnAccountFailoverInput)
-			bridgeAccountFailoverInputExists = turnAccountFailoverInputExists
-			if len(result.wsAccountFailoverReplayInput) > 0 {
-				bridgeAccountFailoverInput = append(
-					bridgeAccountFailoverInput,
-					cloneOpenAIWSRawMessages(result.wsAccountFailoverReplayInput)...,
+				var appendErr error
+				bridgeReplayState, appendErr = appendOpenAIWSReplayInputState(
+					bridgeReplayState,
+					result.wsReplayInput,
+					replayLimits,
 				)
-				bridgeAccountFailoverInputExists = true
+				if appendErr != nil {
+					logOpenAIWSModeInfo(
+						"ingress_ws_replay_input_limit account_id=%d turn=%d mode=http_bridge scope=response action=disable_replay cause=%s",
+						account.ID,
+						turn,
+						truncateOpenAIWSLogValue(appendErr.Error(), openAIWSLogValueMaxLen),
+					)
+				}
+			}
+			bridgeAccountFailoverState = turnAccountFailoverState
+			if len(result.wsAccountFailoverReplayInput) > 0 {
+				var appendErr error
+				bridgeAccountFailoverState, appendErr = appendOpenAIWSReplayInputState(
+					bridgeAccountFailoverState,
+					result.wsAccountFailoverReplayInput,
+					replayLimits,
+				)
+				if appendErr != nil {
+					logOpenAIWSModeInfo(
+						"ingress_ws_replay_input_limit account_id=%d turn=%d mode=http_bridge scope=account_failover_response action=disable_replay cause=%s",
+						account.ID,
+						turn,
+						truncateOpenAIWSLogValue(appendErr.Error(), openAIWSLogValueMaxLen),
+					)
+				}
 			}
 			if bridgeTurnState := strings.TrimSpace(result.ResponseHeaders.Get(openAIWSTurnStateHeader)); bridgeTurnState != "" {
 				turnState = bridgeTurnState
@@ -1414,16 +1469,17 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	lastTurnResponseID := ""
 	lastTurnPayload := []byte(nil)
 	var lastTurnStrictState *openAIWSIngressPreviousTurnStrictState
-	lastTurnReplayInput := []json.RawMessage(nil)
-	lastTurnReplayInputExists := false
-	currentTurnReplayInput := []json.RawMessage(nil)
-	currentTurnReplayInputExists := false
+	replayLimits := s.openAIWSReplayInputLimits()
+	lastTurnReplayState := openAIWSReplayInputState{}
+	currentTurnReplayState := openAIWSReplayInputState{}
 	skipBeforeTurn := false
 	hasCurrentOrReplayFunctionCallOutput := func(payload []byte) bool {
 		if openAIWSRawPayloadHasToolCallOutput(payload) {
 			return true
 		}
-		return currentTurnReplayInputExists && openAIWSRawItemsHasFunctionCallOutput(currentTurnReplayInput)
+		return !currentTurnReplayState.unavailable &&
+			currentTurnReplayState.exists &&
+			openAIWSRawItemsHasFunctionCallOutput(currentTurnReplayState.items)
 	}
 	resetSessionLease := func(markBroken bool) {
 		if sessionLease == nil {
@@ -1448,6 +1504,15 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		// 上游 API 需要 response chain 来匹配 tool_result 与之前的 tool_use，
 		// 丢弃后会导致 "No tool call found for function call output" 400 错误。
 		if hasCurrentOrReplayFunctionCallOutput(currentPayload) {
+			return false
+		}
+		if currentTurnReplayState.unavailable {
+			logOpenAIWSModeInfo(
+				"ingress_ws_prev_response_recovery_skip account_id=%d turn=%d conn_id=%s reason=replay_unavailable action=restart_conversation",
+				account.ID,
+				turn,
+				truncateOpenAIWSLogValue(connID, openAIWSIDValueMaxLen),
+			)
 			return false
 		}
 		if isStrictAffinityTurn(currentPayload) {
@@ -1479,8 +1544,8 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		}
 		updatedWithInput, setInputErr := setOpenAIWSPayloadInputSequence(
 			updatedPayload,
-			currentTurnReplayInput,
-			currentTurnReplayInputExists,
+			currentTurnReplayState.items,
+			currentTurnReplayState.exists,
 		)
 		if setInputErr != nil {
 			logOpenAIWSModeInfo(
@@ -1597,28 +1662,30 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				)
 			}
 		}
-		nextReplayInput, nextReplayInputExists, replayInputErr := buildOpenAIWSReplayInputSequence(
-			lastTurnReplayInput,
-			lastTurnReplayInputExists,
-			currentPayload,
-			currentPreviousResponseID != "",
-		)
+		currentInputItems, currentInputExists, replayInputErr := openAIWSExtractNormalizedInputSequence(currentPayload)
+		nextReplayState := unavailableOpenAIWSReplayInputState()
+		if replayInputErr == nil {
+			nextReplayState, replayInputErr = buildOpenAIWSReplayInputState(
+				lastTurnReplayState,
+				currentInputItems,
+				currentInputExists,
+				currentPreviousResponseID != "",
+				replayLimits,
+			)
+		}
 		if replayInputErr != nil {
 			logOpenAIWSModeInfo(
-				"ingress_ws_replay_input_skip account_id=%d turn=%d conn_id=%s reason=build_error cause=%s",
+				"ingress_ws_replay_input_skip account_id=%d turn=%d conn_id=%s reason=build_error action=disable_replay cause=%s",
 				account.ID,
 				turn,
 				truncateOpenAIWSLogValue(sessionConnID, openAIWSIDValueMaxLen),
 				truncateOpenAIWSLogValue(replayInputErr.Error(), openAIWSLogValueMaxLen),
 			)
-			currentTurnReplayInput = nil
-			currentTurnReplayInputExists = false
-		} else {
-			currentTurnReplayInput = nextReplayInput
-			currentTurnReplayInputExists = nextReplayInputExists
 		}
-		replayHasFunctionCallOutput := currentTurnReplayInputExists &&
-			openAIWSRawItemsHasFunctionCallOutput(currentTurnReplayInput)
+		currentTurnReplayState = nextReplayState
+		replayHasFunctionCallOutput := !currentTurnReplayState.unavailable &&
+			currentTurnReplayState.exists &&
+			openAIWSRawItemsHasFunctionCallOutput(currentTurnReplayState.items)
 		hasFunctionCallOutput = hasFunctionCallOutput || replayHasFunctionCallOutput
 		if storeDisabled && turn > 1 && currentPreviousResponseID != "" {
 			shouldKeepPreviousResponseID := shouldPreserveOpenAIOfficialEgressWSPreviousResponseID(
@@ -1656,6 +1723,17 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					hasFunctionCallOutput,
 				)
 			} else if !shouldKeepPreviousResponseID {
+				if currentTurnReplayState.unavailable {
+					logOpenAIWSModeInfo(
+						"ingress_ws_prev_response_strict_eval account_id=%d turn=%d conn_id=%s action=restart_conversation reason=replay_unavailable previous_response_id=%s expected_previous_response_id=%s",
+						account.ID,
+						turn,
+						truncateOpenAIWSLogValue(sessionConnID, openAIWSIDValueMaxLen),
+						truncateOpenAIWSLogValue(currentPreviousResponseID, openAIWSIDValueMaxLen),
+						truncateOpenAIWSLogValue(expectedPrev, openAIWSIDValueMaxLen),
+					)
+					return newOpenAIWSReplayUnavailableCloseError(nil)
+				}
 				updatedPayload, removed, dropErr := dropPreviousResponseIDFromRawPayload(currentPayload)
 				if dropErr != nil || !removed {
 					dropReason := "not_removed"
@@ -1676,8 +1754,8 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				} else {
 					updatedWithInput, setInputErr := setOpenAIWSPayloadInputSequence(
 						updatedPayload,
-						currentTurnReplayInput,
-						currentTurnReplayInputExists,
+						currentTurnReplayState.items,
+						currentTurnReplayState.exists,
 					)
 					if setInputErr != nil {
 						logOpenAIWSModeInfo(
@@ -1765,13 +1843,26 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				// 因官方上一轮锚点有效而强行保留旧连接专属的 previous_response_id。
 				hasFCOutput := hasFunctionCallOutput
 				hasReplayToolContext := hasFCOutput &&
-					currentTurnReplayInputExists &&
-					openAIWSRawItemsHaveToolCallContextForOutputs(currentTurnReplayInput)
+					!currentTurnReplayState.unavailable &&
+					currentTurnReplayState.exists &&
+					openAIWSRawItemsHaveToolCallContextForOutputs(currentTurnReplayState.items)
 				preserveOfficialChain := shouldPreserveOpenAIOfficialEgressWSPreviousResponseID(
 					ctx,
 					currentPreviousResponseID,
 					expectedPrev,
 				) && !retireBeforeTurn
+				if !preserveOfficialChain && currentTurnReplayState.unavailable {
+					logOpenAIWSModeInfo(
+						"ingress_ws_preflight_ping_recovery_skip account_id=%d turn=%d conn_id=%s trigger=%s reason=replay_unavailable action=restart_conversation previous_response_id=%s",
+						account.ID,
+						turn,
+						truncateOpenAIWSLogValue(sessionConnID, openAIWSIDValueMaxLen),
+						preflightTrigger,
+						truncateOpenAIWSLogValue(currentPreviousResponseID, openAIWSIDValueMaxLen),
+					)
+					resetSessionLease(true)
+					return newOpenAIWSReplayUnavailableCloseError(preflightErr)
+				}
 				if !preserveOfficialChain &&
 					!turnPrevRecoveryTried &&
 					currentPreviousResponseID != "" &&
@@ -1794,8 +1885,8 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					} else {
 						updatedWithInput, setInputErr := setOpenAIWSPayloadInputSequence(
 							updatedPayload,
-							currentTurnReplayInput,
-							currentTurnReplayInputExists,
+							currentTurnReplayState.items,
+							currentTurnReplayState.exists,
 						)
 						if setInputErr != nil {
 							logOpenAIWSModeInfo(
@@ -2058,13 +2149,27 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		}
 		responseID := strings.TrimSpace(result.RequestID)
 		lastTurnResponseID = responseID
-		lastTurnPayload = cloneOpenAIWSPayloadBytes(outboundPayload)
-		lastTurnReplayInput = cloneOpenAIWSRawMessages(currentTurnReplayInput)
-		lastTurnReplayInputExists = currentTurnReplayInputExists
+		// sendAndRelay 返回后出站正文不再修改，直接转移所有权，避免为完整 input
+		// 再保留一份等大的正文副本。
+		lastTurnPayload = outboundPayload
+		lastTurnReplayState = currentTurnReplayState
 		if result.wsReplayInputExists {
-			lastTurnReplayInput = append(lastTurnReplayInput, cloneOpenAIWSRawMessages(result.wsReplayInput)...)
-			lastTurnReplayInputExists = true
+			var appendErr error
+			lastTurnReplayState, appendErr = appendOpenAIWSReplayInputState(
+				lastTurnReplayState,
+				result.wsReplayInput,
+				replayLimits,
+			)
+			if appendErr != nil {
+				logOpenAIWSModeInfo(
+					"ingress_ws_replay_input_limit account_id=%d turn=%d mode=ctx_pool scope=response action=disable_replay cause=%s",
+					account.ID,
+					turn,
+					truncateOpenAIWSLogValue(appendErr.Error(), openAIWSLogValueMaxLen),
+				)
+			}
 		}
+		currentTurnReplayState = openAIWSReplayInputState{}
 		nextStrictState, strictStateErr := buildOpenAIWSIngressPreviousTurnStrictState(outboundPayload)
 		if strictStateErr != nil {
 			lastTurnStrictState = nil

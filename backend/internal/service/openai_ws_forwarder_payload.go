@@ -448,6 +448,111 @@ func cloneOpenAIWSRawMessages(items []json.RawMessage) []json.RawMessage {
 	return cloned
 }
 
+const (
+	openAIWSReplayInputMaxBytesDefault int64 = 16 * 1024 * 1024
+	openAIWSReplayInputMaxItemsDefault       = 4096
+)
+
+type openAIWSReplayInputLimits struct {
+	maxBytes int64
+	maxItems int
+}
+
+type openAIWSReplayInputState struct {
+	items       []json.RawMessage
+	exists      bool
+	unavailable bool
+	rawBytes    int64
+}
+
+type openAIWSReplayInputLimitError struct {
+	items    int
+	rawBytes int64
+	limits   openAIWSReplayInputLimits
+}
+
+func (e *openAIWSReplayInputLimitError) Error() string {
+	if e == nil {
+		return "websocket replay input exceeds configured limit"
+	}
+	return fmt.Sprintf(
+		"websocket replay input exceeds configured limit: items=%d max_items=%d raw_bytes=%d max_bytes=%d",
+		e.items,
+		e.limits.maxItems,
+		e.rawBytes,
+		e.limits.maxBytes,
+	)
+}
+
+func defaultOpenAIWSReplayInputLimits() openAIWSReplayInputLimits {
+	return openAIWSReplayInputLimits{
+		maxBytes: openAIWSReplayInputMaxBytesDefault,
+		maxItems: openAIWSReplayInputMaxItemsDefault,
+	}
+}
+
+func openAIWSRawMessagesBytes(items []json.RawMessage) int64 {
+	var total int64
+	for _, item := range items {
+		total += int64(len(item))
+	}
+	return total
+}
+
+func newOpenAIWSReplayInputState(items []json.RawMessage, exists bool) openAIWSReplayInputState {
+	return openAIWSReplayInputState{
+		items:    items,
+		exists:   exists,
+		rawBytes: openAIWSRawMessagesBytes(items),
+	}
+}
+
+func unavailableOpenAIWSReplayInputState() openAIWSReplayInputState {
+	return openAIWSReplayInputState{unavailable: true}
+}
+
+func validateOpenAIWSReplayInputState(
+	state openAIWSReplayInputState,
+	limits openAIWSReplayInputLimits,
+) (openAIWSReplayInputState, error) {
+	if state.unavailable {
+		return state, nil
+	}
+	if (limits.maxItems > 0 && len(state.items) > limits.maxItems) ||
+		(limits.maxBytes > 0 && state.rawBytes > limits.maxBytes) {
+		return unavailableOpenAIWSReplayInputState(), &openAIWSReplayInputLimitError{
+			items:    len(state.items),
+			rawBytes: state.rawBytes,
+			limits:   limits,
+		}
+	}
+	return state, nil
+}
+
+func appendOpenAIWSReplayInputState(
+	state openAIWSReplayInputState,
+	items []json.RawMessage,
+	limits openAIWSReplayInputLimits,
+) (openAIWSReplayInputState, error) {
+	if state.unavailable || len(items) == 0 {
+		return state, nil
+	}
+	nextItems := len(state.items) + len(items)
+	nextRawBytes := state.rawBytes + openAIWSRawMessagesBytes(items)
+	if (limits.maxItems > 0 && nextItems > limits.maxItems) ||
+		(limits.maxBytes > 0 && nextRawBytes > limits.maxBytes) {
+		return unavailableOpenAIWSReplayInputState(), &openAIWSReplayInputLimitError{
+			items:    nextItems,
+			rawBytes: nextRawBytes,
+			limits:   limits,
+		}
+	}
+	state.items = append(state.items, items...)
+	state.exists = true
+	state.rawBytes = nextRawBytes
+	return state, nil
+}
+
 func normalizeOpenAIWSJSONForCompare(raw []byte) ([]byte, error) {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 {
@@ -466,6 +571,18 @@ func normalizeOpenAIWSJSONForCompareOrRaw(raw []byte) []byte {
 		return bytes.TrimSpace(raw)
 	}
 	return normalized
+}
+
+func openAIWSRawJSONEqual(left, right []byte) bool {
+	leftTrimmed := bytes.TrimSpace(left)
+	rightTrimmed := bytes.TrimSpace(right)
+	if bytes.Equal(leftTrimmed, rightTrimmed) {
+		return true
+	}
+	return bytes.Equal(
+		normalizeOpenAIWSJSONForCompareOrRaw(leftTrimmed),
+		normalizeOpenAIWSJSONForCompareOrRaw(rightTrimmed),
+	)
 }
 
 func normalizeOpenAIWSPayloadWithoutInputAndPreviousResponseID(payload []byte) ([]byte, error) {
@@ -530,9 +647,7 @@ func openAIWSInputIsPrefixExtended(previousPayload, currentPayload []byte) (bool
 	}
 
 	for idx := range previousItems {
-		previousNormalized := normalizeOpenAIWSJSONForCompareOrRaw(previousItems[idx])
-		currentNormalized := normalizeOpenAIWSJSONForCompareOrRaw(currentItems[idx])
-		if !bytes.Equal(previousNormalized, currentNormalized) {
+		if !openAIWSRawJSONEqual(previousItems[idx], currentItems[idx]) {
 			return false, nil
 		}
 	}
@@ -547,9 +662,7 @@ func openAIWSRawItemsHasPrefix(items []json.RawMessage, prefix []json.RawMessage
 		return false
 	}
 	for idx := range prefix {
-		previousNormalized := normalizeOpenAIWSJSONForCompareOrRaw(prefix[idx])
-		currentNormalized := normalizeOpenAIWSJSONForCompareOrRaw(items[idx])
-		if !bytes.Equal(previousNormalized, currentNormalized) {
+		if !openAIWSRawJSONEqual(prefix[idx], items[idx]) {
 			return false
 		}
 	}
@@ -602,7 +715,7 @@ func sanitizeOpenAIWSHistoricalReplayToolCalls(
 	currentItems []json.RawMessage,
 ) []json.RawMessage {
 	if len(previousItems) == 0 {
-		return cloneOpenAIWSRawMessages(previousItems)
+		return previousItems
 	}
 	outputCallIDs := make(map[string]struct{})
 	collectOutputCallIDs := func(items []json.RawMessage) {
@@ -618,15 +731,24 @@ func sanitizeOpenAIWSHistoricalReplayToolCalls(
 	collectOutputCallIDs(previousItems)
 	collectOutputCallIDs(currentItems)
 
-	sanitized := make([]json.RawMessage, 0, len(previousItems))
-	for _, item := range previousItems {
+	var sanitized []json.RawMessage
+	for idx, item := range previousItems {
 		if isCodexToolCallContextItemType(gjson.GetBytes(item, "type").String()) {
 			callID := strings.TrimSpace(gjson.GetBytes(item, "call_id").String())
 			if _, paired := outputCallIDs[callID]; !paired {
+				if sanitized == nil {
+					sanitized = make([]json.RawMessage, 0, len(previousItems)-1)
+					sanitized = append(sanitized, previousItems[:idx]...)
+				}
 				continue
 			}
 		}
-		sanitized = append(sanitized, append(json.RawMessage(nil), item...))
+		if sanitized != nil {
+			sanitized = append(sanitized, item)
+		}
+	}
+	if sanitized == nil {
+		return previousItems
 	}
 	return sanitized
 }
@@ -663,23 +785,56 @@ func buildOpenAIWSReplayInputSequence(
 	if currentErr != nil {
 		return nil, false, currentErr
 	}
+	state, stateErr := buildOpenAIWSReplayInputState(
+		newOpenAIWSReplayInputState(previousFullInput, previousFullInputExists),
+		currentItems,
+		currentExists,
+		hasPreviousResponseID,
+		defaultOpenAIWSReplayInputLimits(),
+	)
+	return state.items, state.exists, stateErr
+}
+
+func buildOpenAIWSReplayInputState(
+	previous openAIWSReplayInputState,
+	currentItems []json.RawMessage,
+	currentExists bool,
+	hasPreviousResponseID bool,
+	limits openAIWSReplayInputLimits,
+) (openAIWSReplayInputState, error) {
 	if !hasPreviousResponseID {
-		return cloneOpenAIWSRawMessages(currentItems), currentExists, nil
+		return validateOpenAIWSReplayInputState(
+			newOpenAIWSReplayInputState(currentItems, currentExists),
+			limits,
+		)
 	}
-	if !previousFullInputExists {
-		return cloneOpenAIWSRawMessages(currentItems), currentExists, nil
+	if previous.unavailable {
+		return unavailableOpenAIWSReplayInputState(), nil
 	}
-	previousFullInput = sanitizeOpenAIWSHistoricalReplayToolCalls(previousFullInput, currentItems)
+	if !previous.exists {
+		return validateOpenAIWSReplayInputState(
+			newOpenAIWSReplayInputState(currentItems, currentExists),
+			limits,
+		)
+	}
+	previousItems := sanitizeOpenAIWSHistoricalReplayToolCalls(previous.items, currentItems)
 	if !currentExists || len(currentItems) == 0 {
-		return cloneOpenAIWSRawMessages(previousFullInput), true, nil
+		return validateOpenAIWSReplayInputState(
+			newOpenAIWSReplayInputState(previousItems, true),
+			limits,
+		)
 	}
-	if openAIWSRawItemsHasPrefix(currentItems, previousFullInput) {
-		return cloneOpenAIWSRawMessages(currentItems), true, nil
+	if openAIWSRawItemsHasPrefix(currentItems, previousItems) {
+		return validateOpenAIWSReplayInputState(
+			newOpenAIWSReplayInputState(currentItems, true),
+			limits,
+		)
 	}
-	merged := make([]json.RawMessage, 0, len(previousFullInput)+len(currentItems))
-	merged = append(merged, cloneOpenAIWSRawMessages(previousFullInput)...)
-	merged = append(merged, cloneOpenAIWSRawMessages(currentItems)...)
-	return merged, true, nil
+	merged := append(previousItems, currentItems...)
+	return validateOpenAIWSReplayInputState(
+		newOpenAIWSReplayInputState(merged, true),
+		limits,
+	)
 }
 
 func setOpenAIWSPayloadInputSequence(

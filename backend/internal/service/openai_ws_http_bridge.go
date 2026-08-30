@@ -121,6 +121,10 @@ func ResolveOpenAIWSClientReadLimitBytes(cfg *config.Config) int64 {
 	return cfg.Gateway.OpenAIWS.ClientReadLimitBytes
 }
 
+func (s *OpenAIGatewayService) openAIWSReplayInputLimits() openAIWSReplayInputLimits {
+	return defaultOpenAIWSReplayInputLimits()
+}
+
 func (s *OpenAIGatewayService) openAIWSHTTPBridgeEnabled() bool {
 	return s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIWS.HTTPBridgeEnabled
 }
@@ -172,29 +176,27 @@ func (c *openAIWSToolCallReplayCollector) AddEvent(eventType string, message []b
 	switch strings.TrimSpace(eventType) {
 	case "response.output_item.done":
 		item := gjson.GetBytes(message, "item")
-		c.addAllItem(item)
-		c.addItem(item)
+		c.addEventItem(item)
 	case "response.completed", "response.done":
 		output := gjson.GetBytes(message, "response.output")
 		if !output.IsArray() {
 			return
 		}
 		for _, item := range output.Array() {
-			c.addAllItem(item)
-			c.addItem(item)
+			c.addEventItem(item)
 		}
 	}
 }
 
 func (c *openAIWSToolCallReplayCollector) Items() []json.RawMessage {
-	return cloneOpenAIWSRawMessages(c.items)
+	return c.items
 }
 
 func (c *openAIWSToolCallReplayCollector) AllItems() []json.RawMessage {
-	return cloneOpenAIWSRawMessages(c.allItems)
+	return c.allItems
 }
 
-func (c *openAIWSToolCallReplayCollector) addAllItem(item gjson.Result) {
+func (c *openAIWSToolCallReplayCollector) addEventItem(item gjson.Result) {
 	if !item.Exists() || item.Type != gjson.JSON {
 		return
 	}
@@ -209,42 +211,28 @@ func (c *openAIWSToolCallReplayCollector) addAllItem(item gjson.Result) {
 	if key == "" {
 		key = raw
 	}
-	if c.allSeen == nil {
-		c.allSeen = make(map[string]struct{})
-	}
-	if _, ok := c.allSeen[key]; ok {
+	_, allSeen := c.allSeen[key]
+	isContext := isCodexToolCallContextItemType(item.Get("type").String())
+	_, contextSeen := c.seen[key]
+	if allSeen && (!isContext || contextSeen) {
 		return
 	}
-	c.allSeen[key] = struct{}{}
-	c.allItems = append(c.allItems, json.RawMessage(raw))
-}
-
-func (c *openAIWSToolCallReplayCollector) addItem(item gjson.Result) {
-	if !item.Exists() || item.Type != gjson.JSON {
+	rawMessage := json.RawMessage([]byte(raw))
+	if !allSeen {
+		if c.allSeen == nil {
+			c.allSeen = make(map[string]struct{})
+		}
+		c.allSeen[key] = struct{}{}
+		c.allItems = append(c.allItems, rawMessage)
+	}
+	if !isContext || contextSeen {
 		return
-	}
-	raw := strings.TrimSpace(item.Raw)
-	if raw == "" || !strings.HasPrefix(raw, "{") {
-		return
-	}
-	if !isCodexToolCallContextItemType(item.Get("type").String()) {
-		return
-	}
-	key := strings.TrimSpace(item.Get("id").String())
-	if key == "" {
-		key = strings.TrimSpace(item.Get("call_id").String())
-	}
-	if key == "" {
-		key = raw
 	}
 	if c.seen == nil {
 		c.seen = make(map[string]struct{})
 	}
-	if _, ok := c.seen[key]; ok {
-		return
-	}
 	c.seen[key] = struct{}{}
-	c.items = append(c.items, json.RawMessage(raw))
+	c.items = append(c.items, rawMessage)
 }
 
 func buildOpenAIWSHTTPBridgeErrorEvent(statusCode int, message string) []byte {

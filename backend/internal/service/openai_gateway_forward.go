@@ -404,6 +404,24 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		bodyModified = true
 		disablePatch()
 	}
+	invalidEncryptedDigests := map[openAIInvalidEncryptedDigest]struct{}(nil)
+	if account != nil {
+		knownInvalidEncryptedDigests := s.openAIInvalidEncryptedAccountDigests(account.ID)
+		if len(knownInvalidEncryptedDigests) > 0 {
+			decoded, decodeErr := ensureReqBody()
+			if decodeErr != nil {
+				return nil, decodeErr
+			}
+			if trimOpenAIInvalidEncryptedReasoningItems(decoded, knownInvalidEncryptedDigests) {
+				markDecodedModified()
+				logOpenAIWSModeInfo(
+					"invalid_encrypted_content_cache_sanitize account_id=%d invalid_digest_count=%d action=drop_known_invalid_items",
+					account.ID,
+					len(knownInvalidEncryptedDigests),
+				)
+			}
+		}
+	}
 
 	apiKey := getAPIKeyFromContext(c)
 	imageGenerationAllowed := GroupAllowsImageGeneration(nil)
@@ -896,6 +914,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			if wsInvalidEncryptedContentRecoveryTried {
 				return false
 			}
+			newInvalidDigests := collectOpenAIEncryptedReasoningDigests(wsReqBody)
 			removedReasoningItems := trimOpenAIEncryptedReasoningItems(wsReqBody)
 			if !removedReasoningItems {
 				logOpenAIWSModeInfo(
@@ -905,6 +924,10 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				)
 				return false
 			}
+			invalidEncryptedDigests = mergeOpenAIInvalidEncryptedDigests(
+				invalidEncryptedDigests,
+				newInvalidDigests,
+			)
 			previousResponseID := openAIWSPayloadString(wsReqBody, "previous_response_id")
 			hasFunctionCallOutput := HasFunctionCallOutput(wsReqBody)
 			if previousResponseID != "" && !hasFunctionCallOutput {
@@ -1037,6 +1060,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			requestID := ""
 			if wsResult != nil {
 				requestID = strings.TrimSpace(wsResult.RequestID)
+			}
+			if len(invalidEncryptedDigests) > 0 {
+				s.bindOpenAIInvalidEncryptedAccount(account.ID, invalidEncryptedDigests)
 			}
 			logOpenAIWSModeDebug(
 				"forward_succeeded account_id=%d request_id=%s stream=%v has_first_token_ms=%v first_token_ms=%d ws_attempts=%d",
@@ -1352,7 +1378,12 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				if decodeErr != nil {
 					return nil, decodeErr
 				}
+				newInvalidDigests := collectOpenAIEncryptedReasoningDigests(decoded)
 				if trimOpenAIEncryptedReasoningItems(decoded) {
+					invalidEncryptedDigests = mergeOpenAIInvalidEncryptedDigests(
+						invalidEncryptedDigests,
+						newInvalidDigests,
+					)
 					body, err = marshalOfficialJSONObjectPreservingOrderAndRaw(decoded, body)
 					if err != nil {
 						return nil, fmt.Errorf("serialize invalid_encrypted_content retry body: %w", err)
@@ -1558,6 +1589,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		// when search_price_per_1k is configured (nil price → $0 from CalculateSearchCost).
 		if searchCount > 0 && account != nil && account.IsGrok() {
 			forwardResult.SearchCount = searchCount
+		}
+		if len(invalidEncryptedDigests) > 0 {
+			s.bindOpenAIInvalidEncryptedAccount(account.ID, invalidEncryptedDigests)
 		}
 		return forwardResult, nil
 	}

@@ -1,0 +1,105 @@
+{
+  "schema_version": "sub2apiplus-openai-replay-oom-repair-source-transition/v1",
+  "issued_at_utc": "2026-08-30T07:53:26Z",
+  "base_commit": "b7541fbaaed38c1f64ab65b2c12b5e8c561fa5e9",
+  "scope": "openai-replay-oom-repair",
+  "predecessor": {
+    "kind": "codex_01491_terminal_state",
+    "path": "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json",
+    "sha256": "4e068ca39f8c31b8e459d4dfb8b9c365631877d46d671f3df9d9a187fd9ea6fa"
+  },
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/codex_01491_terminal_state_test.go",
+      "from_sha256": "28e27ea00f37d03926a6d59becd04faefc117c051ee774da6008a9ffef926722",
+      "to_sha256": "a3b81880e79d229ef9ecc9e83a66045f6602383101055644016dec1b097a58a3",
+      "reason": "让 officialegress 的 0.149.1 终态门禁只通过本修复收据承接精确后继摘要；历史终态收据、客户端画像和既有 wire 规则保持不可变。"
+    },
+    {
+      "path": "backend/internal/service/codex_01491_terminal_state_test.go",
+      "from_sha256": "e7a8e29143bd17cdb44ff0d2eb70bf0aa898083a2365bda12abace8ff0eabb45",
+      "to_sha256": "355ee6e796cf98ffa45080aaddf59d6c74a36e52b59fd77ffb6cd99744307864",
+      "reason": "让 service 的 0.149.1 终态门禁只通过本修复收据承接精确后继摘要，并独立验证收据自摘要、前序、源码摘要与安全边界。"
+    },
+    {
+      "path": "backend/internal/service/openai_gateway_forward.go",
+      "from_sha256": "9a264e127550ec927b7e45bbc38867971e8b4d591aebf5cf2ff3c88bfe7fbea5",
+      "to_sha256": "8620ec8084f8712c8ab8b7ac52664373b77dd42a14879a9d8c0f32ae1d0e8c97",
+      "reason": "HTTP 与 WebSocket 在上游确认 invalid_encrypted_content 且清洗重试成功后，将失效加密内容摘要绑定到账号；后续无状态请求在首次上行前只删除已确认失效项。"
+    },
+    {
+      "path": "backend/internal/service/openai_gateway_request_body.go",
+      "from_sha256": "c0bf95716c827b24dd3756c41076180672e6a362ce019d0de5da3cc7c110aeaf",
+      "to_sha256": "3e381cf4f90c3f026f266ad5d02b12a295dca44327543da2ed63a9b53e01288e",
+      "reason": "为 encrypted reasoning 清洗增加可选谓词，使账号级缓存命中时只清理摘要匹配项；原有错误恢复路径仍保留全量清洗语义。"
+    },
+    {
+      "path": "backend/internal/service/openai_gateway_service.go",
+      "from_sha256": "fa32c2517da9470c942e59c13dafccc9af473508ce6e5862b10706ad84486aaf",
+      "to_sha256": "2d4e6ca5d3b533c273e685056f727c19419beb8b7457c5c3fd31da2e90539890",
+      "reason": "在网关服务中登记按账号隔离的失效加密摘要缓存及互斥保护；容量、TTL 与淘汰规则由独立状态实现统一约束。"
+    },
+    {
+      "path": "backend/internal/service/openai_gateway_service_hotpath_test.go",
+      "from_sha256": "9739397fbf289f14266a88785eb560046e964bfd10a4460d29874b15cdad0c4f",
+      "to_sha256": "58d8e68094fd4a28536ce2a0ce5c35bd24026b9694de45dd594d5f631f178d65",
+      "reason": "补充 store=false 且没有 previous_response_id 的回归测试，证明第一次错误恢复后，第二次相同请求会在首次上行前清理已确认失效摘要。"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_forwarder_ingress.go",
+      "from_sha256": "18657befcdb0a03193181768abe62b28d07dfae49d10dde4893dea599110a37a",
+      "to_sha256": "6f0e13f1d5e50ab04a4354032c1d5912cbd7581a569d143f3e5343e34ae5c1ef",
+      "reason": "将长连接 replay 改为有界状态并转移不可变正文所有权，超过 16 MiB 或 4096 项后停止累积并要求重启会话，避免无界复制导致 OOM。"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_forwarder_ingress_test.go",
+      "from_sha256": "d3517bec56099791dab84eea4ee92bd14584321883cdcd3316680abf536637b8",
+      "to_sha256": "f910b52f388cfacffe4dab691d1b0bbc6c76944bbf71272dc39d2cb8af1504a0",
+      "reason": "补充 replay 缓冲区复用、容量失效和 128 轮长会话分配上限测试，冻结有界内存行为。"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_forwarder_payload.go",
+      "from_sha256": "0fb897bf6564fcd19485cc125a36b65921f4ca54dcb55d11d267bbb24cbde49d",
+      "to_sha256": "a155daaaa2ae2e4e3744f54bb3bf0bc7751aabbc24c52ef4301b355999274650",
+      "reason": "引入 replay 项数与字节数状态，合并时复用 RawMessage 正文并延迟规范化比较，移除每轮对完整历史的深复制。"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_http_bridge.go",
+      "from_sha256": "0f4525fe51d59ffcd11f4912d6bba4c69b03e46d495139673ebf89d50e5fe9be",
+      "to_sha256": "41c6fca317409420d27da4f5a5e81db1308806f441bab135f0561f624969f849",
+      "reason": "HTTP bridge 的 replay 收集器直接返回只读状态，并在单次事件处理中统一去重，避免 Items 与 AllItems 再次复制完整正文。"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_protocol_forward_test.go",
+      "from_sha256": "4ef89e6717e2716ebfcf2e4930a9b8c8dd5598d25c860bd1f3d02fdcb5342ce1",
+      "to_sha256": "aa7fe1daffe0e74167b04b559a42b6a0ad9aae17603da996f46445796f24a56c",
+      "reason": "扩展 WebSocket invalid_encrypted_content 回归测试，证明同账号只清理已确认失效摘要，同时保留新产生的 encrypted reasoning 内容。"
+    }
+  ],
+  "additions": [
+    {
+      "path": "backend/internal/service/openai_invalid_encrypted_content_state.go",
+      "sha256": "869922263611338e17734d4329a754a1af90ffdcab4fffbc2536c73a6d45988a",
+      "reason": "新增账号级 SHA-256 失效摘要缓存：最多 1024 个账号、每账号 128 个摘要、默认一小时 TTL，并优先保留新确认摘要。"
+    },
+    {
+      "path": "backend/internal/service/openai_invalid_encrypted_content_state_test.go",
+      "sha256": "dc8e0fece2e81e4f583e9fd0e899909df9204e7b6ad3f4ca4655c09084a4cd96",
+      "reason": "验证账号隔离、TTL 过期、账号总量上限、每账号摘要上限及新摘要优先保留。"
+    }
+  ],
+  "verification": [
+    "go test ./internal/service -run 'TestOpenAIInvalidEncryptedAccountCache|TestBuildOpenAIWSReplayInputState|TestOpenAIGatewayService_Forward_(StoreFalseReusesInvalidEncryptedDigest|HTTPRetryRecovery|WSv2InvalidEncryptedContentRecoversOnce)' -count=1",
+    "go test -race ./internal/service -run 'TestOpenAIInvalidEncryptedAccountCache|TestBuildOpenAIWSReplayInputState|TestOpenAIGatewayService_Forward_(StoreFalseReusesInvalidEncryptedDigest|HTTPRetryRecovery|WSv2InvalidEncryptedContentRecoversOnce)' -count=1",
+    "go test ./internal/service -run 'TestCodex01491TerminalServiceStateIsFrozen|TestOpenAIReplayOOMRepairSourceTransitionServiceIsFrozen|TestUpstreamV0180SourceTransitionIsFrozen' -count=1",
+    "make check-egress-spec"
+  ],
+  "safety": {
+    "live_account_used": false,
+    "online_acceptance_performed": false,
+    "production_config_changed": false,
+    "official_egress_profile_changed": false
+  },
+  "result": "passed_openai_replay_oom_repair",
+  "identity_sha256": "6d04274f17d61c6bf658d9abf13c1d44045b9033f52176a3540b5b795eb1feb9"
+}

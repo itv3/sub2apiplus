@@ -74,6 +74,10 @@ func normalizeDeepSeekResponsesRequestBody(account *Account, body []byte) []byte
 }
 
 func trimOpenAIEncryptedReasoningItems(reqBody map[string]any) bool {
+	return trimOpenAIEncryptedReasoningItemsIf(reqBody, nil)
+}
+
+func trimOpenAIEncryptedReasoningItemsIf(reqBody map[string]any, shouldTrim func(any) bool) bool {
 	if len(reqBody) == 0 {
 		return false
 	}
@@ -88,6 +92,10 @@ func trimOpenAIEncryptedReasoningItems(reqBody map[string]any) bool {
 		filtered := input[:0]
 		changed := false
 		for _, item := range input {
+			if shouldTrim != nil && !shouldTrim(item) {
+				filtered = append(filtered, item)
+				continue
+			}
 			nextItem, itemChanged, keep := sanitizeEncryptedReasoningInputItem(item)
 			if itemChanged {
 				changed = true
@@ -110,6 +118,10 @@ func trimOpenAIEncryptedReasoningItems(reqBody map[string]any) bool {
 		filtered := input[:0]
 		changed := false
 		for _, item := range input {
+			if shouldTrim != nil && !shouldTrim(item) {
+				filtered = append(filtered, item)
+				continue
+			}
 			nextItem, itemChanged, keep := sanitizeEncryptedReasoningInputItem(item)
 			if itemChanged {
 				changed = true
@@ -134,6 +146,9 @@ func trimOpenAIEncryptedReasoningItems(reqBody map[string]any) bool {
 		reqBody["input"] = filtered
 		return true
 	case map[string]any:
+		if shouldTrim != nil && !shouldTrim(input) {
+			return false
+		}
 		nextItem, changed, keep := sanitizeEncryptedReasoningInputItem(input)
 		if !changed {
 			return false

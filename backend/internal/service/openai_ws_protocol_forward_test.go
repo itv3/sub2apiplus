@@ -1680,6 +1680,24 @@ func TestOpenAIGatewayService_Forward_WSv2InvalidEncryptedContentRecoversOnce(t 
 	require.False(t, gjson.GetBytes(requests[1], "previous_response_id").Exists(), "恢复重试应移除 previous_response_id")
 	require.False(t, gjson.GetBytes(requests[1], `input.0.encrypted_content`).Exists(), "恢复重试应移除 encrypted reasoning item")
 	require.Equal(t, "input_text", gjson.GetBytes(requests[1], `input.0.type`).String())
+
+	rec2 := httptest.NewRecorder()
+	c2, _ := gin.CreateTestContext(rec2)
+	c2.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
+	c2.Request.Header.Set("User-Agent", "custom-client/1.0")
+	secondBody := []byte(`{"model":"gpt-5.3-codex","stream":false,"previous_response_id":"resp_ws_invalid_encrypted_content_recover_ok","input":[{"type":"reasoning","encrypted_content":"gAAA"},{"type":"reasoning","encrypted_content":"freshAAA"},{"type":"input_text","text":"continue"}]}`)
+	secondResult, secondErr := svc.Forward(context.Background(), c2, account, secondBody)
+	require.NoError(t, secondErr)
+	require.NotNil(t, secondResult)
+	require.Equal(t, int32(3), wsAttempts.Load(), "同一响应链不应再因相同加密内容额外重试")
+
+	wsRequestMu.Lock()
+	requests = append([][]byte(nil), wsRequestPayloads...)
+	wsRequestMu.Unlock()
+	require.Len(t, requests, 3)
+	require.Equal(t, "resp_ws_invalid_encrypted_content_recover_ok", gjson.GetBytes(requests[2], "previous_response_id").String())
+	require.NotContains(t, string(requests[2]), "gAAA", "应在首次上行前清理已知无效的加密内容")
+	require.Contains(t, string(requests[2]), "freshAAA", "不应清理新产生且尚未判定无效的加密内容")
 }
 
 func TestOpenAIGatewayService_Forward_WSv2InvalidEncryptedContentSkipsRecoveryWithoutReasoningItem(t *testing.T) {

@@ -169,8 +169,14 @@ func readCodex01491TerminalState() (codex01491TerminalReceipt, error) {
 		currentRaw, readErr := os.ReadFile(codex01491TerminalRepoPath(transition.Path))
 		switch transition.State {
 		case "present":
+			currentDigest := upstreamMergeFrameworkDigest(currentRaw)
 			if readErr != nil || len(transition.CurrentSHA256) != 64 ||
-				upstreamMergeFrameworkDigest(currentRaw) != transition.CurrentSHA256 {
+				(currentDigest != transition.CurrentSHA256 &&
+					!openAIReplayOOMRepairSupersedes(
+						transition.Path,
+						transition.CurrentSHA256,
+						currentDigest,
+					)) {
 				return receipt, errors.New("0.149.1 终态当前摘要不一致：" + transition.Path)
 			}
 		case "deleted":
@@ -191,13 +197,21 @@ func readCodex01491TerminalState() (codex01491TerminalReceipt, error) {
 // codex01491TerminalStateSupersedes 把已归档的逐轮 transition 压缩为一条精确终边。
 // 只接受收据登记的 path／历史摘要／当前摘要三元组，不放宽生产路径或 wire 规则。
 func codex01491TerminalStateSupersedes(path, priorDigest, currentDigest string) bool {
+	if openAIReplayOOMRepairSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	receipt, err := loadCodex01491TerminalState()
 	if err != nil {
 		return false
 	}
 	for _, transition := range receipt.Transitions {
-		if transition.Path == path && transition.CurrentSHA256 == currentDigest &&
-			slices.Contains(transition.PriorSHA256s, priorDigest) {
+		if transition.Path == path && slices.Contains(transition.PriorSHA256s, priorDigest) &&
+			(transition.CurrentSHA256 == currentDigest ||
+				openAIReplayOOMRepairSupersedes(
+					path,
+					transition.CurrentSHA256,
+					currentDigest,
+				)) {
 			return true
 		}
 	}
@@ -206,6 +220,189 @@ func codex01491TerminalStateSupersedes(path, priorDigest, currentDigest string) 
 
 func TestCodex01491TerminalStateIsFrozen(t *testing.T) {
 	if _, err := loadCodex01491TerminalState(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+const openAIReplayOOMRepairTransitionPath = "docs/egress/maintenance/openai-replay-oom-repair-source-transition.json"
+
+type openAIReplayOOMRepairPredecessor struct {
+	Kind   string `json:"kind"`
+	Path   string `json:"path"`
+	SHA256 string `json:"sha256"`
+}
+
+type openAIReplayOOMRepairTransition struct {
+	Path       string `json:"path"`
+	FromSHA256 string `json:"from_sha256"`
+	ToSHA256   string `json:"to_sha256"`
+	Reason     string `json:"reason"`
+}
+
+type openAIReplayOOMRepairAddition struct {
+	Path   string `json:"path"`
+	SHA256 string `json:"sha256"`
+	Reason string `json:"reason"`
+}
+
+type openAIReplayOOMRepairSafety struct {
+	LiveAccountUsed              bool `json:"live_account_used"`
+	OnlineAcceptancePerformed    bool `json:"online_acceptance_performed"`
+	ProductionConfigChanged      bool `json:"production_config_changed"`
+	OfficialEgressProfileChanged bool `json:"official_egress_profile_changed"`
+}
+
+type openAIReplayOOMRepairReceipt struct {
+	SchemaVersion  string                            `json:"schema_version"`
+	IssuedAtUTC    string                            `json:"issued_at_utc"`
+	BaseCommit     string                            `json:"base_commit"`
+	Scope          string                            `json:"scope"`
+	Predecessor    openAIReplayOOMRepairPredecessor  `json:"predecessor"`
+	Transitions    []openAIReplayOOMRepairTransition `json:"transitions"`
+	Additions      []openAIReplayOOMRepairAddition   `json:"additions"`
+	Verification   []string                          `json:"verification"`
+	Safety         openAIReplayOOMRepairSafety       `json:"safety"`
+	Result         string                            `json:"result"`
+	IdentitySHA256 string                            `json:"identity_sha256"`
+}
+
+var (
+	openAIReplayOOMRepairOnce    sync.Once
+	openAIReplayOOMRepairCached  openAIReplayOOMRepairReceipt
+	openAIReplayOOMRepairLoadErr error
+)
+
+func loadOpenAIReplayOOMRepairTransition() (openAIReplayOOMRepairReceipt, error) {
+	openAIReplayOOMRepairOnce.Do(func() {
+		openAIReplayOOMRepairCached, openAIReplayOOMRepairLoadErr =
+			readOpenAIReplayOOMRepairTransition()
+	})
+	return openAIReplayOOMRepairCached, openAIReplayOOMRepairLoadErr
+}
+
+func readOpenAIReplayOOMRepairTransition() (openAIReplayOOMRepairReceipt, error) {
+	var receipt openAIReplayOOMRepairReceipt
+	raw, err := os.ReadFile(codex01491TerminalRepoPath(openAIReplayOOMRepairTransitionPath))
+	if err != nil {
+		return receipt, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&receipt); err != nil {
+		return receipt, err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return receipt, errors.New("OpenAI replay OOM 修复 transition 尾部存在额外 JSON")
+	}
+	var identityDocument map[string]any
+	if err := json.Unmarshal(raw, &identityDocument); err != nil {
+		return receipt, err
+	}
+	delete(identityDocument, "identity_sha256")
+	canonical, err := json.Marshal(identityDocument)
+	if err != nil {
+		return receipt, err
+	}
+	canonical = append(canonical, '\n')
+	if upstreamMergeFrameworkDigest(canonical) != receipt.IdentitySHA256 {
+		return receipt, errors.New("OpenAI replay OOM 修复 transition 自摘要不一致")
+	}
+	if err := validateOpenAIReplayOOMRepairTransition(receipt); err != nil {
+		return receipt, err
+	}
+	return receipt, nil
+}
+
+func validateOpenAIReplayOOMRepairTransition(receipt openAIReplayOOMRepairReceipt) error {
+	if receipt.SchemaVersion != "sub2apiplus-openai-replay-oom-repair-source-transition/v1" ||
+		receipt.IssuedAtUTC != "2026-08-30T07:53:26Z" ||
+		receipt.BaseCommit != "b7541fbaaed38c1f64ab65b2c12b5e8c561fa5e9" ||
+		receipt.Scope != "openai-replay-oom-repair" ||
+		receipt.Result != "passed_openai_replay_oom_repair" ||
+		len(receipt.Transitions) != 11 || len(receipt.Additions) != 2 {
+		return errors.New("OpenAI replay OOM 修复 transition 顶层事实非法")
+	}
+	if receipt.Predecessor.Kind != "codex_01491_terminal_state" ||
+		receipt.Predecessor.Path != codex01491TerminalStatePath ||
+		receipt.Predecessor.SHA256 != "4e068ca39f8c31b8e459d4dfb8b9c365631877d46d671f3df9d9a187fd9ea6fa" {
+		return errors.New("OpenAI replay OOM 修复 transition 前序非法")
+	}
+	predecessorRaw, err := os.ReadFile(codex01491TerminalRepoPath(receipt.Predecessor.Path))
+	if err != nil || upstreamMergeFrameworkDigest(predecessorRaw) != receipt.Predecessor.SHA256 {
+		return errors.New("OpenAI replay OOM 修复 transition 前序摘要不一致")
+	}
+	expectedVerification := []string{
+		"go test ./internal/service -run 'TestOpenAIInvalidEncryptedAccountCache|TestBuildOpenAIWSReplayInputState|TestOpenAIGatewayService_Forward_(StoreFalseReusesInvalidEncryptedDigest|HTTPRetryRecovery|WSv2InvalidEncryptedContentRecoversOnce)' -count=1",
+		"go test -race ./internal/service -run 'TestOpenAIInvalidEncryptedAccountCache|TestBuildOpenAIWSReplayInputState|TestOpenAIGatewayService_Forward_(StoreFalseReusesInvalidEncryptedDigest|HTTPRetryRecovery|WSv2InvalidEncryptedContentRecoversOnce)' -count=1",
+		"go test ./internal/service -run 'TestCodex01491TerminalServiceStateIsFrozen|TestOpenAIReplayOOMRepairSourceTransitionServiceIsFrozen|TestUpstreamV0180SourceTransitionIsFrozen' -count=1",
+		"make check-egress-spec",
+	}
+	if !slices.Equal(receipt.Verification, expectedVerification) {
+		return errors.New("OpenAI replay OOM 修复 transition 验证集合非法")
+	}
+	if receipt.Safety.LiveAccountUsed || receipt.Safety.OnlineAcceptancePerformed ||
+		receipt.Safety.ProductionConfigChanged || receipt.Safety.OfficialEgressProfileChanged {
+		return errors.New("OpenAI replay OOM 修复 transition 安全边界非法")
+	}
+	transitionPaths := make([]string, 0, len(receipt.Transitions))
+	for _, transition := range receipt.Transitions {
+		if strings.TrimSpace(transition.Path) == "" || !receiptSHA256(transition.FromSHA256) ||
+			!receiptSHA256(transition.ToSHA256) || transition.FromSHA256 == transition.ToSHA256 ||
+			strings.TrimSpace(transition.Reason) == "" {
+			return errors.New("OpenAI replay OOM 修复 transition 条目非法")
+		}
+		current, readErr := os.ReadFile(codex01491TerminalRepoPath(transition.Path))
+		if readErr != nil || upstreamMergeFrameworkDigest(current) != transition.ToSHA256 {
+			return errors.New("OpenAI replay OOM 修复 transition 当前摘要不一致：" + transition.Path)
+		}
+		transitionPaths = append(transitionPaths, transition.Path)
+	}
+	additionPaths := make([]string, 0, len(receipt.Additions))
+	for _, addition := range receipt.Additions {
+		if strings.TrimSpace(addition.Path) == "" || !receiptSHA256(addition.SHA256) ||
+			strings.TrimSpace(addition.Reason) == "" {
+			return errors.New("OpenAI replay OOM 修复 addition 条目非法")
+		}
+		current, readErr := os.ReadFile(codex01491TerminalRepoPath(addition.Path))
+		if readErr != nil || upstreamMergeFrameworkDigest(current) != addition.SHA256 {
+			return errors.New("OpenAI replay OOM 修复 addition 当前摘要不一致：" + addition.Path)
+		}
+		additionPaths = append(additionPaths, addition.Path)
+	}
+	if !slices.IsSorted(transitionPaths) ||
+		len(transitionPaths) != len(slices.Compact(append([]string(nil), transitionPaths...))) ||
+		!slices.IsSorted(additionPaths) ||
+		len(additionPaths) != len(slices.Compact(append([]string(nil), additionPaths...))) {
+		return errors.New("OpenAI replay OOM 修复路径未严格排序")
+	}
+	transitionSet := make(map[string]struct{}, len(transitionPaths))
+	for _, path := range transitionPaths {
+		transitionSet[path] = struct{}{}
+	}
+	for _, path := range additionPaths {
+		if _, exists := transitionSet[path]; exists {
+			return errors.New("OpenAI replay OOM 修复 transition 与 addition 路径重复")
+		}
+	}
+	return nil
+}
+
+func openAIReplayOOMRepairSupersedes(path, priorDigest, currentDigest string) bool {
+	receipt, err := loadOpenAIReplayOOMRepairTransition()
+	if err != nil {
+		return false
+	}
+	for _, transition := range receipt.Transitions {
+		if transition.Path == path && transition.FromSHA256 == priorDigest &&
+			transition.ToSHA256 == currentDigest {
+			return true
+		}
+	}
+	return false
+}
+
+func TestOpenAIReplayOOMRepairSourceTransitionIsFrozen(t *testing.T) {
+	if _, err := loadOpenAIReplayOOMRepairTransition(); err != nil {
 		t.Fatal(err)
 	}
 }

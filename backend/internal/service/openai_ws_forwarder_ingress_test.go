@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strings"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -978,6 +979,120 @@ func TestBuildOpenAIWSReplayInputSequence(t *testing.T) {
 		require.Equal(t, "hello", gjson.GetBytes(items[0], "text").String())
 		require.Equal(t, "world", gjson.GetBytes(items[1], "text").String())
 	})
+}
+
+func TestBuildOpenAIWSReplayInputStateReusesRawMessageBuffers(t *testing.T) {
+	t.Parallel()
+
+	previousItem := json.RawMessage(`{"type":"input_text","text":"hello"}`)
+	previousState := newOpenAIWSReplayInputState([]json.RawMessage{previousItem}, true)
+	currentItems, currentExists, err := openAIWSExtractNormalizedInputSequence(
+		[]byte(`{"input":[{"type":"input_text","text":"world"}]}`),
+	)
+	require.NoError(t, err)
+	require.True(t, currentExists)
+
+	state, err := buildOpenAIWSReplayInputState(
+		previousState,
+		currentItems,
+		currentExists,
+		true,
+		defaultOpenAIWSReplayInputLimits(),
+	)
+	require.NoError(t, err)
+	require.Len(t, state.items, 2)
+	require.True(t, &previousItem[0] == &state.items[0][0])
+	require.True(t, &currentItems[0][0] == &state.items[1][0])
+}
+
+func TestBuildOpenAIWSReplayInputStateLimit(t *testing.T) {
+	t.Parallel()
+
+	limits := openAIWSReplayInputLimits{maxBytes: 1024, maxItems: 2}
+	currentItems, currentExists, err := openAIWSExtractNormalizedInputSequence(
+		[]byte(`{"input":[{"type":"input_text","text":"one"},{"type":"input_text","text":"two"},{"type":"input_text","text":"three"}]}`),
+	)
+	require.NoError(t, err)
+
+	state, err := buildOpenAIWSReplayInputState(
+		openAIWSReplayInputState{},
+		currentItems,
+		currentExists,
+		false,
+		limits,
+	)
+	var limitErr *openAIWSReplayInputLimitError
+	require.ErrorAs(t, err, &limitErr)
+	require.True(t, state.unavailable)
+	require.Nil(t, state.items)
+
+	continued, err := buildOpenAIWSReplayInputState(
+		state,
+		[]json.RawMessage{json.RawMessage(`{"type":"input_text","text":"delta"}`)},
+		true,
+		true,
+		limits,
+	)
+	require.NoError(t, err)
+	require.True(t, continued.unavailable)
+
+	reset, err := buildOpenAIWSReplayInputState(
+		state,
+		[]json.RawMessage{json.RawMessage(`{"type":"input_text","text":"new conversation"}`)},
+		true,
+		false,
+		limits,
+	)
+	require.NoError(t, err)
+	require.False(t, reset.unavailable)
+	require.Len(t, reset.items, 1)
+}
+
+var openAIWSReplayBenchmarkRawBytes int64
+
+func TestBuildOpenAIWSReplayInputStateLongSessionAllocations(t *testing.T) {
+	const (
+		turns     = 128
+		chunkSize = 10 * 1024
+	)
+	payloads := make([][]byte, 0, turns)
+	for turn := 0; turn < turns; turn++ {
+		payload, err := json.Marshal(map[string]any{
+			"input": []any{map[string]any{
+				"type": "input_text",
+				"text": strings.Repeat(string(rune('a'+turn%26)), chunkSize),
+			}},
+		})
+		require.NoError(t, err)
+		payloads = append(payloads, payload)
+	}
+
+	result := testing.Benchmark(func(b *testing.B) {
+		for iteration := 0; iteration < b.N; iteration++ {
+			state := openAIWSReplayInputState{}
+			for turn, payload := range payloads {
+				items, exists, err := openAIWSExtractNormalizedInputSequence(payload)
+				if err != nil {
+					b.Fatal(err)
+				}
+				state, err = buildOpenAIWSReplayInputState(
+					state,
+					items,
+					exists,
+					turn > 0,
+					defaultOpenAIWSReplayInputLimits(),
+				)
+				if err != nil {
+					b.Fatal(err)
+				}
+			}
+			openAIWSReplayBenchmarkRawBytes = state.rawBytes
+		}
+	})
+
+	t.Logf("128 轮、约 1.3 MiB replay 的单次累计分配：%d 字节", result.AllocedBytesPerOp())
+	require.Greater(t, openAIWSReplayBenchmarkRawBytes, int64(1200*1024))
+	require.Less(t, result.AllocedBytesPerOp(), int64(12*1024*1024))
 }
 
 func TestOpenAIWSRawPayloadHasToolCallOutput(t *testing.T) {

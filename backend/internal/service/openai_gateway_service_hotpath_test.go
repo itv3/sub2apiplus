@@ -593,6 +593,66 @@ func TestOpenAIGatewayService_Forward_HTTPRetryRecoveryDoesNotDecodeBeforeError(
 	require.Equal(t, "summary_text", gjson.GetBytes(upstream.bodies[1], "input.0.summary.0.type").String())
 }
 
+func TestOpenAIGatewayService_Forward_StoreFalseReusesInvalidEncryptedDigest(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	upstream := &httpUpstreamRecorder{
+		responses: []*http.Response{
+			{
+				StatusCode: http.StatusBadRequest,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(`{"error":{"code":"invalid_encrypted_content","type":"invalid_request_error","message":"bad encrypted content"}}`)),
+			},
+			{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(`{"usage":{"input_tokens":1,"output_tokens":2}}`)),
+			},
+			{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(`{"usage":{"input_tokens":1,"output_tokens":2}}`)),
+			},
+		},
+	}
+	cfg := &config.Config{}
+	cfg.Security.URLAllowlist.Enabled = false
+	svc := &OpenAIGatewayService{cfg: cfg, httpUpstream: upstream}
+	account := &Account{
+		ID:          1010,
+		Name:        "openai-apikey",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"api_key":  "sk-test",
+			"base_url": "https://example.com",
+		},
+		Extra: map[string]any{"use_responses_api": true},
+	}
+	newContext := func() *gin.Context {
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
+		SetOpenAIClientTransport(c, OpenAIClientTransportHTTP)
+		return c
+	}
+	body := []byte(`{"model":"gpt-5","stream":false,"store":false,"input":[{"type":"reasoning","encrypted_content":"stale-cipher","summary":[{"type":"summary_text","text":"keep me"}]},{"type":"message","content":[{"type":"input_text","text":"hi"}]}]}`)
+
+	firstResult, firstErr := svc.Forward(context.Background(), newContext(), account, body)
+	require.NoError(t, firstErr)
+	require.NotNil(t, firstResult)
+	secondResult, secondErr := svc.Forward(context.Background(), newContext(), account, body)
+	require.NoError(t, secondErr)
+	require.NotNil(t, secondResult)
+
+	// 第一次请求先失败再清洗重试；第二次请求应在首次上行前命中账号级摘要缓存。
+	require.Len(t, upstream.bodies, 3)
+	require.Equal(t, "stale-cipher", gjson.GetBytes(upstream.bodies[0], "input.0.encrypted_content").String())
+	require.False(t, gjson.GetBytes(upstream.bodies[1], `input.#(encrypted_content=="stale-cipher")`).Exists())
+	require.False(t, gjson.GetBytes(upstream.bodies[2], `input.#(encrypted_content=="stale-cipher")`).Exists())
+	require.False(t, gjson.GetBytes(upstream.bodies[2], "previous_response_id").Exists())
+}
+
 func TestOpenAIGatewayService_Forward_HTTPRetryRecoveryDropsCompaction(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	upstream := &httpUpstreamRecorder{
