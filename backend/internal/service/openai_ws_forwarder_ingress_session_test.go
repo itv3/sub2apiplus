@@ -754,7 +754,7 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_OfficialEgressSk
 		"sequence":900719925474099312345,
 		"input":[
 			{"type":"message","role":"developer","content":[{"type":"input_text","text":"developer context"}]},
-			{"type":"message","role":"user","content":[{"type":"input_text","text":"draw a cat"}]}
+			{"type":"message","id":"item_invalid_first","call_id":"non_pair_first","role":"user","content":[{"type":"input_text","text":"draw a cat"}]}
 		]
 	}`))
 	cancelWrite()
@@ -779,7 +779,7 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_OfficialEgressSk
 		"tools":[{"type":"namespace","name":"collaboration","tools":[{"type":"function","name":"spawn_agent"}]}],
 		"input":[
 			{"type":"additional_tools","role":"developer","tools":[{"type":"custom","name":"exec","description":"Execute code-mode tools, including image_gen.imagegen."}]},
-			{"type":"message","role":"user","content":[{"type":"input_text","text":"draw a cat"}]}
+			{"type":"message","id":"item_invalid_followup","call_id":"non_pair_followup","role":"user","content":[{"type":"input_text","text":"draw a cat"}]}
 		],
 		"tool_choice":{"type":"namespace","name":"collaboration"}
 	}`))
@@ -848,6 +848,8 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_OfficialEgressSk
 	require.Equal(t, "all_turns", gjson.Get(nonLitePayload, "reasoning.context").String())
 	require.False(t, gjson.Get(nonLitePayload, "parallel_tool_calls").Bool())
 	require.False(t, gjson.Get(nonLitePayload, "sequence").Exists())
+	require.False(t, gjson.Get(nonLitePayload, `input.#(role=="user").id`).Exists())
+	require.False(t, gjson.Get(nonLitePayload, `input.#(role=="user").call_id`).Exists())
 
 	// 画像仍按官方形态整形请求：顶层 namespace 工具搬入 input.additional_tools。
 	litePayload := requestToJSONString(captureConn.writes[2])
@@ -858,6 +860,8 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_OfficialEgressSk
 	require.Equal(t, "all_turns", gjson.Get(litePayload, "reasoning.context").String())
 	require.True(t, gjson.Get(litePayload, "parallel_tool_calls").Exists())
 	require.False(t, gjson.Get(litePayload, "parallel_tool_calls").Bool())
+	require.False(t, gjson.Get(litePayload, `input.#(role=="user").id`).Exists())
+	require.False(t, gjson.Get(litePayload, `input.#(role=="user").call_id`).Exists())
 
 	// 客户端自带的 image_gen.imagegen function tool 属于业务输入，不受桥接影响。
 	functionPayload := requestToJSONString(captureConn.writes[3])
@@ -1271,7 +1275,7 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughHeade
 		"parallel_tool_calls":true,
 		"client_metadata":{"ws_request_header_x_openai_internal_codex_responses_lite":"true"},
 		"tools":[{"type":"namespace","name":"collaboration","tools":[{"type":"function","name":"spawn_agent"}]}],
-		"input":[{"type":"message","role":"user","content":"hello"}],
+		"input":[{"type":"message","id":"item_invalid_passthrough","call_id":"non_pair_passthrough","role":"user","content":"hello"}],
 		"tool_choice":{"type":"namespace","name":"collaboration"}
 	}`))
 	cancelWrite()
@@ -1345,6 +1349,8 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughHeade
 	require.Equal(t, "turn-state-upstream", gjson.Get(forwarded, "client_metadata.x-codex-turn-state").String())
 	require.True(t, gjson.Get(forwarded, "parallel_tool_calls").Exists())
 	require.False(t, gjson.Get(forwarded, "parallel_tool_calls").Bool())
+	require.False(t, gjson.Get(forwarded, "input.0.id").Exists())
+	require.False(t, gjson.Get(forwarded, "input.0.call_id").Exists())
 }
 
 func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_HTTPBridgeModeRelaysHTTPStream(t *testing.T) {

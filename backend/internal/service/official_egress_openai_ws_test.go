@@ -669,6 +669,129 @@ func TestOpenAIOfficialEgressWSConnectionIdentitySeparatesSessions(t *testing.T)
 	require.NotContains(t, secondKey, "kilo-session")
 }
 
+// TestOpenAIOfficialEgressWSBusinessGuardAcceptsCompatibilityItemMetadataCleanup
+// 复现生产故障：WS 入口兼容层会删除上游不接受的 item.id，以及不参与工具配对的
+// message/reasoning/image_generation_call.call_id。这些都是表示层清理，守卫不得把它
+// 误判为业务历史被篡改并以 1008 关闭连接。
+func TestOpenAIOfficialEgressWSBusinessGuardAcceptsCompatibilityItemMetadataCleanup(t *testing.T) {
+	original := []byte(`{
+		"type":"response.create",
+		"model":"gpt-5.6-luna",
+		"input":[
+			{"type":"message","id":"item_message","call_id":"orphan_message","role":"user","content":[{"type":"input_text","text":"继续"}]},
+			{"type":"reasoning","id":"item_reasoning","call_id":"orphan_reasoning","encrypted_content":"cipher","summary":[]},
+			{"type":"image_generation_call","id":"ig_valid","call_id":"orphan_image","status":"completed"}
+		]
+	}`)
+
+	candidate, changed, err := normalizeOpenAIResponsesWebSocketCompatibilityBody(
+		original,
+		&Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth},
+	)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.False(t, gjson.GetBytes(candidate, "input.0.id").Exists())
+	require.False(t, gjson.GetBytes(candidate, "input.1.id").Exists())
+	for index := 0; index < 3; index++ {
+		require.False(t, gjson.GetBytes(
+			candidate,
+			"input."+strconv.Itoa(index)+".call_id",
+		).Exists())
+	}
+
+	require.NoError(t, validateUnifiedOpenAIWSBusinessContract(
+		original,
+		candidate,
+		"",
+		false,
+	))
+}
+
+func TestOpenAIOfficialEgressWSBusinessGuardRejectsSemanticChanges(t *testing.T) {
+	tests := []struct {
+		name      string
+		original  string
+		candidate string
+		errorText string
+	}{
+		{
+			name:      "合法 item id 变化",
+			original:  `{"type":"response.create","input":[{"type":"message","id":"msg_one","role":"user","content":"hello"}]}`,
+			candidate: `{"type":"response.create","input":[{"type":"message","id":"msg_two","role":"user","content":"hello"}]}`,
+			errorText: "input was modified",
+		},
+		{
+			name: "配对 call_id 变化",
+			original: `{"type":"response.create","input":[
+				{"type":"function_call","id":"fc_one","call_id":"call_one","name":"lookup","arguments":"{}"},
+				{"type":"function_call_output","call_id":"call_one","output":"ok"}
+			]}`,
+			candidate: `{"type":"response.create","input":[
+				{"type":"function_call","id":"fc_one","call_id":"call_two","name":"lookup","arguments":"{}"},
+				{"type":"function_call_output","call_id":"call_two","output":"ok"}
+			]}`,
+			errorText: "input was modified",
+		},
+		{
+			name:      "消息角色变化",
+			original:  `{"type":"response.create","input":[{"type":"message","role":"user","content":"hello"}]}`,
+			candidate: `{"type":"response.create","input":[{"type":"message","role":"developer","content":"hello"}]}`,
+			errorText: "input was modified",
+		},
+		{
+			name:      "消息正文变化",
+			original:  `{"type":"response.create","input":[{"type":"message","role":"user","content":"hello"}]}`,
+			candidate: `{"type":"response.create","input":[{"type":"message","role":"user","content":"changed"}]}`,
+			errorText: "input was modified",
+		},
+		{
+			name:      "工具参数变化",
+			original:  `{"type":"response.create","input":[{"type":"function_call","id":"fc_one","call_id":"call_one","name":"lookup","arguments":"{\"q\":\"one\"}"}]}`,
+			candidate: `{"type":"response.create","input":[{"type":"function_call","id":"fc_one","call_id":"call_one","name":"lookup","arguments":"{\"q\":\"two\"}"}]}`,
+			errorText: "input was modified",
+		},
+		{
+			name:      "续链变化",
+			original:  `{"type":"response.create","previous_response_id":"resp_one","input":[]}`,
+			candidate: `{"type":"response.create","previous_response_id":"resp_two","input":[]}`,
+			errorText: "previous_response_id was modified",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateUnifiedOpenAIWSBusinessContract(
+				[]byte(tt.original),
+				[]byte(tt.candidate),
+				"",
+				false,
+			)
+			require.ErrorContains(t, err, tt.errorText)
+		})
+	}
+}
+
+func TestOpenAIOfficialEgressWSBusinessGuardRejectsOrphanToolOutputCleanup(t *testing.T) {
+	original := []byte(`{
+		"type":"response.create",
+		"model":"gpt-5.6-luna",
+		"input":[{"type":"function_call_output","call_id":"call_missing","output":"must not disappear"}]
+	}`)
+	candidate, changed, err := normalizeOpenAIResponsesWebSocketCompatibilityBody(
+		original,
+		&Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth},
+	)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.Empty(t, gjson.GetBytes(candidate, "input").Array())
+	require.ErrorContains(t, validateUnifiedOpenAIWSBusinessContract(
+		original,
+		candidate,
+		"",
+		false,
+	), "input was modified")
+}
+
 func TestOpenAIOfficialEgressWSFramePreservesValidContinuation(t *testing.T) {
 	ctx, _, _, _ := newOfficialOpenAIWSContextForTest(t)
 	previousResponseID := "resp_valid_previous"

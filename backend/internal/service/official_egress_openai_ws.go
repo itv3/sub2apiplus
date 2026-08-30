@@ -679,8 +679,9 @@ func validateUnifiedOpenAIWSBusinessContract(
 }
 
 // canonicalOfficialOpenAIWSBusinessHistory 把允许变化的表示层字段剥离后再比较。
-// additional_tools 与逐项 turn metadata 都由画像/适配器合法重建；消息、工具调用、
-// 工具输出及其业务参数仍必须保持一致。
+// additional_tools、逐项 turn metadata，以及兼容层按既有规则删除的非法 item.id
+// 与非配对 call_id 都不承载业务语义；消息、工具调用、工具输出及其业务参数仍必须
+// 保持一致。
 func canonicalOfficialOpenAIWSBusinessHistory(payload map[string]any) ([]byte, error) {
 	cloned := cloneOfficialOpenAIMap(payload)
 	if _, err := normalizeDerivedOfficialOpenAIInput(cloned); err != nil {
@@ -699,7 +700,16 @@ func canonicalOfficialOpenAIWSBusinessHistory(payload map[string]any) ([]byte, e
 		}
 		itemClone := cloneOfficialOpenAIMap(item)
 		delete(itemClone, officialOpenAIWSItemTurnMetadata)
-		if officialOpenAIString(itemClone, "type") == "message" {
+		itemType := strings.TrimSpace(officialOpenAIString(itemClone, "type"))
+		if itemID, ok := itemClone["id"].(string); ok &&
+			shouldStripOpenAIResponsesInputItemID(itemType, itemID) {
+			delete(itemClone, "id")
+		}
+		if _, exists := itemClone["call_id"]; exists &&
+			shouldStripOpenAIResponsesNonPairCallID(itemType) {
+			delete(itemClone, "call_id")
+		}
+		if itemType == "message" {
 			itemClone["content"] = officialOpenAIHTTPMessageContentText(itemClone["content"])
 		}
 		filtered = append(filtered, itemClone)

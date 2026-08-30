@@ -1,0 +1,57 @@
+{
+  "schema_version": "sub2apiplus-openai-ws-compatibility-guard-repair-source-transition/v1",
+  "issued_at_utc": "2026-08-30T08:50:00Z",
+  "base_commit": "d5c1aa1ce7d2808c6ccdfd484672444629d4fd72",
+  "scope": "openai-ws-compatibility-guard-repair",
+  "predecessor": {
+    "kind": "openai_replay_oom_repair_source_transition",
+    "path": "docs/egress/maintenance/openai-replay-oom-repair-source-transition.json",
+    "sha256": "b7ba33123c8a2415c08574f1e8d009b52ad5220c32494a0abffb54c94f2ef62f"
+  },
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/codex_01491_terminal_state_test.go",
+      "from_sha256": "a3b81880e79d229ef9ecc9e83a66045f6602383101055644016dec1b097a58a3",
+      "to_sha256": "5ab22cae59bd1ae783db38fefdeefe6526f55469019ec4bc49cc56ec72c281b0",
+      "reason": "让 officialegress 终态门禁只接受本收据从 OOM 后继摘要到 WS 兼容守卫修复摘要的精确承接；既有终态与 OOM 收据原文保持不变。"
+    },
+    {
+      "path": "backend/internal/service/codex_01491_terminal_state_test.go",
+      "from_sha256": "355ee6e796cf98ffa45080aaddf59d6c74a36e52b59fd77ffb6cd99744307864",
+      "to_sha256": "53aea197dcb2493cd5f91bd8366e0e7190729fbd5e1496dca089f990bef5cc17",
+      "reason": "让 service 终态门禁独立验证本收据的前序、自摘要、源码摘要与安全边界，并只接受登记的精确后继。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_openai_ws.go",
+      "from_sha256": "8ccd28fc1fb21d7d2abcd32914b3ac1c25d5b834cd13904121f4d81225f4d363",
+      "to_sha256": "69f4ae554f120d6d5847d7caf39871062a149789a760b6c175d98556767d64fd",
+      "reason": "WS 业务历史比较两侧仅按现有兼容层规则删除非法 item.id 与不参与工具配对的 call_id，避免合法表示清理被误判为 input 篡改；其他字段仍严格比较。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_openai_ws_test.go",
+      "from_sha256": "ad385312fadcdda6fa6f219e8829c828323d8c3ed80c8c2b7789046ebbc12188",
+      "to_sha256": "6e27091303470cc834c0e2be05263965319d852c809d7d36e7119bdc998c69f7",
+      "reason": "补充真实兼容转换回归和反向安全测试，证明表示层清理可通过，同时合法 item.id、配对 call_id、正文、角色、工具参数、孤立输出删除与续链变化仍被拒绝。"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_forwarder_ingress_session_test.go",
+      "from_sha256": "857b6c70620cc34f9acce725c776dce2ebba3cc5f2afeff070e432e1ebac9444",
+      "to_sha256": "795eddfc5585b4ebf32054239f23f02399f50e413088c0779d93c5c013b25163",
+      "reason": "扩展真实 WS 会话测试，覆盖首帧、后续帧、ctx_pool ingress 与 OAuth passthrough，确认清理后的业务帧成功上行且不触发 1008。"
+    }
+  ],
+  "verification": [
+    "go test ./internal/service -run 'TestOpenAIOfficialEgressWSBusinessGuard|TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_(OfficialEgressSkipsCodexImageBridge|PassthroughHeadersUsePromptCacheAndTurnState)' -count=1",
+    "go test -race ./internal/service -run 'TestOpenAIOfficialEgressWSBusinessGuard|TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_(OfficialEgressSkipsCodexImageBridge|PassthroughHeadersUsePromptCacheAndTurnState)' -count=1",
+    "go test ./internal/service -count=1",
+    "make check-egress-spec"
+  ],
+  "safety": {
+    "live_account_used": false,
+    "online_acceptance_performed": false,
+    "production_config_changed": false,
+    "official_egress_profile_changed": false
+  },
+  "result": "passed_openai_ws_compatibility_guard_repair",
+  "identity_sha256": "81866a240472307f4fe4ea3e379bed97da0aca036b71f8cf2fb491ddb0655ae8"
+}

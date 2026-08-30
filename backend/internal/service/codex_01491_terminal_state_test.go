@@ -64,7 +64,11 @@ func loadCodex01491TerminalServiceState() (codex01491TerminalServiceReceipt, err
 						transition.Path,
 						transition.CurrentSHA256,
 						currentDigest,
-					)) {
+					) && !openAIWSCompatibilityGuardRepairSupersedesService(
+					transition.Path,
+					transition.CurrentSHA256,
+					currentDigest,
+				)) {
 					codex01491TerminalServiceLoadErr = errors.New(
 						"0.149.1 终态当前摘要不一致：" + transition.Path,
 					)
@@ -87,7 +91,8 @@ func loadCodex01491TerminalServiceState() (codex01491TerminalServiceReceipt, err
 }
 
 func codex01491TerminalStateSupersedesService(path, priorDigest, currentDigest string) bool {
-	if openAIReplayOOMRepairSupersedesService(path, priorDigest, currentDigest) {
+	if openAIReplayOOMRepairSupersedesService(path, priorDigest, currentDigest) ||
+		openAIWSCompatibilityGuardRepairSupersedesService(path, priorDigest, currentDigest) {
 		return true
 	}
 	receipt, err := loadCodex01491TerminalServiceState()
@@ -101,7 +106,11 @@ func codex01491TerminalStateSupersedesService(path, priorDigest, currentDigest s
 					path,
 					transition.CurrentSHA256,
 					currentDigest,
-				)) {
+				) || openAIWSCompatibilityGuardRepairSupersedesService(
+				path,
+				transition.CurrentSHA256,
+				currentDigest,
+			)) {
 			return true
 		}
 	}
@@ -268,7 +277,13 @@ func validateOpenAIReplayOOMRepairTransitionService(
 			"../../..",
 			filepath.FromSlash(transition.Path),
 		))
-		if readErr != nil || upstreamMergeFrameworkServiceDigest(current) != transition.ToSHA256 {
+		currentDigest := upstreamMergeFrameworkServiceDigest(current)
+		if readErr != nil || (currentDigest != transition.ToSHA256 &&
+			!openAIWSCompatibilityGuardRepairSupersedesService(
+				transition.Path,
+				transition.ToSHA256,
+				currentDigest,
+			)) {
 			return errors.New("OpenAI replay OOM 修复 transition 当前摘要不一致：" + transition.Path)
 		}
 		transitionPaths = append(transitionPaths, transition.Path)
@@ -327,6 +342,187 @@ func openAIReplayOOMRepairSupersedesService(
 
 func TestOpenAIReplayOOMRepairSourceTransitionServiceIsFrozen(t *testing.T) {
 	if _, err := loadOpenAIReplayOOMRepairTransitionService(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+const openAIWSCompatibilityGuardRepairTransitionServicePath = "docs/egress/maintenance/openai-ws-compatibility-guard-repair-source-transition.json"
+
+type openAIWSCompatibilityGuardRepairReceiptService struct {
+	SchemaVersion  string                                   `json:"schema_version"`
+	IssuedAtUTC    string                                   `json:"issued_at_utc"`
+	BaseCommit     string                                   `json:"base_commit"`
+	Scope          string                                   `json:"scope"`
+	Predecessor    openAIReplayOOMRepairPredecessorService  `json:"predecessor"`
+	Transitions    []openAIReplayOOMRepairTransitionService `json:"transitions"`
+	Verification   []string                                 `json:"verification"`
+	Safety         openAIReplayOOMRepairSafetyService       `json:"safety"`
+	Result         string                                   `json:"result"`
+	IdentitySHA256 string                                   `json:"identity_sha256"`
+}
+
+var (
+	openAIWSCompatibilityGuardRepairServiceOnce    sync.Once
+	openAIWSCompatibilityGuardRepairServiceCached  openAIWSCompatibilityGuardRepairReceiptService
+	openAIWSCompatibilityGuardRepairServiceLoadErr error
+)
+
+func loadOpenAIWSCompatibilityGuardRepairTransitionService() (
+	openAIWSCompatibilityGuardRepairReceiptService,
+	error,
+) {
+	openAIWSCompatibilityGuardRepairServiceOnce.Do(func() {
+		openAIWSCompatibilityGuardRepairServiceCached,
+			openAIWSCompatibilityGuardRepairServiceLoadErr =
+			readOpenAIWSCompatibilityGuardRepairTransitionService()
+	})
+	return openAIWSCompatibilityGuardRepairServiceCached,
+		openAIWSCompatibilityGuardRepairServiceLoadErr
+}
+
+func readOpenAIWSCompatibilityGuardRepairTransitionService() (
+	openAIWSCompatibilityGuardRepairReceiptService,
+	error,
+) {
+	var receipt openAIWSCompatibilityGuardRepairReceiptService
+	raw, err := os.ReadFile(filepath.Join(
+		"../../..",
+		filepath.FromSlash(openAIWSCompatibilityGuardRepairTransitionServicePath),
+	))
+	if err != nil {
+		return receipt, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&receipt); err != nil {
+		return receipt, err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return receipt, errors.New("OpenAI WS 兼容守卫修复 transition 尾部存在额外 JSON")
+	}
+	var identityDocument map[string]any
+	if err := json.Unmarshal(raw, &identityDocument); err != nil {
+		return receipt, err
+	}
+	delete(identityDocument, "identity_sha256")
+	canonical, err := json.Marshal(identityDocument)
+	if err != nil {
+		return receipt, err
+	}
+	canonical = append(canonical, '\n')
+	if upstreamMergeFrameworkServiceDigest(canonical) != receipt.IdentitySHA256 {
+		return receipt, errors.New("OpenAI WS 兼容守卫修复 transition 自摘要不一致")
+	}
+	if err := validateOpenAIWSCompatibilityGuardRepairTransitionService(receipt); err != nil {
+		return receipt, err
+	}
+	return receipt, nil
+}
+
+func validateOpenAIWSCompatibilityGuardRepairTransitionService(
+	receipt openAIWSCompatibilityGuardRepairReceiptService,
+) error {
+	if receipt.SchemaVersion != "sub2apiplus-openai-ws-compatibility-guard-repair-source-transition/v1" ||
+		receipt.IssuedAtUTC != "2026-08-30T08:50:00Z" ||
+		receipt.BaseCommit != "d5c1aa1ce7d2808c6ccdfd484672444629d4fd72" ||
+		receipt.Scope != "openai-ws-compatibility-guard-repair" ||
+		receipt.Result != "passed_openai_ws_compatibility_guard_repair" ||
+		len(receipt.Transitions) != 5 {
+		return errors.New("OpenAI WS 兼容守卫修复 transition 顶层事实非法")
+	}
+	if receipt.Predecessor.Kind != "openai_replay_oom_repair_source_transition" ||
+		receipt.Predecessor.Path != openAIReplayOOMRepairTransitionServicePath ||
+		receipt.Predecessor.SHA256 != "b7ba33123c8a2415c08574f1e8d009b52ad5220c32494a0abffb54c94f2ef62f" {
+		return errors.New("OpenAI WS 兼容守卫修复 transition 前序非法")
+	}
+	predecessorRaw, err := os.ReadFile(filepath.Join(
+		"../../..",
+		filepath.FromSlash(receipt.Predecessor.Path),
+	))
+	if err != nil || upstreamMergeFrameworkServiceDigest(predecessorRaw) != receipt.Predecessor.SHA256 {
+		return errors.New("OpenAI WS 兼容守卫修复 transition 前序摘要不一致")
+	}
+	expectedVerification := []string{
+		"go test ./internal/service -run 'TestOpenAIOfficialEgressWSBusinessGuard|TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_(OfficialEgressSkipsCodexImageBridge|PassthroughHeadersUsePromptCacheAndTurnState)' -count=1",
+		"go test -race ./internal/service -run 'TestOpenAIOfficialEgressWSBusinessGuard|TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_(OfficialEgressSkipsCodexImageBridge|PassthroughHeadersUsePromptCacheAndTurnState)' -count=1",
+		"go test ./internal/service -count=1",
+		"make check-egress-spec",
+	}
+	if !slices.Equal(receipt.Verification, expectedVerification) {
+		return errors.New("OpenAI WS 兼容守卫修复 transition 验证集合非法")
+	}
+	if receipt.Safety.LiveAccountUsed || receipt.Safety.OnlineAcceptancePerformed ||
+		receipt.Safety.ProductionConfigChanged || receipt.Safety.OfficialEgressProfileChanged {
+		return errors.New("OpenAI WS 兼容守卫修复 transition 安全边界非法")
+	}
+	expectedFrom := map[string]string{
+		"backend/internal/officialegress/codex_01491_terminal_state_test.go":   "a3b81880e79d229ef9ecc9e83a66045f6602383101055644016dec1b097a58a3",
+		"backend/internal/service/codex_01491_terminal_state_test.go":          "355ee6e796cf98ffa45080aaddf59d6c74a36e52b59fd77ffb6cd99744307864",
+		"backend/internal/service/official_egress_openai_ws.go":                "8ccd28fc1fb21d7d2abcd32914b3ac1c25d5b834cd13904121f4d81225f4d363",
+		"backend/internal/service/official_egress_openai_ws_test.go":           "ad385312fadcdda6fa6f219e8829c828323d8c3ed80c8c2b7789046ebbc12188",
+		"backend/internal/service/openai_ws_forwarder_ingress_session_test.go": "857b6c70620cc34f9acce725c776dce2ebba3cc5f2afeff070e432e1ebac9444",
+	}
+	paths := make([]string, 0, len(receipt.Transitions))
+	for _, transition := range receipt.Transitions {
+		if expectedFrom[transition.Path] != transition.FromSHA256 ||
+			!validOpenAIReplayOOMRepairServiceSHA(transition.ToSHA256) ||
+			transition.FromSHA256 == transition.ToSHA256 ||
+			strings.TrimSpace(transition.Reason) == "" {
+			return errors.New("OpenAI WS 兼容守卫修复 transition 条目非法")
+		}
+		current, readErr := os.ReadFile(filepath.Join(
+			"../../..",
+			filepath.FromSlash(transition.Path),
+		))
+		if readErr != nil || upstreamMergeFrameworkServiceDigest(current) != transition.ToSHA256 {
+			return errors.New("OpenAI WS 兼容守卫修复 transition 当前摘要不一致：" + transition.Path)
+		}
+		paths = append(paths, transition.Path)
+	}
+	if !slices.IsSorted(paths) ||
+		len(paths) != len(slices.Compact(append([]string(nil), paths...))) ||
+		len(expectedFrom) != len(paths) {
+		return errors.New("OpenAI WS 兼容守卫修复路径未严格排序")
+	}
+	return nil
+}
+
+func openAIWSCompatibilityGuardRepairSupersedesService(
+	path string,
+	priorDigest string,
+	currentDigest string,
+) bool {
+	receipt, err := loadOpenAIWSCompatibilityGuardRepairTransitionService()
+	if err != nil {
+		return false
+	}
+	for _, transition := range receipt.Transitions {
+		if transition.Path == path && transition.FromSHA256 == priorDigest &&
+			transition.ToSHA256 == currentDigest {
+			return true
+		}
+	}
+	// 两个终态验证器已经由 OOM 收据接管；只允许本收据精确承接该中间摘要。
+	predecessor, err := loadOpenAIReplayOOMRepairTransitionService()
+	if err != nil {
+		return false
+	}
+	for _, transition := range receipt.Transitions {
+		if transition.Path != path || transition.ToSHA256 != currentDigest {
+			continue
+		}
+		for _, priorTransition := range predecessor.Transitions {
+			if priorTransition.Path == path && priorTransition.FromSHA256 == priorDigest &&
+				priorTransition.ToSHA256 == transition.FromSHA256 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func TestOpenAIWSCompatibilityGuardRepairSourceTransitionServiceIsFrozen(t *testing.T) {
+	if _, err := loadOpenAIWSCompatibilityGuardRepairTransitionService(); err != nil {
 		t.Fatal(err)
 	}
 }
