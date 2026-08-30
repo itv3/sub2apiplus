@@ -325,10 +325,11 @@ func TestAdvertisedModelMappingForAccount_AntigravityDefaultsOnlyForMissingOrEmp
 		{Platform: PlatformAntigravity, Credentials: map[string]any{"model_mapping": map[string]any{}}},
 	} {
 		mapping := AdvertisedModelMappingForAccount(account)
-		require.Len(t, mapping, len(antigravity.OfficialModelIDs()))
+		require.Len(t, mapping, len(antigravity.OfficialModelIDs())+1)
 		for _, model := range antigravity.OfficialModelIDs() {
 			require.Equal(t, model, mapping[model])
 		}
+		require.Equal(t, "gemini-3.1-flash-image", mapping["gemini-3.1-flash-image"])
 	}
 
 	malformed := &Account{
