@@ -91,6 +91,12 @@ func TestOpenAIGatewayService_OAuthPassthrough_SanitizesNativeToolItemIDs(t *tes
 				"chatgpt_account_id": "chatgpt-account",
 			}
 			account.Extra = map[string]any{"openai_passthrough": true}
+			// 本测试只验证原生工具 Item ID 清理，不验证 Responses Lite 布局。
+			// 显式固定账号模型能力，避免 bundled 快照与异步 /models 刷新竞态改变 input 下标。
+			svc.openaiModelCapabilities.replaceFromManifest(
+				account.ID,
+				[]byte(`{"models":[{"slug":"gpt-5.6-sol","visibility":"list","use_responses_lite":false,"supports_parallel_tool_calls":true}]}`),
+			)
 
 			body := []byte(`{
 		"model":"gpt-5.6-sol",
