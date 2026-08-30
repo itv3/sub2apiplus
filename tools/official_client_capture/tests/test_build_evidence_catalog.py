@@ -1,4 +1,4 @@
-"""ACC-07 编目器必须确定性、不读文件内容、覆盖不全即失败关闭。
+"""ACC-07 编目器必须确定性、标签不由内容反推、覆盖不全即失败关闭。
 
 capture manifest 此前一直由执行者手写，是标签语义错位与覆盖不全的
 根因。编目器把它变成从冻结声明的确定性推导，因此负例必须覆盖：声明缺 job、glob 落空、
@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).parents[1]))
 
 import build_evidence_catalog as catalog  # noqa: E402
 import derive_official_observations as derive  # noqa: E402
+from model_condition_receipts import build_receipt  # noqa: E402
 
 
 DECLARATION = {
@@ -133,6 +134,131 @@ class CatalogBuildTest(CatalogFixture):
         )
 
 
+class ReceiptRoleCatalogTest(unittest.TestCase):
+    """0.149.1 的并发初始化连接必须由成功收据选样，不能硬编码连接号。"""
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory(prefix="acc07-role-")
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name) / "run"
+        relay_root = self.root / "relay"
+        relay_root.mkdir(parents=True)
+        (relay_root / "relay.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": "byte-relay/v1",
+                    "connections": [
+                        {"connection_id": 1},
+                        {"connection_id": 3},
+                        {"connection_id": 11},
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        (relay_root / "conn001.client_to_upstream.bin").write_bytes(
+            b"GET /backend-api/codex/plugins HTTP/1.1\r\nhost: chatgpt.com\r\n\r\n"
+        )
+        (relay_root / "conn003.client_to_upstream.bin").write_bytes(
+            b"GET /backend-api/codex/models?client_version=0.149.1 HTTP/1.1\r\n"
+            b"host: chatgpt.com\r\n\r\n"
+        )
+        models_body = json.dumps(
+            {"models": [{"slug": "gpt-5.4", "use_responses_lite": False}]},
+            separators=(",", ":"),
+        ).encode("utf-8")
+        (relay_root / "conn003.upstream_to_client.bin").write_bytes(
+            b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n"
+            + f"content-length: {len(models_body)}\r\n\r\n".encode("ascii")
+            + models_body
+        )
+        request_body = json.dumps(
+            {"model": "gpt-5.4", "input": []}, separators=(",", ":")
+        ).encode("utf-8")
+        (relay_root / "conn011.client_to_upstream.bin").write_bytes(
+            b"POST /backend-api/codex/responses HTTP/1.1\r\n"
+            b"content-type: application/json\r\n"
+            + f"content-length: {len(request_body)}\r\n\r\n".encode("ascii")
+            + request_body
+        )
+        receipt = build_receipt(
+            root=self.root,
+            job_id="official-relay-http-response",
+            run_id="campaign-http",
+            track="main",
+            expected_model="gpt-5.4",
+            expected_lite=False,
+        )
+        (self.root / "model-condition-receipt.json").write_text(
+            json.dumps(receipt), encoding="utf-8"
+        )
+        self.declaration = {
+            "schema_version": catalog.LABELS_SCHEMA,
+            "codex_version": "0.149.1",
+            "entries": [
+                {
+                    "job_id": "official-relay-http-response",
+                    "side": "official",
+                    "rules": [
+                        {
+                            "glob": "relay/conn*.client_to_upstream.bin",
+                            "receipt_role": "models_request",
+                            "scenario_ids": ["A01"],
+                            "kind": "relay_binary",
+                            "parser": "opaque_bound_source",
+                            "derive": {
+                                "parser": "h1_request_stream",
+                                "kind": "process_trace",
+                            },
+                            "labels": {"transport": "http", "surface": "models"},
+                            "rationale": "models_request 由成功收据绑定。",
+                        },
+                        {
+                            "glob": "relay/conn*.client_to_upstream.bin",
+                            "receipt_role": "responses_request",
+                            "scenario_ids": ["A04"],
+                            "kind": "relay_binary",
+                            "parser": "opaque_bound_source",
+                            "derive": {
+                                "parser": "h1_request_stream",
+                                "kind": "process_trace",
+                            },
+                            "labels": {"transport": "http", "variant": "http_default"},
+                            "rationale": "responses_request 由成功收据绑定。",
+                        },
+                    ],
+                }
+            ],
+        }
+
+    def _build(self) -> dict:
+        return catalog.build_catalog(
+            self.declaration,
+            {"official-relay-http-response": [("official-run", self.root)]},
+            side="official",
+        )
+
+    def test_receipt_roles_select_actual_models_and_responses_connections(self) -> None:
+        result = self._build()
+        targets = {item["target"] for item in result["bundle_plan"]["entries"]}
+        self.assertEqual(
+            targets,
+            {
+                "official-run/relay/conn003.client_to_upstream.bin",
+                "official-run/relay/conn011.client_to_upstream.bin",
+            },
+        )
+        self.assertNotIn(
+            "official-run/relay/conn001.client_to_upstream.bin", targets
+        )
+
+    def test_receipt_bound_bytes_tampering_fails_closed(self) -> None:
+        path = self.root / "relay" / "conn011.client_to_upstream.bin"
+        path.write_bytes(path.read_bytes() + b"tampered")
+        with self.assertRaisesRegex(catalog.EvidenceCatalogError, "摘要不一致"):
+            self._build()
+
+
 class CatalogNegativeTest(CatalogFixture):
     def test_job_without_declaration_fails_closed(self) -> None:
         self.job_roots["official-extra"] = [("extra-run", self.root)]
@@ -177,6 +303,17 @@ class CatalogNegativeTest(CatalogFixture):
             json.loads(json.dumps(self.declaration["entries"][0]))
         )
         with self.assertRaises(catalog.EvidenceCatalogError):
+            catalog.load_label_declaration(self._write_declaration())
+
+    def test_declaration_target_version_mismatch_rejected(self) -> None:
+        with self.assertRaisesRegex(catalog.EvidenceCatalogError, "目标版本"):
+            catalog.load_label_declaration(
+                self._write_declaration(), expected_codex_version="0.149.1"
+            )
+
+    def test_unknown_receipt_role_rejected(self) -> None:
+        self.declaration["entries"][0]["rules"][0]["receipt_role"] = "conn003"
+        with self.assertRaisesRegex(catalog.EvidenceCatalogError, "receipt_role"):
             catalog.load_label_declaration(self._write_declaration())
 
     def _write_declaration(self) -> Path:
@@ -275,7 +412,7 @@ class RepositoryDeclarationTest(unittest.TestCase):
 
         profile_path = (
             Path(__file__).resolve().parents[1]
-            / "candidate_rule_expectations_0_147_0.json"
+            / "candidate_rule_expectations_0_149_1.json"
         )
         profile = json.loads(profile_path.read_text(encoding="utf-8"))
         rule = next(
@@ -396,6 +533,73 @@ class RepositoryDeclarationTest(unittest.TestCase):
                     f"{entry['job_id']} 的 {rule['glob']} 是客户端原始字节面，"
                     "不得标 ca_mode",
                 )
+
+
+class Repository01491DeclarationTest(unittest.TestCase):
+    """0.149.1 必须使用自己的声明，并按收据角色绑定并发请求。"""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.base = Path(__file__).resolve().parents[1]
+        cls.declaration_path = (
+            cls.base / "codex_upgrade_evidence_labels_0_149_1.json"
+        )
+        cls.scenario_path = cls.base / "codex_upgrade_scenarios_0_149_1.json"
+        cls.declaration = catalog.load_label_declaration(
+            cls.declaration_path, expected_codex_version="0.149.1"
+        )
+        cls.scenarios = json.loads(cls.scenario_path.read_text(encoding="utf-8"))
+
+    def test_declared_jobs_exist_in_01491_scenarios(self) -> None:
+        known = {job["id"] for job in self.scenarios["capture_jobs"]}
+        declared = {entry["job_id"] for entry in self.declaration["entries"]}
+        self.assertTrue(declared <= known)
+
+    def test_a03_cold_lite_prime_matches_official_default_precondition(self) -> None:
+        entry = next(
+            item
+            for item in self.declaration["entries"]
+            if item["job_id"] == "candidate-frozen-core"
+        )
+        by_glob = {rule["glob"]: rule for rule in entry["rules"]}
+        prime = by_glob[
+            "scenarios/A03/relay/conn002.client_to_upstream.bin"
+        ]
+        later_lite = by_glob[
+            "scenarios/A03/relay/conn004.client_to_upstream.bin"
+        ]
+
+        self.assertEqual(prime["labels"]["mode"], "lite")
+        self.assertEqual(prime["labels"]["track"], "lite")
+        self.assertEqual(prime["labels"]["compression"], "zstd")
+        self.assertEqual(prime["labels"]["variant"], "http_default")
+        self.assertEqual(later_lite["labels"]["mode"], "lite")
+        self.assertNotIn("variant", later_lite["labels"])
+
+    def test_http_model_jobs_use_receipt_roles_without_connection_numbers(self) -> None:
+        by_job = {entry["job_id"]: entry for entry in self.declaration["entries"]}
+        expected_roles = {
+            "official-relay-http-response": {
+                "models_request",
+                "responses_request",
+            },
+            "official-relay-http-response-plain": {"responses_request"},
+            "official-lite-http-response": {
+                "models_request",
+                "responses_request",
+            },
+        }
+        for job_id, roles in expected_roles.items():
+            rules = by_job[job_id]["rules"]
+            self.assertEqual({rule.get("receipt_role") for rule in rules}, roles)
+            self.assertTrue(
+                all(rule["glob"] == "relay/conn*.client_to_upstream.bin" for rule in rules)
+            )
+
+    def test_01491_declaration_does_not_reference_0145(self) -> None:
+        content = self.declaration_path.read_text(encoding="utf-8")
+        self.assertNotIn("0.145", content)
+        self.assertNotIn("0_145", content)
 
     def test_frame_labels_only_on_websocket_trace_derivation(self) -> None:
         """帧级标签只能挂在能产出 websocket_frame 观测的规则上。"""

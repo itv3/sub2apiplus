@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-seal-preview-v1.json",
+  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-seal-preview-v2.json",
   "title": "Codex 出站抓包 Seal 预览",
   "description": "人工批准前由机器生成的联合事实摘要；批准值必须等于 review_sha256，预览本身不可回写。",
   "type": "object",
@@ -8,8 +8,11 @@
   "required": [
     "schema_version",
     "campaign_id",
+    "campaign_mode",
+    "campaign_purpose",
     "phase",
     "candidate_id",
+    "candidate_purpose",
     "attempt_id",
     "attempt_digest",
     "stage_payload_sha256",
@@ -21,10 +24,16 @@
   ],
   "properties": {
     "schema_version": {
-      "const": "codex-upgrade-seal-preview/v1"
+      "const": "codex-upgrade-seal-preview/v2"
     },
     "campaign_id": {
       "$ref": "#/$defs/safeId"
+    },
+    "campaign_mode": {
+      "const": "formal"
+    },
+    "campaign_purpose": {
+      "$ref": "#/$defs/candidatePurpose"
     },
     "phase": {
       "enum": [
@@ -40,6 +49,12 @@
         {
           "type": "null"
         }
+      ]
+    },
+    "candidate_purpose": {
+      "oneOf": [
+        {"$ref": "#/$defs/candidatePurpose"},
+        {"type": "null"}
       ]
     },
     "attempt_id": {
@@ -106,6 +121,9 @@
         "properties": {
           "candidate_id": {
             "const": null
+          },
+          "candidate_purpose": {
+            "const": null
           }
         },
         "not": {
@@ -159,6 +177,9 @@
           "candidate_id": {
             "$ref": "#/$defs/safeId"
           },
+          "candidate_purpose": {
+            "$ref": "#/$defs/candidatePurpose"
+          },
           "post_client_restoration_sha256": {
             "$ref": "#/$defs/sha256"
           },
@@ -176,6 +197,12 @@
     "safeId": {
       "type": "string",
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "candidatePurpose": {
+      "enum": [
+        "validation_only",
+        "production_replacement"
+      ]
     },
     "sha256": {
       "type": "string",

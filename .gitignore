@@ -207,5 +207,9 @@ output/
 /.vite/
 /backend/-h
 
+# Codex 升级排障产生的根目录逐轮补丁、脚本和临时工作树不进入仓库。
+/.codex-r*
+/.codex-tmp/
+
 # 本地闭源插件开发目录及构建产物不进入 Sub2API 仓库
 /plugins/

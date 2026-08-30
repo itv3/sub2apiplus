@@ -11,7 +11,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -X main.version=
 FROM debian:bookworm-slim
 
 ARG CODEX_RELEASE=latest
-ARG CLAUDE_RELEASE=2.1.210
+ARG CLAUDE_RELEASE=2.1.231
 
 ENV DEBIAN_FRONTEND=noninteractive \
     TZ=Asia/Shanghai \

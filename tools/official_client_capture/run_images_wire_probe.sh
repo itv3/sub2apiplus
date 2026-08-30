@@ -20,6 +20,7 @@ model=${MODEL:-gpt-5.6-luna}
 capture_container=${CAPTURE_CONTAINER:-capture-cli}
 capture_root=${CAPTURE_ROOT:-/root/oauth-capture}
 capture_tool_root=${CAPTURE_TOOL_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)}
+service_port=${SERVICE_PORT:-}
 run_id=${RUN_ID:?必须提供 RUN_ID}
 window_id=$(date -u +%Y%m%dT%H%M%SZ)
 
@@ -40,6 +41,8 @@ probe_started=0
 ca_installed=0
 model_mapping_restore_armed=0
 original_model_mapping_state=""
+group_image_restore_armed=0
+original_group_allow_image_generation=""
 hosts_patched=0
 keeper_was_running=false
 account_gate_before=""
@@ -78,6 +81,17 @@ cleanup() {
   if [[ $ca_installed == 1 ]]; then
     docker exec "$service_container" rm -f "$custom_ca_path" >/dev/null 2>&1 || true
     docker exec "$service_container" update-ca-certificates --fresh >/dev/null 2>&1 || true
+  fi
+  # 分组图片权限是入口级门禁，必须在最终重启前按原值恢复。这样服务重启后加载的
+  # 一定是原始权限，不能把验收期间的临时 true 留在认证缓存中。
+  if [[ $group_image_restore_armed == 1 ]]; then
+    if ! db_query "update groups set allow_image_generation = $original_group_allow_image_generation
+      where id = $group_id" >/dev/null 2>&1; then
+      status=97
+    elif [[ $(db_query "select allow_image_generation::text from groups where id = $group_id") != "$original_group_allow_image_generation" ]]; then
+      echo "API Key #$api_key_id 所属分组的图片权限未能按原值恢复。" >&2
+      status=97
+    fi
   fi
   if [[ $ca_installed == 1 ]]; then
     docker restart "$service_container" >/dev/null 2>&1 || true
@@ -121,7 +135,7 @@ cleanup() {
     echo "账号 #$account_id 的临时熔断状态与运行前不一致。" >&2
     status=97
   fi
-  echo "环境已恢复：hosts、CA、keeper、账号调度门与 model_mapping 均回到采集前状态。"
+  echo "环境已恢复：hosts、CA、keeper、账号调度门、分组图片权限与 model_mapping 均回到采集前状态。"
   exit $status
 }
 trap cleanup EXIT
@@ -135,9 +149,49 @@ if [[ $current_proxy != NULL ]]; then
   echo "账号 #$account_id 已绑定代理，探针要求直连画像，拒绝继续。" >&2
   exit 1
 fi
+account_shape=$(db_query \
+  "select platform || '|' || type || '|' || coalesce(parent_account_id::text,'NULL') from accounts where id = $account_id")
+if [[ $account_shape != "openai|oauth|NULL" ]]; then
+  echo "账号 #$account_id 不是非影子的 OpenAI OAuth 专用账号，拒绝继续。" >&2
+  exit 1
+fi
 account_gate_before=$(account_gate_state)
 if [[ ! $account_gate_before =~ ^[0-9a-f]*\|[0-9a-f]*$ ]]; then
   echo "无法读取账号 #$account_id 的调度门状态，拒绝继续。" >&2
+  exit 1
+fi
+
+# 图片入口同样通过 API Key 分组选择 OAuth 账号。必须在修改 model_mapping、CA 或 hosts
+# 之前证明分组只会调度 ACCOUNT_ID，避免验收请求落到其他账号。
+api_key=$(db_query "select key from api_keys where id = $api_key_id")
+group_id=$(db_query "select group_id from api_keys where id = $api_key_id")
+token_present=$(db_query \
+  "select case when length(coalesce(credentials->>'access_token','')) > 0 then 'true' else 'false' end from accounts where id = $account_id")
+if [[ -z $api_key || ! $group_id =~ ^[0-9]+$ || $token_present != true ]]; then
+  echo "API Key/分组不存在，或账号 #$account_id 缺少当前 access token。" >&2
+  exit 1
+fi
+eligible_shape=$(db_query "
+select count(*)::text || '|' || count(*) filter (where a.id = $account_id)::text
+from account_groups ag
+join accounts a on a.id = ag.account_id
+where ag.group_id = $group_id
+  and a.platform = 'openai'
+  and a.type = 'oauth'
+  and a.status = 'active'
+  and a.schedulable = true")
+if [[ $eligible_shape != "1|1" ]]; then
+  echo "API Key #$api_key_id 的分组不是账号 #$account_id 的单账号隔离分组，拒绝继续。" >&2
+  exit 1
+fi
+active_api_key_shape=$(db_query "
+select count(*)::text || '|' || count(*) filter (where id = $api_key_id)::text
+from api_keys
+where group_id = $group_id
+  and status = 'active'
+  and deleted_at is null")
+if [[ $active_api_key_shape != "1|1" ]]; then
+  echo "分组 #$group_id 不是 API Key #$api_key_id 的单 Key 隔离分组，拒绝临时修改图片权限。" >&2
   exit 1
 fi
 
@@ -159,11 +213,12 @@ openssl req -x509 -newkey rsa:2048 -sha256 -days 1 -nodes \
 }
 chmod 600 "$tls_dir"/*
 
-# 探针跑在 capture-cli 容器内：宿主机 443 已被占用，而 capture-cli 与 Sub2API 同网络，
-# 容器内 443 空闲，hosts 指向它即可让 Sub2API 以为在直连 chatgpt.com。
-probe_ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}' "$capture_container" | awk '{print $1}')
-if [[ -z $probe_ip ]]; then
-  echo "无法解析 $capture_container 的容器地址。" >&2
+# capture-cli 可能同时加入抓包专网和 Sub2API 业务网，Docker map 的第一个 IP 不保证
+# 对 Sub2API 可达。由服务容器解析 capture-cli 别名，固定使用两者共享网络的 IPv4。
+probe_ip=$(docker exec "$service_container" getent ahostsv4 "$capture_container" 2>/dev/null \
+  | awk 'NR == 1 {print $1}' || true)
+if [[ ! $probe_ip =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+  echo "无法从 $service_container 解析 $capture_container 的共享网络 IPv4 地址。" >&2
   exit 1
 fi
 
@@ -176,7 +231,9 @@ docker exec "$capture_container" mkdir -p "/capture/runs/$run_id/tls"
 docker exec -d "$capture_container" python3 \
   "$capture_tool_root/h1_wire_probe.py" \
   --cert "/capture/runs/$run_id/tls/probe.crt" --key "/capture/runs/$run_id/tls/probe.key" \
-  --port 443 --output "/capture/runs/$run_id/h1-wire.json" --expect "${EXPECT_REQUESTS:-3}" --timeout 120 --idle-timeout 8
+  --port 443 --output "/capture/runs/$run_id/h1-wire.json" \
+  --expect "${EXPECT_REQUESTS:-3}" --timeout 120 --idle-timeout 8 \
+  --record-path-prefix /backend-api/codex/images/
 probe_started=1
 sleep 2
 
@@ -208,31 +265,47 @@ db_query "update accounts set credentials = jsonb_set(
   true
 ) where id = $account_id" >/dev/null
 
+# `/v1/images/*` 在选择账号前先检查分组权限。专用分组已经同时通过单 Key、单账号
+# 隔离门禁，因此只在本次窗口临时启用，并由 EXIT 钩子在最终重启前按原值恢复。
+original_group_allow_image_generation=$(db_query \
+  "select allow_image_generation::text from groups where id = $group_id")
+if [[ $original_group_allow_image_generation != true && $original_group_allow_image_generation != false ]]; then
+  echo "无法读取分组 #$group_id 的图片权限初始状态。" >&2
+  exit 1
+fi
+group_image_restore_armed=1
+db_query "update groups set allow_image_generation = true where id = $group_id" >/dev/null
+
 docker cp "$ca_cert" "$service_container:$custom_ca_path" >/dev/null
 docker exec "$service_container" update-ca-certificates >/dev/null 2>&1
 ca_installed=1
 
-# 先重启让 CA 进入进程的根证书池，再改 hosts——docker restart 会重新生成
-# /etc/hosts，顺序反了 hosts 会被冲掉。Go 的 resolver 每次解析都读该文件，
-# 因此改完无需再次重启即可生效。
+# restart 返回后立即写 hosts；若等到健康检查完成，启动期模型刷新会先连真实上游并
+# 缓存连接，之后的图片请求即使看到新 hosts 也可能绕过探针。
 docker restart "$service_container" >/dev/null
+docker exec "$service_container" sh -c 'grep -v " chatgpt.com$" /etc/hosts > /tmp/.hosts.pre && cat /tmp/.hosts.pre > /etc/hosts && rm -f /tmp/.hosts.pre'
+docker exec "$service_container" sh -c "printf '%s chatgpt.com\n' '$probe_ip' >> /etc/hosts"
+hosts_patched=1
 for _ in $(seq 1 90); do
   health=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$service_container")
   [[ $health == healthy ]] && break
   sleep 1
 done
 
-docker exec "$service_container" sh -c 'grep -v " chatgpt.com$" /etc/hosts > /tmp/.hosts.pre && cat /tmp/.hosts.pre > /etc/hosts && rm -f /tmp/.hosts.pre'
-docker exec "$service_container" sh -c "printf '%s chatgpt.com\n' '$probe_ip' >> /etc/hosts"
-hosts_patched=1
 docker exec "$service_container" sh -c "grep chatgpt.com /etc/hosts" >/dev/null
 clear_account_gate
 
-api_key=$(db_query "select key from api_keys where id = $api_key_id")
-port=$(docker port "$service_container" | sed -n 's/.*127.0.0.1:\([0-9]*\)/\1/p' | head -1)
+if [[ -z $service_port ]]; then
+  service_port=$(docker port "$service_container" 2>/dev/null \
+    | sed -n 's/.*:\([0-9][0-9]*\)$/\1/p' | head -1)
+fi
+if [[ ! $service_port =~ ^[0-9]+$ ]]; then
+  echo "无法解析 $service_container 的宿主机发布端口；可显式设置 SERVICE_PORT。" >&2
+  exit 1
+fi
 # 生图入口：验证 images 模板的 body 形态（tool_choice 等），普通 responses 请求
 # 覆盖不到该模板。
-curl -s -m 60 -o /dev/null -X POST "http://127.0.0.1:${port:-3001}/v1/images/generations" \
+curl -s -m 60 -o /dev/null -X POST "http://127.0.0.1:$service_port/v1/images/generations" \
   -H "Authorization: Bearer $api_key" \
   -H "Content-Type: application/json" \
   -H "User-Agent: h1-wire-probe/1.0" \

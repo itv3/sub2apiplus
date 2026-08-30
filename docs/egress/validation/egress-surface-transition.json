@@ -3,16 +3,21 @@
   "changeset": "6",
   "base_inventory_path": "docs/changeset5/egress-surface-inventory.json",
   "base_inventory_sha256": "569212ecc10787a9524ba69844fa3fcc4f6a45295f46e2492427461ebe680d60",
-  "addition_count": 1,
+  "addition_count": 2,
   "additions": [
     {
       "path": "backend/internal/officialegress/body_document.go",
       "file_type": "regular",
       "reason": "变更集 6 新增 attempt-owned Body document，直接参与 Codex/OpenAI 官方出站 Body 定型"
+    },
+    {
+      "path": "backend/internal/officialegress/routing_hint.go",
+      "file_type": "regular",
+      "reason": "Codex CLI 0.149.1 新增由最终语义 Body 派生 routing hint 的定型逻辑"
     }
   ],
   "removals": [],
-  "resulting_surface_count": 53,
+  "resulting_surface_count": 54,
   "rules": [
     "变更集 5 的 52 面历史清单逐字节保持不变",
     "新增面必须同时命中生产扫描、登记进 §3.5 台账并保持普通文件类型",

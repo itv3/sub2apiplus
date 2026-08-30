@@ -133,6 +133,16 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 			invocationID = identity.InvocationID
 		}
 	}
+	var routingHint officialegress.CodexRoutingHintFacts
+	if officialRuntime != nil {
+		routingHint, err = officialegress.ParseOfficialCodexRoutingHintFacts(
+			officialCodexEndpointResponsesWS,
+			firstPayload,
+		)
+		if err != nil {
+			return nil, wrapOpenAIWSFallback("official_egress_routing_hint", err)
+		}
+	}
 	payloadEventType := openAIWSPayloadString(payload, "type")
 	if payloadEventType == "" {
 		payloadEventType = "response.create"
@@ -231,10 +241,11 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	defer acquireCancel()
 
 	acquireRequest := openAIWSAcquireRequest{
-		Account: account,
-		WSURL:   wsURL,
-		Headers: wsHeaders,
-		SinkID:  runtimeSinkID,
+		Account:     account,
+		WSURL:       wsURL,
+		Headers:     wsHeaders,
+		RoutingHint: routingHint,
+		SinkID:      runtimeSinkID,
 		HeadersFactory: func(factoryCtx context.Context, headers http.Header) (http.Header, error) {
 			return s.refreshOpenAIAgentIdentityHeaders(factoryCtx, account, headers)
 		},

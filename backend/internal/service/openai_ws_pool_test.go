@@ -694,9 +694,10 @@ func TestOpenAIWSConnPool_DoesNotReuseAcrossSinkEnforcementIdentity(t *testing.T
 	pool.guard = &requireCurrentTokenAdmissionGuard{}
 	account := &Account{ID: 129, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
 	base := openAIWSAcquireRequest{
-		Account: account,
-		WSURL:   "wss://chatgpt.com/backend-api/codex/responses",
-		Headers: http.Header{"Upgrade": []string{"websocket"}},
+		Account:     account,
+		WSURL:       "wss://chatgpt.com/backend-api/codex/responses",
+		Headers:     http.Header{"Upgrade": []string{"websocket"}},
+		RoutingHint: officialCodexWSPoolTestRoutingHint(t),
 	}
 	first := base
 	first.SinkID = officialegress.SinkCodexResponsesWS
@@ -734,10 +735,11 @@ func TestOpenAIWSConnPool_SameSinkReuseRequiresCurrentInvocationToken(t *testing
 
 	tokenContext := newWSExecutorAttemptContext(t)
 	request := openAIWSAcquireRequest{
-		Account: &Account{ID: 130, Platform: PlatformOpenAI, Type: AccountTypeOAuth},
-		WSURL:   "wss://chatgpt.com/backend-api/codex/responses",
-		Headers: http.Header{"Upgrade": []string{"websocket"}},
-		SinkID:  officialegress.SinkCodexResponsesWS,
+		Account:     &Account{ID: 130, Platform: PlatformOpenAI, Type: AccountTypeOAuth},
+		WSURL:       "wss://chatgpt.com/backend-api/codex/responses",
+		Headers:     http.Header{"Upgrade": []string{"websocket"}},
+		RoutingHint: officialCodexWSPoolTestRoutingHint(t),
+		SinkID:      officialegress.SinkCodexResponsesWS,
 	}
 	first, err := pool.Acquire(tokenContext, request)
 	require.NoError(t, err)
@@ -786,10 +788,11 @@ func TestOpenAIWSConnPool_NonemptySinkDisablesBackgroundPrewarm(t *testing.T) {
 	pool.guard = &requireCurrentTokenAdmissionGuard{}
 
 	request := openAIWSAcquireRequest{
-		Account: &Account{ID: 131, Platform: PlatformOpenAI, Type: AccountTypeOAuth},
-		WSURL:   "wss://chatgpt.com/backend-api/codex/responses",
-		Headers: http.Header{"Upgrade": []string{"websocket"}},
-		SinkID:  officialegress.SinkCodexResponsesWS,
+		Account:     &Account{ID: 131, Platform: PlatformOpenAI, Type: AccountTypeOAuth},
+		WSURL:       "wss://chatgpt.com/backend-api/codex/responses",
+		Headers:     http.Header{"Upgrade": []string{"websocket"}},
+		RoutingHint: officialCodexWSPoolTestRoutingHint(t),
+		SinkID:      officialegress.SinkCodexResponsesWS,
 	}
 	tokenContext := newWSExecutorAttemptContext(t)
 	first, err := pool.Acquire(tokenContext, request)
@@ -2572,6 +2575,16 @@ func newWSExecutorAttemptContext(t *testing.T) context.Context {
 	return newWSExecutorAttemptContextForSink(t, officialegress.SinkCodexResponsesWS)
 }
 
+func officialCodexWSPoolTestRoutingHint(t *testing.T) officialegress.CodexRoutingHintFacts {
+	t.Helper()
+	facts, err := officialegress.ParseOfficialCodexRoutingHintFacts(
+		officialCodexEndpointResponsesWS,
+		[]byte(`{"model":"gpt-5.6-luna"}`),
+	)
+	require.NoError(t, err)
+	return facts
+}
+
 func newWSExecutorAttemptContextForSink(
 	t *testing.T,
 	sinkID officialegress.SinkID,
@@ -2653,6 +2666,7 @@ func newWSExecutorAttemptContextForSink(
 			BodyPolicy: officialegress.BodyPolicy{
 				ID: "ws-pool-test-body", Source: "test",
 			},
+			RoutingHint:    officialCodexWSPoolTestRoutingHint(t),
 			BehaviorPolicy: behavior,
 			Body:           officialegress.NewReplayableRequestBody(nil),
 			InvocationID:   "ws-pool-current-invocation", DeclaredPersona: officialegress.PersonaCodexCLI,

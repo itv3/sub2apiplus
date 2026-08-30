@@ -37,12 +37,30 @@ codex_version=${CODEX_VERSION:-0.145.0}
 # 无 NET_ADMIN 的容器里不可用。
 relay_port=${RELAY_PORT:-443}
 turns=${TURNS:-1}
-scenario=${SCENARIO:?必须提供 SCENARIO: tool|conn-retry|turnstate-compact|legacy-compact-default|legacy-compact-beta|ws-default|ws-optional-missing|http-response|http-response-plain|residency-us|image|image-edit|image-repeat-tui|search|search-repeat-tui|compact|compact-exec-negative|compact-tui|comp-hash-changed|model-downshift|review-tui|guardian-tui|memgen|realtime-webrtc|runtime-metrics|ws-special-headers|oauth-refresh|file-upload}
+scenario=${SCENARIO:-}
+model_catalog_only=${MODEL_CATALOG_ONLY:-0}
 extra_args=""
 compaction_reason=""
 compaction_first_model=""
 compaction_second_model=""
 compaction_catalog=""
+
+configure_compaction_models() {
+  # 首模型必须跟随 Campaign 冻结的主模型，不能再写死成某个可能已被账号禁用的
+  # 历史模型。第二模型默认选当前 0.149.1 目录中的非 Lite mini 变体；调用方如需
+  # 替换，仍必须给出合法且不同的模型 slug，目录生成阶段会再次核验它真实存在。
+  local secondary=${COMPACTION_SECOND_MODEL:-gpt-5.4-mini}
+  if [[ ! $model =~ ^[A-Za-z0-9._-]+$ || ! $secondary =~ ^[A-Za-z0-9._-]+$ ]]; then
+    echo "压缩场景模型只能包含字母、数字、点、下划线和连字符。" >&2
+    exit 2
+  fi
+  if [[ $model == "$secondary" ]]; then
+    echo "压缩场景的首模型与第二模型必须不同。" >&2
+    exit 2
+  fi
+  compaction_first_model=$model
+  compaction_second_model=$secondary
+}
 
 # **必须关掉的非必要流量**（§1.5.4）。不关的后果是实测的：一次三轮对话 58 个请求里
 # 49 个是 ps/plugins/* 与 ps/mcp，真业务请求只有 6 个——连接数、请求数这类统计
@@ -66,6 +84,14 @@ if [[ ! $codex_version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   echo "CODEX_VERSION 必须是三段数字。" >&2
   exit 2
 fi
+if [[ $model_catalog_only != 0 && $model_catalog_only != 1 ]]; then
+  echo "MODEL_CATALOG_ONLY 必须是 0 或 1。" >&2
+  exit 2
+fi
+if [[ $model_catalog_only == 0 && -z $scenario ]]; then
+  echo "必须提供 SCENARIO。" >&2
+  exit 2
+fi
 # 与 capturelib/scenarios.py 的 UPSTREAM_CAPACITY_* 保持同一语义与量级；那边覆盖
 # official-core 路径，这里覆盖中继路径。两处都只认这一条错误消息。
 UPSTREAM_CAPACITY_MESSAGE="Selected model is at capacity"
@@ -85,6 +111,14 @@ if [[ ! $compact_token_limit =~ ^[0-9]+$ ]]; then
   exit 2
 fi
 
+# 中继必须覆盖整条最长场景。原固定 300 秒会在 compact 第七轮左右先行退出，
+# wrapper 继续运行却只留下半截字节。上限防止调用方误把拼写错误变成超长驻留进程。
+relay_timeout=${RELAY_TIMEOUT:-1800}
+if [[ ! $relay_timeout =~ ^[0-9]+$ ]] || (( relay_timeout < 60 || relay_timeout > 7200 )); then
+  echo "RELAY_TIMEOUT 必须是 60..7200 秒的整数。" >&2
+  exit 2
+fi
+
 require_model_receipt=${REQUIRE_MODEL_CONDITION_RECEIPT:-0}
 model_track=${MODEL_TRACK:-}
 expect_lite=${EXPECT_USE_RESPONSES_LITE:-}
@@ -97,6 +131,10 @@ if [[ $require_model_receipt == 1 ]]; then
     echo "EXPECT_USE_RESPONSES_LITE 必须是 true 或 false。" >&2
     exit 2
   fi
+fi
+if [[ $model_catalog_only == 1 && $require_model_receipt != 1 ]]; then
+  echo "MODEL_CATALOG_ONLY=1 必须同时启用 REQUIRE_MODEL_CONDITION_RECEIPT=1。" >&2
+  exit 2
 fi
 
 work_dir="$capture_root/runs/$run_id"
@@ -122,6 +160,7 @@ requirements_changed=0
 requirements_backup="/tmp/codex-requirements-$run_id.toml"
 memgen_home=""
 file_upload_home=""
+model_catalog_home=""
 auth_backup=""
 auth_before_sha256=""
 # SCN-REALITY-01：目标场景的原始观测落在这里，供 build_scenario_facts.py 解析。
@@ -386,6 +425,50 @@ restore_auth_json() {
   auth_backup=""
 }
 
+prewarm_model_catalog() {
+  # 需要模型条件收据的任务必须先取得一份完整在线目录响应。codex exec、
+  # debug models 与单独 model/list 都可能只返回内置目录；这里用隔离 HOME 和
+  # CODEX_HOME 启动官方 app-server，仅执行 initialize，并保持启动刷新 worker
+  # 存活到 relay 原文中的 /models HTTP 200 刷盘，且不创建 thread 或 turn。
+  model_catalog_home="/tmp/codex-model-catalog-$run_id"
+  docker exec "$capture_container" sh -c \
+    "rm -rf '$model_catalog_home' && install -d -m 0700 '$model_catalog_home'"
+  local attempt home
+  for attempt in 1 2 3; do
+    home="$model_catalog_home/$attempt"
+    docker exec "$capture_container" sh -c \
+      "install -d -m 0700 '$home' && install -m 0600 /root/.codex/auth.json '$home/auth.json'"
+    if docker exec -e HOME="$home" -e CODEX_HOME="$home" \
+      "$capture_container" timeout 30 \
+      python3 "$capture_tool_root/drive_codex_model_catalog.py" \
+      --codex-bin "$codex_bin" \
+      --codex-version "$codex_version" \
+      --model "$model" \
+      --expect-use-responses-lite "$expect_lite" \
+      --relay-dir "/capture/runs/$run_id/relay" \
+      --output "/capture/runs/$run_id/model-catalog-prewarm.json" \
+      --timeout 20; then
+      return 0
+    fi
+    echo "⚠ 在线模型目录预热第 $attempt 次未形成完整原始响应。" >&2
+    sleep 2
+  done
+  echo "❌ 三次在线模型目录预热均未形成完整 /models HTTP 200 原始响应。" >&2
+  return 1
+}
+
+scrub_relay_bytes() {
+  # 中继原文含真实认证信息；即使只是模型目录诊断，也必须在离开采集机前等长脱敏。
+  local scrubbed_relay="$work_dir/relay-scrubbed"
+  rm -rf -- "$scrubbed_relay"
+  python3 "$scrub_tool" \
+    --src "$work_dir/relay" \
+    --dst "$scrubbed_relay" \
+    --verify
+  rm -rf -- "$work_dir/relay"
+  mv -- "$scrubbed_relay" "$work_dir/relay"
+}
+
 cleanup() {
   local status=$?
   # ⚠ 清理函数必须在 set +e 下跑。脚本顶部是 `set -Eeuo pipefail`，而 EXIT trap 里
@@ -421,6 +504,9 @@ cleanup() {
   fi
   if [[ -n $file_upload_home ]]; then
     docker exec "$capture_container" rm -rf -- "$file_upload_home" >/dev/null 2>&1 || true
+  fi
+  if [[ -n $model_catalog_home ]]; then
+    docker exec "$capture_container" rm -rf -- "$model_catalog_home" >/dev/null 2>&1 || true
   fi
   restore_auth_json
   docker exec "$capture_container" rm -f /tmp/codex-guardian-probe.txt >/dev/null 2>&1 || true
@@ -485,6 +571,12 @@ docker exec "$capture_container" update-ca-certificates >/dev/null 2>&1
 
 # 起中继（--assume-alpn 留空 = 不 offer ALPN，与官方 native-tls 实测一致）
 relay_intervention_args=()
+if [[ $require_model_receipt == 1 ]]; then
+  # Codex 0.149.1 把 /models 的建连与读取合计硬限制为 5 秒；DMIT 到 Cloudflare
+  # 偶发一次 TLS 握手就接近 4.9 秒。中继先在该计时器启动前建立同一真实上游
+  # TLS，首个官方模型目录请求只复用连接，不改变任何应用字节或网络选路。
+  relay_intervention_args+=(--preconnect-upstream --preconnect-timeout 15)
+fi
 if [[ ${RELAY_FORCE_WS_FALLBACK_426:-0} == 1 ]]; then
   relay_intervention_args+=(--force-ws-fallback-426)
 fi
@@ -502,8 +594,21 @@ if [[ -n ${RELAY_INJECT_WS_TURN_STATE:-} ]]; then
   fi
   relay_intervention_args+=(--inject-ws-turn-state "$RELAY_INJECT_WS_TURN_STATE")
 fi
+if [[ ${RELAY_SYNTHESIZE_REALTIME_CALL:-0} == 1 && -n ${RELAY_SYNTHESIZE_REALTIME_CALL_AFTER:-} ]]; then
+  echo "realtime 立即合成与延迟合成开关不能同时启用。" >&2
+  exit 2
+fi
 if [[ ${RELAY_SYNTHESIZE_REALTIME_CALL:-0} == 1 ]]; then
   relay_intervention_args+=(--synthesize-realtime-call)
+fi
+if [[ -n ${RELAY_SYNTHESIZE_REALTIME_CALL_AFTER:-} ]]; then
+  if [[ ${RELAY_SYNTHESIZE_REALTIME_CALL_AFTER} != 1 ]]; then
+    echo "RELAY_SYNTHESIZE_REALTIME_CALL_AFTER 当前只允许 1。" >&2
+    exit 2
+  fi
+  relay_intervention_args+=(
+    --synthesize-realtime-call-after "$RELAY_SYNTHESIZE_REALTIME_CALL_AFTER"
+  )
 fi
 if [[ -n ${RELAY_RETRY_PROBE:-} ]]; then
   case "$RELAY_RETRY_PROBE" in
@@ -543,10 +648,30 @@ docker exec -d "$capture_container" python3 \
   --mode direct --port "$relay_port" \
   --upstream-host chatgpt.com --upstream-ip "$upstream_ip" \
   --upstream-map "$upstream_map" \
-  --output "/capture/runs/$run_id/relay" --timeout 300 \
+  --output "/capture/runs/$run_id/relay" --timeout "$relay_timeout" \
   "${relay_intervention_args[@]}"
 relay_started=1
-sleep 2
+if [[ $require_model_receipt == 1 ]]; then
+  relay_ready=0
+  for _ in $(seq 1 400); do
+    if docker exec "$capture_container" test -s \
+      "/capture/runs/$run_id/relay/preconnect-ready.json"; then
+      relay_ready=1
+      break
+    fi
+    if ! docker exec "$capture_container" pgrep -f '[u]pstream_byte_relay.py' \
+      >/dev/null 2>&1; then
+      break
+    fi
+    sleep 0.05
+  done
+  if [[ $relay_ready != 1 ]]; then
+    echo "❌ 模型目录上游 TLS 预连接未在 20 秒内就绪。" >&2
+    exit 1
+  fi
+else
+  sleep 2
+fi
 
 # hosts 劫持须在中继起来之后
 for h in $RELAY_HOSTS; do
@@ -554,6 +679,20 @@ for h in $RELAY_HOSTS; do
     "grep -v \" $h\$\" /etc/hosts > /tmp/.hp && cat /tmp/.hp > /etc/hosts && rm -f /tmp/.hp"
   docker exec "$capture_container" sh -c "printf '127.0.0.1 $h\n' >> /etc/hosts"
 done
+
+if [[ $model_catalog_only == 1 ]]; then
+  echo "=== 仅采集在线模型目录（$model_track / $model）==="
+  prewarm_model_catalog
+  # 目录命令已经关闭连接；先停止中继并刷盘 relay.json，再封存脱敏产物。
+  stop_relay
+  scrub_relay_bytes
+  docker exec "$capture_container" jq \
+    '{schema_version, mode, upstream_host, connection_count: (.connections | length),
+      valid_count: ([.connections[] | select(.valid == true)] | length)}' \
+    "/capture/runs/$run_id/relay/relay.json"
+  printf 'run_id=%s\n' "$run_id"
+  exit 0
+fi
 
 case "$scenario" in
   tool)
@@ -757,48 +896,61 @@ case "$scenario" in
     # maybe_run_previous_model_inline_compact 触发。
     #
     # 原先直接借生产目录里 gpt-5.6-luna -> gpt-5.4 的自然跨组（3000 -> 2911），
-    # 但那让本场景的成败绑死在某个特定模型的上游可用性上——实测 gpt-5.6-luna
-    # 间歇性连第一轮 turn 都跑不完（turn/completed 状态 failed、压缩事件为 0），
-    # 整轮 official 采集因此反复作废。改为与 model-downshift 同样的受控目录：
-    # 只把两个 hash 设成不同，模型固定用采集主模型及其 mini 变体。
+    # 但那让本场景的成败绑死在某个特定模型的上游可用性上——实测旧账号不支持
+    # gpt-5.4，第一轮直接失败。改为与 model-downshift 同样的受控目录：首模型
+    # 跟随 Campaign 的 MODEL，第二模型使用目录中已核验的非 Lite mini 变体。
     # 这是明确记录的 I 类触发干预；官方 CLI、OAuth、V2 压缩实现与出站均不替换。
     prompt='__COMPACTION_REASON__'
     compaction_reason='comp_hash_changed'
-    compaction_first_model='gpt-5.4'
-    compaction_second_model='gpt-5.4-mini'
+    configure_compaction_models
     compaction_catalog="/capture/runs/$run_id/comp-hash-catalog.json"
-    docker exec "$capture_container" jq '
-      {models: [
-        .models[]
-        | select(.slug == "gpt-5.4" or .slug == "gpt-5.4-mini")
-        | if .slug == "gpt-5.4"
-          then .comp_hash = "comp-hash-probe-first"
-          else .comp_hash = "comp-hash-probe-second"
-          end
-      ]}' /root/.codex/models_cache.json > "$work_dir/comp-hash-catalog.json"
+    docker exec "$capture_container" jq \
+      --arg first "$compaction_first_model" \
+      --arg second "$compaction_second_model" '
+      [.models[] | select(.slug == $first or .slug == $second)] as $selected
+      | if (($selected | length) != 2)
+          or any($selected[]; .use_responses_lite != false)
+        then error("压缩场景模型目录缺少两个唯一的非 Lite 模型")
+        else {models: [
+          $selected[]
+          | if .slug == $first
+            then .comp_hash = "comp-hash-probe-first"
+            else .comp_hash = "comp-hash-probe-second"
+            end
+        ]}
+        end' /root/.codex/models_cache.json > "$work_dir/comp-hash-catalog.json"
     chmod 600 "$work_dir/comp-hash-catalog.json" ;;
   model-downshift)
     # ModelDownshift 需旧窗口 > 新窗口且当前 token 已超新模型阈值。默认阈值约
-    # 115k，纯为触发灌入该体量会造成数十万 input token。这里保留生产模型的
-    # 272k -> 128k 窗口关系，只把两个 hash 设成相同、把新模型阈值降为 8000。
+    # 115k，纯为触发灌入该体量会造成数十万 input token。这里把两个 hash 设成
+    # 相同，并把受控目录的旧／新模型窗口冻结为 272000 -> 128000、自动压缩
+    # 阈值冻结为 16000 -> 8000。两类字段缺一不可：官方实现先要求旧窗口严格大于
+    # 新窗口，随后才用新模型阈值判断是否需要 ModelDownshift 压缩。
     # 先导样本中首轮约 9089 token、降档压缩后约 7249，故 8000 能触发降档且不会
     # 立刻再触发 ContextLimit；最终仍由提取器拒绝任何额外压缩原因。
     # 这是明确记录的 I 类触发干预；官方 CLI、OAuth、V2 压缩实现与出站均不替换。
     prompt='__COMPACTION_REASON__'
     compaction_reason='model_downshift'
-    compaction_first_model='gpt-5.4'
-    compaction_second_model='gpt-5.3-codex-spark'
+    configure_compaction_models
     compaction_catalog="/capture/runs/$run_id/model-downshift-catalog.json"
-    docker exec "$capture_container" jq '
-      {models: [
-        .models[]
-        | select(.slug == "gpt-5.4" or .slug == "gpt-5.3-codex-spark")
-        | .comp_hash = "downshift-probe"
-        | if .slug == "gpt-5.3-codex-spark"
-          then .auto_compact_token_limit = 8000
-          else .
-          end
-      ]}' /root/.codex/models_cache.json > "$work_dir/model-downshift-catalog.json"
+    docker exec "$capture_container" jq \
+      --arg first "$compaction_first_model" \
+      --arg second "$compaction_second_model" '
+      [.models[] | select(.slug == $first or .slug == $second)] as $selected
+      | if (($selected | length) != 2)
+          or any($selected[]; .use_responses_lite != false)
+        then error("压缩场景模型目录缺少两个唯一的非 Lite 模型")
+        else {models: [
+          $selected[]
+          | .comp_hash = "downshift-probe"
+          | if .slug == $first
+            then .context_window = 272000
+              | .auto_compact_token_limit = 16000
+            else .context_window = 128000
+              | .auto_compact_token_limit = 8000
+            end
+        ]}
+        end' /root/.codex/models_cache.json > "$work_dir/model-downshift-catalog.json"
     chmod 600 "$work_dir/model-downshift-catalog.json" ;;
   oauth-refresh)
     # 采 SPEC-EP-002 的 auth-sni：官方 CLI 的 OAuth token 刷新走 auth.openai.com。
@@ -865,23 +1017,71 @@ case "$scenario" in
   *) echo "未知 SCENARIO: $scenario" >&2; exit 2 ;;
 esac
 
+if [[ $require_model_receipt == 1 ]]; then
+  echo "=== 在线模型目录预热（$model_track / $model）==="
+  prewarm_model_catalog
+fi
+
 echo "=== 场景 $scenario，$turns 轮 ==="
 if [[ $prompt == "__REALTIME__" ]]; then
-  # A11 目标路径：退出码不再被 `| tail -N || true` 吞掉。驱动落一份原始事件流，
-  # 由 build_scenario_facts.py 判定 started/SDP 与异步 error；这里只如实记录成败。
+  # A11 先跑一次完整自然请求。若当前上游仍以 session.model 拒绝，再由同一个中继
+  # 对第二次官方请求受控返回 200，让官方 CLI 自己派生 sideband。两次事件分别落盘，
+  # build_scenario_facts.py 必须把自然 400 与受控 200 同时写入复合收据，绝不把后者
+  # 冒充自然成功。若未来自然分支恢复，第一轮成功后不会再运行受控分支。
   realtime_status=0
+  realtime_events="/capture/runs/$run_id/scenario-observations/A11-realtime-events.json"
+  realtime_log="$work_dir/realtime-driver.log"
+  if [[ -n ${RELAY_SYNTHESIZE_REALTIME_CALL_AFTER:-} ]]; then
+    realtime_events="/capture/runs/$run_id/scenario-observations/A11-realtime-live-events.json"
+    realtime_log="$work_dir/realtime-live-driver.log"
+  fi
   # shellcheck disable=SC2086
   docker exec "$capture_container" timeout 120 python3 \
     "$capture_tool_root/drive_codex_realtime.py" \
+    --codex-bin "$codex_bin" \
     --codex-version "$codex_version" \
     --model "$model" --transport webrtc --output-modality audio \
     --realtime-version "${REALTIME_VERSION:-v3}" \
     ${DISABLE_FEATURES:+$(for f in $DISABLE_FEATURES; do printf -- '--disable %s ' "$f"; done)} \
-    --events-output "/capture/runs/$run_id/scenario-observations/A11-realtime-events.json" \
-    --hold "${REALTIME_HOLD:-20}" > "$work_dir/realtime-driver.log" 2>&1 || realtime_status=$?
-  tail -10 "$work_dir/realtime-driver.log" || true
+    --events-output "$realtime_events" \
+    --hold "${REALTIME_HOLD:-20}" > "$realtime_log" 2>&1 || realtime_status=$?
+  tail -10 "$realtime_log" || true
   if (( realtime_status != 0 )); then
-    echo "⚠ realtime 驱动以 $realtime_status 退出，A11 目标分支未成立。" >&2
+    echo "⚠ realtime 自然驱动以 $realtime_status 退出，交由证据构建器判定。" >&2
+  fi
+
+  if [[ -n ${RELAY_SYNTHESIZE_REALTIME_CALL_AFTER:-} ]]; then
+    live_events_host="$work_dir/scenario-observations/A11-realtime-live-events.json"
+    live_success=0
+    if jq -e '
+      [.notifications[].method] as $methods
+      | ([range(0; $methods | length)
+          | select($methods[.] == "thread/realtime/started"
+                   or $methods[.] == "thread/realtime/sdp")] | max) as $target
+      | ($target != null)
+        and ([range(0; $target + 1)
+              | select($methods[.] == "thread/realtime/error")] | length == 0)
+    ' "$live_events_host" >/dev/null 2>&1; then
+      live_success=1
+      echo "realtime 自然分支已成立，不运行受控分支。"
+    fi
+    if (( live_success == 0 )); then
+      realtime_status=0
+      # shellcheck disable=SC2086
+      docker exec "$capture_container" timeout 120 python3 \
+        "$capture_tool_root/drive_codex_realtime.py" \
+        --codex-bin "$codex_bin" \
+        --codex-version "$codex_version" \
+        --model "$model" --transport webrtc --output-modality audio \
+        --realtime-version "${REALTIME_VERSION:-v3}" \
+        ${DISABLE_FEATURES:+$(for f in $DISABLE_FEATURES; do printf -- '--disable %s ' "$f"; done)} \
+        --events-output "/capture/runs/$run_id/scenario-observations/A11-realtime-events.json" \
+        --hold "${REALTIME_HOLD:-20}" > "$work_dir/realtime-controlled-driver.log" 2>&1 || realtime_status=$?
+      tail -10 "$work_dir/realtime-controlled-driver.log" || true
+      if (( realtime_status != 0 )); then
+        echo "⚠ realtime 受控分支驱动以 $realtime_status 退出，交由证据构建器判定。" >&2
+      fi
+    fi
   fi
 elif [[ $prompt == "__AUTH_REFRESH__" ]]; then
   # A13 目标路径：由官方 CLI 自己发出 OAuth token 刷新，退出码不吞。
@@ -903,6 +1103,7 @@ elif [[ $prompt == "__COMPACT_TUI__" ]]; then
   # shellcheck disable=SC2086
   docker exec "$capture_container" python3 \
     "$capture_tool_root/drive_codex_tui.py" \
+    --codex-bin "$codex_bin" \
     --model "$model" --cwd /tmp/tui-probe $ctx_opt \
     --warmup "${TUI_WARMUP:-请用一段话介绍什么是 TCP 三次握手。}" \
     --slash "${TUI_SLASH:-/compact}" \
@@ -915,6 +1116,7 @@ elif [[ $prompt == "__COMPACT_TUI__" ]]; then
 elif [[ $prompt == "__PROMPT_TUI_IMAGE__" ]]; then
   docker exec "$capture_container" python3 \
     "$capture_tool_root/drive_codex_tui.py" \
+    --codex-bin "$codex_bin" \
     --model "$model" --cwd /tmp/tui-probe \
     --prompt '请调用图片生成工具生成一张红色狐狸的简单插画；必须实际调用工具。' \
     --prompt '请再次调用图片生成工具生成一张蓝色鲸鱼的简单插画；必须实际调用工具。' \
@@ -924,6 +1126,7 @@ elif [[ $prompt == "__PROMPT_TUI_IMAGE__" ]]; then
 elif [[ $prompt == "__PROMPT_TUI_SEARCH__" ]]; then
   docker exec "$capture_container" python3 \
     "$capture_tool_root/drive_codex_tui.py" \
+    --codex-bin "$codex_bin" \
     --model "$model" --cwd /tmp/tui-probe \
     --prompt '请联网搜索 Rust 1.90 的发布日期；必须实际调用联网搜索工具，只回复日期。' \
     --prompt '请再次联网搜索 Python 3.14 的发布日期；必须实际调用联网搜索工具，只回复日期。' \
@@ -933,6 +1136,7 @@ elif [[ $prompt == "__PROMPT_TUI_SEARCH__" ]]; then
 elif [[ $prompt == "__GUARDIAN_TUI__" ]]; then
   docker exec "$capture_container" python3 \
     "$capture_tool_root/drive_codex_tui.py" \
+    --codex-bin "$codex_bin" \
     --model "$model" --cwd /work --no-bypass \
     --approval-policy on-request --sandbox-mode workspace-write \
     --config 'approvals_reviewer="auto_review"' \
@@ -948,6 +1152,7 @@ elif [[ $prompt == "__MEMGEN__" ]]; then
      cp /root/.codex/config.toml '$memgen_home/config.toml'"
   docker exec -e CODEX_HOME="$memgen_home" "$capture_container" timeout 540 python3 \
     "$capture_tool_root/drive_codex_memgen.py" \
+    --codex-bin "$codex_bin" \
     --codex-version "$codex_version" \
     --model "$model" --cwd /tmp/memgen-probe \
     --relay-dir "/capture/runs/$run_id/relay" --hold "${MEMGEN_HOLD:-360}" \
@@ -1034,6 +1239,7 @@ elif [[ $prompt == "__REVIEW_TUI__" ]]; then
   # shellcheck disable=SC2086
   docker exec "$capture_container" python3 \
     "$capture_tool_root/drive_codex_tui.py" \
+    --codex-bin "$codex_bin" \
     --model "$model" --cwd "$work" \
     --warmup "${TUI_WARMUP:-请只回复 READY，不要做任何其他事。}" \
     --warmup-ready "${TUI_READY:-READY}" \
@@ -1197,26 +1403,25 @@ fi
 
 # 中继原始字节包含真实 Authorization/Cookie；在证据离开采集机前必须等长脱敏。
 # 先写入新目录并复扫，再替换原目录，避免留下未脱敏副本；字节长度和偏移保持不变。
-scrubbed_relay="$work_dir/relay-scrubbed"
-rm -rf -- "$scrubbed_relay"
-python3 "$scrub_tool" \
-  --src "$work_dir/relay" \
-  --dst "$scrubbed_relay" \
-  --verify
-rm -rf -- "$work_dir/relay"
-mv -- "$scrubbed_relay" "$work_dir/relay"
+scrub_relay_bytes
 
 # 双轨模型条件收据：字段全部从脱敏后的最终 relay 原始字节提取。编排器只声明
 # 预期坐标，不能根据 job 退出码补写 model、Lite 或 fallback 状态。
 if [[ $require_model_receipt == 1 ]]; then
   echo "=== 模型条件收据（$model_track / $model）==="
-  python3 "$capture_tool_root/model_condition_receipts.py" \
+  # 收据解析与抓包运行时属于同一个冻结环境。Responses 请求可能使用 zstd；若在
+  # ARM64 宿主机直接运行，会把宿主 Python 的偶然依赖状态混入 Campaign，并在宿主
+  # 未安装 zstandard 时让完整样本失败。受管镜像显式提供 python3-zstandard，且仓库
+  # 与 evidence root 均以相同绝对路径挂载，因此在 capture-cli 内生成最终收据。
+  docker exec "$capture_container" \
+    python3 "$capture_tool_root/model_condition_receipts.py" \
     --run-root "$work_dir" \
     --output "$work_dir/model-condition-receipt.json" \
     --job-id "${SCENARIO_JOB_ID:?模型收据要求 SCENARIO_JOB_ID}" \
     --run-id "$run_id" \
     --track "$model_track" \
     --model "$model" \
+    --model-catalog-prewarm "$work_dir/model-catalog-prewarm.json" \
     --expect-use-responses-lite "$expect_lite"
 fi
 

@@ -21,8 +21,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const updateChangeset1BReceiptArtifactsEnv = "EGRESS_UPDATE_CHANGESET1B_RECEIPT_ARTIFACTS"
-
 type changeset1BReceiptArtifactCase struct {
 	sinkID     officialegress.SinkID
 	endpointID string
@@ -85,8 +83,15 @@ func TestChangeset1BReceiptArtifactsReplayProductionExecutor(t *testing.T) {
 				"..", "officialegress", "catalogdata", "migration-artifacts", "changeset1b",
 				strings.ReplaceAll(string(testCase.sinkID), ".", "_"),
 			)
-			assertOrUpdateChangeset1BArtifact(t, filepath.Join(artifactDirectory, "wire.json"), wireRaw)
-			assertOrUpdateChangeset1BArtifact(t, filepath.Join(artifactDirectory, "execution-verification.json"), verificationRaw)
+			assertChangeset1BActive01491WireSuccessor(
+				t, filepath.Join(artifactDirectory, "wire.json"), wireRaw,
+			)
+			assertChangeset1BActive01491VerificationSuccessor(
+				t,
+				filepath.Join(artifactDirectory, "execution-verification.json"),
+				verificationRaw,
+				wireRaw,
+			)
 		})
 	}
 }
@@ -212,20 +217,40 @@ func changeset1BSHA256(raw []byte) string {
 	return hex.EncodeToString(digest[:])
 }
 
-func assertOrUpdateChangeset1BArtifact(t *testing.T, path string, want []byte) {
+func assertChangeset1BActive01491WireSuccessor(
+	t *testing.T,
+	path string,
+	want []byte,
+) {
 	t.Helper()
-	if os.Getenv(updateChangeset1BReceiptArtifactsEnv) == "1" {
-		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
-		require.NoError(t, os.WriteFile(path, want, 0o644))
-		docsPath := filepath.Join(
-			"..", "..", "..", "docs", "egress", "lifecycle", "migration-artifacts",
-			strings.TrimPrefix(path, filepath.Join("..", "officialegress", "catalogdata", "migration-artifacts")+string(filepath.Separator)),
-		)
-		require.NoError(t, os.MkdirAll(filepath.Dir(docsPath), 0o755))
-		require.NoError(t, os.WriteFile(docsPath, want, 0o644))
-		return
-	}
-	actual, err := os.ReadFile(path)
+	historicalRaw, err := os.ReadFile(path)
 	require.NoError(t, err)
-	require.Equal(t, string(want), string(actual))
+	var historical changeset1BWireFixture
+	require.NoError(t, json.Unmarshal(historicalRaw, &historical))
+	require.NotContains(
+		t,
+		historical.HeaderNames,
+		"x-codex-routing-hint",
+		"changeset1b 冻结制品必须保持 0.147 原文",
+	)
+	successor := historical
+	successor.HeaderNames = append([]string(nil), historical.HeaderNames...)
+	successor.HeaderNames = append(successor.HeaderNames, "x-codex-routing-hint")
+	sort.Strings(successor.HeaderNames)
+	require.Equal(t, string(mustMarshalChangeset1BArtifact(t, successor)), string(want))
+}
+
+func assertChangeset1BActive01491VerificationSuccessor(
+	t *testing.T,
+	path string,
+	want []byte,
+	activeWire []byte,
+) {
+	t.Helper()
+	historicalRaw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	var historical receiptcontract.ExecutionVerification
+	require.NoError(t, json.Unmarshal(historicalRaw, &historical))
+	historical.WireSHA256 = changeset1BSHA256(activeWire)
+	require.Equal(t, string(mustMarshalChangeset1BArtifact(t, historical)), string(want))
 }

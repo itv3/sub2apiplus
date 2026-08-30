@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import struct
 import subprocess
@@ -10,15 +11,20 @@ import tempfile
 import unittest
 import zlib
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from tools.official_client_capture.candidate_evidence_guard import scan_files_for_secrets
 from tools.official_client_capture.relay_extract import parse_ws_frames
 from tools.official_client_capture.scrub_raw_bytes import (
     GENERIC_TOKEN,
+    count_unscrubbed_credentials,
     rewrite_relay_manifest,
     scrub,
 )
 from tools.official_client_capture.upstream_byte_relay import (
+    PreconnectedUpstream,
+    Relay,
     _SYNTHETIC_CLAUDE_PLANS,
     _synthetic_aux_response,
     _SYNTHETIC_AUX_CFUV_COOKIE,
@@ -34,6 +40,7 @@ from tools.official_client_capture.upstream_byte_relay import (
     _decode_client_text_frame,
     _encode_server_text_frame,
     _redact_oauth_refresh_body,
+    _should_synthesize_realtime_call,
     _synthetic_claude_response,
     _synthetic_aux_response,
     _synthetic_core_response,
@@ -95,6 +102,132 @@ def _fragmented_compressed_text_frames(
 
 
 class UpstreamByteRelayWebSocketTest(unittest.TestCase):
+    def test_preconnect_uses_the_same_default_upstream_ip_as_client_route(self) -> None:
+        """Cloudflare 轮询 DNS 不得让预连接与客户端连接选中不同 IP。"""
+
+        class Writer:
+            def get_extra_info(self, name: str):
+                self.assert_name = name
+                return None
+
+        relay = object.__new__(Relay)
+        relay.args = SimpleNamespace(
+            preconnect_upstream=True,
+            upstream_host="chatgpt.com",
+            upstream_ip="198.51.100.23",
+            assume_alpn="",
+            preconnect_timeout=15,
+        )
+        relay._preconnected_upstream = None
+        relay._preconnect_duration_ms = None
+        reader = object()
+        writer = Writer()
+
+        async def exercise() -> None:
+            open_connection = AsyncMock(return_value=(reader, writer))
+            with patch(
+                "tools.official_client_capture.upstream_byte_relay."
+                "asyncio.open_connection",
+                new=open_connection,
+            ):
+                await relay._prepare_preconnected_upstream()
+            self.assertEqual(
+                open_connection.await_args.kwargs["host"],
+                relay._default_upstream_ip("chatgpt.com"),
+            )
+            self.assertEqual(
+                relay._preconnected_upstream.target_ip,
+                "198.51.100.23",
+            )
+
+        asyncio.run(exercise())
+
+    def test_preconnected_upstream_is_consumed_once_only_on_exact_route(self) -> None:
+        class Reader:
+            def at_eof(self) -> bool:
+                return False
+
+        class Writer:
+            def is_closing(self) -> bool:
+                return False
+
+        relay = object.__new__(Relay)
+        relay._preconnected_upstream_lock = asyncio.Lock()
+        relay._preconnected_upstream = PreconnectedUpstream(
+            reader=Reader(),
+            writer=Writer(),
+            target_host="chatgpt.com",
+            target_ip="203.0.113.10",
+            target_port=443,
+            alpn_offer=None,
+            selected_alpn=None,
+            connect_duration_ms=4875.0,
+        )
+
+        async def exercise() -> None:
+            mismatch = await relay._take_preconnected_upstream(
+                target_host="api.openai.com",
+                target_ip="203.0.113.10",
+                target_port=443,
+                alpn_offer=None,
+            )
+            self.assertIsNone(mismatch)
+            matched = await relay._take_preconnected_upstream(
+                target_host="chatgpt.com",
+                target_ip="203.0.113.10",
+                target_port=443,
+                alpn_offer=None,
+            )
+            self.assertIsNotNone(matched)
+            consumed = await relay._take_preconnected_upstream(
+                target_host="chatgpt.com",
+                target_ip="203.0.113.10",
+                target_port=443,
+                alpn_offer=None,
+            )
+            self.assertIsNone(consumed)
+
+        asyncio.run(exercise())
+
+    def test_realtime_延迟合成先放行一次自然请求(self) -> None:
+        self.assertFalse(
+            _should_synthesize_realtime_call(
+                immediate=False,
+                after_live_attempts=1,
+                attempt=1,
+            )
+        )
+        self.assertTrue(
+            _should_synthesize_realtime_call(
+                immediate=False,
+                after_live_attempts=1,
+                attempt=2,
+            )
+        )
+        self.assertFalse(
+            _should_synthesize_realtime_call(
+                immediate=False,
+                after_live_attempts=1,
+                attempt=3,
+            )
+        )
+
+    def test_realtime_旧开关仍只合成第一次(self) -> None:
+        self.assertTrue(
+            _should_synthesize_realtime_call(
+                immediate=True,
+                after_live_attempts=None,
+                attempt=1,
+            )
+        )
+        self.assertFalse(
+            _should_synthesize_realtime_call(
+                immediate=True,
+                after_live_attempts=None,
+                attempt=2,
+            )
+        )
+
     def test_relay_stop_marks_only_exact_client_only_valid_connection(self) -> None:
         metadata = {
             "valid": True,
@@ -1023,6 +1156,23 @@ class ScrubbedRelayEvidenceTest(unittest.TestCase):
         self.assertEqual(replacements, 1)
         self.assertNotIn(b"real-token-value", scrubbed)
         self.assertEqual(scrubbed[-len(body):], body)
+
+    def test_permessage_deflate_frames_are_never_scanned_as_plaintext(self) -> None:
+        """WS 压缩帧中的偶然 query 字节不得被误改而破坏 deflate 流。"""
+
+        frame_bytes = b"\xc1\x10binary?sig=random-compressed-bytes"
+        source = (
+            b"GET /backend-api/codex/responses HTTP/1.1\r\n"
+            b"upgrade: websocket\r\n"
+            b"sec-websocket-extensions: permessage-deflate; client_max_window_bits\r\n"
+            b"authorization: Bearer real-token-value-123456789\r\n\r\n"
+            + frame_bytes
+        )
+        scrubbed, replacements = scrub(source)
+        self.assertEqual(replacements, 1)
+        self.assertNotIn(b"real-token-value", scrubbed)
+        self.assertEqual(scrubbed[-len(frame_bytes):], frame_bytes)
+        self.assertEqual(count_unscrubbed_credentials(scrubbed), (0, 0))
 
     def test_identity_signal_token_is_scrubbed_in_header_and_body(self) -> None:
         """A13 刷新响应里的 identity-signal 令牌必须与 access_token 同等脱敏。

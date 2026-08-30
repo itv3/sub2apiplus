@@ -62,8 +62,10 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
 # 仅重绑 source_spec 章节摘要供基线复算使用。
 # 2026-08-16 主手册更新 §3.5 的 v0.1.177 台账路径后再次重绑第二部分摘要；
 # 规则与判据载荷不变。
+# 2026-08-24 主手册 active 升级为 0.149.1 后再次重绑第二部分摘要；0.145
+# 基线的规则与判据载荷仍保持不变。
 FROZEN_PROFILE_SHA256 = (
-    "9e6220c90607b71ff3468ed3f8b904916cfc1a229a4cf2b7976d4dfac68ba685"
+    "20441c49c10212147ecbe6bd824e8f0b5e690239754ceb0218ff014c5cc037fd"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 RULE_ID_RE = re.compile(r"^SPEC-[A-Z0-9]+-[0-9]{3}$")

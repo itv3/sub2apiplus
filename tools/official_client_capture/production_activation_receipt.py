@@ -331,7 +331,10 @@ def build_receipt(root: Path, facts_relative: str) -> dict[str, Any]:
         raise ProductionReceiptError("acceptance 或 post-promotion 门禁缺少候选身份")
     expected_gate_subject = {
         "campaign_id": campaign["id"],
+        "campaign_mode": "formal",
+        "campaign_purpose": "production_replacement",
         "candidate_id": campaign["candidate_id"],
+        "candidate_purpose": "production_replacement",
         "target_version": target["version"],
         "profile_id": target["profile_id"],
         "profile_digest": target["profile_digest"],
@@ -348,6 +351,11 @@ def build_receipt(root: Path, facts_relative: str) -> dict[str, Any]:
         "promotion_receipt_sha256": promotion_sha256,
     }
     if (
+        acceptance_payload.get("campaign_mode") != "formal"
+        or acceptance_payload.get("campaign_purpose") != "production_replacement"
+        or acceptance_payload.get("candidate_purpose") != "production_replacement"
+        or acceptance_payload.get("production_state") != "accepted_not_activated"
+        or
         gate_payload.get("phase")
         != codex_upgrade_gate_receipt.POST_PROMOTION_PHASE
         or any(

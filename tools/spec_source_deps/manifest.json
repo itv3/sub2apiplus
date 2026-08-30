@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "cargo_lock": "local-analysis/sources/codex-cli-0.147/codex-rs/Cargo.lock",
+  "cargo_lock": "local-analysis/sources/codex-cli-0.149.1/codex-rs/Cargo.lock",
   "dependencies": [
     {
       "name": "hyper",
@@ -45,17 +45,17 @@
     },
     {
       "name": "h2",
-      "version": "0.4.13",
+      "version": "0.4.16",
       "upstream": "https://github.com/hyperium/h2",
-      "commit": "2aeb81fdb5f1d96ee035266186f94fa2927616c7",
+      "commit": "b84b96cdcb15fb5190c151aaf7273c7986e22976",
       "lock_source": "registry+https://github.com/rust-lang/crates.io-index",
-      "lock_checksum": "2f44da3a8150a6703ed5d34e164b875fd14c2cdab9af1252a9a1020bde2bdc54",
+      "lock_checksum": "a9f37a958b41b3b19ee2707c06439c0e9e547e847223eb791ecb0cb821c65e27",
       "files": {
-        "h2-0.4.13/Cargo.toml": "062d93c3c479080ecad38dea04d9b5adb0ae8c368bd75c1831bd534289d707a6",
-        "h2-0.4.13/LICENSE": "b21623012e6c453d944b0342c515b631cfcbf30704c2621b291526b69c10724d",
-        "h2-0.4.13/src/frame/headers.rs": "83bdbffd631d2e1eecc05c00666f89af6ae7d6ab682a43c4328c5211994a047e",
-        "h2-0.4.13/src/frame/settings.rs": "9aed52868a1ddbb5570025edde2e073d3da1291b58d8759bfed7f086d40ef293",
-        "h2-0.4.13/src/hpack/encoder.rs": "36586c14f2c2f98143fda5b45494c6282c887ef81cef32680ce0b1d233c290f0"
+        "h2-0.4.16/Cargo.toml": "da03a1b0bf2ace0356d5edc4b11c55897dc10909fbbaf764f0472121ac3318d8",
+        "h2-0.4.16/LICENSE": "b21623012e6c453d944b0342c515b631cfcbf30704c2621b291526b69c10724d",
+        "h2-0.4.16/src/frame/headers.rs": "a7630564280006b29488c2fb399d52a70d8d7ccc6d1276fd291410b329d038c5",
+        "h2-0.4.16/src/frame/settings.rs": "9aed52868a1ddbb5570025edde2e073d3da1291b58d8759bfed7f086d40ef293",
+        "h2-0.4.16/src/hpack/encoder.rs": "b41373f9fe02022a30e669a780c97399af964d338dc671ec12a79592157b5a46"
       }
     },
     {

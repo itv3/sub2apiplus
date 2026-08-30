@@ -107,7 +107,13 @@ func validateUpstreamV0180SourceTransition(
 		current, readErr := os.ReadFile(filepath.Join(
 			"../../..", filepath.FromSlash(transition.Path),
 		))
-		if readErr != nil || upstreamMergeFrameworkDigest(current) != transition.ToSHA256 {
+		currentDigest := upstreamMergeFrameworkDigest(current)
+		if readErr != nil || (currentDigest != transition.ToSHA256 &&
+			!codex01491TerminalStateSupersedes(
+				transition.Path,
+				transition.ToSHA256,
+				currentDigest,
+			)) {
 			return errors.New("上游 v0.1.180 source transition 当前摘要不一致：" + transition.Path)
 		}
 		paths = append(paths, transition.Path)
@@ -125,13 +131,21 @@ func upstreamV0180SourceTransitionSupersedes(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if codex01491TerminalStateSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	receipt, err := loadUpstreamV0180SourceTransition()
 	if err != nil {
 		return false
 	}
 	for _, transition := range receipt.Transitions {
-		if transition.Path == path && transition.ToSHA256 == currentDigest &&
-			slices.Contains(transition.PredecessorSHA256s, priorDigest) {
+		if transition.Path == path && slices.Contains(transition.PredecessorSHA256s, priorDigest) &&
+			(transition.ToSHA256 == currentDigest ||
+				codex01491TerminalStateSupersedes(
+					path,
+					transition.ToSHA256,
+					currentDigest,
+				)) {
 			return true
 		}
 	}

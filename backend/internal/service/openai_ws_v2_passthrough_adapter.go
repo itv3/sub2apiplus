@@ -895,6 +895,20 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			policyErr,
 		)
 	}
+	var routingHint officialegress.CodexRoutingHintFacts
+	if officialRuntime != nil {
+		routingHint, policyErr = officialegress.ParseOfficialCodexRoutingHintFacts(
+			officialCodexEndpointResponsesWS,
+			firstClientMessage,
+		)
+		if policyErr != nil {
+			return NewOpenAIWSClientCloseError(
+				coderws.StatusPolicyViolation,
+				"official egress websocket routing hint validation failed",
+				policyErr,
+			)
+		}
+	}
 
 	// 在 policy filter 之后再提取 service_tier / reasoning_effort 用于
 	// usage 上报：filter
@@ -1001,7 +1015,8 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				dialCtx,
 				dialer,
 				openAIWSAcquireRequest{
-					Account: account, WSURL: wsURL, Headers: headers, ProxyURL: proxyURL,
+					Account: account, WSURL: wsURL, Headers: headers,
+					RoutingHint: routingHint, ProxyURL: proxyURL,
 				},
 				officialCodexEndpointResponsesWS,
 			)

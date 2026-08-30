@@ -30,10 +30,20 @@ from pathlib import PurePosixPath
 from typing import Callable
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 SPEC = ROOT / "docs" / "CODEX_CLI_CLIENT_EMULATION_GUIDE.md"
 SCAN_ROOT = ROOT / "backend"
 INVENTORY = ROOT / "docs" / "egress" / "consolidation" / "egress-surface-inventory.json"
 CHANGESET6_TRANSITION = ROOT / "docs" / "egress" / "validation" / "egress-surface-transition.json"
+CODEX_01491_TERMINAL_STATE = (
+    ROOT
+    / "docs"
+    / "egress"
+    / "maintenance"
+    / "CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json"
+)
 MAINTENANCE_RETIREMENT = ROOT / "docs" / "egress" / "maintenance" / "official-egress-consolidation-retirement.json"
 MAINTENANCE_RETIREMENT_SHA256 = "d60fb470a83f4a98f5de231265d2f695f3963536ec45290b36341c248a56ee36"
 UPSTREAM_MERGE_PLAN_SCHEMA = "official-egress-upstream-merge-plan/v1"
@@ -424,11 +434,17 @@ def validate_human_ledger(ledger: str) -> None:
 def current_upstream_merge_entries(
     surface: list[str],
     upstream_commit: str,
+    post_upstream_paths: set[str] | None = None,
 ) -> list[dict[str, object]]:
-    """生成相对当前 upstream 基线的 Codex 出站 overlay 精确闭集。"""
+    """生成 upstream 合并时点的 Codex 出站 overlay 精确闭集。
+
+    后续候选 Campaign 新增的出站面由独立 successor transition 冻结，不能倒灌并改写
+    已经封存的 upstream overlay 台账。
+    """
 
     strict_surface = set(surface) - set(SCOPE_EXCLUSIONS)
     candidates = strict_surface | REQUIRED_REVIEW_TOUCHPOINTS | IDENTITY_BOUNDARY_TOUCHPOINTS
+    candidates -= post_upstream_paths or set()
     entries: list[dict[str, object]] = []
     for path in sorted(candidates):
         if not (ROOT / path).is_file():
@@ -544,6 +560,175 @@ def changeset6_additions(inventory_raw: bytes) -> list[dict[str, str]]:
     return additions
 
 
+def codex_01491_terminal_state_identity(document: dict[str, object]) -> str:
+    """复算 0.149.1 终态收据排除自摘要后的规范身份。"""
+
+    payload = {key: value for key, value in document.items() if key != "identity_sha256"}
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8") + b"\n"
+    return sha256(canonical)
+
+
+def validate_codex_01491_repo_artifact(
+    artifact: object,
+    expected_path: str,
+    label: str,
+) -> None:
+    """验证终态收据中的仓库制品坐标与当前普通文件完全一致。"""
+
+    if not isinstance(artifact, dict) or set(artifact) != {"path", "sha256"}:
+        raise RuntimeError(f"{label} 坐标字段非法")
+    if artifact.get("path") != expected_path or not SHA256_RE.fullmatch(
+        str(artifact.get("sha256", ""))
+    ):
+        raise RuntimeError(f"{label} 坐标非法")
+    artifact_path = ROOT / expected_path
+    if (
+        artifact_path.is_symlink()
+        or not artifact_path.is_file()
+        or sha256(artifact_path.read_bytes()) != artifact["sha256"]
+    ):
+        raise RuntimeError(f"{label} 摘要漂移：{expected_path}")
+
+
+def validate_codex_01491_terminal_state(
+    receipt: dict[str, object],
+) -> list[dict[str, str]]:
+    """验证合并后的 0.149.1 终态收据，并返回最终出站面增量。"""
+
+    expected_fields = {
+        "schema_version",
+        "completed_at_utc",
+        "target",
+        "runtime_catalog",
+        "catalog_promotion",
+        "production_activation",
+        "audit_archive",
+        "surface_additions",
+        "retired_runtime_profiles",
+        "transitions",
+        "result",
+        "identity_sha256",
+    }
+    if set(receipt) != expected_fields:
+        raise RuntimeError("0.149.1 终态收据顶层字段不闭合")
+    if (
+        receipt.get("schema_version")
+        != "official-client-codex-0.149.1-terminal-state/v1"
+        or receipt.get("result") != "passed"
+        or not receipt.get("completed_at_utc")
+        or receipt.get("identity_sha256")
+        != codex_01491_terminal_state_identity(receipt)
+    ):
+        raise RuntimeError("0.149.1 终态收据顶层事实或自摘要非法")
+
+    if receipt.get("target") != {
+        "version": "0.149.1",
+        "profile_id": "codex-0.149.1-official-r1491-v2",
+        "profile_sha256": "8c22d3b18b16d249ac041a97efad1b6703c11ef290622b0b1642679a3c010ec3",
+        "previous_version": "0.147.0",
+        "previous_profile_sha256": "94071c8eb93cfd337ac6eabc291d878084e3dcec8a9e618e04e6f68792d1a7bc",
+    }:
+        raise RuntimeError("0.149.1 终态画像坐标非法")
+
+    runtime_catalog = receipt.get("runtime_catalog")
+    if not isinstance(runtime_catalog, dict) or set(runtime_catalog) != {
+        "catalog",
+        "release_graph",
+        "snapshot_catalog",
+        "active_profile",
+    }:
+        raise RuntimeError("0.149.1 Runtime Catalog 坐标字段非法")
+    runtime_paths = {
+        "catalog": "backend/internal/officialegress/catalogdata/runtime/release-catalog.json",
+        "release_graph": (
+            "backend/internal/officialegress/catalogdata/runtime/release-graphs/"
+            "057264d864aea27ebafecf504e95b8c948f25ac20f11fdabbfd2385d35c85465.json"
+        ),
+        "snapshot_catalog": (
+            "backend/internal/officialegress/catalogdata/runtime/snapshot-catalogs/"
+            "4b3e2aded6ad932a4f1adb5efefefe8dd5bad7092a1de3c0bddff54f4a84f57c.json"
+        ),
+        "active_profile": (
+            "backend/internal/officialegress/catalogdata/runtime/profiles/0.149.1/"
+            "8c22d3b18b16d249ac041a97efad1b6703c11ef290622b0b1642679a3c010ec3.json"
+        ),
+    }
+    for key, expected_path in runtime_paths.items():
+        validate_codex_01491_repo_artifact(
+            runtime_catalog.get(key), expected_path, f"0.149.1 {key}"
+        )
+
+    validate_codex_01491_repo_artifact(
+        receipt.get("catalog_promotion"),
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_R28_CATALOG_PROMOTION_RECEIPT.json",
+        "0.149.1 Catalog Promotion 收据",
+    )
+    validate_codex_01491_repo_artifact(
+        receipt.get("production_activation"),
+        "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_R34_PRODUCTION_ACTIVATION_RECEIPT.json",
+        "0.149.1 Production Activation 收据",
+    )
+
+    if receipt.get("audit_archive") != {
+        "path": "codex-0.149.1-consolidated-audit-20260830.tar.gz",
+        "sha256": "cfb3d9afb4453b95662fbcfdf794b4d80efe168fd69accf909abdbf40b6e30d9",
+    }:
+        raise RuntimeError("0.149.1 外部审计归档坐标非法")
+
+    additions = receipt.get("surface_additions")
+    if not isinstance(additions, list) or len(additions) != 1:
+        raise RuntimeError("0.149.1 终态出站面增量非法")
+    addition_path = "backend/internal/officialegress/routing_hint.go"
+    validate_codex_01491_repo_artifact(
+        additions[0], addition_path, "0.149.1 终态出站面"
+    )
+
+    retired = receipt.get("retired_runtime_profiles")
+    expected_retired_paths = [
+        "backend/internal/officialegress/catalogdata/runtime/profiles/0.145.0/"
+        "343991bad0f89614cd092778186f51eb23d5afbf4c98a198981639758bdf5431.json",
+        "backend/internal/officialegress/catalogdata/runtime/profiles/0.145.0/"
+        "e0b59772622f14717f1fdf5c15bfae5758226a04fe8f030110d8a616e20fdf6b.json",
+    ]
+    if (
+        not isinstance(retired, list)
+        or [item.get("path") for item in retired if isinstance(item, dict)]
+        != expected_retired_paths
+        or any((ROOT / path).exists() for path in expected_retired_paths)
+    ):
+        raise RuntimeError("0.149.1 退休画像终态非法")
+
+    transitions = receipt.get("transitions")
+    if not isinstance(transitions, list) or not transitions:
+        raise RuntimeError("0.149.1 终态后继映射为空")
+    return [
+        {
+            "path": addition_path,
+            "file_type": "regular",
+            "reason": "0.149.1 终态收据确认新增官方 routing hint 出站定型面。",
+        }
+    ]
+
+
+def codex_01491_terminal_surface_additions() -> list[dict[str, str]]:
+    """读取 0.149.1 合并终态收据，不再依赖逐轮 transition 或测试模块。"""
+
+    try:
+        receipt = json.loads(
+            CODEX_01491_TERMINAL_STATE.read_text(encoding="utf-8"),
+            object_pairs_hook=_unique_json_object,
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"无法读取 0.149.1 终态收据：{exc}") from exc
+    return validate_codex_01491_terminal_state(receipt)
+
+
 def maintenance_removals(frozen_paths: set[str]) -> list[str]:
     """读取本次退休收据，只允许删除收据绑定且确已不存在的历史出站面。"""
 
@@ -597,9 +782,14 @@ def main() -> int:
     try:
         plan = load_upstream_merge_plan(args.upstream_merge_plan.resolve())
         validate_human_ledger(ledger)
+        terminal_successor_paths = {
+            item["path"]
+            for item in codex_01491_terminal_surface_additions()
+        }
         upstream_entries = current_upstream_merge_entries(
             surface,
             plan.upstream_commit,
+            terminal_successor_paths,
         )
         upstream_payload = upstream_merge_ledger_payload(upstream_entries, plan)
     except RuntimeError as exc:
@@ -679,7 +869,9 @@ def main() -> int:
         print("🔴 变更集 5 的完整出站面必须严格为 52 项", file=sys.stderr)
         return 1
     try:
-        additions = changeset6_additions(inventory_raw)
+        changeset6 = changeset6_additions(inventory_raw)
+        terminal_additions = codex_01491_terminal_surface_additions()
+        additions = changeset6 + terminal_additions
     except RuntimeError as exc:
         print(f"🔴 {exc}", file=sys.stderr)
         return 1
@@ -726,7 +918,8 @@ def main() -> int:
 
     covered = len(declared_paths)
     print(
-        f"✅ §3.5 台账完整：变更集 5 冻结 52 面 + 变更集 6 增量 {len(additions)} 面"
+        f"✅ §3.5 台账完整：变更集 5 冻结 52 面 + 变更集 6 增量 {len(changeset6)} 面"
+        f" + 0.149.1 终态增量 {len(terminal_additions)} 面"
         f" - 维护退休 {len(removal_paths)} 面 = {covered} 个出站定型文件全部登记"
         f"；{plan.upstream_tag} 机器 overlay {len(upstream_entries)} 个文件逐项一致"
         f"（plan={plan.plan_id}）"

@@ -35,8 +35,8 @@ class CandidateTestTraceTest(unittest.TestCase):
         # - candidate_test_trace 冻结的映射与画像都要与 Campaign 目标同版本，否则
         #   load_mapping／load_profile 的 codex_version 校验直接拒绝。
         baseline_profile = tool_root / "candidate_rule_expectations_0_145_0.json"
-        target_profile = tool_root / "candidate_rule_expectations_0_147_0.json"
-        target_mapping = tool_root / "candidate_test_fact_map_0_147_0.json"
+        target_profile = tool_root / "candidate_rule_expectations_0_149_1.json"
+        target_mapping = tool_root / "candidate_test_fact_map_0_149_1.json"
 
         self.assertEqual(
             candidate_rule_assertion.FROZEN_PROFILE_SHA256,
@@ -245,9 +245,9 @@ class CandidateTestTraceTest(unittest.TestCase):
 
     def test_target_version_is_bound_across_inputs_and_receipt(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            fixture = self._fixture(Path(directory), codex_version="0.147.0")
+            fixture = self._fixture(Path(directory), codex_version="0.149.1")
             receipt = self._generate(fixture)
-            self.assertEqual(receipt["codex_version"], "0.147.0")
+            self.assertEqual(receipt["codex_version"], "0.149.1")
             output_manifest = (
                 fixture["evidence_root"]  # type: ignore[operator]
                 / "generated/capture-with-test-traces.json"
@@ -256,7 +256,7 @@ class CandidateTestTraceTest(unittest.TestCase):
                 json.loads(output_manifest.read_text(encoding="utf-8"))[
                     "codex_version"
                 ],
-                "0.147.0",
+                "0.149.1",
             )
 
     def test_empty_or_wrong_target_version_fails_closed(self) -> None:
@@ -413,8 +413,8 @@ class CandidateTestTraceTest(unittest.TestCase):
     def test_default_mapping_digest_and_fact_universe_are_frozen(self) -> None:
         tool_root = Path(__file__).resolve().parents[1]
         _, tests = load_mapping(
-            tool_root / "candidate_test_fact_map_0_147_0.json",
-            expected_codex_version="0.147.0",
+            tool_root / "candidate_test_fact_map_0_149_1.json",
+            expected_codex_version="0.149.1",
             expected_sha256=candidate_test_trace.FROZEN_MAPPING_SHA256,
         )
         fact_ids = {

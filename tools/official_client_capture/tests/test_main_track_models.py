@@ -16,6 +16,7 @@ from tools.official_client_capture import extract_compaction_reason, h1_wire_pro
 from tools.official_client_capture.capturelib.model import (
     LITE_TRACK_MODELS,
     MAIN_TRACK_MODELS,
+    track_models_for_version,
 )
 
 
@@ -29,6 +30,24 @@ class MainTrackModelTests(unittest.TestCase):
         self.assertTrue(MAIN_TRACK_MODELS, "主线模型集合不得为空")
         self.assertTrue(LITE_TRACK_MODELS, "Lite 轨模型集合不得为空")
         self.assertFalse(set(MAIN_TRACK_MODELS) & set(LITE_TRACK_MODELS))
+
+    def test_versioned_track_policies_are_frozen(self) -> None:
+        self.assertEqual(
+            track_models_for_version("0.147.0", "main"),
+            ("gpt-5.4", "gpt-5.5"),
+        )
+        self.assertEqual(
+            track_models_for_version("0.147.0", "lite"),
+            ("gpt-5.6-luna",),
+        )
+        self.assertEqual(
+            track_models_for_version("0.149.1", "main"),
+            ("gpt-5.5", "gpt-5.4-mini"),
+        )
+        self.assertEqual(
+            track_models_for_version("0.149.1", "lite"),
+            ("gpt-5.6-terra", "gpt-5.6-luna"),
+        )
 
     def test_probe_models_cover_both_tracks_with_matching_lite_flag(self) -> None:
         """受控 /models 必须覆盖两条轨道，且 lite 标志与轨道归属一致。
@@ -59,28 +78,19 @@ class MainTrackModelTests(unittest.TestCase):
         )
         self.assertFalse(missing, f"compact 证据白名单缺模型：{sorted(missing)}")
 
-    def test_candidate_scripts_default_to_track_models(self) -> None:
-        """候选脚本的模型默认值必须来自两条轨道的权威定义。
-
-        脚本是 shell、读不到 Python 常量，默认值只能各写一份。写死一个不在轨道里的
-        模型不会当场报错——只有当候选机账号恰好没有它时，才会在采集中途以 404 暴露
-        （k53 的 frozen-core 即如此）。这条测试把两份默认值钉死在权威定义上。
-        """
+    def test_candidate_scripts_require_campaign_models(self) -> None:
+        """候选脚本不得自行猜测目标版本的两条模型轨道。"""
 
         here = Path(__file__).resolve().parents[1]
         core = (here / "run_candidate_core_capture.sh").read_text()
         aux = (here / "run_candidate_aux_capture.sh").read_text()
 
-        core_main = re.search(r"^main_model=\$\{MAIN_MODEL:-([^}]+)\}", core, re.M)
-        core_lite = re.search(r"^lite_model=\$\{LITE_MODEL:-([^}]+)\}", core, re.M)
-        aux_model = re.search(r"^model=\$\{MODEL:-([^}]+)\}", aux, re.M)
-        self.assertIsNotNone(core_main, "core 脚本缺 main_model 默认值")
-        self.assertIsNotNone(core_lite, "core 脚本缺 lite_model 默认值")
-        self.assertIsNotNone(aux_model, "aux 脚本缺 model 默认值")
-
-        self.assertIn(core_main.group(1), MAIN_TRACK_MODELS)
-        self.assertIn(core_lite.group(1), LITE_TRACK_MODELS)
-        self.assertIn(aux_model.group(1), LITE_TRACK_MODELS)
+        self.assertIn("main_model=${MAIN_MODEL:?", core)
+        self.assertIn("lite_model=${LITE_MODEL:?", core)
+        self.assertIn("model=${MODEL:?", aux)
+        self.assertNotRegex(core, re.compile(r"^main_model=\$\{MAIN_MODEL:-", re.M))
+        self.assertNotRegex(core, re.compile(r"^lite_model=\$\{LITE_MODEL:-", re.M))
+        self.assertNotRegex(aux, re.compile(r"^model=\$\{MODEL:-", re.M))
 
     def test_candidate_core_script_has_no_hardcoded_model(self) -> None:
         """core 脚本的请求体不得再出现裸模型名，只能走两个变量。"""
@@ -92,6 +102,48 @@ class MainTrackModelTests(unittest.TestCase):
         self.assertTrue(bodies, "未解析到任何 write_request_body 调用")
         hardcoded = sorted({b for b in bodies if not b.startswith('"$')})
         self.assertFalse(hardcoded, f"仍有硬编码模型：{hardcoded}")
+
+    def test_h1_probe_path_filter_ignores_startup_models(self) -> None:
+        """images 证据槽不能被服务启动期 models 请求抢占。"""
+
+        prefix = "/backend-api/codex/images/"
+        self.assertFalse(
+            h1_wire_probe.record_matches_path_prefix(
+                {
+                    "request_line": (
+                        "GET /backend-api/codex/models?client_version=0.149.1 "
+                        "HTTP/1.1"
+                    )
+                },
+                prefix,
+            )
+        )
+        self.assertTrue(
+            h1_wire_probe.record_matches_path_prefix(
+                {
+                    "request_line": (
+                        "POST /backend-api/codex/images/generations HTTP/1.1"
+                    )
+                },
+                prefix,
+            )
+        )
+        self.assertTrue(
+            h1_wire_probe.record_matches_path_prefix(
+                {"request_line": "GET /anything HTTP/1.1"}, ""
+            )
+        )
+
+    def test_images_script_enables_image_path_filter(self) -> None:
+        """images runner 必须显式启用端点过滤。"""
+
+        script = (
+            Path(__file__).resolve().parents[1] / "run_images_wire_probe.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "--record-path-prefix /backend-api/codex/images/",
+            script,
+        )
 
 
 if __name__ == "__main__":

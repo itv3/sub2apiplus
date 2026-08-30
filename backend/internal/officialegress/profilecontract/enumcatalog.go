@@ -149,6 +149,7 @@ func EngineSupportedEnumValues() EnumCatalog {
 			string(ConditionCookiePresent),
 			string(ConditionCreditIdPresent),
 			string(ConditionFedrampAccount),
+			string(ConditionHostedFileUpload),
 			string(ConditionManagedResidencyPresent),
 			string(ConditionMemoryGeneration),
 			string(ConditionParentThreadPresent),

@@ -231,6 +231,14 @@ func staticClosureEgressPlan(
 	if err != nil {
 		t.Fatal(err)
 	}
+	semanticBody := staticClosureSemanticBody(t, plan.template.endpoint)
+	routingHint := CodexRoutingHintFacts{}
+	if bundle.Version() == "0.149.1" && officialCodexRoutingHintEndpoint(plan.EndpointID()) {
+		routingHint, err = ParseOfficialCodexRoutingHintFacts(plan.EndpointID(), semanticBody)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	return CodexEgressPlan{
 		SinkID:  plan.SinkID(),
 		Purpose: plan.Purpose(), EndpointID: plan.EndpointID(),
@@ -238,14 +246,13 @@ func staticClosureEgressPlan(
 		Mode:         bundle.Mode(), Protocol: plan.Protocol(),
 		Method: plan.template.route.Key.Method, URL: target,
 		Headers: make(http.Header), IdentityMode: IdentityCodexOAuthStrict,
-		IdentityFacts:  executorInvocationIdentityFacts(t),
-		Authentication: authentication,
-		HeaderPolicy:   HeaderPolicy{ID: "static-closure-headers", Source: "test"},
-		BodyPolicy:     BodyPolicy{ID: "static-closure-body", Source: "test"},
-		BehaviorPolicy: bundle.Behavior(),
-		Body: NewReplayableRequestBody(
-			staticClosureSemanticBody(t, plan.template.endpoint),
-		),
+		IdentityFacts:   executorInvocationIdentityFacts(t),
+		Authentication:  authentication,
+		HeaderPolicy:    HeaderPolicy{ID: "static-closure-headers", Source: "test"},
+		BodyPolicy:      BodyPolicy{ID: "static-closure-body", Source: "test"},
+		RoutingHint:     routingHint,
+		BehaviorPolicy:  bundle.Behavior(),
+		Body:            NewReplayableRequestBody(semanticBody),
 		DeclaredPersona: PersonaCodexCLI,
 	}
 }

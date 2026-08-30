@@ -22,6 +22,16 @@ type changeset5WebSocketHeaderCaptureDialer struct {
 	headers http.Header
 }
 
+func officialCodexWebSocketTestRoutingHint(t *testing.T) officialegress.CodexRoutingHintFacts {
+	t.Helper()
+	facts, err := officialegress.ParseOfficialCodexRoutingHintFacts(
+		officialCodexEndpointResponsesWS,
+		[]byte(`{"model":"gpt-5.6-luna"}`),
+	)
+	require.NoError(t, err)
+	return facts
+}
+
 func (d *changeset5WebSocketHeaderCaptureDialer) Dial(
 	_ context.Context,
 	wsURL string,
@@ -63,8 +73,9 @@ func TestChangeset5WebSocketExecutorOwnsFinalHandshakeHeaders(t *testing.T) {
 	identity.SessionID = "99999999-9999-9999-9999-999999999999"
 	dialer := &changeset5WebSocketHeaderCaptureDialer{}
 	request := openAIWSAcquireRequest{
-		Account: account,
-		WSURL:   "wss://chatgpt.com/backend-api/codex/responses",
+		Account:     account,
+		WSURL:       "wss://chatgpt.com/backend-api/codex/responses",
+		RoutingHint: officialCodexWebSocketTestRoutingHint(t),
 		Headers: http.Header{
 			"Authorization":             []string{"Bearer changeset5-ws-token"},
 			"Host":                      []string{"attacker.invalid"},
@@ -87,7 +98,7 @@ func TestChangeset5WebSocketExecutorOwnsFinalHandshakeHeaders(t *testing.T) {
 		"authorization", "chatgpt-account-id", "openai-beta", "originator", "session-id",
 		"thread-id", "user-agent", "version", "x-client-request-id",
 		"x-codex-beta-features", "x-codex-parent-thread-id", "x-codex-turn-metadata",
-		"x-codex-window-id", "x-openai-subagent",
+		"x-codex-routing-hint", "x-codex-window-id", "x-openai-subagent",
 	}
 	var actual []string
 	for name := range dialer.headers {
@@ -103,6 +114,7 @@ func TestChangeset5WebSocketExecutorOwnsFinalHandshakeHeaders(t *testing.T) {
 	require.Equal(t, changeset3ProductionAccount(91).GetChatGPTAccountID(), dialer.headers.Get("chatgpt-account-id"))
 	require.Equal(t, "guardian", dialer.headers.Get("x-openai-subagent"))
 	require.Equal(t, "88888888-8888-8888-8888-888888888891", dialer.headers.Get("x-codex-parent-thread-id"))
+	require.Equal(t, "model=gpt-5.6-luna", dialer.headers.Get("x-codex-routing-hint"))
 	require.Empty(t, dialer.headers.Get("Host"))
 	require.Empty(t, dialer.headers.Get("session_id"))
 	require.Empty(t, dialer.headers.Get("conversation_id"))
@@ -159,8 +171,9 @@ func TestOfficialCodexWebSocketInvocationValidatesEveryPoolAcquire(t *testing.T)
 	guard := &officialCodexAcquireIdentityGuard{}
 	pool.guard = guard
 	request := openAIWSAcquireRequest{
-		Account: account,
-		WSURL:   "wss://chatgpt.com/backend-api/codex/responses",
+		Account:     account,
+		WSURL:       "wss://chatgpt.com/backend-api/codex/responses",
+		RoutingHint: officialCodexWebSocketTestRoutingHint(t),
 		Headers: http.Header{
 			"Upgrade":            []string{"websocket"},
 			"Authorization":      []string{"Bearer ws-test"},

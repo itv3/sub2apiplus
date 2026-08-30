@@ -27,7 +27,11 @@ class ProductionActivationReceiptTests(unittest.TestCase):
             {
                 "status": "complete",
                 "accepted": True,
+                "campaign_mode": "formal",
+                "campaign_purpose": "production_replacement",
                 "candidate_id": "k83-dmit",
+                "candidate_purpose": "production_replacement",
+                "production_state": "accepted_not_activated",
                 "target_version": "0.147.0",
                 "profile_id": "codex-0.147.0",
                 "profile_digest": self.profile_digest,
@@ -38,6 +42,7 @@ class ProductionActivationReceiptTests(unittest.TestCase):
                     "image_reference": self.candidate_image_reference,
                     "build_id": "candidate-build",
                     "deployed_version": "candidate-version",
+                    "candidate_purpose": "production_replacement",
                 },
             },
         )
@@ -98,7 +103,10 @@ class ProductionActivationReceiptTests(unittest.TestCase):
             "phase": gate_receipt.POST_PROMOTION_PHASE,
             "subject": {
                 "campaign_id": "codex-0_147_0-campaign",
+                "campaign_mode": "formal",
+                "campaign_purpose": "production_replacement",
                 "candidate_id": "k83-dmit",
+                "candidate_purpose": "production_replacement",
                 "target_version": target["version"],
                 "target_architecture": "linux/amd64",
                 "profile_id": target["profile_id"],

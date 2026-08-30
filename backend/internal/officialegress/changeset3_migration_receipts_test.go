@@ -32,6 +32,43 @@ type changeset3CanaryObservation struct {
 	ReviewRef          string   `json:"review_ref"`
 }
 
+func changeset3LoadHistorical0145Profile(
+	t *testing.T,
+	key profilecontract.SnapshotKey,
+) (profilecontract.ProfileSpec, profilecontract.ExecutableProfile) {
+	t.Helper()
+	path := filepath.Join(
+		"profilecontract/testdata/snapshots",
+		key.Version,
+		key.Digest+".json",
+	)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("读取变更集 3 历史画像夹具：%v", err)
+	}
+	blobSum := sha256.Sum256(raw)
+	if len(raw) != 50032 || hex.EncodeToString(blobSum[:]) != "36c6c0e4464e6182347210d05d17ea85f6121e98f70f3c36b6ffc2b4230a5c66" {
+		t.Fatal("变更集 3 历史 0.145 画像夹具漂移")
+	}
+	doc, err := profilecontract.ParseSnapshot(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest, err := profilecontract.OfficialSnapshotDigest(doc)
+	if err != nil || doc.Version != key.Version || doc.Digest != key.Digest || digest != key.Digest {
+		t.Fatalf("变更集 3 历史 0.145 画像身份非法：version=%s digest=%s computed=%s err=%v", doc.Version, doc.Digest, digest, err)
+	}
+	profile, err := profilecontract.NewProfileSpec(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executable, err := profilecontract.CompileExecutableProfile(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return profile, executable
+}
+
 func TestChangeset3MigrationReceiptsMatchRuntimeContracts(t *testing.T) {
 	authoritativeCaptures := changeset3LoadAuthoritativePostCaptures(t)
 	manifest, err := loadChangeset3MigrationReceiptManifest()
@@ -58,19 +95,14 @@ func TestChangeset3MigrationReceiptsMatchRuntimeContracts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var release ResolvedCodexRelease
-	for _, mode := range []ReleaseMode{ReleaseModeActive, ReleaseModePrevious} {
-		candidate, resolveErr := DefaultReleaseCatalog().Resolve(mode)
-		if resolveErr != nil {
-			t.Fatal(resolveErr)
-		}
-		if candidate.Version() == "0.145.0" {
-			release = candidate
-			break
-		}
+	historicalKey := profilecontract.SnapshotKey{
+		Version: "0.145.0",
+		Digest:  "e0b59772622f14717f1fdf5c15bfae5758226a04fe8f030110d8a616e20fdf6b",
 	}
-	if release.Version() != "0.145.0" {
-		t.Fatal("变更集 3 历史收据缺少 0.145 Release")
+	historicalProfile, historicalExecutable := changeset3LoadHistorical0145Profile(t, historicalKey)
+	release := ResolvedCodexRelease{
+		mode: ReleaseModePrevious, profileDigest: historicalKey.Digest,
+		profile: historicalProfile, executable: historicalExecutable,
 	}
 	endpointBindings, err := NewEndpointBindingCatalog(catalog, physical, release.ExecutableProfile())
 	if err != nil {

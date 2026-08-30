@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://sub2apiplus.local/schemas/codex-egress-model-condition-receipt-v1.json",
+  "$id": "https://sub2apiplus.local/schemas/codex-egress-model-condition-receipt-v2.json",
   "title": "Codex 出站模型条件成功收据",
   "type": "object",
   "additionalProperties": false,
@@ -19,7 +19,7 @@
     "evidence_bindings"
   ],
   "properties": {
-    "schema_version": {"const": "codex-egress-model-condition-receipt/v1"},
+    "schema_version": {"const": "codex-egress-model-condition-receipt/v2"},
     "status": {"const": "success"},
     "job_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
     "run_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
@@ -43,11 +43,25 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["path", "sha256", "bytes"],
+        "required": ["path", "sha256", "bytes", "roles"],
         "properties": {
           "path": {"type": "string", "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$"},
           "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
-          "bytes": {"type": "integer", "minimum": 1}
+          "bytes": {"type": "integer", "minimum": 1},
+          "roles": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "enum": [
+                "relay_manifest",
+                "model_catalog_prewarm",
+                "models_request",
+                "models_response",
+                "responses_request"
+              ]
+            }
+          }
         }
       }
     }

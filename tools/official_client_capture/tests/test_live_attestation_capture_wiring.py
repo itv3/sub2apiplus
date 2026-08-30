@@ -112,6 +112,16 @@ class LiveAttestationCaptureWiringTest(unittest.TestCase):
         self.assertIn('"live_attestation_compose_dir": str(', self.upgrade)
         self.assertIn('live_attestation_compose_dir=str(', self.upgrade)
 
+    def test_compose_文件串规范化且不使用_eval(self) -> None:
+        self.assertIn("prepare_live_attestation_compose_args()", self.script)
+        self.assertIn(
+            'live_attestation_compose_args+=("-f" "$token")', self.script
+        )
+        self.assertIn(
+            'docker compose "${live_attestation_compose_args[@]}"', self.script
+        )
+        self.assertNotIn("eval docker compose", self.script)
+
 
 if __name__ == "__main__":
     unittest.main()

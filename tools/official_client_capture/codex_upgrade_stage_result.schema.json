@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-stage-result-v1.json",
+  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-stage-result-v2.json",
   "title": "Codex 出站升级不可变阶段收据",
   "description": "每个阶段和 candidate-id 只允许封存一次。所有收据统一使用 stage envelope，业务结果原 schema 放在 result_schema_version，并通过 package_digest 与不可变 campaign.json 绑定。",
   "type": "object",
@@ -9,6 +9,9 @@
     "schema_version",
     "stage",
     "campaign_id",
+    "campaign_mode",
+    "campaign_purpose",
+    "candidate_purpose",
     "campaign_manifest_sha256",
     "sealed_at_utc",
     "package_digest",
@@ -20,7 +23,7 @@
       "minLength": 1
     },
     "schema_version": {
-      "const": "codex-upgrade-stage-result/v1"
+      "const": "codex-upgrade-stage-result/v2"
     },
     "result_schema_version": {
       "type": "string",
@@ -37,6 +40,18 @@
     },
     "campaign_id": {
       "$ref": "#/$defs/safeId"
+    },
+    "campaign_mode": {
+      "const": "formal"
+    },
+    "campaign_purpose": {
+      "$ref": "#/$defs/candidatePurpose"
+    },
+    "candidate_purpose": {
+      "oneOf": [
+        {"$ref": "#/$defs/candidatePurpose"},
+        {"type": "null"}
+      ]
     },
     "candidate_id": {
       "$ref": "#/$defs/safeId"
@@ -97,6 +112,10 @@
     },
     "assertion_context": {
       "$ref": "#/$defs/assertionContext"
+    },
+    "assertion_gate": {
+      "type": "object",
+      "minProperties": 1
     },
     "observed_profile": {
       "$ref": "#/$defs/fileBinding"
@@ -213,18 +232,44 @@
     },
     "evidence_seal": {
       "$ref": "#/$defs/fileBinding"
+    },
+    "candidate_identity": {
+      "$ref": "#/$defs/candidateIdentityProjection"
+    },
+    "candidate_external_gate": {
+      "$ref": "#/$defs/externalGateBinding"
+    },
+    "production_state": {
+      "const": "accepted_not_activated"
+    },
+    "predecessor_import": {
+      "$ref": "#/$defs/fileBinding"
+    },
+    "predecessor_package_digest": {
+      "$ref": "#/$defs/sha256"
     }
   },
   "allOf": [
     {
       "if": {
-        "properties": {
-          "stage": {
-            "const": "capture-official"
+        "allOf": [
+          {
+            "properties": {
+              "stage": {
+                "const": "capture-official"
+              }
+            },
+            "required": [
+              "stage"
+            ]
+          },
+          {
+            "not": {
+              "required": [
+                "predecessor_import"
+              ]
+            }
           }
-        },
-        "required": [
-          "stage"
         ]
       },
       "then": {
@@ -249,16 +294,27 @@
     },
     {
       "if": {
-        "properties": {
-          "stage": {
-            "enum": [
-              "capture-official",
-              "capture-candidate"
+        "allOf": [
+          {
+            "properties": {
+              "stage": {
+                "enum": [
+                  "capture-official",
+                  "capture-candidate"
+                ]
+              }
+            },
+            "required": [
+              "stage"
             ]
+          },
+          {
+            "not": {
+              "required": [
+                "predecessor_import"
+              ]
+            }
           }
-        },
-        "required": [
-          "stage"
         ]
       },
       "then": {
@@ -272,8 +328,61 @@
           "surface",
           "client_bindings",
           "assertion_context",
+          "assertion_gate",
           "restoration",
           "security"
+        ]
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "predecessor_import"
+        ]
+      },
+      "then": {
+        "required": [
+          "predecessor_package_digest"
+        ],
+        "properties": {
+          "stage": {
+            "enum": [
+              "capture-official",
+              "classify"
+            ]
+          },
+          "status": {
+            "const": "complete"
+          },
+          "candidate_purpose": {
+            "const": null
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "allOf": [
+          {
+            "required": [
+              "predecessor_import"
+            ]
+          },
+          {
+            "properties": {
+              "stage": {
+                "const": "capture-official"
+              }
+            },
+            "required": [
+              "stage"
+            ]
+          }
+        ]
+      },
+      "then": {
+        "required": [
+          "surface"
         ]
       }
     },
@@ -291,6 +400,7 @@
       "then": {
         "required": [
           "candidate_id",
+          "candidate_purpose",
           "observed_profile"
         ],
         "properties": {
@@ -380,6 +490,7 @@
       "then": {
         "required": [
           "candidate_id",
+          "candidate_purpose",
           "result_schema_version",
           "target_version",
           "equal",
@@ -411,6 +522,7 @@
       "then": {
         "required": [
           "candidate_id",
+          "candidate_purpose",
           "result_schema_version",
           "accepted",
           "target_version",
@@ -426,7 +538,10 @@
           "classification_package_digest",
           "official_evidence_inventory_digest",
           "candidate_evidence_inventory_digest",
-          "evidence_seal"
+          "evidence_seal",
+          "candidate_identity",
+          "candidate_external_gate",
+          "production_state"
         ]
       }
     },
@@ -447,8 +562,27 @@
       },
       "then": {
         "required": [
-          "candidate_id"
+          "candidate_id",
+          "candidate_purpose"
         ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "stage": {
+            "enum": [
+              "capture-official",
+              "classify"
+            ]
+          }
+        },
+        "required": ["stage"]
+      },
+      "then": {
+        "properties": {
+          "candidate_purpose": {"const": null}
+        }
       }
     }
   ],
@@ -461,6 +595,12 @@
     "safeId": {
       "type": "string",
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "candidatePurpose": {
+      "enum": [
+        "validation_only",
+        "production_replacement"
+      ]
     },
     "version": {
       "type": "string",
@@ -526,6 +666,35 @@
           "type": "integer",
           "minimum": 1
         }
+      }
+    },
+    "candidateIdentityProjection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_tree_sha256",
+        "image_id",
+        "image_reference",
+        "build_id",
+        "deployed_version",
+        "candidate_purpose"
+      ],
+      "properties": {
+        "source_tree_sha256": {"$ref": "#/$defs/sha256"},
+        "image_id": {"$ref": "#/$defs/imageId"},
+        "image_reference": {"$ref": "#/$defs/immutableImage"},
+        "build_id": {"$ref": "#/$defs/safeId"},
+        "deployed_version": {"$ref": "#/$defs/safeId"},
+        "candidate_purpose": {"$ref": "#/$defs/candidatePurpose"}
+      }
+    },
+    "externalGateBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidence_root", "receipt"],
+      "properties": {
+        "evidence_root": {"$ref": "#/$defs/absolutePath"},
+        "receipt": {"$ref": "#/$defs/fileBindingWithBytes"}
       }
     },
     "fileBindings": {

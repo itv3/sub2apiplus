@@ -64,6 +64,7 @@ type BodyPolicy struct {
 type BodyRuntimeConditions struct {
 	CreditIDPresent            bool
 	PreviousResponseIDReusable bool
+	HostedFileUploadPresent    bool
 }
 
 func (p BodyPolicy) Validate() error {
@@ -383,6 +384,11 @@ func validateCompilerPlan(plan CodexEgressPlan, bundle ReleaseBundle) error {
 	if err := plan.BodyPolicy.Validate(); err != nil {
 		return err
 	}
+	if !plan.RoutingHint.IsZero() {
+		if err := plan.RoutingHint.Validate(); err != nil {
+			return err
+		}
+	}
 	if plan.BehaviorPolicy.ID != "" && plan.BehaviorPolicy.ID != bundle.behavior.ID {
 		return errors.New("Plan BehaviorPolicy 与 Bundle 不一致")
 	}
@@ -668,7 +674,7 @@ func compileEndpointHeaders(
 		}
 		value, generated, valueErr := codexHeaderValue(
 			slot, userAgent, originator,
-			plan.IdentityFacts, authentication,
+			plan.IdentityFacts, plan.RoutingHint, authentication,
 		)
 		if valueErr != nil {
 			return nil, fmt.Errorf("Endpoint %s Header %s：%w", endpoint.EndpointID(), slot.Name, valueErr)
@@ -794,6 +800,7 @@ func codexHeaderValue(
 	userAgent string,
 	originator string,
 	facts CodexIdentityFacts,
+	routingHint CodexRoutingHintFacts,
 	authentication AttemptAuthenticationInput,
 ) (string, bool, error) {
 	name := strings.ToLower(strings.TrimSpace(slot.Name))
@@ -809,7 +816,16 @@ func codexHeaderValue(
 		return facts.ClientRequestID.Value, false, nil
 	}
 	switch slot.Source {
-	case profilecontract.SourceGenerated, profilecontract.SourceRequestBody:
+	case profilecontract.SourceRequestBody:
+		if name == "content-length" {
+			return "", true, nil
+		}
+		if name == "x-codex-routing-hint" {
+			value, err := routingHint.HeaderValue()
+			return value, false, err
+		}
+		return "", false, errors.New("未知 request_body Header")
+	case profilecontract.SourceGenerated:
 		return "", true, nil
 	case profilecontract.SourceConstant:
 		return "", false, errors.New("ProfileSpec constant 为空")
@@ -1214,6 +1230,8 @@ func codexBodyFieldConditionEnabled(
 		return true, nil
 	case profilecontract.ConditionCreditIdPresent:
 		return bodyConditions.CreditIDPresent, nil
+	case profilecontract.ConditionHostedFileUpload:
+		return bodyConditions.HostedFileUploadPresent, nil
 	case profilecontract.ConditionAuto:
 		return false, nil
 	case profilecontract.ConditionAttestationPresent,

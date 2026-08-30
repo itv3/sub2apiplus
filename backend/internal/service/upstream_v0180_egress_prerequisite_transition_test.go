@@ -159,12 +159,20 @@ func upstreamV0180EgressPrerequisiteTransitionSupersedesService(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if codex01491TerminalStateSupersedesService(
+		path, priorDigest, currentDigest,
+	) {
+		return true
+	}
 	receipt, err := loadUpstreamV0180EgressPrerequisiteServiceTransition()
 	if err != nil {
 		return false
 	}
 	for _, transition := range receipt.Transitions {
-		if transition.Path != path || transition.ToSHA256 != currentDigest {
+		if transition.Path != path || (transition.ToSHA256 != currentDigest &&
+			!codex01491TerminalStateSupersedesService(
+				path, transition.ToSHA256, currentDigest,
+			)) {
 			continue
 		}
 		if transition.FromSHA256 == priorDigest ||

@@ -1,7 +1,7 @@
 # Codex CLI 客户端仿真与版本演进手册
 
 > **适用范围**：Sub2API 使用 OpenAI OAuth 账号的 Codex CLI 客户端仿真
-> **当前 active 基线**：`codex-cli 0.147.0`；previous 为 `codex-cli 0.145.0`
+> **当前 active 基线**：`codex-cli 0.149.1`；previous 为 `codex-cli 0.147.0`
 > **依赖基线**：[`tools/spec_source_deps/manifest.json`](../tools/spec_source_deps/manifest.json)
 > **文档定位**：本文是 Codex CLI 客户端规则、Sub2API 仿真实现和版本演进的人类可读权威入口；
 > 逐规则机器证据见 [`docs/EVIDENCE_INDEX.md`](EVIDENCE_INDEX.md)。
@@ -27,12 +27,12 @@ HTTP／WebSocket、Header、Body、端点和跨请求状态。当前版本及依
 mimic、其他供应商及可关闭的 plugins、apps、analytics、otel 流量。自定义 CA 和自定义
 provider 规则仅作为条件分支记录。
 
-**遥测零流量边界。** Framework §1.2、§3.2 的公共规则适用于当前 active 0.147.0。官方源码中，
-`config/src/types.rs:219-223` 的 `AnalyticsConfigToml.enabled=false` 经
-`core/src/config/mod.rs:4261` 传入 analytics client，并由 `analytics/src/client.rs:220-226` 禁用事件队列。
+**遥测零流量边界。** Framework §1.2、§3.2 的公共规则适用于当前 active 0.149.1。官方源码中，
+`config/src/types.rs:217-223` 的 `AnalyticsConfigToml.enabled=false` 经
+`core/src/config/mod.rs:4182` 传入 analytics client，并由 `analytics/src/client.rs:222-233` 禁用事件队列。
 OTEL 是独立配置：`otel.metrics_exporter=none` 才关闭默认 Statsig metrics；不能只写笼统的
-`otel.exporter=none`，因为 `config/src/types.rs:583-592` 中 log／trace exporter 默认是 `None`，metrics
-exporter 默认仍为 `Statsig`，`otel/src/provider.rs:137-159` 仅在 metrics exporter 非 `None` 时构建指标
+`otel.exporter=none`，因为 `config/src/types.rs:585-592` 中 log／trace exporter 默认是 `None`，metrics
+exporter 默认仍为 `Statsig`，`otel/src/provider.rs:194-230` 仅在 metrics exporter 非 `None` 时构建指标
 管线。上述配置及源码摘要冻结后，候选“零遥测”不计为仿真差异，也不能生成 RequiredRule；未关闭或
 实际触发的请求仍按正常出站规则验收。
 
@@ -64,26 +64,39 @@ Codex 行为”，第三部分说明“Sub2API 如何实现 Codex 方言”，�
 
 | 类型 | 材料 | 可以证明 |
 |---|---|---|
-| L1 | `local-analysis/sources/codex-cli-0.147/codex-rs/` 官方 stable 源码 | 调用链、条件和内部机制 |
+| L1 | `local-analysis/sources/codex-cli-0.149.1/codex-rs/` 官方 stable 源码 | 调用链、条件和内部机制 |
 | L2 | `tools/spec_source_deps/` 锁定依赖源码 | 指定依赖版本与 feature 下的行为 |
 | P／R | pcap、等长脱敏原始字节 | TLS、连接、HTTP／WS 和 Body 的实际输出 |
 | J／M／L4 | 解码摘要、manifest、测试和合成输入 | 摘要绑定与辅助验证，不能单独定义官方规则 |
 
 当前 L2 依赖锁定为 `hyper 1.8.1`、`hyper-util 0.1.20`、`http 1.4.0`、`tungstenite 0.27.0`、
-`h2 0.4.13` 和 `reqwest 0.12.28`；准确来源和摘要以依赖基线清单为准。Sub2API 实现证据位于
+`h2 0.4.16` 和 `reqwest 0.12.28`；准确来源和摘要以依赖基线清单为准。Sub2API 实现证据位于
 `backend/` 和 `docs/egress/`；逐规则索引及源码锚点分别见 `docs/EVIDENCE_INDEX.md` 和
 `tools/spec_ref_anchors.json`。
 
-当前规则画像基于官方 tag `rust-v0.147.0`（commit `be6e8eac029b183056b7e4402879f15d2c85f61b`）
-及正式 0.145→0.147 Campaign。批准画像为 `codex-0.147.0-official-k59-v1`，摘要为
-`94071c8eb93cfd337ac6eabc291d878084e3dcec8a9e618e04e6f68792d1a7bc`；Campaign
-`codex-0_147_0-20260815T055433Z` 的 42 项规则和 15 项门禁全部通过，acceptance SHA-256 为
-`07d0006b2819effa47ee3301c0210a73aecd2047712fe76f992128e33e1579e6`。Catalog 选择和当前生产
-事实分别由
+当前规则画像基于官方 tag `rust-v0.149.1`（commit `ff29a44391deccde0aba0f8390337d7f3c319ea4`）；
+官方 Linux amd64 二进制 SHA-256 为
+`e24fb784c7d71140d67afb620f56e9137496cf7f6c9e19217fa3666dcf306278`。仓库 active 画像为
+`codex-0.149.1-official-r1491-v2`，摘要为
+`8c22d3b18b16d249ac041a97efad1b6703c11ef290622b0b1642679a3c010ec3`；Release graph 与
+Snapshot catalog 摘要分别为
+`057264d864aea27ebafecf504e95b8c948f25ac20f11fdabbfd2385d35c85465`、
+`4b3e2aded6ad932a4f1adb5efefefe8dd5bad7092a1de3c0bddff54f4a84f57c`。0.149.1 的 HTTP、WS
+Main 与 WS Lite 主采样分别绑定 run `codex-0_149_1-20260824T-http-main-r2`、
+`codex-0_149_1-20260824T-ws-main-r2`、`codex-0_149_1-20260824T-ws-lite-r1`。
+本次 Catalog 晋升与 ARM64 生产激活分别由
+[`R28 catalog promotion receipt`](egress/maintenance/CODEX_CLI_0147_TO_01491_R28_CATALOG_PROMOTION_RECEIPT.json)
+与
+[`R34 production activation receipt`](egress/maintenance/CODEX_CLI_0147_TO_01491_R34_PRODUCTION_ACTIVATION_RECEIPT.json)
+证明；逐轮 transition 已合并为
+[`0.149.1 terminal state receipt`](egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json)，
+不再作为运行时输入或独立测试留在仓库。
+0.147 的 Catalog 晋升与生产事实仍分别由
 [`K83 catalog promotion receipt`](egress/maintenance/CODEX_CLI_0145_TO_0147_K83_CATALOG_PROMOTION_RECEIPT.json)
 与
 [`K83 production activation receipt`](egress/maintenance/CODEX_CLI_0145_TO_0147_K83_PRODUCTION_ACTIVATION_RECEIPT.json)
-证明。各规则保留的早期 run ID 是未变化规则的原始证据，不代表 active 版本仍为 0.145。
+证明；它们现在是 previous 与历史生产证据，不表示本次修改或部署了 Vircs。各规则保留的早期 run ID
+是未变化规则的原始证据，不代表 active 版本仍为旧版本。
 
 所有证据必须绑定官方源码、依赖、二进制、平台、配置、账号、抓包运行号和摘要。只有能够重新
 解析的材料可以作为规则依据；R 类材料只允许等长脱敏，未脱敏材料不得离开采集机。
@@ -159,7 +172,7 @@ images、alpha-search、legacy compact、realtime 和条件 header 等只在各�
 - **规则**：`CODEX_CA_CERTIFICATE` 或 `SSL_CERT_FILE` 指向非空、可读且可解析的
   CA bundle 时切换到 rustls；实测为 10 cipher，ALPN 依次 offer `h2`、`http/1.1`。
 - **源码**：[L1] `http-client/src/custom_ca.rs:296-320`、`http-client/src/custom_ca.rs:398`；
-  默认客户端失败回退见 `login/src/auth/default_client.rs:300-305`。
+  默认客户端失败回退见 `login/src/auth/default_client.rs:305-310`。
 - **实测**：`audit-tls002-ca-n0-20260730a`（P）验证 ClientHello；
   `official-h2-20260727T131936Z`（J）验证协商为 h2。
 - **实现**：只有有效 CA bundle 才进入该分支；变量未设置、空值或证书无效不得按 h2 画像处理。
@@ -194,9 +207,9 @@ images、alpha-search、legacy compact、realtime 和条件 header 等只在各�
 - **范围**：内置 OpenAI OAuth。
 - **规则**：`supports_websockets=true` 时先走 WS；重试预算耗尽并设置
   `force_http_fallback` 后改走 HTTP POST。
-- **源码**：[L1] `model-provider-info/src/lib.rs:139`、
-  `core/src/client.rs:522`、`core/src/client.rs:949`、
-  `core/src/responses_retry.rs:35-45`。
+- **源码**：[L1] `model-provider-info/src/lib.rs:146`、
+  `core/src/client.rs:524`、`core/src/client.rs:955`、
+  `core/src/responses_retry.rs:85-99`。
 - **实测**：`official-httpfb3-20260727T234853Z`（J）记录自然重试耗尽；
   `audit-ep014-turnstate-echo-20260730a`（R）记录受控 426 后的 HTTP 降级请求。
 - **实现**：内置 provider 默认启用 WS；HTTP 只在明确降级条件成立时使用。
@@ -208,9 +221,9 @@ images、alpha-search、legacy compact、realtime 和条件 header 等只在各�
   的 HTTP 链；不含长期持有 Client 的 backend-client 和 WS prewarm。
 - **规则**：不同上层 API 调用各自新建 `reqwest::Client`，正常跨调用不复用 TCP；
   同一次调用的 retry 共享 Client，存活连接可复用，断连后由同一 Client 新建 TCP。
-- **源码**：[L1] `login/src/auth/default_client.rs:221-223`、
-  `core/src/client.rs:983-996`、`codex-api/src/endpoint/session.rs:80-154`、
-  `model-provider/src/models_endpoint.rs:75`、`ext/image-generation/src/backend.rs:30`、
+- **源码**：[L1] `login/src/auth/default_client.rs:226-228`、
+  `core/src/client.rs:1014-1027`、`codex-api/src/endpoint/session.rs:80-154`、
+  `model-provider/src/models_endpoint.rs:76`、`ext/image-generation/src/backend.rs:62-78`、
   `ext/web-search/src/tool.rs:91`。
 - **实测**：`clean2-conn-20260728T132008Z`、`audit-conn001-image-repeat-20260730a`、
   `audit-conn001-search-repeat-20260730a`、
@@ -258,14 +271,17 @@ images、alpha-search、legacy compact、realtime 和条件 header 等只在各�
 
 - **范围**：内置 OpenAI OAuth；普通 HTTP。
 - **规则**：用户 header 按 `HeaderMap.entries` 迭代序输出，不按字典序；发生
-  `swap_remove` 时也不能把结果简化为原始插入序。0.147.0 的默认 Lite Responses 样本中，
-  `x-openai-internal-codex-responses-lite` 位于 `x-codex-turn-metadata` 与
-  `x-client-request-id` 之间。
+  `swap_remove` 时也不能把结果简化为原始插入序。0.149.1 的 Responses 中，
+  `x-openai-internal-codex-responses-lite`（若有）位于 `x-codex-turn-metadata` 之后，
+  `x-codex-routing-hint` 随后追加并位于 `x-client-request-id` 之前。`cookie` 仅在
+  Cookie jar 已建立时出现；冷启动 Lite 样本不强制该头。
 - **源码**：[L2] `tools/spec_source_deps/http-1.4.0/src/header/map.rs:923-928`、
   `tools/spec_source_deps/http-1.4.0/src/header/map.rs:1572-1602`；各端点的构造顺序由
-  L1 `core/src/client.rs:1153-1177`、`core/src/client.rs:1918-1924` 调用链决定。
-- **实测**：`audit-h1raw-20260730a`、`audit-ep014-turnstate-echo-20260730a`（R）
-  验证 models、responses 及条件 turn-state 插槽。
+  L1 `core/src/client.rs:1187-1211`、`core/src/client.rs:1491-1498`、
+  `core/src/client.rs:1974-1980` 调用链决定。
+- **实测**：`c1491-r14-f-lite-http-response/relay/conn005.client_to_upstream.bin`（R）
+  验证冷启动 Lite Responses 的最终原始线序；models 与条件 turn-state 由同 Campaign
+  其他受管样本覆盖。
 - **实现**：逐端点复刻最终线序，不得使用统一字典排序或一份 header 并集。
 - **状态**：✅ 源码充分；抓包充分。
 
@@ -277,7 +293,7 @@ images、alpha-search、legacy compact、realtime 和条件 header 等只在各�
 - **规则**：SETTINGS 帧按 `ENABLE_PUSH, INITIAL_WINDOW_SIZE, MAX_FRAME_SIZE,
   MAX_HEADER_LIST_SIZE` 输出，即参数 ID `2,4,5,6`。
 - **源码**：[L2] `tools/spec_source_deps/hyper-1.8.1/src/proto/h2/client.rs:110` 与
-  `tools/spec_source_deps/h2-0.4.13/src/frame/settings.rs:213-259`。
+  `tools/spec_source_deps/h2-0.4.16/src/frame/settings.rs:213-259`。
 - **实测**：`official-h2-20260727T131936Z`（J，3/3 完整连接）为主证据；
   `relay-h2-20260728T032147Z`（R）只作正向原始帧交叉核验，不用于计数或缺失命题。
 - **实现**：只在有效自定义 CA 触发的 h2 分支复刻。
@@ -329,7 +345,7 @@ images、alpha-search、legacy compact、realtime 和条件 header 等只在各�
 - **范围**：自定义 CA 条件分支。
 - **规则**：stream 0 的首个 WINDOW_UPDATE 增量为 `5,177,345`。
 - **源码**：[L2] `tools/spec_source_deps/hyper-1.8.1/src/proto/h2/client.rs:48` 与
-  `tools/spec_source_deps/h2-0.4.13/src/frame/settings.rs:43-44`。
+  `tools/spec_source_deps/h2-0.4.16/src/frame/settings.rs:43-44`。
 - **实测**：`official-h2-20260727T131936Z`（J，3/3 完整连接）为主证据；
   `relay-h2-20260728T032147Z`（R）只作正向原始帧交叉核验。
 - **实现**：复刻该连接窗口配置，不单独硬写无来源的帧常量。
@@ -339,8 +355,8 @@ images、alpha-search、legacy compact、realtime 和条件 header 等只在各�
 
 - **范围**：自定义 CA 条件分支。
 - **规则**：`:method, :scheme, :authority, :path`。
-- **源码**：[L2] `tools/spec_source_deps/h2-0.4.13/src/frame/headers.rs:698-718`、
-  `tools/spec_source_deps/h2-0.4.13/src/hpack/encoder.rs:61-78`。
+- **源码**：[L2] `tools/spec_source_deps/h2-0.4.16/src/frame/headers.rs:698-718`、
+  `tools/spec_source_deps/h2-0.4.16/src/hpack/encoder.rs:61-78`。
 - **实测**：`official-h2-20260727T131936Z`（J，3/3 完整连接）为主证据；
   `relay-h2-20260728T032147Z`（R）只作 HPACK 正向交叉核验。
 - **实现**：保持该伪头顺序。
@@ -376,7 +392,7 @@ images、alpha-search、legacy compact、realtime 和条件 header 等只在各�
 - **范围**：自定义 provider；仅当 `http_headers` 注入对应头。
 - **规则**：WS 握手中 `origin` 输出为 `Origin`，
   `sec-websocket-protocol` 输出为 `Sec-WebSocket-Protocol`；普通 HTTP 仍为小写。
-- **源码**：[L1] 注入入口 `model-provider-info/src/lib.rs:115`；[L2]
+- **源码**：[L1] 注入入口 `model-provider-info/src/lib.rs:122`；[L2]
   `tools/spec_source_deps/tungstenite-openai-0.27.0/src/handshake/client.rs:190-206`。
 - **实测**：`relay-wshdr3`（R）在同一运行取得 WS 正例与 HTTP 对照。
 - **实现**：固定 OpenAI OAuth 上游无需实现；兼容 Codex 自定义 provider 时才实现。
@@ -401,7 +417,7 @@ images、alpha-search、legacy compact、realtime 和条件 header 等只在各�
   service_tier?, prompt_cache_key?, text?, generate?, client_metadata?`。
   `generate=false` 只用于 warmup；`previous_response_id` 只在既有响应前缀可复用时出现。
 - **源码**：[L1] `codex-api/src/common.rs:302-328`、
-  `core/src/client.rs:1618-1654`、`core/src/client.rs:924`。
+  `core/src/client.rs:1674-1710`、`core/src/client.rs:930`。
 - **实测**：`clean-tool-20260728T132346Z`（R）覆盖 Lite；
   `audit-ws005-nonlite-20260730a`（R）覆盖非 Lite、warmup 与增量帧。
 - **实现**：按 serde 条件省略字段；不得把 Lite 的 13 项子集或“首轮／后续轮”写成固定规则。
@@ -409,17 +425,29 @@ images、alpha-search、legacy compact、realtime 和条件 header 等只在各�
 
 ## 2.8 Header
 
-### SPEC-HDR-001 请求 header 的内部组装顺序
+### SPEC-HDR-001 请求 header 的内部组装顺序与 routing hint
 
 - **范围**：派生／内部机制。
 - **机制**：请求先由 provider 构造，再合并端点额外头、body 和 configure 结果；
   每次 retry 最后执行认证。流式路径还会先转为 prepared request。Client 默认头是
   与请求级头并行的入口。
+- **规则**：0.149.1 仅在内置 OpenAI ChatGPT OAuth 身份下，为普通 Responses HTTP、legacy
+  compact 与 WS 握手添加 `x-codex-routing-hint`。值从同一次最终语义 Body 派生：无
+  `service_tier` 或其值为 `null` 时为 `model=<model>`；存在字符串 tier 时为
+  `model=<model>;tier=<service_tier>`。普通 header override、自定义 provider、API Key、环境变量
+  key、experimental bearer、显式 auth 或 AWS provider 均不得生成或覆盖该头。
 - **源码**：[L1] `codex-api/src/endpoint/session.rs:48`、
   `codex-api/src/endpoint/session.rs:80-154`、
-  `login/src/auth/default_client.rs:291-305`。
-- **实测**：不适用；wire 只能证明最终 header 集合与线序，不能反推内部调用顺序。
-- **实现**：内部代码可不同，但覆盖、认证重试和最终线序结果必须与各可见规则一致。
+  `login/src/auth/default_client.rs:296-310`、
+  `core/src/client.rs:630-635`、`core/src/client.rs:989-1011`、
+  `core/src/client.rs:1140-1141`、`core/src/client.rs:1491-1498`、
+  `core/src/client.rs:1619-1623`。
+- **实测**：0.149.1 HTTP Main、WS Main 与 WS Lite 主采样均验证 model-only 线序；tier、`null`、
+  重复键、非法 Header 字节与非 OAuth 身份由源码闭环和本地负例覆盖。wire 只能证明最终集合与线序，
+  不能单独反推内部调用顺序。
+- **实现**：内部代码可不同，但 routing hint 必须由通过重复键检查的最终 Body 与可信 OAuth 身份共同
+  生成；入站同名头一律删除，Body 或 Header 值非法时 fail-close。覆盖、认证重试和最终线序结果必须
+  与各可见规则一致。
 - **状态**：— 源码充分；抓包不适用。
 
 ### SPEC-HDR-002 Client 默认 header 集合
@@ -430,9 +458,9 @@ images、alpha-search、legacy compact、realtime 和条件 header 等只在各�
   配置项 `enforce_residency`，不是环境变量。
 - **源码**：[L1] `login/src/auth/default_client.rs:52`、
   `login/src/auth/default_client.rs:99-104`、
-  `login/src/auth/default_client.rs:330-343`、
-  `config/src/config_requirements.rs:929`、
-  `exec/src/lib.rs:460`、`tui/src/lib.rs:1150`、
+  `login/src/auth/default_client.rs:335-348`、
+  `config/src/config_requirements.rs:954`、
+  `exec/src/lib.rs:471`、`tui/src/lib.rs:1562`、
   `app-server/src/request_processors/initialize_processor.rs:136`。
 - **实测**：`official-body2-20260728T000549Z`（J）验证默认集合；
   `audit-hdr002-residency-20260730a`（R）验证 `us` 正向分支。
@@ -444,8 +472,8 @@ images、alpha-search、legacy compact、realtime 和条件 header 等只在各�
 - **范围**：内置 OpenAI OAuth。
 - **规则**：Codex 自身只在 WS 握手发送
   `openai-beta: responses_websockets=2026-02-06`；HTTP responses 和 images 不发送。
-- **源码**：[L1] `core/src/client.rs:142`、`core/src/client.rs:1113`、
-  `cli/src/doctor.rs:93`、`cli/src/doctor.rs:2393`。
+- **源码**：[L1] `core/src/client.rs:143`、`core/src/client.rs:1147`、
+  `cli/src/doctor.rs:110`、`cli/src/doctor.rs:2396`。
 - **实测**：`clean-tool-20260728T132346Z`（R）为 WS 正例；
   `audit-body002-plain-20260730a`（HTTP responses）、
   `clean-image-20260728T132405Z`（generations）、
@@ -457,11 +485,11 @@ images、alpha-search、legacy compact、realtime 和条件 header 等只在各�
 
 - **范围**：内置 OpenAI OAuth。
 - **规则**：UA 为平台前缀加可选 ` ({name}; {version})` suffix。exec 使用
-  `codex_exec/0.147.0` 与 `(codex_exec; 0.147.0)`；TUI 使用
-  `codex-tui/0.147.0` 与 `(codex-tui; 0.147.0)`。启动首次 models 因进程级写入时序，
+  `codex_exec/0.149.1` 与 `(codex_exec; 0.149.1)`；TUI 使用
+  `codex-tui/0.149.1` 与 `(codex-tui; 0.149.1)`。启动首次 models 因进程级写入时序，
   有 suffix 和无 suffix 均属于官方观测集。
 - **源码**：[L1] `login/src/auth/default_client.rs:39`、
-  `login/src/auth/default_client.rs:159`、
+  `login/src/auth/default_client.rs:164`、
   `app-server/src/request_processors/initialize_processor.rs:94-137`、
   `cloud-tasks/src/util.rs:13`。
 - **实测**：`clean-search-20260728T132311Z`（exec）、`clean-legacy-20260728T132509Z`
@@ -490,7 +518,7 @@ images、alpha-search、legacy compact、realtime 和条件 header 等只在各�
   `session_id` 或 `conversation-id`。realtime 的 `x-session-id` 是独立分支。
 - **源码**：[L1] `codex-api/src/requests/headers.rs:8`、
   `codex-api/src/requests/headers.rs:11`；realtime 见
-  `core/src/realtime_conversation.rs:1668`。
+  `core/src/realtime_conversation.rs:1672`。
 - **实测**：`audit-h1raw-20260730a`（responses）、`clean-legacy-20260728T132509Z`
   （compact）、`clean-search-20260728T132311Z`（alpha-search 不发送）均为 R。
 - **实现**：严格按端点发送，不能把会话头扩散到 alpha-search。
@@ -504,9 +532,9 @@ images、alpha-search、legacy compact、realtime 和条件 header 等只在各�
   `x-openai-memgen-request: true` 来自内部 memory consolidation；
   `x-codex-parent-thread-id` 来自父线程；
   `x-responsesapi-include-timing-metrics: true` 来自 `runtime_metrics`。
-- **源码**：[L1] `core/src/responses_metadata.rs:255-334`、
-  `core/src/client.rs:734-767`、`core/src/client.rs:1108-1120`、
-  `features/src/lib.rs:982-986`。
+- **源码**：[L1] `core/src/responses_metadata.rs:317-404`、
+  `core/src/client.rs:742-775`、`core/src/client.rs:1139-1154`、
+  `features/src/lib.rs:973-977`。
 - **实测**：`relay-review4`、`audit-hdr008-guardian-20260730a`、
   `audit-hdr008-memgen-20260730a`、`relay-rtmetrics1`（R）。
 - **实现**：按条件插入；`x-openai-subagent` 的 `Other(label)` 不得实现成封闭枚举。
@@ -532,8 +560,8 @@ images、alpha-search、legacy compact、realtime 和条件 header 等只在各�
 - **范围**：内置 OpenAI OAuth。
 - **规则**：`enable_request_compression` 默认开启时普通 responses 使用 zstd；
   关闭时明文。legacy compact 始终明文。
-- **源码**：[L1] `features/src/lib.rs:1084-1087`、
-  `core/src/session/session.rs:1169`、`http-client/src/request.rs:41-43`。
+- **源码**：[L1] `features/src/lib.rs:1087-1090`、
+  `core/src/session/session.rs:1403`、`http-client/src/request.rs:41-43`。
 - **实测**：`audit-ep014-turnstate-echo-20260730a`（zstd responses）、
   `audit-body002-plain-20260730a`（关闭压缩）、`clean-legacy-20260728T132509Z`
   （明文 compact），均为 R。
@@ -546,8 +574,8 @@ images、alpha-search、legacy compact、realtime 和条件 header 等只在各�
 - **规则**：instructions/tools 迁入 `input.additional_tools`；
   `reasoning.context=all_turns`；`parallel_tool_calls=false`。WS 增量帧不重复发送
   已复用的 additional_tools 前缀。
-- **源码**：[L1] `core/src/client.rs:817-833`、
-  `core/src/client.rs:862-891`、`core/src/client.rs:924`。
+- **源码**：[L1] `core/src/client.rs:825-841`、
+  `core/src/client.rs:868-897`、`core/src/client.rs:930`。
 - **实测**：`audit-ep014-turnstate-echo-20260730a`（HTTP）、
   `clean-tool-20260728T132346Z`（WS），均为 R。
 - **实现**：由模型 manifest 驱动；不得把 Lite 变换应用到非 Lite 模型。
@@ -560,8 +588,8 @@ images、alpha-search、legacy compact、realtime 和条件 header 等只在各�
   `response.metadata.headers` 读取。保存到当前 turn 后，后续 responses／legacy
   compact 通过 header，WS 通过 `client_metadata` 原样回送。
 - **源码**：[L1] `codex-api/src/sse/responses.rs:62-70`、
-  `codex-api/src/endpoint/responses_websocket.rs:739-742`、
-  `core/src/client.rs:1575-1579`、`core/src/client.rs:1898-1914`。
+  `codex-api/src/endpoint/responses_websocket.rs:747-750`、
+  `core/src/client.rs:1630-1634`、`core/src/client.rs:1954-1970`。
 - **实测**：`audit-ep014-turnstate-echo-20260730a`、
   `audit-ep014-turnstate-compact-20260730a`、
   `audit-body004-ws-turnstate-20260730a`（R）完成三条输入→保存→回送闭环。
@@ -572,7 +600,7 @@ images、alpha-search、legacy compact、realtime 和条件 header 等只在各�
 
 - **范围**：内置 OpenAI OAuth；HTTP 与 WS。
 - **规则**：`tool_choice` 为 JSON 字符串，当前值 `"auto"`，不是对象。
-- **源码**：[L1] `codex-api/src/common.rs:259`、`core/src/client.rs:923`。
+- **源码**：[L1] `codex-api/src/common.rs:259`、`core/src/client.rs:929`。
 - **实测**：`audit-ep014-turnstate-echo-20260730a`、`audit-body002-plain-20260730a`、
   `clean-tool-20260728T132346Z`、`audit-ws005-nonlite-20260730a`（R）。
 - **实现**：所有传输和 Lite／非 Lite 分支均序列化为字符串。
@@ -586,7 +614,7 @@ images、alpha-search、legacy compact、realtime 和条件 header 等只在各�
   `reasoning.context=all_turns`；非 Lite 保留顶层 instructions/tools，
   `parallel_tool_calls` 取 prompt 值。Option 字段为空时省略。
 - **源码**：[L1] `codex-api/src/common.rs:253-274`、
-  `core/src/client.rs:817-924`。
+  `core/src/client.rs:825-930`。
 - **实测**：`audit-ep014-turnstate-echo-20260730a`（Lite）与
   `audit-body002-plain-20260730a`（非 Lite），均为 R。
 - **实现**：按模型 manifest 与 Option 值序列化，不硬编码某个模型的一次字段子集。
@@ -611,8 +639,8 @@ images、alpha-search、legacy compact、realtime 和条件 header 等只在各�
 - **规则**：非 Lite 可在顶层 `tools` 中发送 namespace `image_gen`／工具
   `imagegen`；Lite 将能力放入 `input.additional_tools` 的 exec 工具目录。
   模型调用后由客户端请求独立 `images/generations` 或 `images/edits`。
-- **源码**：[L1] `core/src/tools/spec_plan.rs:103-104`、
-  `tools/src/tool_spec.rs:22-45`、`ext/image-generation/src/backend.rs:30-78`、
+- **源码**：[L1] `core/src/tools/spec_plan.rs:106-107`、
+  `tools/src/tool_spec.rs:22-45`、`ext/image-generation/src/backend.rs:61-110`、
   `codex-api/src/endpoint/images.rs:33-68`。
 - **实测**：`audit-body002-plain-20260730a`（非 Lite）、
   `clean-image-20260728T132405Z`（Lite + generations）、
@@ -620,19 +648,28 @@ images、alpha-search、legacy compact、realtime 和条件 header 等只在各�
 - **实现**：按 Lite 模式呈现工具；不得改成 hosted `{"type":"image_generation"}`。
 - **状态**：✅ 源码充分；抓包充分。
 
-### SPEC-EP-002 OAuth 域名分布
+### SPEC-EP-002 OAuth 域名分布与 Files 三跳
 
 - **范围**：内置 OpenAI OAuth。
 - **规则**：模型与常规业务默认使用 `chatgpt.com/backend-api/*`。条件例外为：
   token 刷新到 `auth.openai.com`；realtime sideband 默认到 `api.openai.com`；
   文件上传 PUT 使用服务端返回的区域 `*.oaiusercontent.com` URL。
-- **源码**：[L1] `model-provider-info/src/lib.rs:331-334`、
-  `login/src/auth/manager.rs:192`、`core/src/realtime_conversation.rs:1157-1165`、
-  `core/src/mcp_openai_file.rs:147-189`、`codex-api/src/files.rs:126-275`。
+- **Files 规则**：`POST /backend-api/files` 的基础 Body 为 `file_name, file_size, use_case`；hosted
+  connector 调用必须再同时发送 `codex_connector_id, codex_action_name, codex_model`，三者必须全有
+  或全无。随后 PUT 必须逐字使用 create 响应返回的完整 URL，最后以空对象 POST
+  `/backend-api/files/{file_id}/uploaded`；`status=retry` 复用 finalize invocation 轮询。成功响应含
+  `file_size_bytes` 时以它为最终大小，缺失时回退到请求大小。
+- **源码**：[L1] `model-provider-info/src/lib.rs:377-380`、
+  `login/src/auth/manager.rs:194`、`core/src/realtime_conversation.rs:1161-1169`、
+  `core/src/mcp_tool_call.rs:441-449`、`core/src/mcp_openai_file.rs:198-243`、
+  `codex-api/src/files.rs:26-39`、`codex-api/src/files.rs:119-188`、
+  `codex-api/src/files.rs:254-319`。
 - **实测**：`oauth-ep002-allhosts`、`oauth-ep002-refresh`（P）；
   `audit-ep012-sideband-synth-20260730a`、
-  `audit-ep002-file-upload-full2-20260730a`（R）。
-- **实现**：使用配置或服务端返回 URL；不得硬编码单一区域上传 host。
+  `audit-ep002-file-upload-full2-20260730a`（R）；0.149.1 hosted 三元字段与大小优先级由官方源码测试、
+  Sub2API 三跳集成测试及缺字段负例共同闭环。
+- **实现**：使用配置或服务端返回 URL；不得硬编码单一区域上传 host。create 与 uploaded 分别冻结
+  Body attestation，uploaded 的 retry 只复用自身 invocation，避免把 hosted create 条件扩散到空 Body。
 - **状态**：✅ 源码部分；抓包充分。
 
 ### SPEC-EP-005 只有 responses 可使用请求压缩
@@ -655,7 +692,7 @@ images、alpha-search、legacy compact、realtime 和条件 header 等只在各�
 ### SPEC-EP-006 models 的 URL 与方法
 
 - **范围**：内置 OpenAI OAuth。
-- **规则**：`GET {base}/models?client_version=0.147.0`。
+- **规则**：`GET {base}/models?client_version=0.149.1`。
 - **源码**：[L1] `codex-api/src/endpoint/models.rs:31-55`。
 - **实测**：`audit-h1raw-20260730a`（R）。
 - **实现**：版本 query 与 CLI 基线一致。
@@ -697,12 +734,12 @@ images、alpha-search、legacy compact、realtime 和条件 header 等只在各�
   `GET+Upgrade wss://api.openai.com/v1/realtime?intent=quicksilver&call_id=…`
   建立 sideband，并发送 `openai-alpha: quicksilver=v1`。
 - **源码**：[L1] `codex-api/src/endpoint/realtime_call.rs:213-224`、
-  `core/src/realtime_conversation.rs:1157`、
-  `core/src/realtime_conversation.rs:1188-1206`、
-  `core/src/realtime_conversation.rs:1657`、
-  `codex-api/src/endpoint/realtime_websocket/methods.rs:742-815`、
-  `codex-api/src/endpoint/realtime_websocket/methods.rs:919-994`、
-  `core/src/realtime_conversation.rs:1763-1769`。
+  `core/src/realtime_conversation.rs:1161`、
+  `core/src/realtime_conversation.rs:1192-1210`、
+  `core/src/realtime_conversation.rs:1661`、
+  `codex-api/src/endpoint/realtime_websocket/methods.rs:808-886`、
+  `codex-api/src/endpoint/realtime_websocket/methods.rs:1014-1089`、
+  `core/src/realtime_conversation/sideband.rs:50-59`。
 - **实测**：`webrtc-20260728T134028Z`（R）自然第一跳返回 400；
   `live2-20260728T140403Z`、`audit-ep012-realtime-20260730a`（R）自然第一跳返回 403；
   `audit-ep012-sideband-synth-20260730a`（R）以受控 200 触发官方客户端第二跳。
@@ -713,10 +750,10 @@ images、alpha-search、legacy compact、realtime 和条件 header 等只在各�
 
 - **范围**：内置 OpenAI OAuth；由 `Provider::url_for_path()` 构造的 Codex API URL。
 - **规则**：provider 级 `query_params=None`；query 只由端点自身添加。目前 models
-  添加 `client_version=0.147.0`，realtime/calls 添加 `intent` 与 `architecture`，
+  添加 `client_version=0.149.1`，realtime/calls 添加 `intent` 与 `architecture`，
   普通 responses 不带 query。
 - **源码**：[L1] `codex-api/src/provider.rs:53`、
-  `model-provider-info/src/lib.rs:341`、
+  `model-provider-info/src/lib.rs:387`、
   `codex-api/src/endpoint/realtime_call.rs:213-224`。
 - **实测**：`audit-h1raw-20260730a`（models／responses）与
   `webrtc-20260728T134028Z`（realtime），均为 R。
@@ -726,19 +763,26 @@ images、alpha-search、legacy compact、realtime 和条件 header 等只在各�
 ### SPEC-EP-014 legacy compact 的 header 集合
 
 - **范围**：内置 OpenAI OAuth；legacy compact。
-- **规则**：默认线序为
+- **规则**：默认 Lite 线序的允许全集为
   `version, x-codex-installation-id, x-codex-window-id, x-codex-turn-metadata,
-  session-id, thread-id, x-openai-internal-codex-responses-lite, authorization,
+  session-id, thread-id, x-codex-routing-hint, x-openai-internal-codex-responses-lite, authorization,
   chatgpt-account-id, content-type, accept, originator, user-agent, cookie, host,
-  content-length`。条件头位于 `x-codex-installation-id` 之后、
+  content-length`。除 `cookie` 外各项必须存在且顺序固定；`cookie` 仅在 Cookie jar
+  已建立时出现，并固定在 `user-agent` 与 `host` 之间。条件头位于
+  `x-codex-installation-id` 之后、
   `x-codex-window-id` 之前：分别触发时，`x-codex-beta-features` 或
   `x-codex-turn-state` 占第 3 个 header 槽。
-- **源码**：[L1] `core/src/client.rs:612-630`、`core/src/client.rs:1898-1915`、
+- **源码**：[L1] `core/src/client.rs:613-638`、`core/src/client.rs:1954-1971`、
   `codex-api/src/endpoint/responses.rs:89`。
-- **实测**：`clean-legacy-20260728T132509Z`（默认）、
+- **实测**：`c1491-r14-f-lite-legacy-compact-default/relay/conn006.client_to_upstream.bin`
+  证明冷启动 Lite 默认请求携带 Lite 头但没有 Cookie；
+  `c1491-r14-f-official-legacy-compact-default/relay/conn007.client_to_upstream.bin`
+  证明 Cookie jar 建立后的 main 默认请求在同一固定槽携带 Cookie。两份 R 证据分别
+  冻结模型条件与 Cookie 条件，不要求把两个独立条件合并到同一官方请求。
   `audit-ep014-beta-legacy-20260730a`（beta）、
   `audit-ep014-turnstate-compact-20260730a`（turn-state），均为 R。
-- **实现**：按条件和固定插槽生成；不得把缺失条件头简单追加到末尾。
+- **实现**：按模型、Cookie jar 和条件头事实分别决定是否出现，并按固定插槽生成；
+  不得把缺失条件头简单追加到末尾，也不得把 Cookie 错误提升为 Lite 请求必选头。
 - **状态**：✅ 源码部分；抓包充分。
 
 ### SPEC-EP-015 alpha-search 的 header 与 body
@@ -770,10 +814,11 @@ images、alpha-search、legacy compact、realtime 和条件 header 等只在各�
   consume 再含 `content-type, content-length` 与 `redeem_request_id` body。
 - **源码**：[L1] `backend-client/src/client/rate_limit_resets.rs:15-19`、
   `backend-client/src/client/rate_limit_resets.rs:31-109`、
-  `backend-client/src/client.rs:221-240`、`backend-client/src/client.rs:458-475`、
-  `backend-client/src/client.rs:637-641`。最终线序仍由 wire 确认。
+  `backend-client/src/client.rs:226-245`、`backend-client/src/client.rs:463-480`、
+  `backend-client/src/client.rs:642-646`。最终线序仍由 wire 确认。
 - **实测**：正式 k80 Campaign 的 A12 取得三种 GET 与安全 consume；12 份冻结证据的
-  `wham-get-paths` 断言通过；机器事实见 0.147 Campaign 验收回执与证据归档。
+  `wham-get-paths` 断言通过；0.149.1 HTTP Main 又取得 `settings/user`，其余机器事实沿用已批准
+  0.147 Campaign 验收回执与证据归档。
 - **实现**：使用 backend-client 独立 header 形态；不得套用 Codex 主模型端点线序。
 - **状态**：✅ 源码部分；抓包充分。
 
@@ -795,9 +840,9 @@ images、alpha-search、legacy compact、realtime 和条件 header 等只在各�
 - **规则**：默认走普通 `/responses`，并向 input 追加
   `{"type":"compaction_trigger"}`；manual 与 auto 都如此，不调用
   `/responses/compact`。
-- **源码**：[L1] `core/src/compact_remote_v2_attempt.rs:71`、
-  `model-provider/src/provider.rs:55-63`、
-  `features/src/lib.rs:1472-1475`、`core/src/tasks/compact.rs:41-50`。
+- **源码**：[L1] `core/src/compact_remote_v2_attempt.rs:77`、
+  `model-provider/src/provider.rs:69-77`、
+  `features/src/lib.rs:1529-1532`、`core/src/tasks/compact.rs:41-50`。
 - **实测**：`relay-tui-recap-20260728T112358Z`（manual）与
   `audit-ep021-auto-clean-20260730a`（auto），均为 R。
 - **实现**：默认 V2；只有显式关闭 V2 后才进入 legacy compact。
@@ -814,7 +859,7 @@ images、alpha-search、legacy compact、realtime 和条件 header 等只在各�
   user-agent, cookie, host, content-length`。
 - **源码**：[L1] `codex-api/src/images.rs:5-30`、
   `codex-api/src/endpoint/images.rs:33-68`、
-  `ext/image-generation/src/tool.rs:279-336`。
+  `ext/image-generation/src/tool.rs:412-469`。
 - **实测**：`clean-image-20260728T132405Z`（generations）与 `relay-imgedit1`
   （edits），均含 R。
 - **实现**：`n=None` 时省略；edits 以内联 data URL 发送。
@@ -828,12 +873,12 @@ images、alpha-search、legacy compact、realtime 和条件 header 等只在各�
   reason 为 `user_requested`、`context_limit`、`model_downshift`、
   `comp_hash_changed`。遥测 implementation 标签只有
   `responses`、`responses_compaction_v2`、`responses_compact`，不能与运行时分支一一等同。
-- **源码**：[L1] `analytics/src/facts.rs:354-367`、
+- **源码**：[L1] `analytics/src/facts.rs:404-417`、
   `core/src/tasks/compact.rs:34-65`、
   `core/src/compact_token_budget.rs:21-92`、
-  `core/src/session/turn.rs:979-1208`、
+  `core/src/session/turn.rs:1013-1242`、
   `core/src/compact_model_fallback.rs:30-40`、
-  `core/src/compact_remote_v2_attempt.rs:71`。
+  `core/src/compact_remote_v2_attempt.rs:77`。
 - **实测**：`relay-tui-recap-20260728T112358Z`（user_requested）、
   `audit-ep021-auto-clean-20260730a`（context_limit）、
   `audit-ep023-comphash-20260730b`、`audit-ep023-downshift-20260730b`（R）。
@@ -847,7 +892,7 @@ images、alpha-search、legacy compact、realtime 和条件 header 等只在各�
 - **记录**：TUI 将 `/compact` 解析为手动压缩；`codex exec '/compact'` 将其作为普通
   user message 发送，不产生 compaction_trigger 或 legacy compact 请求。
 - **源码**：[L1] `tui/src/slash_command.rs:40`、
-  `tui/src/chatwidget/slash_dispatch.rs:262`。
+  `tui/src/chatwidget/slash_dispatch.rs:264`。
 - **实测**：`relay-tui-recap-20260728T112358Z`（TUI 正例）与
   `audit-ep024-exec-negative-clean-20260730a`（exec 负例），均为 R。
 - **实现**：不实现采集入口；产品若提供 TUI 兼容层，再按 surface 区分 slash command。
@@ -878,7 +923,7 @@ Key、Group、账号路由和计费沿用 Framework §1.3 的业务所有权；�
 | 版本发现与入口归一化 | GitHub `/releases/latest`／列表回退、6 小时节流与启动防抖、UA/version 配对和账号 UA 兼容、`openai_codex_client_version_synced`、管理端候选值、客户端名和环境指纹 | active ReleaseCatalog、画像摘要、最终 version 和 wire 契约 |
 | 生产 strict wire | ReleaseCatalog、ReleaseBundle、Compiler、Executor 和受信 adapter 定型 URL、Header、Body、顺序、压缩、传输、状态与连接 | 被候选版本、管理员／账号 UA 或入站身份覆盖 |
 
-当前 active strict wire 是 Codex CLI 0.147.0；自动同步只更新候选值，active ReleaseCatalog 只能经证据验收后显式发布。
+当前 active strict wire 是 Codex CLI 0.149.1；自动同步只更新候选值，active ReleaseCatalog 只能经证据验收后显式发布。
 
 | persona／状态 | 端点范围 | 逻辑出口 | 约束 |
 |---|---|---|---|
@@ -922,15 +967,15 @@ MCP，就原样进入官方 Persona wire。接入时必须冻结第三方产品�
 顺序或条件变化即视为新目录，未重新批准前 fail-close。该路径只能主张“目标 Codex CLI + 冻结 MCP
 配置”的等价性，不能冒充默认无 MCP 的官方客户端，也不是 Codex Persona 上线的前置条件。
 
-## 3.2 Codex 0.147.0 active 画像与发布执行契约
+## 3.2 Codex 0.149.1 active 画像与发布执行契约
 
 active／previous 画像均以内容寻址 Snapshot 保存 exec／TUI 身份、feature、端点、Header／Body
 闭集与顺序、压缩、TLS、连接、条件状态和文件上传编排：
 
 | mode | 版本与画像摘要 | 端点闭集 | 用途 |
 |---|---|---|---|
-| active | 0.147.0；`94071c8eb93cfd337ac6eabc291d878084e3dcec8a9e618e04e6f68792d1a7bc` | 16 个静态端点（含 `wham_settings_user`）+ 1 个 ReturnedURL 动态端点 | 生产默认 |
-| previous | 0.145.0；`e0b59772622f14717f1fdf5c15bfae5758226a04fe8f030110d8a616e20fdf6b` | 15 个静态端点 + 1 个 ReturnedURL 动态端点 | 受控回滚和历史复算 |
+| active | 0.149.1；`8c22d3b18b16d249ac041a97efad1b6703c11ef290622b0b1642679a3c010ec3` | 16 个静态端点（含 `wham_settings_user`）+ 1 个 ReturnedURL 动态端点 | 生产默认 |
+| previous | 0.147.0；`94071c8eb93cfd337ac6eabc291d878084e3dcec8a9e618e04e6f68792d1a7bc` | 16 个静态端点（含 `wham_settings_user`）+ 1 个 ReturnedURL 动态端点 | 受控回滚和历史复算 |
 
 启动期解码、结构校验或摘要核对失败即阻止启动；运行时只读不可变快照，需改写的数据按次深拷贝。
 
@@ -1041,7 +1086,7 @@ make check-egress-spec
 | 路径组 | 责任 |
 |---|---|
 | `backend/internal/officialegress/` | ReleaseCatalog、RouteCatalog、Scope、Compiler、Executor、Guard、FinalizationToken 与画像契约 |
-| `backend/internal/service/official_egress_codex_*`、`official_client_profile_registry.go` | 0.145.0／0.147.0 不可变 Snapshot、可信 release Build 运行态投影、发布投影、端点编排、Files 与模型能力 |
+| `backend/internal/service/official_egress_codex_*`、`official_client_profile_registry.go` | 0.147.0／0.149.1 不可变 Snapshot、可信 release Build 运行态投影、发布投影、端点编排、Files 与模型能力 |
 | `backend/internal/service/official_egress_openai_http.go`、`official_egress_openai_ws.go` | HTTP／WS 统一入口归一化：保留业务语义，重建动态身份，禁止官方／第三方入口形成两套 wire 权威 |
 | `backend/internal/service/official_egress_*invocation.go`、`official_egress_transport_adapters.go` | HTTP／WS invocation、attempt 和受信 terminal adapter |
 | `backend/internal/service/official_egress_upstream_identity_bridge.go` | 把上游身份设施的 canonical/version 读取源单向桥接到 active 已验收 ReleaseBundle |
@@ -1126,7 +1171,7 @@ net/http、HTTPUpstream、req/v3、WS、facade 和 client factory，并用变异
 > 迁移边界与现有代码处置见共享框架第五部分。
 
 当前 21 个 `codex_profile` Runtime Sink、29 条 route 全部 `enforced`，无 Codex `legacy_observe`；29 条由
-变更集 3 的 28 条历史 route 加 0.147.0 的 `wham_settings_user` 版本 route 构成。HTTP、WS、fallback、
+变更集 3 的 28 条历史 route 加 `wham_settings_user` 版本 route 构成。HTTP、WS、fallback、
 models、images、files、alpha-search、WHAM 和 OAuth refresh 都进入统一 Executor。ReleaseCatalog 预编译
 不可变 active／previous；attempt Body 单次解析并有序输出，重复键 fail-close，`server_response` query
 只经受信通道提交。
@@ -1172,6 +1217,13 @@ Framework §5.3 是升级总操作入口并规定 `VC-0～VC-6` 顺序；本部�
 正式 Campaign 前先完成可丢弃的 DOC-PRE／P0。DOC-PRE 只登记并审核本次 maintenance
 transition；合并后必须从干净 HEAD 执行 P0。P0 只发现阻断，不形成目标版本证据：
 
+0.149.1 的 DOC-PRE 规则现已合并到本指南第二部分，不再维护独立候选规则文档。历史 DOC-PRE 配套输入为
+`candidate_rule_expectations_0_149_1.json`、`codex_upgrade_scenarios_0_147_0.json`、
+`codex_upgrade_scenarios_0_149_1.json`，规范锚点与依赖基线统一使用
+`tools/spec_ref_anchors.json` 和 `tools/spec_source_deps/manifest.json`。这些文件只提供目标版本和工具能力输入；该次 DOC-PRE 冻结的
+历史 production active／previous 为 0.147.0／0.145.0，当前值必须从文首基线、Runtime Catalog 和最新
+有效激活收据共同复算，不能据 DOC-PRE 文件推断 Catalog 晋升、生产激活或部署完成。
+
 | 类别 | P0 通过条件 |
 |---|---|
 | 身份与角色 | 冻结官方二进制、源码／依赖／平台／feature／镜像和网络条件；执行副本、测试树与 finalizer 同源 |
@@ -1188,6 +1240,8 @@ P0 还必须执行以下机器预检；临时画像和合成证据只验证工�
 | 双版本与画像生成 | 用临时批准资产验证 `prepare-profile`／`stage-profile`、Active 不变、Active／Previous endpoint 并集和版本新增 route 的 fail-close 门禁 |
 | 候选工具链 | 验证 candidate core／aux、WS、relay、manifest、trace、finalizer、Schema 和逐规则断言能识别目标版本，禁止遗留版本硬编码 |
 | 执行身份 | 逐字核对受管工具树与实际执行副本；确认候选源码、测试树、目标架构和镜像构建输入可形成同源摘要链 |
+| 官方证据 | 按 Framework §5.3.5 冻结并验证唯一 `reuse／recapture` 决定 |
+| ARM64 执行 | 逐项通过 §4.0.5 的网络、运行时、模型目录、坐标、依赖、时间和存储门禁 |
 
 所有 P0 输出都必须带输入和工具摘要、原始错误、退出码及临时资产 inventory；无法证明通过的
 项目登记为阻断，不得用临时副本的修改结果创建 Campaign。
@@ -1195,6 +1249,13 @@ P0 还必须执行以下机器预检；临时画像和合成证据只验证工�
 P0 产物标为 `preflight-only`，不得发送真实请求、使用 `--acknowledge-live-requests`、创建正式
 Campaign，或修改 Active／Previous、运行环境和历史证据。阻断修复应独立提交，随后重跑 P0；
 只有干净、同源的受管树才能创建正式 Campaign。
+
+工具以不可省略的机器坐标隔离两类目录。P0 必须在新的持久目录执行
+`plan --campaign-mode preflight_only --campaign-purpose <validation_only|production_replacement>`；该目录
+只允许 `plan/status`，`capture-official`、`classify`、画像暂存、candidate、compare、accept、`all` 和
+`resume` 均失败关闭。P0 通过后，必须换一个尚不存在的目录执行
+`plan --campaign-mode formal --campaign-purpose <同一用途>`。模式缺失、非法、摘要篡改或试图借
+preflight 目录续跑，均不得自动回退为 formal。
 
 ### 4.0.2 共享身份边界在 Codex 工具中的投影
 
@@ -1207,6 +1268,56 @@ Campaign、candidate 与 attempt 的规范身份边界以 Framework §3.3、§5.
 | 同版本后继 Campaign | 受管工具影响证据含义、环境无法证明恢复，或已冻结的机器角色、执行副本和 finalizer 身份错误 |
 | 同 Campaign 新 candidate | Sub2API 源码树、测试树、构建 ID、部署版本、OCI digest、image ID 或 profile ID／digest 变化 |
 | 同 candidate 新 attempt | 冻结身份不变，仅因网络、配额或临时运行失败重试；新 attempt 不覆盖旧记录 |
+
+当同版本 Campaign 的官方阶段与五份分类清单已经完整封存，但 candidate 的冻结运行时身份、
+执行副本或环境恢复窗口错误时，使用 `successor` 建立后继 Campaign，不得重写旧 attempt，也不得
+把旧 candidate 的 Kilo 收据改绑到新 Campaign：
+
+~~~bash
+python3 tools/official_client_capture/codex_upgrade.py successor \
+  --predecessor-campaign-dir /absolute/path/to/predecessor \
+  --campaign-dir /absolute/path/to/new-campaign \
+  --campaign-id <new-id> \
+  --codex-account-id <当前可用账号-id> \
+  --reason candidate_runtime_identity_correction \
+  --predecessor-candidate-id <old-candidate-id> \
+  --predecessor-attempt-id <old-attempt-id>
+~~~
+
+若逐规则断言证明旧批准画像或断言与已封存的官方原始字节冲突，而官方 attempt、
+inventory、安全扫描和原始证据本身仍完整，则使用分类事实纠正后继：
+
+~~~bash
+python3 tools/official_client_capture/codex_upgrade.py successor \
+  --predecessor-campaign-dir /absolute/path/to/predecessor \
+  --campaign-dir /absolute/path/to/new-campaign \
+  --campaign-id <new-id> \
+  --codex-account-id <当前可用账号-id> \
+  --reason classification_fact_correction
+~~~
+
+该入口签发 v3 `predecessor-import.json`，只复制计划期 inputs／analysis 和规范化
+official surface；旧分类结果只作为被纠正事实绑定摘要，不复制批准五件套。新 Campaign
+回到 `official_sealed`，必须重新执行 `prepare-profile`、五件套审核和 `classify`。它不会
+重新发送官方 CLI 请求；若原始官方证据缺失必要事实、身份不可信或 evidence 语义本身需要
+改变，则本入口失败关闭，必须建立新的正式官方取证 Campaign。
+
+重建新 Campaign 坐标时，工具只允许逐字继承的前序场景清单保留历史章节摘要；该豁免仅限
+`classification_fact_correction` 的计划重建调用。新批准场景必须重新绑定当前章节摘要，普通
+后继、Candidate 执行和分类批准路径均不得使用历史摘要豁免。
+
+最后两项可同时省略；提供时必须成对绑定。Codex 账号属于 Candidate 的运行前提，不属于可承接的
+官方／分类事实；每个后继 Campaign 必须通过 `--codex-account-id` 重新显式选择当前可用账号。
+工具只允许这一项运行配置改变，并在 v2 `predecessor-import.json` 中冻结前序值、后继值和原因；
+历史 v1 收据仍按“配置逐字不变”只读重放。该命令只逐字复制计划期 inputs／analysis、五份批准
+清单和规范化 official surface，并生成 `predecessor-import.json`。原始官方 evidence、attempt、
+inventory 与安全收据继续位于前序 Campaign，保持只读；后继的 `status`、`compare`、`accept`
+每次都从前序路径重放 Campaign manifest、官方 stage seal、证据 inventory／security、批准五件套
+及其联合摘要；多级后继必须递归回到最初官方 attempt 的原始绝对 Campaign 目录校验，禁止把上游
+相对 attempt 路径重新解释到中间后继目录。任一路径、文件摘要、package digest 或原始证据漂移均失败关闭。后继 Campaign
+普通运行时纠正后继只能新跑 candidate 与第三方客户端验证；分类事实纠正后继允许重新批准规则、
+场景、画像和断言，但仍不得改变目标版本、官方身份或已封存官方证据语义。后面三项发生变化时
+必须按版本 Campaign 重新执行相应阶段。
 
 采集、探针、relay、脱敏、收据生成、环境快照和编排等产出侧工具变化会改变证据字节，必须
 新建 Campaign。评估侧工具只有在显式白名单内才允许漂移，并须登记摘要、重放全部受影响门禁；
@@ -1222,6 +1333,10 @@ Campaign、candidate 与 attempt 的规范身份边界以 Framework §3.3、§5.
 同一 Campaign 后续出现新的 `production_replacement` candidate 时，旧生产收据只证明历史事实，
 不得继续代表当前生产；新 candidate 不能借旧 candidate 的 canary、镜像、回滚演练或激活收据。
 如果尚未完成 §4.6，其状态必须明确报告为 `accepted_not_activated`。
+
+`campaign_mode`、`campaign_purpose` 和 `candidate_purpose` 必须进入 Campaign、预约、attempt、seal
+预览、阶段收据、comparison、AcceptanceFact、evidence seal 与外部门禁重放。candidate 的用途必须
+等于 Campaign 用途；缺失、漂移或把 `validation_only` 改写成 `production_replacement` 均须失败关闭。
 
 ### 4.0.3 Codex 工具状态投影与专用不变量
 
@@ -1271,6 +1386,7 @@ candidate 必须由最新有效激活收据、运行容器 digest 和 activation
 | Catalog promotion 与 promotion receipt | 已实现 | `egresscatalogpromote` 只生成确定性 Catalog／contract／receipt，不部署服务 |
 | post-promotion gate receipt | 已实现 | 同一工具生成并独立重放 `post_promotion` 收据，绑定 acceptance、promotion、production tree 和目标架构；六项固定门禁均须零失败、零跳过 |
 | production activation receipt | 已实现 | `production_activation_receipt.py` v2 强制消费 promotion、post-promotion gate、acceptance、production tree 和四阶段原始事实，生成不可覆盖收据并独立重放；历史 v1／K80 收据只证明当时事实 |
+| 新增收敛门禁 | 未受管实现 | 时间台账／6 小时停线、门禁承接及 ARM64 网络／磁盘收据尚缺受管生成和重放；下个版本 Formal 前必须补齐 |
 | 第三方客户端绑定 | 当前固定为 Kilo 双入口 | 工具和 Schema 明确要求 `kilo-compatible`、`kilo-responses`，文档不得单独泛化 |
 
 后继版本创建正式 Campaign 前，必须对两阶段门禁生成并重放受管收据；缺少收据、摘要漂移、失败、
@@ -1278,6 +1394,32 @@ candidate 必须由最新有效激活收据、运行容器 digest 和 activation
 §4.0.2 的工具漂移边界。人工“已经运行”结论、终端截图或未绑定原始事实的静态 JSON 不能替代受管
 收据。若未来要把 Kilo 泛化为可配置第三方客户端集合，也应先修改工具、Schema 和验收测试，再调整
 本流程。
+
+### 4.0.5 ARM64 执行、时间与资源硬门禁
+
+本环境后续 Codex 升级的 P0、取证、Candidate、Kilo、门禁、canary 和部署验证均只在 ARM64 执行。
+DMIT 归档只读复用，不登录或修改 DMIT 主机。ARM64 固定出站边界如下：
+
+| 对象 | 强制出站网络坐标 | 公网出口 | 禁止变化 |
+|---|---|---|---|
+| `sub2apiplus` | `proxy-network`：`172.25.0.3`，网关 `172.25.0.1` | `179.255.100.158` | compose 网络、地址、默认出站路由、NAT／iptables |
+| `capture-cli` | `capture-network`：`172.30.0.10`，网关 `172.30.0.1` | `179.255.100.158` | compose 网络、地址、默认出站路由、NAT／iptables |
+
+附加 Docker 网络不得改变上表选路。每次 P0、attempt、Kilo、canary 和部署验证都在首个请求前及恢复后
+记录网络摘要和独立出口证明；坐标不符即停线，脚本不得改网络、NAT／iptables 或切换 ARM64 本机出口。
+
+| P0 检查 | 必须证明 |
+|---|---|
+| 端口与恢复 | 实际调用容器可访问发布端口；hosts、CA、模型映射和 relay 按 before／after 完整恢复 |
+| 隔离 | 每个 attempt 使用独立、权限为 `0700` 的 `HOME／CODEX_HOME`，不读取其他账号或前序缓存 |
+| 模型目录 | Main／Lite 仅以 initialize-only 各请求一次；禁止 `thread/start`、turn、Responses 或 WS 预热 |
+| 出站与 TLS | DNS 冻结精确 IP 并在 CLI 计时前预连接，不得静默回退其他地址 |
+| 运行坐标 | reservation 前确认 ID 不超过 128 字符，失败证据完成归档和收据重定位后才补跑 |
+| 同源环境 | 工具、候选、finalizer、目标架构依赖摘要一致，完整环境烟测稳定通过 |
+
+时间、归档复用、重试和门禁补跑统一遵守 Framework §5.3.5；`UpgradeTimingLedger` 从 DOC-PRE 首项开始。
+创建运行目录前，ARM64 根文件系统须同时满足使用率低于 70% 且可用空间不少于 30 GiB。达到水位后仅按
+manifest 清理未被收据引用的可再生缓存、worktree、镜像层和 staging，禁止删除证据或无界递归扫描。
 
 ## 4.1 官方目标版本取证
 
@@ -1293,8 +1435,8 @@ python3 tools/official_client_capture/codex_upgrade.py --help
 
 | 输入 | 内容 |
 |---|---|
-| 基线 | 当前第二部分规则、官方源码／证据和场景清单 |
-| 目标 | Codex CLI 版本、官方源码、Cargo.lock／依赖、二进制及 SHA-256 |
+| 基线 | 当前第二部分规则、官方源码／证据和 `--scenario-manifest` 场景清单 |
+| 目标 | Codex CLI 版本、官方源码、Cargo.lock／依赖、二进制、SHA-256 及 `--target-scenario-manifest` 正式采集场景清单 |
 | 条件 | 平台、运行镜像、默认 feature、模型、账号、代理和 TLS 条件 |
 | 坐标 | 持久 Campaign 目录、采集机、证据目录和环境恢复坐标 |
 
@@ -1302,9 +1444,15 @@ Campaign 目录必须是持久、绝对、尚不存在且不经过符号链接�
 Lite 等互斥条件使用独立 track、job、evidence root 和 receipt；只有两侧模型及其他取证条件
 相同时，差异才能归因于版本。
 
+`plan` 必须同时冻结 baseline 与 target 两份场景清单：baseline 清单只用于升级前规则和差异分析，
+运行目标官方 CLI 的 `capture-official` 只从 target 清单生成 Job。批准 `scenarios.json` 时允许调整
+规则归属、coverage 和人工说明，但 official 的命令、环境、证据根、必需收据及模型轨道必须与
+Formal Campaign 冻结的 target 执行契约逐摘要一致；不一致时必须新建 Campaign，不得借 baseline
+命令模板执行目标版本。
+
 | 顺序 | 命令 | 机器产物 |
 |---:|---|---|
-| 1 | `codex_upgrade.py plan` | 冻结输入，生成 `target-source.json`、`source-diff.json` 和 `baseline-surface.json` |
+| 1 | `codex_upgrade.py plan --campaign-mode formal --campaign-purpose <用途>` | 在 P0 目录之外冻结正式输入，生成 `target-source.json`、`source-diff.json` 和 `baseline-surface.json` |
 | 2 | `capture-official run` | 按场景采集 HTTP、WS、TLS、端点、状态和错误分支证据 |
 | 3 | `capture-official seal` | 校验恢复、权限、秘密扫描、inventory 和 finalizer，进入 `official_sealed` |
 | 4 | `classify`（不传批准清单） | 生成官方差异和 `classification/draft/<revision>/` 五份草案 |
@@ -1439,12 +1587,19 @@ python3 tools/official_client_capture/codex_upgrade.py capture-candidate run \
   --deployed-version <deployed-version> \
   --profile-id <approved-profile-id> \
   --profile-digest <approved-profile-digest> \
+  --candidate-purpose <validation_only|production_replacement> \
   --acknowledge-live-requests
 ~~~
 
 工具在真实请求前复算源码、运行镜像和画像，原子创建 attempt，冻结源码、构建、部署、
 image／OCI 和 profile 身份，并生成 `attempt_id` 与 `run_nonce`。attempt、activation fact、
 镜像构建证明和实测源码摘要必须指向同一源码树。
+
+Campaign 与 candidate ID 还会和场景后缀、主体及 16 字符 UTC 窗口拼成 direct／mitm
+运行坐标，最终值不得超过 128 字符。编排器必须在创建 reservation 前复算完整坐标并失败关闭；
+不得等脚本启动后才留下必败 attempt。若某 candidate 已形成恢复完整的失败 attempt，同一
+candidate 仍只能显式 `resume --rerun-failed`；身份或坐标需要变化时必须换新 candidate ID，
+旧 candidate 只读保留且不能把整个 Campaign 永久锁死。
 
 ### 4.4.2 场景与第三方入口
 
@@ -1470,7 +1625,9 @@ realtime sideband、A13 OAuth refresh、A14 Files 三跳等高风险场景只有
 
 `run` 完成后、首次 `seal` 前，必须完成两条真实 Kilo 请求；其 ingress、runtime、response 和
 usage 必须绑定本次 Campaign／attempt／`run_nonce`，并位于 attempt 开始与 client checkpoint
-之间。两条请求之后不得再发送本 attempt 的客户端验证请求。
+之间。两条入口统一使用 Campaign 已冻结的 `lite_model`；主轨 `model` 只用于官方／候选场景任务，
+不得被 seal 隐式复用于 Kilo。历史 Campaign 未记录 `lite_model` 时只读重放才允许回退主轨模型。
+两条请求之后不得再发送本 attempt 的客户端验证请求。
 
 ### 4.4.3 四阶段封存
 
@@ -1486,6 +1643,7 @@ usage 必须绑定本次 Campaign／attempt／`run_nonce`，并位于 attempt �
    python3 tools/official_client_capture/codex_upgrade.py capture-candidate seal \
      --campaign-dir /绝对路径/campaign \
      --candidate-id <candidate-id> \
+     --candidate-purpose <与 run 完全相同的用途> \
      --attempt-id <attempt-id> \
      --capture-manifest /绝对路径/capture-manifest.json \
      --assertion-evidence-root /绝对路径/attempt-evidence \
@@ -1515,6 +1673,10 @@ usage 必须绑定本次 Campaign／attempt／`run_nonce`，并位于 attempt �
 - 开跑前机器预检必须覆盖不可变镜像 RepoDigest、挂载与 PID namespace、实际执行工具副本、冻结
   Codex CLI、构建 tag、模型与账号能力、Live／WS／compact 开关、管理凭据、activation 身份、
   账号熔断与配额、采集端口、run-root 标记及属主／权限；任一缺失在真实请求前失败关闭。
+- `candidate-frozen-aux` 还必须在修改环境前确认隔离分组只含目标账号，并已启用 Live 与图片生成；
+  `--live-attestation-compose-files` 中每个 compose 文件都按 `-f` 参数解释，允许兼容历史首个裸绝对
+  路径，但拒绝相对路径、符号链接、其他 compose 选项和 shell `eval`。只读前检失败不得执行恢复
+  钩子或伪造 `restoration_failed`，首个真实修改前才允许武装恢复。
 - Campaign job 的有效参数以冻结 job definition 和 attempt `argv` 为准；脚本默认值或外部同名
   环境变量被 job 覆盖时不得据其推断实际执行条件。
 - 固定镜像 digest，只替换应用容器并保留回滚点；运行期间不执行 `pull`、`compose down` 或
@@ -1588,9 +1750,12 @@ python3 tools/official_client_capture/codex_upgrade_gate_receipt.py replay \
   --receipt candidate-gates.receipt.json
 ~~~
 
-finalizer 固定检查三项门禁均为退出码 0、失败 0、跳过 0，并绑定 Campaign、candidate、目标版本／架构、
-Profile、candidate package、源码树和镜像。缺项、替换命令、证据摘要漂移或身份不一致时不得执行
+finalizer 固定检查三项门禁均为退出码 0、失败 0、跳过 0，并绑定 formal 模式、Campaign／candidate
+用途、目标版本／架构、Profile、candidate package、源码树和镜像。缺项、替换命令、用途漂移、证据摘要漂移或身份不一致时不得执行
 `accept`。
+
+门禁补跑遵守 Framework §5.3.5：以唯一前序收据和 environment continuity 证明承接，只重跑失败项；
+身份变化时只重跑受影响闭集。无法证明承接的工具计为 P0 阻断，禁止复制 JSON 或反复全量执行。
 
 ~~~bash
 python3 tools/official_client_capture/codex_upgrade.py accept \
@@ -1612,7 +1777,8 @@ python3 tools/official_client_capture/codex_upgrade.py accept \
 
 `accept` 会重新独立重放外部门禁，并把收据、candidate identity、candidate package digest 和 evidence
 seal 绑定为同一 AcceptanceFact。全部通过后，工具只写一次地保存断言、`accepted=true`、
-`failed_gates=[]` 和 evidence seal，Campaign 进入 `ready`；收据事后漂移会使 `status` 重新退回非 ready。
+`failed_gates=[]`、`production_state=accepted_not_activated` 和 evidence seal，Campaign 进入 `ready`；
+收据事后漂移会使 `status` 重新退回非 ready。
 失败 attempt 不可覆盖，Campaign 保持 `compared`。
 
 ### 4.5.4 ready 边界
@@ -1623,6 +1789,8 @@ seal 绑定为同一 AcceptanceFact。全部通过后，工具只写一次地保
 
 `validation_only` candidate 到此结束并标记为 `accepted_not_activated`。`production_replacement`
 candidate 不得在此结束；必须使用本次 acceptance 和已验收 candidate 源码继续执行 §4.6。
+对后者，`status --candidate-id` 必须继续返回 `production_status=accepted_not_activated` 并明确提示
+§4.6；在 promotion、canary、activation 和 rollback 收据完成前不得宣称升级完成。
 候选验证镜像以 `previous` 运行，只证明候选规则，不能直接作为默认 `active` 的生产镜像。后继
 candidate 一旦准备替换生产，旧 candidate 的生产收据不得复用。
 
@@ -1703,6 +1871,9 @@ python3 tools/official_client_capture/codex_upgrade_gate_receipt.py replay \
 该阶段收据额外绑定 AcceptanceFact、promotion receipt 和 production tree；candidate 身份、目标架构、
 Profile、package、源码树和镜像必须与验收阶段完全一致。任一门禁失败或跳过、两份输入摘要漂移、
 production tree 不一致，均禁止构建正式镜像或开始 canary。
+
+post-promotion 门禁同样遵守 Framework §5.3.5。promotion 前必须具备 candidate／active 双模式夹具并
+证明 Go／Python 后继图一致；失败时保留旧 Active 或完整回滚。
 
 ### 4.6.3 独立 Active canary
 

@@ -11,7 +11,7 @@ Sub2API Plus 是基于 [Wei-Shaw/sub2api](https://github.com/Wei-Shaw/sub2api) �
 | 版本与差异 | 源码版本以 `backend/cmd/server/VERSION` 为准，已发布版本以 GitHub Releases 为准。自定义差异看最近一次合并的上游 tag 至 `HEAD`，合并点可用 `git log --oneline --grep='sync upstream'` 查到。 |
 | Docker 镜像 | `ghcr.io/itv3/sub2apiplus` |
 | 命名约定 | 对外使用 `sub2apiplus` / `Sub2API Plus`；主服务 Go module 和 import 保留 `github.com/Wei-Shaw/sub2api`，降低上游合并成本；keeper 为独立 module `github.com/itv3/sub2apiplus/keeper`，无上游对应物。 |
-| Go / 客户端版本 | 主服务 `go 1.26.6`（`backend/go.mod`）；keeper `go 1.24`（`keeper/go.mod`）；keeper 固定 Claude CLI `2.1.210`，Codex 的 `CODEX_RELEASE` 当前仍为 `latest`，无缓存重建时记录实际安装版本。 |
+| Go / 客户端版本 | 主服务 `go 1.26.6`（`backend/go.mod`）；keeper `go 1.24`（`keeper/go.mod`）；keeper 固定 Claude CLI `2.1.231`，Codex 的 `CODEX_RELEASE` 当前仍为 `latest`，无缓存重建时记录实际安装版本。 |
 | Docker 命名 | Compose service 保留 `sub2api`；默认容器名为 `sub2apiplus`、`sub2apiplus-postgres`、`sub2apiplus-redis`。 |
 
 维护原则：
@@ -179,7 +179,7 @@ Antigravity 增强用于让 Antigravity 账号新增后默认可用；新建账�
 4. keeper 获取按账号、按平台签发的短期 scoped proxy token；官方客户端进程不能获得全局 `SUB2APIPLUS_KEEPER_INTERNAL_TOKEN`。
 5. 只有 `IsSchedulable()` 通过且具备有效平台 API Key 的账号进入候选，其余不返回、不签发 token，恢复后自动重新进入；账号代理入口在实际执行前再次校验。排除项：停用、`error` 状态、`schedulable=false`、过载、限流、临时不可调度、配额耗尽，以及过期账号（仅在账号级 `auto_pause_on_expired` 开启时排除，该开关默认开）。
 6. 官方客户端单次执行超时默认 2700 秒，该值同时是 Claude 链路的最小值，不能调得更低；`sub2apiplus.timeout_seconds` 仅控制 keeper 调主服务内部接口的超时，默认 180 秒。
-7. keeper 容器内固定 Claude CLI `2.1.210`，与 mimic 出站画像版本（§1.2.2 的 `2.1.220`）是两件独立的事：本地跑的是真实 CLI，出站形态由内部代理按 active 画像改写，两者不需要对齐。
+7. keeper 容器内固定 Claude CLI `2.1.231`，与 mimic 出站画像版本（§1.2.2 的 `2.1.220`）是两件独立的事：本地跑的是真实 CLI，出站形态由内部代理按 active 画像改写，两者不需要对齐。
 
 保活配置位于“Plus 增强功能 / 账号保活”；账号级设置保存在 `account.Extra`，全局约束和题库保存在 keeper state：
 | 配置 | 说明 |
@@ -643,7 +643,7 @@ README、机器生成证据索引及 JSON 收据只承担操作或审计责任�
 | [`tools/official_client_capture/README.md`](tools/official_client_capture/README.md) | 官方客户端出站工具索引；Codex 具有受管编排器，Claude 当前仅有取证与门禁工具。 |
 | [`backend/internal/service/testdata/official_egress/README.md`](backend/internal/service/testdata/official_egress/README.md) | OAuth、API Key、Kilo、AnyRouter 和 Vircs 的脱敏实证索引。 |
 | [`docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md`](docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md) | 官方 OAuth 客户端共用的目标、扩展架构、证据生命周期与发布门槛。 |
-| [`docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md`](docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md) | Codex CLI 客户端规则、Sub2API 仿真实现和版本演进规范；当前 active 基线为 0.147.0。 |
+| [`docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md`](docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md) | Codex CLI 客户端规则、Sub2API 仿真实现和版本演进规范；当前 active 基线为 0.149.1。 |
 | [`docs/EVIDENCE_INDEX.md`](docs/EVIDENCE_INDEX.md) | Codex 官方规则编号与证据文件的机器生成索引。 |
 | [`docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md`](docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md) | Claude Code 规则与证据、环境职责、Sub2API 实现和版本演进规范。 |
 | [`docs/COMPOSITE_GROUPS.md`](docs/COMPOSITE_GROUPS.md) | Composite Groups 路由、管理流程和使用边界。 |

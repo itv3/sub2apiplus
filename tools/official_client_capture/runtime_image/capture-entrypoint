@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# 抓包容器必须位于固定的 capture-network；否则外部请求不会经过已审计的 DMIT
+# 路由。离线镜像自检可显式设置 CAPTURE_ALLOW_ANY_NET=1。
+container_ip=$(hostname -i 2>/dev/null | awk '{print $1}')
+case "$container_ip" in
+  172.30.*) ;;
+  *)
+    if [[ ${CAPTURE_ALLOW_ANY_NET:-0} != 1 ]]; then
+      echo "拒绝启动：容器 IP ${container_ip:-未知} 不在 capture-network。" >&2
+      exit 78
+    fi
+    echo "警告：已放行非 capture-network 的离线运行。" >&2
+    ;;
+esac
+
+exec /usr/bin/tini -- "$@"

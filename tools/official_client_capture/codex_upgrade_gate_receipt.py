@@ -16,12 +16,13 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 
-FACTS_SCHEMA = "codex-upgrade-external-gate-facts/v1"
-RECEIPT_SCHEMA = "codex-upgrade-external-gate-receipt/v1"
-PRODUCER_SCHEMA = "codex-upgrade-external-gate-producer/v1"
+FACTS_SCHEMA = "codex-upgrade-external-gate-facts/v2"
+RECEIPT_SCHEMA = "codex-upgrade-external-gate-receipt/v2"
+PRODUCER_SCHEMA = "codex-upgrade-external-gate-producer/v2"
 CANDIDATE_PHASE = "candidate_external"
 POST_PROMOTION_PHASE = "post_promotion"
 PHASES = frozenset({CANDIDATE_PHASE, POST_PROMOTION_PHASE})
+CANDIDATE_PURPOSES = frozenset({"validation_only", "production_replacement"})
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
@@ -137,6 +138,14 @@ def _version(value: Any, label: str) -> str:
     return value
 
 
+def _candidate_purpose(value: Any, label: str) -> str:
+    if value not in CANDIDATE_PURPOSES:
+        raise GateReceiptError(
+            f"{label}必须是 validation_only 或 production_replacement"
+        )
+    return str(value)
+
+
 def _rfc3339(value: Any, label: str) -> datetime:
     if not isinstance(value, str) or not RFC3339_RE.fullmatch(value):
         raise GateReceiptError(f"{label}不是带时区 RFC3339 时间")
@@ -220,7 +229,10 @@ def _validate_subject(value: Any, phase: str) -> dict[str, Any]:
         value,
         {
             "campaign_id",
+            "campaign_mode",
+            "campaign_purpose",
             "candidate_id",
+            "candidate_purpose",
             "target_version",
             "target_architecture",
             "profile_id",
@@ -237,7 +249,14 @@ def _validate_subject(value: Any, phase: str) -> dict[str, Any]:
     )
     normalized = {
         "campaign_id": _safe_id(subject.get("campaign_id"), "subject.campaign_id"),
+        "campaign_mode": subject.get("campaign_mode"),
+        "campaign_purpose": _candidate_purpose(
+            subject.get("campaign_purpose"), "subject.campaign_purpose"
+        ),
         "candidate_id": _safe_id(subject.get("candidate_id"), "subject.candidate_id"),
+        "candidate_purpose": _candidate_purpose(
+            subject.get("candidate_purpose"), "subject.candidate_purpose"
+        ),
         "target_version": _version(subject.get("target_version"), "subject.target_version"),
         "target_architecture": subject.get("target_architecture"),
         "profile_id": _safe_id(subject.get("profile_id"), "subject.profile_id"),
@@ -276,6 +295,10 @@ def _validate_subject(value: Any, phase: str) -> dict[str, Any]:
         normalized["candidate_image_reference"]
     ):
         raise GateReceiptError("subject.candidate_image_reference 非法")
+    if normalized["campaign_mode"] != "formal":
+        raise GateReceiptError("subject.campaign_mode 必须为 formal")
+    if normalized["candidate_purpose"] != normalized["campaign_purpose"]:
+        raise GateReceiptError("subject candidate purpose 与 Campaign 用途不一致")
     if phase == CANDIDATE_PHASE:
         if any(
             normalized[key] is not None
@@ -287,6 +310,10 @@ def _validate_subject(value: Any, phase: str) -> dict[str, Any]:
         ):
             raise GateReceiptError("candidate_external 禁止携带生产或 promotion 身份")
     else:
+        if normalized["candidate_purpose"] != "production_replacement":
+            raise GateReceiptError(
+                "post_promotion 只允许 production_replacement candidate"
+            )
         if any(
             normalized[key] is None
             for key in (
@@ -328,6 +355,10 @@ def _validate_inputs(
         if (
             acceptance.get("status") != "complete"
             or acceptance.get("accepted") is not True
+            or acceptance.get("campaign_mode") != subject["campaign_mode"]
+            or acceptance.get("campaign_purpose") != subject["campaign_purpose"]
+            or acceptance.get("candidate_purpose") != subject["candidate_purpose"]
+            or acceptance.get("production_state") != "accepted_not_activated"
             or acceptance.get("candidate_id") != subject["candidate_id"]
             or acceptance.get("target_version") != subject["target_version"]
             or acceptance.get("profile_id") != subject["profile_id"]

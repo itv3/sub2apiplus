@@ -503,6 +503,7 @@ func (r *OfficialEgressTransitionRuntime) ExecuteCodexHTTP(
 				ID: input.PolicyID + ".body", Source: input.PolicySource,
 				Conditions: semantic.BodyConditions,
 			},
+			RoutingHint:     semantic.RoutingHint,
 			BehaviorPolicy:  behavior,
 			Body:            semantic.Body,
 			InvocationID:    invocationID,

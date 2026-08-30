@@ -44,6 +44,7 @@ func TestChangeset6ConcurrentPrepareUsesIndependentAttemptDocuments(t *testing.T
 					BodyPolicy: officialegress.BodyPolicy{
 						ID: "changeset6.concurrent.body", Source: "test", Conditions: semantic.BodyConditions,
 					},
+					RoutingHint:    semantic.RoutingHint,
 					BehaviorPolicy: testCase.bundle.Behavior(), Body: semantic.Body,
 					InvocationID: "concurrent-invocation", DeclaredPersona: officialegress.PersonaCodexCLI,
 				}, officialegress.EndpointDynamicInputs{})

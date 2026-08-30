@@ -20,6 +20,8 @@ const officialCodexProfileVersion = officialCodexVersion0145
 
 const (
 	officialCodexVersion0145 = "0.145.0"
+	// 0.145 已退出生产 selector；该摘要只用于冻结历史画像的离线复算。
+	officialCodexHistoricalProfileDigest = "e0b59772622f14717f1fdf5c15bfae5758226a04fe8f030110d8a616e20fdf6b"
 
 	officialCodexSurfaceExec = "exec"
 	officialCodexSurfaceTUI  = "tui"
@@ -289,6 +291,16 @@ type officialCodexBodyField struct {
 
 var officialCodexFormalProfileCache sync.Map
 
+// loadOfficialCodexHistoricalExecutableProfile 是已退休画像的离线注入边界。
+// 正式二进制不注册任何历史来源，因此生产请求无法借该入口重新选择已退休版本；
+// 同包历史回归只在 _test.go 中注入摘要冻结的 testdata 夹具。
+var loadOfficialCodexHistoricalExecutableProfile = func(
+	string,
+	string,
+) (profilecontract.ExecutableProfile, error) {
+	return profilecontract.ExecutableProfile{}, errors.New("service 运行时不加载已退休历史画像")
+}
+
 // resolveCodexVersionProfile 只接受精确三段版本，不做 trim、别名或回退；
 // 未登记的版本按未知处理，不回退到任何既有快照。
 //
@@ -314,7 +326,20 @@ func resolveCodexVersionProfile(version string) (*officialCodexVersionProfile, e
 		found = true
 	}
 	if !found {
-		return nil, fmt.Errorf("未知 Codex 官方出站版本画像：%q", version)
+		// 生产选择始终走 resolveCodexVersionProfileForMode，并且只能得到
+		// Active/Previous。0.145 的冻结回归必须经离线注入边界读取 testdata，
+		// 不得再从当前运行 Catalog 取历史画像。
+		if version != officialCodexVersion0145 {
+			return nil, fmt.Errorf("未知 Codex 官方出站版本画像：%q", version)
+		}
+		executable, err := loadOfficialCodexHistoricalExecutableProfile(
+			version,
+			officialCodexHistoricalProfileDigest,
+		)
+		if err != nil {
+			return nil, err
+		}
+		return resolveOfficialCodexExecutableProfile(executable)
 	}
 	return resolveOfficialCodexReleaseProfile(selected)
 }
@@ -323,6 +348,19 @@ func resolveOfficialCodexReleaseProfile(
 	release officialegress.ResolvedCodexRelease,
 ) (*officialCodexVersionProfile, error) {
 	executable := release.ExecutableProfile()
+	profile, err := resolveOfficialCodexExecutableProfile(executable)
+	if err != nil {
+		return nil, err
+	}
+	if profile.Digest != release.ExecutableProfileDigest() {
+		return nil, errors.New("service 投影与正式 ExecutableProfileDigest 不一致")
+	}
+	return profile, nil
+}
+
+func resolveOfficialCodexExecutableProfile(
+	executable profilecontract.ExecutableProfile,
+) (*officialCodexVersionProfile, error) {
 	if cached, ok := officialCodexFormalProfileCache.Load(executable.Digest()); ok {
 		profile, valid := cached.(*officialCodexVersionProfile)
 		if !valid {
@@ -331,8 +369,8 @@ func resolveOfficialCodexReleaseProfile(
 		return profile, nil
 	}
 	profile := projectExecutableCodexProfile(executable)
-	if profile.Digest != release.ExecutableProfileDigest() {
-		return nil, errors.New("service 投影与正式 ExecutableProfileDigest 不一致")
+	if profile.Digest != executable.Digest() {
+		return nil, errors.New("service 投影与 ExecutableProfileDigest 不一致")
 	}
 	actual, _ := officialCodexFormalProfileCache.LoadOrStore(executable.Digest(), &profile)
 	cachedProfile, valid := actual.(*officialCodexVersionProfile)

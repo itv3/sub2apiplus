@@ -112,10 +112,10 @@ func TestProxyKeeperAnthropicAccountMimicTakesPriorityAndUsesCurrentCLITLS(t *te
 		Method: http.MethodPost,
 		Path:   "/v1/messages",
 		Header: http.Header{
-			"User-Agent":     []string{"claude-cli/2.1.210 (external, sdk-cli)"},
+			"User-Agent":     []string{"claude-cli/2.1.231 (external, sdk-cli)"},
 			"Anthropic-Beta": []string{"advisor-tool-2026-03-01,context-1m-2025-08-07"},
 		},
-		Body: strings.NewReader(`{"model":"claude-fable-5","max_tokens":64000,"stream":true,"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.210.abc; cc_entrypoint=sdk-cli;"},{"type":"text","text":"You are a Claude agent, built on Anthropic's Claude Agent SDK.","cache_control":{"type":"ephemeral"}},{"type":"text","text":"CWD: /workspace/projects/ai-keeper\nDate: 2026-07-15","cache_control":{"type":"ephemeral"}}],"tools":[{"name":"Read","description":"Read files from the mounted workspace.","input_schema":{"type":"object","properties":{"file_path":{"type":"string"}}}},{"name":"CustomTool","description":"Must be removed.","input_schema":{"type":"object","properties":{}}}],"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}],"metadata":{"user_id":"{\"device_id\":\"device\",\"account_uuid\":\"\",\"session_id\":\"11111111-2222-4333-8444-555555555555\"}"}}`),
+		Body: strings.NewReader(`{"model":"claude-fable-5","max_tokens":64000,"stream":true,"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.231.abc; cc_entrypoint=sdk-cli;"},{"type":"text","text":"You are a Claude agent, built on Anthropic's Claude Agent SDK.","cache_control":{"type":"ephemeral"}},{"type":"text","text":"CWD: /workspace/projects/ai-keeper\nDate: 2026-07-15","cache_control":{"type":"ephemeral"}}],"tools":[{"name":"Read","description":"Read files from the mounted workspace.","input_schema":{"type":"object","properties":{"file_path":{"type":"string"}}}},{"name":"CustomTool","description":"Must be removed.","input_schema":{"type":"object","properties":{}}}],"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}],"metadata":{"user_id":"{\"device_id\":\"device\",\"account_uuid\":\"\",\"session_id\":\"11111111-2222-4333-8444-555555555555\"}"}}`),
 	})
 	require.NoError(t, err)
 	require.NotNil(t, resp)

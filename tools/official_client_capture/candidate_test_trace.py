@@ -34,10 +34,10 @@ OBSERVATION_SCHEMA_VERSION = "codex-candidate-observation/v1"
 RECEIPT_SCHEMA_VERSION = "codex-candidate-test-trace-receipt/v1"
 FACT_PREFIX = "CANDIDATE_TRACE_FACT "
 DEFAULT_MAPPING_RELATIVE_PATH = (
-    "tools/official_client_capture/candidate_test_fact_map_0_147_0.json"
+    "tools/official_client_capture/candidate_test_fact_map_0_149_1.json"
 )
 DEFAULT_PROFILE_RELATIVE_PATH = (
-    "tools/official_client_capture/candidate_rule_expectations_0_147_0.json"
+    "tools/official_client_capture/candidate_rule_expectations_0_149_1.json"
 )
 # 冻结映射内容完成后由离线测试固定；任何修改都必须显式更新并重新审核。
 #
@@ -54,8 +54,10 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
 # 2026-08-16（R12）：版本泄漏纠正把共享生产代码中的硬编码版本改为画像驱动，
 # `official_egress_openai_http.go` 与 `openai_alpha_search.go` 的源码摘要随之变化。
 # 映射只更新这两份源码快照，不改变测试、事实或规则语义。
+# 2026-08-24：目标升级到 0.149.1；冻结映射重算同一组验收测试与生产源码摘要，
+# 规则和事实宇宙保持不变。
 FROZEN_MAPPING_SHA256 = (
-    "7e11d0de1805cbc0631938ab4f9c0cca155b8542dd0f921cc11eeaf4fa121fd4"
+    "d0f36acace6a872c2a339680418396c3e2a11148bd44e8faca42da880a6455e8"
 )
 # 2026-08-11（R8）：与双轨 selector 修订后的冻结断言画像保持同一摘要，
 # 含 BODY-006/nonlite-* 两条补 method=POST 与 responses 路径约束的修订。
@@ -84,8 +86,10 @@ FROZEN_MAPPING_SHA256 = (
 # EP-019 的人类可读描述为三个 GET。机器断言与验收契约载荷不变。
 # 2026-08-16 主手册更新 §3.5 的 v0.1.177 台账路径后再次重绑第二部分摘要；
 # 规则与判据载荷不变。
+# 2026-08-24：断言画像升级为 0.149.1，加入 routing hint 的 HTTP、WS 与 legacy
+# compact 线序，并重绑当前第二部分摘要；42 条验收规则数量不变。
 FROZEN_PROFILE_SHA256 = (
-    "0b4549d5c4a506a0f0a238fd761a1fcecffdc556b03d9bf052ff9ffc190fe4eb"
+    "90641bb30f8ad56a9ff99eabb22965141814694a042bebb1324cdb8d306dc487"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")

@@ -87,13 +87,55 @@ class JobRetryWithinAttemptTest(unittest.TestCase):
             root = Path(temporary) / "run-dir"
             root.mkdir()
             (root / "traffic.pcap").write_bytes(b"stale")
-            cu._archive_failed_job_evidence(
-                {"evidence_roots": [str(root)]}, attempt_index=1
-            )
+            result = {
+                "evidence_roots": [str(root)],
+                "scenario_receipts": [
+                    {"path": str(root / "scenario-receipt.json")}
+                ],
+            }
+            cu._archive_failed_job_evidence(result, attempt_index=1)
             self.assertFalse(root.exists())
             archived = root.with_name(f"{root.name}.failed-attempt1")
             self.assertTrue(archived.is_dir())
             self.assertEqual((archived / "traffic.pcap").read_bytes(), b"stale")
+            self.assertEqual(result["evidence_roots"], [str(archived)])
+            self.assertEqual(
+                result["scenario_receipts"][0]["path"],
+                str(archived / "scenario-receipt.json"),
+            )
+
+    def test_最终失败也归档证据供跨_attempt_重跑(self) -> None:
+        """用尽内部重试后必须清出固定路径，显式 resume 才能重新创建它。"""
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "run-dir"
+            calls: list[int] = []
+
+            def always_fail(job, log_root, attempt_index=1, scenario_context=None):
+                self.assertFalse(root.exists())
+                root.mkdir()
+                (root / "traffic.pcap").write_bytes(
+                    f"attempt-{attempt_index}".encode()
+                )
+                calls.append(attempt_index)
+                return {
+                    "id": job.job_id,
+                    "status": "failed",
+                    "evidence_roots": [str(root)],
+                }
+
+            with mock.patch.object(cu, "run_job", side_effect=always_fail), \
+                 mock.patch.object(cu.time, "sleep"):
+                result = cu._run_job_with_retry(_Job(), Path(temporary))
+
+            final_archive = root.with_name(f"{root.name}.failed-attempt3")
+            self.assertEqual(calls, [1, 2, 3])
+            self.assertFalse(root.exists())
+            self.assertTrue(final_archive.is_dir())
+            self.assertEqual(result["evidence_roots"], [str(final_archive)])
+            self.assertEqual(
+                (final_archive / "traffic.pcap").read_bytes(), b"attempt-3"
+            )
 
     def test_收据记录补跑次数(self) -> None:
         """审计要能还原真实执行过程，而不是只看到最后一次。"""

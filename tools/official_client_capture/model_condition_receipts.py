@@ -25,10 +25,24 @@ from tools.official_client_capture.capturelib.security import secure_write_json
 from tools.official_client_capture.relay_extract import decompress_zstd
 
 
-SCHEMA_VERSION = "codex-egress-model-condition-receipt/v1"
+SCHEMA_VERSION = "codex-egress-model-condition-receipt/v2"
+PREWARM_SCHEMA_VERSION = "codex-model-catalog-prewarm/v1"
 SHA256_RE = re.compile(r"^[a-f0-9]{64}$")
 SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 TRACKS = {"main", "lite"}
+BINDING_ROLES = frozenset(
+    {
+        "relay_manifest",
+        "model_catalog_prewarm",
+        "models_request",
+        "models_response",
+        "responses_request",
+    }
+)
+REQUIRED_BINDING_ROLES = frozenset(
+    {"relay_manifest", "models_request", "models_response", "responses_request"}
+)
 MAX_FILE_BYTES = 512 * 1024 * 1024
 
 
@@ -61,6 +75,39 @@ def _bind(root: Path, path: Path) -> dict[str, Any]:
         "sha256": _sha256(path),
         "bytes": size,
     }
+
+
+def _role_binding(root: Path, path: Path, *roles: str) -> dict[str, Any]:
+    """给原始证据绑定明确角色，供后续编目按语义选择而不是猜连接号。"""
+
+    normalized = sorted(set(roles))
+    if not normalized or any(role not in BINDING_ROLES for role in normalized):
+        raise ModelConditionReceiptError(f"模型条件证据角色非法：{normalized}")
+    return {**_bind(root, path), "roles": normalized}
+
+
+def _merge_role_bindings(bindings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """同一路径可能同时承担多个角色；摘要坐标必须一致后才能合并。"""
+
+    merged: dict[str, dict[str, Any]] = {}
+    for binding in bindings:
+        path = binding["path"]
+        existing = merged.get(path)
+        if existing is None:
+            merged[path] = {
+                "path": path,
+                "sha256": binding["sha256"],
+                "bytes": binding["bytes"],
+                "roles": sorted(set(binding["roles"])),
+            }
+            continue
+        if (
+            existing["sha256"] != binding["sha256"]
+            or existing["bytes"] != binding["bytes"]
+        ):
+            raise ModelConditionReceiptError(f"同一路径模型条件绑定不一致：{path}")
+        existing["roles"] = sorted(set(existing["roles"]) | set(binding["roles"]))
+    return [merged[path] for path in sorted(merged)]
 
 
 def _split_head(payload: bytes, start: int) -> tuple[list[str], int] | None:
@@ -243,6 +290,27 @@ def _ws_request_models(raw: bytes) -> list[str]:
     return models
 
 
+def _responses_request_models(raw: bytes) -> list[str]:
+    """从一份客户端原始连接中提取 HTTP／WS Responses 请求模型。"""
+
+    models: list[str] = []
+    for request in _iter_messages(raw, response=False):
+        path = request["target"].split("?", 1)[0]
+        if request["method"] != "POST" or path not in {
+            "/backend-api/codex/responses",
+            "/backend-api/codex/responses/compact",
+        }:
+            continue
+        body = _json_body(request)
+        model = body.get("model") if isinstance(body, dict) else None
+        if not isinstance(model, str) or not model:
+            raise ModelConditionReceiptError("Responses 请求体缺少字符串 model。")
+        models.append(model)
+    # WS 传输下业务请求位于 Upgrade 后的帧中，与 HTTP 结果取并集。
+    models.extend(_ws_request_models(raw))
+    return models
+
+
 def _load_relay(root: Path) -> dict[str, Any]:
     path = root / "relay" / "relay.json"
     if path.is_symlink() or not path.is_file():
@@ -256,6 +324,237 @@ def _load_relay(root: Path) -> dict[str, Any]:
     return payload
 
 
+def _manifest_proves_request_only_connection(
+    connection: dict[str, Any],
+    *,
+    request_path: Path,
+    response_path: Path,
+) -> bool:
+    """确认单向请求是 relay 明确记录的零响应事实，而不是原始文件丢失。"""
+
+    if (
+        connection.get("valid") is not True
+        or "error" in connection
+        or request_path.is_symlink()
+        or not request_path.is_file()
+        or response_path.exists()
+        or response_path.is_symlink()
+    ):
+        return False
+    byte_counts = connection.get("bytes")
+    digests = connection.get("sha256")
+    segments = connection.get("segments")
+    if (
+        not isinstance(byte_counts, dict)
+        or set(byte_counts) != {"client_to_upstream"}
+        or not isinstance(digests, dict)
+        or set(digests) != {"client_to_upstream"}
+        or not isinstance(segments, list)
+        or not segments
+    ):
+        return False
+    expected_offset = 0
+    for segment in segments:
+        if (
+            not isinstance(segment, dict)
+            or segment.get("direction") != "client_to_upstream"
+            or isinstance(segment.get("offset"), bool)
+            or not isinstance(segment.get("offset"), int)
+            or segment["offset"] != expected_offset
+            or isinstance(segment.get("length"), bool)
+            or not isinstance(segment.get("length"), int)
+            or segment["length"] <= 0
+        ):
+            return False
+        expected_offset += segment["length"]
+    return (
+        byte_counts["client_to_upstream"] == expected_offset
+        and request_path.stat().st_size == expected_offset
+        and digests["client_to_upstream"] == _sha256(request_path)
+    )
+
+
+def _manifest_proves_scrubbed_connection(
+    relay: dict[str, Any],
+    connection_id: int,
+    *,
+    request_binding: dict[str, Any],
+    response_binding: dict[str, Any],
+) -> bool:
+    """确认预热原件只发生了 manifest 声明的等长凭据脱敏。"""
+
+    if relay.get("credential_scrubbing") != {
+        "method": "equal_length_replacement",
+        "byte_offsets_preserved": True,
+        "hashes_recomputed": True,
+    }:
+        return False
+    matches = [
+        item
+        for item in relay.get("connections", [])
+        if isinstance(item, dict) and item.get("connection_id") == connection_id
+    ]
+    if len(matches) != 1:
+        return False
+    connection = matches[0]
+    expected_bytes = {
+        "client_to_upstream": request_binding["bytes"],
+        "upstream_to_client": response_binding["bytes"],
+    }
+    expected_sha256 = {
+        "client_to_upstream": request_binding["sha256"],
+        "upstream_to_client": response_binding["sha256"],
+    }
+    if (
+        connection.get("valid") is not True
+        or connection.get("error") is not None
+        or connection.get("bytes") != expected_bytes
+        or connection.get("sha256") != expected_sha256
+    ):
+        return False
+    segments = connection.get("segments")
+    if not isinstance(segments, list) or not segments:
+        return False
+    offsets = {"client_to_upstream": 0, "upstream_to_client": 0}
+    for segment in segments:
+        if not isinstance(segment, dict):
+            return False
+        direction = segment.get("direction")
+        offset = segment.get("offset")
+        length = segment.get("length")
+        if (
+            direction not in offsets
+            or isinstance(offset, bool)
+            or not isinstance(offset, int)
+            or offset != offsets[direction]
+            or isinstance(length, bool)
+            or not isinstance(length, int)
+            or length <= 0
+        ):
+            return False
+        offsets[direction] += length
+    return offsets == expected_bytes
+
+
+def _load_prewarm_catalog(
+    root: Path,
+    path: Path,
+    *,
+    relay: dict[str, Any],
+    expected_model: str,
+    expected_lite: bool,
+) -> tuple[int, Path, list[dict[str, Any]]]:
+    """重放预热摘要绑定的唯一完整模型目录响应。
+
+    app-server 初始化时会并发拉取多个大目录；`model/list` 完成后关闭隔离进程，其他
+    连接可能只收到响应头。预热摘要已经绑定其中一份完整 HTTP 200，因此最终收据只
+    重放这条明确坐标，避免把同进程主动结束形成的半响应误判为原始证据丢失。
+    """
+
+    if not path.is_absolute():
+        path = root / path
+    binding = _role_binding(root, path, "model_catalog_prewarm")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise ModelConditionReceiptError(f"模型目录预热摘要不可读：{error}") from error
+    required = {
+        "schema_version",
+        "status",
+        "codex_version",
+        "model_id",
+        "use_responses_lite",
+        "protocol_record_count",
+        "model_count",
+        "capture",
+    }
+    if not isinstance(payload, dict) or set(payload) != required:
+        raise ModelConditionReceiptError("模型目录预热摘要字段不闭合。")
+    if (
+        payload.get("schema_version") != PREWARM_SCHEMA_VERSION
+        or payload.get("status") != "success"
+        or not VERSION_RE.fullmatch(str(payload.get("codex_version", "")))
+        or payload.get("model_id") != expected_model
+        or payload.get("use_responses_lite") is not expected_lite
+    ):
+        raise ModelConditionReceiptError("模型目录预热摘要坐标不匹配。")
+    for field in ("protocol_record_count", "model_count"):
+        value = payload.get(field)
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ModelConditionReceiptError(f"模型目录预热摘要 {field} 非法。")
+
+    capture = payload.get("capture")
+    capture_fields = {
+        "connection_id",
+        "request_path",
+        "request_sha256",
+        "response_path",
+        "response_sha256",
+        "use_responses_lite",
+    }
+    if not isinstance(capture, dict) or set(capture) != capture_fields:
+        raise ModelConditionReceiptError("模型目录预热 capture 字段不闭合。")
+    connection_id = capture.get("connection_id")
+    if (
+        isinstance(connection_id, bool)
+        or not isinstance(connection_id, int)
+        or connection_id <= 0
+        or capture.get("use_responses_lite") is not expected_lite
+    ):
+        raise ModelConditionReceiptError("模型目录预热 capture 坐标非法。")
+    expected_request = f"relay/conn{connection_id:03d}.client_to_upstream.bin"
+    expected_response = f"relay/conn{connection_id:03d}.upstream_to_client.bin"
+    if (
+        capture.get("request_path") != expected_request
+        or capture.get("response_path") != expected_response
+        or not SHA256_RE.fullmatch(str(capture.get("request_sha256", "")))
+        or not SHA256_RE.fullmatch(str(capture.get("response_sha256", "")))
+    ):
+        raise ModelConditionReceiptError("模型目录预热 capture 路径或摘要非法。")
+
+    request_path = root / expected_request
+    response_path = root / expected_response
+    request_binding = _role_binding(root, request_path, "models_request")
+    response_binding = _role_binding(root, response_path, "models_response")
+    pre_scrub_digests_match = (
+        request_binding["sha256"] == capture["request_sha256"]
+        and response_binding["sha256"] == capture["response_sha256"]
+    )
+    if not pre_scrub_digests_match and not _manifest_proves_scrubbed_connection(
+        relay,
+        connection_id,
+        request_binding=request_binding,
+        response_binding=response_binding,
+    ):
+        raise ModelConditionReceiptError(
+            "模型目录预热原始字节摘要不一致，且最终 manifest 未证明等长脱敏。"
+        )
+    requests = list(_iter_messages(request_path.read_bytes(), response=False))
+    if not any(
+        request.get("method") == "GET"
+        and str(request.get("target", "")).split("?", 1)[0]
+        == "/backend-api/codex/models"
+        for request in requests
+    ):
+        raise ModelConditionReceiptError("模型目录预热请求不是 /models。")
+    responses = list(_iter_messages(response_path.read_bytes(), response=True))
+    if len(responses) != 1 or responses[0].get("status") != 200:
+        raise ModelConditionReceiptError("模型目录预热响应不是唯一完整 HTTP 200。")
+    models_payload = _json_body(responses[0])
+    models = models_payload.get("models") if isinstance(models_payload, dict) else None
+    matches = [
+        item
+        for item in models or []
+        if isinstance(item, dict) and item.get("slug") == expected_model
+    ]
+    if (
+        len(matches) != 1
+        or matches[0].get("use_responses_lite") is not expected_lite
+    ):
+        raise ModelConditionReceiptError("模型目录预热响应未证明目标模型 Lite 条件。")
+    return connection_id, response_path, [binding, request_binding, response_binding]
+
+
 def build_receipt(
     *,
     root: Path,
@@ -264,6 +563,7 @@ def build_receipt(
     track: str,
     expected_model: str,
     expected_lite: bool,
+    model_catalog_prewarm: Path | None = None,
 ) -> dict[str, Any]:
     """从原始 relay 字节建立成功收据，条件不成立即抛错。"""
 
@@ -279,49 +579,137 @@ def build_receipt(
         raise ModelConditionReceiptError("expected_lite 必须是布尔值。")
 
     relay = _load_relay(root)
-    model_connections: list[tuple[int, Path]] = []
+    validated_connections: list[tuple[int, dict[str, Any]]] = []
     connection_ids: set[int] = set()
     for connection in relay["connections"]:
-        connection_id = connection.get("connection_id") if isinstance(connection, dict) else None
+        connection_id = (
+            connection.get("connection_id") if isinstance(connection, dict) else None
+        )
         if (
             not isinstance(connection_id, int)
             or isinstance(connection_id, bool)
             or connection_id <= 0
             or connection_id in connection_ids
         ):
-            raise ModelConditionReceiptError("relay/relay.json connection_id 非法或重复。")
+            raise ModelConditionReceiptError(
+                "relay/relay.json connection_id 非法或重复。"
+            )
         connection_ids.add(connection_id)
-        request_path = root / "relay" / f"conn{connection_id:03d}.client_to_upstream.bin"
-        if request_path.is_symlink() or not request_path.is_file():
-            raise ModelConditionReceiptError(f"缺少连接 {connection_id} 的原始请求字节。")
-        for request in _iter_messages(request_path.read_bytes(), response=False):
-            path = request["target"].split("?", 1)[0]
-            if request["method"] == "GET" and path == "/backend-api/codex/models":
-                model_connections.append((connection_id, request_path))
-    if not model_connections:
-        raise ModelConditionReceiptError("至少需要一条 /models 原始连接。")
-    bindings: list[dict[str, Any]] = []
+        validated_connections.append((connection_id, connection))
+    bindings: list[dict[str, Any]] = [
+        _role_binding(root, root / "relay" / "relay.json", "relay_manifest")
+    ]
     models_response_paths: list[Path] = []
     actual_lites: list[bool] = []
-    for connection_id, models_request_path in sorted(model_connections):
-        response_path = root / "relay" / f"conn{connection_id:03d}.upstream_to_client.bin"
-        if response_path.is_symlink() or not response_path.is_file():
-            raise ModelConditionReceiptError(f"缺少连接 {connection_id} 的原始响应字节。")
-        responses = list(_iter_messages(response_path.read_bytes(), response=True))
-        if len(responses) != 1 or responses[0]["status"] != 200:
-            raise ModelConditionReceiptError("每条 /models 连接必须恰好返回一个 HTTP 200。")
-        models_payload = _json_body(responses[0])
-        models = models_payload.get("models") if isinstance(models_payload, dict) else None
-        matches = [
-            item
-            for item in models or []
-            if isinstance(item, dict) and item.get("slug") == expected_model
-        ]
-        if len(matches) != 1 or not isinstance(matches[0].get("use_responses_lite"), bool):
-            raise ModelConditionReceiptError("/models 未唯一给出目标模型的 Lite 元数据。")
-        actual_lites.append(matches[0]["use_responses_lite"])
+    if model_catalog_prewarm is not None:
+        prewarm_connection_id, response_path, prewarm_bindings = _load_prewarm_catalog(
+            root,
+            model_catalog_prewarm,
+            relay=relay,
+            expected_model=expected_model,
+            expected_lite=expected_lite,
+        )
+        if prewarm_connection_id not in connection_ids:
+            raise ModelConditionReceiptError(
+                "模型目录预热连接未登记在 relay manifest。"
+            )
         models_response_paths.append(response_path)
-        bindings.extend((_bind(root, models_request_path), _bind(root, response_path)))
+        actual_lites.append(expected_lite)
+        bindings.extend(prewarm_bindings)
+    else:
+        model_connections: list[tuple[int, Path, dict[str, Any]]] = []
+        for connection_id, connection in validated_connections:
+            request_path = (
+                root
+                / "relay"
+                / f"conn{connection_id:03d}.client_to_upstream.bin"
+            )
+            if request_path.is_symlink() or not request_path.is_file():
+                # 客户端会短暂建立后立即放弃一条 TLS 连接；中继仍会登记连接的打开／
+                # 关闭时间，但没有任何方向的字节、摘要或 segment，因此不会生成 .bin。
+                # 这种严格意义上的空连接不承载模型条件事实，应从分母中排除。
+                response_path = (
+                    root
+                    / "relay"
+                    / f"conn{connection_id:03d}.upstream_to_client.bin"
+                )
+                if (
+                    isinstance(connection, dict)
+                    and connection.get("bytes") == {}
+                    and connection.get("sha256") == {}
+                    and connection.get("segments") == []
+                    and not response_path.exists()
+                    and not response_path.is_symlink()
+                ):
+                    continue
+                raise ModelConditionReceiptError(
+                    f"缺少连接 {connection_id} 的原始请求字节。"
+                )
+            for request in _iter_messages(request_path.read_bytes(), response=False):
+                request_target = request["target"].split("?", 1)[0]
+                if (
+                    request["method"] == "GET"
+                    and request_target == "/backend-api/codex/models"
+                ):
+                    model_connections.append((connection_id, request_path, connection))
+        if not model_connections:
+            raise ModelConditionReceiptError("至少需要一条 /models 原始连接。")
+        # relay manifest 是单向连接排除判据的一部分，必须和原始请求一起进入收据绑定。
+        for connection_id, models_request_path, connection in sorted(
+            model_connections,
+            key=lambda item: item[0],
+        ):
+            response_path = (
+                root
+                / "relay"
+                / f"conn{connection_id:03d}.upstream_to_client.bin"
+            )
+            if response_path.is_symlink() or not response_path.is_file():
+                if _manifest_proves_request_only_connection(
+                    connection,
+                    request_path=models_request_path,
+                    response_path=response_path,
+                ):
+                    bindings.append(
+                        _role_binding(root, models_request_path, "models_request")
+                    )
+                    continue
+                raise ModelConditionReceiptError(
+                    f"缺少连接 {connection_id} 的原始响应字节。"
+                )
+            responses = list(_iter_messages(response_path.read_bytes(), response=True))
+            if len(responses) != 1 or responses[0]["status"] != 200:
+                raise ModelConditionReceiptError(
+                    "每条 /models 连接必须恰好返回一个 HTTP 200。"
+                )
+            models_payload = _json_body(responses[0])
+            models = (
+                models_payload.get("models")
+                if isinstance(models_payload, dict)
+                else None
+            )
+            matches = [
+                item
+                for item in models or []
+                if isinstance(item, dict) and item.get("slug") == expected_model
+            ]
+            if (
+                len(matches) != 1
+                or not isinstance(matches[0].get("use_responses_lite"), bool)
+            ):
+                raise ModelConditionReceiptError(
+                    "/models 未唯一给出目标模型的 Lite 元数据。"
+                )
+            actual_lites.append(matches[0]["use_responses_lite"])
+            models_response_paths.append(response_path)
+            bindings.extend(
+                (
+                    _role_binding(root, models_request_path, "models_request"),
+                    _role_binding(root, response_path, "models_response"),
+                )
+            )
+    if not models_response_paths:
+        raise ModelConditionReceiptError("没有取得完整的 /models HTTP 200 原始响应。")
     if any(actual_lite is not expected_lite for actual_lite in actual_lites):
         raise ModelConditionReceiptError(
             f"目标模型 use_responses_lite={sorted(set(actual_lites))}，预期为 {expected_lite}。"
@@ -330,29 +718,10 @@ def build_receipt(
     request_models: list[str] = []
     for request_path in sorted((root / "relay").glob("conn*.client_to_upstream.bin")):
         raw = request_path.read_bytes()
-        used = False
-        for request in _iter_messages(raw, response=False):
-            path = request["target"].split("?", 1)[0]
-            if request["method"] != "POST" or path not in {
-                "/backend-api/codex/responses",
-                "/backend-api/codex/responses/compact",
-            }:
-                continue
-            body = _json_body(request)
-            model = body.get("model") if isinstance(body, dict) else None
-            if not isinstance(model, str) or not model:
-                raise ModelConditionReceiptError("Responses 请求体缺少字符串 model。")
-            request_models.append(model)
-            used = True
-        # WS 传输下 Responses 不是 HTTP POST：握手是 GET + Upgrade，真正的请求体在
-        # WS 帧里，而官方协商了 permessage-deflate，帧 payload 是 raw deflate，
-        # 明文搜不到 model。因此 HTTP 路径取不到时再走帧路径，两者取并集后一起
-        # 参与 fallback 判定——判据强度不变，只是把 WS 形态也纳入证明范围。
-        for model in _ws_request_models(raw):
-            request_models.append(model)
-            used = True
-        if used:
-            bindings.append(_bind(root, request_path))
+        models = _responses_request_models(raw)
+        request_models.extend(models)
+        if models:
+            bindings.append(_role_binding(root, request_path, "responses_request"))
     if not request_models:
         raise ModelConditionReceiptError(
             "未见可绑定的 Responses／compact 原始请求模型（HTTP 与 WS 帧均未取到）。"
@@ -362,7 +731,7 @@ def build_receipt(
         raise ModelConditionReceiptError(
             f"实际请求模型发生 fallback：{sorted(set(request_models))}。"
         )
-    bindings = sorted({item["path"]: item for item in bindings}.values(), key=lambda item: item["path"])
+    bindings = _merge_role_bindings(bindings)
     return {
         "schema_version": SCHEMA_VERSION,
         "status": "success",
@@ -390,7 +759,7 @@ def validate_receipt(
     model_id: str,
     use_responses_lite: bool,
 ) -> dict[str, Any]:
-    """严格校验收据结构、期望坐标与所有 evidence binding。"""
+    """严格校验收据结构、期望坐标、角色语义与所有 evidence binding。"""
 
     required = {
         "schema_version",
@@ -423,6 +792,12 @@ def validate_receipt(
             raise ModelConditionReceiptError(f"模型条件收据 {key} 不一致。")
     if not SAFE_ID_RE.fullmatch(str(payload.get("run_id", ""))):
         raise ModelConditionReceiptError("模型条件收据 run_id 非法。")
+    if payload.get("track") not in TRACKS:
+        raise ModelConditionReceiptError("模型条件收据 track 非法。")
+    if not isinstance(payload.get("model_id"), str) or not payload["model_id"]:
+        raise ModelConditionReceiptError("模型条件收据 model_id 非法。")
+    if not isinstance(payload.get("use_responses_lite"), bool):
+        raise ModelConditionReceiptError("模型条件收据 use_responses_lite 非法。")
     if not SHA256_RE.fullmatch(str(payload.get("models_response_sha256", ""))):
         raise ModelConditionReceiptError("models_response_sha256 非法。")
     if payload.get("observed_request_models") != [model_id]:
@@ -431,11 +806,20 @@ def validate_receipt(
     if not isinstance(bindings, list) or not bindings:
         raise ModelConditionReceiptError("模型条件收据 evidence_bindings 不能为空。")
     seen: set[str] = set()
+    by_role: dict[str, list[tuple[Path, dict[str, Any]]]] = {
+        role: [] for role in BINDING_ROLES
+    }
     response_match = False
     for item in bindings:
-        if not isinstance(item, dict) or set(item) != {"path", "sha256", "bytes"}:
+        if not isinstance(item, dict) or set(item) != {
+            "path",
+            "sha256",
+            "bytes",
+            "roles",
+        }:
             raise ModelConditionReceiptError("模型条件收据 binding 字段不闭合。")
         path_value = item["path"]
+        roles = item["roles"]
         if (
             not isinstance(path_value, str)
             or not path_value
@@ -444,12 +828,77 @@ def validate_receipt(
             or path_value in seen
         ):
             raise ModelConditionReceiptError("模型条件收据 binding 路径非法或重复。")
+        if (
+            not isinstance(roles, list)
+            or not roles
+            or roles != sorted(set(roles))
+            or any(role not in BINDING_ROLES for role in roles)
+        ):
+            raise ModelConditionReceiptError("模型条件收据 binding 角色非法。")
         seen.add(path_value)
-        actual = _bind(root, root / path_value)
-        if actual != item:
+        path = root / path_value
+        actual = _bind(root, path)
+        expected_binding = {key: item[key] for key in ("path", "sha256", "bytes")}
+        if actual != expected_binding:
             raise ModelConditionReceiptError(f"模型条件证据摘要不一致：{path_value}")
-        if path_value.endswith(".upstream_to_client.bin"):
-            response_match = response_match or item["sha256"] == payload["models_response_sha256"]
+        for role in roles:
+            by_role[role].append((path, item))
+        if "models_response" in roles:
+            response_match = (
+                response_match
+                or item["sha256"] == payload["models_response_sha256"]
+            )
+    missing_roles = sorted(
+        role for role in REQUIRED_BINDING_ROLES if not by_role[role]
+    )
+    if missing_roles:
+        raise ModelConditionReceiptError(
+            f"模型条件收据缺少必需证据角色：{missing_roles}"
+        )
+    relay_manifests = by_role["relay_manifest"]
+    if len(relay_manifests) != 1 or relay_manifests[0][1]["path"] != "relay/relay.json":
+        raise ModelConditionReceiptError("relay_manifest 角色坐标非法。")
+    for path, _binding in by_role["models_request"]:
+        requests = list(_iter_messages(path.read_bytes(), response=False))
+        if not any(
+            request.get("method") == "GET"
+            and str(request.get("target", "")).split("?", 1)[0]
+            == "/backend-api/codex/models"
+            for request in requests
+        ):
+            raise ModelConditionReceiptError(
+                f"models_request 角色未绑定 /models 请求：{path}"
+            )
+    for path, _binding in by_role["models_response"]:
+        responses = list(_iter_messages(path.read_bytes(), response=True))
+        if len(responses) != 1 or responses[0].get("status") != 200:
+            raise ModelConditionReceiptError(
+                f"models_response 角色不是唯一 HTTP 200：{path}"
+            )
+        models_payload = _json_body(responses[0])
+        models = models_payload.get("models") if isinstance(models_payload, dict) else None
+        matches = [
+            item
+            for item in models or []
+            if isinstance(item, dict) and item.get("slug") == model_id
+        ]
+        if (
+            len(matches) != 1
+            or matches[0].get("use_responses_lite") is not use_responses_lite
+        ):
+            raise ModelConditionReceiptError(
+                f"models_response 角色未证明目标模型条件：{path}"
+            )
+    role_request_models: list[str] = []
+    for path, _binding in by_role["responses_request"]:
+        models = _responses_request_models(path.read_bytes())
+        if not models:
+            raise ModelConditionReceiptError(
+                f"responses_request 角色未绑定业务请求：{path}"
+            )
+        role_request_models.extend(models)
+    if sorted(set(role_request_models)) != [model_id]:
+        raise ModelConditionReceiptError("responses_request 角色模型不匹配。")
     if not response_match:
         raise ModelConditionReceiptError("models_response_sha256 未绑定原始响应文件。")
     return dict(payload)
@@ -464,6 +913,7 @@ def main() -> None:
     parser.add_argument("--track", choices=tuple(sorted(TRACKS)), required=True)
     parser.add_argument("--model", required=True)
     parser.add_argument("--expect-use-responses-lite", choices=("true", "false"), required=True)
+    parser.add_argument("--model-catalog-prewarm", type=Path)
     arguments = parser.parse_args()
     expected_lite = arguments.expect_use_responses_lite == "true"
     receipt = build_receipt(
@@ -473,6 +923,7 @@ def main() -> None:
         track=arguments.track,
         expected_model=arguments.model,
         expected_lite=expected_lite,
+        model_catalog_prewarm=arguments.model_catalog_prewarm,
     )
     secure_write_json(arguments.output, receipt)
     print(json.dumps(receipt, ensure_ascii=False, sort_keys=True))

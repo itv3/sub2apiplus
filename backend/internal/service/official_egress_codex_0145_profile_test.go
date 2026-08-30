@@ -8,19 +8,15 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-
-	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 )
 
 func officialCodex0145RequiredEndpointIDs() []string {
-	mode := openAICodexReleaseModeForVersionForTest(officialCodexVersion0145)
-	release, err := officialegress.DefaultReleaseCatalog().Resolve(mode)
+	profile, err := resolveCodexVersionProfile(officialCodexVersion0145)
 	if err != nil {
 		panic(err)
 	}
-	endpoints := release.ExecutableProfile().Endpoints()
-	ids := make([]string, 0, len(endpoints))
-	for _, endpoint := range endpoints {
+	ids := make([]string, 0, len(profile.Endpoints))
+	for _, endpoint := range profile.Endpoints {
 		ids = append(ids, endpoint.ID)
 	}
 	return ids
@@ -178,11 +174,7 @@ func TestOfficialCodex0145RequiredRuleAndEndpointUniverse(t *testing.T) {
 	if len(profile.RequiredRules) != 0 {
 		t.Fatalf("证据专用 RequiredRules 不得进入 service 可执行投影：%v", profile.RequiredRules)
 	}
-	mode := openAICodexReleaseModeForVersionForTest(officialCodexVersion0145)
-	formal, err := officialegress.DefaultReleaseCatalog().Resolve(mode)
-	if err != nil {
-		t.Fatal(err)
-	}
+	formal := mustOfficialCodexHistoricalFixture(t)
 	var evidenceRules []string
 	if err := json.Unmarshal(formal.Profile().ToSnapshot().RequiredRules, &evidenceRules); err != nil {
 		t.Fatal(err)
@@ -542,20 +534,24 @@ func TestOfficialCodex0145ConnectionLifecycleComesFromEndpointProfile(t *testing
 			Transport:       OfficialEgressTransportHTTP,
 			UpstreamHost:    endpoint.Host,
 			ProfileVersion:  officialCodexVersion0145,
-			ProfileMode:     string(openAICodexReleaseModeForVersionForTest(officialCodexVersion0145)),
+			ProfileMode:     "historical_audit",
 			AccountType:     account.Type,
 			CodexEndpointID: endpoint.ID,
 			InvocationID:    invocationID,
 		})
-		profile, err := (DefaultOfficialEgressProfileResolver{}).ResolveHTTPProfile(
-			egressContext,
-			account,
-			endpoint.Path,
-		)
-		if err != nil {
-			t.Fatal(err)
+		profile := OfficialEgressProfile{
+			Enabled:                   true,
+			Version:                   officialCodexVersion0145,
+			TargetPlatform:            PlatformOpenAI,
+			InboundEndpoint:           endpoint.Path,
+			Transport:                 OfficialEgressTransportHTTP,
+			UpstreamHost:              endpoint.Host,
+			CodexVersionProfileID:     "codex-cli-" + officialCodexVersion0145,
+			CodexVersionProfileDigest: officialCodexHistoricalProfileDigest,
+			CodexEndpointProfileID:    endpoint.ID,
+			TransportProfileID:        endpoint.TransportID,
 		}
-		return profile.ConnectionPoolID
+		return buildOfficialEgressConnectionPoolID(egressContext, profile)
 	}
 
 	usagePool := resolvePoolID(officialCodexEndpointWhamUsage, "call-a")
@@ -697,11 +693,7 @@ func TestOfficialCodex0145DeepCopyAndDigest(t *testing.T) {
 	if first != pristine {
 		t.Fatal("两次版本解析返回了不同指针，只读单例契约被破坏")
 	}
-	mode := openAICodexReleaseModeForVersionForTest(officialCodexVersion0145)
-	formal, err := officialegress.DefaultReleaseCatalog().Resolve(mode)
-	if err != nil {
-		t.Fatal(err)
-	}
+	formal := mustOfficialCodexHistoricalFixture(t)
 	if first.Digest != pristine.Digest || first.Digest != formal.ExecutableProfileDigest() {
 		t.Fatalf("可执行画像摘要不稳定：%s / %s / %s", first.Digest, pristine.Digest, formal.ExecutableProfileDigest())
 	}

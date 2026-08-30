@@ -254,6 +254,7 @@ func (i *officialCodexHTTPInvocation) Execute(
 				ID: i.headerPolicy.ID + ".body", Source: i.headerPolicy.Source,
 				Conditions: semantic.BodyConditions,
 			},
+			RoutingHint:    semantic.RoutingHint,
 			BehaviorPolicy: i.behaviorPolicy, Body: body,
 			InvocationID: i.invocation.InvocationID(), DeclaredPersona: officialegress.PersonaCodexCLI,
 		},

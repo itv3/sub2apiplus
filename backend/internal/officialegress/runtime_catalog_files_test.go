@@ -40,6 +40,64 @@ func TestRuntimeCatalogFilesDeterministicallyRebuildEmbeddedTree(t *testing.T) {
 	}
 }
 
+func TestRuntimeCatalogArchiveFilesPreserveHistoricalAggregates(t *testing.T) {
+	catalog := DefaultReleaseCatalog()
+	current, err := catalog.RuntimeCatalogFiles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive, err := catalog.RuntimeCatalogArchiveFiles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	currentPaths := make(map[string]bool, len(current))
+	for _, file := range current {
+		currentPaths[file.Path] = true
+	}
+	archiveFiles := make(map[string][]byte, len(archive))
+	for _, file := range archive {
+		if _, exists := archiveFiles[file.Path]; exists {
+			t.Fatalf("正式版本归档重复路径：%s", file.Path)
+		}
+		archiveFiles[file.Path] = file.Data
+	}
+	for _, historicalPath := range []string{
+		"release-graphs/d8a7634c9af52159c912b539df74b9fa3b92664c0b90cc0defd6789cd07c846d.json",
+		"snapshot-catalogs/0e66972cc5f27fe1a1fe710f2ba1565e220ec7ca0cf4e6e6d6acf29ac63fcc88.json",
+	} {
+		if currentPaths[historicalPath] {
+			t.Fatalf("历史聚合重新进入当前 selector 闭包：%s", historicalPath)
+		}
+		embedded, readErr := releaseCatalogFS.ReadFile(path.Join("catalogdata/runtime", historicalPath))
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if !bytes.Equal(archiveFiles[historicalPath], embedded) {
+			t.Fatalf("历史聚合未逐字节追加保留：%s", historicalPath)
+		}
+	}
+}
+
+func TestRuntimeCatalogDoesNotEmbedRetiredCodex0145Profiles(t *testing.T) {
+	for _, snapshot := range DefaultReleaseCatalog().snapshots.ToDoc().Snapshots {
+		if snapshot.Version == "0.145.0" {
+			t.Fatalf("已退休的 Codex 0.145.0 画像仍在当前 SnapshotCatalog：%s", snapshot.Digest)
+		}
+	}
+	err := fs.WalkDir(releaseCatalogFS, "catalogdata/runtime/profiles", func(pathValue string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if !entry.IsDir() && strings.Contains(pathValue, "/0.145.0/") {
+			t.Fatalf("已退休的 Codex 0.145.0 画像仍被嵌入正式镜像：%s", pathValue)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestReleaseCatalogFSContainsNoHistoricalTestdata(t *testing.T) {
 	err := fs.WalkDir(releaseCatalogFS, ".", func(pathValue string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {

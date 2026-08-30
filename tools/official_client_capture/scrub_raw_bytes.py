@@ -90,6 +90,10 @@ CONTENT_LENGTH_HEADER = re.compile(rb"(?im)^content-length:\s*(\d+)\s*$")
 ZSTD_CONTENT_ENCODING_HEADER = re.compile(
     rb"(?im)^content-encoding:\s*[^\r\n]*\bzstd\b[^\r\n]*\r?$"
 )
+WEBSOCKET_UPGRADE_HEADER = re.compile(rb"(?im)^upgrade:\s*websocket\s*\r?$")
+PERMESSAGE_DEFLATE_HEADER = re.compile(
+    rb"(?im)^sec-websocket-extensions:\s*[^\r\n]*\bpermessage-deflate\b[^\r\n]*\r?$"
+)
 
 
 def placeholder(length: int) -> bytes:
@@ -137,6 +141,80 @@ def _zstd_body_spans(data: bytes) -> list[tuple[int, int]]:
     return spans
 
 
+def _websocket_deflate_spans(data: bytes) -> list[tuple[int, int]]:
+    """保护已协商 permessage-deflate 的 WS 帧区，避免把压缩字节当明文改写。
+
+    OAuth 凭据位于握手 header，仍由既有规则等长脱敏。握手后的数据帧已经按
+    permessage-deflate 压缩，直接对压缩字节跑 query／JSON 正则既不能可靠找到
+    凭据，还可能把随机字节误判成 ``?name=value`` 并破坏 deflate 流。
+    """
+
+    header_end = data.find(b"\r\n\r\n")
+    if header_end < 0:
+        return []
+    first_line_end = data.find(b"\r\n", 0, header_end)
+    if first_line_end < 0 or not HTTP_START_LINE.fullmatch(data[:first_line_end]):
+        return []
+    header = data[:header_end]
+    if (
+        WEBSOCKET_UPGRADE_HEADER.search(header) is None
+        or PERMESSAGE_DEFLATE_HEADER.search(header) is None
+    ):
+        return []
+    frame_start = header_end + 4
+    return [(frame_start, len(data))] if frame_start < len(data) else []
+
+
+def _merge_protected_spans(spans: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """合并压缩区间，确保后续切片不重复或倒退。"""
+
+    merged: list[tuple[int, int]] = []
+    for start, end in sorted(spans):
+        if start >= end:
+            continue
+        if not merged or start > merged[-1][1]:
+            merged.append((start, end))
+            continue
+        merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+    return merged
+
+
+def _split_protected_chunks(data: bytes) -> list[tuple[bytes, bool]]:
+    """把原始字节拆成可扫描区与压缩区，两阶段使用同一边界。"""
+
+    protected = _merge_protected_spans(
+        _zstd_body_spans(data) + _websocket_deflate_spans(data)
+    )
+    chunks: list[tuple[bytes, bool]] = []
+    cursor = 0
+    for start, end in protected:
+        chunks.append((data[cursor:start], False))
+        chunks.append((data[start:end], True))
+        cursor = end
+    chunks.append((data[cursor:], False))
+    return chunks
+
+
+def count_unscrubbed_credentials(data: bytes) -> tuple[int, int]:
+    """只复扫可解释明文字节，返回规则残留数和通用 token 命中数。"""
+
+    leftover = 0
+    generic = 0
+    for chunk, is_protected in _split_protected_chunks(data):
+        if is_protected:
+            continue
+        for pattern, group in RULES:
+            for match in pattern.finditer(chunk):
+                value = match.group(group)
+                safe = value.startswith(SECRET_MARKER) and not (
+                    set(value[len(SECRET_MARKER):]) - set(FILL)
+                )
+                if not safe and set(value) - set(FILL):
+                    leftover += 1
+        generic += len(GENERIC_TOKEN.findall(chunk))
+    return leftover, generic
+
+
 def scrub(data: bytes) -> tuple[bytes, int]:
     """等长替换，返回 (新字节, 替换处数)。"""
     count = 0
@@ -149,17 +227,8 @@ def scrub(data: bytes) -> tuple[bytes, int]:
         # 用同样长度的占位替换值本身，前缀（header 名与冒号空格）原样保留
         return whole[: len(whole) - len(value)] + placeholder(len(value))
 
-    protected = _zstd_body_spans(data)
-    chunks: list[tuple[bytes, bool]] = []
-    cursor = 0
-    for start, end in protected:
-        chunks.append((data[cursor:start], False))
-        chunks.append((data[start:end], True))
-        cursor = end
-    chunks.append((data[cursor:], False))
-
     rewritten: list[bytes] = []
-    for chunk, is_protected in chunks:
+    for chunk, is_protected in _split_protected_chunks(data):
         if is_protected:
             rewritten.append(chunk)
             continue
@@ -249,23 +318,14 @@ def main() -> int:
 
     if args.verify:
         leftover = 0
+        generic = 0
         for f in sorted(dst.rglob("*.bin")):
-            d = f.read_bytes()
-            for pattern, group in RULES:
-                for m in pattern.finditer(d):
-                    # 直接看捕获组本身是否已是安全的等长占位。
-                    # 早前按冒号切分取值——query 形态（`?pageToken=…`）里没有冒号，
-                    # 切分结果只有一段，取 [1] 直接越界。
-                    value = m.group(group)
-                    safe = value.startswith(SECRET_MARKER) and not (
-                        set(value[len(SECRET_MARKER):]) - set(FILL)
-                    )
-                    if not safe and set(value) - set(FILL):
-                        leftover += 1
+            file_leftover, file_generic = count_unscrubbed_credentials(
+                f.read_bytes()
+            )
+            leftover += file_leftover
+            generic += file_generic
         print(f"复扫残留凭据：{leftover} 处")
-        # 额外扫一遍通用 token 特征，防规则漏网
-        generic = sum(len(GENERIC_TOKEN.findall(f.read_bytes()))
-                      for f in dst.rglob("*.bin"))
         print(f"通用 token 特征残留：{generic} 处（仅计前面有字段名的，"
               f"排除加密流里的偶然匹配）")
         if leftover or generic:

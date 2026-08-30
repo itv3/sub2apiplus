@@ -42,7 +42,8 @@ SSE_RESPONSE = (
 # 后续的 /responses 请求根本不会发出，也就采集不到真正要对比的 POST 形态。
 #
 # 两条轨道的模型都必须在清单里有条目，且 use_responses_lite 必须与真实上游元数据
-# 一致（k41／k51 的 /models 原文：gpt-5.4=false、gpt-5.5=false、gpt-5.6-*=true）。
+# 一致。载荷取 0.147.0 与 0.149.1 已受管模型的并集，历史复算与新 Campaign
+# 均须从同一份显式模型政策校验 Lite 条件。
 # 缺条目时 CLI 查不到模型元数据会落到默认值，采集条件就与标签声明脱节——本探针是
 # 受控上游，元数据由这里权威给出，写错即等于伪造 Lite 条件。清单必须覆盖
 # capturelib.model 的 MAIN_TRACK_MODELS 与 LITE_TRACK_MODELS，由
@@ -53,6 +54,12 @@ MODELS_BODY = (
     b'"supports_parallel_tool_calls":true},'
     b'{"slug":"gpt-5.5","display_name":"GPT-5.5",'
     b'"visibility":"list","use_responses_lite":false,'
+    b'"supports_parallel_tool_calls":true},'
+    b'{"slug":"gpt-5.4-mini","display_name":"GPT-5.4 Mini",'
+    b'"visibility":"list","use_responses_lite":false,'
+    b'"supports_parallel_tool_calls":true},'
+    b'{"slug":"gpt-5.6-terra","display_name":"GPT-5.6 Terra",'
+    b'"visibility":"list","use_responses_lite":true,'
     b'"supports_parallel_tool_calls":true},'
     b'{"slug":"gpt-5.6-luna","display_name":"GPT-5.6 Luna",'
     b'"visibility":"list","use_responses_lite":true,'
@@ -190,7 +197,24 @@ def parse_head(raw: bytes) -> dict:
     }
 
 
-def handle(connection: ssl.SSLSocket, records: list, lock: threading.Lock) -> None:
+def record_matches_path_prefix(record: dict, path_prefix: str) -> bool:
+    """判断请求是否属于当前探针要封存的端点范围。"""
+
+    if not path_prefix:
+        return True
+    request_line = record.get("request_line")
+    if not isinstance(request_line, str):
+        return False
+    parts = request_line.split(" ", 2)
+    return len(parts) >= 2 and parts[1].startswith(path_prefix)
+
+
+def handle(
+    connection: ssl.SSLSocket,
+    records: list,
+    lock: threading.Lock,
+    record_path_prefix: str,
+) -> None:
     buffer = b""
     try:
         while HEADER_TERMINATOR not in buffer and len(buffer) < MAX_HEADER_BYTES:
@@ -225,8 +249,11 @@ def handle(connection: ssl.SSLSocket, records: list, lock: threading.Lock) -> No
             record["body"] = summary
         record["negotiated_alpn"] = connection.selected_alpn_protocol()
         record["tls_version"] = connection.version()
-        with lock:
-            records.append(record)
+        # images 探针启动服务时也会先收到 /codex/models。该请求必须正常响应，
+        # 但不能占用 images 场景唯一的证据槽，否则产物会把模型清单误当图片请求。
+        if record_matches_path_prefix(record, record_path_prefix):
+            with lock:
+                records.append(record)
         names = record.get("header_names_in_order") or []
         is_upgrade = any(n.strip().lower() == "upgrade" for n in names)
         if is_upgrade and os.environ.get("H1_PROBE_DROP_WS") == "1":
@@ -255,7 +282,14 @@ def main() -> None:
     parser.add_argument("--timeout", type=int, default=120)
     parser.add_argument("--idle-timeout", type=int, default=8,
                         help="收到首个请求后等待后续请求的秒数")
+    parser.add_argument(
+        "--record-path-prefix",
+        default="",
+        help="只封存 request-target 以该前缀开头的请求；其他请求仍正常响应",
+    )
     args = parser.parse_args()
+    if args.record_path_prefix and not args.record_path_prefix.startswith("/"):
+        parser.error("--record-path-prefix 必须以 / 开头")
 
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain(certfile=args.cert, keyfile=args.key)
@@ -282,13 +316,20 @@ def main() -> None:
             except (OSError, ssl.SSLError):
                 raw_conn.close()
                 continue
-            thread = threading.Thread(target=handle, args=(tls_conn, records, lock), daemon=True)
+            thread = threading.Thread(
+                target=handle,
+                args=(tls_conn, records, lock, args.record_path_prefix),
+                daemon=True,
+            )
             thread.start()
             threads.append(thread)
             thread.join(timeout=args.timeout)
-            # 收到首个请求后缩短等待：后续请求若存在会紧随其后，
-            # 没有则不必空等完整超时，让编排脚本尽快读到产物。
-            listener.settimeout(args.idle_timeout)
+            # 只在收到首条“要封存”的请求后缩短等待。过滤掉的启动期 models 请求
+            # 不能启动 idle timeout，否则服务尚未健康时 images 探针就会提前退出。
+            with lock:
+                has_matching_record = bool(records)
+            if has_matching_record:
+                listener.settimeout(args.idle_timeout)
     finally:
         listener.close()
 

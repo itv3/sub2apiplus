@@ -23,20 +23,61 @@ PRODUCT_TRANSPORTS = (
 SUBJECTS = tuple(f"{product}-{transport}" for product, transport in PRODUCT_TRANSPORTS)
 SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
-# 0.145→0.147 双轨采集的模型坐标权威定义。
+# 各目标版本双轨采集的模型坐标权威定义。
 #
 # 收录进主线的唯一条件是上游 /models 元数据给出 use_responses_lite=false：主线判据
 # （BODY-006、EP-014、H1-004 等）整体建立在非 Lite 形态上，混进一个 Lite 模型会让
 # 全部主线样本的语义翻转，而不是少采一条。两个集合都实测自官方 /models 原文，
-# k51 官方证据：gpt-5.4／gpt-5.5／gpt-5.4-mini／gpt-5.3-codex-spark 为 false，
-# gpt-5.6-* 全系为 true。
+# 0.147.0 的官方证据：gpt-5.4／gpt-5.5 为 false，gpt-5.6-luna 为 true；
+# 0.149.1 的官方证据：gpt-5.5／gpt-5.4-mini 为 false，
+# gpt-5.6-terra／gpt-5.6-luna 为 true。
 #
 # 主线只收录已在本升级中实际采过或即将采的两个，而不是所有 non-lite 模型——没被
-# 实测过的模型不进白名单，保持 fail-closed。改这两个集合必须同步 h1_wire_probe 的
+# 实测过的模型不进白名单，保持 fail-closed。改这些集合必须同步 h1_wire_probe 的
 # 受控 /models 载荷与 extract_compaction_reason 的 ALLOWED_MODELS，
 # test_main_track_models.py 锁定三者一致。
-MAIN_TRACK_MODELS = ("gpt-5.4", "gpt-5.5")
-LITE_TRACK_MODELS = ("gpt-5.6-luna",)
+TRACK_MODELS_BY_CODEX_VERSION = {
+    "0.147.0": {
+        "main": ("gpt-5.4", "gpt-5.5"),
+        "lite": ("gpt-5.6-luna",),
+    },
+    "0.149.1": {
+        "main": ("gpt-5.5", "gpt-5.4-mini"),
+        "lite": ("gpt-5.6-terra", "gpt-5.6-luna"),
+    },
+}
+
+
+def _model_union(track: str) -> tuple[str, ...]:
+    """按首次出现顺序返回全部受管版本的轨道模型并集。"""
+
+    return tuple(
+        dict.fromkeys(
+            model
+            for policy in TRACK_MODELS_BY_CODEX_VERSION.values()
+            for model in policy[track]
+        )
+    )
+
+
+# 兼容只需要“已受管模型全集”的解析器与探针；升级编排必须调用
+# track_models_for_version()，不能用并集替代目标版本政策。
+MAIN_TRACK_MODELS = _model_union("main")
+LITE_TRACK_MODELS = _model_union("lite")
+
+
+def track_models_for_version(codex_version: str, track: str) -> tuple[str, ...]:
+    """读取目标版本的模型轨道；缺少政策时失败关闭。"""
+
+    policy = TRACK_MODELS_BY_CODEX_VERSION.get(codex_version)
+    if policy is None:
+        raise ConfigurationError(f"缺少 Codex {codex_version} 的模型轨道政策。")
+    models = policy.get(track)
+    if not models:
+        raise ConfigurationError(
+            f"Codex {codex_version} 缺少 {track} 模型轨道。"
+        )
+    return models
 
 
 class ConfigurationError(ValueError):

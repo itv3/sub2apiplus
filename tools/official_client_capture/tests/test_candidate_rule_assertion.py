@@ -87,6 +87,109 @@ class CandidateRuleExpectationTest(unittest.TestCase):
             profile["source_spec_sha256"],
         )
 
+    def test_01491_profile_uses_canonical_guide(self) -> None:
+        profile_path = TOOL_ROOT / "candidate_rule_expectations_0_149_1.json"
+        rule_manifest = TOOL_ROOT / "codex_upgrade_rules_0_149_1.json"
+        profile = load_profile(
+            profile_path,
+            rule_manifest,
+            verify_frozen_digest=False,
+            expected_codex_version="0.149.1",
+            expected_profile_sha256=file_sha256(profile_path),
+        )
+        self.assertEqual(len(profile["scenarios"]), 15)
+        self.assertEqual(len(profile["rules"]), 42)
+        self.assertEqual(
+            profile["source_spec"],
+            "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md#第二章",
+        )
+        spec_relative, _, fragment = profile["source_spec"].partition("#")
+        self.assertEqual(
+            source_spec_section_sha256(
+                TOOL_ROOT.parents[1] / spec_relative, fragment
+            ),
+            profile["source_spec_sha256"],
+        )
+
+    def test_01491_session_header_selector_excludes_auxiliary_posts(self) -> None:
+        """会话头选择器只能覆盖 Responses 与 compact，不能吸入 analytics。"""
+
+        profile = json.loads(
+            (TOOL_ROOT / "candidate_rule_expectations_0_149_1.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        rule = next(
+            item for item in profile["rules"] if item["rule_id"] == "SPEC-HDR-007"
+        )
+        expected_paths = [
+            "/backend-api/codex/responses",
+            "/backend-api/codex/responses/compact",
+        ]
+        for check_id in ("responses-session-id", "responses-thread-id"):
+            check = next(item for item in rule["checks"] if item["id"] == check_id)
+            path_condition = next(
+                condition
+                for condition in check["select"]["where"]
+                if condition["path"] == "data.path"
+            )
+            self.assertEqual(path_condition["operator"], "in")
+            self.assertEqual(path_condition["value"], expected_paths)
+
+    def test_01491_ep014_cookie_is_optional_only_in_its_fixed_slot(self) -> None:
+        """冷启动缺 Cookie 与暖会话携带 Cookie 都应通过，其他缺项或错序失败。"""
+
+        profile = json.loads(
+            (TOOL_ROOT / "candidate_rule_expectations_0_149_1.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        rule = next(
+            item for item in profile["rules"] if item["rule_id"] == "SPEC-EP-014"
+        )
+        check = next(
+            item
+            for item in rule["checks"]
+            if item["id"] == "legacy-default-headers"
+        )
+        assertion = check["assertion"]
+        cold = list(assertion["required"])
+        warm = list(cold)
+        warm.insert(warm.index("host"), "cookie")
+
+        def observation(record_id: str, headers: list[str]) -> Observation:
+            return Observation(
+                record_id=record_id,
+                scenario_id="A09",
+                record_type="http_request",
+                artifact_path=f"{record_id}.bin",
+                evidence_paths=(f"{record_id}.bin",),
+                labels={"track": "lite", "variant": "default"},
+                data={"header_names_in_order": headers},
+            )
+
+        passed, _ = _evaluate_assertion(
+            [observation("cold", cold), observation("warm", warm)], assertion
+        )
+        self.assertTrue(passed)
+
+        without_lite = [
+            header
+            for header in cold
+            if header != "x-openai-internal-codex-responses-lite"
+        ]
+        passed, _ = _evaluate_assertion(
+            [observation("missing-lite", without_lite)], assertion
+        )
+        self.assertFalse(passed)
+
+        misplaced_cookie = list(cold)
+        misplaced_cookie.insert(misplaced_cookie.index("content-length"), "cookie")
+        passed, _ = _evaluate_assertion(
+            [observation("misplaced-cookie", misplaced_cookie)], assertion
+        )
+        self.assertFalse(passed)
+
     def test_profile_is_independent_from_candidate_go_profile(self) -> None:
         checker_source = (TOOL_ROOT / "candidate_rule_assertion.py").read_text(
             encoding="utf-8"

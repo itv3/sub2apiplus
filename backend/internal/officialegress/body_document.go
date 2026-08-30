@@ -232,6 +232,8 @@ type CompilerOwnedBodyFields struct {
 	RefreshToken               string
 	EventType                  string
 	PreviousResponseIDReusable bool
+	RoutingHint                CodexRoutingHintFacts
+	HostedFileUploadPresent    bool
 }
 
 // PrepareOfficialCodexAttemptBody 在单个 attempt 起点复制并解析需要抽取
@@ -260,7 +262,7 @@ func PrepareOfficialCodexAttemptBody(
 
 func endpointExtractsCompilerOwnedBody(endpointID string) bool {
 	switch endpointID {
-	case "responses_http", "responses_compact", "responses_ws", "oauth_refresh":
+	case "responses_http", "responses_compact", "responses_ws", "oauth_refresh", "files_create":
 		return true
 	default:
 		return false
@@ -272,6 +274,32 @@ func extractCompilerOwnedBodyFields(
 	document *orderedJSONDocument,
 	output *CompilerOwnedBodyFields,
 ) error {
+	if officialCodexRoutingHintEndpoint(endpointID) {
+		routingHint, err := optionalCodexRoutingHintFactsFromDocument(document)
+		if err != nil {
+			return err
+		}
+		output.RoutingHint = routingHint
+	}
+	if endpointID == "files_create" {
+		hostedNames := []string{"codex_connector_id", "codex_action_name", "codex_model"}
+		presentCount := 0
+		for _, name := range hostedNames {
+			value, present := document.value(name)
+			if !present {
+				continue
+			}
+			presentCount++
+			var text string
+			if err := json.Unmarshal(value, &text); err != nil || strings.TrimSpace(text) == "" {
+				return fmt.Errorf("Codex hosted 文件上传字段 %s 非法", name)
+			}
+		}
+		if presentCount != 0 && presentCount != len(hostedNames) {
+			return errors.New("Codex hosted 文件上传三个上下文字段必须全有或全无")
+		}
+		output.HostedFileUploadPresent = presentCount == len(hostedNames)
+	}
 	if endpointID == "responses_ws" {
 		typeRaw, present := document.value("type")
 		if !present || json.Unmarshal(typeRaw, &output.EventType) != nil || strings.TrimSpace(output.EventType) == "" {

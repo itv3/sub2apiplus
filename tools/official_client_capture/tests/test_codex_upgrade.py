@@ -30,17 +30,143 @@ from tools.official_client_capture.codex_upgrade import Job
 
 
 class CodexUpgradeTest(unittest.TestCase):
-    def test_0145_to_0147_main_model_default_is_gpt_5_4(self) -> None:
+    def test_third_party_client_model_uses_lite_track_and_preserves_history(self) -> None:
+        self.assertEqual(
+            codex_upgrade._third_party_client_model(
+                {"model": "gpt-5.5", "lite_model": "gpt-5.6-luna"}
+            ),
+            "gpt-5.6-luna",
+        )
+        self.assertEqual(
+            codex_upgrade._third_party_client_model({"model": "gpt-5.5"}),
+            "gpt-5.5",
+        )
+        with self.assertRaisesRegex(
+            codex_upgrade.ConfigurationError,
+            "第三方客户端冻结模型",
+        ):
+            codex_upgrade._third_party_client_model({"model": ""})
+
+    def test_plan_requires_all_versioned_policy_inputs(self) -> None:
         parser = codex_upgrade._build_parser()
         plan_parser = next(
             action.choices["plan"]
             for action in parser._actions
             if getattr(action, "choices", None) and "plan" in action.choices
         )
-        model_action = next(
-            action for action in plan_parser._actions if action.dest == "model"
+        actions = {action.dest: action for action in plan_parser._actions}
+        self.assertTrue(actions["rule_manifest"].required)
+        self.assertTrue(actions["scenario_manifest"].required)
+        self.assertTrue(actions["target_scenario_manifest"].required)
+        self.assertTrue(actions["model"].required)
+        self.assertTrue(actions["lite_model"].required)
+        self.assertTrue(actions["campaign_mode"].required)
+        self.assertTrue(actions["campaign_purpose"].required)
+        self.assertIsNone(actions["model"].default)
+        self.assertIsNone(actions["lite_model"].default)
+
+    def test_plan_rejects_missing_or_invalid_mode_and_purpose(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for field, value, message in (
+                ("campaign_mode", None, "campaign-mode"),
+                ("campaign_mode", "dry_run", "campaign-mode"),
+                ("campaign_purpose", None, "campaign-purpose"),
+                ("campaign_purpose", "diagnostic", "campaign-purpose"),
+            ):
+                arguments = self._campaign_arguments(root / field / str(value))
+                setattr(arguments, field, value)
+                with self.assertRaisesRegex(
+                    codex_upgrade.ConfigurationError,
+                    message,
+                ):
+                    codex_upgrade.create_campaign(arguments)
+
+    def test_campaign_loader_rejects_missing_invalid_and_tampered_mode(self) -> None:
+        for mutation, update_digest, message in (
+            ("missing", True, "campaign_mode"),
+            ("invalid", True, "campaign_mode"),
+            ("tampered", False, "摘要不一致"),
+        ):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                campaign_dir, _ = self._create_campaign(root)
+                path = campaign_dir / "campaign.json"
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                if mutation == "missing":
+                    payload.pop("campaign_mode")
+                elif mutation == "invalid":
+                    payload["campaign_mode"] = "dry_run"
+                else:
+                    payload["campaign_mode"] = "preflight_only"
+                self._write_json(path, payload)
+                if update_digest:
+                    (campaign_dir / "campaign.sha256").write_text(
+                        codex_upgrade.file_sha256(path) + "\n",
+                        encoding="utf-8",
+                    )
+                with self.assertRaisesRegex(
+                    codex_upgrade.ConfigurationError,
+                    message,
+                ):
+                    codex_upgrade.load_campaign_manifest(campaign_dir)
+
+    def test_preflight_only_is_terminal_and_rejects_live_continuations(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            arguments = self._campaign_arguments(root, campaign_mode="preflight_only")
+            manifest = codex_upgrade.create_campaign(arguments)
+            self.assertEqual(manifest["campaign_mode"], "preflight_only")
+            status = codex_upgrade.campaign_status(arguments.campaign_dir)
+            self.assertEqual(status["status"], "preflight_complete")
+            self.assertNotEqual(status["next_command"], "capture-official")
+
+            arguments.acknowledge_live_requests = True
+            with (
+                mock.patch.object(
+                    codex_upgrade,
+                    "_verify_execution_tree",
+                    side_effect=AssertionError("preflight 不得触碰执行环境"),
+                ),
+                self.assertRaisesRegex(
+                    codex_upgrade.ConfigurationError,
+                    "preflight_only",
+                ),
+            ):
+                codex_upgrade._run_capture_attempt(arguments, "official")
+            with self.assertRaisesRegex(
+                codex_upgrade.ConfigurationError,
+                "preflight_only",
+            ):
+                codex_upgrade.save_stage_result(
+                    arguments.campaign_dir,
+                    "capture-official",
+                    {"status": "failed"},
+                )
+            return_code, _, stderr = self._run_main(
+                ["resume", "--campaign-dir", str(arguments.campaign_dir)]
+            )
+            self.assertEqual(return_code, 1)
+            self.assertIn("preflight_only", stderr)
+
+    def test_candidate_purpose_must_match_campaign_before_runtime_checks(self) -> None:
+        arguments = argparse.Namespace(
+            runtime_image=f"candidate@sha256:{'1' * 64}",
+            build_id="build-a",
+            deployed_version="version-a",
+            profile_id="profile-a",
+            profile_digest="2" * 64,
+            candidate_purpose="production_replacement",
         )
-        self.assertEqual(model_action.default, "gpt-5.4")
+        with self.assertRaisesRegex(
+            codex_upgrade.ConfigurationError,
+            "Campaign 冻结用途",
+        ):
+            codex_upgrade._candidate_identity_for_run(
+                arguments,
+                {"campaign_purpose": "validation_only"},
+                {},
+            )
 
     def test_checked_in_baseline_scenario_bindings_match_sources(self) -> None:
         tool_root = Path(__file__).resolve().parents[1]
@@ -120,6 +246,332 @@ class CodexUpgradeTest(unittest.TestCase):
             "Campaign target_version",
         ):
             codex_upgrade._validate_scenario_manifest_shape(mutated)
+
+    def test_01491_scenario_manifests_are_additive_and_model_parameterized(self) -> None:
+        tool_root = Path(__file__).resolve().parents[1]
+        repo_root = tool_root.parents[1]
+        for version in ("0.147.0", "0.149.1"):
+            suffix = version.replace(".", "_")
+            scenario_path = tool_root / f"codex_upgrade_scenarios_{suffix}.json"
+            scenario = json.loads(scenario_path.read_text(encoding="utf-8"))
+            self.assertEqual(scenario["codex_version"], version)
+            codex_upgrade._validate_scenario_manifest_shape(scenario)
+
+            source = scenario["source_spec"]
+            if version == "0.147.0":
+                frozen_binding = (
+                    codex_upgrade._load_frozen_assertion_source_spec_binding(
+                        tool_root
+                        / "candidate_rule_expectations_0_147_0.json",
+                        version,
+                    )
+                )
+                self.assertEqual(
+                    codex_upgrade._scenario_source_spec_binding(
+                        scenario,
+                        label="0.147.0 场景清单",
+                    ),
+                    frozen_binding,
+                )
+            else:
+                self.assertEqual(
+                    source["sha256"],
+                    codex_upgrade.source_spec_section_sha256(
+                        repo_root / source["path"], source["fragment"]
+                    ),
+                )
+            rules = scenario["rule_manifest"]
+            self.assertEqual(
+                rules["sha256"], codex_upgrade.file_sha256(repo_root / rules["path"])
+            )
+
+            serialized = json.dumps(scenario, ensure_ascii=False)
+            self.assertNotIn("gpt-5.4\"", serialized)
+            self.assertNotIn("gpt-5.6-luna\"", serialized)
+            core = next(
+                job for job in scenario["capture_jobs"]
+                if job["id"] == "candidate-frozen-core"
+            )
+            self.assertEqual(
+                core["steps"][0]["environment"]["MAIN_MODEL"], "{model}"
+            )
+            self.assertEqual(
+                core["steps"][0]["environment"]["LITE_MODEL"], "{lite_model}"
+            )
+            if version == "0.149.1":
+                auxiliary = next(
+                    job
+                    for job in scenario["capture_jobs"]
+                    if job["id"] == "candidate-frozen-aux"
+                )
+                self.assertEqual(auxiliary["track"], "lite")
+                self.assertEqual(auxiliary["model_id"], "{lite_model}")
+                self.assertTrue(auxiliary["expected_use_responses_lite"])
+                self.assertFalse(auxiliary["required_model_receipt"])
+                wham_job = next(
+                    job
+                    for job in scenario["capture_jobs"]
+                    if job["id"] == "official-wham-safe"
+                )
+                wham_command = wham_job["steps"][1]["argv"][2]
+                self.assertIn("--entrypoint python3", wham_command)
+                self.assertNotIn("{runtime_image} python3 ", wham_command)
+                realtime_job = next(
+                    job
+                    for job in scenario["capture_jobs"]
+                    if job["id"] == "official-relay-realtime-webrtc"
+                )
+                self.assertEqual(
+                    realtime_job["steps"][0]["environment"][
+                        "RELAY_SYNTHESIZE_REALTIME_CALL_AFTER"
+                    ],
+                    "1",
+                )
+
+    def test_01491_plan_jobs_execute_target_scenario_instead_of_baseline(self) -> None:
+        """目标 CLI 的 official jobs 必须来自 0.149.1 清单。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            arguments = self._campaign_arguments(Path(directory))
+            tool_root = Path(__file__).resolve().parents[1]
+            arguments.baseline_version = "0.147.0"
+            arguments.target_version = "0.149.1"
+            arguments.rule_manifest = tool_root / "codex_upgrade_rules_0_147_0.json"
+            arguments.scenario_manifest = (
+                tool_root / "codex_upgrade_scenarios_0_147_0.json"
+            )
+            arguments.target_scenario_manifest = (
+                tool_root / "codex_upgrade_scenarios_0_149_1.json"
+            )
+            arguments.output = arguments.campaign_dir
+            arguments.model = "gpt-5.5"
+            arguments.lite_model = "gpt-5.6-terra"
+            rules = load_rule_manifest(arguments.rule_manifest, "0.147.0")
+
+            jobs, baseline_path, target_path = codex_upgrade._load_plan_jobs(
+                arguments, rules
+            )
+
+            self.assertEqual(baseline_path, arguments.scenario_manifest)
+            self.assertEqual(target_path, arguments.target_scenario_manifest)
+            wham_job = next(
+                job for job in jobs if job.job_id == "official-wham-safe"
+            )
+            self.assertIn("--entrypoint python3", wham_job.steps[1]["argv"][2])
+            realtime_job = next(
+                job
+                for job in jobs
+                if job.job_id == "official-relay-realtime-webrtc"
+            )
+            self.assertEqual(
+                realtime_job.steps[0]["environment"][
+                    "RELAY_SYNTHESIZE_REALTIME_CALL_AFTER"
+                ],
+                "1",
+            )
+            auxiliary_job = next(
+                job for job in jobs if job.job_id == "candidate-frozen-aux"
+            )
+            self.assertEqual(auxiliary_job.track, "lite")
+            self.assertEqual(auxiliary_job.model_id, "gpt-5.6-terra")
+            self.assertTrue(auxiliary_job.expected_use_responses_lite)
+            self.assertFalse(auxiliary_job.required_model_receipt)
+
+    def test_historical_baseline_uses_frozen_profile_and_target_uses_current_spec(
+        self,
+    ) -> None:
+        """0.147 只认同版本冻结画像，0.149.1 仍严格绑定当前候选规格。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            arguments = self._campaign_arguments(Path(directory))
+            arguments.baseline_version = "0.147.0"
+            arguments.target_version = "0.149.1"
+            arguments.campaign_dir = Path(directory).resolve() / "campaign"
+            arguments.output = arguments.campaign_dir
+            context = codex_upgrade._job_context(arguments)
+            tool_root = Path(__file__).resolve().parents[1]
+            baseline_scenario = (
+                tool_root / "codex_upgrade_scenarios_0_147_0.json"
+            )
+            frozen_profile = (
+                tool_root / "candidate_rule_expectations_0_147_0.json"
+            )
+            frozen_binding = (
+                codex_upgrade._load_frozen_assertion_source_spec_binding(
+                    frozen_profile,
+                    "0.147.0",
+                )
+            )
+
+            with self.assertRaisesRegex(
+                codex_upgrade.ConfigurationError,
+                "规格第二章摘要不一致",
+            ):
+                codex_upgrade.load_scenario_jobs(
+                    baseline_scenario,
+                    context,
+                    expected_version="0.147.0",
+                    require_bindings=True,
+                )
+            baseline_jobs = codex_upgrade.load_scenario_jobs(
+                baseline_scenario,
+                context,
+                expected_version="0.147.0",
+                require_bindings=True,
+                historical_source_spec_binding=frozen_binding,
+            )
+            self.assertTrue(baseline_jobs)
+
+            target_jobs = codex_upgrade.load_scenario_jobs(
+                tool_root / "codex_upgrade_scenarios_0_149_1.json",
+                context,
+                expected_version="0.149.1",
+                require_bindings=True,
+            )
+            self.assertTrue(target_jobs)
+
+            tampered_profile = Path(directory) / "tampered-profile.json"
+            tampered = json.loads(frozen_profile.read_text(encoding="utf-8"))
+            tampered["source_spec_sha256"] = "0" * 64
+            self._write_json(tampered_profile, tampered)
+            tampered_binding = (
+                codex_upgrade._load_frozen_assertion_source_spec_binding(
+                    tampered_profile,
+                    "0.147.0",
+                )
+            )
+            with self.assertRaisesRegex(
+                codex_upgrade.ConfigurationError,
+                "受控冻结画像不一致",
+            ):
+                codex_upgrade.load_scenario_jobs(
+                    baseline_scenario,
+                    context,
+                    expected_version="0.147.0",
+                    require_bindings=True,
+                    historical_source_spec_binding=tampered_binding,
+                )
+
+    def test_runtime_successor_only_bridges_reclassified_historical_plan(self) -> None:
+        """运行时后继只能用当前批准场景承接历史 Formal 摘要。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            arguments = self._campaign_arguments(root / "inputs")
+            current = json.loads(
+                arguments.target_scenario_manifest.read_text(encoding="utf-8")
+            )
+            frozen = json.loads(json.dumps(current, ensure_ascii=False))
+            frozen["source_spec"]["sha256"] = "0" * 64
+            frozen["profile_id"] = "codex-0.146.0-historical"
+            approved = json.loads(json.dumps(current, ensure_ascii=False))
+            approved["profile_id"] = "codex-0.146.0-approved"
+
+            staging = root / "staging"
+            frozen_path = staging / "inputs/target-discovery-scenarios.json"
+            approved_path = staging / "classification/approved/scenarios.json"
+            self._write_json(frozen_path, frozen)
+            self._write_json(approved_path, approved)
+            manifest = {
+                "target_version": "0.146.0",
+                "inputs": {
+                    "target_discovery_scenarios": {
+                        "path": frozen_path.relative_to(staging).as_posix(),
+                        "sha256": codex_upgrade.file_sha256(frozen_path),
+                    }
+                },
+            }
+            classification_bindings = {
+                "scenario_manifest": {
+                    "path": approved_path.relative_to(staging).as_posix(),
+                    "sha256": codex_upgrade.file_sha256(approved_path),
+                }
+            }
+            self.assertEqual(
+                codex_upgrade._successor_uses_reclassified_historical_plan_binding(
+                    staging, manifest, classification_bindings
+                ),
+                codex_upgrade._scenario_source_spec_binding(
+                    frozen,
+                    label="测试历史 Formal 场景",
+                ),
+            )
+
+            stale_approval = json.loads(json.dumps(approved, ensure_ascii=False))
+            stale_approval["source_spec"]["sha256"] = "1" * 64
+            self._write_json(approved_path, stale_approval)
+            classification_bindings["scenario_manifest"]["sha256"] = (
+                codex_upgrade.file_sha256(approved_path)
+            )
+            with self.assertRaisesRegex(
+                codex_upgrade.ConfigurationError,
+                "批准场景未绑定当前规格摘要",
+            ):
+                codex_upgrade._successor_uses_reclassified_historical_plan_binding(
+                    staging,
+                    manifest,
+                    classification_bindings,
+                )
+
+            changed_execution = json.loads(json.dumps(approved, ensure_ascii=False))
+            changed_execution["capture_jobs"][0]["steps"][0]["argv"] = ["false"]
+            self._write_json(approved_path, changed_execution)
+            classification_bindings["scenario_manifest"]["sha256"] = (
+                codex_upgrade.file_sha256(approved_path)
+            )
+            with self.assertRaisesRegex(
+                codex_upgrade.ConfigurationError,
+                "官方执行合同不一致",
+            ):
+                codex_upgrade._successor_uses_reclassified_historical_plan_binding(
+                    staging,
+                    manifest,
+                    classification_bindings,
+                )
+
+    def test_plan_freezes_target_scenario_and_official_reloads_same_jobs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            arguments = self._campaign_arguments(root)
+            target_payload = json.loads(
+                arguments.target_scenario_manifest.read_text(encoding="utf-8")
+            )
+            official_job = next(
+                job
+                for job in target_payload["capture_jobs"]
+                if job["id"] == "official-test"
+            )
+            official_job["steps"][0]["argv"] = ["printf", "target-scenario"]
+            self._write_json(arguments.target_scenario_manifest, target_payload)
+
+            manifest = codex_upgrade.create_campaign(arguments)
+            target_reference = manifest["inputs"]["target_discovery_scenarios"]
+            frozen_target = root / "campaign" / target_reference["path"]
+            self.assertEqual(
+                json.loads(frozen_target.read_text(encoding="utf-8"))[
+                    "codex_version"
+                ],
+                "0.146.0",
+            )
+            jobs = codex_upgrade._campaign_jobs(
+                root / "campaign", manifest, "official"
+            )
+            reloaded = next(job for job in jobs if job.job_id == "official-test")
+            self.assertEqual(reloaded.steps[0]["argv"], ["printf", "target-scenario"])
+
+    def test_plan_rejects_baseline_manifest_as_target_scenario(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            arguments = self._campaign_arguments(Path(directory))
+            arguments.target_scenario_manifest = arguments.scenario_manifest
+            arguments.output = arguments.campaign_dir
+            rules = load_rule_manifest(
+                arguments.rule_manifest, arguments.baseline_version
+            )
+            with self.assertRaisesRegex(
+                codex_upgrade.ConfigurationError,
+                "codex_version 与当前阶段不一致",
+            ):
+                codex_upgrade._load_plan_jobs(arguments, rules)
 
     def test_campaign_capture_scripts_bind_frozen_tool_root(self) -> None:
         tool_root = Path(__file__).resolve().parents[1]
@@ -228,7 +680,11 @@ class CodexUpgradeTest(unittest.TestCase):
             campaign_dir = Path(temporary) / "campaign"
             campaign_dir.mkdir(mode=0o700)
             self._write_json(campaign_dir / "campaign.json", {})
-            manifest = {"campaign_id": "reservation-test"}
+            manifest = {
+                "campaign_id": "reservation-test",
+                "campaign_mode": "formal",
+                "campaign_purpose": "validation_only",
+            }
             job = Job(
                 job_id="candidate-test",
                 phase="candidate",
@@ -248,7 +704,10 @@ class CodexUpgradeTest(unittest.TestCase):
                     campaign_dir,
                     phase="candidate",
                     candidate_id="candidate-a",
-                    identity={"profile_id": "profile-a"},
+                    identity={
+                        "profile_id": "profile-a",
+                        "candidate_purpose": "validation_only",
+                    },
                     jobs=[job],
                 )
 
@@ -384,7 +843,12 @@ class CodexUpgradeTest(unittest.TestCase):
         return scenario_manifest
 
     def _campaign_arguments(
-        self, root: Path, *, campaign_id: str = "upgrade-0146-test"
+        self,
+        root: Path,
+        *,
+        campaign_id: str = "upgrade-0146-test",
+        campaign_mode: str = "formal",
+        campaign_purpose: str = "validation_only",
     ) -> argparse.Namespace:
         baseline_source = root / "baseline-source"
         target_source = root / "target-source"
@@ -433,6 +897,22 @@ class CodexUpgradeTest(unittest.TestCase):
             version="0.145.0",
             name="scenarios.json",
         )
+        target_rule_manifest = root / "target-rules.json"
+        self._write_json(
+            target_rule_manifest,
+            {
+                "schema_version": codex_upgrade.RULE_SCHEMA,
+                "codex_version": "0.146.0",
+                "required_rules": required_rules,
+            },
+        )
+        target_scenario_manifest = self._write_scenario_manifest(
+            root,
+            target_rule_manifest,
+            tuple(required_rules),
+            version="0.146.0",
+            name="target-scenarios.json",
+        )
         package_path = root / "codex-package-x86_64-unknown-linux-musl.tar.gz"
         binary_bytes = b"codex-cli-test-binary"
         code_mode_host_bytes = b"codex-code-mode-host-test-binary"
@@ -468,6 +948,8 @@ class CodexUpgradeTest(unittest.TestCase):
             acknowledge_live_requests=False,
             baseline_version="0.145.0",
             target_version="0.146.0",
+            campaign_mode=campaign_mode,
+            campaign_purpose=campaign_purpose,
             baseline_source=baseline_source,
             target_source=target_source,
             baseline_evidence=baseline_evidence,
@@ -480,10 +962,12 @@ class CodexUpgradeTest(unittest.TestCase):
             runtime_image=f"capture-runtime@sha256:{'b' * 64}",
             rule_manifest=baseline_rule_manifest,
             scenario_manifest=scenario_manifest,
+            target_scenario_manifest=target_scenario_manifest,
             extra_jobs=None,
             suite="full",
             campaign_id=campaign_id,
             model="gpt-5.6-luna",
+            lite_model="gpt-5.6-luna",
             capture_root=Path("/root/oauth-capture"),
             capture_container="capture-cli",
             service_container="sub2apiplus",
@@ -497,6 +981,7 @@ class CodexUpgradeTest(unittest.TestCase):
             codex_account_id=90,
             api_key_id=1,
             candidate_id=None,
+            candidate_purpose=None,
             profile_id=None,
             profile_digest=None,
             target_rule_manifest=None,
@@ -506,8 +991,18 @@ class CodexUpgradeTest(unittest.TestCase):
             assertions=None,
         )
 
-    def _create_campaign(self, root: Path) -> tuple[Path, dict[str, object]]:
-        arguments = self._campaign_arguments(root)
+    def _create_campaign(
+        self,
+        root: Path,
+        *,
+        campaign_mode: str = "formal",
+        campaign_purpose: str = "validation_only",
+    ) -> tuple[Path, dict[str, object]]:
+        arguments = self._campaign_arguments(
+            root,
+            campaign_mode=campaign_mode,
+            campaign_purpose=campaign_purpose,
+        )
         codex_upgrade.create_campaign(arguments)
         campaign_dir = arguments.campaign_dir
         manifest = codex_upgrade.load_campaign_manifest(campaign_dir)
@@ -1079,11 +1574,18 @@ class CodexUpgradeTest(unittest.TestCase):
         reservation: dict[str, object] = {
             "schema_version": codex_upgrade.CAPTURE_RESERVATION_SCHEMA,
             "campaign_id": campaign_manifest["campaign_id"],
+            "campaign_mode": campaign_manifest["campaign_mode"],
+            "campaign_purpose": campaign_manifest["campaign_purpose"],
             "campaign_manifest_sha256": codex_upgrade.file_sha256(
                 campaign_dir / "campaign.json"
             ),
             "phase": phase,
             "candidate_id": candidate_id,
+            "candidate_purpose": (
+                campaign_manifest["campaign_purpose"]
+                if phase == "candidate"
+                else None
+            ),
             "attempt_id": attempt_id,
             "run_nonce": run_nonce,
             "started_at_utc": attempt_started_at_utc,
@@ -1126,6 +1628,13 @@ class CodexUpgradeTest(unittest.TestCase):
         attempt_path = attempt_root / "attempt.json"
         payload: dict[str, object] = {
             "status": "complete" if restoration_passed else "failed",
+            "campaign_mode": campaign_manifest["campaign_mode"],
+            "campaign_purpose": campaign_manifest["campaign_purpose"],
+            "candidate_purpose": (
+                campaign_manifest["campaign_purpose"]
+                if phase == "candidate"
+                else None
+            ),
             "attempt": self._binding(
                 attempt_path, attempt_path.relative_to(campaign_dir).as_posix()
             ),
@@ -1368,9 +1877,15 @@ class CodexUpgradeTest(unittest.TestCase):
         return return_code, stdout.getvalue(), stderr.getvalue()
 
     def _create_classified_campaign(
-        self, root: Path
+        self,
+        root: Path,
+        *,
+        campaign_purpose: str = "validation_only",
     ) -> tuple[Path, dict[str, object], tuple[str, ...]]:
-        campaign_dir, manifest = self._create_campaign(root)
+        campaign_dir, manifest = self._create_campaign(
+            root,
+            campaign_purpose=campaign_purpose,
+        )
         self._seal_official_stage(root, campaign_dir, manifest)
         target, migration, scenario, profile, assertion_profile, rules = (
             self._write_classification_manifests(root)
@@ -1405,6 +1920,9 @@ class CodexUpgradeTest(unittest.TestCase):
             "deployed_version": "0.1.999-test",
             "profile_id": "codex-0.146.0-test-v1",
             "profile_digest": profile_digest,
+            "candidate_purpose": codex_upgrade.load_campaign_manifest(
+                campaign_dir
+            )["campaign_purpose"],
         }
         self._write_capture_stage(
             campaign_dir,
@@ -1471,7 +1989,10 @@ class CodexUpgradeTest(unittest.TestCase):
             "phase": codex_upgrade_gate_receipt.CANDIDATE_PHASE,
             "subject": {
                 "campaign_id": manifest["campaign_id"],
+                "campaign_mode": manifest["campaign_mode"],
+                "campaign_purpose": manifest["campaign_purpose"],
                 "candidate_id": candidate_id,
+                "candidate_purpose": identity["candidate_purpose"],
                 "target_version": manifest["target_version"],
                 "target_architecture": "linux/amd64",
                 "profile_id": identity["profile_id"],
@@ -1528,10 +2049,12 @@ class CodexUpgradeTest(unittest.TestCase):
         profile_digest: str | None = None,
         first_rule_status: str = "pass",
         first_rule_evidence_level: str = "full",
+        campaign_dir: Path | None = None,
+        official_evidence: Path | None = None,
     ) -> Path:
         assertions_path = root / f"{candidate_id}-assertions.json"
         selected_rules = rules[:-1] if omit_last else rules
-        campaign_dir = root / "campaign"
+        campaign_dir = campaign_dir or root / "campaign"
         manifest = codex_upgrade.load_campaign_manifest(campaign_dir)
         official = codex_upgrade._load_stage_result(
             campaign_dir, "capture-official"
@@ -1545,7 +2068,9 @@ class CodexUpgradeTest(unittest.TestCase):
         comparison = codex_upgrade._load_stage_result(
             campaign_dir, "compare", candidate_id
         )
-        official_evidence = root / "official-evidence" / "surface.json"
+        official_evidence = (
+            official_evidence or root / "official-evidence" / "surface.json"
+        )
         candidate_evidence = root / f"{candidate_id}-evidence" / "surface.json"
         official_relative = "official-evidence/surface.json"
         candidate_relative = f"{candidate_id}-evidence/surface.json"
@@ -1691,6 +2216,7 @@ class CodexUpgradeTest(unittest.TestCase):
             set(subparsers[0].choices),
             {
                 "plan",
+                "successor",
                 "capture-official",
                 "classify",
                 "prepare-profile",
@@ -1703,6 +2229,642 @@ class CodexUpgradeTest(unittest.TestCase):
                 "resume",
             },
         )
+
+    def test_successor_carries_forward_official_and_classification_read_only(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            predecessor_dir, predecessor_manifest, _ = (
+                self._create_classified_campaign(root / "predecessor")
+            )
+            predecessor_official = codex_upgrade._load_stage_result(
+                predecessor_dir, "capture-official"
+            )
+            predecessor_classification = codex_upgrade._load_stage_result(
+                predecessor_dir, "classify"
+            )
+            successor_dir = root / "successor"
+            return_code, stdout, stderr = self._run_main(
+                [
+                    "successor",
+                    "--predecessor-campaign-dir",
+                    str(predecessor_dir),
+                    "--campaign-dir",
+                    str(successor_dir),
+                    "--campaign-id",
+                    "upgrade-0146-successor",
+                    "--codex-account-id",
+                    "91",
+                    "--reason",
+                    "candidate_runtime_identity_correction",
+                ]
+            )
+            self.assertEqual(return_code, 0, stderr)
+            result = json.loads(stdout)
+            self.assertEqual(result["status"], "profile_approved")
+            self.assertFalse(result["official_recapture_required"])
+            self.assertEqual(result["codex_account_id"], 91)
+
+            successor_manifest = codex_upgrade.load_campaign_manifest(successor_dir)
+            self.assertEqual(
+                successor_manifest["predecessor"]["campaign_id"],
+                predecessor_manifest["campaign_id"],
+            )
+            self.assertEqual(
+                predecessor_manifest["configuration"]["codex_account_id"], 90
+            )
+            self.assertEqual(
+                successor_manifest["configuration"]["codex_account_id"], 91
+            )
+            import_receipt = json.loads(
+                (successor_dir / "predecessor-import.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(
+                import_receipt["schema_version"],
+                codex_upgrade.PREDECESSOR_IMPORT_SCHEMA,
+            )
+            self.assertEqual(
+                import_receipt["configuration_transition"],
+                {
+                    "codex_account_id": {
+                        "predecessor": 90,
+                        "successor": 91,
+                        "reason": "operator_selected_active_account",
+                    }
+                },
+            )
+            self.assertEqual(
+                successor_manifest["official_identity"],
+                predecessor_manifest["official_identity"],
+            )
+            stored_official = json.loads(
+                (successor_dir / "official" / "result.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertIn("predecessor_import", stored_official)
+            self.assertNotIn("attempt", stored_official)
+            self.assertEqual(
+                stored_official["surface"]["path"],
+                "imports/official/surface.json",
+            )
+            self.assertFalse((successor_dir / "official" / "attempts").exists())
+
+            official = codex_upgrade._load_stage_result(
+                successor_dir, "capture-official"
+            )
+            classification = codex_upgrade._load_stage_result(
+                successor_dir, "classify"
+            )
+            self.assertEqual(official["identity"], predecessor_official["identity"])
+            self.assertEqual(
+                official["evidence_inventory"],
+                predecessor_official["evidence_inventory"],
+            )
+            self.assertNotEqual(
+                official["package_digest"],
+                predecessor_official["package_digest"],
+            )
+            self.assertEqual(
+                classification["joint_manifest_sha256"],
+                predecessor_classification["joint_manifest_sha256"],
+            )
+            self.assertNotEqual(
+                classification["package_digest"],
+                predecessor_classification["package_digest"],
+            )
+            self.assertFalse((successor_dir / "official" / "attempts").exists())
+
+    def test_successor_rebinds_live_attestation_compose_coordinates_immutably(
+        self,
+    ) -> None:
+        """运行时纠正后继必须冻结新 compose 路径，并保留前序配置。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            predecessor_dir, predecessor_manifest, _ = (
+                self._create_classified_campaign(root / "predecessor")
+            )
+            compose_dir = root / "compose"
+            compose_dir.mkdir(mode=0o700)
+            compose_dir = compose_dir.resolve()
+            base_compose = compose_dir / "docker-compose.yml"
+            candidate_override = compose_dir / "candidate-r23.override.yml"
+            base_compose.write_text("services: {}\n", encoding="utf-8")
+            candidate_override.write_text("services: {}\n", encoding="utf-8")
+            base_compose.chmod(0o600)
+            candidate_override.chmod(0o600)
+            compose_files = f"{base_compose} -f {candidate_override}"
+            successor_dir = root / "successor"
+
+            return_code, stdout, stderr = self._run_main(
+                [
+                    "successor",
+                    "--predecessor-campaign-dir",
+                    str(predecessor_dir),
+                    "--campaign-dir",
+                    str(successor_dir),
+                    "--campaign-id",
+                    "upgrade-0146-runtime-rebound",
+                    "--codex-account-id",
+                    "91",
+                    "--reason",
+                    "candidate_runtime_identity_correction",
+                    "--live-attestation-compose-dir",
+                    str(compose_dir),
+                    "--live-attestation-compose-files",
+                    compose_files,
+                ]
+            )
+            self.assertEqual(return_code, 0, stderr)
+            self.assertTrue(json.loads(stdout)["runtime_configuration_rebound"])
+
+            successor_manifest = codex_upgrade.load_campaign_manifest(successor_dir)
+            self.assertEqual(
+                predecessor_manifest["configuration"].get(
+                    "live_attestation_compose_files", ""
+                ),
+                "",
+            )
+            self.assertEqual(
+                successor_manifest["configuration"][
+                    "live_attestation_compose_dir"
+                ],
+                str(compose_dir),
+            )
+            self.assertEqual(
+                successor_manifest["configuration"][
+                    "live_attestation_compose_files"
+                ],
+                compose_files,
+            )
+            import_receipt = json.loads(
+                (successor_dir / "predecessor-import.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(
+                import_receipt["schema_version"],
+                codex_upgrade.PREDECESSOR_RUNTIME_IMPORT_SCHEMA,
+            )
+            self.assertEqual(
+                import_receipt["configuration_transition"],
+                {
+                    "codex_account_id": {
+                        "predecessor": 90,
+                        "successor": 91,
+                        "reason": "operator_selected_active_account",
+                    },
+                    "live_attestation_compose_dir": {
+                        "predecessor": "",
+                        "successor": str(compose_dir),
+                        "reason": "candidate_runtime_identity_correction",
+                    },
+                    "live_attestation_compose_files": {
+                        "predecessor": "",
+                        "successor": compose_files,
+                        "reason": "candidate_runtime_identity_correction",
+                    },
+                },
+            )
+
+    def test_successor_rejects_partial_or_reclassification_compose_rebinding(
+        self,
+    ) -> None:
+        """不完整坐标及分类纠正后继均不得改变 Candidate 部署路径。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            predecessor_dir, _, _ = self._create_classified_campaign(
+                root / "predecessor"
+            )
+            compose_dir = root / "compose"
+            compose_dir.mkdir(mode=0o700)
+            compose_dir = compose_dir.resolve()
+            compose_file = compose_dir / "docker-compose.yml"
+            compose_file.write_text("services: {}\n", encoding="utf-8")
+            compose_file.chmod(0o600)
+            common = [
+                "successor",
+                "--predecessor-campaign-dir",
+                str(predecessor_dir),
+                "--codex-account-id",
+                "91",
+            ]
+
+            partial_dir = root / "partial"
+            return_code, _, stderr = self._run_main(
+                [
+                    *common,
+                    "--campaign-dir",
+                    str(partial_dir),
+                    "--campaign-id",
+                    "upgrade-0146-partial-runtime",
+                    "--reason",
+                    "candidate_runtime_identity_correction",
+                    "--live-attestation-compose-dir",
+                    str(compose_dir),
+                ]
+            )
+            self.assertEqual(return_code, 1)
+            self.assertIn("必须同时提供", stderr)
+            self.assertFalse(partial_dir.exists())
+
+            reclassification_dir = root / "reclassification"
+            return_code, _, stderr = self._run_main(
+                [
+                    *common,
+                    "--campaign-dir",
+                    str(reclassification_dir),
+                    "--campaign-id",
+                    "upgrade-0146-reclassification-runtime",
+                    "--reason",
+                    "classification_fact_correction",
+                    "--live-attestation-compose-dir",
+                    str(compose_dir),
+                    "--live-attestation-compose-files",
+                    str(compose_file),
+                ]
+            )
+            self.assertEqual(return_code, 1)
+            self.assertIn("只有 candidate_runtime_identity_correction", stderr)
+            self.assertFalse(reclassification_dir.exists())
+
+    def test_reclassification_successor_imports_only_official_stage(self) -> None:
+        """批准事实纠正必须复用官方证据，但不得复制旧批准五件套。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            predecessor_dir, predecessor_manifest, _ = (
+                self._create_classified_campaign(root / "predecessor")
+            )
+            predecessor_official = codex_upgrade._load_stage_result(
+                predecessor_dir, "capture-official"
+            )
+            successor_dir = root / "successor"
+            with mock.patch.object(
+                codex_upgrade,
+                "load_scenario_jobs",
+                wraps=codex_upgrade.load_scenario_jobs,
+            ) as load_scenario_jobs:
+                return_code, stdout, stderr = self._run_main(
+                    [
+                        "successor",
+                        "--predecessor-campaign-dir",
+                        str(predecessor_dir),
+                        "--campaign-dir",
+                        str(successor_dir),
+                        "--campaign-id",
+                        "upgrade-0146-reclassification-successor",
+                        "--codex-account-id",
+                        "92",
+                        "--reason",
+                        "classification_fact_correction",
+                    ]
+                )
+            self.assertEqual(return_code, 0, stderr)
+            self.assertTrue(
+                any(
+                    isinstance(
+                        call.kwargs.get("historical_source_spec_binding"),
+                        codex_upgrade.HistoricalSourceSpecBinding,
+                    )
+                    for call in load_scenario_jobs.call_args_list
+                )
+            )
+            result = json.loads(stdout)
+            self.assertEqual(result["status"], "official_sealed")
+            self.assertFalse(result["official_recapture_required"])
+            self.assertFalse(result["classification_imported"])
+            self.assertTrue(result["classification_reapproval_required"])
+            self.assertEqual(result["codex_account_id"], 92)
+
+            successor_manifest = codex_upgrade.load_campaign_manifest(successor_dir)
+            self.assertEqual(
+                successor_manifest["predecessor"]["campaign_id"],
+                predecessor_manifest["campaign_id"],
+            )
+            self.assertEqual(
+                successor_manifest["configuration"]["codex_account_id"], 92
+            )
+            self.assertFalse((successor_dir / "classification" / "result.json").exists())
+            self.assertFalse((successor_dir / "classification" / "approved").exists())
+
+            import_receipt = json.loads(
+                (successor_dir / "predecessor-import.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(
+                import_receipt["schema_version"],
+                codex_upgrade.PREDECESSOR_RECLASSIFICATION_IMPORT_SCHEMA,
+            )
+            self.assertEqual(
+                import_receipt["import_mode"],
+                "official_only_reclassification",
+            )
+            self.assertFalse(
+                any(
+                    item["kind"] == "approved_classification"
+                    for item in import_receipt["copied_files"]
+                )
+            )
+
+            replayed = codex_upgrade._load_stage_result(
+                successor_dir, "capture-official"
+            )
+            self.assertEqual(
+                replayed["evidence_inventory"],
+                predecessor_official["evidence_inventory"],
+            )
+            self.assertEqual(
+                replayed["security"], predecessor_official["security"]
+            )
+            approval_request = codex_upgrade.classify_campaign(
+                successor_dir,
+                target_rule_manifest=predecessor_dir.parent / "target-rules.json",
+                migration_manifest=predecessor_dir.parent / "rule-migration.json",
+                scenario_manifest=predecessor_dir.parent / "target-scenarios.json",
+                profile_manifest=predecessor_dir.parent / "profile.json",
+                assertion_profile_manifest=(
+                    predecessor_dir.parent / "assertion-profile.json"
+                ),
+            )
+            self.assertEqual(approval_request["status"], "approval_required")
+            with self.assertRaises(codex_upgrade.ConfigurationError):
+                codex_upgrade._load_stage_result(successor_dir, "classify")
+
+    def test_successor_replays_predecessor_through_compare_and_accept(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            predecessor_root = root / "predecessor"
+            predecessor_dir, _, rules = self._create_classified_campaign(
+                predecessor_root
+            )
+            successor_dir = root / "campaign"
+            return_code, _, stderr = self._run_main(
+                [
+                    "successor",
+                    "--predecessor-campaign-dir",
+                    str(predecessor_dir),
+                    "--campaign-dir",
+                    str(successor_dir),
+                    "--campaign-id",
+                    "upgrade-0146-successor-accept",
+                    "--codex-account-id",
+                    "90",
+                    "--reason",
+                    "candidate_runtime_identity_correction",
+                ]
+            )
+            self.assertEqual(return_code, 0, stderr)
+            _, identity = self._seal_candidate_stage(root, successor_dir)
+            comparison = codex_upgrade.compare_campaign(
+                successor_dir, "candidate-a"
+            )
+            self.assertTrue(comparison["equal"])
+            assertions = self._write_assertions(
+                root,
+                rules,
+                identity,
+                campaign_dir=successor_dir,
+                official_evidence=(
+                    predecessor_root / "official-evidence" / "surface.json"
+                ),
+            )
+            with mock.patch.object(codex_upgrade, "_rerun_machine_assertion"):
+                acceptance = self._accept_campaign(
+                    root,
+                    successor_dir,
+                    "candidate-a",
+                    assertions,
+                )
+            self.assertTrue(acceptance["accepted"])
+            self.assertEqual(
+                codex_upgrade.campaign_status(
+                    successor_dir, "candidate-a"
+                )["status"],
+                "ready",
+            )
+
+    def test_successor_replays_historical_v1_account_invariant_receipt(self) -> None:
+        """历史 v1 收据没有账号过渡字段，只允许原账号逐字承接。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            predecessor_dir, _, _ = self._create_classified_campaign(
+                root / "predecessor"
+            )
+            successor_dir = root / "successor"
+            return_code, _, stderr = self._run_main(
+                [
+                    "successor",
+                    "--predecessor-campaign-dir",
+                    str(predecessor_dir),
+                    "--campaign-dir",
+                    str(successor_dir),
+                    "--campaign-id",
+                    "upgrade-0146-successor-v1-replay",
+                    "--codex-account-id",
+                    "90",
+                    "--reason",
+                    "candidate_runtime_identity_correction",
+                ]
+            )
+            self.assertEqual(return_code, 0, stderr)
+
+            import_path = successor_dir / "predecessor-import.json"
+            receipt = json.loads(import_path.read_text(encoding="utf-8"))
+            receipt["schema_version"] = codex_upgrade.PREDECESSOR_IMPORT_SCHEMA_V1
+            receipt.pop("configuration_transition")
+            receipt.pop("receipt_digest")
+            receipt["receipt_digest"] = codex_upgrade._fingerprint(receipt)
+            self._write_json(import_path, receipt)
+
+            manifest = codex_upgrade.load_campaign_manifest(successor_dir)
+            stage_payload = json.loads(
+                (successor_dir / "official" / "result.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            stage_payload["predecessor_import"]["sha256"] = (
+                codex_upgrade.file_sha256(import_path)
+            )
+            replayed = codex_upgrade._validate_predecessor_import_receipt(
+                successor_dir,
+                manifest,
+                stage_payload,
+                "capture-official",
+                frozenset(),
+            )
+            self.assertEqual(replayed["status"], "complete")
+
+    def test_successor_replays_historical_stage_without_rebinding_finalizer(
+        self,
+    ) -> None:
+        """历史机器收据保留原 finalizer 身份，后继只重放阶段封印。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            predecessor_dir, _, _ = self._create_classified_campaign(
+                root / "predecessor"
+            )
+            successor_dir = root / "successor"
+            with mock.patch.object(
+                codex_upgrade,
+                "_replay_capture_stage_receipts",
+                side_effect=codex_upgrade.ConfigurationError(
+                    "历史 finalizer 不得被当前路径重新绑定"
+                ),
+            ) as replay:
+                return_code, stdout, stderr = self._run_main(
+                    [
+                        "successor",
+                        "--predecessor-campaign-dir",
+                        str(predecessor_dir),
+                        "--campaign-dir",
+                        str(successor_dir),
+                        "--campaign-id",
+                        "upgrade-0146-successor-historical-finalizer",
+                        "--codex-account-id",
+                        "90",
+                        "--reason",
+                        "candidate_runtime_identity_correction",
+                    ]
+                )
+                self.assertEqual(return_code, 0, stderr)
+                self.assertEqual(json.loads(stdout)["status"], "profile_approved")
+                self.assertEqual(
+                    codex_upgrade.campaign_status(successor_dir)["status"],
+                    "profile_approved",
+                )
+            replay.assert_not_called()
+
+    def test_successor_chain_replays_original_attempt_in_original_directory(
+        self,
+    ) -> None:
+        """二级后继递归重放最初 attempt，不按中间 Campaign 误解相对路径。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            predecessor_dir, _, _ = self._create_classified_campaign(
+                root / "predecessor"
+            )
+            first_successor = root / "successor-one"
+            second_successor = root / "successor-two"
+            for source, target, campaign_id, account_id in (
+                (
+                    predecessor_dir,
+                    first_successor,
+                    "upgrade-0146-successor-level-one",
+                    "90",
+                ),
+                (
+                    first_successor,
+                    second_successor,
+                    "upgrade-0146-successor-level-two",
+                    "91",
+                ),
+            ):
+                return_code, _, stderr = self._run_main(
+                    [
+                        "successor",
+                        "--predecessor-campaign-dir",
+                        str(source),
+                        "--campaign-dir",
+                        str(target),
+                        "--campaign-id",
+                        campaign_id,
+                        "--codex-account-id",
+                        account_id,
+                        "--reason",
+                        "candidate_runtime_identity_correction",
+                    ]
+                )
+                self.assertEqual(return_code, 0, stderr)
+
+            self.assertEqual(
+                codex_upgrade.campaign_status(second_successor)["status"],
+                "profile_approved",
+            )
+            self.assertEqual(
+                codex_upgrade.load_campaign_manifest(second_successor)[
+                    "configuration"
+                ]["codex_account_id"],
+                91,
+            )
+
+    def test_successor_replay_fails_closed_on_local_or_predecessor_drift(
+        self,
+    ) -> None:
+        for drift_side in ("successor", "predecessor"):
+            with self.subTest(drift_side=drift_side), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                predecessor_dir, _, _ = self._create_classified_campaign(
+                    root / "predecessor"
+                )
+                successor_dir = root / "successor"
+                return_code, _, stderr = self._run_main(
+                    [
+                        "successor",
+                        "--predecessor-campaign-dir",
+                        str(predecessor_dir),
+                        "--campaign-dir",
+                        str(successor_dir),
+                        "--campaign-id",
+                        f"upgrade-0146-successor-{drift_side}",
+                        "--codex-account-id",
+                        "90",
+                        "--reason",
+                        "candidate_runtime_identity_correction",
+                    ]
+                )
+                self.assertEqual(return_code, 0, stderr)
+                target = (
+                    successor_dir / "classification" / "approved" / "profile.json"
+                    if drift_side == "successor"
+                    else predecessor_dir / "official" / "surface.json"
+                )
+                target.write_bytes(target.read_bytes() + b"\n")
+                with self.assertRaises(codex_upgrade.ConfigurationError):
+                    codex_upgrade.campaign_status(successor_dir)
+
+    def test_successor_requires_new_id_and_paired_abandoned_attempt_coordinates(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            predecessor_dir, predecessor_manifest, _ = (
+                self._create_classified_campaign(root / "predecessor")
+            )
+            base = [
+                "successor",
+                "--predecessor-campaign-dir",
+                str(predecessor_dir),
+                "--campaign-dir",
+                str(root / "successor"),
+                "--campaign-id",
+                predecessor_manifest["campaign_id"],
+                "--codex-account-id",
+                "90",
+                "--reason",
+                "candidate_runtime_identity_correction",
+            ]
+            return_code, _, stderr = self._run_main(base)
+            self.assertEqual(return_code, 1)
+            self.assertIn("新的 campaign-id", stderr)
+
+            paired = list(base)
+            paired[paired.index(predecessor_manifest["campaign_id"])] = (
+                "upgrade-0146-successor-paired"
+            )
+            paired.extend(["--predecessor-candidate-id", "candidate-a"])
+            return_code, _, stderr = self._run_main(paired)
+            self.assertEqual(return_code, 1)
+            self.assertIn("必须同时提供", stderr)
 
     def test_campaign_manifest_is_immutable_and_stage_is_write_once(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1768,6 +2930,10 @@ class CodexUpgradeTest(unittest.TestCase):
                     arguments.baseline_version,
                     "--target-version",
                     arguments.target_version,
+                    "--campaign-mode",
+                    arguments.campaign_mode,
+                    "--campaign-purpose",
+                    arguments.campaign_purpose,
                     "--baseline-source",
                     str(arguments.baseline_source),
                     "--target-source",
@@ -1788,8 +2954,14 @@ class CodexUpgradeTest(unittest.TestCase):
                     str(arguments.rule_manifest),
                     "--scenario-manifest",
                     str(arguments.scenario_manifest),
+                    "--target-scenario-manifest",
+                    str(arguments.target_scenario_manifest),
                     "--campaign-id",
                     arguments.campaign_id,
+                    "--model",
+                    "gpt-5.5",
+                    "--lite-model",
+                    "gpt-5.6-terra",
                 ]
             )
             self.assertEqual(plan_code, 0, plan_stderr)
@@ -1878,6 +3050,33 @@ class CodexUpgradeTest(unittest.TestCase):
             )
             status = codex_upgrade.campaign_status(campaign_dir)
             self.assertEqual(status["stages"]["classify"], "complete")
+
+    def test_classify_rejects_target_scenario_execution_contract_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            campaign_dir, manifest = self._create_campaign(root)
+            self._seal_official_stage(root, campaign_dir, manifest)
+            target, migration, scenario, profile, assertion_profile, _ = (
+                self._write_classification_manifests(root)
+            )
+            scenario_payload = json.loads(scenario.read_text(encoding="utf-8"))
+            official_job = next(
+                job
+                for job in scenario_payload["capture_jobs"]
+                if job["id"] == "official-test"
+            )
+            official_job["steps"][0]["argv"] = ["false"]
+            self._write_json(scenario, scenario_payload)
+
+            return_code, _, stderr = self._run_main(
+                self._classification_arguments(
+                    campaign_dir,
+                    (target, migration, scenario, profile, assertion_profile),
+                )
+            )
+
+            self.assertEqual(return_code, 1)
+            self.assertIn("official 执行契约", stderr)
 
     def test_classify_requires_exact_dynamic_discovery_classification(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1984,9 +3183,60 @@ class CodexUpgradeTest(unittest.TestCase):
         updated, count = codex_upgrade._apply_assertion_profile_overrides(
             profile,
             target_version="0.147.0",
+            base_profile_path=base_path,
         )
         self.assertEqual(count, 0)
         self.assertEqual(updated, profile)
+
+    def test_01491_期望覆盖从_0147_精确追加_routing_hint(self) -> None:
+        tool_root = Path(__file__).resolve().parents[1]
+        base_path = tool_root / "candidate_rule_expectations_0_147_0.json"
+        profile = json.loads(base_path.read_text(encoding="utf-8"))
+        updated, count = codex_upgrade._apply_assertion_profile_overrides(
+            profile,
+            target_version="0.149.1",
+            base_profile_path=base_path,
+        )
+        self.assertEqual(count, 3)
+        for rule_id, check_id in (
+            ("SPEC-H1-004", "responses-order"),
+            ("SPEC-WS-002", "default-swap-remove-order"),
+            ("SPEC-EP-014", "legacy-default-headers"),
+        ):
+            check = next(
+                check
+                for rule in updated["rules"]
+                if rule["rule_id"] == rule_id
+                for check in rule["checks"]
+                if check["id"] == check_id
+            )
+            if (rule_id, check_id) == ("SPEC-H1-004", "responses-order"):
+                header_order = check["assertion"]["value"]
+                self.assertIn("x-codex-routing-hint", header_order)
+                self.assertLess(
+                    header_order.index("x-openai-internal-codex-responses-lite"),
+                    header_order.index("x-codex-routing-hint"),
+                )
+                self.assertNotIn("cookie", header_order)
+            elif (rule_id, check_id) == (
+                "SPEC-EP-014",
+                "legacy-default-headers",
+            ):
+                assertion = check["assertion"]
+                self.assertEqual(
+                    assertion["operator"], "all_ordered_subset_of"
+                )
+                self.assertIn("x-codex-routing-hint", assertion["required"])
+                self.assertIn(
+                    "x-openai-internal-codex-responses-lite",
+                    assertion["required"],
+                )
+                self.assertIn("cookie", assertion["allowed"])
+                self.assertNotIn("cookie", assertion["required"])
+            else:
+                self.assertIn(
+                    "x-codex-routing-hint", check["assertion"]["value"]
+                )
 
     def test_wham_get_paths_保持_0145_原期望(self) -> None:
         """防回归：不得再把 usage 换成 settings/user。"""
@@ -2466,6 +3716,12 @@ class CodexUpgradeTest(unittest.TestCase):
                     root, campaign_dir, "candidate-a", assertions
                 )
             self.assertTrue(acceptance["accepted"])
+            self.assertEqual(acceptance["campaign_mode"], "formal")
+            self.assertEqual(acceptance["campaign_purpose"], "validation_only")
+            self.assertEqual(acceptance["candidate_purpose"], "validation_only")
+            self.assertEqual(
+                acceptance["production_state"], "accepted_not_activated"
+            )
             self.assertTrue(
                 acceptance["gates"]["candidate_external_gate_complete"]
             )
@@ -2496,6 +3752,105 @@ class CodexUpgradeTest(unittest.TestCase):
             )
             status = codex_upgrade.campaign_status(campaign_dir)
             self.assertEqual(status["status"], "ready")
+
+    def test_candidate_purpose_is_frozen_through_attempt_and_comparison(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            campaign_dir, _, _ = self._create_classified_campaign(root)
+            self._seal_candidate_stage(root, campaign_dir)
+            candidate = codex_upgrade._load_stage_result(
+                campaign_dir, "capture-candidate", "candidate-a"
+            )
+            self.assertEqual(candidate["candidate_purpose"], "validation_only")
+            self.assertEqual(
+                candidate["identity"]["candidate_purpose"], "validation_only"
+            )
+            attempt_path = campaign_dir / candidate["attempt"]["path"]
+            attempt = json.loads(attempt_path.read_text(encoding="utf-8"))
+            self.assertEqual(attempt["candidate_purpose"], "validation_only")
+            reservation_path = campaign_dir / attempt["reservation"]["path"]
+            reservation = json.loads(reservation_path.read_text(encoding="utf-8"))
+            self.assertEqual(reservation["candidate_purpose"], "validation_only")
+            preview_path = campaign_dir / candidate["seal_preview"]["path"]
+            preview = json.loads(preview_path.read_text(encoding="utf-8"))
+            self.assertEqual(preview["candidate_purpose"], "validation_only")
+
+            comparison = codex_upgrade.compare_campaign(campaign_dir, "candidate-a")
+            self.assertEqual(comparison["candidate_purpose"], "validation_only")
+            sealed = codex_upgrade._load_stage_result(
+                campaign_dir, "compare", "candidate-a"
+            )
+            self.assertEqual(sealed["candidate_purpose"], "validation_only")
+
+    def test_attempt_and_comparison_purpose_drift_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            campaign_dir, _, _ = self._create_classified_campaign(root)
+            self._seal_candidate_stage(root, campaign_dir)
+            candidate = codex_upgrade._load_stage_result(
+                campaign_dir, "capture-candidate", "candidate-a"
+            )
+            attempt_path = campaign_dir / candidate["attempt"]["path"]
+            attempt = json.loads(attempt_path.read_text(encoding="utf-8"))
+            attempt_id = attempt["attempt_id"]
+            attempt["candidate_purpose"] = "production_replacement"
+            attempt.pop("attempt_digest")
+            attempt["attempt_digest"] = codex_upgrade._fingerprint(attempt)
+            self._write_json(attempt_path, attempt)
+            with self.assertRaisesRegex(
+                codex_upgrade.ConfigurationError,
+                "身份或摘要不一致",
+            ):
+                codex_upgrade._load_capture_attempt(
+                    campaign_dir,
+                    "candidate",
+                    "candidate-a",
+                    attempt_id,
+                )
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            campaign_dir, _, _ = self._create_classified_campaign(root)
+            self._seal_candidate_stage(root, campaign_dir)
+            codex_upgrade.compare_campaign(campaign_dir, "candidate-a")
+            path = campaign_dir / "comparisons/candidate-a/result.json"
+            comparison = json.loads(path.read_text(encoding="utf-8"))
+            comparison["candidate_purpose"] = "production_replacement"
+            comparison.pop("package_digest")
+            comparison["package_digest"] = codex_upgrade._fingerprint(comparison)
+            self._write_json(path, comparison)
+            with self.assertRaisesRegex(
+                codex_upgrade.ConfigurationError,
+                "candidate purpose",
+            ):
+                codex_upgrade._load_stage_result(
+                    campaign_dir, "compare", "candidate-a"
+                )
+
+    def test_production_replacement_ready_requires_explicit_activation_chain(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            campaign_dir, _, rules = self._create_classified_campaign(
+                root,
+                campaign_purpose="production_replacement",
+            )
+            _, identity = self._seal_candidate_stage(root, campaign_dir)
+            codex_upgrade.compare_campaign(campaign_dir, "candidate-a")
+            assertions = self._write_assertions(root, rules, identity)
+            with mock.patch.object(codex_upgrade, "_rerun_machine_assertion"):
+                acceptance = self._accept_campaign(
+                    root, campaign_dir, "candidate-a", assertions
+                )
+            self.assertEqual(
+                acceptance["candidate_purpose"], "production_replacement"
+            )
+            status = codex_upgrade.campaign_status(campaign_dir, "candidate-a")
+            self.assertEqual(status["status"], "ready")
+            self.assertEqual(
+                status["production_status"], "accepted_not_activated"
+            )
+            self.assertIn("§4.6", status["next_command"])
+            self.assertIn("不得宣称生产升级完成", status["next_command"])
 
     def test_accept_rejects_missing_candidate_external_gate(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

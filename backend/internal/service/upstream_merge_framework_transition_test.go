@@ -102,6 +102,11 @@ func upstreamMergeFrameworkTransitionSupersedesService(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if codex01491TerminalStateSupersedesService(
+		path, priorDigest, currentDigest,
+	) {
+		return true
+	}
 	if compositeModelProtocolSourceTransitionSupersedesService(
 		path, priorDigest, currentDigest,
 	) {
@@ -122,6 +127,9 @@ func upstreamMergeFrameworkTransitionSupersedesService(
 		if transition.Path == path &&
 			slices.Contains(transition.PredecessorSHA256s, priorDigest) &&
 			(transition.ToSHA256 == currentDigest ||
+				codex01491TerminalStateSupersedesService(
+					path, transition.ToSHA256, currentDigest,
+				) ||
 				compositeModelProtocolSourceTransitionSupersedesService(
 					path, transition.ToSHA256, currentDigest,
 				) ||

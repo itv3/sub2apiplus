@@ -58,6 +58,7 @@ MAX_EVIDENCE_BYTES = 512 * 1024 * 1024
 REGIONAL_SNI_RE = re.compile(r"^[a-z0-9.-]+\.oaiusercontent\.com$")
 # 真实观测形态：`Location: /v1/realtime/calls/rtc_u0_EBE4oHU6FYPaFejVfBpPW`。
 CALL_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
+A11_CONTROLLED_INTERVENTION = "synthesize_realtime_call_after_live_failure"
 
 
 class ScenarioFactsError(ValueError):
@@ -285,6 +286,210 @@ def _find_exchange(
     raise ScenarioFactsError(f"relay 字节中没有 {method} 目标请求。")
 
 
+def _find_exchanges(
+    evidence: EvidenceSet,
+    root: Path,
+    method: str,
+    path_predicate,
+) -> list[dict[str, Any]]:
+    """返回所有目标交换及其连接编号，供同根多分支场景做精确归属。"""
+
+    relay_root = root / RELAY_DIR
+    exchanges: list[dict[str, Any]] = []
+    for request_path in sorted(relay_root.glob("conn*.client_to_upstream.bin")):
+        match = re.fullmatch(r"conn([0-9]+)\.client_to_upstream\.bin", request_path.name)
+        if match is None:
+            continue
+        response_path = request_path.with_name(
+            request_path.name.replace("client_to_upstream", "upstream_to_client")
+        )
+        if response_path.is_symlink() or not response_path.is_file():
+            continue
+        evidence.bind(request_path)
+        evidence.bind(response_path)
+        requests = list(_iter_requests(request_path.read_bytes()))
+        responses = list(_iter_responses(response_path.read_bytes()))
+        for index, request in enumerate(requests):
+            if request["method"] != method or not path_predicate(
+                _path_of(request["target"])
+            ):
+                continue
+            if index >= len(responses):
+                raise ScenarioFactsError(
+                    f"{method} {_path_of(request['target'])} 没有对应的响应字节。"
+                )
+            exchanges.append({
+                "connection_id": int(match.group(1)),
+                "request": request,
+                "response": responses[index],
+                "request_path": request_path,
+                "response_path": response_path,
+            })
+    if not exchanges:
+        raise ScenarioFactsError(f"relay 字节中没有 {method} 目标请求。")
+    return exchanges
+
+
+def _relay_manifest_connections(
+    evidence: EvidenceSet,
+    root: Path,
+) -> dict[int, dict[str, Any]]:
+    """读取 relay.json，并把连接身份闭合为唯一整数编号。"""
+
+    path = root / RELAY_DIR / "relay.json"
+    if path.is_symlink() or not path.is_file():
+        raise ScenarioFactsError("A11 缺少 relay/relay.json，无法区分自然与受控响应。")
+    evidence.bind(path)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise ScenarioFactsError(f"relay.json 不可读：{error}") from error
+    if not isinstance(payload, dict) or payload.get("schema_version") != "byte-relay/v1":
+        raise ScenarioFactsError("relay.json schema_version 不匹配。")
+    raw_connections = payload.get("connections")
+    if not isinstance(raw_connections, list):
+        raise ScenarioFactsError("relay.json connections 必须是数组。")
+    connections: dict[int, dict[str, Any]] = {}
+    for item in raw_connections:
+        if not isinstance(item, dict):
+            raise ScenarioFactsError("relay.json connection 必须是对象。")
+        connection_id = item.get("connection_id")
+        if (
+            not isinstance(connection_id, int)
+            or isinstance(connection_id, bool)
+            or connection_id < 1
+            or connection_id in connections
+        ):
+            raise ScenarioFactsError("relay.json connection_id 缺失、非法或重复。")
+        connections[connection_id] = item
+    return connections
+
+
+def _verify_manifest_exchange(
+    exchange: dict[str, Any],
+    connection: dict[str, Any],
+) -> None:
+    """核对 relay 元数据确实绑定到本连接最终字节，而非旁路声明。"""
+
+    if connection.get("valid") is not True:
+        raise ScenarioFactsError("A11 目标连接未被 relay 标为 valid。")
+    request = exchange["request"]
+    expected_line = f"{request['method']} {request['target']} HTTP/1.1"
+    if connection.get("request_line") != expected_line:
+        raise ScenarioFactsError("A11 relay request_line 与目标请求字节不一致。")
+    sizes = connection.get("bytes")
+    digests = connection.get("sha256")
+    if not isinstance(sizes, dict) or not isinstance(digests, dict):
+        raise ScenarioFactsError("A11 relay 元数据缺少字节绑定。")
+    for direction, key in (
+        ("client_to_upstream", "request_path"),
+        ("upstream_to_client", "response_path"),
+    ):
+        path = exchange[key]
+        if sizes.get(direction) != path.stat().st_size or digests.get(direction) != _sha256(path):
+            raise ScenarioFactsError(f"A11 relay {direction} 元数据与最终字节不一致。")
+
+
+def _call_id_from_response(response: dict[str, Any]) -> str:
+    """从 call-create 的 Location 头提取并校验 call_id。"""
+
+    location = response["headers"].get("location", "")
+    call_id = location.rstrip("/").rsplit("/", 1)[-1] if "/" in location else ""
+    if not call_id or not CALL_ID_RE.fullmatch(call_id):
+        raise ScenarioFactsError(
+            f"call-create 响应的 Location 未给出 call_id：{location[:120]!r}"
+        )
+    return call_id
+
+
+def _realtime_success_events(
+    evidence: EvidenceSet,
+    root: Path,
+    name: str,
+) -> tuple[str, int]:
+    """从官方 app-server 事件中提取成功终态及收尾错误次数。"""
+
+    events = _load_observation(evidence, root, name)
+    notifications = _require(events, "notifications", "A11 事件日志")
+    if not isinstance(notifications, list):
+        raise ScenarioFactsError("A11 事件日志 notifications 必须是数组。")
+    final_event = None
+    final_index = -1
+    for index, item in enumerate(notifications):
+        method = _method_of(item)
+        if method == "thread/realtime/started":
+            final_event = "thread_realtime_started"
+            final_index = index
+        elif method == "thread/realtime/sdp":
+            if final_event is None:
+                final_event = "sdp_answer"
+            final_index = index
+    if final_event is None:
+        raise ScenarioFactsError("realtime 没有 started／SDP 最终事件。")
+
+    in_session_errors = 0
+    teardown_errors = 0
+    for index, item in enumerate(notifications):
+        if _method_of(item) != "thread/realtime/error":
+            continue
+        if index <= final_index:
+            in_session_errors += 1
+            continue
+        tail = {_method_of(x) for x in notifications[index + 1 :]}
+        if tail - {"thread/realtime/closed", "thread/realtime/error"}:
+            in_session_errors += 1
+        else:
+            teardown_errors += 1
+    if in_session_errors:
+        raise ScenarioFactsError(
+            f"realtime 会话期内出现 {in_session_errors} 次异步 error。"
+        )
+    return final_event, teardown_errors
+
+
+def _live_failure_message_sha256(
+    evidence: EvidenceSet,
+    root: Path,
+    response: dict[str, Any],
+) -> str:
+    """绑定自然 400 响应与 app-server error，并返回规范化消息摘要。"""
+
+    events = _load_observation(evidence, root, "A11-realtime-live-events.json")
+    notifications = _require(events, "notifications", "A11 自然事件日志")
+    if not isinstance(notifications, list):
+        raise ScenarioFactsError("A11 自然事件日志 notifications 必须是数组。")
+    if any(
+        _method_of(item) in {"thread/realtime/started", "thread/realtime/sdp"}
+        for item in notifications
+    ):
+        raise ScenarioFactsError("A11 自然失败事件中混入了成功终态。")
+    messages: list[str] = []
+    for item in notifications:
+        if _method_of(item) != "thread/realtime/error" or not isinstance(item, dict):
+            continue
+        params = item.get("params")
+        message = params.get("message") if isinstance(params, dict) else None
+        if isinstance(message, str) and message:
+            messages.append(message)
+    if len(messages) != 1:
+        raise ScenarioFactsError("A11 自然失败必须留下且只留下一个带消息的 realtime error。")
+
+    try:
+        response_payload = json.loads(response["body"].decode("utf-8"))
+        event_payload = json.loads(messages[0])
+    except (UnicodeError, json.JSONDecodeError) as error:
+        raise ScenarioFactsError(f"A11 自然 400 错误体不是可比对 JSON：{error}") from error
+    if response_payload != event_payload:
+        raise ScenarioFactsError("A11 自然 400 响应与 app-server error 消息不一致。")
+    canonical = json.dumps(
+        event_payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
 # --------------------------------------------------------------------------
 # pcap ClientHello
 # --------------------------------------------------------------------------
@@ -330,79 +535,135 @@ def _require_sni(hellos: list[tuple[str, float]], expected: str) -> float:
 
 
 def _facts_a11(evidence: EvidenceSet, root: Path) -> dict[str, Any]:
-    request, response = _find_exchange(
+    exchanges = _find_exchanges(
         evidence,
         root,
         "POST",
         lambda path: path.endswith("/backend-api/codex/realtime/calls"),
     )
-    del request
-    if not 200 <= response["status"] <= 299:
-        raise ScenarioFactsError(
-            f"realtime call-create 返回 {response['status']}，目标分支未成立。"
-        )
-    # WebRTC 的 call-create 返回 201 + text/plain 的 SDP answer，**响应体不是 JSON**；
-    # call_id 由 `Location: /v1/realtime/calls/{call_id}` 给出，随后 V3 sideband 用
-    # 同一个 id 走 `/v1/live/{call_id}`。这是 k37 真实采集观测到的形态。
-    location = response["headers"].get("location", "")
-    call_id = location.rstrip("/").rsplit("/", 1)[-1] if "/" in location else ""
-    if not call_id or not CALL_ID_RE.fullmatch(call_id):
-        raise ScenarioFactsError(
-            f"call-create 响应的 Location 未给出 call_id：{location[:120]!r}"
-        )
+    connections = _relay_manifest_connections(evidence, root)
+    by_connection = {exchange["connection_id"]: exchange for exchange in exchanges}
+    if len(by_connection) != len(exchanges):
+        raise ScenarioFactsError("A11 同一连接出现多个 call-create，无法闭合分支归属。")
+    for connection_id, exchange in by_connection.items():
+        connection = connections.get(connection_id)
+        if connection is None:
+            raise ScenarioFactsError(f"relay.json 缺少 A11 连接 {connection_id}。")
+        _verify_manifest_exchange(exchange, connection)
 
-    events = _load_observation(evidence, root, "A11-realtime-events.json")
-    notifications = _require(events, "notifications", "A11 事件日志")
-    if not isinstance(notifications, list):
-        raise ScenarioFactsError("A11 事件日志 notifications 必须是数组。")
-    # 目标事件（started／sdp）的最后位置：它之前的 error 说明会话没建立起来，
-    # 属真实失败；它之后、且只与关闭序列同现的 error，是上游收尾方式的差异。
-    final_event = None
-    final_index = -1
-    for index, item in enumerate(notifications):
-        method = _method_of(item)
-        if method == "thread/realtime/started":
-            final_event = "thread_realtime_started"
-            final_index = index
-        elif method == "thread/realtime/sdp":
-            if final_event is None:
-                final_event = "sdp_answer"
-            final_index = index
-    if final_event is None:
-        raise ScenarioFactsError("realtime 没有 started／SDP 最终事件。")
-
-    # 会话期内的 error 一律失败关闭；收尾 error 单独计数并写进事实，不静默丢弃。
-    #
-    # 判据只回答「realtime 会话能否建立、sideband 能否绑定 call_id」，不回答
-    # 「上游用什么方式结束连接」。实测同一场景两次采集的 wire 逐字等价——上行
-    # 2055／15778／2348、四个连接、sideband 已建立——唯一差别是收尾时上游一次走
-    # 优雅关闭、一次直接 reset（`Connection reset without closing handshake`）。
-    # 原实现把后者判成失败，等价证据因此被拒，且重试无法绕过：reset 发生在会话
-    # 结束那一刻，与 hold 时长无关。
-    in_session_errors = 0
-    teardown_errors = 0
-    for index, item in enumerate(notifications):
-        if _method_of(item) != "thread/realtime/error":
-            continue
-        if index <= final_index:
-            in_session_errors += 1
-            continue
-        # 位于目标事件之后：只有当其后再无任何非关闭类通知时才算收尾。
-        tail = {_method_of(x) for x in notifications[index + 1 :]}
-        if tail - {"thread/realtime/closed", "thread/realtime/error"}:
-            in_session_errors += 1
-        else:
-            teardown_errors += 1
-    if in_session_errors:
-        raise ScenarioFactsError(
-            f"realtime 会话期内出现 {in_session_errors} 次异步 error。"
-        )
-    if not _sideband_joins_call(evidence, root, call_id):
-        raise ScenarioFactsError("relay 字节中没有与 call-create 同 call_id 的 sideband 连接。")
-
+    controlled_ids = [
+        connection_id
+        for connection_id, connection in connections.items()
+        if connection.get("intervention") == A11_CONTROLLED_INTERVENTION
+    ]
     hellos = _client_hellos(evidence, root)
     _require_sni(hellos, "api.openai.com")
+
+    if controlled_ids:
+        if len(controlled_ids) != 1:
+            raise ScenarioFactsError("A11 复合模式必须且只能有一次受控 first-hop 响应。")
+        controlled_id = controlled_ids[0]
+        controlled = by_connection.get(controlled_id)
+        controlled_meta = connections[controlled_id]
+        if controlled is None:
+            raise ScenarioFactsError("A11 受控干预没有对应的 call-create 字节。")
+        live_candidates = [
+            exchange
+            for connection_id, exchange in by_connection.items()
+            if connection_id != controlled_id
+            and connections[connection_id].get("realtime_call_attempt") == 1
+            and connections[connection_id].get("realtime_call_action")
+            == "forward_to_production"
+            and not connections[connection_id].get("intervention")
+        ]
+        if len(live_candidates) != 1:
+            raise ScenarioFactsError("A11 复合模式缺少唯一的第一次自然上游请求。")
+        live = live_candidates[0]
+        live_meta = connections[live["connection_id"]]
+        if (
+            controlled_meta.get("realtime_call_attempt") != 2
+            or controlled_meta.get("realtime_call_action") != "synthetic_response"
+        ):
+            raise ScenarioFactsError("A11 受控响应不是紧随自然请求的第二次 first-hop。")
+        live_opened = live_meta.get("opened_at_unix_ms")
+        controlled_opened = controlled_meta.get("opened_at_unix_ms")
+        if (
+            not isinstance(live_opened, int)
+            or isinstance(live_opened, bool)
+            or not isinstance(controlled_opened, int)
+            or isinstance(controlled_opened, bool)
+            or live_opened >= controlled_opened
+        ):
+            raise ScenarioFactsError("A11 自然请求与受控请求的墙钟顺序不成立。")
+        live_response = live["response"]
+        controlled_response = controlled["response"]
+        if live_response["status"] != 400:
+            raise ScenarioFactsError(
+                f"A11 复合模式要求自然第一跳为 400，实际为 {live_response['status']}。"
+            )
+        if not 200 <= controlled_response["status"] <= 299:
+            raise ScenarioFactsError("A11 受控第一跳没有返回 2xx。")
+        live_message_sha256 = _live_failure_message_sha256(
+            evidence,
+            root,
+            live_response,
+        )
+        call_id = _call_id_from_response(controlled_response)
+        final_event, teardown_errors = _realtime_success_events(
+            evidence,
+            root,
+            "A11-realtime-events.json",
+        )
+        if not _sideband_joins_call(evidence, root, call_id):
+            raise ScenarioFactsError(
+                "relay 字节中没有与受控 call-create 同 call_id 的官方 sideband 连接。"
+            )
+        return {
+            "observation_mode": "live_failure_plus_controlled_branch",
+            "live_failure_status": 400,
+            "live_failure_message_sha256": live_message_sha256,
+            "controlled_call_create_status": controlled_response["status"],
+            "controlled_call_id_sha256": hashlib.sha256(
+                call_id.encode("utf-8")
+            ).hexdigest(),
+            "controlled_intervention": A11_CONTROLLED_INTERVENTION,
+            "sdp_or_started_event": final_event,
+            "async_error_count": 0,
+            "teardown_error_count": teardown_errors,
+            "sideband_sni": "api.openai.com",
+            "sideband_call_id_linked": True,
+        }
+
+    # 纯自然成功模式：目标 2xx 所在连接不得带任何受控干预。存在旧的立即合成
+    # `synthesize_realtime_call` 时不会误入这里，因此受控诊断不能冒充正式成功。
+    live_successes = [
+        exchange
+        for connection_id, exchange in by_connection.items()
+        if 200 <= exchange["response"]["status"] <= 299
+        and not connections[connection_id].get("intervention")
+    ]
+    if len(live_successes) != 1:
+        statuses = [exchange["response"]["status"] for exchange in exchanges]
+        raise ScenarioFactsError(
+            f"A11 没有唯一、未受控的自然 2xx call-create：{statuses}。"
+        )
+    live = live_successes[0]
+    response = live["response"]
+    call_id = _call_id_from_response(response)
+    live_events_name = (
+        "A11-realtime-live-events.json"
+        if (root / OBSERVATION_DIR / "A11-realtime-live-events.json").is_file()
+        else "A11-realtime-events.json"
+    )
+    final_event, teardown_errors = _realtime_success_events(
+        evidence,
+        root,
+        live_events_name,
+    )
+    if not _sideband_joins_call(evidence, root, call_id):
+        raise ScenarioFactsError("relay 字节中没有与 call-create 同 call_id 的 sideband 连接。")
     return {
+        "observation_mode": "live_success",
         "call_create_status": response["status"],
         "call_id_sha256": hashlib.sha256(call_id.encode("utf-8")).hexdigest(),
         "sdp_or_started_event": final_event,

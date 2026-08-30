@@ -19,7 +19,6 @@ side=${SIDE:-official}
 # 拒绝继续。本脚本只编排受管工具、不产生新的证据语义，故置于其外。
 repo_root=${REPO_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)}
 tool_root=${TOOL_ROOT:-"$repo_root/tools/official_client_capture"}
-declaration=${DECLARATION:-"$tool_root/codex_upgrade_evidence_labels_0_145_0.json"}
 
 case "$side" in
   official) attempt_dir="$campaign_dir/official/attempts/$attempt_id" ;;
@@ -31,6 +30,26 @@ esac
 
 attempt_json="$attempt_dir/attempt.json"
 [[ -f $attempt_json ]] || { echo "找不到 attempt: $attempt_json" >&2; exit 1; }
+campaign_json="$campaign_dir/campaign.json"
+[[ -f $campaign_json ]] || { echo "找不到 Campaign: $campaign_json" >&2; exit 1; }
+
+# 声明必须与 Campaign 目标版本逐字绑定。不存在对应版本声明时失败关闭，绝不回退到
+# 旧版本；即使调用方显式传入 DECLARATION，编目器也会再次校验 codex_version。
+target_version=$(python3 - "$campaign_json" <<'PY'
+import json, pathlib, re, sys
+campaign = json.loads(pathlib.Path(sys.argv[1]).read_text())
+version = campaign.get("target_version")
+if not isinstance(version, str) or not re.fullmatch(r"\d+\.\d+\.\d+", version):
+    raise SystemExit("Campaign target_version 非法")
+print(version)
+PY
+)
+version_key=${target_version//./_}
+declaration=${DECLARATION:-"$tool_root/codex_upgrade_evidence_labels_${version_key}.json"}
+[[ -f $declaration && ! -L $declaration ]] || {
+  echo "找不到目标版本 $target_version 的证据标签声明：$declaration" >&2
+  exit 1
+}
 
 bundle_dir="$attempt_dir/evidence/assertion-bundle"
 [[ -e $bundle_dir ]] && { echo "断言证据包已存在，拒绝覆盖：$bundle_dir" >&2; exit 1; }
@@ -125,7 +144,8 @@ done < "$work_dir/jobroots.txt"
 
 cd "$repo_root"
 python3 "$tool_root/build_evidence_catalog.py" \
-  --declaration "$declaration" --side "$side" \
+  --declaration "$declaration" --expected-codex-version "$target_version" \
+  --side "$side" \
   "${catalog_args[@]}" --output-dir "$work_dir/catalog"
 
 python3 "$tool_root/build_assertion_bundle.py" \

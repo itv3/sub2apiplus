@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-campaign-v1.json",
+  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-campaign-v2.json",
   "title": "Codex 出站版本升级 Campaign 不可变核心清单",
   "description": "Campaign 创建时只写一次，并由 campaign.sha256 封存。后续状态、候选身份、比较结果和验收门禁只能写入独立阶段收据，禁止回写本清单。",
   "type": "object",
@@ -9,6 +9,8 @@
     "schema_version",
     "campaign_id",
     "created_at_utc",
+    "campaign_mode",
+    "campaign_purpose",
     "baseline_version",
     "target_version",
     "target_sha256",
@@ -29,13 +31,22 @@
       "minLength": 1
     },
     "schema_version": {
-      "const": "codex-upgrade-campaign/v1"
+      "const": "codex-upgrade-campaign/v2"
     },
     "campaign_id": {
       "$ref": "#/$defs/safeId"
     },
     "created_at_utc": {
       "$ref": "#/$defs/timestamp"
+    },
+    "campaign_mode": {
+      "enum": [
+        "preflight_only",
+        "formal"
+      ]
+    },
+    "campaign_purpose": {
+      "$ref": "#/$defs/candidatePurpose"
     },
     "baseline_version": {
       "$ref": "#/$defs/version"
@@ -60,6 +71,9 @@
     },
     "tool_identity": {
       "$ref": "#/$defs/toolIdentity"
+    },
+    "predecessor": {
+      "$ref": "#/$defs/predecessor"
     },
     "inputs": {
       "$ref": "#/$defs/inputs"
@@ -98,6 +112,12 @@
     "safeId": {
       "type": "string",
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "candidatePurpose": {
+      "enum": [
+        "validation_only",
+        "production_replacement"
+      ]
     },
     "version": {
       "type": "string",
@@ -170,6 +190,30 @@
           "type": "null"
         }
       ]
+    },
+    "predecessor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "campaign_dir",
+        "campaign_id",
+        "campaign_manifest_sha256",
+        "reason"
+      ],
+      "properties": {
+        "campaign_dir": {
+          "$ref": "#/$defs/absolutePath"
+        },
+        "campaign_id": {
+          "$ref": "#/$defs/safeId"
+        },
+        "campaign_manifest_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "reason": {
+          "const": "candidate_runtime_identity_correction"
+        }
+      }
     },
     "sourceIdentity": {
       "type": "object",
@@ -306,7 +350,11 @@
         "git_commit",
         "entry_count",
         "files_sha256",
-        "entries"
+        "entries",
+        "production_count",
+        "production_sha256",
+        "evaluation_count",
+        "evaluation_sha256"
       ],
       "properties": {
         "git_commit": {
@@ -325,6 +373,20 @@
           "items": {
             "$ref": "#/$defs/toolFile"
           }
+        },
+        "production_count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "production_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "evaluation_count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "evaluation_sha256": {
+          "$ref": "#/$defs/sha256"
         }
       }
     },
@@ -341,6 +403,9 @@
           "$ref": "#/$defs/fileBinding"
         },
         "discovery_scenarios": {
+          "$ref": "#/$defs/fileBinding"
+        },
+        "target_discovery_scenarios": {
           "$ref": "#/$defs/fileBinding"
         },
         "extra_jobs": {
@@ -382,6 +447,7 @@
         "baseline_evidence",
         "runtime_image",
         "model",
+        "lite_model",
         "capture_root",
         "capture_container",
         "service_container",
@@ -393,7 +459,9 @@
         "capture_code_mode_host_bin",
         "relay_code_mode_host_bin",
         "codex_account_id",
-        "api_key_id"
+        "api_key_id",
+        "live_attestation_compose_dir",
+        "live_attestation_compose_files"
       ],
       "properties": {
         "baseline_source": {
@@ -412,6 +480,9 @@
           "$ref": "#/$defs/nonEmptyText"
         },
         "model": {
+          "$ref": "#/$defs/nonEmptyText"
+        },
+        "lite_model": {
           "$ref": "#/$defs/nonEmptyText"
         },
         "capture_root": {
@@ -451,6 +522,12 @@
         "api_key_id": {
           "type": "integer",
           "minimum": 1
+        },
+        "live_attestation_compose_dir": {
+          "type": "string"
+        },
+        "live_attestation_compose_files": {
+          "type": "string"
         }
       }
     },

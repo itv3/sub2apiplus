@@ -152,6 +152,11 @@ class CommandTest(unittest.TestCase):
         command_text = "\n".join(command)
         self.assertIn("features.hooks=true", command)
         self.assertIn('shell_environment_policy.inherit="none"', command)
+        self.assertIn(
+            'shell_environment_policy.set={PATH="/usr/bin:/bin",'
+            'HOME="/work",LANG="C.UTF-8",LC_ALL="C.UTF-8"}',
+            command,
+        )
         self.assertIn("--expected-command", command_text)
         self.assertIn("printf CODEX_CAPTURE_TOOL_OK", command_text)
         self.assertNotIn("CANARY-SECRET", "\n".join(command))

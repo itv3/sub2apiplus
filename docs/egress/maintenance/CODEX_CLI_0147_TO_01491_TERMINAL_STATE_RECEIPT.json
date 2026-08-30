@@ -1,0 +1,2628 @@
+{
+  "schema_version": "official-client-codex-0.149.1-terminal-state/v1",
+  "completed_at_utc": "2026-08-30T03:41:35Z",
+  "target": {
+    "version": "0.149.1",
+    "profile_id": "codex-0.149.1-official-r1491-v2",
+    "profile_sha256": "8c22d3b18b16d249ac041a97efad1b6703c11ef290622b0b1642679a3c010ec3",
+    "previous_version": "0.147.0",
+    "previous_profile_sha256": "94071c8eb93cfd337ac6eabc291d878084e3dcec8a9e618e04e6f68792d1a7bc"
+  },
+  "runtime_catalog": {
+    "catalog": {
+      "path": "backend/internal/officialegress/catalogdata/runtime/release-catalog.json",
+      "sha256": "88470ee5918ff558d0c32136499fa7e6d595834c5b7a084a02785e0e51585c3d"
+    },
+    "release_graph": {
+      "path": "backend/internal/officialegress/catalogdata/runtime/release-graphs/057264d864aea27ebafecf504e95b8c948f25ac20f11fdabbfd2385d35c85465.json",
+      "sha256": "057264d864aea27ebafecf504e95b8c948f25ac20f11fdabbfd2385d35c85465"
+    },
+    "snapshot_catalog": {
+      "path": "backend/internal/officialegress/catalogdata/runtime/snapshot-catalogs/4b3e2aded6ad932a4f1adb5efefefe8dd5bad7092a1de3c0bddff54f4a84f57c.json",
+      "sha256": "4b3e2aded6ad932a4f1adb5efefefe8dd5bad7092a1de3c0bddff54f4a84f57c"
+    },
+    "active_profile": {
+      "path": "backend/internal/officialegress/catalogdata/runtime/profiles/0.149.1/8c22d3b18b16d249ac041a97efad1b6703c11ef290622b0b1642679a3c010ec3.json",
+      "sha256": "a8ec3ccf43748bd225a9bd753fb2a240d3f5667da76ccd344e370294178ec2df"
+    }
+  },
+  "catalog_promotion": {
+    "path": "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_R28_CATALOG_PROMOTION_RECEIPT.json",
+    "sha256": "677dad86a2d8ed3b2f842068a343a4fce4a4ea6c975534023ab86edc5f74907d"
+  },
+  "production_activation": {
+    "path": "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_R34_PRODUCTION_ACTIVATION_RECEIPT.json",
+    "sha256": "094d95a33c53099bb211fc3c7a6f23e2432cf2b0e8468f83d91c9712d3b24975"
+  },
+  "audit_archive": {
+    "path": "codex-0.149.1-consolidated-audit-20260830.tar.gz",
+    "sha256": "cfb3d9afb4453b95662fbcfdf794b4d80efe168fd69accf909abdbf40b6e30d9"
+  },
+  "surface_additions": [
+    {
+      "path": "backend/internal/officialegress/routing_hint.go",
+      "sha256": "80626878919a1a06f54361da972efab2db4e3750babb90053ece3f2bf6c71282"
+    }
+  ],
+  "retired_runtime_profiles": [
+    {
+      "path": "backend/internal/officialegress/catalogdata/runtime/profiles/0.145.0/343991bad0f89614cd092778186f51eb23d5afbf4c98a198981639758bdf5431.json",
+      "sha256": "ff503d73d7402fb0d6429a67b415aa7d2bc863a3002cf5e5ee9ab3baa3d7529f"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/runtime/profiles/0.145.0/e0b59772622f14717f1fdf5c15bfae5758226a04fe8f030110d8a616e20fdf6b.json",
+      "sha256": "36c6c0e4464e6182347210d05d17ea85f6121e98f70f3c36b6ffc2b4230a5c66"
+    }
+  ],
+  "transitions": [
+    {
+      "path": ".github/workflows/backend-ci.yml",
+      "state": "present",
+      "prior_sha256s": [
+        "0f6c1230a7306e46e22948ee5be7fb594e8cd09a6753f3d878e0163f570ac221",
+        "718f02550142ad0cb0c265f9c7b978b97371f28f8572f46b958bd60c85c08d0f"
+      ],
+      "current_sha256": "e756b8314ff6a4d305b680e8c0832412c9970ee2f6d82d61932ab08d6dbab6cc",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": ".gitignore",
+      "state": "present",
+      "prior_sha256s": [
+        "b31486272278ea54a2fecfcb4fd2be8f69ebca13f9179c084af108c36054a31e",
+        "df1cdba2e13c5f37e5e5c64c18bdf03d321d329d1908bb0e57b434ca15b505fc"
+      ],
+      "current_sha256": "62e6137beb38465ae94434eef97e6041a03d517225cdeef2a2281cd775b54446",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "Makefile",
+      "state": "present",
+      "prior_sha256s": [
+        "070cfac169fefc59dcfc968d0f46a72935d825ef44332a5364adeeb7cc40b490",
+        "1c1e7f1b3f60294b980812140a223a2cbf6ac499302b777338a034a38920c80a",
+        "fda874af797442e8238a7a4b011cedc7f4f724e5ace635244b19d770b454782d"
+      ],
+      "current_sha256": "1bcb83eed48dbe0a5198f98e8fc3d59cf16d96bbb8292abe44cb540783f24462",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "README.md",
+      "state": "present",
+      "prior_sha256s": [
+        "5b490117e540c7b2b7f05f552ccd6c127faeeba3b01b4f8a3cc5ac35db09be59",
+        "e332ca33d40b654cbdcf685fe89b33c4b102abba767f93a8f2c42f5b561372cd"
+      ],
+      "current_sha256": "d9a763e1e428b99b0799cb8f1db2ca49ed726eb4700538a4fe0c40e1e579dcd7",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/cmd/egressscan/classify.go",
+      "state": "present",
+      "prior_sha256s": [
+        "5d20596c2e4da6f5e64cb454f7dd045ba92664cc5673f9b869a889dfe5436b2d",
+        "962c55574a319669db36eb6810068802a0271ec0c4bbe696638563e50347fe78",
+        "c1da6c5a9db7be862cbb5f58c8dcde33c8b67d29407073f5e1da7d2d71709a7f",
+        "c39ba21bc773991c5eb5929b3fdb8e646fac85b612d68e88be738d160e26f9b4",
+        "dc3449aed5f180862f3e294d6f518130b05ae4df325fd79badb7a6538e7aee33",
+        "fc7b999cb57fa47dca212c4653524b0acd5b6304c912294971948bcc54abca49"
+      ],
+      "current_sha256": "1ed55101182ad64efaed965794a982ac4dad1a62fcde58260f02969d6d830378",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/cmd/egressscan/lifecycle_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "0169dcfffe9e1203d2017bde9a67b0467aec08fb38bba90218aba036608f1a16",
+        "352ab440f07c20f53df5745950eca64bafbd71ca62087c275f43674eef068cd6",
+        "49e815d5a098989d34b1f6151591178a3954c3db7e4801fbf2de80117ba68501",
+        "526b0cd3099b78b4587c2496b3233c6096617c89cbecd8da33fbc13b42856255",
+        "7e8b8392916180921093e8db9c2423cf76fec817f5573c1329eadb78027bcae4",
+        "9b225bcd4b1ffbe20a9f03fccd6efd84f8d8422b3a08df301d8a519a3f9d1f32",
+        "b20d6ff74b93b9cc9c827bb1284060e46ce7f3ca76d43e99b221dcaaa37f8ab9"
+      ],
+      "current_sha256": "f0f4b3e03341e2b949b91a5722f8b0951ddd055906a63f8fbc015f6c2e02532b",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/cmd/egressscan/main.go",
+      "state": "present",
+      "prior_sha256s": [
+        "007c84013c4f8f64ea06892419d5913c33c5fa56e3cb05ce5551adc6d9785f5d",
+        "3954450dae0c7e11a77fbb2b28879d75d342d60352fd5280f3f41d5a871d3c1c",
+        "df5a1d80e4ba8c2f97d783ca8c4c089dc37bba8b77efb95209d69bed22801007"
+      ],
+      "current_sha256": "d927a4992234f6a33815fc889f636fa0fe2d2168ccf935847b37b39fcef66ec6",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/cmd/egressscan/supplements.go",
+      "state": "present",
+      "prior_sha256s": [
+        "3f18b1f38869071e65218110120015928a0c02d8430e9db298ad84c617f3c6dc"
+      ],
+      "current_sha256": "3cafb110fbcc059d78acd390d50142f86ae8875028071b5c6d42e7c492bf54bb",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/cmd/server/main.go",
+      "state": "present",
+      "prior_sha256s": [
+        "40542e66119ceeff811071250121a90cc350c56b2b0a0a2d036601f5ca6b5c5d",
+        "ed6112349e20ff9609f5556da1a63887d453db04697441d58a651542c9da9009"
+      ],
+      "current_sha256": "dc8a2bd6537b4e1d87715f9e8f1768e11c1398670af1f3a1df6237b087e5f718",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/cmd/server/wire.go",
+      "state": "present",
+      "prior_sha256s": [
+        "eed1893b88880d8531bea542407f3050f486cfc71817dbcf9a8c170d67a7a018"
+      ],
+      "current_sha256": "22e7ff931ac57900f39ca5f49a9c548a7caceed957a2469e6c3ff9fe602d838b",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/cmd/server/wire_gen.go",
+      "state": "present",
+      "prior_sha256s": [
+        "7cad1c7cc65bf93dee48496a7500a4a60584ebf924625ee9ea5b1120a69298b5",
+        "82b7ea7769b45cdde388917c814bb3f424c5e5d36086c819f568ec20f5335c16",
+        "909ca85de7219d3b112e2bcaaef6ec04f329becc18c2e9ac0171e5083d65635f"
+      ],
+      "current_sha256": "7fc08bddf23518938ade99a2fe2402f83f0795662c2a68510d597566d0f810ff",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/config/config.go",
+      "state": "present",
+      "prior_sha256s": [
+        "0f1e43060ec0e09220006a4063e647d36aaa6d4be7d8bdecf4572ff6e1b3a151",
+        "7d5f38bc9f3e11fc7e3fa0818f9990ae718e9209eaa279f50641a03b7915000a",
+        "f76b526f55f00db9c7509d8f3ee517223086f3a852a544d4dbeeddab71a9008c"
+      ],
+      "current_sha256": "18809baead630b1edd72570f3acd0bf3777ff9857b69b824407a11fffec07712",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/config/config_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "5bbdccc36ad039b73c702bf80199aefbcf20c1e7e4a40267e6a0118575e3d412",
+        "d31256a91b019f3cb9ecfdd33d52b7a2e6fa833eea02be6a4e6d4289c1d6aeba"
+      ],
+      "current_sha256": "08809523c38d2a64c478d64c008239c82e1805c4d809fdc790250831035148a8",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/handler/admin/openai_oauth_handler_privacy_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "9cafa1707679ccae578929c9c102dd2a01a2085e55289fec2dc84901b580e75c"
+      ],
+      "current_sha256": "a89b23ad36041c8cb30df41bcca4e3e6ccf4f4366e15a78b28a48530b562ed6e",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/handler/admin/setting_handler.go",
+      "state": "present",
+      "prior_sha256s": [
+        "b444329932274865c307403540e9946bda8161b55a462c48f703a9635496d581"
+      ],
+      "current_sha256": "290bbdab05885e2985801bbf4407d1c5664a37fb6ee29131f86e27cdcd2527d8",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/handler/admin/setting_handler_update.go",
+      "state": "present",
+      "prior_sha256s": [
+        "cae7214fdc8a0f5c93e876dc433b25d239097749368b755d027d048147b0d3ec"
+      ],
+      "current_sha256": "00bab42848488a56798ddc56801aa7dd0193ebe27b1d45242d93be42129a2397",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/handler/dto/settings.go",
+      "state": "present",
+      "prior_sha256s": [
+        "af459a05fe9df520f405aa4b698ce2dac32ecb3ade96ac3413a8bc49c78ca113"
+      ],
+      "current_sha256": "fb939f6fde7562b7b4e7bdb63fb780dfd06d9a6c50b99d6cec456665cba613d3",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/handler/gateway_handler.go",
+      "state": "present",
+      "prior_sha256s": [
+        "0875e6a08e1819172f487c93f52932e9d53a0e232e7e1203302f0724394377a2",
+        "672c3fe54d16645053ca9553724c7a35af0255dff75bc003fb20a08b21ac0092",
+        "8c4090270bc2b038cef630c95eb9cf4f96c69fa4162a8eb0f6594151532b110a"
+      ],
+      "current_sha256": "7808c3aeef6f0715292120f76be27bb2bfa946cf212ba94405bf4281722504e3",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/handler/openai_gateway_handler.go",
+      "state": "present",
+      "prior_sha256s": [
+        "226800bec6331094a49d36d6150cfe3fe31424c566d1c204b162d0baba7729e5",
+        "268eb5fc6b126320167bb349ac5d38c915338a474512ca946a275e1daa3ed184",
+        "eaf943a49c3838be83efe4c26dd88e6bb3cdbe34e8c6c459ddf6cbccb9c8d8cf",
+        "fcb44519ab1cf9382d9f1b1f456b64d07f613fa8fd3611db722524f7fb5f977d"
+      ],
+      "current_sha256": "e04a4a304b17b67442e77f3b32d38b477970e2656200ff189a46dc8e2ad450a6",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/business_binding_ast_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "36ae53307172f39e46ffb4df1579accc85d123c112783ee63a715ace73ffdc72"
+      ],
+      "current_sha256": "d2c96e8adeb9a2e3310a5c05d029b711a963632249dcac8ec04ab2c824f21f4d",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/catalog.go",
+      "state": "present",
+      "prior_sha256s": [
+        "2fd850d01e40185b3f94b332a1b0ec287bb6797dc96da72c778105587a3248c5",
+        "71073b0d0f526e812effdab2f5804395df5ad7e7cc0c476428d5e4bed3b2f6e9",
+        "76546d3289a8cc9fc837b6722cfc7bdc4adee2c5cf653a401075c372f84bac01",
+        "fa7ff398724c7bf875229a1d4d077187a5c9a21a5a9079eee9ba3a33823b1386"
+      ],
+      "current_sha256": "d89df8806f8625c5fdae2720f6fb968c008eb3b541e574677d8d3966c0eb1a8e",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/catalog_generic_bind_retirement_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "5c17bbabe3d214ae2d64e00def97e7f69b1033052cf4a8b2f1a76788311a5c46"
+      ],
+      "current_sha256": "50942dcc21efef1cb808b7ab3ae13d5768b04f07c71282732f8fb0ac1e688d0e",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/catalog_retirements_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "214a2a7d63c241a9380fa60ea5f6e252e5e8d0f7820459534185251c073a9a4e",
+        "2f597cac545897f1f33bd99db52dd877d2b790e9c72602f7d3976284a994aa35",
+        "4c87fe2d74d780911b570b5a18127e9ed9c82b356c3f7a55a4e981c554f93913",
+        "598fcad7db865ea09b74c0690078053bc84f89d2d210b85a26382fb149414afd",
+        "de6b85f943953917d9c61804da10ddc1105dc3b9c9dffecfebf2d217b43c9ba8",
+        "ebb7e1a9314f1ce50983631d201ba7777cfd525d346bce8fe6c9e495313b61f0"
+      ],
+      "current_sha256": "c3e6e3261b7658e5da04953a1b7edf41ccc57a70478a5852902a34f08377503a",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/claude/production/claude-code-2.1.226-fw-h-approval.json",
+      "state": "present",
+      "prior_sha256s": [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "current_sha256": "73e690d20fdb36688d70247d4c857f6aa31ebfc6dcd755fbbcc8276e37d74f1a",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/claude/production/claude-code-2.1.226-fw-h-legacy-retirement-approval.json",
+      "state": "present",
+      "prior_sha256s": [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "current_sha256": "1d002a2708b198256098999932908d47f0eb90a2c819f11d8393570f33996c2c",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/claude/profiles/2.1.226/e02a3af6fa56cf09b6525d884c9de3f7b76ffe84eb000d92606681b0085b9ab5.json",
+      "state": "present",
+      "prior_sha256s": [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "current_sha256": "e02a3af6fa56cf09b6525d884c9de3f7b76ffe84eb000d92606681b0085b9ab5",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/claude/release-catalog.json",
+      "state": "present",
+      "prior_sha256s": [
+        "3f47ee0d89a13478bcce121b956c8e3554685cbffeb47530080684654a1e0fa7"
+      ],
+      "current_sha256": "40ae64a9b08cfea0d4a1c2b25993c31f0322a2edd0b4583bce3a4bbaeb6b4bb9",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/claude/wire/2.1.226/07dbb15e8a621c4ef4922a9dec09e08d032fd649414f7d2f572c95c87b5679a7.json",
+      "state": "present",
+      "prior_sha256s": [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "current_sha256": "07dbb15e8a621c4ef4922a9dec09e08d032fd649414f7d2f572c95c87b5679a7",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/claude/wire/2.1.226/a7d2c91fc5c4b43bd49f93b60d0d681e487db0e1cdb25d3096e703cb85587c4d.json",
+      "state": "present",
+      "prior_sha256s": [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "current_sha256": "a7d2c91fc5c4b43bd49f93b60d0d681e487db0e1cdb25d3096e703cb85587c4d",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/release-catalog.json",
+      "state": "present",
+      "prior_sha256s": [
+        "4a8cf2712f2558f3b0bdb151e781054f141b5632309865a54cdeee4a1326ede6"
+      ],
+      "current_sha256": "aa2ad86b83c1be055e7986dfbc48e99168c62a8064b677a7a7e13e62002f44dc",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/changeset3_post_identity_authority_final_wire_frozen_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "6128c91dd54036c607ed2c01dc4c79ed3dd3fea4fe8aa876349dc0e06f1b70af",
+        "9a8de9628ea90e00376628a1e37319d839ec35ff55388eedf3ac52cedd12cf5c",
+        "a330fcd6bba7206c5d50a6e008a445528084ed24d79fbb4a8a2498527ead7a23",
+        "a6cdaee6b58bd40a18091c794b43576fad3fbcf4ad3d823cc01916d6eae75c42"
+      ],
+      "current_sha256": "220257702059379d9f7a767719ed397d8f0ea669b88835ef3c994bd654f3e63b",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_body.go",
+      "state": "present",
+      "prior_sha256s": [
+        "0bbd57f2f656f1fb6a7ebb02031466d99f87a2775c44eb3aaee9af1a9b41cff9",
+        "0dad456982d4135eb9a4e71cf20c8f13e117dcd6f92f9e6e96f80e253378406c",
+        "6877123a881ba1ade19f51120d39d77f12f878b99ba5d4cb7c5603a8711b7823",
+        "736f35a4a0258591fdd700979f1da0ee6c29373d6006bd31501bf1ee4647e102",
+        "a3e4264c9f8a5bccec8de19e259dc2d20950be1616da3d0f818bd00b6aa6f09e",
+        "a4559ce277a1bf1c8c554ab42fd70695d141a8ab64f16b28afde1de8b1329c50",
+        "ba45723ed345a30cbd358ea9d0c23fe065df410a921fc3c69aa3eb6d5dd846b7",
+        "c01884b217daf3cb3a8d19a63cbb7b41fb8505f80e5cdd316f4e548a161e085e",
+        "cb97480760bb7f9eb7a664ce7a4eb1b1f0717f412e6b6ba5e9b676eb588f9a9d",
+        "f5630f1a1907d54eb8b5f5dfff111e55a7a6c07fcb18779856f17844e0939f3a"
+      ],
+      "current_sha256": "3d90294dfe5f45b61a98eca44816209035548706258f55b287c4e05d850ea242",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_candidate_catalog.go",
+      "state": "present",
+      "prior_sha256s": [
+        "4266bcce5a0f93013a52dc56e0d3e58a708ab9a84473374d4c71bf15b7a98c46",
+        "4fee5d9c1bdad14a94159b77776cea4a27d7c015834013469a24c13f96483053",
+        "c37324eeb697fa1ff7a33d273eeb7d50dd5c50f8c96d54868944500e232dd4b1",
+        "c79cd932e64cdfdabb8641ecfcf4353498713a1e60811456ccdd8240a8c724fc"
+      ],
+      "current_sha256": "683d7c86827738dc11b887285ce457ef0408bedd40396852d73c34e112eefdd8",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_canonical.go",
+      "state": "present",
+      "prior_sha256s": [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "current_sha256": "237782c0906802206bd7ce106f0189677242cb9117f191d38ff1af6557f8547c",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_canonical_runtime_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "current_sha256": "27872d1657b84c4f7bacd5cbb6933384b3cdca9ae69464ba461905b05660de6d",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_desktop_third_party_ingress_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "2722eccfe15338cd08574fa5224716e14de49834b904245d795e5c0254db4b07",
+        "6d29f1e04f30eaa7201a108c622419ff46f16f8104634cdaed7b94d4255cb66a",
+        "a52518c9c6f86519616e600bf1bbd50034352c442bbdd436c6f83b0993fc15e6",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "current_sha256": "b0cdb15ab246d43b87254936cd209186aa74411bce59d12dc7ff7c857533b6ac",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_desktop_title_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "4ce5ff6d1efb55c37cf1337c81a877a31144bab599d674a4d723e28255b52424",
+        "b3868aca8e19c51655107fa3fed9bff41b9cf4e22d94b556d0711242cb46fe3b",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "e41217b2e018b5be9587bb2fd0359a2c2ab0ed289de99771069b2739d5a5c772"
+      ],
+      "current_sha256": "dcf168016ab982ddb4afc2e37aad533489691c3ed4f3a6abb8636fab45307da7",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_alias_route_transition_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "368e08ed053cd26e0e8aecdf35e25aecf19527298dad2efffdf55c6794eb0136",
+        "7357b32caa9c130f814a096da9c7c9b3b0f2186ae7a13efaa1498d3e77cddd96",
+        "c6131b2219f90734d76d7d15d721dc03806bfe1bbadb7c16678358f8da62c454"
+      ],
+      "current_sha256": "117cb66c68507725dd5453001929320c55e4fc91d9ce99d4e8569168dde0d25a",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_count_tokens_transition_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "1fb21b1fc703d2c9556b3294db34c890cc0f44e8b9d11f46ba00f99ad8fa09bb",
+        "4b80b0cab9049cf049f3b89ac4c1b73fd825a4a9dbcd09cbf7fb1eb79a76f78b",
+        "54f6edd4e75ed4a328f6c6287b7083dd2277a70132db62b4e4f34561f05ade73",
+        "9e06356d182463d32b4a4174fa9735c0bafbae13d3a313c03fa1d0edb38037c0",
+        "f41daefd336de111ce763fbbb8e39588a0b021d754748ebaa0fe9ddd3d4156d0"
+      ],
+      "current_sha256": "727edb976973cfa22dfb50a9e5600d20dc9632d204d8999677f84467311f3835",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_desktop_compat_transition_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "1a307102cd7481d2563406d503506795142786201d7ad2955e53060f0c3b6a87",
+        "cfd057f1ca1bf49e2fbbeaf99fb9e0851c63500ea516c037172ffe1f65121bdc",
+        "ddbd623140801d4eb7b5c7fc7dc61a36d85948b213d192d34b286df1bd5a63fb",
+        "fd372d711d0139ad5c3571a245bc200a6d064e1e5030f823153f1a76ae2bbbdc"
+      ],
+      "current_sha256": "2d01ee381e0ca3906774624d687d34b0a80fc3f3879211aeb76060d23df0f93a",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_desktop_ingress_transition_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "5fcd0654f0adeb2a5ae2bd5c3b19fb04590a5c4e6564830e8132293d49640f58",
+        "c4e0ad688fd4e528751b39e8c7689db2941bf60ffb391e5d1bdd1c42a2d98574"
+      ],
+      "current_sha256": "49d90536c3bdc085d8b068dce9fe203e753b2498478e1f816042dce58fae3fb4",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_desktop_title_transition_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "4916d31469ac694b3b6c957551b474adb2206da2db361a3b74bb6dc91931afdb",
+        "55f9b903bc692002529658b9ad3c181ae2bdcf71a12e8aba50e992b538854270"
+      ],
+      "current_sha256": "4f5029b0177ecb1f5c29854c6b63eaf586de1428d089973862fdc66ab5332500",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_fable_desktop_title_transition_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "b285b2a9b2c595fb1b8f25bd070f0691f8c5bad83fb08de46150c3cd7a3fb64f",
+        "f3be18f80ae5062c54d3240aa04ac1401a4ad61a0beef6188bb8528485b05b34"
+      ],
+      "current_sha256": "9670be7c4f9a2e32ef6fdd2b161bd5b9aa66f3bbe498966448d10b7e8bbb7f78",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_ingress_authority_transition_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "63b4c343f64f5d27a7c6ce31b7cc40e7a1dc27717b84bf344e22c35a9db7969d",
+        "b019f3c8c0cabd94a38b72780ec874e696e123736c3d039420b337e78ead3166"
+      ],
+      "current_sha256": "a69a1b9605940b384787ddadd72b8f226394d97991a857aac3f890c0d4bd0b7a",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_model_capability_transition_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "164fe08eae7c12d747ac9c69787ec085085a9e5d00ae1e89b104b90c874015ff",
+        "21cf6f30608d2347dff283a115ab13d18b0d97a919b1eaf8d5c454fd73afd639",
+        "3afebe6c7acef452989795a87fa6750f80052d7579562b379be13ac8f15746c1",
+        "5a5c77ed966303808b9508f407e00635914b5cbd7fdd297f54e95f842c1a2359",
+        "9173c5b7ed29798ceb5728679a7a795b0b5edeb2b65ce3186e1fc0d5aa05f969",
+        "b50789d84bda42d17f15eb6c4f1e0e2b041bb40ccd793a3d400997e9323d8c89",
+        "ee8a989a4c81b055a5df58c5e0789de709f92d95995af60fc8f795fa9401f514",
+        "f9eda892c3f9baac614137e0eda865a810946db0137a9b1818d55f4b5034d158"
+      ],
+      "current_sha256": "0c8ddd5eeddd4239a342f19862cb78b224be8927660717dd07483e395c2fd3b5",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_query_fail_close_transition_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "1f554a5eeaf13c044ea11dc29768fedf42ba28c5a705d635c98df768010bfa32",
+        "ce4157ca50bc939e4e690f0b51c9c1d2e9cdaa6f3490112a7e5a4905b35805c9",
+        "d261488f8aee7b9833adf7723d110bfcba7e76cee66ce7abf700b3680ae9b428"
+      ],
+      "current_sha256": "b0d550d26245a3725b15a8d1c1c5799303ec9db37a66ab6e99c1b1f967abf673",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_source_transition_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "0a1d42ad025bc8bbc1e49351c295b5c887a02e0af7d5c4f57af3ac2ca2b921d2",
+        "68d3fc2c9544b690b5590bac7632c0a23913cf265cefc3e2ebbc9b9ca0cde5e3",
+        "e943503961ebaf1e890410fcd61a8745f205b09668b9b807d5d7ec5404961fae",
+        "fbef8a45a7e4c1d9940926d24e6caba1785591399e61f4c0a3255c88d3cdf118"
+      ],
+      "current_sha256": "c404a18b6b64940230ff4d2d54a24084c009e0f26909e40c2416253f9cd5935c",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_support_envelope_transition_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "b13c848eeb8e7a7ded6a056650ad5e7ba8389765ed52686a59a2a17592c7edb0",
+        "b878caf77318a4fb12177d2a7f6001f0432e768235ec5c439ae72eb3d77a2bfb"
+      ],
+      "current_sha256": "6a6c139c60d546fbc0c36c16114dfeccd2b6bdfb2b8d2c9423f79d82b0c98f20",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_test_transition_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "f89db4513f2d7646fc3ddc7acd6a75eae943024869ceddc14c9359e39162badf"
+      ],
+      "current_sha256": "4d1188d3e5c3f77673fef6986fb362a37662e8cac980458cb94c20a7e2f4ae50",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_thinking_display_transition_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "108a1cee07325d3f63e56b0c7578cb0a3031ca05a810d7a7f4ff2bc4bff28db2",
+        "323824fc35067cc4ba139433e7c2702ac92ce01efa2b5dafe3615826e62f715e",
+        "dd1e6794ffd732105880683377c09a4351b5895dd740d8be481bf647c852540f",
+        "e3abae6d0a1ff445adb531618653b8f0c84e53de7c07705531ee8cfaf5719bd6"
+      ],
+      "current_sha256": "d8829060e2243fe27d44e9e2c42b3cc29423099026bef506db3184c5ad1a9d01",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_three_model_acceptance_attempt_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "01214b1308aef7fc3f815a9d6900f9c393f3ccb022446eda838ef3e8576e8baa"
+      ],
+      "current_sha256": "a472c11cb291aea970574ff7d999b46ff999d3f51fec0c76416223eaa4e84ed0",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_three_model_acceptance_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "1fbdfdfd8b8a6490ea0e0ad225991dadc2ba846edcb987379b24bac3f731aaa9",
+        "b13ce331c4786276cea558f6952ca59da8a8f017c5e7dcb50e0637ab716985b7"
+      ],
+      "current_sha256": "46021d23d900c88a97511f5bf936d9b712a7cd088ab41ce1a36352dbd1169ad2",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_h_bare_chat_route_transition_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "2a70431b45bf8693f0e7e6204e4e67ef3ce7dd74b7e6940a171adec557c40f3f",
+        "325dc948c57dd0e3a121b20ff7cadac118ec8e9e602a8d270d035803f077f054"
+      ],
+      "current_sha256": "26b273a77f860907a6b4287cb895fdd02ee0ea4ff24ec8756dd090327b9ea5a0",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_h_fable_declared_fallback_transition_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "5087dba4128969fa9704baa8e6dcec0eea9320444feb090b889cd2760458144c",
+        "5df62a666d47ab93b86bb6bc0d90fd526ec669b3fc57ef8a1222e45ff74e6920",
+        "cc85b844d43b371027b9c20a0e2b7b5766e7e0ba4fb075c5ddb88f18f7da1415"
+      ],
+      "current_sha256": "0bcdc32facae66708a3eb1c4503cef163799e134bf612ad720d4fd07d94973ae",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_h_legacy_retirement_transition_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "02953064979285ed9cfb302c076f018b295ece14547f189ce9f436e0d4549e8a",
+        "284d94c43ce4e2742796026484c3b93e2251b9aa156fdb51cc32b71e6b5be01c",
+        "63cbd59d9fb97d71531f32fef80e720ff192747fe42e7e1e12fd4cab79fd8c73",
+        "6882ec3399ad4bcdcf11728847e314f69f4308f1f632139705f901d3395735e2",
+        "6f608a1c2e05b25ee06f50dea3f8a174a38f50126a7541dadaee50da5704c752",
+        "cf1695ce7eb3dcd50d982fd54d6d8aa42d0d3e5424ca7c1522622d7dc78e2b9a",
+        "fabaf5cf55fdb973b07015a9b4baf2ecc1b3258d9e108a83fd124eea36aa815f"
+      ],
+      "current_sha256": "ab7d3f3749821d093ecb7412279bce87139fa140820a709ceebe6d63613e53a4",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_h_production_acceptance_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "79d9ec88b1e38bd74d4dbfe804fb30672a319df14eb89fe2637ebb9aa1ae1c14",
+        "8fe26ba5f79bff41166cbf9a6c20608dfacf0c03cebdf82daba24f3b6d9ce2a6",
+        "d83fa8c31b3ffedeb13cdf0b5eb6e54d7eda1938faa52355065be59c105537c5",
+        "e90d991ac119f71ae9cd4131c4303ad5f91ab427e9642b5da9273d2f00fb69b2"
+      ],
+      "current_sha256": "8156647f0919e4d518d3d88a2aecd996107ea16653da424bdd4d054f1a5d3942",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_h_production_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "b1bdedffc56a9b01918c75b88f148a6cbf35f7f37aaaee0b636f97005adad6ef",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "f727f409093630317644f37d0d5850f3166440ad9b69bd55dca8592d5de91d12"
+      ],
+      "current_sha256": "f5b918c2f24106188c9db41d040083b610250b0375c9ca4a0463a9db0660e57d",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_h_response_request_id_acceptance_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "ede7dba75c3eede800c0bf6c4726c3b8bb692f26b11b71379344bb36818e3b72"
+      ],
+      "current_sha256": "10118799f26772d77195dbbbd661c6780e02a772b9b3a27b29fdb6db54025770",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_h_response_request_id_transition_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "269de6a65a406795a81b685817807a8357ff304543370f14a7f01dd300564d8d",
+        "9532aced4283cd1b2c496ff73e42a0681606243d602a8fa50043419ef3f85e3e"
+      ],
+      "current_sha256": "9e7386d825f9c8552d10dc25c417f4d57cb70335d2eaf0368948fa9a5ffe50c2",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_h_source_transition_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "092c202b754038c012351d60cd0eea8efa1d26a8669b690a95a6f3b8fd95a380",
+        "87cb831e452973be7d42f99144ea97efbc03fd06fd2fe1ba3841f0c2662b78c4",
+        "a1ff79a9197ce1252856fa8829e17971e0d6061a060e7d006d66a257ba5ae8cb",
+        "abe5c12961a4b887f2390425a17f52ef5af0247ceac3657e2b76c883ef220954",
+        "bee369a73147fdeefb706a8d76a087a3628188a7289ee41bc2bce45902aa4337",
+        "d21ab94266805733e2037ed84a9d4dc3b069e955acacccc1d55c740d18657110",
+        "f0fb7bc7b99f8500d43785f85d4cb9033aa1be6674caa315e11a9f4c95dfa79c"
+      ],
+      "current_sha256": "d3f3c5011c03cc5915cfbf4b5c5c55bcbf7671646a220ef707cef946e68faf4f",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_h_state_durability_transition_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "31650f20d7ddd4123e47d6dce019feeb8a5247b91a80bbc65c739a6be19cd835",
+        "53b4b5793d2f89ecb62885ce0a3df9fd886f5e0526a03d03409f93d3b5ef3d7c",
+        "9cfa422ffb55dd8ea9686dd69aae2e7f8812ecba87fbeb05878759f4c41c0e21",
+        "d20039c45eb1370ff645ba6fca687d9acd9d05a17750a24b70daa313b15c4897"
+      ],
+      "current_sha256": "ef1f8d7261463a9ea63d4c5de245b3b8ea561673503bb2903f6d4d29a607ee35",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_h_third_party_strict_transition_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "211e46cfcfba1ea8adfee204508137b9cac3606952ade41db8d705cec85acbe2",
+        "41b008bf91253989594415e1dd09c312b53c233be115591b196b36d83afc2083",
+        "56fd975b4ec9f7340a0dcd2045455a49eb23dc4cb1b6dab39e6c4f845fa28ecc",
+        "92918c371b2d61f0fbcbc3c7288ecec0a087aa60f39d330d0042df3cc1d5b573",
+        "ee6641a431be5e31c98a3d623a75007e2dcc44038fe8b6c46031af941932c7ff"
+      ],
+      "current_sha256": "6905a38ee23b21076dd4f3d90fdfb9cfd93eaa94a49e68df5b8b4bbc5ea16ecb",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_identity.go",
+      "state": "present",
+      "prior_sha256s": [
+        "070b3bd60f7a2cafa3e301e332c01d09f9da373574210da3f7ba7f543409da24"
+      ],
+      "current_sha256": "a810459b5780879d0ba06dd8d6acde4e8baff0ff4182f52e7fdb70864b7149d9",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_implementation_coverage_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "07852cf3bbf1cd939ce592edbc56c7709acf1e176b2cada2aee1dd2c93e9ae56",
+        "8795b7d152ac2a3f810369ce58200e38adc3163f3cd631ab6a2c36afe8e8387b",
+        "9d576d5bf33f200dc733ba0db124a1faabc11d91ed5501cd65e526f098148979",
+        "e14e1ee23f5357888af66805c869b6abfbdde5662c905104597a8d9620b0bf37"
+      ],
+      "current_sha256": "43a1adb9d5d9e6643d733cde1f913878b831e1886eed47fbdd9554d4d9f7ca32",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_ingress.go",
+      "state": "present",
+      "prior_sha256s": [
+        "0920335717e3d646bc4d54bda997ea8c81a23bd3fd056d6258b442824abd0204",
+        "13e1c1947ac4b46d44764ee1f409655dcb42e147f71b053144747f2a32736aaf",
+        "18fa37164205d0016107090c91e5a02278ed2bcb5bed8804fb2bab16209dd444",
+        "27abd1e5c54bb4a980eaf00e744c6507bacb4da0bbf4eaead7e4329b2ebef6e8",
+        "555ccc6fa3ea80d17ce5a2a2f50bf12a7534373d461610abdffbdfb207e1d4ad",
+        "aac2e5e9326cb97a14f0b0bcf81505418a54bc233bef85f14099d68d5ae6f57e",
+        "d7f2b39481e4da26f175a516e638887bdda07af6fa7b49f9000046413e5d0f92",
+        "d999c542e0bcb582beab24a3d3c46dd0759ffe6608716f05b708bdee86a33d98",
+        "eec9e4c32e1d53f2e470cd5d3e86405e78d15370227597757ea1ed18521143fd"
+      ],
+      "current_sha256": "5758ec909629b8832f2a8a44279ae554c4f6f553a3a78b8bdacfff8463aa99fc",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_official_client_only_transition_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "8e8fdcee9f00d586a1b04eb91aee8b974078b56da83f2fb860574a097b0c33c5",
+        "cadf9ee72387d1b938dcc845b71127f74d22680a8bc4a4149cc5eb9a8b80a746"
+      ],
+      "current_sha256": "9fadd328ac7823c558e858f376d4f5d53ee6eeb8c56fd5ae72f9d49b27101520",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_offline_release_repair_transition_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "56e083ea4e3e4962a5b9474c7354ee242a503e92c795ab7fc21dbd583afb0329",
+        "be8fc931c1e20a8a061ab1f9275b7fe9e8dff92973f5884d9568684ec9af1568"
+      ],
+      "current_sha256": "5b8c34d1b412434d5af10adf614397a1ba8a1700f39c25bda02506d4cffd29d3",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_persona_release_catalog_deployment_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "5ea261bf182d8e8c842662004259c65d05ee910beaf75855c1a3f12003bd0ba6"
+      ],
+      "current_sha256": "1041e563ffa71973e6d3fa3c5796bceefcf6e5332105a274699fa954bbf3c6ab",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_persona_release_catalog_transition_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "225ce22881c654e193ad095d424446c0c23bda3dfdf4c765a4726f0c9c9b2e4d",
+        "31fed94b6c57d65dd785d08fe525b66bdcda971d343f5e2b20cadca1f53dd463",
+        "5a5a60ad47ed0ccf35c02507b52a5050e82cb0c40b2cef1af3f64be27a2dc255",
+        "6446c7890abe5fb3063696bcac131961dc226a1ffffb44997fe7bb9d54cc6b5d"
+      ],
+      "current_sha256": "356c481f6add4afff14871da01b66c1876a95d02ec4cdb0718ddaa6c8fa65d54",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_production_release.go",
+      "state": "present",
+      "prior_sha256s": [
+        "4d43c714585fb8035f62d439bfb2f81092b2c6c9bc74dd7708d3cdbb45aa8af8",
+        "62354107b3ab97eb9174e7f9a427966a3f0bfaab47626467a79e9603b8effdf0",
+        "694c0b039add9d47793c8ac777d7529f6eb9014e436e0ad30f268e23061619cf",
+        "989e86699caf844fd62baebc40641978fdb975443f4857a695fdc428070f07f8",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "current_sha256": "48e926a45cb0a4408ac6489529b9426d26d92ba88cefa697dd1b4c8c28fd33d0",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_profile.go",
+      "state": "present",
+      "prior_sha256s": [
+        "6c347093c3b722b6b9339fc9f497b279f5d9839d6dc99212313933fe0b5756b1",
+        "a3d404cd9501808252ca689d1965cc63d9b4bd1d9f35a5558260c58ec1a7a5bb"
+      ],
+      "current_sha256": "226a2e2ac54e6af750d14c59963ac574b3542c67c9e3370ed1c22737aea8f565",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_profile_contract_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "39aeb0c31042e8e1aab4eadc308b6d47acba76d345c768cdae4619ecb0672236"
+      ],
+      "current_sha256": "5ea5f2c923a659b3122f3188a72878788012bc0d11cd9a8a76c07f521b1dfc6d",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_runtime.go",
+      "state": "present",
+      "prior_sha256s": [
+        "081b75a2420d4e7ad7a3a9e976e6f6928050708e73b57effcb5b20b63e5a79ac",
+        "22c631761c28a142c70f064debe2c386517471b2e7b585acdf3bdb9063af9a54",
+        "2730de466f960db35021198d83d9a1cf284fded42235ec927c204f5f464d003f",
+        "3aa827f35ae49bd43af4f11f8c968790eb2e482b6b25662bdd8b1bbecb320310",
+        "5942bfd60b41f55ddaf923c97464ea6746d7579b52fb5bdc6ea5dbf42e66fc00",
+        "5b24eec2cedd2cdd44e9045933261b62dfac2f5d9cc64d6c057ff0024af9167c",
+        "607fea56eb0e5791d5df6e61e4cb2d903c4384e9f0520b988b8f21f0f6ea9719",
+        "6b018039f988c30b1d1e5e6b3d468d005cee285c05ff4a07aa07e2e246825c71",
+        "800439f1551d295528a2c137b8c00df6c23b69eaa260c7a20017c12d399e19ae",
+        "c8c764873aaf615a2256a0bac2b2875db1db00e8d6c7d9a7deb52bd478801f5b",
+        "fa171c89e08be0a576d1e716da2c7780155699b685d705ce694bdcae618efa5f"
+      ],
+      "current_sha256": "775ec7883f5a664ff43b86fc554e43dd185aeb56e55d097a1215aeaf4223fb81",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_runtime_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "04f00c443f15f779334d35426c6e807c73f87501b4a5625dfc0b29e773d0e06b",
+        "095e904de351a7fb202b4c656bec90e77215c4f9c1e1fddfaaff2cc0f1973e56",
+        "0b6937795cceea8a2ad8d157e376a717d2230710890d991385a8ab5f6ef268b7",
+        "1ee2703a674a38d9ce09010fe0716a4feb3776c50c92edf78a1d1850eec49314",
+        "213517afb5236008d1c75b189584833120b15785bce7e9e5afbd8b28052abf49",
+        "2427ef52e7bd52a6667c0ec1c67549a5f92a77fd8a827b5e3f0a2e98dda5b750",
+        "b2d983d68c5c06f025831407d2d36ec5fb96b80a9030bfa1f93e44d146495352",
+        "be9d07c8a9799b5bda8608c457163f5ba433e82053c800a4d012a856ed9c7a27",
+        "eb8945aec040a5c7107b86138bac48aac467d19fdf453a6105770e46132d8e48",
+        "efb839ff28e27b29fa16902ad90e9975f43d7272bc349963177c19cf1829cbef",
+        "f695cba17c1f3d2de882b1b6e43e47367e8cc9ed35e1b80e4789f677050a05c4"
+      ],
+      "current_sha256": "d5a9aaffe0d1788140dedceb96e8fb6cd69dd7589e80a47fb3f0166c6a7b1e09",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_state_store.go",
+      "state": "present",
+      "prior_sha256s": [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "current_sha256": "1dc820b0a88fde3e67467856e7e4360547b86292bace7fc146563dc992f3ca91",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_state_store_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "current_sha256": "754032288f20f3dcbec99b3f1b34ea0c66d418e64b96c17d0b1d9e9457a0c330",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_tools.go",
+      "state": "present",
+      "prior_sha256s": [
+        "7de86c22025f1752ab24dc4937cd40f4ff198583bd80b36091ef4e5bed29cc6f",
+        "b31599b9552aed54e9f4380951ae0403a25da0af376e13027f39d4f3fd76806e",
+        "b700b2e054bb010f95940bcd94d6c4e1ca5c0a59b5ecf3dfb3fd8fc876f1abdd",
+        "e49b12302ff469ec5d446f9d184466a25c65c8b7b3e1db8cf793b1bfc63d7b79"
+      ],
+      "current_sha256": "696dfd1406fc5584d50d7159a02ce58b3edc9f97378a26c97dddb87964df8526",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_wire.go",
+      "state": "present",
+      "prior_sha256s": [
+        "16908550c92c8fad1213b755998109585846951c49987f16d612f16e2bc25f95",
+        "6ad92f4c74b7368270d63a39c693a1329f5db1f9472dc061d64bd7fca4c3839d",
+        "9558669b8f9c546116d1942424405d18e9a665b1fd6967e77c35ba4cb6fa14d8"
+      ],
+      "current_sha256": "a0dfb3106949e2f7d7541c13094d77f93a0cbdab7f54522e55c0af405f4a6e99",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/compiler.go",
+      "state": "present",
+      "prior_sha256s": [
+        "187016839c67c7f7f9280dcb70e29b6ad028371e56b422d3b110bf886ca3a008",
+        "2001cec3e3602c909f1aaae1f104dc09a4e38c8272980e1ecba54b03147ef3bf",
+        "2a8140afc8899259665daf77676cf8c52c9b94f488b18da0e2b1d99d1dc34391",
+        "5e5ec6589b0576dcc8b682a8afdf558ab1580596786cde1829704c17b02021b5",
+        "8811a148de994c59640255ccb764e29e4026799aa38e4758f317c86ecf46d2b3",
+        "a13b3f8bc3796857ae77899a858b253dba00af5519e9bb0df3d5bb457222531e",
+        "a46b59cfc7ca0d9d9ab7fdc51c3dcded379d62c922a10950bd4ce7053ae4ba6b"
+      ],
+      "current_sha256": "6f8bbc3cfdfb641d646e4068d4d014a81c7a4d147ac2e07c351ba36ee3447b49",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/composite_model_protocol_source_transition_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "03efafa7dc01ffc5d54158e67a5abbe735a85574e6f924a55b0389f248b50a00",
+        "acec3b25982aabb63eeaf759092f6039e306995ba25d9d2a8ad0fdb04a9bd773"
+      ],
+      "current_sha256": "fbc7c2149738b1af6e22eea35504d7f535e6173f3f4cc79318bb9c74105a51ed",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/executor.go",
+      "state": "present",
+      "prior_sha256s": [
+        "12f38cb9eb0559192cef98640826a1d173663747ed72116f5f0607bca6b062a1",
+        "4678f9442d123d5ddcdd3d0382a33683d484ec44e781f9f0b1fccc437e539c6d",
+        "46aed2e3793eb9d03699d201e50ddc33c677b8fa8365754efe8571b5a16d9f5d",
+        "b72f0e5af60b689ec7817ea1381d464d980de7162ce1721e88ba7995f2e7fbe3",
+        "c09ba8acf44a45f4f2f5513f7a7a7d6587918d078f821b66f5e2920670421479",
+        "da58f780ef00229599759f2be35307bf4a3305f332fa30834f6675c8e9f5aa6b",
+        "f60ef1232f2e2cc2be681a44e89cc42ba4e16821610ce7caaa0191bfedc47362"
+      ],
+      "current_sha256": "f4e08ab3e4a9d4be9102b0ece09dc83e285f456c3222f2f5bfdefa03691e5b42",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/executor_one_shot_retirement_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "2dec8cd717b38d06b3659538c9863858dd6da9d4a4da602d1ed5d92c7553a566",
+        "4fcdaa8fca4efd325185785ee3c76d9c5261b230634a4292ffce9af856db89de",
+        "7b722ff74ef32666d55da468313e72544f8f1489f9dcfbb6b1816b8553c66c65",
+        "84dfe4a0d9ea5fd77386cc529ded3dac8f4bac1b4567654eb5595e951720a247",
+        "e33ced5ce2af781f820351aed082873b907acf5d5ccc7429d023bd078eda611c",
+        "fbb8979a634e6674867147538c12ea2bb81cdb6fc9a8964ebe685395bc03f281"
+      ],
+      "current_sha256": "ac7853d4405664730c7991b8451707cdaf68cb8bf7ad6dd243529d199f270dae",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/fw_e_observation_source_transition_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "1220cb3e80454304720c8bb4763fe4454926261a75304a05c2bd25e2857e7bd5",
+        "46e0442369a36a869ac0d6243bf3f7e5213736d8789fb9f21e4ca50726b9b113",
+        "8009c8dae09ef8863bf1d65917b5690d77cf5d85f8b4bf25d6bee6e89f22b15f"
+      ],
+      "current_sha256": "2d15e35e00d03c1e5f9c4c9b0cbaf21a35bb9daebf0900d848de8a01e31c2307",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/ingress_adapter.go",
+      "state": "present",
+      "prior_sha256s": [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "current_sha256": "9de40f015a0da3f11c23030fefe829ee7b50f9506f70fb1d20059defd49a4176",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/ingress_adapter_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "current_sha256": "6ddd22d28fbb1badcc9cff2c0abf7f4f9274799ba798f548f7bac36226a36e89",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/legacy_baseline_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "61410d1c8b977e84897ea1ab82c7c10783f97ac42b353d49021acd1d134503a5",
+        "975cfdfc067d7de91119a3245be196c85142bed979f5e2ad85bcd0701ac65ff0"
+      ],
+      "current_sha256": "c48fe0b50e07440df283d52e0be27198873a29ae1b86e734f319d79fdfafa78a",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/legacy_observation_catalog.go",
+      "state": "present",
+      "prior_sha256s": [
+        "3eb6057b791c48b96b1a65fb227393a071f8ef7ce1647296a942d76e2f986c9a"
+      ],
+      "current_sha256": "df4d148dde9ed0c1ddad2e22151beb4e2b7b23e73e05a894bb7468eadb3c8f43",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/legacy_observation_catalog_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "004aa45793d80179f1bdbb9f28215551fb3c0fda408c3a0fad149db564fd44a5"
+      ],
+      "current_sha256": "87e0a5d704231978a29acb84f0d8ad58dfcfe4bce3ee625cbdddcbb0f14f36c1",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/officialegress_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "3865e9bd04be5586fac2df84dc6bbedaffd6a218f22a9256cdef4b701d52116a",
+        "707870d88e067f80ed154844b5182a0007db47752bc33377a40676d4ea0c8828",
+        "a95e37891da572d87f1891025cd9e220411b561f777811c034379afcbb2e5fc6",
+        "fbaec88f03131e2233ff6042874114932fbacf2bb92e2c92f7a72b5c7a850658"
+      ],
+      "current_sha256": "10b5015bbb0a0fcf4568c238937663f5b3e14e81d500697ab72eeca242afa877",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/persona_registry.go",
+      "state": "present",
+      "prior_sha256s": [
+        "26588c1082027471ceb43f00b4e3410f47ae7d6a9373cd7e10f8d0edd803ead3"
+      ],
+      "current_sha256": "2b76ce43a45b66bafec272fb9a1627fc10eb16ccdce3a556879789fc56742da7",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/persona_release_catalog.go",
+      "state": "present",
+      "prior_sha256s": [
+        "8ae5bda53df10b5a8b876dd5f3f4ca6e604fd3322b44edd9120b6243a94386c2"
+      ],
+      "current_sha256": "ffc92d65a183b1f78097efe9f37f95e9b3d7e60808677be4ff95cc0f39e7577e",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/route_catalog.go",
+      "state": "present",
+      "prior_sha256s": [
+        "193401de9ac21311b02422196b7bd9b9ac10cc59c9a3736a71c21d117bb244a8",
+        "84dd70ad8fedfd2341a1cfa358385d8e5e8b0dad963053d5157295809f7dc617",
+        "ac31d1778ec08133124455f0b0c2343c326633a67cbecd35f3d9ea8692ae1dd8",
+        "fe5a14a77cf48441390a465c82dc3933cd711a3da62b514738406edce2ec6d79"
+      ],
+      "current_sha256": "a893e3bb05b2ffd003a6910ff530388e5583083fee1f37b6dc80b91f380fac07",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/runtime_controls_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "63ea675b57557a472d7f1fe1873eea04de8d2516d1f50efb9dba8a69d4cde441"
+      ],
+      "current_sha256": "3a1eb8c0ee73209773d3330967cb76e335977d29b802209245db99abe2b35501",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/sink_ids.go",
+      "state": "present",
+      "prior_sha256s": [
+        "3d489e655661f0c4005c95d9dd4938c88ca3944171647921dcf43f98587288cb",
+        "8a89a8771a8410a9e106887bcc8af5f89af21d5ae01837a39b59d14ab354d6b3",
+        "be9e52e414230651e5afd4a0ba558503ca3d06e001689efe37a22a96d7125a3b"
+      ],
+      "current_sha256": "ccd77badfe4a78b8493c2aa6abdc9f90334759abb5641e0436f79d22cdc5b0d2",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/upstream_merge_egress_snapshot_transition_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "6b19ea585910eb13091d5995cab13ec5817ea62c693c35da6c2095f7575d7e4d",
+        "d63e163f3246b6adf60510592bcd6556f77705fd5044d2a573f280377ce91bb5"
+      ],
+      "current_sha256": "5d757fe1ae7372e658d358ddb09a49f395ca4290ecbc7a138737d22d88f6ac95",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/upstream_merge_framework_transition_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "11ea1e9db4f989f1bf5dbdc6612858125cb467d327506eb6b49a77a435fb0d12",
+        "1c917085f00d2b3a0ce8892652589cdffaf5d15dcd01547e5e21b7d8f185a9b8",
+        "1d5f701752a2f1960b4f87924af5ceb3e93e3049bd2a34947599166aeb7a66af",
+        "bb0af3ce58f351054fea326a660c1bc635b93daaf39ed67c260498070a8f0edf",
+        "ff03fe3995be282fcb9fc7f0181704c072859249635ea629b2cb3de33b2af3eb"
+      ],
+      "current_sha256": "3c3fce6bcb8f0dd3f5c1dbb18b39b7887680ab56c059df8c1f532760a6941102",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/upstream_merge_route_scope_transition_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "bd80c8fdc01e848bc1156e255232c817e0428063dcf70845da147e11fa55d582"
+      ],
+      "current_sha256": "0a2bf5f80b2ad6c6343bd61acb53272dfe9c6ac3deee70b115167ade6c2f7cc8",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/upstream_v0177_source_transition_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "19aca87c1d1b164695e81d54b94f99a78c0b20250797018e238997af60bb1a26",
+        "2503c45f88ba2e9d4cf5b9890fd7484e0123bf9ec32f021b066ac16ebbca576d",
+        "922190f5b186f4fdf32adeaad031ad64ee65a092e54e13ee4452625819463056"
+      ],
+      "current_sha256": "80c080f9ac4dfb67607432737e6413e31f473781f3f3c780056d3d968023e46c",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/upstream_v0179_release_ci_repair_transition_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "86859c3681e7e83a3dca31d3120bc14170f5b5576cef5d8c9bb4e43a2d9140b8",
+        "8b1cf81befcae36c74e416da9f45dfa3d5f51e18623bbb7979d6044105de4933"
+      ],
+      "current_sha256": "7ed25330efa408d276a3a59fdf0d360782b51a777249321cbc0fe3ba619584dc",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/upstream_v0179_source_transition_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "52c45f57b404e42bda5de3693b4655018a0aa98a7281a13221f85b8db7ef17e0",
+        "ebb80b8bc044372bd7263970b0a9b20b3cfeef6ffbf039cae1df6fda72a27e35"
+      ],
+      "current_sha256": "f2eb8c66d46a12f9746b285690d4d8e47cda1cc123ab4a86d829ec8fc7820a92",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/upstream_v0180_egress_prerequisite_transition_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "f7ee4c384a85cab6031dd88b4440a3f1adb1ca1ba558fa9506126f2560301886"
+      ],
+      "current_sha256": "5436004aefcca8c745ebccbc60f37ca5cfa0d644d5aa45ccf5de13d576d50695",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/upstream_v0180_source_transition_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "65e6a3e6c9a00e63f122556e3187b4549b6a34eaed443dbbe7b78aad5101a1e8"
+      ],
+      "current_sha256": "feeec0fdf046b205f9745496951590690fe72a94a87be5874d1c7b2e53f49027",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/officialegress/websocket_tokenless_retirement_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "077774926c40aadd1b1bc0fcdd9809e4ffb5031eafdfb10540db0a9e39550ad6",
+        "434a15a5919409aea4885ca8ceb827a443c614c33676ea14542ff7e253a9bb5f",
+        "7da08cb7032ee300cdc5a12d05a0c086ff9f2761f047a2a11441eed5e28b69c3",
+        "881a4f2353d59266cacd5de308bc1d72ce06680bacd5217eea9d55d20dda20d3",
+        "93e9c73d203dd8c1dd2d073c2d5ee199c581c0b03a8fc31e23280ad70a2d5359"
+      ],
+      "current_sha256": "835d79f90b1854aed3cf966a5aa5c37eedc9ece06e3a1076cf259cf697f5645a",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/pkg/apicompat/chatcompletions_responses_bridge.go",
+      "state": "present",
+      "prior_sha256s": [
+        "2b96615340ef78edc649e8a8ad0d57ed5ae08780f7fbc0d64de850e213763d6c"
+      ],
+      "current_sha256": "587c800d774ae6642de25930dddebe447ac9ba9d259e4f98d44d54a70536b9cf",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/repository/claude_oauth_service.go",
+      "state": "present",
+      "prior_sha256s": [
+        "b45aa0e4658bc1f247080041fb625076f63b6011eba367c0c1ed390a7126fcc0"
+      ],
+      "current_sha256": "e6871d18ade70395bd49fd268ef748b70dc5317c99899d386f2766c7a74baca0",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/repository/claude_usage_service.go",
+      "state": "present",
+      "prior_sha256s": [
+        "95a0ea81d84e832c5f814ae2baeb3d6c23b21b0fa03435fa23524fef7c31ef4c"
+      ],
+      "current_sha256": "36b6dac7eb45295c7e67ff6b1f46eff70e2d0252812a8bb1dfd4c63afab93640",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/repository/official_egress_claude_fw_h_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "20dbf61b4110ac5e89dcfc31596a167bbfd354e13b3018e8fd68f773bc39b947",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "current_sha256": "0c0cc55e87bd5c7d6f6f8694f1ce158299bf0bff263c0b84c12b2d7b0fec25c8",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/repository/official_egress_guard.go",
+      "state": "present",
+      "prior_sha256s": [
+        "599d96a8b8c49003f7e342820acb0eeb6c8bb0a26ec43d32a5dc2a473448cd62",
+        "5bdd021b905c360770f06fe510a95104236ce39d48a3fe0b9e4d565cf5b9c179"
+      ],
+      "current_sha256": "4f906eb81e5011883edf1b75e70d9c66d31c337b34d34f1a51a2f4455bc1ea58",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/repository/openai_oauth_service.go",
+      "state": "present",
+      "prior_sha256s": [
+        "33c7c215bf7b548be0ca47eab4065d92a0f0a4090e4c1e95a24608d28c68c059",
+        "d11bea5a1c3c9331690319286b41263cc8a5279977cc2fc23ddc9c45f56a1ec6"
+      ],
+      "current_sha256": "c93c851ffafde56559643565b984fcf226634ca711dcfe707ceec1108f2501fc",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/server/routes/gateway.go",
+      "state": "present",
+      "prior_sha256s": [
+        "acdc53cfbc80a70a3bd56537c4c422ea4a7feb8bf9ae5e637d42aea00ba29fbe"
+      ],
+      "current_sha256": "5dcb87b701a641d9063f81cc264f205cfa0a076691070ed43956fc2c71c48d60",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/account.go",
+      "state": "present",
+      "prior_sha256s": [
+        "d3e7944f5def10b9a3fa0e124ab35d4cfd5aeb6e2a3c270a68a5885a3e856aaa"
+      ],
+      "current_sha256": "345de9109e14be850ec3b9c9f9468e998d081baf5eff2d6ad4c4f8acf40ea4f4",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/account_test_service.go",
+      "state": "present",
+      "prior_sha256s": [
+        "60d88fe090b4223eeee8b5e3219c928447c62c095c6deef2433276270a2dfa9a",
+        "87be85247043a2ee5921cf18475f8b71c63fcb06809ffb306e221d5ff9ab8a54",
+        "be884895e4a230e9e101ce1149dfe4a4f1973af48bb097628dff3e2ff40ea08d",
+        "d09f96e2c1be03548d912282b4b4b5e9ebcfa2b01e534636c4cc966ab4b2940e"
+      ],
+      "current_sha256": "25e8fcf84b3e5cc8a87c6abd8a87033f1687ffe23d2d03e2079a66f9ff741737",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/account_usage_service.go",
+      "state": "present",
+      "prior_sha256s": [
+        "e3a5c53d3659ce9de24f05e0f6db5bc7c72dd545bcdd89cf1c0a90de49050e61"
+      ],
+      "current_sha256": "6af18976b51e953cf55752c7cb09a7fbbae42bccfde73fc02fbc2ae197dea481",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/claude_fw_e_observation_binding_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "23987c534e0114448881c97ca56a8bdf95b5723ec3d9218629484b703b91f602"
+      ],
+      "current_sha256": "4705c40652a44a01553ab6c50a576f791aa492ba3aa71695eeab6a68d9969155",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/claude_fw_g_candidate_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "23129b4738e4ef010e6c4fe42629e55a8d4d1df364c8bb26e876c6a74264f998",
+        "32b2dd05e778e7c1cc7f2f824664f3dad28b49c5eae91ab402594e6b336bddad",
+        "717069e45ffbd97fd33ae6c30389868c4b3ba39651a16476a5d67ca94d30aa98",
+        "76ece1896fcacd385f35168c1655e35338c0d8fb6e402585ca95ce10b17808a3",
+        "a5aefdce3b5e37644d71c5824bacf76c77bfcacd8336fb99ab32649316b9373e",
+        "aa4f97f1fb19c007529857a0401092bcfc121cae126b9481922015e322fa89e2",
+        "ae41668681af96e05d7ac37b1546cec2447cddaad62cb169eef8281532a097d7",
+        "da34b47877ba8e5c1a4aedf731f5ebd18dd279dd0b261630468ef6c69d226ef7"
+      ],
+      "current_sha256": "684f42f98c96e5fc0bdc8a097d9e1e692aa430d67b4cbb5003de27624e5370db",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/claude_fw_g_desktop_query_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "663f8ed3a170bbcba4e7a825b02ae39fdb6d311f636e1030c662518152bac5dc",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "current_sha256": "86a48bf9b98fdaeaad1c98aa4428160f2f943f0af625123f093acf3c91d5631b",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/claude_fw_g_source_transition_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "2802379d33652a36b5d1c0d19c2723ffea7e2c220df14f1b28be99fedd16c55d",
+        "9ef2cc4a97c023f6ad4921e2664d823ffcfc2435442b18a9673529d136e93893",
+        "bba44a4afd16836b158710d0ca7d66642863647d867ea396c299a825c78018f5",
+        "f7ac7a794bde6e297d560c0ab84efe6fc6a8db08360f8a2ff17c3fa1a9c8d4b4"
+      ],
+      "current_sha256": "af150bb2d69255212bb6e44b856cfd7ca73bbacf4f4e4e117e4fba08fee7d6b6",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/claude_fw_g_test_transition_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "1658b7647c238493228183ff8d23a21a794e1e2e57e8c94ce65af4493df5c7a1",
+        "8babbac8d5049542c2f0f6cc31c1577a5dcc1afe4b9107aad74e1915fbb575cf",
+        "de32b4c8f5447382049f2386083aaf1d2fad155a48ae5673d60d729a6a5993e3"
+      ],
+      "current_sha256": "725da9037a210b8d1c8f16086bf219ccf6b669efc4df465e207b351ff7f92f3d",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/claude_fw_g_transport_capture_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "df7bc0da920038bf2bb4315c7e5225495805b1af175ac6d8501652c0f131c30a"
+      ],
+      "current_sha256": "51a4ee6975efff0af5235de32c3ce930eeb0ec7b2a794a188bc6e43f94721c85",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/claude_fw_h_legacy_retirement_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "current_sha256": "33901ecd35164e2158e19ef045deca65064309f858677c394f72f47a34bf30e0",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/claude_fw_h_legacy_retirement_transition_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "dc885dcd4c4a0cb99ee2ca53f84037a8ea6a7270db3c5dbeb92f6d2eec2a4776"
+      ],
+      "current_sha256": "e41011e36d8a413014886ce61f2eaed54088fbf0a85991c3747be3f55462b51d",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/claude_fw_h_production_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "current_sha256": "b222e0d2a7fc27a558c02a0f5268bccd5e5bee6331c251e24d0118ee4c185e01",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/claude_fw_h_source_transition_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "280167279665623d67031281401d22e50826e64921c9fb32e90e10ab5b0ce597",
+        "52071ccab574e1761f0d3771dd525ffe8a22667953031a0679a3078f307f93d1",
+        "9acfc4ea876cacc39e72314ca4e9c7b7150dc5f29c16532208ac290acc649ad6",
+        "dba53b2c016460d109b4f68e3ad29b63d3781de84bb56e10b796ecc7b6455180"
+      ],
+      "current_sha256": "0983cda9fb876c383749660e81f32829d4e27d44dd7971424c670b02d58b5f92",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/claude_fw_h_state_durability_transition_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "0b641efecc1505ac338238b349d43b172b8663753a82cf5b1743291b846e859d"
+      ],
+      "current_sha256": "015edb744ef023653120b7b489abe87a5646d18b6184496790271d3ee59c96db",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/claude_official_egress_activation_fact.go",
+      "state": "present",
+      "prior_sha256s": [
+        "6318d2d169fb8b45ef77d0767a81904e10269c441d6cc7442abc6fc78307033e",
+        "9c639692e8d724d891a3ce96c829dd266c571d5405ba6f5dac0fbe4f93d29b81",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "current_sha256": "3e29005dfc4c61aa0a373a7fbd61271b8ec2bd80977b6044951bfed5b96a28e5",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/claude_offline_ci_stabilization_transition_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "3896b275b5a054d06a55145f1b603d1c6ec2ec458cadeb75f0f5627ff7280493"
+      ],
+      "current_sha256": "87bfb2f625745cd2953fe8b6a450a8698b3799e681897c03978b2bcbeef05d0c",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/codex_models_unwired_transport_retirement_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "055659531062220a2783ceec5b5da0b0c43b714842745de54b535b6bf0fa680e",
+        "81d6e11f3b2950d84f21e6f9e32eda33f743e607359be3aa3150523ea1bd7440",
+        "ae16a5ccf4b67d91b22be26093829cc55bebd7db967b6a51481069a47dccf459"
+      ],
+      "current_sha256": "ebb266c1cb45bef0bd1a3d7378e6aea911fe8924f193232d8141e8b88d96cc27",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/compatibility_code_retirement_closure_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "2ede77848d2d45c86b6a03ae4ee22f56a5de18b9571516ae19a4aa084547b681",
+        "2fbdceac5e91d51bb20b192f8c26f964e19648faaadad94b4b39f9dc6e1d6923",
+        "6836d0f491155c396be34228437ce0bab3cee835a9343a9b6f2b8921574c1309",
+        "82f2ed1dc63c5da7002f1041ea4d48dc1c2f1749a8221e09e54db046c2054842"
+      ],
+      "current_sha256": "9e7ba19d2a4dc810c660836e07da9a583f58e97ac7cf4a6ef7b7dd7093c323ad",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/domain_constants.go",
+      "state": "present",
+      "prior_sha256s": [
+        "3ebbd02a6c672bd804abda286df7241acdd0002d1381ae60fb60430b681911d5"
+      ],
+      "current_sha256": "f2aae7fa7cd07736c79b4e91fd91aec16c4228b1a5f7207a8941eab61452d4e7",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/fw_e_observation_source_transition_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "9ca338653e809a3dbe55e925c8680c0b902b4100d1653cbe22a1ada143ee9cd5"
+      ],
+      "current_sha256": "e49974bb255a5a95ecfdd8e947c9e4afda7efd94bae21752fb79e500e5be1974",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/gateway_anthropic_apikey_passthrough_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "7f7c0cd353993b526f0d973901ef250a2cf6422f3ef8d6485c25dd40215d2217",
+        "9d601ea9ef69e50c9f17af58e947d3e212fa18bb5828506b999bff9ef5aa4572"
+      ],
+      "current_sha256": "c3eb97b9d5ebc7acd2b2d871e533fcdad124a3f46576cdb677fc7c2a301a677b",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/gateway_claude_fw_g.go",
+      "state": "present",
+      "prior_sha256s": [
+        "06d9660b4f3a99236ac9e83e23047a20d77cefd64f38f5d4ca6671faac82f721",
+        "1a43809d795bf4cd03b721a1faef2758f7100b1b3ff2f85bc51f9131347bde2e",
+        "2a0456aa53102502be65aee3f8830db85c1b8bf08f01951789a3654918ca388b",
+        "2c0cebeb86d90296d83d3e9b75b26d7aeeab7f42f17bd7d27db1471a13c54267",
+        "750ecc54194ba13a01bdf42a0a962fc6b76195cca3c00179cf369017407d0e6d",
+        "8978cf81424e8d141eec31b016f84292b743384c92ccf90aba507d9f98a36b2c",
+        "a2645eb7fafe510ad565591a749e14cd0a6417beb1dbcf40357ed8eaab153dc3",
+        "b39f1f82400d96d61588a2671566db5f36e16852ada992095d238cf326507314",
+        "ccdfb6001a3380043e82e26fa083d33a4d4d4a5528ed7310ea53a9c17c51c07f",
+        "f242a7b38d2e7a48bac1dbde3e428f6876dc1c393db1bfea9cb55afa54680988"
+      ],
+      "current_sha256": "5ea6d4fcf27fc9c6ef95c93907b8aaa912a9078b6122219a83967a8b7753f9f9",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/gateway_claude_fw_g_buffer_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "current_sha256": "a4a5fd6ad9c8eb7f661a506f48ea9c4605d2a7b72024f331322cc77035bdaf48",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/gateway_claude_oauth_body.go",
+      "state": "present",
+      "prior_sha256s": [
+        "dd599cd8cfb1f442e9c394b8cd959a822f24aa6d524b3d28cd261a8366f34134"
+      ],
+      "current_sha256": "be4e8c65605cbcd91b5aaf2bd283a8b18ab5e242820f36190c7c00b911179724",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/gateway_claude_strict_openai.go",
+      "state": "present",
+      "prior_sha256s": [
+        "08337d0d8d07329a82a6e0dc42980bd343d01aeff7c68abaa6be45188eed2452",
+        "20492d5427fcfb90d88006df8215e2777b79bee4fc60d2e4c34169b9a8902582",
+        "a1a39f1011dbc02f2f9ff711e38e0acfc5656123ef6d1aba85b8bce2d3f475a9",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "current_sha256": "659b782d4af22cac0b418c1f0c35987bf41020254590c092ace43d1e0a212fe5",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/gateway_claude_strict_openai_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "f76a12197c0072f349c4108a7a727b7ed1ec134a026bac017b6dccc051c691fb",
+        "f8fb3718a0caf040c25a824ce1f22f7374075f195e0954dcc215d120a7302b65"
+      ],
+      "current_sha256": "8fcb0c56051f3dc8b999d712b125fbf5cd9d865862115764c7e263dd7ac18fc0",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/gateway_context_management_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "806f03addf0884548ea34e3ee4ac252c736a3f1e08c875f4861f0aa75f0068f3",
+        "8d55618054876037df8df965d644f84acba08ec17924b3c9800b4eb4c0465ed7",
+        "ab6efe1dc65548fd59b8497e69f68892ca12421d71df9242803ad388e68e6f50",
+        "c172a385e3e89ef3926a5daa44fca3aa1a29a689bed3548591b60a51013a333a"
+      ],
+      "current_sha256": "a15304642a243ef16f2d91870c6a9d9d1b089481d62c5c697986d82ac9706f41",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/gateway_count_tokens.go",
+      "state": "present",
+      "prior_sha256s": [
+        "06336443d8a0e8fec49fb1cf9999c41d5d2afd8ba1969589c8d7a5adebcaf997",
+        "6fb12c3133aad52f01668a41cf9bb57408c31aa8e2b1a6851ce40814fd10ffce",
+        "703072dd64f23ab39ccc4579f21c503aca9c3d991121b97dc2558ce453a876dd",
+        "c8b77b9d5e86fea750f4da4a7476d28baa1440130b7a4975466c7abd98fd439f"
+      ],
+      "current_sha256": "4a1725fa3679ac982e943d868da113e5f60295760d3a12c29eabc9822b16af3a",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/gateway_forward.go",
+      "state": "present",
+      "prior_sha256s": [
+        "4d7a69ef69c7a752ce83c24f3a54b5316d85005b1fc283b20fe44b6d8dd99a4f",
+        "655b5433c97856f654ca1bc46899d726f3c43fe627e301989e2d0fb2f8268fa2",
+        "83c88415b955ef3dc7b38b8c1d7cd8f378b7a3657d0d1e2980317061bfd8b7fa"
+      ],
+      "current_sha256": "e99128238536c46beda0f56ffc53beff34faf6571ce0bdca3aa9532135899da4",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/gateway_forward_as_chat_completions.go",
+      "state": "present",
+      "prior_sha256s": [
+        "1395a0760ade13707b4242bc604fe6b26851c2f615042624d503ca3a4cf45de2",
+        "243be47814ab71d960b87032644092e90ef2f8c2f319cdefcc9e7aebc1fd04ae",
+        "62c236ca8f8a65c22334c75b59fe199d0c39f13a3964425b63f6865d7c505e92"
+      ],
+      "current_sha256": "ce75d3720da98bde94c17ccba387b5b0ca9c4c8a25a492e1afc5248f2a6b5fc7",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/gateway_forward_as_responses.go",
+      "state": "present",
+      "prior_sha256s": [
+        "1efd342643a33c111339e09a4dc173cfdb776c65e186673e0ffd736950db9180",
+        "751b2a0cc80a5c04d8b078325a8841a9f1fa46bafa9a9d0077b6325a8e768fe7",
+        "c9d297ecc04022104f727dadb0cf048581d972fc76a5909042d296558e4324bb"
+      ],
+      "current_sha256": "2657c0f62fc269ddb604738ca17d43b0dbe6f38828747b8351f1a840d03473ac",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/gateway_forward_partial_usage_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "b55906b014c971fdc8308e71f54042a2c506b0bbbca6cc92cd0fc210f7459ea9",
+        "cc80e98ef8c3f9e87a55181f6d890deedf71cf1424760fc6b1903240c63f9896",
+        "e4f0c833a7b61c3f6c5cf0772ecc5067b6786be42114694134693e03915c4ee9"
+      ],
+      "current_sha256": "4c863caf0a4dafda2640a10f5e3b7abb36a3663197fa09b6c5946089e96380eb",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/gateway_upstream_request.go",
+      "state": "present",
+      "prior_sha256s": [
+        "0ccb96b3b8315db857458be289d32d8da22f16a568979e6c0a8b41426152f442",
+        "6b40d364c27c25c42eb917c29fd4ec20f0fda993bdcdfd730c91633a6d8f9b1a",
+        "b41ecf58734bcdf6fbcbf193b20bad86f86dbc91d35088a7ed21cd1cc38ef0b1"
+      ],
+      "current_sha256": "7d6c5f7067f64b1f6e118f951bf438d6b0eaae31b01e8785e13297b9a956719d",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/oauth_service.go",
+      "state": "present",
+      "prior_sha256s": [
+        "4c91bcfef3f6e916734ce1884374194f7eabead1cd0fdf0c520848276c030633",
+        "b2bbb90377e66014d73406a8d95fb4bd823e052b4ee6cf05cc98fcacd323080e"
+      ],
+      "current_sha256": "b190ce834a488da3a63f3be2325d9dd76358b9cb85e9aebc31dae4b467785bb7",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/official_client_profile_registry.go",
+      "state": "present",
+      "prior_sha256s": [
+        "f9c4af1603b63fa4ed1f8875d60cce14ab93c6aeba48c52f3210c24567ec97a6"
+      ],
+      "current_sha256": "426562cbbfb234014c0833ac2f33b5a2208b6242d3976d109bb4436edc42e992",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/official_client_profile_registry_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "47746c5fc267ab45fa9c5a562aa18acfcd7d0aa4bde251c039b3ae7811f12f24"
+      ],
+      "current_sha256": "6a1d7c063e9c81362cdb4a0c1aac1a3154b8e7c033e8e1e49aaefa1a1c51b4b1",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_1a_binding.go",
+      "state": "present",
+      "prior_sha256s": [
+        "e8d4ba520182cf7c1c07ff533d77a67ffe9900b5cdfae57066e32a10698559fd",
+        "ee17db9cc376f9d4e5fb4f89bbb8b325ae921be0521a34186536db3a444e549e",
+        "fb46acef9881ff09a1b49d5a44f73186341e7eb8970d56435ec5243e7619a894"
+      ],
+      "current_sha256": "797fa51a2cdea544c1b2d86cb4fc69049debe51a6060776ea4b1cb5d3986abab",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_1a_transition.go",
+      "state": "present",
+      "prior_sha256s": [
+        "b65c1173437ddda735aa6d6085e73ead7b6360b909cf890de95004cd0ca68519"
+      ],
+      "current_sha256": "3d398835ab0499077ce25bdea9889e46f9f49c7561bad9236da381c2e034cdc5",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_1b_executor.go",
+      "state": "present",
+      "prior_sha256s": [
+        "0eb8d682ab43549c5b9daa122ef40ba75a10e7e2653ef41c5ed830223bc3c4f9",
+        "270f4439f1d39f1a75a42f171b119b507ad4998ed9ee4ae7e19bf7d94f30e334",
+        "6771cb9904274a9664292d13094594b6969460f440ee1527fe36e4f2fdb1573d",
+        "814a7497ab3a97a8239eb187b8226a93fd830258bda7c02659d883c06ba5f9cf",
+        "8947e4e8d6fb86fbaf86a072a34793d145fe85ca2b87b0d6cd0f9c7c284b2632",
+        "e93e8a3005fbf140879b9c6009fc218d20a877bf058466d3c53b3cb36a6cd567"
+      ],
+      "current_sha256": "9e45bd2fcf577766966f4ad4bb247b78304ae336d433079836af5bc990848568",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_anthropic.go",
+      "state": "present",
+      "prior_sha256s": [
+        "534fa20eb916411ea5bd999a8ba6e28050506ab8be06bd390b5bd1a2684adfc0"
+      ],
+      "current_sha256": "c90e231cc940e739e176fe8cd0a85397899466159534261916a05d41b3429bdd",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_anthropic_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "687ed121106b5e8372867f2d584d0c56cd941a3517af365c2cc9c25d3c0f4b17",
+        "c431c41a365cdb5c614af948b85f24b61d115819173f63d331b841dd5317f32e"
+      ],
+      "current_sha256": "965c226c44ced48872b24a1f36c0705ea2250316dbfbfffef4b65b7cb6ec039b",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_benchmark_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "66e0775b72be6456d71c5527b21664c1b06b9c743fdfb83515a808812331a846"
+      ],
+      "current_sha256": "920fb8b0ea849a854bf865d576152268d79554ada9d1e236e237801ef93d4342",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_changeset3_production_final_wire_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "01e6e5493ee8ce9f5cd5039bb30b7829d76e565bd195feffa2806475bd5aab23",
+        "0643f3acf17f40c341ca6d78b2918444cba45cdb230c70acab86830cfe65e886",
+        "3964bbd26488ee0d0bebe44693bc3a7957aaa9b094b0ca2fbc1f08d849ce6771",
+        "8b2640ad2c2e80a73b422e52c3b23ed85ff52b178637bfc86ed795849b82110d",
+        "964c942e3c1a202276e44f14c87411f6e66da9ee9a21027275144ca3a8d4b8d8",
+        "f2732d83a5d33aa0effe98c372cfa0f7f7f1d77327068ae532200e9b53167842"
+      ],
+      "current_sha256": "b64895b506b140f7fc6b996220fd337d0bd45501d9011ba02f75ad8d5dac75ab",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_claude_state_redis.go",
+      "state": "present",
+      "prior_sha256s": [
+        "05bfef20769d65236a74736604d64deb4c2ec49d6cfb576b9a50ecb9a601031f",
+        "1aab581d4635fefe6131643c98f6da523f323ba09b9222af8e5729cc03bbc6c8",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "current_sha256": "c079e37efb566d59a1c86d3ed5695699bb6a972f0f34e9f467972f9cd5396306",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_claude_state_redis_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "0f6371cd20cda9c5ef30a5ea8e5c02a3e51a299d83a4f9325ae34254af6d1722",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "current_sha256": "f43666d3895fe3067ebc4c7d6f5db074af228cd3354f475de05921f841852783",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_codex_files.go",
+      "state": "present",
+      "prior_sha256s": [
+        "109c39f3e608b8fb1b5a3e86b24be2afae65f3fceef1df639ab12ac32f0048ca",
+        "9f4389d53158cff54932511db0cc25ac7c289646d35ab0b48a2201d965ff1ca5",
+        "dc9a1f3311d498656bc07412b67a6d8681d7d1bba36d2c702ec26e23b3dc04bb",
+        "f52e89fb7659ac5af8b3321fb98bc2af7dd68d5fcce95f2478ac79a5387e14f0"
+      ],
+      "current_sha256": "2421f642b3e3ecf167cce207c9a9c9a8d1167a1c907d476ab6e2941629263df4",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_http_invocation.go",
+      "state": "present",
+      "prior_sha256s": [
+        "32841f6a17c86652153ba3e5a94c6b36410940477aa8e8583c5beb72fd4b30e4",
+        "88c414efd01e8a3cd46dc3597ca16c3dee5b8287147213d87f7fcbbaa07c6bf5",
+        "ed4a9e36401e1db0d4fb235feea6dc8b6edaa370cfa10c20a0f72d9b755e87e5",
+        "f9dd86c484b1048d91ece9302f57e3f6c6f4abd9a9204ad9ea9f79d39b11c1c1"
+      ],
+      "current_sha256": "f473fc55fe2913fe5872dafa35e657f371ec718810db3ee59b409f9fec510b6d",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_identity_authority.go",
+      "state": "present",
+      "prior_sha256s": [
+        "28632da0dde806746955da08c4f5b10e9f021337af77cdf082c5808464ae849a",
+        "2f82dfdae81df71203e777163b680a4072132b8e9cc50e609ca275c022953cad",
+        "4ba01a6a2840d422d626cfc4bc04eee8789b01e19c31b9252f9f70faeaaf53ad",
+        "6fa05184e2ece9d087c4c094f4bea4839307242f424b522080334f9aaf307843",
+        "7be776232f74e5f62f861ab92a2892d73ab3f8a5b58184204a184a586a8a0aef"
+      ],
+      "current_sha256": "b52c107746c754184307fd5a0b145576fd45ab9c146b2ffcb3f3a958dfd06748",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_openai_ws.go",
+      "state": "present",
+      "prior_sha256s": [
+        "3ee8d5bea8ec90b23de0f15f704e12996b2ac9b746ef5ecb36cc64e663468490",
+        "4b47a3156a8689c1639bc66ed3079f5b7a3c831bc3ac2e42a8a3841e80484269",
+        "95601bf42caf100e2503ff09689cd4eb086e06bab47aa19e5e2b9b56f5ccd158",
+        "96045283a4861f38168c9673499ecc1bde50750c480f667e490380742ccecbb1"
+      ],
+      "current_sha256": "8ccd28fc1fb21d7d2abcd32914b3ac1c25d5b834cd13904121f4d81225f4d363",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_openai_ws_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "069c00267e3976bc3f2b068ad08ddc07f4f60fe87627f2dd3073d6478f327b86",
+        "83882364e2c8b27fec18faab832fa6b3637d21bcff89b172d51ddf1210cd0f95",
+        "dc1be426fb124b2e7c714088bf3e18b88acc4086343ac49a8324e19c4451439b"
+      ],
+      "current_sha256": "ad385312fadcdda6fa6f219e8829c828323d8c3ed80c8c2b7789046ebbc12188",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_p0_regression_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "67f2062006e873e6e32c662f74b23c544cfb4bb2b7a8581f237ce946fcc1aa46"
+      ],
+      "current_sha256": "f15611ee934a7c4704d15dd24563d4c68f62487eadb16464244a4aa96cca3d75",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_profile.go",
+      "state": "present",
+      "prior_sha256s": [
+        "02af82c1a12cb655c15cce91c7dab21b34692c25869830d980798526c03db5f9",
+        "c0f57e836b0c9eb200693190e5004ff197eb9bbede4d70693b88316209b7a676"
+      ],
+      "current_sha256": "39f603dab7903a4c3c73897ba61617ce4aab22afcff7b421f56b8ef1fa23d34d",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_profile_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "131305397eff824bafd1f46a65ee224380e288552dbb8cdfb1085c2bea672814",
+        "f1a744dc697603b5983cf7c94c4af900238fe633068701636f0ddfb0ead18591"
+      ],
+      "current_sha256": "d42d70661c8909a4a5fcd962ea0835ab94f8527d0802b94796c300b177d3c84f",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_t1_contract_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "1e4af2ad89f56930b6f0806391b91d4f70432027ca77c340ddadc56637a11784",
+        "344577161d9fdf20ffd7e4e391b28cc0026eb726ef4dee9c0f6d7d53acc539a9",
+        "50e4cb06b847a871f866653b6aa9c570b83d3ce1e19835732834e9ec8def2a42"
+      ],
+      "current_sha256": "f1a414bdad7a9bb7aa96e2b01ca2a474a7b14d208a40b361e4a05c0fdc5e6e2c",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_transport.go",
+      "state": "present",
+      "prior_sha256s": [
+        "c0295b807d27232854bf7e0f045b4c26a082307f222cd3f51169092d3cd7e11d",
+        "ee6129d687cfbab9736053259ea85c9c16a98ffad2e91cb2e4369bac0e37d73c"
+      ],
+      "current_sha256": "d42534ae7c0e2ecf4610ae7330cb95ee4bc5ba576e15a654df415f839e2ee5e9",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_transport_adapters.go",
+      "state": "present",
+      "prior_sha256s": [
+        "1da65dc52f8811613f6dde337b06a15b70ac6410eab2a7d9ccfc8c08bd1a0c44",
+        "b9bf2d0c462eee41fb086f9798dea75f3fb80d366f36b66951b24aaf893b2f6b",
+        "c7b788324a6e232c2be5f2805e199d4df098337fceda772121aa49bf2aba5081"
+      ],
+      "current_sha256": "ed6f9f74c59c741f54b810f29d26126e12596724249ec87c5a1b7471b6674143",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_transport_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "199bbee2dcc686e17eddf94ec6d530587f48507f60c5ea4b8714d986b427ac3d"
+      ],
+      "current_sha256": "5ea482d5347610452a676b67eaedc5a04c83c5e598004583e6b28dbdf37d2114",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_websocket_invocation.go",
+      "state": "present",
+      "prior_sha256s": [
+        "09c9d93c4b8db313a63f119fb92101b028a1566bccfbda53009ab5816f90f74b",
+        "39fa0dfbaf9683daef1ec6cc4c7eaa0ac2da69b679693f82a4377340affd9bcc",
+        "5a0febd6f92e0117579711c48b44126a3b61cea83be95f0713f7e29f198c6864",
+        "918b0aef1c030255a7136477d64fbc483bec785a082c0c961346e8c2967f861f",
+        "a0bffaaee8ac38d346043b2b94a2450c185b6792a13e465cf09639b4e91685d1"
+      ],
+      "current_sha256": "a9cd27d3cdb302cca592cfbe3ba8ae3bdc99efa90f16463f08808ca567d83e34",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/openai_codex_models_service.go",
+      "state": "present",
+      "prior_sha256s": [
+        "433dd2887a6ba7bb16aa2c4193ad78383769d1bea775e50f615c881c954c8198",
+        "4ed62e7afacf6341d0942f317372c8f7d2b23e426ab1594bded68189ef4b312d",
+        "e55889f113eba404ab17fccd8b4d6bb2cb3a2d7abb54a5330e39b9bfbb487986"
+      ],
+      "current_sha256": "44fba8bd7739c4e4267bb96f486010850e6e90ff07ec3f3a2196f06527ca80c2",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/openai_codex_models_service_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "6ba9672486cd78d97af89d85d9639b2606fda98ccc980a8f45ce5f260c359a16",
+        "874f5ed35f11666b7d50b71f3b6e549137fe2c361e88389299ca1d67ea6e8dc0",
+        "dcbade0edb891f945d0d1848a4eb2d8c3140a9f111f711639385e9e13599354e"
+      ],
+      "current_sha256": "0d374c9d16e82da6eca3c2645efedef6824874fbbb042d0bce2dd0b31e34813a",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/openai_forward_plan.go",
+      "state": "present",
+      "prior_sha256s": [
+        "5539b9a047496507a442706ceb7495745b5b1c61c15dcb3d51ae1ad3437f034e",
+        "b182f97b108fa35a4cdcd5d731892cbe883fd254c414872d6bc3608b246e0fc7",
+        "b649a954323fc07830faef60a532d930e87707c46dad5e4f2a96daeb6299a80d"
+      ],
+      "current_sha256": "f7711eced66bdfa351475705f8258820936956ffc91d15a01dc73e4611bd5141",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/openai_gateway_chat_completions.go",
+      "state": "present",
+      "prior_sha256s": [
+        "4f4cbe8c89fb88134779b8204803d945470cae2db4026ba4ceaba7f9d87360cc"
+      ],
+      "current_sha256": "b16ccb5a4e261d6982dbf80c8deb83b7f1600a71dd12be804ca2d8596054d3d1",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/openai_gateway_forward.go",
+      "state": "present",
+      "prior_sha256s": [
+        "a66ce368dbf7f3acb43d65544ba126643a83bacbec6587bc38df3fcf9167da82"
+      ],
+      "current_sha256": "9a264e127550ec927b7e45bbc38867971e8b4d591aebf5cf2ff3c88bfe7fbea5",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/openai_gateway_messages.go",
+      "state": "present",
+      "prior_sha256s": [
+        "befcf73a99e2533bd43c8b2f447d829394c105dceca7bd092e61fc1d4ebdb096"
+      ],
+      "current_sha256": "179dce94c34c8165cca43c49565affa68729f936ed279bbc708c33d78f89fbf7",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/openai_gateway_passthrough.go",
+      "state": "present",
+      "prior_sha256s": [
+        "896de5eb6a1acf980b0db8ad2c2e2f283d7dae4d7a938d1eae3b0049bd38a8ce"
+      ],
+      "current_sha256": "ad2310940ea873e8d5aea83a159eedc8678da9228a18be5c0922ad51f17f8bbe",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/openai_gateway_request_body.go",
+      "state": "present",
+      "prior_sha256s": [
+        "5c8a7a0b2a46296a2adc99e15a103ee2162da371f52c65f2ae75415957a44a39"
+      ],
+      "current_sha256": "c0bf95716c827b24dd3756c41076180672e6a362ce019d0de5da3cc7c110aeaf",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/openai_gateway_response_handling.go",
+      "state": "present",
+      "prior_sha256s": [
+        "6f193a00301e699d650fc9c32dfbdd1b21f722e6f254a1d4c99505d953c7eeff"
+      ],
+      "current_sha256": "73c6226c167410b64763c5fb309bd1d41a9e6aa935c5b1c2c4b14c59ef2996b7",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/openai_gateway_service.go",
+      "state": "present",
+      "prior_sha256s": [
+        "8d2be26ae50fc48b95ba1ad3ed1558b7a8aef4e432b063562bb187a6bb59b89f"
+      ],
+      "current_sha256": "fa32c2517da9470c942e59c13dafccc9af473508ce6e5862b10706ad84486aaf",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/openai_images.go",
+      "state": "present",
+      "prior_sha256s": [
+        "753e640e3b5199abaa081e951ad90a3edea2790b3a3e8f2329cdc69a08538cb1",
+        "c83660b1027531cd3b5d42f16cb99ed5a4acc6589af994d6c406c7381d06b203"
+      ],
+      "current_sha256": "702af76efd5d22cfe3b9e6d65bfe3c053c9cec38ed6573741cbe941bf11cb8d7",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/openai_oauth_service.go",
+      "state": "present",
+      "prior_sha256s": [
+        "7804a34437a93841f6fe27a358eb96c0b893a34b8599e5f15904c59086c73ab3",
+        "d5a337d64f170a54b5b9e6c4d166ca09e041d61d667a0d7ff10ccfdde8e8957a",
+        "e97e2864dc9bd84e238b561b25a061e3ba5afcdbc7d7d0fdaf6d3a5b275a224a"
+      ],
+      "current_sha256": "0ba0dea9feb6498698d115dc5e26b4635853f2d3c005d23005f6043d24eff872",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/openai_oauth_service_auth_url_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "f1f6133019db86094562b4494c97559ae9219dc2dc2cfd2af7b49c54b8c8174e"
+      ],
+      "current_sha256": "14c28b72278abf9c44c593b6f789b5d7fdb2690cc1cd53e35bb88bab827fa610",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/openai_oauth_service_refresh_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "f397d24af75e8e35b372a0d424134f42fea371f01e36527de53ff4eb08e4c91c"
+      ],
+      "current_sha256": "53f457760bfc58011deca50d9d5dce3c198669bc66ce565cd303ae01cb2e4592",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/openai_oauth_service_state_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "8979a2c7ecec9670c923f3ee5e917e6e22c4166276c1a8edf5e94c85bd420f86"
+      ],
+      "current_sha256": "364a17bc2ebef8443c76946dd9ba15f244fa67fbf4e3de6b4b15bad05f314e56",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_forwarder_ingress.go",
+      "state": "present",
+      "prior_sha256s": [
+        "57f4ecf978c571a639dcfb8e4d691f860d052efea30e90508b715db5c429efac",
+        "a01d4ce6a3723e2d0d910f20d72c02653faf906caf1aeeaf20e5485effa83892",
+        "ac6ec70c90ea61fa9bcb90b3eea1eedf5655078c7812b18cbf6ab99aa38158a4",
+        "f9a271b480fa02bb7068e2ec2ab5e47ae5c5022bceeb3582bc95b277af300333"
+      ],
+      "current_sha256": "18657befcdb0a03193181768abe62b28d07dfae49d10dde4893dea599110a37a",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_forwarder_ingress_session_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "04fae9071fb740e7e6578e01bcd67430851c06b073e522b14835846307d51adf",
+        "af21806461f16c1b1faf56bdc12e71c6ac4b5a0468ef42eb0b7e9c2564b8f7a1"
+      ],
+      "current_sha256": "857b6c70620cc34f9acce725c776dce2ebba3cc5f2afeff070e432e1ebac9444",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_forwarder_v2.go",
+      "state": "present",
+      "prior_sha256s": [
+        "14d5ff523e60f37f8c82343532685a0f790d2690fe11615fa3187b649a722141",
+        "ba149360fefe37bf4dd00aed4311fc7bf12578f8716f1f46ccc094c16b7cb98a"
+      ],
+      "current_sha256": "eee97f4ad1b054b3db0481d4e47225abd1dd066079670f8aec66fbe5f874cf68",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_http_bridge.go",
+      "state": "present",
+      "prior_sha256s": [
+        "8b0734d7dbce1a7b94b1d51928b1e3e18529bb3c985ac20a08dfed872c0f4eb9"
+      ],
+      "current_sha256": "0f4525fe51d59ffcd11f4912d6bba4c69b03e46d495139673ebf89d50e5fe9be",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_pool.go",
+      "state": "present",
+      "prior_sha256s": [
+        "4974af082bedc10fc7f8415e152233e15894e4415667598933f2b37e5fa07462",
+        "6d3f0500ab84b5c03d5d29e290b674323e92047553085a60ee39846615407ffc",
+        "7cc28e30a4b0f96f0b926ad6a75fd85419b6c3db8f2d609bc8da9c401c66bfb0",
+        "bc4b83a16d3b1d9b2dfa7f7827efbda8b4724a9eae1fe0d84cffc425e796d4cc",
+        "e56252152cb32ea47db00ea66983d7a987154e6691ff4d48532a556d960b8528"
+      ],
+      "current_sha256": "fa1d3b3f437ee3b387117982bee04b9c91762a925f427c5230cc28ba5b8b947d",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_pool_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "9cfe3919bcaef8dd14322b6c528364090e4c2215a1193c406df921640607902a",
+        "9e3819979c96438ba16528025095ccca97c634a247262b255f0ad0003e2ccb40",
+        "fb4e385c8a47bbd9d400c07767b56323dc3838216126bb799671cb41fa4ca1d0"
+      ],
+      "current_sha256": "04e981024f27d015272343d2fc891d25a04386a58bfc18731f7681df06ab0a29",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_v2_passthrough_adapter.go",
+      "state": "present",
+      "prior_sha256s": [
+        "39b21ef04cc8e095885399027c119da1892100e1fc227ef1b985618ae21fcd3c",
+        "45d786045c38573a775a37c0a33af011b03601ab6b53f37f8c095def8ef4abf3",
+        "46d5884fc4b4d27e39cfe34a30f99605208a9e19617bd36e699eddfdd9d3963e",
+        "e3cf01b231076fa057efb2fb13c0810f10dd92a939a091f3ade0a54dec83af9b",
+        "f7226d7f58b2c912c735d8a157c62a90f775e740bf7ecc9e768786388bc6a791"
+      ],
+      "current_sha256": "881b280fceb4fa951cc2638685249ce0eb432c843af366a72dbfd0943aaea1cd",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/setting_parse.go",
+      "state": "present",
+      "prior_sha256s": [
+        "2e74d2409b74933931ba48d87355d6ff738eb66d58dc69034074c6b4a18be736"
+      ],
+      "current_sha256": "9a5db2d05022c62d1c659b462a14f0e1fb8c903b4977e4c5609268a6049ce858",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/setting_update.go",
+      "state": "present",
+      "prior_sha256s": [
+        "39ffacf6553d68f01e07eb0dc009983cf21b1258cff6be72bb90e9bcc2034c2c"
+      ],
+      "current_sha256": "a19d2023119e45fba1e1b496b42d616dd526ead8350f7759ce61efb81c429d68",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/settings_view.go",
+      "state": "present",
+      "prior_sha256s": [
+        "af1f892392b33b4f4543c74c846525aa50041bee86de380e4be2d2d88e91863d"
+      ],
+      "current_sha256": "5b949dcb0d24ea0103c12a7e3baf1b39bd6903432775c4e77a2034ff355cff9e",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/testdata/official_egress_version_leak_ast.json",
+      "state": "present",
+      "prior_sha256s": [
+        "7344d7acbe575b0a5d1a22245fd496911a34b70ca525d0144bda00c32604a8a2"
+      ],
+      "current_sha256": "4de39af5be296554fbcaff3189cb6727f016280220b8559c18a0f8d0c35610a8",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/upstream_merge_framework_transition_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "9da70966f4168afa5551c1e45fdbff02ad4967978363b148d944bb8f541a490b",
+        "ad36563747358488e97d46051d9ba626a3dad1a003a94d97eb881b3891d519da",
+        "e741ec9be5e3c34868caf6ed615bb69d9ec74caa4784f6fc5329ab748bfba256"
+      ],
+      "current_sha256": "e134c9d9f357c7210cff0629ae50b551980809cff8888e39067869c9d5f0fd6b",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/upstream_models.go",
+      "state": "present",
+      "prior_sha256s": [
+        "0679db46bcfc901c54f8b9b746726281845ccd54824106594b8f1f5d1fe77f0c",
+        "3899766a1c7b9a3bb1d3caee90eb1085e5ce9e01c3ac6f102d5ce49ecfde0e0d",
+        "9498a8a6c225fbe0dc16a0380aa38066e08d2afed01fe8ebbeaf7aaed23519f8",
+        "b1dc1214c904ceeb496ad885e54d6bdab6b27f6ca2ca6e30698caf55a068e9c7"
+      ],
+      "current_sha256": "83fe5a75478e8968ebb84486856243a66ad193a70b33b4544fa495133c0df2d8",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/upstream_v0177_source_transition_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "9d3c999478d408ba79e2edc653caceadc1cf264f194748a140a735e700e9f821",
+        "9d5dedcb0bfba62bf9a267868ceae010ad8eca5f31324c1dad390ba05921ffa6",
+        "be6f0f8da0bd8afeec42c580467dfb7768a436a31d9a174fbea445e0f4829618",
+        "e5896d7b6b681be1aa28c5fb5c377e15947068d68fd4e2ab5abc986625ed2c63"
+      ],
+      "current_sha256": "27caf01e38700071ad81c85fba353fc4fa6e420ab7dfbb6b1672e9bf16b8b7d8",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/upstream_v0179_release_ci_repair_transition_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "271edd7545950ec255b651a3b40fdfe6781c5a4119d3c5ee0d7f233f82f158b2",
+        "36eedbfaf3e9857e9075e37774e410f92a1bb03f0901f5954bff5d8926b037db"
+      ],
+      "current_sha256": "f31df14ce7a1924caee147caeb18065a7bee79f506c1be4e5a15ed90f4047eff",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/upstream_v0179_source_transition_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "98c59518a91b7bfc702bb8ceb4094b0c6966f0069ac42b95449f640636e2316f",
+        "acba02ace84efed2fb3eab287a8830d00bd08f62d44cf49c924cb8cf574a4c26"
+      ],
+      "current_sha256": "781aeee1b1489bebe4d672341049a4fd90f894551d2b985bc01dc3971bbefac7",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/upstream_v0180_egress_prerequisite_transition_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "9a138074aadeed87c57c4515662d8bfd965a955fa9f03cb8bd05c080e1507ffc"
+      ],
+      "current_sha256": "ae5ba1ef8e898f5b08fde3ef3e9e1e57d73090879a5eafe1abeb95e2c4ae72f8",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/upstream_v0180_source_transition_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "ef6d2245a8119174edb3f481945b0701660edfa95669ec34cb1aa6c6d73dcd59"
+      ],
+      "current_sha256": "ca615387e7c56effa6f65f1b6c9a4bffefcf7976c07c8f56a309bf6d729ce775",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/service/wire.go",
+      "state": "present",
+      "prior_sha256s": [
+        "9101d38edf45b13ae3bfdd218cadbcdd7b0a667f6a2b10ec9ad7650266d534b4",
+        "cd67a78b1e20c4a5ab7c4b73d3fa99fcc645eb46f120b26eeae42699b899702c",
+        "e3d10c78e558d12609c3394cb8b47e7cba66943f21a7dc190f0f71ade40aa528"
+      ],
+      "current_sha256": "a828db4b27330b9eba1916154ecf7e0b193c0cc7103d366c750a848e3f320af6",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/web/embed_on.go",
+      "state": "present",
+      "prior_sha256s": [
+        "460f80327ef9aa960613a753661107cd610c3627d839996e01137766c06da612"
+      ],
+      "current_sha256": "63a74bb385715486eeff8c5b12adf4030ead556f55cf407babe87646d2127571",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/web/frontend_route_bypass.go",
+      "state": "present",
+      "prior_sha256s": [
+        "bcf72161da6fbe078cfd53062c8853fa3117cc6c2e6a904486d815db7ba54336",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "current_sha256": "e8126797c3dba707fc691c857c2322ff8346f0ccb98fd68ba959bda6f410df44",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "backend/internal/web/frontend_route_bypass_test.go",
+      "state": "present",
+      "prior_sha256s": [
+        "182c6cfdf2d0264362968392022b7bf4d1245f43300380d611e21e9da0306715",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "current_sha256": "91fad822c41b5e8dd31a2a4f4c5a9938ea9ba2f9d9d4767dbe5c32e4f4dcdd11",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "deploy/config.example.yaml",
+      "state": "present",
+      "prior_sha256s": [
+        "49775cee38da80ac703d331be9224c0865e2e05bc950b0d59375abe65988d564",
+        "58a1bff6653169a20f96a563be567b1ff4c9dfc2714d51d30f34472665cf8183",
+        "6a56063c83b37a6761d5cafb2dce0d4269722b5dbd99f6b80095a71b830053de"
+      ],
+      "current_sha256": "b1c98a8f865a923330cd332b961a95fff6a196f7f23a7165f2bd710ff16889ed",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md",
+      "state": "present",
+      "prior_sha256s": [
+        "1a882aec8fcff55693126d5d2d8cadb6e8460cf59762c27de76e24a39a0e4a81",
+        "1c2dadb394a57928c5ff21a1ede8241d885932213e6db37d04a30754821f025c",
+        "258bdff4347573da38df8dcb721c92489dc43fc488018b7f062d25fbe8a65c0c",
+        "25b8688b5ef288826bf225ae3046250680f331906c1e0c09484320677f54e39d",
+        "300c6bbe506f6b195b4683f55fac1edf8ac79dad1ca4fb02693ad9add0cf3f1a",
+        "46cf897208663b4c9e462a882305c3ae2d99b92390f20f2b4798c8e28729e94c",
+        "48e222b72d889d29fb71796af5f12eda5d9fc11fc543ed593946451b3ea4256f",
+        "4cc9b2acbbc50203cab78eeeedaf0d4f46aaa4500d082e27fdf5a8e9b937b31b",
+        "6729311fb0152a2e6c100412af96ed5c3c8939675e7daa584349e1bccd5704f8",
+        "798310f78d239c7eb00425b6e621171b2c10b0003954a10550b783bc7de0dd54",
+        "83c7f959af4a43b9b7e1a596ebea3ea2b1bd415da04a24c402ff568445c6b5d9",
+        "b21c647e9c7027d846ffb47a5bb654fa1b19dd4369fbc29ee65326b0cb2db3e8",
+        "e2f91f2e16edd5618446df27c5a31c2868e1197a762cc40b647c27c0d3a2529a",
+        "f764d050426d02b0ca8404747c698c21a42b545f224b93332a8a5dbad4a99bfe"
+      ],
+      "current_sha256": "353e2699077a45486315febe8b5879780abe062829db17ba0564b74078d1b746",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md",
+      "state": "present",
+      "prior_sha256s": [
+        "0168d542f49d544ad1a85b092a9d05b12c9b82ac4e21a914ca22acefce12e43d",
+        "43af2571424da85583debe82fac969fd252f6f9f635ced42e7fd9cda2aa987ba",
+        "54f012645b71530fa737855bec0b10d10f8213a7605c674f7a76c1c83aa476ff",
+        "82b45ac16832984bc3a4b82b801c7a2e70590cb33ca3089cad312f791898a28f",
+        "85d3a86211256c8f9f580a7ee8e9dfc6b2477f91a2131f0a174104e439c1e9e8",
+        "b2f1609bd2dc4d9cae66442abc9d7512ab411360d99ce85a131e319ab6c457f3",
+        "d52d40885e65eb9f9b059897216b6fe5fcd7c5402062ceafb6d944397f395910",
+        "e07a9565900677aa4bd4e5899a80ee554f96c20127cacd3361a6d215c856b61f",
+        "f5ad2e49f9f225f94cfc7deda008332a33a8da6e321c4d718da9def5ef7bd3cb"
+      ],
+      "current_sha256": "1d7beef5b945f77a8837d2631121acb607032684fde07d4ef37f83b1ffd49e38",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md",
+      "state": "present",
+      "prior_sha256s": [
+        "22cda15d0f33544255d386525872fc4ffe9a48c03cd6874dc61983761e8ce65d",
+        "273854123d12bc5762d401eb63e6654ac2f69e6e8a1c9d253eecace0452aa688",
+        "3036aff1ecaabadd45b1cc1bde2ab28f58c9367f645eb7ffe3735334112c9f04",
+        "5f9271412f2adde4c1fed3b67fafbbd25cf7ddf62df75354c78ed9d141c459f5",
+        "684e9c0f9d7acbf115dd8365ff27c66ce22eecfb6b381b805c0feb5249e5cc7c",
+        "6d9a82b2d9e1346f543c9a12568511dd1f53a36049cc13edbd0e04912c66bbc9",
+        "92ce59b2fc90014f11ae41127b4a1f6b8b71c8a248fc8078ef55125f4b3cec22",
+        "af1066176c33db3580ff4f47b22bbc90ae2fde587357570ad43430ac6975522e",
+        "d274ab40f022da3124084d51f99b5c403518256ff27c1939282b0d49f7979560",
+        "d66f73d33602faacf1d7d1b796aa38a9f842e077609960328ec0ac38d64be7eb",
+        "fe969b696bee84456948673fcf051ab24b17cc72c97fa23dca58ee1d8e69c5ce"
+      ],
+      "current_sha256": "6e9db8b6600c2b108bb7aef7d8b1c408c20c2448f26e2e45af4df7b6dc81f05a",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "docs/egress/foundation/persona-catalog.md",
+      "state": "present",
+      "prior_sha256s": [
+        "5d8d24bce5966a6f4e7d698830940597eedfb545e115567d5e4a4ba4d797fbb3"
+      ],
+      "current_sha256": "bced4154e6c7a9ea7a317ffcf6ddc7e07ea67accfa6b2d1dd5747420368f9ef5",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "docs/egress/maintenance/bootstrap-inventory-lock.json",
+      "state": "present",
+      "prior_sha256s": [
+        "2ea1d70f7fb2885bd048d4d81a7c5d7fed8d9f283044d5f70df344cd66fa1d18",
+        "593130bca0612eb2584945c577a7d3a014e7cdc42b4ca544b6f8d6ef4a593532",
+        "629cb0a8b32532d98edc52693c8bf00c70ec81145f0a870b870a63cebd238594",
+        "88d027eefa197d564d1bc3a902581be412768239a06902facf448d51e5f7d24c",
+        "917fbcc0c6cf8f0a28b553837e167c07efc38aec566a98ab52c59d68ceec1b65",
+        "a354f834db1b5cecaa2f70989fe1cf72ebcdbb1987a79029ef3409755b0229ac",
+        "edf349af67eb9821014c8639df4f2a76e61f6cb1a024d09a2019bb37816200b1"
+      ],
+      "current_sha256": "d94bfe584b1cfb61bb852c7c6de9dbc3298084c0a95e329c960b0ee12fc0f0a2",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "frontend/src/api/admin/settings.ts",
+      "state": "present",
+      "prior_sha256s": [
+        "7600f4bc33683662bf9131aeec789785dfe886f5003a27df55403837d5a5e824"
+      ],
+      "current_sha256": "9a5a08284724b8569f5788ee2484c4d9f0cd71d1b88e3901f6e41b882d56ef82",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "frontend/src/i18n/locales/en/admin/settings.ts",
+      "state": "present",
+      "prior_sha256s": [
+        "e75a8673c854042cc8404fa1ed01a0bd8ccf45834bd2acff2cf31a93495ee09d"
+      ],
+      "current_sha256": "8a6652d01e096697814917c471ac4287656ba308e7f82c7b3014415a0acb178e",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "frontend/src/i18n/locales/zh/admin/settings.ts",
+      "state": "present",
+      "prior_sha256s": [
+        "a696bc2ead944596efbf4ad93cee59ad4d1271ee84d5af0502575508d9c6f446"
+      ],
+      "current_sha256": "5feb7c359f610c3dac54ee2be8671c7e1fe12db02c03ce1465e7e74fb67c3c88",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "frontend/src/views/admin/SettingsView.vue",
+      "state": "present",
+      "prior_sha256s": [
+        "f3d7d0d7bbb1e354be111bb63c2e34df28cd6e4060999fe26a7465b53dcfe9f6"
+      ],
+      "current_sha256": "79809091223dbf14b736d0963c393fe98918c08cecc057d76551988fddca5a29",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "tools/changeset6_benchmark_evidence.py",
+      "state": "present",
+      "prior_sha256s": [
+        "a0e063c600f5beca4881628fedb75e74e4352412edba90f4a91edbf4b8e62e81"
+      ],
+      "current_sha256": "b7145a70b43b398d44fb1bda0243728036af6ebc135622271080255e42691999",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "tools/check_ledger_completeness.py",
+      "state": "present",
+      "prior_sha256s": [
+        "3e650b9d07982ff96f1c90f6fcf70b4ba9264df7183b0ef91edfcc3cbd1cf375"
+      ],
+      "current_sha256": "b9481a9b6acaa7c1b26943ca51dd8e5f98fb8b8e039aeab597d7bdbc3bd169c0",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "tools/check_version_leak.py",
+      "state": "present",
+      "prior_sha256s": [
+        "b3a4203408455eca17363d6e17cbc82d2fda54dbd5645004dcb1d4f29539ce7b"
+      ],
+      "current_sha256": "0a4f484ff2f6041923ea552d6fb9ab0d9f307d2a728bb15f5ab2b3ccd3264314",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "tools/fw_e_workspace_transition.py",
+      "state": "present",
+      "prior_sha256s": [
+        "5b49a6b0b09e78284223ea4a136271d6deda03c6ce7d4b40de5bab9fb668aba4"
+      ],
+      "current_sha256": "a474dd35e689e8984b28bc54d206761d87e5db04723964d9f590303aeb9a8de2",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "tools/generate_claude_fw_g_profile.py",
+      "state": "present",
+      "prior_sha256s": [
+        "2e039e1dc54de7e3a363da4544888498063fbcb85d4a8d49d228a49fe377a612",
+        "871e74ac3e0466d26977e9bb44256ec2e4d913b7e87895c7a307c4c5926420e4",
+        "a476f1c75745abacb1c3b1d99542326ad34c17475d16359b4c5454e43b5e54bd",
+        "ead47ac1ce4dd456ee4c4d37ad2a09b23e4eb034698ff62af57fa443ea542483"
+      ],
+      "current_sha256": "2ec7faf3f39582c6e91e12ba6f2a3b6f925cb926d34b940caa7eabb96a6fe14a",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "tools/official_client_capture/capturelib/claude_fw_f_v4.py",
+      "state": "present",
+      "prior_sha256s": [
+        "2eda3f870240e348f74bfcc4f2364105a56b74d2c792124e6d7544f045a92ba2"
+      ],
+      "current_sha256": "3f019b4305f76321ad0a2a713b0359b115f4b5923bcedcf20720d739b8f8dea9",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "tools/official_client_capture/claude_fw_f_complete_runner.py",
+      "state": "present",
+      "prior_sha256s": [
+        "89b6eab7d4484c9936f8ab50254c1abc40c80b494aced597412459faa8b2441c"
+      ],
+      "current_sha256": "c1de6b8074cf497b8180e3bcbac6292c90814ac611fb7924767fd89ea289c4bd",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "tools/official_client_capture/claude_fw_f_measured_rules.py",
+      "state": "present",
+      "prior_sha256s": [
+        "709286e864d74a2bb3afcb1bfb3f1a0325194db43209db1ce35a1c9cd061611d"
+      ],
+      "current_sha256": "c8750033fc8f69cb9f754a96bcd9942b81699bb4bfdcdd2a111536af0ce313e2",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "tools/official_client_capture/claude_fw_g_acceptance.py",
+      "state": "present",
+      "prior_sha256s": [
+        "a5c35ce93615caf5c051682154067a116523d0831c40b472ade47291cb3c0cc8",
+        "bd7e52e02d8b7c14e66a71972a124f822a529a7e9c49714848f2842456698692"
+      ],
+      "current_sha256": "48df4b8a2a7b0a8bced36e9b1aa878f551b8c5642260ed5cc2872ac59f7f69b0",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "tools/official_client_capture/claude_fw_g_candidate_pair.py",
+      "state": "present",
+      "prior_sha256s": [
+        "386548bb2fe0bb24a2a418b8606145115293c851f26adadc1f629cc9e2da6bfa",
+        "38a4499ad70a8a25f335939c06444f34c924636cbc6a9764cbd3f83c2948b048",
+        "90a84e8de5eb0b24e84afac1b03d07df0e555af3a544f3ef45a48739c5c953ad",
+        "ed7e93e604c7c314d2bcc1e34d4fff3587f03635083a63c5a11494a8654947a9"
+      ],
+      "current_sha256": "b723b27ea765889e4d74d10d2f10f09983dfe1990cebc645975aae99aeb9c132",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "tools/official_client_capture/claude_fw_g_implementation_coverage_2_1_226.json",
+      "state": "present",
+      "prior_sha256s": [
+        "0d513db16ab5ec1ed5a4ff11afc230aab9f48175e95f611acf35a7469e50330c",
+        "378a880d7293b7e9f3916031ee3b0e45884456371784ba6cd48ff15432cda6cb",
+        "482324ef0ff68062a5323098097da6a719a3c086f426c67fc2bb6ec27b88c783",
+        "79c208e3775b3dfdc3f62ea95548550801bf2aea96e67d5010b390f894ec008c"
+      ],
+      "current_sha256": "cc783db04973554d83ee9f4bf8581d48f7caf0f1bdf4beafcc34199d53aeedfb",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "tools/official_client_capture/claude_required_rules_2_1_226.json",
+      "state": "present",
+      "prior_sha256s": [
+        "50261962778b8a7cf85f2dd01a8057f8004e92c0978456e88d9457d4ef8030b3"
+      ],
+      "current_sha256": "c09fdc9158d4d3aee7e5d28cc4a794e259a3c56899e00d558afab4c537389045",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "tools/official_client_capture/codex_upgrade.py",
+      "state": "present",
+      "prior_sha256s": [
+        "2d908fa6bfda9ad2cfcea8d8af8fcd62ac6bdf4735b1175cd622b526eb3ba329"
+      ],
+      "current_sha256": "cd643c5f9da9437dc7bc88b57d94cfc830b93f354b18c606955666d62457abcd",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "tools/official_client_capture/codex_upgrade_gate_receipt.py",
+      "state": "present",
+      "prior_sha256s": [
+        "c60b3c4992b5a6081e678eb6c3b23e308ca6ea82e8be395e66a9705c01375abb"
+      ],
+      "current_sha256": "861d07d5d6574c0e953df930907bfc8d5a2a64f34072b2f204992362f22327d8",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "tools/official_client_capture/codex_upgrade_gate_receipt.schema.json",
+      "state": "present",
+      "prior_sha256s": [
+        "9dd199157683be777a2a575ea06d947ec40d40ae321acdaf7e8f6109c9cc6131"
+      ],
+      "current_sha256": "b140621fb5fbf27292ab11e7ac4eec165bc8e86932528736c0bb4f6226ee4ea3",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "tools/official_client_capture/production_activation_receipt.py",
+      "state": "present",
+      "prior_sha256s": [
+        "f292af9d4d81c8d839618cc0065fbe89ce23761365929490b5300a756ecf9ae5"
+      ],
+      "current_sha256": "83ed012547421355251e0cbc28a3c8b9cb471250170e9b2d11242356cd085382",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_claude_fw_e_complete_campaign.py",
+      "state": "present",
+      "prior_sha256s": [
+        "98b796ae15589da188ae8f2601ed7439ee3e90d33c2a89ec875bbe9d188a02da",
+        "a9f6e0008d50a794b94b68e0dcae497784e65af316b8076532bbd167e53ebeb7"
+      ],
+      "current_sha256": "3bf2a0288437400afb30c01bc64309a3f83a13b2ed0fac2c4f1b229f9e34d2e7",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_claude_fw_f_measured_rules.py",
+      "state": "present",
+      "prior_sha256s": [
+        "e0959e86ee1ca54921770713f6214577d447714599c337dd813aba18fb36cd35"
+      ],
+      "current_sha256": "d31ae1fadcc3e93a9d240ff546de1e6179a5fdea6240120ad04bb1b559b6dc71",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_claude_fw_f_profile.py",
+      "state": "present",
+      "prior_sha256s": [
+        "f66b7d0e8cfaf38fcb78fb40edf47e2f1e3e65e565ca852c6e10506f56b44edf"
+      ],
+      "current_sha256": "f4c0048008dfa056dfdfb21a9a19ffc76abbcc6d1ef2ceffc82d659714585951",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_claude_fw_f_v4.py",
+      "state": "present",
+      "prior_sha256s": [
+        "c5cca3aaafa03e2a29018cafb3183c34476640b125d6a63103a328d2126b874e"
+      ],
+      "current_sha256": "3342aad46829f54ae92f97871d20d400c11a81bef8fa798b1edfbf4bcf5be1a5",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_upgrade.py",
+      "state": "present",
+      "prior_sha256s": [
+        "ce450f428db89c5a6f2295914267c35e436b8297ee6044836e03e4e234b8e534"
+      ],
+      "current_sha256": "b87b55aa9741a10f49fbc5da495104b483be089522fde7218effc577717ee002",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_upgrade_gate_receipt.py",
+      "state": "present",
+      "prior_sha256s": [
+        "dcbb5b251bbf7ff376ecf75b88bcb684679d9eb3ed0ad5f30dbcb8b6812ce3b3"
+      ],
+      "current_sha256": "c0d4d642248a00687c4bf9d462ea3ec8d69830cd1cbcfaecd49552486edd16d7",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_production_activation_receipt.py",
+      "state": "present",
+      "prior_sha256s": [
+        "eab63014f52a0cb3047ea18ddb8b716f822856a901b42bd83bf9a9fe74b7be7a"
+      ],
+      "current_sha256": "9871203509cb1087e785a62ebdfcd56b5a2795d756510c51a381ba3ac81c850b",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "tools/upstream_merge/gitops.py",
+      "state": "present",
+      "prior_sha256s": [
+        "5bfe32178bc3f3e456178761d328c360efd0ae4ef0214f6aae78c7ca3465f5e6",
+        "a9d4ea4a532e4352d6b3caf58dd0eeb391e058b6a9679faabb401f30d417abf0"
+      ],
+      "current_sha256": "44d33ec647d18aaf23622310a451d2c4f8be489842b7a61acb91b8a9090c4a7c",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "tools/upstream_merge/tests/test_workflow.py",
+      "state": "present",
+      "prior_sha256s": [
+        "4bfd6c6eadc4b7dd22b769346de000aef2b9baf24d9274e35fa5086e33d822a9",
+        "81dbb171da724fc5a2ace027a28fb055af9034088a302418b220ee8cffb69b60"
+      ],
+      "current_sha256": "8783e42366787c049e09edca51f642016ccc4e5de8ffab9dd018f7be8e6d8c10",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    },
+    {
+      "path": "tools/version_leak_baseline.json",
+      "state": "present",
+      "prior_sha256s": [
+        "7274caa9daf5a8b7bf4edb5b3e70f98e4fed1ecc7798c48c8dd95b73ff80ad48"
+      ],
+      "current_sha256": "0b54ca935002d9e2dc6278e9ded93354c356418405c520fa6c0090c2712009b7",
+      "consolidated_reason": "将历史精确 transition 合并为 0.149.1 当前终态；原始收据保持只读。"
+    }
+  ],
+  "result": "passed",
+  "identity_sha256": "6a8c8c1259237ce3fa0ab0a81db4022e5791c81819e34bbb8600a51c7d9cc19e"
+}

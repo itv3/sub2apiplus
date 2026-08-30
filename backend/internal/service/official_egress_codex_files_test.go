@@ -165,7 +165,7 @@ func TestUploadOfficialCodexFileExecutesProfileDrivenThreeStepFlow(t *testing.T)
 				_, _ = io.WriteString(writer, `{"status":"retry"}`)
 				return
 			}
-			_, _ = io.WriteString(writer, `{"status":"success","download_url":"https://download.example/file_123","file_name":"hello.txt","mime_type":"text/plain"}`)
+			_, _ = io.WriteString(writer, `{"status":"success","download_url":"https://download.example/file_123","file_name":"hello.txt","mime_type":"text/plain","file_size_bytes":7}`)
 		default:
 			http.NotFound(writer, request)
 		}
@@ -192,7 +192,7 @@ func TestUploadOfficialCodexFileExecutesProfileDrivenThreeStepFlow(t *testing.T)
 		URI:           "sediment://file_123",
 		DownloadURL:   "https://download.example/file_123",
 		FileName:      "hello.txt",
-		FileSizeBytes: 5,
+		FileSizeBytes: 7,
 		MIMEType:      officialCodexFileStringPointer("text/plain"),
 	}, uploaded)
 
@@ -263,10 +263,98 @@ func TestUploadOfficialCodexFileExecutesProfileDrivenThreeStepFlow(t *testing.T)
 	})
 }
 
+func TestUploadOfficialCodexHostedFileIncludesContextAndFallsBackToRequestSize(t *testing.T) {
+	var wireMu sync.Mutex
+	wires := make([]officialCodexFileWireRequest, 0, 3)
+	const returnedUploadURL = "https://region.oaiusercontent.com/files/file_hosted/raw?sig=hosted"
+
+	server := httptest.NewTLSServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		body, readErr := io.ReadAll(request.Body)
+		if readErr != nil {
+			http.Error(writer, readErr.Error(), http.StatusInternalServerError)
+			return
+		}
+		wireMu.Lock()
+		wires = append(wires, officialCodexFileWireRequest{
+			Method: request.Method, RequestURI: request.RequestURI,
+			Host: request.Host, Header: request.Header.Clone(),
+			ContentLength: request.ContentLength, Body: body,
+		})
+		wireMu.Unlock()
+
+		switch {
+		case request.Method == http.MethodPost && request.URL.Path == "/backend-api/files":
+			writer.Header().Set("content-type", "application/json")
+			_, _ = fmt.Fprintf(writer, `{"file_id":"file_hosted","upload_url":%q}`, returnedUploadURL)
+		case request.Method == http.MethodPut && request.URL.Path == "/files/file_hosted/raw":
+			writer.WriteHeader(http.StatusCreated)
+		case request.Method == http.MethodPost && request.URL.Path == "/backend-api/files/file_hosted/uploaded":
+			writer.Header().Set("content-type", "application/json")
+			_, _ = io.WriteString(writer, `{"status":"success","download_url":"https://download.example/file_hosted","file_name":"report.pdf","mime_type":"application/pdf"}`)
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	upstream := newOfficialCodexFileTestUpstream(t, server)
+	runtimeState, err := newOfficialEgressTransitionRuntimeWithExecutor(
+		officialegress.DefaultGuard(),
+		upstream,
+		officialegress.ExecutorID(t.Name()),
+		officialegress.ReleaseModeActive,
+	)
+	require.NoError(t, err)
+	service := &OpenAIGatewayService{httpUpstream: upstream, officialEgress: runtimeState}
+	uploaded, err := service.UploadOfficialCodexFile(
+		context.Background(),
+		officialCodexFileTestAccount(),
+		OfficialCodexFileUploadInput{
+			FileName: "report.pdf", FileSizeBytes: 8,
+			Contents: bytes.NewReader([]byte("%PDF-1.4")),
+			HostedUpload: &OfficialCodexHostedFileUploadContext{
+				ConnectorID: "library", ActionName: "create_library_file", Model: "gpt-work",
+			},
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, uint64(8), uploaded.FileSizeBytes, "旧服务缺少 file_size_bytes 时必须回退请求大小")
+
+	wireMu.Lock()
+	actualWires := append([]officialCodexFileWireRequest(nil), wires...)
+	wireMu.Unlock()
+	require.Len(t, actualWires, 3)
+	require.Equal(
+		t,
+		`{"file_name":"report.pdf","file_size":8,"use_case":"codex","codex_connector_id":"library","codex_action_name":"create_library_file","codex_model":"gpt-work"}`,
+		string(actualWires[0].Body),
+	)
+}
+
+func TestUploadOfficialCodexHostedFileRejectsIncompleteContextBeforeNetwork(t *testing.T) {
+	testCases := []OfficialCodexHostedFileUploadContext{
+		{ActionName: "action", Model: "model"},
+		{ConnectorID: "connector", Model: "model"},
+		{ConnectorID: "connector", ActionName: "action"},
+		{ConnectorID: " ", ActionName: "action", Model: "model"},
+	}
+	for _, hostedUpload := range testCases {
+		upstream := &officialCodexFileTestUpstream{}
+		service := &OpenAIGatewayService{httpUpstream: upstream}
+		_, err := service.UploadOfficialCodexFile(
+			context.Background(),
+			officialCodexFileTestAccount(),
+			OfficialCodexFileUploadInput{HostedUpload: &hostedUpload},
+		)
+		require.ErrorContains(t, err, "三个字段必须同时为非空字符串")
+		require.Empty(t, upstream.snapshot())
+	}
+}
+
 func TestUploadOfficialCodexFileRejectsOversizeBeforeNetwork(t *testing.T) {
 	upstream := &officialCodexFileTestUpstream{}
 	service := &OpenAIGatewayService{httpUpstream: upstream}
-	profile, err := resolveCodexVersionProfile(officialCodexVersion0145)
+	profile, err := resolveCodexVersionProfileForMode(officialClientProfileModeActive)
 	require.NoError(t, err)
 	_, err = service.UploadOfficialCodexFile(
 		context.Background(),
@@ -348,7 +436,7 @@ func TestOfficialCodexFileFinalizeStopsAtProfileTimeout(t *testing.T) {
 	defer server.Close()
 	upstream := newOfficialCodexFileTestUpstream(t, server)
 	service := &OpenAIGatewayService{httpUpstream: upstream}
-	profile, err := resolveCodexVersionProfile(officialCodexVersion0145)
+	profile, err := resolveCodexVersionProfileForMode(officialClientProfileModeActive)
 	require.NoError(t, err)
 	runtimeState, err := resolveOfficialEgressRuntime(nil, upstream)
 	require.NoError(t, err)

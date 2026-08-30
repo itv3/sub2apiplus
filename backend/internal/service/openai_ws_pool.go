@@ -68,6 +68,9 @@ type openAIWSAcquireRequest struct {
 	Account *Account
 	WSURL   string
 	Headers http.Header
+	// RoutingHint 只能由已解析的 response.create Body 生成；严格 OAuth
+	// Compiler 不读取同名普通 Header，避免调用方或账号 override 注入。
+	RoutingHint officialegress.CodexRoutingHintFacts
 	// SinkID 由业务调用点提供，连接池仅为后台预热和延迟拨号保留并透传。
 	SinkID officialegress.SinkID
 	// HeadersFactory is evaluated inside dialConn. It exists so credentials

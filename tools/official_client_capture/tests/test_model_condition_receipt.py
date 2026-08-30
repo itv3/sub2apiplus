@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 import tempfile
@@ -83,6 +84,51 @@ class ModelConditionReceiptTest(unittest.TestCase):
             _h1_request(request_model)
         )
         return root
+
+    def _write_prewarm(
+        self,
+        root: Path,
+        *,
+        connection_id: int = 1,
+        model: str = "gpt-5.6-luna",
+        lite: bool = True,
+    ) -> Path:
+        """绑定夹具里一份已完整落盘的模型目录响应。"""
+
+        request = root / "relay" / f"conn{connection_id:03d}.client_to_upstream.bin"
+        response = root / "relay" / f"conn{connection_id:03d}.upstream_to_client.bin"
+        path = root / "model-catalog-prewarm.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": "codex-model-catalog-prewarm/v1",
+                    "status": "success",
+                    "codex_version": "0.149.1",
+                    "model_id": model,
+                    "use_responses_lite": lite,
+                    "protocol_record_count": 3,
+                    "model_count": 2,
+                    "capture": {
+                        "connection_id": connection_id,
+                        "request_path": (
+                            f"relay/conn{connection_id:03d}.client_to_upstream.bin"
+                        ),
+                        "request_sha256": hashlib.sha256(
+                            request.read_bytes()
+                        ).hexdigest(),
+                        "response_path": (
+                            f"relay/conn{connection_id:03d}.upstream_to_client.bin"
+                        ),
+                        "response_sha256": hashlib.sha256(
+                            response.read_bytes()
+                        ).hexdigest(),
+                        "use_responses_lite": lite,
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        return path
 
     def _ws_fixture(
         self,
@@ -202,6 +248,22 @@ class ModelConditionReceiptTest(unittest.TestCase):
             self.assertTrue(receipt["use_responses_lite"])
             self.assertFalse(receipt["model_fallback"])
             self.assertEqual(receipt["observed_request_models"], ["gpt-5.6-luna"])
+            roles_by_path = {
+                item["path"]: item["roles"]
+                for item in receipt["evidence_bindings"]
+            }
+            self.assertEqual(
+                roles_by_path["relay/conn001.client_to_upstream.bin"],
+                ["models_request"],
+            )
+            self.assertEqual(
+                roles_by_path["relay/conn001.upstream_to_client.bin"],
+                ["models_response"],
+            )
+            self.assertEqual(
+                roles_by_path["relay/conn002.client_to_upstream.bin"],
+                ["responses_request"],
+            )
             validate_receipt(
                 receipt,
                 root=root,
@@ -210,6 +272,36 @@ class ModelConditionReceiptTest(unittest.TestCase):
                 model_id="gpt-5.6-luna",
                 use_responses_lite=True,
             )
+
+    def test_角色被改绑到错误请求时失败关闭(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(Path(directory) / "run")
+            receipt = build_receipt(
+                root=root,
+                job_id="official-lite-http-response",
+                run_id="campaign-lite-http",
+                track="lite",
+                expected_model="gpt-5.6-luna",
+                expected_lite=True,
+            )
+            by_path = {
+                item["path"]: item for item in receipt["evidence_bindings"]
+            }
+            by_path["relay/conn001.client_to_upstream.bin"]["roles"] = [
+                "responses_request"
+            ]
+            by_path["relay/conn002.client_to_upstream.bin"]["roles"] = [
+                "models_request"
+            ]
+            with self.assertRaisesRegex(ModelConditionReceiptError, "models_request"):
+                validate_receipt(
+                    receipt,
+                    root=root,
+                    job_id="official-lite-http-response",
+                    track="lite",
+                    model_id="gpt-5.6-luna",
+                    use_responses_lite=True,
+                )
 
     def test_accepts_multiple_consistent_models_responses(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -239,7 +331,7 @@ class ModelConditionReceiptTest(unittest.TestCase):
                 expected_model="gpt-5.6-luna",
                 expected_lite=True,
             )
-            self.assertEqual(len(receipt["evidence_bindings"]), 5)
+            self.assertEqual(len(receipt["evidence_bindings"]), 6)
             validate_receipt(
                 receipt,
                 root=root,
@@ -248,6 +340,277 @@ class ModelConditionReceiptTest(unittest.TestCase):
                 model_id="gpt-5.6-luna",
                 use_responses_lite=True,
             )
+
+    def test_预热摘要只绑定完整响应并排除并发半响应(self) -> None:
+        """隔离 app-server 主动退出留下的其他半响应不得作废已绑定的完整 200。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(Path(directory) / "run")
+            relay_path = root / "relay" / "relay.json"
+            relay = json.loads(relay_path.read_text(encoding="utf-8"))
+            relay["connections"].append({"connection_id": 3})
+            relay_path.write_text(json.dumps(relay), encoding="utf-8")
+            (root / "relay" / "conn003.client_to_upstream.bin").write_bytes(
+                b"GET /backend-api/codex/models HTTP/1.1\r\n"
+                b"host: chatgpt.com\r\n\r\n"
+            )
+            (root / "relay" / "conn003.upstream_to_client.bin").write_bytes(
+                b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n"
+                b"content-length: 100\r\n\r\n{"
+            )
+            prewarm = self._write_prewarm(root)
+
+            with self.assertRaises(ModelConditionReceiptError):
+                build_receipt(
+                    root=root,
+                    job_id="official-lite-http-response",
+                    run_id="campaign-lite-http",
+                    track="lite",
+                    expected_model="gpt-5.6-luna",
+                    expected_lite=True,
+                )
+            receipt = build_receipt(
+                root=root,
+                job_id="official-lite-http-response",
+                run_id="campaign-lite-http",
+                track="lite",
+                expected_model="gpt-5.6-luna",
+                expected_lite=True,
+                model_catalog_prewarm=prewarm,
+            )
+            bound_paths = {item["path"] for item in receipt["evidence_bindings"]}
+            self.assertIn("model-catalog-prewarm.json", bound_paths)
+            self.assertIn("relay/conn001.upstream_to_client.bin", bound_paths)
+            self.assertNotIn("relay/conn003.upstream_to_client.bin", bound_paths)
+
+    def test_预热摘要原始字节摘要漂移时失败关闭(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(Path(directory) / "run")
+            prewarm = self._write_prewarm(root)
+            payload = json.loads(prewarm.read_text(encoding="utf-8"))
+            payload["capture"]["response_sha256"] = "0" * 64
+            prewarm.write_text(json.dumps(payload), encoding="utf-8")
+
+            with self.assertRaisesRegex(ModelConditionReceiptError, "摘要不一致"):
+                build_receipt(
+                    root=root,
+                    job_id="official-lite-http-response",
+                    run_id="campaign-lite-http",
+                    track="lite",
+                    expected_model="gpt-5.6-luna",
+                    expected_lite=True,
+                    model_catalog_prewarm=Path("model-catalog-prewarm.json"),
+                )
+
+    def test_预热摘要接受_manifest_证明的等长脱敏(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(Path(directory) / "run")
+            request_path = root / "relay" / "conn001.client_to_upstream.bin"
+            request_path.write_bytes(
+                request_path.read_bytes()
+                .replace(b"\r\n\r\n", b"\r\nauthorization: Bearer secret-one\r\n\r\n")
+            )
+            prewarm = self._write_prewarm(root)
+            request_path.write_bytes(
+                request_path.read_bytes().replace(
+                    b"Bearer secret-one",
+                    b"<secret><secret>x",
+                )
+            )
+            response_path = root / "relay" / "conn001.upstream_to_client.bin"
+            request = request_path.read_bytes()
+            response = response_path.read_bytes()
+            relay_path = root / "relay" / "relay.json"
+            relay = json.loads(relay_path.read_text(encoding="utf-8"))
+            relay["credential_scrubbing"] = {
+                "method": "equal_length_replacement",
+                "byte_offsets_preserved": True,
+                "hashes_recomputed": True,
+            }
+            relay["connections"][0] = {
+                "connection_id": 1,
+                "valid": True,
+                "error": None,
+                "bytes": {
+                    "client_to_upstream": len(request),
+                    "upstream_to_client": len(response),
+                },
+                "sha256": {
+                    "client_to_upstream": hashlib.sha256(request).hexdigest(),
+                    "upstream_to_client": hashlib.sha256(response).hexdigest(),
+                },
+                "segments": [
+                    {
+                        "direction": "client_to_upstream",
+                        "offset": 0,
+                        "length": len(request),
+                    },
+                    {
+                        "direction": "upstream_to_client",
+                        "offset": 0,
+                        "length": len(response),
+                    },
+                ],
+            }
+            relay_path.write_text(json.dumps(relay), encoding="utf-8")
+
+            receipt = build_receipt(
+                root=root,
+                job_id="official-lite-http-response",
+                run_id="campaign-lite-http",
+                track="lite",
+                expected_model="gpt-5.6-luna",
+                expected_lite=True,
+                model_catalog_prewarm=prewarm,
+            )
+            self.assertEqual(receipt["observed_request_models"], ["gpt-5.6-luna"])
+
+    def test_ignores_manifest_declared_zero_byte_connection(self) -> None:
+        """中继登记但未传输任何字节的竞速连接不属于证据丢失。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(Path(directory) / "run")
+            relay_path = root / "relay" / "relay.json"
+            relay = json.loads(relay_path.read_text(encoding="utf-8"))
+            relay["connections"].append(
+                {
+                    "connection_id": 3,
+                    "bytes": {},
+                    "sha256": {},
+                    "segments": [],
+                    "opened_at_unix_ms": 1,
+                    "closed_at_unix_ms": 2,
+                }
+            )
+            relay_path.write_text(json.dumps(relay), encoding="utf-8")
+
+            receipt = build_receipt(
+                root=root,
+                job_id="official-lite-http-response",
+                run_id="campaign-lite-http",
+                track="lite",
+                expected_model="gpt-5.6-luna",
+                expected_lite=True,
+            )
+            self.assertEqual(receipt["observed_request_models"], ["gpt-5.6-luna"])
+            bound_paths = {item["path"] for item in receipt["evidence_bindings"]}
+            self.assertIn("relay/relay.json", bound_paths)
+            self.assertNotIn("relay/conn003.client_to_upstream.bin", bound_paths)
+
+    def test_允许受_manifest_约束的单向_models_失败尝试(self) -> None:
+        """已有完整 200 时，额外单向请求是上游零响应事实，不是文件丢失。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(Path(directory) / "run")
+            request = (
+                b"GET /backend-api/codex/models?client_version=0.149.1 HTTP/1.1\r\n"
+                b"host: chatgpt.com\r\n\r\n"
+            )
+            request_path = root / "relay" / "conn003.client_to_upstream.bin"
+            request_path.write_bytes(request)
+            relay_path = root / "relay" / "relay.json"
+            relay = json.loads(relay_path.read_text(encoding="utf-8"))
+            relay["connections"].append(
+                {
+                    "connection_id": 3,
+                    "valid": True,
+                    "bytes": {"client_to_upstream": len(request)},
+                    "sha256": {
+                        "client_to_upstream": hashlib.sha256(request).hexdigest()
+                    },
+                    "segments": [
+                        {
+                            "direction": "client_to_upstream",
+                            "offset": 0,
+                            "length": len(request),
+                        }
+                    ],
+                }
+            )
+            relay_path.write_text(json.dumps(relay), encoding="utf-8")
+
+            receipt = build_receipt(
+                root=root,
+                job_id="official-lite-http-response",
+                run_id="campaign-lite-http",
+                track="lite",
+                expected_model="gpt-5.6-luna",
+                expected_lite=True,
+            )
+            self.assertEqual(receipt["observed_request_models"], ["gpt-5.6-luna"])
+            bound_paths = {item["path"] for item in receipt["evidence_bindings"]}
+            self.assertIn("relay/relay.json", bound_paths)
+            self.assertIn("relay/conn003.client_to_upstream.bin", bound_paths)
+
+    def test_单向_models_的_manifest_摘要漂移仍失败关闭(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(Path(directory) / "run")
+            request = (
+                b"GET /backend-api/codex/models?client_version=0.149.1 HTTP/1.1\r\n"
+                b"host: chatgpt.com\r\n\r\n"
+            )
+            (root / "relay" / "conn003.client_to_upstream.bin").write_bytes(request)
+            relay_path = root / "relay" / "relay.json"
+            relay = json.loads(relay_path.read_text(encoding="utf-8"))
+            relay["connections"].append(
+                {
+                    "connection_id": 3,
+                    "valid": True,
+                    "bytes": {"client_to_upstream": len(request)},
+                    "sha256": {"client_to_upstream": "0" * 64},
+                    "segments": [
+                        {
+                            "direction": "client_to_upstream",
+                            "offset": 0,
+                            "length": len(request),
+                        }
+                    ],
+                }
+            )
+            relay_path.write_text(json.dumps(relay), encoding="utf-8")
+
+            with self.assertRaisesRegex(ModelConditionReceiptError, "缺少连接 3"):
+                build_receipt(
+                    root=root,
+                    job_id="official-lite-http-response",
+                    run_id="campaign-lite-http",
+                    track="lite",
+                    expected_model="gpt-5.6-luna",
+                    expected_lite=True,
+                )
+
+    def test_rejects_missing_bytes_for_nonempty_connection(self) -> None:
+        """只豁免严格空连接；声称有 segment 的连接仍须存在原始字节。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._fixture(Path(directory) / "run")
+            relay_path = root / "relay" / "relay.json"
+            relay = json.loads(relay_path.read_text(encoding="utf-8"))
+            relay["connections"].append(
+                {
+                    "connection_id": 3,
+                    "bytes": {"client_to_upstream": 10},
+                    "sha256": {"client_to_upstream": "0" * 64},
+                    "segments": [
+                        {
+                            "direction": "client_to_upstream",
+                            "offset": 0,
+                            "length": 10,
+                        }
+                    ],
+                }
+            )
+            relay_path.write_text(json.dumps(relay), encoding="utf-8")
+
+            with self.assertRaisesRegex(ModelConditionReceiptError, "缺少连接 3"):
+                build_receipt(
+                    root=root,
+                    job_id="official-lite-http-response",
+                    run_id="campaign-lite-http",
+                    track="lite",
+                    expected_model="gpt-5.6-luna",
+                    expected_lite=True,
+                )
 
     def test_rejects_models_metadata_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

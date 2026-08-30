@@ -60,6 +60,20 @@ class CandidateAuxCaptureScriptTest(unittest.TestCase):
         self.assertNotIn("--upstream-ip", self.source)
         self.assertNotIn("--upstream-map", self.source)
 
+    def test_read_only_preflight_finishes_before_restoration_trap(self) -> None:
+        snapshot = self.source.index("original_ca_hash=")
+        trap = self.source.index("trap restore_environment EXIT ERR INT TERM")
+        first_mutation = self.source.index('docker stop "$keeper_container"', trap)
+        self.assertLess(snapshot, trap)
+        self.assertLess(trap, first_mutation)
+
+    def test_aux_group_capabilities_are_checked_before_capture(self) -> None:
+        live_gate = self.source.index("API Key 分组未启用 Live")
+        image_gate = self.source.index("API Key 分组未启用图片生成")
+        snapshot = self.source.index('docker cp "$service_container:/etc/hosts"')
+        self.assertLess(live_gate, snapshot)
+        self.assertLess(image_gate, snapshot)
+
     def test_a12_counts_target_profile_settings_request(self) -> None:
         self.assertIn('"wham_settings_user": 2', self.source)
         self.assertIn('"wham_usage": 2', self.source)
@@ -86,9 +100,8 @@ class CandidateAuxCaptureScriptTest(unittest.TestCase):
         self.assertIn('"legacy_compact": 4', self.source)
 
     def test_text_and_image_scenarios_use_separate_models(self) -> None:
-        # 文本模型默认值由 test_main_track_models 钉在 LITE_TRACK_MODELS 上；
-        # 这里只要求两者是**不同的两个变量**，不再重复锁定具体取值。
-        self.assertIn("model=${MODEL:-gpt-5.6-luna}", self.source)
+        # 文本模型由 Campaign 显式注入；这里只要求两者是不同变量。
+        self.assertIn("model=${MODEL:?", self.source)
         self.assertIn("image_model=${IMAGE_MODEL:-gpt-image-2}", self.source)
 
         compact = self.source[

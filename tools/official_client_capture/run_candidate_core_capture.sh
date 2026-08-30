@@ -31,12 +31,9 @@ api_key_id=${API_KEY_ID:-1}
 run_id=${RUN_ID:?必须提供 RUN_ID}
 relay_port=${RELAY_PORT:-18443}
 ws_failure_count=${A07_WS_FAILURE_COUNT:-6}
-# 主线与 Lite 轨的模型坐标，权威定义在 capturelib.model 的 MAIN_TRACK_MODELS／
-# LITE_TRACK_MODELS，tests/test_main_track_models.py 锁定这里的默认值与之一致。
-# 原先 Lite 触发写死 gpt-5.6-sol：Vircs 的 pro 账号两个 Lite 模型都有，从没暴露；
-# 换到 free 账号的候选机上，A03-lite 第一跳就是 404，整个 frozen-core 停在那里。
-main_model=${MAIN_MODEL:-gpt-5.5}
-lite_model=${LITE_MODEL:-gpt-5.6-luna}
+# 主线与 Lite 轨模型必须由 Campaign 场景清单显式注入，禁止脚本按当前版本猜测。
+main_model=${MAIN_MODEL:?必须由 Campaign 提供 MAIN_MODEL}
+lite_model=${LITE_MODEL:?必须由 Campaign 提供 LITE_MODEL}
 
 for numeric in "$account_id" "$api_key_id" "$relay_port" "$ws_failure_count"; do
   if [[ ! $numeric =~ ^[0-9]+$ ]]; then
@@ -1007,11 +1004,12 @@ run_response_ws_session() {
     3< <(printf '%s' "$api_key")
 }
 
-# A03：先用非 Lite zstd prime 建立冷 Cookie jar，再抓默认非 Lite 样本；
-# 随后执行两轮 Lite zstd，由首轮 Lite 响应建立 turn-state 闭环。
+# A03：先用 Lite zstd 冷请求建立 Cookie jar；该请求与官方 Lite 专项的
+# 冷启动前提一致。随后抓默认非 Lite 样本，并用两轮 Lite zstd 建立
+# turn-state 闭环。
 start_capture A03
 trigger_root="$work_dir/scenarios/A03/trigger"
-write_request_body "$trigger_root/prime.json" "$main_model" non_lite a03-cookie-prime
+write_request_body "$trigger_root/prime.json" "$lite_model" lite a03-cookie-prime
 compress_zstd "$trigger_root/prime.json" "$trigger_root/prime.zst"
 run_response_request A03 prime "$trigger_root/prime.zst" \
   "$exec_ua" codex_exec -H 'Content-Encoding: zstd'

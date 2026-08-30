@@ -250,7 +250,7 @@ Inventory 无截断保存且封存后不可改写；候选仅按 `source_ids` �
 
 | 单元 | 必须新建身份的变化 |
 |---|---|
-| Campaign | 官方目标版本、产物、平台、入口、默认条件或影响 EvidencePackage 语义的产出工具变化 |
+| Campaign | 官方目标版本、产物、平台、入口、默认条件、正式／预检模式、升级用途、冻结规则／场景输入或影响 EvidencePackage 语义的产出工具变化 |
 | ApprovalFact | DiscoveryDispositionLedger 摘要、SupportEnvelope、目标规则、迁移决策、画像、场景、断言或批准用途变化 |
 | candidate | ApprovalFact 引用、Sub2APIPlus 源码、测试树、构建、镜像或候选用途变化 |
 | attempt | 上述身份不变，仅因临时网络、额度或运行失败重试 |
@@ -358,7 +358,7 @@ DeploymentTrafficEnvelope
 | 官方客户端换版 | 官方产品版本、发行物、依赖、平台、默认条件或目标画像变化 | §5.3 | 新 Campaign；后续生成新 ApprovalFact 和 candidate |
 | 共享合同／运行时变化 | Registry、Store、Selector、Executor、Token、Guard 或最小 CompiledEnvelope 合同变化 | §5.4 | 后继共享合同和全部受影响 Persona 的新验证事实 |
 | 同版本实现变化 | 官方规则、画像、场景和产出侧证据工具不变，仅实现、测试或构建变化 | §5.5.1 | 原 Campaign 下的新 candidate |
-| 兼容代码退休 | 删除遗留入口、finalizer、旁路、类型或构造接线 | §5.5.2 | 独立退休变更集和 RemovalReceipt |
+| 旧运行画像／兼容代码退休 | 删除不再被 active／rollback 引用的运行画像，或遗留入口、finalizer、旁路、类型与构造接线 | §5.5.2 | 独立退休变更集和 RemovalReceipt |
 | 纯文档澄清 | 不改变规范语义、机器事实、代码、画像、场景或门禁 | 对应文档直接修订 | 不复用或覆盖任何历史收据 |
 
 官方客户端换版不得夹带 Sub2API 上游合并或无关重构；上游更新也不得顺手改变目标客户端版本。两类
@@ -369,6 +369,22 @@ candidate 或批准事实。
 若规则、SupportEnvelope、画像、断言、场景或产出侧证据工具发生变化，即使官方版本字符串不变，也
 必须建立同版本后继 Campaign，不能按普通实现变更处理。Campaign、ApprovalFact、candidate 与 attempt
 的身份边界以 §3.3 为准，所有事实只写追加。
+
+### 5.1.1 全章公共执行约束
+
+除纯文档澄清外，每个独立变更集必须在首个动作前冻结墙钟预算、同根因重试上限、资源水位、适用时的
+证据复用决定和只追加计时台账。计时连续覆盖运行、等待、诊断、审批和恢复；组合变更分别记账，并从
+首个受管阶段（如 `U-0`／`VC-0`）到最终交付或激活保留端到端墙钟。
+
+- 同一根因连续失败两次即停线；独立修复、离线回归和干净预检通过前，禁止第三次 live attempt 或换
+  Campaign／candidate 绕过。
+- 身份及环境连续时只读承接并重放已通过门禁，只补跑失败项；发生变化时只重跑受影响闭集。无法证明
+  连续性即停线，不得复制收据或反复全量碰撞。规范明确要求的独立终态全量重放不属于失败补跑。
+- 读取、构建和清理由显式 manifest 限界；达到资源水位后只清理未被收据引用的可再生资产，禁止无界
+  递归和删除历史证据。
+
+预算到期必须保存最后合法身份并输出阶段、根因、墙钟、重试／live 请求计数、资源水位、最后成功收据及
+唯一下一动作。缺少可重放的计时、连续性或资源收据时只能停在首阶段；客户端升级的固定预算见 §5.3.5。
 
 ## 5.2 合并 Sub2API 上游更新
 
@@ -383,6 +399,7 @@ candidate 或批准事实。
 Framework §5.2 的 U-0～U-6 全部完成
 ∧ Codex 三类门禁（active wire／rollback wire／ingress matrix）全部 passed
 ∧ Claude 三类门禁（active wire／rollback wire／ingress matrix）全部 passed
+∧ §5.1.1 公共执行收据完整
 ∧ 当前工具阻断数 = 0
 ⇒ upstream_source_baseline_updated
 ```
@@ -431,7 +448,7 @@ Persona Guard。新增官方出站不得使用裸 client；ReleaseCatalog／Snap
 | `ChangeDecision v1` | 每次合并 | 逐文件／逐 delta 分类、动作及身份／证据语义变化判定 |
 | `CandidateDispositionInput v1` | 12 类门禁全通过 | 两个 Persona 的处置模式及 Campaign／candidate／Approval／Acceptance、共享合同和原业务收据 |
 
-`UpstreamMergePlan v1` 与 v0.1.177 台账只用于历史重放。新合并只允许 v2；计划生成后若工具、Schema
+`UpstreamMergePlan v1` 与已封存早期台账只用于历史重放。新合并只允许 v2；计划生成后若工具、Schema
 或门禁漂移，必须作废计划，先独立补齐并测试工具，再从 `U-0` 重新开始。
 
 ### 5.2.3 按 U-0～U-6 执行
@@ -511,8 +528,8 @@ python3 -m tools.upstream_merge replay \
   --rerun-gates post-final-001
 ```
 
-- `current_guard_state` 只允许 `source_absent／out_of_scope_passthrough／legacy_observe／canary_enforce／
-  enforced` 并仅陈述当前事实；目标计划不得覆盖。已知 Persona OAuth 发送源封存前至少为 observation-only
+- `current_guard_state` 只允许 `source_absent`、`out_of_scope_passthrough`、`legacy_observe`、
+  `canary_enforce`、`enforced` 并仅陈述当前事实；目标计划不得覆盖。已知 Persona OAuth 发送源封存前至少为 observation-only
   `legacy_observe`，未知 OAuth 出站始终为 `denied`。
 - merge commit 或 candidate tree 不等于交付或生产更新；`accepted_not_activated` 也只表示候选可交付。
   `U-6` 只更新本地受审源码基线；只有另行取得部署权限并完成 §5.6，才能声明生产已更新。
@@ -534,6 +551,9 @@ stable 和一个用途；Codex 与 Claude 同时换版时必须建立两个 Camp
 3. 升级用途。`validation_only` 只交付固定候选；`production_replacement` 还必须具备部署授权并执行 §5.6。
 4. 受管坐标。Campaign、candidate、attempt、证据根和输出均使用新的持久绝对路径，冻结工具与 Schema
    摘要；历史制品只读，不得覆盖。
+5. 执行预算。冻结本次升级的阶段墙钟预算、重试上限、证据复用决定、资源水位和
+   `UpgradeTimingLedger` 输出路径；预算从首次 DOC-PRE/P0 动作开始连续计算，等待、诊断、审批和重试
+   均不得从墙钟时间中扣除。
 
 `VC-0／P0` 必须先证明当前工具能从输入身份读取目标版本、active／rollback 和规则全集。任何旧目标版本
 常量、缺少必填 policy／Schema／生成器、不可独立重放的收据或缺失 mutation 门禁都计为工具阻断；先以
@@ -543,11 +563,14 @@ stable 和一个用途；Codex 与 Claude 同时换版时必须建立两个 Camp
 VC-0～VC-6 公共状态全部完成
 ∧ 所选客户端轨道第四部分的专用制品与门禁全部完成
 ∧ 当前工具阻断数 = 0
+∧ UpgradeTimingLedger 完整且不存在未关闭的超时停线
 ⇒ ready_for_operator_release
 
 ready_for_operator_release
 ∧ 已取得部署授权
 ∧ Framework §5.6 与客户端生产轨道全部完成
+∧ production Catalog／selector promotion receipt 可独立重放
+∧ post-promotion gate receipt 可独立重放
 ∧ DeploymentFact／activation receipt 可独立重放
 ⇒ production_active_upgraded
 ```
@@ -556,13 +579,13 @@ ready_for_operator_release
 
 | 阶段 | 操作 | 必须输出 | 退出条件 |
 |---|---|---|---|
-| `VC-0` 预检与基线 | 冻结 §5.3.1 全部输入，运行客户端 P0 | `UpgradePlan + CampaignIdentity`、工具就绪收据 | 当前生产可复算，工具阻断为 0；退出后才可创建正式 Campaign |
-| `VC-1` 目标取证 | 从目标官方产物独立发现 sink、构造路径、条件和状态，采集适用 P／R／J／M | EvidencePackage、DiscoveryInventory、SinkInventory | 目标身份完整、发现无预设截断，未知项保持未分类 |
+| `VC-0` 预检与基线 | 冻结 §5.3.1 全部输入，运行客户端 P0 | `UpgradePlan + CampaignIdentity`、工具就绪收据、时间与资源基线 | 当前生产可复算，工具阻断为 0；退出后才可创建正式 Campaign |
+| `VC-1` 目标取证 | 按 P0 决定只读导入并重放可信目标证据，或从目标官方产物重新发现并采集适用 P／R／J／M | 受管导入收据或新 EvidencePackage、DiscoveryInventory、SinkInventory | 目标身份完整，复用链可重放或新发现无预设截断，未知项保持未分类 |
 | `VC-2` 语义清零 | 对每个发现作唯一终态处置，建立原子断言、迁移决策和 RequiredRules 映射 | DiscoveryDispositionLedger、AtomicAssertionLedger、RequiredRules manifest | 未决、遗漏、重复和无主断言均为 0，不从发现数量机械生成 SPEC |
 | `VC-3` 画像与批准 | target-first 生成 ProfileSchema、ReleaseArtifact、SupportEnvelope、Persona 派生和验收矩阵 | ApprovalFact、ReleaseArtifact、目标 ingress／egress Inventory | 画像、规则、断言、范围和证据摘要一致；范围外 fail-close，production selector 未改变 |
 | `VC-4` 实现与候选 | 在 Persona 方言内实现差异，冻结源码、测试、构建、镜像和独立 Release 引用 | ValidationCandidate、candidate inventory | 同源身份闭合，无厂商事实泄入共享层，跨 Persona 隔离通过 |
 | `VC-5` 成对验收 | 批准入口执行逐规则 PAIR，拒绝入口执行凭据前负例，并覆盖状态重建、故障和回退 | AcceptanceFact、逐规则结果、回退／恢复收据 | final wire 对拍通过，无未决 strict 项；失败 attempt 只读保留 |
-| `VC-6` 交付或激活 | 无生产权限时封存固定候选；有权限时继续 §5.6 的 canary、切换、回滚和恢复 | `ready_for_operator_release`；生产激活另有 DeploymentFact | 交付边界明确；生产激活还须满足 §4.2 三个 Envelope 及 §5.6 收据 |
+| `VC-6` 交付或激活 | 无生产权限时封存固定候选；有权限时继续 §5.6 的晋升、门禁、canary、切换、回滚和恢复 | `ready_for_operator_release`；生产激活另有 promotion、post-promotion gate 和 activation 收据 | 交付边界明确；生产激活还须满足 §4.2 三个 Envelope 及 §5.6 收据链 |
 
 目标证据是新画像的唯一设计权威；未收敛发现和证据不足能力保持 `denied`，只有 IngressPolicy 批准的
 正向入口进入 PAIR。`VC-4` 若暴露共享合同缺口，作废当前 candidate，先执行 §5.4。目标 stable、阶段
@@ -576,30 +599,48 @@ ready_for_operator_release
 
 | 阶段 | Codex CLI 轨道 | Claude Code 轨道 |
 |---|---|---|
-| `VC-0` | 在干净 HEAD 运行 `make test-capture-tools`、`make check-egress-spec`；复算 Active／Previous 后执行 `codex_upgrade.py plan` | 冻结 generation policy、Vircs／DMIT 和 active／rollback；审计全部工具的版本参数化后执行 `claude_fw_e.py freeze` |
-| `VC-1` | `capture-official run` → 生成受管证据 → `capture-official seal` | `analyze-bundles` → 全 host/path 捕获与 `capture-index` → validation closure／crosswalk → `rule-assessments` → `seal` |
-| `VC-2` | `classify` 生成草案，逐项审核目标规则、迁移、场景、画像和断言清单，再用联合摘要批准 | 清零 DiscoveryDispositionLedger 和语义候选，形成 RequiredRules／AtomicAssertionLedger 及迁移决定 |
-| `VC-3` | `prepare-profile` → 审核五份清单 → 批准版 `classify` → `stage-profile`；只能追加候选 Catalog，不切 Active | 复制并更新目标 generation policy → `generate_claude_fw_g_profile.py` → `claude_fw_g_official_finalize.py` → 签发 ApprovalFact／ReleaseArtifact；不得修改 production selector |
-| `VC-4` | 将暂存画像纳入同源 candidate、构建固定镜像，执行 `capture-candidate run` → 生成收据 → `capture-candidate seal` 两阶段批准 | 实现批准差异、构建固定 candidate，并用目标 policy 驱动的 PAIR 工具完成 DMIT `prepare → capture → seal → approve` |
-| `VC-5` | `compare` → `build_rule_assertion_results.py` → candidate 外部门禁收据 `finalize/replay` → `codex_upgrade.py accept` | 重放批准 Store 和官方复算，完成正向 PAIR、第三方凭据前负例、回退／恢复，再执行 `claude_fw_g_acceptance.py` |
-| `VC-6` | `validation_only` 停在 `accepted_not_activated`；`production_replacement` 继续 Codex 手册 §4.6 和 Framework §5.6 | 在 DMIT 签发 `ready_for_operator_release`；Vircs 生产替换必须另获授权并执行 Framework §5.6 |
+| `VC-0` | 按 Codex 手册复算 Active／Previous，冻结模式、用途并清零工具阻断 | 按 Claude 手册冻结 generation policy、active／rollback 并清零工具阻断 |
+| `VC-1` | `reuse` 时只读导入并重放官方阶段；`recapture` 时重新采集并封存 | 按复用决定重放可信证据，或重新完成目标原生取证与封存 |
+| `VC-2` | 新换版或分类纠正时重新分类并审核；运行时身份后继可承接已批准分类 | 清零 DiscoveryDispositionLedger 和语义候选，形成 RequiredRules、原子断言及迁移决定 |
+| `VC-3` | 生成并批准五份清单，只追加候选 Catalog，不切 Active | 由目标 policy 生成画像并签发 ApprovalFact／ReleaseArtifact，不改 production selector |
+| `VC-4` | 将批准画像纳入同源 candidate，构建固定镜像并封存候选及批准第三方入口证据 | 实现批准差异并用目标 policy 完成固定 candidate PAIR |
+| `VC-5` | 离线比较、逐规则断言、外部门禁重放和 Acceptance finalizer | 重放官方事实，完成正向 PAIR、凭据前负例、回退／恢复和 Acceptance finalizer |
+| `VC-6` | `validation_only` 停在 `accepted_not_activated`；生产替换继续客户端生产轨道和 §5.6 | 按用途交付固定候选，生产替换另获授权并继续客户端生产轨道和 §5.6 |
 
-Codex 的统一入口为 `python3 tools/official_client_capture/codex_upgrade.py --help`；每阶段前后使用
-`status` 只读推导状态，只有身份未变化的临时失败才使用 `resume`。Claude 每个新版本先复制并更新
-`claude_fw_g_generation_policy_<version>_v2.json`，再把同一 policy 传给画像生成、官方 finalizer、
-candidate PAIR 和 Acceptance finalizer。
-
-当前工具状态：`claude_fw_g_candidate_pair.py` 仍固定绑定 2.1.226，只能重放历史 Campaign。下一个 Claude
-版本必须在 P0 前让它从 generation policy 读取目标版本、规则／断言计数和输入摘要，并补齐 Schema、
-mutation 测试及独立重放，否则 `current_tool_blocker_count > 0`。历史基线规则见 Claude 手册 §4.2。
+具体命令、机器、账号、模型、当前版本和工具阻断状态只在客户端手册记录。两条轨道的 P0 都必须拒绝
+历史版本常量、隐式用途和不可重放收据；`ready` 或 AcceptanceFact 均不得冒充生产激活事实。
 
 ### 5.3.4 失败恢复
 
 - P0 失败：不创建 Campaign；独立修复工具、Schema 或环境后从 `VC-0` 重来。
 - 官方产物、目标 stable、画像、规则、断言、用途或证据语义变化：新建 Campaign；源码、测试、构建、
   镜像或 Release 引用变化：新建 candidate；身份不变的临时采集失败：保留旧 attempt 并新建 attempt。
+- 前序官方证据仍可信时，后继必须以受管收据只读承接：仅修正 candidate 运行时身份时从 `VC-4` 继续；
+  分类事实纠正时从 `VC-2` 重做分类与批准。缺少必要官方事实、官方身份变化或证据语义失真才返回 `VC-1`
+  重新取证。
 - 任一阶段失败或摘要漂移时保留旧制品和收据，按状态机回到最近合法身份；不得覆盖、跳过门禁或手工清除
   阻断。升级完成状态只按 §5.3.1 的两个公式判定。
+- 同一根因连续失败两次即按 §5.3.5 停线。独立工具修复、离线回归和新的干净 P0 全部通过前，禁止
+  第三次 live attempt，也不得通过新 Campaign 或 candidate 绕过阻断。
+
+### 5.3.5 时间预算、停线与资源收敛
+
+官方客户端升级的正常墙钟目标为 4～6 小时；该目标用于识别流程是否已漂移为工具研发、环境排障或无界
+重跑，不降低证据标准。`production_replacement` 从首次 DOC-PRE/P0 到
+`production_active_upgraded` 的默认预算如下，客户端手册只能收紧：
+
+| 阶段 | 墙钟停线预算 | 到期动作 |
+|---|---:|---|
+| `VC-0` | 45 分钟 | 不创建 Formal；冻结阻断并把工具／环境修复拆为独立变更集 |
+| `VC-1～VC-3` | 75 分钟 | 停止新增官方请求；复核归档复用决定、目标身份和未决分类 |
+| `VC-4` | 90 分钟 | 恢复环境并保留 attempt；区分实现变化、工具变化和临时失败 |
+| `VC-5` | 75 分钟 | 只保留可重放门禁；禁止用新 candidate 或 Campaign 重跑相同失败 |
+| `VC-6` | 75 分钟 | 保持或恢复旧 Active；不得在未闭合回滚时继续扩大流量 |
+
+任一阶段预算或总计 6 小时先到即按 §5.1.1 `stop_the_line`。本流程的计时台账固定命名为
+`UpgradeTimingLedger`；P0 还须冻结唯一 `reuse／recapture` 决定。身份、摘要、原始字节、安全和场景覆盖
+均可信时只读复用；仅缺少必要事实、官方身份变化或证据语义失真允许重抓，candidate、账号或模型变化
+不构成理由。
 
 ## 5.4 修改共享合同或共享运行时
 
@@ -611,7 +652,7 @@ Persona 方言无法承载，且缺口属于厂商无关的共享控制面时，
 |---|---|
 | 合并 Sub2API 上游，且共享合同语义不变 | §5.2 |
 | 官方客户端画像、规则或方言变化 | §5.3 |
-| 同版本实现修改，且共享合同语义不变 | §5.5 |
+| 同版本实现修改，且共享合同语义不变 | §5.5.1 |
 | `CompiledEnvelope`，或 Registry、Store、Selector、Executor、Token、Guard 的合同或语义变化 | 本节；若由上游合并触发，还必须同时满足 §5.2 |
 
 新增 Persona 时，先以专属 Plan、Schema 和 DialectCompiler 表达其事实。只有证据证明某项机制在至少两个
@@ -622,8 +663,8 @@ Persona 间重复、稳定且属于共享控制面，才可进入本节；单客
 1. 只读冻结全部受影响 Persona 的 active／rollback Release、final wire、Runtime Selector、运行镜像、
    回退收据，以及引用旧合同的 validation candidate。
 2. 证明共享变更的必要性，定义后继合同、影响分母和失败关闭行为；厂商 wire 事实不得进入共享合同。
-3. 以 Codex active／rollback 建立逐字节零差异基线，并用至少一个不可部署的第二 Persona 纵向样例证明
-   接口可表达性及 authority、issuer、状态和连接隔离。
+3. 为全部受影响 Persona 的 active／rollback 建立逐字节零差异基线；主张共享抽象时，至少使用两个
+   Persona 证明接口可表达性及 authority、issuer、状态和连接隔离。
 4. 生成后继合同与测试，为全部受影响实现建立新 candidate，并完成 route／Sink、Release、Token、Guard、
    状态、连接和跨 Persona 负例；旧 candidate 不得借新合同继续验收。
 5. 全部受影响 Persona 的验收与回退事实闭合后，才允许按 §5.6 发布；此前 production selector 保持不变，
@@ -632,7 +673,7 @@ Persona 间重复、稳定且属于共享控制面，才可进入本节；单客
 `CompiledEnvelope` 仍只能包含 §2.3 的厂商无关事实。共享实现可以复用代码，但每个 Persona 的 authority、
 Token issuer、invocation、状态命名空间和连接身份必须独立。
 
-## 5.5 同版本实现修改与兼容代码退休
+## 5.5 同版本实现修改、旧画像与兼容代码退休
 
 ### 5.5.1 同版本修改
 
@@ -642,18 +683,21 @@ Token issuer、invocation、状态命名空间和连接身份必须独立。
 
 实现过程中一旦发现现有规则或 Schema 不能表达真实官方行为，立即停止普通 candidate 路径，建立
 同版本后继 Campaign；不得修改旧 ApprovalFact 或用实现测试提升官方证据等级。
+若冲突可由既有官方原始证据和源码充分判定，后继只读承接官方阶段并重新执行分类、画像和断言批准，
+不得重复采集官方流量；只有既有原始证据缺少必要事实或官方身份／证据语义不再可信时，才重新取证。
 
-### 5.5.2 退休旧代码
+### 5.5.2 退休旧运行画像或兼容代码
 
 每次退休使用独立变更集，并按以下顺序执行：
 
-1. 用类型扫描、调用图、ProductionIngressInventory 和 EgressDispositionInventory 证明全部生产消费者，
-   区分 `migrated_strict`、`retained_legacy`、`explicitly_retired` 与 `rerouted`。
-2. 迁移真实消费者并让旧入口明确 fail-close；未知入口或出站保持 `denied`，不得先删除 Guard。
+1. 用 Catalog／selector 引用、类型扫描、调用图及两个 Inventory 证明全部生产与回滚消费者，区分
+   `migrated_strict`、`retained_legacy`、`explicitly_retired` 与 `rerouted`。
+2. 旧运行画像仅在新 Active 稳定、Previous／rollback 已冻结且均不再引用它后退出运行 Catalog；迁移真实
+   消费者并让旧入口明确 fail-close，未知入口或出站保持 `denied`，不得先删除 Guard。
 3. 验证全部受影响 Persona 的 active／rollback、HTTP／WS／fallback、辅助端点、状态恢复和跨 Persona
    负例，以空 wire 允许列表比较前后。
-4. 删除旧类型、字段、构造接线、finalizer、旁路和只验证旧实现的测试；同步收紧源码绝迹门禁，防止
-   通过别名或 wrapper 恢复。
+4. 只删除当前运行投影及无消费者的旧类型、字段、构造接线、finalizer、旁路和实现测试；历史 Release、
+   原始证据、Approval／Acceptance、promotion／activation／rollback 收据及其重放夹具继续只读保留。
 5. 生成不可覆盖的 RemovalReceipt 和机器退休收据并完成公共门禁；需要部署时继续 §5.6，不得以退休
    收据代替生产激活事实。
 
@@ -671,17 +715,18 @@ Key、其他 Persona、业务认证、平滑升级或已演练回滚的代码不
 | 终点 | 必须完成 | 不得声明 |
 |---|---|---|
 | 候选交付 | 固定 candidate、隔离验收、应用回退／恢复、稳定观察及 `ready_for_operator_release` 收据 | production selector 已改变、DeploymentFact 已签发或生产已激活 |
-| 生产激活 | 已取得部署授权，并完成下列六步及可重放的 DeploymentFact／activation receipt | 在任一步骤或身份尚未闭合时声明生产升级完成 |
+| 生产激活 | 已取得部署授权，并完成下列六步及可重放的 promotion、post-promotion gate、DeploymentFact／activation 收据 | 在任一步骤或身份尚未闭合时声明生产升级完成 |
 
 所有生产激活，无论 candidate 来自换版、上游更新、共享合同还是同版本实现变化，都必须执行：
 
 1. 写操作前只读冻结生产镜像、compose／配置、selector、Release、画像、activation fact、数据和依赖；
-2. 从已验收 candidate 生成 production Catalog、差异清单和正式目标架构镜像，重跑终态门禁；
+2. 从已验收 candidate 生成并晋升 production Catalog，签发 promotion receipt；构建正式目标架构镜像，
+   以 promotion 后源码重跑终态门禁并签发 post-promotion gate receipt；
 3. 在隔离环境以默认 production active 运行独立 canary，不得通过强制 candidate／rollback mode 命中目标；
 4. 只替换应用容器完成正式切换，不重建数据库、缓存、挂载、网络或其他依赖；
 5. 切回冻结回退镜像验证真实入口和数据兼容，再恢复目标镜像并完成稳定观察；
-6. 生成绑定 Campaign／candidate／Approval／Acceptance、源码、镜像、Release、三个 Envelope、
-   canary、切换、回滚和恢复事实的不可覆盖收据。
+6. 生成消费 Acceptance、promotion、post-promotion gate，并绑定 Campaign／candidate／Approval、源码、
+   镜像、Release、三个 Envelope、canary、切换、回滚和恢复事实的不可覆盖 activation receipt。
 
 客户端手册必须声明部署权限、执行终点以及对应的工具、环境和专用收据。运行镜像、selector、Release、
 画像或收据任一不一致时，状态保持 `production_unverified` 并执行已冻结回退，不得在故障实例上补画像
@@ -693,6 +738,7 @@ Key、其他 Persona、业务认证、平滑升级或已演练回滚的代码不
 
 | 失败类型 | 返回入口 |
 |---|---|
+| 墙钟预算、同根因重试、连续性收据或资源水位不满足 | §5.1.1；停线并保留最后合法身份 |
 | Sub2API 上游合并计划、隔离工作树、冲突处置、影响分母或门禁不完整 | §5.2.4 |
 | 官方客户端取证、规则收敛、画像、candidate 身份或换版门禁失败 | §5.3.4；身份变化同时按 §3.3 建立新事实 |
 | 共享合同出现厂商事实、隔离破坏或非预期 final-wire 差异 | §5.4 |

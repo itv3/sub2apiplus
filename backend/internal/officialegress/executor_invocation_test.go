@@ -184,7 +184,7 @@ func TestExecutorInvocationBindsIdentityPoliciesAndConsumesAttemptAuthentication
 	)
 	wantDialectAttestation := codexAttestationDigest(
 		"dialect", request.Plan.HeaderPolicy.Digest(), request.Plan.BodyPolicy.Digest(),
-		request.Plan.BehaviorPolicy.ID,
+		request.Plan.BehaviorPolicy.ID, request.Plan.RoutingHint.Digest(),
 	)
 	if payload.IdentityAttestationDigest != wantIdentityAttestation ||
 		payload.DialectAttestationDigest != wantDialectAttestation ||
@@ -462,6 +462,7 @@ func newExecutorInvocationTestFixture(
 			IdentityFacts:  executorInvocationIdentityFacts(t),
 			HeaderPolicy:   HeaderPolicy{ID: "invocation-test-headers", Source: "test"},
 			BodyPolicy:     BodyPolicy{ID: "invocation-test-body", Source: "test"},
+			RoutingHint:    CodexRoutingHintFacts{model: "gpt-test"},
 			BehaviorPolicy: behavior, Body: NewReplayableRequestBody(nil),
 			InvocationID: "invocation-test-id", DeclaredPersona: PersonaCodexCLI,
 		},

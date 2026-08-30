@@ -1,0 +1,3350 @@
+{
+  "schema_version": "codex-candidate-rule-expectations/v1",
+  "codex_version": "0.149.1",
+  "source_spec": "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md#第二章",
+  "source_spec_sha256": "1ef315a8066f940fc1e38139014c188ace2fe442816ae25287825de1ed166e81",
+  "scenarios": [
+    {
+      "description": "默认系统 CA 的 HTTP ClientHello 与 models 请求",
+      "preconditions": [
+        "Ubuntu 24.04",
+        "未配置有效自定义 CA",
+        "候选出站 netns 抓包已启动"
+      ],
+      "required_artifact_kinds": [
+        "pcap",
+        "process_trace"
+      ],
+      "scenario_id": "A01",
+      "trigger": "使用隔离账号执行一次启动 models 和一次 HTTP Responses 调用"
+    },
+    {
+      "description": "四次彼此独立的 Responses WS ClientHello",
+      "preconditions": [
+        "至少四份独立 pcap",
+        "内置 OpenAI OAuth",
+        "未配置有效自定义 CA"
+      ],
+      "required_artifact_kinds": [
+        "pcap"
+      ],
+      "scenario_id": "A02",
+      "trigger": "每次重启候选进程后分别触发一次 Responses WS 握手"
+    },
+    {
+      "description": "Responses HTTP Lite、zstd 与 HTTP turn-state 闭环",
+      "preconditions": [
+        "use_responses_lite=true",
+        "enable_request_compression=true",
+        "字节中继开启"
+      ],
+      "required_artifact_kinds": [
+        "relay_binary",
+        "process_trace"
+      ],
+      "scenario_id": "A03",
+      "trigger": "使用 Lite 模型执行两轮 HTTP Responses，并由受控上游在首轮注入 turn-state"
+    },
+    {
+      "description": "Responses HTTP 非 Lite、按样本标注压缩条件及条件 Header 矩阵",
+      "preconditions": [
+        "use_responses_lite=false",
+        "压缩开启与关闭样本分别以 labels.compression 标注",
+        "各条件分支分别留有正负样本"
+      ],
+      "required_artifact_kinds": [
+        "relay_binary",
+        "process_trace"
+      ],
+      "scenario_id": "A04",
+      "trigger": "使用非 Lite 模型分别触发 residency、subagent、memgen、parent thread 和 runtime metrics 分支"
+    },
+    {
+      "description": "Responses WS Lite S2、turn-state 与压缩上下文",
+      "preconditions": [
+        "WS 握手成功",
+        "permessage-deflate 已协商",
+        "原始双向字节完整"
+      ],
+      "required_artifact_kinds": [
+        "relay_binary",
+        "websocket_trace"
+      ],
+      "scenario_id": "A05",
+      "trigger": "执行两轮 Lite WS 会话并由受控上游回送 response.metadata turn-state"
+    },
+    {
+      "description": "Responses WS 非 Lite、warmup 与增量帧",
+      "preconditions": [
+        "use_responses_lite=false",
+        "上游返回可复用 previous_response_id",
+        "原始 WS 帧完整"
+      ],
+      "required_artifact_kinds": [
+        "relay_binary",
+        "websocket_trace"
+      ],
+      "scenario_id": "A06",
+      "trigger": "在同一 WS 会话依次执行 warmup、首轮和可复用前缀的增量请求"
+    },
+    {
+      "description": "WS 重试预算耗尽后的 HTTP fallback",
+      "preconditions": [
+        "故障次数由冻结场景配置",
+        "入口 invocation_id 全程可追踪",
+        "不得手工发起独立 HTTP 请求"
+      ],
+      "required_artifact_kinds": [
+        "relay_binary",
+        "process_trace"
+      ],
+      "scenario_id": "A07",
+      "trigger": "受控中继连续返回足量可重试 WS 失败，直到同一调用改发 HTTP POST"
+    },
+    {
+      "description": "HTTP Client 生命周期与 retry 连接关系",
+      "preconditions": [
+        "使用隔离账户固定到同一上游",
+        "三种分支分别记录 invocation_id 与 connection_id",
+        "样本完整性检查通过"
+      ],
+      "required_artifact_kinds": [
+        "relay_binary",
+        "process_trace"
+      ],
+      "scenario_id": "A08",
+      "trigger": "分别执行跨上层调用、keepalive 500 重试和受控断连重试"
+    },
+    {
+      "description": "models、legacy compact、alpha-search 与 images 辅助链",
+      "preconditions": [
+        "各端点使用独立调用",
+        "legacy 分支显式关闭 remote_compaction_v2",
+        "字节中继开启"
+      ],
+      "required_artifact_kinds": [
+        "relay_binary",
+        "process_trace"
+      ],
+      "scenario_id": "A09",
+      "trigger": "分别触发 models、显式 legacy compact、两阶段搜索、图像生成与编辑"
+    },
+    {
+      "description": "Remote Compaction V2 与四种 reason",
+      "preconditions": [
+        "每个 reason 有独立 process trace",
+        "默认 remote_compaction_v2=true",
+        "已有 trigger 的负向样本存在"
+      ],
+      "required_artifact_kinds": [
+        "relay_binary",
+        "process_trace"
+      ],
+      "scenario_id": "A10",
+      "trigger": "分别触发 manual、context_limit、model_downshift、comp_hash_changed 和 TokenBudget 分支"
+    },
+    {
+      "description": "realtime 第一跳、sideband WS 与终止清理",
+      "preconditions": [
+        "第一跳和第二跳可用同一 call_id 哈希关联",
+        "api.openai.com SNI 抓包开启",
+        "只清理本轮 Redis 临时键"
+      ],
+      "required_artifact_kinds": [
+        "pcap",
+        "relay_binary",
+        "process_trace"
+      ],
+      "scenario_id": "A11",
+      "trigger": "受控第一跳返回 call_id，随后接受 sideband WS 并发送 session.ended"
+    },
+    {
+      "description": "wham usage、reset credits 查询与安全 consume",
+      "preconditions": [
+        "consume 不连接生产 wham",
+        "三个请求属于同一验收批次",
+        "redeem_request_id 已脱敏"
+      ],
+      "required_artifact_kinds": [
+        "relay_binary"
+      ],
+      "scenario_id": "A12",
+      "trigger": "调用配额查询并将 consume 发往受控响应器"
+    },
+    {
+      "description": "OAuth dummy refresh",
+      "preconditions": [
+        "不写入账户凭据",
+        "dummy token 纳入 secret scan",
+        "auth.openai.com SNI 可见"
+      ],
+      "required_artifact_kinds": [
+        "pcap",
+        "relay_binary"
+      ],
+      "scenario_id": "A13",
+      "trigger": "通过 raw refresh-token 管理入口提交仅用于验收的 dummy token，并由受控 auth 端点返回 invalid_grant"
+    },
+    {
+      "description": "文件 create、区域 blob PUT 与 uploaded 三阶段链",
+      "preconditions": [
+        "区域 URL 由响应返回而非客户端硬编码",
+        "PUT 不离开受控端点",
+        "file_id 与 URL 只保留哈希"
+      ],
+      "required_artifact_kinds": [
+        "pcap",
+        "relay_binary",
+        "process_trace"
+      ],
+      "scenario_id": "A14",
+      "trigger": "使用生产 service 调用路径执行受控文件上传，create 返回本轮区域 URL"
+    },
+    {
+      "description": "exec、TUI 与启动 models UA 画像",
+      "preconditions": [
+        "入口 surface 由 process trace 证明",
+        "UA 已解析为前缀和 suffix",
+        "不接受 curl 伪造入口头"
+      ],
+      "required_artifact_kinds": [
+        "process_trace"
+      ],
+      "scenario_id": "A15",
+      "trigger": "分别由 Codex 0.149.1 exec 和 TUI 入口触发，并取得启动 models 有 suffix 与无 suffix 两种样本"
+    }
+  ],
+  "rules": [
+    {
+      "checks": [
+        {
+          "assertion": {
+            "operator": "count_at_least",
+            "value": 1
+          },
+          "description": "默认 HTTP 至少捕获一条 ClientHello",
+          "id": "http-clienthello-count",
+          "select": {
+            "record_type": "tls_client_hello",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.transport",
+                "value": "http"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.ca_mode",
+                "value": "system"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.cipher_suite_count",
+            "value": 30
+          },
+          "description": "每条默认 HTTP ClientHello 均包含 30 个 cipher suite",
+          "id": "cipher-count",
+          "select": {
+            "record_type": "tls_client_hello",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.transport",
+                "value": "http"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.ca_mode",
+                "value": "system"
+              },
+              {
+                "operator": "equal",
+                "path": "data.sni",
+                "value": "chatgpt.com"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.has_alpn_extension",
+            "value": false
+          },
+          "description": "默认 HTTP ClientHello 不包含 ALPN 扩展",
+          "id": "alpn-absent",
+          "select": {
+            "record_type": "tls_client_hello",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.transport",
+                "value": "http"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.ca_mode",
+                "value": "system"
+              }
+            ]
+          }
+        }
+      ],
+      "description": "默认 HTTP 使用 30 个 cipher 且不发送 ALPN 扩展",
+      "rule_id": "SPEC-TLS-001",
+      "scenario_ids": [
+        "A01"
+      ]
+    },
+    {
+      "checks": [
+        {
+          "assertion": {
+            "minimum_artifacts": 4,
+            "minimum_distinct_orders": 1,
+            "minimum_records": 4,
+            "operator": "same_set_distinct_order",
+            "path": "data.extension_types"
+          },
+          "description": "四份独立 WS 抓包扩展集合一致且至少出现两种排列",
+          "id": "extension-order-diversity",
+          "select": {
+            "record_type": "tls_client_hello",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.transport",
+                "value": "websocket"
+              },
+              {
+                "operator": "equal",
+                "path": "data.sni",
+                "value": "chatgpt.com"
+              }
+            ]
+          }
+        }
+      ],
+      "description": "WS ClientHello 扩展集合相同但顺序不是固定常量",
+      "rule_id": "SPEC-TLS-003",
+      "scenario_ids": [
+        "A02"
+      ]
+    },
+    {
+      "checks": [
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.alpn_protocols",
+            "value": []
+          },
+          "description": "默认 HTTP ClientHello 全部无 ALPN",
+          "id": "no-alpn",
+          "select": {
+            "record_type": "tls_client_hello",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.transport",
+                "value": "http"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.ca_mode",
+                "value": "system"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.protocol",
+            "value": "HTTP/1.1"
+          },
+          "description": "默认 HTTP 原始请求行使用 HTTP/1.1",
+          "id": "h1-wire",
+          "select": {
+            "record_type": "http_request",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.wire_protocol",
+                "value": "http"
+              },
+              {
+                "operator": "absent",
+                "path": "labels.ca_mode"
+              }
+            ]
+          }
+        }
+      ],
+      "description": "默认 HTTP 不 offer ALPN 并使用 HTTP/1.1",
+      "rule_id": "SPEC-PROTO-001",
+      "scenario_ids": [
+        "A01"
+      ]
+    },
+    {
+      "checks": [
+        {
+          "assertion": {
+            "operator": "all_list_prefix",
+            "path": "data.transports",
+            "value": [
+              "websocket"
+            ]
+          },
+          "description": "正常场景首先使用 websocket",
+          "id": "default-websocket",
+          "select": {
+            "record_type": "transport_fallback",
+            "scenario_ids": [
+              "A05"
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_list_suffix",
+            "path": "data.transports",
+            "value": [
+              "http"
+            ]
+          },
+          "description": "重试预算 exhausted 后以 HTTP 结束",
+          "id": "fallback-after-exhaustion",
+          "select": {
+            "record_type": "transport_fallback",
+            "scenario_ids": [
+              "A07"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.retry_budget_state",
+                "value": "exhausted"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_list_all_same",
+            "path": "data.invocation_ids"
+          },
+          "description": "WS 尝试和 HTTP fallback 属于同一上层调用",
+          "id": "same-invocation",
+          "select": {
+            "record_type": "transport_fallback",
+            "scenario_ids": [
+              "A07"
+            ]
+          }
+        }
+      ],
+      "description": "Responses 默认 WS，预算耗尽后同一调用降级 HTTP",
+      "rule_id": "SPEC-PROTO-002",
+      "scenario_ids": [
+        "A05",
+        "A07"
+      ]
+    },
+    {
+      "checks": [
+        {
+          "assertion": {
+            "operator": "all_list_all_different",
+            "path": "data.cross_call_connection_ids"
+          },
+          "description": "不同上层调用使用不同 connection_id",
+          "id": "cross-call-distinct",
+          "select": {
+            "record_type": "connection_lifecycle"
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_list_all_same",
+            "path": "data.keepalive_retry_connection_ids"
+          },
+          "description": "同调用 keepalive retry 复用 connection_id",
+          "id": "keepalive-reuse",
+          "select": {
+            "record_type": "connection_lifecycle"
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_list_all_different",
+            "path": "data.disconnect_retry_connection_ids"
+          },
+          "description": "同调用断连 retry 新建 connection_id",
+          "id": "disconnect-new-connection",
+          "select": {
+            "record_type": "connection_lifecycle"
+          }
+        }
+      ],
+      "description": "跨调用不复用，同调用 keepalive 重试复用，断连重试新建连接",
+      "rule_id": "SPEC-CONN-001",
+      "scenario_ids": [
+        "A08"
+      ]
+    },
+    {
+      "checks": [
+        {
+          "assertion": {
+            "operator": "all_lowercase",
+            "path": "data.header_names_in_order"
+          },
+          "description": "所有标记为普通 HTTP 的原始请求头名均为小写",
+          "id": "ordinary-http-lowercase",
+          "select": {
+            "record_type": "http_request",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.wire_protocol",
+                "value": "http"
+              }
+            ]
+          }
+        }
+      ],
+      "description": "普通 HTTP header 名在线上全部小写",
+      "rule_id": "SPEC-H1-001",
+      "scenario_ids": [
+        "A01",
+        "A03",
+        "A04",
+        "A09",
+        "A11",
+        "A12",
+        "A13",
+        "A14"
+      ]
+    },
+    {
+      "checks": [
+        {
+          "assertion": {
+            "operator": "all_list_suffix",
+            "path": "data.header_names_in_order",
+            "value": [
+              "host"
+            ]
+          },
+          "description": "models 无 body 请求以 host 结尾",
+          "id": "no-body-host-last",
+          "select": {
+            "record_type": "http_request",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/models"
+              },
+              {
+                "operator": "absent",
+                "path": "labels.ca_mode"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_list_suffix",
+            "path": "data.header_names_in_order",
+            "value": [
+              "host",
+              "content-length"
+            ]
+          },
+          "description": "自动长度请求保持 host、content-length 尾序",
+          "id": "body-host-before-length",
+          "select": {
+            "record_type": "http_request",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.body_length",
+                "value": "automatic"
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              }
+            ]
+          }
+        }
+      ],
+      "description": "host 位于用户 header 之后，无 body 时为最后一项",
+      "rule_id": "SPEC-H1-002",
+      "scenario_ids": [
+        "A01",
+        "A03"
+      ]
+    },
+    {
+      "checks": [
+        {
+          "assertion": {
+            "operator": "all_list_suffix",
+            "path": "data.header_names_in_order",
+            "value": [
+              "host",
+              "content-length"
+            ]
+          },
+          "description": "所有自动长度 HTTP 请求均以 host、content-length 结尾",
+          "id": "automatic-length-tail",
+          "select": {
+            "record_type": "http_request",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.body_length",
+                "value": "automatic"
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              },
+              {
+                "operator": "absent",
+                "path": "labels.ca_mode"
+              }
+            ]
+          }
+        }
+      ],
+      "description": "hyper 自动 content-length 位于 host 之后",
+      "rule_id": "SPEC-H1-003",
+      "scenario_ids": [
+        "A03",
+        "A04",
+        "A09",
+        "A11",
+        "A12",
+        "A13"
+      ]
+    },
+    {
+      "checks": [
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.header_names_in_order",
+            "value": [
+              "version",
+              "authorization",
+              "chatgpt-account-id",
+              "accept",
+              "originator",
+              "user-agent",
+              "host"
+            ]
+          },
+          "description": "models 默认头线序与官方 0.149.1 原始字节一致",
+          "id": "models-order",
+          "select": {
+            "record_type": "http_request",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/models"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.variant",
+                "value": "no_cookie"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.header_names_in_order",
+            "value": [
+              "version",
+              "x-codex-beta-features",
+              "x-codex-window-id",
+              "x-codex-turn-metadata",
+              "x-openai-internal-codex-responses-lite",
+              "x-codex-routing-hint",
+              "x-client-request-id",
+              "session-id",
+              "thread-id",
+              "accept",
+              "content-encoding",
+              "content-type",
+              "authorization",
+              "chatgpt-account-id",
+              "originator",
+              "user-agent",
+              "host",
+              "content-length"
+            ]
+          },
+          "description": "Responses 默认压缩头线序与官方 0.149.1 原始字节一致",
+          "id": "responses-order",
+          "select": {
+            "record_type": "http_request",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.variant",
+                "value": "http_default"
+              }
+            ]
+          }
+        }
+      ],
+      "description": "用户 header 使用逐端点冻结的 HeaderMap 最终线序",
+      "rule_id": "SPEC-H1-004",
+      "scenario_ids": [
+        "A01",
+        "A03"
+      ]
+    },
+    {
+      "checks": [
+        {
+          "assertion": {
+            "operator": "all_list_prefix",
+            "path": "data.header_names_in_order",
+            "value": [
+              "Host",
+              "Connection",
+              "Upgrade",
+              "Sec-WebSocket-Version",
+              "Sec-WebSocket-Key"
+            ]
+          },
+          "description": "所有 WS 握手以前五个固定 Header 开始",
+          "id": "handshake-prefix",
+          "select": {
+            "record_type": "http_request",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.wire_protocol",
+                "value": "websocket"
+              }
+            ]
+          }
+        }
+      ],
+      "description": "WS 握手前五项具有固定大小写与顺序",
+      "rule_id": "SPEC-WS-001",
+      "scenario_ids": [
+        "A05",
+        "A06"
+      ]
+    },
+    {
+      "checks": [
+        {
+          "assertion": {
+            "operator": "all_lowercase",
+            "path": "data.remaining_header_names"
+          },
+          "description": "前五项之后的 WS Header 名全部小写",
+          "id": "remaining-lowercase",
+          "select": {
+            "record_type": "http_request",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.wire_protocol",
+                "value": "websocket"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.remaining_header_names",
+            "value": [
+              "chatgpt-account-id",
+              "authorization",
+              "user-agent",
+              "originator",
+              "openai-beta",
+              "version",
+              "x-codex-beta-features",
+              "x-client-request-id",
+              "session-id",
+              "thread-id",
+              "x-codex-window-id",
+              "x-codex-turn-metadata",
+              "x-codex-routing-hint",
+              "sec-websocket-extensions"
+            ]
+          },
+          "description": "默认完整握手的剩余线序与官方样本一致",
+          "id": "default-swap-remove-order",
+          "select": {
+            "record_type": "http_request",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.wire_protocol",
+                "value": "websocket"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.variant",
+                "value": "default"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "count_at_least",
+            "value": 1
+          },
+          "description": "至少保留一个缺少可选头后的独立扰动样本",
+          "id": "optional-missing-covered",
+          "select": {
+            "record_type": "http_request",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.wire_protocol",
+                "value": "websocket"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.variant",
+                "value": "optional_missing"
+              }
+            ]
+          }
+        }
+      ],
+      "description": "WS 前五项之后均为小写且按 swap_remove 结果输出",
+      "rule_id": "SPEC-WS-002",
+      "scenario_ids": [
+        "A05",
+        "A06"
+      ]
+    },
+    {
+      "checks": [
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.header_values.sec-websocket-extensions",
+            "value": [
+              "permessage-deflate; client_max_window_bits"
+            ]
+          },
+          "description": "握手请求包含 permessage-deflate",
+          "id": "extension-negotiated",
+          "select": {
+            "record_type": "http_request",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.wire_protocol",
+                "value": "websocket"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.rsv1_deflate",
+            "value": true
+          },
+          "description": "压缩 TEXT 业务帧 RSV1 均置位",
+          "id": "compressed-text-rsv1",
+          "select": {
+            "record_type": "websocket_frame",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.opcode",
+                "value": "TEXT"
+              },
+              {
+                "operator": "equal",
+                "path": "data.compressed",
+                "value": "permessage-deflate"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_list_prefix",
+            "path": "data.decompression_results",
+            "value": [
+              "ok",
+              "ok"
+            ]
+          },
+          "description": "同一连接至少连续两帧使用同一 inflater 成功解压",
+          "id": "context-takeover",
+          "select": {
+            "record_type": "websocket_compression_context"
+          }
+        }
+      ],
+      "description": "WS 业务帧使用 permessage-deflate、RSV1 与连接级上下文接管",
+      "rule_id": "SPEC-WS-004",
+      "scenario_ids": [
+        "A05"
+      ]
+    },
+    {
+      "checks": [
+        {
+          "assertion": {
+            "allowed": [
+              "type",
+              "model",
+              "instructions",
+              "previous_response_id",
+              "input",
+              "tools",
+              "tool_choice",
+              "parallel_tool_calls",
+              "reasoning",
+              "store",
+              "stream",
+              "stream_options",
+              "include",
+              "service_tier",
+              "prompt_cache_key",
+              "text",
+              "generate",
+              "client_metadata"
+            ],
+            "operator": "all_ordered_subset_of",
+            "path": "data.top_level_fields_in_order",
+            "required": [
+              "type",
+              "model",
+              "input",
+              "tool_choice",
+              "parallel_tool_calls",
+              "reasoning",
+              "store",
+              "stream",
+              "include"
+            ]
+          },
+          "description": "response.create 字段只从冻结槽位按顺序出现",
+          "id": "field-slots",
+          "select": {
+            "record_type": "websocket_frame",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.event_type",
+                "value": "response.create"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.shape.generate",
+            "value": "bool:false"
+          },
+          "description": "warmup 帧的 generate 为 false",
+          "id": "warmup-generate-false",
+          "select": {
+            "record_type": "websocket_frame",
+            "scenario_ids": [
+              "A06"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.frame_role",
+                "value": "warmup"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_subset",
+            "path": "data",
+            "value": {
+              "prefix_reusable": "yes",
+              "previous_response_id_presence": "present"
+            }
+          },
+          "description": "增量帧只在可复用前缀成立时携带 previous_response_id",
+          "id": "incremental-prefix-reuse",
+          "select": {
+            "record_type": "response_prefix_reuse",
+            "scenario_ids": [
+              "A06"
+            ]
+          }
+        }
+      ],
+      "description": "response.create 字段遵循固定槽位和条件省略",
+      "rule_id": "SPEC-WS-005",
+      "scenario_ids": [
+        "A05",
+        "A06"
+      ]
+    },
+    {
+      "checks": [
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.stages",
+            "value": [
+              "provider",
+              "endpoint_headers",
+              "body",
+              "configure",
+              "prepared_request",
+              "retry_auth"
+            ]
+          },
+          "description": "内部 trace 呈现冻结的组装阶段顺序",
+          "id": "assembly-stages",
+          "select": {
+            "record_type": "header_assembly"
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_list_suffix",
+            "path": "data.retry_stages",
+            "value": [
+              "retry_auth"
+            ]
+          },
+          "description": "每次 retry 最后执行认证",
+          "id": "retry-auth-last",
+          "select": {
+            "record_type": "header_assembly"
+          }
+        }
+      ],
+      "description": "provider、端点、configure、prepared 与 retry auth 的内部组装顺序",
+      "rule_id": "SPEC-HDR-001",
+      "scenario_ids": [
+        "A03",
+        "A08"
+      ]
+    },
+    {
+      "checks": [
+        {
+          "assertion": {
+            "operator": "all_contains",
+            "path": "data.header_names_in_order",
+            "value": "originator"
+          },
+          "description": "普通内置请求均含 originator 与 user-agent",
+          "id": "default-identity-headers",
+          "select": {
+            "record_type": "http_request",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.provider",
+                "value": "openai_oauth"
+              },
+              {
+                "operator": "absent",
+                "path": "labels.ca_mode"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.transport",
+                "value": "http"
+              },
+              {
+                "operator": "not_equal",
+                "path": "data.path",
+                "value": "/backend-api/wham/settings/user"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_contains",
+            "path": "data.header_names_in_order",
+            "value": "user-agent"
+          },
+          "description": "普通内置请求均含 user-agent",
+          "id": "default-user-agent",
+          "select": {
+            "record_type": "http_request",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.provider",
+                "value": "openai_oauth"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.header_values.x-openai-internal-codex-residency",
+            "value": [
+              "us"
+            ]
+          },
+          "description": "受管理 residency=us 时发送精确值",
+          "id": "residency-positive",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A04"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.residency",
+                "value": "us"
+              },
+              {
+                "operator": "absent",
+                "path": "labels.ca_mode"
+              },
+              {
+                "operator": "not_equal",
+                "path": "data.path",
+                "value": "/backend-api/wham/settings/user"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_absent",
+            "path": "data.header_values.x-openai-internal-codex-residency"
+          },
+          "description": "未配置 residency 时完全不发送该头",
+          "id": "residency-negative",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A04"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.residency",
+                "value": "unset"
+              }
+            ]
+          }
+        }
+      ],
+      "description": "Client 默认头为 originator、user-agent 和条件 residency",
+      "rule_id": "SPEC-HDR-002",
+      "scenario_ids": [
+        "A04",
+        "A15"
+      ]
+    },
+    {
+      "checks": [
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.header_values.openai-beta",
+            "value": [
+              "responses_websockets=2026-02-06"
+            ]
+          },
+          "description": "WS 握手发送精确 beta 值",
+          "id": "ws-beta",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A05"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.wire_protocol",
+                "value": "websocket"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_absent",
+            "path": "data.header_values.openai-beta"
+          },
+          "description": "HTTP Responses 和 images 不发送 OpenAI-Beta",
+          "id": "http-beta-absent",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A03",
+              "A09"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.wire_protocol",
+                "value": "http"
+              }
+            ]
+          }
+        }
+      ],
+      "description": "Codex 只在 WS 握手添加 OpenAI-Beta",
+      "rule_id": "SPEC-HDR-004",
+      "scenario_ids": [
+        "A03",
+        "A05",
+        "A09"
+      ]
+    },
+    {
+      "checks": [
+        {
+          "assertion": {
+            "operator": "any_subset",
+            "path": "data",
+            "value": {
+              "originator": "codex_exec",
+              "user_agent_prefix": "codex_exec/0.149.1",
+              "user_agent_suffix": "(codex_exec; 0.149.1)"
+            }
+          },
+          "description": "exec 使用 codex_exec 前缀与同名 suffix",
+          "id": "exec-identity",
+          "select": {
+            "record_type": "surface_identity",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.surface",
+                "value": "exec"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "any_subset",
+            "path": "data",
+            "value": {
+              "originator": "codex-tui",
+              "user_agent_prefix": "codex-tui/0.149.1",
+              "user_agent_suffix": "(codex-tui; 0.149.1)"
+            }
+          },
+          "description": "TUI 使用 codex-tui 前缀与同名 suffix",
+          "id": "tui-identity",
+          "select": {
+            "record_type": "surface_identity",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.surface",
+                "value": "tui"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "distinct_values_equal",
+            "path": "data.suffix_state",
+            "value": [
+              "present",
+              "absent"
+            ]
+          },
+          "description": "启动 models 同时覆盖 suffix present 与 absent 官方观测集",
+          "id": "startup-models-suffix-states",
+          "select": {
+            "record_type": "surface_identity",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.endpoint",
+                "value": "models"
+              }
+            ]
+          }
+        }
+      ],
+      "description": "UA 由 surface 前缀和可选 suffix 组成",
+      "rule_id": "SPEC-HDR-005",
+      "scenario_ids": [
+        "A15"
+      ]
+    },
+    {
+      "checks": [
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.header_values.accept",
+            "value": [
+              "text/event-stream"
+            ]
+          },
+          "description": "HTTP Responses 使用 text/event-stream",
+          "id": "responses-http-sse",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A03"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_absent",
+            "path": "data.header_values.accept"
+          },
+          "description": "WS 握手不发送 accept",
+          "id": "ws-no-accept",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A05"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.wire_protocol",
+                "value": "websocket"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.header_values.accept",
+            "value": [
+              "*/*"
+            ]
+          },
+          "description": "辅助端点使用 */*",
+          "id": "auxiliary-wildcard",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A09"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.endpoint_class",
+                "value": "auxiliary"
+              },
+              {
+                "operator": "absent",
+                "path": "labels.ca_mode"
+              },
+              {
+                "operator": "not_equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              }
+            ]
+          }
+        }
+      ],
+      "description": "accept 按传输和端点变化",
+      "rule_id": "SPEC-HDR-006",
+      "scenario_ids": [
+        "A03",
+        "A05",
+        "A09"
+      ]
+    },
+    {
+      "checks": [
+        {
+          "assertion": {
+            "operator": "all_contains",
+            "path": "data.header_names_in_order",
+            "value": "session-id"
+          },
+          "description": "Responses 和 compact 均包含 session-id",
+          "id": "responses-session-id",
+          "select": {
+            "record_type": "http_request",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.session_header_scope",
+                "value": "responses_or_compact"
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              },
+              {
+                "operator": "in",
+                "path": "data.path",
+                "value": [
+                  "/backend-api/codex/responses",
+                  "/backend-api/codex/responses/compact"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_contains",
+            "path": "data.header_names_in_order",
+            "value": "thread-id"
+          },
+          "description": "Responses 和 compact 均包含 thread-id",
+          "id": "responses-thread-id",
+          "select": {
+            "record_type": "http_request",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.session_header_scope",
+                "value": "responses_or_compact"
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              },
+              {
+                "operator": "in",
+                "path": "data.path",
+                "value": [
+                  "/backend-api/codex/responses",
+                  "/backend-api/codex/responses/compact"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_not_contains",
+            "path": "data.header_names_in_order",
+            "value": "session_id"
+          },
+          "description": "所有相关请求均不发送 underscore 或 conversation-id 旧名",
+          "id": "legacy-names-absent",
+          "select": {
+            "record_type": "http_request",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.provider",
+                "value": "openai_oauth"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_not_contains",
+            "path": "data.header_names_in_order",
+            "value": "conversation-id"
+          },
+          "description": "所有相关请求均不发送 conversation-id",
+          "id": "conversation-id-absent",
+          "select": {
+            "record_type": "http_request",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.provider",
+                "value": "openai_oauth"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_contains",
+            "path": "data.header_names_in_order",
+            "value": "x-session-id"
+          },
+          "description": "realtime 第一跳使用 x-session-id",
+          "id": "realtime-x-session",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A11"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/realtime/calls"
+              }
+            ]
+          }
+        }
+      ],
+      "description": "普通 responses/compact 使用连字符会话头，realtime 使用独立 x-session-id",
+      "rule_id": "SPEC-HDR-007",
+      "scenario_ids": [
+        "A03",
+        "A09",
+        "A11"
+      ]
+    },
+    {
+      "checks": [
+        {
+          "assertion": {
+            "operator": "all_match",
+            "path": "data.value",
+            "value": ".+"
+          },
+          "description": "subagent 值允许开放 label，不限制为封闭枚举",
+          "id": "subagent-open-label",
+          "select": {
+            "record_type": "conditional_header",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.name",
+                "value": "x-openai-subagent"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.value",
+            "value": "true"
+          },
+          "description": "memory consolidation 发送 memgen=true",
+          "id": "memgen-true",
+          "select": {
+            "record_type": "conditional_header",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.name",
+                "value": "x-openai-memgen-request"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_match",
+            "path": "data.value_sha256",
+            "value": "[0-9a-f]{64}"
+          },
+          "description": "子线程正例包含非空 parent thread 哈希",
+          "id": "parent-thread",
+          "select": {
+            "record_type": "conditional_header",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.name",
+                "value": "x-codex-parent-thread-id"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.value",
+            "value": "true"
+          },
+          "description": "runtime_metrics 发送 timing metrics=true",
+          "id": "timing-metrics-true",
+          "select": {
+            "record_type": "conditional_header",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.name",
+                "value": "x-responsesapi-include-timing-metrics"
+              }
+            ]
+          }
+        }
+      ],
+      "description": "四类条件 header 只在对应来源或 feature 成立时出现",
+      "rule_id": "SPEC-HDR-008",
+      "scenario_ids": [
+        "A04",
+        "A05"
+      ]
+    },
+    {
+      "checks": [
+        {
+          "assertion": {
+            "allowed": [
+              "model",
+              "instructions",
+              "input",
+              "tools",
+              "tool_choice",
+              "parallel_tool_calls",
+              "reasoning",
+              "store",
+              "stream",
+              "stream_options",
+              "include",
+              "service_tier",
+              "prompt_cache_key",
+              "text",
+              "client_metadata"
+            ],
+            "operator": "all_ordered_subset_of",
+            "path": "data.body.top_level_fields_in_order",
+            "required": [
+              "model",
+              "input",
+              "tool_choice",
+              "parallel_tool_calls",
+              "reasoning",
+              "store",
+              "stream",
+              "include"
+            ]
+          },
+          "description": "HTTP 顶层字段仅来自 ResponsesApiRequest 槽位",
+          "id": "http-closed-fields",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A03",
+              "A04"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              },
+              {
+                "operator": "absent",
+                "path": "labels.surface"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "allowed": [
+              "type",
+              "model",
+              "instructions",
+              "previous_response_id",
+              "input",
+              "tools",
+              "tool_choice",
+              "parallel_tool_calls",
+              "reasoning",
+              "store",
+              "stream",
+              "stream_options",
+              "include",
+              "service_tier",
+              "prompt_cache_key",
+              "text",
+              "generate",
+              "client_metadata"
+            ],
+            "operator": "all_ordered_subset_of",
+            "path": "data.top_level_fields_in_order",
+            "required": [
+              "type",
+              "model",
+              "input",
+              "tool_choice",
+              "parallel_tool_calls",
+              "reasoning",
+              "store",
+              "stream",
+              "include"
+            ]
+          },
+          "description": "WS 顶层字段仅来自 ResponseCreateWsRequest 加 type",
+          "id": "ws-closed-fields",
+          "select": {
+            "record_type": "websocket_frame",
+            "scenario_ids": [
+              "A05",
+              "A06"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.event_type",
+                "value": "response.create"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.egress_occurrences",
+            "value": 0
+          },
+          "description": "刻意注入的未知顶层 sentinel 不会出现在候选出站",
+          "id": "unknown-sentinel-absent",
+          "select": {
+            "record_type": "serialization_boundary",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.ingress_sentinel",
+                "value": "candidate_unknown_sentinel"
+              }
+            ]
+          }
+        }
+      ],
+      "description": "HTTP 与 WS Responses 使用各自封闭结构体字段",
+      "rule_id": "SPEC-BODY-001",
+      "scenario_ids": [
+        "A03",
+        "A04",
+        "A05",
+        "A06"
+      ]
+    },
+    {
+      "checks": [
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.header_values.content-encoding",
+            "value": [
+              "zstd"
+            ]
+          },
+          "description": "压缩开启时 Responses 使用 zstd",
+          "id": "responses-zstd",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A03"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.compression",
+                "value": "zstd"
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              },
+              {
+                "operator": "absent",
+                "path": "labels.ca_mode"
+              },
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_absent",
+            "path": "data.header_values.content-encoding"
+          },
+          "description": "压缩关闭时 Responses 不发送 content-encoding",
+          "id": "responses-plain",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A04"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.compression",
+                "value": "plain"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_absent",
+            "path": "data.header_values.content-encoding"
+          },
+          "description": "legacy compact 始终不发送 content-encoding",
+          "id": "compact-plain",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A09"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses/compact"
+              }
+            ]
+          }
+        }
+      ],
+      "description": "Responses 尊重压缩开关，legacy compact 始终明文",
+      "rule_id": "SPEC-BODY-002",
+      "scenario_ids": [
+        "A03",
+        "A04",
+        "A09"
+      ]
+    },
+    {
+      "checks": [
+        {
+          "assertion": {
+            "operator": "all_subset",
+            "path": "data",
+            "value": {
+              "instructions_location": "input.additional_tools",
+              "parallel_tool_calls": false,
+              "reasoning_context": "all_turns",
+              "tools_location": "input.additional_tools"
+            }
+          },
+          "description": "Lite 将工具迁入 additional_tools，并设置 all_turns/false",
+          "id": "lite-transform",
+          "select": {
+            "record_type": "lite_transform"
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.additional_tools_occurrences",
+            "value": 0
+          },
+          "description": "WS 增量帧不重复已复用的 additional_tools",
+          "id": "incremental-no-repeat",
+          "select": {
+            "record_type": "lite_transform",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.transport",
+                "value": "websocket_incremental"
+              }
+            ]
+          }
+        }
+      ],
+      "description": "Lite 变换由模型 manifest 驱动且 WS 增量不重复 additional_tools",
+      "rule_id": "SPEC-BODY-003",
+      "scenario_ids": [
+        "A03",
+        "A05"
+      ]
+    },
+    {
+      "checks": [
+        {
+          "assertion": {
+            "left_path": "data.received_sha256",
+            "operator": "all_fields_equal",
+            "right_path": "data.returned_sha256"
+          },
+          "description": "读取值哈希与后续回送值哈希相同",
+          "id": "turn-state-value-preserved",
+          "select": {
+            "record_type": "turn_state_chain"
+          }
+        },
+        {
+          "assertion": {
+            "operator": "distinct_values_equal",
+            "path": "data.return_channel",
+            "value": [
+              "http_header",
+              "websocket_client_metadata",
+              "legacy_compact_header"
+            ]
+          },
+          "description": "HTTP、WS 与 compact 三条回送通道全部有闭环",
+          "id": "turn-state-channels",
+          "select": {
+            "record_type": "turn_state_chain"
+          }
+        }
+      ],
+      "description": "turn-state 从响应读取、保存并按下一请求传输形态回送",
+      "rule_id": "SPEC-BODY-004",
+      "scenario_ids": [
+        "A03",
+        "A05",
+        "A09"
+      ]
+    },
+    {
+      "checks": [
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.body.shape.tool_choice",
+            "value": "str:auto"
+          },
+          "description": "HTTP body 的 tool_choice 为字符串 auto",
+          "id": "http-tool-choice",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A03",
+              "A04"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.shape.tool_choice",
+            "value": "str:auto"
+          },
+          "description": "WS response.create 的 tool_choice 为字符串 auto",
+          "id": "ws-tool-choice",
+          "select": {
+            "record_type": "websocket_frame",
+            "scenario_ids": [
+              "A05",
+              "A06"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.event_type",
+                "value": "response.create"
+              }
+            ]
+          }
+        }
+      ],
+      "description": "所有 Responses 分支将 tool_choice 序列化为字符串 auto",
+      "rule_id": "SPEC-BODY-005",
+      "scenario_ids": [
+        "A03",
+        "A04",
+        "A05",
+        "A06"
+      ]
+    },
+    {
+      "checks": [
+        {
+          "assertion": {
+            "operator": "all_not_contains",
+            "path": "data.body.top_level_fields_in_order",
+            "value": "instructions"
+          },
+          "description": "Lite 顶层省略 instructions 与 tools",
+          "id": "lite-top-level-omission",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A03"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.mode",
+                "value": "lite"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.track",
+                "value": "lite"
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_not_contains",
+            "path": "data.body.top_level_fields_in_order",
+            "value": "tools"
+          },
+          "description": "Lite 顶层不发送 tools",
+          "id": "lite-tools-omission",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A03"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.mode",
+                "value": "lite"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.track",
+                "value": "lite"
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_contains",
+            "path": "data.body.top_level_fields_in_order",
+            "value": "instructions"
+          },
+          "description": "非 Lite 的 Responses 请求体保留 instructions 和 tools",
+          "id": "nonlite-fields-present",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A04"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.mode",
+                "value": "non_lite"
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              },
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_contains",
+            "path": "data.body.top_level_fields_in_order",
+            "value": "tools"
+          },
+          "description": "非 Lite 的 Responses 请求体保留 tools",
+          "id": "nonlite-tools-present",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A04"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.mode",
+                "value": "non_lite"
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              },
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              }
+            ]
+          }
+        }
+      ],
+      "description": "HTTP Responses 的 Lite/非 Lite 字段与 Option 省略规则",
+      "rule_id": "SPEC-BODY-006",
+      "scenario_ids": [
+        "A03",
+        "A04"
+      ]
+    },
+    {
+      "checks": [
+        {
+          "assertion": {
+            "operator": "all_subset",
+            "path": "data",
+            "value": {
+              "hosted_image_generation_occurrences": 0,
+              "namespace": "image_gen",
+              "tool": "imagegen"
+            }
+          },
+          "description": "非 Lite 呈现 image_gen/imagegen 而非 hosted image_generation",
+          "id": "nonlite-image-tool",
+          "select": {
+            "record_type": "image_tool_flow",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.mode",
+                "value": "non_lite"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.location",
+            "value": "input.additional_tools"
+          },
+          "description": "Lite 将能力放入 input.additional_tools",
+          "id": "lite-image-tool",
+          "select": {
+            "record_type": "image_tool_flow",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.mode",
+                "value": "lite"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "distinct_values_equal",
+            "path": "data.path",
+            "value": [
+              "/backend-api/codex/images/generations",
+              "/backend-api/codex/images/edits"
+            ]
+          },
+          "description": "工具调用后出现独立 generation 与 edit 端点",
+          "id": "independent-image-endpoints",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A09"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.endpoint_class",
+                "value": "images"
+              }
+            ]
+          }
+        }
+      ],
+      "description": "生图工具按 Lite 模式呈现并调用独立 images 端点",
+      "rule_id": "SPEC-EP-001",
+      "scenario_ids": [
+        "A03",
+        "A04",
+        "A09"
+      ]
+    },
+    {
+      "checks": [
+        {
+          "assertion": {
+            "operator": "any_equal",
+            "path": "data.sni",
+            "value": "chatgpt.com"
+          },
+          "description": "常规业务存在 chatgpt.com SNI",
+          "id": "chatgpt-sni",
+          "select": {
+            "record_type": "tls_client_hello",
+            "scenario_ids": [
+              "A01"
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "any_equal",
+            "path": "data.sni",
+            "value": "auth.openai.com"
+          },
+          "description": "OAuth refresh 存在 auth.openai.com SNI",
+          "id": "auth-sni",
+          "select": {
+            "record_type": "tls_client_hello",
+            "scenario_ids": [
+              "A13"
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "any_equal",
+            "path": "data.sni",
+            "value": "api.openai.com"
+          },
+          "description": "realtime sideband 存在 api.openai.com SNI",
+          "id": "api-sni",
+          "select": {
+            "record_type": "tls_client_hello",
+            "scenario_ids": [
+              "A11"
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "count_at_least",
+            "value": 1
+          },
+          "description": "文件 PUT 使用响应返回的区域 oaiusercontent.com 主机",
+          "id": "regional-file-sni",
+          "select": {
+            "record_type": "tls_client_hello",
+            "scenario_ids": [
+              "A14"
+            ],
+            "where": [
+              {
+                "operator": "match",
+                "path": "data.sni",
+                "value": "^[a-z0-9.-]+\\.oaiusercontent\\.com$"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "left_path": "data.create_upload_url_sha256",
+            "operator": "all_fields_equal",
+            "right_path": "data.put_url_sha256"
+          },
+          "description": "create 返回 URL 与实际 PUT URL 的脱敏哈希一致",
+          "id": "file-url-chain",
+          "select": {
+            "record_type": "file_upload_chain",
+            "scenario_ids": [
+              "A14"
+            ]
+          }
+        }
+      ],
+      "description": "业务、刷新、realtime 与文件上传使用各自域名来源",
+      "rule_id": "SPEC-EP-002",
+      "scenario_ids": [
+        "A01",
+        "A11",
+        "A13",
+        "A14"
+      ]
+    },
+    {
+      "checks": [
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.path",
+            "value": "/backend-api/codex/responses"
+          },
+          "description": "压缩正例仅命中 Responses",
+          "id": "responses-may-zstd",
+          "select": {
+            "record_type": "http_request",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.header_values.content-encoding",
+                "value": [
+                  "zstd"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_absent",
+            "path": "data.header_values.content-encoding"
+          },
+          "description": "models、compact、search 与 images 均无 content-encoding",
+          "id": "auxiliary-no-compression",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A09"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.endpoint_class",
+                "value": "auxiliary"
+              }
+            ]
+          }
+        }
+      ],
+      "description": "只有 Responses 允许请求压缩",
+      "rule_id": "SPEC-EP-005",
+      "scenario_ids": [
+        "A03",
+        "A09"
+      ]
+    },
+    {
+      "checks": [
+        {
+          "assertion": {
+            "operator": "all_subset",
+            "path": "data",
+            "value": {
+              "method": "GET",
+              "path": "/backend-api/codex/models",
+              "query_pairs": [
+                [
+                  "client_version",
+                  "0.149.1"
+                ]
+              ]
+            }
+          },
+          "description": "models 方法、路径与 query 精确匹配 0.149.1",
+          "id": "models-method-path-query",
+          "select": {
+            "record_type": "http_request",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/models"
+              }
+            ]
+          }
+        }
+      ],
+      "description": "models 使用 GET 和唯一 client_version query",
+      "rule_id": "SPEC-EP-006",
+      "scenario_ids": [
+        "A09"
+      ]
+    },
+    {
+      "checks": [
+        {
+          "assertion": {
+            "operator": "all_subset",
+            "path": "data",
+            "value": {
+              "method": "POST",
+              "path": "/backend-api/codex/responses/compact",
+              "query_pairs": []
+            }
+          },
+          "description": "legacy compact 方法和路径精确匹配",
+          "id": "legacy-compact-endpoint",
+          "select": {
+            "record_type": "http_request",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses/compact"
+              }
+            ]
+          }
+        }
+      ],
+      "description": "显式 legacy compact 使用 POST /responses/compact",
+      "rule_id": "SPEC-EP-007",
+      "scenario_ids": [
+        "A09"
+      ]
+    },
+    {
+      "checks": [
+        {
+          "assertion": {
+            "operator": "all_subset",
+            "path": "data",
+            "value": {
+              "method": "POST",
+              "path": "/backend-api/codex/alpha/search",
+              "query_pairs": []
+            }
+          },
+          "description": "搜索方法和路径精确匹配",
+          "id": "alpha-search-endpoint",
+          "select": {
+            "record_type": "http_request",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/alpha/search"
+              }
+            ]
+          }
+        }
+      ],
+      "description": "alpha-search 使用 POST /alpha/search",
+      "rule_id": "SPEC-EP-008",
+      "scenario_ids": [
+        "A09"
+      ]
+    },
+    {
+      "checks": [
+        {
+          "assertion": {
+            "operator": "all_subset",
+            "path": "data",
+            "value": {
+              "method": "POST",
+              "query_pairs": [
+                [
+                  "intent",
+                  "quicksilver"
+                ],
+                [
+                  "architecture",
+                  "avas"
+                ]
+              ]
+            }
+          },
+          "description": "realtime calls 第一跳精确匹配 intent 与 architecture",
+          "id": "realtime-first-hop",
+          "select": {
+            "record_type": "http_request",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/realtime/calls"
+              }
+            ]
+          }
+        }
+      ],
+      "description": "realtime 第一跳使用固定方法、路径和两个 query",
+      "rule_id": "SPEC-EP-009",
+      "scenario_ids": [
+        "A11"
+      ]
+    },
+    {
+      "checks": [
+        {
+          "assertion": {
+            "operator": "all_subset",
+            "path": "data",
+            "value": {
+              "first_hop_method": "POST",
+              "first_hop_path": "/backend-api/codex/realtime/calls",
+              "openai_alpha": "quicksilver=v1",
+              "sideband_host": "api.openai.com",
+              "sideband_method": "GET",
+              "sideband_path": "/v1/realtime",
+              "sideband_upgrade": "websocket",
+              "terminal_event": "session.ended"
+            }
+          },
+          "description": "第一跳与 sideband 使用同一 call_id 哈希且第二跳完成 Upgrade",
+          "id": "two-hop-chain",
+          "select": {
+            "record_type": "realtime_chain"
+          }
+        },
+        {
+          "assertion": {
+            "left_path": "data.first_hop_call_id_sha256",
+            "operator": "all_fields_equal",
+            "right_path": "data.sideband_call_id_sha256"
+          },
+          "description": "第一跳 call_id 与第二跳 query 的哈希相同",
+          "id": "call-id-linked",
+          "select": {
+            "record_type": "realtime_chain"
+          }
+        }
+      ],
+      "description": "realtime 第一跳成功后建立 api.openai.com sideband WS",
+      "rule_id": "SPEC-EP-012",
+      "scenario_ids": [
+        "A11"
+      ]
+    },
+    {
+      "checks": [
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.query_pairs",
+            "value": [
+              [
+                "client_version",
+                "0.149.1"
+              ]
+            ]
+          },
+          "description": "models 只有 client_version",
+          "id": "models-query-boundary",
+          "select": {
+            "record_type": "http_request",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/models"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.query_pairs",
+            "value": [
+              [
+                "intent",
+                "quicksilver"
+              ],
+              [
+                "architecture",
+                "avas"
+              ]
+            ]
+          },
+          "description": "realtime calls 只有 intent 与 architecture",
+          "id": "realtime-query-boundary",
+          "select": {
+            "record_type": "http_request",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/realtime/calls"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.query_pairs",
+            "value": []
+          },
+          "description": "普通 Responses 不带 query",
+          "id": "responses-no-query",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A03"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              }
+            ]
+          }
+        }
+      ],
+      "description": "内置 provider 不添加全局 query，只保留端点自身 query",
+      "rule_id": "SPEC-EP-013",
+      "scenario_ids": [
+        "A01",
+        "A03",
+        "A11"
+      ]
+    },
+    {
+      "checks": [
+        {
+          "assertion": {
+            "allowed": [
+              "version",
+              "x-codex-installation-id",
+              "x-codex-window-id",
+              "x-codex-turn-metadata",
+              "session-id",
+              "thread-id",
+              "x-codex-routing-hint",
+              "x-openai-internal-codex-responses-lite",
+              "authorization",
+              "chatgpt-account-id",
+              "content-type",
+              "accept",
+              "originator",
+              "user-agent",
+              "cookie",
+              "host",
+              "content-length"
+            ],
+            "operator": "all_ordered_subset_of",
+            "path": "data.header_names_in_order",
+            "required": [
+              "version",
+              "x-codex-installation-id",
+              "x-codex-window-id",
+              "x-codex-turn-metadata",
+              "session-id",
+              "thread-id",
+              "x-codex-routing-hint",
+              "x-openai-internal-codex-responses-lite",
+              "authorization",
+              "chatgpt-account-id",
+              "content-type",
+              "accept",
+              "originator",
+              "user-agent",
+              "host",
+              "content-length"
+            ]
+          },
+          "description": "默认 legacy compact header 线序精确匹配",
+          "id": "legacy-default-headers",
+          "select": {
+            "record_type": "http_request",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses/compact"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.variant",
+                "value": "default"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.track",
+                "value": "lite"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_list_prefix",
+            "path": "data.header_names_in_order",
+            "value": [
+              "version",
+              "x-codex-installation-id",
+              "x-codex-beta-features",
+              "x-codex-window-id"
+            ]
+          },
+          "description": "beta 条件头占 installation-id 后的第三槽",
+          "id": "legacy-beta-slot",
+          "select": {
+            "record_type": "http_request",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses/compact"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.variant",
+                "value": "beta"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_list_prefix",
+            "path": "data.header_names_in_order",
+            "value": [
+              "version",
+              "x-codex-installation-id",
+              "x-codex-turn-state",
+              "x-codex-window-id"
+            ]
+          },
+          "description": "turn-state 条件头占 installation-id 后的第三槽",
+          "id": "legacy-turn-state-slot",
+          "select": {
+            "record_type": "http_request",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses/compact"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.variant",
+                "value": "turn_state"
+              }
+            ]
+          }
+        }
+      ],
+      "description": "legacy compact 默认与两个条件插槽具有精确线序",
+      "rule_id": "SPEC-EP-014",
+      "scenario_ids": [
+        "A09"
+      ]
+    },
+    {
+      "checks": [
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.header_names_in_order",
+            "value": [
+              "version",
+              "x-codex-turn-metadata",
+              "authorization",
+              "chatgpt-account-id",
+              "content-type",
+              "accept",
+              "originator",
+              "user-agent",
+              "cookie",
+              "host",
+              "content-length"
+            ]
+          },
+          "description": "两次 alpha-search 使用相同精确 Header 线序",
+          "id": "search-header-order",
+          "select": {
+            "record_type": "http_request",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/alpha/search"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.body.top_level_fields_in_order",
+            "value": [
+              "id",
+              "model",
+              "input",
+              "commands",
+              "settings",
+              "max_output_tokens"
+            ]
+          },
+          "description": "alpha-search 顶层 body 字段精确匹配",
+          "id": "search-body-order",
+          "select": {
+            "record_type": "http_request",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/alpha/search"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_list_all_different",
+            "path": "data.command_sha256s"
+          },
+          "description": "同一运行两阶段 command 哈希不同",
+          "id": "search-command-phases",
+          "select": {
+            "record_type": "alpha_search_flow"
+          }
+        }
+      ],
+      "description": "alpha-search 的 header/body 精确且 commands 随阶段变化",
+      "rule_id": "SPEC-EP-015",
+      "scenario_ids": [
+        "A09"
+      ]
+    },
+    {
+      "checks": [
+        {
+          "assertion": {
+            "operator": "distinct_values_equal",
+            "path": "data.path",
+            "value": [
+              "/backend-api/wham/usage",
+              "/backend-api/wham/rate-limit-reset-credits",
+              "/backend-api/wham/settings/user"
+            ]
+          },
+          "description": "三个 GET 路径均出现且无额外 WHAM GET",
+          "id": "wham-get-paths",
+          "select": {
+            "record_type": "http_request",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "GET"
+              },
+              {
+                "operator": "match",
+                "path": "data.path",
+                "value": "^/backend-api/wham/"
+              },
+              {
+                "operator": "absent",
+                "path": "labels.ca_mode"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.header_names_in_order",
+            "value": [
+              "user-agent",
+              "authorization",
+              "chatgpt-account-id",
+              "accept",
+              "host"
+            ]
+          },
+          "description": "前两个 GET 使用 backend-client 精确线序",
+          "id": "wham-get-headers",
+          "select": {
+            "record_type": "http_request",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "GET"
+              },
+              {
+                "operator": "match",
+                "path": "data.path",
+                "value": "^/backend-api/wham/"
+              },
+              {
+                "operator": "absent",
+                "path": "labels.ca_mode"
+              },
+              {
+                "operator": "not_equal",
+                "path": "data.path",
+                "value": "/backend-api/wham/settings/user"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_subset",
+            "path": "data",
+            "value": {
+              "header_names_in_order": [
+                "user-agent",
+                "authorization",
+                "chatgpt-account-id",
+                "content-type",
+                "accept",
+                "host",
+                "content-length"
+              ],
+              "method": "POST"
+            }
+          },
+          "description": "consume 使用 POST、精确线序及 redeem_request_id body",
+          "id": "wham-consume",
+          "select": {
+            "record_type": "http_request",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/wham/rate-limit-reset-credits/consume"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.body.top_level_fields_in_order",
+            "value": [
+              "redeem_request_id"
+            ]
+          },
+          "description": "consume body 顶层只有 redeem_request_id",
+          "id": "wham-consume-body",
+          "select": {
+            "record_type": "http_request",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/wham/rate-limit-reset-credits/consume"
+              }
+            ]
+          }
+        }
+      ],
+      "description": "WHAM 三个 GET 与安全 consume 使用独立 backend-client 形态",
+      "rule_id": "SPEC-EP-019",
+      "scenario_ids": [
+        "A12"
+      ]
+    },
+    {
+      "checks": [
+        {
+          "assertion": {
+            "allowed": [
+              "model",
+              "input",
+              "instructions",
+              "tools",
+              "parallel_tool_calls",
+              "reasoning",
+              "service_tier",
+              "prompt_cache_key",
+              "text"
+            ],
+            "operator": "all_ordered_subset_of",
+            "path": "data.body.top_level_fields_in_order",
+            "required": [
+              "model",
+              "input",
+              "parallel_tool_calls"
+            ]
+          },
+          "description": "legacy body 只从 CompactRequest 槽位按顺序出现",
+          "id": "legacy-body-slots",
+          "select": {
+            "record_type": "http_request",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses/compact"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.body.top_level_fields_in_order",
+            "value": [
+              "model",
+              "input",
+              "parallel_tool_calls",
+              "reasoning",
+              "prompt_cache_key",
+              "text"
+            ]
+          },
+          "description": "默认样本字段与官方 0.149.1 wire 子集一致",
+          "id": "legacy-observed-subset",
+          "select": {
+            "record_type": "http_request",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses/compact"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.variant",
+                "value": "default"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.track",
+                "value": "lite"
+              }
+            ]
+          }
+        }
+      ],
+      "description": "legacy compact 使用独立封闭 body 结构",
+      "rule_id": "SPEC-EP-020",
+      "scenario_ids": [
+        "A09"
+      ]
+    },
+    {
+      "checks": [
+        {
+          "assertion": {
+            "operator": "all_contains",
+            "path": "data.body.shape.input._types",
+            "value": "compaction_trigger"
+          },
+          "description": "manual 与 auto 的普通 Responses input 均含 compaction_trigger",
+          "id": "v2-compaction-trigger",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A10"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              },
+              {
+                "operator": "in",
+                "path": "labels.compaction_mode",
+                "value": [
+                  "manual",
+                  "auto"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "count_equal",
+            "value": 0
+          },
+          "description": "默认 V2 批次不请求 /responses/compact",
+          "id": "v2-no-legacy-call",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A10"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses/compact"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.remote_compaction_v2",
+            "value": "disabled_explicitly"
+          },
+          "description": "A09 legacy 请求由显式关闭 V2 的 trace 证明",
+          "id": "explicit-legacy-only",
+          "select": {
+            "record_type": "compaction_decision",
+            "scenario_ids": [
+              "A09"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.implementation",
+                "value": "legacy"
+              }
+            ]
+          }
+        }
+      ],
+      "description": "默认 manual/auto compaction 使用 Responses V2，仅显式关闭才走 legacy",
+      "rule_id": "SPEC-EP-021",
+      "scenario_ids": [
+        "A09",
+        "A10"
+      ]
+    },
+    {
+      "checks": [
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.header_names_in_order",
+            "value": [
+              "version",
+              "authorization",
+              "chatgpt-account-id",
+              "content-type",
+              "accept",
+              "originator",
+              "user-agent",
+              "cookie",
+              "host",
+              "content-length"
+            ]
+          },
+          "description": "generation 与 edit 的 Header 线序一致且精确",
+          "id": "image-header-order",
+          "select": {
+            "record_type": "http_request",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.endpoint_class",
+                "value": "images"
+              },
+              {
+                "operator": "absent",
+                "path": "labels.surface"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.body.top_level_fields_in_order",
+            "value": [
+              "prompt",
+              "background",
+              "model",
+              "quality",
+              "size"
+            ]
+          },
+          "description": "generation body 字段精确匹配",
+          "id": "generation-body-order",
+          "select": {
+            "record_type": "http_request",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/images/generations"
+              },
+              {
+                "operator": "absent",
+                "path": "labels.surface"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.body.top_level_fields_in_order",
+            "value": [
+              "images",
+              "prompt",
+              "background",
+              "model",
+              "quality",
+              "size"
+            ]
+          },
+          "description": "edit 在首位增加 images 且省略 n",
+          "id": "edit-body-order",
+          "select": {
+            "record_type": "http_request",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/images/edits"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_subset",
+            "path": "data",
+            "value": {
+              "content_type": "application/json",
+              "images_scheme": "data",
+              "multipart_part_count": 0
+            }
+          },
+          "description": "edit 使用 JSON data URL 而不是 multipart",
+          "id": "edit-json-data-url",
+          "select": {
+            "record_type": "image_edit_encoding"
+          }
+        }
+      ],
+      "description": "images generations/edits 使用 JSON、精确字段与相同 Header 线序",
+      "rule_id": "SPEC-EP-022",
+      "scenario_ids": [
+        "A09"
+      ]
+    },
+    {
+      "checks": [
+        {
+          "assertion": {
+            "operator": "distinct_values_equal",
+            "path": "data.reason",
+            "value": [
+              "user_requested",
+              "context_limit",
+              "model_downshift",
+              "comp_hash_changed"
+            ]
+          },
+          "description": "四种压缩 reason 均有独立 trace",
+          "id": "four-reasons",
+          "select": {
+            "record_type": "compaction_decision",
+            "where": [
+              {
+                "operator": "in",
+                "path": "data.reason",
+                "value": [
+                  "user_requested",
+                  "context_limit",
+                  "model_downshift",
+                  "comp_hash_changed"
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.implementation",
+            "value": "responses_compaction_v2"
+          },
+          "description": "远程 provider 默认选择 responses_compaction_v2",
+          "id": "remote-v2-default",
+          "select": {
+            "record_type": "compaction_decision",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.provider_scope",
+                "value": "remote_default"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.summary_egress_count",
+            "value": 0
+          },
+          "description": "TokenBudget 分支没有摘要出站",
+          "id": "token-budget-no-egress",
+          "select": {
+            "record_type": "compaction_decision",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.implementation",
+                "value": "token_budget"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.appended_trigger_count",
+            "value": 0
+          },
+          "description": "输入已有 compaction_trigger 时不再次追加",
+          "id": "existing-trigger-no-double",
+          "select": {
+            "record_type": "compaction_decision",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.input_trigger_state",
+                "value": "already_present"
+              }
+            ]
+          }
+        }
+      ],
+      "description": "压缩选择、四种 reason、TokenBudget 零出站与去重语义",
+      "rule_id": "SPEC-EP-023",
+      "scenario_ids": [
+        "A10"
+      ]
+    }
+  ]
+}

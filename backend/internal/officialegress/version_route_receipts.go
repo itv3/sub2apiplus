@@ -229,7 +229,12 @@ func applyVersionRouteReceipts(
 				return nil, fmt.Errorf("版本 route 收据重复登记 route: %s", document.SinkID)
 			}
 		}
-		binding, profileDigests, err := resolveVersionRouteBinding(*input, route)
+		// 历史版本 route 收据只复核其签发时冻结的画像集合。当前 Active/Previous
+		// 是否仍能覆盖该 route，由 NewBundleResolver 的跨画像门禁独立校验；不能因
+		// 候选版本进入 Previous 就反向要求覆盖或改写既有只读收据。
+		binding, profileDigests, err := resolveVersionRouteBindingForProfiles(
+			*input, route, document.ProfileDigests,
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -293,6 +298,28 @@ func resolveVersionRouteBinding(
 	input SinkBindingInput,
 	route CatalogRoute,
 ) (EndpointBinding, []string, error) {
+	profiles := make([]string, 0, 2)
+	seenProfiles := make(map[string]bool)
+	for _, mode := range []ReleaseMode{ReleaseModeActive, ReleaseModePrevious} {
+		release, err := DefaultReleaseCatalog().Resolve(mode)
+		if err != nil {
+			return EndpointBinding{}, nil, err
+		}
+		if seenProfiles[release.ProfileDigest()] {
+			continue
+		}
+		seenProfiles[release.ProfileDigest()] = true
+		profiles = append(profiles, release.ProfileDigest())
+	}
+	sort.Strings(profiles)
+	return resolveVersionRouteBindingForProfiles(input, route, profiles)
+}
+
+func resolveVersionRouteBindingForProfiles(
+	input SinkBindingInput,
+	route CatalogRoute,
+	profileDigests []string,
+) (EndpointBinding, []string, error) {
 	temporary := input
 	temporary.Routes = append(append([]CatalogRoute(nil), input.Routes...), route)
 	temporary.EnforcementState = SinkStateLegacyObserve
@@ -310,37 +337,48 @@ func resolveVersionRouteBinding(
 		return EndpointBinding{}, nil, fmt.Errorf("版本 route 临时 SinkCatalog 缺少 %s", input.ID)
 	}
 	var resolved EndpointBinding
-	var profiles []string
-	seenProfiles := make(map[string]bool)
-	for _, mode := range []ReleaseMode{ReleaseModeActive, ReleaseModePrevious} {
-		release, resolveErr := DefaultReleaseCatalog().Resolve(mode)
-		if resolveErr != nil {
-			return EndpointBinding{}, nil, resolveErr
+	resolvedProfiles := make([]string, 0, len(profileDigests))
+	releaseCatalog := DefaultReleaseCatalog()
+	for _, profileDigest := range profileDigests {
+		matched := false
+		for _, key := range releaseCatalog.snapshots.Keys() {
+			if key.Digest != profileDigest {
+				continue
+			}
+			if matched {
+				return EndpointBinding{}, nil, fmt.Errorf("版本 route 画像摘要不唯一: %s", profileDigest)
+			}
+			executable, ok := releaseCatalog.snapshots.ResolveExecutable(key)
+			if !ok {
+				return EndpointBinding{}, nil, fmt.Errorf("版本 route 缺少可执行画像: %s", profileDigest)
+			}
+			bindings, bindingErr := NewEndpointBindingCatalog(sinks, physical, executable)
+			if bindingErr != nil {
+				return EndpointBinding{}, nil, bindingErr
+			}
+			candidate, present := bindings.ResolveBindingRoute(sink, route, physical)
+			if !present {
+				return EndpointBinding{}, nil, fmt.Errorf(
+					"版本 route 在冻结画像中无 EndpointBinding: %s: %s", input.ID, profileDigest,
+				)
+			}
+			if len(resolvedProfiles) > 0 && (candidate.EndpointID() != resolved.EndpointID() ||
+				candidate.ReleasePurpose() != resolved.ReleasePurpose()) {
+				return EndpointBinding{}, nil, fmt.Errorf("版本 route 在不同画像中连接到不同 EndpointBinding: %s", input.ID)
+			}
+			resolved = candidate
+			matched = true
 		}
-		if seenProfiles[release.ProfileDigest()] {
-			continue
+		if !matched {
+			return EndpointBinding{}, nil, fmt.Errorf("版本 route 引用未知画像摘要: %s", profileDigest)
 		}
-		seenProfiles[release.ProfileDigest()] = true
-		bindings, bindingErr := NewEndpointBindingCatalog(sinks, physical, release.ExecutableProfile())
-		if bindingErr != nil {
-			return EndpointBinding{}, nil, bindingErr
-		}
-		candidate, present := bindings.ResolveBindingRoute(sink, route, physical)
-		if !present {
-			continue
-		}
-		if len(profiles) > 0 && (candidate.EndpointID() != resolved.EndpointID() ||
-			candidate.ReleasePurpose() != resolved.ReleasePurpose()) {
-			return EndpointBinding{}, nil, fmt.Errorf("版本 route 在不同画像中连接到不同 EndpointBinding: %s", input.ID)
-		}
-		resolved = candidate
-		profiles = append(profiles, release.ProfileDigest())
+		resolvedProfiles = append(resolvedProfiles, profileDigest)
 	}
-	sort.Strings(profiles)
-	if len(profiles) == 0 {
-		return EndpointBinding{}, nil, fmt.Errorf("版本 route 在 Active/Previous 中均无 EndpointBinding: %s", input.ID)
+	sort.Strings(resolvedProfiles)
+	if len(resolvedProfiles) == 0 {
+		return EndpointBinding{}, nil, fmt.Errorf("版本 route 未指定冻结画像: %s", input.ID)
 	}
-	return resolved, profiles, nil
+	return resolved, resolvedProfiles, nil
 }
 
 func verifyVersionRouteReceiptArtifacts(

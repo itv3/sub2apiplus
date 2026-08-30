@@ -256,6 +256,7 @@ func (i *officialCodexWebSocketInvocation) executeAcquire(
 			BodyPolicy: officialegress.BodyPolicy{
 				ID: i.behavior.ID + ".body", Source: i.behavior.Source,
 			},
+			RoutingHint:    request.RoutingHint,
 			BehaviorPolicy: i.behavior, Body: semantic.Body,
 			InvocationID: i.invocation.InvocationID(), DeclaredPersona: officialegress.PersonaCodexCLI,
 		},

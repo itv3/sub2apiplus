@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-seal-failure-v1.json",
+  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-seal-failure-v2.json",
   "title": "Codex 候选 Seal 恢复失败收据",
   "description": "Kilo 后恢复门禁失败时写入 attempt 内的主污染事实，不能依赖 Campaign 旁路 marker。",
   "type": "object",
@@ -8,6 +8,9 @@
   "required": [
     "schema_version",
     "campaign_id",
+    "campaign_mode",
+    "campaign_purpose",
+    "candidate_purpose",
     "campaign_manifest_sha256",
     "phase",
     "candidate_id",
@@ -20,9 +23,12 @@
   ],
   "properties": {
     "schema_version": {
-      "const": "codex-upgrade-seal-failure/v1"
+      "const": "codex-upgrade-seal-failure/v2"
     },
     "campaign_id": {"$ref": "#/$defs/safeId"},
+    "campaign_mode": {"const": "formal"},
+    "campaign_purpose": {"$ref": "#/$defs/candidatePurpose"},
+    "candidate_purpose": {"$ref": "#/$defs/candidatePurpose"},
     "campaign_manifest_sha256": {"$ref": "#/$defs/sha256"},
     "phase": {"const": "candidate"},
     "candidate_id": {"$ref": "#/$defs/safeId"},
@@ -44,6 +50,9 @@
     "sha256": {
       "type": "string",
       "pattern": "^[0-9a-f]{64}$"
+    },
+    "candidatePurpose": {
+      "enum": ["validation_only", "production_replacement"]
     },
     "nonEmptyText": {
       "type": "string",

@@ -1048,6 +1048,26 @@ def _upstream_alpn_offer(
     return [selected_protocol] if selected_protocol else None
 
 
+def _should_synthesize_realtime_call(
+    *,
+    immediate: bool,
+    after_live_attempts: int | None,
+    attempt: int,
+) -> bool:
+    """判断本次 realtime 第一跳是否应由中继受控应答。
+
+    旧开关保持「第一次立即合成」的兼容语义；延迟开关只允许先把指定次数的请求
+    原样转发生产上游，再对紧随其后的那一次请求合成响应。A11 正式场景固定先转发
+    一次自然请求，只有确认自然分支失败后才运行第二次驱动。
+    """
+
+    if attempt < 1:
+        raise ValueError("realtime attempt 必须从 1 开始")
+    if immediate:
+        return attempt == 1
+    return after_live_attempts is not None and attempt == after_live_attempts + 1
+
+
 class ByteRecorder:
     """按方向分别落盘原始字节，并记录分片边界与哈希。
 
@@ -1106,6 +1126,20 @@ class ByteRecorder:
             "opened_at_unix_ms": self.opened_at_unix_ms,
             "closed_at_unix_ms": round(time.time() * 1000),
         }
+
+
+@dataclass
+class PreconnectedUpstream:
+    """在官方客户端 5 秒模型目录超时开始前建好的真实上游 TLS 连接。"""
+
+    reader: asyncio.StreamReader
+    writer: asyncio.StreamWriter
+    target_host: str
+    target_ip: str
+    target_port: int
+    alpn_offer: tuple[str, ...] | None
+    selected_alpn: str | None
+    connect_duration_ms: float
 
 
 def _annotate_relay_stop_after_client_request(
@@ -1178,6 +1212,8 @@ class Relay:
         self._turn_state_injected = False
         self._ws_turn_state_injected = False
         self._synthesized_realtime_call = False
+        self._realtime_call_attempts = 0
+        self._realtime_call_lock = asyncio.Lock()
         self._core_http_responses = 0
         self._core_ws_handshakes = 0
         self._core_ws_response_creates = 0
@@ -1195,6 +1231,9 @@ class Relay:
         # 主动断开、attempt 2 落到新连接。锁用于避免两个并发连接抢到同一编号。
         self._retry_probe_attempts = 0
         self._retry_probe_lock = asyncio.Lock()
+        self._preconnected_upstream: PreconnectedUpstream | None = None
+        self._preconnected_upstream_lock = asyncio.Lock()
+        self._preconnect_duration_ms: float | None = None
 
         self.ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         self.ctx.load_cert_chain(certfile=args.cert, keyfile=args.key)
@@ -1219,6 +1258,117 @@ class Relay:
                     self._dns_cache[h.strip()] = i.strip()
         self.ctx.sni_callback = self._on_sni
 
+    def _default_upstream_ip(self, target_host: str) -> str:
+        """返回未发生 SNI 切换时实际使用的默认上游地址。"""
+
+        # run_official_relay_scenario.sh 会分别生成 --upstream-ip 与
+        # --upstream-map；Cloudflare 轮询 DNS 时，两次解析可能得到不同地址。
+        # handle() 的默认路由历史上以 --upstream-ip 为准，预连接必须复用同一
+        # 选址，否则严格匹配会静默失败并重新执行一次慢 TLS 握手。
+        return self.args.upstream_ip or target_host
+
+    async def _prepare_preconnected_upstream(self) -> None:
+        """预建一次真实上游 TLS，避开官方模型目录请求的 5 秒硬超时。"""
+
+        if not self.args.preconnect_upstream:
+            return
+        target_host = self.args.upstream_host
+        target_ip = self._default_upstream_ip(target_host)
+        target_port = 443
+        offered = tuple(self.args.assume_alpn.split(",")) if self.args.assume_alpn else None
+        context = ssl.create_default_context()
+        if offered:
+            context.set_alpn_protocols(list(offered))
+        started = time.monotonic()
+        reader, writer = await asyncio.wait_for(
+            asyncio.open_connection(
+                host=target_ip,
+                port=target_port,
+                ssl=context,
+                server_hostname=target_host,
+            ),
+            timeout=self.args.preconnect_timeout,
+        )
+        duration_ms = round((time.monotonic() - started) * 1000, 3)
+        ssl_object = writer.get_extra_info("ssl_object")
+        selected_alpn = ssl_object.selected_alpn_protocol() if ssl_object else None
+        self._preconnected_upstream = PreconnectedUpstream(
+            reader=reader,
+            writer=writer,
+            target_host=target_host,
+            target_ip=target_ip,
+            target_port=target_port,
+            alpn_offer=offered,
+            selected_alpn=selected_alpn,
+            connect_duration_ms=duration_ms,
+        )
+        self._preconnect_duration_ms = duration_ms
+
+    async def _take_preconnected_upstream(
+        self,
+        *,
+        target_host: str,
+        target_ip: str,
+        target_port: int,
+        alpn_offer: list[str] | None,
+    ) -> PreconnectedUpstream | None:
+        """只把预建连接交给主机、IP、端口与 ALPN 完全一致的首个客户端连接。"""
+
+        async with self._preconnected_upstream_lock:
+            candidate = self._preconnected_upstream
+            if candidate is None:
+                return None
+            expected_offer = tuple(alpn_offer) if alpn_offer else None
+            if (
+                candidate.target_host != target_host
+                or candidate.target_ip != target_ip
+                or candidate.target_port != target_port
+                or candidate.alpn_offer != expected_offer
+                or candidate.writer.is_closing()
+                or candidate.reader.at_eof()
+            ):
+                return None
+            self._preconnected_upstream = None
+            return candidate
+
+    def _write_preconnect_ready(self) -> None:
+        """在监听端口与预建 TLS 都就绪后写入无凭据就绪收据。"""
+
+        if not self.args.preconnect_upstream:
+            return
+        path = self.out / "preconnect-ready.json"
+        descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(
+                {
+                    "schema_version": "byte-relay-preconnect-ready/v1",
+                    "status": "ready",
+                    "upstream_host": self.args.upstream_host,
+                    "connect_duration_ms": self._preconnect_duration_ms,
+                },
+                stream,
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+            stream.write("\n")
+
+    async def _close_unused_preconnected_upstream(self) -> None:
+        """关闭未被客户端连接消费的预建上游，避免 relay 退出后遗留 TLS 会话。"""
+
+        async with self._preconnected_upstream_lock:
+            candidate = self._preconnected_upstream
+            self._preconnected_upstream = None
+        if candidate is None:
+            return
+        candidate.writer.close()
+        try:
+            await asyncio.wait_for(candidate.writer.wait_closed(), timeout=0.5)
+        except (asyncio.TimeoutError, ConnectionError, ssl.SSLError, OSError):
+            try:
+                candidate.writer.transport.abort()
+            except (AttributeError, OSError, RuntimeError):
+                pass
+
     async def _claim_core_counter(self, name: str) -> int:
         """为并发核心连接分配稳定序号。"""
 
@@ -1227,6 +1377,24 @@ class Relay:
             value = int(getattr(self, attribute)) + 1
             setattr(self, attribute, value)
             return value
+
+    async def _claim_realtime_call_attempt(self) -> tuple[int, bool]:
+        """原子分配 realtime 第一跳序号，避免并发连接抢占受控分支。"""
+
+        async with self._realtime_call_lock:
+            self._realtime_call_attempts += 1
+            attempt = self._realtime_call_attempts
+            synthesize = (
+                not self._synthesized_realtime_call
+                and _should_synthesize_realtime_call(
+                    immediate=self.args.synthesize_realtime_call,
+                    after_live_attempts=self.args.synthesize_realtime_call_after,
+                    attempt=attempt,
+                )
+            )
+            if synthesize:
+                self._synthesized_realtime_call = True
+        return attempt, synthesize
 
     def _log_synthetic_core(
         self,
@@ -1699,9 +1867,9 @@ class Relay:
                         target_ip = await self._resolve(sni)
                         meta["upstream_ip_used"] = target_ip
                 else:
-                    target_ip = self.args.upstream_ip or target_host
+                    target_ip = self._default_upstream_ip(target_host)
             else:
-                target_ip = self.args.upstream_ip or target_host
+                target_ip = self._default_upstream_ip(target_host)
 
             # 受控干预只支持未协商 ALPN 的 HTTP/1.1。默认路径不预读，仍保持原来的
             # 全透明字节泵；开启干预时只缓冲首部，用于识别 WS 握手或 HTTP POST。
@@ -1715,6 +1883,7 @@ class Relay:
                 or self.args.inject_turn_state
                 or self.args.inject_ws_turn_state
                 or self.args.synthesize_realtime_call
+                or self.args.synthesize_realtime_call_after is not None
                 or self.args.retry_probe
                 or self.args.synthetic_profile
             )
@@ -2079,9 +2248,21 @@ class Relay:
                 is_realtime_call = request_line.startswith(
                     "POST /backend-api/codex/realtime/calls?"
                 )
-                if (self.args.synthesize_realtime_call and is_realtime_call
-                        and not self._synthesized_realtime_call):
-                    self._synthesized_realtime_call = True
+                synthesize_realtime = False
+                if is_realtime_call and (
+                    self.args.synthesize_realtime_call
+                    or self.args.synthesize_realtime_call_after is not None
+                ):
+                    realtime_attempt, synthesize_realtime = (
+                        await self._claim_realtime_call_attempt()
+                    )
+                    meta["realtime_call_attempt"] = realtime_attempt
+                    meta["realtime_call_action"] = (
+                        "synthetic_response"
+                        if synthesize_realtime
+                        else "forward_to_production"
+                    )
+                if synthesize_realtime:
                     rec.write("client_to_upstream", initial_head)
                     length_match = re.search(
                         rb"\r\ncontent-length:\s*(\d+)\r\n",
@@ -2105,11 +2286,17 @@ class Relay:
                     writer.write(response)
                     await writer.drain()
                     meta["valid"] = True
-                    meta["intervention"] = "synthesize_realtime_call"
+                    intervention = (
+                        "synthesize_realtime_call"
+                        if self.args.synthesize_realtime_call
+                        else "synthesize_realtime_call_after_live_failure"
+                    )
+                    meta["intervention"] = intervention
                     self._log_intervention({
-                        "type": "synthesize_realtime_call",
+                        "type": intervention,
                         "connection_id": conn_id,
                         "call_id": "rtc_probe",
+                        "realtime_call_attempt": realtime_attempt,
                         "request_line": request_line,
                     })
                     return
@@ -2122,12 +2309,27 @@ class Relay:
                 mirror_selected=self.args.mirror_selected_alpn,
             )
             meta["upstream_alpn_offer"] = upstream_offer
-            if upstream_offer:
-                up_ctx.set_alpn_protocols(upstream_offer)
-            up_r, up_w = await asyncio.open_connection(
-                host=target_ip, port=target_port,
-                ssl=up_ctx, server_hostname=target_host)
-            up_alpn = up_w.get_extra_info("ssl_object").selected_alpn_protocol()
+            preconnected = await self._take_preconnected_upstream(
+                target_host=target_host,
+                target_ip=target_ip,
+                target_port=target_port,
+                alpn_offer=upstream_offer,
+            )
+            if preconnected is not None:
+                up_r, up_w = preconnected.reader, preconnected.writer
+                up_alpn = preconnected.selected_alpn
+                meta["upstream_preconnected"] = True
+                meta["upstream_preconnect_duration_ms"] = (
+                    preconnected.connect_duration_ms
+                )
+            else:
+                if upstream_offer:
+                    up_ctx.set_alpn_protocols(upstream_offer)
+                up_r, up_w = await asyncio.open_connection(
+                    host=target_ip, port=target_port,
+                    ssl=up_ctx, server_hostname=target_host)
+                up_alpn = up_w.get_extra_info("ssl_object").selected_alpn_protocol()
+                meta["upstream_preconnected"] = False
             meta["upstream_alpn"] = up_alpn
             if cli_alpn != up_alpn:
                 # 两侧不一致即污染：中继会把客户端逼上它本不走的协议。
@@ -2205,7 +2407,9 @@ class Relay:
     async def serve(self) -> None:
         # 始终以明文接受：TLS 握手必须发生在窥探 ClientHello 之后，
         # 否则 asyncio 会在回调前就完成握手，拿不到客户端的 ALPN offer。
+        await self._prepare_preconnected_upstream()
         server = await asyncio.start_server(self.handle, "0.0.0.0", self.args.port)
+        self._write_preconnect_ready()
         self._stop_event = asyncio.Event()
         if self._stop_requested:
             self._stop_event.set()
@@ -2231,6 +2435,7 @@ class Relay:
         finally:
             if loop_signal_registered:
                 loop.remove_signal_handler(signal.SIGTERM)
+            await self._close_unused_preconnected_upstream()
         self._stop_event = None
 
     def dump(self) -> None:
@@ -2253,6 +2458,8 @@ class Relay:
                        ),
                        "production_forwarding_enabled": not bool(self.args.synthetic_profile),
                        "mirror_selected_alpn": self.args.mirror_selected_alpn,
+                       "upstream_preconnect_enabled": self.args.preconnect_upstream,
+                       "upstream_preconnect_duration_ms": self._preconnect_duration_ms,
                        "connections": self.records},
                       f, ensure_ascii=False, indent=2)
         print(json.dumps({"connections": len(self.records),
@@ -2275,6 +2482,18 @@ def main() -> None:
                          "**必须在劫持 hosts 之前解析好**")
     ap.add_argument("--upstream-ip", default="",
                     help="direct 模式必填：上游真实 IP，绕开被劫持的 hosts")
+    ap.add_argument(
+        "--preconnect-upstream",
+        action="store_true",
+        help=("在开始监听客户端前预建一次真实上游 TLS；仅供模型目录前置采集"
+              "规避官方客户端的 5 秒硬超时，不修改任何应用字节"),
+    )
+    ap.add_argument(
+        "--preconnect-timeout",
+        type=float,
+        default=15.0,
+        help="预建真实上游 TLS 的独立超时秒数",
+    )
     ap.add_argument("--output", required=True)
     ap.add_argument("--assume-alpn", default="",
                     help="客户端 ALPN offer（逗号分隔）。asyncio 无法窥探 ClientHello，"
@@ -2292,8 +2511,20 @@ def main() -> None:
                     help="仅一次：向首个 HTTP /responses 的 200 响应注入该 turn-state")
     ap.add_argument("--inject-ws-turn-state", default="",
                     help="仅一次：在 responses WS 首个 response.create 后注入 response.metadata")
-    ap.add_argument("--synthesize-realtime-call", action="store_true",
-                    help="仅一次：合成 realtime/calls 200，用于触发 sideband 派生请求")
+    realtime_synthesis = ap.add_mutually_exclusive_group()
+    realtime_synthesis.add_argument(
+        "--synthesize-realtime-call",
+        action="store_true",
+        help="兼容模式，仅第一次：合成 realtime/calls 200，用于触发 sideband 派生请求",
+    )
+    realtime_synthesis.add_argument(
+        "--synthesize-realtime-call-after",
+        type=int,
+        choices=(1,),
+        default=None,
+        metavar="LIVE_ATTEMPTS",
+        help="先真实转发一次 realtime/calls，再仅对下一次请求合成 200",
+    )
     ap.add_argument(
         "--synthetic-profile",
         choices=(
@@ -2379,11 +2610,23 @@ def main() -> None:
         ap.error("候选合成画像必须提供 --codex-version")
     if args.synthetic_profile and (args.upstream_ip or args.upstream_map):
         ap.error("候选合成模式禁止配置任何生产上游 IP/map")
+    if args.preconnect_timeout <= 0:
+        ap.error("--preconnect-timeout 必须大于 0")
+    if args.preconnect_upstream and (
+        args.mode != "direct"
+        or args.synthetic_profile
+        or args.mirror_selected_alpn
+        or not args.upstream_ip
+    ):
+        ap.error(
+            "--preconnect-upstream 只允许 direct 真实上游、固定 ALPN 的模型目录采集"
+        )
     if args.synthetic_profile and any((
         args.force_ws_fallback_426,
         args.inject_turn_state,
         args.inject_ws_turn_state,
         args.synthesize_realtime_call,
+        args.synthesize_realtime_call_after is not None,
         args.retry_probe,
     )):
         ap.error("候选合成模式不能与其他受控干预混用")

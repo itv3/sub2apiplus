@@ -134,7 +134,7 @@ func (p codexDialectPlan) control() executorPlanControl {
 		),
 		dialectAttestationDigest: codexAttestationDigest(
 			"dialect", plan.HeaderPolicy.Digest(), plan.BodyPolicy.Digest(),
-			plan.BehaviorPolicy.ID,
+			plan.BehaviorPolicy.ID, plan.RoutingHint.Digest(),
 		),
 		invocationAttestationDigest: codexAttestationDigest(
 			"invocation", string(plan.IdentityMode), plan.IdentityFacts.invocationDigest(),
