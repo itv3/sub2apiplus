@@ -1492,8 +1492,8 @@ owner PID/nonce、attempt、UTC 截止时间、最后 heartbeat 和当前命令�
 分钟账本 60 秒；事件和账本逐条 `fsync`。Job 的每个步骤必须经 Campaign lease 的统一命令入口执行。
 ARM64 离线门禁确认不会输出秘密时必须使用 `run --persist-output`，失败输出保存在对应 run 目录的
 `command-output.log`；先从日志定位并只补跑失败项，不得为找错误再跑一遍完整门禁。live Job 禁止启用。
-监督器若不以 `/root/oauth-capture` 为当前目录启动绝对 Python 脚本，命令必须显式加
-`PYTHONPATH=/root/oauth-capture`；导入失败不得触发后续探针或扩大重跑范围。
+监督器在 `capture-cli` 容器内若不以 `$CAPTURE_CONTAINER_ROOT` 为当前目录启动绝对 Python 脚本，命令
+必须显式加 `PYTHONPATH=$CAPTURE_CONTAINER_ROOT`；导入失败不得触发后续探针或扩大重跑范围。
 强停后的 `audit` 只读检查若发现事件链或分钟区间缺口，立即返回失败，不能继续 ARM64 部署。
 完整记录的业务失败必须分类为 `failed`；只有事件链损坏、监督器失联、分钟缺口或终态不可证明时才是
 `audit-incomplete`，不能把正常 fail-close 误报为审计缺口。
@@ -1668,7 +1668,68 @@ upgrade ID、基线、目标版本和用途与计划一致；ARM64 收据必须�
 本环境后续 Codex 升级的 P0、取证、Candidate、Kilo、门禁、canary 和部署验证均只在 ARM64 执行。
 DMIT 归档只读复用，不登录或修改 DMIT 主机。ARM64 固定出站边界如下：
 
-ARM64 的 Go 固定使用 `/root/oauth-capture/state/local/go1.27.0/bin`；构建和 Go 门禁统一设置
+#### 4.0.5.1 ARM64 抓包目录坐标
+
+本机 Docker 项目统一归入 `/root/docker/<项目名>`。`capture-cli` 的规范坐标固定为：
+
+| 变量／坐标 | 固定值 | 作用 |
+|---|---|---|
+| `CAPTURE_HOST_PROJECT_ROOT` | `/root/docker/capture-cli` | 宿主机 Compose、镜像构建输入和配置根 |
+| `CAPTURE_HOST_DATA_ROOT` | `/root/docker/capture-cli/data` | 宿主机唯一可写数据根，权限 `0700`、Git 忽略 |
+| `CAPTURE_CONTAINER_ROOT` | `/root/oauth-capture` | 容器内运行根，不表示允许同名宿主目录继续写入 |
+| 历史宿主兼容根 | `/root/oauth-capture` | 迁移期只读重放坐标，禁止产生 0.154 新数据 |
+
+标准目录布局为：
+
+```text
+/root/docker/capture-cli/
+├── docker-compose.yml
+├── image/
+├── config/
+└── data/
+    ├── state/
+    ├── runtime/
+    ├── work/
+    ├── evidence/
+    │   ├── campaigns/
+    │   ├── control/
+    │   └── audit/
+    ├── staging/
+    └── archive/
+```
+
+宿主机命令和容器内命令必须分别使用上述变量，不得因两侧历史上都出现 `/root/oauth-capture` 而混淆
+bind source 与容器 target。Compose 文件固定为
+`$CAPTURE_HOST_PROJECT_ROOT/docker-compose.yml`，工作目录固定为 `$CAPTURE_HOST_PROJECT_ROOT`；项目名
+必须显式冻结，不能继续由旧目录名 `deploy` 或当前工作目录推导。`image/` 和 `config/` 只放受管输入，
+所有可变对象只能写入 `data/` 的对应子目录。
+
+截至本规则生效时，现有 Compose 和可写数据仍位于
+`/root/oauth-capture/deploy/docker-compose.yml` 与 `/root/oauth-capture`。它们是待迁移的历史坐标，
+不是规范例外；规则生效后只允许写入目录迁移本身的控制账本和收据，其他用途仅可执行历史只读复验与
+回退。0.154 的 P0／Formal Campaign 前必须生成并通过目录迁移收据，至少绑定旧新 inventory、Compose
+原文与渲染摘要、bind 映射、镜像、容器、固定 IP／出口、权限、迁移前后字节数及历史兼容 bind mount。
+迁移期间旧宿主路径不得接收新的 staging、bundle、patch、源码树或 Campaign；迁移完成后的兼容 bind
+只读，不能形成第二份可写数据。
+
+P0 必须同时通过以下目录门禁：
+
+1. 解析 Compose 后，本地 build context、env file 和业务 bind source 均位于项目根或数据根；
+2. `docker inspect capture-cli` 的实际挂载、镜像、网络和固定 IP 与迁移收据逐项一致；
+3. 有界枚举 `/root` 第一层，不得出现本轮新增的 `codex-*`、bundle、patch、worktree、恢复树或抓包目录；
+4. `data/staging` 中每个临时对象均有 owner、用途、创建时间、上限和清理状态；
+5. 清理只接受冻结 manifest，完成引用／占用／挂载检查和异机归档后生成前后复验收据，禁止无范围删除。
+
+后续命令统一先声明：
+
+```bash
+export CAPTURE_HOST_PROJECT_ROOT=/root/docker/capture-cli
+export CAPTURE_HOST_DATA_ROOT="$CAPTURE_HOST_PROJECT_ROOT/data"
+export CAPTURE_CONTAINER_ROOT=/root/oauth-capture
+```
+
+ARM64 宿主机的 Go 固定使用 `$CAPTURE_HOST_DATA_ROOT/state/local/go1.27.0/bin`；`capture-cli` 容器内使用
+`$CAPTURE_CONTAINER_ROOT/state/local/go1.27.0/bin`。两者必须解析为同一冻结工具链摘要。构建和 Go 门禁统一设置
 `GOPROXY=off`、`GOFLAGS=-mod=readonly`，不得临时下载或切换工具链。
 `docker build --network=none` 只限制 Dockerfile 的 `RUN`，不限制基础镜像解析；声称离线构建前必须
 确认全部基础镜像 digest 和层已在本机冻结。
@@ -1891,7 +1952,7 @@ Campaign 外的待审核 `profile.json`。随后审核：
 `check-egress-spec`；不得累积多个未登记提交后再进入 ARM64 全门禁。
 
 ~~~bash
-export PATH="/root/oauth-capture/state/local/go1.27.0/bin:$PATH"
+export PATH="$CAPTURE_HOST_DATA_ROOT/state/local/go1.27.0/bin:$PATH"
 export GOPROXY=off
 export GOFLAGS=-mod=readonly
 python3 tools/official_client_capture/codex_upgrade.py stage-profile \
@@ -1966,7 +2027,7 @@ python3 tools/official_client_capture/codex_upgrade.py candidate-runtime-overrid
 有效期检查，缺失或过期时立即失败，不得先执行其他候选 Job。
 
 ~~~bash
-export ADMIN_BEARER_TOKEN_FILE=/root/oauth-capture/state/<upgrade-id>/admin-token
+export ADMIN_BEARER_TOKEN_FILE="$CAPTURE_HOST_DATA_ROOT/state/<upgrade-id>/admin-token"
 python3 tools/official_client_capture/codex_upgrade.py capture-candidate run \
   --campaign-dir /绝对路径/campaign \
   --candidate-id <candidate-id> \
