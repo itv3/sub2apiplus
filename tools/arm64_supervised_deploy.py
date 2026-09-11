@@ -38,8 +38,10 @@ from typing import Any, Callable, Mapping
 # 阶段只读导入新 Campaign；受管工具树摘要随之更新。
 # 2026-09-11（0.154）：新增目标版本清单、Astra Lite 轨模型政策和 0.154 升级对；部署坐标
 # 统一迁入 /root/docker/capture-cli/data，受管工具树摘要随之更新。
+# 2026-09-12（0.154 补丁绑定修复）：画像补丁清单改为绑定活动画像文件 SHA-256，
+# 并增加穿过正式画像派生校验的离线回归；规则语义与网络行为不变。
 DEFAULT_TOOL_DIGEST = (
-    "dcb8059af3b4ad06342e6771b322cb20ae3d34b54241b8f2954fe719ddd7ef6f"
+    "0b7140e1f26ef0ea3bace16593700b7751a29d40b44fc8856fad2b6b3bc19505"
 )
 DEFAULT_SUPERVISOR_DIGEST = (
     "f12daa3edb619546081141ac736af56dfb34b4cadff3bf63fe8dacabf22d80b4"
