@@ -81,6 +81,11 @@ CAPTURE_CLI_DIRECTORY_GOVERNANCE_FREEZE_SUCCESSOR = (
     ROOT
     / "docs/egress/maintenance/upstream-capture-cli-directory-governance-20260911-freeze-successor.json"
 )
+# 2026-09-11：Codex CLI 0.154.0 画像工具、目标清单和 Astra Lite 轨政策的后继摘要。
+CODEX_0154_EMULATION_UPGRADE_FREEZE_SUCCESSOR = (
+    ROOT
+    / "docs/egress/maintenance/upstream-codex-0154-emulation-upgrade-20260911-freeze-successor.json"
+)
 HISTORICAL_LEDGER = "docs/egress/maintenance/historical-source-drift-successor.json"
 SHA256_LENGTH = 64
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -166,6 +171,7 @@ def successor_edges(path: str) -> list[tuple[str, str]]:
         CODEX_UPGRADE_BATCH3_FREEZE_SUCCESSOR,
         V0242_VERSION_SYNC_FREEZE_SUCCESSOR,
         CAPTURE_CLI_DIRECTORY_GOVERNANCE_FREEZE_SUCCESSOR,
+        CODEX_0154_EMULATION_UPGRADE_FREEZE_SUCCESSOR,
     ):
         payload = json.loads(receipt_path.read_text(encoding="utf-8"))
         _validate_successor_receipt(payload)
