@@ -76,6 +76,11 @@ CODEX_UPGRADE_BATCH3_FREEZE_SUCCESSOR = (
 V0242_VERSION_SYNC_FREEZE_SUCCESSOR = (
     ROOT / "docs/egress/maintenance/upstream-v0.2.4-2-version-sync-freeze-successor.json"
 )
+# 2026-09-11：capture-cli 宿主目录、输出边界、迁移兼容与污染清理规范的后继摘要。
+CAPTURE_CLI_DIRECTORY_GOVERNANCE_FREEZE_SUCCESSOR = (
+    ROOT
+    / "docs/egress/maintenance/upstream-capture-cli-directory-governance-20260911-freeze-successor.json"
+)
 HISTORICAL_LEDGER = "docs/egress/maintenance/historical-source-drift-successor.json"
 SHA256_LENGTH = 64
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -160,6 +165,7 @@ def successor_edges(path: str) -> list[tuple[str, str]]:
         CODEX_UPGRADE_BATCH2_FREEZE_SUCCESSOR,
         CODEX_UPGRADE_BATCH3_FREEZE_SUCCESSOR,
         V0242_VERSION_SYNC_FREEZE_SUCCESSOR,
+        CAPTURE_CLI_DIRECTORY_GOVERNANCE_FREEZE_SUCCESSOR,
     ):
         payload = json.loads(receipt_path.read_text(encoding="utf-8"))
         _validate_successor_receipt(payload)
