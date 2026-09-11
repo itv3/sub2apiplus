@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""在 ARM64 上受独立监督器保护地启用 Codex 0.151 工具和文档。
+"""在 ARM64 上受独立监督器保护地启用 Codex 0.154 工具和文档。
 
 本脚本只负责受管工具和活动文档的同一部署事务，不执行官方请求，也不读取证据。
 所有外部命令都经由 ``codex_upgrade_supervisor.SupervisorClient``，文件操作前后均
@@ -36,8 +36,10 @@ from typing import Any, Callable, Mapping
 # codex_upgrade_legacy_boundary.py 去掉版本字面量；受管工具树与监督器摘要随之更新。
 # 2026-09-11（批次 2）：codex_upgrade.py 新增 reuse-official-evidence 正式命令，把已封存官方
 # 阶段只读导入新 Campaign；受管工具树摘要随之更新。
+# 2026-09-11（0.154）：新增目标版本清单、Astra Lite 轨模型政策和 0.154 升级对；部署坐标
+# 统一迁入 /root/docker/capture-cli/data，受管工具树摘要随之更新。
 DEFAULT_TOOL_DIGEST = (
-    "19cbdf5722b68918daffbf069237996f38fed0fc6efcd77c80869a20001c0293"
+    "dcb8059af3b4ad06342e6771b322cb20ae3d34b54241b8f2954fe719ddd7ef6f"
 )
 DEFAULT_SUPERVISOR_DIGEST = (
     "f12daa3edb619546081141ac736af56dfb34b4cadff3bf63fe8dacabf22d80b4"
@@ -53,7 +55,7 @@ MANAGED_DOCUMENTS = (
     "CODEX_CLI_CLIENT_EMULATION_GUIDE.md",
 )
 MANAGED_ASSERTION_PREPARER = "prepare_assertion_bundle.sh"
-TARGET_SCENARIO_MANIFEST = "codex_upgrade_scenarios_0_151_0.json"
+TARGET_SCENARIO_MANIFEST = "codex_upgrade_scenarios_0_154_0.json"
 SOURCE_SPEC_HEADINGS = {
     "第二章": "# 第二部分 Codex CLI 客户端规则画像",
     "第二部分": "# 第二部分 Codex CLI 客户端规则画像",
@@ -446,22 +448,22 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--staging-root",
         type=Path,
-        default=Path("/root/oauth-capture/.codex-0151-supervised-20260902T030745Z"),
+        default=Path("/root/docker/capture-cli/data/staging/codex-0.154.0-managed-tools"),
     )
     parser.add_argument(
         "--production-root",
         type=Path,
-        default=Path("/root/oauth-capture/tools/official_client_capture"),
+        default=Path("/root/docker/capture-cli/data/tools/official_client_capture"),
     )
     parser.add_argument(
         "--production-doc-root",
         type=Path,
-        default=Path("/root/oauth-capture/docs"),
+        default=Path("/root/docker/capture-cli/data/docs"),
     )
     parser.add_argument(
         "--control-root",
         type=Path,
-        default=Path("/root/oauth-capture/control"),
+        default=Path("/root/docker/capture-cli/data/control"),
     )
     parser.add_argument("--expected-tool-digest", default=DEFAULT_TOOL_DIGEST)
     parser.add_argument("--expected-supervisor-digest", default=DEFAULT_SUPERVISOR_DIGEST)
@@ -496,7 +498,7 @@ def main(argv: list[str] | None = None) -> int:
         raise DeploymentError("生产工具树不存在或不可信。")
     supervisor = load_supervisor(staging_root)
     stamp = utc_stamp().lower()
-    campaign_id = f"c0151-supervisor-enable-{stamp}-{secrets.token_hex(4)}"
+    campaign_id = f"c0154-supervisor-enable-{stamp}-{secrets.token_hex(4)}"
     attached_client = supervisor.SupervisorClient.attach_from_environment()
     client = attached_client or supervisor.SupervisorClient(
         control_root,
@@ -517,7 +519,7 @@ def main(argv: list[str] | None = None) -> int:
     switched_archived_documents: list[str] = []
     tool_switched = False
     assertion_preparer_switched = False
-    receipt_path = control_root / f"codex-0151-supervisor-enable-{stamp}.json"
+    receipt_path = control_root / f"codex-0154-supervisor-enable-{stamp}.json"
 
     def switch_tool_tree() -> Mapping[str, Any]:
         """在事件结束写入失败时也保留已经发生的交换状态。"""
@@ -563,7 +565,7 @@ def main(argv: list[str] | None = None) -> int:
                 ),
             )
             candidate = control_root / (
-                f"codex-0151-tool-candidate-{stamp}-{secrets.token_hex(4)}"
+                f"codex-0154-tool-candidate-{stamp}-{secrets.token_hex(4)}"
             )
             record_step(
                 client,
@@ -597,7 +599,7 @@ def main(argv: list[str] | None = None) -> int:
                 ),
             )
             transaction_root = production_doc_root / (
-                f".codex-0151-deploy-{stamp}-{secrets.token_hex(4)}"
+                f".codex-0154-deploy-{stamp}-{secrets.token_hex(4)}"
             )
             record_step(
                 client,
@@ -1144,8 +1146,8 @@ def _post_switch_verify(
         raise DeploymentError("容器内抓包执行源属主或权限不安全。")
     run_checked(
         client,
-        "enable:verify-0151-binary",
-        ["docker", "exec", "capture-cli", "/opt/codex-0.151.0/bin/codex", "--version"],
+        "enable:verify-0154-binary",
+        ["docker", "exec", "capture-cli", "/opt/codex-0.154.0/bin/codex", "--version"],
     )
     return {
         "production_file_count": count,

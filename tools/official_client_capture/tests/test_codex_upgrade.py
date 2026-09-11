@@ -3154,7 +3154,7 @@ class CodexUpgradeTest(unittest.TestCase):
     def test_current_scenario_manifests_are_additive_and_model_parameterized(self) -> None:
         tool_root = Path(__file__).resolve().parents[1]
         repo_root = tool_root.parents[1]
-        for version in ("0.147.0", "0.149.1", "0.151.0"):
+        for version in ("0.147.0", "0.149.1", "0.151.0", "0.154.0"):
             suffix = version.replace(".", "_")
             scenario_path = tool_root / f"codex_upgrade_scenarios_{suffix}.json"
             scenario = json.loads(scenario_path.read_text(encoding="utf-8"))
@@ -3202,7 +3202,7 @@ class CodexUpgradeTest(unittest.TestCase):
             self.assertEqual(
                 core["steps"][0]["environment"]["LITE_MODEL"], "{lite_model}"
             )
-            if version in {"0.149.1", "0.151.0"}:
+            if version in {"0.149.1", "0.151.0", "0.154.0"}:
                 auxiliary = next(
                     job
                     for job in scenario["capture_jobs"]
@@ -7343,6 +7343,7 @@ class CodexUpgradeTest(unittest.TestCase):
                 "codex_upgrade.py": "1" * 64,
                 "codex_upgrade_predecessor_import.schema.json": "2" * 64,
                 "codex_upgrade_scenarios_0_151_0.json": "3" * 64,
+                "codex_upgrade_scenarios_0_154_0.json": "d" * 64,
                 "mitm_scenario_checkpoint.py": "8" * 64,
                 "prewarm_codex_home.py": "a" * 64,
                 "run_candidate_aux_capture.sh": "4" * 64,
@@ -10974,6 +10975,37 @@ class CodexUpgradeTest(unittest.TestCase):
             "target_version": "0.151.0",
             "model": "gpt-5.5",
             "lite_model": "gpt-5.6-terra",
+        }
+        for mutation, message in mutations:
+            with self.subTest(mutation=mutation):
+                values = {**baseline, **mutation}
+                with self.assertRaisesRegex(
+                    codex_upgrade.ConfigurationError,
+                    message,
+                ):
+                    codex_upgrade._validate_upgrade_pair_models(**values)
+
+    def test_0154_upgrade_pair_model_policy_mutations_fail_closed(self) -> None:
+        """0.154 必须用非 Lite 主线和 Astra Lite 轨，错配时立即拒绝。"""
+
+        codex_upgrade._validate_upgrade_pair_models(
+            baseline_version="0.151.0",
+            target_version="0.154.0",
+            model="gpt-5.5",
+            lite_model="gpt-6-astra",
+        )
+
+        mutations = (
+            ({"baseline_version": "0.149.1"}, "不支持的 Codex 升级对"),
+            ({"target_version": "0.155.0"}, "不支持的 Codex 升级对"),
+            ({"model": "gpt-6-astra"}, "主升级线只能使用 gpt-5.5"),
+            ({"lite_model": "gpt-5.6-terra"}, "Lite 专项只能使用 gpt-6-astra"),
+        )
+        baseline = {
+            "baseline_version": "0.151.0",
+            "target_version": "0.154.0",
+            "model": "gpt-5.5",
+            "lite_model": "gpt-6-astra",
         }
         for mutation, message in mutations:
             with self.subTest(mutation=mutation):

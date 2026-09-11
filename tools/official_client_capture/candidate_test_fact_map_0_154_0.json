@@ -1,0 +1,701 @@
+{
+  "schema_version": "codex-candidate-test-fact-map/v1",
+  "codex_version": "0.154.0",
+  "fact_prefix": "CANDIDATE_TRACE_FACT ",
+  "forbidden_record_types": [
+    "http_request",
+    "tls_client_hello",
+    "websocket_frame"
+  ],
+  "tests": [
+    {
+      "package": "github.com/Wei-Shaw/sub2api/internal/service",
+      "name": "TestCandidateTraceCodex0145RuntimeAndBoundaryFacts",
+      "test_file": "backend/internal/service/official_egress_codex_candidate_trace_acceptance_test.go",
+      "test_file_sha256": "0d5f7566af1cf7be4de27d6adc376a3fc9043e6809ad20963fefe66ccc395586",
+      "source_files": [
+        {
+          "path": "backend/internal/service/official_egress_codex_0145_profile.go",
+          "sha256": "02ec8fcbb8a567b3c6adb0861bfe4bb7d1803362325d531b1e2b47f3430c8377"
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "sha256": "78269f6fe5ff4154421402337b5e33efdec720ba6172b9d75794747ece70846c"
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "sha256": "ddfcbad5951d1292388fc604a7bb3c8a66b410d3f80044d8d708d45a87a8f8a8"
+        }
+      ],
+      "facts": [
+        {
+          "fact_id": "a15.surface-exec",
+          "scenario_id": "A15",
+          "record_type": "surface_identity",
+          "trace_kind": "process_trace",
+          "data_keys": [
+            "endpoint",
+            "originator",
+            "surface",
+            "suffix_state",
+            "user_agent_prefix",
+            "user_agent_suffix"
+          ],
+          "required_source_kinds": [
+            "relay_binary"
+          ]
+        },
+        {
+          "fact_id": "a15.surface-tui",
+          "scenario_id": "A15",
+          "record_type": "surface_identity",
+          "trace_kind": "process_trace",
+          "data_keys": [
+            "endpoint",
+            "originator",
+            "surface",
+            "suffix_state",
+            "user_agent_prefix",
+            "user_agent_suffix"
+          ],
+          "required_source_kinds": [
+            "relay_binary"
+          ]
+        },
+        {
+          "fact_id": "a15.models-no-suffix",
+          "scenario_id": "A15",
+          "record_type": "surface_identity",
+          "trace_kind": "process_trace",
+          "data_keys": [
+            "endpoint",
+            "originator",
+            "surface",
+            "suffix_state",
+            "user_agent_prefix",
+            "user_agent_suffix"
+          ],
+          "required_source_kinds": [
+            "relay_binary"
+          ]
+        },
+        {
+          "fact_id": "a04.conditional-subagent",
+          "scenario_id": "A04",
+          "record_type": "conditional_header",
+          "trace_kind": "process_trace",
+          "data_keys": [
+            "name",
+            "value"
+          ],
+          "required_source_kinds": [
+            "relay_binary"
+          ]
+        },
+        {
+          "fact_id": "a04.conditional-memgen",
+          "scenario_id": "A04",
+          "record_type": "conditional_header",
+          "trace_kind": "process_trace",
+          "data_keys": [
+            "name",
+            "value"
+          ],
+          "required_source_kinds": [
+            "relay_binary"
+          ]
+        },
+        {
+          "fact_id": "a04.conditional-parent-thread",
+          "scenario_id": "A04",
+          "record_type": "conditional_header",
+          "trace_kind": "process_trace",
+          "data_keys": [
+            "name",
+            "value_sha256"
+          ],
+          "required_source_kinds": [
+            "relay_binary"
+          ]
+        },
+        {
+          "fact_id": "a04.conditional-timing-metrics",
+          "scenario_id": "A04",
+          "record_type": "conditional_header",
+          "trace_kind": "process_trace",
+          "data_keys": [
+            "name",
+            "value"
+          ],
+          "required_source_kinds": [
+            "relay_binary"
+          ]
+        },
+        {
+          "fact_id": "a04.serialization-boundary",
+          "scenario_id": "A04",
+          "record_type": "serialization_boundary",
+          "trace_kind": "process_trace",
+          "data_keys": [
+            "egress_occurrences",
+            "ingress_sentinel"
+          ],
+          "required_source_kinds": [
+            "relay_binary"
+          ]
+        },
+        {
+          "fact_id": "a09.image-tool-nonlite",
+          "scenario_id": "A09",
+          "record_type": "image_tool_flow",
+          "trace_kind": "process_trace",
+          "data_keys": [
+            "hosted_image_generation_occurrences",
+            "mode",
+            "namespace",
+            "tool"
+          ],
+          "required_source_kinds": [
+            "relay_binary"
+          ]
+        },
+        {
+          "fact_id": "a09.image-tool-lite",
+          "scenario_id": "A09",
+          "record_type": "image_tool_flow",
+          "trace_kind": "process_trace",
+          "data_keys": [
+            "location",
+            "mode"
+          ],
+          "required_source_kinds": [
+            "relay_binary"
+          ]
+        },
+        {
+          "fact_id": "a09.image-edit-encoding",
+          "scenario_id": "A09",
+          "record_type": "image_edit_encoding",
+          "trace_kind": "process_trace",
+          "data_keys": [
+            "content_type",
+            "images_scheme",
+            "multipart_part_count"
+          ],
+          "required_source_kinds": [
+            "relay_binary"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "github.com/Wei-Shaw/sub2api/internal/service",
+      "name": "TestCandidateTraceCodex0145LiteAndPrefixFacts",
+      "test_file": "backend/internal/service/official_egress_codex_candidate_trace_acceptance_test.go",
+      "test_file_sha256": "0d5f7566af1cf7be4de27d6adc376a3fc9043e6809ad20963fefe66ccc395586",
+      "source_files": [
+        {
+          "path": "backend/internal/service/official_egress_openai_http.go",
+          "sha256": "38e21b8c9ad427ef24efc61f35950fc9d92e53bb94bc19e01648f9ea3b0cad76"
+        },
+        {
+          "path": "backend/internal/service/openai_ws_forwarder_payload.go",
+          "sha256": "9efae6cb124186e47aa0534048248fcab540638009d2c055053e1994d5fa723f"
+        }
+      ],
+      "facts": [
+        {
+          "fact_id": "a03.lite-transform",
+          "scenario_id": "A03",
+          "record_type": "lite_transform",
+          "trace_kind": "process_trace",
+          "data_keys": [
+            "additional_tools_occurrences",
+            "instructions_location",
+            "parallel_tool_calls",
+            "reasoning_context",
+            "tools_location",
+            "transport"
+          ],
+          "required_source_kinds": [
+            "relay_binary"
+          ]
+        },
+        {
+          "fact_id": "a06.prefix-reuse",
+          "scenario_id": "A06",
+          "record_type": "response_prefix_reuse",
+          "trace_kind": "websocket_trace",
+          "data_keys": [
+            "prefix_reusable",
+            "previous_response_id_presence"
+          ],
+          "required_source_kinds": [
+            "relay_binary"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "github.com/Wei-Shaw/sub2api/internal/service",
+      "name": "TestCandidateTraceCodex0145TurnStateFacts",
+      "test_file": "backend/internal/service/official_egress_codex_candidate_trace_acceptance_test.go",
+      "test_file_sha256": "0d5f7566af1cf7be4de27d6adc376a3fc9043e6809ad20963fefe66ccc395586",
+      "source_files": [
+        {
+          "path": "backend/internal/service/official_egress_openai_http.go",
+          "sha256": "38e21b8c9ad427ef24efc61f35950fc9d92e53bb94bc19e01648f9ea3b0cad76"
+        },
+        {
+          "path": "backend/internal/service/official_egress_openai_ws.go",
+          "sha256": "9ab49b7bf5c9311f817435af0fcabfeac76d508abbe38f44c7d1d06f18e0b48d"
+        }
+      ],
+      "facts": [
+        {
+          "fact_id": "a03.turn-state-http",
+          "scenario_id": "A03",
+          "record_type": "turn_state_chain",
+          "trace_kind": "process_trace",
+          "data_keys": [
+            "received_sha256",
+            "return_channel",
+            "returned_sha256"
+          ],
+          "required_source_kinds": [
+            "relay_binary"
+          ]
+        },
+        {
+          "fact_id": "a05.turn-state-ws",
+          "scenario_id": "A05",
+          "record_type": "turn_state_chain",
+          "trace_kind": "websocket_trace",
+          "data_keys": [
+            "received_sha256",
+            "return_channel",
+            "returned_sha256"
+          ],
+          "required_source_kinds": [
+            "relay_binary"
+          ]
+        },
+        {
+          "fact_id": "a09.turn-state-compact",
+          "scenario_id": "A09",
+          "record_type": "turn_state_chain",
+          "trace_kind": "process_trace",
+          "data_keys": [
+            "received_sha256",
+            "return_channel",
+            "returned_sha256"
+          ],
+          "required_source_kinds": [
+            "relay_binary"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "github.com/Wei-Shaw/sub2api/internal/service",
+      "name": "TestCandidateTraceCodex0145WSCompressionAndDefaultTransport",
+      "test_file": "backend/internal/service/official_egress_codex_candidate_trace_acceptance_test.go",
+      "test_file_sha256": "0d5f7566af1cf7be4de27d6adc376a3fc9043e6809ad20963fefe66ccc395586",
+      "source_files": [
+        {
+          "path": "backend/internal/service/openai_ws_client.go",
+          "sha256": "65a9cb0580dd715e9d49b1680318d3224e92143ffcf7dbb7bcfaad521de4be85"
+        }
+      ],
+      "facts": [
+        {
+          "fact_id": "a05.ws-compression-context",
+          "scenario_id": "A05",
+          "record_type": "websocket_compression_context",
+          "trace_kind": "websocket_trace",
+          "data_keys": [
+            "decompression_results"
+          ],
+          "required_source_kinds": [
+            "relay_binary"
+          ]
+        },
+        {
+          "fact_id": "a05.default-websocket",
+          "scenario_id": "A05",
+          "record_type": "transport_fallback",
+          "trace_kind": "websocket_trace",
+          "data_keys": [
+            "transports"
+          ],
+          "required_source_kinds": [
+            "relay_binary"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "github.com/Wei-Shaw/sub2api/internal/service",
+      "name": "TestCandidateTraceCodex0145OAuthFallbackSameInvocation",
+      "test_file": "backend/internal/service/official_egress_codex_candidate_trace_acceptance_test.go",
+      "test_file_sha256": "0d5f7566af1cf7be4de27d6adc376a3fc9043e6809ad20963fefe66ccc395586",
+      "source_files": [
+        {
+          "path": "backend/internal/service/openai_gateway_forward.go",
+          "sha256": "8baab9fe6785599eb3a89677bd8d401c2901566adf98fce5f99b994d909a515b"
+        },
+        {
+          "path": "backend/internal/service/official_egress_integration.go",
+          "sha256": "6564cec1ac6713c9e48a1fa28d795148943dfdfab82dbfac7c9f32174665e315"
+        }
+      ],
+      "facts": [
+        {
+          "fact_id": "a07.oauth-fallback",
+          "scenario_id": "A07",
+          "record_type": "transport_fallback",
+          "trace_kind": "process_trace",
+          "data_keys": [
+            "invocation_ids",
+            "retry_budget_state",
+            "transports"
+          ],
+          "required_source_kinds": [
+            "relay_binary"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "github.com/Wei-Shaw/sub2api/internal/service",
+      "name": "TestCandidateTraceCodex0145HeaderAssembly",
+      "test_file": "backend/internal/service/official_egress_codex_candidate_trace_acceptance_test.go",
+      "test_file_sha256": "0d5f7566af1cf7be4de27d6adc376a3fc9043e6809ad20963fefe66ccc395586",
+      "source_files": [
+        {
+          "path": "backend/internal/service/official_egress_codex_0145_profile.go",
+          "sha256": "02ec8fcbb8a567b3c6adb0861bfe4bb7d1803362325d531b1e2b47f3430c8377"
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "sha256": "78269f6fe5ff4154421402337b5e33efdec720ba6172b9d75794747ece70846c"
+        }
+      ],
+      "facts": [
+        {
+          "fact_id": "a03.header-assembly",
+          "scenario_id": "A03",
+          "record_type": "header_assembly",
+          "trace_kind": "process_trace",
+          "data_keys": [
+            "retry_stages",
+            "stages"
+          ],
+          "required_source_kinds": [
+            "relay_binary"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "github.com/Wei-Shaw/sub2api/internal/service",
+      "name": "TestCandidateTraceCodex0145AlphaSearchPhases",
+      "test_file": "backend/internal/service/official_egress_codex_candidate_trace_acceptance_test.go",
+      "test_file_sha256": "0d5f7566af1cf7be4de27d6adc376a3fc9043e6809ad20963fefe66ccc395586",
+      "source_files": [
+        {
+          "path": "backend/internal/service/openai_alpha_search.go",
+          "sha256": "a11cf388e3fa0f0757b81c9955b3416158c4d2c34183cad487754ece2e49defc"
+        }
+      ],
+      "facts": [
+        {
+          "fact_id": "a09.alpha-search-phases",
+          "scenario_id": "A09",
+          "record_type": "alpha_search_flow",
+          "trace_kind": "process_trace",
+          "data_keys": [
+            "command_sha256s"
+          ],
+          "required_source_kinds": [
+            "relay_binary"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "github.com/Wei-Shaw/sub2api/internal/service",
+      "name": "TestCandidateTraceCodex0145RealtimeChain",
+      "test_file": "backend/internal/service/official_egress_codex_candidate_trace_acceptance_test.go",
+      "test_file_sha256": "0d5f7566af1cf7be4de27d6adc376a3fc9043e6809ad20963fefe66ccc395586",
+      "source_files": [
+        {
+          "path": "backend/internal/service/openai_live.go",
+          "sha256": "f5fc2b9e3d5ab616b58c0cb30753a5332858021c002079c211bf6c05e6a82715"
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_0145_profile.go",
+          "sha256": "02ec8fcbb8a567b3c6adb0861bfe4bb7d1803362325d531b1e2b47f3430c8377"
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "sha256": "78269f6fe5ff4154421402337b5e33efdec720ba6172b9d75794747ece70846c"
+        }
+      ],
+      "facts": [
+        {
+          "fact_id": "a11.realtime-chain",
+          "scenario_id": "A11",
+          "record_type": "realtime_chain",
+          "trace_kind": "process_trace",
+          "data_keys": [
+            "first_hop_call_id_sha256",
+            "first_hop_method",
+            "first_hop_path",
+            "openai_alpha",
+            "sideband_call_id_sha256",
+            "sideband_host",
+            "sideband_method",
+            "sideband_path",
+            "sideband_upgrade",
+            "terminal_event"
+          ],
+          "required_source_kinds": [
+            "relay_binary"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "github.com/Wei-Shaw/sub2api/internal/service",
+      "name": "TestCandidateTraceCodex0145CompactionDecisions",
+      "test_file": "backend/internal/service/official_egress_codex_candidate_trace_acceptance_test.go",
+      "test_file_sha256": "0d5f7566af1cf7be4de27d6adc376a3fc9043e6809ad20963fefe66ccc395586",
+      "source_files": [
+        {
+          "path": "backend/internal/service/official_egress_openai_http.go",
+          "sha256": "38e21b8c9ad427ef24efc61f35950fc9d92e53bb94bc19e01648f9ea3b0cad76"
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_0145_profile.go",
+          "sha256": "02ec8fcbb8a567b3c6adb0861bfe4bb7d1803362325d531b1e2b47f3430c8377"
+        }
+      ],
+      "facts": [
+        {
+          "fact_id": "a10.compaction-reason-user_requested",
+          "scenario_id": "A10",
+          "record_type": "compaction_decision",
+          "trace_kind": "process_trace",
+          "data_keys": [
+            "implementation",
+            "provider_scope",
+            "reason",
+            "remote_compaction_v2"
+          ],
+          "required_source_kinds": [
+            "relay_binary"
+          ]
+        },
+        {
+          "fact_id": "a10.compaction-reason-context_limit",
+          "scenario_id": "A10",
+          "record_type": "compaction_decision",
+          "trace_kind": "process_trace",
+          "data_keys": [
+            "implementation",
+            "reason",
+            "remote_compaction_v2"
+          ],
+          "required_source_kinds": [
+            "relay_binary"
+          ]
+        },
+        {
+          "fact_id": "a10.compaction-reason-model_downshift",
+          "scenario_id": "A10",
+          "record_type": "compaction_decision",
+          "trace_kind": "process_trace",
+          "data_keys": [
+            "implementation",
+            "reason",
+            "remote_compaction_v2"
+          ],
+          "required_source_kinds": [
+            "relay_binary"
+          ]
+        },
+        {
+          "fact_id": "a10.compaction-reason-comp_hash_changed",
+          "scenario_id": "A10",
+          "record_type": "compaction_decision",
+          "trace_kind": "process_trace",
+          "data_keys": [
+            "implementation",
+            "reason",
+            "remote_compaction_v2"
+          ],
+          "required_source_kinds": [
+            "relay_binary"
+          ]
+        },
+        {
+          "fact_id": "a10.token-budget-no-egress",
+          "scenario_id": "A10",
+          "record_type": "compaction_decision",
+          "trace_kind": "process_trace",
+          "data_keys": [
+            "implementation",
+            "remote_compaction_v2",
+            "summary_egress_count"
+          ],
+          "required_source_kinds": [
+            "relay_binary"
+          ]
+        },
+        {
+          "fact_id": "a10.existing-trigger",
+          "scenario_id": "A10",
+          "record_type": "compaction_decision",
+          "trace_kind": "process_trace",
+          "data_keys": [
+            "appended_trigger_count",
+            "input_trigger_state",
+            "remote_compaction_v2"
+          ],
+          "required_source_kinds": [
+            "relay_binary"
+          ]
+        },
+        {
+          "fact_id": "a09.explicit-legacy",
+          "scenario_id": "A09",
+          "record_type": "compaction_decision",
+          "trace_kind": "process_trace",
+          "data_keys": [
+            "implementation",
+            "legacy_endpoint",
+            "remote_compaction_v2"
+          ],
+          "required_source_kinds": [
+            "relay_binary"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "github.com/Wei-Shaw/sub2api/internal/service",
+      "name": "TestUploadOfficialCodexFileExecutesProfileDrivenThreeStepFlow",
+      "test_file": "backend/internal/service/official_egress_codex_files_test.go",
+      "test_file_sha256": "7310cff4cca40e12ad4059238bfe014bf365f758e2490e7e2286cf2b2342a209",
+      "source_files": [
+        {
+          "path": "backend/internal/service/official_egress_codex_files.go",
+          "sha256": "f2cc2ec726b18510cb4103c260f8cd85ab1e103ee5d00b9357c7e5955aad05ee"
+        }
+      ],
+      "facts": [
+        {
+          "fact_id": "a14.file-upload-url-chain",
+          "scenario_id": "A14",
+          "record_type": "file_upload_chain",
+          "trace_kind": "process_trace",
+          "data_keys": [
+            "create_upload_url_sha256",
+            "put_url_sha256"
+          ],
+          "required_source_kinds": [
+            "relay_binary"
+          ]
+        },
+        {
+          "fact_id": "a14.file-upload-c2pa-negative",
+          "scenario_id": "A14",
+          "record_type": "file_upload_chain",
+          "trace_kind": "process_trace",
+          "data_keys": [
+            "c2pa_condition",
+            "body_mode",
+            "embedded_create_request_matches",
+            "attempt_count"
+          ],
+          "required_source_kinds": [
+            "relay_binary"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "github.com/Wei-Shaw/sub2api/internal/service",
+      "name": "TestUploadOfficialCodexFileC2PAReservationReusesCreateBodyOnRetry",
+      "test_file": "backend/internal/service/official_egress_codex_files_test.go",
+      "test_file_sha256": "7310cff4cca40e12ad4059238bfe014bf365f758e2490e7e2286cf2b2342a209",
+      "source_files": [
+        {
+          "path": "backend/internal/service/official_egress_codex_files.go",
+          "sha256": "f2cc2ec726b18510cb4103c260f8cd85ab1e103ee5d00b9357c7e5955aad05ee"
+        }
+      ],
+      "facts": [
+        {
+          "fact_id": "a14.file-upload-c2pa-positive",
+          "scenario_id": "A14",
+          "record_type": "file_upload_chain",
+          "trace_kind": "process_trace",
+          "data_keys": [
+            "c2pa_condition",
+            "body_mode",
+            "embedded_create_request_matches"
+          ],
+          "required_source_kinds": [
+            "relay_binary"
+          ]
+        },
+        {
+          "fact_id": "a14.file-upload-c2pa-positive-retry",
+          "scenario_id": "A14",
+          "record_type": "file_upload_chain",
+          "trace_kind": "process_trace",
+          "data_keys": [
+            "c2pa_condition",
+            "body_mode",
+            "embedded_create_request_matches",
+            "attempt_count",
+            "retry_body_reused"
+          ],
+          "required_source_kinds": [
+            "relay_binary"
+          ]
+        }
+      ]
+    },
+    {
+      "package": "github.com/Wei-Shaw/sub2api/internal/repository",
+      "name": "TestCandidateTraceCodex0145HTTPConnectionLifecycle",
+      "test_file": "backend/internal/repository/official_egress_codex_candidate_trace_acceptance_test.go",
+      "test_file_sha256": "c0aa313e6ca0421d988555ce2ed8ac92ed558fb558d3d0bac3e9c17ebee7a21c",
+      "source_files": [
+        {
+          "path": "backend/internal/repository/http_upstream.go",
+          "sha256": "e0879d39944c573fdc2c18beba59a32f7a74990d5610b9dc10d7e6f5f5f8679d"
+        }
+      ],
+      "facts": [
+        {
+          "fact_id": "a08.connection-lifecycle",
+          "scenario_id": "A08",
+          "record_type": "connection_lifecycle",
+          "trace_kind": "process_trace",
+          "data_keys": [
+            "cross_call_connection_ids",
+            "disconnect_retry_connection_ids",
+            "keepalive_retry_connection_ids"
+          ],
+          "required_source_kinds": [
+            "relay_binary"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -56,6 +56,14 @@ class MainTrackModelTests(unittest.TestCase):
             track_models_for_version("0.151.0", "lite"),
             ("gpt-5.6-terra",),
         )
+        self.assertEqual(
+            track_models_for_version("0.154.0", "main"),
+            ("gpt-5.5",),
+        )
+        self.assertEqual(
+            track_models_for_version("0.154.0", "lite"),
+            ("gpt-6-astra",),
+        )
 
     def test_probe_models_cover_both_tracks_with_matching_lite_flag(self) -> None:
         """受控 /models 必须覆盖两条轨道，且 lite 标志与轨道归属一致。

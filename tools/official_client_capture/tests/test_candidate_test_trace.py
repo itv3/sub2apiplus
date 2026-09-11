@@ -35,8 +35,8 @@ class CandidateTestTraceTest(unittest.TestCase):
         # - candidate_test_trace 冻结的映射与画像都要与 Campaign 目标同版本，否则
         #   load_mapping／load_profile 的 codex_version 校验直接拒绝。
         baseline_profile = tool_root / "candidate_rule_expectations_0_149_1.json"
-        target_profile = tool_root / "candidate_rule_expectations_0_151_0.json"
-        target_mapping = tool_root / "candidate_test_fact_map_0_151_0.json"
+        target_profile = tool_root / "candidate_rule_expectations_0_154_0.json"
+        target_mapping = tool_root / "candidate_test_fact_map_0_154_0.json"
 
         self.assertEqual(
             candidate_rule_assertion.FROZEN_PROFILE_SHA256,
@@ -432,8 +432,8 @@ class CandidateTestTraceTest(unittest.TestCase):
     def test_default_mapping_digest_and_fact_universe_are_frozen(self) -> None:
         tool_root = Path(__file__).resolve().parents[1]
         _, tests = load_mapping(
-            tool_root / "candidate_test_fact_map_0_151_0.json",
-            expected_codex_version="0.151.0",
+            tool_root / "candidate_test_fact_map_0_154_0.json",
+            expected_codex_version="0.154.0",
             expected_sha256=candidate_test_trace.FROZEN_MAPPING_SHA256,
         )
         fact_ids = {
