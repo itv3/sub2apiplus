@@ -822,7 +822,7 @@ def _preflight(
         name: legacy_production_document_facts(production_doc_root / name)
         for name in MANAGED_DOCUMENTS
     }
-    legacy_runtime_document_facts: dict[str, dict[str, Any]] = {}
+    legacy_runtime_document_facts: list[dict[str, Any]] = []
     for name in MANAGED_RUNTIME_DOCUMENTS:
         production_document = managed_document_path(
             production_doc_root,
@@ -830,13 +830,16 @@ def _preflight(
             label="生产运行时依赖文档",
             allow_missing=True,
         )
-        legacy_runtime_document_facts[name] = (
-            {
-                "status": "present",
-                **legacy_production_document_facts(production_document),
-            }
-            if production_document.exists()
-            else {"status": "absent"}
+        legacy_runtime_document_facts.append(
+            (
+                {
+                    "path": name,
+                    "status": "present",
+                    **legacy_production_document_facts(production_document),
+                }
+                if production_document.exists()
+                else {"path": name, "status": "absent"}
+            )
         )
     capture_network = parse_container_network(
         run_checked(
@@ -863,6 +866,7 @@ def _preflight(
     if repository_docs.is_symlink() or not repository_docs.is_dir():
         raise DeploymentError("暂存文档归档目录不存在或不可信。")
     document_sha256: dict[str, str] = {}
+    runtime_document_bindings: list[dict[str, str]] = []
     for name in MANAGED_DOCUMENTS:
         runtime_document = staging_root / "docs" / name
         archived_document = repository_docs / name
@@ -885,7 +889,9 @@ def _preflight(
             allow_missing=False,
         )
         reject_untrusted_file(runtime_document, label="暂存运行时依赖文档")
-        document_sha256[name] = file_sha256(runtime_document)
+        runtime_document_bindings.append(
+            {"path": name, "sha256": file_sha256(runtime_document)}
+        )
     source_spec = verify_scenario_source_spec(staging_root, staging_tool)
     return {
         "staging_file_count": staging_count,
@@ -896,6 +902,7 @@ def _preflight(
         "network_policy": "fixed-dmit",
         "wireguard": wireguard,
         "document_sha256": document_sha256,
+        "runtime_document_bindings": runtime_document_bindings,
         "scenario_source_spec": source_spec,
         "legacy_production_documents": legacy_document_facts,
         "legacy_runtime_documents": legacy_runtime_document_facts,
@@ -1210,6 +1217,7 @@ def _post_switch_verify(
     if file_sha256(assertion_preparer) != expected_assertion_preparer_digest:
         raise DeploymentError("生产 assertion bundle 入口摘要不符。")
     document_sha256: dict[str, str] = {}
+    runtime_document_bindings: list[dict[str, str]] = []
     repository_docs = staging_root / "docs" / "repository-docs"
     production_repository_docs = production_doc_root / "repository-docs"
     if not production_repository_docs.is_dir():
@@ -1246,7 +1254,9 @@ def _post_switch_verify(
         production_sha256 = file_sha256(production_document)
         if production_sha256 != file_sha256(staging_document):
             raise DeploymentError(f"生产运行时依赖文档与暂存副本不一致：{name}")
-        document_sha256[name] = production_sha256
+        runtime_document_bindings.append(
+            {"path": name, "sha256": production_sha256}
+        )
     source_spec = verify_scenario_source_spec(
         production_doc_root.parent,
         production,
@@ -1298,6 +1308,7 @@ def _post_switch_verify(
         "supervisor_help_bytes": len(version.encode("utf-8")),
         "wireguard": wireguard,
         "document_sha256": document_sha256,
+        "runtime_document_bindings": runtime_document_bindings,
         "scenario_source_spec": source_spec,
     }
 

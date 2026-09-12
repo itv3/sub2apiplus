@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest import mock
 
 from tools import arm64_supervised_deploy as deploy
+from tools.official_client_capture import codex_upgrade_supervisor as supervisor
 
 
 class Arm64SupervisedDeployTest(unittest.TestCase):
@@ -330,6 +331,20 @@ class Arm64SupervisedDeployTest(unittest.TestCase):
                     label="测试运行时文档",
                     allow_missing=True,
                 )
+
+    def test_runtime_document_metadata_uses_path_values(self) -> None:
+        """带斜杠的仓库坐标只能作为值写入监督器 metadata。"""
+
+        path = deploy.MANAGED_RUNTIME_DOCUMENTS[0]
+        payload = {
+            "runtime_document_bindings": [
+                {"path": path, "sha256": "a" * 64},
+            ],
+            "legacy_runtime_documents": [
+                {"path": path, "status": "absent"},
+            ],
+        }
+        self.assertEqual(supervisor._metadata(payload), payload)
 
     def test_second_document_failure_can_rollback_first_and_tool(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
