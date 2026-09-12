@@ -1,0 +1,112 @@
+{
+  "base_commit": "f2a79883d0194eb320cfa8c309bc8e5f09e8c346",
+  "changed_path_count": 3,
+  "current_commit": "db3988435162f2b964a3386577b4b46db9c13af6",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [
+    "tools/official_client_capture/tests/test_codex_0151_worktree_successor.py"
+  ],
+  "frozen_edge_count": 2998,
+  "frozen_path_count": 1398,
+  "identity_sha256": "40225e4e980478df04c76ff532f8e8a357d965387f3a2516bf9d1c34e9671e28",
+  "issued_at_utc": "2026-09-12T00:33:00Z",
+  "mode": "commit",
+  "required_manual_actions": [
+    {
+      "action_kind": "python_receipt_list",
+      "file": "tools/official_client_capture/tests/test_codex_0151_worktree_successor.py",
+      "instruction": "生成本次 freeze successor 后，把它的仓库相对路径追加到该测试 successor_edges 的显式收据列表并重跑；该测试属于 Campaign 受管工具文件，改动前须老板确认。",
+      "path": "tools/arm64_supervised_deploy.py",
+      "rule_id": "codex-0151-worktree-successor",
+      "verification": [
+        "python3 -m unittest tools.official_client_capture.tests.test_codex_0151_worktree_successor"
+      ]
+    },
+    {
+      "action_kind": "python_receipt_list",
+      "file": "tools/official_client_capture/tests/test_codex_0151_worktree_successor.py",
+      "instruction": "生成本次 freeze successor 后，把它的仓库相对路径追加到该测试 successor_edges 的显式收据列表并重跑；该测试属于 Campaign 受管工具文件，改动前须老板确认。",
+      "path": "tools/official_client_capture/tests/test_codex_0151_worktree_successor.py",
+      "rule_id": "codex-0151-worktree-successor",
+      "verification": [
+        "python3 -m unittest tools.official_client_capture.tests.test_codex_0151_worktree_successor"
+      ]
+    }
+  ],
+  "result": "manual_actions_required",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-0154-runtime-doc-metadata-20260912-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "tools/arm64_supervised_deploy.py",
+      "predecessor_sha256s": [
+        "646f3f7e7616fefedbfaa29ee6fcbcfbf87200ce6df41431178eb16c9f628c4e"
+      ],
+      "reason": "修复 ARM64 运行时文档部署监督元数据 path=tools/arm64_supervised_deploy.py",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-capability-pin-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-canonical-production-chain-20260912-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-emulation-upgrade-20260911-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-profile-patch-binding-20260912-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-runtime-doc-closure-20260912-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-upgrade-batch1-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-upgrade-batch2-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-tool-identity-sync-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "22abc2aaa7e1c0d2508d6fad23d856e93e43efcae4948d60a988712fc7d8930e"
+    },
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/tests/test_codex_0151_worktree_successor.py",
+      "predecessor_sha256s": [
+        "4eeddf108815b95b4bc4e1107a2f92cb6c59d9c476bbe295486007f978849216"
+      ],
+      "reason": "修复 ARM64 运行时文档部署监督元数据 path=tools/official_client_capture/tests/test_codex_0151_worktree_successor.py",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-capability-pin-freeze-successor.json",
+        "docs/egress/maintenance/upstream-capture-cli-directory-governance-20260911-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-canonical-production-chain-20260912-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-emulation-upgrade-20260911-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-profile-patch-binding-20260912-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-runtime-doc-closure-20260912-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-upgrade-batch1-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-upgrade-batch2-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-upgrade-batch3-freeze-successor.json",
+        "docs/egress/maintenance/upstream-doc-trim-20260911-freeze-successor.json",
+        "docs/egress/maintenance/upstream-tool-hints-20260911-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.3-reconnect-repair-gate-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.3-release-prep-source-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.3-tool-identity-sync-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-2-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/version-sync-0.2.3-3-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "a37fcde78c2527796d54388e2c13b6db6c4f2ac101172667b9aa9ee8f8bbb662"
+    }
+  ],
+  "unregistered_path_count": 1,
+  "unregistered_paths": [
+    "tools/official_client_capture/tests/test_arm64_supervised_deploy.py"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci",
+    "python3 -m unittest tools.official_client_capture.tests.test_codex_0151_worktree_successor"
+  ]
+}
