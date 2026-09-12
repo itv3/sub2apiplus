@@ -1010,6 +1010,7 @@ def _prepare_document_candidates(
     os.chown(backup_root, 0, 0)
     os.chmod(backup_root, 0o700)
     digests: dict[str, str] = {}
+    runtime_document_bindings: list[dict[str, str]] = []
     for name in MANAGED_DOCUMENTS:
         source = staging_doc_root / name
         production = production_doc_root / name
@@ -1051,7 +1052,9 @@ def _prepare_document_candidates(
             os.fsync(stream.fileno())
         if file_sha256(destination) != file_sha256(source):
             raise DeploymentError(f"运行时依赖文档候选复制后摘要漂移：{name}")
-        digests[name] = file_sha256(destination)
+        runtime_document_bindings.append(
+            {"path": name, "sha256": file_sha256(destination)}
+        )
     fsync_directory(candidate_archive_root)
     fsync_directory(candidate_root)
     fsync_directory(backup_root)
@@ -1060,6 +1063,7 @@ def _prepare_document_candidates(
     return {
         "transaction_root": transaction_root.name,
         "document_sha256": digests,
+        "runtime_document_bindings": runtime_document_bindings,
     }
 
 

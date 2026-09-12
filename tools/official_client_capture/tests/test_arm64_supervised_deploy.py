@@ -346,6 +346,33 @@ class Arm64SupervisedDeployTest(unittest.TestCase):
         }
         self.assertEqual(supervisor._metadata(payload), payload)
 
+    def test_prepared_document_metadata_passes_supervisor_cleaning(self) -> None:
+        """候选准备函数的真实返回值必须能直接写入监督器事件。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            staging_docs = root / "staging-docs"
+            production_docs = root / "production-docs"
+            transaction = production_docs / ".transaction"
+            self._write_documents(staging_docs, "new")
+            self._write_documents(staging_docs / "repository-docs", "new")
+            self._write_runtime_documents(staging_docs, "new")
+            self._write_documents(production_docs, "old")
+            with (
+                mock.patch.object(deploy, "reject_untrusted_file"),
+                mock.patch.object(deploy.os, "chown"),
+            ):
+                result = deploy._prepare_document_candidates(
+                    staging_docs,
+                    production_docs,
+                    transaction,
+                )
+            self.assertEqual(supervisor._metadata(result), result)
+            self.assertEqual(
+                [item["path"] for item in result["runtime_document_bindings"]],
+                list(deploy.MANAGED_RUNTIME_DOCUMENTS),
+            )
+
     def test_second_document_failure_can_rollback_first_and_tool(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
