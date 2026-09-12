@@ -1,0 +1,226 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-vc-receipt-v1.json",
+  "title": "Codex VC-0～VC-6 统一阶段收据",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "kind", "status", "subject", "assertions",
+    "evidence", "issued_at_utc", "receipt_digest"
+  ],
+  "properties": {
+    "schema_version": {"const": "codex-upgrade-vc-receipt/v1"},
+    "kind": {
+      "enum": [
+        "p0_gate", "implementation_tests", "private_archive",
+        "cleanup_decision", "vc5_completion", "vc6_completion"
+      ]
+    },
+    "status": {"enum": ["passed", "complete"]},
+    "subject": {"$ref": "#/$defs/subject"},
+    "assertions": {"type": "object"},
+    "evidence": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/evidence"}
+    },
+    "issued_at_utc": {"type": "string", "format": "date-time"},
+    "receipt_digest": {"$ref": "#/$defs/sha256"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"kind": {"enum": ["p0_gate", "implementation_tests"]}}},
+      "then": {"properties": {"status": {"const": "passed"}}},
+      "else": {"properties": {"status": {"const": "complete"}}}
+    },
+    {
+      "if": {"properties": {"kind": {"const": "p0_gate"}}},
+      "then": {
+        "properties": {
+          "subject": {"$ref": "#/$defs/p0Subject"},
+          "assertions": {"$ref": "#/$defs/p0Assertions"},
+          "evidence": {"minItems": 5, "maxItems": 5}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"kind": {"const": "implementation_tests"}}},
+      "then": {
+        "properties": {
+          "subject": {"$ref": "#/$defs/implementationSubject"},
+          "assertions": {"$ref": "#/$defs/implementationAssertions"},
+          "evidence": {"minItems": 2, "maxItems": 2}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"kind": {"const": "private_archive"}}},
+      "then": {
+        "properties": {
+          "subject": {"$ref": "#/$defs/candidateSubject"},
+          "assertions": {"$ref": "#/$defs/archiveAssertions"},
+          "evidence": {"minItems": 2, "maxItems": 2}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"kind": {"const": "cleanup_decision"}}},
+      "then": {
+        "properties": {
+          "subject": {"$ref": "#/$defs/candidateSubject"},
+          "assertions": {"$ref": "#/$defs/cleanupAssertions"},
+          "evidence": {"minItems": 2, "maxItems": 3}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"kind": {"const": "vc5_completion"}}},
+      "then": {
+        "properties": {
+          "subject": {"$ref": "#/$defs/candidateSubject"},
+          "assertions": {"$ref": "#/$defs/vc5Assertions"},
+          "evidence": {"minItems": 1, "maxItems": 2}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"kind": {"const": "vc6_completion"}}},
+      "then": {
+        "properties": {
+          "subject": {"$ref": "#/$defs/candidateSubject"},
+          "assertions": {"$ref": "#/$defs/vc6Assertions"},
+          "evidence": {"minItems": 1, "maxItems": 3}
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "safeId": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+    "nullableSafeId": {"oneOf": [{"$ref": "#/$defs/safeId"}, {"type": "null"}]},
+    "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "subject": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "upgrade_id", "campaign_id", "campaign_purpose", "baseline_version",
+        "target_version", "candidate_id", "attempt_id"
+      ],
+      "properties": {
+        "upgrade_id": {"$ref": "#/$defs/safeId"},
+        "campaign_id": {"$ref": "#/$defs/nullableSafeId"},
+        "campaign_purpose": {"enum": ["validation_only", "production_replacement"]},
+        "baseline_version": {"$ref": "#/$defs/version"},
+        "target_version": {"$ref": "#/$defs/version"},
+        "candidate_id": {"$ref": "#/$defs/nullableSafeId"},
+        "attempt_id": {"$ref": "#/$defs/nullableSafeId"}
+      }
+    },
+    "p0Subject": {
+      "allOf": [
+        {"$ref": "#/$defs/subject"},
+        {"properties": {"campaign_id": {"type": "null"}, "candidate_id": {"type": "null"}, "attempt_id": {"type": "null"}}}
+      ]
+    },
+    "implementationSubject": {
+      "allOf": [
+        {"$ref": "#/$defs/subject"},
+        {"properties": {"campaign_id": {"$ref": "#/$defs/safeId"}, "candidate_id": {"$ref": "#/$defs/safeId"}, "attempt_id": {"type": "null"}}}
+      ]
+    },
+    "candidateSubject": {
+      "allOf": [
+        {"$ref": "#/$defs/subject"},
+        {"properties": {"campaign_id": {"$ref": "#/$defs/safeId"}, "candidate_id": {"$ref": "#/$defs/safeId"}, "attempt_id": {"$ref": "#/$defs/safeId"}}}
+      ]
+    },
+    "evidence": {
+      "type": "object", "additionalProperties": false,
+      "required": ["role", "path", "sha256", "bytes"],
+      "properties": {
+        "role": {"$ref": "#/$defs/safeId"},
+        "path": {"type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "bytes": {"type": "integer", "minimum": 1, "maximum": 67108864}
+      }
+    },
+    "commandGate": {
+      "type": "object", "additionalProperties": false,
+      "required": ["gate_id", "kind", "command", "exit_code", "passed", "failed", "approved_skip", "unexpected_skip"],
+      "properties": {
+        "gate_id": {"$ref": "#/$defs/safeId"},
+        "kind": {"enum": ["public", "affected"]},
+        "command": {"type": "array", "minItems": 1, "maxItems": 64, "items": {"type": "string", "minLength": 1}},
+        "exit_code": {"type": "integer", "minimum": 0},
+        "passed": {"type": "integer", "minimum": 0},
+        "failed": {"const": 0},
+        "approved_skip": {"type": "integer", "minimum": 0},
+        "unexpected_skip": {"const": 0}
+      }
+    },
+    "p0Assertions": {
+      "type": "object", "additionalProperties": false,
+      "required": ["offline_gates", "tool_blockers", "campaign_run_rehearsal", "rollback_ready", "job_rehearsal_sha256"],
+      "properties": {
+        "offline_gates": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"$ref": "#/$defs/commandGate"}},
+        "tool_blockers": {"const": []},
+        "campaign_run_rehearsal": {
+          "type": "object", "additionalProperties": false,
+          "required": ["multi_batch_passed", "original_deadline_inherited", "frozen_jobs_passed", "live_request_count"],
+          "properties": {
+            "multi_batch_passed": {"const": true}, "original_deadline_inherited": {"const": true},
+            "frozen_jobs_passed": {"const": true}, "live_request_count": {"const": 0}
+          }
+        },
+        "rollback_ready": {"const": true},
+        "job_rehearsal_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "implementationAssertions": {
+      "type": "object", "additionalProperties": false,
+      "required": ["git_commit", "source_tree_sha256", "target_architecture", "gates"],
+      "properties": {
+        "git_commit": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
+        "source_tree_sha256": {"$ref": "#/$defs/sha256"},
+        "target_architecture": {"type": "string", "pattern": "^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$"},
+        "gates": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/commandGate"}}
+      }
+    },
+    "archiveAssertions": {
+      "type": "object", "additionalProperties": false,
+      "required": ["archive_uri", "restore_location", "inventory_sha256", "file_count", "total_bytes", "unpack_verified", "digest_verified", "critical_receipts_replayed"],
+      "properties": {
+        "archive_uri": {"type": "string", "minLength": 1}, "restore_location": {"type": "string", "minLength": 1},
+        "inventory_sha256": {"$ref": "#/$defs/sha256"}, "file_count": {"type": "integer", "minimum": 1},
+        "total_bytes": {"type": "integer", "minimum": 1}, "unpack_verified": {"const": true},
+        "digest_verified": {"const": true}, "critical_receipts_replayed": {"const": true}
+      }
+    },
+    "cleanupAssertions": {
+      "type": "object", "additionalProperties": false,
+      "required": ["decision", "reason", "target_count", "target_manifest_sha256", "dry_run_verified", "production_dependencies_zero", "unique_evidence_copy_preserved", "approved", "execution_verified"],
+      "properties": {
+        "decision": {"enum": ["executed", "deferred"]}, "reason": {"type": "string", "minLength": 1},
+        "target_count": {"type": "integer", "minimum": 0}, "target_manifest_sha256": {"$ref": "#/$defs/sha256"},
+        "dry_run_verified": {"const": true}, "production_dependencies_zero": {"const": true},
+        "unique_evidence_copy_preserved": {"const": true}, "approved": {"type": "boolean"},
+        "execution_verified": {"type": "boolean"}
+      }
+    },
+    "vc5Assertions": {
+      "type": "object", "additionalProperties": false,
+      "required": ["acceptance_passed", "vc5_pending_count", "canonical_handoff"],
+      "properties": {
+        "acceptance_passed": {"const": true}, "vc5_pending_count": {"const": 0},
+        "canonical_handoff": {"enum": ["not_required", "complete"]}
+      }
+    },
+    "vc6Assertions": {
+      "type": "object", "additionalProperties": false,
+      "required": ["production_tree_closed", "final_image_reverified", "archive_recoverable", "cleanup_decision_recorded", "vc6_pending_count"],
+      "properties": {
+        "production_tree_closed": {"type": "boolean"}, "final_image_reverified": {"type": "boolean"},
+        "archive_recoverable": {"type": "boolean"}, "cleanup_decision_recorded": {"type": "boolean"},
+        "vc6_pending_count": {"const": 0}
+      }
+    }
+  }
+}

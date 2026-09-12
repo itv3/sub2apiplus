@@ -1,0 +1,59 @@
+{
+  "base_commit": "1bd42c83c90ae2443acd01b7b2b02e6ea0be78fc",
+  "changed_path_count": 2,
+  "current_commit": null,
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 3037,
+  "frozen_path_count": 1398,
+  "identity_sha256": "f9cb6e2344a6d4cac5d6721b75fb248f0d4fbefe4e9ab54ec555ec771d031ae9",
+  "issued_at_utc": "2026-09-12T14:56:00Z",
+  "mode": "worktree",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-claude-vc1-vc3-contract-20260912-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md",
+      "predecessor_sha256s": [
+        "678814238d2251ffb288ac0c96067a43d0ff673d55c9fd9720a9d57611dda685"
+      ],
+      "reason": "对齐 Claude VC-1～VC-3 文档与控制工具合同：EvidencePackage v3 只封存原始证据，规则迁移结论与原子断言分别进入独立内容寻址账本，并由同一 Campaign 的分类事实连接后续批准；仅登记指南后继摘要，不改变官方客户端画像、Persona、wire 或生产状态 path=docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md",
+      "source_receipts": [
+        "docs/egress/maintenance/client-vc-stage-navigation-20260912-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "5d39c6617a22e95c8c967a88bdec170fa2bb87739637aa0b9f49abf82f3df4d2"
+    },
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/tests/test_codex_0151_worktree_successor.py",
+      "predecessor_sha256s": [
+        "d944055960f04977d95a3a0d1f7b7f67b02fbd8e87182c13eb518c88cd566f5b"
+      ],
+      "reason": "把本次 Claude VC-1～VC-3 窄范围 successor 追加到 Python 冻结门禁的显式收据列表；仅登记门禁源码后继摘要，不改写既有收据 path=tools/official_client_capture/tests/test_codex_0151_worktree_successor.py",
+      "source_receipts": [
+        "docs/egress/maintenance/client-vc-stage-navigation-20260912-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "bb38fcf91f3d99ab67608c4c6577d3c5c4d188aa8633e4b89562192e60f2fd8e"
+    }
+  ],
+  "unregistered_path_count": 0,
+  "unregistered_paths": [],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "python3 -m unittest tools.official_client_capture.tests.test_codex_0151_worktree_successor",
+    "make check-egress-spec-ci"
+  ]
+}

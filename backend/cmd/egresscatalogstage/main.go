@@ -44,10 +44,13 @@ func main() {
 	profileManifest := flag.String("profile-manifest", "", "classify 封存的 approved profile.json")
 	campaignID := flag.String("campaign-id", "", "不可变 Campaign ID")
 	classificationSHA := flag.String("classification-sha256", "", "五份批准清单联合摘要")
+	profileDerivationSHA := flag.String("profile-derivation-sha256", "", "VC-3 画像派生收据摘要")
+	gateRequirementsSHA := flag.String("gate-requirements-sha256", "", "VC-3 post-promotion 门禁需求摘要")
 	output := flag.String("output", "", "不存在的候选目录绝对路径")
 	flag.Parse()
 	if *prepareSnapshot != "" || *prepareProfileID != "" || *prepareOutput != "" {
-		if *profileManifest != "" || *campaignID != "" || *classificationSHA != "" || *output != "" {
+		if *profileManifest != "" || *campaignID != "" || *classificationSHA != "" ||
+			*profileDerivationSHA != "" || *gateRequirementsSHA != "" || *output != "" {
 			fmt.Fprintln(os.Stderr, "画像草案生成失败：prepare 与 stage 参数不能混用")
 			os.Exit(2)
 		}
@@ -64,6 +67,8 @@ func main() {
 		*profileManifest,
 		*campaignID,
 		*classificationSHA,
+		*profileDerivationSHA,
+		*gateRequirementsSHA,
 		*output,
 	)
 	if err != nil {
@@ -145,11 +150,21 @@ func stageApprovedProfile(
 	manifestPath string,
 	campaignID string,
 	classificationSHA string,
+	profileDerivationSHA string,
+	gateRequirementsSHA string,
 	output string,
 ) (map[string]any, error) {
 	manifest, err := readApprovedProfileManifest(manifestPath)
 	if err != nil {
 		return nil, err
+	}
+	if requiresCompleteVCArtifacts(manifest.CodexVersion) {
+		if !isSHA256(profileDerivationSHA) || !isSHA256(gateRequirementsSHA) {
+			return nil, errors.New("目标版本必须提供合法的画像派生与 post-promotion 门禁需求摘要")
+		}
+	} else if (profileDerivationSHA == "") != (gateRequirementsSHA == "") ||
+		(profileDerivationSHA != "" && (!isSHA256(profileDerivationSHA) || !isSHA256(gateRequirementsSHA))) {
+		return nil, errors.New("画像派生与 post-promotion 门禁需求摘要必须成对提供且为小写 SHA-256")
 	}
 	staged, err := officialegress.BuildStagedReleaseCatalog(
 		officialegress.DefaultReleaseCatalog(),
@@ -187,6 +202,10 @@ func stageApprovedProfile(
 	assets[filepath.ToSlash(filepath.Join("profilecontract/testdata", snapshotPath))] = snapshotRaw
 
 	receipt := staged.CatalogStageReceiptCore()
+	if profileDerivationSHA != "" {
+		receipt["profile_derivation_sha256"] = profileDerivationSHA
+		receipt["post_promotion_gate_requirements_sha256"] = gateRequirementsSHA
+	}
 	inventory := stageInventory(assets)
 	receipt["inventory"] = inventory
 	receipt["inventory_sha256"] = canonicalSHA256(inventory)
@@ -200,6 +219,28 @@ func stageApprovedProfile(
 		return nil, err
 	}
 	return receipt, nil
+}
+
+func requiresCompleteVCArtifacts(version string) bool {
+	var major, minor, patch int
+	if _, err := fmt.Sscanf(version, "%d.%d.%d", &major, &minor, &patch); err != nil {
+		return false
+	}
+	if major != 0 {
+		return major > 0
+	}
+	if minor != 154 {
+		return minor > 154
+	}
+	return patch >= 0
+}
+
+func isSHA256(value string) bool {
+	if len(value) != sha256.Size*2 {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil && value == strings.ToLower(value)
 }
 
 func readApprovedProfileManifest(pathValue string) (approvedProfileManifest, error) {

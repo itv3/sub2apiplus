@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-vc-batch-v1.json",
+  "title": "Codex VC 不可变执行批次",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "campaign_id", "campaign_plan_sha256", "batch_id",
+    "sequence", "phase", "predecessor_checkpoint", "execute_item_ids",
+    "reuse_item_ids", "actions", "compiled_at_utc", "must_start_by_utc",
+    "original_deadline_at_utc", "batch_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "codex-upgrade-vc-batch/v1"},
+    "campaign_id": {"$ref": "#/$defs/safeId"},
+    "campaign_plan_sha256": {"$ref": "#/$defs/sha256"},
+    "batch_id": {"$ref": "#/$defs/safeId"},
+    "sequence": {"type": "integer", "minimum": 1},
+    "phase": {"enum": ["VC-1", "VC-2", "VC-3", "VC-4", "VC-5", "VC-6"]},
+    "predecessor_checkpoint": {"$ref": "#/$defs/checkpointReference"},
+    "execute_item_ids": {"$ref": "#/$defs/idArray"},
+    "reuse_item_ids": {"$ref": "#/$defs/idArray"},
+    "actions": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {"$ref": "#/$defs/action"}
+    },
+    "compiled_at_utc": {"type": "string", "format": "date-time"},
+    "must_start_by_utc": {"type": "string", "format": "date-time"},
+    "original_deadline_at_utc": {"type": "string", "format": "date-time"},
+    "batch_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "safeId": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "idArray": {
+      "type": "array", "uniqueItems": true,
+      "items": {"$ref": "#/$defs/safeId"}
+    },
+    "checkpointReference": {
+      "type": "object", "additionalProperties": false,
+      "required": ["path", "sha256", "phase", "checkpoint_sha256"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "phase": {"enum": ["VC-0", "VC-1", "VC-2", "VC-3", "VC-4", "VC-5"]},
+        "checkpoint_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "action": {
+      "type": "object", "additionalProperties": false,
+      "required": ["action_id", "operation", "timeout_seconds", "command", "item_ids"],
+      "properties": {
+        "action_id": {"$ref": "#/$defs/safeId"},
+        "operation": {"type": "string", "minLength": 1, "maxLength": 256},
+        "timeout_seconds": {"type": "number", "exclusiveMinimum": 0, "maximum": 86400},
+        "command": {
+          "type": "array", "minItems": 1, "maxItems": 64,
+          "items": {"type": "string", "minLength": 1, "maxLength": 4096}
+        },
+        "item_ids": {
+          "type": "array", "minItems": 1, "uniqueItems": true,
+          "items": {"$ref": "#/$defs/safeId"}
+        }
+      }
+    }
+  }
+}

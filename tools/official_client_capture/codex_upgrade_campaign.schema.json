@@ -76,6 +76,9 @@
     "control_receipts": {
       "$ref": "#/$defs/controlReceipts"
     },
+    "vc_control": {
+      "$ref": "#/$defs/vcControl"
+    },
     "predecessor": {
       "$ref": "#/$defs/predecessor"
     },
@@ -231,6 +234,30 @@
         }
       ]
     },
+    "vcControl": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "campaign_plan",
+        "vc0_checkpoint",
+        "first_formal_batch",
+        "first_campaign_run_manifest"
+      ],
+      "properties": {
+        "campaign_plan": {
+          "$ref": "#/$defs/fileBinding"
+        },
+        "vc0_checkpoint": {
+          "$ref": "#/$defs/fileBinding"
+        },
+        "first_formal_batch": {
+          "$ref": "#/$defs/nullableFileBinding"
+        },
+        "first_campaign_run_manifest": {
+          "$ref": "#/$defs/nullableFileBinding"
+        }
+      }
+    },
     "fileBindingWithBytes": {
       "type": "object",
       "additionalProperties": false,
@@ -325,7 +352,21 @@
         },
         "job_rehearsal": {
           "$ref": "#/$defs/jobRehearsalControl"
+        },
+        "p0_gate": {
+          "$ref": "#/$defs/p0GateControl"
         }
+      }
+    },
+    "p0GateControl": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidence_root", "receipt", "receipt_digest", "upgrade_id"],
+      "properties": {
+        "evidence_root": {"$ref": "#/$defs/absolutePath"},
+        "receipt": {"$ref": "#/$defs/fileBindingWithBytes"},
+        "receipt_digest": {"$ref": "#/$defs/sha256"},
+        "upgrade_id": {"$ref": "#/$defs/safeId"}
       }
     },
     "jobRehearsalControl": {

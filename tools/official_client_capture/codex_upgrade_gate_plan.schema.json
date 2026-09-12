@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/codex-post-promotion-gate-plan-v1.json",
+  "title": "Codex VC-4 post-promotion 门禁执行计划",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "campaign_id",
+    "target_version",
+    "joint_manifest_sha256",
+    "requirements_sha256",
+    "mapping_sha256",
+    "affected_rule_ids",
+    "inherited_rule_ids",
+    "gates",
+    "gate_count",
+    "plan_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "codex-post-promotion-gate-plan/v1"},
+    "campaign_id": {"$ref": "#/$defs/safeId"},
+    "target_version": {"$ref": "#/$defs/version"},
+    "joint_manifest_sha256": {"$ref": "#/$defs/sha256"},
+    "requirements_sha256": {"$ref": "#/$defs/sha256"},
+    "mapping_sha256": {"$ref": "#/$defs/sha256"},
+    "affected_rule_ids": {"$ref": "#/$defs/ruleIds"},
+    "inherited_rule_ids": {"$ref": "#/$defs/ruleIds"},
+    "gates": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/gate"}
+    },
+    "gate_count": {"type": "integer", "minimum": 1},
+    "plan_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "safeId": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+    "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "ruleId": {"type": "string", "pattern": "^SPEC-[A-Z0-9]+-[0-9]{3}$"},
+    "ruleIds": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/ruleId"}
+    },
+    "gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "gate_id",
+        "test_id",
+        "working_directory",
+        "command",
+        "requirement_sha256"
+      ],
+      "properties": {
+        "gate_id": {"$ref": "#/$defs/safeId"},
+        "test_id": {"$ref": "#/$defs/safeId"},
+        "working_directory": {"enum": [".", "backend"]},
+        "command": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "requirement_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  }
+}

@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest import mock
 
 from tools.official_client_capture import codex_upgrade_gate_receipt as gate_receipt
+from tools.official_client_capture import codex_upgrade_vc_artifacts as vc_artifacts
 from tools.official_client_capture import production_activation_receipt as receipt
 
 
@@ -116,6 +117,33 @@ class ProductionActivationReceiptTests(unittest.TestCase):
                 "production_selector_changed": True,
             },
         )
+        requirements = vc_artifacts.build_gate_requirements(
+            campaign_id="codex-0_147_0-campaign",
+            target_version=str(target["version"]),
+            joint_manifest_sha256="d" * 64,
+            affected_rule_ids=["SPEC-HDR-005"],
+            inherited_rule_ids=["SPEC-BODY-001"],
+            migration_manifest={
+                "path": "inputs/migration.json",
+                "sha256": "e" * 64,
+            },
+        )
+        mapping = {
+            "schema_version": vc_artifacts.GATE_MAPPING_SCHEMA,
+            "requirements_sha256": requirements["requirements_sha256"],
+            "gates": [
+                {
+                    "gate_id": row["gate_id"],
+                    "test_id": f"post-test-{index:03d}",
+                    "working_directory": "backend" if index % 2 else ".",
+                    "command": ["python3", "-m", f"post_gate_{index:03d}"],
+                    "requirement_sha256": vc_artifacts.digest(row),
+                }
+                for index, row in enumerate(requirements["requirements"], 1)
+            ],
+        }
+        gate_plan = vc_artifacts.build_gate_plan(requirements, mapping)
+        gate_plan_path = self._write("inputs/gate-plan.json", gate_plan)
         gate_facts = {
             "schema_version": gate_receipt.FACTS_SCHEMA,
             "phase": gate_receipt.POST_PROMOTION_PHASE,
@@ -154,6 +182,10 @@ class ProductionActivationReceiptTests(unittest.TestCase):
                     "sha256": self._digest(promotion),
                 },
             ],
+            "gate_plan": {
+                "path": gate_plan_path.relative_to(self.root).as_posix(),
+                "sha256": self._digest(gate_plan_path),
+            },
             "environment": {},
             "gates": [],
         }
@@ -166,8 +198,8 @@ class ProductionActivationReceiptTests(unittest.TestCase):
                 "path": environment.relative_to(self.root).as_posix(),
                 "sha256": self._digest(environment),
             }
-        for index, gate_id in enumerate(sorted(gate_receipt.POST_PROMOTION_COMMANDS)):
-            cwd, command = gate_receipt.POST_PROMOTION_COMMANDS[gate_id]
+        for index, contract in enumerate(gate_plan["gates"]):
+            gate_id = contract["gate_id"]
             evidence = self._write(
                 f"post-gates/{gate_id}.json",
                 {"gate_id": gate_id, "passed": True},
@@ -175,8 +207,9 @@ class ProductionActivationReceiptTests(unittest.TestCase):
             gate_facts["gates"].append(
                 {
                     "gate_id": gate_id,
-                    "command": list(command),
-                    "working_directory": cwd,
+                    "test_id": contract["test_id"],
+                    "command": list(contract["command"]),
+                    "working_directory": contract["working_directory"],
                     "host": "runner-1",
                     "architecture": "linux/amd64",
                     "started_at_utc": f"2026-08-15T23:{index:02d}:00Z",

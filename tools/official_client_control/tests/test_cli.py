@@ -15,10 +15,21 @@ class CLITests(unittest.TestCase):
         parser = build_parser()
         help_text = parser.format_help()
         self.assertNotIn("fact-append", help_text)
+        self.assertIn("rule-classification-record", FACT_COMMANDS)
         self.assertIn("evidence-approve", FACT_COMMANDS)
         self.assertIn("profile-approve", FACT_COMMANDS)
         self.assertIn("candidate-freeze", FACT_COMMANDS)
+        self.assertIn("validation-attempt-create", FACT_COMMANDS)
         self.assertIn("selector-activate", FACT_COMMANDS)
+        for command in (
+            "candidate-build-finalize",
+            "validation-gate-finalize",
+            "validation-finalize",
+            "candidate-delivery-record",
+            "candidate-delivery-finalize",
+        ):
+            with self.subTest(command=command):
+                self.assertIn(command, help_text)
 
     def test_cli_initializes_private_store(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

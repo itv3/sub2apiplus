@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest import mock
 
 from tools.official_client_capture import codex_upgrade_gate_receipt as receipt
+from tools.official_client_capture import codex_upgrade_vc_artifacts as vc_artifacts
 
 
 class CodexUpgradeGateReceiptTests(unittest.TestCase):
@@ -83,43 +84,91 @@ class CodexUpgradeGateReceiptTests(unittest.TestCase):
             "promotion_receipt_sha256": None,
         }
 
-    def _gates(self, phase: str) -> list[dict[str, object]]:
-        contracts = (
-            receipt.CANDIDATE_COMMANDS
-            if phase == receipt.CANDIDATE_PHASE
-            else receipt.POST_PROMOTION_COMMANDS
+    def _post_gate_plan(
+        self,
+        subject: dict[str, object],
+    ) -> tuple[dict[str, object], dict[str, str]]:
+        requirements = vc_artifacts.build_gate_requirements(
+            campaign_id=str(subject["campaign_id"]),
+            target_version=str(subject["target_version"]),
+            joint_manifest_sha256="a" * 64,
+            affected_rule_ids=["SPEC-HDR-005"],
+            inherited_rule_ids=["SPEC-BODY-001"],
+            migration_manifest={"path": "inputs/migration.json", "sha256": "b" * 64},
         )
+        mapping = {
+            "schema_version": vc_artifacts.GATE_MAPPING_SCHEMA,
+            "requirements_sha256": requirements["requirements_sha256"],
+            "gates": [
+                {
+                    "gate_id": row["gate_id"],
+                    "test_id": f"post-test-{index:03d}",
+                    "working_directory": "backend" if index % 2 else ".",
+                    "command": ["python3", "-m", f"post_gate_{index:03d}"],
+                    "requirement_sha256": vc_artifacts.digest(row),
+                }
+                for index, row in enumerate(requirements["requirements"], 1)
+            ],
+        }
+        plan = vc_artifacts.build_gate_plan(requirements, mapping)
+        path = self._write("inputs/gate-plan.json", plan)
+        return plan, {
+            "path": path.relative_to(self.root).as_posix(),
+            "sha256": self._digest(path),
+        }
+
+    def _gates(
+        self,
+        phase: str,
+        gate_plan: dict[str, object] | None,
+    ) -> list[dict[str, object]]:
+        if phase == receipt.CANDIDATE_PHASE:
+            contracts = [
+                {
+                    "gate_id": gate_id,
+                    "working_directory": cwd,
+                    "command": list(command),
+                    "test_id": None,
+                }
+                for gate_id, (cwd, command) in receipt.CANDIDATE_COMMANDS.items()
+            ]
+        else:
+            assert gate_plan is not None
+            contracts = list(gate_plan["gates"])
         gates: list[dict[str, object]] = []
-        for index, gate_id in enumerate(sorted(contracts)):
-            cwd, command = contracts[gate_id]
+        for index, contract in enumerate(
+            sorted(contracts, key=lambda item: str(item["gate_id"]))
+        ):
+            gate_id = str(contract["gate_id"])
             evidence = self._write(
                 f"evidence/{phase}-{gate_id}.json",
                 {"gate_id": gate_id, "passed": True},
             )
-            gates.append(
-                {
-                    "gate_id": gate_id,
-                    "command": list(command),
-                    "working_directory": cwd,
-                    "host": "runner-1",
-                    "architecture": "linux/amd64",
-                    "started_at_utc": f"2026-08-23T00:{index:02d}:00Z",
-                    "completed_at_utc": f"2026-08-23T00:{index:02d}:30Z",
-                    "exit_code": 0,
-                    "status": "passed",
-                    "passed_count": 1,
-                    "failed_count": 0,
-                    "skipped_count": 0,
-                    "stdout_sha256": "6" * 64,
-                    "stderr_sha256": "7" * 64,
-                    "evidence": [
-                        {
-                            "path": evidence.relative_to(self.root).as_posix(),
-                            "sha256": self._digest(evidence),
-                        }
-                    ],
-                }
-            )
+            gate = {
+                "gate_id": gate_id,
+                "command": list(contract["command"]),
+                "working_directory": contract["working_directory"],
+                "host": "runner-1",
+                "architecture": "linux/amd64",
+                "started_at_utc": f"2026-08-23T00:{index:02d}:00Z",
+                "completed_at_utc": f"2026-08-23T00:{index:02d}:30Z",
+                "exit_code": 0,
+                "status": "passed",
+                "passed_count": 1,
+                "failed_count": 0,
+                "skipped_count": 0,
+                "stdout_sha256": "6" * 64,
+                "stderr_sha256": "7" * 64,
+                "evidence": [
+                    {
+                        "path": evidence.relative_to(self.root).as_posix(),
+                        "sha256": self._digest(evidence),
+                    }
+                ],
+            }
+            if phase == receipt.POST_PROMOTION_PHASE:
+                gate["test_id"] = contract["test_id"]
+            gates.append(gate)
         return gates
 
     def _environment(self, attempt_id: str) -> dict[str, dict[str, str]]:
@@ -144,8 +193,11 @@ class CodexUpgradeGateReceiptTests(unittest.TestCase):
         previous_receipt: str | None = None,
     ) -> dict[str, object]:
         subject = self._subject(phase)
+        gate_plan: dict[str, object] | None = None
+        gate_plan_reference: dict[str, str] | None = None
         inputs: list[dict[str, str]] = []
         if phase == receipt.POST_PROMOTION_PHASE:
+            gate_plan, gate_plan_reference = self._post_gate_plan(subject)
             acceptance = self._write(
                 "inputs/acceptance.json",
                 {
@@ -160,6 +212,13 @@ class CodexUpgradeGateReceiptTests(unittest.TestCase):
                     "profile_id": subject["profile_id"],
                     "profile_digest": subject["profile_digest"],
                     "candidate_package_digest": subject["candidate_package_digest"],
+                    "candidate_identity": {
+                        "gate_plan": {
+                            "sha256": gate_plan_reference["sha256"],
+                            "plan_sha256": gate_plan["plan_sha256"],
+                            "requirements_sha256": gate_plan["requirements_sha256"],
+                        }
+                    },
                 },
             )
             subject["acceptance_sha256"] = self._digest(acceptance)
@@ -204,8 +263,9 @@ class CodexUpgradeGateReceiptTests(unittest.TestCase):
             },
             "subject": subject,
             "inputs": inputs,
+            "gate_plan": gate_plan_reference,
             "environment": self._environment(attempt_id),
-            "gates": self._gates(phase),
+            "gates": self._gates(phase, gate_plan),
         }
 
     def test_candidate_finalize_and_replay(self) -> None:
@@ -223,6 +283,51 @@ class CodexUpgradeGateReceiptTests(unittest.TestCase):
         finalized = receipt.finalize(self.root, "post-facts.json", "post-receipt.json")
         self.assertEqual([item["role"] for item in finalized["inputs"]], ["acceptance", "promotion"])
         self.assertEqual(finalized, receipt.replay(self.root, "post-receipt.json"))
+
+    def test_post_promotion_requires_gate_plan(self) -> None:
+        facts = self._facts(receipt.POST_PROMOTION_PHASE)
+        facts["gate_plan"] = None
+        self._write("missing-plan.json", facts)
+        with self.assertRaisesRegex(receipt.GateReceiptError, "必须绑定 VC-4"):
+            receipt.build_receipt(self.root, "missing-plan.json")
+
+    def test_post_promotion_rejects_command_or_test_id_drift(self) -> None:
+        for field, value in (("command", ["python3", "-m", "other"]), ("test_id", "other-test")):
+            with self.subTest(field=field):
+                facts = self._facts(receipt.POST_PROMOTION_PHASE)
+                facts["gates"][0][field] = value
+                path = f"drift-{field}.json"
+                self._write(path, facts)
+                with self.assertRaisesRegex(receipt.GateReceiptError, "冻结合同"):
+                    receipt.build_receipt(self.root, path)
+
+    def test_invalid_gate_id_fails_as_managed_error(self) -> None:
+        facts = self._facts(receipt.CANDIDATE_PHASE)
+        facts["gates"][0]["gate_id"] = []
+        self._write("bad-gate-id.json", facts)
+        with self.assertRaisesRegex(receipt.GateReceiptError, "gate_id"):
+            receipt.build_receipt(self.root, "bad-gate-id.json")
+
+    def test_v3_facts_cannot_finalize_but_historical_receipt_replays(self) -> None:
+        facts = self._facts(receipt.CANDIDATE_PHASE)
+        facts["schema_version"] = receipt.LEGACY_FACTS_SCHEMA
+        facts.pop("gate_plan")
+        self._write("legacy-facts.json", facts)
+        with self.assertRaisesRegex(receipt.GateReceiptError, "只允许历史收据重放"):
+            receipt.finalize(self.root, "legacy-facts.json", "legacy-new.json")
+
+        historical = receipt.build_receipt(
+            self.root,
+            "legacy-facts.json",
+            _allow_legacy=True,
+        )
+        historical_path = self.root / "legacy-receipt.json"
+        historical_path.write_bytes(receipt._canonical(historical))
+        historical_path.chmod(0o600)
+        self.assertEqual(
+            receipt.replay(self.root, "legacy-receipt.json"),
+            historical,
+        )
 
     def test_missing_gate_fails_closed(self) -> None:
         facts = self._facts(receipt.CANDIDATE_PHASE)

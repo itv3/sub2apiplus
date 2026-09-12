@@ -114,6 +114,23 @@ CODEX_0154_RUNTIME_DOC_CANDIDATE_METADATA_FREEZE_SUCCESSOR = (
     ROOT
     / "docs/egress/maintenance/upstream-codex-0154-runtime-doc-candidate-metadata-20260912-freeze-successor.json"
 )
+# 2026-09-12：Framework 与两份客户端指南建立 VC-0～VC-6 唯一执行入口，
+# 同步澄清账号、模型可见性和运行坐标的身份边界。
+CLIENT_VC_STAGE_NAVIGATION_FREEZE_SUCCESSOR = (
+    ROOT
+    / "docs/egress/maintenance/client-vc-stage-navigation-20260912-freeze-successor.json"
+)
+# 2026-09-12：Claude VC-1～VC-3 合同拆分为证据包、规则迁移账本与原子断言账本，
+# 同步冻结指南说明及本显式 successor 列表。
+CLAUDE_VC1_VC3_CONTRACT_FREEZE_SUCCESSOR = (
+    ROOT
+    / "docs/egress/maintenance/upstream-claude-vc1-vc3-contract-20260912-freeze-successor.json"
+)
+# 2026-09-13：Codex 第四部分与 VC-0～VC-6 工具、测试及部署摘要最终对齐。
+CODEX_VC_FINAL_ALIGNMENT_FREEZE_SUCCESSOR = (
+    ROOT
+    / "docs/egress/maintenance/upstream-codex-vc-final-alignment-20260913-freeze-successor.json"
+)
 HISTORICAL_LEDGER = "docs/egress/maintenance/historical-source-drift-successor.json"
 SHA256_LENGTH = 64
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -179,7 +196,7 @@ def base_state(commit: str, path: str) -> dict[str, Any]:
 
 
 def successor_edges(path: str) -> list[tuple[str, str]]:
-    """读取已封存的 v0.2.3 后继边，不把当前工作区当作授权来源。"""
+    """读取显式登记的后继边，不扫描未登记收据。"""
 
     edges: list[tuple[str, str]] = []
     for receipt_path in (
@@ -205,6 +222,9 @@ def successor_edges(path: str) -> list[tuple[str, str]]:
         CODEX_0154_RUNTIME_DOC_CLOSURE_FREEZE_SUCCESSOR,
         CODEX_0154_RUNTIME_DOC_METADATA_FREEZE_SUCCESSOR,
         CODEX_0154_RUNTIME_DOC_CANDIDATE_METADATA_FREEZE_SUCCESSOR,
+        CLIENT_VC_STAGE_NAVIGATION_FREEZE_SUCCESSOR,
+        CLAUDE_VC1_VC3_CONTRACT_FREEZE_SUCCESSOR,
+        CODEX_VC_FINAL_ALIGNMENT_FREEZE_SUCCESSOR,
     ):
         payload = json.loads(receipt_path.read_text(encoding="utf-8"))
         _validate_successor_receipt(payload)
@@ -213,7 +233,7 @@ def successor_edges(path: str) -> list[tuple[str, str]]:
 
 
 def _validate_successor_receipt(payload: dict[str, Any]) -> None:
-    """校验后继收据身份与提交连续性。"""
+    """校验后继收据身份，以及 commit／worktree 模式的基准连续性。"""
 
     identity = payload.get("identity_sha256")
     unsigned = dict(payload)
@@ -225,21 +245,33 @@ def _validate_successor_receipt(payload: dict[str, Any]) -> None:
         separators=(",", ":"),
     ).encode()
     if not isinstance(identity, str) or not SHA256_PATTERN.fullmatch(identity):
-        raise AssertionError("v0.2.3 后继收据 identity_sha256 非法")
+        raise AssertionError("后继收据 identity_sha256 非法")
     if sha256(canonical) != identity:
-        raise AssertionError("v0.2.3 后继收据自摘要不一致")
+        raise AssertionError("后继收据自摘要不一致")
 
     base_commit = payload.get("base_commit")
     current_commit = payload.get("current_commit")
+    head_commit = git("rev-parse", "HEAD").decode().strip()
     if (
         not isinstance(base_commit, str)
         or not re.fullmatch(r"[0-9a-f]{40}", base_commit)
+        or not git_is_ancestor(base_commit, head_commit)
+    ):
+        raise AssertionError("后继收据基准提交关系非法")
+
+    mode = payload.get("mode", "commit")
+    if mode == "worktree":
+        if current_commit is not None:
+            raise AssertionError("worktree 后继收据不得声明 current_commit")
+        return
+    if (
+        mode != "commit"
         or not isinstance(current_commit, str)
         or not re.fullmatch(r"[0-9a-f]{40}", current_commit)
         or not git_is_ancestor(base_commit, current_commit)
-        or not git_is_ancestor(current_commit, git("rev-parse", "HEAD").decode().strip())
+        or not git_is_ancestor(current_commit, head_commit)
     ):
-        raise AssertionError("v0.2.3 后继收据提交关系非法")
+        raise AssertionError("commit 后继收据提交关系非法")
 
 
 def _successor_edges_from_payload(
@@ -264,7 +296,7 @@ def _successor_edges_from_payload(
                 for predecessor in predecessors
             )
         ):
-            raise AssertionError("v0.2.3 后继收据摘要边非法")
+            raise AssertionError("后继收据摘要边非法")
         edges.extend((predecessor, successor) for predecessor in predecessors)
     return edges
 

@@ -176,7 +176,7 @@ class FWESealTests(unittest.TestCase):
             "upstream_route_family": "anthropic-api",
         }
         return {
-            "schema_version": "official-client-fw-e-seal-plan/v3",
+            "schema_version": "official-client-fw-e-seal-plan/v4",
             "campaign_id": "claude-fw-e-test",
             "persona": persona,
             "target_version": "2.1.226",
@@ -201,15 +201,10 @@ class FWESealTests(unittest.TestCase):
             "cross_source_matrix_path": "matrix.json",
             "completeness_closure_path": "closure.json",
             "capture_index_path": "capture.json",
-            "rules": [
+            "evidence_items": [
                 {
-                    "spec_id": "SPEC-001",
-                    "evidence_level": "observed",
-                    "rule_lifecycle": "candidate",
-                    "compatibility_class": "request_egress",
-                    "migration_decision": "change",
-                    "decision_basis": "inheritance_not_proven",
-                    "semantic_equivalence_proven": False,
+                    "evidence_id": "EVIDENCE-SPEC-001",
+                    "source_ids": ["SPEC-001"],
                     "evidence_paths": ["rules/SPEC-001.json"],
                     "applicability": ["platform=linux/amd64"],
                 }
@@ -268,7 +263,8 @@ class FWESealTests(unittest.TestCase):
         result = seal_fw_e_plan(self.store, self.external, self.plan())
         self.assertEqual(result["checkpoint"], "evidence_recorded")
         self.assertEqual(result["approval_state"], "awaiting_explicit_evidence_approval")
-        self.assertEqual(result["rule_count"], 1)
+        self.assertEqual(result["evidence_item_count"], 1)
+        self.assertEqual(result["source_candidate_count"], 1)
         self.assertEqual(result["semantic_candidate_count"], 0)
         self.assertEqual(result["discovery_item_count"], 1)
         self.assertEqual(result["target_sink_count"], 1)
@@ -286,11 +282,15 @@ class FWESealTests(unittest.TestCase):
         self.assertNotIn("profile_schema", object_kinds)
         self.assertNotIn("snapshot", object_kinds)
         self.assertNotIn("release_artifact", object_kinds)
+        package = self.store.load_object(result["evidence_package_ref"])["payload"]
+        self.assertEqual(package["schema_version"], "official-client-evidence-package/v3")
+        self.assertNotIn("rules", package)
+        self.assertNotIn("migration_decision", json.dumps(package))
 
-    def test_blocks_inherit_without_semantic_equivalence(self) -> None:
+    def test_blocks_migration_conclusion_in_vc_1_evidence_item(self) -> None:
         plan = self.plan()
-        plan["rules"][0]["migration_decision"] = "inherit"
-        with self.assertRaisesRegex(ControlError, "禁止使用 inherit"):
+        plan["evidence_items"][0]["migration_decision"] = "inherit"
+        with self.assertRaisesRegex(ControlError, "字段不闭合"):
             seal_fw_e_plan(self.store, self.external, plan)
 
     def test_blocks_legacy_observe_from_claiming_strict(self) -> None:
@@ -329,10 +329,10 @@ class FWESealTests(unittest.TestCase):
         with self.assertRaisesRegex(ControlError, "unclassified target sink"):
             seal_fw_e_plan(self.store, self.external, plan)
 
-    def test_blocks_unbounded_rule_with_blocked_evidence(self) -> None:
+    def test_blocks_evidence_source_gap(self) -> None:
         plan = self.plan()
-        plan["rules"][0]["evidence_level"] = "blocked"
-        with self.assertRaisesRegex(ControlError, "只有在 validation-only"):
+        plan["evidence_items"][0]["source_ids"] = ["SPEC-OTHER"]
+        with self.assertRaisesRegex(ControlError, "证据来源未闭合"):
             seal_fw_e_plan(self.store, self.external, plan)
 
     def test_blocks_semantic_candidate_mixed_into_rule_ledger(self) -> None:
@@ -348,42 +348,24 @@ class FWESealTests(unittest.TestCase):
         with self.assertRaisesRegex(ControlError, "只能包含身份唯一的 SPEC"):
             seal_fw_e_plan(self.store, self.external, plan)
 
-    def test_seals_bounded_validation_only_blocked_rule(self) -> None:
+    def test_allows_multiple_evidence_items_for_one_source(self) -> None:
         plan = self.plan()
-        rule = plan["rules"][0]
-        rule.update(
+        first = plan["evidence_items"][0]
+        first["evidence_id"] = "EVIDENCE-SPEC-001-A"
+        plan["evidence_items"].append(
             {
-                "evidence_level": "blocked",
-                "migration_decision": "add",
-                "decision_basis": "new_target_rule",
-                "applicability": [
-                    "approval_scope=validation_only",
-                    "platform=linux/amd64",
-                    "production_eligibility=denied",
-                    "validation_scope=historical-source",
-                ],
+                **first,
+                "evidence_id": "EVIDENCE-SPEC-001-B",
             }
         )
         result = seal_fw_e_plan(self.store, self.external, plan)
         self.assertEqual(result["checkpoint"], "evidence_recorded")
-        self.assertEqual(result["approval_state"], "awaiting_explicit_evidence_approval")
+        self.assertEqual(result["evidence_item_count"], 2)
 
-    def test_blocks_validation_only_rule_without_scope(self) -> None:
+    def test_blocks_evidence_item_without_source(self) -> None:
         plan = self.plan()
-        rule = plan["rules"][0]
-        rule.update(
-            {
-                "evidence_level": "blocked",
-                "migration_decision": "add",
-                "decision_basis": "new_target_rule",
-                "applicability": [
-                    "approval_scope=validation_only",
-                    "platform=linux/amd64",
-                    "production_eligibility=denied",
-                ],
-            }
-        )
-        with self.assertRaisesRegex(ControlError, "边界明确"):
+        plan["evidence_items"][0]["source_ids"] = []
+        with self.assertRaisesRegex(ControlError, "source_ids 必须是非空"):
             seal_fw_e_plan(self.store, self.external, plan)
 
     def test_blocks_capture_without_privacy_control_proof(self) -> None:

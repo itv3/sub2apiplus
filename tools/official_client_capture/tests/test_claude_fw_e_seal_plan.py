@@ -182,7 +182,19 @@ class SealPlanTests(unittest.TestCase):
             root = Path(directory)
             paths = self._fixture(root)
             plan = self._build(root, paths)
-            self.assertEqual(plan["schema_version"], "official-client-fw-e-seal-plan/v3")
+            self.assertEqual(plan["schema_version"], "official-client-fw-e-seal-plan/v4")
+            self.assertNotIn("rules", plan)
+            self.assertEqual(
+                plan["evidence_items"],
+                [
+                    {
+                        "evidence_id": "EVIDENCE-SPEC-001",
+                        "source_ids": ["SPEC-001"],
+                        "evidence_paths": ["rule.json"],
+                        "applicability": ["platform=linux/amd64"],
+                    }
+                ],
+            )
             self.assertEqual(len(plan["ingress_aliases"]), 1)
             self.assertEqual(len(plan["egress_entries"]), 1)
             self.assertEqual(

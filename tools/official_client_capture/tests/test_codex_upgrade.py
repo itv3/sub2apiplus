@@ -34,6 +34,7 @@ from tools.official_client_capture.codex_upgrade import Job
 from tools.official_client_capture.tests.control_receipt_fixtures import (
     create_arm_receipt,
     create_job_rehearsal_receipt,
+    create_p0_gate_receipt,
     create_timing_checkpoint,
 )
 
@@ -53,7 +54,7 @@ class CodexUpgradeTest(unittest.TestCase):
             target_scenario: object,
             **kwargs: object,
         ) -> str:
-            if target_version == "0.147.0":
+            if target_version in {"0.147.0", "0.154.0"}:
                 return "d" * 64
             return original(target_version, target_scenario, **kwargs)
 
@@ -5400,7 +5401,11 @@ class CodexUpgradeTest(unittest.TestCase):
                 "profile_id": (
                     "codex-0.147.0-test-v1"
                     if version == "0.147.0"
-                    else "codex-0.145.0-upgrade-v1"
+                    else (
+                        "codex-0.145.0-upgrade-v1"
+                        if version == "0.145.0"
+                        else f"codex-{version}-test-v1"
+                    )
                 ),
                 "source_spec": {
                     "path": "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md",
@@ -5545,6 +5550,10 @@ class CodexUpgradeTest(unittest.TestCase):
         campaign_id: str = "upgrade-0146-test",
         campaign_mode: str = "formal",
         campaign_purpose: str = "validation_only",
+        baseline_version: str = "0.145.0",
+        target_version: str = "0.147.0",
+        model: str = "gpt-5.4",
+        lite_model: str = "gpt-5.6-luna",
     ) -> argparse.Namespace:
         baseline_source = root / "baseline-source"
         target_source = root / "target-source"
@@ -5570,7 +5579,7 @@ class CodexUpgradeTest(unittest.TestCase):
                             "path": "/backend-api/codex/responses",
                             "http_version": "HTTP/1.1",
                             "headers": [
-                                ["version", "0.145.0"],
+                                ["version", baseline_version],
                                 ["host", "chatgpt.com"],
                             ],
                             "json_shape": {"model": "<string>", "input": []},
@@ -5581,16 +5590,16 @@ class CodexUpgradeTest(unittest.TestCase):
         )
         baseline_rule_manifest = (
             Path(__file__).resolve().parents[1]
-            / "codex_upgrade_rules_0_145_0.json"
+            / f"codex_upgrade_rules_{baseline_version.replace('.', '_')}.json"
         )
         required_rules = list(
-            load_rule_manifest(baseline_rule_manifest, "0.145.0")
+            load_rule_manifest(baseline_rule_manifest, baseline_version)
         )
         scenario_manifest = self._write_scenario_manifest(
             root,
             baseline_rule_manifest,
             tuple(required_rules),
-            version="0.145.0",
+            version=baseline_version,
             name="scenarios.json",
             historical_source_binding=True,
         )
@@ -5599,7 +5608,7 @@ class CodexUpgradeTest(unittest.TestCase):
             target_rule_manifest,
             {
                 "schema_version": codex_upgrade.RULE_SCHEMA,
-                "codex_version": "0.147.0",
+                "codex_version": target_version,
                 "required_rules": required_rules,
             },
         )
@@ -5607,7 +5616,7 @@ class CodexUpgradeTest(unittest.TestCase):
             root,
             target_rule_manifest,
             tuple(required_rules),
-            version="0.147.0",
+            version=target_version,
             name="target-scenarios.json",
         )
         package_path = root / "codex-package-x86_64-unknown-linux-musl.tar.gz"
@@ -5616,7 +5625,7 @@ class CodexUpgradeTest(unittest.TestCase):
         package_metadata = json.dumps(
             {
                 "layoutVersion": 1,
-                "version": "0.147.0",
+                "version": target_version,
                 "target": "x86_64-unknown-linux-musl",
                 "variant": "codex",
                 "entrypoint": "bin/codex",
@@ -5653,8 +5662,8 @@ class CodexUpgradeTest(unittest.TestCase):
         timing_receipt = create_timing_checkpoint(
             timing_root,
             upgrade_id=campaign_id,
-            baseline_version="0.145.0",
-            target_version="0.147.0",
+            baseline_version=baseline_version,
+            target_version=target_version,
             campaign_purpose=campaign_purpose,
         )
         arm_root = root / "control" / "arm64-p0"
@@ -5682,6 +5691,8 @@ class CodexUpgradeTest(unittest.TestCase):
             live_compose_files = str(compose_file.resolve())
         rehearsal_root: Path | None = None
         rehearsal_receipt: Path | None = None
+        p0_gate_root: Path | None = None
+        p0_gate_receipt: Path | None = None
         if campaign_mode == "formal":
             # 旧版本只用于离线合成 Campaign；目标标签声明门禁由 0.151
             # 专项测试覆盖，不能为即将退休的 0.147 新增生产声明。
@@ -5692,7 +5703,7 @@ class CodexUpgradeTest(unittest.TestCase):
             ):
                 contract = (
                     codex_upgrade_job_rehearsal_receipt.build_execution_contract(
-                        target_version="0.147.0",
+                        target_version=target_version,
                         target_sha256=target_sha256,
                         target_package_sha256=target_package_sha256,
                         target_code_mode_host_sha256=target_code_mode_host_sha256,
@@ -5702,21 +5713,21 @@ class CodexUpgradeTest(unittest.TestCase):
                         ],
                         configuration={
                             "runtime_image": runtime_image,
-                            "model": "gpt-5.4",
-                            "lite_model": "gpt-5.6-luna",
+                            "model": model,
+                            "lite_model": lite_model,
                             "capture_root": "/root/oauth-capture",
                             "capture_container": "capture-cli",
                             "service_container": "sub2apiplus",
                             "keeper_container": "sub2apiplus-keeper",
                             "postgres_container": "sub2apiplus-postgres",
                             "redis_container": "sub2apiplus-redis",
-                            "capture_codex_bin": "/opt/codex-0.147.0/bin/codex",
-                            "relay_codex_bin": "/opt/codex-0.147.0/bin/codex",
+                            "capture_codex_bin": f"/opt/codex-{target_version}/bin/codex",
+                            "relay_codex_bin": f"/opt/codex-{target_version}/bin/codex",
                             "capture_code_mode_host_bin": (
-                                "/opt/codex-0.147.0/bin/codex-code-mode-host"
+                                f"/opt/codex-{target_version}/bin/codex-code-mode-host"
                             ),
                             "relay_code_mode_host_bin": (
-                                "/opt/codex-0.147.0/bin/codex-code-mode-host"
+                                f"/opt/codex-{target_version}/bin/codex-code-mode-host"
                             ),
                             "codex_account_id": 90,
                             "api_key_id": 1,
@@ -5735,6 +5746,16 @@ class CodexUpgradeTest(unittest.TestCase):
                 contract=contract,
                 preflight_campaign_id="preflight-fixture",
             )
+            if codex_upgrade._requires_complete_vc_artifacts(target_version):
+                p0_gate_root = root / "control" / "p0-gate"
+                p0_gate_receipt = create_p0_gate_receipt(
+                    p0_gate_root,
+                    upgrade_id=campaign_id,
+                    baseline_version=baseline_version,
+                    target_version=target_version,
+                    campaign_purpose=campaign_purpose,
+                    job_rehearsal_receipt=rehearsal_receipt,
+                )
         return argparse.Namespace(
             command="plan",
             campaign_dir=root / "campaign",
@@ -5742,8 +5763,8 @@ class CodexUpgradeTest(unittest.TestCase):
             dry_run=False,
             execute=False,
             acknowledge_live_requests=False,
-            baseline_version="0.145.0",
-            target_version="0.147.0",
+            baseline_version=baseline_version,
+            target_version=target_version,
             campaign_mode=campaign_mode,
             campaign_purpose=campaign_purpose,
             timing_ledger_dir=timing_root,
@@ -5752,6 +5773,8 @@ class CodexUpgradeTest(unittest.TestCase):
             arm64_environment_receipt=arm_receipt,
             job_rehearsal_root=rehearsal_root,
             job_rehearsal_receipt=rehearsal_receipt,
+            p0_gate_root=p0_gate_root,
+            p0_gate_receipt=p0_gate_receipt,
             baseline_source=baseline_source,
             target_source=target_source,
             baseline_evidence=baseline_evidence,
@@ -5766,21 +5789,21 @@ class CodexUpgradeTest(unittest.TestCase):
             extra_jobs=None,
             suite="full",
             campaign_id=campaign_id,
-            model="gpt-5.4",
-            lite_model="gpt-5.6-luna",
+            model=model,
+            lite_model=lite_model,
             capture_root=Path("/root/oauth-capture"),
             capture_container="capture-cli",
             service_container="sub2apiplus",
             keeper_container="sub2apiplus-keeper",
             postgres_container="sub2apiplus-postgres",
             redis_container="sub2apiplus-redis",
-            capture_codex_bin="/opt/codex-0.147.0/bin/codex",
-            relay_codex_bin="/opt/codex-0.147.0/bin/codex",
+            capture_codex_bin=f"/opt/codex-{target_version}/bin/codex",
+            relay_codex_bin=f"/opt/codex-{target_version}/bin/codex",
             capture_code_mode_host_bin=(
-                "/opt/codex-0.147.0/bin/codex-code-mode-host"
+                f"/opt/codex-{target_version}/bin/codex-code-mode-host"
             ),
             relay_code_mode_host_bin=(
-                "/opt/codex-0.147.0/bin/codex-code-mode-host"
+                f"/opt/codex-{target_version}/bin/codex-code-mode-host"
             ),
             codex_account_id=90,
             api_key_id=1,
@@ -5851,6 +5874,8 @@ class CodexUpgradeTest(unittest.TestCase):
     ) -> None:
         evidence_root.mkdir(parents=True, exist_ok=True)
         campaign_manifest = codex_upgrade.load_campaign_manifest(campaign_dir)
+        target_version = str(campaign_manifest["target_version"])
+        campaign_configuration = campaign_manifest["configuration"]
         attempt_id = (
             "20260731T000000Z-1111111111111111"
             if phase == "official"
@@ -5876,7 +5901,7 @@ class CodexUpgradeTest(unittest.TestCase):
                     "path": "/backend-api/codex/responses",
                     "http_version": "HTTP/1.1",
                     "headers": [
-                        ["version", "0.147.0"],
+                        ["version", target_version],
                         ["host", "chatgpt.com"],
                     ],
                     "json_shape": {"model": "<string>", "input": []},
@@ -5936,7 +5961,7 @@ class CodexUpgradeTest(unittest.TestCase):
                 "schema_version": (
                     "codex-candidate-capture-manifest/v1"
                 ),
-                "codex_version": "0.147.0",
+                "codex_version": target_version,
                 "capture_id": f"{phase}-{candidate_id or 'official'}",
                 "status": "complete",
                 "artifacts": [
@@ -6327,7 +6352,7 @@ class CodexUpgradeTest(unittest.TestCase):
             "scenario_receipts": [],
             "scenario_receipt_failures": [],
             "track": "main",
-            "model_id": "gpt-5.4",
+            "model_id": campaign_configuration["model"],
             "expected_use_responses_lite": False,
             "required_model_receipt": False,
             "model_condition_receipt": None,
@@ -6338,7 +6363,7 @@ class CodexUpgradeTest(unittest.TestCase):
             package_identity = campaign_manifest["official_identity"]["package"]
             binary_verification = {
                 "passed": True,
-                "expected_version": "0.147.0",
+                "expected_version": target_version,
                 "expected_sha256": campaign_manifest["target_sha256"],
                 "runtime_image_reference": f"capture-runtime@sha256:{'b' * 64}",
                 "runtime_image_id": f"sha256:{'c' * 64}",
@@ -6346,14 +6371,23 @@ class CodexUpgradeTest(unittest.TestCase):
                     {
                         "label": label,
                         "path": path,
-                        "version": "0.147.0",
-                        "version_output": "codex-cli 0.147.0",
+                        "version": target_version,
+                        "version_output": f"codex-cli {target_version}",
                         "sha256": campaign_manifest["target_sha256"],
                     }
                     for label, path in (
-                        ("container:capture_codex_bin", "/opt/codex-0.147.0/bin/codex"),
-                        ("container:relay_codex_bin", "/opt/codex-0.147.0/bin/codex"),
-                        ("host:relay_codex_bin", "/opt/codex-0.147.0/bin/codex"),
+                        (
+                            "container:capture_codex_bin",
+                            campaign_configuration["capture_codex_bin"],
+                        ),
+                        (
+                            "container:relay_codex_bin",
+                            campaign_configuration["relay_codex_bin"],
+                        ),
+                        (
+                            "host:relay_codex_bin",
+                            campaign_configuration["relay_codex_bin"],
+                        ),
                     )
                 ],
                 "package": package_identity,
@@ -6366,15 +6400,15 @@ class CodexUpgradeTest(unittest.TestCase):
                     for label, path in (
                         (
                             "container:capture_code_mode_host_bin",
-                            "/opt/codex-0.147.0/bin/codex-code-mode-host",
+                            campaign_configuration["capture_code_mode_host_bin"],
                         ),
                         (
                             "container:relay_code_mode_host_bin",
-                            "/opt/codex-0.147.0/bin/codex-code-mode-host",
+                            campaign_configuration["relay_code_mode_host_bin"],
                         ),
                         (
                             "host:relay_code_mode_host_bin",
-                            "/opt/codex-0.147.0/bin/codex-code-mode-host",
+                            campaign_configuration["relay_code_mode_host_bin"],
                         ),
                     )
                 ],
@@ -6561,7 +6595,10 @@ class CodexUpgradeTest(unittest.TestCase):
         payload["evidence_inventory"] = codex_upgrade._evidence_inventory(
             [evidence_root]
         )
-        if evaluation_transition is not None:
+        if evaluation_transition is not None or (
+            phase == "official"
+            and codex_upgrade._requires_complete_vc_artifacts(campaign_manifest)
+        ):
             evidence_manifest = (
                 codex_upgrade_evidence_manifest.build_evidence_manifest(
                     [evidence_root],
@@ -6582,6 +6619,54 @@ class CodexUpgradeTest(unittest.TestCase):
                 "raw_evidence_private": True,
                 **evidence_manifest["security"],
             }
+        if (
+            phase == "official"
+            and codex_upgrade._requires_complete_vc_artifacts(campaign_manifest)
+        ):
+            source_diff = codex_upgrade._analysis_payload(
+                campaign_dir,
+                campaign_manifest,
+                "source-diff",
+            )
+            baseline_surface = codex_upgrade._analysis_payload(
+                campaign_dir,
+                campaign_manifest,
+                "baseline-surface",
+            )
+            official_diff = codex_upgrade.compare_surfaces(
+                baseline_surface,
+                normalized_surface,
+            )
+            finalized_root = attempt_root / "finalized"
+            finalized_root.mkdir(mode=0o700)
+            official_diff_path = finalized_root / "baseline-to-target-official.json"
+            self._write_json(official_diff_path, official_diff)
+            official_diff_binding = self._binding(
+                official_diff_path,
+                official_diff_path.relative_to(campaign_dir).as_posix(),
+            )
+            source_diff_path = campaign_dir / campaign_manifest["analysis"][
+                "source-diff"
+            ]["path"]
+            discovery = codex_upgrade.codex_upgrade_vc_artifacts.build_discovery_inventory(
+                campaign_id=str(campaign_manifest["campaign_id"]),
+                target_version=target_version,
+                source_diff=source_diff,
+                official_diff=official_diff,
+                source_diff_binding=self._binding(
+                    source_diff_path,
+                    source_diff_path.relative_to(campaign_dir).as_posix(),
+                ),
+                official_diff_binding=official_diff_binding,
+                evidence_manifest_binding=payload["evidence_manifest"],
+            )
+            discovery_path = finalized_root / "discovery-inventory.json"
+            self._write_json(discovery_path, discovery)
+            payload["official_diff"] = official_diff_binding
+            payload["discovery_inventory"] = self._binding(
+                discovery_path,
+                discovery_path.relative_to(campaign_dir).as_posix(),
+            )
         codex_upgrade._seal_preview(
             campaign_dir,
             attempt_root,
@@ -6599,12 +6684,23 @@ class CodexUpgradeTest(unittest.TestCase):
             preview_path,
             preview_path.relative_to(campaign_dir).as_posix(),
         )
-        codex_upgrade.save_stage_result(
+        stage_path = codex_upgrade.save_stage_result(
             campaign_dir,
             "capture-official" if phase == "official" else "capture-candidate",
             payload,
             candidate_id=candidate_id,
         )
+        if (
+            phase == "official"
+            and restoration_passed
+            and codex_upgrade._requires_complete_vc_artifacts(campaign_manifest)
+        ):
+            codex_upgrade._complete_vc_phase(
+                campaign_dir,
+                campaign_manifest,
+                phase="VC-1",
+                stage_receipt_path=stage_path.resolve(strict=True),
+            )
 
     def _write_classification_manifests(
         self,
@@ -6915,6 +7011,7 @@ class CodexUpgradeTest(unittest.TestCase):
                 "promotion_receipt_sha256": None,
             },
             "inputs": [],
+            "gate_plan": None,
             "environment": {},
             "gates": gates,
         }
@@ -7142,16 +7239,20 @@ class CodexUpgradeTest(unittest.TestCase):
                 "plan",
                 "canonical-import",
                 "canonical-advance",
+                "compile-vc-batch",
                 "successor",
                 "capture-official",
                 "classify",
                 "prepare-profile",
                 "stage-profile",
+                "plan-candidate-gates",
+                "record-candidate-build",
                 "capture-candidate",
                 "candidate-runtime-override",
                 "reuse-official-evidence",
                 "compare",
                 "accept",
+                "deliver-candidate",
                 "all",
                 "evaluation-transition",
                 "terminal-transition-preflight",
@@ -12480,8 +12581,8 @@ class CodexUpgradeTest(unittest.TestCase):
                 argparse.Namespace(
                     campaign_dir=campaign_dir,
                     candidate_id="cand-1",
-                    reason="切换到当前可用采集账号",
-                    set=["codex_account_id=91", "service_container=sub2apiplus-b"],
+                    reason="切换到当前可用服务容器",
+                    set=["service_container=sub2apiplus-b"],
                 )
             )
             self.assertEqual(result["status"], "recorded")
@@ -12491,7 +12592,6 @@ class CodexUpgradeTest(unittest.TestCase):
             self.assertEqual(
                 result["overrides"],
                 {
-                    "codex_account_id": {"predecessor": 90, "successor": 91},
                     "service_container": {
                         "predecessor": "sub2apiplus",
                         "successor": "sub2apiplus-b",
@@ -12512,7 +12612,7 @@ class CodexUpgradeTest(unittest.TestCase):
             effective = codex_upgrade._apply_candidate_runtime_override(
                 campaign_dir, manifest, "cand-1"
             )
-            self.assertEqual(effective["configuration"]["codex_account_id"], 91)
+            self.assertEqual(effective["configuration"]["codex_account_id"], 90)
             self.assertEqual(effective["configuration"]["service_container"], "sub2apiplus-b")
             self.assertEqual(manifest["configuration"]["codex_account_id"], 90)
             again = codex_upgrade._apply_candidate_runtime_override(
@@ -12522,12 +12622,12 @@ class CodexUpgradeTest(unittest.TestCase):
             arguments = codex_upgrade._campaign_arguments(
                 campaign_dir, effective, candidate_id="cand-1"
             )
-            self.assertEqual(arguments.codex_account_id, 91)
+            self.assertEqual(arguments.codex_account_id, 90)
             self.assertEqual(arguments.service_container, "sub2apiplus-b")
             probe = codex_upgrade._environment_probe_arguments(
                 effective, root / "probe", "before"
             )
-            self.assertEqual(probe.account_id, 91)
+            self.assertEqual(probe.account_id, 90)
             self.assertEqual(probe.service_container, "sub2apiplus-b")
             # 其他候选不受影响；未封存 attempt 扫描不会把覆盖收据当成 attempt。
             untouched = codex_upgrade._apply_candidate_runtime_override(
@@ -12559,12 +12659,12 @@ class CodexUpgradeTest(unittest.TestCase):
                 attempt("target_source=/tmp/other")
             with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "不允许在候选层覆盖"):
                 attempt("runtime_image=capture-runtime@sha256:" + "c" * 64)
-            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "无需覆盖"):
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "不允许在候选层覆盖"):
                 attempt("codex_account_id=90")
-            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "必须是正整数"):
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "不允许在候选层覆盖"):
                 attempt("codex_account_id=abc")
             with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "重复指定"):
-                attempt("codex_account_id=91", "codex_account_id=92")
+                attempt("service_container=sub2apiplus-b", "service_container=sub2apiplus-c")
             with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "必须同时覆盖"):
                 attempt("live_attestation_compose_dir=/tmp/compose")
             with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "不是合法容器名"):
@@ -12584,20 +12684,23 @@ class CodexUpgradeTest(unittest.TestCase):
             arguments = argparse.Namespace(
                 campaign_dir=campaign_dir,
                 candidate_id="cand-1",
-                reason="换账号",
-                set=["codex_account_id=91"],
+                reason="换服务容器",
+                set=["service_container=sub2apiplus-b"],
             )
             codex_upgrade.create_candidate_runtime_override(arguments)
             with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "已存在"):
                 codex_upgrade.create_candidate_runtime_override(arguments)
             path = campaign_dir / "candidates" / "cand-1" / "runtime-override.json"
             receipt = json.loads(path.read_text(encoding="utf-8"))
-            receipt["overrides"]["codex_account_id"]["successor"] = 92
+            receipt["overrides"]["service_container"]["successor"] = "sub2apiplus-c"
             path.write_text(json.dumps(receipt), encoding="utf-8")
             with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "摘要或 schema 非法"):
                 codex_upgrade._apply_candidate_runtime_override(campaign_dir, manifest, "cand-1")
             # 重新签名但 predecessor 与冻结值不衔接同样拒绝。
-            receipt["overrides"]["codex_account_id"] = {"predecessor": 77, "successor": 92}
+            receipt["overrides"]["service_container"] = {
+                "predecessor": "wrong-predecessor",
+                "successor": "sub2apiplus-c",
+            }
             receipt.pop("receipt_digest")
             receipt["receipt_digest"] = codex_upgrade._fingerprint(receipt)
             path.write_text(json.dumps(receipt), encoding="utf-8")
@@ -12611,7 +12714,7 @@ class CodexUpgradeTest(unittest.TestCase):
                         campaign_dir=campaign_dir,
                         candidate_id="cand-2",
                         reason="x",
-                        set=["codex_account_id=91"],
+                        set=["service_container=sub2apiplus-b"],
                     )
                 )
             (campaign_dir / "candidates" / "cand-3").mkdir(parents=True)
@@ -12624,7 +12727,7 @@ class CodexUpgradeTest(unittest.TestCase):
                         campaign_dir=campaign_dir,
                         candidate_id="cand-3",
                         reason="x",
-                        set=["codex_account_id=91"],
+                        set=["service_container=sub2apiplus-b"],
                     )
                 )
 
@@ -12730,6 +12833,97 @@ class CodexUpgradeTest(unittest.TestCase):
                     ),
                     "successor",
                 )
+
+    def test_0154_reuse_official_evidence_rebuilds_vc0_and_seals_vc1(
+        self,
+    ) -> None:
+        """0.154 官方证据复用必须形成新 Campaign 的零请求 VC 控制链。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            arguments = self._campaign_arguments(
+                root / "predecessor",
+                campaign_id="upgrade-0154-predecessor",
+                baseline_version="0.151.0",
+                target_version="0.154.0",
+                model="gpt-5.5",
+                lite_model="gpt-6-astra",
+            )
+            predecessor_manifest = codex_upgrade.create_campaign(arguments)
+            predecessor_dir = arguments.campaign_dir
+            self._seal_official_stage(
+                root / "predecessor",
+                predecessor_dir,
+                predecessor_manifest,
+            )
+
+            successor_dir = root / "successor"
+            return_code, stdout, stderr = self._run_main(
+                [
+                    "reuse-official-evidence",
+                    "--predecessor-campaign-dir",
+                    str(predecessor_dir),
+                    "--campaign-dir",
+                    str(successor_dir),
+                    "--campaign-id",
+                    "upgrade-0154-successor",
+                    "--codex-account-id",
+                    "93",
+                ]
+            )
+            self.assertEqual(return_code, 0, stderr)
+            result = json.loads(stdout)
+            self.assertEqual(result["status"], "official_sealed")
+            self.assertEqual(result["executed_job_count"], 0)
+            self.assertEqual(result["scanned_bytes"], 0)
+            self.assertEqual(result["live_request_count"], 0)
+
+            manifest = codex_upgrade.load_campaign_manifest(successor_dir)
+            predecessor_plan = codex_upgrade._vc_campaign_plan(
+                predecessor_dir,
+                predecessor_manifest,
+            )
+            plan = codex_upgrade._vc_campaign_plan(successor_dir, manifest)
+            self.assertEqual(plan["campaign_id"], "upgrade-0154-successor")
+            self.assertNotEqual(plan["plan_sha256"], predecessor_plan["plan_sha256"])
+
+            control = manifest["vc_control"]
+            batch = json.loads(
+                (successor_dir / control["first_formal_batch"]["path"]).read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(batch["phase"], "VC-1")
+            self.assertEqual(batch["execute_item_ids"], [])
+            self.assertEqual(batch["reuse_item_ids"], ["official-test"])
+            self.assertEqual(batch["actions"], [])
+
+            run_manifest = json.loads(
+                (
+                    successor_dir
+                    / control["first_campaign_run_manifest"]["path"]
+                ).read_text(encoding="utf-8")
+            )
+            self.assertTrue(run_manifest["no_op"])
+            self.assertEqual(run_manifest["execute_items"], [])
+            self.assertEqual(run_manifest["reuse_items"], ["official-test"])
+
+            _, checkpoint = codex_upgrade._replay_vc_checkpoint(
+                successor_dir,
+                plan,
+                "VC-1",
+            )
+            self.assertEqual(checkpoint["execute_item_ids"], [])
+            self.assertEqual(checkpoint["reuse_item_ids"], ["official-test"])
+            self.assertEqual(
+                checkpoint["metrics"],
+                {"live_request_count": 0, "scanned_bytes": 0},
+            )
+            self.assertEqual(
+                checkpoint["stage_receipt"]["path"],
+                "official/result.json",
+            )
+            self.assertFalse((successor_dir / "official" / "attempts").exists())
 
     def test_formal_campaign_run_enforcement_covers_future_target_versions(self) -> None:
         """campaign-run 强制派发与旧写入拒绝按历史豁免集合判定，不再逐版本硬编码。"""
@@ -13677,13 +13871,16 @@ class ToolIdentitySideSplitTest(unittest.TestCase):
         self.assertEqual(sides["evaluation_count"], len(paths))
         components = codex_upgrade._tool_component_identities(entries)["components"]
         self.assertEqual(components["shared"]["entry_count"], 0)
+        expected_control = len(
+            paths.intersection(codex_upgrade._CONTROL_PLANE_TOOL_FILES)
+        )
         self.assertEqual(
             components["control"]["entry_count"],
-            2,
+            expected_control,
         )
         self.assertEqual(
             components["evaluator"]["entry_count"],
-            len(paths) - 2,
+            len(paths) - expected_control,
         )
 
     def test_candidate_trace_transformers_are_evaluation_side(self):

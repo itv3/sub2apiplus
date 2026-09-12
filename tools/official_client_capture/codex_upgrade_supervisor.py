@@ -42,6 +42,7 @@ CAMPAIGN_ACTIVITY_SCHEMA = "codex-upgrade-campaign-activity/v1"
 CAMPAIGN_FINISH_SCHEMA = "codex-upgrade-campaign-finish/v1"
 CAMPAIGN_CONTINUITY_SCHEMA = "codex-upgrade-campaign-continuity/v1"
 CAMPAIGN_RUN_SCHEMA = "codex-upgrade-campaign-run/v1"
+CAMPAIGN_RUN_BATCHED_SCHEMA = "codex-upgrade-campaign-run/v2"
 CAMPAIGN_RUN_LOCK_FILENAME = ".campaign-run.lock"
 # campaign-run 启动的子命令通过这些只读环境变量复用同一个父监督器。
 # 子进程不得自行创建第二个监督器；身份仍以父 run_dir/state.json 为准。
@@ -3357,17 +3358,97 @@ def _campaign_run_manifest(path: Path) -> dict[str, Any]:
     path = Path(path)
     _validate_file(path)
     payload = _read_json(path)
-    required = {"schema_version", "campaign_id", "phase", "deadline_seconds", "actions", "no_op"}
-    optional = {"execute_items", "reuse_items"}
+    schema_version = payload.get("schema_version")
+    if schema_version == CAMPAIGN_RUN_SCHEMA:
+        required = {
+            "schema_version",
+            "campaign_id",
+            "phase",
+            "deadline_seconds",
+            "actions",
+            "no_op",
+        }
+        optional = {"execute_items", "reuse_items"}
+    elif schema_version == CAMPAIGN_RUN_BATCHED_SCHEMA:
+        required = {
+            "schema_version",
+            "campaign_id",
+            "campaign_plan_sha256",
+            "batch_id",
+            "batch_sequence",
+            "batch_sha256",
+            "phase",
+            "predecessor_checkpoint",
+            "original_deadline_at_utc",
+            "actions",
+            "execute_items",
+            "reuse_items",
+            "no_op",
+        }
+        optional = set()
+    else:
+        raise SupervisorError("Campaign run manifest schema_version 不受支持。")
     if (
         not required.issubset(payload)
         or set(payload) - required - optional
-        or payload.get("schema_version") != CAMPAIGN_RUN_SCHEMA
     ):
         raise SupervisorError("Campaign run manifest 字段或 schema 不闭合。")
     campaign_id = _safe_id(payload.get("campaign_id"), "campaign_id")
     phase = _safe_id(payload.get("phase"), "phase", maximum=32)
-    deadline_seconds = _positive_seconds(payload.get("deadline_seconds"), "deadline_seconds")
+    deadline_seconds: float | None = None
+    original_deadline_at_utc: str | None = None
+    original_deadline_at_epoch: float | None = None
+    if schema_version == CAMPAIGN_RUN_SCHEMA:
+        deadline_seconds = _positive_seconds(
+            payload.get("deadline_seconds"),
+            "deadline_seconds",
+        )
+    else:
+        original_deadline_at_utc = str(payload.get("original_deadline_at_utc", ""))
+        try:
+            deadline_value = datetime.fromisoformat(
+                original_deadline_at_utc.replace("Z", "+00:00")
+            )
+        except ValueError as error:
+            raise SupervisorError(
+                "Campaign run original_deadline_at_utc 不是有效 RFC3339 时间。"
+            ) from error
+        if deadline_value.tzinfo is None:
+            raise SupervisorError("Campaign run 原始 deadline 缺少时区。")
+        original_deadline_at_epoch = deadline_value.timestamp()
+        for field in ("campaign_plan_sha256", "batch_sha256"):
+            value = payload.get(field)
+            if (
+                not isinstance(value, str)
+                or len(value) != 64
+                or any(character not in "0123456789abcdef" for character in value)
+            ):
+                raise SupervisorError(f"Campaign run {field} 非法。")
+        _safe_id(payload.get("batch_id"), "batch_id")
+        sequence = payload.get("batch_sequence")
+        if not isinstance(sequence, int) or isinstance(sequence, bool) or sequence < 1:
+            raise SupervisorError("Campaign run batch_sequence 非法。")
+        predecessor = payload.get("predecessor_checkpoint")
+        if not isinstance(predecessor, dict) or set(predecessor) != {
+            "path",
+            "sha256",
+            "phase",
+            "checkpoint_sha256",
+        }:
+            raise SupervisorError("Campaign run predecessor_checkpoint 字段不闭合。")
+        _safe_id(predecessor.get("phase"), "predecessor_checkpoint.phase", maximum=32)
+        if not isinstance(predecessor.get("path"), str) or not predecessor["path"]:
+            raise SupervisorError("Campaign run predecessor checkpoint 路径为空。")
+        for field in ("sha256", "checkpoint_sha256"):
+            value = predecessor.get(field)
+            if (
+                not isinstance(value, str)
+                or len(value) != 64
+                or any(character not in "0123456789abcdef" for character in value)
+            ):
+                raise SupervisorError(
+                    f"Campaign run predecessor_checkpoint.{field} 非法。"
+                )
     no_op = payload.get("no_op")
     if not isinstance(no_op, bool):
         raise SupervisorError("Campaign run manifest no_op 必须是布尔值。")
@@ -3377,12 +3458,15 @@ def _campaign_run_manifest(path: Path) -> dict[str, Any]:
     normalized_actions: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
     for index, raw in enumerate(actions, 1):
-        if not isinstance(raw, dict) or set(raw) != {
+        expected_action_fields = {
             "action_id",
             "operation",
             "timeout_seconds",
             "command",
-        }:
+        }
+        if schema_version == CAMPAIGN_RUN_BATCHED_SCHEMA:
+            expected_action_fields.add("item_ids")
+        if not isinstance(raw, dict) or set(raw) != expected_action_fields:
             raise SupervisorError(f"Campaign run action 第 {index} 项字段不闭合。")
         action_id = _safe_id(raw.get("action_id"), f"action[{index}].action_id")
         if action_id in seen_ids:
@@ -3427,6 +3511,9 @@ def _campaign_run_manifest(path: Path) -> dict[str, Any]:
             "control-epoch",
             "evaluation-transition",
             "terminal-transition-preflight",
+            "plan",
+            "reuse-official-evidence",
+            "compile-vc-batch",
         }
         if is_supervisor_cli:
             forbidden |= {
@@ -3440,16 +3527,33 @@ def _campaign_run_manifest(path: Path) -> dict[str, Any]:
             }
         if is_upgrade_cli and any(item in forbidden for item in command):
             raise SupervisorError(
-                f"Campaign run action 第 {index} 项包含旧监督／写入入口，拒绝预声明。"
+                f"Campaign run action 第 {index} 项包含控制面或旧写入入口，拒绝预声明。"
             )
-        normalized_actions.append(
-            {
-                "action_id": action_id,
-                "operation": operation,
-                "timeout_seconds": timeout_seconds,
-                "command": list(command),
-            }
-        )
+        normalized_action = {
+            "action_id": action_id,
+            "operation": operation,
+            "timeout_seconds": timeout_seconds,
+            "command": list(command),
+        }
+        if schema_version == CAMPAIGN_RUN_BATCHED_SCHEMA:
+            item_ids = raw.get("item_ids")
+            if (
+                not isinstance(item_ids, list)
+                or not item_ids
+                or item_ids != sorted(set(item_ids))
+                or any(
+                    not isinstance(value, str)
+                    or not value
+                    or len(value) > 128
+                    or not SAFE_ID_CHARS.issuperset(value)
+                    for value in item_ids
+                )
+            ):
+                raise SupervisorError(
+                    f"Campaign run action 第 {index} 项 item_ids 非法。"
+                )
+            normalized_action["item_ids"] = list(item_ids)
+        normalized_actions.append(normalized_action)
     execute_items = payload.get(
         "execute_items", [item["action_id"] for item in normalized_actions]
     )
@@ -3466,8 +3570,19 @@ def _campaign_run_manifest(path: Path) -> dict[str, Any]:
         ) or len(set(values)) != len(values):
             raise SupervisorError(f"Campaign run manifest {label} 含非法或重复 ID。")
     action_ids = {item["action_id"] for item in normalized_actions}
-    if set(execute_items) != action_ids:
-        raise SupervisorError("execute_items 必须与预声明动作集合完全一致。")
+    if schema_version == CAMPAIGN_RUN_SCHEMA:
+        if set(execute_items) != action_ids:
+            raise SupervisorError("execute_items 必须与预声明动作集合完全一致。")
+    else:
+        covered = [
+            item_id
+            for action in normalized_actions
+            for item_id in action["item_ids"]
+        ]
+        if len(covered) != len(set(covered)) or sorted(covered) != sorted(execute_items):
+            raise SupervisorError(
+                "batched campaign-run 动作未无重叠地精确覆盖 execute_items。"
+            )
     if set(execute_items) & set(reuse_items):
         raise SupervisorError("execute_items 与 reuse_items 不得交叉。")
     if no_op and normalized_actions:
@@ -3476,16 +3591,29 @@ def _campaign_run_manifest(path: Path) -> dict[str, Any]:
         raise SupervisorError("非 no_op Campaign 必须至少声明一个动作。")
     if no_op and execute_items:
         raise SupervisorError("no_op Campaign 的 execute_items 必须为空。")
-    return {
-        "schema_version": CAMPAIGN_RUN_SCHEMA,
+    normalized = {
+        "schema_version": schema_version,
         "campaign_id": campaign_id,
         "phase": phase,
-        "deadline_seconds": deadline_seconds,
         "no_op": no_op,
         "actions": normalized_actions,
         "execute_items": list(execute_items),
         "reuse_items": list(reuse_items),
     }
+    if schema_version == CAMPAIGN_RUN_SCHEMA:
+        normalized["deadline_seconds"] = deadline_seconds
+    else:
+        normalized.update(
+            {
+                "campaign_plan_sha256": payload["campaign_plan_sha256"],
+                "batch_id": payload["batch_id"],
+                "batch_sequence": payload["batch_sequence"],
+                "batch_sha256": payload["batch_sha256"],
+                "predecessor_checkpoint": dict(payload["predecessor_checkpoint"]),
+                "original_deadline_at_utc": original_deadline_at_utc,
+            }
+        )
+    return normalized
 
 
 def build_campaign_run_manifest(
@@ -3559,6 +3687,52 @@ def build_campaign_run_manifest(
     return payload
 
 
+def build_batched_campaign_run_manifest(
+    *,
+    campaign_id: str,
+    campaign_plan_sha256: str,
+    batch_id: str,
+    batch_sequence: int,
+    batch_sha256: str,
+    phase: str,
+    predecessor_checkpoint: Mapping[str, Any],
+    original_deadline_at_utc: str,
+    actions: Sequence[Mapping[str, Any]],
+    execute_items: Sequence[str],
+    reuse_items: Sequence[str],
+) -> dict[str, Any]:
+    """把已冻结 VC batch 编译成使用绝对总截止时间的 v2 队列。"""
+
+    payload = {
+        "schema_version": CAMPAIGN_RUN_BATCHED_SCHEMA,
+        "campaign_id": campaign_id,
+        "campaign_plan_sha256": campaign_plan_sha256,
+        "batch_id": batch_id,
+        "batch_sequence": batch_sequence,
+        "batch_sha256": batch_sha256,
+        "phase": phase,
+        "predecessor_checkpoint": dict(predecessor_checkpoint),
+        "original_deadline_at_utc": original_deadline_at_utc,
+        "no_op": not actions,
+        "actions": [dict(action) for action in actions],
+        "execute_items": list(execute_items),
+        "reuse_items": list(reuse_items),
+    }
+    # 使用与 CLI 完全相同的校验器，避免生成器与执行器对字段或闭集理解不同。
+    descriptor, temporary_name = tempfile.mkstemp(prefix=".campaign-run-v2-", suffix=".json")
+    temporary = Path(temporary_name)
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(_canonical(payload))
+        normalized = _campaign_run_manifest(temporary)
+    finally:
+        temporary.unlink(missing_ok=True)
+    # ``_campaign_run_manifest`` 只增加运行期解析值；不可变文件保持声明字段。
+    normalized.pop("original_deadline_at_epoch", None)
+    return normalized
+
+
 def _campaign_run_lock(state_dir: Path) -> tuple[int, Path]:
     """为一个动作队列占用唯一锁，防止同一目录并发启动多个父监督器。"""
 
@@ -3574,6 +3748,35 @@ def _campaign_run_lock(state_dir: Path) -> tuple[int, Path]:
     return descriptor, state_dir
 
 
+def _campaign_run_history(
+    state_dir: Path,
+    campaign_id: str,
+) -> list[tuple[dict[str, Any], dict[str, Any], Path]]:
+    """读取同一 Campaign 已封存队列，拒绝缺清单或摘要不一致的历史。"""
+
+    history: list[tuple[dict[str, Any], dict[str, Any], Path]] = []
+    for state_path in sorted(state_dir.glob("run-*/state.json")):
+        try:
+            previous = _read_state(state_path.parent)
+        except SupervisorError:
+            continue
+        if previous.get("campaign_id") != campaign_id:
+            continue
+        record_path = state_path.parent / "campaign-run-manifest.json"
+        if not record_path.is_file() or record_path.is_symlink():
+            raise SupervisorError("同一 Campaign 的历史 run 缺少不可变队列清单。")
+        record = _read_json(record_path)
+        recorded_manifest = record.get("manifest")
+        if (
+            not isinstance(recorded_manifest, dict)
+            or record.get("manifest_sha256")
+            != _sha256(_canonical(recorded_manifest))
+        ):
+            raise SupervisorError("同一 Campaign 的历史队列清单摘要不一致。")
+        history.append((previous, recorded_manifest, state_path.parent))
+    return history
+
+
 def _campaign_run_command(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     """按预声明队列在一个父监督器下自动完成全部动作。"""
 
@@ -3584,18 +3787,67 @@ def _campaign_run_command(args: argparse.Namespace) -> tuple[int, dict[str, Any]
     status = "failed"
     reason = "campaign-run-failed"
     try:
-        # 同一 state-dir 下一个逻辑 Campaign 只能有一个不可变运行实例；恢复必须
-        # 走显式的历史导入流程，不能用同一 campaign-id 重新获得一份新 deadline。
-        for state_path in sorted(state_dir.glob("run-*/state.json")):
-            try:
-                previous = _read_state(state_path.parent)
-            except SupervisorError:
-                continue
-            if previous.get("campaign_id") == manifest["campaign_id"]:
+        history = _campaign_run_history(state_dir, str(manifest["campaign_id"]))
+        if manifest["schema_version"] == CAMPAIGN_RUN_SCHEMA:
+            # v1 只有相对预算，不能安全承接后续批次；保留历史行为且禁止复用 ID。
+            if history:
                 raise SupervisorError(
                     "同一 campaign-id 已有历史运行实例，拒绝重新起算 deadline。"
                 )
-        deadline = time.time() + float(manifest["deadline_seconds"])
+            deadline = time.time() + float(manifest["deadline_seconds"])
+        else:
+            if any(
+                prior_manifest.get("schema_version")
+                != CAMPAIGN_RUN_BATCHED_SCHEMA
+                for _state, prior_manifest, _run_dir in history
+            ):
+                raise SupervisorError("batched Campaign 不得与历史 v1 run 混用。")
+            ordered = sorted(
+                history,
+                key=lambda item: int(item[1].get("batch_sequence", 0)),
+            )
+            sequences = [
+                int(prior_manifest.get("batch_sequence", 0))
+                for _state, prior_manifest, _run_dir in ordered
+            ]
+            expected_prior = list(range(1, int(manifest["batch_sequence"])))
+            if sequences != expected_prior:
+                raise SupervisorError(
+                    "Campaign batch_sequence 必须从 1 连续递增，禁止跳批、重复或回退。"
+                )
+            if any(
+                state.get("state") != "stopped"
+                for state, _prior_manifest, _run_dir in ordered
+            ):
+                raise SupervisorError("前序 Campaign 批次未以成功终态完成。")
+            if any(
+                prior_manifest.get("original_deadline_at_utc")
+                != manifest["original_deadline_at_utc"]
+                or prior_manifest.get("campaign_plan_sha256")
+                != manifest["campaign_plan_sha256"]
+                for _state, prior_manifest, _run_dir in ordered
+            ):
+                raise SupervisorError("Campaign 后继批次改变了总计划或原始 deadline。")
+            seen_batch_ids = {
+                str(prior_manifest.get("batch_id"))
+                for _state, prior_manifest, _run_dir in ordered
+            }
+            seen_batch_digests = {
+                str(prior_manifest.get("batch_sha256"))
+                for _state, prior_manifest, _run_dir in ordered
+            }
+            if (
+                manifest["batch_id"] in seen_batch_ids
+                or manifest["batch_sha256"] in seen_batch_digests
+            ):
+                raise SupervisorError("Campaign 后继批次重复使用既有批次身份。")
+            deadline = datetime.fromisoformat(
+                str(manifest["original_deadline_at_utc"]).replace("Z", "+00:00")
+            ).timestamp()
+            if deadline <= time.time():
+                raise SupervisorError(
+                    "Campaign 原始绝对 deadline 已经过期，禁止重新计时。"
+                )
         client = SupervisorClient(
             state_dir,
             campaign_id=str(manifest["campaign_id"]),
@@ -3613,7 +3865,7 @@ def _campaign_run_command(args: argparse.Namespace) -> tuple[int, dict[str, Any]
         _write_json(
             client.run_dir / "campaign-run-manifest.json",
             {
-                "schema_version": CAMPAIGN_RUN_SCHEMA,
+                "schema_version": manifest["schema_version"],
                 "manifest_sha256": _sha256(_canonical(manifest)),
                 "manifest": manifest,
             },
@@ -3673,6 +3925,17 @@ def _campaign_run_command(args: argparse.Namespace) -> tuple[int, dict[str, Any]
             "execute_items": list(manifest.get("execute_items", [])),
             "reuse_items": list(manifest.get("reuse_items", [])),
         }
+        if manifest["schema_version"] == CAMPAIGN_RUN_BATCHED_SCHEMA:
+            payload.update(
+                {
+                    "batch_id": manifest["batch_id"],
+                    "batch_sequence": manifest["batch_sequence"],
+                    "batch_sha256": manifest["batch_sha256"],
+                    "original_deadline_at_utc": manifest[
+                        "original_deadline_at_utc"
+                    ],
+                }
+            )
         return (0 if status == "stopped" else 1), payload
     except BaseException as error:
         reason = f"{type(error).__name__}"
@@ -3793,7 +4056,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "--manifest",
         required=True,
         type=Path,
-        help="0600 的 codex-upgrade-campaign-run/v1 动作队列清单",
+        help=(
+            "0600 的 campaign-run 动作队列清单；历史兼容使用 v1，"
+            "VC-0～VC-6 正式分批流程使用 v2"
+        ),
     )
     campaign_run.add_argument(
         "--heartbeat-seconds",

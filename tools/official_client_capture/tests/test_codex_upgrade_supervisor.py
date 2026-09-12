@@ -422,37 +422,48 @@ class SupervisorTests(unittest.TestCase):
             path.chmod(0o600)
             self.assertEqual(_campaign_run_manifest(path)["reuse_items"], ["inherited-rule"])
 
-    def test_campaign_run_manifest_rejects_legacy_write_command_before_start(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            manifest = root / "manifest.json"
-            manifest.write_text(
-                json.dumps(
-                    {
-                        "schema_version": "codex-upgrade-campaign-run/v1",
-                        "campaign_id": "campaign-build",
-                        "phase": "official",
-                        "deadline_seconds": 30,
-                        "no_op": False,
-                        "actions": [
-                            {
-                                "action_id": "legacy",
-                                "operation": "VC-2:legacy",
-                                "timeout_seconds": 10,
-                                "command": [
-                                    sys.executable,
-                                    "codex_upgrade.py",
-                                    "successor",
-                                ],
-                            }
-                        ],
-                    }
-                ),
-                encoding="utf-8",
-            )
-            manifest.chmod(0o600)
-            with self.assertRaisesRegex(SupervisorError, "旧监督／写入入口"):
-                _campaign_run_manifest(manifest)
+    def test_campaign_run_manifest_rejects_control_and_legacy_write_commands_before_start(
+        self,
+    ) -> None:
+        for command in (
+            "successor",
+            "plan",
+            "reuse-official-evidence",
+            "compile-vc-batch",
+        ):
+            with self.subTest(command=command), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                manifest = root / "manifest.json"
+                manifest.write_text(
+                    json.dumps(
+                        {
+                            "schema_version": "codex-upgrade-campaign-run/v1",
+                            "campaign_id": "campaign-build",
+                            "phase": "official",
+                            "deadline_seconds": 30,
+                            "no_op": False,
+                            "actions": [
+                                {
+                                    "action_id": "forbidden",
+                                    "operation": "VC-2:forbidden",
+                                    "timeout_seconds": 10,
+                                    "command": [
+                                        sys.executable,
+                                        "codex_upgrade.py",
+                                        command,
+                                    ],
+                                }
+                            ],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                manifest.chmod(0o600)
+                with self.assertRaisesRegex(
+                    SupervisorError,
+                    "控制面或旧写入入口",
+                ):
+                    _campaign_run_manifest(manifest)
 
     def test_campaign_run_rejects_reusing_campaign_id(self) -> None:
         """同一逻辑 Campaign 不能靠再次启动重新获得 deadline。"""

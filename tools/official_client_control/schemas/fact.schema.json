@@ -23,6 +23,7 @@
       "enum": [
         "discovery_recorded",
         "evidence_recorded",
+        "rule_classification_recorded",
         "evidence_approved",
         "profile_approved",
         "candidate_frozen",
@@ -32,6 +33,8 @@
         "scenario_approved",
         "pair_recorded",
         "acceptance_recorded",
+        "validation_attempt_created",
+        "validation_completed",
         "selector_observed",
         "selector_activated",
         "release_promoted",
@@ -40,7 +43,8 @@
         "active",
         "rollback_verified",
         "restored_active",
-        "inventory_current_appended"
+        "inventory_current_appended",
+        "candidate_delivery_recorded"
       ]
     },
     "sequence": {"type": "integer", "minimum": 1},

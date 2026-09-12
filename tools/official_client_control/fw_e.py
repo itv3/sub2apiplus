@@ -26,13 +26,9 @@ from .canonical import (
     validate_relative_path,
 )
 from .contracts import (
-    COMPATIBILITY_CLASSES,
     EGRESS_DISPOSITIONS,
     EGRESS_GUARD_STATES,
-    EVIDENCE_LEVELS,
     INGRESS_DISPOSITIONS,
-    MIGRATION_DECISIONS,
-    RULE_LIFECYCLES,
     SPEC_ID_RE,
     campaign_identity_sha256,
     validate_persona,
@@ -42,7 +38,7 @@ from .receipts import control_tool_bundle_sha256
 from .store import ControlStore
 
 
-PLAN_SCHEMA = "official-client-fw-e-seal-plan/v3"
+PLAN_SCHEMA = "official-client-fw-e-seal-plan/v4"
 TARGET_INVENTORY_SCHEMA = "claude-code-target-sink-inventory/v1"
 CROSS_SOURCE_MATRIX_SCHEMA = "claude-code-fw-e-cross-source-matrix/v2"
 COMPLETENESS_SCHEMA = "claude-code-fw-e-completeness/v2"
@@ -390,121 +386,61 @@ def _expect_enum(value: Any, allowed: set[str], label: str) -> str:
     return text
 
 
-def _validate_rules(
-    rules: Any,
-    expected_rule_ids: list[str],
+def _validate_evidence_items(
+    evidence_items: Any,
+    expected_source_ids: list[str],
     external_root: Path,
 ) -> list[dict[str, Any]]:
-    if not isinstance(rules, list) or not rules:
-        raise ControlError("FW-E rules 必须是非空数组")
+    """把 VC-1 证据项封存为事实输入，不接受任何迁移或规则结论。"""
+
+    if not isinstance(evidence_items, list) or not evidence_items:
+        raise ControlError("FW-E evidence_items 必须是非空数组")
     normalized: list[dict[str, Any]] = []
-    identities: list[str] = []
-    for index, raw in enumerate(rules):
-        label = f"FW-E rules[{index}]"
+    evidence_ids: list[str] = []
+    covered_source_ids: set[str] = set()
+    for index, raw in enumerate(evidence_items):
+        label = f"FW-E evidence_items[{index}]"
         if not isinstance(raw, dict):
             raise ControlError(f"{label} 必须是对象")
         expect_exact_keys(
             raw,
             {
-                "spec_id",
-                "evidence_level",
-                "rule_lifecycle",
-                "compatibility_class",
-                "migration_decision",
-                "decision_basis",
-                "semantic_equivalence_proven",
+                "evidence_id",
+                "source_ids",
                 "evidence_paths",
                 "applicability",
             },
             label,
         )
-        spec_id = expect_string(raw["spec_id"], f"{label}.spec_id")
-        if not SPEC_ID_RE.fullmatch(spec_id):
-            raise ControlError(f"{label}.spec_id 非法")
-        identities.append(spec_id)
-        evidence_level = _expect_enum(
-            raw["evidence_level"], EVIDENCE_LEVELS, f"{label}.evidence_level"
-        )
-        lifecycle = _expect_enum(
-            raw["rule_lifecycle"], RULE_LIFECYCLES, f"{label}.rule_lifecycle"
-        )
-        compatibility = _expect_enum(
-            raw["compatibility_class"],
-            COMPATIBILITY_CLASSES,
-            f"{label}.compatibility_class",
-        )
-        decision = _expect_enum(
-            raw["migration_decision"],
-            MIGRATION_DECISIONS,
-            f"{label}.migration_decision",
-        )
-        basis = _expect_enum(
-            raw["decision_basis"],
-            {
-                "semantic_equivalence_proven",
-                "observed_difference",
-                "inheritance_not_proven",
-                "new_target_rule",
-                "removed_target_rule",
-                "condition_difference",
-            },
-            f"{label}.decision_basis",
-        )
-        equivalence = raw["semantic_equivalence_proven"]
-        if not isinstance(equivalence, bool):
-            raise ControlError(f"{label}.semantic_equivalence_proven 必须是布尔值")
-        if decision == "inherit" and (
-            not equivalence or basis != "semantic_equivalence_proven"
-        ):
-            raise ControlError(f"{spec_id} 未证明语义等价，禁止使用 inherit")
-        if decision != "inherit" and equivalence:
-            raise ControlError(f"{spec_id} 非 inherit 决策不得声称语义等价已证明")
-        if decision == "delete" and lifecycle != "superseded":
-            raise ControlError(f"{spec_id} delete 必须使用 superseded 生命周期")
-        if evidence_level == "verified" and basis == "inheritance_not_proven":
-            raise ControlError(f"{spec_id} 继承未证明时不能标为 verified")
+        evidence_id = expect_safe_id(raw["evidence_id"], f"{label}.evidence_id")
+        evidence_ids.append(evidence_id)
+        source_ids = expect_string_list(raw["source_ids"], f"{label}.source_ids")
+        for source_index, source_id in enumerate(source_ids):
+            expect_safe_id(source_id, f"{label}.source_ids[{source_index}]")
+        covered_source_ids.update(source_ids)
         evidence_paths = expect_string_list(
             raw["evidence_paths"], f"{label}.evidence_paths"
         )
         applicability = expect_string_list(
             raw["applicability"], f"{label}.applicability"
         )
-        if evidence_level == "blocked":
-            required_validation_markers = {
-                "approval_scope=validation_only",
-                "production_eligibility=denied",
-            }
-            if (
-                lifecycle != "candidate"
-                or decision != "add"
-                or not required_validation_markers.issubset(set(applicability))
-                or not any(
-                    item.startswith("validation_scope=") for item in applicability
-                )
-            ):
-                raise ControlError(
-                    f"{spec_id} blocked 规则只有在 validation-only、禁止生产且边界明确时才能封存 FW-E"
-                )
         normalized.append(
             {
-                "spec_id": spec_id,
-                "evidence_level": evidence_level,
-                "rule_lifecycle": lifecycle,
-                "compatibility_class": compatibility,
-                "migration_decision": decision,
+                "evidence_id": evidence_id,
+                "source_ids": source_ids,
                 "evidence_refs": [
                     external_binding(external_root, path) for path in evidence_paths
                 ],
                 "applicability": applicability,
             }
         )
-    expected = expect_string_list(expected_rule_ids, "expected_rule_ids")
-    if identities != sorted(set(identities)):
-        raise ControlError("FW-E rules 必须按 spec_id 排序且不得重复")
-    if identities != expected:
-        missing = sorted(set(expected) - set(identities))
-        extra = sorted(set(identities) - set(expected))
-        raise ControlError(f"FW-E 规则台账未闭合：missing={missing}, extra={extra}")
+    expected = set(expect_string_list(expected_source_ids, "expected_source_ids"))
+    if evidence_ids != sorted(set(evidence_ids)):
+        raise ControlError("FW-E evidence_items 必须按 evidence_id 排序且不得重复")
+    if covered_source_ids != expected:
+        missing = sorted(expected - covered_source_ids)
+        extra = sorted(covered_source_ids - expected)
+        raise ControlError(f"FW-E 证据来源未闭合：missing={missing}, extra={extra}")
     return normalized
 
 
@@ -850,7 +786,7 @@ def seal_fw_e_plan(
             "cross_source_matrix_path",
             "completeness_closure_path",
             "capture_index_path",
-            "rules",
+            "evidence_items",
             "inventory_observed_at_utc",
             "inventory_evidence_paths",
             "ingress_aliases",
@@ -906,8 +842,8 @@ def seal_fw_e_plan(
     inventory_bindings = external_bindings(
         external_root, plan["inventory_evidence_paths"], "inventory_evidence_paths"
     )
-    rules = _validate_rules(
-        plan["rules"], completeness["expected_rule_ids"], external_root
+    evidence_items = _validate_evidence_items(
+        plan["evidence_items"], completeness["expected_rule_ids"], external_root
     )
     aliases = _validate_aliases(plan["ingress_aliases"])
     ingress_entries = _validate_ingress_entries(plan["ingress_entries"])
@@ -1093,7 +1029,7 @@ def seal_fw_e_plan(
     evidence_package_ref = store.seal_object(
         "evidence_package",
         {
-            "schema_version": "official-client-evidence-package/v2",
+            "schema_version": "official-client-evidence-package/v3",
             "persona": persona,
             "version": target_version,
             "official_artifacts": official_artifacts,
@@ -1103,7 +1039,7 @@ def seal_fw_e_plan(
             "comparison_policy_ref": traffic_policy_ref,
             "completeness_ref": completeness_ref,
             "producer_tool_sha256": tool_sha256,
-            "rules": rules,
+            "evidence_items": evidence_items,
         },
     )
     evidence_fact_ref = store.append_fact(
@@ -1139,7 +1075,8 @@ def seal_fw_e_plan(
         "egress_disposition_inventory_ref": egress_inventory_ref,
         "target_disposition_proposal_ref": proposal_ref,
         "tool_bundle_sha256": tool_sha256,
-        "rule_count": len(rules),
+        "evidence_item_count": len(evidence_items),
+        "source_candidate_count": len(completeness["expected_rule_ids"]),
         "semantic_candidate_count": completeness["semantic_candidate_count"],
         "discovery_item_count": completeness["discovery_item_count"],
         "target_sink_count": completeness["target_sink_count"],

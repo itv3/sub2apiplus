@@ -112,6 +112,12 @@
     "surface": {
       "$ref": "#/$defs/fileBinding"
     },
+    "discovery_inventory": {
+      "$ref": "#/$defs/fileBinding"
+    },
+    "official_diff": {
+      "$ref": "#/$defs/fileBinding"
+    },
     "client_bindings": {
       "type": "array",
       "uniqueItems": true,
@@ -151,6 +157,12 @@
       "$ref": "#/$defs/fileBinding"
     },
     "assertion_profile_manifest": {
+      "$ref": "#/$defs/fileBinding"
+    },
+    "profile_derivation": {
+      "$ref": "#/$defs/fileBinding"
+    },
+    "post_promotion_gate_requirements": {
       "$ref": "#/$defs/fileBinding"
     },
     "joint_manifest_sha256": {

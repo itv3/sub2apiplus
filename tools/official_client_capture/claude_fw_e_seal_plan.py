@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""由冻结证据、规则台账和当前 Inventory 生成 Claude FW-E v2 封存计划。"""
+"""由冻结证据、历史预评估和当前 Inventory 生成 Claude FW-E v4 封存计划。"""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from tools.official_client_control.canonical import (  # noqa: E402
 from tools.official_client_control.errors import ControlError  # noqa: E402
 
 
-PLAN_SCHEMA = "official-client-fw-e-seal-plan/v3"
+PLAN_SCHEMA = "official-client-fw-e-seal-plan/v4"
 ASSESSMENTS_SCHEMA = "claude-code-fw-e-rule-assessments/v2"
 FREEZE_SCHEMA = "claude-code-fw-e-official-freeze/v1"
 
@@ -391,17 +391,52 @@ def build_seal_plan(
     if not set(platforms).issubset(set(freeze.get("platforms", []))):
         raise SealPlanError("seal plan 平台超出官方冻结范围")
     assessments = load_json(rule_assessments_path, "FW-E rule assessments")
-    rules = assessments.get("rules")
+    assessment_rules = assessments.get("rules")
     if (
         assessments.get("schema_version") != ASSESSMENTS_SCHEMA
         or assessments.get("target_version") != target_version
-        or not isinstance(rules, list)
-        or assessments.get("rule_count") != len(rules)
+        or not isinstance(assessment_rules, list)
+        or assessments.get("rule_count") != len(assessment_rules)
     ):
         raise SealPlanError("FW-E rule assessments 不闭合")
-    spec_ids = [row.get("spec_id") for row in rules if isinstance(row, dict)]
-    if len(spec_ids) != len(rules) or spec_ids != sorted(set(spec_ids)):
+    spec_ids = [
+        row.get("spec_id") for row in assessment_rules if isinstance(row, dict)
+    ]
+    if len(spec_ids) != len(assessment_rules) or spec_ids != sorted(set(spec_ids)):
         raise SealPlanError("FW-E rule assessments 身份未排序或重复")
+    evidence_items: list[dict[str, Any]] = []
+    for index, row in enumerate(assessment_rules):
+        if not isinstance(row, dict):
+            raise SealPlanError(f"FW-E rule assessments[{index}] 必须是对象")
+        evidence_paths = row.get("evidence_paths")
+        applicability = row.get("applicability")
+        if (
+            not isinstance(evidence_paths, list)
+            or not evidence_paths
+            or not all(isinstance(item, str) and item for item in evidence_paths)
+            or evidence_paths != sorted(set(evidence_paths))
+        ):
+            raise SealPlanError(
+                f"FW-E rule assessments[{index}].evidence_paths 未排序、重复或为空"
+            )
+        if (
+            not isinstance(applicability, list)
+            or not applicability
+            or not all(isinstance(item, str) and item for item in applicability)
+            or applicability != sorted(set(applicability))
+        ):
+            raise SealPlanError(
+                f"FW-E rule assessments[{index}].applicability 未排序、重复或为空"
+            )
+        spec_id = str(row["spec_id"])
+        evidence_items.append(
+            {
+                "evidence_id": f"EVIDENCE-{spec_id}",
+                "source_ids": [spec_id],
+                "evidence_paths": evidence_paths,
+                "applicability": applicability,
+            }
+        )
 
     aliases, ingress_entries, ingress_sources = validate_ingress_catalog(
         workspace_root, ingress_catalog_path
@@ -485,7 +520,7 @@ def build_seal_plan(
         "capture_index_path": relative_file(
             workspace_root, capture_index_path, "capture index"
         ),
-        "rules": rules,
+        "evidence_items": evidence_items,
         "inventory_observed_at_utc": inventory_observed_at_utc,
         "inventory_evidence_paths": unique_relatives(
             workspace_root, inventory_paths, "inventory evidence"

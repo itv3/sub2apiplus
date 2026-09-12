@@ -1,0 +1,160 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2api.local/schemas/official-client-validation-workflow-v1.json",
+  "title": "VC-5 严格验证工作流",
+  "description": "ValidationExecutionPlan、ValidationAttempt、CandidateEvidencePackage 与 VC-5 完成事实的闭集。",
+  "oneOf": [
+    {"$ref": "#/$defs/plan"},
+    {"$ref": "#/$defs/evidence"},
+    {"$ref": "#/$defs/attempt"},
+    {"$ref": "#/$defs/completed"},
+    {"$ref": "#/$defs/acceptance"}
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "campaign_id", "persona", "plan_id", "candidate_id", "candidate_ref", "candidate_build_receipt_ref", "profile_approval_ref", "scenario_plan_ref", "atomic_assertion_ledger_ref", "validation_scope_sha256", "execute_item_ids", "reuse_item_ids", "external_gates", "run_conditions", "production_selector_before_ref", "vircs_state", "identity_sha256"],
+      "properties": {
+        "schema_version": {"const": "official-client-validation-execution-plan/v1"},
+        "campaign_id": {"type": "string"},
+        "persona": {"type": "object"},
+        "plan_id": {"type": "string"},
+        "candidate_id": {"type": "string"},
+        "candidate_ref": {"type": "object"},
+        "candidate_build_receipt_ref": {"type": "object"},
+        "profile_approval_ref": {"type": "object"},
+        "scenario_plan_ref": {"type": "object"},
+        "atomic_assertion_ledger_ref": {"type": "object"},
+        "validation_scope_sha256": {"$ref": "#/$defs/sha256"},
+        "execute_item_ids": {"type": "array", "minItems": 1, "items": {"type": "string"}, "uniqueItems": true},
+        "reuse_item_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "external_gates": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["gate_id", "requirement_sha256", "source", "command", "working_directory", "host_id", "architecture", "reused_receipt_ref", "previous_failed_receipt_ref"],
+            "properties": {
+              "gate_id": {"type": "string"},
+              "requirement_sha256": {"$ref": "#/$defs/sha256"},
+              "source": {"enum": ["execute", "reuse"]},
+              "command": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+              "working_directory": {"type": "string"},
+              "host_id": {"type": "string"},
+              "architecture": {"type": "string"},
+              "reused_receipt_ref": {"oneOf": [{"type": "null"}, {"type": "object"}]},
+              "previous_failed_receipt_ref": {"oneOf": [{"type": "null"}, {"type": "object"}]}
+            }
+          }
+        },
+        "run_conditions": {"type": "object"},
+        "production_selector_before_ref": {"type": "object"},
+        "vircs_state": {"$ref": "#/$defs/vircs"},
+        "identity_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "campaign_id", "persona", "target_version", "package_id", "candidate_id", "attempt_id", "candidate_ref", "candidate_build_receipt_ref", "validation_attempt_ref", "atomic_assertion_ledger_ref", "scenario_approval_refs", "scenario_assertion_results", "raw_evidence_inventory", "environment_before_ref", "environment_after_ref", "recovery_evidence_ref", "secret_scan_evidence_ref", "artifact_count", "inventory_sha256", "identity_sha256"],
+      "properties": {
+        "schema_version": {"const": "official-client-candidate-evidence-package/v1"},
+        "campaign_id": {"type": "string"},
+        "persona": {"type": "object"},
+        "target_version": {"type": "string"},
+        "package_id": {"type": "string"},
+        "candidate_id": {"type": "string"},
+        "attempt_id": {"type": "string"},
+        "candidate_ref": {"type": "object"},
+        "candidate_build_receipt_ref": {"type": "object"},
+        "validation_attempt_ref": {"type": "object"},
+        "atomic_assertion_ledger_ref": {"type": "object"},
+        "scenario_approval_refs": {"type": "array", "minItems": 1},
+        "scenario_assertion_results": {"type": "array"},
+        "raw_evidence_inventory": {"type": "array", "minItems": 1},
+        "environment_before_ref": {"type": "object"},
+        "environment_after_ref": {"type": "object"},
+        "recovery_evidence_ref": {"type": "object"},
+        "secret_scan_evidence_ref": {"type": "object"},
+        "artifact_count": {"type": "integer", "minimum": 1},
+        "inventory_sha256": {"$ref": "#/$defs/sha256"},
+        "identity_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "attempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "attempt_id", "candidate_id", "candidate_ref", "candidate_build_receipt_ref", "validation_execution_plan_ref", "run_conditions", "production_selector_before_ref", "vircs_state", "result", "identity_sha256"],
+      "properties": {
+        "schema_version": {"const": "official-client-validation-attempt/v1"},
+        "attempt_id": {"type": "string"},
+        "candidate_id": {"type": "string"},
+        "candidate_ref": {"type": "object"},
+        "candidate_build_receipt_ref": {"type": "object"},
+        "validation_execution_plan_ref": {"type": "object"},
+        "run_conditions": {"type": "object"},
+        "production_selector_before_ref": {"type": "object"},
+        "vircs_state": {"$ref": "#/$defs/vircs"},
+        "result": {"const": "created"},
+        "identity_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "completed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "attempt_id", "candidate_id", "candidate_ref", "candidate_build_receipt_ref", "validation_attempt_ref", "validation_execution_plan_ref", "candidate_evidence_package_ref", "acceptance_ref", "pair_refs", "external_gate_receipt_refs", "production_selector_after_ref", "vircs_state", "result", "identity_sha256"],
+      "properties": {
+        "schema_version": {"const": "official-client-validation-completed/v1"},
+        "attempt_id": {"type": "string"},
+        "candidate_id": {"type": "string"},
+        "candidate_ref": {"type": "object"},
+        "candidate_build_receipt_ref": {"type": "object"},
+        "validation_attempt_ref": {"type": "object"},
+        "validation_execution_plan_ref": {"type": "object"},
+        "candidate_evidence_package_ref": {"type": "object"},
+        "acceptance_ref": {"type": "object"},
+        "pair_refs": {"type": "array", "minItems": 1},
+        "external_gate_receipt_refs": {"type": "array", "minItems": 1},
+        "production_selector_after_ref": {"type": "object"},
+        "vircs_state": {"$ref": "#/$defs/vircs"},
+        "result": {"const": "passed"},
+        "identity_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "acceptance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "candidate_id", "profile_approval_ref", "candidate_ref", "candidate_build_receipt_ref", "validation_attempt_ref", "candidate_evidence_package_ref", "atomic_assertion_ledger_ref", "pair_refs", "boundary_assertion_refs", "inventory_assertion_refs", "external_gate_receipt_refs", "acceptance_purpose", "result", "identity_sha256"],
+      "properties": {
+        "schema_version": {"const": "official-client-acceptance/v2"},
+        "candidate_id": {"type": "string"},
+        "profile_approval_ref": {"type": "object"},
+        "candidate_ref": {"type": "object"},
+        "candidate_build_receipt_ref": {"type": "object"},
+        "validation_attempt_ref": {"type": "object"},
+        "candidate_evidence_package_ref": {"type": "object"},
+        "atomic_assertion_ledger_ref": {"type": "object"},
+        "pair_refs": {"type": "array", "minItems": 1},
+        "boundary_assertion_refs": {"type": "array", "minItems": 1},
+        "inventory_assertion_refs": {"type": "array", "minItems": 1},
+        "external_gate_receipt_refs": {"type": "array", "minItems": 1},
+        "acceptance_purpose": {"enum": ["validation_only", "production_replacement"]},
+        "result": {"enum": ["validation_only", "accepted"]},
+        "identity_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "vircs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ownership", "verification", "action"],
+      "properties": {
+        "ownership": {"const": "operator_managed"},
+        "verification": {"const": "unverified"},
+        "action": {"const": "not_touched"}
+      }
+    }
+  }
+}

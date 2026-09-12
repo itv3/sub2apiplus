@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2api.local/schemas/official-client-atomic-assertion-ledger-v1.json",
+  "title": "VC-2 原子断言台账",
+  "description": "冻结目标 RequiredRule 与 scenario-only 原子断言的唯一归属、证据通道和结果。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "campaign_id",
+    "persona",
+    "target_version",
+    "rule_migration_ledger_ref",
+    "scenario_only_owner_ids",
+    "assertions",
+    "identity_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "official-client-atomic-assertion-ledger/v1"},
+    "campaign_id": {"$ref": "#/$defs/safeId"},
+    "persona": {"$ref": "#/$defs/persona"},
+    "target_version": {"type": "string", "minLength": 1},
+    "rule_migration_ledger_ref": {"$ref": "#/$defs/objectRef"},
+    "scenario_only_owner_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/safeId"}
+    },
+    "assertions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/assertion"}
+    },
+    "identity_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "safeId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]{0,127}$"
+    },
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "persona": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "official_product", "auth_family", "upstream_route_family"],
+      "properties": {
+        "provider": {"$ref": "#/$defs/safeId"},
+        "official_product": {"$ref": "#/$defs/safeId"},
+        "auth_family": {"const": "oauth"},
+        "upstream_route_family": {"$ref": "#/$defs/safeId"}
+      }
+    },
+    "objectRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["object_kind", "sha256"],
+      "properties": {
+        "object_kind": {"const": "rule_migration_ledger"},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "assertion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "assertion_id",
+        "owner_kind",
+        "owner_id",
+        "evidence_item_ids",
+        "conditions",
+        "channels",
+        "result"
+      ],
+      "properties": {
+        "assertion_id": {"$ref": "#/$defs/safeId"},
+        "owner_kind": {"enum": ["required_rule", "scenario_only"]},
+        "owner_id": {"$ref": "#/$defs/safeId"},
+        "evidence_item_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/safeId"}
+        },
+        "conditions": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "channels": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"enum": ["P", "R", "J", "M"]}
+        },
+        "result": {"enum": ["pass", "observed"]}
+      }
+    }
+  }
+}

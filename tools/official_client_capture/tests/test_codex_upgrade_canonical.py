@@ -375,43 +375,16 @@ class CanonicalImportTests(unittest.TestCase):
             self.assertEqual(lease["campaign_id"], "campaign-151")
             self.assertEqual(lease["state"], "released")
 
-    def test_fresh_campaign_initializes_native_checkpoint(self) -> None:
+    def test_incomplete_0154_fixture_cannot_initialize_native_checkpoint(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             arguments = self._fixture(Path(directory))
             arguments.retire_version = "0.149.1"
             self._make_native_attempt(arguments)
-
-            preview = codex_upgrade.import_canonical_checkpoint(arguments)
-            self.assertEqual(preview["source_kind"], "native")
-            self.assertIn("retire-0.149.1", preview["execute_item_ids"])
-            arguments.approve_import_sha256 = preview["review_sha256"]
-            completed = codex_upgrade.import_canonical_checkpoint(arguments)
-            self.assertEqual(completed["source_kind"], "native")
-
-            checkpoint = incremental_recovery.CanonicalCheckpointStore(
-                arguments.campaign_dir / "canonical" / "checkpoints",
-                create=False,
-            ).latest()
-            self.assertIsNotNone(checkpoint)
-            assert checkpoint is not None
-            self.assertEqual(checkpoint["source"]["kind"], "native")
-            self.assertEqual(checkpoint["source"]["legacy_object_types"], [])
-            self.assertEqual(len(checkpoint["source"]["receipt_refs"]), 1)
-            jobs = {
-                item["item_id"]: item
-                for item in checkpoint["items"]
-                if item["details"].get("kind") == "candidate-job"
-            }
-            self.assertEqual(set(jobs), {"candidate-a", "candidate-b"})
-            self.assertTrue(
-                all(item["disposition"] == "executed" for item in jobs.values())
-            )
-            self.assertTrue(
-                all(
-                    item["source"]["path"].endswith("/attempt.json")
-                    for item in jobs.values()
-                )
-            )
+            with self.assertRaisesRegex(
+                codex_upgrade.ConfigurationError,
+                "campaign.json 或 campaign.sha256",
+            ):
+                codex_upgrade.import_canonical_checkpoint(arguments)
 
     def test_0154_patch_manifest_binds_real_active_profile(self) -> None:
         """0.154 补丁必须绑定活动画像文件，并通过正式派生校验。"""

@@ -13,7 +13,11 @@ from .gates import WorkflowGates
 from .receipts import (
     control_tool_bundle_sha256,
     finalize_activation,
+    finalize_candidate_build,
+    finalize_candidate_delivery,
     finalize_promotion,
+    finalize_validation,
+    finalize_validation_gate,
     replay_receipt,
 )
 from .store import ControlStore
@@ -22,6 +26,7 @@ from .store import ControlStore
 FACT_COMMANDS = {
     "discovery-record": "discovery_recorded",
     "evidence-record": "evidence_recorded",
+    "rule-classification-record": "rule_classification_recorded",
     "evidence-approve": "evidence_approved",
     "profile-approve": "profile_approved",
     "candidate-freeze": "candidate_frozen",
@@ -31,6 +36,7 @@ FACT_COMMANDS = {
     "scenario-approve": "scenario_approved",
     "pair-record": "pair_recorded",
     "acceptance-record": "acceptance_recorded",
+    "validation-attempt-create": "validation_attempt_created",
     "selector-observe": "selector_observed",
     "selector-activate": "selector_activated",
     "promotion-record": "release_promoted",
@@ -103,6 +109,54 @@ def build_parser() -> argparse.ArgumentParser:
     activation.add_argument("--selector-after-ref", required=True, type=_absolute_path)
     activation.add_argument("--inventory-current-ref", required=True, type=_absolute_path)
 
+    candidate_build = subparsers.add_parser(
+        "candidate-build-finalize", help="生成不可覆盖 CandidateBuildReceipt"
+    )
+    _add_store(candidate_build)
+    candidate_build.add_argument("--campaign", required=True)
+    candidate_build.add_argument("--input", required=True, type=_absolute_path)
+
+    validation_gate = subparsers.add_parser(
+        "validation-gate-finalize", help="生成一次执行或复用的外部门禁收据"
+    )
+    _add_store(validation_gate)
+    validation_gate.add_argument("--campaign", required=True)
+    validation_gate.add_argument("--attempt-ref", required=True, type=_absolute_path)
+    validation_gate.add_argument("--input", required=True, type=_absolute_path)
+
+    validation = subparsers.add_parser(
+        "validation-finalize", help="复算严格验收链并追加 VC-5 完成事实"
+    )
+    _add_store(validation)
+    validation.add_argument("--campaign", required=True)
+    validation.add_argument("--acceptance-ref", required=True, type=_absolute_path)
+    validation.add_argument("--selector-after-ref", required=True, type=_absolute_path)
+    validation.add_argument("--issued-at", required=True)
+
+    candidate_delivery = subparsers.add_parser(
+        "candidate-delivery-record", help="追加候选交付四阶段事实"
+    )
+    _add_fact_command(candidate_delivery)
+    candidate_delivery.add_argument(
+        "--stage",
+        required=True,
+        choices=(
+            "candidate_active",
+            "rollback_verified",
+            "candidate_restored",
+            "stable_observed",
+        ),
+    )
+
+    candidate_delivery_finalize = subparsers.add_parser(
+        "candidate-delivery-finalize", help="生成 ready_for_operator_release 候选交付收据"
+    )
+    _add_store(candidate_delivery_finalize)
+    candidate_delivery_finalize.add_argument("--campaign", required=True)
+    candidate_delivery_finalize.add_argument(
+        "--package-ref", required=True, type=_absolute_path
+    )
+
     replay = subparsers.add_parser("replay", help="独立复算 Store、事实链和收据")
     _add_store(replay)
     replay.add_argument("--external-root", type=_absolute_path)
@@ -171,6 +225,43 @@ def execute(arguments: argparse.Namespace) -> dict[str, Any]:
             _load_object(arguments.selector_before_ref, "selector before ref"),
             _load_object(arguments.selector_after_ref, "selector after ref"),
             _load_object(arguments.inventory_current_ref, "inventory current ref"),
+        )
+    if command == "candidate-build-finalize":
+        return finalize_candidate_build(
+            store,
+            arguments.campaign,
+            _load_object(arguments.input, "candidate build input"),
+        )
+    if command == "validation-gate-finalize":
+        return finalize_validation_gate(
+            store,
+            arguments.campaign,
+            _load_object(arguments.attempt_ref, "validation attempt ref"),
+            _load_object(arguments.input, "validation gate result"),
+        )
+    if command == "validation-finalize":
+        return finalize_validation(
+            store,
+            arguments.campaign,
+            _load_object(arguments.acceptance_ref, "acceptance ref"),
+            _load_object(arguments.selector_after_ref, "selector after ref"),
+            arguments.issued_at,
+        )
+    if command == "candidate-delivery-record":
+        payload = _load_object(arguments.input, "candidate delivery payload")
+        if payload.get("stage") != arguments.stage:
+            raise ControlError("candidate delivery payload.stage 与 --stage 不一致")
+        return store.append_fact(
+            arguments.campaign,
+            "candidate_delivery_recorded",
+            payload,
+            arguments.issued_at,
+        )
+    if command == "candidate-delivery-finalize":
+        return finalize_candidate_delivery(
+            store,
+            arguments.campaign,
+            _load_object(arguments.package_ref, "candidate delivery package ref"),
         )
     if command == "replay":
         return store.replay(

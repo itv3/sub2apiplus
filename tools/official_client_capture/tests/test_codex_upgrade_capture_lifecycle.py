@@ -528,7 +528,18 @@ class CaptureLifecycleTest(unittest.TestCase):
                     stage_payload=replacement_payload,
                     approve_sha256=None,
                 )
-                with mock.patch.object(codex_upgrade, "save_stage_result"):
+                with (
+                    mock.patch.object(codex_upgrade, "save_stage_result"),
+                    mock.patch.object(
+                        codex_upgrade,
+                        "_require_formal_campaign",
+                        return_value={
+                            "campaign_mode": "formal",
+                            "campaign_purpose": "production_replacement",
+                            "target_version": "0.146.0",
+                        },
+                    ),
+                ):
                     approved = codex_upgrade._approve_frozen_capture_seal(
                         argparse.Namespace(
                             approve_seal_sha256=replacement_preview[
@@ -634,6 +645,16 @@ class CaptureLifecycleTest(unittest.TestCase):
                     codex_upgrade,
                     "campaign_status",
                     return_value={"status": "profile_approved"},
+                ),
+                mock.patch.object(
+                    codex_upgrade,
+                    "_require_formal_campaign",
+                    return_value={
+                        "campaign_id": "campaign-a",
+                        "campaign_mode": "formal",
+                        "campaign_purpose": "production_replacement",
+                        "target_version": "0.146.0",
+                    },
                 ),
                 mock.patch.object(
                     codex_upgrade,

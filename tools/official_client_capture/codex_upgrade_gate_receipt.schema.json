@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-external-gate-receipt-v3.json",
+  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-external-gate-receipt-v4.json",
   "title": "Codex 升级外部门禁 attempt 链收据",
   "type": "object",
   "additionalProperties": false,
@@ -11,6 +11,7 @@
     "attempt",
     "subject",
     "inputs",
+    "gate_plan",
     "environment",
     "executed_gate_ids",
     "carried_gate_ids",
@@ -22,7 +23,7 @@
   ],
   "properties": {
     "schema_version": {
-      "const": "codex-upgrade-external-gate-receipt/v3"
+      "const": "codex-upgrade-external-gate-receipt/v4"
     },
     "phase": {
       "enum": [
@@ -47,6 +48,16 @@
       "items": {
         "$ref": "#/$defs/inputBinding"
       }
+    },
+    "gate_plan": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/gatePlanBinding"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "environment": {
       "type": "object",
@@ -175,6 +186,36 @@
         "bytes": {
           "type": "integer",
           "minimum": 1
+        }
+      }
+    },
+    "gatePlanBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256",
+        "bytes",
+        "plan_sha256",
+        "requirements_sha256"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "plan_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "requirements_sha256": {
+          "$ref": "#/$defs/sha256"
         }
       }
     },
@@ -323,6 +364,9 @@
         "gate_id": {
           "$ref": "#/$defs/safeId"
         },
+        "test_id": {
+          "$ref": "#/$defs/safeId"
+        },
         "command": {
           "type": "array",
           "minItems": 1,
@@ -414,7 +458,7 @@
       ],
       "properties": {
         "schema_version": {
-          "const": "codex-upgrade-external-gate-producer/v3"
+          "const": "codex-upgrade-external-gate-producer/v4"
         },
         "tool": {
           "type": "string",

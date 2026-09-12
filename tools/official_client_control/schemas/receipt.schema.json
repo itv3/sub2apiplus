@@ -1,11 +1,14 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://sub2api.local/schemas/official-client-control-receipt-v1.json",
-  "title": "不可覆盖晋升与激活收据",
-  "description": "收据绑定不可变事实引用、对象摘要、工具身份及确定性复算输入。",
+  "title": "不可覆盖控制收据",
+  "description": "Candidate 构建、验证门禁、候选交付、晋升与激活收据绑定不可变事实引用、对象摘要、工具身份及确定性复算输入。",
   "oneOf": [
     {"$ref": "#/$defs/promotion"},
-    {"$ref": "#/$defs/activation"}
+    {"$ref": "#/$defs/activation"},
+    {"$ref": "#/$defs/candidateBuild"},
+    {"$ref": "#/$defs/validationGate"},
+    {"$ref": "#/$defs/candidateDelivery"}
   ],
   "$defs": {
     "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
@@ -50,6 +53,94 @@
         "input_facts_sha256": {"$ref": "#/$defs/sha256"},
         "completed_at_utc": {"type": "string", "format": "date-time"},
         "producer_tool_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "candidateBuild": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "campaign_id", "candidate_id", "candidate_purpose", "target_version", "profile_approval_ref", "release_artifact_ref", "support_envelope_ref", "source_identity", "profile_identity", "validation_scope_sha256", "build_identity", "artifact_inventory", "image", "input_facts_sha256", "completed_at_utc", "producer_tool_sha256", "identity_sha256"],
+      "properties": {
+        "schema_version": {"const": "official-client-candidate-build-receipt/v1"},
+        "campaign_id": {"type": "string"},
+        "candidate_id": {"type": "string"},
+        "candidate_purpose": {"enum": ["validation_only", "production_replacement"]},
+        "target_version": {"type": "string"},
+        "profile_approval_ref": {"type": "object"},
+        "release_artifact_ref": {"type": "object"},
+        "support_envelope_ref": {"type": "object"},
+        "source_identity": {"type": "object"},
+        "profile_identity": {"type": "object"},
+        "validation_scope_sha256": {"$ref": "#/$defs/sha256"},
+        "build_identity": {"type": "object"},
+        "artifact_inventory": {"type": "object"},
+        "image": {"type": "object"},
+        "input_facts_sha256": {"$ref": "#/$defs/sha256"},
+        "completed_at_utc": {"type": "string", "format": "date-time"},
+        "producer_tool_sha256": {"$ref": "#/$defs/sha256"},
+        "identity_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "validationGate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "campaign_id", "candidate_id", "attempt_id", "candidate_ref", "candidate_build_receipt_ref", "validation_attempt_ref", "validation_execution_plan_ref", "gate_id", "requirement_sha256", "source", "command", "working_directory", "host_id", "architecture", "started_at_utc", "completed_at_utc", "exit_code", "output_sha256", "result", "reused_receipt_ref", "previous_failed_receipt_ref", "input_facts_sha256", "producer_tool_sha256", "identity_sha256"],
+      "properties": {
+        "schema_version": {"const": "official-client-validation-gate-receipt/v1"},
+        "campaign_id": {"type": "string"},
+        "candidate_id": {"type": "string"},
+        "attempt_id": {"type": "string"},
+        "candidate_ref": {"type": "object"},
+        "candidate_build_receipt_ref": {"type": "object"},
+        "validation_attempt_ref": {"type": "object"},
+        "validation_execution_plan_ref": {"type": "object"},
+        "gate_id": {"type": "string"},
+        "requirement_sha256": {"$ref": "#/$defs/sha256"},
+        "source": {"enum": ["execute", "reuse"]},
+        "command": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+        "working_directory": {"type": "string"},
+        "host_id": {"type": "string"},
+        "architecture": {"type": "string"},
+        "started_at_utc": {"type": "string", "format": "date-time"},
+        "completed_at_utc": {"type": "string", "format": "date-time"},
+        "exit_code": {"type": "integer", "minimum": 0},
+        "output_sha256": {"$ref": "#/$defs/sha256"},
+        "result": {"enum": ["pass", "failed"]},
+        "reused_receipt_ref": {"oneOf": [{"type": "null"}, {"type": "object"}]},
+        "previous_failed_receipt_ref": {"oneOf": [{"type": "null"}, {"type": "object"}]},
+        "input_facts_sha256": {"$ref": "#/$defs/sha256"},
+        "producer_tool_sha256": {"$ref": "#/$defs/sha256"},
+        "identity_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "candidateDelivery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "campaign_id", "campaign_purpose", "target_version", "profile_approval_ref", "candidate_id", "candidate_ref", "candidate_build_receipt_ref", "validation_completed_ref", "acceptance_ref", "candidate_evidence_package_ref", "delivery_plan_ref", "delivery_fact_refs", "candidate_delivery_package_ref", "private_archive_manifest_ref", "candidate_image_digest", "host_id", "architecture", "release_state", "vircs_state", "input_facts_sha256", "completed_at_utc", "producer_tool_sha256", "identity_sha256"],
+      "properties": {
+        "schema_version": {"const": "official-client-candidate-delivery-receipt/v1"},
+        "campaign_id": {"type": "string"},
+        "campaign_purpose": {"enum": ["validation_only", "production_replacement"]},
+        "target_version": {"type": "string"},
+        "profile_approval_ref": {"type": "object"},
+        "candidate_id": {"type": "string"},
+        "candidate_ref": {"type": "object"},
+        "candidate_build_receipt_ref": {"type": "object"},
+        "validation_completed_ref": {"type": "object"},
+        "acceptance_ref": {"type": "object"},
+        "candidate_evidence_package_ref": {"type": "object"},
+        "delivery_plan_ref": {"type": "object"},
+        "delivery_fact_refs": {"type": "array", "minItems": 4, "maxItems": 4},
+        "candidate_delivery_package_ref": {"type": "object"},
+        "private_archive_manifest_ref": {"type": "object"},
+        "candidate_image_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "host_id": {"type": "string"},
+        "architecture": {"type": "string"},
+        "release_state": {"const": "ready_for_operator_release"},
+        "vircs_state": {"type": "object"},
+        "input_facts_sha256": {"$ref": "#/$defs/sha256"},
+        "completed_at_utc": {"type": "string", "format": "date-time"},
+        "producer_tool_sha256": {"$ref": "#/$defs/sha256"},
+        "identity_sha256": {"$ref": "#/$defs/sha256"}
       }
     }
   }

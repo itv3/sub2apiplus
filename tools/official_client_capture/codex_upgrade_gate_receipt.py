@@ -13,17 +13,21 @@ import sys
 import tempfile
 from datetime import datetime
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Mapping
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from tools.official_client_capture import codex_upgrade_arm64_environment_receipt
+from tools.official_client_capture import codex_upgrade_vc_artifacts
 
 
-FACTS_SCHEMA = "codex-upgrade-external-gate-facts/v3"
-RECEIPT_SCHEMA = "codex-upgrade-external-gate-receipt/v3"
-PRODUCER_SCHEMA = "codex-upgrade-external-gate-producer/v3"
+LEGACY_FACTS_SCHEMA = "codex-upgrade-external-gate-facts/v3"
+LEGACY_RECEIPT_SCHEMA = "codex-upgrade-external-gate-receipt/v3"
+LEGACY_PRODUCER_SCHEMA = "codex-upgrade-external-gate-producer/v3"
+FACTS_SCHEMA = "codex-upgrade-external-gate-facts/v4"
+RECEIPT_SCHEMA = "codex-upgrade-external-gate-receipt/v4"
+PRODUCER_SCHEMA = "codex-upgrade-external-gate-producer/v4"
 SAME_ROOT_CAUSE_RETRY_LIMIT = 2
 CANDIDATE_PHASE = "candidate_external"
 POST_PROMOTION_PHASE = "post_promotion"
@@ -49,6 +53,8 @@ CANDIDATE_COMMANDS: dict[str, tuple[str, tuple[str, ...]]] = {
     "full-regression": (".", ("make", "test")),
     "target-platform": (".", ("make", "test")),
 }
+# 该静态集合只用于重放已经生成的 v3 历史收据。v4 的 post-promotion
+# 合同必须从 VC-4 门禁计划读取，禁止再把上一版本的 affected rule 写死。
 POST_PROMOTION_COMMANDS: dict[str, tuple[str, tuple[str, ...]]] = {
     "affected-spec-ep-002": (
         "backend",
@@ -100,6 +106,10 @@ POST_PROMOTION_COMMANDS: dict[str, tuple[str, tuple[str, ...]]] = {
         ("python3", "tools/check_version_leak.py", "--self-test"),
     ),
 }
+
+
+def _is_complete_vc_target(version: str) -> bool:
+    return tuple(int(part) for part in version.split(".")) >= (0, 154, 0)
 
 
 class GateReceiptError(ValueError):
@@ -363,11 +373,77 @@ def _validate_subject(value: Any, phase: str) -> dict[str, Any]:
     return normalized
 
 
+def _static_contracts(
+    commands: Mapping[str, tuple[str, tuple[str, ...]]],
+) -> dict[str, dict[str, Any]]:
+    """把历史静态命令规范化为统一的门禁合同结构。"""
+
+    return {
+        gate_id: {
+            "working_directory": working_directory,
+            "command": tuple(command),
+            "test_id": None,
+        }
+        for gate_id, (working_directory, command) in commands.items()
+    }
+
+
+def _validate_gate_plan(
+    root: Path,
+    value: Any,
+    *,
+    phase: str,
+    subject: Mapping[str, Any],
+    legacy: bool,
+) -> tuple[dict[str, Any] | None, dict[str, dict[str, Any]], bool]:
+    """返回（计划绑定、执行合同、gate 行是否必须携带 test_id）。"""
+
+    if legacy:
+        contracts = (
+            CANDIDATE_COMMANDS
+            if phase == CANDIDATE_PHASE
+            else POST_PROMOTION_COMMANDS
+        )
+        return None, _static_contracts(contracts), False
+    if phase == CANDIDATE_PHASE:
+        if value is not None:
+            raise GateReceiptError("candidate_external 不得携带 post-promotion 门禁计划")
+        return None, _static_contracts(CANDIDATE_COMMANDS), False
+    if not isinstance(value, dict):
+        raise GateReceiptError("post_promotion v4 必须绑定 VC-4 门禁执行计划")
+    binding, raw_plan = _binding(root, value, "gate_plan")
+    try:
+        plan = codex_upgrade_vc_artifacts.validate_gate_plan(raw_plan)
+    except codex_upgrade_vc_artifacts.VCArtifactError as error:
+        raise GateReceiptError(f"VC-4 门禁执行计划无法重放：{error}") from error
+    if (
+        plan.get("campaign_id") != subject.get("campaign_id")
+        or plan.get("target_version") != subject.get("target_version")
+    ):
+        raise GateReceiptError("VC-4 门禁执行计划未绑定当前 Campaign 或目标版本")
+    contracts = {
+        str(gate["gate_id"]): {
+            "working_directory": gate["working_directory"],
+            "command": tuple(gate["command"]),
+            "test_id": gate["test_id"],
+        }
+        for gate in plan["gates"]
+    }
+    if not contracts:
+        raise GateReceiptError("VC-4 门禁执行计划不能为空")
+    return {
+        **binding,
+        "plan_sha256": plan["plan_sha256"],
+        "requirements_sha256": plan["requirements_sha256"],
+    }, contracts, True
+
+
 def _validate_inputs(
     root: Path,
     values: Any,
     phase: str,
     subject: dict[str, Any],
+    gate_plan: dict[str, Any] | None,
 ) -> list[dict[str, Any]]:
     if not isinstance(values, list):
         raise GateReceiptError("inputs 必须是数组")
@@ -425,6 +501,24 @@ def _validate_inputs(
             raise GateReceiptError("post_promotion promotion receipt 身份不一致")
         if normalized[1]["sha256"] != subject["promotion_receipt_sha256"]:
             raise GateReceiptError("post_promotion promotion_receipt_sha256 不一致")
+        if _is_complete_vc_target(subject["target_version"]):
+            candidate_identity = acceptance.get("candidate_identity")
+            accepted_plan = (
+                candidate_identity.get("gate_plan")
+                if isinstance(candidate_identity, dict)
+                else None
+            )
+            if (
+                gate_plan is None
+                or not isinstance(accepted_plan, dict)
+                or accepted_plan.get("sha256") != gate_plan["sha256"]
+                or accepted_plan.get("plan_sha256") != gate_plan["plan_sha256"]
+                or accepted_plan.get("requirements_sha256")
+                != gate_plan["requirements_sha256"]
+            ):
+                raise GateReceiptError(
+                    "post_promotion 门禁计划未绑定 VC-5 AcceptanceFact"
+                )
     return normalized
 
 
@@ -433,11 +527,17 @@ def _validate_gates(
     values: Any,
     phase: str,
     architecture: str,
+    contracts: Mapping[str, Mapping[str, Any]],
+    *,
+    require_test_id: bool,
 ) -> tuple[list[dict[str, Any]], str, list[str], list[str]]:
     if not isinstance(values, list) or not values:
         raise GateReceiptError("gates 不能为空")
-    contracts = CANDIDATE_COMMANDS if phase == CANDIDATE_PHASE else POST_PROMOTION_COMMANDS
-    ids = [item.get("gate_id") for item in values if isinstance(item, dict)]
+    ids: list[str] = []
+    for index, item in enumerate(values, 1):
+        if not isinstance(item, dict):
+            raise GateReceiptError(f"gates 第 {index} 项必须是对象")
+        ids.append(_safe_id(item.get("gate_id"), f"gates 第 {index} 项 gate_id"))
     if ids != sorted(ids) or len(set(ids)) != len(ids) or any(
         gate_id not in contracts for gate_id in ids
     ):
@@ -448,31 +548,45 @@ def _validate_gates(
     latest: datetime | None = None
     latest_raw = ""
     for item in values:
+        fields = {
+            "gate_id",
+            "command",
+            "working_directory",
+            "host",
+            "architecture",
+            "started_at_utc",
+            "completed_at_utc",
+            "exit_code",
+            "status",
+            "passed_count",
+            "failed_count",
+            "skipped_count",
+            "stdout_sha256",
+            "stderr_sha256",
+            "evidence",
+        }
+        if require_test_id:
+            fields.add("test_id")
         gate = _expect(
             item,
-            {
-                "gate_id",
-                "command",
-                "working_directory",
-                "host",
-                "architecture",
-                "started_at_utc",
-                "completed_at_utc",
-                "exit_code",
-                "status",
-                "passed_count",
-                "failed_count",
-                "skipped_count",
-                "stdout_sha256",
-                "stderr_sha256",
-                "evidence",
-            },
+            fields,
             "gate",
         )
         gate_id = gate["gate_id"]
-        expected_cwd, expected_command = contracts[gate_id]
-        if gate.get("working_directory") != expected_cwd or gate.get("command") != list(expected_command):
-            raise GateReceiptError(f"门禁 {gate_id} 命令或工作目录不符合冻结合同")
+        contract = contracts[gate_id]
+        expected_cwd = contract["working_directory"]
+        expected_command = contract["command"]
+        if (
+            gate.get("working_directory") != expected_cwd
+            or gate.get("command") != list(expected_command)
+            or (
+                require_test_id
+                and gate.get("test_id") != contract.get("test_id")
+            )
+        ):
+            raise GateReceiptError(
+                f"门禁 {gate_id} 的 test ID、命令或工作目录不符合冻结合同"
+            )
         gate_architecture = gate.get("architecture")
         if not isinstance(gate_architecture, str) or not gate_architecture:
             raise GateReceiptError(f"门禁 {gate_id} architecture 为空")
@@ -608,33 +722,49 @@ def build_receipt(
     facts_relative: str,
     *,
     _seen_receipts: set[str] | None = None,
+    _allow_legacy: bool = False,
 ) -> dict[str, Any]:
     root = _private_root(root)
     facts_path = _relative(root, facts_relative, "facts")
     facts, facts_raw = _load_json(facts_path, "facts")
-    _expect(
-        facts,
-        {
-            "schema_version",
-            "phase",
-            "attempt",
-            "subject",
-            "inputs",
-            "environment",
-            "gates",
-        },
-        "facts",
-    )
-    if facts.get("schema_version") != FACTS_SCHEMA:
+    facts_schema = facts.get("schema_version")
+    legacy = facts_schema == LEGACY_FACTS_SCHEMA
+    if legacy and not _allow_legacy:
+        raise GateReceiptError("v3 facts 只允许历史收据重放，禁止生成新收据")
+    if facts_schema not in {FACTS_SCHEMA, LEGACY_FACTS_SCHEMA}:
         raise GateReceiptError("facts.schema_version 不匹配")
+    fields = {
+        "schema_version",
+        "phase",
+        "attempt",
+        "subject",
+        "inputs",
+        "environment",
+        "gates",
+    }
+    if not legacy:
+        fields.add("gate_plan")
+    _expect(facts, fields, "facts")
     phase = facts.get("phase")
     if phase not in PHASES:
         raise GateReceiptError("facts.phase 非法")
     attempt = _validate_attempt(facts.get("attempt"))
     subject = _validate_subject(facts.get("subject"), phase)
-    inputs = _validate_inputs(root, facts.get("inputs"), phase, subject)
+    gate_plan, contracts, require_test_id = _validate_gate_plan(
+        root,
+        facts.get("gate_plan"),
+        phase=phase,
+        subject=subject,
+        legacy=legacy,
+    )
+    inputs = _validate_inputs(
+        root,
+        facts.get("inputs"),
+        phase,
+        subject,
+        gate_plan,
+    )
     environment = _validate_environment(root, facts.get("environment"), attempt["attempt_id"])
-    contracts = CANDIDATE_COMMANDS if phase == CANDIDATE_PHASE else POST_PROMOTION_COMMANDS
 
     previous_binding: dict[str, Any] | None = None
     previous: dict[str, Any] | None = None
@@ -655,8 +785,11 @@ def build_receipt(
             raise GateReceiptError("只有失败的前序门禁 attempt 可以补跑")
         if (
             previous.get("phase") != phase
+            or previous.get("schema_version")
+            != (LEGACY_RECEIPT_SCHEMA if legacy else RECEIPT_SCHEMA)
             or previous.get("subject") != subject
             or not _same_inputs(previous.get("inputs", []), inputs)
+            or previous.get("gate_plan") != gate_plan
         ):
             raise GateReceiptError("前序门禁 attempt 身份或输入不连续")
         previous_attempt = previous.get("attempt")
@@ -689,6 +822,8 @@ def build_receipt(
         facts.get("gates"),
         phase,
         subject["target_architecture"],
+        contracts,
+        require_test_id=require_test_id,
     )
     executed_ids = [item["gate_id"] for item in gates]
     if executed_ids != expected_executed_ids:
@@ -712,8 +847,8 @@ def build_receipt(
     status_value = "failed" if effective_failed else "passed"
     failure_count = prior_failure_count + 1 if status_value == "failed" else prior_failure_count
     tool_path = Path(__file__).resolve()
-    return {
-        "schema_version": RECEIPT_SCHEMA,
+    result = {
+        "schema_version": LEGACY_RECEIPT_SCHEMA if legacy else RECEIPT_SCHEMA,
         "phase": phase,
         "status": status_value,
         "attempt": {
@@ -732,7 +867,7 @@ def build_receipt(
         "effective_gates": effective,
         "completed_at_utc": completed_at,
         "producer": {
-            "schema_version": PRODUCER_SCHEMA,
+            "schema_version": LEGACY_PRODUCER_SCHEMA if legacy else PRODUCER_SCHEMA,
             "tool": str(tool_path),
             "tool_sha256": _sha256_file(tool_path),
             "facts": {
@@ -742,6 +877,9 @@ def build_receipt(
             },
         },
     }
+    if not legacy:
+        result["gate_plan"] = gate_plan
+    return result
 
 
 def _write_once(path: Path, payload: dict[str, Any]) -> None:
@@ -787,15 +925,42 @@ def replay(
     seen.add(receipt_relative)
     receipt_path = _relative(root, receipt_relative, "receipt")
     receipt, raw = _load_json(receipt_path, "receipt")
-    if receipt.get("schema_version") != RECEIPT_SCHEMA:
+    receipt_schema = receipt.get("schema_version")
+    if receipt_schema not in {RECEIPT_SCHEMA, LEGACY_RECEIPT_SCHEMA}:
         raise GateReceiptError("receipt.schema_version 不匹配")
     producer = receipt.get("producer")
-    if not isinstance(producer, dict) or producer.get("schema_version") != PRODUCER_SCHEMA:
+    expected_producer_schema = (
+        LEGACY_PRODUCER_SCHEMA
+        if receipt_schema == LEGACY_RECEIPT_SCHEMA
+        else PRODUCER_SCHEMA
+    )
+    if (
+        not isinstance(producer, dict)
+        or producer.get("schema_version") != expected_producer_schema
+    ):
         raise GateReceiptError("receipt.producer 不受支持")
     facts = producer.get("facts")
     if not isinstance(facts, dict) or not isinstance(facts.get("path"), str):
         raise GateReceiptError("receipt.producer.facts 缺失")
-    expected = build_receipt(root, facts["path"], _seen_receipts=seen)
+    expected = build_receipt(
+        root,
+        facts["path"],
+        _seen_receipts=seen,
+        _allow_legacy=receipt_schema == LEGACY_RECEIPT_SCHEMA,
+    )
+    if receipt_schema == LEGACY_RECEIPT_SCHEMA:
+        # v3 收据冻结了当时的 producer 路径与工具摘要。升级到 v4 后已无法从
+        # 当前文件字节复现旧摘要，但仍可用当前实现完整重放旧 facts、静态合同、
+        # 前序链和证据绑定；因此只承接这两个历史 producer 身份字段。
+        tool = producer.get("tool")
+        tool_sha256 = producer.get("tool_sha256")
+        if not isinstance(tool, str) or not tool or not isinstance(
+            tool_sha256, str
+        ):
+            raise GateReceiptError("v3 receipt producer 身份非法")
+        _sha256(tool_sha256, "v3 receipt producer.tool_sha256")
+        expected["producer"]["tool"] = tool
+        expected["producer"]["tool_sha256"] = tool_sha256
     if _canonical(expected) != raw:
         raise GateReceiptError("门禁收据重放结果不一致")
     return receipt

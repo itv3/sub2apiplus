@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2api.local/schemas/official-client-candidate-delivery-v1.json",
+  "title": "VC-6 候选交付闭环",
+  "description": "冻结交付计划、四阶段事实、候选交付包与脱敏私有归档清单。",
+  "oneOf": [
+    {"$ref": "#/$defs/plan"},
+    {"$ref": "#/$defs/fact"},
+    {"$ref": "#/$defs/package"},
+    {"$ref": "#/$defs/archive"}
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "imageDigest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "stage": {"enum": ["candidate_active", "rollback_verified", "candidate_restored", "stable_observed"]},
+    "plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "campaign_id", "persona", "plan_id", "delivery_id", "candidate_id", "candidate_ref", "candidate_build_receipt_ref", "validation_completed_ref", "acceptance_ref", "candidate_evidence_package_ref", "host_id", "architecture", "compose_sha256", "environment_sha256", "configuration_sha256", "network_sha256", "runtime_profile_sha256", "rollback_runtime_profile_sha256", "candidate_image_digest", "rollback_image_digest", "observation_window_seconds", "stage_checks", "environment_freeze_ref", "rollback_material_refs", "vircs_state", "identity_sha256"],
+      "properties": {
+        "schema_version": {"const": "official-client-candidate-delivery-plan/v1"},
+        "campaign_id": {"type": "string"}, "persona": {"type": "object"}, "plan_id": {"type": "string"}, "delivery_id": {"type": "string"}, "candidate_id": {"type": "string"},
+        "candidate_ref": {"type": "object"}, "candidate_build_receipt_ref": {"type": "object"}, "validation_completed_ref": {"type": "object"}, "acceptance_ref": {"type": "object"}, "candidate_evidence_package_ref": {"type": "object"},
+        "host_id": {"type": "string"}, "architecture": {"type": "string"},
+        "compose_sha256": {"$ref": "#/$defs/sha256"}, "environment_sha256": {"$ref": "#/$defs/sha256"}, "configuration_sha256": {"$ref": "#/$defs/sha256"}, "network_sha256": {"$ref": "#/$defs/sha256"}, "runtime_profile_sha256": {"$ref": "#/$defs/sha256"}, "rollback_runtime_profile_sha256": {"$ref": "#/$defs/sha256"},
+        "candidate_image_digest": {"$ref": "#/$defs/imageDigest"}, "rollback_image_digest": {"$ref": "#/$defs/imageDigest"},
+        "observation_window_seconds": {"type": "integer", "minimum": 1}, "stage_checks": {"type": "object"}, "environment_freeze_ref": {"type": "object"}, "rollback_material_refs": {"type": "array", "minItems": 1}, "vircs_state": {"type": "object"}, "identity_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "fact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "delivery_id", "stage", "candidate_id", "candidate_ref", "candidate_build_receipt_ref", "validation_completed_ref", "acceptance_ref", "delivery_plan_ref", "previous_stage_ref", "host_id", "architecture", "compose_sha256", "environment_sha256", "configuration_sha256", "network_sha256", "runtime_profile_sha256", "image_digest", "check_ids", "evidence_refs", "observed_seconds", "result", "identity_sha256"],
+      "properties": {
+        "schema_version": {"const": "official-client-candidate-delivery-fact/v1"}, "delivery_id": {"type": "string"}, "stage": {"$ref": "#/$defs/stage"}, "candidate_id": {"type": "string"},
+        "candidate_ref": {"type": "object"}, "candidate_build_receipt_ref": {"type": "object"}, "validation_completed_ref": {"type": "object"}, "acceptance_ref": {"type": "object"}, "delivery_plan_ref": {"type": "object"}, "previous_stage_ref": {"oneOf": [{"type": "null"}, {"type": "object"}]},
+        "host_id": {"type": "string"}, "architecture": {"type": "string"}, "compose_sha256": {"$ref": "#/$defs/sha256"}, "environment_sha256": {"$ref": "#/$defs/sha256"}, "configuration_sha256": {"$ref": "#/$defs/sha256"}, "network_sha256": {"$ref": "#/$defs/sha256"}, "runtime_profile_sha256": {"$ref": "#/$defs/sha256"}, "image_digest": {"$ref": "#/$defs/imageDigest"},
+        "check_ids": {"type": "array", "minItems": 1}, "evidence_refs": {"type": "array", "minItems": 1}, "observed_seconds": {"type": "integer", "minimum": 0}, "result": {"enum": ["pass", "failed"]}, "identity_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "package": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "campaign_id", "persona", "package_id", "delivery_id", "candidate_id", "candidate_ref", "candidate_build_receipt_ref", "validation_completed_ref", "acceptance_ref", "candidate_evidence_package_ref", "delivery_plan_ref", "delivery_fact_refs", "deployment_configuration_ref", "public_evidence_index_refs", "rollback_material_refs", "private_archive_manifest_ref", "candidate_image_digest", "artifact_count", "identity_sha256"],
+      "properties": {
+        "schema_version": {"const": "official-client-candidate-delivery-package/v1"}, "campaign_id": {"type": "string"}, "persona": {"type": "object"}, "package_id": {"type": "string"}, "delivery_id": {"type": "string"}, "candidate_id": {"type": "string"},
+        "candidate_ref": {"type": "object"}, "candidate_build_receipt_ref": {"type": "object"}, "validation_completed_ref": {"type": "object"}, "acceptance_ref": {"type": "object"}, "candidate_evidence_package_ref": {"type": "object"}, "delivery_plan_ref": {"type": "object"}, "delivery_fact_refs": {"type": "array", "minItems": 4, "maxItems": 4}, "deployment_configuration_ref": {"type": "object"}, "public_evidence_index_refs": {"type": "array", "minItems": 1}, "rollback_material_refs": {"type": "array", "minItems": 1}, "private_archive_manifest_ref": {"type": "object"}, "candidate_image_digest": {"$ref": "#/$defs/imageDigest"}, "artifact_count": {"type": "integer", "minimum": 3, "description": "一份部署配置、公开证据索引和回退材料的引用项总数；不含私有归档内部条目。"}, "identity_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "archive": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "campaign_id", "persona", "manifest_id", "redacted", "entries", "entry_count", "total_bytes", "manifest_sha256", "identity_sha256"],
+      "properties": {
+        "schema_version": {"const": "official-client-private-archive-manifest/v1"}, "campaign_id": {"type": "string"}, "persona": {"type": "object"}, "manifest_id": {"type": "string"}, "redacted": {"const": true}, "entries": {"type": "array", "minItems": 1}, "entry_count": {"type": "integer", "minimum": 1}, "total_bytes": {"type": "integer", "minimum": 0}, "manifest_sha256": {"$ref": "#/$defs/sha256"}, "identity_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  }
+}

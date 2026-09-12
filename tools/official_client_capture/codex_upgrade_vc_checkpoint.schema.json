@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-vc-checkpoint-v1.json",
+  "title": "Codex VC 阶段 checkpoint",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "campaign_id", "campaign_plan_sha256", "phase", "status",
+    "predecessor_checkpoint", "stage_receipt", "completed_at_utc",
+    "execute_item_ids", "reuse_item_ids", "metrics", "checkpoint_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "codex-upgrade-vc-checkpoint/v1"},
+    "campaign_id": {"$ref": "#/$defs/safeId"},
+    "campaign_plan_sha256": {"$ref": "#/$defs/sha256"},
+    "phase": {"$ref": "#/$defs/phase"},
+    "status": {"enum": ["complete", "blocked", "failed"]},
+    "predecessor_checkpoint": {
+      "oneOf": [{"$ref": "#/$defs/checkpointReference"}, {"type": "null"}]
+    },
+    "stage_receipt": {"$ref": "#/$defs/fileBinding"},
+    "completed_at_utc": {"type": "string", "format": "date-time"},
+    "execute_item_ids": {"$ref": "#/$defs/idArray"},
+    "reuse_item_ids": {"$ref": "#/$defs/idArray"},
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["live_request_count", "scanned_bytes"],
+      "properties": {
+        "live_request_count": {"type": "integer", "minimum": 0},
+        "scanned_bytes": {"type": "integer", "minimum": 0}
+      }
+    },
+    "checkpoint_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "safeId": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "phase": {"enum": ["VC-0", "VC-1", "VC-2", "VC-3", "VC-4", "VC-5", "VC-6"]},
+    "idArray": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/safeId"}},
+    "fileBinding": {
+      "type": "object", "additionalProperties": false, "required": ["path", "sha256"],
+      "properties": {"path": {"type": "string", "minLength": 1}, "sha256": {"$ref": "#/$defs/sha256"}}
+    },
+    "checkpointReference": {
+      "type": "object", "additionalProperties": false,
+      "required": ["path", "sha256", "phase", "checkpoint_sha256"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1}, "sha256": {"$ref": "#/$defs/sha256"},
+        "phase": {"$ref": "#/$defs/phase"}, "checkpoint_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  }
+}

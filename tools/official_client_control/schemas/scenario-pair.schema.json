@@ -6,11 +6,30 @@
   "oneOf": [
     {
       "type": "object",
+      "additionalProperties": false,
       "required": ["candidate_id", "scenario_id", "attempt_id", "stage", "previous_stage_ref", "artifact_refs", "result"],
       "properties": {
         "candidate_id": {"type": "string"},
         "scenario_id": {"type": "string"},
         "attempt_id": {"type": "string"},
+        "stage": {"enum": ["prepare", "capture", "seal", "approve"]},
+        "previous_stage_ref": {"oneOf": [{"type": "null"}, {"type": "object"}]},
+        "artifact_refs": {"type": "array"},
+        "result": {"enum": ["prepared", "pass", "failed"]},
+        "reviewer": {"type": "string"},
+        "review_ref": {"type": "string"}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "candidate_id", "scenario_id", "attempt_id", "validation_attempt_ref", "stage", "previous_stage_ref", "artifact_refs", "result"],
+      "properties": {
+        "schema_version": {"const": "official-client-scenario-stage/v2"},
+        "candidate_id": {"type": "string"},
+        "scenario_id": {"type": "string"},
+        "attempt_id": {"type": "string"},
+        "validation_attempt_ref": {"type": "object"},
         "stage": {"enum": ["prepare", "capture", "seal", "approve"]},
         "previous_stage_ref": {"oneOf": [{"type": "null"}, {"type": "object"}]},
         "artifact_refs": {"type": "array"},
@@ -33,6 +52,32 @@
         "official_result": {"type": "object"},
         "third_party_results": {"type": "array"},
         "dynamic_field_checks": {"type": "array", "minItems": 1}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "pair_id", "spec_id", "candidate_id", "profile_approval_ref", "release_artifact_ref", "condition_sha256", "scenario_approval_refs", "candidate_evidence_package_ref", "atomic_assertion_ledger_ref", "official_result", "candidate_result", "third_party_results", "dynamic_field_checks", "assertion_results", "implementation_anchors", "test_anchors", "result_source", "comparison_mode"],
+      "properties": {
+        "schema_version": {"const": "official-client-pair/v2"},
+        "pair_id": {"type": "string", "pattern": "^PAIR-SPEC-[A-Z0-9][A-Z0-9._-]{0,95}$"},
+        "spec_id": {"type": "string", "pattern": "^SPEC-[A-Z0-9][A-Z0-9._-]{0,95}$"},
+        "candidate_id": {"type": "string"},
+        "profile_approval_ref": {"type": "object"},
+        "release_artifact_ref": {"type": "object"},
+        "condition_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "scenario_approval_refs": {"type": "array", "minItems": 1},
+        "candidate_evidence_package_ref": {"type": "object"},
+        "atomic_assertion_ledger_ref": {"type": "object"},
+        "official_result": {"type": "object"},
+        "candidate_result": {"type": "object"},
+        "third_party_results": {"type": "array"},
+        "dynamic_field_checks": {"type": "array", "minItems": 1},
+        "assertion_results": {"type": "array", "minItems": 1},
+        "implementation_anchors": {"type": "array", "minItems": 1},
+        "test_anchors": {"type": "array", "minItems": 1},
+        "result_source": {"enum": ["execute", "reuse"]},
+        "comparison_mode": {"enum": ["dual_wire", "candidate_profile"]}
       }
     }
   ]

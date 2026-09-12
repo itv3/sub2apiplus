@@ -2,7 +2,7 @@
   "schema_version": "codex-candidate-rule-expectations/v1",
   "codex_version": "0.149.1",
   "source_spec": "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md#第二章",
-  "source_spec_sha256": "aa719cc8a5d7cb63b8edb84ad89a5bee6f79d6ddc00dd04c7c5740acbf935a23",
+  "source_spec_sha256": "8dfdd3a96df7297a62285f7ae2bd23741baa4dd73d166e5f22cea53475359515",
   "scenarios": [
     {
       "description": "默认系统 CA 的 HTTP ClientHello 与 models 请求",

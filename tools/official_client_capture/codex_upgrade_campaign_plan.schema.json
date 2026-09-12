@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-campaign-plan-v1.json",
+  "title": "Codex VC-0 Campaign 总计划",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "campaign_id", "campaign_mode", "campaign_purpose",
+    "baseline_version", "target_version", "created_at_utc",
+    "original_deadline_at_utc", "phase_order", "dependencies", "initial_phase",
+    "future_identity_placeholders", "controls", "plan_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "codex-upgrade-campaign-plan/v1"},
+    "campaign_id": {"$ref": "#/$defs/safeId"},
+    "campaign_mode": {"enum": ["preflight_only", "formal"]},
+    "campaign_purpose": {"enum": ["validation_only", "production_replacement"]},
+    "baseline_version": {"$ref": "#/$defs/version"},
+    "target_version": {"$ref": "#/$defs/version"},
+    "created_at_utc": {"type": "string", "format": "date-time"},
+    "original_deadline_at_utc": {"type": "string", "format": "date-time"},
+    "phase_order": {"const": ["VC-0", "VC-1", "VC-2", "VC-3", "VC-4", "VC-5", "VC-6"]},
+    "dependencies": {
+      "const": {
+        "VC-0": [], "VC-1": ["VC-0"], "VC-2": ["VC-1"],
+        "VC-3": ["VC-2"], "VC-4": ["VC-3"], "VC-5": ["VC-4"],
+        "VC-6": ["VC-5"]
+      }
+    },
+    "initial_phase": {"const": "VC-0"},
+    "future_identity_placeholders": {"const": false},
+    "controls": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "timing_checkpoint_sha256", "arm64_environment_sha256",
+        "job_rehearsal_sha256", "p0_gate_sha256"
+      ],
+      "properties": {
+        "timing_checkpoint_sha256": {"$ref": "#/$defs/sha256"},
+        "arm64_environment_sha256": {"$ref": "#/$defs/sha256"},
+        "job_rehearsal_sha256": {"$ref": "#/$defs/nullableSha256"},
+        "p0_gate_sha256": {"$ref": "#/$defs/nullableSha256"}
+      }
+    },
+    "plan_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "safeId": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+    "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "nullableSha256": {"oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]}
+  }
+}

@@ -278,24 +278,12 @@ candidate 通过不等于已经上线。生产激活还需绑定 AcceptanceFact�
 
 ### 5.1.2 依赖图与单一恢复算法
 
-每个 Job 和门禁必须声明逐文件直接依赖，形成有向无环图。结果键为：
+每个可执行项必须声明直接输入、环境身份和逐文件直接依赖，形成有向无环图。结果身份至少绑定项目 ID、
+输入摘要、环境摘要和直接依赖摘要；具体字段与编码格式由客户端指南定义。全局工具树摘要只用于审计，
+不能代替逐项失效计算。
 
-```text
-result_key = item_id + input_sha256 + environment_sha256 + direct_dependency_sha256
-```
-
-组件至少分为：
-
-- `producer`：采集、中继、脱敏；
-- `evaluator`：manifest、分类、断言和报告；
-- `control`：状态机、租约、watchdog 和计时；
-- `scenario`：单个场景合同；
-- `runtime`：源码、二进制、镜像和容器；
-- `network`：固定出口及 MTU；
-- `gate`：单个验收或部署门禁。
-
-全局工具树摘要只用于审计，不能作为失效依据。变化文件必须映射到明确组件和下游项；未知或未登记文件在
-执行前失败关闭，不得退化为全量重跑。
+组件至少区分产出、评估、控制、场景、运行时、环境／网络和门禁。变化文件必须映射到明确组件和下游项；
+未知或未登记文件在执行前失败关闭，不得退化为无依据的全量重跑。
 
 | 变化 | 允许动作 |
 |---|---|
@@ -308,132 +296,96 @@ result_key = item_id + input_sha256 + environment_sha256 + direct_dependency_sha
 
 #### 恢复算法
 
-所有新 Campaign 只允许一种恢复方式，不得创建 `successor`、`control epoch`、`runtime repair`、多槽
-`evaluation transition` 或递增 `vN` 来绕过失败。
-
-恢复步骤固定如下：
+所有客户端使用同一恢复语义：从最近合法 checkpoint 重新计算执行闭集，不通过改名、复制 Campaign 或
+增加恢复分支绕过失败。具体步骤为：
 
 1. 读取同一 Campaign 最近一个合法 checkpoint。
 2. 校验 Campaign、ApprovalFact、candidate、环境和来源收据身份。
 3. 计算 `execute = failed ∪ pending ∪ changed_dependencies 的下游闭集`。
 4. 从执行集合移除已有可信通过结果且依赖未变化的项。
-5. 输出并封存 `RecoveryPlan`，明确 execute、reuse、原因、扫描和 live 请求预算。
-6. 若 `execute=[]`，在 reservation 前写 `incremental-noop` 并立即成功退出。
+5. 封存恢复计划，明确 execute、reuse、原因、扫描和 live 请求预算。
+6. 若执行集合为空，在取得资源或产生副作用前写入客户端定义的 no-op 证明并立即退出。
 7. 否则按拓扑序只执行 execute；每项结束立即写 checkpoint。
 
-`incremental-noop` 不启动容器、不做环境探针、不读大证据、不发请求，且必须记录
-`scanned_bytes=0`、`live_request_count=0`。
+no-op 分支不得启动运行时、执行环境探针、读取大证据或发送请求，并必须证明扫描量和 live 请求量均为零。
 
 同一根因连续失败两次即停线。修复必须先在冻结的最小历史夹具上完整跑通从故障点到最终阶段，再允许恢复；
-禁止把正式 ARM64 Campaign 当作工具集成测试环境。
-
-历史 Campaign 如使用旧恢复类型，只允许一次导入为当前规范的 canonical checkpoint。导入只重放摘要和
-来源，不复制证据、不改变身份、不执行 Job；导入失败即保持历史 Campaign 停线，不再新增兼容分支。
-Kilo 导入必须直接校验已封存事实的真实结构：`observations` 是仅含 `kilo-compatible` 和
-`kilo-responses` 的对象；不得把它臆造为数组，也不得因此重发 Kilo。
+禁止把正式 Campaign 当作工具集成测试环境。历史恢复类型的导入、兼容读取和退休边界由客户端指南定义；
+导入只能重放已封存摘要和来源，不复制或重发官方证据，也不得改变原身份。
 
 ### 5.1.3 控制面、环境面与数据面独立失效
 
 | 身份面 | 内容 | 变化后的最大影响 |
 |---|---|---|
 | 控制面 | 状态机、租约、watchdog、计时、状态查询和只读收据解析 | 只重跑控制面离线门禁 |
-| 环境面 | ARM64容器、路由、出口、MTU、磁盘和依赖事实 | 重做P0，并按语义差异决定直接下游 |
+| 环境面 | 平台、架构、主机／容器、路由、出口、MTU、磁盘和依赖事实 | 重做 P0，并按语义差异决定直接下游 |
 | 数据面 | 规则实现、场景、producer、二进制、镜像和协议证据 | 只重跑对应规则及其下游闭集 |
 
-三种身份必须分别计算摘要和失效集合。控制面修复不得改变数据面 `result_key`，环境 producer 的代码摘要
-不得冒充环境语义变化；任何工具都不得把三者重新合成全局失效开关。
+三种身份必须分别计算摘要和失效集合。控制面修复不得改变数据面结果身份，环境 producer 的代码摘要不得
+冒充环境语义变化；任何工具都不得把三者重新合成全局失效开关。
 
-canonical 调度与生产收据文件（`codex_upgrade_campaign_run.schema.json`、
-`codex_upgrade_legacy_boundary.py`、`codex_upgrade_gate_receipt.py`、
-`production_activation_receipt.py`、`production_activation_receipt.schema.json`、
-`profile_rule_patches_0_151_0.json`）属于控制／评估面，只能重放对应门禁，不能触发已封存请求重跑。
-新增文件必须先登记到白名单；未登记文件继续按产出面 fail-close。
+控制面变化只允许重跑受影响的离线控制门禁；环境变化先重新验证环境，再决定哪些数据面结果失效；数据面
+变化只执行对应规则及其下游闭集。具体文件到身份面的映射由客户端指南登记，未登记文件按数据面变化
+失败关闭，已封存的官方请求不得因控制面或评估器变化而重发。
 
 #### 连续监督与时间账本
 
-新 Campaign 的正式执行入口固定为
-`tools/official_client_capture/codex_upgrade_supervisor.py campaign-run`。它读取一个不可变的
-`codex-upgrade-campaign-run/v1` 动作清单，在同一个父监督器内按声明顺序自动执行全部动作；动作之间不得
-依赖人工再次派发。清单为 `no_op=true` 且动作集合为空时，直接写入 `incremental-noop` 并结束。
-`campaign-start`、`campaign-mark`、`campaign-exec` 仅保留给监督器离线回归和历史收据兼容，不得作为新正式
-升级的编排入口。
+正式 Campaign 必须冻结总计划、阶段依赖、身份、预算和不可后移的 deadline；每个阶段或恢复批次只能根据
+上一份已封存 checkpoint 生成不可变动作清单。总计划不得预填未来才产生的批准、Candidate、attempt、镜像
+或收据身份，动作清单也不得在启动后补写。
 
-`campaign-run` 派发动作时注入父 `run_dir`、Campaign 身份、owner nonce 和原始
-deadline；动作内的 `codex_upgrade.py` 只能附加到该父监督器，禁止再创建
-`CampaignLease`、`.supervisor/run-*` 或重新起算 deadline。动作清单可同时声明
-`execute_items` 与 `reuse_items`：前者才允许执行，后者只能读取既有 checkpoint；
-前者为空时必须生成 `no_op=true` 并立即结束。`successor`、`control-epoch`、
-`evaluation-transition`、`terminal-transition-preflight` 以及监督器的旧写入入口
-在正式 `campaign-run` 上下文中于取得 lease 前硬拒绝，不产生新的写入收据。
-0.151.0 formal 的 capture、classify、profile、compare、accept、resume 和
-canonical 写入命令若未携带父上下文同样硬拒绝；`status` 等只读命令不受此限制。
+客户端指南必须定义受管写入口、执行状态、失联／超时判定和 checkpoint 格式；存在长时间运行的 worker 时，
+还必须定义心跳频率。受管控制面连续记录动作开始、结束、失败、等待原因、执行与复用范围、live 请求量和
+扫描量；进程重启、attempt 或恢复不得重置时间账本和 deadline。任何时间区间无法分类、执行控制丢失或
+需要人工补派时立即停线。
 
-唯一的廉价修复例外是候选已经进入 `awaiting_receipts`、全部 Candidate Job 均为
-`reused/complete`、`executed_job_ids`／`failed_job_ids`／`pending_job_ids` 为空，且
-尚未生成 `evidence-manifest`、seal draft 或 seal preview。此时若当前工具变化只落在
-`control`、`evaluator`、`orchestrator` 三个组件，`campaign-run` 可登记
-`metadata_only_seal_repair` 并继续 seal；不得重发请求、不得创建旧
-`evaluation-transition`，也不得把该例外用于已有失败或已开始深度扫描的 attempt。
-若该 attempt 绑定的 UpgradeTimingLedger 已在 VC-0 因 `permanent-stop-*` 停线，
-只有冻结 checkpoint 仍为 active、停线后的唯一新增事件使 `head_sequence` 恰好加一且
-当前 `live_request_count=0` 时，才可只读承接该 Ledger；其他 stopped／stop_required
-状态、多个新增事件或非零 live 请求都必须 fail-close，不能通过 active 门禁。
-若当前使用的是历史 control epoch，且该 epoch 的 `boundary` 全零、其 Ledger 仅因
-预算到期进入 `stop_required`（`same_root_cause_failures` 为空、`live_request_count=0`），
-则 metadata-only seal 可回退到上述 Campaign 冻结控制收据；该回退不得承接失败重试，
-不得创建新的 epoch／successor，且仍须通过冻结 VC-0 Ledger 的唯一 `permanent-stop-*`
-校验。任何非零边界、失败计数、live 请求或其他 `stop_required` 原因继续 fail-close。
+阶段完成后必须在 §5.3.2 冻结的交接窗口内，以封存输出生成下一批次。执行集合为空时直接生成 no-op 证明，
+不得用空 Job、空转心跳或新 Campaign 延长运行；阶段退出条件未满足时也不得伪造终态。
 
-metadata-only seal 还必须校验来源 attempt 的 `environment/after` 目录及其
-`after_probe` 绑定，并将 `probe-manifest.json` 与五份状态快照逐文件以不可覆盖副本
-写入当前 attempt；当前已有的 `environment/client-after` 只能与该来源 after 生成恢复收据。
-该过程不得执行环境探针、发送请求或改写来源文件；来源摘要漂移、目录缺项、额外文件或目标文件不一致均立即 fail-close。
+#### 受管工具与文档部署
 
-VC-6 还必须在监督器层面硬拒绝旧入口：只要命令阶段是 `VC-6`，即使没有父上下文，
-`campaign-start`、`campaign-mark`、`campaign-exec`、`campaign-stop`、`campaign-owner`
-和 `run` 也不得启动或改写状态；唯一允许的正式入口是带完整不可变 manifest 的
-`campaign-run`。manifest 在创建父 run 前完成校验并封存摘要；不得只登记一个
-planning 动作后再等待人工补派。
+受管工具在运行时直接读取的仓库文档属于工具直接依赖。部署清单必须逐文件登记其规范相对路径和摘要，
+并与工具树在同一可回滚事务中切换；首次纳管的缺失文件也必须能恢复为不存在。P0 必须从生产运行根执行
+相关重放测试，禁止只在完整开发工作树通过后发布不完整的文档子集。具体清单、打包和部署命令由客户端
+指南定义。
 
-每个 Campaign 从首个动作到生产验证结束使用一个独立父监督器，所有命令必须通过统一包装器执行。监督器
-独立于升级任务运行，并实时落盘：
+### 5.1.4 执行环境冻结与隔离
 
-- 动作开始、结束、失败事件立即追加并 `fsync`；
-- 每5秒记录监督器和 worker 心跳；
-- 每60秒生成时间账本，将区间分类为 `planning`、`active` 或 `waiting`；`orchestrator-idle` 只允许兼容读取旧收据，
-  新流程不得登记该分类；
-- worker 失联20秒、动作超时或编排器15秒未派发下一动作立即停线；
-- 正常停止、SIGTERM、SIGKILL、会话断开和主机失联均留下可审计终态或明确缺口。
+每个客户端指南必须明确取证、构建、候选验收和生产操作各自使用的平台、架构、主机／容器角色及权限边界，
+并冻结网络、路由、出口、DNS、证书、MTU、运行时依赖和资源水位。具体机器、地址和参数只属于该客户端，
+不得提升为其他客户端必须继承的共享默认值。
 
-Campaign 使用一个不可后移的全局 deadline；进程重启、attempt、恢复或监督器换代均不得重置。新监督器
-必须绑定前序终态、摘要和时间缺口。任何分钟无法分类即 `audit-incomplete`，禁止部署。
+P0、attempt 和交付或部署前后都必须核对本次冻结的环境身份；不一致时在任何外部请求或写操作前停线。
+禁止修改宿主网络、隧道、防火墙、容器地址、证书或协议字段来迁就测试。只有采集传输故障已由原始网络证据
+定位且不改变官方画像时，才允许使用客户端指南预先批准的局部传输参数。
 
-每阶段结束后立即汇总开始时间、结束时间、耗时、execute、reuse、失败项、live 请求数、扫描次数、扫描／
-复用字节和下一动作。不得在升级结束后补写。
+### 5.1.5 宿主目录与数据治理
 
-编排器必须按有限状态机运行：`dispatching → executing → evaluating → terminal`。
-正式 `campaign-run` 直接按预声明队列连续执行，不得登记 `planning:dispatch-next-action`，
-也不得依赖人工补派；动作成功后立即进入队列中的下一项。15 秒派发窗口只保留给历史
-离线兼容回归，若它出现在 VC-6 正式账本中必须停线并标记为入口违规。禁止使用无 Job 的
-`post-action-idle` 保持心跳。评估后若 `failed_items=[]` 且 `pending_items=[]`，必须立即请求终态或
-下一阶段；若集合为空但当前阶段未满足退出条件，必须立即失败，不能继续等待、重试或创建新 Campaign。
+每个执行环境必须登记唯一的项目根、数据根、暂存根和必要的只读兼容根；实际路径、权限、容器挂载和编排
+方式由客户端指南定义，不能由当前目录、历史习惯或共享框架中的固定宿主路径隐式决定。
 
-### 5.1.4 ARM64固定环境
+输出边界固定如下：
 
-Codex CLI 的抓包、测试和部署必须在 ARM64 完成。以下网络事实是不可修改的环境合同：
+| 对象 | 允许位置 |
+|---|---|
+| 编排文件、镜像构建输入和受管配置 | 已登记项目根内、数据根外的只读或受管路径 |
+| state、runtime、work、Campaign、control、audit 和 archive | 已登记数据根的对应子目录 |
+| 短期测试夹具 | 已登记暂存根；使用系统临时目录必须有明确能力需求和清理边界 |
+| 历史绝对路径兼容 | 已登记兼容根，仅允许只读重放和迁移验证 |
 
-```text
-sub2apiplus = 172.25.0.3
-capture-cli = 172.30.0.10
-公网出口 = 179.255.100.158
-wg1 MTU = 1420
-```
+创建目录、打开输出文件和启动容器前，工具必须解析已有路径组件并验证最终位置仍位于允许根内；`..`、
+符号链接、相对路径、未登记挂载源和大小写近似目录均不得绕过检查。声明配置还必须与实际运行时的挂载、
+网络和镜像身份逐项核对，不能只审核配置文本。
 
-P0、attempt 和部署前后均须核对容器 IP、默认路由、公网出口、宿主持久 MTU、运行 MTU 和对端 MTU。
-不一致时在任何外部请求前停线；禁止修改网络、WireGuard、iptables／nftables 或容器 IP 来迁就测试。
+P0 和每个 attempt 前后都必须在已登记宿主边界内执行有界污染检查，并与开始前 inventory 比较；不得无界
+扫描整台主机。发现新的未登记对象立即停线。临时对象只能按冻结 manifest 精确清理；清理前复核引用、
+占用、挂载和摘要，清理后记录对象、字节数、前后磁盘水位、排除项和复验结果。原始证据、合法 checkpoint
+及仍被收据引用的对象禁止清理。
 
-只有明确的采集传输故障且已由 pcap 证明时，辅助程序才可在自身 socket 设置已批准的 TCP 参数；不得改变
-官方画像或删除 TLS 字段掩盖网络问题。
+历史项目迁入标准根时，须先封存旧、新目录和编排配置摘要，再停写、迁移、逐项复验并仅重建受影响运行时。
+需要让旧绝对路径继续可解析时，只能建立登记过的只读兼容映射，禁止复制出第二份可写事实或用符号链接
+冒充证据根。目录变化属于运行坐标变化，按 §5.3.4 登记；兼容消费者清零并生成移除收据后才能撤销旧映射。
+迁移闭合前不得创建目标版本 Formal Campaign。
 
 ## 5.2 合并 Sub2API 上游更新
 
@@ -611,145 +563,91 @@ U-4 的结果只有三种出口：
 
 ## 5.3 官方客户端升级
 
-### 5.3.1 P0冻结
+本节是所有官方 OAuth 客户端换版共用的**阶段合同**，不是具体客户端的操作手册。它只规定阶段语义、
+共同安全边界、身份恢复原则和时间控制；命令、脚本、Schema、字段、机器职责、目录、网络、部署参数及
+客户端专用收据，以对应客户端指南为执行权威。
 
-开始前冻结：
+发生表述冲突时：阶段顺序和共同约束以本节为准，具体执行方法以客户端指南为准。若客户端现有工具无法
+满足本节合同，必须先停线并独立修复工具或文档，不得在升级过程中自行改写阶段含义。
 
-1. 目标版本、官方产物、依赖、平台、入口和摘要；
-2. 当前 active／rollback Release、Profile、selector、镜像和回退收据；
-3. `validation_only` 或 `production_replacement` 终点；
-4. Campaign、candidate、attempt、证据根和工具版本；
-5. 全局墙钟预算、阶段预算、重试上限、资源水位和复用决定；
-6. 明确的账号与 API Key 数据库 ID，禁止脚本默认选择或回退到其他 Key；
-7. ARM64固定网络合同；
-8. 宿主机 `project_root`、`data_root`、容器内运行根、兼容根、Compose 工作目录和完整挂载映射。
+### 5.3.1 P0 冻结
 
-P0 必须完全离线验证升级器、Schema、监督器、最小历史夹具和生产部署预演。任何工具阻断必须在创建正式
-Campaign 前解决。正式 Campaign 开始后不得修改框架工具；发现缺陷按 §5.1.2 停线并拆分修复。
+VC-0 开始正式 Campaign 前，必须冻结并形成可重放记录：
 
-#### 5.3.1.1 宿主目录与输出边界
+1. **目标与基线**：目标官方产物身份，以及当前 active／rollback 身份和可用回退点；
+2. **Campaign 身份**：升级用途、终点、账号与权限条件、证据根和受管工具版本；
+3. **执行边界**：平台与环境角色、网络和目录边界、资源水位、总 deadline、阶段预算及重试上限；
+4. **证据策略**：已有可信证据的复用范围，以及仍需补齐的事实。
 
-每个采集 Docker 项目必须登记唯一宿主机目录坐标。默认 `project_root` 为
-`/root/docker/<project-id>`，保存 Compose、镜像构建输入和受管配置；唯一允许运行时产出写入的 `data_root` 为
-`<project_root>/data`，权限必须为 `0700` 并从版本控制中排除。偏离默认布局必须有写一次的目录坐标
-收据、必要性和退出期限，不能由脚本当前目录或历史习惯隐式决定。
-
-输出边界固定如下：
-
-| 对象 | 允许位置 |
-|---|---|
-| Compose、Dockerfile、镜像构建输入和受管配置 | `project_root` 内、`data_root` 外的已登记路径 |
-| state、runtime、work、Campaign、control、audit、staging 和 archive | `data_root` 的对应子目录 |
-| 短期测试夹具 | `data_root/staging`；只有操作系统能力测试确实要求时才可使用 `/tmp` |
-| 历史绝对路径兼容 | 收据登记的 `compatibility_root`，仅允许只读重放和迁移验证 |
-
-创建目录、打开输出文件和启动容器前，工具必须解析已有路径组件并验证最终位置仍位于允许根内；`..`、
-符号链接、相对路径、未登记 bind source 和大小写近似目录均不得绕过该检查。禁止直接在 `/root` 生成
-抓包、源码树、构建包、bundle、patch、worktree、恢复树或临时目录，也不得先写到 `/root` 再移动到
-受管根来规避门禁。
-
-Compose 必须从登记的 `project_root` 执行并冻结显式项目名。P0 须解析合并后的 Compose 配置，逐项核验
-build context、env file 和宿主 bind source；项目数据必须位于 `data_root`，系统级挂载必须逐项登记用途、
-读写模式和最小权限。随后以 `docker inspect` 复核实际挂载源、目标、传播模式、网络和镜像身份，不能只
-审核 YAML 文本。
-
-受管工具在运行时直接读取的仓库文档属于工具直接依赖。部署清单必须逐文件登记其规范相对路径和摘要，
-并与工具树在同一可回滚事务中切换；首次纳管的缺失文件也必须能恢复为不存在。P0 必须从生产运行根执行
-相关重放测试，禁止只在完整开发工作树通过后把不完整文档子集发布到 ARM64。
-
-P0 和每个 attempt 的前后都必须执行有界宿主污染检查：只枚举 `/root` 第一层并与开始前 inventory、
-项目注册表和明确保留项比较，不递归扫描整个根目录。发现新的未登记采集对象立即停线。临时对象只能按
-冻结 manifest 精确清理；清理前必须完成引用、占用、挂载和摘要复核，清理后生成包含对象清单、字节数、
-前后磁盘水位、排除项及复验结果的收据。原始证据、canonical checkpoint 和仍被收据引用的对象禁止清理。
-
-历史项目迁入标准根时，须先封存旧、新目录和 Compose 摘要，再停写、迁移、逐项复验并仅重建受影响容器。
-需要让旧绝对路径继续可解析时，只能建立登记过的只读兼容 bind mount，禁止复制出第二份可写事实或用
-符号链接冒充证据根。目录变化属于运行坐标变化，按 §5.3.4 登记覆盖收据；兼容消费者清零并生成移除
-收据后才能撤销旧挂载。迁移闭合前不得创建目标版本 Formal Campaign。
+P0 只做离线预检，不采集目标 live 证据、不创建 Candidate、不修改生产。具体冻结字段、预检命令和收据格式
+由客户端指南定义。输入完整、工具与环境可用、预算和回退点有效且工具阻断为零，才允许进入 VC-1。
 
 ### 5.3.2 VC-0～VC-6
 
-| 阶段 | 操作 | 退出条件 |
+七个阶段依次回答“升级什么、目标行为是什么、哪些规则变化、目标画像是什么、如何实现、是否验收通过、
+是否可以交付或上线”。前一阶段的封存产物是后一阶段的输入，不得跳过、倒序或用后续结果补写前序事实。
+
+| 阶段 | 步骤 | 主要工作 | 完成标志 |
+|---|---|---|---|
+| VC‑0 | 冻结升级输入 | 冻结目标、基线、用途、身份、执行边界、预算、回退点和证据复用计划 | P0 记录通过，工具阻断为零，环境和回退点有效 |
+| VC‑1 | 收集目标证据 | 分析目标版本源码和协议行为；已有同身份可信证据时只读复用，没有证据或缺少必要事实时才定向抓包 | 目标身份完整，`DiscoveryInventory` 与逐项证据封存 |
+| VC‑2 | 逐规则判定差异 | 将每项发现归类为 `inherit/change/condition_change/add/delete`，并为每条受影响规则生成可独立验证的原子断言 | 迁移清单和原子断言完整，`blocked` 与其他未决项为零 |
+| VC‑3 | 生成目标画像 | 复制当前 active 画像，只修改版本身份和 `affected_rules` 对应字段，生成 Profile、Release、SupportEnvelope 和 ApprovalFact | 所有 Profile 差异均有版本或规则来源，生产 selector 未改变 |
+| VC‑4 | 实现固定 Candidate | 只实现 `affected_rules` 及其直接依赖，构建源码、画像、Release 和镜像身份固定的 candidate | 代码和测试变化均可追溯，candidate 身份不可变 |
+| VC‑5 | 定向验证 | 对比官方与 candidate 的定向 PAIR，执行画像差异、负例、状态和回退验收；继承规则只重放既有收据 | 受影响项全部通过，继承字段及收据可重放，AcceptanceFact 完整 |
+| VC‑6 | 交付或生产激活 | `validation_only` 交付候选；`production_replacement` 按 §5.6 执行 canary、生产切流、实际回滚和目标恢复 | 候选可交付，或生产激活、回滚、恢复及收据全部完成 |
+
+每阶段完成后，必须在 VC-0 冻结的交接窗口内登记完成事件，并以该阶段的封存输出生成下一阶段输入；窗口
+只用于登记和派发，具体时限由客户端指南或 Campaign 计划规定，不是阶段执行预算。
+
+具体操作必须进入目标客户端的对应章节，禁止跨客户端照抄参数、工具或机器职责：
+
+| 阶段 | Codex CLI | Claude Code |
 |---|---|---|
-| VC-0 | 完成 P0，冻结基线、目标、预算和复用计划 | 工具阻断为零，监督器、网络和回退点有效 |
-| VC-1 | 只读导入可信目标证据；仅缺事实时定向取证 | 目标身份完整，DiscoveryInventory 封存 |
-| VC-2 | 逐规则生成迁移决策和原子断言 | `inherit/change/condition_change/add/delete` 完整且未决为零 |
-| VC-3 | 复制当前active画像，只应用版本字段和`affected_rules`补丁，生成新Profile、Release、SupportEnvelope和ApprovalFact | Profile diff全部映射到版本身份或差异规则，selector未改变 |
-| VC-4 | 只实现 `affected_rules`，生成固定 candidate | 代码与测试改动均能追溯到规则或直接依赖 |
-| VC-5 | 定向 PAIR、画像diff门禁、负例、状态和回退验收 | 受影响项通过，继承字段及收据可重放，AcceptanceFact完整 |
-| VC-6 | 交付候选或按 §5.6 激活生产 | 候选可交付，或生产切流、回滚、恢复和收据全部完成 |
+| VC‑0 | [§4.0](CODEX_CLI_CLIENT_EMULATION_GUIDE.md#codex-vc-0) | [§4.0](CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md#claude-vc-0) |
+| VC‑1 | [§4.1](CODEX_CLI_CLIENT_EMULATION_GUIDE.md#codex-vc-1) | [§4.1](CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md#claude-vc-1) |
+| VC‑2 | [§4.2](CODEX_CLI_CLIENT_EMULATION_GUIDE.md#codex-vc-2) | [§4.2](CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md#claude-vc-2) |
+| VC‑3 | [§4.3](CODEX_CLI_CLIENT_EMULATION_GUIDE.md#codex-vc-3) | [§4.3](CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md#claude-vc-3) |
+| VC‑4 | [§4.4](CODEX_CLI_CLIENT_EMULATION_GUIDE.md#codex-vc-4) | [§4.4](CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md#claude-vc-4) |
+| VC‑5 | [§4.5](CODEX_CLI_CLIENT_EMULATION_GUIDE.md#codex-vc-5) | [§4.5](CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md#claude-vc-5) |
+| VC‑6 | [§4.6](CODEX_CLI_CLIENT_EMULATION_GUIDE.md#codex-vc-6) | [§4.6](CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md#claude-vc-6) |
 
-每个阶段必须在60秒内写完成事件并进入下一阶段。任何执行计划必须同时报告：
+### 5.3.3 取证与增量验收边界
 
-```text
-total_rule_count
-affected_rule_ids
-inherited_rule_ids
-execute_item_ids
-reused_item_ids
-```
+1. 官方产物、源码和协议证据必须绑定明确身份并保持不可变；绑定方法和隔离方式由客户端指南定义。
+2. 已可信封存的官方证据只读复用。只有缺少完成分类或原子断言所需事实时，才能返回 VC-1 定向补证；
+   工具修复、报告变化、Candidate 变化或新 Campaign 承接均不是重发官方请求的理由。
+3. VC-4～VC-5 只执行 `affected_rules` 及其直接依赖闭集；`inherited_rules` 只重放来源和验收收据。
+   执行计划必须区分规则总数、受影响项、继承项、实际执行项和复用项，异常扩圈须在执行前说明依赖路径。
+4. 阶段只能消费前序阶段的封存输出。阶段完成事件、批次编译、checkpoint、具体字段和 runner 均由客户端
+   指南定义，但不得依赖人工补派、遍历无关历史证据或用后续结果补写前序事实。
 
-若 `affected_rule_ids` 很小但 `execute_item_ids` 异常扩大，必须在执行前停止并解释依赖路径；不得以“更安全”
-为由全量运行。
+### 5.3.4 失败恢复与身份边界
 
-### 5.3.3 取证与候选限制
+失败恢复统一执行 §5.1.2。本节只定义共同身份边界；具体 ID、收据和恢复命令由客户端指南定义：
 
-任何调用官方客户端的 Job 都必须冻结二进制绝对路径，并在 reservation 前逐字核验 `--version`。禁止依赖
-`PATH`、通用软链接或旧版本默认值。
+| 变化或失败 | 身份处理 | 恢复动作 |
+|---|---|---|
+| 身份与依赖均未变化的临时失败 | 保留原 Campaign、candidate 和 attempt | 从最近合法 checkpoint 继续，只执行 `failed` 或 `pending` 项 |
+| 目标、基线、用途、账号权限条件或官方产物身份变化 | 停止当前 Campaign，建立新 Campaign | 回到 VC-0 重新冻结；从 VC-1 补齐新身份所需证据 |
+| 规则分类或目标画像变化 | 停止当前 Campaign，建立后继 Campaign | 分别从 VC-2 或 VC-3 继续；仍有效的官方证据只读复用 |
+| Candidate 的源码、画像或构建产物变化 | 保留 Campaign，建立新 Candidate | 从 VC-4 继续，只执行受影响闭集 |
+| 仅运行坐标变化，且产物、权限和环境语义均不变 | 保留 Campaign 和 Candidate | 在首次 attempt 前按客户端指南登记坐标变化；否则重新判定身份 |
+| 控制面或 evaluator 工具变化 | 不改变数据面身份 | 按 §5.1.3 只重跑受影响的离线门禁 |
 
-MITM／代理 Job 使用独占空配置目录，显式关闭插件、MCP发现、更新检查和遥测。每个场景独立 checkpoint；
-失败只重跑该场景。直连成功而采集代理失败时，只允许一次受管复现，随后停线诊断，禁止重跑全矩阵碰运气。
-
-新版本取证只覆盖：
-
-- `change`、`condition_change`、`add` 的必要正反事实；
-- `delete` 的不存在性和消费者闭合证明；
-- `inherit` 尚缺少的目标语义证明。
-
-不得为继承规则重新生成 candidate 流量。官方请求证据一旦可信封存，工具修复、报告变化和 candidate 变化
-均不得成为重发理由；此后需要新 Campaign 时，用 `reuse-official-evidence` 把已封存官方阶段只读导入，
-只重新批准分类，不重发官方请求。
-
-VC-5 的增量边界固定如下：
-
-- `seal` 只聚合 canonical checkpoint 和本轮新增的小型收据，不遍历历史证据根；
-- `compare` 只比较 checkpoint 摘要、画像差异和 `affected_rules` 收据，历史原始证据扫描量必须为零；
-- `accept` 只执行或重放 `affected_rules` 的断言；`inherited_rules` 必须逐条重放导入时封存的迁移收据；
-- 任一步骤发现执行集合含继承规则、九项已复用 Candidate Job 或新 live 请求，立即停线。
-
-### 5.3.4 失败恢复
-
-官方客户端升级失败统一执行 §5.1.2，不再定义版本专用恢复分支：
-
-- 身份不变的临时失败保留原 attempt，只执行失败或未完成项；
-- 规则、画像、用途或官方产物变化时停止当前 Campaign，并从相应 VC 阶段建立新身份；
-- candidate 源码、构建或镜像变化时建立新 candidate，但只执行受影响闭集；
-- 采集账号、容器名、二进制路径或 compose 坐标等运行坐标变化时不新建 Campaign，也不新建 candidate；
-  在该候选首个 attempt 前登记候选层运行坐标覆盖收据，run 与 seal 读取同一份收据；
-- 控制面工具变化按 §5.1.3 生成 evaluator run，不使规则、证据或 Candidate Job 失效；
-- 已封存官方请求只读复用，任何恢复均不得自动重发；
-- 执行集合为空时写 `incremental-noop` 并立即退出。
-
-旧 Campaign 的 `successor／epoch／repair／transition` 只作为历史记录读取，不得继续追加，也不得作为新流程
-前置条件。需要承接时按 §5.1.2 一次性导入 canonical checkpoint。
+任何恢复分支都不得改写历史实体或自动重发已封存的官方请求；没有实际执行项时不得创建空转身份。
 
 ### 5.3.5 时间预算与停线
 
-正常官方客户端增量升级目标为4～6小时；差异很小时应明显短于该目标。默认阶段预算：
+VC-0 必须冻结总 deadline、阶段预算、同根因重试上限和资源水位；具体数值由客户端指南或本次已批准的
+Campaign 计划规定，本框架不为不同客户端设置统一固定时长。
 
-| 阶段 | 上限 |
-|---|---:|
-| VC-0 | 45分钟 |
-| VC-1～VC-3 | 75分钟 |
-| VC-4 | 90分钟 |
-| VC-5 | 75分钟 |
-| VC-6 | 75分钟 |
+时间账本从准备工作的第一项开始连续记录，不得在正式取证、新 Candidate 或恢复执行时重新起算。阶段预算
+或总 deadline 先到即停线；不得为同一工作对象新建 Campaign、Candidate 或控制收据来重置计时。
 
-阶段或总预算先到即停线。预算到期不得创建新 Campaign、candidate、successor 或控制收据来重置计时。
-停线报告必须给出最后合法 checkpoint、根因、已耗墙钟、execute／reuse、live 请求数、扫描字节和唯一下一动作。
-
-若差异不超过3条，P0 应给出2小时内完成定向实现、验收和部署的计划；无法满足时必须在正式取证前说明具体
-阻断，禁止进入无界执行。
+停线报告至少包含最后合法 checkpoint、根因、已耗墙钟、执行与复用范围、live 请求量、扫描量和唯一下一
+动作。`validation_only` 在 VC-6 交付候选与完整证据；`production_replacement` 还必须按 §5.6 完成生产
+激活、实际回滚和目标恢复。客户端不具备生产权限时，只能采用前一种终点。
 
 ## 5.4 修改共享合同或运行时
 
@@ -801,52 +699,44 @@ VC-5 的增量边界固定如下：
 
 <a id="638-fw-h生产迁移与遗留退休"></a>
 
-生产激活只执行以下六步：
+VC-0 必须在 `validation_only` 与 `production_replacement` 中选择一个终点；进入正式 Campaign 后不得换用
+另一终点。两条路径都必须消费 VC-5 的同一份封存输出，但只有具备明确生产权限的客户端才能进入生产激活。
 
-1. 只读冻结当前镜像、compose、selector、Release、画像、数据和依赖，并将当前active确定为本次rollback。
-2. 从已验收candidate生成不可变production Release和正式ARM64镜像；不得修改或覆盖旧Release。
-3. 在隔离环境用默认 production selector 运行 canary，禁止强制 candidate mode。
-4. 在同一原子事务中将`production_rollback`指向原active、将`production_active`指向目标Release，并只替换应用容器；不得重建数据库、缓存、网络或挂载。
-5. 通过selector切回rollback验证真实入口和数据兼容，再原子恢复目标active并稳定观察。
-6. 签发 activation receipt，绑定 AcceptanceFact、源码、镜像、Release、selector、canary、切换、回滚和恢复。
+### 5.6.1 候选交付
 
-VC-6 只能从最新 canonical checkpoint 续跑，唯一入口为：
+`validation_only` 只交付已验收候选，不改变生产 Release、selector、运行镜像或依赖：
 
-```text
-canonical-advance production-activation --step-receipt <activation-receipt>
-canonical-advance rollback-verification --step-receipt <activation-receipt>
-canonical-advance retire --retire-version <旧-previous-version> --step-receipt <removal-receipt>
-```
+1. 重放 AcceptanceFact，核对 Candidate、Profile、Release、规则范围和构建产物身份一致；
+2. 在客户端指定的隔离环境完成最终门禁、候选切换、实际回退、目标恢复和稳定观察；
+3. 封装不可变候选、配置、公开证据索引、逐规则结果、回退材料和私有证据归档清单；
+4. 签发客户端定义的候选交付收据，达到 `ready_for_operator_release`。
 
-上面三条仅是 `campaign-run` 动作的 operation 示例，不得作为独立 CLI 写入入口。
+候选交付收据不得写成生产 DeploymentFact，也不得暗示用户管理的生产环境已经验证或修改。客户端没有生产
+权限、生产回退点不完整或生产环境不在本次范围内时，VC-6 必须在此终止。
 
-三个步骤都必须校验收据后追加 checkpoint，不得改写旧 checkpoint。`production-activation` 必须先绑定
-本轮 canonical acceptance、正式镜像和目标恢复终态；`rollback-verification` 只重放同一激活收据中的
-回滚与恢复事实；动态生成的 `retire-<旧-previous-version>` 仅在前两项完成且消费者扫描为零后执行。
-`--retire-version` 必须在 canonical 初始化时显式冻结，且不得等于本轮 active rollback 或目标版本。失败只保留当前步骤为待执行，
-禁止回退到 VC-0～VC-5、重建 Candidate、重跑九项 Job 或重发 Kilo。
+### 5.6.2 生产激活
 
-ARM64部署包必须同时包含受管工具和两份活动文档，拒绝 AppleDouble 文件；暂存树先验证摘要、属主和权限，
-再原子交换。部署包不是完整源码树；受影响项和公共终态门禁必须在完整只读源码快照执行，不能因包内缺
-文件扩大测试集合、修改业务工具或重跑已通过项。
+`production_replacement` 必须先满足候选交付条件，再执行以下共享步骤：
 
-监督器执行子进程时 stdin 固定关闭；禁止用 heredoc、管道输入或交互命令传入部署逻辑。部署脚本必须先
-作为有 SHA-256 的普通文件落盘，再作为 `campaign-run` 的预声明动作执行；执行后必须核对活动文件摘要和命令帮助，
-若命令返回 0 但摘要未变化，按 `supervised-noop` 失败，不得视为部署成功。
+1. 只读冻结当前生产 Release、selector、运行产物、数据和依赖，并将当前 active 固定为本次 rollback；
+2. 从已验收 Candidate 生成不可变 production Release 和正式产物，以差异清单连接两种身份；
+3. 在隔离环境使用默认 production selector 运行 canary，禁止强制 Candidate 模式；
+4. 在同一原子事务中更新 active／rollback，并只替换必要的应用运行时，不重建无关数据或依赖；
+5. 通过真实入口切回 rollback 验证数据兼容，再原子恢复目标 active 并稳定观察；
+6. 签发 activation receipt，绑定 AcceptanceFact、正式产物、Release、selector、canary、切换、回滚和恢复。
 
-部署后必须验证：
+VC-6 只执行 `affected_rules` 的生产检查和公共终态门禁；继承规则只重放封存收据。禁止在晋升、构建、
+canary、切换或回滚期间重跑完整 Candidate／规则矩阵或重发官方请求。任一失败立即恢复旧 Active，状态保持
+`production_unverified`；不得在故障实例上补画像、改环境或继续扩流。
 
-- active 版本、Release、Profile 和 selector 一致；
-- ARM64固定容器 IP、DMIT出口和 MTU 未变化；
-- 所有受影响规则通过生产最小检查；
-- 未受影响规则的冻结收据和依赖摘要仍可重放，不重新发送请求；
-- 回滚和恢复均成功；
-- 父监督器账本完整且 `audit-incomplete=false`。
+### 5.6.3 客户端执行入口
 
-VC-6 的测试集合固定为 `affected_rules` 的实现测试和公共终态门禁；继承规则只重放 checkpoint 摘要。
-禁止在 promotion、正式构建、canary、切换或回滚阶段重新执行全量 Candidate／全量规则回归。
+机器、命令、镜像、编排文件、收据 Schema、归档和清理方式只由客户端指南规定：
 
-任一失败立即恢复旧 Active，状态保持 `production_unverified`，不得在故障实例上补画像、改网络或继续扩流。
+| 客户端 | VC-6 执行权威 |
+|---|---|
+| Codex CLI | [§4.6](CODEX_CLI_CLIENT_EMULATION_GUIDE.md#codex-vc-6) |
+| Claude Code | [§4.6](CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md#claude-vc-6) |
 
 ## 5.7 完成定义
 
@@ -857,6 +747,7 @@ RuleMigrationManifest 完整
 ∧ affected_items 全部通过
 ∧ inherited_items 全部可重放
 ∧ AcceptanceFact 完整
+∧ 客户端候选交付收据可重放
 ⇒ ready_for_operator_release
 ```
 
@@ -864,13 +755,14 @@ RuleMigrationManifest 完整
 
 ```text
 ready_for_operator_release
-∧ ARM64 production Release 已激活
+∧ production Release 与正式运行产物已激活
+∧ 默认 production selector 解析到目标 Release
 ∧ canary、切换、回滚和恢复通过
 ∧ activation receipt 可重放
 ∧ 审计账本完整
 ⇒ production_active_upgraded
 ```
 
-除这两个公式外，不得以版本号、candidate、测试通过、镜像存在或收据数量宣称升级完成。
-
-自 0.151 起 `production_active_upgraded` 由门禁机器判定：终态收据 `docs/egress/maintenance/CODEX_CLI_<前版>_TO_<本版>_TERMINAL_STATE_RECEIPT.json` 入库后，`make check-egress-spec-ci` 与 `officialegress`/`service` 冻结测试校验其自摘要、四份阶段收据与审计索引逐字在库、审计索引复核通过、退休画像已不存在、Runtime Catalog 的 source 落在其 Campaign 链上；Runtime Catalog 的 active 版本没有终态收据即失败。
+这两个公式只定义共享语义，具体状态字段、收据 Schema 和机器门禁以客户端指南为准。客户端没有生产权限时
+不得宣称 `production_active_upgraded`；任何客户端都不得仅凭版本号、Candidate、测试通过、产物存在或收据
+数量宣称升级完成。

@@ -11,6 +11,8 @@ import (
 
 const codexCLINarrativeRetirementSHA256 = "5c4eec66d9f1d05bc0a651cace3d9bc4470a008e8bc88abff5dbb591f17832cf"
 
+const codexCLIHistoryAuditPath = "docs/CODEX_CLI_CLIENT_EMULATION_HISTORY_AUDIT.md"
+
 type codexCLINarrativeRemoval struct {
 	Path                string   `json:"path"`
 	SHA256BeforeRemoval string   `json:"sha256_before_removal"`
@@ -82,6 +84,13 @@ func TestCodexCLINarrativeRetirementIsFrozenAndComplete(t *testing.T) {
 	if !bytes.Contains(guideRaw, []byte("# "+receipt.Authority.Title)) {
 		t.Fatalf("主手册标题与退役回执不一致：%s", receipt.Authority.Title)
 	}
+	historyAuditRaw, err := os.ReadFile(filepath.Join(repositoryRoot, filepath.FromSlash(codexCLIHistoryAuditPath)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(guideRaw, []byte("CODEX_CLI_CLIENT_EMULATION_HISTORY_AUDIT.md")) {
+		t.Fatal("主手册缺少 Codex CLI 历史审计入口")
+	}
 
 	expectedRemoved := map[string]string{
 		"docs/egress/maintenance/ACCEPT_PIPELINE_DEFECTS.md":                "1ca6f85e3248081fda5fee4ba858bef693ef333f9b6377a835222226db5880f1",
@@ -106,8 +115,8 @@ func TestCodexCLINarrativeRetirementIsFrozenAndComplete(t *testing.T) {
 			t.Fatalf("已退役历史叙事仍存在或状态异常：path=%s err=%v", removed.Path, statErr)
 		}
 		for _, anchor := range removed.ReplacementAnchors {
-			if !bytes.Contains([]byte(guideText), []byte(anchor)) {
-				t.Fatalf("主手册缺少退役内容替代锚点：path=%s anchor=%s", removed.Path, anchor)
+			if !bytes.Contains([]byte(guideText), []byte(anchor)) && !bytes.Contains(historyAuditRaw, []byte(anchor)) {
+				t.Fatalf("主手册及历史审计均缺少退役内容替代锚点：path=%s anchor=%s", removed.Path, anchor)
 			}
 		}
 	}

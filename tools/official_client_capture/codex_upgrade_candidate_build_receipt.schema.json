@@ -1,0 +1,174 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-candidate-build-receipt-v1.json",
+  "title": "Codex VC-4 Candidate 同源构建收据",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "status",
+    "campaign_id",
+    "campaign_manifest_sha256",
+    "candidate_id",
+    "candidate_purpose",
+    "target_version",
+    "deployed_version",
+    "target_architecture",
+    "source",
+    "binary",
+    "image",
+    "build",
+    "profile",
+    "catalog_stage",
+    "source_transition",
+    "gate_requirements",
+    "gate_plan",
+    "implementation_tests",
+    "built_at_utc",
+    "receipt_digest"
+  ],
+  "properties": {
+    "schema_version": {"const": "codex-upgrade-candidate-build-receipt/v1"},
+    "status": {"const": "complete"},
+    "campaign_id": {"$ref": "#/$defs/safeId"},
+    "campaign_manifest_sha256": {"$ref": "#/$defs/sha256"},
+    "candidate_id": {"$ref": "#/$defs/safeId"},
+    "candidate_purpose": {"$ref": "#/$defs/purpose"},
+    "target_version": {"$ref": "#/$defs/version"},
+    "deployed_version": {"$ref": "#/$defs/version"},
+    "target_architecture": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["root", "tree_sha256", "git_commit"],
+      "properties": {
+        "root": {"$ref": "#/$defs/absolutePath"},
+        "tree_sha256": {"$ref": "#/$defs/sha256"},
+        "git_commit": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"}
+      }
+    },
+    "binary": {"$ref": "#/$defs/absoluteFileBinding"},
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reference", "manifest_digest", "image_id"],
+      "properties": {
+        "reference": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._/:+-]*@sha256:[0-9a-f]{64}$"
+        },
+        "manifest_digest": {"$ref": "#/$defs/imageId"},
+        "image_id": {"$ref": "#/$defs/imageId"}
+      }
+    },
+    "build": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["build_id", "parameters", "parameters_sha256"],
+      "properties": {
+        "build_id": {"$ref": "#/$defs/safeId"},
+        "parameters": {"type": "object"},
+        "parameters_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["profile_id", "profile_digest", "derivation_receipt_sha256"],
+      "properties": {
+        "profile_id": {"$ref": "#/$defs/safeId"},
+        "profile_digest": {"$ref": "#/$defs/sha256"},
+        "derivation_receipt_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "catalog_stage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "catalog_tree_sha256"],
+      "properties": {
+        "path": {"$ref": "#/$defs/absolutePath"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "catalog_tree_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "source_transition": {"$ref": "#/$defs/absoluteBinding"},
+    "gate_requirements": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "requirements_sha256"],
+      "properties": {
+        "path": {"$ref": "#/$defs/relativePath"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "requirements_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "gate_plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "plan_sha256", "requirements_sha256"],
+      "properties": {
+        "path": {"$ref": "#/$defs/absolutePath"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "plan_sha256": {"$ref": "#/$defs/sha256"},
+        "requirements_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "implementation_tests": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidence_root", "receipt", "receipt_digest"],
+      "properties": {
+        "evidence_root": {"$ref": "#/$defs/absolutePath"},
+        "receipt": {"$ref": "#/$defs/relativeFileBinding"},
+        "receipt_digest": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "built_at_utc": {"type": "string", "format": "date-time"},
+    "receipt_digest": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "safeId": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+    "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "purpose": {"enum": ["validation_only", "production_replacement"]},
+    "imageId": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "absolutePath": {"type": "string", "pattern": "^/"},
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$"
+    },
+    "absoluteBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": {"$ref": "#/$defs/absolutePath"},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "absoluteFileBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "bytes"],
+      "properties": {
+        "path": {"$ref": "#/$defs/absolutePath"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "bytes": {"type": "integer", "minimum": 1}
+      }
+    },
+    "relativeFileBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "bytes"],
+      "properties": {
+        "path": {"$ref": "#/$defs/relativePath"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "bytes": {"type": "integer", "minimum": 1}
+      }
+    }
+  }
+}

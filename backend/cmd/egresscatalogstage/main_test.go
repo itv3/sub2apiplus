@@ -12,6 +12,10 @@ import (
 )
 
 func approvedProfileManifestForStageTest(t *testing.T) []byte {
+	return approvedProfileManifestForStageVersionTest(t, "0.148.0")
+}
+
+func approvedProfileManifestForStageVersionTest(t *testing.T, targetVersion string) []byte {
 	t.Helper()
 	active, err := officialegress.DefaultReleaseCatalog().Resolve(officialegress.ReleaseModeActive)
 	if err != nil {
@@ -22,7 +26,7 @@ func approvedProfileManifestForStageTest(t *testing.T) []byte {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw = []byte(strings.ReplaceAll(string(raw), active.Version(), "0.148.0"))
+	raw = []byte(strings.ReplaceAll(string(raw), active.Version(), targetVersion))
 	if err := json.Unmarshal(raw, &snapshot); err != nil {
 		t.Fatal(err)
 	}
@@ -40,8 +44,8 @@ func approvedProfileManifestForStageTest(t *testing.T) []byte {
 	}
 	manifest := approvedProfileManifest{
 		SchemaVersion:        "codex-egress-profile/v1",
-		CodexVersion:         "0.148.0",
-		ProfileID:            "codex-0.148.0-stage-test",
+		CodexVersion:         targetVersion,
+		ProfileID:            "codex-" + targetVersion + "-stage-test",
 		ProfileDigest:        snapshot.Digest,
 		ProfilePayload:       payload,
 		ProfilePayloadSHA256: canonicalSHA256(canonicalPayload),
@@ -69,6 +73,8 @@ func TestStageApprovedProfileWritesCompleteImmutableCandidateDirectory(t *testin
 		manifestPath,
 		"codex-0-147-stage-test",
 		strings.Repeat("a", 64),
+		"",
+		"",
 		output,
 	)
 	if err != nil {
@@ -93,9 +99,64 @@ func TestStageApprovedProfileWritesCompleteImmutableCandidateDirectory(t *testin
 		manifestPath,
 		"codex-0-147-stage-test",
 		strings.Repeat("a", 64),
+		"",
+		"",
 		output,
 	); err == nil {
 		t.Fatal("重复输出覆盖候选目录时未失败关闭")
+	}
+}
+
+func TestStageApprovedProfileBindsVC3ArtifactsFor0154(t *testing.T) {
+	root := t.TempDir()
+	manifestPath := filepath.Join(root, "profile.json")
+	manifestRaw := approvedProfileManifestForStageVersionTest(t, "0.154.0")
+	if err := os.WriteFile(manifestPath, manifestRaw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	derivationSHA := strings.Repeat("b", 64)
+	requirementsSHA := strings.Repeat("c", 64)
+	receipt, err := stageApprovedProfile(
+		manifestPath,
+		"codex-0-154-stage-test",
+		strings.Repeat("a", 64),
+		derivationSHA,
+		requirementsSHA,
+		filepath.Join(resolvedRoot, "catalog-stage"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipt["profile_derivation_sha256"] != derivationSHA ||
+		receipt["post_promotion_gate_requirements_sha256"] != requirementsSHA {
+		t.Fatalf("候选目录收据未绑定 VC-3 制品：%v", receipt)
+	}
+}
+
+func TestStageApprovedProfileRejectsMissingVC3ArtifactsFor0154(t *testing.T) {
+	root := t.TempDir()
+	manifestPath := filepath.Join(root, "profile.json")
+	manifestRaw := approvedProfileManifestForStageVersionTest(t, "0.154.0")
+	if err := os.WriteFile(manifestPath, manifestRaw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stageApprovedProfile(
+		manifestPath,
+		"codex-0-154-stage-test",
+		strings.Repeat("a", 64),
+		"",
+		"",
+		filepath.Join(resolvedRoot, "catalog-stage"),
+	); err == nil {
+		t.Fatal("0.154.0 缺少 VC-3 摘要时未失败关闭")
 	}
 }
 

@@ -10,6 +10,7 @@ from pathlib import Path
 from tools.official_client_capture import codex_upgrade_arm64_environment_receipt as arm
 from tools.official_client_capture import codex_upgrade_job_rehearsal_receipt as rehearsal
 from tools.official_client_capture import codex_upgrade_timing_ledger as timing
+from tools.official_client_capture import codex_upgrade_vc_receipt as vc_receipt
 
 
 def _write(path: Path, value: object) -> Path:
@@ -335,3 +336,83 @@ def create_job_rehearsal_receipt(
     _write(root / "facts.json", facts)
     rehearsal.finalize(root, "facts.json", "receipt.json")
     return root / "receipt.json"
+
+
+def create_p0_gate_receipt(
+    root: Path,
+    *,
+    upgrade_id: str,
+    baseline_version: str,
+    target_version: str,
+    campaign_purpose: str,
+    job_rehearsal_receipt: Path,
+) -> Path:
+    """创建不运行命令、但结构与正式 P0 完全一致的合成门禁收据。"""
+
+    root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    root.chmod(0o700)
+    evidence = []
+    for role in sorted(
+        {
+            "campaign_run_rehearsal",
+            "check_egress_spec",
+            "job_rehearsal",
+            "rollback",
+            "test_capture_tools",
+        }
+    ):
+        relative = f"evidence/{role}.log"
+        _write(root / relative, {"role": role, "status": "passed"})
+        evidence.append({"role": role, "path": relative})
+    facts = {
+        "schema_version": vc_receipt.FACTS_SCHEMA,
+        "kind": "p0_gate",
+        "subject": {
+            "upgrade_id": upgrade_id,
+            "campaign_id": None,
+            "campaign_purpose": campaign_purpose,
+            "baseline_version": baseline_version,
+            "target_version": target_version,
+            "candidate_id": None,
+            "attempt_id": None,
+        },
+        "assertions": {
+            "offline_gates": [
+                {
+                    "gate_id": "check-egress-spec",
+                    "kind": "public",
+                    "command": ["make", "check-egress-spec"],
+                    "exit_code": 0,
+                    "passed": 1,
+                    "failed": 0,
+                    "approved_skip": 0,
+                    "unexpected_skip": 0,
+                },
+                {
+                    "gate_id": "test-capture-tools",
+                    "kind": "public",
+                    "command": ["make", "test-capture-tools"],
+                    "exit_code": 0,
+                    "passed": 1,
+                    "failed": 0,
+                    "approved_skip": 0,
+                    "unexpected_skip": 0,
+                },
+            ],
+            "tool_blockers": [],
+            "campaign_run_rehearsal": {
+                "multi_batch_passed": True,
+                "original_deadline_inherited": True,
+                "frozen_jobs_passed": True,
+                "live_request_count": 0,
+            },
+            "rollback_ready": True,
+            "job_rehearsal_sha256": hashlib.sha256(
+                job_rehearsal_receipt.read_bytes()
+            ).hexdigest(),
+        },
+        "evidence": evidence,
+    }
+    facts_path = _write(root / "p0-facts.json", facts)
+    vc_receipt.finalize(root.resolve(), facts_path.name, "p0-receipt.json")
+    return root / "p0-receipt.json"

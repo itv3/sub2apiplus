@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-candidate-delivery-receipt-v1.json",
+  "title": "Codex VC-6 Candidate 交付终态收据",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "status",
+    "release_state",
+    "campaign_id",
+    "campaign_manifest_sha256",
+    "campaign_purpose",
+    "candidate_id",
+    "attempt_id",
+    "target_version",
+    "candidate_identity_sha256",
+    "build_receipt",
+    "acceptance_fact",
+    "canonical_checkpoint",
+    "production_state",
+    "metrics",
+    "issued_at_utc",
+    "receipt_digest"
+  ],
+  "properties": {
+    "schema_version": {"const": "codex-upgrade-candidate-delivery-receipt/v1"},
+    "status": {"const": "complete"},
+    "release_state": {
+      "enum": ["ready_for_operator_release", "production_active_restored"]
+    },
+    "campaign_id": {"$ref": "#/$defs/safeId"},
+    "campaign_manifest_sha256": {"$ref": "#/$defs/sha256"},
+    "campaign_purpose": {"$ref": "#/$defs/purpose"},
+    "candidate_id": {"$ref": "#/$defs/safeId"},
+    "attempt_id": {"$ref": "#/$defs/safeId"},
+    "target_version": {"$ref": "#/$defs/version"},
+    "candidate_identity_sha256": {"$ref": "#/$defs/sha256"},
+    "build_receipt": {"$ref": "#/$defs/fileBinding"},
+    "acceptance_fact": {"$ref": "#/$defs/fileBinding"},
+    "canonical_checkpoint": {
+      "oneOf": [
+        {"$ref": "#/$defs/fileBinding"},
+        {"type": "null"}
+      ]
+    },
+    "production_state": {
+      "enum": ["accepted_not_activated", "restored_active"]
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scanned_bytes", "live_request_count"],
+      "properties": {
+        "scanned_bytes": {"const": 0},
+        "live_request_count": {"const": 0}
+      }
+    },
+    "issued_at_utc": {"type": "string", "format": "date-time"},
+    "receipt_digest": {"$ref": "#/$defs/sha256"}
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"campaign_purpose": {"const": "validation_only"}},
+        "required": ["campaign_purpose"]
+      },
+      "then": {
+        "properties": {
+          "release_state": {"const": "ready_for_operator_release"},
+          "canonical_checkpoint": {"type": "null"},
+          "production_state": {"const": "accepted_not_activated"}
+        }
+      },
+      "else": {
+        "properties": {
+          "release_state": {"const": "production_active_restored"},
+          "canonical_checkpoint": {"$ref": "#/$defs/fileBinding"},
+          "production_state": {"const": "restored_active"}
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "safeId": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+    "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "purpose": {"enum": ["validation_only", "production_replacement"]},
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$"
+    },
+    "fileBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "bytes"],
+      "properties": {
+        "path": {"$ref": "#/$defs/relativePath"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "bytes": {"type": "integer", "minimum": 1}
+      }
+    }
+  }
+}

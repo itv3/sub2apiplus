@@ -1,90 +1,114 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://sub2apiplus.local/schema/codex-upgrade-campaign-run.schema.json",
-  "title": "Codex upgrade canonical campaign run",
-  "type": "object",
-  "additionalProperties": false,
-  "required": [
-    "schema_version",
-    "campaign_id",
-    "phase",
-    "deadline_seconds",
-    "no_op",
-    "actions"
+  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-campaign-run.json",
+  "title": "Codex 升级 campaign-run 动作清单",
+  "oneOf": [
+    {"$ref": "#/$defs/v1"},
+    {"$ref": "#/$defs/v2"}
   ],
-  "properties": {
-    "schema_version": {
-      "const": "codex-upgrade-campaign-run/v1"
-    },
-    "campaign_id": {
+  "$defs": {
+    "safeId": {
       "type": "string",
-      "pattern": "^[A-Za-z0-9._-]{1,128}$"
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
     },
     "phase": {
       "type": "string",
-      "pattern": "^[A-Za-z0-9._-]{1,32}$"
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$"
     },
-    "deadline_seconds": {
-      "type": "number",
-      "exclusiveMinimum": 0
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
     },
-    "no_op": {
-      "type": "boolean"
-    },
-    "actions": {
+    "idArray": {
       "type": "array",
       "maxItems": 256,
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": [
-          "action_id",
-          "operation",
-          "timeout_seconds",
-          "command"
-        ],
-        "properties": {
-          "action_id": {
-            "type": "string",
-            "pattern": "^[A-Za-z0-9._-]{1,128}$"
-          },
-          "operation": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 256
-          },
-          "timeout_seconds": {
-            "type": "number",
-            "exclusiveMinimum": 0
-          },
-          "command": {
-            "type": "array",
-            "minItems": 1,
-            "maxItems": 64,
-            "items": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 4096
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/safeId"}
+    },
+    "command": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {"type": "string", "minLength": 1, "maxLength": 4096}
+    },
+    "actionV1": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action_id", "operation", "timeout_seconds", "command"],
+      "properties": {
+        "action_id": {"$ref": "#/$defs/safeId"},
+        "operation": {"type": "string", "minLength": 1, "maxLength": 256},
+        "timeout_seconds": {"type": "number", "exclusiveMinimum": 0, "maximum": 86400},
+        "command": {"$ref": "#/$defs/command"}
+      }
+    },
+    "actionV2": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action_id", "operation", "timeout_seconds", "command", "item_ids"],
+      "properties": {
+        "action_id": {"$ref": "#/$defs/safeId"},
+        "operation": {"type": "string", "minLength": 1, "maxLength": 256},
+        "timeout_seconds": {"type": "number", "exclusiveMinimum": 0, "maximum": 86400},
+        "command": {"$ref": "#/$defs/command"},
+        "item_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/safeId"}
         }
-    },
-    "execute_items": {
-      "type": "array",
-      "maxItems": 256,
-      "items": {
-        "type": "string",
-        "pattern": "^[A-Za-z0-9._-]{1,128}$"
       }
     },
-    "reuse_items": {
-      "type": "array",
-      "maxItems": 256,
-      "items": {
-        "type": "string",
-        "pattern": "^[A-Za-z0-9._-]{1,128}$"
+    "checkpointReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "phase", "checkpoint_sha256"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "phase": {"$ref": "#/$defs/phase"},
+        "checkpoint_sha256": {"$ref": "#/$defs/sha256"}
       }
-    }
-  }
-}
+    },
+    "v1": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "campaign_id", "phase", "deadline_seconds", "actions", "no_op"],
+      "properties": {
+        "schema_version": {"const": "codex-upgrade-campaign-run/v1"},
+        "campaign_id": {"$ref": "#/$defs/safeId"},
+        "phase": {"$ref": "#/$defs/phase"},
+        "deadline_seconds": {"type": "number", "exclusiveMinimum": 0, "maximum": 86400},
+        "actions": {"type": "array", "maxItems": 256, "items": {"$ref": "#/$defs/actionV1"}},
+        "execute_items": {"$ref": "#/$defs/idArray"},
+        "reuse_items": {"$ref": "#/$defs/idArray"},
+        "no_op": {"type": "boolean"}
+      }
+    },
+    "v2": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version", "campaign_id", "campaign_plan_sha256", "batch_id",
+        "batch_sequence", "batch_sha256", "phase", "predecessor_checkpoint",
+        "original_deadline_at_utc", "actions", "execute_items", "reuse_items", "no_op"
+      ],
+      "properties": {
+        "schema_version": {"const": "codex-upgrade-campaign-run/v2"},
+        "campaign_id": {"$ref": "#/$defs/safeId"},
+        "campaign_plan_sha256": {"$ref": "#/$defs/sha256"},
+        "batch_id": {"$ref": "#/$defs/safeId"},
+        "batch_sequence": {"type": "integer", "minimum": 1},
+        "batch_sha256": {"$ref": "#/$defs/sha256"},
+        "phase": {"$ref": "#/$defs/phase"},
+        "predecessor_checkpoint": {"$ref": "#/$defs/checkpointReference"},
+        "original_deadline_at_utc": {"type": "string", "format": "date-time"},
+        "actions": {"type": "array", "maxItems": 256, "items": {"$ref": "#/$defs/actionV2"}},
+        "execute_items": {"$ref": "#/$defs/idArray"},
+        "reuse_items": {"$ref": "#/$defs/idArray"},
+        "no_op": {"type": "boolean"}
+      }
     }
   }
 }

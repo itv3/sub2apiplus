@@ -42,11 +42,15 @@ from typing import Any, Callable, Mapping
 # 并增加穿过正式画像派生校验的离线回归；规则语义与网络行为不变。
 # 2026-09-12（canonical 生产链修复）：fresh Candidate attempt 可原生初始化
 # checkpoint，并由显式版本参数决定旧 Previous 退休项；受管工具摘要随之更新。
+# 2026-09-12（VC 制品链闭合）：新增动态门禁需求／计划、Candidate 构建与交付收据，
+# 并把 0.154 的画像派生、构建身份和 post-promotion v4 门禁纳入受管工具树。
+# 2026-09-13（VC-0～VC-6 最终对齐）：补齐多批次控制、阶段完成收据、两阶段生产
+# 交付和对应失败关闭；受管工具树与监督器摘要随之更新。
 DEFAULT_TOOL_DIGEST = (
-    "124856cbcd0a61aa63db6edec7919af64c2ae9df1294d592fa8739485cf968d7"
+    "192d89aaff1ee789a49c3e26d336be88ef85e194303acc2a3b3c861bfcb05a23"
 )
 DEFAULT_SUPERVISOR_DIGEST = (
-    "f12daa3edb619546081141ac736af56dfb34b4cadff3bf63fe8dacabf22d80b4"
+    "4434f47747bf4612f8fa57918529d0ed3dc64f686b504b4478905fceb75f11bd"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "b9ca7b6f48b3c33a63a864a9ce7ebd617335378ea52fe9148ea161ab3b276ada"

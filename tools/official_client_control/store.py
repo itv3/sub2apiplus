@@ -308,7 +308,13 @@ class ControlStore:
         return receipt
 
     def list_receipt_refs(self, kind: str) -> list[dict[str, Any]]:
-        if kind not in {"promotion", "activation"}:
+        if kind not in {
+            "promotion",
+            "activation",
+            "candidate_build",
+            "validation_gate",
+            "candidate_delivery",
+        }:
             raise ControlError(f"未知收据类型：{kind}")
         directory = self.root / "receipts" / kind
         if not directory.exists():
@@ -396,7 +402,13 @@ class ControlStore:
 
         receipt_count = 0
         receipts_dir = self.root / "receipts"
-        for kind in ("promotion", "activation"):
+        for kind in (
+            "promotion",
+            "activation",
+            "candidate_build",
+            "validation_gate",
+            "candidate_delivery",
+        ):
             directory = receipts_dir / kind
             if not directory.exists():
                 continue
@@ -407,6 +419,9 @@ class ControlStore:
                     raise ControlError(f"收据路径非法：{path}")
                 reference = {"receipt_kind": kind, "sha256": path.stem}
                 replay_receipt(self, reference)
+                external_bindings.extend(
+                    self._iter_external_bindings(self.load_receipt(reference))
+                )
                 receipt_count += 1
 
         if external_bindings and external_root is None and require_external:

@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/codex-post-promotion-gate-requirements-v1.json",
+  "title": "Codex VC-3 post-promotion 门禁需求",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "campaign_id",
+    "target_version",
+    "joint_manifest_sha256",
+    "migration_manifest",
+    "affected_rule_ids",
+    "inherited_rule_ids",
+    "requirements",
+    "requirement_count",
+    "requirements_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "codex-post-promotion-gate-requirements/v1"},
+    "campaign_id": {"$ref": "#/$defs/safeId"},
+    "target_version": {"$ref": "#/$defs/version"},
+    "joint_manifest_sha256": {"$ref": "#/$defs/sha256"},
+    "migration_manifest": {"$ref": "#/$defs/binding"},
+    "affected_rule_ids": {"$ref": "#/$defs/ruleIds"},
+    "inherited_rule_ids": {"$ref": "#/$defs/ruleIds"},
+    "requirements": {
+      "type": "array",
+      "minItems": 4,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/requirement"}
+    },
+    "requirement_count": {"type": "integer", "minimum": 4},
+    "requirements_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "safeId": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+    "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "ruleId": {"type": "string", "pattern": "^SPEC-[A-Z0-9]+-[0-9]{3}$"},
+    "ruleIds": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/ruleId"}
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "requirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["gate_id", "kind", "rule_id", "required_test_semantic"],
+      "properties": {
+        "gate_id": {"$ref": "#/$defs/safeId"},
+        "kind": {"enum": ["affected_rule", "public"]},
+        "rule_id": {
+          "oneOf": [
+            {"$ref": "#/$defs/ruleId"},
+            {"type": "null"}
+          ]
+        },
+        "required_test_semantic": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}
