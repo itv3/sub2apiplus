@@ -40,8 +40,10 @@ from typing import Any, Callable, Mapping
 # 统一迁入 /root/docker/capture-cli/data，受管工具树摘要随之更新。
 # 2026-09-12（0.154 补丁绑定修复）：画像补丁清单改为绑定活动画像文件 SHA-256，
 # 并增加穿过正式画像派生校验的离线回归；规则语义与网络行为不变。
+# 2026-09-12（canonical 生产链修复）：fresh Candidate attempt 可原生初始化
+# checkpoint，并由显式版本参数决定旧 Previous 退休项；受管工具摘要随之更新。
 DEFAULT_TOOL_DIGEST = (
-    "0b7140e1f26ef0ea3bace16593700b7751a29d40b44fc8856fad2b6b3bc19505"
+    "124856cbcd0a61aa63db6edec7919af64c2ae9df1294d592fa8739485cf968d7"
 )
 DEFAULT_SUPERVISOR_DIGEST = (
     "f12daa3edb619546081141ac736af56dfb34b4cadff3bf63fe8dacabf22d80b4"

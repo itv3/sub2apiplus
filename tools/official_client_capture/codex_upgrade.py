@@ -199,7 +199,7 @@ CANONICAL_DIRECTORY = "canonical"
 CANONICAL_CHECKPOINT_DIRECTORY = "checkpoints"
 CANONICAL_IMPORT_RECEIPT_FILENAME = "import-receipt.json"
 CANONICAL_PRODUCTION_STEPS = frozenset(
-    {"production-activation", "rollback-verification", "retire-0.147.0"}
+    {"production-activation", "rollback-verification", "retire"}
 )
 CANONICAL_REMOVAL_RECEIPT_SCHEMA = "codex-runtime-profile-removal/v1"
 CAMPAIGN_MODES = frozenset({"preflight_only", "formal"})
@@ -7487,7 +7487,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     canonical_import = subparsers.add_parser(
         "canonical-import",
-        help="把历史恢复链一次性导入唯一 canonical checkpoint",
+        help="从当前成功 attempt 或历史恢复链初始化唯一 canonical checkpoint",
     )
     add_candidate_reference(canonical_import)
     canonical_import.add_argument("--attempt-id", required=True)
@@ -7519,6 +7519,11 @@ def _build_parser() -> argparse.ArgumentParser:
         default="VC-5",
     )
     canonical_import.add_argument(
+        "--retire-version",
+        required=True,
+        help="目标激活并验证回滚后，从运行 Catalog 退休的旧 Previous 版本。",
+    )
+    canonical_import.add_argument(
         "--approve-import-sha256",
         help="复核零扫描、零请求导入预览后回传的摘要。",
     )
@@ -7539,6 +7544,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "--step-receipt",
         type=Path,
         help="VC-6 必需：Campaign 内已生成并可独立重放的激活或删除收据。",
+    )
+    canonical_advance.add_argument(
+        "--retire-version",
+        help="canonical-step=retire 时必需，必须与初始化时冻结的退休项一致。",
     )
     add_watchdog_options(canonical_advance)
 
@@ -31179,7 +31188,7 @@ def validate_profile_derivation(
 
 
 def _canonical_import_subject(arguments: argparse.Namespace) -> dict[str, Any]:
-    """从当前小型收据构造一次性导入主题，不复制或扫描原始证据。"""
+    """从当前小型收据构造一次性 checkpoint，不复制或扫描原始证据。"""
 
     campaign_dir = arguments.campaign_dir
     _validate_existing_campaign_path(campaign_dir)
@@ -31196,6 +31205,15 @@ def _canonical_import_subject(arguments: argparse.Namespace) -> dict[str, Any]:
         raise ConfigurationError("--candidate-id 格式非法。")
     if not SAFE_ID_RE.fullmatch(arguments.attempt_id):
         raise ConfigurationError("--attempt-id 格式非法。")
+    retire_version = str(getattr(arguments, "retire_version", ""))
+    if (
+        not VERSION_RE.fullmatch(retire_version)
+        or retire_version
+        in {str(manifest["baseline_version"]), str(manifest["target_version"])}
+    ):
+        raise ConfigurationError(
+            "--retire-version 必须是不同于 active rollback 和目标的旧 Previous 版本。"
+        )
 
     classification_path = campaign_dir / "classification" / "result.json"
     classification = _read_json(classification_path, "已批准分类结果")
@@ -31262,19 +31280,39 @@ def _canonical_import_subject(arguments: argparse.Namespace) -> dict[str, Any]:
     incremental_plan = attempt.get("incremental_plan")
     if not isinstance(incremental_plan, Mapping):
         raise ConfigurationError("Candidate attempt 缺少增量计划。")
-    planned_job_ids = incremental_plan.get("planned_job_ids")
-    reused_job_ids = incremental_plan.get("reused_job_ids")
+    plan_lists: dict[str, list[str]] = {}
+    for field in (
+        "planned_job_ids",
+        "reused_job_ids",
+        "affected_job_ids",
+        "failed_job_ids",
+        "pending_job_ids",
+        "executed_job_ids",
+    ):
+        value = incremental_plan.get(field)
+        if (
+            not isinstance(value, list)
+            or not all(
+                isinstance(item, str) and SAFE_ID_RE.fullmatch(item)
+                for item in value
+            )
+            or len(value) != len(set(value))
+        ):
+            raise ConfigurationError(f"Candidate attempt {field} 非法。")
+        plan_lists[field] = value
+    planned_job_ids = plan_lists["planned_job_ids"]
+    reused_job_ids = plan_lists["reused_job_ids"]
+    executed_job_ids = plan_lists["executed_job_ids"]
     if (
-        not isinstance(planned_job_ids, list)
-        or not isinstance(reused_job_ids, list)
-        or sorted(planned_job_ids) != sorted(reused_job_ids)
-        or incremental_plan.get("affected_job_ids") != []
-        or incremental_plan.get("failed_job_ids") != []
-        or incremental_plan.get("pending_job_ids") != []
-        or incremental_plan.get("executed_job_ids") != []
+        not planned_job_ids
+        or plan_lists["failed_job_ids"]
+        or plan_lists["pending_job_ids"]
+        or set(reused_job_ids).intersection(executed_job_ids)
+        or set(planned_job_ids) != set(reused_job_ids) | set(executed_job_ids)
+        or set(plan_lists["affected_job_ids"]) != set(executed_job_ids)
     ):
         raise ConfigurationError(
-            "历史 Candidate Job 不是零执行全复用，禁止 canonical 导入。"
+            "Candidate Job 必须成功闭合，executed 与 reused 精确覆盖计划。"
         )
     results = attempt.get("results")
     if not isinstance(results, list) or len(results) != len(planned_job_ids):
@@ -31288,19 +31326,28 @@ def _canonical_import_subject(arguments: argparse.Namespace) -> dict[str, Any]:
     items: list[dict[str, Any]] = []
     for job_id in sorted(planned_job_ids):
         result = result_by_id[job_id]
-        source = result.get("source_receipt")
+        disposition = "executed" if job_id in executed_job_ids else "reused"
         if (
             result.get("status") != "complete"
-            or result.get("disposition") != "reused"
-            or not isinstance(source, Mapping)
+            or result.get("disposition") != disposition
         ):
-            raise ConfigurationError(f"Candidate Job 尚不可复用：{job_id}")
-        source_path = _campaign_file(campaign_dir, str(source.get("path", "")))
-        source_binding = _canonical_file_binding(
-            campaign_dir, source_path, f"Candidate Job {job_id} 来源"
-        )
-        if source_binding != dict(source):
-            raise ConfigurationError(f"Candidate Job 来源摘要漂移：{job_id}")
+            raise ConfigurationError(f"Candidate Job 结果未按计划完成：{job_id}")
+        if disposition == "executed":
+            if result.get("source_receipt") is not None:
+                raise ConfigurationError(
+                    f"本轮执行的 Candidate Job 不得伪装为历史复用：{job_id}"
+                )
+            source_binding = attempt_binding
+        else:
+            source = result.get("source_receipt")
+            if not isinstance(source, Mapping):
+                raise ConfigurationError(f"复用 Candidate Job 缺少来源：{job_id}")
+            source_path = _campaign_file(campaign_dir, str(source.get("path", "")))
+            source_binding = _canonical_file_binding(
+                campaign_dir, source_path, f"Candidate Job {job_id} 来源"
+            )
+            if source_binding != dict(source):
+                raise ConfigurationError(f"Candidate Job 来源摘要漂移：{job_id}")
         result_key = result.get("incremental_result_key")
         if not SHA256_RE.fullmatch(str(result_key)):
             raise ConfigurationError(f"Candidate Job result_key 非法：{job_id}")
@@ -31308,7 +31355,7 @@ def _canonical_import_subject(arguments: argparse.Namespace) -> dict[str, Any]:
             {
                 "item_id": job_id,
                 "status": "complete",
-                "disposition": "reused",
+                "disposition": disposition,
                 "result_sha256": _fingerprint(result),
                 "result_key": result_key,
                 "source": source_binding,
@@ -31442,7 +31489,11 @@ def _canonical_import_subject(arguments: argparse.Namespace) -> dict[str, Any]:
         if evidence_manifest_path.exists() or evidence_manifest_path.is_symlink()
         else None
     )
-    legacy_types, legacy_refs = _canonical_legacy_sources(campaign_dir)
+    source_kind = "native" if executed_job_ids else "historical-import"
+    if source_kind == "historical-import":
+        legacy_types, legacy_refs = _canonical_legacy_sources(campaign_dir)
+    else:
+        legacy_types, legacy_refs = [], []
     next_items = [
         "candidate-seal",
         "compare",
@@ -31450,7 +31501,7 @@ def _canonical_import_subject(arguments: argparse.Namespace) -> dict[str, Any]:
         "acceptance",
         "production-activation",
         "rollback-verification",
-        "retire-0.147.0",
+        f"retire-{retire_version}",
     ]
     return {
         "campaign": {
@@ -31474,7 +31525,7 @@ def _canonical_import_subject(arguments: argparse.Namespace) -> dict[str, Any]:
         "evidence_manifest": evidence_manifest,
         "deadline": _canonical_supervisor_deadline(arguments.supervisor_run_dir),
         "source": {
-            "kind": "historical-import",
+            "kind": source_kind,
             "legacy_object_types": legacy_types,
             "receipt_refs": [attempt_binding, *legacy_refs],
         },
@@ -31483,13 +31534,14 @@ def _canonical_import_subject(arguments: argparse.Namespace) -> dict[str, Any]:
 
 
 def import_canonical_checkpoint(arguments: argparse.Namespace) -> dict[str, Any]:
-    """预览或封存一次性历史导入；执行过程中不发请求、不扫证据。"""
+    """预览或封存一次性初始化；执行过程中不发请求、不扫证据。"""
 
     subject = _canonical_import_subject(arguments)
     review_sha256 = _fingerprint(subject)
     summary = {
         **subject["migration"],
         **subject["plan"],
+        "source_kind": subject["source"]["kind"],
         "review_sha256": review_sha256,
         "scanned_bytes": 0,
         "live_request_count": 0,
@@ -31543,7 +31595,7 @@ def import_canonical_checkpoint(arguments: argparse.Namespace) -> dict[str, Any]
             ).as_posix(),
             "sha256": checkpoint["checkpoint_sha256"],
         },
-        "source_kind": "historical-import",
+        "source_kind": subject["source"]["kind"],
         "scanned_bytes": 0,
         "live_request_count": 0,
     }
@@ -31956,6 +32008,7 @@ def _canonical_production_step(
     checkpoint: Mapping[str, Any],
     step: str,
     receipt_path: Path | None,
+    retire_version: str | None,
 ) -> dict[str, Any]:
     """只从已重放的生产收据推进 VC-6，不触碰 VC-0～VC-5。"""
 
@@ -31965,6 +32018,8 @@ def _canonical_production_step(
     if "acceptance" not in index:
         raise ConfigurationError("canonical VC-6 必须从已接受 checkpoint 开始。")
     if step in {"production-activation", "rollback-verification"}:
+        if retire_version is not None:
+            raise ConfigurationError(f"canonical {step} 不接收 --retire-version。")
         receipt, binding = _canonical_activation_receipt(
             campaign_dir, checkpoint, receipt_path
         )
@@ -32000,12 +32055,21 @@ def _canonical_production_step(
             "checkpoint_sha256": completed["checkpoint_sha256"],
         }
 
-    if step != "retire-0.147.0":
+    if step != "retire":
         raise ConfigurationError("canonical production step 非法。")
+    if retire_version is None or not VERSION_RE.fullmatch(retire_version):
+        raise ConfigurationError("canonical retire 必须提供合法 --retire-version。")
+    item_id = f"retire-{retire_version}"
+    if item_id not in checkpoint["plan"]["execute_item_ids"]:
+        raise ConfigurationError("退休版本与 canonical 初始化冻结的计划不一致。")
     if not {"production-activation", "rollback-verification"}.issubset(index):
-        raise ConfigurationError("删除 0.147 前必须完成生产激活、回滚和目标恢复。")
-    binding = _canonical_file_binding(campaign_dir, receipt_path, "0.147 RemovalReceipt")
-    receipt = _read_json(receipt_path, "0.147 RemovalReceipt")
+        raise ConfigurationError(
+            f"删除 {retire_version} 前必须完成生产激活、回滚和目标恢复。"
+        )
+    binding = _canonical_file_binding(
+        campaign_dir, receipt_path, f"{retire_version} RemovalReceipt"
+    )
+    receipt = _read_json(receipt_path, f"{retire_version} RemovalReceipt")
     scan = receipt.get("consumer_scan")
     if (
         receipt.get("schema_version") != CANONICAL_REMOVAL_RECEIPT_SCHEMA
@@ -32013,7 +32077,7 @@ def _canonical_production_step(
         or receipt.get("campaign_id") != checkpoint["campaign"]["campaign_id"]
         or receipt.get("active_version") != checkpoint["campaign"]["target_version"]
         or receipt.get("rollback_version") != checkpoint["campaign"]["baseline_version"]
-        or receipt.get("removed_version") != "0.147.0"
+        or receipt.get("removed_version") != retire_version
         or receipt.get("production_activation_sha256")
         != index["production-activation"]["source"]["sha256"]
         or not isinstance(scan, Mapping)
@@ -32023,18 +32087,20 @@ def _canonical_production_step(
         or receipt.get("runtime_catalog_removed") is not True
         or receipt.get("historical_evidence_preserved") is not True
     ):
-        raise ConfigurationError("0.147 RemovalReceipt 未证明零消费者、运行态删除和历史保留。")
+        raise ConfigurationError(
+            f"{retire_version} RemovalReceipt 未证明零消费者、运行态删除和历史保留。"
+        )
     completed = _canonical_complete_item(
         campaign_dir,
-        item_id=step,
+        item_id=item_id,
         receipt_path=receipt_path,
-        result_key=_fingerprint({"step": step, "receipt": binding}),
-        details={"kind": "runtime-profile-removal", "removed_version": "0.147.0"},
+        result_key=_fingerprint({"step": item_id, "receipt": binding}),
+        details={"kind": "runtime-profile-removal", "removed_version": retire_version},
         phase="VC-6",
     )
     return {
         "status": "complete",
-        "item_id": step,
+        "item_id": item_id,
         "receipt_sha256": binding["sha256"],
         "checkpoint_sha256": completed["checkpoint_sha256"],
     }
@@ -32067,7 +32133,11 @@ def advance_canonical_checkpoint(arguments: argparse.Namespace) -> dict[str, Any
         return _canonical_accept(campaign_dir, checkpoint)
     if arguments.canonical_step in CANONICAL_PRODUCTION_STEPS:
         return _canonical_production_step(
-            campaign_dir, checkpoint, arguments.canonical_step, step_receipt
+            campaign_dir,
+            checkpoint,
+            arguments.canonical_step,
+            step_receipt,
+            getattr(arguments, "retire_version", None),
         )
     raise ConfigurationError("canonical step 非法。")
 

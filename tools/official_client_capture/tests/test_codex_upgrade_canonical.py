@@ -1,4 +1,4 @@
-"""Canonical checkpoint 的一次性历史导入测试。"""
+"""Canonical checkpoint 的历史导入与原生初始化测试。"""
 
 from __future__ import annotations
 
@@ -213,8 +213,78 @@ class CanonicalImportTests(unittest.TestCase):
             profile_activation_fact=profile_path,
             supervisor_run_dir=supervisor,
             phase="VC-5",
+            retire_version="0.147.0",
             approve_import_sha256=None,
         )
+
+    def _make_native_attempt(self, arguments: argparse.Namespace) -> None:
+        """把历史全复用夹具改为 fresh Campaign 的全执行成功 attempt。"""
+
+        campaign_path = arguments.campaign_dir / "campaign.json"
+        campaign = json.loads(campaign_path.read_text(encoding="utf-8"))
+        campaign.update({"baseline_version": "0.151.0", "target_version": "0.154.0"})
+        self._write(campaign_path, campaign)
+
+        active = json.loads(arguments.active_profile.read_text(encoding="utf-8"))
+        active["Version"] = "0.151.0"
+        active["Endpoints"][0]["Headers"][0]["Value"] = "0.151.0"
+        self._write(arguments.active_profile, active)
+
+        classification_path = (
+            arguments.campaign_dir / "classification" / "result.json"
+        )
+        classification = json.loads(classification_path.read_text(encoding="utf-8"))
+        target_path = (
+            arguments.campaign_dir / classification["profile_manifest"]["path"]
+        )
+        target = json.loads(target_path.read_text(encoding="utf-8"))
+        target["codex_version"] = "0.154.0"
+        target["profile_payload"]["Version"] = "0.154.0"
+        target["profile_payload"]["Endpoints"][0]["Headers"][0]["Value"] = "0.154.0"
+        self._write(target_path, target)
+        classification["profile_manifest"]["sha256"] = codex_upgrade.file_sha256(
+            target_path
+        )
+        self._write(classification_path, classification)
+
+        patches = json.loads(
+            arguments.profile_patch_manifest.read_text(encoding="utf-8")
+        )
+        patches.update(
+            {
+                "baseline_version": "0.151.0",
+                "target_version": "0.154.0",
+                "active_profile_sha256": codex_upgrade.file_sha256(
+                    arguments.active_profile
+                ),
+            }
+        )
+        self._write(arguments.profile_patch_manifest, patches)
+
+        attempt_path = (
+            arguments.campaign_dir
+            / "candidates"
+            / arguments.candidate_id
+            / "attempts"
+            / arguments.attempt_id
+            / "attempt.json"
+        )
+        attempt = json.loads(attempt_path.read_text(encoding="utf-8"))
+        attempt["incremental_plan"].update(
+            {
+                "reused_job_ids": [],
+                "affected_job_ids": ["candidate-a", "candidate-b"],
+                "executed_job_ids": ["candidate-a", "candidate-b"],
+            }
+        )
+        for result in attempt["results"]:
+            result["disposition"] = "executed"
+            result.pop("source_receipt", None)
+        self._write(attempt_path, attempt)
+
+        kilo = json.loads(arguments.kilo_facts.read_text(encoding="utf-8"))
+        kilo["identity"]["target_version"] = "0.154.0"
+        self._write(arguments.kilo_facts, kilo)
 
     def test_import_is_previewed_then_written_once_without_execution(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -227,6 +297,7 @@ class CanonicalImportTests(unittest.TestCase):
             self.assertEqual(preview["inherited_rule_ids"], ["SPEC-A-001"])
             self.assertEqual(preview["scanned_bytes"], 0)
             self.assertEqual(preview["live_request_count"], 0)
+            self.assertEqual(preview["source_kind"], "historical-import")
             self.assertNotIn("candidate-a", preview["execute_item_ids"])
 
             arguments.approve_import_sha256 = preview["review_sha256"]
@@ -303,6 +374,44 @@ class CanonicalImportTests(unittest.TestCase):
             )
             self.assertEqual(lease["campaign_id"], "campaign-151")
             self.assertEqual(lease["state"], "released")
+
+    def test_fresh_campaign_initializes_native_checkpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            arguments = self._fixture(Path(directory))
+            arguments.retire_version = "0.149.1"
+            self._make_native_attempt(arguments)
+
+            preview = codex_upgrade.import_canonical_checkpoint(arguments)
+            self.assertEqual(preview["source_kind"], "native")
+            self.assertIn("retire-0.149.1", preview["execute_item_ids"])
+            arguments.approve_import_sha256 = preview["review_sha256"]
+            completed = codex_upgrade.import_canonical_checkpoint(arguments)
+            self.assertEqual(completed["source_kind"], "native")
+
+            checkpoint = incremental_recovery.CanonicalCheckpointStore(
+                arguments.campaign_dir / "canonical" / "checkpoints",
+                create=False,
+            ).latest()
+            self.assertIsNotNone(checkpoint)
+            assert checkpoint is not None
+            self.assertEqual(checkpoint["source"]["kind"], "native")
+            self.assertEqual(checkpoint["source"]["legacy_object_types"], [])
+            self.assertEqual(len(checkpoint["source"]["receipt_refs"]), 1)
+            jobs = {
+                item["item_id"]: item
+                for item in checkpoint["items"]
+                if item["details"].get("kind") == "candidate-job"
+            }
+            self.assertEqual(set(jobs), {"candidate-a", "candidate-b"})
+            self.assertTrue(
+                all(item["disposition"] == "executed" for item in jobs.values())
+            )
+            self.assertTrue(
+                all(
+                    item["source"]["path"].endswith("/attempt.json")
+                    for item in jobs.values()
+                )
+            )
 
     def test_0154_patch_manifest_binds_real_active_profile(self) -> None:
         """0.154 补丁必须绑定活动画像文件，并通过正式派生校验。"""
@@ -519,7 +628,8 @@ class CanonicalImportTests(unittest.TestCase):
                     "historical_evidence_preserved": True,
                 },
             )
-            advance.canonical_step = "retire-0.147.0"
+            advance.canonical_step = "retire"
+            advance.retire_version = "0.147.0"
             advance.step_receipt = removal_path
             result = codex_upgrade.advance_canonical_checkpoint(advance)
             self.assertEqual(result["status"], "complete")

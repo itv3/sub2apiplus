@@ -811,14 +811,15 @@ VC-6 只能从最新 canonical checkpoint 续跑，唯一入口为：
 ```text
 canonical-advance production-activation --step-receipt <activation-receipt>
 canonical-advance rollback-verification --step-receipt <activation-receipt>
-canonical-advance retire-0.147.0 --step-receipt <removal-receipt>
+canonical-advance retire --retire-version <旧-previous-version> --step-receipt <removal-receipt>
 ```
 
 上面三条仅是 `campaign-run` 动作的 operation 示例，不得作为独立 CLI 写入入口。
 
 三个步骤都必须校验收据后追加 checkpoint，不得改写旧 checkpoint。`production-activation` 必须先绑定
 本轮 canonical acceptance、正式镜像和目标恢复终态；`rollback-verification` 只重放同一激活收据中的
-回滚与恢复事实；`retire-0.147.0` 仅在前两项完成且消费者扫描为零后执行。失败只保留当前步骤为待执行，
+回滚与恢复事实；动态生成的 `retire-<旧-previous-version>` 仅在前两项完成且消费者扫描为零后执行。
+`--retire-version` 必须在 canonical 初始化时显式冻结，且不得等于本轮 active rollback 或目标版本。失败只保留当前步骤为待执行，
 禁止回退到 VC-0～VC-5、重建 Candidate、重跑九项 Job 或重发 Kilo。
 
 ARM64部署包必须同时包含受管工具和两份活动文档，拒绝 AppleDouble 文件；暂存树先验证摘要、属主和权限，
