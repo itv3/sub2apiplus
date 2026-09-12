@@ -20,6 +20,14 @@ class Arm64SupervisedDeployTest(unittest.TestCase):
             (root / name).write_text(f"{prefix}:{name}\n", encoding="utf-8")
 
     @staticmethod
+    def _write_runtime_documents(root: Path, prefix: str) -> None:
+        root.mkdir(parents=True, exist_ok=True)
+        for name in deploy.MANAGED_RUNTIME_DOCUMENTS:
+            path = root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(f"{prefix}:{name}\n", encoding="utf-8")
+
+    @staticmethod
     def _exchange_contents(first: Path, second: Path) -> None:
         """在非 Linux 测试机上模拟 renameat2 的最终交换语义。"""
 
@@ -46,6 +54,8 @@ class Arm64SupervisedDeployTest(unittest.TestCase):
             backups = transaction / "backups"
             self._write_documents(production_docs, "old")
             self._write_documents(candidates, "new")
+            self._write_runtime_documents(production_docs, "old")
+            self._write_runtime_documents(candidates, "new")
             backups.mkdir(parents=True)
 
             production_tool = root / "production-tool"
@@ -56,14 +66,20 @@ class Arm64SupervisedDeployTest(unittest.TestCase):
             (backup_tool / "marker").write_text("old", encoding="utf-8")
 
             switched: list[str] = []
-            with mock.patch.object(
-                deploy,
-                "atomic_exchange",
-                side_effect=self._exchange_contents,
+            with (
+                mock.patch.object(
+                    deploy,
+                    "atomic_exchange",
+                    side_effect=self._exchange_contents,
+                ),
+                mock.patch.object(deploy.os, "chown"),
             ):
                 deploy._switch_documents(transaction, production_docs, switched)
-                self.assertEqual(switched, list(deploy.MANAGED_DOCUMENTS))
-                for name in deploy.MANAGED_DOCUMENTS:
+                self.assertEqual(
+                    switched,
+                    [*deploy.MANAGED_DOCUMENTS, *deploy.MANAGED_RUNTIME_DOCUMENTS],
+                )
+                for name in (*deploy.MANAGED_DOCUMENTS, *deploy.MANAGED_RUNTIME_DOCUMENTS):
                     self.assertTrue((production_docs / name).read_text().startswith("new:"))
 
                 result = deploy._rollback_deployment(
@@ -76,8 +92,62 @@ class Arm64SupervisedDeployTest(unittest.TestCase):
 
             self.assertEqual(result["rollback"], "completed")
             self.assertEqual((production_tool / "marker").read_text(), "old")
-            for name in deploy.MANAGED_DOCUMENTS:
+            for name in (*deploy.MANAGED_DOCUMENTS, *deploy.MANAGED_RUNTIME_DOCUMENTS):
                 self.assertTrue((production_docs / name).read_text().startswith("old:"))
+
+    def test_new_runtime_documents_are_removed_by_joint_rollback(self) -> None:
+        """首次纳管的运行时依赖也必须在事务失败时恢复为不存在。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            production_docs = root / "docs"
+            transaction = production_docs / ".transaction"
+            candidates = transaction / "candidates"
+            backups = transaction / "backups"
+            self._write_documents(production_docs, "old")
+            self._write_documents(candidates, "new")
+            self._write_runtime_documents(candidates, "new")
+            backups.mkdir(parents=True)
+
+            production_tool = root / "production-tool"
+            backup_tool = root / "backup-tool"
+            production_tool.mkdir()
+            backup_tool.mkdir()
+            (production_tool / "marker").write_text("new", encoding="utf-8")
+            (backup_tool / "marker").write_text("old", encoding="utf-8")
+
+            switched: list[str] = []
+            installed: list[str] = []
+            with (
+                mock.patch.object(
+                    deploy,
+                    "atomic_exchange",
+                    side_effect=self._exchange_contents,
+                ),
+                mock.patch.object(deploy.os, "chown"),
+            ):
+                deploy._switch_documents(
+                    transaction,
+                    production_docs,
+                    switched,
+                    installed_documents=installed,
+                )
+                self.assertEqual(installed, list(deploy.MANAGED_RUNTIME_DOCUMENTS))
+                result = deploy._rollback_deployment(
+                    backup_tool,
+                    production_tool,
+                    transaction,
+                    production_docs,
+                    switched,
+                    installed_documents=installed,
+                )
+
+            self.assertEqual(
+                result["removed_installed_documents"],
+                list(reversed(deploy.MANAGED_RUNTIME_DOCUMENTS)),
+            )
+            for name in deploy.MANAGED_RUNTIME_DOCUMENTS:
+                self.assertFalse((production_docs / name).exists())
 
     def test_document_archive_switches_and_rolls_back_with_active_documents(self) -> None:
         """活动文档与 repository-docs 必须共用同一交换和回滚事务。"""
@@ -104,6 +174,8 @@ class Arm64SupervisedDeployTest(unittest.TestCase):
                 (production_archive / name).write_text("old-archive\n", encoding="utf-8")
                 (candidates / name).write_text("new-active\n", encoding="utf-8")
                 (candidate_archive / name).write_text("new-archive\n", encoding="utf-8")
+            self._write_runtime_documents(production_docs, "old")
+            self._write_runtime_documents(candidates, "new")
 
             # 归档测试同时提供工具树回滚坐标；该测试只断言文档事务，
             # 但回滚原语会按合同收口工具树，因此不能省略其测试对象。
@@ -130,7 +202,10 @@ class Arm64SupervisedDeployTest(unittest.TestCase):
                     switched,
                     switched_archived,
                 )
-                self.assertEqual(switched, list(deploy.MANAGED_DOCUMENTS))
+                self.assertEqual(
+                    switched,
+                    [*deploy.MANAGED_DOCUMENTS, *deploy.MANAGED_RUNTIME_DOCUMENTS],
+                )
                 self.assertEqual(switched_archived, list(deploy.MANAGED_DOCUMENTS))
                 for name in deploy.MANAGED_DOCUMENTS:
                     self.assertEqual((production_docs / name).read_text(), "new-active\n")
@@ -177,6 +252,8 @@ class Arm64SupervisedDeployTest(unittest.TestCase):
             backups = transaction / "backups"
             self._write_documents(production_docs, "old")
             self._write_documents(candidates, "new")
+            self._write_runtime_documents(production_docs, "old")
+            self._write_runtime_documents(candidates, "new")
             backups.mkdir(parents=True)
 
             production_tool = root / "production-tool"
@@ -238,6 +315,22 @@ class Arm64SupervisedDeployTest(unittest.TestCase):
                 deploy.legacy_production_document_facts(document)
             document.chmod(stat.S_IFREG | 0o644)
 
+    def test_runtime_document_rejects_symlink_parent(self) -> None:
+        """运行时文档的任一父目录都不能由符号链接冒充。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "target"
+            target.mkdir()
+            (root / "egress").symlink_to(target, target_is_directory=True)
+            with self.assertRaisesRegex(deploy.DeploymentError, "符号链接"):
+                deploy.managed_document_path(
+                    root,
+                    "egress/maintenance/fact.json",
+                    label="测试运行时文档",
+                    allow_missing=True,
+                )
+
     def test_second_document_failure_can_rollback_first_and_tool(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -247,6 +340,8 @@ class Arm64SupervisedDeployTest(unittest.TestCase):
             backups = transaction / "backups"
             self._write_documents(production_docs, "old")
             self._write_documents(candidates, "new")
+            self._write_runtime_documents(production_docs, "old")
+            self._write_runtime_documents(candidates, "new")
             backups.mkdir(parents=True)
 
             production_tool = root / "production-tool"
@@ -270,10 +365,13 @@ class Arm64SupervisedDeployTest(unittest.TestCase):
                     raise OSError("injected document switch failure")
                 self._exchange_contents(first, second)
 
-            with mock.patch.object(
-                deploy,
-                "atomic_exchange",
-                side_effect=exchange_with_failure,
+            with (
+                mock.patch.object(
+                    deploy,
+                    "atomic_exchange",
+                    side_effect=exchange_with_failure,
+                ),
+                mock.patch.object(deploy.os, "chown"),
             ):
                 with self.assertRaisesRegex(OSError, "injected"):
                     deploy._switch_documents(transaction, production_docs, switched)

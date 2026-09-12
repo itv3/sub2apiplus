@@ -58,6 +58,15 @@ MANAGED_DOCUMENTS = (
     "OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md",
     "CODEX_CLI_CLIENT_EMULATION_GUIDE.md",
 )
+# 计时账本会在运行时从仓库根读取这些来源链文档。它们不是普通说明文档，
+# 而是历史 producer 摘要承接的直接依赖，必须与工具树放在同一部署事务中。
+MANAGED_RUNTIME_DOCUMENTS = (
+    "egress/maintenance/codex-cli-0151-model-policy-tool-successor-source-transition.json",
+    "egress/maintenance/codex-cli-0151-container-path-recovery-tool-successor-source-transition.json",
+    "egress/maintenance/codex-cli-0151-timing-producer-replay-tool-successor-source-transition.json",
+    "egress/maintenance/codex-cli-0151-producer-coordinate-decoupling-source-transition.json",
+    "egress/maintenance/codex-cli-0151-worktree-successor.json",
+)
 MANAGED_ASSERTION_PREPARER = "prepare_assertion_bundle.sh"
 TARGET_SCENARIO_MANIFEST = "codex_upgrade_scenarios_0_154_0.json"
 SOURCE_SPEC_HEADINGS = {
@@ -233,6 +242,30 @@ def reject_untrusted_file(path: Path, *, label: str) -> None:
     metadata = path.stat()
     if metadata.st_uid != 0 or metadata.st_gid != 0 or metadata.st_mode & 0o022:
         raise DeploymentError(f"{label}属主或写权限不安全：{path}")
+
+
+def managed_document_path(
+    root: Path,
+    relative: str,
+    *,
+    label: str,
+    allow_missing: bool,
+) -> Path:
+    """解析受管文档坐标，并拒绝任一路径组件被符号链接替代。"""
+
+    parsed = Path(relative)
+    if parsed.is_absolute() or not parsed.parts or ".." in parsed.parts:
+        raise DeploymentError(f"{label}不是规范相对路径：{relative}")
+    current = root
+    for index, part in enumerate(parsed.parts):
+        current /= part
+        if current.is_symlink():
+            raise DeploymentError(f"{label}路径包含符号链接：{current}")
+        if current.exists() and index < len(parsed.parts) - 1 and not current.is_dir():
+            raise DeploymentError(f"{label}父路径不是目录：{current}")
+        if not current.exists() and not allow_missing:
+            raise DeploymentError(f"{label}缺失：{current}")
+    return current
 
 
 def legacy_production_document_facts(path: Path) -> dict[str, Any]:
@@ -521,6 +554,7 @@ def main(argv: list[str] | None = None) -> int:
     transaction_root: Path | None = None
     switched_documents: list[str] = []
     switched_archived_documents: list[str] = []
+    installed_documents: list[str] = []
     tool_switched = False
     assertion_preparer_switched = False
     receipt_path = control_root / f"codex-0154-supervisor-enable-{stamp}.json"
@@ -643,6 +677,7 @@ def main(argv: list[str] | None = None) -> int:
                     production_doc_root,
                     switched_documents,
                     switched_archived_documents,
+                    installed_documents=installed_documents,
                 ),
             )
             record_step(
@@ -681,6 +716,7 @@ def main(argv: list[str] | None = None) -> int:
                     str(transaction_root / "backups") if transaction_root else None
                 ),
                 "switched_archived_documents": list(switched_archived_documents),
+                "installed_runtime_documents": list(installed_documents),
                 "supervisor_run_dir": str(client.run_dir),
             }
             record_step(
@@ -694,7 +730,12 @@ def main(argv: list[str] | None = None) -> int:
         except BaseException:
             # 必须在监督器仍运行时记录回滚；不能等上下文退出后再补写。
             if (
-                (tool_switched or assertion_preparer_switched or switched_documents)
+                (
+                    tool_switched
+                    or assertion_preparer_switched
+                    or switched_documents
+                    or installed_documents
+                )
                 and backup is not None
                 and backup.is_dir()
                 and production_root.is_dir()
@@ -710,6 +751,7 @@ def main(argv: list[str] | None = None) -> int:
                             production_doc_root,
                             switched_documents,
                             switched_archived_documents,
+                            installed_documents=installed_documents,
                             auxiliary_backup=assertion_preparer_backup,
                             auxiliary_production=production_assertion_preparer,
                             auxiliary_switched=assertion_preparer_switched,
@@ -780,6 +822,22 @@ def _preflight(
         name: legacy_production_document_facts(production_doc_root / name)
         for name in MANAGED_DOCUMENTS
     }
+    legacy_runtime_document_facts: dict[str, dict[str, Any]] = {}
+    for name in MANAGED_RUNTIME_DOCUMENTS:
+        production_document = managed_document_path(
+            production_doc_root,
+            name,
+            label="生产运行时依赖文档",
+            allow_missing=True,
+        )
+        legacy_runtime_document_facts[name] = (
+            {
+                "status": "present",
+                **legacy_production_document_facts(production_document),
+            }
+            if production_document.exists()
+            else {"status": "absent"}
+        )
     capture_network = parse_container_network(
         run_checked(
             client,
@@ -819,6 +877,15 @@ def _preflight(
         reject_untrusted_file(runtime_document, label="暂存活动文档")
         reject_untrusted_file(archived_document, label="暂存归档文档")
         document_sha256[name] = file_sha256(runtime_document)
+    for name in MANAGED_RUNTIME_DOCUMENTS:
+        runtime_document = managed_document_path(
+            staging_root / "docs",
+            name,
+            label="暂存运行时依赖文档",
+            allow_missing=False,
+        )
+        reject_untrusted_file(runtime_document, label="暂存运行时依赖文档")
+        document_sha256[name] = file_sha256(runtime_document)
     source_spec = verify_scenario_source_spec(staging_root, staging_tool)
     return {
         "staging_file_count": staging_count,
@@ -831,6 +898,7 @@ def _preflight(
         "document_sha256": document_sha256,
         "scenario_source_spec": source_spec,
         "legacy_production_documents": legacy_document_facts,
+        "legacy_runtime_documents": legacy_runtime_document_facts,
     }
 
 
@@ -957,6 +1025,26 @@ def _prepare_document_candidates(
         if file_sha256(archive_destination) != file_sha256(source):
             raise DeploymentError(f"文档归档候选复制后摘要漂移：{name}")
         digests[name] = file_sha256(destination)
+    for name in MANAGED_RUNTIME_DOCUMENTS:
+        source = managed_document_path(
+            staging_doc_root,
+            name,
+            label="暂存运行时依赖文档",
+            allow_missing=False,
+        )
+        reject_untrusted_file(source, label="暂存运行时依赖文档")
+        destination = candidate_root / name
+        destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        os.chown(destination.parent, 0, 0)
+        os.chmod(destination.parent, 0o700)
+        shutil.copyfile(source, destination)
+        os.chown(destination, 0, 0)
+        os.chmod(destination, 0o644)
+        with destination.open("rb") as stream:
+            os.fsync(stream.fileno())
+        if file_sha256(destination) != file_sha256(source):
+            raise DeploymentError(f"运行时依赖文档候选复制后摘要漂移：{name}")
+        digests[name] = file_sha256(destination)
     fsync_directory(candidate_archive_root)
     fsync_directory(candidate_root)
     fsync_directory(backup_root)
@@ -973,18 +1061,48 @@ def _switch_documents(
     production_doc_root: Path,
     switched_documents: list[str],
     switched_archived_documents: list[str] | None = None,
+    *,
+    installed_documents: list[str] | None = None,
 ) -> Mapping[str, Any]:
     """在同一事务中交换活动文档和归档副本，并保存回滚坐标。"""
 
     candidate_root = transaction_root / "candidates"
     candidate_archive_root = candidate_root / "repository-docs"
     backup_root = transaction_root / "backups"
-    for name in MANAGED_DOCUMENTS:
-        candidate = candidate_root / name
-        production = production_doc_root / name
-        backup = backup_root / name
+    installed = installed_documents if installed_documents is not None else []
+    for name in (*MANAGED_DOCUMENTS, *MANAGED_RUNTIME_DOCUMENTS):
+        candidate = managed_document_path(
+            candidate_root,
+            name,
+            label="文档候选",
+            allow_missing=False,
+        )
+        production = managed_document_path(
+            production_doc_root,
+            name,
+            label="生产文档",
+            allow_missing=True,
+        )
+        backup = managed_document_path(
+            backup_root,
+            name,
+            label="文档回滚副本",
+            allow_missing=True,
+        )
         if backup.exists() or backup.is_symlink():
             raise DeploymentError(f"文档回滚副本已存在：{name}")
+        production.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        backup.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        os.chown(production.parent, 0, 0)
+        os.chmod(production.parent, 0o700)
+        os.chown(backup.parent, 0, 0)
+        os.chmod(backup.parent, 0o700)
+        if not production.exists():
+            os.rename(candidate, production)
+            installed.append(name)
+            fsync_directory(candidate.parent)
+            fsync_directory(production.parent)
+            continue
         exchanged = False
         try:
             atomic_exchange(candidate, production)
@@ -1036,6 +1154,7 @@ def _switch_documents(
                 raise
     return {
         "switched_documents": list(switched_documents),
+        "installed_documents": list(installed),
         "switched_archived_documents": list(archived),
         "backup_root": str(backup_root),
     }
@@ -1110,6 +1229,24 @@ def _post_switch_verify(
         ):
             raise DeploymentError(f"生产活动文档与暂存/归档副本不一致：{name}")
         document_sha256[name] = production_sha256
+    for name in MANAGED_RUNTIME_DOCUMENTS:
+        production_document = managed_document_path(
+            production_doc_root,
+            name,
+            label="生产运行时依赖文档",
+            allow_missing=False,
+        )
+        staging_document = managed_document_path(
+            staging_root / "docs",
+            name,
+            label="暂存运行时依赖文档",
+            allow_missing=False,
+        )
+        reject_untrusted_file(production_document, label="生产运行时依赖文档")
+        production_sha256 = file_sha256(production_document)
+        if production_sha256 != file_sha256(staging_document):
+            raise DeploymentError(f"生产运行时依赖文档与暂存副本不一致：{name}")
+        document_sha256[name] = production_sha256
     source_spec = verify_scenario_source_spec(
         production_doc_root.parent,
         production,
@@ -1173,6 +1310,7 @@ def _rollback_deployment(
     switched_documents: list[str],
     switched_archived_documents: list[str] | None = None,
     *,
+    installed_documents: list[str] | None = None,
     auxiliary_backup: Path | None = None,
     auxiliary_production: Path | None = None,
     auxiliary_switched: bool = False,
@@ -1181,9 +1319,10 @@ def _rollback_deployment(
 
     failures: list[str] = []
     restored_documents: list[str] = []
+    removed_installed_documents: list[str] = []
     restored_archived_documents: list[str] = []
     archived = switched_archived_documents or []
-    if transaction_root is None and switched_documents:
+    if transaction_root is None and (switched_documents or installed_documents):
         failures.append("缺少文档事务目录")
     elif transaction_root is not None:
         backup_root = transaction_root / "backups"
@@ -1193,6 +1332,18 @@ def _rollback_deployment(
                 restored_documents.append(name)
             except BaseException as error:
                 failures.append(f"文档 {name}: {type(error).__name__}")
+        candidate_root = transaction_root / "candidates"
+        for name in reversed(installed_documents or []):
+            try:
+                production_document = production_doc_root / name
+                candidate_document = candidate_root / name
+                candidate_document.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                os.rename(production_document, candidate_document)
+                fsync_directory(production_document.parent)
+                fsync_directory(candidate_document.parent)
+                removed_installed_documents.append(name)
+            except BaseException as error:
+                failures.append(f"新增文档 {name}: {type(error).__name__}")
         backup_archive_root = backup_root / "repository-docs"
         production_archive_root = production_doc_root / "repository-docs"
         for name in reversed(archived):
@@ -1221,6 +1372,7 @@ def _rollback_deployment(
     return {
         "failed_tree": backup.name,
         "restored_documents": restored_documents,
+        "removed_installed_documents": removed_installed_documents,
         "restored_archived_documents": restored_archived_documents,
         "restored_assertion_preparer": auxiliary_switched,
         "rollback": "completed",
