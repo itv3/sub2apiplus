@@ -108,6 +108,12 @@ CODEX_0154_RUNTIME_DOC_METADATA_FREEZE_SUCCESSOR = (
     ROOT
     / "docs/egress/maintenance/upstream-codex-0154-runtime-doc-metadata-20260912-freeze-successor.json"
 )
+# 2026-09-12：文档候选准备步骤的摘要也改为监督器可接受的路径值数组，
+# 并由真实函数返回值回归覆盖。
+CODEX_0154_RUNTIME_DOC_CANDIDATE_METADATA_FREEZE_SUCCESSOR = (
+    ROOT
+    / "docs/egress/maintenance/upstream-codex-0154-runtime-doc-candidate-metadata-20260912-freeze-successor.json"
+)
 HISTORICAL_LEDGER = "docs/egress/maintenance/historical-source-drift-successor.json"
 SHA256_LENGTH = 64
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -198,6 +204,7 @@ def successor_edges(path: str) -> list[tuple[str, str]]:
         CODEX_0154_CANONICAL_PRODUCTION_CHAIN_FREEZE_SUCCESSOR,
         CODEX_0154_RUNTIME_DOC_CLOSURE_FREEZE_SUCCESSOR,
         CODEX_0154_RUNTIME_DOC_METADATA_FREEZE_SUCCESSOR,
+        CODEX_0154_RUNTIME_DOC_CANDIDATE_METADATA_FREEZE_SUCCESSOR,
     ):
         payload = json.loads(receipt_path.read_text(encoding="utf-8"))
         _validate_successor_receipt(payload)
