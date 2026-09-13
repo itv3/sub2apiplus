@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# 抓包容器必须位于固定的 capture-network；否则外部请求不会经过已审计的 DMIT
+# 抓包容器必须位于固定的 capture-network；否则外部请求不会经过已审计的 BWG
 # 路由。离线镜像自检可显式设置 CAPTURE_ALLOW_ANY_NET=1。
 container_ip=$(hostname -i 2>/dev/null | awk '{print $1}')
 case "$container_ip" in

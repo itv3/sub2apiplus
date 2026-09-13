@@ -47,6 +47,10 @@ class Arm64EnvironmentReceiptTests(unittest.TestCase):
         facts["collector"] = producer
         facts.pop("wireguard", None)
         facts["contract_sha256"] = receipt.LEGACY_NETWORK_CONTRACT_SHA256
+        for container in facts["containers"]:
+            container["public_egress"][
+                "ip_address"
+            ] = receipt.LEGACY_DMIT_PUBLIC_EGRESS
         self._rewrite(facts_path, facts)
         legacy_receipt = receipt._build_receipt(
             root,
@@ -54,6 +58,39 @@ class Arm64EnvironmentReceiptTests(unittest.TestCase):
             replay_producer=producer,
         )
         receipt_path = root / "p0-v1-receipt.json"
+        receipt._write_once(receipt_path, legacy_receipt)
+        return facts_path, receipt_path, facts
+
+    def _legacy_v3_fixture(
+        self, root: Path
+    ) -> tuple[Path, Path, dict[str, object]]:
+        """构造切换 BWG 前由 v3 生成的 DMIT 环境收据。"""
+
+        facts_path, facts = self._fixture(root)
+        producer = {
+            "schema_version": receipt.PRODUCER_SCHEMA,
+            "tool": str(Path(receipt.__file__).resolve()),
+            "tool_sha256": next(
+                iter(receipt.REGISTERED_REPLAY_PRODUCER_HASHES["3"])
+            ),
+            "version": "3",
+        }
+        facts["collector"] = producer
+        facts["contract_sha256"] = receipt.LEGACY_V3_NETWORK_CONTRACT_SHA256
+        for container in facts["containers"]:
+            container["public_egress"][
+                "ip_address"
+            ] = receipt.LEGACY_DMIT_PUBLIC_EGRESS
+        wireguard = facts["wireguard"]
+        wireguard.pop("egress_provider")
+        wireguard["expected_dmit_mtu"] = wireguard.pop("expected_mtu")
+        self._rewrite(facts_path, facts)
+        legacy_receipt = receipt._build_receipt(
+            root,
+            facts_path.name,
+            replay_producer=producer,
+        )
+        receipt_path = root / "p0-v3-receipt.json"
         receipt._write_once(receipt_path, legacy_receipt)
         return facts_path, receipt_path, facts
 
@@ -133,11 +170,11 @@ class Arm64EnvironmentReceiptTests(unittest.TestCase):
                 with self.assertRaisesRegex(receipt.Arm64EnvironmentReceiptError, message):
                     receipt.build_receipt(root, "p0-facts.json")
 
-    def test_wg1_mtu_must_match_frozen_dmit_value(self) -> None:
+    def test_wg1_mtu_must_match_frozen_bwg_value(self) -> None:
         for field, value in (
             ("configured_mtu", 8920),
             ("runtime_mtu", 8920),
-            ("expected_dmit_mtu", 8920),
+            ("expected_mtu", 8920),
         ):
             with self.subTest(field=field), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
@@ -150,6 +187,22 @@ class Arm64EnvironmentReceiptTests(unittest.TestCase):
                     "MTU",
                 ):
                     receipt.build_receipt(root, "p0-facts.json")
+
+    def test_current_bwg_contract_rejects_previous_dmit_egress(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            root.chmod(0o700)
+            path, facts = self._fixture(root)
+            for container in facts["containers"]:
+                container["public_egress"][
+                    "ip_address"
+                ] = receipt.LEGACY_DMIT_PUBLIC_EGRESS
+            self._rewrite(path, facts)
+            with self.assertRaisesRegex(
+                receipt.Arm64EnvironmentReceiptError,
+                "公网出口",
+            ):
+                receipt.build_receipt(root, "p0-facts.json")
 
     def test_disk_watermarks_fail_closed(self) -> None:
         for field, value in (("used_percent", 70), ("available_bytes", 30 * 1024**3 - 1)):
@@ -246,6 +299,26 @@ class Arm64EnvironmentReceiptTests(unittest.TestCase):
             )["continuity_identity_sha256"]
             self.assertNotEqual(before, after)
 
+    def test_replay_accepts_registered_v3_dmit_contract(self) -> None:
+        """BWG producer 只读承接已登记的 v3 DMIT 收据。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            root.chmod(0o700)
+            facts_path, receipt_path, facts = self._legacy_v3_fixture(root)
+
+            replayed = receipt.replay(root, receipt_path.name)
+            self.assertEqual(replayed["producer"]["version"], "3")
+            self.assertEqual(
+                facts["containers"][0]["public_egress"]["ip_address"],
+                receipt.LEGACY_DMIT_PUBLIC_EGRESS,
+            )
+            with self.assertRaisesRegex(
+                receipt.Arm64EnvironmentReceiptError,
+                "身份漂移",
+            ):
+                receipt.build_receipt(root, facts_path.name)
+
     def test_replay_rejects_unregistered_historical_producer(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -282,6 +355,10 @@ class Arm64EnvironmentReceiptTests(unittest.TestCase):
             facts["collector"] = producer
             facts.pop("wireguard", None)
             facts["contract_sha256"] = receipt.LEGACY_NETWORK_CONTRACT_SHA256
+            for container in facts["containers"]:
+                container["public_egress"][
+                    "ip_address"
+                ] = receipt.LEGACY_DMIT_PUBLIC_EGRESS
             self._rewrite(facts_path, facts)
             legacy_receipt = receipt._build_receipt(
                 root,

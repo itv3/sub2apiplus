@@ -590,7 +590,7 @@ docker exec "$capture_container" update-ca-certificates >/dev/null 2>&1
 # 起中继（--assume-alpn 留空 = 不 offer ALPN，与官方 native-tls 实测一致）
 relay_intervention_args=()
 if [[ $require_model_receipt == 1 ]]; then
-  # Codex 0.149.1 把 /models 的建连与读取合计硬限制为 5 秒；DMIT 到 Cloudflare
+  # Codex 0.149.1 把 /models 的建连与读取合计硬限制为 5 秒；BWG 到 Cloudflare
   # 偶发一次 TLS 握手就接近 4.9 秒。中继先在该计时器启动前建立同一真实上游
   # TLS，首个官方模型目录请求只复用连接，不改变任何应用字节或网络选路。
   relay_intervention_args+=(--preconnect-upstream --preconnect-timeout 15)

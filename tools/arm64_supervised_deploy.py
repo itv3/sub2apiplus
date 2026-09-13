@@ -46,8 +46,10 @@ from typing import Any, Callable, Mapping
 # 并把 0.154 的画像派生、构建身份和 post-promotion v4 门禁纳入受管工具树。
 # 2026-09-13（VC-0～VC-6 最终对齐）：补齐多批次控制、阶段完成收据、两阶段生产
 # 交付和对应失败关闭；受管工具树与监督器摘要随之更新。
+# 2026-09-13（BWG 出口切换）：将新 P0 的固定公网出口从 DMIT 切换到 BWG，
+# 历史 DMIT 收据仍由环境 producer 的兼容分支只读重放。
 DEFAULT_TOOL_DIGEST = (
-    "192d89aaff1ee789a49c3e26d336be88ef85e194303acc2a3b3c861bfcb05a23"
+    "ce3fa435a8d1c8c487623b6a80b3a4fcb29489e482ee4e81282fe23a8ba2b680"
 )
 DEFAULT_SUPERVISOR_DIGEST = (
     "4434f47747bf4612f8fa57918529d0ed3dc64f686b504b4478905fceb75f11bd"
@@ -80,7 +82,8 @@ SOURCE_SPEC_HEADINGS = {
 }
 WG1_CONFIG = Path("/etc/wireguard/wg1.conf")
 WG1_RUNTIME_MTU = Path("/sys/class/net/wg1/mtu")
-EXPECTED_DMIT_WG1_MTU = 1420
+EXPECTED_EGRESS_PROVIDER = "BWG"
+EXPECTED_WG1_MTU = 1420
 
 
 class DeploymentError(RuntimeError):
@@ -429,7 +432,7 @@ def parse_container_network(output: str, name: str) -> str:
 
 
 def verify_wg1_mtu() -> dict[str, Any]:
-    """验证 ARM64 wg1 的持久配置和运行时值均匹配 DMIT。"""
+    """验证 ARM64 wg1 的持久配置和运行时值均匹配 BWG。"""
 
     if WG1_CONFIG.is_symlink() or not WG1_CONFIG.is_file():
         raise DeploymentError("ARM64 wg1 配置不是可信普通文件。")
@@ -467,19 +470,22 @@ def verify_wg1_mtu() -> dict[str, Any]:
         runtime_mtu = int(WG1_RUNTIME_MTU.read_text(encoding="ascii").strip())
     except (OSError, UnicodeError, ValueError) as error:
         raise DeploymentError("ARM64 wg1 运行时 MTU 不可读。") from error
-    if configured_values != [EXPECTED_DMIT_WG1_MTU]:
+    if configured_values != [EXPECTED_WG1_MTU]:
         raise DeploymentError(
-            f"ARM64 wg1 配置 MTU 必须唯一且等于 DMIT {EXPECTED_DMIT_WG1_MTU}。"
+            f"ARM64 wg1 配置 MTU 必须唯一且等于 "
+            f"{EXPECTED_EGRESS_PROVIDER} {EXPECTED_WG1_MTU}。"
         )
-    if runtime_mtu != EXPECTED_DMIT_WG1_MTU:
+    if runtime_mtu != EXPECTED_WG1_MTU:
         raise DeploymentError(
-            f"ARM64 wg1 运行时 MTU 与 DMIT {EXPECTED_DMIT_WG1_MTU} 不一致。"
+            f"ARM64 wg1 运行时 MTU 与 "
+            f"{EXPECTED_EGRESS_PROVIDER} {EXPECTED_WG1_MTU} 不一致。"
         )
     return {
         "interface": "wg1",
+        "egress_provider": EXPECTED_EGRESS_PROVIDER,
         "configured_mtu": configured_values[0],
         "runtime_mtu": runtime_mtu,
-        "expected_dmit_mtu": EXPECTED_DMIT_WG1_MTU,
+        "expected_mtu": EXPECTED_WG1_MTU,
         "config_sha256": sha256_bytes(raw),
     }
 
@@ -864,7 +870,7 @@ def _preflight(
     rules = run_checked(client, "enable:inspect-policy", ["ip", "-4", "rule", "show"])
     routes = run_checked(client, "enable:inspect-route", ["ip", "-4", "route", "show", "table", "51830"])
     if "172.30.0.10" not in rules or "172.25.0.3" not in rules or "default dev wg1" not in routes:
-        raise DeploymentError("固定 DMIT 出口路由策略不完整。")
+        raise DeploymentError("固定 BWG 出口路由策略不完整。")
     wireguard = verify_wg1_mtu()
     repository_docs = staging_root / "docs" / "repository-docs"
     if repository_docs.is_symlink() or not repository_docs.is_dir():
@@ -903,7 +909,7 @@ def _preflight(
         "staging_assertion_preparer_sha256": expected_assertion_preparer_digest,
         "capture_ip": capture_network,
         "service_ip": service_network,
-        "network_policy": "fixed-dmit",
+        "network_policy": "fixed-bwg",
         "wireguard": wireguard,
         "document_sha256": document_sha256,
         "runtime_document_bindings": runtime_document_bindings,

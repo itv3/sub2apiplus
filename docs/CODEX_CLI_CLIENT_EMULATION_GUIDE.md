@@ -1432,7 +1432,7 @@ Framework §5.1.4～§5.1.5 只规定环境冻结、路径安全和数据治理�
 |---|---|
 | Sub2API 容器 IP | `172.25.0.3` |
 | `capture-cli` 容器 IP | `172.30.0.10` |
-| 公网出口 | `179.255.100.158`，经 DMIT |
+| 公网出口 | `144.34.230.210`，经 BWG |
 | `wg1` MTU | `1420`；同时核对宿主持久值、运行值和对端值 |
 | 宿主项目根 | `/root/docker/capture-cli` |
 | 宿主数据根 | `/root/docker/capture-cli/data`，权限 `0700`，版本控制忽略 |
@@ -1450,7 +1450,7 @@ export CAPTURE_CONTAINER_ROOT=/root/oauth-capture
 ```
 
 P0 必须从 Compose 渲染结果和 `docker inspect capture-cli` 同时验证挂载、镜像、固定 IP、默认路由、
-DMIT 公网出口和 `wg1` MTU；脚本不得修改网络、NAT／iptables、WireGuard 或容器地址来迁就测试。
+BWG 公网出口和 `wg1` MTU；脚本不得修改网络、NAT／iptables、WireGuard 或容器地址来迁就测试。
 
 ARM64 宿主与容器必须使用同一冻结 Go 工具链，构建设置 `GOPROXY=off`、`GOFLAGS=-mod=readonly`。
 缺少前端依赖时，只能通过绝对路径 `CAPTURE_TYPESCRIPT_MODULE` 使用 Makefile 已锁定摘要的只读
@@ -1460,7 +1460,7 @@ TypeScript；禁止临时安装依赖、复制 `node_modules` 或切换工具链
 | P0 检查 | 必须证明 |
 |---|---|
 | 目录与挂载 | build context、env file、业务 bind source 和全部写入均在登记根内；`/root` 第一层无本轮污染 |
-| 网络与 TLS | `sub2apiplus` 与 `capture-cli` 使用本节固定地址并经 DMIT 同一出口；DNS、证书和 MTU 可复算 |
+| 网络与 TLS | `sub2apiplus` 与 `capture-cli` 使用本节固定地址并经 BWG 同一出口；DNS、证书和 MTU 可复算 |
 | 运行隔离 | 每个 attempt 使用独立、权限为 `0700` 的 `HOME／CODEX_HOME`，不读取其他账号或前序缓存 |
 | 模型目录 | Main／Lite 仅各执行一次 initialize-only；不得用 thread、turn、Responses 或 WS 请求预热 |
 | 同源依赖 | 工具、测试、candidate、finalizer、目标架构依赖和实际执行副本摘要一致 |
@@ -1774,7 +1774,7 @@ Candidate 源码树与 Campaign 目录必须彼此独立；source transition 也
 的来源关系，并绑定 post-promotion 门禁需求与执行计划摘要。镜像交接使用
 `registry/repository@sha256:<manifest-digest>`，不能只写可变 tag。
 
-Go 必须离线编译；ARM64 缺少前端依赖时，只允许通过 `capture-cli` 的固定 DMIT 出口取得依赖，然后将
+Go 必须离线编译；ARM64 缺少前端依赖时，只允许通过 `capture-cli` 的固定 BWG 出口取得依赖，然后将
 前端产物、ARM64 二进制和运行资源叠加到冻结的 ARM64 基础镜像。证据机和低资源生产机不承担 Go／Node
 编译，也不得用现场重编译产物替代构建收据中的制品。
 
@@ -1902,7 +1902,7 @@ VC-4 只在构建收据中冻结最终制品，不调用“只落盘身份”的
 - 复核不可变镜像 RepoDigest、挂载与 PID namespace、实际执行工具副本、目标 Codex 绝对路径及
   `codex-cli <target-version>`，禁止通过 `codex-capture`、`PATH` 或默认值选中旧版本；
 - 复核账号、API Key、模型可见性、Live／WS／compact 开关、熔断与配额、activation 身份、采集端口、
-  run-root、属主和权限，以及 §4.0.3 的固定容器 IP、DMIT 出口和 MTU；
+  run-root、属主和权限，以及 §4.0.3 的固定容器 IP、BWG 出口和 MTU；
 - `candidate-frozen-aux` 在修改环境前确认隔离分组只含目标账号且已启用 Live 和图片生成；合并解析全部
   Compose 文件，必须指向同一 candidate 镜像并设置 `candidate_release_mode=previous`。拒绝相对路径、
   符号链接、其他 Compose 选项和 shell `eval`；`production_replacement` 不允许缺少 Compose 坐标；
@@ -2425,7 +2425,7 @@ GitHub 发版成功也不等于生产已经更新。
 ### 4.6.6 原子生产切换
 
 部署前复核 `docker compose config` 或等价结果，并在 VC-0／P0 冻结的生产主机上复核固定
-容器 IP、DMIT 出口和 wg1 持久配置／运行时 MTU；当前 ARM64 基线为 1420，实际判定以 VC-0 冻结值为准。
+容器 IP、BWG 出口和 wg1 持久配置／运行时 MTU；当前 ARM64 基线为 1420，实际判定以 VC-0 冻结值为准。
 应用服务必须绑定最终 `repository@sha256:<manifest-digest>`，数据库、Redis、keeper、挂载和网络保持
 不变。冻结动作体为：
 

@@ -85,9 +85,10 @@ def create_arm_receipt(
         },
         "wireguard": {
             "interface": arm.WIREGUARD_INTERFACE,
-            "configured_mtu": arm.EXPECTED_DMIT_WG1_MTU,
-            "runtime_mtu": arm.EXPECTED_DMIT_WG1_MTU,
-            "expected_dmit_mtu": arm.EXPECTED_DMIT_WG1_MTU,
+            "egress_provider": arm.EXPECTED_EGRESS_PROVIDER,
+            "configured_mtu": arm.EXPECTED_WG1_MTU,
+            "runtime_mtu": arm.EXPECTED_WG1_MTU,
+            "expected_mtu": arm.EXPECTED_WG1_MTU,
             "config_path": str(arm.WIREGUARD_CONFIG),
             "config_sha256": "d" * 64,
         },

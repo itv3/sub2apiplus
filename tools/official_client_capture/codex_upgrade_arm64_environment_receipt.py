@@ -25,7 +25,7 @@ from tools.official_client_capture import incremental_recovery
 FACTS_SCHEMA = "codex-upgrade-arm64-environment-facts/v1"
 RECEIPT_SCHEMA = "codex-upgrade-arm64-environment-receipt/v1"
 PRODUCER_SCHEMA = "codex-upgrade-arm64-environment-producer/v1"
-PRODUCER_VERSION = "3"
+PRODUCER_VERSION = "4"
 PRODUCER_TOOL_RELATIVE = (
     "tools/official_client_capture/codex_upgrade_arm64_environment_receipt.py"
 )
@@ -48,16 +48,29 @@ REGISTERED_REPLAY_PRODUCER_HASHES = {
             "a62a269e5e4cb0e64aac21e5223ddbde8b884ecbe383b405c560e3c6ebcea527",
         }
     ),
+    # v3 首次把 wg1 持久配置、运行时 MTU 和配置摘要纳入收据。切换到
+    # BWG 后，旧 DMIT 合同只能按原字段和原出口只读重放，不能生成新事实。
+    "3": frozenset(
+        {
+            "36f9d717f847cd71ff66b569cf3daa5ce6c9a2f419f204db7f3c39a4beb4a1ac",
+        }
+    ),
 }
 PUBLIC_EGRESS_URL = "https://api.ipify.org"
-EXPECTED_PUBLIC_EGRESS = "179.255.100.158"
+EXPECTED_EGRESS_PROVIDER = "BWG"
+EXPECTED_PUBLIC_EGRESS = "144.34.230.210"
+LEGACY_DMIT_PUBLIC_EGRESS = "179.255.100.158"
 WIREGUARD_INTERFACE = "wg1"
 WIREGUARD_CONFIG = Path("/etc/wireguard/wg1.conf")
-# DMIT 当前受管 wg1 MTU 已独立核验并冻结为 1420。ARM64 的持久配置和
+# BWG 当前受管 wg1 MTU 已独立核验并冻结为 1420。ARM64 的持久配置和
 # 运行时值必须同时与该对端值一致，不能只检查 IP、rule 和 route。
-EXPECTED_DMIT_WG1_MTU = 1420
+EXPECTED_WG1_MTU = 1420
+LEGACY_DMIT_WG1_MTU = 1420
 LEGACY_NETWORK_CONTRACT_SHA256 = (
     "9e342c764883ee1107b998ef7a26650402ff4e8d82207926f518528f83dc4ec8"
+)
+LEGACY_V3_NETWORK_CONTRACT_SHA256 = (
+    "551c8faf877eb4889edd7f4426c007110107b2d657f22b59b70785869902736b"
 )
 ROOT_MAX_USED_PERCENT = 69
 ROOT_MIN_AVAILABLE_BYTES = 30 * 1024 * 1024 * 1024
@@ -309,11 +322,12 @@ def contract_sha256() -> str:
         _canonical(
             {
                 "containers": CONTAINER_CONTRACTS,
+                "egress_provider": EXPECTED_EGRESS_PROVIDER,
                 "public_egress_ip": EXPECTED_PUBLIC_EGRESS,
                 "public_egress_url": PUBLIC_EGRESS_URL,
                 "wireguard": {
                     "interface": WIREGUARD_INTERFACE,
-                    "expected_dmit_mtu": EXPECTED_DMIT_WG1_MTU,
+                    "expected_mtu": EXPECTED_WG1_MTU,
                 },
                 "root_max_used_percent": ROOT_MAX_USED_PERCENT,
                 "root_min_available_bytes": ROOT_MIN_AVAILABLE_BYTES,
@@ -525,9 +539,10 @@ def _wireguard_observation() -> dict[str, Any]:
             configured_values.append(int(value.strip()))
         except ValueError as error:
             raise Arm64EnvironmentReceiptError("ARM64 wg1 配置 MTU 非整数") from error
-    if configured_values != [EXPECTED_DMIT_WG1_MTU]:
+    if configured_values != [EXPECTED_WG1_MTU]:
         raise Arm64EnvironmentReceiptError(
-            f"ARM64 wg1 配置 MTU 必须唯一且等于 DMIT {EXPECTED_DMIT_WG1_MTU}"
+            f"ARM64 wg1 配置 MTU 必须唯一且等于 "
+            f"{EXPECTED_EGRESS_PROVIDER} {EXPECTED_WG1_MTU}"
         )
 
     runtime_path = Path(f"/sys/class/net/{WIREGUARD_INTERFACE}/mtu")
@@ -535,15 +550,17 @@ def _wireguard_observation() -> dict[str, Any]:
         runtime_mtu = int(runtime_path.read_text(encoding="ascii").strip())
     except (OSError, UnicodeError, ValueError) as error:
         raise Arm64EnvironmentReceiptError("ARM64 wg1 运行时 MTU 不可读") from error
-    if runtime_mtu != EXPECTED_DMIT_WG1_MTU:
+    if runtime_mtu != EXPECTED_WG1_MTU:
         raise Arm64EnvironmentReceiptError(
-            f"ARM64 wg1 运行时 MTU 与 DMIT {EXPECTED_DMIT_WG1_MTU} 不一致"
+            f"ARM64 wg1 运行时 MTU 与 "
+            f"{EXPECTED_EGRESS_PROVIDER} {EXPECTED_WG1_MTU} 不一致"
         )
     return {
         "interface": WIREGUARD_INTERFACE,
+        "egress_provider": EXPECTED_EGRESS_PROVIDER,
         "configured_mtu": configured_values[0],
         "runtime_mtu": runtime_mtu,
-        "expected_dmit_mtu": EXPECTED_DMIT_WG1_MTU,
+        "expected_mtu": EXPECTED_WG1_MTU,
         "config_path": str(config),
         "config_sha256": _sha256_bytes(raw),
     }
@@ -619,7 +636,12 @@ def collect_facts(
         _ACTIVE_HEARTBEAT = previous_heartbeat
 
 
-def _validate_container(value: Any, expected_name: str) -> dict[str, Any]:
+def _validate_container(
+    value: Any,
+    expected_name: str,
+    *,
+    expected_public_egress: str,
+) -> dict[str, Any]:
     container = _expect(
         value,
         {
@@ -678,9 +700,12 @@ def _validate_container(value: Any, expected_name: str) -> dict[str, Any]:
         {"url", "ip_address", "response_sha256"},
         f"{expected_name}.public_egress",
     )
-    if egress.get("url") != PUBLIC_EGRESS_URL or egress.get("ip_address") != EXPECTED_PUBLIC_EGRESS:
+    if (
+        egress.get("url") != PUBLIC_EGRESS_URL
+        or egress.get("ip_address") != expected_public_egress
+    ):
         raise Arm64EnvironmentReceiptError(
-            f"{expected_name} 公网出口不是 {EXPECTED_PUBLIC_EGRESS}"
+            f"{expected_name} 公网出口不是 {expected_public_egress}"
         )
     if not SHA256_RE.fullmatch(str(egress.get("response_sha256", ""))):
         raise Arm64EnvironmentReceiptError(f"{expected_name} 出口响应摘要非法")
@@ -716,7 +741,7 @@ def validate_facts(
         "containers",
         "collector",
     }
-    if producer_version == PRODUCER_VERSION:
+    if producer_version in {"3", PRODUCER_VERSION}:
         fact_fields.add("wireguard")
     _expect(
         facts,
@@ -729,11 +754,15 @@ def validate_facts(
         raise Arm64EnvironmentReceiptError("facts.phase 非法")
     _safe_id(facts.get("subject_id"), "facts.subject_id")
     _rfc3339(facts.get("observed_at_utc"), "facts.observed_at_utc")
-    expected_contract = (
-        contract_sha256()
-        if producer_version == PRODUCER_VERSION
-        else LEGACY_NETWORK_CONTRACT_SHA256
-    )
+    if producer_version == PRODUCER_VERSION:
+        expected_contract = contract_sha256()
+        expected_public_egress = EXPECTED_PUBLIC_EGRESS
+    elif producer_version == "3":
+        expected_contract = LEGACY_V3_NETWORK_CONTRACT_SHA256
+        expected_public_egress = LEGACY_DMIT_PUBLIC_EGRESS
+    else:
+        expected_contract = LEGACY_NETWORK_CONTRACT_SHA256
+        expected_public_egress = LEGACY_DMIT_PUBLIC_EGRESS
     if facts.get("contract_sha256") != expected_contract:
         raise Arm64EnvironmentReceiptError("固定网络或资源合同摘要漂移")
     host = _expect(facts.get("host"), {"hostname", "architecture"}, "facts.host")
@@ -763,10 +792,15 @@ def validate_facts(
     if not isinstance(containers, list) or [item.get("name") for item in containers if isinstance(item, dict)] != expected_names:
         raise Arm64EnvironmentReceiptError("容器事实必须唯一且完整覆盖固定双容器")
     normalized = [
-        _validate_container(item, name) for item, name in zip(containers, expected_names, strict=True)
+        _validate_container(
+            item,
+            name,
+            expected_public_egress=expected_public_egress,
+        )
+        for item, name in zip(containers, expected_names, strict=True)
     ]
     wireguard: dict[str, Any] | None = None
-    if producer_version == PRODUCER_VERSION:
+    if producer_version == "3":
         wireguard = _expect(
             facts.get("wireguard"),
             {
@@ -781,14 +815,40 @@ def validate_facts(
         )
         if (
             wireguard.get("interface") != WIREGUARD_INTERFACE
-            or wireguard.get("configured_mtu") != EXPECTED_DMIT_WG1_MTU
-            or wireguard.get("runtime_mtu") != EXPECTED_DMIT_WG1_MTU
-            or wireguard.get("expected_dmit_mtu") != EXPECTED_DMIT_WG1_MTU
+            or wireguard.get("configured_mtu") != LEGACY_DMIT_WG1_MTU
+            or wireguard.get("runtime_mtu") != LEGACY_DMIT_WG1_MTU
+            or wireguard.get("expected_dmit_mtu") != LEGACY_DMIT_WG1_MTU
             or wireguard.get("config_path") != str(WIREGUARD_CONFIG)
             or not SHA256_RE.fullmatch(str(wireguard.get("config_sha256", "")))
         ):
             raise Arm64EnvironmentReceiptError(
-                "ARM64 wg1 持久配置或运行时 MTU 与 DMIT 冻结值不一致"
+                "历史 ARM64 wg1 持久配置或运行时 MTU 与 DMIT 冻结值不一致"
+            )
+    elif producer_version == PRODUCER_VERSION:
+        wireguard = _expect(
+            facts.get("wireguard"),
+            {
+                "interface",
+                "egress_provider",
+                "configured_mtu",
+                "runtime_mtu",
+                "expected_mtu",
+                "config_path",
+                "config_sha256",
+            },
+            "wireguard",
+        )
+        if (
+            wireguard.get("interface") != WIREGUARD_INTERFACE
+            or wireguard.get("egress_provider") != EXPECTED_EGRESS_PROVIDER
+            or wireguard.get("configured_mtu") != EXPECTED_WG1_MTU
+            or wireguard.get("runtime_mtu") != EXPECTED_WG1_MTU
+            or wireguard.get("expected_mtu") != EXPECTED_WG1_MTU
+            or wireguard.get("config_path") != str(WIREGUARD_CONFIG)
+            or not SHA256_RE.fullmatch(str(wireguard.get("config_sha256", "")))
+        ):
+            raise Arm64EnvironmentReceiptError(
+                "ARM64 wg1 持久配置或运行时 MTU 与 BWG 冻结值不一致"
             )
     # Docker restart／compose recreate 会更换 container_id、EndpointID 和容器内接口名，
     # 但不会改变受管网络本身。候选抓包按设计会执行这两类操作；若把这些临时值纳入
