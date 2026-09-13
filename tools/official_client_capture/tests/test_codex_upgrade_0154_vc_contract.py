@@ -296,14 +296,13 @@ class CodexUpgrade0154VCContractTests(unittest.TestCase):
                     )
 
     def test_campaign_bootstrap_and_batch_controls_are_direct_only(self) -> None:
-        """Campaign 引导与批次编译必须直接运行，不能成为队列动作。"""
+        """预检与批次控制直接运行，Formal plan 只能走原子收口。"""
 
-        arguments = argparse.Namespace()
-        for command in (
-            "plan",
-            "reuse-official-evidence",
-            "compile-vc-batch",
-        ):
+        arguments = argparse.Namespace(
+            campaign_mode="preflight_only",
+            target_version="0.154.0",
+        )
+        for command in ("plan", "reuse-official-evidence", "compile-vc-batch"):
             with self.subTest(command=command), mock.patch.dict(
                 os.environ,
                 {},
@@ -328,6 +327,20 @@ class CodexUpgrade0154VCContractTests(unittest.TestCase):
                         arguments,
                         command,
                     )
+
+        formal_arguments = argparse.Namespace(
+            campaign_mode="formal",
+            target_version="0.154.0",
+        )
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with self.assertRaisesRegex(
+                codex_upgrade.ConfigurationError,
+                "只能由 codex_upgrade_vc0_closeout.py 原子创建",
+            ):
+                codex_upgrade._reject_unparented_formal_write(
+                    formal_arguments,
+                    "plan",
+                )
 
     def _delivery_fixture(
         self,

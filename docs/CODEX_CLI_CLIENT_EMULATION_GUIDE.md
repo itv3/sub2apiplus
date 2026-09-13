@@ -1239,8 +1239,9 @@ Framework §5.3 是升级总操作入口并规定 `VC-0～VC-6` 顺序；本部�
    checkpoint 封存后编译本批次不可变清单。不得在 VC-0 预填后续尚未产生的批准摘要、candidate／attempt
    ID、镜像 digest 或收据摘要，也不得在批次启动后补写。总计划是 Formal plan 产物，不是批次动作清单。
 2. 阶段动作的唯一派发入口是 `codex_upgrade_supervisor.py campaign-run`。本部分的阶段命令块均为已冻结
-   v2 清单中的 `action.command`，不是操作员可绕过监督器直接执行的入口。只有以下三个控制面命令直接
-   执行：VC-0 的 `plan` 创建全新 Campaign、总计划和首批；`reuse-official-evidence` 创建全新 Campaign，
+   v2 清单中的 `action.command`，不是操作员可绕过监督器直接执行的入口。只有以下三个控制面动作不进入
+   阶段队列：VC-0 的 `preflight_only plan` 只创建离线预检；Formal `plan` 只能由
+   `codex_upgrade_vc0_closeout.py` 在原子收口进程内调用；`reuse-official-evidence` 创建全新 Campaign，
    以零请求导入已封存官方证据，并生成“全部 official Job 为 reuse”的 VC-1 no-op 批次及 checkpoint；
    `compile-vc-batch` 在前序 checkpoint 封存后只编译下一批。三者都不得放入 `campaign-run` 动作队列，
    不得延长原始 deadline 或执行阶段数据面动作。
@@ -1336,7 +1337,7 @@ Codex 工具运行时读取的 Framework 和客户端指南属于受管依赖。
 ## 4.0 VC-0 冻结升级输入
 
 - **输入**：当前 Active／Previous、目标版本及官方产物、账号与 API Key 身份、ARM64 环境、用途、预算和回退点。
-- **操作与工具**：完成 DOC-PRE，执行 `preflight_only` plan、P0 离线门禁和 `campaign-run` 分批演练；随后以直接控制面命令 `plan` 冻结 Formal Campaign 总计划并编译首批。
+- **操作与工具**：完成 DOC-PRE，执行 `preflight_only` plan、P0 离线门禁和 `campaign-run` 分批演练；随后只通过 `codex_upgrade_vc0_closeout.py` 原子冻结 Formal Campaign 总计划并立即派发首批。
 - **产物**：DOC-PRE／P0 收据、时间账本、工具与环境摘要、Campaign 总计划和首个 Formal 批次清单。
 - **完成标志**：工具阻断为零、网络与目录有效、live 请求为零、回退点可用。
 - **失败恢复**：正式 Campaign 前停线，工具缺口拆成独立变更；修复后只重跑 VC-0。
@@ -1374,7 +1375,9 @@ python3 tools/official_client_capture/codex_upgrade.py plan \
 
 `preflight_only` 目录只允许计划、状态查询和离线演练；不得发送真实请求、使用
 `--acknowledge-live-requests`、创建 Formal attempt、修改 Active／Previous 或写入历史证据。P0 通过后，
-必须换一个尚不存在的目录执行同一用途的 `plan --campaign-mode formal`，禁止把预检目录直接续作。
+禁止直接执行 `plan --campaign-mode formal`；必须交由 §4.0.4 的
+`codex_upgrade_vc0_closeout.py` 使用尚不存在的 Formal 目录原子创建并立即派发首批。
+预检目录不得直接续作；0.154.0 及后续目标的 CLI 边界会强制拒绝人工 Formal `plan`。
 
 `plan --rule-manifest` 绑定 baseline 的 `codex_upgrade_rules_<baseline>.json`；目标版本的
 `candidate_rule_expectations_<target>.json` 只用于候选断言预检，不能代替 baseline 规则清单。
@@ -1485,10 +1488,15 @@ python3 -m tools.official_client_capture.codex_upgrade_job_rehearsal_receipt rep
 ```
 
 `collect` 检查路径、依赖、语法、二进制、bubblewrap 和 zstd，并在 `runs／runtime` 内创建唯一临时对象，
-从两个容器别名交叉验证写入和同源映射；另在 `runs` 内执行一次“容器别名创建 → 登记宿主路径归档 →
-两条容器别名读取归档 → 有界清理”的失败证据路由探针。它不执行 Job、不发送请求。任一 Job
-失败都必须先能形成失败收据并独立重放；失败、缺项、环境漂移或目标场景／工具摘要不一致时禁止创建
-Formal Campaign。Formal `plan` 必须绑定上述 rehearsal receipt，并再次独立重放。
+从两个容器别名交叉验证写入和同源映射；另以 P0 强制门禁执行真实
+`campaign-run v2 → 父 CampaignLease → Job 首次失败加两次重试` 生命周期。每轮 Job 都在
+`capture-cli` 内通过 `bwrap --unshare-net` 使用同一固定证据根并以非零码退出，宿主编排器必须依次生成
+`.failed-attempt1／2／3`，再从宿主路径、`/capture` 和 `/root/oauth-capture` 校验 device、inode 与 marker，
+最后由父监督器有界清理本轮随机目录。父 run 必须为 `stopped`、`audit_incomplete=false`，三轮 Job／step
+事件全部闭合且 `live_request_count=0`。收据必须携带
+`failure_lifecycle_probe_sha256`；只有 storage 探针的历史收据仍可只读重放，但不得用于新 Formal。
+任一 Job 失败都必须先能形成失败收据并独立重放；失败、缺项、环境漂移或目标场景／工具摘要不一致时
+禁止创建 Formal Campaign。Formal 创建必须绑定上述 rehearsal receipt，并再次独立重放。
 
 创建运行目录前，ARM64 根文件系统须同时满足使用率低于 70% 且可用空间不少于 30 GiB。达到水位后只能
 按 manifest 清理未被收据引用的可再生缓存、worktree、镜像层和 staging，禁止删除证据或无界扫描。
@@ -1500,15 +1508,42 @@ VC-0 的机器退出条件固定为：
 ```text
 P0 收据通过
 ∧ 工具阻断为零
-∧ campaign-run 分批执行、原始 deadline 承接与全部冻结 Job 的离线演练通过
+∧ campaign-run 分批执行、原始 deadline 承接、失败生命周期与全部冻结 Job 的离线演练通过
 ∧ 网络、目录、资源水位和回退点有效
 ∧ live_request_count = 0
-⇒ 创建新的 Formal Campaign，封存总计划并在 60 秒内启动 VC-1 首批动作
+⇒ 由原子收口工具创建新的 Formal Campaign，封存总计划并在同一进程内启动 VC-1 首批动作
 ```
 
 工具、Schema、场景、依赖、账号、权限、模型可见性、官方产物、环境、成本、磁盘或时间预算任一不满足，
-均不得创建 Formal Campaign；按 Framework §5.3.4 给出最后 checkpoint、根因和唯一下一动作。全部通过后
-封存 P0 收据、Campaign 总计划和首批动作清单，换新目录创建 Formal Campaign 并立即进入 VC-1。
+均不得创建 Formal Campaign；按 Framework §5.3.4 给出最后 checkpoint、根因和唯一下一动作。全部通过后，
+使用唯一入口：
+
+```bash
+python3 -m tools.official_client_capture.codex_upgrade_vc0_closeout \
+  --preflight-campaign-dir "$PREFLIGHT_CAMPAIGN" \
+  --formal-campaign-dir "$FORMAL_CAMPAIGN" \
+  --formal-campaign-id "$FORMAL_CAMPAIGN_ID" \
+  --job-rehearsal-root "$JOB_REHEARSAL_ROOT" \
+  --job-rehearsal-receipt receipt.json \
+  --p0-gate-root "$P0_GATE_ROOT" \
+  --p0-gate-receipt p0-receipt.json \
+  --managed-tool-deploy-receipt "$MANAGED_TOOL_DEPLOY_RECEIPT" \
+  --supervisor-state-dir "$VC1_SUPERVISOR_STATE_DIR" \
+  --audit-dir "$VC0_CLOSEOUT_AUDIT_DIR"
+```
+
+该入口从 preflight `campaign.json` 恢复全部 Formal 参数，并严格重放 ARM64、Job rehearsal、P0、
+campaign-run rehearsal 和受管工具部署五份输入。时间账本必须仍为 active VC-0，且阶段与总 deadline
+较早者至少剩余 300 秒。工具把五份收据安全复制进账本，追加唯一 `receipt_passed`，生成 active timing
+checkpoint，调用一次 `create_campaign()`，复制 Formal plan／VC-0 checkpoint，依次追加 VC-0 完成和
+VC-1 开始事件，再在同一 Python 进程调用一次 `campaign-run`。任何失败均保留不可覆盖诊断和半成品，
+在首次账本写入前失败只记录 audit 诊断、不改动账本；已写入收口事件后失败且仍有 active 阶段时，
+必须追加 `stage_abandoned`。失败若恰在 VC-0 已完成而 VC-1 尚未开始的边界，则记录
+`between-stages` 诊断并只允许从已封存 Formal checkpoint 恢复；若原 deadline 已要求停线，则追加
+`stop_the_line`。全部失败路径都不清理、
+不覆盖、不自动重试、不延长 deadline；必须依据诊断和最后合法 checkpoint 按 §5.3.4 恢复。
+执行该命令会进入 VC-1 并可能发送已批准的正式请求；禁止用
+人工 SSH 多命令、heredoc 或直接 `plan --campaign-mode formal` 替代。
 
 “当前工具是否就绪”只能由本次 P0 收据、Job rehearsal 和门禁输出证明，不再在长期手册中维护容易过期的
 状态表。除冻结身份实际漂移外，不得重复已经通过的离线演练，也不得以准备工作为由停留在 VC-0。

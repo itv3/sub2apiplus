@@ -297,6 +297,70 @@ def create_job_rehearsal_receipt(
         "job_roots_sha256": rehearsal._fingerprint(job_roots),
         "job_roots": job_roots,
     }
+    failure_source_name = "codex-failure-lifecycle-fixture"
+    failure_archives = []
+    for attempt_index in range(1, rehearsal.FAILURE_LIFECYCLE_ATTEMPT_COUNT + 1):
+        archive_name = f"{failure_source_name}.failed-attempt{attempt_index}"
+        marker = {
+            "schema_version": rehearsal.FAILURE_LIFECYCLE_MARKER_SCHEMA,
+            "source_name": failure_source_name,
+            "attempt_index": attempt_index,
+            "network_isolated": True,
+            "live_request_count": 0,
+        }
+        failure_archives.append(
+            {
+                "attempt_index": attempt_index,
+                "archive_name": archive_name,
+                "host_archive": f"{host_data_root}/runs/{archive_name}",
+                "container_archives": [
+                    f"{alias}/runs/{archive_name}" for alias in aliases
+                ],
+                "device": 100,
+                "inode": 300 + attempt_index,
+                "marker_sha256": hashlib.sha256(
+                    rehearsal._canonical(marker)
+                ).hexdigest(),
+                "marker": marker,
+            }
+        )
+    failure_lifecycle_probe = {
+        "schema_version": rehearsal.FAILURE_LIFECYCLE_SCHEMA,
+        "status": "passed",
+        "campaign_run_schema_version": "codex-upgrade-campaign-run/v2",
+        "campaign_id": "p0-failure-lifecycle-fixture",
+        "job_id": rehearsal.FAILURE_LIFECYCLE_JOB_ID,
+        "source_name": failure_source_name,
+        "capture_container": configuration["capture_container"],
+        "capture_root": capture_root,
+        "host_runs_root": f"{host_data_root}/runs",
+        "retry_limit": 2,
+        "attempt_count": rehearsal.FAILURE_LIFECYCLE_ATTEMPT_COUNT,
+        "network_isolated": True,
+        "live_request_count": 0,
+        "archives": failure_archives,
+        "final_result": {
+            "status": "failed",
+            "attempt_index": rehearsal.FAILURE_LIFECYCLE_ATTEMPT_COUNT,
+            "evidence_roots": [
+                f"{capture_root}/runs/{failure_source_name}.failed-attempt3"
+            ],
+        },
+        "parent_supervisor": {
+            "run_state": "stopped",
+            "audit_incomplete": False,
+            "event_count": 20,
+            "required_event_count": 16,
+            "actions": [
+                {
+                    "action_id": "failure-lifecycle",
+                    "returncode": 0,
+                    "status": "passed",
+                }
+            ],
+        },
+        "cleanup_verified": True,
+    }
     jobs: list[dict[str, object]] = []
     for job_id in contract["job_ids"]:
         step_count = contract["step_counts"][job_id]
@@ -418,6 +482,7 @@ def create_job_rehearsal_receipt(
                 "version": "bubblewrap fixture",
                 "network_isolated": True,
             },
+            "failure_lifecycle": failure_lifecycle_probe,
             "storage": storage_probe,
             "zstd": {
                 "status": "passed",

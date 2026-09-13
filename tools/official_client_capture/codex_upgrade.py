@@ -9042,6 +9042,7 @@ _CONTROL_PLANE_TOOL_FILES = frozenset(
         "codex_upgrade_vc_action_plan.schema.json",
         "codex_upgrade_vc_receipt.py",
         "codex_upgrade_vc_receipt.schema.json",
+        "codex_upgrade_vc0_closeout.py",
         "codex_upgrade_campaign_lease.schema.json",
         "codex_upgrade_campaign_lease_stop.schema.json",
         "codex_upgrade_control_epoch.schema.json",
@@ -9078,6 +9079,7 @@ _CANONICAL_EVALUATION_ONLY_FILES = frozenset(
         "codex_upgrade_vc_action_plan.schema.json",
         "codex_upgrade_vc_receipt.py",
         "codex_upgrade_vc_receipt.schema.json",
+        "codex_upgrade_vc0_closeout.py",
         "codex_upgrade_gate_receipt.py",
         "codex_upgrade_gate_receipt.schema.json",
         "codex_upgrade_gate_requirements.schema.json",
@@ -9184,6 +9186,7 @@ _EVALUATION_SIDE_FILES = frozenset(
         "codex_upgrade_vc_artifacts.py",
         "codex_upgrade_vc_receipt.py",
         "codex_upgrade_vc_receipt.schema.json",
+        "codex_upgrade_vc0_closeout.py",
         "codex_upgrade_legacy_boundary.py",
         "codex_upgrade_job_rehearsal_receipt.schema.json",
         "codex_upgrade_predecessor_import.schema.json",
@@ -37819,8 +37822,27 @@ def _reject_unparented_formal_write(
     in_campaign_run = (
         os.environ.get(codex_upgrade_supervisor.CAMPAIGN_RUN_CONTEXT_ENV) == "1"
     )
+    # 0.154.0 起，普通 Formal plan 的创建和首批派发必须由 VC-0 原子收口
+    # 工具在同一进程内完成。这里拦住操作员直接执行 CLI plan；原子收口通过
+    # Python API 调用 create_campaign，不经过这个命令行边界。历史版本和
+    # preflight_only 仍保留原入口，避免改变既有只读夹具语义。
+    if command == "plan":
+        if in_campaign_run:
+            raise ConfigurationError(
+                "plan 是 Campaign 引导／批次控制面命令，禁止由 campaign-run 动作派发。"
+            )
+        if (
+            getattr(arguments, "campaign_mode", None) == "formal"
+            and _requires_complete_vc_artifacts(
+                str(getattr(arguments, "target_version", ""))
+            )
+        ):
+            raise ConfigurationError(
+                "0.154.0 起 Formal plan 只能由 "
+                "codex_upgrade_vc0_closeout.py 原子创建并立即派发首批。"
+            )
+        return
     direct_control_commands = {
-        "plan",
         "reuse-official-evidence",
         "compile-vc-batch",
     }

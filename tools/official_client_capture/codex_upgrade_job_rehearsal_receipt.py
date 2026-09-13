@@ -18,7 +18,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Mapping
 
@@ -59,6 +59,12 @@ EXPECTED_CAPTURE_CONTAINER_ROOT = PurePosixPath("/root/oauth-capture")
 CAPTURE_CONTAINER_ALIAS = PurePosixPath("/capture")
 WRITABLE_CAPTURE_NAMESPACES = ("runs", "runtime")
 FAILED_EVIDENCE_ARCHIVE_SUFFIX = ".failed-attempt1"
+FAILURE_LIFECYCLE_SCHEMA = "codex-upgrade-failure-lifecycle-probe/v1"
+FAILURE_LIFECYCLE_WORKER_SCHEMA = "codex-upgrade-failure-lifecycle-worker/v1"
+FAILURE_LIFECYCLE_MARKER_SCHEMA = "codex-upgrade-failure-lifecycle-marker/v1"
+FAILURE_LIFECYCLE_JOB_ID = "vc1-failure-lifecycle-probe"
+FAILURE_LIFECYCLE_ATTEMPT_COUNT = 3
+FAILURE_LIFECYCLE_DEADLINE_SECONDS = 120
 
 # 完整演练包含大量 docker／脚本语法探针；所有层级都从这里读取同一条
 # deadline，避免固定 timeout 的命令串联后突破 attempt 预算。
@@ -1395,6 +1401,606 @@ print(json.dumps({
             raise JobRehearsalReceiptError("失败证据归档探针清理失败") from cleanup_error
 
 
+def _cleanup_failure_lifecycle_artifacts(
+    host_runs_root: Path,
+    source_name: str,
+) -> None:
+    """只清理一次失败生命周期探针预先声明的四个随机目录。"""
+
+    paths = [host_runs_root / source_name]
+    paths.extend(
+        host_runs_root / f"{source_name}.failed-attempt{attempt_index}"
+        for attempt_index in range(1, FAILURE_LIFECYCLE_ATTEMPT_COUNT + 1)
+    )
+    for path in paths:
+        try:
+            path.relative_to(host_runs_root)
+        except ValueError as error:
+            raise JobRehearsalReceiptError("失败生命周期清理路径越过 runs 根") from error
+        if path.is_symlink():
+            path.unlink()
+        elif path.is_dir():
+            shutil.rmtree(path)
+        elif path.exists():
+            path.unlink()
+
+
+def _failure_lifecycle_worker(arguments: argparse.Namespace) -> dict[str, Any]:
+    """在 campaign-run 子进程内走完真实 Job 失败、重试和归档链。"""
+
+    from tools.official_client_capture import codex_upgrade
+
+    campaign_id = _safe_id(arguments.campaign_id, "campaign_id")
+    source_name = _safe_id(arguments.source_name, "source_name")
+    container = _safe_id(arguments.capture_container, "capture_container")
+    capture_root = _absolute_posix_path(arguments.capture_root, "capture_root")
+    host_runs_root = Path(arguments.host_runs_root)
+    campaign_dir = Path(arguments.campaign_dir)
+    log_root = Path(arguments.log_root)
+    output = Path(arguments.output)
+    if (
+        not host_runs_root.is_absolute()
+        or host_runs_root.is_symlink()
+        or not host_runs_root.is_dir()
+        or not campaign_dir.is_absolute()
+        or campaign_dir.is_symlink()
+        or not campaign_dir.is_dir()
+        or not log_root.is_absolute()
+        or log_root.is_symlink()
+        or not log_root.is_dir()
+        or not output.is_absolute()
+        or output.is_symlink()
+        or output.exists()
+    ):
+        raise JobRehearsalReceiptError("失败生命周期 worker 路径不可信")
+    if capture_root != EXPECTED_CAPTURE_CONTAINER_ROOT:
+        raise JobRehearsalReceiptError("失败生命周期 worker 容器根漂移")
+    if stat.S_IMODE(campaign_dir.stat().st_mode) != 0o700 or stat.S_IMODE(
+        log_root.stat().st_mode
+    ) != 0o700:
+        raise JobRehearsalReceiptError("失败生命周期 worker 私有目录必须为 0700")
+    try:
+        output.parent.resolve(strict=True).relative_to(campaign_dir.parent.resolve(strict=True))
+    except (OSError, ValueError) as error:
+        raise JobRehearsalReceiptError("失败生命周期 worker 输出越过夹具根") from error
+
+    aliases = sorted({CAPTURE_CONTAINER_ALIAS, capture_root}, key=str)
+    logical_source = capture_root / "runs" / source_name
+    marker_name = "failure-lifecycle-marker.json"
+    expected_paths = [host_runs_root / source_name]
+    expected_paths.extend(
+        host_runs_root / f"{source_name}.failed-attempt{attempt_index}"
+        for attempt_index in range(1, FAILURE_LIFECYCLE_ATTEMPT_COUNT + 1)
+    )
+    if any(path.exists() or path.is_symlink() for path in expected_paths):
+        raise JobRehearsalReceiptError("失败生命周期探针路径发生碰撞")
+
+    # 每次 Job 启动都在新的 network namespace 中确认没有默认路由，再创建
+    # 同一个固定证据根并以预期非零码退出。归档清空固定根后，下一次重试才能
+    # 再次创建它；因此三次成功建目录本身就证明了重试与归档之间的先后关系。
+    failure_script = r'''
+import json,os,pathlib,sys
+root=pathlib.Path(sys.argv[1])
+source_name=sys.argv[2]
+marker_name=sys.argv[3]
+lines=pathlib.Path('/proc/net/route').read_text(encoding='ascii').splitlines()[1:]
+if any(len(line.split())>1 and line.split()[1]=='00000000' for line in lines):
+    raise SystemExit('default-route-present')
+attempt=1
+while (root.parent/f'{source_name}.failed-attempt{attempt}').exists():
+    attempt+=1
+if attempt>3:
+    raise SystemExit('unexpected-attempt')
+if root.exists() or root.is_symlink():
+    raise SystemExit('fixed-source-not-cleared')
+os.mkdir(root,0o700)
+payload={
+    'schema_version':'codex-upgrade-failure-lifecycle-marker/v1',
+    'source_name':source_name,
+    'attempt_index':attempt,
+    'network_isolated':True,
+    'live_request_count':0,
+}
+raw=(json.dumps(payload,sort_keys=True,separators=(',',':'))+'\n').encode()
+flags=os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,'O_NOFOLLOW',0)
+descriptor=os.open(root/marker_name,flags,0o600)
+with os.fdopen(descriptor,'wb') as stream:
+    stream.write(raw)
+    stream.flush()
+    os.fsync(stream.fileno())
+raise SystemExit(23)
+'''
+    verify_script = r'''
+import hashlib,json,pathlib,sys
+aliases=[pathlib.Path(value) for value in json.loads(sys.argv[1])]
+source_name=sys.argv[2]
+marker_name=sys.argv[3]
+entries=[]
+for attempt in range(1,4):
+    paths=[alias/'runs'/f'{source_name}.failed-attempt{attempt}' for alias in aliases]
+    if any(not path.is_dir() or path.is_symlink() for path in paths):
+        raise SystemExit('archive-missing')
+    metadata=[path.stat() for path in paths]
+    if len({(item.st_dev,item.st_ino) for item in metadata})!=1:
+        raise SystemExit('archive-alias-mismatch')
+    raw_values=[(path/marker_name).read_bytes() for path in paths]
+    if len(set(raw_values))!=1:
+        raise SystemExit('marker-alias-mismatch')
+    marker=json.loads(raw_values[0])
+    if marker.get('attempt_index')!=attempt or marker.get('network_isolated') is not True or marker.get('live_request_count')!=0:
+        raise SystemExit('marker-invalid')
+    entries.append({
+        'attempt_index':attempt,
+        'container_archives':[str(path) for path in paths],
+        'device':metadata[0].st_dev,
+        'inode':metadata[0].st_ino,
+        'marker_sha256':hashlib.sha256(raw_values[0]).hexdigest(),
+        'marker':marker,
+    })
+print(json.dumps({'status':'passed','entries':entries},sort_keys=True))
+'''
+    cleanup_script = r'''
+import json,pathlib,sys
+paths=[pathlib.Path(value) for value in json.loads(sys.argv[1])]
+marker_name=sys.argv[2]
+for path in paths:
+    if path.is_symlink() or not path.is_dir():
+        raise SystemExit('cleanup-target-invalid')
+    children=list(path.iterdir())
+    if len(children)!=1 or children[0].name!=marker_name or children[0].is_symlink() or not children[0].is_file():
+        raise SystemExit('cleanup-target-not-bounded')
+for path in paths:
+    (path/marker_name).unlink()
+    path.rmdir()
+if any(path.exists() or path.is_symlink() for path in paths):
+    raise SystemExit('cleanup-incomplete')
+'''
+
+    codex_upgrade.FAILED_JOB_EVIDENCE_HOST_RUN_ROOT = host_runs_root
+    codex_upgrade.FAILED_JOB_EVIDENCE_CONTAINER_RUN_ROOTS = tuple(
+        alias / "runs" for alias in aliases
+    )
+    if codex_upgrade.JOB_RETRY_LIMIT != 2:
+        raise JobRehearsalReceiptError("生产 Job 重试上限不再是两次")
+    # 只在这个独立、零网络 worker 进程中消除 30 秒退避；生产常量和调用方
+    # 进程均不改变，演练仍完整执行首次加两次重试。
+    codex_upgrade.JOB_RETRY_DELAY_SECONDS = 0
+    job = codex_upgrade.Job(
+        job_id=FAILURE_LIFECYCLE_JOB_ID,
+        phase="official",
+        suites=("full",),
+        description="VC-1 失败、重试和证据归档离线演练",
+        steps=(
+            {
+                "argv": [
+                    "docker",
+                    "exec",
+                    container,
+                    "bwrap",
+                    "--unshare-pid",
+                    "--unshare-net",
+                    "--die-with-parent",
+                    "--ro-bind",
+                    "/",
+                    "/",
+                    "--bind",
+                    str(capture_root / "runs"),
+                    str(capture_root / "runs"),
+                    "--dev",
+                    "/dev",
+                    "--proc",
+                    "/proc",
+                    "--",
+                    "/usr/bin/python3",
+                    "-c",
+                    failure_script,
+                    str(logical_source),
+                    source_name,
+                    marker_name,
+                ],
+                "environment": {},
+                "timeout": 30,
+            },
+        ),
+        evidence_roots=(str(logical_source),),
+        covers=(),
+    )
+    deadline = incremental_recovery.WallClockDeadline(
+        FAILURE_LIFECYCLE_DEADLINE_SECONDS,
+        label="failure-lifecycle-worker",
+    )
+    worker_result: dict[str, Any] | None = None
+    try:
+        with codex_upgrade.CampaignLease(
+            campaign_dir,
+            phase="official",
+            candidate_id=None,
+            deadline=deadline,
+            attempt_id="failure-lifecycle-attempt",
+            command="failure-lifecycle-worker",
+            campaign_id=campaign_id,
+        ) as lease:
+            result = codex_upgrade._run_job_with_retry(
+                job,
+                log_root,
+                deadline=deadline,
+                heartbeat=lambda operation: lease.heartbeat(operation),
+            )
+            expected_final_root = str(
+                capture_root
+                / "runs"
+                / f"{source_name}.failed-attempt{FAILURE_LIFECYCLE_ATTEMPT_COUNT}"
+            )
+            if (
+                result.get("status") != "failed"
+                or result.get("attempt_index") != FAILURE_LIFECYCLE_ATTEMPT_COUNT
+                or result.get("evidence_roots") != [expected_final_root]
+            ):
+                raise JobRehearsalReceiptError("失败生命周期 Job 未完成三次失败归档")
+
+            archives: list[dict[str, Any]] = []
+            for attempt_index in range(1, FAILURE_LIFECYCLE_ATTEMPT_COUNT + 1):
+                archive_name = f"{source_name}.failed-attempt{attempt_index}"
+                host_archive = host_runs_root / archive_name
+                marker_path = host_archive / marker_name
+                if (
+                    host_archive.is_symlink()
+                    or not host_archive.is_dir()
+                    or marker_path.is_symlink()
+                    or not marker_path.is_file()
+                ):
+                    raise JobRehearsalReceiptError("失败生命周期宿主归档缺失")
+                marker_raw = marker_path.read_bytes()
+                try:
+                    marker = json.loads(marker_raw)
+                except (UnicodeError, json.JSONDecodeError) as error:
+                    raise JobRehearsalReceiptError("失败生命周期 marker 非法") from error
+                metadata = host_archive.stat()
+                archives.append(
+                    {
+                        "attempt_index": attempt_index,
+                        "archive_name": archive_name,
+                        "host_archive": str(host_archive),
+                        "container_archives": [
+                            str(alias / "runs" / archive_name) for alias in aliases
+                        ],
+                        "device": metadata.st_dev,
+                        "inode": metadata.st_ino,
+                        "marker_sha256": _sha256_bytes(marker_raw),
+                        "marker": marker,
+                    }
+                )
+
+            verified = lease.run_command(
+                [
+                    "docker",
+                    "exec",
+                    container,
+                    "python3",
+                    "-c",
+                    verify_script,
+                    json.dumps([str(alias) for alias in aliases]),
+                    source_name,
+                    marker_name,
+                ],
+                operation="failure-lifecycle:verify-aliases",
+                timeout_seconds=30,
+                job_id=FAILURE_LIFECYCLE_JOB_ID,
+            )
+            try:
+                container_facts = json.loads(verified.stdout)
+            except (TypeError, UnicodeError, json.JSONDecodeError) as error:
+                raise JobRehearsalReceiptError(
+                    "失败生命周期容器验证输出非法"
+                ) from error
+            expected_container_entries = [
+                {
+                    "attempt_index": item["attempt_index"],
+                    "container_archives": item["container_archives"],
+                    "device": item["device"],
+                    "inode": item["inode"],
+                    "marker_sha256": item["marker_sha256"],
+                    "marker": item["marker"],
+                }
+                for item in archives
+            ]
+            if container_facts != {
+                "status": "passed",
+                "entries": expected_container_entries,
+            }:
+                raise JobRehearsalReceiptError("失败生命周期宿主与容器事实不同源")
+
+            cleanup = lease.run_command(
+                [
+                    sys.executable,
+                    "-c",
+                    cleanup_script,
+                    json.dumps([item["host_archive"] for item in archives]),
+                    marker_name,
+                ],
+                operation="failure-lifecycle:cleanup",
+                timeout_seconds=30,
+                job_id=FAILURE_LIFECYCLE_JOB_ID,
+            )
+            if cleanup.returncode != 0 or any(
+                path.exists() or path.is_symlink() for path in expected_paths
+            ):
+                raise JobRehearsalReceiptError("失败生命周期受监督清理未闭合")
+            worker_result = {
+                "schema_version": FAILURE_LIFECYCLE_WORKER_SCHEMA,
+                "status": "passed",
+                "campaign_id": campaign_id,
+                "job_id": FAILURE_LIFECYCLE_JOB_ID,
+                "source_name": source_name,
+                "capture_container": container,
+                "capture_root": str(capture_root),
+                "host_runs_root": str(host_runs_root),
+                "retry_limit": codex_upgrade.JOB_RETRY_LIMIT,
+                "attempt_count": FAILURE_LIFECYCLE_ATTEMPT_COUNT,
+                "network_isolated": True,
+                "live_request_count": 0,
+                "archives": archives,
+                "final_result": {
+                    "status": result["status"],
+                    "attempt_index": result["attempt_index"],
+                    "evidence_roots": result["evidence_roots"],
+                },
+                "cleanup_verified": True,
+            }
+            _write_once(output, worker_result)
+    finally:
+        # 正常路径已经通过父监督器完成清理；这里只是异常兜底，仍仅触碰
+        # 本轮随机名称对应的四个精确目录。
+        _cleanup_failure_lifecycle_artifacts(host_runs_root, source_name)
+    if worker_result is None:
+        raise JobRehearsalReceiptError("失败生命周期 worker 未生成结果")
+    return worker_result
+
+
+def _capture_failure_lifecycle_probe(
+    configuration: Mapping[str, Any],
+    host_runs_root: Path,
+) -> dict[str, Any]:
+    """用真实 campaign-run v2 和父租约演练完整 VC-1 失败生命周期。"""
+
+    from tools.official_client_capture import codex_upgrade_supervisor
+
+    container = _safe_id(configuration.get("capture_container"), "capture_container")
+    capture_root = _absolute_posix_path(configuration.get("capture_root"), "capture_root")
+    if capture_root != EXPECTED_CAPTURE_CONTAINER_ROOT:
+        raise JobRehearsalReceiptError("失败生命周期探针容器根漂移")
+    runtime_root = host_runs_root.parent / "runtime"
+    if (
+        host_runs_root.is_symlink()
+        or not host_runs_root.is_dir()
+        or runtime_root.is_symlink()
+        or not runtime_root.is_dir()
+    ):
+        raise JobRehearsalReceiptError("失败生命周期探针宿主运行根不可信")
+
+    nonce = secrets.token_hex(12)
+    source_name = f"codex-failure-lifecycle-{nonce}"
+    campaign_id = f"p0-failure-lifecycle-{nonce}"
+    fixture = Path(
+        tempfile.mkdtemp(prefix=f".{source_name}-", dir=runtime_root)
+    )
+    fixture.chmod(0o700)
+    campaign_dir = fixture / "campaign"
+    state_dir = fixture / "supervisor"
+    log_root = fixture / "logs"
+    worker_output = fixture / "worker-result.json"
+    manifest_path = fixture / "campaign-run.json"
+    predecessor_path = fixture / "vc0-checkpoint.json"
+    for directory in (campaign_dir, state_dir, log_root):
+        directory.mkdir(mode=0o700)
+    expected_paths = [host_runs_root / source_name]
+    expected_paths.extend(
+        host_runs_root / f"{source_name}.failed-attempt{attempt_index}"
+        for attempt_index in range(1, FAILURE_LIFECYCLE_ATTEMPT_COUNT + 1)
+    )
+    try:
+        _write_once(
+            campaign_dir / "campaign.json",
+            {"campaign_id": campaign_id, "campaign_mode": "formal"},
+        )
+        predecessor = {
+            "schema_version": "codex-upgrade-failure-lifecycle-predecessor/v1",
+            "campaign_id": campaign_id,
+            "phase": "VC-0",
+            "status": "completed",
+            "live_request_count": 0,
+        }
+        _write_once(predecessor_path, predecessor)
+        predecessor_sha256 = _sha256_file(predecessor_path)
+        action = {
+            "action_id": "failure-lifecycle",
+            "operation": "VC-1:failure-lifecycle",
+            "timeout_seconds": FAILURE_LIFECYCLE_DEADLINE_SECONDS,
+            "command": [
+                sys.executable,
+                str(Path(__file__).resolve()),
+                "failure-lifecycle-worker",
+                "--campaign-dir",
+                str(campaign_dir),
+                "--campaign-id",
+                campaign_id,
+                "--capture-container",
+                container,
+                "--capture-root",
+                str(capture_root),
+                "--host-runs-root",
+                str(host_runs_root),
+                "--source-name",
+                source_name,
+                "--log-root",
+                str(log_root),
+                "--output",
+                str(worker_output),
+            ],
+            "item_ids": [FAILURE_LIFECYCLE_JOB_ID],
+        }
+        original_deadline = datetime.now(timezone.utc) + timedelta(
+            seconds=FAILURE_LIFECYCLE_DEADLINE_SECONDS + 30
+        )
+        manifest = codex_upgrade_supervisor.build_batched_campaign_run_manifest(
+            campaign_id=campaign_id,
+            campaign_plan_sha256=_fingerprint(
+                {"campaign_id": campaign_id, "probe": FAILURE_LIFECYCLE_SCHEMA}
+            ),
+            batch_id="failure-lifecycle-batch",
+            batch_sequence=1,
+            batch_sha256=_fingerprint(action),
+            phase="official",
+            predecessor_checkpoint={
+                "path": str(predecessor_path),
+                "sha256": predecessor_sha256,
+                "phase": "VC-0",
+                "checkpoint_sha256": _fingerprint(predecessor),
+            },
+            original_deadline_at_utc=original_deadline.isoformat(
+                timespec="milliseconds"
+            ).replace("+00:00", "Z"),
+            actions=[action],
+            execute_items=[FAILURE_LIFECYCLE_JOB_ID],
+            reuse_items=[],
+        )
+        _write_once(manifest_path, manifest)
+        raw_campaign_result = _run(
+            [
+                sys.executable,
+                str(Path(codex_upgrade_supervisor.__file__).resolve()),
+                "campaign-run",
+                "--state-dir",
+                str(state_dir),
+                "--manifest",
+                str(manifest_path),
+                "--heartbeat-seconds",
+                "0.2",
+                "--watchdog-timeout-seconds",
+                "5",
+                "--ledger-interval-seconds",
+                "0.2",
+            ],
+            "VC-1 失败生命周期 campaign-run v2 演练",
+            timeout=FAILURE_LIFECYCLE_DEADLINE_SECONDS + 30,
+        )
+        try:
+            campaign_result = json.loads(raw_campaign_result)
+        except (UnicodeError, json.JSONDecodeError) as error:
+            raise JobRehearsalReceiptError(
+                "失败生命周期 campaign-run 输出非法"
+            ) from error
+        worker, _worker_raw = _load_json(worker_output, "失败生命周期 worker 结果")
+        run_dir = Path(str(campaign_result.get("run_dir", "")))
+        try:
+            run_dir.resolve(strict=True).relative_to(state_dir.resolve(strict=True))
+        except (OSError, ValueError) as error:
+            raise JobRehearsalReceiptError("失败生命周期父 run_dir 越界") from error
+        audit = codex_upgrade_supervisor._audit_command(run_dir)
+        events_path = run_dir / "events.ndjson"
+        events = [
+            json.loads(line)
+            for line in events_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        event_pairs = {
+            (str(item.get("event_type")), str(item.get("operation")))
+            for item in events
+            if isinstance(item, Mapping)
+        }
+        required_pairs = {
+            (event_type, operation)
+            for attempt_index in range(1, FAILURE_LIFECYCLE_ATTEMPT_COUNT + 1)
+            for event_type, operation in (
+                (
+                    "action-started",
+                    f"job:{FAILURE_LIFECYCLE_JOB_ID}:attempt-{attempt_index}",
+                ),
+                (
+                    "action-failed",
+                    f"job:{FAILURE_LIFECYCLE_JOB_ID}:attempt-{attempt_index}",
+                ),
+                (
+                    "action-started",
+                    f"job:{FAILURE_LIFECYCLE_JOB_ID}:step-1:attempt-{attempt_index}",
+                ),
+                (
+                    "action-failed",
+                    f"job:{FAILURE_LIFECYCLE_JOB_ID}:step-1:attempt-{attempt_index}",
+                ),
+            )
+        }
+        required_pairs.update(
+            {
+                ("action-started", "failure-lifecycle:verify-aliases"),
+                ("action-finished", "failure-lifecycle:verify-aliases"),
+                ("action-started", "failure-lifecycle:cleanup"),
+                ("action-finished", "failure-lifecycle:cleanup"),
+            }
+        )
+        actions = campaign_result.get("actions")
+        if (
+            campaign_result.get("campaign_id") != campaign_id
+            or campaign_result.get("status") != "stopped"
+            or campaign_result.get("reason") != "queue-complete"
+            or campaign_result.get("execute_items") != [FAILURE_LIFECYCLE_JOB_ID]
+            or campaign_result.get("reuse_items") != []
+            or not isinstance(actions, list)
+            or actions
+            != [
+                {
+                    "action_id": "failure-lifecycle",
+                    "returncode": 0,
+                    "status": "passed",
+                }
+            ]
+            or audit.get("state") != "stopped"
+            or audit.get("audit_incomplete") is not False
+            or not required_pairs.issubset(event_pairs)
+        ):
+            raise JobRehearsalReceiptError("失败生命周期父监督器未形成完整成功终态")
+        probe = {
+            "schema_version": FAILURE_LIFECYCLE_SCHEMA,
+            "status": "passed",
+            "campaign_run_schema_version": manifest["schema_version"],
+            "campaign_id": campaign_id,
+            "job_id": worker.get("job_id"),
+            "source_name": worker.get("source_name"),
+            "capture_container": worker.get("capture_container"),
+            "capture_root": worker.get("capture_root"),
+            "host_runs_root": worker.get("host_runs_root"),
+            "retry_limit": worker.get("retry_limit"),
+            "attempt_count": worker.get("attempt_count"),
+            "network_isolated": worker.get("network_isolated"),
+            "live_request_count": worker.get("live_request_count"),
+            "archives": worker.get("archives"),
+            "final_result": worker.get("final_result"),
+            "parent_supervisor": {
+                "run_state": audit.get("state"),
+                "audit_incomplete": audit.get("audit_incomplete"),
+                "event_count": audit.get("event_count"),
+                "required_event_count": len(required_pairs),
+                "actions": actions,
+            },
+            "cleanup_verified": worker.get("cleanup_verified") is True
+            and not any(path.exists() or path.is_symlink() for path in expected_paths),
+        }
+        return _validate_failure_lifecycle_probe(
+            probe,
+            {
+                "configuration": dict(configuration),
+            },
+        )
+    finally:
+        _cleanup_failure_lifecycle_artifacts(host_runs_root, source_name)
+        # fixture 是 runtime 根下由 mkdtemp 原子创建的本轮唯一目录；先拒绝
+        # 顶层符号链接，再只删除该精确目录，不扫描其他运行资产。
+        if fixture.is_symlink():
+            fixture.unlink()
+        elif fixture.is_dir():
+            shutil.rmtree(fixture)
+
+
 def _capture_storage_probe(
     jobs: Iterable[Any],
     configuration: Mapping[str, Any],
@@ -2619,6 +3225,10 @@ def _collect_facts(
             f"execute_count={len(execute)}，execute_job_ids={execute[:10]}"
         )
     storage_probe = _capture_storage_probe(jobs, configuration)
+    failure_lifecycle_probe = _capture_failure_lifecycle_probe(
+        configuration,
+        Path(EXPECTED_HOST_DATA_ROOT) / "runs",
+    )
     binary_verification = codex_upgrade._verify_official_binaries(
         manifest,
         deadline=deadline,
@@ -2835,6 +3445,7 @@ def _collect_facts(
         "binary_verification": binary_verification,
         "probes": {
             "bubblewrap": _bwrap_probe(str(configuration["capture_container"])),
+            "failure_lifecycle": failure_lifecycle_probe,
             "storage": storage_probe,
             "zstd": _zstd_probe(
                 str(configuration["capture_container"]), str(execution_root)
@@ -3288,6 +3899,185 @@ def _validate_storage_probe(
     return storage
 
 
+def _validate_failure_lifecycle_probe(
+    value: Any,
+    contract: Mapping[str, Any],
+) -> dict[str, Any]:
+    """重放 campaign-run、父租约、三次失败归档与清理的联合事实。"""
+
+    probe = _expect(
+        value,
+        {
+            "schema_version",
+            "status",
+            "campaign_run_schema_version",
+            "campaign_id",
+            "job_id",
+            "source_name",
+            "capture_container",
+            "capture_root",
+            "host_runs_root",
+            "retry_limit",
+            "attempt_count",
+            "network_isolated",
+            "live_request_count",
+            "archives",
+            "final_result",
+            "parent_supervisor",
+            "cleanup_verified",
+        },
+        "probes.failure_lifecycle",
+    )
+    configuration = contract.get("configuration")
+    if not isinstance(configuration, Mapping):
+        raise JobRehearsalReceiptError("失败生命周期探针缺少执行配置")
+    capture_root = _absolute_posix_path(
+        configuration.get("capture_root"),
+        "execution_contract.capture_root",
+    )
+    aliases = sorted({CAPTURE_CONTAINER_ALIAS, capture_root}, key=str)
+    campaign_id = _safe_id(probe.get("campaign_id"), "failure_lifecycle.campaign_id")
+    source_name = _safe_id(probe.get("source_name"), "failure_lifecycle.source_name")
+    if (
+        probe.get("schema_version") != FAILURE_LIFECYCLE_SCHEMA
+        or probe.get("status") != "passed"
+        or probe.get("campaign_run_schema_version")
+        != "codex-upgrade-campaign-run/v2"
+        or not campaign_id.startswith("p0-failure-lifecycle-")
+        or not source_name.startswith("codex-failure-lifecycle-")
+        or probe.get("job_id") != FAILURE_LIFECYCLE_JOB_ID
+        or probe.get("capture_container") != configuration.get("capture_container")
+        or probe.get("capture_root") != str(capture_root)
+        or capture_root != EXPECTED_CAPTURE_CONTAINER_ROOT
+        or probe.get("host_runs_root")
+        != str(EXPECTED_HOST_DATA_ROOT / "runs")
+        or probe.get("retry_limit") != 2
+        or probe.get("attempt_count") != FAILURE_LIFECYCLE_ATTEMPT_COUNT
+        or probe.get("network_isolated") is not True
+        or probe.get("live_request_count") != 0
+        or probe.get("cleanup_verified") is not True
+    ):
+        raise JobRehearsalReceiptError("失败生命周期探针身份、重试或零网络事实非法")
+
+    archives = probe.get("archives")
+    if (
+        not isinstance(archives, list)
+        or len(archives) != FAILURE_LIFECYCLE_ATTEMPT_COUNT
+    ):
+        raise JobRehearsalReceiptError("失败生命周期归档数量非法")
+    seen_inodes: set[tuple[int, int]] = set()
+    for attempt_index, raw_archive in enumerate(archives, 1):
+        archive = _expect(
+            raw_archive,
+            {
+                "attempt_index",
+                "archive_name",
+                "host_archive",
+                "container_archives",
+                "device",
+                "inode",
+                "marker_sha256",
+                "marker",
+            },
+            f"probes.failure_lifecycle.archives.{attempt_index}",
+        )
+        archive_name = f"{source_name}.failed-attempt{attempt_index}"
+        expected_host = str(EXPECTED_HOST_DATA_ROOT / "runs" / archive_name)
+        expected_containers = [
+            str(alias / "runs" / archive_name) for alias in aliases
+        ]
+        marker = _expect(
+            archive.get("marker"),
+            {
+                "schema_version",
+                "source_name",
+                "attempt_index",
+                "network_isolated",
+                "live_request_count",
+            },
+            f"probes.failure_lifecycle.archives.{attempt_index}.marker",
+        )
+        device = archive.get("device")
+        inode = archive.get("inode")
+        if (
+            archive.get("attempt_index") != attempt_index
+            or archive.get("archive_name") != archive_name
+            or archive.get("host_archive") != expected_host
+            or archive.get("container_archives") != expected_containers
+            or not isinstance(device, int)
+            or isinstance(device, bool)
+            or device < 0
+            or not isinstance(inode, int)
+            or isinstance(inode, bool)
+            or inode <= 0
+            or (device, inode) in seen_inodes
+            or marker
+            != {
+                "schema_version": FAILURE_LIFECYCLE_MARKER_SCHEMA,
+                "source_name": source_name,
+                "attempt_index": attempt_index,
+                "network_isolated": True,
+                "live_request_count": 0,
+            }
+            or archive.get("marker_sha256") != _sha256_bytes(_canonical(marker))
+        ):
+            raise JobRehearsalReceiptError(
+                f"失败生命周期第 {attempt_index} 次归档事实非法"
+            )
+        seen_inodes.add((device, inode))
+
+    final_result = _expect(
+        probe.get("final_result"),
+        {"status", "attempt_index", "evidence_roots"},
+        "probes.failure_lifecycle.final_result",
+    )
+    expected_final_root = str(
+        capture_root
+        / "runs"
+        / f"{source_name}.failed-attempt{FAILURE_LIFECYCLE_ATTEMPT_COUNT}"
+    )
+    if final_result != {
+        "status": "failed",
+        "attempt_index": FAILURE_LIFECYCLE_ATTEMPT_COUNT,
+        "evidence_roots": [expected_final_root],
+    }:
+        raise JobRehearsalReceiptError("失败生命周期最终 Job 结果非法")
+
+    parent = _expect(
+        probe.get("parent_supervisor"),
+        {
+            "run_state",
+            "audit_incomplete",
+            "event_count",
+            "required_event_count",
+            "actions",
+        },
+        "probes.failure_lifecycle.parent_supervisor",
+    )
+    event_count = parent.get("event_count")
+    required_event_count = parent.get("required_event_count")
+    if (
+        parent.get("run_state") != "stopped"
+        or parent.get("audit_incomplete") is not False
+        or not isinstance(event_count, int)
+        or isinstance(event_count, bool)
+        or not isinstance(required_event_count, int)
+        or isinstance(required_event_count, bool)
+        or required_event_count != 16
+        or event_count < required_event_count
+        or parent.get("actions")
+        != [
+            {
+                "action_id": "failure-lifecycle",
+                "returncode": 0,
+                "status": "passed",
+            }
+        ]
+    ):
+        raise JobRehearsalReceiptError("失败生命周期父监督器终态非法")
+    return probe
+
+
 def _validate_component_summary(value: Any, label: str) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         raise JobRehearsalReceiptError(f"{label}必须是对象")
@@ -3728,15 +4518,28 @@ def validate_facts(
         raise JobRehearsalReceiptError("probes必须是对象")
     probe_fields = set(raw_probes)
     legacy_probe_fields = {"bubblewrap", "zstd"}
-    current_probe_fields = {*legacy_probe_fields, "storage"}
+    storage_probe_fields = {*legacy_probe_fields, "storage"}
+    current_probe_fields = {*storage_probe_fields, "failure_lifecycle"}
     if probe_fields == legacy_probe_fields and allow_collector_drift:
         # 历史收据继续按原字节只读重放，但不能再作为新 Formal 的 P0 证明。
         probes = raw_probes
         storage_probe_sha256: str | None = None
+        failure_lifecycle_probe_sha256: str | None = None
+    elif probe_fields == storage_probe_fields and allow_collector_drift:
+        # 失败生命周期门禁加入前生成的收据仍可逐字重放；它只证明旧版
+        # storage 路由，不能作为当前 Formal 的完整 P0 证明。
+        probes = raw_probes
+        storage_probe = _validate_storage_probe(probes.get("storage"), contract)
+        storage_probe_sha256 = _fingerprint(storage_probe)
+        failure_lifecycle_probe_sha256 = None
     else:
         probes = _expect(raw_probes, current_probe_fields, "probes")
         storage_probe = _validate_storage_probe(probes.get("storage"), contract)
         storage_probe_sha256 = _fingerprint(storage_probe)
+        failure_lifecycle_probe = _validate_failure_lifecycle_probe(
+            probes.get("failure_lifecycle"), contract
+        )
+        failure_lifecycle_probe_sha256 = _fingerprint(failure_lifecycle_probe)
     bubblewrap = _expect(
         probes.get("bubblewrap"),
         {"status", "version", "network_isolated"},
@@ -3995,6 +4798,7 @@ def validate_facts(
         "status": expected_status,
         "passed_job_count": passed_count,
         "storage_probe_sha256": storage_probe_sha256,
+        "failure_lifecycle_probe_sha256": failure_lifecycle_probe_sha256,
         "failed_job_ids": [
             str(item["id"]) for item in jobs if item.get("status") == "failed"
         ],
@@ -4067,6 +4871,13 @@ def build_receipt(
     storage_probe_sha256 = validated.get("storage_probe_sha256")
     if storage_probe_sha256 is not None:
         receipt["storage_probe_sha256"] = storage_probe_sha256
+    failure_lifecycle_probe_sha256 = validated.get(
+        "failure_lifecycle_probe_sha256"
+    )
+    if failure_lifecycle_probe_sha256 is not None:
+        receipt["failure_lifecycle_probe_sha256"] = (
+            failure_lifecycle_probe_sha256
+        )
     # 失败／增量字段保持可选，旧 v1 收据仍能按原结构重放。
     if validated["status"] != "passed":
         receipt["failed_job_ids"] = validated["failed_job_ids"]
@@ -4216,6 +5027,9 @@ def assert_formal_compatible(
         or not SHA256_RE.fullmatch(
             str(receipt.get("storage_probe_sha256", ""))
         )
+        or not SHA256_RE.fullmatch(
+            str(receipt.get("failure_lifecycle_probe_sha256", ""))
+        )
     ):
         raise JobRehearsalReceiptError("Formal 所需完整 Job 演练收据未通过")
 
@@ -4298,6 +5112,9 @@ def assert_recovery_compatible(
         or not SHA256_RE.fullmatch(
             str(source.get("storage_probe_sha256", ""))
         )
+        or not SHA256_RE.fullmatch(
+            str(source.get("failure_lifecycle_probe_sha256", ""))
+        )
     ):
         raise JobRehearsalReceiptError(
             "恢复 incremental-noop 的原始通过事实不完整或不兼容"
@@ -4355,6 +5172,18 @@ def build_parser() -> argparse.ArgumentParser:
     replay_parser = commands.add_parser("replay", help="独立重放完整 Job 演练收据")
     replay_parser.add_argument("--evidence-root", type=Path, required=True)
     replay_parser.add_argument("--receipt", required=True)
+    worker_parser = commands.add_parser(
+        "failure-lifecycle-worker",
+        help=argparse.SUPPRESS,
+    )
+    worker_parser.add_argument("--campaign-dir", type=Path, required=True)
+    worker_parser.add_argument("--campaign-id", required=True)
+    worker_parser.add_argument("--capture-container", required=True)
+    worker_parser.add_argument("--capture-root", required=True)
+    worker_parser.add_argument("--host-runs-root", type=Path, required=True)
+    worker_parser.add_argument("--source-name", required=True)
+    worker_parser.add_argument("--log-root", type=Path, required=True)
+    worker_parser.add_argument("--output", type=Path, required=True)
     return parser
 
 
@@ -4378,8 +5207,26 @@ def main(argv: list[str] | None = None) -> int:
             result = finalize(
                 arguments.evidence_root, arguments.facts, arguments.output
             )
-        else:
+        elif arguments.command == "replay":
             result = replay(arguments.evidence_root, arguments.receipt)
+        else:
+            try:
+                result = _failure_lifecycle_worker(arguments)
+            except Exception as error:
+                # 该 worker 是 campaign-run 的隐藏动作；让父监督器取得有界、
+                # 脱敏的真实异常类型，而不是只有一个无上下文退出码。
+                try:
+                    from tools.official_client_capture import codex_upgrade_supervisor
+
+                    codex_upgrade_supervisor.write_campaign_run_action_diagnostic(
+                        failure_kind="handled-error",
+                        error=error,
+                    )
+                except Exception:
+                    pass
+                raise JobRehearsalReceiptError(
+                    f"失败生命周期 worker 未通过：{type(error).__name__}: {error}"
+                ) from error
     except (
         OSError,
         JobRehearsalReceiptError,

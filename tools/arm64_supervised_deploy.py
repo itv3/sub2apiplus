@@ -54,8 +54,10 @@ from typing import Any, Callable, Mapping
 # 创建、读取、inode 比对与清理探针，并约束冻结 Job 的证据根；受管工具树摘要随之更新。
 # 2026-09-13（失败证据归档路由修复）：宿主编排器把两条容器 runs 别名映射到
 # 唯一宿主子树后再归档；P0 新增创建、宿主归档、跨别名读取和清理闭环。
+# 2026-09-13（VC-0 原子收口）：P0 新增真实 campaign-run／三轮 Job 失败生命周期
+# 门禁，并新增唯一 Formal 收口入口、部分失败阶段关闭和直接 Formal plan 拒绝。
 DEFAULT_TOOL_DIGEST = (
-    "b1486eda53e49625f31ed0b19c888c7849bb0a853e681d36fbe9db1547c1e3c8"
+    "e01b45272990c8b3ff43ca09a761613f6c909f670b2272d590892ccc8293aa1e"
 )
 DEFAULT_SUPERVISOR_DIGEST = (
     "6ed44c1827727c854783f668e45226316698964c5a42b24746641d4f79eb17d1"

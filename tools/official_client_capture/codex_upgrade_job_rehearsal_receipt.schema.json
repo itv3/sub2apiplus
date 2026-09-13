@@ -55,6 +55,10 @@
       "description": "当前 P0 对登记 runs/runtime 子挂载执行同源可写，并对失败证据执行容器创建、宿主归档、双别名读取和有界清理探针的摘要；历史收据可缺省，新 Formal 必须由运行时门禁要求该字段。",
       "$ref": "#/$defs/sha256"
     },
+    "failure_lifecycle_probe_sha256": {
+      "description": "当前 P0 在 ARM64 生产挂载拓扑和 bubblewrap 零网络中，经 campaign-run v2、父 CampaignLease、真实 Job 三次失败、内部重试、三份宿主归档、双容器别名验证、父监督器终态审计和有界清理所得摘要；历史收据可缺省，新 Formal 必须由运行时门禁要求该字段。",
+      "$ref": "#/$defs/sha256"
+    },
     "job_count": {
       "type": "integer",
       "minimum": 1

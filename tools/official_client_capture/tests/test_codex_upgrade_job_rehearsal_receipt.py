@@ -831,6 +831,9 @@ class JobRehearsalReceiptTests(unittest.TestCase):
         self.assertRegex(
             replayed["storage_probe_sha256"], r"^[0-9a-f]{64}$"
         )
+        self.assertRegex(
+            replayed["failure_lifecycle_probe_sha256"], r"^[0-9a-f]{64}$"
+        )
 
     def test_current_facts_missing_storage_probe_fail_closed(self) -> None:
         """新 P0 不能用缺少运行目录写探针的旧结构生成通过收据。"""
@@ -854,6 +857,115 @@ class JobRehearsalReceiptTests(unittest.TestCase):
                 "probes字段不闭合",
             ):
                 receipt.build_receipt(root, "facts.json")
+
+    def test_current_facts_require_complete_failure_lifecycle_probe(self) -> None:
+        """新 P0 必须拒绝缺项、联网、残留或父监督器未闭合的联合事实。"""
+
+        mutations = (
+            (
+                "missing",
+                lambda probe: probe.pop("attempt_count"),
+                "字段不闭合",
+            ),
+            (
+                "live-request",
+                lambda probe: probe.__setitem__("live_request_count", 1),
+                "身份、重试或零网络事实非法",
+            ),
+            (
+                "not-cleaned",
+                lambda probe: probe.__setitem__("cleanup_verified", False),
+                "身份、重试或零网络事实非法",
+            ),
+            (
+                "parent-running",
+                lambda probe: probe["parent_supervisor"].__setitem__(
+                    "run_state", "running"
+                ),
+                "父监督器终态非法",
+            ),
+            (
+                "marker-tampered",
+                lambda probe: probe["archives"][0]["marker"].__setitem__(
+                    "live_request_count", 1
+                ),
+                "第 1 次归档事实非法",
+            ),
+        )
+        for label, mutate, expected_error in mutations:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                root.chmod(0o700)
+                create_job_rehearsal_receipt(
+                    root,
+                    contract=self._contract(root),
+                    preflight_campaign_id="preflight-0151",
+                )
+                facts_path = root / "facts.json"
+                facts = json.loads(facts_path.read_text(encoding="utf-8"))
+                mutate(facts["probes"]["failure_lifecycle"])
+                facts["runtime_identity_sha256"] = receipt._runtime_identity(facts)
+                self._rewrite(facts_path, facts)
+                with self.assertRaisesRegex(
+                    receipt.JobRehearsalReceiptError,
+                    expected_error,
+                ):
+                    receipt.build_receipt(root, "facts.json")
+
+    def test_formal_rejects_receipt_without_failure_lifecycle_digest(self) -> None:
+        """历史结构可重放，但不能绕过当前 Formal 的联合 P0 门禁。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            root.chmod(0o700)
+            contract = self._contract(root)
+            path = create_job_rehearsal_receipt(
+                root,
+                contract=contract,
+                preflight_campaign_id="preflight-0151",
+            )
+            replayed = receipt.replay(root, path.name)
+            replayed.pop("failure_lifecycle_probe_sha256")
+            with self.assertRaisesRegex(
+                receipt.JobRehearsalReceiptError,
+                "Formal 所需完整 Job 演练收据未通过",
+            ):
+                receipt.assert_formal_compatible(replayed, contract)
+
+    def test_storage_only_legacy_receipt_replays_but_is_not_formal(self) -> None:
+        """旧 storage-only 收据保持可审计，当前 Formal 必须拒绝。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            root.chmod(0o700)
+            contract = self._contract(root)
+            create_job_rehearsal_receipt(
+                root,
+                contract=contract,
+                preflight_campaign_id="preflight-0151",
+            )
+            facts_path = root / "facts.json"
+            facts = json.loads(facts_path.read_text(encoding="utf-8"))
+            facts["probes"].pop("failure_lifecycle")
+            facts["runtime_identity_sha256"] = receipt._runtime_identity(facts)
+            self._rewrite(facts_path, facts)
+            legacy = receipt.build_receipt(
+                root,
+                "facts.json",
+                allow_collector_drift=True,
+            )
+            legacy_path = root / "storage-only-receipt.json"
+            legacy_path.write_bytes(receipt._canonical(legacy))
+            legacy_path.chmod(0o600)
+
+            replayed = receipt.replay(root, legacy_path.name)
+            self.assertRegex(replayed["storage_probe_sha256"], r"^[0-9a-f]{64}$")
+            self.assertNotIn("failure_lifecycle_probe_sha256", replayed)
+            with self.assertRaisesRegex(
+                receipt.JobRehearsalReceiptError,
+                "Formal 所需完整 Job 演练收据未通过",
+            ):
+                receipt.assert_formal_compatible(replayed, contract)
 
     def test_failed_job_duration_is_part_of_replayable_contract(self) -> None:
         """失败 Job 的耗时字段必须能被封存和独立重放。"""
