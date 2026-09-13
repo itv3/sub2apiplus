@@ -143,6 +143,12 @@ CODEX_0154_BWG_EGRESS_FREEZE_SUCCESSOR = (
     ROOT
     / "docs/egress/maintenance/upstream-codex-0154-bwg-egress-20260913-freeze-successor.json"
 )
+# 2026-09-13：VC-1 首批暴露父租约缺少 deadline 与失败根因不可见；工具修复
+# 提交后，以独立 freeze successor 承接受管工具和本显式列表的新摘要。
+CODEX_0154_VC1_PARENT_LEASE_REPAIR_FREEZE_SUCCESSOR = (
+    ROOT
+    / "docs/egress/maintenance/upstream-codex-0154-vc1-parent-lease-repair-20260913-freeze-successor.json"
+)
 HISTORICAL_LEDGER = "docs/egress/maintenance/historical-source-drift-successor.json"
 SHA256_LENGTH = 64
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -239,6 +245,7 @@ def successor_edges(path: str) -> list[tuple[str, str]]:
         CODEX_VC_FINAL_ALIGNMENT_FREEZE_SUCCESSOR,
         V0243_VERSION_SYNC_FREEZE_SUCCESSOR,
         CODEX_0154_BWG_EGRESS_FREEZE_SUCCESSOR,
+        CODEX_0154_VC1_PARENT_LEASE_REPAIR_FREEZE_SUCCESSOR,
     ):
         payload = json.loads(receipt_path.read_text(encoding="utf-8"))
         _validate_successor_receipt(payload)
