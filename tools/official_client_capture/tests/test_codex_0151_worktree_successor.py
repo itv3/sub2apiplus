@@ -173,6 +173,12 @@ CODEX_0154_CAMPAIGN_RUN_REHEARSAL_CLOSURE_FREEZE_SUCCESSOR = (
     ROOT
     / "docs/egress/maintenance/upstream-codex-0154-campaign-run-rehearsal-closure-20260913-freeze-successor.json"
 )
+# 2026-09-13：Job 演练隐藏 worker 补齐任意工作目录下的绝对路径入口，
+# 并保留父监督器只写 stdout 时的结构化失败诊断。
+CODEX_0154_JOB_REHEARSAL_ENTRYPOINT_CLOSURE_FREEZE_SUCCESSOR = (
+    ROOT
+    / "docs/egress/maintenance/upstream-codex-0154-job-rehearsal-entrypoint-closure-20260913-freeze-successor.json"
+)
 HISTORICAL_LEDGER = "docs/egress/maintenance/historical-source-drift-successor.json"
 SHA256_LENGTH = 64
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -274,6 +280,7 @@ def successor_edges(path: str) -> list[tuple[str, str]]:
         CODEX_0154_FAILED_EVIDENCE_ARCHIVE_ROUTE_FREEZE_SUCCESSOR,
         CODEX_0154_VC0_ATOMIC_CLOSEOUT_FREEZE_SUCCESSOR,
         CODEX_0154_CAMPAIGN_RUN_REHEARSAL_CLOSURE_FREEZE_SUCCESSOR,
+        CODEX_0154_JOB_REHEARSAL_ENTRYPOINT_CLOSURE_FREEZE_SUCCESSOR,
     ):
         payload = json.loads(receipt_path.read_text(encoding="utf-8"))
         _validate_successor_receipt(payload)
