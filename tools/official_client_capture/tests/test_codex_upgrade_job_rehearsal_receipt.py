@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import copy
 import json
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path, PurePosixPath
@@ -18,6 +20,40 @@ from tools.official_client_capture.tests.control_receipt_fixtures import (
 
 
 class JobRehearsalReceiptTests(unittest.TestCase):
+    def test_direct_script_entrypoint_works_outside_repository(self) -> None:
+        """父 campaign-run 从任意目录按绝对路径启动隐藏 worker。"""
+
+        completed = subprocess.run(
+            [sys.executable, str(Path(receipt.__file__).resolve()), "--help"],
+            cwd="/",
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=10,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("Codex", completed.stdout)
+
+    def test_failure_lifecycle_runner_never_reports_an_empty_error(self) -> None:
+        """父监督器只写 stdout 时也必须给操作员保留结构化诊断。"""
+
+        completed = subprocess.CompletedProcess(
+            args=["campaign-run"],
+            returncode=1,
+            stdout=b'{"status":"failed","reason":"action-failed"}\n',
+            stderr=b"",
+        )
+        with mock.patch.object(subprocess, "run", return_value=completed):
+            with self.assertRaisesRegex(
+                receipt.JobRehearsalReceiptError,
+                '"reason":"action-failed"',
+            ):
+                receipt._run(
+                    ["campaign-run"],
+                    "VC-1 失败生命周期 campaign-run v2 演练",
+                )
+
     def test_evaluator_manifests_do_not_invalidate_capture_jobs(self) -> None:
         """评估器和版本化清单变化不得被 shared 扩大成抓包 Job 重跑。"""
 

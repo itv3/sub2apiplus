@@ -58,8 +58,10 @@ from typing import Any, Callable, Mapping
 # 门禁，并新增唯一 Formal 收口入口、部分失败阶段关闭和直接 Formal plan 拒绝。
 # 2026-09-13（campaign-run 演练收据闭环）：新增受管生成／重放工具，真实执行两个
 # VC batch 并证明原始 deadline 漂移在动作前失败关闭；受管工具树摘要随之更新。
+# 2026-09-13（Job 演练入口闭环）：失败生命周期 worker 支持由父 campaign-run
+# 从任意工作目录按绝对路径启动，并在父进程只写 stdout 时保留结构化失败诊断。
 DEFAULT_TOOL_DIGEST = (
-    "1bb9f8f01110dcbea8eeb7c1db972dc20f170b93b85a69e4497a74ff6bd3bcce"
+    "d4d8242a98b14e4b3e393303e73dc0ae8ac928cb00b6a6763d2b4f14229b5884"
 )
 DEFAULT_SUPERVISOR_DIGEST = (
     "6ed44c1827727c854783f668e45226316698964c5a42b24746641d4f79eb17d1"

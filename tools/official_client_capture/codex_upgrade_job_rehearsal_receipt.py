@@ -22,6 +22,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Mapping
 
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+
 from tools.official_client_capture import incremental_recovery
 
 
@@ -445,6 +448,12 @@ def _run(
         raise JobRehearsalReceiptError(f"{label}执行失败：{error}") from error
     if completed.returncode != 0:
         message = completed.stderr.decode("utf-8", errors="replace")[:500].strip()
+        if not message and label == "VC-1 失败生命周期 campaign-run v2 演练":
+            # campaign-run 对动作失败返回结构化 stdout 和非零退出码，stderr
+            # 可能为空；必须保留这份父监督器诊断，不能再次退化成空错误。
+            message = completed.stdout.decode("utf-8", errors="replace")[:500].strip()
+        if not message:
+            message = f"returncode={completed.returncode}，子进程未返回诊断"
         raise JobRehearsalReceiptError(f"{label}失败：{message}")
     return completed.stdout
 
