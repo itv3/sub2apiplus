@@ -50,8 +50,10 @@ from typing import Any, Callable, Mapping
 # 历史 DMIT 收据仍由环境 producer 的兼容分支只读重放。
 # 2026-09-13（VC-1 父租约修复）：父监督器 deadline 进入 attempt reservation，
 # campaign-run 新增不可覆盖的脱敏动作失败诊断；受管工具树与监督器摘要随之更新。
+# 2026-09-13（运行根可写性修复）：P0 对四个精确可写子挂载执行真实跨别名
+# 创建、读取、inode 比对与清理探针，并约束冻结 Job 的证据根；受管工具树摘要随之更新。
 DEFAULT_TOOL_DIGEST = (
-    "3e756b7a77765b72f4cf5cf4ea3afcebc1c4c75408b5a84aaa93a0ba1facbb72"
+    "2f3b9cc7a1a7b7fa3ee052a71845e698106fd5c646d4754dfb7e9fdff3e131ea"
 )
 DEFAULT_SUPERVISOR_DIGEST = (
     "6ed44c1827727c854783f668e45226316698964c5a42b24746641d4f79eb17d1"

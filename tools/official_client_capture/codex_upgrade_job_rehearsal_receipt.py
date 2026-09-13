@@ -10,6 +10,7 @@ import math
 import os
 import platform
 import re
+import secrets
 import shutil
 import stat
 import subprocess
@@ -48,6 +49,14 @@ DEFAULT_ATTEMPT_WALL_SECONDS = 90 * 60
 MAX_ATTEMPT_WALL_SECONDS = 6 * 60 * 60
 DEFAULT_HEARTBEAT_SECONDS = 30
 MAX_HEARTBEAT_SECONDS = 5 * 60
+
+# Codex 正式 Job 同时通过宿主兼容路径和容器历史路径访问运行数据。两个
+# 宽泛父根必须保持只读，只有 runs／runtime 两个登记子树可以写入；否则
+# 语法演练会错误放行、正式抓包才在 mkdir 阶段失败。
+EXPECTED_HOST_DATA_ROOT = PurePosixPath("/root/docker/capture-cli/data")
+EXPECTED_CAPTURE_CONTAINER_ROOT = PurePosixPath("/root/oauth-capture")
+CAPTURE_CONTAINER_ALIAS = PurePosixPath("/capture")
+WRITABLE_CAPTURE_NAMESPACES = ("runs", "runtime")
 
 # 完整演练包含大量 docker／脚本语法探针；所有层级都从这里读取同一条
 # deadline，避免固定 timeout 的命令串联后突破 attempt 预算。
@@ -1152,6 +1161,344 @@ def _container_facts(configuration: Mapping[str, Any]) -> list[dict[str, Any]]:
     return sorted(output, key=lambda item: item["name"])
 
 
+def _absolute_posix_path(value: Any, label: str) -> PurePosixPath:
+    """解析容器或宿主绝对路径，拒绝别名化和父目录跳转。"""
+
+    if not isinstance(value, str) or not value or "\\" in value:
+        raise JobRehearsalReceiptError(f"{label}不是规范 POSIX 绝对路径")
+    parsed = PurePosixPath(value)
+    if (
+        not parsed.is_absolute()
+        or str(parsed) != value
+        or any(part in {"", ".", ".."} for part in parsed.parts[1:])
+    ):
+        raise JobRehearsalReceiptError(f"{label}不是规范 POSIX 绝对路径")
+    return parsed
+
+
+def _capture_storage_probe(
+    jobs: Iterable[Any],
+    configuration: Mapping[str, Any],
+) -> dict[str, Any]:
+    """验证全部 Job 的运行根，以及宿主／容器别名的同源可写性。"""
+
+    container = _safe_id(configuration.get("capture_container"), "capture_container")
+    capture_root = _absolute_posix_path(
+        configuration.get("capture_root"), "capture_root"
+    )
+    if capture_root != EXPECTED_CAPTURE_CONTAINER_ROOT:
+        raise JobRehearsalReceiptError(
+            "capture_root 未绑定文档登记的容器运行根"
+        )
+    aliases = sorted({CAPTURE_CONTAINER_ALIAS, capture_root}, key=str)
+
+    raw = _run(
+        ["docker", "inspect", container],
+        "capture-cli 运行目录挂载探针",
+    )
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise JobRehearsalReceiptError("capture-cli 挂载探针输出非法") from error
+    if (
+        not isinstance(payload, list)
+        or len(payload) != 1
+        or not isinstance(payload[0], Mapping)
+        or not isinstance(payload[0].get("Mounts"), list)
+    ):
+        raise JobRehearsalReceiptError("capture-cli 挂载探针结果不完整")
+
+    mounts_by_destination: dict[str, dict[str, Any]] = {}
+    for index, raw_mount in enumerate(payload[0]["Mounts"], 1):
+        if not isinstance(raw_mount, Mapping):
+            raise JobRehearsalReceiptError(
+                f"capture-cli 第 {index} 个挂载不是对象"
+            )
+        destination = _absolute_posix_path(
+            raw_mount.get("Destination"),
+            f"capture-cli 第 {index} 个挂载目标",
+        )
+        source = _absolute_posix_path(
+            raw_mount.get("Source"),
+            f"capture-cli 第 {index} 个挂载来源",
+        )
+        if str(destination) in mounts_by_destination:
+            raise JobRehearsalReceiptError(
+                f"capture-cli 挂载目标重复：{destination}"
+            )
+        mounts_by_destination[str(destination)] = {
+            "type": raw_mount.get("Type"),
+            "source": str(source),
+            "destination": str(destination),
+            "read_only": raw_mount.get("RW") is False,
+        }
+
+    host_root = Path(str(EXPECTED_HOST_DATA_ROOT))
+    if host_root.is_symlink() or not host_root.is_dir():
+        raise JobRehearsalReceiptError("登记宿主数据根不存在或是符号链接")
+    host_root_metadata = host_root.stat()
+    if (
+        stat.S_IMODE(host_root_metadata.st_mode) != 0o700
+        or host_root_metadata.st_uid != os.geteuid()
+    ):
+        raise JobRehearsalReceiptError(
+            "登记宿主数据根必须归当前执行用户所有且权限为 0700"
+        )
+
+    root_mounts: list[dict[str, Any]] = []
+    for alias in aliases:
+        mount = mounts_by_destination.get(str(alias))
+        if (
+            mount is None
+            or mount.get("type") != "bind"
+            or mount.get("source") != str(EXPECTED_HOST_DATA_ROOT)
+            or mount.get("read_only") is not True
+        ):
+            raise JobRehearsalReceiptError(
+                f"capture-cli 宽泛父根必须同源只读：{alias}"
+            )
+        root_mounts.append(dict(mount))
+
+    namespace_mounts: dict[str, list[dict[str, Any]]] = {}
+    namespace_sources: dict[str, Path] = {}
+    for namespace in WRITABLE_CAPTURE_NAMESPACES:
+        expected_source = EXPECTED_HOST_DATA_ROOT / namespace
+        source_path = Path(str(expected_source))
+        if source_path.is_symlink() or not source_path.is_dir():
+            raise JobRehearsalReceiptError(
+                f"登记宿主可写子树不存在或是符号链接：{expected_source}"
+            )
+        source_metadata = source_path.stat()
+        if (
+            source_metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(source_metadata.st_mode) & 0o022
+        ):
+            raise JobRehearsalReceiptError(
+                f"登记宿主可写子树所有权或权限过宽：{expected_source}"
+            )
+        current_mounts: list[dict[str, Any]] = []
+        for alias in aliases:
+            destination = alias / namespace
+            mount = mounts_by_destination.get(str(destination))
+            if (
+                mount is None
+                or mount.get("type") != "bind"
+                or mount.get("source") != str(expected_source)
+                or mount.get("read_only") is not False
+            ):
+                raise JobRehearsalReceiptError(
+                    "capture-cli 缺少同源可写运行挂载："
+                    f"source={expected_source} destination={destination}"
+                )
+            current_mounts.append(dict(mount))
+        namespace_mounts[namespace] = current_mounts
+        namespace_sources[namespace] = source_path
+
+    job_roots: list[dict[str, Any]] = []
+    evidence_root_count = 0
+    allowed_run_roots = [alias / "runs" for alias in aliases]
+    for job in sorted(jobs, key=lambda item: str(item.job_id)):
+        roots = list(job.evidence_roots)
+        if not roots:
+            raise JobRehearsalReceiptError(
+                f"{job.job_id} 没有登记 evidence_roots"
+            )
+        normalized_roots: list[str] = []
+        for index, value in enumerate(roots, 1):
+            current = _absolute_posix_path(
+                value, f"{job.job_id} evidence_root {index}"
+            )
+            if not any(
+                current != allowed and current.is_relative_to(allowed)
+                for allowed in allowed_run_roots
+            ):
+                raise JobRehearsalReceiptError(
+                    f"{job.job_id} evidence_root 未落在登记 runs 子树：{current}"
+                )
+            normalized_roots.append(str(current))
+        job_roots.append(
+            {
+                "job_id": str(job.job_id),
+                "evidence_roots": sorted(normalized_roots),
+            }
+        )
+        evidence_root_count += len(normalized_roots)
+
+    # 该探针不运行任何 Job，也不联网。它只在两个登记子树内创建唯一临时
+    # 目录，并从两条容器别名交叉写读，最后在同一进程的 finally 中清理。
+    probe_script = r'''
+import json,os,pathlib,stat,sys
+aliases=json.loads(sys.argv[1])
+namespaces=json.loads(sys.argv[2])
+nonce=sys.argv[3]
+output=[]
+for namespace in namespaces:
+    bases=[pathlib.Path(alias)/namespace for alias in aliases]
+    for base in bases:
+        if not base.is_dir() or base.is_symlink():
+            raise SystemExit("invalid-base:"+str(base))
+    base_stats=[base.stat() for base in bases]
+    if len({(item.st_dev,item.st_ino) for item in base_stats}) != 1:
+        raise SystemExit("alias-source-mismatch:"+namespace)
+    probe_name=".codex-job-rehearsal-"+nonce+"-"+namespace
+    visible=[base/probe_name for base in bases]
+    marker_names=["marker-"+str(index) for index in range(len(bases))]
+    created=False
+    try:
+        os.mkdir(visible[0],0o700)
+        created=True
+        visible_stats=[path.stat() for path in visible]
+        if len({(item.st_dev,item.st_ino) for item in visible_stats}) != 1:
+            raise SystemExit("probe-alias-mismatch:"+namespace)
+        for index,parent in enumerate(visible):
+            payload=(namespace+":"+str(index)).encode("ascii")
+            flags=os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,"O_NOFOLLOW",0)
+            descriptor=os.open(parent/marker_names[index],flags,0o600)
+            with os.fdopen(descriptor,"wb") as stream:
+                stream.write(payload)
+                stream.flush()
+                os.fsync(stream.fileno())
+            for peer in visible:
+                marker=peer/marker_names[index]
+                if marker.read_bytes()!=payload or stat.S_IMODE(marker.stat().st_mode)!=0o600:
+                    raise SystemExit("cross-alias-read-failed:"+namespace)
+        output.append({
+            "name":namespace,
+            "destinations":[{
+                "path":str(base),
+                "device":metadata.st_dev,
+                "inode":metadata.st_ino,
+                "mode":stat.S_IMODE(metadata.st_mode),
+                "uid":metadata.st_uid,
+                "gid":metadata.st_gid,
+            } for base,metadata in zip(bases,base_stats)],
+            "created_via":aliases,
+            "cleanup_verified":True,
+        })
+    finally:
+        if created:
+            for marker_name in marker_names:
+                (visible[0]/marker_name).unlink(missing_ok=True)
+            visible[0].rmdir()
+        if any(path.exists() or path.is_symlink() for path in visible):
+            raise SystemExit("cleanup-failed:"+namespace)
+print(json.dumps({"status":"passed","namespaces":output},sort_keys=True))
+'''
+    token = secrets.token_hex(12)
+    write_raw = _run(
+        [
+            "docker",
+            "exec",
+            container,
+            "python3",
+            "-c",
+            probe_script,
+            json.dumps([str(alias) for alias in aliases]),
+            json.dumps(list(WRITABLE_CAPTURE_NAMESPACES)),
+            token,
+        ],
+        "capture-cli 可写运行目录创建清理探针",
+        timeout=30,
+    )
+    try:
+        write_probe = json.loads(write_raw)
+    except json.JSONDecodeError as error:
+        raise JobRehearsalReceiptError(
+            "capture-cli 可写运行目录探针输出非法"
+        ) from error
+    if (
+        not isinstance(write_probe, Mapping)
+        or write_probe.get("status") != "passed"
+        or not isinstance(write_probe.get("namespaces"), list)
+    ):
+        raise JobRehearsalReceiptError(
+            "capture-cli 可写运行目录探针未通过"
+        )
+    probed_by_name = {
+        str(item.get("name")): item
+        for item in write_probe["namespaces"]
+        if isinstance(item, Mapping)
+    }
+    if set(probed_by_name) != set(WRITABLE_CAPTURE_NAMESPACES):
+        raise JobRehearsalReceiptError(
+            "capture-cli 可写运行目录探针未覆盖全部登记子树"
+        )
+
+    writable_namespaces: list[dict[str, Any]] = []
+    for namespace in WRITABLE_CAPTURE_NAMESPACES:
+        source_path = namespace_sources[namespace]
+        source_metadata = source_path.stat()
+        probed = probed_by_name[namespace]
+        destinations = probed.get("destinations")
+        expected_destinations = [str(alias / namespace) for alias in aliases]
+        if (
+            not isinstance(destinations, list)
+            or [item.get("path") for item in destinations if isinstance(item, Mapping)]
+            != expected_destinations
+            or probed.get("created_via") != [str(alias) for alias in aliases]
+            or probed.get("cleanup_verified") is not True
+        ):
+            raise JobRehearsalReceiptError(
+                f"capture-cli {namespace} 创建清理探针事实不完整"
+            )
+        normalized_destinations: list[dict[str, Any]] = []
+        for destination in destinations:
+            if not isinstance(destination, Mapping):
+                raise JobRehearsalReceiptError(
+                    f"capture-cli {namespace} 目标统计非法"
+                )
+            normalized = {
+                field: destination.get(field)
+                for field in ("path", "device", "inode", "mode", "uid", "gid")
+            }
+            if (
+                normalized["device"] != source_metadata.st_dev
+                or normalized["inode"] != source_metadata.st_ino
+                or normalized["mode"] != stat.S_IMODE(source_metadata.st_mode)
+                or normalized["uid"] != source_metadata.st_uid
+                or normalized["gid"] != source_metadata.st_gid
+            ):
+                raise JobRehearsalReceiptError(
+                    f"capture-cli {namespace} 宿主／容器映射不同源"
+                )
+            normalized_destinations.append(normalized)
+        writable_namespaces.append(
+            {
+                "name": namespace,
+                "source": str(source_path),
+                "source_mode": stat.S_IMODE(source_metadata.st_mode),
+                "source_uid": source_metadata.st_uid,
+                "source_gid": source_metadata.st_gid,
+                "source_device": source_metadata.st_dev,
+                "source_inode": source_metadata.st_ino,
+                "mounts": namespace_mounts[namespace],
+                "destinations": normalized_destinations,
+                "created_via": list(probed["created_via"]),
+                "cleanup_verified": True,
+            }
+        )
+
+    return {
+        "status": "passed",
+        "capture_container": container,
+        "capture_root": str(capture_root),
+        "host_data_root": {
+            "path": str(host_root),
+            "mode": stat.S_IMODE(host_root_metadata.st_mode),
+            "uid": host_root_metadata.st_uid,
+            "gid": host_root_metadata.st_gid,
+            "device": host_root_metadata.st_dev,
+            "inode": host_root_metadata.st_ino,
+        },
+        "root_mounts": root_mounts,
+        "writable_namespaces": writable_namespaces,
+        "job_count": len(job_roots),
+        "evidence_root_count": evidence_root_count,
+        "job_roots_sha256": _fingerprint(job_roots),
+        "job_roots": job_roots,
+    }
+
+
 def _bwrap_probe(container: str) -> dict[str, Any]:
     version = _run(
         ["docker", "exec", container, "bwrap", "--version"],
@@ -2045,6 +2392,7 @@ def _collect_facts(
             "受管、执行和 capture-cli 工具树不一致；"
             f"execute_count={len(execute)}，execute_job_ids={execute[:10]}"
         )
+    storage_probe = _capture_storage_probe(jobs, configuration)
     binary_verification = codex_upgrade._verify_official_binaries(
         manifest,
         deadline=deadline,
@@ -2261,6 +2609,7 @@ def _collect_facts(
         "binary_verification": binary_verification,
         "probes": {
             "bubblewrap": _bwrap_probe(str(configuration["capture_container"])),
+            "storage": storage_probe,
             "zstd": _zstd_probe(
                 str(configuration["capture_container"]), str(execution_root)
             ),
@@ -2403,6 +2752,241 @@ def _validate_dependencies(value: Any, expected: Iterable[str], label: str) -> N
         names.append(binding["name"])
     if names != list(expected):
         raise JobRehearsalReceiptError(f"{label}命令集合漂移")
+
+
+def _validate_storage_probe(
+    value: Any,
+    contract: Mapping[str, Any],
+) -> dict[str, Any]:
+    """重放正式 Job 的登记运行根和可写别名事实。"""
+
+    storage = _expect(
+        value,
+        {
+            "status",
+            "capture_container",
+            "capture_root",
+            "host_data_root",
+            "root_mounts",
+            "writable_namespaces",
+            "job_count",
+            "evidence_root_count",
+            "job_roots_sha256",
+            "job_roots",
+        },
+        "probes.storage",
+    )
+    configuration = contract["configuration"]
+    capture_root = _absolute_posix_path(
+        configuration["capture_root"], "execution_contract.capture_root"
+    )
+    aliases = sorted({CAPTURE_CONTAINER_ALIAS, capture_root}, key=str)
+    if (
+        storage.get("status") != "passed"
+        or storage.get("capture_container") != configuration["capture_container"]
+        or storage.get("capture_root") != str(capture_root)
+        or capture_root != EXPECTED_CAPTURE_CONTAINER_ROOT
+    ):
+        raise JobRehearsalReceiptError("可写运行目录探针身份非法")
+
+    host_root = _expect(
+        storage.get("host_data_root"),
+        {"path", "mode", "uid", "gid", "device", "inode"},
+        "probes.storage.host_data_root",
+    )
+    if (
+        host_root.get("path") != str(EXPECTED_HOST_DATA_ROOT)
+        or host_root.get("mode") != 0o700
+    ):
+        raise JobRehearsalReceiptError("登记宿主数据根事实非法")
+    for field in ("uid", "gid", "device", "inode"):
+        current = host_root.get(field)
+        if (
+            not isinstance(current, int)
+            or isinstance(current, bool)
+            or current < 0
+            or (field == "inode" and current == 0)
+        ):
+            raise JobRehearsalReceiptError(
+                f"登记宿主数据根 {field} 非法"
+            )
+
+    def validate_mount(
+        raw_mount: Any,
+        *,
+        destination: PurePosixPath,
+        source: PurePosixPath,
+        read_only: bool,
+        label: str,
+    ) -> dict[str, Any]:
+        mount = _expect(
+            raw_mount,
+            {"type", "source", "destination", "read_only"},
+            label,
+        )
+        if (
+            mount.get("type") != "bind"
+            or mount.get("source") != str(source)
+            or mount.get("destination") != str(destination)
+            or mount.get("read_only") is not read_only
+        ):
+            raise JobRehearsalReceiptError(f"{label}挂载身份非法")
+        return mount
+
+    root_mounts = storage.get("root_mounts")
+    if not isinstance(root_mounts, list) or len(root_mounts) != len(aliases):
+        raise JobRehearsalReceiptError("只读父根挂载未完整覆盖容器别名")
+    for mount, alias in zip(root_mounts, aliases, strict=True):
+        validate_mount(
+            mount,
+            destination=alias,
+            source=EXPECTED_HOST_DATA_ROOT,
+            read_only=True,
+            label=f"probes.storage.root_mounts.{alias}",
+        )
+
+    namespaces = storage.get("writable_namespaces")
+    if (
+        not isinstance(namespaces, list)
+        or [item.get("name") for item in namespaces if isinstance(item, Mapping)]
+        != list(WRITABLE_CAPTURE_NAMESPACES)
+    ):
+        raise JobRehearsalReceiptError("可写运行目录未完整覆盖登记子树")
+    for raw_namespace, expected_name in zip(
+        namespaces, WRITABLE_CAPTURE_NAMESPACES, strict=True
+    ):
+        namespace = _expect(
+            raw_namespace,
+            {
+                "name",
+                "source",
+                "source_mode",
+                "source_uid",
+                "source_gid",
+                "source_device",
+                "source_inode",
+                "mounts",
+                "destinations",
+                "created_via",
+                "cleanup_verified",
+            },
+            f"probes.storage.{expected_name}",
+        )
+        expected_source = EXPECTED_HOST_DATA_ROOT / expected_name
+        if (
+            namespace.get("name") != expected_name
+            or namespace.get("source") != str(expected_source)
+            or namespace.get("cleanup_verified") is not True
+            or namespace.get("created_via") != [str(alias) for alias in aliases]
+        ):
+            raise JobRehearsalReceiptError(
+                f"可写运行目录 {expected_name} 身份或清理事实非法"
+            )
+        numeric_fields = (
+            "source_mode",
+            "source_uid",
+            "source_gid",
+            "source_device",
+            "source_inode",
+        )
+        if any(
+            not isinstance(namespace.get(field), int)
+            or isinstance(namespace.get(field), bool)
+            or namespace[field] < 0
+            for field in numeric_fields
+        ) or namespace["source_inode"] == 0:
+            raise JobRehearsalReceiptError(
+                f"可写运行目录 {expected_name} 宿主统计非法"
+            )
+        if namespace["source_mode"] & 0o022:
+            raise JobRehearsalReceiptError(
+                f"可写运行目录 {expected_name} 权限过宽"
+            )
+        mounts = namespace.get("mounts")
+        destinations = namespace.get("destinations")
+        if (
+            not isinstance(mounts, list)
+            or not isinstance(destinations, list)
+            or len(mounts) != len(aliases)
+            or len(destinations) != len(aliases)
+        ):
+            raise JobRehearsalReceiptError(
+                f"可写运行目录 {expected_name} 别名数量非法"
+            )
+        for mount, destination_fact, alias in zip(
+            mounts, destinations, aliases, strict=True
+        ):
+            destination = alias / expected_name
+            validate_mount(
+                mount,
+                destination=destination,
+                source=expected_source,
+                read_only=False,
+                label=f"probes.storage.{expected_name}.{alias}.mount",
+            )
+            current = _expect(
+                destination_fact,
+                {"path", "device", "inode", "mode", "uid", "gid"},
+                f"probes.storage.{expected_name}.{alias}.stat",
+            )
+            if (
+                current.get("path") != str(destination)
+                or current.get("device") != namespace["source_device"]
+                or current.get("inode") != namespace["source_inode"]
+                or current.get("mode") != namespace["source_mode"]
+                or current.get("uid") != namespace["source_uid"]
+                or current.get("gid") != namespace["source_gid"]
+            ):
+                raise JobRehearsalReceiptError(
+                    f"可写运行目录 {expected_name} 宿主／容器不同源"
+                )
+
+    job_roots = storage.get("job_roots")
+    if not isinstance(job_roots, list):
+        raise JobRehearsalReceiptError("Job 运行根必须是数组")
+    expected_job_ids = list(contract["job_ids"])
+    actual_job_ids = [
+        item.get("job_id") for item in job_roots if isinstance(item, Mapping)
+    ]
+    if actual_job_ids != expected_job_ids:
+        raise JobRehearsalReceiptError("Job 运行根未完整覆盖冻结 Job 集")
+    evidence_count = 0
+    allowed_run_roots = [alias / "runs" for alias in aliases]
+    for raw_job in job_roots:
+        job = _expect(
+            raw_job,
+            {"job_id", "evidence_roots"},
+            "probes.storage.job_roots",
+        )
+        roots = job.get("evidence_roots")
+        if (
+            not isinstance(roots, list)
+            or not roots
+            or roots != sorted(set(roots))
+        ):
+            raise JobRehearsalReceiptError(
+                f"{job.get('job_id')} 运行根为空、重复或未排序"
+            )
+        for index, raw_root in enumerate(roots, 1):
+            current = _absolute_posix_path(
+                raw_root,
+                f"{job.get('job_id')} evidence_root {index}",
+            )
+            if not any(
+                current != allowed and current.is_relative_to(allowed)
+                for allowed in allowed_run_roots
+            ):
+                raise JobRehearsalReceiptError(
+                    f"{job.get('job_id')} 运行根越过登记 runs 子树"
+                )
+        evidence_count += len(roots)
+    if (
+        storage.get("job_count") != len(expected_job_ids)
+        or storage.get("evidence_root_count") != evidence_count
+        or storage.get("job_roots_sha256") != _fingerprint(job_roots)
+    ):
+        raise JobRehearsalReceiptError("Job 运行根汇总或摘要漂移")
+    return storage
 
 
 def _validate_component_summary(value: Any, label: str) -> dict[str, Any]:
@@ -2840,7 +3424,20 @@ def validate_facts(
         )
     ):
         raise JobRehearsalReceiptError("Codex 主程序或 code-mode-host 身份未闭合")
-    probes = _expect(facts.get("probes"), {"bubblewrap", "zstd"}, "probes")
+    raw_probes = facts.get("probes")
+    if not isinstance(raw_probes, dict):
+        raise JobRehearsalReceiptError("probes必须是对象")
+    probe_fields = set(raw_probes)
+    legacy_probe_fields = {"bubblewrap", "zstd"}
+    current_probe_fields = {*legacy_probe_fields, "storage"}
+    if probe_fields == legacy_probe_fields and allow_collector_drift:
+        # 历史收据继续按原字节只读重放，但不能再作为新 Formal 的 P0 证明。
+        probes = raw_probes
+        storage_probe_sha256: str | None = None
+    else:
+        probes = _expect(raw_probes, current_probe_fields, "probes")
+        storage_probe = _validate_storage_probe(probes.get("storage"), contract)
+        storage_probe_sha256 = _fingerprint(storage_probe)
     bubblewrap = _expect(
         probes.get("bubblewrap"),
         {"status", "version", "network_isolated"},
@@ -3098,6 +3695,7 @@ def validate_facts(
         "job_set_sha256": expected_job_set_sha,
         "status": expected_status,
         "passed_job_count": passed_count,
+        "storage_probe_sha256": storage_probe_sha256,
         "failed_job_ids": [
             str(item["id"]) for item in jobs if item.get("status") == "failed"
         ],
@@ -3167,6 +3765,9 @@ def build_receipt(
         },
         "producer": facts["collector"] if allow_collector_drift else _producer(),
     }
+    storage_probe_sha256 = validated.get("storage_probe_sha256")
+    if storage_probe_sha256 is not None:
+        receipt["storage_probe_sha256"] = storage_probe_sha256
     # 失败／增量字段保持可选，旧 v1 收据仍能按原结构重放。
     if validated["status"] != "passed":
         receipt["failed_job_ids"] = validated["failed_job_ids"]
@@ -3313,6 +3914,9 @@ def assert_formal_compatible(
         or receipt.get("execution_contract_sha256")
         != execution_contract_sha256(dict(expected_contract))
         or receipt.get("job_count") != expected_contract.get("job_count")
+        or not SHA256_RE.fullmatch(
+            str(receipt.get("storage_probe_sha256", ""))
+        )
     ):
         raise JobRehearsalReceiptError("Formal 所需完整 Job 演练收据未通过")
 
@@ -3392,6 +3996,9 @@ def assert_recovery_compatible(
         or source.get("job_count") != noop.get("source_job_count")
         or source.get("job_set_sha256") != noop.get("source_job_set_sha256")
         or not SHA256_RE.fullmatch(str(runtime_identity or ""))
+        or not SHA256_RE.fullmatch(
+            str(source.get("storage_probe_sha256", ""))
+        )
     ):
         raise JobRehearsalReceiptError(
             "恢复 incremental-noop 的原始通过事实不完整或不兼容"

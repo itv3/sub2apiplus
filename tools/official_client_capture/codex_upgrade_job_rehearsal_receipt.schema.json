@@ -51,6 +51,10 @@
         }
       ]
     },
+    "storage_probe_sha256": {
+      "description": "当前 P0 对登记 runs/runtime 子挂载执行同源可写和有界清理探针的摘要；历史收据可缺省，新 Formal 必须由运行时门禁要求该字段。",
+      "$ref": "#/$defs/sha256"
+    },
     "job_count": {
       "type": "integer",
       "minimum": 1

@@ -1436,9 +1436,11 @@ Framework §5.1.4～§5.1.5 只规定环境冻结、路径安全和数据治理�
 | `wg1` MTU | `1420`；同时核对宿主持久值、运行值和对端值 |
 | 宿主项目根 | `/root/docker/capture-cli` |
 | 宿主数据根 | `/root/docker/capture-cli/data`，权限 `0700`，版本控制忽略 |
+| 宿主证据运行子树 | `/root/docker/capture-cli/data/runs`，只承载 Job 证据目录 |
+| 宿主临时运行子树 | `/root/docker/capture-cli/data/runtime`，只承载可恢复的运行期临时文件 |
 | 容器运行根 | `/root/oauth-capture` |
 | Compose | `/root/docker/capture-cli/docker-compose.yml`，从项目根以冻结项目名执行 |
-| 历史宿主兼容根 | `/root/oauth-capture`，仅允许只读重放，禁止产生新版本数据 |
+| 历史宿主兼容根 | `/root/oauth-capture`，必须与宿主数据根同源；只允许通过已登记的 `runs／runtime` 子树产生本轮数据 |
 
 宿主的 state、runtime、work、evidence、control、audit、staging 和 archive 全部位于数据根；不得直接在
 `/root` 创建源码树、bundle、patch、worktree、恢复树或抓包目录。后续宿主命令统一先声明：
@@ -1451,6 +1453,9 @@ export CAPTURE_CONTAINER_ROOT=/root/oauth-capture
 
 P0 必须从 Compose 渲染结果和 `docker inspect capture-cli` 同时验证挂载、镜像、固定 IP、默认路由、
 BWG 公网出口和 `wg1` MTU；脚本不得修改网络、NAT／iptables、WireGuard 或容器地址来迁就测试。
+`/capture` 与 `/root/oauth-capture` 两个宽泛父挂载必须同源只读；Compose 只能把宿主数据根的 `runs` 和
+`runtime` 分别以可写 bind 覆盖到两个父根的同名子路径。四个可写目标必须与对应宿主子树的设备号、inode、
+所有者和权限一致，禁止把整个数据根改成可写来绕过目录门禁。
 
 ARM64 宿主与容器必须使用同一冻结 Go 工具链，构建设置 `GOPROXY=off`、`GOFLAGS=-mod=readonly`。
 缺少前端依赖时，只能通过绝对路径 `CAPTURE_TYPESCRIPT_MODULE` 使用 Makefile 已锁定摘要的只读
@@ -1479,7 +1484,8 @@ python3 -m tools.official_client_capture.codex_upgrade_job_rehearsal_receipt rep
   --evidence-root "$JOB_REHEARSAL_ROOT" --receipt receipt.json
 ```
 
-`collect` 只检查路径、依赖、语法、二进制、bubblewrap 和 zstd，不执行 Job、不发送请求。任一 Job
+`collect` 检查路径、依赖、语法、二进制、bubblewrap 和 zstd，并在 `runs／runtime` 内创建唯一临时对象，
+从两个容器别名交叉验证写入和同源映射后立即有界清理；它不执行 Job、不发送请求。任一 Job
 失败都必须先能形成失败收据并独立重放；失败、缺项、环境漂移或目标场景／工具摘要不一致时禁止创建
 Formal Campaign。Formal `plan` 必须绑定上述 rehearsal receipt，并再次独立重放。
 

@@ -6,7 +6,7 @@ import copy
 import json
 import tempfile
 import unittest
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from unittest import mock
 
 from tools.official_client_capture import codex_upgrade
@@ -420,6 +420,167 @@ class JobRehearsalReceiptTests(unittest.TestCase):
         self.assertEqual(result["status"], "passed")
         self.assertEqual(result["step_count"], 1)
 
+    def test_storage_probe_rejects_readonly_parents_without_writable_children(
+        self,
+    ) -> None:
+        """只读父挂载不能再被语法探针错误放行为可运行环境。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            data_root = Path(directory) / "data"
+            data_root.mkdir(mode=0o700)
+            (data_root / "runs").mkdir(mode=0o700)
+            (data_root / "runtime").mkdir(mode=0o700)
+            configuration = self._contract(Path(directory))["configuration"]
+            aliases = sorted(
+                {
+                    str(receipt.CAPTURE_CONTAINER_ALIAS),
+                    str(configuration["capture_root"]),
+                }
+            )
+            inspected = [
+                {
+                    "Mounts": [
+                        {
+                            "Type": "bind",
+                            "Source": str(data_root),
+                            "Destination": alias,
+                            "RW": False,
+                        }
+                        for alias in aliases
+                    ]
+                }
+            ]
+            job = codex_upgrade.Job(
+                job_id="official-core",
+                phase="official",
+                suites=("full",),
+                description="official-core",
+                steps=(
+                    {"argv": ["true"], "environment": {}, "timeout": 1},
+                ),
+                evidence_roots=(
+                    f"{configuration['capture_root']}/runs/official-core",
+                ),
+                covers=("SPEC-TLS-001",),
+            )
+            with (
+                mock.patch.object(
+                    receipt,
+                    "EXPECTED_HOST_DATA_ROOT",
+                    PurePosixPath(str(data_root)),
+                ),
+                mock.patch.object(
+                    receipt,
+                    "_run",
+                    return_value=json.dumps(inspected).encode(),
+                ) as run,
+            ):
+                with self.assertRaisesRegex(
+                    receipt.JobRehearsalReceiptError,
+                    "缺少同源可写运行挂载",
+                ):
+                    receipt._capture_storage_probe([job], configuration)
+            run.assert_called_once()
+
+    def test_storage_probe_accepts_readonly_parents_with_same_source_children(
+        self,
+    ) -> None:
+        """runs/runtime 同源可写子挂载必须通过有界创建清理事实。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            data_root = Path(directory) / "data"
+            data_root.mkdir(mode=0o700)
+            for namespace in receipt.WRITABLE_CAPTURE_NAMESPACES:
+                (data_root / namespace).mkdir(mode=0o700)
+            configuration = self._contract(Path(directory))["configuration"]
+            aliases = sorted(
+                {
+                    str(receipt.CAPTURE_CONTAINER_ALIAS),
+                    str(configuration["capture_root"]),
+                }
+            )
+            mounts = [
+                {
+                    "Type": "bind",
+                    "Source": str(data_root),
+                    "Destination": alias,
+                    "RW": False,
+                }
+                for alias in aliases
+            ]
+            namespaces = []
+            for namespace in receipt.WRITABLE_CAPTURE_NAMESPACES:
+                source = data_root / namespace
+                metadata = source.stat()
+                mounts.extend(
+                    {
+                        "Type": "bind",
+                        "Source": str(source),
+                        "Destination": f"{alias}/{namespace}",
+                        "RW": True,
+                    }
+                    for alias in aliases
+                )
+                namespaces.append(
+                    {
+                        "name": namespace,
+                        "destinations": [
+                            {
+                                "path": f"{alias}/{namespace}",
+                                "device": metadata.st_dev,
+                                "inode": metadata.st_ino,
+                                "mode": metadata.st_mode & 0o777,
+                                "uid": metadata.st_uid,
+                                "gid": metadata.st_gid,
+                            }
+                            for alias in aliases
+                        ],
+                        "created_via": aliases,
+                        "cleanup_verified": True,
+                    }
+                )
+            job = codex_upgrade.Job(
+                job_id="official-core",
+                phase="official",
+                suites=("full",),
+                description="official-core",
+                steps=(
+                    {"argv": ["true"], "environment": {}, "timeout": 1},
+                ),
+                evidence_roots=(
+                    f"{configuration['capture_root']}/runs/official-core",
+                ),
+                covers=("SPEC-TLS-001",),
+            )
+            inspect_raw = json.dumps([{"Mounts": mounts}]).encode()
+            write_raw = json.dumps(
+                {"status": "passed", "namespaces": namespaces}
+            ).encode()
+            with (
+                mock.patch.object(
+                    receipt,
+                    "EXPECTED_HOST_DATA_ROOT",
+                    PurePosixPath(str(data_root)),
+                ),
+                mock.patch.object(
+                    receipt,
+                    "_run",
+                    side_effect=[inspect_raw, write_raw],
+                ) as run,
+            ):
+                result = receipt._capture_storage_probe([job], configuration)
+                validated = receipt._validate_storage_probe(
+                    result,
+                    {
+                        "configuration": configuration,
+                        "job_ids": [job.job_id],
+                    },
+                )
+            self.assertEqual(run.call_count, 2)
+            self.assertEqual(validated["status"], "passed")
+            self.assertEqual(validated["job_count"], 1)
+            self.assertEqual(validated["evidence_root_count"], 1)
+
     def test_incremental_plan_reuses_exact_campaign_coordinate_relocation(
         self,
     ) -> None:
@@ -556,6 +717,32 @@ class JobRehearsalReceiptTests(unittest.TestCase):
             replayed = receipt.replay(root, path.name)
         self.assertEqual(replayed["status"], "passed")
         self.assertEqual(replayed["job_count"], 38)
+        self.assertRegex(
+            replayed["storage_probe_sha256"], r"^[0-9a-f]{64}$"
+        )
+
+    def test_current_facts_missing_storage_probe_fail_closed(self) -> None:
+        """新 P0 不能用缺少运行目录写探针的旧结构生成通过收据。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            root.chmod(0o700)
+            contract = self._contract(root)
+            create_job_rehearsal_receipt(
+                root,
+                contract=contract,
+                preflight_campaign_id="preflight-0151",
+            )
+            facts_path = root / "facts.json"
+            facts = json.loads(facts_path.read_text(encoding="utf-8"))
+            facts["probes"].pop("storage")
+            facts["runtime_identity_sha256"] = receipt._runtime_identity(facts)
+            self._rewrite(facts_path, facts)
+            with self.assertRaisesRegex(
+                receipt.JobRehearsalReceiptError,
+                "probes字段不闭合",
+            ):
+                receipt.build_receipt(root, "facts.json")
 
     def test_failed_job_duration_is_part_of_replayable_contract(self) -> None:
         """失败 Job 的耗时字段必须能被封存和独立重放。"""

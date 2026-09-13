@@ -193,6 +193,82 @@ def create_job_rehearsal_receipt(
         }
         for index, name in enumerate(container_names, 1)
     ]
+    capture_root = str(configuration["capture_root"])
+    aliases = sorted({str(rehearsal.CAPTURE_CONTAINER_ALIAS), capture_root})
+    host_data_root = str(rehearsal.EXPECTED_HOST_DATA_ROOT)
+    job_roots = [
+        {
+            "job_id": job_id,
+            "evidence_roots": [f"{capture_root}/runs/{job_id}"],
+        }
+        for job_id in contract["job_ids"]
+    ]
+    writable_namespaces = []
+    for index, namespace in enumerate(
+        rehearsal.WRITABLE_CAPTURE_NAMESPACES, 1
+    ):
+        source = f"{host_data_root}/{namespace}"
+        inode = 200 + index
+        writable_namespaces.append(
+            {
+                "name": namespace,
+                "source": source,
+                "source_mode": 0o700,
+                "source_uid": 0,
+                "source_gid": 0,
+                "source_device": 100,
+                "source_inode": inode,
+                "mounts": [
+                    {
+                        "type": "bind",
+                        "source": source,
+                        "destination": f"{alias}/{namespace}",
+                        "read_only": False,
+                    }
+                    for alias in aliases
+                ],
+                "destinations": [
+                    {
+                        "path": f"{alias}/{namespace}",
+                        "device": 100,
+                        "inode": inode,
+                        "mode": 0o700,
+                        "uid": 0,
+                        "gid": 0,
+                    }
+                    for alias in aliases
+                ],
+                "created_via": aliases,
+                "cleanup_verified": True,
+            }
+        )
+    storage_probe = {
+        "status": "passed",
+        "capture_container": configuration["capture_container"],
+        "capture_root": capture_root,
+        "host_data_root": {
+            "path": host_data_root,
+            "mode": 0o700,
+            "uid": 0,
+            "gid": 0,
+            "device": 100,
+            "inode": 200,
+        },
+        "root_mounts": [
+            {
+                "type": "bind",
+                "source": host_data_root,
+                "destination": alias,
+                "read_only": True,
+            }
+            for alias in aliases
+        ],
+        "writable_namespaces": writable_namespaces,
+        "job_count": len(job_roots),
+        "evidence_root_count": len(job_roots),
+        "job_roots_sha256": rehearsal._fingerprint(job_roots),
+        "job_roots": job_roots,
+    }
     jobs: list[dict[str, object]] = []
     for job_id in contract["job_ids"]:
         step_count = contract["step_counts"][job_id]
@@ -314,6 +390,7 @@ def create_job_rehearsal_receipt(
                 "version": "bubblewrap fixture",
                 "network_isolated": True,
             },
+            "storage": storage_probe,
             "zstd": {
                 "status": "passed",
                 "input_sha256": hashlib.sha256(rehearsal.ZSTD_FRAME).hexdigest(),
