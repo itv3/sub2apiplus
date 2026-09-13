@@ -1487,6 +1487,25 @@ python3 -m tools.official_client_capture.codex_upgrade_job_rehearsal_receipt rep
   --evidence-root "$JOB_REHEARSAL_ROOT" --receipt receipt.json
 ```
 
+`campaign-run v2` 的双批次与原始 deadline 负例使用另一份全新、权限为 `0700` 的证据根，
+禁止手工拼装收据：
+
+```bash
+mkdir -m 0700 "$CAMPAIGN_RUN_REHEARSAL_ROOT"
+python3 -m tools.official_client_capture.codex_upgrade_campaign_run_rehearsal_receipt collect \
+  --campaign-dir "$PREFLIGHT_CAMPAIGN" \
+  --evidence-root "$CAMPAIGN_RUN_REHEARSAL_ROOT" \
+  --output receipt.json
+python3 -m tools.official_client_capture.codex_upgrade_campaign_run_rehearsal_receipt replay \
+  --campaign-dir "$PREFLIGHT_CAMPAIGN" \
+  --evidence-root "$CAMPAIGN_RUN_REHEARSAL_ROOT" \
+  --receipt receipt.json
+```
+
+该工具从 preflight VC-0 checkpoint 连续编译两个真实 VC batch，在两个独立父监督器中执行零网络
+合成动作并封存 checkpoint；第三批只漂移原始 deadline，必须在创建父 run 和执行动作前失败关闭。
+`replay` 会重新核对批次、checkpoint、实际执行 manifest、动作事实、父监督器终态和完整临时资产清单。
+
 `collect` 检查路径、依赖、语法、二进制、bubblewrap 和 zstd，并在 `runs／runtime` 内创建唯一临时对象，
 从两个容器别名交叉验证写入和同源映射；另以 P0 强制门禁执行真实
 `campaign-run v2 → 父 CampaignLease → Job 首次失败加两次重试` 生命周期。每轮 Job 都在
