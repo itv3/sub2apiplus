@@ -48,6 +48,7 @@ class Arm64EnvironmentReceiptTests(unittest.TestCase):
         facts.pop("wireguard", None)
         facts["contract_sha256"] = receipt.LEGACY_NETWORK_CONTRACT_SHA256
         for container in facts["containers"]:
+            container.pop("tls_readiness")
             container["public_egress"][
                 "ip_address"
             ] = receipt.LEGACY_DMIT_PUBLIC_EGRESS
@@ -78,12 +79,19 @@ class Arm64EnvironmentReceiptTests(unittest.TestCase):
         facts["collector"] = producer
         facts["contract_sha256"] = receipt.LEGACY_V3_NETWORK_CONTRACT_SHA256
         for container in facts["containers"]:
+            container.pop("tls_readiness")
             container["public_egress"][
                 "ip_address"
             ] = receipt.LEGACY_DMIT_PUBLIC_EGRESS
-        wireguard = facts["wireguard"]
-        wireguard.pop("egress_provider")
-        wireguard["expected_dmit_mtu"] = wireguard.pop("expected_mtu")
+        current_wireguard = facts["wireguard"]
+        facts["wireguard"] = {
+            "interface": current_wireguard["interface"],
+            "configured_mtu": current_wireguard["configured_mtu"],
+            "runtime_mtu": current_wireguard["runtime_mtu"],
+            "expected_dmit_mtu": current_wireguard["expected_mtu"],
+            "config_path": current_wireguard["config_path"],
+            "config_sha256": current_wireguard["config_sha256"],
+        }
         self._rewrite(facts_path, facts)
         legacy_receipt = receipt._build_receipt(
             root,
@@ -91,6 +99,47 @@ class Arm64EnvironmentReceiptTests(unittest.TestCase):
             replay_producer=producer,
         )
         receipt_path = root / "p0-v3-receipt.json"
+        receipt._write_once(receipt_path, legacy_receipt)
+        return facts_path, receipt_path, facts
+
+    def _legacy_v4_fixture(
+        self, root: Path
+    ) -> tuple[Path, Path, dict[str, object]]:
+        """构造增强 Endpoint／TLS 门禁前由 v4 生成的 BWG 收据。"""
+
+        facts_path, facts = self._fixture(root)
+        producer = {
+            "schema_version": receipt.PRODUCER_SCHEMA,
+            "tool": str(Path(receipt.__file__).resolve()),
+            "tool_sha256": next(
+                iter(receipt.REGISTERED_REPLAY_PRODUCER_HASHES["4"])
+            ),
+            "version": "4",
+        }
+        facts["collector"] = producer
+        facts["contract_sha256"] = receipt.LEGACY_V4_NETWORK_CONTRACT_SHA256
+        for container in facts["containers"]:
+            container.pop("tls_readiness")
+        current_wireguard = facts["wireguard"]
+        facts["wireguard"] = {
+            key: current_wireguard[key]
+            for key in (
+                "interface",
+                "egress_provider",
+                "configured_mtu",
+                "runtime_mtu",
+                "expected_mtu",
+                "config_path",
+                "config_sha256",
+            )
+        }
+        self._rewrite(facts_path, facts)
+        legacy_receipt = receipt._build_receipt(
+            root,
+            facts_path.name,
+            replay_producer=producer,
+        )
+        receipt_path = root / "p0-v4-receipt.json"
         receipt._write_once(receipt_path, legacy_receipt)
         return facts_path, receipt_path, facts
 
@@ -187,6 +236,78 @@ class Arm64EnvironmentReceiptTests(unittest.TestCase):
                     "MTU",
                 ):
                     receipt.build_receipt(root, "p0-facts.json")
+
+    def test_wg1_endpoint_and_tcpmss_must_match_frozen_bwg_value(self) -> None:
+        mutations = (
+            ("configured_endpoint", "[2607:8700:5500:d44::2]:51830"),
+            ("runtime_endpoint", "[2607:8700:5500:d44::2]:51830"),
+            ("expected_endpoint", "bwg.3ab.in:51830"),
+            ("configured_tcpmss_sources", ["172.30.0.0/16"]),
+            ("runtime_tcpmss_sources", ["172.25.0.3/32"]),
+            ("expected_tcp_mss", 1460),
+        )
+        for field, value in mutations:
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                root.chmod(0o700)
+                path, facts = self._fixture(root)
+                facts["wireguard"][field] = value
+                self._rewrite(path, facts)
+                with self.assertRaisesRegex(
+                    receipt.Arm64EnvironmentReceiptError,
+                    "Endpoint、MTU 或 TCPMSS",
+                ):
+                    receipt.build_receipt(root, "p0-facts.json")
+
+    def test_tls_readiness_requires_three_successes_per_container_and_endpoint(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            root.chmod(0o700)
+            path, facts = self._fixture(root)
+            facts["containers"][0]["tls_readiness"][0]["attempts"].pop()
+            self._rewrite(path, facts)
+            with self.assertRaisesRegex(
+                receipt.Arm64EnvironmentReceiptError,
+                "TLS 连续成功次数不足",
+            ):
+                receipt.build_receipt(root, "p0-facts.json")
+
+    def test_runtime_tcpmss_parser_rejects_missing_or_duplicate_rule(self) -> None:
+        lines = [
+            (
+                f"-A FORWARD -s {source} -o wg1 -p tcp -m tcp "
+                "--tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu"
+            )
+            for source in receipt.EXPECTED_TCPMSS_SOURCES
+        ]
+        self.assertEqual(
+            receipt._runtime_tcpmss_sources(("\n".join(lines) + "\n").encode()),
+            sorted(receipt.EXPECTED_TCPMSS_SOURCES),
+        )
+        for payload in (lines[:1], [*lines, lines[0]]):
+            with self.subTest(line_count=len(payload)), self.assertRaisesRegex(
+                receipt.Arm64EnvironmentReceiptError,
+                "缺失、重复",
+            ):
+                receipt._runtime_tcpmss_sources(
+                    ("\n".join(payload) + "\n").encode()
+                )
+
+    def test_tls_readiness_collector_repeats_both_endpoints(self) -> None:
+        outputs = [
+            f"{expected_status}\t192.0.2.1\t0.250000\n".encode()
+            for _probe_name, _url, expected_status in receipt.TLS_READINESS_PROBES
+            for _attempt in range(receipt.TLS_READINESS_ATTEMPTS)
+        ]
+        with mock.patch.object(receipt, "_run", side_effect=outputs) as runner:
+            observed = receipt._tls_readiness_observation("capture-cli")
+        self.assertEqual(runner.call_count, len(outputs))
+        self.assertEqual(
+            [len(item["attempts"]) for item in observed],
+            [receipt.TLS_READINESS_ATTEMPTS] * len(receipt.TLS_READINESS_PROBES),
+        )
 
     def test_current_bwg_contract_rejects_previous_dmit_egress(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -319,6 +440,22 @@ class Arm64EnvironmentReceiptTests(unittest.TestCase):
             ):
                 receipt.build_receipt(root, facts_path.name)
 
+    def test_replay_accepts_registered_v4_bwg_contract(self) -> None:
+        """v5 producer 只读承接尚无 Endpoint／TLS 字段的 v4 BWG 收据。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            root.chmod(0o700)
+            facts_path, receipt_path, _ = self._legacy_v4_fixture(root)
+
+            replayed = receipt.replay(root, receipt_path.name)
+            self.assertEqual(replayed["producer"]["version"], "4")
+            with self.assertRaisesRegex(
+                receipt.Arm64EnvironmentReceiptError,
+                "身份漂移",
+            ):
+                receipt.build_receipt(root, facts_path.name)
+
     def test_replay_rejects_unregistered_historical_producer(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -356,6 +493,7 @@ class Arm64EnvironmentReceiptTests(unittest.TestCase):
             facts.pop("wireguard", None)
             facts["contract_sha256"] = receipt.LEGACY_NETWORK_CONTRACT_SHA256
             for container in facts["containers"]:
+                container.pop("tls_readiness")
                 container["public_egress"][
                     "ip_address"
                 ] = receipt.LEGACY_DMIT_PUBLIC_EGRESS

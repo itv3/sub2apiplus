@@ -23,8 +23,8 @@ from tools.official_client_capture import codex_upgrade as cu
 
 
 class _Job:
-    def __init__(self, required: bool = True) -> None:
-        self.job_id = "official-core"
+    def __init__(self, required: bool = True, job_id: str = "official-core") -> None:
+        self.job_id = job_id
         self.required = required
         self.phase = "official"
         self.steps = []
@@ -80,6 +80,95 @@ class JobRetryWithinAttemptTest(unittest.TestCase):
             cu._run_job_with_retry(_Job(required=False), Path("/tmp"))
 
         self.assertEqual(calls, [1])
+
+    def test_cloud_config启动失败立即升级为campaign前置条件(self) -> None:
+        """0.154 的全局启动失败不得对当前或后续 Job 做机械重试。"""
+
+        with tempfile.TemporaryDirectory() as temporary:
+            host_runs = Path(temporary) / "runs"
+            host_runs.mkdir()
+            root = host_runs / "cloud-config-failure"
+            logical_root = "/root/oauth-capture/runs/cloud-config-failure"
+            calls: list[int] = []
+
+            def fail_once(job, log_root, attempt_index=1, scenario_context=None):
+                calls.append(attempt_index)
+                stderr = (
+                    root
+                    / "results"
+                    / "direct"
+                    / "codex-http"
+                    / "s1"
+                    / "turn1-stderr.log"
+                )
+                stderr.parent.mkdir(parents=True)
+                stderr.write_bytes(
+                    b"Error: timed out waiting for cloud config bundle after 15s\n"
+                )
+                return {
+                    "id": job.job_id,
+                    "status": "failed",
+                    "evidence_roots": [logical_root],
+                }
+
+            with (
+                mock.patch.object(cu, "run_job", side_effect=fail_once),
+                mock.patch.object(cu.time, "sleep") as sleeper,
+                mock.patch.object(
+                    cu,
+                    "FAILED_JOB_EVIDENCE_HOST_RUN_ROOT",
+                    host_runs,
+                ),
+            ):
+                result = cu._run_job_with_retry(_Job(), Path(temporary))
+
+            self.assertEqual(calls, [1])
+            sleeper.assert_not_called()
+            self.assertEqual(
+                result["error"],
+                cu.CAMPAIGN_GLOBAL_PRECONDITION_ERROR,
+            )
+            self.assertEqual(
+                result["evidence_roots"],
+                [f"{logical_root}.failed-attempt1"],
+            )
+            self.assertTrue(
+                (host_runs / "cloud-config-failure.failed-attempt1").is_dir()
+            )
+
+    def test_campaign前置失败保留失败项与pending闭集(self) -> None:
+        """停线后只把已执行项记为 failed，其余计划项必须保持 pending。"""
+
+        prior = {
+            "id": "official-reused",
+            "status": "complete",
+            "disposition": "reused",
+        }
+        failed = {
+            "id": "official-core",
+            "status": "failed",
+            "disposition": "executed",
+            "error": cu.CAMPAIGN_GLOBAL_PRECONDITION_ERROR,
+        }
+        plan = cu._capture_attempt_incremental_plan(
+            planned_jobs=[
+                _Job(job_id="official-reused"),
+                _Job(job_id="official-core"),
+                _Job(job_id="official-pending"),
+            ],
+            prior_results=[prior],
+            results=[prior, failed],
+            changed_components=[],
+            affected_job_ids=[],
+        )
+
+        self.assertEqual(plan["reused_job_ids"], ["official-reused"])
+        self.assertEqual(plan["executed_job_ids"], ["official-core"])
+        self.assertEqual(plan["failed_job_ids"], ["official-core"])
+        self.assertEqual(plan["pending_job_ids"], ["official-pending"])
+        unsigned = dict(plan)
+        digest = unsigned.pop("plan_sha256")
+        self.assertEqual(digest, cu.incremental_recovery.digest(unsigned))
 
     def test_补跑前归档失败证据(self) -> None:
         """宿主归档后，两条容器别名都必须同步重定位。"""

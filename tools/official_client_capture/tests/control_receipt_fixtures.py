@@ -62,6 +62,25 @@ def create_arm_receipt(
                     "ip_address": arm.EXPECTED_PUBLIC_EGRESS,
                     "response_sha256": "e" * 64,
                 },
+                "tls_readiness": [
+                    {
+                        "name": probe_name,
+                        "url": url,
+                        "expected_http_status": expected_status,
+                        "required_successes": arm.TLS_READINESS_ATTEMPTS,
+                        "attempts": [
+                            {
+                                "attempt": attempt,
+                                "http_status": expected_status,
+                                "remote_ip": f"192.0.2.{attempt}",
+                                "tls_seconds": 0.25,
+                                "response_sha256": f"{attempt}" * 64,
+                            }
+                            for attempt in range(1, arm.TLS_READINESS_ATTEMPTS + 1)
+                        ],
+                    }
+                    for probe_name, url, expected_status in arm.TLS_READINESS_PROBES
+                ],
                 "raw_sha256": {
                     "docker_inspect": "f" * 64,
                     "proc_net_route": "0" * 64,
@@ -89,6 +108,13 @@ def create_arm_receipt(
             "configured_mtu": arm.EXPECTED_WG1_MTU,
             "runtime_mtu": arm.EXPECTED_WG1_MTU,
             "expected_mtu": arm.EXPECTED_WG1_MTU,
+            "configured_endpoint": arm.EXPECTED_WG1_ENDPOINT,
+            "runtime_endpoint": arm.EXPECTED_WG1_ENDPOINT,
+            "expected_endpoint": arm.EXPECTED_WG1_ENDPOINT,
+            "configured_tcpmss_sources": sorted(arm.EXPECTED_TCPMSS_SOURCES),
+            "runtime_tcpmss_sources": sorted(arm.EXPECTED_TCPMSS_SOURCES),
+            "expected_tcpmss_sources": sorted(arm.EXPECTED_TCPMSS_SOURCES),
+            "expected_tcp_mss": arm.EXPECTED_TCP_MSS,
             "config_path": str(arm.WIREGUARD_CONFIG),
             "config_sha256": "d" * 64,
         },

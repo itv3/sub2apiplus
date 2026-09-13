@@ -62,8 +62,10 @@ from typing import Any, Callable, Mapping
 # 从任意工作目录按绝对路径启动，并在父进程只写 stdout 时保留结构化失败诊断。
 # 2026-09-13（Campaign 输入逐字节冻结）：规则与双份场景清单保持原始字节，
 # 防止 preflight 重排 JSON 后破坏场景绑定的规则摘要。
+# 2026-09-13（BWG TLS 闭环）：P0 新增固定 IPv4 Endpoint、持久／运行时 MSS clamp
+# 和双容器重复 TLS 探针；Campaign 对 Cloud Config 全局启动失败立即停线。
 DEFAULT_TOOL_DIGEST = (
-    "26d3ae71679759bb9fdb6b4764a5bbec2728e3ccacd19c8271df1d7b5ff37d0c"
+    "1689275d53ac0970bf08ec6e52c68405b49d2c27eea846beffe858592a44789d"
 )
 DEFAULT_SUPERVISOR_DIGEST = (
     "6ed44c1827727c854783f668e45226316698964c5a42b24746641d4f79eb17d1"

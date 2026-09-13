@@ -3355,6 +3355,16 @@ def run_job(
 # 那两处只作用于候选矩阵，不波及官方链路。
 JOB_RETRY_LIMIT = 2
 JOB_RETRY_DELAY_SECONDS = 30
+# Codex 0.154 会在任何用户请求前获取 Cloud Config Bundle。该启动前依赖失败时，
+# 后续所有 Job 共享同一网络前提；继续逐项重试只会重复同一种失败，且浪费正式窗口。
+CLOUD_CONFIG_BUNDLE_TIMEOUT_MARKER = (
+    b"timed out waiting for cloud config bundle after 15s"
+)
+CAMPAIGN_GLOBAL_PRECONDITION_ERROR = (
+    "campaign-global-precondition:codex-cloud-config-bundle-startup"
+)
+GLOBAL_PRECONDITION_SCAN_MAX_FILES = 256
+GLOBAL_PRECONDITION_SCAN_BYTES_PER_FILE = 256 * 1024
 # 正式 Job 在容器内可通过两条历史别名访问同一 runs 子树，但编排器本身运行
 # 在宿主机。失败证据归档必须先把容器别名转换为唯一登记的宿主路径，不能把
 # `/root/oauth-capture` 这类容器路径直接交给宿主 rename。
@@ -3385,6 +3395,12 @@ CLASSIFICATION_CANDIDATE_REUSE_PREVIEW_SCHEMA = (
 CLASSIFICATION_CANDIDATE_REUSE_TRANSITION_SCHEMA = (
     "classification-candidate-reuse-transition/v1"
 )
+
+
+class CampaignGlobalPreconditionError(ConfigurationError):
+    """所有后续 Job 共用的 Campaign 启动前置条件已经失败。"""
+
+
 CLASSIFICATION_CANDIDATE_REUSE_TRANSITION_FILENAME = (
     "classification-candidate-reuse-transition.json"
 )
@@ -6533,6 +6549,57 @@ def _archive_failed_job_evidence(result: dict[str, Any], attempt_index: int) -> 
     result.update(rebased)
 
 
+def _cloud_config_bundle_global_failure(result: Mapping[str, Any]) -> bool:
+    """有界读取 Codex stderr，识别会影响所有 Job 的启动前 Cloud Config 失败。"""
+
+    if result.get("status") != "failed":
+        return False
+    raw_roots = result.get("evidence_roots")
+    if not isinstance(raw_roots, list):
+        return False
+    inspected = 0
+    for raw_root in raw_roots:
+        try:
+            host_root, _ = _failed_job_evidence_host_route(raw_root)
+            _reject_symlink_components(
+                host_root,
+                FAILED_JOB_EVIDENCE_HOST_RUN_ROOT,
+                "Cloud Config 失败证据根",
+            )
+        except (ConfigurationError, OSError, TypeError, ValueError):
+            return False
+        if host_root.is_symlink() or not host_root.is_dir():
+            continue
+        for path in host_root.glob("results/*/*/*/turn*-stderr.log"):
+            inspected += 1
+            if inspected > GLOBAL_PRECONDITION_SCAN_MAX_FILES:
+                return False
+            try:
+                _reject_symlink_components(path, host_root, "Cloud Config stderr")
+                metadata = path.stat()
+                if path.is_symlink() or not path.is_file() or metadata.st_size <= 0:
+                    continue
+                with path.open("rb") as stream:
+                    head = stream.read(GLOBAL_PRECONDITION_SCAN_BYTES_PER_FILE)
+                    if CLOUD_CONFIG_BUNDLE_TIMEOUT_MARKER in head:
+                        return True
+                    if metadata.st_size > GLOBAL_PRECONDITION_SCAN_BYTES_PER_FILE:
+                        stream.seek(
+                            max(
+                                0,
+                                metadata.st_size
+                                - GLOBAL_PRECONDITION_SCAN_BYTES_PER_FILE,
+                            )
+                        )
+                        if CLOUD_CONFIG_BUNDLE_TIMEOUT_MARKER in stream.read(
+                            GLOBAL_PRECONDITION_SCAN_BYTES_PER_FILE
+                        ):
+                            return True
+            except (ConfigurationError, OSError):
+                return False
+    return False
+
+
 def _run_job_with_retry(
     job: Job,
     log_root: Path,
@@ -6590,6 +6657,12 @@ def _run_job_with_retry(
             **run_kwargs,
         )
         if result.get("status") == "complete":
+            return result
+        if _cloud_config_bundle_global_failure(result):
+            # 当前 Job 的失败证据仍须先归档，随后由 attempt 主循环写入 checkpoint
+            # 并停止；稳定分类码不复制原始 stderr，避免把响应或凭据带入控制面。
+            result["error"] = CAMPAIGN_GLOBAL_PRECONDITION_ERROR
+            _archive_failed_job_evidence(result, attempt_index)
             return result
         if not job.required or attempt_index > JOB_RETRY_LIMIT:
             # 最后一份失败证据也必须归档。否则跨 attempt 的显式 resume 会使用
@@ -6711,6 +6784,59 @@ def _failed_job_ids(results: Any) -> list[str]:
             and result.get("status") == "failed"
         }
     )
+
+
+def _capture_attempt_incremental_plan(
+    *,
+    planned_jobs: Iterable[Job],
+    prior_results: Iterable[Mapping[str, Any]],
+    results: Iterable[Mapping[str, Any]],
+    changed_components: Iterable[str],
+    affected_job_ids: Iterable[str],
+) -> dict[str, Any]:
+    """形成失败、待执行和复用项互斥且完整的 attempt 增量闭集。"""
+
+    planned_ids = sorted(job.job_id for job in planned_jobs)
+    prior = list(prior_results)
+    observed = list(results)
+    observed_ids = {
+        str(item.get("id"))
+        for item in observed
+        if isinstance(item.get("id"), str) and item.get("id")
+    }
+    core = {
+        "schema_version": incremental_recovery.SCHEMA_VERSION,
+        "planned_job_ids": planned_ids,
+        "changed_components": sorted(set(changed_components)),
+        "affected_job_ids": sorted(set(affected_job_ids)),
+        "reused_job_ids": sorted(
+            {
+                str(item.get("id"))
+                for item in prior
+                if isinstance(item.get("id"), str) and item.get("id")
+            }
+        ),
+        "executed_job_ids": sorted(
+            {
+                str(item.get("id"))
+                for item in observed
+                if isinstance(item.get("id"), str)
+                and item.get("id")
+                and item.get("disposition", "executed") == "executed"
+            }
+        ),
+        "failed_job_ids": sorted(
+            {
+                str(item.get("id"))
+                for item in observed
+                if isinstance(item.get("id"), str)
+                and item.get("id")
+                and item.get("status") == "failed"
+            }
+        ),
+        "pending_job_ids": sorted(set(planned_ids) - observed_ids),
+    }
+    return {**core, "plan_sha256": incremental_recovery.digest(core)}
 
 
 def _validate_incremental_job_result(
@@ -30289,6 +30415,13 @@ def _run_capture_attempt(
                     force=True,
                     attempt_root=attempt_root,
                 )
+                if result.get("error") == CAMPAIGN_GLOBAL_PRECONDITION_ERROR:
+                    # 失败 Job、checkpoint 与不可变 job 收据已先落盘。异常只负责
+                    # 截断循环；未执行 Job 会由统一 attempt 收口自动进入 pending 闭集。
+                    raise CampaignGlobalPreconditionError(
+                        "Campaign 全局前置条件失败：Codex Cloud Config Bundle "
+                        "启动依赖不可用，已停止后续 Job。"
+                    )
     except BaseException as error:
         # KeyboardInterrupt、超时和进程创建失败都必须先完成 after 探针。
         if execution_error is None:
@@ -30535,6 +30668,11 @@ def _run_capture_attempt(
         ),
     }
     failed_result_ids = _failed_job_ids(results)
+    global_precondition_failed = any(
+        isinstance(result, Mapping)
+        and result.get("error") == CAMPAIGN_GLOBAL_PRECONDITION_ERROR
+        for result in results
+    )
     status = (
         "environment_contaminated"
         if contamination is not None
@@ -30570,74 +30708,13 @@ def _run_capture_attempt(
             ),
             "incremental_tool_transition": incremental_transition,
             "evaluation_transition": evaluation_transition,
-            "incremental_plan": {
-                "schema_version": incremental_recovery.SCHEMA_VERSION,
-                "planned_job_ids": sorted(job.job_id for job in planned_jobs),
-                "changed_components": sorted(changed_components),
-                "affected_job_ids": sorted(affected_job_ids),
-                "reused_job_ids": sorted(
-                    str(item.get("id"))
-                    for item in prior_results
-                    if item.get("id")
-                ),
-                "executed_job_ids": sorted(
-                    str(item.get("id"))
-                    for item in results
-                    if item.get("id")
-                    and item.get("disposition", "executed") == "executed"
-                ),
-                "failed_job_ids": sorted(
-                    str(item.get("id"))
-                    for item in results
-                    if item.get("id") and item.get("status") == "failed"
-                ),
-                "pending_job_ids": sorted(
-                    {
-                        job.job_id for job in planned_jobs
-                    }
-                    - {
-                        str(item.get("id"))
-                        for item in results
-                        if item.get("id")
-                    }
-                ),
-                "plan_sha256": incremental_recovery.digest(
-                    {
-                        "schema_version": incremental_recovery.SCHEMA_VERSION,
-                        "planned_job_ids": sorted(
-                            job.job_id for job in planned_jobs
-                        ),
-                        "changed_components": sorted(changed_components),
-                        "affected_job_ids": sorted(affected_job_ids),
-                        "reused_job_ids": sorted(
-                            str(item.get("id"))
-                            for item in prior_results
-                            if item.get("id")
-                        ),
-                        "executed_job_ids": sorted(
-                            str(item.get("id"))
-                            for item in results
-                            if item.get("id")
-                            and item.get("disposition", "executed") == "executed"
-                        ),
-                        "failed_job_ids": sorted(
-                            str(item.get("id"))
-                            for item in results
-                            if item.get("id") and item.get("status") == "failed"
-                        ),
-                        "pending_job_ids": sorted(
-                            {
-                                job.job_id for job in planned_jobs
-                            }
-                            - {
-                                str(item.get("id"))
-                                for item in results
-                                if item.get("id")
-                            }
-                        ),
-                    }
-                ),
-            },
+            "incremental_plan": _capture_attempt_incremental_plan(
+                planned_jobs=planned_jobs,
+                prior_results=prior_results,
+                results=results,
+                changed_components=changed_components,
+                affected_job_ids=affected_job_ids,
+            ),
             "identity": identity,
             "results": results,
             "evidence_roots": [str(root) for root in evidence_roots],
@@ -30665,9 +30742,14 @@ def _run_capture_attempt(
                 "运行 capture manifest finalizer；候选还需完成运行画像与两种 Kilo 原始 witness。"
                 if status == "awaiting_receipts"
                 else (
-                    "仅补跑失败 Job：" + "、".join(failed_result_ids)
-                    if failed_result_ids
-                    else None
+                    "修复 Campaign 全局网络前置条件后，使用 resume --rerun-failed "
+                    "恢复失败与 pending Job；禁止重发已完成 Job。"
+                    if global_precondition_failed
+                    else (
+                        "仅补跑失败 Job：" + "、".join(failed_result_ids)
+                        if failed_result_ids
+                        else None
+                    )
                 )
             ),
         },

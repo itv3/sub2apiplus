@@ -1437,6 +1437,8 @@ Framework §5.1.4～§5.1.5 只规定环境冻结、路径安全和数据治理�
 | `capture-cli` 容器 IP | `172.30.0.10` |
 | 公网出口 | `144.34.230.210`，经 BWG |
 | `wg1` MTU | `1420`；同时核对宿主持久值、运行值和对端值 |
+| `wg1` Endpoint | `144.34.230.210:51830`；必须使用固定 IPv4，禁止域名解析或对端漫游回 IPv6 |
+| 转发 TCP MSS | `172.25.0.3/32` 与 `172.30.0.0/16` 出 `wg1` 的 SYN 均执行 `TCPMSS --clamp-mss-to-pmtu`；当前有效 MSS 为 `1380` |
 | 宿主项目根 | `/root/docker/capture-cli` |
 | 宿主数据根 | `/root/docker/capture-cli/data`，权限 `0700`，版本控制忽略 |
 | 宿主证据运行子树 | `/root/docker/capture-cli/data/runs`，只承载 Job 证据目录 |
@@ -1455,7 +1457,10 @@ export CAPTURE_CONTAINER_ROOT=/root/oauth-capture
 ```
 
 P0 必须从 Compose 渲染结果和 `docker inspect capture-cli` 同时验证挂载、镜像、固定 IP、默认路由、
-BWG 公网出口和 `wg1` MTU；脚本不得修改网络、NAT／iptables、WireGuard 或容器地址来迁就测试。
+BWG 公网出口，以及 `wg1` 的持久／运行时 MTU、固定 IPv4 Endpoint 和两条持久／运行时 MSS clamp；
+脚本不得修改网络、NAT／iptables、WireGuard 或容器地址来迁就测试。两个容器还必须分别对
+`/backend-api/wham/config/bundle` 与 `/v1/models` 连续完成三次 DNS／TCP／TLS／HTTP 探针；单次 ipify
+成功不能替代这组启动前就绪性门禁。
 `/capture` 与 `/root/oauth-capture` 两个宽泛父挂载必须同源只读；Compose 只能把宿主数据根的 `runs` 和
 `runtime` 分别以可写 bind 覆盖到两个父根的同名子路径。四个可写目标必须与对应宿主子树的设备号、inode、
 所有者和权限一致，禁止把整个数据根改成可写来绕过目录门禁。
@@ -1516,6 +1521,9 @@ python3 -m tools.official_client_capture.codex_upgrade_campaign_run_rehearsal_re
 `failure_lifecycle_probe_sha256`；只有 storage 探针的历史收据仍可只读重放，但不得用于新 Formal。
 任一 Job 失败都必须先能形成失败收据并独立重放；失败、缺项、环境漂移或目标场景／工具摘要不一致时
 禁止创建 Formal Campaign。Formal 创建必须绑定上述 rehearsal receipt，并再次独立重放。
+Codex 0.154 的 Cloud Config Bundle 属于全部 Job 共享的启动前置条件；若 stderr 出现其 15 秒等待超时，
+编排器必须在首个 Job 的首次失败后将其标记为 Campaign 全局前置条件，封存该失败项并把其余项保持为
+`pending`，随后立即停线。禁止继续当前 Job 的内部重试或启动后续 Job。
 
 创建运行目录前，ARM64 根文件系统须同时满足使用率低于 70% 且可用空间不少于 30 GiB。达到水位后只能
 按 manifest 清理未被收据引用的可再生缓存、worktree、镜像层和 staging，禁止删除证据或无界扫描。

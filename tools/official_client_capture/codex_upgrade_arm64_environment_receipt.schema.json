@@ -97,7 +97,7 @@
           "$ref": "#/$defs/sha256"
         },
         "version": {
-          "const": "4"
+          "const": "5"
         }
       }
     }
