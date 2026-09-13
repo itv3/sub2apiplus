@@ -131,6 +131,11 @@ CODEX_VC_FINAL_ALIGNMENT_FREEZE_SUCCESSOR = (
     ROOT
     / "docs/egress/maintenance/upstream-codex-vc-final-alignment-20260913-freeze-successor.json"
 )
+# 2026-09-13：v0.2.4-3 发版提交更新 VERSION 后产生的后继摘要，
+# 由 freeze-successor-generate 以 commit 模式生成。
+V0243_VERSION_SYNC_FREEZE_SUCCESSOR = (
+    ROOT / "docs/egress/maintenance/upstream-v0.2.4-3-version-sync-freeze-successor.json"
+)
 HISTORICAL_LEDGER = "docs/egress/maintenance/historical-source-drift-successor.json"
 SHA256_LENGTH = 64
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -225,6 +230,7 @@ def successor_edges(path: str) -> list[tuple[str, str]]:
         CLIENT_VC_STAGE_NAVIGATION_FREEZE_SUCCESSOR,
         CLAUDE_VC1_VC3_CONTRACT_FREEZE_SUCCESSOR,
         CODEX_VC_FINAL_ALIGNMENT_FREEZE_SUCCESSOR,
+        V0243_VERSION_SYNC_FREEZE_SUCCESSOR,
     ):
         payload = json.loads(receipt_path.read_text(encoding="utf-8"))
         _validate_successor_receipt(payload)
