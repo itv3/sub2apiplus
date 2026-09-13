@@ -3952,6 +3952,9 @@ class CampaignLease:
                     "attempt_id": self.attempt_id,
                     "state": "active",
                     "operation": self.command,
+                    "deadline_at_utc": codex_upgrade_supervisor._epoch_to_utc(
+                        attached.deadline_at_epoch
+                    ),
                     "attached_to_run_dir": str(attached.run_dir),
                 }
                 self._last_heartbeat_monotonic = time.monotonic()
@@ -26376,6 +26379,34 @@ def _reserve_capture_attempt(
                 f"capture-* run 绕过：{failed}"
             )
 
+        manifest = _require_formal_campaign(campaign_dir)
+        if phase == "candidate" and identity.get("candidate_purpose") != manifest.get(
+            "campaign_purpose"
+        ):
+            raise ConfigurationError(
+                "候选预约身份用途与 Campaign 冻结用途不一致。"
+            )
+        lease_binding: dict[str, str] | None = None
+        if lease is not None:
+            if not lease.acquired:
+                raise ConfigurationError("reservation 缺少 active Campaign lease。")
+            lease_payload = lease.payload
+            if lease_payload.get("campaign_id") != manifest.get("campaign_id"):
+                raise ConfigurationError("reservation 与 Campaign lease 身份不一致。")
+            owner_nonce = lease_payload.get("owner_nonce")
+            deadline_at_utc = lease_payload.get("deadline_at_utc")
+            if not isinstance(owner_nonce, str) or not SHA256_RE.fullmatch(owner_nonce):
+                raise ConfigurationError("reservation 的 Campaign lease owner nonce 非法。")
+            if not _is_rfc3339_timestamp(deadline_at_utc):
+                raise ConfigurationError(
+                    "reservation 的 Campaign lease 缺少合法 deadline_at_utc。"
+                )
+            lease_binding = {
+                "path": CAMPAIGN_LEASE_FILENAME,
+                "owner_nonce": owner_nonce,
+                "deadline_at_utc": str(deadline_at_utc),
+            }
+
         attempts_root = ensure_private_directory(
             campaign_dir / relative / "attempts", campaign_dir
         )
@@ -26391,13 +26422,6 @@ def _reserve_capture_attempt(
         if final_root.exists() or final_root.is_symlink():
             raise ConfigurationError("随机 attempt-id 发生冲突。")
         run_nonce = secrets.token_hex(32)
-        manifest = _require_formal_campaign(campaign_dir)
-        if phase == "candidate" and identity.get("candidate_purpose") != manifest.get(
-            "campaign_purpose"
-        ):
-            raise ConfigurationError(
-                "候选预约身份用途与 Campaign 冻结用途不一致。"
-            )
         reservation: dict[str, Any] = {
             "schema_version": CAPTURE_RESERVATION_SCHEMA,
             "campaign_id": manifest["campaign_id"],
@@ -26424,17 +26448,8 @@ def _reserve_capture_attempt(
                 for job in jobs
             ],
         }
-        if lease is not None:
-            if not lease.acquired:
-                raise ConfigurationError("reservation 缺少 active Campaign lease。")
-            lease_payload = lease.payload
-            if lease_payload.get("campaign_id") != manifest.get("campaign_id"):
-                raise ConfigurationError("reservation 与 Campaign lease 身份不一致。")
-            reservation["campaign_lease"] = {
-                "path": CAMPAIGN_LEASE_FILENAME,
-                "owner_nonce": str(lease_payload["owner_nonce"]),
-                "deadline_at_utc": str(lease_payload["deadline_at_utc"]),
-            }
+        if lease_binding is not None:
+            reservation["campaign_lease"] = lease_binding
         reservation["reservation_digest"] = _fingerprint(reservation)
 
         temporary_root = Path(
@@ -37987,6 +38002,21 @@ def _campaign_run_aware_exit_code(
     return direct_exit_code
 
 
+def _record_campaign_run_action_failure(
+    failure_kind: str,
+    error: BaseException,
+) -> None:
+    """尽力写入脱敏诊断；诊断失败不得覆盖原始控制流。"""
+
+    try:
+        codex_upgrade_supervisor.write_campaign_run_action_diagnostic(
+            failure_kind=failure_kind,
+            error=error,
+        )
+    except BaseException:
+        pass
+
+
 def _main_without_campaign_lease(argv: list[str] | None = None) -> int:
     os.umask(0o077)
     raw_argv = list(sys.argv[1:] if argv is None else argv)
@@ -38170,7 +38200,8 @@ def _main_without_campaign_lease(argv: list[str] | None = None) -> int:
             raise ConfigurationError(f"不受支持的命令：{command}")
         print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
         return return_code
-    except KeyboardInterrupt:
+    except KeyboardInterrupt as error:
+        _record_campaign_run_action_failure("interrupted", error)
         active_lease = _ACTIVE_CAMPAIGN_LEASE
         if active_lease is not None:
             try:
@@ -38186,11 +38217,12 @@ def _main_without_campaign_lease(argv: list[str] | None = None) -> int:
         ValueError,
         subprocess.SubprocessError,
     ) as error:
+        _record_campaign_run_action_failure("handled-error", error)
         print(f"升级审计失败：{error}", file=sys.stderr)
         return 1
 
 
-def main(argv: list[str] | None = None) -> int:
+def _main_with_campaign_lease(argv: list[str] | None = None) -> int:
     """带 Campaign lease 的 CLI 入口。
 
     先在轻量解析阶段确定命令坐标，再调用原有 dispatch。这样所有正式可变
@@ -38212,6 +38244,7 @@ def main(argv: list[str] | None = None) -> int:
         _reject_campaign_run_legacy_write(arguments, str(arguments.command))
         _reject_unparented_formal_write(arguments, str(arguments.command))
     except ConfigurationError as error:
+        _record_campaign_run_action_failure("handled-error", error)
         print(f"升级审计失败：{error}", file=sys.stderr)
         return 1
     with _main_command_lease(arguments) as lease:
@@ -38224,6 +38257,16 @@ def main(argv: list[str] | None = None) -> int:
                 "owner_interrupted" if return_code == 130 else "command_failed"
             )
         return return_code
+
+
+def main(argv: list[str] | None = None) -> int:
+    """执行带租约入口，并为未捕获异常留下动作级脱敏诊断。"""
+
+    try:
+        return _main_with_campaign_lease(argv)
+    except BaseException as error:
+        _record_campaign_run_action_failure("unexpected-error", error)
+        raise
 
 
 if __name__ == "__main__":

@@ -53,7 +53,29 @@ CAMPAIGN_RUN_PHASE_ENV = "CODEX_UPGRADE_CAMPAIGN_PHASE"
 CAMPAIGN_RUN_OWNER_PID_ENV = "CODEX_UPGRADE_CAMPAIGN_OWNER_PID"
 CAMPAIGN_RUN_OWNER_NONCE_ENV = "CODEX_UPGRADE_CAMPAIGN_OWNER_NONCE"
 CAMPAIGN_RUN_DEADLINE_ENV = "CODEX_UPGRADE_CAMPAIGN_DEADLINE_AT_EPOCH"
-
+CAMPAIGN_RUN_ACTION_ID_ENV = "CODEX_UPGRADE_CAMPAIGN_ACTION_ID"
+CAMPAIGN_RUN_ACTION_DIAGNOSTIC_ENV = (
+    "CODEX_UPGRADE_CAMPAIGN_ACTION_DIAGNOSTIC"
+)
+ACTION_DIAGNOSTIC_SCHEMA = "codex-upgrade-campaign-action-diagnostic/v1"
+ACTION_DIAGNOSTIC_FAILURE_KINDS = frozenset(
+    {"handled-error", "interrupted", "unexpected-error", "child-returncode"}
+)
+ACTION_DIAGNOSTIC_FIELDS = frozenset(
+    {
+        "schema_version",
+        "campaign_id",
+        "phase",
+        "action_id",
+        "owner_pid",
+        "owner_nonce",
+        "failure_kind",
+        "error_type",
+        "message",
+        "recorded_at_utc",
+        "diagnostic_sha256",
+    }
+)
 DEFAULT_HEARTBEAT_SECONDS = 5
 DEFAULT_WATCHDOG_TIMEOUT_SECONDS = 20
 DEFAULT_LEDGER_INTERVAL_SECONDS = 60
@@ -76,6 +98,16 @@ SENSITIVE_MARKERS = (
     "password",
     "bearer",
     "credential",
+)
+# 失败详情只能保留经过短文本规则校验的控制面说明。出现这些来源标签时，
+# 整段内容改写为固定文案，避免 argv、环境或原始输出进入持久审计文件。
+ACTION_DIAGNOSTIC_REDACTION_MARKERS = SENSITIVE_MARKERS + (
+    "argv",
+    "environment",
+    "stdout",
+    "stderr",
+    "raw output",
+    "command line",
 )
 TERMINAL_STATES = frozenset(
     {"stopped", "failed", "audit-incomplete", "watchdog-aborted"}
@@ -389,6 +421,189 @@ def _read_json(path: Path) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise SupervisorError(f"监督器 JSON 顶层必须是对象：{path.name}")
     return payload
+
+
+def _action_diagnostic_message(value: Any) -> str:
+    """生成有界脱敏说明，禁止把命令、环境或原始输出带入收据。"""
+
+    fallback = "错误详情已按脱敏规则省略。"
+    if not isinstance(value, str):
+        return _note(fallback, "动作失败诊断")
+    normalized = " ".join(value.strip().split())
+    lowered = normalized.lower()
+    if (
+        not normalized
+        or len(normalized) > MAX_NOTE_LENGTH
+        or any(marker in lowered for marker in ACTION_DIAGNOSTIC_REDACTION_MARKERS)
+    ):
+        return _note(fallback, "动作失败诊断")
+    try:
+        return _note(normalized, "动作失败诊断")
+    except SupervisorError:
+        return _note(fallback, "动作失败诊断")
+
+
+def _validate_action_diagnostic_timestamp(value: Any) -> str:
+    """只接受带 ``Z`` 的 RFC3339 UTC 时间。"""
+
+    if not isinstance(value, str) or not value.endswith("Z"):
+        raise SupervisorError("动作失败诊断时间必须是 RFC3339 UTC。")
+    try:
+        parsed = datetime.fromisoformat(value[:-1] + "+00:00")
+    except ValueError as error:
+        raise SupervisorError("动作失败诊断时间非法。") from error
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise SupervisorError("动作失败诊断时间缺少 UTC 时区。")
+    return value
+
+
+def _action_diagnostic_path(
+    run_dir: Path,
+    action_id: str,
+    *,
+    create_directory: bool,
+    supplied_path: Path | None = None,
+) -> Path:
+    """解析动作专属诊断路径，并把它约束在父 run 目录内。"""
+
+    run_dir = _validate_state_dir(Path(run_dir), create=False)
+    action_id = _safe_id(action_id, "action_id")
+    diagnostic_dir = _validate_state_dir(
+        run_dir / "action-diagnostics",
+        create=create_directory,
+    )
+    expected = diagnostic_dir / f"action-{action_id}-failure.json"
+    if supplied_path is not None:
+        if not supplied_path.is_absolute():
+            raise SupervisorError("动作失败诊断路径必须是绝对路径。")
+        supplied = Path(os.path.abspath(supplied_path))
+        if supplied != expected:
+            raise SupervisorError("动作失败诊断路径与 action 身份不一致。")
+    return expected
+
+
+def _validate_action_diagnostic(
+    path: Path,
+    *,
+    run_dir: Path,
+    campaign_id: str,
+    phase: str,
+    action_id: str,
+    owner_pid: int,
+    owner_nonce: str,
+) -> dict[str, Any]:
+    """校验动作失败诊断的闭合字段、父身份、权限与自摘要。"""
+
+    expected = _action_diagnostic_path(
+        run_dir,
+        action_id,
+        create_directory=False,
+        supplied_path=path,
+    )
+    payload = _read_json(expected)
+    if set(payload) != ACTION_DIAGNOSTIC_FIELDS:
+        raise SupervisorError("动作失败诊断字段不闭合。")
+    unsigned = dict(payload)
+    digest = unsigned.pop("diagnostic_sha256", None)
+    if (
+        payload.get("schema_version") != ACTION_DIAGNOSTIC_SCHEMA
+        or payload.get("campaign_id") != campaign_id
+        or payload.get("phase") != phase
+        or payload.get("action_id") != action_id
+        or payload.get("owner_pid") != owner_pid
+        or payload.get("owner_nonce") != owner_nonce
+        or payload.get("failure_kind") not in ACTION_DIAGNOSTIC_FAILURE_KINDS
+        or not isinstance(payload.get("error_type"), str)
+        or _safe_id(payload.get("error_type"), "error_type")
+        != payload.get("error_type")
+        or not isinstance(payload.get("message"), str)
+        or _action_diagnostic_message(payload.get("message"))
+        != payload.get("message")
+        or digest != _sha256(_canonical(unsigned))
+    ):
+        raise SupervisorError("动作失败诊断身份、内容或摘要非法。")
+    _validate_action_diagnostic_timestamp(payload.get("recorded_at_utc"))
+    return payload
+
+
+def _write_action_diagnostic(
+    path: Path,
+    *,
+    campaign_id: str,
+    phase: str,
+    action_id: str,
+    owner_pid: int,
+    owner_nonce: str,
+    failure_kind: str,
+    error_type: str,
+    message: str,
+) -> dict[str, Any]:
+    """以不可覆盖方式写一份动作失败诊断。"""
+
+    campaign_id = _safe_id(campaign_id, "campaign_id")
+    phase = _safe_id(phase, "phase", maximum=32)
+    action_id = _safe_id(action_id, "action_id")
+    owner_nonce = _safe_id(owner_nonce, "owner_nonce", maximum=128)
+    if isinstance(owner_pid, bool) or not isinstance(owner_pid, int) or owner_pid <= 0:
+        raise SupervisorError("动作失败诊断 owner_pid 非法。")
+    if failure_kind not in ACTION_DIAGNOSTIC_FAILURE_KINDS:
+        raise SupervisorError("动作失败诊断 failure_kind 非法。")
+    error_type = _safe_id(error_type, "error_type")
+    payload: dict[str, Any] = {
+        "schema_version": ACTION_DIAGNOSTIC_SCHEMA,
+        "campaign_id": campaign_id,
+        "phase": phase,
+        "action_id": action_id,
+        "owner_pid": owner_pid,
+        "owner_nonce": owner_nonce,
+        "failure_kind": failure_kind,
+        "error_type": error_type,
+        "message": _action_diagnostic_message(message),
+        "recorded_at_utc": _utc_now(),
+    }
+    payload["diagnostic_sha256"] = _sha256(_canonical(payload))
+    _write_json(path, payload, replace=False)
+    return payload
+
+
+def write_campaign_run_action_diagnostic(
+    *,
+    failure_kind: str,
+    error: BaseException,
+) -> Path | None:
+    """由 campaign-run 子进程写入动作专属的脱敏失败诊断。
+
+    非 campaign-run 上下文不创建文件。调用方必须忽略这里的写入异常并保留
+    原始失败；父进程会在子命令退出后独立校验或生成固定的兜底诊断。
+    """
+
+    if os.environ.get(CAMPAIGN_RUN_CONTEXT_ENV) != "1":
+        return None
+    client = SupervisorClient.attach_from_environment()
+    if client is None or client.run_dir is None:
+        raise SupervisorError("动作失败诊断无法附加父监督器。")
+    action_id = os.environ.get(CAMPAIGN_RUN_ACTION_ID_ENV)
+    diagnostic_value = os.environ.get(CAMPAIGN_RUN_ACTION_DIAGNOSTIC_ENV)
+    if not action_id or not diagnostic_value:
+        raise SupervisorError("campaign-run 上下文缺少动作失败诊断坐标。")
+    path = _action_diagnostic_path(
+        client.run_dir,
+        action_id,
+        create_directory=False,
+        supplied_path=Path(diagnostic_value),
+    )
+    _write_action_diagnostic(
+        path,
+        campaign_id=client.campaign_id,
+        phase=client.phase,
+        action_id=action_id,
+        owner_pid=client.owner_pid,
+        owner_nonce=client.owner_nonce,
+        failure_kind=failure_kind,
+        error_type=type(error).__name__,
+        message=str(error),
+    )
+    return path
 
 
 def _read_state(run_dir: Path) -> dict[str, Any]:
@@ -3894,20 +4109,86 @@ def _campaign_run_command(args: argparse.Namespace) -> tuple[int, dict[str, Any]
                     CAMPAIGN_RUN_DEADLINE_ENV: str(client.deadline_at_epoch),
                 }
             )
+            diagnostic_dir = _validate_state_dir(
+                client.run_dir / "action-diagnostics",
+                create=True,
+            )
             for action in manifest["actions"]:
-                result = client.run_command(
-                    list(action["command"]),
-                    operation=str(action["operation"]),
-                    timeout_seconds=float(action["timeout_seconds"]),
-                    job_id=str(action["action_id"]),
-                    env=child_environment,
-                    capture_output=False,
+                action_id = str(action["action_id"])
+                diagnostic_path = diagnostic_dir / (
+                    f"action-{action_id}-failure.json"
                 )
+                action_environment = dict(child_environment)
+                action_environment.update(
+                    {
+                        CAMPAIGN_RUN_ACTION_ID_ENV: action_id,
+                        CAMPAIGN_RUN_ACTION_DIAGNOSTIC_ENV: str(diagnostic_path),
+                    }
+                )
+                try:
+                    result = client.run_command(
+                        list(action["command"]),
+                        operation=str(action["operation"]),
+                        timeout_seconds=float(action["timeout_seconds"]),
+                        job_id=action_id,
+                        env=action_environment,
+                        capture_output=False,
+                    )
+                except BaseException as error:
+                    if not diagnostic_path.exists():
+                        _write_action_diagnostic(
+                            diagnostic_path,
+                            campaign_id=str(manifest["campaign_id"]),
+                            phase=str(manifest["phase"]),
+                            action_id=action_id,
+                            owner_pid=client.owner_pid,
+                            owner_nonce=client.owner_nonce,
+                            failure_kind="unexpected-error",
+                            error_type=type(error).__name__,
+                            message="子命令未正常返回。",
+                        )
+                    _validate_action_diagnostic(
+                        diagnostic_path,
+                        run_dir=client.run_dir,
+                        campaign_id=str(manifest["campaign_id"]),
+                        phase=str(manifest["phase"]),
+                        action_id=action_id,
+                        owner_pid=client.owner_pid,
+                        owner_nonce=client.owner_nonce,
+                    )
+                    raise
                 action_result = {
-                    "action_id": str(action["action_id"]),
+                    "action_id": action_id,
                     "returncode": int(result.returncode),
                     "status": "passed" if result.returncode == 0 else "failed",
                 }
+                if result.returncode != 0:
+                    if not diagnostic_path.exists():
+                        _write_action_diagnostic(
+                            diagnostic_path,
+                            campaign_id=str(manifest["campaign_id"]),
+                            phase=str(manifest["phase"]),
+                            action_id=action_id,
+                            owner_pid=client.owner_pid,
+                            owner_nonce=client.owner_nonce,
+                            failure_kind="child-returncode",
+                            error_type="ChildProcessError",
+                            message="子命令以非零状态退出，未提供进一步的脱敏诊断。",
+                        )
+                    diagnostic = _validate_action_diagnostic(
+                        diagnostic_path,
+                        run_dir=client.run_dir,
+                        campaign_id=str(manifest["campaign_id"]),
+                        phase=str(manifest["phase"]),
+                        action_id=action_id,
+                        owner_pid=client.owner_pid,
+                        owner_nonce=client.owner_nonce,
+                    )
+                    action_result["diagnostic"] = {
+                        "schema_version": ACTION_DIAGNOSTIC_SCHEMA,
+                        "path": str(diagnostic_path.relative_to(client.run_dir)),
+                        "sha256": diagnostic["diagnostic_sha256"],
+                    }
                 results.append(action_result)
                 if result.returncode != 0:
                     reason = f"action-failed:{action['action_id']}"

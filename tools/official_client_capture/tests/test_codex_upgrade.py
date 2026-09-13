@@ -5322,6 +5322,166 @@ class CodexUpgradeTest(unittest.TestCase):
             "protected_tables": protected_tables,
         }
 
+    @staticmethod
+    def _attached_campaign_lease(
+        campaign_dir: Path,
+        *,
+        campaign_id: str,
+        deadline_at_epoch: float,
+    ) -> tuple[mock.Mock, codex_upgrade.CampaignLease]:
+        """构造只附加父监督器、不创建嵌套 monitor 的租约夹具。"""
+
+        started_monotonic_ns = codex_upgrade.time.monotonic_ns()
+        remaining_seconds = max(1.0, deadline_at_epoch - codex_upgrade.time.time())
+        attached = mock.Mock()
+        attached.campaign_id = campaign_id
+        attached.phase = "official"
+        attached.owner_pid = 4321
+        attached.owner_nonce = "a" * 64
+        attached.deadline_at_epoch = deadline_at_epoch
+        attached.heartbeat_seconds = 0.05
+        attached.run_dir = campaign_dir / ".supervisor" / "run-parent"
+        attached._started_monotonic_ns = started_monotonic_ns
+        attached._deadline_monotonic_ns = started_monotonic_ns + int(
+            remaining_seconds * 1_000_000_000
+        )
+        lease = codex_upgrade.CampaignLease(
+            campaign_dir,
+            phase="official",
+            candidate_id=None,
+            deadline=codex_upgrade.incremental_recovery.WallClockDeadline(120),
+            command="capture-official",
+            campaign_id=campaign_id,
+        )
+        return attached, lease
+
+    def test_parent_supervisor_deadline_is_bound_into_attempt_reservation(self) -> None:
+        """父监督器绝对 deadline 必须穿过附加租约进入预约收据。"""
+
+        with tempfile.TemporaryDirectory() as temporary:
+            campaign_dir = Path(temporary) / "campaign"
+            campaign_dir.mkdir(mode=0o700)
+            campaign_id = "reservation-parent"
+            manifest = {
+                "campaign_id": campaign_id,
+                "campaign_mode": "formal",
+                "campaign_purpose": "validation_only",
+            }
+            self._write_json(campaign_dir / "campaign.json", manifest)
+            deadline_at_epoch = codex_upgrade.time.time() + 60
+            attached, lease = self._attached_campaign_lease(
+                campaign_dir,
+                campaign_id=campaign_id,
+                deadline_at_epoch=deadline_at_epoch,
+            )
+            job = Job(
+                job_id="official-parent-deadline",
+                phase="official",
+                suites=("full",),
+                description="父监督器 deadline 绑定测试",
+                steps=(),
+                evidence_roots=(str(Path(temporary) / "evidence"),),
+                covers=(),
+            )
+
+            with (
+                mock.patch.object(
+                    codex_upgrade.codex_upgrade_supervisor.SupervisorClient,
+                    "attach_from_environment",
+                    return_value=attached,
+                ),
+                mock.patch.object(
+                    codex_upgrade,
+                    "load_campaign_manifest",
+                    return_value=manifest,
+                ),
+                lease,
+            ):
+                expected_deadline = (
+                    codex_upgrade.codex_upgrade_supervisor._epoch_to_utc(
+                        deadline_at_epoch
+                    )
+                )
+                self.assertEqual(
+                    lease.payload["deadline_at_utc"],
+                    expected_deadline,
+                )
+                _attempt_dir, reservation = codex_upgrade._reserve_capture_attempt(
+                    campaign_dir,
+                    phase="official",
+                    candidate_id=None,
+                    identity={"profile_id": "official-parent"},
+                    jobs=[job],
+                    lease=lease,
+                )
+
+            self.assertEqual(
+                reservation["campaign_lease"]["deadline_at_utc"],
+                expected_deadline,
+            )
+            self.assertEqual(
+                reservation["campaign_lease"]["owner_nonce"],
+                attached.owner_nonce,
+            )
+
+    def test_attempt_reservation_rejects_missing_lease_deadline_before_mutation(self) -> None:
+        """deadline 缺失时安全失败，且不得创建 attempts 目录。"""
+
+        with tempfile.TemporaryDirectory() as temporary:
+            campaign_dir = Path(temporary) / "campaign"
+            campaign_dir.mkdir(mode=0o700)
+            campaign_id = "reservation-missing-deadline"
+            manifest = {
+                "campaign_id": campaign_id,
+                "campaign_mode": "formal",
+                "campaign_purpose": "validation_only",
+            }
+            self._write_json(campaign_dir / "campaign.json", manifest)
+            attached, lease = self._attached_campaign_lease(
+                campaign_dir,
+                campaign_id=campaign_id,
+                deadline_at_epoch=codex_upgrade.time.time() + 60,
+            )
+            job = Job(
+                job_id="official-missing-deadline",
+                phase="official",
+                suites=("full",),
+                description="缺失 deadline 安全失败测试",
+                steps=(),
+                evidence_roots=(str(Path(temporary) / "evidence"),),
+                covers=(),
+            )
+
+            with (
+                mock.patch.object(
+                    codex_upgrade.codex_upgrade_supervisor.SupervisorClient,
+                    "attach_from_environment",
+                    return_value=attached,
+                ),
+                mock.patch.object(
+                    codex_upgrade,
+                    "load_campaign_manifest",
+                    return_value=manifest,
+                ),
+                lease,
+            ):
+                self.assertIsNotNone(lease._payload)
+                lease._payload.pop("deadline_at_utc")  # type: ignore[union-attr]
+                with self.assertRaisesRegex(
+                    codex_upgrade.ConfigurationError,
+                    "deadline_at_utc",
+                ):
+                    codex_upgrade._reserve_capture_attempt(
+                        campaign_dir,
+                        phase="official",
+                        candidate_id=None,
+                        identity={"profile_id": "official-parent"},
+                        jobs=[job],
+                        lease=lease,
+                    )
+
+            self.assertFalse((campaign_dir / "official" / "attempts").exists())
+
     def test_attempt_reservation_is_created_below_phase_root(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             campaign_dir = Path(temporary) / "campaign"

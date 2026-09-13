@@ -325,8 +325,96 @@ class SupervisorTests(unittest.TestCase):
             payload = json.loads(result.stdout)
             self.assertEqual(payload["status"], "failed")
             self.assertEqual([item["action_id"] for item in payload["actions"]], ["failed"])
-            report = _audit_command(Path(str(payload["run_dir"])))
+            run_dir = Path(str(payload["run_dir"]))
+            diagnostic_binding = payload["actions"][0]["diagnostic"]
+            diagnostic_path = run_dir / diagnostic_binding["path"]
+            self.assertEqual(diagnostic_path.stat().st_mode & 0o777, 0o600)
+            diagnostic = json.loads(diagnostic_path.read_text(encoding="utf-8"))
+            self.assertEqual(diagnostic["failure_kind"], "child-returncode")
+            self.assertEqual(
+                diagnostic_binding["sha256"],
+                diagnostic["diagnostic_sha256"],
+            )
+            report = _audit_command(run_dir)
             self.assertFalse(report["audit_incomplete"])
+
+    def test_campaign_run_child_failure_diagnostic_is_bounded_and_redacted(self) -> None:
+        """子进程可留下原因类型，但 argv、环境和原始输出不得持久化。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            child = (
+                "import sys; "
+                "from tools.official_client_capture import codex_upgrade_supervisor as s; "
+                "error=RuntimeError('argv=hidden-argument environment=hidden-variable "
+                "stdout=hidden-output token=hidden-token'); "
+                "s.write_campaign_run_action_diagnostic("
+                "failure_kind='unexpected-error', error=error); sys.exit(7)"
+            )
+            result = self._campaign_run(
+                root,
+                actions=[
+                    {
+                        "action_id": "redacted",
+                        "operation": "queue-redacted",
+                        "timeout_seconds": 2,
+                        "command": [sys.executable, "-c", child],
+                    }
+                ],
+            )
+            self.assertNotEqual(result.returncode, 0)
+            payload = json.loads(result.stdout)
+            run_dir = Path(str(payload["run_dir"]))
+            binding = payload["actions"][0]["diagnostic"]
+            diagnostic_path = run_dir / binding["path"]
+            raw_diagnostic = diagnostic_path.read_text(encoding="utf-8")
+            diagnostic = json.loads(raw_diagnostic)
+            self.assertEqual(diagnostic["failure_kind"], "unexpected-error")
+            self.assertEqual(diagnostic["error_type"], "RuntimeError")
+            self.assertEqual(diagnostic["message"], "错误详情已按脱敏规则省略。")
+            self.assertLessEqual(len(diagnostic["message"]), 512)
+            for hidden in (
+                "hidden-argument",
+                "hidden-variable",
+                "hidden-output",
+                "hidden-token",
+            ):
+                self.assertNotIn(hidden, raw_diagnostic)
+            self.assertEqual(diagnostic_path.stat().st_mode & 0o777, 0o600)
+
+    def test_campaign_run_records_codex_upgrade_handled_failure(self) -> None:
+        """真实编排器的已知异常路径必须产出由父进程验证的诊断绑定。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            upgrade_script = Path(__file__).parents[1] / "codex_upgrade.py"
+            result = self._campaign_run(
+                root,
+                actions=[
+                    {
+                        "action_id": "handled",
+                        "operation": "queue-handled",
+                        "timeout_seconds": 2,
+                        "command": [
+                            sys.executable,
+                            str(upgrade_script),
+                            "status",
+                            "--campaign-dir",
+                            str(root / "missing-campaign"),
+                        ],
+                    }
+                ],
+            )
+            self.assertNotEqual(result.returncode, 0)
+            payload = json.loads(result.stdout)
+            run_dir = Path(str(payload["run_dir"]))
+            binding = payload["actions"][0]["diagnostic"]
+            diagnostic = json.loads(
+                (run_dir / binding["path"]).read_text(encoding="utf-8")
+            )
+            self.assertEqual(diagnostic["failure_kind"], "handled-error")
+            self.assertEqual(diagnostic["error_type"], "ConfigurationError")
+            self.assertEqual(binding["sha256"], diagnostic["diagnostic_sha256"])
 
     def test_campaign_run_empty_queue_is_immediate_noop(self) -> None:
         """空执行集合必须立即写 no-op 并结束，不启动任何动作。"""

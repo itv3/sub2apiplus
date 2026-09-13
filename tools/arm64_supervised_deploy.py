@@ -48,11 +48,13 @@ from typing import Any, Callable, Mapping
 # 交付和对应失败关闭；受管工具树与监督器摘要随之更新。
 # 2026-09-13（BWG 出口切换）：将新 P0 的固定公网出口从 DMIT 切换到 BWG，
 # 历史 DMIT 收据仍由环境 producer 的兼容分支只读重放。
+# 2026-09-13（VC-1 父租约修复）：父监督器 deadline 进入 attempt reservation，
+# campaign-run 新增不可覆盖的脱敏动作失败诊断；受管工具树与监督器摘要随之更新。
 DEFAULT_TOOL_DIGEST = (
-    "ce3fa435a8d1c8c487623b6a80b3a4fcb29489e482ee4e81282fe23a8ba2b680"
+    "3e756b7a77765b72f4cf5cf4ea3afcebc1c4c75408b5a84aaa93a0ba1facbb72"
 )
 DEFAULT_SUPERVISOR_DIGEST = (
-    "4434f47747bf4612f8fa57918529d0ed3dc64f686b504b4478905fceb75f11bd"
+    "6ed44c1827727c854783f668e45226316698964c5a42b24746641d4f79eb17d1"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "b9ca7b6f48b3c33a63a864a9ce7ebd617335378ea52fe9148ea161ab3b276ada"
