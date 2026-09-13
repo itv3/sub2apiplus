@@ -191,6 +191,12 @@ CODEX_0154_BWG_TLS_GLOBAL_FAILFAST_FREEZE_SUCCESSOR = (
     ROOT
     / "docs/egress/maintenance/upstream-codex-0154-bwg-tls-global-failfast-20260913-freeze-successor.json"
 )
+# 2026-09-14：环境 producer v6 补齐回程 SYN-ACK MSS、无凭据 Codex Rust TLS
+# 探针与复用 deadline 的 attempt phase；历史 v5 收据只读重放。
+CODEX_0154_BWG_MSS_RUST_TLS_REPAIR_FREEZE_SUCCESSOR = (
+    ROOT
+    / "docs/egress/maintenance/upstream-codex-0154-bwg-mss-rust-tls-repair-20260914-freeze-successor.json"
+)
 HISTORICAL_LEDGER = "docs/egress/maintenance/historical-source-drift-successor.json"
 SHA256_LENGTH = 64
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -295,6 +301,7 @@ def successor_edges(path: str) -> list[tuple[str, str]]:
         CODEX_0154_JOB_REHEARSAL_ENTRYPOINT_CLOSURE_FREEZE_SUCCESSOR,
         CODEX_0154_CAMPAIGN_INPUT_BYTE_FREEZE_SUCCESSOR,
         CODEX_0154_BWG_TLS_GLOBAL_FAILFAST_FREEZE_SUCCESSOR,
+        CODEX_0154_BWG_MSS_RUST_TLS_REPAIR_FREEZE_SUCCESSOR,
     ):
         payload = json.loads(receipt_path.read_text(encoding="utf-8"))
         _validate_successor_receipt(payload)
