@@ -52,8 +52,10 @@ from typing import Any, Callable, Mapping
 # campaign-run 新增不可覆盖的脱敏动作失败诊断；受管工具树与监督器摘要随之更新。
 # 2026-09-13（运行根可写性修复）：P0 对四个精确可写子挂载执行真实跨别名
 # 创建、读取、inode 比对与清理探针，并约束冻结 Job 的证据根；受管工具树摘要随之更新。
+# 2026-09-13（失败证据归档路由修复）：宿主编排器把两条容器 runs 别名映射到
+# 唯一宿主子树后再归档；P0 新增创建、宿主归档、跨别名读取和清理闭环。
 DEFAULT_TOOL_DIGEST = (
-    "2f3b9cc7a1a7b7fa3ee052a71845e698106fd5c646d4754dfb7e9fdff3e131ea"
+    "b1486eda53e49625f31ed0b19c888c7849bb0a853e681d36fbe9db1547c1e3c8"
 )
 DEFAULT_SUPERVISOR_DIGEST = (
     "6ed44c1827727c854783f668e45226316698964c5a42b24746641d4f79eb17d1"

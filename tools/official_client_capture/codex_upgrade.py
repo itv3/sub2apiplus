@@ -3355,6 +3355,16 @@ def run_job(
 # 那两处只作用于候选矩阵，不波及官方链路。
 JOB_RETRY_LIMIT = 2
 JOB_RETRY_DELAY_SECONDS = 30
+# 正式 Job 在容器内可通过两条历史别名访问同一 runs 子树，但编排器本身运行
+# 在宿主机。失败证据归档必须先把容器别名转换为唯一登记的宿主路径，不能把
+# `/root/oauth-capture` 这类容器路径直接交给宿主 rename。
+FAILED_JOB_EVIDENCE_CONTAINER_RUN_ROOTS = (
+    PurePosixPath("/capture/runs"),
+    PurePosixPath("/root/oauth-capture/runs"),
+)
+FAILED_JOB_EVIDENCE_HOST_RUN_ROOT = Path(
+    "/root/docker/capture-cli/data/runs"
+)
 DEFAULT_ATTEMPT_WALL_SECONDS = 90 * 60
 MAX_ATTEMPT_WALL_SECONDS = 6 * 60 * 60
 # 审计规范固定为 5 秒 owner 心跳；独立监督器在 20 秒内判定失联。
@@ -6382,6 +6392,32 @@ def _validate_incremental_noop_receipt(
         raise ConfigurationError("incremental-noop 收据摘要不一致。")
 
 
+def _failed_job_evidence_host_route(value: Any) -> tuple[Path, PurePosixPath]:
+    """把登记的容器 runs 路径转换为宿主物理路径。"""
+
+    if not isinstance(value, str) or not value or "\\" in value:
+        raise ConfigurationError("失败任务证据根不是规范 POSIX 绝对路径。")
+    logical = PurePosixPath(value)
+    if (
+        not logical.is_absolute()
+        or str(logical) != value
+        or any(part in {"", ".", ".."} for part in logical.parts[1:])
+    ):
+        raise ConfigurationError("失败任务证据根不是规范 POSIX 绝对路径。")
+    for alias in FAILED_JOB_EVIDENCE_CONTAINER_RUN_ROOTS:
+        try:
+            relative = logical.relative_to(alias)
+        except ValueError:
+            continue
+        if not relative.parts:
+            raise ConfigurationError("失败任务证据根不能等于登记 runs 根。")
+        return (
+            FAILED_JOB_EVIDENCE_HOST_RUN_ROOT.joinpath(*relative.parts),
+            relative,
+        )
+    raise ConfigurationError("失败任务证据根未落在登记的容器 runs 别名内。")
+
+
 def _archive_failed_job_evidence(result: dict[str, Any], attempt_index: int) -> None:
     """把失败证据整体归档，并同步重定位收据里的路径。
 
@@ -6392,24 +6428,83 @@ def _archive_failed_job_evidence(result: dict[str, Any], attempt_index: int) -> 
     """
 
     replacements: dict[str, str] = {}
+    raw_roots = result.get("evidence_roots") or []
+    if not isinstance(raw_roots, list):
+        raise ConfigurationError("失败任务 evidence_roots 必须是数组。")
+    if not raw_roots:
+        return
 
-    for value in list(result.get("evidence_roots") or []):
-        root = Path(value)
-        if not root.exists() or root.is_symlink():
+    host_root = FAILED_JOB_EVIDENCE_HOST_RUN_ROOT
+    if (
+        not host_root.is_absolute()
+        or host_root.is_symlink()
+        or not host_root.is_dir()
+    ):
+        raise ConfigurationError("失败任务证据宿主 runs 根不存在或不可信。")
+
+    planned: list[tuple[Path, Path, PurePosixPath, PurePosixPath]] = []
+    seen_sources: set[Path] = set()
+    for value in raw_roots:
+        source, relative = _failed_job_evidence_host_route(value)
+        _reject_symlink_components(source, host_root, "失败任务证据根")
+        if not source.exists():
+            # Job 可能在创建运行目录前失败；此时没有旧证据需要归档，但路径
+            # 身份仍必须先通过登记根校验，不能借“缺失”绕过路由门禁。
             continue
-        archived = root.with_name(f"{root.name}.failed-attempt{attempt_index}")
+        if source.is_symlink() or not source.is_dir():
+            raise ConfigurationError("失败任务证据根不是可信目录。")
+        if source in seen_sources:
+            raise ConfigurationError("失败任务证据根重复映射到同一宿主目录。")
+        for existing in seen_sources:
+            if source.is_relative_to(existing) or existing.is_relative_to(source):
+                raise ConfigurationError("失败任务证据根存在嵌套宿主目录。")
+        seen_sources.add(source)
+
+        archive_name = f"{source.name}.failed-attempt{attempt_index}"
+        archived = source.with_name(archive_name)
         suffix = 1
-        while archived.exists():
+        while archived.exists() or archived.is_symlink():
             suffix += 1
-            archived = root.with_name(
-                f"{root.name}.failed-attempt{attempt_index}-{suffix}"
+            archive_name = f"{source.name}.failed-attempt{attempt_index}-{suffix}"
+            archived = source.with_name(archive_name)
+        _reject_symlink_components(archived, host_root, "失败任务归档目标")
+        archived_relative = relative.with_name(archive_name)
+        planned.append((source, archived, relative, archived_relative))
+
+    moved: list[tuple[Path, Path]] = []
+    try:
+        for source, archived, _relative, _archived_relative in planned:
+            source.rename(archived)
+            moved.append((source, archived))
+    except OSError as error:
+        rollback_complete = True
+        for source, archived in reversed(moved):
+            try:
+                archived.rename(source)
+            except OSError:
+                rollback_complete = False
+        error_number = error.errno if isinstance(error.errno, int) else "none"
+        error_name = (
+            errno.errorcode.get(error.errno, "UNKNOWN")
+            if isinstance(error.errno, int)
+            else "UNKNOWN"
+        )
+        # 诊断只保留异常类型、errno 与回滚状态，不把宿主路径或任务原始
+        # 输出写入父监督器的持久收据。
+        raise ConfigurationError(
+            "失败任务证据归档失败："
+            f"error_type={type(error).__name__} "
+            f"errno={error_number}({error_name}) "
+            f"rollback_complete={str(rollback_complete).lower()}"
+        ) from error
+
+    for _source, _archived, relative, archived_relative in planned:
+        # 同一物理目录可能被收据中的任一容器别名引用；两条逻辑路径都要
+        # 重定位，并保持各自原有别名不变。
+        for alias in FAILED_JOB_EVIDENCE_CONTAINER_RUN_ROOTS:
+            replacements[str(alias.joinpath(*relative.parts))] = str(
+                alias.joinpath(*archived_relative.parts)
             )
-        try:
-            root.rename(archived)
-        except OSError:
-            # 归档失败不能吞掉：证据残留会让补跑在旧样本上得出结论。
-            raise ConfigurationError(f"无法归档失败任务的证据目录：{root}")
-        replacements[str(root)] = str(archived)
 
     if not replacements:
         return

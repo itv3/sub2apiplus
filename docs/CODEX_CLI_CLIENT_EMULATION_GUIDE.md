@@ -1485,7 +1485,8 @@ python3 -m tools.official_client_capture.codex_upgrade_job_rehearsal_receipt rep
 ```
 
 `collect` 检查路径、依赖、语法、二进制、bubblewrap 和 zstd，并在 `runs／runtime` 内创建唯一临时对象，
-从两个容器别名交叉验证写入和同源映射后立即有界清理；它不执行 Job、不发送请求。任一 Job
+从两个容器别名交叉验证写入和同源映射；另在 `runs` 内执行一次“容器别名创建 → 登记宿主路径归档 →
+两条容器别名读取归档 → 有界清理”的失败证据路由探针。它不执行 Job、不发送请求。任一 Job
 失败都必须先能形成失败收据并独立重放；失败、缺项、环境漂移或目标场景／工具摘要不一致时禁止创建
 Formal Campaign。Formal `plan` 必须绑定上述 rehearsal receipt，并再次独立重放。
 

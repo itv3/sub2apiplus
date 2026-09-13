@@ -242,6 +242,18 @@ def create_job_rehearsal_receipt(
                 "cleanup_verified": True,
             }
         )
+    archive_source_name = "codex-archive-route-fixture"
+    archive_name = (
+        archive_source_name + rehearsal.FAILED_EVIDENCE_ARCHIVE_SUFFIX
+    )
+    archive_container_sources = [
+        f"{alias}/runs/{archive_source_name}" for alias in aliases
+    ]
+    archive_container_archives = [
+        f"{alias}/runs/{archive_name}" for alias in aliases
+    ]
+    archive_host_source = f"{host_data_root}/runs/{archive_source_name}"
+    archive_host_archive = f"{host_data_root}/runs/{archive_name}"
     storage_probe = {
         "status": "passed",
         "capture_container": configuration["capture_container"],
@@ -264,6 +276,22 @@ def create_job_rehearsal_receipt(
             for alias in aliases
         ],
         "writable_namespaces": writable_namespaces,
+        "archive_route": {
+            "status": "passed",
+            "namespace": "runs",
+            "source_name": archive_source_name,
+            "archive_name": archive_name,
+            "host_source": archive_host_source,
+            "host_archive": archive_host_archive,
+            "container_sources": archive_container_sources,
+            "container_archives": archive_container_archives,
+            "created_via": archive_container_sources[0],
+            "archived_via": archive_host_archive,
+            "read_via": archive_container_archives,
+            "device": 100,
+            "inode": 201,
+            "cleanup_verified": True,
+        },
         "job_count": len(job_roots),
         "evidence_root_count": len(job_roots),
         "job_roots_sha256": rehearsal._fingerprint(job_roots),

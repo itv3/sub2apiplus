@@ -416,6 +416,47 @@ class SupervisorTests(unittest.TestCase):
             self.assertEqual(diagnostic["error_type"], "ConfigurationError")
             self.assertEqual(binding["sha256"], diagnostic["diagnostic_sha256"])
 
+    def test_archive_failure_diagnostic_preserves_redacted_errno(self) -> None:
+        """归档失败的异常类型与 errno 必须穿过父监督器持久化。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            message = (
+                "失败任务证据归档失败：error_type=OSError "
+                "errno=30(EROFS) rollback_complete=true"
+            )
+            child = (
+                "import sys; "
+                "from tools.official_client_capture.capturelib.model "
+                "import ConfigurationError; "
+                "from tools.official_client_capture "
+                "import codex_upgrade_supervisor as s; "
+                f"error=ConfigurationError({message!r}); "
+                "s.write_campaign_run_action_diagnostic("
+                "failure_kind='handled-error',error=error); sys.exit(1)"
+            )
+            result = self._campaign_run(
+                root,
+                actions=[
+                    {
+                        "action_id": "archive-failure",
+                        "operation": "queue-archive-failure",
+                        "timeout_seconds": 2,
+                        "command": [sys.executable, "-c", child],
+                    }
+                ],
+            )
+            self.assertNotEqual(result.returncode, 0)
+            payload = json.loads(result.stdout)
+            run_dir = Path(str(payload["run_dir"]))
+            binding = payload["actions"][0]["diagnostic"]
+            diagnostic = json.loads(
+                (run_dir / binding["path"]).read_text(encoding="utf-8")
+            )
+            self.assertEqual(diagnostic["error_type"], "ConfigurationError")
+            self.assertEqual(diagnostic["message"], message)
+            self.assertEqual(binding["sha256"], diagnostic["diagnostic_sha256"])
+
     def test_campaign_run_empty_queue_is_immediate_noop(self) -> None:
         """空执行集合必须立即写 no-op 并结束，不启动任何动作。"""
 

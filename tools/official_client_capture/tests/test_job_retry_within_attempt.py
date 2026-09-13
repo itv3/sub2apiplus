@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import errno
 import sys
 import tempfile
 import unittest
@@ -81,34 +82,155 @@ class JobRetryWithinAttemptTest(unittest.TestCase):
         self.assertEqual(calls, [1])
 
     def test_补跑前归档失败证据(self) -> None:
-        """不归档就补跑，新结论会落在混有旧样本的目录上。"""
+        """宿主归档后，两条容器别名都必须同步重定位。"""
 
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary) / "run-dir"
+            host_runs = Path(temporary) / "data" / "runs"
+            host_runs.mkdir(parents=True)
+            root = host_runs / "run-dir"
             root.mkdir()
             (root / "traffic.pcap").write_bytes(b"stale")
             result = {
-                "evidence_roots": [str(root)],
+                "evidence_roots": ["/root/oauth-capture/runs/run-dir"],
                 "scenario_receipts": [
-                    {"path": str(root / "scenario-receipt.json")}
+                    {
+                        "path": (
+                            "/capture/runs/run-dir/scenario-receipt.json"
+                        )
+                    }
                 ],
             }
-            cu._archive_failed_job_evidence(result, attempt_index=1)
+            with mock.patch.object(
+                cu,
+                "FAILED_JOB_EVIDENCE_HOST_RUN_ROOT",
+                host_runs,
+            ):
+                cu._archive_failed_job_evidence(result, attempt_index=1)
             self.assertFalse(root.exists())
             archived = root.with_name(f"{root.name}.failed-attempt1")
             self.assertTrue(archived.is_dir())
             self.assertEqual((archived / "traffic.pcap").read_bytes(), b"stale")
-            self.assertEqual(result["evidence_roots"], [str(archived)])
+            self.assertEqual(
+                result["evidence_roots"],
+                ["/root/oauth-capture/runs/run-dir.failed-attempt1"],
+            )
             self.assertEqual(
                 result["scenario_receipts"][0]["path"],
-                str(archived / "scenario-receipt.json"),
+                "/capture/runs/run-dir.failed-attempt1/scenario-receipt.json",
             )
+
+    def test_归档支持_capture_别名并保留_oauth_收据别名(self) -> None:
+        """任一登记别名发起归档时，另一别名下的引用也必须可重放。"""
+
+        with tempfile.TemporaryDirectory() as temporary:
+            host_runs = Path(temporary) / "runs"
+            host_runs.mkdir()
+            source = host_runs / "capture-alias"
+            source.mkdir()
+            result = {
+                "evidence_roots": ["/capture/runs/capture-alias"],
+                "nested": {
+                    "path": (
+                        "/root/oauth-capture/runs/capture-alias/receipt.json"
+                    )
+                },
+            }
+            with mock.patch.object(
+                cu,
+                "FAILED_JOB_EVIDENCE_HOST_RUN_ROOT",
+                host_runs,
+            ):
+                cu._archive_failed_job_evidence(result, attempt_index=2)
+
+            self.assertTrue((host_runs / "capture-alias.failed-attempt2").is_dir())
+            self.assertEqual(
+                result["evidence_roots"],
+                ["/capture/runs/capture-alias.failed-attempt2"],
+            )
+            self.assertEqual(
+                result["nested"]["path"],
+                (
+                    "/root/oauth-capture/runs/"
+                    "capture-alias.failed-attempt2/receipt.json"
+                ),
+            )
+
+    def test_归档拒绝未登记根与父目录跳转(self) -> None:
+        """缺失路径也不能借未登记别名或父目录跳转绕过路由门禁。"""
+
+        with tempfile.TemporaryDirectory() as temporary:
+            host_runs = Path(temporary) / "runs"
+            host_runs.mkdir()
+            with mock.patch.object(
+                cu,
+                "FAILED_JOB_EVIDENCE_HOST_RUN_ROOT",
+                host_runs,
+            ):
+                for root in (
+                    "/tmp/unregistered",
+                    "/capture/runs/../escaped",
+                    "/root/oauth-capture/runs",
+                ):
+                    with self.subTest(root=root), self.assertRaises(
+                        cu.ConfigurationError
+                    ):
+                        cu._archive_failed_job_evidence(
+                            {"evidence_roots": [root]},
+                            attempt_index=1,
+                        )
+
+    def test_归档拒绝宿主符号链接(self) -> None:
+        """容器逻辑路径不得经宿主 runs 子树中的符号链接逃逸。"""
+
+        with tempfile.TemporaryDirectory() as temporary:
+            host_runs = Path(temporary) / "runs"
+            host_runs.mkdir()
+            outside = Path(temporary) / "outside"
+            outside.mkdir()
+            (host_runs / "linked").symlink_to(outside, target_is_directory=True)
+            with mock.patch.object(
+                cu,
+                "FAILED_JOB_EVIDENCE_HOST_RUN_ROOT",
+                host_runs,
+            ), self.assertRaisesRegex(cu.ConfigurationError, "符号链接"):
+                cu._archive_failed_job_evidence(
+                    {"evidence_roots": ["/capture/runs/linked"]},
+                    attempt_index=1,
+                )
+            self.assertTrue(outside.is_dir())
+
+    def test_归档失败诊断保留异常类型与_errno(self) -> None:
+        """父监督器应能区分只读文件系统，而不是只看到泛化失败。"""
+
+        with tempfile.TemporaryDirectory() as temporary:
+            host_runs = Path(temporary) / "runs"
+            host_runs.mkdir()
+            (host_runs / "readonly").mkdir()
+            failure = OSError(errno.EROFS, "read-only file system")
+            with mock.patch.object(
+                cu,
+                "FAILED_JOB_EVIDENCE_HOST_RUN_ROOT",
+                host_runs,
+            ), mock.patch.object(Path, "rename", side_effect=failure):
+                with self.assertRaises(cu.ConfigurationError) as caught:
+                    cu._archive_failed_job_evidence(
+                        {"evidence_roots": ["/capture/runs/readonly"]},
+                        attempt_index=1,
+                    )
+            message = str(caught.exception)
+            self.assertIn("error_type=OSError", message)
+            self.assertIn(f"errno={errno.EROFS}(EROFS)", message)
+            self.assertIn("rollback_complete=true", message)
+            self.assertNotIn(str(host_runs), message)
 
     def test_最终失败也归档证据供跨_attempt_重跑(self) -> None:
         """用尽内部重试后必须清出固定路径，显式 resume 才能重新创建它。"""
 
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary) / "run-dir"
+            host_runs = Path(temporary) / "runs"
+            host_runs.mkdir()
+            root = host_runs / "run-dir"
+            logical_root = "/root/oauth-capture/runs/run-dir"
             calls: list[int] = []
 
             def always_fail(job, log_root, attempt_index=1, scenario_context=None):
@@ -121,18 +243,26 @@ class JobRetryWithinAttemptTest(unittest.TestCase):
                 return {
                     "id": job.job_id,
                     "status": "failed",
-                    "evidence_roots": [str(root)],
+                    "evidence_roots": [logical_root],
                 }
 
             with mock.patch.object(cu, "run_job", side_effect=always_fail), \
-                 mock.patch.object(cu.time, "sleep"):
+                 mock.patch.object(cu.time, "sleep"), \
+                 mock.patch.object(
+                     cu,
+                     "FAILED_JOB_EVIDENCE_HOST_RUN_ROOT",
+                     host_runs,
+                 ):
                 result = cu._run_job_with_retry(_Job(), Path(temporary))
 
             final_archive = root.with_name(f"{root.name}.failed-attempt3")
             self.assertEqual(calls, [1, 2, 3])
             self.assertFalse(root.exists())
             self.assertTrue(final_archive.is_dir())
-            self.assertEqual(result["evidence_roots"], [str(final_archive)])
+            self.assertEqual(
+                result["evidence_roots"],
+                [f"{logical_root}.failed-attempt3"],
+            )
             self.assertEqual(
                 (final_archive / "traffic.pcap").read_bytes(), b"attempt-3"
             )

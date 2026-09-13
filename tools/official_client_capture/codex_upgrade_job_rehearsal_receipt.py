@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import json
 import math
@@ -57,6 +58,7 @@ EXPECTED_HOST_DATA_ROOT = PurePosixPath("/root/docker/capture-cli/data")
 EXPECTED_CAPTURE_CONTAINER_ROOT = PurePosixPath("/root/oauth-capture")
 CAPTURE_CONTAINER_ALIAS = PurePosixPath("/capture")
 WRITABLE_CAPTURE_NAMESPACES = ("runs", "runtime")
+FAILED_EVIDENCE_ARCHIVE_SUFFIX = ".failed-attempt1"
 
 # 完整演练包含大量 docker／脚本语法探针；所有层级都从这里读取同一条
 # deadline，避免固定 timeout 的命令串联后突破 attempt 预算。
@@ -1176,6 +1178,223 @@ def _absolute_posix_path(value: Any, label: str) -> PurePosixPath:
     return parsed
 
 
+def _capture_archive_route_probe(
+    container: str,
+    aliases: list[PurePosixPath],
+    host_runs_root: Path,
+) -> dict[str, Any]:
+    """实测容器创建、宿主归档、跨别名读取与清理闭环。"""
+
+    source_name = f"codex-archive-route-{secrets.token_hex(12)}"
+    archive_name = source_name + FAILED_EVIDENCE_ARCHIVE_SUFFIX
+    marker_name = "archive-route-marker"
+    marker_payload = b"codex-archive-route-probe"
+    container_sources = [str(alias / "runs" / source_name) for alias in aliases]
+    container_archives = [str(alias / "runs" / archive_name) for alias in aliases]
+    host_source = host_runs_root / source_name
+    host_archive = host_runs_root / archive_name
+    if any(
+        path.exists() or path.is_symlink()
+        for path in (host_source, host_archive)
+    ):
+        raise JobRehearsalReceiptError("失败证据归档探针路径发生碰撞")
+
+    create_script = r'''
+import json,os,pathlib,stat,sys
+sources=[pathlib.Path(item) for item in json.loads(sys.argv[1])]
+marker_name=sys.argv[2]
+payload=bytes.fromhex(sys.argv[3])
+if any(path.exists() or path.is_symlink() for path in sources):
+    raise SystemExit("archive-source-exists")
+os.mkdir(sources[0],0o700)
+flags=os.O_WRONLY|os.O_CREAT|os.O_EXCL|getattr(os,"O_NOFOLLOW",0)
+descriptor=os.open(sources[0]/marker_name,flags,0o600)
+with os.fdopen(descriptor,"wb") as stream:
+    stream.write(payload)
+    stream.flush()
+    os.fsync(stream.fileno())
+metadata=[path.stat() for path in sources]
+if len({(item.st_dev,item.st_ino) for item in metadata})!=1:
+    raise SystemExit("archive-source-alias-mismatch")
+if any((path/marker_name).read_bytes()!=payload for path in sources):
+    raise SystemExit("archive-source-cross-alias-read-failed")
+print(json.dumps({
+    "status":"created",
+    "sources":[str(path) for path in sources],
+    "created_via":str(sources[0]),
+    "device":metadata[0].st_dev,
+    "inode":metadata[0].st_ino,
+},sort_keys=True))
+'''
+    verify_script = r'''
+import json,pathlib,sys
+sources=[pathlib.Path(item) for item in json.loads(sys.argv[1])]
+archives=[pathlib.Path(item) for item in json.loads(sys.argv[2])]
+marker_name=sys.argv[3]
+payload=bytes.fromhex(sys.argv[4])
+if any(path.exists() or path.is_symlink() for path in sources):
+    raise SystemExit("archive-source-still-visible")
+if any(not path.is_dir() or path.is_symlink() for path in archives):
+    raise SystemExit("archive-target-missing")
+metadata=[path.stat() for path in archives]
+if len({(item.st_dev,item.st_ino) for item in metadata})!=1:
+    raise SystemExit("archive-target-alias-mismatch")
+if any((path/marker_name).read_bytes()!=payload for path in archives):
+    raise SystemExit("archive-target-cross-alias-read-failed")
+(archives[0]/marker_name).unlink()
+archives[0].rmdir()
+if any(path.exists() or path.is_symlink() for path in sources+archives):
+    raise SystemExit("archive-route-cleanup-failed")
+print(json.dumps({
+    "status":"passed",
+    "read_via":[str(path) for path in archives],
+    "device":metadata[0].st_dev,
+    "inode":metadata[0].st_ino,
+    "cleanup_verified":True,
+},sort_keys=True))
+'''
+
+    cleanup_error: OSError | None = None
+    try:
+        created_raw = _run(
+            [
+                "docker",
+                "exec",
+                container,
+                "python3",
+                "-c",
+                create_script,
+                json.dumps(container_sources),
+                marker_name,
+                marker_payload.hex(),
+            ],
+            "capture-cli 失败证据归档创建探针",
+            timeout=30,
+        )
+        try:
+            created = json.loads(created_raw)
+        except json.JSONDecodeError as error:
+            raise JobRehearsalReceiptError(
+                "失败证据归档创建探针输出非法"
+            ) from error
+        if (
+            not isinstance(created, Mapping)
+            or created.get("status") != "created"
+            or created.get("sources") != container_sources
+            or created.get("created_via") != container_sources[0]
+            or not isinstance(created.get("device"), int)
+            or isinstance(created.get("device"), bool)
+            or created["device"] < 0
+            or not isinstance(created.get("inode"), int)
+            or isinstance(created.get("inode"), bool)
+            or created["inode"] <= 0
+        ):
+            raise JobRehearsalReceiptError("失败证据归档创建事实不完整")
+        if host_source.is_symlink() or not host_source.is_dir():
+            raise JobRehearsalReceiptError("失败证据宿主映射不存在或不可信")
+        source_metadata = host_source.stat()
+        if (
+            source_metadata.st_dev != created["device"]
+            or source_metadata.st_ino != created["inode"]
+            or source_metadata.st_dev != host_runs_root.stat().st_dev
+        ):
+            raise JobRehearsalReceiptError("失败证据容器与宿主映射不同源")
+        try:
+            host_source.rename(host_archive)
+        except OSError as error:
+            error_number = error.errno if isinstance(error.errno, int) else "none"
+            error_name = (
+                errno.errorcode.get(error.errno, "UNKNOWN")
+                if isinstance(error.errno, int)
+                else "UNKNOWN"
+            )
+            raise JobRehearsalReceiptError(
+                "失败证据宿主归档失败："
+                f"error_type={type(error).__name__} "
+                f"errno={error_number}({error_name})"
+            ) from error
+        if host_archive.is_symlink() or not host_archive.is_dir():
+            raise JobRehearsalReceiptError("失败证据宿主归档目标不可信")
+        archive_metadata = host_archive.stat()
+        if (
+            archive_metadata.st_dev != created["device"]
+            or archive_metadata.st_ino != created["inode"]
+        ):
+            raise JobRehearsalReceiptError("失败证据宿主归档后 inode 漂移")
+
+        verified_raw = _run(
+            [
+                "docker",
+                "exec",
+                container,
+                "python3",
+                "-c",
+                verify_script,
+                json.dumps(container_sources),
+                json.dumps(container_archives),
+                marker_name,
+                marker_payload.hex(),
+            ],
+            "capture-cli 失败证据归档跨别名读取清理探针",
+            timeout=30,
+        )
+        try:
+            verified = json.loads(verified_raw)
+        except json.JSONDecodeError as error:
+            raise JobRehearsalReceiptError(
+                "失败证据归档读取探针输出非法"
+            ) from error
+        if (
+            not isinstance(verified, Mapping)
+            or verified.get("status") != "passed"
+            or verified.get("read_via") != container_archives
+            or verified.get("device") != created["device"]
+            or verified.get("inode") != created["inode"]
+            or verified.get("cleanup_verified") is not True
+            or any(
+                path.exists() or path.is_symlink()
+                for path in (host_source, host_archive)
+            )
+        ):
+            raise JobRehearsalReceiptError("失败证据归档读取清理事实不完整")
+        return {
+            "status": "passed",
+            "namespace": "runs",
+            "source_name": source_name,
+            "archive_name": archive_name,
+            "host_source": str(host_source),
+            "host_archive": str(host_archive),
+            "container_sources": container_sources,
+            "container_archives": container_archives,
+            "created_via": container_sources[0],
+            "archived_via": str(host_archive),
+            "read_via": container_archives,
+            "device": created["device"],
+            "inode": created["inode"],
+            "cleanup_verified": True,
+        }
+    finally:
+        # 探针无论在哪一步失败都只清理本轮随机目录；不递归处理 runs 根，
+        # 也不触碰任何正式证据。
+        for path in (host_source, host_archive):
+            try:
+                if path.is_symlink():
+                    path.unlink()
+                    continue
+                marker = path / marker_name
+                if marker.is_symlink() or marker.is_file():
+                    marker.unlink()
+                if path.is_dir():
+                    path.rmdir()
+            except OSError as error:
+                cleanup_error = error
+        if cleanup_error is not None or any(
+            path.exists() or path.is_symlink()
+            for path in (host_source, host_archive)
+        ):
+            raise JobRehearsalReceiptError("失败证据归档探针清理失败") from cleanup_error
+
+
 def _capture_storage_probe(
     jobs: Iterable[Any],
     configuration: Mapping[str, Any],
@@ -1478,6 +1697,12 @@ print(json.dumps({"status":"passed","namespaces":output},sort_keys=True))
             }
         )
 
+    archive_route = _capture_archive_route_probe(
+        container,
+        aliases,
+        namespace_sources["runs"],
+    )
+
     return {
         "status": "passed",
         "capture_container": container,
@@ -1492,6 +1717,7 @@ print(json.dumps({"status":"passed","namespaces":output},sort_keys=True))
         },
         "root_mounts": root_mounts,
         "writable_namespaces": writable_namespaces,
+        "archive_route": archive_route,
         "job_count": len(job_roots),
         "evidence_root_count": evidence_root_count,
         "job_roots_sha256": _fingerprint(job_roots),
@@ -2754,6 +2980,65 @@ def _validate_dependencies(value: Any, expected: Iterable[str], label: str) -> N
         raise JobRehearsalReceiptError(f"{label}命令集合漂移")
 
 
+def _validate_archive_route_probe(
+    value: Any,
+    *,
+    aliases: list[PurePosixPath],
+    host_runs_root: PurePosixPath,
+) -> dict[str, Any]:
+    """重放失败证据归档的四段闭环事实。"""
+
+    route = _expect(
+        value,
+        {
+            "status",
+            "namespace",
+            "source_name",
+            "archive_name",
+            "host_source",
+            "host_archive",
+            "container_sources",
+            "container_archives",
+            "created_via",
+            "archived_via",
+            "read_via",
+            "device",
+            "inode",
+            "cleanup_verified",
+        },
+        "probes.storage.archive_route",
+    )
+    source_name = _safe_id(route.get("source_name"), "archive_route.source_name")
+    archive_name = _safe_id(
+        route.get("archive_name"), "archive_route.archive_name"
+    )
+    expected_sources = [str(alias / "runs" / source_name) for alias in aliases]
+    expected_archives = [str(alias / "runs" / archive_name) for alias in aliases]
+    expected_host_source = str(host_runs_root / source_name)
+    expected_host_archive = str(host_runs_root / archive_name)
+    if (
+        route.get("status") != "passed"
+        or route.get("namespace") != "runs"
+        or archive_name != source_name + FAILED_EVIDENCE_ARCHIVE_SUFFIX
+        or route.get("host_source") != expected_host_source
+        or route.get("host_archive") != expected_host_archive
+        or route.get("container_sources") != expected_sources
+        or route.get("container_archives") != expected_archives
+        or route.get("created_via") != expected_sources[0]
+        or route.get("archived_via") != expected_host_archive
+        or route.get("read_via") != expected_archives
+        or route.get("cleanup_verified") is not True
+        or not isinstance(route.get("device"), int)
+        or isinstance(route.get("device"), bool)
+        or route["device"] < 0
+        or not isinstance(route.get("inode"), int)
+        or isinstance(route.get("inode"), bool)
+        or route["inode"] <= 0
+    ):
+        raise JobRehearsalReceiptError("失败证据归档路由事实非法")
+    return route
+
+
 def _validate_storage_probe(
     value: Any,
     contract: Mapping[str, Any],
@@ -2769,6 +3054,7 @@ def _validate_storage_probe(
             "host_data_root",
             "root_mounts",
             "writable_namespaces",
+            "archive_route",
             "job_count",
             "evidence_root_count",
             "job_roots_sha256",
@@ -2940,6 +3226,19 @@ def _validate_storage_probe(
                 raise JobRehearsalReceiptError(
                     f"可写运行目录 {expected_name} 宿主／容器不同源"
                 )
+
+    archive_route = _validate_archive_route_probe(
+        storage.get("archive_route"),
+        aliases=aliases,
+        host_runs_root=EXPECTED_HOST_DATA_ROOT / "runs",
+    )
+    runs_namespace = next(
+        item
+        for item in namespaces
+        if isinstance(item, Mapping) and item.get("name") == "runs"
+    )
+    if archive_route["device"] != runs_namespace["source_device"]:
+        raise JobRehearsalReceiptError("失败证据归档路由未落在登记 runs 设备")
 
     job_roots = storage.get("job_roots")
     if not isinstance(job_roots, list):

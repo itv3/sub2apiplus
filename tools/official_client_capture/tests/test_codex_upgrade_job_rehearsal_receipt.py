@@ -556,6 +556,34 @@ class JobRehearsalReceiptTests(unittest.TestCase):
             write_raw = json.dumps(
                 {"status": "passed", "namespaces": namespaces}
             ).encode()
+            archive_source_name = "codex-archive-route-unit"
+            archive_name = (
+                archive_source_name + receipt.FAILED_EVIDENCE_ARCHIVE_SUFFIX
+            )
+            archive_sources = [
+                f"{alias}/runs/{archive_source_name}" for alias in aliases
+            ]
+            archive_targets = [
+                f"{alias}/runs/{archive_name}" for alias in aliases
+            ]
+            host_source = data_root / "runs" / archive_source_name
+            host_target = data_root / "runs" / archive_name
+            archive_route = {
+                "status": "passed",
+                "namespace": "runs",
+                "source_name": archive_source_name,
+                "archive_name": archive_name,
+                "host_source": str(host_source),
+                "host_archive": str(host_target),
+                "container_sources": archive_sources,
+                "container_archives": archive_targets,
+                "created_via": archive_sources[0],
+                "archived_via": str(host_target),
+                "read_via": archive_targets,
+                "device": (data_root / "runs").stat().st_dev,
+                "inode": (data_root / "runs").stat().st_ino,
+                "cleanup_verified": True,
+            }
             with (
                 mock.patch.object(
                     receipt,
@@ -567,6 +595,11 @@ class JobRehearsalReceiptTests(unittest.TestCase):
                     "_run",
                     side_effect=[inspect_raw, write_raw],
                 ) as run,
+                mock.patch.object(
+                    receipt,
+                    "_capture_archive_route_probe",
+                    return_value=archive_route,
+                ) as archive_probe,
             ):
                 result = receipt._capture_storage_probe([job], configuration)
                 validated = receipt._validate_storage_probe(
@@ -577,9 +610,87 @@ class JobRehearsalReceiptTests(unittest.TestCase):
                     },
                 )
             self.assertEqual(run.call_count, 2)
+            archive_probe.assert_called_once()
             self.assertEqual(validated["status"], "passed")
             self.assertEqual(validated["job_count"], 1)
             self.assertEqual(validated["evidence_root_count"], 1)
+
+    def test_archive_route_probe_closes_host_mapping_and_alias_read(self) -> None:
+        """P0 必须真实走完容器创建、宿主归档、双别名读取和清理。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            host_runs = Path(directory) / "runs"
+            host_runs.mkdir()
+            aliases = [
+                PurePosixPath("/capture"),
+                PurePosixPath("/root/oauth-capture"),
+            ]
+            call_count = 0
+
+            def fake_run(
+                argv: list[str],
+                label: str,
+                timeout: int = 60,
+                **_kwargs: object,
+            ) -> bytes:
+                nonlocal call_count
+                call_count += 1
+                self.assertEqual(timeout, 30)
+                if call_count == 1:
+                    self.assertIn("归档创建探针", label)
+                    sources = json.loads(argv[-3])
+                    marker_name = argv[-2]
+                    payload = bytes.fromhex(argv[-1])
+                    source = host_runs / PurePosixPath(sources[0]).name
+                    source.mkdir(mode=0o700)
+                    (source / marker_name).write_bytes(payload)
+                    metadata = source.stat()
+                    return json.dumps(
+                        {
+                            "status": "created",
+                            "sources": sources,
+                            "created_via": sources[0],
+                            "device": metadata.st_dev,
+                            "inode": metadata.st_ino,
+                        }
+                    ).encode()
+
+                self.assertEqual(call_count, 2)
+                self.assertIn("跨别名读取清理探针", label)
+                sources = json.loads(argv[-4])
+                archives = json.loads(argv[-3])
+                marker_name = argv[-2]
+                payload = bytes.fromhex(argv[-1])
+                self.assertFalse(
+                    (host_runs / PurePosixPath(sources[0]).name).exists()
+                )
+                archived = host_runs / PurePosixPath(archives[0]).name
+                self.assertEqual((archived / marker_name).read_bytes(), payload)
+                metadata = archived.stat()
+                (archived / marker_name).unlink()
+                archived.rmdir()
+                return json.dumps(
+                    {
+                        "status": "passed",
+                        "read_via": archives,
+                        "device": metadata.st_dev,
+                        "inode": metadata.st_ino,
+                        "cleanup_verified": True,
+                    }
+                ).encode()
+
+            with mock.patch.object(receipt, "_run", side_effect=fake_run):
+                result = receipt._capture_archive_route_probe(
+                    "capture-cli",
+                    aliases,
+                    host_runs,
+                )
+
+            self.assertEqual(call_count, 2)
+            self.assertEqual(result["status"], "passed")
+            self.assertEqual(result["read_via"], result["container_archives"])
+            self.assertTrue(result["cleanup_verified"])
+            self.assertEqual(list(host_runs.iterdir()), [])
 
     def test_incremental_plan_reuses_exact_campaign_coordinate_relocation(
         self,
