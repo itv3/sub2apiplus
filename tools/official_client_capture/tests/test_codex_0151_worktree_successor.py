@@ -149,6 +149,12 @@ CODEX_0154_VC1_PARENT_LEASE_REPAIR_FREEZE_SUCCESSOR = (
     ROOT
     / "docs/egress/maintenance/upstream-codex-0154-vc1-parent-lease-repair-20260913-freeze-successor.json"
 )
+# 2026-09-13：P0 补齐四个精确可写子挂载的真实跨别名探针，并约束
+# 冻结 Job 的证据根；由 freeze-successor-generate 以 commit 模式登记后继摘要。
+CODEX_0154_WRITABLE_RUN_ROOT_REPAIR_FREEZE_SUCCESSOR = (
+    ROOT
+    / "docs/egress/maintenance/upstream-codex-0154-writable-run-root-repair-20260913-freeze-successor.json"
+)
 HISTORICAL_LEDGER = "docs/egress/maintenance/historical-source-drift-successor.json"
 SHA256_LENGTH = 64
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -246,6 +252,7 @@ def successor_edges(path: str) -> list[tuple[str, str]]:
         V0243_VERSION_SYNC_FREEZE_SUCCESSOR,
         CODEX_0154_BWG_EGRESS_FREEZE_SUCCESSOR,
         CODEX_0154_VC1_PARENT_LEASE_REPAIR_FREEZE_SUCCESSOR,
+        CODEX_0154_WRITABLE_RUN_ROOT_REPAIR_FREEZE_SUCCESSOR,
     ):
         payload = json.loads(receipt_path.read_text(encoding="utf-8"))
         _validate_successor_receipt(payload)
