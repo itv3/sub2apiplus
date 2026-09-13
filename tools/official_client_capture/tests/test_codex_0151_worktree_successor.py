@@ -185,6 +185,12 @@ CODEX_0154_CAMPAIGN_INPUT_BYTE_FREEZE_SUCCESSOR = (
     ROOT
     / "docs/egress/maintenance/upstream-codex-0154-campaign-input-byte-freeze-20260913-freeze-successor.json"
 )
+# 2026-09-13：固定 BWG IPv4 Endpoint 与 MSS clamp，并让 Cloud Config
+# 全局启动失败在首个 Job 首次失败后立即停线。
+CODEX_0154_BWG_TLS_GLOBAL_FAILFAST_FREEZE_SUCCESSOR = (
+    ROOT
+    / "docs/egress/maintenance/upstream-codex-0154-bwg-tls-global-failfast-20260913-freeze-successor.json"
+)
 HISTORICAL_LEDGER = "docs/egress/maintenance/historical-source-drift-successor.json"
 SHA256_LENGTH = 64
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -288,6 +294,7 @@ def successor_edges(path: str) -> list[tuple[str, str]]:
         CODEX_0154_CAMPAIGN_RUN_REHEARSAL_CLOSURE_FREEZE_SUCCESSOR,
         CODEX_0154_JOB_REHEARSAL_ENTRYPOINT_CLOSURE_FREEZE_SUCCESSOR,
         CODEX_0154_CAMPAIGN_INPUT_BYTE_FREEZE_SUCCESSOR,
+        CODEX_0154_BWG_TLS_GLOBAL_FAILFAST_FREEZE_SUCCESSOR,
     ):
         payload = json.loads(receipt_path.read_text(encoding="utf-8"))
         _validate_successor_receipt(payload)
