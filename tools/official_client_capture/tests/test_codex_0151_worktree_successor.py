@@ -155,6 +155,12 @@ CODEX_0154_WRITABLE_RUN_ROOT_REPAIR_FREEZE_SUCCESSOR = (
     ROOT
     / "docs/egress/maintenance/upstream-codex-0154-writable-run-root-repair-20260913-freeze-successor.json"
 )
+# 2026-09-13：失败 Job 的容器证据别名在宿主归档前映射到登记 runs 子树，
+# P0 同时实测创建、宿主归档、双别名读取与清理闭环。
+CODEX_0154_FAILED_EVIDENCE_ARCHIVE_ROUTE_FREEZE_SUCCESSOR = (
+    ROOT
+    / "docs/egress/maintenance/upstream-codex-0154-failed-evidence-archive-route-20260913-freeze-successor.json"
+)
 HISTORICAL_LEDGER = "docs/egress/maintenance/historical-source-drift-successor.json"
 SHA256_LENGTH = 64
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -253,6 +259,7 @@ def successor_edges(path: str) -> list[tuple[str, str]]:
         CODEX_0154_BWG_EGRESS_FREEZE_SUCCESSOR,
         CODEX_0154_VC1_PARENT_LEASE_REPAIR_FREEZE_SUCCESSOR,
         CODEX_0154_WRITABLE_RUN_ROOT_REPAIR_FREEZE_SUCCESSOR,
+        CODEX_0154_FAILED_EVIDENCE_ARCHIVE_ROUTE_FREEZE_SUCCESSOR,
     ):
         payload = json.loads(receipt_path.read_text(encoding="utf-8"))
         _validate_successor_receipt(payload)
