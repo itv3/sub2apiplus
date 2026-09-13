@@ -136,6 +136,13 @@ CODEX_VC_FINAL_ALIGNMENT_FREEZE_SUCCESSOR = (
 V0243_VERSION_SYNC_FREEZE_SUCCESSOR = (
     ROOT / "docs/egress/maintenance/upstream-v0.2.4-3-version-sync-freeze-successor.json"
 )
+# 2026-09-13：Codex VC-0 固定公网出口由 DMIT 切换到 BWG，并把环境 producer
+# 升级为 v4；历史 v3 DMIT 收据只读重放。由 freeze-successor-generate 以
+# commit 模式生成对应后继摘要。
+CODEX_0154_BWG_EGRESS_FREEZE_SUCCESSOR = (
+    ROOT
+    / "docs/egress/maintenance/upstream-codex-0154-bwg-egress-20260913-freeze-successor.json"
+)
 HISTORICAL_LEDGER = "docs/egress/maintenance/historical-source-drift-successor.json"
 SHA256_LENGTH = 64
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -231,6 +238,7 @@ def successor_edges(path: str) -> list[tuple[str, str]]:
         CLAUDE_VC1_VC3_CONTRACT_FREEZE_SUCCESSOR,
         CODEX_VC_FINAL_ALIGNMENT_FREEZE_SUCCESSOR,
         V0243_VERSION_SYNC_FREEZE_SUCCESSOR,
+        CODEX_0154_BWG_EGRESS_FREEZE_SUCCESSOR,
     ):
         payload = json.loads(receipt_path.read_text(encoding="utf-8"))
         _validate_successor_receipt(payload)
