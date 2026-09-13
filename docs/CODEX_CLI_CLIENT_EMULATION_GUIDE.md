@@ -1438,7 +1438,7 @@ Framework §5.1.4～§5.1.5 只规定环境冻结、路径安全和数据治理�
 | 公网出口 | `144.34.230.210`，经 BWG |
 | `wg1` MTU | `1420`；同时核对宿主持久值、运行值和对端值 |
 | `wg1` Endpoint | `144.34.230.210:51830`；必须使用固定 IPv4，禁止域名解析或对端漫游回 IPv6 |
-| 转发 TCP MSS | `172.25.0.3/32` 与 `172.30.0.0/16` 出 `wg1` 的 SYN 均执行 `TCPMSS --clamp-mss-to-pmtu`；当前有效 MSS 为 `1380` |
+| 转发 TCP MSS | 双向共四条：`172.25.0.3/32` 与 `172.30.0.0/16` 出 `wg1` 的 SYN 执行 `TCPMSS --clamp-mss-to-pmtu`；由 `wg1` 回到两个目标的 SYN／SYN-ACK 在 MSS 大于 `1380` 时执行 `TCPMSS --set-mss 1380` |
 | 宿主项目根 | `/root/docker/capture-cli` |
 | 宿主数据根 | `/root/docker/capture-cli/data`，权限 `0700`，版本控制忽略 |
 | 宿主证据运行子树 | `/root/docker/capture-cli/data/runs`，只承载 Job 证据目录 |
@@ -1457,10 +1457,16 @@ export CAPTURE_CONTAINER_ROOT=/root/oauth-capture
 ```
 
 P0 必须从 Compose 渲染结果和 `docker inspect capture-cli` 同时验证挂载、镜像、固定 IP、默认路由、
-BWG 公网出口，以及 `wg1` 的持久／运行时 MTU、固定 IPv4 Endpoint 和两条持久／运行时 MSS clamp；
+BWG 公网出口，以及 `wg1` 的持久／运行时 MTU、固定 IPv4 Endpoint 和四条双向持久／运行时 MSS 规则；
 脚本不得修改网络、NAT／iptables、WireGuard 或容器地址来迁就测试。两个容器还必须分别对
 `/backend-api/wham/config/bundle` 与 `/v1/models` 连续完成三次 DNS／TCP／TLS／HTTP 探针；单次 ipify
-成功不能替代这组启动前就绪性门禁。
+成功不能替代这组启动前就绪性门禁。出站 curl 成功也不能代替 Codex Rust TLS 栈：P0 还必须在
+`capture-cli` 内以 `/opt/codex-0.154.0/bin/codex doctor --json --no-color` 执行一次实际探针，使用
+`/root/docker/capture-cli/data/runtime` 到 `/capture/runtime` 的临时 `0700` 空 `CODEX_HOME`，并以
+`env -i` 清空继承环境。该探针不得携带账号或凭据、不得发送模型请求；其整体退出码／状态应仅因
+`auth.credentials=fail` 而为 `1／fail`，同时必须满足 `config.load=ok`、
+`network.provider_reachability=ok` 和 `no Codex credentials were found`。收据只保存版本、检查状态、
+耗时、报告字节数与 SHA-256，临时 HOME 必须在退出时删除。
 `/capture` 与 `/root/oauth-capture` 两个宽泛父挂载必须同源只读；Compose 只能把宿主数据根的 `runs` 和
 `runtime` 分别以可写 bind 覆盖到两个父根的同名子路径。四个可写目标必须与对应宿主子树的设备号、inode、
 所有者和权限一致，禁止把整个数据根改成可写来绕过目录门禁。
@@ -1534,6 +1540,7 @@ VC-0 的机器退出条件固定为：
 
 ```text
 P0 收据通过
+∧ 双向四条 MSS 与 Codex 0.154 Rust TLS 无凭据探针通过
 ∧ 工具阻断为零
 ∧ campaign-run 分批执行、原始 deadline 承接、失败生命周期与全部冻结 Job 的离线演练通过
 ∧ 网络、目录、资源水位和回退点有效

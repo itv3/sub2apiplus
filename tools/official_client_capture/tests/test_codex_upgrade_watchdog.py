@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import tempfile
 import unittest
 import json
@@ -168,6 +169,57 @@ class WatchdogTests(unittest.TestCase):
             self.assertTrue(
                 list((campaign / codex_upgrade.CAMPAIGN_LEASE_STOP_DIRECTORY).glob("*.json"))
             )
+
+    def test_active_campaign_deadline_is_rebound_to_official_without_reset(
+        self,
+    ) -> None:
+        """campaign-run 复用父 deadline 时先绑定 official，且不重置时间锚。"""
+
+        class PlannedStop(RuntimeError):
+            pass
+
+        with tempfile.TemporaryDirectory() as directory:
+            campaign = Path(directory) / "campaign"
+            campaign.mkdir(mode=0o700)
+            deadline = incremental_recovery.WallClockDeadline(120)
+            deadline.phase = "stage"
+            started = deadline.started_monotonic
+            ending = deadline.deadline_monotonic
+            active = mock.Mock()
+            active.deadline = deadline
+            arguments = argparse.Namespace(campaign_dir=campaign)
+            with (
+                mock.patch.object(
+                    codex_upgrade,
+                    "_ACTIVE_CAMPAIGN_LEASE",
+                    active,
+                ),
+                mock.patch.object(
+                    codex_upgrade,
+                    "_lease_identity_matches",
+                    return_value=True,
+                ),
+                mock.patch.object(
+                    codex_upgrade,
+                    "_require_formal_campaign",
+                    return_value={"campaign_id": "campaign-a"},
+                ),
+                mock.patch.object(
+                    codex_upgrade,
+                    "_assert_initial_vc1_handoff_window",
+                ),
+                mock.patch.object(
+                    codex_upgrade,
+                    "_reject_contaminated_campaign",
+                    side_effect=PlannedStop,
+                ),
+                self.assertRaises(PlannedStop),
+            ):
+                codex_upgrade._run_capture_attempt(arguments, "official")
+            self.assertIs(active.deadline, deadline)
+            self.assertEqual(deadline.phase, "official")
+            self.assertEqual(deadline.started_monotonic, started)
+            self.assertEqual(deadline.deadline_monotonic, ending)
 
     def test_watchdog_files_keep_independent_low_risk_components(self) -> None:
         expected = {
@@ -823,6 +875,50 @@ class WatchdogTests(unittest.TestCase):
             codex_upgrade._validate_attempt_watchdog_bindings(
                 campaign, attempt, payload, planned
             )
+
+    def test_failed_official_heartbeat_replays_without_phase_drift(self) -> None:
+        """失败 official attempt 的 status／recovery 校验不再看到 stage phase。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            campaign, payload, planned = self._valid_payload(Path(directory))
+            attempt = campaign / "official" / "attempts" / "A1"
+            deadline = incremental_recovery.WallClockDeadline(120)
+            deadline.phase = "stage"
+            started = deadline.started_monotonic
+            ending = deadline.deadline_monotonic
+            codex_upgrade._bind_attempt_deadline_metadata(deadline, "official")
+            heartbeat = attempt / "watchdog-heartbeat.json"
+            codex_upgrade._write_attempt_heartbeat(
+                heartbeat,
+                deadline,
+                operation="attempt:failed",
+                force=True,
+                attempt_root=attempt,
+            )
+            payload["execution_error"] = {
+                "type": "ConfigurationError",
+                "message": "合成失败",
+            }
+            payload["completed_at_utc"] = (
+                datetime.now(timezone.utc) + timedelta(seconds=1)
+            ).isoformat().replace("+00:00", "Z")
+            payload["watchdog"]["heartbeat"] = {
+                "path": "official/attempts/A1/watchdog-heartbeat.json",
+                "sha256": codex_upgrade.file_sha256(heartbeat),
+                "bytes": heartbeat.stat().st_size,
+            }
+
+            codex_upgrade._validate_attempt_watchdog_fields(payload, planned)
+            codex_upgrade._validate_attempt_watchdog_bindings(
+                campaign,
+                attempt,
+                payload,
+                planned,
+            )
+            document = json.loads(heartbeat.read_text(encoding="utf-8"))
+            self.assertEqual(document["phase"], "official")
+            self.assertEqual(deadline.started_monotonic, started)
+            self.assertEqual(deadline.deadline_monotonic, ending)
 
     def test_file_binding_cannot_cross_to_sibling_attempt(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

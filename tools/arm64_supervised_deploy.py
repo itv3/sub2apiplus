@@ -64,8 +64,10 @@ from typing import Any, Callable, Mapping
 # 防止 preflight 重排 JSON 后破坏场景绑定的规则摘要。
 # 2026-09-13（BWG TLS 闭环）：P0 新增固定 IPv4 Endpoint、持久／运行时 MSS clamp
 # 和双容器重复 TLS 探针；Campaign 对 Cloud Config 全局启动失败立即停线。
+# 2026-09-14（BWG 双向 MSS 与 Rust TLS 修复）：环境 producer v6 同时冻结
+# 回程 SYN-ACK MSS、隔离无凭据 Codex Doctor Rust TLS 路径和 attempt heartbeat phase。
 DEFAULT_TOOL_DIGEST = (
-    "1689275d53ac0970bf08ec6e52c68405b49d2c27eea846beffe858592a44789d"
+    "53f3f3d3eb9d048a3c27ccc1959e3eaca6a893afdfcc0406eb1f4bb0eeb71fa8"
 )
 DEFAULT_SUPERVISOR_DIGEST = (
     "6ed44c1827727c854783f668e45226316698964c5a42b24746641d4f79eb17d1"

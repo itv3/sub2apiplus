@@ -114,11 +114,37 @@ def create_arm_receipt(
             "configured_tcpmss_sources": sorted(arm.EXPECTED_TCPMSS_SOURCES),
             "runtime_tcpmss_sources": sorted(arm.EXPECTED_TCPMSS_SOURCES),
             "expected_tcpmss_sources": sorted(arm.EXPECTED_TCPMSS_SOURCES),
+            "configured_tcpmss_destinations": sorted(
+                arm.EXPECTED_TCPMSS_DESTINATIONS
+            ),
+            "runtime_tcpmss_destinations": sorted(
+                arm.EXPECTED_TCPMSS_DESTINATIONS
+            ),
+            "expected_tcpmss_destinations": sorted(
+                arm.EXPECTED_TCPMSS_DESTINATIONS
+            ),
             "expected_tcp_mss": arm.EXPECTED_TCP_MSS,
             "config_path": str(arm.WIREGUARD_CONFIG),
             "config_sha256": "d" * 64,
         },
         "containers": containers,
+        "rust_tls_readiness": {
+            "container": arm.RUST_TLS_PROBE_CONTAINER,
+            "binary": arm.RUST_TLS_PROBE_BINARY,
+            "codex_version": arm.RUST_TLS_PROBE_CODEX_VERSION,
+            "isolated_empty_codex_home": True,
+            "process_exit_code": 1,
+            "overall_status": "fail",
+            "failed_check_ids": ["auth.credentials"],
+            "checks": {
+                "auth.credentials": "fail",
+                "config.load": "ok",
+                "network.provider_reachability": "ok",
+            },
+            "duration_seconds": 1.25,
+            "report_sha256": "c" * 64,
+            "report_bytes": 4096,
+        },
         "collector": {
             "schema_version": arm.PRODUCER_SCHEMA,
             "tool": str(tool),

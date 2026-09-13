@@ -4693,8 +4693,21 @@ def _attempt_deadline(
     # 这些是编排器元数据，不改变 deadline 的起点；同一对象贯穿预约、探针、
     # Job、清理和收据写入，重试不得重新创建对象。
     deadline.heartbeat_seconds = heartbeat  # type: ignore[attr-defined]
+    _bind_attempt_deadline_metadata(deadline, phase)
+    return deadline
+
+
+def _bind_attempt_deadline_metadata(
+    deadline: incremental_recovery.WallClockDeadline,
+    phase: str,
+) -> incremental_recovery.WallClockDeadline:
+    """给复用 deadline 绑定 attempt 元数据，不改动任何时间锚。"""
+
+    if phase not in {"official", "candidate"}:
+        raise ConfigurationError("capture attempt deadline phase 非法。")
     deadline.phase = phase  # type: ignore[attr-defined]
-    deadline.last_completed_job_id = None  # type: ignore[attr-defined]
+    if not hasattr(deadline, "last_completed_job_id"):
+        deadline.last_completed_job_id = None  # type: ignore[attr-defined]
     return deadline
 
 
@@ -29368,7 +29381,10 @@ def _run_capture_attempt(
             )
         _lease = active
         _manifest = _manifest or _require_formal_campaign(arguments.campaign_dir)
-        _deadline = _deadline or active.deadline
+        _deadline = _bind_attempt_deadline_metadata(
+            _deadline or active.deadline,
+            phase,
+        )
 
     # 用递归的一层 wrapper 保证整个 CLI invocation（包括计划、reservation、探针、
     # Job、清理和收据写入）都处于同一个 Campaign lease；无需把数百行主体再缩进，
@@ -29410,7 +29426,10 @@ def _run_capture_attempt(
             str(getattr(arguments, "candidate_id", "") or ""),
         )
     _reject_contaminated_campaign(arguments.campaign_dir)
-    deadline = _deadline or _attempt_deadline(arguments, phase)
+    deadline = _bind_attempt_deadline_metadata(
+        _deadline or _attempt_deadline(arguments, phase),
+        phase,
+    )
     seal_only = {
         "attempt_id": getattr(arguments, "attempt_id", None),
         "capture_manifest": getattr(arguments, "capture_manifest", None),

@@ -46,6 +46,7 @@ class Arm64EnvironmentReceiptTests(unittest.TestCase):
         }
         facts["collector"] = producer
         facts.pop("wireguard", None)
+        facts.pop("rust_tls_readiness", None)
         facts["contract_sha256"] = receipt.LEGACY_NETWORK_CONTRACT_SHA256
         for container in facts["containers"]:
             container.pop("tls_readiness")
@@ -78,6 +79,7 @@ class Arm64EnvironmentReceiptTests(unittest.TestCase):
         }
         facts["collector"] = producer
         facts["contract_sha256"] = receipt.LEGACY_V3_NETWORK_CONTRACT_SHA256
+        facts.pop("rust_tls_readiness", None)
         for container in facts["containers"]:
             container.pop("tls_readiness")
             container["public_egress"][
@@ -118,6 +120,7 @@ class Arm64EnvironmentReceiptTests(unittest.TestCase):
         }
         facts["collector"] = producer
         facts["contract_sha256"] = receipt.LEGACY_V4_NETWORK_CONTRACT_SHA256
+        facts.pop("rust_tls_readiness", None)
         for container in facts["containers"]:
             container.pop("tls_readiness")
         current_wireguard = facts["wireguard"]
@@ -140,6 +143,39 @@ class Arm64EnvironmentReceiptTests(unittest.TestCase):
             replay_producer=producer,
         )
         receipt_path = root / "p0-v4-receipt.json"
+        receipt._write_once(receipt_path, legacy_receipt)
+        return facts_path, receipt_path, facts
+
+    def _legacy_v5_fixture(
+        self, root: Path
+    ) -> tuple[Path, Path, dict[str, object]]:
+        """构造仅校验出站 MSS 与 curl TLS 的 v5 BWG 收据。"""
+
+        facts_path, facts = self._fixture(root)
+        producer = {
+            "schema_version": receipt.PRODUCER_SCHEMA,
+            "tool": str(Path(receipt.__file__).resolve()),
+            "tool_sha256": next(
+                iter(receipt.REGISTERED_REPLAY_PRODUCER_HASHES["5"])
+            ),
+            "version": "5",
+        }
+        facts["collector"] = producer
+        facts["contract_sha256"] = receipt.LEGACY_V5_NETWORK_CONTRACT_SHA256
+        facts.pop("rust_tls_readiness", None)
+        for field in (
+            "configured_tcpmss_destinations",
+            "runtime_tcpmss_destinations",
+            "expected_tcpmss_destinations",
+        ):
+            facts["wireguard"].pop(field)
+        self._rewrite(facts_path, facts)
+        legacy_receipt = receipt._build_receipt(
+            root,
+            facts_path.name,
+            replay_producer=producer,
+        )
+        receipt_path = root / "p0-v5-receipt.json"
         receipt._write_once(receipt_path, legacy_receipt)
         return facts_path, receipt_path, facts
 
@@ -244,6 +280,8 @@ class Arm64EnvironmentReceiptTests(unittest.TestCase):
             ("expected_endpoint", "bwg.3ab.in:51830"),
             ("configured_tcpmss_sources", ["172.30.0.0/16"]),
             ("runtime_tcpmss_sources", ["172.25.0.3/32"]),
+            ("configured_tcpmss_destinations", ["172.30.0.0/16"]),
+            ("runtime_tcpmss_destinations", ["172.25.0.3/32"]),
             ("expected_tcp_mss", 1460),
         )
         for field, value in mutations:
@@ -255,7 +293,7 @@ class Arm64EnvironmentReceiptTests(unittest.TestCase):
                 self._rewrite(path, facts)
                 with self.assertRaisesRegex(
                     receipt.Arm64EnvironmentReceiptError,
-                    "Endpoint、MTU 或 TCPMSS",
+                    "Endpoint、MTU 或双向 TCPMSS",
                 ):
                     receipt.build_receipt(root, "p0-facts.json")
 
@@ -275,25 +313,60 @@ class Arm64EnvironmentReceiptTests(unittest.TestCase):
                 receipt.build_receipt(root, "p0-facts.json")
 
     def test_runtime_tcpmss_parser_rejects_missing_or_duplicate_rule(self) -> None:
-        lines = [
+        outbound = [
             (
                 f"-A FORWARD -s {source} -o wg1 -p tcp -m tcp "
                 "--tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu"
             )
             for source in receipt.EXPECTED_TCPMSS_SOURCES
         ]
+        inbound = [
+            (
+                f"-A FORWARD -d {destination} -i wg1 -p tcp -m tcp "
+                "--tcp-flags SYN,RST SYN -m tcpmss "
+                f"--mss {receipt.EXPECTED_TCPMSS_MATCH_RANGE} "
+                f"-j TCPMSS --set-mss {receipt.EXPECTED_TCP_MSS}"
+            )
+            for destination in receipt.EXPECTED_TCPMSS_DESTINATIONS
+        ]
+        lines = [*outbound, *inbound]
         self.assertEqual(
-            receipt._runtime_tcpmss_sources(("\n".join(lines) + "\n").encode()),
-            sorted(receipt.EXPECTED_TCPMSS_SOURCES),
+            receipt._runtime_tcpmss_rules(("\n".join(lines) + "\n").encode()),
+            {
+                "sources": sorted(receipt.EXPECTED_TCPMSS_SOURCES),
+                "destinations": sorted(receipt.EXPECTED_TCPMSS_DESTINATIONS),
+            },
         )
-        for payload in (lines[:1], [*lines, lines[0]]):
+        for payload in (outbound, lines[:-1], [*lines, inbound[0]]):
             with self.subTest(line_count=len(payload)), self.assertRaisesRegex(
                 receipt.Arm64EnvironmentReceiptError,
-                "缺失、重复",
+                "缺失、重复|目标漂移",
             ):
-                receipt._runtime_tcpmss_sources(
+                receipt._runtime_tcpmss_rules(
                     ("\n".join(payload) + "\n").encode()
                 )
+
+    def test_expected_tcpmss_config_commands_cover_bidirectional_lifecycle(
+        self,
+    ) -> None:
+        commands = receipt._expected_tcpmss_config_commands()
+        self.assertEqual(len(commands), 8)
+        self.assertEqual(
+            [kind for kind, _command in commands].count("postup"),
+            4,
+        )
+        self.assertEqual(
+            [kind for kind, _command in commands].count("postdown"),
+            4,
+        )
+        self.assertEqual(
+            sum("--clamp-mss-to-pmtu" in command for _kind, command in commands),
+            4,
+        )
+        self.assertEqual(
+            sum("--set-mss 1380" in command for _kind, command in commands),
+            4,
+        )
 
     def test_tls_readiness_collector_repeats_both_endpoints(self) -> None:
         outputs = [
@@ -308,6 +381,106 @@ class Arm64EnvironmentReceiptTests(unittest.TestCase):
             [len(item["attempts"]) for item in observed],
             [receipt.TLS_READINESS_ATTEMPTS] * len(receipt.TLS_READINESS_PROBES),
         )
+
+    def test_rust_tls_collector_uses_empty_home_and_accepts_only_no_auth_failure(
+        self,
+    ) -> None:
+        observed_argv: list[str] = []
+
+        def doctor(
+            argv: list[str],
+            _label: str,
+            **kwargs: object,
+        ) -> subprocess.CompletedProcess[bytes]:
+            observed_argv.extend(argv)
+            home = next(
+                item.split("=", 1)[1]
+                for item in argv
+                if item.startswith("CODEX_HOME=")
+            )
+            report = {
+                "schemaVersion": 1,
+                "codexVersion": receipt.RUST_TLS_PROBE_CODEX_VERSION,
+                "overallStatus": "fail",
+                "checks": {
+                    "auth.credentials": {
+                        "status": "fail",
+                        "summary": "no Codex credentials were found",
+                    },
+                    "config.load": {
+                        "status": "ok",
+                        "details": {"CODEX_HOME": home},
+                    },
+                    "network.provider_reachability": {"status": "ok"},
+                },
+            }
+            self.assertEqual(kwargs["allowed_returncodes"], frozenset({1}))
+            return subprocess.CompletedProcess(
+                argv,
+                1,
+                (json.dumps(report, sort_keys=True) + "\n").encode(),
+                b"",
+            )
+
+        with tempfile.TemporaryDirectory() as directory:
+            runtime_root = Path(directory)
+            runtime_root.chmod(0o700)
+            with (
+                mock.patch.object(
+                    receipt,
+                    "RUST_TLS_PROBE_HOST_RUNTIME_ROOT",
+                    runtime_root,
+                ),
+                mock.patch.object(receipt, "_run_completed", side_effect=doctor),
+                mock.patch.object(receipt.time, "monotonic", side_effect=[10.0, 12.5]),
+            ):
+                observed = receipt._rust_tls_readiness_observation()
+            self.assertEqual(list(runtime_root.iterdir()), [])
+
+        self.assertEqual(observed["process_exit_code"], 1)
+        self.assertEqual(observed["duration_seconds"], 2.5)
+        self.assertEqual(
+            observed["checks"]["network.provider_reachability"],
+            "ok",
+        )
+        self.assertIn("/usr/bin/env", observed_argv)
+        self.assertIn("-i", observed_argv)
+        self.assertFalse(
+            any(
+                "TOKEN=" in item or "API_KEY=" in item or "AUTH=" in item
+                for item in observed_argv
+            )
+        )
+
+    def test_rust_tls_readiness_rejects_missing_network_or_present_credentials(
+        self,
+    ) -> None:
+        mutations = (
+            ("checks", "network.provider_reachability", "fail"),
+            ("checks", "auth.credentials", "ok"),
+            ("root", "process_exit_code", 0),
+            (
+                "root",
+                "failed_check_ids",
+                ["auth.credentials", "network.provider_reachability"],
+            ),
+            ("root", "codex_version", "0.151.0"),
+        )
+        for group, field, value in mutations:
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                root.chmod(0o700)
+                path, facts = self._fixture(root)
+                if group == "checks":
+                    facts["rust_tls_readiness"]["checks"][field] = value
+                else:
+                    facts["rust_tls_readiness"][field] = value
+                self._rewrite(path, facts)
+                with self.assertRaisesRegex(
+                    receipt.Arm64EnvironmentReceiptError,
+                    "Rust TLS",
+                ):
+                    receipt.build_receipt(root, "p0-facts.json")
 
     def test_current_bwg_contract_rejects_previous_dmit_egress(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -441,7 +614,7 @@ class Arm64EnvironmentReceiptTests(unittest.TestCase):
                 receipt.build_receipt(root, facts_path.name)
 
     def test_replay_accepts_registered_v4_bwg_contract(self) -> None:
-        """v5 producer 只读承接尚无 Endpoint／TLS 字段的 v4 BWG 收据。"""
+        """v6 producer 只读承接尚无 Endpoint／TLS 字段的 v4 BWG 收据。"""
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -450,6 +623,27 @@ class Arm64EnvironmentReceiptTests(unittest.TestCase):
 
             replayed = receipt.replay(root, receipt_path.name)
             self.assertEqual(replayed["producer"]["version"], "4")
+            with self.assertRaisesRegex(
+                receipt.Arm64EnvironmentReceiptError,
+                "身份漂移",
+            ):
+                receipt.build_receipt(root, facts_path.name)
+
+    def test_replay_accepts_registered_v5_outbound_mss_contract(self) -> None:
+        """v6 只读承接缺少回程 MSS 与 Rust TLS 的 v5 BWG 收据。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            root.chmod(0o700)
+            facts_path, receipt_path, facts = self._legacy_v5_fixture(root)
+
+            replayed = receipt.replay(root, receipt_path.name)
+            self.assertEqual(replayed["producer"]["version"], "5")
+            self.assertNotIn("rust_tls_readiness", facts)
+            self.assertNotIn(
+                "runtime_tcpmss_destinations",
+                facts["wireguard"],
+            )
             with self.assertRaisesRegex(
                 receipt.Arm64EnvironmentReceiptError,
                 "身份漂移",
@@ -491,6 +685,7 @@ class Arm64EnvironmentReceiptTests(unittest.TestCase):
             facts = json.loads(facts_path.read_text(encoding="utf-8"))
             facts["collector"] = producer
             facts.pop("wireguard", None)
+            facts.pop("rust_tls_readiness", None)
             facts["contract_sha256"] = receipt.LEGACY_NETWORK_CONTRACT_SHA256
             for container in facts["containers"]:
                 container.pop("tls_readiness")

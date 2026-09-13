@@ -16,6 +16,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -26,7 +27,7 @@ from tools.official_client_capture import incremental_recovery
 FACTS_SCHEMA = "codex-upgrade-arm64-environment-facts/v1"
 RECEIPT_SCHEMA = "codex-upgrade-arm64-environment-receipt/v1"
 PRODUCER_SCHEMA = "codex-upgrade-arm64-environment-producer/v1"
-PRODUCER_VERSION = "5"
+PRODUCER_VERSION = "6"
 PRODUCER_TOOL_RELATIVE = (
     "tools/official_client_capture/codex_upgrade_arm64_environment_receipt.py"
 )
@@ -63,6 +64,14 @@ REGISTERED_REPLAY_PRODUCER_HASHES = {
             "5d7a9965022ad513b3751793388529a0185747e791609f086803df483ddd4d1d",
         }
     ),
+    # v5 首次冻结 BWG IPv4 Endpoint、出站 MSS clamp 和双容器 curl TLS
+    # 就绪性，但尚未验证回程 SYN-ACK MSS 与 Codex Rust TLS 栈。它只能按
+    # 原字段只读重放，不能再生成新的 P0 事实。
+    "5": frozenset(
+        {
+            "960172c6ac3263b27ab56d9318455982b22535f41726a936b1bd69ed8db85a52",
+        }
+    ),
 }
 PUBLIC_EGRESS_URL = "https://api.ipify.org"
 TLS_READINESS_PROBES = (
@@ -85,6 +94,14 @@ EXPECTED_WG1_ENDPOINT = "144.34.230.210:51830"
 EXPECTED_WG1_MTU = 1420
 EXPECTED_TCP_MSS = EXPECTED_WG1_MTU - 40
 EXPECTED_TCPMSS_SOURCES = ("172.25.0.3/32", "172.30.0.0/16")
+EXPECTED_TCPMSS_DESTINATIONS = EXPECTED_TCPMSS_SOURCES
+EXPECTED_TCPMSS_MATCH_RANGE = f"{EXPECTED_TCP_MSS + 1}:65535"
+RUST_TLS_PROBE_CONTAINER = "capture-cli"
+RUST_TLS_PROBE_BINARY = "/opt/codex-0.154.0/bin/codex"
+RUST_TLS_PROBE_CODEX_VERSION = "0.154.0"
+RUST_TLS_PROBE_HOST_RUNTIME_ROOT = Path("/root/docker/capture-cli/data/runtime")
+RUST_TLS_PROBE_CONTAINER_RUNTIME_ROOT = PurePosixPath("/capture/runtime")
+RUST_TLS_PROBE_TIMEOUT_SECONDS = 30
 LEGACY_DMIT_WG1_MTU = 1420
 LEGACY_NETWORK_CONTRACT_SHA256 = (
     "9e342c764883ee1107b998ef7a26650402ff4e8d82207926f518528f83dc4ec8"
@@ -94,6 +111,9 @@ LEGACY_V3_NETWORK_CONTRACT_SHA256 = (
 )
 LEGACY_V4_NETWORK_CONTRACT_SHA256 = (
     "a0521c7c38ee3bb820772423b644c711f8bdb476bb98c68057c2c32c93e39057"
+)
+LEGACY_V5_NETWORK_CONTRACT_SHA256 = (
+    "1b0130348650881625e47a4f880c3b3b5b3430365d6bbcce4fe3c390088a1e4f"
 )
 ROOT_MAX_USED_PERCENT = 69
 ROOT_MIN_AVAILABLE_BYTES = 30 * 1024 * 1024 * 1024
@@ -362,7 +382,24 @@ def contract_sha256() -> str:
                     "expected_mtu": EXPECTED_WG1_MTU,
                     "expected_endpoint": EXPECTED_WG1_ENDPOINT,
                     "tcp_mss_clamp_sources": list(EXPECTED_TCPMSS_SOURCES),
+                    "tcp_mss_clamp_destinations": list(
+                        EXPECTED_TCPMSS_DESTINATIONS
+                    ),
                     "expected_tcp_mss": EXPECTED_TCP_MSS,
+                },
+                "rust_tls_readiness": {
+                    "container": RUST_TLS_PROBE_CONTAINER,
+                    "binary": RUST_TLS_PROBE_BINARY,
+                    "codex_version": RUST_TLS_PROBE_CODEX_VERSION,
+                    "isolated_empty_codex_home": True,
+                    "expected_process_exit_code": 1,
+                    "expected_overall_status": "fail",
+                    "allowed_failed_checks": ["auth.credentials"],
+                    "required_checks": {
+                        "auth.credentials": "fail",
+                        "config.load": "ok",
+                        "network.provider_reachability": "ok",
+                    },
                 },
                 "root_max_used_percent": ROOT_MAX_USED_PERCENT,
                 "root_min_available_bytes": ROOT_MIN_AVAILABLE_BYTES,
@@ -372,19 +409,31 @@ def contract_sha256() -> str:
     )
 
 
-def _run(
+def _run_completed(
     argv: list[str],
     label: str,
     timeout: int = 30,
     *,
     operation: str,
+    allowed_returncodes: frozenset[int] = frozenset({0}),
     deadline: incremental_recovery.WallClockDeadline | None = None,
     heartbeat: Any | None = None,
-) -> bytes:
+) -> subprocess.CompletedProcess[bytes]:
+    """执行受 deadline 约束的探针，并校验其允许退出码闭集。"""
+
     # 中文 label 只用于错误诊断；heartbeat operation 属于机器审计字段，
     # 必须使用固定 ASCII 标签，不能把诊断文本或命令参数直接写入心跳。
     if not HEARTBEAT_OPERATION_RE.fullmatch(operation):
         raise Arm64EnvironmentReceiptError("ARM64 探针 heartbeat operation 非法")
+    if (
+        not isinstance(allowed_returncodes, frozenset)
+        or not allowed_returncodes
+        or any(
+            isinstance(value, bool) or not isinstance(value, int)
+            for value in allowed_returncodes
+        )
+    ):
+        raise Arm64EnvironmentReceiptError("ARM64 探针允许退出码闭集非法")
     active_deadline = deadline if deadline is not None else _ACTIVE_DEADLINE
     active_heartbeat = heartbeat if heartbeat is not None else _ACTIVE_HEARTBEAT
     try:
@@ -408,10 +457,31 @@ def _run(
             )
     except (OSError, subprocess.SubprocessError) as error:
         raise Arm64EnvironmentReceiptError(f"{label}执行失败") from error
-    if completed.returncode != 0:
+    if completed.returncode not in allowed_returncodes:
         message = completed.stderr.decode("utf-8", errors="replace")[:300].strip()
         raise Arm64EnvironmentReceiptError(f"{label}失败：{message}")
-    return completed.stdout
+    return completed
+
+
+def _run(
+    argv: list[str],
+    label: str,
+    timeout: int = 30,
+    *,
+    operation: str,
+    deadline: incremental_recovery.WallClockDeadline | None = None,
+    heartbeat: Any | None = None,
+) -> bytes:
+    """执行必须成功的普通探针并返回 stdout。"""
+
+    return _run_completed(
+        argv,
+        label,
+        timeout,
+        operation=operation,
+        deadline=deadline,
+        heartbeat=heartbeat,
+    ).stdout
 
 
 def _parse_default_route(raw: bytes, container: str) -> dict[str, str]:
@@ -508,6 +578,125 @@ def _tls_readiness_observation(container: str) -> list[dict[str, Any]]:
             }
         )
     return observations
+
+
+def _rust_tls_readiness_observation() -> dict[str, Any]:
+    """用无凭据 Codex 0.154 Doctor 验证实际 Rust TLS 请求路径。"""
+
+    runtime_root = RUST_TLS_PROBE_HOST_RUNTIME_ROOT
+    if runtime_root.is_symlink() or not runtime_root.is_dir():
+        raise Arm64EnvironmentReceiptError("Codex Rust TLS 临时运行根不可信")
+    metadata = runtime_root.stat()
+    if (
+        metadata.st_uid != os.geteuid()
+        or metadata.st_gid != os.getegid()
+        or stat.S_IMODE(metadata.st_mode) != 0o700
+    ):
+        raise Arm64EnvironmentReceiptError(
+            "Codex Rust TLS 临时运行根必须由当前执行用户拥有且权限为 0700"
+        )
+
+    with tempfile.TemporaryDirectory(
+        prefix="codex-0154-doctor-",
+        dir=runtime_root,
+    ) as temporary_name:
+        temporary = Path(temporary_name)
+        temporary.chmod(0o700)
+        if temporary.is_symlink() or any(temporary.iterdir()):
+            raise Arm64EnvironmentReceiptError(
+                "Codex Rust TLS 探针 CODEX_HOME 不是隔离空目录"
+            )
+        container_home = str(
+            RUST_TLS_PROBE_CONTAINER_RUNTIME_ROOT / temporary.name
+        )
+        started = time.monotonic()
+        completed = _run_completed(
+            [
+                "docker",
+                "exec",
+                RUST_TLS_PROBE_CONTAINER,
+                "/usr/bin/env",
+                "-i",
+                f"CODEX_HOME={container_home}",
+                f"HOME={container_home}",
+                "PATH=/usr/bin:/bin",
+                RUST_TLS_PROBE_BINARY,
+                "doctor",
+                "--json",
+                "--no-color",
+            ],
+            "capture-cli Codex 0.154 Rust TLS 就绪探针",
+            timeout=RUST_TLS_PROBE_TIMEOUT_SECONDS,
+            operation="arm64:rust-tls:codex-0154-doctor",
+            allowed_returncodes=frozenset({1}),
+        )
+        duration_seconds = time.monotonic() - started
+
+    raw = completed.stdout
+    if not raw or len(raw) > MAX_JSON_BYTES:
+        raise Arm64EnvironmentReceiptError("Codex Rust TLS Doctor 报告大小非法")
+    try:
+        report = json.loads(raw)
+    except (UnicodeError, json.JSONDecodeError) as error:
+        raise Arm64EnvironmentReceiptError(
+            "Codex Rust TLS Doctor 报告不是合法 UTF-8 JSON"
+        ) from error
+    if not isinstance(report, dict):
+        raise Arm64EnvironmentReceiptError("Codex Rust TLS Doctor 报告顶层必须是对象")
+    checks = report.get("checks")
+    if not isinstance(checks, dict):
+        raise Arm64EnvironmentReceiptError("Codex Rust TLS Doctor 缺少 checks")
+    expected_checks = {
+        "auth.credentials": "fail",
+        "config.load": "ok",
+        "network.provider_reachability": "ok",
+    }
+    observed_checks: dict[str, str] = {}
+    for check_id, expected_status in expected_checks.items():
+        check = checks.get(check_id)
+        if not isinstance(check, dict) or check.get("status") != expected_status:
+            raise Arm64EnvironmentReceiptError(
+                f"Codex Rust TLS Doctor {check_id} 未通过冻结状态"
+            )
+        observed_checks[check_id] = expected_status
+    failed_check_ids = sorted(
+        str(check_id)
+        for check_id, check in checks.items()
+        if isinstance(check, dict) and check.get("status") == "fail"
+    )
+    auth_summary = str(checks["auth.credentials"].get("summary", ""))
+    config_details = checks["config.load"].get("details")
+    if (
+        failed_check_ids != ["auth.credentials"]
+        or "no codex credentials were found" not in auth_summary.lower()
+        or not isinstance(config_details, dict)
+        or config_details.get("CODEX_HOME") != container_home
+    ):
+        raise Arm64EnvironmentReceiptError(
+            "Codex Rust TLS Doctor 未证明隔离 CODEX_HOME 无凭据"
+        )
+    if (
+        report.get("schemaVersion") != 1
+        or report.get("codexVersion") != RUST_TLS_PROBE_CODEX_VERSION
+        or report.get("overallStatus") != "fail"
+        or not 0 < duration_seconds <= RUST_TLS_PROBE_TIMEOUT_SECONDS
+    ):
+        raise Arm64EnvironmentReceiptError(
+            "Codex Rust TLS Doctor 版本、终态或耗时与冻结合同不一致"
+        )
+    return {
+        "container": RUST_TLS_PROBE_CONTAINER,
+        "binary": RUST_TLS_PROBE_BINARY,
+        "codex_version": RUST_TLS_PROBE_CODEX_VERSION,
+        "isolated_empty_codex_home": True,
+        "process_exit_code": completed.returncode,
+        "overall_status": report["overallStatus"],
+        "failed_check_ids": failed_check_ids,
+        "checks": observed_checks,
+        "duration_seconds": round(duration_seconds, 3),
+        "report_sha256": _sha256_bytes(raw),
+        "report_bytes": len(raw),
+    }
 
 
 def _container_observation(name: str) -> dict[str, Any]:
@@ -610,7 +799,7 @@ def _container_observation(name: str) -> dict[str, Any]:
 
 
 def _expected_tcpmss_config_commands() -> list[tuple[str, str]]:
-    """返回 wg-quick 中必须精确存在的幂等 MSS 持久化命令。"""
+    """返回 wg-quick 中必须精确存在的双向幂等 MSS 持久化命令。"""
 
     commands: list[tuple[str, str]] = []
     for source in EXPECTED_TCPMSS_SOURCES:
@@ -625,18 +814,33 @@ def _expected_tcpmss_config_commands() -> list[tuple[str, str]]:
         commands.append(
             ("postdown", f"{base} 2>/dev/null && {delete} || true")
         )
+    for destination in EXPECTED_TCPMSS_DESTINATIONS:
+        base = (
+            f"iptables -w 5 -t mangle -C FORWARD -i %i -d {destination} "
+            f"-p tcp --tcp-flags SYN,RST SYN -m tcpmss "
+            f"--mss {EXPECTED_TCPMSS_MATCH_RANGE} -j TCPMSS "
+            f"--set-mss {EXPECTED_TCP_MSS}"
+        )
+        append = base.replace(" -C FORWARD ", " -A FORWARD ", 1)
+        delete = base.replace(" -C FORWARD ", " -D FORWARD ", 1)
+        commands.append(("postup", f"{base} 2>/dev/null || {append}"))
+        commands.append(
+            ("postdown", f"{base} 2>/dev/null && {delete} || true")
+        )
     return sorted(commands)
 
 
-def _runtime_tcpmss_sources(raw: bytes) -> list[str]:
-    """解析 iptables-save，确认两个来源各有且仅有一条正确 clamp。"""
+def _runtime_tcpmss_rules(raw: bytes) -> dict[str, list[str]]:
+    """解析 iptables-save，确认出站 SYN 与回程 SYN-ACK 四条规则闭合。"""
 
     try:
         lines = raw.decode("ascii").splitlines()
     except UnicodeError as error:
         raise Arm64EnvironmentReceiptError("ARM64 TCPMSS 运行时规则编码非法") from error
-    observed: list[str] = []
+    observed_sources: list[str] = []
+    observed_destinations: list[str] = []
     expected_sources = set(EXPECTED_TCPMSS_SOURCES)
+    expected_destinations = set(EXPECTED_TCPMSS_DESTINATIONS)
     for line in lines:
         if not line.startswith("-A FORWARD ") or "TCPMSS" not in line:
             continue
@@ -657,34 +861,82 @@ def _runtime_tcpmss_sources(raw: bytes) -> list[str]:
             if "-s" in normalized and normalized.index("-s") + 1 < len(normalized)
             else ""
         )
-        if source not in expected_sources:
-            continue
-        expected = [
-            "-A",
-            "FORWARD",
-            "-s",
-            source,
-            "-o",
-            WIREGUARD_INTERFACE,
-            "-p",
-            "tcp",
-            "--tcp-flags",
-            "SYN,RST",
-            "SYN",
-            "-j",
-            "TCPMSS",
-            "--clamp-mss-to-pmtu",
-        ]
-        if normalized != expected:
-            raise Arm64EnvironmentReceiptError(
-                f"ARM64 {source} TCPMSS 运行时规则与冻结合同不一致"
-            )
-        observed.append(source)
-    if sorted(observed) != sorted(EXPECTED_TCPMSS_SOURCES):
-        raise Arm64EnvironmentReceiptError(
-            "ARM64 TCPMSS 运行时规则缺失、重复或来源漂移"
+        destination = (
+            normalized[normalized.index("-d") + 1]
+            if "-d" in normalized
+            and normalized.index("-d") + 1 < len(normalized)
+            else ""
         )
-    return sorted(observed)
+        if source in expected_sources:
+            expected = [
+                "-A",
+                "FORWARD",
+                "-s",
+                source,
+                "-o",
+                WIREGUARD_INTERFACE,
+                "-p",
+                "tcp",
+                "--tcp-flags",
+                "SYN,RST",
+                "SYN",
+                "-j",
+                "TCPMSS",
+                "--clamp-mss-to-pmtu",
+            ]
+            if normalized != expected:
+                raise Arm64EnvironmentReceiptError(
+                    f"ARM64 {source} 出站 TCPMSS 运行时规则与冻结合同不一致"
+                )
+            observed_sources.append(source)
+            continue
+        if destination in expected_destinations:
+            # iptables-save 会把配置中的 ``-i wg1 -d ...`` 规范化为
+            # ``-d ... -i wg1``；这里按真实序列精确校验，避免宽松包含判断。
+            expected = [
+                "-A",
+                "FORWARD",
+                "-d",
+                destination,
+                "-i",
+                WIREGUARD_INTERFACE,
+                "-p",
+                "tcp",
+                "--tcp-flags",
+                "SYN,RST",
+                "SYN",
+                "-m",
+                "tcpmss",
+                "--mss",
+                EXPECTED_TCPMSS_MATCH_RANGE,
+                "-j",
+                "TCPMSS",
+                "--set-mss",
+                str(EXPECTED_TCP_MSS),
+            ]
+            if normalized != expected:
+                raise Arm64EnvironmentReceiptError(
+                    f"ARM64 {destination} 回程 TCPMSS 运行时规则与冻结合同不一致"
+                )
+            observed_destinations.append(destination)
+    if sorted(observed_sources) != sorted(EXPECTED_TCPMSS_SOURCES):
+        raise Arm64EnvironmentReceiptError(
+            "ARM64 出站 TCPMSS 运行时规则缺失、重复或来源漂移"
+        )
+    if sorted(observed_destinations) != sorted(EXPECTED_TCPMSS_DESTINATIONS):
+        raise Arm64EnvironmentReceiptError(
+            "ARM64 回程 TCPMSS 运行时规则缺失、重复或目标漂移"
+        )
+    return {
+        "sources": sorted(observed_sources),
+        "destinations": sorted(observed_destinations),
+    }
+
+
+def _runtime_tcpmss_sources(raw: bytes) -> list[str]:
+    """兼容内部调用名；校验完整双向规则后返回出站来源。"""
+
+    return _runtime_tcpmss_rules(raw)["sources"]
 
 
 def _wireguard_observation() -> dict[str, Any]:
@@ -778,7 +1030,7 @@ def _wireguard_observation() -> dict[str, Any]:
         "ARM64 TCPMSS 运行时规则读取",
         operation="arm64:wg1:tcpmss",
     )
-    runtime_tcpmss_sources = _runtime_tcpmss_sources(iptables_raw)
+    runtime_tcpmss = _runtime_tcpmss_rules(iptables_raw)
     return {
         "interface": WIREGUARD_INTERFACE,
         "egress_provider": EXPECTED_EGRESS_PROVIDER,
@@ -789,8 +1041,15 @@ def _wireguard_observation() -> dict[str, Any]:
         "runtime_endpoint": runtime_endpoint,
         "expected_endpoint": EXPECTED_WG1_ENDPOINT,
         "configured_tcpmss_sources": sorted(EXPECTED_TCPMSS_SOURCES),
-        "runtime_tcpmss_sources": runtime_tcpmss_sources,
+        "runtime_tcpmss_sources": runtime_tcpmss["sources"],
         "expected_tcpmss_sources": sorted(EXPECTED_TCPMSS_SOURCES),
+        "configured_tcpmss_destinations": sorted(
+            EXPECTED_TCPMSS_DESTINATIONS
+        ),
+        "runtime_tcpmss_destinations": runtime_tcpmss["destinations"],
+        "expected_tcpmss_destinations": sorted(
+            EXPECTED_TCPMSS_DESTINATIONS
+        ),
         "expected_tcp_mss": EXPECTED_TCP_MSS,
         "config_path": str(config),
         "config_sha256": _sha256_bytes(raw),
@@ -837,6 +1096,7 @@ def _collect_facts(*, phase: str, subject_id: str) -> dict[str, Any]:
         "containers": [
             _container_observation(name) for name in sorted(CONTAINER_CONTRACTS)
         ],
+        "rust_tls_readiness": _rust_tls_readiness_observation(),
         "collector": {
             "schema_version": PRODUCER_SCHEMA,
             "tool": str(producer),
@@ -884,7 +1144,7 @@ def _validate_container(
         "public_egress",
         "raw_sha256",
     }
-    if producer_version == PRODUCER_VERSION:
+    if producer_version in {"5", PRODUCER_VERSION}:
         fields.add("tls_readiness")
     container = _expect(
         value,
@@ -944,7 +1204,7 @@ def _validate_container(
         )
     if not SHA256_RE.fullmatch(str(egress.get("response_sha256", ""))):
         raise Arm64EnvironmentReceiptError(f"{expected_name} 出口响应摘要非法")
-    if producer_version == PRODUCER_VERSION:
+    if producer_version in {"5", PRODUCER_VERSION}:
         readiness = container.get("tls_readiness")
         if not isinstance(readiness, list) or len(readiness) != len(
             TLS_READINESS_PROBES
@@ -1022,6 +1282,61 @@ def _validate_container(
     return container
 
 
+def _validate_rust_tls_readiness(value: Any) -> dict[str, Any]:
+    """校验无凭据 Codex Doctor 留下的最小、无秘密 Rust TLS 事实。"""
+
+    observation = _expect(
+        value,
+        {
+            "container",
+            "binary",
+            "codex_version",
+            "isolated_empty_codex_home",
+            "process_exit_code",
+            "overall_status",
+            "failed_check_ids",
+            "checks",
+            "duration_seconds",
+            "report_sha256",
+            "report_bytes",
+        },
+        "rust_tls_readiness",
+    )
+    expected_checks = {
+        "auth.credentials": "fail",
+        "config.load": "ok",
+        "network.provider_reachability": "ok",
+    }
+    checks = _expect(
+        observation.get("checks"),
+        set(expected_checks),
+        "rust_tls_readiness.checks",
+    )
+    duration = observation.get("duration_seconds")
+    report_bytes = observation.get("report_bytes")
+    if (
+        observation.get("container") != RUST_TLS_PROBE_CONTAINER
+        or observation.get("binary") != RUST_TLS_PROBE_BINARY
+        or observation.get("codex_version") != RUST_TLS_PROBE_CODEX_VERSION
+        or observation.get("isolated_empty_codex_home") is not True
+        or observation.get("process_exit_code") != 1
+        or observation.get("overall_status") != "fail"
+        or observation.get("failed_check_ids") != ["auth.credentials"]
+        or checks != expected_checks
+        or isinstance(duration, bool)
+        or not isinstance(duration, (int, float))
+        or not 0 < float(duration) <= RUST_TLS_PROBE_TIMEOUT_SECONDS
+        or isinstance(report_bytes, bool)
+        or not isinstance(report_bytes, int)
+        or not 0 < report_bytes <= MAX_JSON_BYTES
+        or not SHA256_RE.fullmatch(str(observation.get("report_sha256", "")))
+    ):
+        raise Arm64EnvironmentReceiptError(
+            "Codex Rust TLS 就绪事实与冻结合同不一致"
+        )
+    return observation
+
+
 def validate_facts(
     facts: dict[str, Any],
     *,
@@ -1044,8 +1359,10 @@ def validate_facts(
         "containers",
         "collector",
     }
-    if producer_version in {"3", "4", PRODUCER_VERSION}:
+    if producer_version in {"3", "4", "5", PRODUCER_VERSION}:
         fact_fields.add("wireguard")
+    if producer_version == PRODUCER_VERSION:
+        fact_fields.add("rust_tls_readiness")
     _expect(
         facts,
         fact_fields,
@@ -1059,6 +1376,9 @@ def validate_facts(
     _rfc3339(facts.get("observed_at_utc"), "facts.observed_at_utc")
     if producer_version == PRODUCER_VERSION:
         expected_contract = contract_sha256()
+        expected_public_egress = EXPECTED_PUBLIC_EGRESS
+    elif producer_version == "5":
+        expected_contract = LEGACY_V5_NETWORK_CONTRACT_SHA256
         expected_public_egress = EXPECTED_PUBLIC_EGRESS
     elif producer_version == "4":
         expected_contract = LEGACY_V4_NETWORK_CONTRACT_SHA256
@@ -1106,6 +1426,8 @@ def validate_facts(
         )
         for item, name in zip(containers, expected_names, strict=True)
     ]
+    if producer_version == PRODUCER_VERSION:
+        _validate_rust_tls_readiness(facts.get("rust_tls_readiness"))
     wireguard: dict[str, Any] | None = None
     if producer_version == "3":
         wireguard = _expect(
@@ -1157,7 +1479,7 @@ def validate_facts(
             raise Arm64EnvironmentReceiptError(
                 "历史 ARM64 wg1 持久配置或运行时 MTU 与 BWG 冻结值不一致"
             )
-    elif producer_version == PRODUCER_VERSION:
+    elif producer_version == "5":
         wireguard = _expect(
             facts.get("wireguard"),
             {
@@ -1196,7 +1518,58 @@ def validate_facts(
             or not SHA256_RE.fullmatch(str(wireguard.get("config_sha256", "")))
         ):
             raise Arm64EnvironmentReceiptError(
-                "ARM64 wg1 Endpoint、MTU 或 TCPMSS 与 BWG 冻结值不一致"
+                "历史 ARM64 wg1 Endpoint、MTU 或 TCPMSS 与 BWG 冻结值不一致"
+            )
+    elif producer_version == PRODUCER_VERSION:
+        wireguard = _expect(
+            facts.get("wireguard"),
+            {
+                "interface",
+                "egress_provider",
+                "configured_mtu",
+                "runtime_mtu",
+                "expected_mtu",
+                "configured_endpoint",
+                "runtime_endpoint",
+                "expected_endpoint",
+                "configured_tcpmss_sources",
+                "runtime_tcpmss_sources",
+                "expected_tcpmss_sources",
+                "configured_tcpmss_destinations",
+                "runtime_tcpmss_destinations",
+                "expected_tcpmss_destinations",
+                "expected_tcp_mss",
+                "config_path",
+                "config_sha256",
+            },
+            "wireguard",
+        )
+        expected_sources = sorted(EXPECTED_TCPMSS_SOURCES)
+        expected_destinations = sorted(EXPECTED_TCPMSS_DESTINATIONS)
+        if (
+            wireguard.get("interface") != WIREGUARD_INTERFACE
+            or wireguard.get("egress_provider") != EXPECTED_EGRESS_PROVIDER
+            or wireguard.get("configured_mtu") != EXPECTED_WG1_MTU
+            or wireguard.get("runtime_mtu") != EXPECTED_WG1_MTU
+            or wireguard.get("expected_mtu") != EXPECTED_WG1_MTU
+            or wireguard.get("configured_endpoint") != EXPECTED_WG1_ENDPOINT
+            or wireguard.get("runtime_endpoint") != EXPECTED_WG1_ENDPOINT
+            or wireguard.get("expected_endpoint") != EXPECTED_WG1_ENDPOINT
+            or wireguard.get("configured_tcpmss_sources") != expected_sources
+            or wireguard.get("runtime_tcpmss_sources") != expected_sources
+            or wireguard.get("expected_tcpmss_sources") != expected_sources
+            or wireguard.get("configured_tcpmss_destinations")
+            != expected_destinations
+            or wireguard.get("runtime_tcpmss_destinations")
+            != expected_destinations
+            or wireguard.get("expected_tcpmss_destinations")
+            != expected_destinations
+            or wireguard.get("expected_tcp_mss") != EXPECTED_TCP_MSS
+            or wireguard.get("config_path") != str(WIREGUARD_CONFIG)
+            or not SHA256_RE.fullmatch(str(wireguard.get("config_sha256", "")))
+        ):
+            raise Arm64EnvironmentReceiptError(
+                "ARM64 wg1 Endpoint、MTU 或双向 TCPMSS 与 BWG 冻结值不一致"
             )
     # Docker restart／compose recreate 会更换 container_id、EndpointID 和容器内接口名，
     # 但不会改变受管网络本身。候选抓包按设计会执行这两类操作；若把这些临时值纳入
