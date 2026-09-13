@@ -167,6 +167,12 @@ CODEX_0154_VC0_ATOMIC_CLOSEOUT_FREEZE_SUCCESSOR = (
     ROOT
     / "docs/egress/maintenance/upstream-codex-0154-vc0-atomic-closeout-20260913-freeze-successor.json"
 )
+# 2026-09-13：campaign-run 分批演练改由受管工具生成并独立重放，禁止继续
+# 手工拼装 Formal 收口所需的 P0 证明。
+CODEX_0154_CAMPAIGN_RUN_REHEARSAL_CLOSURE_FREEZE_SUCCESSOR = (
+    ROOT
+    / "docs/egress/maintenance/upstream-codex-0154-campaign-run-rehearsal-closure-20260913-freeze-successor.json"
+)
 HISTORICAL_LEDGER = "docs/egress/maintenance/historical-source-drift-successor.json"
 SHA256_LENGTH = 64
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -267,6 +273,7 @@ def successor_edges(path: str) -> list[tuple[str, str]]:
         CODEX_0154_WRITABLE_RUN_ROOT_REPAIR_FREEZE_SUCCESSOR,
         CODEX_0154_FAILED_EVIDENCE_ARCHIVE_ROUTE_FREEZE_SUCCESSOR,
         CODEX_0154_VC0_ATOMIC_CLOSEOUT_FREEZE_SUCCESSOR,
+        CODEX_0154_CAMPAIGN_RUN_REHEARSAL_CLOSURE_FREEZE_SUCCESSOR,
     ):
         payload = json.loads(receipt_path.read_text(encoding="utf-8"))
         _validate_successor_receipt(payload)
