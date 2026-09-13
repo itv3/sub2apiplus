@@ -8782,6 +8782,58 @@ def _secure_copy_file_once(source: Path, destination: Path) -> dict[str, Any]:
     }
 
 
+def _freeze_json_input_exact(
+    source: Path,
+    destination: Path,
+    *,
+    label: str,
+) -> dict[str, Any]:
+    """校验并逐字节冻结 JSON 对象，保留上游绑定所使用的原始摘要。"""
+
+    if source.is_symlink() or not source.is_file():
+        raise ConfigurationError(f"{label}不是可信普通文件：{source}")
+    try:
+        raw = source.read_bytes()
+        payload = json.loads(raw.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ConfigurationError(f"无法读取{label} {source}：{error}") from error
+    if not isinstance(payload, dict):
+        raise ConfigurationError(f"{label}必须是 JSON 对象：{source}")
+
+    ensure_private_directory(destination.parent)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent
+    )
+    temporary = Path(temporary_name)
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "wb") as stream:
+            descriptor = -1
+            stream.write(raw)
+            stream.flush()
+            os.fsync(stream.fileno())
+        try:
+            os.link(temporary, destination)
+        except FileExistsError as error:
+            raise ConfigurationError(
+                f"不可变文件已经存在，禁止覆盖：{destination}"
+            ) from error
+        destination.chmod(0o600)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        temporary.unlink(missing_ok=True)
+
+    source_digest = hashlib.sha256(raw).hexdigest()
+    try:
+        frozen = destination.read_bytes()
+    except OSError as error:
+        raise ConfigurationError(f"无法复核冻结的{label} {destination}：{error}") from error
+    if frozen != raw or hashlib.sha256(frozen).hexdigest() != source_digest:
+        raise ConfigurationError(f"{label}冻结后字节或摘要不一致：{destination}")
+    return payload
+
+
 @contextmanager
 def _campaign_lock(
     campaign_dir: Path,
@@ -12006,15 +12058,20 @@ def create_campaign(arguments: argparse.Namespace) -> dict[str, Any]:
     ensure_private_directory(campaign_dir)
     inputs_root = ensure_private_directory(campaign_dir / "inputs", campaign_dir)
     analysis_root = ensure_private_directory(campaign_dir / "analysis", campaign_dir)
-    baseline_rules_payload = _read_json(arguments.rule_manifest, "基线规则清单")
-    scenario_payload = _read_json(scenario_manifest, "baseline 发现场景清单")
-    target_scenario_payload = _read_json(
-        target_scenario_manifest, "target 正式采集场景清单"
+    _freeze_json_input_exact(
+        arguments.rule_manifest,
+        inputs_root / "baseline-rules.json",
+        label="基线规则清单",
     )
-    secure_write_json(inputs_root / "baseline-rules.json", baseline_rules_payload)
-    secure_write_json(inputs_root / "discovery-scenarios.json", scenario_payload)
-    secure_write_json(
-        inputs_root / "target-discovery-scenarios.json", target_scenario_payload
+    _freeze_json_input_exact(
+        scenario_manifest,
+        inputs_root / "discovery-scenarios.json",
+        label="baseline 发现场景清单",
+    )
+    _freeze_json_input_exact(
+        target_scenario_manifest,
+        inputs_root / "target-discovery-scenarios.json",
+        label="target 正式采集场景清单",
     )
     extra_jobs_reference: dict[str, Any] | None = None
     if arguments.extra_jobs is not None:

@@ -60,8 +60,10 @@ from typing import Any, Callable, Mapping
 # VC batch 并证明原始 deadline 漂移在动作前失败关闭；受管工具树摘要随之更新。
 # 2026-09-13（Job 演练入口闭环）：失败生命周期 worker 支持由父 campaign-run
 # 从任意工作目录按绝对路径启动，并在父进程只写 stdout 时保留结构化失败诊断。
+# 2026-09-13（Campaign 输入逐字节冻结）：规则与双份场景清单保持原始字节，
+# 防止 preflight 重排 JSON 后破坏场景绑定的规则摘要。
 DEFAULT_TOOL_DIGEST = (
-    "d4d8242a98b14e4b3e393303e73dc0ae8ac928cb00b6a6763d2b4f14229b5884"
+    "26d3ae71679759bb9fdb6b4764a5bbec2728e3ccacd19c8271df1d7b5ff37d0c"
 )
 DEFAULT_SUPERVISOR_DIGEST = (
     "6ed44c1827727c854783f668e45226316698964c5a42b24746641d4f79eb17d1"

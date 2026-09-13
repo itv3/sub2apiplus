@@ -4156,6 +4156,82 @@ class CodexUpgradeTest(unittest.TestCase):
             reloaded = next(job for job in jobs if job.job_id == "official-test")
             self.assertEqual(reloaded.steps[0]["argv"], ["printf", "target-scenario"])
 
+    def test_plan_preserves_exact_bytes_for_bound_json_inputs(self) -> None:
+        """非规范 JSON 的冻结字节和 SHA 不得因重新格式化而漂移。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            arguments = self._campaign_arguments(
+                root, campaign_mode="preflight_only"
+            )
+
+            baseline_rules = root / "baseline-rules-noncanonical.json"
+            baseline_payload = json.loads(
+                arguments.rule_manifest.read_text(encoding="utf-8")
+            )
+            baseline_rules.write_bytes(
+                (
+                    " \r\n"
+                    + json.dumps(
+                        baseline_payload,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                    + "\r\n"
+                ).encode("utf-8")
+            )
+            arguments.rule_manifest = baseline_rules
+
+            baseline_scenarios = json.loads(
+                arguments.scenario_manifest.read_text(encoding="utf-8")
+            )
+            baseline_scenarios["rule_manifest"]["path"] = baseline_rules.name
+            baseline_scenarios["rule_manifest"]["sha256"] = (
+                codex_upgrade.file_sha256(baseline_rules)
+            )
+            arguments.scenario_manifest.write_bytes(
+                (
+                    json.dumps(
+                        baseline_scenarios,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                    + " \r\n"
+                ).encode("utf-8")
+            )
+
+            target_scenarios = json.loads(
+                arguments.target_scenario_manifest.read_text(encoding="utf-8")
+            )
+            arguments.target_scenario_manifest.write_bytes(
+                (
+                    "\n\t"
+                    + json.dumps(
+                        target_scenarios,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                ).encode("utf-8")
+            )
+
+            manifest = codex_upgrade.create_campaign(arguments)
+            for input_name, source in (
+                ("baseline_rules", arguments.rule_manifest),
+                ("discovery_scenarios", arguments.scenario_manifest),
+                (
+                    "target_discovery_scenarios",
+                    arguments.target_scenario_manifest,
+                ),
+            ):
+                with self.subTest(input_name=input_name):
+                    reference = manifest["inputs"][input_name]
+                    frozen = arguments.campaign_dir / reference["path"]
+                    self.assertEqual(frozen.read_bytes(), source.read_bytes())
+                    self.assertEqual(
+                        reference["sha256"],
+                        codex_upgrade.file_sha256(source),
+                    )
+
     def test_plan_rejects_baseline_manifest_as_target_scenario(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             arguments = self._campaign_arguments(Path(directory))
