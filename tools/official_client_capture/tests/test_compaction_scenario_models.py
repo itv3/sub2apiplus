@@ -34,13 +34,19 @@ class CompactionScenarioModelTest(unittest.TestCase):
             self.source,
             r"compaction_first_model=['\"]gpt-",
         )
-        self.assertNotIn("gpt-5.3-codex-spark", self.source)
+        self.assertNotRegex(
+            self.source,
+            r"compaction_(?:first|second)_model=['\"]gpt-5.3-codex-spark",
+        )
 
-    def test_第二模型可冻结覆盖且默认使用非_Lite_mini(self) -> None:
+    def test_第二模型可冻结覆盖且按目标版本选择非_Lite模型(self) -> None:
         self.assertIn(
-            "local secondary=${COMPACTION_SECOND_MODEL:-gpt-5.4-mini}",
+            "local secondary=${COMPACTION_SECOND_MODEL:-}",
             self.source,
         )
+        self.assertIn("codex_minor >= 154", self.source)
+        self.assertIn("secondary=gpt-5.3-codex-spark", self.source)
+        self.assertIn("secondary=gpt-5.4-mini", self.source)
         self.assertIn("compaction_second_model=$secondary", self.source)
         self.assertIn(".use_responses_lite != false", self.source)
 

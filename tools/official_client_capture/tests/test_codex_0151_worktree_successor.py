@@ -227,6 +227,12 @@ CODEX_0154_VC1_DEADLINE_ORPHAN_FINALIZATION_FREEZE_SUCCESSOR = (
     ROOT
     / "docs/egress/maintenance/upstream-codex-0154-vc1-deadline-orphan-finalization-20260914-freeze-successor.json"
 )
+# 2026-09-14：0.154 首轮 Formal 取证的压缩模型、WHAM 可写根和零计数
+# relay 失败闭合修复；原失败 Campaign 只读，修复入口不发送新请求。
+CODEX_0154_VC1_FORMAL_FAILURE_CLOSURE_FREEZE_SUCCESSOR = (
+    ROOT
+    / "docs/egress/maintenance/upstream-codex-0154-vc1-formal-failure-closure-20260914-freeze-successor.json"
+)
 HISTORICAL_LEDGER = "docs/egress/maintenance/historical-source-drift-successor.json"
 SHA256_LENGTH = 64
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -337,6 +343,7 @@ def successor_edges(path: str) -> list[tuple[str, str]]:
         CODEX_0154_VC1_INTERRUPTION_CONTINUATION_FREEZE_SUCCESSOR,
         CODEX_0154_VC1_FINALIZATION_RECOVERY_FREEZE_SUCCESSOR,
         CODEX_0154_VC1_DEADLINE_ORPHAN_FINALIZATION_FREEZE_SUCCESSOR,
+        CODEX_0154_VC1_FORMAL_FAILURE_CLOSURE_FREEZE_SUCCESSOR,
     ):
         payload = json.loads(receipt_path.read_text(encoding="utf-8"))
         _validate_successor_receipt(payload)

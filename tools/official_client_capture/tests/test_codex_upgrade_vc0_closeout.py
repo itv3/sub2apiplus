@@ -266,6 +266,27 @@ class VC0CloseoutTests(unittest.TestCase):
         request_path.write_bytes(b"".join(request_bodies))
         request_path.chmod(0o600)
 
+        zero_relay_root = runs_root / "oauth-zero" / "relay"
+        zero_relay_root.mkdir(parents=True, mode=0o700)
+        zero_request_path = zero_relay_root / "conn001.client_to_upstream.bin"
+        zero_request_path.write_bytes(
+            b"POST /oauth/token HTTP/1.1\r\n"
+            b"content-type: application/json\r\n"
+            b"content-length: 2\r\n\r\n{}"
+        )
+        zero_request_path.chmod(0o600)
+
+        empty_relay_root = runs_root / "relay-empty" / "relay"
+        empty_relay_root.mkdir(parents=True, mode=0o700)
+        self._write(
+            empty_relay_root / "relay.json",
+            {
+                "schema_version": "byte-relay/v1",
+                "mode": "direct",
+                "connections": [],
+            },
+        )
+
         log_path = (
             campaign_dir
             / "official"
@@ -296,6 +317,16 @@ class VC0CloseoutTests(unittest.TestCase):
                 "id": "official-relay",
                 "phase": "official",
                 "evidence_roots": ["/root/oauth-capture/runs/relay"],
+            },
+            {
+                "id": "official-relay-oauth-refresh",
+                "phase": "official",
+                "evidence_roots": ["/root/oauth-capture/runs/oauth-zero"],
+            },
+            {
+                "id": "official-relay-pre-request-zero",
+                "phase": "official",
+                "evidence_roots": ["/root/oauth-capture/runs/relay-empty"],
             },
             {
                 "id": "pre-request-job",
@@ -344,6 +375,8 @@ class VC0CloseoutTests(unittest.TestCase):
                 "official-compact",
                 "official-core",
                 "official-relay",
+                "official-relay-oauth-refresh",
+                "official-relay-pre-request-zero",
                 "pre-request-job",
             ],
         )
@@ -351,8 +384,144 @@ class VC0CloseoutTests(unittest.TestCase):
         self.assertEqual(audit["pre_request_zero_job_ids"], ["pre-request-job"])
         self.assertEqual(
             sorted(source["live_request_count"] for source in audit["sources"]),
-            [1, 2, 2, 3],
+            [0, 0, 1, 2, 2, 3],
         )
+
+    def test_failed_closeout_closure_repair_is_append_only(self) -> None:
+        """计数器修复只能承接原 closure-failed 诊断并追加阶段终态。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            data_root, campaign_dir = self._live_request_fixture(root)
+            ledger_root = data_root / "control" / "timing-ledger"
+            ledger_root.parent.mkdir(parents=True, mode=0o700)
+            now = datetime.now(timezone.utc)
+            timing.create_ledger(
+                ledger_root,
+                upgrade_id="upgrade-0154",
+                baseline_version="0.151.0",
+                target_version="0.154.0",
+                campaign_purpose="production_replacement",
+                evidence_decision="recapture",
+                started_at_utc=(now - timedelta(minutes=190)).isoformat(),
+            )
+            timing.append_event(
+                ledger_root,
+                event_id="formal-live-p0-receipts-passed",
+                phase="VC-0",
+                event_type="receipt_passed",
+                recorded_at_utc=(now - timedelta(minutes=189)).isoformat(),
+            )
+            timing.append_event(
+                ledger_root,
+                event_id="formal-live-vc0-completed",
+                phase="VC-0",
+                event_type="stage_completed",
+                recorded_at_utc=(now - timedelta(minutes=188)).isoformat(),
+            )
+            timing.append_event(
+                ledger_root,
+                event_id="formal-live-vc1-started",
+                phase="VC-1",
+                event_type="stage_started",
+                recorded_at_utc=(now - timedelta(minutes=187)).isoformat(),
+            )
+            timing_summary = timing.inspect_ledger(
+                ledger_root,
+                now=(now - timedelta(minutes=186)).isoformat(),
+            )
+            receipt_root = (
+                ledger_root / "receipts" / "vc0-closeout" / "formal-live"
+            )
+            receipt_root.mkdir(parents=True, mode=0o700)
+
+            source_audit = data_root / "audit" / "source-closeout"
+            source_audit.mkdir(parents=True, mode=0o700)
+            self._write(
+                source_audit / "request.json",
+                {
+                    "formal_campaign_dir": str(campaign_dir),
+                    "formal_campaign_id": "formal-live",
+                },
+            )
+            self._write(
+                source_audit / "failure.json",
+                {
+                    "schema_version": closeout.CLOSEOUT_DIAGNOSTIC_SCHEMA,
+                    "status": "failed",
+                    "failed_step": "dispatch-vc1",
+                    "formal_campaign_path_exists": True,
+                    "deadline_extended": False,
+                    "cleanup_performed": False,
+                    "timing_summary": timing_summary,
+                    "timing_failure_closure": {
+                        "status": "closure-failed",
+                        "error_type": "VC0CloseoutError",
+                        "message": closeout.FAILED_CLOSEOUT_CLOSURE_REPAIR_MESSAGE,
+                    },
+                },
+            )
+            repair_parent = data_root / "audit" / "repairs"
+            repair_parent.mkdir(mode=0o700)
+
+            forged_audit = data_root / "audit" / "forged-closeout"
+            forged_audit.mkdir(mode=0o700)
+            self._write(
+                forged_audit / "request.json",
+                {
+                    "formal_campaign_dir": str(campaign_dir),
+                    "formal_campaign_id": "formal-live",
+                },
+            )
+            forged_failure = json.loads(
+                (source_audit / "failure.json").read_text(encoding="utf-8")
+            )
+            forged_failure["timing_failure_closure"]["message"] = (
+                "其他未批准的闭合失败"
+            )
+            self._write(forged_audit / "failure.json", forged_failure)
+            before_forged = timing.inspect_ledger(ledger_root)
+            with self.assertRaisesRegex(
+                closeout.VC0CloseoutError,
+                "不属于可追加修复",
+            ):
+                closeout.repair_failed_closeout_closure(
+                    formal_campaign_dir=campaign_dir,
+                    timing_ledger_dir=ledger_root,
+                    source_audit_dir=forged_audit,
+                    audit_dir=repair_parent / "forged-repair",
+                )
+            self.assertEqual(timing.inspect_ledger(ledger_root), before_forged)
+
+            receipt = closeout.repair_failed_closeout_closure(
+                formal_campaign_dir=campaign_dir,
+                timing_ledger_dir=ledger_root,
+                source_audit_dir=source_audit,
+                audit_dir=repair_parent / "repair-1",
+            )
+
+            summary = timing.inspect_ledger(ledger_root)
+            self.assertEqual(receipt["status"], "complete")
+            self.assertEqual(
+                receipt["closure"]["status"],
+                "stop-the-line-recorded",
+            )
+            self.assertEqual(receipt["live_request_count"], 0)
+            self.assertEqual(receipt["total_live_request_count"], 8)
+            self.assertEqual(summary["status"], "stopped")
+            self.assertEqual(summary["active_phase"], "VC-1")
+            self.assertEqual(summary["total_live_request_count"], 8)
+
+            with self.assertRaisesRegex(
+                closeout.VC0CloseoutError,
+                "原时间账本字段漂移",
+            ):
+                closeout.repair_failed_closeout_closure(
+                    formal_campaign_dir=campaign_dir,
+                    timing_ledger_dir=ledger_root,
+                    source_audit_dir=source_audit,
+                    audit_dir=repair_parent / "repair-2",
+                )
 
     def test_failure_accounting_repair_is_append_only_and_not_repeatable(self) -> None:
         """历史失败事件保持逐字不变，计数只能追加一次。"""

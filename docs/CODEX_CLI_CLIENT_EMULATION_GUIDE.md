@@ -1710,6 +1710,25 @@ VC-1 开始事件，再在同一 Python 进程调用一次 `campaign-run`。任�
 执行该命令会进入 VC-1 并可能发送已批准的正式请求；禁止用
 人工 SSH 多命令、heredoc 或直接 `plan --campaign-mode formal` 替代。
 
+若原子收口已形成失败 Formal Campaign，且唯一失败闭合诊断逐字为
+`official-relay-oauth-refresh 已开始但没有可闭合的 live 请求计数来源`，说明旧计数器把已观察到的零
+Responses relay 误判成了无来源。当前 Campaign 不得重跑；先完成修复工具的离线回归和受管部署，再在
+ARM64 `capture-cli` 容器内、`campaign-run` 与 CampaignLease 之外执行一次：
+
+```bash
+python3 -m tools.official_client_capture.codex_upgrade_vc0_closeout \
+  repair-failure-closure \
+  --formal-campaign-dir /绝对路径/失败Formal-Campaign \
+  --timing-ledger-dir /绝对路径/连续时间账本 \
+  --source-audit-dir /绝对路径/原VC-0-closeout失败审计 \
+  --audit-dir /绝对路径/尚不存在的修复审计目录
+```
+
+该入口只读重放原请求、失败诊断、Campaign 和账本 head；只接受上述确定性缺陷，模型请求与历史改写均为
+零。它按冻结证据根发布 live 请求审计，并根据原阶段 deadline 追加唯一 `stage_abandoned` 或
+`stop_the_line`。任何身份、摘要或账本漂移都失败关闭，且不得对同一现场再次执行。旧 Campaign 永久只读；
+只有账本尚未进入永久停线时，才能沿用同一总 deadline 从新的 VC-0 开始。
+
 “当前工具是否就绪”只能由本次 P0 收据、Job rehearsal 和门禁输出证明，不再在长期手册中维护容易过期的
 状态表。除冻结身份实际漂移外，不得重复已经通过的离线演练，也不得以准备工作为由停留在 VC-0。
 

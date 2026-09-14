@@ -3221,6 +3221,17 @@ class CodexUpgradeTest(unittest.TestCase):
                 wham_command = wham_job["steps"][1]["argv"][2]
                 self.assertIn("--entrypoint python3", wham_command)
                 self.assertNotIn("{runtime_image} python3 ", wham_command)
+                if version == "0.154.0":
+                    self.assertIn(
+                        "run_root={repo_root}/runs/{campaign_id}-official-wham-safe",
+                        wham_command,
+                    )
+                    self.assertIn(
+                        "runtime_root={repo_root}/runtime/{campaign_id}-official-wham-safe",
+                        wham_command,
+                    )
+                    self.assertIn("-v {repo_root}:/capture", wham_command)
+                    self.assertNotIn("-v {capture_root}:/capture", wham_command)
                 realtime_job = next(
                     job
                     for job in scenario["capture_jobs"]

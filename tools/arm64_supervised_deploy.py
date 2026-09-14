@@ -76,8 +76,11 @@ from typing import Any, Callable, Mapping
 # 并新增只承接既有确定性失败 v4 的唯一 v5 零请求收尾；不增加产出侧变化。
 # 2026-09-14（VC-1 deadline 孤儿封口）：批次预留 attempt 清理窗口，并新增只消费
 # sequence 5 冻结现场、零模型请求且永久停线的直接 finalizer。
+# 2026-09-14（0.154 首轮正式取证缺陷闭合）：压缩场景改用当前非 Lite 第二模型，
+# WHAM safe 写入登记数据根，并允许零 Responses／零连接 relay 形成失败请求审计；
+# 新增只承接该确定性失败的追加式账本闭合入口。
 DEFAULT_TOOL_DIGEST = (
-    "86cf9a27f384956a466366ad9ff9e62c79a8d5fd867969b1d84aab5db5f1cdd9"
+    "d5cbfafdcae477956be617b902fffca9653b4a4da607d54093792a5fa4c6628f"
 )
 DEFAULT_SUPERVISOR_DIGEST = (
     "cf660e9d7d6c341d8c1dbc96d5161dfbf709ceb17a166d16936851988f978c88"

@@ -49,9 +49,18 @@ compaction_catalog=""
 
 configure_compaction_models() {
   # 首模型必须跟随 Campaign 冻结的主模型，不能再写死成某个可能已被账号禁用的
-  # 历史模型。第二模型默认选当前 0.149.1 目录中的非 Lite mini 变体；调用方如需
-  # 替换，仍必须给出合法且不同的模型 slug，目录生成阶段会再次核验它真实存在。
-  local secondary=${COMPACTION_SECOND_MODEL:-gpt-5.4-mini}
+  # 历史模型。第二模型按目标 CLI 版本选择该版本已冻结的非 Lite 变体：0.154
+  # 的在线目录已不再提供 gpt-5.4-mini，继续沿用 0.149.1 默认值会在发请求前
+  # 必然失败。调用方如需替换，仍必须给出合法且不同的模型 slug，目录生成阶段
+  # 会再次核验它真实存在且 use_responses_lite=false。
+  local secondary=${COMPACTION_SECOND_MODEL:-}
+  if [[ -z $secondary ]]; then
+    if (( codex_major > 0 || codex_minor >= 154 )); then
+      secondary=gpt-5.3-codex-spark
+    else
+      secondary=gpt-5.4-mini
+    fi
+  fi
   if [[ ! $model =~ ^[A-Za-z0-9._-]+$ || ! $secondary =~ ^[A-Za-z0-9._-]+$ ]]; then
     echo "压缩场景模型只能包含字母、数字、点、下划线和连字符。" >&2
     exit 2

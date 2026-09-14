@@ -64,6 +64,9 @@ PRE_REQUEST_FAILURE_MARKERS = (
     "宿主与容器 runs 根不同源".encode("utf-8"),
     b"CAPTURE_HOST_DATA_ROOT",
 )
+FAILED_CLOSEOUT_CLOSURE_REPAIR_MESSAGE = (
+    "official-relay-oauth-refresh 已开始但没有可闭合的 live 请求计数来源"
+)
 
 
 class VC0CloseoutError(RuntimeError):
@@ -1509,7 +1512,33 @@ def _relay_live_request_sources(root: Path) -> list[dict[str, Any]]:
     from tools.official_client_capture import model_condition_receipts
 
     sources: list[dict[str, Any]] = []
-    for path in sorted(relay_root.glob("conn*.client_to_upstream.bin")):
+    request_paths = sorted(relay_root.glob("conn*.client_to_upstream.bin"))
+    if not request_paths:
+        # relay 已成功启动但客户端尚未连接时不会产生 conn*.bin。绑定零连接
+        # manifest，才能区分“请求数确定为 0”和“证据根损坏／未形成”。
+        manifest_path = relay_root / "relay.json"
+        if not manifest_path.is_file() or manifest_path.is_symlink():
+            return []
+        manifest, _raw = _load_json(manifest_path, "relay 零连接 manifest")
+        if (
+            manifest.get("schema_version") != "byte-relay/v1"
+            or manifest.get("connections") != []
+        ):
+            raise VC0CloseoutError("relay 没有请求字节且零连接 manifest 非法")
+        resolved = _trusted_file(
+            manifest_path,
+            "relay 零连接 manifest",
+            maximum=MAX_JSON_BYTES,
+        )
+        return [
+            {
+                "kind": "relay_zero_connections",
+                "path": str(resolved),
+                "sha256": _sha256_file(resolved),
+                "live_request_count": 0,
+            }
+        ]
+    for path in request_paths:
         path = _trusted_file(
             path,
             "relay 客户端原始字节",
@@ -1518,15 +1547,17 @@ def _relay_live_request_sources(root: Path) -> list[dict[str, Any]]:
         count = len(
             model_condition_receipts._responses_request_models(path.read_bytes())
         )
-        if count:
-            sources.append(
-                {
-                    "kind": "relay_responses_requests",
-                    "path": str(path),
-                    "sha256": _sha256_file(path),
-                    "live_request_count": count,
-                }
-            )
+        # OAuth refresh 等正式场景会形成真实 relay 字节，但按本账本的
+        # “模型 turn／Responses 请求”口径计数应为 0。零值来源仍须绑定文件
+        # 摘要，否则失败收口会把“已观察且为零”误判成“没有计数来源”。
+        sources.append(
+            {
+                "kind": "relay_responses_requests",
+                "path": str(path),
+                "sha256": _sha256_file(path),
+                "live_request_count": count,
+            }
+        )
     return sources
 
 
@@ -2412,6 +2443,157 @@ def repair_failure_live_request_accounting(
         raise
 
 
+def repair_failed_closeout_closure(
+    *,
+    formal_campaign_dir: Path,
+    timing_ledger_dir: Path,
+    source_audit_dir: Path,
+    audit_dir: Path,
+) -> dict[str, Any]:
+    """只追加补齐一次因计数器缺陷未写入的失败阶段闭合。"""
+
+    os.umask(0o077)
+    audit_root = _new_private_directory(audit_dir, "失败闭合修复审计目录")
+    request = {
+        "schema_version": "codex-upgrade-failed-closeout-closure-repair-request/v1",
+        "formal_campaign_dir": str(formal_campaign_dir),
+        "timing_ledger_dir": str(timing_ledger_dir),
+        "source_audit_dir": str(source_audit_dir),
+        "requested_at_utc": _utc_now(),
+        "history_rewrite_allowed": False,
+        "live_requests_allowed": False,
+    }
+    _write_once(audit_root / "request.json", request)
+    try:
+        campaign_dir = _trusted_directory(formal_campaign_dir, "Formal Campaign")
+        campaign, _campaign_raw = _load_json(
+            campaign_dir / "campaign.json",
+            "Formal Campaign",
+        )
+        campaign_id = str(campaign.get("campaign_id", ""))
+        if (
+            campaign.get("campaign_mode") != "formal"
+            or not SAFE_ID_RE.fullmatch(campaign_id)
+        ):
+            raise VC0CloseoutError("Formal Campaign 身份非法")
+
+        source_root = _trusted_directory(source_audit_dir, "原失败审计目录")
+        source_request_path = _trusted_file(
+            source_root / "request.json",
+            "原 VC-0 closeout 请求",
+        )
+        source_failure_path = _trusted_file(
+            source_root / "failure.json",
+            "原 VC-0 closeout 失败诊断",
+        )
+        source_request, _source_request_raw = _load_json(
+            source_request_path,
+            "原 VC-0 closeout 请求",
+        )
+        source_failure, _source_failure_raw = _load_json(
+            source_failure_path,
+            "原 VC-0 closeout 失败诊断",
+        )
+        closure = source_failure.get("timing_failure_closure")
+        timing_summary = source_failure.get("timing_summary")
+        failed_step = source_failure.get("failed_step")
+        try:
+            source_campaign_dir = Path(
+                str(source_request.get("formal_campaign_dir", ""))
+            ).resolve(strict=True)
+        except OSError as error:
+            raise VC0CloseoutError("原失败请求的 Formal Campaign 路径不可重放") from error
+        if (
+            source_failure.get("schema_version") != CLOSEOUT_DIAGNOSTIC_SCHEMA
+            or source_failure.get("status") != "failed"
+            or not isinstance(closure, Mapping)
+            or closure.get("status") != "closure-failed"
+            or closure.get("error_type") != "VC0CloseoutError"
+            or closure.get("message") != FAILED_CLOSEOUT_CLOSURE_REPAIR_MESSAGE
+            or not isinstance(timing_summary, Mapping)
+            or failed_step != "dispatch-vc1"
+            or source_request.get("formal_campaign_id") != campaign_id
+            or source_campaign_dir != campaign_dir.resolve(strict=True)
+            or source_failure.get("formal_campaign_path_exists") is not True
+            or source_failure.get("deadline_extended") is not False
+            or source_failure.get("cleanup_performed") is not False
+        ):
+            raise VC0CloseoutError("原失败诊断不属于可追加修复的 closeout 闭合缺陷")
+
+        ledger_root = _private_directory(timing_ledger_dir, "UpgradeTimingLedger")
+        with _ledger_lock(ledger_root):
+            before = codex_upgrade_timing_ledger.inspect_ledger(ledger_root)
+            for key in (
+                "upgrade_id",
+                "head_sequence",
+                "head_sha256",
+                "active_phase",
+                "total_live_request_count",
+                "total_deadline_at_utc",
+            ):
+                if before.get(key) != timing_summary.get(key):
+                    raise VC0CloseoutError(
+                        f"失败闭合修复发现原时间账本字段漂移：{key}"
+                    )
+            if (
+                before.get("status") not in {"active", "stop_required"}
+                or before.get("active_phase") not in codex_upgrade_timing_ledger.PHASE_ORDER
+            ):
+                raise VC0CloseoutError("原时间账本已不是待闭合的 active／stop_required 阶段")
+            closure_result = _close_failed_timing_stage(
+                ledger_root,
+                formal_campaign_dir=campaign_dir,
+                formal_campaign_id=campaign_id,
+                failed_step=failed_step,
+            )
+            if closure_result.get("status") not in {
+                "stage-abandoned-recorded",
+                "stop-the-line-recorded",
+            }:
+                raise VC0CloseoutError("失败闭合修复未形成唯一阶段终态")
+            after = codex_upgrade_timing_ledger.inspect_ledger(ledger_root)
+
+        receipt = {
+            "schema_version": "codex-upgrade-failed-closeout-closure-repair/v1",
+            "status": "complete",
+            "completed_at_utc": _utc_now(),
+            "campaign_id": campaign_id,
+            "source_request": {
+                "path": str(source_request_path),
+                "sha256": _sha256_file(source_request_path),
+            },
+            "source_failure": {
+                "path": str(source_failure_path),
+                "sha256": _sha256_file(source_failure_path),
+            },
+            "closure": closure_result,
+            "ledger_head_sequence": after["head_sequence"],
+            "ledger_head_sha256": after["head_sha256"],
+            "total_live_request_count": after["total_live_request_count"],
+            "history_rewritten": False,
+            "live_request_count": 0,
+        }
+        _write_once(audit_root / "receipt.json", receipt)
+        return receipt
+    except BaseException as error:
+        try:
+            _write_once(
+                audit_root / "failure.json",
+                {
+                    "schema_version": "codex-upgrade-failed-closeout-closure-repair-failure/v1",
+                    "status": "failed",
+                    "failed_at_utc": _utc_now(),
+                    "error_type": type(error).__name__,
+                    "message": str(error),
+                    "history_rewritten": False,
+                    "live_request_count": 0,
+                },
+            )
+        except BaseException:
+            pass
+        raise
+
+
 def closeout(arguments: argparse.Namespace) -> dict[str, Any]:
     """执行一次不可重入的 VC-0 收口与 VC-1 首批派发。"""
 
@@ -2733,9 +2915,34 @@ def build_accounting_repair_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_failure_closure_repair_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="只追加补齐 VC-0 closeout 失败后未写入的时间阶段终态"
+    )
+    parser.add_argument("--formal-campaign-dir", type=Path, required=True)
+    parser.add_argument("--timing-ledger-dir", type=Path, required=True)
+    parser.add_argument("--source-audit-dir", type=Path, required=True)
+    parser.add_argument("--audit-dir", type=Path, required=True)
+    return parser
+
+
 def main(argv: list[str] | None = None) -> int:
     if argv is None:
         argv = sys.argv[1:]
+    if argv and argv[0] == "repair-failure-closure":
+        arguments = build_failure_closure_repair_parser().parse_args(argv[1:])
+        try:
+            receipt = repair_failed_closeout_closure(
+                formal_campaign_dir=arguments.formal_campaign_dir,
+                timing_ledger_dir=arguments.timing_ledger_dir,
+                source_audit_dir=arguments.source_audit_dir,
+                audit_dir=arguments.audit_dir,
+            )
+        except (OSError, ValueError, VC0CloseoutError) as error:
+            print(f"Codex closeout 失败闭合修复失败：{error}", file=sys.stderr)
+            return 1
+        print(json.dumps(receipt, ensure_ascii=False, sort_keys=True))
+        return 0
     if argv and argv[0] == "repair-failure-accounting":
         arguments = build_accounting_repair_parser().parse_args(argv[1:])
         try:
