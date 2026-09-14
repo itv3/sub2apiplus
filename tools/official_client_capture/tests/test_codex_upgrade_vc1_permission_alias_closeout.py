@@ -32,8 +32,16 @@ class PermissionAliasCloseoutTests(unittest.TestCase):
         runs_root.mkdir(mode=0o700)
         external_roots: list[Path] = []
         for index in range(30):
-            evidence_root = runs_root / f"{campaign_id}-job-{index:02d}"
-            evidence_root.mkdir(mode=0o700)
+            if index < 2:
+                suffix = "" if index == 0 else "-ws-repeat"
+                evidence_root = (
+                    runs_root
+                    / "official-client/oauth"
+                    / f"oauth-{campaign_id}{suffix}"
+                )
+            else:
+                evidence_root = runs_root / f"{campaign_id}-job-{index:02d}"
+            evidence_root.mkdir(parents=True, mode=0o700)
             external_roots.append(evidence_root)
         gap = external_roots[0] / "direct"
         gap.mkdir(mode=0o755)
@@ -166,7 +174,7 @@ class PermissionAliasCloseoutTests(unittest.TestCase):
                 root = Path(directory).resolve()
                 fixture = self._fixture(root)
                 runs_root = fixture["runs_root"]
-                target_root = runs_root / f"{closeout.CAMPAIGN_ID}-job-01"
+                target_root = runs_root / f"{closeout.CAMPAIGN_ID}-job-02"
                 target = target_root / "target.txt"
                 target.write_text("fixture", encoding="utf-8")
                 target.chmod(0o600)

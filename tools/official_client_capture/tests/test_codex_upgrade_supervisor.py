@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import copy
 import hashlib
 import io
 import json
@@ -685,6 +686,318 @@ class SupervisorTests(unittest.TestCase):
             bindings,
             (sequence_two_state, sequence_two, sequence_two_dir),
         )
+
+    def _permission_alias_predispatch_fixture(
+        self,
+        root: Path,
+    ) -> dict[str, object]:
+        """建立 sequence 4 未创建父 run 时唯一 sequence 5 的完整夹具。"""
+
+        (
+            sequence_three_state,
+            sequence_three,
+            sequence_three_dir,
+            sequence_four,
+            bindings,
+            sequence_two,
+        ) = self._permission_alias_fixture(root)
+        campaign_id = str(sequence_four["campaign_id"])
+        campaign_dir = Path(
+            sequence_four["actions"][1]["command"][
+                sequence_four["actions"][1]["command"].index("--campaign-dir") + 1
+            ]
+        )
+        data_root = campaign_dir.parents[2]
+        action_input_dir = data_root / "control" / f"{campaign_id}-action-inputs"
+
+        compiled_at = "2000-01-01T00:00:00+00:00"
+        must_start_by = "2000-01-01T00:01:00+00:00"
+        sequence_four_batch_path = (
+            campaign_dir / "control/vc/batches/0004-vc-1.json"
+        )
+        self._write_json(
+            sequence_four_batch_path,
+            {
+                "sequence": 4,
+                "batch_id": "vc-1-0004",
+                "batch_sha256": sequence_four["batch_sha256"],
+                "compiled_at_utc": compiled_at,
+                "must_start_by_utc": must_start_by,
+            },
+        )
+        sequence_four_manifest_path = (
+            campaign_dir / "control/vc/run-manifests/0004-vc-1.json"
+        )
+        self._write_json(sequence_four_manifest_path, sequence_four)
+        sequence_four_action_plan_path = (
+            action_input_dir / "vc1-sequence4-action-plan.json"
+        )
+
+        sequence_one_manifest: dict[str, object] = {
+            "schema_version": supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA,
+            "campaign_id": campaign_id,
+            "campaign_plan_sha256": sequence_four["campaign_plan_sha256"],
+            "batch_id": "vc-1-0001",
+            "batch_sequence": 1,
+            "batch_sha256": "7" * 64,
+            "phase": "VC-1",
+            "original_deadline_at_utc": sequence_four["original_deadline_at_utc"],
+        }
+        sequence_one_dir = root / "run-sequence-one"
+        sequence_one_dir.mkdir(mode=0o700)
+        sequence_one_state: dict[str, object] = {"state": "stopped"}
+        self._write_json(
+            sequence_one_dir / "campaign-run-manifest.json",
+            {
+                "schema_version": supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA,
+                "manifest": sequence_one_manifest,
+                "manifest_sha256": supervisor._sha256(
+                    supervisor._canonical(sequence_one_manifest)
+                ),
+            },
+        )
+        history = [
+            (sequence_one_state, sequence_one_manifest, sequence_one_dir),
+            sequence_two,
+            (sequence_three_state, sequence_three, sequence_three_dir),
+        ]
+
+        helper_path = (
+            data_root
+            / "tools/official_client_capture/"
+            "codex_upgrade_vc1_permission_alias_closeout.py"
+        )
+        helper_sha256 = hashlib.sha256(helper_path.read_bytes()).hexdigest()
+        closeout_tool_path = (
+            data_root
+            / "tools/official_client_capture/"
+            "codex_upgrade_vc1_permission_alias_predispatch_closeout.py"
+        )
+        closeout_tool_path.write_text("# predispatch fixture\n", encoding="utf-8")
+        closeout_tool_path.chmod(0o600)
+        closeout_tool_sha256 = hashlib.sha256(
+            closeout_tool_path.read_bytes()
+        ).hexdigest()
+        current_tool_files_sha256 = "f" * 64
+        current_deployment_path = (
+            data_root / "control/codex-0154-supervisor-enable-sequence5.json"
+        )
+        self._write_json(
+            current_deployment_path,
+            {
+                "schema_version": "codex-arm64-supervisor-enable/v1",
+                "status": "passed",
+                "architecture": "aarch64",
+                "production_tool_root": str(helper_path.parent),
+                "tool_files_sha256": current_tool_files_sha256,
+                "supervisor_sha256": hashlib.sha256(
+                    Path(supervisor.__file__).read_bytes()
+                ).hexdigest(),
+            },
+        )
+        current_deployment_sha256 = hashlib.sha256(
+            current_deployment_path.read_bytes()
+        ).hexdigest()
+
+        boundary = mock.Mock(
+            entries=(object(), object()),
+            gaps=(object(),),
+            gap_sha256="6" * 64,
+            boundary_sha256="5" * 64,
+        )
+        run_history: list[dict[str, object]] = []
+        for _state, manifest, run_dir in history:
+            run_history.append(
+                {
+                    "batch_sequence": manifest["batch_sequence"],
+                    "run_name": run_dir.name,
+                    "manifest_file_sha256": hashlib.sha256(
+                        (run_dir / "campaign-run-manifest.json").read_bytes()
+                    ).hexdigest(),
+                }
+            )
+        receipt_path = (
+            action_input_dir / "sequence4-predispatch-closeout-receipt.json"
+        )
+        receipt_core: dict[str, object] = {
+            "schema_version": "codex-vc1-permission-alias-predispatch-closeout/v1",
+            "status": "passed",
+            "campaign_id": campaign_id,
+            "attempt_id": supervisor.VC1_PERMISSION_COMPENSATION_ATTEMPT_ID,
+            "created_at_utc": "2026-09-14T14:00:00Z",
+            "source_sequence": 4,
+            "source_batch_file_sha256": hashlib.sha256(
+                sequence_four_batch_path.read_bytes()
+            ).hexdigest(),
+            "source_batch_sha256": sequence_four["batch_sha256"],
+            "source_manifest_file_sha256": hashlib.sha256(
+                sequence_four_manifest_path.read_bytes()
+            ).hexdigest(),
+            "source_action_plan_sha256": hashlib.sha256(
+                sequence_four_action_plan_path.read_bytes()
+            ).hexdigest(),
+            "source_failed_deployment_sha256": str(
+                sequence_four["actions"][0]["command"][
+                    sequence_four["actions"][0]["command"].index(
+                        "--deployment-receipt-sha256"
+                    )
+                    + 1
+                ]
+            ),
+            "source_compiled_at_utc": compiled_at,
+            "source_must_start_by_utc": must_start_by,
+            "source_actions": [
+                "harden-official-evidence-permissions-via-alias",
+                "seal-official-preview",
+            ],
+            "source_run_created": False,
+            "source_run_history": run_history,
+            "deterministic_error_type": "PermissionAliasCloseoutError",
+            "deterministic_error": supervisor.VC1_PERMISSION_ALIAS_PREDISPATCH_ERROR,
+            "current_deployment_receipt": str(current_deployment_path),
+            "current_deployment_receipt_sha256": current_deployment_sha256,
+            "current_tool_files_sha256": current_tool_files_sha256,
+            "closeout_tool_sha256": closeout_tool_sha256,
+            "current_helper_sha256": helper_sha256,
+            "boundary": {
+                "entry_count": len(boundary.entries),
+                "gap_count": len(boundary.gaps),
+                "gap_sha256": boundary.gap_sha256,
+                "stable_boundary_sha256": boundary.boundary_sha256,
+            },
+            "scanned_bytes": 0,
+            "live_request_count": 0,
+        }
+        receipt = {
+            **receipt_core,
+            "receipt_sha256": supervisor._sha256(
+                supervisor._canonical(receipt_core)
+            ),
+        }
+        self._write_json(receipt_path, receipt)
+
+        permission_receipt_path = (
+            action_input_dir / "sequence5-permission-alias-closeout-receipt.json"
+        )
+        alias_action = {
+            "action_id": "harden-official-evidence-permissions-via-alias-v2",
+            "operation": "VC-1:harden-official-evidence-permissions-via-alias-v2",
+            "timeout_seconds": 180.0,
+            "command": [
+                "/usr/bin/python3",
+                str(helper_path),
+                "--campaign-id",
+                campaign_id,
+                "--attempt-id",
+                supervisor.VC1_PERMISSION_COMPENSATION_ATTEMPT_ID,
+                "--attempt",
+                str(
+                    campaign_dir
+                    / "official/attempts"
+                    / supervisor.VC1_PERMISSION_COMPENSATION_ATTEMPT_ID
+                    / "attempt.json"
+                ),
+                "--attempt-sha256",
+                str(bindings["VC1_PERMISSION_COMPENSATION_ATTEMPT_SHA256"]),
+                "--roots-sha256",
+                str(bindings["VC1_PERMISSION_COMPENSATION_ROOTS_SHA256"]),
+                "--self-sha256",
+                helper_sha256,
+                "--readonly-runs-root",
+                str(bindings["VC1_PERMISSION_ALIAS_READONLY_RUNS_ROOT"]),
+                "--writable-runs-root",
+                str(data_root / "runs"),
+                "--deployment-receipt",
+                str(current_deployment_path),
+                "--deployment-receipt-sha256",
+                current_deployment_sha256,
+                "--tool-files-sha256",
+                current_tool_files_sha256,
+                "--receipt",
+                str(permission_receipt_path),
+            ],
+            "item_ids": ["harden-official-evidence-permissions-via-alias-v2"],
+        }
+        sequence_five: dict[str, object] = {
+            **sequence_four,
+            "batch_id": "vc-1-0005",
+            "batch_sequence": 5,
+            "batch_sha256": "e" * 64,
+            "actions": [alias_action, sequence_three["actions"][1]],
+            "execute_items": [
+                "harden-official-evidence-permissions-via-alias-v2",
+                "seal-official-preview",
+            ],
+            "reuse_items": ["prepare-official-assertion-bundle"],
+        }
+        sequence_five_action_plan_path = (
+            action_input_dir / "vc1-sequence5-action-plan.json"
+        )
+        self._write_json(
+            sequence_five_action_plan_path,
+            {
+                "schema_version": "codex-upgrade-vc-action-plan/v1",
+                "execute_item_ids": sequence_five["execute_items"],
+                "reuse_item_ids": sequence_five["reuse_items"],
+                "actions": sequence_five["actions"],
+            },
+        )
+        historical_deployment_path = Path(
+            sequence_four["actions"][0]["command"][
+                sequence_four["actions"][0]["command"].index(
+                    "--deployment-receipt"
+                )
+                + 1
+            ]
+        )
+        bindings.update(
+            {
+                "VC1_PERMISSION_ALIAS_ENTRY_COUNT": len(boundary.entries),
+                "VC1_PERMISSION_ALIAS_GAP_COUNT": len(boundary.gaps),
+                "VC1_PERMISSION_ALIAS_GAP_SHA256": boundary.gap_sha256,
+                "VC1_PERMISSION_ALIAS_PREDISPATCH_BATCH_FILE_SHA256": receipt_core[
+                    "source_batch_file_sha256"
+                ],
+                "VC1_PERMISSION_ALIAS_PREDISPATCH_BATCH_SHA256": sequence_four[
+                    "batch_sha256"
+                ],
+                "VC1_PERMISSION_ALIAS_PREDISPATCH_MANIFEST_FILE_SHA256": receipt_core[
+                    "source_manifest_file_sha256"
+                ],
+                "VC1_PERMISSION_ALIAS_PREDISPATCH_ACTION_PLAN_SHA256": receipt_core[
+                    "source_action_plan_sha256"
+                ],
+                "VC1_PERMISSION_ALIAS_PREDISPATCH_DEPLOYMENT_SHA256": hashlib.sha256(
+                    historical_deployment_path.read_bytes()
+                ).hexdigest(),
+                "VC1_PERMISSION_ALIAS_PREDISPATCH_TOOL_FILES_SHA256": sequence_four[
+                    "actions"
+                ][0]["command"][
+                    sequence_four["actions"][0]["command"].index(
+                        "--tool-files-sha256"
+                    )
+                    + 1
+                ],
+                "VC1_PERMISSION_ALIAS_PREDISPATCH_SUPERVISOR_SHA256": hashlib.sha256(
+                    Path(supervisor.__file__).read_bytes()
+                ).hexdigest(),
+                "VC1_PERMISSION_ALIAS_PREDISPATCH_COMPILED_AT_UTC": compiled_at,
+                "VC1_PERMISSION_ALIAS_PREDISPATCH_MUST_START_BY_UTC": must_start_by,
+                "VC1_PERMISSION_ALIAS_V2_HELPER_SHA256": helper_sha256,
+                "VC1_PERMISSION_ALIAS_PREDISPATCH_CLOSEOUT_TOOL_SHA256": (
+                    closeout_tool_sha256
+                ),
+            }
+        )
+        return {
+            "successor": sequence_five,
+            "history": history,
+            "bindings": bindings,
+            "boundary": boundary,
+            "receipt_path": receipt_path,
+            "permission_receipt_path": permission_receipt_path,
+            "sequence_four_batch_path": sequence_four_batch_path,
+        }
 
     def _recovery_manifest(self, root: Path) -> dict[str, object]:
         contract = root / "recovery-contract.json"
@@ -2003,6 +2316,102 @@ class SupervisorTests(unittest.TestCase):
                             run_dir,
                             successor,
                         )
+
+    def test_permission_alias_predispatch_allows_only_exact_sequence_five(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = self._permission_alias_predispatch_fixture(
+                Path(directory).resolve()
+            )
+            with (
+                mock.patch.multiple(supervisor, **fixture["bindings"]),
+                mock.patch.object(
+                    supervisor.permission_alias_closeout,
+                    "inspect_permission_boundary",
+                    return_value=fixture["boundary"],
+                ) as inspect_boundary,
+            ):
+                ordered = supervisor._validate_batched_campaign_history(
+                    fixture["successor"],
+                    fixture["history"],
+                )
+            self.assertEqual(
+                [item[1]["batch_sequence"] for item in ordered],
+                [1, 2, 3],
+            )
+            self.assertEqual(inspect_boundary.call_count, 2)
+
+    def test_permission_alias_predispatch_rejects_any_frozen_fact_drift(
+        self,
+    ) -> None:
+        for mutation in ("batch", "seal", "receipt", "output"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory:
+                fixture = self._permission_alias_predispatch_fixture(
+                    Path(directory).resolve()
+                )
+                successor = fixture["successor"]
+                if mutation == "batch":
+                    Path(fixture["sequence_four_batch_path"]).write_text(
+                        "{}\n",
+                        encoding="utf-8",
+                    )
+                elif mutation == "seal":
+                    successor = copy.deepcopy(successor)
+                    successor["actions"][1]["timeout_seconds"] = 1499.0
+                elif mutation == "receipt":
+                    receipt_path = Path(fixture["receipt_path"])
+                    receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+                    receipt["live_request_count"] = 1
+                    receipt.pop("receipt_sha256")
+                    receipt["receipt_sha256"] = supervisor._sha256(
+                        supervisor._canonical(receipt)
+                    )
+                    self._write_json(receipt_path, receipt)
+                else:
+                    self._write_json(
+                        Path(fixture["permission_receipt_path"]),
+                        {"unexpected": True},
+                    )
+                with (
+                    mock.patch.multiple(supervisor, **fixture["bindings"]),
+                    mock.patch.object(
+                        supervisor.permission_alias_closeout,
+                        "inspect_permission_boundary",
+                        return_value=fixture["boundary"],
+                    ),
+                ):
+                    with self.assertRaisesRegex(
+                        SupervisorError,
+                        "制品摘要|逐字复用 seal|封口收据|动作或输出",
+                    ):
+                        supervisor._validate_batched_campaign_history(
+                            successor,
+                            fixture["history"],
+                        )
+
+    def test_permission_alias_predispatch_rejects_existing_sequence_four_run(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = self._permission_alias_predispatch_fixture(
+                Path(directory).resolve()
+            )
+            history = list(fixture["history"])
+            sequence_four = copy.deepcopy(fixture["successor"])
+            sequence_four["batch_id"] = "vc-1-0004"
+            sequence_four["batch_sequence"] = 4
+            history.append(({"state": "stopped"}, sequence_four, Path(directory)))
+            with mock.patch.multiple(supervisor, **fixture["bindings"]):
+                self.assertFalse(
+                    supervisor._validate_permission_alias_predispatch_successor(
+                        fixture["history"][-1][0],
+                        fixture["history"][-1][1],
+                        fixture["history"][-1][2],
+                        fixture["successor"],
+                        history,
+                    )
+                )
 
     def test_failed_v3_only_allows_exact_sequence_three_v4_successor(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -118,6 +118,47 @@ VC1_PERMISSION_ALIAS_GAP_SHA256 = (
     "2b69ee039891bf6c58b6c787af105b9a896956b562cd0801c10ca7d2b36f2842"
 )
 VC1_PERMISSION_ALIAS_READONLY_RUNS_ROOT = Path("/root/oauth-capture/runs")
+# sequence 4 已在 60 秒窗口内编译，但旧 helper 遗漏真实 OAuth 嵌套根，
+# 因而在父 run 创建前被只读前检拒绝。以下摘要只允许该未派发批次经零请求
+# 封口收据承接到唯一 sequence 5；不得覆盖或重编 sequence 4。
+VC1_PERMISSION_ALIAS_PREDISPATCH_BATCH_FILE_SHA256 = (
+    "02445883a35a1298821a76cfb8eed841b596de2169c22fc34d6d660981ed2cc8"
+)
+VC1_PERMISSION_ALIAS_PREDISPATCH_BATCH_SHA256 = (
+    "b2455bb609270d25ac257d08405c6eebfd6cfa2d3d207f946e227929030f72fb"
+)
+VC1_PERMISSION_ALIAS_PREDISPATCH_MANIFEST_FILE_SHA256 = (
+    "6d574a8c785f5ccd0a26033ff43631b62789b27db289590053c210aaedf55e23"
+)
+VC1_PERMISSION_ALIAS_PREDISPATCH_ACTION_PLAN_SHA256 = (
+    "0daf24b9e369b59735520cfa4ed51d874baa083b1fa396089c36fe8e0b5d8cf1"
+)
+VC1_PERMISSION_ALIAS_PREDISPATCH_DEPLOYMENT_SHA256 = (
+    "7d81a306ec1d71e0eb795ed45d1b2ad71449e60d39f5f2f969e921c0968ca5a6"
+)
+VC1_PERMISSION_ALIAS_PREDISPATCH_TOOL_FILES_SHA256 = (
+    "3bfcc618a6fb94a8c145e747a044803e6b0f148ef5f7004e15f990a91d7d6da9"
+)
+VC1_PERMISSION_ALIAS_PREDISPATCH_SUPERVISOR_SHA256 = (
+    "625a6d86ea28e4025b051ded84a829e8bfd5787db7b5450a41ef2460317d71b9"
+)
+VC1_PERMISSION_ALIAS_PREDISPATCH_COMPILED_AT_UTC = (
+    "2026-09-14T13:43:34+00:00"
+)
+VC1_PERMISSION_ALIAS_PREDISPATCH_MUST_START_BY_UTC = (
+    "2026-09-14T13:44:34+00:00"
+)
+VC1_PERMISSION_ALIAS_PREDISPATCH_ERROR = (
+    "外部证据根不属于冻结 Campaign："
+    "/root/oauth-capture/runs/official-client/oauth/"
+    "oauth-c0154-formal-vc1-bwg-new-window-20260914t100818z"
+)
+VC1_PERMISSION_ALIAS_V2_HELPER_SHA256 = (
+    "68ea110f695395b1d90930622f9920b0353c63f349f98497f80dc2f19fe29f93"
+)
+VC1_PERMISSION_ALIAS_PREDISPATCH_CLOSEOUT_TOOL_SHA256 = (
+    "93255ea8de7162c8c790a7a13d64fd3370dbac0e131a2cd6c239398f7c9f9e26"
+)
 CAMPAIGN_RUN_LOCK_FILENAME = ".campaign-run.lock"
 # campaign-run 启动的子命令通过这些只读环境变量复用同一个父监督器。
 # 子进程不得自行创建第二个监督器；身份仍以父 run_dir/state.json 为准。
@@ -5789,6 +5830,8 @@ def _validate_permission_alias_closeout_successor(
     prior_manifest: Mapping[str, Any],
     prior_dir: Path,
     successor_manifest: Mapping[str, Any],
+    *,
+    historical_frozen: bool = False,
 ) -> bool:
     """验证只承接本次 sequence 3 EROFS 的唯一 sequence 4。
 
@@ -6165,22 +6208,37 @@ def _validate_permission_alias_closeout_successor(
         data_root
         / "tools/official_client_capture/codex_upgrade_vc1_permission_alias_closeout.py"
     )
-    helper_raw = _permission_compensation_managed_file(
-        helper_path,
-        "权限别名新 helper",
+    deployment_common_valid = (
+        _sha256(deployment_raw) == deployment_sha256
+        and deployment.get("schema_version") == "codex-arm64-supervisor-enable/v1"
+        and deployment.get("status") == "passed"
+        and deployment.get("architecture") == "aarch64"
+        and deployment.get("production_tool_root")
+        == str(data_root / "tools/official_client_capture")
+        and deployment.get("tool_files_sha256") == tool_files_sha256
     )
-    supervisor_digest = _sha256(Path(__file__).read_bytes())
-    if (
-        _sha256(deployment_raw) != deployment_sha256
-        or _sha256(helper_raw) != VC1_PERMISSION_ALIAS_HELPER_SHA256
-        or deployment.get("schema_version") != "codex-arm64-supervisor-enable/v1"
-        or deployment.get("status") != "passed"
-        or deployment.get("architecture") != "aarch64"
-        or deployment.get("production_tool_root")
-        != str(data_root / "tools/official_client_capture")
-        or deployment.get("tool_files_sha256") != tool_files_sha256
-        or deployment.get("supervisor_sha256") != supervisor_digest
-    ):
+    if historical_frozen:
+        deployment_valid = (
+            deployment_common_valid
+            and deployment_sha256
+            == VC1_PERMISSION_ALIAS_PREDISPATCH_DEPLOYMENT_SHA256
+            and tool_files_sha256
+            == VC1_PERMISSION_ALIAS_PREDISPATCH_TOOL_FILES_SHA256
+            and deployment.get("supervisor_sha256")
+            == VC1_PERMISSION_ALIAS_PREDISPATCH_SUPERVISOR_SHA256
+        )
+    else:
+        helper_raw = _permission_compensation_managed_file(
+            helper_path,
+            "权限别名新 helper",
+        )
+        deployment_valid = (
+            deployment_common_valid
+            and _sha256(helper_raw) == VC1_PERMISSION_ALIAS_HELPER_SHA256
+            and deployment.get("supervisor_sha256")
+            == _sha256(Path(__file__).read_bytes())
+        )
+    if not deployment_valid:
         raise SupervisorError("VC-1 权限别名部署收据没有绑定当前工具。")
 
     receipt_path = action_input_dir / "sequence4-permission-alias-closeout-receipt.json"
@@ -6250,6 +6308,344 @@ def _validate_permission_alias_closeout_successor(
     return True
 
 
+def _validate_permission_alias_predispatch_successor(
+    prior_state: Mapping[str, Any],
+    prior_manifest: Mapping[str, Any],
+    prior_dir: Path,
+    successor_manifest: Mapping[str, Any],
+    ordered_history: Sequence[tuple[dict[str, Any], dict[str, Any], Path]],
+) -> bool:
+    """验证唯一未派发 sequence 4 经零请求收据承接到 sequence 5。"""
+
+    campaign_id = VC1_PERMISSION_COMPENSATION_CAMPAIGN_ID
+    if (
+        successor_manifest.get("schema_version") != CAMPAIGN_RUN_BATCHED_SCHEMA
+        or successor_manifest.get("campaign_id") != campaign_id
+        or successor_manifest.get("batch_id") != "vc-1-0005"
+        or successor_manifest.get("batch_sequence") != 5
+        or successor_manifest.get("phase") != "VC-1"
+        or len(ordered_history) != 3
+        or [item[1].get("batch_sequence") for item in ordered_history]
+        != [1, 2, 3]
+    ):
+        return False
+
+    prior_actions = prior_manifest.get("actions")
+    successor_actions = successor_manifest.get("actions")
+    if (
+        not isinstance(prior_actions, list)
+        or len(prior_actions) != 2
+        or not isinstance(successor_actions, list)
+        or len(successor_actions) != 2
+    ):
+        raise SupervisorError("VC-1 权限别名预派发恢复动作数量漂移。")
+    seal_action = prior_actions[1]
+    if not isinstance(seal_action, dict) or successor_actions[1] != seal_action:
+        raise SupervisorError("VC-1 权限别名预派发恢复没有逐字复用 seal 动作。")
+    seal_command = seal_action.get("command")
+    if not isinstance(seal_command, list) or not all(
+        isinstance(value, str) for value in seal_command
+    ):
+        raise SupervisorError("VC-1 权限别名预派发恢复的 seal 命令非法。")
+    campaign_dir = Path(
+        _permission_compensation_command_value(seal_command, "--campaign-dir")
+    )
+    data_root = campaign_dir.parents[2]
+    action_input_dir = data_root / "control" / f"{campaign_id}-action-inputs"
+    batch_path = campaign_dir / "control/vc/batches/0004-vc-1.json"
+    manifest_path = campaign_dir / "control/vc/run-manifests/0004-vc-1.json"
+    batch_raw = _permission_compensation_private_file(
+        batch_path,
+        "权限别名 sequence 4 batch",
+    )
+    frozen_manifest_raw = _permission_compensation_private_file(
+        manifest_path,
+        "权限别名 sequence 4 run manifest",
+    )
+    if (
+        _sha256(batch_raw)
+        != VC1_PERMISSION_ALIAS_PREDISPATCH_BATCH_FILE_SHA256
+        or _sha256(frozen_manifest_raw)
+        != VC1_PERMISSION_ALIAS_PREDISPATCH_MANIFEST_FILE_SHA256
+        or _sha256(
+            _permission_compensation_private_file(
+                action_input_dir / "vc1-sequence4-action-plan.json",
+                "权限别名 sequence 4 action plan",
+            )
+        )
+        != VC1_PERMISSION_ALIAS_PREDISPATCH_ACTION_PLAN_SHA256
+    ):
+        raise SupervisorError("VC-1 权限别名未派发 sequence 4 制品摘要漂移。")
+    batch = _permission_compensation_json(batch_raw, "权限别名 sequence 4 batch")
+    frozen_manifest = _permission_compensation_json(
+        frozen_manifest_raw,
+        "权限别名 sequence 4 run manifest",
+    )
+    if (
+        batch.get("sequence") != 4
+        or batch.get("batch_sha256")
+        != VC1_PERMISSION_ALIAS_PREDISPATCH_BATCH_SHA256
+        or batch.get("compiled_at_utc")
+        != VC1_PERMISSION_ALIAS_PREDISPATCH_COMPILED_AT_UTC
+        or batch.get("must_start_by_utc")
+        != VC1_PERMISSION_ALIAS_PREDISPATCH_MUST_START_BY_UTC
+        or frozen_manifest.get("batch_sha256")
+        != VC1_PERMISSION_ALIAS_PREDISPATCH_BATCH_SHA256
+        or successor_manifest.get("predecessor_checkpoint")
+        != frozen_manifest.get("predecessor_checkpoint")
+    ):
+        raise SupervisorError("VC-1 权限别名未派发 sequence 4 身份漂移。")
+    try:
+        must_start_by = datetime.fromisoformat(
+            VC1_PERMISSION_ALIAS_PREDISPATCH_MUST_START_BY_UTC
+        ).timestamp()
+    except ValueError as error:
+        raise SupervisorError("VC-1 权限别名 sequence 4 启动窗口非法。") from error
+    if time.time() <= must_start_by:
+        raise SupervisorError("VC-1 权限别名 sequence 4 尚未过启动窗口。")
+
+    # 历史模式仍重放 sequence 3 的全部一次性锚点、旧 action plan、旧部署
+    # 收据和当前 1,882 项元数据边界，但不要求生产树继续保留旧 helper。
+    if not _validate_permission_alias_closeout_successor(
+        prior_state,
+        prior_manifest,
+        prior_dir,
+        frozen_manifest,
+        historical_frozen=True,
+    ):
+        raise SupervisorError("VC-1 权限别名未派发 sequence 4 无法重放。")
+
+    receipt_path = action_input_dir / "sequence4-predispatch-closeout-receipt.json"
+    receipt_raw = _permission_compensation_private_file(
+        receipt_path,
+        "权限别名 sequence 4 预派发封口收据",
+    )
+    receipt = _permission_compensation_json(
+        receipt_raw,
+        "权限别名 sequence 4 预派发封口收据",
+    )
+    unsigned_receipt = dict(receipt)
+    receipt_sha256 = unsigned_receipt.pop("receipt_sha256", None)
+    try:
+        receipt_created_at = datetime.fromisoformat(
+            str(receipt.get("created_at_utc")).replace("Z", "+00:00")
+        ).timestamp()
+    except ValueError as error:
+        raise SupervisorError("VC-1 权限别名预派发封口时间非法。") from error
+    if receipt_created_at <= must_start_by or receipt_created_at > time.time() + 5:
+        raise SupervisorError("VC-1 权限别名预派发封口时间越出允许窗口。")
+    expected_run_history = []
+    for state, manifest, run_dir in ordered_history:
+        del state
+        run_raw = _permission_compensation_private_file(
+            run_dir / "campaign-run-manifest.json",
+            "权限别名历史 run manifest",
+        )
+        expected_run_history.append(
+            {
+                "batch_sequence": manifest.get("batch_sequence"),
+                "run_name": run_dir.name,
+                "manifest_file_sha256": _sha256(run_raw),
+            }
+        )
+    try:
+        boundary = permission_alias_closeout.inspect_permission_boundary(
+            attempt_path=(
+                campaign_dir
+                / "official/attempts"
+                / VC1_PERMISSION_COMPENSATION_ATTEMPT_ID
+                / "attempt.json"
+            ),
+            campaign_id=campaign_id,
+            attempt_id=VC1_PERMISSION_COMPENSATION_ATTEMPT_ID,
+            attempt_sha256=VC1_PERMISSION_COMPENSATION_ATTEMPT_SHA256,
+            roots_sha256=VC1_PERMISSION_COMPENSATION_ROOTS_SHA256,
+            readonly_runs_root=VC1_PERMISSION_ALIAS_READONLY_RUNS_ROOT,
+            writable_runs_root=data_root / "runs",
+            require_mount_modes=True,
+            expected_entry_count=VC1_PERMISSION_ALIAS_ENTRY_COUNT,
+            expected_gap_count=VC1_PERMISSION_ALIAS_GAP_COUNT,
+            expected_gap_sha256=VC1_PERMISSION_ALIAS_GAP_SHA256,
+        )
+    except permission_alias_closeout.PermissionAliasCloseoutError as error:
+        raise SupervisorError(
+            f"VC-1 权限别名 sequence 5 边界前检失败：{error}"
+        ) from error
+    deployment_path_text = receipt.get("current_deployment_receipt")
+    if not isinstance(deployment_path_text, str):
+        raise SupervisorError("VC-1 权限别名预派发收据缺少当前部署坐标。")
+    deployment_path = Path(deployment_path_text)
+    deployment_raw = _permission_compensation_private_file(
+        deployment_path,
+        "权限别名 sequence 5 部署收据",
+    )
+    deployment = _permission_compensation_json(
+        deployment_raw,
+        "权限别名 sequence 5 部署收据",
+    )
+    helper_path = (
+        data_root
+        / "tools/official_client_capture/codex_upgrade_vc1_permission_alias_closeout.py"
+    )
+    closeout_tool_path = (
+        data_root
+        / "tools/official_client_capture/"
+        "codex_upgrade_vc1_permission_alias_predispatch_closeout.py"
+    )
+    helper_raw = _permission_compensation_managed_file(
+        helper_path,
+        "权限别名 sequence 5 helper",
+    )
+    closeout_tool_raw = _permission_compensation_managed_file(
+        closeout_tool_path,
+        "权限别名预派发封口工具",
+    )
+    if (
+        receipt_sha256 != _sha256(_canonical(unsigned_receipt))
+        or receipt.get("schema_version")
+        != "codex-vc1-permission-alias-predispatch-closeout/v1"
+        or receipt.get("status") != "passed"
+        or receipt.get("campaign_id") != campaign_id
+        or receipt.get("attempt_id") != VC1_PERMISSION_COMPENSATION_ATTEMPT_ID
+        or receipt.get("source_sequence") != 4
+        or receipt.get("source_batch_file_sha256")
+        != VC1_PERMISSION_ALIAS_PREDISPATCH_BATCH_FILE_SHA256
+        or receipt.get("source_batch_sha256")
+        != VC1_PERMISSION_ALIAS_PREDISPATCH_BATCH_SHA256
+        or receipt.get("source_manifest_file_sha256")
+        != VC1_PERMISSION_ALIAS_PREDISPATCH_MANIFEST_FILE_SHA256
+        or receipt.get("source_action_plan_sha256")
+        != VC1_PERMISSION_ALIAS_PREDISPATCH_ACTION_PLAN_SHA256
+        or receipt.get("source_failed_deployment_sha256")
+        != VC1_PERMISSION_ALIAS_PREDISPATCH_DEPLOYMENT_SHA256
+        or receipt.get("source_compiled_at_utc")
+        != VC1_PERMISSION_ALIAS_PREDISPATCH_COMPILED_AT_UTC
+        or receipt.get("source_must_start_by_utc")
+        != VC1_PERMISSION_ALIAS_PREDISPATCH_MUST_START_BY_UTC
+        or receipt.get("source_actions")
+        != ["harden-official-evidence-permissions-via-alias", "seal-official-preview"]
+        or receipt.get("source_run_created") is not False
+        or receipt.get("source_run_history") != expected_run_history
+        or receipt.get("deterministic_error_type")
+        != "PermissionAliasCloseoutError"
+        or receipt.get("deterministic_error")
+        != VC1_PERMISSION_ALIAS_PREDISPATCH_ERROR
+        or receipt.get("current_deployment_receipt_sha256")
+        != _sha256(deployment_raw)
+        or receipt.get("current_tool_files_sha256")
+        != deployment.get("tool_files_sha256")
+        or receipt.get("closeout_tool_sha256")
+        != VC1_PERMISSION_ALIAS_PREDISPATCH_CLOSEOUT_TOOL_SHA256
+        or _sha256(closeout_tool_raw)
+        != VC1_PERMISSION_ALIAS_PREDISPATCH_CLOSEOUT_TOOL_SHA256
+        or receipt.get("current_helper_sha256")
+        != VC1_PERMISSION_ALIAS_V2_HELPER_SHA256
+        or _sha256(helper_raw) != VC1_PERMISSION_ALIAS_V2_HELPER_SHA256
+        or receipt.get("boundary")
+        != {
+            "entry_count": len(boundary.entries),
+            "gap_count": len(boundary.gaps),
+            "gap_sha256": boundary.gap_sha256,
+            "stable_boundary_sha256": boundary.boundary_sha256,
+        }
+        or receipt.get("scanned_bytes") != 0
+        or receipt.get("live_request_count") != 0
+        or deployment.get("schema_version")
+        != "codex-arm64-supervisor-enable/v1"
+        or deployment.get("status") != "passed"
+        or deployment.get("architecture") != "aarch64"
+        or deployment.get("production_tool_root")
+        != str(data_root / "tools/official_client_capture")
+        or deployment.get("supervisor_sha256")
+        != _sha256(Path(__file__).read_bytes())
+    ):
+        raise SupervisorError("VC-1 权限别名预派发封口收据或当前工具漂移。")
+
+    alias_action = successor_actions[0]
+    if not isinstance(alias_action, dict):
+        raise SupervisorError("VC-1 权限别名 sequence 5 动作非法。")
+    deployment_sha256 = receipt["current_deployment_receipt_sha256"]
+    tool_files_sha256 = receipt["current_tool_files_sha256"]
+    permission_receipt_path = (
+        action_input_dir / "sequence5-permission-alias-closeout-receipt.json"
+    )
+    expected_alias_action = {
+        "action_id": "harden-official-evidence-permissions-via-alias-v2",
+        "operation": "VC-1:harden-official-evidence-permissions-via-alias-v2",
+        "timeout_seconds": 180.0,
+        "command": [
+            "/usr/bin/python3",
+            str(helper_path),
+            "--campaign-id",
+            campaign_id,
+            "--attempt-id",
+            VC1_PERMISSION_COMPENSATION_ATTEMPT_ID,
+            "--attempt",
+            str(
+                campaign_dir
+                / "official/attempts"
+                / VC1_PERMISSION_COMPENSATION_ATTEMPT_ID
+                / "attempt.json"
+            ),
+            "--attempt-sha256",
+            VC1_PERMISSION_COMPENSATION_ATTEMPT_SHA256,
+            "--roots-sha256",
+            VC1_PERMISSION_COMPENSATION_ROOTS_SHA256,
+            "--self-sha256",
+            VC1_PERMISSION_ALIAS_V2_HELPER_SHA256,
+            "--readonly-runs-root",
+            str(VC1_PERMISSION_ALIAS_READONLY_RUNS_ROOT),
+            "--writable-runs-root",
+            str(data_root / "runs"),
+            "--deployment-receipt",
+            str(deployment_path),
+            "--deployment-receipt-sha256",
+            deployment_sha256,
+            "--tool-files-sha256",
+            tool_files_sha256,
+            "--receipt",
+            str(permission_receipt_path),
+        ],
+        "item_ids": ["harden-official-evidence-permissions-via-alias-v2"],
+    }
+    if (
+        alias_action != expected_alias_action
+        or successor_manifest.get("execute_items")
+        != [
+            "harden-official-evidence-permissions-via-alias-v2",
+            "seal-official-preview",
+        ]
+        or successor_manifest.get("reuse_items")
+        != ["prepare-official-assertion-bundle"]
+        or successor_manifest.get("no_op") is not False
+        or permission_receipt_path.exists()
+        or permission_receipt_path.is_symlink()
+    ):
+        raise SupervisorError("VC-1 权限别名 sequence 5 动作或输出漂移。")
+    if (
+        deployment_path.parent != data_root / "control"
+        or not deployment_path.name.startswith("codex-0154-supervisor-enable-")
+        or not deployment_path.name.endswith(".json")
+        or deployment.get("tool_files_sha256") != tool_files_sha256
+    ):
+        raise SupervisorError("VC-1 权限别名 sequence 5 部署坐标漂移。")
+    action_plan = _permission_compensation_json(
+        _permission_compensation_private_file(
+            action_input_dir / "vc1-sequence5-action-plan.json",
+            "权限别名 sequence 5 action plan",
+        ),
+        "权限别名 sequence 5 action plan",
+    )
+    if action_plan != {
+        "schema_version": "codex-upgrade-vc-action-plan/v1",
+        "execute_item_ids": list(successor_manifest["execute_items"]),
+        "reuse_item_ids": list(successor_manifest["reuse_items"]),
+        "actions": list(successor_manifest["actions"]),
+    }:
+        raise SupervisorError("VC-1 权限别名 sequence 5 action plan 漂移。")
+    return True
+
+
 def _validate_batched_campaign_history(
     manifest: Mapping[str, Any],
     history: Sequence[tuple[dict[str, Any], dict[str, Any], Path]],
@@ -6275,7 +6671,25 @@ def _validate_batched_campaign_history(
         int(prior_manifest.get("batch_sequence", 0))
         for _state, prior_manifest, _run_dir in ordered
     ]
-    expected_prior = list(range(1, int(manifest["batch_sequence"])))
+    predispatch_successor = False
+    if (
+        int(manifest["batch_sequence"]) == 5
+        and sequences == [1, 2, 3]
+        and ordered
+    ):
+        last_state, last_manifest, last_dir = ordered[-1]
+        predispatch_successor = _validate_permission_alias_predispatch_successor(
+            last_state,
+            last_manifest,
+            last_dir,
+            manifest,
+            ordered,
+        )
+    expected_prior = (
+        [1, 2, 3]
+        if predispatch_successor
+        else list(range(1, int(manifest["batch_sequence"])))
+    )
     if sequences != expected_prior:
         raise SupervisorError(
             "Campaign batch_sequence 必须从 1 连续递增，禁止跳批、重复或回退。"
@@ -6442,6 +6856,13 @@ def _validate_batched_campaign_history(
                 _run_dir,
                 successor_manifest,
             )
+        ):
+            continue
+        if (
+            predispatch_successor
+            and index == len(ordered) - 1
+            and prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
+            and successor_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
         ):
             continue
         if prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA:

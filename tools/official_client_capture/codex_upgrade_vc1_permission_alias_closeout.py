@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """通过已冻结的可写宿主别名收口本次 VC-1 官方证据权限。
 
-本工具只服务于 0.154.0 首轮正式 Campaign 的唯一 sequence 4。证据仍以
+本工具只服务于 0.154.0 首轮正式 Campaign 的 sequence 4 预派发失败后继。证据仍以
 ``/root/oauth-capture/runs`` 下的只读逻辑路径作为身份；只有逐项证明宿主
 ``runs`` 别名指向同一 inode 后，才允许经可写别名执行 ``fchmod``。工具不读取
 证据正文、不发送网络请求，也不创建或改写 seal 制品。
@@ -39,7 +39,7 @@ SUPERVISOR_PATH = (
     HOST_DATA_ROOT / "tools/official_client_capture/codex_upgrade_supervisor.py"
 )
 ACTION_INPUT_DIR = HOST_DATA_ROOT / "control" / f"{CAMPAIGN_ID}-action-inputs"
-RECEIPT_PATH = ACTION_INPUT_DIR / "sequence4-permission-alias-closeout-receipt.json"
+RECEIPT_PATH = ACTION_INPUT_DIR / "sequence5-permission-alias-closeout-receipt.json"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -268,6 +268,23 @@ def _boundary_record(entry: EntrySnapshot) -> dict[str, Any]:
     }
 
 
+def _external_root_belongs_to_campaign(relative: Path, campaign_id: str) -> bool:
+    """只接受本次冻结清单实际使用的两种外部根命名。"""
+
+    parts = relative.parts
+    direct_root = len(parts) == 1 and parts[0].startswith(f"{campaign_id}-")
+    oauth_roots = {
+        f"oauth-{campaign_id}",
+        f"oauth-{campaign_id}-ws-repeat",
+    }
+    nested_oauth_root = (
+        len(parts) == 3
+        and parts[:2] == ("official-client", "oauth")
+        and parts[2] in oauth_roots
+    )
+    return direct_root or nested_oauth_root
+
+
 def inspect_permission_boundary(
     *,
     attempt_path: Path,
@@ -349,11 +366,7 @@ def inspect_permission_boundary(
                 raise PermissionAliasCloseoutError(
                     f"外部证据根越出只读 runs 根：{root}"
                 ) from error
-            if (
-                not relative.parts
-                or relative == Path(".")
-                or not relative.parts[0].startswith(f"{campaign_id}-")
-            ):
+            if not _external_root_belongs_to_campaign(relative, campaign_id):
                 raise PermissionAliasCloseoutError(
                     f"外部证据根不属于冻结 Campaign：{root}"
                 )

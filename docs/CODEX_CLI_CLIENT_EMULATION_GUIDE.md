@@ -1245,6 +1245,8 @@ Framework §5.3 是升级总操作入口并规定 `VC-0～VC-6` 顺序；本部�
    以零请求导入已封存官方证据，并生成“全部 official Job 为 reuse”的 VC-1 no-op 批次及 checkpoint；
    `compile-vc-batch` 在前序 checkpoint 封存后只编译下一批；
    `compile-vc-interrupted-recovery-batch` 只为下述 `KeyboardInterrupt` 孤儿编译一次 v3 预览批次；
+   `codex_upgrade_vc1_permission_alias_predispatch_closeout.py` 只封存下述 sequence 4 在父 run 创建前的
+   唯一确定性拒绝；
    `finalize-vc1-deadline-orphan` 只直接封口下述原 deadline 已过期的唯一孤儿。
    这些入口都不得放入 `campaign-run` 动作队列，
    不得延长原始 deadline 或执行阶段数据面动作。
@@ -1426,7 +1428,7 @@ sequence 4 启用前必须同时只读证明：sequence 3 的 state、run manife
 `2b69ee039891bf6c58b6c787af105b9a896956b562cd0801c10ca7d2b36f2842`。该检查只枚举名称和元数据，
 `scanned_bytes=0`、`live_request_count=0`。
 
-新 helper
+sequence 4 当时部署的 helper
 `tools/official_client_capture/codex_upgrade_vc1_permission_alias_closeout.py` 只允许把
 `/root/oauth-capture/runs/<relative>` 映射到
 `/root/docker/capture-cli/data/runs/<relative>`。它必须先证明逻辑根为只读、宿主根为可写，并对每个目录和
@@ -1456,6 +1458,62 @@ action plan 的执行闭集只能依次为
 在工具、action plan、命令和原 state-dir 都准备完成后编译，并立即执行新生成的 `0004-vc-1.json`。
 成功取得 `review_sha256` 后仍须停止并由操作员确认；不得在 sequence 4 内追加正式 seal，也不得据此宣称
 VC-1 已完成。
+
+若上述唯一 sequence 4 已经以 batch 文件摘要
+`02445883a35a1298821a76cfb8eed841b596de2169c22fc34d6d660981ed2cc8`、batch 身份
+`b2455bb609270d25ac257d08405c6eebfd6cfa2d3d207f946e227929030f72fb` 和 run manifest 文件摘要
+`6d574a8c785f5ccd0a26033ff43631b62789b27db289590053c210aaedf55e23` 封存，但在父 run 创建前逐字失败为
+`外部证据根不属于冻结 Campaign：/root/oauth-capture/runs/official-client/oauth/oauth-c0154-formal-vc1-bwg-new-window-20260914t100818z`，
+则不得删除、覆盖或重编 sequence 4。该失败只允许源于旧 helper 遗漏真实 OAuth 两级目录形态；此时
+state-dir 中必须仍精确只有 sequence 1～3，sequence 4 权限动作和 seal 均未启动，模型请求数为零，权限
+收据和三份 seal 制品均不存在。
+
+先部署修正后的 helper、监督器和预派发封口工具。修正 helper 对外部根只新增两个精确允许值：
+`official-client/oauth/oauth-<campaign-id>` 与
+`official-client/oauth/oauth-<campaign-id>-ws-repeat`；原单层 `<campaign-id>-*` 规则保持不变，其他嵌套、
+前缀近似或跨 Campaign 根仍失败关闭。随后在原执行环境、`campaign-run` 之外运行一次：
+
+```bash
+python3 /root/docker/capture-cli/data/tools/official_client_capture/codex_upgrade_vc1_permission_alias_predispatch_closeout.py \
+  --current-deployment-receipt /root/docker/capture-cli/data/control/codex-0154-supervisor-enable-<时间>.json \
+  --current-deployment-receipt-sha256 <当前部署收据SHA-256> \
+  --tool-files-sha256 <当前受管工具树SHA-256> \
+  --self-sha256 <预派发封口工具SHA-256> \
+  --receipt /root/docker/capture-cli/data/control/c0154-formal-vc1-bwg-new-window-20260914t100818z-action-inputs/sequence4-predispatch-closeout-receipt.json
+```
+
+该工具必须以非阻塞独占方式锁定原 `.campaign-run.lock`，复算 sequence 4 batch、run manifest、action plan
+和旧部署摘要，从当前部署回滚树加载摘要为
+`408e9d733b8997e569fbea36ab648f1bd70e45f9669accf3cc9353eb8b2566b1` 的旧 helper 并复现上述精确错误，
+再用当前 helper 只读证明 1,882 项／15 个权限缺口及固定 gap 摘要未漂移。它不得读取证据正文、修改权限、
+创建 run 或发送请求；唯一输出是以 `O_EXCL` 创建的 `0600` 收据，且必须声明
+`source_run_created=false`、`scanned_bytes=0`、`live_request_count=0`。
+
+预派发封口收据生成后，建立 `vc1-sequence5-action-plan.json`。执行闭集只能依次为
+`harden-official-evidence-permissions-via-alias-v2`、`seal-official-preview`，reuse 只能为
+`prepare-official-assertion-bundle`；seal 动作必须逐字复制 sequence 3。新权限动作必须绑定当前 helper、
+当前部署收据及其文件摘要、当前工具树摘要，并把唯一输出固定为
+`sequence5-permission-alias-closeout-receipt.json`。准备完成后才编译，并在约 60 秒窗口内立即使用原
+state-dir 派发：
+
+```bash
+python3 tools/official_client_capture/codex_upgrade.py \
+  compile-vc-batch \
+  --campaign-dir /root/docker/capture-cli/data/evidence/campaigns/c0154-formal-vc1-bwg-new-window-20260914t100818z \
+  --phase VC-1 \
+  --sequence 5 \
+  --predecessor-checkpoint /root/docker/capture-cli/data/evidence/campaigns/c0154-formal-vc1-bwg-new-window-20260914t100818z/control/vc/vc-0-checkpoint.json \
+  --action-plan /root/docker/capture-cli/data/control/c0154-formal-vc1-bwg-new-window-20260914t100818z-action-inputs/vc1-sequence5-action-plan.json
+
+python3 tools/official_client_capture/codex_upgrade_supervisor.py campaign-run \
+  --state-dir /root/docker/capture-cli/data/control/c0154-formal-vc1-bwg-new-window-20260914t100818z-supervisor \
+  --manifest /root/docker/capture-cli/data/evidence/campaigns/c0154-formal-vc1-bwg-new-window-20260914t100818z/control/vc/run-manifests/0005-vc-1.json
+```
+
+监督器只允许历史序号 `[1,2,3]` 在上述收据下跳过未创建的 sequence 4 父 run；任何 sequence 4 run、制品
+摘要漂移、非零请求／扫描、已有权限或 seal 输出、seal 动作变化、过期后重编或第二份预派发恢复均停线。
+sequence 5 仍受原 Campaign 绝对 deadline 约束。成功取得 `review_sha256` 后必须停止并由操作员确认；不得
+执行正式 seal，也不得宣称 VC-1 已完成。
 
 #### VC-1 原总 deadline 到期孤儿的直接封口
 
