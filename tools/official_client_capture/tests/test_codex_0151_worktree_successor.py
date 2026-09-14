@@ -203,6 +203,12 @@ CODEX_0154_VC1_CAPTURE_TOOL_RECOVERY_FREEZE_SUCCESSOR = (
     ROOT
     / "docs/egress/maintenance/upstream-codex-0154-vc1-capture-tool-recovery-20260914-freeze-successor.json"
 )
+# 2026-09-14：VC-1 KeyboardInterrupt 孤儿 attempt 以唯一 v3 零请求预览封口，
+# 人工确认后才允许普通 v2 定向补跑 failed／pending 闭集。
+CODEX_0154_VC1_INTERRUPTION_RECOVERY_FREEZE_SUCCESSOR = (
+    ROOT
+    / "docs/egress/maintenance/upstream-codex-0154-vc1-interruption-recovery-20260914-freeze-successor.json"
+)
 HISTORICAL_LEDGER = "docs/egress/maintenance/historical-source-drift-successor.json"
 SHA256_LENGTH = 64
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -309,6 +315,7 @@ def successor_edges(path: str) -> list[tuple[str, str]]:
         CODEX_0154_BWG_TLS_GLOBAL_FAILFAST_FREEZE_SUCCESSOR,
         CODEX_0154_BWG_MSS_RUST_TLS_REPAIR_FREEZE_SUCCESSOR,
         CODEX_0154_VC1_CAPTURE_TOOL_RECOVERY_FREEZE_SUCCESSOR,
+        CODEX_0154_VC1_INTERRUPTION_RECOVERY_FREEZE_SUCCESSOR,
     ):
         payload = json.loads(receipt_path.read_text(encoding="utf-8"))
         _validate_successor_receipt(payload)
