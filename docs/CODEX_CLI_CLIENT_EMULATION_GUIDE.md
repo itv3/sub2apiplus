@@ -1244,8 +1244,9 @@ Framework §5.3 是升级总操作入口并规定 `VC-0～VC-6` 顺序；本部�
    `codex_upgrade_vc0_closeout.py` 在原子收口进程内调用；`reuse-official-evidence` 创建全新 Campaign，
    以零请求导入已封存官方证据，并生成“全部 official Job 为 reuse”的 VC-1 no-op 批次及 checkpoint；
    `compile-vc-batch` 在前序 checkpoint 封存后只编译下一批；
-   `compile-vc-interrupted-recovery-batch` 只为下述 `KeyboardInterrupt` 孤儿编译一次 v3 预览批次。
-   这四者都不得放入 `campaign-run` 动作队列，
+   `compile-vc-interrupted-recovery-batch` 只为下述 `KeyboardInterrupt` 孤儿编译一次 v3 预览批次；
+   `finalize-vc1-deadline-orphan` 只直接封口下述原 deadline 已过期的唯一孤儿。
+   这些入口都不得放入 `campaign-run` 动作队列，
    不得延长原始 deadline 或执行阶段数据面动作。
 3. 身份变化、失败恢复和 `execute／reuse` 计算统一执行 Framework §5.1.2、§5.3.2～§5.3.4；各阶段只写
    Codex 专用触发条件，不重复建立身份或恢复矩阵。
@@ -1383,6 +1384,41 @@ python3 tools/official_client_capture/codex_upgrade.py \
 after 探针、改写 attempt、创建 reservation 或发送请求。成功后由操作员确认，sequence 5 才可回到普通
 v2 真实补跑；v5 失败不得再生成第六种恢复清单。
 
+#### VC-1 原总 deadline 到期孤儿的直接封口
+
+若上述 sequence 5 真实补跑已取得 reservation、执行 15 个 Job 后，父监督器按 Campaign 原始绝对
+deadline 形成 `watchdog-aborted/global-wall-clock-deadline-expired`，并且冻结闭集恰为
+`planned=29 / affected=27 / reused=2 / executed=15 / failed=0 / pending=12`，则原 Campaign 已经到达终点。
+不得编译 sequence 6，不得重跑任何 Job、创建新 reservation、枚举 `.failed-attemptN` 归档或进入 VC-2。
+
+先部署并重放通过修复后的受管工具，再在 ARM64 `capture-cli` 容器内、`campaign-run` 与 CampaignLease
+之外直接执行：
+
+```bash
+python3 tools/official_client_capture/codex_upgrade.py \
+  finalize-vc1-deadline-orphan \
+  --campaign-dir /绝对路径/campaign \
+  --source-attempt /绝对路径/campaign/official/attempts/<attempt-id> \
+  --supervisor-run-dir /绝对路径/sequence-5-supervisor/run-<owner-nonce> \
+  --timing-ledger-dir /绝对路径/连续时间账本 \
+  --historical-live-request-audit /绝对路径/历史请求审计.json \
+  --deployment-receipt /绝对路径/当前ARM64工具部署收据 \
+  --expected-historical-live-requests 26 \
+  --expected-delta-live-requests 38 \
+  --expected-total-live-requests 64 \
+  --max-finalization-seconds <本次收口上限>
+```
+
+`--max-finalization-seconds` 只约束 after、ARM64 after、restoration 与收据发布，不能替换或延长已经过期的
+Campaign deadline。工具必须逐字重放 sequence 5 清单、父监督器终态、reservation lease 绑定、原
+transition、当前部署收据和 Ledger sequence 6 前缀；请求审计只读取 checkpoint 结果中明确登记的基础
+evidence roots，并证明 `26 + 38 = 64`、`failed_attempt_archives_enumerated=false`、finalizer 新增模型请求
+为零。成功终态固定为失败 `attempt.json`（`CampaignDeadlineExpired`）和唯一 Ledger sequence 7
+`stop_the_line/stopped`；重复调用只能重放同一合同、attempt、收据和事件，不能追加第二个停线事件。
+
+完成该封口不表示 VC-1 通过。当前 Campaign 永久停线，唯一下一动作是完成工具闭合后建立全新 VC-0，
+再按 VC-0→VC-1 顺序重新开始。
+
 ### Codex 连续监督、时间账本与文档部署
 
 VC-0 冻结 Campaign 总计划、阶段依赖、身份、预算和原始 deadline；每个阶段或恢复批次只根据前序封存
@@ -1395,6 +1431,8 @@ checkpoint 编译本批次清单。总计划不能预填未来的 approval SHA�
 - 每 5 秒记录监督器和 worker 心跳；
 - 每 60 秒把时间区间归类为 `planning／active／waiting`；新流程不得写 `orchestrator-idle`；
 - worker 失联 20 秒、动作超时或编排器 15 秒未派发下一动作时立即停线；
+- v2 及后续批次在原始总 deadline 前预留 120 秒 attempt 清理窗口，并再保留最多 5 秒父监督器终态排空；
+  数据面执行截止到达时先向 Python worker 发送 `SIGUSR1` 展开 `finally`，清理窗口耗尽才强停进程组；
 - 正常停止、信号、会话断开和主机失联都必须留下可审计终态或明确缺口。
 
 编排状态机固定为 `dispatching → executing → evaluating → terminal`。批次内部按冻结队列连续执行，禁止

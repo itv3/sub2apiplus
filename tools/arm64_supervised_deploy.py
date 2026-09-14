@@ -74,11 +74,13 @@ from typing import Any, Callable, Mapping
 # 并新增只承接既有确定性失败 v3 的唯一 v4 零请求预览；不增加产出侧变化。
 # 2026-09-14（VC-1 中断恢复收尾）：统一父 campaign-run 清单的换行规范摘要，
 # 并新增只承接既有确定性失败 v4 的唯一 v5 零请求收尾；不增加产出侧变化。
+# 2026-09-14（VC-1 deadline 孤儿封口）：批次预留 attempt 清理窗口，并新增只消费
+# sequence 5 冻结现场、零模型请求且永久停线的直接 finalizer。
 DEFAULT_TOOL_DIGEST = (
-    "765ebe512b8f0f5e140935bb7b849c5f1471e40f546e8385349d11e99239f817"
+    "86cf9a27f384956a466366ad9ff9e62c79a8d5fd867969b1d84aab5db5f1cdd9"
 )
 DEFAULT_SUPERVISOR_DIGEST = (
-    "49a33ea19a0e12a173c9228240f4f60b884cf7c5bc6a44f72a31c2e4184781b0"
+    "cf660e9d7d6c341d8c1dbc96d5161dfbf709ceb17a166d16936851988f978c88"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "b9ca7b6f48b3c33a63a864a9ce7ebd617335378ea52fe9148ea161ab3b276ada"

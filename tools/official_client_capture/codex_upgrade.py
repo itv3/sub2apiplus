@@ -14,6 +14,7 @@ import inspect
 import json
 import math
 import os
+import platform
 import re
 import secrets
 import shutil
@@ -3392,6 +3393,36 @@ DEFAULT_WATCHDOG_TIMEOUT_SECONDS = (
 WATCHDOG_HEARTBEAT_SCHEMA = "codex-upgrade-watchdog-heartbeat/v1"
 WATCHDOG_CHECKPOINT_SCHEMA = "codex-upgrade-watchdog-checkpoint/v1"
 JOB_CHECKPOINT_SCHEMA = "codex-upgrade-job-checkpoint/v1"
+DEADLINE_ORPHAN_CONTRACT_SCHEMA = (
+    "codex-upgrade-deadline-orphan-finalization-contract/v1"
+)
+DEADLINE_ORPHAN_FINALIZER_SCHEMA = (
+    "codex-upgrade-deadline-orphan-finalizer/v1"
+)
+RECOVERY_EXECUTION_HANDOFF_SCHEMA = (
+    "codex-upgrade-recovery-execution-handoff/v1"
+)
+DEADLINE_ORPHAN_CONTRACT_FILENAME = (
+    "deadline-orphan-finalization-contract.json"
+)
+DEADLINE_ORPHAN_FINALIZER_FILENAME = "deadline-orphan-finalizer.json"
+DEADLINE_ORPHAN_AUDIT_FILENAME = "deadline-orphan-live-request-audit.json"
+DEADLINE_ORPHAN_LOCK_FILENAME = ".deadline-orphan-finalizer.lock"
+DEADLINE_ORPHAN_EXPECTED_BATCH_SEQUENCE = 5
+DEADLINE_ORPHAN_EXPECTED_JOB_COUNTS = {
+    "planned": 29,
+    "affected": 27,
+    "reused": 2,
+    "executed": 15,
+    "failed": 0,
+    "pending": 12,
+}
+DEADLINE_ORPHAN_EXPECTED_HISTORICAL_LIVE_REQUESTS = 26
+DEADLINE_ORPHAN_EXPECTED_DELTA_LIVE_REQUESTS = 38
+DEADLINE_ORPHAN_EXPECTED_TOTAL_LIVE_REQUESTS = 64
+DEADLINE_ORPHAN_EXPECTED_LEDGER_PREFIX_SEQUENCE = 6
+DEADLINE_ORPHAN_EXPECTED_LEDGER_STOP_SEQUENCE = 7
+DEADLINE_ORPHAN_STOP_ROOT_CAUSE_ID = "vc1-global-deadline-expired"
 INCREMENTAL_NOOP_SCHEMA = "codex-upgrade-incremental-noop/v1"
 CLASSIFICATION_CANDIDATE_REUSE_PREVIEW_SCHEMA = (
     "classification-candidate-reuse-preview/v1"
@@ -3403,6 +3434,10 @@ CLASSIFICATION_CANDIDATE_REUSE_TRANSITION_SCHEMA = (
 
 class CampaignGlobalPreconditionError(ConfigurationError):
     """所有后续 Job 共用的 Campaign 启动前置条件已经失败。"""
+
+
+class CampaignCleanupRequested(RuntimeError):
+    """父监督器要求停止数据面并在原 deadline 内展开 attempt 清理。"""
 
 
 CLASSIFICATION_CANDIDATE_REUSE_TRANSITION_FILENAME = (
@@ -3458,6 +3493,12 @@ CAPTURE_SUCCESS_STATUSES = frozenset(
     {"complete", "incremental-noop", "recovery_plan"}
 )
 CAMPAIGN_LEASE_STATES = frozenset({"active", "released", "stop_the_line"})
+# batched 父监督器提前冻结的数据面清理窗口。准入检查只会缩短可执行
+# Job 的时间，不会延长或替换 Campaign 原始绝对 deadline。
+CAPTURE_CLEANUP_RESERVE_SECONDS = (
+    codex_upgrade_supervisor.DEFAULT_BATCHED_ACTION_CLEANUP_GRACE_SECONDS
+)
+CAPTURE_RESERVATION_ADMISSION_SECONDS = 30
 
 # 只在当前进程持有租约期间设置；attempt heartbeat 会把同一操作标签同步到
 # Campaign 租约，从而覆盖没有 attempt 目录的 CLI 命令间隙。
@@ -4537,7 +4578,13 @@ def _mutable_command_coordinates(
     """返回 ``(command, phase, candidate_id, allow_stale_recovery)``。"""
 
     command = str(getattr(arguments, "command", ""))
-    if command in {"status", "plan", "terminal-transition-preflight", ""}:
+    if command in {
+        "status",
+        "plan",
+        "terminal-transition-preflight",
+        "finalize-vc1-deadline-orphan",
+        "",
+    }:
         return None
     if command in {"capture-official"}:
         return command, "official", None, False
@@ -4707,6 +4754,66 @@ def _attempt_deadline(
     deadline.heartbeat_seconds = heartbeat  # type: ignore[attr-defined]
     _bind_attempt_deadline_metadata(deadline, phase)
     return deadline
+
+
+def _campaign_cleanup_reserve_seconds() -> float:
+    """读取父监督器冻结的清理窗口；普通直接调用没有额外保留量。"""
+
+    raw = os.environ.get(
+        codex_upgrade_supervisor.CAMPAIGN_RUN_CLEANUP_GRACE_ENV
+    )
+    if raw is None:
+        return 0.0
+    try:
+        value = float(raw)
+    except ValueError as error:
+        raise ConfigurationError("campaign-run 清理窗口不是数字。") from error
+    if (
+        not math.isfinite(value)
+        or value < CAPTURE_CLEANUP_RESERVE_SECONDS
+        or value > MAX_ATTEMPT_WALL_SECONDS
+    ):
+        raise ConfigurationError("campaign-run 清理窗口不满足受管下限。")
+    return value
+
+
+def _require_capture_budget_before_data_action(
+    deadline: incremental_recovery.WallClockDeadline,
+    *,
+    operation: str,
+    reservation: bool = False,
+) -> None:
+    """在 reservation／Job 前保留完整 after 与终态清理预算。"""
+
+    reserve = _campaign_cleanup_reserve_seconds()
+    if reserve <= 0:
+        deadline.check(operation)
+        return
+    required = reserve + (
+        CAPTURE_RESERVATION_ADMISSION_SECONDS if reservation else 0
+    )
+    if deadline.remaining_seconds <= required:
+        raise incremental_recovery.WallClockTimeoutError(
+            operation,
+            elapsed_seconds=deadline.elapsed_seconds,
+            budget_seconds=deadline.budget_seconds,
+        )
+    execution_deadline = os.environ.get(
+        codex_upgrade_supervisor.CAMPAIGN_RUN_EXECUTION_DEADLINE_ENV
+    )
+    if execution_deadline is None:
+        raise ConfigurationError("campaign-run 缺少冻结的数据面执行截止。")
+    try:
+        remaining_execution = float(execution_deadline) - time.time()
+    except ValueError as error:
+        raise ConfigurationError("campaign-run 数据面执行截止非法。") from error
+    minimum = CAPTURE_RESERVATION_ADMISSION_SECONDS if reservation else 0
+    if not math.isfinite(remaining_execution) or remaining_execution <= minimum:
+        raise incremental_recovery.WallClockTimeoutError(
+            operation,
+            elapsed_seconds=deadline.elapsed_seconds,
+            budget_seconds=deadline.budget_seconds,
+        )
 
 
 def _bind_attempt_deadline_metadata(
@@ -8249,6 +8356,57 @@ def _build_parser() -> argparse.ArgumentParser:
         type=Path,
         required=True,
         help="codex-upgrade-vc-action-plan/v1 的 execute／reuse 与动作映射。",
+    )
+
+    deadline_orphan = subparsers.add_parser(
+        "finalize-vc1-deadline-orphan",
+        help=(
+            "直接封口已被原始总 deadline 强停的 VC-1 sequence 5 attempt；"
+            "不取得 CampaignLease、不重跑 Job"
+        ),
+    )
+    add_campaign_reference(deadline_orphan)
+    deadline_orphan.add_argument("--source-attempt", type=Path, required=True)
+    deadline_orphan.add_argument(
+        "--supervisor-run-dir",
+        type=Path,
+        required=True,
+    )
+    deadline_orphan.add_argument(
+        "--timing-ledger-dir",
+        type=Path,
+        required=True,
+    )
+    deadline_orphan.add_argument(
+        "--historical-live-request-audit",
+        type=Path,
+        required=True,
+    )
+    deadline_orphan.add_argument(
+        "--deployment-receipt",
+        type=Path,
+        required=True,
+    )
+    deadline_orphan.add_argument(
+        "--expected-historical-live-requests",
+        type=int,
+        required=True,
+    )
+    deadline_orphan.add_argument(
+        "--expected-delta-live-requests",
+        type=int,
+        required=True,
+    )
+    deadline_orphan.add_argument(
+        "--expected-total-live-requests",
+        type=int,
+        required=True,
+    )
+    deadline_orphan.add_argument(
+        "--max-finalization-seconds",
+        type=int,
+        required=True,
+        help="仅约束 after／恢复／收据封口，不替换或延长原 Campaign deadline。",
     )
 
     compile_interrupted = subparsers.add_parser(
@@ -13666,6 +13824,2728 @@ def _interrupted_recovery_attempt_binding(
         "sha256": file_sha256(path),
         "bytes": path.stat().st_size,
     }
+
+
+def _recovery_execution_handoff_parent() -> dict[str, Any]:
+    """冻结当前零请求预览父批次，供下一份真实 v2 直接消费。"""
+
+    run_value = os.environ.get(
+        codex_upgrade_supervisor.CAMPAIGN_RUN_DIR_ENV
+    )
+    action_id = os.environ.get(
+        codex_upgrade_supervisor.CAMPAIGN_RUN_ACTION_ID_ENV
+    )
+    if (
+        os.environ.get(codex_upgrade_supervisor.CAMPAIGN_RUN_CONTEXT_ENV) != "1"
+        or not run_value
+        or not action_id
+    ):
+        raise ConfigurationError("恢复执行交接只能由零请求预览父批次签发。")
+    run_dir = Path(run_value)
+    if not run_dir.is_absolute() or run_dir.is_symlink() or not run_dir.is_dir():
+        raise ConfigurationError("恢复执行交接的父 run_dir 不可信。")
+    state = codex_upgrade_supervisor._read_state(run_dir)
+    record_path = run_dir / "campaign-run-manifest.json"
+    record = _read_json(record_path, "恢复执行交接父清单")
+    parent_manifest = record.get("manifest")
+    if (
+        state.get("state") != "running"
+        or not isinstance(parent_manifest, Mapping)
+        or parent_manifest.get("schema_version")
+        not in {
+            codex_upgrade_supervisor.CAMPAIGN_RUN_RECOVERY_SCHEMA,
+            codex_upgrade_supervisor.CAMPAIGN_RUN_RECOVERY_CONTINUATION_SCHEMA,
+            codex_upgrade_supervisor.CAMPAIGN_RUN_RECOVERY_FINALIZATION_SCHEMA,
+        }
+        or record.get("manifest_sha256")
+        != codex_upgrade_supervisor._sha256(
+            codex_upgrade_supervisor._canonical(dict(parent_manifest))
+        )
+        or action_id
+        not in {
+            "recover-vc1-interruption-preview",
+            "continue-vc1-interruption-preview",
+        }
+        or len(parent_manifest.get("actions", [])) != 1
+        or parent_manifest["actions"][0].get("action_id") != action_id
+        or state.get("owner_nonce")
+        != os.environ.get(
+            codex_upgrade_supervisor.CAMPAIGN_RUN_OWNER_NONCE_ENV
+        )
+    ):
+        raise ConfigurationError("恢复执行交接父批次身份或运行态漂移。")
+    return {
+        "run_dir": str(run_dir.resolve(strict=True)),
+        "owner_nonce": str(state["owner_nonce"]),
+        "batch_sequence": int(parent_manifest["batch_sequence"]),
+        "original_deadline_at_utc": str(
+            parent_manifest["original_deadline_at_utc"]
+        ),
+        "manifest_record_sha256": file_sha256(record_path),
+        "manifest_sha256": str(record["manifest_sha256"]),
+        "action_id": action_id,
+    }
+
+
+def _write_recovery_execution_handoff(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    *,
+    source_root: Path,
+    source_attempt: Mapping[str, Any],
+    planned_jobs: Sequence[Job],
+    execute_job_ids: Iterable[str],
+    reuse_job_ids: Iterable[str],
+    prior_results: Sequence[Mapping[str, Any]],
+    recovery_scope: Mapping[str, Any],
+    tool_identity: Mapping[str, Any],
+    tool_impact: Mapping[str, Any],
+) -> dict[str, str]:
+    """签发一次 preview→真实执行交接，避免后继重扫大制品。"""
+
+    parent = _recovery_execution_handoff_parent()
+    source_path = source_root / "attempt.json"
+    if (
+        source_path.is_symlink()
+        or not source_path.is_file()
+        or source_attempt.get("attempt_digest") is None
+    ):
+        raise ConfigurationError("恢复执行交接缺少不可变源 attempt。")
+    execute = sorted(set(str(value) for value in execute_job_ids))
+    reuse = sorted(set(str(value) for value in reuse_job_ids))
+    planned = sorted(job.job_id for job in planned_jobs)
+    reused_results = [dict(item) for item in prior_results]
+    if (
+        set(execute) & set(reuse)
+        or set(execute) | set(reuse) != set(planned)
+        or {str(item.get("id")) for item in reused_results} != set(reuse)
+        or parent["original_deadline_at_utc"]
+        != _interrupted_recovery_campaign_plan(campaign_dir, manifest)[1][
+            "original_deadline_at_utc"
+        ]
+    ):
+        raise ConfigurationError("恢复执行交接的 execute／reuse 或 deadline 漂移。")
+    core = {
+        "schema_version": RECOVERY_EXECUTION_HANDOFF_SCHEMA,
+        "issued_at_utc": _utc_now(),
+        "campaign_id": manifest["campaign_id"],
+        "source_attempt": {
+            "path": str(source_path.relative_to(campaign_dir)),
+            "sha256": file_sha256(source_path),
+            "attempt_id": source_attempt["attempt_id"],
+            "attempt_digest": source_attempt["attempt_digest"],
+        },
+        "parent_preview": parent,
+        "official_identity_sha256": _fingerprint(
+            manifest.get("official_identity")
+        ),
+        "tool_files_sha256": str(tool_identity.get("files_sha256", "")),
+        "tool_impact": dict(tool_impact),
+        "recovery_scope": dict(recovery_scope),
+        "planned_job_ids": planned,
+        "execute_job_ids": execute,
+        "reuse_job_ids": reuse,
+        "reused_results": reused_results,
+        "zero_request_boundary": {
+            "reservation_exists": False,
+            "live_request_count": 0,
+            "scanned_bytes": 0,
+        },
+    }
+    payload = {**core, "handoff_sha256": _fingerprint(core)}
+    root = ensure_private_directory(
+        source_root / "recovery-execution-handoffs",
+        source_root,
+    )
+    path = root / f"{parent['manifest_sha256']}.json"
+    _write_or_verify_json(path, payload)
+    return {
+        "path": str(path.relative_to(campaign_dir)),
+        "sha256": file_sha256(path),
+    }
+
+
+def _load_recovery_execution_handoff(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    *,
+    source_root: Path,
+    source_attempt: Mapping[str, Any],
+    planned_jobs: Sequence[Job],
+    execute_job_ids: Iterable[str],
+    reuse_job_ids: Iterable[str],
+    recovery_scope: Mapping[str, Any],
+    tool_identity: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """重放唯一匹配的签名交接；没有交接时保留历史慢路径。"""
+
+    root = source_root / "recovery-execution-handoffs"
+    if not root.exists():
+        return None
+    if root.is_symlink() or not root.is_dir():
+        raise ConfigurationError("恢复执行交接目录不可信。")
+    matches: list[dict[str, Any]] = []
+    expected_execute = sorted(set(str(value) for value in execute_job_ids))
+    expected_reuse = sorted(set(str(value) for value in reuse_job_ids))
+    expected_planned = sorted(job.job_id for job in planned_jobs)
+    source_path = source_root / "attempt.json"
+    for path in sorted(root.glob("*.json")):
+        if path.is_symlink() or not path.is_file():
+            raise ConfigurationError("恢复执行交接目录含不可信文件。")
+        payload = _read_json(path, "恢复执行交接")
+        unsigned = dict(payload)
+        digest = unsigned.pop("handoff_sha256", None)
+        expected_fields = {
+            "schema_version",
+            "issued_at_utc",
+            "campaign_id",
+            "source_attempt",
+            "parent_preview",
+            "official_identity_sha256",
+            "tool_files_sha256",
+            "tool_impact",
+            "recovery_scope",
+            "planned_job_ids",
+            "execute_job_ids",
+            "reuse_job_ids",
+            "reused_results",
+            "zero_request_boundary",
+            "handoff_sha256",
+        }
+        if (
+            set(payload) != expected_fields
+            or payload.get("schema_version") != RECOVERY_EXECUTION_HANDOFF_SCHEMA
+            or not _is_rfc3339_timestamp(payload.get("issued_at_utc"))
+            or digest != _fingerprint(unsigned)
+            or not isinstance(payload.get("tool_impact"), Mapping)
+            or not isinstance(payload.get("recovery_scope"), Mapping)
+            or payload.get("zero_request_boundary") != {
+                "reservation_exists": False,
+                "live_request_count": 0,
+                "scanned_bytes": 0,
+            }
+        ):
+            raise ConfigurationError("恢复执行交接字段、摘要或零请求边界非法。")
+        # 同一 source 允许保留较早、工具身份不同的合法预览；只有与当前
+        # Campaign／闭集完全匹配的一份才可进入快路径。结构或自摘要损坏则
+        # 一律停线，不能借慢路径掩盖不可变交接被改写。
+        if (
+            payload.get("campaign_id") != manifest.get("campaign_id")
+            or payload.get("source_attempt")
+            != {
+                "path": str(source_path.relative_to(campaign_dir)),
+                "sha256": file_sha256(source_path),
+                "attempt_id": source_attempt.get("attempt_id"),
+                "attempt_digest": source_attempt.get("attempt_digest"),
+            }
+            or payload.get("official_identity_sha256")
+            != _fingerprint(manifest.get("official_identity"))
+            or payload.get("tool_files_sha256")
+            != tool_identity.get("files_sha256")
+            or payload.get("recovery_scope") != dict(recovery_scope)
+            or payload.get("planned_job_ids") != expected_planned
+            or payload.get("execute_job_ids") != expected_execute
+            or payload.get("reuse_job_ids") != expected_reuse
+        ):
+            continue
+        parent = payload.get("parent_preview")
+        if not isinstance(parent, Mapping):
+            continue
+        run_dir = Path(str(parent.get("run_dir", "")))
+        record_path = run_dir / "campaign-run-manifest.json"
+        stop_path = run_dir / "stop-receipt.json"
+        try:
+            state = codex_upgrade_supervisor._read_state(run_dir)
+            record = _read_json(record_path, "恢复执行交接父清单")
+            stop = _read_json(stop_path, "恢复执行交接父终态")
+        except (OSError, ConfigurationError, codex_upgrade_supervisor.SupervisorError):
+            continue
+        if (
+            state.get("state") != "stopped"
+            or state.get("owner_nonce") != parent.get("owner_nonce")
+            or file_sha256(record_path) != parent.get("manifest_record_sha256")
+            or record.get("manifest_sha256") != parent.get("manifest_sha256")
+            or stop.get("event_type") != "stopped"
+            or stop.get("reason") != "queue-complete"
+            or stop.get("owner_nonce") != parent.get("owner_nonce")
+        ):
+            continue
+        reused_results = payload.get("reused_results")
+        if (
+            not isinstance(reused_results, list)
+            or {str(item.get("id")) for item in reused_results if isinstance(item, Mapping)}
+            != set(expected_reuse)
+        ):
+            continue
+        for item in reused_results:
+            if not isinstance(item, Mapping):
+                raise ConfigurationError("恢复执行交接的复用结果结构非法。")
+            _validate_incremental_job_result(
+                item,
+                label=f"恢复执行交接:{item.get('id', '')}",
+            )
+        matches.append({**payload, "binding": {
+            "path": str(path.relative_to(campaign_dir)),
+            "sha256": file_sha256(path),
+        }})
+    if len(matches) > 1:
+        raise ConfigurationError("存在多份匹配的恢复执行交接。")
+    if not matches:
+        return None
+    # 交接只替代昂贵身份／大制品重放；当前 Ledger 和控制收据仍须轻量复验。
+    _verify_control_receipts(campaign_dir, dict(manifest), require_active=True)
+    return matches[0]
+
+
+@contextmanager
+def _deadline_orphan_finalizer_lock(attempt_root: Path) -> Iterable[None]:
+    """用 attempt 专属文件锁串行化直接 finalizer，绝不取得 CampaignLease。"""
+
+    if attempt_root.is_symlink() or not attempt_root.is_dir():
+        raise ConfigurationError("deadline orphan attempt 根不存在或不可信。")
+    lock_path = attempt_root / DEADLINE_ORPHAN_LOCK_FILENAME
+    if lock_path.is_symlink():
+        raise ConfigurationError("deadline orphan finalizer 锁不得是符号链接。")
+    descriptor = os.open(
+        lock_path,
+        os.O_RDWR
+        | os.O_CREAT
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0),
+        0o600,
+    )
+    try:
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+        ):
+            raise ConfigurationError(
+                "deadline orphan finalizer 锁必须属于当前用户。"
+            )
+        os.fchmod(descriptor, 0o600)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise ConfigurationError(
+                "同一 deadline orphan attempt 已有 finalizer 在运行。"
+            ) from error
+        yield
+    finally:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+        finally:
+            os.close(descriptor)
+
+
+def _deadline_orphan_external_binding(path: Path, label: str) -> dict[str, Any]:
+    """绑定 Campaign 外的小型普通文件，不允许符号链接或宽权限。"""
+
+    if not path.is_absolute() or path.is_symlink() or not path.is_file():
+        raise ConfigurationError(f"{label}必须是可信绝对普通文件。")
+    resolved = path.resolve(strict=True)
+    metadata = resolved.stat()
+    if (
+        metadata.st_uid != os.geteuid()
+        or stat.S_IMODE(metadata.st_mode) & 0o022
+        or metadata.st_size <= 0
+        or metadata.st_size > 64 * 1024 * 1024
+    ):
+        raise ConfigurationError(f"{label}属主、权限或大小非法。")
+    return {
+        "path": str(resolved),
+        "sha256": file_sha256(resolved),
+        "bytes": metadata.st_size,
+    }
+
+
+def _deadline_orphan_validate_probe_root(
+    root: Path,
+    *,
+    phase: str,
+) -> dict[str, Any]:
+    """重放一份原子发布的环境探针目录及全部五类快照。"""
+
+    if root.is_symlink() or not root.is_dir():
+        raise ConfigurationError(f"deadline orphan {phase} 探针目录不可信。")
+    expected_names = {
+        "probe-manifest.json",
+        *ENVIRONMENT_STATE_FILES.values(),
+    }
+    actual_names = {entry.name for entry in os.scandir(root)}
+    if actual_names != expected_names:
+        raise ConfigurationError(
+            f"deadline orphan {phase} 探针目录内容不闭合。"
+        )
+    manifest_path = root / "probe-manifest.json"
+    manifest = _read_json(manifest_path, f"deadline orphan {phase} 探针")
+    snapshots = manifest.get("snapshots")
+    if (
+        manifest.get("schema_version")
+        != codex_upgrade_environment_probe.PROBE_MANIFEST_SCHEMA
+        or manifest.get("phase") != phase
+        or not _is_rfc3339_timestamp(manifest.get("observed_at_utc"))
+        or not isinstance(snapshots, list)
+        or len(snapshots) != len(ENVIRONMENT_STATE_FILES)
+    ):
+        raise ConfigurationError(
+            f"deadline orphan {phase} 探针清单身份或快照数量非法。"
+        )
+    seen: set[str] = set()
+    for item in snapshots:
+        if (
+            not isinstance(item, Mapping)
+            or set(item) != {"bytes", "comparison", "kind", "path", "sha256"}
+            or not isinstance(item.get("kind"), str)
+            or item["kind"] not in ENVIRONMENT_STATE_FILES
+            or item["kind"] in seen
+            or item.get("path") != ENVIRONMENT_STATE_FILES[item["kind"]]
+            or not SHA256_RE.fullmatch(str(item.get("sha256", "")))
+            or not isinstance(item.get("bytes"), int)
+            or isinstance(item.get("bytes"), bool)
+            or int(item["bytes"]) <= 0
+        ):
+            raise ConfigurationError(
+                f"deadline orphan {phase} 探针快照绑定非法。"
+            )
+        snapshot_path = root / str(item["path"])
+        if (
+            snapshot_path.is_symlink()
+            or not snapshot_path.is_file()
+            or snapshot_path.stat().st_size != item["bytes"]
+            or file_sha256(snapshot_path) != item["sha256"]
+        ):
+            raise ConfigurationError(
+                f"deadline orphan {phase} 探针快照摘要漂移。"
+            )
+        seen.add(str(item["kind"]))
+    return manifest
+
+
+def _deadline_orphan_source_checkpoint(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    source_attempt: Path,
+) -> dict[str, Any]:
+    """重放 sequence 5 孤儿 reservation 与当前 checkpoint 闭集。"""
+
+    expected = campaign_dir / "official" / "attempts" / source_attempt.name
+    try:
+        resolved = source_attempt.resolve(strict=True)
+        expected_resolved = expected.resolve(strict=True)
+    except (OSError, RuntimeError) as error:
+        raise ConfigurationError("deadline orphan source attempt 不存在。") from error
+    if (
+        not source_attempt.is_absolute()
+        or source_attempt.is_symlink()
+        or resolved != expected_resolved
+        or not SAFE_ID_RE.fullmatch(resolved.name)
+    ):
+        raise ConfigurationError(
+            "deadline orphan source attempt 越出当前 Formal Campaign。"
+        )
+    reservation = _load_capture_reservation(
+        campaign_dir,
+        resolved,
+        phase="official",
+        candidate_id=None,
+        _manifest=manifest,
+    )
+    try:
+        store = incremental_recovery.CheckpointStore(
+            resolved / "checkpoints",
+            create=False,
+        )
+        records = store.records()
+    except incremental_recovery.IncrementalRecoveryError as error:
+        raise ConfigurationError(
+            "deadline orphan Job checkpoint 无法重放。"
+        ) from error
+    results = [dict(record.get("result", {})) for record in records]
+    planned_ids = {
+        str(item["id"]) for item in reservation.get("planned_jobs", [])
+    }
+    validation_payload = {
+        "campaign_id": manifest["campaign_id"],
+        "phase": "official",
+        "attempt_id": resolved.name,
+        "run_nonce": reservation["run_nonce"],
+        "results": results,
+    }
+    _validate_checkpoint_records(
+        records,
+        validation_payload,
+        planned_job_ids=planned_ids,
+        strict_context=True,
+    )
+    dispositions: dict[str, str] = {}
+    for record, result in zip(records, results, strict=True):
+        job_id = str(result.get("id", ""))
+        disposition = result.get("disposition")
+        if (
+            result.get("status") != "complete"
+            or disposition not in {"executed", "reused"}
+            or record.get("disposition") != disposition
+            or job_id in dispositions
+        ):
+            raise ConfigurationError(
+                "deadline orphan checkpoint 含失败、重复或 disposition 漂移。"
+            )
+        dispositions[job_id] = str(disposition)
+    executed_ids = {
+        job_id for job_id, value in dispositions.items() if value == "executed"
+    }
+    reused_ids = {
+        job_id for job_id, value in dispositions.items() if value == "reused"
+    }
+    pending_ids = planned_ids - executed_ids - reused_ids
+    actual_counts = {
+        "planned": len(planned_ids),
+        "affected": len(executed_ids | pending_ids),
+        "reused": len(reused_ids),
+        "executed": len(executed_ids),
+        "failed": 0,
+        "pending": len(pending_ids),
+    }
+    if actual_counts != DEADLINE_ORPHAN_EXPECTED_JOB_COUNTS:
+        raise ConfigurationError(
+            "deadline orphan Job 闭集不是冻结的 29/27/2/15/0/12。"
+        )
+
+    evidence_root = resolved / "evidence"
+    before_root = evidence_root / "environment" / "before"
+    before_manifest = _deadline_orphan_validate_probe_root(
+        before_root,
+        phase="before",
+    )
+    arm64_before_path = (
+        evidence_root / "environment" / "arm64-before" / "receipt.json"
+    )
+    try:
+        arm64_before = codex_upgrade_arm64_environment_receipt.replay(
+            arm64_before_path.parent,
+            arm64_before_path.name,
+        )
+    except codex_upgrade_arm64_environment_receipt.Arm64EnvironmentReceiptError as error:
+        raise ConfigurationError(
+            "deadline orphan ARM64 before 收据无法重放。"
+        ) from error
+    if (
+        arm64_before.get("status") != "passed"
+        or arm64_before.get("phase") != "attempt_before"
+        or arm64_before.get("subject_id") != resolved.name
+    ):
+        raise ConfigurationError("deadline orphan ARM64 before 身份非法。")
+    heartbeat_path = resolved / "watchdog-heartbeat.json"
+    heartbeat = _read_json(heartbeat_path, "deadline orphan watchdog heartbeat")
+    if (
+        set(heartbeat)
+        != {
+            "schema_version",
+            "phase",
+            "operation",
+            "elapsed_seconds",
+            "remaining_seconds",
+            "last_completed_job_id",
+            "updated_at_utc",
+        }
+        or heartbeat.get("schema_version") != WATCHDOG_HEARTBEAT_SCHEMA
+        or heartbeat.get("phase") != "official"
+        or heartbeat.get("last_completed_job_id")
+        != (records[-1].get("item_id") if records else None)
+        or not _is_rfc3339_timestamp(heartbeat.get("updated_at_utc"))
+    ):
+        raise ConfigurationError("deadline orphan watchdog heartbeat 身份非法。")
+    heartbeat_budget = float(heartbeat.get("elapsed_seconds", -1)) + float(
+        heartbeat.get("remaining_seconds", -1)
+    )
+    _validate_watchdog_document_values(
+        heartbeat,
+        label="deadline orphan watchdog heartbeat",
+        planned_job_ids=planned_ids,
+        budget=heartbeat_budget,
+    )
+    binary_path = resolved / "official-binary-verification.json"
+    if binary_path.is_symlink() or not binary_path.is_file():
+        raise ConfigurationError(
+            "deadline orphan 缺少官方二进制验证收据。"
+        )
+    for directory, label in (
+        (evidence_root, "evidence"),
+        (resolved / "logs", "logs"),
+    ):
+        if directory.is_symlink() or not directory.is_dir():
+            raise ConfigurationError(f"deadline orphan {label} 目录不可信。")
+    return {
+        "attempt_root": resolved,
+        "reservation": reservation,
+        "records": records,
+        "results": results,
+        "planned_job_ids": sorted(planned_ids),
+        "executed_job_ids": sorted(executed_ids),
+        "reused_job_ids": sorted(reused_ids),
+        "pending_job_ids": sorted(pending_ids),
+        "affected_job_ids": sorted(executed_ids | pending_ids),
+        "failed_job_ids": [],
+        "checkpoint": {
+            "path": str((resolved / "checkpoints").relative_to(campaign_dir)),
+            "record_count": len(records),
+            "last_sequence": records[-1]["checkpoint_sequence"],
+            "last_sha256": records[-1]["checkpoint_sha256"],
+        },
+        "before_manifest": before_manifest,
+        "arm64_before": arm64_before,
+        "arm64_before_path": arm64_before_path,
+        "heartbeat": heartbeat,
+        "heartbeat_path": heartbeat_path,
+        "heartbeat_budget": heartbeat_budget,
+        "binary_path": binary_path,
+    }
+
+
+def _deadline_orphan_supervisor_snapshot(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    run_dir: Path,
+    source: Mapping[str, Any],
+) -> dict[str, Any]:
+    """只接受 sequence 5 被全局绝对 deadline 强停的唯一父监督器。"""
+
+    if not run_dir.is_absolute() or run_dir.is_symlink() or not run_dir.is_dir():
+        raise ConfigurationError("deadline orphan supervisor run_dir 不可信。")
+    run_dir = run_dir.resolve(strict=True)
+    state_path = run_dir / "state.json"
+    record_path = run_dir / "campaign-run-manifest.json"
+    stop_path = run_dir / "stop-receipt.json"
+    try:
+        state = codex_upgrade_supervisor._read_state(run_dir)
+        record = _read_json(record_path, "deadline orphan campaign-run 清单")
+        stop = _read_json(stop_path, "deadline orphan supervisor stop 收据")
+        audit = codex_upgrade_supervisor._audit_command(run_dir)
+    except codex_upgrade_supervisor.SupervisorError as error:
+        raise ConfigurationError(
+            f"deadline orphan supervisor 无法重放：{error}"
+        ) from error
+    run_manifest = record.get("manifest")
+    if not isinstance(run_manifest, Mapping):
+        raise ConfigurationError("deadline orphan supervisor 缺少 v2 manifest。")
+    canonical_manifest_path = (
+        campaign_dir
+        / "control"
+        / "vc"
+        / "run-manifests"
+        / f"{DEADLINE_ORPHAN_EXPECTED_BATCH_SEQUENCE:04d}-vc-1.json"
+    )
+    try:
+        canonical_manifest = codex_upgrade_supervisor._campaign_run_manifest(
+            canonical_manifest_path
+        )
+    except codex_upgrade_supervisor.SupervisorError as error:
+        raise ConfigurationError(
+            f"deadline orphan 规范 v2 manifest 无法重放：{error}"
+        ) from error
+    canonical_manifest.pop("original_deadline_at_epoch", None)
+    reservation = source["reservation"]
+    lease_binding = reservation.get("campaign_lease")
+    planned = set(source["planned_job_ids"])
+    execute = set(run_manifest.get("execute_items", []))
+    reuse = set(run_manifest.get("reuse_items", []))
+    stop_unsigned = dict(stop)
+    stop_digest = stop_unsigned.pop("receipt_sha256", None)
+    original_deadline = _rfc3339_datetime(
+        run_manifest.get("original_deadline_at_utc"),
+        "deadline orphan 原始 deadline",
+    )
+    if (
+        dict(run_manifest) != canonical_manifest
+        or record.get("schema_version")
+        != codex_upgrade_supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA
+        or record.get("manifest_sha256")
+        != codex_upgrade_supervisor._sha256(
+            codex_upgrade_supervisor._canonical(dict(run_manifest))
+        )
+        or run_manifest.get("schema_version")
+        != codex_upgrade_supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA
+        or run_manifest.get("campaign_id") != manifest.get("campaign_id")
+        or run_manifest.get("phase") != "VC-1"
+        or run_manifest.get("batch_sequence")
+        != DEADLINE_ORPHAN_EXPECTED_BATCH_SEQUENCE
+        or run_manifest.get("no_op") is not False
+        or execute != set(source["affected_job_ids"])
+        or reuse != set(source["reused_job_ids"])
+        or execute & reuse
+        or execute | reuse != planned
+        or not isinstance(lease_binding, Mapping)
+        or lease_binding.get("owner_nonce") != state.get("owner_nonce")
+        or _rfc3339_datetime(
+            lease_binding.get("deadline_at_utc"),
+            "deadline orphan reservation deadline",
+        )
+        != original_deadline
+        or abs(float(state.get("deadline_at_epoch", 0)) - original_deadline.timestamp())
+        > 0.001
+        or state.get("campaign_id") != manifest.get("campaign_id")
+        or state.get("phase") != "VC-1"
+        or state.get("state") != "watchdog-aborted"
+        or stop.get("schema_version") != codex_upgrade_supervisor.STOP_SCHEMA
+        or stop.get("event_type") != "watchdog-aborted"
+        or stop.get("reason") != "global-wall-clock-deadline-expired"
+        or stop.get("campaign_id") != manifest.get("campaign_id")
+        or stop.get("owner_nonce") != state.get("owner_nonce")
+        or not _is_rfc3339_timestamp(stop.get("detected_at_utc"))
+        or not isinstance(stop.get("detected_at_epoch"), (int, float))
+        or isinstance(stop.get("detected_at_epoch"), bool)
+        or abs(
+            float(stop.get("detected_at_epoch", 0))
+            - _rfc3339_datetime(
+                stop.get("detected_at_utc"),
+                "deadline orphan supervisor detected_at",
+            ).timestamp()
+        )
+        > 0.001
+        or stop_digest
+        != codex_upgrade_supervisor._sha256(
+            codex_upgrade_supervisor._canonical(stop_unsigned)
+        )
+        or audit.get("state") != "watchdog-aborted"
+        or audit.get("audit_incomplete") is not True
+        or audit.get("integrity_errors") != []
+        or codex_upgrade_supervisor._owner_alive(int(state.get("owner_pid", -1)))
+        or codex_upgrade_supervisor._owner_alive(int(state.get("monitor_pid", -1)))
+    ):
+        raise ConfigurationError(
+            "deadline orphan supervisor、v2 sequence 5 或绝对 deadline 漂移。"
+        )
+    actions = run_manifest.get("actions")
+    action_items = {
+        str(item)
+        for action in actions or []
+        if isinstance(action, Mapping)
+        for item in action.get("item_ids", [])
+    }
+    if not isinstance(actions, list) or not actions or action_items != execute:
+        raise ConfigurationError(
+            "deadline orphan v2 动作未精确绑定 27 个 affected Job。"
+        )
+    return {
+        "run_dir": str(run_dir),
+        "state": state,
+        "manifest": dict(run_manifest),
+        "audit": audit,
+        "terminal": {
+            "state": "watchdog-aborted",
+            "reason": "global-wall-clock-deadline-expired",
+            "batch_sequence": DEADLINE_ORPHAN_EXPECTED_BATCH_SEQUENCE,
+            "detected_at_utc": str(stop["detected_at_utc"]),
+            "owner_nonce": str(state["owner_nonce"]),
+        },
+        "state_binding": _deadline_orphan_external_binding(
+            state_path, "deadline orphan supervisor state"
+        ),
+        "manifest_record_binding": _deadline_orphan_external_binding(
+            record_path, "deadline orphan supervisor manifest"
+        ),
+        "stop_receipt_binding": _deadline_orphan_external_binding(
+            stop_path, "deadline orphan supervisor stop receipt"
+        ),
+        "audit_sha256": _fingerprint(audit),
+        "original_deadline_at_utc": str(
+            run_manifest["original_deadline_at_utc"]
+        ),
+        "execute_job_ids": sorted(execute),
+        "reuse_job_ids": sorted(reuse),
+    }
+
+
+def _deadline_orphan_execution_transition(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    source: Mapping[str, Any],
+    supervisor: Mapping[str, Any],
+) -> dict[str, Any]:
+    """从两项 reused 结果重建 sequence 5 真正使用的工具与 transition。"""
+
+    reused_results = [
+        result
+        for result in source["results"]
+        if result.get("disposition") == "reused"
+    ]
+    carried = {
+        str(result.get("carried_from_attempt", ""))
+        for result in reused_results
+    }
+    if len(carried) != 1 or not SAFE_ID_RE.fullmatch(next(iter(carried), "")):
+        raise ConfigurationError(
+            "deadline orphan reused Job 未绑定唯一来源 attempt。"
+        )
+    source_attempt_id = next(iter(carried))
+    prior_root, prior_attempt = _load_capture_attempt(
+        campaign_dir,
+        "official",
+        None,
+        source_attempt_id,
+        _verified_campaign_manifest=manifest,
+    )
+    prior_path = prior_root / "attempt.json"
+    expected_source_receipt = {
+        "path": str(prior_path.relative_to(campaign_dir)),
+        "sha256": file_sha256(prior_path),
+        "bytes": prior_path.stat().st_size,
+    }
+    if any(
+        result.get("source_receipt") != expected_source_receipt
+        for result in reused_results
+    ):
+        raise ConfigurationError(
+            "deadline orphan reused Job 来源 attempt 摘要漂移。"
+        )
+    marker = prior_attempt.get("interrupted_recovery")
+    transition_path = _interrupted_recovery_transition_path(prior_root)
+    transition = _read_json(
+        transition_path,
+        "deadline orphan interrupted recovery transition",
+    )
+    unsigned = dict(transition)
+    transition_digest = unsigned.pop("transition_sha256", None)
+    required = {
+        "schema_version",
+        "issued_at_utc",
+        "campaign_id",
+        "attempt_id",
+        "attempt_digest",
+        "contract",
+        "from_tool_files_sha256",
+        "to_tool_files_sha256",
+        "changed_files",
+        "allowed_production_paths",
+        "affected_job_ids",
+        "recovery_scope",
+        "allowed_operations",
+        "zero_request_boundary",
+        "transition_sha256",
+    }
+    if "continuation_manifest" in transition:
+        required.add("continuation_manifest")
+    scope = transition.get("recovery_scope")
+    contract_binding = marker.get("contract") if isinstance(marker, Mapping) else None
+    if (
+        transition_path.is_symlink()
+        or set(transition) != required
+        or transition.get("schema_version")
+        != INTERRUPTED_RECOVERY_TRANSITION_SCHEMA
+        or transition.get("campaign_id") != manifest.get("campaign_id")
+        or transition.get("attempt_id") != prior_attempt.get("attempt_id")
+        or transition.get("attempt_digest") != prior_attempt.get("attempt_digest")
+        or transition.get("contract") != contract_binding
+        or transition.get("allowed_operations") != ["capture-run"]
+        or transition.get("zero_request_boundary")
+        != {
+            "reservation_exists": False,
+            "live_request_count": 0,
+            "scanned_bytes": 0,
+        }
+        or transition_digest != _fingerprint(unsigned)
+        or not isinstance(scope, Mapping)
+        or set(scope.get("planned_job_ids", []))
+        != set(source["planned_job_ids"])
+        or set(scope.get("completed_job_ids", []))
+        != set(source["reused_job_ids"])
+        or set(scope.get("execute_job_ids", []))
+        != set(supervisor["execute_job_ids"])
+        or set(transition.get("affected_job_ids", []))
+        != set(supervisor["execute_job_ids"])
+    ):
+        raise ConfigurationError(
+            "deadline orphan interrupted recovery transition 或闭集漂移。"
+        )
+    effective_transition = {
+        field: transition[field]
+        for field in (
+            "from_tool_files_sha256",
+            "to_tool_files_sha256",
+            "changed_files",
+            "allowed_production_paths",
+            "affected_job_ids",
+        )
+    }
+    execution_tool = _interrupted_recovery_effective_tool_identity(
+        manifest,
+        effective_transition,
+        execute_job_ids=source["affected_job_ids"],
+        reuse_job_ids=source["reused_job_ids"],
+    )
+    jobs = {
+        job.job_id: job
+        for job in _campaign_jobs(campaign_dir, dict(manifest), "official")
+    }
+    reservation_plan = {
+        str(item["id"]): str(item["execution_sha256"])
+        for item in source["reservation"]["planned_jobs"]
+    }
+    if set(jobs) != set(reservation_plan):
+        raise ConfigurationError(
+            "deadline orphan reservation 与当前 Formal Job 集漂移。"
+        )
+    for result in source["results"]:
+        job_id = str(result["id"])
+        if (
+            _job_execution_sha256(jobs[job_id]) != reservation_plan[job_id]
+            or not _historical_result_metadata_matches(
+                result,
+                jobs[job_id],
+                dict(manifest["official_identity"]),
+                execution_tool,
+                reservation_plan[job_id],
+                current_tool=execution_tool,
+            )
+        ):
+            raise ConfigurationError(
+                f"deadline orphan Job 未绑定 sequence 5 执行工具：{job_id}"
+            )
+    component_bundle = _tool_component_bundle(execution_tool)
+    component_drift = _tool_component_drift(
+        manifest.get("tool_identity", {}),
+        execution_tool,
+    )
+    return {
+        "binding": {
+            "path": str(transition_path.relative_to(campaign_dir)),
+            "sha256": file_sha256(transition_path),
+        },
+        "execution_tool_files_sha256": execution_tool["files_sha256"],
+        "tool_components": component_bundle["components"],
+        "changed_components": sorted(component_drift.get("changed_components", [])),
+        "source_attempt_id": source_attempt_id,
+        "source_attempt_digest": prior_attempt["attempt_digest"],
+    }
+
+
+def _deadline_orphan_deployment_snapshot(path: Path) -> dict[str, Any]:
+    """重放当前 ARM64 工具部署收据，不把旧 Campaign 工具冒充当前工具。"""
+
+    binding = _deadline_orphan_external_binding(
+        path,
+        "deadline orphan 受管工具部署收据",
+    )
+    resolved = Path(binding["path"])
+    payload = _read_json(resolved, "deadline orphan 受管工具部署收据")
+    required = {
+        "schema_version",
+        "status",
+        "campaign_id",
+        "created_at_utc",
+        "architecture",
+        "production_tool_root",
+        "production_doc_root",
+        "tool_files_sha256",
+        "supervisor_sha256",
+        "assertion_preparer_sha256",
+        "rollback_backup",
+        "assertion_preparer_rollback_backup",
+        "document_rollback_backup",
+        "switched_archived_documents",
+        "installed_runtime_documents",
+        "supervisor_run_dir",
+    }
+    canonical = (
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        + b"\n"
+    )
+    current_tool = _tool_identity(include_git=False)
+    production_root = Path(str(payload.get("production_tool_root", "")))
+    production_doc_root = Path(str(payload.get("production_doc_root", "")))
+    rollback_root = Path(str(payload.get("rollback_backup", "")))
+    assertion_backup = Path(
+        str(payload.get("assertion_preparer_rollback_backup", ""))
+    )
+    document_backup = Path(str(payload.get("document_rollback_backup", "")))
+    supervisor_run = Path(str(payload.get("supervisor_run_dir", "")))
+    current_root = Path(__file__).resolve().parent
+    assertion_preparer = current_root.parent / "prepare_assertion_bundle.sh"
+    trusted_coordinates = (
+        (production_root, True),
+        (production_doc_root, True),
+        (rollback_root, True),
+        (assertion_backup, False),
+        (document_backup, True),
+        (supervisor_run, True),
+    )
+    if (
+        set(payload) != required
+        or resolved.read_bytes() != canonical
+        or payload.get("schema_version") != "codex-arm64-supervisor-enable/v1"
+        or payload.get("status") != "passed"
+        or not SAFE_ID_RE.fullmatch(str(payload.get("campaign_id", "")))
+        or not _is_rfc3339_timestamp(payload.get("created_at_utc"))
+        or payload.get("architecture") != "aarch64"
+        or platform.machine() != "aarch64"
+        or production_root.is_symlink()
+        or production_root.resolve(strict=True) != current_root
+        or payload.get("tool_files_sha256") != current_tool.get("files_sha256")
+        or not assertion_preparer.is_file()
+        or assertion_preparer.is_symlink()
+        or payload.get("supervisor_sha256")
+        != file_sha256(current_root / "codex_upgrade_supervisor.py")
+        or payload.get("assertion_preparer_sha256")
+        != file_sha256(assertion_preparer)
+        or payload.get("switched_archived_documents")
+        != [
+            "OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md",
+            "CODEX_CLI_CLIENT_EMULATION_GUIDE.md",
+        ]
+        or not isinstance(payload.get("installed_runtime_documents"), list)
+        or payload["installed_runtime_documents"]
+        != sorted(set(payload["installed_runtime_documents"]))
+        or any(
+            not coordinate.is_absolute()
+            or coordinate.is_symlink()
+            or (directory and not coordinate.is_dir())
+            or (not directory and not coordinate.is_file())
+            or coordinate.stat().st_uid != os.geteuid()
+            or stat.S_IMODE(coordinate.stat().st_mode) & 0o022
+            for coordinate, directory in trusted_coordinates
+        )
+    ):
+        raise ConfigurationError(
+            "deadline orphan 部署收据未绑定当前 ARM64 受管工具树。"
+        )
+    try:
+        run_state = codex_upgrade_supervisor._read_state(supervisor_run)
+        run_audit = codex_upgrade_supervisor._audit_command(supervisor_run)
+    except (OSError, ValueError, codex_upgrade_supervisor.SupervisorError) as error:
+        raise ConfigurationError(
+            f"deadline orphan 部署监督器无法重放：{error}"
+        ) from error
+    if (
+        run_state.get("campaign_id") != payload.get("campaign_id")
+        or run_state.get("phase") != "bootstrap"
+        or run_state.get("state") != "stopped"
+        or run_audit.get("run_dir") != str(supervisor_run.resolve(strict=True))
+        or run_audit.get("state") != "stopped"
+        or run_audit.get("audit_incomplete") is not False
+        or run_audit.get("integrity_errors") not in (None, [])
+    ):
+        raise ConfigurationError(
+            "deadline orphan 部署监督器未形成完整终态。"
+        )
+    return {
+        "binding": binding,
+        "campaign_id": str(payload["campaign_id"]),
+        "tool_files_sha256": str(payload["tool_files_sha256"]),
+        "supervisor_run_dir": str(supervisor_run.resolve(strict=True)),
+    }
+
+
+def _deadline_orphan_timing_prefix(
+    ledger_root: Path,
+    manifest: Mapping[str, Any],
+    supervisor: Mapping[str, Any],
+    *,
+    expected_historical_live_requests: int,
+) -> dict[str, Any]:
+    """重放 Ledger 的固定 sequence 6 前缀，并只允许尚未或已经追加 sequence 7。"""
+
+    if (
+        not ledger_root.is_absolute()
+        or ledger_root.is_symlink()
+        or not ledger_root.is_dir()
+    ):
+        raise ConfigurationError("deadline orphan 时间账本目录不可信。")
+    resolved = ledger_root.resolve(strict=True)
+    try:
+        prefix = codex_upgrade_timing_ledger.inspect_ledger(
+            resolved,
+            limit=DEADLINE_ORPHAN_EXPECTED_LEDGER_PREFIX_SEQUENCE,
+        )
+        current = codex_upgrade_timing_ledger.inspect_ledger(resolved)
+    except (OSError, codex_upgrade_timing_ledger.TimingLedgerError) as error:
+        raise ConfigurationError(
+            f"deadline orphan 时间账本无法重放：{error}"
+        ) from error
+    if (
+        prefix.get("head_sequence")
+        != DEADLINE_ORPHAN_EXPECTED_LEDGER_PREFIX_SEQUENCE
+        or current.get("head_sequence")
+        not in {
+            DEADLINE_ORPHAN_EXPECTED_LEDGER_PREFIX_SEQUENCE,
+            DEADLINE_ORPHAN_EXPECTED_LEDGER_STOP_SEQUENCE,
+        }
+        or prefix.get("status") != "stop_required"
+        # sequence 5 真实现场已经用 stage_abandoned 关闭 VC-1；sequence 6
+        # 只补写历史请求计数，因此 active_phase 必须保持为空，不能伪造为活跃阶段。
+        or prefix.get("active_phase") is not None
+        or prefix.get("baseline_version") != manifest.get("baseline_version")
+        or prefix.get("target_version") != manifest.get("target_version")
+        or prefix.get("campaign_purpose") != manifest.get("campaign_purpose")
+        or prefix.get("total_deadline_at_utc")
+        != supervisor.get("original_deadline_at_utc")
+        or prefix.get("total_live_request_count")
+        != expected_historical_live_requests
+        or (
+            current.get("head_sequence")
+            == DEADLINE_ORPHAN_EXPECTED_LEDGER_PREFIX_SEQUENCE
+            and current.get("status") != "stop_required"
+        )
+        or (
+            current.get("head_sequence")
+            == DEADLINE_ORPHAN_EXPECTED_LEDGER_STOP_SEQUENCE
+            and current.get("status") != "stopped"
+        )
+    ):
+        raise ConfigurationError(
+            "deadline orphan Ledger 不是冻结的 sequence 6 stop_required 前缀。"
+        )
+    plan_path = resolved / "ledger.json"
+    return {
+        "ledger_dir": str(resolved),
+        "ledger_plan_sha256": file_sha256(plan_path),
+        "prefix_head_sequence": int(prefix["head_sequence"]),
+        "prefix_head_sha256": str(prefix["head_sha256"]),
+        "prefix_status": str(prefix["status"]),
+        "active_phase": None,
+        "historical_live_request_count": int(
+            prefix["total_live_request_count"]
+        ),
+        "total_deadline_at_utc": str(prefix["total_deadline_at_utc"]),
+        "current": current,
+    }
+
+
+def _deadline_orphan_contract_core(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    source: Mapping[str, Any],
+    supervisor: Mapping[str, Any],
+    timing: Mapping[str, Any],
+    historical_audit: Mapping[str, Any],
+    deployment: Mapping[str, Any],
+    execution_transition: Mapping[str, Any],
+    *,
+    expected_historical_live_requests: int,
+    expected_delta_live_requests: int,
+    expected_total_live_requests: int,
+    max_finalization_seconds: int,
+) -> dict[str, Any]:
+    """构造不含签发时间和自摘要的 deadline orphan 固定合同。"""
+
+    attempt_root = Path(str(source["attempt_root"]))
+    reservation_path = attempt_root / "reservation.json"
+    before_path = (
+        attempt_root
+        / "evidence"
+        / "environment"
+        / "before"
+        / "probe-manifest.json"
+    )
+    transition = {
+        key: execution_transition[key]
+        for key in (
+            "binding",
+            "execution_tool_files_sha256",
+            "changed_components",
+            "source_attempt_id",
+            "source_attempt_digest",
+        )
+    }
+    return {
+        "schema_version": DEADLINE_ORPHAN_CONTRACT_SCHEMA,
+        "campaign_id": str(manifest["campaign_id"]),
+        "attempt_id": attempt_root.name,
+        "batch_sequence": DEADLINE_ORPHAN_EXPECTED_BATCH_SEQUENCE,
+        "original_deadline_at_utc": str(
+            supervisor["original_deadline_at_utc"]
+        ),
+        "source": {
+            "reservation": {
+                **_interrupted_recovery_attempt_binding(
+                    campaign_dir,
+                    reservation_path,
+                ),
+                "reservation_digest": str(
+                    source["reservation"]["reservation_digest"]
+                ),
+            },
+            "checkpoint": dict(source["checkpoint"]),
+            "before_probe": _interrupted_recovery_attempt_binding(
+                campaign_dir,
+                before_path,
+            ),
+            "arm64_before_receipt": _interrupted_recovery_attempt_binding(
+                campaign_dir,
+                Path(str(source["arm64_before_path"])),
+            ),
+            "watchdog_heartbeat": _interrupted_recovery_attempt_binding(
+                campaign_dir,
+                Path(str(source["heartbeat_path"])),
+            ),
+            "binary_verification": _interrupted_recovery_attempt_binding(
+                campaign_dir,
+                Path(str(source["binary_path"])),
+            ),
+            "planned_job_ids": list(source["planned_job_ids"]),
+            "affected_job_ids": list(source["affected_job_ids"]),
+            "reused_job_ids": list(source["reused_job_ids"]),
+            "executed_job_ids": list(source["executed_job_ids"]),
+            "failed_job_ids": list(source["failed_job_ids"]),
+            "pending_job_ids": list(source["pending_job_ids"]),
+            "job_counts": dict(DEADLINE_ORPHAN_EXPECTED_JOB_COUNTS),
+        },
+        "supervisor": {
+            "run_dir": str(supervisor["run_dir"]),
+            "terminal": dict(supervisor["terminal"]),
+            "state": dict(supervisor["state_binding"]),
+            "manifest_record": dict(supervisor["manifest_record_binding"]),
+            "stop_receipt": dict(supervisor["stop_receipt_binding"]),
+            "audit_sha256": str(supervisor["audit_sha256"]),
+        },
+        "timing_ledger": {
+            key: timing[key]
+            for key in (
+                "ledger_dir",
+                "ledger_plan_sha256",
+                "prefix_head_sequence",
+                "prefix_head_sha256",
+                "prefix_status",
+                "active_phase",
+                "historical_live_request_count",
+                "total_deadline_at_utc",
+            )
+        },
+        "historical_live_request_audit": dict(historical_audit),
+        "deployment_receipt": {
+            "binding": dict(deployment["binding"]),
+            "campaign_id": str(deployment["campaign_id"]),
+            "tool_files_sha256": str(deployment["tool_files_sha256"]),
+            "supervisor_run_dir": str(deployment["supervisor_run_dir"]),
+        },
+        "execution_transition": transition,
+        "request_accounting": {
+            "historical_live_request_count": expected_historical_live_requests,
+            "delta_live_request_count": expected_delta_live_requests,
+            "total_live_request_count": expected_total_live_requests,
+            "finalizer_live_request_count": 0,
+            "failed_attempt_archives_enumerated": False,
+        },
+        "max_finalization_seconds": max_finalization_seconds,
+        "operation_boundary": {
+            "campaign_lease_acquired": False,
+            "reservation_created": False,
+            "batch_created": False,
+            "jobs_reexecuted": False,
+            "model_requests_sent": False,
+            "vc2_entered": False,
+        },
+    }
+
+
+def _validate_deadline_orphan_contract_document(
+    payload: Mapping[str, Any],
+    *,
+    campaign_id: str,
+    attempt_id: str,
+) -> None:
+    """校验 finalization contract 的闭合字段与自摘要。"""
+
+    required = {
+        "schema_version",
+        "issued_at_utc",
+        "campaign_id",
+        "attempt_id",
+        "batch_sequence",
+        "original_deadline_at_utc",
+        "source",
+        "supervisor",
+        "timing_ledger",
+        "historical_live_request_audit",
+        "deployment_receipt",
+        "execution_transition",
+        "request_accounting",
+        "max_finalization_seconds",
+        "operation_boundary",
+        "contract_sha256",
+    }
+    unsigned = dict(payload)
+    digest = unsigned.pop("contract_sha256", None)
+    accounting = payload.get("request_accounting")
+    boundary = payload.get("operation_boundary")
+    accounting_fields = {
+        "historical_live_request_count",
+        "delta_live_request_count",
+        "total_live_request_count",
+        "finalizer_live_request_count",
+        "failed_attempt_archives_enumerated",
+    }
+    if (
+        set(payload) != required
+        or payload.get("schema_version") != DEADLINE_ORPHAN_CONTRACT_SCHEMA
+        or payload.get("campaign_id") != campaign_id
+        or payload.get("attempt_id") != attempt_id
+        or payload.get("batch_sequence")
+        != DEADLINE_ORPHAN_EXPECTED_BATCH_SEQUENCE
+        or not _is_rfc3339_timestamp(payload.get("issued_at_utc"))
+        or not _is_rfc3339_timestamp(payload.get("original_deadline_at_utc"))
+        or digest != _fingerprint(unsigned)
+        or not isinstance(payload.get("source"), Mapping)
+        or not isinstance(payload.get("supervisor"), Mapping)
+        or not isinstance(payload.get("timing_ledger"), Mapping)
+        or not isinstance(payload.get("historical_live_request_audit"), Mapping)
+        or not isinstance(payload.get("deployment_receipt"), Mapping)
+        or not isinstance(payload.get("execution_transition"), Mapping)
+        or not isinstance(accounting, Mapping)
+        or set(accounting) != accounting_fields
+        or any(
+            not isinstance(accounting.get(field), int)
+            or isinstance(accounting.get(field), bool)
+            or int(accounting[field]) < 0
+            for field in (
+                "historical_live_request_count",
+                "delta_live_request_count",
+                "total_live_request_count",
+                "finalizer_live_request_count",
+            )
+        )
+        or accounting.get("historical_live_request_count")
+        + accounting.get("delta_live_request_count")
+        != accounting.get("total_live_request_count")
+        or accounting.get("finalizer_live_request_count") != 0
+        or accounting.get("failed_attempt_archives_enumerated") is not False
+        or boundary
+        != {
+            "campaign_lease_acquired": False,
+            "reservation_created": False,
+            "batch_created": False,
+            "jobs_reexecuted": False,
+            "model_requests_sent": False,
+            "vc2_entered": False,
+        }
+        or not isinstance(payload.get("max_finalization_seconds"), int)
+        or isinstance(payload.get("max_finalization_seconds"), bool)
+        or int(payload["max_finalization_seconds"]) <= 0
+    ):
+        raise ConfigurationError(
+            "deadline orphan finalization contract 字段、身份或自摘要非法。"
+        )
+
+
+def _deadline_orphan_contract(
+    path: Path,
+    core: Mapping[str, Any],
+) -> dict[str, Any]:
+    """创建或逐字段重放唯一 finalization contract。"""
+
+    if path.exists() or path.is_symlink():
+        if path.is_symlink() or not path.is_file():
+            raise ConfigurationError(
+                "deadline orphan finalization contract 路径不可信。"
+            )
+        payload = _read_json(path, "deadline orphan finalization contract")
+        _validate_deadline_orphan_contract_document(
+            payload,
+            campaign_id=str(core["campaign_id"]),
+            attempt_id=str(core["attempt_id"]),
+        )
+        comparable = dict(payload)
+        comparable.pop("issued_at_utc", None)
+        comparable.pop("contract_sha256", None)
+        if comparable != dict(core):
+            raise ConfigurationError(
+                "既有 deadline orphan finalization contract 与当前现场漂移。"
+            )
+        return payload
+    document = {
+        **dict(core),
+        "issued_at_utc": _utc_now(),
+    }
+    document["contract_sha256"] = _fingerprint(document)
+    _secure_write_json_once(path, document)
+    _validate_deadline_orphan_contract_document(
+        document,
+        campaign_id=str(core["campaign_id"]),
+        attempt_id=str(core["attempt_id"]),
+    )
+    return document
+
+
+def _deadline_orphan_live_request_audit(
+    campaign_dir: Path,
+    source: Mapping[str, Any],
+    historical_audit_path: Path,
+    output_path: Path,
+    *,
+    expected_historical_live_requests: int,
+    expected_delta_live_requests: int,
+    expected_total_live_requests: int,
+) -> dict[str, Any]:
+    """创建或重放只枚举 checkpoint 基础根的增量请求审计。"""
+
+    # 延迟导入用于打破 closeout -> codex_upgrade 的模块依赖环。
+    from tools.official_client_capture import codex_upgrade_vc0_closeout
+
+    observed_at_utc: str | None = None
+    existing: dict[str, Any] | None = None
+    if output_path.exists() or output_path.is_symlink():
+        if output_path.is_symlink() or not output_path.is_file():
+            raise ConfigurationError(
+                "deadline orphan live 请求审计路径不可信。"
+            )
+        existing = _read_json(output_path, "deadline orphan live 请求审计")
+        observed_at_utc = existing.get("observed_at_utc")
+        if not _is_rfc3339_timestamp(observed_at_utc):
+            raise ConfigurationError(
+                "deadline orphan live 请求审计时间非法。"
+            )
+    try:
+        audit = codex_upgrade_vc0_closeout.build_deadline_orphan_live_request_audit(
+            campaign_dir,
+            source_attempt=Path(str(source["attempt_root"])),
+            historical_live_request_audit=historical_audit_path,
+            expected_historical_live_requests=(
+                expected_historical_live_requests
+            ),
+            expected_delta_live_requests=expected_delta_live_requests,
+            expected_total_live_requests=expected_total_live_requests,
+            expected_executed_job_ids=set(source["executed_job_ids"]),
+            expected_reused_job_ids=set(source["reused_job_ids"]),
+            expected_pending_job_ids=set(source["pending_job_ids"]),
+            observed_at_utc=observed_at_utc,
+        )
+    except codex_upgrade_vc0_closeout.VC0CloseoutError as error:
+        raise ConfigurationError(
+            f"deadline orphan live 请求审计失败：{error}"
+        ) from error
+    if existing is not None:
+        if existing != audit:
+            raise ConfigurationError(
+                "既有 deadline orphan live 请求审计与 checkpoint 漂移。"
+            )
+    else:
+        _secure_write_json_once(output_path, audit)
+    replayed = _read_json(output_path, "deadline orphan live 请求审计")
+    if replayed != audit:
+        raise ConfigurationError("deadline orphan live 请求审计发布后漂移。")
+    return replayed
+
+
+def _deadline_orphan_finalization_deadline(
+    max_finalization_seconds: int,
+    *,
+    last_completed_job_id: str | None,
+) -> incremental_recovery.WallClockDeadline:
+    """建立只约束本次收口操作、绝不替换原 Campaign deadline 的计时器。"""
+
+    if (
+        not isinstance(max_finalization_seconds, int)
+        or isinstance(max_finalization_seconds, bool)
+        or max_finalization_seconds <= 0
+        or max_finalization_seconds > MAX_ATTEMPT_WALL_SECONDS
+    ):
+        raise ConfigurationError(
+            f"--max-finalization-seconds 必须在 1～{MAX_ATTEMPT_WALL_SECONDS} 秒之间。"
+        )
+    try:
+        deadline = incremental_recovery.WallClockDeadline(
+            max_finalization_seconds,
+            label="vc1-deadline-orphan-finalization",
+        )
+    except incremental_recovery.IncrementalRecoveryError as error:
+        raise ConfigurationError(str(error)) from error
+    deadline.phase = "official"  # type: ignore[attr-defined]
+    deadline.heartbeat_seconds = DEFAULT_HEARTBEAT_SECONDS  # type: ignore[attr-defined]
+    deadline.last_completed_job_id = last_completed_job_id  # type: ignore[attr-defined]
+    return deadline
+
+
+def _deadline_orphan_fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _deadline_orphan_remove_staging(path: Path, parent: Path, prefix: str) -> None:
+    """只清理本 finalizer 自己创建且尚未发布的隐藏暂存目录。"""
+
+    if not path.exists() and not path.is_symlink():
+        return
+    try:
+        path.relative_to(parent)
+    except ValueError as error:
+        raise ConfigurationError("deadline orphan 暂存目录越界。") from error
+    if (
+        not path.name.startswith(prefix)
+        or path.is_symlink()
+        or not path.is_dir()
+        or path.stat().st_uid != os.geteuid()
+    ):
+        raise ConfigurationError("deadline orphan 暂存目录不可信。")
+    shutil.rmtree(path)
+
+
+def _deadline_orphan_after_probe(
+    manifest: Mapping[str, Any],
+    source: Mapping[str, Any],
+    deadline: incremental_recovery.WallClockDeadline,
+) -> tuple[Path, dict[str, Any]]:
+    """先在同文件系统暂存完整 after，再以单次 rename 发布。"""
+
+    attempt_root = Path(str(source["attempt_root"]))
+    environment_root = ensure_private_directory(
+        attempt_root / "evidence" / "environment",
+        attempt_root,
+    )
+    target = environment_root / "after"
+    deadline.check("deadline-orphan:after:admission")
+    if target.exists() or target.is_symlink():
+        if target.is_symlink() or not target.is_dir():
+            raise ConfigurationError("deadline orphan after 目标不可信。")
+        return target / "probe-manifest.json", _deadline_orphan_validate_probe_root(
+            target,
+            phase="after",
+        )
+    prefix = ".deadline-orphan-after."
+    staging = Path(tempfile.mkdtemp(prefix=prefix, dir=environment_root))
+    staging.chmod(0o700)
+    try:
+        _probe_capture_environment(
+            dict(manifest),
+            staging,
+            "after",
+            deadline=deadline,
+        )
+        probe = _deadline_orphan_validate_probe_root(staging, phase="after")
+        deadline.check("deadline-orphan:after:publish")
+        if target.exists() or target.is_symlink():
+            raise ConfigurationError(
+                "deadline orphan after 在原子发布前被并发创建。"
+            )
+        os.rename(staging, target)
+        _deadline_orphan_fsync_directory(environment_root)
+    finally:
+        _deadline_orphan_remove_staging(staging, environment_root, prefix)
+    replayed = _deadline_orphan_validate_probe_root(target, phase="after")
+    if replayed != probe:
+        raise ConfigurationError("deadline orphan after 原子发布后漂移。")
+    return target / "probe-manifest.json", replayed
+
+
+def _deadline_orphan_arm64_after(
+    source: Mapping[str, Any],
+    deadline: incremental_recovery.WallClockDeadline,
+) -> tuple[Path, dict[str, Any]]:
+    """先暂存 ARM64 after facts/receipt，再原子发布完整目录。"""
+
+    attempt_root = Path(str(source["attempt_root"]))
+    environment_root = ensure_private_directory(
+        attempt_root / "evidence" / "environment",
+        attempt_root,
+    )
+    target = environment_root / "arm64-after"
+    deadline.check("deadline-orphan:arm64-after:admission")
+    if target.exists() or target.is_symlink():
+        if target.is_symlink() or not target.is_dir():
+            raise ConfigurationError("deadline orphan ARM64 after 目标不可信。")
+        try:
+            receipt = codex_upgrade_arm64_environment_receipt.replay(
+                target,
+                "receipt.json",
+            )
+        except codex_upgrade_arm64_environment_receipt.Arm64EnvironmentReceiptError as error:
+            raise ConfigurationError(
+                "deadline orphan ARM64 after 无法重放。"
+            ) from error
+        if (
+            receipt.get("status") != "passed"
+            or receipt.get("phase") != "attempt_after"
+            or receipt.get("subject_id") != attempt_root.name
+        ):
+            raise ConfigurationError("deadline orphan ARM64 after 身份非法。")
+        return target / "receipt.json", receipt
+    prefix = ".deadline-orphan-arm64-after."
+    staging = Path(tempfile.mkdtemp(prefix=prefix, dir=environment_root))
+    staging.chmod(0o700)
+    try:
+        _staged_path, receipt = _capture_arm64_environment_receipt(
+            staging,
+            phase="attempt_after",
+            subject_id=attempt_root.name,
+            deadline=deadline,
+        )
+        deadline.check("deadline-orphan:arm64-after:publish")
+        if target.exists() or target.is_symlink():
+            raise ConfigurationError(
+                "deadline orphan ARM64 after 在原子发布前被并发创建。"
+            )
+        os.rename(staging, target)
+        _deadline_orphan_fsync_directory(environment_root)
+    finally:
+        _deadline_orphan_remove_staging(staging, environment_root, prefix)
+    try:
+        replayed = codex_upgrade_arm64_environment_receipt.replay(
+            target,
+            "receipt.json",
+        )
+    except codex_upgrade_arm64_environment_receipt.Arm64EnvironmentReceiptError as error:
+        raise ConfigurationError(
+            "deadline orphan ARM64 after 发布后无法重放。"
+        ) from error
+    if replayed != receipt:
+        raise ConfigurationError("deadline orphan ARM64 after 原子发布后漂移。")
+    return target / "receipt.json", replayed
+
+
+def _deadline_orphan_restoration(
+    source: Mapping[str, Any],
+    deadline: incremental_recovery.WallClockDeadline,
+) -> tuple[Path, dict[str, Any]]:
+    """创建或重放 before/after 的环境恢复收据。"""
+
+    attempt_root = Path(str(source["attempt_root"]))
+    evidence_root = attempt_root / "evidence"
+    path = evidence_root / "receipts" / "restoration-report.json"
+    deadline.check("deadline-orphan:restoration:admission")
+    if path.exists() or path.is_symlink():
+        if path.is_symlink() or not path.is_file():
+            raise ConfigurationError("deadline orphan restoration 路径不可信。")
+        try:
+            receipt = replay_receipt(
+                path,
+                evidence_root,
+                expected_subcommand="restoration",
+            )
+        except (ReceiptFinalizerError, OSError, ValueError) as error:
+            raise ConfigurationError(
+                f"deadline orphan restoration 无法重放：{error}"
+            ) from error
+    else:
+        path, receipt = _finalize_attempt_restoration(
+            evidence_root,
+            phase="official",
+            candidate_id=None,
+        )
+    checks = receipt.get("checks")
+    expected_checks = {
+        "service_state_restored",
+        "container_state_restored",
+        "database_state_preserved",
+        "account_state_preserved",
+        "configuration_state_restored",
+    }
+    if (
+        receipt.get("schema_version") != RESTORATION_SCHEMA
+        or receipt.get("phase") != "official"
+        or receipt.get("candidate_id") is not None
+        or receipt.get("status") != "restored"
+        or not isinstance(checks, list)
+        or {
+            str(item.get("id"))
+            for item in checks
+            if isinstance(item, Mapping) and item.get("passed") is True
+        }
+        != expected_checks
+        or len(checks) != len(expected_checks)
+    ):
+        raise ConfigurationError(
+            "deadline orphan restoration 身份或五项检查未闭合。"
+        )
+    deadline.check("deadline-orphan:restoration:complete")
+    return path, receipt
+
+
+def _deadline_orphan_timeout_checkpoint(
+    source: Mapping[str, Any],
+    supervisor: Mapping[str, Any],
+) -> tuple[Path, dict[str, Any]]:
+    """把父监督器已经判定的原 deadline 写成 attempt 专属超时终态。"""
+
+    attempt_root = Path(str(source["attempt_root"]))
+    budget = round(float(source["heartbeat_budget"]), 3)
+    operation = _normalize_watchdog_operation(
+        "campaign-run:global-wall-clock-deadline-expired"
+    )
+    checkpoint = {
+        "schema_version": WATCHDOG_CHECKPOINT_SCHEMA,
+        "status": "timeout",
+        "phase": "official",
+        "operation": operation,
+        "elapsed_seconds": budget,
+        "remaining_seconds": 0.0,
+        "budget_seconds": budget,
+        "last_completed_job_id": source["heartbeat"].get(
+            "last_completed_job_id"
+        ),
+        "recorded_at_utc": str(
+            supervisor["terminal"]["detected_at_utc"]
+        ),
+    }
+    _validate_watchdog_document_values(
+        checkpoint,
+        label="deadline orphan timeout checkpoint",
+        planned_job_ids=set(source["planned_job_ids"]),
+        budget=budget,
+    )
+    path = attempt_root / "timeout-checkpoint.json"
+    _write_or_verify_json(path, checkpoint)
+    return path, checkpoint
+
+
+def _deadline_orphan_attempt_core(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    source: Mapping[str, Any],
+    supervisor: Mapping[str, Any],
+    execution_transition: Mapping[str, Any],
+    contract_path: Path,
+    audit_path: Path,
+    timeout_path: Path,
+    after_path: Path,
+    restoration_path: Path,
+    arm64_after_path: Path,
+    continuity: Mapping[str, Any],
+    *,
+    expected_historical_live_requests: int,
+    expected_delta_live_requests: int,
+    expected_total_live_requests: int,
+) -> dict[str, Any]:
+    """构造 deadline orphan 的唯一失败 attempt 内容。"""
+
+    attempt_root = Path(str(source["attempt_root"]))
+    evidence_root = attempt_root / "evidence"
+    result_roots = [
+        Path(str(root))
+        for result in source["results"]
+        for root in result.get("evidence_roots", [])
+    ]
+    evidence_roots = _deduplicate_evidence_roots(
+        [*result_roots, evidence_root, attempt_root / "logs"],
+        require_nonempty=False,
+    )
+    plan_core = {
+        "schema_version": incremental_recovery.SCHEMA_VERSION,
+        "planned_job_ids": list(source["planned_job_ids"]),
+        "changed_components": list(
+            execution_transition["changed_components"]
+        ),
+        "affected_job_ids": list(source["affected_job_ids"]),
+        "reused_job_ids": list(source["reused_job_ids"]),
+        "executed_job_ids": list(source["executed_job_ids"]),
+        "failed_job_ids": list(source["failed_job_ids"]),
+        "pending_job_ids": list(source["pending_job_ids"]),
+    }
+    request_accounting = {
+        "historical_live_request_count": expected_historical_live_requests,
+        "delta_live_request_count": expected_delta_live_requests,
+        "total_live_request_count": expected_total_live_requests,
+        "finalizer_live_request_count": 0,
+        "failed_attempt_archives_enumerated": False,
+    }
+    watchdog_budget = round(float(source["heartbeat_budget"]), 3)
+    return {
+        "campaign_id": str(manifest["campaign_id"]),
+        "phase": "official",
+        "candidate_id": None,
+        "status": "failed",
+        "continuity": dict(continuity),
+        "tool_components": dict(execution_transition["tool_components"]),
+        "incremental_tool_transition": None,
+        "evaluation_transition": None,
+        "interrupted_recovery_transition": dict(
+            execution_transition["binding"]
+        ),
+        "deadline_orphan_finalization": {
+            "contract": _vc_control_binding(campaign_dir, contract_path),
+            "live_request_audit": _vc_control_binding(
+                campaign_dir,
+                audit_path,
+            ),
+            "request_accounting": request_accounting,
+            "supervisor_terminal": {
+                "state": "watchdog-aborted",
+                "reason": "global-wall-clock-deadline-expired",
+                "batch_sequence": DEADLINE_ORPHAN_EXPECTED_BATCH_SEQUENCE,
+            },
+        },
+        "incremental_plan": {
+            **plan_core,
+            "plan_sha256": incremental_recovery.digest(plan_core),
+        },
+        "identity": dict(manifest["official_identity"]),
+        "results": [dict(result) for result in source["results"]],
+        "evidence_roots": [str(root) for root in evidence_roots],
+        "environment": {
+            "evidence_root": str(evidence_root.resolve(strict=True)),
+            "before_probe": _attempt_evidence_binding(
+                evidence_root,
+                evidence_root / "environment" / "before" / "probe-manifest.json",
+            ),
+            "after_probe": _attempt_evidence_binding(
+                evidence_root,
+                after_path,
+            ),
+            "restoration_report": _attempt_evidence_binding(
+                evidence_root,
+                restoration_path,
+            ),
+            "arm64_before_receipt": _attempt_evidence_binding(
+                evidence_root,
+                Path(str(source["arm64_before_path"])),
+            ),
+            "arm64_after_receipt": _attempt_evidence_binding(
+                evidence_root,
+                arm64_after_path,
+            ),
+        },
+        "binary_verification": _read_json(
+            Path(str(source["binary_path"])),
+            "deadline orphan 官方二进制验证",
+        ),
+        "watchdog": {
+            "schema_version": WATCHDOG_HEARTBEAT_SCHEMA,
+            "budget_seconds": watchdog_budget,
+            "heartbeat_seconds": DEFAULT_HEARTBEAT_SECONDS,
+            "elapsed_seconds": watchdog_budget,
+            "remaining_seconds": 0.0,
+            "heartbeat": _interrupted_recovery_attempt_binding(
+                campaign_dir,
+                Path(str(source["heartbeat_path"])),
+            ),
+            "timeout_checkpoint": _interrupted_recovery_attempt_binding(
+                campaign_dir,
+                timeout_path,
+            ),
+            "last_completed_job_id": source["heartbeat"].get(
+                "last_completed_job_id"
+            ),
+        },
+        "job_checkpoint": {
+            "schema_version": JOB_CHECKPOINT_SCHEMA,
+            "campaign_id": str(manifest["campaign_id"]),
+            "phase": "official",
+            "attempt_id": attempt_root.name,
+            "run_nonce": str(source["reservation"]["run_nonce"]),
+            **dict(source["checkpoint"]),
+        },
+        "execution_error": {
+            "type": "CampaignDeadlineExpired",
+            "message": (
+                "VC-1 sequence 5 已由父监督器按原始总 deadline 强停；"
+                "本 finalizer 仅补齐环境、请求计数和不可变停线终态。"
+            ),
+        },
+        "restoration_error": None,
+        "next_gate": (
+            "当前 Campaign 永久停线；不得进入 VC-2、重跑 sequence 5 "
+            "或重发已完成请求。工具闭合后从新的 VC-0 开始。"
+        ),
+    }
+
+
+def _deadline_orphan_write_or_replay_attempt(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    source: Mapping[str, Any],
+    core: Mapping[str, Any],
+) -> dict[str, Any]:
+    """只写一次 attempt；中断重入时要求全部业务字段逐字一致。"""
+
+    attempt_root = Path(str(source["attempt_root"]))
+    path = attempt_root / "attempt.json"
+    if path.exists() or path.is_symlink():
+        if path.is_symlink() or not path.is_file():
+            raise ConfigurationError("deadline orphan attempt 终态路径不可信。")
+        _root, existing = _load_capture_attempt(
+            campaign_dir,
+            "official",
+            None,
+            attempt_root.name,
+            _verified_campaign_manifest=manifest,
+        )
+        if any(existing.get(key) != value for key, value in core.items()):
+            raise ConfigurationError(
+                "既有 deadline orphan attempt 与当前 finalization contract 漂移。"
+            )
+        return existing
+    return _write_capture_attempt(
+        campaign_dir,
+        attempt_root,
+        dict(core),
+        _verified_campaign_manifest=manifest,
+    )
+
+
+def _deadline_orphan_finalizer_receipt(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    source: Mapping[str, Any],
+    attempt: Mapping[str, Any],
+    contract_path: Path,
+    audit_path: Path,
+    supervisor: Mapping[str, Any],
+    deployment: Mapping[str, Any],
+    timing: Mapping[str, Any],
+) -> tuple[Path, dict[str, Any]]:
+    """创建或重放可供 Ledger sequence 7 绑定的 finalizer 收据。"""
+
+    attempt_root = Path(str(source["attempt_root"]))
+    path = attempt_root / DEADLINE_ORPHAN_FINALIZER_FILENAME
+    event_id = "deadline-orphan-stop-" + _fingerprint(
+        {
+            "campaign_id": manifest["campaign_id"],
+            "attempt_id": attempt_root.name,
+            "prefix_head_sha256": timing["prefix_head_sha256"],
+        }
+    )[:20]
+    stable = {
+        "schema_version": DEADLINE_ORPHAN_FINALIZER_SCHEMA,
+        "status": "complete",
+        "campaign_id": str(manifest["campaign_id"]),
+        "attempt_id": attempt_root.name,
+        "attempt_digest": str(attempt["attempt_digest"]),
+        "contract": _vc_control_binding(campaign_dir, contract_path),
+        "live_request_audit": _vc_control_binding(campaign_dir, audit_path),
+        "request_accounting": dict(
+            attempt["deadline_orphan_finalization"]["request_accounting"]
+        ),
+        "job_counts": dict(DEADLINE_ORPHAN_EXPECTED_JOB_COUNTS),
+        "supervisor_terminal": dict(supervisor["terminal"]),
+        "deployment_receipt": {
+            "binding": dict(deployment["binding"]),
+            "tool_files_sha256": str(deployment["tool_files_sha256"]),
+        },
+        "ledger_prefix": {
+            key: timing[key]
+            for key in (
+                "ledger_dir",
+                "ledger_plan_sha256",
+                "prefix_head_sequence",
+                "prefix_head_sha256",
+                "historical_live_request_count",
+                "total_deadline_at_utc",
+            )
+        },
+        "ledger_stop_event": {
+            "sequence": DEADLINE_ORPHAN_EXPECTED_LEDGER_STOP_SEQUENCE,
+            "event_id": event_id,
+            "phase": "VC-1",
+            "event_type": "stop_the_line",
+            "attempt_id": attempt_root.name,
+            "root_cause_id": DEADLINE_ORPHAN_STOP_ROOT_CAUSE_ID,
+            "live_request_count": int(
+                attempt["deadline_orphan_finalization"]["request_accounting"][
+                    "delta_live_request_count"
+                ]
+            ),
+            "next_action": (
+                "保留 VC-0/VC-1 全部不可变现场并永久停止当前 Campaign；"
+                "工具闭合后只允许从新的 VC-0 开始，禁止进入 VC-2。"
+            ),
+        },
+        "request_boundary": {
+            "campaign_lease_acquired": False,
+            "reservation_created": False,
+            "batch_created": False,
+            "jobs_reexecuted": False,
+            "model_requests_sent": False,
+            "finalizer_live_request_count": 0,
+            "vc2_entered": False,
+        },
+    }
+    if path.exists() or path.is_symlink():
+        if path.is_symlink() or not path.is_file():
+            raise ConfigurationError("deadline orphan finalizer 收据路径不可信。")
+        payload = _read_json(path, "deadline orphan finalizer 收据")
+        unsigned = dict(payload)
+        digest = unsigned.pop("finalizer_sha256", None)
+        comparable = dict(unsigned)
+        finalized_at = comparable.pop("finalized_at_utc", None)
+        if (
+            not _is_rfc3339_timestamp(finalized_at)
+            or digest != _fingerprint(unsigned)
+            or comparable != stable
+        ):
+            raise ConfigurationError(
+                "既有 deadline orphan finalizer 收据与 attempt 漂移。"
+            )
+        return path, payload
+    document = {**stable, "finalized_at_utc": _utc_now()}
+    document["finalizer_sha256"] = _fingerprint(document)
+    _secure_write_json_once(path, document)
+    return path, document
+
+
+def _deadline_orphan_copy_or_verify_receipt(
+    source: Path,
+    destination: Path,
+) -> None:
+    """把收口输入逐字节复制到 Ledger；重入时只接受同一内容。"""
+
+    if source.is_symlink() or not source.is_file():
+        raise ConfigurationError(
+            f"deadline orphan Ledger 收据来源不可信：{source}"
+        )
+    if destination.exists() or destination.is_symlink():
+        if (
+            destination.is_symlink()
+            or not destination.is_file()
+            or destination.stat().st_size != source.stat().st_size
+            or file_sha256(destination) != file_sha256(source)
+        ):
+            raise ConfigurationError(
+                f"既有 deadline orphan Ledger 收据漂移：{destination}"
+            )
+        return
+    _secure_copy_file_once(source, destination)
+
+
+def _deadline_orphan_ledger_receipts(
+    campaign_dir: Path,
+    source: Mapping[str, Any],
+    supervisor: Mapping[str, Any],
+    deployment: Mapping[str, Any],
+    historical_audit_path: Path,
+    contract_path: Path,
+    audit_path: Path,
+    finalizer_path: Path,
+    timing: Mapping[str, Any],
+) -> list[dict[str, str]]:
+    """在 Ledger 内保存 finalizer 所需全部外部小型收据副本。"""
+
+    ledger_root = Path(str(timing["ledger_dir"]))
+    attempt_root = Path(str(source["attempt_root"]))
+    receipt_root = ensure_private_directory(
+        ledger_root
+        / "receipts"
+        / "vc1-deadline-orphan"
+        / str(source["reservation"]["campaign_id"])
+        / attempt_root.name,
+        ledger_root,
+    )
+    sources = {
+        "deadline_orphan_attempt": attempt_root / "attempt.json",
+        "deadline_orphan_contract": contract_path,
+        "deadline_orphan_finalizer": finalizer_path,
+        "historical_live_request_accounting": historical_audit_path,
+        "live_request_accounting": audit_path,
+        "managed_tool_deployment": Path(
+            str(deployment["binding"]["path"])
+        ),
+        "supervisor_manifest": Path(
+            str(supervisor["manifest_record_binding"]["path"])
+        ),
+        "supervisor_state": Path(str(supervisor["state_binding"]["path"])),
+        "supervisor_terminal": Path(
+            str(supervisor["stop_receipt_binding"]["path"])
+        ),
+    }
+    receipts: list[dict[str, str]] = []
+    for role, source_path in sorted(sources.items()):
+        destination = receipt_root / f"{role}.json"
+        _deadline_orphan_copy_or_verify_receipt(source_path, destination)
+        receipts.append(
+            {
+                "role": role,
+                "path": destination.relative_to(ledger_root).as_posix(),
+                "sha256": file_sha256(destination),
+            }
+        )
+    return receipts
+
+
+def _deadline_orphan_stop_ledger(
+    timing: Mapping[str, Any],
+    finalizer: Mapping[str, Any],
+    receipts: list[dict[str, str]],
+    *,
+    expected_total_live_requests: int,
+) -> dict[str, Any]:
+    """追加或重放唯一 sequence 7 stop_the_line 事件。"""
+
+    ledger_root = Path(str(timing["ledger_dir"]))
+    stop = finalizer["ledger_stop_event"]
+    recorded_at = str(finalizer["finalized_at_utc"])
+    expected_event = {
+        "schema_version": codex_upgrade_timing_ledger.EVENT_SCHEMA,
+        "sequence": DEADLINE_ORPHAN_EXPECTED_LEDGER_STOP_SEQUENCE,
+        "event_id": str(stop["event_id"]),
+        "recorded_at_utc": recorded_at,
+        "phase": "VC-1",
+        "event_type": "stop_the_line",
+        "attempt_id": str(stop["attempt_id"]),
+        "root_cause_id": DEADLINE_ORPHAN_STOP_ROOT_CAUSE_ID,
+        "live_request_count": int(stop["live_request_count"]),
+        "receipts": sorted(receipts, key=lambda item: item["role"]),
+        "next_action": str(stop["next_action"]),
+        "previous_event_sha256": str(timing["prefix_head_sha256"]),
+    }
+    try:
+        current = codex_upgrade_timing_ledger.inspect_ledger(
+            ledger_root,
+            now=recorded_at,
+        )
+        if (
+            current.get("head_sequence")
+            == DEADLINE_ORPHAN_EXPECTED_LEDGER_PREFIX_SEQUENCE
+        ):
+            codex_upgrade_timing_ledger.append_event(
+                ledger_root,
+                event_id=expected_event["event_id"],
+                phase="VC-1",
+                event_type="stop_the_line",
+                attempt_id=expected_event["attempt_id"],
+                root_cause_id=DEADLINE_ORPHAN_STOP_ROOT_CAUSE_ID,
+                live_request_count=expected_event["live_request_count"],
+                receipts=expected_event["receipts"],
+                next_action=expected_event["next_action"],
+                recorded_at_utc=recorded_at,
+            )
+        elif (
+            current.get("head_sequence")
+            != DEADLINE_ORPHAN_EXPECTED_LEDGER_STOP_SEQUENCE
+        ):
+            raise ConfigurationError(
+                "deadline orphan Ledger 在 sequence 6/7 之外发生漂移。"
+            )
+    except (OSError, codex_upgrade_timing_ledger.TimingLedgerError) as error:
+        if isinstance(error, ConfigurationError):
+            raise
+        raise ConfigurationError(
+            f"deadline orphan Ledger stop_the_line 写入失败：{error}"
+        ) from error
+    event_path = (
+        ledger_root
+        / "events"
+        / f"{DEADLINE_ORPHAN_EXPECTED_LEDGER_STOP_SEQUENCE:06d}.json"
+    )
+    event = _read_json(event_path, "deadline orphan Ledger sequence 7")
+    if event != expected_event:
+        raise ConfigurationError(
+            "deadline orphan Ledger 已有 sequence 7 不是同一 stop event。"
+        )
+    try:
+        final = codex_upgrade_timing_ledger.inspect_ledger(
+            ledger_root,
+            now=recorded_at,
+        )
+    except (OSError, codex_upgrade_timing_ledger.TimingLedgerError) as error:
+        raise ConfigurationError(
+            f"deadline orphan Ledger 终态无法重放：{error}"
+        ) from error
+    if (
+        final.get("status") != "stopped"
+        or final.get("head_sequence")
+        != DEADLINE_ORPHAN_EXPECTED_LEDGER_STOP_SEQUENCE
+        or final.get("last_event_id") != expected_event["event_id"]
+        or final.get("total_live_request_count")
+        != expected_total_live_requests
+        or final.get("active_phase") != timing.get("active_phase")
+    ):
+        raise ConfigurationError(
+            "deadline orphan Ledger sequence 7 未形成 64 请求永久停线终态。"
+        )
+    return {
+        "summary": final,
+        "event": {
+            "path": str(event_path.relative_to(ledger_root)),
+            "sha256": file_sha256(event_path),
+        },
+    }
+
+
+def _validate_deadline_orphan_attempt_bindings(
+    campaign_dir: Path,
+    attempt_root: Path,
+    payload: Mapping[str, Any],
+) -> None:
+    """重放 deadline orphan attempt 的合同、审计和环境终态绑定。"""
+
+    marker = payload.get("deadline_orphan_finalization")
+    plan = payload.get("incremental_plan")
+    if not isinstance(marker, Mapping) or not isinstance(plan, Mapping):
+        raise ConfigurationError("deadline orphan attempt 缺少合同或闭集。")
+    contract_path = attempt_root / DEADLINE_ORPHAN_CONTRACT_FILENAME
+    audit_path = attempt_root / DEADLINE_ORPHAN_AUDIT_FILENAME
+    expected_contract_binding = _vc_control_binding(campaign_dir, contract_path)
+    expected_audit_binding = _vc_control_binding(campaign_dir, audit_path)
+    if (
+        marker.get("contract") != expected_contract_binding
+        or marker.get("live_request_audit") != expected_audit_binding
+    ):
+        raise ConfigurationError(
+            "deadline orphan attempt 的合同或请求审计绑定漂移。"
+        )
+    contract = _read_json(contract_path, "deadline orphan finalization contract")
+    _validate_deadline_orphan_contract_document(
+        contract,
+        campaign_id=str(payload["campaign_id"]),
+        attempt_id=attempt_root.name,
+    )
+    accounting = marker["request_accounting"]
+    source = contract.get("source")
+    transition = contract.get("execution_transition")
+    timing = contract.get("timing_ledger")
+    if (
+        contract.get("request_accounting") != accounting
+        or not isinstance(source, Mapping)
+        or any(
+            source.get(field) != plan.get(field)
+            for field in (
+                "planned_job_ids",
+                "affected_job_ids",
+                "reused_job_ids",
+                "executed_job_ids",
+                "failed_job_ids",
+                "pending_job_ids",
+            )
+        )
+        or source.get("job_counts") != DEADLINE_ORPHAN_EXPECTED_JOB_COUNTS
+        or not isinstance(transition, Mapping)
+        or transition.get("binding")
+        != payload.get("interrupted_recovery_transition")
+        or not isinstance(timing, Mapping)
+        or timing.get("prefix_head_sequence")
+        != DEADLINE_ORPHAN_EXPECTED_LEDGER_PREFIX_SEQUENCE
+        or timing.get("historical_live_request_count")
+        != accounting["historical_live_request_count"]
+    ):
+        raise ConfigurationError(
+            "deadline orphan contract 与 attempt 闭集或 Ledger 前缀漂移。"
+        )
+
+    audit = _read_json(audit_path, "deadline orphan live 请求审计")
+    audit_required = {
+        "schema_version",
+        "status",
+        "campaign_id",
+        "attempt_id",
+        "observed_at_utc",
+        "counting_rule",
+        "checkpoint",
+        "historical_audit",
+        "historical_live_request_count",
+        "delta_live_request_count",
+        "total_live_request_count",
+        "executed_job_ids",
+        "reused_job_ids",
+        "pending_job_ids",
+        "job_live_request_counts",
+        "sources",
+        "source_sets_disjoint",
+        "failed_attempt_archives_enumerated",
+    }
+    job_counts = audit.get("job_live_request_counts")
+    audit_sources = audit.get("sources")
+    valid_job_counts = bool(
+        isinstance(job_counts, list)
+        and all(
+            isinstance(item, Mapping)
+            and set(item) == {"job_id", "live_request_count", "source_paths"}
+            and isinstance(item.get("job_id"), str)
+            and SAFE_ID_RE.fullmatch(str(item["job_id"])) is not None
+            and isinstance(item.get("live_request_count"), int)
+            and not isinstance(item.get("live_request_count"), bool)
+            and int(item["live_request_count"]) >= 0
+            and isinstance(item.get("source_paths"), list)
+            and all(
+                isinstance(value, str) and Path(value).is_absolute()
+                for value in item["source_paths"]
+            )
+            and item["source_paths"] == sorted(set(item["source_paths"]))
+            for item in job_counts
+        )
+    )
+    valid_sources = bool(
+        isinstance(audit_sources, list)
+        and all(
+            isinstance(item, Mapping)
+            and set(item)
+            == {
+                "job_id",
+                "kind",
+                "path",
+                "sha256",
+                "live_request_count",
+            }
+            and isinstance(item.get("job_id"), str)
+            and SAFE_ID_RE.fullmatch(str(item["job_id"])) is not None
+            and isinstance(item.get("kind"), str)
+            and bool(item["kind"])
+            and isinstance(item.get("path"), str)
+            and Path(str(item["path"])).is_absolute()
+            and SHA256_RE.fullmatch(str(item.get("sha256", ""))) is not None
+            and isinstance(item.get("live_request_count"), int)
+            and not isinstance(item.get("live_request_count"), bool)
+            and int(item["live_request_count"]) > 0
+            for item in audit_sources
+        )
+    )
+    if (
+        set(audit) != audit_required
+        or audit.get("schema_version")
+        != "codex-upgrade-deadline-orphan-live-request-audit/v1"
+        or audit.get("status") != "complete"
+        or audit.get("campaign_id") != payload.get("campaign_id")
+        or audit.get("attempt_id") != attempt_root.name
+        or not _is_rfc3339_timestamp(audit.get("observed_at_utc"))
+        or audit.get("counting_rule")
+        != "codex_model_turns_and_responses_requests/v1"
+        or audit.get("checkpoint") != source.get("checkpoint")
+        or audit.get("historical_live_request_count")
+        != accounting["historical_live_request_count"]
+        or audit.get("delta_live_request_count")
+        != accounting["delta_live_request_count"]
+        or audit.get("total_live_request_count")
+        != accounting["total_live_request_count"]
+        or audit.get("executed_job_ids") != plan.get("executed_job_ids")
+        or audit.get("reused_job_ids") != plan.get("reused_job_ids")
+        or audit.get("pending_job_ids") != plan.get("pending_job_ids")
+        or audit.get("source_sets_disjoint") is not True
+        or audit.get("failed_attempt_archives_enumerated") is not False
+        or not valid_job_counts
+        or {str(item.get("job_id")) for item in job_counts if isinstance(item, Mapping)}
+        != set(plan["executed_job_ids"])
+        or sum(
+            int(item.get("live_request_count", -1))
+            for item in job_counts
+            if isinstance(item, Mapping)
+        )
+        != accounting["delta_live_request_count"]
+        or not valid_sources
+        or sum(
+            int(item.get("live_request_count", -1))
+            for item in audit_sources
+            if isinstance(item, Mapping)
+        )
+        != accounting["delta_live_request_count"]
+    ):
+        raise ConfigurationError(
+            "deadline orphan live 请求审计身份、闭集或计数漂移。"
+        )
+
+    evidence_root = attempt_root / "evidence"
+    environment = payload.get("environment")
+    expected_paths = {
+        "before_probe": evidence_root
+        / "environment"
+        / "before"
+        / "probe-manifest.json",
+        "after_probe": evidence_root
+        / "environment"
+        / "after"
+        / "probe-manifest.json",
+        "restoration_report": evidence_root
+        / "receipts"
+        / "restoration-report.json",
+        "arm64_before_receipt": evidence_root
+        / "environment"
+        / "arm64-before"
+        / "receipt.json",
+        "arm64_after_receipt": evidence_root
+        / "environment"
+        / "arm64-after"
+        / "receipt.json",
+    }
+    if (
+        not isinstance(environment, Mapping)
+        or environment.get("evidence_root")
+        != str(evidence_root.resolve(strict=True))
+        or any(
+            environment.get(field)
+            != _attempt_evidence_binding(evidence_root, path)
+            for field, path in expected_paths.items()
+        )
+    ):
+        raise ConfigurationError(
+            "deadline orphan attempt 环境文件绑定漂移。"
+        )
+    _deadline_orphan_validate_probe_root(
+        expected_paths["before_probe"].parent,
+        phase="before",
+    )
+    _deadline_orphan_validate_probe_root(
+        expected_paths["after_probe"].parent,
+        phase="after",
+    )
+    try:
+        arm64_before = codex_upgrade_arm64_environment_receipt.replay(
+            expected_paths["arm64_before_receipt"].parent,
+            "receipt.json",
+        )
+        arm64_after = codex_upgrade_arm64_environment_receipt.replay(
+            expected_paths["arm64_after_receipt"].parent,
+            "receipt.json",
+        )
+        restoration = replay_receipt(
+            expected_paths["restoration_report"],
+            evidence_root,
+            expected_subcommand="restoration",
+        )
+    except (
+        codex_upgrade_arm64_environment_receipt.Arm64EnvironmentReceiptError,
+        ReceiptFinalizerError,
+        OSError,
+        ValueError,
+    ) as error:
+        raise ConfigurationError(
+            f"deadline orphan 环境终态无法重放：{error}"
+        ) from error
+    if (
+        arm64_before.get("status") != "passed"
+        or arm64_before.get("phase") != "attempt_before"
+        or arm64_before.get("subject_id") != attempt_root.name
+        or arm64_after.get("status") != "passed"
+        or arm64_after.get("phase") != "attempt_after"
+        or arm64_after.get("subject_id") != attempt_root.name
+        or arm64_before.get("continuity_identity_sha256")
+        != arm64_after.get("continuity_identity_sha256")
+        or restoration.get("schema_version") != RESTORATION_SCHEMA
+        or restoration.get("status") != "restored"
+        or restoration.get("phase") != "official"
+        or restoration.get("candidate_id") is not None
+    ):
+        raise ConfigurationError(
+            "deadline orphan ARM64 连续性或 restoration 终态漂移。"
+        )
+
+    finalizer_path = attempt_root / DEADLINE_ORPHAN_FINALIZER_FILENAME
+    if finalizer_path.exists() or finalizer_path.is_symlink():
+        if finalizer_path.is_symlink() or not finalizer_path.is_file():
+            raise ConfigurationError("deadline orphan finalizer 收据不可信。")
+        finalizer = _read_json(finalizer_path, "deadline orphan finalizer 收据")
+        unsigned = dict(finalizer)
+        digest = unsigned.pop("finalizer_sha256", None)
+        if (
+            finalizer.get("schema_version") != DEADLINE_ORPHAN_FINALIZER_SCHEMA
+            or finalizer.get("status") != "complete"
+            or finalizer.get("campaign_id") != payload.get("campaign_id")
+            or finalizer.get("attempt_id") != attempt_root.name
+            or finalizer.get("attempt_digest") != payload.get("attempt_digest")
+            or finalizer.get("contract") != marker.get("contract")
+            or finalizer.get("live_request_audit")
+            != marker.get("live_request_audit")
+            or finalizer.get("request_accounting") != accounting
+            or not _is_rfc3339_timestamp(finalizer.get("finalized_at_utc"))
+            or digest != _fingerprint(unsigned)
+        ):
+            raise ConfigurationError(
+                "deadline orphan finalizer 收据与 attempt 漂移。"
+            )
+
+
+def finalize_vc1_deadline_orphan(
+    arguments: argparse.Namespace,
+) -> dict[str, Any]:
+    """直接封口 sequence 5 deadline 孤儿，并把 38 条增量请求停线入账。"""
+
+    if (
+        _ACTIVE_CAMPAIGN_LEASE is not None
+        or os.environ.get(codex_upgrade_supervisor.CAMPAIGN_RUN_CONTEXT_ENV)
+        == "1"
+    ):
+        raise ConfigurationError(
+            "deadline orphan finalizer 必须在 campaign-run 和 CampaignLease 之外执行。"
+        )
+    expected_values = {
+        "expected_historical_live_requests": (
+            DEADLINE_ORPHAN_EXPECTED_HISTORICAL_LIVE_REQUESTS
+        ),
+        "expected_delta_live_requests": (
+            DEADLINE_ORPHAN_EXPECTED_DELTA_LIVE_REQUESTS
+        ),
+        "expected_total_live_requests": (
+            DEADLINE_ORPHAN_EXPECTED_TOTAL_LIVE_REQUESTS
+        ),
+    }
+    for field, expected in expected_values.items():
+        value = getattr(arguments, field, None)
+        if (
+            not isinstance(value, int)
+            or isinstance(value, bool)
+            or value != expected
+        ):
+            raise ConfigurationError(
+                "deadline orphan 请求计数必须固定为 26 + 38 = 64。"
+            )
+    max_finalization_seconds = getattr(
+        arguments,
+        "max_finalization_seconds",
+        None,
+    )
+    if (
+        not isinstance(max_finalization_seconds, int)
+        or isinstance(max_finalization_seconds, bool)
+        or max_finalization_seconds <= 0
+        or max_finalization_seconds > MAX_ATTEMPT_WALL_SECONDS
+    ):
+        raise ConfigurationError(
+            f"--max-finalization-seconds 必须在 1～{MAX_ATTEMPT_WALL_SECONDS} 秒之间。"
+        )
+    campaign_dir = getattr(arguments, "campaign_dir", None)
+    source_argument = getattr(arguments, "source_attempt", None)
+    if (
+        not isinstance(campaign_dir, Path)
+        or not campaign_dir.is_absolute()
+        or campaign_dir.is_symlink()
+        or not campaign_dir.is_dir()
+        or not isinstance(source_argument, Path)
+        or not source_argument.is_absolute()
+        or source_argument.is_symlink()
+        or not source_argument.is_dir()
+    ):
+        raise ConfigurationError(
+            "deadline orphan Campaign 与 source attempt 必须是可信绝对目录。"
+        )
+    campaign_dir = campaign_dir.resolve(strict=True)
+    manifest = load_campaign_manifest(
+        campaign_dir,
+        _skip_control_validation=True,
+    )
+    _require_formal_campaign(campaign_dir, manifest)
+    expected_attempt = (
+        campaign_dir / "official" / "attempts" / source_argument.name
+    )
+    try:
+        attempt_root = source_argument.resolve(strict=True)
+    except (OSError, RuntimeError) as error:
+        raise ConfigurationError("deadline orphan source attempt 不存在。") from error
+    if (
+        attempt_root != expected_attempt.resolve(strict=True)
+        or not SAFE_ID_RE.fullmatch(attempt_root.name)
+    ):
+        raise ConfigurationError(
+            "deadline orphan source attempt 越出当前 Formal Campaign。"
+        )
+
+    with _deadline_orphan_finalizer_lock(attempt_root):
+        source = _deadline_orphan_source_checkpoint(
+            campaign_dir,
+            manifest,
+            attempt_root,
+        )
+        supervisor = _deadline_orphan_supervisor_snapshot(
+            campaign_dir,
+            manifest,
+            getattr(arguments, "supervisor_run_dir"),
+            source,
+        )
+        execution_transition = _deadline_orphan_execution_transition(
+            campaign_dir,
+            manifest,
+            source,
+            supervisor,
+        )
+        deployment = _deadline_orphan_deployment_snapshot(
+            getattr(arguments, "deployment_receipt")
+        )
+        historical_audit_path = getattr(
+            arguments,
+            "historical_live_request_audit",
+        )
+        historical_audit_binding = _deadline_orphan_external_binding(
+            historical_audit_path,
+            "deadline orphan 历史 live 请求审计",
+        )
+        timing = _deadline_orphan_timing_prefix(
+            getattr(arguments, "timing_ledger_dir"),
+            manifest,
+            supervisor,
+            expected_historical_live_requests=(
+                DEADLINE_ORPHAN_EXPECTED_HISTORICAL_LIVE_REQUESTS
+            ),
+        )
+        contract_path = attempt_root / DEADLINE_ORPHAN_CONTRACT_FILENAME
+        contract_core = _deadline_orphan_contract_core(
+            campaign_dir,
+            manifest,
+            source,
+            supervisor,
+            timing,
+            historical_audit_binding,
+            deployment,
+            execution_transition,
+            expected_historical_live_requests=(
+                DEADLINE_ORPHAN_EXPECTED_HISTORICAL_LIVE_REQUESTS
+            ),
+            expected_delta_live_requests=(
+                DEADLINE_ORPHAN_EXPECTED_DELTA_LIVE_REQUESTS
+            ),
+            expected_total_live_requests=(
+                DEADLINE_ORPHAN_EXPECTED_TOTAL_LIVE_REQUESTS
+            ),
+            max_finalization_seconds=max_finalization_seconds,
+        )
+        contract = _deadline_orphan_contract(contract_path, contract_core)
+        finalization_deadline = _deadline_orphan_finalization_deadline(
+            max_finalization_seconds,
+            last_completed_job_id=source["heartbeat"].get(
+                "last_completed_job_id"
+            ),
+        )
+        audit_path = attempt_root / DEADLINE_ORPHAN_AUDIT_FILENAME
+        audit = _deadline_orphan_live_request_audit(
+            campaign_dir,
+            source,
+            historical_audit_path,
+            audit_path,
+            expected_historical_live_requests=(
+                DEADLINE_ORPHAN_EXPECTED_HISTORICAL_LIVE_REQUESTS
+            ),
+            expected_delta_live_requests=(
+                DEADLINE_ORPHAN_EXPECTED_DELTA_LIVE_REQUESTS
+            ),
+            expected_total_live_requests=(
+                DEADLINE_ORPHAN_EXPECTED_TOTAL_LIVE_REQUESTS
+            ),
+        )
+        finalization_deadline.check("deadline-orphan:audit:complete")
+        timeout_path, _timeout = _deadline_orphan_timeout_checkpoint(
+            source,
+            supervisor,
+        )
+        after_path, _after = _deadline_orphan_after_probe(
+            manifest,
+            source,
+            finalization_deadline,
+        )
+        arm64_after_path, arm64_after = _deadline_orphan_arm64_after(
+            source,
+            finalization_deadline,
+        )
+        if (
+            source["arm64_before"].get("continuity_identity_sha256")
+            != arm64_after.get("continuity_identity_sha256")
+        ):
+            raise ConfigurationError(
+                "deadline orphan 前后 ARM64 网络或运行身份漂移。"
+            )
+        restoration_path, _restoration = _deadline_orphan_restoration(
+            source,
+            finalization_deadline,
+        )
+        carried_attempt_ids = {
+            str(result.get("carried_from_attempt"))
+            for result in source["results"]
+            if result.get("disposition") == "reused"
+        }
+        continuity = _verify_environment_continuity(
+            campaign_dir,
+            Path("official"),
+            carried_attempt_ids,
+            source["before_manifest"],
+        )
+        if not isinstance(continuity, Mapping):
+            raise ConfigurationError(
+                "deadline orphan 两项 reused Job 未形成唯一环境连续性。"
+            )
+        attempt_core = _deadline_orphan_attempt_core(
+            campaign_dir,
+            manifest,
+            source,
+            supervisor,
+            execution_transition,
+            contract_path,
+            audit_path,
+            timeout_path,
+            after_path,
+            restoration_path,
+            arm64_after_path,
+            continuity,
+            expected_historical_live_requests=(
+                DEADLINE_ORPHAN_EXPECTED_HISTORICAL_LIVE_REQUESTS
+            ),
+            expected_delta_live_requests=(
+                DEADLINE_ORPHAN_EXPECTED_DELTA_LIVE_REQUESTS
+            ),
+            expected_total_live_requests=(
+                DEADLINE_ORPHAN_EXPECTED_TOTAL_LIVE_REQUESTS
+            ),
+        )
+        attempt = _deadline_orphan_write_or_replay_attempt(
+            campaign_dir,
+            manifest,
+            source,
+            attempt_core,
+        )
+        finalizer_path, finalizer = _deadline_orphan_finalizer_receipt(
+            campaign_dir,
+            manifest,
+            source,
+            attempt,
+            contract_path,
+            audit_path,
+            supervisor,
+            deployment,
+            timing,
+        )
+        receipts = _deadline_orphan_ledger_receipts(
+            campaign_dir,
+            source,
+            supervisor,
+            deployment,
+            historical_audit_path,
+            contract_path,
+            audit_path,
+            finalizer_path,
+            timing,
+        )
+        finalization_deadline.check("deadline-orphan:ledger-stop:admission")
+        ledger = _deadline_orphan_stop_ledger(
+            timing,
+            finalizer,
+            receipts,
+            expected_total_live_requests=(
+                DEADLINE_ORPHAN_EXPECTED_TOTAL_LIVE_REQUESTS
+            ),
+        )
+        _attempt_root, replayed_attempt = _load_capture_attempt(
+            campaign_dir,
+            "official",
+            None,
+            attempt_root.name,
+            _verified_campaign_manifest=manifest,
+        )
+        if replayed_attempt.get("attempt_digest") != attempt.get(
+            "attempt_digest"
+        ):
+            raise ConfigurationError(
+                "deadline orphan attempt 最终重放摘要漂移。"
+            )
+        return {
+            "status": "stopped",
+            "campaign_id": str(manifest["campaign_id"]),
+            "phase": "VC-1",
+            "batch_sequence": DEADLINE_ORPHAN_EXPECTED_BATCH_SEQUENCE,
+            "attempt_id": attempt_root.name,
+            "attempt_digest": str(attempt["attempt_digest"]),
+            "contract": str(contract_path),
+            "contract_sha256": str(contract["contract_sha256"]),
+            "live_request_audit": str(audit_path),
+            "historical_live_request_count": int(
+                audit["historical_live_request_count"]
+            ),
+            "delta_live_request_count": int(audit["delta_live_request_count"]),
+            "total_live_request_count": int(audit["total_live_request_count"]),
+            "finalizer_live_request_count": 0,
+            "failed_attempt_archives_enumerated": False,
+            "planned_job_count": DEADLINE_ORPHAN_EXPECTED_JOB_COUNTS["planned"],
+            "affected_job_count": DEADLINE_ORPHAN_EXPECTED_JOB_COUNTS["affected"],
+            "reused_job_count": DEADLINE_ORPHAN_EXPECTED_JOB_COUNTS["reused"],
+            "executed_job_count": DEADLINE_ORPHAN_EXPECTED_JOB_COUNTS["executed"],
+            "failed_job_count": DEADLINE_ORPHAN_EXPECTED_JOB_COUNTS["failed"],
+            "pending_job_count": DEADLINE_ORPHAN_EXPECTED_JOB_COUNTS["pending"],
+            "ledger_head_sequence": ledger["summary"]["head_sequence"],
+            "ledger_head_sha256": ledger["summary"]["head_sha256"],
+            "reservation_exists": True,
+            "new_reservation_created": False,
+            "new_batch_created": False,
+            "jobs_reexecuted": False,
+            "model_requests_sent": False,
+            "vc2_entered": False,
+        }
 
 
 def _close_interrupted_recovery_attempt(
@@ -29708,6 +32588,119 @@ def _validate_attempt_incremental_fields(
             or parsed.name != INTERRUPTED_RECOVERY_TRANSITION_FILENAME
         ):
             raise ConfigurationError("attempt 中断恢复 transition 路径或阶段非法。")
+    deadline_orphan = payload.get("deadline_orphan_finalization")
+    if deadline_orphan is not None:
+        if not isinstance(deadline_orphan, Mapping) or set(deadline_orphan) != {
+            "contract",
+            "live_request_audit",
+            "request_accounting",
+            "supervisor_terminal",
+        }:
+            raise ConfigurationError("deadline orphan attempt 标记字段不闭合。")
+        _require_file_binding(
+            deadline_orphan.get("contract"),
+            "deadline orphan finalization contract",
+        )
+        _require_file_binding(
+            deadline_orphan.get("live_request_audit"),
+            "deadline orphan live 请求审计",
+        )
+        accounting = deadline_orphan.get("request_accounting")
+        terminal = deadline_orphan.get("supervisor_terminal")
+        if (
+            not isinstance(accounting, Mapping)
+            or set(accounting)
+            != {
+                "historical_live_request_count",
+                "delta_live_request_count",
+                "total_live_request_count",
+                "finalizer_live_request_count",
+                "failed_attempt_archives_enumerated",
+            }
+            or any(
+                not isinstance(accounting.get(name), int)
+                or isinstance(accounting.get(name), bool)
+                or int(accounting[name]) < 0
+                for name in (
+                    "historical_live_request_count",
+                    "delta_live_request_count",
+                    "total_live_request_count",
+                    "finalizer_live_request_count",
+                )
+            )
+            or int(accounting["historical_live_request_count"])
+            + int(accounting["delta_live_request_count"])
+            != int(accounting["total_live_request_count"])
+            or accounting.get("finalizer_live_request_count") != 0
+            or accounting.get("failed_attempt_archives_enumerated") is not False
+            or not isinstance(terminal, Mapping)
+            or terminal
+            != {
+                "state": "watchdog-aborted",
+                "reason": "global-wall-clock-deadline-expired",
+                "batch_sequence": DEADLINE_ORPHAN_EXPECTED_BATCH_SEQUENCE,
+            }
+        ):
+            raise ConfigurationError(
+                "deadline orphan 请求计数或 supervisor 终态非法。"
+            )
+        environment = payload.get("environment")
+        expected_environment_fields = {
+            "evidence_root",
+            "before_probe",
+            "after_probe",
+            "restoration_report",
+            "arm64_before_receipt",
+            "arm64_after_receipt",
+        }
+        if (
+            payload.get("phase") != "official"
+            or payload.get("candidate_id") is not None
+            or payload.get("status") != "failed"
+            or interrupted_recovery is not None
+            or interrupted_transition is None
+            or payload.get("incremental_tool_transition") is not None
+            or payload.get("evaluation_transition") is not None
+            or not isinstance(payload.get("execution_error"), Mapping)
+            or payload["execution_error"].get("type")
+            != "CampaignDeadlineExpired"
+            or payload.get("restoration_error") is not None
+            or not isinstance(payload.get("continuity"), Mapping)
+            or not isinstance(environment, Mapping)
+            or set(environment) != expected_environment_fields
+            or not isinstance(environment.get("evidence_root"), str)
+            or not Path(str(environment["evidence_root"])).is_absolute()
+            or any(environment.get(name) is None for name in expected_environment_fields - {"evidence_root"})
+            or not isinstance(plan, Mapping)
+            or len(plan.get("planned_job_ids", []))
+            != DEADLINE_ORPHAN_EXPECTED_JOB_COUNTS["planned"]
+            or len(plan.get("affected_job_ids", []))
+            != DEADLINE_ORPHAN_EXPECTED_JOB_COUNTS["affected"]
+            or len(plan.get("reused_job_ids", []))
+            != DEADLINE_ORPHAN_EXPECTED_JOB_COUNTS["reused"]
+            or len(plan.get("executed_job_ids", []))
+            != DEADLINE_ORPHAN_EXPECTED_JOB_COUNTS["executed"]
+            or len(plan.get("failed_job_ids", []))
+            != DEADLINE_ORPHAN_EXPECTED_JOB_COUNTS["failed"]
+            or len(plan.get("pending_job_ids", []))
+            != DEADLINE_ORPHAN_EXPECTED_JOB_COUNTS["pending"]
+            or set(plan.get("affected_job_ids", []))
+            != set(plan.get("executed_job_ids", []))
+            | set(plan.get("pending_job_ids", []))
+            or len(results)
+            != DEADLINE_ORPHAN_EXPECTED_JOB_COUNTS["reused"]
+            + DEADLINE_ORPHAN_EXPECTED_JOB_COUNTS["executed"]
+            or any(
+                not isinstance(item, Mapping)
+                or item.get("status") != "complete"
+                or item.get("disposition") not in {"executed", "reused"}
+                for item in results
+            )
+            or not isinstance(payload.get("watchdog"), Mapping)
+            or payload["watchdog"].get("remaining_seconds") != 0
+            or payload["watchdog"].get("timeout_checkpoint") is None
+        ):
+            raise ConfigurationError("deadline orphan attempt 闭集或环境终态非法。")
     candidate_reuse_transition = payload.get(
         "classification_candidate_reuse_transition"
     )
@@ -29779,10 +32772,17 @@ def _write_capture_attempt(
     campaign_dir: Path,
     attempt_root: Path,
     payload: dict[str, Any],
+    *,
+    _verified_campaign_manifest: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """只写一次封存 run 阶段 attempt，不允许 seal 回写。"""
 
-    _require_formal_campaign(campaign_dir)
+    manifest = (
+        dict(_verified_campaign_manifest)
+        if isinstance(_verified_campaign_manifest, Mapping)
+        else _require_formal_campaign(campaign_dir)
+    )
+    _require_formal_campaign(campaign_dir, manifest)
     phase = str(payload.get("phase", ""))
     candidate_id = payload.get("candidate_id")
     reservation = _load_capture_reservation(
@@ -29790,6 +32790,7 @@ def _write_capture_attempt(
         attempt_root,
         phase=phase,
         candidate_id=(str(candidate_id) if candidate_id is not None else None),
+        _manifest=manifest,
     )
     identity = payload.get("identity")
     if not isinstance(identity, dict) or _fingerprint(identity) != reservation.get(
@@ -29921,6 +32922,12 @@ def _load_capture_attempt(
         payload,
         planned_job_ids={str(item["id"]) for item in reservation["planned_jobs"]},
     )
+    if payload.get("deadline_orphan_finalization") is not None:
+        _validate_deadline_orphan_attempt_bindings(
+            campaign_dir,
+            attempt_root,
+            payload,
+        )
     evaluation_transition = payload.get("evaluation_transition")
     if evaluation_transition is not None:
         transition_path = _campaign_file(
@@ -32146,6 +35153,7 @@ def _run_capture_attempt(
     recovery_completed_ids: set[str] | None = None
     recovery_execute_ids: set[str] | None = None
     phase_recovery_high_risk_paths: set[str] = set()
+    recovery_execution_handoff: dict[str, Any] | None = None
     if classification_candidate_reuse_context is not None:
         preview, _ = _build_classification_candidate_reuse_preview(
             campaign_dir,
@@ -32332,48 +35340,73 @@ def _run_capture_attempt(
                     # 身份分级既没有执行对象，也会违反 reservation 前立即退出。
                     phase_recovery_high_risk_paths = set()
                     affected_job_ids = set()
-        prior_results = _prior_complete_results(
-            campaign_dir,
-            attempt_relative,
-            jobs,
-            phase=phase,
-            candidate_id=candidate_id,
-            identity=identity,
-            tool_identity=tool_identity,
-            affected_job_ids=affected_job_ids,
-            expected_reuse_job_ids=recovery_completed_ids,
-            source_attempt_id=(
-                recovery_source_root.name if recovery_source_root is not None else None
-            ),
-            source_campaign_dir=recovery_source_campaign_dir,
-            source_candidate_id=recovery_source_candidate_id,
-            source_receipt_binding=recovery_source_receipt,
-            allowed_high_risk_path_changes=(
-                runtime_successor_recovery[
-                    "allowed_high_risk_path_changes"
-                ]
-                if runtime_successor_recovery is not None
-                else phase_recovery_high_risk_paths
-            ),
-            validated_current_production_sha256=(
-                runtime_successor_recovery.get(
-                    "validated_current_production_sha256"
-                )
-                if runtime_successor_recovery is not None
-                else None
-            ),
-            allowed_source_statuses=(
-                runtime_successor_recovery["allowed_source_statuses"]
-                if runtime_successor_recovery is not None
-                else (
-                    ("failed", "awaiting_receipts")
-                    if recovery_source_attempt is not None
-                    and recovery_source_attempt.get("status")
-                    == "awaiting_receipts"
-                    else ("failed",)
-                )
-            ),
-        )
+        if (
+            recovery_source_root is not None
+            and recovery_source_attempt is not None
+            and recovery_scope is not None
+            and recovery_execute_ids is not None
+            and recovery_completed_ids is not None
+            and recovery_source_campaign_dir is None
+        ):
+            recovery_execution_handoff = _load_recovery_execution_handoff(
+                campaign_dir,
+                manifest,
+                source_root=recovery_source_root,
+                source_attempt=recovery_source_attempt,
+                planned_jobs=planned_jobs,
+                execute_job_ids=recovery_execute_ids,
+                reuse_job_ids=recovery_completed_ids,
+                recovery_scope=recovery_scope,
+                tool_identity=tool_identity,
+            )
+        if recovery_execution_handoff is not None:
+            prior_results = [
+                dict(item)
+                for item in recovery_execution_handoff["reused_results"]
+            ]
+        else:
+            prior_results = _prior_complete_results(
+                campaign_dir,
+                attempt_relative,
+                jobs,
+                phase=phase,
+                candidate_id=candidate_id,
+                identity=identity,
+                tool_identity=tool_identity,
+                affected_job_ids=affected_job_ids,
+                expected_reuse_job_ids=recovery_completed_ids,
+                source_attempt_id=(
+                    recovery_source_root.name if recovery_source_root is not None else None
+                ),
+                source_campaign_dir=recovery_source_campaign_dir,
+                source_candidate_id=recovery_source_candidate_id,
+                source_receipt_binding=recovery_source_receipt,
+                allowed_high_risk_path_changes=(
+                    runtime_successor_recovery[
+                        "allowed_high_risk_path_changes"
+                    ]
+                    if runtime_successor_recovery is not None
+                    else phase_recovery_high_risk_paths
+                ),
+                validated_current_production_sha256=(
+                    runtime_successor_recovery.get(
+                        "validated_current_production_sha256"
+                    )
+                    if runtime_successor_recovery is not None
+                    else None
+                ),
+                allowed_source_statuses=(
+                    runtime_successor_recovery["allowed_source_statuses"]
+                    if runtime_successor_recovery is not None
+                    else (
+                        ("failed", "awaiting_receipts")
+                        if recovery_source_attempt is not None
+                        and recovery_source_attempt.get("status")
+                        == "awaiting_receipts"
+                        else ("failed",)
+                    )
+                ),
+            )
         completed_ids = {item["id"] for item in prior_results}
         if recovery_completed_ids is not None:
             if completed_ids != recovery_completed_ids:
@@ -32456,7 +35489,9 @@ def _run_capture_attempt(
     # 容器和首个请求之前立即停线。该调用仍位于 no-op 之后，空执行集合不会
     # 触发完整身份校验。
     tool_impact = (
-        cheap_impact
+        dict(recovery_execution_handoff["tool_impact"])
+        if recovery_execution_handoff is not None
+        else cheap_impact
         if classification_candidate_reuse_context is not None
         else _verify_plan_identity(
             campaign_dir,
@@ -32569,7 +35604,7 @@ def _run_capture_attempt(
                 else ()
             ),
         )
-        return {
+        preview = {
             "status": "recovery_plan",
             "phase": phase,
             "candidate_id": candidate_id,
@@ -32588,6 +35623,33 @@ def _run_capture_attempt(
             "scanned_bytes": 0,
             **invalidation,
         }
+        if (
+            recovery_source_root is not None
+            and recovery_source_attempt is not None
+            and recovery_scope is not None
+            and isinstance(tool_impact, Mapping)
+            and os.environ.get(
+                codex_upgrade_supervisor.CAMPAIGN_RUN_ACTION_ID_ENV
+            )
+            in {
+                "recover-vc1-interruption-preview",
+                "continue-vc1-interruption-preview",
+            }
+        ):
+            preview["execution_handoff"] = _write_recovery_execution_handoff(
+                campaign_dir,
+                manifest,
+                source_root=recovery_source_root,
+                source_attempt=recovery_source_attempt,
+                planned_jobs=planned_jobs,
+                execute_job_ids=(job.job_id for job in jobs),
+                reuse_job_ids=(str(item.get("id")) for item in prior_results),
+                prior_results=prior_results,
+                recovery_scope=recovery_scope,
+                tool_identity=tool_identity,
+                tool_impact=tool_impact,
+            )
+        return preview
     if (
         classification_candidate_reuse_context is None
         and not getattr(arguments, "acknowledge_live_requests", False)
@@ -32658,6 +35720,11 @@ def _run_capture_attempt(
         # 和首个真实请求之前失败，不能等十几分钟后才发现。
         _validate_candidate_admin_credential(planned_jobs)
 
+    _require_capture_budget_before_data_action(
+        deadline,
+        operation="attempt:reservation-admission",
+        reservation=True,
+    )
     attempt_root, reservation = _reserve_capture_attempt(
         campaign_dir,
         phase=phase,
@@ -32930,6 +35997,10 @@ def _run_capture_attempt(
                 campaign_dir=campaign_dir,
             )
             for job in jobs:
+                _require_capture_budget_before_data_action(
+                    deadline,
+                    operation=f"job:{job.job_id}:admission",
+                )
                 _write_attempt_heartbeat(
                     heartbeat_path,
                     deadline,
@@ -40569,6 +43640,7 @@ def _reject_unparented_formal_write(
         "compile-vc-batch",
         "compile-vc-interrupted-recovery-batch",
         "compile-vc-interrupted-recovery-continuation",
+        "finalize-vc1-deadline-orphan",
     }
     if command in direct_control_commands:
         if in_campaign_run:
@@ -40858,6 +43930,38 @@ def _record_campaign_run_action_failure(
         pass
 
 
+@contextmanager
+def _campaign_cleanup_signal_guard() -> Iterable[None]:
+    """把父监督器的 SIGUSR1 转换为可展开的 Python 清理异常。"""
+
+    requested = os.environ.get(
+        codex_upgrade_supervisor.CAMPAIGN_RUN_CLEANUP_SIGNAL_ENV
+    )
+    if requested is None:
+        yield
+        return
+    if (
+        requested != "SIGUSR1"
+        or os.environ.get(
+            codex_upgrade_supervisor.CAMPAIGN_RUN_CONTEXT_ENV
+        )
+        != "1"
+    ):
+        raise ConfigurationError("campaign-run 清理信号上下文非法。")
+    previous = signal.getsignal(signal.SIGUSR1)
+
+    def request_cleanup(_signum: int, _frame: Any) -> None:
+        raise CampaignCleanupRequested(
+            "父监督器数据面截止已到，正在原始 deadline 内执行 attempt 清理。"
+        )
+
+    signal.signal(signal.SIGUSR1, request_cleanup)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGUSR1, previous)
+
+
 def _main_without_campaign_lease(argv: list[str] | None = None) -> int:
     os.umask(0o077)
     raw_argv = list(sys.argv[1:] if argv is None else argv)
@@ -40977,6 +44081,9 @@ def _main_without_campaign_lease(argv: list[str] | None = None) -> int:
             return_code = 0
         elif command == "compile-vc-interrupted-recovery-continuation":
             result = compile_vc_interrupted_recovery_continuation(arguments)
+            return_code = 0
+        elif command == "finalize-vc1-deadline-orphan":
+            result = finalize_vc1_deadline_orphan(arguments)
             return_code = 0
         elif command == "recover-vc1-interruption":
             result = recover_vc1_interruption(arguments)
@@ -41116,7 +44223,8 @@ def main(argv: list[str] | None = None) -> int:
     """执行带租约入口，并为未捕获异常留下动作级脱敏诊断。"""
 
     try:
-        return _main_with_campaign_lease(argv)
+        with _campaign_cleanup_signal_guard():
+            return _main_with_campaign_lease(argv)
     except BaseException as error:
         _record_campaign_run_action_failure("unexpected-error", error)
         raise

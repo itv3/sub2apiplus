@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import fnmatch
 import hashlib
 import json
 import os
@@ -37,6 +38,9 @@ from tools.official_client_capture import codex_upgrade_vc_receipt
 CLOSEOUT_RECEIPT_SCHEMA = "codex-upgrade-vc0-closeout-receipt/v1"
 CLOSEOUT_DIAGNOSTIC_SCHEMA = "codex-upgrade-vc0-closeout-diagnostic/v1"
 LIVE_REQUEST_AUDIT_SCHEMA = "codex-upgrade-live-request-audit/v1"
+DEADLINE_ORPHAN_LIVE_REQUEST_AUDIT_SCHEMA = (
+    "codex-upgrade-deadline-orphan-live-request-audit/v1"
+)
 CAMPAIGN_RUN_REHEARSAL_SCHEMA = "codex-p0-campaign-run-rehearsal/v1"
 MANAGED_TOOL_DEPLOY_SCHEMA = "codex-arm64-supervisor-enable/v1"
 MINIMUM_REMAINING_SECONDS = 300
@@ -1696,6 +1700,426 @@ def build_live_request_audit(
         "pending_job_ids": sorted(pending_jobs),
         "pre_request_zero_job_ids": sorted(zero_jobs),
         "sources": sources,
+    }
+
+
+def _replay_historical_live_request_audit(
+    path: Path,
+    *,
+    campaign_id: str,
+    expected_live_request_count: int,
+) -> tuple[dict[str, Any], dict[str, Any], set[Path]]:
+    """重放已入账的历史请求审计，并返回其不可变绑定与来源闭集。"""
+
+    audit_path = _trusted_file(path, "历史 live 请求审计")
+    audit, raw = _load_json(audit_path, "历史 live 请求审计")
+    required = {
+        "schema_version",
+        "status",
+        "campaign_id",
+        "observed_at_utc",
+        "counting_rule",
+        "live_request_count",
+        "observed_job_ids",
+        "pending_job_ids",
+        "pre_request_zero_job_ids",
+        "sources",
+    }
+    if (
+        set(audit) != required
+        or audit.get("schema_version") != LIVE_REQUEST_AUDIT_SCHEMA
+        or audit.get("status") != "complete"
+        or audit.get("campaign_id") != campaign_id
+        or audit.get("counting_rule")
+        != "codex_model_turns_and_responses_requests/v1"
+        or audit.get("live_request_count") != expected_live_request_count
+        or not isinstance(audit.get("sources"), list)
+    ):
+        raise VC0CloseoutError("历史 live 请求审计身份、字段或计数漂移")
+    _timestamp(audit.get("observed_at_utc"), "历史 live 请求审计时间")
+    for field in (
+        "observed_job_ids",
+        "pending_job_ids",
+        "pre_request_zero_job_ids",
+    ):
+        values = audit.get(field)
+        if (
+            not isinstance(values, list)
+            or values != sorted(set(values))
+            or any(not isinstance(value, str) or not SAFE_ID_RE.fullmatch(value) for value in values)
+        ):
+            raise VC0CloseoutError(f"历史 live 请求审计 {field} 非法")
+
+    source_paths: set[Path] = set()
+    source_total = 0
+    for index, source in enumerate(audit["sources"], 1):
+        if not isinstance(source, Mapping) or set(source) != {
+            "kind",
+            "path",
+            "sha256",
+            "live_request_count",
+        }:
+            raise VC0CloseoutError(
+                f"历史 live 请求审计 sources[{index}] 字段不闭合"
+            )
+        source_path = _trusted_file(
+            Path(str(source.get("path", ""))),
+            f"历史 live 请求来源 {index}",
+            maximum=512 * 1024 * 1024,
+        )
+        resolved = source_path.resolve(strict=True)
+        count = source.get("live_request_count")
+        if (
+            resolved in source_paths
+            or not isinstance(source.get("kind"), str)
+            or not source["kind"]
+            or _sha256_file(source_path)
+            != _sha256(source.get("sha256"), f"历史来源 {index}.sha256")
+            or not isinstance(count, int)
+            or isinstance(count, bool)
+            or count <= 0
+        ):
+            raise VC0CloseoutError(f"历史 live 请求来源 {index} 非法或重复")
+        source_paths.add(resolved)
+        source_total += count
+    if source_total != expected_live_request_count:
+        raise VC0CloseoutError("历史 live 请求来源合计与审计总数不一致")
+    return (
+        audit,
+        {
+            "path": str(audit_path.resolve(strict=True)),
+            "sha256": _sha256_bytes(raw),
+            "bytes": len(raw),
+            "live_request_count": expected_live_request_count,
+        },
+        source_paths,
+    )
+
+
+def _deadline_orphan_job_root_patterns(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+) -> dict[str, tuple[str, ...]]:
+    """返回冻结 Job 的容器坐标及其宿主基础 root 模式。"""
+
+    configuration = manifest.get("configuration")
+    jobs = manifest.get("jobs")
+    if not isinstance(configuration, Mapping) or not isinstance(jobs, list):
+        raise VC0CloseoutError("Formal Campaign 缺少 configuration 或 jobs")
+    capture_root = Path(str(configuration.get("capture_root", "")))
+    if not capture_root.is_absolute() or capture_root == Path("/"):
+        raise VC0CloseoutError("Formal Campaign CAPTURE_ROOT 非法")
+    host_data_root = _formal_host_data_root(campaign_dir)
+    result: dict[str, tuple[str, ...]] = {}
+    for row in jobs:
+        if not isinstance(row, Mapping) or row.get("phase") != "official":
+            continue
+        job_id = str(row.get("id", ""))
+        roots = row.get("evidence_roots")
+        if (
+            not SAFE_ID_RE.fullmatch(job_id)
+            or job_id in result
+            or not isinstance(roots, list)
+            or not roots
+        ):
+            raise VC0CloseoutError("Formal official Job 或 evidence_roots 非法")
+        patterns: list[str] = []
+        for value in roots:
+            # checkpoint 由容器 worker 写入时保留冻结的 /root/oauth-capture
+            # 坐标；finalizer 在 ARM64 宿主运行时也可能看到同一 bind mount 的
+            # /root/docker/capture-cli/data 坐标。两者都必须来自 Campaign 内同一
+            # 冻结 root，不能因此放宽到目录枚举或失败归档搜索。
+            frozen = Path(str(value)).as_posix()
+            mapped = _map_container_evidence_root(
+                value,
+                capture_root=capture_root,
+                host_data_root=host_data_root,
+            ).as_posix()
+            for pattern in (frozen, mapped):
+                if pattern not in patterns:
+                    patterns.append(pattern)
+        result[job_id] = tuple(patterns)
+    return result
+
+
+def _deadline_orphan_result_roots(
+    result: Mapping[str, Any],
+    *,
+    expected_patterns: tuple[str, ...],
+) -> list[Path]:
+    """解析 checkpoint 明确登记的基础 root；禁止搜索失败归档。"""
+
+    values = result.get("evidence_roots")
+    if not isinstance(values, list) or not values:
+        raise VC0CloseoutError(
+            f"{result.get('id', 'unknown')} checkpoint 缺少 evidence_roots"
+        )
+    roots: list[Path] = []
+    seen: set[Path] = set()
+    for value in values:
+        raw = Path(str(value))
+        if (
+            not raw.is_absolute()
+            or raw.is_symlink()
+            or not raw.is_dir()
+            or any(".failed-attempt" in part for part in raw.parts)
+        ):
+            raise VC0CloseoutError("deadline orphan 只接受可信基础 evidence root")
+        resolved = raw.resolve(strict=True)
+        if (
+            resolved in seen
+            or not any(
+                fnmatch.fnmatchcase(resolved.as_posix(), pattern)
+                for pattern in expected_patterns
+            )
+        ):
+            raise VC0CloseoutError(
+                f"{result.get('id', 'unknown')} evidence root 越出冻结 Job 模式"
+            )
+        seen.add(resolved)
+        roots.append(resolved)
+    return roots
+
+
+def build_deadline_orphan_live_request_audit(
+    formal_campaign_dir: Path,
+    *,
+    source_attempt: Path,
+    historical_live_request_audit: Path,
+    expected_historical_live_requests: int,
+    expected_delta_live_requests: int,
+    expected_total_live_requests: int,
+    expected_executed_job_ids: set[str] | None = None,
+    expected_reused_job_ids: set[str] | None = None,
+    expected_pending_job_ids: set[str] | None = None,
+    observed_at_utc: str | None = None,
+) -> dict[str, Any]:
+    """只核算 deadline 孤儿本 attempt 新执行项产生的模型请求。"""
+
+    for label, value in (
+        ("历史请求数", expected_historical_live_requests),
+        ("增量请求数", expected_delta_live_requests),
+        ("总请求数", expected_total_live_requests),
+    ):
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise VC0CloseoutError(f"{label}必须是非负整数")
+    if (
+        expected_historical_live_requests + expected_delta_live_requests
+        != expected_total_live_requests
+    ):
+        raise VC0CloseoutError("历史、增量与总 live 请求计数不闭合")
+
+    campaign_dir = _trusted_directory(formal_campaign_dir, "Formal Campaign")
+    manifest, raw_manifest = _load_json(
+        campaign_dir / "campaign.json", "Formal Campaign"
+    )
+    campaign_id = str(manifest.get("campaign_id", ""))
+    digest_path = _trusted_file(campaign_dir / "campaign.sha256", "Campaign 摘要")
+    if (
+        manifest.get("campaign_mode") != "formal"
+        or not SAFE_ID_RE.fullmatch(campaign_id)
+        or digest_path.read_text(encoding="ascii").strip()
+        != _sha256_bytes(raw_manifest)
+    ):
+        raise VC0CloseoutError("deadline orphan Campaign 身份或摘要漂移")
+    expected_attempt = campaign_dir / "official" / "attempts" / source_attempt.name
+    try:
+        attempt_root = source_attempt.resolve(strict=True)
+        expected_root = expected_attempt.resolve(strict=True)
+    except (OSError, RuntimeError) as error:
+        raise VC0CloseoutError("deadline orphan attempt 不存在或不可信") from error
+    if (
+        not source_attempt.is_absolute()
+        or source_attempt.is_symlink()
+        or attempt_root != expected_root
+        or not SAFE_ID_RE.fullmatch(attempt_root.name)
+    ):
+        raise VC0CloseoutError("deadline orphan attempt 越出当前 Campaign")
+
+    try:
+        reservation = codex_upgrade._load_capture_reservation(
+            campaign_dir,
+            attempt_root,
+            phase="official",
+            candidate_id=None,
+            _manifest=manifest,
+        )
+        records = codex_upgrade.incremental_recovery.CheckpointStore(
+            attempt_root / "checkpoints",
+            create=False,
+        ).records()
+    except (
+        OSError,
+        codex_upgrade.ConfigurationError,
+        codex_upgrade.incremental_recovery.IncrementalRecoveryError,
+    ) as error:
+        raise VC0CloseoutError(
+            f"deadline orphan reservation／checkpoint 无法重放：{error}"
+        ) from error
+    if not records:
+        raise VC0CloseoutError("deadline orphan checkpoint 为空")
+    results = [dict(record.get("result", {})) for record in records]
+    planned = {str(row["id"]) for row in reservation["planned_jobs"]}
+    validation_payload = {
+        "campaign_id": campaign_id,
+        "phase": "official",
+        "attempt_id": attempt_root.name,
+        "run_nonce": reservation["run_nonce"],
+        "results": results,
+    }
+    try:
+        codex_upgrade._validate_checkpoint_records(
+            records,
+            validation_payload,
+            planned_job_ids=planned,
+            strict_context=True,
+        )
+    except codex_upgrade.ConfigurationError as error:
+        raise VC0CloseoutError(f"deadline orphan checkpoint 漂移：{error}") from error
+
+    dispositions = {
+        str(result.get("id")): result.get("disposition") for result in results
+    }
+    if any(
+        result.get("status") != "complete"
+        or result.get("disposition") not in {"executed", "reused"}
+        for result in results
+    ):
+        raise VC0CloseoutError("deadline orphan checkpoint 含失败或未知 disposition")
+    executed_ids = {
+        job_id for job_id, disposition in dispositions.items() if disposition == "executed"
+    }
+    reused_ids = {
+        job_id for job_id, disposition in dispositions.items() if disposition == "reused"
+    }
+    pending_ids = planned - executed_ids - reused_ids
+    for actual, expected, label in (
+        (executed_ids, expected_executed_job_ids, "executed"),
+        (reused_ids, expected_reused_job_ids, "reused"),
+        (pending_ids, expected_pending_job_ids, "pending"),
+    ):
+        if expected is not None and actual != {str(value) for value in expected}:
+            raise VC0CloseoutError(f"deadline orphan {label} Job 闭集漂移")
+
+    historical, historical_binding, historical_sources = (
+        _replay_historical_live_request_audit(
+            historical_live_request_audit,
+            campaign_id=campaign_id,
+            expected_live_request_count=expected_historical_live_requests,
+        )
+    )
+    patterns = _deadline_orphan_job_root_patterns(campaign_dir, manifest)
+    sources: list[dict[str, Any]] = []
+    job_counts: list[dict[str, Any]] = []
+    delta_source_paths: set[Path] = set()
+    result_by_id = {str(result["id"]): result for result in results}
+    for job_id in sorted(executed_ids):
+        if job_id not in patterns:
+            raise VC0CloseoutError(f"checkpoint Job 不在 Formal Campaign：{job_id}")
+        roots = _deadline_orphan_result_roots(
+            result_by_id[job_id],
+            expected_patterns=patterns[job_id],
+        )
+        job_sources: list[dict[str, Any]] = []
+        seen_job_sources: set[Path] = set()
+        for root in roots:
+            manifest_path = root / "manifest.json"
+            if manifest_path.is_file() and not manifest_path.is_symlink():
+                resolved = manifest_path.resolve(strict=True)
+                if resolved not in seen_job_sources:
+                    job_sources.append(
+                        {
+                            "job_id": job_id,
+                            "kind": "official_capture_turns",
+                            "path": str(resolved),
+                            "sha256": _sha256_file(resolved),
+                            "live_request_count": _capture_manifest_live_requests(
+                                resolved
+                            ),
+                        }
+                    )
+                    seen_job_sources.add(resolved)
+            for summary_path in (
+                root / "result" / "direct" / "summary.json",
+                root / "result" / "mitm" / "summary.json",
+            ):
+                if summary_path.is_file() and not summary_path.is_symlink():
+                    resolved = summary_path.resolve(strict=True)
+                    if resolved not in seen_job_sources:
+                        job_sources.append(
+                            {
+                                "job_id": job_id,
+                                "kind": "compact_completed_turns",
+                                "path": str(resolved),
+                                "sha256": _sha256_file(resolved),
+                                "live_request_count": _compact_summary_live_requests(
+                                    resolved
+                                ),
+                            }
+                        )
+                        seen_job_sources.add(resolved)
+            for relay_source in _relay_live_request_sources(root):
+                resolved = Path(str(relay_source["path"])).resolve(strict=True)
+                if resolved not in seen_job_sources:
+                    job_sources.append({"job_id": job_id, **relay_source})
+                    seen_job_sources.add(resolved)
+        if not job_sources and job_id != "official-http-fallback":
+            raise VC0CloseoutError(
+                f"{job_id} 已执行但没有可闭合的增量 live 请求来源"
+            )
+        for source in job_sources:
+            resolved = Path(str(source["path"])).resolve(strict=True)
+            if resolved in delta_source_paths:
+                raise VC0CloseoutError("多个 Job 重复引用同一增量请求来源")
+            delta_source_paths.add(resolved)
+            sources.append(source)
+        job_counts.append(
+            {
+                "job_id": job_id,
+                "live_request_count": sum(
+                    int(source["live_request_count"]) for source in job_sources
+                ),
+                "source_paths": sorted(str(source["path"]) for source in job_sources),
+            }
+        )
+    overlap = historical_sources & delta_source_paths
+    if overlap:
+        raise VC0CloseoutError("历史与 deadline orphan 增量请求来源发生重叠")
+    delta = sum(int(source["live_request_count"]) for source in sources)
+    if delta != expected_delta_live_requests:
+        raise VC0CloseoutError(
+            f"deadline orphan 增量请求计数漂移：expected={expected_delta_live_requests}, actual={delta}"
+        )
+    if int(historical["live_request_count"]) + delta != expected_total_live_requests:
+        raise VC0CloseoutError("deadline orphan 总请求计数不闭合")
+    checkpoint = {
+        "path": str((attempt_root / "checkpoints").relative_to(campaign_dir)),
+        "record_count": len(records),
+        "last_sequence": records[-1]["checkpoint_sequence"],
+        "last_sha256": records[-1]["checkpoint_sha256"],
+    }
+    return {
+        "schema_version": DEADLINE_ORPHAN_LIVE_REQUEST_AUDIT_SCHEMA,
+        "status": "complete",
+        "campaign_id": campaign_id,
+        "attempt_id": attempt_root.name,
+        "observed_at_utc": observed_at_utc or _utc_now(),
+        "counting_rule": "codex_model_turns_and_responses_requests/v1",
+        "checkpoint": checkpoint,
+        "historical_audit": historical_binding,
+        "historical_live_request_count": expected_historical_live_requests,
+        "delta_live_request_count": delta,
+        "total_live_request_count": expected_total_live_requests,
+        "executed_job_ids": sorted(executed_ids),
+        "reused_job_ids": sorted(reused_ids),
+        "pending_job_ids": sorted(pending_ids),
+        "job_live_request_counts": job_counts,
+        "sources": sorted(
+            sources,
+            key=lambda source: (str(source["job_id"]), str(source["path"])),
+        ),
+        "source_sets_disjoint": True,
+        "failed_attempt_archives_enumerated": False,
     }
 
 

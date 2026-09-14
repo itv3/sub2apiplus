@@ -60,6 +60,11 @@ CAMPAIGN_RUN_ACTION_ID_ENV = "CODEX_UPGRADE_CAMPAIGN_ACTION_ID"
 CAMPAIGN_RUN_ACTION_DIAGNOSTIC_ENV = (
     "CODEX_UPGRADE_CAMPAIGN_ACTION_DIAGNOSTIC"
 )
+CAMPAIGN_RUN_CLEANUP_SIGNAL_ENV = "CODEX_UPGRADE_CAMPAIGN_CLEANUP_SIGNAL"
+CAMPAIGN_RUN_EXECUTION_DEADLINE_ENV = (
+    "CODEX_UPGRADE_CAMPAIGN_EXECUTION_DEADLINE_AT_EPOCH"
+)
+CAMPAIGN_RUN_CLEANUP_GRACE_ENV = "CODEX_UPGRADE_CAMPAIGN_CLEANUP_GRACE_SECONDS"
 ACTION_DIAGNOSTIC_SCHEMA = "codex-upgrade-campaign-action-diagnostic/v1"
 ACTION_DIAGNOSTIC_FAILURE_KINDS = frozenset(
     {"handled-error", "interrupted", "unexpected-error", "child-returncode"}
@@ -87,6 +92,11 @@ DEFAULT_LEDGER_INTERVAL_SECONDS = 60
 DEFAULT_ORCHESTRATOR_DISPATCH_TIMEOUT_SECONDS = 15
 DEFAULT_POLL_SECONDS = 0.2
 DEFAULT_STOP_WAIT_SECONDS = 2
+# v2 及后续批次必须在原始总截止前主动结束数据面动作，为 attempt after、
+# restoration、ARM64 after、timeout checkpoint 和父监督器终态留下固定窗口。
+# 这不是延长 deadline：数据面可用时间会相应缩短，原始绝对截止保持不变。
+DEFAULT_BATCHED_ACTION_CLEANUP_GRACE_SECONDS = 120
+DEFAULT_TERMINAL_DRAIN_SECONDS = 5
 MAX_OPERATION_LENGTH = 256
 MAX_JOB_ID_LENGTH = 128
 MAX_NOTE_LENGTH = 512
@@ -903,6 +913,22 @@ def _terminate_owner(pid: int) -> None:
         try:
             os.kill(pid, signal.SIGKILL)
         except OSError:
+            pass
+
+
+def _request_process_cleanup(process: subprocess.Popen[Any]) -> None:
+    """请求受管 worker 展开清理；不立即杀死其独立子进程组。"""
+
+    if process.poll() is not None:
+        return
+    try:
+        os.kill(process.pid, signal.SIGUSR1)
+    except (AttributeError, OSError, ProcessLookupError):
+        # 不支持 SIGUSR1 的平台仍以 SIGTERM 失败关闭；正式 ARM64 路径固定
+        # 支持 SIGUSR1，Codex worker 会把它转换为可展开的清理异常。
+        try:
+            process.terminate()
+        except (AttributeError, OSError, ProcessLookupError):
             pass
 
 
@@ -1938,6 +1964,7 @@ class SupervisorClient:
         *,
         operation: str,
         timeout_seconds: float,
+        cleanup_grace_seconds: float = 0,
         cwd: str | os.PathLike[str] | None = None,
         env: Mapping[str, str] | None = None,
         capture_output: bool = True,
@@ -1954,7 +1981,29 @@ class SupervisorClient:
         if not command or any(not item for item in command):
             raise SupervisorError("统一命令入口收到空参数。")
         timeout_seconds = _positive_seconds(timeout_seconds, "统一命令入口 timeout")
+        if (
+            isinstance(cleanup_grace_seconds, bool)
+            or not isinstance(cleanup_grace_seconds, (int, float))
+            or not math.isfinite(float(cleanup_grace_seconds))
+            or float(cleanup_grace_seconds) < 0
+        ):
+            raise SupervisorError("统一命令入口 cleanup grace 非法。")
+        cleanup_grace = float(cleanup_grace_seconds)
         self._ensure_monitor_alive()
+        if self._deadline_monotonic_ns is None:
+            raise SupervisorError("监督器单调 deadline 尚未初始化。")
+        remaining_wall = (
+            self._deadline_monotonic_ns - time.monotonic_ns()
+        ) / 1_000_000_000
+        terminal_drain = (
+            min(DEFAULT_TERMINAL_DRAIN_SECONDS, cleanup_grace / 4.0)
+            if cleanup_grace > 0
+            else 0.0
+        )
+        if remaining_wall <= cleanup_grace + terminal_drain:
+            raise SupervisorTimeout(
+                f"统一命令剩余预算不足以容纳清理与终态排空：{operation}"
+            )
         self.event_start(operation, job_id=job_id)
         if output_stream is not None and capture_output:
             raise SupervisorError("统一命令入口不能同时指定 output_stream 和 capture_output。")
@@ -1972,6 +2021,20 @@ class SupervisorClient:
                 else (subprocess.PIPE if capture_output else subprocess.DEVNULL)
             )
         )
+        process_environment = dict(env) if env is not None else None
+        execution_deadline_epoch = self.deadline_at_epoch - cleanup_grace
+        if cleanup_grace > 0:
+            if process_environment is None:
+                process_environment = os.environ.copy()
+            process_environment.update(
+                {
+                    CAMPAIGN_RUN_CLEANUP_SIGNAL_ENV: "SIGUSR1",
+                    CAMPAIGN_RUN_EXECUTION_DEADLINE_ENV: str(
+                        execution_deadline_epoch
+                    ),
+                    CAMPAIGN_RUN_CLEANUP_GRACE_ENV: str(cleanup_grace),
+                }
+            )
         try:
             process = subprocess.Popen(
                 command,
@@ -1979,7 +2042,7 @@ class SupervisorClient:
                 stdout=output_target,
                 stderr=stderr_target,
                 cwd=cwd,
-                env=dict(env) if env is not None else None,
+                env=process_environment,
                 text=text,
                 start_new_session=True,
                 shell=False,
@@ -1993,23 +2056,22 @@ class SupervisorClient:
             raise
         started = time.monotonic()
         # 同时受单步 timeout 和 Campaign 的绝对墙钟截止约束；绝不因为
-        # 子命令重试而重新起算全局预算。
-        deadline = started + timeout_seconds
-        if self._deadline_monotonic_ns is None:
-            raise SupervisorError("监督器单调 deadline 尚未初始化。")
-        remaining_wall = (
-            self._deadline_monotonic_ns - time.monotonic_ns()
-        ) / 1_000_000_000
-        if remaining_wall <= 0:
-            _terminate_process_group(process)
-            self._command_failed = True
-            self.event_fail(operation, reason="global-deadline-expired")
-            raise SupervisorTimeout(f"统一命令超时：{operation}")
-        deadline = min(deadline, started + remaining_wall)
+        # 子命令重试而重新起算全局预算。batched Campaign 会把执行截止提前，
+        # 到点先用 SIGUSR1 请求 Python worker 展开 finally；只有清理窗口耗尽
+        # 才强杀进程组。原始 Campaign deadline 从未改变。
+        global_deadline = self._deadline_monotonic_ns / 1_000_000_000
+        execution_deadline = min(
+            started + timeout_seconds,
+            global_deadline - cleanup_grace,
+        )
+        cleanup_deadline = min(
+            global_deadline - terminal_drain,
+            execution_deadline + max(0.0, cleanup_grace - terminal_drain),
+        )
         interval = min(float(self.heartbeat_seconds), 1.0)
         try:
             while True:
-                remaining = deadline - time.monotonic()
+                remaining = execution_deadline - time.monotonic()
                 if remaining <= 0:
                     raise SupervisorTimeout(f"统一命令超时：{operation}")
                 try:
@@ -2034,12 +2096,41 @@ class SupervisorClient:
                     if heartbeat_callback is not None:
                         heartbeat_callback(operation)
         except BaseException as error:
+            if (
+                isinstance(error, SupervisorTimeout)
+                and cleanup_grace > 0
+                and process.poll() is None
+            ):
+                _request_process_cleanup(process)
+                cleanup_operation = f"{operation}:cleanup"
+                while process.poll() is None and time.monotonic() < cleanup_deadline:
+                    remaining_cleanup = cleanup_deadline - time.monotonic()
+                    try:
+                        process.wait(
+                            timeout=max(
+                                0.01,
+                                min(interval, remaining_cleanup),
+                            )
+                        )
+                    except subprocess.TimeoutExpired:
+                        self.heartbeat(cleanup_operation, job_id=job_id, force=True)
+                        if heartbeat_callback is not None:
+                            heartbeat_callback(cleanup_operation)
             _terminate_process_group(process)
             try:
                 self.event_fail(
                     operation,
                     job_id=job_id,
-                    reason=type(error).__name__,
+                    reason=(
+                        "cleanup-window-expired"
+                        if isinstance(error, SupervisorTimeout)
+                        and cleanup_grace > 0
+                        and process.poll() is None
+                        else "cleanup-requested-timeout"
+                        if isinstance(error, SupervisorTimeout)
+                        and cleanup_grace > 0
+                        else type(error).__name__
+                    ),
                 )
             except BaseException:
                 pass
@@ -5234,6 +5325,17 @@ def _campaign_run_command(args: argparse.Namespace) -> tuple[int, dict[str, Any]
                         list(action["command"]),
                         operation=str(action["operation"]),
                         timeout_seconds=float(action["timeout_seconds"]),
+                        cleanup_grace_seconds=(
+                            DEFAULT_BATCHED_ACTION_CLEANUP_GRACE_SECONDS
+                            if manifest["schema_version"]
+                            in {
+                                CAMPAIGN_RUN_BATCHED_SCHEMA,
+                                CAMPAIGN_RUN_RECOVERY_SCHEMA,
+                                CAMPAIGN_RUN_RECOVERY_CONTINUATION_SCHEMA,
+                                CAMPAIGN_RUN_RECOVERY_FINALIZATION_SCHEMA,
+                            }
+                            else 0
+                        ),
                         job_id=action_id,
                         env=action_environment,
                         capture_output=False,

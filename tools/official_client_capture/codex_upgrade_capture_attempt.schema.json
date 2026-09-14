@@ -72,6 +72,13 @@
         "environment_contaminated"
       ]
     },
+    "continuity": {
+      "description": "复用历史 Job 时，对唯一来源 attempt 的环境连续性证明；无复用时为空。",
+      "oneOf": [
+        {"$ref": "#/$defs/attemptContinuity"},
+        {"type": "null"}
+      ]
+    },
     "identity": {
       "oneOf": [
         {
@@ -169,6 +176,10 @@
     "interrupted_recovery_transition": {
       "description": "恢复后继 attempt 对源孤儿 attempt 专用 transition 的只读绑定。",
       "$ref": "#/$defs/fileBinding"
+    },
+    "deadline_orphan_finalization": {
+      "description": "原始总 deadline 强停后，由专用直接 finalizer 补齐环境终态、请求计数和停线绑定。",
+      "$ref": "#/$defs/deadlineOrphanFinalization"
     },
     "classification_candidate_reuse_transition": {
       "description": "分类事实纠正后继对直接前序九项 Candidate 结果的零执行复用授权。",
@@ -386,6 +397,30 @@
           "required": ["interrupted_recovery"]
         }
       }
+    },
+    {
+      "if": {
+        "required": ["deadline_orphan_finalization"]
+      },
+      "then": {
+        "required": [
+          "incremental_plan",
+          "watchdog",
+          "job_checkpoint",
+          "interrupted_recovery_transition",
+          "continuity"
+        ],
+        "properties": {
+          "phase": {"const": "official"},
+          "candidate_id": {"const": null},
+          "candidate_purpose": {"const": null},
+          "status": {"const": "failed"},
+          "restoration_error": {"type": "null"}
+        },
+        "not": {
+          "required": ["interrupted_recovery"]
+        }
+      }
     }
   ],
   "$defs": {
@@ -411,6 +446,65 @@
             "scanned_bytes": 0
           }
         }
+      }
+    },
+    "deadlineOrphanFinalization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract",
+        "live_request_audit",
+        "request_accounting",
+        "supervisor_terminal"
+      ],
+      "properties": {
+        "contract": {"$ref": "#/$defs/fileBinding"},
+        "live_request_audit": {"$ref": "#/$defs/fileBinding"},
+        "request_accounting": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "historical_live_request_count",
+            "delta_live_request_count",
+            "total_live_request_count",
+            "finalizer_live_request_count",
+            "failed_attempt_archives_enumerated"
+          ],
+          "properties": {
+            "historical_live_request_count": {"type": "integer", "minimum": 0},
+            "delta_live_request_count": {"type": "integer", "minimum": 0},
+            "total_live_request_count": {"type": "integer", "minimum": 0},
+            "finalizer_live_request_count": {"const": 0},
+            "failed_attempt_archives_enumerated": {"const": false}
+          }
+        },
+        "supervisor_terminal": {
+          "const": {
+            "state": "watchdog-aborted",
+            "reason": "global-wall-clock-deadline-expired",
+            "batch_sequence": 5
+          }
+        }
+      }
+    },
+    "attemptContinuity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "source_attempt_id",
+        "compared_kinds",
+        "source_after_probe_sha256"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "codex-upgrade-attempt-continuity/v1"
+        },
+        "source_attempt_id": {"$ref": "#/$defs/safeId"},
+        "compared_kinds": {
+          "const": ["service", "containers", "account", "configuration"]
+        },
+        "source_after_probe_sha256": {"$ref": "#/$defs/sha256"}
       }
     },
     "candidatePurpose": {

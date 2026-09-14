@@ -7478,6 +7478,7 @@ class CodexUpgradeTest(unittest.TestCase):
                 "compile-vc-batch",
                 "compile-vc-interrupted-recovery-batch",
                 "compile-vc-interrupted-recovery-continuation",
+                "finalize-vc1-deadline-orphan",
                 "recover-vc1-interruption",
                 "continue-vc1-interruption",
                 "successor",

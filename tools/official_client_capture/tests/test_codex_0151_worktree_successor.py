@@ -221,6 +221,12 @@ CODEX_0154_VC1_FINALIZATION_RECOVERY_FREEZE_SUCCESSOR = (
     ROOT
     / "docs/egress/maintenance/upstream-codex-0154-vc1-finalization-recovery-20260914-freeze-successor.json"
 )
+# 2026-09-14：sequence 5 原总 deadline 到期后，只允许零请求直接封口并
+# 永久停线；同时为后续批次预留可展开的 attempt 清理窗口。
+CODEX_0154_VC1_DEADLINE_ORPHAN_FINALIZATION_FREEZE_SUCCESSOR = (
+    ROOT
+    / "docs/egress/maintenance/upstream-codex-0154-vc1-deadline-orphan-finalization-20260914-freeze-successor.json"
+)
 HISTORICAL_LEDGER = "docs/egress/maintenance/historical-source-drift-successor.json"
 SHA256_LENGTH = 64
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -330,6 +336,7 @@ def successor_edges(path: str) -> list[tuple[str, str]]:
         CODEX_0154_VC1_INTERRUPTION_RECOVERY_FREEZE_SUCCESSOR,
         CODEX_0154_VC1_INTERRUPTION_CONTINUATION_FREEZE_SUCCESSOR,
         CODEX_0154_VC1_FINALIZATION_RECOVERY_FREEZE_SUCCESSOR,
+        CODEX_0154_VC1_DEADLINE_ORPHAN_FINALIZATION_FREEZE_SUCCESSOR,
     ):
         payload = json.loads(receipt_path.read_text(encoding="utf-8"))
         _validate_successor_receipt(payload)

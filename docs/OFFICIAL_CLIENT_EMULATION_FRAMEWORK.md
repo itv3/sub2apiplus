@@ -661,6 +661,15 @@ attempt／合同／探针均未改写，且 reservation、真实请求和扫描�
 全部失败父链、原续接清单、新部署收据及纯评估／控制工具变化；成功后回到普通阶段批次，失败则永久停线，
 不得继续扩展恢复版本。
 
+若真实补跑已取得 reservation 并执行部分 Job，随后父监督器因 **Campaign 原始绝对 deadline 到期**进入
+`watchdog-aborted`，该 attempt 只能由客户端专用的 deadline orphan finalizer 直接封口。不得为它编译后继
+恢复清单、重新运行 Job、创建新 reservation 或进入下一 VC 阶段。finalizer 必须在 `campaign-run` 和
+Campaign lease 之外运行，只能依据原 reservation、追加式 checkpoint、失败父监督器和连续时间账本：补齐
+after／环境恢复／超时终态，按 checkpoint 明确登记的基础 evidence roots 核算增量 live 请求，写入不可变
+失败 attempt，并向原时间账本追加唯一永久停线事件。请求审计不得遍历 `.failed-attemptN` 等未登记归档；
+finalizer 自身的模型请求数必须为零。封口后当前 Campaign 永久停止，唯一下一动作是修复并闭合工具后建立
+新的 VC-0；原 deadline 不得用新的收口预算替换或延长。
+
 任何恢复分支都不得改写历史实体或自动重发已封存的官方请求；没有实际执行项时不得创建空转身份。
 
 ### 5.3.5 时间预算与停线
