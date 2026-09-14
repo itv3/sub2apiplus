@@ -397,14 +397,38 @@ def verify_scenario_source_spec(
 
 
 def load_supervisor(staging_root: Path) -> Any:
-    module_path = staging_root / "tools" / "official_client_capture" / "codex_upgrade_supervisor.py"
+    module_root = staging_root / "tools" / "official_client_capture"
+    module_path = module_root / "codex_upgrade_supervisor.py"
+    helper_path = module_root / "codex_upgrade_vc1_permission_alias_closeout.py"
     if module_path.is_symlink() or not module_path.is_file():
         raise DeploymentError("暂存监督器文件不存在或不可信。")
+    if helper_path.is_symlink() or not helper_path.is_file():
+        raise DeploymentError("暂存权限别名 helper 不存在或不可信。")
     spec = importlib.util.spec_from_file_location("arm64_staging_supervisor", module_path)
     if spec is None or spec.loader is None:
         raise DeploymentError("无法加载暂存监督器。")
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    # 监督器以脚本方式运行时会从同目录导入 helper。部署器用 importlib 加载
+    # 暂存副本时也必须精确复现这条搜索路径，同时隔离进程内可能缓存的同名旧模块，
+    # 否则会在生产切换前误载旧 helper 或直接报 ModuleNotFoundError。
+    helper_module_name = "codex_upgrade_vc1_permission_alias_closeout"
+    original_sys_path = list(sys.path)
+    previous_helper = sys.modules.pop(helper_module_name, None)
+    try:
+        sys.path.insert(0, str(module_root))
+        spec.loader.exec_module(module)
+        loaded_helper = getattr(module, "permission_alias_closeout", None)
+        loaded_helper_file = getattr(loaded_helper, "__file__", None)
+        if (
+            not isinstance(loaded_helper_file, str)
+            or Path(loaded_helper_file).resolve() != helper_path.resolve()
+        ):
+            raise DeploymentError("暂存监督器未绑定同目录权限别名 helper。")
+    finally:
+        sys.path[:] = original_sys_path
+        sys.modules.pop(helper_module_name, None)
+        if previous_helper is not None:
+            sys.modules[helper_module_name] = previous_helper
     return module
 
 

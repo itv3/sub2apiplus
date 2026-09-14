@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import stat
+import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -241,6 +243,30 @@ class Arm64SupervisedDeployTest(unittest.TestCase):
             deploy.DEFAULT_ASSERTION_PREPARER_DIGEST,
             deploy.file_sha256(assertion_preparer),
         )
+
+    def test_load_supervisor_binds_staged_sibling_helper(self) -> None:
+        """importlib 加载必须复现监督器脚本的同目录 helper 搜索语义。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            module_root = root / "tools" / "official_client_capture"
+            module_root.mkdir(parents=True)
+            helper_name = "codex_upgrade_vc1_permission_alias_closeout"
+            helper_path = module_root / f"{helper_name}.py"
+            helper_path.write_text("SOURCE = 'staged'\n", encoding="utf-8")
+            (module_root / "codex_upgrade_supervisor.py").write_text(
+                f"import {helper_name} as permission_alias_closeout\n"
+                "SOURCE = permission_alias_closeout.SOURCE\n",
+                encoding="utf-8",
+            )
+            old_helper = types.ModuleType(helper_name)
+            old_helper.SOURCE = "cached"
+            original_path = list(sys.path)
+            with mock.patch.dict(sys.modules, {helper_name: old_helper}):
+                loaded = deploy.load_supervisor(root)
+                self.assertEqual(loaded.SOURCE, "staged")
+                self.assertIs(sys.modules[helper_name], old_helper)
+            self.assertEqual(sys.path, original_path)
 
     def test_assertion_preparer_switch_and_joint_rollback_are_atomic(self) -> None:
         """主工具树外的 bundle 入口必须随事务切换并可共同回滚。"""

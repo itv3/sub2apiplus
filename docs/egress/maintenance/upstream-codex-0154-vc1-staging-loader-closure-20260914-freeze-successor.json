@@ -1,0 +1,159 @@
+{
+  "base_commit": "3f2a34430afae198351b120102c540cb9d5c547d",
+  "changed_path_count": 3,
+  "current_commit": null,
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 3224,
+  "frozen_path_count": 1398,
+  "identity_sha256": "9052c66f61770b13f5cd8d5d30d4d6920eec1ca20e307e4ae05c6685f2f15280",
+  "issued_at_utc": "2026-09-14T13:28:00Z",
+  "mode": "worktree",
+  "required_manual_actions": [
+    {
+      "action_kind": "python_receipt_list",
+      "file": "tools/official_client_capture/tests/test_codex_0151_worktree_successor.py",
+      "instruction": "生成本次 freeze successor 后，把它的仓库相对路径追加到该测试 successor_edges 的显式收据列表并重跑；该测试属于 Campaign 受管工具文件，改动前须老板确认。",
+      "path": "tools/arm64_supervised_deploy.py",
+      "rule_id": "codex-0151-worktree-successor",
+      "verification": [
+        "python3 -m unittest tools.official_client_capture.tests.test_codex_0151_worktree_successor"
+      ]
+    },
+    {
+      "action_kind": "python_receipt_list",
+      "file": "tools/official_client_capture/tests/test_codex_0151_worktree_successor.py",
+      "instruction": "生成本次 freeze successor 后，把它的仓库相对路径追加到该测试 successor_edges 的显式收据列表并重跑；该测试属于 Campaign 受管工具文件，改动前须老板确认。",
+      "path": "tools/official_client_capture/tests/test_codex_0151_worktree_successor.py",
+      "rule_id": "codex-0151-worktree-successor",
+      "verification": [
+        "python3 -m unittest tools.official_client_capture.tests.test_codex_0151_worktree_successor"
+      ]
+    }
+  ],
+  "result": "manual_actions_required",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-0154-vc1-staging-loader-closure-20260914-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "tools/arm64_supervised_deploy.py",
+      "predecessor_sha256s": [
+        "22cb73f1caff02f65f177cb3784b9631edff8e99a95b7677e39b77f95eae7578"
+      ],
+      "reason": "Codex 0.154 VC-1 Sequence 4 ARM64 暂存监督器同目录 helper 加载闭合 path=tools/arm64_supervised_deploy.py",
+      "source_receipts": [
+        "docs/egress/maintenance/client-vc-stage-navigation-20260912-freeze-successor.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-capability-pin-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-bwg-egress-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-bwg-mss-rust-tls-repair-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-bwg-tls-global-failfast-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-campaign-input-byte-freeze-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-campaign-run-rehearsal-closure-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-canonical-production-chain-20260912-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-emulation-upgrade-20260911-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-failed-evidence-archive-route-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-job-rehearsal-entrypoint-closure-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-profile-patch-binding-20260912-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-runtime-doc-candidate-metadata-20260912-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-runtime-doc-closure-20260912-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-runtime-doc-metadata-20260912-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc0-atomic-closeout-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-capture-tool-recovery-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-deadline-orphan-finalization-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-finalization-recovery-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-formal-failure-closure-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-interruption-continuation-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-interruption-recovery-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-parent-lease-repair-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-permission-alias-closeout-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-permission-preflight-compensation-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-permission-preflight-path-binding-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-writable-run-root-repair-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-upgrade-batch1-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-upgrade-batch2-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-vc-final-alignment-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-tool-identity-sync-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "fc5e0f3ae64c8d731384588af5b2e3fd682681db753b2534eeb231e53067081e"
+    },
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/tests/test_codex_0151_worktree_successor.py",
+      "predecessor_sha256s": [
+        "04ba9abc5d254daa7c887dd6a3ff771c71fc72a8988f4093f9ce6ee14ed5d769"
+      ],
+      "reason": "Codex 0.154 VC-1 Sequence 4 ARM64 暂存监督器同目录 helper 加载闭合 path=tools/official_client_capture/tests/test_codex_0151_worktree_successor.py",
+      "source_receipts": [
+        "docs/egress/maintenance/client-vc-stage-navigation-20260912-freeze-successor.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-capability-pin-freeze-successor.json",
+        "docs/egress/maintenance/upstream-capture-cli-directory-governance-20260911-freeze-successor.json",
+        "docs/egress/maintenance/upstream-claude-vc1-vc3-contract-20260912-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-bwg-egress-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-bwg-mss-rust-tls-repair-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-bwg-tls-global-failfast-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-campaign-input-byte-freeze-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-campaign-run-rehearsal-closure-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-canonical-production-chain-20260912-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-emulation-upgrade-20260911-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-failed-evidence-archive-route-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-job-rehearsal-entrypoint-closure-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-profile-patch-binding-20260912-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-runtime-doc-candidate-metadata-20260912-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-runtime-doc-closure-20260912-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-runtime-doc-metadata-20260912-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc0-atomic-closeout-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-capture-tool-recovery-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-deadline-orphan-finalization-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-failure-closure-coordinate-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-finalization-recovery-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-formal-failure-closure-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-interruption-continuation-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-interruption-recovery-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-parent-lease-repair-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-permission-alias-closeout-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-permission-preflight-compensation-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-permission-preflight-path-binding-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-writable-run-root-repair-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-upgrade-batch1-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-upgrade-batch2-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-upgrade-batch3-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-vc-final-alignment-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-doc-trim-20260911-freeze-successor.json",
+        "docs/egress/maintenance/upstream-tool-hints-20260911-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.3-reconnect-repair-gate-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.3-release-prep-source-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.3-tool-identity-sync-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-2-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-3-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/version-sync-0.2.3-3-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "09d5a6383575e2ddd0b6ee04d56de8beb74e2515335e1940568c341cdf5cbb5f"
+    }
+  ],
+  "unregistered_path_count": 1,
+  "unregistered_paths": [
+    "tools/official_client_capture/tests/test_arm64_supervised_deploy.py"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci",
+    "python3 -m unittest tools.official_client_capture.tests.test_codex_0151_worktree_successor"
+  ]
+}

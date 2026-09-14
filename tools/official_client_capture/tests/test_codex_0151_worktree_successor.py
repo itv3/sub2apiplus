@@ -257,6 +257,12 @@ CODEX_0154_VC1_PERMISSION_ALIAS_CLOSEOUT_FREEZE_SUCCESSOR = (
     ROOT
     / "docs/egress/maintenance/upstream-codex-0154-vc1-permission-alias-closeout-20260914-freeze-successor.json"
 )
+# 2026-09-14：ARM64 部署器通过 importlib 加载暂存监督器时，必须临时绑定
+# 同目录 helper，并隔离进程内可能缓存的旧模块。
+CODEX_0154_VC1_STAGING_LOADER_CLOSURE_FREEZE_SUCCESSOR = (
+    ROOT
+    / "docs/egress/maintenance/upstream-codex-0154-vc1-staging-loader-closure-20260914-freeze-successor.json"
+)
 HISTORICAL_LEDGER = "docs/egress/maintenance/historical-source-drift-successor.json"
 SHA256_LENGTH = 64
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -372,6 +378,7 @@ def successor_edges(path: str) -> list[tuple[str, str]]:
         CODEX_0154_VC1_PERMISSION_PREFLIGHT_COMPENSATION_FREEZE_SUCCESSOR,
         CODEX_0154_VC1_PERMISSION_PREFLIGHT_PATH_BINDING_FREEZE_SUCCESSOR,
         CODEX_0154_VC1_PERMISSION_ALIAS_CLOSEOUT_FREEZE_SUCCESSOR,
+        CODEX_0154_VC1_STAGING_LOADER_CLOSURE_FREEZE_SUCCESSOR,
     ):
         payload = json.loads(receipt_path.read_text(encoding="utf-8"))
         _validate_successor_receipt(payload)
