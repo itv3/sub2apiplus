@@ -153,11 +153,22 @@ VC1_PERMISSION_ALIAS_PREDISPATCH_ERROR = (
     "/root/oauth-capture/runs/official-client/oauth/"
     "oauth-c0154-formal-vc1-bwg-new-window-20260914t100818z"
 )
+VC1_PERMISSION_ALIAS_HISTORICAL_HELPER_DEPLOYMENT_PATH = Path(
+    "/root/docker/capture-cli/data/control/"
+    "codex-0154-supervisor-enable-20260914t145040z.json"
+)
+VC1_PERMISSION_ALIAS_HISTORICAL_HELPER_DEPLOYMENT_SHA256 = (
+    "1f3c903139c9035a2e9f5a3fe176801811478d812449df8a5b0d076192b5f395"
+)
+VC1_PERMISSION_ALIAS_HISTORICAL_HELPER_ROLLBACK_PATH = Path(
+    "/root/docker/capture-cli/data/control/"
+    "managed-tools-backup-before-3ce4cb1b6b17-20260914t145040z-ae7426f3"
+)
 VC1_PERMISSION_ALIAS_V2_HELPER_SHA256 = (
     "67957d6ac413b5c87fcfb24bb003e49f13e27212e90fa564cd7652b5ab411a4c"
 )
 VC1_PERMISSION_ALIAS_PREDISPATCH_CLOSEOUT_TOOL_SHA256 = (
-    "93255ea8de7162c8c790a7a13d64fd3370dbac0e131a2cd6c239398f7c9f9e26"
+    "cc7d2409938ca1215c3388a9a9194e32491c8ff9f88410d32b50e7289a120b00"
 )
 CAMPAIGN_RUN_LOCK_FILENAME = ".campaign-run.lock"
 # campaign-run 启动的子命令通过这些只读环境变量复用同一个父监督器。
@@ -6530,6 +6541,14 @@ def _validate_permission_alias_predispatch_successor(
         != "PermissionAliasCloseoutError"
         or receipt.get("deterministic_error")
         != VC1_PERMISSION_ALIAS_PREDISPATCH_ERROR
+        or receipt.get("historical_helper_deployment_receipt")
+        != str(VC1_PERMISSION_ALIAS_HISTORICAL_HELPER_DEPLOYMENT_PATH)
+        or receipt.get("historical_helper_deployment_receipt_sha256")
+        != VC1_PERMISSION_ALIAS_HISTORICAL_HELPER_DEPLOYMENT_SHA256
+        or receipt.get("historical_helper_rollback")
+        != str(VC1_PERMISSION_ALIAS_HISTORICAL_HELPER_ROLLBACK_PATH)
+        or receipt.get("historical_helper_sha256")
+        != VC1_PERMISSION_ALIAS_HELPER_SHA256
         or receipt.get("current_deployment_receipt_sha256")
         != _sha256(deployment_raw)
         or receipt.get("current_tool_files_sha256")

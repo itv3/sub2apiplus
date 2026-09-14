@@ -80,6 +80,19 @@ FAILED_SUPERVISOR_SHA256 = (
 FAILED_HELPER_SHA256 = (
     "408e9d733b8997e569fbea36ab648f1bd70e45f9669accf3cc9353eb8b2566b1"
 )
+# 首次修正部署已把 sequence 4 使用的旧 helper 原子保存在这棵回滚树中。
+# 后续修正本封口工具时仍只允许从该固定部署事实重放历史错误。
+HISTORICAL_HELPER_DEPLOYMENT_PATH = (
+    HOST_DATA_ROOT / "control/codex-0154-supervisor-enable-20260914t145040z.json"
+)
+HISTORICAL_HELPER_DEPLOYMENT_SHA256 = (
+    "1f3c903139c9035a2e9f5a3fe176801811478d812449df8a5b0d076192b5f395"
+)
+HISTORICAL_HELPER_ROLLBACK_PATH = (
+    HOST_DATA_ROOT
+    / "control/managed-tools-backup-before-3ce4cb1b6b17-"
+    "20260914t145040z-ae7426f3"
+)
 SEQUENCE4_COMPILED_AT_UTC = "2026-09-14T13:43:34+00:00"
 SEQUENCE4_MUST_START_BY_UTC = "2026-09-14T13:44:34+00:00"
 EXPECTED_OLD_ERROR = (
@@ -217,8 +230,44 @@ def _load_historical_helper(path: Path) -> Any:
     if spec is None or spec.loader is None:
         raise PredispatchCloseoutError("无法加载历史失败 helper。")
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    module_name = spec.name
+    previous = sys.modules.get(module_name)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        if previous is None:
+            sys.modules.pop(module_name, None)
+        else:
+            sys.modules[module_name] = previous
     return module
+
+
+def _validate_historical_helper_source() -> Path:
+    """绑定首次修正部署留下的旧 helper 回滚副本。"""
+
+    payload = _json(
+        _private_file(
+            HISTORICAL_HELPER_DEPLOYMENT_PATH,
+            "历史 helper 部署收据",
+            HISTORICAL_HELPER_DEPLOYMENT_SHA256,
+        ),
+        "历史 helper 部署收据",
+    )
+    if (
+        payload.get("schema_version") != "codex-arm64-supervisor-enable/v1"
+        or payload.get("status") != "passed"
+        or payload.get("architecture") != "aarch64"
+        or payload.get("rollback_backup") != str(HISTORICAL_HELPER_ROLLBACK_PATH)
+    ):
+        raise PredispatchCloseoutError("历史 helper 部署与回滚坐标漂移。")
+    _owned_directory(HISTORICAL_HELPER_ROLLBACK_PATH, "历史 helper 回滚工具树")
+    old_helper_path = (
+        HISTORICAL_HELPER_ROLLBACK_PATH
+        / "codex_upgrade_vc1_permission_alias_closeout.py"
+    )
+    _managed_file(old_helper_path, "历史失败 helper", FAILED_HELPER_SHA256)
+    return old_helper_path
 
 
 def _validate_sequence4_artifacts() -> tuple[dict[str, Any], dict[str, Any]]:
@@ -331,13 +380,7 @@ def close_predispatch(
         expected_tool_files_sha256=tool_files_sha256,
         expected_self_sha256=self_sha256,
     )
-    current_deployment = _json(
-        _private_file(current_deployment_receipt, "当前受管部署收据"),
-        "当前受管部署收据",
-    )
-    rollback = Path(str(current_deployment["rollback_backup"]))
-    old_helper_path = rollback / "codex_upgrade_vc1_permission_alias_closeout.py"
-    permission_closeout.reject_symlink_components(old_helper_path, "历史失败 helper")
+    old_helper_path = _validate_historical_helper_source()
     historical_helper = _load_historical_helper(old_helper_path)
     batch, manifest = _validate_sequence4_artifacts()
 
@@ -410,6 +453,14 @@ def close_predispatch(
             "source_run_history": run_facts,
             "deterministic_error_type": "PermissionAliasCloseoutError",
             "deterministic_error": EXPECTED_OLD_ERROR,
+            "historical_helper_deployment_receipt": str(
+                HISTORICAL_HELPER_DEPLOYMENT_PATH
+            ),
+            "historical_helper_deployment_receipt_sha256": (
+                HISTORICAL_HELPER_DEPLOYMENT_SHA256
+            ),
+            "historical_helper_rollback": str(HISTORICAL_HELPER_ROLLBACK_PATH),
+            "historical_helper_sha256": FAILED_HELPER_SHA256,
             "current_deployment_receipt": str(current_deployment_receipt),
             "current_deployment_receipt_sha256": current_deployment_receipt_sha256,
             "current_tool_files_sha256": tool_files_sha256,

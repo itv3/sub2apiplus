@@ -854,6 +854,12 @@ class SupervisorTests(unittest.TestCase):
             "source_run_history": run_history,
             "deterministic_error_type": "PermissionAliasCloseoutError",
             "deterministic_error": supervisor.VC1_PERMISSION_ALIAS_PREDISPATCH_ERROR,
+            "historical_helper_deployment_receipt": str(current_deployment_path),
+            "historical_helper_deployment_receipt_sha256": (
+                current_deployment_sha256
+            ),
+            "historical_helper_rollback": str(data_root / "historical-rollback"),
+            "historical_helper_sha256": helper_sha256,
             "current_deployment_receipt": str(current_deployment_path),
             "current_deployment_receipt_sha256": current_deployment_sha256,
             "current_tool_files_sha256": current_tool_files_sha256,
@@ -983,6 +989,15 @@ class SupervisorTests(unittest.TestCase):
                 ).hexdigest(),
                 "VC1_PERMISSION_ALIAS_PREDISPATCH_COMPILED_AT_UTC": compiled_at,
                 "VC1_PERMISSION_ALIAS_PREDISPATCH_MUST_START_BY_UTC": must_start_by,
+                "VC1_PERMISSION_ALIAS_HISTORICAL_HELPER_DEPLOYMENT_PATH": (
+                    current_deployment_path
+                ),
+                "VC1_PERMISSION_ALIAS_HISTORICAL_HELPER_DEPLOYMENT_SHA256": (
+                    current_deployment_sha256
+                ),
+                "VC1_PERMISSION_ALIAS_HISTORICAL_HELPER_ROLLBACK_PATH": (
+                    data_root / "historical-rollback"
+                ),
                 "VC1_PERMISSION_ALIAS_V2_HELPER_SHA256": helper_sha256,
                 "VC1_PERMISSION_ALIAS_PREDISPATCH_CLOSEOUT_TOOL_SHA256": (
                     closeout_tool_sha256

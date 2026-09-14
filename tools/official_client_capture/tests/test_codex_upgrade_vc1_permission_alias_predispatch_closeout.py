@@ -144,6 +144,10 @@ class PermissionAliasPredispatchCloseoutTests(unittest.TestCase):
             rollback / "codex_upgrade_vc1_permission_alias_closeout.py"
         )
         historical_helper_path.write_text(
+            "from dataclasses import dataclass\n"
+            "@dataclass\n"
+            "class Snapshot:\n"
+            "    value: int = 1\n"
             "class PermissionAliasCloseoutError(RuntimeError):\n"
             "    pass\n"
             "def inspect_permission_boundary(**kwargs):\n"
@@ -201,6 +205,11 @@ class PermissionAliasPredispatchCloseoutTests(unittest.TestCase):
             "FAILED_TOOL_FILES_SHA256": failed_tool_files_sha256,
             "FAILED_SUPERVISOR_SHA256": failed_supervisor_sha256,
             "FAILED_HELPER_SHA256": self._sha256(historical_helper_path),
+            "HISTORICAL_HELPER_DEPLOYMENT_PATH": current_deployment_path,
+            "HISTORICAL_HELPER_DEPLOYMENT_SHA256": self._sha256(
+                current_deployment_path
+            ),
+            "HISTORICAL_HELPER_ROLLBACK_PATH": rollback,
             "SEQUENCE4_COMPILED_AT_UTC": compiled_at,
             "SEQUENCE4_MUST_START_BY_UTC": must_start_by,
             "EXPECTED_RUN_NAMES": run_names,

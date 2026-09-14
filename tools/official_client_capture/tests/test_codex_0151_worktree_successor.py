@@ -281,6 +281,12 @@ CODEX_0154_VC1_PCAP_FILENAME_BOUNDARY_FREEZE_SUCCESSOR = (
     ROOT
     / "docs/egress/maintenance/upstream-codex-0154-vc1-pcap-filename-boundary-20260914-freeze-successor.json"
 )
+# 2026-09-14：预派发封口加载历史 dataclass helper 时临时绑定模块，
+# 并把旧 helper 来源固定到首次修正部署留下的不可变回滚树。
+CODEX_0154_VC1_HISTORICAL_HELPER_LOADER_FREEZE_SUCCESSOR = (
+    ROOT
+    / "docs/egress/maintenance/upstream-codex-0154-vc1-historical-helper-loader-20260914-freeze-successor.json"
+)
 HISTORICAL_LEDGER = "docs/egress/maintenance/historical-source-drift-successor.json"
 SHA256_LENGTH = 64
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -400,6 +406,7 @@ def successor_edges(path: str) -> list[tuple[str, str]]:
         CODEX_0154_VC1_PERMISSION_ALIAS_PREDISPATCH_CLOSEOUT_FREEZE_SUCCESSOR,
         CODEX_0154_VC1_TCPDUMP_OWNER_BOUNDARY_FREEZE_SUCCESSOR,
         CODEX_0154_VC1_PCAP_FILENAME_BOUNDARY_FREEZE_SUCCESSOR,
+        CODEX_0154_VC1_HISTORICAL_HELPER_LOADER_FREEZE_SUCCESSOR,
     ):
         payload = json.loads(receipt_path.read_text(encoding="utf-8"))
         _validate_successor_receipt(payload)
