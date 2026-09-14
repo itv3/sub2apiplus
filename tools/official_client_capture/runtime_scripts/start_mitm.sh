@@ -130,6 +130,30 @@ if [[ -e $output_dir || -L $output_dir ]]; then
 fi
 install -d -m 0700 "$output_dir"
 log_path="$output_dir/mitmdump.log"
+# 后台命令的重定向由子进程完成；父 shell 可能在日志文件真正出现前继续执行。
+# 先由当前进程原子创建并收紧权限，既消除 chmod 竞态，也保证后续任一失败都已
+# 进入受管清理区，不能留下没有 state 文件的孤儿 mitmdump。
+install -m 0600 /dev/null "$log_path"
+pid=""
+pgid=""
+temporary_state=""
+
+cleanup_failed_start() {
+  local original_exit_code=$?
+  trap - EXIT ERR INT TERM
+  set +e
+  if [[ $pgid =~ ^[0-9]+$ ]]; then
+    kill -TERM -- "-$pgid" >/dev/null 2>&1 || true
+    sleep 0.2
+    kill -KILL -- "-$pgid" >/dev/null 2>&1 || true
+  fi
+  if [[ -n $temporary_state ]]; then
+    rm -f -- "$temporary_state"
+  fi
+  rm -f -- "$state_path"
+  exit "$original_exit_code"
+}
+trap cleanup_failed_start EXIT ERR INT TERM
 
 if [[ $fingerprint_mode == 1 ]]; then
   setsid env \
@@ -175,19 +199,6 @@ else
 fi
 pid=$!
 pgid=$pid
-chmod 0600 "$log_path"
-
-cleanup_failed_start() {
-  local original_exit_code=$?
-  trap - EXIT ERR INT TERM
-  set +e
-  kill -TERM -- "-$pgid" >/dev/null 2>&1 || true
-  sleep 0.2
-  kill -KILL -- "-$pgid" >/dev/null 2>&1 || true
-  rm -f -- "$state_path"
-  exit "$original_exit_code"
-}
-trap cleanup_failed_start EXIT ERR INT TERM
 
 if [[ ! -r /proc/$pid/stat ]]; then
   echo "MITM 进程未能启动。" >&2
@@ -207,6 +218,7 @@ temporary_state="$state_path.$$.tmp"
 } >"$temporary_state"
 chmod 0600 "$temporary_state"
 mv -- "$temporary_state" "$state_path"
+temporary_state=""
 
 ready=0
 for _ in $(seq 1 200); do

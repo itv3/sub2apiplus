@@ -18,6 +18,8 @@ umask 077
 capture_container=${CAPTURE_CONTAINER:-capture-cli}
 capture_root=${CAPTURE_ROOT:-/root/oauth-capture}
 capture_tool_root=${CAPTURE_TOOL_ROOT:-$capture_root/tools/official_client_capture}
+host_tool_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+capture_host_data_root=${CAPTURE_HOST_DATA_ROOT:-$(cd -- "$host_tool_root/../.." && pwd -P)}
 run_id=${RUN_ID:?必须提供 RUN_ID}
 model=${MODEL:-gpt-5.6-luna}
 expect_connections=${EXPECT_CONNECTIONS:-3}
@@ -28,10 +30,32 @@ if [[ ! $run_id =~ ^[A-Za-z0-9._-]+$ ]]; then
   exit 2
 fi
 
-work_dir="$capture_root/runs/$run_id"
+if [[ $capture_host_data_root != /* || $capture_host_data_root == / || -L $capture_host_data_root || ! -d $capture_host_data_root ]]; then
+  echo "CAPTURE_HOST_DATA_ROOT 必须是可信的非根绝对目录。" >&2
+  exit 2
+fi
+host_runs_root="$capture_host_data_root/runs"
+container_runs_root="$capture_root/runs"
+if [[ -L $host_runs_root || ! -d $host_runs_root ]]; then
+  echo "宿主 runs 根不存在或不可信：$host_runs_root" >&2
+  exit 1
+fi
+host_runs_identity=$(stat -Lc '%d:%i' "$host_runs_root")
+container_runs_identity=$(docker exec "$capture_container" stat -Lc '%d:%i' "$container_runs_root")
+if [[ $host_runs_identity != "$container_runs_identity" ]]; then
+  echo "宿主与容器 runs 根不同源，拒绝发送请求。" >&2
+  exit 1
+fi
+
+work_dir="$host_runs_root/$run_id"
 tls_dir="$work_dir/tls"
-ca_full="$capture_root/state/mitm/mitmproxy-ca.pem"
-ca_cert="$capture_root/state/mitm/mitmproxy-ca-cert.pem"
+ca_full="$capture_host_data_root/state/mitm/mitmproxy-ca.pem"
+ca_cert="$capture_host_data_root/state/mitm/mitmproxy-ca-cert.pem"
+
+if [[ -e $work_dir || -L $work_dir ]]; then
+  echo "RUN_ID 已存在，拒绝混写旧样本：$work_dir" >&2
+  exit 2
+fi
 
 probe_started=0
 

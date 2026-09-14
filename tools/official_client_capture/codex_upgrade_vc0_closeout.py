@@ -36,6 +36,7 @@ from tools.official_client_capture import codex_upgrade_vc_receipt
 
 CLOSEOUT_RECEIPT_SCHEMA = "codex-upgrade-vc0-closeout-receipt/v1"
 CLOSEOUT_DIAGNOSTIC_SCHEMA = "codex-upgrade-vc0-closeout-diagnostic/v1"
+LIVE_REQUEST_AUDIT_SCHEMA = "codex-upgrade-live-request-audit/v1"
 CAMPAIGN_RUN_REHEARSAL_SCHEMA = "codex-p0-campaign-run-rehearsal/v1"
 MANAGED_TOOL_DEPLOY_SCHEMA = "codex-arm64-supervisor-enable/v1"
 MINIMUM_REMAINING_SECONDS = 300
@@ -53,6 +54,11 @@ INPUT_ROLES = (
     "job_rehearsal",
     "managed_tool_deploy",
     "p0_gate",
+)
+PRE_REQUEST_FAILURE_MARKERS = (
+    b"Read-only file system",
+    "宿主与容器 runs 根不同源".encode("utf-8"),
+    b"CAPTURE_HOST_DATA_ROOT",
 )
 
 
@@ -1392,9 +1398,333 @@ def _copy_formal_control_artifacts(
     return result
 
 
+def _formal_host_data_root(formal_campaign_dir: Path) -> Path:
+    """从规范 ``<data>/evidence/campaigns/<id>`` 坐标恢复宿主数据根。"""
+
+    campaign = formal_campaign_dir.resolve(strict=True)
+    if (
+        campaign.parent.name != "campaigns"
+        or campaign.parent.parent.name != "evidence"
+    ):
+        raise VC0CloseoutError("Formal Campaign 不在规范宿主 evidence/campaigns 根")
+    return _trusted_directory(
+        campaign.parent.parent.parent,
+        "Formal Campaign 宿主数据根",
+    )
+
+
+def _map_container_evidence_root(
+    value: Any,
+    *,
+    capture_root: Path,
+    host_data_root: Path,
+) -> Path:
+    """把冻结的容器证据坐标映射到同源宿主数据根，不要求目标已经存在。"""
+
+    candidate = Path(str(value))
+    if not candidate.is_absolute() or ".." in candidate.parts:
+        raise VC0CloseoutError("Job evidence root 不是规范绝对路径")
+    try:
+        relative = candidate.relative_to(capture_root)
+    except ValueError as error:
+        raise VC0CloseoutError("Job evidence root 越过冻结 CAPTURE_ROOT") from error
+    mapped = host_data_root / relative
+    try:
+        mapped.relative_to(host_data_root)
+    except ValueError as error:
+        raise VC0CloseoutError("Job evidence root 越过宿主数据根") from error
+    return mapped
+
+
+def _failed_attempt_roots(base: Path) -> list[Path]:
+    """返回一个冻结 root 及其不可变 ``.failed-attemptN`` 归档。"""
+
+    candidates: list[tuple[int, Path]] = []
+    if base.exists() or base.is_symlink():
+        candidates.append((0, base))
+    if base.parent.is_dir() and not base.parent.is_symlink():
+        prefix = re.escape(base.name) + r"\.failed-attempt([1-9][0-9]*)"
+        for path in base.parent.iterdir():
+            match = re.fullmatch(prefix, path.name)
+            if match is not None:
+                candidates.append((int(match.group(1)), path))
+    roots: list[Path] = []
+    for _index, path in sorted(candidates):
+        if path.is_symlink() or not path.is_dir():
+            raise VC0CloseoutError(f"live 请求审计遇到不可信 evidence root：{path}")
+        roots.append(path.resolve(strict=True))
+    return roots
+
+
+def _capture_manifest_live_requests(path: Path) -> int:
+    """按既有 UpgradeTimingLedger 口径累计官方 case 的真实 turn。"""
+
+    payload, _raw = _load_json(path, "官方 capture manifest")
+    if payload.get("schema_version") != "official-client-capture/v1":
+        raise VC0CloseoutError("官方 capture manifest schema 非预期")
+    cases = payload.get("case_results")
+    if not isinstance(cases, list):
+        raise VC0CloseoutError("官方 capture manifest 缺少 case_results")
+    count = 0
+    for index, case in enumerate(cases):
+        scenario = case.get("scenario_result") if isinstance(case, Mapping) else None
+        turns = scenario.get("turn_count") if isinstance(scenario, Mapping) else None
+        if not isinstance(turns, int) or isinstance(turns, bool) or turns < 0:
+            raise VC0CloseoutError(
+                f"官方 capture manifest case_results[{index}].turn_count 非法"
+            )
+        count += turns
+    return count
+
+
+def _compact_summary_live_requests(path: Path) -> int:
+    """累计 app-server compact 驱动已经完成并落盘的 turn 数。"""
+
+    payload, _raw = _load_json(path, "官方 compact summary")
+    turns = payload.get("turn_completed_count")
+    if (
+        payload.get("schema_version") != "codex-compact-capture/v1"
+        or not isinstance(turns, int)
+        or isinstance(turns, bool)
+        or turns < 0
+    ):
+        raise VC0CloseoutError("官方 compact summary schema 或 turn 数非法")
+    return turns
+
+
+def _relay_live_request_sources(root: Path) -> list[dict[str, Any]]:
+    """从 relay 客户端原始字节累计 HTTP／WS Responses 模型请求。"""
+
+    relay_root = root / "relay"
+    if not relay_root.exists():
+        return []
+    if relay_root.is_symlink() or not relay_root.is_dir():
+        raise VC0CloseoutError("relay evidence root 不可信")
+    # 复用模型条件收据的逐帧解析器；它同时覆盖 HTTP body 与 Upgrade 后 WS 帧，
+    # 不把 /models 预热或 TCP 连接数误算成模型请求。
+    from tools.official_client_capture import model_condition_receipts
+
+    sources: list[dict[str, Any]] = []
+    for path in sorted(relay_root.glob("conn*.client_to_upstream.bin")):
+        path = _trusted_file(
+            path,
+            "relay 客户端原始字节",
+            maximum=512 * 1024 * 1024,
+        )
+        count = len(
+            model_condition_receipts._responses_request_models(path.read_bytes())
+        )
+        if count:
+            sources.append(
+                {
+                    "kind": "relay_responses_requests",
+                    "path": str(path),
+                    "sha256": _sha256_file(path),
+                    "live_request_count": count,
+                }
+            )
+    return sources
+
+
+def _job_logs(formal_campaign_dir: Path, job_id: str) -> list[Path]:
+    """只读取当前 Campaign attempts 下与 Job ID 精确匹配的脱敏日志。"""
+
+    attempts = formal_campaign_dir / "official" / "attempts"
+    if not attempts.exists():
+        return []
+    if attempts.is_symlink() or not attempts.is_dir():
+        raise VC0CloseoutError("Formal official attempts 根不可信")
+    result: list[Path] = []
+    pattern = re.compile(re.escape(job_id) + r"(?:-retry[0-9]+)?-[0-9]+\.log")
+    for attempt in attempts.iterdir():
+        logs = attempt / "logs"
+        if attempt.is_symlink() or not attempt.is_dir() or not logs.exists():
+            continue
+        if logs.is_symlink() or not logs.is_dir():
+            raise VC0CloseoutError("Formal attempt logs 根不可信")
+        for path in logs.iterdir():
+            if pattern.fullmatch(path.name):
+                result.append(_trusted_file(path, "Formal Job 日志"))
+    return sorted(result)
+
+
+def _logs_prove_pre_request_failure(paths: list[Path]) -> bool:
+    """仅接受 wrapper 在创建运行根之前写出的固定失败标记。"""
+
+    if not paths:
+        return False
+    for path in paths:
+        raw = _read_stable_file(path, "Formal Job 日志", maximum=MAX_JSON_BYTES)
+        if not any(marker in raw for marker in PRE_REQUEST_FAILURE_MARKERS):
+            return False
+    return True
+
+
+def build_live_request_audit(
+    formal_campaign_dir: Path,
+    *,
+    formal_campaign_id: str,
+    observed_at_utc: str | None = None,
+) -> dict[str, Any]:
+    """从 Formal 不可变证据核算已发生的模型请求，未知来源一律失败关闭。"""
+
+    campaign_dir = _trusted_directory(formal_campaign_dir, "Formal Campaign")
+    manifest, raw = _load_json(campaign_dir / "campaign.json", "Formal Campaign")
+    if (
+        manifest.get("campaign_id") != formal_campaign_id
+        or manifest.get("campaign_mode") != "formal"
+    ):
+        raise VC0CloseoutError("live 请求审计的 Formal Campaign 身份不一致")
+    digest_path = _trusted_file(campaign_dir / "campaign.sha256", "Campaign 摘要")
+    expected_digest = digest_path.read_text(encoding="ascii").strip()
+    if expected_digest != _sha256_bytes(raw):
+        raise VC0CloseoutError("live 请求审计发现 Campaign 摘要漂移")
+    jobs = manifest.get("jobs", [])
+    if not isinstance(jobs, list):
+        raise VC0CloseoutError("Formal Campaign jobs 非数组")
+    configuration = manifest.get("configuration")
+    if jobs and not isinstance(configuration, Mapping):
+        raise VC0CloseoutError("Formal Campaign 缺少 configuration")
+    if not jobs:
+        return {
+            "schema_version": LIVE_REQUEST_AUDIT_SCHEMA,
+            "status": "complete",
+            "campaign_id": formal_campaign_id,
+            "observed_at_utc": observed_at_utc or _utc_now(),
+            "counting_rule": "codex_model_turns_and_responses_requests/v1",
+            "live_request_count": 0,
+            "observed_job_ids": [],
+            "pending_job_ids": [],
+            "pre_request_zero_job_ids": [],
+            "sources": [],
+        }
+
+    host_data_root = _formal_host_data_root(campaign_dir)
+    capture_root = Path(str(configuration.get("capture_root", "")))
+    if not capture_root.is_absolute() or capture_root == Path("/"):
+        raise VC0CloseoutError("Formal Campaign CAPTURE_ROOT 非法")
+    sources: list[dict[str, Any]] = []
+    observed_jobs: set[str] = set()
+    pending_jobs: set[str] = set()
+    zero_jobs: set[str] = set()
+    seen_sources: set[Path] = set()
+    for item in jobs:
+        if not isinstance(item, Mapping) or item.get("phase") != "official":
+            continue
+        job_id = str(item.get("id", ""))
+        if not SAFE_ID_RE.fullmatch(job_id):
+            raise VC0CloseoutError("Formal official Job ID 非法")
+        evidence_roots = item.get("evidence_roots")
+        if not isinstance(evidence_roots, list):
+            raise VC0CloseoutError(f"{job_id} evidence_roots 非数组")
+        roots: list[Path] = []
+        for value in evidence_roots:
+            base = _map_container_evidence_root(
+                value,
+                capture_root=capture_root,
+                host_data_root=host_data_root,
+            )
+            roots.extend(_failed_attempt_roots(base))
+        logs = _job_logs(campaign_dir, job_id)
+        if not roots and not logs:
+            pending_jobs.add(job_id)
+            continue
+        observed_jobs.add(job_id)
+        supported = False
+        for root in roots:
+            manifest_path = root / "manifest.json"
+            if manifest_path.is_file() and not manifest_path.is_symlink():
+                resolved = manifest_path.resolve(strict=True)
+                if resolved not in seen_sources:
+                    count = _capture_manifest_live_requests(resolved)
+                    sources.append(
+                        {
+                            "kind": "official_capture_turns",
+                            "path": str(resolved),
+                            "sha256": _sha256_file(resolved),
+                            "live_request_count": count,
+                        }
+                    )
+                    seen_sources.add(resolved)
+                supported = True
+            for summary_path in (
+                root / "result" / "direct" / "summary.json",
+                root / "result" / "mitm" / "summary.json",
+            ):
+                if summary_path.is_file() and not summary_path.is_symlink():
+                    resolved = summary_path.resolve(strict=True)
+                    if resolved not in seen_sources:
+                        count = _compact_summary_live_requests(resolved)
+                        sources.append(
+                            {
+                                "kind": "compact_completed_turns",
+                                "path": str(resolved),
+                                "sha256": _sha256_file(resolved),
+                                "live_request_count": count,
+                            }
+                        )
+                        seen_sources.add(resolved)
+                    supported = True
+            relay_sources = _relay_live_request_sources(root)
+            if relay_sources:
+                supported = True
+            for source in relay_sources:
+                resolved = Path(str(source["path"])).resolve(strict=True)
+                if resolved not in seen_sources:
+                    sources.append(source)
+                    seen_sources.add(resolved)
+        # HTTP fallback 的探针只在容器 localhost 返回受控响应，不转发上游；
+        # 无 run root 且固定前置失败标记也证明脚本尚未启动任何客户端请求。
+        if not supported:
+            if job_id == "official-http-fallback" or _logs_prove_pre_request_failure(logs):
+                zero_jobs.add(job_id)
+            else:
+                raise VC0CloseoutError(
+                    f"{job_id} 已开始但没有可闭合的 live 请求计数来源"
+                )
+    sources.sort(key=lambda source: (str(source["path"]), str(source["kind"])))
+    return {
+        "schema_version": LIVE_REQUEST_AUDIT_SCHEMA,
+        "status": "complete",
+        "campaign_id": formal_campaign_id,
+        "observed_at_utc": observed_at_utc or _utc_now(),
+        "counting_rule": "codex_model_turns_and_responses_requests/v1",
+        "live_request_count": sum(
+            int(source["live_request_count"]) for source in sources
+        ),
+        "observed_job_ids": sorted(observed_jobs),
+        "pending_job_ids": sorted(pending_jobs),
+        "pre_request_zero_job_ids": sorted(zero_jobs),
+        "sources": sources,
+    }
+
+
+def _publish_failure_live_request_audit(
+    timing_ledger_dir: Path,
+    *,
+    formal_campaign_id: str,
+    audit: Mapping[str, Any],
+    filename: str,
+) -> dict[str, Any]:
+    """把计数收据一次性写入既有 VC-0 收口命名空间。"""
+
+    receipt_root = _private_directory(
+        timing_ledger_dir / "receipts" / "vc0-closeout" / formal_campaign_id,
+        "VC-0 收口收据目录",
+    )
+    path = receipt_root / filename
+    _write_once(path, audit)
+    return {
+        "role": "live_request_accounting",
+        "path": path.relative_to(timing_ledger_dir).as_posix(),
+        "sha256": _sha256_file(path),
+    }
+
+
 def _close_failed_timing_stage(
     timing_ledger_dir: Path,
     *,
+    formal_campaign_dir: Path,
     formal_campaign_id: str,
     failed_step: str,
 ) -> dict[str, Any]:
@@ -1422,6 +1752,17 @@ def _close_failed_timing_stage(
         "保留全部不可变现场，按 Framework §5.3.4 从最后合法 checkpoint "
         "审计并恢复；不得重置原 deadline 或重发已通过请求"
     )
+    audit = build_live_request_audit(
+        formal_campaign_dir,
+        formal_campaign_id=formal_campaign_id,
+    )
+    live_request_count = int(audit["live_request_count"])
+    audit_binding = _publish_failure_live_request_audit(
+        timing_ledger_dir,
+        formal_campaign_id=formal_campaign_id,
+        audit=audit,
+        filename=f"failure-live-request-audit-{digest}.json",
+    )
     if summary.get("status") == "stop_required":
         phase = (
             str(active_phase)
@@ -1436,19 +1777,41 @@ def _close_failed_timing_stage(
             phase=phase,
             event_type="stop_the_line",
             root_cause_id=root_cause_id,
-            live_request_count=0,
+            live_request_count=live_request_count,
+            receipts=[audit_binding],
             next_action=next_action,
         )
         return {
             "status": "stop-the-line-recorded",
             "event_id": event_id,
             "head_sha256": closed.get("head_sha256"),
+            "live_request_count": live_request_count,
+            "live_request_audit": audit_binding,
         }
+    accounting_event_id = f"vc0-closeout-live-audit-{digest}"
+    accounting_phase = (
+        str(active_phase)
+        if active_phase in codex_upgrade_timing_ledger.PHASE_ORDER
+        else "VC-1"
+        if f"{formal_campaign_id}-vc1-started" in written_ids
+        else "VC-0"
+    )
+    accounted = codex_upgrade_timing_ledger.append_event(
+        timing_ledger_dir,
+        event_id=accounting_event_id,
+        phase=accounting_phase,
+        event_type="receipt_passed",
+        receipts=[audit_binding],
+        live_request_count=live_request_count,
+        next_action=next_action,
+    )
     if active_phase not in codex_upgrade_timing_ledger.PHASE_ORDER:
         return {
             "status": "between-stages",
             "event_id": None,
-            "head_sha256": summary.get("head_sha256"),
+            "head_sha256": accounted.get("head_sha256"),
+            "live_request_count": live_request_count,
+            "live_request_audit": audit_binding,
         }
     closed = codex_upgrade_timing_ledger.append_event(
         timing_ledger_dir,
@@ -1464,6 +1827,8 @@ def _close_failed_timing_stage(
         "event_id": event_id,
         "phase": active_phase,
         "head_sha256": closed.get("head_sha256"),
+        "live_request_count": live_request_count,
+        "live_request_audit": audit_binding,
     }
 
 
@@ -1518,6 +1883,109 @@ def _write_failure(
     except BaseException:
         # 原始异常优先；audit 目录和已有不可变文件仍保留现场。
         pass
+
+
+def repair_failure_live_request_accounting(
+    *,
+    formal_campaign_dir: Path,
+    timing_ledger_dir: Path,
+    audit_dir: Path,
+) -> dict[str, Any]:
+    """只追加修复旧失败事件漏记的 live 请求量，不改写任何历史文件。"""
+
+    os.umask(0o077)
+    audit_root = _new_private_directory(audit_dir, "live 请求修复审计目录")
+    request = {
+        "schema_version": "codex-upgrade-live-request-accounting-repair-request/v1",
+        "formal_campaign_dir": str(formal_campaign_dir),
+        "timing_ledger_dir": str(timing_ledger_dir),
+        "requested_at_utc": _utc_now(),
+        "history_rewrite_allowed": False,
+    }
+    _write_once(audit_root / "request.json", request)
+    try:
+        campaign_dir = _trusted_directory(formal_campaign_dir, "Formal Campaign")
+        campaign, _raw = _load_json(
+            campaign_dir / "campaign.json",
+            "Formal Campaign",
+        )
+        campaign_id = str(campaign.get("campaign_id", ""))
+        if not SAFE_ID_RE.fullmatch(campaign_id):
+            raise VC0CloseoutError("Formal Campaign ID 非法")
+        ledger_root = _private_directory(timing_ledger_dir, "UpgradeTimingLedger")
+        with _ledger_lock(ledger_root):
+            before = codex_upgrade_timing_ledger.inspect_ledger(ledger_root)
+            if before.get("total_live_request_count") != 0:
+                raise VC0CloseoutError("账本已有 live 请求计量，拒绝重复追加修复")
+            events = codex_upgrade_timing_ledger._load_events(ledger_root)
+            if not any(
+                event.get("event_type") == "stage_abandoned"
+                and str(event.get("event_id", "")).startswith(
+                    "vc0-closeout-failure-"
+                )
+                for event, _event_raw in events
+            ):
+                raise VC0CloseoutError("账本没有可修复的 VC-0 closeout 失败事件")
+            audit = build_live_request_audit(
+                campaign_dir,
+                formal_campaign_id=campaign_id,
+            )
+            live_request_count = int(audit["live_request_count"])
+            if live_request_count <= 0:
+                raise VC0CloseoutError("审计未取得任何可追加的 live 请求")
+            _write_once(audit_root / "evidence.json", audit)
+            digest = _sha256_bytes(
+                f"{campaign_id}\0historical-live-accounting".encode("utf-8")
+            )[:20]
+            binding = _publish_failure_live_request_audit(
+                ledger_root,
+                formal_campaign_id=campaign_id,
+                audit=audit,
+                filename=f"historical-live-request-audit-{digest}.json",
+            )
+            event_id = f"live-request-accounting-repair-{digest}"
+            appended = codex_upgrade_timing_ledger.append_event(
+                ledger_root,
+                event_id=event_id,
+                phase="VC-1",
+                event_type="receipt_passed",
+                receipts=[binding],
+                live_request_count=live_request_count,
+                next_action=(
+                    "保留原 Campaign 与 deadline，完成工具修复离线闭环后从最近合法 "
+                    "VC-1 checkpoint 恢复 failed/pending 项"
+                ),
+            )
+        receipt = {
+            "schema_version": "codex-upgrade-live-request-accounting-repair/v1",
+            "status": "complete",
+            "completed_at_utc": _utc_now(),
+            "campaign_id": campaign_id,
+            "history_rewritten": False,
+            "live_request_count": live_request_count,
+            "ledger_event_id": event_id,
+            "ledger_head_sequence": appended["head_sequence"],
+            "ledger_head_sha256": appended["head_sha256"],
+            "ledger_receipt": binding,
+        }
+        _write_once(audit_root / "receipt.json", receipt)
+        return receipt
+    except BaseException as error:
+        try:
+            _write_once(
+                audit_root / "failure.json",
+                {
+                    "schema_version": "codex-upgrade-live-request-accounting-repair-failure/v1",
+                    "status": "failed",
+                    "failed_at_utc": _utc_now(),
+                    "error_type": type(error).__name__,
+                    "message": str(error),
+                    "history_rewritten": False,
+                },
+            )
+        except BaseException:
+            pass
+        raise
 
 
 def closeout(arguments: argparse.Namespace) -> dict[str, Any]:
@@ -1776,6 +2244,7 @@ def closeout(arguments: argparse.Namespace) -> dict[str, Any]:
                 with _ledger_lock(timing_root):
                     timing_failure_closure = _close_failed_timing_stage(
                         timing_root,
+                        formal_campaign_dir=formal_campaign_dir,
                         formal_campaign_id=formal_campaign_id,
                         failed_step=step,
                     )
@@ -1830,7 +2299,32 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_accounting_repair_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="只追加修复 VC-0 closeout 失败账本漏记的 live 请求量"
+    )
+    parser.add_argument("--formal-campaign-dir", type=Path, required=True)
+    parser.add_argument("--timing-ledger-dir", type=Path, required=True)
+    parser.add_argument("--audit-dir", type=Path, required=True)
+    return parser
+
+
 def main(argv: list[str] | None = None) -> int:
+    if argv is None:
+        argv = sys.argv[1:]
+    if argv and argv[0] == "repair-failure-accounting":
+        arguments = build_accounting_repair_parser().parse_args(argv[1:])
+        try:
+            receipt = repair_failure_live_request_accounting(
+                formal_campaign_dir=arguments.formal_campaign_dir,
+                timing_ledger_dir=arguments.timing_ledger_dir,
+                audit_dir=arguments.audit_dir,
+            )
+        except (OSError, ValueError, VC0CloseoutError) as error:
+            print(f"Codex live 请求账本修复失败：{error}", file=sys.stderr)
+            return 1
+        print(json.dumps(receipt, ensure_ascii=False, sort_keys=True))
+        return 0
     arguments = build_parser().parse_args(argv)
     try:
         receipt = closeout(arguments)

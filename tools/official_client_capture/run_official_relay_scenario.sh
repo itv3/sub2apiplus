@@ -29,7 +29,9 @@ umask 077
 capture_container=${CAPTURE_CONTAINER:-capture-cli}
 capture_root=${CAPTURE_ROOT:-/root/oauth-capture}
 capture_tool_root=${CAPTURE_TOOL_ROOT:-$capture_root/tools/official_client_capture}
-scrub_tool="$capture_tool_root/scrub_raw_bytes.py"
+host_tool_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+capture_host_data_root=${CAPTURE_HOST_DATA_ROOT:-$(cd -- "$host_tool_root/../.." && pwd -P)}
+scrub_tool="$host_tool_root/scrub_raw_bytes.py"
 run_id=${RUN_ID:?必须提供 RUN_ID}
 model=${MODEL:-gpt-5.4}
 codex_version=${CODEX_VERSION:-0.145.0}
@@ -154,14 +156,32 @@ if [[ $model_catalog_only == 1 && $require_model_receipt != 1 ]]; then
   exit 2
 fi
 
-work_dir="$capture_root/runs/$run_id"
+if [[ $capture_host_data_root != /* || $capture_host_data_root == / || -L $capture_host_data_root || ! -d $capture_host_data_root ]]; then
+  echo "CAPTURE_HOST_DATA_ROOT 必须是可信的非根绝对目录。" >&2
+  exit 2
+fi
+host_runs_root="$capture_host_data_root/runs"
+container_runs_root="$capture_root/runs"
+if [[ -L $host_runs_root || ! -d $host_runs_root ]]; then
+  echo "宿主 runs 根不存在或不可信：$host_runs_root" >&2
+  exit 1
+fi
+host_runs_identity=$(stat -Lc '%d:%i' "$host_runs_root")
+container_runs_identity=$(docker exec "$capture_container" stat -Lc '%d:%i' "$container_runs_root")
+if [[ $host_runs_identity != "$container_runs_identity" ]]; then
+  echo "宿主与容器 runs 根不同源，拒绝发送请求。" >&2
+  exit 1
+fi
+
+work_dir="$host_runs_root/$run_id"
+container_work_dir="$container_runs_root/$run_id"
 tls_dir="$work_dir/tls"
-ca_full="$capture_root/state/mitm/mitmproxy-ca.pem"
-ca_cert="$capture_root/state/mitm/mitmproxy-ca-cert.pem"
+ca_full="$capture_host_data_root/state/mitm/mitmproxy-ca.pem"
+ca_cert="$capture_host_data_root/state/mitm/mitmproxy-ca-cert.pem"
 
 # 同一 RUN_ID 重跑会留下本轮未覆盖的高编号 conn 文件，后置 glob 可能误把旧命中
 # 当成本轮证据。采集目录必须一次性、不可复用；需要重采就换新 RUN_ID。
-if [[ -e $work_dir ]]; then
+if [[ -e $work_dir || -L $work_dir ]]; then
   echo "RUN_ID 已存在，拒绝混写旧样本：$work_dir" >&2
   exit 2
 fi
@@ -172,7 +192,7 @@ relay_started=0
 # 抓到的域名就是 CLI 真实意图连接的域名——SPEC-EP-002 正是验这一点。
 capture_client_hello=${CAPTURE_CLIENT_HELLO:-0}
 tcpdump_started=0
-pcap_dir="$capture_root/runs/${RUN_ID:-unset}/direct"
+pcap_dir="$work_dir/direct"
 requirements_changed=0
 requirements_backup="/tmp/codex-requirements-$run_id.toml"
 memgen_home=""
@@ -182,7 +202,7 @@ model_catalog_home=""
 auth_backup=""
 auth_before_sha256=""
 # SCN-REALITY-01：目标场景的原始观测落在这里，供 build_scenario_facts.py 解析。
-observation_dir="$capture_root/runs/${RUN_ID:-unset}/scenario-observations"
+observation_dir="$work_dir/scenario-observations"
 
 write_observation() {
   # 只写事实，不判成败；判定由收据构建器按契约做。
@@ -1445,13 +1465,13 @@ if [[ $require_model_receipt == 1 ]]; then
   # 与 evidence root 均以相同绝对路径挂载，因此在 capture-cli 内生成最终收据。
   docker exec "$capture_container" \
     python3 "$capture_tool_root/model_condition_receipts.py" \
-    --run-root "$work_dir" \
-    --output "$work_dir/model-condition-receipt.json" \
+    --run-root "$container_work_dir" \
+    --output "$container_work_dir/model-condition-receipt.json" \
     --job-id "${SCENARIO_JOB_ID:?模型收据要求 SCENARIO_JOB_ID}" \
     --run-id "$run_id" \
     --track "$model_track" \
     --model "$model" \
-    --model-catalog-prewarm "$work_dir/model-catalog-prewarm.json" \
+    --model-catalog-prewarm "$container_work_dir/model-catalog-prewarm.json" \
     --expect-use-responses-lite "$expect_lite"
 fi
 
@@ -1474,7 +1494,7 @@ if [[ -n $target_scenario ]]; then
   if [[ $target_scenario == A14 ]]; then
     scenario_fact_args+=(--a14-c2pa-expectation "$a14_c2pa_expectation")
   fi
-  if ! python3 "$capture_tool_root/build_scenario_facts.py" \
+  if ! python3 "$host_tool_root/build_scenario_facts.py" \
     --scenario "$target_scenario" \
     --job-id "${SCENARIO_JOB_ID:-official-relay-$scenario}" \
     --run-id "$run_id" \

@@ -6,6 +6,10 @@ capture_container=${CAPTURE_CONTAINER:-capture-cli}
 capture_root=${CAPTURE_ROOT:-/root/oauth-capture}
 capture_tool_root=${CAPTURE_TOOL_ROOT:-$capture_root/tools/official_client_capture}
 capture_runtime_root=${CAPTURE_RUNTIME_ROOT:-$capture_tool_root/runtime_scripts}
+# CAPTURE_ROOT 是容器内逻辑根，不能再被宿主 shell 当作可写路径。Formal 工具
+# 默认从自身受管部署位置反推宿主数据根；显式变量用于离线夹具与非标准部署。
+host_tool_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+capture_host_data_root=${CAPTURE_HOST_DATA_ROOT:-$(cd -- "$host_tool_root/../.." && pwd -P)}
 codex_model=${CODEX_MODEL:-gpt-5.4}
 codex_version=${CODEX_VERSION:-0.145.0}
 codex_bin=${CODEX_BIN:-/root/.local/bin/codex}
@@ -13,6 +17,26 @@ run_id=${RUN_ID:-"official-codex-compact-$(date -u +%Y%m%dT%H%M%SZ)"}
 subject=codex-compact
 direct_started=0
 mitm_started=0
+
+verify_storage_mapping() {
+  if [[ $capture_host_data_root != /* || $capture_host_data_root == / || -L $capture_host_data_root || ! -d $capture_host_data_root ]]; then
+    echo "CAPTURE_HOST_DATA_ROOT 必须是可信的非根绝对目录。" >&2
+    exit 2
+  fi
+  local host_runs="$capture_host_data_root/runs"
+  local container_runs="$capture_root/runs"
+  if [[ -L $host_runs || ! -d $host_runs ]]; then
+    echo "宿主 runs 根不存在或不可信：$host_runs" >&2
+    exit 1
+  fi
+  local host_runs_identity container_runs_identity
+  host_runs_identity=$(stat -Lc '%d:%i' "$host_runs")
+  container_runs_identity=$(docker exec "$capture_container" stat -Lc '%d:%i' "$container_runs")
+  if [[ $host_runs_identity != "$container_runs_identity" ]]; then
+    echo "宿主与容器 runs 根不同源，拒绝发送请求。" >&2
+    exit 1
+  fi
+}
 
 cleanup() {
   local original_exit_code=$?
@@ -28,6 +52,13 @@ cleanup() {
 }
 trap cleanup EXIT ERR INT TERM
 
+verify_storage_mapping
+host_run_root="$capture_host_data_root/runs/$run_id"
+if [[ -e $host_run_root || -L $host_run_root ]]; then
+  echo "RUN_ID 已存在，拒绝混写旧样本：$host_run_root" >&2
+  exit 2
+fi
+install -d -m 0700 "$host_run_root"
 direct_output="/capture/runs/$run_id/result/direct"
 docker exec "$capture_container" "$capture_runtime_root/start_direct.sh" \
   "$run_id" "$subject" "$capture_container"
@@ -62,7 +93,7 @@ docker exec \
 docker exec "$capture_container" "$capture_runtime_root/stop_mitm.sh"
 mitm_started=0
 
-python3 - "$capture_root/runs/$run_id" "$run_id" "$codex_model" <<'PY'
+python3 - "$host_run_root" "$run_id" "$codex_model" <<'PY'
 import hashlib
 import json
 import os

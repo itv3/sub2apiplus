@@ -1969,7 +1969,7 @@ class OfficialCaptureScriptTest(unittest.TestCase):
         # 且 A13 的还原前后摘要还没产生。这里比的是实际调用点，不是注释。
         scrub = self.source.index('mv -- "$scrubbed_relay"')
         restore = self.source.index("restore_auth_json\n\n# SCN-REALITY-01")
-        build = self.source.index('"$capture_tool_root/build_scenario_facts.py"')
+        build = self.source.index('"$host_tool_root/build_scenario_facts.py"')
         self.assertLess(scrub, restore)
         self.assertLess(restore, build)
 

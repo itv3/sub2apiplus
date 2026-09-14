@@ -205,8 +205,216 @@ class VC0CloseoutTests(unittest.TestCase):
                 },
             },
         }
-        self._write(campaign_dir / "campaign.json", manifest)
+        campaign_path = self._write(campaign_dir / "campaign.json", manifest)
+        digest_path = campaign_dir / "campaign.sha256"
+        digest_path.write_text(
+            closeout._sha256_file(campaign_path) + "\n",
+            encoding="ascii",
+        )
+        digest_path.chmod(0o600)
         return manifest
+
+    def _live_request_fixture(self, root: Path) -> tuple[Path, Path]:
+        """构造完成、失败归档、relay、前置失败和待执行混合现场。"""
+
+        data_root = root / "data"
+        campaign_dir = data_root / "evidence" / "campaigns" / "formal-live"
+        campaign_dir.mkdir(parents=True, mode=0o700)
+        data_root.chmod(0o700)
+        runs_root = data_root / "runs"
+        runs_root.mkdir(mode=0o700)
+
+        core_root = runs_root / "core"
+        self._write(
+            core_root / "manifest.json",
+            {
+                "schema_version": "official-client-capture/v1",
+                "case_results": [
+                    {"scenario_result": {"turn_count": 1}},
+                    {"scenario_result": {"turn_count": 2}},
+                ],
+            },
+        )
+        for attempt, turns in ((1, 2), (2, 1)):
+            self._write(
+                runs_root
+                / f"compact.failed-attempt{attempt}"
+                / "result"
+                / "direct"
+                / "summary.json",
+                {
+                    "schema_version": "codex-compact-capture/v1",
+                    "turn_completed_count": turns,
+                },
+            )
+
+        relay_root = runs_root / "relay" / "relay"
+        relay_root.mkdir(parents=True, mode=0o700)
+        request_bodies = []
+        for model in ("gpt-5.5", "gpt-6-astra"):
+            body = json.dumps(
+                {"model": model, "input": []},
+                separators=(",", ":"),
+            ).encode("utf-8")
+            request_bodies.append(
+                b"POST /backend-api/codex/responses HTTP/1.1\r\n"
+                b"content-type: application/json\r\n"
+                + f"content-length: {len(body)}\r\n\r\n".encode("ascii")
+                + body
+            )
+        request_path = relay_root / "conn001.client_to_upstream.bin"
+        request_path.write_bytes(b"".join(request_bodies))
+        request_path.chmod(0o600)
+
+        log_path = (
+            campaign_dir
+            / "official"
+            / "attempts"
+            / "attempt-1"
+            / "logs"
+            / "pre-request-job-1.log"
+        )
+        log_path.parent.mkdir(parents=True, mode=0o700)
+        log_path.write_text(
+            "mkdir: cannot create directory: Read-only file system\n",
+            encoding="utf-8",
+        )
+        log_path.chmod(0o600)
+
+        jobs = [
+            {
+                "id": "official-core",
+                "phase": "official",
+                "evidence_roots": ["/root/oauth-capture/runs/core"],
+            },
+            {
+                "id": "official-compact",
+                "phase": "official",
+                "evidence_roots": ["/root/oauth-capture/runs/compact"],
+            },
+            {
+                "id": "official-relay",
+                "phase": "official",
+                "evidence_roots": ["/root/oauth-capture/runs/relay"],
+            },
+            {
+                "id": "pre-request-job",
+                "phase": "official",
+                "evidence_roots": ["/root/oauth-capture/runs/pre-request"],
+            },
+            {
+                "id": "pending-job",
+                "phase": "official",
+                "evidence_roots": ["/root/oauth-capture/runs/pending"],
+            },
+        ]
+        campaign_path = self._write(
+            campaign_dir / "campaign.json",
+            {
+                "campaign_id": "formal-live",
+                "campaign_mode": "formal",
+                "configuration": {"capture_root": "/root/oauth-capture"},
+                "jobs": jobs,
+            },
+        )
+        digest_path = campaign_dir / "campaign.sha256"
+        digest_path.write_text(
+            closeout._sha256_file(campaign_path) + "\n",
+            encoding="ascii",
+        )
+        digest_path.chmod(0o600)
+        return data_root, campaign_dir
+
+    def test_live_request_audit_counts_mixed_formal_evidence(self) -> None:
+        """逐一覆盖完成、失败归档、relay、前置失败和 pending 口径。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _data_root, campaign_dir = self._live_request_fixture(root)
+            audit = closeout.build_live_request_audit(
+                campaign_dir,
+                formal_campaign_id="formal-live",
+                observed_at_utc="2026-09-13T23:00:00Z",
+            )
+
+        self.assertEqual(audit["live_request_count"], 8)
+        self.assertEqual(
+            audit["observed_job_ids"],
+            [
+                "official-compact",
+                "official-core",
+                "official-relay",
+                "pre-request-job",
+            ],
+        )
+        self.assertEqual(audit["pending_job_ids"], ["pending-job"])
+        self.assertEqual(audit["pre_request_zero_job_ids"], ["pre-request-job"])
+        self.assertEqual(
+            sorted(source["live_request_count"] for source in audit["sources"]),
+            [1, 2, 2, 3],
+        )
+
+    def test_failure_accounting_repair_is_append_only_and_not_repeatable(self) -> None:
+        """历史失败事件保持逐字不变，计数只能追加一次。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            data_root, campaign_dir = self._live_request_fixture(root)
+            ledger_root = data_root / "control" / "timing-ledger"
+            ledger_root.parent.mkdir(parents=True, mode=0o700)
+            now = datetime.now(timezone.utc)
+            timing.create_ledger(
+                ledger_root,
+                upgrade_id="upgrade-0154",
+                baseline_version="0.151.0",
+                target_version="0.154.0",
+                campaign_purpose="production_replacement",
+                evidence_decision="recapture",
+                started_at_utc=(now - timedelta(minutes=10)).isoformat(),
+            )
+            timing.append_event(
+                ledger_root,
+                event_id="vc0-closeout-failure-fixture",
+                phase="VC-0",
+                event_type="stage_abandoned",
+                root_cause_id="capture-path-fixture",
+                next_action="完成工具修复后恢复 VC-1",
+                recorded_at_utc=(now - timedelta(minutes=5)).isoformat(),
+            )
+            historical = {
+                path.name: path.read_bytes()
+                for path in sorted((ledger_root / "events").iterdir())
+            }
+            receipt_root = (
+                ledger_root / "receipts" / "vc0-closeout" / "formal-live"
+            )
+            receipt_root.mkdir(parents=True, mode=0o700)
+            audit_parent = data_root / "audit"
+            audit_parent.mkdir(mode=0o700)
+
+            receipt = closeout.repair_failure_live_request_accounting(
+                formal_campaign_dir=campaign_dir,
+                timing_ledger_dir=ledger_root,
+                audit_dir=audit_parent / "repair-1",
+            )
+            self.assertEqual(receipt["live_request_count"], 8)
+            self.assertFalse(receipt["history_rewritten"])
+            self.assertEqual(
+                timing.inspect_ledger(ledger_root)["total_live_request_count"],
+                8,
+            )
+            for name, raw in historical.items():
+                self.assertEqual((ledger_root / "events" / name).read_bytes(), raw)
+
+            with self.assertRaisesRegex(
+                closeout.VC0CloseoutError,
+                "已有 live 请求计量",
+            ):
+                closeout.repair_failure_live_request_accounting(
+                    formal_campaign_dir=campaign_dir,
+                    timing_ledger_dir=ledger_root,
+                    audit_dir=audit_parent / "repair-2",
+                )
 
     def test_recovers_every_formal_plan_parameter_from_preflight(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

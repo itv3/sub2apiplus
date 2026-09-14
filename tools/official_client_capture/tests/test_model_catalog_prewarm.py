@@ -149,7 +149,7 @@ class ModelCatalogPrewarmTest(unittest.TestCase):
         self.assertIn("drive_codex_model_catalog.py", source)
         self.assertIn('--relay-dir "/capture/runs/$run_id/relay"', source)
         self.assertIn(
-            '--model-catalog-prewarm "$work_dir/model-catalog-prewarm.json"',
+            '--model-catalog-prewarm "$container_work_dir/model-catalog-prewarm.json"',
             source,
         )
         self.assertIn("for attempt in 1 2 3", source)
