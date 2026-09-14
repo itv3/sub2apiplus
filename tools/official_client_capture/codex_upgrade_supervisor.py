@@ -46,6 +46,40 @@ CAMPAIGN_RUN_BATCHED_SCHEMA = "codex-upgrade-campaign-run/v2"
 CAMPAIGN_RUN_RECOVERY_SCHEMA = "codex-upgrade-campaign-run/v3"
 CAMPAIGN_RUN_RECOVERY_CONTINUATION_SCHEMA = "codex-upgrade-campaign-run/v4"
 CAMPAIGN_RUN_RECOVERY_FINALIZATION_SCHEMA = "codex-upgrade-campaign-run/v5"
+# 2026-09-14：0.154 首轮正式 VC-1 的 sequence 2 已完成 assertion bundle，
+# 但 seal 在读取证据正文前因历史目录权限为 0755/0644 而失败。sequence 3 已在
+# 失败后、工具修复前不可覆盖地编译，因此不能追加恢复字段。以下身份只为这一条
+# 已冻结 v2→v2 权限补偿边提供 fail-close 锚点，不得复用为普通失败重试机制。
+VC1_PERMISSION_COMPENSATION_CAMPAIGN_ID = (
+    "c0154-formal-vc1-bwg-new-window-20260914t100818z"
+)
+VC1_PERMISSION_COMPENSATION_CAMPAIGN_PLAN_SHA256 = (
+    "ac13ad0e159050a872a42b26b7f7b8966e85488a9a86ab7af0b93219441f797c"
+)
+VC1_PERMISSION_COMPENSATION_FAILED_BATCH_SHA256 = (
+    "8dc9756311f232a330216c0562f05ec7301eb9370106e8e63e6d6d3a2f53d92b"
+)
+VC1_PERMISSION_COMPENSATION_SUCCESSOR_BATCH_SHA256 = (
+    "6a3aa65e451a76d0608125e594f3d2164c76e8212fabd051a379c3c975eb64df"
+)
+VC1_PERMISSION_COMPENSATION_ATTEMPT_ID = (
+    "20260914T102852Z-04996800fbbe4e94"
+)
+VC1_PERMISSION_COMPENSATION_ATTEMPT_SHA256 = (
+    "2fe5677bdc05dda3b8089ca07fa176aa76f07499867f2ca64785dc73769dd0c7"
+)
+VC1_PERMISSION_COMPENSATION_ROOTS_SHA256 = (
+    "ae45b6f54c7d2333a5cdf80c5a42aa8510bc2f0083df381c2a3ed53b1116fe2d"
+)
+VC1_PERMISSION_COMPENSATION_HELPER_SHA256 = (
+    "0d2f432beb6684d7bb9a427134b93b28b99179c349ef1f447b7b7a8339b72d0a"
+)
+VC1_PERMISSION_COMPENSATION_ACTION_PLAN_SHA256 = (
+    "6fd7f67d5f003520ccab7ceea23a78e6f91a6301a253a750455865860a779ec1"
+)
+VC1_PERMISSION_COMPENSATION_DIAGNOSTIC_SHA256 = (
+    "7fc4cf19ad4fb586d83242e9ae89baea96880545d80b5a559822cfdb12b1ceb6"
+)
 CAMPAIGN_RUN_LOCK_FILENAME = ".campaign-run.lock"
 # campaign-run 启动的子命令通过这些只读环境变量复用同一个父监督器。
 # 子进程不得自行创建第二个监督器；身份仍以父 run_dir/state.json 为准。
@@ -5039,11 +5073,615 @@ def _recovery_finalization_predecessor_from_run(
     }
 
 
+def _permission_compensation_private_directory(path: Path, label: str) -> None:
+    """校验一次性权限补偿控制目录的属主、类型和最小权限。"""
+
+    if not path.is_absolute():
+        raise SupervisorError(f"{label} 必须是绝对路径。")
+    _reject_symlink_components(path)
+    try:
+        metadata = path.lstat()
+    except OSError as error:
+        raise SupervisorError(f"{label} 无法读取。") from error
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+        or metadata.st_gid != os.getegid()
+        or stat.S_IMODE(metadata.st_mode) != 0o700
+    ):
+        raise SupervisorError(f"{label} 必须是当前执行用户和组拥有的 0700 目录。")
+
+
+def _permission_compensation_private_file(path: Path, label: str) -> bytes:
+    """以 no-follow fd 读取一次性权限补偿文件并锁定 inode 边界。"""
+
+    if not path.is_absolute():
+        raise SupervisorError(f"{label} 必须是绝对路径。")
+    _reject_symlink_components(path)
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as error:
+        raise SupervisorError(f"{label} 无法安全打开。") from error
+    try:
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_uid != os.geteuid()
+            or before.st_gid != os.getegid()
+            or stat.S_IMODE(before.st_mode) != 0o600
+            or before.st_nlink != 1
+        ):
+            raise SupervisorError(
+                f"{label} 必须是当前执行用户和组拥有、无额外硬链接的 0600 普通文件。"
+            )
+        chunks: list[bytes] = []
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        after = os.fstat(descriptor)
+        if (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+            before.st_mtime_ns,
+            before.st_nlink,
+        ) != (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            after.st_mtime_ns,
+            after.st_nlink,
+        ):
+            raise SupervisorError(f"{label} 在读取期间发生漂移。")
+        return b"".join(chunks)
+    finally:
+        os.close(descriptor)
+
+
+def _permission_compensation_json(raw: bytes, label: str) -> dict[str, Any]:
+    """解析一次性权限补偿绑定的 UTF-8 JSON 对象。"""
+
+    try:
+        value = json.loads(raw.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as error:
+        raise SupervisorError(f"{label} 不是有效 UTF-8 JSON。") from error
+    if not isinstance(value, dict):
+        raise SupervisorError(f"{label} 顶层必须是对象。")
+    return value
+
+
+def _permission_compensation_events(
+    run_dir: Path,
+    *,
+    campaign_id: str,
+    owner_pid: int,
+    owner_nonce: str,
+) -> list[dict[str, Any]]:
+    """只读重放失败批次事件摘要链，并返回绑定同一父身份的事件。"""
+
+    raw = _permission_compensation_private_file(
+        run_dir / "events.ndjson",
+        "权限补偿前序事件账本",
+    )
+    records: list[dict[str, Any]] = []
+    previous_digest: str | None = None
+    for line_number, line in enumerate(raw.splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError as error:
+            raise SupervisorError(
+                f"权限补偿前序事件账本第 {line_number} 行损坏。"
+            ) from error
+        if not isinstance(event, dict):
+            raise SupervisorError(
+                f"权限补偿前序事件账本第 {line_number} 行不是对象。"
+            )
+        unsigned = dict(event)
+        digest = unsigned.pop("event_sha256", None)
+        if (
+            event.get("schema_version") != EVENT_SCHEMA
+            or event.get("sequence") != len(records) + 1
+            or event.get("previous_event_sha256") != previous_digest
+            or not isinstance(digest, str)
+            or digest != _sha256(_canonical(unsigned))
+            or event.get("campaign_id") != campaign_id
+            or event.get("phase") != "VC-1"
+            or event.get("owner_pid") != owner_pid
+            or event.get("owner_nonce") != owner_nonce
+        ):
+            raise SupervisorError("权限补偿前序事件身份或摘要链漂移。")
+        records.append(event)
+        previous_digest = digest
+    if not records:
+        raise SupervisorError("权限补偿前序事件账本为空。")
+    return records
+
+
+def _permission_compensation_command_value(
+    command: Sequence[str],
+    flag: str,
+) -> str:
+    """从冻结命令中取得唯一旗标值，拒绝缺失、重复或无值。"""
+
+    if command.count(flag) != 1:
+        raise SupervisorError(f"权限补偿命令 {flag} 必须且只能出现一次。")
+    index = command.index(flag)
+    if index + 1 >= len(command):
+        raise SupervisorError(f"权限补偿命令 {flag} 缺少值。")
+    return command[index + 1]
+
+
+def _validate_permission_preflight_compensation_successor(
+    prior_state: Mapping[str, Any],
+    prior_manifest: Mapping[str, Any],
+    prior_dir: Path,
+    successor_manifest: Mapping[str, Any],
+) -> bool:
+    """验证 0.154 VC-1 唯一 seal 权限前检补偿 v2 后继。
+
+    返回 ``False`` 表示当前清单根本不是这条一次性边，调用方继续使用原有
+    v2→v3 通用失败关闭规则；一旦命中本 Campaign 的 sequence 3，则任一
+    身份、文件、动作或收据漂移都会抛错，不能降级为普通 v2 重试。
+    """
+
+    if (
+        successor_manifest.get("schema_version") != CAMPAIGN_RUN_BATCHED_SCHEMA
+        or successor_manifest.get("campaign_id")
+        != VC1_PERMISSION_COMPENSATION_CAMPAIGN_ID
+        or successor_manifest.get("batch_sequence") != 3
+    ):
+        return False
+
+    campaign_id = VC1_PERMISSION_COMPENSATION_CAMPAIGN_ID
+    if (
+        prior_manifest.get("schema_version") != CAMPAIGN_RUN_BATCHED_SCHEMA
+        or prior_manifest.get("campaign_id") != campaign_id
+        or prior_manifest.get("campaign_plan_sha256")
+        != VC1_PERMISSION_COMPENSATION_CAMPAIGN_PLAN_SHA256
+        or successor_manifest.get("campaign_plan_sha256")
+        != VC1_PERMISSION_COMPENSATION_CAMPAIGN_PLAN_SHA256
+        or prior_manifest.get("batch_sequence") != 2
+        or prior_manifest.get("batch_sha256")
+        != VC1_PERMISSION_COMPENSATION_FAILED_BATCH_SHA256
+        or successor_manifest.get("batch_sha256")
+        != VC1_PERMISSION_COMPENSATION_SUCCESSOR_BATCH_SHA256
+        or prior_manifest.get("phase") != "VC-1"
+        or successor_manifest.get("phase") != "VC-1"
+        or prior_manifest.get("predecessor_checkpoint")
+        != successor_manifest.get("predecessor_checkpoint")
+    ):
+        raise SupervisorError("VC-1 权限前检补偿的 Campaign 或批次身份漂移。")
+
+    _permission_compensation_private_directory(
+        prior_dir,
+        "权限补偿前序 run 目录",
+    )
+    state_path = prior_dir / "state.json"
+    recorded_state = _permission_compensation_json(
+        _permission_compensation_private_file(
+            state_path,
+            "权限补偿前序 state",
+        ),
+        "权限补偿前序 state",
+    )
+    if recorded_state != dict(prior_state):
+        raise SupervisorError("VC-1 权限前检补偿的前序 state 读取值漂移。")
+    owner_pid = prior_state.get("owner_pid")
+    owner_nonce = prior_state.get("owner_nonce")
+    if (
+        prior_state.get("state") != "failed"
+        or prior_state.get("campaign_id") != campaign_id
+        or prior_state.get("phase") != "VC-1"
+        or isinstance(owner_pid, bool)
+        or not isinstance(owner_pid, int)
+        or owner_pid <= 0
+        or not isinstance(owner_nonce, str)
+        or not owner_nonce
+    ):
+        raise SupervisorError("VC-1 权限前检补偿的前序 state 终态或父身份非法。")
+
+    manifest_record = _permission_compensation_json(
+        _permission_compensation_private_file(
+            prior_dir / "campaign-run-manifest.json",
+            "权限补偿前序 run manifest",
+        ),
+        "权限补偿前序 run manifest",
+    )
+    if (
+        set(manifest_record) != {"schema_version", "manifest", "manifest_sha256"}
+        or manifest_record.get("schema_version") != CAMPAIGN_RUN_BATCHED_SCHEMA
+        or manifest_record.get("manifest") != dict(prior_manifest)
+        or manifest_record.get("manifest_sha256")
+        != _sha256(_canonical(dict(prior_manifest)))
+    ):
+        raise SupervisorError("VC-1 权限前检补偿的前序 run manifest 漂移。")
+
+    stop = _permission_compensation_json(
+        _permission_compensation_private_file(
+            prior_dir / "stop-receipt.json",
+            "权限补偿前序 stop receipt",
+        ),
+        "权限补偿前序 stop receipt",
+    )
+    unsigned_stop = dict(stop)
+    stop_digest = unsigned_stop.pop("receipt_sha256", None)
+    if (
+        stop.get("schema_version") != STOP_SCHEMA
+        or stop.get("event_type") != "failed"
+        or stop.get("reason") != "action-failed:seal-official-preview"
+        or stop.get("campaign_id") != campaign_id
+        or stop.get("phase") != "VC-1"
+        or stop.get("owner_pid") != owner_pid
+        or stop.get("owner_nonce") != owner_nonce
+        or stop_digest != _sha256(_canonical(unsigned_stop))
+    ):
+        raise SupervisorError("VC-1 权限前检补偿的前序 stop receipt 漂移。")
+
+    diagnostic_path = _action_diagnostic_path(
+        prior_dir,
+        "seal-official-preview",
+        create_directory=False,
+    )
+    diagnostic = _validate_action_diagnostic(
+        diagnostic_path,
+        run_dir=prior_dir,
+        campaign_id=campaign_id,
+        phase="VC-1",
+        action_id="seal-official-preview",
+        owner_pid=owner_pid,
+        owner_nonce=owner_nonce,
+    )
+    diagnostic_raw = _permission_compensation_private_file(
+        diagnostic_path,
+        "权限补偿前序 seal 诊断",
+    )
+    message_prefix = (
+        "seal 廉价前检失败（scanned_bytes=0）：证据目录向 group/other 开放，"
+        "必须先修正权限："
+    )
+    message = diagnostic.get("message")
+    if (
+        diagnostic.get("diagnostic_sha256")
+        != VC1_PERMISSION_COMPENSATION_DIAGNOSTIC_SHA256
+        or diagnostic.get("failure_kind") != "handled-error"
+        or diagnostic.get("error_type") != "ConfigurationError"
+        or not isinstance(message, str)
+        or not message.startswith(message_prefix)
+        or not message.removeprefix(message_prefix)
+    ):
+        raise SupervisorError(
+            "VC-1 权限前检补偿的失败诊断不是 scanned_bytes=0 权限前检。"
+        )
+
+    prior_actions = prior_manifest.get("actions")
+    successor_actions = successor_manifest.get("actions")
+    if (
+        not isinstance(prior_actions, list)
+        or len(prior_actions) != 2
+        or not isinstance(successor_actions, list)
+        or len(successor_actions) != 2
+    ):
+        raise SupervisorError("VC-1 权限前检补偿的动作数量漂移。")
+    prior_prepare, prior_seal = prior_actions
+    harden_action, successor_seal = successor_actions
+    if not isinstance(prior_seal, dict) or not isinstance(successor_seal, dict):
+        raise SupervisorError("VC-1 权限前检补偿的 seal 动作非法。")
+    seal_command = prior_seal.get("command")
+    if (
+        not isinstance(seal_command, list)
+        or not all(isinstance(value, str) for value in seal_command)
+    ):
+        raise SupervisorError("VC-1 权限前检补偿的 seal 命令非法。")
+    campaign_dir = Path(
+        _permission_compensation_command_value(seal_command, "--campaign-dir")
+    )
+    attempt_id = _permission_compensation_command_value(
+        seal_command,
+        "--attempt-id",
+    )
+    if (
+        not campaign_dir.is_absolute()
+        or campaign_dir.name != campaign_id
+        or campaign_dir.parent.name != "campaigns"
+        or campaign_dir.parent.parent.name != "evidence"
+        or attempt_id != VC1_PERMISSION_COMPENSATION_ATTEMPT_ID
+    ):
+        raise SupervisorError("VC-1 权限前检补偿的 Campaign 或 attempt 路径漂移。")
+    data_root = campaign_dir.parents[2]
+    attempt_root = (
+        campaign_dir / "official" / "attempts" / attempt_id
+    )
+    assertion_root = attempt_root / "evidence" / "assertion-bundle"
+    capture_manifest = assertion_root / "capture-manifest.json"
+    expected_seal_command = [
+        "/usr/bin/python3",
+        str(data_root / "tools/official_client_capture/codex_upgrade.py"),
+        "capture-official",
+        "seal",
+        "--campaign-dir",
+        str(campaign_dir),
+        "--attempt-id",
+        attempt_id,
+        "--capture-manifest",
+        str(capture_manifest),
+        "--assertion-evidence-root",
+        str(assertion_root),
+        "--max-wall-seconds",
+        "1440",
+        "--heartbeat-seconds",
+        "5",
+    ]
+    expected_seal_action = {
+        "action_id": "seal-official-preview",
+        "operation": "VC-1:capture-official-seal-preview",
+        "timeout_seconds": 1500.0,
+        "command": expected_seal_command,
+        "item_ids": ["seal-official-preview"],
+    }
+    expected_prepare_action = {
+        "action_id": "prepare-official-assertion-bundle",
+        "operation": "VC-1:prepare-official-assertion-bundle",
+        "timeout_seconds": 300.0,
+        "command": [
+            "/usr/bin/env",
+            f"CAMPAIGN_DIR={campaign_dir}",
+            f"ATTEMPT_ID={attempt_id}",
+            "SIDE=official",
+            f"REPO_ROOT={data_root}",
+            f"TOOL_ROOT={data_root / 'tools/official_client_capture'}",
+            "/usr/bin/bash",
+            str(data_root / "tools/prepare_assertion_bundle.sh"),
+        ],
+        "item_ids": ["prepare-official-assertion-bundle"],
+    }
+    if (
+        prior_prepare != expected_prepare_action
+        or prior_seal != expected_seal_action
+        or successor_seal != prior_seal
+        or prior_manifest.get("execute_items")
+        != ["prepare-official-assertion-bundle", "seal-official-preview"]
+        or prior_manifest.get("reuse_items") != []
+        or prior_manifest.get("no_op") is not False
+    ):
+        raise SupervisorError(
+            "VC-1 权限前检补偿未逐字复用原 assertion/seal 动作。"
+        )
+
+    events = _permission_compensation_events(
+        prior_dir,
+        campaign_id=campaign_id,
+        owner_pid=owner_pid,
+        owner_nonce=owner_nonce,
+    )
+    prepare_started = [
+        event
+        for event in events
+        if event.get("event_type") == "action-started"
+        and event.get("job_id") == "prepare-official-assertion-bundle"
+    ]
+    prepare_finished = [
+        event
+        for event in events
+        if event.get("event_type") == "action-finished"
+        and event.get("job_id") == "prepare-official-assertion-bundle"
+    ]
+    seal_started = [
+        event
+        for event in events
+        if event.get("event_type") == "action-started"
+        and event.get("job_id") == "seal-official-preview"
+    ]
+    seal_failed = [
+        event
+        for event in events
+        if event.get("event_type") == "action-failed"
+        and event.get("job_id") == "seal-official-preview"
+    ]
+    if (
+        len(prepare_started) != 1
+        or len(prepare_finished) != 1
+        or len(seal_started) != 1
+        or len(seal_failed) != 1
+        or not (
+            prepare_started[0]["sequence"]
+            < prepare_finished[0]["sequence"]
+            < seal_started[0]["sequence"]
+            < seal_failed[0]["sequence"]
+        )
+        or prepare_finished[0].get("operation")
+        != "VC-1:prepare-official-assertion-bundle"
+        or prepare_finished[0].get("status") != "passed"
+        or not isinstance(prepare_finished[0].get("metadata"), dict)
+        or prepare_finished[0]["metadata"].get("returncode") != 0
+        or seal_failed[0].get("operation")
+        != "VC-1:capture-official-seal-preview"
+        or seal_failed[0].get("status") != "failed"
+        or seal_failed[0].get("reason") != "returncode=1"
+        or any(
+            event.get("event_type") == "action-failed"
+            and event.get("job_id") == "prepare-official-assertion-bundle"
+            for event in events
+        )
+        or any(
+            event.get("event_type") == "action-finished"
+            and event.get("job_id") == "seal-official-preview"
+            for event in events
+        )
+    ):
+        raise SupervisorError(
+            "VC-1 权限前检补偿未证明 assertion bundle 成功且 seal 仅前检失败。"
+        )
+
+    _permission_compensation_private_directory(
+        assertion_root,
+        "权限补偿 assertion bundle 目录",
+    )
+    _permission_compensation_private_file(
+        capture_manifest,
+        "权限补偿 capture manifest",
+    )
+    attempt_path = attempt_root / "attempt.json"
+    attempt_raw = _permission_compensation_private_file(
+        attempt_path,
+        "权限补偿 attempt",
+    )
+    attempt = _permission_compensation_json(attempt_raw, "权限补偿 attempt")
+    evidence_roots = attempt.get("evidence_roots")
+    results = attempt.get("results")
+    if (
+        _sha256(attempt_raw) != VC1_PERMISSION_COMPENSATION_ATTEMPT_SHA256
+        or attempt.get("campaign_id") != campaign_id
+        or attempt.get("attempt_id") != attempt_id
+        or attempt.get("status") != "awaiting_receipts"
+        or not isinstance(results, list)
+        or len(results) != 29
+        or any(
+            not isinstance(item, dict) or item.get("status") != "complete"
+            for item in results
+        )
+        or not isinstance(evidence_roots, list)
+        or len(evidence_roots) != 32
+        or any(not isinstance(value, str) for value in evidence_roots)
+        or len(set(evidence_roots)) != 32
+        or _sha256(
+            json.dumps(
+                evidence_roots,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
+        != VC1_PERMISSION_COMPENSATION_ROOTS_SHA256
+    ):
+        raise SupervisorError("VC-1 权限前检补偿的 attempt、Job 或 32 根摘要漂移。")
+    internal_roots = {attempt_root / "evidence", attempt_root / "logs"}
+    result_roots: list[str] = []
+    for result in results:
+        values = result.get("evidence_roots")
+        if (
+            not isinstance(values, list)
+            or not values
+            or any(not isinstance(value, str) for value in values)
+        ):
+            raise SupervisorError("VC-1 权限前检补偿的 Job evidence_roots 不闭合。")
+        result_roots.extend(values)
+    roots = [Path(value) for value in evidence_roots]
+    if set(map(Path, result_roots)) | internal_roots != set(roots):
+        raise SupervisorError("VC-1 权限前检补偿的 Job 根与 attempt 根不闭合。")
+    for index, root in enumerate(roots):
+        if not root.is_absolute():
+            raise SupervisorError("VC-1 权限前检补偿包含非绝对证据根。")
+        _reject_symlink_components(root)
+        try:
+            metadata = root.lstat()
+        except OSError as error:
+            raise SupervisorError("VC-1 权限前检补偿证据根无法读取。") from error
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or metadata.st_gid != os.getegid()
+        ):
+            raise SupervisorError("VC-1 权限前检补偿证据根类型或属主漂移。")
+        for other in roots[index + 1 :]:
+            if root.is_relative_to(other) or other.is_relative_to(root):
+                raise SupervisorError("VC-1 权限前检补偿证据根发生嵌套。")
+    failed_root = Path(message.removeprefix(message_prefix))
+    if failed_root not in roots or stat.S_IMODE(failed_root.lstat().st_mode) & 0o077 == 0:
+        raise SupervisorError("VC-1 权限前检补偿诊断目录不在 32 根或已不再开放。")
+
+    for output in (
+        attempt_root / "evidence-manifest.json",
+        attempt_root / "seal-draft.json",
+        attempt_root / "seal-preview.json",
+    ):
+        if output.exists() or output.is_symlink():
+            raise SupervisorError("VC-1 权限前检补偿前已存在 seal 制品。")
+
+    action_input_dir = data_root / "control" / f"{campaign_id}-action-inputs"
+    helper_path = action_input_dir / "vc1_evidence_permission_closeout.py"
+    action_plan_path = action_input_dir / "vc1-sequence3-action-plan.json"
+    receipt_path = action_input_dir / "sequence3-permission-closeout-receipt.json"
+    expected_harden_command = [
+        "/usr/bin/python3",
+        str(helper_path),
+        "--campaign-id",
+        campaign_id,
+        "--attempt-id",
+        attempt_id,
+        "--attempt",
+        str(attempt_path),
+        "--attempt-sha256",
+        VC1_PERMISSION_COMPENSATION_ATTEMPT_SHA256,
+        "--roots-sha256",
+        VC1_PERMISSION_COMPENSATION_ROOTS_SHA256,
+        "--self-sha256",
+        VC1_PERMISSION_COMPENSATION_HELPER_SHA256,
+        "--receipt",
+        str(receipt_path),
+    ]
+    expected_harden_action = {
+        "action_id": "harden-official-evidence-permissions",
+        "operation": "VC-1:harden-official-evidence-permissions",
+        "timeout_seconds": 120.0,
+        "command": expected_harden_command,
+        "item_ids": ["harden-official-evidence-permissions"],
+    }
+    if (
+        harden_action != expected_harden_action
+        or successor_manifest.get("execute_items")
+        != ["harden-official-evidence-permissions", "seal-official-preview"]
+        or successor_manifest.get("reuse_items")
+        != ["prepare-official-assertion-bundle"]
+        or successor_manifest.get("no_op") is not False
+    ):
+        raise SupervisorError("VC-1 权限前检补偿的 action/reuse 闭集漂移。")
+
+    _permission_compensation_private_directory(
+        action_input_dir,
+        "权限补偿 action-inputs 目录",
+    )
+    helper_raw = _permission_compensation_private_file(
+        helper_path,
+        "权限补偿 helper",
+    )
+    action_plan_raw = _permission_compensation_private_file(
+        action_plan_path,
+        "权限补偿 action plan",
+    )
+    action_plan = _permission_compensation_json(
+        action_plan_raw,
+        "权限补偿 action plan",
+    )
+    expected_action_plan = {
+        "schema_version": "codex-upgrade-vc-action-plan/v1",
+        "execute_item_ids": list(successor_manifest["execute_items"]),
+        "reuse_item_ids": list(successor_manifest["reuse_items"]),
+        "actions": list(successor_manifest["actions"]),
+    }
+    if (
+        _sha256(helper_raw) != VC1_PERMISSION_COMPENSATION_HELPER_SHA256
+        or _sha256(action_plan_raw)
+        != VC1_PERMISSION_COMPENSATION_ACTION_PLAN_SHA256
+        or action_plan != expected_action_plan
+        or receipt_path.exists()
+        or receipt_path.is_symlink()
+    ):
+        raise SupervisorError(
+            "VC-1 权限前检补偿的 helper、action plan 或目标 receipt 漂移。"
+        )
+    return True
+
+
 def _validate_batched_campaign_history(
     manifest: Mapping[str, Any],
     history: Sequence[tuple[dict[str, Any], dict[str, Any], Path]],
 ) -> list[tuple[dict[str, Any], dict[str, Any], Path]]:
-    """校验 v2/v3/v4/v5 连续链和三类唯一失败后继。"""
+    """校验 v2/v3/v4/v5 连续链和获批的唯一失败后继。"""
 
     if any(
         prior_manifest.get("schema_version")
@@ -5209,6 +5847,17 @@ def _validate_batched_campaign_history(
         if (
             prior_schema == CAMPAIGN_RUN_RECOVERY_CONTINUATION_SCHEMA
             and successor_schema == CAMPAIGN_RUN_RECOVERY_FINALIZATION_SCHEMA
+        ):
+            continue
+        if (
+            prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
+            and successor_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
+            and _validate_permission_preflight_compensation_successor(
+                state,
+                prior_manifest,
+                _run_dir,
+                successor_manifest,
+            )
         ):
             continue
         if prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA:

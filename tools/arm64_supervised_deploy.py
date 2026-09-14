@@ -79,11 +79,13 @@ from typing import Any, Callable, Mapping
 # 2026-09-14（0.154 首轮正式取证缺陷闭合）：压缩场景改用当前非 Lite 第二模型，
 # WHAM safe 写入登记数据根，并允许零 Responses／零连接 relay 形成失败请求审计；
 # 新增只承接该确定性失败的追加式账本闭合入口。
+# 2026-09-14（VC-1 seal 权限前检补偿）：监督器新增只承接本次冻结 sequence 2
+# 的一次性 v2→v2 权限收口门禁；其他失败仍沿既有 v3/v4/v5 唯一恢复链停线。
 DEFAULT_TOOL_DIGEST = (
-    "d5cbfafdcae477956be617b902fffca9653b4a4da607d54093792a5fa4c6628f"
+    "2a54a1182b5cf1ddf3755c52bd7d20a2424faa4d966924fe867a739ab59556b2"
 )
 DEFAULT_SUPERVISOR_DIGEST = (
-    "cf660e9d7d6c341d8c1dbc96d5161dfbf709ceb17a166d16936851988f978c88"
+    "f77dfa954c1d702a802514c36b1d1cbc2f296619c0bf50363c36ea8f448f7fb8"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "b9ca7b6f48b3c33a63a864a9ce7ebd617335378ea52fe9148ea161ab3b276ada"

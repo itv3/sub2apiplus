@@ -14,6 +14,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from tools.official_client_capture import codex_upgrade_supervisor as supervisor
 from tools.official_client_capture.codex_upgrade_supervisor import (
@@ -40,6 +41,358 @@ class SupervisorTests(unittest.TestCase):
             encoding="utf-8",
         )
         path.chmod(0o600)
+
+    @staticmethod
+    def _write_permission_compensation_events(
+        path: Path,
+        *,
+        campaign_id: str,
+        owner_pid: int,
+        owner_nonce: str,
+        prepare_status: str = "passed",
+    ) -> None:
+        """生成只覆盖权限补偿判定所需动作的完整摘要链。"""
+
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        path.parent.chmod(0o700)
+        specifications = [
+            (
+                "action-started",
+                "prepare-official-assertion-bundle",
+                "VC-1:prepare-official-assertion-bundle",
+                "running",
+                None,
+                {},
+            ),
+            (
+                "action-finished",
+                "prepare-official-assertion-bundle",
+                "VC-1:prepare-official-assertion-bundle",
+                prepare_status,
+                None,
+                {"duration_seconds": 1.0, "returncode": 0},
+            ),
+            (
+                "action-started",
+                "seal-official-preview",
+                "VC-1:capture-official-seal-preview",
+                "running",
+                None,
+                {},
+            ),
+            (
+                "action-failed",
+                "seal-official-preview",
+                "VC-1:capture-official-seal-preview",
+                "failed",
+                "returncode=1",
+                {"duration_seconds": 1.0},
+            ),
+        ]
+        records: list[dict[str, object]] = []
+        previous: str | None = None
+        for sequence, specification in enumerate(specifications, 1):
+            event_type, job_id, operation, status, reason, metadata = specification
+            unsigned: dict[str, object] = {
+                "schema_version": supervisor.EVENT_SCHEMA,
+                "sequence": sequence,
+                "recorded_at_utc": f"2026-09-14T11:06:{18 + sequence:02d}.000Z",
+                "recorded_at_epoch": 1000.0 + sequence,
+                "event_type": event_type,
+                "operation": operation,
+                "campaign_id": campaign_id,
+                "phase": "VC-1",
+                "owner_pid": owner_pid,
+                "owner_nonce": owner_nonce,
+                "job_id": job_id,
+                "status": status,
+                "reason": reason,
+                "started_at_epoch": 1000.0 + sequence,
+                "ended_at_epoch": (
+                    None if event_type == "action-started" else 1000.5 + sequence
+                ),
+                "metadata": metadata,
+                "previous_event_sha256": previous,
+            }
+            event = dict(unsigned)
+            digest = supervisor._sha256(supervisor._canonical(unsigned))
+            event["event_sha256"] = digest
+            records.append(event)
+            previous = digest
+        path.write_bytes(b"".join(supervisor._canonical(value) for value in records))
+        path.chmod(0o600)
+
+    def _permission_compensation_fixture(
+        self,
+        root: Path,
+    ) -> tuple[
+        dict[str, object],
+        dict[str, object],
+        Path,
+        dict[str, object],
+        dict[str, str],
+    ]:
+        """建立可离线验证的一次性 v2→v2 权限补偿夹具。"""
+
+        root = root.resolve(strict=True)
+        campaign_id = supervisor.VC1_PERMISSION_COMPENSATION_CAMPAIGN_ID
+        attempt_id = supervisor.VC1_PERMISSION_COMPENSATION_ATTEMPT_ID
+        data_root = root / "data"
+        campaign_dir = data_root / "evidence" / "campaigns" / campaign_id
+        attempt_root = campaign_dir / "official" / "attempts" / attempt_id
+        assertion_root = attempt_root / "evidence" / "assertion-bundle"
+        logs_root = attempt_root / "logs"
+        assertion_root.mkdir(parents=True, mode=0o700)
+        assertion_root.chmod(0o700)
+        logs_root.mkdir(parents=True, mode=0o700)
+        logs_root.chmod(0o700)
+        self._write_json(
+            assertion_root / "capture-manifest.json",
+            {"fixture": True},
+        )
+
+        external_roots: list[Path] = []
+        for index in range(30):
+            evidence_root = root / "evidence-roots" / f"root-{index:02d}"
+            evidence_root.mkdir(parents=True, mode=0o700)
+            evidence_root.chmod(0o700)
+            external_roots.append(evidence_root)
+        failed_root = external_roots[0]
+        failed_root.chmod(0o755)
+        evidence_roots = [
+            *(str(value) for value in external_roots),
+            str(attempt_root / "evidence"),
+            str(logs_root),
+        ]
+        results: list[dict[str, object]] = []
+        for index in range(29):
+            assigned = [str(external_roots[index])]
+            if index == 0:
+                assigned.append(str(external_roots[-1]))
+            results.append(
+                {
+                    "job_id": f"job-{index:02d}",
+                    "status": "complete",
+                    "evidence_roots": assigned,
+                }
+            )
+        attempt = {
+            "campaign_id": campaign_id,
+            "attempt_id": attempt_id,
+            "status": "awaiting_receipts",
+            "results": results,
+            "evidence_roots": evidence_roots,
+        }
+        attempt_path = attempt_root / "attempt.json"
+        self._write_json(attempt_path, attempt)
+        attempt_sha256 = hashlib.sha256(attempt_path.read_bytes()).hexdigest()
+        roots_sha256 = hashlib.sha256(
+            json.dumps(
+                evidence_roots,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+
+        seal_command = [
+            "/usr/bin/python3",
+            str(data_root / "tools/official_client_capture/codex_upgrade.py"),
+            "capture-official",
+            "seal",
+            "--campaign-dir",
+            str(campaign_dir),
+            "--attempt-id",
+            attempt_id,
+            "--capture-manifest",
+            str(assertion_root / "capture-manifest.json"),
+            "--assertion-evidence-root",
+            str(assertion_root),
+            "--max-wall-seconds",
+            "1440",
+            "--heartbeat-seconds",
+            "5",
+        ]
+        prepare_action = {
+            "action_id": "prepare-official-assertion-bundle",
+            "operation": "VC-1:prepare-official-assertion-bundle",
+            "timeout_seconds": 300.0,
+            "command": [
+                "/usr/bin/env",
+                f"CAMPAIGN_DIR={campaign_dir}",
+                f"ATTEMPT_ID={attempt_id}",
+                "SIDE=official",
+                f"REPO_ROOT={data_root}",
+                f"TOOL_ROOT={data_root / 'tools/official_client_capture'}",
+                "/usr/bin/bash",
+                str(data_root / "tools/prepare_assertion_bundle.sh"),
+            ],
+            "item_ids": ["prepare-official-assertion-bundle"],
+        }
+        seal_action = {
+            "action_id": "seal-official-preview",
+            "operation": "VC-1:capture-official-seal-preview",
+            "timeout_seconds": 1500.0,
+            "command": seal_command,
+            "item_ids": ["seal-official-preview"],
+        }
+        checkpoint = {
+            "path": "control/vc/vc-0-checkpoint.json",
+            "sha256": "3" * 64,
+            "phase": "VC-0",
+            "checkpoint_sha256": "4" * 64,
+        }
+        prior_manifest: dict[str, object] = {
+            "schema_version": supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA,
+            "campaign_id": campaign_id,
+            "campaign_plan_sha256": (
+                supervisor.VC1_PERMISSION_COMPENSATION_CAMPAIGN_PLAN_SHA256
+            ),
+            "batch_id": "vc-1-0002",
+            "batch_sequence": 2,
+            "batch_sha256": (
+                supervisor.VC1_PERMISSION_COMPENSATION_FAILED_BATCH_SHA256
+            ),
+            "phase": "VC-1",
+            "predecessor_checkpoint": checkpoint,
+            "original_deadline_at_utc": "2099-09-14T12:00:00Z",
+            "no_op": False,
+            "actions": [prepare_action, seal_action],
+            "execute_items": [
+                "prepare-official-assertion-bundle",
+                "seal-official-preview",
+            ],
+            "reuse_items": [],
+        }
+
+        action_input_dir = data_root / "control" / f"{campaign_id}-action-inputs"
+        action_input_dir.mkdir(parents=True, mode=0o700)
+        action_input_dir.chmod(0o700)
+        helper_path = action_input_dir / "vc1_evidence_permission_closeout.py"
+        helper_path.write_text("# fixture helper\n", encoding="utf-8")
+        helper_path.chmod(0o600)
+        helper_sha256 = hashlib.sha256(helper_path.read_bytes()).hexdigest()
+        receipt_path = action_input_dir / "sequence3-permission-closeout-receipt.json"
+        harden_action = {
+            "action_id": "harden-official-evidence-permissions",
+            "operation": "VC-1:harden-official-evidence-permissions",
+            "timeout_seconds": 120.0,
+            "command": [
+                "/usr/bin/python3",
+                str(helper_path),
+                "--campaign-id",
+                campaign_id,
+                "--attempt-id",
+                attempt_id,
+                "--attempt",
+                str(attempt_path),
+                "--attempt-sha256",
+                attempt_sha256,
+                "--roots-sha256",
+                roots_sha256,
+                "--self-sha256",
+                helper_sha256,
+                "--receipt",
+                str(receipt_path),
+            ],
+            "item_ids": ["harden-official-evidence-permissions"],
+        }
+        successor_manifest: dict[str, object] = {
+            **prior_manifest,
+            "batch_id": "vc-1-0003",
+            "batch_sequence": 3,
+            "batch_sha256": (
+                supervisor.VC1_PERMISSION_COMPENSATION_SUCCESSOR_BATCH_SHA256
+            ),
+            "actions": [harden_action, seal_action],
+            "execute_items": [
+                "harden-official-evidence-permissions",
+                "seal-official-preview",
+            ],
+            "reuse_items": ["prepare-official-assertion-bundle"],
+        }
+        action_plan_path = action_input_dir / "vc1-sequence3-action-plan.json"
+        self._write_json(
+            action_plan_path,
+            {
+                "schema_version": "codex-upgrade-vc-action-plan/v1",
+                "execute_item_ids": successor_manifest["execute_items"],
+                "reuse_item_ids": successor_manifest["reuse_items"],
+                "actions": successor_manifest["actions"],
+            },
+        )
+        action_plan_sha256 = hashlib.sha256(action_plan_path.read_bytes()).hexdigest()
+
+        prior_dir = root / "run-failed-v2"
+        prior_dir.mkdir(mode=0o700)
+        prior_dir.chmod(0o700)
+        prior_state: dict[str, object] = {
+            "state": "failed",
+            "campaign_id": campaign_id,
+            "phase": "VC-1",
+            "owner_pid": os.getpid(),
+            "owner_nonce": "8" * 64,
+            "terminal_at_utc": "2026-09-14T11:06:29.796Z",
+        }
+        self._write_json(prior_dir / "state.json", prior_state)
+        self._write_json(
+            prior_dir / "campaign-run-manifest.json",
+            {
+                "schema_version": supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA,
+                "manifest": prior_manifest,
+                "manifest_sha256": supervisor._sha256(
+                    supervisor._canonical(prior_manifest)
+                ),
+            },
+        )
+        stop: dict[str, object] = {
+            "schema_version": supervisor.STOP_SCHEMA,
+            "campaign_id": campaign_id,
+            "detected_at_epoch": 1005.0,
+            "detected_at_utc": "2026-09-14T11:06:29.784Z",
+            "event_type": "failed",
+            "owner_nonce": prior_state["owner_nonce"],
+            "owner_pid": prior_state["owner_pid"],
+            "phase": "VC-1",
+            "reason": "action-failed:seal-official-preview",
+        }
+        stop["receipt_sha256"] = supervisor._sha256(supervisor._canonical(stop))
+        self._write_json(prior_dir / "stop-receipt.json", stop)
+        self._write_permission_compensation_events(
+            prior_dir / "events.ndjson",
+            campaign_id=campaign_id,
+            owner_pid=os.getpid(),
+            owner_nonce=str(prior_state["owner_nonce"]),
+        )
+        diagnostic_path = supervisor._action_diagnostic_path(
+            prior_dir,
+            "seal-official-preview",
+            create_directory=True,
+        )
+        diagnostic = supervisor._write_action_diagnostic(
+            diagnostic_path,
+            campaign_id=campaign_id,
+            phase="VC-1",
+            action_id="seal-official-preview",
+            owner_pid=os.getpid(),
+            owner_nonce=str(prior_state["owner_nonce"]),
+            failure_kind="handled-error",
+            error_type="ConfigurationError",
+            message=(
+                "seal 廉价前检失败（scanned_bytes=0）：证据目录向 group/other 开放，"
+                f"必须先修正权限：{failed_root}"
+            ),
+        )
+        bindings = {
+            "VC1_PERMISSION_COMPENSATION_ATTEMPT_SHA256": attempt_sha256,
+            "VC1_PERMISSION_COMPENSATION_ROOTS_SHA256": roots_sha256,
+            "VC1_PERMISSION_COMPENSATION_HELPER_SHA256": helper_sha256,
+            "VC1_PERMISSION_COMPENSATION_ACTION_PLAN_SHA256": action_plan_sha256,
+            "VC1_PERMISSION_COMPENSATION_DIAGNOSTIC_SHA256": str(
+                diagnostic["diagnostic_sha256"]
+            ),
+        }
+        return prior_state, prior_manifest, prior_dir, successor_manifest, bindings
 
     def _recovery_manifest(self, root: Path) -> dict[str, object]:
         contract = root / "recovery-contract.json"
@@ -1024,6 +1377,206 @@ class SupervisorTests(unittest.TestCase):
                 recovery,
                 [(prior_state, prior_manifest, prior_dir)],
             )
+
+    def test_failed_v2_allows_only_frozen_permission_compensation_successor(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            prior_state, prior_manifest, prior_dir, successor, bindings = (
+                self._permission_compensation_fixture(root)
+            )
+            sequence_one_manifest = {
+                "schema_version": supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA,
+                "campaign_id": successor["campaign_id"],
+                "campaign_plan_sha256": successor["campaign_plan_sha256"],
+                "batch_id": "vc-1-0001",
+                "batch_sequence": 1,
+                "batch_sha256": "7" * 64,
+                "original_deadline_at_utc": successor["original_deadline_at_utc"],
+            }
+            sequence_one_state = {"state": "stopped"}
+            with mock.patch.multiple(supervisor, **bindings):
+                self.assertTrue(
+                    supervisor._validate_permission_preflight_compensation_successor(
+                        prior_state,
+                        prior_manifest,
+                        prior_dir,
+                        successor,
+                    )
+                )
+                ordered = supervisor._validate_batched_campaign_history(
+                    successor,
+                    [
+                        (
+                            sequence_one_state,
+                            sequence_one_manifest,
+                            root / "run-sequence-one",
+                        ),
+                        (prior_state, prior_manifest, prior_dir),
+                    ],
+                )
+            self.assertEqual(
+                [item[1]["batch_sequence"] for item in ordered],
+                [1, 2],
+            )
+
+    def test_permission_compensation_rejects_nonzero_scan_diagnostic(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            prior_state, prior_manifest, prior_dir, successor, bindings = (
+                self._permission_compensation_fixture(root)
+            )
+            diagnostic_path = (
+                prior_dir
+                / "action-diagnostics"
+                / "action-seal-official-preview-failure.json"
+            )
+            diagnostic = json.loads(diagnostic_path.read_text(encoding="utf-8"))
+            diagnostic.pop("diagnostic_sha256")
+            diagnostic["message"] = (
+                "seal 廉价前检失败（scanned_bytes=1）：证据目录向 group/other 开放，"
+                "必须先修正权限：/fixture"
+            )
+            diagnostic["diagnostic_sha256"] = supervisor._sha256(
+                supervisor._canonical(diagnostic)
+            )
+            self._write_json(diagnostic_path, diagnostic)
+            bindings["VC1_PERMISSION_COMPENSATION_DIAGNOSTIC_SHA256"] = str(
+                diagnostic["diagnostic_sha256"]
+            )
+            with mock.patch.multiple(supervisor, **bindings):
+                with self.assertRaisesRegex(SupervisorError, "scanned_bytes=0"):
+                    supervisor._validate_permission_preflight_compensation_successor(
+                        prior_state,
+                        prior_manifest,
+                        prior_dir,
+                        successor,
+                    )
+
+    def test_permission_compensation_rejects_helper_identity_drift(self) -> None:
+        mutations = ("path", "sha256", "permissions")
+        for mutation in mutations:
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                prior_state, prior_manifest, prior_dir, successor, bindings = (
+                    self._permission_compensation_fixture(root)
+                )
+                harden = successor["actions"][0]
+                helper_path = Path(harden["command"][1])
+                if mutation == "path":
+                    harden["command"][1] = str(helper_path.with_name("other.py"))
+                elif mutation == "sha256":
+                    helper_path.write_text("# drifted helper\n", encoding="utf-8")
+                    helper_path.chmod(0o600)
+                else:
+                    helper_path.chmod(0o644)
+                with mock.patch.multiple(supervisor, **bindings):
+                    with self.assertRaisesRegex(SupervisorError, "权限.*补偿"):
+                        supervisor._validate_permission_preflight_compensation_successor(
+                            prior_state,
+                            prior_manifest,
+                            prior_dir,
+                            successor,
+                        )
+
+    def test_permission_compensation_rejects_attempt_and_roots_drift(self) -> None:
+        for mutation in ("attempt", "roots"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                prior_state, prior_manifest, prior_dir, successor, bindings = (
+                    self._permission_compensation_fixture(root)
+                )
+                harden_command = successor["actions"][0]["command"]
+                attempt_path = Path(
+                    harden_command[harden_command.index("--attempt") + 1]
+                )
+                if mutation == "attempt":
+                    attempt = json.loads(attempt_path.read_text(encoding="utf-8"))
+                    attempt["unexpected"] = True
+                    self._write_json(attempt_path, attempt)
+                else:
+                    roots_index = harden_command.index("--roots-sha256") + 1
+                    drifted = "f" * 64
+                    harden_command[roots_index] = drifted
+                    bindings["VC1_PERMISSION_COMPENSATION_ROOTS_SHA256"] = drifted
+                with mock.patch.multiple(supervisor, **bindings):
+                    with self.assertRaisesRegex(SupervisorError, "attempt|32 根"):
+                        supervisor._validate_permission_preflight_compensation_successor(
+                            prior_state,
+                            prior_manifest,
+                            prior_dir,
+                            successor,
+                        )
+
+    def test_permission_compensation_rejects_action_or_seal_drift(self) -> None:
+        for mutation in ("reuse", "seal"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                prior_state, prior_manifest, prior_dir, successor, bindings = (
+                    self._permission_compensation_fixture(root)
+                )
+                if mutation == "reuse":
+                    successor["reuse_items"] = []
+                else:
+                    successor["actions"][1]["command"].append("--unexpected")
+                with mock.patch.multiple(supervisor, **bindings):
+                    with self.assertRaisesRegex(SupervisorError, "权限前检补偿"):
+                        supervisor._validate_permission_preflight_compensation_successor(
+                            prior_state,
+                            prior_manifest,
+                            prior_dir,
+                            successor,
+                        )
+
+    def test_permission_compensation_rejects_existing_seal_artifact(self) -> None:
+        for name in (
+            "evidence-manifest.json",
+            "seal-draft.json",
+            "seal-preview.json",
+        ):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                prior_state, prior_manifest, prior_dir, successor, bindings = (
+                    self._permission_compensation_fixture(root)
+                )
+                harden_command = successor["actions"][0]["command"]
+                attempt_path = Path(
+                    harden_command[harden_command.index("--attempt") + 1]
+                )
+                self._write_json(attempt_path.parent / name, {"unexpected": True})
+                with mock.patch.multiple(supervisor, **bindings):
+                    with self.assertRaisesRegex(SupervisorError, "已存在 seal 制品"):
+                        supervisor._validate_permission_preflight_compensation_successor(
+                            prior_state,
+                            prior_manifest,
+                            prior_dir,
+                            successor,
+                        )
+
+    def test_permission_compensation_requires_successful_assertion_bundle(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            prior_state, prior_manifest, prior_dir, successor, bindings = (
+                self._permission_compensation_fixture(root)
+            )
+            self._write_permission_compensation_events(
+                prior_dir / "events.ndjson",
+                campaign_id=str(prior_state["campaign_id"]),
+                owner_pid=int(prior_state["owner_pid"]),
+                owner_nonce=str(prior_state["owner_nonce"]),
+                prepare_status="failed",
+            )
+            with mock.patch.multiple(supervisor, **bindings):
+                with self.assertRaisesRegex(SupervisorError, "assertion bundle 成功"):
+                    supervisor._validate_permission_preflight_compensation_successor(
+                        prior_state,
+                        prior_manifest,
+                        prior_dir,
+                        successor,
+                    )
 
     def test_failed_v3_only_allows_exact_sequence_three_v4_successor(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -1384,6 +1384,35 @@ python3 tools/official_client_capture/codex_upgrade.py \
 after 探针、改写 attempt、创建 reservation 或发送请求。成功后由操作员确认，sequence 5 才可回到普通
 v2 真实补跑；v5 失败不得再生成第六种恢复清单。
 
+#### VC-1 seal 权限廉价前检的唯一补偿后继
+
+本分支只允许承接 Campaign `c0154-formal-vc1-bwg-new-window-20260914t100818z` 的唯一失败 sequence 2；
+失败批次 SHA-256 必须为
+`8dc9756311f232a330216c0562f05ec7301eb9370106e8e63e6d6d3a2f53d92b`，不可覆盖的 sequence 3
+批次 SHA-256 必须为 `6a3aa65e451a76d0608125e594f3d2164c76e8212fabd051a379c3c975eb64df`。
+它不是第二种普通 v2 重试：其他 Campaign、序号、批次或 v2 失败仍只能由既有唯一 v3 恢复后继承接。
+
+启用前必须同时只读证明：前序 stop reason 精确为 `action-failed:seal-official-preview`；动作诊断为
+`handled-error/ConfigurationError`，说明精确包含 `seal 廉价前检失败（scanned_bytes=0）` 和唯一不合规
+证据根；父事件摘要链证明 `prepare-official-assertion-bundle` 已以 returncode 0 成功，随后原 seal 命令仅以
+returncode 1 失败；attempt `20260914T102852Z-04996800fbbe4e94` 仍为 `awaiting_receipts`，29 个 Job 全部
+`complete`，32 个冻结证据根闭合；`evidence-manifest.json`、`seal-draft.json`、`seal-preview.json` 和权限
+收口 receipt 均不存在。诊断、attempt、根列表、前后批次、Campaign plan 和前序 checkpoint 的摘要必须与
+监督器内本次一次性锚点逐字一致。
+
+sequence 3 的动作闭集只能是：先执行 `harden-official-evidence-permissions`，再逐字重放 sequence 2 的
+`seal-official-preview`；`prepare-official-assertion-bundle` 只能列入 reuse。权限工具和 action plan 必须位于
+`/root/docker/capture-cli/data/control/c0154-formal-vc1-bwg-new-window-20260914t100818z-action-inputs`，父目录为
+当前执行用户和组拥有的 `0700` 非链接目录，两个文件均为同属主、无额外硬链接的 `0600` 普通文件；工具、
+action plan、attempt 和 32 根列表摘要必须与冻结命令一致。权限工具只允许把目录权限与 `0700` 相与、文件
+权限与 `0600` 相与，并以 `O_NOFOLLOW`、device/inode、size、mtime、nlink 二次核验边界；收据必须以
+`O_EXCL` 首次创建并声明 `scanned_bytes=0`、`live_request_count=0`。
+
+部署通过冻结后继登记的新监督器后，直接使用原 state-dir 执行已经存在的
+`control/vc/run-manifests/0003-vc-1.json`；不得重编、删除或覆盖 sequence 3。权限动作非零时队列立即停线；
+只有权限收据成功，原 seal 预览才可继续。取得 `review_sha256` 后必须停止并由操作员复核确认，不能在同一
+批次追加正式 seal，也不能因此宣称 VC-1 已完成。
+
 #### VC-1 原总 deadline 到期孤儿的直接封口
 
 若上述 sequence 5 真实补跑已取得 reservation、执行 15 个 Job 后，父监督器按 Campaign 原始绝对
