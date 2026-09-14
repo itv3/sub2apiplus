@@ -1712,11 +1712,14 @@ VC-1 开始事件，再在同一 Python 进程调用一次 `campaign-run`。任�
 
 若原子收口已形成失败 Formal Campaign，且唯一失败闭合诊断逐字为
 `official-relay-oauth-refresh 已开始但没有可闭合的 live 请求计数来源`，说明旧计数器把已观察到的零
-Responses relay 误判成了无来源。当前 Campaign 不得重跑；先完成修复工具的离线回归和受管部署，再在
-ARM64 `capture-cli` 容器内、`campaign-run` 与 CampaignLease 之外执行一次：
+Responses relay 误判成了无来源。当前 Campaign 不得重跑；先完成修复工具的离线回归和受管部署，再从
+ARM64 宿主登记的生产数据根、`campaign-run` 与 CampaignLease 之外执行一次。该动作只读既有抓包证据并
+写控制账本，不发起抓包，因此不得为迁就容器的只读父挂载复制或改写账本：
 
 ```bash
-python3 -m tools.official_client_capture.codex_upgrade_vc0_closeout \
+cd "$CAPTURE_HOST_DATA_ROOT"
+PYTHONPATH="$CAPTURE_HOST_DATA_ROOT" \
+  python3 -m tools.official_client_capture.codex_upgrade_vc0_closeout \
   repair-failure-closure \
   --formal-campaign-dir /绝对路径/失败Formal-Campaign \
   --timing-ledger-dir /绝对路径/连续时间账本 \

@@ -233,6 +233,12 @@ CODEX_0154_VC1_FORMAL_FAILURE_CLOSURE_FREEZE_SUCCESSOR = (
     ROOT
     / "docs/egress/maintenance/upstream-codex-0154-vc1-formal-failure-closure-20260914-freeze-successor.json"
 )
+# 2026-09-14：失败闭合是宿主控制账本动作而非抓包；入口改为登记数据根，
+# 不复制只读账本来迁就 capture-cli 容器挂载。
+CODEX_0154_VC1_FAILURE_CLOSURE_COORDINATE_FREEZE_SUCCESSOR = (
+    ROOT
+    / "docs/egress/maintenance/upstream-codex-0154-vc1-failure-closure-coordinate-20260914-freeze-successor.json"
+)
 HISTORICAL_LEDGER = "docs/egress/maintenance/historical-source-drift-successor.json"
 SHA256_LENGTH = 64
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -344,6 +350,7 @@ def successor_edges(path: str) -> list[tuple[str, str]]:
         CODEX_0154_VC1_FINALIZATION_RECOVERY_FREEZE_SUCCESSOR,
         CODEX_0154_VC1_DEADLINE_ORPHAN_FINALIZATION_FREEZE_SUCCESSOR,
         CODEX_0154_VC1_FORMAL_FAILURE_CLOSURE_FREEZE_SUCCESSOR,
+        CODEX_0154_VC1_FAILURE_CLOSURE_COORDINATE_FREEZE_SUCCESSOR,
     ):
         payload = json.loads(receipt_path.read_text(encoding="utf-8"))
         _validate_successor_receipt(payload)
