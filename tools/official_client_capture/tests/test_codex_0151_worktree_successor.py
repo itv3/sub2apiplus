@@ -209,6 +209,12 @@ CODEX_0154_VC1_INTERRUPTION_RECOVERY_FREEZE_SUCCESSOR = (
     ROOT
     / "docs/egress/maintenance/upstream-codex-0154-vc1-interruption-recovery-20260914-freeze-successor.json"
 )
+# 2026-09-14：既有 v3 因 heartbeat 路径基准缺陷失败后，由一次性 v4
+# 零请求续接清单签发原 transition，不改写历史 attempt 或重做探针。
+CODEX_0154_VC1_INTERRUPTION_CONTINUATION_FREEZE_SUCCESSOR = (
+    ROOT
+    / "docs/egress/maintenance/upstream-codex-0154-vc1-interruption-continuation-20260914-freeze-successor.json"
+)
 HISTORICAL_LEDGER = "docs/egress/maintenance/historical-source-drift-successor.json"
 SHA256_LENGTH = 64
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -316,6 +322,7 @@ def successor_edges(path: str) -> list[tuple[str, str]]:
         CODEX_0154_BWG_MSS_RUST_TLS_REPAIR_FREEZE_SUCCESSOR,
         CODEX_0154_VC1_CAPTURE_TOOL_RECOVERY_FREEZE_SUCCESSOR,
         CODEX_0154_VC1_INTERRUPTION_RECOVERY_FREEZE_SUCCESSOR,
+        CODEX_0154_VC1_INTERRUPTION_CONTINUATION_FREEZE_SUCCESSOR,
     ):
         payload = json.loads(receipt_path.read_text(encoding="utf-8"))
         _validate_successor_receipt(payload)
