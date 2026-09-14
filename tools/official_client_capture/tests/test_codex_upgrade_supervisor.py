@@ -175,6 +175,95 @@ class SupervisorTests(unittest.TestCase):
         }
         return payload
 
+    def _recovery_finalization_manifest(
+        self,
+        root: Path,
+        continuation_path: Path,
+        manifest_path: Path,
+    ) -> dict[str, object]:
+        continuation = self._recovery_continuation_manifest(
+            root,
+            continuation_path,
+        )
+        self._write_json(continuation_path, continuation)
+        deployment = root / "finalization-deployment.json"
+        self._write_json(deployment, {"fixture": "finalization"})
+        maintenance = {
+            "from_tool_files_sha256": "b" * 64,
+            "to_tool_files_sha256": "f" * 64,
+            "changed_files": [
+                {
+                    "path": "codex_upgrade.py",
+                    "from_sha256": "d" * 64,
+                    "to_sha256": "e" * 64,
+                    "classification": "evaluation",
+                    "affected_job_ids": [],
+                }
+            ],
+            "allowed_production_paths": [],
+            "affected_job_ids": [],
+        }
+        effective = {
+            **maintenance,
+            "from_tool_files_sha256": "a" * 64,
+        }
+        return {
+            **continuation,
+            "schema_version": supervisor.CAMPAIGN_RUN_RECOVERY_FINALIZATION_SCHEMA,
+            "batch_id": "vc-1-0004",
+            "batch_sequence": 4,
+            "batch_sha256": "0" * 64,
+            "recovery_mode": "interrupted-vc1-preview-finalization",
+            "continuation_manifest": {
+                "path": str(continuation_path),
+                "sha256": hashlib.sha256(
+                    continuation_path.read_bytes()
+                ).hexdigest(),
+            },
+            "finalization_predecessor": {
+                "run_dir": str(root / "run-failed-v4"),
+                "state_sha256": "7" * 64,
+                "manifest_sha256": "8" * 64,
+                "stop_receipt_sha256": "9" * 64,
+                "action_diagnostic_sha256": "a" * 64,
+                "owner_nonce": "b" * 64,
+                "terminal_at_utc": "2026-09-14T03:05:40Z",
+                "state": "failed",
+                "reason": "action-failed:continue-vc1-interruption-preview",
+                "error_type": "ConfigurationError",
+                "message": "中断恢复续接父 v4 清单、自绑定或动作漂移。",
+                "batch_id": "vc-1-0003",
+                "batch_sequence": 3,
+                "batch_sha256": "e" * 64,
+            },
+            "deployment_receipt": {
+                "path": str(deployment),
+                "sha256": hashlib.sha256(deployment.read_bytes()).hexdigest(),
+                "tool_files_sha256": "f" * 64,
+            },
+            "maintenance_tool_transition": maintenance,
+            "effective_tool_transition": effective,
+            "actions": [
+                {
+                    "action_id": "continue-vc1-interruption-preview",
+                    "operation": "VC-1:continue-interruption-preview",
+                    "timeout_seconds": 60,
+                    "command": [
+                        sys.executable,
+                        "/srv/tools/codex_upgrade.py",
+                        "continue-vc1-interruption",
+                        "--campaign-dir",
+                        "/srv/campaign",
+                        "--recovery-contract",
+                        continuation["recovery_contract"]["path"],
+                        "--continuation-manifest",
+                        str(manifest_path),
+                    ],
+                    "item_ids": ["job-b", "job-c"],
+                }
+            ],
+        }
+
     def _campaign_command(self, *arguments: str) -> dict[str, object]:
         """通过真实 CLI 进程验证常驻 Campaign 接口。"""
 
@@ -855,6 +944,33 @@ class SupervisorTests(unittest.TestCase):
             with self.assertRaisesRegex(SupervisorError, "风险分类非法"):
                 _campaign_run_manifest(invalid)
 
+    def test_v5_requires_exact_failed_v4_and_control_only_maintenance(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            continuation_path = root / "continuation.json"
+            manifest_path = root / "finalization.json"
+            payload = self._recovery_finalization_manifest(
+                root,
+                continuation_path,
+                manifest_path,
+            )
+            self._write_json(manifest_path, payload)
+            parsed = _campaign_run_manifest(manifest_path)
+            self.assertEqual(
+                parsed["schema_version"],
+                supervisor.CAMPAIGN_RUN_RECOVERY_FINALIZATION_SCHEMA,
+            )
+
+            payload["finalization_predecessor"]["message"] = "其他错误"
+            invalid = root / "invalid-finalization.json"
+            payload["actions"][0]["command"][-1] = str(invalid)
+            self._write_json(invalid, payload)
+            with self.assertRaisesRegex(
+                SupervisorError,
+                "finalization_predecessor",
+            ):
+                _campaign_run_manifest(invalid)
+
     def test_failed_v2_only_allows_direct_v3_successor(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1006,6 +1122,74 @@ class SupervisorTests(unittest.TestCase):
                 [
                     (v2_state, v2_manifest, v2_dir),
                     (v3_state, v3_manifest, v3_dir),
+                ],
+            )
+
+            v4_path = root / "continuation-history.json"
+            self._write_json(v4_path, v4)
+            v4_dir = root / "run-failed-v4"
+            v4_state = {
+                "state": "failed",
+                "campaign_id": "campaign-recovery",
+                "phase": "VC-1",
+                "owner_pid": os.getpid(),
+                "owner_nonce": "b" * 64,
+                "terminal_at_utc": "2026-09-14T03:05:40Z",
+            }
+            self._write_json(v4_dir / "state.json", v4_state)
+            self._write_json(
+                v4_dir / "campaign-run-manifest.json",
+                {"manifest": v4},
+            )
+            self._write_json(
+                v4_dir / "stop-receipt.json",
+                {
+                    "event_type": "failed",
+                    "reason": "action-failed:continue-vc1-interruption-preview",
+                    "owner_nonce": v4_state["owner_nonce"],
+                    "campaign_id": v4_state["campaign_id"],
+                },
+            )
+            v4_diagnostic_path = supervisor._action_diagnostic_path(
+                v4_dir,
+                "continue-vc1-interruption-preview",
+                create_directory=True,
+            )
+            supervisor._write_action_diagnostic(
+                v4_diagnostic_path,
+                campaign_id="campaign-recovery",
+                phase="VC-1",
+                action_id="continue-vc1-interruption-preview",
+                owner_pid=os.getpid(),
+                owner_nonce="b" * 64,
+                failure_kind="handled-error",
+                error_type="ConfigurationError",
+                message="中断恢复续接父 v4 清单、自绑定或动作漂移。",
+            )
+            v5 = self._recovery_finalization_manifest(
+                root,
+                root / "continuation-v5-fixture.json",
+                root / "finalization.json",
+            )
+            v5["recovery_predecessor"] = v3_manifest["recovery_predecessor"]
+            v5["continuation_predecessor"] = v4["continuation_predecessor"]
+            v5["continuation_manifest"] = {
+                "path": str(v4_path),
+                "sha256": hashlib.sha256(v4_path.read_bytes()).hexdigest(),
+            }
+            v5["finalization_predecessor"] = (
+                supervisor._recovery_finalization_predecessor_from_run(
+                    v4_state,
+                    v4,
+                    v4_dir,
+                )
+            )
+            supervisor._validate_batched_campaign_history(
+                v5,
+                [
+                    (v2_state, v2_manifest, v2_dir),
+                    (v3_state, v3_manifest, v3_dir),
+                    (v4_state, v4, v4_dir),
                 ],
             )
 

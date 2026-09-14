@@ -72,11 +72,13 @@ from typing import Any, Callable, Mapping
 # 唯一 v3 恢复预览和普通 v2 定向补跑的合同闭环；受管工具树摘要随之更新。
 # 2026-09-14（VC-1 中断恢复续接）：修正恢复 attempt 的 heartbeat 绑定基准，
 # 并新增只承接既有确定性失败 v3 的唯一 v4 零请求预览；不增加产出侧变化。
+# 2026-09-14（VC-1 中断恢复收尾）：统一父 campaign-run 清单的换行规范摘要，
+# 并新增只承接既有确定性失败 v4 的唯一 v5 零请求收尾；不增加产出侧变化。
 DEFAULT_TOOL_DIGEST = (
-    "df392aa0b466cf4d23c3d6debc6da8658700c44f1dbb32ad7a1a3208bad534ab"
+    "765ebe512b8f0f5e140935bb7b849c5f1471e40f546e8385349d11e99239f817"
 )
 DEFAULT_SUPERVISOR_DIGEST = (
-    "438deb607e44bae4590f765ff726f5f3655bf1e4c531628a217b46278a069b1c"
+    "49a33ea19a0e12a173c9228240f4f60b884cf7c5bc6a44f72a31c2e4184781b0"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "b9ca7b6f48b3c33a63a864a9ce7ebd617335378ea52fe9148ea161ab3b276ada"

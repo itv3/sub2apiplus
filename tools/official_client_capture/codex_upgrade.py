@@ -33,7 +33,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from collections.abc import Mapping
-from typing import Any, Iterable
+from typing import Any, Iterable, Sequence
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
@@ -8280,7 +8280,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     compile_continuation = subparsers.add_parser(
         "compile-vc-interrupted-recovery-continuation",
-        help="为已封存的固定 watchdog 路径缺陷编译唯一 campaign-run v4 续接",
+        help="为已封存的固定零请求工具缺陷编译唯一 campaign-run v4/v5 续接",
     )
     add_campaign_reference(compile_continuation)
     compile_continuation.add_argument("--sequence", type=int, required=True)
@@ -8292,7 +8292,14 @@ def _build_parser() -> argparse.ArgumentParser:
     compile_continuation.add_argument(
         "--failed-recovery-supervisor-run-dir",
         type=Path,
-        required=True,
+    )
+    compile_continuation.add_argument(
+        "--continuation-manifest",
+        type=Path,
+    )
+    compile_continuation.add_argument(
+        "--failed-continuation-supervisor-run-dir",
+        type=Path,
     )
     compile_continuation.add_argument(
         "--deployment-receipt",
@@ -8314,7 +8321,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     continue_interrupted = subparsers.add_parser(
         "continue-vc1-interruption",
-        help="内部：由 campaign-run v4 续接已封存失败 v3 的零请求预览",
+        help="内部：由 campaign-run v4/v5 续接已封存失败链的零请求预览",
     )
     add_campaign_reference(continue_interrupted)
     continue_interrupted.add_argument(
@@ -10125,9 +10132,6 @@ def _validate_incremental_tool_transition(
         "raw_evidence_scanned_bytes",
         "transition_sha256",
     }
-    continuation_binding = payload.get("continuation_manifest")
-    if continuation_binding is not None:
-        required.add("continuation_manifest")
     if set(transition) != required:
         raise ConfigurationError("增量工具过渡字段不闭合。")
     unsigned = dict(transition)
@@ -12620,9 +12624,22 @@ def compile_vc_interrupted_recovery_continuation(
     campaign_dir = arguments.campaign_dir
     manifest = _require_formal_campaign(campaign_dir)
     if not _requires_complete_vc_artifacts(manifest):
-        raise ConfigurationError("v4 中断恢复续接只用于 0.154.0 起的完整 VC 链。")
+        raise ConfigurationError("中断恢复续接只用于 0.154.0 起的完整 VC 链。")
+    if arguments.sequence == 4:
+        return _compile_vc_interrupted_recovery_finalization(
+            arguments,
+            manifest,
+        )
     if arguments.sequence != 3:
-        raise ConfigurationError("v4 中断恢复续接只能使用全局序号 3。")
+        raise ConfigurationError("中断恢复续接只允许使用全局序号 3 或 4。")
+    if getattr(arguments, "failed_recovery_supervisor_run_dir", None) is None:
+        raise ConfigurationError("v4 续接缺少失败 v3 supervisor run_dir。")
+    if (
+        getattr(arguments, "continuation_manifest", None) is not None
+        or getattr(arguments, "failed_continuation_supervisor_run_dir", None)
+        is not None
+    ):
+        raise ConfigurationError("v4 续接不得提供 v5 专用前序参数。")
     contract_path = arguments.recovery_contract.resolve(strict=True)
     contract = _load_interrupted_recovery_contract(
         campaign_dir,
@@ -12805,6 +12822,225 @@ def compile_vc_interrupted_recovery_continuation(
     }
 
 
+def _compile_vc_interrupted_recovery_finalization(
+    arguments: argparse.Namespace,
+    manifest: Mapping[str, Any],
+) -> dict[str, Any]:
+    """为固定父清单摘要算法缺陷编译唯一 sequence 4 的 v5 收尾。"""
+
+    campaign_dir = arguments.campaign_dir
+    if getattr(arguments, "failed_recovery_supervisor_run_dir", None) is not None:
+        raise ConfigurationError("v5 收尾不得重复提供失败 v3 run_dir。")
+    if (
+        getattr(arguments, "continuation_manifest", None) is None
+        or getattr(arguments, "failed_continuation_supervisor_run_dir", None)
+        is None
+    ):
+        raise ConfigurationError("v5 收尾缺少原 v4 清单或失败 v4 run_dir。")
+    contract_path = arguments.recovery_contract.resolve(strict=True)
+    contract = _load_interrupted_recovery_contract(
+        campaign_dir,
+        manifest,
+        contract_path,
+        enforce_start_window=False,
+        enforce_current_tool=False,
+    )
+    if contract.get("batch_sequence") != 2:
+        raise ConfigurationError("v5 收尾只接受 sequence 2 的原恢复合同。")
+    source = contract["source_attempt"]
+    source_root, source_attempt = _load_capture_attempt(
+        campaign_dir,
+        "official",
+        None,
+        str(source["attempt_id"]),
+        _verified_campaign_manifest=manifest,
+    )
+    expected_marker = {
+        "contract": {
+            "path": str(contract_path.relative_to(campaign_dir)),
+            "sha256": file_sha256(contract_path),
+        },
+        "request_boundary": {
+            "reservation_exists": False,
+            "live_request_count": 0,
+            "scanned_bytes": 0,
+        },
+    }
+    if source_attempt.get("interrupted_recovery") != expected_marker:
+        raise ConfigurationError("v5 收尾源 attempt 不是原 v3 封存的零请求终态。")
+    transition_path = _interrupted_recovery_transition_path(source_root)
+    if transition_path.exists() or transition_path.is_symlink():
+        raise ConfigurationError("v5 收尾前已经存在 transition，禁止重复编译。")
+
+    continuation_path = arguments.continuation_manifest.resolve(strict=True)
+    continuation = _load_interrupted_recovery_continuation_manifest(
+        campaign_dir,
+        manifest,
+        continuation_path=continuation_path,
+        contract_path=contract_path,
+        contract=contract,
+        enforce_current_tool=False,
+    )
+    finalization_predecessor = (
+        _interrupted_recovery_failed_finalization_supervisor(
+            arguments.failed_continuation_supervisor_run_dir,
+            continuation_path=continuation_path,
+            continuation=continuation,
+        )
+    )
+
+    deploy_path = arguments.deployment_receipt.resolve(strict=True)
+    deploy = _read_json(deploy_path, "v5 受管工具部署收据")
+    current_tool = _tool_identity(include_git=False)
+    if (
+        deploy_path.is_symlink()
+        or deploy.get("schema_version") != "codex-arm64-supervisor-enable/v1"
+        or deploy.get("status") != "passed"
+        or deploy.get("architecture") != "aarch64"
+        or deploy.get("tool_files_sha256") != current_tool["files_sha256"]
+    ):
+        raise ConfigurationError("v5 部署收据未绑定当前 ARM64 受管工具身份。")
+    deployment_binding = {
+        "path": str(deploy_path),
+        "sha256": file_sha256(deploy_path),
+        "tool_files_sha256": str(current_tool["files_sha256"]),
+    }
+    previous_tool = _interrupted_recovery_effective_tool_identity(
+        manifest,
+        continuation["effective_tool_transition"],
+        execute_job_ids=source["execute_job_ids"],
+        reuse_job_ids=source["reuse_job_ids"],
+    )
+    maintenance_transition = _build_interrupted_recovery_maintenance_transition(
+        previous_tool,
+        current_tool,
+    )
+    effective_transition = _build_interrupted_recovery_tool_transition(
+        manifest,
+        current_tool,
+        execute_job_ids=source["execute_job_ids"],
+        reuse_job_ids=source["reuse_job_ids"],
+    )
+    previous_production = [
+        item
+        for item in continuation["effective_tool_transition"]["changed_files"]
+        if item["classification"] == "failed_job_production"
+    ]
+    current_production = [
+        item
+        for item in effective_transition["changed_files"]
+        if item["classification"] == "failed_job_production"
+    ]
+    if current_production != previous_production:
+        raise ConfigurationError("v5 维护修复增加或改变了任何产出侧工具变化。")
+
+    _plan_path, plan = _interrupted_recovery_campaign_plan(campaign_dir, manifest)
+    predecessor_path, predecessor = _replay_vc_checkpoint(campaign_dir, plan, "VC-0")
+    now = datetime.now(timezone.utc)
+    deadline = _rfc3339_datetime(plan["original_deadline_at_utc"], "Campaign 总截止")
+    if now >= deadline:
+        raise ConfigurationError("Campaign 原始绝对 deadline 已到期。")
+    must_start = min(now + timedelta(seconds=120), deadline)
+    batches_root = campaign_dir / "control" / "vc" / "batches"
+    manifests_root = campaign_dir / "control" / "vc" / "run-manifests"
+    batch_path = batches_root / "0004-vc-1.json"
+    run_path = manifests_root / "0004-vc-1.json"
+    if any(path.exists() or path.is_symlink() for path in (batch_path, run_path)):
+        raise ConfigurationError("v5 sequence 4 控制制品已存在，禁止覆盖。")
+    existing_batches = sorted(
+        int(path.name.split("-", 1)[0])
+        for path in batches_root.glob("[0-9][0-9][0-9][0-9]-vc-*.json")
+    )
+    if existing_batches != [1, 2, 3]:
+        raise ConfigurationError("v5 收尾前的 batch 序号不是唯一 1/2/3 链。")
+    action = {
+        "action_id": "continue-vc1-interruption-preview",
+        "operation": "VC-1:continue-interruption-preview",
+        "timeout_seconds": min(
+            1800,
+            max(1, int((deadline - now).total_seconds())),
+        ),
+        "command": [
+            sys.executable,
+            str(Path(__file__).resolve()),
+            "continue-vc1-interruption",
+            "--campaign-dir",
+            str(campaign_dir.resolve(strict=True)),
+            "--recovery-contract",
+            str(contract_path),
+            "--continuation-manifest",
+            str(run_path),
+        ],
+        "item_ids": list(source["execute_job_ids"]),
+    }
+    try:
+        batch = codex_upgrade_vc_artifacts.build_vc_batch(
+            campaign_plan=plan,
+            phase="VC-1",
+            sequence=4,
+            predecessor_checkpoint=_vc_checkpoint_reference(
+                campaign_dir,
+                predecessor_path,
+                predecessor,
+            ),
+            execute_item_ids=source["execute_job_ids"],
+            reuse_item_ids=source["reuse_job_ids"],
+            actions=[action],
+            compiled_at_utc=now.isoformat(timespec="seconds"),
+            must_start_by_utc=must_start.isoformat(timespec="seconds"),
+        )
+    except codex_upgrade_vc_artifacts.VCArtifactError as error:
+        raise ConfigurationError(str(error)) from error
+    run_manifest = (
+        codex_upgrade_supervisor.build_recovery_finalization_campaign_run_manifest(
+            campaign_id=plan["campaign_id"],
+            campaign_plan_sha256=plan["plan_sha256"],
+            batch_id=batch["batch_id"],
+            batch_sequence=batch["sequence"],
+            batch_sha256=batch["batch_sha256"],
+            phase="VC-1",
+            predecessor_checkpoint=batch["predecessor_checkpoint"],
+            original_deadline_at_utc=batch["original_deadline_at_utc"],
+            recovery_contract={
+                "path": str(contract_path),
+                "sha256": file_sha256(contract_path),
+            },
+            recovery_predecessor=contract["failed_supervisor"],
+            continuation_predecessor=continuation["continuation_predecessor"],
+            continuation_manifest={
+                "path": str(continuation_path),
+                "sha256": file_sha256(continuation_path),
+            },
+            finalization_predecessor=finalization_predecessor,
+            deployment_receipt=deployment_binding,
+            maintenance_tool_transition=maintenance_transition,
+            effective_tool_transition=effective_transition,
+            actions=batch["actions"],
+            execute_items=batch["execute_item_ids"],
+            reuse_items=batch["reuse_item_ids"],
+        )
+    )
+    ensure_private_directory(batches_root, campaign_dir)
+    ensure_private_directory(manifests_root, campaign_dir)
+    _secure_write_json_once(batch_path, batch)
+    _secure_write_json_once(run_path, run_manifest)
+    return {
+        "status": "complete",
+        "campaign_id": plan["campaign_id"],
+        "phase": "VC-1",
+        "batch_sequence": 4,
+        "batch": str(batch_path),
+        "batch_sha256": batch["batch_sha256"],
+        "campaign_run_manifest": str(run_path),
+        "original_deadline_at_utc": plan["original_deadline_at_utc"],
+        "execute_item_ids": source["execute_job_ids"],
+        "reuse_item_ids": source["reuse_job_ids"],
+        "reservation_exists": False,
+        "live_request_count": 0,
+        "scanned_bytes": 0,
+    }
+
+
 def _load_interrupted_recovery_contract(
     campaign_dir: Path,
     manifest: Mapping[str, Any],
@@ -12920,10 +13156,30 @@ def _interrupted_recovery_transition_tool_identity(
 ) -> dict[str, Any]:
     """从 Campaign 原工具和 v3 合同重建当时已部署工具的逐文件身份。"""
 
-    expected_tool = manifest.get("tool_identity")
     transition = contract.get("tool_transition")
-    if not isinstance(expected_tool, Mapping) or not isinstance(transition, Mapping):
+    source = contract.get("source_attempt")
+    if not isinstance(transition, Mapping) or not isinstance(source, Mapping):
         raise ConfigurationError("中断恢复缺少可重建的工具 transition。")
+    return _interrupted_recovery_effective_tool_identity(
+        manifest,
+        transition,
+        execute_job_ids=source.get("execute_job_ids", []),
+        reuse_job_ids=source.get("reuse_job_ids", []),
+    )
+
+
+def _interrupted_recovery_effective_tool_identity(
+    manifest: Mapping[str, Any],
+    transition: Mapping[str, Any],
+    *,
+    execute_job_ids: Sequence[str],
+    reuse_job_ids: Sequence[str],
+) -> dict[str, Any]:
+    """从 Campaign 原工具和有效 transition 重建目标工具逐文件身份。"""
+
+    expected_tool = manifest.get("tool_identity")
+    if not isinstance(expected_tool, Mapping):
+        raise ConfigurationError("中断恢复缺少 Campaign 原工具身份。")
     entries = _tool_entry_index(expected_tool)
     for item in transition.get("changed_files", []):
         if not isinstance(item, Mapping):
@@ -12948,13 +13204,12 @@ def _interrupted_recovery_transition_tool_identity(
     }
     if rebuilt["files_sha256"] != transition.get("to_tool_files_sha256"):
         raise ConfigurationError("中断恢复工具 transition 无法重建目标工具摘要。")
-    source = contract["source_attempt"]
     if (
         _build_interrupted_recovery_tool_transition(
             manifest,
             rebuilt,
-            execute_job_ids=source["execute_job_ids"],
-            reuse_job_ids=source["reuse_job_ids"],
+            execute_job_ids=execute_job_ids,
+            reuse_job_ids=reuse_job_ids,
         )
         != transition
     ):
@@ -13065,6 +13320,47 @@ def _interrupted_recovery_failed_continuation_supervisor(
     return binding
 
 
+def _interrupted_recovery_failed_finalization_supervisor(
+    run_dir: Path,
+    *,
+    continuation_path: Path,
+    continuation: Mapping[str, Any],
+) -> dict[str, Any]:
+    """重放精确失败 v4，并生成 v5 不可替换的直接前序。"""
+
+    if not run_dir.is_absolute() or run_dir.is_symlink() or not run_dir.is_dir():
+        raise ConfigurationError("失败 v4 supervisor run_dir 不可信。")
+    try:
+        state = codex_upgrade_supervisor._read_state(run_dir)
+        record = _read_json(run_dir / "campaign-run-manifest.json", "失败 v4 清单")
+        prior_manifest = record.get("manifest")
+        if not isinstance(prior_manifest, Mapping):
+            raise ConfigurationError("失败 v4 清单缺少 manifest。")
+        binding = codex_upgrade_supervisor._recovery_finalization_predecessor_from_run(
+            state,
+            prior_manifest,
+            run_dir,
+        )
+    except codex_upgrade_supervisor.SupervisorError as error:
+        raise ConfigurationError(str(error)) from error
+    if (
+        prior_manifest != continuation
+        or record.get("manifest_sha256")
+        != codex_upgrade_supervisor._sha256(
+            codex_upgrade_supervisor._canonical(dict(continuation))
+        )
+        or continuation["actions"][0]["command"].count(
+            str(continuation_path)
+        )
+        != 1
+    ):
+        raise ConfigurationError("失败 v4 没有逐字绑定原续接清单或自身路径。")
+    audit = codex_upgrade_supervisor._audit_command(run_dir)
+    if audit.get("audit_incomplete") is not False:
+        raise ConfigurationError("失败 v4 supervisor 审计不完整。")
+    return binding
+
+
 def _load_interrupted_recovery_continuation_manifest(
     campaign_dir: Path,
     manifest: Mapping[str, Any],
@@ -13072,6 +13368,7 @@ def _load_interrupted_recovery_continuation_manifest(
     continuation_path: Path,
     contract_path: Path,
     contract: Mapping[str, Any],
+    enforce_current_tool: bool = True,
 ) -> dict[str, Any]:
     """重放 v4 清单、双前序、新部署及两段工具 transition。"""
 
@@ -13118,6 +13415,12 @@ def _load_interrupted_recovery_continuation_manifest(
     )
     if continuation != payload.get("continuation_predecessor"):
         raise ConfigurationError("v4 清单的失败 v3 直接前序漂移。")
+    continuation_tool = _interrupted_recovery_effective_tool_identity(
+        manifest,
+        payload["effective_tool_transition"],
+        execute_job_ids=source["execute_job_ids"],
+        reuse_job_ids=source["reuse_job_ids"],
+    )
     current_tool = _tool_identity(include_git=False)
     deploy_binding = payload["deployment_receipt"]
     deploy_path = Path(str(deploy_binding["path"]))
@@ -13132,11 +13435,134 @@ def _load_interrupted_recovery_continuation_manifest(
         deploy.get("schema_version") != "codex-arm64-supervisor-enable/v1"
         or deploy.get("status") != "passed"
         or deploy.get("architecture") != "aarch64"
-        or deploy.get("tool_files_sha256") != current_tool["files_sha256"]
-        or deploy_binding["tool_files_sha256"] != current_tool["files_sha256"]
+        or deploy.get("tool_files_sha256") != continuation_tool["files_sha256"]
+        or deploy_binding["tool_files_sha256"]
+        != continuation_tool["files_sha256"]
     ):
         raise ConfigurationError("v4 清单的新部署收据未绑定当前工具。")
     previous_tool = _interrupted_recovery_transition_tool_identity(manifest, contract)
+    maintenance = _build_interrupted_recovery_maintenance_transition(
+        previous_tool,
+        continuation_tool,
+    )
+    effective = _build_interrupted_recovery_tool_transition(
+        manifest,
+        continuation_tool,
+        execute_job_ids=source["execute_job_ids"],
+        reuse_job_ids=source["reuse_job_ids"],
+    )
+    if (
+        payload.get("maintenance_tool_transition") != maintenance
+        or payload.get("effective_tool_transition") != effective
+        or (
+            enforce_current_tool
+            and current_tool["files_sha256"] != continuation_tool["files_sha256"]
+        )
+    ):
+        raise ConfigurationError("v4 清单的维护或最终有效工具 transition 漂移。")
+    return payload
+
+
+def _load_interrupted_recovery_finalization_manifest(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    *,
+    finalization_path: Path,
+    contract_path: Path,
+    contract: Mapping[str, Any],
+) -> dict[str, Any]:
+    """重放 v5 清单、v4 失败前序、新部署及两段工具 transition。"""
+
+    expected_path = campaign_dir / "control" / "vc" / "run-manifests" / "0004-vc-1.json"
+    try:
+        resolved = finalization_path.resolve(strict=True)
+    except OSError as error:
+        raise ConfigurationError("v5 finalization manifest 不存在。") from error
+    if (
+        finalization_path.is_symlink()
+        or not finalization_path.is_file()
+        or resolved != expected_path.resolve(strict=True)
+    ):
+        raise ConfigurationError("v5 finalization manifest 不在唯一规范坐标。")
+    try:
+        payload = codex_upgrade_supervisor._campaign_run_manifest(resolved)
+    except codex_upgrade_supervisor.SupervisorError as error:
+        raise ConfigurationError(str(error)) from error
+    _plan_path, plan = _interrupted_recovery_campaign_plan(campaign_dir, manifest)
+    source = contract["source_attempt"]
+    expected_contract = {
+        "path": str(contract_path),
+        "sha256": file_sha256(contract_path),
+    }
+    continuation_binding = payload.get("continuation_manifest")
+    if (
+        payload.get("schema_version")
+        != codex_upgrade_supervisor.CAMPAIGN_RUN_RECOVERY_FINALIZATION_SCHEMA
+        or payload.get("campaign_id") != manifest.get("campaign_id")
+        or payload.get("campaign_plan_sha256") != plan.get("plan_sha256")
+        or payload.get("batch_sequence") != 4
+        or payload.get("phase") != "VC-1"
+        or payload.get("original_deadline_at_utc")
+        != plan.get("original_deadline_at_utc")
+        or payload.get("recovery_contract") != expected_contract
+        or payload.get("recovery_predecessor") != contract.get("failed_supervisor")
+        or payload.get("execute_items") != source.get("execute_job_ids")
+        or payload.get("reuse_items") != source.get("reuse_job_ids")
+        or not isinstance(continuation_binding, Mapping)
+        or set(continuation_binding) != {"path", "sha256"}
+    ):
+        raise ConfigurationError("v5 清单的 Campaign、合同或 2/27 闭集漂移。")
+    continuation_path = Path(str(continuation_binding["path"]))
+    if (
+        continuation_path.is_symlink()
+        or not continuation_path.is_file()
+        or file_sha256(continuation_path) != continuation_binding["sha256"]
+    ):
+        raise ConfigurationError("v5 清单绑定的原 v4 清单漂移。")
+    continuation = _load_interrupted_recovery_continuation_manifest(
+        campaign_dir,
+        manifest,
+        continuation_path=continuation_path,
+        contract_path=contract_path,
+        contract=contract,
+        enforce_current_tool=False,
+    )
+    if payload.get("continuation_predecessor") != continuation.get(
+        "continuation_predecessor"
+    ):
+        raise ConfigurationError("v5 清单的失败 v3 直接前序漂移。")
+    finalization = _interrupted_recovery_failed_finalization_supervisor(
+        Path(str(payload["finalization_predecessor"]["run_dir"])),
+        continuation_path=continuation_path,
+        continuation=continuation,
+    )
+    if finalization != payload.get("finalization_predecessor"):
+        raise ConfigurationError("v5 清单的失败 v4 直接前序漂移。")
+
+    current_tool = _tool_identity(include_git=False)
+    deploy_binding = payload["deployment_receipt"]
+    deploy_path = Path(str(deploy_binding["path"]))
+    if (
+        deploy_path.is_symlink()
+        or not deploy_path.is_file()
+        or file_sha256(deploy_path) != deploy_binding["sha256"]
+    ):
+        raise ConfigurationError("v5 清单的新部署收据路径或摘要漂移。")
+    deploy = _read_json(deploy_path, "v5 新部署收据")
+    if (
+        deploy.get("schema_version") != "codex-arm64-supervisor-enable/v1"
+        or deploy.get("status") != "passed"
+        or deploy.get("architecture") != "aarch64"
+        or deploy.get("tool_files_sha256") != current_tool["files_sha256"]
+        or deploy_binding["tool_files_sha256"] != current_tool["files_sha256"]
+    ):
+        raise ConfigurationError("v5 清单的新部署收据未绑定当前工具。")
+    previous_tool = _interrupted_recovery_effective_tool_identity(
+        manifest,
+        continuation["effective_tool_transition"],
+        execute_job_ids=source["execute_job_ids"],
+        reuse_job_ids=source["reuse_job_ids"],
+    )
     maintenance = _build_interrupted_recovery_maintenance_transition(
         previous_tool,
         current_tool,
@@ -13151,18 +13577,57 @@ def _load_interrupted_recovery_continuation_manifest(
         payload.get("maintenance_tool_transition") != maintenance
         or payload.get("effective_tool_transition") != effective
     ):
-        raise ConfigurationError("v4 清单的维护或最终有效工具 transition 漂移。")
+        raise ConfigurationError("v5 清单的维护或最终有效工具 transition 漂移。")
     return payload
+
+
+def _load_interrupted_recovery_effective_manifest(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    *,
+    continuation_path: Path,
+    contract_path: Path,
+    contract: Mapping[str, Any],
+) -> dict[str, Any]:
+    """按 schema 只读重放 v4 或本次唯一 v5 零请求清单。"""
+
+    schema_version = _read_json(
+        continuation_path,
+        "中断恢复续接清单",
+    ).get("schema_version")
+    if (
+        schema_version
+        == codex_upgrade_supervisor.CAMPAIGN_RUN_RECOVERY_CONTINUATION_SCHEMA
+    ):
+        return _load_interrupted_recovery_continuation_manifest(
+            campaign_dir,
+            manifest,
+            continuation_path=continuation_path,
+            contract_path=contract_path,
+            contract=contract,
+        )
+    if (
+        schema_version
+        == codex_upgrade_supervisor.CAMPAIGN_RUN_RECOVERY_FINALIZATION_SCHEMA
+    ):
+        return _load_interrupted_recovery_finalization_manifest(
+            campaign_dir,
+            manifest,
+            finalization_path=continuation_path,
+            contract_path=contract_path,
+            contract=contract,
+        )
+    raise ConfigurationError("中断恢复续接清单 schema_version 不受支持。")
 
 
 def _validate_interrupted_recovery_continuation_parent(
     continuation_path: Path,
     continuation: Mapping[str, Any],
 ) -> None:
-    """确认续接命令正由绑定自身清单的唯一 v4 父动作派发。"""
+    """确认续接命令正由绑定自身清单的唯一 v4/v5 父动作派发。"""
 
     if os.environ.get(codex_upgrade_supervisor.CAMPAIGN_RUN_CONTEXT_ENV) != "1":
-        raise ConfigurationError("中断恢复续接命令只能由 campaign-run v4 派发。")
+        raise ConfigurationError("中断恢复续接命令只能由 campaign-run v4/v5 派发。")
     run_dir = Path(os.environ.get(codex_upgrade_supervisor.CAMPAIGN_RUN_DIR_ENV, ""))
     action_id = os.environ.get(codex_upgrade_supervisor.CAMPAIGN_RUN_ACTION_ID_ENV)
     record_path = run_dir / "campaign-run-manifest.json"
@@ -13170,8 +13635,16 @@ def _validate_interrupted_recovery_continuation_parent(
         raise ConfigurationError("中断恢复续接父监督器清单不存在或不可信。")
     record = _read_json(record_path, "中断恢复续接父队列")
     if (
-        record.get("manifest") != continuation
-        or record.get("manifest_sha256") != _fingerprint(dict(continuation))
+        continuation.get("schema_version")
+        not in {
+            codex_upgrade_supervisor.CAMPAIGN_RUN_RECOVERY_CONTINUATION_SCHEMA,
+            codex_upgrade_supervisor.CAMPAIGN_RUN_RECOVERY_FINALIZATION_SCHEMA,
+        }
+        or record.get("manifest") != continuation
+        or record.get("manifest_sha256")
+        != codex_upgrade_supervisor._sha256(
+            codex_upgrade_supervisor._canonical(dict(continuation))
+        )
         or action_id != "continue-vc1-interruption-preview"
         or len(continuation.get("actions", [])) != 1
         or continuation["actions"][0]["command"].count(
@@ -13179,7 +13652,7 @@ def _validate_interrupted_recovery_continuation_parent(
         )
         != 1
     ):
-        raise ConfigurationError("中断恢复续接父 v4 清单、自绑定或动作漂移。")
+        raise ConfigurationError("中断恢复续接父 v4/v5 清单、自绑定或动作漂移。")
 
 
 def _interrupted_recovery_attempt_binding(
@@ -13447,6 +13920,9 @@ def _validate_interrupted_recovery_transition(
         "zero_request_boundary",
         "transition_sha256",
     }
+    continuation_binding = payload.get("continuation_manifest")
+    if continuation_binding is not None:
+        required.add("continuation_manifest")
     unsigned = dict(payload)
     digest = unsigned.pop("transition_sha256", None)
     contract_binding = payload.get("contract")
@@ -13486,7 +13962,7 @@ def _validate_interrupted_recovery_transition(
             not isinstance(continuation_binding, Mapping)
             or set(continuation_binding) != {"path", "sha256"}
         ):
-            raise ConfigurationError("中断恢复 transition 的 v4 清单绑定非法。")
+            raise ConfigurationError("中断恢复 transition 的续接清单绑定非法。")
         continuation_path = _campaign_file(
             campaign_dir,
             str(continuation_binding["path"]),
@@ -13496,8 +13972,8 @@ def _validate_interrupted_recovery_transition(
             or not continuation_path.is_file()
             or file_sha256(continuation_path) != continuation_binding["sha256"]
         ):
-            raise ConfigurationError("中断恢复 transition 的 v4 清单摘要漂移。")
-        continuation = _load_interrupted_recovery_continuation_manifest(
+            raise ConfigurationError("中断恢复 transition 的续接清单摘要漂移。")
+        continuation = _load_interrupted_recovery_effective_manifest(
             campaign_dir,
             manifest,
             continuation_path=continuation_path,
@@ -13682,7 +14158,7 @@ def continue_vc1_interruption(arguments: argparse.Namespace) -> dict[str, Any]:
         enforce_current_tool=False,
     )
     continuation_path = arguments.continuation_manifest.resolve(strict=True)
-    continuation = _load_interrupted_recovery_continuation_manifest(
+    continuation = _load_interrupted_recovery_effective_manifest(
         campaign_dir,
         manifest,
         continuation_path=continuation_path,

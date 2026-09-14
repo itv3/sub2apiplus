@@ -1268,6 +1268,8 @@ result_key = item_id + input_sha256 + environment_sha256 + direct_dependency_sha
 `codex-upgrade-campaign-run/v4` 同样不是普通阶段版本；它只承接已经封口 attempt、但因
 `watchdog-heartbeat.json` 路径基准缺陷失败的唯一 v3，并且只能作为 sequence 3 执行一次。其他 v3 失败
 一律停线，不能借用 v4。
+`codex-upgrade-campaign-run/v5` 只承接该唯一 v4 因父 `campaign-run` 清单摘要换行规范不一致而产生的
+确定性零请求失败，并且只能作为 sequence 4 执行一次；它不是通用重试版本。其他 v4 失败一律停线。
 `codex-upgrade-campaign-run/v1` 只保留给历史兼容与离线回归；`campaign-start`、`campaign-mark`、
 `campaign-exec` 不得编排新 Campaign。
 
@@ -1359,6 +1361,27 @@ python3 tools/official_client_capture/codex_upgrade.py \
 attempt、不创建 reservation、不发送请求；它只签发 transition 并输出 `execute=27`、`reuse=2`、
 `reservation_exists=false`、`live_request_count=0`、`scanned_bytes=0`。成功后由操作员确认，sequence 4 才可
 回到普通 v2 真实补跑。
+
+若唯一 v4 已经封存失败，且动作诊断逐字等于
+`ConfigurationError: 中断恢复续接父 v4 清单、自绑定或动作漂移。`，同时只读复算证明父记录的
+`manifest_sha256` 恰好是规范 JSON 加结尾换行的摘要、其他父绑定条件全部成立、transition 尚不存在，
+则不得改写或重跑 v4。部署修复工具后，以同一编译入口生成唯一 v5：
+
+```bash
+python3 tools/official_client_capture/codex_upgrade.py \
+  compile-vc-interrupted-recovery-continuation \
+  --campaign-dir /绝对路径/campaign \
+  --sequence 4 \
+  --recovery-contract /绝对路径/campaign/control/vc/recovery-contracts/0002-vc-1.json \
+  --continuation-manifest /绝对路径/campaign/control/vc/run-manifests/0003-vc-1.json \
+  --failed-continuation-supervisor-run-dir /绝对路径/原state-dir/run-<失败v4-owner-nonce> \
+  --deployment-receipt /绝对路径/修复后ARM64工具部署收据
+```
+
+随后仍在原 `state-dir` 执行新生成的 `0004-vc-1.json`。v5 必须逐字绑定失败 v2／v3／v4、原 v4 清单、
+原恢复合同、新部署收据，以及 v4 工具到当前工具的纯评估／控制变化；不得改变产出侧文件，且仍不得重做
+after 探针、改写 attempt、创建 reservation 或发送请求。成功后由操作员确认，sequence 5 才可回到普通
+v2 真实补跑；v5 失败不得再生成第六种恢复清单。
 
 ### Codex 连续监督、时间账本与文档部署
 
