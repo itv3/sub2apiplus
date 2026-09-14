@@ -11,6 +11,95 @@ from tools.official_client_capture import codex_upgrade_vc_artifacts as artifact
 
 
 class CodexUpgradeVCArtifactsTests(unittest.TestCase):
+    @staticmethod
+    def _campaign_plan() -> dict[str, object]:
+        return artifacts.build_campaign_plan(
+            campaign_id="codex-0_154_0-campaign",
+            campaign_mode="formal",
+            campaign_purpose="validation_only",
+            baseline_version="0.151.0",
+            target_version="0.154.0",
+            created_at_utc="2026-09-14T00:00:00Z",
+            original_deadline_at_utc="2026-09-14T12:00:00Z",
+            timing_checkpoint_sha256="1" * 64,
+            arm64_environment_sha256="2" * 64,
+            job_rehearsal_sha256="3" * 64,
+            p0_gate_sha256="4" * 64,
+        )
+
+    def _interrupted_recovery_contract(self) -> dict[str, object]:
+        plan = self._campaign_plan()
+        return artifacts.build_interrupted_recovery_contract(
+            campaign_plan=plan,
+            batch_sequence=2,
+            source_attempt={
+                "attempt_id": "attempt-a",
+                "reservation": {
+                    "path": "official/attempts/attempt-a/reservation.json",
+                    "sha256": "5" * 64,
+                    "reservation_digest": "6" * 64,
+                },
+                "run_nonce": "7" * 64,
+                "identity_sha256": "8" * 64,
+                "checkpoint": {
+                    "path": "official/attempts/attempt-a/checkpoints",
+                    "record_count": 2,
+                    "last_sequence": 2,
+                    "last_sha256": "9" * 64,
+                },
+                "planned_job_ids": ["job-a", "job-b", "job-c"],
+                "completed_job_ids": ["job-a"],
+                "failed_job_ids": ["job-b"],
+                "pending_job_ids": ["job-c"],
+                "execute_job_ids": ["job-b", "job-c"],
+                "reuse_job_ids": ["job-a"],
+            },
+            failed_supervisor={
+                "run_dir": "/srv/control/run-a",
+                "state_sha256": "a" * 64,
+                "manifest_sha256": "b" * 64,
+                "stop_receipt_sha256": "c" * 64,
+                "owner_nonce": "d" * 64,
+                "terminal_at_utc": "2026-09-14T01:00:00Z",
+                "state": "failed",
+                "reason": "KeyboardInterrupt",
+                "batch_id": "vc-1-0001",
+                "batch_sequence": 1,
+                "batch_sha256": "e" * 64,
+            },
+            timing_ledger={
+                "ledger_dir": "/srv/control/ledger",
+                "ledger_plan_sha256": "f" * 64,
+                "event_head_sequence": 6,
+                "event_head_sha256": "0" * 64,
+                "status": "active",
+                "total_live_request_count": 26,
+                "total_deadline_at_utc": plan["original_deadline_at_utc"],
+            },
+            deployment_receipt={
+                "path": "/srv/control/deploy.json",
+                "sha256": "1" * 64,
+                "tool_files_sha256": "2" * 64,
+            },
+            tool_transition={
+                "from_tool_files_sha256": "3" * 64,
+                "to_tool_files_sha256": "2" * 64,
+                "changed_files": [
+                    {
+                        "path": "run_official_relay_scenario.sh",
+                        "from_sha256": "4" * 64,
+                        "to_sha256": "5" * 64,
+                        "classification": "failed_job_production",
+                        "affected_job_ids": ["job-b", "job-c"],
+                    }
+                ],
+                "allowed_production_paths": ["run_official_relay_scenario.sh"],
+                "affected_job_ids": ["job-b", "job-c"],
+            },
+            compiled_at_utc="2026-09-14T01:01:00Z",
+            must_start_by_utc="2026-09-14T01:03:00Z",
+        )
+
     def _requirements(
         self,
         affected: list[str] | None = None,
@@ -247,6 +336,44 @@ class CodexUpgradeVCArtifactsTests(unittest.TestCase):
         self.assertEqual(production["release_state"], "production_active_restored")
         self.assertEqual(build_receipt["candidate_purpose"], "validation_only")
 
+    def test_interrupted_recovery_contract_closes_execute_reuse_and_zero_boundary(self) -> None:
+        contract = self._interrupted_recovery_contract()
+        self.assertEqual(
+            artifacts.validate_interrupted_recovery_contract(
+                contract,
+                self._campaign_plan(),
+            ),
+            contract,
+        )
+
+        wrong_partition = copy.deepcopy(contract)
+        wrong_partition["source_attempt"]["completed_job_ids"] = ["job-a", "job-b"]
+        wrong_partition["contract_sha256"] = artifacts.digest(
+            {key: value for key, value in wrong_partition.items() if key != "contract_sha256"}
+        )
+        with self.assertRaisesRegex(artifacts.VCArtifactError, "执行／复用闭集"):
+            artifacts.validate_interrupted_recovery_contract(wrong_partition)
+
+        wrong_boundary = copy.deepcopy(contract)
+        wrong_boundary["zero_request_boundary"]["reservation_exists"] = True
+        wrong_boundary["contract_sha256"] = artifacts.digest(
+            {key: value for key, value in wrong_boundary.items() if key != "contract_sha256"}
+        )
+        with self.assertRaisesRegex(artifacts.VCArtifactError, "零预约"):
+            artifacts.validate_interrupted_recovery_contract(wrong_boundary)
+
+    def test_interrupted_recovery_rejects_production_change_on_completed_job(self) -> None:
+        contract = self._interrupted_recovery_contract()
+        tampered = copy.deepcopy(contract)
+        changed = tampered["tool_transition"]["changed_files"][0]
+        changed["affected_job_ids"] = ["job-a"]
+        tampered["tool_transition"]["affected_job_ids"] = ["job-a"]
+        tampered["contract_sha256"] = artifacts.digest(
+            {key: value for key, value in tampered.items() if key != "contract_sha256"}
+        )
+        with self.assertRaisesRegex(artifacts.VCArtifactError, "越过 failed/pending"):
+            artifacts.validate_interrupted_recovery_contract(tampered)
+
     def test_new_schema_files_match_runtime_versions(self) -> None:
         root = Path(artifacts.__file__).resolve().parent
         expected = {
@@ -254,6 +381,7 @@ class CodexUpgradeVCArtifactsTests(unittest.TestCase):
             "codex_upgrade_vc_checkpoint.schema.json": artifacts.VC_CHECKPOINT_SCHEMA,
             "codex_upgrade_vc_batch.schema.json": artifacts.VC_BATCH_SCHEMA,
             "codex_upgrade_vc_action_plan.schema.json": artifacts.VC_ACTION_PLAN_SCHEMA,
+            "codex_upgrade_interrupted_recovery_contract.schema.json": artifacts.INTERRUPTED_RECOVERY_CONTRACT_SCHEMA,
             "codex_upgrade_gate_requirements.schema.json": artifacts.GATE_REQUIREMENTS_SCHEMA,
             "codex_upgrade_gate_mapping.schema.json": artifacts.GATE_MAPPING_SCHEMA,
             "codex_upgrade_gate_plan.schema.json": artifacts.GATE_PLAN_SCHEMA,

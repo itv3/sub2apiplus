@@ -7476,6 +7476,8 @@ class CodexUpgradeTest(unittest.TestCase):
                 "canonical-import",
                 "canonical-advance",
                 "compile-vc-batch",
+                "compile-vc-interrupted-recovery-batch",
+                "recover-vc1-interruption",
                 "successor",
                 "capture-official",
                 "classify",

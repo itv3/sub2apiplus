@@ -68,11 +68,13 @@ from typing import Any, Callable, Mapping
 # 回程 SYN-ACK MSS、隔离无凭据 Codex Doctor Rust TLS 路径和 attempt heartbeat phase。
 # 2026-09-14（VC-1 抓包运行根与 MITM 生命周期修复）：宿主 wrapper 分离容器
 # 逻辑根与宿主数据根，MITM 启动失败统一回收，并补齐失败请求计数审计。
+# 2026-09-14（VC-1 KeyboardInterrupt 孤儿恢复）：新增失败 attempt 零请求封口、
+# 唯一 v3 恢复预览和普通 v2 定向补跑的合同闭环；受管工具树摘要随之更新。
 DEFAULT_TOOL_DIGEST = (
-    "97c840d9d6d9af72b28c0bcd6800951d821b80f7c6b2e00f38965ad0e6a7fee8"
+    "6e0d133eaa65a7c4e7b195f2a3a913321b86f60c8c04c41cedc594cfa9c7002a"
 )
 DEFAULT_SUPERVISOR_DIGEST = (
-    "6ed44c1827727c854783f668e45226316698964c5a42b24746641d4f79eb17d1"
+    "cf8a4514c6e31feaae3e6077e256ff8412cdb3ce1da7a586c2b74bfdce99dbfa"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "b9ca7b6f48b3c33a63a864a9ce7ebd617335378ea52fe9148ea161ab3b276ada"

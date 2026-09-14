@@ -162,6 +162,14 @@
       "description": "评估工具 transition 的受控绑定；失败源 attempt 仅授权 capture-run，补跑闭集完成的新 attempt 承接同一绑定后才可进行离线 seal/compare/accept。",
       "$ref": "#/$defs/fileBinding"
     },
+    "interrupted_recovery": {
+      "description": "VC-1 父队列中断后，以零请求方式封口孤儿 attempt 的合同绑定。",
+      "$ref": "#/$defs/interruptedRecovery"
+    },
+    "interrupted_recovery_transition": {
+      "description": "恢复后继 attempt 对源孤儿 attempt 专用 transition 的只读绑定。",
+      "$ref": "#/$defs/fileBinding"
+    },
     "classification_candidate_reuse_transition": {
       "description": "分类事实纠正后继对直接前序九项 Candidate 结果的零执行复用授权。",
       "$ref": "#/$defs/fileBinding"
@@ -346,6 +354,38 @@
           }
         }
       }
+    },
+    {
+      "if": {
+        "required": ["interrupted_recovery"]
+      },
+      "then": {
+        "properties": {
+          "phase": {"const": "official"},
+          "candidate_id": {"const": null},
+          "candidate_purpose": {"const": null},
+          "status": {"const": "failed"},
+          "restoration_error": {"type": "null"}
+        },
+        "not": {
+          "required": ["interrupted_recovery_transition"]
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["interrupted_recovery_transition"]
+      },
+      "then": {
+        "properties": {
+          "phase": {"const": "official"},
+          "candidate_id": {"const": null},
+          "candidate_purpose": {"const": null}
+        },
+        "not": {
+          "required": ["interrupted_recovery"]
+        }
+      }
     }
   ],
   "$defs": {
@@ -357,6 +397,21 @@
     "safeId": {
       "type": "string",
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "interruptedRecovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract", "request_boundary"],
+      "properties": {
+        "contract": {"$ref": "#/$defs/fileBinding"},
+        "request_boundary": {
+          "const": {
+            "reservation_exists": false,
+            "live_request_count": 0,
+            "scanned_bytes": 0
+          }
+        }
+      }
     },
     "candidatePurpose": {
       "enum": [

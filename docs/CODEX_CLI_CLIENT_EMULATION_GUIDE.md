@@ -1243,7 +1243,9 @@ Framework §5.3 是升级总操作入口并规定 `VC-0～VC-6` 顺序；本部�
    阶段队列：VC-0 的 `preflight_only plan` 只创建离线预检；Formal `plan` 只能由
    `codex_upgrade_vc0_closeout.py` 在原子收口进程内调用；`reuse-official-evidence` 创建全新 Campaign，
    以零请求导入已封存官方证据，并生成“全部 official Job 为 reuse”的 VC-1 no-op 批次及 checkpoint；
-   `compile-vc-batch` 在前序 checkpoint 封存后只编译下一批。三者都不得放入 `campaign-run` 动作队列，
+   `compile-vc-batch` 在前序 checkpoint 封存后只编译下一批；
+   `compile-vc-interrupted-recovery-batch` 只为下述 `KeyboardInterrupt` 孤儿编译一次 v3 预览批次。
+   这四者都不得放入 `campaign-run` 动作队列，
    不得延长原始 deadline 或执行阶段数据面动作。
 3. 身份变化、失败恢复和 `execute／reuse` 计算统一执行 Framework §5.1.2、§5.3.2～§5.3.4；各阶段只写
    Codex 专用触发条件，不重复建立身份或恢复矩阵。
@@ -1261,6 +1263,8 @@ result_key = item_id + input_sha256 + environment_sha256 + direct_dependency_sha
 逐文件依赖必须登记到 `producer／evaluator／control／scenario／runtime／network／gate` 之一。正式阶段动作队列
 唯一派发入口是 `tools/official_client_capture/codex_upgrade_supervisor.py campaign-run`；VC-0～VC-6 新流程使用
 `codex-upgrade-campaign-run/v2`，并绑定 Campaign 总计划、批次、直接前序 checkpoint 和原始绝对 deadline。
+`codex-upgrade-campaign-run/v3` 不是普通阶段版本，只允许作为一个失败 v2 的唯一直接后继，用于 VC-1
+中断恢复的零请求预览；成功 v3 之后的真实补跑仍回到普通 v2。
 `codex-upgrade-campaign-run/v1` 只保留给历史兼容与离线回归；`campaign-start`、`campaign-mark`、
 `campaign-exec` 不得编排新 Campaign。
 
@@ -1289,6 +1293,47 @@ seal preview；同时变化只能属于 `control／evaluator／orchestrator`。�
 旧恢复机制及 Kilo 历史事实只按
 [历史审计](CODEX_CLI_CLIENT_EMULATION_HISTORY_AUDIT.md#codex-0151-historical-recovery)读取，不得成为新 Campaign
 的前置条件。
+
+#### VC-1 `KeyboardInterrupt` 孤儿的单次恢复
+
+只有同时满足下列条件才使用本分支：失败父批次是 v2 且终态为 `failed/KeyboardInterrupt`；官方 attempt
+已有同一 reservation 和可重放 checkpoint，但没有 `attempt.json`；checkpoint 同时包含已完成项和
+失败／待执行项；Campaign、目标产物、账号权限、模型可见性、环境语义及原始 deadline 未变化。工具变化
+必须逐文件分类，评估／控制侧可离线承接；产出侧文件必须精确映射到 `failed ∪ pending`，不得触及
+`complete`。
+
+先直接编译一次性合同和 v3 清单：
+
+```bash
+python3 tools/official_client_capture/codex_upgrade.py \
+  compile-vc-interrupted-recovery-batch \
+  --campaign-dir /绝对路径/campaign \
+  --sequence <失败批次序号+1> \
+  --source-attempt /绝对路径/campaign/official/attempts/<attempt-id> \
+  --failed-supervisor-run-dir /绝对路径/原state-dir/run-<owner-nonce> \
+  --timing-ledger-dir /绝对路径/连续时间账本 \
+  --deployment-receipt /绝对路径/当前ARM64工具部署收据
+```
+
+随后必须使用失败批次原来的 `state-dir` 立即执行生成的 v3 清单；改用空目录会因缺少唯一直接失败前序而
+拒绝：
+
+```bash
+python3 tools/official_client_capture/codex_upgrade_supervisor.py campaign-run \
+  --state-dir /绝对路径/原state-dir \
+  --manifest /绝对路径/campaign/control/vc/run-manifests/<序号>-vc-1.json
+```
+
+v3 恰好包含一个 `recover-vc1-interruption` 动作。它只补齐原 attempt 的 after／ARM64 after／恢复收据，
+写入不可变失败终态和专用 transition，再调用 `resume --rerun-failed --preview-recovery`；禁止携带
+`--acknowledge-live-requests`。成功输出必须逐字证明 execute／reuse 集合与合同一致，并满足
+`reservation_exists=false`、`live_request_count=0`、`scanned_bytes=0`。这一步不生成 VC-1 checkpoint，
+也不表示 execute 项已经运行。
+
+操作员确认预览后，按普通 action plan 编译下一序号的 VC-1 v2 批次，动作才可携带
+`resume --rerun-failed --acknowledge-live-requests` 执行冻结的 execute 闭集；复用项继续只读承接。
+合同、transition、源 attempt、失败 v2 和预览 v3 均只写追加，任一摘要、owner nonce、Ledger head、部署
+工具或闭集漂移都停线，不得重编同一序号或新建 reservation 试探。
 
 ### Codex 连续监督、时间账本与文档部署
 

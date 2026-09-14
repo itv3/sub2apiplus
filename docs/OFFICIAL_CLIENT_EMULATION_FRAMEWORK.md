@@ -637,6 +637,17 @@ P0 只做离线预检，不采集目标 live 证据、不创建 Candidate、不�
 | 仅运行坐标变化，且产物、权限和环境语义均不变 | 保留 Campaign 和 Candidate | 在首次 attempt 前按客户端指南登记坐标变化；否则重新判定身份 |
 | 控制面或 evaluator 工具变化 | 不改变数据面身份 | 按 §5.1.3 只重跑受影响的离线门禁 |
 
+父监督器因明确的 `KeyboardInterrupt` 失败、同一 attempt 已有追加式 Job checkpoint 但尚未写入终态时，
+只有在目标、账号权限、环境语义和数据面身份均未变化的情况下，才允许使用客户端专用的中断恢复合同。
+该合同必须同时冻结失败父监督器、原 reservation、checkpoint 的 `complete／failed／pending` 闭集、原始
+deadline、连续时间账本、当前部署收据及逐文件工具差异。产出侧变化只能映射到 `failed ∪ pending`，
+`complete` 只能只读复用；无法逐文件证明影响范围时回到停线处置。
+
+中断后的第一个后继批次只能补齐原 attempt 的环境恢复终态、签发单次 transition，并在 reservation 前
+输出恢复预览；其边界必须是 `reservation_exists=false`、`live_request_count=0`、`scanned_bytes=0`。
+预览不得执行任何 Job。操作员确认 execute／reuse 闭集后，才可由下一份普通阶段批次派发真实补跑；任何
+工具都不得把“恢复预览成功”解释为阶段 Job 已执行或 VC 阶段已完成。
+
 任何恢复分支都不得改写历史实体或自动重发已封存的官方请求；没有实际执行项时不得创建空转身份。
 
 ### 5.3.5 时间预算与停线

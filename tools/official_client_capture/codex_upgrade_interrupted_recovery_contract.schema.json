@@ -1,0 +1,187 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-interrupted-recovery-contract.json",
+  "title": "Codex VC-1 中断恢复合同",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "campaign_id",
+    "campaign_plan_sha256",
+    "phase",
+    "batch_sequence",
+    "source_attempt",
+    "failed_supervisor",
+    "timing_ledger",
+    "deployment_receipt",
+    "tool_transition",
+    "zero_request_boundary",
+    "compiled_at_utc",
+    "must_start_by_utc",
+    "original_deadline_at_utc",
+    "contract_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "codex-upgrade-interrupted-recovery-contract/v1"},
+    "campaign_id": {"$ref": "#/$defs/safeId"},
+    "campaign_plan_sha256": {"$ref": "#/$defs/sha256"},
+    "phase": {"const": "VC-1"},
+    "batch_sequence": {"type": "integer", "minimum": 2},
+    "source_attempt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "attempt_id", "reservation", "run_nonce", "identity_sha256",
+        "checkpoint", "planned_job_ids", "completed_job_ids", "failed_job_ids",
+        "pending_job_ids", "execute_job_ids", "reuse_job_ids"
+      ],
+      "properties": {
+        "attempt_id": {"$ref": "#/$defs/safeId"},
+        "reservation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "sha256", "reservation_digest"],
+          "properties": {
+            "path": {"type": "string", "minLength": 1},
+            "sha256": {"$ref": "#/$defs/sha256"},
+            "reservation_digest": {"$ref": "#/$defs/sha256"}
+          }
+        },
+        "run_nonce": {"$ref": "#/$defs/sha256"},
+        "identity_sha256": {"$ref": "#/$defs/sha256"},
+        "checkpoint": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "record_count", "last_sequence", "last_sha256"],
+          "properties": {
+            "path": {"type": "string", "minLength": 1},
+            "record_count": {"type": "integer", "minimum": 1},
+            "last_sequence": {"type": "integer", "minimum": 1},
+            "last_sha256": {"$ref": "#/$defs/sha256"}
+          }
+        },
+        "planned_job_ids": {"$ref": "#/$defs/idArray"},
+        "completed_job_ids": {"$ref": "#/$defs/idArray"},
+        "failed_job_ids": {"$ref": "#/$defs/idArray"},
+        "pending_job_ids": {"$ref": "#/$defs/idArray"},
+        "execute_job_ids": {"$ref": "#/$defs/idArray"},
+        "reuse_job_ids": {"$ref": "#/$defs/idArray"}
+      }
+    },
+    "failed_supervisor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "run_dir", "state_sha256", "manifest_sha256", "stop_receipt_sha256",
+        "owner_nonce", "terminal_at_utc", "state", "reason", "batch_id",
+        "batch_sequence", "batch_sha256"
+      ],
+      "properties": {
+        "run_dir": {"type": "string", "pattern": "^/"},
+        "state_sha256": {"$ref": "#/$defs/sha256"},
+        "manifest_sha256": {"$ref": "#/$defs/sha256"},
+        "stop_receipt_sha256": {"$ref": "#/$defs/sha256"},
+        "owner_nonce": {"$ref": "#/$defs/sha256"},
+        "terminal_at_utc": {"type": "string", "format": "date-time"},
+        "state": {"const": "failed"},
+        "reason": {"const": "KeyboardInterrupt"},
+        "batch_id": {"$ref": "#/$defs/safeId"},
+        "batch_sequence": {"type": "integer", "minimum": 1},
+        "batch_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "timing_ledger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "ledger_dir", "ledger_plan_sha256", "event_head_sequence",
+        "event_head_sha256", "status", "total_live_request_count",
+        "total_deadline_at_utc"
+      ],
+      "properties": {
+        "ledger_dir": {"type": "string", "pattern": "^/"},
+        "ledger_plan_sha256": {"$ref": "#/$defs/sha256"},
+        "event_head_sequence": {"type": "integer", "minimum": 1},
+        "event_head_sha256": {"$ref": "#/$defs/sha256"},
+        "status": {"const": "active"},
+        "total_live_request_count": {"type": "integer", "minimum": 1},
+        "total_deadline_at_utc": {"type": "string", "format": "date-time"}
+      }
+    },
+    "deployment_receipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "tool_files_sha256"],
+      "properties": {
+        "path": {"type": "string", "pattern": "^/"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "tool_files_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "tool_transition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "from_tool_files_sha256", "to_tool_files_sha256", "changed_files",
+        "allowed_production_paths", "affected_job_ids"
+      ],
+      "properties": {
+        "from_tool_files_sha256": {"$ref": "#/$defs/sha256"},
+        "to_tool_files_sha256": {"$ref": "#/$defs/sha256"},
+        "changed_files": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "path", "from_sha256", "to_sha256", "classification",
+              "affected_job_ids"
+            ],
+            "properties": {
+              "path": {"type": "string", "minLength": 1},
+              "from_sha256": {"oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
+              "to_sha256": {"oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
+              "classification": {
+                "enum": ["evaluation", "phase_scoped_hybrid", "failed_job_production"]
+              },
+              "affected_job_ids": {"$ref": "#/$defs/idArray"}
+            }
+          }
+        },
+        "allowed_production_paths": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "affected_job_ids": {"$ref": "#/$defs/idArray"}
+      }
+    },
+    "zero_request_boundary": {
+      "const": {
+        "reservation_exists": false,
+        "live_request_count": 0,
+        "scanned_bytes": 0
+      }
+    },
+    "compiled_at_utc": {"type": "string", "format": "date-time"},
+    "must_start_by_utc": {"type": "string", "format": "date-time"},
+    "original_deadline_at_utc": {"type": "string", "format": "date-time"},
+    "contract_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "safeId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "idArray": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/safeId"}
+    }
+  }
+}

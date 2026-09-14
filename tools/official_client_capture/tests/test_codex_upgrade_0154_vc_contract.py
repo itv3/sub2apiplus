@@ -302,7 +302,12 @@ class CodexUpgrade0154VCContractTests(unittest.TestCase):
             campaign_mode="preflight_only",
             target_version="0.154.0",
         )
-        for command in ("plan", "reuse-official-evidence", "compile-vc-batch"):
+        for command in (
+            "plan",
+            "reuse-official-evidence",
+            "compile-vc-batch",
+            "compile-vc-interrupted-recovery-batch",
+        ):
             with self.subTest(command=command), mock.patch.dict(
                 os.environ,
                 {},
@@ -341,6 +346,221 @@ class CodexUpgrade0154VCContractTests(unittest.TestCase):
                     formal_arguments,
                     "plan",
                 )
+
+    def test_interrupted_recovery_rejects_owner_nonce_tampering(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory).resolve()
+            binding = {
+                "owner_nonce": "1" * 64,
+            }
+            with (
+                mock.patch.object(
+                    codex_upgrade.codex_upgrade_supervisor,
+                    "_read_state",
+                    return_value={"campaign_id": "campaign-a"},
+                ),
+                mock.patch.object(
+                    codex_upgrade,
+                    "_read_json",
+                    return_value={"manifest": {}},
+                ),
+                mock.patch.object(
+                    codex_upgrade.codex_upgrade_supervisor,
+                    "_recovery_predecessor_from_run",
+                    return_value=binding,
+                ),
+                mock.patch.object(
+                    codex_upgrade.codex_upgrade_supervisor,
+                    "_audit_command",
+                    return_value={"audit_incomplete": False},
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    codex_upgrade.ConfigurationError,
+                    "owner 不一致",
+                ):
+                    codex_upgrade._interrupted_recovery_failed_supervisor(
+                        run_dir,
+                        campaign_id="campaign-a",
+                        owner_nonce="2" * 64,
+                    )
+
+    def test_interrupted_attempt_close_is_idempotent_without_new_probe(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            campaign_dir = Path(directory) / "campaign"
+            attempt_root = (
+                campaign_dir / "official" / "attempts" / "attempt-a"
+            )
+            attempt_root.mkdir(parents=True)
+            contract_path = (
+                campaign_dir
+                / "control"
+                / "vc"
+                / "recovery-contracts"
+                / "0002-vc-1.json"
+            )
+            self._write(contract_path, {"fixture": True})
+            marker = {
+                "contract": {
+                    "path": contract_path.relative_to(campaign_dir).as_posix(),
+                    "sha256": codex_upgrade.file_sha256(contract_path),
+                },
+                "request_boundary": {
+                    "reservation_exists": False,
+                    "live_request_count": 0,
+                    "scanned_bytes": 0,
+                },
+            }
+            existing = {"interrupted_recovery": marker}
+            (attempt_root / "attempt.json").write_text("{}\n", encoding="utf-8")
+            with (
+                mock.patch.object(
+                    codex_upgrade,
+                    "_load_capture_attempt",
+                    return_value=(attempt_root, existing),
+                ),
+                mock.patch.object(
+                    codex_upgrade,
+                    "_interrupted_recovery_source_snapshot",
+                    side_effect=AssertionError("幂等重放不得重新读取孤儿路径"),
+                ),
+                mock.patch.object(
+                    codex_upgrade,
+                    "_probe_capture_environment",
+                    side_effect=AssertionError("幂等重放不得重新探测环境"),
+                ),
+            ):
+                self.assertEqual(
+                    codex_upgrade._close_interrupted_recovery_attempt(
+                        campaign_dir,
+                        self._manifest(),
+                        contract_path,
+                        {"source_attempt": {"attempt_id": "attempt-a"}},
+                    ),
+                    (attempt_root, existing),
+                )
+
+    def test_interrupted_attempt_close_rejects_partial_after_before_probe(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            campaign_dir = Path(directory) / "campaign"
+            attempt_root = (
+                campaign_dir / "official" / "attempts" / "attempt-a"
+            )
+            environment_root = attempt_root / "evidence" / "environment"
+            self._write(
+                environment_root / "before" / "probe-manifest.json",
+                {"phase": "before"},
+            )
+            self._write(
+                environment_root / "arm64-before" / "receipt.json",
+                {"fixture": True},
+            )
+            self._write(
+                environment_root / "after" / "probe-manifest.json",
+                {"partial": True},
+            )
+            source = {"attempt_id": "attempt-a"}
+            active = mock.MagicMock()
+            with (
+                mock.patch.object(
+                    codex_upgrade,
+                    "_interrupted_recovery_source_snapshot",
+                    return_value=(source, [], {"campaign_lease": {}}),
+                ),
+                mock.patch.object(codex_upgrade, "_bind_active_lease_attempt"),
+                mock.patch.object(codex_upgrade, "_ACTIVE_CAMPAIGN_LEASE", active),
+                mock.patch.object(
+                    codex_upgrade,
+                    "_bind_attempt_deadline_metadata",
+                    return_value=mock.MagicMock(),
+                ),
+                mock.patch.object(
+                    codex_upgrade.codex_upgrade_arm64_environment_receipt,
+                    "replay",
+                    return_value={"continuity_identity_sha256": "1" * 64},
+                ),
+                mock.patch.object(
+                    codex_upgrade,
+                    "_probe_capture_environment",
+                ) as probe,
+            ):
+                with self.assertRaisesRegex(
+                    codex_upgrade.ConfigurationError,
+                    "已有不完整 after",
+                ):
+                    codex_upgrade._close_interrupted_recovery_attempt(
+                        campaign_dir,
+                        self._manifest(),
+                        campaign_dir / "contract.json",
+                        {"source_attempt": source},
+                    )
+            probe.assert_not_called()
+
+    def test_interrupted_attempt_close_rejects_arm64_continuity_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            campaign_dir = Path(directory) / "campaign"
+            attempt_root = (
+                campaign_dir / "official" / "attempts" / "attempt-a"
+            )
+            evidence_root = attempt_root / "evidence"
+            environment_root = evidence_root / "environment"
+            self._write(
+                environment_root / "before" / "probe-manifest.json",
+                {"phase": "before"},
+            )
+            self._write(
+                environment_root / "arm64-before" / "receipt.json",
+                {"fixture": True},
+            )
+            source = {"attempt_id": "attempt-a"}
+            active = mock.MagicMock()
+            restoration = evidence_root / "receipts" / "restoration-report.json"
+            arm64_after = environment_root / "arm64-after" / "receipt.json"
+            with (
+                mock.patch.object(
+                    codex_upgrade,
+                    "_interrupted_recovery_source_snapshot",
+                    return_value=(source, [], {"campaign_lease": {}}),
+                ),
+                mock.patch.object(codex_upgrade, "_bind_active_lease_attempt"),
+                mock.patch.object(codex_upgrade, "_ACTIVE_CAMPAIGN_LEASE", active),
+                mock.patch.object(
+                    codex_upgrade,
+                    "_bind_attempt_deadline_metadata",
+                    return_value=mock.MagicMock(),
+                ),
+                mock.patch.object(
+                    codex_upgrade.codex_upgrade_arm64_environment_receipt,
+                    "replay",
+                    return_value={"continuity_identity_sha256": "1" * 64},
+                ),
+                mock.patch.object(codex_upgrade, "_probe_capture_environment"),
+                mock.patch.object(
+                    codex_upgrade,
+                    "_finalize_attempt_restoration",
+                    return_value=(restoration, {}),
+                ),
+                mock.patch.object(
+                    codex_upgrade,
+                    "_capture_arm64_environment_receipt",
+                    return_value=(
+                        arm64_after,
+                        {"continuity_identity_sha256": "2" * 64},
+                    ),
+                ),
+                mock.patch.object(codex_upgrade, "_write_capture_attempt") as write,
+            ):
+                with self.assertRaisesRegex(
+                    codex_upgrade.ConfigurationError,
+                    "ARM64 网络或运行身份漂移",
+                ):
+                    codex_upgrade._close_interrupted_recovery_attempt(
+                        campaign_dir,
+                        self._manifest(),
+                        campaign_dir / "contract.json",
+                        {"source_attempt": source},
+                    )
+            write.assert_not_called()
 
     def _delivery_fixture(
         self,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -14,6 +15,7 @@ import time
 import unittest
 from pathlib import Path
 
+from tools.official_client_capture import codex_upgrade_supervisor as supervisor
 from tools.official_client_capture.codex_upgrade_supervisor import (
     SupervisorClient,
     SupervisorError,
@@ -30,6 +32,74 @@ IMMEDIATE_DETECTION_SECONDS = 2.0
 
 
 class SupervisorTests(unittest.TestCase):
+    @staticmethod
+    def _write_json(path: Path, payload: dict[str, object]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        path.write_text(
+            json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        path.chmod(0o600)
+
+    def _recovery_manifest(self, root: Path) -> dict[str, object]:
+        contract = root / "recovery-contract.json"
+        contract.write_text("{}\n", encoding="utf-8")
+        contract.chmod(0o600)
+        return {
+            "schema_version": supervisor.CAMPAIGN_RUN_RECOVERY_SCHEMA,
+            "campaign_id": "campaign-recovery",
+            "campaign_plan_sha256": "1" * 64,
+            "batch_id": "vc-1-0002",
+            "batch_sequence": 2,
+            "batch_sha256": "2" * 64,
+            "phase": "VC-1",
+            "predecessor_checkpoint": {
+                "path": "control/vc/VC-0-checkpoint.json",
+                "sha256": "3" * 64,
+                "phase": "VC-0",
+                "checkpoint_sha256": "4" * 64,
+            },
+            "original_deadline_at_utc": "2099-09-14T12:00:00Z",
+            "recovery_mode": "interrupted-vc1-preview",
+            "recovery_contract": {
+                "path": str(contract),
+                "sha256": hashlib.sha256(contract.read_bytes()).hexdigest(),
+            },
+            "recovery_predecessor": {
+                "run_dir": str(root / "run-prior"),
+                "state_sha256": "5" * 64,
+                "manifest_sha256": "6" * 64,
+                "stop_receipt_sha256": "7" * 64,
+                "owner_nonce": "8" * 64,
+                "terminal_at_utc": "2026-09-14T01:00:00Z",
+                "state": "failed",
+                "reason": "KeyboardInterrupt",
+                "batch_id": "vc-1-0001",
+                "batch_sequence": 1,
+                "batch_sha256": "9" * 64,
+            },
+            "no_op": False,
+            "actions": [
+                {
+                    "action_id": "recover-vc1-interruption-preview",
+                    "operation": "VC-1:recover-interruption-preview",
+                    "timeout_seconds": 60,
+                    "command": [
+                        sys.executable,
+                        "/srv/tools/codex_upgrade.py",
+                        "recover-vc1-interruption",
+                        "--campaign-dir",
+                        "/srv/campaign",
+                        "--recovery-contract",
+                        str(contract),
+                    ],
+                    "item_ids": ["job-b", "job-c"],
+                }
+            ],
+            "execute_items": ["job-b", "job-c"],
+            "reuse_items": ["job-a"],
+        }
+
     def _campaign_command(self, *arguments: str) -> dict[str, object]:
         """通过真实 CLI 进程验证常驻 Campaign 接口。"""
 
@@ -593,6 +663,148 @@ class SupervisorTests(unittest.TestCase):
                     "控制面或旧写入入口",
                 ):
                     _campaign_run_manifest(manifest)
+
+    def test_v2_cannot_invoke_interrupted_recovery_command(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = root / "manifest.json"
+            self._write_json(
+                manifest,
+                {
+                    "schema_version": supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA,
+                    "campaign_id": "campaign-recovery",
+                    "campaign_plan_sha256": "1" * 64,
+                    "batch_id": "vc-1-0002",
+                    "batch_sequence": 2,
+                    "batch_sha256": "2" * 64,
+                    "phase": "VC-1",
+                    "predecessor_checkpoint": {
+                        "path": "checkpoint.json",
+                        "sha256": "3" * 64,
+                        "phase": "VC-0",
+                        "checkpoint_sha256": "4" * 64,
+                    },
+                    "original_deadline_at_utc": "2099-09-14T12:00:00Z",
+                    "no_op": False,
+                    "actions": [
+                        {
+                            "action_id": "recover",
+                            "operation": "VC-1:recover",
+                            "timeout_seconds": 60,
+                            "command": [
+                                sys.executable,
+                                "/srv/tools/codex_upgrade.py",
+                                "recover-vc1-interruption",
+                            ],
+                            "item_ids": ["job-a"],
+                        }
+                    ],
+                    "execute_items": ["job-a"],
+                    "reuse_items": [],
+                },
+            )
+            with self.assertRaisesRegex(SupervisorError, "控制面或旧写入入口"):
+                _campaign_run_manifest(manifest)
+
+    def test_v3_requires_the_unique_bound_preview_action(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            payload = self._recovery_manifest(root)
+            manifest = root / "manifest.json"
+            self._write_json(manifest, payload)
+            self.assertEqual(
+                _campaign_run_manifest(manifest)["schema_version"],
+                supervisor.CAMPAIGN_RUN_RECOVERY_SCHEMA,
+            )
+
+            payload["actions"][0]["action_id"] = "different-action"
+            self._write_json(root / "invalid.json", payload)
+            with self.assertRaisesRegex(SupervisorError, "唯一零请求预览动作"):
+                _campaign_run_manifest(root / "invalid.json")
+
+    def test_v3_builder_allows_atomic_contract_to_land_after_structure_check(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            payload = self._recovery_manifest(root)
+            contract_path = Path(payload["recovery_contract"]["path"])
+            contract_path.unlink()
+            built = supervisor.build_recovery_campaign_run_manifest(
+                campaign_id=payload["campaign_id"],
+                campaign_plan_sha256=payload["campaign_plan_sha256"],
+                batch_id=payload["batch_id"],
+                batch_sequence=payload["batch_sequence"],
+                batch_sha256=payload["batch_sha256"],
+                phase=payload["phase"],
+                predecessor_checkpoint=payload["predecessor_checkpoint"],
+                original_deadline_at_utc=payload["original_deadline_at_utc"],
+                recovery_contract=payload["recovery_contract"],
+                recovery_predecessor=payload["recovery_predecessor"],
+                actions=payload["actions"],
+                execute_items=payload["execute_items"],
+                reuse_items=payload["reuse_items"],
+            )
+            self.assertEqual(
+                built["schema_version"],
+                supervisor.CAMPAIGN_RUN_RECOVERY_SCHEMA,
+            )
+            manifest = root / "not-executable.json"
+            self._write_json(manifest, built)
+            with self.assertRaisesRegex(SupervisorError, "路径或摘要漂移"):
+                _campaign_run_manifest(manifest)
+
+    def test_failed_v2_only_allows_direct_v3_successor(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            prior_dir = root / "run-prior"
+            prior_manifest = {
+                "schema_version": supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA,
+                "campaign_id": "campaign-recovery",
+                "campaign_plan_sha256": "1" * 64,
+                "batch_id": "vc-1-0001",
+                "batch_sequence": 1,
+                "batch_sha256": "9" * 64,
+                "original_deadline_at_utc": "2099-09-14T12:00:00Z",
+            }
+            prior_state = {
+                "state": "failed",
+                "campaign_id": "campaign-recovery",
+                "owner_nonce": "8" * 64,
+                "terminal_at_utc": "2026-09-14T01:00:00Z",
+            }
+            self._write_json(prior_dir / "state.json", prior_state)
+            self._write_json(
+                prior_dir / "campaign-run-manifest.json",
+                {"manifest": prior_manifest},
+            )
+            self._write_json(
+                prior_dir / "stop-receipt.json",
+                {
+                    "event_type": "failed",
+                    "reason": "KeyboardInterrupt",
+                    "owner_nonce": prior_state["owner_nonce"],
+                    "campaign_id": prior_state["campaign_id"],
+                },
+            )
+            recovery = self._recovery_manifest(root)
+            recovery["recovery_predecessor"] = supervisor._recovery_predecessor_from_run(
+                prior_state,
+                prior_manifest,
+                prior_dir,
+            )
+            ordinary = dict(recovery)
+            ordinary.pop("recovery_mode")
+            ordinary.pop("recovery_contract")
+            ordinary.pop("recovery_predecessor")
+            ordinary["schema_version"] = supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA
+            with self.assertRaisesRegex(SupervisorError, "唯一直接 v3"):
+                supervisor._validate_batched_campaign_history(
+                    ordinary,
+                    [(prior_state, prior_manifest, prior_dir)],
+                )
+            supervisor._validate_batched_campaign_history(
+                recovery,
+                [(prior_state, prior_manifest, prior_dir)],
+            )
 
     def test_campaign_run_rejects_reusing_campaign_id(self) -> None:
         """同一逻辑 Campaign 不能靠再次启动重新获得 deadline。"""

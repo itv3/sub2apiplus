@@ -21,6 +21,9 @@ CAMPAIGN_PLAN_SCHEMA = "codex-upgrade-campaign-plan/v1"
 VC_CHECKPOINT_SCHEMA = "codex-upgrade-vc-checkpoint/v1"
 VC_BATCH_SCHEMA = "codex-upgrade-vc-batch/v1"
 VC_ACTION_PLAN_SCHEMA = "codex-upgrade-vc-action-plan/v1"
+INTERRUPTED_RECOVERY_CONTRACT_SCHEMA = (
+    "codex-upgrade-interrupted-recovery-contract/v1"
+)
 GATE_REQUIREMENTS_SCHEMA = "codex-post-promotion-gate-requirements/v1"
 GATE_MAPPING_SCHEMA = "codex-post-promotion-gate-mapping/v2"
 GATE_PLAN_SCHEMA = "codex-post-promotion-gate-plan/v1"
@@ -480,6 +483,354 @@ def validate_vc_batch(
         ):
             raise VCArtifactError("VC batch 未继承同一 Campaign 或原始 deadline")
     _self_digest(payload, "batch_sha256", "VC batch")
+    return payload
+
+
+def build_interrupted_recovery_contract(
+    *,
+    campaign_plan: Mapping[str, Any],
+    batch_sequence: int,
+    source_attempt: Mapping[str, Any],
+    failed_supervisor: Mapping[str, Any],
+    timing_ledger: Mapping[str, Any],
+    deployment_receipt: Mapping[str, Any],
+    tool_transition: Mapping[str, Any],
+    compiled_at_utc: str,
+    must_start_by_utc: str,
+) -> dict[str, Any]:
+    """生成 VC-1 中断恢复的单次使用控制合同。
+
+    合同只保存小型绑定与集合，不读取或嵌入原始抓包正文。执行集合必须由
+    checkpoint 的 failed/pending 闭集得出，已完成项只能进入复用集合。
+    """
+
+    plan = validate_campaign_plan(campaign_plan)
+    payload = {
+        "schema_version": INTERRUPTED_RECOVERY_CONTRACT_SCHEMA,
+        "campaign_id": plan["campaign_id"],
+        "campaign_plan_sha256": plan["plan_sha256"],
+        "phase": "VC-1",
+        "batch_sequence": batch_sequence,
+        "source_attempt": json.loads(
+            json.dumps(dict(source_attempt), ensure_ascii=False)
+        ),
+        "failed_supervisor": json.loads(
+            json.dumps(dict(failed_supervisor), ensure_ascii=False)
+        ),
+        "timing_ledger": json.loads(
+            json.dumps(dict(timing_ledger), ensure_ascii=False)
+        ),
+        "deployment_receipt": json.loads(
+            json.dumps(dict(deployment_receipt), ensure_ascii=False)
+        ),
+        "tool_transition": json.loads(
+            json.dumps(dict(tool_transition), ensure_ascii=False)
+        ),
+        "zero_request_boundary": {
+            "reservation_exists": False,
+            "live_request_count": 0,
+            "scanned_bytes": 0,
+        },
+        "compiled_at_utc": _timestamp(compiled_at_utc, "compiled_at_utc"),
+        "must_start_by_utc": _timestamp(
+            must_start_by_utc, "must_start_by_utc"
+        ),
+        "original_deadline_at_utc": plan["original_deadline_at_utc"],
+    }
+    payload["contract_sha256"] = digest(payload)
+    return validate_interrupted_recovery_contract(payload, plan)
+
+
+def _sorted_safe_ids(value: Any, label: str, *, nonempty: bool = False) -> list[str]:
+    if (
+        not isinstance(value, list)
+        or (nonempty and not value)
+        or value != sorted(set(value))
+        or not all(isinstance(item, str) and SAFE_ID_RE.fullmatch(item) for item in value)
+    ):
+        raise VCArtifactError(f"{label} 必须是排序且无重复的安全标识数组")
+    return list(value)
+
+
+def validate_interrupted_recovery_contract(
+    value: Any,
+    campaign_plan: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """校验中断恢复合同的身份、checkpoint 闭集与零请求边界。"""
+
+    required = {
+        "schema_version",
+        "campaign_id",
+        "campaign_plan_sha256",
+        "phase",
+        "batch_sequence",
+        "source_attempt",
+        "failed_supervisor",
+        "timing_ledger",
+        "deployment_receipt",
+        "tool_transition",
+        "zero_request_boundary",
+        "compiled_at_utc",
+        "must_start_by_utc",
+        "original_deadline_at_utc",
+        "contract_sha256",
+    }
+    if not isinstance(value, Mapping) or set(value) != required:
+        raise VCArtifactError("中断恢复合同字段不闭合")
+    payload = dict(value)
+    sequence = payload.get("batch_sequence")
+    if (
+        payload.get("schema_version") != INTERRUPTED_RECOVERY_CONTRACT_SCHEMA
+        or payload.get("phase") != "VC-1"
+        or not isinstance(sequence, int)
+        or isinstance(sequence, bool)
+        or sequence < 2
+    ):
+        raise VCArtifactError("中断恢复合同 schema、阶段或批次序号非法")
+    _safe_id(payload.get("campaign_id"), "中断恢复 campaign_id")
+    _sha256(payload.get("campaign_plan_sha256"), "中断恢复 plan SHA")
+
+    source = payload.get("source_attempt")
+    source_fields = {
+        "attempt_id",
+        "reservation",
+        "run_nonce",
+        "identity_sha256",
+        "checkpoint",
+        "planned_job_ids",
+        "completed_job_ids",
+        "failed_job_ids",
+        "pending_job_ids",
+        "execute_job_ids",
+        "reuse_job_ids",
+    }
+    if not isinstance(source, Mapping) or set(source) != source_fields:
+        raise VCArtifactError("中断恢复 source_attempt 字段不闭合")
+    _safe_id(source.get("attempt_id"), "中断恢复 attempt_id")
+    _sha256(source.get("run_nonce"), "中断恢复 run_nonce")
+    _sha256(source.get("identity_sha256"), "中断恢复 identity SHA")
+    reservation = source.get("reservation")
+    if not isinstance(reservation, Mapping) or set(reservation) != {
+        "path",
+        "sha256",
+        "reservation_digest",
+    }:
+        raise VCArtifactError("中断恢复 reservation 绑定不闭合")
+    _binding(
+        {"path": reservation.get("path"), "sha256": reservation.get("sha256")},
+        "中断恢复 reservation",
+    )
+    _sha256(reservation.get("reservation_digest"), "reservation_digest")
+    checkpoint = source.get("checkpoint")
+    if not isinstance(checkpoint, Mapping) or set(checkpoint) != {
+        "path",
+        "record_count",
+        "last_sequence",
+        "last_sha256",
+    }:
+        raise VCArtifactError("中断恢复 checkpoint 绑定不闭合")
+    if not isinstance(checkpoint.get("path"), str) or not checkpoint["path"]:
+        raise VCArtifactError("中断恢复 checkpoint 路径为空")
+    record_count = checkpoint.get("record_count")
+    if (
+        not isinstance(record_count, int)
+        or isinstance(record_count, bool)
+        or record_count < 1
+        or checkpoint.get("last_sequence") != record_count
+    ):
+        raise VCArtifactError("中断恢复 checkpoint 计数或末序号非法")
+    _sha256(checkpoint.get("last_sha256"), "中断恢复 checkpoint SHA")
+    planned = set(
+        _sorted_safe_ids(source.get("planned_job_ids"), "planned_job_ids", nonempty=True)
+    )
+    completed = set(_sorted_safe_ids(source.get("completed_job_ids"), "completed_job_ids"))
+    failed = set(_sorted_safe_ids(source.get("failed_job_ids"), "failed_job_ids", nonempty=True))
+    pending = set(_sorted_safe_ids(source.get("pending_job_ids"), "pending_job_ids"))
+    execute = set(_sorted_safe_ids(source.get("execute_job_ids"), "execute_job_ids", nonempty=True))
+    reuse = set(_sorted_safe_ids(source.get("reuse_job_ids"), "reuse_job_ids", nonempty=True))
+    if (
+        completed & failed
+        or completed & pending
+        or failed & pending
+        or completed | failed | pending != planned
+        or execute != failed | pending
+        or reuse != completed
+        or execute & reuse
+    ):
+        raise VCArtifactError("中断恢复 checkpoint 执行／复用闭集非法")
+
+    supervisor = payload.get("failed_supervisor")
+    if not isinstance(supervisor, Mapping) or set(supervisor) != {
+        "run_dir",
+        "state_sha256",
+        "manifest_sha256",
+        "stop_receipt_sha256",
+        "owner_nonce",
+        "terminal_at_utc",
+        "state",
+        "reason",
+        "batch_id",
+        "batch_sequence",
+        "batch_sha256",
+    }:
+        raise VCArtifactError("中断恢复 failed_supervisor 字段不闭合")
+    if (
+        not isinstance(supervisor.get("run_dir"), str)
+        or not supervisor["run_dir"].startswith("/")
+        or supervisor.get("state") != "failed"
+        or supervisor.get("reason") != "KeyboardInterrupt"
+        or supervisor.get("batch_sequence") != sequence - 1
+    ):
+        raise VCArtifactError("中断恢复失败监督器状态或直接前序关系非法")
+    _safe_id(supervisor.get("batch_id"), "失败监督器 batch_id")
+    _sha256(supervisor.get("state_sha256"), "失败监督器 state SHA")
+    _sha256(supervisor.get("manifest_sha256"), "失败监督器 manifest SHA")
+    _sha256(supervisor.get("stop_receipt_sha256"), "失败监督器 stop SHA")
+    _sha256(supervisor.get("owner_nonce"), "失败监督器 owner nonce")
+    _sha256(supervisor.get("batch_sha256"), "失败监督器 batch SHA")
+    _timestamp(supervisor.get("terminal_at_utc"), "失败监督器 terminal_at_utc")
+
+    ledger = payload.get("timing_ledger")
+    if not isinstance(ledger, Mapping) or set(ledger) != {
+        "ledger_dir",
+        "ledger_plan_sha256",
+        "event_head_sequence",
+        "event_head_sha256",
+        "status",
+        "total_live_request_count",
+        "total_deadline_at_utc",
+    }:
+        raise VCArtifactError("中断恢复 timing_ledger 字段不闭合")
+    if (
+        not isinstance(ledger.get("ledger_dir"), str)
+        or not ledger["ledger_dir"].startswith("/")
+        or ledger.get("status") != "active"
+        or not isinstance(ledger.get("event_head_sequence"), int)
+        or isinstance(ledger.get("event_head_sequence"), bool)
+        or ledger["event_head_sequence"] < 1
+        or not isinstance(ledger.get("total_live_request_count"), int)
+        or isinstance(ledger.get("total_live_request_count"), bool)
+        or ledger["total_live_request_count"] < 1
+    ):
+        raise VCArtifactError("中断恢复 timing_ledger 状态、计数或路径非法")
+    _sha256(ledger.get("ledger_plan_sha256"), "timing ledger plan SHA")
+    _sha256(ledger.get("event_head_sha256"), "timing ledger head SHA")
+    _timestamp(ledger.get("total_deadline_at_utc"), "timing ledger deadline")
+
+    deployment = payload.get("deployment_receipt")
+    if not isinstance(deployment, Mapping) or set(deployment) != {
+        "path",
+        "sha256",
+        "tool_files_sha256",
+    }:
+        raise VCArtifactError("中断恢复 deployment_receipt 字段不闭合")
+    if not isinstance(deployment.get("path"), str) or not deployment["path"].startswith("/"):
+        raise VCArtifactError("中断恢复 deployment receipt 必须是绝对路径")
+    _sha256(deployment.get("sha256"), "deployment receipt SHA")
+    _sha256(deployment.get("tool_files_sha256"), "deployment tool SHA")
+
+    transition = payload.get("tool_transition")
+    if not isinstance(transition, Mapping) or set(transition) != {
+        "from_tool_files_sha256",
+        "to_tool_files_sha256",
+        "changed_files",
+        "allowed_production_paths",
+        "affected_job_ids",
+    }:
+        raise VCArtifactError("中断恢复 tool_transition 字段不闭合")
+    _sha256(transition.get("from_tool_files_sha256"), "transition from SHA")
+    _sha256(transition.get("to_tool_files_sha256"), "transition to SHA")
+    changed = transition.get("changed_files")
+    if not isinstance(changed, list) or not changed:
+        raise VCArtifactError("中断恢复 changed_files 不能为空")
+    paths: list[str] = []
+    production_paths: set[str] = set()
+    changed_affected: set[str] = set()
+    for item in changed:
+        if not isinstance(item, Mapping) or set(item) != {
+            "path",
+            "from_sha256",
+            "to_sha256",
+            "classification",
+            "affected_job_ids",
+        }:
+            raise VCArtifactError("中断恢复 changed_files 项字段不闭合")
+        path = item.get("path")
+        if not isinstance(path, str) or not path or path.startswith("/"):
+            raise VCArtifactError("中断恢复 changed_files 路径非法")
+        if item.get("from_sha256") is not None:
+            _sha256(item.get("from_sha256"), "changed_files from SHA")
+        if item.get("to_sha256") is not None:
+            _sha256(item.get("to_sha256"), "changed_files to SHA")
+        classification = item.get("classification")
+        if classification not in {
+            "evaluation",
+            "phase_scoped_hybrid",
+            "failed_job_production",
+        }:
+            raise VCArtifactError("中断恢复 changed_files 分类非法")
+        affected = set(
+            _sorted_safe_ids(item.get("affected_job_ids"), "changed affected_job_ids")
+        )
+        if classification == "failed_job_production":
+            if not affected:
+                raise VCArtifactError("产出侧变化必须映射至少一个 Job")
+            production_paths.add(path)
+            changed_affected.update(affected)
+        elif affected:
+            raise VCArtifactError("评估／混合变化不得声明产出 Job")
+        paths.append(path)
+    if paths != sorted(set(paths)):
+        raise VCArtifactError("中断恢复 changed_files 必须按路径唯一排序")
+    allowed_paths = transition.get("allowed_production_paths")
+    if (
+        not isinstance(allowed_paths, list)
+        or allowed_paths != sorted(set(allowed_paths))
+        or set(allowed_paths) != production_paths
+    ):
+        raise VCArtifactError("中断恢复产出侧路径闭集非法")
+    transition_affected = set(
+        _sorted_safe_ids(transition.get("affected_job_ids"), "transition affected_job_ids", nonempty=True)
+    )
+    if (
+        transition_affected != changed_affected
+        or not transition_affected.issubset(execute)
+        or transition_affected & reuse
+    ):
+        raise VCArtifactError("中断恢复产出侧变化越过 failed/pending 闭集")
+
+    boundary = payload.get("zero_request_boundary")
+    if boundary != {
+        "reservation_exists": False,
+        "live_request_count": 0,
+        "scanned_bytes": 0,
+    }:
+        raise VCArtifactError("中断恢复预览必须是零预约、零请求、零扫描")
+    compiled = _timestamp(payload.get("compiled_at_utc"), "恢复合同 compiled_at_utc")
+    start_by = _timestamp(payload.get("must_start_by_utc"), "恢复合同 must_start_by_utc")
+    deadline = _timestamp(
+        payload.get("original_deadline_at_utc"),
+        "恢复合同 original_deadline_at_utc",
+    )
+    if not (
+        datetime.fromisoformat(compiled.replace("Z", "+00:00"))
+        < datetime.fromisoformat(start_by.replace("Z", "+00:00"))
+        <= datetime.fromisoformat(deadline.replace("Z", "+00:00"))
+    ):
+        raise VCArtifactError("中断恢复合同启动时限未承接原始 deadline")
+    if ledger["total_deadline_at_utc"] != deadline:
+        raise VCArtifactError("中断恢复 Ledger 与 Campaign 总 deadline 不一致")
+    if deployment["tool_files_sha256"] != transition["to_tool_files_sha256"]:
+        raise VCArtifactError("中断恢复部署摘要与目标工具身份不一致")
+    if campaign_plan is not None:
+        plan = validate_campaign_plan(campaign_plan)
+        if (
+            payload["campaign_id"] != plan["campaign_id"]
+            or payload["campaign_plan_sha256"] != plan["plan_sha256"]
+            or deadline != plan["original_deadline_at_utc"]
+        ):
+            raise VCArtifactError("中断恢复合同未绑定同一 Campaign 总计划")
+    _self_digest(payload, "contract_sha256", "中断恢复合同")
     return payload
 
 

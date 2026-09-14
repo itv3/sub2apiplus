@@ -4,7 +4,8 @@
   "title": "Codex 升级 campaign-run 动作清单",
   "oneOf": [
     {"$ref": "#/$defs/v1"},
-    {"$ref": "#/$defs/v2"}
+    {"$ref": "#/$defs/v2"},
+    {"$ref": "#/$defs/v3"}
   ],
   "$defs": {
     "safeId": {
@@ -71,6 +72,37 @@
         "checkpoint_sha256": {"$ref": "#/$defs/sha256"}
       }
     },
+    "fileBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": {"type": "string", "pattern": "^/"},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "recoveryPredecessor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "run_dir", "state_sha256", "manifest_sha256", "stop_receipt_sha256",
+        "owner_nonce", "terminal_at_utc", "state", "reason", "batch_id",
+        "batch_sequence", "batch_sha256"
+      ],
+      "properties": {
+        "run_dir": {"type": "string", "pattern": "^/"},
+        "state_sha256": {"$ref": "#/$defs/sha256"},
+        "manifest_sha256": {"$ref": "#/$defs/sha256"},
+        "stop_receipt_sha256": {"$ref": "#/$defs/sha256"},
+        "owner_nonce": {"$ref": "#/$defs/sha256"},
+        "terminal_at_utc": {"type": "string", "format": "date-time"},
+        "state": {"const": "failed"},
+        "reason": {"const": "KeyboardInterrupt"},
+        "batch_id": {"$ref": "#/$defs/safeId"},
+        "batch_sequence": {"type": "integer", "minimum": 1},
+        "batch_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
     "v1": {
       "type": "object",
       "additionalProperties": false,
@@ -108,6 +140,34 @@
         "execute_items": {"$ref": "#/$defs/idArray"},
         "reuse_items": {"$ref": "#/$defs/idArray"},
         "no_op": {"type": "boolean"}
+      }
+    },
+    "v3": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version", "campaign_id", "campaign_plan_sha256", "batch_id",
+        "batch_sequence", "batch_sha256", "phase", "predecessor_checkpoint",
+        "original_deadline_at_utc", "recovery_mode", "recovery_contract",
+        "recovery_predecessor", "actions", "execute_items", "reuse_items", "no_op"
+      ],
+      "properties": {
+        "schema_version": {"const": "codex-upgrade-campaign-run/v3"},
+        "campaign_id": {"$ref": "#/$defs/safeId"},
+        "campaign_plan_sha256": {"$ref": "#/$defs/sha256"},
+        "batch_id": {"$ref": "#/$defs/safeId"},
+        "batch_sequence": {"type": "integer", "minimum": 2},
+        "batch_sha256": {"$ref": "#/$defs/sha256"},
+        "phase": {"const": "VC-1"},
+        "predecessor_checkpoint": {"$ref": "#/$defs/checkpointReference"},
+        "original_deadline_at_utc": {"type": "string", "format": "date-time"},
+        "recovery_mode": {"const": "interrupted-vc1-preview"},
+        "recovery_contract": {"$ref": "#/$defs/fileBinding"},
+        "recovery_predecessor": {"$ref": "#/$defs/recoveryPredecessor"},
+        "actions": {"type": "array", "minItems": 1, "maxItems": 1, "items": {"$ref": "#/$defs/actionV2"}},
+        "execute_items": {"$ref": "#/$defs/idArray"},
+        "reuse_items": {"$ref": "#/$defs/idArray"},
+        "no_op": {"const": false}
       }
     }
   }
