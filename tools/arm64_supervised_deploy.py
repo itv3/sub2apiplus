@@ -70,11 +70,13 @@ from typing import Any, Callable, Mapping
 # 逻辑根与宿主数据根，MITM 启动失败统一回收，并补齐失败请求计数审计。
 # 2026-09-14（VC-1 KeyboardInterrupt 孤儿恢复）：新增失败 attempt 零请求封口、
 # 唯一 v3 恢复预览和普通 v2 定向补跑的合同闭环；受管工具树摘要随之更新。
+# 2026-09-14（VC-1 中断恢复续接）：修正恢复 attempt 的 heartbeat 绑定基准，
+# 并新增只承接既有确定性失败 v3 的唯一 v4 零请求预览；不增加产出侧变化。
 DEFAULT_TOOL_DIGEST = (
-    "6e0d133eaa65a7c4e7b195f2a3a913321b86f60c8c04c41cedc594cfa9c7002a"
+    "df392aa0b466cf4d23c3d6debc6da8658700c44f1dbb32ad7a1a3208bad534ab"
 )
 DEFAULT_SUPERVISOR_DIGEST = (
-    "cf8a4514c6e31feaae3e6077e256ff8412cdb3ce1da7a586c2b74bfdce99dbfa"
+    "438deb607e44bae4590f765ff726f5f3655bf1e4c531628a217b46278a069b1c"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "b9ca7b6f48b3c33a63a864a9ce7ebd617335378ea52fe9148ea161ab3b276ada"

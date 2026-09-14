@@ -100,6 +100,81 @@ class SupervisorTests(unittest.TestCase):
             "reuse_items": ["job-a"],
         }
 
+    def _recovery_continuation_manifest(
+        self,
+        root: Path,
+        manifest_path: Path,
+    ) -> dict[str, object]:
+        recovery = self._recovery_manifest(root)
+        deployment = root / "deployment.json"
+        self._write_json(deployment, {"fixture": True})
+        maintenance = {
+            "from_tool_files_sha256": "a" * 64,
+            "to_tool_files_sha256": "b" * 64,
+            "changed_files": [
+                {
+                    "path": "codex_upgrade_supervisor.py",
+                    "from_sha256": "c" * 64,
+                    "to_sha256": "d" * 64,
+                    "classification": "evaluation",
+                    "affected_job_ids": [],
+                }
+            ],
+            "allowed_production_paths": [],
+            "affected_job_ids": [],
+        }
+        payload = {
+            **recovery,
+            "schema_version": supervisor.CAMPAIGN_RUN_RECOVERY_CONTINUATION_SCHEMA,
+            "batch_id": "vc-1-0003",
+            "batch_sequence": 3,
+            "batch_sha256": "e" * 64,
+            "recovery_mode": "interrupted-vc1-preview-continuation",
+            "continuation_predecessor": {
+                "run_dir": str(root / "run-failed-v3"),
+                "state_sha256": "1" * 64,
+                "manifest_sha256": "2" * 64,
+                "stop_receipt_sha256": "3" * 64,
+                "action_diagnostic_sha256": "4" * 64,
+                "owner_nonce": "5" * 64,
+                "terminal_at_utc": "2026-09-14T02:08:21Z",
+                "state": "failed",
+                "reason": "action-failed:recover-vc1-interruption-preview",
+                "error_type": "ConfigurationError",
+                "message": "watchdog heartbeat 越出当前 attempt。",
+                "batch_id": "vc-1-0002",
+                "batch_sequence": 2,
+                "batch_sha256": "6" * 64,
+            },
+            "deployment_receipt": {
+                "path": str(deployment),
+                "sha256": hashlib.sha256(deployment.read_bytes()).hexdigest(),
+                "tool_files_sha256": "b" * 64,
+            },
+            "maintenance_tool_transition": maintenance,
+            "effective_tool_transition": maintenance,
+            "actions": [
+                {
+                    "action_id": "continue-vc1-interruption-preview",
+                    "operation": "VC-1:continue-interruption-preview",
+                    "timeout_seconds": 60,
+                    "command": [
+                        sys.executable,
+                        "/srv/tools/codex_upgrade.py",
+                        "continue-vc1-interruption",
+                        "--campaign-dir",
+                        "/srv/campaign",
+                        "--recovery-contract",
+                        recovery["recovery_contract"]["path"],
+                        "--continuation-manifest",
+                        str(manifest_path),
+                    ],
+                    "item_ids": ["job-b", "job-c"],
+                }
+            ],
+        }
+        return payload
+
     def _campaign_command(self, *arguments: str) -> dict[str, object]:
         """通过真实 CLI 进程验证常驻 Campaign 接口。"""
 
@@ -752,6 +827,34 @@ class SupervisorTests(unittest.TestCase):
             with self.assertRaisesRegex(SupervisorError, "路径或摘要漂移"):
                 _campaign_run_manifest(manifest)
 
+    def test_v4_requires_exact_continuation_and_control_only_maintenance(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest_path = root / "continuation.json"
+            payload = self._recovery_continuation_manifest(root, manifest_path)
+            self._write_json(manifest_path, payload)
+            parsed = _campaign_run_manifest(manifest_path)
+            self.assertEqual(
+                parsed["schema_version"],
+                supervisor.CAMPAIGN_RUN_RECOVERY_CONTINUATION_SCHEMA,
+            )
+
+            payload["maintenance_tool_transition"]["changed_files"][0][
+                "classification"
+            ] = "failed_job_production"
+            payload["maintenance_tool_transition"]["changed_files"][0][
+                "affected_job_ids"
+            ] = ["job-b"]
+            payload["maintenance_tool_transition"]["allowed_production_paths"] = [
+                "codex_upgrade_supervisor.py"
+            ]
+            payload["maintenance_tool_transition"]["affected_job_ids"] = ["job-b"]
+            invalid = root / "invalid-continuation.json"
+            payload["actions"][0]["command"][-1] = str(invalid)
+            self._write_json(invalid, payload)
+            with self.assertRaisesRegex(SupervisorError, "风险分类非法"):
+                _campaign_run_manifest(invalid)
+
     def test_failed_v2_only_allows_direct_v3_successor(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -804,6 +907,106 @@ class SupervisorTests(unittest.TestCase):
             supervisor._validate_batched_campaign_history(
                 recovery,
                 [(prior_state, prior_manifest, prior_dir)],
+            )
+
+    def test_failed_v3_only_allows_exact_sequence_three_v4_successor(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            v2_dir = root / "run-failed-v2"
+            v2_manifest = {
+                "schema_version": supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA,
+                "campaign_id": "campaign-recovery",
+                "campaign_plan_sha256": "1" * 64,
+                "batch_id": "vc-1-0001",
+                "batch_sequence": 1,
+                "batch_sha256": "9" * 64,
+                "original_deadline_at_utc": "2099-09-14T12:00:00Z",
+            }
+            v2_state = {
+                "state": "failed",
+                "campaign_id": "campaign-recovery",
+                "owner_nonce": "8" * 64,
+                "terminal_at_utc": "2026-09-14T01:00:00Z",
+            }
+            self._write_json(v2_dir / "state.json", v2_state)
+            self._write_json(
+                v2_dir / "campaign-run-manifest.json",
+                {"manifest": v2_manifest},
+            )
+            self._write_json(
+                v2_dir / "stop-receipt.json",
+                {
+                    "event_type": "failed",
+                    "reason": "KeyboardInterrupt",
+                    "owner_nonce": v2_state["owner_nonce"],
+                    "campaign_id": v2_state["campaign_id"],
+                },
+            )
+            v3_dir = root / "run-failed-v3"
+            v3_manifest = self._recovery_manifest(root)
+            v3_manifest["recovery_predecessor"] = (
+                supervisor._recovery_predecessor_from_run(
+                    v2_state,
+                    v2_manifest,
+                    v2_dir,
+                )
+            )
+            v3_state = {
+                "state": "failed",
+                "campaign_id": "campaign-recovery",
+                "phase": "VC-1",
+                "owner_pid": os.getpid(),
+                "owner_nonce": "a" * 64,
+                "terminal_at_utc": "2026-09-14T02:08:21Z",
+            }
+            self._write_json(v3_dir / "state.json", v3_state)
+            self._write_json(
+                v3_dir / "campaign-run-manifest.json",
+                {"manifest": v3_manifest},
+            )
+            self._write_json(
+                v3_dir / "stop-receipt.json",
+                {
+                    "event_type": "failed",
+                    "reason": "action-failed:recover-vc1-interruption-preview",
+                    "owner_nonce": v3_state["owner_nonce"],
+                    "campaign_id": v3_state["campaign_id"],
+                },
+            )
+            diagnostic_path = supervisor._action_diagnostic_path(
+                v3_dir,
+                "recover-vc1-interruption-preview",
+                create_directory=True,
+            )
+            supervisor._write_action_diagnostic(
+                diagnostic_path,
+                campaign_id="campaign-recovery",
+                phase="VC-1",
+                action_id="recover-vc1-interruption-preview",
+                owner_pid=os.getpid(),
+                owner_nonce="a" * 64,
+                failure_kind="handled-error",
+                error_type="ConfigurationError",
+                message="watchdog heartbeat 越出当前 attempt。",
+            )
+            v4 = self._recovery_continuation_manifest(
+                root,
+                root / "continuation.json",
+            )
+            v4["recovery_predecessor"] = v3_manifest["recovery_predecessor"]
+            v4["continuation_predecessor"] = (
+                supervisor._recovery_continuation_predecessor_from_run(
+                    v3_state,
+                    v3_manifest,
+                    v3_dir,
+                )
+            )
+            supervisor._validate_batched_campaign_history(
+                v4,
+                [
+                    (v2_state, v2_manifest, v2_dir),
+                    (v3_state, v3_manifest, v3_dir),
+                ],
             )
 
     def test_campaign_run_rejects_reusing_campaign_id(self) -> None:

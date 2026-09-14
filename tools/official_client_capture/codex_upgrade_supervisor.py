@@ -44,6 +44,7 @@ CAMPAIGN_CONTINUITY_SCHEMA = "codex-upgrade-campaign-continuity/v1"
 CAMPAIGN_RUN_SCHEMA = "codex-upgrade-campaign-run/v1"
 CAMPAIGN_RUN_BATCHED_SCHEMA = "codex-upgrade-campaign-run/v2"
 CAMPAIGN_RUN_RECOVERY_SCHEMA = "codex-upgrade-campaign-run/v3"
+CAMPAIGN_RUN_RECOVERY_CONTINUATION_SCHEMA = "codex-upgrade-campaign-run/v4"
 CAMPAIGN_RUN_LOCK_FILENAME = ".campaign-run.lock"
 # campaign-run 启动的子命令通过这些只读环境变量复用同一个父监督器。
 # 子进程不得自行创建第二个监督器；身份仍以父 run_dir/state.json 为准。
@@ -3568,6 +3569,180 @@ def _campaign_stop_command(
     raise SupervisorError("Campaign 父监督器未在 5 秒内封存终态并排空进程。")
 
 
+def _campaign_run_sha256(value: Any, label: str) -> str:
+    """校验 campaign-run 控制制品中的 SHA-256 字面量。"""
+
+    if (
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(character not in "0123456789abcdef" for character in value)
+    ):
+        raise SupervisorError(f"Campaign run {label} 非法。")
+    return value
+
+
+def _campaign_run_file_binding(
+    value: Any,
+    *,
+    label: str,
+    require_bound_files: bool,
+    include_tool_identity: bool = False,
+) -> dict[str, str]:
+    """校验恢复清单绑定的绝对普通文件及其摘要。"""
+
+    fields = {"path", "sha256"}
+    if include_tool_identity:
+        fields.add("tool_files_sha256")
+    if not isinstance(value, dict) or set(value) != fields:
+        raise SupervisorError(f"Campaign {label} 字段不闭合。")
+    bound_path = Path(str(value.get("path", "")))
+    digest = _campaign_run_sha256(value.get("sha256"), f"{label}.sha256")
+    if (
+        not bound_path.is_absolute()
+        or bound_path.is_symlink()
+        or (
+            require_bound_files
+            and (
+                not bound_path.is_file()
+                or _sha256(bound_path.read_bytes()) != digest
+            )
+        )
+    ):
+        raise SupervisorError(f"Campaign {label} 路径或摘要漂移。")
+    normalized = {"path": str(bound_path), "sha256": digest}
+    if include_tool_identity:
+        normalized["tool_files_sha256"] = _campaign_run_sha256(
+            value.get("tool_files_sha256"),
+            f"{label}.tool_files_sha256",
+        )
+    return normalized
+
+
+def _campaign_run_tool_transition(
+    value: Any,
+    *,
+    label: str,
+    maintenance_only: bool,
+) -> dict[str, Any]:
+    """校验 v4 中维护变化和最终有效工具变化的逐文件闭集。"""
+
+    fields = {
+        "from_tool_files_sha256",
+        "to_tool_files_sha256",
+        "changed_files",
+        "allowed_production_paths",
+        "affected_job_ids",
+    }
+    if not isinstance(value, dict) or set(value) != fields:
+        raise SupervisorError(f"Campaign {label} 字段不闭合。")
+    normalized: dict[str, Any] = {
+        "from_tool_files_sha256": _campaign_run_sha256(
+            value.get("from_tool_files_sha256"),
+            f"{label}.from_tool_files_sha256",
+        ),
+        "to_tool_files_sha256": _campaign_run_sha256(
+            value.get("to_tool_files_sha256"),
+            f"{label}.to_tool_files_sha256",
+        ),
+    }
+    raw_changed = value.get("changed_files")
+    changed: list[dict[str, Any]] = []
+    seen_paths: set[str] = set()
+    if not isinstance(raw_changed, list) or not raw_changed:
+        raise SupervisorError(f"Campaign {label}.changed_files 必须为非空数组。")
+    for index, raw in enumerate(raw_changed, 1):
+        if not isinstance(raw, dict) or set(raw) != {
+            "path",
+            "from_sha256",
+            "to_sha256",
+            "classification",
+            "affected_job_ids",
+        }:
+            raise SupervisorError(
+                f"Campaign {label}.changed_files 第 {index} 项字段不闭合。"
+            )
+        raw_path = raw.get("path")
+        parsed = Path(str(raw_path))
+        if (
+            not isinstance(raw_path, str)
+            or not raw_path
+            or parsed.is_absolute()
+            or "\\" in raw_path
+            or str(parsed) != raw_path
+            or any(part in {"", ".", ".."} for part in parsed.parts)
+            or raw_path in seen_paths
+        ):
+            raise SupervisorError(f"Campaign {label}.changed_files 路径非法。")
+        seen_paths.add(raw_path)
+        for side in ("from_sha256", "to_sha256"):
+            digest = raw.get(side)
+            if digest is not None:
+                _campaign_run_sha256(digest, f"{label}.{side}")
+        if raw.get("from_sha256") is None and raw.get("to_sha256") is None:
+            raise SupervisorError(f"Campaign {label}.changed_files 双侧摘要均为空。")
+        classification = raw.get("classification")
+        allowed_classifications = {
+            "evaluation",
+            "phase_scoped_hybrid",
+        }
+        if not maintenance_only:
+            allowed_classifications.add("failed_job_production")
+        if classification not in allowed_classifications:
+            raise SupervisorError(f"Campaign {label}.changed_files 风险分类非法。")
+        affected = raw.get("affected_job_ids")
+        if (
+            not isinstance(affected, list)
+            or affected != sorted(set(affected))
+            or any(
+                not isinstance(item, str)
+                or not item
+                or len(item) > 128
+                or not SAFE_ID_CHARS.issuperset(item)
+                for item in affected
+            )
+            or (classification != "failed_job_production" and affected)
+        ):
+            raise SupervisorError(f"Campaign {label}.changed_files affected Job 非法。")
+        changed.append(dict(raw))
+    if [item["path"] for item in changed] != sorted(seen_paths):
+        raise SupervisorError(f"Campaign {label}.changed_files 必须按路径排序。")
+    for field in ("allowed_production_paths", "affected_job_ids"):
+        values = value.get(field)
+        if (
+            not isinstance(values, list)
+            or values != sorted(set(values))
+            or any(not isinstance(item, str) or not item for item in values)
+        ):
+            raise SupervisorError(f"Campaign {label}.{field} 非法。")
+        normalized[field] = list(values)
+    production_paths = sorted(
+        item["path"]
+        for item in changed
+        if item["classification"] == "failed_job_production"
+    )
+    affected_union = sorted(
+        {
+            job_id
+            for item in changed
+            for job_id in item["affected_job_ids"]
+        }
+    )
+    if (
+        normalized["allowed_production_paths"] != production_paths
+        or normalized["affected_job_ids"] != affected_union
+        or (
+            maintenance_only
+            and (
+                normalized["allowed_production_paths"]
+                or normalized["affected_job_ids"]
+            )
+        )
+    ):
+        raise SupervisorError(f"Campaign {label} 产出路径或 affected Job 闭集漂移。")
+    normalized["changed_files"] = changed
+    return normalized
+
+
 def _campaign_run_manifest(
     path: Path,
     *,
@@ -3596,6 +3771,7 @@ def _campaign_run_manifest(
     elif schema_version in {
         CAMPAIGN_RUN_BATCHED_SCHEMA,
         CAMPAIGN_RUN_RECOVERY_SCHEMA,
+        CAMPAIGN_RUN_RECOVERY_CONTINUATION_SCHEMA,
     }:
         required = {
             "schema_version",
@@ -3618,6 +3794,18 @@ def _campaign_run_manifest(
                     "recovery_mode",
                     "recovery_contract",
                     "recovery_predecessor",
+                }
+            )
+        elif schema_version == CAMPAIGN_RUN_RECOVERY_CONTINUATION_SCHEMA:
+            required.update(
+                {
+                    "recovery_mode",
+                    "recovery_contract",
+                    "recovery_predecessor",
+                    "continuation_predecessor",
+                    "deployment_receipt",
+                    "maintenance_tool_transition",
+                    "effective_tool_transition",
                 }
             )
         optional = set()
@@ -3652,13 +3840,7 @@ def _campaign_run_manifest(
             raise SupervisorError("Campaign run 原始 deadline 缺少时区。")
         original_deadline_at_epoch = deadline_value.timestamp()
         for field in ("campaign_plan_sha256", "batch_sha256"):
-            value = payload.get(field)
-            if (
-                not isinstance(value, str)
-                or len(value) != 64
-                or any(character not in "0123456789abcdef" for character in value)
-            ):
-                raise SupervisorError(f"Campaign run {field} 非法。")
+            _campaign_run_sha256(payload.get(field), field)
         _safe_id(payload.get("batch_id"), "batch_id")
         sequence = payload.get("batch_sequence")
         if not isinstance(sequence, int) or isinstance(sequence, bool) or sequence < 1:
@@ -3684,26 +3866,22 @@ def _campaign_run_manifest(
                 raise SupervisorError(
                     f"Campaign run predecessor_checkpoint.{field} 非法。"
                 )
-        if schema_version == CAMPAIGN_RUN_RECOVERY_SCHEMA:
-            if payload.get("recovery_mode") != "interrupted-vc1-preview":
+        if schema_version in {
+            CAMPAIGN_RUN_RECOVERY_SCHEMA,
+            CAMPAIGN_RUN_RECOVERY_CONTINUATION_SCHEMA,
+        }:
+            expected_mode = (
+                "interrupted-vc1-preview"
+                if schema_version == CAMPAIGN_RUN_RECOVERY_SCHEMA
+                else "interrupted-vc1-preview-continuation"
+            )
+            if payload.get("recovery_mode") != expected_mode:
                 raise SupervisorError("Campaign recovery mode 非法。")
-            contract = payload.get("recovery_contract")
-            if not isinstance(contract, dict) or set(contract) != {"path", "sha256"}:
-                raise SupervisorError("Campaign recovery_contract 字段不闭合。")
-            contract_path = Path(str(contract.get("path", "")))
-            if (
-                not contract_path.is_absolute()
-                or contract_path.is_symlink()
-                or (
-                    require_bound_files
-                    and (
-                        not contract_path.is_file()
-                        or _sha256(contract_path.read_bytes())
-                        != contract.get("sha256")
-                    )
-                )
-            ):
-                raise SupervisorError("Campaign recovery_contract 路径或摘要漂移。")
+            _campaign_run_file_binding(
+                payload.get("recovery_contract"),
+                label="recovery_contract",
+                require_bound_files=require_bound_files,
+            )
             recovery_predecessor = payload.get("recovery_predecessor")
             recovery_fields = {
                 "run_dir",
@@ -3723,7 +3901,6 @@ def _campaign_run_manifest(
                 or set(recovery_predecessor) != recovery_fields
                 or recovery_predecessor.get("state") != "failed"
                 or recovery_predecessor.get("reason") != "KeyboardInterrupt"
-                or recovery_predecessor.get("batch_sequence") != sequence - 1
             ):
                 raise SupervisorError("Campaign recovery_predecessor 字段或直接前序关系非法。")
             run_dir = Path(str(recovery_predecessor.get("run_dir", "")))
@@ -3750,15 +3927,98 @@ def _campaign_run_manifest(
                 "owner_nonce",
                 "batch_sha256",
             ):
-                value = recovery_predecessor.get(field)
+                _campaign_run_sha256(
+                    recovery_predecessor.get(field),
+                    f"recovery_predecessor.{field}",
+                )
+            if (
+                schema_version == CAMPAIGN_RUN_RECOVERY_SCHEMA
+                and recovery_predecessor.get("batch_sequence") != sequence - 1
+            ):
+                raise SupervisorError("Campaign v3 recovery_predecessor 不是直接前序。")
+            if schema_version == CAMPAIGN_RUN_RECOVERY_CONTINUATION_SCHEMA:
+                continuation = payload.get("continuation_predecessor")
+                continuation_fields = {
+                    "run_dir",
+                    "state_sha256",
+                    "manifest_sha256",
+                    "stop_receipt_sha256",
+                    "action_diagnostic_sha256",
+                    "owner_nonce",
+                    "terminal_at_utc",
+                    "state",
+                    "reason",
+                    "error_type",
+                    "message",
+                    "batch_id",
+                    "batch_sequence",
+                    "batch_sha256",
+                }
                 if (
-                    not isinstance(value, str)
-                    or len(value) != 64
-                    or any(character not in "0123456789abcdef" for character in value)
+                    not isinstance(continuation, dict)
+                    or set(continuation) != continuation_fields
+                    or continuation.get("state") != "failed"
+                    or continuation.get("reason")
+                    != "action-failed:recover-vc1-interruption-preview"
+                    or continuation.get("error_type") != "ConfigurationError"
+                    or continuation.get("message")
+                    != "watchdog heartbeat 越出当前 attempt。"
+                    or recovery_predecessor.get("batch_sequence") != 1
+                    or continuation.get("batch_sequence") != sequence - 1
+                    or sequence != 3
                 ):
-                    raise SupervisorError(
-                        f"Campaign recovery_predecessor.{field} 非法。"
+                    raise SupervisorError("Campaign v4 continuation_predecessor 非法。")
+                continuation_dir = Path(str(continuation.get("run_dir", "")))
+                if not continuation_dir.is_absolute():
+                    raise SupervisorError("Campaign v4 continuation run_dir 必须是绝对路径。")
+                _safe_id(continuation.get("batch_id"), "continuation batch_id")
+                try:
+                    continuation_time = datetime.fromisoformat(
+                        str(continuation.get("terminal_at_utc", "")).replace(
+                            "Z", "+00:00"
+                        )
                     )
+                except ValueError as error:
+                    raise SupervisorError(
+                        "Campaign v4 continuation terminal_at_utc 非法。"
+                    ) from error
+                if continuation_time.tzinfo is None:
+                    raise SupervisorError(
+                        "Campaign v4 continuation terminal_at_utc 缺少时区。"
+                    )
+                for field in (
+                    "state_sha256",
+                    "manifest_sha256",
+                    "stop_receipt_sha256",
+                    "action_diagnostic_sha256",
+                    "owner_nonce",
+                    "batch_sha256",
+                ):
+                    _campaign_run_sha256(
+                        continuation.get(field),
+                        f"continuation_predecessor.{field}",
+                    )
+                _campaign_run_file_binding(
+                    payload.get("deployment_receipt"),
+                    label="deployment_receipt",
+                    require_bound_files=require_bound_files,
+                    include_tool_identity=True,
+                )
+                maintenance = _campaign_run_tool_transition(
+                    payload.get("maintenance_tool_transition"),
+                    label="maintenance_tool_transition",
+                    maintenance_only=True,
+                )
+                effective = _campaign_run_tool_transition(
+                    payload.get("effective_tool_transition"),
+                    label="effective_tool_transition",
+                    maintenance_only=False,
+                )
+                if (
+                    maintenance["to_tool_files_sha256"]
+                    != effective["to_tool_files_sha256"]
+                ):
+                    raise SupervisorError("Campaign v4 两段工具 transition 目标不一致。")
     no_op = payload.get("no_op")
     if not isinstance(no_op, bool):
         raise SupervisorError("Campaign run manifest no_op 必须是布尔值。")
@@ -3777,6 +4037,7 @@ def _campaign_run_manifest(
         if schema_version in {
             CAMPAIGN_RUN_BATCHED_SCHEMA,
             CAMPAIGN_RUN_RECOVERY_SCHEMA,
+            CAMPAIGN_RUN_RECOVERY_CONTINUATION_SCHEMA,
         }:
             expected_action_fields.add("item_ids")
         if not isinstance(raw, dict) or set(raw) != expected_action_fields:
@@ -3828,9 +4089,12 @@ def _campaign_run_manifest(
             "reuse-official-evidence",
             "compile-vc-batch",
             "compile-vc-interrupted-recovery-batch",
+            "compile-vc-interrupted-recovery-continuation",
         }
         if schema_version != CAMPAIGN_RUN_RECOVERY_SCHEMA:
             forbidden.add("recover-vc1-interruption")
+        if schema_version != CAMPAIGN_RUN_RECOVERY_CONTINUATION_SCHEMA:
+            forbidden.add("continue-vc1-interruption")
         if is_supervisor_cli:
             forbidden |= {
                 "campaign-start",
@@ -3854,6 +4118,7 @@ def _campaign_run_manifest(
         if schema_version in {
             CAMPAIGN_RUN_BATCHED_SCHEMA,
             CAMPAIGN_RUN_RECOVERY_SCHEMA,
+            CAMPAIGN_RUN_RECOVERY_CONTINUATION_SCHEMA,
         }:
             item_ids = raw.get("item_ids")
             if (
@@ -3941,6 +4206,44 @@ def _campaign_run_manifest(
             raise SupervisorError(
                 "v3 中断恢复只能执行绑定合同的唯一零请求预览动作。"
             )
+    if schema_version == CAMPAIGN_RUN_RECOVERY_CONTINUATION_SCHEMA:
+        if no_op or len(normalized_actions) != 1:
+            raise SupervisorError("v4 中断恢复续接必须恰好声明一个非 no-op 动作。")
+        continuation_action = normalized_actions[0]
+        continuation_command = continuation_action["command"]
+        contract_path = str(payload["recovery_contract"]["path"])
+        contract_flag_index = (
+            continuation_command.index("--recovery-contract")
+            if continuation_command.count("--recovery-contract") == 1
+            else -1
+        )
+        manifest_flag_index = (
+            continuation_command.index("--continuation-manifest")
+            if continuation_command.count("--continuation-manifest") == 1
+            else -1
+        )
+        continuation_basenames = {
+            Path(item).name for item in continuation_command[:4]
+        }
+        if (
+            phase != "VC-1"
+            or not continuation_basenames & {"codex_upgrade.py", "codex-upgrade"}
+            or continuation_action["action_id"]
+            != "continue-vc1-interruption-preview"
+            or continuation_action["operation"]
+            != "VC-1:continue-interruption-preview"
+            or continuation_command.count("continue-vc1-interruption") != 1
+            or contract_flag_index < 0
+            or contract_flag_index + 1 >= len(continuation_command)
+            or continuation_command[contract_flag_index + 1] != contract_path
+            or manifest_flag_index < 0
+            or manifest_flag_index + 1 >= len(continuation_command)
+            or not Path(continuation_command[manifest_flag_index + 1]).is_absolute()
+            or "--acknowledge-live-requests" in continuation_command
+        ):
+            raise SupervisorError(
+                "v4 中断恢复续接只能执行绑定原合同和自身清单的唯一零请求预览动作。"
+            )
     normalized = {
         "schema_version": schema_version,
         "campaign_id": campaign_id,
@@ -3963,12 +4266,30 @@ def _campaign_run_manifest(
                 "original_deadline_at_utc": original_deadline_at_utc,
             }
         )
-        if schema_version == CAMPAIGN_RUN_RECOVERY_SCHEMA:
+        if schema_version in {
+            CAMPAIGN_RUN_RECOVERY_SCHEMA,
+            CAMPAIGN_RUN_RECOVERY_CONTINUATION_SCHEMA,
+        }:
             normalized.update(
                 {
                     "recovery_mode": payload["recovery_mode"],
                     "recovery_contract": dict(payload["recovery_contract"]),
                     "recovery_predecessor": dict(payload["recovery_predecessor"]),
+                }
+            )
+        if schema_version == CAMPAIGN_RUN_RECOVERY_CONTINUATION_SCHEMA:
+            normalized.update(
+                {
+                    "continuation_predecessor": dict(
+                        payload["continuation_predecessor"]
+                    ),
+                    "deployment_receipt": dict(payload["deployment_receipt"]),
+                    "maintenance_tool_transition": dict(
+                        payload["maintenance_tool_transition"]
+                    ),
+                    "effective_tool_transition": dict(
+                        payload["effective_tool_transition"]
+                    ),
                 }
             )
     return normalized
@@ -4145,6 +4466,68 @@ def build_recovery_campaign_run_manifest(
     return normalized
 
 
+def build_recovery_continuation_campaign_run_manifest(
+    *,
+    campaign_id: str,
+    campaign_plan_sha256: str,
+    batch_id: str,
+    batch_sequence: int,
+    batch_sha256: str,
+    phase: str,
+    predecessor_checkpoint: Mapping[str, Any],
+    original_deadline_at_utc: str,
+    recovery_contract: Mapping[str, Any],
+    recovery_predecessor: Mapping[str, Any],
+    continuation_predecessor: Mapping[str, Any],
+    deployment_receipt: Mapping[str, Any],
+    maintenance_tool_transition: Mapping[str, Any],
+    effective_tool_transition: Mapping[str, Any],
+    actions: Sequence[Mapping[str, Any]],
+    execute_items: Sequence[str],
+    reuse_items: Sequence[str],
+) -> dict[str, Any]:
+    """生成只承接指定 v3 路径缺陷的一次性 v4 零请求续接队列。"""
+
+    payload = {
+        "schema_version": CAMPAIGN_RUN_RECOVERY_CONTINUATION_SCHEMA,
+        "campaign_id": campaign_id,
+        "campaign_plan_sha256": campaign_plan_sha256,
+        "batch_id": batch_id,
+        "batch_sequence": batch_sequence,
+        "batch_sha256": batch_sha256,
+        "phase": phase,
+        "predecessor_checkpoint": dict(predecessor_checkpoint),
+        "original_deadline_at_utc": original_deadline_at_utc,
+        "recovery_mode": "interrupted-vc1-preview-continuation",
+        "recovery_contract": dict(recovery_contract),
+        "recovery_predecessor": dict(recovery_predecessor),
+        "continuation_predecessor": dict(continuation_predecessor),
+        "deployment_receipt": dict(deployment_receipt),
+        "maintenance_tool_transition": dict(maintenance_tool_transition),
+        "effective_tool_transition": dict(effective_tool_transition),
+        "no_op": not actions,
+        "actions": [dict(action) for action in actions],
+        "execute_items": list(execute_items),
+        "reuse_items": list(reuse_items),
+    }
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=".campaign-run-v4-", suffix=".json"
+    )
+    temporary = Path(temporary_name)
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(_canonical(payload))
+        normalized = _campaign_run_manifest(
+            temporary,
+            require_bound_files=False,
+        )
+    finally:
+        temporary.unlink(missing_ok=True)
+    normalized.pop("original_deadline_at_epoch", None)
+    return normalized
+
+
 def _campaign_run_lock(state_dir: Path) -> tuple[int, Path]:
     """为一个动作队列占用唯一锁，防止同一目录并发启动多个父监督器。"""
 
@@ -4229,15 +4612,84 @@ def _recovery_predecessor_from_run(
     }
 
 
+def _recovery_continuation_predecessor_from_run(
+    state: Mapping[str, Any],
+    manifest: Mapping[str, Any],
+    run_dir: Path,
+) -> dict[str, Any]:
+    """重放本次路径基准缺陷导致的失败 v3，并生成 v4 唯一前序绑定。"""
+
+    state_path = run_dir / "state.json"
+    manifest_path = run_dir / "campaign-run-manifest.json"
+    stop_path = run_dir / "stop-receipt.json"
+    diagnostic_path = _action_diagnostic_path(
+        run_dir,
+        "recover-vc1-interruption-preview",
+        create_directory=False,
+    )
+    if any(
+        path.is_symlink() or not path.is_file()
+        for path in (state_path, manifest_path, stop_path, diagnostic_path)
+    ):
+        raise SupervisorError("v4 续接前序缺少可信 state／manifest／stop／诊断收据。")
+    stop = _read_json(stop_path)
+    if (
+        state.get("state") != "failed"
+        or stop.get("event_type") != "failed"
+        or stop.get("reason")
+        != "action-failed:recover-vc1-interruption-preview"
+        or stop.get("owner_nonce") != state.get("owner_nonce")
+        or stop.get("campaign_id") != state.get("campaign_id")
+        or manifest.get("schema_version") != CAMPAIGN_RUN_RECOVERY_SCHEMA
+        or manifest.get("batch_sequence") != 2
+    ):
+        raise SupervisorError("v4 只允许承接固定路径缺陷导致的唯一失败 v3。")
+    diagnostic = _validate_action_diagnostic(
+        diagnostic_path,
+        run_dir=run_dir,
+        campaign_id=str(state["campaign_id"]),
+        phase=str(state["phase"]),
+        action_id="recover-vc1-interruption-preview",
+        owner_pid=int(state["owner_pid"]),
+        owner_nonce=str(state["owner_nonce"]),
+    )
+    if (
+        diagnostic.get("failure_kind") != "handled-error"
+        or diagnostic.get("error_type") != "ConfigurationError"
+        or diagnostic.get("message") != "watchdog heartbeat 越出当前 attempt。"
+    ):
+        raise SupervisorError("v4 续接前序诊断不是获批的 watchdog 路径缺陷。")
+    return {
+        "run_dir": str(run_dir.resolve(strict=True)),
+        "state_sha256": _sha256(state_path.read_bytes()),
+        "manifest_sha256": _sha256(manifest_path.read_bytes()),
+        "stop_receipt_sha256": _sha256(stop_path.read_bytes()),
+        "action_diagnostic_sha256": _sha256(diagnostic_path.read_bytes()),
+        "owner_nonce": str(state["owner_nonce"]),
+        "terminal_at_utc": str(state["terminal_at_utc"]),
+        "state": "failed",
+        "reason": "action-failed:recover-vc1-interruption-preview",
+        "error_type": "ConfigurationError",
+        "message": "watchdog heartbeat 越出当前 attempt。",
+        "batch_id": str(manifest["batch_id"]),
+        "batch_sequence": int(manifest["batch_sequence"]),
+        "batch_sha256": str(manifest["batch_sha256"]),
+    }
+
+
 def _validate_batched_campaign_history(
     manifest: Mapping[str, Any],
     history: Sequence[tuple[dict[str, Any], dict[str, Any], Path]],
 ) -> list[tuple[dict[str, Any], dict[str, Any], Path]]:
-    """校验 v2/v3 连续链，并只放行失败批次的唯一直接恢复后继。"""
+    """校验 v2/v3/v4 连续链和两类唯一失败后继。"""
 
     if any(
         prior_manifest.get("schema_version")
-        not in {CAMPAIGN_RUN_BATCHED_SCHEMA, CAMPAIGN_RUN_RECOVERY_SCHEMA}
+        not in {
+            CAMPAIGN_RUN_BATCHED_SCHEMA,
+            CAMPAIGN_RUN_RECOVERY_SCHEMA,
+            CAMPAIGN_RUN_RECOVERY_CONTINUATION_SCHEMA,
+        }
         for _state, prior_manifest, _run_dir in history
     ):
         raise SupervisorError("batched Campaign 不得与历史 v1 run 混用。")
@@ -4263,39 +4715,90 @@ def _validate_batched_campaign_history(
     ):
         raise SupervisorError("Campaign 后继批次改变了总计划或原始 deadline。")
 
-    # 历史失败只能由紧随其后的一个成功 v3 恢复批次消费。任何跳过、重复消费、
-    # v3 自身失败或普通 v2 绕过失败前序都立即拒绝。
-    for index, (state, prior_manifest, run_dir) in enumerate(ordered):
+    # 把待执行清单临时拼到链尾，只校验身份，不把它当作已有终态。这样既能
+    # 约束当前 v3/v4 的直接前序，也能验证历史特殊清单没有被普通 v2 绕过。
+    combined: list[tuple[dict[str, Any] | None, Mapping[str, Any], Path | None]] = [
+        (state, prior_manifest, run_dir)
+        for state, prior_manifest, run_dir in ordered
+    ]
+    combined.append((None, manifest, None))
+    for index, (state, current_manifest, run_dir) in enumerate(combined):
+        schema = current_manifest.get("schema_version")
+        if schema == CAMPAIGN_RUN_RECOVERY_SCHEMA:
+            if index == 0:
+                raise SupervisorError("v3 恢复批次缺少直接失败 v2 前序。")
+            previous_state, previous_manifest, previous_dir = combined[index - 1]
+            if (
+                previous_state is None
+                or previous_dir is None
+                or previous_manifest.get("schema_version")
+                != CAMPAIGN_RUN_BATCHED_SCHEMA
+                or previous_state.get("state") != "failed"
+                or current_manifest.get("recovery_predecessor")
+                != _recovery_predecessor_from_run(
+                    previous_state,
+                    previous_manifest,
+                    previous_dir,
+                )
+            ):
+                raise SupervisorError("v3 恢复清单未逐字绑定唯一直接失败 v2 前序。")
+        elif schema == CAMPAIGN_RUN_RECOVERY_CONTINUATION_SCHEMA:
+            # v4 不是可复用的通用恢复版本，只承接本 Campaign 的 sequence 1/2
+            # 特定失败链；历史 v4 成功后，sequence 4 才能回到普通 v2。
+            if index != 2:
+                raise SupervisorError("v4 续接只允许位于唯一 sequence 3。")
+            original_state, original_manifest, original_dir = combined[0]
+            failed_state, failed_manifest, failed_dir = combined[1]
+            if (
+                original_state is None
+                or original_dir is None
+                or failed_state is None
+                or failed_dir is None
+                or original_manifest.get("schema_version")
+                != CAMPAIGN_RUN_BATCHED_SCHEMA
+                or failed_manifest.get("schema_version")
+                != CAMPAIGN_RUN_RECOVERY_SCHEMA
+                or original_state.get("state") != "failed"
+                or failed_state.get("state") != "failed"
+                or current_manifest.get("recovery_predecessor")
+                != _recovery_predecessor_from_run(
+                    original_state,
+                    original_manifest,
+                    original_dir,
+                )
+                or current_manifest.get("continuation_predecessor")
+                != _recovery_continuation_predecessor_from_run(
+                    failed_state,
+                    failed_manifest,
+                    failed_dir,
+                )
+            ):
+                raise SupervisorError("v4 没有逐字绑定获批的 v2/v3 双前序。")
+
+    # 已封存失败只能由链中的下一项消费。v2 交给 v3；只有上述精确诊断的
+    # v3 可交给 v4。v4 失败或其他终态一律停线，不再开放第五种清单。
+    for index, (state, prior_manifest, _run_dir) in enumerate(ordered):
         terminal_state = state.get("state")
         if terminal_state == "stopped":
             continue
         if terminal_state != "failed":
             raise SupervisorError("前序 Campaign 批次没有可信终态。")
-        successor = ordered[index + 1] if index + 1 < len(ordered) else None
-        if successor is None:
-            if manifest.get("schema_version") != CAMPAIGN_RUN_RECOVERY_SCHEMA:
-                raise SupervisorError("失败批次只能由唯一直接 v3 恢复后继承接。")
-            recovery_manifest = manifest
-        else:
-            successor_state, recovery_manifest, _successor_dir = successor
-            if successor_state.get("state") != "stopped":
-                raise SupervisorError("失败批次的 v3 恢复后继未成功封存。")
+        successor_manifest = combined[index + 1][1]
+        prior_schema = prior_manifest.get("schema_version")
+        successor_schema = successor_manifest.get("schema_version")
         if (
-            recovery_manifest.get("schema_version")
-            != CAMPAIGN_RUN_RECOVERY_SCHEMA
-            or recovery_manifest.get("recovery_predecessor")
-            != _recovery_predecessor_from_run(state, prior_manifest, run_dir)
+            prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
+            and successor_schema == CAMPAIGN_RUN_RECOVERY_SCHEMA
         ):
-            raise SupervisorError("v3 恢复清单未逐字绑定唯一直接失败前序。")
-
-    if manifest.get("schema_version") == CAMPAIGN_RUN_RECOVERY_SCHEMA:
-        if not ordered:
-            raise SupervisorError("v3 恢复批次缺少直接失败前序。")
-        state, prior_manifest, run_dir = ordered[-1]
-        if manifest.get("recovery_predecessor") != _recovery_predecessor_from_run(
-            state, prior_manifest, run_dir
+            continue
+        if (
+            prior_schema == CAMPAIGN_RUN_RECOVERY_SCHEMA
+            and successor_schema == CAMPAIGN_RUN_RECOVERY_CONTINUATION_SCHEMA
         ):
-            raise SupervisorError("v3 恢复批次没有承接当前唯一失败前序。")
+            continue
+        if prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA:
+            raise SupervisorError("失败批次只能由唯一直接 v3 恢复后继承接。")
+        raise SupervisorError("失败批次没有被唯一允许的直接恢复后继承接。")
 
     seen_batch_ids = {
         str(prior_manifest.get("batch_id"))
@@ -4486,6 +4989,7 @@ def _campaign_run_command(args: argparse.Namespace) -> tuple[int, dict[str, Any]
         if manifest["schema_version"] in {
             CAMPAIGN_RUN_BATCHED_SCHEMA,
             CAMPAIGN_RUN_RECOVERY_SCHEMA,
+            CAMPAIGN_RUN_RECOVERY_CONTINUATION_SCHEMA,
         }:
             payload.update(
                 {
@@ -4497,7 +5001,10 @@ def _campaign_run_command(args: argparse.Namespace) -> tuple[int, dict[str, Any]
                     ],
                 }
             )
-            if manifest["schema_version"] == CAMPAIGN_RUN_RECOVERY_SCHEMA:
+            if manifest["schema_version"] in {
+                CAMPAIGN_RUN_RECOVERY_SCHEMA,
+                CAMPAIGN_RUN_RECOVERY_CONTINUATION_SCHEMA,
+            }:
                 payload["recovery_mode"] = manifest["recovery_mode"]
         return (0 if status == "stopped" else 1), payload
     except BaseException as error:

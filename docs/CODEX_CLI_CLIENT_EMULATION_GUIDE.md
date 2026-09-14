@@ -1265,6 +1265,9 @@ result_key = item_id + input_sha256 + environment_sha256 + direct_dependency_sha
 `codex-upgrade-campaign-run/v2`，并绑定 Campaign 总计划、批次、直接前序 checkpoint 和原始绝对 deadline。
 `codex-upgrade-campaign-run/v3` 不是普通阶段版本，只允许作为一个失败 v2 的唯一直接后继，用于 VC-1
 中断恢复的零请求预览；成功 v3 之后的真实补跑仍回到普通 v2。
+`codex-upgrade-campaign-run/v4` 同样不是普通阶段版本；它只承接已经封口 attempt、但因
+`watchdog-heartbeat.json` 路径基准缺陷失败的唯一 v3，并且只能作为 sequence 3 执行一次。其他 v3 失败
+一律停线，不能借用 v4。
 `codex-upgrade-campaign-run/v1` 只保留给历史兼容与离线回归；`campaign-start`、`campaign-mark`、
 `campaign-exec` 不得编排新 Campaign。
 
@@ -1334,6 +1337,28 @@ v3 恰好包含一个 `recover-vc1-interruption` 动作。它只补齐原 attemp
 `resume --rerun-failed --acknowledge-live-requests` 执行冻结的 execute 闭集；复用项继续只读承接。
 合同、transition、源 attempt、失败 v2 和预览 v3 均只写追加，任一摘要、owner nonce、Ledger head、部署
 工具或闭集漂移都停线，不得重编同一序号或新建 reservation 试探。
+
+历史 v3 若已写入自摘要有效的失败 `attempt.json`，且其唯一失败诊断精确为
+`ConfigurationError: watchdog heartbeat 越出当前 attempt。`，不得重跑 v3。先部署修复后的工具，再直接
+编译一次性 v4：
+
+```bash
+python3 tools/official_client_capture/codex_upgrade.py \
+  compile-vc-interrupted-recovery-continuation \
+  --campaign-dir /绝对路径/campaign \
+  --sequence 3 \
+  --recovery-contract /绝对路径/campaign/control/vc/recovery-contracts/0002-vc-1.json \
+  --failed-recovery-supervisor-run-dir /绝对路径/原state-dir/run-<失败v3-owner-nonce> \
+  --deployment-receipt /绝对路径/修复后ARM64工具部署收据
+```
+
+随后仍在原 `state-dir` 执行生成的 `0003-vc-1.json`。v4 会严格重放 sequence 1 的失败 v2、sequence 2 的
+失败 v3、原合同、不可变 attempt、新部署收据及两段逐文件工具变化；历史错误 heartbeat 绑定只在
+`status=failed`、`interrupted_recovery` 合法、`execution_error.type=KeyboardInterrupt`、路径精确等于
+`watchdog-heartbeat.json` 且文件摘要／字节数匹配时按 attempt 相对路径解释。v4 不重做 after 探针、不改写
+attempt、不创建 reservation、不发送请求；它只签发 transition 并输出 `execute=27`、`reuse=2`、
+`reservation_exists=false`、`live_request_count=0`、`scanned_bytes=0`。成功后由操作员确认，sequence 4 才可
+回到普通 v2 真实补跑。
 
 ### Codex 连续监督、时间账本与文档部署
 

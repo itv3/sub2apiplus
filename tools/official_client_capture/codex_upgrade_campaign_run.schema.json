@@ -5,7 +5,8 @@
   "oneOf": [
     {"$ref": "#/$defs/v1"},
     {"$ref": "#/$defs/v2"},
-    {"$ref": "#/$defs/v3"}
+    {"$ref": "#/$defs/v3"},
+    {"$ref": "#/$defs/v4"}
   ],
   "$defs": {
     "safeId": {
@@ -103,6 +104,83 @@
         "batch_sha256": {"$ref": "#/$defs/sha256"}
       }
     },
+    "continuationPredecessor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "run_dir", "state_sha256", "manifest_sha256", "stop_receipt_sha256",
+        "action_diagnostic_sha256", "owner_nonce", "terminal_at_utc", "state",
+        "reason", "error_type", "message", "batch_id", "batch_sequence",
+        "batch_sha256"
+      ],
+      "properties": {
+        "run_dir": {"type": "string", "pattern": "^/"},
+        "state_sha256": {"$ref": "#/$defs/sha256"},
+        "manifest_sha256": {"$ref": "#/$defs/sha256"},
+        "stop_receipt_sha256": {"$ref": "#/$defs/sha256"},
+        "action_diagnostic_sha256": {"$ref": "#/$defs/sha256"},
+        "owner_nonce": {"$ref": "#/$defs/sha256"},
+        "terminal_at_utc": {"type": "string", "format": "date-time"},
+        "state": {"const": "failed"},
+        "reason": {"const": "action-failed:recover-vc1-interruption-preview"},
+        "error_type": {"const": "ConfigurationError"},
+        "message": {"const": "watchdog heartbeat 越出当前 attempt。"},
+        "batch_id": {"$ref": "#/$defs/safeId"},
+        "batch_sequence": {"const": 2},
+        "batch_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "deploymentBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "tool_files_sha256"],
+      "properties": {
+        "path": {"type": "string", "pattern": "^/"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "tool_files_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "changedToolFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path", "from_sha256", "to_sha256", "classification",
+        "affected_job_ids"
+      ],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "from_sha256": {"oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
+        "to_sha256": {"oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
+        "classification": {
+          "enum": ["evaluation", "phase_scoped_hybrid", "failed_job_production"]
+        },
+        "affected_job_ids": {"$ref": "#/$defs/idArray"}
+      }
+    },
+    "toolTransition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "from_tool_files_sha256", "to_tool_files_sha256", "changed_files",
+        "allowed_production_paths", "affected_job_ids"
+      ],
+      "properties": {
+        "from_tool_files_sha256": {"$ref": "#/$defs/sha256"},
+        "to_tool_files_sha256": {"$ref": "#/$defs/sha256"},
+        "changed_files": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/changedToolFile"}
+        },
+        "allowed_production_paths": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "affected_job_ids": {"$ref": "#/$defs/idArray"}
+      }
+    },
     "v1": {
       "type": "object",
       "additionalProperties": false,
@@ -164,6 +242,40 @@
         "recovery_mode": {"const": "interrupted-vc1-preview"},
         "recovery_contract": {"$ref": "#/$defs/fileBinding"},
         "recovery_predecessor": {"$ref": "#/$defs/recoveryPredecessor"},
+        "actions": {"type": "array", "minItems": 1, "maxItems": 1, "items": {"$ref": "#/$defs/actionV2"}},
+        "execute_items": {"$ref": "#/$defs/idArray"},
+        "reuse_items": {"$ref": "#/$defs/idArray"},
+        "no_op": {"const": false}
+      }
+    },
+    "v4": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version", "campaign_id", "campaign_plan_sha256", "batch_id",
+        "batch_sequence", "batch_sha256", "phase", "predecessor_checkpoint",
+        "original_deadline_at_utc", "recovery_mode", "recovery_contract",
+        "recovery_predecessor", "continuation_predecessor", "deployment_receipt",
+        "maintenance_tool_transition", "effective_tool_transition", "actions",
+        "execute_items", "reuse_items", "no_op"
+      ],
+      "properties": {
+        "schema_version": {"const": "codex-upgrade-campaign-run/v4"},
+        "campaign_id": {"$ref": "#/$defs/safeId"},
+        "campaign_plan_sha256": {"$ref": "#/$defs/sha256"},
+        "batch_id": {"$ref": "#/$defs/safeId"},
+        "batch_sequence": {"const": 3},
+        "batch_sha256": {"$ref": "#/$defs/sha256"},
+        "phase": {"const": "VC-1"},
+        "predecessor_checkpoint": {"$ref": "#/$defs/checkpointReference"},
+        "original_deadline_at_utc": {"type": "string", "format": "date-time"},
+        "recovery_mode": {"const": "interrupted-vc1-preview-continuation"},
+        "recovery_contract": {"$ref": "#/$defs/fileBinding"},
+        "recovery_predecessor": {"$ref": "#/$defs/recoveryPredecessor"},
+        "continuation_predecessor": {"$ref": "#/$defs/continuationPredecessor"},
+        "deployment_receipt": {"$ref": "#/$defs/deploymentBinding"},
+        "maintenance_tool_transition": {"$ref": "#/$defs/toolTransition"},
+        "effective_tool_transition": {"$ref": "#/$defs/toolTransition"},
         "actions": {"type": "array", "minItems": 1, "maxItems": 1, "items": {"$ref": "#/$defs/actionV2"}},
         "execute_items": {"$ref": "#/$defs/idArray"},
         "reuse_items": {"$ref": "#/$defs/idArray"},

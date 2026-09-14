@@ -7,6 +7,7 @@ import json
 import os
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -561,6 +562,211 @@ class CodexUpgrade0154VCContractTests(unittest.TestCase):
                         {"source_attempt": source},
                     )
             write.assert_not_called()
+
+    def test_legacy_interrupted_watchdog_binding_replays_real_attempt(self) -> None:
+        """真实 write→load 只兼容已封存 v3 的唯一 attempt-relative 路径。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            campaign_dir = Path(directory) / "campaign"
+            campaign_dir.mkdir(mode=0o700)
+            manifest = {
+                **self._manifest(),
+                "baseline_version": "0.151.0",
+            }
+            self._write(campaign_dir / "campaign.json", manifest)
+            attempt_root = campaign_dir / "official" / "attempts" / "attempt-a"
+            attempt_root.mkdir(parents=True, mode=0o700)
+            identity = {"version": "0.154.0", "binary": "fixture"}
+            run_nonce = "1" * 64
+            started = (
+                datetime.now(timezone.utc) - timedelta(seconds=2)
+            ).isoformat().replace("+00:00", "Z")
+            execution_sha256 = "2" * 64
+            reservation = {
+                "schema_version": codex_upgrade.CAPTURE_RESERVATION_SCHEMA,
+                "campaign_id": manifest["campaign_id"],
+                "campaign_mode": "formal",
+                "campaign_purpose": "validation_only",
+                "campaign_manifest_sha256": codex_upgrade.file_sha256(
+                    campaign_dir / "campaign.json"
+                ),
+                "phase": "official",
+                "candidate_id": None,
+                "candidate_purpose": None,
+                "attempt_id": "attempt-a",
+                "run_nonce": run_nonce,
+                "started_at_utc": started,
+                "identity_sha256": codex_upgrade._fingerprint(identity),
+                "planned_jobs": [
+                    {
+                        "id": "job-a",
+                        "required": True,
+                        "execution_sha256": execution_sha256,
+                    }
+                ],
+            }
+            reservation["reservation_digest"] = codex_upgrade._fingerprint(
+                reservation
+            )
+            self._write(attempt_root / "reservation.json", reservation)
+            result = {
+                "id": "job-a",
+                "status": "failed",
+                "execution_sha256": execution_sha256,
+            }
+            store = codex_upgrade.incremental_recovery.CheckpointStore(
+                attempt_root / "checkpoints"
+            )
+            checkpoint = store.append(
+                {
+                    "checkpoint_schema_version": codex_upgrade.JOB_CHECKPOINT_SCHEMA,
+                    "campaign_id": manifest["campaign_id"],
+                    "phase": "official",
+                    "attempt_id": "attempt-a",
+                    "run_nonce": run_nonce,
+                    "item_id": "job-a",
+                    "status": "failed",
+                    "result_sha256": codex_upgrade.incremental_recovery.digest(result),
+                    "result": result,
+                    "previous_checkpoint_sha256": None,
+                }
+            )
+            deadline = codex_upgrade.incremental_recovery.WallClockDeadline(120)
+            deadline.phase = "official"
+            heartbeat_path = attempt_root / "watchdog-heartbeat.json"
+            codex_upgrade._write_attempt_heartbeat(
+                heartbeat_path,
+                deadline,
+                operation="attempt:failed",
+                force=True,
+                attempt_root=attempt_root,
+            )
+            contract_path = (
+                campaign_dir
+                / "control"
+                / "vc"
+                / "recovery-contracts"
+                / "0002-vc-1.json"
+            )
+            self._write(contract_path, {"fixture": True})
+            source = {
+                "attempt_id": "attempt-a",
+                "run_nonce": run_nonce,
+                "identity_sha256": reservation["identity_sha256"],
+                "reservation": {
+                    "path": "official/attempts/attempt-a/reservation.json",
+                    "sha256": codex_upgrade.file_sha256(
+                        attempt_root / "reservation.json"
+                    ),
+                    "reservation_digest": reservation["reservation_digest"],
+                },
+                "planned_job_ids": ["job-a"],
+                "completed_job_ids": [],
+                "failed_job_ids": ["job-a"],
+                "pending_job_ids": [],
+            }
+            marker = {
+                "contract": {
+                    "path": contract_path.relative_to(campaign_dir).as_posix(),
+                    "sha256": codex_upgrade.file_sha256(contract_path),
+                },
+                "request_boundary": {
+                    "reservation_exists": False,
+                    "live_request_count": 0,
+                    "scanned_bytes": 0,
+                },
+            }
+            plan_core = {
+                "schema_version": codex_upgrade.incremental_recovery.SCHEMA_VERSION,
+                "planned_job_ids": ["job-a"],
+                "changed_components": [],
+                "affected_job_ids": [],
+                "reused_job_ids": [],
+                "executed_job_ids": ["job-a"],
+                "failed_job_ids": ["job-a"],
+                "pending_job_ids": [],
+            }
+            payload = {
+                "campaign_id": manifest["campaign_id"],
+                "phase": "official",
+                "candidate_id": None,
+                "status": "failed",
+                "identity": identity,
+                "results": [result],
+                "interrupted_recovery": marker,
+                "incremental_plan": {
+                    **plan_core,
+                    "plan_sha256": codex_upgrade.incremental_recovery.digest(
+                        plan_core
+                    ),
+                },
+                "watchdog": {
+                    "schema_version": codex_upgrade.WATCHDOG_HEARTBEAT_SCHEMA,
+                    "budget_seconds": 120,
+                    "heartbeat_seconds": 5,
+                    "elapsed_seconds": deadline.elapsed_seconds,
+                    "remaining_seconds": deadline.remaining_seconds,
+                    "heartbeat": {
+                        # 精确复现 v3 已落盘的错误绑定，不能改写 attempt。
+                        "path": "watchdog-heartbeat.json",
+                        "sha256": codex_upgrade.file_sha256(heartbeat_path),
+                        "bytes": heartbeat_path.stat().st_size,
+                    },
+                    "timeout_checkpoint": None,
+                    "last_completed_job_id": None,
+                },
+                "job_checkpoint": {
+                    "schema_version": codex_upgrade.JOB_CHECKPOINT_SCHEMA,
+                    "campaign_id": manifest["campaign_id"],
+                    "phase": "official",
+                    "attempt_id": "attempt-a",
+                    "run_nonce": run_nonce,
+                    "path": "official/attempts/attempt-a/checkpoints",
+                    "record_count": 1,
+                    "last_sequence": 1,
+                    "last_sha256": checkpoint["checkpoint_sha256"],
+                },
+                "execution_error": {
+                    "type": "KeyboardInterrupt",
+                    "message": "父 campaign-run 已中断。",
+                },
+                "restoration_error": None,
+            }
+            with (
+                mock.patch.object(
+                    codex_upgrade,
+                    "load_campaign_manifest",
+                    return_value=manifest,
+                ),
+                mock.patch.object(
+                    codex_upgrade,
+                    "_interrupted_recovery_campaign_plan",
+                    return_value=(campaign_dir / "plan.json", {}),
+                ),
+                mock.patch.object(
+                    codex_upgrade.codex_upgrade_vc_artifacts,
+                    "validate_interrupted_recovery_contract",
+                    return_value={"source_attempt": source},
+                ),
+            ):
+                written = codex_upgrade._write_capture_attempt(
+                    campaign_dir,
+                    attempt_root,
+                    payload,
+                )
+                loaded_root, loaded = codex_upgrade._load_capture_attempt(
+                    campaign_dir,
+                    "official",
+                    None,
+                    "attempt-a",
+                    _verified_campaign_manifest=manifest,
+                )
+            self.assertEqual(loaded_root, attempt_root)
+            self.assertEqual(loaded["attempt_digest"], written["attempt_digest"])
+            self.assertEqual(
+                loaded["watchdog"]["heartbeat"]["path"],
+                "watchdog-heartbeat.json",
+            )
 
     def _delivery_fixture(
         self,
