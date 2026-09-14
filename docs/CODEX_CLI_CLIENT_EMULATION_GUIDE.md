@@ -1413,6 +1413,50 @@ action plan、attempt 和 32 根列表摘要必须与冻结命令一致。权限
 只有权限收据成功，原 seal 预览才可继续。取得 `review_sha256` 后必须停止并由操作员复核确认，不能在同一
 批次追加正式 seal，也不能因此宣称 VC-1 已完成。
 
+若该唯一 sequence 3 在首个 `harden-official-evidence-permissions` 动作以 returncode 1 失败，且失败 run
+精确为
+`run-d932716c0dd0fbb60789232cbffad83910a271f58262b67679db75629341769f`、动作诊断摘要精确为
+`dfe840655b4772c3bb4c3a0f5d706687bcc9ba744af749424be15f057f06b325`，不得重编或覆盖 sequence 3。
+只有部署了本节定义的可写别名 helper 后，才允许建立唯一 sequence 4；其他权限失败仍然停线。
+
+sequence 4 启用前必须同时只读证明：sequence 3 的 state、run manifest、stop receipt、events 和动作诊断
+文件摘要与一次性监督器锚点一致；事件链只有旧权限动作启动／失败，原 seal 从未启动；sequence 3 权限收据
+和三份 seal 制品均不存在；attempt 仍为 `awaiting_receipts`，29 个 Job 全部 `complete`，32 个冻结根及
+1,882 个元数据项未漂移；待收口项仍精确为 15 项，其路径、类型和模式的规范摘要为
+`2b69ee039891bf6c58b6c787af105b9a896956b562cd0801c10ca7d2b36f2842`。该检查只枚举名称和元数据，
+`scanned_bytes=0`、`live_request_count=0`。
+
+新 helper
+`tools/official_client_capture/codex_upgrade_vc1_permission_alias_closeout.py` 只允许把
+`/root/oauth-capture/runs/<relative>` 映射到
+`/root/docker/capture-cli/data/runs/<relative>`。它必须先证明逻辑根为只读、宿主根为可写，并对每个目录和
+文件的名称、类型、device、inode、size、mtime、nlink 逐项比对；符号链接、特殊文件、普通文件硬链接、
+根嵌套或任一别名漂移都失败关闭。权限只能经可写别名的 `O_NOFOLLOW` fd 执行 `fchmod`，随后必须从只读
+身份路径二次核验。收据固定为 action-inputs 目录下的
+`sequence4-permission-alias-closeout-receipt.json`，只允许 `O_EXCL` 首次创建，并声明
+`scanned_bytes=0`、`live_request_count=0`。
+
+必须先完成 ARM64 受管部署并取得绑定当前 helper、监督器和工具树的部署收据，再以
+`vc1-sequence4-action-plan.json` 编译 sequence 4：
+
+```bash
+python3 tools/official_client_capture/codex_upgrade.py \
+  compile-vc-batch \
+  --campaign-dir /root/docker/capture-cli/data/evidence/campaigns/c0154-formal-vc1-bwg-new-window-20260914t100818z \
+  --phase VC-1 \
+  --sequence 4 \
+  --predecessor-checkpoint /root/docker/capture-cli/data/evidence/campaigns/c0154-formal-vc1-bwg-new-window-20260914t100818z/control/vc/vc-0-checkpoint.json \
+  --action-plan /root/docker/capture-cli/data/control/c0154-formal-vc1-bwg-new-window-20260914t100818z-action-inputs/vc1-sequence4-action-plan.json
+```
+
+action plan 的执行闭集只能依次为
+`harden-official-evidence-permissions-via-alias`、`seal-official-preview`，reuse 只能为
+`prepare-official-assertion-bundle`；seal 动作必须逐字复用 sequence 3。权限动作还必须逐字绑定部署收据
+路径、收据文件摘要、受管工具树摘要和 helper 摘要。`compile-vc-batch` 的启动窗口只有约 60 秒，因此只能
+在工具、action plan、命令和原 state-dir 都准备完成后编译，并立即执行新生成的 `0004-vc-1.json`。
+成功取得 `review_sha256` 后仍须停止并由操作员确认；不得在 sequence 4 内追加正式 seal，也不得据此宣称
+VC-1 已完成。
+
 #### VC-1 原总 deadline 到期孤儿的直接封口
 
 若上述 sequence 5 真实补跑已取得 reservation、执行 15 个 Job 后，父监督器按 Campaign 原始绝对

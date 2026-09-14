@@ -122,6 +122,87 @@ class SupervisorTests(unittest.TestCase):
         path.write_bytes(b"".join(supervisor._canonical(value) for value in records))
         path.chmod(0o600)
 
+    @staticmethod
+    def _write_permission_alias_failure_events(
+        path: Path,
+        *,
+        campaign_id: str,
+        owner_pid: int,
+        owner_nonce: str,
+    ) -> None:
+        """生成 sequence 3 首动作失败且 seal 从未启动的完整摘要链。"""
+
+        specifications = [
+            ("command-started", None, "supervisor:start", "running", None),
+            (
+                "action-started",
+                "harden-official-evidence-permissions",
+                "VC-1:harden-official-evidence-permissions",
+                "running",
+                None,
+            ),
+            (
+                "action-failed",
+                "harden-official-evidence-permissions",
+                "VC-1:harden-official-evidence-permissions",
+                "failed",
+                "returncode=1",
+            ),
+            (
+                "stop-requested",
+                None,
+                "supervisor:stop-request",
+                "stopping",
+                "action-failed:harden-official-evidence-permissions",
+            ),
+            (
+                "failed",
+                None,
+                "supervisor:stop",
+                "failed",
+                "action-failed:harden-official-evidence-permissions",
+            ),
+        ]
+        records: list[dict[str, object]] = []
+        previous: str | None = None
+        for sequence, specification in enumerate(specifications, 1):
+            event_type, job_id, operation, status, reason = specification
+            unsigned: dict[str, object] = {
+                "schema_version": supervisor.EVENT_SCHEMA,
+                "sequence": sequence,
+                "recorded_at_utc": f"2026-09-14T12:31:{12 + sequence:02d}.000Z",
+                "recorded_at_epoch": 2000.0 + sequence,
+                "event_type": event_type,
+                "operation": operation,
+                "campaign_id": campaign_id,
+                "phase": "VC-1",
+                "owner_pid": owner_pid,
+                "owner_nonce": owner_nonce,
+                "job_id": job_id,
+                "status": status,
+                "reason": reason,
+                "started_at_epoch": (
+                    2000.0 + sequence if event_type == "action-started" else None
+                ),
+                "ended_at_epoch": (
+                    2000.5 + sequence if event_type == "action-failed" else None
+                ),
+                "metadata": (
+                    {"duration_seconds": 0.2}
+                    if event_type == "action-failed"
+                    else {}
+                ),
+                "previous_event_sha256": previous,
+            }
+            event = dict(unsigned)
+            digest = supervisor._sha256(supervisor._canonical(unsigned))
+            event["event_sha256"] = digest
+            records.append(event)
+            previous = digest
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        path.write_bytes(b"".join(supervisor._canonical(value) for value in records))
+        path.chmod(0o600)
+
     def _permission_compensation_fixture(
         self,
         root: Path,
@@ -394,6 +475,216 @@ class SupervisorTests(unittest.TestCase):
             ),
         }
         return prior_state, prior_manifest, prior_dir, successor_manifest, bindings
+
+    def _permission_alias_fixture(
+        self,
+        root: Path,
+    ) -> tuple[
+        dict[str, object],
+        dict[str, object],
+        Path,
+        dict[str, object],
+        dict[str, str | int | Path],
+        tuple[dict[str, object], dict[str, object], Path],
+    ]:
+        """在原权限补偿夹具上建立唯一 sequence 3→4 失败后继。"""
+
+        sequence_two_state, sequence_two, sequence_two_dir, sequence_three, bindings = (
+            self._permission_compensation_fixture(root)
+        )
+        campaign_id = str(sequence_three["campaign_id"])
+        campaign_dir = Path(
+            sequence_three["actions"][1]["command"][
+                sequence_three["actions"][1]["command"].index("--campaign-dir") + 1
+            ]
+        )
+        data_root = campaign_dir.parents[2]
+        attempt_path = (
+            campaign_dir
+            / "official/attempts"
+            / supervisor.VC1_PERMISSION_COMPENSATION_ATTEMPT_ID
+            / "attempt.json"
+        )
+        failed_run_name = "run-" + "d" * 64
+        sequence_three_dir = (
+            root / f"{campaign_id}-supervisor" / failed_run_name
+        )
+        sequence_three_dir.mkdir(parents=True, mode=0o700)
+        sequence_three_dir.chmod(0o700)
+        sequence_three_state: dict[str, object] = {
+            "state": "failed",
+            "campaign_id": campaign_id,
+            "phase": "VC-1",
+            "owner_pid": os.getpid(),
+            "owner_nonce": failed_run_name.removeprefix("run-"),
+            "terminal_at_utc": "2026-09-14T12:31:18.169Z",
+        }
+        self._write_json(sequence_three_dir / "state.json", sequence_three_state)
+        self._write_json(
+            sequence_three_dir / "campaign-run-manifest.json",
+            {
+                "schema_version": supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA,
+                "manifest": sequence_three,
+                "manifest_sha256": supervisor._sha256(
+                    supervisor._canonical(sequence_three)
+                ),
+            },
+        )
+        stop: dict[str, object] = {
+            "schema_version": supervisor.STOP_SCHEMA,
+            "campaign_id": campaign_id,
+            "detected_at_epoch": 2006.0,
+            "detected_at_utc": "2026-09-14T12:31:18.160Z",
+            "event_type": "failed",
+            "owner_nonce": sequence_three_state["owner_nonce"],
+            "owner_pid": sequence_three_state["owner_pid"],
+            "phase": "VC-1",
+            "reason": "action-failed:harden-official-evidence-permissions",
+        }
+        stop["receipt_sha256"] = supervisor._sha256(supervisor._canonical(stop))
+        self._write_json(sequence_three_dir / "stop-receipt.json", stop)
+        self._write_permission_alias_failure_events(
+            sequence_three_dir / "events.ndjson",
+            campaign_id=campaign_id,
+            owner_pid=os.getpid(),
+            owner_nonce=str(sequence_three_state["owner_nonce"]),
+        )
+        diagnostic_path = supervisor._action_diagnostic_path(
+            sequence_three_dir,
+            "harden-official-evidence-permissions",
+            create_directory=True,
+        )
+        diagnostic = supervisor._write_action_diagnostic(
+            diagnostic_path,
+            campaign_id=campaign_id,
+            phase="VC-1",
+            action_id="harden-official-evidence-permissions",
+            owner_pid=os.getpid(),
+            owner_nonce=str(sequence_three_state["owner_nonce"]),
+            failure_kind="child-returncode",
+            error_type="ChildProcessError",
+            message="子命令以非零状态退出，未提供进一步的脱敏诊断。",
+        )
+
+        helper_path = (
+            data_root
+            / "tools/official_client_capture/codex_upgrade_vc1_permission_alias_closeout.py"
+        )
+        helper_path.parent.mkdir(parents=True, mode=0o700)
+        helper_path.write_text("# alias fixture helper\n", encoding="utf-8")
+        helper_path.chmod(0o600)
+        helper_sha256 = hashlib.sha256(helper_path.read_bytes()).hexdigest()
+        deployment_path = (
+            data_root / "control/codex-0154-supervisor-enable-fixture.json"
+        )
+        tool_files_sha256 = "a" * 64
+        self._write_json(
+            deployment_path,
+            {
+                "schema_version": "codex-arm64-supervisor-enable/v1",
+                "status": "passed",
+                "architecture": "aarch64",
+                "production_tool_root": str(helper_path.parent),
+                "tool_files_sha256": tool_files_sha256,
+                "supervisor_sha256": hashlib.sha256(
+                    Path(supervisor.__file__).read_bytes()
+                ).hexdigest(),
+            },
+        )
+        deployment_sha256 = hashlib.sha256(deployment_path.read_bytes()).hexdigest()
+        action_input_dir = data_root / "control" / f"{campaign_id}-action-inputs"
+        receipt_path = (
+            action_input_dir / "sequence4-permission-alias-closeout-receipt.json"
+        )
+        readonly_runs_root = root / "readonly-runs"
+        alias_action = {
+            "action_id": "harden-official-evidence-permissions-via-alias",
+            "operation": "VC-1:harden-official-evidence-permissions-via-alias",
+            "timeout_seconds": 180.0,
+            "command": [
+                "/usr/bin/python3",
+                str(helper_path),
+                "--campaign-id",
+                campaign_id,
+                "--attempt-id",
+                supervisor.VC1_PERMISSION_COMPENSATION_ATTEMPT_ID,
+                "--attempt",
+                str(attempt_path),
+                "--attempt-sha256",
+                str(bindings["VC1_PERMISSION_COMPENSATION_ATTEMPT_SHA256"]),
+                "--roots-sha256",
+                str(bindings["VC1_PERMISSION_COMPENSATION_ROOTS_SHA256"]),
+                "--self-sha256",
+                helper_sha256,
+                "--readonly-runs-root",
+                str(readonly_runs_root),
+                "--writable-runs-root",
+                str(data_root / "runs"),
+                "--deployment-receipt",
+                str(deployment_path),
+                "--deployment-receipt-sha256",
+                deployment_sha256,
+                "--tool-files-sha256",
+                tool_files_sha256,
+                "--receipt",
+                str(receipt_path),
+            ],
+            "item_ids": ["harden-official-evidence-permissions-via-alias"],
+        }
+        successor: dict[str, object] = {
+            **sequence_three,
+            "batch_id": "vc-1-0004",
+            "batch_sequence": 4,
+            "batch_sha256": "b" * 64,
+            "actions": [alias_action, sequence_three["actions"][1]],
+            "execute_items": [
+                "harden-official-evidence-permissions-via-alias",
+                "seal-official-preview",
+            ],
+            "reuse_items": ["prepare-official-assertion-bundle"],
+        }
+        self._write_json(
+            action_input_dir / "vc1-sequence4-action-plan.json",
+            {
+                "schema_version": "codex-upgrade-vc-action-plan/v1",
+                "execute_item_ids": successor["execute_items"],
+                "reuse_item_ids": successor["reuse_items"],
+                "actions": successor["actions"],
+            },
+        )
+        bindings.update(
+            {
+                "VC1_PERMISSION_ALIAS_FAILED_RUN_NAME": failed_run_name,
+                "VC1_PERMISSION_ALIAS_STATE_FILE_SHA256": hashlib.sha256(
+                    (sequence_three_dir / "state.json").read_bytes()
+                ).hexdigest(),
+                "VC1_PERMISSION_ALIAS_MANIFEST_FILE_SHA256": hashlib.sha256(
+                    (sequence_three_dir / "campaign-run-manifest.json").read_bytes()
+                ).hexdigest(),
+                "VC1_PERMISSION_ALIAS_STOP_FILE_SHA256": hashlib.sha256(
+                    (sequence_three_dir / "stop-receipt.json").read_bytes()
+                ).hexdigest(),
+                "VC1_PERMISSION_ALIAS_EVENTS_FILE_SHA256": hashlib.sha256(
+                    (sequence_three_dir / "events.ndjson").read_bytes()
+                ).hexdigest(),
+                "VC1_PERMISSION_ALIAS_DIAGNOSTIC_FILE_SHA256": hashlib.sha256(
+                    diagnostic_path.read_bytes()
+                ).hexdigest(),
+                "VC1_PERMISSION_ALIAS_FAILURE_DIAGNOSTIC_SHA256": str(
+                    diagnostic["diagnostic_sha256"]
+                ),
+                "VC1_PERMISSION_ALIAS_HELPER_SHA256": helper_sha256,
+                "VC1_PERMISSION_ALIAS_READONLY_RUNS_ROOT": readonly_runs_root,
+            }
+        )
+        return (
+            sequence_three_state,
+            sequence_three,
+            sequence_three_dir,
+            successor,
+            bindings,
+            (sequence_two_state, sequence_two, sequence_two_dir),
+        )
 
     def _recovery_manifest(self, root: Path) -> dict[str, object]:
         contract = root / "recovery-contract.json"
@@ -1578,6 +1869,140 @@ class SupervisorTests(unittest.TestCase):
                         prior_dir,
                         successor,
                     )
+
+    def test_failed_sequence_three_allows_only_permission_alias_successor(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            state, manifest, run_dir, successor, bindings, sequence_two = (
+                self._permission_alias_fixture(root)
+            )
+            sequence_one_manifest = {
+                "schema_version": supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA,
+                "campaign_id": successor["campaign_id"],
+                "campaign_plan_sha256": successor["campaign_plan_sha256"],
+                "batch_id": "vc-1-0001",
+                "batch_sequence": 1,
+                "batch_sha256": "7" * 64,
+                "original_deadline_at_utc": successor["original_deadline_at_utc"],
+            }
+            with (
+                mock.patch.multiple(supervisor, **bindings),
+                mock.patch.object(
+                    supervisor.permission_alias_closeout,
+                    "inspect_permission_boundary",
+                    return_value=object(),
+                ) as inspect_boundary,
+            ):
+                self.assertTrue(
+                    supervisor._validate_permission_alias_closeout_successor(
+                        state,
+                        manifest,
+                        run_dir,
+                        successor,
+                    )
+                )
+                ordered = supervisor._validate_batched_campaign_history(
+                    successor,
+                    [
+                        (
+                            {"state": "stopped"},
+                            sequence_one_manifest,
+                            root / "run-sequence-one",
+                        ),
+                        sequence_two,
+                        (state, manifest, run_dir),
+                    ],
+                )
+            self.assertEqual(
+                [item[1]["batch_sequence"] for item in ordered],
+                [1, 2, 3],
+            )
+            self.assertEqual(inspect_boundary.call_count, 2)
+
+    def test_permission_alias_successor_rejects_boundary_or_deployment_drift(
+        self,
+    ) -> None:
+        for mutation in ("boundary", "deployment"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                state, manifest, run_dir, successor, bindings, _sequence_two = (
+                    self._permission_alias_fixture(root)
+                )
+                alias_command = successor["actions"][0]["command"]
+                if mutation == "deployment":
+                    index = alias_command.index("--tool-files-sha256") + 1
+                    alias_command[index] = "c" * 64
+                    boundary_side_effect = None
+                else:
+                    boundary_side_effect = (
+                        supervisor.permission_alias_closeout.PermissionAliasCloseoutError(
+                            "双别名 inode 漂移"
+                        )
+                    )
+                with (
+                    mock.patch.multiple(supervisor, **bindings),
+                    mock.patch.object(
+                        supervisor.permission_alias_closeout,
+                        "inspect_permission_boundary",
+                        side_effect=boundary_side_effect,
+                        return_value=object(),
+                    ),
+                ):
+                    with self.assertRaisesRegex(
+                        SupervisorError,
+                        "边界前检失败|部署收据|sequence 4 动作",
+                    ):
+                        supervisor._validate_permission_alias_closeout_successor(
+                            state,
+                            manifest,
+                            run_dir,
+                            successor,
+                        )
+
+    def test_permission_alias_successor_rejects_seal_or_receipt_preexistence(
+        self,
+    ) -> None:
+        for mutation in ("seal", "receipt"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                state, manifest, run_dir, successor, bindings, _sequence_two = (
+                    self._permission_alias_fixture(root)
+                )
+                campaign_dir = Path(
+                    successor["actions"][1]["command"][
+                        successor["actions"][1]["command"].index("--campaign-dir") + 1
+                    ]
+                )
+                if mutation == "seal":
+                    target = (
+                        campaign_dir
+                        / "official/attempts"
+                        / supervisor.VC1_PERMISSION_COMPENSATION_ATTEMPT_ID
+                        / "seal-preview.json"
+                    )
+                else:
+                    target = Path(successor["actions"][0]["command"][-1])
+                self._write_json(target, {"unexpected": True})
+                with (
+                    mock.patch.multiple(supervisor, **bindings),
+                    mock.patch.object(
+                        supervisor.permission_alias_closeout,
+                        "inspect_permission_boundary",
+                        return_value=object(),
+                    ),
+                ):
+                    with self.assertRaisesRegex(
+                        SupervisorError,
+                        "已存在 seal 制品|sequence 4 动作或收据",
+                    ):
+                        supervisor._validate_permission_alias_closeout_successor(
+                            state,
+                            manifest,
+                            run_dir,
+                            successor,
+                        )
 
     def test_failed_v3_only_allows_exact_sequence_three_v4_successor(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

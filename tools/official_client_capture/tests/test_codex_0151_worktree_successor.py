@@ -251,6 +251,12 @@ CODEX_0154_VC1_PERMISSION_PREFLIGHT_PATH_BINDING_FREEZE_SUCCESSOR = (
     ROOT
     / "docs/egress/maintenance/upstream-codex-0154-vc1-permission-preflight-path-binding-20260914-freeze-successor.json"
 )
+# 2026-09-14：sequence 3 经只读 bind alias 执行 fchmod 失败；唯一 sequence 4
+# 通过逐 inode 校验的宿主可写 runs 别名收口权限，再逐字重放 seal 预览。
+CODEX_0154_VC1_PERMISSION_ALIAS_CLOSEOUT_FREEZE_SUCCESSOR = (
+    ROOT
+    / "docs/egress/maintenance/upstream-codex-0154-vc1-permission-alias-closeout-20260914-freeze-successor.json"
+)
 HISTORICAL_LEDGER = "docs/egress/maintenance/historical-source-drift-successor.json"
 SHA256_LENGTH = 64
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -365,6 +371,7 @@ def successor_edges(path: str) -> list[tuple[str, str]]:
         CODEX_0154_VC1_FAILURE_CLOSURE_COORDINATE_FREEZE_SUCCESSOR,
         CODEX_0154_VC1_PERMISSION_PREFLIGHT_COMPENSATION_FREEZE_SUCCESSOR,
         CODEX_0154_VC1_PERMISSION_PREFLIGHT_PATH_BINDING_FREEZE_SUCCESSOR,
+        CODEX_0154_VC1_PERMISSION_ALIAS_CLOSEOUT_FREEZE_SUCCESSOR,
     ):
         payload = json.loads(receipt_path.read_text(encoding="utf-8"))
         _validate_successor_receipt(payload)

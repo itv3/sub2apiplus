@@ -81,11 +81,13 @@ from typing import Any, Callable, Mapping
 # 新增只承接该确定性失败的追加式账本闭合入口。
 # 2026-09-14（VC-1 seal 权限前检补偿）：监督器新增只承接本次冻结 sequence 2
 # 的一次性 v2→v2 权限收口门禁；其他失败仍沿既有 v3/v4/v5 唯一恢复链停线。
+# 2026-09-14（VC-1 权限只读别名收口）：新增只承接 sequence 3 EROFS 的
+# sequence 4 窄门禁，经逐 inode 校验的宿主可写 runs 别名执行权限收口。
 DEFAULT_TOOL_DIGEST = (
-    "e87248804bd319eddf5840a3c37487d6bb9f101dbf129a7279ddaab93e3e21f9"
+    "3bfcc618a6fb94a8c145e747a044803e6b0f148ef5f7004e15f990a91d7d6da9"
 )
 DEFAULT_SUPERVISOR_DIGEST = (
-    "17303a0c09b08b543dabf33188bcedba00daf33346e618d1ccb820149f371059"
+    "625a6d86ea28e4025b051ded84a829e8bfd5787db7b5450a41ef2460317d71b9"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "b9ca7b6f48b3c33a63a864a9ce7ebd617335378ea52fe9148ea161ab3b276ada"
