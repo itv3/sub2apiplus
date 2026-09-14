@@ -92,6 +92,7 @@ from tools.official_client_capture import codex_upgrade_timing_ledger
 from tools.official_client_capture import codex_upgrade_vc_artifacts
 from tools.official_client_capture import codex_upgrade_vc_receipt
 from tools.official_client_capture import codex_upgrade_supervisor
+from tools.official_client_capture import codex_upgrade_predispatch_stop
 from tools.official_client_capture import codex_upgrade_legacy_boundary
 from tools.official_client_capture import codex_upgrade_gate_receipt as external_gate_receipt
 from tools.official_client_capture import incremental_recovery
@@ -4588,6 +4589,12 @@ def _mutable_command_coordinates(
         return None
     if command in {"capture-official"}:
         return command, "official", None, False
+    if command == "compile-and-run-vc-batch":
+        # 原子入口从编译开始到父 run 终态始终持有同一个 state-dir
+        # ``.campaign-run.lock``，父 campaign-run 继承 Campaign 原始绝对
+        # deadline。这里不得再创建 CampaignLease，否则会多出第二个监督器，
+        # 并由默认 ``--max-wall-seconds`` 产生一条与原 deadline 竞争的边界。
+        return None
     if command in {
         "compile-vc-batch",
         "compile-vc-interrupted-recovery-batch",
@@ -4657,7 +4664,7 @@ def _mutable_command_coordinates(
 def _main_command_lease(
     arguments: argparse.Namespace,
 ) -> Iterable[CampaignLease | None]:
-    """主 CLI 的统一 lease 入口；status／plan 保持纯只读或建新目录。"""
+    """主 CLI 的统一 lease 入口；只读、引导和原子派发不另建 lease。"""
 
     coordinates = _mutable_command_coordinates(arguments)
     if coordinates is None:
@@ -7702,6 +7709,17 @@ def _build_parser() -> argparse.ArgumentParser:
                 help="由运行中 Sub2API 产生的实际画像观测收据。",
             )
 
+    def add_heartbeat_option(target: argparse.ArgumentParser) -> None:
+        target.add_argument(
+            "--heartbeat-seconds",
+            type=int,
+            default=None,
+            help=(
+                f"watchdog heartbeat 间隔（默认 {DEFAULT_HEARTBEAT_SECONDS} 秒，"
+                f"上限 {MAX_HEARTBEAT_SECONDS} 秒）。"
+            ),
+        )
+
     def add_watchdog_options(target: argparse.ArgumentParser) -> None:
         target.add_argument(
             "--max-wall-seconds",
@@ -7712,15 +7730,7 @@ def _build_parser() -> argparse.ArgumentParser:
                 f"上限 {MAX_ATTEMPT_WALL_SECONDS} 秒）。"
             ),
         )
-        target.add_argument(
-            "--heartbeat-seconds",
-            type=int,
-            default=None,
-            help=(
-                f"watchdog heartbeat 间隔（默认 {DEFAULT_HEARTBEAT_SECONDS} 秒，"
-                f"上限 {MAX_HEARTBEAT_SECONDS} 秒）。"
-            ),
-        )
+        add_heartbeat_option(target)
 
     plan = subparsers.add_parser("plan", help="预检并创建不可变 Campaign")
     plan.add_argument(
@@ -8335,28 +8345,51 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     add_watchdog_options(stage_profile)
 
+    def add_vc_batch_compile_arguments(target: argparse.ArgumentParser) -> None:
+        add_campaign_reference(target)
+        target.add_argument(
+            "--phase",
+            choices=codex_upgrade_vc_artifacts.VC_PHASES[1:],
+            required=True,
+        )
+        target.add_argument("--sequence", type=int, required=True)
+        target.add_argument(
+            "--predecessor-checkpoint",
+            type=Path,
+            required=True,
+        )
+        target.add_argument(
+            "--action-plan",
+            type=Path,
+            required=True,
+            help="codex-upgrade-vc-action-plan/v1 的 execute／reuse 与动作映射。",
+        )
+
     compile_batch = subparsers.add_parser(
         "compile-vc-batch",
-        help="从已封存直接前序 checkpoint 编译下一份 VC batch 与 campaign-run v2 清单",
+        help="内部/历史：只编译下一份 VC batch 与 campaign-run v2 清单",
     )
-    add_campaign_reference(compile_batch)
-    compile_batch.add_argument(
-        "--phase",
-        choices=codex_upgrade_vc_artifacts.VC_PHASES[1:],
-        required=True,
+    add_vc_batch_compile_arguments(compile_batch)
+
+    compile_and_run_batch = subparsers.add_parser(
+        "compile-and-run-vc-batch",
+        help="0.154.0 起 Formal 后继批次的原子编译与父监督器派发入口",
     )
-    compile_batch.add_argument("--sequence", type=int, required=True)
-    compile_batch.add_argument(
-        "--predecessor-checkpoint",
-        type=Path,
-        required=True,
+    add_vc_batch_compile_arguments(compile_and_run_batch)
+    compile_and_run_batch.add_argument("--state-dir", type=Path, required=True)
+    compile_and_run_batch.add_argument(
+        "--watchdog-timeout-seconds",
+        type=float,
+        default=codex_upgrade_supervisor.DEFAULT_WATCHDOG_TIMEOUT_SECONDS,
     )
-    compile_batch.add_argument(
-        "--action-plan",
-        type=Path,
-        required=True,
-        help="codex-upgrade-vc-action-plan/v1 的 execute／reuse 与动作映射。",
+    compile_and_run_batch.add_argument(
+        "--ledger-interval-seconds",
+        type=float,
+        default=codex_upgrade_supervisor.DEFAULT_LEDGER_INTERVAL_SECONDS,
     )
+    # 本入口的唯一墙钟边界来自 Campaign plan 的原始绝对 deadline；只允许
+    # 调整父监督器心跳，禁止再暴露第二个相对 ``--max-wall-seconds``。
+    add_heartbeat_option(compile_and_run_batch)
 
     deadline_orphan = subparsers.add_parser(
         "finalize-vc1-deadline-orphan",
@@ -9515,6 +9548,7 @@ _CONTROL_PLANE_TOOL_FILES = frozenset(
         "codex_upgrade_vc_receipt.schema.json",
         "codex_upgrade_vc0_closeout.py",
         "codex_upgrade_campaign_run_rehearsal_receipt.py",
+        "codex_upgrade_predispatch_stop.py",
         "codex_upgrade_campaign_lease.schema.json",
         "codex_upgrade_campaign_lease_stop.schema.json",
         "codex_upgrade_control_epoch.schema.json",
@@ -9554,6 +9588,7 @@ _CANONICAL_EVALUATION_ONLY_FILES = frozenset(
         "codex_upgrade_vc_receipt.schema.json",
         "codex_upgrade_vc0_closeout.py",
         "codex_upgrade_campaign_run_rehearsal_receipt.py",
+        "codex_upgrade_predispatch_stop.py",
         "codex_upgrade_gate_receipt.py",
         "codex_upgrade_gate_receipt.schema.json",
         "codex_upgrade_gate_requirements.schema.json",
@@ -9663,6 +9698,7 @@ _EVALUATION_SIDE_FILES = frozenset(
         "codex_upgrade_vc_receipt.schema.json",
         "codex_upgrade_vc0_closeout.py",
         "codex_upgrade_campaign_run_rehearsal_receipt.py",
+        "codex_upgrade_predispatch_stop.py",
         "codex_upgrade_legacy_boundary.py",
         "codex_upgrade_job_rehearsal_receipt.schema.json",
         "codex_upgrade_predecessor_import.schema.json",
@@ -17112,6 +17148,24 @@ def continue_vc1_interruption(arguments: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def _vc_run_manifest_from_batch(batch: Mapping[str, Any]) -> dict[str, Any]:
+    """从已校验 VC batch 确定性重建唯一父 run 清单。"""
+
+    return codex_upgrade_supervisor.build_batched_campaign_run_manifest(
+        campaign_id=str(batch["campaign_id"]),
+        campaign_plan_sha256=str(batch["campaign_plan_sha256"]),
+        batch_id=str(batch["batch_id"]),
+        batch_sequence=int(batch["sequence"]),
+        batch_sha256=str(batch["batch_sha256"]),
+        phase=str(batch["phase"]),
+        predecessor_checkpoint=batch["predecessor_checkpoint"],
+        original_deadline_at_utc=str(batch["original_deadline_at_utc"]),
+        actions=batch["actions"],
+        execute_items=batch["execute_item_ids"],
+        reuse_items=batch["reuse_item_ids"],
+    )
+
+
 def compile_vc_batch(arguments: argparse.Namespace) -> dict[str, Any]:
     """从直接前序 checkpoint 一次生成 batch 和可执行 v2 队列。"""
 
@@ -17205,19 +17259,7 @@ def compile_vc_batch(arguments: argparse.Namespace) -> dict[str, Any]:
         )
     except codex_upgrade_vc_artifacts.VCArtifactError as error:
         raise ConfigurationError(str(error)) from error
-    run_manifest = codex_upgrade_supervisor.build_batched_campaign_run_manifest(
-        campaign_id=plan["campaign_id"],
-        campaign_plan_sha256=plan["plan_sha256"],
-        batch_id=batch["batch_id"],
-        batch_sequence=batch["sequence"],
-        batch_sha256=batch["batch_sha256"],
-        phase=batch["phase"],
-        predecessor_checkpoint=batch["predecessor_checkpoint"],
-        original_deadline_at_utc=batch["original_deadline_at_utc"],
-        actions=batch["actions"],
-        execute_items=batch["execute_item_ids"],
-        reuse_items=batch["reuse_item_ids"],
-    )
+    run_manifest = _vc_run_manifest_from_batch(batch)
     batch_path = batches_root / f"{sequence:04d}-{phase.lower()}.json"
     run_path = manifests_root / f"{sequence:04d}-{phase.lower()}.json"
     ensure_private_directory(batches_root, campaign_dir)
@@ -17225,11 +17267,13 @@ def compile_vc_batch(arguments: argparse.Namespace) -> dict[str, Any]:
     _secure_write_json_once(batch_path, batch)
     try:
         _secure_write_json_once(run_path, run_manifest)
-    except BaseException:
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except BaseException as error:
         # batch 已是不可变审计事实；若第二个文件写入失败，不删除或覆盖，明确停线。
         raise ConfigurationError(
             "VC batch 已封存但 campaign-run 清单写入失败；禁止覆盖，需按恢复策略处理。"
-        )
+        ) from error
     return {
         "status": "complete",
         "campaign_id": plan["campaign_id"],
@@ -17242,6 +17286,167 @@ def compile_vc_batch(arguments: argparse.Namespace) -> dict[str, Any]:
         "execute_item_ids": batch["execute_item_ids"],
         "reuse_item_ids": batch["reuse_item_ids"],
     }
+
+
+def compile_and_run_vc_batch(
+    arguments: argparse.Namespace,
+    *,
+    _compiler: Any | None = None,
+) -> tuple[dict[str, Any], int]:
+    """在同一 state-dir 锁内编译后继批次并立即创建父 run。
+
+    ``_compiler`` 只供零网络生产同形演练注入同一制品构建器；正式 CLI 永远
+    使用 ``compile_vc_batch``，参数面不能选择或替换编译实现。
+    """
+
+    campaign_dir = arguments.campaign_dir
+    phase = str(arguments.phase)
+    sequence = int(arguments.sequence)
+    batch_path = (
+        campaign_dir
+        / "control"
+        / "vc"
+        / "batches"
+        / f"{sequence:04d}-{phase.lower()}.json"
+    )
+    manifest_path = (
+        campaign_dir
+        / "control"
+        / "vc"
+        / "run-manifests"
+        / f"{sequence:04d}-{phase.lower()}.json"
+    )
+    try:
+        lock_descriptor, state_dir = codex_upgrade_supervisor._campaign_run_lock(
+            arguments.state_dir
+        )
+    except codex_upgrade_supervisor.SupervisorError as error:
+        raise ConfigurationError(str(error)) from error
+    run_names_before = {
+        path.name for path in state_dir.iterdir() if path.name.startswith("run-")
+    }
+    stage = "compile"
+    batch: dict[str, Any] | None = None
+    try:
+        compiler = compile_vc_batch if _compiler is None else _compiler
+        compiled = compiler(arguments)
+        batch = codex_upgrade_vc_artifacts.validate_vc_batch(
+            _read_json(batch_path, "原子派发 VC batch")
+        )
+        stage = "dispatch"
+        start_by = datetime.fromisoformat(
+            str(batch["must_start_by_utc"]).replace("Z", "+00:00")
+        )
+        if datetime.now(timezone.utc) > start_by:
+            raise ConfigurationError(
+                "VC batch 的 60 秒启动窗口已过期，拒绝创建父 run。"
+            )
+        run_manifest = codex_upgrade_supervisor._campaign_run_manifest(manifest_path)
+        run_arguments = argparse.Namespace(
+            heartbeat_seconds=(
+                arguments.heartbeat_seconds
+                if arguments.heartbeat_seconds is not None
+                else codex_upgrade_supervisor.DEFAULT_HEARTBEAT_SECONDS
+            ),
+            watchdog_timeout_seconds=arguments.watchdog_timeout_seconds,
+            ledger_interval_seconds=arguments.ledger_interval_seconds,
+        )
+        returncode, run = codex_upgrade_supervisor._campaign_run_locked(
+            run_arguments,
+            manifest=run_manifest,
+            state_dir=state_dir,
+        )
+        return (
+            {
+                "status": str(run["status"]),
+                "campaign_id": compiled["campaign_id"],
+                "phase": compiled["phase"],
+                "batch_sequence": compiled["batch_sequence"],
+                "compile": compiled,
+                "campaign_run": run,
+                "predispatch_stop": None,
+            },
+            returncode,
+        )
+    except BaseException as error:
+        run_names_after = {
+            path.name for path in state_dir.iterdir() if path.name.startswith("run-")
+        }
+        parent_run_created = bool(run_names_after - run_names_before)
+        # 两文件发布之间仍可能出现可捕获异常。batch 已经可信落盘时，先用
+        # 同一确定性 builder 补齐缺失 manifest，才能让通用停线收据绑定完整
+        # 的不可变编译事实；补写失败会明确报告停线也未闭合。
+        if (
+            not parent_run_created
+            and batch_path.is_file()
+            and not batch_path.is_symlink()
+            and not manifest_path.exists()
+            and not manifest_path.is_symlink()
+        ):
+            try:
+                partial_batch = codex_upgrade_vc_artifacts.validate_vc_batch(
+                    _read_json(batch_path, "原子派发部分 VC batch")
+                )
+                ensure_private_directory(manifest_path.parent, campaign_dir)
+                _secure_write_json_once(
+                    manifest_path,
+                    _vc_run_manifest_from_batch(partial_batch),
+                )
+            except BaseException as manifest_error:
+                raise ConfigurationError(
+                    "原子编译派发在 batch 落盘后失败，且无法确定性补齐 manifest；"
+                    f"通用停线未闭合：{type(manifest_error).__name__}"
+                ) from error
+        if (
+            not parent_run_created
+            and batch_path.is_file()
+            and not batch_path.is_symlink()
+            and manifest_path.is_file()
+            and not manifest_path.is_symlink()
+        ):
+            if isinstance(error, (KeyboardInterrupt, SystemExit)):
+                failure_kind = "interrupted-before-parent-run"
+            elif stage == "compile":
+                failure_kind = "compile-failed-after-artifact-write"
+            elif batch is not None:
+                now = datetime.now(timezone.utc)
+                deadline = datetime.fromisoformat(
+                    str(batch["original_deadline_at_utc"]).replace("Z", "+00:00")
+                )
+                start_by = datetime.fromisoformat(
+                    str(batch["must_start_by_utc"]).replace("Z", "+00:00")
+                )
+                if now > deadline:
+                    failure_kind = "deadline-expired"
+                elif now > start_by:
+                    failure_kind = "start-window-expired"
+                else:
+                    failure_kind = "dispatch-before-parent-run"
+            else:
+                failure_kind = "dispatch-before-parent-run"
+            try:
+                stop_path, _stop = codex_upgrade_predispatch_stop._record_locked(
+                    campaign_dir=campaign_dir,
+                    state_dir=state_dir,
+                    batch_path=batch_path,
+                    manifest_path=manifest_path,
+                    failure_kind=failure_kind,
+                    error_type=type(error).__name__,
+                )
+            except BaseException as stop_error:
+                raise ConfigurationError(
+                    "原子编译派发在父 run 创建前失败，且通用停线收据写入失败："
+                    f"{type(stop_error).__name__}"
+                ) from error
+            if isinstance(error, (KeyboardInterrupt, SystemExit)):
+                raise
+            raise ConfigurationError(
+                "原子编译派发在父 run 创建前失败；已封存通用停线收据 "
+                f"{stop_path}，唯一下一动作是完成工具闭合后建立新 VC-0。"
+            ) from error
+        raise
+    finally:
+        os.close(lock_descriptor)
 
 
 def create_campaign(arguments: argparse.Namespace) -> dict[str, Any]:
@@ -43488,6 +43693,7 @@ def _normalize_legacy_argv(argv: list[str]) -> tuple[list[str], str | None]:
         "prepare-profile",
         "stage-profile",
         "compile-vc-batch",
+        "compile-and-run-vc-batch",
         "compile-vc-interrupted-recovery-batch",
         "compile-vc-interrupted-recovery-continuation",
         "recover-vc1-interruption",
@@ -43638,6 +43844,7 @@ def _reject_unparented_formal_write(
     direct_control_commands = {
         "reuse-official-evidence",
         "compile-vc-batch",
+        "compile-and-run-vc-batch",
         "compile-vc-interrupted-recovery-batch",
         "compile-vc-interrupted-recovery-continuation",
         "finalize-vc1-deadline-orphan",
@@ -43648,6 +43855,20 @@ def _reject_unparented_formal_write(
                 f"{command} 是 Campaign 引导／批次控制面命令，"
                 "禁止由 campaign-run 动作派发。"
             )
+        if command == "compile-vc-batch":
+            campaign_dir = getattr(arguments, "campaign_dir", None)
+            if isinstance(campaign_dir, Path):
+                manifest_path = campaign_dir / "campaign.json"
+                if manifest_path.is_file() and not manifest_path.is_symlink():
+                    manifest = _read_json(manifest_path, "Campaign 清单")
+                    if (
+                        manifest.get("campaign_mode") == "formal"
+                        and _requires_complete_vc_artifacts(manifest)
+                    ):
+                        raise ConfigurationError(
+                            "0.154.0 起 Formal 后继批次必须使用 "
+                            "compile-and-run-vc-batch 原子编译派发入口。"
+                        )
         return
     if in_campaign_run:
         return
@@ -44076,6 +44297,8 @@ def _main_without_campaign_lease(argv: list[str] | None = None) -> int:
         elif command == "compile-vc-batch":
             result = compile_vc_batch(arguments)
             return_code = 0
+        elif command == "compile-and-run-vc-batch":
+            result, return_code = compile_and_run_vc_batch(arguments)
         elif command == "compile-vc-interrupted-recovery-batch":
             result = compile_vc_interrupted_recovery_batch(arguments)
             return_code = 0

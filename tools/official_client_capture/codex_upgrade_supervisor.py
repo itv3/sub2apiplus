@@ -32,8 +32,10 @@ from typing import Any, Iterable, Iterator, Mapping, Sequence
 
 if __package__ in {None, ""}:
     import codex_upgrade_vc1_permission_alias_closeout as permission_alias_closeout
+    import codex_upgrade_vc_artifacts as vc_artifacts
 else:
     from . import codex_upgrade_vc1_permission_alias_closeout as permission_alias_closeout
+    from . import codex_upgrade_vc_artifacts as vc_artifacts
 
 
 SCHEMA_VERSION = "codex-upgrade-supervisor/v1"
@@ -294,11 +296,18 @@ class SupervisorTimeout(SupervisorError):
 
 
 def _canonical(value: Mapping[str, Any]) -> bytes:
-    return (
-        json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        .encode("utf-8")
-        + b"\n"
-    )
+    """委托 VC 控制制品模块生成跨工具统一的 canonical JSON。"""
+
+    return vc_artifacts.canonical_bytes(value)
+
+
+def _legacy_compact_canonical(value: Mapping[str, Any]) -> bytes:
+    """重放唯一历史 compact 收据；新制品不得使用此编码。"""
+
+    canonical = vc_artifacts.canonical_bytes(value)
+    if not canonical.endswith(b"\n"):
+        raise SupervisorError("共享 canonical JSON 合同缺少唯一末尾换行。")
+    return canonical[:-1]
 
 
 def _sha256(value: bytes) -> str:
@@ -6512,7 +6521,7 @@ def _validate_permission_alias_predispatch_successor(
         "权限别名预派发封口工具",
     )
     if (
-        receipt_sha256 != _sha256(_canonical(unsigned_receipt))
+        receipt_sha256 != _sha256(_legacy_compact_canonical(unsigned_receipt))
         or receipt.get("schema_version")
         != "codex-vc1-permission-alias-predispatch-closeout/v1"
         or receipt.get("status") != "passed"
@@ -6904,11 +6913,14 @@ def _validate_batched_campaign_history(
     return ordered
 
 
-def _campaign_run_command(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
-    """按预声明队列在一个父监督器下自动完成全部动作。"""
+def _campaign_run_locked(
+    args: argparse.Namespace,
+    *,
+    manifest: Mapping[str, Any],
+    state_dir: Path,
+) -> tuple[int, dict[str, Any]]:
+    """在调用方已持有 ``.campaign-run.lock`` 时执行一个父动作队列。"""
 
-    manifest = _campaign_run_manifest(Path(args.manifest))
-    lock_descriptor, state_dir = _campaign_run_lock(Path(args.state_dir))
     client: SupervisorClient | None = None
     results: list[dict[str, Any]] = []
     status = "failed"
@@ -7124,6 +7136,20 @@ def _campaign_run_command(args: argparse.Namespace) -> tuple[int, dict[str, Any]
                 client.stop(reason=reason, status="failed")
             except BaseException:
                 pass
+
+
+def _campaign_run_command(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    """取唯一锁并按预声明队列完成全部动作。"""
+
+    manifest = _campaign_run_manifest(Path(args.manifest))
+    lock_descriptor, state_dir = _campaign_run_lock(Path(args.state_dir))
+    try:
+        return _campaign_run_locked(
+            args,
+            manifest=manifest,
+            state_dir=state_dir,
+        )
+    finally:
         os.close(lock_descriptor)
 
 

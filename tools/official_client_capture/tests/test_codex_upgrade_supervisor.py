@@ -17,6 +17,9 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from tools.official_client_capture import (
+    codex_upgrade_vc1_permission_alias_predispatch_closeout as predispatch_closeout,
+)
 from tools.official_client_capture import codex_upgrade_supervisor as supervisor
 from tools.official_client_capture.codex_upgrade_supervisor import (
     SupervisorClient,
@@ -876,9 +879,10 @@ class SupervisorTests(unittest.TestCase):
         }
         receipt = {
             **receipt_core,
-            "receipt_sha256": supervisor._sha256(
-                supervisor._canonical(receipt_core)
-            ),
+            # 必须调用真实 producer 的编码，禁止被测 consumer 自造输入。
+            "receipt_sha256": hashlib.sha256(
+                predispatch_closeout.canonical_bytes(receipt_core)
+            ).hexdigest(),
         }
         self._write_json(receipt_path, receipt)
 

@@ -287,6 +287,12 @@ CODEX_0154_VC1_HISTORICAL_HELPER_LOADER_FREEZE_SUCCESSOR = (
     ROOT
     / "docs/egress/maintenance/upstream-codex-0154-vc1-historical-helper-loader-20260914-freeze-successor.json"
 )
+# 2026-09-15：后继批次原子编译派发只保留一个父监督器，通用预派发
+# 停线和 ARM64 双跑演练闭合，并同步 0.154 主轨／Astra Lite 轨标签。
+CODEX_0154_ATOMIC_PREDISPATCH_TOOL_CLOSURE_FREEZE_SUCCESSOR = (
+    ROOT
+    / "docs/egress/maintenance/upstream-codex-0154-atomic-predispatch-tool-closure-20260915-freeze-successor.json"
+)
 HISTORICAL_LEDGER = "docs/egress/maintenance/historical-source-drift-successor.json"
 SHA256_LENGTH = 64
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -407,6 +413,7 @@ def successor_edges(path: str) -> list[tuple[str, str]]:
         CODEX_0154_VC1_TCPDUMP_OWNER_BOUNDARY_FREEZE_SUCCESSOR,
         CODEX_0154_VC1_PCAP_FILENAME_BOUNDARY_FREEZE_SUCCESSOR,
         CODEX_0154_VC1_HISTORICAL_HELPER_LOADER_FREEZE_SUCCESSOR,
+        CODEX_0154_ATOMIC_PREDISPATCH_TOOL_CLOSURE_FREEZE_SUCCESSOR,
     ):
         payload = json.loads(receipt_path.read_text(encoding="utf-8"))
         _validate_successor_receipt(payload)

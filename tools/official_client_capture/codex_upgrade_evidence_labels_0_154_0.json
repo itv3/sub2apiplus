@@ -415,7 +415,7 @@
             "body_length": "automatic",
             "provider": "openai_oauth"
           },
-          "rationale": "主线以 gpt-5.4 建立普通 WS turn，中继在 response.metadata 边界注入 turn-state；随后真实 legacy compact 必须自然回送第三槽。"
+          "rationale": "主线以 gpt-5.5 建立普通 WS turn，中继在 response.metadata 边界注入 turn-state；随后真实 legacy compact 必须自然回送第三槽。"
         }
       ]
     },
@@ -445,7 +445,7 @@
             "body_length": "automatic",
             "provider": "openai_oauth"
           },
-          "rationale": "主线 gpt-5.4 的 legacy compact 默认槽位样本；模型条件收据必须证明 use_responses_lite=false，Cookie jar 已建立并在固定槽携带 cookie，本样本不进入 Lite-only selector。"
+          "rationale": "主线 gpt-5.5 的 legacy compact 默认槽位样本；模型条件收据必须证明 use_responses_lite=false，Cookie jar 已建立并在固定槽携带 cookie，本样本不进入 Lite-only selector。"
         }
       ]
     },
@@ -475,7 +475,7 @@
             "body_length": "automatic",
             "provider": "openai_oauth"
           },
-          "rationale": "Lite 专项固定 gpt-5.6-luna，模型条件收据证明 use_responses_lite=true；冷启动时 Cookie jar 尚未建立，因此 EP-014 默认线序允许固定槽 cookie 缺席。"
+          "rationale": "Lite 专项固定 gpt-6-astra，模型条件收据证明 use_responses_lite=true；冷启动时 Cookie jar 尚未建立，因此 EP-014 默认线序允许固定槽 cookie 缺席。"
         }
       ]
     },
@@ -503,7 +503,7 @@
             "body_length": "automatic",
             "provider": "openai_oauth"
           },
-          "rationale": "A05 唯一的证据来源：Lite 专项固定 gpt-5.6-luna，模型条件收据证明 use_responses_lite=true；两轮 WS 会话由中继在 response.metadata 边界回送 turn-state，permessage-deflate 由握手自身协商。此前 A05 曾被绑在主线 turnstate-compact 上并标 mode=lite——那个条件从未成立，R8 撤销后 A05 一度失去全部证据，本 job 补回。"
+          "rationale": "A05 唯一的证据来源：Lite 专项固定 gpt-6-astra，模型条件收据证明 use_responses_lite=true；两轮 WS 会话由中继在 response.metadata 边界回送 turn-state，permessage-deflate 由握手自身协商。此前 A05 曾被绑在主线 turnstate-compact 上并标 mode=lite——那个条件从未成立，R8 撤销后 A05 一度失去全部证据，本 job 补回。"
         }
       ]
     },
@@ -722,7 +722,7 @@
             "body_length": "automatic",
             "provider": "openai_oauth"
           },
-          "rationale": "WS 重试预算耗尽后改发 HTTP POST，由 h1 探针记录最终 wire 形态。本 job 走主线 {model}=gpt-5.4，探针受控清单对该模型给出 use_responses_lite=false，与真实上游元数据一致，故 mode 只能是 non_lite。"
+          "rationale": "WS 重试预算耗尽后改发 HTTP POST，由 h1 探针记录最终 wire 形态。本 job 走主线 {model}=gpt-5.5，探针受控清单对该模型给出 use_responses_lite=false，与真实上游元数据一致，故 mode 只能是 non_lite。"
         }
       ]
     },
@@ -1910,7 +1910,7 @@
             "body_length": "automatic",
             "provider": "openai_oauth"
           },
-          "rationale": "A09 job 固定 Lite 模型（MODEL 默认 gpt-5.6-luna）；首连接是 models GET，models 属辅助出站面（endpoint_class=auxiliary），供 HDR-006 auxiliary-wildcard 与 EP-005 选样。"
+          "rationale": "A09 job 固定 Lite 模型（MODEL 为 gpt-6-astra）；首连接是 models GET，models 属辅助出站面（endpoint_class=auxiliary），供 HDR-006 auxiliary-wildcard 与 EP-005 选样。"
         },
         {
           "glob": "scenarios/A09/relay/conn002.client_to_upstream.bin",
@@ -1955,7 +1955,7 @@
             "body_length": "automatic",
             "provider": "openai_oauth"
           },
-          "rationale": "compact 驱动序列第 2 轮是暖会话 default：不注入条件头，prime 响应已建立 Cookie jar，因此在固定槽携带 cookie；track=lite 由 job 冻结模型坐标（gpt-5.6-luna，use_responses_lite=true）推出。"
+          "rationale": "compact 驱动序列第 2 轮是暖会话 default：不注入条件头，prime 响应已建立 Cookie jar，因此在固定槽携带 cookie；track=lite 由 job 冻结模型坐标（gpt-6-astra，use_responses_lite=true）推出。"
         },
         {
           "glob": "scenarios/A09/relay/conn004.client_to_upstream.bin",

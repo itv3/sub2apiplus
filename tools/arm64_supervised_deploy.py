@@ -86,11 +86,13 @@ from typing import Any, Callable, Mapping
 # 2026-09-14（VC-1 权限别名预派发封口）：修正真实 OAuth 两级证据根识别，
 # 固定 tcpdump pcap 的非特权属主边界，并新增只承接 sequence 4 在父 run 创建前
 # 确定性误拒绝的零请求 sequence 5 窄门禁。
+# 2026-09-15（通用原子派发工具闭合）：后继批次改为单一父 campaign-run
+# 监督器，新增通用预派发停线与 ARM64 双跑重放，并同步 0.154 模型轨标签。
 DEFAULT_TOOL_DIGEST = (
-    "fee111d1363be75e95dd4a2937646ad6306ddbc8b287077ad6eea01a789b5e30"
+    "8be8b991c071dff94be39e1bef6b4e7667061f39d88026b22f57fdce880d622d"
 )
 DEFAULT_SUPERVISOR_DIGEST = (
-    "80e49e8ede66cdf8c0a5f3e0198c60bc894549150f478b0129f259b957227591"
+    "647d94e7734f57e159454b663414532210652c678cf215977d6634c6e6d4ddd9"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "b9ca7b6f48b3c33a63a864a9ce7ebd617335378ea52fe9148ea161ab3b276ada"

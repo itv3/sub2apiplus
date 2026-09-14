@@ -27,6 +27,7 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from tools.official_client_capture import codex_upgrade
+from tools.official_client_capture import codex_upgrade_predispatch_stop
 from tools.official_client_capture import codex_upgrade_supervisor
 from tools.official_client_capture import codex_upgrade_vc_artifacts
 
@@ -34,6 +35,7 @@ from tools.official_client_capture import codex_upgrade_vc_artifacts
 RECEIPT_SCHEMA = "codex-p0-campaign-run-rehearsal/v1"
 EXECUTIONS_SCHEMA = "codex-p0-campaign-run-executions/v1"
 ACTION_RESULT_SCHEMA = "codex-p0-campaign-run-action-result/v1"
+ATOMIC_RECEIPT_SCHEMA = "codex-atomic-vc0-vc1-rehearsal/v1"
 MAX_JSON_BYTES = 16 * 1024 * 1024
 MINIMUM_REMAINING_SECONDS = 120
 SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -95,6 +97,17 @@ def _private_directory(path: Path, label: str) -> Path:
     metadata = resolved.stat()
     if metadata.st_uid != os.geteuid() or stat.S_IMODE(metadata.st_mode) & 0o077:
         raise CampaignRunRehearsalError(f"{label}权限不得允许 group/other 访问")
+    return resolved
+
+
+def _mount_directory(path: Path, label: str) -> Path:
+    """校验生产挂载点本身；挂载点无需具备证据目录的 0700 权限。"""
+
+    if not path.is_absolute() or path.is_symlink() or not path.is_dir():
+        raise CampaignRunRehearsalError(f"{label}必须是非符号链接绝对目录")
+    resolved = path.resolve(strict=True)
+    if resolved.stat().st_uid != os.geteuid():
+        raise CampaignRunRehearsalError(f"{label}必须由当前用户拥有")
     return resolved
 
 
@@ -1053,6 +1066,1059 @@ def replay(
     return receipt
 
 
+def _atomic_environment(*, require_arm64: bool) -> dict[str, Any]:
+    """验证 capture-cli 的生产挂载形态；本地单测可显式关闭环境门禁。"""
+
+    machine = os.uname().machine.lower()
+    if not require_arm64:
+        return {
+            "enforced": False,
+            "architecture": machine,
+        }
+    if machine not in {"aarch64", "arm64"}:
+        raise CampaignRunRehearsalError("原子双跑只能在 ARM64 capture-cli 内执行")
+    capture_root = _mount_directory(Path("/capture"), "capture 只读根")
+    staging_root = _mount_directory(Path("/capture/staging"), "capture staging 根")
+    logical_runs = _mount_directory(
+        Path("/root/oauth-capture/runs"),
+        "逻辑 runs 根",
+    )
+    writable_runs = _mount_directory(Path("/capture/runs"), "可写 runs 根")
+    readonly_flag = getattr(os, "ST_RDONLY", 1)
+    capture_readonly = bool(os.statvfs(capture_root).f_flag & readonly_flag)
+    staging_readonly = bool(os.statvfs(staging_root).f_flag & readonly_flag)
+    logical_metadata = logical_runs.stat()
+    writable_metadata = writable_runs.stat()
+    same_inode = (
+        logical_metadata.st_dev,
+        logical_metadata.st_ino,
+    ) == (
+        writable_metadata.st_dev,
+        writable_metadata.st_ino,
+    )
+    logical_readonly = bool(os.statvfs(logical_runs).f_flag & readonly_flag)
+    writable_readonly = bool(os.statvfs(writable_runs).f_flag & readonly_flag)
+    if (
+        not capture_readonly
+        or staging_readonly
+        or not same_inode
+        or logical_readonly
+        or writable_readonly
+    ):
+        raise CampaignRunRehearsalError(
+            "capture/staging 或 runs 双别名挂载形态与生产合同不一致"
+        )
+    return {
+        "enforced": True,
+        "architecture": "aarch64",
+        "capture_root": str(capture_root),
+        "capture_root_readonly": True,
+        "staging_root": str(staging_root),
+        "staging_root_readonly": False,
+        "logical_runs_root": str(logical_runs),
+        "logical_runs_readonly": False,
+        "writable_runs_root": str(writable_runs),
+        "writable_runs_readonly": False,
+        "runs_device": logical_metadata.st_dev,
+        "runs_inode": logical_metadata.st_ino,
+        "runs_same_inode": True,
+    }
+
+
+def _atomic_tool_identity() -> dict[str, Any]:
+    """冻结原子入口及其真实 producer／consumer 的当前字节身份。"""
+
+    tool_root = Path(__file__).resolve().parent
+    paths = sorted(
+        {
+            Path(__file__).resolve(),
+            Path(codex_upgrade.__file__).resolve(),
+            Path(codex_upgrade_predispatch_stop.__file__).resolve(),
+            Path(codex_upgrade_supervisor.__file__).resolve(),
+            Path(codex_upgrade_vc_artifacts.__file__).resolve(),
+        },
+        key=lambda item: item.relative_to(tool_root).as_posix(),
+    )
+    files = [
+        {
+            "path": path.relative_to(tool_root).as_posix(),
+            "sha256": _sha256_file(path),
+        }
+        for path in paths
+    ]
+    return {
+        "files": files,
+        "bundle_sha256": codex_upgrade_vc_artifacts.digest(files),
+    }
+
+
+def _atomic_inventory(root: Path) -> list[dict[str, Any]]:
+    """枚举一套演练的完整小型控制树，额外文件会改变 inventory。"""
+
+    entries: list[dict[str, Any]] = []
+    for path in sorted(root.rglob("*"), key=lambda item: item.relative_to(root).as_posix()):
+        relative = path.relative_to(root).as_posix()
+        metadata = path.lstat()
+        mode = stat.S_IMODE(metadata.st_mode)
+        if metadata.st_uid != os.geteuid():
+            raise CampaignRunRehearsalError(
+                f"原子演练 inventory 属主漂移：{relative}"
+            )
+        if stat.S_ISLNK(metadata.st_mode):
+            raise CampaignRunRehearsalError(f"原子演练 inventory 含符号链接：{relative}")
+        if stat.S_ISDIR(metadata.st_mode):
+            if mode != 0o700:
+                raise CampaignRunRehearsalError(
+                    f"原子演练 inventory 目录权限不是 0700：{relative}"
+                )
+            entries.append(
+                {
+                    "path": relative,
+                    "kind": "directory",
+                    "mode": "0700",
+                }
+            )
+        elif stat.S_ISREG(metadata.st_mode):
+            if mode != 0o600 or metadata.st_nlink != 1:
+                raise CampaignRunRehearsalError(
+                    f"原子演练 inventory 文件权限或硬链接数漂移：{relative}"
+                )
+            entries.append(
+                {
+                    "path": relative,
+                    "kind": "file",
+                    "mode": "0600",
+                    "bytes": metadata.st_size,
+                    "sha256": _sha256_file(path),
+                }
+            )
+        else:
+            raise CampaignRunRehearsalError(
+                f"原子演练 inventory 含特殊文件：{relative}"
+            )
+    return entries
+
+
+def _write_atomic_campaign(
+    root: Path,
+    *,
+    campaign_id: str,
+) -> tuple[Path, Path, dict[str, Any], Path, dict[str, Any]]:
+    """建立只含 VC-0 小型控制制品的独立离线 Campaign。"""
+
+    campaign_dir = root / "campaign"
+    state_dir = root / "state"
+    campaign_dir.mkdir(mode=0o700)
+    state_dir.mkdir(mode=0o700)
+    now = datetime.now(timezone.utc)
+    plan = codex_upgrade_vc_artifacts.build_campaign_plan(
+        campaign_id=campaign_id,
+        campaign_mode="formal",
+        campaign_purpose="validation_only",
+        baseline_version="0.151.0",
+        target_version="0.154.0",
+        created_at_utc=now.isoformat(),
+        original_deadline_at_utc=(now + timedelta(minutes=10)).isoformat(),
+        timing_checkpoint_sha256="1" * 64,
+        arm64_environment_sha256="2" * 64,
+        job_rehearsal_sha256="3" * 64,
+        p0_gate_sha256="4" * 64,
+    )
+    plan_path = campaign_dir / "control/vc/campaign-plan.json"
+    plan_path.parent.mkdir(mode=0o700, parents=True)
+    (campaign_dir / "control").chmod(0o700)
+    plan_path.parent.chmod(0o700)
+    _write_once(plan_path, plan)
+    stage_receipt_path = campaign_dir / "control/vc/vc0-stage.json"
+    _write_once(
+        stage_receipt_path,
+        {
+            "schema_version": "codex-atomic-vc0-stage/v1",
+            "status": "passed",
+            "campaign_id": campaign_id,
+            "live_request_count": 0,
+            "scanned_bytes": 0,
+        },
+    )
+    checkpoint = codex_upgrade_vc_artifacts.build_vc_checkpoint(
+        campaign_plan=plan,
+        phase="VC-0",
+        status="complete",
+        predecessor_checkpoint=None,
+        stage_receipt={
+            "path": stage_receipt_path.relative_to(campaign_dir).as_posix(),
+            "sha256": _sha256_file(stage_receipt_path),
+        },
+        completed_at_utc=datetime.now(timezone.utc).isoformat(),
+        execute_item_ids=[],
+        reuse_item_ids=[],
+        live_request_count=0,
+        scanned_bytes=0,
+    )
+    checkpoint_path = campaign_dir / "control/vc/vc-0-checkpoint.json"
+    _write_once(checkpoint_path, checkpoint)
+    _write_once(
+        campaign_dir / "campaign.json",
+        {
+            "campaign_id": campaign_id,
+            "campaign_mode": "formal",
+            "campaign_purpose": "validation_only",
+            "baseline_version": "0.151.0",
+            "target_version": "0.154.0",
+            "vc_control": {
+                "campaign_plan": {
+                    "path": plan_path.relative_to(campaign_dir).as_posix(),
+                    "sha256": _sha256_file(plan_path),
+                }
+            },
+        },
+    )
+    return campaign_dir, state_dir, plan, checkpoint_path, checkpoint
+
+
+def _atomic_compiler(
+    *,
+    plan: Mapping[str, Any],
+    checkpoint: Mapping[str, Any],
+    checkpoint_path: Path,
+) -> Any:
+    """返回与正式编译器使用同一 builders 和不可覆盖写入器的离线闭包。"""
+
+    def compile_batch(arguments: argparse.Namespace) -> dict[str, Any]:
+        action_plan = codex_upgrade_vc_artifacts.validate_action_plan(
+            _load_json(arguments.action_plan, "原子演练 action plan")
+        )
+        if (
+            arguments.predecessor_checkpoint.resolve(strict=True)
+            != checkpoint_path.resolve(strict=True)
+        ):
+            raise CampaignRunRehearsalError("原子演练 predecessor 路径漂移")
+        predecessor = {
+            "path": Path(arguments.predecessor_checkpoint)
+            .relative_to(arguments.campaign_dir)
+            .as_posix(),
+            "sha256": _sha256_file(arguments.predecessor_checkpoint),
+            "phase": checkpoint["phase"],
+            "checkpoint_sha256": checkpoint["checkpoint_sha256"],
+        }
+        now = datetime.now(timezone.utc)
+        batch = codex_upgrade_vc_artifacts.build_vc_batch(
+            campaign_plan=plan,
+            phase=arguments.phase,
+            sequence=arguments.sequence,
+            predecessor_checkpoint=predecessor,
+            execute_item_ids=action_plan["execute_item_ids"],
+            reuse_item_ids=action_plan["reuse_item_ids"],
+            actions=action_plan["actions"],
+            compiled_at_utc=now.isoformat(),
+            must_start_by_utc=(now + timedelta(seconds=30)).isoformat(),
+        )
+        name = f"{arguments.sequence:04d}-{arguments.phase.lower()}.json"
+        batch_path = arguments.campaign_dir / "control/vc/batches" / name
+        manifest_path = (
+            arguments.campaign_dir / "control/vc/run-manifests" / name
+        )
+        codex_upgrade._secure_write_json_once(batch_path, batch)
+        manifest = codex_upgrade_supervisor.build_batched_campaign_run_manifest(
+            campaign_id=batch["campaign_id"],
+            campaign_plan_sha256=batch["campaign_plan_sha256"],
+            batch_id=batch["batch_id"],
+            batch_sequence=batch["sequence"],
+            batch_sha256=batch["batch_sha256"],
+            phase=batch["phase"],
+            predecessor_checkpoint=batch["predecessor_checkpoint"],
+            original_deadline_at_utc=batch["original_deadline_at_utc"],
+            actions=batch["actions"],
+            execute_items=batch["execute_item_ids"],
+            reuse_items=batch["reuse_item_ids"],
+        )
+        codex_upgrade._secure_write_json_once(manifest_path, manifest)
+        return {
+            "status": "complete",
+            "campaign_id": batch["campaign_id"],
+            "phase": batch["phase"],
+            "batch_sequence": batch["sequence"],
+            "batch": str(batch_path),
+            "batch_sha256": batch["batch_sha256"],
+            "campaign_run_manifest": str(manifest_path),
+            "original_deadline_at_utc": batch["original_deadline_at_utc"],
+            "execute_item_ids": batch["execute_item_ids"],
+            "reuse_item_ids": batch["reuse_item_ids"],
+        }
+
+    return compile_batch
+
+
+def _atomic_negative_checks(
+    *,
+    instance_root: Path,
+    state_dir: Path,
+    plan: Mapping[str, Any],
+    batch_path: Path,
+    manifest_path: Path,
+) -> dict[str, bool]:
+    """执行 canonical、已有 run、deadline 和额外文件四个负例。"""
+
+    batch = _load_json(batch_path, "原子演练 VC batch")
+    tampered = dict(batch)
+    tampered["reuse_item_ids"] = ["tampered-reuse"]
+    try:
+        codex_upgrade_vc_artifacts.validate_vc_batch(tampered, plan)
+    except codex_upgrade_vc_artifacts.VCArtifactError:
+        canonical_rejected = True
+    else:
+        raise CampaignRunRehearsalError("canonical 篡改负例没有失败关闭")
+
+    manifest = codex_upgrade_supervisor._campaign_run_manifest(manifest_path)
+    try:
+        codex_upgrade_predispatch_stop._history_summary(state_dir, manifest)
+    except codex_upgrade_predispatch_stop.PredispatchStopError as error:
+        if "已有父 run" not in str(error):
+            raise CampaignRunRehearsalError(
+                "已有父 run 负例被其他原因拒绝"
+            ) from error
+        existing_run_rejected = True
+    else:
+        raise CampaignRunRehearsalError("已有父 run 负例没有失败关闭")
+
+    checkpoint_reference = {
+        "path": "control/vc/vc-1-checkpoint.json",
+        "sha256": "7" * 64,
+        "phase": "VC-1",
+        "checkpoint_sha256": "8" * 64,
+    }
+    deadline = datetime.fromisoformat(
+        str(plan["original_deadline_at_utc"]).replace("Z", "+00:00")
+    )
+    drifted = codex_upgrade_supervisor.build_batched_campaign_run_manifest(
+        campaign_id=str(plan["campaign_id"]),
+        campaign_plan_sha256=str(plan["plan_sha256"]),
+        batch_id="vc-2-0002",
+        batch_sequence=2,
+        batch_sha256="9" * 64,
+        phase="VC-2",
+        predecessor_checkpoint=checkpoint_reference,
+        original_deadline_at_utc=(deadline - timedelta(seconds=1)).isoformat(),
+        actions=[],
+        execute_items=[],
+        reuse_items=[],
+    )
+    history = codex_upgrade_supervisor._campaign_run_history(
+        state_dir,
+        str(plan["campaign_id"]),
+    )
+    try:
+        codex_upgrade_supervisor._validate_batched_campaign_history(
+            drifted,
+            history,
+        )
+    except codex_upgrade_supervisor.SupervisorError as error:
+        if "deadline" not in str(error):
+            raise CampaignRunRehearsalError(
+                "deadline 漂移负例被其他原因拒绝"
+            ) from error
+        deadline_drift_rejected = True
+    else:
+        raise CampaignRunRehearsalError("deadline 漂移负例没有失败关闭")
+
+    baseline_inventory = _atomic_inventory(instance_root)
+    extra_path = instance_root / "unregistered-negative.json"
+    try:
+        _write_once(extra_path, {"negative_fixture": "extra-file"})
+        if _atomic_inventory(instance_root) == baseline_inventory:
+            raise CampaignRunRehearsalError("额外文件负例未改变 inventory")
+        extra_file_detected = True
+    finally:
+        extra_path.unlink(missing_ok=True)
+        codex_upgrade_supervisor._fsync_directory(instance_root)
+    if _atomic_inventory(instance_root) != baseline_inventory:
+        raise CampaignRunRehearsalError("额外文件负例清理后 inventory 未恢复")
+    return {
+        "canonical_tamper_rejected": canonical_rejected,
+        "existing_parent_run_rejected": existing_run_rejected,
+        "deadline_drift_rejected": deadline_drift_rejected,
+        "extra_file_detected_by_inventory": extra_file_detected,
+    }
+
+
+def _atomic_action(campaign_id: str, marker_path: Path) -> dict[str, Any]:
+    """生成原子演练唯一的零网络动作。"""
+
+    action_id = "atomic-offline-action"
+    execute_id = "atomic-offline-execute"
+    return {
+        "action_id": action_id,
+        "operation": "VC-1:atomic-offline-rehearsal",
+        "timeout_seconds": 30.0,
+        "command": _action_command(
+            campaign_id=campaign_id,
+            phase="VC-1",
+            action_id=action_id,
+            output=marker_path,
+        ),
+        "item_ids": [execute_id],
+    }
+
+
+def _collect_atomic_instance(root: Path, index: int) -> dict[str, Any]:
+    """从全新 VC-0 控制树经真实原子入口完成一次 VC-1。"""
+
+    root.mkdir(mode=0o700)
+    campaign_id = f"atomic-vc0-vc1-{index}"
+    campaign_dir, state_dir, plan, checkpoint_path, checkpoint = (
+        _write_atomic_campaign(root, campaign_id=campaign_id)
+    )
+    action_id = "atomic-offline-action"
+    execute_id = "atomic-offline-execute"
+    reuse_id = "atomic-offline-reuse"
+    marker_path = state_dir / "atomic-action.json"
+    action_plan_path = campaign_dir / "control/vc/vc1-action-plan.json"
+    _write_once(
+        action_plan_path,
+        {
+            "schema_version": codex_upgrade_vc_artifacts.VC_ACTION_PLAN_SCHEMA,
+            "execute_item_ids": [execute_id],
+            "reuse_item_ids": [reuse_id],
+            "actions": [_atomic_action(campaign_id, marker_path)],
+        },
+    )
+    arguments = argparse.Namespace(
+        campaign_dir=campaign_dir,
+        state_dir=state_dir,
+        phase="VC-1",
+        sequence=1,
+        predecessor_checkpoint=checkpoint_path,
+        action_plan=action_plan_path,
+        heartbeat_seconds=1,
+        watchdog_timeout_seconds=5.0,
+        ledger_interval_seconds=1.0,
+    )
+    result, returncode = codex_upgrade.compile_and_run_vc_batch(
+        arguments,
+        _compiler=_atomic_compiler(
+            plan=plan,
+            checkpoint=checkpoint,
+            checkpoint_path=checkpoint_path,
+        ),
+    )
+    run = result.get("campaign_run")
+    if returncode != 0 or not isinstance(run, Mapping):
+        raise CampaignRunRehearsalError("原子 VC-0→VC-1 演练未形成父 run 终态")
+    run_summary = _run_summary(
+        run,
+        expected_campaign_id=campaign_id,
+        expected_batch_id="vc-1-0001",
+        expected_sequence=1,
+        expected_deadline=str(plan["original_deadline_at_utc"]),
+        expected_action_id=action_id,
+        expected_execute=execute_id,
+        expected_reuse=reuse_id,
+        marker_path=marker_path,
+    )
+    batch_path = campaign_dir / "control/vc/batches/0001-vc-1.json"
+    manifest_path = campaign_dir / "control/vc/run-manifests/0001-vc-1.json"
+    vc1_checkpoint = codex_upgrade_vc_artifacts.build_vc_checkpoint(
+        campaign_plan=plan,
+        phase="VC-1",
+        status="complete",
+        predecessor_checkpoint={
+            "path": checkpoint_path.relative_to(campaign_dir).as_posix(),
+            "sha256": _sha256_file(checkpoint_path),
+            "phase": "VC-0",
+            "checkpoint_sha256": checkpoint["checkpoint_sha256"],
+        },
+        stage_receipt={
+            "path": str(marker_path),
+            "sha256": _sha256_file(marker_path),
+        },
+        completed_at_utc=datetime.now(timezone.utc).isoformat(),
+        execute_item_ids=[execute_id],
+        reuse_item_ids=[reuse_id],
+        live_request_count=0,
+        scanned_bytes=0,
+    )
+    vc1_checkpoint_path = campaign_dir / "control/vc/vc-1-checkpoint.json"
+    _write_once(vc1_checkpoint_path, vc1_checkpoint)
+    negatives = _atomic_negative_checks(
+        instance_root=root,
+        state_dir=state_dir,
+        plan=plan,
+        batch_path=batch_path,
+        manifest_path=manifest_path,
+    )
+    return {
+        "index": index,
+        "campaign_id": campaign_id,
+        "root": str(root),
+        "campaign_dir": str(campaign_dir),
+        "state_dir": str(state_dir),
+        "vc0_checkpoint": {
+            "path": checkpoint_path.relative_to(root).as_posix(),
+            "sha256": _sha256_file(checkpoint_path),
+            "checkpoint_sha256": checkpoint["checkpoint_sha256"],
+        },
+        "vc1_batch": {
+            "path": batch_path.relative_to(root).as_posix(),
+            "sha256": _sha256_file(batch_path),
+        },
+        "vc1_manifest": {
+            "path": manifest_path.relative_to(root).as_posix(),
+            "sha256": _sha256_file(manifest_path),
+        },
+        "vc1_checkpoint": {
+            "path": vc1_checkpoint_path.relative_to(root).as_posix(),
+            "sha256": _sha256_file(vc1_checkpoint_path),
+            "checkpoint_sha256": vc1_checkpoint["checkpoint_sha256"],
+        },
+        "action_marker": {
+            "path": marker_path.relative_to(root).as_posix(),
+            "sha256": _sha256_file(marker_path),
+        },
+        "parent_run": run_summary,
+        "negative_fixtures": negatives,
+        "live_request_count": 0,
+        "scanned_bytes": 0,
+        "inventory": _atomic_inventory(root),
+    }
+
+
+def collect_atomic_double(
+    evidence_root: Path,
+    output_relative: str | Path,
+    *,
+    require_arm64: bool = True,
+) -> dict[str, Any]:
+    """在两个完全独立的新根中连续完成 VC-0→VC-1 原子闭环。"""
+
+    root = _private_directory(evidence_root, "原子双跑证据根")
+    if stat.S_IMODE(root.stat().st_mode) != 0o700:
+        raise CampaignRunRehearsalError("原子双跑证据根权限必须精确为 0700")
+    if any(root.iterdir()):
+        raise CampaignRunRehearsalError("原子双跑证据根必须为空")
+    output = _new_output(root, output_relative, "原子双跑收据输出")
+    environment = _atomic_environment(require_arm64=require_arm64)
+    if require_arm64:
+        try:
+            root.relative_to(Path("/capture/staging").resolve(strict=True))
+        except ValueError as error:
+            raise CampaignRunRehearsalError(
+                "原子双跑证据根必须位于 /capture/staging"
+            ) from error
+    instances = [
+        _collect_atomic_instance(root / "instance-1", 1),
+        _collect_atomic_instance(root / "instance-2", 2),
+    ]
+    first_root = str(root / "instance-1").encode("utf-8")
+    for path in (root / "instance-2").rglob("*"):
+        if path.is_file() and first_root in path.read_bytes():
+            raise CampaignRunRehearsalError("第二次演练读取或引用了第一次状态")
+    receipt: dict[str, Any] = {
+        "schema_version": ATOMIC_RECEIPT_SCHEMA,
+        "status": "passed",
+        "collected_at_utc": datetime.now(timezone.utc)
+        .isoformat(timespec="milliseconds")
+        .replace("+00:00", "Z"),
+        "environment": environment,
+        "tool_identity": _atomic_tool_identity(),
+        "instances": instances,
+        "isolation": {
+            "distinct_campaign_ids": True,
+            "distinct_state_dirs": True,
+            "second_references_first": False,
+        },
+        "live_request_count": 0,
+        "scanned_bytes": 0,
+        "network_used": False,
+    }
+    receipt["receipt_sha256"] = codex_upgrade_vc_artifacts.digest(receipt)
+    _write_once(output, receipt)
+    return receipt
+
+
+def _atomic_bound_file(
+    root: Path,
+    value: Any,
+    expected_relative: str,
+    label: str,
+    *,
+    identity_field: str | None = None,
+) -> tuple[dict[str, Any], Path]:
+    """校验原子演练收据中的规范相对路径、摘要和可选身份字段。"""
+
+    fields = {"path", "sha256"}
+    if identity_field is not None:
+        fields.add(identity_field)
+    binding = _expect_fields(value, fields, label)
+    if binding.get("path") != expected_relative:
+        raise CampaignRunRehearsalError(f"{label}路径漂移")
+    path = _relative_file(root, expected_relative, label)
+    if (
+        not isinstance(binding.get("sha256"), str)
+        or not SHA256_RE.fullmatch(str(binding["sha256"]))
+        or binding["sha256"] != _sha256_file(path)
+    ):
+        raise CampaignRunRehearsalError(f"{label}摘要漂移")
+    return binding, path
+
+
+def _atomic_expected_inventory_paths(run_name: str) -> set[str]:
+    """返回单次合成 VC-0→VC-1 控制树允许存在的完整路径集合。"""
+
+    run = f"state/{run_name}"
+    return {
+        "campaign",
+        "campaign/campaign.json",
+        "campaign/control",
+        "campaign/control/vc",
+        "campaign/control/vc/batches",
+        "campaign/control/vc/batches/0001-vc-1.json",
+        "campaign/control/vc/campaign-plan.json",
+        "campaign/control/vc/run-manifests",
+        "campaign/control/vc/run-manifests/0001-vc-1.json",
+        "campaign/control/vc/vc-0-checkpoint.json",
+        "campaign/control/vc/vc-1-checkpoint.json",
+        "campaign/control/vc/vc0-stage.json",
+        "campaign/control/vc/vc1-action-plan.json",
+        "state",
+        "state/.campaign-run.lock",
+        "state/atomic-action.json",
+        run,
+        f"{run}/.supervisor.lock",
+        f"{run}/action-diagnostics",
+        f"{run}/campaign-run-manifest.json",
+        f"{run}/events.ndjson",
+        f"{run}/heartbeat.json",
+        f"{run}/minute-ledger.ndjson",
+        f"{run}/state.json",
+        f"{run}/stop-receipt.json",
+        f"{run}/stop-request.json",
+        f"{run}/watchdog-heartbeats.ndjson",
+    }
+
+
+def _replay_atomic_instance(
+    root: Path,
+    index: int,
+    value: Any,
+) -> None:
+    """从实际文件和父 run 重建一个原子演练实例，拒绝重摘要伪造。"""
+
+    instance = _expect_fields(
+        value,
+        {
+            "index",
+            "campaign_id",
+            "root",
+            "campaign_dir",
+            "state_dir",
+            "vc0_checkpoint",
+            "vc1_batch",
+            "vc1_manifest",
+            "vc1_checkpoint",
+            "action_marker",
+            "parent_run",
+            "negative_fixtures",
+            "live_request_count",
+            "scanned_bytes",
+            "inventory",
+        },
+        f"原子双跑实例 {index}",
+    )
+    instance_root = _private_directory(root / f"instance-{index}", "原子演练实例根")
+    campaign_dir = _private_directory(instance_root / "campaign", "原子演练 Campaign")
+    state_dir = _private_directory(instance_root / "state", "原子演练 state-dir")
+    campaign_id = f"atomic-vc0-vc1-{index}"
+    if (
+        instance.get("index") != index
+        or instance.get("campaign_id") != campaign_id
+        or instance.get("root") != str(instance_root)
+        or instance.get("campaign_dir") != str(campaign_dir)
+        or instance.get("state_dir") != str(state_dir)
+        or instance.get("live_request_count") != 0
+        or instance.get("scanned_bytes") != 0
+        or instance.get("negative_fixtures")
+        != {
+            "canonical_tamper_rejected": True,
+            "existing_parent_run_rejected": True,
+            "deadline_drift_rejected": True,
+            "extra_file_detected_by_inventory": True,
+        }
+    ):
+        raise CampaignRunRehearsalError(f"原子双跑实例 {index} 身份或零请求边界漂移")
+
+    plan_path = _relative_file(
+        campaign_dir,
+        "control/vc/campaign-plan.json",
+        "原子演练 Campaign plan",
+    )
+    try:
+        plan = codex_upgrade_vc_artifacts.validate_campaign_plan(
+            _load_json(plan_path, "原子演练 Campaign plan")
+        )
+    except codex_upgrade_vc_artifacts.VCArtifactError as error:
+        raise CampaignRunRehearsalError("原子演练 Campaign plan 非法") from error
+    if (
+        plan.get("campaign_id") != campaign_id
+        or plan.get("campaign_mode") != "formal"
+        or plan.get("campaign_purpose") != "validation_only"
+        or plan.get("baseline_version") != "0.151.0"
+        or plan.get("target_version") != "0.154.0"
+        or plan.get("controls")
+        != {
+            "timing_checkpoint_sha256": "1" * 64,
+            "arm64_environment_sha256": "2" * 64,
+            "job_rehearsal_sha256": "3" * 64,
+            "p0_gate_sha256": "4" * 64,
+        }
+    ):
+        raise CampaignRunRehearsalError("原子演练 Campaign plan 身份漂移")
+
+    campaign_document = _expect_fields(
+        _load_json(campaign_dir / "campaign.json", "原子演练 Campaign 清单"),
+        {
+            "campaign_id",
+            "campaign_mode",
+            "campaign_purpose",
+            "baseline_version",
+            "target_version",
+            "vc_control",
+        },
+        "原子演练 Campaign 清单",
+    )
+    if campaign_document != {
+        "campaign_id": campaign_id,
+        "campaign_mode": "formal",
+        "campaign_purpose": "validation_only",
+        "baseline_version": "0.151.0",
+        "target_version": "0.154.0",
+        "vc_control": {
+            "campaign_plan": {
+                "path": "control/vc/campaign-plan.json",
+                "sha256": _sha256_file(plan_path),
+            }
+        },
+    }:
+        raise CampaignRunRehearsalError("原子演练 Campaign 清单漂移")
+
+    stage_path = _relative_file(
+        campaign_dir,
+        "control/vc/vc0-stage.json",
+        "原子演练 VC-0 阶段事实",
+    )
+    if _load_json(stage_path, "原子演练 VC-0 阶段事实") != {
+        "schema_version": "codex-atomic-vc0-stage/v1",
+        "status": "passed",
+        "campaign_id": campaign_id,
+        "live_request_count": 0,
+        "scanned_bytes": 0,
+    }:
+        raise CampaignRunRehearsalError("原子演练 VC-0 阶段事实漂移")
+
+    vc0_binding, vc0_path = _atomic_bound_file(
+        instance_root,
+        instance.get("vc0_checkpoint"),
+        "campaign/control/vc/vc-0-checkpoint.json",
+        "原子演练 VC-0 checkpoint",
+        identity_field="checkpoint_sha256",
+    )
+    try:
+        vc0 = codex_upgrade_vc_artifacts.validate_vc_checkpoint(
+            _load_json(vc0_path, "原子演练 VC-0 checkpoint"),
+            plan,
+        )
+    except codex_upgrade_vc_artifacts.VCArtifactError as error:
+        raise CampaignRunRehearsalError("原子演练 VC-0 checkpoint 非法") from error
+    if (
+        vc0_binding.get("checkpoint_sha256") != vc0.get("checkpoint_sha256")
+        or vc0.get("phase") != "VC-0"
+        or vc0.get("status") != "complete"
+        or vc0.get("predecessor_checkpoint") is not None
+        or vc0.get("stage_receipt")
+        != {
+            "path": "control/vc/vc0-stage.json",
+            "sha256": _sha256_file(stage_path),
+        }
+        or vc0.get("execute_item_ids") != []
+        or vc0.get("reuse_item_ids") != []
+        or vc0.get("metrics") != {"live_request_count": 0, "scanned_bytes": 0}
+    ):
+        raise CampaignRunRehearsalError("原子演练 VC-0 checkpoint 语义漂移")
+
+    marker_path = state_dir / "atomic-action.json"
+    action = _atomic_action(campaign_id, marker_path)
+    action_plan_path = _relative_file(
+        campaign_dir,
+        "control/vc/vc1-action-plan.json",
+        "原子演练 VC-1 action plan",
+    )
+    try:
+        action_plan = codex_upgrade_vc_artifacts.validate_action_plan(
+            _load_json(action_plan_path, "原子演练 VC-1 action plan")
+        )
+    except codex_upgrade_vc_artifacts.VCArtifactError as error:
+        raise CampaignRunRehearsalError("原子演练 VC-1 action plan 非法") from error
+    if action_plan != {
+        "schema_version": codex_upgrade_vc_artifacts.VC_ACTION_PLAN_SCHEMA,
+        "execute_item_ids": ["atomic-offline-execute"],
+        "reuse_item_ids": ["atomic-offline-reuse"],
+        "actions": [action],
+    }:
+        raise CampaignRunRehearsalError("原子演练 VC-1 action plan 漂移")
+
+    predecessor = {
+        "path": "control/vc/vc-0-checkpoint.json",
+        "sha256": _sha256_file(vc0_path),
+        "phase": "VC-0",
+        "checkpoint_sha256": vc0["checkpoint_sha256"],
+    }
+    _batch_binding, batch_path = _atomic_bound_file(
+        instance_root,
+        instance.get("vc1_batch"),
+        "campaign/control/vc/batches/0001-vc-1.json",
+        "原子演练 VC-1 batch",
+    )
+    try:
+        batch = codex_upgrade_vc_artifacts.validate_vc_batch(
+            _load_json(batch_path, "原子演练 VC-1 batch"),
+            plan,
+        )
+    except codex_upgrade_vc_artifacts.VCArtifactError as error:
+        raise CampaignRunRehearsalError("原子演练 VC-1 batch 非法") from error
+    if (
+        batch.get("sequence") != 1
+        or batch.get("phase") != "VC-1"
+        or batch.get("predecessor_checkpoint") != predecessor
+        or batch.get("execute_item_ids") != ["atomic-offline-execute"]
+        or batch.get("reuse_item_ids") != ["atomic-offline-reuse"]
+        or batch.get("actions") != [action]
+        or batch.get("original_deadline_at_utc")
+        != plan.get("original_deadline_at_utc")
+    ):
+        raise CampaignRunRehearsalError("原子演练 VC-1 batch 语义漂移")
+
+    _manifest_binding, manifest_path = _atomic_bound_file(
+        instance_root,
+        instance.get("vc1_manifest"),
+        "campaign/control/vc/run-manifests/0001-vc-1.json",
+        "原子演练 VC-1 manifest",
+    )
+    try:
+        manifest = codex_upgrade_supervisor._campaign_run_manifest(manifest_path)
+    except codex_upgrade_supervisor.SupervisorError as error:
+        raise CampaignRunRehearsalError("原子演练 VC-1 manifest 非法") from error
+    expected_manifest = codex_upgrade_supervisor.build_batched_campaign_run_manifest(
+        campaign_id=campaign_id,
+        campaign_plan_sha256=str(plan["plan_sha256"]),
+        batch_id=str(batch["batch_id"]),
+        batch_sequence=1,
+        batch_sha256=str(batch["batch_sha256"]),
+        phase="VC-1",
+        predecessor_checkpoint=predecessor,
+        original_deadline_at_utc=str(plan["original_deadline_at_utc"]),
+        actions=[action],
+        execute_items=["atomic-offline-execute"],
+        reuse_items=["atomic-offline-reuse"],
+    )
+    if manifest != expected_manifest:
+        raise CampaignRunRehearsalError("原子演练 VC-1 manifest 未由 batch 确定性编译")
+
+    parent = _expect_fields(
+        instance.get("parent_run"),
+        {
+            "schema_version",
+            "batch_id",
+            "batch_sequence",
+            "original_deadline_at_utc",
+            "state",
+            "audit_incomplete",
+            "event_count",
+            "execute_items",
+            "reuse_items",
+            "run_dir",
+        },
+        "原子演练父 run",
+    )
+    run_dir = _private_directory(Path(str(parent.get("run_dir", ""))), "原子演练父 run")
+    run_directories = sorted(
+        path.resolve()
+        for path in state_dir.iterdir()
+        if path.name.startswith("run-") and path.is_dir() and not path.is_symlink()
+    )
+    if run_dir.parent != state_dir or run_directories != [run_dir]:
+        raise CampaignRunRehearsalError("原子演练父 run 数量或路径漂移")
+    try:
+        audit = codex_upgrade_supervisor._audit_command(run_dir)
+    except codex_upgrade_supervisor.SupervisorError as error:
+        raise CampaignRunRehearsalError("原子演练父 run 无法审计") from error
+    expected_parent = {
+        "schema_version": codex_upgrade_supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA,
+        "batch_id": batch["batch_id"],
+        "batch_sequence": 1,
+        "original_deadline_at_utc": plan["original_deadline_at_utc"],
+        "state": "stopped",
+        "audit_incomplete": False,
+        "event_count": audit["event_count"],
+        "execute_items": ["atomic-offline-execute"],
+        "reuse_items": ["atomic-offline-reuse"],
+        "run_dir": str(run_dir),
+    }
+    if parent != expected_parent or audit.get("state") != "stopped" or audit.get(
+        "audit_incomplete"
+    ) is not False:
+        raise CampaignRunRehearsalError("原子演练父 run 终态漂移")
+    recorded_manifest = _expect_fields(
+        _load_json(run_dir / "campaign-run-manifest.json", "父 run 不可变 manifest"),
+        {"schema_version", "manifest_sha256", "manifest"},
+        "父 run 不可变 manifest",
+    )
+    if recorded_manifest != {
+        "schema_version": codex_upgrade_supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA,
+        "manifest_sha256": _sha256_bytes(
+            codex_upgrade_vc_artifacts.canonical_bytes(manifest)
+        ),
+        "manifest": manifest,
+    }:
+        raise CampaignRunRehearsalError("父 run 实际执行 manifest 漂移")
+
+    marker_binding, marker_file = _atomic_bound_file(
+        instance_root,
+        instance.get("action_marker"),
+        "state/atomic-action.json",
+        "原子演练动作事实",
+    )
+    if marker_file != marker_path or _load_json(marker_file, "原子演练动作事实") != {
+        "schema_version": ACTION_RESULT_SCHEMA,
+        "status": "passed",
+        "campaign_id": campaign_id,
+        "phase": "VC-1",
+        "action_id": "atomic-offline-action",
+        "parent_run_dir": str(run_dir),
+        "network_used": False,
+        "live_request_count": 0,
+    }:
+        raise CampaignRunRehearsalError("原子演练动作事实漂移")
+
+    vc1_binding, vc1_path = _atomic_bound_file(
+        instance_root,
+        instance.get("vc1_checkpoint"),
+        "campaign/control/vc/vc-1-checkpoint.json",
+        "原子演练 VC-1 checkpoint",
+        identity_field="checkpoint_sha256",
+    )
+    try:
+        vc1 = codex_upgrade_vc_artifacts.validate_vc_checkpoint(
+            _load_json(vc1_path, "原子演练 VC-1 checkpoint"),
+            plan,
+        )
+    except codex_upgrade_vc_artifacts.VCArtifactError as error:
+        raise CampaignRunRehearsalError("原子演练 VC-1 checkpoint 非法") from error
+    if (
+        vc1_binding.get("checkpoint_sha256") != vc1.get("checkpoint_sha256")
+        or vc1.get("phase") != "VC-1"
+        or vc1.get("status") != "complete"
+        or vc1.get("predecessor_checkpoint") != predecessor
+        or vc1.get("stage_receipt")
+        != {"path": str(marker_path), "sha256": marker_binding["sha256"]}
+        or vc1.get("execute_item_ids") != ["atomic-offline-execute"]
+        or vc1.get("reuse_item_ids") != ["atomic-offline-reuse"]
+        or vc1.get("metrics") != {"live_request_count": 0, "scanned_bytes": 0}
+    ):
+        raise CampaignRunRehearsalError("原子演练 VC-1 checkpoint 语义漂移")
+
+    inventory = _atomic_inventory(instance_root)
+    if (
+        instance.get("inventory") != inventory
+        or {entry["path"] for entry in inventory}
+        != _atomic_expected_inventory_paths(run_dir.name)
+    ):
+        raise CampaignRunRehearsalError(f"原子双跑实例 {index} inventory 漂移")
+
+
+def replay_atomic_double(
+    evidence_root: Path,
+    receipt_relative: str | Path,
+    *,
+    require_arm64: bool | None = None,
+) -> dict[str, Any]:
+    """重放双跑收据、工具身份、隔离关系及完整文件 inventory。"""
+
+    root = _private_directory(evidence_root, "原子双跑证据根")
+    if stat.S_IMODE(root.stat().st_mode) != 0o700:
+        raise CampaignRunRehearsalError("原子双跑证据根权限必须精确为 0700")
+    receipt_path = _relative_file(root, receipt_relative, "原子双跑收据")
+    receipt_metadata = _private_file(receipt_path, "原子双跑收据").stat()
+    if (
+        receipt_path.parent != root
+        or stat.S_IMODE(receipt_metadata.st_mode) != 0o600
+        or receipt_metadata.st_nlink != 1
+    ):
+        raise CampaignRunRehearsalError("原子双跑收据位置、权限或硬链接数漂移")
+    receipt = _load_json(receipt_path, "原子双跑收据")
+    unsigned = dict(receipt)
+    digest = unsigned.pop("receipt_sha256", None)
+    expected_fields = {
+        "schema_version",
+        "status",
+        "collected_at_utc",
+        "environment",
+        "tool_identity",
+        "instances",
+        "isolation",
+        "live_request_count",
+        "scanned_bytes",
+        "network_used",
+        "receipt_sha256",
+    }
+    try:
+        collected_at = datetime.fromisoformat(
+            str(receipt.get("collected_at_utc", "")).replace("Z", "+00:00")
+        )
+    except ValueError as error:
+        raise CampaignRunRehearsalError("原子双跑 collected_at_utc 非法") from error
+    normalized_collected_at = collected_at.astimezone(timezone.utc).isoformat(
+        timespec="milliseconds"
+    ).replace("+00:00", "Z")
+    if (
+        set(receipt) != expected_fields
+        or receipt.get("schema_version") != ATOMIC_RECEIPT_SCHEMA
+        or receipt.get("status") != "passed"
+        or receipt.get("live_request_count") != 0
+        or receipt.get("scanned_bytes") != 0
+        or receipt.get("network_used") is not False
+        or receipt.get("collected_at_utc") != normalized_collected_at
+        or digest != codex_upgrade_vc_artifacts.digest(unsigned)
+        or receipt.get("tool_identity") != _atomic_tool_identity()
+        or receipt.get("isolation")
+        != {
+            "distinct_campaign_ids": True,
+            "distinct_state_dirs": True,
+            "second_references_first": False,
+        }
+    ):
+        raise CampaignRunRehearsalError("原子双跑收据身份、自摘要或零请求边界漂移")
+    environment = receipt.get("environment")
+    if not isinstance(environment, Mapping):
+        raise CampaignRunRehearsalError("原子双跑环境字段非法")
+    enforce = bool(environment.get("enforced")) if require_arm64 is None else require_arm64
+    if environment != _atomic_environment(require_arm64=enforce):
+        raise CampaignRunRehearsalError("原子双跑生产环境挂载身份漂移")
+    instances = receipt.get("instances")
+    if not isinstance(instances, list) or len(instances) != 2:
+        raise CampaignRunRehearsalError("原子双跑必须恰好包含两个独立实例")
+    expected_top = {"instance-1", "instance-2", receipt_path.name}
+    if {path.name for path in root.iterdir()} != expected_top:
+        raise CampaignRunRehearsalError("原子双跑证据根含未登记额外文件")
+    for index, raw in enumerate(instances, 1):
+        _replay_atomic_instance(root, index, raw)
+    first_root = str(root / "instance-1").encode("utf-8")
+    if any(
+        path.is_file() and first_root in path.read_bytes()
+        for path in (root / "instance-2").rglob("*")
+    ):
+        raise CampaignRunRehearsalError("第二次演练引用了第一次状态")
+    return receipt
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -1064,6 +2130,18 @@ def build_parser() -> argparse.ArgumentParser:
     replay_parser.add_argument("--campaign-dir", type=Path, required=True)
     replay_parser.add_argument("--evidence-root", type=Path, required=True)
     replay_parser.add_argument("--receipt", required=True)
+    atomic_collect_parser = commands.add_parser(
+        "atomic-double-collect",
+        help="仅在 ARM64 capture-cli 内连续执行两次零网络 VC-0→VC-1",
+    )
+    atomic_collect_parser.add_argument("--evidence-root", type=Path, required=True)
+    atomic_collect_parser.add_argument("--output", required=True)
+    atomic_replay_parser = commands.add_parser(
+        "atomic-double-replay",
+        help="仅在 ARM64 capture-cli 内重放原子双跑收据",
+    )
+    atomic_replay_parser.add_argument("--evidence-root", type=Path, required=True)
+    atomic_replay_parser.add_argument("--receipt", required=True)
     worker_parser = commands.add_parser("action-worker", help=argparse.SUPPRESS)
     worker_parser.add_argument("--campaign-id", required=True)
     worker_parser.add_argument("--phase", required=True)
@@ -1088,12 +2166,26 @@ def main(argv: list[str] | None = None) -> int:
                 arguments.receipt,
                 campaign_dir=arguments.campaign_dir,
             )
+        elif arguments.command == "atomic-double-collect":
+            result = collect_atomic_double(
+                arguments.evidence_root,
+                arguments.output,
+                require_arm64=True,
+            )
+        elif arguments.command == "atomic-double-replay":
+            result = replay_atomic_double(
+                arguments.evidence_root,
+                arguments.receipt,
+                require_arm64=True,
+            )
         else:
             result = _action_worker(arguments)
     except (
         OSError,
         subprocess.SubprocessError,
         CampaignRunRehearsalError,
+        RuntimeError,
+        ValueError,
     ) as error:
         print(f"Codex campaign-run 演练失败：{error}", file=sys.stderr)
         return 1

@@ -10,7 +10,8 @@
 > [`docs/EVIDENCE_INDEX.md`](EVIDENCE_INDEX.md)。本文只定义 Codex CLI 的规则、画像、实现和专用流程增量。
 
 正式 Campaign 的阶段动作只允许由 `codex_upgrade_supervisor.py campaign-run` 派发；`plan`、
-`reuse-official-evidence` 和 `compile-vc-batch` 是三个受限的 Campaign 引导／批次控制命令，适用边界见
+`reuse-official-evidence` 和 `compile-and-run-vc-batch` 是三个受限的 Campaign 引导／批次控制命令；
+`compile-vc-batch` 仅保留给历史读取和内部测试，0.154.0 起 Formal CLI 会失败关闭。适用边界见
 第四部分公共执行约定和 Framework §5.1.2、§5.3.2～§5.3.4。历史恢复入口仅供解释旧收据，不得用于新
 Campaign，兼容边界见附录 A。
 
@@ -1239,11 +1240,12 @@ Framework §5.3 是升级总操作入口并规定 `VC-0～VC-6` 顺序；本部�
    checkpoint 封存后编译本批次不可变清单。不得在 VC-0 预填后续尚未产生的批准摘要、candidate／attempt
    ID、镜像 digest 或收据摘要，也不得在批次启动后补写。总计划是 Formal plan 产物，不是批次动作清单。
 2. 阶段动作的唯一派发入口是 `codex_upgrade_supervisor.py campaign-run`。本部分的阶段命令块均为已冻结
-   v2 清单中的 `action.command`，不是操作员可绕过监督器直接执行的入口。只有以下三个控制面动作不进入
+   v2 清单中的 `action.command`，不是操作员可绕过监督器直接执行的入口。只有以下控制面动作不进入
    阶段队列：VC-0 的 `preflight_only plan` 只创建离线预检；Formal `plan` 只能由
    `codex_upgrade_vc0_closeout.py` 在原子收口进程内调用；`reuse-official-evidence` 创建全新 Campaign，
    以零请求导入已封存官方证据，并生成“全部 official Job 为 reuse”的 VC-1 no-op 批次及 checkpoint；
-   `compile-vc-batch` 在前序 checkpoint 封存后只编译下一批；
+   `compile-and-run-vc-batch` 在同一个非阻塞 state-dir 锁内编译下一批并立即创建父 run；
+   `compile-vc-batch` 仅允许历史读取和内部测试，不得用于新的 Formal 批次；
    `compile-vc-interrupted-recovery-batch` 只为下述 `KeyboardInterrupt` 孤儿编译一次 v3 预览批次；
    `codex_upgrade_vc1_permission_alias_predispatch_closeout.py` 只封存下述 sequence 4 在父 run 创建前的
    唯一确定性拒绝；
@@ -1273,6 +1275,38 @@ result_key = item_id + input_sha256 + environment_sha256 + direct_dependency_sha
 一律停线，不能借用 v4。
 `codex-upgrade-campaign-run/v5` 只承接该唯一 v4 因父 `campaign-run` 清单摘要换行规范不一致而产生的
 确定性零请求失败，并且只能作为 sequence 4 执行一次；它不是通用重试版本。其他 v4 失败一律停线。
+
+上述 v3～v5 和下文 sequence 3～5 仅用于只读解释 0.154.0 首轮事故链，不是新 Campaign 的恢复模板。
+通用工具闭合后不得再增加 sequence 专用恢复版本；新批次若在编译完成后、父 run 创建前失败，只能由
+`codex_upgrade_predispatch_stop.py record` 写入 `codex-upgrade-predispatch-stop/v1` 停线收据。该收据固定
+`source_run_created=false`、`successor_eligible=false`、`live_request_count=0`、`scanned_bytes=0`，唯一
+下一动作是完成工具闭合后建立新 VC-0，绝不能作为后继批次输入。
+
+原子入口能捕获的失败会自动写收据；只有进程被 `SIGKILL` 等不可捕获方式终止、且两个编译制品已经完整
+落盘而父 run 尚不存在时，才允许在原 Campaign 上补写一次。命令固定为：
+
+```bash
+CAMPAIGN_DIR=/绝对路径/campaign
+STATE_DIR=/绝对路径/本轮Campaign-supervisor
+BATCH_NAME=0002-vc-2.json
+
+python3 -m tools.official_client_capture.codex_upgrade_predispatch_stop record \
+  --campaign-dir "$CAMPAIGN_DIR" \
+  --state-dir "$STATE_DIR" \
+  --batch "$CAMPAIGN_DIR/control/vc/batches/$BATCH_NAME" \
+  --manifest "$CAMPAIGN_DIR/control/vc/run-manifests/$BATCH_NAME" \
+  --failure-kind operator-recovery \
+  --error-type ProcessExit
+
+python3 -m tools.official_client_capture.codex_upgrade_predispatch_stop replay \
+  --campaign-dir "$CAMPAIGN_DIR" \
+  --state-dir "$STATE_DIR" \
+  --receipt "$CAMPAIGN_DIR/control/vc/predispatch-stops/$BATCH_NAME"
+```
+
+`BATCH_NAME` 的序号必须使用四位十进制，阶段使用小写形式。`record`
+会非阻塞取得同一把 `.campaign-run.lock`，验证 Campaign plan、batch、manifest 和全部既有父 run；任何字段、
+路径、摘要、历史或锁状态不一致均拒绝写入。补写和重放均不得运行 action，也不得恢复当前 Campaign。
 `codex-upgrade-campaign-run/v1` 只保留给历史兼容与离线回归；`campaign-start`、`campaign-mark`、
 `campaign-exec` 不得编排新 Campaign。
 
@@ -1438,8 +1472,8 @@ sequence 4 当时部署的 helper
 `sequence4-permission-alias-closeout-receipt.json`，只允许 `O_EXCL` 首次创建，并声明
 `scanned_bytes=0`、`live_request_count=0`。
 
-必须先完成 ARM64 受管部署并取得绑定当前 helper、监督器和工具树的部署收据，再以
-`vc1-sequence4-action-plan.json` 编译 sequence 4：
+以下命令块是首轮事故的历史执行记录，当前 Formal CLI 必须拒绝，不得重演。事故当时先完成 ARM64 受管
+部署并取得绑定 helper、监督器和工具树的部署收据，再以 `vc1-sequence4-action-plan.json` 编译 sequence 4：
 
 ```bash
 python3 tools/official_client_capture/codex_upgrade.py \
@@ -1493,7 +1527,8 @@ python3 /root/docker/capture-cli/data/tools/official_client_capture/codex_upgrad
 创建 run 或发送请求；唯一输出是以 `O_EXCL` 创建的 `0600` 收据，且必须声明
 `source_run_created=false`、`scanned_bytes=0`、`live_request_count=0`。
 
-预派发封口收据生成后，建立 `vc1-sequence5-action-plan.json`。执行闭集只能依次为
+以下同样是不可重演的历史 sequence 5 记录。预派发封口收据生成后，当时建立了
+`vc1-sequence5-action-plan.json`。执行闭集只能依次为
 `harden-official-evidence-permissions-via-alias-v2`、`seal-official-preview`，reuse 只能为
 `prepare-official-assertion-bundle`；seal 动作必须逐字复制 sequence 3。新权限动作必须绑定当前 helper、
 当前部署收据及其文件摘要、当前工具树摘要，并把唯一输出固定为
@@ -1579,20 +1614,21 @@ checkpoint 编译本批次清单。总计划不能预填未来的 approval SHA�
 `codex-upgrade-vc-action-plan/v1`，再直接运行：
 
 ~~~bash
-python3 tools/official_client_capture/codex_upgrade.py compile-vc-batch \
+python3 tools/official_client_capture/codex_upgrade.py compile-and-run-vc-batch \
   --campaign-dir /绝对路径/campaign \
+  --state-dir /绝对路径/本轮Campaign-supervisor \
   --phase <VC-2...VC-6> \
   --sequence <全局连续序号，从 2 开始> \
   --predecessor-checkpoint /绝对路径/campaign/control/vc/<前序>-checkpoint.json \
   --action-plan /绝对路径/action-plan.json
-
-python3 tools/official_client_capture/codex_upgrade_supervisor.py campaign-run \
-  --state-dir /绝对路径/本批-supervisor \
-  --manifest /绝对路径/campaign/control/vc/run-manifests/<序号>-<阶段>.json
 ~~~
 
-`compile-vc-batch` 只接受规范直接前序 checkpoint，且本阶段尚未存在 checkpoint；不允许跳号、
-延长 deadline、重编已封存批次或由 `campaign-run` 内部调用。动作返回
+原子入口从取得 `.campaign-run.lock` 到父 run 创建始终持有同一把锁，只接受规范直接前序 checkpoint，
+且本阶段尚未存在 checkpoint；不允许跳号、延长 deadline、重编已封存批次或由 `campaign-run` 内部调用。
+该入口不创建外层 `CampaignLease`，也不接受第二个相对 `--max-wall-seconds`；唯一监督器是它立即启动的父
+`campaign-run`，唯一墙钟边界是 Campaign plan 已冻结的原始绝对 deadline。
+编译后父 run 创建前的任何可捕获失败都会写通用预派发停线收据；SIGKILL 后可由同一工具的 `record` 子命令
+补写，但不能继续原 Campaign。动作返回
 `awaiting_receipts`、`approval_required` 时，父 `campaign-run` 将其视为本批合法停靠点并正常封存；
 同一命令绕过父监督器直接运行仍以退出码 2 提示未到终态。
 
@@ -1658,7 +1694,12 @@ python3 tools/official_client_capture/codex_upgrade.py plan \
    预演；另用至少两组差异夹具证明批次继承原始 deadline、运行坐标覆盖拒绝账号字段、post-promotion
    门禁随批准规则集合变化而变化。P0 只证明工具能力，不生成目标版本证据。
 4. 按 §4.0.3 完成 ARM64 环境检查、实规模成本检查和全部冻结 Job 的离线 rehearsal。
-5. 冻结 Campaign 总计划，并从当前已知输入编译首个不可变 Formal 批次，明确本批次的
+5. 在 ARM64 `capture-cli` 的 `/capture/staging` 全新 0700 根运行
+   `codex_upgrade_campaign_run_rehearsal_receipt.py atomic-double-collect`，连续两次从互不引用的 VC-0
+   控制树经真实原子入口完成 VC-1；必须同时证明 `/capture` 只读、`/capture/staging` 可写、
+   容器内 `/root/oauth-capture/runs` 与 `/capture/runs` 同 inode 且均可写，并冻结当前工具 bundle 摘要。
+   两次结果和 canonical 篡改、已有父 run、deadline 漂移、额外文件负例均通过，且请求数、扫描字节均为零。
+6. 冻结 Campaign 总计划，并从当前已知输入编译首个不可变 Formal 批次，明确本批次的
    `execute_items`、`reuse_items`、输入摘要和直接依赖；后续批次只能从前序封存输出生成。执行集合为空时
    必须生成 `incremental-noop`。
 
@@ -1779,11 +1820,39 @@ python3 -m tools.official_client_capture.codex_upgrade_campaign_run_rehearsal_re
   --receipt receipt.json
 ```
 
-该工具从 preflight VC-0 checkpoint 连续编译两个真实 VC batch，在两个独立父监督器中执行零网络
+此外，部署到 ARM64 后必须在 `capture-cli` 的 `/capture/staging` 下再建立一份全新 `0700` 根，连续执行两棵
+互不引用的 synthetic VC-0→VC-1 控制树。该演练调用真实 `compile-and-run-vc-batch` 协调器、共享 VC 制品
+builder、父监督器和子进程 attach，但 action 固定为无网络合成动作：
+
+```bash
+ATOMIC_REHEARSAL_ROOT="$(mktemp -d /capture/staging/codex-atomic-vc0-vc1.XXXXXXXX)"
+chmod 0700 "$ATOMIC_REHEARSAL_ROOT"
+
+python3 -m tools.official_client_capture.codex_upgrade_campaign_run_rehearsal_receipt \
+  atomic-double-collect \
+  --evidence-root "$ATOMIC_REHEARSAL_ROOT" \
+  --output receipt.json
+
+python3 -m tools.official_client_capture.codex_upgrade_campaign_run_rehearsal_receipt \
+  atomic-double-replay \
+  --evidence-root "$ATOMIC_REHEARSAL_ROOT" \
+  --receipt receipt.json
+```
+
+正式模式会同时验证 `aarch64`、`/capture` 只读、`/capture/staging` 可写、容器内
+`/root/oauth-capture/runs` 与 `/capture/runs` 均可写且两个 runs 别名的 device/inode 相同。宿主机上的
+`/root/oauth-capture/runs` 只读身份路径不属于本容器内演练坐标。两次运行必须各有独立 Campaign ID、state-dir、
+VC-0 checkpoint、VC-1 batch、父 run 和 VC-1 checkpoint；canonical 篡改、已有父 run、deadline 漂移和
+额外文件四个负例必须全部命中，`live_request_count=0`、`scanned_bytes=0`、`network_used=false`。工具身份
+只使用相对工具路径和文件 SHA-256，因此同一部署字节的 bundle 摘要必须能跨工作区与 ARM64 路径复算。
+
+旧分批演练的 `campaign_run_rehearsal_receipt.py collect` 从 preflight VC-0 checkpoint 连续编译两个真实
+VC batch，在两个独立父监督器中执行零网络
 合成动作并封存 checkpoint；第三批只漂移原始 deadline，必须在创建父 run 和执行动作前失败关闭。
 `replay` 会重新核对批次、checkpoint、实际执行 manifest、动作事实、父监督器终态和完整临时资产清单。
 
-`collect` 检查路径、依赖、语法、二进制、bubblewrap 和 zstd，并在 `runs／runtime` 内创建唯一临时对象，
+Job 演练的 `codex_upgrade_job_rehearsal_receipt.py collect` 检查路径、依赖、语法、二进制、bubblewrap 和
+zstd，并在 `runs／runtime` 内创建唯一临时对象，
 从两个容器别名交叉验证写入和同源映射；另以 P0 强制门禁执行真实
 `campaign-run v2 → 父 CampaignLease → Job 首次失败加两次重试` 生命周期。每轮 Job 都在
 `capture-cli` 内通过 `bwrap --unshare-net` 使用同一固定证据根并以非零码退出，宿主编排器必须依次生成

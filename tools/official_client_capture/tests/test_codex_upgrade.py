@@ -7487,6 +7487,7 @@ class CodexUpgradeTest(unittest.TestCase):
                 "canonical-import",
                 "canonical-advance",
                 "compile-vc-batch",
+                "compile-and-run-vc-batch",
                 "compile-vc-interrupted-recovery-batch",
                 "compile-vc-interrupted-recovery-continuation",
                 "finalize-vc1-deadline-orphan",
@@ -14193,6 +14194,22 @@ class ToolIdentitySideSplitTest(unittest.TestCase):
         )["components"]
         self.assertEqual(components["evaluator"]["entry_count"], len(label_paths))
         self.assertEqual(components["shared"]["entry_count"], 0)
+
+    def test_0154_evidence_labels_use_current_model_tracks(self):
+        """0.154 专用标签不得残留旧主轨或旧 Lite 轨模型名称。"""
+
+        path = Path(codex_upgrade.__file__).with_name(
+            "codex_upgrade_evidence_labels_0_154_0.json"
+        )
+        serialized = json.dumps(
+            json.loads(path.read_text(encoding="utf-8")),
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        self.assertIn("gpt-5.5", serialized)
+        self.assertIn("gpt-6-astra", serialized)
+        self.assertNotIn("gpt-5.4", serialized)
+        self.assertNotIn("gpt-5.6-luna", serialized)
 
     def test_invalidation_summary_never_overlaps_reuse(self):
         """失效 Job 与复用收据不能同时包含同一项。"""
