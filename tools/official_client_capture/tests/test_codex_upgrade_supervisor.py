@@ -157,7 +157,8 @@ class SupervisorTests(unittest.TestCase):
             evidence_root.mkdir(parents=True, mode=0o700)
             evidence_root.chmod(0o700)
             external_roots.append(evidence_root)
-        failed_root = external_roots[0]
+        failed_root = external_roots[0] / "direct"
+        failed_root.mkdir(mode=0o700)
         failed_root.chmod(0o755)
         evidence_roots = [
             *(str(value) for value in external_roots),

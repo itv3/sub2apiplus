@@ -1393,8 +1393,8 @@ v2 真实补跑；v5 失败不得再生成第六种恢复清单。
 它不是第二种普通 v2 重试：其他 Campaign、序号、批次或 v2 失败仍只能由既有唯一 v3 恢复后继承接。
 
 启用前必须同时只读证明：前序 stop reason 精确为 `action-failed:seal-official-preview`；动作诊断为
-`handled-error/ConfigurationError`，说明精确包含 `seal 廉价前检失败（scanned_bytes=0）` 和唯一不合规
-证据根；父事件摘要链证明 `prepare-official-assertion-bundle` 已以 returncode 0 成功，随后原 seal 命令仅以
+`handled-error/ConfigurationError`，说明精确包含 `seal 廉价前检失败（scanned_bytes=0）`，且其中的不合规
+目录只位于唯一冻结证据根内；父事件摘要链证明 `prepare-official-assertion-bundle` 已以 returncode 0 成功，随后原 seal 命令仅以
 returncode 1 失败；attempt `20260914T102852Z-04996800fbbe4e94` 仍为 `awaiting_receipts`，29 个 Job 全部
 `complete`，32 个冻结证据根闭合；`evidence-manifest.json`、`seal-draft.json`、`seal-preview.json` 和权限
 收口 receipt 均不存在。诊断、attempt、根列表、前后批次、Campaign plan 和前序 checkpoint 的摘要必须与

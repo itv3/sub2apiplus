@@ -5591,8 +5591,28 @@ def _validate_permission_preflight_compensation_successor(
             if root.is_relative_to(other) or other.is_relative_to(root):
                 raise SupervisorError("VC-1 权限前检补偿证据根发生嵌套。")
     failed_root = Path(message.removeprefix(message_prefix))
-    if failed_root not in roots or stat.S_IMODE(failed_root.lstat().st_mode) & 0o077 == 0:
-        raise SupervisorError("VC-1 权限前检补偿诊断目录不在 32 根或已不再开放。")
+    if not failed_root.is_absolute():
+        raise SupervisorError("VC-1 权限前检补偿诊断目录不是绝对路径。")
+    _reject_symlink_components(failed_root)
+    matching_roots = [
+        root
+        for root in roots
+        if failed_root == root or failed_root.is_relative_to(root)
+    ]
+    try:
+        failed_metadata = failed_root.lstat()
+    except OSError as error:
+        raise SupervisorError("VC-1 权限前检补偿诊断目录无法读取。") from error
+    if (
+        len(matching_roots) != 1
+        or not stat.S_ISDIR(failed_metadata.st_mode)
+        or failed_metadata.st_uid != os.geteuid()
+        or failed_metadata.st_gid != os.getegid()
+        or stat.S_IMODE(failed_metadata.st_mode) & 0o077 == 0
+    ):
+        raise SupervisorError(
+            "VC-1 权限前检补偿诊断目录不在唯一冻结根内或已不再开放。"
+        )
 
     for output in (
         attempt_root / "evidence-manifest.json",

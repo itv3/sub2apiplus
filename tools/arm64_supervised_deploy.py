@@ -82,10 +82,10 @@ from typing import Any, Callable, Mapping
 # 2026-09-14（VC-1 seal 权限前检补偿）：监督器新增只承接本次冻结 sequence 2
 # 的一次性 v2→v2 权限收口门禁；其他失败仍沿既有 v3/v4/v5 唯一恢复链停线。
 DEFAULT_TOOL_DIGEST = (
-    "2a54a1182b5cf1ddf3755c52bd7d20a2424faa4d966924fe867a739ab59556b2"
+    "e87248804bd319eddf5840a3c37487d6bb9f101dbf129a7279ddaab93e3e21f9"
 )
 DEFAULT_SUPERVISOR_DIGEST = (
-    "f77dfa954c1d702a802514c36b1d1cbc2f296619c0bf50363c36ea8f448f7fb8"
+    "17303a0c09b08b543dabf33188bcedba00daf33346e618d1ccb820149f371059"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "b9ca7b6f48b3c33a63a864a9ce7ebd617335378ea52fe9148ea161ab3b276ada"
