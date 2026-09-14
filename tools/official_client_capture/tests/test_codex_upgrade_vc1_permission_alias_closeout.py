@@ -180,16 +180,18 @@ class PermissionAliasCloseoutTests(unittest.TestCase):
             st_mtime_ns=4,
             st_nlink=1,
         )
-        with (
-            mock.patch.object(closeout, "reject_symlink_components"),
-            mock.patch.object(Path, "lstat", side_effect=[metadata, metadata]),
-        ):
-            snapshot = closeout._entry_snapshot(
-                Path("/readonly/traffic.pcap"),
-                Path("/writable/traffic.pcap"),
-                external_alias=True,
-            )
-        self.assertEqual((snapshot.uid, snapshot.gid), (100, 102))
+        for filename in ("egress.pcap", "traffic.pcap"):
+            with (
+                self.subTest(filename=filename),
+                mock.patch.object(closeout, "reject_symlink_components"),
+                mock.patch.object(Path, "lstat", side_effect=[metadata, metadata]),
+            ):
+                snapshot = closeout._entry_snapshot(
+                    Path("/readonly") / filename,
+                    Path("/writable") / filename,
+                    external_alias=True,
+                )
+                self.assertEqual((snapshot.uid, snapshot.gid), (100, 102))
 
         with (
             mock.patch.object(closeout, "reject_symlink_components"),

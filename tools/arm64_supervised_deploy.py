@@ -87,10 +87,10 @@ from typing import Any, Callable, Mapping
 # 固定 tcpdump pcap 的非特权属主边界，并新增只承接 sequence 4 在父 run 创建前
 # 确定性误拒绝的零请求 sequence 5 窄门禁。
 DEFAULT_TOOL_DIGEST = (
-    "bc0552a06c8116be185aebf988d433d0808cbdcc0094202597d01448eb852f7d"
+    "3ce4cb1b6b17e951db27842f8cd2f8f7c44f2ab6aaa9aa74640767e4cbe2395d"
 )
 DEFAULT_SUPERVISOR_DIGEST = (
-    "7d8b5ce137dc09ee2d6989cb76666d3d86bd90ce254dc0ed3d2e99679d399fa2"
+    "f9b73d1543d80fd5e6be7e5fc2963248bd82a15e3166a42a7ed850e8ae0865e0"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "b9ca7b6f48b3c33a63a864a9ce7ebd617335378ea52fe9148ea161ab3b276ada"

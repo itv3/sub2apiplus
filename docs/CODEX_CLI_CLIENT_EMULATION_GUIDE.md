@@ -1486,7 +1486,7 @@ python3 /root/docker/capture-cli/data/tools/official_client_capture/codex_upgrad
 和旧部署摘要，从当前部署回滚树加载摘要为
 `408e9d733b8997e569fbea36ab648f1bd70e45f9669accf3cc9353eb8b2566b1` 的旧 helper 并复现上述精确错误，
 再用当前 helper 只读证明 1,882 项／15 个权限缺口及固定 gap 摘要未漂移。真实 pcap 由容器内固定
-`tcpdump` 身份写入；只允许名为 `traffic.pcap` 且双别名 uid/gid 均为 `100:102` 的普通文件保留该属主，
+`tcpdump` 身份写入；只允许名为 `traffic.pcap` 或 `egress.pcap` 且双别名 uid/gid 均为 `100:102` 的普通文件保留该属主，
 目录和其他文件仍必须为 root:root。uid/gid 必须进入稳定边界并在 `fchmod` 前后二次核验。工具不得读取证据正文、修改权限、
 创建 run 或发送请求；唯一输出是以 `O_EXCL` 创建的 `0600` 收据，且必须声明
 `source_run_created=false`、`scanned_bytes=0`、`live_request_count=0`。

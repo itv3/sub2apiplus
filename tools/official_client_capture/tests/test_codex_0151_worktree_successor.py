@@ -269,11 +269,17 @@ CODEX_0154_VC1_PERMISSION_ALIAS_PREDISPATCH_CLOSEOUT_FREEZE_SUCCESSOR = (
     ROOT
     / "docs/egress/maintenance/upstream-codex-0154-vc1-permission-alias-predispatch-closeout-20260914-freeze-successor.json"
 )
-# 2026-09-14：ARM64 真实边界证明 15 个 pcap 由固定 tcpdump 100:102
-# 身份创建；只允许该精确文件类型保留非 root 属主并纳入稳定边界。
+# 2026-09-14：ARM64 真实边界证明 15 个 traffic／egress pcap 由固定
+# tcpdump 100:102 身份创建；只允许该精确文件集合保留非 root 属主。
 CODEX_0154_VC1_TCPDUMP_OWNER_BOUNDARY_FREEZE_SUCCESSOR = (
     ROOT
     / "docs/egress/maintenance/upstream-codex-0154-vc1-tcpdump-owner-boundary-20260914-freeze-successor.json"
+)
+# 2026-09-14：全量现场枚举补齐 egress.pcap 名称；允许集仍只包含两个
+# 精确 pcap 文件名，其他非 root 项继续失败关闭。
+CODEX_0154_VC1_PCAP_FILENAME_BOUNDARY_FREEZE_SUCCESSOR = (
+    ROOT
+    / "docs/egress/maintenance/upstream-codex-0154-vc1-pcap-filename-boundary-20260914-freeze-successor.json"
 )
 HISTORICAL_LEDGER = "docs/egress/maintenance/historical-source-drift-successor.json"
 SHA256_LENGTH = 64
@@ -393,6 +399,7 @@ def successor_edges(path: str) -> list[tuple[str, str]]:
         CODEX_0154_VC1_STAGING_LOADER_CLOSURE_FREEZE_SUCCESSOR,
         CODEX_0154_VC1_PERMISSION_ALIAS_PREDISPATCH_CLOSEOUT_FREEZE_SUCCESSOR,
         CODEX_0154_VC1_TCPDUMP_OWNER_BOUNDARY_FREEZE_SUCCESSOR,
+        CODEX_0154_VC1_PCAP_FILENAME_BOUNDARY_FREEZE_SUCCESSOR,
     ):
         payload = json.loads(receipt_path.read_text(encoding="utf-8"))
         _validate_successor_receipt(payload)

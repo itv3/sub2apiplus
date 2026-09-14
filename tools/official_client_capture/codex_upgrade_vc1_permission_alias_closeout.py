@@ -32,6 +32,7 @@ EXPECTED_GAP_SHA256 = "2b69ee039891bf6c58b6c787af105b9a896956b562cd0801c10ca7d2b
 # 只允许这一种文件名和身份例外，目录及其他文件仍必须由当前 root 拥有。
 TCPDUMP_UID = 100
 TCPDUMP_GID = 102
+TCPDUMP_FILENAMES = frozenset({"egress.pcap", "traffic.pcap"})
 HOST_DATA_ROOT = Path("/root/docker/capture-cli/data")
 READONLY_RUNS_ROOT = Path("/root/oauth-capture/runs")
 WRITABLE_RUNS_ROOT = HOST_DATA_ROOT / "runs"
@@ -212,8 +213,8 @@ def _entry_snapshot(
     )
     frozen_tcpdump_owner = (
         kind == "file"
-        and read_path.name == "traffic.pcap"
-        and write_path.name == "traffic.pcap"
+        and read_path.name in TCPDUMP_FILENAMES
+        and write_path.name == read_path.name
         and read_metadata.st_uid == TCPDUMP_UID
         and read_metadata.st_gid == TCPDUMP_GID
     )
