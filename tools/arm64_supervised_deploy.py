@@ -84,12 +84,13 @@ from typing import Any, Callable, Mapping
 # 2026-09-14（VC-1 权限只读别名收口）：新增只承接 sequence 3 EROFS 的
 # sequence 4 窄门禁，经逐 inode 校验的宿主可写 runs 别名执行权限收口。
 # 2026-09-14（VC-1 权限别名预派发封口）：修正真实 OAuth 两级证据根识别，
-# 并新增只承接 sequence 4 在父 run 创建前确定性误拒绝的零请求 sequence 5 窄门禁。
+# 固定 tcpdump pcap 的非特权属主边界，并新增只承接 sequence 4 在父 run 创建前
+# 确定性误拒绝的零请求 sequence 5 窄门禁。
 DEFAULT_TOOL_DIGEST = (
-    "82e52550e345c8c0c4baa1b9d4c418de1e819db19ca65b4a3f1019be0ea24d17"
+    "bc0552a06c8116be185aebf988d433d0808cbdcc0094202597d01448eb852f7d"
 )
 DEFAULT_SUPERVISOR_DIGEST = (
-    "11f5ca808d6070a67bd96e270a2fc2019dd4d9ace968039cf2e768452feaffc2"
+    "7d8b5ce137dc09ee2d6989cb76666d3d86bd90ce254dc0ed3d2e99679d399fa2"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "b9ca7b6f48b3c33a63a864a9ce7ebd617335378ea52fe9148ea161ab3b276ada"

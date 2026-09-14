@@ -28,6 +28,10 @@ ROOTS_SHA256 = "ae45b6f54c7d2333a5cdf80c5a42aa8510bc2f0083df381c2a3ed53b1116fe2d
 EXPECTED_ENTRY_COUNT = 1882
 EXPECTED_GAP_COUNT = 15
 EXPECTED_GAP_SHA256 = "2b69ee039891bf6c58b6c787af105b9a896956b562cd0801c10ca7d2b36f2842"
+# tcpdump 在 capture-cli 内以固定非特权身份写入 pcap；宿主映射为同一数值身份。
+# 只允许这一种文件名和身份例外，目录及其他文件仍必须由当前 root 拥有。
+TCPDUMP_UID = 100
+TCPDUMP_GID = 102
 HOST_DATA_ROOT = Path("/root/docker/capture-cli/data")
 READONLY_RUNS_ROOT = Path("/root/oauth-capture/runs")
 WRITABLE_RUNS_ROOT = HOST_DATA_ROOT / "runs"
@@ -61,6 +65,8 @@ class EntrySnapshot:
     size: int
     mtime_ns: int
     nlink: int
+    uid: int
+    gid: int
     external_alias: bool
 
 
@@ -182,13 +188,6 @@ def _entry_snapshot(
     reject_symlink_components(write_path, "证据可写别名路径")
     read_metadata = read_path.lstat()
     write_metadata = write_path.lstat()
-    if (
-        read_metadata.st_uid != os.geteuid()
-        or read_metadata.st_gid != os.getegid()
-        or write_metadata.st_uid != os.geteuid()
-        or write_metadata.st_gid != os.getegid()
-    ):
-        raise PermissionAliasCloseoutError(f"证据项属主漂移：{read_path}")
     if stat.S_ISDIR(read_metadata.st_mode):
         kind = "directory"
         target_mode = stat.S_IMODE(read_metadata.st_mode) & 0o700
@@ -203,6 +202,23 @@ def _entry_snapshot(
             )
     else:
         raise PermissionAliasCloseoutError(f"证据边界包含特殊文件：{read_path}")
+    owners_match = (
+        read_metadata.st_uid == write_metadata.st_uid
+        and read_metadata.st_gid == write_metadata.st_gid
+    )
+    current_owner = (
+        read_metadata.st_uid == os.geteuid()
+        and read_metadata.st_gid == os.getegid()
+    )
+    frozen_tcpdump_owner = (
+        kind == "file"
+        and read_path.name == "traffic.pcap"
+        and write_path.name == "traffic.pcap"
+        and read_metadata.st_uid == TCPDUMP_UID
+        and read_metadata.st_gid == TCPDUMP_GID
+    )
+    if not owners_match or not (current_owner or frozen_tcpdump_owner):
+        raise PermissionAliasCloseoutError(f"证据项属主漂移：{read_path}")
     if not same_type or _metadata_identity(read_metadata) != _metadata_identity(
         write_metadata
     ):
@@ -218,6 +234,8 @@ def _entry_snapshot(
         size=read_metadata.st_size,
         mtime_ns=read_metadata.st_mtime_ns,
         nlink=read_metadata.st_nlink,
+        uid=read_metadata.st_uid,
+        gid=read_metadata.st_gid,
         external_alias=external_alias,
     )
 
@@ -264,6 +282,8 @@ def _boundary_record(entry: EntrySnapshot) -> dict[str, Any]:
         "size": entry.size,
         "mtime_ns": entry.mtime_ns,
         "nlink": entry.nlink,
+        "uid": entry.uid,
+        "gid": entry.gid,
         "external_alias": entry.external_alias,
     }
 
@@ -425,6 +445,8 @@ def _harden_entry(entry: EntrySnapshot) -> None:
         expected_type = stat.S_ISDIR if entry.kind == "directory" else stat.S_ISREG
         if (
             not expected_type(metadata.st_mode)
+            or metadata.st_uid != entry.uid
+            or metadata.st_gid != entry.gid
             or _metadata_identity(metadata)
             != (entry.device, entry.inode, entry.size, entry.mtime_ns, entry.nlink)
         ):

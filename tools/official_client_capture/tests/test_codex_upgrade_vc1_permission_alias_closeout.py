@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import stat
 import tempfile
 import unittest
 from pathlib import Path
@@ -166,6 +167,42 @@ class PermissionAliasCloseoutTests(unittest.TestCase):
                     first,
                     second,
                     require_mount_modes=False,
+                )
+
+    def test_only_frozen_tcpdump_owner_is_allowed_for_nonroot_file(self) -> None:
+        metadata = mock.Mock(
+            st_mode=stat.S_IFREG | 0o600,
+            st_uid=closeout.TCPDUMP_UID,
+            st_gid=closeout.TCPDUMP_GID,
+            st_dev=1,
+            st_ino=2,
+            st_size=3,
+            st_mtime_ns=4,
+            st_nlink=1,
+        )
+        with (
+            mock.patch.object(closeout, "reject_symlink_components"),
+            mock.patch.object(Path, "lstat", side_effect=[metadata, metadata]),
+        ):
+            snapshot = closeout._entry_snapshot(
+                Path("/readonly/traffic.pcap"),
+                Path("/writable/traffic.pcap"),
+                external_alias=True,
+            )
+        self.assertEqual((snapshot.uid, snapshot.gid), (100, 102))
+
+        with (
+            mock.patch.object(closeout, "reject_symlink_components"),
+            mock.patch.object(Path, "lstat", side_effect=[metadata, metadata]),
+        ):
+            with self.assertRaisesRegex(
+                closeout.PermissionAliasCloseoutError,
+                "证据项属主漂移",
+            ):
+                closeout._entry_snapshot(
+                    Path("/readonly/not-pcap.bin"),
+                    Path("/writable/not-pcap.bin"),
+                    external_alias=True,
                 )
 
     def test_boundary_rejects_symlink_and_hardlink(self) -> None:
