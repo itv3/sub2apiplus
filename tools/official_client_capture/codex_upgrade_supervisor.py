@@ -5075,7 +5075,12 @@ def _close_failed_campaign_timing_ledger(
     event_prefix = f"campaign-run-failure-{failure_digest[:20]}"
     abandon_event_id = f"{event_prefix}-stage-abandoned"
     stop_event_id = f"{event_prefix}-stop-the-line"
-    next_action = "完成工具闭合后建立全新 VC-0；禁止继续当前 Campaign。"
+    # B9：失败父批次的唯一下一动作是先对账再从最近合法 checkpoint 恢复，而不是
+    # 直接放弃 Campaign；reconciler 判定永久停线时才向项目总账追加终态。
+    next_action = (
+        "resume-from-checkpoint：先执行 reconcile-supervisor-run／reconcile-attempt 对账，"
+        "按判定从最近合法 checkpoint 恢复或永久停线；禁止跳过对账继续当前 Campaign。"
+    )
 
     with _timing_closeout_lock(ledger_dir):
         try:

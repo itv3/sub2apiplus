@@ -343,6 +343,59 @@ class ProjectLedgerTests(unittest.TestCase):
             self.assertEqual(ledger.create_fixture_ledger(root), ledger_root)
             self.assertEqual(ledger.register_existing_campaign(staged)["status"], "duplicate")
 
+    def test_supersede_approval_releases_formal_slot_once(self) -> None:
+        """B8：同版本无终态 formal 达上限后，只能凭一次性批准收据取代；head 变化或用过即失效。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            ledger_root = _create(root, formal_open_limit=1)
+            first = _campaign(root, "c1")
+            _register(root, first, "c1")
+            second = _campaign(root, "c2")
+            with self.assertRaisesRegex(ledger.ProjectLedgerError, "已达上限"):
+                _register(root, second, "c2")
+            with self.assertRaisesRegex(ledger.ProjectLedgerError, "未在总账注册"):
+                ledger.create_supersede_approval(ledger_root, superseded_campaign_id="c9", approved_by="老板")
+            approval = ledger.create_supersede_approval(ledger_root, superseded_campaign_id="c1", approved_by="老板")
+            payload = json.loads(Path(approval["approval_path"]).read_text(encoding="utf-8"))
+            self.assertEqual(payload["schema_version"], ledger.SUPERSEDE_APPROVAL_SCHEMA)
+            self.assertEqual(payload["admission_head_sha256"], ledger.replay_head(ledger_root)["head_sha256"])
+            applied = ledger.apply_supersede_approval(ledger_root, Path(approval["approval_path"]))
+            head = ledger.replay_head(ledger_root)
+            self.assertEqual(head["terminal_campaigns"]["c1"]["terminal_reason"], "superseded")
+            self.assertEqual(head["operations"][applied["operation_id"]]["event_type"], "campaign_terminal")
+            # 用过即失效；被取代 Campaign 也不能再签发。
+            with self.assertRaisesRegex(ledger.ProjectLedgerError, "已使用"):
+                ledger.apply_supersede_approval(ledger_root, Path(approval["approval_path"]))
+            with self.assertRaisesRegex(ledger.ProjectLedgerError, "已终态"):
+                ledger.create_supersede_approval(ledger_root, superseded_campaign_id="c1", approved_by="老板")
+            with self.assertRaisesRegex(ledger.ProjectLedgerError, "已终态"):
+                ledger.assert_campaign_admitted(first, command="resume", require=True)
+            # 名额释放后 c2 可注册；随后 head 变化让先签的收据失效。
+            _register(root, second, "c2")
+            stale = ledger.create_supersede_approval(ledger_root, superseded_campaign_id="c2", approved_by="老板")
+            ledger.append_project_event(
+                ledger_root,
+                operation_id="noise-repair",
+                event_type="root_cause_repaired",
+                payload={"root_cause_id": "rc1-00000000000000000000"},
+                source_batch_sha256=None,
+            )
+            with self.assertRaisesRegex(ledger.ProjectLedgerError, "head 已变化"):
+                ledger.apply_supersede_approval(ledger_root, Path(stale["approval_path"]))
+            self.assertNotIn("c2", ledger.replay_head(ledger_root)["terminal_campaigns"])
+            # CLI 往返：重新签发并消费。
+            self.assertEqual(
+                ledger.main(["supersede-approval-create", "--ledger-dir", str(ledger_root), "--campaign-id", "c2", "--approved-by", "老板"]),
+                0,
+            )
+            approvals = sorted((ledger_root / ledger.SUPERSESSIONS_DIR_NAME / "approvals").glob("supersede-c2-*.json"))
+            self.assertEqual(len(approvals), 2)
+            fresh = [p for p in approvals if json.loads(p.read_text(encoding="utf-8"))["admission_head_sha256"] == ledger.replay_head(ledger_root)["head_sha256"]]
+            self.assertEqual(len(fresh), 1)
+            self.assertEqual(ledger.main(["supersede-approval-apply", "--ledger-dir", str(ledger_root), "--approval", str(fresh[0])]), 0)
+            self.assertEqual(ledger.replay_head(ledger_root)["terminal_campaigns"]["c2"]["terminal_reason"], "superseded")
+
     def test_concurrent_plans_only_one_registers_under_formal_limit(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()

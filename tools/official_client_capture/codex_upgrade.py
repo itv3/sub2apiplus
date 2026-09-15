@@ -15092,6 +15092,9 @@ def _assert_project_ledger_consumer(command: str, arguments: argparse.Namespace)
         consumer = "resume"
     elif command == "capture-official" and getattr(arguments, "capture_action", None) == "seal":
         consumer = "seal"
+    elif command in {"compare", "accept"}:
+        # B9：compare／accept 写比较与验收收据，同样先经项目总账准入门禁。
+        consumer = command
     if consumer is None:
         return
     campaign_dir = getattr(arguments, "campaign_dir", None)
@@ -24516,6 +24519,32 @@ def _campaign_lease_status(
     }
 
 
+def _project_ledger_status(campaign_dir: Path, campaign_id: str) -> dict[str, Any] | None:
+    """B9：status 只读展示项目总账 head 的两层预算与终态事实；找不到总账时为 None。"""
+
+    root = codex_upgrade_project_ledger.find_project_ledger(campaign_dir.parent)
+    if root is None:
+        return None
+    try:
+        head = codex_upgrade_project_ledger.replay_head(root)
+        plan, _raw = codex_upgrade_project_ledger._load_plan(root)
+    except (OSError, codex_upgrade_project_ledger.ProjectLedgerError) as error:
+        return {"path": str(root), "error": str(error)}
+    return {
+        "path": str(root),
+        "head_sequence": head["sequence"],
+        "head_sha256": head["head_sha256"],
+        "blocked": head["blocked"],
+        "absolute_deadline_utc": plan["absolute_deadline_utc"],
+        "live_request_budget": head["live_request_budget"],
+        "remaining_live_requests": head["remaining_live_requests"],
+        "root_causes_at_limit": head["root_causes_at_limit"],
+        "campaign_registered": campaign_id in head["registered_campaigns"],
+        "campaign_rejected": head["rejected_campaigns"].get(campaign_id),
+        "campaign_terminal": head["terminal_campaigns"].get(campaign_id),
+    }
+
+
 def campaign_status(
     campaign_dir: Path,
     candidate_id: str | None = None,
@@ -24888,6 +24917,21 @@ def campaign_status(
     else:
         status = "planned"
         next_command = "capture-official"
+    project_ledger_status = _project_ledger_status(
+        campaign_dir, str(manifest.get("campaign_id", ""))
+    )
+    if project_ledger_status is not None and "error" not in project_ledger_status:
+        if project_ledger_status["campaign_terminal"] is not None:
+            next_command = (
+                "Campaign 已在项目总账终态（"
+                f"{project_ledger_status['campaign_terminal']['terminal_reason']}）；"
+                "只读保留，不得派发、resume、复用或 seal"
+            )
+        elif project_ledger_status["blocked"]:
+            next_command = (
+                "项目总账 blocked：只允许 accounting_resolved／root_cause_repaired／"
+                "reconciliation_committed／campaign_terminal，禁止注册、派发、resume、复用与 seal"
+            )
     return {
         "schema_version": "codex-upgrade-status/v2",
         "verification_mode": "shallow",
@@ -24917,6 +24961,7 @@ def campaign_status(
         "contamination_records": contamination_records,
         "campaign_lease": lease_status,
         "campaign_lease_stop_receipts": lease_stop_receipts,
+        "project_ledger": project_ledger_status,
         "next_command": next_command,
     }
 

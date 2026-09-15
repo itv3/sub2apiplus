@@ -443,6 +443,27 @@ def verify_scenario_source_spec(
     }
 
 
+def project_ledger_summary(supervisor: Any, data_root: Path) -> dict[str, Any] | None:
+    """B9：部署收据只读记录生产数据根下项目总账 head 的两层预算事实；没有总账时为 None。"""
+
+    ledger_module = getattr(supervisor, "project_ledger", None)
+    if ledger_module is None:
+        return None
+    root = ledger_module.find_project_ledger(data_root / "evidence" / "campaigns")
+    if root is None:
+        return None
+    head = ledger_module.replay_head(root)
+    plan, _raw = ledger_module._load_plan(root)
+    return {
+        "path": str(root),
+        "head_sequence": head["sequence"],
+        "head_sha256": head["head_sha256"],
+        "blocked": head["blocked"],
+        "remaining_live_requests": head["remaining_live_requests"],
+        "absolute_deadline_utc": plan["absolute_deadline_utc"],
+    }
+
+
 def load_supervisor(staging_root: Path) -> Any:
     module_root = staging_root / "tools" / "official_client_capture"
     module_path = module_root / "codex_upgrade_supervisor.py"
@@ -849,6 +870,11 @@ def main(argv: list[str] | None = None) -> int:
                     arguments.expected_assertion_preparer_digest,
                 ),
             )
+            ledger_summary = record_step(
+                client,
+                "enable:read-project-ledger",
+                lambda: project_ledger_summary(supervisor, control_root.parent),
+            )
             receipt = {
                 "schema_version": "codex-arm64-supervisor-enable/v1",
                 "status": "passed",
@@ -879,6 +905,8 @@ def main(argv: list[str] | None = None) -> int:
                 "switched_archived_documents": list(switched_archived_documents),
                 "installed_runtime_documents": list(installed_documents),
                 "supervisor_run_dir": str(client.run_dir),
+                # B9：项目总账 head 摘要；生产数据根下没有总账时记录为 null。
+                "project_ledger": ledger_summary or None,
             }
             record_step(
                 client,

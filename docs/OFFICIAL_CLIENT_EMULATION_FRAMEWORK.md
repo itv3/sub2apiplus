@@ -655,8 +655,9 @@ supervisor-run reconciler 对账；reservation 之后的任何中断由 attempt 
 可恢复的 attempt 必须先输出零请求恢复预览（冻结 complete／failed／indeterminate／pending 闭集与预计新增
 请求），经操作员批准后才能补跑；父监督器中断可恢复时阶段保持 active 并重新派发同一批次。永久停线时
 写阶段废弃与停线事件并向项目总账追加终态事件。Job 完成态以 result 与 checkpoint 同时存在为准，有证据
-无终态 checkpoint 视为不确定并归入失败集合。下文 `KeyboardInterrupt` 孤儿、续接、收尾与 deadline 孤儿
-封口条款只对已采用它们的历史 Campaign 保持只读解释，不再是新 Campaign 的恢复模板。
+无终态 checkpoint 视为不确定并归入失败集合。下文 `KeyboardInterrupt` 孤儿条款只对已采用它的历史
+Campaign 保持只读解释，不再是新 Campaign 的恢复模板；续接、收尾与 deadline 孤儿封口条款已于
+2026-09-16 连同其执行入口删除，历史收据只按客户端历史审计读取。
 
 父监督器因明确的 `KeyboardInterrupt` 失败、同一 attempt 已有追加式 Job checkpoint 但尚未写入终态时，
 只有在目标、账号权限、环境语义和数据面身份均未变化的情况下，才允许使用客户端专用的中断恢复合同。
@@ -668,28 +669,6 @@ deadline、连续时间账本、当前部署收据及逐文件工具差异。产
 输出恢复预览；其边界必须是 `reservation_exists=false`、`live_request_count=0`、`scanned_bytes=0`。
 预览不得执行任何 Job。操作员确认 execute／reuse 闭集后，才可由下一份普通阶段批次派发真实补跑；任何
 工具都不得把“恢复预览成功”解释为阶段 Job 已执行或 VC 阶段已完成。
-
-若该唯一恢复后继已经完成 attempt 封口，却因恢复工具自身的确定性、零请求路径缺陷在 transition 签发前
-失败，则不得改写 attempt、重做环境 after 探针或直接重跑同一清单。只有只读重放能够逐字证明失败诊断、
-既有 attempt 自摘要、原恢复合同、失败父链和零请求边界均未漂移时，客户端才可定义一个版本化、一次性的
-`evaluator run` 续接清单。该清单必须绑定失败恢复清单及其诊断、新部署收据、失败恢复时工具到当前工具的
-纯评估／控制变化，以及 Campaign 原工具到当前工具的最终有效变化；不得新增产出侧变化。续接只允许签发
-原 transition 并再次输出零请求预览，成功后才回到普通阶段批次。
-
-若该一次性续接又在 transition 签发前因父清单自绑定摘要的确定性规范化缺陷失败，只有同时满足以下条件
-才能追加最后一个版本化收尾清单：失败诊断逐字命中已批准缺陷，父清单除摘要算法外的全部绑定成立，原
-attempt／合同／探针均未改写，且 reservation、真实请求和扫描字节增量均为零。收尾清单必须逐字绑定此前
-全部失败父链、原续接清单、新部署收据及纯评估／控制工具变化；成功后回到普通阶段批次，失败则永久停线，
-不得继续扩展恢复版本。
-
-若真实补跑已取得 reservation 并执行部分 Job，随后父监督器因 **Campaign 原始绝对 deadline 到期**进入
-`watchdog-aborted`，该 attempt 只能由客户端专用的 deadline orphan finalizer 直接封口。不得为它编译后继
-恢复清单、重新运行 Job、创建新 reservation 或进入下一 VC 阶段。finalizer 必须在 `campaign-run` 和
-Campaign lease 之外运行，只能依据原 reservation、追加式 checkpoint、失败父监督器和连续时间账本：补齐
-after／环境恢复／超时终态，按 checkpoint 明确登记的基础 evidence roots 核算增量 live 请求，写入不可变
-失败 attempt，并向原时间账本追加唯一永久停线事件。请求审计不得遍历 `.failed-attemptN` 等未登记归档；
-finalizer 自身的模型请求数必须为零。封口后当前 Campaign 永久停止，唯一下一动作是修复并闭合工具后建立
-新的 VC-0；原 deadline 不得用新的收口预算替换或延长。
 
 任何恢复分支都不得改写历史实体或自动重发已封存的官方请求；没有实际执行项时不得创建空转身份。
 
@@ -710,6 +689,14 @@ Campaign 计划规定，本框架不为不同客户端设置统一固定时长�
 以逐请求身份键全局去重累计，估计按来源去重。任何失败先入账后判定；账务无法确定时项目总账进入 blocked，
 blocked 期间只允许补账、根因修复、对账提交与终态事件。总账 blocked、绝对截止到达、预算耗尽或根因达
 上限时，所有 Campaign 的注册、派发、恢复、复用与封存一律拒绝。
+
+根因身份只由组件、稳定错误码、失败步骤与错误码登记的稳定维度生成，诊断全文只进审计；同根因在项目内
+跨 Campaign 累计，达到冻结上限即拒绝，修复以独立修复收据清零且不激活历史 Campaign；枚举表或算法版本
+变化必须携带旧新映射并继承累计次数。项目总账的消费者不止派发入口：状态查询只读展示两层预算与终态
+事实，比较与验收作为消费者经准入门禁，受管部署收据记录总账 head 摘要。同版本无终态 Formal Campaign
+达到上限后不得再建；取代既有 Campaign 只能凭绑定总账 head 的一次性人工批准收据追加终态事件，
+head 变化或用过一次即失效。失败父批次的唯一下一动作是先对账再从最近合法 checkpoint 恢复，永久停线
+只能由对账判定得出。
 
 ## 5.4 修改共享合同或运行时
 

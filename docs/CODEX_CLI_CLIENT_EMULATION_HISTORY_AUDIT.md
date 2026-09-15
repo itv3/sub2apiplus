@@ -59,3 +59,21 @@ Schema／测试为准。历史收据、attempt、Ledger 和 producer 字段保�
 | `4.5.3 accept 前置与正式验收` | §4.5.6 |
 | `4.6 生产启用与回滚` | §4.6 VC-6 |
 | `第五部分 非版本变更维护` | 第五部分 Codex 兼容代码退休附加门禁 |
+
+<a id="codex-0154-retired-entrypoints"></a>
+## 4. 0.154 首轮事故链一次性入口的删除清单（2026-09-16）
+
+0.154 首轮正式 VC-1 曾为一条具体事故链逐个增加 sequence 专用恢复入口。改造方案 B2～B6 在 reconciler
+（`reconcile-supervisor-run`／`reconcile-attempt`）成为唯一对账入口后，把这些执行分支连同其硬编码锚点删除。
+删除以带证明的 freeze successor（`passed_with_deletions`，逐路径无引用扫描与历史读取器）登记；历史 run、
+attempt 与收据保持生成时原文，只读解释，不得用当前工具重放或改写。
+
+| 已删除入口／文件 | 当时用途 | 删除理由 | 当前读取方式 |
+|---|---|---|---|
+| `codex_upgrade_vc1_permission_alias_predispatch_closeout.py` | sequence 4 在父 run 创建前被只读前检拒绝后的零请求封口 | 只服务一次事故，锚点为 15 个硬编码摘要；通用失败由 reconciler 对账 | 收据 `sequence4-predispatch-closeout-receipt.json` 只读；无历史 reader 需求 |
+| `codex_upgrade_vc1_permission_alias_closeout.py` | 经宿主可写别名 `fchmod` 收口证据权限 | 已由通用 `harden-evidence-permissions` 两步式收口取代 | 收据 `sequence4/5-permission-alias-closeout-receipt.json` 只读 |
+| 监督器 `VC1_PERMISSION_*` 37 个常量与三个专用后继验证器 | 逐字绑定 sequence 2～5 的失败父链 | 一次性锚点不可复用；失败父批次只允许普通零请求恢复预览或唯一 v3 | 历史 run 目录只读 |
+| `compile-vc-interrupted-recovery-continuation`、`continue-vc1-interruption`、`campaign-run/v4`、`/v5` | 承接失败 v3／v4 的续接与收尾清单 | 只对两次确定性工具缺陷有效；v3 失败改为停线并由 reconciler 对账 | 历史清单与 transition 只读；`interrupted-recovery-transition.json` 由主编排器只读 loader 解释 |
+| `finalize-vc1-deadline-orphan` 及 23 个 `_deadline_orphan_*` 执行 helper、VC-0 收尾的孤儿请求审计 | 原 deadline 到期后直接封口孤儿 attempt 并追加唯一停线事件 | 冻结了 `29/27/2/15/0/12` 与 `26+38=64` 等一次事故数量；deadline 到期由 reconciler 判定 `deadline_wall_clock` | `deadline_orphan_finalization` 字段、合同与审计由主编排器只读 loader 按结构自洽校验 |
+| `repair-failure-closure`（指南 §4.0.4 段落） | 修复 VC-0 收口失败闭合的零请求计数缺陷 | 文档条款退役；代码入口只保留历史重放 | 审计目录只读 |
+

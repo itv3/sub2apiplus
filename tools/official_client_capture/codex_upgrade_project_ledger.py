@@ -77,6 +77,11 @@ CAMPAIGN_PLAN_SCHEMA = "upgrade-campaign-ledger-plan/v1"
 ENTRY_SCHEMA = "upgrade-outbox-entry/v2"
 COMMIT_SCHEMA = "upgrade-outbox-commit/v2"
 REPAIR_SCHEMA = "root-cause-repair/v1"
+# B8：同版本无终态 formal Campaign 达到 formal_open_limit 后，只能凭一次性人工批准收据取代
+# 既有 Campaign（追加 campaign_terminal／superseded 释放名额）；收据绑定签发时的总账 head，
+# head 变化或用过一次即失效。
+SUPERSEDE_APPROVAL_SCHEMA = "campaign-supersede-approval/v1"
+SUPERSESSIONS_DIR_NAME = "supersessions"
 RECONCILE_REPORT_SCHEMA = "project-ledger-reconcile/v1"
 LEDGER_DIR_NAME = "upgrade-project-ledger"
 CAMPAIGN_LEDGER_DIR_NAME = "ledger"
@@ -103,7 +108,8 @@ REQUEST_STATUSES = ("resolved", "estimated", "unresolved")
 BLOCKED_ALLOWED_EVENTS = frozenset(
     {"accounting_resolved", "root_cause_repaired", "reconciliation_committed", "campaign_terminal"}
 )
-CONSUMER_COMMANDS = frozenset({"plan", "reuse-official-evidence", "campaign-run", "resume", "seal"})
+# B9：compare／accept 也是总账消费者，写收据前先经准入门禁。
+CONSUMER_COMMANDS = frozenset({"plan", "reuse-official-evidence", "campaign-run", "resume", "seal", "compare", "accept"})
 ESTIMATION_POLICIES = ("none", "upper_bound_from_sibling", "upper_bound_from_sibling_or_turn_ratio")
 REPAIR_KINDS = ("code", "environment")
 DEFAULT_RETRY_LIMIT = 2
@@ -1209,6 +1215,7 @@ def reconcile_project_ledger(root: Path, *, campaign_dir: Path | None = None, no
             if ledger_dir.exists():
                 sources.append(("campaign", _private_dir(ledger_dir, "Campaign 账本目录") / "outbox", campaign_dir))
         sources.append(("repairs", root / "repairs" / "outbox", None))
+        sources.append(("supersessions", root / SUPERSESSIONS_DIR_NAME / "outbox", None))
         for kind, outbox, source_campaign in sources:
             for _n, batch_dir in _batch_dirs(outbox):
                 batch = _read_batch(batch_dir)
@@ -1469,6 +1476,104 @@ def record_root_cause_repair(
     return {"operation_id": operation_id, "receipt_path": str(receipt_path), "receipt_sha256": receipt_sha256, "batch_sha256": batch["batch_sha256"], "head_sequence": report["head_sequence"]}
 
 
+def create_supersede_approval(
+    root: Path,
+    *,
+    superseded_campaign_id: str,
+    approved_by: str,
+    now: str | None = None,
+) -> dict[str, Any]:
+    """签发一次性人工批准收据（B8）：绑定当前总账 head、被取代 Campaign、批准人与时间。
+
+    只对已注册、未终态的 formal Campaign 签发；收据只写一次，不改写既有文件。收据在
+    签发后的 head 上才有效，总账再追加任何事件都会让它失效，须重新批准。
+    """
+
+    _safe_id(superseded_campaign_id, "superseded_campaign_id")
+    if not isinstance(approved_by, str) or not approved_by.strip():
+        raise ProjectLedgerError("取代批准必须写明批准人")
+    with project_lock(root):
+        plan, _raw = _load_plan(root)
+        head = _replay(root, plan, _load_events(root), rebuild_cache=False)
+        registered = head["registered_campaigns"].get(superseded_campaign_id)
+        if registered is None:
+            raise ProjectLedgerError(f"被取代 Campaign 未在总账注册：{superseded_campaign_id}")
+        if superseded_campaign_id in head["terminal_campaigns"]:
+            raise ProjectLedgerError(f"被取代 Campaign 已终态：{superseded_campaign_id}")
+        if registered.get("campaign_mode") != "formal":
+            raise ProjectLedgerError("只能取代 formal Campaign")
+        receipt = {
+            "schema_version": SUPERSEDE_APPROVAL_SCHEMA,
+            "project_id": plan["project_id"],
+            "superseded_campaign_id": superseded_campaign_id,
+            "target_version": registered.get("target_version"),
+            "approved_by": approved_by.strip(),
+            "approved_at_utc": now or _utc_now(),
+            "admission_head_sha256": head["head_sha256"],
+            "head_sequence": head["sequence"],
+        }
+        receipt_sha256 = _digest(receipt)
+        supersessions = _private_dir(root / SUPERSESSIONS_DIR_NAME, "supersessions 目录", create=True)
+        approvals = _private_dir(supersessions / "approvals", "取代批准目录", create=True)
+        _private_dir(supersessions / "outbox", "取代 outbox 目录", create=True)
+        receipt_path = approvals / f"supersede-{superseded_campaign_id}-{receipt_sha256[:16]}.json"
+        _write_once(receipt_path, receipt)
+    return {"approval_path": str(receipt_path), "approval_sha256": receipt_sha256, "admission_head_sha256": receipt["admission_head_sha256"]}
+
+
+def apply_supersede_approval(root: Path, approval_path: Path, *, now: datetime | None = None) -> dict[str, Any]:
+    """消费取代批准收据（B8）：head 未变才有效，追加 campaign_terminal（superseded）；用过即失效。"""
+
+    payload, _raw = _read_json(approval_path, "取代批准收据")
+    receipt = _expect(
+        payload,
+        {"schema_version", "project_id", "superseded_campaign_id", "target_version", "approved_by", "approved_at_utc", "admission_head_sha256", "head_sequence"},
+        "取代批准收据",
+    )
+    if receipt.get("schema_version") != SUPERSEDE_APPROVAL_SCHEMA:
+        raise ProjectLedgerError("取代批准收据 schema 非法")
+    campaign_id = _safe_id(receipt.get("superseded_campaign_id"), "superseded_campaign_id")
+    if not isinstance(receipt.get("approved_by"), str) or not receipt["approved_by"].strip():
+        raise ProjectLedgerError("取代批准收据缺少批准人")
+    _timestamp(receipt.get("approved_at_utc"), "approved_at_utc")
+    approval_sha256 = _digest(receipt)
+    operation_id = f"supersede:{campaign_id}:{approval_sha256[:16]}"
+    with project_lock(root):
+        plan, _raw = _load_plan(root)
+        head = _replay(root, plan, _load_events(root), rebuild_cache=False)
+        if receipt.get("project_id") != plan["project_id"]:
+            raise ProjectLedgerError("取代批准收据不属于本项目总账")
+        if operation_id in head["operations"]:
+            raise ProjectLedgerError("取代批准收据已使用，用过即失效")
+        if head["head_sha256"] != receipt.get("admission_head_sha256"):
+            raise ProjectLedgerError("总账 head 已变化，取代批准失效，须重新批准")
+        if campaign_id not in head["registered_campaigns"]:
+            raise ProjectLedgerError(f"被取代 Campaign 未注册：{campaign_id}")
+        if campaign_id in head["terminal_campaigns"]:
+            raise ProjectLedgerError(f"被取代 Campaign 已终态：{campaign_id}")
+        ledger_dir = _private_dir(root / SUPERSESSIONS_DIR_NAME, "supersessions 目录", create=True)
+        _private_dir(ledger_dir / "outbox", "取代 outbox 目录", create=True)
+        batch = write_batch(
+            ledger_dir,
+            operation_id=operation_id,
+            event_type="campaign_terminal",
+            payload={
+                "campaign_id": campaign_id,
+                "terminal_reason": "superseded",
+                "approval_sha256": approval_sha256,
+                "approved_by": receipt["approved_by"],
+                "approved_at_utc": receipt["approved_at_utc"],
+                "admission_head_sha256": receipt["admission_head_sha256"],
+            },
+            source={"kind": "supersede_approval", "sha256": approval_sha256},
+        )
+        report = reconcile_project_ledger(root, now=now)
+    pushed = [item for item in report["results"] if item.get("operation_id") == operation_id]
+    if not pushed or pushed[-1].get("status") not in {"appended", "duplicate"}:
+        raise ProjectLedgerError(f"取代事件未推入总账：{pushed}")
+    return {"operation_id": operation_id, "approval_sha256": approval_sha256, "batch_sha256": batch["batch_sha256"], "head_sequence": report["head_sequence"], "head_sha256": report["head_sha256"]}
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -1574,6 +1679,13 @@ def build_parser() -> argparse.ArgumentParser:
     admitted = subparsers.add_parser("assert-campaign-admitted", help="消费者门禁只读检查")
     admitted.add_argument("--campaign-dir", type=Path, required=True)
     admitted.add_argument("--consumer", choices=sorted(CONSUMER_COMMANDS), required=True)
+    approve = subparsers.add_parser("supersede-approval-create", help="签发一次性取代批准收据（绑定当前 head）")
+    approve.add_argument("--ledger-dir", type=Path, required=True)
+    approve.add_argument("--campaign-id", required=True, help="被取代的 formal Campaign ID")
+    approve.add_argument("--approved-by", required=True)
+    apply = subparsers.add_parser("supersede-approval-apply", help="消费取代批准收据并追加 campaign_terminal（superseded）")
+    apply.add_argument("--ledger-dir", type=Path, required=True)
+    apply.add_argument("--approval", type=Path, required=True)
     return parser
 
 
@@ -1615,6 +1727,10 @@ def main(argv: list[str] | None = None) -> int:
                     raise ProjectLedgerError("--binding 必须为 KEY=VALUE")
                 bindings[key] = value
             result = record_root_cause_repair(arguments.ledger_dir, root_cause_id=arguments.root_cause_id, kind=arguments.kind, bindings=bindings, note=arguments.note)
+        elif arguments.command == "supersede-approval-create":
+            result = create_supersede_approval(arguments.ledger_dir, superseded_campaign_id=arguments.campaign_id, approved_by=arguments.approved_by)
+        elif arguments.command == "supersede-approval-apply":
+            result = apply_supersede_approval(arguments.ledger_dir, arguments.approval)
         else:
             result = assert_campaign_admitted(arguments.campaign_dir, command=arguments.consumer, require=True) or {}
     except (ProjectLedgerError, OSError, root_cause.RootCauseError) as error:

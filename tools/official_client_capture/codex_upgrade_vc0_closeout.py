@@ -1018,6 +1018,8 @@ def _validate_managed_tool_deploy(
         if isinstance(payload, Mapping) and MANAGED_TOOL_DEPLOY_V2_FIELDS & set(payload)
         else frozenset()
     )
+    # B9：新部署收据只读记录项目总账 head 摘要（可为 null）；历史收据没有该字段。
+    optional_fields = {"project_ledger"} if isinstance(payload, Mapping) and "project_ledger" in payload else set()
     receipt = _expect(
         payload,
         {
@@ -1030,6 +1032,7 @@ def _validate_managed_tool_deploy(
             "production_doc_root",
             "tool_files_sha256",
             *v2_fields,
+            *optional_fields,
             "supervisor_sha256",
             "assertion_preparer_sha256",
             "rollback_backup",

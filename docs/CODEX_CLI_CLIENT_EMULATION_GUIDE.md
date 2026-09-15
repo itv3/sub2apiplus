@@ -1247,9 +1247,8 @@ Framework §5.3 是升级总操作入口并规定 `VC-0～VC-6` 顺序；本部�
    `compile-and-run-vc-batch` 在同一个非阻塞 state-dir 锁内编译下一批并立即创建父 run；
    `compile-vc-batch` 仅允许历史读取和内部测试，不得用于新的 Formal 批次；
    `compile-vc-interrupted-recovery-batch` 只为下述 `KeyboardInterrupt` 孤儿编译一次 v3 预览批次；
-   `codex_upgrade_vc1_permission_alias_predispatch_closeout.py` 只封存下述 sequence 4 在父 run 创建前的
-   唯一确定性拒绝；
-   `finalize-vc1-deadline-orphan` 只直接封口下述原 deadline 已过期的唯一孤儿。
+   sequence 4 预派发封口与 deadline 孤儿直接封口两个一次性入口已于 2026-09-16 删除，其历史收据只按
+   [历史审计](CODEX_CLI_CLIENT_EMULATION_HISTORY_AUDIT.md#codex-0154-retired-entrypoints)读取。
    这些入口都不得放入 `campaign-run` 动作队列，
    不得延长原始 deadline 或执行阶段数据面动作。
 3. 身份变化、失败恢复和 `execute／reuse` 计算统一执行 Framework §5.1.2、§5.3.2～§5.3.4；各阶段只写
@@ -1296,6 +1295,16 @@ direct 分支按总账冻结的 `estimation_policy` 计上界并标记，无同�
 只进审计详情；枚举表或算法变化必须携带旧新映射收据并继承累计次数。代码缺陷的修复以
 `root-cause-repair/v1` 收据绑定修复提交、定向回归与部署收据，产生 `root_cause_repaired` 事件清零，
 不激活历史 Campaign。
+
+枚举表 `root_cause_codes.json`（`codex-upgrade-root-cause-codes/v1`，算法 `structured-root-cause/v1`）
+当前登记 16 个稳定错误码：8 个结构化码——`campaign-run.action-failed`（supervisor，维度 `phase`）、
+`vc0-closeout.step-failed`（vc0-closeout）、`supervisor-run.interrupted`、`attempt.interrupted`、
+`attempt.deadline-expired`、`attempt.accounting-unresolved`、`attempt.environment-contaminated`、
+`attempt.identity-changed`（均为 reconciler，维度 `phase`）——以及 8 个只读 `legacy` 字面量，后者只用于
+把 0.151／0.154 历史账本的旧根因映射进同一计数空间，不得由新工具产生。项目总账冻结
+`root_cause_codes_sha256` 与 `root_cause_algorithm_version`；同根因在同一项目内跨 Campaign 累计，达到
+`same_root_cause_retry_limit`（默认 2）即拒绝注册、派发、恢复、复用与封存，直到修复收据清零。生产者
+只能通过 `codex_upgrade_root_cause.structured_root_cause` 生成根因 ID，禁止手写字面量。
 
 **工具身份策略 v2。** 受管目录内的 `tool_identity_policy_v2.json` 把受管文件分为 `wire_producer`、
 `evidence_semantics`、`control` 三层加 `ignored`，编排器 `codex_upgrade.py` 按函数闭包分别归入 wire
@@ -1390,14 +1399,10 @@ result_key = item_id + input_sha256 + environment_sha256 + direct_dependency_sha
 唯一派发入口是 `tools/official_client_capture/codex_upgrade_supervisor.py campaign-run`；VC-0～VC-6 新流程使用
 `codex-upgrade-campaign-run/v2`，并绑定 Campaign 总计划、批次、直接前序 checkpoint 和原始绝对 deadline。
 `codex-upgrade-campaign-run/v3` 不是普通阶段版本，只允许作为一个失败 v2 的唯一直接后继，用于 VC-1
-中断恢复的零请求预览；成功 v3 之后的真实补跑仍回到普通 v2。
-`codex-upgrade-campaign-run/v4` 同样不是普通阶段版本；它只承接已经封口 attempt、但因
-`watchdog-heartbeat.json` 路径基准缺陷失败的唯一 v3，并且只能作为 sequence 3 执行一次。其他 v3 失败
-一律停线，不能借用 v4。
-`codex-upgrade-campaign-run/v5` 只承接该唯一 v4 因父 `campaign-run` 清单摘要换行规范不一致而产生的
-确定性零请求失败，并且只能作为 sequence 4 执行一次；它不是通用重试版本。其他 v4 失败一律停线。
+中断恢复的零请求预览；成功 v3 之后的真实补跑仍回到普通 v2。v3 失败一律停线并交由 reconciler 对账。
+历史 `codex-upgrade-campaign-run/v4`／`v5` 续接与收尾版本已于 2026-09-16 删除：监督器不再接受这两种
+清单，其历史 run 目录只读保留并按历史审计解释。
 
-上述 v3～v5 和下文 sequence 3～5 仅用于只读解释 0.154.0 首轮事故链，不是新 Campaign 的恢复模板。
 通用工具闭合后不得再增加 sequence 专用恢复版本；新批次若在编译完成后、父 run 创建前失败，只能由
 `codex_upgrade_predispatch_stop.py record` 写入 `codex-upgrade-predispatch-stop/v1` 停线收据。该收据固定
 `source_run_created=false`、`successor_eligible=false`、`live_request_count=0`、`scanned_bytes=0`，唯一
@@ -1497,218 +1502,6 @@ v3 恰好包含一个 `recover-vc1-interruption` 动作。它只补齐原 attemp
 `resume --rerun-failed --acknowledge-live-requests` 执行冻结的 execute 闭集；复用项继续只读承接。
 合同、transition、源 attempt、失败 v2 和预览 v3 均只写追加，任一摘要、owner nonce、Ledger head、部署
 工具或闭集漂移都停线，不得重编同一序号或新建 reservation 试探。
-
-历史 v3 若已写入自摘要有效的失败 `attempt.json`，且其唯一失败诊断精确为
-`ConfigurationError: watchdog heartbeat 越出当前 attempt。`，不得重跑 v3。先部署修复后的工具，再直接
-编译一次性 v4：
-
-```bash
-python3 tools/official_client_capture/codex_upgrade.py \
-  compile-vc-interrupted-recovery-continuation \
-  --campaign-dir /绝对路径/campaign \
-  --sequence 3 \
-  --recovery-contract /绝对路径/campaign/control/vc/recovery-contracts/0002-vc-1.json \
-  --failed-recovery-supervisor-run-dir /绝对路径/原state-dir/run-<失败v3-owner-nonce> \
-  --deployment-receipt /绝对路径/修复后ARM64工具部署收据
-```
-
-随后仍在原 `state-dir` 执行生成的 `0003-vc-1.json`。v4 会严格重放 sequence 1 的失败 v2、sequence 2 的
-失败 v3、原合同、不可变 attempt、新部署收据及两段逐文件工具变化；历史错误 heartbeat 绑定只在
-`status=failed`、`interrupted_recovery` 合法、`execution_error.type=KeyboardInterrupt`、路径精确等于
-`watchdog-heartbeat.json` 且文件摘要／字节数匹配时按 attempt 相对路径解释。v4 不重做 after 探针、不改写
-attempt、不创建 reservation、不发送请求；它只签发 transition 并输出 `execute=27`、`reuse=2`、
-`reservation_exists=false`、`live_request_count=0`、`scanned_bytes=0`。成功后由操作员确认，sequence 4 才可
-回到普通 v2 真实补跑。
-
-若唯一 v4 已经封存失败，且动作诊断逐字等于
-`ConfigurationError: 中断恢复续接父 v4 清单、自绑定或动作漂移。`，同时只读复算证明父记录的
-`manifest_sha256` 恰好是规范 JSON 加结尾换行的摘要、其他父绑定条件全部成立、transition 尚不存在，
-则不得改写或重跑 v4。部署修复工具后，以同一编译入口生成唯一 v5：
-
-```bash
-python3 tools/official_client_capture/codex_upgrade.py \
-  compile-vc-interrupted-recovery-continuation \
-  --campaign-dir /绝对路径/campaign \
-  --sequence 4 \
-  --recovery-contract /绝对路径/campaign/control/vc/recovery-contracts/0002-vc-1.json \
-  --continuation-manifest /绝对路径/campaign/control/vc/run-manifests/0003-vc-1.json \
-  --failed-continuation-supervisor-run-dir /绝对路径/原state-dir/run-<失败v4-owner-nonce> \
-  --deployment-receipt /绝对路径/修复后ARM64工具部署收据
-```
-
-随后仍在原 `state-dir` 执行新生成的 `0004-vc-1.json`。v5 必须逐字绑定失败 v2／v3／v4、原 v4 清单、
-原恢复合同、新部署收据，以及 v4 工具到当前工具的纯评估／控制变化；不得改变产出侧文件，且仍不得重做
-after 探针、改写 attempt、创建 reservation 或发送请求。成功后由操作员确认，sequence 5 才可回到普通
-v2 真实补跑；v5 失败不得再生成第六种恢复清单。
-
-#### VC-1 seal 权限廉价前检的唯一补偿后继
-
-本分支只允许承接 Campaign `c0154-formal-vc1-bwg-new-window-20260914t100818z` 的唯一失败 sequence 2；
-失败批次 SHA-256 必须为
-`8dc9756311f232a330216c0562f05ec7301eb9370106e8e63e6d6d3a2f53d92b`，不可覆盖的 sequence 3
-批次 SHA-256 必须为 `6a3aa65e451a76d0608125e594f3d2164c76e8212fabd051a379c3c975eb64df`。
-它不是第二种普通 v2 重试：其他 Campaign、序号、批次或 v2 失败仍只能由既有唯一 v3 恢复后继承接。
-
-启用前必须同时只读证明：前序 stop reason 精确为 `action-failed:seal-official-preview`；动作诊断为
-`handled-error/ConfigurationError`，说明精确包含 `seal 廉价前检失败（scanned_bytes=0）`，且其中的不合规
-目录只位于唯一冻结证据根内；父事件摘要链证明 `prepare-official-assertion-bundle` 已以 returncode 0 成功，随后原 seal 命令仅以
-returncode 1 失败；attempt `20260914T102852Z-04996800fbbe4e94` 仍为 `awaiting_receipts`，29 个 Job 全部
-`complete`，32 个冻结证据根闭合；`evidence-manifest.json`、`seal-draft.json`、`seal-preview.json` 和权限
-收口 receipt 均不存在。诊断、attempt、根列表、前后批次、Campaign plan 和前序 checkpoint 的摘要必须与
-监督器内本次一次性锚点逐字一致。
-
-sequence 3 的动作闭集只能是：先执行 `harden-official-evidence-permissions`，再逐字重放 sequence 2 的
-`seal-official-preview`；`prepare-official-assertion-bundle` 只能列入 reuse。权限工具和 action plan 必须位于
-`/root/docker/capture-cli/data/control/c0154-formal-vc1-bwg-new-window-20260914t100818z-action-inputs`，父目录为
-当前执行用户和组拥有的 `0700` 非链接目录，两个文件均为同属主、无额外硬链接的 `0600` 普通文件；工具、
-action plan、attempt 和 32 根列表摘要必须与冻结命令一致。权限工具只允许把目录权限与 `0700` 相与、文件
-权限与 `0600` 相与，并以 `O_NOFOLLOW`、device/inode、size、mtime、nlink 二次核验边界；收据必须以
-`O_EXCL` 首次创建并声明 `scanned_bytes=0`、`live_request_count=0`。
-
-部署通过冻结后继登记的新监督器后，直接使用原 state-dir 执行已经存在的
-`control/vc/run-manifests/0003-vc-1.json`；不得重编、删除或覆盖 sequence 3。权限动作非零时队列立即停线；
-只有权限收据成功，原 seal 预览才可继续。取得 `review_sha256` 后必须停止并由操作员复核确认，不能在同一
-批次追加正式 seal，也不能因此宣称 VC-1 已完成。
-
-若该唯一 sequence 3 在首个 `harden-official-evidence-permissions` 动作以 returncode 1 失败，且失败 run
-精确为
-`run-d932716c0dd0fbb60789232cbffad83910a271f58262b67679db75629341769f`、动作诊断摘要精确为
-`dfe840655b4772c3bb4c3a0f5d706687bcc9ba744af749424be15f057f06b325`，不得重编或覆盖 sequence 3。
-只有部署了本节定义的可写别名 helper 后，才允许建立唯一 sequence 4；其他权限失败仍然停线。
-
-sequence 4 启用前必须同时只读证明：sequence 3 的 state、run manifest、stop receipt、events 和动作诊断
-文件摘要与一次性监督器锚点一致；事件链只有旧权限动作启动／失败，原 seal 从未启动；sequence 3 权限收据
-和三份 seal 制品均不存在；attempt 仍为 `awaiting_receipts`，29 个 Job 全部 `complete`，32 个冻结根及
-1,882 个元数据项未漂移；待收口项仍精确为 15 项，其路径、类型和模式的规范摘要为
-`2b69ee039891bf6c58b6c787af105b9a896956b562cd0801c10ca7d2b36f2842`。该检查只枚举名称和元数据，
-`scanned_bytes=0`、`live_request_count=0`。
-
-sequence 4 当时部署的 helper
-`tools/official_client_capture/codex_upgrade_vc1_permission_alias_closeout.py` 只允许把
-`/root/oauth-capture/runs/<relative>` 映射到
-`/root/docker/capture-cli/data/runs/<relative>`。它必须先证明逻辑根为只读、宿主根为可写，并对每个目录和
-文件的名称、类型、device、inode、size、mtime、nlink 逐项比对；符号链接、特殊文件、普通文件硬链接、
-根嵌套或任一别名漂移都失败关闭。权限只能经可写别名的 `O_NOFOLLOW` fd 执行 `fchmod`，随后必须从只读
-身份路径二次核验。收据固定为 action-inputs 目录下的
-`sequence4-permission-alias-closeout-receipt.json`，只允许 `O_EXCL` 首次创建，并声明
-`scanned_bytes=0`、`live_request_count=0`。
-
-以下命令块是首轮事故的历史执行记录，当前 Formal CLI 必须拒绝，不得重演。事故当时先完成 ARM64 受管
-部署并取得绑定 helper、监督器和工具树的部署收据，再以 `vc1-sequence4-action-plan.json` 编译 sequence 4：
-
-```bash
-python3 tools/official_client_capture/codex_upgrade.py \
-  compile-vc-batch \
-  --campaign-dir /root/docker/capture-cli/data/evidence/campaigns/c0154-formal-vc1-bwg-new-window-20260914t100818z \
-  --phase VC-1 \
-  --sequence 4 \
-  --predecessor-checkpoint /root/docker/capture-cli/data/evidence/campaigns/c0154-formal-vc1-bwg-new-window-20260914t100818z/control/vc/vc-0-checkpoint.json \
-  --action-plan /root/docker/capture-cli/data/control/c0154-formal-vc1-bwg-new-window-20260914t100818z-action-inputs/vc1-sequence4-action-plan.json
-```
-
-action plan 的执行闭集只能依次为
-`harden-official-evidence-permissions-via-alias`、`seal-official-preview`，reuse 只能为
-`prepare-official-assertion-bundle`；seal 动作必须逐字复用 sequence 3。权限动作还必须逐字绑定部署收据
-路径、收据文件摘要、受管工具树摘要和 helper 摘要。`compile-vc-batch` 的启动窗口只有约 60 秒，因此只能
-在工具、action plan、命令和原 state-dir 都准备完成后编译，并立即执行新生成的 `0004-vc-1.json`。
-成功取得 `review_sha256` 后仍须停止并由操作员确认；不得在 sequence 4 内追加正式 seal，也不得据此宣称
-VC-1 已完成。
-
-若上述唯一 sequence 4 已经以 batch 文件摘要
-`02445883a35a1298821a76cfb8eed841b596de2169c22fc34d6d660981ed2cc8`、batch 身份
-`b2455bb609270d25ac257d08405c6eebfd6cfa2d3d207f946e227929030f72fb` 和 run manifest 文件摘要
-`6d574a8c785f5ccd0a26033ff43631b62789b27db289590053c210aaedf55e23` 封存，但在父 run 创建前逐字失败为
-`外部证据根不属于冻结 Campaign：/root/oauth-capture/runs/official-client/oauth/oauth-c0154-formal-vc1-bwg-new-window-20260914t100818z`，
-则不得删除、覆盖或重编 sequence 4。该失败只允许源于旧 helper 遗漏真实 OAuth 两级目录形态；此时
-state-dir 中必须仍精确只有 sequence 1～3，sequence 4 权限动作和 seal 均未启动，模型请求数为零，权限
-收据和三份 seal 制品均不存在。
-
-先部署修正后的 helper、监督器和预派发封口工具。修正 helper 对外部根只新增两个精确允许值：
-`official-client/oauth/oauth-<campaign-id>` 与
-`official-client/oauth/oauth-<campaign-id>-ws-repeat`；原单层 `<campaign-id>-*` 规则保持不变，其他嵌套、
-前缀近似或跨 Campaign 根仍失败关闭。随后在原执行环境、`campaign-run` 之外运行一次：
-
-```bash
-python3 /root/docker/capture-cli/data/tools/official_client_capture/codex_upgrade_vc1_permission_alias_predispatch_closeout.py \
-  --current-deployment-receipt /root/docker/capture-cli/data/control/codex-0154-supervisor-enable-<时间>.json \
-  --current-deployment-receipt-sha256 <当前部署收据SHA-256> \
-  --tool-files-sha256 <当前受管工具树SHA-256> \
-  --self-sha256 <预派发封口工具SHA-256> \
-  --receipt /root/docker/capture-cli/data/control/c0154-formal-vc1-bwg-new-window-20260914t100818z-action-inputs/sequence4-predispatch-closeout-receipt.json
-```
-
-该工具必须以非阻塞独占方式锁定原 `.campaign-run.lock`，复算 sequence 4 batch、run manifest、action plan
-和旧部署摘要，从当前部署回滚树加载摘要为
-`408e9d733b8997e569fbea36ab648f1bd70e45f9669accf3cc9353eb8b2566b1` 的旧 helper 并复现上述精确错误。
-该历史副本固定来自部署收据 `codex-0154-supervisor-enable-20260914t145040z.json` 所绑定的回滚树；后续部署
-不得改为扫描其他备份。随后
-再用当前 helper 只读证明 1,882 项／15 个权限缺口及固定 gap 摘要未漂移。真实 pcap 由容器内固定
-`tcpdump` 身份写入；只允许名为 `traffic.pcap` 或 `egress.pcap` 且双别名 uid/gid 均为 `100:102` 的普通文件保留该属主，
-目录和其他文件仍必须为 root:root。uid/gid 必须进入稳定边界并在 `fchmod` 前后二次核验。工具不得读取证据正文、修改权限、
-创建 run 或发送请求；唯一输出是以 `O_EXCL` 创建的 `0600` 收据，且必须声明
-`source_run_created=false`、`scanned_bytes=0`、`live_request_count=0`。
-
-以下同样是不可重演的历史 sequence 5 记录。预派发封口收据生成后，当时建立了
-`vc1-sequence5-action-plan.json`。执行闭集只能依次为
-`harden-official-evidence-permissions-via-alias-v2`、`seal-official-preview`，reuse 只能为
-`prepare-official-assertion-bundle`；seal 动作必须逐字复制 sequence 3。新权限动作必须绑定当前 helper、
-当前部署收据及其文件摘要、当前工具树摘要，并把唯一输出固定为
-`sequence5-permission-alias-closeout-receipt.json`。准备完成后才编译，并在约 60 秒窗口内立即使用原
-state-dir 派发：
-
-```bash
-python3 tools/official_client_capture/codex_upgrade.py \
-  compile-vc-batch \
-  --campaign-dir /root/docker/capture-cli/data/evidence/campaigns/c0154-formal-vc1-bwg-new-window-20260914t100818z \
-  --phase VC-1 \
-  --sequence 5 \
-  --predecessor-checkpoint /root/docker/capture-cli/data/evidence/campaigns/c0154-formal-vc1-bwg-new-window-20260914t100818z/control/vc/vc-0-checkpoint.json \
-  --action-plan /root/docker/capture-cli/data/control/c0154-formal-vc1-bwg-new-window-20260914t100818z-action-inputs/vc1-sequence5-action-plan.json
-
-python3 tools/official_client_capture/codex_upgrade_supervisor.py campaign-run \
-  --state-dir /root/docker/capture-cli/data/control/c0154-formal-vc1-bwg-new-window-20260914t100818z-supervisor \
-  --manifest /root/docker/capture-cli/data/evidence/campaigns/c0154-formal-vc1-bwg-new-window-20260914t100818z/control/vc/run-manifests/0005-vc-1.json
-```
-
-监督器只允许历史序号 `[1,2,3]` 在上述收据下跳过未创建的 sequence 4 父 run；任何 sequence 4 run、制品
-摘要漂移、非零请求／扫描、已有权限或 seal 输出、seal 动作变化、过期后重编或第二份预派发恢复均停线。
-sequence 5 仍受原 Campaign 绝对 deadline 约束。成功取得 `review_sha256` 后必须停止并由操作员确认；不得
-执行正式 seal，也不得宣称 VC-1 已完成。
-
-#### VC-1 原总 deadline 到期孤儿的直接封口
-
-若上述 sequence 5 真实补跑已取得 reservation、执行 15 个 Job 后，父监督器按 Campaign 原始绝对
-deadline 形成 `watchdog-aborted/global-wall-clock-deadline-expired`，并且冻结闭集恰为
-`planned=29 / affected=27 / reused=2 / executed=15 / failed=0 / pending=12`，则原 Campaign 已经到达终点。
-不得编译 sequence 6，不得重跑任何 Job、创建新 reservation、枚举 `.failed-attemptN` 归档或进入 VC-2。
-
-先部署并重放通过修复后的受管工具，再在 ARM64 `capture-cli` 容器内、`campaign-run` 与 CampaignLease
-之外直接执行：
-
-```bash
-python3 tools/official_client_capture/codex_upgrade.py \
-  finalize-vc1-deadline-orphan \
-  --campaign-dir /绝对路径/campaign \
-  --source-attempt /绝对路径/campaign/official/attempts/<attempt-id> \
-  --supervisor-run-dir /绝对路径/sequence-5-supervisor/run-<owner-nonce> \
-  --timing-ledger-dir /绝对路径/连续时间账本 \
-  --historical-live-request-audit /绝对路径/历史请求审计.json \
-  --deployment-receipt /绝对路径/当前ARM64工具部署收据 \
-  --expected-historical-live-requests 26 \
-  --expected-delta-live-requests 38 \
-  --expected-total-live-requests 64 \
-  --max-finalization-seconds <本次收口上限>
-```
-
-`--max-finalization-seconds` 只约束 after、ARM64 after、restoration 与收据发布，不能替换或延长已经过期的
-Campaign deadline。工具必须逐字重放 sequence 5 清单、父监督器终态、reservation lease 绑定、原
-transition、当前部署收据和 Ledger sequence 6 前缀；请求审计只读取 checkpoint 结果中明确登记的基础
-evidence roots，并证明 `26 + 38 = 64`、`failed_attempt_archives_enumerated=false`、finalizer 新增模型请求
-为零。成功终态固定为失败 `attempt.json`（`CampaignDeadlineExpired`）和唯一 Ledger sequence 7
-`stop_the_line/stopped`；重复调用只能重放同一合同、attempt、收据和事件，不能追加第二个停线事件。
-
-完成该封口不表示 VC-1 通过。当前 Campaign 永久停线，唯一下一动作是完成工具闭合后建立全新 VC-0，
-再按 VC-0→VC-1 顺序重新开始。
 
 ### Codex 连续监督、时间账本与文档部署
 
@@ -2046,28 +1839,6 @@ VC-1 开始事件，再在同一 Python 进程调用一次 `campaign-run`。任�
 不覆盖、不自动重试、不延长 deadline；必须依据诊断和最后合法 checkpoint 按 §5.3.4 恢复。
 执行该命令会进入 VC-1 并可能发送已批准的正式请求；禁止用
 人工 SSH 多命令、heredoc 或直接 `plan --campaign-mode formal` 替代。
-
-若原子收口已形成失败 Formal Campaign，且唯一失败闭合诊断逐字为
-`official-relay-oauth-refresh 已开始但没有可闭合的 live 请求计数来源`，说明旧计数器把已观察到的零
-Responses relay 误判成了无来源。当前 Campaign 不得重跑；先完成修复工具的离线回归和受管部署，再从
-ARM64 宿主登记的生产数据根、`campaign-run` 与 CampaignLease 之外执行一次。该动作只读既有抓包证据并
-写控制账本，不发起抓包，因此不得为迁就容器的只读父挂载复制或改写账本：
-
-```bash
-cd "$CAPTURE_HOST_DATA_ROOT"
-PYTHONPATH="$CAPTURE_HOST_DATA_ROOT" \
-  python3 -m tools.official_client_capture.codex_upgrade_vc0_closeout \
-  repair-failure-closure \
-  --formal-campaign-dir /绝对路径/失败Formal-Campaign \
-  --timing-ledger-dir /绝对路径/连续时间账本 \
-  --source-audit-dir /绝对路径/原VC-0-closeout失败审计 \
-  --audit-dir /绝对路径/尚不存在的修复审计目录
-```
-
-该入口只读重放原请求、失败诊断、Campaign 和账本 head；只接受上述确定性缺陷，模型请求与历史改写均为
-零。它按冻结证据根发布 live 请求审计，并根据原阶段 deadline 追加唯一 `stage_abandoned` 或
-`stop_the_line`。任何身份、摘要或账本漂移都失败关闭，且不得对同一现场再次执行。旧 Campaign 永久只读；
-只有账本尚未进入永久停线时，才能沿用同一总 deadline 从新的 VC-0 开始。
 
 “当前工具是否就绪”只能由本次 P0 收据、Job rehearsal 和门禁输出证明，不再在长期手册中维护容易过期的
 状态表。除冻结身份实际漂移外，不得重复已经通过的离线演练，也不得以准备工作为由停留在 VC-0。
