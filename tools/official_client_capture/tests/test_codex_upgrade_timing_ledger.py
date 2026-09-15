@@ -217,10 +217,15 @@ class TimingLedgerTests(unittest.TestCase):
             write(deletion_proof=drifted)
             with self.assertRaisesRegex(ledger.TimingLedgerError, "历史读取器摘要漂移"):
                 ledger._load_freeze_successor_edge(root, descriptor)
+            # 未登记路径的删除可以携带证明；证明里若声称冻结删除但 deleted_frozen_paths 为空则拒绝。
             write(deleted_frozen_paths=[], result="passed_local_evidence_successor")
             plain = dict(descriptor, result="passed_local_evidence_successor")
-            with self.assertRaisesRegex(ledger.TimingLedgerError, "未删除冻结路径却携带"):
+            with self.assertRaisesRegex(ledger.TimingLedgerError, "与 deleted_frozen_paths 不一致"):
                 ledger._load_freeze_successor_edge(root, plain)
+            unregistered = json.loads(json.dumps(proof))
+            unregistered["deleted_paths"][0]["frozen"] = False
+            write(deleted_frozen_paths=[], result="passed_local_evidence_successor", deletion_proof=unregistered)
+            self.assertEqual(ledger._load_freeze_successor_edge(root, plain), ("1" * 64, "2" * 64))
 
     def test_unregistered_producer_digest_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

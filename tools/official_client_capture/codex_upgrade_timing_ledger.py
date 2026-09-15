@@ -451,12 +451,11 @@ def _validate_freeze_deletion_proof(
         not isinstance(item, str) or not item for item in deleted
     ):
         raise TimingLedgerError("producer freeze successor deleted_frozen_paths 非法")
-    if not deleted:
-        if proof is not None:
-            raise TimingLedgerError("producer freeze successor 未删除冻结路径却携带 deletion_proof")
+    if not deleted and proof is None:
         return
-    if receipt.get("result") != FREEZE_RESULT_PASSED_WITH_DELETIONS:
+    if deleted and receipt.get("result") != FREEZE_RESULT_PASSED_WITH_DELETIONS:
         raise TimingLedgerError("producer freeze successor 删除了冻结路径但 result 不是 passed_with_deletions")
+    # 未登记路径的删除也可以携带证明；此时证明里不得声称任何路径是冻结路径。
     proof = _expect(
         proof,
         {"algorithm", "reason", "deleted_paths", "historical_readers"},
@@ -492,6 +491,8 @@ def _validate_freeze_deletion_proof(
         covered[str(entry["path"])] = bool(entry["frozen"])
     if any(covered.get(path) is not True for path in deleted):
         raise TimingLedgerError("producer freeze successor 存在没有无引用证明的冻结删除路径")
+    if any(frozen and path not in deleted for path, frozen in covered.items()):
+        raise TimingLedgerError("producer freeze successor deletion_proof 声称的冻结删除路径与 deleted_frozen_paths 不一致")
     for reader in proof["historical_readers"]:
         binding = _expect(reader, {"path", "sha256"}, "deletion_proof 历史读取器")
         relative = binding.get("path")

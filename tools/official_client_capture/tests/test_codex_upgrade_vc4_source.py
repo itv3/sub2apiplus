@@ -170,10 +170,16 @@ class CodexUpgradeVC4SourceTests(unittest.TestCase):
                 codex_upgrade._validate_candidate_source_transition(
                     self.source, self._signed(document), git_commit=current
                 )
-        # 没有删除冻结路径却携带证明同样拒绝。
+        # 没有删除冻结路径却在证明里声称冻结删除同样拒绝；未登记删除的证明则允许。
         extra = copy.deepcopy(self.transition)
-        extra["deletion_proof"] = proof
-        with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "未删除冻结路径却携带"):
+        extra["deletion_proof"] = copy.deepcopy(proof)
+        with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "与 deleted_frozen_paths 不一致"):
+            codex_upgrade._validate_candidate_source_transition(
+                self.source, self._signed(extra), git_commit=self.current_commit
+            )
+        extra["deletion_proof"]["deleted_paths"][0]["frozen"] = False
+        extra["deletion_proof"]["historical_readers"] = [{"path": "managed.txt", "sha256": self.after_sha256}]
+        with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "历史读取器登记非法"):
             codex_upgrade._validate_candidate_source_transition(
                 self.source, self._signed(extra), git_commit=self.current_commit
             )
