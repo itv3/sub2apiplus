@@ -2,7 +2,7 @@
 """原子收口 Codex VC-0，并立即派发首个 VC-1 批次。
 
 本工具是 Formal Campaign 的唯一创建入口。它从已冻结的 preflight Campaign
-恢复全部 ``plan`` 参数，重放五类 P0 收据，在同一个 Python 进程内完成计时
+恢复全部 ``plan`` 参数，重放六类 P0 收据，在同一个 Python 进程内完成计时
 事件、Formal Campaign 创建和 ``campaign-run`` 派发。任一步失败都会留下
 不可覆盖诊断；工具不会删除半成品、延长原始 deadline 或自行重试。
 """
@@ -18,6 +18,7 @@ import os
 import platform
 import re
 import stat
+import subprocess
 import sys
 import tempfile
 from contextlib import contextmanager
@@ -54,6 +55,7 @@ EXPECTED_MANAGED_DOCUMENTS = (
 )
 INPUT_ROLES = (
     "arm64_environment",
+    "atomic_campaign_run_rehearsal",
     "campaign_run_rehearsal",
     "job_rehearsal",
     "managed_tool_deploy",
@@ -525,6 +527,7 @@ def _assert_active_vc0(
     *,
     upgrade_id: str,
     evidence_decision: str,
+    expected_total_live_request_count: int,
     now: str,
 ) -> None:
     expected_identity = {
@@ -538,7 +541,8 @@ def _assert_active_vc0(
         any(summary.get(key) != value for key, value in expected_identity.items())
         or summary.get("status") != "active"
         or summary.get("active_phase") != "VC-0"
-        or summary.get("total_live_request_count") != 0
+        or summary.get("total_live_request_count")
+        != expected_total_live_request_count
     ):
         raise VC0CloseoutError("UpgradeTimingLedger 不是当前升级的 active VC-0")
     remaining = _remaining_seconds(summary, now)
@@ -603,11 +607,22 @@ def _validate_timing_and_arm64(
         != timing["checkpoint_head_sha256"]
     ):
         raise VC0CloseoutError("preflight timing checkpoint head 漂移")
+    frozen_summary = frozen.get("summary")
+    if not isinstance(frozen_summary, Mapping):
+        raise VC0CloseoutError("preflight timing checkpoint 缺少冻结摘要")
+    frozen_live_requests = frozen_summary.get("total_live_request_count")
+    if (
+        not isinstance(frozen_live_requests, int)
+        or isinstance(frozen_live_requests, bool)
+        or frozen_live_requests < 0
+    ):
+        raise VC0CloseoutError("preflight timing checkpoint 请求累计值非法")
     _assert_active_vc0(
         summary,
         manifest,
         upgrade_id=str(timing["upgrade_id"]),
         evidence_decision=str(timing["evidence_decision"]),
+        expected_total_live_request_count=frozen_live_requests,
         now=now,
     )
 
@@ -1040,6 +1055,83 @@ def _validate_managed_tool_deploy(
     return _binding_source("managed_tool_deploy", receipt_path)
 
 
+def _validate_atomic_campaign_run_rehearsal(
+    root: Path,
+    receipt_path: Path,
+    preflight_dir: Path,
+    manifest: Mapping[str, Any],
+) -> ReceiptSource:
+    """在 ``capture-cli`` 容器内重放原子双跑，并绑定宿主侧同源收据。"""
+
+    evidence_root = _private_directory(root, "atomic-double 证据根")
+    path = _inside(evidence_root, receipt_path, "atomic-double 收据")
+    try:
+        data_root = preflight_dir.parents[2].resolve(strict=True)
+        relative_root = evidence_root.relative_to(data_root / "staging")
+    except (IndexError, OSError, ValueError) as error:
+        raise VC0CloseoutError(
+            "atomic-double 证据根必须位于当前生产数据根 staging 下"
+        ) from error
+    if not relative_root.parts:
+        raise VC0CloseoutError("atomic-double 证据根不得直接使用 staging 根")
+    configuration = manifest.get("configuration")
+    if not isinstance(configuration, Mapping):
+        raise VC0CloseoutError("preflight 缺少 capture-cli 运行配置")
+    container = _safe_id(
+        configuration.get("capture_container"),
+        "atomic-double capture_container",
+    )
+    container_root = PurePosixPath("/capture/staging", *relative_root.parts)
+    receipt_relative = path.relative_to(evidence_root).as_posix()
+    command = [
+        "docker",
+        "exec",
+        "--env",
+        "PYTHONPATH=/capture",
+        "--workdir",
+        "/capture",
+        container,
+        "python3",
+        "-m",
+        (
+            "tools.official_client_capture."
+            "codex_upgrade_campaign_run_rehearsal_receipt"
+        ),
+        "atomic-double-replay",
+        "--evidence-root",
+        str(container_root),
+        "--receipt",
+        receipt_relative,
+    ]
+    try:
+        completed = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            timeout=180,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise VC0CloseoutError(f"atomic-double 容器重放无法执行：{error}") from error
+    stdout = completed.stdout.strip()
+    stderr = completed.stderr.strip()
+    if completed.returncode != 0 or not stdout or len(stdout) > MAX_JSON_BYTES:
+        detail = stderr.decode("utf-8", errors="replace")[:2000]
+        raise VC0CloseoutError(
+            f"atomic-double 容器重放失败：exit={completed.returncode}，stderr={detail}"
+        )
+    try:
+        replayed = json.loads(stdout)
+    except (UnicodeError, json.JSONDecodeError) as error:
+        raise VC0CloseoutError("atomic-double 容器重放输出不是单一 JSON") from error
+    if replayed != {
+        "campaign_id": None,
+        "live_request_count": 0,
+        "status": "passed",
+    }:
+        raise VC0CloseoutError("atomic-double 容器重放未闭合零请求边界")
+    return _binding_source("atomic_campaign_run_rehearsal", path)
+
+
 def validate_inputs(
     *,
     preflight_campaign_dir: Path,
@@ -1047,10 +1139,12 @@ def validate_inputs(
     job_rehearsal_receipt: Path,
     p0_gate_root: Path,
     p0_gate_receipt: Path,
+    atomic_rehearsal_root: Path,
+    atomic_rehearsal_receipt: Path,
     managed_tool_deploy_receipt: Path,
     now: str | None = None,
 ) -> ValidatedInputs:
-    """重放五份输入并返回创建 Formal 所需的规范坐标。"""
+    """重放六份输入并返回创建 Formal 所需的规范坐标。"""
 
     observed = now or _utc_now()
     preflight_dir, manifest = _load_preflight(preflight_campaign_dir)
@@ -1084,10 +1178,17 @@ def validate_inputs(
         managed_tool_deploy_receipt,
         manifest,
     )
+    atomic_source = _validate_atomic_campaign_run_rehearsal(
+        atomic_rehearsal_root,
+        atomic_rehearsal_receipt,
+        preflight_dir,
+        manifest,
+    )
     receipts = tuple(
         sorted(
             (
                 arm_source,
+                atomic_source,
                 campaign_source,
                 job_source,
                 deploy_source,
@@ -1097,7 +1198,7 @@ def validate_inputs(
         )
     )
     if tuple(item.role for item in receipts) != INPUT_ROLES:
-        raise VC0CloseoutError("VC-0 五份输入角色不闭合")
+        raise VC0CloseoutError("VC-0 六份输入角色不闭合")
     return ValidatedInputs(
         preflight_dir=preflight_dir,
         preflight_manifest=manifest,
@@ -2631,6 +2732,10 @@ def closeout(arguments: argparse.Namespace) -> dict[str, Any]:
             "job_rehearsal_receipt": str(arguments.job_rehearsal_receipt),
             "p0_gate_root": str(arguments.p0_gate_root),
             "p0_gate_receipt": str(arguments.p0_gate_receipt),
+            "atomic_rehearsal_root": str(arguments.atomic_rehearsal_root),
+            "atomic_rehearsal_receipt": str(
+                arguments.atomic_rehearsal_receipt
+            ),
             "managed_tool_deploy_receipt": str(
                 arguments.managed_tool_deploy_receipt
             ),
@@ -2645,6 +2750,10 @@ def closeout(arguments: argparse.Namespace) -> dict[str, Any]:
             job_rehearsal_receipt=Path(arguments.job_rehearsal_receipt),
             p0_gate_root=Path(arguments.p0_gate_root),
             p0_gate_receipt=Path(arguments.p0_gate_receipt),
+            atomic_rehearsal_root=Path(arguments.atomic_rehearsal_root),
+            atomic_rehearsal_receipt=Path(
+                arguments.atomic_rehearsal_receipt
+            ),
             managed_tool_deploy_receipt=Path(
                 arguments.managed_tool_deploy_receipt
             ),
@@ -2675,6 +2784,9 @@ def closeout(arguments: argparse.Namespace) -> dict[str, Any]:
                 upgrade_id=str(validated.timing_summary["upgrade_id"]),
                 evidence_decision=str(
                     validated.timing_summary["evidence_decision"]
+                ),
+                expected_total_live_request_count=int(
+                    validated.timing_summary["total_live_request_count"]
                 ),
                 now=recheck_at,
             )
@@ -2884,6 +2996,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--job-rehearsal-receipt", type=Path, required=True)
     parser.add_argument("--p0-gate-root", type=Path, required=True)
     parser.add_argument("--p0-gate-receipt", type=Path, required=True)
+    parser.add_argument("--atomic-rehearsal-root", type=Path, required=True)
+    parser.add_argument("--atomic-rehearsal-receipt", type=Path, required=True)
     parser.add_argument("--managed-tool-deploy-receipt", type=Path, required=True)
     parser.add_argument("--supervisor-state-dir", type=Path, required=True)
     parser.add_argument("--audit-dir", type=Path, required=True)

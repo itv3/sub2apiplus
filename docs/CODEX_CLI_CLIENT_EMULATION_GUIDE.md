@@ -1902,14 +1902,20 @@ python3 -m tools.official_client_capture.codex_upgrade_vc0_closeout \
   --job-rehearsal-receipt receipt.json \
   --p0-gate-root "$P0_GATE_ROOT" \
   --p0-gate-receipt p0-receipt.json \
+  --atomic-rehearsal-root "$ATOMIC_REHEARSAL_HOST_ROOT" \
+  --atomic-rehearsal-receipt receipt.json \
   --managed-tool-deploy-receipt "$MANAGED_TOOL_DEPLOY_RECEIPT" \
   --supervisor-state-dir "$VC1_SUPERVISOR_STATE_DIR" \
   --audit-dir "$VC0_CLOSEOUT_AUDIT_DIR"
 ```
 
-该入口从 preflight `campaign.json` 恢复全部 Formal 参数，并严格重放 ARM64、Job rehearsal、P0、
-campaign-run rehearsal 和受管工具部署五份输入。时间账本必须仍为 active VC-0，且阶段与总 deadline
-较早者至少剩余 300 秒。工具把五份收据安全复制进账本，追加唯一 `receipt_passed`，生成 active timing
+其中 `ATOMIC_REHEARSAL_HOST_ROOT` 必须是容器 `/capture/staging` 对应的宿主数据根 `staging` 子目录；入口
+会在 `capture-cli` 内执行只读 `atomic-double-replay`，再绑定宿主侧同源收据。该入口从 preflight
+`campaign.json` 恢复全部 Formal 参数，并严格重放 ARM64、Job rehearsal、P0、campaign-run rehearsal、
+atomic-double rehearsal 和受管工具部署六份输入。时间账本必须仍为 active VC-0，且阶段与总 deadline
+较早者至少剩余 300 秒；从失败 Campaign 返回新 VC-0 时，历史请求累计必须原样保留，并与本次 preflight
+冻结 checkpoint 相等，从而证明本轮 VC-0 的请求增量为零。工具把六份收据安全复制进账本，追加唯一
+`receipt_passed`，生成 active timing
 checkpoint，调用一次 `create_campaign()`，复制 Formal plan／VC-0 checkpoint，依次追加 VC-0 完成和
 VC-1 开始事件，再在同一 Python 进程调用一次 `campaign-run`。任何失败均保留不可覆盖诊断和半成品，
 在首次账本写入前失败只记录 audit 诊断、不改动账本；已写入收口事件后失败且仍有 active 阶段时，

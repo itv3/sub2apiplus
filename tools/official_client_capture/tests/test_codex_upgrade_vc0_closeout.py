@@ -160,6 +160,8 @@ class VC0CloseoutTests(unittest.TestCase):
             job_rehearsal_receipt=Path("receipt.json"),
             p0_gate_root=root / "p0",
             p0_gate_receipt=Path("receipt.json"),
+            atomic_rehearsal_root=root / "atomic",
+            atomic_rehearsal_receipt=Path("receipt.json"),
             managed_tool_deploy_receipt=root / "deploy.json",
             supervisor_state_dir=root / "control" / "vc1-supervisor",
             audit_dir=root / "audit" / "closeout-0154",
@@ -1040,6 +1042,159 @@ class VC0CloseoutTests(unittest.TestCase):
                     now=now.isoformat(),
                 )
 
+    def test_restarted_vc0_accepts_frozen_historical_request_total_only(self) -> None:
+        """新 VC-0 保留历史请求累计，但冻结后新增请求必须失败关闭。"""
+
+        now = datetime.now(timezone.utc)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            root.chmod(0o700)
+            ledger_root, manifest = self._timing_arm_manifest(
+                root,
+                started_at=(now - timedelta(minutes=2)).isoformat(),
+            )
+            timing.append_event(
+                ledger_root,
+                event_id="vc0-complete-before-restart",
+                phase="VC-0",
+                event_type="stage_completed",
+            )
+            timing.append_event(
+                ledger_root,
+                event_id="vc1-start-before-restart",
+                phase="VC-1",
+                event_type="stage_started",
+            )
+            timing.append_event(
+                ledger_root,
+                event_id="vc1-live-accounting-before-restart",
+                phase="VC-1",
+                event_type="receipt_passed",
+                live_request_count=8,
+            )
+            timing.append_event(
+                ledger_root,
+                event_id="vc1-abandoned-before-restart",
+                phase="VC-1",
+                event_type="stage_abandoned",
+                root_cause_id="control-tool-gap",
+                next_action="修复控制工具后从新 VC-0 承接",
+            )
+            timing.append_event(
+                ledger_root,
+                event_id="vc0-restarted",
+                phase="VC-0",
+                event_type="stage_started",
+            )
+            checkpoint = timing.checkpoint(
+                ledger_root,
+                "receipts/restarted-vc0.json",
+            )
+            checkpoint_path = ledger_root / "receipts/restarted-vc0.json"
+            timing_control = manifest["control_receipts"]["upgrade_timing"]
+            timing_control["receipt"] = {
+                "path": "receipts/restarted-vc0.json",
+                "sha256": closeout._sha256_file(checkpoint_path),
+                "bytes": checkpoint_path.stat().st_size,
+            }
+            timing_control["checkpoint_head_sha256"] = checkpoint["summary"][
+                "head_sha256"
+            ]
+
+            _timing_root, _arm_root, _arm_path, summary, _source = (
+                closeout._validate_timing_and_arm64(
+                    root,
+                    manifest,
+                    now=(now + timedelta(seconds=1)).isoformat(),
+                )
+            )
+            self.assertEqual(summary["active_phase"], "VC-0")
+            self.assertEqual(summary["total_live_request_count"], 8)
+
+            timing.append_event(
+                ledger_root,
+                event_id="unexpected-live-after-vc0-freeze",
+                phase="VC-0",
+                event_type="receipt_passed",
+                live_request_count=1,
+            )
+            with self.assertRaisesRegex(closeout.VC0CloseoutError, "active VC-0"):
+                closeout._validate_timing_and_arm64(
+                    root,
+                    manifest,
+                    now=(now + timedelta(seconds=2)).isoformat(),
+                )
+
+    def test_atomic_rehearsal_is_replayed_in_capture_container(self) -> None:
+        """宿主收口必须在 capture-cli 内重放同源 atomic-double 收据。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            data_root = Path(directory) / "data"
+            preflight = data_root / "evidence/campaigns/preflight-0154"
+            atomic_root = data_root / "staging/atomic-double"
+            preflight.mkdir(parents=True, mode=0o700)
+            atomic_root.mkdir(parents=True, mode=0o700)
+            data_root.chmod(0o700)
+            (data_root / "evidence").chmod(0o700)
+            (data_root / "evidence/campaigns").chmod(0o700)
+            (data_root / "staging").chmod(0o700)
+            receipt = self._write(atomic_root / "receipt.json", {"atomic": True})
+            completed = mock.Mock(
+                returncode=0,
+                stdout=(
+                    b'{"campaign_id": null, "live_request_count": 0, '
+                    b'"status": "passed"}\n'
+                ),
+                stderr=b"",
+            )
+            with mock.patch.object(
+                closeout.subprocess,
+                "run",
+                return_value=completed,
+            ) as run:
+                source = closeout._validate_atomic_campaign_run_rehearsal(
+                    atomic_root,
+                    Path("receipt.json"),
+                    preflight,
+                    {"configuration": {"capture_container": "capture-cli"}},
+                )
+            self.assertEqual(source.role, "atomic_campaign_run_rehearsal")
+            self.assertEqual(source.sha256, closeout._sha256_file(receipt))
+            command = run.call_args.args[0]
+            self.assertEqual(command[0:2], ["docker", "exec"])
+            self.assertIn("/capture/staging/atomic-double", command)
+            self.assertIn("atomic-double-replay", command)
+
+    def test_atomic_rehearsal_rejects_failed_container_replay(self) -> None:
+        """容器重放失败时不得把 atomic-double 文件仅按摘要放行。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            data_root = Path(directory) / "data"
+            preflight = data_root / "evidence/campaigns/preflight-0154"
+            atomic_root = data_root / "staging/atomic-double"
+            preflight.mkdir(parents=True, mode=0o700)
+            atomic_root.mkdir(parents=True, mode=0o700)
+            data_root.chmod(0o700)
+            (data_root / "evidence").chmod(0o700)
+            (data_root / "evidence/campaigns").chmod(0o700)
+            (data_root / "staging").chmod(0o700)
+            self._write(atomic_root / "receipt.json", {"atomic": True})
+            completed = mock.Mock(returncode=1, stdout=b"", stderr=b"tampered")
+            with (
+                mock.patch.object(
+                    closeout.subprocess,
+                    "run",
+                    return_value=completed,
+                ),
+                self.assertRaisesRegex(closeout.VC0CloseoutError, "容器重放失败"),
+            ):
+                closeout._validate_atomic_campaign_run_rehearsal(
+                    atomic_root,
+                    Path("receipt.json"),
+                    preflight,
+                    {"configuration": {"capture_container": "capture-cli"}},
+                )
+
     def test_existing_formal_path_fails_before_receipt_or_event_write(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1311,6 +1466,7 @@ class VC0CloseoutTests(unittest.TestCase):
                 {path.name for path in copied.iterdir()},
                 {
                     "arm64_environment.json",
+                    "atomic_campaign_run_rehearsal.json",
                     "campaign_run_rehearsal.json",
                     "formal-campaign-plan.json",
                     "formal-vc0-checkpoint.json",
