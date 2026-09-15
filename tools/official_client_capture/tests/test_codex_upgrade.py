@@ -4602,36 +4602,43 @@ class CodexUpgradeTest(unittest.TestCase):
             ) -> dict[str, object]:
                 return {**payload, "attempt_digest": "5" * 64}
 
-            with (
-                mock.patch.object(codex_upgrade, "_reject_contaminated_campaign"),
-                mock.patch.object(codex_upgrade, "_load_stage_result", return_value={"status": "complete"}),
-                mock.patch.object(codex_upgrade, "_active_unsealed_attempts", return_value=[]),
-                mock.patch.object(codex_upgrade, "_classification_candidate_reuse_source", return_value=context),
-                mock.patch.object(codex_upgrade, "_candidate_identity_for_run", return_value=identity),
-                mock.patch.object(codex_upgrade, "_campaign_jobs", return_value=jobs),
-                mock.patch.object(codex_upgrade, "_tool_identity", return_value={"files_sha256": "1" * 64}),
-                mock.patch.object(codex_upgrade, "_cheap_capture_tool_impact", return_value={"affected_job_ids": [], "changed_components": []}),
-                mock.patch.object(codex_upgrade, "_build_classification_candidate_reuse_preview", return_value=({"preview_sha256": "3" * 64}, reused)),
-                mock.patch.object(codex_upgrade, "_approve_classification_candidate_reuse_transition", return_value=({}, transition_binding, source_binding)),
-                mock.patch.object(codex_upgrade, "_prior_complete_results", return_value=reused),
-                mock.patch.object(codex_upgrade, "_reserve_capture_attempt", return_value=(attempt_root, reservation)),
-                mock.patch.object(
-                    codex_upgrade,
-                    "_close_attempt_evidence_permissions",
-                    return_value={
-                        "path": "evidence-permission-closeout.json",
-                        "sha256": "6" * 64,
-                        "bytes": 1,
-                    },
-                ),
-                mock.patch.object(codex_upgrade, "_write_capture_attempt", side_effect=write_attempt) as writer,
-                mock.patch.object(codex_upgrade, "_probe_capture_environment") as probe,
-                mock.patch.object(codex_upgrade, "_capture_arm64_environment_receipt") as arm64_probe,
-                mock.patch.object(codex_upgrade, "_run_job_with_retry") as run_job,
-                mock.patch.object(codex_upgrade, "_verify_plan_identity") as verify,
-                mock.patch.object(codex_upgrade, "_verify_execution_tree") as execution_tree,
-                mock.patch.object(codex_upgrade, "_validate_candidate_admin_credential") as credential,
-            ):
+            # 20 个替身用 ExitStack 逐个进入：Python 3.12 的静态嵌套块上限是 20，
+            # 括号式 with 每个上下文各算一个块，受管部署机（3.12）编译不过。
+            with contextlib.ExitStack() as stack:
+                for target, options in (
+                    ("_reject_contaminated_campaign", {}),
+                    ("_load_stage_result", {"return_value": {"status": "complete"}}),
+                    ("_active_unsealed_attempts", {"return_value": []}),
+                    ("_classification_candidate_reuse_source", {"return_value": context}),
+                    ("_candidate_identity_for_run", {"return_value": identity}),
+                    ("_campaign_jobs", {"return_value": jobs}),
+                    ("_tool_identity", {"return_value": {"files_sha256": "1" * 64}}),
+                    ("_cheap_capture_tool_impact", {"return_value": {"affected_job_ids": [], "changed_components": []}}),
+                    ("_build_classification_candidate_reuse_preview", {"return_value": ({"preview_sha256": "3" * 64}, reused)}),
+                    ("_approve_classification_candidate_reuse_transition", {"return_value": ({}, transition_binding, source_binding)}),
+                    ("_prior_complete_results", {"return_value": reused}),
+                    ("_reserve_capture_attempt", {"return_value": (attempt_root, reservation)}),
+                    (
+                        "_close_attempt_evidence_permissions",
+                        {
+                            "return_value": {
+                                "path": "evidence-permission-closeout.json",
+                                "sha256": "6" * 64,
+                                "bytes": 1,
+                            }
+                        },
+                    ),
+                ):
+                    stack.enter_context(mock.patch.object(codex_upgrade, target, **options))
+                writer = stack.enter_context(
+                    mock.patch.object(codex_upgrade, "_write_capture_attempt", side_effect=write_attempt)
+                )
+                probe = stack.enter_context(mock.patch.object(codex_upgrade, "_probe_capture_environment"))
+                arm64_probe = stack.enter_context(mock.patch.object(codex_upgrade, "_capture_arm64_environment_receipt"))
+                run_job = stack.enter_context(mock.patch.object(codex_upgrade, "_run_job_with_retry"))
+                verify = stack.enter_context(mock.patch.object(codex_upgrade, "_verify_plan_identity"))
+                execution_tree = stack.enter_context(mock.patch.object(codex_upgrade, "_verify_execution_tree"))
+                credential = stack.enter_context(mock.patch.object(codex_upgrade, "_validate_candidate_admin_credential"))
                 result = codex_upgrade._run_capture_attempt(
                     arguments,
                     "candidate",
