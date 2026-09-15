@@ -302,6 +302,16 @@ RUNTIME_CODEX_BINARY_JOB_IDS = frozenset(
         "candidate-compact-mitm",
     }
 )
+# 0.154.0 的模型目录只剩一个 Main 模型；两条跨模型压缩链必须由
+# gpt-5.5 切到 Campaign 已冻结的 gpt-6-astra Lite。该修复会改变共享中继
+# 脚本，但实际只进入这两个场景分支，因此恢复授权同时绑定旧／新文件摘要、
+# Campaign 模型和失败 Job 闭集。任一后续字节变化都会失配并重新停线。
+OFFICIAL_COMPACTION_LITE_RECOVERY_JOB_IDS = frozenset(
+    {
+        "official-relay-comp-hash-changed",
+        "official-relay-model-downshift",
+    }
+)
 # 这三个历史 direct Job 已由下列脚本在请求前把缺省路径唯一展开为
 # /opt/codex-$CODEX_VERSION/bin/codex，并执行 ``codex --version`` 硬校验。
 # 仅该逐字脚本摘要可把“缺少显式 CODEX_BIN”视为同一实际执行；任何脚本
@@ -366,6 +376,24 @@ RUNTIME_SUCCESSOR_CHANGED_TOOL_PATH_JOB_IDS = {
         {"candidate-core-mitm", "candidate-compact-mitm"}
     ),
 }
+OFFICIAL_COMPACTION_LITE_RECOVERY_FILES = {
+    "build_compaction_model_catalog.py": {
+        "from_sha256": None,
+        "to_sha256": "91f08f1bc455cbd92186da51e96e7f777ab30d276c7686d03a784b860381119c",
+    },
+    "codex_upgrade_scenarios_0_154_0.json": {
+        "from_sha256": "990bebace395b36079fb0ff9464dee1a1483c8bd566d98338f7182954b71578b",
+        "to_sha256": "9dfb2e2e759cba27659c99623603419d21286a8e9cf801b0a5ff1bb397a76ba3",
+    },
+    "run_official_relay_scenario.sh": {
+        "from_sha256": "a6fe6c89b1350817b428d6b7b96e942eb24e81fd7af3a0f24c2b92e82c7398e1",
+        "to_sha256": "31e3c57ad25ee4b32bc0ce0d15fd4fa08e00d1e94c9bf668175367e0680e22c0",
+    },
+}
+OFFICIAL_COMPACTION_LITE_RECOVERY_TRANSITION_ID = (
+    "codex-0.154-gpt6-astra-compaction/v1"
+)
+BATCHED_FAILED_CAPTURE_RECOVERY_KIND = "batched_failed_capture_recovery"
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 CODEX_USER_AGENT_VERSION_RE = re.compile(
     r"(?:codex_exec|codex-tui|codex_cli_rs)/(\d+\.\d+\.\d+)"
@@ -9845,6 +9873,7 @@ _TOOL_COMPONENT_NAMES = frozenset(
 )
 _PRODUCER_TOOL_FILES = frozenset(
     {
+        "build_compaction_model_catalog.py",
         "capture.py",
         "run_codex_scenario_target.py",
         "pcap_clienthello.py",
@@ -10272,6 +10301,12 @@ def _tool_path_job_map(
         impact_map.setdefault(path, set()).update(
             job_id
             for job_id in job_ids
+            if job_id in planned_ids
+        )
+    for path in OFFICIAL_COMPACTION_LITE_RECOVERY_FILES:
+        impact_map.setdefault(path, set()).update(
+            job_id
+            for job_id in OFFICIAL_COMPACTION_LITE_RECOVERY_JOB_IDS
             if job_id in planned_ids
         )
     return impact_map
@@ -13867,7 +13902,114 @@ def _interrupted_recovery_attempt_binding(
     }
 
 
-def _recovery_execution_handoff_parent() -> dict[str, Any]:
+def _recovery_execution_action(
+    parent_manifest: Mapping[str, Any],
+    action_id: str,
+) -> Mapping[str, Any]:
+    """返回父批次当前唯一动作，并拒绝动作身份歧义。"""
+
+    actions = parent_manifest.get("actions")
+    if (
+        not isinstance(actions, list)
+        or len(actions) != 1
+        or not isinstance(actions[0], Mapping)
+        or actions[0].get("action_id") != action_id
+    ):
+        raise ConfigurationError("恢复执行交接父批次必须恰好声明当前唯一动作。")
+    return actions[0]
+
+
+def _validate_recovery_execution_action_command(
+    action: Mapping[str, Any],
+    *,
+    campaign_dir: Path,
+    preview: bool,
+) -> None:
+    """验证 v2 动作是零请求预览或其唯一真实消费命令。"""
+
+    command = action.get("command")
+    if not isinstance(command, list) or not all(
+        isinstance(value, str) and value for value in command
+    ):
+        raise ConfigurationError("恢复执行交接父动作命令非法。")
+    basenames = {Path(value).name for value in command[:4]}
+    campaign_indexes = [
+        index for index, value in enumerate(command) if value == "--campaign-dir"
+    ]
+    campaign_value = (
+        Path(command[campaign_indexes[0] + 1])
+        if len(campaign_indexes) == 1
+        and campaign_indexes[0] + 1 < len(command)
+        else None
+    )
+    common_valid = (
+        bool(basenames & {"codex_upgrade.py", "codex-upgrade"})
+        and command.count("resume") == 1
+        and command.count("--rerun-failed") == 1
+        and campaign_value is not None
+        and campaign_value.is_absolute()
+        and campaign_value.resolve(strict=False)
+        == campaign_dir.resolve(strict=True)
+    )
+    preview_valid = (
+        command.count("--preview-recovery") == 1
+        and "--acknowledge-live-requests" not in command
+    )
+    execution_valid = (
+        "--preview-recovery" not in command
+        and command.count("--acknowledge-live-requests") == 1
+    )
+    if not common_valid or (preview and not preview_valid) or (
+        not preview and not execution_valid
+    ):
+        boundary = "零请求预览" if preview else "真实两项补跑"
+        raise ConfigurationError(f"恢复执行交接父动作不是唯一合法的{boundary}命令。")
+
+
+def _validate_batched_recovery_execution_parent(
+    parent_manifest: Mapping[str, Any],
+    *,
+    campaign_dir: Path,
+    campaign_id: str,
+    action_id: str,
+    execute_job_ids: Iterable[str],
+    reuse_job_ids: Iterable[str],
+    preview: bool,
+    expected_sequence: int,
+) -> None:
+    """验证普通 VC-1 v2 的 2/27 预览／执行父动作。"""
+
+    execute = sorted({str(value) for value in execute_job_ids})
+    reuse = sorted({str(value) for value in reuse_job_ids})
+    action = _recovery_execution_action(parent_manifest, action_id)
+    if (
+        parent_manifest.get("schema_version")
+        != codex_upgrade_supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA
+        or parent_manifest.get("campaign_id") != campaign_id
+        or parent_manifest.get("phase") != "VC-1"
+        or parent_manifest.get("batch_sequence") != expected_sequence
+        or parent_manifest.get("no_op") is not False
+        or parent_manifest.get("execute_items") != execute
+        or parent_manifest.get("reuse_items") != reuse
+        or action.get("item_ids") != execute
+    ):
+        raise ConfigurationError(
+            "恢复执行交接必须由普通 VC-1 campaign-run v2 的精确 2/27 闭集派发。"
+        )
+    _validate_recovery_execution_action_command(
+        action,
+        campaign_dir=campaign_dir,
+        preview=preview,
+    )
+
+
+def _recovery_execution_handoff_parent(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    *,
+    execute_job_ids: Iterable[str],
+    reuse_job_ids: Iterable[str],
+) -> dict[str, Any]:
     """冻结当前零请求预览父批次，供下一份真实 v2 直接消费。"""
 
     run_value = os.environ.get(
@@ -13893,31 +14035,31 @@ def _recovery_execution_handoff_parent() -> dict[str, Any]:
         state.get("state") != "running"
         or not isinstance(parent_manifest, Mapping)
         or parent_manifest.get("schema_version")
-        not in {
-            codex_upgrade_supervisor.CAMPAIGN_RUN_RECOVERY_SCHEMA,
-            codex_upgrade_supervisor.CAMPAIGN_RUN_RECOVERY_CONTINUATION_SCHEMA,
-            codex_upgrade_supervisor.CAMPAIGN_RUN_RECOVERY_FINALIZATION_SCHEMA,
-        }
+        != codex_upgrade_supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA
         or record.get("manifest_sha256")
         != codex_upgrade_supervisor._sha256(
             codex_upgrade_supervisor._canonical(dict(parent_manifest))
         )
-        or action_id
-        not in {
-            "recover-vc1-interruption-preview",
-            "continue-vc1-interruption-preview",
-        }
-        or len(parent_manifest.get("actions", [])) != 1
-        or parent_manifest["actions"][0].get("action_id") != action_id
         or state.get("owner_nonce")
         != os.environ.get(
             codex_upgrade_supervisor.CAMPAIGN_RUN_OWNER_NONCE_ENV
         )
     ):
         raise ConfigurationError("恢复执行交接父批次身份或运行态漂移。")
+    _validate_batched_recovery_execution_parent(
+        parent_manifest,
+        campaign_dir=campaign_dir,
+        campaign_id=str(manifest.get("campaign_id", "")),
+        action_id=action_id,
+        execute_job_ids=execute_job_ids,
+        reuse_job_ids=reuse_job_ids,
+        preview=True,
+        expected_sequence=2,
+    )
     return {
         "run_dir": str(run_dir.resolve(strict=True)),
         "owner_nonce": str(state["owner_nonce"]),
+        "schema_version": str(parent_manifest["schema_version"]),
         "batch_sequence": int(parent_manifest["batch_sequence"]),
         "original_deadline_at_utc": str(
             parent_manifest["original_deadline_at_utc"]
@@ -13944,7 +14086,6 @@ def _write_recovery_execution_handoff(
 ) -> dict[str, str]:
     """签发一次 preview→真实执行交接，避免后继重扫大制品。"""
 
-    parent = _recovery_execution_handoff_parent()
     source_path = source_root / "attempt.json"
     if (
         source_path.is_symlink()
@@ -13956,6 +14097,26 @@ def _write_recovery_execution_handoff(
     reuse = sorted(set(str(value) for value in reuse_job_ids))
     planned = sorted(job.job_id for job in planned_jobs)
     reused_results = [dict(item) for item in prior_results]
+    expected_tool_impact = _official_compaction_lite_recovery_tool_impact(
+        manifest,
+        tool_identity,
+        source_attempt=source_attempt,
+        recovery_scope=recovery_scope,
+    )
+    if (
+        expected_tool_impact is not None
+        and dict(tool_impact) != expected_tool_impact
+    ) or (
+        expected_tool_impact is None
+        and tool_impact.get("kind") == BATCHED_FAILED_CAPTURE_RECOVERY_KIND
+    ):
+        raise ConfigurationError("恢复执行交接没有绑定唯一三文件整改授权。")
+    parent = _recovery_execution_handoff_parent(
+        campaign_dir,
+        manifest,
+        execute_job_ids=execute,
+        reuse_job_ids=reuse,
+    )
     if (
         set(execute) & set(reuse)
         or set(execute) | set(reuse) != set(planned)
@@ -14004,6 +14165,106 @@ def _write_recovery_execution_handoff(
         "path": str(path.relative_to(campaign_dir)),
         "sha256": file_sha256(path),
     }
+
+
+def _validate_recovery_execution_handoff_parent_terminal(
+    parent: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    """重放零请求预览父批次的不可变 queue-complete 终态。"""
+
+    run_dir = Path(str(parent.get("run_dir", "")))
+    record_path = run_dir / "campaign-run-manifest.json"
+    stop_path = run_dir / "stop-receipt.json"
+    if (
+        not run_dir.is_absolute()
+        or run_dir.is_symlink()
+        or not run_dir.is_dir()
+        or record_path.is_symlink()
+        or stop_path.is_symlink()
+    ):
+        raise ConfigurationError("恢复执行交接的预览父批次路径不可信。")
+    try:
+        state = codex_upgrade_supervisor._read_state(run_dir)
+        record = _read_json(record_path, "恢复执行交接父清单")
+        stop = _read_json(stop_path, "恢复执行交接父终态")
+    except (OSError, codex_upgrade_supervisor.SupervisorError) as error:
+        raise ConfigurationError("恢复执行交接的预览父批次无法重放。") from error
+    parent_manifest = record.get("manifest")
+    if (
+        not isinstance(parent_manifest, Mapping)
+        or state.get("state") != "stopped"
+        or state.get("owner_nonce") != parent.get("owner_nonce")
+        or file_sha256(record_path) != parent.get("manifest_record_sha256")
+        or record.get("manifest_sha256") != parent.get("manifest_sha256")
+        or record.get("manifest_sha256")
+        != codex_upgrade_supervisor._sha256(
+            codex_upgrade_supervisor._canonical(dict(parent_manifest))
+        )
+        or parent_manifest.get("schema_version")
+        != parent.get("schema_version", parent_manifest.get("schema_version"))
+        or parent_manifest.get("batch_sequence") != parent.get("batch_sequence")
+        or stop.get("event_type") != "stopped"
+        or stop.get("reason") != "queue-complete"
+        or stop.get("owner_nonce") != parent.get("owner_nonce")
+    ):
+        raise ConfigurationError(
+            "恢复执行交接的预览父批次不是不可变 queue-complete 终态。"
+        )
+    return parent_manifest
+
+
+def _validate_recovery_execution_handoff_consumer(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    *,
+    parent: Mapping[str, Any],
+    execute_job_ids: Iterable[str],
+    reuse_job_ids: Iterable[str],
+) -> None:
+    """确认 handoff 只被紧邻的普通 VC-1 v2 真实动作消费。"""
+
+    run_value = os.environ.get(codex_upgrade_supervisor.CAMPAIGN_RUN_DIR_ENV)
+    action_id = os.environ.get(codex_upgrade_supervisor.CAMPAIGN_RUN_ACTION_ID_ENV)
+    if (
+        os.environ.get(codex_upgrade_supervisor.CAMPAIGN_RUN_CONTEXT_ENV) != "1"
+        or not run_value
+        or not action_id
+    ):
+        raise ConfigurationError("恢复执行 handoff 只能由真实 v2 父批次消费。")
+    run_dir = Path(run_value)
+    record_path = run_dir / "campaign-run-manifest.json"
+    if (
+        not run_dir.is_absolute()
+        or run_dir.is_symlink()
+        or not run_dir.is_dir()
+        or record_path.is_symlink()
+        or not record_path.is_file()
+    ):
+        raise ConfigurationError("恢复执行 handoff 消费父批次路径不可信。")
+    state = codex_upgrade_supervisor._read_state(run_dir)
+    record = _read_json(record_path, "恢复执行 handoff 消费父清单")
+    consumer_manifest = record.get("manifest")
+    if (
+        state.get("state") != "running"
+        or state.get("owner_nonce")
+        != os.environ.get(codex_upgrade_supervisor.CAMPAIGN_RUN_OWNER_NONCE_ENV)
+        or not isinstance(consumer_manifest, Mapping)
+        or record.get("manifest_sha256")
+        != codex_upgrade_supervisor._sha256(
+            codex_upgrade_supervisor._canonical(dict(consumer_manifest))
+        )
+    ):
+        raise ConfigurationError("恢复执行 handoff 消费父批次身份或运行态漂移。")
+    _validate_batched_recovery_execution_parent(
+        consumer_manifest,
+        campaign_dir=campaign_dir,
+        campaign_id=str(manifest.get("campaign_id", "")),
+        action_id=action_id,
+        execute_job_ids=execute_job_ids,
+        reuse_job_ids=reuse_job_ids,
+        preview=False,
+        expected_sequence=int(parent["batch_sequence"]) + 1,
+    )
 
 
 def _load_recovery_execution_handoff(
@@ -14091,26 +14352,30 @@ def _load_recovery_execution_handoff(
             continue
         parent = payload.get("parent_preview")
         if not isinstance(parent, Mapping):
-            continue
-        run_dir = Path(str(parent.get("run_dir", "")))
-        record_path = run_dir / "campaign-run-manifest.json"
-        stop_path = run_dir / "stop-receipt.json"
-        try:
-            state = codex_upgrade_supervisor._read_state(run_dir)
-            record = _read_json(record_path, "恢复执行交接父清单")
-            stop = _read_json(stop_path, "恢复执行交接父终态")
-        except (OSError, ConfigurationError, codex_upgrade_supervisor.SupervisorError):
-            continue
+            raise ConfigurationError("恢复执行交接缺少预览父批次绑定。")
+        expected_impact = _official_compaction_lite_recovery_tool_impact(
+            manifest,
+            tool_identity,
+            source_attempt=source_attempt,
+            recovery_scope=recovery_scope,
+        )
         if (
-            state.get("state") != "stopped"
-            or state.get("owner_nonce") != parent.get("owner_nonce")
-            or file_sha256(record_path) != parent.get("manifest_record_sha256")
-            or record.get("manifest_sha256") != parent.get("manifest_sha256")
-            or stop.get("event_type") != "stopped"
-            or stop.get("reason") != "queue-complete"
-            or stop.get("owner_nonce") != parent.get("owner_nonce")
+            expected_impact is not None
+            and payload.get("tool_impact") != expected_impact
+        ) or (
+            expected_impact is None
+            and payload.get("tool_impact", {}).get("kind")
+            == BATCHED_FAILED_CAPTURE_RECOVERY_KIND
         ):
-            continue
+            raise ConfigurationError("恢复执行交接的三文件授权或工具影响闭集漂移。")
+        _validate_recovery_execution_handoff_parent_terminal(parent)
+        _validate_recovery_execution_handoff_consumer(
+            campaign_dir,
+            manifest,
+            parent=parent,
+            execute_job_ids=expected_execute,
+            reuse_job_ids=expected_reuse,
+        )
         reused_results = payload.get("reused_results")
         if (
             not isinstance(reused_results, list)
@@ -14136,6 +14401,227 @@ def _load_recovery_execution_handoff(
     # 交接只替代昂贵身份／大制品重放；当前 Ledger 和控制收据仍须轻量复验。
     _verify_control_receipts(campaign_dir, dict(manifest), require_active=True)
     return matches[0]
+
+
+def _replay_bound_official_compaction_recovery_handoff(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    current_tool: Mapping[str, Any],
+    *,
+    successor_root: Path,
+    successor_attempt: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """重放成功补跑 attempt 绑定的 0.154 两项恢复 handoff。"""
+
+    binding = successor_attempt.get("recovery_execution_handoff")
+    if binding is None:
+        return None
+    _require_file_binding(binding, "0.154 official 恢复 execution handoff")
+    handoff_path = _campaign_file(campaign_dir, str(binding["path"]))
+    if (
+        handoff_path.is_symlink()
+        or not handoff_path.is_file()
+        or file_sha256(handoff_path) != binding["sha256"]
+        or handoff_path.parent.name != "recovery-execution-handoffs"
+    ):
+        raise ConfigurationError("0.154 official 恢复 execution handoff 绑定漂移。")
+    payload = _read_json(handoff_path, "0.154 official 恢复 execution handoff")
+    unsigned = dict(payload)
+    digest = unsigned.pop("handoff_sha256", None)
+    expected_fields = {
+        "schema_version",
+        "issued_at_utc",
+        "campaign_id",
+        "source_attempt",
+        "parent_preview",
+        "official_identity_sha256",
+        "tool_files_sha256",
+        "tool_impact",
+        "recovery_scope",
+        "planned_job_ids",
+        "execute_job_ids",
+        "reuse_job_ids",
+        "reused_results",
+        "zero_request_boundary",
+        "handoff_sha256",
+    }
+    source_binding = payload.get("source_attempt")
+    if (
+        set(payload) != expected_fields
+        or payload.get("schema_version") != RECOVERY_EXECUTION_HANDOFF_SCHEMA
+        or payload.get("campaign_id") != manifest.get("campaign_id")
+        or not _is_rfc3339_timestamp(payload.get("issued_at_utc"))
+        or digest != _fingerprint(unsigned)
+        or not isinstance(source_binding, Mapping)
+        or set(source_binding)
+        != {"path", "sha256", "attempt_id", "attempt_digest"}
+        or payload.get("official_identity_sha256")
+        != _fingerprint(manifest.get("official_identity"))
+        or payload.get("tool_files_sha256") != current_tool.get("files_sha256")
+        or payload.get("zero_request_boundary")
+        != {
+            "reservation_exists": False,
+            "live_request_count": 0,
+            "scanned_bytes": 0,
+        }
+    ):
+        raise ConfigurationError("0.154 official 恢复 execution handoff 字段或身份非法。")
+
+    source_path = _campaign_file(campaign_dir, str(source_binding["path"]))
+    if source_path.name != "attempt.json" or source_path.parent == successor_root:
+        raise ConfigurationError("0.154 official 恢复 handoff 源 attempt 路径非法。")
+    source_root, source_attempt = _load_capture_attempt(
+        campaign_dir,
+        "official",
+        None,
+        source_path.parent.name,
+        _verified_campaign_manifest=manifest,
+    )
+    expected_source_binding = {
+        "path": str((source_root / "attempt.json").relative_to(campaign_dir)),
+        "sha256": file_sha256(source_root / "attempt.json"),
+        "attempt_id": source_attempt.get("attempt_id"),
+        "attempt_digest": source_attempt.get("attempt_digest"),
+    }
+    recovery_scope = payload.get("recovery_scope")
+    if source_path != source_root / "attempt.json" or dict(source_binding) != (
+        expected_source_binding
+    ) or not isinstance(recovery_scope, Mapping):
+        raise ConfigurationError("0.154 official 恢复 handoff 源 attempt 绑定漂移。")
+    replayed_scope = _phase_evaluation_recovery_scope(
+        campaign_dir,
+        manifest,
+        phase="official",
+        candidate_id=None,
+        attempt_root=source_root,
+        attempt=source_attempt,
+    )
+    if replayed_scope != dict(recovery_scope):
+        raise ConfigurationError("0.154 official 恢复 handoff 与源 attempt 闭集漂移。")
+    expected_impact = _official_compaction_lite_recovery_tool_impact(
+        manifest,
+        current_tool,
+        source_attempt=source_attempt,
+        recovery_scope=recovery_scope,
+    )
+    if expected_impact is None or payload.get("tool_impact") != expected_impact:
+        raise ConfigurationError("0.154 official 恢复 handoff 的工具授权漂移。")
+
+    planned = sorted(str(value) for value in recovery_scope["planned_job_ids"])
+    execute = sorted(str(value) for value in recovery_scope["execute_job_ids"])
+    reuse = sorted(str(value) for value in recovery_scope["completed_job_ids"])
+    reused_results = payload.get("reused_results")
+    if (
+        payload.get("planned_job_ids") != planned
+        or payload.get("execute_job_ids") != execute
+        or payload.get("reuse_job_ids") != reuse
+        or not isinstance(reused_results, list)
+        or {
+            str(item.get("id"))
+            for item in reused_results
+            if isinstance(item, Mapping)
+        }
+        != set(reuse)
+    ):
+        raise ConfigurationError("0.154 official 恢复 handoff 的 2/27 闭集漂移。")
+    for item in reused_results:
+        if not isinstance(item, Mapping):
+            raise ConfigurationError("0.154 official 恢复 handoff 复用结果非法。")
+        _validate_incremental_job_result(
+            item,
+            label=f"0.154 official 恢复 handoff:{item.get('id', '')}",
+        )
+    parent = payload.get("parent_preview")
+    if not isinstance(parent, Mapping):
+        raise ConfigurationError("0.154 official 恢复 handoff 缺少预览父批次。")
+    _validate_recovery_execution_handoff_parent_terminal(parent)
+
+    plan = successor_attempt.get("incremental_plan")
+    successor_results = successor_attempt.get("results")
+    if (
+        successor_attempt.get("campaign_id") != manifest.get("campaign_id")
+        or successor_attempt.get("phase") != "official"
+        or successor_attempt.get("candidate_id") is not None
+        or successor_attempt.get("status") != "awaiting_receipts"
+        or not isinstance(plan, Mapping)
+        or plan.get("planned_job_ids") != planned
+        or plan.get("reused_job_ids") != reuse
+        or plan.get("executed_job_ids") != execute
+        or plan.get("failed_job_ids") != []
+        or plan.get("pending_job_ids") != []
+        or set(plan.get("affected_job_ids", [])) != set(execute)
+        or not isinstance(successor_results, list)
+    ):
+        raise ConfigurationError("0.154 official 恢复后继 attempt 的执行闭集漂移。")
+    successor_by_id = {
+        str(item.get("id")): item
+        for item in successor_results
+        if isinstance(item, Mapping)
+    }
+    if set(successor_by_id) != set(planned) or any(
+        successor_by_id.get(str(item["id"])) != item for item in reused_results
+    ):
+        raise ConfigurationError("0.154 official 恢复后继没有逐字承接 27 项结果。")
+    return {
+        **expected_impact,
+        "recovery_execution_handoff": dict(binding),
+    }
+
+
+def _official_compaction_recovery_successor_impact(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    current_tool: Mapping[str, Any],
+    *,
+    attempt_root: Path | None,
+    attempt: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    """从直接 attempt 或已封存 official 阶段重放恢复授权。"""
+
+    if (
+        isinstance(attempt, Mapping)
+        and attempt_root is not None
+        and attempt.get("recovery_execution_handoff") is not None
+    ):
+        return _replay_bound_official_compaction_recovery_handoff(
+            campaign_dir,
+            manifest,
+            current_tool,
+            successor_root=attempt_root,
+            successor_attempt=attempt,
+        )
+    stage_path = campaign_dir / "official" / "result.json"
+    if not stage_path.is_file() or stage_path.is_symlink():
+        return None
+    stage = _load_stage_result(
+        campaign_dir,
+        "capture-official",
+        _replay_machine_receipts=False,
+        _shallow=True,
+        _verified_campaign_manifest=manifest,
+    )
+    stage_binding = stage.get("attempt")
+    _require_file_binding(stage_binding, "0.154 official 恢复封存 attempt")
+    stage_attempt_path = _campaign_file(campaign_dir, str(stage_binding["path"]))
+    stage_root, stage_attempt = _load_capture_attempt(
+        campaign_dir,
+        "official",
+        None,
+        stage_attempt_path.parent.name,
+        _verified_campaign_manifest=manifest,
+    )
+    if (
+        stage_attempt_path != stage_root / "attempt.json"
+        or file_sha256(stage_attempt_path) != stage_binding["sha256"]
+    ):
+        raise ConfigurationError("0.154 official 恢复封存 attempt 绑定漂移。")
+    return _replay_bound_official_compaction_recovery_handoff(
+        campaign_dir,
+        manifest,
+        current_tool,
+        successor_root=stage_root,
+        successor_attempt=stage_attempt,
+    )
 
 
 @contextmanager
@@ -26867,6 +27353,7 @@ def _verify_plan_identity(
     operation: str | None = None,
     attempt_root: Path | None = None,
     attempt: Mapping[str, Any] | None = None,
+    recovery_scope: Mapping[str, Any] | None = None,
     deadline: incremental_recovery.WallClockDeadline | None = None,
     heartbeat: Any | None = None,
     allow_stopped_classification_draft_approval: bool = False,
@@ -26989,6 +27476,38 @@ def _verify_plan_identity(
         return None
     component_drift = _tool_component_drift(expected_tool, current_tool)
     changed_components = set(component_drift.get("changed_components", []))
+    if (
+        operation == "capture-run"
+        and isinstance(attempt, Mapping)
+        and attempt_root is not None
+        and isinstance(recovery_scope, Mapping)
+        and attempt.get("phase") == "official"
+        and attempt.get("candidate_id") is None
+        and attempt.get("status") == "failed"
+    ):
+        compaction_recovery = _official_compaction_lite_recovery_tool_impact(
+            manifest,
+            current_tool,
+            source_attempt=attempt,
+            recovery_scope=recovery_scope,
+        )
+        if compaction_recovery is not None:
+            _verify_control_receipts(campaign_dir, manifest, require_active=True)
+            if deadline is not None:
+                deadline.check("plan-identity:official-compaction-lite-recovery")
+            return compaction_recovery
+    compaction_successor = _official_compaction_recovery_successor_impact(
+        campaign_dir,
+        manifest,
+        current_tool,
+        attempt_root=attempt_root,
+        attempt=attempt,
+    )
+    if compaction_successor is not None:
+        _verify_control_receipts(campaign_dir, manifest, require_active=True)
+        if deadline is not None:
+            deadline.check("plan-identity:official-compaction-lite-successor")
+        return compaction_successor
     effective_epoch = _load_control_epoch_receipt(campaign_dir, manifest)
     official_epoch_classification_drift = (
         isinstance(effective_epoch, Mapping)
@@ -28427,6 +28946,124 @@ def _phase_evaluation_changed_files(
     return changed
 
 
+def _official_compaction_lite_recovery_tool_impact(
+    manifest: Mapping[str, Any],
+    current_tool: Mapping[str, Any],
+    *,
+    source_attempt: Mapping[str, Any],
+    recovery_scope: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """验证 0.154 Main→Astra Lite 两项失败恢复的唯一产出变化。
+
+    该授权不是通用的 official 失败重试通道。只有三份生产文件逐字命中已审核
+    的旧／新摘要、Campaign 双轨模型不变、源 attempt 恰好失败两项且没有 pending
+    时才返回影响闭集。其余任何生产字节或 Job 集变化都失败关闭。
+    """
+
+    expected_tool = manifest.get("tool_identity")
+    configuration = manifest.get("configuration")
+    if not isinstance(expected_tool, Mapping) or not isinstance(
+        configuration, Mapping
+    ):
+        return None
+    drift = _tool_identity_drift(current_tool, expected_tool)
+    production_paths = set(drift.get("production", [])) - set(
+        _PHASE_EVALUATION_HYBRID_FILES
+    )
+    registered_paths = set(OFFICIAL_COMPACTION_LITE_RECOVERY_FILES)
+    # 没有触及本次三份文件时交回既有恢复逻辑；一旦触及其中任一项，就必须
+    # 完整命中本专用合同，不得再退化到 evaluation-transition。
+    if not production_paths.intersection(registered_paths):
+        return None
+    if (
+        manifest.get("campaign_mode") != "formal"
+        or manifest.get("target_version") != "0.154.0"
+        or configuration.get("model") != "gpt-5.5"
+        or configuration.get("lite_model") != "gpt-6-astra"
+        or source_attempt.get("campaign_id") != manifest.get("campaign_id")
+        or source_attempt.get("phase") != "official"
+        or source_attempt.get("candidate_id") is not None
+        or source_attempt.get("status") != "failed"
+    ):
+        raise ConfigurationError(
+            "0.154 Main→Astra Lite 恢复的 Campaign、模型或源 attempt 身份非法。"
+        )
+
+    planned = {str(value) for value in recovery_scope.get("planned_job_ids", [])}
+    completed = {
+        str(value) for value in recovery_scope.get("completed_job_ids", [])
+    }
+    failed = {str(value) for value in recovery_scope.get("failed_job_ids", [])}
+    pending = {str(value) for value in recovery_scope.get("pending_job_ids", [])}
+    execute = {str(value) for value in recovery_scope.get("execute_job_ids", [])}
+    expected_execute = set(OFFICIAL_COMPACTION_LITE_RECOVERY_JOB_IDS)
+    manifest_jobs = manifest.get("jobs")
+    if not isinstance(manifest_jobs, list):
+        raise ConfigurationError("0.154 Main→Astra Lite 恢复缺少 Campaign Job 清单。")
+    manifest_official = {
+        str(job.get("id"))
+        for job in manifest_jobs
+        if isinstance(job, Mapping) and job.get("phase") == "official"
+    }
+    if (
+        len(planned) != 29
+        or planned != manifest_official
+        or failed != expected_execute
+        or pending
+        or execute != expected_execute
+        or completed != planned - expected_execute
+        or len(completed) != 27
+        or completed & execute
+        or completed | execute != planned
+    ):
+        raise ConfigurationError(
+            "0.154 Main→Astra Lite 恢复必须保持 failed=2、pending=0、reuse=27 的冻结闭集。"
+        )
+
+    before = _tool_entry_index(expected_tool)
+    after = _tool_entry_index(current_tool)
+    changed_files = _phase_evaluation_changed_files(expected_tool, current_tool)
+    if production_paths != registered_paths:
+        raise ConfigurationError(
+            "0.154 Main→Astra Lite 恢复出现合同外生产文件变化："
+            + "、".join(sorted(production_paths ^ registered_paths))
+        )
+    for path, binding in OFFICIAL_COMPACTION_LITE_RECOVERY_FILES.items():
+        if (
+            before.get(path) != binding["from_sha256"]
+            or after.get(path) != binding["to_sha256"]
+        ):
+            raise ConfigurationError(
+                f"0.154 Main→Astra Lite 恢复文件旧／新摘要漂移：{path}"
+            )
+
+    component_drift = _tool_component_drift(expected_tool, current_tool)
+    return {
+        "kind": BATCHED_FAILED_CAPTURE_RECOVERY_KIND,
+        "transition_id": OFFICIAL_COMPACTION_LITE_RECOVERY_TRANSITION_ID,
+        "changed_components": sorted(
+            str(value)
+            for value in component_drift.get("changed_components", [])
+        ),
+        "changed_paths": component_drift.get("changed_paths", {}),
+        "changed_files": changed_files,
+        "allowed_production_paths": sorted(registered_paths),
+        "affected_job_ids": sorted(expected_execute),
+        "models": {
+            "main": "gpt-5.5",
+            "lite": "gpt-6-astra",
+            "lite_use_responses_lite": True,
+        },
+        "recovery_scope_sha256": _fingerprint(dict(recovery_scope)),
+        "from_component_identity_sha256": _fingerprint(
+            _tool_component_bundle(expected_tool)
+        ),
+        "to_component_identity_sha256": _fingerprint(
+            _tool_component_bundle(current_tool)
+        ),
+    }
+
+
 def _phase_evaluation_failed_job_production_changes(
     drift: Mapping[str, list[str]],
     *,
@@ -28489,6 +29126,19 @@ def _authorize_phase_recovery_production_paths(
 ) -> set[str]:
     """在复用历史结果前验证 transition，并返回可排除的精确产出文件。"""
 
+    if phase == "official" and candidate_id is None:
+        compaction_recovery = _official_compaction_lite_recovery_tool_impact(
+            manifest,
+            current_tool,
+            source_attempt=attempt,
+            recovery_scope=recovery_scope,
+        )
+        if compaction_recovery is not None:
+            return {
+                str(path)
+                for path in compaction_recovery["allowed_production_paths"]
+            }
+
     interrupted_path = _interrupted_recovery_transition_path(attempt_root)
     if interrupted_path.is_file() and not interrupted_path.is_symlink():
         if phase != "official" or candidate_id is not None:
@@ -28542,22 +29192,30 @@ def _phase_recovery_exact_affected_job_ids(
     """
 
     paths = {str(path) for path in production_paths}
+    planned = {str(job_id) for job_id in planned_job_ids}
     if explicit_affected_job_ids is not None:
         affected = {str(job_id) for job_id in explicit_affected_job_ids}
         unknown_paths: set[str] = set()
     else:
-        unknown_paths = paths - set(RUNTIME_SUCCESSOR_CHANGED_TOOL_PATH_JOB_IDS)
+        registered_paths = set(RUNTIME_SUCCESSOR_CHANGED_TOOL_PATH_JOB_IDS) | set(
+            OFFICIAL_COMPACTION_LITE_RECOVERY_FILES
+        )
+        unknown_paths = paths - registered_paths
         affected = {
             job_id
             for path in paths
-            for job_id in RUNTIME_SUCCESSOR_CHANGED_TOOL_PATH_JOB_IDS[path]
+            for job_id in (
+                OFFICIAL_COMPACTION_LITE_RECOVERY_JOB_IDS
+                if path in OFFICIAL_COMPACTION_LITE_RECOVERY_FILES
+                else RUNTIME_SUCCESSOR_CHANGED_TOOL_PATH_JOB_IDS[path]
+            )
+            if job_id in planned
         } if not unknown_paths else set()
     if unknown_paths:
         raise ConfigurationError(
             "恢复 transition 包含没有 Job 映射的产出文件："
             + "、".join(sorted(unknown_paths))
         )
-    planned = {str(job_id) for job_id in planned_job_ids}
     execute = {
         str(job_id) for job_id in recovery_scope.get("execute_job_ids", [])
     }
@@ -32836,6 +33494,29 @@ def _validate_attempt_incremental_fields(
             or parsed.name != INTERRUPTED_RECOVERY_TRANSITION_FILENAME
         ):
             raise ConfigurationError("attempt 中断恢复 transition 路径或阶段非法。")
+    recovery_handoff = payload.get("recovery_execution_handoff")
+    if recovery_handoff is not None:
+        _require_file_binding(
+            recovery_handoff,
+            "attempt 恢复 execution handoff",
+        )
+        raw_path = str(recovery_handoff.get("path", ""))
+        parsed = PurePosixPath(raw_path)
+        if (
+            payload.get("phase") != "official"
+            or payload.get("candidate_id") is not None
+            or payload.get("status") not in {"awaiting_receipts", "failed"}
+            or interrupted_recovery is not None
+            or interrupted_transition is not None
+            or payload.get("evaluation_transition") is not None
+            or parsed.is_absolute()
+            or str(parsed) != raw_path
+            or "\\" in raw_path
+            or any(part in {"", ".", ".."} for part in parsed.parts)
+            or parsed.parent.name != "recovery-execution-handoffs"
+            or parsed.suffix != ".json"
+        ):
+            raise ConfigurationError("attempt 恢复 execution handoff 路径或阶段非法。")
     deadline_orphan = payload.get("deadline_orphan_finalization")
     if deadline_orphan is not None:
         if not isinstance(deadline_orphan, Mapping) or set(deadline_orphan) != {
@@ -35824,6 +36505,7 @@ def _run_capture_attempt(
             operation="capture-run",
             attempt_root=recovery_source_root,
             attempt=recovery_source_attempt,
+            recovery_scope=recovery_scope,
             deadline=deadline,
         )
     )
@@ -35953,13 +36635,17 @@ def _run_capture_attempt(
             and recovery_source_attempt is not None
             and recovery_scope is not None
             and isinstance(tool_impact, Mapping)
-            and os.environ.get(
-                codex_upgrade_supervisor.CAMPAIGN_RUN_ACTION_ID_ENV
+            and (
+                tool_impact.get("kind")
+                == BATCHED_FAILED_CAPTURE_RECOVERY_KIND
+                or os.environ.get(
+                    codex_upgrade_supervisor.CAMPAIGN_RUN_ACTION_ID_ENV
+                )
+                in {
+                    "recover-vc1-interruption-preview",
+                    "continue-vc1-interruption-preview",
+                }
             )
-            in {
-                "recover-vc1-interruption-preview",
-                "continue-vc1-interruption-preview",
-            }
         ):
             preview["execution_handoff"] = _write_recovery_execution_handoff(
                 campaign_dir,
@@ -36723,6 +37409,15 @@ def _run_capture_attempt(
             "evaluation_transition": evaluation_transition,
             "interrupted_recovery_transition": (
                 interrupted_recovery_transition_binding
+            ),
+            **(
+                {
+                    "recovery_execution_handoff": dict(
+                        recovery_execution_handoff["binding"]
+                    )
+                }
+                if recovery_execution_handoff is not None
+                else {}
             ),
             "incremental_plan": _capture_attempt_incremental_plan(
                 planned_jobs=planned_jobs,

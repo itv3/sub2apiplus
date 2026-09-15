@@ -185,6 +185,10 @@
       "description": "恢复后继 attempt 对源孤儿 attempt 专用 transition 的只读绑定。",
       "$ref": "#/$defs/fileBinding"
     },
+    "recovery_execution_handoff": {
+      "description": "普通 VC-1 v2 零请求预览签发、并由紧邻真实补跑消费的不可变 handoff 绑定。",
+      "$ref": "#/$defs/fileBinding"
+    },
     "deadline_orphan_finalization": {
       "description": "原始总 deadline 强停后，由专用直接 finalizer 补齐环境终态、请求计数和停线绑定。",
       "$ref": "#/$defs/deadlineOrphanFinalization"
@@ -403,6 +407,18 @@
         },
         "not": {
           "required": ["interrupted_recovery"]
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["recovery_execution_handoff"]
+      },
+      "then": {
+        "properties": {
+          "phase": {"const": "official"},
+          "candidate_id": {"const": null},
+          "candidate_purpose": {"const": null}
         }
       }
     },

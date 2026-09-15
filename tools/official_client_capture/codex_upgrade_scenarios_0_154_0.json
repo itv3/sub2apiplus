@@ -1993,6 +1993,7 @@
             "CAPTURE_ROOT": "{capture_root}",
             "CODEX_VERSION": "{target_version}",
             "CODEX_BIN": "{relay_codex_bin}",
+            "COMPACTION_SECOND_MODEL": "{lite_model}",
             "MODEL": "{model}",
             "RUN_ID": "{campaign_id}-official-comp-hash-changed",
             "SCENARIO": "comp-hash-changed"
@@ -2030,6 +2031,7 @@
             "CAPTURE_ROOT": "{capture_root}",
             "CODEX_VERSION": "{target_version}",
             "CODEX_BIN": "{relay_codex_bin}",
+            "COMPACTION_SECOND_MODEL": "{lite_model}",
             "MODEL": "{model}",
             "RUN_ID": "{campaign_id}-official-model-downshift",
             "SCENARIO": "model-downshift"

@@ -45,21 +45,24 @@ extra_args=""
 compaction_reason=""
 compaction_first_model=""
 compaction_second_model=""
+compaction_second_track=""
 compaction_catalog=""
 
 configure_compaction_models() {
-  # 首模型必须跟随 Campaign 冻结的主模型，不能再写死成某个可能已被账号禁用的
-  # 历史模型。第二模型按目标 CLI 版本选择该版本已冻结的非 Lite 变体：0.154
-  # 的在线目录已不再提供 gpt-5.4-mini，继续沿用 0.149.1 默认值会在发请求前
-  # 必然失败。调用方如需替换，仍必须给出合法且不同的模型 slug，目录生成阶段
-  # 会再次核验它真实存在且 use_responses_lite=false。
+  # 首模型必须跟随 Campaign 冻结的 Main 模型。新建的 0.154 Campaign 会显式
+  # 注入 Lite 模型；修复前已冻结的 0.154 Job 没有该环境字段，只能回退到该版本
+  # 唯一登记的 Lite 模型 gpt-6-astra。恢复门禁会再次证明它等于 Campaign 的
+  # lite_model，不能从在线目录猜选，也不能把 Astra 的 Lite 标记改成 Main。
+  # 旧目标仍保留历史 Main→Main 默认值，保证历史只读演练语义不变。
   local secondary=${COMPACTION_SECOND_MODEL:-}
-  if [[ -z $secondary ]]; then
-    if (( codex_major > 0 || codex_minor >= 154 )); then
-      secondary=gpt-5.3-codex-spark
-    else
-      secondary=gpt-5.4-mini
+  local secondary_track=main
+  if (( codex_major > 0 || codex_minor >= 154 )); then
+    if [[ -z $secondary ]]; then
+      secondary=gpt-6-astra
     fi
+    secondary_track=lite
+  elif [[ -z $secondary ]]; then
+    secondary=gpt-5.4-mini
   fi
   if [[ ! $model =~ ^[A-Za-z0-9._-]+$ || ! $secondary =~ ^[A-Za-z0-9._-]+$ ]]; then
     echo "压缩场景模型只能包含字母、数字、点、下划线和连字符。" >&2
@@ -71,6 +74,7 @@ configure_compaction_models() {
   fi
   compaction_first_model=$model
   compaction_second_model=$secondary
+  compaction_second_track=$secondary_track
 }
 
 # **必须关掉的非必要流量**（§1.5.4）。不关的后果是实测的：一次三轮对话 58 个请求里
@@ -949,27 +953,20 @@ case "$scenario" in
     # 原先直接借生产目录里 gpt-5.6-luna -> gpt-5.4 的自然跨组（3000 -> 2911），
     # 但那让本场景的成败绑死在某个特定模型的上游可用性上——实测旧账号不支持
     # gpt-5.4，第一轮直接失败。改为与 model-downshift 同样的受控目录：首模型
-    # 跟随 Campaign 的 MODEL，第二模型使用目录中已核验的非 Lite mini 变体。
+    # 跟随 Campaign 的 MODEL，第二模型使用 Campaign 显式冻结的 Lite 变体。
     # 这是明确记录的 I 类触发干预；官方 CLI、OAuth、V2 压缩实现与出站均不替换。
     prompt='__COMPACTION_REASON__'
     compaction_reason='comp_hash_changed'
     configure_compaction_models
     compaction_catalog="/capture/runs/$run_id/comp-hash-catalog.json"
-    docker exec "$capture_container" jq \
-      --arg first "$compaction_first_model" \
-      --arg second "$compaction_second_model" '
-      [.models[] | select(.slug == $first or .slug == $second)] as $selected
-      | if (($selected | length) != 2)
-          or any($selected[]; .use_responses_lite != false)
-        then error("压缩场景模型目录缺少两个唯一的非 Lite 模型")
-        else {models: [
-          $selected[]
-          | if .slug == $first
-            then .comp_hash = "comp-hash-probe-first"
-            else .comp_hash = "comp-hash-probe-second"
-            end
-        ]}
-        end' /root/.codex/models_cache.json > "$work_dir/comp-hash-catalog.json"
+    docker exec "$capture_container" python3 \
+      "$capture_tool_root/build_compaction_model_catalog.py" \
+      --models-cache /root/.codex/models_cache.json \
+      --output "$compaction_catalog" \
+      --first-model "$compaction_first_model" \
+      --second-model "$compaction_second_model" \
+      --second-track "$compaction_second_track" \
+      --reason "$compaction_reason"
     chmod 600 "$work_dir/comp-hash-catalog.json" ;;
   model-downshift)
     # ModelDownshift 需旧窗口 > 新窗口且当前 token 已超新模型阈值。默认阈值约
@@ -984,24 +981,14 @@ case "$scenario" in
     compaction_reason='model_downshift'
     configure_compaction_models
     compaction_catalog="/capture/runs/$run_id/model-downshift-catalog.json"
-    docker exec "$capture_container" jq \
-      --arg first "$compaction_first_model" \
-      --arg second "$compaction_second_model" '
-      [.models[] | select(.slug == $first or .slug == $second)] as $selected
-      | if (($selected | length) != 2)
-          or any($selected[]; .use_responses_lite != false)
-        then error("压缩场景模型目录缺少两个唯一的非 Lite 模型")
-        else {models: [
-          $selected[]
-          | .comp_hash = "downshift-probe"
-          | if .slug == $first
-            then .context_window = 272000
-              | .auto_compact_token_limit = 16000
-            else .context_window = 128000
-              | .auto_compact_token_limit = 8000
-            end
-        ]}
-        end' /root/.codex/models_cache.json > "$work_dir/model-downshift-catalog.json"
+    docker exec "$capture_container" python3 \
+      "$capture_tool_root/build_compaction_model_catalog.py" \
+      --models-cache /root/.codex/models_cache.json \
+      --output "$compaction_catalog" \
+      --first-model "$compaction_first_model" \
+      --second-model "$compaction_second_model" \
+      --second-track "$compaction_second_track" \
+      --reason "$compaction_reason"
     chmod 600 "$work_dir/model-downshift-catalog.json" ;;
   oauth-refresh)
     # 采 SPEC-EP-002 的 auth-sni：官方 CLI 的 OAuth token 刷新走 auth.openai.com。
