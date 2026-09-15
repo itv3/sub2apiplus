@@ -6,6 +6,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from tools.official_client_capture import certify_release
 from tools.official_client_capture import codex_upgrade
@@ -146,6 +147,29 @@ class CertifyReleaseTests(unittest.TestCase):
             path = policy_tests._write_json(root / "tampered.json", tampered)
             with self.assertRaisesRegex(certify_release.ReleaseCertificationError, "自摘要不一致"):
                 certify_release.verify(path)
+
+    def test_issue_can_delegate_atomic_replay_to_capture_container(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            inputs = self._inputs(root)
+            completed = mock.Mock(returncode=0, stdout=b'{"campaign_id": null, "live_request_count": 0, "status": "passed"}\n', stderr=b"")
+            with mock.patch.object(certify_release.subprocess, "run", return_value=completed) as run:
+                certification = certify_release.build_certification(
+                    **inputs, atomic_container="capture-cli", data_root=root / "data"
+                )
+            command = run.call_args.args[0]
+            self.assertEqual(command[:2], ["docker", "exec"])
+            self.assertIn("/capture/staging/atomic-double", command)
+            self.assertIn("atomic-double-replay", command)
+            self.assertEqual(certification["atomic_double_rehearsal"]["replayed_in_container"], "capture-cli")
+            failed = mock.Mock(returncode=1, stdout=b"", stderr=b"tampered")
+            with mock.patch.object(certify_release.subprocess, "run", return_value=failed), self.assertRaisesRegex(
+                certify_release.ReleaseCertificationError, "容器重放失败"
+            ):
+                certify_release.build_certification(**inputs, atomic_container="capture-cli", data_root=root / "data")
+            with self.assertRaisesRegex(certify_release.ReleaseCertificationError, "需要 --data-root"):
+                certify_release.build_certification(**inputs, atomic_container="capture-cli")
 
     def test_issue_rejects_stale_deployment_and_mismatched_pre_a3(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
