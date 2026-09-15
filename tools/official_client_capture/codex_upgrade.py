@@ -4639,6 +4639,9 @@ def _mutable_command_coordinates(
         # 不能再建 CampaignLease，否则同一进程内会与自身的锁互相等待。
         "verdict-official-attempt-identity",
         "harden-evidence-permissions",
+        # B0 两个 reconciler 自持 Campaign 排他锁与账本目录锁，不建 CampaignLease。
+        "reconcile-supervisor-run",
+        "reconcile-attempt",
         "",
     }:
         return None
@@ -8977,6 +8980,34 @@ def _build_parser() -> argparse.ArgumentParser:
         "--approve-sha256",
         help="apply 必需：preview 输出的 review_sha256。",
     )
+    reconcile_run = subparsers.add_parser(
+        "reconcile-supervisor-run",
+        help=(
+            "B0：对账尚无 attempt 的父监督器 run（派发前失败、SIGKILL 或中断），"
+            "先入账后判定；可恢复时 phase 保持 active"
+        ),
+    )
+    reconcile_run.add_argument("--run-dir", type=Path, required=True)
+    add_campaign_reference(reconcile_run)
+    reconcile_run.add_argument(
+        "--control-root",
+        type=Path,
+        help="部署收据所在控制根；默认 <宿主数据根>/control。",
+    )
+    reconcile_attempt = subparsers.add_parser(
+        "reconcile-attempt",
+        help=(
+            "B0：对账 reservation 之后中断的 attempt，先入账后判定；"
+            "可恢复时生成零请求 recovery-preview，批准后才能 resume --rerun-failed"
+        ),
+    )
+    add_campaign_reference(reconcile_attempt)
+    reconcile_attempt.add_argument("--attempt-id", required=True)
+    reconcile_attempt.add_argument("--control-root", type=Path)
+    reconcile_attempt.add_argument(
+        "--approve-recovery-sha256",
+        help="按 recovery-preview 的 review_sha256 批准冻结的恢复闭集。",
+    )
     resume = subparsers.add_parser("resume", help="按最近稳定状态续跑失败阶段")
     add_campaign_reference(resume)
     resume.add_argument("--candidate-id")
@@ -9000,6 +9031,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--preview-recovery",
         action="store_true",
         help="只读输出失败补跑闭集；不预约、不探针、不发送请求。",
+    )
+    resume.add_argument(
+        "--recovery-preview",
+        type=Path,
+        help="B0：已批准的 recovery-preview/v1 路径；0.154 起失败／中断 attempt 的 --rerun-failed 必需。",
     )
     resume.add_argument(
         "--candidate-reuse-source-campaign-dir",
@@ -9701,6 +9737,7 @@ _CONTROL_PLANE_TOOL_FILES = frozenset(
         "codex_upgrade_campaign_disposition.py",
         # 项目总账、outbox batch、admission 与消费者门禁、修复收据。
         "codex_upgrade_project_ledger.py",
+        "codex_upgrade_reconciler.py",
         # 零请求 smoke 只在 staging 夹具上跑新命令并写收据。
         "codex_upgrade_zero_request_smoke.py",
         # 工具身份四层策略：策略文件与计算模块只改变身份判据，不改变证据字节。
@@ -9764,6 +9801,7 @@ _CANONICAL_EVALUATION_ONLY_FILES = frozenset(
         "codex_upgrade_campaign_disposition.py",
         # 项目总账、outbox batch、admission 与消费者门禁、修复收据。
         "codex_upgrade_project_ledger.py",
+        "codex_upgrade_reconciler.py",
         # 零请求 smoke 只在 staging 夹具上跑新命令并写收据。
         "codex_upgrade_zero_request_smoke.py",
         # 工具身份四层策略：策略文件与计算模块只改变身份判据，不改变证据字节。
@@ -9896,6 +9934,7 @@ _EVALUATION_SIDE_FILES = frozenset(
         "codex_upgrade_campaign_disposition.py",
         # 项目总账、outbox batch、admission 与消费者门禁、修复收据。
         "codex_upgrade_project_ledger.py",
+        "codex_upgrade_reconciler.py",
         # 零请求 smoke 只在 staging 夹具上跑新命令并写收据。
         "codex_upgrade_zero_request_smoke.py",
         # 工具身份四层策略：策略文件与计算模块只改变身份判据，不改变证据字节。
@@ -27140,7 +27179,11 @@ def _latest_attempt_summary(
         if not attempt_path.exists():
             return {
                 "attempt_id": path.name,
-                "status": "reserved_or_interrupted",
+                "status": (
+                    "reconciled_interrupted"
+                    if _attempt_reconciled_terminal(campaign_dir, path.name) is not None
+                    else "reserved_or_interrupted"
+                ),
                 "seal_preview": False,
                 "run_nonce": reservation["run_nonce"],
                 "attempt_started_at_utc": reservation["started_at_utc"],
@@ -27921,9 +27964,12 @@ def campaign_status(
                 "compared": "accept",
             }[status]
     elif candidate_attempt is not None:
-        if candidate_attempt["status"] == "reserved_or_interrupted":
+        if candidate_attempt["status"] == "reconciled_interrupted":
+            status = "candidate_capture_failed"
+            next_command = "resume --rerun-failed --recovery-preview <已批准的 recovery-preview>"
+        elif candidate_attempt["status"] == "reserved_or_interrupted":
             status = "candidate_capture_interrupted"
-            next_command = "人工审计孤儿预约并新建 Campaign；不得自动重跑"
+            next_command = "先执行 reconcile-attempt；按判定与已批准预览决定 resume 或永久停线"
         elif candidate_attempt["status"] == "awaiting_receipts":
             if candidate_attempt.get("failed_job_ids"):
                 status = "candidate_capture_failed"
@@ -27982,9 +28028,12 @@ def campaign_status(
         status = "official_sealed"
         next_command = "classify"
     elif official_attempt is not None:
-        if official_attempt["status"] == "reserved_or_interrupted":
+        if official_attempt["status"] == "reconciled_interrupted":
+            status = "official_capture_failed"
+            next_command = "resume --rerun-failed --recovery-preview <已批准的 recovery-preview>"
+        elif official_attempt["status"] == "reserved_or_interrupted":
             status = "official_capture_interrupted"
-            next_command = "人工审计孤儿预约并新建 Campaign；不得自动重跑"
+            next_command = "先执行 reconcile-attempt；按判定与已批准预览决定 resume 或永久停线"
         elif official_attempt["status"] == "awaiting_receipts":
             status = (
                 "official_awaiting_seal_approval"
@@ -35511,6 +35560,9 @@ def _active_unsealed_attempts(
             )
             attempt_path = attempt_root / "attempt.json"
             if not attempt_path.exists():
+                # B0：已对账的孤儿以 attempt-reconciliation 收据为终态，不再阻塞新预约。
+                if _attempt_reconciled_terminal(campaign_dir, attempt_root.name) is not None:
+                    continue
                 active.append(
                     f"{candidate_id or 'official'}:{attempt_root.name}:reserved_or_interrupted"
                 )
@@ -35546,7 +35598,11 @@ def _failed_capture_attempts(
     for current_phase, candidate_id, attempt_root in _campaign_attempt_roots(
         campaign_dir
     ):
-        if current_phase != phase or not (attempt_root / "attempt.json").is_file():
+        if current_phase != phase:
+            continue
+        if not (attempt_root / "attempt.json").is_file():
+            if _attempt_reconciled_terminal(campaign_dir, attempt_root.name) is not None:
+                failed.append(f"{candidate_id or 'official'}:{attempt_root.name}")
             continue
         _, attempt = _load_capture_attempt(
             campaign_dir,
@@ -37558,6 +37614,8 @@ def _run_capture_attempt(
         getattr(arguments, "rerun_failed", False)
         and classification_candidate_reuse_context is None
     ):
+        preview_payload = getattr(arguments, "recovery_preview_payload", None)
+        reconciled_orphan = False
         source = _latest_failed_attempt_for_identity(
             campaign_dir,
             phase=phase,
@@ -37587,7 +37645,20 @@ def _run_capture_attempt(
                 recovery_source_receipt = runtime_successor_recovery[
                     "source_receipt"
                 ]
-        if source is None:
+        if (
+            source is None
+            and isinstance(preview_payload, Mapping)
+            and preview_payload.get("source_attempt_receipt_exists") is False
+            and not preview_payload.get("reuse_job_ids")
+        ):
+            # B0：已对账的孤儿 attempt 没有 attempt.json，也没有 after 探针可证明
+            # 证据前提，闭集由已批准的恢复预览冻结：不复用、按预览执行集合重跑。
+            reconciled_orphan = True
+            recovery_completed_ids = set()
+            recovery_execute_ids = {
+                str(item) for item in preview_payload.get("execute_job_ids", [])
+            }
+        elif source is None:
             # 显式 rerun 只能承接一个可验证的失败源；没有源时禁止回退到
             # 当前计划或全量 Job，避免“失败项为空”被误解释成重新抓包。
             raise ConfigurationError(
@@ -37676,6 +37747,19 @@ def _run_capture_attempt(
                     # 身份分级既没有执行对象，也会违反 reservation 前立即退出。
                     phase_recovery_high_risk_paths = set()
                     affected_job_ids = set()
+        if isinstance(preview_payload, Mapping) and not reconciled_orphan:
+            # 已批准的恢复预览是操作员确认的唯一闭集；源 attempt 冻结闭集必须与之逐项相等。
+            if (
+                recovery_source_root is None
+                or recovery_source_root.name != preview_payload.get("source_attempt_id")
+                or set(preview_payload.get("reuse_job_ids", []))
+                != set(recovery_completed_ids or set())
+                or set(preview_payload.get("execute_job_ids", []))
+                != set(recovery_execute_ids or set())
+            ):
+                raise ConfigurationError(
+                    "已批准的恢复预览与源 attempt 冻结闭集不一致；重新执行 reconcile-attempt。"
+                )
         if (
             recovery_source_root is not None
             and recovery_source_attempt is not None
@@ -37695,7 +37779,9 @@ def _run_capture_attempt(
                 recovery_scope=recovery_scope,
                 tool_identity=tool_identity,
             )
-        if recovery_execution_handoff is not None:
+        if reconciled_orphan:
+            prior_results = []
+        elif recovery_execution_handoff is not None:
             prior_results = [
                 dict(item)
                 for item in recovery_execution_handoff["reused_results"]
@@ -46047,6 +46133,8 @@ def _reject_unparented_formal_write(
     direct_control_commands = {
         "reuse-official-evidence",
         "harden-evidence-permissions",
+        "reconcile-supervisor-run",
+        "reconcile-attempt",
         "wire-transition-intent",
         "wire-transition-final",
         "evaluation-epoch",
@@ -46360,6 +46448,48 @@ def _harden_evidence_permissions_command(arguments: argparse.Namespace) -> dict[
     return result
 
 
+def _reconcile_supervisor_run_command(arguments: argparse.Namespace) -> dict[str, Any]:
+    """B0：父监督器 run 对账（自身零请求）。"""
+
+    from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+    try:
+        return reconciler.reconcile_supervisor_run(
+            Path(arguments.run_dir),
+            arguments.campaign_dir,
+            control_root=getattr(arguments, "control_root", None),
+        )
+    except reconciler.ReconcilerError as error:
+        raise ConfigurationError(str(error)) from error
+
+
+def _reconcile_attempt_command(arguments: argparse.Namespace) -> dict[str, Any]:
+    """B0：attempt 对账（自身零请求）；可恢复时产出或批准恢复预览。"""
+
+    from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+    try:
+        return reconciler.reconcile_attempt(
+            arguments.campaign_dir,
+            str(arguments.attempt_id),
+            control_root=getattr(arguments, "control_root", None),
+            approve_recovery_sha256=getattr(arguments, "approve_recovery_sha256", None),
+        )
+    except reconciler.ReconcilerError as error:
+        raise ConfigurationError(str(error)) from error
+
+
+def _attempt_reconciled_terminal(campaign_dir: Path, attempt_id: str) -> dict[str, Any] | None:
+    """已对账的孤儿 attempt（无 attempt.json）以对账收据为终态，不再视为 active。"""
+
+    from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+    try:
+        return reconciler.attempt_reconciled_terminal(campaign_dir, attempt_id)
+    except reconciler.ReconcilerError as error:
+        raise ConfigurationError(str(error)) from error
+
+
 def _resume_campaign(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
     manifest = _require_formal_campaign(arguments.campaign_dir)
     status = campaign_status(arguments.campaign_dir, arguments.candidate_id)
@@ -46371,6 +46501,11 @@ def _resume_campaign(arguments: argparse.Namespace) -> tuple[dict[str, Any], int
         "candidate_capture_interrupted",
         "capture_state_inconsistent",
     }:
+        if current != "capture_state_inconsistent" and _requires_complete_vc_artifacts(manifest):
+            raise ConfigurationError(
+                "attempt 已中断且尚未对账；先执行 reconcile-attempt，"
+                "按判定与已批准的 recovery-preview 决定是否 resume --rerun-failed。"
+            )
         raise ConfigurationError("存在孤儿预约或并发残留；只能人工审计后新建 Campaign。")
     if current == "candidate_selection_required":
         raise ConfigurationError("请先按 status 输出选择原 candidate-id，resume 不会猜测。")
@@ -46386,6 +46521,21 @@ def _resume_campaign(arguments: argparse.Namespace) -> tuple[dict[str, Any], int
                 manifest,
                 label="候选失败重跑",
             )
+        if _requires_complete_vc_artifacts(manifest) and not getattr(
+            arguments, "preview_recovery", False
+        ):
+            # B0：0.154 起失败／已对账中断 attempt 的补跑必须由已批准的零请求恢复预览冻结闭集。
+            from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+            try:
+                arguments.recovery_preview_payload = reconciler.load_approved_recovery_preview(
+                    arguments.campaign_dir,
+                    getattr(arguments, "recovery_preview", None),
+                    phase=phase,
+                    candidate_id=arguments.candidate_id if phase == "candidate" else None,
+                )
+            except reconciler.ReconcilerError as error:
+                raise ConfigurationError(str(error)) from error
         result = _run_capture_attempt(arguments, phase)
         return result, 0 if result.get("status") in CAPTURE_SUCCESS_STATUSES else 2
     if current == "planned":
@@ -46709,6 +46859,12 @@ def _main_without_campaign_lease(argv: list[str] | None = None) -> int:
         elif command == "harden-evidence-permissions":
             result = _harden_evidence_permissions_command(arguments)
             return_code = 0 if result.get("status") in {"passed", "applied", "approval_required"} else 3
+        elif command == "reconcile-supervisor-run":
+            result = _reconcile_supervisor_run_command(arguments)
+            return_code = 0 if result.get("status") == "recoverable" else 3
+        elif command == "reconcile-attempt":
+            result = _reconcile_attempt_command(arguments)
+            return_code = 0 if result.get("status") == "recoverable" else 3
         elif command == "status":
             result = campaign_status(arguments.campaign_dir, arguments.candidate_id)
             return_code = 0

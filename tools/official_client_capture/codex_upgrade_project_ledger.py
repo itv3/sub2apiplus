@@ -619,6 +619,20 @@ def _apply_request_part(state: dict[str, Any], part: Mapping[str, Any], operatio
     if status not in REQUEST_STATUSES or not isinstance(keys, list) or any(not isinstance(k, str) for k in keys):
         raise ProjectLedgerError(f"{label}请求部分形态非法")
     estimated = _count(part.get("estimated_delta", 0), f"{label}.estimated_delta")
+    sources = part.get("estimated_sources")
+    if sources is not None:
+        # B0：估计按来源（producer run）全局去重，同一 direct 分支多次对账只计一次上界。
+        if not isinstance(sources, list):
+            raise ProjectLedgerError(f"{label}.estimated_sources 必须是列表")
+        estimated = 0
+        for item in sources:
+            if not isinstance(item, Mapping) or not isinstance(item.get("source_id"), str) or not item["source_id"]:
+                raise ProjectLedgerError(f"{label}.estimated_sources 条目非法")
+            count = _count(item.get("estimated_count", 0), f"{label}.estimated_sources.estimated_count")
+            if item["source_id"] in state["accounted_estimated_sources"]:
+                continue
+            state["accounted_estimated_sources"].add(item["source_id"])
+            estimated += count
     accounted: set[str] = state["accounted_identity_index"]
     initial: set[str] = state["initial_identity_keys"]
     new_keys = 0
@@ -644,6 +658,7 @@ def _replay(root: Path, plan: Mapping[str, Any], events: list[dict[str, Any]], *
         "accounted_identity_index": set(),
         "initial_identity_keys": _initial_keys(root, plan),
         "duplicate_identity_keys": [],
+        "accounted_estimated_sources": set(),
         "root_cause_counts": dict(plan["initial_root_cause_counts"]),
         "registered_campaigns": {},
         "rejected_campaigns": {},
@@ -733,6 +748,7 @@ def _replay(root: Path, plan: Mapping[str, Any], events: list[dict[str, Any]], *
         "accounted_identity_index": sorted(state["accounted_identity_index"]),
         "accounted_identity_index_sha256": _digest(sorted(state["accounted_identity_index"])),
         "duplicate_identity_keys": state["duplicate_identity_keys"],
+        "accounted_estimated_sources": sorted(state["accounted_estimated_sources"]),
         "root_cause_counts": dict(sorted(state["root_cause_counts"].items())),
         "root_causes_at_limit": sorted(rc for rc, n in state["root_cause_counts"].items() if n >= limit),
         "registered_campaigns": state["registered_campaigns"],

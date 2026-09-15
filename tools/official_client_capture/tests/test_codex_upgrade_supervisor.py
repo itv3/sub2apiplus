@@ -1774,6 +1774,7 @@ class SupervisorTests(unittest.TestCase):
             "plan",
             "reuse-official-evidence",
             "harden-evidence-permissions",
+            "reconcile-attempt",
             "compile-vc-batch",
         ):
             with self.subTest(command=command), tempfile.TemporaryDirectory() as directory:

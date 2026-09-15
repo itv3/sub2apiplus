@@ -31,6 +31,7 @@
         "codex_upgrade_official_attempt_audit.py",
         "codex_upgrade_predispatch_stop.py",
         "codex_upgrade_project_ledger.py",
+        "codex_upgrade_reconciler.py",
         "codex_upgrade_root_cause.py",
         "codex_upgrade_supervisor.py",
         "codex_upgrade_time_reconciliation.py",

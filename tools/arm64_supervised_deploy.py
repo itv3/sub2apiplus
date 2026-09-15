@@ -99,7 +99,7 @@ from typing import Any, Callable, Mapping
 # A2-3：不再硬编码整树摘要。暂存树自算摘要即期望值，候选与生产三向互等；
 # 收据额外写策略 v2 的五个摘要，供 VC-0 收口与 seal 按 wire 身份比对。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "c17f208daf945774027d9ff4ffac19f1f83195124d42a6c0f057c1fcdac18b69"
+    "8552e5ae04a157a4a74204a6c52d24a24abbe594af2c39791a7da28b66637c7e"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "b9ca7b6f48b3c33a63a864a9ce7ebd617335378ea52fe9148ea161ab3b276ada"

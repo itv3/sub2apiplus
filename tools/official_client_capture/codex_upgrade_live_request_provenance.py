@@ -902,9 +902,17 @@ def collect_campaign_provenance(
             raise ProvenanceError(f"{job_id} evidence_roots 非数组")
         roots: list[Path] = []
         for value in evidence_roots:
-            base = closeout._map_container_evidence_root(
-                value, capture_root=capture_root, host_data_root=host_data_root
-            )
+            candidate = Path(str(value))
+            # 与 attempt 审计同一规则：已经落在宿主数据根内的证据根按宿主路径记录，
+            # 只有容器坐标才需要按冻结 CAPTURE_ROOT 映射。
+            if candidate.is_absolute() and (
+                candidate == host_data_root or host_data_root in candidate.parents
+            ):
+                base = candidate
+            else:
+                base = closeout._map_container_evidence_root(
+                    value, capture_root=capture_root, host_data_root=host_data_root
+                )
             roots.extend(closeout._failed_attempt_roots(base))
         for root in roots:
             if root not in root_cache:

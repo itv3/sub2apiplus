@@ -8,8 +8,11 @@ import gzip
 import hashlib
 import io
 import json
+import os
+import subprocess
 import tarfile
 import tempfile
+import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -7598,6 +7601,8 @@ class CodexUpgradeTest(unittest.TestCase):
                 "evaluation-epoch",
                 "verdict-official-attempt-identity",
                 "harden-evidence-permissions",
+                "reconcile-supervisor-run",
+                "reconcile-attempt",
                 "status",
                 "resume",
             },
@@ -14038,6 +14043,647 @@ class CodexUpgradeTest(unittest.TestCase):
             self.assertEqual(return_code, 3, stderr)
             self.assertEqual(json.loads(stdout)["verdict"], "different")
             self.assertTrue(verdict_output.is_file())
+
+    # ------------------------------------------------------------------
+    # B0：两个 reconciler、先入账后判定、恢复预览与批准、resume 衔接
+    # ------------------------------------------------------------------
+
+    def _b0_fixture(self, root: Path, *, campaign_id: str = "upgrade-0154-b0") -> dict[str, object]:
+        """规范宿主布局下的 0.154 Formal Campaign：总账、部署收据、Campaign 账本齐全。"""
+
+        data = root / "data"
+        campaigns = data / "evidence" / "campaigns"
+        control = data / "control"
+        campaigns.mkdir(parents=True)
+        control.mkdir()
+        for path in (data, data / "evidence", campaigns, control):
+            path.chmod(0o700)
+        ledger_root = project_ledger_fixture.install_fixture_ledger(data)
+        arguments = self._campaign_arguments(
+            campaigns,
+            campaign_id=campaign_id,
+            baseline_version="0.151.0",
+            target_version="0.154.0",
+            model="gpt-5.5",
+            lite_model="gpt-6-astra",
+        )
+        arguments.campaign_dir = campaigns / campaign_id
+        # 夹具 Job 的证据根是宿主路径（<campaign_dir>/official-evidence），provenance 与审计
+        # 按“已在宿主数据根内”的规则直接使用，不经 CAPTURE_ROOT 映射。
+        manifest = codex_upgrade.create_campaign(arguments)
+        campaign_dir = arguments.campaign_dir
+        tool = codex_upgrade._tool_identity(include_git=False)
+        now = (
+            datetime.now(timezone.utc)
+            .isoformat(timespec="milliseconds")
+            .replace("+00:00", "Z")
+        )
+        deployment = self._write_import_receipt(
+            control / "codex-0154-supervisor-enable-20260915t170000z.json",
+            {
+                "schema_version": codex_upgrade.ARM64_SUPERVISED_DEPLOY_RECEIPT_SCHEMA,
+                "status": "passed",
+                "campaign_id": "codex-0154-b0-deploy",
+                "created_at_utc": now,
+                "architecture": "aarch64",
+                "production_tool_root": "/root/docker/capture-cli/data/tools/official_client_capture",
+                "production_doc_root": "/root/docker/capture-cli/data/docs",
+                "tool_files_sha256": tool["files_sha256"],
+                "policy_version": tool["policy_version"],
+                "policy_sha256": tool["policy_sha256"],
+                "wire_producer_sha256": tool["wire_producer_sha256"],
+                "evidence_semantics_sha256": tool["evidence_semantics_sha256"],
+                "control_sha256": tool["control_sha256"],
+                "supervisor_sha256": "1" * 64,
+                "assertion_preparer_sha256": "2" * 64,
+                "rollback_backup": None,
+            },
+        )
+        jobs = codex_upgrade._campaign_jobs(campaign_dir, manifest, "official")
+        return {
+            "data": data,
+            "control": control,
+            "ledger": ledger_root,
+            "campaign_dir": campaign_dir,
+            "manifest": manifest,
+            "jobs": jobs,
+            "tool": tool,
+            "deployment": deployment,
+            "timing_ledger": Path(str(manifest["control_receipts"]["upgrade_timing"]["ledger_dir"])),
+        }
+
+    def _b0_orphan_attempt(self, fixture: dict[str, object], *, complete_job: bool = False) -> str:
+        """只发布 reservation 的孤儿 attempt；可选写一条 complete checkpoint 与 Job 收据。"""
+
+        campaign_dir = fixture["campaign_dir"]
+        manifest = fixture["manifest"]
+        jobs = fixture["jobs"]
+        attempt_root, reservation = codex_upgrade._reserve_capture_attempt(
+            campaign_dir,
+            phase="official",
+            candidate_id=None,
+            identity=dict(manifest["official_identity"]),
+            jobs=jobs,
+            allow_failed_rerun=True,
+        )
+        if complete_job:
+            job = jobs[0]
+            result = {
+                "id": job.job_id,
+                "phase": "official",
+                "required": True,
+                "execution_sha256": codex_upgrade._job_execution_sha256(job),
+                "status": "complete",
+                "description": "合成 Job",
+                "duration_seconds": 0.0,
+                "steps": [],
+                "evidence_roots": [],
+                "missing_evidence_patterns": [],
+                "empty_evidence_patterns": [],
+                "covers": [],
+                "scenario_ids": [],
+                "scenario_receipts": [],
+                "scenario_receipt_failures": [],
+                "track": "main",
+                "model_id": "gpt-5.5",
+                "expected_use_responses_lite": False,
+                "required_model_receipt": False,
+                "model_condition_receipt": None,
+                "model_condition_receipt_failure": None,
+                "disposition": "executed",
+            }
+            store = codex_upgrade.incremental_recovery.CheckpointStore(attempt_root / "checkpoints")
+            store.append(
+                {
+                    "checkpoint_schema_version": codex_upgrade.JOB_CHECKPOINT_SCHEMA,
+                    "campaign_id": manifest["campaign_id"],
+                    "phase": "official",
+                    "attempt_id": attempt_root.name,
+                    "run_nonce": reservation["run_nonce"],
+                    "item_id": job.job_id,
+                    "status": "complete",
+                    "disposition": "executed",
+                    "result_sha256": codex_upgrade.incremental_recovery.digest(result),
+                    "result_key": None,
+                    "result": result,
+                    "source_receipt": None,
+                    "previous_checkpoint_sha256": None,
+                }
+            )
+            codex_upgrade._secure_write_json_once(attempt_root / f"job-{job.job_id}.json", result)
+        return attempt_root.name
+
+    def _b0_run_dir(
+        self,
+        fixture: dict[str, object],
+        name: str,
+        *,
+        state: str = "failed",
+        owner_pid: int | None = None,
+        phase: str = "VC-0",
+    ) -> Path:
+        """一个已终止（或仍在运行）的父监督器 run 目录：state、events、minute ledger、run 清单。"""
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        run_dir = fixture["control"] / f"run-{name}"
+        run_dir.mkdir(mode=0o700)
+        if owner_pid is None:
+            # 已退出并被回收的进程号：_owner_alive 对它返回 False。
+            finished = subprocess.Popen(["true"])
+            finished.wait()
+            owner_pid = finished.pid
+        started = time.time() - 30.0
+        terminal = started + 1.0
+        state_payload: dict[str, object] = {
+            "schema_version": supervisor.STATE_SCHEMA,
+            "supervisor_schema_version": supervisor.SCHEMA_VERSION,
+            "campaign_id": fixture["manifest"]["campaign_id"],
+            "phase": phase,
+            "owner_pid": owner_pid,
+            "owner_nonce": "7" * 64,
+            "started_at_utc": supervisor._epoch_to_utc(started),
+            "started_at_epoch": started,
+            "started_monotonic_ns": 1_000_000_000,
+            "deadline_at_epoch": started + 3600.0,
+            "deadline_monotonic_ns": 3_601_000_000_000,
+            "heartbeat_seconds": 5.0,
+            "watchdog_timeout_seconds": 30.0,
+            "ledger_interval_seconds": 60.0,
+            "state": state,
+            "terminate_owner": False,
+        }
+        if state != "running":
+            state_payload["terminal_at_utc"] = supervisor._epoch_to_utc(terminal)
+            state_payload["terminal_at_epoch"] = terminal
+        self._write_json(run_dir / "state.json", state_payload)
+        (run_dir / "state.json").chmod(0o600)
+        supervisor._append_event(
+            run_dir,
+            event_type="dispatch",
+            operation="dispatch",
+            owner_pid=owner_pid,
+            owner_nonce="7" * 64,
+            campaign_id=str(fixture["manifest"]["campaign_id"]),
+            phase=phase,
+            status=state,
+            reason="SIGKILL" if state != "running" else None,
+        )
+        supervisor._write_minute_record(
+            run_dir,
+            bucket_start=started,
+            bucket_end=terminal,
+            heartbeat=None,
+            owner_alive=state == "running",
+            heartbeat_age=None,
+            classification="failed" if state != "running" else "active",
+        )
+        inner = {
+            "schema_version": supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA,
+            "campaign_id": fixture["manifest"]["campaign_id"],
+            "phase": phase,
+            "deadline_seconds": 3600,
+            "no_op": False,
+            "execute_items": ["official-test"],
+            "reuse_items": [],
+            "actions": [],
+        }
+        self._write_json(
+            run_dir / "campaign-run-manifest.json",
+            {
+                "schema_version": supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA,
+                "manifest": inner,
+                "manifest_sha256": supervisor._sha256(supervisor._canonical(inner)),
+            },
+        )
+        for path in run_dir.rglob("*"):
+            path.chmod(0o700 if path.is_dir() else 0o600)
+        return run_dir
+
+    @staticmethod
+    def _b0_resume(campaign_dir: Path, preview: Path | None = None) -> dict[str, object]:
+        """0.154 的 resume 由 campaign-run 派发，测试直接调用入口后的实现验证 B0 门禁。"""
+
+        result, _return_code = codex_upgrade._resume_campaign(
+            argparse.Namespace(
+                campaign_dir=campaign_dir,
+                candidate_id=None,
+                rerun_failed=True,
+                recovery_preview=preview,
+                preview_recovery=False,
+                assertions=None,
+                external_gate_root=None,
+                external_gate_receipt=None,
+            )
+        )
+        return result
+
+    @staticmethod
+    def _b0_ledger_events(ledger_dir: Path) -> list[tuple[str, str]]:
+        return [
+            (str(event["event_type"]), str(event["event_id"]))
+            for event, _raw in codex_upgrade_timing_ledger._load_events(ledger_dir)
+        ]
+
+    def test_b0_reconcile_attempt_orphan_is_recoverable_and_gates_resume(self) -> None:
+        """孤儿 attempt：先入账后判定为可恢复，生成零请求预览；resume 只认已批准预览。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            attempt_id = self._b0_orphan_attempt(fixture)
+            head_before = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+            self.assertEqual(codex_upgrade.campaign_status(campaign_dir)["status"], "official_capture_interrupted")
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "先执行 reconcile-attempt"):
+                self._b0_resume(campaign_dir)
+
+            return_code, stdout, stderr = self._run_main(
+                ["reconcile-attempt", "--campaign-dir", str(campaign_dir), "--attempt-id", attempt_id]
+            )
+            self.assertEqual(return_code, 0, stderr)
+            result = json.loads(stdout)
+            self.assertEqual(result["status"], "recoverable")
+            self.assertEqual(result["root_cause"]["stable_error_code"], "attempt.interrupted")
+            self.assertEqual(result["root_cause"]["failed_step"], "reservation")
+            self.assertEqual(result["jobs"], {"complete": [], "failed": [], "indeterminate": [], "pending": ["official-test"]})
+            self.assertEqual(result["live_request_count"], 0)
+            self.assertEqual(result["ledger_attempt_events"], "recorded")
+            receipt_path = campaign_dir / result["reconciliation_receipt"]["path"]
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            self.assertEqual(receipt["schema_version"], reconciler.ATTEMPT_SCHEMA)
+            self.assertFalse(receipt["attempt_receipt_exists"])
+            self.assertEqual(receipt["deployment_receipt"]["sha256"], codex_upgrade.file_sha256(fixture["deployment"]))
+            events = self._b0_ledger_events(fixture["timing_ledger"])
+            self.assertIn(("attempt_started", f"reconcile-attempt-started-{attempt_id}"), events)
+            self.assertIn(("attempt_failed", f"reconcile-attempt-failed-{attempt_id}"), events)
+            # 一个 batch 一个项目事件，且已推入总账。
+            self.assertFalse(result["batch"]["reused"])
+            head = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+            self.assertEqual(head["sequence"], head_before["sequence"] + 1)
+            self.assertEqual(head["root_cause_counts"][result["root_cause"]["root_cause_id"]], 1)
+            self.assertFalse(head["blocked"])
+            self.assertEqual(result["project_head"]["root_cause_count"], 1)
+            preview = result["recovery_preview"]
+            self.assertEqual(preview["schema_version"], reconciler.RECOVERY_PREVIEW_SCHEMA)
+            self.assertEqual(preview["execute_job_ids"], ["official-test"])
+            self.assertEqual(preview["reuse_job_ids"], [])
+            self.assertFalse(preview["source_attempt_receipt_exists"])
+            self.assertEqual(preview["expected_new_requests"]["unknown_job_ids"], ["official-test"])
+            self.assertEqual(preview["reservation_exists"], False)
+            preview_path = Path(result["recovery_preview_path"])
+            self.assertTrue(preview_path.is_file())
+
+            # 幂等重放：不重复写收据、账本事件与 batch，总账 head 不变。
+            replay = reconciler.reconcile_attempt(campaign_dir, attempt_id)
+            self.assertEqual(replay["status"], "recoverable")
+            self.assertTrue(replay["batch"]["reused"])
+            self.assertEqual(replay["reconciliation_receipt"], result["reconciliation_receipt"])
+            self.assertEqual(self._b0_ledger_events(fixture["timing_ledger"]), events)
+            self.assertEqual(codex_upgrade_project_ledger.replay_head(fixture["ledger"])["sequence"], head["sequence"])
+            self.assertEqual(replay["recovery_preview"]["index"], preview["index"])
+
+            # 已对账的孤儿不再是 active 预约，而是待补跑的失败 attempt。
+            self.assertEqual(codex_upgrade._active_unsealed_attempts(campaign_dir, "official"), [])
+            self.assertEqual(codex_upgrade._failed_capture_attempts(campaign_dir, "official"), [f"official:{attempt_id}"])
+            status = codex_upgrade.campaign_status(campaign_dir)
+            self.assertEqual(status["status"], "official_capture_failed")
+            self.assertIn("--recovery-preview", status["next_command"])
+
+            # 未批准预览：resume 拒绝。
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "必须提供 --recovery-preview"):
+                self._b0_resume(campaign_dir)
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "尚未批准"):
+                self._b0_resume(campaign_dir, preview_path)
+            # 错误摘要不能批准。
+            return_code, _stdout, stderr = self._run_main(
+                ["reconcile-attempt", "--campaign-dir", str(campaign_dir), "--attempt-id", attempt_id, "--approve-recovery-sha256", "0" * 64]
+            )
+            self.assertNotEqual(return_code, 0)
+            self.assertIn("批准摘要与任何恢复预览都不一致", stderr)
+            return_code, stdout, stderr = self._run_main(
+                ["reconcile-attempt", "--campaign-dir", str(campaign_dir), "--attempt-id", attempt_id, "--approve-recovery-sha256", preview["review_sha256"]]
+            )
+            self.assertEqual(return_code, 0, stderr)
+            approval = json.loads(stdout)["recovery_approval"]
+            self.assertEqual(approval["schema_version"], reconciler.RECOVERY_APPROVAL_SCHEMA)
+            self.assertEqual(approval["execute_job_ids"], ["official-test"])
+            # 批准后 resume 通过门禁，并把冻结闭集交给 run（此处用替身截住真实派发）。
+            captured: dict[str, object] = {}
+
+            def fake_run(arguments: argparse.Namespace, phase: str) -> dict[str, object]:
+                captured["phase"] = phase
+                captured["preview"] = getattr(arguments, "recovery_preview_payload", None)
+                return {"status": "awaiting_receipts"}
+
+            with mock.patch.object(codex_upgrade, "_run_capture_attempt", side_effect=fake_run):
+                resumed = self._b0_resume(campaign_dir, preview_path)
+            self.assertEqual(resumed["status"], "awaiting_receipts")
+            self.assertEqual(captured["phase"], "official")
+            self.assertEqual(captured["preview"]["execute_job_ids"], ["official-test"])
+            self.assertEqual(captured["preview"]["approval"]["approved_sha256"], preview["review_sha256"])
+            # 工具身份漂移后预览失效。
+            drifted = dict(fixture["tool"], wire_producer_sha256="0" * 64)
+            with mock.patch.object(codex_upgrade, "_tool_identity", return_value=drifted):
+                with self.assertRaisesRegex(reconciler.ReconcilerError, "工具身份已变化"):
+                    reconciler.load_approved_recovery_preview(campaign_dir, preview_path, phase="official", candidate_id=None)
+
+    def test_b0_reconcile_attempt_same_root_cause_limit_stops_the_line(self) -> None:
+        """同根因第二次失败使总账计数到达上限：stage_abandoned、stop_the_line 与 campaign_terminal。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            first = self._b0_orphan_attempt(fixture)
+            first_result = reconciler.reconcile_attempt(campaign_dir, first)
+            self.assertEqual(first_result["status"], "recoverable")
+            root_cause_id = first_result["root_cause"]["root_cause_id"]
+            second = self._b0_orphan_attempt(fixture)
+            second_result = reconciler.reconcile_attempt(campaign_dir, second)
+            self.assertEqual(second_result["status"], "permanent_stop")
+            self.assertEqual(second_result["root_cause"]["root_cause_id"], root_cause_id)
+            self.assertEqual(second_result["decision"]["terminal_reason"], "root_cause_limit")
+            self.assertEqual(second_result["project_head"]["root_cause_count"], 2)
+            events = self._b0_ledger_events(fixture["timing_ledger"])
+            types = [item[0] for item in events]
+            self.assertEqual(types[-2:], ["stage_abandoned", "stop_the_line"])
+            self.assertLess(types.index("attempt_failed"), types.index("stage_abandoned"))
+            self.assertEqual(codex_upgrade_timing_ledger.inspect_ledger(fixture["timing_ledger"])["status"], "stopped")
+            head = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+            self.assertEqual(head["terminal_campaigns"][str(fixture["manifest"]["campaign_id"])]["terminal_reason"], "root_cause_limit")
+            self.assertIn(root_cause_id, head["root_causes_at_limit"])
+            with self.assertRaisesRegex(codex_upgrade_project_ledger.ProjectLedgerError, "已终态"):
+                codex_upgrade_project_ledger.assert_campaign_admitted(campaign_dir, command="resume", require=True)
+            # 停线后再对账同一 attempt：幂等，不再追加事件。
+            replay = reconciler.reconcile_attempt(campaign_dir, second)
+            self.assertEqual(replay["status"], "permanent_stop")
+            self.assertEqual(self._b0_ledger_events(fixture["timing_ledger"]), events)
+            self.assertEqual(codex_upgrade_project_ledger.replay_head(fixture["ledger"])["sequence"], head["sequence"])
+            with self.assertRaisesRegex(reconciler.ReconcilerError, "不接受恢复批准"):
+                reconciler.reconcile_attempt(campaign_dir, second, approve_recovery_sha256="0" * 64)
+
+    def test_b0_reconcile_attempt_unresolved_accounting_blocks_and_terminates(self) -> None:
+        """请求数无法确定：请求部分 unresolved、总账 blocked，但 campaign_terminal 仍可写。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            # Job 证据根存在但没有任何权威来源（无 manifest／result／relay），也没有证明请求前失败的日志。
+            evidence_root = campaign_dir / "official-evidence"
+            evidence_root.mkdir(mode=0o700)
+            self._write_json(evidence_root / "surface.json", {"records": []})
+            (evidence_root / "surface.json").chmod(0o600)
+            attempt_id = self._b0_orphan_attempt(fixture)
+            result = reconciler.reconcile_attempt(campaign_dir, attempt_id)
+            self.assertEqual(result["status"], "permanent_stop")
+            self.assertEqual(result["decision"]["terminal_reason"], "accounting_unresolved")
+            self.assertEqual(result["root_cause"]["stable_error_code"], "attempt.accounting-unresolved")
+            self.assertEqual(result["jobs"]["indeterminate"], ["official-test"])
+            self.assertTrue(result["project_head"]["blocked"])
+            head = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+            self.assertTrue(head["blocked"])
+            self.assertEqual(head["unresolved_operation_ids"], [f"reconcile-attempt:{attempt_id}"])
+            self.assertIn(str(fixture["manifest"]["campaign_id"]), head["terminal_campaigns"])
+            with self.assertRaisesRegex(codex_upgrade_project_ledger.ProjectLedgerError, "blocked|已终态"):
+                codex_upgrade_project_ledger.assert_campaign_admitted(campaign_dir, command="seal", require=True)
+
+    def test_b0_reconcile_attempt_deadline_expired_fails_attempt_before_abandoning_stage(self) -> None:
+        """deadline 到期时账本 stop_required：先 metadata-only attempt_failed，再 stage_abandoned、stop_the_line。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            ledger_dir = fixture["timing_ledger"]
+            attempt_id = self._b0_orphan_attempt(fixture)
+            codex_upgrade_timing_ledger.append_event(
+                ledger_dir,
+                event_id=f"run-attempt-started-{attempt_id}",
+                phase="VC-0",
+                event_type="attempt_started",
+                attempt_id=attempt_id,
+                next_action="capture-official",
+            )
+            deadline = codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)["total_deadline_at_utc"]
+            later = (
+                datetime.fromisoformat(deadline.replace("Z", "+00:00")) + timedelta(hours=1)
+            ).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+            result = reconciler.reconcile_attempt(campaign_dir, attempt_id, now=later)
+            self.assertEqual(result["status"], "permanent_stop")
+            self.assertEqual(result["decision"]["terminal_reason"], "deadline_wall_clock")
+            self.assertEqual(result["root_cause"]["stable_error_code"], "attempt.deadline-expired")
+            types = [item[0] for item in self._b0_ledger_events(ledger_dir)]
+            self.assertEqual(types[-3:], ["attempt_failed", "stage_abandoned", "stop_the_line"])
+            failed_event = next(
+                event for event, _raw in codex_upgrade_timing_ledger._load_events(ledger_dir)
+                if event["event_id"] == f"reconcile-attempt-failed-{attempt_id}"
+            )
+            self.assertEqual(failed_event["receipts"], [])
+            self.assertEqual(failed_event["live_request_count"], 0)
+            self.assertEqual(codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)["status"], "stopped")
+
+    def test_b0_reconcile_attempt_precise_requests_enter_ledger_once(self) -> None:
+        """有权威来源的证据按身份键精确入账；同一证据两次对账只计一次。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+        from tools.official_client_capture.tests.test_codex_upgrade_live_request_provenance import (
+            RESPONSES,
+            _mitm_http_row,
+            _turn_events,
+            _write_jsonl,
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            capture = campaign_dir / "official-evidence"
+            self._write_json(
+                capture / "manifest.json",
+                {
+                    "schema_version": "official-client-capture/v1",
+                    "case_results": [
+                        {"evidence": "mitm", "subject": "codex-http", "scenario": "s4", "scenario_result": {"turn_count": 1}}
+                    ],
+                },
+            )
+            _turn_events(capture / "results" / "mitm" / "codex-http" / "s4" / "turn1-events.jsonl", 1)
+            _write_jsonl(
+                capture / "mitm" / "codex-http" / "s4" / "codex-http.jsonl",
+                [
+                    _mitm_http_row("b0-run", "codex-http", "s4", "GET", "/backend-api/models"),
+                    _mitm_http_row("b0-run", "codex-http", "s4", "POST", RESPONSES, "gpt-5.5"),
+                    _mitm_http_row("b0-run", "codex-http", "s4", "POST", RESPONSES + "?x=1", "gpt-5.5"),
+                ],
+            )
+            self._make_private_tree(capture)
+            head_before = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+            first = self._b0_orphan_attempt(fixture, complete_job=True)
+            result = reconciler.reconcile_attempt(campaign_dir, first)
+            self.assertEqual(result["status"], "recoverable")
+            self.assertEqual(result["jobs"]["complete"], ["official-test"])
+            batch_dir = Path(result["batch"]["batch_dir"])
+            entry = json.loads((batch_dir / "entry-01.json").read_text(encoding="utf-8"))
+            request = entry["payload_fragment"]["request"]
+            self.assertEqual(request["status"], "resolved")
+            self.assertEqual(len(request["identity_keys"]), 2)
+            head = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+            self.assertEqual(head["precise_total"], head_before["precise_total"] + 2)
+            # 没有 after 探针：complete Job 不复用，预览按 provenance 给出预计请求数。
+            preview = result["recovery_preview"]
+            self.assertEqual(preview["reuse_job_ids"], [])
+            self.assertEqual(preview["expected_new_requests"]["known_by_job"], {"official-test": 2})
+            second = self._b0_orphan_attempt(fixture)
+            second_result = reconciler.reconcile_attempt(campaign_dir, second)
+            second_entry = json.loads((Path(second_result["batch"]["batch_dir"]) / "entry-01.json").read_text(encoding="utf-8"))
+            self.assertEqual(second_entry["payload_fragment"]["request"]["identity_keys"], [])
+            self.assertEqual(
+                codex_upgrade_project_ledger.replay_head(fixture["ledger"])["precise_total"],
+                head_before["precise_total"] + 2,
+            )
+
+    def test_b0_estimated_sources_are_counted_once_in_project_ledger(self) -> None:
+        """估计部分按来源去重：同一 direct 分支多次进入 batch 只累加一次上界。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            head_before = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+            for operation in ("op-a", "op-b"):
+                with codex_upgrade_project_ledger.campaign_ledger_lock(campaign_dir) as ledger_dir:
+                    codex_upgrade_project_ledger.write_batch(
+                        ledger_dir,
+                        operation_id=operation,
+                        event_type="reconciliation_committed",
+                        payload={
+                            "campaign_id": fixture["manifest"]["campaign_id"],
+                            "request": {
+                                "status": "estimated",
+                                "identity_keys": [],
+                                "estimated_delta": 7,
+                                "estimated_sources": [{"source_id": "c:run-direct", "job_id": "official-test", "estimated_count": 7}],
+                            },
+                            "root_cause": {"root_cause_id": "rc1-" + "a" * 20},
+                        },
+                        source={"kind": "test", "sha256": "0" * 64},
+                    )
+                codex_upgrade_project_ledger.reconcile_project_ledger(fixture["ledger"], campaign_dir=campaign_dir)
+            head = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+            self.assertEqual(head["estimated_total"], head_before["estimated_total"] + 7)
+            self.assertEqual(head["accounted_estimated_sources"], ["c:run-direct"])
+            self.assertEqual(head["root_cause_counts"]["rc1-" + "a" * 20], 2)
+
+    def test_b0_uncommitted_batch_is_not_pushed_and_blocks_new_batches(self) -> None:
+        """batch 写了 entry 未 COMMIT：补齐器不推送，对账也不得在其后再写新 batch。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            attempt_id = self._b0_orphan_attempt(fixture)
+            outbox = campaign_dir / "ledger" / "outbox"
+            existing = sorted(outbox.iterdir())
+            dangling = outbox / f"batch-{len(existing) + 1:06d}"
+            dangling.mkdir(mode=0o700)
+            entry = {
+                "schema_version": codex_upgrade_project_ledger.ENTRY_SCHEMA,
+                "batch_sequence": len(existing) + 1,
+                "entry_sequence": 1,
+                "operation_id": "dangling-op",
+                "event_type": "reconciliation_committed",
+                "payload_fragment": {"campaign_id": fixture["manifest"]["campaign_id"]},
+                "source": {"kind": "test", "sha256": "0" * 64},
+                "receipt_bindings": [],
+                "previous_entry_sha256": None,
+            }
+            entry["entry_sha256"] = codex_upgrade_project_ledger._digest(entry)
+            self._write_json(dangling / "entry-01.json", entry)
+            (dangling / "entry-01.json").chmod(0o600)
+            report = codex_upgrade_project_ledger.reconcile_project_ledger(fixture["ledger"], campaign_dir=campaign_dir)
+            self.assertTrue(any(item.get("status") == "uncommitted" for item in report["results"]))
+            with self.assertRaisesRegex(reconciler.ReconcilerError, "未 COMMIT"):
+                reconciler.reconcile_attempt(campaign_dir, attempt_id)
+
+    def test_b0_reconcile_supervisor_run_recoverable_then_limit_stops(self) -> None:
+        """父监督器 run 对账：可恢复时账本 receipt_passed 且 phase 保持 active；同根因第二次停线。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            ledger_dir = fixture["timing_ledger"]
+            running = self._b0_run_dir(fixture, "a" * 64, state="running", owner_pid=os.getpid())
+            with self.assertRaisesRegex(reconciler.ReconcilerError, "仍在运行"):
+                reconciler.reconcile_supervisor_run(running, campaign_dir)
+            first = self._b0_run_dir(fixture, "b" * 64)
+            return_code, stdout, stderr = self._run_main(
+                ["reconcile-supervisor-run", "--run-dir", str(first), "--campaign-dir", str(campaign_dir)]
+            )
+            self.assertEqual(return_code, 0, stderr)
+            result = json.loads(stdout)
+            self.assertEqual(result["status"], "recoverable")
+            self.assertEqual(result["root_cause"]["stable_error_code"], "supervisor-run.interrupted")
+            self.assertEqual(result["root_cause"]["failed_step"], "dispatch")
+            self.assertEqual(result["live_request_count"], 0)
+            receipt = json.loads((campaign_dir / result["reconciliation_receipt"]["path"]).read_text(encoding="utf-8"))
+            self.assertEqual(receipt["schema_version"], reconciler.SUPERVISOR_RUN_SCHEMA)
+            self.assertFalse(receipt["attempt_events_fabricated"])
+            self.assertEqual(receipt["run"]["state"], "failed")
+            self.assertFalse(receipt["run"]["owner_alive"])
+            summary = codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)
+            self.assertEqual(summary["status"], "active")
+            self.assertEqual(summary["active_phase"], "VC-0")
+            events = self._b0_ledger_events(ledger_dir)
+            self.assertIn(("receipt_passed", f"reconcile-run-passed-{first.name}"), events)
+            self.assertNotIn("attempt_failed", [item[0] for item in events])
+            head = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+            self.assertEqual(head["root_cause_counts"][result["root_cause"]["root_cause_id"]], 1)
+            # run 期间产生过 reservation → 必须改用 reconcile-attempt。
+            orphan = self._b0_orphan_attempt(fixture)
+            later = self._b0_run_dir(fixture, "c" * 64)
+            with self.assertRaisesRegex(reconciler.ReconcilerError, "改用 reconcile-attempt"):
+                reconciler.reconcile_supervisor_run(later, campaign_dir)
+            self.assertTrue(orphan)
+            # 同根因第二个 run（reservation 早于该 run 启动）：计数到 2，永久停线。
+            reconciler.reconcile_attempt(campaign_dir, orphan)
+            time.sleep(0.05)
+            second = self._b0_run_dir(fixture, "d" * 64)
+            state = json.loads((second / "state.json").read_text(encoding="utf-8"))
+            state["started_at_epoch"] = time.time() + 5.0
+            state["started_at_utc"] = codex_upgrade.codex_upgrade_supervisor._epoch_to_utc(state["started_at_epoch"])
+            state["terminal_at_epoch"] = state["started_at_epoch"] + 1.0
+            state["terminal_at_utc"] = codex_upgrade.codex_upgrade_supervisor._epoch_to_utc(state["terminal_at_epoch"])
+            (second / "state.json").write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            (second / "minute-ledger.ndjson").unlink()
+            codex_upgrade.codex_upgrade_supervisor._write_minute_record(
+                second,
+                bucket_start=state["started_at_epoch"],
+                bucket_end=state["terminal_at_epoch"],
+                heartbeat=None,
+                owner_alive=False,
+                heartbeat_age=None,
+                classification="failed",
+            )
+            second_result = reconciler.reconcile_supervisor_run(second, campaign_dir)
+            self.assertEqual(second_result["status"], "permanent_stop")
+            self.assertEqual(second_result["decision"]["terminal_reason"], "root_cause_limit")
+            self.assertEqual(codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)["status"], "stopped")
+            terminal = codex_upgrade_project_ledger.replay_head(fixture["ledger"])["terminal_campaigns"]
+            self.assertEqual(terminal[str(fixture["manifest"]["campaign_id"])]["terminal_reason"], "root_cause_limit")
 
     def test_formal_campaign_run_enforcement_covers_future_target_versions(self) -> None:
         """campaign-run 强制派发与旧写入拒绝按历史豁免集合判定，不再逐版本硬编码。"""

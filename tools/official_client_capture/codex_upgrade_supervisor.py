@@ -4605,6 +4605,8 @@ def _campaign_run_manifest(
             "plan",
             "reuse-official-evidence",
             "harden-evidence-permissions",
+            "reconcile-supervisor-run",
+            "reconcile-attempt",
             "compile-vc-batch",
             "compile-vc-interrupted-recovery-batch",
             "compile-vc-interrupted-recovery-continuation",
