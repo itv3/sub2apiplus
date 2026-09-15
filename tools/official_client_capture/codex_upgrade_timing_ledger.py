@@ -102,6 +102,12 @@ PRODUCER_FREEZE_SUCCESSORS = (
         "scope": "upstream-codex-0154-vc1-timing-producer-chain-closeout-20260915-freeze-successor",
         "result": "manual_actions_required",
     },
+    {
+        "path": "docs/egress/maintenance/upstream-codex-0154-a0a-tool-unlock-20260915-freeze-successor.json",
+        "base_commit": "ff5f94cb46eb05ab209debee291836b97f083678",
+        "scope": "upstream-codex-0154-a0a-tool-unlock-20260915-freeze-successor",
+        "result": "manual_actions_required",
+    },
 )
 
 
