@@ -582,7 +582,9 @@ U-4 的结果只有三种出口：
 VC-0 开始正式 Campaign 前，必须冻结并形成可重放记录：
 
 1. **目标与基线**：目标官方产物身份，以及当前 active／rollback 身份和可用回退点；
-2. **Campaign 身份**：升级用途、终点、账号与权限条件、证据根和受管工具版本；
+2. **Campaign 身份**：升级用途、终点、账号与权限条件、证据根，以及受管工具版本、策略摘要与发布认证
+   收据；整树版本不直接作为失效判据，`wire_producer_sha256`、`evidence_semantics_sha256` 与
+   `policy_sha256` 仍是门禁；
 3. **执行边界**：平台与环境角色、网络和目录边界、资源水位、总 deadline、阶段预算及重试上限；
 4. **证据策略**：已有可信证据的复用范围，以及仍需补齐的事实。
 
@@ -645,6 +647,9 @@ P0 只做离线预检，不采集目标 live 证据、不创建 Candidate、不�
 | Candidate 的源码、画像或构建产物变化 | 保留 Campaign，建立新 Candidate | 从 VC-4 继续，只执行受影响闭集 |
 | 仅运行坐标变化，且产物、权限和环境语义均不变 | 保留 Campaign 和 Candidate | 在首次 attempt 前按客户端指南登记坐标变化；否则重新判定身份 |
 | 控制面或 evaluator 工具变化 | 不改变数据面身份 | 按 §5.1.3 只重跑受影响的离线门禁 |
+| wire producer 变化 | 保留 Campaign，`wire_producer_sha256` 进入两阶段 transition | 只补跑受影响 Job，经 intent／final 两阶段 transition 承接；全部 Job 受影响则建普通后继 |
+| evidence semantics 变化 | 保留 Campaign，追加 evaluation epoch | 只重跑离线处理，原始字节不重采 |
+| policy 变化 | 建立新 Campaign | 经兼容收据与发布认证后从 VC-0 重新开始；既有 Campaign 保持自身冻结策略 |
 
 自客户端指南声明采用对账合同起，任何中断只有两个只读入口：尚无 attempt 的父监督器中断由
 supervisor-run reconciler 对账；reservation 之后的任何中断由 attempt reconciler 对账。两者输出独立不可变

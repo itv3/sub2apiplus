@@ -1604,24 +1604,19 @@ python3 tools/official_client_capture/codex_upgrade.py plan \
    passed／failed／approved_skip／unexpected_skip；正式结果要求 `unexpected_skip=0`。
 2. 核对受管工具树、ARM64 执行副本、测试树和 finalizer 同源；目标版本、场景或证据标签中的旧版本硬编码
    必须被门禁识别。
-3. 用最小历史夹具验证 `campaign-run`、Profile／Catalog 生成、candidate、seal、compare、accept 和部署
-   预演；另用至少两组差异夹具证明批次继承原始 deadline、运行坐标覆盖拒绝账号字段、post-promotion
-   门禁随批准规则集合变化而变化。P0 只证明工具能力，不生成目标版本证据。
-4. 按 §4.0.3 完成 ARM64 环境检查、实规模成本检查和全部冻结 Job 的离线 rehearsal。
-5. 在 ARM64 `capture-cli` 的 `/capture/staging` 全新 0700 根运行
-   `codex_upgrade_campaign_run_rehearsal_receipt.py atomic-double-collect`，连续两次从互不引用的 VC-0
-   控制树经真实原子入口完成 VC-1；必须同时证明 `/capture` 只读、`/capture/staging` 可写、
-   容器内 `/root/oauth-capture/runs` 与 `/capture/runs` 同 inode 且均可写，并冻结当前工具 bundle 摘要。
-   每轮还必须真实制造并收口 `0755/0644` 证据权限缺口、重放通用权限收据，再由失败父 run 把
-   `active/VC-1` 时间账本关闭为 `stage_abandoned → stop_the_line`；第二个失败父 run 必须证明账本闭合
-   冲突会显式进入父结果且不会改写既有终态。两次结果和 canonical 篡改、已有父 run、deadline 漂移、
-   额外文件负例均通过，且请求数、扫描字节均为零。
-6. 冻结 Campaign 总计划，并从当前已知输入编译首个不可变 Formal 批次，明确本批次的
+3. 冻结 Campaign 总计划，并从当前已知输入编译首个不可变 Formal 批次，明确本批次的
    `execute_items`、`reuse_items`、输入摘要和直接依赖；后续批次只能从前序封存输出生成。执行集合为空时
    必须生成 `incremental-noop`。
 
-所有 P0 输出都必须携带输入、工具摘要、原始错误、退出码和临时资产 inventory。工具功能缺口必须在
-Formal Campaign 前拆成独立变更并重新执行 P0；不得在正式 Campaign 上边运行边修工具。
+历史夹具回归、ARM64 实规模成本检查与全部冻结 Job 的离线 rehearsal、以及 `/capture/staging` 内的
+atomic-double 双跑，自 C 阶段起不再是 P0 逐项输入：它们由 §4.0.5 的受管工具发布认证在签发时重放并
+合成，P0 收据只以 `release_certification` 角色绑定发布认证文件。
+
+所有 P0 输出都必须携带输入、工具摘要、原始错误、退出码和临时资产 inventory。受管工具在 Campaign 期间
+的变化按策略 v2 分层处置：`wire_producer` 变化只经两阶段 transition 补跑受影响 Job，全部受影响则建普通
+Formal 后继；`evidence_semantics` 变化追加 evaluation epoch，只重跑离线处理；`policy` 变化建新 Campaign；
+`control` 变化只重跑控制门禁。整树版本不再直接作为失效判据，但工具功能缺口仍必须在 Formal Campaign
+前拆成独立变更、重新签发发布认证并重新执行 P0；不得在正式 Campaign 上边运行边修工具。
 
 ### 4.0.2 Codex 专用身份、用途与检查点
 
@@ -1653,23 +1648,39 @@ Campaign／candidate／attempt／收据只读，不得覆盖。旧 `successor／
 ### 4.0.3 ARM64 参数与离线预演
 
 Framework §5.1.4～§5.1.5 只规定环境冻结、路径安全和数据治理的共享合同；本节是 Codex 取证、测试、
-构建和部署环境的参数权威。上述动作统一在 ARM64 完成，固定网络与 `capture-cli` 坐标如下：
+构建和部署环境的参数权威。上述动作统一在 ARM64 完成。坐标按「是否影响证据字节」分为两类：第一类进入
+ARM64 环境收据与 Campaign 冻结身份，变化即视为环境身份漂移；第二类只作 P0 健康检查，变化不作废
+Campaign，也不进入证据身份。
 
-| 坐标 | 固定值 |
+冻结身份（影响证据字节）：
+
+| 坐标 | 固定值或摘要来源 |
 |---|---|
 | Sub2API 容器 IP | `172.25.0.3` |
 | `capture-cli` 容器 IP | `172.30.0.10` |
-| 公网出口 | `144.34.230.210`，经 BWG |
+| 公网出口与实际出口路由 | `144.34.230.210`，经 BWG；以两个容器的实际出口探针为准 |
+| TLS 栈探针 | `capture-cli` 内 `codex doctor --json --no-color` 无凭据探针的检查状态与报告摘要 |
+| 容器镜像 digest | `capture-cli` 与 `sub2apiplus` 运行镜像的 OCI digest |
+| Codex 二进制 | `/opt/codex-<target>/bin/codex` 与 `codex-code-mode-host` 的 SHA-256 |
+| 解析后的 Compose 配置摘要 | `docker compose config` 渲染结果的规范摘要，而不是文件路径 |
+| 挂载与抓包拓扑摘要 | 两个父根只读、`runs／runtime` 可写 bind、抓包接口与 tcpdump 身份的规范摘要 |
+| 代理与 CA 摘要 | relay 代理坐标、注入 CA 与模型映射的规范摘要 |
+| 宿主数据根 | `/root/docker/capture-cli/data`，权限 `0700`，版本控制忽略 |
+| 宿主证据运行子树 | `/root/docker/capture-cli/data/runs`，只承载 Job 证据目录 |
+| 容器运行根 | `/root/oauth-capture` |
+| 历史宿主兼容根 | `/root/oauth-capture`，必须与宿主数据根同源；只允许通过已登记的 `runs／runtime` 子树产生本轮数据 |
+
+P0 健康检查（不影响证据字节，不进入冻结身份）：
+
+| 检查项 | 期望值 |
+|---|---|
+| Compose 文件路径 | `/root/docker/capture-cli/docker-compose.yml`，从项目根以冻结项目名执行 |
+| 宿主项目根 | `/root/docker/capture-cli` |
+| 宿主临时运行子树 | `/root/docker/capture-cli/data/runtime`，只承载可恢复的运行期临时文件 |
+| 挂载 inode | 四个可写目标与对应宿主子树的设备号、inode、所有者和权限一致 |
 | `wg1` MTU | `1420`；同时核对宿主持久值、运行值和对端值 |
 | `wg1` Endpoint | `144.34.230.210:51830`；必须使用固定 IPv4，禁止域名解析或对端漫游回 IPv6 |
 | 转发 TCP MSS | 双向共四条：`172.25.0.3/32` 与 `172.30.0.0/16` 出 `wg1` 的 SYN 执行 `TCPMSS --clamp-mss-to-pmtu`；由 `wg1` 回到两个目标的 SYN／SYN-ACK 在 MSS 大于 `1380` 时执行 `TCPMSS --set-mss 1380` |
-| 宿主项目根 | `/root/docker/capture-cli` |
-| 宿主数据根 | `/root/docker/capture-cli/data`，权限 `0700`，版本控制忽略 |
-| 宿主证据运行子树 | `/root/docker/capture-cli/data/runs`，只承载 Job 证据目录 |
-| 宿主临时运行子树 | `/root/docker/capture-cli/data/runtime`，只承载可恢复的运行期临时文件 |
-| 容器运行根 | `/root/oauth-capture` |
-| Compose | `/root/docker/capture-cli/docker-compose.yml`，从项目根以冻结项目名执行 |
-| 历史宿主兼容根 | `/root/oauth-capture`，必须与宿主数据根同源；只允许通过已登记的 `runs／runtime` 子树产生本轮数据 |
 
 宿主的 state、runtime、work、evidence、control、audit、staging 和 archive 全部位于数据根；不得直接在
 `/root` 创建源码树、bundle、patch、worktree、恢复树或抓包目录。后续宿主命令统一先声明：
@@ -1706,65 +1717,7 @@ TypeScript；禁止临时安装依赖、复制 `node_modules` 或切换工具链
 | 网络与 TLS | `sub2apiplus` 与 `capture-cli` 使用本节固定地址并经 BWG 同一出口；DNS、证书和 MTU 可复算 |
 | 运行隔离 | 每个 attempt 使用独立、权限为 `0700` 的 `HOME／CODEX_HOME`，不读取其他账号或前序缓存 |
 | 模型目录 | Main／Lite 仅各执行一次 initialize-only；不得用 thread、turn、Responses 或 WS 请求预热 |
-| 同源依赖 | 工具、测试、candidate、finalizer、目标架构依赖和实际执行副本摘要一致 |
 | 环境恢复 | 端口、hosts、CA、模型映射、relay、容器和托管字段具备 before／after 恢复语义 |
-| 全部 Job | 展开 target 的完整 official／candidate Job 集，在真实 `capture-cli` 内验证命令、路径、环境变量、依赖和证据标签，不发送官方请求 |
-| 成本模型 | 用不小于最大单一 manifest 的夹具证明 preview 只扫描一次，其余状态／批准／复用操作读取原始证据 0 字节 |
-
-Job rehearsal 使用独立、权限为 `0700` 的证据根：
-
-```bash
-python3 -m tools.official_client_capture.codex_upgrade_job_rehearsal_receipt collect \
-  --campaign-dir "$PREFLIGHT_CAMPAIGN" --evidence-root "$JOB_REHEARSAL_ROOT" --output facts.json
-python3 -m tools.official_client_capture.codex_upgrade_job_rehearsal_receipt finalize \
-  --evidence-root "$JOB_REHEARSAL_ROOT" --facts facts.json --output receipt.json
-python3 -m tools.official_client_capture.codex_upgrade_job_rehearsal_receipt replay \
-  --evidence-root "$JOB_REHEARSAL_ROOT" --receipt receipt.json
-```
-
-`campaign-run v2` 的双批次与原始 deadline 负例使用另一份全新、权限为 `0700` 的证据根，
-禁止手工拼装收据：
-
-```bash
-mkdir -m 0700 "$CAMPAIGN_RUN_REHEARSAL_ROOT"
-python3 -m tools.official_client_capture.codex_upgrade_campaign_run_rehearsal_receipt collect \
-  --campaign-dir "$PREFLIGHT_CAMPAIGN" \
-  --evidence-root "$CAMPAIGN_RUN_REHEARSAL_ROOT" \
-  --output receipt.json
-python3 -m tools.official_client_capture.codex_upgrade_campaign_run_rehearsal_receipt replay \
-  --campaign-dir "$PREFLIGHT_CAMPAIGN" \
-  --evidence-root "$CAMPAIGN_RUN_REHEARSAL_ROOT" \
-  --receipt receipt.json
-```
-
-此外，部署到 ARM64 后必须在 `capture-cli` 的 `/capture/staging` 下再建立一份全新 `0700` 根，连续执行两棵
-互不引用的 synthetic VC-0→VC-1 控制树。该演练调用真实 `compile-and-run-vc-batch` 协调器、共享 VC 制品
-builder、父监督器和子进程 attach，但 action 固定为无网络合成动作：
-
-```bash
-ATOMIC_REHEARSAL_ROOT="$(mktemp -d /capture/staging/codex-atomic-vc0-vc1.XXXXXXXX)"
-chmod 0700 "$ATOMIC_REHEARSAL_ROOT"
-
-python3 -m tools.official_client_capture.codex_upgrade_campaign_run_rehearsal_receipt \
-  atomic-double-collect \
-  --evidence-root "$ATOMIC_REHEARSAL_ROOT" \
-  --output receipt.json
-
-python3 -m tools.official_client_capture.codex_upgrade_campaign_run_rehearsal_receipt \
-  atomic-double-replay \
-  --evidence-root "$ATOMIC_REHEARSAL_ROOT" \
-  --receipt receipt.json
-```
-
-正式模式会同时验证 `aarch64`、`/capture` 只读、`/capture/staging` 可写、容器内
-`/root/oauth-capture/runs` 与 `/capture/runs` 均可写且两个 runs 别名的 device/inode 相同。宿主机上的
-`/root/oauth-capture/runs` 只读身份路径不属于本容器内演练坐标。两次运行必须各有独立 Campaign ID、state-dir、
-VC-0 checkpoint、VC-1 batch、成功父 run 和 VC-1 checkpoint；`v2` 收据还必须逐轮绑定通用权限收口、
-失败父 run 的账本终态及闭合失败父结果。权限夹具固定含 4 个 `0755` 目录和 4 个零字节 `0644` 文件，
-权限工具只能读取元数据并将其收口为 `0700/0600`；收据独立重放后仍须声明 `scanned_bytes=0`。
-canonical 篡改、已有父 run、deadline 漂移和额外文件四个负例必须全部命中，`live_request_count=0`、
-`scanned_bytes=0`、`network_used=false`。工具身份只使用相对工具路径和文件 SHA-256，因此同一部署字节的
-bundle 摘要必须能跨工作区与 ARM64 路径复算。
 
 旧分批演练的 `campaign_run_rehearsal_receipt.py collect` 从 preflight VC-0 checkpoint 连续编译两个真实
 VC batch，在两个独立父监督器中执行零网络
@@ -1781,7 +1734,8 @@ zstd，并在 `runs／runtime` 内创建唯一临时对象，
 事件全部闭合且 `live_request_count=0`。收据必须携带
 `failure_lifecycle_probe_sha256`；只有 storage 探针的历史收据仍可只读重放，但不得用于新 Formal。
 任一 Job 失败都必须先能形成失败收据并独立重放；失败、缺项、环境漂移或目标场景／工具摘要不一致时
-禁止创建 Formal Campaign。Formal 创建必须绑定上述 rehearsal receipt，并再次独立重放。
+禁止创建 Formal Campaign。上述三份 rehearsal receipt 由 §4.0.5 的发布认证在签发时重放并绑定；
+Formal 创建只绑定发布认证，并从其中恢复 Job rehearsal 绑定再次独立重放。
 Codex 0.154 的 Cloud Config Bundle 属于全部 Job 共享的启动前置条件；若 stderr 出现其 15 秒等待超时，
 编排器必须在首个 Job 的首次失败后将其标记为 Campaign 全局前置条件，封存该失败项并把其余项保持为
 `pending`，随后立即停线。禁止继续当前 Job 的内部重试或启动后续 Job。
@@ -1797,7 +1751,7 @@ VC-0 的机器退出条件固定为：
 P0 收据通过
 ∧ 双向四条 MSS 与 Codex 0.154 Rust TLS 无凭据探针通过
 ∧ 工具阻断为零
-∧ campaign-run 分批执行、原始 deadline 承接、失败生命周期与全部冻结 Job 的离线演练通过
+∧ 发布认证收据有效，且当前受管工具部署收据的五摘要与之一致
 ∧ 网络、目录、资源水位和回退点有效
 ∧ live_request_count = 0
 ⇒ 由原子收口工具创建新的 Formal Campaign，封存总计划并在同一进程内启动 VC-1 首批动作
@@ -1812,23 +1766,19 @@ python3 -m tools.official_client_capture.codex_upgrade_vc0_closeout \
   --preflight-campaign-dir "$PREFLIGHT_CAMPAIGN" \
   --formal-campaign-dir "$FORMAL_CAMPAIGN" \
   --formal-campaign-id "$FORMAL_CAMPAIGN_ID" \
-  --job-rehearsal-root "$JOB_REHEARSAL_ROOT" \
-  --job-rehearsal-receipt receipt.json \
   --p0-gate-root "$P0_GATE_ROOT" \
   --p0-gate-receipt p0-receipt.json \
-  --atomic-rehearsal-root "$ATOMIC_REHEARSAL_HOST_ROOT" \
-  --atomic-rehearsal-receipt receipt.json \
   --managed-tool-deploy-receipt "$MANAGED_TOOL_DEPLOY_RECEIPT" \
+  --release-certification "$RELEASE_CERTIFICATION" \
   --supervisor-state-dir "$VC1_SUPERVISOR_STATE_DIR" \
   --audit-dir "$VC0_CLOSEOUT_AUDIT_DIR"
 ```
 
-其中 `ATOMIC_REHEARSAL_HOST_ROOT` 必须是容器 `/capture/staging` 对应的宿主数据根 `staging` 子目录；入口
-会在 `capture-cli` 内执行只读 `atomic-double-replay`，再绑定宿主侧同源收据。该入口从 preflight
-`campaign.json` 恢复全部 Formal 参数，并严格重放 ARM64、Job rehearsal、P0、campaign-run rehearsal、
-atomic-double rehearsal 和受管工具部署六份输入。时间账本必须仍为 active VC-0，且阶段与总 deadline
+该入口从 preflight `campaign.json` 恢复全部 Formal 参数，并严格重放 ARM64 环境、P0、受管工具部署与
+发布认证四份输入：发布认证的五摘要与策略版本必须等于部署收据，其内部绑定的 Job rehearsal 收据仍逐字
+重放并作为 Formal `plan --job-rehearsal-*` 的来源。时间账本必须仍为 active VC-0，且阶段与总 deadline
 较早者至少剩余 300 秒；从失败 Campaign 返回新 VC-0 时，历史请求累计必须原样保留，并与本次 preflight
-冻结 checkpoint 相等，从而证明本轮 VC-0 的请求增量为零。工具把六份收据安全复制进账本，追加唯一
+冻结 checkpoint 相等，从而证明本轮 VC-0 的请求增量为零。工具把四份收据安全复制进账本，追加唯一
 `receipt_passed`，生成 active timing
 checkpoint，调用一次 `create_campaign()`，复制 Formal plan／VC-0 checkpoint，依次追加 VC-0 完成和
 VC-1 开始事件，再在同一 Python 进程调用一次 `campaign-run`。任何失败均保留不可覆盖诊断和半成品，
@@ -1842,6 +1792,41 @@ VC-1 开始事件，再在同一 Python 进程调用一次 `campaign-run`。任�
 
 “当前工具是否就绪”只能由本次 P0 收据、Job rehearsal 和门禁输出证明，不再在长期手册中维护容易过期的
 状态表。除冻结身份实际漂移外，不得重复已经通过的离线演练，也不得以准备工作为由停留在 VC-0。
+
+### 4.0.5 受管工具发布认证
+
+自 C 阶段起，受管工具树的每次发布都必须签发 `tool-release-certification/v1`（`certify_release.py`），
+它替换 A2.6 的 `policy-activation-certification/v1`，是 VC-0 收口、Formal `plan` 与
+`reuse-official-evidence` 唯一接受的工具就绪证明。签发时逐项重放并绑定：
+
+1. 当前 ARM64 受管工具部署收据（五摘要与 `policy_version` 必须等于当前工具树）；
+2. `pre-a3-path-certification/v1`（§4.0.1 的历史夹具回归：reconciler 两个分支、先入账后判定、恢复预览
+   与批准、batch 补齐、`accounting_resolved`、两阶段 wire transition、evaluation epoch、策略 v2 seal 分支、
+   从 `awaiting_receipts` 只读导入、两步式权限收口），且其绑定的部署收据必须就是本次发布认证的部署收据；
+3. ARM64 全量 Job rehearsal 收据（`codex_upgrade_job_rehearsal_receipt.py collect／finalize／replay`，
+   必须带 `failure_lifecycle_probe_sha256`）；
+4. `/capture/staging` 内的 atomic-double 双跑收据（`campaign_run_rehearsal_receipt.py atomic-double-collect／
+   atomic-double-replay`，工具身份必须来自当前树）；
+5. 可选的 campaign-run 分批演练收据（需给出 preflight Campaign 目录）。
+
+```bash
+python3 -m tools.official_client_capture.certify_release issue \
+  --deployment-receipt "$MANAGED_TOOL_DEPLOY_RECEIPT" \
+  --pre-a3-certification "$PRE_A3_CERTIFICATION" \
+  --policy-activation "$POLICY_ACTIVATION" \
+  --job-rehearsal-root "$JOB_REHEARSAL_ROOT" --job-rehearsal-receipt receipt.json \
+  --atomic-rehearsal-root "$ATOMIC_REHEARSAL_HOST_ROOT" --atomic-rehearsal-receipt receipt.json \
+  --output "$RELEASE_CERTIFICATION"
+
+python3 -m tools.official_client_capture.certify_release verify \
+  --certification "$RELEASE_CERTIFICATION"
+```
+
+收据只写一次，`superseded_by` 非空即失效；`verify` 只核对自摘要、五摘要与各绑定文件摘要，不重跑演练。
+P0 门禁收据的 evidence 角色固定为 `check_egress_spec`、`release_certification`、`rollback`、
+`test_capture_tools` 四个，`assertions.release_certification_sha256` 与 `release_certification` 角色文件
+都必须等于发布认证文件的 SHA-256。任一绑定文件漂移、部署收据五摘要变化或受管树再次变化，都必须重新部署、
+重新签发发布认证并重新执行 P0。
 
 <a id="codex-vc-1"></a>
 ## 4.1 VC-1 收集目标证据

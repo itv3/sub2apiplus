@@ -47,6 +47,7 @@ from tools.official_client_capture.tests.control_receipt_fixtures import (
     create_arm_receipt,
     create_job_rehearsal_receipt,
     create_p0_gate_receipt,
+    create_release_certification,
     create_timing_checkpoint,
 )
 
@@ -5976,7 +5977,8 @@ class CodexUpgradeTest(unittest.TestCase):
             live_compose_files = str(compose_file.resolve())
         rehearsal_root: Path | None = None
         rehearsal_receipt: Path | None = None
-        p0_gate_root: Path | None = None
+        p0_gate_root = None
+        release_certification = None
         p0_gate_receipt: Path | None = None
         if campaign_mode == "formal":
             # 旧版本只用于离线合成 Campaign；目标标签声明门禁由 0.151
@@ -6032,6 +6034,11 @@ class CodexUpgradeTest(unittest.TestCase):
                 preflight_campaign_id="preflight-fixture",
             )
             if codex_upgrade._requires_complete_vc_artifacts(target_version):
+                release_certification = create_release_certification(
+                    root / "control" / "release-certification",
+                    job_rehearsal_root=rehearsal_root,
+                    job_rehearsal_receipt=rehearsal_receipt,
+                )
                 p0_gate_root = root / "control" / "p0-gate"
                 p0_gate_receipt = create_p0_gate_receipt(
                     p0_gate_root,
@@ -6039,7 +6046,7 @@ class CodexUpgradeTest(unittest.TestCase):
                     baseline_version=baseline_version,
                     target_version=target_version,
                     campaign_purpose=campaign_purpose,
-                    job_rehearsal_receipt=rehearsal_receipt,
+                    release_certification=release_certification,
                 )
         return argparse.Namespace(
             command="plan",
@@ -6060,6 +6067,7 @@ class CodexUpgradeTest(unittest.TestCase):
             job_rehearsal_receipt=rehearsal_receipt,
             p0_gate_root=p0_gate_root,
             p0_gate_receipt=p0_gate_receipt,
+            release_certification=release_certification,
             baseline_source=baseline_source,
             target_source=target_source,
             baseline_evidence=baseline_evidence,

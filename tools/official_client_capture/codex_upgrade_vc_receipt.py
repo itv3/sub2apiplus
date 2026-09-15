@@ -187,9 +187,8 @@ def _validate_p0_assertions(value: Any) -> dict[str, Any]:
         {
             "offline_gates",
             "tool_blockers",
-            "campaign_run_rehearsal",
             "rollback_ready",
-            "job_rehearsal_sha256",
+            "release_certification_sha256",
         },
         "P0 assertions",
     )
@@ -208,26 +207,11 @@ def _validate_p0_assertions(value: Any) -> dict[str, Any]:
         raise VCReceiptError("P0 离线门禁名称、顺序或字面命令不一致")
     if assertions["tool_blockers"] != []:
         raise VCReceiptError("P0 工具阻断不为零")
-    rehearsal = _expect(
-        assertions["campaign_run_rehearsal"],
-        {
-            "multi_batch_passed",
-            "original_deadline_inherited",
-            "frozen_jobs_passed",
-            "live_request_count",
-        },
-        "P0 campaign_run_rehearsal",
-    )
-    if rehearsal != {
-        "multi_batch_passed": True,
-        "original_deadline_inherited": True,
-        "frozen_jobs_passed": True,
-        "live_request_count": 0,
-    }:
-        raise VCReceiptError("P0 campaign-run、原始 deadline 或冻结 Job 演练未通过")
     if assertions["rollback_ready"] is not True:
         raise VCReceiptError("P0 回退点不可用")
-    _sha256(assertions["job_rehearsal_sha256"], "P0 job_rehearsal_sha256")
+    # C3：Job rehearsal、campaign-run rehearsal 与 atomic-double 已合成进发布认证，
+    # P0 只绑定发布认证收据的文件摘要。
+    _sha256(assertions["release_certification_sha256"], "P0 release_certification_sha256")
     assertions["offline_gates"] = normalized
     return assertions
 
@@ -382,9 +366,8 @@ def _validate_assertions(kind: str, purpose: str, value: Any) -> dict[str, Any]:
 def _expected_roles(kind: str, purpose: str, assertions: Mapping[str, Any]) -> set[str]:
     if kind == "p0_gate":
         return {
-            "campaign_run_rehearsal",
             "check_egress_spec",
-            "job_rehearsal",
+            "release_certification",
             "rollback",
             "test_capture_tools",
         }

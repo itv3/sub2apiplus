@@ -561,6 +561,79 @@ def create_job_rehearsal_receipt(
     return root / "receipt.json"
 
 
+def create_release_certification(
+    root: Path,
+    *,
+    job_rehearsal_root: Path,
+    job_rehearsal_receipt: Path,
+    atomic_rehearsal_root: Path | None = None,
+    atomic_rehearsal_receipt: Path | None = None,
+) -> Path:
+    """合成一份可被 ``certify_release.verify`` 接受的发布认证：五摘要取当前树，
+    部署收据与 pre-A3 认证用合成文件绑定，不重跑任何演练（发布认证签发流程本身在
+    ``test_certify_release`` 中覆盖）。"""
+
+    from tools.official_client_capture import certify_release
+    from tools.official_client_capture import codex_upgrade_policy_certification as policy_certification
+
+    root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    root.chmod(0o700)
+    identity = policy_certification.current_identity()
+    deployment = _write(
+        root / "deployment.json",
+        {
+            "schema_version": policy_certification.DEPLOY_RECEIPT_SCHEMA,
+            "status": "passed",
+            "campaign_id": "deploy-fixture",
+            "created_at_utc": "2026-09-16T00:00:00.000Z",
+            "policy_version": identity["policy_version"],
+            **{name: identity[name] for name in policy_certification.IDENTITY_FIELDS},
+        },
+    )
+    pre_a3_path = _write(root / "pre-a3.json", {"schema_version": "pre-a3-path-certification/v1", "status": "passed", "fixture": True})
+    job_receipt_path = job_rehearsal_root / job_rehearsal_receipt if not job_rehearsal_receipt.is_absolute() else job_rehearsal_receipt
+    job_replayed = rehearsal.replay(job_rehearsal_root.resolve(), job_receipt_path.name)
+    if atomic_rehearsal_root is None:
+        atomic_rehearsal_root = root / "atomic"
+        atomic_rehearsal_root.mkdir(mode=0o700)
+        atomic_rehearsal_receipt = _write(atomic_rehearsal_root / "receipt.json", {"schema_version": "codex-atomic-vc0-vc1-rehearsal/v2", "fixture": True})
+    assert atomic_rehearsal_receipt is not None
+    atomic_receipt_path = (
+        atomic_rehearsal_receipt if atomic_rehearsal_receipt.is_absolute() else atomic_rehearsal_root / atomic_rehearsal_receipt
+    )
+    certification = certify_release.compose_certification(
+        identity=identity,
+        deployment_receipt={"path": str(deployment.resolve()), "sha256": codex_upgrade_file_sha256(deployment), "created_at_utc": "2026-09-16T00:00:00.000Z"},
+        pre_a3_certification={"path": str(pre_a3_path.resolve()), "sha256": codex_upgrade_file_sha256(pre_a3_path), "receipt_sha256": "0" * 64, "scenario_count": 0},
+        policy_activation=None,
+        job_rehearsal={
+            "evidence_root": str(job_rehearsal_root.resolve()),
+            "receipt": job_receipt_path.name,
+            "sha256": codex_upgrade_file_sha256(job_receipt_path),
+            "job_count": job_replayed.get("job_count"),
+            "execution_contract_sha256": job_replayed.get("execution_contract_sha256"),
+            "failure_lifecycle_probe_sha256": job_replayed["failure_lifecycle_probe_sha256"],
+            "storage_probe_sha256": job_replayed["storage_probe_sha256"],
+            "preflight_campaign_id": job_replayed["preflight_campaign"]["campaign_id"],
+        },
+        atomic_double_rehearsal={
+            "evidence_root": str(atomic_rehearsal_root.resolve()),
+            "receipt": atomic_receipt_path.name,
+            "sha256": codex_upgrade_file_sha256(atomic_receipt_path),
+            "campaign_ids": ["atomic-vc0-vc1-1", "atomic-vc0-vc1-2"],
+            "live_request_count": 0,
+            "scanned_bytes": 0,
+        },
+        campaign_run_rehearsal=None,
+        issued_at_utc="2026-09-16T00:00:00.000Z",
+    )
+    return _write(root / "release-certification.json", certification)
+
+
+def codex_upgrade_file_sha256(path: Path) -> str:
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
 def create_p0_gate_receipt(
     root: Path,
     *,
@@ -568,25 +641,27 @@ def create_p0_gate_receipt(
     baseline_version: str,
     target_version: str,
     campaign_purpose: str,
-    job_rehearsal_receipt: Path,
+    release_certification: Path,
 ) -> Path:
-    """创建不运行命令、但结构与正式 P0 完全一致的合成门禁收据。"""
+    """创建不运行命令、但结构与正式 P0 完全一致的合成门禁收据。
+
+    C3：evidence 角色为 ``check_egress_spec``、``release_certification``、``rollback``、
+    ``test_capture_tools``；``release_certification`` 角色的文件是发布认证的逐字节副本。
+    """
 
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     root.chmod(0o700)
     evidence = []
-    for role in sorted(
-        {
-            "campaign_run_rehearsal",
-            "check_egress_spec",
-            "job_rehearsal",
-            "rollback",
-            "test_capture_tools",
-        }
-    ):
+    for role in sorted({"check_egress_spec", "rollback", "test_capture_tools"}):
         relative = f"evidence/{role}.log"
         _write(root / relative, {"role": role, "status": "passed"})
         evidence.append({"role": role, "path": relative})
+    certification_copy = root / "evidence" / "release-certification.json"
+    certification_copy.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    certification_copy.write_bytes(Path(release_certification).read_bytes())
+    certification_copy.chmod(0o600)
+    evidence.append({"role": "release_certification", "path": "evidence/release-certification.json"})
+    evidence.sort(key=lambda item: item["role"])
     facts = {
         "schema_version": vc_receipt.FACTS_SCHEMA,
         "kind": "p0_gate",
@@ -623,15 +698,9 @@ def create_p0_gate_receipt(
                 },
             ],
             "tool_blockers": [],
-            "campaign_run_rehearsal": {
-                "multi_batch_passed": True,
-                "original_deadline_inherited": True,
-                "frozen_jobs_passed": True,
-                "live_request_count": 0,
-            },
             "rollback_ready": True,
-            "job_rehearsal_sha256": hashlib.sha256(
-                job_rehearsal_receipt.read_bytes()
+            "release_certification_sha256": hashlib.sha256(
+                Path(release_certification).read_bytes()
             ).hexdigest(),
         },
         "evidence": evidence,

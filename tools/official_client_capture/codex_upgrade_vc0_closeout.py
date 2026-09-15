@@ -27,6 +27,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterator, Mapping
 
+from tools.official_client_capture import certify_release
 from tools.official_client_capture import codex_upgrade
 from tools.official_client_capture import codex_upgrade_arm64_environment_receipt
 from tools.official_client_capture import codex_upgrade_job_rehearsal_receipt
@@ -54,13 +55,13 @@ EXPECTED_MANAGED_DOCUMENTS = (
     "OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md",
     "CODEX_CLI_CLIENT_EMULATION_GUIDE.md",
 )
+# C2：VC-0 只重放四份必需输入；Job rehearsal、campaign-run rehearsal 与 atomic-double
+# 已合成进发布认证（tool-release-certification/v1），由发布认证绑定并在其签发时重放。
 INPUT_ROLES = (
     "arm64_environment",
-    "atomic_campaign_run_rehearsal",
-    "campaign_run_rehearsal",
-    "job_rehearsal",
     "managed_tool_deploy",
     "p0_gate",
+    "release_certification",
 )
 PRE_REQUEST_FAILURE_MARKERS = (
     b"Read-only file system",
@@ -99,6 +100,7 @@ class ValidatedInputs:
     job_rehearsal_receipt: Path
     p0_gate_root: Path
     p0_gate_receipt: Path
+    release_certification: Path
     receipts: tuple[ReceiptSource, ...]
     timing_summary: dict[str, Any]
 
@@ -909,9 +911,8 @@ def _validate_p0_gate(
     receipt_path: Path,
     manifest: Mapping[str, Any],
     timing_summary: Mapping[str, Any],
-    job_source: ReceiptSource,
-    preflight_dir: Path,
-) -> tuple[Path, Path, ReceiptSource, ReceiptSource]:
+    release_certification: Path,
+) -> tuple[Path, Path, ReceiptSource]:
     evidence_root = _private_directory(root, "P0 gate 证据根")
     path = _inside(evidence_root, receipt_path, "P0 gate 收据")
     try:
@@ -933,9 +934,10 @@ def _validate_p0_gate(
         or subject.get("baseline_version") != manifest.get("baseline_version")
         or subject.get("target_version") != manifest.get("target_version")
         or not isinstance(assertions, Mapping)
-        or assertions.get("job_rehearsal_sha256") != job_source.sha256
+        or assertions.get("release_certification_sha256")
+        != _sha256_file(release_certification)
     ):
-        raise VC0CloseoutError("P0 gate 未绑定当前升级或 Job rehearsal")
+        raise VC0CloseoutError("P0 gate 未绑定当前升级或发布认证")
     evidence = receipt.get("evidence")
     if not isinstance(evidence, list):
         raise VC0CloseoutError("P0 gate 缺少 evidence")
@@ -945,33 +947,18 @@ def _validate_p0_gate(
         if isinstance(item, Mapping)
     }
     if set(by_role) != {
-        "campaign_run_rehearsal",
         "check_egress_spec",
-        "job_rehearsal",
+        "release_certification",
         "rollback",
         "test_capture_tools",
     }:
         raise VC0CloseoutError("P0 gate evidence 角色不闭合")
-    if by_role["job_rehearsal"].get("sha256") != job_source.sha256:
-        raise VC0CloseoutError("P0 gate evidence 未绑定 Job rehearsal 字节")
-    campaign_binding = by_role["campaign_run_rehearsal"]
-    campaign_path = _inside(
-        evidence_root,
-        str(campaign_binding.get("path", "")),
-        "campaign-run rehearsal 收据",
-    )
-    if (
-        _sha256_file(campaign_path)
-        != _sha256(campaign_binding.get("sha256"), "campaign-run rehearsal sha256")
-        or campaign_path.stat().st_size != campaign_binding.get("bytes")
-    ):
-        raise VC0CloseoutError("campaign-run rehearsal P0 绑定漂移")
-    _validate_campaign_run_rehearsal(campaign_path, preflight_dir, manifest)
+    if by_role["release_certification"].get("sha256") != _sha256_file(release_certification):
+        raise VC0CloseoutError("P0 gate evidence 未绑定发布认证字节")
     return (
         evidence_root,
         path,
         _binding_source("p0_gate", path),
-        _binding_source("campaign_run_rehearsal", campaign_path),
     )
 
 
@@ -1009,7 +996,7 @@ def _deploy_receipt_identity_matches(
 def _validate_managed_tool_deploy(
     path: Path,
     manifest: Mapping[str, Any],
-) -> ReceiptSource:
+) -> tuple[ReceiptSource, dict[str, Any]]:
     receipt_path = _trusted_file(path, "受管工具部署收据")
     payload, raw = _load_json(receipt_path, "受管工具部署收据")
     # A2-2：新部署收据带策略 v2 五摘要；历史收据没有，两种集合都接受。
@@ -1113,99 +1100,59 @@ def _validate_managed_tool_deploy(
         or audit.get("audit_incomplete") is not False
     ):
         raise VC0CloseoutError("受管工具部署监督器未形成完整终态")
-    return _binding_source("managed_tool_deploy", receipt_path)
+    return _binding_source("managed_tool_deploy", receipt_path), dict(receipt)
 
 
-def _validate_atomic_campaign_run_rehearsal(
-    root: Path,
-    receipt_path: Path,
+def _validate_release_certification(
+    path: Path,
+    deploy_receipt: Mapping[str, Any],
     preflight_dir: Path,
     manifest: Mapping[str, Any],
-) -> ReceiptSource:
-    """在 ``capture-cli`` 容器内重放原子双跑，并绑定宿主侧同源收据。"""
+) -> tuple[Path, Path, dict[str, Any], ReceiptSource, ReceiptSource]:
+    """C2：重放发布认证，核对其五摘要与部署收据一致，并从中恢复 Job rehearsal 绑定。"""
 
-    evidence_root = _private_directory(root, "atomic-double 证据根")
-    path = _inside(evidence_root, receipt_path, "atomic-double 收据")
+    certification_path = _trusted_file(path, "发布认证")
     try:
-        data_root = preflight_dir.parents[2].resolve(strict=True)
-        relative_root = evidence_root.relative_to(data_root / "staging")
-    except (IndexError, OSError, ValueError) as error:
-        raise VC0CloseoutError(
-            "atomic-double 证据根必须位于当前生产数据根 staging 下"
-        ) from error
-    if not relative_root.parts:
-        raise VC0CloseoutError("atomic-double 证据根不得直接使用 staging 根")
-    configuration = manifest.get("configuration")
-    if not isinstance(configuration, Mapping):
-        raise VC0CloseoutError("preflight 缺少 capture-cli 运行配置")
-    container = _safe_id(
-        configuration.get("capture_container"),
-        "atomic-double capture_container",
+        certification = certify_release.verify(certification_path)
+    except (OSError, ValueError, certify_release.ReleaseCertificationError) as error:
+        raise VC0CloseoutError(f"发布认证校验失败：{error}") from error
+    identity = certification.get("identity") or {}
+    if any(
+        str(deploy_receipt.get(field)) != str(identity.get(field))
+        for field in ("tool_files_sha256", "policy_sha256", "wire_producer_sha256", "evidence_semantics_sha256", "control_sha256")
+    ) or deploy_receipt.get("policy_version") != certification.get("policy_version"):
+        raise VC0CloseoutError("发布认证五摘要或策略版本与受管工具部署收据不一致")
+    bound_deploy = certification.get("deployment_receipt") or {}
+    if Path(str(bound_deploy.get("path", ""))).resolve(strict=False) != Path(str(deploy_receipt.get("_path", ""))).resolve(strict=False) and bound_deploy.get("sha256") != deploy_receipt.get("_sha256"):
+        raise VC0CloseoutError("发布认证绑定的部署收据不是本次收口提供的部署收据")
+    job_binding = certification.get("job_rehearsal") or {}
+    job_root, job_path, job_receipt, job_source = _validate_job_rehearsal(
+        preflight_dir,
+        manifest,
+        Path(str(job_binding.get("evidence_root", ""))),
+        Path(str(job_binding.get("receipt", ""))),
     )
-    container_root = PurePosixPath("/capture/staging", *relative_root.parts)
-    receipt_relative = path.relative_to(evidence_root).as_posix()
-    command = [
-        "docker",
-        "exec",
-        "--env",
-        "PYTHONPATH=/capture",
-        "--workdir",
-        "/capture",
-        container,
-        "python3",
-        "-m",
-        (
-            "tools.official_client_capture."
-            "codex_upgrade_campaign_run_rehearsal_receipt"
-        ),
-        "atomic-double-replay",
-        "--evidence-root",
-        str(container_root),
-        "--receipt",
-        receipt_relative,
-    ]
-    try:
-        completed = subprocess.run(
-            command,
-            check=False,
-            capture_output=True,
-            timeout=180,
-        )
-    except (OSError, subprocess.SubprocessError) as error:
-        raise VC0CloseoutError(f"atomic-double 容器重放无法执行：{error}") from error
-    stdout = completed.stdout.strip()
-    stderr = completed.stderr.strip()
-    if completed.returncode != 0 or not stdout or len(stdout) > MAX_JSON_BYTES:
-        detail = stderr.decode("utf-8", errors="replace")[:2000]
-        raise VC0CloseoutError(
-            f"atomic-double 容器重放失败：exit={completed.returncode}，stderr={detail}"
-        )
-    try:
-        replayed = json.loads(stdout)
-    except (UnicodeError, json.JSONDecodeError) as error:
-        raise VC0CloseoutError("atomic-double 容器重放输出不是单一 JSON") from error
-    if replayed != {
-        "campaign_id": None,
-        "live_request_count": 0,
-        "status": "passed",
-    }:
-        raise VC0CloseoutError("atomic-double 容器重放未闭合零请求边界")
-    return _binding_source("atomic_campaign_run_rehearsal", path)
+    if job_source.sha256 != job_binding.get("sha256"):
+        raise VC0CloseoutError("发布认证绑定的 Job rehearsal 收据摘要漂移")
+    return (
+        job_root,
+        job_path,
+        job_receipt,
+        job_source,
+        _binding_source("release_certification", certification_path),
+    )
 
 
 def validate_inputs(
     *,
     preflight_campaign_dir: Path,
-    job_rehearsal_root: Path,
-    job_rehearsal_receipt: Path,
     p0_gate_root: Path,
     p0_gate_receipt: Path,
-    atomic_rehearsal_root: Path,
-    atomic_rehearsal_receipt: Path,
     managed_tool_deploy_receipt: Path,
+    release_certification: Path,
     now: str | None = None,
 ) -> ValidatedInputs:
-    """重放六份输入并返回创建 Formal 所需的规范坐标。"""
+    """重放四份输入并返回创建 Formal 所需的规范坐标（C2）。"""
 
     observed = now or _utc_now()
     preflight_dir, manifest = _load_preflight(preflight_campaign_dir)
@@ -1216,50 +1163,42 @@ def validate_inputs(
         timing_summary,
         arm_source,
     ) = _validate_timing_and_arm64(preflight_dir, manifest, now=observed)
+    deploy_source, deploy_receipt = _validate_managed_tool_deploy(
+        managed_tool_deploy_receipt,
+        manifest,
+    )
+    deploy_receipt = {
+        **deploy_receipt,
+        "_path": str(deploy_source.path),
+        "_sha256": deploy_source.sha256,
+    }
     (
         job_root,
         job_path,
         _job_receipt,
-        job_source,
-    ) = _validate_job_rehearsal(
+        _job_source,
+        release_source,
+    ) = _validate_release_certification(
+        release_certification,
+        deploy_receipt,
         preflight_dir,
         manifest,
-        job_rehearsal_root,
-        job_rehearsal_receipt,
     )
-    p0_root, p0_path, p0_source, campaign_source = _validate_p0_gate(
+    p0_root, p0_path, p0_source = _validate_p0_gate(
         p0_gate_root,
         p0_gate_receipt,
         manifest,
         timing_summary,
-        job_source,
-        preflight_dir,
-    )
-    deploy_source = _validate_managed_tool_deploy(
-        managed_tool_deploy_receipt,
-        manifest,
-    )
-    atomic_source = _validate_atomic_campaign_run_rehearsal(
-        atomic_rehearsal_root,
-        atomic_rehearsal_receipt,
-        preflight_dir,
-        manifest,
+        release_source.path,
     )
     receipts = tuple(
         sorted(
-            (
-                arm_source,
-                atomic_source,
-                campaign_source,
-                job_source,
-                deploy_source,
-                p0_source,
-            ),
+            (arm_source, deploy_source, p0_source, release_source),
             key=lambda item: item.role,
         )
     )
     if tuple(item.role for item in receipts) != INPUT_ROLES:
-        raise VC0CloseoutError("VC-0 六份输入角色不闭合")
+        raise VC0CloseoutError("VC-0 四份输入角色不闭合")
     return ValidatedInputs(
         preflight_dir=preflight_dir,
         preflight_manifest=manifest,
@@ -1270,6 +1209,7 @@ def validate_inputs(
         job_rehearsal_receipt=job_path,
         p0_gate_root=p0_root,
         p0_gate_receipt=p0_path,
+        release_certification=release_source.path,
         receipts=receipts,
         timing_summary=timing_summary,
     )
@@ -1365,6 +1305,8 @@ def recover_formal_plan_arguments(
         str(validated.job_rehearsal_receipt),
         "--p0-gate-root",
         str(validated.p0_gate_root),
+        "--release-certification",
+        str(validated.release_certification),
         "--p0-gate-receipt",
         str(validated.p0_gate_receipt),
         "--baseline-source",
@@ -2382,17 +2324,12 @@ def closeout(arguments: argparse.Namespace) -> dict[str, Any]:
             "preflight_campaign_dir": str(arguments.preflight_campaign_dir),
             "formal_campaign_dir": str(formal_campaign_dir),
             "formal_campaign_id": formal_campaign_id,
-            "job_rehearsal_root": str(arguments.job_rehearsal_root),
-            "job_rehearsal_receipt": str(arguments.job_rehearsal_receipt),
             "p0_gate_root": str(arguments.p0_gate_root),
             "p0_gate_receipt": str(arguments.p0_gate_receipt),
-            "atomic_rehearsal_root": str(arguments.atomic_rehearsal_root),
-            "atomic_rehearsal_receipt": str(
-                arguments.atomic_rehearsal_receipt
-            ),
             "managed_tool_deploy_receipt": str(
                 arguments.managed_tool_deploy_receipt
             ),
+            "release_certification": str(arguments.release_certification),
             "supervisor_state_dir": str(supervisor_state_dir),
             "requested_at_utc": _utc_now(),
         }
@@ -2400,17 +2337,12 @@ def closeout(arguments: argparse.Namespace) -> dict[str, Any]:
         step = "validate-inputs"
         validated = validate_inputs(
             preflight_campaign_dir=Path(arguments.preflight_campaign_dir),
-            job_rehearsal_root=Path(arguments.job_rehearsal_root),
-            job_rehearsal_receipt=Path(arguments.job_rehearsal_receipt),
             p0_gate_root=Path(arguments.p0_gate_root),
             p0_gate_receipt=Path(arguments.p0_gate_receipt),
-            atomic_rehearsal_root=Path(arguments.atomic_rehearsal_root),
-            atomic_rehearsal_receipt=Path(
-                arguments.atomic_rehearsal_receipt
-            ),
             managed_tool_deploy_receipt=Path(
                 arguments.managed_tool_deploy_receipt
             ),
+            release_certification=Path(arguments.release_certification),
         )
         timing_root = _private_directory(
             validated.timing_ledger_dir,
@@ -2646,13 +2578,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--preflight-campaign-dir", type=Path, required=True)
     parser.add_argument("--formal-campaign-dir", type=Path, required=True)
     parser.add_argument("--formal-campaign-id", required=True)
-    parser.add_argument("--job-rehearsal-root", type=Path, required=True)
-    parser.add_argument("--job-rehearsal-receipt", type=Path, required=True)
     parser.add_argument("--p0-gate-root", type=Path, required=True)
     parser.add_argument("--p0-gate-receipt", type=Path, required=True)
-    parser.add_argument("--atomic-rehearsal-root", type=Path, required=True)
-    parser.add_argument("--atomic-rehearsal-receipt", type=Path, required=True)
     parser.add_argument("--managed-tool-deploy-receipt", type=Path, required=True)
+    parser.add_argument("--release-certification", type=Path, required=True)
     parser.add_argument("--supervisor-state-dir", type=Path, required=True)
     parser.add_argument("--audit-dir", type=Path, required=True)
     parser.add_argument(

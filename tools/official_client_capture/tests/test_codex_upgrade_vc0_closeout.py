@@ -137,6 +137,7 @@ class VC0CloseoutTests(unittest.TestCase):
         arm_path = self._write(arm_root / "receipt.json", {"synthetic": True})
         job_path = self._write(job_root / "receipt.json", {"synthetic": True})
         p0_path = self._write(p0_root / "receipt.json", {"synthetic": True})
+        release_path = self._write(root / "release-certification.json", {"synthetic": True})
         return closeout.ValidatedInputs(
             preflight_dir=preflight,
             preflight_manifest=manifest,
@@ -147,6 +148,7 @@ class VC0CloseoutTests(unittest.TestCase):
             job_rehearsal_receipt=job_path,
             p0_gate_root=p0_root,
             p0_gate_receipt=p0_path,
+            release_certification=release_path,
             receipts=tuple(sources),
             timing_summary=timing_summary,
         )
@@ -156,13 +158,10 @@ class VC0CloseoutTests(unittest.TestCase):
             preflight_campaign_dir=root / "preflight",
             formal_campaign_dir=root / "campaigns" / "formal-0154",
             formal_campaign_id="formal-0154",
-            job_rehearsal_root=root / "job",
-            job_rehearsal_receipt=Path("receipt.json"),
             p0_gate_root=root / "p0",
             p0_gate_receipt=Path("receipt.json"),
-            atomic_rehearsal_root=root / "atomic",
-            atomic_rehearsal_receipt=Path("receipt.json"),
             managed_tool_deploy_receipt=root / "deploy.json",
+            release_certification=root / "release-certification.json",
             supervisor_state_dir=root / "control" / "vc1-supervisor",
             audit_dir=root / "audit" / "closeout-0154",
             heartbeat_seconds=5.0,
@@ -647,6 +646,7 @@ class VC0CloseoutTests(unittest.TestCase):
                 expected = Path(str(expected))
             self.assertEqual(actual, expected, field)
         self.assertEqual(arguments.extra_jobs.name, "extra-jobs.json")
+        self.assertEqual(arguments.release_certification, validated.release_certification)
 
     def test_any_of_five_receipts_drifting_before_copy_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -928,7 +928,7 @@ class VC0CloseoutTests(unittest.TestCase):
                     },
                 ),
             ):
-                source = closeout._validate_managed_tool_deploy(
+                source, _deploy_payload = closeout._validate_managed_tool_deploy(
                     receipt_path,
                     {"tool_identity": current_identity},
                 )
@@ -1123,76 +1123,6 @@ class VC0CloseoutTests(unittest.TestCase):
                     root,
                     manifest,
                     now=(now + timedelta(seconds=2)).isoformat(),
-                )
-
-    def test_atomic_rehearsal_is_replayed_in_capture_container(self) -> None:
-        """宿主收口必须在 capture-cli 内重放同源 atomic-double 收据。"""
-
-        with tempfile.TemporaryDirectory() as directory:
-            data_root = Path(directory) / "data"
-            preflight = data_root / "evidence/campaigns/preflight-0154"
-            atomic_root = data_root / "staging/atomic-double"
-            preflight.mkdir(parents=True, mode=0o700)
-            atomic_root.mkdir(parents=True, mode=0o700)
-            data_root.chmod(0o700)
-            (data_root / "evidence").chmod(0o700)
-            (data_root / "evidence/campaigns").chmod(0o700)
-            (data_root / "staging").chmod(0o700)
-            receipt = self._write(atomic_root / "receipt.json", {"atomic": True})
-            completed = mock.Mock(
-                returncode=0,
-                stdout=(
-                    b'{"campaign_id": null, "live_request_count": 0, '
-                    b'"status": "passed"}\n'
-                ),
-                stderr=b"",
-            )
-            with mock.patch.object(
-                closeout.subprocess,
-                "run",
-                return_value=completed,
-            ) as run:
-                source = closeout._validate_atomic_campaign_run_rehearsal(
-                    atomic_root,
-                    Path("receipt.json"),
-                    preflight,
-                    {"configuration": {"capture_container": "capture-cli"}},
-                )
-            self.assertEqual(source.role, "atomic_campaign_run_rehearsal")
-            self.assertEqual(source.sha256, closeout._sha256_file(receipt))
-            command = run.call_args.args[0]
-            self.assertEqual(command[0:2], ["docker", "exec"])
-            self.assertIn("/capture/staging/atomic-double", command)
-            self.assertIn("atomic-double-replay", command)
-
-    def test_atomic_rehearsal_rejects_failed_container_replay(self) -> None:
-        """容器重放失败时不得把 atomic-double 文件仅按摘要放行。"""
-
-        with tempfile.TemporaryDirectory() as directory:
-            data_root = Path(directory) / "data"
-            preflight = data_root / "evidence/campaigns/preflight-0154"
-            atomic_root = data_root / "staging/atomic-double"
-            preflight.mkdir(parents=True, mode=0o700)
-            atomic_root.mkdir(parents=True, mode=0o700)
-            data_root.chmod(0o700)
-            (data_root / "evidence").chmod(0o700)
-            (data_root / "evidence/campaigns").chmod(0o700)
-            (data_root / "staging").chmod(0o700)
-            self._write(atomic_root / "receipt.json", {"atomic": True})
-            completed = mock.Mock(returncode=1, stdout=b"", stderr=b"tampered")
-            with (
-                mock.patch.object(
-                    closeout.subprocess,
-                    "run",
-                    return_value=completed,
-                ),
-                self.assertRaisesRegex(closeout.VC0CloseoutError, "容器重放失败"),
-            ):
-                closeout._validate_atomic_campaign_run_rehearsal(
-                    atomic_root,
-                    Path("receipt.json"),
-                    preflight,
-                    {"configuration": {"capture_container": "capture-cli"}},
                 )
 
     def test_existing_formal_path_fails_before_receipt_or_event_write(self) -> None:
@@ -1466,13 +1396,11 @@ class VC0CloseoutTests(unittest.TestCase):
                 {path.name for path in copied.iterdir()},
                 {
                     "arm64_environment.json",
-                    "atomic_campaign_run_rehearsal.json",
-                    "campaign_run_rehearsal.json",
                     "formal-campaign-plan.json",
                     "formal-vc0-checkpoint.json",
-                    "job_rehearsal.json",
                     "managed_tool_deploy.json",
                     "p0_gate.json",
+                    "release_certification.json",
                     "timing-vc0-active.json",
                 },
             )

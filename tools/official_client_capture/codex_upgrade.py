@@ -3458,6 +3458,9 @@ DEADLINE_ORPHAN_CONTRACT_FILENAME = (
 )
 DEADLINE_ORPHAN_FINALIZER_FILENAME = "deadline-orphan-finalizer.json"
 DEADLINE_ORPHAN_AUDIT_FILENAME = "deadline-orphan-live-request-audit.json"
+RECOVERY_EXECUTION_HANDOFF_SCHEMA = (
+    "codex-upgrade-recovery-execution-handoff/v1"
+)
 INCREMENTAL_NOOP_SCHEMA = "codex-upgrade-incremental-noop/v1"
 CLASSIFICATION_CANDIDATE_REUSE_PREVIEW_SCHEMA = (
     "classification-candidate-reuse-preview/v1"
@@ -7845,7 +7848,15 @@ def _build_parser() -> argparse.ArgumentParser:
     plan.add_argument(
         "--p0-gate-receipt",
         type=Path,
-        help="Formal 必需：绑定离线门禁、分批演练、回退点与 Job 演练的 P0 收据。",
+        help="Formal 必需：绑定离线门禁、回退点与发布认证的 P0 收据。",
+    )
+    plan.add_argument(
+        "--release-certification",
+        type=Path,
+        help=(
+            "0.154.0 起 Formal 必需：tool-release-certification/v1 发布认证，"
+            "合成 Job 演练、campaign-run 演练、atomic-double 与 pre-A3 路径认证。"
+        ),
     )
     plan.add_argument("--baseline-source", type=Path, required=True)
     plan.add_argument("--target-source", type=Path, required=True)
@@ -9002,18 +9013,22 @@ def _validate_arguments(arguments: argparse.Namespace) -> None:
             "formal plan 必须显式提供 --job-rehearsal-root 与 "
             "--job-rehearsal-receipt。"
         )
+    release_certification = getattr(arguments, "release_certification", None)
     if (
         arguments.campaign_mode == "formal"
         and _requires_complete_vc_artifacts(arguments.target_version)
-        and not all(isinstance(value, Path) for value in (p0_root, p0_receipt))
+        and not all(
+            isinstance(value, Path)
+            for value in (p0_root, p0_receipt, release_certification)
+        )
     ):
         raise ConfigurationError(
-            "0.154.0 起 formal plan 必须显式提供 --p0-gate-root 与 "
-            "--p0-gate-receipt。"
+            "0.154.0 起 formal plan 必须显式提供 --p0-gate-root、"
+            "--p0-gate-receipt 与 --release-certification。"
         )
     if arguments.campaign_mode == "preflight_only" and any(
         value is not None
-        for value in (rehearsal_root, rehearsal_receipt, p0_root, p0_receipt)
+        for value in (rehearsal_root, rehearsal_receipt, p0_root, p0_receipt, release_certification)
     ):
         raise ConfigurationError(
             "preflight_only 不得消费完整 Job 演练或最终 P0 收据；先创建 "
@@ -9620,6 +9635,7 @@ _CONTROL_PLANE_TOOL_FILES = frozenset(
         "codex_upgrade_campaign_disposition.py",
         # 项目总账、outbox batch、admission 与消费者门禁、修复收据。
         "codex_upgrade_project_ledger.py",
+        "certify_release.py",
         "codex_upgrade_reconciler.py",
         "codex_upgrade_policy_certification.py",
         "codex_upgrade_pre_a3_certification.py",
@@ -9686,6 +9702,7 @@ _CANONICAL_EVALUATION_ONLY_FILES = frozenset(
         "codex_upgrade_campaign_disposition.py",
         # 项目总账、outbox batch、admission 与消费者门禁、修复收据。
         "codex_upgrade_project_ledger.py",
+        "certify_release.py",
         "codex_upgrade_reconciler.py",
         "codex_upgrade_policy_certification.py",
         "codex_upgrade_pre_a3_certification.py",
@@ -9821,6 +9838,7 @@ _EVALUATION_SIDE_FILES = frozenset(
         "codex_upgrade_campaign_disposition.py",
         # 项目总账、outbox batch、admission 与消费者门禁、修复收据。
         "codex_upgrade_project_ledger.py",
+        "certify_release.py",
         "codex_upgrade_reconciler.py",
         "codex_upgrade_policy_certification.py",
         "codex_upgrade_pre_a3_certification.py",
@@ -11312,6 +11330,16 @@ def _plan_control_receipts(arguments: argparse.Namespace) -> dict[str, Any]:
         subject = p0_receipt.get("subject")
         assertions = p0_receipt.get("assertions")
         rehearsal_binding = rehearsal_control.get("receipt")
+        # C3：P0 绑定发布认证；发布认证又绑定 Formal plan 所用的 Job 演练收据。
+        from tools.official_client_capture import certify_release
+
+        release_path = getattr(arguments, "release_certification", None)
+        assert isinstance(release_path, Path)
+        try:
+            release = certify_release.verify(release_path)
+        except (OSError, ValueError, certify_release.ReleaseCertificationError) as error:
+            raise ConfigurationError(f"发布认证未通过：{error}") from error
+        release_sha256 = file_sha256(release_path)
         if (
             p0_receipt.get("kind") != "p0_gate"
             or p0_receipt.get("status") != "passed"
@@ -11323,12 +11351,20 @@ def _plan_control_receipts(arguments: argparse.Namespace) -> dict[str, Any]:
             or subject.get("campaign_purpose") != arguments.campaign_purpose
             or not isinstance(assertions, Mapping)
             or not isinstance(rehearsal_binding, Mapping)
-            or assertions.get("job_rehearsal_sha256")
+            or assertions.get("release_certification_sha256") != release_sha256
+            or (release.get("job_rehearsal") or {}).get("sha256")
             != rehearsal_binding.get("sha256")
         ):
             raise ConfigurationError(
-                "P0 门禁收据未绑定当前升级、用途、版本或完整 Job 演练。"
+                "P0 门禁收据未绑定当前升级、用途、版本或发布认证，"
+                "或发布认证绑定的 Job 演练与本次 plan 不一致。"
             )
+        controls["release_certification"] = {
+            "path": str(release_path.resolve(strict=True)),
+            "sha256": release_sha256,
+            "receipt_sha256": release["receipt_sha256"],
+            "identity": dict(release["identity"]),
+        }
         resolved_p0 = p0_root.resolve(strict=True)
         p0_file = resolved_p0 / p0_relative
         controls["p0_gate"] = {
@@ -11549,6 +11585,7 @@ def _verify_control_receipts(
         expected_controls.add("job_rehearsal")
         if _requires_complete_vc_artifacts(manifest):
             expected_controls.add("p0_gate")
+            expected_controls.add("release_certification")
     if not isinstance(controls, dict) or set(controls) != expected_controls:
         raise ConfigurationError("Campaign 缺少完整控制收据绑定。")
     timing = controls.get("upgrade_timing")
@@ -11782,6 +11819,16 @@ def _verify_control_receipts(
             subject = p0_receipt.get("subject")
             assertions = p0_receipt.get("assertions")
             rehearsal_binding = rehearsal.get("receipt")
+            release = controls.get("release_certification")
+            if (
+                not isinstance(release, Mapping)
+                or set(release) != {"path", "sha256", "receipt_sha256", "identity"}
+                or not Path(str(release.get("path", ""))).is_absolute()
+                or Path(str(release["path"])).is_symlink()
+                or not Path(str(release["path"])).is_file()
+                or file_sha256(Path(str(release["path"]))) != release.get("sha256")
+            ):
+                raise ConfigurationError("Campaign 发布认证绑定字段不闭合或文件漂移。")
             if (
                 p0_receipt.get("kind") != "p0_gate"
                 or p0_receipt.get("status") != "passed"
@@ -11794,10 +11841,9 @@ def _verify_control_receipts(
                 or subject.get("campaign_purpose") != manifest.get("campaign_purpose")
                 or not isinstance(assertions, Mapping)
                 or not isinstance(rehearsal_binding, Mapping)
-                or assertions.get("job_rehearsal_sha256")
-                != rehearsal_binding.get("sha256")
+                or assertions.get("release_certification_sha256") != release.get("sha256")
             ):
-                raise ConfigurationError("P0 门禁收据身份或 Job 演练绑定漂移。")
+                raise ConfigurationError("P0 门禁收据身份或发布认证绑定漂移。")
         except (OSError, codex_upgrade_vc_receipt.VCReceiptError) as error:
             if isinstance(error, ConfigurationError):
                 raise
