@@ -180,6 +180,12 @@ PRODUCER_FREEZE_SUCCESSORS = (
         "scope": "upstream-codex-0154-a2-contract-v2-identity-20260916-freeze-successor",
         "result": "manual_actions_required",
     },
+    {
+        "path": "docs/egress/maintenance/upstream-codex-0154-a3a-harden-tcpdump-owner-20260916-freeze-successor.json",
+        "base_commit": "30d7c15b444be15a7da9493ce28dce0510f598f6",
+        "scope": "upstream-codex-0154-a3a-harden-tcpdump-owner-20260916-freeze-successor",
+        "result": "manual_actions_required",
+    },
 )
 
 
