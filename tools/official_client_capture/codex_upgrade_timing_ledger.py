@@ -162,6 +162,12 @@ PRODUCER_FREEZE_SUCCESSORS = (
         "scope": "upstream-codex-0154-c1-atomic-container-20260916-freeze-successor",
         "result": "manual_actions_required",
     },
+    {
+        "path": "docs/egress/maintenance/upstream-codex-0154-c3-historical-p0-compat-20260916-freeze-successor.json",
+        "base_commit": "ad0dd0d692fd20626bb56b305786978d2e37d9c9",
+        "scope": "upstream-codex-0154-c3-historical-p0-compat-20260916-freeze-successor",
+        "result": "manual_actions_required",
+    },
 )
 
 
