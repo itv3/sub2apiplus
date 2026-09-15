@@ -346,6 +346,11 @@ CODEX_0154_A26_A25_POLICY_CERTIFICATION_FREEZE_SUCCESSOR = (
     ROOT
     / "docs/egress/maintenance/upstream-codex-0154-a26-a25-policy-certification-20260916-freeze-successor.json"
 )
+# 2026-09-16：受管测试模块适配部署机 Python 3.12 静态嵌套块上限（ExitStack）。
+CODEX_0154_A25_PY312_NESTING_FREEZE_SUCCESSOR = (
+    ROOT
+    / "docs/egress/maintenance/upstream-codex-0154-a25-py312-nesting-20260916-freeze-successor.json"
+)
 HISTORICAL_LEDGER = "docs/egress/maintenance/historical-source-drift-successor.json"
 SHA256_LENGTH = 64
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -476,6 +481,7 @@ def successor_edges(path: str) -> list[tuple[str, str]]:
         CODEX_0154_A2_A3A_POLICY_REUSE_FREEZE_SUCCESSOR,
         CODEX_0154_B0_RECONCILER_FREEZE_SUCCESSOR,
         CODEX_0154_A26_A25_POLICY_CERTIFICATION_FREEZE_SUCCESSOR,
+        CODEX_0154_A25_PY312_NESTING_FREEZE_SUCCESSOR,
     ):
         payload = json.loads(receipt_path.read_text(encoding="utf-8"))
         _validate_successor_receipt(payload)
