@@ -317,6 +317,12 @@ CODEX_0154_VC1_V2_RECOVERY_PREDISPATCH_CLOSEOUT_FREEZE_SUCCESSOR = (
     ROOT
     / "docs/egress/maintenance/upstream-codex-0154-vc1-v2-recovery-predispatch-closeout-20260915-freeze-successor.json"
 )
+# 2026-09-15：VC-0 原子收口强制重放 ARM64 atomic-double 收据，并允许
+# 新 VC-0 在不清零历史请求累计的前提下证明本阶段请求增量为零。
+CODEX_0154_VC0_ATOMIC_RECEIPT_TIMING_CLOSEOUT_FREEZE_SUCCESSOR = (
+    ROOT
+    / "docs/egress/maintenance/upstream-codex-0154-vc0-atomic-receipt-timing-closeout-20260915-freeze-successor.json"
+)
 HISTORICAL_LEDGER = "docs/egress/maintenance/historical-source-drift-successor.json"
 SHA256_LENGTH = 64
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -442,6 +448,7 @@ def successor_edges(path: str) -> list[tuple[str, str]]:
         CODEX_0154_VC1_TIMING_PRODUCER_CHAIN_CLOSEOUT_FREEZE_SUCCESSOR,
         CODEX_0154_ASTRA_LITE_RECOVERY_FREEZE_SUCCESSOR,
         CODEX_0154_VC1_V2_RECOVERY_PREDISPATCH_CLOSEOUT_FREEZE_SUCCESSOR,
+        CODEX_0154_VC0_ATOMIC_RECEIPT_TIMING_CLOSEOUT_FREEZE_SUCCESSOR,
     ):
         payload = json.loads(receipt_path.read_text(encoding="utf-8"))
         _validate_successor_receipt(payload)
