@@ -463,10 +463,6 @@ def load_supervisor(staging_root: Path) -> Any:
             "timing_ledger",
             module_root / "codex_upgrade_timing_ledger.py",
         ),
-        "codex_upgrade_vc1_permission_alias_closeout": (
-            "permission_alias_closeout",
-            module_root / "codex_upgrade_vc1_permission_alias_closeout.py",
-        ),
         "codex_upgrade_vc_artifacts": (
             "vc_artifacts",
             module_root / "codex_upgrade_vc_artifacts.py",

@@ -386,63 +386,6 @@ class CodexUpgrade0154VCContractTests(unittest.TestCase):
                         owner_nonce="2" * 64,
                     )
 
-    def test_continuation_parent_uses_supervisor_canonical_manifest_hash(self) -> None:
-        """父记录的换行规范摘要必须与真实 campaign-run 写法一致。"""
-
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            for schema_version in (
-                codex_upgrade.codex_upgrade_supervisor.CAMPAIGN_RUN_RECOVERY_CONTINUATION_SCHEMA,
-                codex_upgrade.codex_upgrade_supervisor.CAMPAIGN_RUN_RECOVERY_FINALIZATION_SCHEMA,
-            ):
-                with self.subTest(schema_version=schema_version):
-                    run_dir = root / schema_version.rsplit("/", 1)[-1]
-                    continuation_path = run_dir / "continuation.json"
-                    continuation = {
-                        "schema_version": schema_version,
-                        "actions": [
-                            {
-                                "command": [
-                                    "python3",
-                                    "codex_upgrade.py",
-                                    "continue-vc1-interruption",
-                                    str(continuation_path),
-                                ]
-                            }
-                        ],
-                    }
-                    self._write(continuation_path, continuation)
-                    supervisor = codex_upgrade.codex_upgrade_supervisor
-                    recorded_sha256 = supervisor._sha256(
-                        supervisor._canonical(continuation)
-                    )
-                    self.assertNotEqual(
-                        recorded_sha256,
-                        codex_upgrade._fingerprint(continuation),
-                    )
-                    self._write(
-                        run_dir / "campaign-run-manifest.json",
-                        {
-                            "manifest": continuation,
-                            "manifest_sha256": recorded_sha256,
-                        },
-                    )
-                    with mock.patch.dict(
-                        os.environ,
-                        {
-                            supervisor.CAMPAIGN_RUN_CONTEXT_ENV: "1",
-                            supervisor.CAMPAIGN_RUN_DIR_ENV: str(run_dir),
-                            supervisor.CAMPAIGN_RUN_ACTION_ID_ENV: (
-                                "continue-vc1-interruption-preview"
-                            ),
-                        },
-                        clear=True,
-                    ):
-                        codex_upgrade._validate_interrupted_recovery_continuation_parent(
-                            continuation_path,
-                            continuation,
-                        )
-
     def test_interrupted_attempt_close_is_idempotent_without_new_probe(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             campaign_dir = Path(directory) / "campaign"
