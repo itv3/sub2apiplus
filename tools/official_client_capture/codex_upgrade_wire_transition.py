@@ -431,9 +431,14 @@ def verdict_official_attempt_identity(
         deployed_sha = str(active_receipt[2].get("tool_files_sha256", ""))
         if deployed_sha != frozen_files:
             problems.append("attempt 时生效的部署收据整树摘要与 Campaign 冻结身份不一致")
+        # 部署脚本把回滚备份命名为 managed-tools-backup-before-<新树摘要前12位>，其内容是
+        # 被替换的旧树；因此 attempt 生效树的精确副本是「之后第一份部署」的回滚备份。
+        # 这里不按目录名猜，只按副本内容摘要等于生效部署收据的整树摘要来认定。
         for _time, path, payload in later:
             backup = Path(str(payload.get("rollback_backup", "")))
-            if backup.is_dir() and not backup.is_symlink() and backup.name.startswith(f"managed-tools-backup-before-{deployed_sha[:12]}"):
+            if not backup.is_dir() or backup.is_symlink():
+                continue
+            if _fingerprint({"entries": _tree_entries(backup)}) == deployed_sha:
                 copy_root = backup
                 copy_source = path.name
                 break
