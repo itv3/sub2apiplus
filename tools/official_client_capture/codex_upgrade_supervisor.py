@@ -6862,6 +6862,186 @@ def _validate_permission_alias_predispatch_successor(
     return True
 
 
+def _validate_batched_official_recovery_preview_successor(
+    prior_state: Mapping[str, Any],
+    prior_manifest: Mapping[str, Any],
+    prior_dir: Path,
+    successor_manifest: Mapping[str, Any],
+) -> bool:
+    """允许完整失败 attempt 进入普通 v2 的零请求恢复预览。
+
+    这里只开放父监督器的结构边界：sequence 1 必须是唯一失败的
+    ``capture-official``，sequence 2 必须把原 execute 集合无遗漏地划分为
+    execute／reuse，并且唯一动作只能执行 ``resume --rerun-failed
+    --preview-recovery``。源 attempt、自摘要、工具影响和实际恢复闭集仍由动作
+    内的恢复器逐字复算；本层不得读取正文或写死某一次事故的数量。
+    """
+
+    successor_actions = successor_manifest.get("actions")
+    if (
+        successor_manifest.get("schema_version") != CAMPAIGN_RUN_BATCHED_SCHEMA
+        or successor_manifest.get("phase") != "VC-1"
+        or successor_manifest.get("batch_sequence") != 2
+        or not isinstance(successor_actions, list)
+        or len(successor_actions) != 1
+        or not isinstance(successor_actions[0], Mapping)
+    ):
+        return False
+    successor_action = successor_actions[0]
+    successor_command = successor_action.get("command")
+    if (
+        not isinstance(successor_command, list)
+        or successor_command.count("resume") != 1
+        or successor_command.count("--preview-recovery") != 1
+    ):
+        return False
+
+    resume_index = successor_command.index("resume")
+    successor_prefix = successor_command[:resume_index]
+    successor_tail = successor_command[resume_index:]
+    if (
+        resume_index not in {1, 2}
+        or not successor_prefix
+        or not {
+            Path(value).name for value in successor_prefix
+        }
+        & {"codex_upgrade.py", "codex-upgrade"}
+        or len(successor_tail) != 5
+        or successor_tail[0] != "resume"
+        or successor_tail[1] != "--campaign-dir"
+        or not Path(successor_tail[2]).is_absolute()
+        or successor_tail[3:] != ["--rerun-failed", "--preview-recovery"]
+        or "--acknowledge-live-requests" in successor_command
+    ):
+        raise SupervisorError("VC-1 普通恢复预览动作或零请求边界漂移。")
+    campaign_dir = Path(successor_tail[2])
+
+    prior_actions = prior_manifest.get("actions")
+    prior_execute = prior_manifest.get("execute_items")
+    successor_execute = successor_manifest.get("execute_items")
+    successor_reuse = successor_manifest.get("reuse_items")
+    if (
+        prior_manifest.get("schema_version") != CAMPAIGN_RUN_BATCHED_SCHEMA
+        or prior_manifest.get("campaign_id") != successor_manifest.get("campaign_id")
+        or prior_manifest.get("phase") != "VC-1"
+        or prior_manifest.get("batch_sequence") != 1
+        or prior_manifest.get("campaign_plan_sha256")
+        != successor_manifest.get("campaign_plan_sha256")
+        or prior_manifest.get("original_deadline_at_utc")
+        != successor_manifest.get("original_deadline_at_utc")
+        or prior_manifest.get("predecessor_checkpoint")
+        != successor_manifest.get("predecessor_checkpoint")
+        or prior_manifest.get("no_op") is not False
+        or successor_manifest.get("no_op") is not False
+        or prior_manifest.get("reuse_items") != []
+        or not isinstance(prior_actions, list)
+        or len(prior_actions) != 1
+        or not isinstance(prior_actions[0], Mapping)
+        or not isinstance(prior_execute, list)
+        or not prior_execute
+        or not isinstance(successor_execute, list)
+        or not successor_execute
+        or not isinstance(successor_reuse, list)
+        or set(successor_execute) & set(successor_reuse)
+        or sorted(successor_execute + successor_reuse) != sorted(prior_execute)
+        or successor_action.get("item_ids") != successor_execute
+        or successor_action.get("operation") != "VC-1:official-recovery"
+    ):
+        raise SupervisorError("VC-1 普通恢复预览的父批次身份或 execute/reuse 分区漂移。")
+
+    prior_action = prior_actions[0]
+    prior_command = prior_action.get("command")
+    if not isinstance(prior_command, list) or prior_command.count("capture-official") != 1:
+        raise SupervisorError("VC-1 普通恢复预览缺少唯一 capture-official 父动作。")
+    capture_index = prior_command.index("capture-official")
+    prior_prefix = prior_command[:capture_index]
+    prior_tail = prior_command[capture_index:]
+    if (
+        prior_prefix != successor_prefix
+        or prior_tail
+        != [
+            "capture-official",
+            "run",
+            "--campaign-dir",
+            str(campaign_dir),
+            "--acknowledge-live-requests",
+        ]
+        or prior_action.get("action_id") != "capture-official"
+        or prior_action.get("operation") != "VC-1:capture-official"
+        or prior_action.get("item_ids") != prior_execute
+    ):
+        raise SupervisorError("VC-1 普通恢复预览的 capture-official 父动作漂移。")
+
+    _permission_compensation_private_directory(
+        prior_dir,
+        "VC-1 普通恢复预览前序 run 目录",
+    )
+    recorded_state = _permission_compensation_json(
+        _permission_compensation_private_file(
+            prior_dir / "state.json",
+            "VC-1 普通恢复预览前序 state",
+        ),
+        "VC-1 普通恢复预览前序 state",
+    )
+    owner_pid = prior_state.get("owner_pid")
+    owner_nonce = prior_state.get("owner_nonce")
+    if (
+        recorded_state != dict(prior_state)
+        or prior_state.get("state") != "failed"
+        or prior_state.get("campaign_id") != successor_manifest.get("campaign_id")
+        or prior_state.get("phase") != "VC-1"
+        or isinstance(owner_pid, bool)
+        or not isinstance(owner_pid, int)
+        or owner_pid <= 0
+        or not isinstance(owner_nonce, str)
+        or not owner_nonce
+    ):
+        raise SupervisorError("VC-1 普通恢复预览的父终态或 owner 身份漂移。")
+
+    stop = _permission_compensation_json(
+        _permission_compensation_private_file(
+            prior_dir / "stop-receipt.json",
+            "VC-1 普通恢复预览前序 stop receipt",
+        ),
+        "VC-1 普通恢复预览前序 stop receipt",
+    )
+    unsigned_stop = dict(stop)
+    stop_digest = unsigned_stop.pop("receipt_sha256", None)
+    if (
+        stop.get("schema_version") != STOP_SCHEMA
+        or stop.get("event_type") != "failed"
+        or stop.get("reason") != "action-failed:capture-official"
+        or stop.get("campaign_id") != prior_state.get("campaign_id")
+        or stop.get("phase") != "VC-1"
+        or stop.get("owner_pid") != owner_pid
+        or stop.get("owner_nonce") != owner_nonce
+        or stop_digest != _sha256(_canonical(unsigned_stop))
+    ):
+        raise SupervisorError("VC-1 普通恢复预览的父 stop receipt 漂移。")
+
+    diagnostic = _validate_action_diagnostic(
+        _action_diagnostic_path(
+            prior_dir,
+            "capture-official",
+            create_directory=False,
+        ),
+        run_dir=prior_dir,
+        campaign_id=str(prior_state["campaign_id"]),
+        phase="VC-1",
+        action_id="capture-official",
+        owner_pid=owner_pid,
+        owner_nonce=owner_nonce,
+    )
+    if (
+        diagnostic.get("failure_kind") != "child-returncode"
+        or diagnostic.get("error_type") != "ChildProcessError"
+        or diagnostic.get("message")
+        != "子命令以非零状态退出，未提供进一步的脱敏诊断。"
+    ):
+        raise SupervisorError("VC-1 普通恢复预览的父动作诊断漂移。")
+    return True
+
+
 def _validate_batched_campaign_history(
     manifest: Mapping[str, Any],
     history: Sequence[tuple[dict[str, Any], dict[str, Any], Path]],
@@ -7025,9 +7205,10 @@ def _validate_batched_campaign_history(
                     "v5 没有逐字绑定获批的 v2/v3/v4 三前序。"
                 )
 
-    # 已封存失败只能由链中的下一项消费。v2 交给 v3；只有上述精确诊断的
-    # v3 可交给 v4；只有固定摘要算法诊断的 v4 可交给 v5。v5 失败或其他
-    # 终态一律停线，不再开放第六种恢复清单。
+    # 已封存失败只能由链中的下一项消费。完整失败 attempt 可由普通 v2
+    # 零请求预览承接；KeyboardInterrupt 孤儿仍由 v3 承接。只有上述精确
+    # 诊断的 v3 可交给 v4，只有固定摘要算法诊断的 v4 可交给 v5。
+    # v5 失败或其他终态一律停线，不再开放第六种恢复清单。
     for index, (state, prior_manifest, _run_dir) in enumerate(ordered):
         terminal_state = state.get("state")
         if terminal_state == "stopped":
@@ -7050,6 +7231,17 @@ def _validate_batched_campaign_history(
         if (
             prior_schema == CAMPAIGN_RUN_RECOVERY_CONTINUATION_SCHEMA
             and successor_schema == CAMPAIGN_RUN_RECOVERY_FINALIZATION_SCHEMA
+        ):
+            continue
+        if (
+            prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
+            and successor_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
+            and _validate_batched_official_recovery_preview_successor(
+                state,
+                prior_manifest,
+                _run_dir,
+                successor_manifest,
+            )
         ):
             continue
         if (

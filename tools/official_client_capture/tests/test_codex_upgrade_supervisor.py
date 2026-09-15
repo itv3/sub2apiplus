@@ -2004,6 +2004,250 @@ class SupervisorTests(unittest.TestCase):
                 [(prior_state, prior_manifest, prior_dir)],
             )
 
+    def test_failed_official_v2_allows_exact_normal_v2_recovery_preview(self) -> None:
+        """完整失败 attempt 以普通 v2 预览承接，不经过历史 v3。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            campaign_dir = root / "campaign"
+            campaign_dir.mkdir(mode=0o700)
+            prior_dir = root / "run-prior"
+            prior_dir.mkdir(mode=0o700)
+            campaign_id = "campaign-official-preview"
+            owner_nonce = "8" * 64
+            checkpoint = {
+                "path": "control/vc/vc-0-checkpoint.json",
+                "sha256": "3" * 64,
+                "phase": "VC-0",
+                "checkpoint_sha256": "4" * 64,
+            }
+            command_prefix = ["/usr/bin/python3", "/managed/codex_upgrade.py"]
+            prior_manifest: dict[str, object] = {
+                "schema_version": supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA,
+                "campaign_id": campaign_id,
+                "campaign_plan_sha256": "1" * 64,
+                "batch_id": "vc-1-0001",
+                "batch_sequence": 1,
+                "batch_sha256": "5" * 64,
+                "phase": "VC-1",
+                "predecessor_checkpoint": checkpoint,
+                "original_deadline_at_utc": "2099-09-14T12:00:00Z",
+                "no_op": False,
+                "actions": [
+                    {
+                        "action_id": "capture-official",
+                        "operation": "VC-1:capture-official",
+                        "timeout_seconds": 3600.0,
+                        "command": [
+                            *command_prefix,
+                            "capture-official",
+                            "run",
+                            "--campaign-dir",
+                            str(campaign_dir),
+                            "--acknowledge-live-requests",
+                        ],
+                        "item_ids": ["failed-job", "passed-job"],
+                    }
+                ],
+                "execute_items": ["failed-job", "passed-job"],
+                "reuse_items": [],
+            }
+            prior_state: dict[str, object] = {
+                "state": "failed",
+                "campaign_id": campaign_id,
+                "phase": "VC-1",
+                "owner_pid": os.getpid(),
+                "owner_nonce": owner_nonce,
+                "terminal_at_utc": "2026-09-15T03:08:05.545Z",
+            }
+            self._write_json(prior_dir / "state.json", prior_state)
+            stop: dict[str, object] = {
+                "schema_version": supervisor.STOP_SCHEMA,
+                "campaign_id": campaign_id,
+                "detected_at_epoch": 1005.0,
+                "detected_at_utc": "2026-09-15T03:08:05.531Z",
+                "event_type": "failed",
+                "owner_nonce": owner_nonce,
+                "owner_pid": os.getpid(),
+                "phase": "VC-1",
+                "reason": "action-failed:capture-official",
+            }
+            stop["receipt_sha256"] = supervisor._sha256(supervisor._canonical(stop))
+            self._write_json(prior_dir / "stop-receipt.json", stop)
+            diagnostic_path = supervisor._action_diagnostic_path(
+                prior_dir,
+                "capture-official",
+                create_directory=True,
+            )
+            supervisor._write_action_diagnostic(
+                diagnostic_path,
+                campaign_id=campaign_id,
+                phase="VC-1",
+                action_id="capture-official",
+                owner_pid=os.getpid(),
+                owner_nonce=owner_nonce,
+                failure_kind="child-returncode",
+                error_type="ChildProcessError",
+                message="子命令以非零状态退出，未提供进一步的脱敏诊断。",
+            )
+            successor: dict[str, object] = {
+                "schema_version": supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA,
+                "campaign_id": campaign_id,
+                "campaign_plan_sha256": "1" * 64,
+                "batch_id": "vc-1-0002",
+                "batch_sequence": 2,
+                "batch_sha256": "6" * 64,
+                "phase": "VC-1",
+                "predecessor_checkpoint": checkpoint,
+                "original_deadline_at_utc": "2099-09-14T12:00:00Z",
+                "no_op": False,
+                "actions": [
+                    {
+                        "action_id": "preview-official-recovery",
+                        "operation": "VC-1:official-recovery",
+                        "timeout_seconds": 600.0,
+                        "command": [
+                            *command_prefix,
+                            "resume",
+                            "--campaign-dir",
+                            str(campaign_dir),
+                            "--rerun-failed",
+                            "--preview-recovery",
+                        ],
+                        "item_ids": ["failed-job"],
+                    }
+                ],
+                "execute_items": ["failed-job"],
+                "reuse_items": ["passed-job"],
+            }
+            ordered = supervisor._validate_batched_campaign_history(
+                successor,
+                [(prior_state, prior_manifest, prior_dir)],
+            )
+            self.assertEqual([item[1]["batch_sequence"] for item in ordered], [1])
+
+            drifted = copy.deepcopy(successor)
+            drifted["reuse_items"] = []
+            with self.assertRaisesRegex(SupervisorError, "execute/reuse"):
+                supervisor._validate_batched_campaign_history(
+                    drifted,
+                    [(prior_state, prior_manifest, prior_dir)],
+                )
+
+    def test_campaign_run_locked_dispatches_failed_v2_normal_v2_preview(self) -> None:
+        """真实父入口必须能从失败 sequence 1 派发普通 sequence 2 预览。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            state_dir = root / "supervisor-state"
+            state_dir.mkdir(mode=0o700)
+            campaign_dir = root / "campaign"
+            campaign_dir.mkdir(mode=0o700)
+            driver = root / "codex_upgrade.py"
+            driver.write_text(
+                """from pathlib import Path
+import sys
+
+if "capture-official" in sys.argv:
+    raise SystemExit(7)
+if "resume" in sys.argv and "--preview-recovery" in sys.argv:
+    campaign = Path(sys.argv[sys.argv.index("--campaign-dir") + 1])
+    (campaign / "preview-ran.txt").write_text("passed\\n", encoding="utf-8")
+    raise SystemExit(0)
+raise SystemExit(9)
+""",
+                encoding="utf-8",
+            )
+            driver.chmod(0o600)
+            checkpoint = {
+                "path": "control/vc/vc-0-checkpoint.json",
+                "sha256": "3" * 64,
+                "phase": "VC-0",
+                "checkpoint_sha256": "4" * 64,
+            }
+            common = {
+                "campaign_id": "campaign-official-preview-dispatch",
+                "campaign_plan_sha256": "1" * 64,
+                "phase": "VC-1",
+                "predecessor_checkpoint": checkpoint,
+                "original_deadline_at_utc": "2099-09-15T08:12:43Z",
+            }
+            command_prefix = [sys.executable, str(driver)]
+            first = supervisor.build_batched_campaign_run_manifest(
+                **common,
+                batch_id="vc-1-0001",
+                batch_sequence=1,
+                batch_sha256="5" * 64,
+                actions=[
+                    {
+                        "action_id": "capture-official",
+                        "operation": "VC-1:capture-official",
+                        "timeout_seconds": 5.0,
+                        "command": [
+                            *command_prefix,
+                            "capture-official",
+                            "run",
+                            "--campaign-dir",
+                            str(campaign_dir),
+                            "--acknowledge-live-requests",
+                        ],
+                        "item_ids": ["failed-job", "passed-job"],
+                    }
+                ],
+                execute_items=["failed-job", "passed-job"],
+                reuse_items=[],
+            )
+            args = argparse.Namespace(
+                heartbeat_seconds=0.05,
+                watchdog_timeout_seconds=0.5,
+                ledger_interval_seconds=0.05,
+            )
+            first_returncode, first_payload = supervisor._campaign_run_locked(
+                args,
+                manifest=first,
+                state_dir=state_dir,
+            )
+            self.assertEqual(first_returncode, 1)
+            self.assertEqual(first_payload["reason"], "action-failed:capture-official")
+
+            second = supervisor.build_batched_campaign_run_manifest(
+                **common,
+                batch_id="vc-1-0002",
+                batch_sequence=2,
+                batch_sha256="6" * 64,
+                actions=[
+                    {
+                        "action_id": "preview-official-recovery",
+                        "operation": "VC-1:official-recovery",
+                        "timeout_seconds": 5.0,
+                        "command": [
+                            *command_prefix,
+                            "resume",
+                            "--campaign-dir",
+                            str(campaign_dir),
+                            "--rerun-failed",
+                            "--preview-recovery",
+                        ],
+                        "item_ids": ["failed-job"],
+                    }
+                ],
+                execute_items=["failed-job"],
+                reuse_items=["passed-job"],
+            )
+            second_returncode, second_payload = supervisor._campaign_run_locked(
+                args,
+                manifest=second,
+                state_dir=state_dir,
+            )
+            self.assertEqual(second_returncode, 0)
+            self.assertEqual(second_payload["status"], "stopped")
+            self.assertEqual(second_payload["reason"], "queue-complete")
+            self.assertEqual(
+                (campaign_dir / "preview-ran.txt").read_text(encoding="utf-8"),
+                "passed\n",
+            )
+
     def test_failed_v2_allows_only_frozen_permission_compensation_successor(
         self,
     ) -> None:

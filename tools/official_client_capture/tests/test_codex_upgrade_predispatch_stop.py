@@ -31,6 +31,7 @@ class PredispatchStopTests(unittest.TestCase):
         root: Path,
         *,
         expired: bool = False,
+        with_action: bool = False,
     ) -> tuple[Path, Path, Path, Path]:
         campaign_dir = root / "campaign"
         state_dir = root / "state"
@@ -82,14 +83,28 @@ class PredispatchStopTests(unittest.TestCase):
             "phase": "VC-0",
             "checkpoint_sha256": "6" * 64,
         }
+        execute_item_ids = ["fixture-execute"] if with_action else []
+        actions = (
+            [
+                {
+                    "action_id": "fixture-action",
+                    "operation": "VC-1:fixture-action",
+                    "timeout_seconds": 30,
+                    "command": ["/usr/bin/true"],
+                    "item_ids": ["fixture-execute"],
+                }
+            ]
+            if with_action
+            else []
+        )
         batch = artifacts.build_vc_batch(
             campaign_plan=plan,
             phase="VC-1",
             sequence=1,
             predecessor_checkpoint=predecessor,
-            execute_item_ids=[],
+            execute_item_ids=execute_item_ids,
             reuse_item_ids=["fixture-reuse"],
-            actions=[],
+            actions=actions,
             compiled_at_utc=compiled.isoformat(),
             must_start_by_utc=must_start.isoformat(),
         )
@@ -132,6 +147,29 @@ class PredispatchStopTests(unittest.TestCase):
                 {"live_request_count": 0, "scanned_bytes": 0},
             )
             self.assertEqual(receipt["next_action"], stop.NEXT_ACTION)
+            self.assertEqual(
+                stop.replay(
+                    campaign_dir=fixture[0],
+                    state_dir=fixture[1],
+                    receipt_path=receipt_path,
+                ),
+                receipt,
+            )
+
+    def test_record_and_replay_accepts_real_non_noop_v2_actions(self) -> None:
+        """真实 v2 的 item_ids 必须在 batch 与 manifest 间逐字重放。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = self._fixture(Path(directory), with_action=True)
+            receipt_path, receipt = stop.record(
+                campaign_dir=fixture[0],
+                state_dir=fixture[1],
+                batch_path=fixture[2],
+                manifest_path=fixture[3],
+                failure_kind="dispatch-before-parent-run",
+                error_type="SupervisorError",
+            )
+            self.assertEqual(receipt["metrics"]["live_request_count"], 0)
             self.assertEqual(
                 stop.replay(
                     campaign_dir=fixture[0],

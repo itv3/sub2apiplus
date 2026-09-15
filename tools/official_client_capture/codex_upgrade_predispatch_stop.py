@@ -164,10 +164,10 @@ def _load_batch_and_manifest(
         != campaign_dir / "control" / "vc" / "run-manifests" / expected_name
     ):
         raise PredispatchStopError("VC batch 或 campaign-run 清单不在规范路径。")
-    expected_actions = [
-        {key: value for key, value in action.items() if key != "item_ids"}
-        for action in batch["actions"]
-    ]
+    # v2 manifest 与 batch 使用同一动作结构，包含 item_ids。此前删除该字段
+    # 会让所有非 no-op 的真实 batch 被误判为“非确定性编译”，并导致原子
+    # 入口在首个派发错误后连停线收据也无法写入。
+    expected_actions = [dict(action) for action in batch["actions"]]
     if (
         manifest.get("schema_version") != supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA
         or manifest.get("campaign_id") != batch.get("campaign_id")
