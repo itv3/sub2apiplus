@@ -1376,6 +1376,14 @@ def _load_provenance_receipt(path: Path) -> tuple[dict[str, Any], bytes]:
     payload, raw = _load_json(path, "provenance 收据")
     if payload.get("schema_version") != PROVENANCE_RECEIPT_SCHEMA:
         raise TimingLedgerError("provenance 收据 schema 不是 live-request-provenance/v2")
+    # live-request-provenance/v2 的生产者（collect-campaign）把 Formal Campaign ID 写在
+    # ``campaign_id``；关闭收据统一记为 ``formal_campaign_id``。两者同时存在时必须一致。
+    campaign_id = payload.get("campaign_id")
+    formal_campaign_id = payload.get("formal_campaign_id")
+    if isinstance(campaign_id, str) and campaign_id:
+        if formal_campaign_id not in (None, campaign_id):
+            raise TimingLedgerError("provenance 收据 campaign_id 与 formal_campaign_id 不一致")
+        payload = {**payload, "formal_campaign_id": campaign_id}
     for field in (
         "formal_campaign_id",
         "status",

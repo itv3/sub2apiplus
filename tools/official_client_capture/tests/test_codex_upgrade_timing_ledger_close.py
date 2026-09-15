@@ -16,10 +16,12 @@ def _iso(value: datetime) -> str:
     return value.isoformat(timespec="seconds")
 
 
-def _write_provenance(path: Path, *, campaign_id: str = "c-formal", precise: int = 140, estimated: int = 30, status: str = "complete", schema: str = ledger.PROVENANCE_RECEIPT_SCHEMA) -> Path:
+def _write_provenance(path: Path, *, campaign_id: str = "c-formal", precise: int = 140, estimated: int = 30, status: str = "complete", schema: str = ledger.PROVENANCE_RECEIPT_SCHEMA, id_field: str = "campaign_id") -> Path:
+    """按 collect-campaign 的真实产出形状写 provenance 收据：Formal Campaign ID 位于 ``campaign_id``。"""
+
     payload = {
         "schema_version": schema,
-        "formal_campaign_id": campaign_id,
+        id_field: campaign_id,
         "status": status,
         "precise_total": precise,
         "estimated_total": estimated,
@@ -130,6 +132,32 @@ class CloseCampaignLedgerTests(unittest.TestCase):
             result = ledger.close_campaign_ledger(ledger_dir, root_cause_id="rc1-abc", provenance_receipt=receipt)
             self.assertEqual(result["appended_event_ids"], ["close-stop-the-line"])
             self.assertEqual(ledger.inspect_ledger(ledger_dir)["status"], "stopped")
+
+    def test_provenance_campaign_id_field_shapes(self) -> None:
+        """真实 collect-campaign 产出只有 campaign_id；旧夹具的 formal_campaign_id 仍可读，二者冲突即拒绝。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            real = _write_provenance(root / "real.json", campaign_id="c-real")
+            payload, _raw = ledger._load_provenance_receipt(real)
+            self.assertEqual(payload["formal_campaign_id"], "c-real")
+            legacy = _write_provenance(root / "legacy.json", campaign_id="c-legacy", id_field="formal_campaign_id")
+            payload, _raw = ledger._load_provenance_receipt(legacy)
+            self.assertEqual(payload["formal_campaign_id"], "c-legacy")
+            conflict_path = root / "conflict.json"
+            conflict = json.loads(real.read_text("utf-8"))
+            conflict["formal_campaign_id"] = "c-other"
+            conflict_path.write_text(json.dumps(conflict, ensure_ascii=False, sort_keys=True) + "\n", "utf-8")
+            conflict_path.chmod(0o600)
+            with self.assertRaisesRegex(ledger.TimingLedgerError, "不一致"):
+                ledger._load_provenance_receipt(conflict_path)
+            missing_path = root / "missing.json"
+            missing = json.loads(real.read_text("utf-8"))
+            del missing["campaign_id"]
+            missing_path.write_text(json.dumps(missing, ensure_ascii=False, sort_keys=True) + "\n", "utf-8")
+            missing_path.chmod(0o600)
+            with self.assertRaisesRegex(ledger.TimingLedgerError, "缺少 formal_campaign_id"):
+                ledger._load_provenance_receipt(missing_path)
 
     def test_rejects_wrong_schema_and_unresolved_is_recorded(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
