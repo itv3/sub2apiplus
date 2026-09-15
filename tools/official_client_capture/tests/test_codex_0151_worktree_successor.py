@@ -293,6 +293,12 @@ CODEX_0154_ATOMIC_PREDISPATCH_TOOL_CLOSURE_FREEZE_SUCCESSOR = (
     ROOT
     / "docs/egress/maintenance/upstream-codex-0154-atomic-predispatch-tool-closure-20260915-freeze-successor.json"
 )
+# 2026-09-15：Attempt v3 通用证据权限、父失败计时闭合和 P0 双轮 v2
+# 的最终后继摘要；失败 Formal Campaign 保持只读且未增加官方请求。
+CODEX_0154_VC1_GENERAL_TOOLCHAIN_CLOSEOUT_FREEZE_SUCCESSOR = (
+    ROOT
+    / "docs/egress/maintenance/upstream-codex-0154-vc1-general-toolchain-closeout-20260915-freeze-successor.json"
+)
 HISTORICAL_LEDGER = "docs/egress/maintenance/historical-source-drift-successor.json"
 SHA256_LENGTH = 64
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -414,6 +420,7 @@ def successor_edges(path: str) -> list[tuple[str, str]]:
         CODEX_0154_VC1_PCAP_FILENAME_BOUNDARY_FREEZE_SUCCESSOR,
         CODEX_0154_VC1_HISTORICAL_HELPER_LOADER_FREEZE_SUCCESSOR,
         CODEX_0154_ATOMIC_PREDISPATCH_TOOL_CLOSURE_FREEZE_SUCCESSOR,
+        CODEX_0154_VC1_GENERAL_TOOLCHAIN_CLOSEOUT_FREEZE_SUCCESSOR,
     ):
         payload = json.loads(receipt_path.read_text(encoding="utf-8"))
         _validate_successor_receipt(payload)
