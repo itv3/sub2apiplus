@@ -146,6 +146,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="commit 模式下追加工作树中已定稿的文件（如引用本收据的门禁文件），登记 before 提交摘要到当前摘要的边；可重复",
     )
     freeze.add_argument(
+        "--deletion-reason",
+        help="区间内删除冻结路径时的删除原因；给出后收据携带 deletion_proof，result 为 passed_with_deletions",
+    )
+    freeze.add_argument(
+        "--historical-reader",
+        action="append",
+        default=[],
+        help="承接被删除 Python 模块历史读取的仓库相对模块路径；删除 .py 时至少一个，可重复",
+    )
+    freeze.add_argument(
         "--dry-run",
         action="store_true",
         help="只输出冻结命中、未登记路径与特殊待办，不落盘",
@@ -417,6 +427,8 @@ def execute(arguments: argparse.Namespace) -> dict[str, Any]:
             reason=arguments.reason,
             dry_run=arguments.dry_run,
             extra_worktree_paths=arguments.extra_worktree_path,
+            deletion_reason=arguments.deletion_reason,
+            historical_readers=arguments.historical_reader,
         )
     if command == "identity-seal":
         draft = expect_object(load_json(arguments.input, "identity draft"), "identity draft")

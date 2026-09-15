@@ -422,6 +422,120 @@ class FreezeSuccessorTest(unittest.TestCase):
         generate_source_transition(self.root, self.base, middle, output)
         self.assertTrue(output.exists())
 
+    def test_deleting_frozen_path_requires_and_records_deletion_proof(self) -> None:
+        # B1：删除冻结路径 backend/a.go 没有删除原因即拒绝，不再降级为人工待办。
+        (self.root / "backend/a.go").unlink()
+        output = self.maintenance / "upstream-t9-freeze-successor.json"
+        with self.assertRaisesRegex(UpstreamMergeError, "--deletion-reason"):
+            generate_freeze_successor(self.root, self.base, None, output, tag="t9")
+        plan = plan_freeze_successor(self.root, self.base, None)
+        self.assertEqual(plan["deleted_frozen_paths"], ["backend/a.go"])
+        self.assertEqual(
+            plan["deleted_paths"],
+            [{"path": "backend/a.go", "frozen": True, "last_sha256": digest(self.sources["backend/a.go"])}],
+        )
+        summary = generate_freeze_successor(
+            self.root, self.base, None, output, tag="t9", deletion_reason="退役 a"
+        )
+        self.assertEqual(summary["result"], "passed_with_deletions")
+        self.assertTrue(summary["deletion_proof"])
+        self.assertEqual(summary["deleted_path_count"], 1)
+        document = json.loads(output.read_text(encoding="utf-8"))
+        self.assertEqual(document["result"], "passed_with_deletions")
+        self.assertEqual(document["deleted_frozen_paths"], ["backend/a.go"])
+        proof = document["deletion_proof"]
+        self.assertEqual(proof["algorithm"], "deletion-proof/v1")
+        self.assertEqual(proof["reason"], "退役 a")
+        self.assertEqual(proof["historical_readers"], [])
+        entry = proof["deleted_paths"][0]
+        self.assertEqual(
+            (entry["path"], entry["frozen"], entry["last_sha256"]),
+            ("backend/a.go", True, digest(self.sources["backend/a.go"])),
+        )
+        self.assertEqual(entry["reference_scan"]["algorithm"], "reference-scan/v1")
+        self.assertEqual(entry["reference_scan"]["patterns"], ["a.go"])
+        self.assertEqual(entry["reference_scan"]["references"], [])
+        self.assertEqual(gate_compatible_identity(document), document["identity_sha256"])
+        # 删除不产生摘要边：a.go 的已知摘要集合保持原样，证明结构也不会被抽成边。
+        _edges, known, _ = load_frozen_edges(self.root)
+        self.assertEqual(known["backend/a.go"], {"0" * 64, digest(self.sources["backend/a.go"])})
+
+    def test_deleted_python_module_reference_scan_and_historical_reader(self) -> None:
+        # B1：删除 Python 模块时，三类残留引用任一命中即拒绝，且必须登记历史读取器。
+        (self.root / "tools/e.py").unlink()
+        reader = self.root / "tools/f.py"
+        reader.write_text("from tools import e\n", encoding="utf-8")
+        output = self.maintenance / "upstream-t10-freeze-successor.json"
+        with self.assertRaisesRegex(UpstreamMergeError, "仍被引用.*python:tools/f.py"):
+            generate_freeze_successor(
+                self.root, self.base, None, output, tag="t10",
+                deletion_reason="退役 e", historical_readers=["tools/f.py"],
+            )
+        reader.write_text("print('f')\n", encoding="utf-8")
+        action = self.root / "config/action.json"
+        action.parent.mkdir()
+        action.write_text(json.dumps({"command": ["python3", "tools/e.py"]}), encoding="utf-8")
+        with self.assertRaisesRegex(UpstreamMergeError, "仍被引用.*json:config/action.json"):
+            generate_freeze_successor(
+                self.root, self.base, None, output, tag="t10",
+                deletion_reason="退役 e", historical_readers=["tools/f.py"],
+            )
+        # 非 command 类字段里的路径文本不算引用。
+        action.write_text(json.dumps({"note": "tools/e.py"}), encoding="utf-8")
+        script = self.root / "run.sh"
+        script.write_text("python3 tools/e.py\n", encoding="utf-8")
+        with self.assertRaisesRegex(UpstreamMergeError, "仍被引用.*shell:run.sh"):
+            generate_freeze_successor(
+                self.root, self.base, None, output, tag="t10",
+                deletion_reason="退役 e", historical_readers=["tools/f.py"],
+            )
+        script.unlink()
+        with self.assertRaisesRegex(UpstreamMergeError, "--historical-reader"):
+            generate_freeze_successor(self.root, self.base, None, output, tag="t10", deletion_reason="退役 e")
+        with self.assertRaisesRegex(UpstreamMergeError, "历史读取器不存在"):
+            generate_freeze_successor(
+                self.root, self.base, None, output, tag="t10",
+                deletion_reason="退役 e", historical_readers=["tools/missing.py"],
+            )
+        summary = generate_freeze_successor(
+            self.root, self.base, None, output, tag="t10",
+            deletion_reason="退役 e", historical_readers=["tools/f.py"],
+        )
+        # tools/e.py 命中注册表 python_receipt_list 规则：结果仍是人工待办，但证明照样写入。
+        self.assertEqual(summary["result"], "manual_actions_required")
+        self.assertTrue(summary["deletion_proof"])
+        document = json.loads(output.read_text(encoding="utf-8"))
+        proof = document["deletion_proof"]
+        self.assertEqual(proof["historical_readers"], [{"path": "tools/f.py", "sha256": digest("print('f')\n")}])
+        self.assertEqual(proof["deleted_paths"][0]["reference_scan"]["patterns"], ["e", "e.py"])
+        self.assertEqual(proof["deleted_paths"][0]["reference_scan"]["references"], [])
+
+    def test_commit_mode_deletion_proof_reads_after_tree(self) -> None:
+        (self.root / "backend/a.go").unlink()
+        after = self._commit("delete a")
+        output = self.maintenance / "upstream-t11-freeze-successor.json"
+        summary = generate_freeze_successor(
+            self.root, self.base, after, output, tag="t11", deletion_reason="退役 a"
+        )
+        self.assertEqual(summary["result"], "passed_with_deletions")
+        document = json.loads(output.read_text(encoding="utf-8"))
+        self.assertEqual(document["current_commit"], after)
+        self.assertEqual(document["deletion_proof"]["deleted_paths"][0]["frozen"], True)
+        # 未登记路径的删除给出原因时也记录证明，但 result 不因此变化。
+        (self.root / "backend/free.go").unlink()
+        free_after = self._commit("delete free")
+        (self.root / "backend/b.go").write_text("package b // changed\n", encoding="utf-8")
+        changed = self._commit("change b")
+        report = generate_freeze_successor(
+            self.root, after, changed, None, tag="t12", dry_run=True, deletion_reason="退役 free"
+        )
+        self.assertEqual(report["result"], "passed_local_evidence_successor")
+        self.assertEqual(report["deleted_frozen_paths"], [])
+        # t11 收据随 "delete free" 一起进入了区间，因此未登记路径里还会出现它自身。
+        self.assertIn("backend/free.go", report["unregistered_paths"])
+        self.assertEqual(report["deletion_proof"]["deleted_paths"][0]["frozen"], False)
+        self.assertIsNotNone(free_after)
+
     def test_real_repository_frozen_coverage_is_consistent(self) -> None:
         edges, known, _ = load_frozen_edges(SOURCE_ROOT)
         # 2026-09-10 基线：成对边覆盖 1078 条路径，加上只有后继摘要的新增文件条目共 1254 条。
@@ -431,7 +545,9 @@ class FreezeSuccessorTest(unittest.TestCase):
         self.assertIn("Makefile", known)
         self.assertGreater(len(edges), len(known))
         registry = load_freeze_registry(SOURCE_ROOT)
-        self.assertGreaterEqual(len(registry["rules"]), 4)
+        # B1 起 Python 门禁按 schema glob freeze successor，python_receipt_list 规则已退役。
+        self.assertGreaterEqual(len(registry["rules"]), 3)
+        self.assertNotIn("codex-0151-worktree-successor", {rule["id"] for rule in registry["rules"]})
 
 
 if __name__ == "__main__":

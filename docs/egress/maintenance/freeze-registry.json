@@ -1,5 +1,5 @@
 {
-  "identity_sha256": "ce2ec9e5b4d4cf7fe0d381489724782854dfba729bfad4e27194ae84b7f37fef",
+  "identity_sha256": "0db09d7c39ae5bf8e6c2a3474e85aea1caebe2ba6021451597eb2d389630432e",
   "issued_at_utc": "2026-09-10T10:00:00Z",
   "policy": {
     "chain_policy": "只承接已登记摘要到当前摘要的精确边；前序摘要不在已登记集合中即链断裂，工具 fail-close，不得凭空补边。",
@@ -9,23 +9,6 @@
   },
   "purpose": "登记通用 successor 图之外仍需额外动作的冻结台账；未命中任何规则的冻结路径只需 freeze-successor-generate 生成的精确边即可被两包 Go 门禁承接。",
   "rules": [
-    {
-      "action": {
-        "file": "tools/official_client_capture/tests/test_codex_0151_worktree_successor.py",
-        "instruction": "生成本次 freeze successor 后，把它的仓库相对路径追加到该测试 successor_edges 的显式收据列表并重跑；该测试属于 Campaign 受管工具文件，改动前须老板确认。",
-        "kind": "python_receipt_list"
-      },
-      "description": "Codex CLI 0.151 worktree successor 登记的路径由 Python 门禁沿显式列出的 successor 收据承接。",
-      "id": "codex-0151-worktree-successor",
-      "match": {
-        "receipt_paths": [
-          "docs/egress/maintenance/codex-cli-0151-worktree-successor.json"
-        ]
-      },
-      "verification": [
-        "python3 -m unittest tools.official_client_capture.tests.test_codex_0151_worktree_successor"
-      ]
-    },
     {
       "action": {
         "file": "tools/arm64_supervised_deploy.py",

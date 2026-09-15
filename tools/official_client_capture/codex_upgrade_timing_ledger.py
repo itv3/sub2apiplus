@@ -417,6 +417,85 @@ def _load_producer_successor_edge(
     return before, after
 
 
+FREEZE_RESULT_PASSED_WITH_DELETIONS = "passed_with_deletions"
+FREEZE_DELETION_PROOF_ALGORITHM = "deletion-proof/v1"
+FREEZE_REFERENCE_SCAN_ALGORITHM = "reference-scan/v1"
+
+
+def _validate_freeze_deletion_proof(
+    repository_root: Path,
+    receipt: dict[str, Any],
+) -> None:
+    """B1：删除冻结路径的 freeze successor 必须携带三项证明。
+
+    与 ``codex_upgrade._validate_freeze_deletion_proof`` 语义一致，但计时账本
+    保持自包含：非空删除原因、逐路径无引用扫描为空、历史读取器仍在仓库内且
+    摘要一致。未删除冻结路径时不得携带 ``deletion_proof``。
+    """
+
+    deleted = receipt.get("deleted_frozen_paths")
+    proof = receipt.get("deletion_proof")
+    if not isinstance(deleted, list) or any(
+        not isinstance(item, str) or not item for item in deleted
+    ):
+        raise TimingLedgerError("producer freeze successor deleted_frozen_paths 非法")
+    if not deleted:
+        if proof is not None:
+            raise TimingLedgerError("producer freeze successor 未删除冻结路径却携带 deletion_proof")
+        return
+    if receipt.get("result") != FREEZE_RESULT_PASSED_WITH_DELETIONS:
+        raise TimingLedgerError("producer freeze successor 删除了冻结路径但 result 不是 passed_with_deletions")
+    proof = _expect(
+        proof,
+        {"algorithm", "reason", "deleted_paths", "historical_readers"},
+        "producer freeze successor deletion_proof",
+    )
+    if (
+        proof.get("algorithm") != FREEZE_DELETION_PROOF_ALGORITHM
+        or not isinstance(proof.get("reason"), str)
+        or not proof["reason"].strip()
+        or not isinstance(proof.get("deleted_paths"), list)
+        or not isinstance(proof.get("historical_readers"), list)
+        or not proof["historical_readers"]
+    ):
+        raise TimingLedgerError("producer freeze successor deletion_proof 原因或历史读取器缺失")
+    covered: dict[str, bool] = {}
+    for item in proof["deleted_paths"]:
+        entry = _expect(item, {"path", "frozen", "last_sha256", "reference_scan"}, "deletion_proof 删除路径")
+        scan = _expect(
+            entry.get("reference_scan"),
+            {"algorithm", "patterns", "scopes", "references"},
+            "deletion_proof 引用扫描",
+        )
+        if (
+            not isinstance(entry.get("path"), str)
+            or not entry["path"]
+            or not isinstance(entry.get("frozen"), bool)
+            or scan.get("algorithm") != FREEZE_REFERENCE_SCAN_ALGORITHM
+            or not isinstance(scan.get("patterns"), list)
+            or not scan["patterns"]
+            or scan.get("references") != []
+        ):
+            raise TimingLedgerError("producer freeze successor 删除路径仍有引用或扫描证明非法")
+        covered[str(entry["path"])] = bool(entry["frozen"])
+    if any(covered.get(path) is not True for path in deleted):
+        raise TimingLedgerError("producer freeze successor 存在没有无引用证明的冻结删除路径")
+    for reader in proof["historical_readers"]:
+        binding = _expect(reader, {"path", "sha256"}, "deletion_proof 历史读取器")
+        relative = binding.get("path")
+        if (
+            not isinstance(relative, str)
+            or not relative.endswith(".py")
+            or relative in deleted
+            or not isinstance(binding.get("sha256"), str)
+            or not SHA256_RE.fullmatch(binding["sha256"])
+        ):
+            raise TimingLedgerError("producer freeze successor 历史读取器登记非法")
+        reader_path = _repository_file(repository_root, relative, "deletion_proof 历史读取器")
+        if _sha256_bytes(reader_path.read_bytes()) != binding["sha256"]:
+            raise TimingLedgerError(f"producer freeze successor 历史读取器摘要漂移：{relative}")
+
+
 def _load_freeze_successor_edge(
     repository_root: Path,
     descriptor: dict[str, str],
@@ -432,31 +511,31 @@ def _load_freeze_successor_edge(
         payload = json.loads(receipt_path.read_bytes())
     except (UnicodeError, json.JSONDecodeError) as error:
         raise TimingLedgerError("producer freeze successor 不是合法 JSON") from error
-    receipt = _expect(
-        payload,
-        {
-            "schema_version",
-            "issued_at_utc",
-            "base_commit",
-            "current_commit",
-            "scope",
-            "mode",
-            "extra_worktree_paths",
-            "frozen_path_count",
-            "frozen_edge_count",
-            "changed_path_count",
-            "transitions",
-            "unregistered_path_count",
-            "unregistered_paths",
-            "deleted_frozen_paths",
-            "required_manual_actions",
-            "verification",
-            "safety",
-            "result",
-            "identity_sha256",
-        },
-        "producer freeze successor",
-    )
+    receipt_fields = {
+        "schema_version",
+        "issued_at_utc",
+        "base_commit",
+        "current_commit",
+        "scope",
+        "mode",
+        "extra_worktree_paths",
+        "frozen_path_count",
+        "frozen_edge_count",
+        "changed_path_count",
+        "transitions",
+        "unregistered_path_count",
+        "unregistered_paths",
+        "deleted_frozen_paths",
+        "required_manual_actions",
+        "verification",
+        "safety",
+        "result",
+        "identity_sha256",
+    }
+    if isinstance(payload, dict) and "deletion_proof" in payload:
+        # B1：带证明删除冻结路径的收据额外携带 deletion_proof。
+        receipt_fields = receipt_fields | {"deletion_proof"}
+    receipt = _expect(payload, receipt_fields, "producer freeze successor")
     expected_fields = {
         "schema_version": "official-egress-upstream-freeze-successor/v1",
         "base_commit": descriptor["base_commit"],
@@ -501,8 +580,7 @@ def _load_freeze_successor_edge(
     )
     if any(safety.values()):
         raise TimingLedgerError("producer freeze successor 超出离线工具修复边界")
-    if receipt.get("deleted_frozen_paths") != []:
-        raise TimingLedgerError("producer freeze successor 删除了冻结路径")
+    _validate_freeze_deletion_proof(repository_root, receipt)
     entries = receipt.get("transitions")
     if not isinstance(entries, list):
         raise TimingLedgerError("producer freeze successor transitions 不是数组")

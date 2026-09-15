@@ -46,6 +46,20 @@ MAINTENANCE_ROOT = "docs/egress/maintenance"
 FREEZE_REGISTRY_RELATIVE = f"{MAINTENANCE_ROOT}/freeze-registry.json"
 FREEZE_REGISTRY_SCHEMA = "official-egress-freeze-registry/v1"
 FREEZE_SUCCESSOR_SCHEMA = "official-egress-upstream-freeze-successor/v1"
+# B1：带证明删除冻结文件。收据 result 为 passed_with_deletions 时必须携带
+# deletion_proof：删除原因、每个删除路径的工作树无引用扫描、历史读取兼容证明。
+FREEZE_RESULT_PASSED = "passed_local_evidence_successor"
+FREEZE_RESULT_MANUAL = "manual_actions_required"
+FREEZE_RESULT_PASSED_WITH_DELETIONS = "passed_with_deletions"
+DELETION_PROOF_ALGORITHM = "deletion-proof/v1"
+REFERENCE_SCAN_ALGORITHM = "reference-scan/v1"
+# 引用扫描范围：Python import 与属性引用、Shell／Makefile 调用、JSON 动作命令字段。
+REFERENCE_SCAN_PYTHON_PATHSPECS = ("*.py",)
+REFERENCE_SCAN_SHELL_PATHSPECS = ("*.sh", "Makefile", "*.mk")
+REFERENCE_SCAN_JSON_PATHSPECS = ("*.json",)
+REFERENCE_SCAN_JSON_COMMAND_KEYS = frozenset(
+    {"command", "commands", "action", "argv", "args", "entrypoint", "script", "module", "tool"}
+)
 # 与 Go 侧 loadAuditedSourceSuccessorEdges 相同：只读取 schema_version 含这些标记的收据。
 LEDGER_SCHEMA_MARKERS = ("successor", "transition", "ledger", "receipt")
 PREDECESSOR_SCALAR_KEYS = ("predecessor_sha256", "from_sha256")
@@ -401,6 +415,8 @@ def plan_freeze_successor(
     broken: list[dict[str, Any]] = []
     manual_actions: list[dict[str, Any]] = []
     deleted_frozen: list[str] = []
+    deleted_paths: list[dict[str, Any]] = []
+
     def note_rule_actions(path: str) -> None:
         # 注册表规则描述的是“目录级摘要”等收据边之外的冻结，必须对每个变化路径
         # 判定，而不只对已登记收据边的路径判定；否则改一个目录内的新文件会漏报。
@@ -422,12 +438,23 @@ def plan_freeze_successor(
         old_path = change["old_path"] or path
         note_rule_actions(path)
         frozen_paths = [candidate for candidate in {path, old_path} if candidate in known]
+        if change["status"] == "D":
+            # 通用 successor 图只能表达“摘要到摘要”；删除路径不产生边，只登记
+            # 删除事实，冻结路径的删除还必须由 deletion_proof 携带证明。
+            deleted_paths.append(
+                {
+                    "path": path,
+                    "frozen": bool(frozen_paths),
+                    "last_sha256": _blob_digest_at(root, before, old_path),
+                }
+            )
+            if frozen_paths:
+                deleted_frozen.append(path)
+            else:
+                unregistered.append(path)
+            continue
         if not frozen_paths:
             unregistered.append(path)
-            continue
-        if change["status"] == "D":
-            # 通用 successor 图只能表达“摘要到摘要”，删除冻结路径必须人工处置。
-            deleted_frozen.append(path)
             continue
         before_digest = _blob_digest_at(root, before, old_path)
         if after is not None and path not in extras:
@@ -472,6 +499,7 @@ def plan_freeze_successor(
         "frozen_hits": hits,
         "unregistered_paths": sorted(unregistered),
         "deleted_frozen_paths": sorted(deleted_frozen),
+        "deleted_paths": sorted(deleted_paths, key=lambda item: item["path"]),
         "broken_chain": broken,
         "required_manual_actions": manual_actions,
         "registry_rule_count": len(registry["rules"]),
@@ -512,6 +540,191 @@ def _assert_no_self_binding(
         raise UpstreamMergeError(f"输出收据不得出现在它描述的变化集合中：{output_relative}")
 
 
+def _git_grep_references(
+    repository_root: Path,
+    after_commit: str | None,
+    patterns: Sequence[str],
+    pathspecs: Sequence[str],
+    *,
+    word_boundary: bool,
+) -> list[dict[str, Any]]:
+    """用 ``git grep`` 在 after 提交树（或工作树含未跟踪文件）内查找字面模式。"""
+
+    command = ["git", "grep", "-n", "-I", "-F"]
+    if word_boundary:
+        command.append("-w")
+    for pattern in patterns:
+        command.extend(["-e", pattern])
+    if after_commit is not None:
+        command.append(after_commit)
+    else:
+        command.append("--untracked")
+    command.append("--")
+    command.extend(pathspecs)
+    command.append(f":(exclude){MAINTENANCE_ROOT}/")
+    completed = subprocess.run(
+        command,
+        cwd=repository_root,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if completed.returncode not in {0, 1}:
+        raise UpstreamMergeError(
+            "引用扫描 git grep 失败：" + completed.stderr.decode("utf-8", errors="replace").strip()
+        )
+    hits: list[dict[str, Any]] = []
+    for raw_line in completed.stdout.decode("utf-8", errors="replace").splitlines():
+        line = raw_line
+        if after_commit is not None and line.startswith(after_commit + ":"):
+            line = line[len(after_commit) + 1 :]
+        path, _separator, remainder = line.partition(":")
+        line_number, _separator, content = remainder.partition(":")
+        if not path or not line_number.isdigit():
+            continue
+        hits.append({"path": path, "line": int(line_number), "content": content.strip()[:200]})
+    return hits
+
+
+def _read_repository_text(repository_root: Path, after_commit: str | None, relative: str) -> str | None:
+    if after_commit is not None:
+        completed = subprocess.run(
+            ["git", "show", f"{after_commit}:{relative}"],
+            cwd=repository_root,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        if completed.returncode != 0:
+            return None
+        raw = completed.stdout
+    else:
+        path = repository_root / Path(*relative.split("/"))
+        if path.is_symlink() or not path.is_file():
+            return None
+        raw = path.read_bytes()
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
+def _json_command_references(value: Any, patterns: Sequence[str], *, key: str | None = None) -> bool:
+    """递归查找 JSON 动作命令字段（command／argv 等）中的字面引用。"""
+
+    if isinstance(value, dict):
+        return any(_json_command_references(child, patterns, key=str(name)) for name, child in value.items())
+    if isinstance(value, list):
+        return any(_json_command_references(child, patterns, key=key) for child in value)
+    if isinstance(value, str) and key in REFERENCE_SCAN_JSON_COMMAND_KEYS:
+        return any(pattern in value for pattern in patterns)
+    return False
+
+
+def scan_deleted_path_references(
+    repository_root: Path,
+    after_commit: str | None,
+    deleted_path: str,
+    *,
+    ignored_paths: Sequence[str] = (),
+) -> dict[str, Any]:
+    """为一个删除路径生成 ``reference-scan/v1`` 结果：三类引用全部为空才算无引用。"""
+
+    root = assert_git_repository(repository_root)
+    name = deleted_path.rsplit("/", 1)[-1]
+    stem, _dot, suffix = name.rpartition(".")
+    patterns = [name]
+    python_patterns = [name]
+    if suffix == "py" and stem:
+        # 模块名用于 import x／from pkg import x／pkg.x 属性引用。
+        python_patterns.append(stem)
+    ignored = set(ignored_paths) | {deleted_path}
+    references: list[dict[str, Any]] = []
+    for hit in _git_grep_references(
+        root, after_commit, python_patterns, REFERENCE_SCAN_PYTHON_PATHSPECS, word_boundary=True
+    ):
+        if hit["path"] not in ignored:
+            references.append({"kind": "python", **hit})
+    for hit in _git_grep_references(
+        root, after_commit, patterns, REFERENCE_SCAN_SHELL_PATHSPECS, word_boundary=False
+    ):
+        if hit["path"] not in ignored:
+            references.append({"kind": "shell", **hit})
+    json_candidates = sorted(
+        {
+            hit["path"]
+            for hit in _git_grep_references(
+                root, after_commit, patterns, REFERENCE_SCAN_JSON_PATHSPECS, word_boundary=False
+            )
+            if hit["path"] not in ignored
+        }
+    )
+    for candidate in json_candidates:
+        text = _read_repository_text(root, after_commit, candidate)
+        try:
+            document = json.loads(text) if text is not None else None
+        except ValueError:
+            document = None
+        if document is None or _json_command_references(document, patterns):
+            references.append({"kind": "json", "path": candidate, "line": 0, "content": "command 字段引用"})
+    references.sort(key=lambda item: (item["kind"], item["path"], item["line"]))
+    return {
+        "algorithm": REFERENCE_SCAN_ALGORITHM,
+        "patterns": sorted(set(patterns) | set(python_patterns)),
+        "scopes": ["python:import-and-attribute", "shell:invocation", "json:command-fields"],
+        "references": references,
+    }
+
+
+def build_deletion_proof(
+    repository_root: Path,
+    plan: dict[str, Any],
+    *,
+    deletion_reason: str,
+    historical_readers: Sequence[str],
+) -> dict[str, Any]:
+    """为 plan 中全部删除路径生成删除证明；任一引用残留或读取器缺失即拒绝。"""
+
+    root = assert_git_repository(repository_root)
+    if not isinstance(deletion_reason, str) or not deletion_reason.strip():
+        raise UpstreamMergeError("删除冻结路径必须提供非空 --deletion-reason")
+    deleted = plan.get("deleted_paths") or []
+    if not deleted:
+        raise UpstreamMergeError("区间内没有删除路径，无需删除证明")
+    after = plan.get("after_commit")
+    deleted_names = [item["path"] for item in deleted]
+    entries: list[dict[str, Any]] = []
+    for item in deleted:
+        scan = scan_deleted_path_references(root, after, item["path"], ignored_paths=deleted_names)
+        if scan["references"]:
+            listed = "; ".join(
+                f"{ref['kind']}:{ref['path']}:{ref['line']}" for ref in scan["references"][:8]
+            )
+            raise UpstreamMergeError(f"删除路径仍被引用，拒绝生成删除证明：{item['path']} ← {listed}")
+        entries.append({**item, "reference_scan": scan})
+    readers: list[dict[str, str]] = []
+    for reader in historical_readers:
+        relative = safe_relative_path(reader, "historical reader")
+        if not relative.endswith(".py") or relative in deleted_names:
+            raise UpstreamMergeError(f"历史读取器必须是仍存在的 Python 模块：{relative}")
+        if after is not None:
+            digest = _blob_digest_at(root, after, relative)
+        else:
+            digest = _worktree_digest(root, relative)
+        if digest is None:
+            raise UpstreamMergeError(f"历史读取器不存在或不是普通文件：{relative}")
+        readers.append({"path": relative, "sha256": digest})
+    readers.sort(key=lambda item: item["path"])
+    if any(item["path"].endswith(".py") for item in deleted) and not readers:
+        raise UpstreamMergeError("删除 Python 模块必须以 --historical-reader 登记承接历史读取的模块")
+    return {
+        "algorithm": DELETION_PROOF_ALGORITHM,
+        "reason": deletion_reason.strip(),
+        "deleted_paths": entries,
+        "historical_readers": readers,
+    }
+
+
 def generate_freeze_successor(
     repository_root: Path,
     before_commit: str,
@@ -522,8 +735,15 @@ def generate_freeze_successor(
     reason: str | None = None,
     dry_run: bool = False,
     extra_worktree_paths: Sequence[str] = (),
+    deletion_reason: str | None = None,
+    historical_readers: Sequence[str] = (),
 ) -> dict[str, Any]:
-    """在最终 revision 一次性生成全部冻结台账的 successor 收据。"""
+    """在最终 revision 一次性生成全部冻结台账的 successor 收据。
+
+    区间内删除了冻结路径时必须给出 ``deletion_reason``（以及 Python 模块的
+    ``historical_readers``），收据 result 为 ``passed_with_deletions`` 并携带
+    ``deletion_proof``；没有证明的冻结删除保持 fail-close，不再降级为人工待办。
+    """
 
     root = assert_git_repository(repository_root)
     if not isinstance(tag, str) or not SAFE_ID_RE.match(tag):
@@ -571,10 +791,22 @@ def generate_freeze_successor(
         for command in action["verification"]:
             if command not in verification:
                 verification.append(command)
-    if plan["required_manual_actions"] or plan["deleted_frozen_paths"]:
-        result = "manual_actions_required"
+    deletion_proof: dict[str, Any] | None = None
+    if plan["deleted_paths"] and deletion_reason is not None:
+        deletion_proof = build_deletion_proof(
+            root, plan, deletion_reason=deletion_reason, historical_readers=historical_readers
+        )
+    elif plan["deleted_frozen_paths"]:
+        raise UpstreamMergeError(
+            "区间内删除了冻结路径，必须提供 --deletion-reason（及 --historical-reader）生成删除证明："
+            + ", ".join(plan["deleted_frozen_paths"])
+        )
+    if plan["required_manual_actions"]:
+        result = FREEZE_RESULT_MANUAL
+    elif plan["deleted_frozen_paths"]:
+        result = FREEZE_RESULT_PASSED_WITH_DELETIONS
     else:
-        result = "passed_local_evidence_successor"
+        result = FREEZE_RESULT_PASSED
     document = bind_gate_compatible_identity(
         {
             "schema_version": FREEZE_SUCCESSOR_SCHEMA,
@@ -601,6 +833,7 @@ def generate_freeze_successor(
                 "deployment_performed": False,
             },
             "result": result,
+            **({"deletion_proof": deletion_proof} if deletion_proof is not None else {}),
         }
     )
     if dry_run:
@@ -617,6 +850,8 @@ def generate_freeze_successor(
         "transition_count": len(transitions),
         "unregistered_path_count": len(plan["unregistered_paths"]),
         "deleted_frozen_path_count": len(plan["deleted_frozen_paths"]),
+        "deleted_path_count": len(plan["deleted_paths"]),
+        "deletion_proof": deletion_proof is not None,
         "manual_action_count": len(plan["required_manual_actions"]),
         "verification": verification,
     }

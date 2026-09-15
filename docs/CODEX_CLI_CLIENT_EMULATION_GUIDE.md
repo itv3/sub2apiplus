@@ -2327,8 +2327,11 @@ python3 -m tools.upstream_merge freeze-successor-generate \
 Candidate 源码树与 Campaign 目录必须彼此独立；source transition 也不得放入源码树，否则会形成
 自引用摘要。源码、测试、文档或 Catalog 后续再变化，原 transition 即失效，必须重建；不得累积多个
 未登记提交后再进入 ARM64 门禁。transition 必须满足
-`result=passed_local_evidence_successor`、`required_manual_actions=[]`、`unregistered_paths=[]`、
-`deleted_frozen_paths=[]`，且 `verification` 明确包含 `make check-egress-spec`。其 `safety` 还必须同时明确
+`required_manual_actions=[]`、`unregistered_paths=[]`，且 `verification` 明确包含 `make check-egress-spec`；
+`deleted_frozen_paths=[]` 时 `result=passed_local_evidence_successor`，删除了冻结路径时必须是
+`result=passed_with_deletions` 并携带 `deletion_proof`（非空删除原因、每个被删路径的
+`reference-scan/v1` 无引用扫描——Python import／属性引用、Shell 调用、JSON 动作命令字段均为空——以及
+仍存在于源码树且摘要一致的历史读取模块）。其 `safety` 还必须同时明确
 `deployment_performed=false`、`live_account_used=false`、`official_egress_profile_changed=false`、
 `production_config_changed=false` 和 `wire_or_persona_selection_changed=false`；任一条件不满足都不得封存 Candidate。
 

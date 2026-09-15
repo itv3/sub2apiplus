@@ -43541,6 +43541,96 @@ def _git_blob_sha256(root: Path, revision: str, relative: str) -> str | None:
     return hashlib.sha256(content).hexdigest()
 
 
+FREEZE_SUCCESSOR_RESULT_PASSED = "passed_local_evidence_successor"
+FREEZE_SUCCESSOR_RESULT_PASSED_WITH_DELETIONS = "passed_with_deletions"
+FREEZE_DELETION_PROOF_ALGORITHM = "deletion-proof/v1"
+FREEZE_REFERENCE_SCAN_ALGORITHM = "reference-scan/v1"
+
+
+def _validate_freeze_deletion_proof(
+    transition: Mapping[str, Any],
+    *,
+    repository_root: Path,
+    label: str,
+) -> None:
+    """B1：删除冻结路径的后继收据必须携带三项证明。
+
+    三项分别是：非空删除原因；每个被删冻结路径的工作树无引用扫描
+    （``reference-scan/v1``，Python import／属性引用、Shell 调用、JSON 动作命令
+    字段均为空）；历史读取兼容证明（承接历史收据读取的 Python 模块仍存在于
+    仓库且摘要一致）。没有删除冻结路径的收据不得携带 ``deletion_proof``。
+    """
+
+    deleted = transition.get("deleted_frozen_paths")
+    proof = transition.get("deletion_proof")
+    if not isinstance(deleted, list) or any(
+        not isinstance(item, str) or not item for item in deleted
+    ):
+        raise ConfigurationError(f"{label} deleted_frozen_paths 非法。")
+    if not deleted:
+        if proof is not None:
+            raise ConfigurationError(f"{label} 未删除冻结路径却携带 deletion_proof。")
+        return
+    if transition.get("result") != FREEZE_SUCCESSOR_RESULT_PASSED_WITH_DELETIONS:
+        raise ConfigurationError(
+            f"{label} 删除了冻结路径，result 必须是 {FREEZE_SUCCESSOR_RESULT_PASSED_WITH_DELETIONS}。"
+        )
+    if (
+        not isinstance(proof, Mapping)
+        or set(proof) != {"algorithm", "reason", "deleted_paths", "historical_readers"}
+        or proof.get("algorithm") != FREEZE_DELETION_PROOF_ALGORITHM
+        or not isinstance(proof.get("reason"), str)
+        or not proof["reason"].strip()
+        or not isinstance(proof.get("deleted_paths"), list)
+        or not isinstance(proof.get("historical_readers"), list)
+        or not proof["historical_readers"]
+    ):
+        raise ConfigurationError(f"{label} deletion_proof 结构、原因或历史读取器缺失。")
+    covered: dict[str, bool] = {}
+    for item in proof["deleted_paths"]:
+        scan = item.get("reference_scan") if isinstance(item, Mapping) else None
+        if (
+            not isinstance(item, Mapping)
+            or set(item) != {"path", "frozen", "last_sha256", "reference_scan"}
+            or not isinstance(item.get("path"), str)
+            or not item["path"]
+            or not isinstance(item.get("frozen"), bool)
+            or not isinstance(scan, Mapping)
+            or set(scan) != {"algorithm", "patterns", "scopes", "references"}
+            or scan.get("algorithm") != FREEZE_REFERENCE_SCAN_ALGORITHM
+            or not isinstance(scan.get("patterns"), list)
+            or not scan["patterns"]
+            or scan.get("references") != []
+        ):
+            raise ConfigurationError(f"{label} 删除路径的无引用扫描证明非法。")
+        covered[str(item["path"])] = bool(item["frozen"])
+    if any(covered.get(path) is not True for path in deleted):
+        raise ConfigurationError(f"{label} 存在没有无引用证明的冻结删除路径。")
+    for reader in proof["historical_readers"]:
+        relative = reader.get("path") if isinstance(reader, Mapping) else None
+        if (
+            not isinstance(reader, Mapping)
+            or set(reader) != {"path", "sha256"}
+            or not isinstance(relative, str)
+            or not relative.endswith(".py")
+            or relative in deleted
+            or relative.startswith("/")
+            or "\\" in relative
+            or any(part in {"", ".", ".."} for part in relative.split("/"))
+            or not SHA256_RE.fullmatch(str(reader.get("sha256", "")))
+        ):
+            raise ConfigurationError(f"{label} 历史读取器登记非法。")
+        candidate = repository_root / Path(*relative.split("/"))
+        if (
+            candidate.is_symlink()
+            or not candidate.is_file()
+            or file_sha256(candidate) != reader["sha256"]
+        ):
+            raise ConfigurationError(
+                f"{label} 历史读取器不存在或摘要漂移：{relative}"
+            )
+
+
 def _validate_candidate_source_transition(
     source_root: Path,
     transition: Mapping[str, Any],
@@ -43570,7 +43660,7 @@ def _validate_candidate_source_transition(
         "result",
         "identity_sha256",
     }
-    if not isinstance(transition, Mapping) or set(transition) != required:
+    if not isinstance(transition, Mapping) or set(transition) - {"deletion_proof"} != required:
         raise ConfigurationError("Candidate source transition 字段不闭合。")
     if (
         transition.get("schema_version")
@@ -43584,16 +43674,26 @@ def _validate_candidate_source_transition(
         raise ConfigurationError(
             "Candidate source transition 必须是绑定当前 commit 的提交模式收据。"
         )
+    expected_result = (
+        FREEZE_SUCCESSOR_RESULT_PASSED_WITH_DELETIONS
+        if transition.get("deleted_frozen_paths")
+        else FREEZE_SUCCESSOR_RESULT_PASSED
+    )
     if (
-        transition.get("result") != "passed_local_evidence_successor"
+        transition.get("result") != expected_result
         or transition.get("required_manual_actions") != []
         or transition.get("unregistered_path_count") != 0
         or transition.get("unregistered_paths") != []
-        or transition.get("deleted_frozen_paths") != []
     ):
         raise ConfigurationError(
-            "Candidate source transition 仍有人工待办、未登记路径、删除冻结路径或失败状态。"
+            "Candidate source transition 仍有人工待办、未登记路径或失败状态；"
+            "删除冻结路径必须以 passed_with_deletions 携带删除证明。"
         )
+    _validate_freeze_deletion_proof(
+        transition,
+        repository_root=source_root,
+        label="Candidate source transition",
+    )
     verification = transition.get("verification")
     safety = transition.get("safety")
     if (

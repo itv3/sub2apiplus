@@ -88,6 +88,96 @@ class CodexUpgradeVC4SourceTests(unittest.TestCase):
         payload["identity_sha256"] = codex_upgrade._fingerprint(payload)
         return payload
 
+    def _signed(self, payload: dict[str, object]) -> dict[str, object]:
+        payload = copy.deepcopy(payload)
+        payload.pop("identity_sha256", None)
+        payload["identity_sha256"] = codex_upgrade._fingerprint(payload)
+        return payload
+
+    def test_transition_with_proven_deletion_is_accepted_and_unproven_rejected(self) -> None:
+        """B1：删除冻结路径的 transition 必须以 passed_with_deletions 携带三项证明。"""
+
+        retired = self.source / "retired.py"
+        retired.write_text("VALUE = 1\n", encoding="utf-8")
+        self._git("add", "retired.py")
+        self._git("commit", "-q", "-m", "add retired")
+        base = self._git("rev-parse", "HEAD").stdout.strip()
+        before_managed = hashlib.sha256(self.managed.read_bytes()).hexdigest()
+        retired.unlink()
+        reader = self.source / "reader.py"
+        reader.write_text("def load():\n    return None\n", encoding="utf-8")
+        self.managed.write_text("after deletion\n", encoding="utf-8")
+        self._git("add", "-A")
+        self._git("commit", "-q", "-m", "retire module")
+        current = self._git("rev-parse", "HEAD").stdout.strip()
+        reader_sha256 = hashlib.sha256(reader.read_bytes()).hexdigest()
+        proof = {
+            "algorithm": "deletion-proof/v1",
+            "reason": "执行分支已由 reconciler 取代",
+            "deleted_paths": [
+                {
+                    "path": "retired.py",
+                    "frozen": True,
+                    "last_sha256": hashlib.sha256(b"VALUE = 1\n").hexdigest(),
+                    "reference_scan": {
+                        "algorithm": "reference-scan/v1",
+                        "patterns": ["retired", "retired.py"],
+                        "scopes": ["python:import-and-attribute", "shell:invocation", "json:command-fields"],
+                        "references": [],
+                    },
+                }
+            ],
+            "historical_readers": [{"path": "reader.py", "sha256": reader_sha256}],
+        }
+        payload = copy.deepcopy(self.transition)
+        payload.update(
+            {
+                "base_commit": base,
+                "current_commit": current,
+                "changed_path_count": 3,
+                "deleted_frozen_paths": ["retired.py"],
+                "result": "passed_with_deletions",
+                "deletion_proof": proof,
+            }
+        )
+        payload["transitions"][0]["predecessor_sha256s"] = [before_managed]
+        payload["transitions"][0]["to_sha256"] = hashlib.sha256(self.managed.read_bytes()).hexdigest()
+        codex_upgrade._validate_candidate_source_transition(
+            self.source, self._signed(payload), git_commit=current
+        )
+        negatives = []
+        unproven = copy.deepcopy(payload)
+        unproven.pop("deletion_proof")
+        negatives.append((unproven, "deletion_proof"))
+        wrong_result = copy.deepcopy(payload)
+        wrong_result["result"] = "passed_local_evidence_successor"
+        negatives.append((wrong_result, "passed_with_deletions"))
+        referenced = copy.deepcopy(payload)
+        referenced["deletion_proof"]["deleted_paths"][0]["reference_scan"]["references"] = [
+            {"kind": "python", "path": "reader.py", "line": 1, "content": "import retired"}
+        ]
+        negatives.append((referenced, "无引用扫描证明非法"))
+        drifted = copy.deepcopy(payload)
+        drifted["deletion_proof"]["historical_readers"][0]["sha256"] = "0" * 64
+        negatives.append((drifted, "历史读取器不存在或摘要漂移"))
+        uncovered = copy.deepcopy(payload)
+        uncovered["deletion_proof"]["deleted_paths"][0]["path"] = "other.py"
+        negatives.append((uncovered, "没有无引用证明的冻结删除路径"))
+        for document, message in negatives:
+            with self.subTest(message=message), self.assertRaisesRegex(
+                codex_upgrade.ConfigurationError, message
+            ):
+                codex_upgrade._validate_candidate_source_transition(
+                    self.source, self._signed(document), git_commit=current
+                )
+        # 没有删除冻结路径却携带证明同样拒绝。
+        extra = copy.deepcopy(self.transition)
+        extra["deletion_proof"] = proof
+        with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "未删除冻结路径却携带"):
+            codex_upgrade._validate_candidate_source_transition(
+                self.source, self._signed(extra), git_commit=self.current_commit
+            )
+
     def test_transition_replays_from_both_git_blobs(self) -> None:
         codex_upgrade._validate_candidate_source_transition(
             self.source,

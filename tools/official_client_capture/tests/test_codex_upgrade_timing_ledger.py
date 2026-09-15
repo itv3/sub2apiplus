@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import tempfile
 import unittest
@@ -114,6 +115,112 @@ class TimingLedgerTests(unittest.TestCase):
             ledger._write_once(root / "receipts" / "frozen-producer.json", receipt)
             replayed = ledger.replay(root, "receipts/frozen-producer.json")
             self.assertEqual(replayed, receipt)
+
+    def test_freeze_successor_with_proven_deletion_replays_and_unproven_fails(self) -> None:
+        """B1：带证明删除冻结路径的 freeze successor 才能参与计时工具摘要链。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            reader = root / "tools" / "official_client_capture" / "historical_reader.py"
+            reader.parent.mkdir(parents=True)
+            reader.write_text("def read():\n    return None\n", encoding="utf-8")
+            reader_sha256 = hashlib.sha256(reader.read_bytes()).hexdigest()
+            relative = "docs/egress/maintenance/upstream-b1-freeze-successor.json"
+            receipt_path = root / Path(*relative.split("/"))
+            receipt_path.parent.mkdir(parents=True)
+            descriptor = {
+                "path": relative,
+                "base_commit": "a" * 40,
+                "scope": "upstream-b1-freeze-successor",
+                "result": "passed_with_deletions",
+            }
+            proof = {
+                "algorithm": "deletion-proof/v1",
+                "reason": "执行分支退役",
+                "deleted_paths": [
+                    {
+                        "path": "tools/official_client_capture/retired.py",
+                        "frozen": True,
+                        "last_sha256": "3" * 64,
+                        "reference_scan": {
+                            "algorithm": "reference-scan/v1",
+                            "patterns": ["retired", "retired.py"],
+                            "scopes": ["python:import-and-attribute", "shell:invocation", "json:command-fields"],
+                            "references": [],
+                        },
+                    }
+                ],
+                "historical_readers": [
+                    {"path": "tools/official_client_capture/historical_reader.py", "sha256": reader_sha256}
+                ],
+            }
+
+            def write(**overrides: object) -> None:
+                document: dict[str, object] = {
+                    "schema_version": "official-egress-upstream-freeze-successor/v1",
+                    "issued_at_utc": "2026-09-16T00:00:00Z",
+                    "base_commit": "a" * 40,
+                    "current_commit": "b" * 40,
+                    "scope": "upstream-b1-freeze-successor",
+                    "mode": "commit",
+                    "extra_worktree_paths": [],
+                    "frozen_path_count": 2,
+                    "frozen_edge_count": 2,
+                    "changed_path_count": 2,
+                    "transitions": [
+                        {
+                            "path": ledger.PRODUCER_TOOL_RELATIVE,
+                            "old_path": "",
+                            "status": "M",
+                            "predecessor_sha256s": ["1" * 64],
+                            "to_sha256": "2" * 64,
+                            "source_receipts": ["docs/egress/maintenance/base.json"],
+                            "reason": "登记计时工具后继",
+                        }
+                    ],
+                    "unregistered_path_count": 0,
+                    "unregistered_paths": [],
+                    "deleted_frozen_paths": ["tools/official_client_capture/retired.py"],
+                    "required_manual_actions": [],
+                    "verification": ["make check-egress-spec-ci"],
+                    "safety": {
+                        "deployment_performed": False,
+                        "live_account_used": False,
+                        "official_egress_profile_changed": False,
+                        "production_config_changed": False,
+                        "wire_or_persona_selection_changed": False,
+                    },
+                    "result": "passed_with_deletions",
+                    "deletion_proof": json.loads(json.dumps(proof)),
+                }
+                document.update(overrides)
+                for key in [k for k, v in document.items() if v is None]:
+                    document.pop(key)
+                compact = json.dumps(document, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                document["identity_sha256"] = hashlib.sha256(compact.encode("utf-8")).hexdigest()
+                receipt_path.write_text(json.dumps(document, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+            write()
+            self.assertEqual(ledger._load_freeze_successor_edge(root, descriptor), ("1" * 64, "2" * 64))
+            write(deletion_proof=None)
+            with self.assertRaisesRegex(ledger.TimingLedgerError, "deletion_proof"):
+                ledger._load_freeze_successor_edge(root, descriptor)
+            referenced = json.loads(json.dumps(proof))
+            referenced["deleted_paths"][0]["reference_scan"]["references"] = [
+                {"kind": "shell", "path": "run.sh", "line": 3, "content": "python3 retired.py"}
+            ]
+            write(deletion_proof=referenced)
+            with self.assertRaisesRegex(ledger.TimingLedgerError, "仍有引用"):
+                ledger._load_freeze_successor_edge(root, descriptor)
+            drifted = json.loads(json.dumps(proof))
+            drifted["historical_readers"][0]["sha256"] = "0" * 64
+            write(deletion_proof=drifted)
+            with self.assertRaisesRegex(ledger.TimingLedgerError, "历史读取器摘要漂移"):
+                ledger._load_freeze_successor_edge(root, descriptor)
+            write(deleted_frozen_paths=[], result="passed_local_evidence_successor")
+            plain = dict(descriptor, result="passed_local_evidence_successor")
+            with self.assertRaisesRegex(ledger.TimingLedgerError, "未删除冻结路径却携带"):
+                ledger._load_freeze_successor_edge(root, plain)
 
     def test_unregistered_producer_digest_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -32,324 +32,30 @@ RECONNECT_REPAIR_GATE_SUCCESSOR = (
 TOOL_IDENTITY_SYNC_SUCCESSOR = (
     ROOT / "docs/egress/maintenance/upstream-v0.2.3-tool-identity-sync-successor.json"
 )
-# 2026-09-10：模型能力在请求内钉住（openai_gateway_forward.go / openai_model_capabilities.go）
-# 及随之同步的受管工具身份三件套，由 freeze-successor-generate 以 commit 模式生成。
-CAPABILITY_PIN_FREEZE_SUCCESSOR = (
-    ROOT / "docs/egress/maintenance/upstream-capability-pin-freeze-successor.json"
+# B1（2026-09-16）：freeze-successor-generate 产生的通用 successor 收据不再逐份显式登记，
+# 而是按 schema 从 maintenance 目录 glob；新增收据不必再改本文件，也不再需要用
+# --extra-worktree-path 把本文件自身登记进收据。非 freeze 形态的六份历史收据仍显式列出。
+MAINTENANCE_ROOT = ROOT / "docs/egress/maintenance"
+FREEZE_SUCCESSOR_SCHEMA = "official-egress-upstream-freeze-successor/v1"
+EXPLICIT_SUCCESSORS = (
+    POST_BOOTSTRAP_SUCCESSOR,
+    RELEASE_PREP_SUCCESSOR,
+    VERSION_SYNC_SUCCESSOR,
+    RECONNECT_REPAIR_TRANSITION,
+    RECONNECT_REPAIR_GATE_SUCCESSOR,
+    TOOL_IDENTITY_SYNC_SUCCESSOR,
 )
-# 2026-09-10：发版机器人 VERSION 同步提交（0.2.3-3）对 backend/cmd/server/VERSION
-# 产生的后继摘要，由 freeze-successor-generate 以 commit 模式生成。
-VERSION_SYNC_0233_FREEZE_SUCCESSOR = (
-    ROOT / "docs/egress/maintenance/version-sync-0.2.3-3-freeze-successor.json"
-)
-# 2026-09-10：上游 v0.2.4 合并（MiniMax 接入、长流 HTTP/2 保活、客户端断开取消）
-# 对已冻结路径产生的后继摘要，由 freeze-successor-generate 以 commit 模式一次性生成。
-UPSTREAM_V024_FREEZE_SUCCESSOR = (
-    ROOT / "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json"
-)
-# 2026-09-11：发版 VERSION 同步（0.2.4-1）与 §5.2 精简改写的后继摘要。
-DOC_TRIM_20260911_FREEZE_SUCCESSOR = (
-    ROOT / "docs/egress/maintenance/upstream-doc-trim-20260911-freeze-successor.json"
-)
-# 2026-09-11：upstream_merge 工具改进（建议端补齐承接分类、拒绝时给出已知答案）的后继摘要。
-TOOL_HINTS_20260911_FREEZE_SUCCESSOR = (
-    ROOT / "docs/egress/maintenance/upstream-tool-hints-20260911-freeze-successor.json"
-)
-# 2026-09-11：Codex 升级工具改造批次 1（候选层运行坐标覆盖、campaign-run 强制派发泛化、
-# 监督器派发超时竞争修复、codex-p0-rehearsal 目标）对已冻结路径产生的后继摘要，
-# 由 freeze-successor-generate 以 commit 模式生成。
-CODEX_UPGRADE_BATCH1_FREEZE_SUCCESSOR = (
-    ROOT / "docs/egress/maintenance/upstream-codex-upgrade-batch1-freeze-successor.json"
-)
-# 2026-09-11：批次 2（reuse-official-evidence 正式命令，把已封存官方阶段只读导入新 Campaign）
-# 对已冻结路径产生的后继摘要，由 freeze-successor-generate 以 commit 模式生成。
-CODEX_UPGRADE_BATCH2_FREEZE_SUCCESSOR = (
-    ROOT / "docs/egress/maintenance/upstream-codex-upgrade-batch2-freeze-successor.json"
-)
-# 2026-09-11：批次 3（§5.7 完成定义门禁化：check_ledger_completeness 通用校验终态收据 +
-# officialegress/service 通用终态测试）对已冻结路径产生的后继摘要，同样以 commit 模式生成。
-CODEX_UPGRADE_BATCH3_FREEZE_SUCCESSOR = (
-    ROOT / "docs/egress/maintenance/upstream-codex-upgrade-batch3-freeze-successor.json"
-)
-# 2026-09-11：v0.2.4-2 发版后 github-actions bot 的 VERSION 同步提交对 VERSION 产生的后继摘要，
-# 由 freeze-successor-generate 以 commit 模式生成。
-V0242_VERSION_SYNC_FREEZE_SUCCESSOR = (
-    ROOT / "docs/egress/maintenance/upstream-v0.2.4-2-version-sync-freeze-successor.json"
-)
-# 2026-09-11：capture-cli 宿主目录、输出边界、迁移兼容与污染清理规范的后继摘要。
-CAPTURE_CLI_DIRECTORY_GOVERNANCE_FREEZE_SUCCESSOR = (
-    ROOT
-    / "docs/egress/maintenance/upstream-capture-cli-directory-governance-20260911-freeze-successor.json"
-)
-# 2026-09-11：Codex CLI 0.154.0 画像工具、目标清单和 Astra Lite 轨政策的后继摘要。
-CODEX_0154_EMULATION_UPGRADE_FREEZE_SUCCESSOR = (
-    ROOT
-    / "docs/egress/maintenance/upstream-codex-0154-emulation-upgrade-20260911-freeze-successor.json"
-)
-# 2026-09-12：修正 0.154 画像补丁对活动画像文件摘要的绑定，并同步受管工具摘要。
-CODEX_0154_PROFILE_PATCH_BINDING_FREEZE_SUCCESSOR = (
-    ROOT
-    / "docs/egress/maintenance/upstream-codex-0154-profile-patch-binding-20260912-freeze-successor.json"
-)
-# 2026-09-12：fresh Campaign canonical 初始化、动态旧 Previous 退休和对应框架语义的后继摘要。
-CODEX_0154_CANONICAL_PRODUCTION_CHAIN_FREEZE_SUCCESSOR = (
-    ROOT
-    / "docs/egress/maintenance/upstream-codex-0154-canonical-production-chain-20260912-freeze-successor.json"
-)
-# 2026-09-12：ARM64 受管工具把计时账本直接读取的 maintenance 文档纳入
-# 同一可回滚部署事务，并覆盖首次新增文档的回滚语义。
-CODEX_0154_RUNTIME_DOC_CLOSURE_FREEZE_SUCCESSOR = (
-    ROOT
-    / "docs/egress/maintenance/upstream-codex-0154-runtime-doc-closure-20260912-freeze-successor.json"
-)
-# 2026-09-12：运行时文档坐标改为监督器可接受的 metadata 数组值，避免路径
-# 中的斜杠被误用为事件对象键。
-CODEX_0154_RUNTIME_DOC_METADATA_FREEZE_SUCCESSOR = (
-    ROOT
-    / "docs/egress/maintenance/upstream-codex-0154-runtime-doc-metadata-20260912-freeze-successor.json"
-)
-# 2026-09-12：文档候选准备步骤的摘要也改为监督器可接受的路径值数组，
-# 并由真实函数返回值回归覆盖。
-CODEX_0154_RUNTIME_DOC_CANDIDATE_METADATA_FREEZE_SUCCESSOR = (
-    ROOT
-    / "docs/egress/maintenance/upstream-codex-0154-runtime-doc-candidate-metadata-20260912-freeze-successor.json"
-)
-# 2026-09-12：Framework 与两份客户端指南建立 VC-0～VC-6 唯一执行入口，
-# 同步澄清账号、模型可见性和运行坐标的身份边界。
-CLIENT_VC_STAGE_NAVIGATION_FREEZE_SUCCESSOR = (
-    ROOT
-    / "docs/egress/maintenance/client-vc-stage-navigation-20260912-freeze-successor.json"
-)
-# 2026-09-12：Claude VC-1～VC-3 合同拆分为证据包、规则迁移账本与原子断言账本，
-# 同步冻结指南说明及本显式 successor 列表。
-CLAUDE_VC1_VC3_CONTRACT_FREEZE_SUCCESSOR = (
-    ROOT
-    / "docs/egress/maintenance/upstream-claude-vc1-vc3-contract-20260912-freeze-successor.json"
-)
-# 2026-09-13：Codex 第四部分与 VC-0～VC-6 工具、测试及部署摘要最终对齐。
-CODEX_VC_FINAL_ALIGNMENT_FREEZE_SUCCESSOR = (
-    ROOT
-    / "docs/egress/maintenance/upstream-codex-vc-final-alignment-20260913-freeze-successor.json"
-)
-# 2026-09-13：v0.2.4-3 发版提交更新 VERSION 后产生的后继摘要，
-# 由 freeze-successor-generate 以 commit 模式生成。
-V0243_VERSION_SYNC_FREEZE_SUCCESSOR = (
-    ROOT / "docs/egress/maintenance/upstream-v0.2.4-3-version-sync-freeze-successor.json"
-)
-# 2026-09-13：Codex VC-0 固定公网出口由 DMIT 切换到 BWG，并把环境 producer
-# 升级为 v4；历史 v3 DMIT 收据只读重放。由 freeze-successor-generate 以
-# commit 模式生成对应后继摘要。
-CODEX_0154_BWG_EGRESS_FREEZE_SUCCESSOR = (
-    ROOT
-    / "docs/egress/maintenance/upstream-codex-0154-bwg-egress-20260913-freeze-successor.json"
-)
-# 2026-09-13：VC-1 首批暴露父租约缺少 deadline 与失败根因不可见；工具修复
-# 提交后，以独立 freeze successor 承接受管工具和本显式列表的新摘要。
-CODEX_0154_VC1_PARENT_LEASE_REPAIR_FREEZE_SUCCESSOR = (
-    ROOT
-    / "docs/egress/maintenance/upstream-codex-0154-vc1-parent-lease-repair-20260913-freeze-successor.json"
-)
-# 2026-09-13：P0 补齐四个精确可写子挂载的真实跨别名探针，并约束
-# 冻结 Job 的证据根；由 freeze-successor-generate 以 commit 模式登记后继摘要。
-CODEX_0154_WRITABLE_RUN_ROOT_REPAIR_FREEZE_SUCCESSOR = (
-    ROOT
-    / "docs/egress/maintenance/upstream-codex-0154-writable-run-root-repair-20260913-freeze-successor.json"
-)
-# 2026-09-13：失败 Job 的容器证据别名在宿主归档前映射到登记 runs 子树，
-# P0 同时实测创建、宿主归档、双别名读取与清理闭环。
-CODEX_0154_FAILED_EVIDENCE_ARCHIVE_ROUTE_FREEZE_SUCCESSOR = (
-    ROOT
-    / "docs/egress/maintenance/upstream-codex-0154-failed-evidence-archive-route-20260913-freeze-successor.json"
-)
-# 2026-09-13：VC-0 原子收口、Formal plan 直接调用拒绝和真实三轮
-# 失败生命周期演练的后继摘要。
-CODEX_0154_VC0_ATOMIC_CLOSEOUT_FREEZE_SUCCESSOR = (
-    ROOT
-    / "docs/egress/maintenance/upstream-codex-0154-vc0-atomic-closeout-20260913-freeze-successor.json"
-)
-# 2026-09-13：campaign-run 分批演练改由受管工具生成并独立重放，禁止继续
-# 手工拼装 Formal 收口所需的 P0 证明。
-CODEX_0154_CAMPAIGN_RUN_REHEARSAL_CLOSURE_FREEZE_SUCCESSOR = (
-    ROOT
-    / "docs/egress/maintenance/upstream-codex-0154-campaign-run-rehearsal-closure-20260913-freeze-successor.json"
-)
-# 2026-09-13：Job 演练隐藏 worker 补齐任意工作目录下的绝对路径入口，
-# 并保留父监督器只写 stdout 时的结构化失败诊断。
-CODEX_0154_JOB_REHEARSAL_ENTRYPOINT_CLOSURE_FREEZE_SUCCESSOR = (
-    ROOT
-    / "docs/egress/maintenance/upstream-codex-0154-job-rehearsal-entrypoint-closure-20260913-freeze-successor.json"
-)
-# 2026-09-13：Campaign 冻结规则与双份场景输入时保留原始 JSON 字节，
-# 防止 preflight 格式化导致场景绑定的规则摘要漂移。
-CODEX_0154_CAMPAIGN_INPUT_BYTE_FREEZE_SUCCESSOR = (
-    ROOT
-    / "docs/egress/maintenance/upstream-codex-0154-campaign-input-byte-freeze-20260913-freeze-successor.json"
-)
-# 2026-09-13：固定 BWG IPv4 Endpoint 与 MSS clamp，并让 Cloud Config
-# 全局启动失败在首个 Job 首次失败后立即停线。
-CODEX_0154_BWG_TLS_GLOBAL_FAILFAST_FREEZE_SUCCESSOR = (
-    ROOT
-    / "docs/egress/maintenance/upstream-codex-0154-bwg-tls-global-failfast-20260913-freeze-successor.json"
-)
-# 2026-09-14：环境 producer v6 补齐回程 SYN-ACK MSS、无凭据 Codex Rust TLS
-# 探针与复用 deadline 的 attempt phase；历史 v5 收据只读重放。
-CODEX_0154_BWG_MSS_RUST_TLS_REPAIR_FREEZE_SUCCESSOR = (
-    ROOT
-    / "docs/egress/maintenance/upstream-codex-0154-bwg-mss-rust-tls-repair-20260914-freeze-successor.json"
-)
-# 2026-09-14：VC-1 首批抓包暴露宿主／容器运行根混用和 MITM 启动回收缺口；
-# 工具修复同时补齐历史失败请求量的追加式审计。
-CODEX_0154_VC1_CAPTURE_TOOL_RECOVERY_FREEZE_SUCCESSOR = (
-    ROOT
-    / "docs/egress/maintenance/upstream-codex-0154-vc1-capture-tool-recovery-20260914-freeze-successor.json"
-)
-# 2026-09-14：VC-1 KeyboardInterrupt 孤儿 attempt 以唯一 v3 零请求预览封口，
-# 人工确认后才允许普通 v2 定向补跑 failed／pending 闭集。
-CODEX_0154_VC1_INTERRUPTION_RECOVERY_FREEZE_SUCCESSOR = (
-    ROOT
-    / "docs/egress/maintenance/upstream-codex-0154-vc1-interruption-recovery-20260914-freeze-successor.json"
-)
-# 2026-09-14：既有 v3 因 heartbeat 路径基准缺陷失败后，由一次性 v4
-# 零请求续接清单签发原 transition，不改写历史 attempt 或重做探针。
-CODEX_0154_VC1_INTERRUPTION_CONTINUATION_FREEZE_SUCCESSOR = (
-    ROOT
-    / "docs/egress/maintenance/upstream-codex-0154-vc1-interruption-continuation-20260914-freeze-successor.json"
-)
-# 2026-09-14：既有 v4 因父清单摘要换行规范不一致失败后，由唯一 v5
-# 零请求收尾清单签发原 transition；失败父链和历史制品保持只读。
-CODEX_0154_VC1_FINALIZATION_RECOVERY_FREEZE_SUCCESSOR = (
-    ROOT
-    / "docs/egress/maintenance/upstream-codex-0154-vc1-finalization-recovery-20260914-freeze-successor.json"
-)
-# 2026-09-14：sequence 5 原总 deadline 到期后，只允许零请求直接封口并
-# 永久停线；同时为后续批次预留可展开的 attempt 清理窗口。
-CODEX_0154_VC1_DEADLINE_ORPHAN_FINALIZATION_FREEZE_SUCCESSOR = (
-    ROOT
-    / "docs/egress/maintenance/upstream-codex-0154-vc1-deadline-orphan-finalization-20260914-freeze-successor.json"
-)
-# 2026-09-14：0.154 首轮 Formal 取证的压缩模型、WHAM 可写根和零计数
-# relay 失败闭合修复；原失败 Campaign 只读，修复入口不发送新请求。
-CODEX_0154_VC1_FORMAL_FAILURE_CLOSURE_FREEZE_SUCCESSOR = (
-    ROOT
-    / "docs/egress/maintenance/upstream-codex-0154-vc1-formal-failure-closure-20260914-freeze-successor.json"
-)
-# 2026-09-14：失败闭合是宿主控制账本动作而非抓包；入口改为登记数据根，
-# 不复制只读账本来迁就 capture-cli 容器挂载。
-CODEX_0154_VC1_FAILURE_CLOSURE_COORDINATE_FREEZE_SUCCESSOR = (
-    ROOT
-    / "docs/egress/maintenance/upstream-codex-0154-vc1-failure-closure-coordinate-20260914-freeze-successor.json"
-)
-# 2026-09-14：seal 在扫描零字节时因历史证据权限开放而失败；唯一冻结
-# sequence 3 先收口 32 根权限，再逐字重放原 seal 预览。
-CODEX_0154_VC1_PERMISSION_PREFLIGHT_COMPENSATION_FREEZE_SUCCESSOR = (
-    ROOT
-    / "docs/egress/maintenance/upstream-codex-0154-vc1-permission-preflight-compensation-20260914-freeze-successor.json"
-)
-# 2026-09-14：现场 seal 诊断指向冻结根内的 direct 子目录；门禁按唯一
-# 冻结祖先绑定，并继续拒绝跨根、链接、属主或权限漂移。
-CODEX_0154_VC1_PERMISSION_PREFLIGHT_PATH_BINDING_FREEZE_SUCCESSOR = (
-    ROOT
-    / "docs/egress/maintenance/upstream-codex-0154-vc1-permission-preflight-path-binding-20260914-freeze-successor.json"
-)
-# 2026-09-14：sequence 3 经只读 bind alias 执行 fchmod 失败；唯一 sequence 4
-# 通过逐 inode 校验的宿主可写 runs 别名收口权限，再逐字重放 seal 预览。
-CODEX_0154_VC1_PERMISSION_ALIAS_CLOSEOUT_FREEZE_SUCCESSOR = (
-    ROOT
-    / "docs/egress/maintenance/upstream-codex-0154-vc1-permission-alias-closeout-20260914-freeze-successor.json"
-)
-# 2026-09-14：ARM64 部署器通过 importlib 加载暂存监督器时，必须临时绑定
-# 同目录 helper，并隔离进程内可能缓存的旧模块。
-CODEX_0154_VC1_STAGING_LOADER_CLOSURE_FREEZE_SUCCESSOR = (
-    ROOT
-    / "docs/egress/maintenance/upstream-codex-0154-vc1-staging-loader-closure-20260914-freeze-successor.json"
-)
-# 2026-09-14：sequence 4 在父 run 创建前因旧 helper 遗漏真实 OAuth
-# 两级根而失败；零请求封口后只允许唯一 sequence 5 承接。
-CODEX_0154_VC1_PERMISSION_ALIAS_PREDISPATCH_CLOSEOUT_FREEZE_SUCCESSOR = (
-    ROOT
-    / "docs/egress/maintenance/upstream-codex-0154-vc1-permission-alias-predispatch-closeout-20260914-freeze-successor.json"
-)
-# 2026-09-14：ARM64 真实边界证明 15 个 traffic／egress pcap 由固定
-# tcpdump 100:102 身份创建；只允许该精确文件集合保留非 root 属主。
-CODEX_0154_VC1_TCPDUMP_OWNER_BOUNDARY_FREEZE_SUCCESSOR = (
-    ROOT
-    / "docs/egress/maintenance/upstream-codex-0154-vc1-tcpdump-owner-boundary-20260914-freeze-successor.json"
-)
-# 2026-09-14：全量现场枚举补齐 egress.pcap 名称；允许集仍只包含两个
-# 精确 pcap 文件名，其他非 root 项继续失败关闭。
-CODEX_0154_VC1_PCAP_FILENAME_BOUNDARY_FREEZE_SUCCESSOR = (
-    ROOT
-    / "docs/egress/maintenance/upstream-codex-0154-vc1-pcap-filename-boundary-20260914-freeze-successor.json"
-)
-# 2026-09-14：预派发封口加载历史 dataclass helper 时临时绑定模块，
-# 并把旧 helper 来源固定到首次修正部署留下的不可变回滚树。
-CODEX_0154_VC1_HISTORICAL_HELPER_LOADER_FREEZE_SUCCESSOR = (
-    ROOT
-    / "docs/egress/maintenance/upstream-codex-0154-vc1-historical-helper-loader-20260914-freeze-successor.json"
-)
-# 2026-09-15：后继批次原子编译派发只保留一个父监督器，通用预派发
-# 停线和 ARM64 双跑演练闭合，并同步 0.154 主轨／Astra Lite 轨标签。
-CODEX_0154_ATOMIC_PREDISPATCH_TOOL_CLOSURE_FREEZE_SUCCESSOR = (
-    ROOT
-    / "docs/egress/maintenance/upstream-codex-0154-atomic-predispatch-tool-closure-20260915-freeze-successor.json"
-)
-# 2026-09-15：Attempt v3 通用证据权限、父失败计时闭合和 P0 双轮 v2
-# 的最终后继摘要；失败 Formal Campaign 保持只读且未增加官方请求。
-CODEX_0154_VC1_GENERAL_TOOLCHAIN_CLOSEOUT_FREEZE_SUCCESSOR = (
-    ROOT
-    / "docs/egress/maintenance/upstream-codex-0154-vc1-general-toolchain-closeout-20260915-freeze-successor.json"
-)
-# 2026-09-15：计时生产者从 0.151 初始快照经通用 freeze successor
-# 连续承接到当前工具摘要，避免历史 UpgradeTimingLedger 因工具升级失效。
-CODEX_0154_VC1_TIMING_PRODUCER_CHAIN_CLOSEOUT_FREEZE_SUCCESSOR = (
-    ROOT
-    / "docs/egress/maintenance/upstream-codex-0154-vc1-timing-producer-chain-closeout-20260915-freeze-successor.json"
-)
-# 2026-09-15：0.154 压缩链显式采用唯一 Main gpt-5.5 与冻结的
-# gpt-6-astra Lite，并以普通 v2 sequence 2/3 交接恢复两项失败 Job。
-CODEX_0154_ASTRA_LITE_RECOVERY_FREEZE_SUCCESSOR = (
-    ROOT
-    / "docs/egress/maintenance/upstream-codex-0154-astra-lite-recovery-20260915-freeze-successor.json"
-)
-# 2026-09-15：普通 v2 恢复预览承接真实失败 sequence 1，并让通用
-# predispatch stop 对非 no-op batch 保留完整 item_ids 后确定性封口。
-CODEX_0154_VC1_V2_RECOVERY_PREDISPATCH_CLOSEOUT_FREEZE_SUCCESSOR = (
-    ROOT
-    / "docs/egress/maintenance/upstream-codex-0154-vc1-v2-recovery-predispatch-closeout-20260915-freeze-successor.json"
-)
-# 2026-09-15：VC-0 原子收口强制重放 ARM64 atomic-double 收据，并允许
-# 新 VC-0 在不清零历史请求累计的前提下证明本阶段请求增量为零。
-CODEX_0154_VC0_ATOMIC_RECEIPT_TIMING_CLOSEOUT_FREEZE_SUCCESSOR = (
-    ROOT
-    / "docs/egress/maintenance/upstream-codex-0154-vc0-atomic-receipt-timing-closeout-20260915-freeze-successor.json"
-)
-# 2026-09-15：A0a 工具解锁——根因编码与枚举表、逐请求 provenance v2、attempt
-# 审计、时间对账、处置清单、账本关闭、项目总账与 outbox batch、零请求 smoke。
-CODEX_0154_A0A_TOOL_UNLOCK_FREEZE_SUCCESSOR = (
-    ROOT
-    / "docs/egress/maintenance/upstream-codex-0154-a0a-tool-unlock-20260915-freeze-successor.json"
-)
-# 2026-09-16：A2 工具身份策略 v2（四层摘要、两阶段 wire transition、evaluation epoch、
-# 身份裁定）与 A3a 两步式权限收口、awaiting_receipts 官方证据复用导入。
-CODEX_0154_A2_A3A_POLICY_REUSE_FREEZE_SUCCESSOR = (
-    ROOT
-    / "docs/egress/maintenance/upstream-codex-0154-a2-a3a-policy-reuse-20260916-freeze-successor.json"
-)
-# 2026-09-16：B0 两个 reconciler（supervisor-run／attempt）、先入账后判定、恢复预览与批准、
-# resume 衔接、总账估计来源去重。
-CODEX_0154_B0_RECONCILER_FREEZE_SUCCESSOR = (
-    ROOT
-    / "docs/egress/maintenance/upstream-codex-0154-b0-reconciler-20260916-freeze-successor.json"
-)
-# 2026-09-16：A2.6 策略兼容收据与激活认证、A2.5 pre-A3 路径认证、策略 v3、框架与指南最小规范更新。
-CODEX_0154_A26_A25_POLICY_CERTIFICATION_FREEZE_SUCCESSOR = (
-    ROOT
-    / "docs/egress/maintenance/upstream-codex-0154-a26-a25-policy-certification-20260916-freeze-successor.json"
-)
-# 2026-09-16：受管测试模块适配部署机 Python 3.12 静态嵌套块上限（ExitStack）。
-CODEX_0154_A25_PY312_NESTING_FREEZE_SUCCESSOR = (
-    ROOT
-    / "docs/egress/maintenance/upstream-codex-0154-a25-py312-nesting-20260916-freeze-successor.json"
+# 2026-09-10 早期由旧算法签名、从未进入本门禁显式列表的五份 freeze successor：
+# 它们的 identity_sha256 既不是紧凑形态也不是缩进形态，历史收据只读不得改写，
+# 因此只豁免自摘要核对；基准提交关系与摘要边形态仍按同一规则校验。
+LEGACY_IDENTITY_FREEZE_SUCCESSORS = frozenset(
+    {
+        "upstream-doc-sync-20260910-freeze-successor.json",
+        "upstream-flaky-test-repair-freeze-successor.json",
+        "upstream-tooling-batch1-freeze-successor.json",
+        "upstream-tooling-batch2-freeze-successor.json",
+        "upstream-tooling-batch4-freeze-successor.json",
+    }
 )
 HISTORICAL_LEDGER = "docs/egress/maintenance/historical-source-drift-successor.json"
 SHA256_LENGTH = 64
@@ -415,81 +121,55 @@ def base_state(commit: str, path: str) -> dict[str, Any]:
     }
 
 
+def freeze_successor_receipts() -> list[Path]:
+    """按 schema 从 maintenance 目录收集全部 freeze successor 收据（确定性排序）。"""
+
+    found: list[Path] = []
+    for candidate in sorted(MAINTENANCE_ROOT.glob("*.json")):
+        if candidate.is_symlink() or not candidate.is_file():
+            continue
+        try:
+            payload = json.loads(candidate.read_text(encoding="utf-8"))
+        except ValueError:
+            continue
+        if isinstance(payload, dict) and payload.get("schema_version") == FREEZE_SUCCESSOR_SCHEMA:
+            found.append(candidate)
+    return found
+
+
+_RECEIPT_CACHE: dict[str, list[tuple[Path, dict[str, Any]]]] = {}
+
+
+def _validated_receipts() -> list[tuple[Path, dict[str, Any]]]:
+    """读取并校验显式收据与 glob 到的 freeze successor；同一进程内只校验一次。"""
+
+    cached = _RECEIPT_CACHE.get("receipts")
+    if cached is not None:
+        return cached
+    loaded: list[tuple[Path, dict[str, Any]]] = []
+    for receipt_path in (*EXPLICIT_SUCCESSORS, *freeze_successor_receipts()):
+        payload = json.loads(receipt_path.read_text(encoding="utf-8"))
+        _validate_successor_receipt(
+            payload,
+            skip_identity=receipt_path.name in LEGACY_IDENTITY_FREEZE_SUCCESSORS,
+        )
+        loaded.append((receipt_path, payload))
+    _RECEIPT_CACHE["receipts"] = loaded
+    return loaded
+
+
 def successor_edges(path: str) -> list[tuple[str, str]]:
-    """读取显式登记的后继边，不扫描未登记收据。"""
+    """读取显式登记与按 schema glob 的后继边，不接受未校验收据。"""
 
     edges: list[tuple[str, str]] = []
-    for receipt_path in (
-        POST_BOOTSTRAP_SUCCESSOR,
-        RELEASE_PREP_SUCCESSOR,
-        VERSION_SYNC_SUCCESSOR,
-        RECONNECT_REPAIR_TRANSITION,
-        RECONNECT_REPAIR_GATE_SUCCESSOR,
-        TOOL_IDENTITY_SYNC_SUCCESSOR,
-        CAPABILITY_PIN_FREEZE_SUCCESSOR,
-        VERSION_SYNC_0233_FREEZE_SUCCESSOR,
-        UPSTREAM_V024_FREEZE_SUCCESSOR,
-        DOC_TRIM_20260911_FREEZE_SUCCESSOR,
-        TOOL_HINTS_20260911_FREEZE_SUCCESSOR,
-        CODEX_UPGRADE_BATCH1_FREEZE_SUCCESSOR,
-        CODEX_UPGRADE_BATCH2_FREEZE_SUCCESSOR,
-        CODEX_UPGRADE_BATCH3_FREEZE_SUCCESSOR,
-        V0242_VERSION_SYNC_FREEZE_SUCCESSOR,
-        CAPTURE_CLI_DIRECTORY_GOVERNANCE_FREEZE_SUCCESSOR,
-        CODEX_0154_EMULATION_UPGRADE_FREEZE_SUCCESSOR,
-        CODEX_0154_PROFILE_PATCH_BINDING_FREEZE_SUCCESSOR,
-        CODEX_0154_CANONICAL_PRODUCTION_CHAIN_FREEZE_SUCCESSOR,
-        CODEX_0154_RUNTIME_DOC_CLOSURE_FREEZE_SUCCESSOR,
-        CODEX_0154_RUNTIME_DOC_METADATA_FREEZE_SUCCESSOR,
-        CODEX_0154_RUNTIME_DOC_CANDIDATE_METADATA_FREEZE_SUCCESSOR,
-        CLIENT_VC_STAGE_NAVIGATION_FREEZE_SUCCESSOR,
-        CLAUDE_VC1_VC3_CONTRACT_FREEZE_SUCCESSOR,
-        CODEX_VC_FINAL_ALIGNMENT_FREEZE_SUCCESSOR,
-        V0243_VERSION_SYNC_FREEZE_SUCCESSOR,
-        CODEX_0154_BWG_EGRESS_FREEZE_SUCCESSOR,
-        CODEX_0154_VC1_PARENT_LEASE_REPAIR_FREEZE_SUCCESSOR,
-        CODEX_0154_WRITABLE_RUN_ROOT_REPAIR_FREEZE_SUCCESSOR,
-        CODEX_0154_FAILED_EVIDENCE_ARCHIVE_ROUTE_FREEZE_SUCCESSOR,
-        CODEX_0154_VC0_ATOMIC_CLOSEOUT_FREEZE_SUCCESSOR,
-        CODEX_0154_CAMPAIGN_RUN_REHEARSAL_CLOSURE_FREEZE_SUCCESSOR,
-        CODEX_0154_JOB_REHEARSAL_ENTRYPOINT_CLOSURE_FREEZE_SUCCESSOR,
-        CODEX_0154_CAMPAIGN_INPUT_BYTE_FREEZE_SUCCESSOR,
-        CODEX_0154_BWG_TLS_GLOBAL_FAILFAST_FREEZE_SUCCESSOR,
-        CODEX_0154_BWG_MSS_RUST_TLS_REPAIR_FREEZE_SUCCESSOR,
-        CODEX_0154_VC1_CAPTURE_TOOL_RECOVERY_FREEZE_SUCCESSOR,
-        CODEX_0154_VC1_INTERRUPTION_RECOVERY_FREEZE_SUCCESSOR,
-        CODEX_0154_VC1_INTERRUPTION_CONTINUATION_FREEZE_SUCCESSOR,
-        CODEX_0154_VC1_FINALIZATION_RECOVERY_FREEZE_SUCCESSOR,
-        CODEX_0154_VC1_DEADLINE_ORPHAN_FINALIZATION_FREEZE_SUCCESSOR,
-        CODEX_0154_VC1_FORMAL_FAILURE_CLOSURE_FREEZE_SUCCESSOR,
-        CODEX_0154_VC1_FAILURE_CLOSURE_COORDINATE_FREEZE_SUCCESSOR,
-        CODEX_0154_VC1_PERMISSION_PREFLIGHT_COMPENSATION_FREEZE_SUCCESSOR,
-        CODEX_0154_VC1_PERMISSION_PREFLIGHT_PATH_BINDING_FREEZE_SUCCESSOR,
-        CODEX_0154_VC1_PERMISSION_ALIAS_CLOSEOUT_FREEZE_SUCCESSOR,
-        CODEX_0154_VC1_STAGING_LOADER_CLOSURE_FREEZE_SUCCESSOR,
-        CODEX_0154_VC1_PERMISSION_ALIAS_PREDISPATCH_CLOSEOUT_FREEZE_SUCCESSOR,
-        CODEX_0154_VC1_TCPDUMP_OWNER_BOUNDARY_FREEZE_SUCCESSOR,
-        CODEX_0154_VC1_PCAP_FILENAME_BOUNDARY_FREEZE_SUCCESSOR,
-        CODEX_0154_VC1_HISTORICAL_HELPER_LOADER_FREEZE_SUCCESSOR,
-        CODEX_0154_ATOMIC_PREDISPATCH_TOOL_CLOSURE_FREEZE_SUCCESSOR,
-        CODEX_0154_VC1_GENERAL_TOOLCHAIN_CLOSEOUT_FREEZE_SUCCESSOR,
-        CODEX_0154_VC1_TIMING_PRODUCER_CHAIN_CLOSEOUT_FREEZE_SUCCESSOR,
-        CODEX_0154_ASTRA_LITE_RECOVERY_FREEZE_SUCCESSOR,
-        CODEX_0154_VC1_V2_RECOVERY_PREDISPATCH_CLOSEOUT_FREEZE_SUCCESSOR,
-        CODEX_0154_VC0_ATOMIC_RECEIPT_TIMING_CLOSEOUT_FREEZE_SUCCESSOR,
-        CODEX_0154_A0A_TOOL_UNLOCK_FREEZE_SUCCESSOR,
-        CODEX_0154_A2_A3A_POLICY_REUSE_FREEZE_SUCCESSOR,
-        CODEX_0154_B0_RECONCILER_FREEZE_SUCCESSOR,
-        CODEX_0154_A26_A25_POLICY_CERTIFICATION_FREEZE_SUCCESSOR,
-        CODEX_0154_A25_PY312_NESTING_FREEZE_SUCCESSOR,
-    ):
-        payload = json.loads(receipt_path.read_text(encoding="utf-8"))
-        _validate_successor_receipt(payload)
+    for _receipt_path, payload in _validated_receipts():
         edges.extend(_successor_edges_from_payload(payload, path))
     return edges
 
 
-def _validate_successor_receipt(payload: dict[str, Any]) -> None:
+def _validate_successor_receipt(
+    payload: dict[str, Any], *, skip_identity: bool = False
+) -> None:
     """校验后继收据身份，以及 commit／worktree 模式的基准连续性。"""
 
     identity = payload.get("identity_sha256")
@@ -503,7 +183,7 @@ def _validate_successor_receipt(payload: dict[str, Any]) -> None:
     ).encode()
     if not isinstance(identity, str) or not SHA256_PATTERN.fullmatch(identity):
         raise AssertionError("后继收据 identity_sha256 非法")
-    if sha256(canonical) != identity:
+    if not skip_identity and sha256(canonical) != identity:
         raise AssertionError("后继收据自摘要不一致")
 
     base_commit = payload.get("base_commit")
