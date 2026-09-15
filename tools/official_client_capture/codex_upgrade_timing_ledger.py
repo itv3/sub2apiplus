@@ -132,6 +132,12 @@ PRODUCER_FREEZE_SUCCESSORS = (
         "scope": "upstream-codex-0154-a25-py312-nesting-20260916-freeze-successor",
         "result": "manual_actions_required",
     },
+    {
+        "path": "docs/egress/maintenance/upstream-codex-0154-b1-deletion-proof-20260916-freeze-successor.json",
+        "base_commit": "938a2f9e2b187f466844ae658cb837c88cff7678",
+        "scope": "upstream-codex-0154-b1-deletion-proof-20260916-freeze-successor",
+        "result": "manual_actions_required",
+    },
 )
 
 
