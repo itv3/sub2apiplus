@@ -150,6 +150,12 @@ PRODUCER_FREEZE_SUCCESSORS = (
         "scope": "upstream-codex-0154-c-release-certification-20260916-freeze-successor",
         "result": "manual_actions_required",
     },
+    {
+        "path": "docs/egress/maintenance/upstream-codex-0154-a1b-verdict-copy-20260916-freeze-successor.json",
+        "base_commit": "d78cf9cfbf21cd5dfae2e626af9a33041920e200",
+        "scope": "upstream-codex-0154-a1b-verdict-copy-20260916-freeze-successor",
+        "result": "manual_actions_required",
+    },
 )
 
 
