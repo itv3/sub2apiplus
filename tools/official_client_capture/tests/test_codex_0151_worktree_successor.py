@@ -311,6 +311,12 @@ CODEX_0154_ASTRA_LITE_RECOVERY_FREEZE_SUCCESSOR = (
     ROOT
     / "docs/egress/maintenance/upstream-codex-0154-astra-lite-recovery-20260915-freeze-successor.json"
 )
+# 2026-09-15：普通 v2 恢复预览承接真实失败 sequence 1，并让通用
+# predispatch stop 对非 no-op batch 保留完整 item_ids 后确定性封口。
+CODEX_0154_VC1_V2_RECOVERY_PREDISPATCH_CLOSEOUT_FREEZE_SUCCESSOR = (
+    ROOT
+    / "docs/egress/maintenance/upstream-codex-0154-vc1-v2-recovery-predispatch-closeout-20260915-freeze-successor.json"
+)
 HISTORICAL_LEDGER = "docs/egress/maintenance/historical-source-drift-successor.json"
 SHA256_LENGTH = 64
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -435,6 +441,7 @@ def successor_edges(path: str) -> list[tuple[str, str]]:
         CODEX_0154_VC1_GENERAL_TOOLCHAIN_CLOSEOUT_FREEZE_SUCCESSOR,
         CODEX_0154_VC1_TIMING_PRODUCER_CHAIN_CLOSEOUT_FREEZE_SUCCESSOR,
         CODEX_0154_ASTRA_LITE_RECOVERY_FREEZE_SUCCESSOR,
+        CODEX_0154_VC1_V2_RECOVERY_PREDISPATCH_CLOSEOUT_FREEZE_SUCCESSOR,
     ):
         payload = json.loads(receipt_path.read_text(encoding="utf-8"))
         _validate_successor_receipt(payload)
