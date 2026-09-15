@@ -329,6 +329,12 @@ CODEX_0154_A0A_TOOL_UNLOCK_FREEZE_SUCCESSOR = (
     ROOT
     / "docs/egress/maintenance/upstream-codex-0154-a0a-tool-unlock-20260915-freeze-successor.json"
 )
+# 2026-09-16：A2 工具身份策略 v2（四层摘要、两阶段 wire transition、evaluation epoch、
+# 身份裁定）与 A3a 两步式权限收口、awaiting_receipts 官方证据复用导入。
+CODEX_0154_A2_A3A_POLICY_REUSE_FREEZE_SUCCESSOR = (
+    ROOT
+    / "docs/egress/maintenance/upstream-codex-0154-a2-a3a-policy-reuse-20260916-freeze-successor.json"
+)
 HISTORICAL_LEDGER = "docs/egress/maintenance/historical-source-drift-successor.json"
 SHA256_LENGTH = 64
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -456,6 +462,7 @@ def successor_edges(path: str) -> list[tuple[str, str]]:
         CODEX_0154_VC1_V2_RECOVERY_PREDISPATCH_CLOSEOUT_FREEZE_SUCCESSOR,
         CODEX_0154_VC0_ATOMIC_RECEIPT_TIMING_CLOSEOUT_FREEZE_SUCCESSOR,
         CODEX_0154_A0A_TOOL_UNLOCK_FREEZE_SUCCESSOR,
+        CODEX_0154_A2_A3A_POLICY_REUSE_FREEZE_SUCCESSOR,
     ):
         payload = json.loads(receipt_path.read_text(encoding="utf-8"))
         _validate_successor_receipt(payload)
