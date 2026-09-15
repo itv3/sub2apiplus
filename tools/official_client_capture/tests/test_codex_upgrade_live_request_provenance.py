@@ -65,7 +65,38 @@ def _ws_connection(messages: list[dict]) -> bytes:
     return handshake + b"".join(_ws_client_frame(json.dumps(m)) for m in messages)
 
 
-def _mitm_http_row(run_id: str, subject: str, scenario: str, method: str, path: str, model: str | None = None) -> dict:
+def _addon_body(payload: dict | None) -> dict:
+    """按 addons/mitm_capture._body_summary 的真实格式构造请求正文摘要。
+
+    真实记录里模型只在 body.json / body.text 内，body 顶层没有 model 字段。
+    """
+
+    text = json.dumps(payload) if payload is not None else ""
+    raw = text.encode("utf-8")
+    return {
+        "length": len(raw),
+        "sha256": hashlib.sha256(raw).hexdigest(),
+        "content_encoding": "",
+        "decoded_length": len(raw),
+        "decoded_sha256": hashlib.sha256(raw).hexdigest(),
+        "decode_error": "",
+        "text": text,
+        "json": payload,
+    }
+
+
+def _mitm_http_row(
+    run_id: str,
+    subject: str,
+    scenario: str,
+    method: str,
+    path: str,
+    model: str | None = None,
+    *,
+    payload: dict | None = None,
+) -> dict:
+    if payload is None and model is not None:
+        payload = {"model": model}
     return {
         "_run_id": run_id,
         "_subject": subject,
@@ -77,7 +108,7 @@ def _mitm_http_row(run_id: str, subject: str, scenario: str, method: str, path: 
             "host": "chatgpt.com",
             "port": 443,
             "path": path,
-            "body": {"model": model} if model else {},
+            "body": _addon_body(payload),
         },
         "response": {"status": 200},
     }
@@ -389,6 +420,51 @@ class LiveRequestProvenanceTests(unittest.TestCase):
             self.assertEqual(os.stat(output).st_mode & 0o777, 0o600)
             with self.assertRaisesRegex(provenance.ProvenanceError, "不得覆盖"):
                 provenance.write_receipt(payload, output)
+
+    def test_mitm_body_summary_and_turn_metadata_are_parsed(self) -> None:
+        """mitm 正文是摘要对象：模型取自 body.json 或 body.text，线程元数据取自 client_metadata。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            system_metadata = json.dumps({"thread_source": "system", "request_kind": "prewarm"})
+            rows = [
+                _mitm_http_row(
+                    "r", "s1", "sc", "POST", RESPONSES,
+                    payload={"model": "gpt-5.6-luna", "client_metadata": {"x-codex-turn-metadata": system_metadata}},
+                ),
+                _mitm_http_row("r", "s1", "sc", "POST", RESPONSES, model="gpt-5.5"),
+                _mitm_http_row("r", "s1", "sc", "POST", RESPONSES, model="gpt-5.5"),
+                _mitm_http_row("r", "s1", "sc", "POST", RESPONSES),
+                _mitm_http_row("r", "s1", "sc", "POST", RESPONSES),
+                _mitm_http_row("r", "s1", "sc", "GET", "/backend-api/codex/models", model="gpt-5.5"),
+            ]
+            # 第三条只剩 text 可解析；第四条 text 不是 JSON；第五条把 model 伪造在 body 顶层。
+            rows[2]["request"]["body"]["json"] = None
+            rows[3]["request"]["body"]["text"] = "not-json"
+            rows[4]["request"]["body"] = {"model": "gpt-5.5"}
+            path = root / "codex-http.jsonl"
+            _write_jsonl(path, rows)
+            ws_path = root / "codex-ws.jsonl"
+            _write_jsonl(ws_path, [
+                _mitm_ws_row("r", "s1", "sc", True, {
+                    "type": "response.create", "model": "gpt-6-astra",
+                    "client_metadata": {"x-codex-turn-metadata": json.dumps({"thread_source": "user", "request_kind": "turn"})},
+                }),
+                _mitm_ws_row("r", "s1", "sc", True, {"type": "response.create", "model": "gpt-6-astra", "client_metadata": {"x-codex-turn-metadata": "{broken"}}),
+                _mitm_ws_row("r", "s1", "sc", False, {"type": "response.created"}),
+            ])
+            _chmod_tree(root)
+            prefix = {"evidence": "mitm", "subject": "s1", "scenario": "sc"}
+            http = provenance._mitm_http_requests(path, producer_run_id="r", source_kind="mitm", coordinate_prefix=prefix)
+            self.assertEqual(
+                [(r["model"], r["thread_source"], r["request_kind"]) for r in http],
+                [("gpt-5.6-luna", "system", "prewarm"), ("gpt-5.5", None, None), ("gpt-5.5", None, None), (None, None, None), (None, None, None)],
+            )
+            ws = provenance._mitm_ws_requests(ws_path, producer_run_id="r", source_kind="mitm", coordinate_prefix=prefix)
+            self.assertEqual(
+                [(r["model"], r["thread_source"], r["request_kind"]) for r in ws],
+                [("gpt-6-astra", "user", "turn"), ("gpt-6-astra", None, None)],
+            )
 
 
 if __name__ == "__main__":

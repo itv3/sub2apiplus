@@ -136,6 +136,64 @@ def _path_without_query(target: Any) -> str:
     return target.split("?", 1)[0]
 
 
+def _turn_metadata(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """取请求载荷 client_metadata.x-codex-turn-metadata 里的线程元数据。
+
+    官方客户端把线程来源（thread_source）与请求种类（request_kind）以 JSON 字符串
+    放在该字段；缺失或不可解析时返回空字典，不做任何猜测。
+    """
+
+    metadata = payload.get("client_metadata")
+    if not isinstance(metadata, Mapping):
+        return {}
+    raw = metadata.get("x-codex-turn-metadata")
+    if not isinstance(raw, str):
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _payload_context(payload: Any) -> dict[str, Any]:
+    """统一提取请求载荷里的模型、线程来源与请求种类；取不到一律记 None。"""
+
+    if not isinstance(payload, Mapping):
+        return {"model": None, "thread_source": None, "request_kind": None}
+    model = payload.get("model")
+    metadata = _turn_metadata(payload)
+    thread_source = metadata.get("thread_source")
+    request_kind = metadata.get("request_kind")
+    return {
+        "model": model if isinstance(model, str) else None,
+        "thread_source": thread_source if isinstance(thread_source, str) else None,
+        "request_kind": request_kind if isinstance(request_kind, str) else None,
+    }
+
+
+def _mitm_body_payload(body: Any) -> Any:
+    """mitm addon 把请求正文记成摘要对象：优先取已解析的 json，其次解析 text。
+
+    真实记录形态见 addons/mitm_capture._body_summary：模型不在 body 顶层，而在
+    body.json 或 body.text 里；直接读 body["model"] 永远取不到。
+    """
+
+    if not isinstance(body, Mapping):
+        return None
+    payload = body.get("json")
+    if isinstance(payload, Mapping):
+        return payload
+    text = body.get("text")
+    if not isinstance(text, str):
+        return None
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, Mapping) else None
+
+
 def _request(
     *,
     producer_run_id: str,
@@ -144,7 +202,7 @@ def _request(
     source_file: Path,
     source_sha256: str,
     record_offset: int,
-    model: str | None,
+    context: Mapping[str, Any],
 ) -> dict[str, Any]:
     return {
         "identity_key": identity_key(producer_run_id, source_kind, native_coordinate),
@@ -154,7 +212,9 @@ def _request(
         "source_file": str(source_file),
         "source_sha256": source_sha256,
         "record_offset": record_offset,
-        "model": model,
+        "model": context.get("model"),
+        "thread_source": context.get("thread_source"),
+        "request_kind": context.get("request_kind"),
     }
 
 
@@ -181,11 +241,7 @@ def _mitm_http_requests(
             continue
         if _path_without_query(request.get("path")) not in MODEL_ENDPOINTS:
             continue
-        body = request.get("body")
-        model = None
-        if isinstance(body, Mapping):
-            candidate = body.get("model")
-            model = candidate if isinstance(candidate, str) else None
+        context = _payload_context(_mitm_body_payload(request.get("body")))
         coordinate = {
             **coordinate_prefix,
             "file": resolved.name,
@@ -201,7 +257,7 @@ def _mitm_http_requests(
                 source_file=resolved,
                 source_sha256=digest,
                 record_offset=index,
-                model=model,
+                context=context,
             )
         )
     return requests
@@ -231,7 +287,7 @@ def _mitm_ws_requests(
                 payload = None
         if not isinstance(payload, Mapping) or payload.get("type") != "response.create":
             continue
-        model = payload.get("model")
+        context = _payload_context(payload)
         coordinate = {
             **coordinate_prefix,
             "file": resolved.name,
@@ -246,7 +302,7 @@ def _mitm_ws_requests(
                 source_file=resolved,
                 source_sha256=digest,
                 record_offset=index,
-                model=model if isinstance(model, str) else None,
+                context=context,
             )
         )
     return requests
@@ -613,8 +669,7 @@ def _relay_branches(root: Path) -> list[dict[str, Any]]:
             target = _path_without_query(message.get("target"))
             if message.get("method") != "POST" or target not in MODEL_ENDPOINTS:
                 continue
-            body = model_condition_receipts._json_body(message)
-            model = body.get("model") if isinstance(body, dict) else None
+            context = _payload_context(model_condition_receipts._json_body(message))
             coordinate = {
                 "connection": connection,
                 "transport": "http",
@@ -629,14 +684,14 @@ def _relay_branches(root: Path) -> list[dict[str, Any]]:
                     source_file=resolved,
                     source_sha256=digest,
                     record_offset=http_ordinal,
-                    model=model if isinstance(model, str) else None,
+                    context=context,
                 )
             )
         for message in _ws_client_messages(raw):
             payload = message["payload"]
             if not isinstance(payload, dict) or payload.get("type") != "response.create":
                 continue
-            model = payload.get("model")
+            context = _payload_context(payload)
             coordinate = {
                 "connection": connection,
                 "transport": "ws",
@@ -651,7 +706,7 @@ def _relay_branches(root: Path) -> list[dict[str, Any]]:
                     source_file=resolved,
                     source_sha256=digest,
                     record_offset=message["ordinal"],
-                    model=model if isinstance(model, str) else None,
+                    context=context,
                 )
             )
     return [

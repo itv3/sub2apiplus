@@ -9582,6 +9582,8 @@ _CONTROL_PLANE_TOOL_FILES = frozenset(
         "root_cause_codes.json",
         # 逐请求 provenance 只读解析既有证据核算请求数，不产生证据字节。
         "codex_upgrade_live_request_provenance.py",
+        # attempt 只读审计只读取既有收据与证据，不产生证据字节。
+        "codex_upgrade_official_attempt_audit.py",
         "codex_upgrade_campaign_run_rehearsal_receipt.py",
         "codex_upgrade_predispatch_stop.py",
         "codex_upgrade_campaign_lease.schema.json",
@@ -9628,6 +9630,8 @@ _CANONICAL_EVALUATION_ONLY_FILES = frozenset(
         "root_cause_codes.json",
         # 逐请求 provenance 只读解析既有证据核算请求数，不产生证据字节。
         "codex_upgrade_live_request_provenance.py",
+        # attempt 只读审计只读取既有收据与证据，不产生证据字节。
+        "codex_upgrade_official_attempt_audit.py",
         "codex_upgrade_campaign_run_rehearsal_receipt.py",
         "codex_upgrade_predispatch_stop.py",
         "codex_upgrade_gate_receipt.py",
@@ -9743,6 +9747,8 @@ _EVALUATION_SIDE_FILES = frozenset(
         "root_cause_codes.json",
         # 逐请求 provenance 只读解析既有证据核算请求数，不产生证据字节。
         "codex_upgrade_live_request_provenance.py",
+        # attempt 只读审计只读取既有收据与证据，不产生证据字节。
+        "codex_upgrade_official_attempt_audit.py",
         "codex_upgrade_campaign_run_rehearsal_receipt.py",
         "codex_upgrade_predispatch_stop.py",
         "codex_upgrade_legacy_boundary.py",
