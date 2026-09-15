@@ -138,6 +138,12 @@ PRODUCER_FREEZE_SUCCESSORS = (
         "scope": "upstream-codex-0154-b1-deletion-proof-20260916-freeze-successor",
         "result": "manual_actions_required",
     },
+    {
+        "path": "docs/egress/maintenance/upstream-codex-0154-b-cleanup-20260916-freeze-successor.json",
+        "base_commit": "ad2547a86d652d7978d726706311e1c311d76825",
+        "scope": "upstream-codex-0154-b-cleanup-20260916-freeze-successor",
+        "result": "manual_actions_required",
+    },
 )
 
 
