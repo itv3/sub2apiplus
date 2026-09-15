@@ -24,7 +24,8 @@ mtime 与文档时间不参与边界，只能作为人工分类收据的支撑�
 * 基本区间先按证据区间归类，优先级从高到低：监督器 run（非 bootstrap）按其
   phase 记 ``vc0_execution``／``vc1_execution``／``vc_execution:<phase>``；审计目录
   请求到完成记 ``vc0_execution``（目录名含 ``vc0-closeout``）、``vc1_execution``
-  （含 ``vc1``）或 ``vc_execution:audit``；账本某阶段 active 且未停线记该阶段执行。
+  （含 ``vc1``）或 ``vc_execution:audit``；账本某阶段在两个事件之间 active 且未停线
+  记该阶段执行，账本末尾未关闭的阶段不延续（只登记 ``dangling_stages``）。
   这些区间 ``basis.kind = evidence``。
 * 无证据覆盖时按基本区间终点的点事件推断（``basis.kind = inferred``）：终点是
   git 提交则 ``tool_repair``，但长于空闲阈值时记 ``idle``；终点是部署收据或
@@ -226,14 +227,15 @@ def _ledger_points_and_spans(
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     """把账本事件展开成点事件、阶段执行区间与停线区间。
 
-    未关闭的阶段与未恢复的停线延续到下一个账本创建时刻（新账本即旧账本弃用），
-    没有后继账本时延续到窗口终点。停线期间不计阶段执行。
+    未恢复的停线延续到下一个账本创建时刻（新账本即旧账本弃用），没有后继账本时
+    延续到窗口终点；未关闭的阶段不延续，只登记为悬空阶段。停线期间不计阶段执行。
     """
 
     creations = sorted(ledger["created_at"] for ledger in ledgers)
     points: list[dict[str, Any]] = []
     active_spans: list[dict[str, Any]] = []
     stopped_spans: list[dict[str, Any]] = []
+    dangling: list[dict[str, Any]] = []
     for ledger in ledgers:
         ledger_id = ledger["ledger_id"]
         successor = next((t for t in creations if t > ledger["created_at"]), None)
@@ -286,11 +288,14 @@ def _ledger_points_and_spans(
                 if suspended_stage is not None:
                     open_stage = (suspended_stage[0], time, suspended_stage[1])
                     suspended_stage = None
-        if open_stage is not None and open_stage[1] < horizon:
-            active_spans.append(_ledger_span(ledger_id, open_stage, horizon))
+        # 未关闭的阶段不延续：账本没有后续事件就没有"仍在执行"的证据，真实执行由
+        # 监督器 run 与审计目录证明；悬空阶段只在 dangling_stages 里留痕，等 A0b 关闭。
+        if open_stage is not None:
+            dangling.append({"ledger_id": ledger_id, "phase": open_stage[0], "since_utc": _iso(open_stage[1]), "sequence": open_stage[2]})
+        # 停线是状态而不是活动：没有 recovery_verified 就一直停线，延续到下一账本创建或窗口终点。
         if stop_since is not None and stop_since[0] < horizon:
             stopped_spans.append(_stopped_span(ledger_id, stop_since, horizon))
-    return points, active_spans, stopped_spans
+    return points, active_spans, stopped_spans, dangling
 
 
 def _ledger_span(ledger_id: str, stage: tuple[str, datetime, int], end: datetime) -> dict[str, Any]:
@@ -742,7 +747,7 @@ def reconcile_upgrade_time(
     creation_threshold = timedelta(minutes=campaign_creation_threshold_minutes)
 
     ledgers, ignored_ledgers = _load_ledgers(root)
-    ledger_points, ledger_spans, stopped_spans = _ledger_points_and_spans(ledgers, until=until)
+    ledger_points, ledger_spans, stopped_spans, dangling_stages = _ledger_points_and_spans(ledgers, until=until)
     runs = _load_supervisor_runs(root)
     deployments = _load_deployments(root)
     campaigns = _load_campaigns(root)
@@ -856,6 +861,7 @@ def reconcile_upgrade_time(
                 for l in ledgers
             ],
             "ignored_ledgers": ignored_ledgers,
+            "dangling_stages": dangling_stages,
             "supervisor_runs": len(runs),
             "deployments": len(deployments),
             "campaigns": len(campaigns),

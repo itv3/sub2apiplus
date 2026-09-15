@@ -23,6 +23,14 @@ from tools.official_client_capture import codex_upgrade_gate_receipt
 from tools.official_client_capture import codex_upgrade_job_rehearsal_receipt
 from tools.official_client_capture import codex_upgrade_receipt_finalizer
 from tools.official_client_capture import codex_upgrade_timing_ledger
+from tools.official_client_capture import codex_upgrade_project_ledger
+from tools.official_client_capture import codex_upgrade_wire_transition as wire_transition
+from tools.official_client_capture import (
+    codex_upgrade_harden_evidence_permissions as harden,
+)
+from tools.official_client_capture import (
+    codex_upgrade_official_attempt_audit as attempt_audit,
+)
 from tools.official_client_capture.codex_upgrade import (
     build_coverage,
     compare_inventory,
@@ -5378,6 +5386,16 @@ class CodexUpgradeTest(unittest.TestCase):
         }
 
     @staticmethod
+    def _environment_binding(evidence_root: Path, path: Path) -> dict[str, object]:
+        """attempt.environment 用的 evidence_root 相对绑定（path/sha256/bytes）。"""
+
+        return {
+            "path": path.relative_to(evidence_root).as_posix(),
+            "sha256": codex_upgrade.file_sha256(path),
+            "bytes": path.stat().st_size,
+        }
+
+    @staticmethod
     def _make_private_tree(root: Path) -> None:
         for path in sorted(root.rglob("*")):
             path.chmod(0o700 if path.is_dir() else 0o600)
@@ -6103,6 +6121,8 @@ class CodexUpgradeTest(unittest.TestCase):
         include_new_surface: bool = False,
         evaluation_transition_identity: dict[str, object] | None = None,
         evaluation_recovery_controls: dict[str, object] | None = None,
+        seal: bool = True,
+        bind_environment: bool = False,
     ) -> Path:
         evidence_root = root / "official-evidence"
         self._write_capture_stage(
@@ -6113,6 +6133,8 @@ class CodexUpgradeTest(unittest.TestCase):
             include_new_surface=include_new_surface,
             evaluation_transition_identity=evaluation_transition_identity,
             evaluation_recovery_controls=evaluation_recovery_controls,
+            seal=seal,
+            bind_environment=bind_environment,
         )
         return evidence_root
 
@@ -6128,6 +6150,8 @@ class CodexUpgradeTest(unittest.TestCase):
         restoration_passed: bool = True,
         evaluation_transition_identity: dict[str, object] | None = None,
         evaluation_recovery_controls: dict[str, object] | None = None,
+        seal: bool = True,
+        bind_environment: bool = False,
     ) -> None:
         evidence_root.mkdir(parents=True, exist_ok=True)
         campaign_manifest = codex_upgrade.load_campaign_manifest(campaign_dir)
@@ -6210,6 +6234,19 @@ class CodexUpgradeTest(unittest.TestCase):
         codex_upgrade_receipt_finalizer.finalize_restoration(
             argparse.Namespace(**restoration_arguments)
         )
+        if bind_environment:
+            # 历史 attempt 的环境绑定：恢复报告与 ARM64 前后收据都在 evidence_root 内，
+            # ARM64 收据内容由测试用 replay 替身解释。
+            for phase_name in ("arm64-before", "arm64-after"):
+                self._write_json(
+                    evidence_root / "environment" / phase_name / "receipt.json",
+                    {
+                        "schema_version": "codex-upgrade-arm64-environment-receipt/v1",
+                        "status": "passed",
+                        "phase": phase_name.replace("-", "_").replace("arm64", "attempt"),
+                        "subject_id": attempt_id,
+                    },
+                )
 
         capture_manifest = evidence_root / "capture-manifest.json"
         self._write_json(
@@ -6721,12 +6758,29 @@ class CodexUpgradeTest(unittest.TestCase):
                 "identity": identity,
                 "results": [result_item],
                 "evidence_roots": [str(evidence_root)],
-                "environment": {
-                    "evidence_root": str(evidence_root),
-                    "before_probe": None,
-                    "after_probe": None,
-                    "restoration_report": None,
-                },
+                "environment": (
+                    {
+                        "evidence_root": str(evidence_root),
+                        "before_probe": None,
+                        "after_probe": None,
+                        "restoration_report": self._environment_binding(
+                            evidence_root, restoration_report
+                        ),
+                        "arm64_before_receipt": self._environment_binding(
+                            evidence_root, evidence_root / "environment" / "arm64-before" / "receipt.json"
+                        ),
+                        "arm64_after_receipt": self._environment_binding(
+                            evidence_root, evidence_root / "environment" / "arm64-after" / "receipt.json"
+                        ),
+                    }
+                    if bind_environment
+                    else {
+                        "evidence_root": str(evidence_root),
+                        "before_probe": None,
+                        "after_probe": None,
+                        "restoration_report": None,
+                    }
+                ),
                 "binary_verification": binary_verification,
                 "execution_error": None,
                 "restoration_error": None,
@@ -6743,6 +6797,9 @@ class CodexUpgradeTest(unittest.TestCase):
             encoding="utf-8",
         )
         (attempt_root / "attempt.json").chmod(0o600)
+        if not seal:
+            # 只留下 awaiting_receipts 的历史 attempt，供官方证据复用导入测试使用。
+            return
         evaluation_transition: dict[str, str] | None = None
         if evaluation_transition_identity is not None:
             self.assertIsNotNone(evaluation_recovery_controls)
@@ -7536,6 +7593,11 @@ class CodexUpgradeTest(unittest.TestCase):
                 "terminal-transition-preflight",
                 "control-epoch",
                 "deep-verify",
+                "wire-transition-intent",
+                "wire-transition-final",
+                "evaluation-epoch",
+                "verdict-official-attempt-identity",
+                "harden-evidence-permissions",
                 "status",
                 "resume",
             },
@@ -13203,6 +13265,779 @@ class CodexUpgradeTest(unittest.TestCase):
                 "official/result.json",
             )
             self.assertFalse((successor_dir / "official" / "attempts").exists())
+
+    # ------------------------------------------------------------------
+    # A3a：官方证据从 awaiting_receipts 前序 attempt 只读导入
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _tree_digests(root: Path) -> dict[str, tuple[str, str | None]]:
+        """逐文件记录 mode 与内容摘要，用于证明前序目录在导入前后逐字节不变。"""
+
+        digests: dict[str, tuple[str, str | None]] = {}
+        for path in sorted(root.rglob("*")):
+            if path.is_symlink():
+                continue
+            mode = format(path.stat().st_mode & 0o777, "04o")
+            digest = codex_upgrade.file_sha256(path) if path.is_file() else None
+            digests[path.relative_to(root).as_posix()] = (mode, digest)
+        return digests
+
+    def _write_import_receipt(
+        self,
+        path: Path,
+        payload: dict[str, object],
+        *,
+        self_digest: bool = False,
+    ) -> Path:
+        document = dict(payload)
+        if self_digest:
+            document["receipt_sha256"] = codex_upgrade._fingerprint(document)
+        self._write_json(path, document)
+        path.chmod(0o600)
+        return path
+
+    def _official_attempt_import_fixture(self, root: Path) -> dict[str, object]:
+        """构造 A3a 导入所需的前序 awaiting_receipts attempt 与七份绑定收据。
+
+        前序 Campaign 放在规范的 ``<data>/evidence/campaigns/<id>`` 布局下，
+        权限收口走真实两步式命令；审计、裁定、部署、路径认证与策略激活收据
+        按各自 schema 手写，五摘要取当前工具身份。
+        """
+
+        data = root / "data"
+        campaigns = data / "evidence" / "campaigns"
+        campaigns.mkdir(parents=True)
+        for path in (data, data / "evidence", campaigns):
+            path.chmod(0o700)
+        ledger_root = project_ledger_fixture.install_fixture_ledger(data)
+        arguments = self._campaign_arguments(
+            campaigns,
+            campaign_id="upgrade-0154-fresh",
+            baseline_version="0.151.0",
+            target_version="0.154.0",
+            model="gpt-5.5",
+            lite_model="gpt-6-astra",
+        )
+        # 生产布局下目录名等于 campaign_id；后继坐标迁移只替换 campaign_id，
+        # 夹具必须保持同样的对应关系。
+        arguments.campaign_dir = campaigns / "upgrade-0154-fresh"
+        predecessor_manifest = codex_upgrade.create_campaign(arguments)
+        predecessor_dir = arguments.campaign_dir
+        evidence_root = self._seal_official_stage(
+            campaigns,
+            predecessor_dir,
+            predecessor_manifest,
+            seal=False,
+            bind_environment=True,
+        )
+        attempt_id = "20260731T000000Z-1111111111111111"
+        attempt_root = predecessor_dir / "official" / "attempts" / attempt_id
+        attempt_path = attempt_root / "attempt.json"
+        attempt_sha256 = codex_upgrade.file_sha256(attempt_path)
+        source_attempt = json.loads(attempt_path.read_text(encoding="utf-8"))
+
+        # A3b-1：经正式 CLI 走真实两步式权限收口（preview → apply → replay）。
+        return_code, stdout, stderr = self._run_main(
+            [
+                "harden-evidence-permissions",
+                "preview",
+                "--campaign-dir",
+                str(predecessor_dir),
+                "--attempt-id",
+                attempt_id,
+            ]
+        )
+        self.assertEqual(return_code, 0, stderr)
+        preview = json.loads(stdout)
+        self.assertEqual(preview["status"], "approval_required")
+        self.assertNotIn("entries", preview)
+        return_code, stdout, stderr = self._run_main(
+            [
+                "harden-evidence-permissions",
+                "apply",
+                "--campaign-dir",
+                str(predecessor_dir),
+                "--attempt-id",
+                attempt_id,
+                "--approve-sha256",
+                preview["review_sha256"],
+            ]
+        )
+        self.assertEqual(return_code, 0, stderr)
+        applied = json.loads(stdout)
+        self.assertEqual(applied["status"], "applied")
+        return_code, stdout, stderr = self._run_main(
+            [
+                "harden-evidence-permissions",
+                "replay",
+                "--campaign-dir",
+                str(predecessor_dir),
+                "--attempt-id",
+                attempt_id,
+            ]
+        )
+        self.assertEqual(return_code, 0, stderr)
+        self.assertEqual(json.loads(stdout)["status"], "passed")
+        permission_path = (
+            predecessor_dir
+            / "control"
+            / "evidence-permissions"
+            / attempt_id
+            / f"apply-{int(applied['index']):02d}.json"
+        )
+        _root, roots, _attempt = harden._evidence_roots(predecessor_dir, attempt_id)
+        entries = harden._snapshot(roots, with_content=True)
+        inventory = sorted(
+            (
+                {
+                    "path": str(Path(entry["path"]).resolve()),
+                    "bytes": entry["bytes"],
+                    "sha256": entry["sha256"],
+                }
+                for entry in entries
+                if entry["kind"] == "file"
+            ),
+            key=lambda item: item["path"],
+        )
+        tool = codex_upgrade._tool_identity(include_git=False)
+        identity_five = {
+            "policy_sha256": tool["policy_sha256"],
+            "wire_producer_sha256": tool["wire_producer_sha256"],
+            "evidence_semantics_sha256": tool["evidence_semantics_sha256"],
+            "control_sha256": tool["control_sha256"],
+            "tool_files_sha256": tool["files_sha256"],
+        }
+        now = (
+            datetime.now(timezone.utc)
+            .isoformat(timespec="milliseconds")
+            .replace("+00:00", "Z")
+        )
+        receipts = root / "receipts"
+        receipts.mkdir(mode=0o700)
+        audit_path = self._write_import_receipt(
+            receipts / "audit.json",
+            {
+                "schema_version": attempt_audit.SCHEMA_VERSION,
+                "campaign_id": predecessor_manifest["campaign_id"],
+                "attempt_id": attempt_id,
+                "attempt_status": "awaiting_receipts",
+                "attempt_sha256": attempt_sha256,
+                "observed_at_utc": now,
+                "status": "passed",
+                "failed_sections": [],
+                "identity": {"passed": True, "mismatched_fields": []},
+                "account": {"passed": True},
+                "models": {"passed": True, "problems": []},
+                "environment": {"passed": True, "problems": []},
+                "integrity": {
+                    "passed": True,
+                    "problems": [],
+                    "checkpoint_count": 1,
+                    "checkpoint_statuses": {"complete": 1},
+                    "evidence_root_count": len(roots),
+                    "missing_evidence_roots": [],
+                    "inventory_file_count": len(inventory),
+                    "inventory_bytes": sum(int(item["bytes"]) for item in inventory),
+                    "inventory_sha256": codex_upgrade._fingerprint(inventory),
+                    "inventory": inventory,
+                    "nonconforming_permission_entries": 0,
+                },
+                "requests": {
+                    "status": "complete",
+                    "counting_rule": "turn_ratio",
+                    "estimation_policy": "none",
+                    "precise_total": 0,
+                    "estimated_total": 0,
+                    "unresolved_job_ids": [],
+                    "identity_keys_sha256": "0" * 64,
+                },
+                "permissions": {
+                    "nonconforming_entries": 0,
+                    "action": "只报告；收口由 harden-evidence-permissions 两步式命令执行",
+                },
+            },
+        )
+        verdict_path = self._write_import_receipt(
+            receipts / "verdict.json",
+            {
+                "schema_version": wire_transition.VERDICT_SCHEMA,
+                "campaign_id": predecessor_manifest["campaign_id"],
+                "attempt_id": attempt_id,
+                "observed_at_utc": now,
+                "policy_sha256": tool["policy_sha256"],
+                "frozen_files_sha256": predecessor_manifest["tool_identity"]["files_sha256"],
+                "frozen_v2_identity": None,
+                "active_deployment_receipt": None,
+                "historical_copy": None,
+                "historical_copy_source_receipt": None,
+                "historical_wire_producer_sha256": tool["wire_producer_sha256"],
+                "current_wire_producer_sha256": tool["wire_producer_sha256"],
+                "current_files_sha256": tool["files_sha256"],
+                "problems": [],
+                "basis": "historical_copy_policy_v2",
+                "verdict": "equal",
+            },
+        )
+        deployment_path = self._write_import_receipt(
+            receipts / "deployment.json",
+            {
+                "schema_version": codex_upgrade.ARM64_SUPERVISED_DEPLOY_RECEIPT_SCHEMA,
+                "status": "passed",
+                "campaign_id": "codex-0154-a3a-deploy",
+                "created_at_utc": now,
+                "architecture": "aarch64",
+                "production_tool_root": "/root/docker/capture-cli/data/tools/official_client_capture",
+                "production_doc_root": "/root/docker/capture-cli/data/docs",
+                "policy_version": tool["policy_version"],
+                **identity_five,
+                "supervisor_sha256": "1" * 64,
+                "assertion_preparer_sha256": "2" * 64,
+                "rollback_backup": None,
+                "assertion_preparer_rollback_backup": None,
+                "document_rollback_backup": None,
+                "switched_archived_documents": [],
+                "installed_runtime_documents": [],
+                "supervisor_run_dir": "/root/docker/capture-cli/data/control/deploy-run",
+            },
+        )
+        deployment_binding = {
+            "path": str(deployment_path),
+            "sha256": codex_upgrade.file_sha256(deployment_path),
+        }
+        certification_path = self._write_import_receipt(
+            receipts / "path-certification.json",
+            {
+                "schema_version": codex_upgrade.PRE_A3_PATH_CERTIFICATION_SCHEMA,
+                "status": "passed",
+                "certified_at_utc": now,
+                "identity": identity_five,
+                "deployment_receipt": deployment_binding,
+                "scenarios": ["reuse-official-evidence", "seal"],
+            },
+            self_digest=True,
+        )
+        activation_path = self._write_import_receipt(
+            receipts / "policy-activation.json",
+            {
+                "schema_version": codex_upgrade.POLICY_ACTIVATION_CERTIFICATION_SCHEMA,
+                "status": "active",
+                "activated_at_utc": now,
+                "policy_version": tool["policy_version"],
+                "policy_sha256": tool["policy_sha256"],
+                "identity": identity_five,
+                "deployment_receipt": deployment_binding,
+                "authorized_scopes": ["A2.5", "A3b"],
+                "superseded_by": None,
+            },
+            self_digest=True,
+        )
+        return {
+            "data": data,
+            "campaigns": campaigns,
+            "ledger": ledger_root,
+            "predecessor_dir": predecessor_dir,
+            "predecessor_manifest": predecessor_manifest,
+            "attempt_id": attempt_id,
+            "attempt_root": attempt_root,
+            "attempt_sha256": attempt_sha256,
+            "source_attempt": source_attempt,
+            "evidence_root": evidence_root,
+            "audit": audit_path,
+            "verdict": verdict_path,
+            "permission": permission_path,
+            "certification": certification_path,
+            "activation": activation_path,
+            "deployment": deployment_path,
+            "tool": tool,
+            "identity_five": identity_five,
+        }
+
+    @staticmethod
+    def _official_attempt_import_argv(
+        fixture: dict[str, object],
+        successor_dir: Path,
+        *,
+        omit: tuple[str, ...] = (),
+    ) -> list[str]:
+        options = [
+            ("--predecessor-campaign-dir", fixture["predecessor_dir"]),
+            ("--campaign-dir", successor_dir),
+            ("--campaign-id", "upgrade-0154-official-reuse"),
+            ("--codex-account-id", "93"),
+            ("--predecessor-official-attempt-id", fixture["attempt_id"]),
+            ("--audit-receipt", fixture["audit"]),
+            ("--identity-verdict", fixture["verdict"]),
+            ("--permission-receipt", fixture["permission"]),
+            ("--path-certification", fixture["certification"]),
+            ("--policy-activation", fixture["activation"]),
+            ("--deployment-receipt", fixture["deployment"]),
+            ("--project-ledger", fixture["ledger"]),
+        ]
+        argv = ["reuse-official-evidence"]
+        for flag, value in options:
+            if flag in omit:
+                continue
+            argv.extend([flag, str(value)])
+        return argv
+
+    @staticmethod
+    def _fake_permission_closeout(attempt_root: Path, evidence_roots: object) -> dict[str, object]:
+        """离线夹具没有受管 runs 别名，权限收口收据用可重放的替身文件代替。"""
+
+        receipt = attempt_root / "evidence-permission-closeout.json"
+        receipt.write_text(
+            json.dumps(
+                {
+                    "schema_version": "codex-upgrade-evidence-permission-closeout/v1",
+                    "status": "passed",
+                    "evidence_roots": [str(root) for root in evidence_roots],
+                },
+                ensure_ascii=False,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        receipt.chmod(0o600)
+        return {
+            "path": receipt.name,
+            "sha256": codex_upgrade.file_sha256(receipt),
+            "bytes": receipt.stat().st_size,
+        }
+
+    def test_0154_reuse_official_evidence_imports_awaiting_receipts_attempt_and_seals(
+        self,
+    ) -> None:
+        """A3a：前序停在 awaiting_receipts 时，七份收据绑定后零执行导入并由新 Campaign seal。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._official_attempt_import_fixture(root)
+            predecessor_dir = fixture["predecessor_dir"]
+            evidence_root = fixture["evidence_root"]
+            source_attempt = fixture["source_attempt"]
+            before = self._tree_digests(predecessor_dir)
+            evidence_before = self._tree_digests(evidence_root)
+            head_before = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+            successor_dir = fixture["campaigns"] / "upgrade-0154-official-reuse"
+            with (
+                mock.patch.object(
+                    codex_upgrade,
+                    "_close_official_reuse_evidence_permissions",
+                    side_effect=self._fake_permission_closeout,
+                ),
+                mock.patch.object(
+                    codex_upgrade,
+                    "_replay_attempt_evidence_permissions",
+                    return_value={},
+                ),
+            ):
+                return_code, stdout, stderr = self._run_main(
+                    self._official_attempt_import_argv(fixture, successor_dir)
+                )
+                self.assertEqual(return_code, 0, stderr)
+                result = json.loads(stdout)
+                self.assertEqual(result["status"], "official_awaiting_receipts")
+                self.assertFalse(result["official_sealed"])
+                self.assertTrue(result["official_imported"])
+                self.assertEqual(result["import_mode"], "official_attempt_reuse")
+                self.assertEqual(result["executed_job_count"], 0)
+                self.assertEqual(result["live_request_count"], 0)
+                self.assertEqual(result["scanned_bytes"], 0)
+                self.assertIn("零请求", result["next_command"])
+                attempt_id = result["official_attempt_id"]
+                self.assertTrue(attempt_id)
+                # 前序目录与前序证据逐字节、逐 mode 不变。
+                self.assertEqual(self._tree_digests(predecessor_dir), before)
+                self.assertEqual(self._tree_digests(evidence_root), evidence_before)
+
+                import_receipt = json.loads(
+                    (successor_dir / "predecessor-import.json").read_text(encoding="utf-8")
+                )
+                self.assertEqual(
+                    import_receipt["schema_version"],
+                    codex_upgrade.PREDECESSOR_OFFICIAL_ATTEMPT_IMPORT_SCHEMA,
+                )
+                self.assertEqual(import_receipt["import_mode"], "official_attempt_reuse")
+                self.assertEqual(import_receipt["stages"], {})
+                imported = import_receipt["official_attempt_import"]
+                self.assertEqual(
+                    imported["source_attempt"]["attempt_digest"],
+                    source_attempt["attempt_digest"],
+                )
+                self.assertEqual(imported["source_attempt"]["sha256"], fixture["attempt_sha256"])
+                self.assertEqual(imported["source_attempt"]["job_ids"], ["official-test"])
+                self.assertEqual(imported["identity_verdict"]["verdict"], "equal")
+                self.assertTrue(imported["content_proof"]["matches_audit_inventory"])
+                self.assertTrue(imported["content_proof"]["matches_permission_receipt"])
+                self.assertEqual(
+                    imported["content_proof"]["content_sha256"],
+                    json.loads(fixture["permission"].read_text(encoding="utf-8"))[
+                        "content_sha256_after"
+                    ],
+                )
+                self.assertEqual(imported["deployment_receipt"]["tool_files_sha256"], fixture["tool"]["files_sha256"])
+                self.assertEqual(imported["tool_identity"]["wire_producer_sha256"], fixture["tool"]["wire_producer_sha256"])
+                self.assertEqual(imported["project_ledger"]["head_sha256"], head_before["head_sha256"])
+
+                attempt_root = successor_dir / "official" / "attempts" / attempt_id
+                attempt = json.loads((attempt_root / "attempt.json").read_text(encoding="utf-8"))
+                self.assertEqual(attempt["schema_version"], codex_upgrade.CAPTURE_ATTEMPT_SCHEMA)
+                self.assertEqual(attempt["status"], "awaiting_receipts")
+                self.assertEqual(
+                    attempt["official_evidence_reuse_transition"]["path"],
+                    "predecessor-import.json",
+                )
+                self.assertEqual(attempt["evidence_roots"], source_attempt["evidence_roots"])
+                self.assertEqual(attempt["environment"]["evidence_root"], str(evidence_root))
+                self.assertIsNone(attempt["environment"]["arm64_before_receipt"])
+                self.assertEqual(attempt["incremental_plan"]["reused_job_ids"], ["official-test"])
+                self.assertEqual(attempt["incremental_plan"]["executed_job_ids"], [])
+                self.assertEqual(len(attempt["results"]), 1)
+                reused = attempt["results"][0]
+                self.assertEqual(reused["disposition"], "reused")
+                self.assertEqual(reused["carried_from_attempt"], fixture["attempt_id"])
+                self.assertEqual(reused["source_receipt"]["path"], "predecessor-import.json")
+                # 执行摘要按新 Campaign 坐标重绑，前序证据根原样保留。
+                self.assertNotEqual(
+                    reused["execution_sha256"],
+                    source_attempt["results"][0]["execution_sha256"],
+                )
+                self.assertEqual(reused["evidence_roots"], source_attempt["results"][0]["evidence_roots"])
+                self.assertFalse((successor_dir / "official" / "result.json").exists())
+                self.assertEqual(
+                    codex_upgrade.campaign_status(successor_dir)["status"],
+                    "official_awaiting_receipts",
+                )
+                # 总账：已注册且消费者门禁放行；导入本身不消耗任何请求预算。
+                admitted = codex_upgrade_project_ledger.assert_campaign_admitted(
+                    successor_dir, command="seal", require=True
+                )
+                self.assertEqual(admitted["campaign_id"], "upgrade-0154-official-reuse")
+                head_after = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+                self.assertEqual(
+                    head_after["remaining_live_requests"],
+                    head_before["remaining_live_requests"],
+                )
+
+                # seal：零请求，环境与恢复收据来自前序 attempt，证据清单按前序证据根构建。
+                capture_manifest = evidence_root / "capture-manifest.json"
+                capture_binding = self._binding(
+                    capture_manifest, f"{evidence_root.name}/{capture_manifest.name}"
+                )
+                assertion_context = {
+                    "capture_manifest": capture_binding,
+                    "capture_manifest_path": str(capture_manifest.resolve()),
+                    "evidence_root": str(evidence_root.resolve()),
+                    "evidence_prefix": evidence_root.name,
+                }
+                assertion_gate = {
+                    "side": "official",
+                    "bundle_dir_name": "assertion-bundle",
+                    "bundle_provenance_sha256": "1" * 64,
+                    "bundle_entry_count": 1,
+                    "derived_provenance_sha256": None,
+                    "candidate_trace_receipt_sha256": None,
+                    "capture_manifest": {
+                        "path": "capture-manifest.json",
+                        "sha256": capture_binding["sha256"],
+                    },
+                    "acceptance_contract_sha256": "2" * 64,
+                    "artifact_count": 1,
+                    "observation_count": 1,
+                    "checked_rule_count": 1,
+                    "checked_check_count": 1,
+                }
+
+                original_replay = codex_upgrade.codex_upgrade_arm64_environment_receipt.replay
+
+                def replay_arm64(directory: Path, name: str) -> dict[str, object]:
+                    # 只替换前序 attempt 的环境收据；Campaign 控制收据仍走真实重放。
+                    directory = Path(directory)
+                    if directory.parent != evidence_root / "environment":
+                        return original_replay(directory, name)
+                    return {
+                        "status": "passed",
+                        "phase": (
+                            "attempt_before"
+                            if "before" in directory.name
+                            else "attempt_after"
+                        ),
+                        "subject_id": fixture["attempt_id"],
+                        "continuity_identity_sha256": "c" * 64,
+                    }
+
+                seal_arguments = argparse.Namespace(
+                    campaign_dir=successor_dir,
+                    attempt_id=attempt_id,
+                    approve_seal_sha256=None,
+                    evidence_root=[],
+                    capture_manifest=None,
+                    assertion_evidence_root=None,
+                    restoration_report=None,
+                )
+                with (
+                    mock.patch.object(
+                        codex_upgrade,
+                        "_verify_official_binaries",
+                        return_value=source_attempt["binary_verification"],
+                    ),
+                    mock.patch.object(
+                        codex_upgrade,
+                        "_capture_assertion_context",
+                        return_value=assertion_context,
+                    ),
+                    mock.patch.object(
+                        codex_upgrade,
+                        "_run_seal_assertion_gate",
+                        return_value=assertion_gate,
+                    ),
+                    mock.patch.object(
+                        codex_upgrade.codex_upgrade_arm64_environment_receipt,
+                        "replay",
+                        side_effect=replay_arm64,
+                    ),
+                ):
+                    preview = codex_upgrade._seal_capture_attempt(seal_arguments, "official")
+                    self.assertEqual(preview["status"], "approval_required")
+                    self.assertEqual(
+                        codex_upgrade.campaign_status(successor_dir)["status"],
+                        "official_awaiting_seal_approval",
+                    )
+                    seal_arguments.approve_seal_sha256 = preview["review_sha256"]
+                    sealed = codex_upgrade._seal_capture_attempt(seal_arguments, "official")
+                    self.assertEqual(sealed["status"], "complete")
+                self.assertEqual(
+                    codex_upgrade.campaign_status(successor_dir)["status"],
+                    "official_sealed",
+                )
+                stage = codex_upgrade._load_stage_result(
+                    successor_dir,
+                    "capture-official",
+                    _replay_machine_receipts=False,
+                )
+                self.assertEqual(stage["status"], "complete")
+                self.assertEqual([item["id"] for item in stage["results"]], ["official-test"])
+                self.assertEqual(stage["results"][0]["disposition"], "reused")
+                manifest = codex_upgrade.load_campaign_manifest(successor_dir)
+                plan = codex_upgrade._vc_campaign_plan(successor_dir, manifest)
+                _, checkpoint = codex_upgrade._replay_vc_checkpoint(successor_dir, plan, "VC-1")
+                self.assertEqual(checkpoint["execute_item_ids"], [])
+                self.assertEqual(checkpoint["reuse_item_ids"], ["official-test"])
+                self.assertEqual(checkpoint["metrics"]["live_request_count"], 0)
+                self.assertEqual(checkpoint["stage_receipt"]["path"], "official/result.json")
+                # seal 之后前序仍然逐字节不变，总账请求计数增量为 0。
+                self.assertEqual(self._tree_digests(predecessor_dir), before)
+                head_sealed = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+                self.assertEqual(
+                    head_sealed["remaining_live_requests"],
+                    head_before["remaining_live_requests"],
+                )
+
+    def test_0154_official_attempt_import_rejects_broken_bindings(self) -> None:
+        """A3a：任一收据缺失、未通过、未绑定该 attempt 或证据漂移都拒绝导入且不留半成品。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._official_attempt_import_fixture(root)
+            predecessor_dir = fixture["predecessor_dir"]
+            before = self._tree_digests(predecessor_dir)
+            successor_dir = fixture["campaigns"] / "upgrade-0154-official-reuse"
+
+            def expect_rejection(argv: list[str], fragment: str) -> None:
+                return_code, _stdout, stderr = self._run_main(argv)
+                self.assertNotEqual(return_code, 0)
+                self.assertIn(fragment, stderr)
+                self.assertFalse(successor_dir.exists(), stderr)
+                self.assertEqual(self._tree_digests(predecessor_dir), before)
+
+            def rewrite(path: Path, mutate) -> None:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                mutate(payload)
+                self._write_json(path, payload)
+                path.chmod(0o600)
+
+            with (
+                mock.patch.object(
+                    codex_upgrade,
+                    "_close_official_reuse_evidence_permissions",
+                    side_effect=self._fake_permission_closeout,
+                ),
+                mock.patch.object(
+                    codex_upgrade,
+                    "_replay_attempt_evidence_permissions",
+                    return_value={},
+                ),
+            ):
+                # 缺少任一导入参数。
+                expect_rejection(
+                    self._official_attempt_import_argv(
+                        fixture, successor_dir, omit=("--audit-receipt",)
+                    ),
+                    "必须同时提供：--audit-receipt",
+                )
+                # 审计未通过。
+                audit_backup = fixture["audit"].read_text(encoding="utf-8")
+                rewrite(fixture["audit"], lambda payload: payload.update(status="failed", failed_sections=["models"]))
+                expect_rejection(
+                    self._official_attempt_import_argv(fixture, successor_dir),
+                    "A1a 审计收据未通过",
+                )
+                fixture["audit"].write_text(audit_backup, encoding="utf-8")
+                # 审计 inventory 与当前证据不一致。
+                rewrite(fixture["audit"], lambda payload: payload["integrity"]["inventory"].pop())
+                expect_rejection(
+                    self._official_attempt_import_argv(fixture, successor_dir),
+                    "A1a 审计 inventory 不一致",
+                )
+                fixture["audit"].write_text(audit_backup, encoding="utf-8")
+                # 裁定不是「相等」。
+                verdict_backup = fixture["verdict"].read_text(encoding="utf-8")
+                rewrite(fixture["verdict"], lambda payload: payload.update(verdict="different"))
+                expect_rejection(
+                    self._official_attempt_import_argv(fixture, successor_dir),
+                    "A1b 身份裁定",
+                )
+                fixture["verdict"].write_text(verdict_backup, encoding="utf-8")
+                # 部署收据五摘要不是当前工具。
+                deployment_backup = fixture["deployment"].read_text(encoding="utf-8")
+                rewrite(fixture["deployment"], lambda payload: payload.update(wire_producer_sha256="0" * 64))
+                expect_rejection(
+                    self._official_attempt_import_argv(fixture, successor_dir),
+                    "五摘要与当前工具身份不一致",
+                )
+                fixture["deployment"].write_text(deployment_backup, encoding="utf-8")
+                # 路径认证绑定的不是这份部署收据（部署收据字节变化即失效）。
+                rewrite(fixture["deployment"], lambda payload: payload.update(supervisor_run_dir="/elsewhere"))
+                expect_rejection(
+                    self._official_attempt_import_argv(fixture, successor_dir),
+                    "pre-A3 路径认证收据",
+                )
+                fixture["deployment"].write_text(deployment_backup, encoding="utf-8")
+                # 策略激活已被替换。
+                activation_backup = fixture["activation"].read_text(encoding="utf-8")
+                rewrite(
+                    fixture["activation"],
+                    lambda payload: (
+                        payload.update(superseded_by="tool-release-certification/v1"),
+                        payload.pop("receipt_sha256"),
+                        payload.update(receipt_sha256=codex_upgrade._fingerprint(payload)),
+                    ),
+                )
+                expect_rejection(
+                    self._official_attempt_import_argv(fixture, successor_dir),
+                    "已被后续认证替换",
+                )
+                fixture["activation"].write_text(activation_backup, encoding="utf-8")
+                # 前序证据内容在权限收口后被改动（mode 不变）。
+                surface_path = fixture["evidence_root"] / "surface.json"
+                surface_backup = surface_path.read_bytes()
+                surface_path.write_bytes(surface_backup + b"\n")
+                surface_path.chmod(0o600)
+                return_code, _stdout, stderr = self._run_main(
+                    self._official_attempt_import_argv(fixture, successor_dir)
+                )
+                self.assertNotEqual(return_code, 0)
+                self.assertIn("内容在权限收口后发生变化", stderr)
+                self.assertFalse(successor_dir.exists())
+                surface_path.write_bytes(surface_backup)
+                surface_path.chmod(0o600)
+                self.assertEqual(self._tree_digests(predecessor_dir), before)
+                # 物化失败（权限收口拒绝）时整个后继目录被清理，总账不留注册。
+                with mock.patch.object(
+                    codex_upgrade,
+                    "_close_official_reuse_evidence_permissions",
+                    side_effect=codex_upgrade.ConfigurationError("前序证据仍有 1 个条目未达到 0700/0600"),
+                ):
+                    expect_rejection(
+                        self._official_attempt_import_argv(fixture, successor_dir),
+                        "未达到 0700/0600",
+                    )
+                head = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+                self.assertNotIn("upgrade-0154-official-reuse", head["registered_campaigns"])
+                # 前序未封存却不提供导入参数。
+                expect_rejection(
+                    self._official_attempt_import_argv(
+                        fixture,
+                        successor_dir,
+                        omit=(
+                            "--predecessor-official-attempt-id",
+                            "--audit-receipt",
+                            "--identity-verdict",
+                            "--permission-receipt",
+                            "--path-certification",
+                            "--policy-activation",
+                            "--deployment-receipt",
+                            "--project-ledger",
+                        ),
+                    ),
+                    "前序官方阶段尚未封存",
+                )
+                # 修好全部绑定后仍能成功导入，证明上面的拒绝没有污染前序。
+                return_code, stdout, stderr = self._run_main(
+                    self._official_attempt_import_argv(fixture, successor_dir)
+                )
+                self.assertEqual(return_code, 0, stderr)
+                self.assertEqual(json.loads(stdout)["status"], "official_awaiting_receipts")
+
+    def test_0154_official_attempt_import_arguments_rejected_for_sealed_predecessor(
+        self,
+    ) -> None:
+        """前序已封存时走既有只读导入路径，八项 attempt 导入参数一律拒绝。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            project_ledger_fixture.install_fixture_ledger(root)
+            arguments = self._campaign_arguments(
+                root / "predecessor",
+                campaign_id="upgrade-0154-sealed",
+                baseline_version="0.151.0",
+                target_version="0.154.0",
+                model="gpt-5.5",
+                lite_model="gpt-6-astra",
+            )
+            predecessor_manifest = codex_upgrade.create_campaign(arguments)
+            predecessor_dir = arguments.campaign_dir
+            self._seal_official_stage(root / "predecessor", predecessor_dir, predecessor_manifest)
+            successor_dir = root / "successor"
+            return_code, _stdout, stderr = self._run_main(
+                [
+                    "reuse-official-evidence",
+                    "--predecessor-campaign-dir",
+                    str(predecessor_dir),
+                    "--campaign-dir",
+                    str(successor_dir),
+                    "--campaign-id",
+                    "upgrade-0154-sealed-successor",
+                    "--codex-account-id",
+                    "93",
+                    "--predecessor-official-attempt-id",
+                    "20260731T000000Z-1111111111111111",
+                ]
+            )
+            self.assertNotEqual(return_code, 0)
+            self.assertIn("只允许在前序官方阶段尚未封存时使用", stderr)
+            self.assertFalse(successor_dir.exists())
+            # A2 裁定命令经正式 CLI 可达：没有部署收据时如实裁定为「不同」并返回 3。
+            control_root = root / "control"
+            control_root.mkdir(mode=0o700)
+            verdict_output = root / "verdict.json"
+            return_code, stdout, stderr = self._run_main(
+                [
+                    "verdict-official-attempt-identity",
+                    "--campaign-dir",
+                    str(predecessor_dir),
+                    "--attempt-id",
+                    "20260731T000000Z-1111111111111111",
+                    "--control-root",
+                    str(control_root),
+                    "--output",
+                    str(verdict_output),
+                ]
+            )
+            self.assertEqual(return_code, 3, stderr)
+            self.assertEqual(json.loads(stdout)["verdict"], "different")
+            self.assertTrue(verdict_output.is_file())
 
     def test_formal_campaign_run_enforcement_covers_future_target_versions(self) -> None:
         """campaign-run 强制派发与旧写入拒绝按历史豁免集合判定，不再逐版本硬编码。"""

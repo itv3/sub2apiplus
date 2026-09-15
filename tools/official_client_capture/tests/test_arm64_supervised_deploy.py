@@ -230,8 +230,11 @@ class Arm64SupervisedDeployTest(unittest.TestCase):
 
     def test_default_digests_match_current_managed_tool_tree(self) -> None:
         tool_root = Path(deploy.__file__).resolve().parent / "official_client_capture"
-        digest, _ = deploy.tool_digest(tool_root)
-        self.assertEqual(deploy.DEFAULT_TOOL_DIGEST, digest)
+        # A2-3：整树摘要不再硬编码；暂存树自算即期望。策略 v2 五摘要须可从树内策略算出。
+        self.assertFalse(hasattr(deploy, "DEFAULT_TOOL_DIGEST"))
+        identity = deploy.staging_identity_v2(tool_root)
+        self.assertEqual(identity["policy_version"], 2)
+        self.assertEqual({len(identity[k]) for k in ("policy_sha256", "wire_producer_sha256", "evidence_semantics_sha256", "control_sha256")}, {64})
         self.assertEqual(
             deploy.DEFAULT_SUPERVISOR_DIGEST,
             deploy.file_sha256(tool_root / "codex_upgrade_supervisor.py"),

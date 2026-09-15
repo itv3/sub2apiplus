@@ -4604,6 +4604,7 @@ def _campaign_run_manifest(
             "terminal-transition-preflight",
             "plan",
             "reuse-official-evidence",
+            "harden-evidence-permissions",
             "compile-vc-batch",
             "compile-vc-interrupted-recovery-batch",
             "compile-vc-interrupted-recovery-continuation",

@@ -197,6 +197,10 @@
       "description": "分类事实纠正后继对直接前序九项 Candidate 结果的零执行复用授权。",
       "$ref": "#/$defs/fileBinding"
     },
+    "official_evidence_reuse_transition": {
+      "description": "官方证据复用导入（A3a）：绑定当前 Campaign 的 predecessor-import.json，attempt 为零执行 metadata-only，results 是前序 awaiting_receipts official attempt 的坐标迁移投影。",
+      "$ref": "#/$defs/fileBinding"
+    },
     "incremental_plan": {
       "$ref": "#/$defs/attemptIncrementalPlan"
     },

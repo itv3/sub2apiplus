@@ -569,8 +569,20 @@ def build_execution_contract(
     configuration: Mapping[str, Any],
     target_scenario: Mapping[str, Any],
     extra_jobs: Mapping[str, Any] | None,
+    wire_producer_sha256: str | None = None,
+    policy_sha256: str | None = None,
 ) -> dict[str, Any]:
-    """生成 preflight 与 Formal 之间不含 Campaign ID 的稳定执行合同。"""
+    """生成 preflight 与 Formal 之间不含 Campaign ID 的稳定执行合同。
+
+    A2-1：v2 Campaign 的合同额外记录当前有效 wire 身份与策略摘要；执行前的工具
+    比对以它们为准，整树摘要只用于三副本互等与审计。
+    """
+
+    for label, value in (("wire_producer_sha256", wire_producer_sha256), ("policy_sha256", policy_sha256)):
+        if value is not None and not SHA256_RE.fullmatch(str(value)):
+            raise JobRehearsalReceiptError(f"{label} 不是 SHA-256")
+    if (wire_producer_sha256 is None) != (policy_sha256 is None):
+        raise JobRehearsalReceiptError("wire_producer_sha256 与 policy_sha256 必须同时给出")
 
     for label, value in (
         ("target_sha256", target_sha256),
@@ -650,6 +662,7 @@ def build_execution_contract(
         "target_code_mode_host_sha256": target_code_mode_host_sha256,
         "suite": suite,
         "tool_files_sha256": tool_files_sha256,
+        **({"wire_producer_sha256": wire_producer_sha256, "policy_sha256": policy_sha256} if wire_producer_sha256 is not None else {}),
         "target_scenario_sha256": _fingerprint(target_scenario),
         "evidence_label_declaration_sha256": (
             evidence_label_declaration_sha256
@@ -673,7 +686,22 @@ def execution_contract_sha256(contract: Mapping[str, Any]) -> str:
     return _fingerprint(contract)
 
 
+CONTRACT_V2_IDENTITY_FIELDS = frozenset({"wire_producer_sha256", "policy_sha256"})
+
+
+def _contract_tool_matches(contract: Mapping[str, Any], managed_files_sha256: str, current_identity: Mapping[str, Any]) -> bool:
+    """A2-1：合同带 wire 身份时按 wire＋策略比当前工具，否则按整树。"""
+
+    if contract.get("wire_producer_sha256") is not None:
+        return (
+            current_identity.get("wire_producer_sha256") == contract.get("wire_producer_sha256")
+            and current_identity.get("policy_sha256") == contract.get("policy_sha256")
+        )
+    return managed_files_sha256 == contract.get("tool_files_sha256")
+
+
 def validate_execution_contract(contract: dict[str, Any]) -> dict[str, Any]:
+    v2_fields = CONTRACT_V2_IDENTITY_FIELDS if isinstance(contract, dict) and CONTRACT_V2_IDENTITY_FIELDS & set(contract) else frozenset()
     _expect(
         contract,
         {
@@ -684,6 +712,7 @@ def validate_execution_contract(contract: dict[str, Any]) -> dict[str, Any]:
             "target_code_mode_host_sha256",
             "suite",
             "tool_files_sha256",
+            *v2_fields,
             "target_scenario_sha256",
             "evidence_label_declaration_sha256",
             "extra_jobs_sha256",
@@ -3136,6 +3165,8 @@ def _collect_facts(
         configuration=configuration,
         target_scenario=target_scenario,
         extra_jobs=extra_jobs,
+        wire_producer_sha256=manifest["tool_identity"].get("wire_producer_sha256"),
+        policy_sha256=manifest["tool_identity"].get("policy_sha256"),
     )
     jobs = [
         *codex_upgrade._campaign_jobs(
@@ -3227,7 +3258,7 @@ def _collect_facts(
         managed_tree["entries"]
         == execution_tree["entries"]
         == container_tree["entries"]
-        and managed_tree["files_sha256"] == contract["tool_files_sha256"]
+        and _contract_tool_matches(contract, managed_tree["files_sha256"], codex_upgrade._tool_identity(include_git=False))
     ):
         execute = list(plan["execute_job_ids"])
         raise JobRehearsalReceiptError(

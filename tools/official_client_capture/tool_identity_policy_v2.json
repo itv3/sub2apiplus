@@ -1,0 +1,146 @@
+{
+  "schema_version": "tool-identity-policy/v2",
+  "policy_version": 2,
+  "description": "受管工具身份四层策略（方案 A2）。只有 wire_producer 层作为重采判据；evidence_semantics 变化追加 evaluation epoch；control 变化只重跑控制门禁；files 整树摘要只作溯源与三副本一致性。未被任何规则命中的新文件按最严格的 wire_producer 计。ignored 前缀是其它客户端（Claude）专用工具，对 Codex Campaign 既不产生请求也不解释证据，只进入整树摘要。",
+  "ignored_prefixes": [
+    "claude_",
+    "claude_21220/",
+    "capturelib/claude_fw_",
+    "fixtures/claude_",
+    "analyze_claude_",
+    "extract_claude_bundle.py"
+  ],
+  "layers": {
+    "control": {
+      "suffixes": [
+        ".schema.json"
+      ],
+      "files": [
+        "__init__.py",
+        "codex_upgrade_arm64_environment_receipt.py",
+        "codex_upgrade_campaign_disposition.py",
+        "codex_upgrade_campaign_run_rehearsal_receipt.py",
+        "codex_upgrade_environment_probe.py",
+        "codex_upgrade_evidence_permissions.py",
+        "codex_upgrade_gate_receipt.py",
+        "codex_upgrade_harden_evidence_permissions.py",
+        "codex_upgrade_job_rehearsal_receipt.py",
+        "codex_upgrade_legacy_boundary.py",
+        "codex_upgrade_live_request_provenance.py",
+        "codex_upgrade_official_asset_receipt.py",
+        "codex_upgrade_official_attempt_audit.py",
+        "codex_upgrade_predispatch_stop.py",
+        "codex_upgrade_project_ledger.py",
+        "codex_upgrade_root_cause.py",
+        "codex_upgrade_supervisor.py",
+        "codex_upgrade_time_reconciliation.py",
+        "codex_upgrade_timing_ledger.py",
+        "codex_upgrade_tool_identity_policy.py",
+        "codex_upgrade_vc0_closeout.py",
+        "codex_upgrade_vc1_permission_alias_closeout.py",
+        "codex_upgrade_vc1_permission_alias_predispatch_closeout.py",
+        "codex_upgrade_vc_artifacts.py",
+        "codex_upgrade_vc_receipt.py",
+        "codex_upgrade_wire_transition.py",
+        "codex_upgrade_zero_request_smoke.py",
+        "incremental_recovery.py",
+        "post_run_secret_scan_receipt.py",
+        "production_activation_receipt.py",
+        "root_cause_codes.json",
+        "runtime_host_receipt.py",
+        "tool_identity_policy_v2.json"
+      ]
+    },
+    "evidence_semantics": {
+      "prefixes": [
+        "candidate_rule_expectation",
+        "candidate_test_fact_map_",
+        "codex_upgrade_evidence_labels_",
+        "codex_upgrade_rules_",
+        "profile_rule_patches_"
+      ],
+      "files": [
+        "acceptance_contract.py",
+        "assertion_gate.py",
+        "build_assertion_bundle.py",
+        "build_capture_manifest.py",
+        "build_evidence_catalog.py",
+        "build_kilo_client_receipts.py",
+        "build_observed_profile_runtime_audit.py",
+        "build_rule_assertion_results.py",
+        "build_scenario_facts.py",
+        "candidate_evidence_guard.py",
+        "candidate_rule_assertion.py",
+        "candidate_rule_assertion_result.example.json",
+        "candidate_test_trace.py",
+        "check_sample_integrity.py",
+        "codex_upgrade_evidence_manifest.py",
+        "codex_upgrade_receipt_finalizer.py",
+        "derive_official_observations.py",
+        "extract_capture_records.py",
+        "extract_compaction_reason.py",
+        "model_condition_receipts.py",
+        "pcap_clienthello.py",
+        "relay_extract.py",
+        "scenario_receipts.py",
+        "scrub_raw_bytes.py"
+      ]
+    },
+    "wire_producer": {
+      "prefixes": [
+        "addons/",
+        "capturelib/",
+        "codex_upgrade_scenarios_",
+        "drive_",
+        "fixtures/",
+        "hooks/",
+        "run_",
+        "runtime_image/",
+        "runtime_scripts/"
+      ],
+      "files": [
+        "build_compaction_model_catalog.py",
+        "build_fingerprint_proxy.sh",
+        "capture.py",
+        "h1_wire_probe.py",
+        "mitm_scenario_checkpoint.py",
+        "prewarm_codex_home.py",
+        "upstream_byte_relay.py"
+      ]
+    }
+  },
+  "orchestrator": {
+    "file": "codex_upgrade.py",
+    "wire_roots": [
+      "_load_plan_jobs",
+      "_job_context",
+      "_campaign_arguments",
+      "_run_job_impl",
+      "_run_job_with_retry",
+      "_scenario_source_spec_binding",
+      "_expand_roots",
+      "_safe_plan",
+      "_scenario_job_execution_contract",
+      "_scenario_non_execution_contract"
+    ],
+    "evidence_roots": [
+      "scan_evidence",
+      "_evidence_inventory",
+      "_finalize_scenario_receipt",
+      "_inventory_content_index",
+      "_inventory_contents_equal",
+      "_inventory_index",
+      "_finalize_attempt_restoration",
+      "_seal_capture_attempt"
+    ],
+    "dynamic_call_names": [
+      "eval",
+      "exec",
+      "__import__",
+      "globals",
+      "locals",
+      "vars"
+    ]
+  },
+  "default_layer": "wire_producer"
+}

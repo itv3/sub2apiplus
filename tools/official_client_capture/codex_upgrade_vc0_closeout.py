@@ -975,12 +975,49 @@ def _validate_p0_gate(
     )
 
 
+MANAGED_TOOL_DEPLOY_V2_FIELDS = frozenset(
+    {"policy_version", "policy_sha256", "wire_producer_sha256", "evidence_semantics_sha256", "control_sha256"}
+)
+
+
+def _deploy_receipt_identity_matches(
+    receipt: Mapping[str, Any],
+    current_identity: Mapping[str, Any],
+    manifest_identity: Mapping[str, Any],
+) -> bool:
+    """A2-2 三向比：收据、当前受管树、Campaign 冻结身份。
+
+    收据带 v2 字段时比当前有效 wire 身份与策略摘要（control／evidence 变化不阻断
+    VC-0 收口）；历史收据只有整树摘要时退回整树三向相等。
+    """
+
+    if MANAGED_TOOL_DEPLOY_V2_FIELDS & set(receipt):
+        for field in ("wire_producer_sha256", "policy_sha256"):
+            if not (
+                receipt.get(field)
+                == current_identity.get(field)
+                == manifest_identity.get(field)
+            ):
+                return False
+        return True
+    return (
+        receipt.get("tool_files_sha256") == current_identity.get("files_sha256")
+        and receipt.get("tool_files_sha256") == manifest_identity.get("files_sha256")
+    )
+
+
 def _validate_managed_tool_deploy(
     path: Path,
     manifest: Mapping[str, Any],
 ) -> ReceiptSource:
     receipt_path = _trusted_file(path, "受管工具部署收据")
     payload, raw = _load_json(receipt_path, "受管工具部署收据")
+    # A2-2：新部署收据带策略 v2 五摘要；历史收据没有，两种集合都接受。
+    v2_fields = (
+        MANAGED_TOOL_DEPLOY_V2_FIELDS
+        if isinstance(payload, Mapping) and MANAGED_TOOL_DEPLOY_V2_FIELDS & set(payload)
+        else frozenset()
+    )
     receipt = _expect(
         payload,
         {
@@ -992,6 +1029,7 @@ def _validate_managed_tool_deploy(
             "production_tool_root",
             "production_doc_root",
             "tool_files_sha256",
+            *v2_fields,
             "supervisor_sha256",
             "assertion_preparer_sha256",
             "rollback_backup",
@@ -1046,9 +1084,7 @@ def _validate_managed_tool_deploy(
         or receipt.get("architecture") != "aarch64"
         or platform.machine() != "aarch64"
         or production_root != current_root
-        or receipt.get("tool_files_sha256") != current_identity.get("files_sha256")
-        or receipt.get("tool_files_sha256")
-        != manifest_identity.get("files_sha256")
+        or not _deploy_receipt_identity_matches(receipt, current_identity, manifest_identity)
         or receipt.get("supervisor_sha256") != _sha256_file(supervisor_path)
         or not assertion_preparer.is_file()
         or assertion_preparer.is_symlink()

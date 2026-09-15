@@ -389,8 +389,16 @@ class UpgradeTimeReconciliationTests(unittest.TestCase):
             self.assertEqual([l["ledger_id"] for l in receipt["sources"]["ledgers"]], ["evidence/control/ledger-a", "control/c-formal-timing-ledger"])
             self.assertEqual(receipt["sources"]["ignored_ledgers"], [{"ledger_id": "control/repair-timing-ledger", "schema_version": "codex-repair-timing-ledger/v1"}])
             totals = _totals_minutes(receipt)
-            self.assertEqual(totals["vc0_execution"], 78.0)
-            self.assertEqual(totals["unclassified"], 90.0)
+            # 第二账本的 VC-0 阶段在末尾未关闭：不延续为执行，只登记为悬空阶段。
+            self.assertEqual(totals["vc0_execution"], 38.0)
+            # 账本 a 自 45 分钟起停线，第二账本创建是停线后的可信终点：110～200 记 stop_gap。
+            self.assertEqual(totals["stop_gap"], 90.0)
+            self.assertEqual(totals["unclassified"], 40.0)
+            # 账本 a 的 VC-1 在 stop_the_line 时已被截断挂起，不算悬空；只有第二账本悬空。
+            self.assertEqual(
+                receipt["sources"]["dangling_stages"],
+                [{"ledger_id": "control/c-formal-timing-ledger", "phase": "VC-0", "since_utc": _iso(_at(200)), "sequence": 1}],
+            )
 
 
 if __name__ == "__main__":

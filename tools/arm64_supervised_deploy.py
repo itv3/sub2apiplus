@@ -96,11 +96,10 @@ from typing import Any, Callable, Mapping
 # 显式切换到冻结的 gpt-6-astra Lite，并新增普通 v2 两阶段恢复交接门禁。
 # 2026-09-15（通用 v2 恢复与预派发停线修复）：失败的正式 sequence 1
 # 可由普通 v2 零请求恢复预览承接，非 no-op batch 可确定性补写停线收据。
-DEFAULT_TOOL_DIGEST = (
-    "f7668ed59a8dc4f101999c1f6d5f4c3151b236d001925391674c8c999f9318d2"
-)
+# A2-3：不再硬编码整树摘要。暂存树自算摘要即期望值，候选与生产三向互等；
+# 收据额外写策略 v2 的五个摘要，供 VC-0 收口与 seal 按 wire 身份比对。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "6dcfb9b5d9c73ddc66c71d306e933bd6acf77cd40e8986be8c6fea78494b4794"
+    "c17f208daf945774027d9ff4ffac19f1f83195124d42a6c0f057c1fcdac18b69"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "b9ca7b6f48b3c33a63a864a9ce7ebd617335378ea52fe9148ea161ab3b276ada"
@@ -195,6 +194,33 @@ def tool_entries(root: Path) -> list[dict[str, str]]:
 def tool_digest(root: Path) -> tuple[str, int]:
     entries = tool_entries(root)
     return sha256_bytes(canonical({"entries": entries})), len(entries)
+
+
+def staging_identity_v2(staging_tool: Path) -> dict[str, Any]:
+    """用暂存树自带的策略文件与策略模块计算五摘要中的四项（整树摘要另算）。"""
+
+    policy_module_path = staging_tool / "codex_upgrade_tool_identity_policy.py"
+    policy_path = staging_tool / "tool_identity_policy_v2.json"
+    for path in (policy_module_path, policy_path):
+        if path.is_symlink() or not path.is_file():
+            raise DeploymentError(f"暂存树缺少工具身份策略：{path.name}")
+    spec = importlib.util.spec_from_file_location("arm64_staging_tool_identity_policy", policy_module_path)
+    if spec is None or spec.loader is None:
+        raise DeploymentError("无法加载暂存工具身份策略模块。")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    try:
+        policy = module.load_policy(policy_path)
+        identity = module.compute_identity_v2(policy, staging_tool, tool_entries(staging_tool))
+    except Exception as error:  # noqa: BLE001 - 策略失败必须让部署失败关闭
+        raise DeploymentError(f"暂存工具身份策略计算失败：{error}") from error
+    return {
+        "policy_version": int(identity["policy_version"]),
+        "policy_sha256": str(identity["policy_sha256"]),
+        "wire_producer_sha256": str(identity["wire_producer_sha256"]),
+        "evidence_semantics_sha256": str(identity["evidence_semantics_sha256"]),
+        "control_sha256": str(identity["control_sha256"]),
+    }
 
 
 def reject_untrusted_tree(root: Path) -> int:
@@ -624,7 +650,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path("/root/docker/capture-cli/data/control"),
     )
-    parser.add_argument("--expected-tool-digest", default=DEFAULT_TOOL_DIGEST)
+    parser.add_argument("--expected-tool-digest", default=None, help="可选；给定时暂存树摘要必须等于它，省略时以暂存树自算摘要为准")
     parser.add_argument("--expected-supervisor-digest", default=DEFAULT_SUPERVISOR_DIGEST)
     parser.add_argument(
         "--expected-assertion-preparer-digest",
@@ -651,6 +677,13 @@ def main(argv: list[str] | None = None) -> int:
     if stat.S_IMODE(control_root.stat().st_mode) != 0o700 or control_root.stat().st_uid != 0:
         raise DeploymentError("控制目录必须是 root 拥有的 0700 目录。")
     staging_tool = staging_root / "tools" / "official_client_capture"
+    if not staging_tool.is_symlink() and staging_tool.is_dir():
+        staging_digest, _staging_count = tool_digest(staging_tool)
+        if arguments.expected_tool_digest is None:
+            arguments.expected_tool_digest = staging_digest
+        elif arguments.expected_tool_digest != staging_digest:
+            raise DeploymentError(f"暂存工具摘要与 --expected-tool-digest 不符：{staging_digest}")
+        arguments.identity_v2 = staging_identity_v2(staging_tool)
     if staging_tool.is_symlink() or not staging_tool.is_dir():
         raise DeploymentError("暂存工具树不存在或不可信。")
     if production_root.is_symlink() or not production_root.is_dir():
@@ -824,6 +857,11 @@ def main(argv: list[str] | None = None) -> int:
                 "production_tool_root": str(production_root),
                 "production_doc_root": str(production_doc_root),
                 "tool_files_sha256": arguments.expected_tool_digest,
+                "policy_version": arguments.identity_v2["policy_version"],
+                "policy_sha256": arguments.identity_v2["policy_sha256"],
+                "wire_producer_sha256": arguments.identity_v2["wire_producer_sha256"],
+                "evidence_semantics_sha256": arguments.identity_v2["evidence_semantics_sha256"],
+                "control_sha256": arguments.identity_v2["control_sha256"],
                 "supervisor_sha256": arguments.expected_supervisor_digest,
                 "assertion_preparer_sha256": (
                     arguments.expected_assertion_preparer_digest

@@ -1773,6 +1773,7 @@ class SupervisorTests(unittest.TestCase):
             "successor",
             "plan",
             "reuse-official-evidence",
+            "harden-evidence-permissions",
             "compile-vc-batch",
         ):
             with self.subTest(command=command), tempfile.TemporaryDirectory() as directory:

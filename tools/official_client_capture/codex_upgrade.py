@@ -91,6 +91,8 @@ from tools.official_client_capture import codex_upgrade_evidence_manifest
 from tools.official_client_capture import codex_upgrade_job_rehearsal_receipt
 from tools.official_client_capture import codex_upgrade_timing_ledger
 from tools.official_client_capture import codex_upgrade_project_ledger
+from tools.official_client_capture import codex_upgrade_tool_identity_policy
+from tools.official_client_capture import codex_upgrade_wire_transition
 from tools.official_client_capture import codex_upgrade_vc_artifacts
 from tools.official_client_capture import codex_upgrade_vc_receipt
 from tools.official_client_capture import codex_upgrade_supervisor
@@ -195,6 +197,24 @@ PREDECESSOR_RUNTIME_SCENARIO_IMPORT_SCHEMA = (
 )
 PREDECESSOR_CONTROL_REPLACEMENT_IMPORT_SCHEMA = (
     "codex-upgrade-predecessor-import/v10"
+)
+# A3a：前序官方阶段尚未封存时，从单一 awaiting_receipts official attempt 只读导入。
+PREDECESSOR_OFFICIAL_ATTEMPT_IMPORT_SCHEMA = (
+    "codex-upgrade-predecessor-import/v11"
+)
+OFFICIAL_ATTEMPT_IMPORT_MODE = "official_attempt_reuse"
+PRE_A3_PATH_CERTIFICATION_SCHEMA = "pre-a3-path-certification/v1"
+POLICY_ACTIVATION_CERTIFICATION_SCHEMA = "policy-activation-certification/v1"
+ARM64_SUPERVISED_DEPLOY_RECEIPT_SCHEMA = "codex-arm64-supervisor-enable/v1"
+OFFICIAL_ATTEMPT_IMPORT_ARGUMENT_NAMES = (
+    "predecessor_official_attempt_id",
+    "audit_receipt",
+    "identity_verdict",
+    "permission_receipt",
+    "path_certification",
+    "policy_activation",
+    "deployment_receipt",
+    "project_ledger",
 )
 PREDECESSOR_SEALED_STAGE_RECOVERY_IMPORT_SCHEMAS = frozenset(
     {
@@ -4615,9 +4635,16 @@ def _mutable_command_coordinates(
         "plan",
         "terminal-transition-preflight",
         "finalize-vc1-deadline-orphan",
+        # 只读裁定；两步式权限收口自持 Campaign 排他锁（.campaign.lock），
+        # 不能再建 CampaignLease，否则同一进程内会与自身的锁互相等待。
+        "verdict-official-attempt-identity",
+        "harden-evidence-permissions",
         "",
     }:
         return None
+    if command in {"wire-transition-intent", "wire-transition-final", "evaluation-epoch"}:
+        # A2 控制面写入：借 official 侧 CampaignLease 防止与其他 Campaign 写操作并发。
+        return command, "official", None, False
     if command in {"capture-official"}:
         return command, "official", None, False
     if command == "compile-and-run-vc-batch":
@@ -8184,8 +8211,10 @@ def _build_parser() -> argparse.ArgumentParser:
     reuse_official = subparsers.add_parser(
         "reuse-official-evidence",
         help=(
-            "把前序 Campaign 已封存的官方阶段只读导入一个新的正式 Campaign（§5.3.3），"
-            "不重发官方请求，不复制旧批准五件套；工具修复或账号变化后用它代替重新取证"
+            "把前序 Campaign 的官方证据只读导入一个新的正式 Campaign（§5.3.3），"
+            "不重发官方请求，不复制旧批准五件套；前序已封存时直接承接官方阶段，"
+            "前序停在 awaiting_receipts 时须带 A1a 审计、A1b 裁定、权限收口、路径认证、"
+            "策略激活、部署收据与项目总账八项绑定，导入单一 attempt 后由新 Campaign seal"
         ),
     )
     reuse_official.add_argument(
@@ -8219,6 +8248,46 @@ def _build_parser() -> argparse.ArgumentParser:
     reuse_official.add_argument("--predecessor-stop-ledger-dir", type=Path)
     reuse_official.add_argument("--predecessor-stop-receipt", type=Path)
     reuse_official.add_argument("--predecessor-recovery-transition", type=Path)
+    # A3a：前序官方阶段尚未封存时，从单一 awaiting_receipts attempt 只读导入的八项绑定。
+    reuse_official.add_argument(
+        "--predecessor-official-attempt-id",
+        help="前序 Campaign 中唯一被导入的 awaiting_receipts official attempt。",
+    )
+    reuse_official.add_argument(
+        "--audit-receipt",
+        type=Path,
+        help="A1a：该 attempt 的 official-attempt-audit/v1 只读审计收据（五段全部通过）。",
+    )
+    reuse_official.add_argument(
+        "--identity-verdict",
+        type=Path,
+        help="A1b：该 attempt 的 official-attempt-identity-verdict/v1 裁定收据（必须为相等）。",
+    )
+    reuse_official.add_argument(
+        "--permission-receipt",
+        type=Path,
+        help="A3b-1：harden-evidence-permissions apply 收据（前序 control/evidence-permissions 内最新一份）。",
+    )
+    reuse_official.add_argument(
+        "--path-certification",
+        type=Path,
+        help="A2.5：pre-a3-path-certification/v1 收据。",
+    )
+    reuse_official.add_argument(
+        "--policy-activation",
+        type=Path,
+        help="A2.6：policy-activation-certification/v1 收据。",
+    )
+    reuse_official.add_argument(
+        "--deployment-receipt",
+        type=Path,
+        help="当前 ARM64 部署收据；五摘要必须等于当前工具身份。",
+    )
+    reuse_official.add_argument(
+        "--project-ledger",
+        type=Path,
+        help="项目总账目录；必须是后继目录祖先处那份总账。",
+    )
     add_watchdog_options(reuse_official)
     # 复用 create_successor_campaign 的 official-only 导入分支；其余 successor
     # 专用参数固定为空，原因固定为 official_evidence_reuse。
@@ -8867,6 +8936,47 @@ def _build_parser() -> argparse.ArgumentParser:
     add_campaign_reference(status)
     status.add_argument("--candidate-id")
 
+    wire_intent = subparsers.add_parser(
+        "wire-transition-intent", help="签发两阶段 wire transition 的 intent（先预览再批准）"
+    )
+    add_campaign_reference(wire_intent)
+    wire_intent.add_argument("--approve-sha256")
+    wire_final = subparsers.add_parser(
+        "wire-transition-final", help="闭集内 Job 全部 complete 后签 wire transition 的 final"
+    )
+    add_campaign_reference(wire_final)
+    wire_final.add_argument("--attempt-id", required=True)
+    epoch = subparsers.add_parser(
+        "evaluation-epoch", help="evidence semantics 变化后为 attempt 追加 evaluation epoch"
+    )
+    add_campaign_reference(epoch)
+    epoch.add_argument("--attempt-id", required=True)
+    epoch.add_argument("--reason", required=True)
+    verdict = subparsers.add_parser(
+        "verdict-official-attempt-identity", help="裁定 attempt 执行时的 wire 身份是否等于当前"
+    )
+    add_campaign_reference(verdict)
+    verdict.add_argument("--attempt-id", required=True)
+    verdict.add_argument("--control-root", type=Path, required=True)
+    verdict.add_argument("--output", type=Path, required=True)
+    harden = subparsers.add_parser(
+        "harden-evidence-permissions",
+        help=(
+            "两步式证据权限收口（A3a）：preview 只读输出前后 mode 清单与内容摘要，"
+            "apply --approve-sha256 按批准摘要只改 mode 为 0700/0600，replay 只读复核"
+        ),
+    )
+    harden.add_argument(
+        "harden_action",
+        choices=("preview", "apply", "replay"),
+        help="preview：只读预览；apply：按批准摘要收口；replay：只读复核最新收据。",
+    )
+    add_campaign_reference(harden)
+    harden.add_argument("--attempt-id", required=True)
+    harden.add_argument(
+        "--approve-sha256",
+        help="apply 必需：preview 输出的 review_sha256。",
+    )
     resume = subparsers.add_parser("resume", help="按最近稳定状态续跑失败阶段")
     add_campaign_reference(resume)
     resume.add_argument("--candidate-id")
@@ -9593,6 +9703,13 @@ _CONTROL_PLANE_TOOL_FILES = frozenset(
         "codex_upgrade_project_ledger.py",
         # 零请求 smoke 只在 staging 夹具上跑新命令并写收据。
         "codex_upgrade_zero_request_smoke.py",
+        # 工具身份四层策略：策略文件与计算模块只改变身份判据，不改变证据字节。
+        "codex_upgrade_tool_identity_policy.py",
+        "tool_identity_policy_v2.json",
+        # 两阶段 wire transition、evaluation epoch 链与身份裁定只写控制收据。
+        "codex_upgrade_wire_transition.py",
+        # 两步式证据权限收口只改 mode，不改内容。
+        "codex_upgrade_harden_evidence_permissions.py",
         "codex_upgrade_campaign_run_rehearsal_receipt.py",
         "codex_upgrade_predispatch_stop.py",
         "codex_upgrade_campaign_lease.schema.json",
@@ -9649,6 +9766,13 @@ _CANONICAL_EVALUATION_ONLY_FILES = frozenset(
         "codex_upgrade_project_ledger.py",
         # 零请求 smoke 只在 staging 夹具上跑新命令并写收据。
         "codex_upgrade_zero_request_smoke.py",
+        # 工具身份四层策略：策略文件与计算模块只改变身份判据，不改变证据字节。
+        "codex_upgrade_tool_identity_policy.py",
+        "tool_identity_policy_v2.json",
+        # 两阶段 wire transition、evaluation epoch 链与身份裁定只写控制收据。
+        "codex_upgrade_wire_transition.py",
+        # 两步式证据权限收口只改 mode，不改内容。
+        "codex_upgrade_harden_evidence_permissions.py",
         "codex_upgrade_campaign_run_rehearsal_receipt.py",
         "codex_upgrade_predispatch_stop.py",
         "codex_upgrade_gate_receipt.py",
@@ -9774,6 +9898,13 @@ _EVALUATION_SIDE_FILES = frozenset(
         "codex_upgrade_project_ledger.py",
         # 零请求 smoke 只在 staging 夹具上跑新命令并写收据。
         "codex_upgrade_zero_request_smoke.py",
+        # 工具身份四层策略：策略文件与计算模块只改变身份判据，不改变证据字节。
+        "codex_upgrade_tool_identity_policy.py",
+        "tool_identity_policy_v2.json",
+        # 两阶段 wire transition、evaluation epoch 链与身份裁定只写控制收据。
+        "codex_upgrade_wire_transition.py",
+        # 两步式证据权限收口只改 mode，不改内容。
+        "codex_upgrade_harden_evidence_permissions.py",
         "codex_upgrade_campaign_run_rehearsal_receipt.py",
         "codex_upgrade_predispatch_stop.py",
         "codex_upgrade_legacy_boundary.py",
@@ -10092,9 +10223,22 @@ def _verify_execution_tree(capture_root: Path | None) -> None:
 
 
 def _tool_identity(*, include_git: bool = True) -> dict[str, Any]:
+    """受管工具身份：v1 整树／组件／两侧摘要，加 A2 策略 v2 的五个摘要。
+
+    v2 摘要由 ``tool_identity_policy_v2.json`` 决定：``wire_producer_sha256`` 是唯一的
+    重采判据，``evidence_semantics_sha256`` 变化追加 evaluation epoch，``control_sha256``
+    只重跑控制门禁，``policy_sha256`` 变化须经 A2.6 兼容收据。策略无法解析时 plan
+    直接失败。
+    """
+
     tool_root = Path(__file__).resolve().parent
     entries = _tool_tree_entries(tool_root)
     components = _tool_component_identities(entries)
+    try:
+        policy = codex_upgrade_tool_identity_policy.load_policy()
+        identity_v2 = codex_upgrade_tool_identity_policy.compute_identity_v2(policy, tool_root, entries)
+    except codex_upgrade_tool_identity_policy.ToolIdentityPolicyError as error:
+        raise ConfigurationError(f"工具身份策略 v2 无法计算：{error}") from error
     return {
         "git_commit": (
             _git_commit(Path(__file__).resolve().parents[2])
@@ -10107,7 +10251,24 @@ def _tool_identity(*, include_git: bool = True) -> dict[str, Any]:
         "components": components["components"],
         "component_identity_sha256": _fingerprint(components),
         **_tool_identity_sides(entries),
+        "policy_version": identity_v2["policy_version"],
+        "policy_sha256": identity_v2["policy_sha256"],
+        "wire_producer_sha256": identity_v2["wire_producer_sha256"],
+        "evidence_semantics_sha256": identity_v2["evidence_semantics_sha256"],
+        "control_sha256": identity_v2["control_sha256"],
+        "orchestrator_closures": identity_v2["orchestrator_closures"],
     }
+
+
+def _wire_closure_sha256(identity: Mapping[str, Any]) -> str | None:
+    """取工具身份里编排器 wire 闭包摘要；v1 身份没有该字段返回 None。"""
+
+    closures = identity.get("orchestrator_closures")
+    if not isinstance(closures, Mapping):
+        return None
+    wire = closures.get("wire_producer")
+    value = wire.get("closure_sha256") if isinstance(wire, Mapping) else None
+    return value if isinstance(value, str) else None
 
 
 def _tool_identity_drift(
@@ -10313,9 +10474,20 @@ def _exact_tool_path_impact(
 
     planned = list(jobs)
     drift = _tool_identity_drift(current_tool, expected_tool)
-    changed_paths = sorted(
-        set(drift.get("production", [])) - set(_PHASE_EVALUATION_HYBRID_FILES)
-    )
+    changed = set(drift.get("production", []))
+    hybrid = set(_PHASE_EVALUATION_HYBRID_FILES)
+    expected_closure = _wire_closure_sha256(expected_tool)
+    current_closure = _wire_closure_sha256(current_tool)
+    if expected_closure is not None and current_closure is not None:
+        # A2-8：v2 身份按编排器 wire 闭包判定混合文件。闭包未变，codex_upgrade.py 的
+        # 变化不算产出变化；闭包变了，它映射不到具体 Job，进入 unmapped 让调用方按
+        # 「映射不到则全部 Job 受影响」处理，不再静默豁免。
+        if expected_closure == current_closure:
+            changed -= hybrid
+    else:
+        # v1 身份没有闭包信息，保持历史豁免语义，历史 Campaign 重放不受影响。
+        changed -= hybrid
+    changed_paths = sorted(changed)
     impact_map = _tool_path_job_map(planned, expected_tool, current_tool)
     affected: set[str] = set()
     unmapped: list[str] = []
@@ -20288,6 +20460,8 @@ def _control_epoch_invariants(
         raise ConfigurationError("control epoch Campaign 配置非法。")
     return {
         "tool_files_sha256": str(current_tool.get("files_sha256", "")),
+        "wire_producer_sha256": current_tool.get("wire_producer_sha256"),
+        "policy_sha256": current_tool.get("policy_sha256"),
         "tool_production_sha256": _control_epoch_production_invariant_digest(
             expected_tool,
             current_tool,
@@ -21060,10 +21234,7 @@ def _load_control_epoch_runtime_repair(
         raise ConfigurationError(
             "control epoch 运行授权修复只能替换当前工具的 incremental-noop。"
         )
-    if (
-        payload.get("previous_tool_files_sha256")
-        == current_invariants.get("tool_files_sha256")
-    ):
+    if _control_epoch_identity_unchanged(manifest, base_epoch.get("invariants"), current_invariants):
         raise ConfigurationError("control epoch 运行授权修复没有工具身份变化。")
     _verify_control_receipts(
         campaign_dir,
@@ -21162,8 +21333,7 @@ def _create_control_epoch_runtime_repair(
     previous_invariants = base_epoch.get("invariants")
     if (
         not isinstance(previous_invariants, Mapping)
-        or previous_invariants.get("tool_files_sha256")
-        == invariants.get("tool_files_sha256")
+        or _control_epoch_identity_unchanged(manifest, previous_invariants, invariants)
     ):
         raise ConfigurationError("运行授权修复要求工具身份确实发生变化。")
     controls, successor_summary, _rehearsal = (
@@ -21345,8 +21515,7 @@ def create_control_epoch(arguments: argparse.Namespace) -> dict[str, Any]:
                 frozen_tool = manifest.get("tool_identity")
                 if (
                     not isinstance(frozen_tool, Mapping)
-                    or replacement_current_tool.get("files_sha256")
-                    == frozen_tool.get("files_sha256")
+                    or _tool_signature_matches(frozen_tool, replacement_current_tool)
                 ):
                     raise ConfigurationError(
                         "控制替代后继的 control epoch 要求编排工具身份确实变化。"
@@ -23059,6 +23228,776 @@ def _assert_sealed_stage_stopped_recovery(
         )
 
 
+OFFICIAL_ATTEMPT_IMPORT_IDENTITY_FIELDS = (
+    "policy_sha256",
+    "wire_producer_sha256",
+    "evidence_semantics_sha256",
+    "control_sha256",
+    "tool_files_sha256",
+)
+
+
+def _reused_result_ids(results: Any) -> list[str]:
+    """返回结果集中零请求复用的 Job；历史 ``reused`` 标记与 ``disposition`` 都算。"""
+
+    if not isinstance(results, list):
+        return []
+    return sorted(
+        {
+            str(item.get("id"))
+            for item in results
+            if isinstance(item, Mapping)
+            and isinstance(item.get("id"), str)
+            and (item.get("reused") is True or item.get("disposition") == "reused")
+        }
+    )
+
+
+def _is_official_evidence_reuse_metadata_only_attempt(
+    attempt: Mapping[str, Any],
+) -> bool:
+    """判断 official attempt 是否为 A3a 官方证据复用导入的零执行 metadata-only attempt。"""
+
+    return isinstance(attempt.get("official_evidence_reuse_transition"), Mapping)
+
+
+def _validate_official_attempt_import_arguments(
+    arguments: argparse.Namespace,
+    official_attempt_import: bool,
+) -> None:
+    """A2-9／A3a：前序官方阶段未封存时八项导入参数必须齐全，已封存时禁止出现。"""
+
+    provided = {
+        name: getattr(arguments, name, None)
+        for name in OFFICIAL_ATTEMPT_IMPORT_ARGUMENT_NAMES
+    }
+    if official_attempt_import:
+        missing = [name for name, value in provided.items() if value is None]
+        if missing:
+            raise ConfigurationError(
+                "前序官方阶段尚未封存；从 awaiting_receipts attempt 只读导入必须同时提供："
+                + "、".join("--" + name.replace("_", "-") for name in missing)
+            )
+        return
+    extra = [name for name, value in provided.items() if value is not None]
+    if extra:
+        raise ConfigurationError(
+            "官方 attempt 导入参数只允许在前序官方阶段尚未封存时使用："
+            + "、".join("--" + name.replace("_", "-") for name in extra)
+        )
+
+
+def _read_import_receipt_file(
+    value: Any,
+    label: str,
+) -> tuple[Path, dict[str, Any], str, int]:
+    """读取导入用的小型 JSON 收据，返回规范路径、载荷、sha256 与字节数。"""
+
+    if not isinstance(value, Path):
+        raise ConfigurationError(f"{label}必须是路径。")
+    if value.is_symlink() or not value.is_file():
+        raise ConfigurationError(f"{label}不存在或不可信：{value}")
+    resolved = value.resolve(strict=True)
+    payload = _read_json(resolved, label)
+    return resolved, payload, file_sha256(resolved), resolved.stat().st_size
+
+
+def _verify_certification_receipt(
+    payload: Mapping[str, Any],
+    *,
+    schema_version: str,
+    expected_status: str,
+    expected_identity: Mapping[str, str],
+    deployment_receipt_sha256: str,
+    label: str,
+) -> None:
+    """校验 A2.5／A2.6 认证收据：schema、状态、五摘要、部署收据绑定与自摘要。"""
+
+    unsigned = dict(payload)
+    digest = unsigned.pop("receipt_sha256", None)
+    identity = payload.get("identity")
+    deployment = payload.get("deployment_receipt")
+    if (
+        payload.get("schema_version") != schema_version
+        or payload.get("status") != expected_status
+        or not isinstance(identity, Mapping)
+        or {name: identity.get(name) for name in OFFICIAL_ATTEMPT_IMPORT_IDENTITY_FIELDS}
+        != dict(expected_identity)
+        or not isinstance(deployment, Mapping)
+        or deployment.get("sha256") != deployment_receipt_sha256
+        or not SHA256_RE.fullmatch(str(digest))
+        or _fingerprint(unsigned) != digest
+    ):
+        raise ConfigurationError(
+            f"{label}的 schema、状态、五摘要、部署收据绑定或自摘要不满足导入条件。"
+        )
+
+
+def _official_attempt_import_context(
+    arguments: argparse.Namespace,
+    predecessor_dir: Path,
+    predecessor_manifest: Mapping[str, Any],
+    *,
+    successor_dir: Path,
+) -> dict[str, Any]:
+    """校验从 awaiting_receipts 前序 official attempt 只读导入的全部前置绑定（A3a）。
+
+    只接受单一前序 attempt，不做逐 Job 合并；前序目录只读，不写任何文件。
+    七份外部收据（A1a 审计、A1b 身份裁定、A3b-1 权限收口、A2.5 路径认证、
+    A2.6 策略激活、ARM64 部署收据、项目总账）逐一绑定源 attempt 摘要与当前
+    工具五摘要，并现场重算证据内容摘要证明「A3b-1 前后内容逐字相等」。
+    """
+
+    from tools.official_client_capture import (
+        codex_upgrade_harden_evidence_permissions as harden,
+    )
+    from tools.official_client_capture import (
+        codex_upgrade_official_attempt_audit as attempt_audit,
+    )
+
+    attempt_id = str(arguments.predecessor_official_attempt_id)
+    if not SAFE_ID_RE.fullmatch(attempt_id):
+        raise ConfigurationError("--predecessor-official-attempt-id 格式非法。")
+    predecessor_dir = predecessor_dir.resolve(strict=True)
+    predecessor_campaign_id = str(predecessor_manifest["campaign_id"])
+    source_root, source_attempt = _load_capture_attempt(
+        predecessor_dir,
+        "official",
+        None,
+        attempt_id,
+        _historical_manifest_controls=True,
+    )
+    source_root = source_root.resolve(strict=True)
+    if source_attempt.get("status") != "awaiting_receipts":
+        raise ConfigurationError(
+            "官方证据复用只接受 awaiting_receipts 的前序 official attempt。"
+        )
+    failed_job_ids = _failed_job_ids(source_attempt.get("results"))
+    if failed_job_ids:
+        raise ConfigurationError(
+            "前序 official attempt 仍有失败 Job，禁止导入：" + "、".join(failed_job_ids)
+        )
+    if _is_official_evidence_reuse_metadata_only_attempt(
+        source_attempt
+    ) or _is_classification_candidate_metadata_only_attempt(source_attempt):
+        raise ConfigurationError(
+            "官方证据复用的来源必须是真实执行的 attempt，不接受 metadata-only attempt 逐层转发。"
+        )
+    identity = source_attempt.get("identity")
+    if not isinstance(identity, Mapping) or dict(identity) != dict(
+        predecessor_manifest.get("official_identity") or {}
+    ):
+        raise ConfigurationError("前序 official attempt 身份与前序 Campaign 官方身份不一致。")
+    binary_verification = source_attempt.get("binary_verification")
+    if (
+        not isinstance(binary_verification, Mapping)
+        or binary_verification.get("passed") is not True
+    ):
+        raise ConfigurationError("前序 official attempt 缺少通过的二进制身份验证。")
+    predecessor_jobs = _campaign_jobs(
+        predecessor_dir,
+        dict(predecessor_manifest),
+        "official",
+    )
+    _validate_capture_job_results(
+        predecessor_jobs,
+        source_attempt.get("results"),
+        phase="official",
+    )
+    source_attempt_path = source_root / "attempt.json"
+    source_sha256 = file_sha256(source_attempt_path)
+    current_tool = _tool_identity(include_git=False)
+    expected_identity = {
+        "policy_sha256": str(current_tool["policy_sha256"]),
+        "wire_producer_sha256": str(current_tool["wire_producer_sha256"]),
+        "evidence_semantics_sha256": str(current_tool["evidence_semantics_sha256"]),
+        "control_sha256": str(current_tool["control_sha256"]),
+        "tool_files_sha256": str(current_tool["files_sha256"]),
+    }
+
+    # A1a：只读审计收据必须绑定同一份 attempt.json，五段全部通过。
+    audit_path, audit, audit_sha256, _ = _read_import_receipt_file(
+        arguments.audit_receipt, "A1a 官方 attempt 审计收据"
+    )
+    integrity = audit.get("integrity")
+    if (
+        audit.get("schema_version") != attempt_audit.SCHEMA_VERSION
+        or audit.get("campaign_id") != predecessor_campaign_id
+        or audit.get("attempt_id") != attempt_id
+        or audit.get("attempt_sha256") != source_sha256
+        or audit.get("status") != "passed"
+        or audit.get("failed_sections") != []
+        or not isinstance(integrity, Mapping)
+        or integrity.get("passed") is not True
+        or not isinstance(integrity.get("inventory"), list)
+        or not integrity["inventory"]
+    ):
+        raise ConfigurationError(
+            "A1a 审计收据未通过、未绑定该 attempt 或缺少 inventory，拒绝导入。"
+        )
+    audit_inventory: set[tuple[str, int, str]] = set()
+    for item in integrity["inventory"]:
+        if (
+            not isinstance(item, Mapping)
+            or not isinstance(item.get("path"), str)
+            or isinstance(item.get("bytes"), bool)
+            or not isinstance(item.get("bytes"), int)
+            or not SHA256_RE.fullmatch(str(item.get("sha256", "")))
+        ):
+            raise ConfigurationError("A1a 审计 inventory 条目非法。")
+        audit_inventory.add((str(item["path"]), int(item["bytes"]), str(item["sha256"])))
+    if len(audit_inventory) != len(integrity["inventory"]):
+        raise ConfigurationError("A1a 审计 inventory 含重复条目。")
+
+    # A1b：身份裁定必须为「相等」，且裁定时的当前工具就是现在的工具。
+    verdict_path, verdict, verdict_sha256, _ = _read_import_receipt_file(
+        arguments.identity_verdict, "A1b 官方 attempt 身份裁定"
+    )
+    if (
+        verdict.get("schema_version") != codex_upgrade_wire_transition.VERDICT_SCHEMA
+        or verdict.get("campaign_id") != predecessor_campaign_id
+        or verdict.get("attempt_id") != attempt_id
+        or verdict.get("verdict") != "equal"
+        or verdict.get("problems") != []
+        or verdict.get("policy_sha256") != expected_identity["policy_sha256"]
+        or verdict.get("current_wire_producer_sha256")
+        != expected_identity["wire_producer_sha256"]
+    ):
+        raise ConfigurationError(
+            "A1b 身份裁定不是「相等」、未绑定该 attempt，或裁定时的工具身份已不是当前工具。"
+        )
+
+    # A3b-1：两步式权限收口收据必须位于前序 Campaign 的收据目录，且是最新一份。
+    permission_path, permission, permission_sha256, _ = _read_import_receipt_file(
+        arguments.permission_receipt, "证据权限收口收据"
+    )
+    receipt_dir = predecessor_dir / "control" / "evidence-permissions" / attempt_id
+    if (
+        not receipt_dir.is_dir()
+        or receipt_dir.is_symlink()
+        or permission_path.parent != receipt_dir.resolve(strict=True)
+        or not harden.APPLY_RE.fullmatch(permission_path.name)
+    ):
+        raise ConfigurationError(
+            "权限收口收据必须是前序 Campaign control/evidence-permissions/<attempt_id>/apply-NN.json。"
+        )
+    _latest_index, latest_apply = harden._latest(receipt_dir, harden.APPLY_RE)
+    if latest_apply is None or latest_apply.resolve(strict=True) != permission_path:
+        raise ConfigurationError("权限收口收据必须是该 attempt 最新一份 apply 收据。")
+    permission_unsigned = {
+        key: value
+        for key, value in permission.items()
+        if key not in {"applied_at_utc", "receipt_sha256"}
+    }
+    if (
+        permission.get("schema_version") != harden.APPLY_SCHEMA
+        or permission.get("campaign_id") != predecessor_campaign_id
+        or permission.get("attempt_id") != attempt_id
+        or permission.get("attempt_sha256") != source_sha256
+        or permission.get("status") != "applied"
+        or permission.get("content_unchanged") is not True
+        or permission.get("network_access") != "none"
+        or permission.get("content_sha256_before") != permission.get("content_sha256_after")
+        or not SHA256_RE.fullmatch(str(permission.get("receipt_sha256", "")))
+        or _fingerprint(permission_unsigned) != permission.get("receipt_sha256")
+    ):
+        raise ConfigurationError("权限收口收据未绑定该 attempt、内容不变证明缺失或自摘要不一致。")
+    preview_index = permission.get("preview_index")
+    if isinstance(preview_index, bool) or not isinstance(preview_index, int) or preview_index <= 0:
+        raise ConfigurationError("权限收口收据的预览编号非法。")
+    preview_path = receipt_dir / f"preview-{preview_index:02d}.json"
+    if (
+        preview_path.is_symlink()
+        or not preview_path.is_file()
+        or file_sha256(preview_path) != permission.get("preview_sha256")
+    ):
+        raise ConfigurationError("权限收口收据绑定的预览缺失或摘要漂移。")
+    preview = _read_json(preview_path, "证据权限收口预览")
+    if (
+        preview.get("schema_version") != harden.PREVIEW_SCHEMA
+        or preview.get("attempt_sha256") != source_sha256
+        or preview.get("content_sha256") != permission.get("content_sha256_after")
+        or preview.get("before_mode_sha256") != permission.get("before_mode_sha256")
+    ):
+        raise ConfigurationError("权限收口预览与 apply 收据的前后 mode 清单或内容摘要不一致。")
+
+    # 现场内容不变证明：当前逐文件内容摘要 == 收口后摘要 == A1a inventory；全部条目达标。
+    _mapped_root, mapped_roots, _mapped_attempt = harden._evidence_roots(
+        predecessor_dir, attempt_id
+    )
+    entries = harden._snapshot(mapped_roots, with_content=True)
+    content_sha256 = harden._content_digest(entries)
+    if content_sha256 != permission.get("content_sha256_after"):
+        raise ConfigurationError("前序证据内容在权限收口后发生变化，拒绝导入。")
+    nonconforming = [entry["path"] for entry in entries if entry["mode"] != entry["target_mode"]]
+    if nonconforming:
+        raise ConfigurationError(
+            f"前序证据仍有 {len(nonconforming)} 个条目未达到 0700/0600，先重新执行权限收口。"
+        )
+    mode_sha256 = harden._mode_digest(entries)
+    if mode_sha256 != permission.get("after_mode_sha256"):
+        raise ConfigurationError("前序证据当前 mode 清单与权限收口后清单不一致。")
+    current_inventory = {
+        (str(Path(entry["path"]).resolve()), int(entry["bytes"]), str(entry["sha256"]))
+        for entry in entries
+        if entry["kind"] == "file"
+    }
+    if current_inventory != audit_inventory:
+        raise ConfigurationError("前序证据当前 inventory 与 A1a 审计 inventory 不一致，拒绝导入。")
+
+    # ARM64 部署收据：五摘要必须就是当前工具身份。
+    deploy_path, deploy, deploy_sha256, _ = _read_import_receipt_file(
+        arguments.deployment_receipt, "ARM64 部署收据"
+    )
+    deploy_identity = {
+        name: deploy.get(name) for name in OFFICIAL_ATTEMPT_IMPORT_IDENTITY_FIELDS
+    }
+    if (
+        deploy.get("schema_version") != ARM64_SUPERVISED_DEPLOY_RECEIPT_SCHEMA
+        or deploy.get("status") != "passed"
+        or deploy_identity != expected_identity
+        or deploy.get("policy_version") != current_tool["policy_version"]
+    ):
+        raise ConfigurationError("ARM64 部署收据未通过或五摘要与当前工具身份不一致。")
+
+    # A2.5 路径认证与 A2.6 策略激活认证：绑定同一份部署收据与五摘要。
+    certification_path, certification, certification_sha256, _ = (
+        _read_import_receipt_file(arguments.path_certification, "pre-A3 路径认证收据")
+    )
+    _verify_certification_receipt(
+        certification,
+        schema_version=PRE_A3_PATH_CERTIFICATION_SCHEMA,
+        expected_status="passed",
+        expected_identity=expected_identity,
+        deployment_receipt_sha256=deploy_sha256,
+        label="pre-A3 路径认证收据",
+    )
+    activation_path, activation, activation_sha256, _ = _read_import_receipt_file(
+        arguments.policy_activation, "策略激活认证收据"
+    )
+    _verify_certification_receipt(
+        activation,
+        schema_version=POLICY_ACTIVATION_CERTIFICATION_SCHEMA,
+        expected_status="active",
+        expected_identity=expected_identity,
+        deployment_receipt_sha256=deploy_sha256,
+        label="策略激活认证收据",
+    )
+    if (
+        activation.get("policy_version") != current_tool["policy_version"]
+        or activation.get("policy_sha256") != expected_identity["policy_sha256"]
+        or activation.get("superseded_by") is not None
+    ):
+        raise ConfigurationError("策略激活认证不是当前策略，或已被后续认证替换。")
+
+    # 项目总账：必须就是后继目录祖先处的总账，且当前未 blocked。
+    ledger_path = getattr(arguments, "project_ledger", None)
+    if not isinstance(ledger_path, Path) or ledger_path.is_symlink() or not ledger_path.is_dir():
+        raise ConfigurationError("--project-ledger 必须是项目总账目录。")
+    ledger_path = ledger_path.resolve(strict=True)
+    expected_ledger = codex_upgrade_project_ledger.find_project_ledger(successor_dir.parent)
+    if expected_ledger is None or expected_ledger.resolve(strict=True) != ledger_path:
+        raise ConfigurationError("--project-ledger 与后继目录祖先处的项目总账不一致。")
+    try:
+        head = codex_upgrade_project_ledger.replay_head(ledger_path)
+    except codex_upgrade_project_ledger.ProjectLedgerError as error:
+        raise ConfigurationError(f"项目总账重放失败：{error}") from error
+    if head.get("blocked"):
+        raise ConfigurationError("项目总账处于 blocked，拒绝官方证据复用导入。")
+    ledger_plan_path = ledger_path / "plan.json"
+
+    receipt = {
+        "source_attempt": {
+            "campaign_id": predecessor_campaign_id,
+            "attempt_id": attempt_id,
+            "path": source_attempt_path.relative_to(predecessor_dir).as_posix(),
+            "sha256": source_sha256,
+            "bytes": source_attempt_path.stat().st_size,
+            "attempt_digest": source_attempt["attempt_digest"],
+            "identity_sha256": _fingerprint(dict(identity)),
+            "schema_version": source_attempt.get("schema_version"),
+            "status": source_attempt["status"],
+            "result_count": len(source_attempt.get("results", [])),
+            "job_ids": sorted(
+                str(item.get("id"))
+                for item in source_attempt.get("results", [])
+                if isinstance(item, Mapping)
+            ),
+        },
+        "audit_receipt": {
+            "path": str(audit_path),
+            "sha256": audit_sha256,
+            "schema_version": audit.get("schema_version"),
+            "status": audit.get("status"),
+            "inventory_sha256": integrity.get("inventory_sha256"),
+            "inventory_file_count": integrity.get("inventory_file_count"),
+            "inventory_bytes": integrity.get("inventory_bytes"),
+        },
+        "identity_verdict": {
+            "path": str(verdict_path),
+            "sha256": verdict_sha256,
+            "schema_version": verdict.get("schema_version"),
+            "verdict": verdict.get("verdict"),
+            "basis": verdict.get("basis"),
+            "policy_sha256": verdict.get("policy_sha256"),
+            "current_wire_producer_sha256": verdict.get("current_wire_producer_sha256"),
+        },
+        "permission_receipt": {
+            "path": str(permission_path),
+            "sha256": permission_sha256,
+            "schema_version": permission.get("schema_version"),
+            "preview_index": preview_index,
+            "preview_sha256": permission.get("preview_sha256"),
+            "before_mode_sha256": permission.get("before_mode_sha256"),
+            "after_mode_sha256": permission.get("after_mode_sha256"),
+            "content_sha256_before": permission.get("content_sha256_before"),
+            "content_sha256_after": permission.get("content_sha256_after"),
+            "changed_count": permission.get("changed_count"),
+        },
+        "content_proof": {
+            "entry_count": len(entries),
+            "file_count": len(current_inventory),
+            "content_sha256": content_sha256,
+            "mode_sha256": mode_sha256,
+            "matches_audit_inventory": True,
+            "matches_permission_receipt": True,
+            "verified_at_utc": _utc_now(),
+        },
+        "path_certification": {
+            "path": str(certification_path),
+            "sha256": certification_sha256,
+            "schema_version": certification.get("schema_version"),
+            "status": certification.get("status"),
+        },
+        "policy_activation": {
+            "path": str(activation_path),
+            "sha256": activation_sha256,
+            "schema_version": activation.get("schema_version"),
+            "status": activation.get("status"),
+            "policy_version": activation.get("policy_version"),
+            "policy_sha256": activation.get("policy_sha256"),
+        },
+        "deployment_receipt": {
+            "path": str(deploy_path),
+            "sha256": deploy_sha256,
+            "schema_version": deploy.get("schema_version"),
+            "status": deploy.get("status"),
+            "created_at_utc": deploy.get("created_at_utc"),
+            "policy_version": deploy.get("policy_version"),
+            **deploy_identity,
+        },
+        "project_ledger": {
+            "path": str(ledger_path),
+            "plan_sha256": file_sha256(ledger_plan_path),
+            "head_sequence": head.get("sequence"),
+            "head_sha256": head.get("head_sha256"),
+            "remaining_live_requests": head.get("remaining_live_requests"),
+        },
+        "tool_identity": {
+            "policy_version": current_tool["policy_version"],
+            **expected_identity,
+        },
+    }
+    return {
+        "receipt": receipt,
+        "source_root": source_root,
+        "source_attempt": source_attempt,
+        "source_attempt_sha256": source_sha256,
+        "predecessor_dir": predecessor_dir,
+        "current_tool": current_tool,
+    }
+
+
+def _official_reuse_results(
+    jobs: list[Job],
+    source_attempt: Mapping[str, Any],
+    *,
+    frozen_manifest: Mapping[str, Any],
+    current_campaign_id: str,
+    identity: Mapping[str, Any],
+    current_tool: Mapping[str, Any],
+    source_receipt_binding: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """把前序 official attempt 的结果零执行投影到当前 Campaign 的 Job 定义。
+
+    只允许 Campaign 坐标（campaign_id）迁移；脚本、参数、环境或证据根的任何
+    其他差异都拒绝。工具身份等价已由 A1b 裁定收据证明，这里只重绑当前
+    execution／component／result key，历史收据本身保持只读。
+    """
+
+    source_results: dict[str, Mapping[str, Any]] = {}
+    for item in source_attempt.get("results", []):
+        if not isinstance(item, Mapping) or not isinstance(item.get("id"), str):
+            raise ConfigurationError("前序 official attempt 的结果条目非法。")
+        if item["id"] in source_results:
+            raise ConfigurationError("前序 official attempt 含重复 Job 结果。")
+        source_results[item["id"]] = item
+    expected_ids = {job.job_id for job in jobs}
+    extra = sorted(set(source_results) - expected_ids)
+    if extra:
+        raise ConfigurationError(
+            "前序 attempt 含当前 Campaign 计划之外的 Job 结果：" + "、".join(extra)
+        )
+    predecessor_campaign_id = str(frozen_manifest["campaign_id"])
+    source_attempt_id = str(source_attempt.get("attempt_id", ""))
+    reused: list[dict[str, Any]] = []
+    for job in jobs:
+        item = source_results.get(job.job_id)
+        if item is None:
+            if job.required:
+                raise ConfigurationError(
+                    f"前序 attempt 缺少 official Job {job.job_id} 的结果，拒绝导入。"
+                )
+            continue
+        if item.get("status") != "complete" or item.get("phase") != "official":
+            raise ConfigurationError(f"前序 official Job {job.job_id} 未完成。")
+        recorded = item.get("execution_sha256")
+        if recorded != _job_execution_sha256(job):
+            frozen_job = _frozen_job_definition(frozen_manifest, job.job_id)
+            if not _successor_job_execution_matches(
+                job,
+                recorded,
+                frozen_job,
+                current_campaign_id=current_campaign_id,
+                predecessor_campaign_id=predecessor_campaign_id,
+                current_candidate_id=None,
+                predecessor_candidate_id=None,
+            ):
+                raise ConfigurationError(
+                    f"前序 official Job {job.job_id} 的执行定义与当前 Campaign 不一致"
+                    "（不只是 Campaign 坐标迁移），拒绝导入。"
+                )
+        rebased = _rebase_reused_result(
+            item,
+            job,
+            identity=identity,
+            tool_identity=current_tool,
+        )
+        rebased["carried_from_attempt"] = source_attempt_id
+        rebased["disposition"] = "reused"
+        rebased["source_receipt"] = dict(source_receipt_binding)
+        reused.append(rebased)
+    return reused
+
+
+def _close_official_reuse_evidence_permissions(
+    attempt_root: Path,
+    evidence_roots: Sequence[Path],
+) -> dict[str, Any]:
+    """为导入 attempt 写权限收口收据；前序证据必须已经达标，导入不改任何元数据。"""
+
+    boundary = codex_upgrade_evidence_permissions.inspect_evidence_boundary(
+        attempt_root.resolve(strict=True),
+        list(evidence_roots),
+    )
+    if boundary.changed_entry_count:
+        raise ConfigurationError(
+            f"前序证据仍有 {boundary.changed_entry_count} 个条目未达到 0700/0600；"
+            "先执行 harden-evidence-permissions preview／apply，导入不改前序任何元数据。"
+        )
+    return _close_attempt_evidence_permissions(attempt_root, list(evidence_roots))
+
+
+def _materialize_official_attempt_import(
+    successor_dir: Path,
+    predecessor_dir: Path,
+    predecessor_manifest: Mapping[str, Any],
+    context: Mapping[str, Any],
+    import_binding: Mapping[str, str],
+) -> dict[str, Any]:
+    """在已发布的后继 Campaign 内合成零执行的 official metadata-only attempt。
+
+    reservation 与 attempt.json 都按正式 run 的原子发布流程写入；results 是前序
+    结果的坐标迁移投影，证据根引用前序宿主路径，环境探针与恢复收据来自前序
+    attempt（seal 时按 metadata-only 规则重放来源）。
+    """
+
+    manifest = _require_formal_campaign(successor_dir)
+    identity = dict(manifest["official_identity"])
+    source_attempt = dict(context["source_attempt"])
+    if dict(source_attempt.get("identity") or {}) != identity:
+        raise ConfigurationError("后继 Campaign 官方身份与前序 attempt 身份不一致。")
+    current_tool = context["current_tool"]
+    jobs = _campaign_jobs(successor_dir, manifest, "official")
+    import_path = _campaign_file(successor_dir, "predecessor-import.json")
+    if (
+        import_path.is_symlink()
+        or not import_path.is_file()
+        or file_sha256(import_path) != import_binding["sha256"]
+    ):
+        raise ConfigurationError("后继导入收据缺失或摘要漂移。")
+    source_receipt_binding = {
+        "path": "predecessor-import.json",
+        "sha256": file_sha256(import_path),
+        "bytes": import_path.stat().st_size,
+    }
+    results = _official_reuse_results(
+        jobs,
+        source_attempt,
+        frozen_manifest=predecessor_manifest,
+        current_campaign_id=str(manifest["campaign_id"]),
+        identity=identity,
+        current_tool=current_tool,
+        source_receipt_binding=source_receipt_binding,
+    )
+    _validate_capture_job_results(jobs, results, phase="official")
+    evidence_roots: list[str] = []
+    for value in source_attempt.get("evidence_roots", []):
+        path = Path(str(value))
+        if not path.is_absolute() or path.is_symlink() or not path.is_dir():
+            raise ConfigurationError(f"前序证据根不存在或不可信：{value}")
+        if str(path) not in evidence_roots:
+            evidence_roots.append(str(path))
+    if not evidence_roots:
+        raise ConfigurationError("前序 official attempt 没有证据根。")
+    source_environment = source_attempt.get("environment")
+    if not isinstance(source_environment, Mapping):
+        raise ConfigurationError("前序 official attempt 缺少环境绑定。")
+    evidence_root = Path(str(source_environment.get("evidence_root", "")))
+    if (
+        not evidence_root.is_absolute()
+        or evidence_root.is_symlink()
+        or not evidence_root.is_dir()
+        or str(evidence_root) not in evidence_roots
+    ):
+        raise ConfigurationError("前序 official attempt 的环境证据根不在其证据边界内。")
+    attempt_root, _reservation = _reserve_capture_attempt(
+        successor_dir,
+        phase="official",
+        candidate_id=None,
+        identity=identity,
+        jobs=jobs,
+    )
+    permission_closeout = _close_official_reuse_evidence_permissions(
+        attempt_root,
+        [Path(value) for value in evidence_roots],
+    )
+    planned_ids = sorted(job.job_id for job in jobs)
+    plan_core = {
+        "schema_version": incremental_recovery.SCHEMA_VERSION,
+        "planned_job_ids": planned_ids,
+        "changed_components": [],
+        "affected_job_ids": [],
+        "reused_job_ids": sorted(str(item["id"]) for item in results),
+        "executed_job_ids": [],
+        "failed_job_ids": [],
+        "pending_job_ids": [],
+    }
+    return _write_capture_attempt(
+        successor_dir,
+        attempt_root,
+        {
+            "campaign_id": manifest["campaign_id"],
+            "phase": "official",
+            "candidate_id": None,
+            "status": "awaiting_receipts",
+            "tool_components": (
+                current_tool.get("components")
+                if isinstance(current_tool, Mapping)
+                else None
+            ),
+            "official_evidence_reuse_transition": dict(import_binding),
+            "incremental_plan": {
+                **plan_core,
+                "plan_sha256": incremental_recovery.digest(plan_core),
+            },
+            "identity": identity,
+            "results": results,
+            "evidence_roots": evidence_roots,
+            "evidence_permission_closeout": permission_closeout,
+            "evidence_permission_error": None,
+            "environment": {
+                "evidence_root": str(evidence_root),
+                "before_probe": None,
+                "after_probe": None,
+                "restoration_report": None,
+                "arm64_before_receipt": None,
+                "arm64_after_receipt": None,
+            },
+            "binary_verification": source_attempt.get("binary_verification"),
+            "execution_error": None,
+            "restoration_error": None,
+            "next_gate": (
+                "零请求：执行 capture-official seal 生成预览，"
+                "再以 --approve-seal-sha256 批准封存。"
+            ),
+        },
+        _verified_campaign_manifest=manifest,
+    )
+
+
+def _official_evidence_reuse_attempt_source(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    attempt: Mapping[str, Any],
+) -> tuple[Path, Path, dict[str, Any], dict[str, Any]]:
+    """重放官方证据复用 metadata-only attempt 的导入收据与前序 official attempt。"""
+
+    binding = attempt.get("official_evidence_reuse_transition")
+    _require_file_binding(binding, "官方证据复用导入收据")
+    assert isinstance(binding, Mapping)
+    if binding.get("path") != "predecessor-import.json":
+        raise ConfigurationError("官方证据复用导入收据路径非法。")
+    import_path = _campaign_file(campaign_dir, "predecessor-import.json")
+    if (
+        import_path.is_symlink()
+        or not import_path.is_file()
+        or file_sha256(import_path) != binding.get("sha256")
+    ):
+        raise ConfigurationError("官方证据复用导入收据缺失或摘要漂移。")
+    receipt = _read_json(import_path, "官方证据复用导入收据")
+    unsigned = dict(receipt)
+    digest = unsigned.pop("receipt_digest", None)
+    imported = receipt.get("official_attempt_import")
+    predecessor = receipt.get("predecessor_campaign")
+    manifest_predecessor = manifest.get("predecessor")
+    if (
+        receipt.get("schema_version") != PREDECESSOR_OFFICIAL_ATTEMPT_IMPORT_SCHEMA
+        or receipt.get("reason") != OFFICIAL_EVIDENCE_REUSE_REASON
+        or receipt.get("import_mode") != OFFICIAL_ATTEMPT_IMPORT_MODE
+        or receipt.get("successor_campaign_id") != manifest.get("campaign_id")
+        or not SHA256_RE.fullmatch(str(digest))
+        or _fingerprint(unsigned) != digest
+        or not isinstance(imported, Mapping)
+        or not isinstance(predecessor, Mapping)
+        or not isinstance(manifest_predecessor, Mapping)
+        or dict(manifest_predecessor) != {**predecessor, "reason": receipt.get("reason")}
+    ):
+        raise ConfigurationError("官方证据复用导入收据身份、模式或摘要非法。")
+    source = imported.get("source_attempt")
+    if not isinstance(source, Mapping):
+        raise ConfigurationError("官方证据复用导入收据缺少来源 attempt 绑定。")
+    source_dir = Path(str(predecessor.get("campaign_dir", "")))
+    if (
+        not source_dir.is_absolute()
+        or source_dir.is_symlink()
+        or not source_dir.is_dir()
+        or source_dir.resolve() == campaign_dir.resolve()
+        or file_sha256(source_dir / "campaign.json")
+        != predecessor.get("campaign_manifest_sha256")
+    ):
+        raise ConfigurationError("官方证据复用的前序 Campaign 路径或清单摘要不可信。")
+    source_attempt_id = str(source.get("attempt_id", ""))
+    if not SAFE_ID_RE.fullmatch(source_attempt_id):
+        raise ConfigurationError("官方证据复用的来源 attempt 身份非法。")
+    source_root, source_attempt = _load_capture_attempt(
+        source_dir,
+        "official",
+        None,
+        source_attempt_id,
+        _historical_manifest_controls=True,
+    )
+    source_root = source_root.resolve(strict=True)
+    if (
+        source_attempt.get("attempt_digest") != source.get("attempt_digest")
+        or file_sha256(source_root / "attempt.json") != source.get("sha256")
+        or source_attempt.get("status") != "awaiting_receipts"
+        or dict(source_attempt.get("identity") or {}) != dict(attempt.get("identity") or {})
+    ):
+        raise ConfigurationError("官方证据复用的来源 attempt 已漂移、已不是 awaiting_receipts 或身份不一致。")
+    return source_dir.resolve(strict=True), source_root, source_attempt, receipt
+
+
 def create_successor_campaign(arguments: argparse.Namespace) -> dict[str, Any]:
     """在项目总账 admission 作用域内创建后继 Campaign 并注册（A0a-11／A0a-12）。"""
 
@@ -23240,14 +24179,34 @@ def _create_successor_campaign_unadmitted(arguments: argparse.Namespace) -> dict
     # 历史机器收据绑定的是当时 finalizer 的绝对路径和摘要；用当前 finalizer
     # 强行重放会把合法的只读历史路径迁移误判为篡改。当前后继不会借用这些
     # 收据生成新事实，因此保留阶段级逐字节校验，但不重新绑定历史 finalizer。
-    official = _load_stage_result(
-        predecessor_dir,
-        "capture-official",
-        _replay_machine_receipts=False,
-        _historical_manifest_controls=control_replacement_successor,
+    predecessor_official_path = _stage_path(predecessor_dir, "capture-official")[1]
+    official_attempt_import = (
+        arguments.reason == OFFICIAL_EVIDENCE_REUSE_REASON
+        and not predecessor_official_path.exists()
+        and not predecessor_official_path.is_symlink()
     )
-    if official.get("status") != "complete":
-        raise ConfigurationError("前序 Campaign 官方阶段尚未完整封存。")
+    _validate_official_attempt_import_arguments(arguments, official_attempt_import)
+    official_attempt_import_context: dict[str, Any] | None = None
+    official: dict[str, Any] | None
+    if official_attempt_import:
+        # A2-9／A3a：前序停在 awaiting_receipts，官方证据经七份收据绑定后零执行导入，
+        # 由新 Campaign 自己的 capture-official seal 完成封存。
+        official = None
+        official_attempt_import_context = _official_attempt_import_context(
+            arguments,
+            predecessor_dir,
+            predecessor_manifest,
+            successor_dir=successor_dir,
+        )
+    else:
+        official = _load_stage_result(
+            predecessor_dir,
+            "capture-official",
+            _replay_machine_receipts=False,
+            _historical_manifest_controls=control_replacement_successor,
+        )
+        if official.get("status") != "complete":
+            raise ConfigurationError("前序 Campaign 官方阶段尚未完整封存。")
     classification: dict[str, Any] | None = None
     sealed_stage_context: dict[str, Any] | None = None
     if sealed_stage_recovery_successor:
@@ -23365,13 +24324,17 @@ def _create_successor_campaign_unadmitted(arguments: argparse.Namespace) -> dict
                     kind="approved_classification",
                     copied_files=copied_files,
                 )
-        surface_binding = _copy_successor_binding(
-            predecessor_dir,
-            staging_dir,
-            official.get("surface"),
-            kind="official_surface",
-            copied_files=copied_files,
-            target_relative=_SUCCESSOR_OFFICIAL_SURFACE_PATH,
+        surface_binding = (
+            None
+            if official is None
+            else _copy_successor_binding(
+                predecessor_dir,
+                staging_dir,
+                official.get("surface"),
+                kind="official_surface",
+                copied_files=copied_files,
+                target_relative=_SUCCESSOR_OFFICIAL_SURFACE_PATH,
+            )
         )
 
         predecessor_manifest_sha256 = file_sha256(
@@ -23587,7 +24550,9 @@ def _create_successor_campaign_unadmitted(arguments: argparse.Namespace) -> dict
         )
         import_receipt: dict[str, Any] = {
             "schema_version": (
-                PREDECESSOR_CONTROL_REPLACEMENT_IMPORT_SCHEMA
+                PREDECESSOR_OFFICIAL_ATTEMPT_IMPORT_SCHEMA
+                if official_attempt_import
+                else PREDECESSOR_CONTROL_REPLACEMENT_IMPORT_SCHEMA
                 if control_replacement_successor
                 else (
                     PREDECESSOR_RUNTIME_SCENARIO_IMPORT_SCHEMA
@@ -23624,17 +24589,21 @@ def _create_successor_campaign_unadmitted(arguments: argparse.Namespace) -> dict
                 "campaign_id": predecessor_manifest["campaign_id"],
                 "campaign_manifest_sha256": predecessor_manifest_sha256,
             },
-            "stages": {
-                "capture-official": {
-                    "path": official_path.relative_to(predecessor_dir).as_posix(),
-                    "sha256": file_sha256(official_path),
-                    "package_digest": official["package_digest"],
-                    "evidence_inventory_digest": official[
-                        "evidence_inventory"
-                    ]["digest"],
-                    "security_sha256": _fingerprint(official["security"]),
-                },
-            },
+            "stages": (
+                {}
+                if official is None
+                else {
+                    "capture-official": {
+                        "path": official_path.relative_to(predecessor_dir).as_posix(),
+                        "sha256": file_sha256(official_path),
+                        "package_digest": official["package_digest"],
+                        "evidence_inventory_digest": official[
+                            "evidence_inventory"
+                        ]["digest"],
+                        "security_sha256": _fingerprint(official["security"]),
+                    },
+                }
+            ),
             "copied_files": sorted(
                 copied_files.values(), key=lambda item: item["target_path"]
             ),
@@ -23700,7 +24669,16 @@ def _create_successor_campaign_unadmitted(arguments: argparse.Namespace) -> dict
                     for field, value in runtime_configuration.items()
                 }
             )
-        if reclassification_successor:
+        if official_attempt_import:
+            assert official_attempt_import_context is not None
+            import_receipt["official_attempt_import"] = json.loads(
+                json.dumps(
+                    official_attempt_import_context["receipt"],
+                    ensure_ascii=False,
+                )
+            )
+            import_receipt["import_mode"] = OFFICIAL_ATTEMPT_IMPORT_MODE
+        elif reclassification_successor:
             import_receipt["import_mode"] = "official_only_reclassification"
         elif sealed_stage_recovery_successor:
             import_receipt["import_mode"] = (
@@ -23714,35 +24692,38 @@ def _create_successor_campaign_unadmitted(arguments: argparse.Namespace) -> dict
             "sha256": file_sha256(import_path),
         }
 
-        official_stage_path = save_stage_result(
-            staging_dir,
-            "capture-official",
-            {
-                "status": "complete",
-                "predecessor_import": import_binding,
-                "predecessor_package_digest": official["package_digest"],
-                "surface": surface_binding,
-            },
-            _successor_manifest=successor_manifest,
-        )
-        if (
-            arguments.reason == OFFICIAL_EVIDENCE_REUSE_REASON
-            and _requires_complete_vc_artifacts(successor_manifest)
-        ):
-            official_job_ids = sorted(
-                str(job["id"])
-                for job in successor_manifest.get("jobs", [])
-                if isinstance(job, Mapping) and job.get("phase") == "official"
-            )
-            _complete_vc_phase(
+        if official is not None:
+            official_stage_path = save_stage_result(
                 staging_dir,
-                successor_manifest,
-                phase="VC-1",
-                stage_receipt_path=official_stage_path.resolve(strict=True),
-                reuse_item_ids=official_job_ids,
-                live_request_count=0,
-                scanned_bytes=0,
+                "capture-official",
+                {
+                    "status": "complete",
+                    "predecessor_import": import_binding,
+                    "predecessor_package_digest": official["package_digest"],
+                    "surface": surface_binding,
+                },
+                _successor_manifest=successor_manifest,
             )
+            if (
+                arguments.reason == OFFICIAL_EVIDENCE_REUSE_REASON
+                and _requires_complete_vc_artifacts(successor_manifest)
+            ):
+                official_job_ids = sorted(
+                    str(job["id"])
+                    for job in successor_manifest.get("jobs", [])
+                    if isinstance(job, Mapping) and job.get("phase") == "official"
+                )
+                _complete_vc_phase(
+                    staging_dir,
+                    successor_manifest,
+                    phase="VC-1",
+                    stage_receipt_path=official_stage_path.resolve(strict=True),
+                    reuse_item_ids=official_job_ids,
+                    live_request_count=0,
+                    scanned_bytes=0,
+                )
+        # 官方 attempt 导入：VC-1 由新 Campaign 的 capture-official seal 完成，
+        # 这里不预写 official 阶段结果。
         if not official_only_successor:
             assert classification is not None
             imported_classification = {
@@ -23774,6 +24755,22 @@ def _create_successor_campaign_unadmitted(arguments: argparse.Namespace) -> dict
     finally:
         if not published:
             shutil.rmtree(staging_dir, ignore_errors=True)
+
+    official_attempt: dict[str, Any] | None = None
+    if official_attempt_import_context is not None:
+        # 权限收口收据记录 attempt 根的绝对路径，只能在最终目录内合成；
+        # 新目录尚未注册总账也没有账本，物化失败时按暂存区整体清理。
+        try:
+            official_attempt = _materialize_official_attempt_import(
+                successor_dir,
+                predecessor_dir,
+                predecessor_manifest,
+                official_attempt_import_context,
+                import_binding,
+            )
+        except BaseException:
+            shutil.rmtree(successor_dir, ignore_errors=True)
+            raise
 
     status = campaign_status(successor_dir)
     return {
@@ -23816,6 +24813,13 @@ def _create_successor_campaign_unadmitted(arguments: argparse.Namespace) -> dict
             else None
         ),
         "official_recapture_required": False,
+        "official_sealed": official is not None,
+        "import_mode": (
+            OFFICIAL_ATTEMPT_IMPORT_MODE if official_attempt_import else None
+        ),
+        "official_attempt_id": (
+            official_attempt["attempt_id"] if official_attempt is not None else None
+        ),
         "codex_account_id": arguments.codex_account_id,
         "runtime_configuration_rebound": runtime_configuration is not None,
         "target_scenario_rebound": target_scenario_transition is not None,
@@ -26222,6 +27226,9 @@ def _latest_attempt_summary(
             "status": attempt["status"],
             "failed_job_ids": _failed_job_ids(attempt.get("results")),
             "seal_preview": preview_exists,
+            "metadata_only_reuse": _is_official_evidence_reuse_metadata_only_attempt(
+                attempt
+            ),
             "client_checkpoint_at_utc": client_checkpoint_at,
             "run_nonce": attempt["run_nonce"],
             "attempt_started_at_utc": attempt["started_at_utc"],
@@ -26987,7 +27994,11 @@ def campaign_status(
             next_command = (
                 "capture-official seal --approve-seal-sha256 <review_sha256>"
                 if official_attempt["seal_preview"]
-                else "完成机器 finalizer 后执行 capture-official seal"
+                else (
+                    "执行 capture-official seal（零请求：官方证据复用导入，无需再跑 finalizer）"
+                    if official_attempt.get("metadata_only_reuse")
+                    else "完成机器 finalizer 后执行 capture-official seal"
+                )
             )
         else:
             status = "official_capture_failed"
@@ -27490,6 +28501,164 @@ def _verify_stopped_classification_draft_approval(
     }
 
 
+_POLICY_V2_EVALUATION_OPERATIONS = frozenset(
+    {"capture-official-seal", "capture-candidate-seal", "compare", "accept", "deep-verify", "classify"}
+)
+
+
+def _tool_signature_matches(frozen: Any, current: Mapping[str, Any]) -> bool:
+    """按 Campaign 的身份版本比较工具：v2 比当前有效 wire 身份与策略摘要，v1 比整树。"""
+
+    if not isinstance(frozen, Mapping):
+        return False
+    if _is_policy_v2_identity(frozen):
+        return (
+            current.get("wire_producer_sha256") == frozen.get("wire_producer_sha256")
+            and current.get("policy_sha256") == frozen.get("policy_sha256")
+        )
+    return current.get("files_sha256") == frozen.get("files_sha256")
+
+
+def _control_epoch_identity_unchanged(
+    manifest: Mapping[str, Any],
+    previous: Any,
+    current: Any,
+) -> bool:
+    """A2-4：control epoch 比较工具身份时，v2 Campaign 只看 wire 身份与策略摘要。
+
+    两份不变量都带 wire 字段才按 v2 比；历史 epoch 没有 wire 字段时退回整树。
+    """
+
+    if not isinstance(previous, Mapping) or not isinstance(current, Mapping):
+        return False
+    frozen = manifest.get("tool_identity")
+    if (
+        isinstance(frozen, Mapping)
+        and _is_policy_v2_identity(frozen)
+        and isinstance(previous.get("wire_producer_sha256"), str)
+        and isinstance(current.get("wire_producer_sha256"), str)
+    ):
+        return (
+            previous.get("wire_producer_sha256") == current.get("wire_producer_sha256")
+            and previous.get("policy_sha256") == current.get("policy_sha256")
+        )
+    return previous.get("tool_files_sha256") == current.get("tool_files_sha256")
+
+
+def _is_policy_v2_identity(identity: Mapping[str, Any]) -> bool:
+    """plan 时记录了策略 v2 五摘要的 Campaign 才走四层判定；旧 Campaign 按 v1。"""
+
+    return isinstance(identity.get("policy_sha256"), str) and isinstance(
+        identity.get("wire_producer_sha256"), str
+    )
+
+
+def _verify_plan_identity_v2(
+    campaign_dir: Path,
+    manifest: dict[str, Any],
+    *,
+    current_tool: Mapping[str, Any],
+    expected_tool: Mapping[str, Any],
+    operation: str | None,
+    attempt_root: Path | None,
+    attempt: Mapping[str, Any] | None,
+    deadline: incremental_recovery.WallClockDeadline | None,
+) -> dict[str, Any]:
+    """A2 四层身份判定：只有 wire producer 层是重采判据。
+
+    * 策略摘要不等：拒绝，策略变化须经 A2.6 兼容收据并以新 Campaign 承接。
+    * wire 身份不等：只有生效且指向当前 wire 的 intent 才放行执行类操作，并把
+      闭集交给调用方补跑；评估类操作在 intent 未 final 前一律拒绝。
+    * wire 身份相等：evidence semantics 变化时评估类操作要求当前 attempt 已追加
+      覆盖到当前摘要的 evaluation epoch；control 变化只留痕放行。
+    """
+
+    if current_tool.get("policy_sha256") != expected_tool.get("policy_sha256"):
+        raise ConfigurationError(
+            "工具身份策略已变化；策略变化必须经 A2.6 兼容收据与激活认证，并以新 Campaign 承接。"
+        )
+    try:
+        policy = codex_upgrade_tool_identity_policy.load_policy()
+        effective = codex_upgrade_wire_transition.effective_wire_identity(campaign_dir, manifest)
+        drift = codex_upgrade_tool_identity_policy.layer_drift(
+            policy, list(expected_tool.get("entries", [])), list(current_tool.get("entries", []))
+        )
+        expected_evidence = (
+            codex_upgrade_wire_transition.current_evidence_semantics(attempt_root, manifest)
+            if attempt_root is not None
+            else expected_tool.get("evidence_semantics_sha256")
+        )
+    except (
+        codex_upgrade_tool_identity_policy.ToolIdentityPolicyError,
+        codex_upgrade_wire_transition.WireTransitionError,
+    ) as error:
+        raise ConfigurationError(f"策略 v2 身份判定失败：{error}") from error
+    evaluation_operation = operation in _POLICY_V2_EVALUATION_OPERATIONS
+    current_wire = str(current_tool.get("wire_producer_sha256"))
+    changed_paths = {layer: paths for layer, paths in drift.items() if paths}
+    changed_components = sorted(changed_paths)
+    if current_wire != effective["wire_producer_sha256"]:
+        pending = effective["pending_intent"]
+        if pending is not None and pending["to_wire_producer_sha256"] == current_wire:
+            if evaluation_operation:
+                raise ConfigurationError(
+                    f"wire transition intent-{pending['index']:02d} 尚未 final，seal／评估操作拒绝；"
+                    "先补跑闭集内 Job 并签 final。"
+                )
+            _verify_control_receipts(campaign_dir, manifest, require_active=True)
+            _record_evaluation_side_drift(
+                campaign_dir,
+                current_tool,
+                expected_tool,
+                {"evaluation": sorted(drift["evidence_semantics"] + drift["control"])},
+            )
+            if deadline is not None:
+                deadline.check("plan-identity:wire-transition")
+            return {
+                "kind": "wire_producer_transition",
+                "changed_components": changed_components,
+                "changed_paths": changed_paths,
+                "affected_job_ids": list(pending["affected_job_ids"]),
+                "wire_transition_intent": {
+                    "index": pending["index"],
+                    "intent_sha256": pending["intent_sha256"],
+                    "to_wire_producer_sha256": pending["to_wire_producer_sha256"],
+                },
+                "effective_wire_producer_sha256": effective["wire_producer_sha256"],
+                "current_wire_producer_sha256": current_wire,
+            }
+        raise ConfigurationError(
+            "wire producer 身份漂移："
+            + "、".join(drift["wire_producer"] or ["<编排器闭包或映射外变化>"])
+            + "；请签 wire transition intent 承接受影响 Job 闭集，或以普通 Formal 后继 Campaign 重新执行全部 Job。"
+        )
+    evidence_changed = str(current_tool.get("evidence_semantics_sha256")) != str(expected_evidence)
+    if evidence_changed and evaluation_operation:
+        raise ConfigurationError(
+            "evidence semantics 已变化：" + "、".join(drift["evidence_semantics"] or ["<编排器封存闭包>"])
+            + "；先对当前 attempt 追加 evaluation epoch，再执行 seal／评估。"
+        )
+    _verify_control_receipts(campaign_dir, manifest, require_active=True)
+    _record_evaluation_side_drift(
+        campaign_dir,
+        current_tool,
+        expected_tool,
+        {"evaluation": sorted(drift["evidence_semantics"] + drift["control"])},
+    )
+    if deadline is not None:
+        deadline.check("plan-identity:complete")
+    return {
+        "kind": "policy_v2_identity",
+        "changed_components": changed_components,
+        "changed_paths": changed_paths,
+        "affected_job_ids": [],
+        "wire_status": "equal",
+        "effective_wire_producer_sha256": effective["wire_producer_sha256"],
+        "effective_source": effective["source"],
+        "evidence_semantics_changed": evidence_changed,
+    }
+
+
 def _verify_plan_identity(
     campaign_dir: Path,
     manifest: dict[str, Any],
@@ -27618,6 +28787,18 @@ def _verify_plan_identity(
         if deadline is not None:
             deadline.check("plan-identity:complete")
         return None
+    if _is_policy_v2_identity(expected_tool):
+        # v2 Campaign 不再走 v1 的整树／组件 transition 分支。
+        return _verify_plan_identity_v2(
+            campaign_dir,
+            manifest,
+            current_tool=current_tool,
+            expected_tool=expected_tool,
+            operation=operation,
+            attempt_root=attempt_root,
+            attempt=attempt,
+            deadline=deadline,
+        )
     component_drift = _tool_component_drift(expected_tool, current_tool)
     changed_components = set(component_drift.get("changed_components", []))
     if (
@@ -33154,9 +34335,8 @@ def _prior_complete_results(
         if isinstance(frozen_tool, Mapping)
         else None
     )
-    global_tool_unchanged = (
-        current_tool.get("files_sha256") == frozen_tool_files_sha256
-    )
+    # A2-11：v2 Campaign 只比 wire 身份与策略摘要，control／evidence 变化不算全局工具变化。
+    global_tool_unchanged = _tool_signature_matches(frozen_tool, current_tool)
     changed_production_paths: list[str] = []
     path_job_map: dict[str, set[str]] = {}
     if isinstance(frozen_tool, Mapping):
@@ -34254,6 +35434,12 @@ def _load_capture_attempt(
             candidate_id=candidate_id,
             identity=identity,
         )
+    if payload.get("official_evidence_reuse_transition") is not None:
+        if phase != "official" or candidate_id is not None:
+            raise ConfigurationError("官方证据复用 transition 只能绑定官方 attempt。")
+        if candidate_reuse_transition is not None:
+            raise ConfigurationError("attempt 不得同时绑定两种 metadata-only 来源。")
+        _official_evidence_reuse_attempt_source(campaign_dir, manifest, payload)
     return attempt_root, payload
 
 
@@ -37714,11 +38900,7 @@ def _approve_frozen_capture_seal(
             manifest,
             phase="VC-1",
             stage_receipt_path=stage_path.resolve(strict=True),
-            reuse_item_ids=(
-                str(item.get("id"))
-                for item in payload.get("results", [])
-                if isinstance(item, Mapping) and item.get("reused") is True
-            ),
+            reuse_item_ids=_reused_result_ids(payload.get("results")),
             scanned_bytes=int(payload.get("scan_summary", {}).get("scanned_bytes", 0)),
         )
     return {
@@ -38051,12 +39233,25 @@ def _seal_capture_attempt(
     _validate_capture_job_results(jobs, attempt.get("results"), phase=phase)
 
     metadata_source: tuple[Path, Path, dict[str, Any], dict[str, Any]] | None = None
+    metadata_source_kind: str | None = None
     if _is_classification_candidate_metadata_only_attempt(attempt):
         metadata_source = _classification_candidate_reuse_attempt_source(
             campaign_dir,
             manifest,
             attempt,
         )
+        metadata_source_kind = "classification_candidate"
+    elif phase == "official" and _is_official_evidence_reuse_metadata_only_attempt(
+        attempt
+    ):
+        # A3a：官方证据复用导入的零执行 attempt；环境探针、恢复收据与 ARM64
+        # 收据都来自前序真实 attempt，证据清单按前序证据根现场构建。
+        metadata_source = _official_evidence_reuse_attempt_source(
+            campaign_dir,
+            manifest,
+            attempt,
+        )
+        metadata_source_kind = "official_evidence_reuse"
 
     roots = _deduplicate_evidence_roots(
         Path(value) for value in attempt.get("evidence_roots", [])
@@ -38337,7 +39532,7 @@ def _seal_capture_attempt(
         except codex_upgrade_evidence_manifest.EvidenceManifestError as error:
             raise ConfigurationError(str(error)) from error
     else:
-        if metadata_source is not None:
+        if metadata_source is not None and metadata_source_kind == "classification_candidate":
             _source_dir, source_root, source_attempt, _transition = metadata_source
             source_roots = _deduplicate_evidence_roots(
                 Path(value) for value in source_attempt.get("evidence_roots", [])
@@ -38541,11 +39736,7 @@ def _seal_capture_attempt(
             manifest,
             phase="VC-1",
             stage_receipt_path=stage_path.resolve(strict=True),
-            reuse_item_ids=(
-                str(item.get("id"))
-                for item in payload.get("results", [])
-                if isinstance(item, Mapping) and item.get("reused") is True
-            ),
+            reuse_item_ids=_reused_result_ids(payload.get("results")),
             scanned_bytes=int(payload.get("scan_summary", {}).get("scanned_bytes", 0)),
         )
     return {
@@ -44855,6 +46046,11 @@ def _reject_unparented_formal_write(
         return
     direct_control_commands = {
         "reuse-official-evidence",
+        "harden-evidence-permissions",
+        "wire-transition-intent",
+        "wire-transition-final",
+        "evaluation-epoch",
+        "verdict-official-attempt-identity",
         "compile-vc-batch",
         "compile-and-run-vc-batch",
         "compile-vc-interrupted-recovery-batch",
@@ -45050,6 +46246,118 @@ def _require_candidate_launch_arguments(
     missing = sorted(key for key, value in required.items() if not value)
     if missing:
         raise ConfigurationError(f"{label}缺少 Candidate 身份参数：{missing}")
+
+
+def _wire_transition_intent_command(arguments: argparse.Namespace) -> dict[str, Any]:
+    """两阶段 wire transition 第一步：预览变化与受影响 Job 闭集，批准后落 intent。"""
+
+    campaign_dir = arguments.campaign_dir
+    manifest = _require_formal_campaign(campaign_dir)
+    expected_tool = manifest["tool_identity"]
+    if not _is_policy_v2_identity(expected_tool):
+        raise ConfigurationError("v1 Campaign 没有 wire 身份，不能签 wire transition。")
+    current_tool = _tool_identity(include_git=False)
+    jobs = _campaign_jobs(campaign_dir, manifest, "official")
+    path_job_map = _tool_path_job_map(jobs, expected_tool, current_tool)
+    try:
+        policy = codex_upgrade_tool_identity_policy.load_policy()
+        preview = codex_upgrade_wire_transition.build_intent_preview(
+            campaign_dir,
+            manifest,
+            current_identity=current_tool,
+            policy=policy,
+            path_job_map=path_job_map,
+            planned_job_ids=[job.job_id for job in jobs],
+        )
+        approval = getattr(arguments, "approve_sha256", None)
+        if approval is None:
+            return {"status": "approval_required", **{k: preview[k] for k in ("index", "from_wire_producer_sha256", "to_wire_producer_sha256", "changed_paths", "unmapped_paths", "orchestrator_closure_changed", "affected_job_ids", "all_jobs_affected", "review_sha256")}}
+        path = codex_upgrade_wire_transition.approve_intent(campaign_dir, preview, str(approval))
+    except (
+        codex_upgrade_tool_identity_policy.ToolIdentityPolicyError,
+        codex_upgrade_wire_transition.WireTransitionError,
+    ) as error:
+        raise ConfigurationError(str(error)) from error
+    return {"status": "intent_approved", "index": preview["index"], "path": str(path), "affected_job_ids": preview["affected_job_ids"]}
+
+
+def _wire_transition_final_command(arguments: argparse.Namespace) -> dict[str, Any]:
+    campaign_dir = arguments.campaign_dir
+    manifest = _require_formal_campaign(campaign_dir)
+    _attempt_root, attempt = _load_capture_attempt(campaign_dir, "official", None, arguments.attempt_id)
+    try:
+        path = codex_upgrade_wire_transition.build_final(campaign_dir, manifest, attempt)
+        effective = codex_upgrade_wire_transition.effective_wire_identity(campaign_dir, manifest)
+    except codex_upgrade_wire_transition.WireTransitionError as error:
+        raise ConfigurationError(str(error)) from error
+    return {"status": "final_signed", "path": str(path), "effective_wire_producer_sha256": effective["wire_producer_sha256"], "source": effective["source"]}
+
+
+def _evaluation_epoch_command(arguments: argparse.Namespace) -> dict[str, Any]:
+    campaign_dir = arguments.campaign_dir
+    manifest = _require_formal_campaign(campaign_dir)
+    attempt_root, _attempt = _load_capture_attempt(campaign_dir, "official", None, arguments.attempt_id)
+    try:
+        path = codex_upgrade_wire_transition.append_epoch(
+            attempt_root,
+            manifest,
+            current_identity=_tool_identity(include_git=False),
+            reason=str(arguments.reason),
+        )
+        chain = codex_upgrade_wire_transition.load_epochs(attempt_root)
+    except codex_upgrade_wire_transition.WireTransitionError as error:
+        raise ConfigurationError(str(error)) from error
+    return {"status": "epoch_appended", "path": str(path), "epoch_index": chain[-1]["index"], "evidence_semantics_sha256": chain[-1]["to_evidence_semantics_sha256"]}
+
+
+def _verdict_official_attempt_identity_command(arguments: argparse.Namespace) -> dict[str, Any]:
+    campaign_dir = arguments.campaign_dir
+    _require_formal_campaign(campaign_dir)
+    try:
+        policy = codex_upgrade_tool_identity_policy.load_policy()
+        verdict = codex_upgrade_wire_transition.verdict_official_attempt_identity(
+            campaign_dir,
+            str(arguments.attempt_id),
+            control_root=Path(arguments.control_root),
+            current_identity=_tool_identity(include_git=False),
+            policy=policy,
+        )
+        codex_upgrade_wire_transition._write_once(Path(arguments.output), verdict)
+    except (
+        codex_upgrade_tool_identity_policy.ToolIdentityPolicyError,
+        codex_upgrade_wire_transition.WireTransitionError,
+    ) as error:
+        raise ConfigurationError(str(error)) from error
+    return {k: v for k, v in verdict.items() if k != "frozen_v2_identity"}
+
+
+def _harden_evidence_permissions_command(arguments: argparse.Namespace) -> dict[str, Any]:
+    """A3a 正式命令：两步式证据权限收口，metadata-only，不回写 attempt.json。"""
+
+    from tools.official_client_capture import (
+        codex_upgrade_harden_evidence_permissions as harden,
+    )
+
+    campaign_dir = arguments.campaign_dir
+    _require_formal_campaign(campaign_dir)
+    attempt_id = str(arguments.attempt_id)
+    action = str(arguments.harden_action)
+    try:
+        if action == "preview":
+            result = harden.preview(campaign_dir, attempt_id)
+            result = {key: value for key, value in result.items() if key != "entries"}
+            result["status"] = "approval_required"
+        elif action == "apply":
+            approve = getattr(arguments, "approve_sha256", None)
+            if not isinstance(approve, str) or not SHA256_RE.fullmatch(approve):
+                raise ConfigurationError("apply 必须提供 preview 输出的 --approve-sha256。")
+            result = harden.apply(campaign_dir, attempt_id, approve_sha256=approve)
+            result = {key: value for key, value in result.items() if key != "changed"}
+        else:
+            result = harden.replay(campaign_dir, attempt_id)
+    except (harden.HardenError, OSError, ValueError) as error:
+        raise ConfigurationError(f"证据权限收口失败：{error}") from error
+    return result
 
 
 def _resume_campaign(arguments: argparse.Namespace) -> tuple[dict[str, Any], int]:
@@ -45386,6 +46694,21 @@ def _main_without_campaign_lease(argv: list[str] | None = None) -> int:
                 attempt_id=arguments.attempt_id,
             )
             return_code = 0
+        elif command == "wire-transition-intent":
+            result = _wire_transition_intent_command(arguments)
+            return_code = 0
+        elif command == "wire-transition-final":
+            result = _wire_transition_final_command(arguments)
+            return_code = 0
+        elif command == "evaluation-epoch":
+            result = _evaluation_epoch_command(arguments)
+            return_code = 0
+        elif command == "verdict-official-attempt-identity":
+            result = _verdict_official_attempt_identity_command(arguments)
+            return_code = 0 if result.get("verdict") == "equal" else 3
+        elif command == "harden-evidence-permissions":
+            result = _harden_evidence_permissions_command(arguments)
+            return_code = 0 if result.get("status") in {"passed", "applied", "approval_required"} else 3
         elif command == "status":
             result = campaign_status(arguments.campaign_dir, arguments.candidate_id)
             return_code = 0
