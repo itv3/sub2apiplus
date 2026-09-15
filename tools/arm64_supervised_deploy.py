@@ -97,7 +97,7 @@ from typing import Any, Callable, Mapping
 # 2026-09-15（通用 v2 恢复与预派发停线修复）：失败的正式 sequence 1
 # 可由普通 v2 零请求恢复预览承接，非 no-op batch 可确定性补写停线收据。
 DEFAULT_TOOL_DIGEST = (
-    "944de8e4c286ba80955742d6c3bd44025c49d67e761868b91d886cc53f4bc91e"
+    "64091ce6d7a69133026a9854ab77c22ddaea8428ebd923381c8d12304b3c8c2f"
 )
 DEFAULT_SUPERVISOR_DIGEST = (
     "58a950959f3e32a5c92795181e165adac371aa469e4d008a25fd22bdd34f70f6"

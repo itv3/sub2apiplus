@@ -9584,6 +9584,8 @@ _CONTROL_PLANE_TOOL_FILES = frozenset(
         "codex_upgrade_live_request_provenance.py",
         # attempt 只读审计只读取既有收据与证据，不产生证据字节。
         "codex_upgrade_official_attempt_audit.py",
+        # 时间对账只读取账本、监督器事件、部署收据、Campaign 清单与审计目录。
+        "codex_upgrade_time_reconciliation.py",
         "codex_upgrade_campaign_run_rehearsal_receipt.py",
         "codex_upgrade_predispatch_stop.py",
         "codex_upgrade_campaign_lease.schema.json",
@@ -9632,6 +9634,8 @@ _CANONICAL_EVALUATION_ONLY_FILES = frozenset(
         "codex_upgrade_live_request_provenance.py",
         # attempt 只读审计只读取既有收据与证据，不产生证据字节。
         "codex_upgrade_official_attempt_audit.py",
+        # 时间对账只读取账本、监督器事件、部署收据、Campaign 清单与审计目录。
+        "codex_upgrade_time_reconciliation.py",
         "codex_upgrade_campaign_run_rehearsal_receipt.py",
         "codex_upgrade_predispatch_stop.py",
         "codex_upgrade_gate_receipt.py",
@@ -9749,6 +9753,8 @@ _EVALUATION_SIDE_FILES = frozenset(
         "codex_upgrade_live_request_provenance.py",
         # attempt 只读审计只读取既有收据与证据，不产生证据字节。
         "codex_upgrade_official_attempt_audit.py",
+        # 时间对账只读取账本、监督器事件、部署收据、Campaign 清单与审计目录。
+        "codex_upgrade_time_reconciliation.py",
         "codex_upgrade_campaign_run_rehearsal_receipt.py",
         "codex_upgrade_predispatch_stop.py",
         "codex_upgrade_legacy_boundary.py",
