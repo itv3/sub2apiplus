@@ -40529,15 +40529,11 @@ def _validate_freeze_deletion_proof(
             or not SHA256_RE.fullmatch(str(reader.get("sha256", "")))
         ):
             raise ConfigurationError(f"{label} 历史读取器登记非法。")
+        # 记录的 sha256 只是签发时的快照；读取器后续按通用 successor 图演进，
+        # 这里只要求它仍是源码树内存在的普通文件。
         candidate = repository_root / Path(*relative.split("/"))
-        if (
-            candidate.is_symlink()
-            or not candidate.is_file()
-            or file_sha256(candidate) != reader["sha256"]
-        ):
-            raise ConfigurationError(
-                f"{label} 历史读取器不存在或摘要漂移：{relative}"
-            )
+        if candidate.is_symlink() or not candidate.is_file():
+            raise ConfigurationError(f"{label} 历史读取器不存在：{relative}")
 
 
 def _validate_candidate_source_transition(

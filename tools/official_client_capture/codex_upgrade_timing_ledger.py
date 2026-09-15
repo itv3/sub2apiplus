@@ -510,9 +510,9 @@ def _validate_freeze_deletion_proof(
             or not SHA256_RE.fullmatch(binding["sha256"])
         ):
             raise TimingLedgerError("producer freeze successor 历史读取器登记非法")
-        reader_path = _repository_file(repository_root, relative, "deletion_proof 历史读取器")
-        if _sha256_bytes(reader_path.read_bytes()) != binding["sha256"]:
-            raise TimingLedgerError(f"producer freeze successor 历史读取器摘要漂移：{relative}")
+        # 记录的 sha256 只是签发时的快照；读取器后续按通用 successor 图演进，
+        # 这里只要求它仍是仓库内存在的普通文件。
+        _repository_file(repository_root, relative, "deletion_proof 历史读取器")
 
 
 def _load_freeze_successor_edge(

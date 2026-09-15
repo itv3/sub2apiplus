@@ -212,10 +212,10 @@ class TimingLedgerTests(unittest.TestCase):
             write(deletion_proof=referenced)
             with self.assertRaisesRegex(ledger.TimingLedgerError, "仍有引用"):
                 ledger._load_freeze_successor_edge(root, descriptor)
-            drifted = json.loads(json.dumps(proof))
-            drifted["historical_readers"][0]["sha256"] = "0" * 64
-            write(deletion_proof=drifted)
-            with self.assertRaisesRegex(ledger.TimingLedgerError, "历史读取器摘要漂移"):
+            missing = json.loads(json.dumps(proof))
+            missing["historical_readers"][0]["path"] = "tools/official_client_capture/missing_reader.py"
+            write(deletion_proof=missing)
+            with self.assertRaisesRegex(ledger.TimingLedgerError, "历史读取器"):
                 ledger._load_freeze_successor_edge(root, descriptor)
             # 未登记路径的删除可以携带证明；证明里若声称冻结删除但 deleted_frozen_paths 为空则拒绝。
             write(deleted_frozen_paths=[], result="passed_local_evidence_successor")

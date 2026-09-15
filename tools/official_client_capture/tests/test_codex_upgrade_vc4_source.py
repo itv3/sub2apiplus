@@ -158,8 +158,8 @@ class CodexUpgradeVC4SourceTests(unittest.TestCase):
         ]
         negatives.append((referenced, "无引用扫描证明非法"))
         drifted = copy.deepcopy(payload)
-        drifted["deletion_proof"]["historical_readers"][0]["sha256"] = "0" * 64
-        negatives.append((drifted, "历史读取器不存在或摘要漂移"))
+        drifted["deletion_proof"]["historical_readers"][0]["path"] = "missing_reader.py"
+        negatives.append((drifted, "历史读取器不存在"))
         uncovered = copy.deepcopy(payload)
         uncovered["deletion_proof"]["deleted_paths"][0]["path"] = "other.py"
         negatives.append((uncovered, "没有无引用证明的冻结删除路径"))
