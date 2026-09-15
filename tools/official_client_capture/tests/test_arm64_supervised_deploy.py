@@ -233,7 +233,7 @@ class Arm64SupervisedDeployTest(unittest.TestCase):
         # A2-3：整树摘要不再硬编码；暂存树自算即期望。策略 v2 五摘要须可从树内策略算出。
         self.assertFalse(hasattr(deploy, "DEFAULT_TOOL_DIGEST"))
         identity = deploy.staging_identity_v2(tool_root)
-        self.assertEqual(identity["policy_version"], 2)
+        self.assertEqual(identity["policy_version"], 3)
         self.assertEqual({len(identity[k]) for k in ("policy_sha256", "wire_producer_sha256", "evidence_semantics_sha256", "control_sha256")}, {64})
         self.assertEqual(
             deploy.DEFAULT_SUPERVISOR_DIGEST,

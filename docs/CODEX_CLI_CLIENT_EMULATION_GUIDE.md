@@ -1257,6 +1257,127 @@ Framework §5.3 是升级总操作入口并规定 `VC-0～VC-6` 顺序；本部�
 4. `validation_only` 和 `production_replacement` 都必须经过 VC-6。前者只完成只读交付出口，后者继续
    production promotion、canary、切流、实际回滚和目标恢复。
 
+### Codex 0.154 起的项目总账、工具身份策略 v2、对账与只读导入
+
+本节是 2026-09-15 改造方案（A0～A3b）落地后的最小规范；下列行为自 0.154.0 起对 Formal Campaign 强制
+生效，早于 0.154.0 的 Campaign 只按各自冻结的历史合同只读回放。凡与本节冲突的上文 sequence 3～5、
+`KeyboardInterrupt` 孤儿、权限别名补偿与 deadline 孤儿封口条款，只保留为 0.154.0 首轮事故链的只读解释。
+
+**两层预算与项目总账。** 每个升级项目在宿主数据根建立追加式项目总账 `upgrade-project-ledger/`：
+`plan.json` 一次写死 `absolute_deadline_utc`（老板批准，记录批准人与时间）、可选 `live_request_budget`、
+`same_root_cause_retry_limit`、`root_cause_codes_sha256` 与算法版本、`estimation_policy`、`fixture_only`、
+初始精确／估计请求数、初始身份键清单摘要、初始根因计数、`bootstrap_cutover` 与已关闭 Campaign 账本
+head；`events/NNNNNN.json` 只有六种事件：`campaign_registered`、`campaign_registration_rejected`、
+`reconciliation_committed`、`accounting_resolved`、`root_cause_repaired`、`campaign_terminal`
+（`terminal_reason` 只能是 `deadline_wall_clock`、`deadline_live_requests`、`root_cause_limit`、
+`accounting_unresolved`、`environment_contaminated`、`identity_changed`、`superseded`）。权威数据是
+plan 加 events，`head.json` 只是缓存：写入时在目录锁内完整重放并以 head sha 做 CAS，缓存缺失或落后可
+重建，超前或同序号摘要不符失败关闭。Campaign 账本（`UpgradeTimingLedger`）继续记录本 Campaign 的阶段、
+attempt 与停线；跨账本事务由 Campaign 目录 `ledger/outbox/batch-NNNNNN/` 承担：若干 `entry-NN.json`
+是同一项目事件 payload 的分片，`COMMIT` 绑定 `entry_count`、末项 SHA 与 batch SHA，**一个 batch 严格
+对应一个项目事件**；补齐器 `reconcile-project-ledger` 只推送带 `COMMIT` 的 batch，缺项、断链、篡改、
+COMMIT 后追加 entry 即失败关闭，`bootstrap_cutover` 已吸收的 batch 不再推送。锁顺序固定先项目锁后
+Campaign 账本锁。`plan`、`reuse-official-evidence` 在项目锁内做 admission（总账 blocked、剩余预算为 0、
+根因达上限、超过 `formal_open_limit`、Campaign deadline 超过绝对截止即拒绝并追加拒绝事件）；
+`campaign-run`、`resume`、`capture-official seal` 开始前先执行补齐器再锁内重放，本 Campaign 必须有注册
+事件且无拒绝、终态事件。`fixture_only` 总账只允许 staging 路径内的 Campaign。
+
+**统一计量单位与账务状态。** 官方请求只由 `live-request-provenance/v2` 逐请求核算：计量单位是 HTTP
+POST 模型端点或 client 方向 WebSocket `response.create`；身份键为 producer run ID、来源类别与原生记录
+坐标，realpath 与 SHA 只作完整性；同一 Job 只有一个权威来源，capture／compact 的 mitm 分支与 relay 精确，
+direct 分支按总账冻结的 `estimation_policy` 计上界并标记，无同场景可解析分支即 `unresolved`。请求部分
+状态只有 `resolved`、`estimated`、`unresolved`；`unresolved` 使总账 blocked，blocked 期间只允许
+`accounting_resolved`、`root_cause_repaired`、`reconciliation_committed`、`campaign_terminal`，禁止注册、
+派发、resume、复用与 seal。`accounting_resolved` 必须绑定原 operation、新 provenance 审计、准确身份键
+清单与 delta，逐个原子补账，集合清空才解除。身份键全局去重，估计按来源（producer run）去重。
+
+**根因编码。** 所有生产者与消费者使用受管 `root_cause_codes.json`，根因 ID 只由
+`component`、`stable_error_code`、`failed_step` 与错误码登记的稳定维度生成（`rc1-` 前缀），诊断全文
+只进审计详情；枚举表或算法变化必须携带旧新映射收据并继承累计次数。代码缺陷的修复以
+`root-cause-repair/v1` 收据绑定修复提交、定向回归与部署收据，产生 `root_cause_repaired` 事件清零，
+不激活历史 Campaign。
+
+**工具身份策略 v2。** 受管目录内的 `tool_identity_policy_v2.json` 把受管文件分为 `wire_producer`、
+`evidence_semantics`、`control` 三层加 `ignored`，编排器 `codex_upgrade.py` 按函数闭包分别归入 wire
+与 evidence 根；`plan` 把策略写入 `campaign.json` 并单独记录 `policy_sha256`，工具身份同时输出
+`files_sha256`、`wire_producer_sha256`、`evidence_semantics_sha256`、`control_sha256` 与
+`policy_sha256`。只有 wire producer 层是重采判据：wire 身份变化必须经两阶段 transition，`intent`
+冻结受影响 Job 闭集（受影响等于全部即拒签，改用普通 Formal 后继），批准后闭集 Job 用新身份补跑，
+`final` 绑定该 attempt 全部 Job complete；`evidence_semantics` 变化只在 seal／评估前追加单调的
+`evaluation-epoch-<n>` 链；`control` 变化只重跑控制门禁并留痕；`policy_sha256` 变化不得沿用既有
+Campaign，必须升级 `policy_version` 并经 `policy-compatibility-receipt/v1` 与
+`policy-activation-certification/v1` 后以新 Campaign 承接。旧 Campaign 无策略摘要按 v1 整树比较。
+部署收据、执行合同、VC-0 收口与 control epoch 一律比当前有效 wire 身份与 `policy_sha256`；
+`_verify_execution_tree`、三副本互等、finalizer 与账本的 producer 溯源仍比整树。
+`verdict-official-attempt-identity` 从后一份部署收据的 `rollback_backup` 副本按策略重算历史 wire
+身份裁定 `equal／different`；没有副本时只有 v1 整树相等才算相等。
+
+**对账（reconciler）。** 中断只有两种入口，各自输出独立不可变收据，自身模型请求为零：
+`reconcile-supervisor-run --run-dir --campaign-dir` 处理派发前失败、父监督器 SIGKILL 或中断且尚无
+attempt（run 期间已产生 reservation 时拒绝并指向 attempt 入口），输出 `supervisor-run-reconciliation/v1`，
+不伪造 attempt 事件；`reconcile-attempt --campaign-dir --attempt-id` 处理 reservation 之后的任何中断，
+输出 `attempt-reconciliation/v1`，不回写 `attempt.json`，不新增 attempt 状态枚举。Job 完成态：
+`complete` 必须同时有有效 result 与对应 checkpoint；有证据目录但无终态 checkpoint 为 `indeterminate`
+并归入失败集合；证据目录只用于请求计数。统一顺序（每步幂等，中断后从第一步重放）：
+
+1. Campaign 侧写收据；attempt 分支在 Campaign 账本追加无收据的 `attempt_failed`（带根因）。账本此前
+   未登记该 attempt 时先补登 `attempt_started`；账本已 `stop_required` 且无 active attempt 时无法登记，
+   如实记录为跳过，禁止执行 Job。
+2. 写一个 outbox batch，目标事件 `reconciliation_committed`：请求部分是 provenance 核算的未入账身份键
+   与估计 delta（supervisor-run 通常为 0 但必须写；无法精确且无估计依据时 `unresolved`，不写 0），
+   根因部分是根因编码；entry 绑定收据 SHA，attempt 分支还绑定 `attempt_failed` 事件 SHA；写 `COMMIT`。
+3. 执行补齐器把 batch 推成一个项目事件。
+4. 锁内重放总账，得到根因计数、累计请求、剩余预算与 blocked。
+5. 判定：总账 blocked 或本次账务 `unresolved` → 永久停线；身份不变（当前有效 wire 身份与
+   `policy_sha256` 相等）、环境已恢复或可恢复（无污染记录、无 restoration_error）、Campaign 账本仍
+   active、Campaign 与项目 deadline 未到、剩余请求预算大于 0、该根因累计未达上限 → 可恢复；否则
+   永久停线，`terminal_reason` 按首个命中的条件取值。
+6. 可恢复：supervisor-run 在 Campaign 账本追加 `receipt_passed` 绑定账本内收据副本，phase 保持
+   active，可重新派发同一批次；attempt 生成零请求 `recovery-preview/v1`（冻结
+   `complete／failed／indeterminate／pending` 四类闭集、`reuse／execute` 集合、按 provenance 逐 Job 给出
+   的预计新增请求数、`reservation_exists=false`、`live_request_count=0`、`scanned_bytes=0`），操作员以
+   `reconcile-attempt --approve-recovery-sha256 <review_sha256>` 批准后才能
+   `resume --rerun-failed --recovery-preview <path>`。永久停线：账本 `stage_abandoned` 与
+   `stop_the_line`（绑定账本内收据副本），再写 `campaign_terminal` batch 并推入总账。
+
+来源 attempt 没有 after 探针或环境未恢复时，`complete` Job 也不复用，恢复预览的 execute 为全部计划
+Job；已对账的孤儿 attempt 以对账收据为终态，不再阻塞新 reservation。`resume` 对中断状态一律先
+reconcile；0.154 起失败或已对账 attempt 的 `--rerun-failed` 必须携带已批准且工具身份未变的预览，源
+attempt 冻结闭集须与预览逐项相等，否则拒绝。
+
+**权限收口。** `harden-evidence-permissions preview／apply --approve-sha256／replay` 两步式：preview 输出
+前后 mode 清单、逐文件内容摘要与变更摘要；apply 持 Campaign 排他锁，只把 mode 改为 0700／0600，
+禁止网络与内容写入，内容摘要不变才落收据；收据写在 `control/evidence-permissions/<attempt_id>/`，
+不回写 `attempt.json`；中断后幂等重放。
+
+**从 `awaiting_receipts` 只读导入。** 前序官方阶段已封存时 `reuse-official-evidence` 直接承接官方阶段；
+前序停在 `awaiting_receipts` 时必须同时提供 `--predecessor-official-attempt-id`、`--audit-receipt`
+（`official-attempt-audit/v1` 五段全部通过且绑定该 attempt.json）、`--identity-verdict`
+（`official-attempt-identity-verdict/v1` 为 `equal` 且裁定时工具即当前工具）、`--permission-receipt`
+（该 attempt 最新一份 apply 收据）、`--path-certification`（`pre-a3-path-certification/v1`）、
+`--policy-activation`（`policy-activation-certification/v1`）、`--deployment-receipt`（五摘要等于当前
+工具）与 `--project-ledger`（后继目录祖先处的总账）；只接受单一前序 attempt，不做逐 Job 合并。导入
+收据（`codex-upgrade-predecessor-import/v11`，`import_mode=official_attempt_reuse`）显式绑定源
+attempt 摘要、A1a inventory、权限收据与前后 mode 清单、现场重算的内容不变证明、部署收据五摘要、两份
+认证与总账 head；后继目录内合成零执行的 v3 official attempt（results 只做 campaign_id 坐标迁移并
+重绑当前 key，`disposition=reused`，证据根引用前序宿主路径，环境探针为空），由新 Campaign 的
+`capture-official seal` 按 metadata-only 规则封存（环境、恢复与 ARM64 收据来自前序 attempt，证据清单
+按前序证据根现场构建）并完成 VC-1，`reuse_item_ids` 按 `disposition=reused` 统计。
+
+**认证收据。** `pre-a3-path-certification/v1`：`status=passed`，`identity` 五摘要（含
+`tool_files_sha256`）、`deployment_receipt{path,sha256}`、`scenarios`、`receipt_sha256` 自摘要。
+`policy-activation-certification/v1`：`status=active`、`policy_version`、`policy_sha256`、`identity`
+五摘要、`deployment_receipt`、`authorized_scopes`、`superseded_by`（为空才有效）、`receipt_sha256`。
+`policy-compatibility-receipt/v1`：旧新 `policy_version`／`policy_sha256`、逐层分类差异、既有 Campaign
+影响面与处置、`receipt_sha256`。三者都绑定同一份 ARM64 部署收据，五摘要必须等于当前工具身份。
+
+**历史处置与时间对账。** `build-campaign-disposition` 为目标版本的全部历史 Campaign 出唯一处置
+（`reuse_primary`、`reuse_backup`、`read_only_archive`、`preflight_archive`）并列出待关闭账本；
+`reconcile-upgrade-time` 只取 git 提交、账本事件、部署收据、Campaign 创建与监督器事件作可信边界，
+区间分类为执行、工具修复、部署、Campaign 创建、停线间隙、无活动或 `unclassified`，人工分类收据
+`upgrade-time-manual-classification/v1` 必须绑定支撑证据且不得覆盖证据区间；`unclassified` 大于 0
+时项目总账不得封存。
+
 ### Codex 依赖键、监督器与恢复
 
 Framework §5.1.2 规定共享恢复语义；Codex 的结果键固定为：

@@ -7,10 +7,14 @@ helper 在 Campaign 目录的祖先处放一个宽松总账（截止 48 小时�
 
 from __future__ import annotations
 
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from tools.official_client_capture import codex_upgrade_project_ledger as project_ledger
+
+# A2.5 路径认证把全部夹具总账切成 fixture_only：设置该环境变量为 "1" 即可。
+FIXTURE_ONLY_ENV = "CODEX_FIXTURE_LEDGER_FIXTURE_ONLY"
 
 
 def install_fixture_ledger(root: Path, *, fixture_only: bool = False, hours: int = 48) -> Path:
@@ -22,6 +26,8 @@ def install_fixture_ledger(root: Path, *, fixture_only: bool = False, hours: int
     ledger_root = root / project_ledger.LEDGER_DIR_NAME
     if (ledger_root / "plan.json").is_file():
         return ledger_root
+    if os.environ.get(FIXTURE_ONLY_ENV) == "1":
+        fixture_only = True
     deadline = (datetime.now(timezone.utc) + timedelta(hours=hours)).isoformat(timespec="milliseconds").replace("+00:00", "Z")
     project_ledger.create_project_ledger(
         ledger_root,

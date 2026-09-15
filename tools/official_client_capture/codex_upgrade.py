@@ -9738,6 +9738,8 @@ _CONTROL_PLANE_TOOL_FILES = frozenset(
         # 项目总账、outbox batch、admission 与消费者门禁、修复收据。
         "codex_upgrade_project_ledger.py",
         "codex_upgrade_reconciler.py",
+        "codex_upgrade_policy_certification.py",
+        "codex_upgrade_pre_a3_certification.py",
         # 零请求 smoke 只在 staging 夹具上跑新命令并写收据。
         "codex_upgrade_zero_request_smoke.py",
         # 工具身份四层策略：策略文件与计算模块只改变身份判据，不改变证据字节。
@@ -9802,6 +9804,8 @@ _CANONICAL_EVALUATION_ONLY_FILES = frozenset(
         # 项目总账、outbox batch、admission 与消费者门禁、修复收据。
         "codex_upgrade_project_ledger.py",
         "codex_upgrade_reconciler.py",
+        "codex_upgrade_policy_certification.py",
+        "codex_upgrade_pre_a3_certification.py",
         # 零请求 smoke 只在 staging 夹具上跑新命令并写收据。
         "codex_upgrade_zero_request_smoke.py",
         # 工具身份四层策略：策略文件与计算模块只改变身份判据，不改变证据字节。
@@ -9935,6 +9939,8 @@ _EVALUATION_SIDE_FILES = frozenset(
         # 项目总账、outbox batch、admission 与消费者门禁、修复收据。
         "codex_upgrade_project_ledger.py",
         "codex_upgrade_reconciler.py",
+        "codex_upgrade_policy_certification.py",
+        "codex_upgrade_pre_a3_certification.py",
         # 零请求 smoke 只在 staging 夹具上跑新命令并写收据。
         "codex_upgrade_zero_request_smoke.py",
         # 工具身份四层策略：策略文件与计算模块只改变身份判据，不改变证据字节。
