@@ -3500,6 +3500,108 @@ raise SystemExit(9)
         )
         return campaign_dir, ledger_root, manifest
 
+    def _batched_closeout_fixture(
+        self,
+        root: Path,
+    ) -> tuple[Path, Path, dict[str, object], dict[str, object]]:
+        """在 v1 夹具上补齐 v2 分批清单所需的总计划绑定。"""
+
+        from tools.official_client_capture import (
+            codex_upgrade_vc_artifacts as vc_artifacts,
+        )
+
+        campaign_dir, ledger_root, _manifest = self._timing_closeout_fixture(root)
+        plan = vc_artifacts.build_campaign_plan(
+            campaign_id="campaign-closeout",
+            campaign_mode="formal",
+            campaign_purpose="production_replacement",
+            baseline_version="0.151.0",
+            target_version="0.154.0",
+            created_at_utc="2026-09-15T00:00:00Z",
+            original_deadline_at_utc="2026-09-15T06:00:00Z",
+            timing_checkpoint_sha256="1" * 64,
+            arm64_environment_sha256="2" * 64,
+            job_rehearsal_sha256="4" * 64,
+            p0_gate_sha256="5" * 64,
+        )
+        plan_path = campaign_dir / "control" / "vc" / "campaign-plan.json"
+        self._write_json(plan_path, plan)
+        campaign = json.loads((campaign_dir / "campaign.json").read_text("utf-8"))
+        campaign["vc_control"] = {
+            "campaign_plan": {
+                "path": "control/vc/campaign-plan.json",
+                # 绑定记录的是文件字节摘要，与计划内嵌的 plan_sha256 不同。
+                "sha256": supervisor._sha256(plan_path.read_bytes()),
+            }
+        }
+        self._write_json(campaign_dir / "campaign.json", campaign)
+        manifest: dict[str, object] = {
+            "schema_version": supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA,
+            "campaign_id": "campaign-closeout",
+            "phase": "VC-1",
+            "campaign_plan_sha256": plan["plan_sha256"],
+            "batch_sequence": 1,
+        }
+        return campaign_dir, ledger_root, manifest, plan
+
+    def test_batched_failure_closeout_accepts_plan_self_digest(self) -> None:
+        """v2 批次的 campaign_plan_sha256 是计划自摘要，合法父批次必须能关账本。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            campaign_dir, ledger_root, manifest, _plan = self._batched_closeout_fixture(
+                root
+            )
+            result = supervisor._close_failed_campaign_timing_ledger(
+                campaign_dir,
+                manifest,
+                failed_action_id="failing-action",
+            )
+            self.assertEqual(result["status"], "passed")
+            summary = timing_ledger.inspect_ledger(ledger_root)
+            self.assertEqual(summary["status"], "stopped")
+            self.assertIsNone(summary["active_phase"])
+            events = [
+                event["event_type"]
+                for event, _raw in timing_ledger._load_events(ledger_root)
+            ]
+            self.assertEqual(events[-2:], ["stage_abandoned", "stop_the_line"])
+
+    def test_batched_failure_closeout_rejects_plan_digest_drift(self) -> None:
+        """自摘要不符或计划文件被改写时都必须失败关闭，且账本保持 active。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            campaign_dir, ledger_root, manifest, plan = self._batched_closeout_fixture(
+                root
+            )
+            drifted = dict(manifest)
+            drifted["campaign_plan_sha256"] = "3" * 64
+            with self.assertRaisesRegex(
+                supervisor.SupervisorError, "父批次与 Campaign 总计划摘要不一致"
+            ):
+                supervisor._close_failed_campaign_timing_ledger(
+                    campaign_dir,
+                    drifted,
+                    failed_action_id="failing-action",
+                )
+            plan_path = campaign_dir / "control" / "vc" / "campaign-plan.json"
+            tampered = dict(plan)
+            tampered["campaign_purpose"] = "validation_only"
+            self._write_json(plan_path, tampered)
+            with self.assertRaisesRegex(
+                supervisor.SupervisorError, "Campaign 总计划文件或摘要漂移"
+            ):
+                supervisor._close_failed_campaign_timing_ledger(
+                    campaign_dir,
+                    manifest,
+                    failed_action_id="failing-action",
+                )
+            summary = timing_ledger.inspect_ledger(ledger_root)
+            self.assertEqual(summary["active_phase"], "VC-1")
+
     def test_parent_action_failure_closes_upgrade_timing_ledger(self) -> None:
         """父动作非零后不得留下 active/VC-1。"""
 

@@ -1477,6 +1477,49 @@ class VC0CloseoutTests(unittest.TestCase):
                 },
             )
 
+    def test_zero_byte_formal_job_log_is_collected_but_proves_nothing(self) -> None:
+        """deadline 到期留下的零字节日志不能让收口中止，也不能证明请求前失败。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            campaign_dir = root / "campaign"
+            logs = campaign_dir / "official" / "attempts" / "attempt-1" / "logs"
+            logs.mkdir(parents=True, mode=0o700)
+            for parent in (
+                campaign_dir,
+                campaign_dir / "official",
+                campaign_dir / "official" / "attempts",
+                logs.parent,
+            ):
+                parent.chmod(0o700)
+            empty = logs / "deadline-job-1.log"
+            empty.touch(mode=0o600)
+            marker = logs / "deadline-job-2.log"
+            marker.write_text(
+                "mkdir: cannot create directory: Read-only file system\n",
+                encoding="utf-8",
+            )
+            marker.chmod(0o600)
+
+            collected = closeout._job_logs(campaign_dir, "deadline-job")
+            self.assertEqual(collected, sorted([empty.resolve(), marker.resolve()]))
+            # 有一份零字节日志时，整组不能证明请求前失败，但也不得抛错。
+            self.assertFalse(closeout._logs_prove_pre_request_failure(collected))
+            self.assertTrue(closeout._logs_prove_pre_request_failure([marker.resolve()]))
+
+            # 放行只限日志：JSON 收据仍然拒绝零字节。
+            empty_json = root / "empty.json"
+            empty_json.touch(mode=0o600)
+            with self.assertRaisesRegex(
+                closeout.VC0CloseoutError, "大小、属主或权限非法"
+            ):
+                closeout._trusted_file(empty_json, "收据")
+            with self.assertRaisesRegex(
+                closeout.VC0CloseoutError, "大小、属主或权限非法"
+            ):
+                closeout._read_stable_file(empty_json, "收据", maximum=1024)
+
 
 if __name__ == "__main__":
     unittest.main()

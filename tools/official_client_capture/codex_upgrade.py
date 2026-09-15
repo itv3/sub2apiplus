@@ -9577,6 +9577,11 @@ _CONTROL_PLANE_TOOL_FILES = frozenset(
         "codex_upgrade_vc_receipt.py",
         "codex_upgrade_vc_receipt.schema.json",
         "codex_upgrade_vc0_closeout.py",
+        # 根因编码与枚举表只决定账本里的根因 ID，不生成任何证据字节。
+        "codex_upgrade_root_cause.py",
+        "root_cause_codes.json",
+        # 逐请求 provenance 只读解析既有证据核算请求数，不产生证据字节。
+        "codex_upgrade_live_request_provenance.py",
         "codex_upgrade_campaign_run_rehearsal_receipt.py",
         "codex_upgrade_predispatch_stop.py",
         "codex_upgrade_campaign_lease.schema.json",
@@ -9618,6 +9623,11 @@ _CANONICAL_EVALUATION_ONLY_FILES = frozenset(
         "codex_upgrade_vc_receipt.py",
         "codex_upgrade_vc_receipt.schema.json",
         "codex_upgrade_vc0_closeout.py",
+        # 根因编码与枚举表只决定账本里的根因 ID，不生成任何证据字节。
+        "codex_upgrade_root_cause.py",
+        "root_cause_codes.json",
+        # 逐请求 provenance 只读解析既有证据核算请求数，不产生证据字节。
+        "codex_upgrade_live_request_provenance.py",
         "codex_upgrade_campaign_run_rehearsal_receipt.py",
         "codex_upgrade_predispatch_stop.py",
         "codex_upgrade_gate_receipt.py",
@@ -9728,6 +9738,11 @@ _EVALUATION_SIDE_FILES = frozenset(
         "codex_upgrade_vc_receipt.py",
         "codex_upgrade_vc_receipt.schema.json",
         "codex_upgrade_vc0_closeout.py",
+        # 根因编码与枚举表只决定账本里的根因 ID，不生成任何证据字节。
+        "codex_upgrade_root_cause.py",
+        "root_cause_codes.json",
+        # 逐请求 provenance 只读解析既有证据核算请求数，不产生证据字节。
+        "codex_upgrade_live_request_provenance.py",
         "codex_upgrade_campaign_run_rehearsal_receipt.py",
         "codex_upgrade_predispatch_stop.py",
         "codex_upgrade_legacy_boundary.py",

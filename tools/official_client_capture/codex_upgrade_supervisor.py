@@ -32,11 +32,13 @@ from typing import Any, Iterable, Iterator, Mapping, Sequence
 
 if __package__ in {None, ""}:
     import codex_upgrade_evidence_permissions as evidence_permissions
+    import codex_upgrade_root_cause as root_cause
     import codex_upgrade_timing_ledger as timing_ledger
     import codex_upgrade_vc1_permission_alias_closeout as permission_alias_closeout
     import codex_upgrade_vc_artifacts as vc_artifacts
 else:
     from . import codex_upgrade_evidence_permissions as evidence_permissions
+    from . import codex_upgrade_root_cause as root_cause
     from . import codex_upgrade_timing_ledger as timing_ledger
     from . import codex_upgrade_vc1_permission_alias_closeout as permission_alias_closeout
     from . import codex_upgrade_vc_artifacts as vc_artifacts
@@ -7390,10 +7392,7 @@ def _close_failed_campaign_timing_ledger(
             if isinstance(vc_control, Mapping)
             else None
         )
-        if (
-            not isinstance(plan_binding, Mapping)
-            or plan_binding.get("sha256") != manifest.get("campaign_plan_sha256")
-        ):
+        if not isinstance(plan_binding, Mapping):
             raise SupervisorError("父批次与 Campaign 总计划摘要不一致。")
         plan_path = campaign_dir / str(plan_binding.get("path", ""))
         if (
@@ -7402,6 +7401,13 @@ def _close_failed_campaign_timing_ledger(
             or _sha256(plan_path.read_bytes()) != plan_binding.get("sha256")
         ):
             raise SupervisorError("Campaign 总计划文件或摘要漂移。")
+        # 两个口径不能互比：vc_control.campaign_plan.sha256 是计划文件的字节摘要，
+        # 而批次 manifest 的 campaign_plan_sha256 记录的是计划内嵌的自摘要
+        # plan_sha256（见 vc_artifacts.build_campaign_plan）。以前拿字节摘要
+        # 去比自摘要，合法父批次必然被拒，失败账本永远关不掉。
+        plan_payload = _read_json(plan_path)
+        if plan_payload.get("plan_sha256") != manifest.get("campaign_plan_sha256"):
+            raise SupervisorError("父批次与 Campaign 总计划摘要不一致。")
 
     sequence = manifest.get("batch_sequence", 1)
     if not isinstance(sequence, int) or isinstance(sequence, bool) or sequence < 1:
@@ -7417,7 +7423,15 @@ def _close_failed_campaign_timing_ledger(
             }
         )
     )
-    root_cause_id = f"campaign-run-{failure_digest[:24]}"
+    # 根因只由稳定输入生成：同一动作在不同 Campaign 失败得到同一个 ID，
+    # 项目总账的同根因上限才能跨 Campaign 累计。failure_digest 仍含
+    # campaign_id，只用于让事件 ID 在本账本内唯一。
+    root_cause_id = root_cause.structured_root_cause(
+        component="supervisor",
+        stable_error_code="campaign-run.action-failed",
+        failed_step=failed_action_id,
+        stable_dimensions={"phase": phase},
+    )
     event_prefix = f"campaign-run-failure-{failure_digest[:20]}"
     abandon_event_id = f"{event_prefix}-stage-abandoned"
     stop_event_id = f"{event_prefix}-stop-the-line"

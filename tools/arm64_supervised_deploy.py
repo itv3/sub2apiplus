@@ -97,10 +97,10 @@ from typing import Any, Callable, Mapping
 # 2026-09-15（通用 v2 恢复与预派发停线修复）：失败的正式 sequence 1
 # 可由普通 v2 零请求恢复预览承接，非 no-op batch 可确定性补写停线收据。
 DEFAULT_TOOL_DIGEST = (
-    "2d63bf11065a5fc2a08ceefdd09a4639af7b91c80fda7bb4265f64a9fa596c22"
+    "281224ef656cd440bda3d73dd6206278b0311932b6395b455581e57a29a633e2"
 )
 DEFAULT_SUPERVISOR_DIGEST = (
-    "7e54140cb9d4cb5a1d7e0038dba6ff32fa08209f2643dc1548f18882c08937b6"
+    "58a950959f3e32a5c92795181e165adac371aa469e4d008a25fd22bdd34f70f6"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "b9ca7b6f48b3c33a63a864a9ce7ebd617335378ea52fe9148ea161ab3b276ada"
@@ -418,6 +418,10 @@ def load_supervisor(staging_root: Path) -> Any:
         "codex_upgrade_evidence_permissions": (
             "evidence_permissions",
             module_root / "codex_upgrade_evidence_permissions.py",
+        ),
+        "codex_upgrade_root_cause": (
+            "root_cause",
+            module_root / "codex_upgrade_root_cause.py",
         ),
         "codex_upgrade_timing_ledger": (
             "timing_ledger",

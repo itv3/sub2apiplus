@@ -1,0 +1,95 @@
+{
+  "schema_version": "codex-upgrade-root-cause-codes/v1",
+  "algorithm_version": "structured-root-cause/v1",
+  "description": "Codex 升级链路全部根因生产者的稳定错误码枚举表。根因 ID 只由 component、stable_error_code、failed_step 与本表登记的稳定维度生成；诊断全文只进审计详情，不进主键。项目总账冻结本文件摘要与算法版本，任何生产者或消费者都必须先校验一致。修改本表或算法必须携带旧新 ID 映射收据并继承累计次数。",
+  "codes": {
+    "campaign-run.action-failed": {
+      "component": "supervisor",
+      "stable_dimensions": ["phase"],
+      "description": "campaign-run 父批次中某个动作以非零退出；failed_step 为动作 ID。"
+    },
+    "vc0-closeout.step-failed": {
+      "component": "vc0-closeout",
+      "stable_dimensions": [],
+      "description": "VC-0 原子收口在某个步骤失败；failed_step 为步骤名。"
+    },
+    "supervisor-run.interrupted": {
+      "component": "reconciler",
+      "stable_dimensions": ["phase"],
+      "description": "父监督器在派发前或运行中被中断，尚无 attempt。"
+    },
+    "attempt.interrupted": {
+      "component": "reconciler",
+      "stable_dimensions": ["phase"],
+      "description": "reservation 之后 attempt 被中断，checkpoint 未写终态。"
+    },
+    "attempt.deadline-expired": {
+      "component": "reconciler",
+      "stable_dimensions": ["phase"],
+      "description": "attempt 因 Campaign 或项目 deadline 到期停止。"
+    },
+    "attempt.accounting-unresolved": {
+      "component": "reconciler",
+      "stable_dimensions": ["phase"],
+      "description": "attempt 的模型请求数无法从不可变证据确定。"
+    },
+    "attempt.environment-contaminated": {
+      "component": "reconciler",
+      "stable_dimensions": ["phase"],
+      "description": "attempt 的环境恢复失败或前后环境身份不连续。"
+    },
+    "attempt.identity-changed": {
+      "component": "reconciler",
+      "stable_dimensions": ["phase"],
+      "description": "attempt 期间 wire producer 或策略身份发生变化。"
+    },
+    "seal-blocked-by-tool-identity": {
+      "component": "orchestrator",
+      "stable_dimensions": [],
+      "legacy": true,
+      "description": "attempt 已 awaiting_receipts，但封存被工具身份校验拦住（0.154 现场关账本用）。"
+    },
+    "vc1-global-deadline-expired": {
+      "component": "orchestrator",
+      "stable_dimensions": [],
+      "legacy": true,
+      "description": "历史字面量：VC-1 期间 Campaign 原始绝对 deadline 到期。"
+    },
+    "arm64-wg1-peer-identity-drift": {
+      "component": "arm64-environment",
+      "stable_dimensions": [],
+      "legacy": true,
+      "description": "历史字面量：ARM64 wg1 对端身份漂移。"
+    },
+    "capture-cli-public-egress-drift": {
+      "component": "arm64-environment",
+      "stable_dimensions": [],
+      "legacy": true,
+      "description": "历史字面量：capture-cli 公网出口漂移。"
+    },
+    "bwg-reverse-mss-cloud-config-timeout": {
+      "component": "arm64-environment",
+      "stable_dimensions": [],
+      "legacy": true,
+      "description": "历史字面量：BWG 反向 MSS 缺失导致 Cloud Config Bundle 超时。"
+    },
+    "vc1-parent-lease-deadline-missing": {
+      "component": "supervisor",
+      "stable_dimensions": [],
+      "legacy": true,
+      "description": "历史字面量：VC-1 父租约缺少 deadline。"
+    },
+    "vc1-capture-root-readonly-mount": {
+      "component": "capture-runtime",
+      "stable_dimensions": [],
+      "legacy": true,
+      "description": "历史字面量：抓包运行根被只读挂载。"
+    },
+    "vc1-failed-evidence-archive-host-alias": {
+      "component": "vc0-closeout",
+      "stable_dimensions": [],
+      "legacy": true,
+      "description": "历史字面量：失败证据归档走了宿主别名路径。"
+    }
+  }
+}

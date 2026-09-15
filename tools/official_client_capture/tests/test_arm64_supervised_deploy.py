@@ -253,6 +253,7 @@ class Arm64SupervisedDeployTest(unittest.TestCase):
             module_root.mkdir(parents=True)
             dependencies = {
                 "codex_upgrade_evidence_permissions": "evidence_permissions",
+                "codex_upgrade_root_cause": "root_cause",
                 "codex_upgrade_timing_ledger": "timing_ledger",
                 "codex_upgrade_vc1_permission_alias_closeout": (
                     "permission_alias_closeout"

@@ -30,6 +30,7 @@ from typing import Any, Iterator, Mapping
 from tools.official_client_capture import codex_upgrade
 from tools.official_client_capture import codex_upgrade_arm64_environment_receipt
 from tools.official_client_capture import codex_upgrade_job_rehearsal_receipt
+from tools.official_client_capture import codex_upgrade_root_cause
 from tools.official_client_capture import codex_upgrade_supervisor
 from tools.official_client_capture import codex_upgrade_timing_ledger
 from tools.official_client_capture import codex_upgrade_vc_artifacts
@@ -154,20 +155,27 @@ def _file_stat_identity(value: os.stat_result) -> tuple[int, int, int, int, int]
     )
 
 
-def _read_stable_file(path: Path, label: str, *, maximum: int) -> bytes:
+def _read_stable_file(
+    path: Path,
+    label: str,
+    *,
+    maximum: int,
+    allow_empty: bool = False,
+) -> bytes:
     """通过 O_NOFOLLOW 描述符读取一次有大小上限的稳定普通文件。"""
 
-    source = _trusted_file(path, label, maximum=maximum)
+    source = _trusted_file(path, label, maximum=maximum, allow_empty=allow_empty)
     flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
         descriptor = os.open(source, flags)
     except OSError as error:
         raise VC0CloseoutError(f"{label}无法安全打开") from error
+    minimum = 0 if allow_empty else 1
     try:
         before = os.fstat(descriptor)
         if (
             not stat.S_ISREG(before.st_mode)
-            or not 1 <= before.st_size <= maximum
+            or not minimum <= before.st_size <= maximum
             or before.st_uid != os.geteuid()
             or stat.S_IMODE(before.st_mode) & 0o022
         ):
@@ -263,15 +271,29 @@ def _new_private_directory(path: Path, label: str) -> Path:
     return resolved
 
 
-def _trusted_file(path: Path, label: str, *, maximum: int = MAX_JSON_BYTES) -> Path:
+def _trusted_file(
+    path: Path,
+    label: str,
+    *,
+    maximum: int = MAX_JSON_BYTES,
+    allow_empty: bool = False,
+) -> Path:
+    """校验可信普通文件；默认拒绝零字节，只有日志类输入显式放行。
+
+    ``allow_empty`` 只给 Formal Job 日志使用：deadline 到期或进程被杀时
+    wrapper 可能合法地留下零字节日志，这不是伪造证据，不能因此让收口失败。
+    JSON 收据仍然必须至少 1 字节。
+    """
+
     if not path.is_absolute() or path.is_symlink() or not path.is_file():
         raise VC0CloseoutError(f"{label}必须是可信绝对普通文件")
     resolved = path.resolve(strict=True)
     metadata = resolved.stat()
+    minimum = 0 if allow_empty else 1
     if (
         metadata.st_uid != os.geteuid()
         or stat.S_IMODE(metadata.st_mode) & 0o022
-        or not 1 <= metadata.st_size <= maximum
+        or not minimum <= metadata.st_size <= maximum
     ):
         raise VC0CloseoutError(f"{label}大小、属主或权限非法")
     return resolved
@@ -1680,7 +1702,9 @@ def _job_logs(formal_campaign_dir: Path, job_id: str) -> list[Path]:
             raise VC0CloseoutError("Formal attempt logs 根不可信")
         for path in logs.iterdir():
             if pattern.fullmatch(path.name):
-                result.append(_trusted_file(path, "Formal Job 日志"))
+                # deadline 到期或进程被杀时 wrapper 可能只留下零字节日志，
+                # 这是合法现场，不能在收集阶段就把整次收口判死。
+                result.append(_trusted_file(path, "Formal Job 日志", allow_empty=True))
     return sorted(result)
 
 
@@ -1690,7 +1714,11 @@ def _logs_prove_pre_request_failure(paths: list[Path]) -> bool:
     if not paths:
         return False
     for path in paths:
-        raw = _read_stable_file(path, "Formal Job 日志", maximum=MAX_JSON_BYTES)
+        raw = _read_stable_file(
+            path, "Formal Job 日志", maximum=MAX_JSON_BYTES, allow_empty=True
+        )
+        # 零字节日志读出空串，自然不含任何失败标记，只能得出“无法证明
+        # 请求前失败”的保守结论，而不是抛错让收口中止。
         if not any(marker in raw for marker in PRE_REQUEST_FAILURE_MARKERS):
             return False
     return True
@@ -2301,7 +2329,14 @@ def _close_failed_timing_stage(
     digest = _sha256_bytes(
         f"{formal_campaign_id}\0{failed_step}".encode("utf-8")
     )[:20]
-    root_cause_id = f"vc0-closeout-{digest}"
+    # 旧根因 ID 把 campaign_id 混进了摘要，同一步骤在每个新 Campaign 里都算
+    # 新根因，同根因重试上限永远不触发。现在根因只由步骤名生成；含
+    # campaign_id 的 digest 只用于事件 ID，保证本账本内唯一。
+    root_cause_id = codex_upgrade_root_cause.structured_root_cause(
+        component="vc0-closeout",
+        stable_error_code="vc0-closeout.step-failed",
+        failed_step=failed_step,
+    )
     event_id = f"vc0-closeout-failure-{digest}"
     active_phase = summary.get("active_phase")
     next_action = (
