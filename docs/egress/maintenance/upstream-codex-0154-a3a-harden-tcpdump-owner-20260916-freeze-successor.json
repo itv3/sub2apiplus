@@ -1,0 +1,159 @@
+{
+  "base_commit": "30d7c15b444be15a7da9493ce28dce0510f598f6",
+  "changed_path_count": 4,
+  "current_commit": "69e9c9f274326cf7255e744b24697091486217ca",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 3407,
+  "frozen_path_count": 1398,
+  "identity_sha256": "43ebe67e0550f29c6d4102b919a93c66ce24c70946aa5024d97587b4e19fe948",
+  "issued_at_utc": "2026-09-15T23:41:00Z",
+  "mode": "commit",
+  "required_manual_actions": [
+    {
+      "action_kind": "script_constant",
+      "file": "tools/arm64_supervised_deploy.py",
+      "instruction": "用 tools/arm64_supervised_deploy.py 的 tool_digest() 与 file_sha256() 重算 DEFAULT_TOOL_DIGEST、DEFAULT_SUPERVISOR_DIGEST、DEFAULT_ASSERTION_PREPARER_DIGEST 并更新常量；脚本自身随之变化，须在同一收据或后续收据中登记其后继摘要。",
+      "path": "tools/official_client_capture/codex_upgrade_harden_evidence_permissions.py",
+      "rule_id": "arm64-managed-tool-digests",
+      "verification": [
+        "python3 -m unittest tools.official_client_capture.tests.test_arm64_supervised_deploy"
+      ]
+    },
+    {
+      "action_kind": "script_constant",
+      "file": "tools/arm64_supervised_deploy.py",
+      "instruction": "用 tools/arm64_supervised_deploy.py 的 tool_digest() 与 file_sha256() 重算 DEFAULT_TOOL_DIGEST、DEFAULT_SUPERVISOR_DIGEST、DEFAULT_ASSERTION_PREPARER_DIGEST 并更新常量；脚本自身随之变化，须在同一收据或后续收据中登记其后继摘要。",
+      "path": "tools/official_client_capture/codex_upgrade_timing_ledger.py",
+      "rule_id": "arm64-managed-tool-digests",
+      "verification": [
+        "python3 -m unittest tools.official_client_capture.tests.test_arm64_supervised_deploy"
+      ]
+    }
+  ],
+  "result": "manual_actions_required",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-0154-a3a-harden-tcpdump-owner-20260916-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "tools/arm64_supervised_deploy.py",
+      "predecessor_sha256s": [
+        "5a7b12a4270c5f33ce92788fbc009e95f2e991d14e6624642e79e2dc0b4723f3"
+      ],
+      "reason": "重采 Campaign 首个 attempt 的权限收口被 tcpdump 属主拦下；harden 与 seal 侧共用同一条 tcpdump 固定属主边界 path=tools/arm64_supervised_deploy.py",
+      "source_receipts": [
+        "docs/egress/maintenance/client-vc-stage-navigation-20260912-freeze-successor.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-capability-pin-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-a0a-tool-unlock-20260915-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-a0b-provenance-campaign-id-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-a1b-verdict-copy-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-a2-a3a-policy-reuse-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-a2-contract-v2-identity-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-a25-py312-nesting-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-a26-a25-policy-certification-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-astra-lite-recovery-20260915-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-atomic-predispatch-tool-closure-20260915-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-b-cleanup-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-b0-reconciler-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-b1-deletion-proof-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-bwg-egress-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-bwg-mss-rust-tls-repair-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-bwg-tls-global-failfast-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-c-release-certification-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-c1-atomic-container-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-c3-historical-p0-compat-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-campaign-input-byte-freeze-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-campaign-run-rehearsal-closure-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-canonical-production-chain-20260912-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-emulation-upgrade-20260911-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-failed-evidence-archive-route-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-job-rehearsal-entrypoint-closure-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-profile-patch-binding-20260912-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-runtime-doc-candidate-metadata-20260912-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-runtime-doc-closure-20260912-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-runtime-doc-metadata-20260912-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc0-atomic-closeout-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc0-atomic-receipt-timing-closeout-20260915-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-capture-tool-recovery-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-deadline-orphan-finalization-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-finalization-recovery-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-formal-failure-closure-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-general-toolchain-closeout-20260915-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-historical-helper-loader-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-interruption-continuation-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-interruption-recovery-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-parent-lease-repair-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-pcap-filename-boundary-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-permission-alias-closeout-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-permission-alias-predispatch-closeout-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-permission-preflight-compensation-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-permission-preflight-path-binding-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-staging-loader-closure-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-tcpdump-owner-boundary-20260914-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-timing-producer-chain-closeout-20260915-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-v2-recovery-predispatch-closeout-20260915-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-writable-run-root-repair-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-upgrade-batch1-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-upgrade-batch2-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-vc-final-alignment-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-tool-identity-sync-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "8d73ed9faadc983208aee0a597e48ca35456b4e4ef000a6f85fdf1ab465e95e9"
+    },
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/codex_upgrade_timing_ledger.py",
+      "predecessor_sha256s": [
+        "5103ef952c5ab0d1d4b7301db5e4bd55bdf099752f0e474a0dde51a770131aff"
+      ],
+      "reason": "重采 Campaign 首个 attempt 的权限收口被 tcpdump 属主拦下；harden 与 seal 侧共用同一条 tcpdump 固定属主边界 path=tools/official_client_capture/codex_upgrade_timing_ledger.py",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-container-path-recovery-tool-successor-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-producer-coordinate-decoupling-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-timing-producer-replay-tool-successor-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-a0a-tool-unlock-20260915-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-a0b-provenance-campaign-id-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-a1b-verdict-copy-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-a2-a3a-policy-reuse-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-a2-contract-v2-identity-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-a25-py312-nesting-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-a26-a25-policy-certification-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-b-cleanup-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-b0-reconciler-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-b1-deletion-proof-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-c-release-certification-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-c1-atomic-container-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-c3-historical-p0-compat-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-general-toolchain-closeout-20260915-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc1-timing-producer-chain-closeout-20260915-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "fec1320984151a0880cdf6f92ccdbcb6d1988e934f5adbca6dc3b26d50d11f14"
+    }
+  ],
+  "unregistered_path_count": 2,
+  "unregistered_paths": [
+    "tools/official_client_capture/codex_upgrade_harden_evidence_permissions.py",
+    "tools/official_client_capture/tests/test_codex_upgrade_harden_evidence_permissions.py"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci",
+    "python3 -m unittest tools.official_client_capture.tests.test_arm64_supervised_deploy"
+  ]
+}
