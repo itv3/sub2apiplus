@@ -181,17 +181,24 @@ def _command_gate(value: Any, label: str) -> dict[str, Any]:
     return gate
 
 
-def _validate_p0_assertions(value: Any) -> dict[str, Any]:
-    assertions = _expect(
-        value,
-        {
-            "offline_gates",
-            "tool_blockers",
-            "rollback_ready",
-            "release_certification_sha256",
-        },
-        "P0 assertions",
-    )
+# C3 起签发的 P0 断言：离线门禁、工具阻断、回退点与发布认证文件摘要。
+P0_ASSERTION_FIELDS = frozenset(
+    {"offline_gates", "tool_blockers", "rollback_ready", "release_certification_sha256"}
+)
+# C3 之前签发的历史 P0 断言：直接绑定完整 Job 演练收据摘要与 campaign-run 演练结论。
+# 历史收据只允许重放（读取 0.154 首轮 Campaign 的冻结控制），不允许再用同形状 facts 签发。
+HISTORICAL_P0_ASSERTION_FIELDS = frozenset(
+    {"offline_gates", "tool_blockers", "campaign_run_rehearsal", "rollback_ready", "job_rehearsal_sha256"}
+)
+P0_EVIDENCE_ROLES = frozenset({"check_egress_spec", "release_certification", "rollback", "test_capture_tools"})
+HISTORICAL_P0_EVIDENCE_ROLES = frozenset(
+    {"campaign_run_rehearsal", "check_egress_spec", "job_rehearsal", "rollback", "test_capture_tools"}
+)
+
+
+def _validate_p0_offline_gates(assertions: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """两种 P0 断言形状共用的离线门禁、工具阻断与回退点校验。"""
+
     gates = assertions["offline_gates"]
     if not isinstance(gates, list) or len(gates) != 2:
         raise VCReceiptError("P0 必须且只能登记两项离线门禁")
@@ -209,6 +216,43 @@ def _validate_p0_assertions(value: Any) -> dict[str, Any]:
         raise VCReceiptError("P0 工具阻断不为零")
     if assertions["rollback_ready"] is not True:
         raise VCReceiptError("P0 回退点不可用")
+    return normalized
+
+
+def _validate_historical_p0_assertions(value: Any) -> dict[str, Any]:
+    """只读重放 C3 之前的历史 P0 断言（Job 演练摘要与 campaign-run 演练结论）。"""
+
+    assertions = _expect(value, set(HISTORICAL_P0_ASSERTION_FIELDS), "P0 assertions")
+    normalized = _validate_p0_offline_gates(assertions)
+    rehearsal = _expect(
+        assertions["campaign_run_rehearsal"],
+        {
+            "multi_batch_passed",
+            "original_deadline_inherited",
+            "frozen_jobs_passed",
+            "live_request_count",
+        },
+        "P0 campaign_run_rehearsal",
+    )
+    if rehearsal != {
+        "multi_batch_passed": True,
+        "original_deadline_inherited": True,
+        "frozen_jobs_passed": True,
+        "live_request_count": 0,
+    }:
+        raise VCReceiptError("P0 campaign-run、原始 deadline 或冻结 Job 演练未通过")
+    _sha256(assertions["job_rehearsal_sha256"], "P0 job_rehearsal_sha256")
+    assertions["offline_gates"] = normalized
+    return assertions
+
+
+def _validate_p0_assertions(value: Any, *, allow_historical: bool = False) -> dict[str, Any]:
+    if isinstance(value, Mapping) and set(value) == HISTORICAL_P0_ASSERTION_FIELDS:
+        if not allow_historical:
+            raise VCReceiptError("P0 断言是 C3 之前的历史形状，只能重放不能签发")
+        return _validate_historical_p0_assertions(value)
+    assertions = _expect(value, set(P0_ASSERTION_FIELDS), "P0 assertions")
+    normalized = _validate_p0_offline_gates(assertions)
     # C3：Job rehearsal、campaign-run rehearsal 与 atomic-double 已合成进发布认证，
     # P0 只绑定发布认证收据的文件摘要。
     _sha256(assertions["release_certification_sha256"], "P0 release_certification_sha256")
@@ -351,9 +395,11 @@ def _validate_completion_assertions(kind: str, purpose: str, value: Any) -> dict
     return assertions
 
 
-def _validate_assertions(kind: str, purpose: str, value: Any) -> dict[str, Any]:
+def _validate_assertions(
+    kind: str, purpose: str, value: Any, *, allow_historical: bool = False
+) -> dict[str, Any]:
     if kind == "p0_gate":
-        return _validate_p0_assertions(value)
+        return _validate_p0_assertions(value, allow_historical=allow_historical)
     if kind == "implementation_tests":
         return _validate_implementation_assertions(value)
     if kind == "private_archive":
@@ -365,12 +411,10 @@ def _validate_assertions(kind: str, purpose: str, value: Any) -> dict[str, Any]:
 
 def _expected_roles(kind: str, purpose: str, assertions: Mapping[str, Any]) -> set[str]:
     if kind == "p0_gate":
-        return {
-            "check_egress_spec",
-            "release_certification",
-            "rollback",
-            "test_capture_tools",
-        }
+        # 历史 P0 收据（C3 之前）按其自身角色集合重放；新收据只绑定发布认证。
+        if "job_rehearsal_sha256" in assertions:
+            return set(HISTORICAL_P0_EVIDENCE_ROLES)
+        return set(P0_EVIDENCE_ROLES)
     if kind == "implementation_tests":
         return {"check_egress_spec", "implementation_tests"}
     if kind == "private_archive":
@@ -480,7 +524,9 @@ def build_receipt(
     return validate_receipt(payload)
 
 
-def validate_receipt(value: Any) -> dict[str, Any]:
+def validate_receipt(value: Any, *, allow_historical: bool = False) -> dict[str, Any]:
+    """校验阶段收据；``allow_historical`` 只在重放时打开，允许读取 C3 之前的历史 P0 形状。"""
+
     receipt = _expect(
         value,
         {
@@ -502,7 +548,9 @@ def validate_receipt(value: Any) -> dict[str, Any]:
     if receipt["status"] != expected_status:
         raise VCReceiptError(f"{kind} status 非法")
     subject = _subject(receipt["subject"], kind)
-    assertions = _validate_assertions(kind, subject["campaign_purpose"], receipt["assertions"])
+    assertions = _validate_assertions(
+        kind, subject["campaign_purpose"], receipt["assertions"], allow_historical=allow_historical
+    )
     evidence = _validate_evidence(
         kind,
         subject["campaign_purpose"],
@@ -618,7 +666,7 @@ def replay(root: Path, receipt_relative: str) -> dict[str, Any]:
 
     evidence_root = _private_root(root)
     receipt_path = _inside(evidence_root, receipt_relative, "receipt")
-    receipt = validate_receipt(_read_json(receipt_path, "receipt"))
+    receipt = validate_receipt(_read_json(receipt_path, "receipt"), allow_historical=True)
     for item in receipt["evidence"]:
         path = _inside(evidence_root, item["path"], f"evidence.{item['role']}")
         if (

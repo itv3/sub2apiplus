@@ -11,6 +11,9 @@ from pathlib import Path
 from tools.official_client_capture import codex_upgrade
 from tools.official_client_capture import codex_upgrade_vc_artifacts as artifacts
 from tools.official_client_capture import codex_upgrade_vc_receipt as receipts
+from tools.official_client_capture.tests.control_receipt_fixtures import (
+    create_historical_p0_gate_receipt,
+)
 
 
 class CodexUpgradeVCReceiptTests(unittest.TestCase):
@@ -240,6 +243,41 @@ class CodexUpgradeVCReceiptTests(unittest.TestCase):
                     "actions": [],
                 }
             )
+
+    def test_historical_p0_receipt_replays_read_only(self) -> None:
+        """C3 之前签发的历史 P0 收据只能重放，同形状 facts 不能再签发。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve() / "p0"
+            rehearsal = Path(directory) / "job-rehearsal-receipt.json"
+            rehearsal.write_text('{"job_count": 38}\n', encoding="utf-8")
+            receipt_path = create_historical_p0_gate_receipt(
+                root,
+                upgrade_id="codex-0151-to-0154-historical",
+                baseline_version="0.151.0",
+                target_version="0.154.0",
+                campaign_purpose="production_replacement",
+                job_rehearsal_receipt=rehearsal,
+            )
+            replayed = receipts.replay(root, receipt_path.name)
+            self.assertEqual(replayed["status"], "passed")
+            self.assertEqual(
+                set(replayed["assertions"]),
+                set(receipts.HISTORICAL_P0_ASSERTION_FIELDS),
+            )
+            self.assertEqual(
+                {item["role"] for item in replayed["evidence"]},
+                set(receipts.HISTORICAL_P0_EVIDENCE_ROLES),
+            )
+            with self.assertRaisesRegex(receipts.VCReceiptError, "历史形状"):
+                receipts.finalize(root, "p0-facts.json", "p0-receipt-again.json")
+            self.assertFalse((root / "p0-receipt-again.json").exists())
+            # 篡改历史断言里的 Job 演练摘要必须在重放时被自摘要拦下。
+            payload = json.loads(receipt_path.read_text(encoding="utf-8"))
+            payload["assertions"]["job_rehearsal_sha256"] = "0" * 64
+            receipt_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            with self.assertRaisesRegex(receipts.VCReceiptError, "自摘要不一致"):
+                receipts.replay(root, receipt_path.name)
 
     def test_schema_file_matches_runtime_version(self) -> None:
         schema = json.loads(

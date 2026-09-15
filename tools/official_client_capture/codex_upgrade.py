@@ -430,6 +430,43 @@ def _requires_complete_vc_artifacts(value: Mapping[str, Any] | str) -> bool:
     if not isinstance(version, str) or not VERSION_RE.fullmatch(version):
         return False
     return tuple(int(part) for part in version.split(".")) >= VC_ARTIFACT_MIN_VERSION
+
+
+# C3：工具身份策略 v5 起，完整 VC 链的 formal plan 必须绑定发布认证；此前创建的
+# 0.154 首轮 Campaign 只有 Job 演练与 P0 绑定，只读加载时按历史形状承接。
+RELEASE_CERTIFICATION_POLICY_VERSION = 5
+
+
+def _manifest_policy_version(manifest: Mapping[str, Any]) -> int:
+    """读取 Campaign 冻结工具身份里的策略版本；历史清单没有该字段时记 0。"""
+
+    identity = manifest.get("tool_identity")
+    value = identity.get("policy_version") if isinstance(identity, Mapping) else None
+    if value is None or isinstance(value, bool):
+        return 0
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _release_certification_required(
+    manifest: Mapping[str, Any], controls: Mapping[str, Any] | None = None
+) -> bool:
+    """判断 Campaign 控制收据是否必须包含发布认证绑定。
+
+    策略 v5 起创建的完整 VC 链 Campaign 一律要求；已经携带该绑定的清单也按新形状校验。
+    C3 之前创建的历史 Campaign 没有发布认证，其 P0 直接绑定完整 Job 演练收据。
+    """
+
+    if isinstance(controls, Mapping) and "release_certification" in controls:
+        return True
+    return (
+        _requires_complete_vc_artifacts(manifest)
+        and _manifest_policy_version(manifest) >= RELEASE_CERTIFICATION_POLICY_VERSION
+    )
+
+
 RUN_NONCE_RE = SHA256_RE
 SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 RUNTIME_WINDOW_ID_PLACEHOLDER = "20000101T000000Z"
@@ -11585,7 +11622,8 @@ def _verify_control_receipts(
         expected_controls.add("job_rehearsal")
         if _requires_complete_vc_artifacts(manifest):
             expected_controls.add("p0_gate")
-            expected_controls.add("release_certification")
+            if _release_certification_required(manifest, controls):
+                expected_controls.add("release_certification")
     if not isinstance(controls, dict) or set(controls) != expected_controls:
         raise ConfigurationError("Campaign 缺少完整控制收据绑定。")
     timing = controls.get("upgrade_timing")
@@ -11819,8 +11857,9 @@ def _verify_control_receipts(
             subject = p0_receipt.get("subject")
             assertions = p0_receipt.get("assertions")
             rehearsal_binding = rehearsal.get("receipt")
+            release_required = _release_certification_required(manifest, controls)
             release = controls.get("release_certification")
-            if (
+            if release_required and (
                 not isinstance(release, Mapping)
                 or set(release) != {"path", "sha256", "receipt_sha256", "identity"}
                 or not Path(str(release.get("path", ""))).is_absolute()
@@ -11841,9 +11880,14 @@ def _verify_control_receipts(
                 or subject.get("campaign_purpose") != manifest.get("campaign_purpose")
                 or not isinstance(assertions, Mapping)
                 or not isinstance(rehearsal_binding, Mapping)
-                or assertions.get("release_certification_sha256") != release.get("sha256")
             ):
-                raise ConfigurationError("P0 门禁收据身份或发布认证绑定漂移。")
+                raise ConfigurationError("P0 门禁收据身份漂移。")
+            if release_required:
+                if assertions.get("release_certification_sha256") != release.get("sha256"):
+                    raise ConfigurationError("P0 门禁收据身份或发布认证绑定漂移。")
+            elif assertions.get("job_rehearsal_sha256") != rehearsal_binding.get("sha256"):
+                # C3 之前的历史 Campaign：P0 直接绑定完整 Job 演练收据，只读承接。
+                raise ConfigurationError("历史 P0 门禁收据未绑定 Campaign 冻结的完整 Job 演练。")
         except (OSError, codex_upgrade_vc_receipt.VCReceiptError) as error:
             if isinstance(error, ConfigurationError):
                 raise

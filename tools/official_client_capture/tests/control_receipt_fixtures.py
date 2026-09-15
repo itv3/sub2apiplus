@@ -708,3 +708,107 @@ def create_p0_gate_receipt(
     facts_path = _write(root / "p0-facts.json", facts)
     vc_receipt.finalize(root.resolve(), facts_path.name, "p0-receipt.json")
     return root / "p0-receipt.json"
+
+
+def create_historical_p0_gate_receipt(
+    root: Path,
+    *,
+    upgrade_id: str,
+    baseline_version: str,
+    target_version: str,
+    campaign_purpose: str,
+    job_rehearsal_receipt: Path,
+) -> Path:
+    """合成 C3 之前签发的历史 P0 收据（Job 演练摘要与 campaign-run 演练结论）。
+
+    当前 ``finalize`` 只签发新形状，因此这里按 ``build_receipt`` 的载荷布局直接写出
+    收据字节，供只读重放路径的回归测试使用；同时写出同形状 facts 供签发拒绝测试使用。
+    """
+
+    root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    root.chmod(0o700)
+    evidence = []
+    bound = []
+    for role in sorted(
+        {
+            "campaign_run_rehearsal",
+            "check_egress_spec",
+            "job_rehearsal",
+            "rollback",
+            "test_capture_tools",
+        }
+    ):
+        relative = f"evidence/{role}.log"
+        path = _write(root / relative, {"role": role, "status": "passed"})
+        evidence.append({"role": role, "path": relative})
+        bound.append(
+            {
+                "role": role,
+                "path": relative,
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "bytes": path.stat().st_size,
+            }
+        )
+    subject = {
+        "upgrade_id": upgrade_id,
+        "campaign_id": None,
+        "campaign_purpose": campaign_purpose,
+        "baseline_version": baseline_version,
+        "target_version": target_version,
+        "candidate_id": None,
+        "attempt_id": None,
+    }
+    assertions = {
+        "offline_gates": [
+            {
+                "gate_id": "check-egress-spec",
+                "kind": "public",
+                "command": ["make", "check-egress-spec"],
+                "exit_code": 0,
+                "passed": 1,
+                "failed": 0,
+                "approved_skip": 0,
+                "unexpected_skip": 0,
+            },
+            {
+                "gate_id": "test-capture-tools",
+                "kind": "public",
+                "command": ["make", "test-capture-tools"],
+                "exit_code": 0,
+                "passed": 1,
+                "failed": 0,
+                "approved_skip": 0,
+                "unexpected_skip": 0,
+            },
+        ],
+        "tool_blockers": [],
+        "campaign_run_rehearsal": {
+            "multi_batch_passed": True,
+            "original_deadline_inherited": True,
+            "frozen_jobs_passed": True,
+            "live_request_count": 0,
+        },
+        "rollback_ready": True,
+        "job_rehearsal_sha256": hashlib.sha256(job_rehearsal_receipt.read_bytes()).hexdigest(),
+    }
+    _write(
+        root / "p0-facts.json",
+        {
+            "schema_version": vc_receipt.FACTS_SCHEMA,
+            "kind": "p0_gate",
+            "subject": subject,
+            "assertions": assertions,
+            "evidence": evidence,
+        },
+    )
+    payload = {
+        "schema_version": vc_receipt.RECEIPT_SCHEMA,
+        "kind": "p0_gate",
+        "status": "passed",
+        "subject": subject,
+        "assertions": assertions,
+        "evidence": bound,
+        "issued_at_utc": "2026-09-14T00:00:00+00:00",
+    }
+    payload["receipt_digest"] = vc_receipt.digest(payload)
+    return _write(root / "p0-receipt.json", payload)

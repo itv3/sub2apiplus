@@ -1826,7 +1826,10 @@ python3 -m tools.official_client_capture.certify_release verify \
 P0 门禁收据的 evidence 角色固定为 `check_egress_spec`、`release_certification`、`rollback`、
 `test_capture_tools` 四个，`assertions.release_certification_sha256` 与 `release_certification` 角色文件
 都必须等于发布认证文件的 SHA-256。任一绑定文件漂移、部署收据五摘要变化或受管树再次变化，都必须重新部署、
-重新签发发布认证并重新执行 P0。
+重新签发发布认证并重新执行 P0。C3 之前签发的历史 P0 收据（断言为 `job_rehearsal_sha256` 与
+`campaign_run_rehearsal`，角色含 `job_rehearsal` 与 `campaign_run_rehearsal`）只能由 `replay` 只读重放，用于
+加载策略 v5 之前创建的 0.154 首轮 Formal Campaign 的冻结控制；`finalize` 不再签发该形状，策略 v5 起创建的
+Formal Campaign 一律要求 `release_certification` 绑定。
 
 <a id="codex-vc-1"></a>
 ## 4.1 VC-1 收集目标证据

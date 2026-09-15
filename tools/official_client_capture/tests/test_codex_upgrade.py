@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import contextlib
 import gzip
 import hashlib
@@ -45,6 +46,7 @@ from tools.official_client_capture.codex_upgrade import (
 from tools.official_client_capture.codex_upgrade import Job
 from tools.official_client_capture.tests.control_receipt_fixtures import (
     create_arm_receipt,
+    create_historical_p0_gate_receipt,
     create_job_rehearsal_receipt,
     create_p0_gate_receipt,
     create_release_certification,
@@ -11442,6 +11444,108 @@ class CodexUpgradeTest(unittest.TestCase):
                     message,
                 ):
                     codex_upgrade._validate_upgrade_pair_models(**values)
+
+    def test_release_certification_requirement_follows_policy_version(self) -> None:
+        """发布认证绑定只对策略 v5 起创建的完整 VC 链 Campaign 必需，历史清单按 Job 演练承接。"""
+
+        required = codex_upgrade._release_certification_required
+        self.assertFalse(required({"target_version": "0.154.0", "tool_identity": {"files_sha256": "x"}}))
+        self.assertFalse(required({"target_version": "0.154.0", "tool_identity": {"policy_version": 4}}))
+        self.assertFalse(required({"target_version": "0.154.0", "tool_identity": {"policy_version": True}}))
+        self.assertTrue(required({"target_version": "0.154.0", "tool_identity": {"policy_version": 5}}))
+        self.assertTrue(required({"target_version": "0.154.0", "tool_identity": {"policy_version": "6"}}))
+        self.assertFalse(required({"target_version": "0.151.0", "tool_identity": {"policy_version": 5}}))
+        self.assertTrue(
+            required(
+                {"target_version": "0.154.0", "tool_identity": {}},
+                {"release_certification": {"path": "/x"}},
+            )
+        )
+
+    def test_historical_0154_controls_without_release_certification_replay(self) -> None:
+        """C3 之前创建的 0.154 formal Campaign 没有发布认证绑定，只读加载必须按历史 P0 形状重放。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project_ledger_fixture.install_fixture_ledger(root)
+            arguments = self._campaign_arguments(
+                root / "campaign-root",
+                campaign_id="upgrade-0154-historical-controls",
+                baseline_version="0.151.0",
+                target_version="0.154.0",
+                model="gpt-5.5",
+                lite_model="gpt-6-astra",
+            )
+            codex_upgrade.create_campaign(arguments)
+            campaign_dir = arguments.campaign_dir
+            manifest = codex_upgrade.load_campaign_manifest(campaign_dir)
+            self.assertGreaterEqual(
+                codex_upgrade._manifest_policy_version(manifest),
+                codex_upgrade.RELEASE_CERTIFICATION_POLICY_VERSION,
+            )
+            controls = copy.deepcopy(dict(manifest["control_receipts"]))
+            self.assertIn("release_certification", controls)
+            rehearsal_binding = controls["job_rehearsal"]
+            rehearsal_receipt = (
+                Path(rehearsal_binding["evidence_root"]) / rehearsal_binding["receipt"]["path"]
+            )
+            historical_root = (root / "control" / "p0-gate-historical").resolve()
+            historical_receipt = create_historical_p0_gate_receipt(
+                historical_root,
+                upgrade_id=str(controls["p0_gate"]["upgrade_id"]),
+                baseline_version="0.151.0",
+                target_version="0.154.0",
+                campaign_purpose=str(manifest["campaign_purpose"]),
+                job_rehearsal_receipt=rehearsal_receipt,
+            )
+            payload = json.loads(historical_receipt.read_text(encoding="utf-8"))
+            controls["p0_gate"] = {
+                "evidence_root": str(historical_root),
+                "receipt": {
+                    "path": historical_receipt.name,
+                    "sha256": hashlib.sha256(historical_receipt.read_bytes()).hexdigest(),
+                    "bytes": historical_receipt.stat().st_size,
+                },
+                "receipt_digest": payload["receipt_digest"],
+                "upgrade_id": controls["p0_gate"]["upgrade_id"],
+            }
+            del controls["release_certification"]
+            historical_manifest = copy.deepcopy(dict(manifest))
+            historical_manifest["tool_identity"] = {
+                key: value
+                for key, value in dict(manifest["tool_identity"]).items()
+                if key != "policy_version"
+            }
+            # 历史清单：没有策略版本、没有发布认证绑定、P0 绑定 Job 演练摘要 → 只读重放通过。
+            codex_upgrade._verify_control_receipts(
+                campaign_dir,
+                historical_manifest,
+                require_active=False,
+                _control_override=controls,
+            )
+            # 同一套历史控制换成策略 v5 的清单：发布认证成为必需，缺失即拒绝。
+            with self.assertRaisesRegex(
+                codex_upgrade.ConfigurationError, "缺少完整控制收据绑定"
+            ):
+                codex_upgrade._verify_control_receipts(
+                    campaign_dir,
+                    dict(manifest),
+                    require_active=False,
+                    _control_override=controls,
+                )
+            # 历史 P0 若绑定了别的 Job 演练摘要，同样拒绝。
+            drifted = copy.deepcopy(controls)
+            drifted["job_rehearsal"] = {
+                **drifted["job_rehearsal"],
+                "receipt": {**drifted["job_rehearsal"]["receipt"], "sha256": "0" * 64},
+            }
+            with self.assertRaises(codex_upgrade.ConfigurationError):
+                codex_upgrade._verify_control_receipts(
+                    campaign_dir,
+                    historical_manifest,
+                    require_active=False,
+                    _control_override=drifted,
+                )
 
     def test_0154_upgrade_pair_model_policy_mutations_fail_closed(self) -> None:
         """0.154 必须用非 Lite 主线和 Astra Lite 轨，错配时立即拒绝。"""
