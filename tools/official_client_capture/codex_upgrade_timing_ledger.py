@@ -126,6 +126,12 @@ PRODUCER_FREEZE_SUCCESSORS = (
         "scope": "upstream-codex-0154-a26-a25-policy-certification-20260916-freeze-successor",
         "result": "manual_actions_required",
     },
+    {
+        "path": "docs/egress/maintenance/upstream-codex-0154-a25-py312-nesting-20260916-freeze-successor.json",
+        "base_commit": "f92f978974e0a0c207475c4947652ff2eb09873d",
+        "scope": "upstream-codex-0154-a25-py312-nesting-20260916-freeze-successor",
+        "result": "manual_actions_required",
+    },
 )
 
 
