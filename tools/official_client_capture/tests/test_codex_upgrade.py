@@ -6000,6 +6000,12 @@ class CodexUpgradeTest(unittest.TestCase):
                         tool_files_sha256=codex_upgrade._tool_identity()[
                             "files_sha256"
                         ],
+                        wire_producer_sha256=codex_upgrade._tool_identity().get(
+                            "wire_producer_sha256"
+                        ),
+                        policy_sha256=codex_upgrade._tool_identity().get(
+                            "policy_sha256"
+                        ),
                         configuration={
                             "runtime_image": runtime_image,
                             "model": model,
@@ -11444,6 +11450,47 @@ class CodexUpgradeTest(unittest.TestCase):
                     message,
                 ):
                     codex_upgrade._validate_upgrade_pair_models(**values)
+
+    def test_manifest_and_plan_contracts_carry_v2_identity(self) -> None:
+        """A2-1：清单推导与 plan 推导的 Job 演练合同都必须带冻结的 wire／policy 摘要，与 collect 一致。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project_ledger_fixture.install_fixture_ledger(root)
+            arguments = self._campaign_arguments(
+                root / "preflight",
+                campaign_id="upgrade-0154-v2-contract",
+                campaign_mode="preflight_only",
+                campaign_purpose="production_replacement",
+                baseline_version="0.151.0",
+                target_version="0.154.0",
+                model="gpt-5.5",
+                lite_model="gpt-6-astra",
+            )
+            codex_upgrade.create_campaign(arguments)
+            manifest = codex_upgrade.load_campaign_manifest(arguments.campaign_dir)
+            identity = manifest["tool_identity"]
+            self.assertTrue(identity.get("wire_producer_sha256") and identity.get("policy_sha256"))
+            derived = codex_upgrade._job_rehearsal_contract_from_manifest(arguments.campaign_dir, manifest)
+            self.assertEqual(derived["wire_producer_sha256"], identity["wire_producer_sha256"])
+            self.assertEqual(derived["policy_sha256"], identity["policy_sha256"])
+            with mock.patch.object(
+                codex_upgrade_job_rehearsal_receipt,
+                "_target_evidence_label_declaration_sha256",
+                return_value=derived["evidence_label_declaration_sha256"],
+            ):
+                from_arguments = codex_upgrade._job_rehearsal_contract_from_arguments(arguments)
+            self.assertEqual(from_arguments, derived)
+            # 历史清单没有 v2 字段时合同保持 v1 形状。
+            legacy = copy.deepcopy(dict(manifest))
+            legacy["tool_identity"] = {
+                key: value
+                for key, value in identity.items()
+                if key not in ("wire_producer_sha256", "policy_sha256")
+            }
+            legacy_contract = codex_upgrade._job_rehearsal_contract_from_manifest(arguments.campaign_dir, legacy)
+            self.assertNotIn("wire_producer_sha256", legacy_contract)
+            self.assertNotIn("policy_sha256", legacy_contract)
 
     def test_release_certification_requirement_follows_policy_version(self) -> None:
         """发布认证绑定只对策略 v5 起创建的完整 VC 链 Campaign 必需，历史清单按 Job 演练承接。"""

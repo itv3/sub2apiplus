@@ -10876,6 +10876,7 @@ def _job_rehearsal_contract_from_arguments(
         if arguments.extra_jobs is not None
         else None
     )
+    current_identity = _tool_identity()
     try:
         return codex_upgrade_job_rehearsal_receipt.build_execution_contract(
             target_version=arguments.target_version,
@@ -10883,10 +10884,14 @@ def _job_rehearsal_contract_from_arguments(
             target_package_sha256=arguments.target_package_sha256,
             target_code_mode_host_sha256=arguments.target_code_mode_host_sha256,
             suite=arguments.suite,
-            tool_files_sha256=_tool_identity()["files_sha256"],
+            tool_files_sha256=current_identity["files_sha256"],
             configuration=_job_rehearsal_configuration(arguments),
             target_scenario=target_scenario,
             extra_jobs=extra_jobs,
+            # A2-1：collect 把 Campaign 冻结身份里的 wire／policy 摘要写进合同；plan 侧
+            # 复算时必须带同样的两个字段，否则 v2 收据永远与 Formal 合同不一致。
+            wire_producer_sha256=current_identity.get("wire_producer_sha256"),
+            policy_sha256=current_identity.get("policy_sha256"),
         )
     except codex_upgrade_job_rehearsal_receipt.JobRehearsalReceiptError as error:
         raise ConfigurationError(f"Formal Job 执行合同非法：{error}") from error
@@ -10951,6 +10956,10 @@ def _job_rehearsal_contract_from_manifest(
             configuration=_job_rehearsal_configuration(configuration),
             target_scenario=target_scenario,
             extra_jobs=extra_jobs,
+            # A2-1：与 collect 一致，wire／policy 摘要一律取 Campaign 冻结的 tool_identity；
+            # 历史清单没有这两个字段时合同保持 v1 形状。
+            wire_producer_sha256=tool_identity.get("wire_producer_sha256"),
+            policy_sha256=tool_identity.get("policy_sha256"),
         )
         if not _allow_historical_tool_identity or not isinstance(
             recovery_rehearsal_receipt, Mapping
