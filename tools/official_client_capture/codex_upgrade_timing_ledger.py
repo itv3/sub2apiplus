@@ -174,6 +174,12 @@ PRODUCER_FREEZE_SUCCESSORS = (
         "scope": "upstream-codex-0154-a0b-provenance-campaign-id-20260916-freeze-successor",
         "result": "manual_actions_required",
     },
+    {
+        "path": "docs/egress/maintenance/upstream-codex-0154-a2-contract-v2-identity-20260916-freeze-successor.json",
+        "base_commit": "13f0ea026ab460aca411a880c3efd173b21d2174",
+        "scope": "upstream-codex-0154-a2-contract-v2-identity-20260916-freeze-successor",
+        "result": "manual_actions_required",
+    },
 )
 
 

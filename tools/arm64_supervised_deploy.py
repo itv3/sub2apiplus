@@ -133,6 +133,7 @@ MANAGED_RUNTIME_DOCUMENTS = (
     "egress/maintenance/upstream-codex-0154-c1-atomic-container-20260916-freeze-successor.json",
     "egress/maintenance/upstream-codex-0154-c3-historical-p0-compat-20260916-freeze-successor.json",
     "egress/maintenance/upstream-codex-0154-a0b-provenance-campaign-id-20260916-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-a2-contract-v2-identity-20260916-freeze-successor.json",
 )
 MANAGED_ASSERTION_PREPARER = "prepare_assertion_bundle.sh"
 TARGET_SCENARIO_MANIFEST = "codex_upgrade_scenarios_0_154_0.json"
