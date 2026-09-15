@@ -17,6 +17,7 @@ from unittest import mock
 
 from tools.official_client_capture import candidate_evidence_guard
 from tools.official_client_capture import codex_upgrade
+from tools.official_client_capture.tests import project_ledger_fixture
 from tools.official_client_capture import codex_upgrade_evidence_manifest
 from tools.official_client_capture import codex_upgrade_gate_receipt
 from tools.official_client_capture import codex_upgrade_job_rehearsal_receipt
@@ -13118,6 +13119,7 @@ class CodexUpgradeTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            project_ledger_fixture.install_fixture_ledger(root)
             arguments = self._campaign_arguments(
                 root / "predecessor",
                 campaign_id="upgrade-0154-predecessor",

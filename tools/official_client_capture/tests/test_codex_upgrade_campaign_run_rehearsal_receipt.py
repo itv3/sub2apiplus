@@ -16,6 +16,15 @@ from tools.official_client_capture import codex_upgrade_supervisor
 from tools.official_client_capture import codex_upgrade_vc_artifacts
 
 
+def _staging_root(directory: str) -> Path:
+    """演练实例是 staging 树内的 formal Campaign，临时根必须带 staging 段。"""
+
+    root = Path(directory).resolve() / "staging" / "rehearsal"
+    root.mkdir(parents=True, mode=0o700)
+    root.parent.chmod(0o700)
+    return root
+
+
 class CampaignRunRehearsalReceiptTests(unittest.TestCase):
     def _write_json(self, path: Path, value: object) -> Path:
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -131,7 +140,7 @@ class CampaignRunRehearsalReceiptTests(unittest.TestCase):
         """两个真实父 run 必须闭合，deadline 负例不得创建第三个 run。"""
 
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory).resolve()
+            root = _staging_root(directory)
             root.chmod(0o700)
             inputs, evidence_root, receipt = self._collect(root)
             self.assertEqual(receipt["status"], "passed")
@@ -167,7 +176,7 @@ class CampaignRunRehearsalReceiptTests(unittest.TestCase):
         """动作事实或 inventory 任一漂移都必须失败关闭。"""
 
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory).resolve()
+            root = _staging_root(directory)
             root.chmod(0o700)
             inputs, evidence_root, _receipt = self._collect(root)
             marker_path = evidence_root / "action-1.json"
@@ -215,7 +224,7 @@ class CampaignRunRehearsalReceiptTests(unittest.TestCase):
         """已有输出或其他资产存在时不得覆盖或续写。"""
 
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory).resolve()
+            root = _staging_root(directory)
             root.chmod(0o700)
             inputs = self._inputs(root)
             evidence_root = (root / "rehearsal").resolve()
@@ -247,7 +256,7 @@ class CampaignRunRehearsalReceiptTests(unittest.TestCase):
         """真实原子入口必须在两个新根连续形成父 run 与零请求 VC-1。"""
 
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory).resolve()
+            root = _staging_root(directory)
             root.chmod(0o700)
             evidence_root = root / "atomic-double"
             evidence_root.mkdir(mode=0o700)
@@ -323,7 +332,7 @@ class CampaignRunRehearsalReceiptTests(unittest.TestCase):
         """容器双 runs 别名必须同 inode 且均可写，宽泛父根保持只读。"""
 
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory).resolve()
+            root = _staging_root(directory)
             capture = root / "capture"
             staging = root / "staging"
             runs = root / "runs"
@@ -365,7 +374,7 @@ class CampaignRunRehearsalReceiptTests(unittest.TestCase):
         """任一实例出现未登记文件时，冻结 inventory 必须失败关闭。"""
 
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory).resolve()
+            root = _staging_root(directory)
             root.chmod(0o700)
             evidence_root = root / "atomic-double"
             evidence_root.mkdir(mode=0o700)
@@ -392,7 +401,7 @@ class CampaignRunRehearsalReceiptTests(unittest.TestCase):
         """权限收据通过后重新开放文件权限，双轮重放必须失败。"""
 
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory).resolve()
+            root = _staging_root(directory)
             root.chmod(0o700)
             evidence_root = root / "atomic-double"
             evidence_root.mkdir(mode=0o700)
@@ -425,7 +434,7 @@ class CampaignRunRehearsalReceiptTests(unittest.TestCase):
         for case in cases:
             with self.subTest(case=case):
                 with tempfile.TemporaryDirectory() as directory:
-                    root = Path(directory).resolve()
+                    root = _staging_root(directory)
                     root.chmod(0o700)
                     evidence_root = root / "atomic-double"
                     evidence_root.mkdir(mode=0o700)

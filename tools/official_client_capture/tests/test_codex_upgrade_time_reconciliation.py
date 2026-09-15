@@ -372,6 +372,26 @@ class UpgradeTimeReconciliationTests(unittest.TestCase):
             self.assertEqual(totals["unclassified"], 130.0)
             self.assertEqual(receipt["status"], "unclassified_present")
 
+    def test_campaign_timing_ledgers_under_control_are_scanned_and_foreign_ledgers_ignored(self) -> None:
+        """control/*-timing-ledger 也是升级账本；其它 schema 的账本只登记不解析。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = ReconciliationFixture(Path(directory).resolve())
+            fixture.build()
+            _write_ledger(
+                fixture.data / "control" / "c-formal-timing-ledger",
+                _at(200),
+                [_ledger_event(1, _at(200), "VC-0", "stage_started")],
+            )
+            _write_json(fixture.data / "control" / "repair-timing-ledger" / "ledger.json", {"schema_version": "codex-repair-timing-ledger/v1"})
+            _chmod_tree(fixture.data)
+            receipt = fixture.run()
+            self.assertEqual([l["ledger_id"] for l in receipt["sources"]["ledgers"]], ["evidence/control/ledger-a", "control/c-formal-timing-ledger"])
+            self.assertEqual(receipt["sources"]["ignored_ledgers"], [{"ledger_id": "control/repair-timing-ledger", "schema_version": "codex-repair-timing-ledger/v1"}])
+            totals = _totals_minutes(receipt)
+            self.assertEqual(totals["vc0_execution"], 78.0)
+            self.assertEqual(totals["unclassified"], 90.0)
+
 
 if __name__ == "__main__":
     unittest.main()

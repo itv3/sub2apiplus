@@ -2,8 +2,9 @@
 
 方案 A0a-6。可信事件边界只取六类来源，全部来自不可变产物：
 
-1. 时间账本 ``evidence/control/*/ledger.json`` 与其 ``events/NNNNNN.json``（序号连续，
-   ``previous_event_sha256`` 必须等于前一事件文件字节的 SHA-256）；
+1. 时间账本 ``evidence/control/*/ledger.json``（早期升级账本）与 ``control/*/ledger.json``
+   （Campaign 计时账本）及其 ``events/NNNNNN.json``（序号连续，``previous_event_sha256``
+   必须等于前一事件文件字节的 SHA-256）；schema 不是升级计时账本的目录只登记不解析；
 2. 监督器事件流 ``control/**/run-<sha>/events.ndjson``（逐行 ``event_sha256`` 可复算，
    ``previous_event_sha256`` 连续，序号连续）；
 3. 受管部署收据 ``control/codex-*-supervisor-enable-*.json`` 的 ``created_at_utc``；
@@ -158,48 +159,66 @@ def _valid_category(value: Any) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _load_ledgers(data_root: Path) -> list[dict[str, Any]]:
-    control = data_root / "evidence" / "control"
+LEDGER_PARENTS = (("evidence", "control"), ("control",))
+
+
+def _ledger_roots(data_root: Path) -> list[Path]:
+    """账本目录：``evidence/control/*``（早期升级账本）与 ``control/*``（Campaign 计时账本）。"""
+
+    roots: list[Path] = []
+    for parts in LEDGER_PARENTS:
+        parent = data_root.joinpath(*parts)
+        if not parent.is_dir() or parent.is_symlink():
+            continue
+        for child in sorted(parent.iterdir()):
+            if child.is_symlink() or not child.is_dir():
+                continue
+            plan_path = child / "ledger.json"
+            if plan_path.is_symlink() or not plan_path.is_file():
+                continue
+            roots.append(child)
+    return roots
+
+
+def _load_ledgers(data_root: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     ledgers: list[dict[str, Any]] = []
-    if not control.is_dir() or control.is_symlink():
-        return ledgers
-    for child in sorted(control.iterdir()):
-        if child.is_symlink() or not child.is_dir():
-            continue
+    ignored: list[dict[str, Any]] = []
+    for child in _ledger_roots(data_root):
         plan_path = child / "ledger.json"
-        if plan_path.is_symlink() or not plan_path.is_file():
-            continue
-        plan = _load_trusted_json(plan_path, f"账本 {child.name} 计划")
+        ledger_id = str(child.relative_to(data_root))
+        plan = _load_trusted_json(plan_path, f"账本 {ledger_id} 计划")
         if plan.get("schema_version") != timing_ledger.PLAN_SCHEMA:
-            raise TimeReconciliationError(f"账本 {child.name} 计划 schema 非法")
-        created = _timestamp(plan.get("created_at_utc"), f"账本 {child.name} created_at_utc")
+            # 其它类型账本（如修复计时账本）不是升级计时账本，只登记不解析。
+            ignored.append({"ledger_id": ledger_id, "schema_version": plan.get("schema_version")})
+            continue
+        created = _timestamp(plan.get("created_at_utc"), f"账本 {ledger_id} created_at_utc")
         try:
             raw_events = timing_ledger._load_events(child)
         except timing_ledger.TimingLedgerError as error:
-            raise TimeReconciliationError(f"账本 {child.name} 事件不可信：{error}") from error
+            raise TimeReconciliationError(f"账本 {ledger_id} 事件不可信：{error}") from error
         events: list[dict[str, Any]] = []
         previous_digest: str | None = None
         for index, (event, raw) in enumerate(raw_events, start=1):
             try:
                 normalized = timing_ledger._validate_event_shape(child, event, index)
             except timing_ledger.TimingLedgerError as error:
-                raise TimeReconciliationError(f"账本 {child.name} event {index} 形状非法：{error}") from error
+                raise TimeReconciliationError(f"账本 {ledger_id} event {index} 形状非法：{error}") from error
             if normalized.get("previous_event_sha256") != previous_digest:
-                raise TimeReconciliationError(f"账本 {child.name} event {index} 摘要链断裂")
+                raise TimeReconciliationError(f"账本 {ledger_id} event {index} 摘要链断裂")
             previous_digest = _sha256(raw)
             events.append(normalized)
         if not events:
-            raise TimeReconciliationError(f"账本 {child.name} 没有事件")
+            raise TimeReconciliationError(f"账本 {ledger_id} 没有事件")
         ledgers.append(
             {
-                "ledger_id": child.name,
+                "ledger_id": ledger_id,
                 "path": str(child),
                 "upgrade_id": plan.get("upgrade_id"),
                 "created_at": created,
                 "events": events,
             }
         )
-    return ledgers
+    return ledgers, ignored
 
 
 def _ledger_points_and_spans(
@@ -722,7 +741,7 @@ def reconcile_upgrade_time(
     idle_threshold = timedelta(minutes=idle_threshold_minutes)
     creation_threshold = timedelta(minutes=campaign_creation_threshold_minutes)
 
-    ledgers = _load_ledgers(root)
+    ledgers, ignored_ledgers = _load_ledgers(root)
     ledger_points, ledger_spans, stopped_spans = _ledger_points_and_spans(ledgers, until=until)
     runs = _load_supervisor_runs(root)
     deployments = _load_deployments(root)
@@ -836,6 +855,7 @@ def reconcile_upgrade_time(
                 {"ledger_id": l["ledger_id"], "upgrade_id": l["upgrade_id"], "created_at_utc": _iso(l["created_at"]), "event_count": len(l["events"])}
                 for l in ledgers
             ],
+            "ignored_ledgers": ignored_ledgers,
             "supervisor_runs": len(runs),
             "deployments": len(deployments),
             "campaigns": len(campaigns),

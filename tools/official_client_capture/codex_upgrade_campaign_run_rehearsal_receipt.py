@@ -29,6 +29,7 @@ if __package__ in {None, ""}:
 from tools.official_client_capture import codex_upgrade
 from tools.official_client_capture import codex_upgrade_evidence_permissions
 from tools.official_client_capture import codex_upgrade_predispatch_stop
+from tools.official_client_capture import codex_upgrade_project_ledger
 from tools.official_client_capture import codex_upgrade_supervisor
 from tools.official_client_capture import codex_upgrade_timing_ledger
 from tools.official_client_capture import codex_upgrade_vc_artifacts
@@ -1307,6 +1308,10 @@ def _write_atomic_campaign(
             },
         },
     )
+    # 演练实例是 staging 树内的 formal 0.154 Campaign，派发前必须经项目总账门禁；
+    # 这里为实例根创建 fixture_only 总账并完成注册，生产总账不受影响。
+    codex_upgrade_project_ledger.create_fixture_ledger(root)
+    codex_upgrade_project_ledger.register_existing_campaign(campaign_dir)
     return campaign_dir, state_dir, plan, checkpoint_path, checkpoint
 
 
@@ -2338,6 +2343,24 @@ def _atomic_expected_inventory_paths(
     paths = {
         "campaign",
         "campaign/campaign.json",
+        # 项目总账门禁：实例根内的 fixture_only 总账与 Campaign 侧注册 batch。
+        "upgrade-project-ledger",
+        "upgrade-project-ledger/.project-ledger.lock",
+        "upgrade-project-ledger/plan.json",
+        "upgrade-project-ledger/initial-identity-keys.json",
+        "upgrade-project-ledger/head.json",
+        "upgrade-project-ledger/events",
+        "upgrade-project-ledger/events/000001.json",
+        "upgrade-project-ledger/repairs",
+        "upgrade-project-ledger/repairs/outbox",
+        "upgrade-project-ledger/repairs/receipts",
+        "campaign/ledger",
+        "campaign/ledger/.ledger.lock",
+        "campaign/ledger/plan.json",
+        "campaign/ledger/outbox",
+        "campaign/ledger/outbox/batch-000001",
+        "campaign/ledger/outbox/batch-000001/entry-01.json",
+        "campaign/ledger/outbox/batch-000001/COMMIT",
         "campaign/control",
         "campaign/control/vc",
         "campaign/control/vc/batches",

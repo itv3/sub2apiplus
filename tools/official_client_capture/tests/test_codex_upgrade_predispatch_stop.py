@@ -13,6 +13,7 @@ from pathlib import Path
 from tools.official_client_capture import codex_upgrade_predispatch_stop as stop
 from tools.official_client_capture import codex_upgrade_supervisor as supervisor
 from tools.official_client_capture import codex_upgrade_vc_artifacts as artifacts
+from tools.official_client_capture.tests import project_ledger_fixture
 
 
 class PredispatchStopTests(unittest.TestCase):
@@ -37,6 +38,7 @@ class PredispatchStopTests(unittest.TestCase):
         state_dir = root / "state"
         campaign_dir.mkdir(mode=0o700)
         state_dir.mkdir(mode=0o700)
+        project_ledger_fixture.install_fixture_ledger(root)
         now = datetime.now(timezone.utc)
         if expired:
             created = now - timedelta(minutes=10)
@@ -77,6 +79,7 @@ class PredispatchStopTests(unittest.TestCase):
             },
         }
         self._write_json(campaign_dir / "campaign.json", campaign)
+        project_ledger_fixture.register_fixture_campaign(campaign_dir)
         predecessor = {
             "path": "control/vc/vc-0-checkpoint.json",
             "sha256": "5" * 64,

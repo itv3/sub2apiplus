@@ -32,12 +32,14 @@ from typing import Any, Iterable, Iterator, Mapping, Sequence
 
 if __package__ in {None, ""}:
     import codex_upgrade_evidence_permissions as evidence_permissions
+    import codex_upgrade_project_ledger as project_ledger
     import codex_upgrade_root_cause as root_cause
     import codex_upgrade_timing_ledger as timing_ledger
     import codex_upgrade_vc1_permission_alias_closeout as permission_alias_closeout
     import codex_upgrade_vc_artifacts as vc_artifacts
 else:
     from . import codex_upgrade_evidence_permissions as evidence_permissions
+    from . import codex_upgrade_project_ledger as project_ledger
     from . import codex_upgrade_root_cause as root_cause
     from . import codex_upgrade_timing_ledger as timing_ledger
     from . import codex_upgrade_vc1_permission_alias_closeout as permission_alias_closeout
@@ -7799,12 +7801,38 @@ def _campaign_run_locked(
                 pass
 
 
+def _assert_campaign_run_admitted(campaign_dir: Path | None) -> None:
+    """A0a-12 消费者门禁：campaign-run 派发前先补齐再锁内重放项目总账。
+
+    运行清单未绑定 Campaign 目录时（离线演练、无 Campaign 的动作队列）没有门禁对象，
+    直接返回；绑定了 Campaign 的 0.154 formal 派发必须已在总账注册。
+    """
+
+    if campaign_dir is None:
+        return
+    manifest_path = campaign_dir / "campaign.json"
+    if manifest_path.is_symlink() or not manifest_path.is_file():
+        return
+    campaign_manifest = _read_json(manifest_path)
+    try:
+        project_ledger.assert_campaign_admitted(
+            campaign_dir,
+            command="campaign-run",
+            require=project_ledger.requires_project_ledger(
+                campaign_manifest.get("campaign_mode"), campaign_manifest.get("target_version")
+            ),
+        )
+    except project_ledger.ProjectLedgerError as error:
+        raise SupervisorError(f"项目总账拒绝派发：{error}") from error
+
+
 def _campaign_run_command(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     """取唯一锁并按预声明队列完成全部动作。"""
 
     manifest_path = Path(args.manifest)
     manifest = _campaign_run_manifest(manifest_path)
     campaign_dir = _campaign_dir_from_run_manifest(manifest_path)
+    _assert_campaign_run_admitted(campaign_dir)
     lock_descriptor, state_dir = _campaign_run_lock(Path(args.state_dir))
     try:
         return _campaign_run_locked(

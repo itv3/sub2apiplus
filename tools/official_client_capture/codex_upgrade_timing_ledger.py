@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
+import contextlib
 import hashlib
 import json
 import os
@@ -13,7 +15,7 @@ import sys
 import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Iterator
 
 
 PLAN_SCHEMA = "codex-upgrade-timing-ledger-plan/v1"
@@ -1026,6 +1028,11 @@ def append_event(
     # 写 stop_the_line；否则父编排器失败会永久留下 active/VC-x 假象。
     if current["status"] == "stop_required":
         allowed_while_stopping.add("stage_abandoned")
+        # metadata-only attempt_failed：只登记失败与根因，不带收据、不计请求，
+        # 不伴随任何 Job 执行。没有它，stop_required 下的 active attempt 永远关不掉，
+        # stage_abandoned 也就永远写不进去。
+        if event_type == "attempt_failed" and not receipts and live_request_count == 0:
+            allowed_while_stopping.add("attempt_failed")
     if current["status"] in {"stop_required", "stopped"} and event_type not in allowed_while_stopping:
         raise TimingLedgerError("计时或重试门禁已要求停线，禁止继续追加执行事件")
     sequence = len(raw_events) + 1
@@ -1175,6 +1182,236 @@ def _receipt_arguments(values: list[str]) -> list[dict[str, str]]:
     return receipts
 
 
+LEDGER_CLOSE_SCHEMA = "ledger-close/v1"
+PROVENANCE_RECEIPT_SCHEMA = "live-request-provenance/v2"
+CLOSE_LOCK_NAME = ".vc0-closeout.lock"
+DEFAULT_CLOSE_NEXT_ACTION = (
+    "账本已按统一计量口径关闭；后续只能由项目总账登记、复用导入或普通后继 Campaign 承接"
+)
+
+
+@contextlib.contextmanager
+def _close_lock(root: Path) -> Iterator[None]:
+    """与 VC-0 收口共用同一把账本目录锁，串行化关闭与收口。"""
+
+    lock_path = root / CLOSE_LOCK_NAME
+    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(lock_path, flags, 0o600)
+    except OSError as error:
+        raise TimingLedgerError("账本锁文件不可信或无法创建") from error
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid():
+            raise TimingLedgerError("账本锁文件身份不可信")
+        os.fchmod(descriptor, 0o600)
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(descriptor)
+
+
+def _active_attempts(raw_events: list[tuple[dict[str, Any], bytes]]) -> list[tuple[str, str]]:
+    """按事件顺序重放 attempt 状态，返回仍 active 的 (attempt_id, phase)。"""
+
+    active: dict[str, str] = {}
+    for event, _raw in raw_events:
+        attempt_id = event.get("attempt_id")
+        event_type = event.get("event_type")
+        if event_type == "attempt_started" and isinstance(attempt_id, str):
+            active[attempt_id] = str(event.get("phase"))
+        elif event_type in {"attempt_failed", "attempt_completed"} and isinstance(attempt_id, str):
+            active.pop(attempt_id, None)
+    return sorted(active.items())
+
+
+def _load_provenance_receipt(path: Path) -> tuple[dict[str, Any], bytes]:
+    if not path.is_absolute() or path.is_symlink() or not path.is_file():
+        raise TimingLedgerError("provenance 收据必须是可信绝对普通文件")
+    payload, raw = _load_json(path, "provenance 收据")
+    if payload.get("schema_version") != PROVENANCE_RECEIPT_SCHEMA:
+        raise TimingLedgerError("provenance 收据 schema 不是 live-request-provenance/v2")
+    for field in (
+        "formal_campaign_id",
+        "status",
+        "precise_total",
+        "estimated_total",
+        "estimation_policy",
+        "counting_rule",
+        "identity_keys_sha256",
+    ):
+        if field not in payload:
+            raise TimingLedgerError(f"provenance 收据缺少 {field}")
+    for field in ("precise_total", "estimated_total"):
+        value = payload[field]
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise TimingLedgerError(f"provenance 收据 {field} 非法")
+    if payload["status"] not in {"complete", "accounting_unresolved"}:
+        raise TimingLedgerError("provenance 收据 status 非法")
+    return payload, raw
+
+
+def _publish_once(path: Path, payload: dict[str, Any], label: str) -> None:
+    """同一内容重复发布视为幂等；内容不同则失败关闭。"""
+
+    if path.exists():
+        existing, _raw = _load_json(path, label)
+        if _canonical(existing) != _canonical(payload):
+            raise TimingLedgerError(f"{label}已存在且内容不同：{path.name}")
+        return
+    _write_once(path, payload)
+
+
+def close_campaign_ledger(
+    root: Path,
+    *,
+    root_cause_id: str,
+    provenance_receipt: Path,
+    next_action: str | None = None,
+    recorded_at_utc: str | None = None,
+) -> dict[str, Any]:
+    """按统一计量口径关闭一个未停线的 Campaign 计时账本（A0a-8）。
+
+    顺序固定且每步幂等：先给仍 active 的 attempt 追加 metadata-only ``attempt_failed``，
+    再 ``stage_abandoned`` 关闭 active 阶段，最后 ``stop_the_line`` 绑定 provenance 收据
+    与关闭收据。``stop_the_line`` 的 ``live_request_count`` 只记 ``unaccounted_delta``：
+    统一口径重算的精确加估计总数减去账本此前累计；重算结果小于旧累计时记 0 并在
+    关闭收据里如实标 ``delta_clamped``，历史混合口径数字不再被改写。
+    """
+
+    root = _private_ledger(root, must_exist=True)
+    _safe_id(root_cause_id, "root_cause_id")
+    action = next_action or DEFAULT_CLOSE_NEXT_ACTION
+    provenance, provenance_raw = _load_provenance_receipt(Path(provenance_receipt))
+    provenance_sha256 = _sha256_bytes(provenance_raw)
+    with _close_lock(root):
+        plan, _ = _load_plan(root)
+        raw_events = _load_events(root)
+        now = recorded_at_utc or _utc_now()
+        summary = _summarize(root, plan, raw_events, as_of=_timestamp(now, "recorded_at_utc"))
+        if summary["status"] in {"stopped", "complete"}:
+            return {"status": "already-closed", "ledger_status": summary["status"], "summary": summary}
+        previous_count = int(summary["total_live_request_count"])
+        precise = int(provenance["precise_total"])
+        estimated = int(provenance["estimated_total"])
+        recomputed_total = precise + estimated
+        delta = recomputed_total - previous_count
+        recorded_delta = max(delta, 0)
+        close_root = root / "receipts" / "ledger-close"
+        if close_root.is_symlink():
+            raise TimingLedgerError("关闭收据目录不可信")
+        if not close_root.exists():
+            close_root.mkdir(mode=0o700)
+        elif stat.S_IMODE(close_root.stat().st_mode) != 0o700:
+            raise TimingLedgerError("关闭收据目录权限必须是 0700")
+        tag = provenance_sha256[:16]
+        provenance_copy = close_root / f"provenance-{tag}.json"
+        _publish_once(provenance_copy, provenance, "provenance 收据副本")
+        close_receipt = {
+            "schema_version": LEDGER_CLOSE_SCHEMA,
+            "upgrade_id": plan["upgrade_id"],
+            "formal_campaign_id": provenance["formal_campaign_id"],
+            "root_cause_id": root_cause_id,
+            "closed_at_utc": now,
+            "counting_rule": provenance["counting_rule"],
+            "estimation_policy": provenance["estimation_policy"],
+            "provenance_status": provenance["status"],
+            "provenance_receipt_sha256": provenance_sha256,
+            "identity_keys_sha256": provenance["identity_keys_sha256"],
+            "unresolved_job_ids": list(provenance.get("unresolved_job_ids", [])),
+            "previous_count": previous_count,
+            "precise_count": precise,
+            "estimated_count": estimated,
+            "recomputed_total": recomputed_total,
+            "unaccounted_delta": delta,
+            "delta_clamped": delta < 0,
+            "live_request_count_recorded": recorded_delta,
+            "resulting_total": previous_count + recorded_delta,
+        }
+        close_path = close_root / f"ledger-close-{tag}.json"
+        if close_path.exists():
+            existing, _raw = _load_json(close_path, "关闭收据")
+            comparable = {k: v for k, v in existing.items() if k != "closed_at_utc"}
+            if comparable != {k: v for k, v in close_receipt.items() if k != "closed_at_utc"}:
+                raise TimingLedgerError("关闭收据已存在且账务不同，拒绝覆盖")
+        else:
+            _write_once(close_path, close_receipt)
+        bindings = sorted(
+            [
+                {
+                    "role": "ledger_close",
+                    "path": close_path.relative_to(root).as_posix(),
+                    "sha256": _sha256_file(close_path),
+                },
+                {
+                    "role": "provenance",
+                    "path": provenance_copy.relative_to(root).as_posix(),
+                    "sha256": _sha256_file(provenance_copy),
+                },
+            ],
+            key=lambda item: item["role"],
+        )
+        appended: list[str] = []
+        existing_ids = {event["event_id"] for event, _raw in raw_events}
+        for attempt_id, phase in _active_attempts(raw_events):
+            event_id = f"close-attempt-failed-{attempt_id}"
+            if event_id in existing_ids:
+                continue
+            append_event(
+                root,
+                event_id=event_id,
+                phase=phase,
+                event_type="attempt_failed",
+                attempt_id=attempt_id,
+                root_cause_id=root_cause_id,
+                next_action=action,
+            )
+            appended.append(event_id)
+        summary = _summarize(root, plan, _load_events(root), as_of=_timestamp(_utc_now(), "now"))
+        active_phase = summary.get("active_phase")
+        if active_phase is not None:
+            event_id = f"close-stage-abandoned-{active_phase}"
+            if event_id not in existing_ids:
+                append_event(
+                    root,
+                    event_id=event_id,
+                    phase=str(active_phase),
+                    event_type="stage_abandoned",
+                    root_cause_id=root_cause_id,
+                    next_action=action,
+                )
+                appended.append(event_id)
+        raw_events = _load_events(root)
+        summary = _summarize(root, plan, raw_events, as_of=_timestamp(_utc_now(), "now"))
+        if summary["status"] != "stopped":
+            last_phase = str(raw_events[-1][0]["phase"])
+            append_event(
+                root,
+                event_id="close-stop-the-line",
+                phase=last_phase,
+                event_type="stop_the_line",
+                root_cause_id=root_cause_id,
+                live_request_count=recorded_delta,
+                receipts=bindings,
+                next_action=action,
+            )
+            appended.append("close-stop-the-line")
+        final = inspect_ledger(root)
+        if final["status"] != "stopped":
+            raise TimingLedgerError("关闭后账本状态不是 stopped")
+        return {
+            "status": "closed",
+            "ledger_status": final["status"],
+            "appended_event_ids": appended,
+            "ledger_close_receipt": bindings[0],
+            "provenance_receipt": bindings[1],
+            "previous_count": previous_count,
+            "unaccounted_delta": delta,
+            "resulting_total": int(final["total_live_request_count"]),
+            "summary": final,
+        }
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -1204,6 +1441,13 @@ def build_parser() -> argparse.ArgumentParser:
     replay_parser.add_argument("--receipt", required=True)
     status_parser = commands.add_parser("status", help="按当前墙钟只读检查计时状态")
     status_parser.add_argument("--ledger-dir", type=Path, required=True)
+    close_parser = commands.add_parser(
+        "close-campaign-ledger", help="按统一计量口径关闭未停线的 Campaign 计时账本"
+    )
+    close_parser.add_argument("--ledger-dir", type=Path, required=True)
+    close_parser.add_argument("--root-cause", required=True, help="A0a-3 结构化根因 ID")
+    close_parser.add_argument("--provenance-receipt", type=Path, required=True)
+    close_parser.add_argument("--next-action")
     return parser
 
 
@@ -1244,6 +1488,13 @@ def main(argv: list[str] | None = None) -> int:
             result = checkpoint(arguments.ledger_dir, arguments.output)["summary"]
         elif arguments.command == "replay":
             result = replay(arguments.ledger_dir, arguments.receipt)["summary"]
+        elif arguments.command == "close-campaign-ledger":
+            result = close_campaign_ledger(
+                arguments.ledger_dir,
+                root_cause_id=arguments.root_cause,
+                provenance_receipt=arguments.provenance_receipt.resolve(),
+                next_action=arguments.next_action,
+            )
         else:
             result = inspect_ledger(arguments.ledger_dir)
     except (OSError, TimingLedgerError) as error:

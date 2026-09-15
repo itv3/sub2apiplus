@@ -14,6 +14,8 @@ import subprocess
 import sys
 import tempfile
 import time
+
+from tools.official_client_capture.tests import project_ledger_fixture
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -3444,6 +3446,7 @@ raise SystemExit(9)
         data_root = root / "data"
         campaign_dir = data_root / "evidence" / "campaigns" / "campaign-closeout"
         campaign_dir.mkdir(parents=True, mode=0o700)
+        project_ledger_fixture.install_fixture_ledger(data_root)
         ledger_root = data_root / "control" / "timing-ledger"
         ledger_root.parent.mkdir(parents=True, mode=0o700)
         timing_ledger.create_ledger(
@@ -3485,6 +3488,7 @@ raise SystemExit(9)
             },
         }
         self._write_json(campaign_dir / "campaign.json", campaign)
+        project_ledger_fixture.register_fixture_campaign(campaign_dir)
         manifest = build_campaign_run_manifest(
             "campaign-closeout",
             "VC-1",

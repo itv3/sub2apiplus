@@ -90,6 +90,7 @@ from tools.official_client_capture import codex_upgrade_evidence_permissions
 from tools.official_client_capture import codex_upgrade_evidence_manifest
 from tools.official_client_capture import codex_upgrade_job_rehearsal_receipt
 from tools.official_client_capture import codex_upgrade_timing_ledger
+from tools.official_client_capture import codex_upgrade_project_ledger
 from tools.official_client_capture import codex_upgrade_vc_artifacts
 from tools.official_client_capture import codex_upgrade_vc_receipt
 from tools.official_client_capture import codex_upgrade_supervisor
@@ -9586,6 +9587,12 @@ _CONTROL_PLANE_TOOL_FILES = frozenset(
         "codex_upgrade_official_attempt_audit.py",
         # 时间对账只读取账本、监督器事件、部署收据、Campaign 清单与审计目录。
         "codex_upgrade_time_reconciliation.py",
+        # 处置清单只读取 Campaign 清单、attempt 与账本，输出处置收据。
+        "codex_upgrade_campaign_disposition.py",
+        # 项目总账、outbox batch、admission 与消费者门禁、修复收据。
+        "codex_upgrade_project_ledger.py",
+        # 零请求 smoke 只在 staging 夹具上跑新命令并写收据。
+        "codex_upgrade_zero_request_smoke.py",
         "codex_upgrade_campaign_run_rehearsal_receipt.py",
         "codex_upgrade_predispatch_stop.py",
         "codex_upgrade_campaign_lease.schema.json",
@@ -9636,6 +9643,12 @@ _CANONICAL_EVALUATION_ONLY_FILES = frozenset(
         "codex_upgrade_official_attempt_audit.py",
         # 时间对账只读取账本、监督器事件、部署收据、Campaign 清单与审计目录。
         "codex_upgrade_time_reconciliation.py",
+        # 处置清单只读取 Campaign 清单、attempt 与账本，输出处置收据。
+        "codex_upgrade_campaign_disposition.py",
+        # 项目总账、outbox batch、admission 与消费者门禁、修复收据。
+        "codex_upgrade_project_ledger.py",
+        # 零请求 smoke 只在 staging 夹具上跑新命令并写收据。
+        "codex_upgrade_zero_request_smoke.py",
         "codex_upgrade_campaign_run_rehearsal_receipt.py",
         "codex_upgrade_predispatch_stop.py",
         "codex_upgrade_gate_receipt.py",
@@ -9755,6 +9768,12 @@ _EVALUATION_SIDE_FILES = frozenset(
         "codex_upgrade_official_attempt_audit.py",
         # 时间对账只读取账本、监督器事件、部署收据、Campaign 清单与审计目录。
         "codex_upgrade_time_reconciliation.py",
+        # 处置清单只读取 Campaign 清单、attempt 与账本，输出处置收据。
+        "codex_upgrade_campaign_disposition.py",
+        # 项目总账、outbox batch、admission 与消费者门禁、修复收据。
+        "codex_upgrade_project_ledger.py",
+        # 零请求 smoke 只在 staging 夹具上跑新命令并写收据。
+        "codex_upgrade_zero_request_smoke.py",
         "codex_upgrade_campaign_run_rehearsal_receipt.py",
         "codex_upgrade_predispatch_stop.py",
         "codex_upgrade_legacy_boundary.py",
@@ -18005,7 +18024,76 @@ def compile_and_run_vc_batch(
         os.close(lock_descriptor)
 
 
+def _project_ledger_required(campaign_mode: Any, target_version: Any) -> bool:
+    """0.154 起的 formal Campaign 必须在项目总账内创建与执行；其余按总账是否存在决定。"""
+
+    return campaign_mode == "formal" and _requires_complete_vc_artifacts(str(target_version or ""))
+
+
+def _campaign_plan_deadline(campaign_dir: Path) -> str | None:
+    """读取 Campaign 总计划冻结的原始 deadline；没有 VC 制品的 Campaign 返回 None。"""
+
+    path = campaign_dir / "control" / "vc" / "campaign-plan.json"
+    if path.is_symlink() or not path.is_file():
+        return None
+    value = _read_json(path, "Campaign 总计划").get("original_deadline_at_utc")
+    return value if isinstance(value, str) else None
+
+
+def _assert_project_ledger_consumer(command: str, arguments: argparse.Namespace) -> None:
+    """A0a-12 消费者门禁：resume 与 capture-official seal 开始前先补齐再锁内重放总账。"""
+
+    consumer = None
+    if command == "resume":
+        consumer = "resume"
+    elif command == "capture-official" and getattr(arguments, "capture_action", None) == "seal":
+        consumer = "seal"
+    if consumer is None:
+        return
+    campaign_dir = getattr(arguments, "campaign_dir", None)
+    if not isinstance(campaign_dir, Path):
+        return
+    manifest_path = campaign_dir / "campaign.json"
+    if manifest_path.is_symlink() or not manifest_path.is_file():
+        return
+    manifest = _read_json(manifest_path, "Campaign 清单")
+    codex_upgrade_project_ledger.assert_campaign_admitted(
+        campaign_dir,
+        command=consumer,
+        require=_project_ledger_required(manifest.get("campaign_mode"), manifest.get("target_version")),
+    )
+
+
 def create_campaign(arguments: argparse.Namespace) -> dict[str, Any]:
+    """在项目总账 admission 作用域内创建 Campaign 并注册（A0a-11）。
+
+    锁顺序固定：先项目锁（admission_scope），创建完清单后再取 Campaign 锁写注册
+    batch 并推送 ``campaign_registered``。admission 不通过时不留下任何 Campaign 文件。
+    """
+
+    campaign_dir = Path(arguments.campaign_dir)
+    campaign_mode = str(getattr(arguments, "campaign_mode", "") or "")
+    target_version = str(getattr(arguments, "target_version", "") or "")
+    with codex_upgrade_project_ledger.admission_scope(
+        campaign_dir,
+        campaign_id=str(getattr(arguments, "campaign_id", "") or ""),
+        campaign_mode=campaign_mode,
+        target_version=target_version,
+        require=_project_ledger_required(campaign_mode, target_version),
+    ) as admission:
+        manifest = _create_campaign_unadmitted(arguments)
+        if admission is not None:
+            admission.register(
+                campaign_dir,
+                campaign_id=str(manifest["campaign_id"]),
+                campaign_mode=str(manifest["campaign_mode"]),
+                target_version=str(manifest["target_version"]),
+                deadline_at_utc=_campaign_plan_deadline(campaign_dir),
+            )
+    return manifest
+
+
+def _create_campaign_unadmitted(arguments: argparse.Namespace) -> dict[str, Any]:
     """创建只写一次的 Campaign 核心清单和计划期分析产物。"""
 
     _validate_arguments(arguments)
@@ -22972,6 +23060,35 @@ def _assert_sealed_stage_stopped_recovery(
 
 
 def create_successor_campaign(arguments: argparse.Namespace) -> dict[str, Any]:
+    """在项目总账 admission 作用域内创建后继 Campaign 并注册（A0a-11／A0a-12）。"""
+
+    predecessor_manifest = _read_json(
+        Path(arguments.predecessor_campaign_dir) / "campaign.json", "前序 Campaign 清单"
+    )
+    campaign_dir = Path(arguments.campaign_dir)
+    campaign_mode = str(predecessor_manifest.get("campaign_mode") or "")
+    target_version = str(predecessor_manifest.get("target_version") or "")
+    with codex_upgrade_project_ledger.admission_scope(
+        campaign_dir,
+        campaign_id=str(getattr(arguments, "campaign_id", "") or ""),
+        campaign_mode=campaign_mode,
+        target_version=target_version,
+        require=_project_ledger_required(campaign_mode, target_version),
+    ) as admission:
+        result = _create_successor_campaign_unadmitted(arguments)
+        if admission is not None:
+            manifest = _read_json(campaign_dir / "campaign.json", "后继 Campaign 清单")
+            admission.register(
+                campaign_dir,
+                campaign_id=str(manifest["campaign_id"]),
+                campaign_mode=str(manifest["campaign_mode"]),
+                target_version=str(manifest["target_version"]),
+                deadline_at_utc=_campaign_plan_deadline(campaign_dir),
+            )
+    return result
+
+
+def _create_successor_campaign_unadmitted(arguments: argparse.Namespace) -> dict[str, Any]:
     """创建同版本后继 Campaign，并按原因选择承接边界。
 
     普通运行时纠正会承接官方阶段和批准分类；若现有批准事实与原始官方
@@ -45094,6 +45211,7 @@ def _main_without_campaign_lease(argv: list[str] | None = None) -> int:
         _reject_canonical_legacy_write(arguments, command)
         _reject_campaign_run_legacy_write(arguments, command)
         _reject_unparented_formal_write(arguments, command)
+        _assert_project_ledger_consumer(command, arguments)
         if command == "plan":
             manifest = create_campaign(arguments)
             preflight_invalidation = (
