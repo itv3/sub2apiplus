@@ -323,6 +323,12 @@ CODEX_0154_VC0_ATOMIC_RECEIPT_TIMING_CLOSEOUT_FREEZE_SUCCESSOR = (
     ROOT
     / "docs/egress/maintenance/upstream-codex-0154-vc0-atomic-receipt-timing-closeout-20260915-freeze-successor.json"
 )
+# 2026-09-15：A0a 工具解锁——根因编码与枚举表、逐请求 provenance v2、attempt
+# 审计、时间对账、处置清单、账本关闭、项目总账与 outbox batch、零请求 smoke。
+CODEX_0154_A0A_TOOL_UNLOCK_FREEZE_SUCCESSOR = (
+    ROOT
+    / "docs/egress/maintenance/upstream-codex-0154-a0a-tool-unlock-20260915-freeze-successor.json"
+)
 HISTORICAL_LEDGER = "docs/egress/maintenance/historical-source-drift-successor.json"
 SHA256_LENGTH = 64
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -449,6 +455,7 @@ def successor_edges(path: str) -> list[tuple[str, str]]:
         CODEX_0154_ASTRA_LITE_RECOVERY_FREEZE_SUCCESSOR,
         CODEX_0154_VC1_V2_RECOVERY_PREDISPATCH_CLOSEOUT_FREEZE_SUCCESSOR,
         CODEX_0154_VC0_ATOMIC_RECEIPT_TIMING_CLOSEOUT_FREEZE_SUCCESSOR,
+        CODEX_0154_A0A_TOOL_UNLOCK_FREEZE_SUCCESSOR,
     ):
         payload = json.loads(receipt_path.read_text(encoding="utf-8"))
         _validate_successor_receipt(payload)
