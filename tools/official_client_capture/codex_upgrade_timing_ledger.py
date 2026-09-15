@@ -84,6 +84,23 @@ PRODUCER_SUCCESSOR_TRANSITIONS = (
         "result": "passed_codex_cli_0151_producer_coordinate_decoupling",
     },
 )
+# 通用 freeze successor 也会改变计时工具摘要。这里逐份列出允许参与历史
+# UpgradeTimingLedger 重放的收据；运行时只沿这些显式文件中的精确边前进，
+# 不扫描 maintenance 目录，也不接受未登记摘要。
+PRODUCER_FREEZE_SUCCESSORS = (
+    {
+        "path": "docs/egress/maintenance/upstream-codex-0154-vc1-general-toolchain-closeout-20260915-freeze-successor.json",
+        "base_commit": "92e82aade5f69ffd253045478e554c13c1fe2ab6",
+        "scope": "upstream-codex-0154-vc1-general-toolchain-closeout-20260915-freeze-successor",
+        "result": "manual_actions_required",
+    },
+    {
+        "path": "docs/egress/maintenance/upstream-codex-0154-vc1-timing-producer-chain-closeout-20260915-freeze-successor.json",
+        "base_commit": "a50cb75af108ac45ce954c43da61b2cdc32263fe",
+        "scope": "upstream-codex-0154-vc1-timing-producer-chain-closeout-20260915-freeze-successor",
+        "result": "manual_actions_required",
+    },
+)
 
 
 class TimingLedgerError(ValueError):
@@ -368,6 +385,137 @@ def _load_producer_successor_edge(
     return before, after
 
 
+def _load_freeze_successor_edge(
+    repository_root: Path,
+    descriptor: dict[str, str],
+) -> tuple[str, str]:
+    """重放一份显式登记的通用 freeze successor 计时工具摘要边。"""
+
+    receipt_path = _repository_file(
+        repository_root,
+        descriptor["path"],
+        "producer freeze successor",
+    )
+    try:
+        payload = json.loads(receipt_path.read_bytes())
+    except (UnicodeError, json.JSONDecodeError) as error:
+        raise TimingLedgerError("producer freeze successor 不是合法 JSON") from error
+    receipt = _expect(
+        payload,
+        {
+            "schema_version",
+            "issued_at_utc",
+            "base_commit",
+            "current_commit",
+            "scope",
+            "mode",
+            "extra_worktree_paths",
+            "frozen_path_count",
+            "frozen_edge_count",
+            "changed_path_count",
+            "transitions",
+            "unregistered_path_count",
+            "unregistered_paths",
+            "deleted_frozen_paths",
+            "required_manual_actions",
+            "verification",
+            "safety",
+            "result",
+            "identity_sha256",
+        },
+        "producer freeze successor",
+    )
+    expected_fields = {
+        "schema_version": "official-egress-upstream-freeze-successor/v1",
+        "base_commit": descriptor["base_commit"],
+        "scope": descriptor["scope"],
+        "mode": "commit",
+        "result": descriptor["result"],
+    }
+    for field, expected in expected_fields.items():
+        if receipt.get(field) != expected:
+            raise TimingLedgerError(f"producer freeze successor {field} 漂移")
+    _timestamp(receipt.get("issued_at_utc"), "producer freeze successor issued_at_utc")
+    current_commit = receipt.get("current_commit")
+    if (
+        not isinstance(current_commit, str)
+        or not re.fullmatch(r"[0-9a-f]{40}", current_commit)
+        or current_commit == descriptor["base_commit"]
+    ):
+        raise TimingLedgerError("producer freeze successor current_commit 非法")
+    identity = receipt.get("identity_sha256")
+    unsigned = dict(receipt)
+    unsigned.pop("identity_sha256")
+    compact = json.dumps(
+        unsigned,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    if not isinstance(identity, str) or not SHA256_RE.fullmatch(identity):
+        raise TimingLedgerError("producer freeze successor 自摘要非法")
+    if _sha256_bytes(compact) != identity:
+        raise TimingLedgerError("producer freeze successor 自摘要不一致")
+    safety = _expect(
+        receipt.get("safety"),
+        {
+            "deployment_performed",
+            "live_account_used",
+            "official_egress_profile_changed",
+            "production_config_changed",
+            "wire_or_persona_selection_changed",
+        },
+        "producer freeze successor safety",
+    )
+    if any(safety.values()):
+        raise TimingLedgerError("producer freeze successor 超出离线工具修复边界")
+    if receipt.get("deleted_frozen_paths") != []:
+        raise TimingLedgerError("producer freeze successor 删除了冻结路径")
+    entries = receipt.get("transitions")
+    if not isinstance(entries, list):
+        raise TimingLedgerError("producer freeze successor transitions 不是数组")
+    matches = [
+        item
+        for item in entries
+        if isinstance(item, dict) and item.get("path") == PRODUCER_TOOL_RELATIVE
+    ]
+    if len(matches) != 1:
+        raise TimingLedgerError("producer freeze successor 未唯一登记计时工具")
+    edge = _expect(
+        matches[0],
+        {
+            "path",
+            "old_path",
+            "status",
+            "predecessor_sha256s",
+            "to_sha256",
+            "source_receipts",
+            "reason",
+        },
+        "producer freeze successor tool edge",
+    )
+    predecessors = edge.get("predecessor_sha256s")
+    after = edge.get("to_sha256")
+    if (
+        edge.get("old_path") != ""
+        or edge.get("status") != "M"
+        or not isinstance(predecessors, list)
+        or len(predecessors) != 1
+        or not isinstance(predecessors[0], str)
+        or not SHA256_RE.fullmatch(predecessors[0])
+        or not isinstance(after, str)
+        or not SHA256_RE.fullmatch(after)
+        or predecessors[0] == after
+        or not isinstance(edge.get("source_receipts"), list)
+        or not edge["source_receipts"]
+        or not all(isinstance(item, str) and item for item in edge["source_receipts"])
+        or not isinstance(edge.get("reason"), str)
+        or not edge["reason"].strip()
+    ):
+        raise TimingLedgerError("producer freeze successor tool edge 非法")
+    return predecessors[0], after
+
+
 def _producer_tool_coordinate(value: Any) -> tuple[str, ...] | None:
     """提取 producer 的规范相对坐标，忽略工作树根目录。"""
 
@@ -392,7 +540,7 @@ def _producer_tool_coordinate(value: Any) -> tuple[str, ...] | None:
 def _load_current_worktree_successor_edge(
     repository_root: Path,
 ) -> tuple[str, str] | None:
-    """读取当前 0.151 工作区对计时工具追加的唯一摘要边。"""
+    """读取 0.151 工作区快照对计时工具追加的初始摘要边。"""
 
     path = _repository_file(
         repository_root,
@@ -432,7 +580,6 @@ def _load_current_worktree_successor_edge(
         or not isinstance(after, str)
         or not SHA256_RE.fullmatch(after)
         or before == after
-        or _sha256_file(repository_root / PRODUCER_TOOL_RELATIVE) != after
     ):
         raise TimingLedgerError("current worktree successor 计时工具摘要边非法")
     return before, after
@@ -472,6 +619,10 @@ def _producer_identity_matches(frozen: Any, current: dict[str, str]) -> bool:
     current_edge = _load_current_worktree_successor_edge(repository_root)
     if current_edge is not None:
         edges.append(current_edge)
+    edges.extend(
+        _load_freeze_successor_edge(repository_root, descriptor)
+        for descriptor in PRODUCER_FREEZE_SUCCESSORS
+    )
     if not edges:
         return False
     # 每份旧台账都必须沿已登记的摘要边走到当前工具。历史边可以分叉，

@@ -90,8 +90,10 @@ from typing import Any, Callable, Mapping
 # 监督器，新增通用预派发停线与 ARM64 双跑重放，并同步 0.154 模型轨标签。
 # 2026-09-15（VC-1 通用证据闭合）：证据权限收口改为 Attempt v3 通用模块，
 # 父动作失败强制关闭阶段与计时账本，并将 P0 双轮演练升级为 v2。
+# 2026-09-15（计时生产者后继闭合）：历史账本按显式通用 freeze successor
+# 链重放，不再把 0.151 初始工作区快照误当成当前工具摘要。
 DEFAULT_TOOL_DIGEST = (
-    "e6c154379eee967e013005a7504f344eedc3c36c7935ac0eb807ad72798abd8a"
+    "bfd1dea4f23e137ba3804cc1c10c0380033fa7b73b87eb370b03c427a8a5be33"
 )
 DEFAULT_SUPERVISOR_DIGEST = (
     "dd24d083acb7df5b77b50b4c751716b34fa367f451e6c2cc82bad8f1aa802225"
@@ -114,6 +116,8 @@ MANAGED_RUNTIME_DOCUMENTS = (
     "egress/maintenance/codex-cli-0151-timing-producer-replay-tool-successor-source-transition.json",
     "egress/maintenance/codex-cli-0151-producer-coordinate-decoupling-source-transition.json",
     "egress/maintenance/codex-cli-0151-worktree-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc1-general-toolchain-closeout-20260915-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc1-timing-producer-chain-closeout-20260915-freeze-successor.json",
 )
 MANAGED_ASSERTION_PREPARER = "prepare_assertion_bundle.sh"
 TARGET_SCENARIO_MANIFEST = "codex_upgrade_scenarios_0_154_0.json"
