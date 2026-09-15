@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
+from tools.official_client_capture import codex_upgrade_evidence_permissions as evidence_permissions
 from tools.official_client_capture import codex_upgrade_vc0_closeout as closeout
 
 PREVIEW_SCHEMA = "evidence-permission-hardening-preview/v1"
@@ -101,17 +102,19 @@ def _evidence_roots(campaign_dir: Path, attempt_id: str) -> tuple[Path, list[Pat
 
 
 def _snapshot(roots: list[Path], *, with_content: bool) -> list[dict[str, Any]]:
-    """枚举证据根下全部条目；符号链接、特殊文件、非本用户属主、硬链接一律失败关闭。"""
+    """枚举证据根下全部条目；符号链接、特殊文件、硬链接与非法属主一律失败关闭。
+
+    属主边界与 seal 侧 ``codex_upgrade_evidence_permissions`` 完全相同：目录与普通文件必须归当前
+    用户；只有 capture-cli 内 tcpdump 固定身份写出的 ``traffic.pcap``／``egress.pcap`` 允许保留
+    ``100:102``。uid／gid 进入条目并参与 mode 摘要，收口前后二次核验属主未变。
+    """
 
     entries: list[dict[str, Any]] = []
-    uid = os.geteuid()
     for root in roots:
         for path in sorted([root, *root.rglob("*")], key=lambda item: str(item)):
             metadata = path.lstat()
             if stat.S_ISLNK(metadata.st_mode):
                 raise HardenError(f"证据含符号链接：{path}")
-            if metadata.st_uid != uid:
-                raise HardenError(f"证据属主不是当前用户：{path}")
             if stat.S_ISDIR(metadata.st_mode):
                 kind, target = "directory", DIRECTORY_MODE
             elif stat.S_ISREG(metadata.st_mode):
@@ -120,12 +123,16 @@ def _snapshot(roots: list[Path], *, with_content: bool) -> list[dict[str, Any]]:
                     raise HardenError(f"证据文件存在边界外硬链接：{path}")
             else:
                 raise HardenError(f"证据含特殊文件：{path}")
+            if not evidence_permissions._owner_allowed(path, kind, metadata):
+                raise HardenError(f"证据属主不是当前用户，也不在 tcpdump 固定边界内：{path}")
             record: dict[str, Any] = {
                 "path": str(path),
                 "kind": kind,
                 "mode": format(stat.S_IMODE(metadata.st_mode), "04o"),
                 "target_mode": format(target, "04o"),
                 "bytes": metadata.st_size if kind == "file" else 0,
+                "uid": metadata.st_uid,
+                "gid": metadata.st_gid,
             }
             if with_content and kind == "file":
                 record["sha256"] = _file_sha256(path)
@@ -138,7 +145,13 @@ def _content_digest(entries: list[dict[str, Any]]) -> str:
 
 
 def _mode_digest(entries: list[dict[str, Any]]) -> str:
-    return _fingerprint([{"path": e["path"], "kind": e["kind"], "mode": e["mode"]} for e in entries])
+    return _fingerprint(
+        [{"path": e["path"], "kind": e["kind"], "mode": e["mode"], "uid": e.get("uid"), "gid": e.get("gid")} for e in entries]
+    )
+
+
+def _owner_digest(entries: list[dict[str, Any]]) -> str:
+    return _fingerprint([{"path": e["path"], "uid": e.get("uid"), "gid": e.get("gid")} for e in entries])
 
 
 def _receipt_dir(campaign_dir: Path, attempt_id: str) -> Path:
@@ -237,6 +250,8 @@ def apply(campaign_dir: Path, attempt_id: str, *, approve_sha256: str) -> dict[s
         after = _snapshot(roots, with_content=True)
         if _content_digest(after) != preview_payload["content_sha256"]:
             raise HardenError("收口后证据内容摘要变化，metadata-only 前提被破坏")
+        if _owner_digest(after) != _owner_digest(before):
+            raise HardenError("收口后证据属主变化，只允许改 mode")
         if any(e["mode"] != e["target_mode"] for e in after):
             raise HardenError("收口后仍有条目未达到目标权限")
         payload = {

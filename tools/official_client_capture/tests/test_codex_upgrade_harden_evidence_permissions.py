@@ -8,6 +8,7 @@ import stat
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from tools.official_client_capture import codex_upgrade_harden_evidence_permissions as harden
 
@@ -91,6 +92,44 @@ class HardenEvidencePermissionsTests(unittest.TestCase):
             (fixture.run_root / "link").symlink_to(fixture.run_root / "manifest.json")
             with self.assertRaisesRegex(harden.HardenError, "符号链接"):
                 harden.preview(fixture.campaign_dir, fixture.attempt_id)
+
+    def test_tcpdump_owned_pcap_is_frozen_owner_boundary(self) -> None:
+        """tcpdump 固定身份写出的 traffic.pcap 允许保留 100:102；其他文件或目录归别人即失败关闭。"""
+
+        real_lstat = Path.lstat
+
+        def fake_lstat(self: Path, owners: dict[str, tuple[int, int]]) -> os.stat_result:
+            metadata = real_lstat(self)
+            owner = owners.get(self.name)
+            if owner is None:
+                return metadata
+            values = list(metadata)
+            values[stat.ST_UID], values[stat.ST_GID] = owner
+            return os.stat_result(tuple(values))
+
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = HardenFixture(Path(directory).resolve())
+            pcap_dir = fixture.run_root / "direct" / "codex-http" / "s1"
+            pcap_dir.mkdir(parents=True, mode=0o755)
+            pcap_dir.chmod(0o755)
+            pcap = pcap_dir / "traffic.pcap"
+            pcap.write_bytes(b"\xd4\xc3\xb2\xa1pcap")
+            pcap.chmod(0o640)
+            with mock.patch.object(Path, "lstat", lambda self: fake_lstat(self, {"traffic.pcap": (100, 102)})):
+                preview = harden.preview(fixture.campaign_dir, fixture.attempt_id)
+                entry = next(e for e in preview["entries"] if e["path"] == str(pcap))
+                self.assertEqual((entry["uid"], entry["gid"]), (100, 102))
+                applied = harden.apply(fixture.campaign_dir, fixture.attempt_id, approve_sha256=preview["review_sha256"])
+                self.assertEqual(applied["status"], "applied")
+                self.assertEqual(harden.replay(fixture.campaign_dir, fixture.attempt_id)["status"], "passed")
+            self.assertEqual(stat.S_IMODE(pcap.lstat().st_mode), 0o600)
+            # 同样的数值身份落在非 pcap 文件上，或 gid 不是 tcpdump 组，都不在边界内。
+            with mock.patch.object(Path, "lstat", lambda self: fake_lstat(self, {"manifest.json": (100, 102)})):
+                with self.assertRaisesRegex(harden.HardenError, "属主"):
+                    harden.preview(fixture.campaign_dir, fixture.attempt_id)
+            with mock.patch.object(Path, "lstat", lambda self: fake_lstat(self, {"traffic.pcap": (100, 0)})):
+                with self.assertRaisesRegex(harden.HardenError, "属主"):
+                    harden.preview(fixture.campaign_dir, fixture.attempt_id)
 
     def test_cli_round_trip(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
