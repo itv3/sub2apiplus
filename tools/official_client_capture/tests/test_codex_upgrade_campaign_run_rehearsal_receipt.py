@@ -258,6 +258,10 @@ class CampaignRunRehearsalReceiptTests(unittest.TestCase):
             )
 
             self.assertEqual(receipt["status"], "passed")
+            self.assertEqual(
+                receipt["schema_version"],
+                "codex-atomic-vc0-vc1-rehearsal/v2",
+            )
             self.assertEqual(receipt["live_request_count"], 0)
             self.assertEqual(receipt["scanned_bytes"], 0)
             self.assertFalse(receipt["network_used"])
@@ -273,6 +277,30 @@ class CampaignRunRehearsalReceiptTests(unittest.TestCase):
             )
             for item in receipt["instances"]:
                 self.assertEqual(item["parent_run"]["state"], "stopped")
+                self.assertEqual(
+                    item["permission_closeout"]["changed_entry_count"],
+                    8,
+                )
+                self.assertTrue(
+                    item["permission_closeout"]["receipt_replayed"]
+                )
+                self.assertEqual(
+                    item["timing_failure_closeout"]["status"],
+                    "stopped",
+                )
+                self.assertIsNone(
+                    item["timing_failure_closeout"]["active_phase"]
+                )
+                self.assertEqual(
+                    item["timing_failure_closeout"]["failure_parent"]
+                    ["timing_closeout"]["status"],
+                    "passed",
+                )
+                self.assertEqual(
+                    item["timing_failure_closeout"]
+                    ["closeout_failure_parent"]["timing_closeout"]["status"],
+                    "failed",
+                )
                 self.assertEqual(
                     item["negative_fixtures"],
                     {
@@ -360,10 +388,40 @@ class CampaignRunRehearsalReceiptTests(unittest.TestCase):
                     require_arm64=False,
                 )
 
+    def test_atomic_double_replay_rejects_permission_regression(self) -> None:
+        """权限收据通过后重新开放文件权限，双轮重放必须失败。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            evidence_root = root / "atomic-double"
+            evidence_root.mkdir(mode=0o700)
+            rehearsal.collect_atomic_double(
+                evidence_root,
+                "receipt.json",
+                require_arm64=False,
+            )
+            regressed = (
+                evidence_root
+                / "instance-1/data/runs/atomic-vc0-vc1-1-official-core/capture.json"
+            )
+            regressed.chmod(0o644)
+            with self.assertRaises(rehearsal.CampaignRunRehearsalError):
+                rehearsal.replay_atomic_double(
+                    evidence_root,
+                    "receipt.json",
+                    require_arm64=False,
+                )
+
     def test_atomic_replay_rejects_rehashed_instance_and_inventory_tampering(self) -> None:
         """重算收据摘要也不能夹带实例字段或把额外文件登记成合法资产。"""
 
-        cases = ("extra-instance-field", "changed-campaign-id", "registered-extra-file")
+        cases = (
+            "extra-instance-field",
+            "changed-campaign-id",
+            "timing-active",
+            "registered-extra-file",
+        )
         for case in cases:
             with self.subTest(case=case):
                 with tempfile.TemporaryDirectory() as directory:
@@ -382,6 +440,10 @@ class CampaignRunRehearsalReceiptTests(unittest.TestCase):
                         receipt["instances"][0]["unexpected"] = True
                     elif case == "changed-campaign-id":
                         receipt["instances"][0]["campaign_id"] = "forged-campaign"
+                    elif case == "timing-active":
+                        receipt["instances"][0]["timing_failure_closeout"][
+                            "status"
+                        ] = "active"
                     else:
                         self._write_json(
                             evidence_root / "instance-1" / "unregistered.json",

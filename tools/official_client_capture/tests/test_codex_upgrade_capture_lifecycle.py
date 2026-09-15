@@ -239,6 +239,36 @@ class CaptureLifecycleTest(unittest.TestCase):
                 side_effect=self._finalizer(order),
             )
         )
+        def close_permissions(
+            attempt_root: Path,
+            evidence_roots: object,
+        ) -> dict[str, object]:
+            del evidence_roots
+            self.assertFalse((attempt_root / "attempt.json").exists())
+            order.append("permission-closeout")
+            receipt = attempt_root / "evidence-permission-closeout.json"
+            receipt.write_text("{}\n", encoding="utf-8")
+            receipt.chmod(0o600)
+            return {
+                "path": receipt.name,
+                "sha256": codex_upgrade.file_sha256(receipt),
+                "bytes": receipt.stat().st_size,
+            }
+
+        stack.enter_context(
+            mock.patch.object(
+                codex_upgrade,
+                "_close_attempt_evidence_permissions",
+                side_effect=close_permissions,
+            )
+        )
+        stack.enter_context(
+            mock.patch.object(
+                codex_upgrade,
+                "_replay_attempt_evidence_permissions",
+                return_value={},
+            )
+        )
         stack.enter_context(mock.patch.object(codex_upgrade, "run_job", side_effect=run_job))
         return stack
 
@@ -276,7 +306,13 @@ class CaptureLifecycleTest(unittest.TestCase):
             self.assertEqual(result["status"], "awaiting_receipts")
             self.assertEqual(
                 order,
-                ["probe-before", "job", "probe-after", "finalize-restoration"],
+                [
+                    "probe-before",
+                    "job",
+                    "probe-after",
+                    "finalize-restoration",
+                    "permission-closeout",
+                ],
             )
             attempt = json.loads(
                 (Path(result["attempt"]) / "attempt.json").read_text(
@@ -284,8 +320,79 @@ class CaptureLifecycleTest(unittest.TestCase):
                 )
             )
             self.assertEqual(attempt["status"], "awaiting_receipts")
+            self.assertEqual(
+                attempt["schema_version"],
+                codex_upgrade.CAPTURE_ATTEMPT_SCHEMA,
+            )
+            self.assertIsNotNone(attempt["evidence_permission_closeout"])
+            self.assertIsNone(attempt["evidence_permission_error"])
             self.assertIsNotNone(attempt["environment"]["restoration_report"])
             self.assertFalse((campaign_dir / "official" / "result.json").exists())
+
+    def test_permission_closeout_failure_publishes_only_failed_attempt(self) -> None:
+        """权限收口失败不得发布可 seal 的 awaiting_receipts Attempt。"""
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            campaign_dir, job_evidence, job, manifest = self._fixture(root)
+            order: list[str] = []
+
+            def complete_job(
+                current: codex_upgrade.Job,
+                log_root: Path,
+                attempt_index: int = 1,
+                scenario_context: object | None = None,
+            ) -> dict[str, object]:
+                del log_root, attempt_index, scenario_context
+                order.append("job")
+                return {
+                    "id": current.job_id,
+                    "phase": current.phase,
+                    "required": True,
+                    "execution_sha256": codex_upgrade._job_execution_sha256(current),
+                    "status": "complete",
+                    "steps": [],
+                    "evidence_roots": [str(job_evidence)],
+                }
+
+            permission_error = (
+                codex_upgrade.codex_upgrade_evidence_permissions.EvidencePermissionError(
+                    "模拟权限边界漂移"
+                )
+            )
+            with (
+                self._patch_runtime(
+                    manifest,
+                    job,
+                    order,
+                    run_job=complete_job,
+                ),
+                mock.patch.object(
+                    codex_upgrade,
+                    "_close_attempt_evidence_permissions",
+                    side_effect=permission_error,
+                ),
+                self.assertRaisesRegex(
+                    codex_upgrade.codex_upgrade_evidence_permissions.EvidencePermissionError,
+                    "模拟权限边界漂移",
+                ),
+            ):
+                codex_upgrade._run_capture_attempt(
+                    self._arguments(campaign_dir),
+                    "official",
+                )
+
+            attempts = sorted((campaign_dir / "official" / "attempts").iterdir())
+            attempt = json.loads(
+                (attempts[-1] / "attempt.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(attempt["status"], "failed")
+            self.assertIsNone(attempt["evidence_permission_closeout"])
+            self.assertEqual(
+                attempt["evidence_permission_error"]["type"],
+                "EvidencePermissionError",
+            )
+            self.assertNotIn("capture-official seal", str(attempt.get("next_gate")))
 
     def test_keyboard_interrupt_still_runs_after_probe_and_persists_attempt(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -313,7 +420,13 @@ class CaptureLifecycleTest(unittest.TestCase):
 
             self.assertEqual(
                 order,
-                ["probe-before", "job", "probe-after", "finalize-restoration"],
+                [
+                    "probe-before",
+                    "job",
+                    "probe-after",
+                    "finalize-restoration",
+                    "permission-closeout",
+                ],
             )
             attempts = sorted((campaign_dir / "official" / "attempts").iterdir())
             attempt = json.loads(
@@ -358,7 +471,10 @@ class CaptureLifecycleTest(unittest.TestCase):
                         self._arguments(campaign_dir), "official"
                     )
 
-            self.assertEqual(order, ["probe-before", "job", "probe-after"])
+            self.assertEqual(
+                order,
+                ["probe-before", "job", "probe-after", "permission-closeout"],
+            )
             marker = json.loads(
                 (campaign_dir / "environment-contaminated.json").read_text(
                     encoding="utf-8"
@@ -756,6 +872,11 @@ class CaptureLifecycleTest(unittest.TestCase):
                         "phase": "official",
                         "candidate_id": None,
                         "status": "failed",
+                        "evidence_permission_closeout": None,
+                        "evidence_permission_error": {
+                            "type": "FixtureError",
+                            "message": "失败夹具没有可发布证据。",
+                        },
                         "identity": identity,
                         "results": [
                             {
@@ -1400,10 +1521,17 @@ class CaptureLifecycleTest(unittest.TestCase):
             self.assertFalse(
                 (campaign_dir / "environment-contaminated.json").exists()
             )
-            with mock.patch.object(
-                codex_upgrade,
-                "load_campaign_manifest",
-                return_value=manifest,
+            with (
+                mock.patch.object(
+                    codex_upgrade,
+                    "load_campaign_manifest",
+                    return_value=manifest,
+                ),
+                mock.patch.object(
+                    codex_upgrade,
+                    "_replay_attempt_evidence_permissions",
+                    return_value={},
+                ),
             ):
                 records = codex_upgrade._campaign_contamination_records(campaign_dir)
                 self.assertTrue(any(value.endswith(":attempt") for value in records))

@@ -4603,6 +4603,15 @@ class CodexUpgradeTest(unittest.TestCase):
                 mock.patch.object(codex_upgrade, "_approve_classification_candidate_reuse_transition", return_value=({}, transition_binding, source_binding)),
                 mock.patch.object(codex_upgrade, "_prior_complete_results", return_value=reused),
                 mock.patch.object(codex_upgrade, "_reserve_capture_attempt", return_value=(attempt_root, reservation)),
+                mock.patch.object(
+                    codex_upgrade,
+                    "_close_attempt_evidence_permissions",
+                    return_value={
+                        "path": "evidence-permission-closeout.json",
+                        "sha256": "6" * 64,
+                        "bytes": 1,
+                    },
+                ),
                 mock.patch.object(codex_upgrade, "_write_capture_attempt", side_effect=write_attempt) as writer,
                 mock.patch.object(codex_upgrade, "_probe_capture_environment") as probe,
                 mock.patch.object(codex_upgrade, "_capture_arm64_environment_receipt") as arm64_probe,
@@ -4684,7 +4693,7 @@ class CodexUpgradeTest(unittest.TestCase):
                 "planned_jobs": [],
             }
             attempt = {
-                "schema_version": codex_upgrade.CAPTURE_ATTEMPT_SCHEMA,
+                "schema_version": codex_upgrade.LEGACY_CAPTURE_ATTEMPT_SCHEMA,
                 "campaign_id": "campaign-a",
                 "campaign_mode": "formal",
                 "campaign_purpose": "validation_only",
@@ -6695,10 +6704,15 @@ class CodexUpgradeTest(unittest.TestCase):
         codex_upgrade._secure_write_json_once(
             attempt_root / "reservation.json", reservation
         )
-        attempt = codex_upgrade._write_capture_attempt(
-            campaign_dir,
-            attempt_root,
-            {
+        with mock.patch.object(
+            codex_upgrade,
+            "_replay_attempt_evidence_permissions",
+            return_value={},
+        ):
+            attempt = codex_upgrade._write_capture_attempt(
+                campaign_dir,
+                attempt_root,
+                {
                 "campaign_id": campaign_manifest["campaign_id"],
                 "phase": phase,
                 "candidate_id": candidate_id,
@@ -6716,8 +6730,18 @@ class CodexUpgradeTest(unittest.TestCase):
                 "execution_error": None,
                 "restoration_error": None,
                 "next_gate": "生成机器收据后 seal",
-            },
+                },
+            )
+        # 这一大组通用阶段夹具模拟的是历史 Attempt；显式冻结为 v2，后续
+        # 测试才能验证新运行时保留的只读兼容，而不会伪造 v3 权限收据。
+        attempt["schema_version"] = codex_upgrade.LEGACY_CAPTURE_ATTEMPT_SCHEMA
+        attempt.pop("attempt_digest", None)
+        attempt["attempt_digest"] = codex_upgrade._fingerprint(attempt)
+        (attempt_root / "attempt.json").write_text(
+            json.dumps(attempt, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
         )
+        (attempt_root / "attempt.json").chmod(0o600)
         evaluation_transition: dict[str, str] | None = None
         if evaluation_transition_identity is not None:
             self.assertIsNotNone(evaluation_recovery_controls)
@@ -14111,6 +14135,27 @@ class ToolIdentitySideSplitTest(unittest.TestCase):
         )
         self.assertEqual(drift["production"], [])
         self.assertEqual(drift["evaluation"], sorted(paths))
+
+    def test_evidence_permission_closeout_is_control_evaluation_only(self):
+        """权限闭合只改变元数据与控制收据，不得使请求 Job 失效。"""
+
+        path = "codex_upgrade_evidence_permissions.py"
+        entries = [{"path": path, "sha256": "a" * 64}]
+        sides = codex_upgrade._tool_identity_sides(entries)
+        self.assertEqual(sides["production_count"], 0)
+        self.assertEqual(sides["evaluation_count"], 1)
+        components = codex_upgrade._tool_component_identities(entries)["components"]
+        self.assertEqual(components["control"]["entry_count"], 1)
+        affected, changed, unmapped = codex_upgrade._exact_tool_path_impact(
+            [],
+            self._identity(entries),
+            self._identity(
+                [{"path": path, "sha256": "b" * 64}]
+            ),
+        )
+        self.assertEqual(affected, [])
+        self.assertEqual(changed, [])
+        self.assertEqual(unmapped, [])
 
     def test_canonical_control_and_activation_files_are_evaluation_side(self):
         """canonical 调度、门禁和画像补丁不得触发候选请求重跑。"""

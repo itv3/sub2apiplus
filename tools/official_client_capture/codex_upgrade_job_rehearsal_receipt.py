@@ -186,6 +186,7 @@ _JOB_COMPONENT_FILES = {
 # 影响的 Job／门禁；未登记的新文件仍然落到 shared，保持 fail-close。
 _EVALUATOR_FILES = {
     "codex_upgrade.py",
+    "codex_upgrade_evidence_permissions.py",
     "codex_upgrade_job_rehearsal_receipt.py",
     "incremental_recovery.py",
     "codex_upgrade_gate_receipt.py",

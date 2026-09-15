@@ -244,28 +244,56 @@ class Arm64SupervisedDeployTest(unittest.TestCase):
             deploy.file_sha256(assertion_preparer),
         )
 
-    def test_load_supervisor_binds_staged_sibling_helper(self) -> None:
-        """importlib 加载必须复现监督器脚本的同目录 helper 搜索语义。"""
+    def test_load_supervisor_binds_all_staged_sibling_dependencies(self) -> None:
+        """importlib 加载必须复现监督器脚本的全部同目录依赖。"""
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             module_root = root / "tools" / "official_client_capture"
             module_root.mkdir(parents=True)
-            helper_name = "codex_upgrade_vc1_permission_alias_closeout"
-            helper_path = module_root / f"{helper_name}.py"
-            helper_path.write_text("SOURCE = 'staged'\n", encoding="utf-8")
+            dependencies = {
+                "codex_upgrade_evidence_permissions": "evidence_permissions",
+                "codex_upgrade_timing_ledger": "timing_ledger",
+                "codex_upgrade_vc1_permission_alias_closeout": (
+                    "permission_alias_closeout"
+                ),
+                "codex_upgrade_vc_artifacts": "vc_artifacts",
+            }
+            for name in dependencies:
+                (module_root / f"{name}.py").write_text(
+                    f"SOURCE = 'staged:{name}'\n",
+                    encoding="utf-8",
+                )
             (module_root / "codex_upgrade_supervisor.py").write_text(
-                f"import {helper_name} as permission_alias_closeout\n"
-                "SOURCE = permission_alias_closeout.SOURCE\n",
+                "".join(
+                    f"import {name} as {alias}\n"
+                    for name, alias in dependencies.items()
+                )
+                + "SOURCES = {\n"
+                + "".join(
+                    f"    '{name}': {alias}.SOURCE,\n"
+                    for name, alias in dependencies.items()
+                )
+                + "}\n",
                 encoding="utf-8",
             )
-            old_helper = types.ModuleType(helper_name)
-            old_helper.SOURCE = "cached"
+            old_modules = {}
+            for name in dependencies:
+                old_module = types.ModuleType(name)
+                old_module.SOURCE = f"cached:{name}"
+                old_modules[name] = old_module
             original_path = list(sys.path)
-            with mock.patch.dict(sys.modules, {helper_name: old_helper}):
+            with mock.patch.dict(sys.modules, old_modules):
                 loaded = deploy.load_supervisor(root)
-                self.assertEqual(loaded.SOURCE, "staged")
-                self.assertIs(sys.modules[helper_name], old_helper)
+                self.assertEqual(
+                    loaded.SOURCES,
+                    {
+                        name: f"staged:{name}"
+                        for name in dependencies
+                    },
+                )
+                for name, old_module in old_modules.items():
+                    self.assertIs(sys.modules[name], old_module)
             self.assertEqual(sys.path, original_path)
 
     def test_assertion_preparer_switch_and_joint_rollback_are_atomic(self) -> None:

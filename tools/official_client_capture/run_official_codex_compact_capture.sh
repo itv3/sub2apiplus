@@ -59,6 +59,12 @@ if [[ -e $host_run_root || -L $host_run_root ]]; then
   exit 2
 fi
 install -d -m 0700 "$host_run_root"
+# direct／mitm／result 会由容器侧 producer 继续写入；父目录必须在任何容器
+# 进程启动前由宿主显式建立，避免默认 umask 产生 0755 中间层。
+install -d -m 0700 \
+  "$host_run_root/direct" \
+  "$host_run_root/mitm" \
+  "$host_run_root/result"
 direct_output="/capture/runs/$run_id/result/direct"
 docker exec "$capture_container" "$capture_runtime_root/start_direct.sh" \
   "$run_id" "$subject" "$capture_container"

@@ -128,6 +128,7 @@ class JobRehearsalReceiptTests(unittest.TestCase):
         self.assertEqual(plan["reused_job_ids"], ["candidate-frozen-aux"])
         for path in (
             "candidate_rule_assertion.py",
+            "codex_upgrade_evidence_permissions.py",
             "candidate_rule_expectations_0_149_1.json",
             "codex_upgrade_rules_0_151_0.json",
             "codex_upgrade_scenarios_0_151_0.json",

@@ -376,6 +376,8 @@ def parse_arguments() -> argparse.Namespace:
 
 
 def main() -> int:
+    # 多级结果目录和日志从创建起保持私有，不能依赖容器默认 umask。
+    os.umask(0o077)
     arguments = parse_arguments()
     arguments.output_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     arguments.output_dir.chmod(0o700)

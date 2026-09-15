@@ -1698,7 +1698,10 @@ python3 tools/official_client_capture/codex_upgrade.py plan \
    `codex_upgrade_campaign_run_rehearsal_receipt.py atomic-double-collect`，连续两次从互不引用的 VC-0
    控制树经真实原子入口完成 VC-1；必须同时证明 `/capture` 只读、`/capture/staging` 可写、
    容器内 `/root/oauth-capture/runs` 与 `/capture/runs` 同 inode 且均可写，并冻结当前工具 bundle 摘要。
-   两次结果和 canonical 篡改、已有父 run、deadline 漂移、额外文件负例均通过，且请求数、扫描字节均为零。
+   每轮还必须真实制造并收口 `0755/0644` 证据权限缺口、重放通用权限收据，再由失败父 run 把
+   `active/VC-1` 时间账本关闭为 `stage_abandoned → stop_the_line`；第二个失败父 run 必须证明账本闭合
+   冲突会显式进入父结果且不会改写既有终态。两次结果和 canonical 篡改、已有父 run、deadline 漂移、
+   额外文件负例均通过，且请求数、扫描字节均为零。
 6. 冻结 Campaign 总计划，并从当前已知输入编译首个不可变 Formal 批次，明确本批次的
    `execute_items`、`reuse_items`、输入摘要和直接依赖；后续批次只能从前序封存输出生成。执行集合为空时
    必须生成 `incremental-noop`。
@@ -1842,9 +1845,12 @@ python3 -m tools.official_client_capture.codex_upgrade_campaign_run_rehearsal_re
 正式模式会同时验证 `aarch64`、`/capture` 只读、`/capture/staging` 可写、容器内
 `/root/oauth-capture/runs` 与 `/capture/runs` 均可写且两个 runs 别名的 device/inode 相同。宿主机上的
 `/root/oauth-capture/runs` 只读身份路径不属于本容器内演练坐标。两次运行必须各有独立 Campaign ID、state-dir、
-VC-0 checkpoint、VC-1 batch、父 run 和 VC-1 checkpoint；canonical 篡改、已有父 run、deadline 漂移和
-额外文件四个负例必须全部命中，`live_request_count=0`、`scanned_bytes=0`、`network_used=false`。工具身份
-只使用相对工具路径和文件 SHA-256，因此同一部署字节的 bundle 摘要必须能跨工作区与 ARM64 路径复算。
+VC-0 checkpoint、VC-1 batch、成功父 run 和 VC-1 checkpoint；`v2` 收据还必须逐轮绑定通用权限收口、
+失败父 run 的账本终态及闭合失败父结果。权限夹具固定含 4 个 `0755` 目录和 4 个零字节 `0644` 文件，
+权限工具只能读取元数据并将其收口为 `0700/0600`；收据独立重放后仍须声明 `scanned_bytes=0`。
+canonical 篡改、已有父 run、deadline 漂移和额外文件四个负例必须全部命中，`live_request_count=0`、
+`scanned_bytes=0`、`network_used=false`。工具身份只使用相对工具路径和文件 SHA-256，因此同一部署字节的
+bundle 摘要必须能跨工作区与 ARM64 路径复算。
 
 旧分批演练的 `campaign_run_rehearsal_receipt.py collect` 从 preflight VC-0 checkpoint 连续编译两个真实
 VC batch，在两个独立父监督器中执行零网络

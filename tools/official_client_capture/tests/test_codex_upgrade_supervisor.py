@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import contextlib
 import copy
 import hashlib
@@ -18,6 +19,7 @@ from pathlib import Path
 from unittest import mock
 
 from tools.official_client_capture import (
+    codex_upgrade_timing_ledger as timing_ledger,
     codex_upgrade_vc1_permission_alias_predispatch_closeout as predispatch_closeout,
 )
 from tools.official_client_capture import codex_upgrade_supervisor as supervisor
@@ -3188,6 +3190,279 @@ class SupervisorTests(unittest.TestCase):
             )
             report = _audit_command(run_dir)
             self.assertFalse(report["audit_incomplete"])
+
+    def _timing_closeout_fixture(
+        self,
+        root: Path,
+    ) -> tuple[Path, Path, dict[str, object]]:
+        """建立 active/VC-1 的正式 Campaign 与时间账本。"""
+
+        data_root = root / "data"
+        campaign_dir = data_root / "evidence" / "campaigns" / "campaign-closeout"
+        campaign_dir.mkdir(parents=True, mode=0o700)
+        ledger_root = data_root / "control" / "timing-ledger"
+        ledger_root.parent.mkdir(parents=True, mode=0o700)
+        timing_ledger.create_ledger(
+            ledger_root,
+            upgrade_id="upgrade-closeout",
+            baseline_version="0.151.0",
+            target_version="0.154.0",
+            campaign_purpose="production_replacement",
+            evidence_decision="recapture",
+        )
+        timing_ledger.append_event(
+            ledger_root,
+            event_id="fixture-vc0-completed",
+            phase="VC-0",
+            event_type="stage_completed",
+            next_action="启动 VC-1",
+        )
+        timing_ledger.append_event(
+            ledger_root,
+            event_id="fixture-vc1-started",
+            phase="VC-1",
+            event_type="stage_started",
+            next_action="运行父批次",
+        )
+        campaign = {
+            "campaign_id": "campaign-closeout",
+            "campaign_mode": "formal",
+            "campaign_purpose": "production_replacement",
+            "baseline_version": "0.151.0",
+            "target_version": "0.154.0",
+            "control_receipts": {
+                "upgrade_timing": {
+                    "ledger_dir": str(ledger_root),
+                    "ledger_plan_sha256": supervisor._sha256(
+                        (ledger_root / "ledger.json").read_bytes()
+                    ),
+                    "upgrade_id": "upgrade-closeout",
+                }
+            },
+        }
+        self._write_json(campaign_dir / "campaign.json", campaign)
+        manifest = build_campaign_run_manifest(
+            "campaign-closeout",
+            "VC-1",
+            30,
+            actions=[
+                {
+                    "action_id": "failing-action",
+                    "operation": "VC-1:failing-action",
+                    "timeout_seconds": 5,
+                    "command": [sys.executable, "-c", "raise SystemExit(7)"],
+                }
+            ],
+        )
+        return campaign_dir, ledger_root, manifest
+
+    def test_parent_action_failure_closes_upgrade_timing_ledger(self) -> None:
+        """父动作非零后不得留下 active/VC-1。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            campaign_dir, ledger_root, manifest = self._timing_closeout_fixture(root)
+            state_dir = root / "supervisor-state"
+            state_dir.mkdir(mode=0o700)
+            returncode, payload = supervisor._campaign_run_locked(
+                argparse.Namespace(
+                    heartbeat_seconds=0.05,
+                    watchdog_timeout_seconds=0.5,
+                    ledger_interval_seconds=0.05,
+                ),
+                manifest=manifest,
+                state_dir=state_dir,
+                campaign_dir=campaign_dir,
+            )
+            self.assertEqual(returncode, 1)
+            self.assertEqual(payload["timing_closeout"]["status"], "passed")
+            summary = timing_ledger.inspect_ledger(ledger_root)
+            self.assertEqual(summary["status"], "stopped")
+            self.assertIsNone(summary["active_phase"])
+            events = [
+                event["event_type"]
+                for event, _raw in timing_ledger._load_events(ledger_root)
+            ]
+            self.assertEqual(events[-2:], ["stage_abandoned", "stop_the_line"])
+
+    def test_timing_closeout_recovers_partial_stage_abandoned(self) -> None:
+        """首个事件已落盘而第二个事件失败时，重入只能确定性补齐。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            campaign_dir, ledger_root, manifest = self._timing_closeout_fixture(root)
+            real_append = timing_ledger.append_event
+            calls = 0
+
+            def fail_second(*args: object, **kwargs: object) -> dict[str, object]:
+                nonlocal calls
+                calls += 1
+                if calls == 2:
+                    raise timing_ledger.TimingLedgerError("模拟第二次追加失败")
+                return real_append(*args, **kwargs)
+
+            with (
+                mock.patch.object(
+                    supervisor.timing_ledger,
+                    "append_event",
+                    side_effect=fail_second,
+                ),
+                self.assertRaisesRegex(supervisor.SupervisorError, "stop_the_line"),
+            ):
+                supervisor._close_failed_campaign_timing_ledger(
+                    campaign_dir,
+                    manifest,
+                    failed_action_id="failing-action",
+                )
+            middle = timing_ledger.inspect_ledger(ledger_root)
+            self.assertIsNone(middle["active_phase"])
+            self.assertTrue(str(middle["last_event_id"]).endswith("stage-abandoned"))
+            result = supervisor._close_failed_campaign_timing_ledger(
+                campaign_dir,
+                manifest,
+                failed_action_id="failing-action",
+            )
+            self.assertEqual(result["status"], "passed")
+            self.assertEqual(timing_ledger.inspect_ledger(ledger_root)["status"], "stopped")
+
+    def test_parent_reports_timing_closeout_failure(self) -> None:
+        """账本闭合失败必须进入父结果，不能只留下 action-failed。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            campaign_dir, _ledger_root, manifest = self._timing_closeout_fixture(root)
+            state_dir = root / "supervisor-state"
+            state_dir.mkdir(mode=0o700)
+            with mock.patch.object(
+                supervisor,
+                "_close_failed_campaign_timing_ledger",
+                side_effect=supervisor.SupervisorError("模拟账本闭合失败"),
+            ):
+                returncode, payload = supervisor._campaign_run_locked(
+                    argparse.Namespace(
+                        heartbeat_seconds=0.05,
+                        watchdog_timeout_seconds=0.5,
+                        ledger_interval_seconds=0.05,
+                    ),
+                    manifest=manifest,
+                    state_dir=state_dir,
+                    campaign_dir=campaign_dir,
+                )
+            self.assertEqual(returncode, 1)
+            self.assertEqual(payload["timing_closeout"]["status"], "failed")
+            self.assertIn("模拟账本闭合失败", payload["timing_closeout"]["message"])
+
+    def test_vc1_assertion_seal_order_and_permission_receipt_gate(self) -> None:
+        """新 Attempt 只有在权限收据通过且 assertion 位于 seal 前时可派发。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            data_root = root / "data"
+            (data_root / "runs").mkdir(parents=True, mode=0o700)
+            campaign_dir = data_root / "evidence" / "campaigns" / "campaign-gate"
+            attempt_root = campaign_dir / "official" / "attempts" / "attempt-gate"
+            evidence_root = attempt_root / "evidence"
+            logs_root = attempt_root / "logs"
+            evidence_root.mkdir(parents=True, mode=0o700)
+            logs_root.mkdir(mode=0o700)
+            attempt_root.chmod(0o700)
+            evidence_root.chmod(0o700)
+            self._write_json(
+                campaign_dir / "campaign.json",
+                {"campaign_id": "campaign-gate"},
+            )
+            receipt_path, _receipt = supervisor.evidence_permissions.close_evidence_permissions(
+                attempt_root,
+                [evidence_root, logs_root],
+                managed_data_root=data_root,
+            )
+            binding = supervisor.evidence_permissions.receipt_binding(
+                attempt_root,
+                receipt_path,
+            )
+            attempt = {
+                "schema_version": "codex-upgrade-capture-attempt/v3",
+                "campaign_id": "campaign-gate",
+                "phase": "official",
+                "candidate_id": None,
+                "attempt_id": "attempt-gate",
+                "status": "awaiting_receipts",
+                "evidence_roots": [str(evidence_root), str(logs_root)],
+                "evidence_permission_closeout": binding,
+                "evidence_permission_error": None,
+            }
+            attempt["attempt_digest"] = supervisor._attempt_fingerprint(attempt)
+            self._write_json(attempt_root / "attempt.json", attempt)
+            assertion = {
+                "action_id": "prepare-official-assertion-bundle",
+                "operation": "VC-1:prepare-official-assertion-bundle",
+                "timeout_seconds": 5.0,
+                "command": [
+                    "/usr/bin/env",
+                    f"CAMPAIGN_DIR={campaign_dir}",
+                    "ATTEMPT_ID=attempt-gate",
+                    "SIDE=official",
+                    "/usr/bin/bash",
+                    "/tmp/prepare-assertion.sh",
+                ],
+                "item_ids": ["prepare-official-assertion-bundle"],
+            }
+            seal = {
+                "action_id": "seal-official-preview",
+                "operation": "VC-1:capture-official-seal-preview",
+                "timeout_seconds": 5.0,
+                "command": [
+                    sys.executable,
+                    "/tmp/codex_upgrade.py",
+                    "capture-official",
+                    "seal",
+                    "--campaign-dir",
+                    str(campaign_dir),
+                    "--attempt-id",
+                    "attempt-gate",
+                ],
+                "item_ids": ["seal-official-preview"],
+            }
+            supervisor._validate_vc1_assertion_seal_gate(
+                schema_version=supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA,
+                campaign_id="campaign-gate",
+                phase="VC-1",
+                actions=[assertion, seal],
+                require_bound_files=True,
+            )
+            with self.assertRaisesRegex(supervisor.SupervisorError, "必须先生成"):
+                supervisor._validate_vc1_assertion_seal_gate(
+                    schema_version=supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA,
+                    campaign_id="campaign-gate",
+                    phase="VC-1",
+                    actions=[seal, assertion],
+                    require_bound_files=True,
+                )
+
+            attempt["evidence_permission_closeout"] = None
+            attempt["evidence_permission_error"] = {
+                "type": "FixtureError",
+                "message": "模拟权限收口失败",
+            }
+            attempt.pop("attempt_digest")
+            attempt["attempt_digest"] = supervisor._attempt_fingerprint(attempt)
+            (attempt_root / "attempt.json").write_text(
+                json.dumps(attempt, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            (attempt_root / "attempt.json").chmod(0o600)
+            with self.assertRaisesRegex(supervisor.SupervisorError, "没有通过"):
+                supervisor._validate_vc1_assertion_seal_gate(
+                    schema_version=supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA,
+                    campaign_id="campaign-gate",
+                    phase="VC-1",
+                    actions=[assertion, seal],
+                    require_bound_files=True,
+                )
 
 
 if __name__ == "__main__":

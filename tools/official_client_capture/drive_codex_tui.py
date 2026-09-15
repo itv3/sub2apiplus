@@ -126,6 +126,8 @@ class Tui:
 
 
 def main() -> int:
+    # TUI 日志可能包含用户输入和工具参数，创建时即限制为当前用户可见。
+    os.umask(0o077)
     ap = argparse.ArgumentParser()
     ap.add_argument("--codex-bin", default="/root/.local/bin/codex")
     ap.add_argument("--model", default="gpt-5.6-luna")

@@ -31,9 +31,13 @@ from pathlib import Path
 from typing import Any, Iterable, Iterator, Mapping, Sequence
 
 if __package__ in {None, ""}:
+    import codex_upgrade_evidence_permissions as evidence_permissions
+    import codex_upgrade_timing_ledger as timing_ledger
     import codex_upgrade_vc1_permission_alias_closeout as permission_alias_closeout
     import codex_upgrade_vc_artifacts as vc_artifacts
 else:
+    from . import codex_upgrade_evidence_permissions as evidence_permissions
+    from . import codex_upgrade_timing_ledger as timing_ledger
     from . import codex_upgrade_vc1_permission_alias_closeout as permission_alias_closeout
     from . import codex_upgrade_vc_artifacts as vc_artifacts
 
@@ -3968,6 +3972,183 @@ def _campaign_run_tool_transition(
     return normalized
 
 
+def _attempt_fingerprint(payload: Mapping[str, Any]) -> str:
+    """复算与主编排器一致、无结尾换行的 Attempt 摘要。"""
+
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _command_assignment(command: Sequence[str], name: str) -> str:
+    """从 ``/usr/bin/env KEY=value`` 动作中提取唯一冻结坐标。"""
+
+    prefix = f"{name}="
+    values = [value[len(prefix) :] for value in command if value.startswith(prefix)]
+    if len(values) != 1 or not values[0]:
+        raise SupervisorError(f"VC-1 assertion 动作缺少唯一 {name} 坐标。")
+    return values[0]
+
+
+def _command_flag(command: Sequence[str], name: str) -> str:
+    """从 CLI 动作中提取一个唯一的参数值。"""
+
+    if command.count(name) != 1:
+        raise SupervisorError(f"VC-1 seal 动作缺少唯一 {name} 坐标。")
+    index = command.index(name)
+    if index + 1 >= len(command) or not command[index + 1]:
+        raise SupervisorError(f"VC-1 seal 动作的 {name} 值为空。")
+    return command[index + 1]
+
+
+def _assertion_coordinates(action: Mapping[str, Any]) -> tuple[Path, str]:
+    """解析正式 assertion bundle 动作绑定的 Campaign 与 Attempt。"""
+
+    command = action.get("command")
+    if not isinstance(command, list) or not all(isinstance(value, str) for value in command):
+        raise SupervisorError("VC-1 assertion command 非法。")
+    campaign_dir = Path(_command_assignment(command, "CAMPAIGN_DIR"))
+    attempt_id = _safe_id(_command_assignment(command, "ATTEMPT_ID"), "ATTEMPT_ID")
+    if (
+        _command_assignment(command, "SIDE") != "official"
+        or not campaign_dir.is_absolute()
+        or campaign_dir.is_symlink()
+    ):
+        raise SupervisorError("VC-1 assertion 只能绑定官方侧绝对 Campaign。")
+    return campaign_dir, attempt_id
+
+
+def _seal_coordinates(action: Mapping[str, Any]) -> tuple[Path, str]:
+    """解析正式 seal preview 动作绑定的 Campaign 与 Attempt。"""
+
+    command = action.get("command")
+    if not isinstance(command, list) or not all(isinstance(value, str) for value in command):
+        raise SupervisorError("VC-1 seal command 非法。")
+    campaign_dir = Path(_command_flag(command, "--campaign-dir"))
+    attempt_id = _safe_id(_command_flag(command, "--attempt-id"), "--attempt-id")
+    if not campaign_dir.is_absolute() or campaign_dir.is_symlink():
+        raise SupervisorError("VC-1 seal 只能绑定绝对 Campaign。")
+    return campaign_dir, attempt_id
+
+
+def _replay_vc1_evidence_permission_closeout(
+    campaign_dir: Path,
+    attempt_id: str,
+    *,
+    expected_campaign_id: str | None = None,
+) -> str:
+    """重放新 Attempt 的权限收口；v2 仅作为不可重跑的历史身份返回。"""
+
+    try:
+        campaign_dir = campaign_dir.resolve(strict=True)
+    except OSError as error:
+        raise SupervisorError("VC-1 权限门禁的 Campaign 不存在。") from error
+    try:
+        relative = campaign_dir.relative_to(campaign_dir.parents[2])
+    except (IndexError, ValueError) as error:
+        raise SupervisorError("VC-1 Campaign 路径层级非法。") from error
+    if relative.parts[:2] != ("evidence", "campaigns") or len(relative.parts) != 3:
+        raise SupervisorError("VC-1 Campaign 不在受管 data/evidence/campaigns 下。")
+    campaign = _read_json(campaign_dir / "campaign.json")
+    attempt_root = campaign_dir / "official" / "attempts" / attempt_id
+    attempt = _read_json(attempt_root / "attempt.json")
+    unsigned = dict(attempt)
+    digest = unsigned.pop("attempt_digest", None)
+    schema_version = attempt.get("schema_version")
+    if (
+        (
+            expected_campaign_id is not None
+            and campaign.get("campaign_id") != expected_campaign_id
+        )
+        or
+        attempt.get("campaign_id") != campaign.get("campaign_id")
+        or attempt.get("phase") != "official"
+        or attempt.get("candidate_id") is not None
+        or attempt.get("attempt_id") != attempt_id
+        or not isinstance(digest, str)
+        or digest != _attempt_fingerprint(unsigned)
+    ):
+        raise SupervisorError("VC-1 权限门禁的 Attempt 身份或摘要漂移。")
+    if schema_version == "codex-upgrade-capture-attempt/v2":
+        return schema_version
+    if (
+        schema_version != "codex-upgrade-capture-attempt/v3"
+        or attempt.get("status") != "awaiting_receipts"
+        or attempt.get("evidence_permission_error") is not None
+        or not isinstance(attempt.get("evidence_permission_closeout"), Mapping)
+    ):
+        raise SupervisorError("VC-1 assertion 前 Attempt 没有通过的权限收口。")
+    roots = attempt.get("evidence_roots")
+    if (
+        not isinstance(roots, list)
+        or not roots
+        or any(not isinstance(value, str) for value in roots)
+    ):
+        raise SupervisorError("VC-1 权限门禁的 evidence_roots 非法。")
+    try:
+        evidence_permissions.replay_evidence_permission_closeout(
+            attempt_root,
+            [Path(value) for value in roots],
+            attempt["evidence_permission_closeout"],
+            managed_data_root=campaign_dir.parents[2],
+        )
+    except (OSError, evidence_permissions.EvidencePermissionError) as error:
+        raise SupervisorError(f"VC-1 assertion 前权限收口未通过：{error}") from error
+    return schema_version
+
+
+def _validate_vc1_assertion_seal_gate(
+    *,
+    schema_version: str,
+    campaign_id: str,
+    phase: str,
+    actions: Sequence[Mapping[str, Any]],
+    require_bound_files: bool,
+) -> None:
+    """强制新 VC-1 形成权限收口→assertion→seal 的单向顺序。"""
+
+    if schema_version != CAMPAIGN_RUN_BATCHED_SCHEMA or phase != "VC-1":
+        return
+    assertion_indices = [
+        index
+        for index, action in enumerate(actions)
+        if action.get("action_id") == "prepare-official-assertion-bundle"
+    ]
+    seal_indices = [
+        index
+        for index, action in enumerate(actions)
+        if action.get("action_id") == "seal-official-preview"
+    ]
+    if not assertion_indices and not seal_indices:
+        return
+    if len(assertion_indices) > 1 or len(seal_indices) > 1:
+        raise SupervisorError("VC-1 assertion 或 seal 动作重复。")
+    if assertion_indices and seal_indices and assertion_indices[0] >= seal_indices[0]:
+        raise SupervisorError("VC-1 必须先生成 assertion bundle，再执行 seal preview。")
+    coordinates: tuple[Path, str]
+    if assertion_indices:
+        coordinates = _assertion_coordinates(actions[assertion_indices[0]])
+    else:
+        coordinates = _seal_coordinates(actions[seal_indices[0]])
+    if assertion_indices and seal_indices:
+        if _seal_coordinates(actions[seal_indices[0]]) != coordinates:
+            raise SupervisorError("VC-1 assertion 与 seal 没有绑定同一 Attempt。")
+    if not require_bound_files:
+        return
+    attempt_schema = _replay_vc1_evidence_permission_closeout(
+        *coordinates,
+        expected_campaign_id=campaign_id,
+    )
+    if attempt_schema == "codex-upgrade-capture-attempt/v3" and (
+        not assertion_indices or not seal_indices
+    ):
+        raise SupervisorError("新 VC-1 批次必须连续声明 assertion bundle 与 seal preview。")
+
+
 def _campaign_run_manifest(
     path: Path,
     *,
@@ -4474,6 +4655,13 @@ def _campaign_run_manifest(
                 )
             normalized_action["item_ids"] = list(item_ids)
         normalized_actions.append(normalized_action)
+    _validate_vc1_assertion_seal_gate(
+        schema_version=str(schema_version),
+        campaign_id=campaign_id,
+        phase=phase,
+        actions=normalized_actions,
+        require_bound_files=require_bound_files,
+    )
     execute_items = payload.get(
         "execute_items", [item["action_id"] for item in normalized_actions]
     )
@@ -6913,11 +7101,230 @@ def _validate_batched_campaign_history(
     return ordered
 
 
+def _campaign_dir_from_run_manifest(path: Path) -> Path | None:
+    """从规范 ``control/vc/run-manifests`` 路径识别所属 Campaign。"""
+
+    try:
+        resolved = Path(path).resolve(strict=True)
+    except OSError:
+        return None
+    if (
+        resolved.parent.name != "run-manifests"
+        or resolved.parent.parent.name != "vc"
+        or resolved.parent.parent.parent.name != "control"
+    ):
+        return None
+    campaign_dir = resolved.parents[3]
+    campaign_path = campaign_dir / "campaign.json"
+    if campaign_path.is_symlink() or not campaign_path.is_file():
+        return None
+    return campaign_dir
+
+
+@contextmanager
+def _timing_closeout_lock(root: Path) -> Iterator[None]:
+    """与 VC-0 收口共用同一把账本锁，串行化失败终态追加。"""
+
+    lock_path = root / ".vc0-closeout.lock"
+    flags = (
+        os.O_RDWR
+        | os.O_CREAT
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    try:
+        descriptor = os.open(lock_path, flags, 0o600)
+    except OSError as error:
+        raise SupervisorError("Campaign 失败时间账本锁无法创建或不可信。") from error
+    try:
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or metadata.st_gid != os.getegid()
+            or metadata.st_nlink != 1
+        ):
+            raise SupervisorError("Campaign 失败时间账本锁身份不可信。")
+        os.fchmod(descriptor, 0o600)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as error:
+            raise SupervisorError("UpgradeTimingLedger 正由其他收口流程使用。") from error
+        yield
+    finally:
+        os.close(descriptor)
+
+
+def _close_failed_campaign_timing_ledger(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    *,
+    failed_action_id: str,
+) -> dict[str, Any]:
+    """把父动作失败确定性映射为 stage_abandoned 与 stop_the_line。"""
+
+    campaign_dir = Path(campaign_dir)
+    campaign = _read_json(campaign_dir / "campaign.json")
+    controls = campaign.get("control_receipts")
+    timing = controls.get("upgrade_timing") if isinstance(controls, Mapping) else None
+    if not isinstance(timing, Mapping):
+        raise SupervisorError("Campaign 缺少 UpgradeTimingLedger 控制绑定。")
+    ledger_dir = Path(str(timing.get("ledger_dir", "")))
+    if not ledger_dir.is_absolute() or ledger_dir.is_symlink():
+        raise SupervisorError("Campaign UpgradeTimingLedger 路径不可信。")
+    try:
+        ledger_dir = ledger_dir.resolve(strict=True)
+    except OSError as error:
+        raise SupervisorError("Campaign UpgradeTimingLedger 不存在。") from error
+    phase = str(manifest.get("phase", ""))
+    campaign_id = str(manifest.get("campaign_id", ""))
+    if (
+        campaign.get("campaign_id") != campaign_id
+        or phase not in vc_artifacts.VC_PHASES
+        or campaign.get("campaign_mode") != "formal"
+        or timing.get("ledger_plan_sha256")
+        != _sha256((ledger_dir / "ledger.json").read_bytes())
+    ):
+        raise SupervisorError("Campaign、阶段或 UpgradeTimingLedger 计划绑定漂移。")
+    if manifest.get("schema_version") in {
+        CAMPAIGN_RUN_BATCHED_SCHEMA,
+        CAMPAIGN_RUN_RECOVERY_SCHEMA,
+        CAMPAIGN_RUN_RECOVERY_CONTINUATION_SCHEMA,
+        CAMPAIGN_RUN_RECOVERY_FINALIZATION_SCHEMA,
+    }:
+        vc_control = campaign.get("vc_control")
+        plan_binding = (
+            vc_control.get("campaign_plan")
+            if isinstance(vc_control, Mapping)
+            else None
+        )
+        if (
+            not isinstance(plan_binding, Mapping)
+            or plan_binding.get("sha256") != manifest.get("campaign_plan_sha256")
+        ):
+            raise SupervisorError("父批次与 Campaign 总计划摘要不一致。")
+        plan_path = campaign_dir / str(plan_binding.get("path", ""))
+        if (
+            plan_path.is_symlink()
+            or not plan_path.is_file()
+            or _sha256(plan_path.read_bytes()) != plan_binding.get("sha256")
+        ):
+            raise SupervisorError("Campaign 总计划文件或摘要漂移。")
+
+    sequence = manifest.get("batch_sequence", 1)
+    if not isinstance(sequence, int) or isinstance(sequence, bool) or sequence < 1:
+        raise SupervisorError("父失败批次序号非法。")
+    failed_action_id = _safe_id(failed_action_id, "failed_action_id")
+    failure_digest = _sha256(
+        _canonical(
+            {
+                "campaign_id": campaign_id,
+                "phase": phase,
+                "batch_sequence": sequence,
+                "failed_action_id": failed_action_id,
+            }
+        )
+    )
+    root_cause_id = f"campaign-run-{failure_digest[:24]}"
+    event_prefix = f"campaign-run-failure-{failure_digest[:20]}"
+    abandon_event_id = f"{event_prefix}-stage-abandoned"
+    stop_event_id = f"{event_prefix}-stop-the-line"
+    next_action = "完成工具闭合后建立全新 VC-0；禁止继续当前 Campaign。"
+
+    with _timing_closeout_lock(ledger_dir):
+        try:
+            before = timing_ledger.inspect_ledger(ledger_dir)
+        except (OSError, timing_ledger.TimingLedgerError) as error:
+            raise SupervisorError(f"UpgradeTimingLedger 无法重放：{error}") from error
+        if (
+            before.get("upgrade_id") != timing.get("upgrade_id")
+            or before.get("campaign_purpose") != campaign.get("campaign_purpose")
+            or before.get("baseline_version") != campaign.get("baseline_version")
+            or before.get("target_version") != campaign.get("target_version")
+        ):
+            raise SupervisorError("UpgradeTimingLedger 与 Campaign 版本或用途漂移。")
+        if before.get("status") == "stopped":
+            if (
+                before.get("last_event_id") != stop_event_id
+                or before.get("next_action") != next_action
+            ):
+                raise SupervisorError("UpgradeTimingLedger 已由其他根因停线。")
+            return {
+                "status": "passed",
+                "idempotent": True,
+                "ledger_dir": str(ledger_dir),
+                "head_sequence": before["head_sequence"],
+                "head_sha256": before["head_sha256"],
+                "root_cause_id": root_cause_id,
+                "next_action": next_action,
+            }
+
+        if before.get("last_event_id") == abandon_event_id:
+            if before.get("active_phase") is not None:
+                raise SupervisorError("stage_abandoned 部分终态仍残留 active 阶段。")
+        elif before.get("active_phase") == phase:
+            try:
+                timing_ledger.append_event(
+                    ledger_dir,
+                    event_id=abandon_event_id,
+                    phase=phase,
+                    event_type="stage_abandoned",
+                    root_cause_id=root_cause_id,
+                    live_request_count=0,
+                    next_action=next_action,
+                )
+            except (OSError, timing_ledger.TimingLedgerError) as error:
+                raise SupervisorError(
+                    f"UpgradeTimingLedger stage_abandoned 写入失败：{error}"
+                ) from error
+        else:
+            raise SupervisorError("UpgradeTimingLedger 当前阶段与父失败阶段不一致。")
+
+        try:
+            middle = timing_ledger.inspect_ledger(ledger_dir)
+            if (
+                middle.get("last_event_id") != abandon_event_id
+                or middle.get("active_phase") is not None
+            ):
+                raise SupervisorError("UpgradeTimingLedger stage_abandoned 未稳定落盘。")
+            timing_ledger.append_event(
+                ledger_dir,
+                event_id=stop_event_id,
+                phase=phase,
+                event_type="stop_the_line",
+                root_cause_id=root_cause_id,
+                live_request_count=0,
+                next_action=next_action,
+            )
+            final = timing_ledger.inspect_ledger(ledger_dir)
+        except (OSError, timing_ledger.TimingLedgerError) as error:
+            raise SupervisorError(
+                f"UpgradeTimingLedger stop_the_line 写入失败：{error}"
+            ) from error
+        if (
+            final.get("status") != "stopped"
+            or final.get("active_phase") is not None
+            or final.get("last_event_id") != stop_event_id
+            or final.get("next_action") != next_action
+        ):
+            raise SupervisorError("UpgradeTimingLedger 父失败终态未闭合。")
+        return {
+            "status": "passed",
+            "idempotent": False,
+            "ledger_dir": str(ledger_dir),
+            "head_sequence": final["head_sequence"],
+            "head_sha256": final["head_sha256"],
+            "root_cause_id": root_cause_id,
+            "next_action": next_action,
+        }
+
+
 def _campaign_run_locked(
     args: argparse.Namespace,
     *,
     manifest: Mapping[str, Any],
     state_dir: Path,
+    campaign_dir: Path | None = None,
 ) -> tuple[int, dict[str, Any]]:
     """在调用方已持有 ``.campaign-run.lock`` 时执行一个父动作队列。"""
 
@@ -6925,6 +7332,8 @@ def _campaign_run_locked(
     results: list[dict[str, Any]] = []
     status = "failed"
     reason = "campaign-run-failed"
+    timing_closeout: dict[str, Any] | None = None
+    active_action_id: str | None = None
     try:
         history = _campaign_run_history(state_dir, str(manifest["campaign_id"]))
         if manifest["schema_version"] == CAMPAIGN_RUN_SCHEMA:
@@ -6995,6 +7404,21 @@ def _campaign_run_locked(
             )
             for action in manifest["actions"]:
                 action_id = str(action["action_id"])
+                active_action_id = action_id
+                if (
+                    manifest["schema_version"] == CAMPAIGN_RUN_BATCHED_SCHEMA
+                    and manifest["phase"] == "VC-1"
+                    and action_id == "prepare-official-assertion-bundle"
+                ):
+                    coordinates = _assertion_coordinates(action)
+                    attempt_schema = _replay_vc1_evidence_permission_closeout(
+                        *coordinates,
+                        expected_campaign_id=str(manifest["campaign_id"]),
+                    )
+                    if attempt_schema != "codex-upgrade-capture-attempt/v3":
+                        raise SupervisorError(
+                            "历史 v2 Attempt 不得重新派发 assertion 动作。"
+                        )
                 diagnostic_path = diagnostic_dir / (
                     f"action-{action_id}-failure.json"
                 )
@@ -7084,9 +7508,23 @@ def _campaign_run_locked(
                 if result.returncode != 0:
                     reason = f"action-failed:{action['action_id']}"
                     break
+                active_action_id = None
             else:
                 status = "stopped"
                 reason = "queue-complete"
+        if status == "failed" and reason.startswith("action-failed:") and campaign_dir is not None:
+            try:
+                timing_closeout = _close_failed_campaign_timing_ledger(
+                    campaign_dir,
+                    manifest,
+                    failed_action_id=reason.split(":", 1)[1],
+                )
+            except BaseException as error:
+                timing_closeout = {
+                    "status": "failed",
+                    "error_type": type(error).__name__,
+                    "message": str(error)[:1000],
+                }
         client.stop(reason=reason, status=status)
         payload = {
             "campaign_id": manifest["campaign_id"],
@@ -7097,6 +7535,8 @@ def _campaign_run_locked(
             "execute_items": list(manifest.get("execute_items", [])),
             "reuse_items": list(manifest.get("reuse_items", [])),
         }
+        if campaign_dir is not None:
+            payload["timing_closeout"] = timing_closeout
         if manifest["schema_version"] in {
             CAMPAIGN_RUN_BATCHED_SCHEMA,
             CAMPAIGN_RUN_RECOVERY_SCHEMA,
@@ -7122,11 +7562,26 @@ def _campaign_run_locked(
         return (0 if status == "stopped" else 1), payload
     except BaseException as error:
         reason = f"{type(error).__name__}"
+        closeout_error: BaseException | None = None
+        if campaign_dir is not None and active_action_id is not None:
+            try:
+                timing_closeout = _close_failed_campaign_timing_ledger(
+                    campaign_dir,
+                    manifest,
+                    failed_action_id=active_action_id,
+                )
+            except BaseException as timing_error:
+                closeout_error = timing_error
         if client is not None and client.started and not client._stop_completed:
             try:
                 client.stop(reason=reason, status="failed")
             except BaseException:
                 pass
+        if closeout_error is not None:
+            raise SupervisorError(
+                "父 campaign-run 异常且 UpgradeTimingLedger 收口失败："
+                f"{type(closeout_error).__name__}: {str(closeout_error)[:800]}"
+            ) from error
         raise
     finally:
         # 无论动作返回失败还是父编排器抛出异常，都必须把本轮父监督器收口；
@@ -7141,13 +7596,16 @@ def _campaign_run_locked(
 def _campaign_run_command(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
     """取唯一锁并按预声明队列完成全部动作。"""
 
-    manifest = _campaign_run_manifest(Path(args.manifest))
+    manifest_path = Path(args.manifest)
+    manifest = _campaign_run_manifest(manifest_path)
+    campaign_dir = _campaign_dir_from_run_manifest(manifest_path)
     lock_descriptor, state_dir = _campaign_run_lock(Path(args.state_dir))
     try:
         return _campaign_run_locked(
             args,
             manifest=manifest,
             state_dir=state_dir,
+            campaign_dir=campaign_dir,
         )
     finally:
         os.close(lock_descriptor)

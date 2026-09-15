@@ -805,6 +805,11 @@ class CodexUpgrade0154VCContractTests(unittest.TestCase):
                     "validate_interrupted_recovery_contract",
                     return_value={"source_attempt": source},
                 ),
+                mock.patch.object(
+                    codex_upgrade,
+                    "_replay_attempt_evidence_permissions",
+                    return_value={},
+                ),
             ):
                 written = codex_upgrade._write_capture_attempt(
                     campaign_dir,

@@ -870,10 +870,12 @@ def append_event(
     recorded_raw = recorded_at_utc or _utc_now()
     recorded = _timestamp(recorded_raw, "recorded_at_utc")
     current = _summarize(root, plan, raw_events, as_of=recorded)
-    if current["status"] in {"stop_required", "stopped"} and event_type not in {
-        "stop_the_line",
-        "recovery_verified",
-    }:
+    allowed_while_stopping = {"stop_the_line", "recovery_verified"}
+    # 阶段或总预算已经要求停线时，仍必须先把 active 阶段显式废弃，随后才能
+    # 写 stop_the_line；否则父编排器失败会永久留下 active/VC-x 假象。
+    if current["status"] == "stop_required":
+        allowed_while_stopping.add("stage_abandoned")
+    if current["status"] in {"stop_required", "stopped"} and event_type not in allowed_while_stopping:
         raise TimingLedgerError("计时或重试门禁已要求停线，禁止继续追加执行事件")
     sequence = len(raw_events) + 1
     event = {

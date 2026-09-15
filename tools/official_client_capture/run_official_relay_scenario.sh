@@ -687,7 +687,7 @@ if [[ $capture_client_hello == 1 ]]; then
   # 及 SPEC-TLS-003 的既有先例一致。pcap linktype 变为 LINUX_SLL／SLL2，
   # pcap_clienthello.py 已支持，无需改解析器。
   docker exec -d "$capture_container" sh -c \
-    "tcpdump -i any -s 0 -U -w /capture/runs/$run_id/direct/traffic.pcap 'tcp port $relay_port' \
+    "umask 077; tcpdump -i any -s 0 -U -w /capture/runs/$run_id/direct/traffic.pcap 'tcp port $relay_port' \
      > /capture/runs/$run_id/direct/tcpdump.log 2>&1"
   tcpdump_started=1
   sleep 1

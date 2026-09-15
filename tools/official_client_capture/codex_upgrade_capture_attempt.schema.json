@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-capture-attempt-v2.json",
+  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-capture-attempt-v3.json",
   "title": "Codex 出站抓包不可变 Attempt",
   "description": "run 阶段只写一次的抓包事实；seal 只能引用其摘要，不能回写本文件。",
   "type": "object",
@@ -17,6 +17,8 @@
     "identity",
     "results",
     "evidence_roots",
+    "evidence_permission_closeout",
+    "evidence_permission_error",
     "environment",
     "binary_verification",
     "execution_error",
@@ -32,7 +34,7 @@
   ],
   "properties": {
     "schema_version": {
-      "const": "codex-upgrade-capture-attempt/v2"
+      "const": "codex-upgrade-capture-attempt/v3"
     },
     "campaign_id": {
       "$ref": "#/$defs/safeId"
@@ -103,6 +105,12 @@
       "items": {
         "$ref": "#/$defs/absolutePath"
       }
+    },
+    "evidence_permission_closeout": {
+      "$ref": "#/$defs/nullableFileBindingWithBytes"
+    },
+    "evidence_permission_error": {
+      "$ref": "#/$defs/nullableError"
     },
     "environment": {
       "$ref": "#/$defs/environment"

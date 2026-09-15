@@ -86,6 +86,7 @@ from tools.official_client_capture.codex_upgrade_environment_probe import (
 )
 from tools.official_client_capture import codex_upgrade_environment_probe
 from tools.official_client_capture import codex_upgrade_arm64_environment_receipt
+from tools.official_client_capture import codex_upgrade_evidence_permissions
 from tools.official_client_capture import codex_upgrade_evidence_manifest
 from tools.official_client_capture import codex_upgrade_job_rehearsal_receipt
 from tools.official_client_capture import codex_upgrade_timing_ledger
@@ -147,7 +148,8 @@ CLIENT_BINDING_SCHEMA = FINALIZED_CLIENT_BINDING_SCHEMA
 CLIENT_REQUEST_PROOF_SCHEMA = "codex-egress-client-request-evidence/v1"
 CLIENT_RESPONSE_PROOF_SCHEMA = "codex-egress-client-response-evidence/v1"
 RESTORATION_SCHEMA = FINALIZED_RESTORATION_SCHEMA
-CAPTURE_ATTEMPT_SCHEMA = "codex-upgrade-capture-attempt/v2"
+LEGACY_CAPTURE_ATTEMPT_SCHEMA = "codex-upgrade-capture-attempt/v2"
+CAPTURE_ATTEMPT_SCHEMA = "codex-upgrade-capture-attempt/v3"
 CAPTURE_RESERVATION_SCHEMA = "codex-upgrade-capture-reservation/v2"
 SEAL_FAILURE_SCHEMA = "codex-upgrade-seal-failure/v2"
 LEGACY_SEAL_PREVIEW_SCHEMA = "codex-upgrade-seal-preview/v2"
@@ -9558,6 +9560,7 @@ _CONTROL_PLANE_TOOL_FILES = frozenset(
         "codex_upgrade_capture_attempt.schema.json",
         "codex_upgrade_capture_reservation.schema.json",
         "codex_upgrade_incremental_noop.schema.json",
+        "codex_upgrade_evidence_permissions.py",
         "codex_upgrade_supervisor.py",
         "codex_upgrade_supervisor_state.schema.json",
         "codex_upgrade_supervisor_event.schema.json",
@@ -9706,6 +9709,8 @@ _EVALUATION_SIDE_FILES = frozenset(
         "candidate_capture_manifest.schema.json",
         # 对已完成 attempt 做单次 hash／secret scan，并生成只读 manifest；不发送请求。
         "codex_upgrade_evidence_manifest.py",
+        # 只收紧既有证据的 Unix 权限并生成可重放收据；不读取或改变证据正文。
+        "codex_upgrade_evidence_permissions.py",
         # finalizer 只按已封存输入重放/校验收据；历史 producer 的工作树根迁移
         # 不改变证据字节，故归入评估侧，允许阶段限定的离线承接。
         "codex_upgrade_receipt_finalizer.py",
@@ -15706,10 +15711,29 @@ def _deadline_orphan_write_or_replay_attempt(
                 "既有 deadline orphan attempt 与当前 finalization contract 漂移。"
             )
         return existing
+    document = dict(core)
+    permission_binding: dict[str, Any] | None = None
+    permission_error: BaseException | None = None
+    try:
+        permission_binding = _close_attempt_evidence_permissions(
+            attempt_root,
+            [Path(str(value)) for value in document.get("evidence_roots", [])],
+        )
+    except BaseException as error:
+        permission_error = error
+    document["evidence_permission_closeout"] = permission_binding
+    document["evidence_permission_error"] = (
+        {
+            "type": type(permission_error).__name__,
+            "message": str(permission_error)[:1000],
+        }
+        if permission_error is not None
+        else None
+    )
     return _write_capture_attempt(
         campaign_dir,
         attempt_root,
-        dict(core),
+        document,
         _verified_campaign_manifest=manifest,
     )
 
@@ -16727,6 +16751,15 @@ def _close_interrupted_recovery_attempt(
             evidence_root, arm64_after_path
         ),
     }
+    interrupted_permission_closeout: dict[str, Any] | None = None
+    interrupted_permission_error: BaseException | None = None
+    try:
+        interrupted_permission_closeout = _close_attempt_evidence_permissions(
+            attempt_root,
+            evidence_roots,
+        )
+    except BaseException as error:
+        interrupted_permission_error = error
     attempt = _write_capture_attempt(
         campaign_dir,
         attempt_root,
@@ -16757,6 +16790,15 @@ def _close_interrupted_recovery_attempt(
             "identity": dict(manifest["official_identity"]),
             "results": results,
             "evidence_roots": [str(root) for root in evidence_roots],
+            "evidence_permission_closeout": interrupted_permission_closeout,
+            "evidence_permission_error": (
+                {
+                    "type": type(interrupted_permission_error).__name__,
+                    "message": str(interrupted_permission_error)[:1000],
+                }
+                if interrupted_permission_error is not None
+                else None
+            ),
             "environment": environment,
             "binary_verification": _read_json(
                 attempt_root / "official-binary-verification.json",
@@ -17355,6 +17397,7 @@ def compile_and_run_vc_batch(
             run_arguments,
             manifest=run_manifest,
             state_dir=state_dir,
+            campaign_dir=campaign_dir,
         )
         return (
             {
@@ -32973,6 +33016,80 @@ def _validate_attempt_incremental_fields(
     _validate_attempt_watchdog_fields(payload, planned_job_ids)
 
 
+def _close_attempt_evidence_permissions(
+    attempt_root: Path,
+    evidence_roots: Sequence[Path],
+) -> dict[str, Any]:
+    """在 ``attempt.json`` 发布前收口证据权限并返回不可变绑定。"""
+
+    receipt_path, _receipt = (
+        codex_upgrade_evidence_permissions.close_evidence_permissions(
+            attempt_root,
+            evidence_roots,
+        )
+    )
+    return codex_upgrade_evidence_permissions.receipt_binding(
+        attempt_root,
+        receipt_path,
+    )
+
+
+def _replay_attempt_evidence_permissions(
+    attempt_root: Path,
+    payload: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """重放 v3 Attempt 的权限收口；历史 v2 仅保留只读兼容。"""
+
+    schema_version = payload.get("schema_version")
+    if schema_version == LEGACY_CAPTURE_ATTEMPT_SCHEMA:
+        return None
+    if schema_version != CAPTURE_ATTEMPT_SCHEMA:
+        raise ConfigurationError("抓包 attempt schema_version 不受支持。")
+    binding = payload.get("evidence_permission_closeout")
+    permission_error = payload.get("evidence_permission_error")
+    status = payload.get("status")
+    if status == "awaiting_receipts" and (
+        not isinstance(binding, Mapping) or permission_error is not None
+    ):
+        raise ConfigurationError(
+            "awaiting_receipts attempt 缺少通过的证据权限收口收据。"
+        )
+    if binding is None:
+        if permission_error is None:
+            raise ConfigurationError("v3 attempt 缺少权限收口结果。")
+        if (
+            not isinstance(permission_error, Mapping)
+            or set(permission_error) != {"type", "message"}
+            or not all(
+                isinstance(permission_error.get(field), str)
+                and permission_error.get(field)
+                for field in ("type", "message")
+            )
+        ):
+            raise ConfigurationError("v3 attempt 权限收口错误字段非法。")
+        return None
+    if permission_error is not None:
+        raise ConfigurationError("v3 attempt 同时声明权限收口成功与失败。")
+    raw_roots = payload.get("evidence_roots")
+    if (
+        not isinstance(raw_roots, list)
+        or not raw_roots
+        or any(not isinstance(value, str) for value in raw_roots)
+    ):
+        raise ConfigurationError("v3 attempt 权限收口缺少证据根。")
+    try:
+        return codex_upgrade_evidence_permissions.replay_evidence_permission_closeout(
+            attempt_root,
+            [Path(value) for value in raw_roots],
+            binding,
+        )
+    except (
+        OSError,
+        codex_upgrade_evidence_permissions.EvidencePermissionError,
+    ) as error:
+        raise ConfigurationError(f"证据权限收口收据未通过：{error}") from error
+
+
 def _write_capture_attempt(
     campaign_dir: Path,
     attempt_root: Path,
@@ -33031,6 +33148,7 @@ def _write_capture_attempt(
         "path": str((attempt_root / "reservation.json").relative_to(campaign_dir)),
         "sha256": file_sha256(attempt_root / "reservation.json"),
     }
+    _replay_attempt_evidence_permissions(attempt_root, document)
     document["attempt_digest"] = _fingerprint(document)
     _secure_write_json_once(attempt_root / "attempt.json", document)
     return document
@@ -33075,7 +33193,8 @@ def _load_capture_attempt(
     unsigned.pop("attempt_digest", None)
     expected_candidate = candidate_id if phase == "candidate" else None
     if (
-        payload.get("schema_version") != CAPTURE_ATTEMPT_SCHEMA
+        payload.get("schema_version")
+        not in {LEGACY_CAPTURE_ATTEMPT_SCHEMA, CAPTURE_ATTEMPT_SCHEMA}
         or payload.get("campaign_id") != manifest["campaign_id"]
         or payload.get("campaign_mode") != manifest["campaign_mode"]
         or payload.get("campaign_purpose") != manifest["campaign_purpose"]
@@ -33117,6 +33236,7 @@ def _load_capture_attempt(
         "environment_contaminated",
     }:
         raise ConfigurationError("抓包 attempt 状态非法。")
+    _replay_attempt_evidence_permissions(attempt_root, payload)
     _validate_attempt_incremental_fields(
         payload,
         {str(item["id"]) for item in reservation["planned_jobs"]},
@@ -36067,6 +36187,15 @@ def _run_capture_attempt(
             "arm64_before_receipt": None,
             "arm64_after_receipt": None,
         }
+        metadata_permission_closeout: dict[str, Any] | None = None
+        metadata_permission_error: BaseException | None = None
+        try:
+            metadata_permission_closeout = _close_attempt_evidence_permissions(
+                attempt_root,
+                metadata_evidence_roots,
+            )
+        except BaseException as error:
+            metadata_permission_error = error
         metadata_attempt = _write_capture_attempt(
             campaign_dir,
             attempt_root,
@@ -36074,7 +36203,11 @@ def _run_capture_attempt(
                 "campaign_id": manifest["campaign_id"],
                 "phase": phase,
                 "candidate_id": candidate_id,
-                "status": "awaiting_receipts",
+                "status": (
+                    "awaiting_receipts"
+                    if metadata_permission_error is None
+                    else "failed"
+                ),
                 "tool_components": (
                     tool_identity.get("components")
                     if isinstance(tool_identity, Mapping)
@@ -36090,6 +36223,15 @@ def _run_capture_attempt(
                 "identity": identity,
                 "results": list(prior_results),
                 "evidence_roots": [str(root) for root in metadata_evidence_roots],
+                "evidence_permission_closeout": metadata_permission_closeout,
+                "evidence_permission_error": (
+                    {
+                        "type": type(metadata_permission_error).__name__,
+                        "message": str(metadata_permission_error)[:1000],
+                    }
+                    if metadata_permission_error is not None
+                    else None
+                ),
                 "environment": metadata_environment,
                 "binary_verification": None,
                 "watchdog": {
@@ -36105,7 +36247,14 @@ def _run_capture_attempt(
                     "last_completed_job_id": None,
                 },
                 "job_checkpoint": checkpoint_summary,
-                "execution_error": None,
+                "execution_error": (
+                    {
+                        "type": type(metadata_permission_error).__name__,
+                        "message": str(metadata_permission_error)[:1000],
+                    }
+                    if metadata_permission_error is not None
+                    else None
+                ),
                 "restoration_error": None,
                 "next_gate": (
                     "仅补当前 metadata-only attempt 的运行画像、两种 Kilo 原始 "
@@ -36113,6 +36262,8 @@ def _run_capture_attempt(
                 ),
             },
         )
+        if metadata_permission_error is not None:
+            raise metadata_permission_error
         return {
             "status": "awaiting_receipts",
             "phase": phase,
@@ -36531,6 +36682,19 @@ def _run_capture_attempt(
         and restoration_receipt is not None
         else "failed"
     )
+    evidence_permission_closeout: dict[str, Any] | None = None
+    evidence_permission_error: BaseException | None = None
+    try:
+        evidence_permission_closeout = _close_attempt_evidence_permissions(
+            attempt_root,
+            evidence_roots,
+        )
+    except BaseException as error:
+        evidence_permission_error = error
+        if execution_error is None:
+            execution_error = error
+        if status != "environment_contaminated":
+            status = "failed"
     attempt = _write_capture_attempt(
         campaign_dir,
         attempt_root,
@@ -36570,6 +36734,15 @@ def _run_capture_attempt(
             "identity": identity,
             "results": results,
             "evidence_roots": [str(root) for root in evidence_roots],
+            "evidence_permission_closeout": evidence_permission_closeout,
+            "evidence_permission_error": (
+                {
+                    "type": type(evidence_permission_error).__name__,
+                    "message": str(evidence_permission_error)[:1000],
+                }
+                if evidence_permission_error is not None
+                else None
+            ),
             "environment": environment,
             "binary_verification": binary_verification,
             "watchdog": watchdog,

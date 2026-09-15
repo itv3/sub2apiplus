@@ -88,11 +88,13 @@ from typing import Any, Callable, Mapping
 # 确定性误拒绝的零请求 sequence 5 窄门禁。
 # 2026-09-15（通用原子派发工具闭合）：后继批次改为单一父 campaign-run
 # 监督器，新增通用预派发停线与 ARM64 双跑重放，并同步 0.154 模型轨标签。
+# 2026-09-15（VC-1 通用证据闭合）：证据权限收口改为 Attempt v3 通用模块，
+# 父动作失败强制关闭阶段与计时账本，并将 P0 双轮演练升级为 v2。
 DEFAULT_TOOL_DIGEST = (
-    "8be8b991c071dff94be39e1bef6b4e7667061f39d88026b22f57fdce880d622d"
+    "e6c154379eee967e013005a7504f344eedc3c36c7935ac0eb807ad72798abd8a"
 )
 DEFAULT_SUPERVISOR_DIGEST = (
-    "647d94e7734f57e159454b663414532210652c678cf215977d6634c6e6d4ddd9"
+    "dd24d083acb7df5b77b50b4c751716b34fa367f451e6c2cc82bad8f1aa802225"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "b9ca7b6f48b3c33a63a864a9ce7ebd617335378ea52fe9148ea161ab3b276ada"
@@ -404,36 +406,65 @@ def verify_scenario_source_spec(
 def load_supervisor(staging_root: Path) -> Any:
     module_root = staging_root / "tools" / "official_client_capture"
     module_path = module_root / "codex_upgrade_supervisor.py"
-    helper_path = module_root / "codex_upgrade_vc1_permission_alias_closeout.py"
+    sibling_modules = {
+        "codex_upgrade_evidence_permissions": (
+            "evidence_permissions",
+            module_root / "codex_upgrade_evidence_permissions.py",
+        ),
+        "codex_upgrade_timing_ledger": (
+            "timing_ledger",
+            module_root / "codex_upgrade_timing_ledger.py",
+        ),
+        "codex_upgrade_vc1_permission_alias_closeout": (
+            "permission_alias_closeout",
+            module_root / "codex_upgrade_vc1_permission_alias_closeout.py",
+        ),
+        "codex_upgrade_vc_artifacts": (
+            "vc_artifacts",
+            module_root / "codex_upgrade_vc_artifacts.py",
+        ),
+    }
     if module_path.is_symlink() or not module_path.is_file():
         raise DeploymentError("暂存监督器文件不存在或不可信。")
-    if helper_path.is_symlink() or not helper_path.is_file():
-        raise DeploymentError("暂存权限别名 helper 不存在或不可信。")
+    for dependency_path in (item[1] for item in sibling_modules.values()):
+        if dependency_path.is_symlink() or not dependency_path.is_file():
+            raise DeploymentError(
+                f"暂存监督器同目录依赖不存在或不可信：{dependency_path.name}"
+            )
     spec = importlib.util.spec_from_file_location("arm64_staging_supervisor", module_path)
     if spec is None or spec.loader is None:
         raise DeploymentError("无法加载暂存监督器。")
     module = importlib.util.module_from_spec(spec)
-    # 监督器以脚本方式运行时会从同目录导入 helper。部署器用 importlib 加载
+    # 监督器以脚本方式运行时会从同目录导入直接依赖。部署器用 importlib 加载
     # 暂存副本时也必须精确复现这条搜索路径，同时隔离进程内可能缓存的同名旧模块，
-    # 否则会在生产切换前误载旧 helper 或直接报 ModuleNotFoundError。
-    helper_module_name = "codex_upgrade_vc1_permission_alias_closeout"
+    # 否则会在生产切换前误载旧依赖或直接报 ModuleNotFoundError。
     original_sys_path = list(sys.path)
-    previous_helper = sys.modules.pop(helper_module_name, None)
+    previous_modules = {
+        name: sys.modules[name]
+        for name in sibling_modules
+        if name in sys.modules
+    }
+    for name in sibling_modules:
+        sys.modules.pop(name, None)
     try:
         sys.path.insert(0, str(module_root))
         spec.loader.exec_module(module)
-        loaded_helper = getattr(module, "permission_alias_closeout", None)
-        loaded_helper_file = getattr(loaded_helper, "__file__", None)
-        if (
-            not isinstance(loaded_helper_file, str)
-            or Path(loaded_helper_file).resolve() != helper_path.resolve()
-        ):
-            raise DeploymentError("暂存监督器未绑定同目录权限别名 helper。")
+        for attribute, dependency_path in sibling_modules.values():
+            loaded_dependency = getattr(module, attribute, None)
+            loaded_dependency_file = getattr(loaded_dependency, "__file__", None)
+            if (
+                not isinstance(loaded_dependency_file, str)
+                or Path(loaded_dependency_file).resolve()
+                != dependency_path.resolve()
+            ):
+                raise DeploymentError(
+                    f"暂存监督器未绑定同目录依赖：{dependency_path.name}"
+                )
     finally:
         sys.path[:] = original_sys_path
-        sys.modules.pop(helper_module_name, None)
-        if previous_helper is not None:
-            sys.modules[helper_module_name] = previous_helper
+        for name in sibling_modules:
+            sys.modules.pop(name, None)
+        sys.modules.update(previous_modules)
     return module
 
 

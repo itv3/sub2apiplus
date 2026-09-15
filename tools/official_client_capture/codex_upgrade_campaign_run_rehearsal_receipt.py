@@ -27,15 +27,17 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from tools.official_client_capture import codex_upgrade
+from tools.official_client_capture import codex_upgrade_evidence_permissions
 from tools.official_client_capture import codex_upgrade_predispatch_stop
 from tools.official_client_capture import codex_upgrade_supervisor
+from tools.official_client_capture import codex_upgrade_timing_ledger
 from tools.official_client_capture import codex_upgrade_vc_artifacts
 
 
 RECEIPT_SCHEMA = "codex-p0-campaign-run-rehearsal/v1"
 EXECUTIONS_SCHEMA = "codex-p0-campaign-run-executions/v1"
 ACTION_RESULT_SCHEMA = "codex-p0-campaign-run-action-result/v1"
-ATOMIC_RECEIPT_SCHEMA = "codex-atomic-vc0-vc1-rehearsal/v1"
+ATOMIC_RECEIPT_SCHEMA = "codex-atomic-vc0-vc1-rehearsal/v2"
 MAX_JSON_BYTES = 16 * 1024 * 1024
 MINIMUM_REMAINING_SECONDS = 120
 SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -1133,8 +1135,10 @@ def _atomic_tool_identity() -> dict[str, Any]:
         {
             Path(__file__).resolve(),
             Path(codex_upgrade.__file__).resolve(),
+            Path(codex_upgrade_evidence_permissions.__file__).resolve(),
             Path(codex_upgrade_predispatch_stop.__file__).resolve(),
             Path(codex_upgrade_supervisor.__file__).resolve(),
+            Path(codex_upgrade_timing_ledger.__file__).resolve(),
             Path(codex_upgrade_vc_artifacts.__file__).resolve(),
         },
         key=lambda item: item.relative_to(tool_root).as_posix(),
@@ -1257,6 +1261,29 @@ def _write_atomic_campaign(
     )
     checkpoint_path = campaign_dir / "control/vc/vc-0-checkpoint.json"
     _write_once(checkpoint_path, checkpoint)
+    timing_root = root / "timing-ledger"
+    codex_upgrade_timing_ledger.create_ledger(
+        timing_root,
+        upgrade_id=f"{campaign_id}-upgrade",
+        baseline_version="0.151.0",
+        target_version="0.154.0",
+        campaign_purpose="validation_only",
+        evidence_decision="recapture",
+    )
+    codex_upgrade_timing_ledger.append_event(
+        timing_root,
+        event_id=f"{campaign_id}-vc0-completed",
+        phase="VC-0",
+        event_type="stage_completed",
+        next_action="启动原子离线 VC-1",
+    )
+    codex_upgrade_timing_ledger.append_event(
+        timing_root,
+        event_id=f"{campaign_id}-vc1-started",
+        phase="VC-1",
+        event_type="stage_started",
+        next_action="执行原子离线父批次",
+    )
     _write_once(
         campaign_dir / "campaign.json",
         {
@@ -1269,6 +1296,13 @@ def _write_atomic_campaign(
                 "campaign_plan": {
                     "path": plan_path.relative_to(campaign_dir).as_posix(),
                     "sha256": _sha256_file(plan_path),
+                }
+            },
+            "control_receipts": {
+                "upgrade_timing": {
+                    "ledger_dir": str(timing_root),
+                    "ledger_plan_sha256": _sha256_file(timing_root / "ledger.json"),
+                    "upgrade_id": f"{campaign_id}-upgrade",
                 }
             },
         },
@@ -1460,6 +1494,283 @@ def _atomic_action(campaign_id: str, marker_path: Path) -> dict[str, Any]:
     }
 
 
+def _atomic_permission_closeout(root: Path, campaign_id: str) -> dict[str, Any]:
+    """真实制造 0755/0644 缺口，并用通用工具收口、重放。"""
+
+    data_root = root / "data"
+    runs_root = data_root / "runs"
+    attempt_root = (
+        data_root
+        / "evidence"
+        / "campaigns"
+        / campaign_id
+        / "official"
+        / "attempts"
+        / "permission-attempt"
+    )
+    evidence_root = attempt_root / "evidence"
+    logs_root = attempt_root / "logs"
+    direct_root = runs_root / f"{campaign_id}-official-core"
+    oauth_root = runs_root / "official-client" / "oauth" / f"oauth-{campaign_id}"
+    directories = (
+        data_root,
+        runs_root,
+        data_root / "evidence",
+        data_root / "evidence" / "campaigns",
+        data_root / "evidence" / "campaigns" / campaign_id,
+        data_root / "evidence" / "campaigns" / campaign_id / "official",
+        data_root
+        / "evidence"
+        / "campaigns"
+        / campaign_id
+        / "official"
+        / "attempts",
+        attempt_root,
+        evidence_root,
+        logs_root,
+        runs_root / "official-client",
+        runs_root / "official-client" / "oauth",
+        direct_root,
+        oauth_root,
+    )
+    for directory in directories:
+        directory.mkdir(mode=0o700, exist_ok=True)
+        directory.chmod(0o700)
+    gap_roots = (direct_root, oauth_root, evidence_root, logs_root)
+    for directory in gap_roots:
+        directory.chmod(0o755)
+    evidence_files = (
+        direct_root / "capture.json",
+        oauth_root / "tui.log",
+        evidence_root / "restoration.json",
+        logs_root / "job.log",
+    )
+    for path in evidence_files:
+        descriptor = os.open(
+            path,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0),
+            0o644,
+        )
+        try:
+            os.fchmod(descriptor, 0o644)
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+    roots = [direct_root, oauth_root, evidence_root, logs_root]
+    receipt_path, receipt = (
+        codex_upgrade_evidence_permissions.close_evidence_permissions(
+            attempt_root,
+            roots,
+            managed_data_root=data_root,
+            logical_runs_roots=(runs_root,),
+        )
+    )
+    binding = codex_upgrade_evidence_permissions.receipt_binding(
+        attempt_root,
+        receipt_path,
+    )
+    replayed = (
+        codex_upgrade_evidence_permissions.replay_evidence_permission_closeout(
+            attempt_root,
+            roots,
+            binding,
+            managed_data_root=data_root,
+            logical_runs_roots=(runs_root,),
+        )
+    )
+    if (
+        replayed != receipt
+        or receipt.get("changed_entry_count") != 8
+        or receipt.get("external_alias_entry_count") != 4
+        or receipt.get("entry_count") != 8
+        or receipt.get("scanned_bytes") != 0
+        or receipt.get("live_request_count") != 0
+    ):
+        raise CampaignRunRehearsalError("原子演练权限收口或重放事实漂移")
+    return {
+        "schema_version": codex_upgrade_evidence_permissions.SCHEMA_VERSION,
+        "status": "passed",
+        "attempt_root": attempt_root.relative_to(root).as_posix(),
+        "evidence_roots": [path.relative_to(root).as_posix() for path in roots],
+        "receipt": {
+            "path": receipt_path.relative_to(root).as_posix(),
+            "sha256": binding["sha256"],
+            "bytes": binding["bytes"],
+        },
+        "entry_count": receipt["entry_count"],
+        "changed_entry_count": receipt["changed_entry_count"],
+        "external_alias_entry_count": receipt["external_alias_entry_count"],
+        "boundary_sha256": receipt["boundary_sha256"],
+        "pre_closeout_gap_sha256": receipt["pre_closeout_gap_sha256"],
+        "receipt_replayed": True,
+        "scanned_bytes": 0,
+        "live_request_count": 0,
+    }
+
+
+def _atomic_failing_parent(
+    root: Path,
+    *,
+    campaign_dir: Path,
+    campaign_id: str,
+    state_name: str,
+    action_id: str,
+) -> dict[str, Any]:
+    """经真实 campaign-run 执行一个零网络失败动作并冻结父结果。"""
+
+    state_dir = root / state_name
+    manifest_path = (
+        campaign_dir / "control" / "vc" / "run-manifests" / f"{action_id}.json"
+    )
+    manifest = codex_upgrade_supervisor.build_campaign_run_manifest(
+        campaign_id,
+        "VC-1",
+        30,
+        actions=[
+            {
+                "action_id": action_id,
+                "operation": f"VC-1:{action_id}",
+                "timeout_seconds": 5,
+                "command": [sys.executable, "-c", "raise SystemExit(7)"],
+            }
+        ],
+    )
+    _write_once(manifest_path, manifest)
+    returncode, result = codex_upgrade_supervisor._campaign_run_command(
+        argparse.Namespace(
+            manifest=manifest_path,
+            state_dir=state_dir,
+            heartbeat_seconds=0.05,
+            watchdog_timeout_seconds=0.5,
+            ledger_interval_seconds=0.05,
+        )
+    )
+    run_dir = _private_directory(
+        Path(str(result.get("run_dir", ""))),
+        "原子演练失败父 run",
+    )
+    try:
+        audit = codex_upgrade_supervisor._audit_command(run_dir)
+    except codex_upgrade_supervisor.SupervisorError as error:
+        raise CampaignRunRehearsalError("原子演练失败父 run 无法审计") from error
+    actions = result.get("actions")
+    timing_closeout = result.get("timing_closeout")
+    if (
+        returncode != 1
+        or result.get("campaign_id") != campaign_id
+        or result.get("status") != "failed"
+        or result.get("reason") != f"action-failed:{action_id}"
+        or not isinstance(actions, list)
+        or len(actions) != 1
+        or actions[0].get("action_id") != action_id
+        or actions[0].get("returncode") != 7
+        or actions[0].get("status") != "failed"
+        or not isinstance(actions[0].get("diagnostic"), Mapping)
+        or not isinstance(timing_closeout, Mapping)
+        or audit.get("state") != "failed"
+        or audit.get("audit_incomplete") is not False
+    ):
+        raise CampaignRunRehearsalError("原子演练失败父结果未闭合")
+    state = _load_json(run_dir / "state.json", "原子演练失败父状态")
+    diagnostic_path = run_dir / "action-diagnostics" / f"action-{action_id}-failure.json"
+    try:
+        codex_upgrade_supervisor._validate_action_diagnostic(
+            diagnostic_path,
+            run_dir=run_dir,
+            campaign_id=campaign_id,
+            phase="VC-1",
+            action_id=action_id,
+            owner_pid=int(state["owner_pid"]),
+            owner_nonce=str(state["owner_nonce"]),
+        )
+    except (KeyError, TypeError, ValueError, codex_upgrade_supervisor.SupervisorError) as error:
+        raise CampaignRunRehearsalError("原子演练失败动作诊断无法重放") from error
+    return {
+        "action_id": action_id,
+        "state_dir": state_dir.relative_to(root).as_posix(),
+        "run_dir": run_dir.relative_to(root).as_posix(),
+        "state": "failed",
+        "reason": f"action-failed:{action_id}",
+        "audit_incomplete": False,
+        "event_count": audit["event_count"],
+        "timing_closeout": dict(timing_closeout),
+        "live_request_count": 0,
+        "scanned_bytes": 0,
+        "network_used": False,
+    }
+
+
+def _atomic_timing_failure_closeout(
+    root: Path,
+    *,
+    campaign_dir: Path,
+    campaign_id: str,
+) -> dict[str, Any]:
+    """证明失败父 run 关闭 active 阶段，并显式报告闭合失败负例。"""
+
+    failure_action_id = "atomic-offline-failure"
+    closeout_failure_action_id = "atomic-closeout-failure"
+    failure_parent = _atomic_failing_parent(
+        root,
+        campaign_dir=campaign_dir,
+        campaign_id=campaign_id,
+        state_name="failure-state",
+        action_id=failure_action_id,
+    )
+    if failure_parent["timing_closeout"].get("status") != "passed":
+        raise CampaignRunRehearsalError("原子演练父失败没有关闭时间账本")
+    ledger_root = root / "timing-ledger"
+    stopped = codex_upgrade_timing_ledger.inspect_ledger(ledger_root)
+    events = [
+        event["event_type"]
+        for event, _raw in codex_upgrade_timing_ledger._load_events(ledger_root)
+    ]
+    if (
+        stopped.get("status") != "stopped"
+        or stopped.get("active_phase") is not None
+        or events[-2:] != ["stage_abandoned", "stop_the_line"]
+    ):
+        raise CampaignRunRehearsalError("原子演练父失败后时间账本仍为 active")
+    closeout_failure_parent = _atomic_failing_parent(
+        root,
+        campaign_dir=campaign_dir,
+        campaign_id=campaign_id,
+        state_name="closeout-failure-state",
+        action_id=closeout_failure_action_id,
+    )
+    closeout_failure = closeout_failure_parent["timing_closeout"]
+    after_negative = codex_upgrade_timing_ledger.inspect_ledger(ledger_root)
+    if (
+        closeout_failure.get("status") != "failed"
+        or closeout_failure.get("error_type")
+        != "SupervisorError"
+        or "已由其他根因停线" not in str(closeout_failure.get("message", ""))
+        or after_negative.get("status") != "stopped"
+        or after_negative.get("active_phase") is not None
+        or after_negative.get("head_sequence") != stopped.get("head_sequence")
+        or after_negative.get("head_sha256") != stopped.get("head_sha256")
+        or after_negative.get("last_event_id") != stopped.get("last_event_id")
+    ):
+        raise CampaignRunRehearsalError("原子演练账本闭合失败负例未显式报告")
+    return {
+        "ledger_dir": ledger_root.relative_to(root).as_posix(),
+        "ledger_plan_sha256": _sha256_file(ledger_root / "ledger.json"),
+        "status": "stopped",
+        "active_phase": None,
+        "head_sequence": stopped["head_sequence"],
+        "head_sha256": stopped["head_sha256"],
+        "last_event_id": stopped["last_event_id"],
+        "next_action": stopped["next_action"],
+        "event_types": events,
+        "failure_parent": failure_parent,
+        "closeout_failure_parent": closeout_failure_parent,
+        "live_request_count": 0,
+        "scanned_bytes": 0,
+        "network_used": False,
+    }
+
+
 def _collect_atomic_instance(root: Path, index: int) -> dict[str, Any]:
     """从全新 VC-0 控制树经真实原子入口完成一次 VC-1。"""
 
@@ -1468,6 +1779,7 @@ def _collect_atomic_instance(root: Path, index: int) -> dict[str, Any]:
     campaign_dir, state_dir, plan, checkpoint_path, checkpoint = (
         _write_atomic_campaign(root, campaign_id=campaign_id)
     )
+    permission_closeout = _atomic_permission_closeout(root, campaign_id)
     action_id = "atomic-offline-action"
     execute_id = "atomic-offline-execute"
     reuse_id = "atomic-offline-reuse"
@@ -1539,6 +1851,11 @@ def _collect_atomic_instance(root: Path, index: int) -> dict[str, Any]:
     )
     vc1_checkpoint_path = campaign_dir / "control/vc/vc-1-checkpoint.json"
     _write_once(vc1_checkpoint_path, vc1_checkpoint)
+    timing_failure_closeout = _atomic_timing_failure_closeout(
+        root,
+        campaign_dir=campaign_dir,
+        campaign_id=campaign_id,
+    )
     negatives = _atomic_negative_checks(
         instance_root=root,
         state_dir=state_dir,
@@ -1574,6 +1891,8 @@ def _collect_atomic_instance(root: Path, index: int) -> dict[str, Any]:
             "path": marker_path.relative_to(root).as_posix(),
             "sha256": _sha256_file(marker_path),
         },
+        "permission_closeout": permission_closeout,
+        "timing_failure_closeout": timing_failure_closeout,
         "parent_run": run_summary,
         "negative_fixtures": negatives,
         "live_request_count": 0,
@@ -1661,11 +1980,362 @@ def _atomic_bound_file(
     return binding, path
 
 
-def _atomic_expected_inventory_paths(run_name: str) -> set[str]:
+def _replay_atomic_permission_closeout(
+    root: Path,
+    campaign_id: str,
+    value: Any,
+) -> None:
+    """从证据树元数据重放一轮通用权限收口收据。"""
+
+    closeout = _expect_fields(
+        value,
+        {
+            "schema_version",
+            "status",
+            "attempt_root",
+            "evidence_roots",
+            "receipt",
+            "entry_count",
+            "changed_entry_count",
+            "external_alias_entry_count",
+            "boundary_sha256",
+            "pre_closeout_gap_sha256",
+            "receipt_replayed",
+            "scanned_bytes",
+            "live_request_count",
+        },
+        "原子演练权限收口",
+    )
+    attempt_relative = (
+        f"data/evidence/campaigns/{campaign_id}/official/attempts/permission-attempt"
+    )
+    root_relatives = [
+        f"data/runs/{campaign_id}-official-core",
+        f"data/runs/official-client/oauth/oauth-{campaign_id}",
+        f"{attempt_relative}/evidence",
+        f"{attempt_relative}/logs",
+    ]
+    receipt_relative = f"{attempt_relative}/evidence-permission-closeout.json"
+    receipt_binding = _expect_fields(
+        closeout.get("receipt"),
+        {"path", "sha256", "bytes"},
+        "原子演练权限收口绑定",
+    )
+    if (
+        closeout.get("schema_version")
+        != codex_upgrade_evidence_permissions.SCHEMA_VERSION
+        or closeout.get("status") != "passed"
+        or closeout.get("attempt_root") != attempt_relative
+        or closeout.get("evidence_roots") != root_relatives
+        or receipt_binding.get("path") != receipt_relative
+        or closeout.get("entry_count") != 8
+        or closeout.get("changed_entry_count") != 8
+        or closeout.get("external_alias_entry_count") != 4
+        or closeout.get("receipt_replayed") is not True
+        or closeout.get("scanned_bytes") != 0
+        or closeout.get("live_request_count") != 0
+    ):
+        raise CampaignRunRehearsalError("原子演练权限收口字段或零读取事实漂移")
+    attempt_root = _private_directory(root / attempt_relative, "原子演练权限 Attempt")
+    evidence_roots = [
+        _private_directory(root / relative, "原子演练权限证据根")
+        for relative in root_relatives
+    ]
+    receipt_path = _relative_file(root, receipt_relative, "原子演练权限收口收据")
+    binding = {
+        "path": receipt_path.relative_to(attempt_root).as_posix(),
+        "sha256": receipt_binding.get("sha256"),
+        "bytes": receipt_binding.get("bytes"),
+    }
+    try:
+        replayed = (
+            codex_upgrade_evidence_permissions.replay_evidence_permission_closeout(
+                attempt_root,
+                evidence_roots,
+                binding,
+                managed_data_root=root / "data",
+                logical_runs_roots=(root / "data/runs",),
+            )
+        )
+    except codex_upgrade_evidence_permissions.EvidencePermissionError as error:
+        raise CampaignRunRehearsalError("原子演练权限收口收据无法重放") from error
+    if (
+        replayed.get("entry_count") != closeout.get("entry_count")
+        or replayed.get("changed_entry_count") != closeout.get("changed_entry_count")
+        or replayed.get("external_alias_entry_count")
+        != closeout.get("external_alias_entry_count")
+        or replayed.get("boundary_sha256") != closeout.get("boundary_sha256")
+        or replayed.get("pre_closeout_gap_sha256")
+        != closeout.get("pre_closeout_gap_sha256")
+    ):
+        raise CampaignRunRehearsalError("原子演练权限收口重放摘要漂移")
+
+
+def _replay_atomic_failing_parent(
+    root: Path,
+    *,
+    campaign_dir: Path,
+    campaign_id: str,
+    state_name: str,
+    action_id: str,
+    value: Any,
+    expect_closeout_failure: bool,
+) -> None:
+    """重放一个真实失败父 run 及其动作诊断和账本闭合结果。"""
+
+    parent = _expect_fields(
+        value,
+        {
+            "action_id",
+            "state_dir",
+            "run_dir",
+            "state",
+            "reason",
+            "audit_incomplete",
+            "event_count",
+            "timing_closeout",
+            "live_request_count",
+            "scanned_bytes",
+            "network_used",
+        },
+        f"原子演练失败父结果 {action_id}",
+    )
+    state_dir = _private_directory(root / state_name, "原子演练失败父 state-dir")
+    run_relative = parent.get("run_dir")
+    if not isinstance(run_relative, str):
+        raise CampaignRunRehearsalError("原子演练失败父 run 路径非法")
+    run_dir = _private_directory(root / run_relative, "原子演练失败父 run")
+    run_directories = sorted(
+        path.resolve()
+        for path in state_dir.iterdir()
+        if path.name.startswith("run-") and path.is_dir() and not path.is_symlink()
+    )
+    if (
+        parent.get("action_id") != action_id
+        or parent.get("state_dir") != state_name
+        or run_dir.parent != state_dir
+        or run_directories != [run_dir]
+        or parent.get("state") != "failed"
+        or parent.get("reason") != f"action-failed:{action_id}"
+        or parent.get("audit_incomplete") is not False
+        or parent.get("live_request_count") != 0
+        or parent.get("scanned_bytes") != 0
+        or parent.get("network_used") is not False
+    ):
+        raise CampaignRunRehearsalError("原子演练失败父身份或零请求事实漂移")
+    try:
+        audit = codex_upgrade_supervisor._audit_command(run_dir)
+    except codex_upgrade_supervisor.SupervisorError as error:
+        raise CampaignRunRehearsalError("原子演练失败父 run 无法重放") from error
+    state = _load_json(run_dir / "state.json", "原子演练失败父状态")
+    stop_receipt = _load_json(
+        run_dir / "stop-receipt.json",
+        "原子演练失败父 stop receipt",
+    )
+    if (
+        audit.get("state") != "failed"
+        or audit.get("audit_incomplete") is not False
+        or audit.get("event_count") != parent.get("event_count")
+        or state.get("state") != "failed"
+        or stop_receipt.get("reason") != f"action-failed:{action_id}"
+    ):
+        raise CampaignRunRehearsalError("原子演练失败父终态漂移")
+    manifest_path = (
+        campaign_dir / "control" / "vc" / "run-manifests" / f"{action_id}.json"
+    )
+    manifest = codex_upgrade_supervisor._campaign_run_manifest(manifest_path)
+    expected_manifest = codex_upgrade_supervisor.build_campaign_run_manifest(
+        campaign_id,
+        "VC-1",
+        30,
+        actions=[
+            {
+                "action_id": action_id,
+                "operation": f"VC-1:{action_id}",
+                "timeout_seconds": 5,
+                "command": [sys.executable, "-c", "raise SystemExit(7)"],
+            }
+        ],
+    )
+    recorded_manifest = _expect_fields(
+        _load_json(run_dir / "campaign-run-manifest.json", "失败父不可变 manifest"),
+        {"schema_version", "manifest_sha256", "manifest"},
+        "失败父不可变 manifest",
+    )
+    if (
+        manifest != expected_manifest
+        or recorded_manifest
+        != {
+            "schema_version": codex_upgrade_supervisor.CAMPAIGN_RUN_SCHEMA,
+            "manifest_sha256": codex_upgrade_supervisor._sha256(
+                codex_upgrade_supervisor._canonical(expected_manifest)
+            ),
+            "manifest": expected_manifest,
+        }
+    ):
+        raise CampaignRunRehearsalError("原子演练失败父 manifest 漂移")
+    try:
+        codex_upgrade_supervisor._validate_action_diagnostic(
+            run_dir / "action-diagnostics" / f"action-{action_id}-failure.json",
+            run_dir=run_dir,
+            campaign_id=campaign_id,
+            phase="VC-1",
+            action_id=action_id,
+            owner_pid=int(state["owner_pid"]),
+            owner_nonce=str(state["owner_nonce"]),
+        )
+    except (KeyError, TypeError, ValueError, codex_upgrade_supervisor.SupervisorError) as error:
+        raise CampaignRunRehearsalError("原子演练失败动作诊断重放失败") from error
+
+    timing_closeout = parent.get("timing_closeout")
+    if not isinstance(timing_closeout, Mapping):
+        raise CampaignRunRehearsalError("原子演练失败父缺少账本闭合结果")
+    if expect_closeout_failure:
+        try:
+            codex_upgrade_supervisor._close_failed_campaign_timing_ledger(
+                campaign_dir,
+                manifest,
+                failed_action_id=action_id,
+            )
+        except codex_upgrade_supervisor.SupervisorError as error:
+            expected_closeout = {
+                "status": "failed",
+                "error_type": type(error).__name__,
+                "message": str(error)[:1000],
+            }
+        else:
+            raise CampaignRunRehearsalError("原子演练账本闭合失败负例未被拒绝")
+    else:
+        try:
+            expected_closeout = (
+                codex_upgrade_supervisor._close_failed_campaign_timing_ledger(
+                    campaign_dir,
+                    manifest,
+                    failed_action_id=action_id,
+                )
+            )
+        except codex_upgrade_supervisor.SupervisorError as error:
+            raise CampaignRunRehearsalError("原子演练账本闭合无法幂等重放") from error
+        expected_closeout["idempotent"] = False
+    if dict(timing_closeout) != expected_closeout:
+        raise CampaignRunRehearsalError("原子演练失败父账本闭合结果漂移")
+
+
+def _replay_atomic_timing_failure_closeout(
+    root: Path,
+    *,
+    campaign_dir: Path,
+    campaign_id: str,
+    value: Any,
+) -> None:
+    """重放失败父账本终态和闭合失败负例。"""
+
+    closeout = _expect_fields(
+        value,
+        {
+            "ledger_dir",
+            "ledger_plan_sha256",
+            "status",
+            "active_phase",
+            "head_sequence",
+            "head_sha256",
+            "last_event_id",
+            "next_action",
+            "event_types",
+            "failure_parent",
+            "closeout_failure_parent",
+            "live_request_count",
+            "scanned_bytes",
+            "network_used",
+        },
+        "原子演练失败时间账本闭合",
+    )
+    ledger_root = _private_directory(root / "timing-ledger", "原子演练时间账本")
+    summary = codex_upgrade_timing_ledger.inspect_ledger(ledger_root)
+    event_types = [
+        event["event_type"]
+        for event, _raw in codex_upgrade_timing_ledger._load_events(ledger_root)
+    ]
+    if (
+        closeout.get("ledger_dir") != "timing-ledger"
+        or closeout.get("ledger_plan_sha256")
+        != _sha256_file(ledger_root / "ledger.json")
+        or closeout.get("status") != summary.get("status")
+        or closeout.get("active_phase") != summary.get("active_phase")
+        or closeout.get("head_sequence") != summary.get("head_sequence")
+        or closeout.get("head_sha256") != summary.get("head_sha256")
+        or closeout.get("last_event_id") != summary.get("last_event_id")
+        or closeout.get("next_action") != summary.get("next_action")
+        or closeout.get("event_types") != event_types
+        or summary.get("status") != "stopped"
+        or summary.get("active_phase") is not None
+        or event_types[-2:] != ["stage_abandoned", "stop_the_line"]
+        or closeout.get("live_request_count") != 0
+        or closeout.get("scanned_bytes") != 0
+        or closeout.get("network_used") is not False
+    ):
+        raise CampaignRunRehearsalError("原子演练失败时间账本终态漂移")
+    _replay_atomic_failing_parent(
+        root,
+        campaign_dir=campaign_dir,
+        campaign_id=campaign_id,
+        state_name="failure-state",
+        action_id="atomic-offline-failure",
+        value=closeout.get("failure_parent"),
+        expect_closeout_failure=False,
+    )
+    _replay_atomic_failing_parent(
+        root,
+        campaign_dir=campaign_dir,
+        campaign_id=campaign_id,
+        state_name="closeout-failure-state",
+        action_id="atomic-closeout-failure",
+        value=closeout.get("closeout_failure_parent"),
+        expect_closeout_failure=True,
+    )
+
+
+def _atomic_expected_inventory_paths(
+    run_name: str,
+    failure_run_name: str,
+    closeout_failure_run_name: str,
+    campaign_id: str,
+) -> set[str]:
     """返回单次合成 VC-0→VC-1 控制树允许存在的完整路径集合。"""
 
-    run = f"state/{run_name}"
-    return {
+    def supervisor_paths(
+        state_name: str,
+        current_run_name: str,
+        *,
+        failure_action_id: str | None = None,
+    ) -> set[str]:
+        current_run = f"{state_name}/{current_run_name}"
+        paths = {
+            state_name,
+            f"{state_name}/.campaign-run.lock",
+            current_run,
+            f"{current_run}/.supervisor.lock",
+            f"{current_run}/action-diagnostics",
+            f"{current_run}/campaign-run-manifest.json",
+            f"{current_run}/events.ndjson",
+            f"{current_run}/heartbeat.json",
+            f"{current_run}/minute-ledger.ndjson",
+            f"{current_run}/state.json",
+            f"{current_run}/stop-receipt.json",
+            f"{current_run}/stop-request.json",
+            f"{current_run}/watchdog-heartbeats.ndjson",
+        }
+        if failure_action_id is not None:
+            paths.add(
+                f"{current_run}/action-diagnostics/"
+                f"action-{failure_action_id}-failure.json"
+            )
+        return paths
+
+    attempt = (
+        f"data/evidence/campaigns/{campaign_id}/official/attempts/permission-attempt"
+    )
+    paths = {
         "campaign",
         "campaign/campaign.json",
         "campaign/control",
@@ -1675,25 +2345,59 @@ def _atomic_expected_inventory_paths(run_name: str) -> set[str]:
         "campaign/control/vc/campaign-plan.json",
         "campaign/control/vc/run-manifests",
         "campaign/control/vc/run-manifests/0001-vc-1.json",
+        "campaign/control/vc/run-manifests/atomic-offline-failure.json",
+        "campaign/control/vc/run-manifests/atomic-closeout-failure.json",
         "campaign/control/vc/vc-0-checkpoint.json",
         "campaign/control/vc/vc-1-checkpoint.json",
         "campaign/control/vc/vc0-stage.json",
         "campaign/control/vc/vc1-action-plan.json",
-        "state",
-        "state/.campaign-run.lock",
         "state/atomic-action.json",
-        run,
-        f"{run}/.supervisor.lock",
-        f"{run}/action-diagnostics",
-        f"{run}/campaign-run-manifest.json",
-        f"{run}/events.ndjson",
-        f"{run}/heartbeat.json",
-        f"{run}/minute-ledger.ndjson",
-        f"{run}/state.json",
-        f"{run}/stop-receipt.json",
-        f"{run}/stop-request.json",
-        f"{run}/watchdog-heartbeats.ndjson",
+        "timing-ledger",
+        "timing-ledger/.vc0-closeout.lock",
+        "timing-ledger/events",
+        "timing-ledger/events/000001.json",
+        "timing-ledger/events/000002.json",
+        "timing-ledger/events/000003.json",
+        "timing-ledger/events/000004.json",
+        "timing-ledger/events/000005.json",
+        "timing-ledger/ledger.json",
+        "timing-ledger/receipts",
+        "data",
+        "data/evidence",
+        "data/evidence/campaigns",
+        f"data/evidence/campaigns/{campaign_id}",
+        f"data/evidence/campaigns/{campaign_id}/official",
+        f"data/evidence/campaigns/{campaign_id}/official/attempts",
+        attempt,
+        f"{attempt}/evidence",
+        f"{attempt}/evidence/restoration.json",
+        f"{attempt}/logs",
+        f"{attempt}/logs/job.log",
+        f"{attempt}/evidence-permission-closeout.json",
+        "data/runs",
+        f"data/runs/{campaign_id}-official-core",
+        f"data/runs/{campaign_id}-official-core/capture.json",
+        "data/runs/official-client",
+        "data/runs/official-client/oauth",
+        f"data/runs/official-client/oauth/oauth-{campaign_id}",
+        f"data/runs/official-client/oauth/oauth-{campaign_id}/tui.log",
     }
+    paths.update(supervisor_paths("state", run_name))
+    paths.update(
+        supervisor_paths(
+            "failure-state",
+            failure_run_name,
+            failure_action_id="atomic-offline-failure",
+        )
+    )
+    paths.update(
+        supervisor_paths(
+            "closeout-failure-state",
+            closeout_failure_run_name,
+            failure_action_id="atomic-closeout-failure",
+        )
+    )
+    return paths
 
 
 def _replay_atomic_instance(
@@ -1716,6 +2420,8 @@ def _replay_atomic_instance(
             "vc1_manifest",
             "vc1_checkpoint",
             "action_marker",
+            "permission_closeout",
+            "timing_failure_closeout",
             "parent_run",
             "negative_fixtures",
             "live_request_count",
@@ -1782,6 +2488,7 @@ def _replay_atomic_instance(
             "baseline_version",
             "target_version",
             "vc_control",
+            "control_receipts",
         },
         "原子演练 Campaign 清单",
     )
@@ -1795,6 +2502,15 @@ def _replay_atomic_instance(
             "campaign_plan": {
                 "path": "control/vc/campaign-plan.json",
                 "sha256": _sha256_file(plan_path),
+            }
+        },
+        "control_receipts": {
+            "upgrade_timing": {
+                "ledger_dir": str(instance_root / "timing-ledger"),
+                "ledger_plan_sha256": _sha256_file(
+                    instance_root / "timing-ledger/ledger.json"
+                ),
+                "upgrade_id": f"{campaign_id}-upgrade",
             }
         },
     }:
@@ -2025,11 +2741,40 @@ def _replay_atomic_instance(
     ):
         raise CampaignRunRehearsalError("原子演练 VC-1 checkpoint 语义漂移")
 
+    _replay_atomic_permission_closeout(
+        instance_root,
+        campaign_id,
+        instance.get("permission_closeout"),
+    )
+    timing_value = instance.get("timing_failure_closeout")
+    _replay_atomic_timing_failure_closeout(
+        instance_root,
+        campaign_dir=campaign_dir,
+        campaign_id=campaign_id,
+        value=timing_value,
+    )
+    if not isinstance(timing_value, Mapping):
+        raise CampaignRunRehearsalError("原子演练失败时间账本字段非法")
+    failure_parent = timing_value.get("failure_parent")
+    closeout_failure_parent = timing_value.get("closeout_failure_parent")
+    if not isinstance(failure_parent, Mapping) or not isinstance(
+        closeout_failure_parent, Mapping
+    ):
+        raise CampaignRunRehearsalError("原子演练失败父结果字段非法")
+    failure_run_name = Path(str(failure_parent.get("run_dir", ""))).name
+    closeout_failure_run_name = Path(
+        str(closeout_failure_parent.get("run_dir", ""))
+    ).name
     inventory = _atomic_inventory(instance_root)
     if (
         instance.get("inventory") != inventory
         or {entry["path"] for entry in inventory}
-        != _atomic_expected_inventory_paths(run_dir.name)
+        != _atomic_expected_inventory_paths(
+            run_dir.name,
+            failure_run_name,
+            closeout_failure_run_name,
+            campaign_id,
+        )
     ):
         raise CampaignRunRehearsalError(f"原子双跑实例 {index} inventory 漂移")
 
