@@ -156,6 +156,12 @@ PRODUCER_FREEZE_SUCCESSORS = (
         "scope": "upstream-codex-0154-a1b-verdict-copy-20260916-freeze-successor",
         "result": "manual_actions_required",
     },
+    {
+        "path": "docs/egress/maintenance/upstream-codex-0154-c1-atomic-container-20260916-freeze-successor.json",
+        "base_commit": "6526921ee27ed0ec05cee70bf25eb4ce51620524",
+        "scope": "upstream-codex-0154-c1-atomic-container-20260916-freeze-successor",
+        "result": "manual_actions_required",
+    },
 )
 
 
