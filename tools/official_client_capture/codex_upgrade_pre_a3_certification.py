@@ -199,6 +199,13 @@ SCENARIOS: tuple[tuple[str, str, str, str, str], ...] = (
         "test_project_ledger_binding_lets_campaign_plan_set_budgets",
     ),
     (
+        "vc-chain.draft-and-approval-preview-are-legal-stops",
+        "classify 草案 draft 与批准预览 approval_required 在父批次内是合法停靠点，失败状态仍非零",
+        "tools.official_client_capture.tests.test_codex_upgrade_0154_vc_contract",
+        "CodexUpgrade0154VCContractTests",
+        "test_intermediate_status_is_success_only_inside_campaign_run",
+    ),
+    (
         "vc-chain.candidate-seal-and-canonical-advance-consumers",
         "候选 seal 与 canonical-advance 各步骤同为总账消费者，未注册即拒绝",
         "tools.official_client_capture.tests.test_codex_upgrade_project_ledger_integration",

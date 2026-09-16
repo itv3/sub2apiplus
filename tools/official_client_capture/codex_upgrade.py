@@ -44104,11 +44104,17 @@ def _campaign_run_aware_exit_code(
     result: Mapping[str, Any],
     direct_exit_code: int,
 ) -> int:
-    """父批次把合法暂停点视为动作成功；直接 CLI 仍返回诊断码 2。"""
+    """父批次把合法暂停点视为动作成功；直接 CLI 仍返回诊断码 2。
+
+    合法暂停点：官方／候选 attempt 的 ``awaiting_receipts``、classify 第一次批准预览的
+    ``approval_required``，以及 classify 草案的 ``draft``——0.154 起 VC-2 草案必须由
+    campaign-run 派发（指南 §4.2.1 步骤 1），草案本身就是该批次的预期终点，不能被
+    父监督器当作动作失败而把账本停线。
+    """
 
     if (
         os.environ.get(codex_upgrade_supervisor.CAMPAIGN_RUN_CONTEXT_ENV) == "1"
-        and result.get("status") in {"awaiting_receipts", "approval_required"}
+        and result.get("status") in {"awaiting_receipts", "approval_required", "draft"}
     ):
         return 0
     return direct_exit_code

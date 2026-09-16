@@ -271,9 +271,21 @@ class CodexUpgrade0154VCContractTests(unittest.TestCase):
                 codex_upgrade._canonical_accept(Path("/unused"), checkpoint)
 
     def test_intermediate_status_is_success_only_inside_campaign_run(self) -> None:
-        """合法停靠点只对父批次成功，直接 CLI 仍以退出码 2 提醒。"""
+        """合法停靠点只对父批次成功，直接 CLI 仍以退出码 2 提醒。
 
-        for status in ("awaiting_receipts", "approval_required"):
+        classify 草案的 ``draft`` 是 VC-2 首批的预期终点：0.154 首次真实派发时它曾以
+        退出码 2 被父监督器判成动作失败并把账本停线，这里把它固定为合法停靠点；
+        真正的失败状态在父批次内仍是非零。
+        """
+
+        with mock.patch.dict(
+            os.environ,
+            {codex_upgrade.codex_upgrade_supervisor.CAMPAIGN_RUN_CONTEXT_ENV: "1"},
+            clear=True,
+        ):
+            self.assertEqual(codex_upgrade._campaign_run_aware_exit_code({"status": "failed"}, 2), 2)
+            self.assertEqual(codex_upgrade._campaign_run_aware_exit_code({"status": "blocked"}, 2), 2)
+        for status in ("awaiting_receipts", "approval_required", "draft"):
             with self.subTest(status=status):
                 with mock.patch.dict(os.environ, {}, clear=True):
                     self.assertEqual(

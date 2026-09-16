@@ -68,6 +68,7 @@ class PreA3CertificationTests(unittest.TestCase):
                     "vc-chain.admission-before-any-write",
                     "vc-chain.ledger-events-derivation",
                     "vc-chain.ledger-budget-bound-to-project",
+                    "vc-chain.draft-and-approval-preview-are-legal-stops",
                     "vc-chain.candidate-seal-and-canonical-advance-consumers",
                 ],
             )
