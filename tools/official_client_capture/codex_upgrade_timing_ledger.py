@@ -208,6 +208,12 @@ PRODUCER_FREEZE_SUCCESSORS = (
         "scope": "upstream-codex-0154-a0b-stop-phase-import-sites-20260916-freeze-successor",
         "result": "manual_actions_required",
     },
+    {
+        "path": "docs/egress/maintenance/upstream-codex-0154-vc2-vc6-governance-20260916-freeze-successor.json",
+        "base_commit": "d2ae30b46bea56a1f28936fcde9578f61e411c77",
+        "scope": "upstream-codex-0154-vc2-vc6-governance-20260916-freeze-successor",
+        "result": "manual_actions_required",
+    },
 )
 
 
