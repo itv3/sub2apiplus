@@ -994,6 +994,87 @@ class CodexUpgrade0154VCContractTests(unittest.TestCase):
                 ).exists()
             )
 
+    # ------------------------------------------------------------------
+    # 只读导入 Campaign 的分类差异：VC-1 发现清单与动态差异回到原始目录解析
+    # ------------------------------------------------------------------
+
+    def _imported_classification_fixture(self, root: Path) -> tuple[Path, dict[str, object], dict[str, object]]:
+        from tools.official_client_capture import codex_upgrade_vc_artifacts as artifacts
+
+        predecessor = root / "predecessor"
+        successor = root / "successor"
+        for directory in (predecessor / "analysis", predecessor / "official" / "attempts" / "a1" / "finalized", successor / "analysis", successor / "official"):
+            directory.mkdir(parents=True, mode=0o700)
+        source_diff = {"added": [{"fingerprint": "1" * 64, "kind": "endpoint_literal", "file": "x.rs", "value": "/v"}], "removed": [], "added_count": 1, "removed_count": 0}
+        official_diff = {"added": [{"fingerprint": "2" * 64, "kind": "http_request"}], "removed": [], "added_count": 1, "removed_count": 0}
+        for directory in (predecessor, successor):
+            self._write(directory / "analysis" / "source-diff.json", source_diff)
+        source_sha = codex_upgrade.file_sha256(predecessor / "analysis" / "source-diff.json")
+        finalized = predecessor / "official" / "attempts" / "a1" / "finalized"
+        self._write(finalized / "baseline-to-target-official.json", official_diff)
+        official_binding = {"path": "official/attempts/a1/finalized/baseline-to-target-official.json", "sha256": codex_upgrade.file_sha256(finalized / "baseline-to-target-official.json")}
+        inventory = artifacts.build_discovery_inventory(
+            campaign_id="origin-campaign",
+            target_version="0.154.0",
+            source_diff=source_diff,
+            official_diff=official_diff,
+            source_diff_binding={"path": "analysis/source-diff.json", "sha256": source_sha},
+            official_diff_binding=official_binding,
+            evidence_manifest_binding={"path": "official/attempts/a1/evidence-manifest.json", "sha256": "3" * 64},
+        )
+        self._write(finalized / "discovery-inventory.json", inventory)
+        discovery_binding = {"path": "official/attempts/a1/finalized/discovery-inventory.json", "sha256": codex_upgrade.file_sha256(finalized / "discovery-inventory.json")}
+        predecessor_manifest = {
+            **self._manifest(),
+            "campaign_id": "origin-campaign",
+            "analysis": {"source-diff": {"path": "analysis/source-diff.json", "sha256": source_sha}},
+        }
+        self._write(predecessor / "campaign.json", predecessor_manifest)
+        self._write(predecessor / "official" / "result.json", {"status": "complete", "discovery_inventory": discovery_binding, "official_diff": official_binding})
+        successor_manifest = {
+            **self._manifest(),
+            "campaign_id": "successor-campaign",
+            "analysis": {"source-diff": {"path": "analysis/source-diff.json", "sha256": source_sha}},
+            "predecessor": {
+                "campaign_dir": str(predecessor),
+                "campaign_id": "origin-campaign",
+                "campaign_manifest_sha256": codex_upgrade.file_sha256(predecessor / "campaign.json"),
+                "reason": codex_upgrade.OFFICIAL_EVIDENCE_REUSE_REASON,
+            },
+        }
+        self._write(successor / "campaign.json", successor_manifest)
+        projected_official = {
+            "status": "complete",
+            "predecessor_import": {"path": "predecessor-import.json", "sha256": "4" * 64},
+            "discovery_inventory": discovery_binding,
+            "official_diff": official_binding,
+        }
+        return successor, successor_manifest, projected_official
+
+    def test_imported_campaign_resolves_discovery_inventory_at_origin(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            successor, manifest, official = self._imported_classification_fixture(root)
+            source_diff, official_diff = codex_upgrade._classification_differences(successor, manifest, official)
+            self.assertEqual(source_diff["added_count"], 1)
+            self.assertEqual(official_diff["added"][0]["fingerprint"], "2" * 64)
+            # 后继目录本身没有 attempt 文件：解析必须发生在原始目录。
+            self.assertFalse((successor / "official" / "attempts").exists())
+
+    def test_imported_campaign_rejects_predecessor_manifest_drift_and_copied_diff_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            successor, manifest, official = self._imported_classification_fixture(root)
+            drifted = json.loads(json.dumps(manifest))
+            drifted["predecessor"]["campaign_manifest_sha256"] = "5" * 64
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "前序 Campaign 清单摘要漂移"):
+                codex_upgrade._classification_differences(successor, drifted, official)
+            # 导入复制的 source-diff 与原始不一致（此处伪造清单摘要以模拟复制件漂移）
+            copied = json.loads(json.dumps(manifest))
+            copied["analysis"]["source-diff"]["sha256"] = "6" * 64
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "计划期分析摘要漂移"):
+                codex_upgrade._classification_differences(successor, copied, official)
+
 
 if __name__ == "__main__":
     unittest.main()

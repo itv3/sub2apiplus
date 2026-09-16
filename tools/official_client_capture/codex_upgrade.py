@@ -37367,6 +37367,53 @@ def _validate_migration_manifest(
     }
 
 
+def _official_evidence_origin(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    official: Mapping[str, Any],
+) -> tuple[Path, dict[str, Any]]:
+    """沿只读导入链找到真正持有 official attempt 的原始 Campaign 目录与清单。
+
+    ``reuse-official-evidence`` 建出的后继只投影前序的 official 结果，其中
+    ``discovery_inventory``／``official_diff`` 仍是原始 attempt 目录内的相对路径；
+    后继目录里没有这些文件，也不得复制改写。分类差异必须回到原始目录只读解析。
+    """
+
+    current_dir = Path(campaign_dir)
+    current_manifest: Mapping[str, Any] = manifest
+    current_official: Mapping[str, Any] = official
+    hops = 0
+    while current_official.get("predecessor_import") is not None:
+        hops += 1
+        if hops > 8:
+            raise ConfigurationError("只读导入链过深，拒绝解析 official 证据来源。")
+        predecessor = current_manifest.get("predecessor")
+        if not isinstance(predecessor, Mapping):
+            raise ConfigurationError("只读导入 Campaign 缺少 predecessor 绑定。")
+        predecessor_dir = Path(str(predecessor.get("campaign_dir", "")))
+        if (
+            not predecessor_dir.is_absolute()
+            or predecessor_dir.is_symlink()
+            or not predecessor_dir.is_dir()
+        ):
+            raise ConfigurationError("前序 Campaign 目录不可信或不存在。")
+        predecessor_manifest_path = predecessor_dir / "campaign.json"
+        if predecessor_manifest_path.is_symlink() or not predecessor_manifest_path.is_file():
+            raise ConfigurationError("前序 Campaign 缺少 campaign.json。")
+        if file_sha256(predecessor_manifest_path) != predecessor.get("campaign_manifest_sha256"):
+            raise ConfigurationError("前序 Campaign 清单摘要漂移。")
+        predecessor_manifest = _read_json(predecessor_manifest_path, "前序 Campaign 清单")
+        if predecessor_manifest.get("campaign_id") != predecessor.get("campaign_id"):
+            raise ConfigurationError("前序 Campaign ID 与导入绑定不一致。")
+        official_path = _stage_path(predecessor_dir, "capture-official")[1]
+        if official_path.is_symlink() or not official_path.is_file():
+            raise ConfigurationError("前序 Campaign 缺少 official 阶段结果。")
+        current_dir = predecessor_dir
+        current_manifest = predecessor_manifest
+        current_official = _read_json(official_path, "前序 official 阶段结果")
+    return current_dir, dict(current_manifest)
+
+
 def _classification_differences(
     campaign_dir: Path,
     manifest: dict[str, Any],
@@ -37378,12 +37425,18 @@ def _classification_differences(
         official_diff_reference = official.get("official_diff")
         _require_file_binding(discovery_reference, "VC-1 DiscoveryInventory")
         _require_file_binding(official_diff_reference, "VC-1 官方动态差异")
+        # 只读导入的后继：绑定路径属于原始 attempt 目录，在原始 Campaign 目录解析。
+        origin_dir, origin_manifest = campaign_dir, manifest
+        if official.get("predecessor_import") is not None:
+            origin_dir, origin_manifest = _official_evidence_origin(
+                campaign_dir, manifest, official
+            )
         discovery_path = _campaign_file(
-            campaign_dir,
+            origin_dir,
             str(discovery_reference["path"]),
         )
         official_diff_path = _campaign_file(
-            campaign_dir,
+            origin_dir,
             str(official_diff_reference["path"]),
         )
         if (
@@ -37403,13 +37456,19 @@ def _classification_differences(
             )
         except codex_upgrade_vc_artifacts.VCArtifactError as error:
             raise ConfigurationError(str(error)) from error
+        origin_source_diff_sha256 = (
+            origin_manifest.get("analysis", {}).get("source-diff", {}).get("sha256")
+        )
         if (
-            validated.get("campaign_id") != manifest.get("campaign_id")
+            validated.get("campaign_id") != origin_manifest.get("campaign_id")
             or validated.get("target_version") != manifest.get("target_version")
             or validated.get("inputs", {}).get("official_diff")
             != official_diff_reference
             or validated.get("inputs", {}).get("source_diff", {}).get("sha256")
-            != manifest.get("analysis", {}).get("source-diff", {}).get("sha256")
+            != origin_source_diff_sha256
+            # 导入复制的计划期 source-diff 必须与原始 Campaign 逐字节一致。
+            or manifest.get("analysis", {}).get("source-diff", {}).get("sha256")
+            != origin_source_diff_sha256
         ):
             raise ConfigurationError("VC-1 DiscoveryInventory 未绑定当前 Campaign 输入。")
         expected_identities = {
