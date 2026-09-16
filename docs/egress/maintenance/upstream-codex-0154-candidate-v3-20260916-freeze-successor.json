@@ -1,0 +1,66 @@
+{
+  "base_commit": "af0dffbe73adb8299befd9794720887a3b7cd68f",
+  "changed_path_count": 2,
+  "current_commit": "744c5f3f3756f63dcbca232ab89335c609cac3e0",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 3469,
+  "frozen_path_count": 1398,
+  "identity_sha256": "49eaf63ba4693154474a0168906d19b3a3638d3eb17e2a13196d948d5fc0fa5f",
+  "issued_at_utc": "2026-09-16T08:46:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-0154-candidate-v3-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/catalogdata/runtime/release-catalog.json",
+      "predecessor_sha256s": [
+        "071887451db777fa91687be5cf38b22ebd4f466a16cd3e2fec57f0e1b23abac1"
+      ],
+      "reason": "Codex CLI 0.154 VC-4 实现固定 Candidate（第三次重建 Campaign c0154-formal-vc5-recovery-20260916t083650z）：候选 RuntimeCatalog 切换到新候选 release graph（0.151.0 仍为 active，生产选择器不变） path=backend/internal/officialegress/catalogdata/runtime/release-catalog.json",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-formal-recovery-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-r9-candidate-readiness-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v2-20260916-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "2c83ecb55517a4127f732464becaf51709720745603bf09e00b9b183cf93c975"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/releasecontract/testdata/release-graph.json",
+      "predecessor_sha256s": [
+        "6d602f5ffeb1d19e97c8541e1ecc0cb8d0ac440bef7c200822d467d96bc8bbe6"
+      ],
+      "reason": "Codex CLI 0.154 VC-4 实现固定 Candidate（第三次重建 Campaign c0154-formal-vc5-recovery-20260916t083650z）：候选 RuntimeCatalog 切换到新候选 release graph（0.151.0 仍为 active，生产选择器不变） path=backend/internal/officialegress/releasecontract/testdata/release-graph.json",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-formal-recovery-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-r9-candidate-readiness-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v2-20260916-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "0fafc7683b821fe17f62e9e9b2b036ac9a4aa9aed543932a6b9cbf3f8c9ff242"
+    }
+  ],
+  "unregistered_path_count": 0,
+  "unregistered_paths": [],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
