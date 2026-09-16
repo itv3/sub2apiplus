@@ -18,8 +18,19 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Sequence
 
 
-SCHEMA_VERSION = "codex-upgrade-evidence-permission-closeout/v1"
+# v1（历史只读）：边界记录含目录的 mtime_ns／nlink，并枚举证据根内全部条目。
+# v2：目录不记 size／mtime_ns／nlink（子项增删会改变父目录这几项），并跳过证据根顶层的
+# ``assertion-bundle`` 子树——它是 seal 前按 ACC-06 发布进证据根的派生制品，由 seal 用
+# manifest 逐文件摘要另行绑定。v1 边界在 bundle 发布后必然漂移，这是 v2 存在的原因。
+SCHEMA_VERSION_V1 = "codex-upgrade-evidence-permission-closeout/v1"
+SCHEMA_VERSION = "codex-upgrade-evidence-permission-closeout/v2"
 RECEIPT_FILENAME = "evidence-permission-closeout.json"
+# 已绑定 v1 收据的 Attempt 只能在 bundle 发布前、v1 仍可逐字重放时升级：升级收据以
+# 预置的 v1 绑定为前序，此后重放按 v2 规则核对升级收据。
+UPGRADE_FILENAME = "evidence-permission-closeout-upgrade.json"
+ASSERTION_BUNDLE_DIRNAME = "assertion-bundle"
+BOUNDARY_RULE_V1 = "v1"
+BOUNDARY_RULE_V2 = "v2"
 LOGICAL_RUNS_ROOTS = (
     Path("/capture/runs"),
     Path("/root/oauth-capture/runs"),
@@ -194,8 +205,8 @@ def _entry_snapshot(
     )
 
 
-def _walk_paths(root: Path) -> list[Path]:
-    """确定性枚举一棵证据树，不跟随符号链接。"""
+def _walk_paths(root: Path, *, rule: str = BOUNDARY_RULE_V2) -> list[Path]:
+    """确定性枚举一棵证据树，不跟随符号链接；v2 跳过根下顶层 assertion-bundle 子树。"""
 
     paths = [root]
 
@@ -208,6 +219,10 @@ def _walk_paths(root: Path) -> list[Path]:
         followlinks=False,
         onerror=onerror,
     ):
+        if rule == BOUNDARY_RULE_V2 and Path(current) == root:
+            directory_names[:] = [
+                name for name in directory_names if name != ASSERTION_BUNDLE_DIRNAME
+            ]
         directory_names.sort()
         file_names.sort()
         paths.extend(Path(current) / name for name in directory_names)
@@ -215,22 +230,31 @@ def _walk_paths(root: Path) -> list[Path]:
     return paths
 
 
-def _boundary_record(entry: EntrySnapshot) -> dict[str, Any]:
-    """权限位不进入稳定边界，保证 fchmod 前后可比较。"""
+def _boundary_record(entry: EntrySnapshot, *, rule: str = BOUNDARY_RULE_V2) -> dict[str, Any]:
+    """权限位不进入稳定边界，保证 fchmod 前后可比较；v2 目录不记 size／mtime_ns／nlink。"""
 
+    directory_volatile = rule == BOUNDARY_RULE_V2 and entry.kind == "directory"
     return {
         "read_path": str(entry.read_path),
         "write_path": str(entry.write_path),
         "kind": entry.kind,
         "device": entry.device,
         "inode": entry.inode,
-        "size": entry.size,
-        "mtime_ns": entry.mtime_ns,
-        "nlink": entry.nlink,
+        "size": None if directory_volatile else entry.size,
+        "mtime_ns": None if directory_volatile else entry.mtime_ns,
+        "nlink": None if directory_volatile else entry.nlink,
         "uid": entry.uid,
         "gid": entry.gid,
         "external_alias": entry.external_alias,
     }
+
+
+def _rule_for_schema(schema_version: Any) -> str:
+    if schema_version == SCHEMA_VERSION_V1:
+        return BOUNDARY_RULE_V1
+    if schema_version == SCHEMA_VERSION:
+        return BOUNDARY_RULE_V2
+    raise EvidencePermissionError("权限收口收据 schema_version 不受支持。")
 
 
 def _gap_record(entry: EntrySnapshot) -> dict[str, str]:
@@ -344,8 +368,9 @@ def inspect_evidence_boundary(
     *,
     managed_data_root: Path | None = None,
     logical_runs_roots: Sequence[Path] = LOGICAL_RUNS_ROOTS,
+    rule: str = BOUNDARY_RULE_V2,
 ) -> BoundarySnapshot:
-    """只读取 stat 元数据并形成全部证据根的稳定边界摘要。"""
+    """只读取 stat 元数据并形成全部证据根的稳定边界摘要（rule 见 SCHEMA_VERSION 注释）。"""
 
     data_root = Path(managed_data_root) if managed_data_root is not None else _managed_data_root()
     aliases = _root_aliases(
@@ -357,7 +382,7 @@ def inspect_evidence_boundary(
     entries: list[EntrySnapshot] = []
     seen_read_paths: set[Path] = set()
     for read_root, write_root, external_alias in aliases:
-        for read_path in _walk_paths(read_root):
+        for read_path in _walk_paths(read_root, rule=rule):
             if read_path in seen_read_paths:
                 raise EvidencePermissionError(f"证据项被重复枚举：{read_path}")
             seen_read_paths.add(read_path)
@@ -374,7 +399,7 @@ def inspect_evidence_boundary(
     return BoundarySnapshot(
         entries=tuple(entries),
         boundary_sha256=_sha256_bytes(
-            _canonical([_boundary_record(item) for item in entries])
+            _canonical([_boundary_record(item, rule=rule) for item in entries])
         ),
         gap_sha256=_sha256_bytes(_canonical([_gap_record(item) for item in gaps])),
         changed_entry_count=len(gaps),
@@ -580,6 +605,56 @@ def replay_evidence_permission_closeout(
     if path.stat().st_size != size or _sha256_file(path) != digest:
         raise EvidencePermissionError("Attempt 的权限收口收据摘要或大小漂移。")
     payload = _load_receipt(path)
+    roots = _normalized_roots(evidence_roots)
+    data_root = Path(managed_data_root) if managed_data_root is not None else _managed_data_root()
+    upgrade_path = attempt_root / UPGRADE_FILENAME
+    if payload.get("schema_version") == SCHEMA_VERSION_V1 and (
+        upgrade_path.exists() or upgrade_path.is_symlink()
+    ):
+        # v1 收据已被升级收据承接：升级时 v1 曾逐字重放通过，此后按 v2 规则核对升级收据。
+        _reject_symlink_components(upgrade_path, "权限收口升级收据")
+        upgrade = _load_receipt(upgrade_path)
+        predecessor = upgrade.get("predecessor")
+        if (
+            not isinstance(predecessor, Mapping)
+            or set(predecessor) != {"path", "sha256", "bytes"}
+            or predecessor.get("path") != RECEIPT_FILENAME
+            or predecessor.get("sha256") != digest
+            or predecessor.get("bytes") != size
+        ):
+            raise EvidencePermissionError("权限收口升级收据未绑定 Attempt 当前的 v1 收据。")
+        return _replay_receipt_payload(
+            upgrade,
+            attempt_root=attempt_root,
+            roots=roots,
+            data_root=data_root,
+            logical_runs_roots=logical_runs_roots,
+            extra_fields={"predecessor", "upgraded_from"},
+            expected_schema=SCHEMA_VERSION,
+        )
+    return _replay_receipt_payload(
+        payload,
+        attempt_root=attempt_root,
+        roots=roots,
+        data_root=data_root,
+        logical_runs_roots=logical_runs_roots,
+        extra_fields=set(),
+        expected_schema=None,
+    )
+
+
+def _replay_receipt_payload(
+    payload: Mapping[str, Any],
+    *,
+    attempt_root: Path,
+    roots: Sequence[Path],
+    data_root: Path,
+    logical_runs_roots: Sequence[Path],
+    extra_fields: set[str],
+    expected_schema: str | None,
+) -> dict[str, Any]:
+    """按收据自身 schema 对应的规则复核边界；升级收据必须是 v2。"""
+
     expected_payload_fields = {
         "schema_version",
         "status",
@@ -596,14 +671,15 @@ def replay_evidence_permission_closeout(
         "scanned_bytes",
         "live_request_count",
         "receipt_sha256",
-    }
+    } | extra_fields
     unsigned = dict(payload)
     receipt_sha256 = unsigned.pop("receipt_sha256", None)
-    roots = _normalized_roots(evidence_roots)
-    data_root = Path(managed_data_root) if managed_data_root is not None else _managed_data_root()
+    schema_version = payload.get("schema_version")
+    if expected_schema is not None and schema_version != expected_schema:
+        raise EvidencePermissionError("权限收口升级收据 schema_version 非法。")
+    rule = _rule_for_schema(schema_version)
     if (
         set(payload) != expected_payload_fields
-        or payload.get("schema_version") != SCHEMA_VERSION
         or payload.get("status") != "passed"
         or payload.get("attempt_root") != str(attempt_root)
         or payload.get("evidence_roots") != [str(root) for root in roots]
@@ -622,6 +698,7 @@ def replay_evidence_permission_closeout(
         roots,
         managed_data_root=data_root,
         logical_runs_roots=logical_runs_roots,
+        rule=rule,
     )
     if (
         payload.get("entry_count") != len(current.entries)
@@ -631,4 +708,74 @@ def replay_evidence_permission_closeout(
         or current.changed_entry_count != 0
     ):
         raise EvidencePermissionError("权限收口后的证据元数据边界漂移。")
-    return payload
+    return dict(payload)
+
+
+def upgrade_evidence_permission_closeout(
+    attempt_root: Path,
+    evidence_roots: Sequence[Path],
+    binding: Mapping[str, Any],
+    *,
+    managed_data_root: Path | None = None,
+    logical_runs_roots: Sequence[Path] = LOGICAL_RUNS_ROOTS,
+) -> tuple[Path, dict[str, Any]]:
+    """把仍可逐字重放的 v1 收口升级为 v2 边界，只写一次升级收据并绑定 v1 前序。
+
+    升级必须在 assertion bundle 发布前完成：v1 规则含目录 mtime／nlink 与全部子树，
+    bundle 一旦发布即无法重放；升级收据记录同一组证据根在 v2 规则下的边界。
+    """
+
+    attempt_root = Path(attempt_root).resolve(strict=True)
+    roots = _normalized_roots(evidence_roots)
+    data_root = Path(managed_data_root) if managed_data_root is not None else _managed_data_root()
+    upgrade_path = attempt_root / UPGRADE_FILENAME
+    if upgrade_path.exists() or upgrade_path.is_symlink():
+        raise EvidencePermissionError("权限收口升级收据已经存在，禁止覆盖。")
+    v1_payload = _load_receipt(attempt_root / RECEIPT_FILENAME)
+    if v1_payload.get("schema_version") != SCHEMA_VERSION_V1:
+        raise EvidencePermissionError("只有 v1 权限收口收据需要升级。")
+    replay_evidence_permission_closeout(
+        attempt_root,
+        roots,
+        binding,
+        managed_data_root=data_root,
+        logical_runs_roots=logical_runs_roots,
+    )
+    for root in roots:
+        bundle = root / ASSERTION_BUNDLE_DIRNAME
+        if bundle.exists() or bundle.is_symlink():
+            raise EvidencePermissionError(f"升级必须在 assertion bundle 发布前完成：{bundle}")
+    current = inspect_evidence_boundary(
+        attempt_root,
+        roots,
+        managed_data_root=data_root,
+        logical_runs_roots=logical_runs_roots,
+        rule=BOUNDARY_RULE_V2,
+    )
+    if current.changed_entry_count != 0:
+        raise EvidencePermissionError("升级时证据仍有未闭合权限。")
+    receipt: dict[str, Any] = {
+        "schema_version": SCHEMA_VERSION,
+        "status": "passed",
+        "recorded_at_utc": _utc_now(),
+        "attempt_root": str(attempt_root),
+        "evidence_roots": [str(root) for root in roots],
+        "managed_runs_root": str(data_root.resolve(strict=True) / "runs"),
+        "logical_runs_roots": [str(Path(value)) for value in logical_runs_roots],
+        "entry_count": len(current.entries),
+        "changed_entry_count": 0,
+        "external_alias_entry_count": current.external_alias_entry_count,
+        "boundary_sha256": current.boundary_sha256,
+        "pre_closeout_gap_sha256": current.gap_sha256,
+        "scanned_bytes": 0,
+        "live_request_count": 0,
+        "predecessor": {
+            "path": RECEIPT_FILENAME,
+            "sha256": str(binding["sha256"]),
+            "bytes": int(binding["bytes"]),
+        },
+        "upgraded_from": SCHEMA_VERSION_V1,
+    }
+    receipt["receipt_sha256"] = _sha256_bytes(_canonical(receipt))
+    _write_receipt_once(upgrade_path, receipt)
+    return upgrade_path, receipt

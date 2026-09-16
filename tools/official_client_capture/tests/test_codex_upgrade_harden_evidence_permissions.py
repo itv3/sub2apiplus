@@ -131,6 +131,31 @@ class HardenEvidencePermissionsTests(unittest.TestCase):
                 with self.assertRaisesRegex(harden.HardenError, "属主"):
                     harden.preview(fixture.campaign_dir, fixture.attempt_id)
 
+    def test_upgrade_closeout_records_receipt(self) -> None:
+        """upgrade-closeout 调用 seal 侧升级并把升级收据摘要登记到 control/evidence-permissions。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = HardenFixture(Path(directory).resolve())
+            attempt_path = fixture.attempt_root / "attempt.json"
+            payload = json.loads(attempt_path.read_text("utf-8"))
+            payload["evidence_permission_closeout"] = {"path": "evidence-permission-closeout.json", "sha256": "a" * 64, "bytes": 10}
+            _write_json(attempt_path, payload)
+            with self.assertRaisesRegex(harden.HardenError, "升级失败"):
+                harden.upgrade_closeout(fixture.campaign_dir, fixture.attempt_id)
+            upgrade_path = fixture.attempt_root / "evidence-permission-closeout-upgrade.json"
+            _write_json(upgrade_path, {"boundary_sha256": "b" * 64})
+            fake = (upgrade_path, {"predecessor": {"path": "evidence-permission-closeout.json", "sha256": "a" * 64, "bytes": 10}, "boundary_sha256": "b" * 64, "entry_count": 6})
+            with mock.patch.object(harden.evidence_permissions, "upgrade_evidence_permission_closeout", return_value=fake) as upgrade:
+                record = harden.upgrade_closeout(fixture.campaign_dir, fixture.attempt_id)
+            self.assertEqual(record["status"], "upgraded")
+            self.assertEqual(record["predecessor"]["sha256"], "a" * 64)
+            self.assertEqual(upgrade.call_args.kwargs["managed_data_root"], fixture.data)
+            self.assertTrue((fixture.campaign_dir / "control" / "evidence-permissions" / fixture.attempt_id / "closeout-upgrade-01.json").is_file())
+            payload.pop("evidence_permission_closeout")
+            _write_json(attempt_path, payload)
+            with self.assertRaisesRegex(harden.HardenError, "无需升级"):
+                harden.upgrade_closeout(fixture.campaign_dir, fixture.attempt_id)
+
     def test_cli_round_trip(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             fixture = HardenFixture(Path(directory).resolve())

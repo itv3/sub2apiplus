@@ -1359,6 +1359,14 @@ attempt 冻结闭集须与预览逐项相等，否则拒绝。
 禁止网络与内容写入，内容摘要不变才落收据；收据写在 `control/evidence-permissions/<attempt_id>/`，
 不回写 `attempt.json`；中断后幂等重放。
 
+**run 末权限边界与 assertion bundle。** `capture-official run` 结束时写入的
+`evidence-permission-closeout/v2` 边界只记文件的 inode、大小、mtime、链接数与属主；目录只记 inode 与
+属主，并跳过证据根顶层的 `assertion-bundle` 子树——bundle 是 seal 前按 ACC-06 发布进证据根的派生制品，
+由 seal 用 manifest 逐文件摘要另行绑定。历史 v1 边界含目录 mtime／链接数与全部子树，bundle 一经发布
+必然漂移；已绑定 v1 收据的 attempt 必须在 bundle 发布前用
+`harden-evidence-permissions upgrade-closeout` 升级：v1 仍能逐字重放时写一次
+`evidence-permission-closeout-upgrade.json`（以 v1 绑定为前序），此后所有重放按 v2 核对升级收据。
+
 **从 `awaiting_receipts` 只读导入。** 前序官方阶段已封存时 `reuse-official-evidence` 直接承接官方阶段；
 前序停在 `awaiting_receipts` 时必须同时提供 `--predecessor-official-attempt-id`、`--audit-receipt`
 （`official-attempt-audit/v1` 五段全部通过且绑定该 attempt.json）、`--identity-verdict`

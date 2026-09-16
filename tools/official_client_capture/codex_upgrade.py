@@ -8902,8 +8902,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     harden.add_argument(
         "harden_action",
-        choices=("preview", "apply", "replay"),
-        help="preview：只读预览；apply：按批准摘要收口；replay：只读复核最新收据。",
+        choices=("preview", "apply", "replay", "upgrade-closeout"),
+        help=(
+            "preview：只读预览；apply：按批准摘要收口；replay：只读复核最新收据；"
+            "upgrade-closeout：在 assertion bundle 发布前把 v1 run 末收口升级为 v2 边界。"
+        ),
     )
     add_campaign_reference(harden)
     harden.add_argument("--attempt-id", required=True)
@@ -43501,6 +43504,8 @@ def _harden_evidence_permissions_command(arguments: argparse.Namespace) -> dict[
                 raise ConfigurationError("apply 必须提供 preview 输出的 --approve-sha256。")
             result = harden.apply(campaign_dir, attempt_id, approve_sha256=approve)
             result = {key: value for key, value in result.items() if key != "changed"}
+        elif action == "upgrade-closeout":
+            result = harden.upgrade_closeout(campaign_dir, attempt_id)
         else:
             result = harden.replay(campaign_dir, attempt_id)
     except (harden.HardenError, OSError, ValueError) as error:

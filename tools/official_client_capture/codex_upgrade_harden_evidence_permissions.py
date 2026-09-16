@@ -303,10 +303,68 @@ def replay(campaign_dir: Path, attempt_id: str) -> dict[str, Any]:
     return {"status": "passed" if not problems else "failed", "problems": problems, "apply_receipt": str(apply_path), "entry_count": len(current)}
 
 
+UPGRADE_RE = re.compile(r"^closeout-upgrade-(\d{2})\.json$")
+UPGRADE_RECORD_SCHEMA = "evidence-permission-closeout-upgrade-record/v1"
+
+
+def upgrade_closeout(campaign_dir: Path, attempt_id: str) -> dict[str, Any]:
+    """把 attempt 绑定的 v1 run 末权限收口升级为 v2 边界（bundle 发布前，metadata-only）。
+
+    持 Campaign 排他锁；调用 seal 侧 ``upgrade_evidence_permission_closeout`` 在 attempt 根
+    只写一次升级收据，再把升级收据的摘要登记到 ``control/evidence-permissions/<attempt_id>/``。
+    """
+
+    campaign_dir = Path(campaign_dir).resolve(strict=True)
+    descriptor = _campaign_lock(campaign_dir)
+    try:
+        attempt_root, _roots, attempt = _evidence_roots(campaign_dir, attempt_id)
+        binding = attempt.get("evidence_permission_closeout")
+        if not isinstance(binding, Mapping):
+            raise HardenError("attempt 没有 run 末权限收口绑定，无需升级")
+        raw_roots = attempt.get("evidence_roots")
+        if not isinstance(raw_roots, list) or not raw_roots:
+            raise HardenError("attempt 缺少 evidence_roots")
+        try:
+            upgrade_path, receipt = evidence_permissions.upgrade_evidence_permission_closeout(
+                attempt_root,
+                [Path(str(value)) for value in raw_roots],
+                binding,
+                managed_data_root=campaign_dir.parents[2],
+            )
+        except (OSError, evidence_permissions.EvidencePermissionError) as error:
+            raise HardenError(f"权限收口升级失败：{error}") from error
+        receipt_dir = _receipt_dir(campaign_dir, attempt_id)
+        receipt_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        receipt_dir.chmod(0o700)
+        index, _latest_path = _latest(receipt_dir, UPGRADE_RE)
+        record = {
+            "schema_version": UPGRADE_RECORD_SCHEMA,
+            "index": index + 1,
+            "campaign_id": attempt.get("campaign_id"),
+            "attempt_id": attempt_id,
+            "attempt_sha256": _file_sha256(attempt_root / "attempt.json"),
+            "upgrade_receipt": {
+                "path": str(upgrade_path),
+                "sha256": _file_sha256(upgrade_path),
+                "bytes": upgrade_path.stat().st_size,
+            },
+            "predecessor": dict(receipt["predecessor"]),
+            "boundary_sha256": receipt["boundary_sha256"],
+            "entry_count": receipt["entry_count"],
+            "status": "upgraded",
+            "recorded_at_utc": _utc_now(),
+        }
+        record["record_sha256"] = _fingerprint({k: v for k, v in record.items() if k != "recorded_at_utc"})
+        _write_once(receipt_dir / f"closeout-upgrade-{record['index']:02d}.json", record)
+        return record
+    finally:
+        os.close(descriptor)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="两步式证据权限收口：preview 只读，apply 需批准摘要。")
     subparsers = parser.add_subparsers(dest="action", required=True)
-    for name in ("preview", "apply", "replay"):
+    for name in ("preview", "apply", "replay", "upgrade-closeout"):
         sub = subparsers.add_parser(name)
         sub.add_argument("--campaign-dir", type=Path, required=True)
         sub.add_argument("--attempt-id", required=True)
@@ -324,13 +382,15 @@ def main(argv: list[str] | None = None) -> int:
         elif arguments.action == "apply":
             result = apply(arguments.campaign_dir, arguments.attempt_id, approve_sha256=arguments.approve_sha256)
             result = {k: v for k, v in result.items() if k != "changed"}
+        elif arguments.action == "upgrade-closeout":
+            result = upgrade_closeout(arguments.campaign_dir, arguments.attempt_id)
         else:
             result = replay(arguments.campaign_dir, arguments.attempt_id)
     except (HardenError, closeout.VC0CloseoutError, OSError, ValueError) as error:
         print(f"证据权限收口失败：{error}", file=sys.stderr)
         return 2
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))
-    return 0 if result.get("status", "passed") in {"passed", "applied"} or "review_sha256" in result else 2
+    return 0 if result.get("status", "passed") in {"passed", "applied", "upgraded"} or "review_sha256" in result else 2
 
 
 if __name__ == "__main__":
