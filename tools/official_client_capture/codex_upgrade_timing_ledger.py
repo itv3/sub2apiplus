@@ -220,6 +220,12 @@ PRODUCER_FREEZE_SUCCESSORS = (
         "scope": "upstream-codex-0154-vc2-classify-import-origin-20260916-freeze-successor",
         "result": "manual_actions_required",
     },
+    {
+        "path": "docs/egress/maintenance/upstream-codex-0154-vc2-draft-legal-stop-20260916-freeze-successor.json",
+        "base_commit": "a19e2e0d4518850a4c34cd85a360c29ebbb23b8d",
+        "scope": "upstream-codex-0154-vc2-draft-legal-stop-20260916-freeze-successor",
+        "result": "manual_actions_required",
+    },
 )
 
 
