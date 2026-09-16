@@ -198,6 +198,12 @@ PRODUCER_FREEZE_SUCCESSORS = (
         "scope": "upstream-codex-0154-a0b-stop-phase-sealed-accounting-20260916-freeze-successor",
         "result": "manual_actions_required",
     },
+    {
+        "path": "docs/egress/maintenance/upstream-codex-0154-a0b-stop-phase-import-sites-20260916-freeze-successor.json",
+        "base_commit": "6d0eff0ebb1a3727a0229e558e60de810e9ef37e",
+        "scope": "upstream-codex-0154-a0b-stop-phase-import-sites-20260916-freeze-successor",
+        "result": "manual_actions_required",
+    },
 )
 
 
