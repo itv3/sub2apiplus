@@ -1536,7 +1536,8 @@ python3 tools/official_client_capture/codex_upgrade.py compile-and-run-vc-batch 
 `campaign-run`，唯一墙钟边界是 Campaign plan 已冻结的原始绝对 deadline。
 编译后父 run 创建前的任何可捕获失败都会写通用预派发停线收据；SIGKILL 后可由同一工具的 `record` 子命令
 补写，但不能继续原 Campaign。动作返回
-`awaiting_receipts`、`approval_required` 时，父 `campaign-run` 将其视为本批合法停靠点并正常封存；
+`awaiting_receipts`、`approval_required`、classify 草案的 `draft`，以及候选 seal 第一步的
+`client_checkpoint_created` 时，父 `campaign-run` 将其视为本批合法停靠点并正常封存；
 同一命令绕过父监督器直接运行仍以退出码 2 提示未到终态。
 
 Codex 工具运行时读取的 Framework 和客户端指南属于受管依赖。部署清单必须登记规范路径和摘要，与工具树
@@ -2332,7 +2333,7 @@ Kilo Responses 的 `@ai-sdk/openai` provider 必须显式设置 `options.websock
 封存保持四阶段，不能合并为一次不可审核写入：
 
 1. **建立检查点**：两条 Kilo 请求完成后，首次执行下列动作体；工具采集 `client-after` 并返回
-   `client_checkpoint_created`，此时尚未形成最终 seal。
+   `client_checkpoint_created`，此时尚未形成最终 seal；父 `campaign-run` 把它视为本批合法停靠点。
 
    ~~~bash
    python3 tools/official_client_capture/codex_upgrade.py capture-candidate seal \

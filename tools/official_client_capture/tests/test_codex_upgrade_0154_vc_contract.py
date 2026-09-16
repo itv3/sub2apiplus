@@ -275,6 +275,7 @@ class CodexUpgrade0154VCContractTests(unittest.TestCase):
 
         classify 草案的 ``draft`` 是 VC-2 首批的预期终点：0.154 首次真实派发时它曾以
         退出码 2 被父监督器判成动作失败并把账本停线，这里把它固定为合法停靠点；
+        候选 seal 第一步的 ``client_checkpoint_created`` 同理（VC-5 前盘点补上）；
         真正的失败状态在父批次内仍是非零。
         """
 
@@ -285,7 +286,12 @@ class CodexUpgrade0154VCContractTests(unittest.TestCase):
         ):
             self.assertEqual(codex_upgrade._campaign_run_aware_exit_code({"status": "failed"}, 2), 2)
             self.assertEqual(codex_upgrade._campaign_run_aware_exit_code({"status": "blocked"}, 2), 2)
-        for status in ("awaiting_receipts", "approval_required", "draft"):
+        for status in (
+            "awaiting_receipts",
+            "approval_required",
+            "draft",
+            "client_checkpoint_created",
+        ):
             with self.subTest(status=status):
                 with mock.patch.dict(os.environ, {}, clear=True):
                     self.assertEqual(
