@@ -1,0 +1,74 @@
+{
+  "base_commit": "e2db1545a5770482972dff69af1f2ed4e24dd00e",
+  "changed_path_count": 2,
+  "current_commit": "87da9b064422967b2f5b83c8ddb0cf25cc1c39dc",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 3491,
+  "frozen_path_count": 1398,
+  "identity_sha256": "267b2eb195f4852a2aefadeb53bd20fdb5bf4ef18ade8535bbc2d8197f4b4d95",
+  "issued_at_utc": "2026-09-16T12:32:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-0154-candidate-v7-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/catalogdata/runtime/release-catalog.json",
+      "predecessor_sha256s": [
+        "6cc07a58b775184fcea1b8d8ad6e435d7a8a291c68b9d4415bb15c0e2570508e"
+      ],
+      "reason": "Codex CLI 0.154 VC-4 实现固定 Candidate（第 7 次重建 Campaign c0154-formal-vc5-recovery-20260916t122646z）：候选 RuntimeCatalog 切换到新候选 release graph（0.151.0 仍为 active，生产选择器不变） path=backend/internal/officialegress/catalogdata/runtime/release-catalog.json",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-formal-recovery-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-r9-candidate-readiness-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v2-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v3-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v4-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v5-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v6-20260916-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "77ba7f089ebdb049b3add7dd824790b45b5ba7f0be3997eb0a054a1abae48699"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/releasecontract/testdata/release-graph.json",
+      "predecessor_sha256s": [
+        "14ff4cf491a5214ad8b1f2eb51bc9df81c7a0e0038c533e035c8e70aeadfd639"
+      ],
+      "reason": "Codex CLI 0.154 VC-4 实现固定 Candidate（第 7 次重建 Campaign c0154-formal-vc5-recovery-20260916t122646z）：候选 RuntimeCatalog 切换到新候选 release graph（0.151.0 仍为 active，生产选择器不变） path=backend/internal/officialegress/releasecontract/testdata/release-graph.json",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-formal-recovery-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-r9-candidate-readiness-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v2-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v3-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v4-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v5-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v6-20260916-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "248b7d714fc453ddf08aa6d67f0c0ee9c895fd75efdc0fd1f1bd1530df4ddcae"
+    }
+  ],
+  "unregistered_path_count": 0,
+  "unregistered_paths": [],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
