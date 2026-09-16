@@ -186,6 +186,12 @@ PRODUCER_FREEZE_SUCCESSORS = (
         "scope": "upstream-codex-0154-a3a-harden-tcpdump-owner-20260916-freeze-successor",
         "result": "manual_actions_required",
     },
+    {
+        "path": "docs/egress/maintenance/upstream-codex-0154-vc1-evidence-boundary-v2-20260916-freeze-successor.json",
+        "base_commit": "bf66ed875c59bb921e53bafaad67a50e3b07153a",
+        "scope": "upstream-codex-0154-vc1-evidence-boundary-v2-20260916-freeze-successor",
+        "result": "manual_actions_required",
+    },
 )
 
 
