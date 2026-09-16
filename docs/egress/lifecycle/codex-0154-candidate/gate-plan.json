@@ -1,0 +1,106 @@
+{
+  "affected_rule_ids": [],
+  "campaign_id": "c0154-formal-vc2-recovery-20260916t034448z",
+  "gate_count": 4,
+  "gates": [
+    {
+      "command": [
+        "go",
+        "test",
+        "./internal/service",
+        "-run",
+        "^TestOfficialCodexProjectionUsesFormalReleaseCatalog$",
+        "-count=1"
+      ],
+      "gate_id": "catalog-projection",
+      "requirement_sha256": "41577142633685ff5175452aedc5832aa3bd96b902c46994ad10cd8c60c8423a",
+      "test_id": "TestOfficialCodexProjectionUsesFormalReleaseCatalog",
+      "working_directory": "backend"
+    },
+    {
+      "command": [
+        "go",
+        "test",
+        "./internal/service",
+        "-run",
+        "^TestOfficialEgressVersionLeakAST$",
+        "-count=1"
+      ],
+      "gate_id": "official-egress-version-leak-ast",
+      "requirement_sha256": "325097dc78b389372c2092d59812b08d115325f1e6a9bef5eadd43774bdf64eb",
+      "test_id": "TestOfficialEgressVersionLeakAST",
+      "working_directory": "backend"
+    },
+    {
+      "command": [
+        "python3",
+        "tools/check_version_leak.py"
+      ],
+      "gate_id": "version-leak",
+      "requirement_sha256": "d36e7f29fee03930a6e94b2932841e04ce2c79ddfff47caaf5d2e161843e1381",
+      "test_id": "check-version-leak",
+      "working_directory": "."
+    },
+    {
+      "command": [
+        "python3",
+        "tools/check_version_leak.py",
+        "--self-test"
+      ],
+      "gate_id": "version-leak-self-test",
+      "requirement_sha256": "d7031a19dabefe0d319da8493f73dcfcf4442a6a6676577bb781ab8766dd947c",
+      "test_id": "check-version-leak-self-test",
+      "working_directory": "."
+    }
+  ],
+  "inherited_rule_ids": [
+    "SPEC-BODY-001",
+    "SPEC-BODY-002",
+    "SPEC-BODY-003",
+    "SPEC-BODY-004",
+    "SPEC-BODY-005",
+    "SPEC-BODY-006",
+    "SPEC-CONN-001",
+    "SPEC-EP-001",
+    "SPEC-EP-002",
+    "SPEC-EP-005",
+    "SPEC-EP-006",
+    "SPEC-EP-007",
+    "SPEC-EP-008",
+    "SPEC-EP-009",
+    "SPEC-EP-012",
+    "SPEC-EP-013",
+    "SPEC-EP-014",
+    "SPEC-EP-015",
+    "SPEC-EP-019",
+    "SPEC-EP-020",
+    "SPEC-EP-021",
+    "SPEC-EP-022",
+    "SPEC-EP-023",
+    "SPEC-H1-001",
+    "SPEC-H1-002",
+    "SPEC-H1-003",
+    "SPEC-H1-004",
+    "SPEC-HDR-001",
+    "SPEC-HDR-002",
+    "SPEC-HDR-004",
+    "SPEC-HDR-005",
+    "SPEC-HDR-006",
+    "SPEC-HDR-007",
+    "SPEC-HDR-008",
+    "SPEC-PROTO-001",
+    "SPEC-PROTO-002",
+    "SPEC-TLS-001",
+    "SPEC-TLS-003",
+    "SPEC-WS-001",
+    "SPEC-WS-002",
+    "SPEC-WS-004",
+    "SPEC-WS-005"
+  ],
+  "joint_manifest_sha256": "2acb29c9e2aee2d1e2e05ab5dfb9ef9c185c15ceee1ed6df5cd98052c93d3093",
+  "mapping_sha256": "36c9117996a12cd06f038078a7094cd94f23b534113b7453fd066377de63ca95",
+  "plan_sha256": "f079860b43b77ed16c00ce08ab261ad9d98e50247d51dea8faa5eeca1a07ca3b",
+  "requirements_sha256": "e4dc3a1e72bacf2c4bba7a5bacc283676de9c2ee291e5ac0ac8f505c861b056c",
+  "schema_version": "codex-post-promotion-gate-plan/v1",
+  "target_version": "0.154.0"
+}

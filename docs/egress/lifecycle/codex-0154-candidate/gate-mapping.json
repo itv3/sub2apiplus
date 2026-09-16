@@ -1,0 +1,55 @@
+{
+  "gates": [
+    {
+      "command": [
+        "go",
+        "test",
+        "./internal/service",
+        "-run",
+        "^TestOfficialCodexProjectionUsesFormalReleaseCatalog$",
+        "-count=1"
+      ],
+      "gate_id": "catalog-projection",
+      "requirement_sha256": "41577142633685ff5175452aedc5832aa3bd96b902c46994ad10cd8c60c8423a",
+      "test_id": "TestOfficialCodexProjectionUsesFormalReleaseCatalog",
+      "working_directory": "backend"
+    },
+    {
+      "command": [
+        "go",
+        "test",
+        "./internal/service",
+        "-run",
+        "^TestOfficialEgressVersionLeakAST$",
+        "-count=1"
+      ],
+      "gate_id": "official-egress-version-leak-ast",
+      "requirement_sha256": "325097dc78b389372c2092d59812b08d115325f1e6a9bef5eadd43774bdf64eb",
+      "test_id": "TestOfficialEgressVersionLeakAST",
+      "working_directory": "backend"
+    },
+    {
+      "command": [
+        "python3",
+        "tools/check_version_leak.py"
+      ],
+      "gate_id": "version-leak",
+      "requirement_sha256": "d36e7f29fee03930a6e94b2932841e04ce2c79ddfff47caaf5d2e161843e1381",
+      "test_id": "check-version-leak",
+      "working_directory": "."
+    },
+    {
+      "command": [
+        "python3",
+        "tools/check_version_leak.py",
+        "--self-test"
+      ],
+      "gate_id": "version-leak-self-test",
+      "requirement_sha256": "d7031a19dabefe0d319da8493f73dcfcf4442a6a6676577bb781ab8766dd947c",
+      "test_id": "check-version-leak-self-test",
+      "working_directory": "."
+    }
+  ],
+  "requirements_sha256": "e4dc3a1e72bacf2c4bba7a5bacc283676de9c2ee291e5ac0ac8f505c861b056c",
+  "schema_version": "codex-post-promotion-gate-mapping/v2"
+}
