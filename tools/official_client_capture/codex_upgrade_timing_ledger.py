@@ -192,6 +192,12 @@ PRODUCER_FREEZE_SUCCESSORS = (
         "scope": "upstream-codex-0154-vc1-evidence-boundary-v2-20260916-freeze-successor",
         "result": "manual_actions_required",
     },
+    {
+        "path": "docs/egress/maintenance/upstream-codex-0154-a0b-stop-phase-sealed-accounting-20260916-freeze-successor.json",
+        "base_commit": "3b92135737d187dbe38536dd6f55c0eb63d07e2b",
+        "scope": "upstream-codex-0154-a0b-stop-phase-sealed-accounting-20260916-freeze-successor",
+        "result": "manual_actions_required",
+    },
 )
 
 
