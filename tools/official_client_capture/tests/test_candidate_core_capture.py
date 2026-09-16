@@ -74,6 +74,16 @@ class CandidateCoreCaptureScriptTest(unittest.TestCase):
         self.assertNotIn("--upstream-ip", self.source)
         self.assertNotIn("--upstream-map", self.source)
 
+    def test_a15_restarts_service_to_clear_models_manifest_cache(self) -> None:
+        """A15 前必须重启候选服务：候选网关按账号 + 出站身份缓存 models 清单，
+        A03～A08 的 responses 已填满缓存，不重启则三种冻结身份零出站。"""
+        a10_stop = self.source.index("stop_capture", self.source.index("wait_action A10 responses_http_success 4"))
+        a15_start = self.source.index("start_capture A15")
+        restart = self.source.index("restart_service", a10_stop)
+        self.assertLess(a10_stop, restart)
+        self.assertLess(restart, a15_start)
+        self.assertIn("缓存 models 清单", self.source[a10_stop:a15_start])
+
     def test_restoration_is_fail_closed(self) -> None:
         for expected in (
             "original_proxy_state",

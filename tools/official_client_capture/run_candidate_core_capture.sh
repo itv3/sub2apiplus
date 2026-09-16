@@ -1124,6 +1124,11 @@ done
 wait_action A10 responses_http_success 4
 stop_capture
 
+# A15 需要三种冻结身份各自真实出站一次，而候选网关会按「账号 + 出站身份」缓存 models 清单
+#（60 秒新鲜、5 分钟陈旧），A03～A08 的 responses 请求已顺带拉取并填满该缓存，A15 会被缓存
+# 吸收成零出站。与 A07 后同理：重启只清理进程态缓存，账号、proxy 与证据均不变。
+restart_service
+
 # A15：三种冻结身份经生产入口生成真实出站。进程来源本身只由 test trace 证明。
 start_capture A15
 trigger_root="$work_dir/scenarios/A15/trigger"
