@@ -238,6 +238,12 @@ PRODUCER_FREEZE_SUCCESSORS = (
         "scope": "upstream-codex-0154-vc5-a15-models-cache-restart-20260916-freeze-successor",
         "result": "manual_actions_required",
     },
+    {
+        "path": "docs/egress/maintenance/upstream-codex-0154-vc5-aux-empty-mapping-20260916-freeze-successor.json",
+        "base_commit": "8c2455ae86312ed3c6000ef73613ff192465c731",
+        "scope": "upstream-codex-0154-vc5-aux-empty-mapping-20260916-freeze-successor",
+        "result": "manual_actions_required",
+    },
 )
 
 
