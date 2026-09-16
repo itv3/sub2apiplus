@@ -7623,6 +7623,7 @@ class CodexUpgradeTest(unittest.TestCase):
                 "harden-evidence-permissions",
                 "reconcile-supervisor-run",
                 "reconcile-attempt",
+                "account-sealed-official",
                 "status",
                 "resume",
             },
@@ -11491,6 +11492,65 @@ class CodexUpgradeTest(unittest.TestCase):
             legacy_contract = codex_upgrade._job_rehearsal_contract_from_manifest(arguments.campaign_dir, legacy)
             self.assertNotIn("wire_producer_sha256", legacy_contract)
             self.assertNotIn("policy_sha256", legacy_contract)
+
+    def test_account_sealed_official_writes_project_ledger_batch(self) -> None:
+        """已封存 official 阶段的请求按 provenance 入总账：精确键去重、估计按来源去重、幂等。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            ledger_root = project_ledger_fixture.install_fixture_ledger(root)
+            arguments = self._campaign_arguments(
+                root / "sealed",
+                campaign_id="upgrade-0154-sealed-accounting",
+                baseline_version="0.151.0",
+                target_version="0.154.0",
+                model="gpt-5.5",
+                lite_model="gpt-6-astra",
+            )
+            manifest = codex_upgrade.create_campaign(arguments)
+            campaign_dir = arguments.campaign_dir
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "尚未封存"):
+                codex_upgrade._account_sealed_official_command(argparse.Namespace(campaign_dir=campaign_dir))
+            self._seal_official_stage(root / "sealed", campaign_dir, manifest)
+            before = codex_upgrade_project_ledger.replay_head(ledger_root)
+            synthetic = {
+                "schema_version": "live-request-provenance/v2",
+                "campaign_id": manifest["campaign_id"],
+                "counting_rule": "codex_model_requests/v2",
+                "estimation_policy": "upper_bound_from_sibling_or_turn_ratio",
+                "requests": [{"identity_key": f"k{i}"} for i in range(3)],
+                "jobs": [
+                    {
+                        "job_id": "official-core",
+                        "status": "estimated",
+                        "roots": [
+                            {
+                                "first_owner_job_id": "official-core",
+                                "producer_run_id": "run-core",
+                                "branches": [{"status": "estimated", "estimated_count": 4}],
+                            }
+                        ],
+                    }
+                ],
+                "unresolved_job_ids": [],
+                "precise_total": 3,
+                "estimated_total": 4,
+            }
+            with mock.patch.object(reconciler.provenance, "collect_campaign_provenance", return_value=dict(synthetic)):
+                result = codex_upgrade._account_sealed_official_command(argparse.Namespace(campaign_dir=campaign_dir))
+                again = codex_upgrade._account_sealed_official_command(argparse.Namespace(campaign_dir=campaign_dir))
+            self.assertEqual(result["status"], "accounted")
+            self.assertEqual(result["request"]["new_identity_keys"], 3)
+            self.assertEqual(result["request"]["estimated_delta"], 4)
+            self.assertTrue(again["batch"].get("reused"), again)
+            after = codex_upgrade_project_ledger.replay_head(ledger_root)
+            self.assertEqual(after["precise_total"], before["precise_total"] + 3)
+            self.assertEqual(after["estimated_total"], before["estimated_total"] + 4)
+            self.assertEqual(after["root_cause_counts"], before["root_cause_counts"])
+            receipt_dir = campaign_dir / "control" / reconciler.RECONCILIATION_DIR
+            self.assertTrue(any(p.name.startswith("sealed-official-") for p in receipt_dir.iterdir()))
 
     def test_release_certification_requirement_follows_policy_version(self) -> None:
         """发布认证绑定只对策略 v5 起创建的完整 VC 链 Campaign 必需，历史清单按 Job 演练承接。"""

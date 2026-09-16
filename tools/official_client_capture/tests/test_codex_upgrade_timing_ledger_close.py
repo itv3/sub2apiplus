@@ -159,6 +159,22 @@ class CloseCampaignLedgerTests(unittest.TestCase):
             with self.assertRaisesRegex(ledger.TimingLedgerError, "缺少 formal_campaign_id"):
                 ledger._load_provenance_receipt(missing_path)
 
+    def test_stopped_phase_reads_stop_the_line_event(self) -> None:
+        """关账本后摘要 active_phase 为空，停线阶段必须能从 stop_the_line 事件读出，供后继导入使用。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            ledger_dir = self._ledger(root, started_minutes_ago=5)
+            self._open_vc1(ledger_dir)
+            provenance = _write_provenance(root / "prov.json")
+            result = ledger.close_campaign_ledger(ledger_dir, root_cause_id="rc1-test", provenance_receipt=provenance)
+            summary = result["summary"]
+            self.assertEqual(summary["status"], "stopped")
+            self.assertIsNone(summary["active_phase"])
+            self.assertEqual(ledger.stopped_phase(ledger_dir, int(summary["head_sequence"])), "VC-1")
+            self.assertIsNone(ledger.stopped_phase(ledger_dir, int(summary["head_sequence"]) - 1))
+            self.assertIsNone(ledger.stopped_phase(ledger_dir, 99))
+
     def test_rejects_wrong_schema_and_unresolved_is_recorded(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()

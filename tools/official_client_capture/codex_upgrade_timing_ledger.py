@@ -1225,6 +1225,23 @@ def append_event(
     return inspect_ledger(root, now=recorded_raw)
 
 
+def stopped_phase(root: Path, head_sequence: int) -> str | None:
+    """返回账本 head 事件若为 stop_the_line 时所记录的阶段。
+
+    A0a-8 的 close-campaign-ledger 先 stage_abandoned 再 stop_the_line，摘要里的
+    ``active_phase`` 因而为空；停线事实发生在哪个阶段只能从 stop_the_line 事件自身读取。
+    """
+
+    events = _load_events(root)
+    if not isinstance(head_sequence, int) or head_sequence < 1 or head_sequence > len(events):
+        return None
+    event, _raw = events[head_sequence - 1]
+    if event.get("event_type") != "stop_the_line":
+        return None
+    phase = event.get("phase")
+    return phase if phase in PHASE_ORDER else None
+
+
 def build_checkpoint(root: Path, *, observed_at_utc: str | None = None) -> dict[str, Any]:
     root = _private_ledger(root, must_exist=True)
     plan, plan_raw = _load_plan(root)

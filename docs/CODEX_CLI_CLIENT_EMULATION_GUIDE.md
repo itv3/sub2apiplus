@@ -1327,7 +1327,10 @@ attempt（run 期间已产生 reservation 时拒绝并指向 attempt 入口）�
 不伪造 attempt 事件；`reconcile-attempt --campaign-dir --attempt-id` 处理 reservation 之后的任何中断，
 输出 `attempt-reconciliation/v1`，不回写 `attempt.json`，不新增 attempt 状态枚举。Job 完成态：
 `complete` 必须同时有有效 result 与对应 checkpoint；有证据目录但无终态 checkpoint 为 `indeterminate`
-并归入失败集合；证据目录只用于请求计数。统一顺序（每步幂等，中断后从第一步重放）：
+并归入失败集合；证据目录只用于请求计数。成功封存的 official 阶段不经对账，其模型请求由
+`account-sealed-official --campaign-dir` 以同一套 provenance 核算（精确身份键按总账去重、估计上界按来源去重）
+写入一份不带根因的 `reconciliation_committed` batch 并推送总账，按 attempt 幂等。统一顺序（每步幂等，
+中断后从第一步重放）：
 
 1. Campaign 侧写收据；attempt 分支在 Campaign 账本追加无收据的 `attempt_failed`（带根因）。账本此前
    未登记该 attempt 时先补登 `attempt_started`；账本已 `stop_required` 且无 active attempt 时无法登记，

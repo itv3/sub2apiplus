@@ -433,6 +433,90 @@ def _request_part(
     return part, binding, copy_path
 
 
+def account_sealed_official(campaign_dir: Path, *, now: str | None = None) -> dict[str, Any]:
+    """把已封存 official 阶段的模型请求写入项目总账（自身零请求，幂等）。
+
+    总账此前只在失败对账（reconciliation_committed）时入账，成功封存的 Campaign 只停在
+    计时账本与 provenance 收据里。这里复用同一套请求部分核算：精确身份键按总账索引与初始
+    清单去重，估计上界按 producer run 去重，写一份不带根因的 reconciliation_committed batch
+    并立即推送；同一 attempt 重复执行返回既有 batch。
+    """
+
+    campaign_dir = Path(campaign_dir).resolve(strict=True)
+    manifest = codex_upgrade._require_formal_campaign(campaign_dir)
+    if not codex_upgrade._requires_complete_vc_artifacts(manifest):
+        raise ReconcilerError("account-sealed-official 只用于 0.154.0 起的完整 VC 链 Campaign")
+    try:
+        official = codex_upgrade._load_stage_result(
+            campaign_dir, "capture-official", _replay_machine_receipts=False
+        )
+    except codex_upgrade.ConfigurationError as error:
+        raise ReconcilerError(f"official 阶段结果不可用：{error}") from error
+    attempt_binding = official.get("attempt")
+    if official.get("status") != "complete" or not isinstance(attempt_binding, Mapping):
+        raise ReconcilerError("official 阶段尚未封存（official_sealed），先 seal 再入账")
+    attempt_path = codex_upgrade._campaign_file(campaign_dir, str(attempt_binding.get("path", "")))
+    if not attempt_path.is_file() or _file_sha256(attempt_path) != attempt_binding.get("sha256"):
+        raise ReconcilerError("official 阶段绑定的 attempt.json 摘要漂移")
+    attempt_id = attempt_path.parent.name
+    if not codex_upgrade.SAFE_ID_RE.fullmatch(attempt_id):
+        raise ReconcilerError("attempt_id 格式非法")
+    observed = now or _utc_now()
+    project_root = _project_root(campaign_dir)
+    plan, head = _project_facts(project_root)
+    receipt_dir = _reconciliation_dir(campaign_dir, f"sealed-official-{attempt_id}")
+    request_part, provenance_binding, _copy_path = _request_part(
+        campaign_dir, manifest, receipt_dir, plan=plan, head=head, project_root=project_root, now=observed
+    )
+    if request_part["status"] == "unresolved":
+        raise ReconcilerError(
+            "已封存 official 阶段仍有请求数无法确定的 Job，不能入账："
+            + "、".join(request_part["unresolved_job_ids"])
+        )
+    official_path = codex_upgrade._stage_path(campaign_dir, "capture-official")[1]
+    batch = _commit_batch(
+        campaign_dir,
+        operation_id=f"account-sealed-official:{attempt_id}",
+        event_type="reconciliation_committed",
+        payload={
+            "campaign_id": str(manifest["campaign_id"]),
+            "subject_kind": "sealed_official_stage",
+            "subject_id": attempt_id,
+            "phase": "official",
+            "request": request_part,
+            "official_result_sha256": _file_sha256(official_path),
+            "attempt_sha256": str(attempt_binding.get("sha256")),
+        },
+        source={"kind": "sealed_official_accounting", "sha256": provenance_binding["sha256"]},
+        receipt_bindings=[provenance_binding],
+    )
+    try:
+        pushed = project_ledger.reconcile_project_ledger(project_root, campaign_dir=campaign_dir)
+    except project_ledger.ProjectLedgerError as error:
+        raise ReconcilerError(f"项目总账推送失败：{error}") from error
+    with project_ledger.project_lock(project_root):
+        new_head = project_ledger.replay_head(project_root)
+    return {
+        "status": "accounted",
+        "campaign_id": str(manifest["campaign_id"]),
+        "attempt_id": attempt_id,
+        "request": {
+            "status": request_part["status"],
+            "new_identity_keys": len(request_part["identity_keys"]),
+            "identity_key_count_total": request_part["identity_key_count_total"],
+            "estimated_delta": request_part["estimated_delta"],
+            "provenance_receipt_sha256": request_part["provenance_receipt_sha256"],
+        },
+        "batch": batch,
+        "pushed": {k: v for k, v in pushed.items() if k in {"blocked", "head_sequence", "head_sha256"}},
+        "project_ledger": {
+            "precise_total": new_head.get("precise_total"),
+            "estimated_total": new_head.get("estimated_total"),
+            "head_sequence": new_head.get("sequence"),
+        },
+    }
+
+
 # ---------------------------------------------------------------------------
 # 决策表
 # ---------------------------------------------------------------------------

@@ -8942,6 +8942,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "--approve-recovery-sha256",
         help="按 recovery-preview 的 review_sha256 批准冻结的恢复闭集。",
     )
+    account_sealed = subparsers.add_parser(
+        "account-sealed-official",
+        help=(
+            "A0a-11 补充：把已封存 official 阶段的模型请求（精确身份键＋估计上界）写入项目总账；"
+            "自身零请求，按 attempt 幂等"
+        ),
+    )
+    add_campaign_reference(account_sealed)
     resume = subparsers.add_parser("resume", help="按最近稳定状态续跑失败阶段")
     add_campaign_reference(resume)
     resume.add_argument("--candidate-id")
@@ -19189,12 +19197,18 @@ def _successor_recovery_control_transition(
         "target_version": successor_manifest.get("target_version"),
         "campaign_purpose": successor_manifest.get("campaign_purpose"),
     }
+    # A0a-8 关账本先废弃 active 阶段再停线，摘要 active_phase 为空；停线阶段取 stop_the_line 事件自身。
+    stop_phase: Any = (
+        stop_summary.get("active_phase") if isinstance(stop_summary, dict) else None
+    )
+    if stop_phase is None and isinstance(stop_summary, dict):
+        stop_phase = codex_upgrade_timing_ledger.stopped_phase(
+            stop_root, int(stop_summary.get("head_sequence", 0) or 0)
+        )
     if (
         not isinstance(stop_summary, dict)
         or stop_summary.get("status") != "stopped"
-        or not _successor_stop_phase_allowed(
-            arguments, stop_summary.get("active_phase")
-        )
+        or not _successor_stop_phase_allowed(arguments, stop_phase)
         or any(stop_summary.get(key) != value for key, value in expected_summary.items())
     ):
         raise ConfigurationError(
@@ -43544,6 +43558,17 @@ def _reconcile_attempt_command(arguments: argparse.Namespace) -> dict[str, Any]:
         raise ConfigurationError(str(error)) from error
 
 
+def _account_sealed_official_command(arguments: argparse.Namespace) -> dict[str, Any]:
+    """已封存 official 阶段的模型请求入总账（零请求、幂等）。"""
+
+    from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+    try:
+        return reconciler.account_sealed_official(arguments.campaign_dir)
+    except reconciler.ReconcilerError as error:
+        raise ConfigurationError(str(error)) from error
+
+
 def _attempt_reconciled_terminal(campaign_dir: Path, attempt_id: str) -> dict[str, Any] | None:
     """已对账的孤儿 attempt（无 attempt.json）以对账收据为终态，不再视为 active。"""
 
@@ -43924,6 +43949,9 @@ def _main_without_campaign_lease(argv: list[str] | None = None) -> int:
         elif command == "reconcile-attempt":
             result = _reconcile_attempt_command(arguments)
             return_code = 0 if result.get("status") == "recoverable" else 3
+        elif command == "account-sealed-official":
+            result = _account_sealed_official_command(arguments)
+            return_code = 0
         elif command == "status":
             result = campaign_status(arguments.campaign_dir, arguments.candidate_id)
             return_code = 0
