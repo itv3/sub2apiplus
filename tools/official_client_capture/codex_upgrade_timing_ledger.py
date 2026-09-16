@@ -232,6 +232,12 @@ PRODUCER_FREEZE_SUCCESSORS = (
         "scope": "upstream-codex-0154-vc5-client-checkpoint-legal-stop-20260916-freeze-successor",
         "result": "manual_actions_required",
     },
+    {
+        "path": "docs/egress/maintenance/upstream-codex-0154-vc5-a15-models-cache-restart-20260916-freeze-successor.json",
+        "base_commit": "2aed4f8b2ea742f4177d8de2e8299f7d627d8dcd",
+        "scope": "upstream-codex-0154-vc5-a15-models-cache-restart-20260916-freeze-successor",
+        "result": "manual_actions_required",
+    },
 )
 
 
