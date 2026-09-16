@@ -161,6 +161,16 @@ class CandidateAuxCaptureScriptTest(unittest.TestCase):
             self.source,
         )
 
+    def test_missing_model_mapping_is_not_narrowed_by_image_fixture(self) -> None:
+        """账号没有显式 model_mapping 时不得注入只含图片模型的白名单，
+        否则 A09 的 Lite 文本模型会在入口被判 model_not_found。"""
+        guard = self.source.index("if [[ $original_model_mapping_state == missing: ]]; then")
+        inject = self.source.index("jsonb_build_object('$image_model','$image_model')")
+        armed = self.source.index("model_mapping_restore_armed=1")
+        self.assertLess(guard, armed)
+        self.assertLess(armed, inject)
+        self.assertIn("不注入白名单", self.source[guard:inject])
+
     def test_live_session_ended_must_close_record_and_release_all_leases(self) -> None:
         self.assertIn("wait_live_cleanup()", self.source)
         self.assertIn('call_key="live:call:$call_hash"', self.source)

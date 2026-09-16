@@ -883,15 +883,22 @@ proxy_bound=1
 
 # 账号 99 的长期配置使用显式文本模型白名单；图片抓包只在本轮临时加入图片
 # 模型，并由 EXIT 钩子恢复原始字段。先武装恢复标记，再执行更新，覆盖中断窗口。
-model_mapping_restore_armed=1
-model_mapping_restored=0
-db_query "update accounts set credentials = jsonb_set(
-  coalesce(credentials,'{}'::jsonb),
-  '{model_mapping}',
-  coalesce(credentials->'model_mapping','{}'::jsonb) ||
-    jsonb_build_object('$image_model','$image_model'),
-  true
-) where id = $account_id" >/dev/null
+# 账号没有显式 model_mapping 时不注入：空映射的 OAuth 账号按可服务规则本就能服务
+# 图片模型，而注入后的白名单只剩图片模型，会让 A09 的 Lite 文本模型在入口被判
+# model_not_found（HTTP 404）、根本不会出站。
+if [[ $original_model_mapping_state == missing: ]]; then
+  echo "账号 #$account_id 无显式 model_mapping：图片模型经 OAuth 可服务规则放行，不注入白名单。"
+else
+  model_mapping_restore_armed=1
+  model_mapping_restored=0
+  db_query "update accounts set credentials = jsonb_set(
+    coalesce(credentials,'{}'::jsonb),
+    '{model_mapping}',
+    coalesce(credentials->'model_mapping','{}'::jsonb) ||
+      jsonb_build_object('$image_model','$image_model'),
+    true
+  ) where id = $account_id" >/dev/null
+fi
 
 if ! docker cp "$ca_cert" "$service_container:$custom_ca_path" >/dev/null; then
   # 基线已确认该路径不存在；即使复制只完成了一部分，恢复钩子也必须尝试清理。
