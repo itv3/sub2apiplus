@@ -4736,6 +4736,7 @@ def _mutable_command_coordinates(
         "stage-profile",
         "successor",
         "reuse-official-evidence",
+        "account-sealed-official",
     }:
         return command, "official", None, False
     raise ConfigurationError(f"不受支持的命令：{command}")
@@ -23184,6 +23185,14 @@ def _validate_predecessor_import_receipt(
                 "total_live_request_count"
             ),
         }
+        # A0a-8 关账本先废弃 active 阶段再停线，摘要 active_phase 为空；停线阶段取 stop_the_line 事件。
+        import_stop_phase: Any = (
+            stop_summary.get("active_phase") if isinstance(stop_summary, dict) else None
+        )
+        if import_stop_phase is None and isinstance(stop_summary, dict):
+            import_stop_phase = codex_upgrade_timing_ledger.stopped_phase(
+                stop_root, int(stop_summary.get("head_sequence", 0) or 0)
+            )
         if (
             not isinstance(stop_summary, dict)
             or stop_summary.get("status") != "stopped"
@@ -23191,11 +23200,11 @@ def _validate_predecessor_import_receipt(
             or stop_summary.get("upgrade_id")
             != predecessor_timing.get("upgrade_id")
             or (
-                stop_summary.get("active_phase")
+                import_stop_phase
                 not in codex_upgrade_timing_ledger.PHASE_ORDER[1:]
                 and not (
                     control_refresh_import
-                    and stop_summary.get("active_phase") == "VC-0"
+                    and import_stop_phase == "VC-0"
                 )
             )
         ):
@@ -26820,6 +26829,11 @@ def _phase_recovery_controls_from_arguments(
     stop_phase = stop_summary.get("active_phase") if isinstance(
         stop_summary, Mapping
     ) else None
+    if stop_phase is None and isinstance(stop_summary, Mapping):
+        # A0a-8 关账本后摘要 active_phase 为空；停线阶段取 stop_the_line 事件自身。
+        stop_phase = codex_upgrade_timing_ledger.stopped_phase(
+            stop_root, int(stop_summary.get("head_sequence", 0) or 0)
+        )
     legacy_vc0_scope: dict[str, Any] | None = None
     if stop_phase == codex_upgrade_timing_ledger.PHASE_ORDER[0]:
         legacy_vc0_scope = _legacy_vc0_phase_recovery_scope(
@@ -26834,7 +26848,7 @@ def _phase_recovery_controls_from_arguments(
         not isinstance(stop_summary, Mapping)
         or stop_summary.get("status") != "stopped"
         or (
-            stop_summary.get("active_phase")
+            stop_phase
             not in codex_upgrade_timing_ledger.PHASE_ORDER[1:]
             and legacy_vc0_scope is None
         )
