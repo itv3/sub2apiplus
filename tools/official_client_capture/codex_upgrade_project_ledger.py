@@ -109,7 +109,10 @@ BLOCKED_ALLOWED_EVENTS = frozenset(
     {"accounting_resolved", "root_cause_repaired", "reconciliation_committed", "campaign_terminal"}
 )
 # B9：compare／accept 也是总账消费者，写收据前先经准入门禁。
-CONSUMER_COMMANDS = frozenset({"plan", "reuse-official-evidence", "campaign-run", "resume", "seal", "compare", "accept"})
+# canonical-advance 的 VC-6 生产步骤按命令本身准入；其 seal／compare／accept 步骤映射到同名消费者。
+CONSUMER_COMMANDS = frozenset(
+    {"plan", "reuse-official-evidence", "campaign-run", "resume", "seal", "compare", "accept", "canonical-advance"}
+)
 ESTIMATION_POLICIES = ("none", "upper_bound_from_sibling", "upper_bound_from_sibling_or_turn_ratio")
 REPAIR_KINDS = ("code", "environment")
 DEFAULT_RETRY_LIMIT = 2

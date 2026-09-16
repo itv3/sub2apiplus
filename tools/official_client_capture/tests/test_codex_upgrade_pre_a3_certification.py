@@ -17,7 +17,13 @@ from tools.official_client_capture.tests import test_codex_upgrade_policy_certif
 QUICK_SCENARIOS = tuple(
     scenario
     for scenario in certification.SCENARIOS
-    if scenario[0] in {"harden-evidence-permissions.two-step", "wire-transition.intent-final", "batch.uncommitted-not-pushed"}
+    if scenario[0]
+    in {
+        "harden-evidence-permissions.two-step",
+        "wire-transition.intent-final",
+        "batch.uncommitted-not-pushed",
+        "vc-chain.ledger-events-derivation",
+    }
 )
 
 
@@ -52,6 +58,19 @@ class PreA3CertificationTests(unittest.TestCase):
             names = [item["name"] for item in receipt["scenarios"]]
             self.assertEqual(names[:-1], [scenario[0] for scenario in QUICK_SCENARIOS])
             self.assertEqual(names[-1], "accounting.resolved-unblocks")
+            # VC-2～VC-6 派发链场景已并入路径认证，发布认证据此授权后续阶段。
+            self.assertEqual(
+                [scenario[0] for scenario in certification.SCENARIOS if scenario[0].startswith("vc-chain.")],
+                [
+                    "vc-chain.batches-through-vc6",
+                    "vc-chain.stopped-ledger-rejected-before-write",
+                    "vc-chain.failed-batch-abandons-stage",
+                    "vc-chain.admission-before-any-write",
+                    "vc-chain.ledger-events-derivation",
+                    "vc-chain.ledger-budget-bound-to-project",
+                    "vc-chain.candidate-seal-and-canonical-advance-consumers",
+                ],
+            )
             self.assertTrue(all(item["status"] == "passed" for item in receipt["scenarios"]), receipt["scenarios"])
             self.assertEqual(receipt["identity"], {name: policy_certification.current_identity()[name] for name in policy_certification.IDENTITY_FIELDS})
             # 场景夹具全部落在 staging 根下，且总账都是 fixture_only。

@@ -34,6 +34,10 @@ DEFAULT_STAGE_BUDGETS = {
     "VC-6": 75,
 }
 DEFAULT_TOTAL_BUDGET_MINUTES = 360
+# 未绑定项目总账时沿用文档上限；绑定后由总账绝对截止裁剪（见 _budget_ceilings）。
+UNBOUND_TOTAL_BUDGET_CEILING_MINUTES = 360
+PROJECT_LEDGER_BINDING_FIELD = "project_ledger_binding"
+PROJECT_LEDGER_BINDING_FIELDS = {"path", "plan_sha256", "absolute_deadline_utc"}
 DEFAULT_RETRY_LIMIT = 2
 PURPOSES = frozenset({"validation_only", "production_replacement"})
 EVIDENCE_DECISIONS = frozenset({"reuse", "recapture"})
@@ -825,25 +829,53 @@ def _producer_identity_matches(frozen: Any, current: dict[str, str]) -> bool:
     return True
 
 
+def _budget_ceilings(plan: dict[str, Any]) -> tuple[int, dict[str, int]]:
+    """按是否绑定项目总账给出总预算与阶段预算上限。
+
+    未绑定时沿用文档口径（总 360 分钟、阶段各自默认上限）。绑定后 Campaign 账本
+    的总预算由总账绝对截止裁剪：上限是从账本开始到绝对截止的整分钟数，阶段预算
+    再由 Campaign 计划在总预算内自行规定——VC-2 起的人工核对发生在批次之间，
+    不能再按 75 分钟墙钟硬切。框架 §5.3.5 只要求连续计时与先到即停线，数值由
+    客户端指南或已批准的 Campaign 计划规定。
+    """
+
+    binding = plan.get(PROJECT_LEDGER_BINDING_FIELD)
+    if binding is None:
+        return UNBOUND_TOTAL_BUDGET_CEILING_MINUTES, dict(DEFAULT_STAGE_BUDGETS)
+    _expect(binding, set(PROJECT_LEDGER_BINDING_FIELDS), "project_ledger_binding")
+    path = binding.get("path")
+    if not isinstance(path, str) or not path or not PurePosixPath(path).is_absolute():
+        raise TimingLedgerError("project_ledger_binding.path 必须是绝对路径")
+    plan_sha256 = binding.get("plan_sha256")
+    if not isinstance(plan_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", plan_sha256):
+        raise TimingLedgerError("project_ledger_binding.plan_sha256 非法")
+    deadline = _timestamp(binding.get("absolute_deadline_utc"), "project_ledger_binding.absolute_deadline_utc")
+    started = _timestamp(plan.get("started_at_utc"), "started_at_utc")
+    minutes = int((deadline - started).total_seconds() // 60)
+    if minutes < 1:
+        raise TimingLedgerError("项目总账绝对截止早于账本开始时间，无法冻结预算")
+    return minutes, {phase: minutes for phase in PHASE_ORDER}
+
+
 def _validate_plan(plan: dict[str, Any]) -> dict[str, Any]:
-    _expect(
-        plan,
-        {
-            "schema_version",
-            "upgrade_id",
-            "created_at_utc",
-            "started_at_utc",
-            "baseline_version",
-            "target_version",
-            "campaign_purpose",
-            "evidence_decision",
-            "total_budget_minutes",
-            "stage_budgets_minutes",
-            "same_root_cause_retry_limit",
-            "producer",
-        },
-        "ledger plan",
-    )
+    required = {
+        "schema_version",
+        "upgrade_id",
+        "created_at_utc",
+        "started_at_utc",
+        "baseline_version",
+        "target_version",
+        "campaign_purpose",
+        "evidence_decision",
+        "total_budget_minutes",
+        "stage_budgets_minutes",
+        "same_root_cause_retry_limit",
+        "producer",
+    }
+    if isinstance(plan, dict) and PROJECT_LEDGER_BINDING_FIELD in plan:
+        # 历史账本没有该字段；有字段时必须闭合校验，不允许悄悄漂移。
+        required = required | {PROJECT_LEDGER_BINDING_FIELD}
+    _expect(plan, required, "ledger plan")
     if plan.get("schema_version") != PLAN_SCHEMA:
         raise TimingLedgerError("ledger plan schema_version 不匹配")
     _safe_id(plan.get("upgrade_id"), "upgrade_id")
@@ -860,16 +892,18 @@ def _validate_plan(plan: dict[str, Any]) -> dict[str, Any]:
         raise TimingLedgerError("campaign_purpose 非法")
     if plan.get("evidence_decision") not in EVIDENCE_DECISIONS:
         raise TimingLedgerError("P0 必须冻结唯一 reuse／recapture 决定")
+    total_ceiling, stage_ceilings = _budget_ceilings(plan)
     total = plan.get("total_budget_minutes")
-    if not isinstance(total, int) or isinstance(total, bool) or total <= 0 or total > 360:
-        raise TimingLedgerError("总墙钟预算必须为 1～360 分钟")
+    if not isinstance(total, int) or isinstance(total, bool) or total <= 0 or total > total_ceiling:
+        raise TimingLedgerError(f"总墙钟预算必须为 1～{total_ceiling} 分钟")
     budgets = plan.get("stage_budgets_minutes")
     if not isinstance(budgets, dict) or list(budgets) != list(PHASE_ORDER):
         raise TimingLedgerError("阶段预算必须按 VC-0～VC-6 完整排序")
-    for phase, default in DEFAULT_STAGE_BUDGETS.items():
+    for phase in PHASE_ORDER:
         value = budgets.get(phase)
-        if not isinstance(value, int) or isinstance(value, bool) or value <= 0 or value > default:
-            raise TimingLedgerError(f"{phase} 预算必须为正数且不得宽于文档上限 {default}")
+        ceiling = min(stage_ceilings[phase], total)
+        if not isinstance(value, int) or isinstance(value, bool) or value <= 0 or value > ceiling:
+            raise TimingLedgerError(f"{phase} 预算必须为正数且不得宽于上限 {ceiling}")
     if plan.get("same_root_cause_retry_limit") != DEFAULT_RETRY_LIMIT:
         raise TimingLedgerError("同根因重试上限必须固定为 2")
     if not _producer_identity_matches(plan.get("producer"), _producer()):
@@ -1144,9 +1178,15 @@ def create_ledger(
     started_at_utc: str | None = None,
     total_budget_minutes: int = DEFAULT_TOTAL_BUDGET_MINUTES,
     stage_budgets_minutes: dict[str, int] | None = None,
+    project_ledger_dir: Path | None = None,
 ) -> dict[str, Any]:
     root = _private_ledger(root, must_exist=False)
     started = started_at_utc or _utc_now()
+    binding = (
+        _project_ledger_binding(project_ledger_dir)
+        if project_ledger_dir is not None
+        else None
+    )
     plan = {
         "schema_version": PLAN_SCHEMA,
         "upgrade_id": upgrade_id,
@@ -1161,6 +1201,8 @@ def create_ledger(
         "same_root_cause_retry_limit": DEFAULT_RETRY_LIMIT,
         "producer": _producer(),
     }
+    if binding is not None:
+        plan[PROJECT_LEDGER_BINDING_FIELD] = binding
     _validate_plan(plan)
     root.mkdir(mode=0o700)
     (root / "events").mkdir(mode=0o700)
@@ -1183,6 +1225,45 @@ def create_ledger(
     _validate_event_shape(root, initial, 1)
     _write_once(root / "events" / "000001.json", initial)
     return inspect_ledger(root, now=started)
+
+
+def _project_ledger_binding(project_ledger_dir: Path) -> dict[str, Any]:
+    """只读绑定项目总账 plan：绝对路径、plan 摘要与绝对截止时间。"""
+
+    directory = Path(project_ledger_dir)
+    if not directory.is_absolute() or directory.is_symlink() or not directory.is_dir():
+        raise TimingLedgerError("项目总账目录必须是存在的非符号链接绝对目录")
+    plan_path = directory / "plan.json"
+    if plan_path.is_symlink() or not plan_path.is_file():
+        raise TimingLedgerError("项目总账缺少 plan.json")
+    payload, _raw = _load_json(plan_path, "项目总账 plan")
+    if payload.get("schema_version") != "upgrade-project-ledger-plan/v1":
+        raise TimingLedgerError("项目总账 plan schema 非法")
+    deadline = payload.get("absolute_deadline_utc")
+    _timestamp(deadline, "项目总账 absolute_deadline_utc")
+    return {
+        "path": str(directory.resolve(strict=True)),
+        "plan_sha256": _sha256_file(plan_path),
+        "absolute_deadline_utc": str(deadline),
+    }
+
+
+def phase_ledger_state(root: Path, *, now: str | None = None) -> dict[str, Any]:
+    """在 inspect 摘要之上补充按事件顺序收集的已完成阶段列表。
+
+    VC-2 起的批次派发入口用它决定要补写哪些 stage_completed／stage_started：
+    摘要只暴露 active_phase，看不出哪些阶段已经登记完成。
+    """
+
+    root = _private_ledger(root, must_exist=True)
+    summary = inspect_ledger(root, now=now)
+    completed: list[str] = []
+    for event, _raw in _load_events(root):
+        if event.get("event_type") == "stage_completed":
+            phase = str(event.get("phase"))
+            if phase not in completed:
+                completed.append(phase)
+    return {**summary, "completed_phases": completed}
 
 
 def append_event(
@@ -1368,6 +1449,20 @@ def assert_usable(
     if receipt["summary"]["status"] != "active":
         raise TimingLedgerError("冻结 checkpoint 在生成时已非 active")
     return summary
+
+
+def _stage_budget_arguments(values: list[str]) -> dict[str, int] | None:
+    """解析 ``VC-N=分钟`` 覆盖项；未覆盖的阶段沿用默认预算。"""
+
+    if not values:
+        return None
+    budgets = dict(DEFAULT_STAGE_BUDGETS)
+    for item in values:
+        phase, separator, minutes = str(item).partition("=")
+        if not separator or phase not in PHASE_ORDER or not minutes.isdigit() or int(minutes) <= 0:
+            raise TimingLedgerError(f"阶段预算参数非法：{item}（应为 VC-N=正整数分钟）")
+        budgets[phase] = int(minutes)
+    return budgets
 
 
 def _receipt_arguments(values: list[str]) -> list[dict[str, str]]:
@@ -1629,6 +1724,18 @@ def build_parser() -> argparse.ArgumentParser:
     create_parser.add_argument("--campaign-purpose", choices=sorted(PURPOSES), required=True)
     create_parser.add_argument("--evidence-decision", choices=sorted(EVIDENCE_DECISIONS), required=True)
     create_parser.add_argument("--total-budget-minutes", type=int, default=DEFAULT_TOTAL_BUDGET_MINUTES)
+    create_parser.add_argument(
+        "--project-ledger-dir",
+        type=Path,
+        help="绑定项目总账后，总预算与阶段预算上限改由总账绝对截止裁剪（0.154 起 VC-2～VC-6 含人工核对时使用）",
+    )
+    create_parser.add_argument(
+        "--stage-budget-minutes",
+        action="append",
+        default=[],
+        metavar="PHASE=MINUTES",
+        help="覆盖单个阶段预算，可重复；未给出的阶段沿用默认值",
+    )
     append_parser = commands.add_parser("append", help="追加一个不可覆盖的计时事件")
     append_parser.add_argument("--ledger-dir", type=Path, required=True)
     append_parser.add_argument("--event-id", required=True)
@@ -1670,6 +1777,8 @@ def main(argv: list[str] | None = None) -> int:
                 campaign_purpose=arguments.campaign_purpose,
                 evidence_decision=arguments.evidence_decision,
                 total_budget_minutes=arguments.total_budget_minutes,
+                stage_budgets_minutes=_stage_budget_arguments(arguments.stage_budget_minutes),
+                project_ledger_dir=arguments.project_ledger_dir,
             )
         elif arguments.command == "append":
             bindings = _receipt_arguments(arguments.receipt)

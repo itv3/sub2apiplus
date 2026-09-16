@@ -76,6 +76,9 @@ class ProjectLedgerIntegrationTests(unittest.TestCase):
             # 消费者门禁通过
             codex_upgrade._assert_project_ledger_consumer("resume", argparse.Namespace(campaign_dir=campaign_dir))
             codex_upgrade._assert_project_ledger_consumer("capture-official", argparse.Namespace(campaign_dir=campaign_dir, capture_action="seal"))
+            codex_upgrade._assert_project_ledger_consumer("capture-candidate", argparse.Namespace(campaign_dir=campaign_dir, capture_action="seal"))
+            for step in ("seal", "compare", "accept", "production-activation"):
+                codex_upgrade._assert_project_ledger_consumer("canonical-advance", argparse.Namespace(campaign_dir=campaign_dir, canonical_step=step))
             supervisor._assert_campaign_run_admitted(campaign_dir)
 
     def test_formal_0154_plan_without_ledger_is_rejected_and_nothing_is_written(self) -> None:
@@ -106,8 +109,15 @@ class ProjectLedgerIntegrationTests(unittest.TestCase):
                 codex_upgrade._assert_project_ledger_consumer("resume", argparse.Namespace(campaign_dir=campaign_dir))
             with self.assertRaisesRegex(supervisor.SupervisorError, "项目总账拒绝派发"):
                 supervisor._assert_campaign_run_admitted(campaign_dir)
-            # capture-official run 不是消费者
+            # 候选 seal 与 canonical-advance 的每个步骤同样是消费者，不能绕开门禁。
+            with self.assertRaisesRegex(ledger.ProjectLedgerError, "seal 拒绝"):
+                codex_upgrade._assert_project_ledger_consumer("capture-candidate", argparse.Namespace(campaign_dir=campaign_dir, capture_action="seal"))
+            for step, consumer in (("seal", "seal"), ("compare", "compare"), ("accept", "accept"), ("rollback-verification", "canonical-advance")):
+                with self.assertRaisesRegex(ledger.ProjectLedgerError, f"{consumer} 拒绝"):
+                    codex_upgrade._assert_project_ledger_consumer("canonical-advance", argparse.Namespace(campaign_dir=campaign_dir, canonical_step=step))
+            # capture-official／capture-candidate run 不是消费者
             codex_upgrade._assert_project_ledger_consumer("capture-official", argparse.Namespace(campaign_dir=campaign_dir, capture_action="run"))
+            codex_upgrade._assert_project_ledger_consumer("capture-candidate", argparse.Namespace(campaign_dir=campaign_dir, capture_action="run"))
         with tempfile.TemporaryDirectory() as directory:
             root = _data_root(directory, with_ledger=False)
             legacy = root / "evidence" / "campaigns" / "l1"

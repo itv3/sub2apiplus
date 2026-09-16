@@ -424,6 +424,102 @@ class TimingLedgerTests(unittest.TestCase):
             ledger.RECEIPT_SCHEMA,
         )
 
+    def test_project_ledger_binding_lets_campaign_plan_set_budgets(self) -> None:
+        """绑定项目总账后，总预算与阶段预算由总账绝对截止裁剪，不再按 360／75 硬切。"""
+
+        from tools.official_client_capture import codex_upgrade_project_ledger as project_ledger
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            root.chmod(0o700)
+            project_root = root / project_ledger.LEDGER_DIR_NAME
+            started = datetime(2026, 9, 16, tzinfo=timezone.utc)
+            deadline = started + timedelta(days=3)
+            project_ledger.create_project_ledger(
+                project_root,
+                project_id="binding-project",
+                absolute_deadline_utc=deadline.isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+                deadline_approved_by="test",
+                estimation_policy="upper_bound_from_sibling_or_turn_ratio",
+                estimation_policy_approved_by="test",
+                fixture_only=False,
+            )
+            unbound = root / "unbound"
+            with self.assertRaisesRegex(ledger.TimingLedgerError, "1～360"):
+                ledger.create_ledger(
+                    unbound,
+                    upgrade_id="unbound",
+                    baseline_version="0.151.0",
+                    target_version="0.154.0",
+                    campaign_purpose="validation_only",
+                    evidence_decision="reuse",
+                    started_at_utc=started.isoformat(),
+                    total_budget_minutes=24 * 60,
+                )
+            bound = root / "bound"
+            summary = ledger.create_ledger(
+                bound,
+                upgrade_id="bound",
+                baseline_version="0.151.0",
+                target_version="0.154.0",
+                campaign_purpose="validation_only",
+                evidence_decision="reuse",
+                started_at_utc=started.isoformat(),
+                total_budget_minutes=48 * 60,
+                stage_budgets_minutes={**ledger.DEFAULT_STAGE_BUDGETS, "VC-2": 24 * 60, "VC-5": 6 * 60},
+                project_ledger_dir=project_root,
+            )
+            self.assertEqual(summary["status"], "active")
+            plan = json.loads((bound / "ledger.json").read_text(encoding="utf-8"))
+            binding = plan[ledger.PROJECT_LEDGER_BINDING_FIELD]
+            self.assertEqual(binding["path"], str(project_root.resolve()))
+            self.assertEqual(binding["absolute_deadline_utc"], plan["stage_budgets_minutes"] and binding["absolute_deadline_utc"])
+            self.assertEqual(plan["stage_budgets_minutes"]["VC-2"], 24 * 60)
+            # 总预算不得超过总账剩余；阶段预算不得超过总预算。
+            with self.assertRaisesRegex(ledger.TimingLedgerError, "总墙钟预算"):
+                ledger.create_ledger(
+                    root / "over",
+                    upgrade_id="over",
+                    baseline_version="0.151.0",
+                    target_version="0.154.0",
+                    campaign_purpose="validation_only",
+                    evidence_decision="reuse",
+                    started_at_utc=started.isoformat(),
+                    total_budget_minutes=4 * 24 * 60,
+                    project_ledger_dir=project_root,
+                )
+            with self.assertRaisesRegex(ledger.TimingLedgerError, "VC-2 预算"):
+                ledger.create_ledger(
+                    root / "stage-over",
+                    upgrade_id="stage-over",
+                    baseline_version="0.151.0",
+                    target_version="0.154.0",
+                    campaign_purpose="validation_only",
+                    evidence_decision="reuse",
+                    started_at_utc=started.isoformat(),
+                    total_budget_minutes=120,
+                    stage_budgets_minutes={**ledger.DEFAULT_STAGE_BUDGETS, "VC-2": 121},
+                    project_ledger_dir=project_root,
+                )
+            # 历史（未绑定）账本的 plan 不含绑定字段，仍按旧规则读取。
+            unbound_plan = json.loads((root / "bound" / "ledger.json").read_text(encoding="utf-8"))
+            self.assertIn(ledger.PROJECT_LEDGER_BINDING_FIELD, unbound_plan)
+            self.assertEqual(ledger._stage_budget_arguments(["VC-2=1440", "VC-6=90"])["VC-2"], 1440)
+            with self.assertRaisesRegex(ledger.TimingLedgerError, "阶段预算参数非法"):
+                ledger._stage_budget_arguments(["VC-9=10"])
+
+    def test_phase_ledger_state_lists_completed_phases_in_order(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "UpgradeTimingLedger"
+            self._create(root)
+            ledger.append_event(root, event_id="c0", phase="VC-0", event_type="stage_completed", next_action="x", recorded_at_utc=self._at(1))
+            ledger.append_event(root, event_id="s1", phase="VC-1", event_type="stage_started", next_action="x", recorded_at_utc=self._at(2))
+            ledger.append_event(root, event_id="c1", phase="VC-1", event_type="stage_completed", next_action="x", recorded_at_utc=self._at(3))
+            state = ledger.phase_ledger_state(root, now=self._at(4))
+            self.assertEqual(state["completed_phases"], ["VC-0", "VC-1"])
+            self.assertIsNone(state["active_phase"])
+            self.assertEqual(state["head_sequence"], 4)
+
 
 if __name__ == "__main__":
     unittest.main()

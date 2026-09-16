@@ -77,3 +77,68 @@ attempt 与收据保持生成时原文，只读解释，不得用当前工具重
 | `finalize-vc1-deadline-orphan` 及 23 个 `_deadline_orphan_*` 执行 helper、VC-0 收尾的孤儿请求审计 | 原 deadline 到期后直接封口孤儿 attempt 并追加唯一停线事件 | 冻结了 `29/27/2/15/0/12` 与 `26+38=64` 等一次事故数量；deadline 到期由 reconciler 判定 `deadline_wall_clock` | `deadline_orphan_finalization` 字段、合同与审计由主编排器只读 loader 按结构自洽校验 |
 | `repair-failure-closure`（指南 §4.0.4 段落） | 修复 VC-0 收口失败闭合的零请求计数缺陷 | 文档条款退役；代码入口只保留历史重放 | 审计目录只读 |
 
+<a id="codex-0154-transitional-recovery-clauses"></a>
+## 5. 0.154 首轮事故链的过渡恢复条款（只读，2026-09-16 自指南移入）
+
+下列三段条款原在指南第四部分公共执行约定内，是 0.154.0 首轮正式 VC-1 事故链期间写入的过渡恢复规则。
+改造方案 B0 的 reconciler 成为唯一对账入口后，它们不再是新 Campaign 的执行入口：`reconcile-attempt` 统一处理
+reservation 之后的任何中断，真实补跑必须携带已批准的 `recovery-preview/v1`。对应代码入口
+（`compile-vc-interrupted-recovery-batch`、`recover-vc1-interruption`、`codex-upgrade-campaign-run/v3`、
+`_metadata_only_seal_repair_allowed`、`permanent-stop-*` 只读承接）按方案“保留 v3、不删 predispatch_stop”原文保留，
+只服务历史回归与只读解析；退役时按 B1 带证明删除流程再登记一次 successor。以下为原文，不再维护。
+
+### 5.1 metadata-only seal 例外与 `permanent-stop-*` 只读承接（原公共执行约定）
+
+仅有一种 metadata-only seal 例外：Candidate 已进入 `awaiting_receipts`，全部 Candidate Job 均为
+`reused/complete`，executed／failed／pending 集合为空，且尚未生成 evidence manifest、seal draft 或
+seal preview；同时变化只能属于 `control／evaluator／orchestrator`。此时 `campaign-run` 才能登记
+`metadata_only_seal_repair`，不得重发请求、创建旧 evaluation transition，或承接已有失败和已开始深度扫描
+的 attempt。
+
+若来源 Ledger 已因 `permanent-stop-*` 停线，只允许在冻结 checkpoint 仍为 active、停线后唯一新增事件使
+`head_sequence` 恰好加一且 `live_request_count=0` 时只读承接。历史 control epoch 还必须满足 boundary
+全零、仅因预算到期进入 `stop_required` 且没有同根因失败；其他 stopped／stop_required、多个新增事件、
+非零边界或 live 请求全部失败关闭。该分支必须核验来源 attempt 的 `environment/after`、`after_probe`、
+`probe-manifest.json` 和五份状态快照，以不可覆盖副本写入当前 attempt；不得重新探测环境、发送请求或改写
+来源文件。
+
+### 5.2 VC-1 `KeyboardInterrupt` 孤儿的单次恢复（原公共执行约定）
+
+只有同时满足下列条件才使用本分支：失败父批次是 v2 且终态为 `failed/KeyboardInterrupt`；官方 attempt
+已有同一 reservation 和可重放 checkpoint，但没有 `attempt.json`；checkpoint 同时包含已完成项和
+失败／待执行项；Campaign、目标产物、账号权限、模型可见性、环境语义及原始 deadline 未变化。工具变化
+必须逐文件分类，评估／控制侧可离线承接；产出侧文件必须精确映射到 `failed ∪ pending`，不得触及
+`complete`。
+
+先直接编译一次性合同和 v3 清单：
+
+```bash
+python3 tools/official_client_capture/codex_upgrade.py \
+  compile-vc-interrupted-recovery-batch \
+  --campaign-dir /绝对路径/campaign \
+  --sequence <失败批次序号+1> \
+  --source-attempt /绝对路径/campaign/official/attempts/<attempt-id> \
+  --failed-supervisor-run-dir /绝对路径/原state-dir/run-<owner-nonce> \
+  --timing-ledger-dir /绝对路径/连续时间账本 \
+  --deployment-receipt /绝对路径/当前ARM64工具部署收据
+```
+
+随后必须使用失败批次原来的 `state-dir` 立即执行生成的 v3 清单；改用空目录会因缺少唯一直接失败前序而
+拒绝：
+
+```bash
+python3 tools/official_client_capture/codex_upgrade_supervisor.py campaign-run \
+  --state-dir /绝对路径/原state-dir \
+  --manifest /绝对路径/campaign/control/vc/run-manifests/<序号>-vc-1.json
+```
+
+v3 恰好包含一个 `recover-vc1-interruption` 动作。它只补齐原 attempt 的 after／ARM64 after／恢复收据，
+写入不可变失败终态和专用 transition，再调用 `resume --rerun-failed --preview-recovery`；禁止携带
+`--acknowledge-live-requests`。成功输出必须逐字证明 execute／reuse 集合与合同一致，并满足
+`reservation_exists=false`、`live_request_count=0`、`scanned_bytes=0`。这一步不生成 VC-1 checkpoint，
+也不表示 execute 项已经运行。
+
+操作员确认预览后，按普通 action plan 编译下一序号的 VC-1 v2 批次，动作才可携带
+`resume --rerun-failed --acknowledge-live-requests` 执行冻结的 execute 闭集；复用项继续只读承接。
+合同、transition、源 attempt、失败 v2 和预览 v3 均只写追加，任一摘要、owner nonce、Ledger head、部署
+工具或闭集漂移都停线，不得重编同一序号或新建 reservation 试探。

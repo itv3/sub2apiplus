@@ -155,6 +155,56 @@ SCENARIOS: tuple[tuple[str, str, str, str, str], ...] = (
         "HardenEvidencePermissionsTests",
         "test_apply_refuses_content_drift_and_symlinks",
     ),
+    # ---- VC-2～VC-6 派发链（2026-09-16 增补）：零请求合成动作走真实原子入口 ----
+    (
+        "vc-chain.batches-through-vc6",
+        "只读导入 Campaign 从 VC-2 到 VC-6 逐批经 compile-and-run-vc-batch 派发：no-op 首批引导、总账 admission、账本阶段事件、checkpoint 链",
+        "tools.official_client_capture.tests.test_codex_upgrade",
+        "CodexUpgradeTest",
+        "test_vc_chain_batches_advance_ledger_and_checkpoints_through_vc6",
+    ),
+    (
+        "vc-chain.stopped-ledger-rejected-before-write",
+        "账本已停线时原子入口在编译前拒绝，不写 batch／manifest／run／停线收据",
+        "tools.official_client_capture.tests.test_codex_upgrade",
+        "CodexUpgradeTest",
+        "test_vc_chain_rejects_stopped_ledger_before_any_artifact_is_written",
+    ),
+    (
+        "vc-chain.failed-batch-abandons-stage",
+        "动作失败：父 run 写 stage_abandoned＋stop_the_line，后续批次被拒",
+        "tools.official_client_capture.tests.test_codex_upgrade",
+        "CodexUpgradeTest",
+        "test_vc_chain_failed_batch_abandons_stage_and_blocks_next_batch",
+    ),
+    (
+        "vc-chain.admission-before-any-write",
+        "总账拒绝时不进入编译、锁与账本",
+        "tools.official_client_capture.tests.test_codex_upgrade_atomic_dispatch",
+        "AtomicDispatchTests",
+        "test_governance_admission_rejection_happens_before_any_write",
+    ),
+    (
+        "vc-chain.ledger-events-derivation",
+        "阶段事件按账本阶段与 checkpoint 推导：同阶段不写、倒退与前序未封存拒绝",
+        "tools.official_client_capture.tests.test_codex_upgrade_atomic_dispatch",
+        "AtomicDispatchTests",
+        "test_batch_events_are_derived_from_ledger_phase_and_checkpoints",
+    ),
+    (
+        "vc-chain.ledger-budget-bound-to-project",
+        "Campaign 账本绑定项目总账后预算由绝对截止裁剪，人工核对不再按 75 分钟硬切",
+        "tools.official_client_capture.tests.test_codex_upgrade_timing_ledger",
+        "TimingLedgerTests",
+        "test_project_ledger_binding_lets_campaign_plan_set_budgets",
+    ),
+    (
+        "vc-chain.candidate-seal-and-canonical-advance-consumers",
+        "候选 seal 与 canonical-advance 各步骤同为总账消费者，未注册即拒绝",
+        "tools.official_client_capture.tests.test_codex_upgrade_project_ledger_integration",
+        "ProjectLedgerIntegrationTests",
+        "test_consumers_reject_unregistered_0154_formal_and_pass_legacy",
+    ),
 )
 
 

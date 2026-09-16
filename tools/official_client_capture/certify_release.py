@@ -234,7 +234,8 @@ def compose_certification(
         "job_rehearsal": dict(job_rehearsal),
         "atomic_double_rehearsal": dict(atomic_double_rehearsal),
         "campaign_run_rehearsal": dict(campaign_run_rehearsal) if campaign_run_rehearsal else None,
-        "authorized_scopes": ["VC-0", "A3b"],
+        # pre-A3 路径认证自 2026-09-16 起含 VC-2～VC-6 派发链场景，发布认证据此授权后续阶段。
+        "authorized_scopes": ["VC-0", "A3b", "VC-2", "VC-3", "VC-4", "VC-5", "VC-6"],
         "superseded_by": None,
     }
     return {**core, "receipt_sha256": _fingerprint(core)}

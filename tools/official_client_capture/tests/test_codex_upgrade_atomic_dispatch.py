@@ -12,9 +12,38 @@ from unittest import mock
 
 from tools.official_client_capture import codex_upgrade
 from tools.official_client_capture import codex_upgrade_supervisor as supervisor
+from tools.official_client_capture import codex_upgrade_timing_ledger as timing
 
 
 class AtomicDispatchTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # 既有用例只覆盖锁与停线收据；总账 admission 与账本推进另有专项用例，
+        # 这里统一替换成不触盘的夹具，避免每个用例重复 mock。
+        self._governance = {
+            "manifest": {"campaign_id": "atomic-fixture"},
+            "plan": {},
+            "ledger_dir": Path("/nonexistent-ledger"),
+            "ledger_head_sequence": 1,
+            "ledger_events": [("stage_started", "VC-1")],
+            "admission": {"head_sequence": 1},
+        }
+        self._governance_patchers: list[object] = []
+        for name, value in (
+            ("_prepare_atomic_batch_governance", self._governance),
+            ("_append_timing_ledger_batch_events", []),
+            ("_complete_timing_ledger_phase_after_batch", None),
+        ):
+            patcher = mock.patch.object(codex_upgrade, name, return_value=value)
+            patcher.start()
+            self._governance_patchers.append(patcher)
+        self.addCleanup(self._stop_governance_patches)
+
+    def _stop_governance_patches(self) -> None:
+        """专项用例需要真实的治理函数时调用；cleanup 再次调用是空操作。"""
+
+        while self._governance_patchers:
+            self._governance_patchers.pop().stop()
+
     def _arguments(self, root: Path) -> argparse.Namespace:
         campaign_dir = root / "campaign"
         state_dir = root / "state"
@@ -104,6 +133,8 @@ class AtomicDispatchTests(unittest.TestCase):
             self.assertTrue(observed["locked"])
             self.assertEqual(result["status"], "stopped")
             self.assertIsNone(result["predispatch_stop"])
+            self.assertEqual(result["project_ledger"], {"head_sequence": 1})
+            self.assertEqual(result["timing_ledger"]["completion"], None)
 
     def test_failure_before_parent_run_writes_generic_stop(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -422,6 +453,188 @@ class AtomicDispatchTests(unittest.TestCase):
         self.assertIsNone(codex_upgrade._mutable_command_coordinates(arguments))
         self.assertFalse(hasattr(arguments, "max_wall_seconds"))
         self.assertIsNone(arguments.heartbeat_seconds)
+
+    # ------------------------------------------------------------------
+    # 总账 admission 与账本阶段推进（0.154 起 VC-2～VC-6 的唯一入口治理）
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _ledger(root: Path, *, upgrade_id: str = "atomic-ledger") -> Path:
+        ledger_dir = root / "ledger"
+        timing.create_ledger(
+            ledger_dir,
+            upgrade_id=upgrade_id,
+            baseline_version="0.151.0",
+            target_version="0.154.0",
+            campaign_purpose="validation_only",
+            evidence_decision="reuse",
+        )
+        return ledger_dir
+
+    @staticmethod
+    def _campaign_manifest() -> dict[str, object]:
+        return {
+            "campaign_id": "atomic-fixture",
+            "baseline_version": "0.151.0",
+            "target_version": "0.154.0",
+            "campaign_purpose": "validation_only",
+        }
+
+    def test_batch_events_are_derived_from_ledger_phase_and_checkpoints(self) -> None:
+        """同阶段不写事件；只读导入的账本要从 VC-0 一路补齐到目标阶段。"""
+        self._stop_governance_patches()
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            ledger_dir = self._ledger(root)
+            replayed: list[str] = []
+            with mock.patch.object(
+                codex_upgrade,
+                "_replay_vc_checkpoint",
+                side_effect=lambda _dir, _plan, phase: replayed.append(phase) or (root / phase, {}),
+            ):
+                head, events = codex_upgrade._timing_ledger_batch_events(
+                    root, self._campaign_manifest(), {}, phase="VC-2", ledger_dir=ledger_dir
+                )
+            self.assertEqual(head, 1)
+            self.assertEqual(
+                events,
+                [
+                    ("stage_completed", "VC-0"),
+                    ("stage_started", "VC-1"),
+                    ("stage_completed", "VC-1"),
+                    ("stage_started", "VC-2"),
+                ],
+            )
+            self.assertEqual(replayed, ["VC-0", "VC-1"])
+            # 账本已在目标阶段：同阶段后续批次不再写事件。
+            timing.append_event(ledger_dir, event_id="c0", phase="VC-0", event_type="stage_completed", next_action="x")
+            timing.append_event(ledger_dir, event_id="s1", phase="VC-1", event_type="stage_started", next_action="x")
+            head, events = codex_upgrade._timing_ledger_batch_events(
+                root, self._campaign_manifest(), {}, phase="VC-1", ledger_dir=ledger_dir
+            )
+            self.assertEqual((head, events), (3, []))
+            # 阶段倒退与前序未封存都拒绝。
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "倒退"):
+                codex_upgrade._timing_ledger_batch_events(
+                    root, self._campaign_manifest(), {}, phase="VC-0", ledger_dir=ledger_dir
+                )
+            with (
+                mock.patch.object(
+                    codex_upgrade,
+                    "_replay_vc_checkpoint",
+                    side_effect=codex_upgrade.ConfigurationError("VC-1 checkpoint 缺失"),
+                ),
+                self.assertRaisesRegex(codex_upgrade.ConfigurationError, "VC-1 checkpoint 缺失"),
+            ):
+                codex_upgrade._timing_ledger_batch_events(
+                    root, self._campaign_manifest(), {}, phase="VC-2", ledger_dir=ledger_dir
+                )
+
+    def test_batch_events_reject_inactive_or_mismatched_ledger(self) -> None:
+        self._stop_governance_patches()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            ledger_dir = self._ledger(root)
+            manifest = {**self._campaign_manifest(), "campaign_purpose": "production_replacement"}
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "版本或用途不一致"):
+                codex_upgrade._timing_ledger_batch_events(root, manifest, {}, phase="VC-2", ledger_dir=ledger_dir)
+            timing.append_event(
+                ledger_dir,
+                event_id="stop",
+                phase="VC-0",
+                event_type="stop_the_line",
+                next_action="stop",
+            )
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "当前状态为 stopped"):
+                codex_upgrade._timing_ledger_batch_events(
+                    root, self._campaign_manifest(), {}, phase="VC-2", ledger_dir=ledger_dir
+                )
+
+    def test_append_batch_events_writes_in_order_and_rejects_head_drift(self) -> None:
+        self._stop_governance_patches()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            ledger_dir = self._ledger(root)
+            written = codex_upgrade._append_timing_ledger_batch_events(
+                ledger_dir,
+                [("stage_completed", "VC-0"), ("stage_started", "VC-1")],
+                phase="VC-1",
+                sequence=2,
+                expected_head=1,
+            )
+            self.assertEqual(
+                [(item["event_type"], item["phase"], item["head_sequence"]) for item in written],
+                [("stage_completed", "VC-0", 2), ("stage_started", "VC-1", 3)],
+            )
+            state = timing.phase_ledger_state(ledger_dir)
+            self.assertEqual((state["active_phase"], state["completed_phases"]), ("VC-1", ["VC-0"]))
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "被其他流程改写"):
+                codex_upgrade._append_timing_ledger_batch_events(
+                    ledger_dir, [("stage_started", "VC-2")], phase="VC-2", sequence=3, expected_head=1
+                )
+            self.assertEqual(
+                codex_upgrade._append_timing_ledger_batch_events(
+                    ledger_dir, [], phase="VC-1", sequence=3, expected_head=3
+                ),
+                [],
+            )
+
+    def test_phase_completion_after_batch_requires_checkpoint_and_is_idempotent(self) -> None:
+        self._stop_governance_patches()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            ledger_dir = self._ledger(root)
+            campaign_dir = root / "campaign"
+            (campaign_dir / "control" / "vc").mkdir(parents=True, mode=0o700)
+            timing.append_event(ledger_dir, event_id="c0", phase="VC-0", event_type="stage_completed", next_action="x")
+            timing.append_event(ledger_dir, event_id="s1", phase="VC-1", event_type="stage_started", next_action="x")
+            # 没有 checkpoint：同阶段还有后续批次，不写事件。
+            self.assertIsNone(
+                codex_upgrade._complete_timing_ledger_phase_after_batch(
+                    campaign_dir, {}, phase="VC-1", sequence=2, ledger_dir=ledger_dir
+                )
+            )
+            checkpoint = campaign_dir / "control" / "vc" / "vc-1-checkpoint.json"
+            checkpoint.write_text("{}\n", encoding="utf-8")
+            with mock.patch.object(codex_upgrade, "_replay_vc_checkpoint", return_value=(checkpoint, {})):
+                first = codex_upgrade._complete_timing_ledger_phase_after_batch(
+                    campaign_dir, {}, phase="VC-1", sequence=3, ledger_dir=ledger_dir
+                )
+                second = codex_upgrade._complete_timing_ledger_phase_after_batch(
+                    campaign_dir, {}, phase="VC-1", sequence=3, ledger_dir=ledger_dir
+                )
+            self.assertEqual((first["idempotent"], first["head_sequence"]), (False, 4))
+            self.assertEqual((second["idempotent"], second["head_sequence"]), (True, 4))
+            state = timing.phase_ledger_state(ledger_dir)
+            self.assertEqual((state["active_phase"], state["completed_phases"]), (None, ["VC-0", "VC-1"]))
+
+    def test_governance_admission_rejection_happens_before_any_write(self) -> None:
+        """总账拒绝时不得进入编译、锁或账本；与 campaign-run CLI 共用同一门禁。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            arguments = self._arguments(Path(directory))
+            self._stop_governance_patches()
+            with (
+                mock.patch.object(
+                    codex_upgrade,
+                    "_require_formal_campaign",
+                    return_value={**self._campaign_manifest(), "campaign_mode": "formal"},
+                ),
+                mock.patch.object(
+                    codex_upgrade.codex_upgrade_project_ledger,
+                    "assert_campaign_admitted",
+                    side_effect=codex_upgrade.codex_upgrade_project_ledger.ProjectLedgerError("总账 blocked"),
+                ),
+                mock.patch.object(codex_upgrade, "_vc_campaign_plan") as plan_loader,
+                mock.patch.object(codex_upgrade, "compile_vc_batch") as compiler,
+            ):
+                with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "项目总账拒绝派发"):
+                    codex_upgrade.compile_and_run_vc_batch(arguments)
+            plan_loader.assert_not_called()
+            compiler.assert_not_called()
+            self.assertFalse((arguments.campaign_dir / "control").exists())
+            self.assertFalse((arguments.state_dir / supervisor.CAMPAIGN_RUN_LOCK_FILENAME).exists())
 
 
 if __name__ == "__main__":

@@ -11,6 +11,7 @@ import io
 import json
 import os
 import subprocess
+import sys
 import tarfile
 import tempfile
 import time
@@ -27,6 +28,7 @@ from tools.official_client_capture import codex_upgrade_gate_receipt
 from tools.official_client_capture import codex_upgrade_job_rehearsal_receipt
 from tools.official_client_capture import codex_upgrade_receipt_finalizer
 from tools.official_client_capture import codex_upgrade_timing_ledger
+from tools.official_client_capture import codex_upgrade_vc_artifacts
 from tools.official_client_capture import codex_upgrade_project_ledger
 from tools.official_client_capture import codex_upgrade_wire_transition as wire_transition
 from tools.official_client_capture import (
@@ -14960,6 +14962,221 @@ class CodexUpgradeTest(unittest.TestCase):
                     campaign("0.155.0"), "capture-candidate"
                 )
 
+    # ------------------------------------------------------------------
+    # VC-2～VC-6 派发链：零请求合成动作走真实 compile-and-run-vc-batch，
+    # 覆盖项目总账 admission、时间账本阶段推进与 checkpoint 链。
+    # ------------------------------------------------------------------
+
+    def _vc_chain_fixture(self, root: Path) -> dict[str, object]:
+        """只读导入形态的 0.154 Formal Campaign：no-op 首批、VC-1 已封存、账本停在 active VC-0。
+
+        这正是 reuse-official-evidence 建出的恢复 Campaign 在 VC-2 开工前的真实状态。
+        """
+
+        original = codex_upgrade._create_initial_vc_control_artifacts
+
+        def as_reuse(*args: object, **kwargs: object) -> dict[str, object]:
+            kwargs["reuse_official_jobs"] = True
+            return original(*args, **kwargs)
+
+        with mock.patch.object(codex_upgrade, "_create_initial_vc_control_artifacts", side_effect=as_reuse):
+            fixture = self._b0_fixture(root, campaign_id="upgrade-0154-vc-chain")
+        campaign_dir = fixture["campaign_dir"]
+        # 只读导入 Campaign 以 predecessor.reason 标识，加载器据此重算 no-op 首批。
+        manifest_path = campaign_dir / "campaign.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["predecessor"] = {
+            "campaign_dir": str(root / "predecessor-fixture"),
+            "campaign_id": "upgrade-0154-vc-chain-predecessor",
+            "campaign_manifest_sha256": "0" * 64,
+            "reason": codex_upgrade.OFFICIAL_EVIDENCE_REUSE_REASON,
+        }
+        manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        (campaign_dir / "campaign.sha256").write_text(codex_upgrade.file_sha256(manifest_path) + "\n", encoding="utf-8")
+        fixture["manifest"] = manifest
+        stage_receipt = campaign_dir / "control" / "vc-chain" / "vc-1-stage-result.json"
+        stage_receipt.parent.mkdir(mode=0o700)
+        self._write_json(stage_receipt, {"phase": "VC-1", "status": "complete"})
+        stage_receipt.chmod(0o600)
+        codex_upgrade._complete_vc_phase(
+            campaign_dir,
+            manifest,
+            phase="VC-1",
+            stage_receipt_path=stage_receipt.resolve(strict=True),
+        )
+        state_dir = root / "supervisor"
+        state_dir.mkdir(mode=0o700)
+        return {**fixture, "state_dir": state_dir}
+
+    @staticmethod
+    def _vc_chain_action_plan(root: Path, campaign_dir: Path, phase: str, *, fail: bool = False) -> Path:
+        """合成动作：子进程用当前工具封存本阶段 checkpoint；``fail`` 时以非零退出。"""
+
+        repo_root = Path(codex_upgrade.__file__).resolve().parents[2]
+        if fail:
+            script = "import sys; sys.exit(3)"
+        else:
+            script = (
+                "import json, sys, traceback\n"
+                "from pathlib import Path\n"
+                "sys.path.insert(0, sys.argv[3])\n"
+                "campaign_dir = Path(sys.argv[1]); phase = sys.argv[2]\n"
+                "try:\n"
+                "    from unittest import mock\n"
+                "    from tools.official_client_capture import codex_upgrade\n"
+                "    from tools.official_client_capture import codex_upgrade_job_rehearsal_receipt as rehearsal\n"
+                "    receipt = campaign_dir / 'control' / 'vc-chain' / f'{phase.lower()}-stage-result.json'\n"
+                "    receipt.write_text(json.dumps({'phase': phase, 'status': 'complete'}) + '\\n', encoding='utf-8')\n"
+                "    receipt.chmod(0o600)\n"
+                "    # 与父测试 setUp 一致：0.154 合成 Campaign 不走正式证据标签声明。\n"
+                "    with mock.patch.object(rehearsal, '_target_evidence_label_declaration_sha256', return_value='d' * 64):\n"
+                "        manifest = codex_upgrade._require_formal_campaign(campaign_dir)\n"
+                "        codex_upgrade._complete_vc_phase(campaign_dir, manifest, phase=phase, stage_receipt_path=receipt.resolve())\n"
+                "except BaseException:\n"
+                "    (campaign_dir / 'control' / 'vc-chain' / f'{phase.lower()}-error.txt').write_text(traceback.format_exc(), encoding='utf-8')\n"
+                "    raise\n"
+            )
+        item_id = f"{phase.lower()}-synthetic"
+        plan = {
+            "schema_version": codex_upgrade_vc_artifacts.VC_ACTION_PLAN_SCHEMA,
+            "execute_item_ids": [item_id],
+            "reuse_item_ids": [],
+            "actions": [
+                {
+                    "action_id": item_id,
+                    "operation": f"{phase}:synthetic-checkpoint",
+                    "timeout_seconds": 120,
+                    "command": [sys.executable, "-c", script, str(campaign_dir), phase, str(repo_root)],
+                    "item_ids": [item_id],
+                }
+            ],
+        }
+        path = root / "action-plans" / f"{phase.lower()}{'-fail' if fail else ''}.json"
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        path.write_text(json.dumps(plan, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        path.chmod(0o600)
+        return path.resolve(strict=True)
+
+    @staticmethod
+    def _vc_chain_arguments(fixture: dict[str, object], phase: str, sequence: int, action_plan: Path) -> argparse.Namespace:
+        order = codex_upgrade_vc_artifacts.VC_PHASES
+        predecessor = order[order.index(phase) - 1]
+        campaign_dir = fixture["campaign_dir"]
+        return argparse.Namespace(
+            campaign_dir=campaign_dir,
+            state_dir=fixture["state_dir"],
+            phase=phase,
+            sequence=sequence,
+            predecessor_checkpoint=campaign_dir / "control" / "vc" / f"{predecessor.lower()}-checkpoint.json",
+            action_plan=action_plan,
+            heartbeat_seconds=0.2,
+            watchdog_timeout_seconds=5.0,
+            ledger_interval_seconds=0.2,
+        )
+
+    def test_vc_chain_batches_advance_ledger_and_checkpoints_through_vc6(self) -> None:
+        """VC-2～VC-6 每批经原子入口派发：admission、账本阶段事件与 checkpoint 链全部闭合。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._vc_chain_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            ledger_dir = fixture["timing_ledger"]
+            head_before = codex_upgrade_project_ledger.replay_head(fixture["ledger"])["sequence"]
+            order = codex_upgrade_vc_artifacts.VC_PHASES
+            for sequence, phase in enumerate(order[2:], start=2):
+                action_plan = self._vc_chain_action_plan(root, campaign_dir, phase)
+                result, returncode = codex_upgrade.compile_and_run_vc_batch(
+                    self._vc_chain_arguments(fixture, phase, sequence, action_plan)
+                )
+                error_note = campaign_dir / "control" / "vc-chain" / f"{phase.lower()}-error.txt"
+                self.assertEqual(
+                    returncode, 0, error_note.read_text(encoding="utf-8") if error_note.exists() else result
+                )
+                self.assertEqual(result["status"], "stopped")
+                self.assertEqual(result["campaign_run"]["reason"], "queue-complete")
+                self.assertEqual(result["project_ledger"]["campaign_id"], fixture["manifest"]["campaign_id"])
+                if phase == "VC-2":
+                    # 只读导入 Campaign 的 no-op 首批由原子入口在同一锁内代跑成父 run 历史。
+                    self.assertEqual(result["bootstrap_noop_run"]["reason"], "incremental-noop")
+                    self.assertEqual(result["bootstrap_noop_run"]["batch_sequence"], 1)
+                else:
+                    self.assertIsNone(result["bootstrap_noop_run"])
+                checkpoint = campaign_dir / "control" / "vc" / f"{phase.lower()}-checkpoint.json"
+                self.assertTrue(checkpoint.is_file(), phase)
+                completion = result["timing_ledger"]["completion"]
+                self.assertFalse(completion["idempotent"], phase)
+                state = codex_upgrade_timing_ledger.phase_ledger_state(ledger_dir)
+                self.assertEqual(state["status"], "active")
+                self.assertIsNone(state["active_phase"])
+                self.assertEqual(state["completed_phases"], list(order[: order.index(phase) + 1]))
+            events = self._b0_ledger_events(ledger_dir)
+            # 恢复账本停在 active VC-0：VC-2 首批一次补齐 VC-0／VC-1 完成再开 VC-2；
+            # 之后每批各写一次 started／completed。
+            self.assertEqual(
+                events[1:9],
+                [
+                    ("stage_completed", "vc-batch-0002-vc-2-vc-0-completed"),
+                    ("stage_started", "vc-batch-0002-vc-2-vc-1-started"),
+                    ("stage_completed", "vc-batch-0002-vc-2-vc-1-completed"),
+                    ("stage_started", "vc-batch-0002-vc-2-vc-2-started"),
+                    ("stage_completed", "vc-batch-0002-vc-2-completed"),
+                    ("stage_started", "vc-batch-0003-vc-3-vc-3-started"),
+                    ("stage_completed", "vc-batch-0003-vc-3-completed"),
+                    ("stage_started", "vc-batch-0004-vc-4-vc-4-started"),
+                ],
+            )
+            self.assertEqual(events[-1], ("stage_completed", "vc-batch-0006-vc-6-completed"))
+            # 派发本身不写项目总账事件；admission 只读重放 head。
+            self.assertEqual(codex_upgrade_project_ledger.replay_head(fixture["ledger"])["sequence"], head_before)
+            # 已封存阶段不得重编：VC-6 已有 checkpoint。
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "已有 checkpoint"):
+                codex_upgrade.compile_and_run_vc_batch(
+                    self._vc_chain_arguments(fixture, "VC-6", 7, self._vc_chain_action_plan(root / "again", campaign_dir, "VC-6"))
+                )
+            # 5 个阶段批次 + 1 个 no-op 引导首批
+            self.assertEqual(len(list(fixture["state_dir"].glob("run-*/state.json"))), 6)
+
+    def test_vc_chain_rejects_stopped_ledger_before_any_artifact_is_written(self) -> None:
+        """账本已停线时原子入口在编译前拒绝：不写 batch、manifest、run 或停线收据。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._vc_chain_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            codex_upgrade_timing_ledger.append_event(
+                fixture["timing_ledger"], event_id="manual-stop", phase="VC-0", event_type="stop_the_line", next_action="停线"
+            )
+            action_plan = self._vc_chain_action_plan(root, campaign_dir, "VC-2")
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "当前状态为 stopped"):
+                codex_upgrade.compile_and_run_vc_batch(self._vc_chain_arguments(fixture, "VC-2", 2, action_plan))
+            self.assertEqual(sorted(path.name for path in (campaign_dir / "control" / "vc" / "batches").iterdir()), ["0001-vc-1.json"])
+            self.assertFalse((campaign_dir / "control" / "vc" / "predispatch-stops").exists())
+            self.assertEqual(list(fixture["state_dir"].glob("run-*")), [])
+
+    def test_vc_chain_failed_batch_abandons_stage_and_blocks_next_batch(self) -> None:
+        """动作失败：父 run 把账本推成 stage_abandoned＋stop_the_line，后续批次被拒。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._vc_chain_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            ledger_dir = fixture["timing_ledger"]
+            result, returncode = codex_upgrade.compile_and_run_vc_batch(
+                self._vc_chain_arguments(fixture, "VC-2", 2, self._vc_chain_action_plan(root, campaign_dir, "VC-2", fail=True))
+            )
+            self.assertEqual(returncode, 1)
+            self.assertEqual(result["status"], "failed")
+            self.assertEqual(result["campaign_run"]["timing_closeout"]["status"], "passed", result["campaign_run"]["timing_closeout"])
+            self.assertIsNone(result["timing_ledger"]["completion"])
+            state = codex_upgrade_timing_ledger.phase_ledger_state(ledger_dir)
+            self.assertEqual(state["status"], "stopped")
+            self.assertIsNone(state["active_phase"])
+            self.assertFalse((campaign_dir / "control" / "vc" / "vc-2-checkpoint.json").exists())
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "当前状态为 stopped"):
+                codex_upgrade.compile_and_run_vc_batch(
+                    self._vc_chain_arguments(fixture, "VC-2", 3, self._vc_chain_action_plan(root / "retry", campaign_dir, "VC-2"))
+                )
 
 class EvidenceManifestTest(unittest.TestCase):
     """单次内容扫描、断点续作和零扫描复核必须可机器证明。"""
@@ -16182,3 +16399,4 @@ class ExecutionTreeVerificationTest(unittest.TestCase):
 
         repo_root = Path(codex_upgrade.__file__).resolve().parents[2]
         codex_upgrade._verify_execution_tree(repo_root)
+

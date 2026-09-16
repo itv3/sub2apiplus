@@ -1246,7 +1246,8 @@ Framework §5.3 是升级总操作入口并规定 `VC-0～VC-6` 顺序；本部�
    以零请求导入已封存官方证据，并生成“全部 official Job 为 reuse”的 VC-1 no-op 批次及 checkpoint；
    `compile-and-run-vc-batch` 在同一个非阻塞 state-dir 锁内编译下一批并立即创建父 run；
    `compile-vc-batch` 仅允许历史读取和内部测试，不得用于新的 Formal 批次；
-   `compile-vc-interrupted-recovery-batch` 只为下述 `KeyboardInterrupt` 孤儿编译一次 v3 预览批次；
+   `compile-vc-interrupted-recovery-batch` 与 `recover-vc1-interruption` 是 0.154.0 首轮事故链的 v3 历史入口，
+   只保留给历史回归，新 Campaign 的中断统一由 reconciler 承接；
    sequence 4 预派发封口与 deadline 孤儿直接封口两个一次性入口已于 2026-09-16 删除，其历史收据只按
    [历史审计](CODEX_CLI_CLIENT_EMULATION_HISTORY_AUDIT.md#codex-0154-retired-entrypoints)读取。
    这些入口都不得放入 `campaign-run` 动作队列，
@@ -1259,8 +1260,8 @@ Framework §5.3 是升级总操作入口并规定 `VC-0～VC-6` 顺序；本部�
 ### Codex 0.154 起的项目总账、工具身份策略 v2、对账与只读导入
 
 本节是 2026-09-15 改造方案（A0～A3b）落地后的最小规范；下列行为自 0.154.0 起对 Formal Campaign 强制
-生效，早于 0.154.0 的 Campaign 只按各自冻结的历史合同只读回放。凡与本节冲突的上文 sequence 3～5、
-`KeyboardInterrupt` 孤儿、权限别名补偿与 deadline 孤儿封口条款，只保留为 0.154.0 首轮事故链的只读解释。
+生效，早于 0.154.0 的 Campaign 只按各自冻结的历史合同只读回放。0.154.0 首轮事故链的 sequence 专用入口、
+权限别名补偿与 deadline 孤儿封口条款已删除，v3 中断孤儿恢复与两条过渡恢复条款已移入历史审计，均只作只读解释。
 
 **两层预算与项目总账。** 每个升级项目在宿主数据根建立追加式项目总账 `upgrade-project-ledger/`：
 `plan.json` 一次写死 `absolute_deadline_utc`（老板批准，记录批准人与时间）、可选 `live_request_budget`、
@@ -1320,6 +1321,27 @@ Campaign，必须升级 `policy_version` 并经 `policy-compatibility-receipt/v1
 `_verify_execution_tree`、三副本互等、finalizer 与账本的 producer 溯源仍比整树。
 `verdict-official-attempt-identity` 从后一份部署收据的 `rollback_backup` 副本按策略重算历史 wire
 身份裁定 `equal／different`；没有副本时只有 v1 整树相等才算相等。
+
+**VC-2～VC-6 原子入口治理与账本预算（2026-09-16 增补）。** 0.154.0 起 `compile-and-run-vc-batch` 是
+VC-2～VC-6 每一批的唯一强制入口，四层治理在它内部闭合，不再依赖操作员人工 `append`：
+（1）取 state-dir 锁与任何落盘之前先经项目总账 admission，与 `campaign-run` CLI 同一底层门禁
+（未注册、blocked、根因达上限、超绝对截止一律拒绝且无副作用）；（2）只读预检 Campaign 绑定的
+UpgradeTimingLedger：必须 active 且版本、用途一致，目标阶段不得倒退，尚未登记完成的前序阶段必须已有成功封存的
+checkpoint；（3）batch 与 manifest 可信落盘后、父 run 创建前，在账本收口锁内按序补写前序 `stage_completed` 与目标
+阶段 `stage_started`（只读导入的 Campaign 会在 VC-2 首批一次补齐 VC-0／VC-1），账本此刻拒绝即走通用预派发停线，
+`error_type` 记为 `TimingLedgerGateError`；（4）父 run 成功且本阶段 checkpoint 已封存则写 `stage_completed`，同阶段
+多批时只在封存批写一次，幂等。只读导入的 Campaign 第 2 批派发前，入口在同一锁内先把零请求 no-op 首批跑成父 run
+历史，满足监督器“batch_sequence 从 1 连续”的要求；首批含真实动作时不代跑。父动作失败仍由监督器写
+`stage_abandoned`＋`stop_the_line`，此后本 Campaign 的任何批次都被拒绝，唯一下一动作是对账。
+
+Campaign 账本自 0.154.0 起可在 `create` 时以 `--project-ledger-dir` 绑定项目总账：绑定后总预算上限是账本开始到总账
+绝对截止的整分钟数，阶段预算由 Campaign 计划在总预算内以 `--stage-budget-minutes VC-N=分钟` 规定；未绑定的账本沿用
+总 360 分钟与各阶段默认上限。VC-2 起的人工核对（分类草案、联合摘要、比较结果）发生在批次之间，阶段之间账本
+`active_phase` 为空、不计阶段墙钟，因此阶段预算按含人工核对的实际节奏设置，不得为同一工作对象新建账本重置计时
+（框架 §5.3.5：数值由客户端指南或已批准的 Campaign 计划规定，先到即停线）。项目总账的消费者门禁除
+`plan`、`reuse-official-evidence`、`campaign-run`、`resume`、official seal、`compare`、`accept` 外，还包括候选
+`capture-candidate seal` 与 `canonical-advance`（其 seal／compare／accept 步骤映射到同名消费者，VC-6 生产步骤按
+`canonical-advance` 本身准入），不得成为绕开门禁的旁路。
 
 **对账（reconciler）。** 中断只有两种入口，各自输出独立不可变收据，自身模型请求为零：
 `reconcile-supervisor-run --run-dir --campaign-dir` 处理派发前失败、父监督器 SIGKILL 或中断且尚无
@@ -1409,8 +1431,8 @@ result_key = item_id + input_sha256 + environment_sha256 + direct_dependency_sha
 逐文件依赖必须登记到 `producer／evaluator／control／scenario／runtime／network／gate` 之一。正式阶段动作队列
 唯一派发入口是 `tools/official_client_capture/codex_upgrade_supervisor.py campaign-run`；VC-0～VC-6 新流程使用
 `codex-upgrade-campaign-run/v2`，并绑定 Campaign 总计划、批次、直接前序 checkpoint 和原始绝对 deadline。
-`codex-upgrade-campaign-run/v3` 不是普通阶段版本，只允许作为一个失败 v2 的唯一直接后继，用于 VC-1
-中断恢复的零请求预览；成功 v3 之后的真实补跑仍回到普通 v2。v3 失败一律停线并交由 reconciler 对账。
+`codex-upgrade-campaign-run/v3` 是 0.154.0 首轮事故链的历史恢复版本（见历史审计），新 Campaign 不再生成；
+失败父批次统一先对账再从最近合法 checkpoint 恢复。
 历史 `codex-upgrade-campaign-run/v4`／`v5` 续接与收尾版本已于 2026-09-16 删除：监督器不再接受这两种
 清单，其历史 run 目录只读保留并按历史审计解释。
 
@@ -1456,63 +1478,21 @@ python3 -m tools.official_client_capture.codex_upgrade_predispatch_stop replay \
 `control-epoch`、`evaluation-transition`、`terminal-transition-preflight` 和旧写入入口；0.151 formal 的
 capture、classify、profile、compare、accept、resume 及 canonical 写命令没有父上下文时同样拒绝。
 
-仅有一种 metadata-only seal 例外：Candidate 已进入 `awaiting_receipts`，全部 Candidate Job 均为
-`reused/complete`，executed／failed／pending 集合为空，且尚未生成 evidence manifest、seal draft 或
-seal preview；同时变化只能属于 `control／evaluator／orchestrator`。此时 `campaign-run` 才能登记
-`metadata_only_seal_repair`，不得重发请求、创建旧 evaluation transition，或承接已有失败和已开始深度扫描
-的 attempt。
-
-若来源 Ledger 已因 `permanent-stop-*` 停线，只允许在冻结 checkpoint 仍为 active、停线后唯一新增事件使
-`head_sequence` 恰好加一且 `live_request_count=0` 时只读承接。历史 control epoch 还必须满足 boundary
-全零、仅因预算到期进入 `stop_required` 且没有同根因失败；其他 stopped／stop_required、多个新增事件、
-非零边界或 live 请求全部失败关闭。该分支必须核验来源 attempt 的 `environment/after`、`after_probe`、
-`probe-manifest.json` 和五份状态快照，以不可覆盖副本写入当前 attempt；不得重新探测环境、发送请求或改写
-来源文件。
+0.154.0 首轮事故链留下的两条过渡恢复条款（metadata-only seal 例外、`permanent-stop-*` 来源 Ledger 的
+只读承接）已于 2026-09-16 移入[历史审计](CODEX_CLI_CLIENT_EMULATION_HISTORY_AUDIT.md#codex-0154-transitional-recovery-clauses)，
+只作只读解释，不是新 Campaign 的执行入口。
 
 旧恢复机制及 Kilo 历史事实只按
 [历史审计](CODEX_CLI_CLIENT_EMULATION_HISTORY_AUDIT.md#codex-0151-historical-recovery)读取，不得成为新 Campaign
 的前置条件。
 
-#### VC-1 `KeyboardInterrupt` 孤儿的单次恢复
+#### VC-1 中断孤儿的 v3 单次恢复（历史只读）
 
-只有同时满足下列条件才使用本分支：失败父批次是 v2 且终态为 `failed/KeyboardInterrupt`；官方 attempt
-已有同一 reservation 和可重放 checkpoint，但没有 `attempt.json`；checkpoint 同时包含已完成项和
-失败／待执行项；Campaign、目标产物、账号权限、模型可见性、环境语义及原始 deadline 未变化。工具变化
-必须逐文件分类，评估／控制侧可离线承接；产出侧文件必须精确映射到 `failed ∪ pending`，不得触及
-`complete`。
-
-先直接编译一次性合同和 v3 清单：
-
-```bash
-python3 tools/official_client_capture/codex_upgrade.py \
-  compile-vc-interrupted-recovery-batch \
-  --campaign-dir /绝对路径/campaign \
-  --sequence <失败批次序号+1> \
-  --source-attempt /绝对路径/campaign/official/attempts/<attempt-id> \
-  --failed-supervisor-run-dir /绝对路径/原state-dir/run-<owner-nonce> \
-  --timing-ledger-dir /绝对路径/连续时间账本 \
-  --deployment-receipt /绝对路径/当前ARM64工具部署收据
-```
-
-随后必须使用失败批次原来的 `state-dir` 立即执行生成的 v3 清单；改用空目录会因缺少唯一直接失败前序而
-拒绝：
-
-```bash
-python3 tools/official_client_capture/codex_upgrade_supervisor.py campaign-run \
-  --state-dir /绝对路径/原state-dir \
-  --manifest /绝对路径/campaign/control/vc/run-manifests/<序号>-vc-1.json
-```
-
-v3 恰好包含一个 `recover-vc1-interruption` 动作。它只补齐原 attempt 的 after／ARM64 after／恢复收据，
-写入不可变失败终态和专用 transition，再调用 `resume --rerun-failed --preview-recovery`；禁止携带
-`--acknowledge-live-requests`。成功输出必须逐字证明 execute／reuse 集合与合同一致，并满足
-`reservation_exists=false`、`live_request_count=0`、`scanned_bytes=0`。这一步不生成 VC-1 checkpoint，
-也不表示 execute 项已经运行。
-
-操作员确认预览后，按普通 action plan 编译下一序号的 VC-1 v2 批次，动作才可携带
-`resume --rerun-failed --acknowledge-live-requests` 执行冻结的 execute 闭集；复用项继续只读承接。
-合同、transition、源 attempt、失败 v2 和预览 v3 均只写追加，任一摘要、owner nonce、Ledger head、部署
-工具或闭集漂移都停线，不得重编同一序号或新建 reservation 试探。
+0.154.0 首轮事故链为 `KeyboardInterrupt` 孤儿增加的 v3 单次恢复条款已于 2026-09-16 移入
+[历史审计](CODEX_CLI_CLIENT_EMULATION_HISTORY_AUDIT.md#codex-0154-transitional-recovery-clauses)。0.154.0 起
+reservation 之后的任何中断统一由 `reconcile-attempt` 对账，真实补跑必须携带已批准的 `recovery-preview/v1`；
+`compile-vc-interrupted-recovery-batch`／`recover-vc1-interruption` 与 `codex-upgrade-campaign-run/v3` 只保留给历史
+回归与只读解释，不得用于新的 Formal 批次。
 
 ### Codex 连续监督、时间账本与文档部署
 
@@ -1536,7 +1516,9 @@ checkpoint 编译本批次清单。总计划不能预填未来的 approval SHA�
 `audit-incomplete`，禁止部署。
 
 除 VC-0 已自动生成的首个 VC-1 批次外，每次交接先由操作员审核下一阶段的
-`codex-upgrade-vc-action-plan/v1`，再直接运行：
+`codex-upgrade-vc-action-plan/v1`，再直接运行下面的原子入口；账本的阶段推进（前序 `stage_completed`、本阶段
+`stage_started`／`stage_completed`）由该入口按本部分“VC-2～VC-6 原子入口治理”写入，操作员只在对账与停线恢复时
+人工 `append`：
 
 ~~~bash
 python3 tools/official_client_capture/codex_upgrade.py compile-and-run-vc-batch \
@@ -1813,7 +1795,9 @@ VC-1 开始事件，再在同一 Python 进程调用一次 `campaign-run`。任�
 1. 当前 ARM64 受管工具部署收据（五摘要与 `policy_version` 必须等于当前工具树）；
 2. `pre-a3-path-certification/v1`（§4.0.1 的历史夹具回归：reconciler 两个分支、先入账后判定、恢复预览
    与批准、batch 补齐、`accounting_resolved`、两阶段 wire transition、evaluation epoch、策略 v2 seal 分支、
-   从 `awaiting_receipts` 只读导入、两步式权限收口），且其绑定的部署收据必须就是本次发布认证的部署收据；
+   从 `awaiting_receipts` 只读导入、两步式权限收口，以及 2026-09-16 增补的 VC-2～VC-6 派发链：只读导入
+   Campaign 的 no-op 首批引导、总账 admission、账本阶段事件、checkpoint 链、停线账本拒绝与失败停线），且其绑定的
+   部署收据必须就是本次发布认证的部署收据；发布认证据此把 `authorized_scopes` 扩展到 VC-2～VC-6；
 3. ARM64 全量 Job rehearsal 收据（`codex_upgrade_job_rehearsal_receipt.py collect／finalize／replay`，
    必须带 `failure_lifecycle_probe_sha256`）；
 4. `/capture/staging` 内的 atomic-double 双跑收据（`campaign_run_rehearsal_receipt.py atomic-double-collect／

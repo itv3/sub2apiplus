@@ -15017,6 +15017,281 @@ def compile_vc_batch(arguments: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+class TimingLedgerGateError(ConfigurationError):
+    """UpgradeTimingLedger 拒绝为本批次推进阶段；作为预派发停线的 error_type 留痕。"""
+
+
+def _campaign_timing_ledger_dir(manifest: Mapping[str, Any]) -> Path:
+    """从 Campaign 清单的 VC-0 控制绑定取时间账本目录，并核对 plan 摘要未漂移。"""
+
+    controls = manifest.get("control_receipts")
+    timing = controls.get("upgrade_timing") if isinstance(controls, Mapping) else None
+    if not isinstance(timing, Mapping):
+        raise ConfigurationError("Campaign 缺少 UpgradeTimingLedger 控制绑定。")
+    ledger_dir = Path(str(timing.get("ledger_dir", "")))
+    if not ledger_dir.is_absolute() or ledger_dir.is_symlink() or not ledger_dir.is_dir():
+        raise ConfigurationError("Campaign UpgradeTimingLedger 路径不可信。")
+    ledger_dir = ledger_dir.resolve(strict=True)
+    plan_path = ledger_dir / "ledger.json"
+    if (
+        plan_path.is_symlink()
+        or not plan_path.is_file()
+        or file_sha256(plan_path) != timing.get("ledger_plan_sha256")
+    ):
+        raise ConfigurationError("Campaign 绑定的 UpgradeTimingLedger 计划摘要漂移。")
+    return ledger_dir
+
+
+def _timing_ledger_batch_events(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    plan: Mapping[str, Any],
+    *,
+    phase: str,
+    ledger_dir: Path,
+) -> tuple[int, list[tuple[str, str]]]:
+    """只读推导派发 ``phase`` 批次前要补写的账本事件序列。
+
+    返回 ``(当前 head_sequence, [(event_type, phase), ...])``。规则：
+    账本必须 active 且版本、用途与 Campaign 一致；目标阶段已是 active 阶段时
+    不写事件（同阶段后续批次）；否则把尚未登记完成、且 checkpoint 已封存的
+    前序阶段依次补成 ``stage_completed``（只读导入的 Campaign 会一次补齐
+    VC-0／VC-1），再为目标阶段写 ``stage_started``。阶段倒退或前序未封存即拒绝。
+    """
+
+    state = codex_upgrade_timing_ledger.phase_ledger_state(ledger_dir)
+    for field in ("baseline_version", "target_version", "campaign_purpose"):
+        if state.get(field) != manifest.get(field):
+            raise TimingLedgerGateError("UpgradeTimingLedger 与 Campaign 版本或用途不一致。")
+    if state.get("status") != "active":
+        raise TimingLedgerGateError(
+            f"UpgradeTimingLedger 当前状态为 {state.get('status')}，禁止编译 {phase} 批次；"
+            "阶段或总预算先到即停线，不得新建账本重置计时。"
+        )
+    order = codex_upgrade_vc_artifacts.VC_PHASES
+    target_index = order.index(phase)
+    active = state.get("active_phase")
+    if active == phase:
+        return int(state["head_sequence"]), []
+    if isinstance(active, str) and active in order and order.index(active) > target_index:
+        raise TimingLedgerGateError(
+            f"UpgradeTimingLedger 当前阶段 {active} 已越过 {phase}，禁止阶段倒退。"
+        )
+    completed = set(state.get("completed_phases", []))
+    events: list[tuple[str, str]] = []
+    for earlier in order[:target_index]:
+        if earlier in completed:
+            continue
+        # 补登记的前序阶段必须已有成功封存的 checkpoint；缺失即拒绝，不得跳过阶段。
+        _replay_vc_checkpoint(campaign_dir, plan, earlier)
+        if active == earlier:
+            events.append(("stage_completed", earlier))
+        else:
+            events.append(("stage_started", earlier))
+            events.append(("stage_completed", earlier))
+    events.append(("stage_started", phase))
+    return int(state["head_sequence"]), events
+
+
+def _append_timing_ledger_batch_events(
+    ledger_dir: Path,
+    events: list[tuple[str, str]],
+    *,
+    phase: str,
+    sequence: int,
+    expected_head: int,
+) -> list[dict[str, Any]]:
+    """在账本收口锁内按序追加事件；head 在编译期间被改写即拒绝。"""
+
+    if not events:
+        return []
+    written: list[dict[str, Any]] = []
+    try:
+        with codex_upgrade_supervisor._timing_closeout_lock(ledger_dir):
+            state = codex_upgrade_timing_ledger.phase_ledger_state(ledger_dir)
+            if int(state["head_sequence"]) != expected_head:
+                raise TimingLedgerGateError("UpgradeTimingLedger 在编译期间被其他流程改写。")
+            for event_type, event_phase in events:
+                kind = "started" if event_type == "stage_started" else "completed"
+                event_id = f"vc-batch-{sequence:04d}-{phase.lower()}-{event_phase.lower()}-{kind}"
+                if event_type == "stage_started" and event_phase == phase:
+                    next_action = f"派发 {phase} 批次 {sequence:04d}"
+                else:
+                    next_action = f"{event_phase} 已封存，继续补齐账本至 {phase}"
+                summary = codex_upgrade_timing_ledger.append_event(
+                    ledger_dir,
+                    event_id=event_id,
+                    phase=event_phase,
+                    event_type=event_type,
+                    next_action=next_action,
+                )
+                written.append(
+                    {
+                        "event_id": event_id,
+                        "event_type": event_type,
+                        "phase": event_phase,
+                        "head_sequence": summary["head_sequence"],
+                        "head_sha256": summary["head_sha256"],
+                    }
+                )
+    except codex_upgrade_supervisor.SupervisorError as error:
+        raise TimingLedgerGateError(str(error)) from error
+    except codex_upgrade_timing_ledger.TimingLedgerError as error:
+        raise TimingLedgerGateError(f"UpgradeTimingLedger 拒绝推进阶段：{error}") from error
+    return written
+
+
+def _complete_timing_ledger_phase_after_batch(
+    campaign_dir: Path,
+    plan: Mapping[str, Any],
+    *,
+    phase: str,
+    sequence: int,
+    ledger_dir: Path,
+) -> dict[str, Any] | None:
+    """父 run 成功后，本阶段 checkpoint 已封存则写 ``stage_completed``。
+
+    阶段之间的人工核对因此不再占阶段墙钟；没有 checkpoint（同阶段还有后续
+    批次）时不写事件。同阶段重复调用幂等。
+    """
+
+    path = _vc_checkpoint_path(campaign_dir, phase)
+    if path.is_symlink() or not path.is_file():
+        return None
+    _replay_vc_checkpoint(campaign_dir, plan, phase)
+    try:
+        with codex_upgrade_supervisor._timing_closeout_lock(ledger_dir):
+            state = codex_upgrade_timing_ledger.phase_ledger_state(ledger_dir)
+            if phase in state.get("completed_phases", []):
+                return {
+                    "idempotent": True,
+                    "head_sequence": state["head_sequence"],
+                    "head_sha256": state["head_sha256"],
+                }
+            if state.get("active_phase") != phase:
+                raise TimingLedgerGateError(
+                    f"UpgradeTimingLedger 当前阶段为 {state.get('active_phase')}，"
+                    f"无法登记 {phase} 完成。"
+                )
+            event_id = f"vc-batch-{sequence:04d}-{phase.lower()}-completed"
+            summary = codex_upgrade_timing_ledger.append_event(
+                ledger_dir,
+                event_id=event_id,
+                phase=phase,
+                event_type="stage_completed",
+                next_action=f"{phase} checkpoint 已封存；人工核对后编译下一阶段批次",
+            )
+    except codex_upgrade_supervisor.SupervisorError as error:
+        raise TimingLedgerGateError(str(error)) from error
+    except codex_upgrade_timing_ledger.TimingLedgerError as error:
+        raise TimingLedgerGateError(
+            f"父 run 已成功且 {phase} checkpoint 已封存，但 UpgradeTimingLedger 拒绝登记完成：{error}"
+        ) from error
+    return {
+        "idempotent": False,
+        "event_id": event_id,
+        "head_sequence": summary["head_sequence"],
+        "head_sha256": summary["head_sha256"],
+    }
+
+
+def _bootstrap_noop_first_batch(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    *,
+    sequence: int,
+    state_dir: Path,
+    run_arguments: argparse.Namespace,
+) -> dict[str, Any] | None:
+    """只读导入的 Campaign 在派发第 2 批前，先把零请求 no-op 首批跑成父 run 历史。
+
+    ``reuse-official-evidence`` 只生成“全部 official Job 为 reuse”的 VC-1 no-op 批次
+    与 checkpoint，不派发父 run；而监督器要求同一 state-dir 的 batch_sequence 从 1
+    连续递增。没有这一步，恢复 Campaign 的 VC-2 首批会被“禁止跳批”拒绝。
+    首批含真实动作（普通 Formal 的 capture-official）时不代跑，沿用原拒绝语义。
+    """
+
+    if sequence != 2:
+        return None
+    campaign_id = str(manifest.get("campaign_id", ""))
+    try:
+        history = codex_upgrade_supervisor._campaign_run_history(state_dir, campaign_id)
+    except codex_upgrade_supervisor.SupervisorError as error:
+        raise ConfigurationError(str(error)) from error
+    if history:
+        return None
+    first_manifest_path = campaign_dir / "control" / "vc" / "run-manifests" / "0001-vc-1.json"
+    if first_manifest_path.is_symlink() or not first_manifest_path.is_file():
+        return None
+    try:
+        first_manifest = codex_upgrade_supervisor._campaign_run_manifest(first_manifest_path)
+    except codex_upgrade_supervisor.SupervisorError as error:
+        raise ConfigurationError(f"首批 VC-1 清单不可信：{error}") from error
+    if first_manifest.get("no_op") is not True or first_manifest.get("campaign_id") != campaign_id:
+        return None
+    try:
+        returncode, run = codex_upgrade_supervisor._campaign_run_locked(
+            run_arguments,
+            manifest=first_manifest,
+            state_dir=state_dir,
+            campaign_dir=campaign_dir,
+        )
+    except codex_upgrade_supervisor.SupervisorError as error:
+        raise ConfigurationError(f"no-op 首批引导派发失败：{error}") from error
+    if returncode != 0 or run.get("reason") != "incremental-noop":
+        raise ConfigurationError(
+            f"no-op 首批引导派发未闭合：status={run.get('status')} reason={run.get('reason')}"
+        )
+    return {
+        "run_dir": run.get("run_dir"),
+        "status": run.get("status"),
+        "reason": run.get("reason"),
+        "batch_sequence": first_manifest.get("batch_sequence"),
+    }
+
+
+def _prepare_atomic_batch_governance(arguments: argparse.Namespace) -> dict[str, Any]:
+    """原子派发前的两层治理：项目总账 admission 与时间账本只读预检。
+
+    两者都在取 state-dir 锁与任何落盘之前完成：admission 与 ``campaign-run`` CLI
+    共用同一门禁（此前原子入口绕过了它）；账本预检只读，拒绝时不产生 batch、
+    manifest 或停线收据。
+    """
+
+    campaign_dir = arguments.campaign_dir
+    phase = str(arguments.phase)
+    manifest = _require_formal_campaign(campaign_dir)
+    if not _requires_complete_vc_artifacts(manifest):
+        raise ConfigurationError("compile-and-run-vc-batch 只用于 0.154.0 起的完整 VC 链。")
+    # 与 campaign-run CLI（codex_upgrade_supervisor._assert_campaign_run_admitted）同一底层门禁：
+    # 补齐器先行、锁内重放，0.154 formal 必须已注册且未 blocked／终态／超预算。
+    try:
+        admission = codex_upgrade_project_ledger.assert_campaign_admitted(
+            campaign_dir,
+            command="campaign-run",
+            require=_project_ledger_required(manifest.get("campaign_mode"), manifest.get("target_version")),
+        )
+    except codex_upgrade_project_ledger.ProjectLedgerError as error:
+        raise ConfigurationError(f"项目总账拒绝派发：{error}") from error
+    plan = _vc_campaign_plan(campaign_dir, manifest)
+    ledger_dir = _campaign_timing_ledger_dir(manifest)
+    head_sequence, events = _timing_ledger_batch_events(
+        campaign_dir,
+        manifest,
+        plan,
+        phase=phase,
+        ledger_dir=ledger_dir,
+    )
+    return {
+        "manifest": manifest,
+        "plan": plan,
+        "ledger_dir": ledger_dir,
+        "ledger_head_sequence": head_sequence,
+        "ledger_events": events,
+        "admission": admission,
+    }
+
+
 def compile_and_run_vc_batch(
     arguments: argparse.Namespace,
     *,
@@ -15026,11 +15301,29 @@ def compile_and_run_vc_batch(
 
     ``_compiler`` 只供零网络生产同形演练注入同一制品构建器；正式 CLI 永远
     使用 ``compile_vc_batch``，参数面不能选择或替换编译实现。
+
+    0.154 起本入口是 VC-2～VC-6 每一批的唯一强制入口，因此项目总账 admission、
+    时间账本的阶段推进（``stage_started``／``stage_completed``）都在这里闭合，
+    不再依赖操作员人工 ``append``。
     """
 
     campaign_dir = arguments.campaign_dir
     phase = str(arguments.phase)
     sequence = int(arguments.sequence)
+    if _compiler is None:
+        governance = _prepare_atomic_batch_governance(arguments)
+    else:
+        # 零网络生产同形演练（campaign_run_rehearsal_receipt）作用于合成 preflight
+        # Campaign：没有项目总账注册，账本也只是夹具，治理层不适用；正式 CLI
+        # 永远走上面的分支。
+        governance = {
+            "manifest": {},
+            "plan": {},
+            "ledger_dir": None,
+            "ledger_head_sequence": 0,
+            "ledger_events": [],
+            "admission": None,
+        }
     batch_path = (
         campaign_dir
         / "control"
@@ -15051,6 +15344,28 @@ def compile_and_run_vc_batch(
         )
     except codex_upgrade_supervisor.SupervisorError as error:
         raise ConfigurationError(str(error)) from error
+    run_arguments = argparse.Namespace(
+        heartbeat_seconds=(
+            arguments.heartbeat_seconds
+            if arguments.heartbeat_seconds is not None
+            else codex_upgrade_supervisor.DEFAULT_HEARTBEAT_SECONDS
+        ),
+        watchdog_timeout_seconds=arguments.watchdog_timeout_seconds,
+        ledger_interval_seconds=arguments.ledger_interval_seconds,
+    )
+    bootstrap_run: dict[str, Any] | None = None
+    if _compiler is None:
+        try:
+            bootstrap_run = _bootstrap_noop_first_batch(
+                campaign_dir,
+                governance["manifest"],
+                sequence=sequence,
+                state_dir=state_dir,
+                run_arguments=run_arguments,
+            )
+        except BaseException:
+            os.close(lock_descriptor)
+            raise
     run_names_before = {
         path.name for path in state_dir.iterdir() if path.name.startswith("run-")
     }
@@ -15062,6 +15377,18 @@ def compile_and_run_vc_batch(
         batch = codex_upgrade_vc_artifacts.validate_vc_batch(
             _read_json(batch_path, "原子派发 VC batch")
         )
+        # 编译制品已可信落盘后、父 run 创建前推进账本阶段；账本此刻拒绝即
+        # 走通用预派发停线（error_type=TimingLedgerGateError），不创建父 run。
+        stage = "ledger"
+        ledger_events: list[dict[str, Any]] = []
+        if governance["ledger_dir"] is not None:
+            ledger_events = _append_timing_ledger_batch_events(
+                governance["ledger_dir"],
+                governance["ledger_events"],
+                phase=phase,
+                sequence=sequence,
+                expected_head=governance["ledger_head_sequence"],
+            )
         stage = "dispatch"
         start_by = datetime.fromisoformat(
             str(batch["must_start_by_utc"]).replace("Z", "+00:00")
@@ -15071,21 +15398,21 @@ def compile_and_run_vc_batch(
                 "VC batch 的 60 秒启动窗口已过期，拒绝创建父 run。"
             )
         run_manifest = codex_upgrade_supervisor._campaign_run_manifest(manifest_path)
-        run_arguments = argparse.Namespace(
-            heartbeat_seconds=(
-                arguments.heartbeat_seconds
-                if arguments.heartbeat_seconds is not None
-                else codex_upgrade_supervisor.DEFAULT_HEARTBEAT_SECONDS
-            ),
-            watchdog_timeout_seconds=arguments.watchdog_timeout_seconds,
-            ledger_interval_seconds=arguments.ledger_interval_seconds,
-        )
         returncode, run = codex_upgrade_supervisor._campaign_run_locked(
             run_arguments,
             manifest=run_manifest,
             state_dir=state_dir,
             campaign_dir=campaign_dir,
         )
+        completion = None
+        if returncode == 0 and governance["ledger_dir"] is not None:
+            completion = _complete_timing_ledger_phase_after_batch(
+                campaign_dir,
+                governance["plan"],
+                phase=phase,
+                sequence=sequence,
+                ledger_dir=governance["ledger_dir"],
+            )
         return (
             {
                 "status": str(run["status"]),
@@ -15095,6 +15422,15 @@ def compile_and_run_vc_batch(
                 "compile": compiled,
                 "campaign_run": run,
                 "predispatch_stop": None,
+                "bootstrap_noop_run": bootstrap_run,
+                "project_ledger": governance["admission"],
+                "timing_ledger": {
+                    "ledger_dir": (
+                        str(governance["ledger_dir"]) if governance["ledger_dir"] is not None else None
+                    ),
+                    "events": ledger_events,
+                    "completion": completion,
+                },
             },
             returncode,
         )
@@ -15201,11 +15537,20 @@ def _assert_project_ledger_consumer(command: str, arguments: argparse.Namespace)
     consumer = None
     if command == "resume":
         consumer = "resume"
-    elif command == "capture-official" and getattr(arguments, "capture_action", None) == "seal":
+    elif (
+        command in {"capture-official", "capture-candidate"}
+        and getattr(arguments, "capture_action", None) == "seal"
+    ):
+        # 官方与候选两侧的证据封存都是总账消费者；候选 seal 此前漏在门禁之外。
         consumer = "seal"
     elif command in {"compare", "accept"}:
         # B9：compare／accept 写比较与验收收据，同样先经项目总账准入门禁。
         consumer = command
+    elif command == "canonical-advance":
+        # canonical-advance 的 seal／compare／accept 与同名命令是同一语义终点，
+        # 不得成为绕开总账门禁的旁路；VC-6 的生产步骤按 canonical-advance 本身准入。
+        step = str(getattr(arguments, "canonical_step", "") or "")
+        consumer = step if step in {"seal", "compare", "accept"} else "canonical-advance"
     if consumer is None:
         return
     campaign_dir = getattr(arguments, "campaign_dir", None)
