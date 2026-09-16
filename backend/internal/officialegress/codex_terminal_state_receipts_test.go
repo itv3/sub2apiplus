@@ -14,10 +14,54 @@ import (
 // docs/egress/maintenance 留下 CODEX_CLI_*_TERMINAL_STATE_RECEIPT.json，并且
 // 自摘要一致、四份阶段收据与审计索引逐字在库、当前 active 版本必须有收据且
 // Runtime Catalog 的 source 指向其 Campaign 链。0.149.1 由专用测试覆盖。
+// 候选中间态（VC-4 候选 Catalog 入库后、VC-6 激活前）：下一版本候选已入库而 active
+// 未变时，Runtime Catalog 的 source 允许指向候选 Campaign 的 classification 摘要，
+// 前提是该 Campaign 不在 active 终态链上，且 ReleaseGraph 所有 previous 候选节点的
+// source 与之逐字一致；active 节点 source 仍必须落在终态链上。
 
 const codexTerminalStateHistoricalReceipt = "CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json"
 
 var codexTerminalStateSchemaPattern = regexp.MustCompile(`^official-client-codex-(\d+\.\d+\.\d+)-terminal-state/v1$`)
+
+var codexTerminalStateCandidateSourcePattern = regexp.MustCompile(`^campaign:([^/]+)/classification:[0-9a-f]{64}$`)
+
+// codexTerminalStateCandidateNode 是 ReleaseGraph 中一个非 active 节点的版本与来源。
+type codexTerminalStateCandidateNode struct {
+	Mode    string
+	Version string
+	Source  string
+}
+
+// codexTerminalStateCandidateCatalogSource 判定候选中间态：Runtime Catalog source 指向尚未
+// 激活的候选 Campaign classification，该 Campaign 不在 active 终态链上，且 ReleaseGraph 中
+// 所有版本不等于 active 版本的 previous 节点 source 都与之逐字一致（至少一个）。
+func codexTerminalStateCandidateCatalogSource(
+	catalogSource string,
+	activeVersion string,
+	chainIDs []string,
+	candidates []codexTerminalStateCandidateNode,
+) bool {
+	matched := codexTerminalStateCandidateSourcePattern.FindStringSubmatch(catalogSource)
+	if matched == nil {
+		return false
+	}
+	for _, campaignID := range chainIDs {
+		if matched[1] == campaignID {
+			return false
+		}
+	}
+	bound := 0
+	for _, candidate := range candidates {
+		if candidate.Mode != "previous" || candidate.Version == activeVersion {
+			continue
+		}
+		if candidate.Source != catalogSource {
+			return false
+		}
+		bound++
+	}
+	return bound > 0
+}
 
 func codexTerminalStateRepoPath(relative string) string {
 	return filepath.Join("../../..", filepath.FromSlash(relative))
@@ -49,7 +93,7 @@ func codexTerminalStateBinding(t *testing.T, document map[string]any, key string
 	return path, digest
 }
 
-func codexTerminalStateActiveVersion(t *testing.T) (string, []string, string) {
+func codexTerminalStateActiveVersion(t *testing.T) (string, []string, string, []codexTerminalStateCandidateNode) {
 	t.Helper()
 	catalogRaw, err := os.ReadFile(codexTerminalStateRepoPath("backend/internal/officialegress/catalogdata/runtime/release-catalog.json"))
 	if err != nil {
@@ -82,8 +126,14 @@ func codexTerminalStateActiveVersion(t *testing.T) (string, []string, string) {
 	}
 	versions := map[string]struct{}{}
 	sources := []string{}
+	candidates := []codexTerminalStateCandidateNode{}
 	for _, node := range graph.Nodes {
 		if node.Mode != "active" {
+			candidates = append(candidates, codexTerminalStateCandidateNode{
+				Mode:    node.Mode,
+				Version: node.Build.Version,
+				Source:  node.Build.Source,
+			})
 			continue
 		}
 		versions[node.Build.Version] = struct{}{}
@@ -93,13 +143,13 @@ func codexTerminalStateActiveVersion(t *testing.T) (string, []string, string) {
 		t.Fatalf("Runtime Catalog active 版本不唯一：%v", versions)
 	}
 	for version := range versions {
-		return version, sources, catalog.Source
+		return version, sources, catalog.Source, candidates
 	}
-	return "", nil, ""
+	return "", nil, "", nil
 }
 
 func TestCodexTerminalStateReceiptsCloseTheUpgradeLoop(t *testing.T) {
-	activeVersion, activeSources, catalogSource := codexTerminalStateActiveVersion(t)
+	activeVersion, activeSources, catalogSource, candidateNodes := codexTerminalStateActiveVersion(t)
 	matches, err := filepath.Glob(codexTerminalStateRepoPath("docs/egress/maintenance/CODEX_CLI_*_TERMINAL_STATE_RECEIPT.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -176,7 +226,8 @@ func TestCodexTerminalStateReceiptsCloseTheUpgradeLoop(t *testing.T) {
 					t.Fatalf("当前 active 终态 runtime %s 摘要漂移且无 successor 承接：%s", key, path)
 				}
 			}
-			if !strings.HasPrefix(catalogSource, "campaign:"+chainIDs[len(chainIDs)-1]+"/") {
+			if !strings.HasPrefix(catalogSource, "campaign:"+chainIDs[len(chainIDs)-1]+"/") &&
+				!codexTerminalStateCandidateCatalogSource(catalogSource, activeVersion, chainIDs, candidateNodes) {
 				t.Fatalf("Runtime Catalog source 未指向 %s 终态收据的末级 Campaign：%s", version, catalogSource)
 			}
 			for _, source := range activeSources {

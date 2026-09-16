@@ -2808,6 +2808,9 @@ promotion receipt 一致。`receipt.json` 必须以 `codex-production-activation
 阶段收据与审计索引逐字在库；审计索引自摘要和复核通过；声明退休的运行画像已不存在；当前 Active 的
 Runtime Catalog source 指向该收据 Campaign 链末级，ReleaseGraph 的 Active source 落在同一条链上。
 当前 Active 缺少对应终态收据或任一检查失败时，不得声明 `production_active_upgraded`。
+候选中间态（VC-4 候选 Catalog 入库后、VC-6 激活前）是唯一例外：下一版本候选已入库而 Active 未变时，
+Runtime Catalog source 允许指向候选 Campaign 的 `classification` 摘要，前提是该 Campaign 不在 Active
+终态链上，且 ReleaseGraph 所有 Previous 候选节点的 source 与之逐字一致；Active 节点 source 仍须落在终态链上。
 
 四阶段收据生成并重放后，必须从最新 canonical checkpoint 按顺序登记，禁止走旧 successor／epoch 链：
 

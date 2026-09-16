@@ -318,6 +318,52 @@ class CodexTerminalStateReceiptGateTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "未指向 0.151.0 终态收据的末级 Campaign"):
             ledger.validate_codex_terminal_state_receipts()
 
+    def _write_graph(self, extra_nodes: list[dict[str, object]]) -> None:
+        self.graph_path.write_text(
+            json.dumps(
+                {
+                    "nodes": [
+                        {"mode": "active", "build": {"version": "0.151.0", "source": "campaign:c-last/formal"}},
+                        {"mode": "retired", "build": {"version": "0.149.1", "source": "campaign:c-old/formal"}},
+                        *extra_nodes,
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    def test_accepts_candidate_catalog_source_bound_to_previous_nodes(self) -> None:
+        # VC-4 候选中间态：0.154.0 候选以 previous 入库，catalog source 指向候选 Campaign。
+        candidate = "campaign:c-next/classification:" + "b" * 64
+        self._write_graph([{"mode": "previous", "build": {"version": "0.154.0", "source": candidate}}])
+        self._write_catalog(candidate)
+        self._write_receipt(self._receipt())
+        self.assertEqual(len(ledger.validate_codex_terminal_state_receipts()), 1)
+
+    def test_rejects_candidate_catalog_source_without_matching_previous_node(self) -> None:
+        candidate = "campaign:c-next/classification:" + "b" * 64
+        other = "campaign:c-else/classification:" + "c" * 64
+        self._write_graph([{"mode": "previous", "build": {"version": "0.154.0", "source": other}}])
+        self._write_catalog(candidate)
+        self._write_receipt(self._receipt())
+        with self.assertRaisesRegex(RuntimeError, "未指向 0.151.0 终态收据的末级 Campaign"):
+            ledger.validate_codex_terminal_state_receipts()
+
+    def test_rejects_candidate_catalog_source_on_terminal_chain(self) -> None:
+        candidate = "campaign:c-first/classification:" + "b" * 64
+        self._write_graph([{"mode": "previous", "build": {"version": "0.154.0", "source": candidate}}])
+        self._write_catalog(candidate)
+        self._write_receipt(self._receipt())
+        with self.assertRaisesRegex(RuntimeError, "未指向 0.151.0 终态收据的末级 Campaign"):
+            ledger.validate_codex_terminal_state_receipts()
+
+    def test_rejects_candidate_catalog_source_without_previous_node(self) -> None:
+        candidate = "campaign:c-next/classification:" + "b" * 64
+        self._write_catalog(candidate)
+        self._write_receipt(self._receipt())
+        with self.assertRaisesRegex(RuntimeError, "未指向 0.151.0 终态收据的末级 Campaign"):
+            ledger.validate_codex_terminal_state_receipts()
+
     def test_rejects_retired_profile_still_present(self) -> None:
         still_there = self.root / "backend/internal/officialegress/catalogdata/runtime/profiles/0.147.0/gone.json"
         still_there.parent.mkdir(parents=True)

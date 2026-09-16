@@ -861,8 +861,34 @@ def _validate_terminal_repo_binding(
     raise RuntimeError(f"{label} 摘要漂移：{relative}")
 
 
-def _runtime_catalog_active_state() -> tuple[str, list[str], str]:
-    """读取当前 Runtime Catalog：返回 (active 版本, active 节点 source 列表, catalog source)。"""
+CODEX_CANDIDATE_CATALOG_SOURCE_RE = re.compile(r"^campaign:([^/]+)/classification:[0-9a-f]{64}$")
+
+
+def _candidate_catalog_source_allowed(
+    catalog_source: str,
+    active_version: str,
+    chain_ids: list[str],
+    previous_nodes: list[tuple[str, str]],
+) -> bool:
+    """候选中间态（VC-4 候选 Catalog 入库后、VC-6 激活前）的 Runtime Catalog source 判定。
+
+    下一版本候选已入库而 active 未变时，catalog source 允许指向候选 Campaign 的
+    classification 摘要：该 Campaign 不得在 active 终态链上，且 ReleaseGraph 所有版本
+    不等于 active 版本的 previous 节点 source 都必须与之逐字一致（至少一个）。
+    """
+
+    matched = CODEX_CANDIDATE_CATALOG_SOURCE_RE.fullmatch(catalog_source)
+    if matched is None or matched.group(1) in chain_ids:
+        return False
+    bound = [source for version, source in previous_nodes if version != active_version]
+    return bool(bound) and all(source == catalog_source for source in bound)
+
+
+def _runtime_catalog_active_state() -> tuple[str, list[str], str, list[tuple[str, str]]]:
+    """读取当前 Runtime Catalog。
+
+    返回 (active 版本, active 节点 source 列表, catalog source, previous 节点 (版本, source) 列表)。
+    """
 
     catalog = json.loads(RUNTIME_CATALOG_PATH.read_text(encoding="utf-8"))
     graph_reference = catalog.get("release_graph")
@@ -872,15 +898,21 @@ def _runtime_catalog_active_state() -> tuple[str, list[str], str]:
     graph = json.loads(graph_path.read_text(encoding="utf-8"))
     versions: set[str] = set()
     sources: list[str] = []
+    previous_nodes: list[tuple[str, str]] = []
     for node in graph.get("nodes", []):
-        if not isinstance(node, dict) or node.get("mode") != "active":
+        if not isinstance(node, dict):
             continue
         build = node.get("build") or {}
+        if node.get("mode") == "previous":
+            previous_nodes.append((str(build.get("version", "")), str(build.get("source", ""))))
+            continue
+        if node.get("mode") != "active":
+            continue
         versions.add(str(build.get("version", "")))
         sources.append(str(build.get("source", "")))
     if len(versions) != 1:
         raise RuntimeError(f"Runtime Catalog active 版本不唯一：{sorted(versions)!r}")
-    return versions.pop(), sources, str(catalog.get("source", ""))
+    return versions.pop(), sources, str(catalog.get("source", "")), previous_nodes
 
 
 def validate_codex_terminal_state_receipts() -> list[str]:
@@ -890,10 +922,11 @@ def validate_codex_terminal_state_receipts() -> list[str]:
     自摘要一致；四份阶段收据（晋升、激活、post-promotion 门禁、画像退休）与审计索引
     逐字在库；审计索引经 ``codex_audit_index.py check`` 自摘要通过；退休画像已不存在；
     若它就是当前 active 版本，Runtime Catalog 的 source 必须指向其 Campaign 链末级，
-    ReleaseGraph active 节点的 source 必须落在链上。当前 active 版本缺少终态收据即失败。
+    或处于候选中间态（见 ``_candidate_catalog_source_allowed``）；ReleaseGraph active 节点
+    的 source 必须落在链上。当前 active 版本缺少终态收据即失败。
     """
 
-    active_version, active_sources, catalog_source = _runtime_catalog_active_state()
+    active_version, active_sources, catalog_source, previous_nodes = _runtime_catalog_active_state()
     validated: list[str] = []
     seen_versions: set[str] = set()
     for receipt_path in sorted(MAINTENANCE_ROOT.glob(TERMINAL_STATE_RECEIPT_GLOB)):
@@ -986,7 +1019,11 @@ def validate_codex_terminal_state_receipts() -> list[str]:
             raise RuntimeError(f"{version} 终态收据缺少 Campaign 承接链")
         chain_ids = [str(link["campaign_id"]) for link in chain]
         if version == active_version:
-            if not catalog_source.startswith(f"campaign:{chain_ids[-1]}/"):
+            if not catalog_source.startswith(
+                f"campaign:{chain_ids[-1]}/"
+            ) and not _candidate_catalog_source_allowed(
+                catalog_source, active_version, chain_ids, previous_nodes
+            ):
                 raise RuntimeError(
                     f"Runtime Catalog source 未指向 {version} 终态收据的末级 Campaign：{catalog_source}"
                 )
