@@ -335,6 +335,19 @@ C0154_V7_RECOVERY_SOURCE = {
     "tool_files_sha256": (
         "96f79c9e26aaf61c7a226ba87e6c4f5e34e0d8636e6f7ec02de25f993479f8c1"
     ),
+    # v7 在严格构建参数 v2 上线前已经完成 VC-4，因此其不可变构建收据仍是
+    # v1。只允许下面这一个逐字冻结的历史收据跳过 v2 参数重放；外层仍会
+    # 重验源码树、Git commit、二进制、镜像、Catalog、门禁和实现测试。
+    "build_receipt_sha256": (
+        "735304910bebb1b6b000150f93fe4a2bee0c74b2a2a0b65834eab4cf7a4b52e4"
+    ),
+    "build_receipt_bytes": 7895,
+    "build_receipt_digest": (
+        "23e65465a85e1133751ae2ac14e68bf6ef939fd25772ea5e26d64b7738fad9b1"
+    ),
+    "build_parameters_sha256": (
+        "99d7ff903c1d7062631ba9e2f34c1f4e64ea0672dcbcefae47c99a891abfbcd0"
+    ),
 }
 # 该坐标只为已经发布、尚未产生任何 VC-5 执行事实的唯一恢复后继续接
 # 控制链。清单摘要是授权的一部分；同名目录、同版本或同 reason 都不能
@@ -44217,30 +44230,63 @@ def _replay_candidate_build_receipt(
 
     build_parameters = receipt["build"]["parameters"]
     binary_path = Path(receipt["binary"]["path"])
-    try:
-        build_tree = Path(build_parameters["build_tree"]["root"]).resolve(strict=True)
-        docker_context = Path(
-            build_parameters["docker_build"]["context_root"]
-        ).resolve(strict=True)
-        frontend_dist_source = Path(
-            build_parameters["frontend"]["dist_source_root"]
-        ).resolve(strict=True)
-        build_parameters = codex_upgrade_candidate_build.validate_build_parameters(
-            build_parameters,
+    legacy_v7_build = bool(
+        _allow_legacy_v7_source
+        and receipt.get("schema_version")
+        == codex_upgrade_vc_artifacts.LEGACY_CANDIDATE_BUILD_SCHEMA
+    )
+    if legacy_v7_build:
+        frozen = C0154_V7_RECOVERY_SOURCE
+        _validated_c0154_v7_recovery_source_scope(
+            campaign_dir,
+            manifest,
             candidate_id=candidate_id,
-            source_root=resolved_source,
-            git_commit=str(receipt["source"]["git_commit"]),
-            binary_path=binary_path,
-            binary_sha256=str(receipt["binary"]["sha256"]),
-            binary_bytes=int(receipt["binary"]["bytes"]),
-            build_tree=build_tree,
-            docker_context=docker_context,
-            frontend_dist_source=frontend_dist_source,
-            target_architecture=str(receipt["target_architecture"]),
-            image_id=str(receipt["image"]["image_id"]),
+            attempt_id=str(frozen["attempt_id"]),
         )
-    except (KeyError, OSError, codex_upgrade_candidate_build.CandidateBuildError) as error:
-        raise ConfigurationError(f"Candidate 严格构建参数无法重放：{error}") from error
+        if (
+            file_sha256(expected_path) != frozen["build_receipt_sha256"]
+            or expected_path.stat().st_size != frozen["build_receipt_bytes"]
+            or receipt.get("receipt_digest") != frozen["build_receipt_digest"]
+            or receipt.get("build", {}).get("parameters_sha256")
+            != frozen["build_parameters_sha256"]
+        ):
+            raise ConfigurationError("Candidate v7 历史构建收据字节或摘要漂移。")
+        return dict(receipt), {
+            "path": expected_path.relative_to(campaign_dir).as_posix(),
+            "sha256": file_sha256(expected_path),
+            "bytes": expected_path.stat().st_size,
+        }
+    else:
+        try:
+            build_tree = Path(build_parameters["build_tree"]["root"]).resolve(strict=True)
+            docker_context = Path(
+                build_parameters["docker_build"]["context_root"]
+            ).resolve(strict=True)
+            frontend_dist_source = Path(
+                build_parameters["frontend"]["dist_source_root"]
+            ).resolve(strict=True)
+            build_parameters = codex_upgrade_candidate_build.validate_build_parameters(
+                build_parameters,
+                candidate_id=candidate_id,
+                source_root=resolved_source,
+                git_commit=str(receipt["source"]["git_commit"]),
+                binary_path=binary_path,
+                binary_sha256=str(receipt["binary"]["sha256"]),
+                binary_bytes=int(receipt["binary"]["bytes"]),
+                build_tree=build_tree,
+                docker_context=docker_context,
+                frontend_dist_source=frontend_dist_source,
+                target_architecture=str(receipt["target_architecture"]),
+                image_id=str(receipt["image"]["image_id"]),
+            )
+        except (
+            KeyError,
+            OSError,
+            codex_upgrade_candidate_build.CandidateBuildError,
+        ) as error:
+            raise ConfigurationError(
+                f"Candidate 严格构建参数无法重放：{error}"
+            ) from error
 
     machine_payloads: dict[str, dict[str, Any]] = {}
     for name in (
