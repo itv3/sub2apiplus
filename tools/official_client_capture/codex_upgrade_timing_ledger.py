@@ -283,6 +283,12 @@ PRODUCER_FREEZE_SUCCESSORS = (
         "scope": "upstream-codex-0154-vc5-legacy-build-replay-20260917-freeze-successor",
         "result": "manual_actions_required",
     },
+    {
+        "path": "docs/egress/maintenance/upstream-codex-0154-vc5-runtime-rebase-component-20260917-freeze-successor.json",
+        "base_commit": "e422e021850c4eeee0a68692d7a6d20e798105d1",
+        "scope": "upstream-codex-0154-vc5-runtime-rebase-component-20260917-freeze-successor",
+        "result": "manual_actions_required",
+    },
 )
 
 

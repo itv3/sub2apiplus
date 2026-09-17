@@ -484,6 +484,12 @@ RUNTIME_SUCCESSOR_CHANGED_TOOL_PATH_JOB_IDS = {
         {"candidate-core-mitm", "candidate-compact-mitm"}
     ),
 }
+# 失败 Job 后继需要把已审计的历史产出身份重基到当前组件身份。这里的
+# ``evaluator`` 只承接上表中明确登记、且不扩大执行闭集的 schema（当前为
+# timing ledger schema）；普通 control/environment/orchestrator 漂移仍然拒绝。
+_RUNTIME_SUCCESSOR_ALLOWED_REBASE_COMPONENTS = frozenset(
+    {"producer", "relay", "runtime", "shared", "scenario", "evaluator"}
+)
 OFFICIAL_COMPACTION_LITE_RECOVERY_FILES = {
     "build_compaction_model_catalog.py": {
         "from_sha256": None,
@@ -6308,7 +6314,7 @@ def _runtime_successor_recovery_source(
         _tool_component_for_path(path) for path in permitted_rebase_paths
     }
     if not allowed_high_risk_components.issubset(
-        {"producer", "relay", "runtime", "shared", "scenario"}
+        _RUNTIME_SUCCESSOR_ALLOWED_REBASE_COMPONENTS
     ):
         raise ConfigurationError("v9 后继的高风险工具组件分类非法。")
 
@@ -43871,6 +43877,49 @@ def _resolve_candidate_build_binding_path(campaign_dir: Path, value: Any) -> Pat
     return candidate if candidate.is_absolute() else _campaign_file(campaign_dir, value)
 
 
+def _require_c0154_v7_frozen_legacy_build_receipt(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    candidate_id: str,
+    receipt_path: Path,
+    receipt: Mapping[str, Any],
+) -> dict[str, Any]:
+    """只授权逐字冻结的 v7 构建收据跳过后来新增的 v2 实物校验。"""
+
+    frozen = C0154_V7_RECOVERY_SOURCE
+    _validated_c0154_v7_recovery_source_scope(
+        campaign_dir,
+        manifest,
+        candidate_id=candidate_id,
+        attempt_id=str(frozen["attempt_id"]),
+    )
+    build = receipt.get("build")
+    receipt_sha256 = file_sha256(receipt_path)
+    receipt_bytes = receipt_path.stat().st_size
+    if (
+        receipt.get("schema_version")
+        != codex_upgrade_vc_artifacts.LEGACY_CANDIDATE_BUILD_SCHEMA
+        or receipt.get("campaign_id") != frozen["campaign_id"]
+        or receipt.get("campaign_manifest_sha256")
+        != frozen["campaign_manifest_sha256"]
+        or candidate_id != frozen["candidate_id"]
+        or receipt.get("candidate_id") != frozen["candidate_id"]
+        or receipt.get("target_version") != frozen["target_version"]
+        or receipt_sha256 != frozen["build_receipt_sha256"]
+        or receipt_bytes != frozen["build_receipt_bytes"]
+        or receipt.get("receipt_digest") != frozen["build_receipt_digest"]
+        or not isinstance(build, Mapping)
+        or build.get("parameters_sha256")
+        != frozen["build_parameters_sha256"]
+    ):
+        raise ConfigurationError("Candidate v7 历史构建收据字节或摘要漂移。")
+    return {
+        "path": receipt_path.relative_to(campaign_dir).as_posix(),
+        "sha256": receipt_sha256,
+        "bytes": receipt_bytes,
+    }
+
+
 def _replay_projected_candidate_build_receipt(
     campaign_dir: Path,
     manifest: Mapping[str, Any],
@@ -44230,32 +44279,20 @@ def _replay_candidate_build_receipt(
 
     build_parameters = receipt["build"]["parameters"]
     binary_path = Path(receipt["binary"]["path"])
-    legacy_v7_build = bool(
-        _allow_legacy_v7_source
+    frozen_v7_legacy_build = bool(
+        _allow_legacy_v7_source is True
         and receipt.get("schema_version")
         == codex_upgrade_vc_artifacts.LEGACY_CANDIDATE_BUILD_SCHEMA
     )
-    if legacy_v7_build:
-        frozen = C0154_V7_RECOVERY_SOURCE
-        _validated_c0154_v7_recovery_source_scope(
+    if frozen_v7_legacy_build:
+        frozen_binding = _require_c0154_v7_frozen_legacy_build_receipt(
             campaign_dir,
             manifest,
-            candidate_id=candidate_id,
-            attempt_id=str(frozen["attempt_id"]),
+            candidate_id,
+            expected_path,
+            receipt,
         )
-        if (
-            file_sha256(expected_path) != frozen["build_receipt_sha256"]
-            or expected_path.stat().st_size != frozen["build_receipt_bytes"]
-            or receipt.get("receipt_digest") != frozen["build_receipt_digest"]
-            or receipt.get("build", {}).get("parameters_sha256")
-            != frozen["build_parameters_sha256"]
-        ):
-            raise ConfigurationError("Candidate v7 历史构建收据字节或摘要漂移。")
-        return dict(receipt), {
-            "path": expected_path.relative_to(campaign_dir).as_posix(),
-            "sha256": file_sha256(expected_path),
-            "bytes": expected_path.stat().st_size,
-        }
+        return dict(receipt), frozen_binding
     else:
         try:
             build_tree = Path(build_parameters["build_tree"]["root"]).resolve(strict=True)
@@ -44295,8 +44332,6 @@ def _replay_candidate_build_receipt(
         "image_inspection",
         "capability_probe",
     ):
-        if name not in receipt:
-            continue
         binding = receipt[name]
         path = _campaign_file(campaign_dir, str(binding["path"]))
         _reject_symlink_components(path, campaign_dir, f"Candidate {name} 机器收据")
@@ -44308,48 +44343,45 @@ def _replay_candidate_build_receipt(
         if payload.get("receipt_digest") != binding["receipt_digest"]:
             raise ConfigurationError(f"Candidate {name} 机器收据自摘要绑定漂移。")
         machine_payloads[name] = payload
-    if machine_payloads:
-        try:
-            codex_upgrade_candidate_build.replay_inventory_receipt(
-                machine_payloads["build_inventory"],
-                build_parameters,
-                candidate_id=candidate_id,
-                image_id=str(receipt["image"]["image_id"]),
-                source_root=resolved_source,
-                build_tree=build_tree,
-                docker_context=docker_context,
-                binary_path=binary_path,
-            )
-            codex_upgrade_candidate_build.replay_frontend_provenance(
-                machine_payloads["frontend_provenance"],
-                build_parameters,
-                candidate_id=candidate_id,
-                image_id=str(receipt["image"]["image_id"]),
-                source_root=resolved_source,
-                git_commit=str(receipt["source"]["git_commit"]),
-                build_tree=build_tree,
-                frontend_dist_source=frontend_dist_source,
-            )
-            codex_upgrade_candidate_build.replay_image_inspection(
-                machine_payloads["image_inspection"],
-                build_parameters,
-                candidate_id=candidate_id,
-                runtime_image=str(receipt["image"]["reference"]),
-                image_id=str(receipt["image"]["image_id"]),
-                binary_path=binary_path,
-                docker_context=docker_context,
-                git_commit=str(receipt["source"]["git_commit"]),
-                target_architecture=str(receipt["target_architecture"]),
-            )
-            codex_upgrade_candidate_build.replay_capability_probe(
-                machine_payloads["capability_probe"],
-                candidate_id=candidate_id,
-                image_id=str(receipt["image"]["image_id"]),
-            )
-        except (OSError, codex_upgrade_candidate_build.CandidateBuildError) as error:
-            raise ConfigurationError(
-                f"Candidate 构建实物收据无法重放：{error}"
-            ) from error
+    try:
+        codex_upgrade_candidate_build.replay_inventory_receipt(
+            machine_payloads["build_inventory"],
+            build_parameters,
+            candidate_id=candidate_id,
+            image_id=str(receipt["image"]["image_id"]),
+            source_root=resolved_source,
+            build_tree=build_tree,
+            docker_context=docker_context,
+            binary_path=binary_path,
+        )
+        codex_upgrade_candidate_build.replay_frontend_provenance(
+            machine_payloads["frontend_provenance"],
+            build_parameters,
+            candidate_id=candidate_id,
+            image_id=str(receipt["image"]["image_id"]),
+            source_root=resolved_source,
+            git_commit=str(receipt["source"]["git_commit"]),
+            build_tree=build_tree,
+            frontend_dist_source=frontend_dist_source,
+        )
+        codex_upgrade_candidate_build.replay_image_inspection(
+            machine_payloads["image_inspection"],
+            build_parameters,
+            candidate_id=candidate_id,
+            runtime_image=str(receipt["image"]["reference"]),
+            image_id=str(receipt["image"]["image_id"]),
+            binary_path=binary_path,
+            docker_context=docker_context,
+            git_commit=str(receipt["source"]["git_commit"]),
+            target_architecture=str(receipt["target_architecture"]),
+        )
+        codex_upgrade_candidate_build.replay_capability_probe(
+            machine_payloads["capability_probe"],
+            candidate_id=candidate_id,
+            image_id=str(receipt["image"]["image_id"]),
+        )
+    except (OSError, codex_upgrade_candidate_build.CandidateBuildError) as error:
+        raise ConfigurationError(f"Candidate 构建实物收据无法重放：{error}") from error
     return receipt, {
         "path": expected_path.relative_to(campaign_dir).as_posix(),
         "sha256": file_sha256(expected_path),

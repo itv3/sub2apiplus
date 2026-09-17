@@ -646,6 +646,7 @@ class CodexUpgradeTest(unittest.TestCase):
                     recovery_candidate_id=source["candidate_id"],
                     recovery_attempt_id=source["attempt_id"],
                 )
+
             formal_manifest["predecessor"]["campaign_id"] = (
                 codex_upgrade.C0154_V7_RECOVERY_SOURCE["campaign_id"]
             )
@@ -680,6 +681,37 @@ class CodexUpgradeTest(unittest.TestCase):
                     recovery_candidate_id=source["candidate_id"],
                     recovery_attempt_id=source["attempt_id"],
                 )
+
+    def test_v7_failed_job_recovery_allows_registered_timing_schema_rebase(
+        self,
+    ) -> None:
+        """登记为零执行控制前提的 timing schema 可重基，普通控制工具仍拒绝。"""
+
+        registered_paths = {
+            "run_candidate_core_capture.sh",
+            "codex_upgrade_candidate_readiness.py",
+            "codex_upgrade_scenarios_0_154_0.json",
+            "codex_upgrade_timing_ledger.schema.json",
+        }
+        components = {
+            codex_upgrade._tool_component_for_path(path)
+            for path in registered_paths
+        }
+        self.assertEqual(
+            components,
+            {"relay", "shared", "scenario", "evaluator"},
+        )
+        self.assertTrue(
+            components.issubset(
+                codex_upgrade._RUNTIME_SUCCESSOR_ALLOWED_REBASE_COMPONENTS
+            )
+        )
+        self.assertNotIn(
+            codex_upgrade._tool_component_for_path(
+                "codex_upgrade_supervisor.py"
+            ),
+            codex_upgrade._RUNTIME_SUCCESSOR_ALLOWED_REBASE_COMPONENTS,
+        )
 
     def test_v7_failed_job_recovery_requires_exactly_one_source_mode(
         self,
@@ -8349,6 +8381,199 @@ class CodexUpgradeTest(unittest.TestCase):
                         candidate_id=source["candidate_id"],
                         attempt_id=source["attempt_id"],
                     )
+
+    def test_v7_legacy_build_receipt_requires_explicit_source_authority(
+        self,
+    ) -> None:
+        """未进入固定 v7 来源重放时，v1 构建收据必须默认拒绝。"""
+
+        source = codex_upgrade.C0154_V7_RECOVERY_SOURCE
+        with tempfile.TemporaryDirectory() as directory:
+            campaign_dir = Path(directory).resolve()
+            receipt_path = (
+                campaign_dir
+                / "candidates"
+                / str(source["candidate_id"])
+                / "build-receipt.json"
+            )
+            self._write_json(
+                receipt_path,
+                {
+                    "schema_version": (
+                        codex_upgrade_vc_artifacts.LEGACY_CANDIDATE_BUILD_SCHEMA
+                    )
+                },
+            )
+            with self.assertRaisesRegex(
+                codex_upgrade.ConfigurationError,
+                "受管历史投影",
+            ):
+                codex_upgrade._replay_candidate_build_receipt(
+                    campaign_dir,
+                    {},
+                    str(source["candidate_id"]),
+                    receipt_path,
+                )
+
+    def test_v7_frozen_legacy_build_receipt_rejects_each_fixed_field_drift(
+        self,
+    ) -> None:
+        """v1 兼容必须同时锁死来源、文件字节及两层自摘要。"""
+
+        source = codex_upgrade.C0154_V7_RECOVERY_SOURCE
+        with tempfile.TemporaryDirectory() as directory:
+            campaign_dir = Path(directory).resolve()
+            receipt_path = (
+                campaign_dir
+                / "candidates"
+                / str(source["candidate_id"])
+                / "build-receipt.json"
+            )
+            receipt = {
+                "schema_version": (
+                    codex_upgrade_vc_artifacts.LEGACY_CANDIDATE_BUILD_SCHEMA
+                ),
+                "campaign_id": source["campaign_id"],
+                "campaign_manifest_sha256": "1" * 64,
+                "candidate_id": source["candidate_id"],
+                "target_version": source["target_version"],
+                "receipt_digest": "2" * 64,
+                "build": {"parameters_sha256": "3" * 64},
+            }
+            self._write_json(receipt_path, receipt)
+            fixed = {
+                "campaign_dir": str(campaign_dir),
+                "campaign_manifest_sha256": receipt[
+                    "campaign_manifest_sha256"
+                ],
+                "build_receipt_sha256": codex_upgrade.file_sha256(receipt_path),
+                "build_receipt_bytes": receipt_path.stat().st_size,
+                "build_receipt_digest": receipt["receipt_digest"],
+                "build_parameters_sha256": receipt["build"][
+                    "parameters_sha256"
+                ],
+            }
+            manifest = {
+                "campaign_id": source["campaign_id"],
+                "target_version": source["target_version"],
+            }
+
+            with (
+                mock.patch.dict(source, fixed),
+                mock.patch.object(
+                    codex_upgrade,
+                    "_validated_c0154_v7_recovery_source_scope",
+                    return_value={},
+                ) as source_guard,
+            ):
+                binding = (
+                    codex_upgrade._require_c0154_v7_frozen_legacy_build_receipt(
+                        campaign_dir,
+                        manifest,
+                        str(source["candidate_id"]),
+                        receipt_path,
+                        receipt,
+                    )
+                )
+                self.assertEqual(
+                    binding,
+                    {
+                        "path": receipt_path.relative_to(campaign_dir).as_posix(),
+                        "sha256": source["build_receipt_sha256"],
+                        "bytes": source["build_receipt_bytes"],
+                    },
+                )
+                source_guard.assert_called_once_with(
+                    campaign_dir,
+                    manifest,
+                    candidate_id=source["candidate_id"],
+                    attempt_id=source["attempt_id"],
+                )
+
+                receipt_drifts = {
+                    "schema_version": {
+                        "schema_version": codex_upgrade_vc_artifacts.CANDIDATE_BUILD_SCHEMA
+                    },
+                    "campaign_id": {"campaign_id": "another-campaign"},
+                    "campaign_manifest_sha256": {
+                        "campaign_manifest_sha256": "4" * 64
+                    },
+                    "candidate_id": {"candidate_id": "another-candidate"},
+                    "target_version": {"target_version": "0.155.0"},
+                    "receipt_digest": {"receipt_digest": "5" * 64},
+                    "parameters_sha256": {
+                        "build": {"parameters_sha256": "6" * 64}
+                    },
+                }
+                for field, changes in receipt_drifts.items():
+                    with self.subTest(field=field):
+                        changed = copy.deepcopy(receipt)
+                        changed.update(changes)
+                        with self.assertRaisesRegex(
+                            codex_upgrade.ConfigurationError,
+                            "历史构建收据.*漂移",
+                        ):
+                            codex_upgrade._require_c0154_v7_frozen_legacy_build_receipt(
+                                campaign_dir,
+                                manifest,
+                                str(source["candidate_id"]),
+                                receipt_path,
+                                changed,
+                            )
+
+                for field, value in (
+                    ("build_receipt_sha256", "7" * 64),
+                    ("build_receipt_bytes", receipt_path.stat().st_size + 1),
+                ):
+                    with (
+                        self.subTest(field=field),
+                        mock.patch.dict(source, {field: value}),
+                        self.assertRaisesRegex(
+                            codex_upgrade.ConfigurationError,
+                            "历史构建收据.*漂移",
+                        ),
+                    ):
+                        codex_upgrade._require_c0154_v7_frozen_legacy_build_receipt(
+                            campaign_dir,
+                            manifest,
+                            str(source["candidate_id"]),
+                            receipt_path,
+                            receipt,
+                        )
+
+                with self.assertRaisesRegex(
+                    codex_upgrade.ConfigurationError,
+                    "历史构建收据.*漂移",
+                ):
+                    codex_upgrade._require_c0154_v7_frozen_legacy_build_receipt(
+                        campaign_dir,
+                        manifest,
+                        "another-candidate",
+                        receipt_path,
+                        receipt,
+                    )
+
+            with (
+                mock.patch.dict(source, fixed),
+                mock.patch.object(
+                    codex_upgrade,
+                    "_validated_c0154_v7_recovery_source_scope",
+                    side_effect=codex_upgrade.ConfigurationError(
+                        "v7 失败 Job 恢复的直接前序路径不可信。"
+                    ),
+                ),
+                self.assertRaisesRegex(
+                    codex_upgrade.ConfigurationError,
+                    "直接前序路径不可信",
+                ),
+            ):
+                codex_upgrade._require_c0154_v7_frozen_legacy_build_receipt(
+                    campaign_dir,
+                    manifest,
+                    str(source["candidate_id"]),
+                    receipt_path,
+                    receipt,
+                )
 
     def test_published_v7_recovery_coordinates_replay_abandoned_attempt(self) -> None:
         """已发布后继必须从严格 v6 收据完整重放唯一源 attempt。"""
