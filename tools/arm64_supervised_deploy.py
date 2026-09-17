@@ -126,7 +126,7 @@ from typing import Any, Callable, Mapping
 # OverlayFS seal 预演门禁、candidate-trace-test 零请求 Job 与标签 root_suffix
 # 通配；工具身份策略升至 v7。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "48e565e714e91aa2d033c8b4bd232877173d19f87b1f70704441d4b271aa8631"
+    "852fde262087b666f46b06e4e4098a3992e6f203cc7c1a6e734204e31a1a14c9"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "ea5500505d49340fe4971b981a8ab1159266c6a54ad0d3724cdf10cd51815fe4"
