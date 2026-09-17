@@ -9524,6 +9524,169 @@ class CodexUpgradeTest(unittest.TestCase):
             )
         )
 
+    def test_v7_preview_replays_hybrid_and_evaluator_drift(self) -> None:
+        """v7 严格预览应承接旧结果，不得把混合文件或 timing schema 判成重跑。"""
+
+        def tool_identity(
+            values: dict[str, str],
+            *,
+            wire_closure: str,
+            files_sha256: str | None = None,
+        ) -> dict[str, object]:
+            entries = [
+                {"path": path, "sha256": digest}
+                for path, digest in sorted(values.items())
+            ]
+            components = codex_upgrade._tool_component_identities(entries)
+            return {
+                "entry_count": len(entries),
+                "files_sha256": files_sha256
+                or codex_upgrade._fingerprint({"entries": entries}),
+                "entries": entries,
+                "components": components["components"],
+                **codex_upgrade._tool_identity_sides(entries),
+                "orchestrator_closures": {
+                    "wire_producer": {"closure_sha256": wire_closure}
+                },
+            }
+
+        source = codex_upgrade.C0154_V7_RECOVERY_SOURCE
+        frozen_files = {
+            "candidate_rule_expectations_0_154_0.json": "1" * 64,
+            "codex_upgrade.py": "2" * 64,
+            "codex_upgrade_timing_ledger.schema.json": "3" * 64,
+            "run_candidate_core_capture.sh": "4" * 64,
+            "run_h1_wire_probe.sh": "5" * 64,
+        }
+        current_files = {
+            path: (digest if path == "run_h1_wire_probe.sh" else "6" * 64)
+            for path, digest in frozen_files.items()
+        }
+        frozen_tool = tool_identity(
+            frozen_files,
+            wire_closure="7" * 64,
+        )
+        current_tool = tool_identity(current_files, wire_closure="8" * 64)
+        job = Job(
+            job_id="candidate-h1-wire",
+            phase="candidate",
+            suites=("full",),
+            description="h1",
+            steps=(
+                {
+                    "argv": [
+                        "bash",
+                        "/capture/tools/official_client_capture/run_h1_wire_probe.sh",
+                    ],
+                    "environment": {},
+                },
+            ),
+            evidence_roots=("/capture/h1",),
+            covers=(),
+        )
+        identity = {"runtime": "same"}
+        metadata = codex_upgrade._job_incremental_metadata(
+            job,
+            identity=identity,
+            tool_identity=frozen_tool,
+        )
+        result = {
+            "id": job.job_id,
+            "status": "complete",
+            "execution_sha256": metadata["input_sha256"],
+            "tool_components": metadata["components"],
+            "tool_component_digests": metadata["component_digests"],
+            "tool_dependency_files": metadata["tool_dependency_files"],
+            "input_sha256": metadata["input_sha256"],
+            "environment_sha256": metadata["environment_sha256"],
+            "dependency_sha256": metadata["dependency_sha256"],
+            "incremental_result_key": metadata["result_key"],
+        }
+        attempt = {
+            "status": "failed",
+            "identity": identity,
+            "results": [result],
+        }
+        frozen_manifest = {
+            "campaign_id": source["campaign_id"],
+            "target_version": source["target_version"],
+            "tool_identity": frozen_tool,
+        }
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_dir = root / "source"
+            current_dir = root / "current"
+            attempt_root = (
+                source_dir
+                / "candidates"
+                / str(source["candidate_id"])
+                / "attempts"
+                / str(source["attempt_id"])
+            )
+            attempt_root.mkdir(parents=True)
+            (attempt_root / "attempt.json").write_text("{}\n", encoding="utf-8")
+            current_dir.mkdir()
+            with (
+                mock.patch.dict(
+                    source,
+                    {"tool_files_sha256": frozen_tool["files_sha256"]},
+                ),
+                mock.patch.object(
+                    codex_upgrade,
+                    "load_campaign_manifest",
+                    side_effect=[
+                        frozen_manifest,
+                        {"campaign_id": "current-campaign"},
+                    ],
+                ),
+                mock.patch.object(
+                    codex_upgrade,
+                    "_ordered_capture_attempts",
+                    return_value=[(attempt_root, {})],
+                ),
+                mock.patch.object(
+                    codex_upgrade,
+                    "_load_capture_attempt",
+                    return_value=(attempt_root, attempt),
+                ),
+            ):
+                reused = codex_upgrade._prior_complete_results(
+                    current_dir,
+                    Path("candidates/current-candidate"),
+                    [job],
+                    phase="candidate",
+                    candidate_id="current-candidate",
+                    identity=identity,
+                    tool_identity=current_tool,
+                    expected_reuse_job_ids=[job.job_id],
+                    source_attempt_id=str(source["attempt_id"]),
+                    source_campaign_dir=source_dir,
+                    source_candidate_id=str(source["candidate_id"]),
+                    allowed_high_risk_path_changes={
+                        "codex_upgrade_timing_ledger.schema.json",
+                        "run_candidate_core_capture.sh",
+                    },
+                    validated_current_production_sha256=(
+                        codex_upgrade._tool_identity_side_digest_excluding(
+                            current_tool,
+                            "production",
+                            codex_upgrade._PHASE_EVALUATION_HYBRID_FILES,
+                        )
+                    ),
+                    allow_unbound_cross_campaign_preview=True,
+                )
+
+        self.assertEqual([item["id"] for item in reused], [job.job_id])
+        self.assertEqual(
+            reused[0]["incremental_result_key"],
+            codex_upgrade._job_incremental_metadata(
+                job,
+                identity=identity,
+                tool_identity=current_tool,
+            )["result_key"],
+        )
+
     def test_plan_identity_does_not_load_transition_from_cross_campaign_failure(
         self,
     ) -> None:
@@ -18545,6 +18708,44 @@ class ToolIdentitySideSplitTest(unittest.TestCase):
             [],
             expected,
             current,
+        )
+        self.assertEqual(affected, [])
+        self.assertEqual(changed, [])
+        self.assertEqual(unmapped, [])
+
+    def test_hybrid_drift_requires_explicit_historical_replay_authorization(self):
+        """v2 wire 闭包变化默认停线，仅严格历史恢复可排除阶段混合文件。"""
+
+        paths = {
+            "candidate_rule_expectations_0_154_0.json",
+            "codex_upgrade.py",
+        }
+        expected = self._identity(
+            [{"path": path, "sha256": "a" * 64} for path in sorted(paths)]
+        )
+        current = self._identity(
+            [{"path": path, "sha256": "b" * 64} for path in sorted(paths)]
+        )
+        expected["orchestrator_closures"] = {
+            "wire_producer": {"closure_sha256": "c" * 64}
+        }
+        current["orchestrator_closures"] = {
+            "wire_producer": {"closure_sha256": "d" * 64}
+        }
+
+        _affected, changed, unmapped = codex_upgrade._exact_tool_path_impact(
+            [],
+            expected,
+            current,
+        )
+        self.assertEqual(set(changed), paths)
+        self.assertEqual(set(unmapped), paths)
+
+        affected, changed, unmapped = codex_upgrade._exact_tool_path_impact(
+            [],
+            expected,
+            current,
+            allow_phase_evaluation_hybrid_drift=True,
         )
         self.assertEqual(affected, [])
         self.assertEqual(changed, [])

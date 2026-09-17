@@ -11097,8 +11097,14 @@ def _exact_tool_path_impact(
     jobs: Iterable[Job],
     expected_tool: Mapping[str, Any],
     current_tool: Mapping[str, Any],
+    *,
+    allow_phase_evaluation_hybrid_drift: bool = False,
 ) -> tuple[list[str], list[str], list[str]]:
-    """按逐文件传递依赖计算 Job 失效集合；未知产出文件保持停线。"""
+    """按逐文件传递依赖计算 Job 失效集合；未知产出文件保持停线。
+
+    ``allow_phase_evaluation_hybrid_drift`` 只能由已经逐坐标验真的历史恢复源
+    打开。普通 v2 身份仍以 wire 闭包摘要为准，不能借混合文件分类绕过停线。
+    """
 
     planned = list(jobs)
     drift = _tool_identity_drift(current_tool, expected_tool)
@@ -11106,7 +11112,9 @@ def _exact_tool_path_impact(
     hybrid = set(_PHASE_EVALUATION_HYBRID_FILES)
     expected_closure = _wire_closure_sha256(expected_tool)
     current_closure = _wire_closure_sha256(current_tool)
-    if expected_closure is not None and current_closure is not None:
+    if allow_phase_evaluation_hybrid_drift:
+        changed -= hybrid
+    elif expected_closure is not None and current_closure is not None:
         # A2-8：v2 身份按编排器 wire 闭包判定混合文件。闭包未变，codex_upgrade.py 的
         # 变化不算产出变化；闭包变了，它映射不到具体 Job，进入 unmapped 让调用方按
         # 「映射不到则全部 Job 受影响」处理，不再静默豁免。
@@ -33248,7 +33256,7 @@ def _historical_result_metadata_matches(
         _tool_component_for_path(path) for path in allowed_high_risk_paths
     }
     if not allowed_high_risk.issubset(
-        {"producer", "relay", "runtime", "shared", "scenario"}
+        _RUNTIME_SUCCESSOR_ALLOWED_REBASE_COMPONENTS
     ):
         return False
     historical_raw = _tool_component_digest_map(frozen_tool)
@@ -33861,12 +33869,27 @@ def _prior_complete_results(
     global_tool_unchanged = _tool_signature_matches(frozen_tool, current_tool)
     changed_production_paths: list[str] = []
     path_job_map: dict[str, set[str]] = {}
+    strict_c0154_v7_replay = bool(
+        explicit_historical_source
+        and isinstance(history_candidate_id, str)
+        and isinstance(source_attempt_id, str)
+        and _is_c0154_v7_failed_core_source(
+            frozen_manifest,
+            candidate_id=history_candidate_id,
+            attempt_id=source_attempt_id,
+        )
+    )
     if isinstance(frozen_tool, Mapping):
         (
             exact_affected_job_ids,
             changed_production_paths,
             unmapped_production_paths,
-        ) = _exact_tool_path_impact(jobs, frozen_tool, current_tool)
+        ) = _exact_tool_path_impact(
+            jobs,
+            frozen_tool,
+            current_tool,
+            allow_phase_evaluation_hybrid_drift=strict_c0154_v7_replay,
+        )
         if unmapped_production_paths:
             raise ConfigurationError(
                 "历史结果复用发现未登记的产出侧工具变化："
