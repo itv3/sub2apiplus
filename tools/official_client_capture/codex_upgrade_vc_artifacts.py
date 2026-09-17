@@ -27,6 +27,7 @@ INTERRUPTED_RECOVERY_CONTRACT_SCHEMA = (
 GATE_REQUIREMENTS_SCHEMA = "codex-post-promotion-gate-requirements/v1"
 GATE_MAPPING_SCHEMA = "codex-post-promotion-gate-mapping/v2"
 GATE_PLAN_SCHEMA = "codex-post-promotion-gate-plan/v1"
+LEGACY_CANDIDATE_BUILD_SCHEMA = "codex-upgrade-candidate-build-receipt/v1"
 CANDIDATE_BUILD_SCHEMA = "codex-upgrade-candidate-build-receipt/v2"
 CANDIDATE_DELIVERY_SCHEMA = "codex-upgrade-candidate-delivery-receipt/v1"
 
@@ -1552,8 +1553,16 @@ def build_candidate_build_receipt(
     return validate_candidate_build_receipt(payload)
 
 
-def validate_candidate_build_receipt(value: Any) -> dict[str, Any]:
-    """校验 VC-4 构建收据的完整 Candidate 身份。"""
+def validate_candidate_build_receipt(
+    value: Any,
+    *,
+    allow_legacy: bool = False,
+) -> dict[str, Any]:
+    """校验 VC-4 构建收据的完整 Candidate 身份。
+
+    v1 缺少四份机器实物收据，默认必须拒绝。只有调用方已经证明它来自
+    受管的历史投影路径时，才可显式开启只读兼容。
+    """
 
     required = {
         "schema_version",
@@ -1582,10 +1591,29 @@ def validate_candidate_build_receipt(value: Any) -> dict[str, Any]:
         "built_at_utc",
         "receipt_digest",
     }
-    if not isinstance(value, Mapping) or set(value) != required:
+    if not isinstance(value, Mapping):
+        raise VCArtifactError("Candidate 构建收据字段不闭合")
+    schema_version = value.get("schema_version")
+    if schema_version == LEGACY_CANDIDATE_BUILD_SCHEMA and not allow_legacy:
+        raise VCArtifactError("Candidate v1 构建收据只允许受管历史投影重放")
+    machine_fields = {
+        "build_inventory",
+        "frontend_provenance",
+        "image_inspection",
+        "capability_probe",
+    }
+    expected_fields = (
+        required - machine_fields
+        if schema_version == LEGACY_CANDIDATE_BUILD_SCHEMA
+        else required
+    )
+    if set(value) != expected_fields:
         raise VCArtifactError("Candidate 构建收据字段不闭合")
     payload = dict(value)
-    if payload.get("schema_version") != CANDIDATE_BUILD_SCHEMA or payload.get("status") != "complete":
+    supported_schemas = {CANDIDATE_BUILD_SCHEMA}
+    if allow_legacy:
+        supported_schemas.add(LEGACY_CANDIDATE_BUILD_SCHEMA)
+    if schema_version not in supported_schemas or payload.get("status") != "complete":
         raise VCArtifactError("Candidate 构建收据 schema 或状态非法")
     for field in ("campaign_id", "candidate_id"):
         _safe_id(payload.get(field), f"Candidate 构建收据 {field}")
@@ -1608,10 +1636,9 @@ def validate_candidate_build_receipt(value: Any) -> dict[str, Any]:
     gate_plan = payload.get("gate_plan")
     implementation_tests = payload.get("implementation_tests")
     machine_receipts = {
-        "build_inventory": payload.get("build_inventory"),
-        "frontend_provenance": payload.get("frontend_provenance"),
-        "image_inspection": payload.get("image_inspection"),
-        "capability_probe": payload.get("capability_probe"),
+        name: payload.get(name)
+        for name in machine_fields
+        if name in payload
     }
     if not isinstance(source, Mapping) or set(source) != {"root", "tree_sha256", "git_commit"}:
         raise VCArtifactError("Candidate source 身份不闭合")

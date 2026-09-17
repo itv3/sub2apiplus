@@ -788,6 +788,7 @@ class SupervisorTests(unittest.TestCase):
     ) -> None:
         for command in (
             "successor",
+            "recover-candidate-failed-jobs",
             "plan",
             "reuse-official-evidence",
             "harden-evidence-permissions",
@@ -1234,6 +1235,13 @@ class SupervisorTests(unittest.TestCase):
             provenance = ledger_receipt.with_name("provenance.json")
             self._write_json(campaign_receipt, reconciliation)
             self._write_json(ledger_receipt, reconciliation)
+            # Campaign 收据按可读格式写入，而 TimingLedger 副本按紧凑格式保存；
+            # 两者只要 JSON 事实相同，就不能因空白字节不同误报绑定漂移。
+            campaign_receipt.write_text(
+                json.dumps(reconciliation, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            campaign_receipt.chmod(0o600)
             self._write_json(provenance, {"status": "complete"})
             timing_ledger.append_event(
                 ledger_root,

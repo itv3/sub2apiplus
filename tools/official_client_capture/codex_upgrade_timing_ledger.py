@@ -271,6 +271,24 @@ PRODUCER_FREEZE_SUCCESSORS = (
         "scope": "upstream-codex-0154-classification-successor-vc-control-20260917-freeze-successor",
         "result": "manual_actions_required",
     },
+    {
+        "path": "docs/egress/maintenance/upstream-codex-0154-vc5-failed-job-recovery-20260917-freeze-successor.json",
+        "base_commit": "3cfd8cbe31f24127840e4d6ce59b08805afd2dd9",
+        "scope": "upstream-codex-0154-vc5-failed-job-recovery-20260917-freeze-successor",
+        "result": "manual_actions_required",
+    },
+    {
+        "path": "docs/egress/maintenance/upstream-codex-0154-vc5-legacy-build-replay-20260917-freeze-successor.json",
+        "base_commit": "7bcb3f213194d551e2c64c18619134038f8f8189",
+        "scope": "upstream-codex-0154-vc5-legacy-build-replay-20260917-freeze-successor",
+        "result": "manual_actions_required",
+    },
+    {
+        "path": "docs/egress/maintenance/upstream-codex-0154-vc5-runtime-rebase-component-20260917-freeze-successor.json",
+        "base_commit": "e422e021850c4eeee0a68692d7a6d20e798105d1",
+        "scope": "upstream-codex-0154-vc5-runtime-rebase-component-20260917-freeze-successor",
+        "result": "manual_actions_required",
+    },
 )
 
 

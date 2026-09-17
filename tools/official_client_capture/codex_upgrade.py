@@ -308,6 +308,73 @@ SUCCESSOR_REASONS = frozenset(
 )
 OFFICIAL_EVIDENCE_REUSE_REASON = "official_evidence_reuse"
 CLASSIFICATION_FACT_CORRECTION_REASON = "classification_fact_correction"
+FORMAL_FAILED_JOB_RECOVERY_COMMAND = "recover-candidate-failed-jobs"
+# 这组坐标只为 0.154 v7 的已知 A15 单点失败开放。它不是通用豁免：来源
+# Campaign、Candidate、attempt 和工具身份任一不一致都会回到普通失败关闭路径。
+C0154_V7_RECOVERY_SOURCE = {
+    "campaign_dir": (
+        "/root/docker/capture-cli/data/evidence/campaigns/"
+        "c0154-formal-vc5-recovery-20260916t122646z"
+    ),
+    "campaign_id": "c0154-formal-vc5-recovery-20260916t122646z",
+    "campaign_manifest_sha256": (
+        "19dc30b85623907f836c425ef9feac9256c426b3335f88629ae5082e40e8d4d2"
+    ),
+    "target_version": "0.154.0",
+    "candidate_id": "c0154-candidate-v7",
+    "attempt_id": "20260916T124216Z-f5194abd8934f5af",
+    "attempt_sha256": (
+        "84d070952cbd4a14903f9fc2cd0b96f8740a439d35988fb49547aca2f4f48c91"
+    ),
+    "attempt_digest": (
+        "60fc49339121996dcd67581ab3482c138d3f3c9f74945c0e71e7b0d06c9b7b79"
+    ),
+    "identity_sha256": (
+        "88d18b3e9650d88441f6d1762f891081c6e3e7ff43372421f7694bea2af4924a"
+    ),
+    "tool_files_sha256": (
+        "96f79c9e26aaf61c7a226ba87e6c4f5e34e0d8636e6f7ec02de25f993479f8c1"
+    ),
+    # v7 在严格构建参数 v2 上线前已经完成 VC-4，因此其不可变构建收据仍是
+    # v1。只允许下面这一个逐字冻结的历史收据跳过 v2 参数重放；外层仍会
+    # 重验源码树、Git commit、二进制、镜像、Catalog、门禁和实现测试。
+    "build_receipt_sha256": (
+        "735304910bebb1b6b000150f93fe4a2bee0c74b2a2a0b65834eab4cf7a4b52e4"
+    ),
+    "build_receipt_bytes": 7895,
+    "build_receipt_digest": (
+        "23e65465a85e1133751ae2ac14e68bf6ef939fd25772ea5e26d64b7738fad9b1"
+    ),
+    "build_parameters_sha256": (
+        "99d7ff903c1d7062631ba9e2f34c1f4e64ea0672dcbcefae47c99a891abfbcd0"
+    ),
+}
+# 该坐标只为已经发布、尚未产生任何 VC-5 执行事实的唯一恢复后继续接
+# 控制链。清单摘要是授权的一部分；同名目录、同版本或同 reason 都不能
+# 单独获得豁免。
+C0154_VC5_FAILED_JOB_CONTROL_EPOCH = {
+    "campaign_id": "c0154-formal-vc5-failed-job-recovery-20260917t0527z",
+    "campaign_manifest_sha256": (
+        "74af19e396db4d7cc2e6e6c86c01cb9ca188dbc1f13904d953b39dea25cff0d5"
+    ),
+    "target_version": "0.154.0",
+    "predecessor_reason": "candidate_failed_job_tool_recovery",
+    "candidate_id": "c0154-candidate-v7",
+    "attempt_id": "20260916T124216Z-f5194abd8934f5af",
+    "execute_job_id": "candidate-frozen-core",
+    "production_path": "run_candidate_core_capture.sh",
+    "planned_job_ids": (
+        "candidate-compact-direct",
+        "candidate-compact-mitm",
+        "candidate-core-direct",
+        "candidate-core-mitm",
+        "candidate-frozen-aux",
+        "candidate-frozen-core",
+        "candidate-h1-wire",
+        "candidate-images-wire",
+        "candidate-ws-handshake-repeat",
+    ),
+}
 CANDIDATE_INCREMENTAL_SUCCESSOR_REASONS = frozenset(
     {
         "candidate_failed_job_tool_recovery",
@@ -405,6 +472,11 @@ RUNTIME_SUCCESSOR_CHANGED_TOOL_PATH_JOB_IDS = {
     ),
     "run_codex_scenario_target.py": RUNTIME_CODEX_BINARY_JOB_IDS,
     "run_candidate_aux_capture.sh": frozenset({"candidate-frozen-aux"}),
+    "run_candidate_core_capture.sh": frozenset({"candidate-frozen-core"}),
+    # 两项只控制本轮启动前就绪检查／计时收据结构，不会改变已完成 Job 的
+    # 请求或证据字节；空集合表示仍需显式恢复来源授权，但不扩大执行闭集。
+    "codex_upgrade_candidate_readiness.py": frozenset(),
+    "codex_upgrade_timing_ledger.schema.json": frozenset(),
     "runtime_scripts/run_fingerprint_mitm_pair.sh": frozenset(
         {"candidate-core-mitm", "candidate-compact-mitm"}
     ),
@@ -412,6 +484,12 @@ RUNTIME_SUCCESSOR_CHANGED_TOOL_PATH_JOB_IDS = {
         {"candidate-core-mitm", "candidate-compact-mitm"}
     ),
 }
+# 失败 Job 后继需要把已审计的历史产出身份重基到当前组件身份。这里的
+# ``evaluator`` 只承接上表中明确登记、且不扩大执行闭集的 schema（当前为
+# timing ledger schema）；普通 control/environment/orchestrator 漂移仍然拒绝。
+_RUNTIME_SUCCESSOR_ALLOWED_REBASE_COMPONENTS = frozenset(
+    {"producer", "relay", "runtime", "shared", "scenario", "evaluator"}
+)
 OFFICIAL_COMPACTION_LITE_RECOVERY_FILES = {
     "build_compaction_model_catalog.py": {
         "from_sha256": None,
@@ -4762,6 +4840,7 @@ def _mutable_command_coordinates(
     if command in {
         "status",
         "plan",
+        FORMAL_FAILED_JOB_RECOVERY_COMMAND,
         "terminal-transition-preflight",
         # 只读裁定；两步式权限收口自持 Campaign 排他锁（.campaign.lock），
         # 不能再建 CampaignLease，否则同一进程内会与自身的锁互相等待。
@@ -4843,6 +4922,7 @@ def _mutable_command_coordinates(
         "prepare-profile",
         "stage-profile",
         "successor",
+        FORMAL_FAILED_JOB_RECOVERY_COMMAND,
         "reuse-official-evidence",
         "account-sealed-official",
     }:
@@ -6164,7 +6244,13 @@ def _runtime_successor_recovery_source(
             for path in replacement_epoch_source.get("production_paths", [])
         )
     else:
-        high_risk_paths = production_paths - set(_PHASE_EVALUATION_HYBRID_FILES)
+        high_risk_paths = _failed_job_recovery_high_risk_paths(
+            predecessor_dir,
+            predecessor_manifest,
+            manifest,
+            candidate_id=predecessor_candidate_id,
+            attempt_id=predecessor_attempt_id,
+        )
     unknown_paths = high_risk_paths - set(
         RUNTIME_SUCCESSOR_CHANGED_TOOL_PATH_JOB_IDS
     )
@@ -6215,11 +6301,20 @@ def _runtime_successor_recovery_source(
         raise ConfigurationError(
             "v9 后继的产出侧工具变化触及复用 Job；不得放宽粗粒度组件摘要。"
         )
+    permitted_rebase_paths = set(high_risk_paths)
+    if _is_c0154_v7_failed_core_source(
+        predecessor_manifest,
+        candidate_id=predecessor_candidate_id,
+        attempt_id=predecessor_attempt_id,
+    ):
+        permitted_rebase_paths.update(
+            production_paths - set(_PHASE_EVALUATION_HYBRID_FILES)
+        )
     allowed_high_risk_components = {
-        _tool_component_for_path(path) for path in high_risk_paths
+        _tool_component_for_path(path) for path in permitted_rebase_paths
     }
     if not allowed_high_risk_components.issubset(
-        {"producer", "relay", "runtime", "shared", "scenario"}
+        _RUNTIME_SUCCESSOR_ALLOWED_REBASE_COMPONENTS
     ):
         raise ConfigurationError("v9 后继的高风险工具组件分类非法。")
 
@@ -6236,7 +6331,7 @@ def _runtime_successor_recovery_source(
         "allowed_high_risk_component_changes": sorted(
             allowed_high_risk_components
         ),
-        "allowed_high_risk_path_changes": sorted(high_risk_paths),
+        "allowed_high_risk_path_changes": sorted(permitted_rebase_paths),
         "validated_current_production_sha256": (
             validated_current_production_sha256
         ),
@@ -8684,6 +8779,54 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     add_watchdog_options(successor)
 
+    failed_job_recovery = subparsers.add_parser(
+        FORMAL_FAILED_JOB_RECOVERY_COMMAND,
+        help=(
+            "为 0.154 起的失败 Candidate Job 创建正式定向恢复后继；"
+            "VC-0～VC-4 只读承接并重签，不重发请求"
+        ),
+    )
+    failed_job_recovery.add_argument(
+        "--predecessor-campaign-dir", type=Path, required=True
+    )
+    add_campaign_reference(failed_job_recovery)
+    failed_job_recovery.add_argument("--campaign-id", required=True)
+    failed_job_recovery.add_argument("--codex-account-id", type=int, required=True)
+    failed_job_recovery.add_argument(
+        "--predecessor-candidate-id",
+        default=str(C0154_V7_RECOVERY_SOURCE["candidate_id"]),
+        help="前序失败 Candidate；VC-5 v7 恢复默认保持原 Candidate ID。",
+    )
+    failed_job_recovery.add_argument("--predecessor-attempt-id", required=True)
+    for option in (
+        "job-rehearsal-root",
+        "job-rehearsal-receipt",
+        "recovery-timing-ledger-dir",
+        "recovery-timing-receipt",
+        "recovery-arm64-environment-root",
+        "recovery-arm64-environment-receipt",
+        "predecessor-stop-ledger-dir",
+        "predecessor-stop-receipt",
+    ):
+        failed_job_recovery.add_argument(f"--{option}", type=Path, required=True)
+    add_watchdog_options(failed_job_recovery)
+    failed_job_recovery.set_defaults(
+        reason="candidate_failed_job_tool_recovery",
+        live_attestation_compose_dir=None,
+        live_attestation_compose_files=None,
+        target_scenario_manifest=None,
+        active_timing_ledger_dir=None,
+        active_timing_receipt=None,
+        active_arm64_environment_root=None,
+        active_arm64_environment_receipt=None,
+        predecessor_recovery_transition=None,
+        predecessor_control_epoch=None,
+        predecessor_control_runtime_repair=None,
+        predecessor_unpublished_ledger_dir=None,
+        predecessor_unpublished_stop_receipt=None,
+        predecessor_supervisor_run_dir=None,
+    )
+
     reuse_official = subparsers.add_parser(
         "reuse-official-evidence",
         help=(
@@ -10954,8 +11097,14 @@ def _exact_tool_path_impact(
     jobs: Iterable[Job],
     expected_tool: Mapping[str, Any],
     current_tool: Mapping[str, Any],
+    *,
+    allow_phase_evaluation_hybrid_drift: bool = False,
 ) -> tuple[list[str], list[str], list[str]]:
-    """按逐文件传递依赖计算 Job 失效集合；未知产出文件保持停线。"""
+    """按逐文件传递依赖计算 Job 失效集合；未知产出文件保持停线。
+
+    ``allow_phase_evaluation_hybrid_drift`` 只能由已经逐坐标验真的历史恢复源
+    打开。普通 v2 身份仍以 wire 闭包摘要为准，不能借混合文件分类绕过停线。
+    """
 
     planned = list(jobs)
     drift = _tool_identity_drift(current_tool, expected_tool)
@@ -10963,7 +11112,9 @@ def _exact_tool_path_impact(
     hybrid = set(_PHASE_EVALUATION_HYBRID_FILES)
     expected_closure = _wire_closure_sha256(expected_tool)
     current_closure = _wire_closure_sha256(current_tool)
-    if expected_closure is not None and current_closure is not None:
+    if allow_phase_evaluation_hybrid_drift:
+        changed -= hybrid
+    elif expected_closure is not None and current_closure is not None:
         # A2-8：v2 身份按编排器 wire 闭包判定混合文件。闭包未变，codex_upgrade.py 的
         # 变化不算产出变化；闭包变了，它映射不到具体 Job，进入 unmapped 让调用方按
         # 「映射不到则全部 Job 受影响」处理，不再静默豁免。
@@ -11513,18 +11664,19 @@ def _job_rehearsal_contract_from_manifest(
             isinstance(predecessor, Mapping)
             and predecessor.get("reason") == "classification_fact_correction"
         )
-        control_refresh = bool(
+        recovery_rehearsal_successor = bool(
             isinstance(predecessor, Mapping)
             and predecessor.get("reason")
             in {
+                "candidate_failed_job_tool_recovery",
                 "candidate_recovery_control_refresh",
                 "candidate_recovery_control_replacement",
             }
         )
-        if control_refresh:
+        if recovery_rehearsal_successor:
             if not isinstance(recovery_rehearsal_receipt, Mapping):
                 raise ConfigurationError(
-                    "控制刷新必须从绑定的 preflight/no-op 收据复算当前执行合同。"
+                    "恢复后继必须从绑定的 preflight/no-op 收据复算当前执行合同。"
                 )
             control_manifest: Mapping[str, Any] = manifest
             if control_receipts_override is not None:
@@ -11589,7 +11741,7 @@ def _job_rehearsal_contract_from_manifest(
                 )
             ):
                 raise ConfigurationError(
-                    "控制刷新绑定的 preflight/no-op 执行合同摘要不一致。"
+                    "恢复后继绑定的 preflight/no-op 执行合同摘要不一致。"
                 )
             return current_contract
         if classification_noop_successor:
@@ -12705,7 +12857,10 @@ def _validate_initial_vc_control_artifacts(
             reuses_official_stage = bool(
                 isinstance(predecessor, Mapping)
                 and predecessor.get("reason")
-                in OFFICIAL_STAGE_REUSE_SUCCESSOR_REASONS
+                in (
+                    OFFICIAL_STAGE_REUSE_SUCCESSOR_REASONS
+                    | {"candidate_failed_job_tool_recovery"}
+                )
             )
             expected_execute_ids = [] if reuses_official_stage else official_job_ids
             expected_reuse_ids = official_job_ids if reuses_official_stage else []
@@ -13150,6 +13305,22 @@ def _complete_vc_phase(
             raise ConfigurationError(str(error)) from error
     _secure_write_json_once(output, checkpoint)
     return checkpoint
+
+
+def _vc_checkpoint_completed_item_ids(checkpoint: Mapping[str, Any]) -> list[str]:
+    """把前序 checkpoint 的 execute∪reuse 规范化为后继零执行复用闭集。"""
+
+    execute = checkpoint.get("execute_item_ids")
+    reuse = checkpoint.get("reuse_item_ids")
+    if not isinstance(execute, list) or not isinstance(reuse, list):
+        raise ConfigurationError("前序 VC checkpoint 缺少 execute／reuse 闭集。")
+    completed = [*execute, *reuse]
+    if (
+        any(not isinstance(value, str) or not SAFE_ID_RE.fullmatch(value) for value in completed)
+        or len(completed) != len(set(completed))
+    ):
+        raise ConfigurationError("前序 VC checkpoint 的完成项非法或重复。")
+    return sorted(completed)
 
 
 def _interrupted_recovery_campaign_plan(
@@ -15517,10 +15688,16 @@ class TimingLedgerGateError(ConfigurationError):
     """UpgradeTimingLedger 拒绝为本批次推进阶段；作为预派发停线的 error_type 留痕。"""
 
 
-def _campaign_timing_ledger_dir(manifest: Mapping[str, Any]) -> Path:
-    """从 Campaign 清单的 VC-0 控制绑定取时间账本目录，并核对 plan 摘要未漂移。"""
+def _campaign_timing_ledger_dir(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+) -> Path:
+    """解析当前有效时间账本；control epoch 存在时不得退回清单旧控制。"""
 
     controls = manifest.get("control_receipts")
+    effective_epoch = _load_control_epoch_receipt(campaign_dir, manifest)
+    if isinstance(effective_epoch, Mapping):
+        controls = effective_epoch.get("successor_controls")
     timing = controls.get("upgrade_timing") if isinstance(controls, Mapping) else None
     if not isinstance(timing, Mapping):
         raise ConfigurationError("Campaign 缺少 UpgradeTimingLedger 控制绑定。")
@@ -15770,7 +15947,7 @@ def _prepare_atomic_batch_governance(arguments: argparse.Namespace) -> dict[str,
     except codex_upgrade_project_ledger.ProjectLedgerError as error:
         raise ConfigurationError(f"项目总账拒绝派发：{error}") from error
     plan = _vc_campaign_plan(campaign_dir, manifest)
-    ledger_dir = _campaign_timing_ledger_dir(manifest)
+    ledger_dir = _campaign_timing_ledger_dir(campaign_dir, manifest)
     head_sequence, events = _timing_ledger_batch_events(
         campaign_dir,
         manifest,
@@ -16327,6 +16504,99 @@ def _copy_successor_binding(
     return {"path": destination_relative, "sha256": expected_sha256}
 
 
+def _copy_candidate_build_projection(
+    predecessor_dir: Path,
+    staging_dir: Path,
+    predecessor_manifest: Mapping[str, Any],
+    *,
+    candidate_id: str,
+    attempt_id: str,
+    copied_files: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """逐字复制失败 attempt 已绑定的 VC-4 收据；不生成新的构建事实。"""
+
+    _attempt_root, attempt = _load_capture_attempt(
+        predecessor_dir,
+        "candidate",
+        candidate_id,
+        attempt_id,
+    )
+    identity = attempt.get("identity")
+    build_binding = identity.get("build_receipt") if isinstance(identity, Mapping) else None
+    expected_path = _candidate_build_receipt_path(predecessor_dir, candidate_id)
+    expected_relative = expected_path.relative_to(predecessor_dir).as_posix()
+    if (
+        not isinstance(build_binding, Mapping)
+        or set(build_binding) != {"path", "sha256", "bytes"}
+        or build_binding.get("path") != expected_relative
+        or expected_path.is_symlink()
+        or not expected_path.is_file()
+        or file_sha256(expected_path) != build_binding.get("sha256")
+        or expected_path.stat().st_size != build_binding.get("bytes")
+    ):
+        raise ConfigurationError("前序失败 attempt 的 VC-4 构建收据绑定漂移。")
+    try:
+        receipt = codex_upgrade_vc_artifacts.validate_candidate_build_receipt(
+            _read_json(expected_path, "前序 Candidate 构建收据"),
+            allow_legacy=_is_c0154_v7_failed_core_source(
+                predecessor_manifest,
+                candidate_id=candidate_id,
+                attempt_id=attempt_id,
+            ),
+        )
+    except codex_upgrade_vc_artifacts.VCArtifactError as error:
+        raise ConfigurationError(str(error)) from error
+    if (
+        receipt.get("campaign_id") != predecessor_manifest.get("campaign_id")
+        or receipt.get("campaign_manifest_sha256")
+        != file_sha256(predecessor_dir / "campaign.json")
+        or receipt.get("candidate_id") != candidate_id
+        or receipt.get("candidate_purpose")
+        != predecessor_manifest.get("campaign_purpose")
+        or receipt.get("target_version") != predecessor_manifest.get("target_version")
+    ):
+        raise ConfigurationError("前序 VC-4 构建收据身份漂移。")
+    copied = _copy_successor_binding(
+        predecessor_dir,
+        staging_dir,
+        {"path": expected_relative, "sha256": str(build_binding["sha256"])},
+        kind="candidate_build_projection",
+        copied_files=copied_files,
+    )
+    for name in (
+        "build_inventory",
+        "frontend_provenance",
+        "image_inspection",
+        "capability_probe",
+    ):
+        machine = receipt.get(name)
+        if machine is None:
+            continue
+        if (
+            not isinstance(machine, Mapping)
+            or not isinstance(machine.get("path"), str)
+            or not SHA256_RE.fullmatch(str(machine.get("sha256", "")))
+            or not isinstance(machine.get("bytes"), int)
+            or isinstance(machine.get("bytes"), bool)
+        ):
+            raise ConfigurationError(f"前序 Candidate {name} 机器收据绑定非法。")
+        _copy_successor_binding(
+            predecessor_dir,
+            staging_dir,
+            {"path": str(machine["path"]), "sha256": str(machine["sha256"])},
+            kind="candidate_build_projection_machine_receipt",
+            copied_files=copied_files,
+        )
+        projected_machine = _campaign_file(staging_dir, str(machine["path"]))
+        if projected_machine.stat().st_size != machine["bytes"]:
+            raise ConfigurationError(f"前序 Candidate {name} 机器收据大小漂移。")
+    return {
+        "path": copied["path"],
+        "sha256": copied["sha256"],
+        "bytes": expected_path.stat().st_size,
+    }
+
+
 def _successor_uses_reclassified_historical_plan_binding(
     staging_dir: Path,
     manifest: dict[str, Any],
@@ -16396,6 +16666,7 @@ def _successor_uses_reclassified_historical_plan_binding(
         isinstance(manifest.get("predecessor"), Mapping)
         and manifest["predecessor"].get("reason")
         in {
+            "candidate_failed_job_tool_recovery",
             "candidate_recovery_control_refresh",
             "candidate_recovery_control_replacement",
         }
@@ -16506,44 +16777,300 @@ def _successor_abandoned_attempt(
     }
 
 
-def _validate_failed_job_tool_recovery_source(
+def _is_c0154_v7_failed_core_source(
+    predecessor_manifest: Mapping[str, Any],
+    *,
+    candidate_id: str,
+    attempt_id: str,
+) -> bool:
+    """只识别已经审计冻结的 0.154 v7 A15 单点失败来源。"""
+
+    tool_identity = predecessor_manifest.get("tool_identity")
+    return bool(
+        predecessor_manifest.get("campaign_id")
+        == C0154_V7_RECOVERY_SOURCE["campaign_id"]
+        and predecessor_manifest.get("target_version")
+        == C0154_V7_RECOVERY_SOURCE["target_version"]
+        and candidate_id == C0154_V7_RECOVERY_SOURCE["candidate_id"]
+        and attempt_id == C0154_V7_RECOVERY_SOURCE["attempt_id"]
+        and isinstance(tool_identity, Mapping)
+        and tool_identity.get("files_sha256")
+        == C0154_V7_RECOVERY_SOURCE["tool_files_sha256"]
+    )
+
+
+def _validated_c0154_v7_recovery_source_scope(
+    predecessor_dir: Path,
+    predecessor_manifest: Mapping[str, Any],
+    *,
+    candidate_id: str,
+    attempt_id: str,
+) -> dict[str, Any]:
+    """重放已冻结的 v7 Campaign 与失败 attempt，返回完整来源绑定。"""
+
+    expected_dir = Path(str(C0154_V7_RECOVERY_SOURCE["campaign_dir"]))
+    try:
+        resolved_predecessor_dir = predecessor_dir.resolve(strict=True)
+    except (OSError, RuntimeError) as error:
+        raise ConfigurationError("v7 失败 Job 恢复的直接前序路径不可信。") from error
+    if (
+        not predecessor_dir.is_absolute()
+        or predecessor_dir.is_symlink()
+        or not predecessor_dir.is_dir()
+        or resolved_predecessor_dir != predecessor_dir
+        or predecessor_dir != expected_dir
+    ):
+        raise ConfigurationError("v7 失败 Job 恢复的直接前序路径不可信。")
+
+    predecessor_manifest_path = predecessor_dir / "campaign.json"
+    if (
+        predecessor_manifest_path.is_symlink()
+        or not predecessor_manifest_path.is_file()
+        or file_sha256(predecessor_manifest_path)
+        != C0154_V7_RECOVERY_SOURCE["campaign_manifest_sha256"]
+    ):
+        raise ConfigurationError("v7 失败 Job 恢复的前序清单摘要漂移。")
+    replayed_manifest = _read_json(
+        predecessor_manifest_path,
+        "v7 失败 Job 恢复前序清单",
+    )
+    if replayed_manifest != dict(predecessor_manifest) or not (
+        _is_c0154_v7_failed_core_source(
+            replayed_manifest,
+            candidate_id=candidate_id,
+            attempt_id=attempt_id,
+        )
+    ):
+        raise ConfigurationError(
+            "v7 失败 Job 恢复的版本、工具、Candidate 或 attempt 身份漂移。"
+        )
+    attempt_path = (
+        predecessor_dir
+        / "candidates"
+        / candidate_id
+        / "attempts"
+        / attempt_id
+        / "attempt.json"
+    )
+    _reject_symlink_components(attempt_path, predecessor_dir, "v7 恢复源 attempt")
+    if (
+        attempt_path.is_symlink()
+        or not attempt_path.is_file()
+        or file_sha256(attempt_path)
+        != C0154_V7_RECOVERY_SOURCE["attempt_sha256"]
+    ):
+        raise ConfigurationError("v7 失败 Job 恢复的源 attempt 文件摘要漂移。")
+    attempt = _read_json(attempt_path, "v7 失败 Job 恢复源 attempt")
+    unsigned_attempt = dict(attempt)
+    attempt_digest = unsigned_attempt.pop("attempt_digest", None)
+    identity = attempt.get("identity")
+    if (
+        attempt.get("schema_version") != CAPTURE_ATTEMPT_SCHEMA
+        or attempt.get("campaign_id") != C0154_V7_RECOVERY_SOURCE["campaign_id"]
+        or attempt.get("campaign_manifest_sha256")
+        != C0154_V7_RECOVERY_SOURCE["campaign_manifest_sha256"]
+        or attempt.get("phase") != "candidate"
+        or attempt.get("candidate_id") != candidate_id
+        or attempt.get("attempt_id") != attempt_id
+        or attempt.get("status") != "failed"
+        or attempt_digest != C0154_V7_RECOVERY_SOURCE["attempt_digest"]
+        or _fingerprint(unsigned_attempt) != attempt_digest
+        or not isinstance(identity, Mapping)
+        or _fingerprint(identity)
+        != C0154_V7_RECOVERY_SOURCE["identity_sha256"]
+    ):
+        raise ConfigurationError("v7 失败 Job 恢复的源 attempt 完整身份漂移。")
+    abandoned = {
+        "candidate_id": candidate_id,
+        "attempt_id": attempt_id,
+        "path": attempt_path.relative_to(predecessor_dir).as_posix(),
+        "sha256": C0154_V7_RECOVERY_SOURCE["attempt_sha256"],
+        "attempt_digest": str(attempt_digest),
+        "identity_sha256": C0154_V7_RECOVERY_SOURCE["identity_sha256"],
+        "status": "failed",
+    }
+    return {
+        "predecessor_manifest": replayed_manifest,
+        "abandoned_candidate_attempt": abandoned,
+    }
+
+
+def _require_c0154_v7_recovery_source_binding(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    *,
+    candidate_id: str,
+    attempt_id: str,
+) -> dict[str, Any]:
+    """重放 v7 直接前序的不可变清单绑定。
+
+    该函数同时用于后继创建和已发布 Campaign 重载；只读取固定前序的
+    清单与 attempt 字节，不递归加载当前后继或其控制收据。
+    """
+
+    predecessor = manifest.get("predecessor")
+    if (
+        manifest.get("target_version")
+        != C0154_V7_RECOVERY_SOURCE["target_version"]
+        or not isinstance(predecessor, Mapping)
+        or set(predecessor)
+        != {
+            "campaign_dir",
+            "campaign_id",
+            "campaign_manifest_sha256",
+            "reason",
+        }
+        or predecessor.get("reason") != "candidate_failed_job_tool_recovery"
+        or predecessor.get("campaign_dir")
+        != C0154_V7_RECOVERY_SOURCE["campaign_dir"]
+        or predecessor.get("campaign_id")
+        != C0154_V7_RECOVERY_SOURCE["campaign_id"]
+        or predecessor.get("campaign_manifest_sha256")
+        != C0154_V7_RECOVERY_SOURCE["campaign_manifest_sha256"]
+    ):
+        raise ConfigurationError("v7 失败 Job 恢复的直接前序绑定不匹配。")
+    predecessor_dir = Path(str(predecessor["campaign_dir"]))
+    if campaign_dir.exists() and predecessor_dir == campaign_dir.resolve(strict=True):
+        raise ConfigurationError("v7 失败 Job 恢复的直接前序路径不可信。")
+    predecessor_manifest = _read_json(
+        predecessor_dir / "campaign.json",
+        "v7 失败 Job 恢复前序清单",
+    )
+    return _validated_c0154_v7_recovery_source_scope(
+        predecessor_dir,
+        predecessor_manifest,
+        candidate_id=candidate_id,
+        attempt_id=attempt_id,
+    )
+
+
+def _published_c0154_v7_recovery_coordinates(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+) -> tuple[str, str]:
+    """从已发布后继的严格 v6 导入收据重放 Candidate／attempt。"""
+
+    import_path = campaign_dir / "predecessor-import.json"
+    if import_path.is_symlink() or not import_path.is_file():
+        raise ConfigurationError("v7 失败 Job 恢复缺少可信前序导入收据。")
+    imported = _read_json(import_path, "v7 失败 Job 恢复前序导入收据")
+    expected_fields = {
+        "schema_version",
+        "created_at_utc",
+        "reason",
+        "successor_campaign_id",
+        "successor_campaign_manifest_sha256",
+        "predecessor_campaign",
+        "stages",
+        "copied_files",
+        "configuration_transition",
+        "abandoned_candidate_attempt",
+        "job_rehearsal_transition",
+        "recovery_control_transition",
+        "receipt_digest",
+    }
+    unsigned = dict(imported)
+    receipt_digest = unsigned.pop("receipt_digest", None)
+    predecessor = manifest.get("predecessor")
+    predecessor_binding = imported.get("predecessor_campaign")
+    abandoned = imported.get("abandoned_candidate_attempt")
+    manifest_path = campaign_dir / "campaign.json"
+    if (
+        set(imported) != expected_fields
+        or imported.get("schema_version") != PREDECESSOR_RECOVERY_IMPORT_SCHEMA
+        or not _is_rfc3339_timestamp(imported.get("created_at_utc"))
+        or imported.get("reason") != "candidate_failed_job_tool_recovery"
+        or imported.get("successor_campaign_id") != manifest.get("campaign_id")
+        or manifest_path.is_symlink()
+        or not manifest_path.is_file()
+        or imported.get("successor_campaign_manifest_sha256")
+        != file_sha256(manifest_path)
+        or not SHA256_RE.fullmatch(str(receipt_digest or ""))
+        or _fingerprint(unsigned) != receipt_digest
+        or not isinstance(predecessor_binding, Mapping)
+        or set(predecessor_binding)
+        != {"campaign_dir", "campaign_id", "campaign_manifest_sha256"}
+        or predecessor
+        != {
+            **dict(predecessor_binding),
+            "reason": "candidate_failed_job_tool_recovery",
+        }
+        or not isinstance(abandoned, Mapping)
+        or set(abandoned)
+        != {
+            "candidate_id",
+            "attempt_id",
+            "path",
+            "sha256",
+            "attempt_digest",
+            "identity_sha256",
+            "status",
+        }
+        or abandoned.get("candidate_id")
+        != C0154_V7_RECOVERY_SOURCE["candidate_id"]
+        or abandoned.get("attempt_id")
+        != C0154_V7_RECOVERY_SOURCE["attempt_id"]
+        or abandoned.get("status") != "failed"
+        or not isinstance(imported.get("stages"), Mapping)
+        or not isinstance(imported.get("copied_files"), list)
+        or not isinstance(imported.get("configuration_transition"), Mapping)
+        or not isinstance(imported.get("job_rehearsal_transition"), Mapping)
+        or not isinstance(imported.get("recovery_control_transition"), Mapping)
+    ):
+        raise ConfigurationError("v7 失败 Job 恢复的导入身份或自摘要漂移。")
+    candidate_id = str(abandoned["candidate_id"])
+    attempt_id = str(abandoned["attempt_id"])
+    source_scope = _require_c0154_v7_recovery_source_binding(
+        campaign_dir,
+        manifest,
+        candidate_id=candidate_id,
+        attempt_id=attempt_id,
+    )
+    if dict(abandoned) != source_scope.get("abandoned_candidate_attempt"):
+        raise ConfigurationError("v7 失败 Job 恢复的源 attempt 完整绑定漂移。")
+    return candidate_id, attempt_id
+
+
+def _require_c0154_v7_formal_recovery_source(
+    arguments: argparse.Namespace,
+    predecessor_manifest: Mapping[str, Any],
+) -> dict[str, Any]:
+    """把正式恢复入口锁死到已审计的 v7 A15 单点失败坐标。"""
+
+    candidate_id = getattr(arguments, "predecessor_candidate_id", None)
+    attempt_id = getattr(arguments, "predecessor_attempt_id", None)
+    predecessor_dir = getattr(arguments, "predecessor_campaign_dir", None)
+    if (
+        not isinstance(candidate_id, str)
+        or not isinstance(attempt_id, str)
+        or not isinstance(predecessor_dir, Path)
+        or not _is_c0154_v7_failed_core_source(
+            predecessor_manifest,
+            candidate_id=candidate_id,
+            attempt_id=attempt_id,
+        )
+    ):
+        raise ConfigurationError(
+            "正式失败 Job 恢复入口只允许已审计的 0.154 v7 A15 单点失败来源。"
+        )
+    return _validated_c0154_v7_recovery_source_scope(
+        predecessor_dir,
+        predecessor_manifest,
+        candidate_id=candidate_id,
+        attempt_id=attempt_id,
+    )
+
+
+def _failed_job_recovery_high_risk_paths(
     predecessor_dir: Path,
     predecessor_manifest: Mapping[str, Any],
     successor_manifest: Mapping[str, Any],
     *,
     candidate_id: str,
     attempt_id: str,
-    reason: str,
-) -> None:
-    """确认产出工具修复只影响前序 Candidate 的失败 Job 闭集。"""
+) -> set[str]:
+    """把产出侧漂移收窄到真正会改变本轮失败 Job 字节的文件。"""
 
-    attempt_root, attempt = _load_capture_attempt(
-        predecessor_dir,
-        "candidate",
-        candidate_id,
-        attempt_id,
-    )
-    scope = _phase_evaluation_recovery_scope(
-        predecessor_dir,
-        predecessor_manifest,
-        phase="candidate",
-        candidate_id=candidate_id,
-        attempt_root=attempt_root,
-        attempt=attempt,
-        allow_empty=False,
-        allow_awaiting_failures=True,
-    )
-    failed_ids = set(scope.get("failed_job_ids", []))
-    execute_ids = set(scope.get("execute_job_ids", []))
-    if reason == "candidate_recovery_control_refresh":
-        if attempt.get("status") != "failed" or not failed_ids:
-            raise ConfigurationError(
-                "控制刷新只接受已批准 transition 所属的 failed Candidate attempt。"
-            )
-    elif attempt.get("status") != "awaiting_receipts" or not failed_ids:
-        raise ConfigurationError(
-            "失败 Job 工具恢复只接受含可选失败项的 awaiting_receipts Candidate attempt。"
-        )
     source_tool = predecessor_manifest.get("tool_identity")
     successor_tool = successor_manifest.get("tool_identity")
     if not isinstance(source_tool, Mapping) or not isinstance(
@@ -16566,6 +17093,106 @@ def _validate_failed_job_tool_recovery_source(
         )
     ):
         high_risk_paths.remove(target_scenario_path)
+
+    if not _is_c0154_v7_failed_core_source(
+        predecessor_manifest,
+        candidate_id=candidate_id,
+        attempt_id=attempt_id,
+    ):
+        return high_risk_paths
+
+    allowed = {
+        "codex_upgrade_candidate_readiness.py",
+        "codex_upgrade_scenarios_0_154_0.json",
+        "codex_upgrade_timing_ledger.schema.json",
+        "run_candidate_core_capture.sh",
+    }
+    unknown = high_risk_paths - allowed
+    if unknown:
+        raise ConfigurationError(
+            "0.154 v7 恢复含未审计的产出侧工具变化："
+            + "、".join(sorted(unknown))
+        )
+    if "run_candidate_core_capture.sh" not in high_risk_paths:
+        raise ConfigurationError("0.154 v7 恢复没有绑定 A15 产出脚本修复。")
+    if "codex_upgrade_scenarios_0_154_0.json" in high_risk_paths:
+        reference = predecessor_manifest.get("inputs", {}).get(
+            "target_discovery_scenarios"
+        )
+        _require_file_binding(reference, "0.154 v7 前序目标场景")
+        assert isinstance(reference, Mapping)
+        frozen_path = _campaign_file(predecessor_dir, str(reference["path"]))
+        current_path = Path(__file__).resolve().with_name(
+            "codex_upgrade_scenarios_0_154_0.json"
+        )
+        if (
+            frozen_path.is_symlink()
+            or not frozen_path.is_file()
+            or file_sha256(frozen_path) != reference["sha256"]
+            or current_path.is_symlink()
+            or not current_path.is_file()
+            or _scenario_job_execution_contract(
+                _read_json(frozen_path, "0.154 v7 前序目标场景")
+            )
+            != _scenario_job_execution_contract(
+                _read_json(current_path, "0.154 当前目标场景")
+            )
+        ):
+            raise ConfigurationError(
+                "0.154 v7 场景变化触及 Job 执行合同，禁止复用成功 Job。"
+            )
+    # readiness 与 timing schema 只约束本次启动前控制链；场景变化经上面的
+    # 执行合同比较证明只改 A15 说明。真正改变请求字节的唯一文件是失败的
+    # candidate-frozen-core 脚本。
+    return {"run_candidate_core_capture.sh"}
+
+
+def _validate_failed_job_tool_recovery_source(
+    predecessor_dir: Path,
+    predecessor_manifest: Mapping[str, Any],
+    successor_manifest: Mapping[str, Any],
+    *,
+    candidate_id: str,
+    attempt_id: str,
+    reason: str,
+) -> dict[str, Any]:
+    """确认产出工具修复只影响前序 Candidate 的失败 Job 闭集。"""
+
+    attempt_root, attempt = _load_capture_attempt(
+        predecessor_dir,
+        "candidate",
+        candidate_id,
+        attempt_id,
+        _verified_campaign_manifest=predecessor_manifest,
+    )
+    scope = _phase_evaluation_recovery_scope(
+        predecessor_dir,
+        predecessor_manifest,
+        phase="candidate",
+        candidate_id=candidate_id,
+        attempt_root=attempt_root,
+        attempt=attempt,
+        allow_empty=False,
+        allow_awaiting_failures=True,
+    )
+    failed_ids = set(scope.get("failed_job_ids", []))
+    execute_ids = set(scope.get("execute_job_ids", []))
+    if reason == "candidate_recovery_control_refresh":
+        if attempt.get("status") != "failed" or not failed_ids:
+            raise ConfigurationError(
+                "控制刷新只接受已批准 transition 所属的 failed Candidate attempt。"
+            )
+    elif attempt.get("status") not in {"failed", "awaiting_receipts"} or not failed_ids:
+        raise ConfigurationError(
+            "失败 Job 工具恢复只接受含失败项的 failed／awaiting_receipts Candidate attempt。"
+        )
+    high_risk_paths = _failed_job_recovery_high_risk_paths(
+        predecessor_dir,
+        predecessor_manifest,
+        successor_manifest,
+        candidate_id=candidate_id,
+        attempt_id=attempt_id,
+    )
     unknown_paths = high_risk_paths - set(
         RUNTIME_SUCCESSOR_CHANGED_TOOL_PATH_JOB_IDS
     )
@@ -16587,6 +17214,41 @@ def _validate_failed_job_tool_recovery_source(
         )
     if not failed_ids.issubset(execute_ids):
         raise ConfigurationError("失败 Job 工具恢复遗漏前序失败项。")
+    if _is_c0154_v7_failed_core_source(
+        predecessor_manifest,
+        candidate_id=candidate_id,
+        attempt_id=attempt_id,
+    ):
+        expected_planned = {
+            "candidate-compact-direct",
+            "candidate-compact-mitm",
+            "candidate-core-direct",
+            "candidate-core-mitm",
+            "candidate-frozen-aux",
+            "candidate-frozen-core",
+            "candidate-h1-wire",
+            "candidate-images-wire",
+            "candidate-ws-handshake-repeat",
+        }
+        if (
+            set(scope.get("planned_job_ids", [])) != expected_planned
+            or set(scope.get("completed_job_ids", []))
+            != expected_planned - {"candidate-frozen-core"}
+            or failed_ids != {"candidate-frozen-core"}
+            or set(scope.get("pending_job_ids", []))
+            or execute_ids != {"candidate-frozen-core"}
+        ):
+            raise ConfigurationError("0.154 v7 恢复源不是 8 成功／A15 单点失败闭集。")
+    return {
+        "planned_job_ids": sorted(set(scope.get("planned_job_ids", []))),
+        "reused_job_ids": sorted(set(scope.get("completed_job_ids", []))),
+        "execute_job_ids": sorted(execute_ids),
+        "failed_job_ids": sorted(failed_ids),
+        "pending_job_ids": sorted(set(scope.get("pending_job_ids", []))),
+        "reservation_exists": False,
+        "live_request_count": 0,
+        "scanned_bytes": 0,
+    }
 
 
 def _target_scenario_source_spec_only_drift(
@@ -17691,6 +18353,17 @@ def _control_epoch_required_phase(source: Mapping[str, Any]) -> str:
     return "VC-2" if _is_official_sealed_control_epoch_source(source) else "VC-4"
 
 
+def _control_epoch_stop_required_phase(
+    manifest: Mapping[str, Any],
+    source: Mapping[str, Any],
+) -> str:
+    """返回旧 Ledger 停线阶段；唯一 VC-5 恢复后继允许从 VC-0 承接。"""
+
+    if _is_c0154_vc5_failed_job_control_epoch_source(manifest, source):
+        return "VC-0"
+    return _control_epoch_required_phase(source)
+
+
 def _control_epoch_previous_controls(
     manifest: Mapping[str, Any],
     source: Mapping[str, Any],
@@ -17712,6 +18385,169 @@ def _control_epoch_previous_controls(
     return json.loads(json.dumps(controls, ensure_ascii=False))
 
 
+def _is_c0154_vc5_failed_job_control_epoch_campaign(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+) -> bool:
+    """精确识别唯一获准从 VC-0 停线续接控制链的正式后继。"""
+
+    predecessor = manifest.get("predecessor")
+    manifest_path = campaign_dir / "campaign.json"
+    if (
+        campaign_dir.name
+        != C0154_VC5_FAILED_JOB_CONTROL_EPOCH["campaign_id"]
+        or campaign_dir.is_symlink()
+        or not campaign_dir.is_dir()
+        or manifest_path.is_symlink()
+        or not manifest_path.is_file()
+        or manifest.get("campaign_id")
+        != C0154_VC5_FAILED_JOB_CONTROL_EPOCH["campaign_id"]
+        or manifest.get("campaign_mode") != "formal"
+        or manifest.get("target_version")
+        != C0154_VC5_FAILED_JOB_CONTROL_EPOCH["target_version"]
+        or not isinstance(predecessor, Mapping)
+        or predecessor.get("reason")
+        != C0154_VC5_FAILED_JOB_CONTROL_EPOCH["predecessor_reason"]
+    ):
+        return False
+    return (
+        file_sha256(manifest_path)
+        == C0154_VC5_FAILED_JOB_CONTROL_EPOCH["campaign_manifest_sha256"]
+    )
+
+
+def _is_c0154_vc5_failed_job_control_epoch_source(
+    manifest: Mapping[str, Any],
+    source: Mapping[str, Any],
+) -> bool:
+    """确认 control epoch 源仍是 9/8/1 的唯一 A15 恢复闭集。"""
+
+    planned = list(C0154_VC5_FAILED_JOB_CONTROL_EPOCH["planned_job_ids"])
+    execute = [str(C0154_VC5_FAILED_JOB_CONTROL_EPOCH["execute_job_id"])]
+    reused = sorted(set(planned) - set(execute))
+    predecessor = manifest.get("predecessor")
+    return bool(
+        manifest.get("campaign_id")
+        == C0154_VC5_FAILED_JOB_CONTROL_EPOCH["campaign_id"]
+        and manifest.get("target_version")
+        == C0154_VC5_FAILED_JOB_CONTROL_EPOCH["target_version"]
+        and isinstance(predecessor, Mapping)
+        and predecessor.get("reason")
+        == C0154_VC5_FAILED_JOB_CONTROL_EPOCH["predecessor_reason"]
+        and source.get("candidate_id")
+        == C0154_VC5_FAILED_JOB_CONTROL_EPOCH["candidate_id"]
+        and source.get("attempt_id")
+        == C0154_VC5_FAILED_JOB_CONTROL_EPOCH["attempt_id"]
+        and source.get("planned_job_ids") == planned
+        and source.get("execute_job_ids") == execute
+        and source.get("reused_job_ids") == reused
+        and source.get("failed_job_ids") == execute
+        and source.get("pending_job_ids") == []
+        and source.get("production_paths")
+        == [C0154_VC5_FAILED_JOB_CONTROL_EPOCH["production_path"]]
+    )
+
+
+def _c0154_vc5_failed_job_control_epoch_source_context(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    *,
+    candidate_id: str | None,
+    attempt_id: str | None,
+) -> dict[str, Any]:
+    """重放唯一已发布恢复后继的 9/8/1 来源，不引入新执行事实。"""
+
+    if not _is_c0154_vc5_failed_job_control_epoch_campaign(
+        campaign_dir,
+        manifest,
+    ):
+        raise ConfigurationError("VC-5 控制续期 Campaign 身份或清单摘要不匹配。")
+    source_candidate_id, source_attempt_id = (
+        _published_c0154_v7_recovery_coordinates(campaign_dir, manifest)
+    )
+    if (
+        source_candidate_id
+        != C0154_VC5_FAILED_JOB_CONTROL_EPOCH["candidate_id"]
+        or source_attempt_id
+        != C0154_VC5_FAILED_JOB_CONTROL_EPOCH["attempt_id"]
+        or (candidate_id is not None and candidate_id != source_candidate_id)
+        or (attempt_id is not None and attempt_id != source_attempt_id)
+    ):
+        raise ConfigurationError("VC-5 控制续期 Candidate／attempt 身份不匹配。")
+    source_binding = _require_c0154_v7_recovery_source_binding(
+        campaign_dir,
+        manifest,
+        candidate_id=source_candidate_id,
+        attempt_id=source_attempt_id,
+    )
+    predecessor_manifest = source_binding.get("predecessor_manifest")
+    abandoned = source_binding.get("abandoned_candidate_attempt")
+    predecessor = manifest.get("predecessor")
+    if (
+        not isinstance(predecessor_manifest, Mapping)
+        or not isinstance(abandoned, Mapping)
+        or not isinstance(predecessor, Mapping)
+    ):
+        raise ConfigurationError("VC-5 控制续期的前序来源绑定不完整。")
+    predecessor_dir = Path(str(predecessor.get("campaign_dir", ""))).resolve(
+        strict=True
+    )
+    scope = _validate_failed_job_tool_recovery_source(
+        predecessor_dir,
+        predecessor_manifest,
+        manifest,
+        candidate_id=source_candidate_id,
+        attempt_id=source_attempt_id,
+        reason="candidate_failed_job_tool_recovery",
+    )
+    planned = list(C0154_VC5_FAILED_JOB_CONTROL_EPOCH["planned_job_ids"])
+    execute = [str(C0154_VC5_FAILED_JOB_CONTROL_EPOCH["execute_job_id"])]
+    reused = sorted(set(planned) - set(execute))
+    expected_scope = {
+        "planned_job_ids": planned,
+        "reused_job_ids": reused,
+        "execute_job_ids": execute,
+        "failed_job_ids": execute,
+        "pending_job_ids": [],
+        "reservation_exists": False,
+        "live_request_count": 0,
+        "scanned_bytes": 0,
+    }
+    if scope != expected_scope:
+        raise ConfigurationError("VC-5 控制续期来源不是精确的 9/8/1 零执行闭集。")
+    scenario = manifest.get("inputs", {}).get("target_discovery_scenarios")
+    _require_file_binding(scenario, "VC-5 控制续期 target 场景")
+    assert isinstance(scenario, Mapping)
+    import_path = campaign_dir / "predecessor-import.json"
+    source = {
+        "candidate_id": source_candidate_id,
+        "attempt_id": source_attempt_id,
+        "attempt_digest": str(abandoned.get("attempt_digest", "")),
+        "candidate_identity_sha256": str(
+            abandoned.get("identity_sha256", "")
+        ),
+        # 该精确例外没有 evaluation transition；v6 前序导入收据本身就是
+        # 对直接前序、失败 attempt 与 9/8/1 闭集的不可变授权绑定。
+        "source_transition": {
+            "path": "predecessor-import.json",
+            "sha256": file_sha256(import_path),
+        },
+        "recovery_scope_sha256": _fingerprint(scope),
+        "planned_job_ids": planned,
+        "execute_job_ids": execute,
+        "reused_job_ids": reused,
+        "failed_job_ids": execute,
+        "pending_job_ids": [],
+        "production_paths": [
+            str(C0154_VC5_FAILED_JOB_CONTROL_EPOCH["production_path"])
+        ],
+        "target_scenario": dict(scenario),
+    }
+    if not _is_c0154_vc5_failed_job_control_epoch_source(manifest, source):
+        raise ConfigurationError("VC-5 控制续期来源闭集发生漂移。")
+    return source
+
+
 def _control_epoch_source_context(
     campaign_dir: Path,
     manifest: Mapping[str, Any],
@@ -17726,6 +18562,13 @@ def _control_epoch_source_context(
     predecessor_reason = (
         predecessor.get("reason") if isinstance(predecessor, Mapping) else None
     )
+    if predecessor_reason == "candidate_failed_job_tool_recovery":
+        return _c0154_vc5_failed_job_control_epoch_source_context(
+            campaign_dir,
+            manifest,
+            candidate_id=candidate_id,
+            attempt_id=attempt_id,
+        )
     if (
         candidate_id is None
         and attempt_id is None
@@ -18136,6 +18979,7 @@ def _control_epoch_stop_checkpoint(
         or summary.get("active_phase") != expected_stop_phase
         or summary.get("upgrade_id") != timing.get("upgrade_id")
         or summary.get("evidence_decision") != timing.get("evidence_decision")
+        or summary.get("total_live_request_count") != 0
         or str(ledger_root.resolve(strict=True)) != str(timing.get("ledger_dir"))
         or not current_head_valid
     ):
@@ -18161,6 +19005,32 @@ def _control_epoch_stop_checkpoint(
     return binding, dict(summary)
 
 
+def _preserve_c0154_vc0_control_receipts(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    controls: dict[str, Any],
+) -> None:
+    """VC-0～VC-4 已完成，续期只替换时钟／环境／no-op，不重做 P0。"""
+
+    if not _is_c0154_vc5_failed_job_control_epoch_campaign(
+        campaign_dir,
+        manifest,
+    ):
+        return
+    frozen_controls = manifest.get("control_receipts")
+    if not isinstance(frozen_controls, Mapping):
+        raise ConfigurationError("VC-5 控制续期缺少冻结的 VC-0 控制绑定。")
+    preserved_names = {"p0_gate"}
+    if _release_certification_required(manifest, frozen_controls):
+        preserved_names.add("release_certification")
+    if not preserved_names.issubset(frozen_controls):
+        raise ConfigurationError("VC-5 控制续期缺少 P0 或发布认证绑定。")
+    for name in preserved_names:
+        controls[name] = json.loads(
+            json.dumps(frozen_controls[name], ensure_ascii=False)
+        )
+
+
 def _build_control_epoch_successor_controls(
     arguments: argparse.Namespace,
     campaign_dir: Path,
@@ -18182,6 +19052,11 @@ def _build_control_epoch_successor_controls(
         arm64_environment_receipt=arguments.recovery_arm64_environment_receipt,
     )
     controls = _plan_control_receipts(control_arguments)
+    _preserve_c0154_vc0_control_receipts(
+        campaign_dir,
+        manifest,
+        controls,
+    )
     proxy_manifest = json.loads(json.dumps(manifest, ensure_ascii=False))
     proxy_manifest["tool_identity"] = dict(current_tool)
     proxy_manifest["control_receipts"] = controls
@@ -18375,6 +19250,15 @@ def _control_epoch_failed_scope_production_paths(
         raise ConfigurationError(
             "official control epoch 检测到产出侧工具变化，必须永久停线。"
         )
+    if _is_c0154_vc5_failed_job_control_epoch_source(manifest, source):
+        expected_path = str(
+            C0154_VC5_FAILED_JOB_CONTROL_EPOCH["production_path"]
+        )
+        if production_paths != {expected_path}:
+            raise ConfigurationError(
+                "VC-5 控制续期只允许 candidate-frozen-core 的已授权产出脚本变化。"
+            )
+        return production_paths
     scope = _control_epoch_final_execution_scope(source)
     unknown_paths = production_paths - set(
         RUNTIME_SUCCESSOR_CHANGED_TOOL_PATH_JOB_IDS
@@ -18548,6 +19432,18 @@ def _load_control_epoch_receipt(
         manifest,
         _enforce_prepublication_boundary=False,
     )
+    c0154_vc5_failed_job_epoch = bool(
+        _is_c0154_vc5_failed_job_control_epoch_campaign(campaign_dir, manifest)
+        and _is_c0154_vc5_failed_job_control_epoch_source(manifest, source)
+    )
+    if c0154_vc5_failed_job_epoch and (
+        len(paths) != 1
+        or has_runtime_repair
+        or has_runtime_repair_amendment
+    ):
+        raise ConfigurationError(
+            "VC-5 控制续期只允许一份 control epoch，禁止 runtime repair 或第二纪元。"
+        )
     official_sealed_epoch = _is_official_sealed_control_epoch_source(source)
     if official_sealed_epoch and (
         len(paths) != 1 or has_runtime_repair_amendment
@@ -18647,8 +19543,8 @@ def _load_control_epoch_receipt(
             raise ConfigurationError("control epoch 历史链的产出侧冻结身份不连续。")
         if frozen_production_sha256 is None:
             frozen_production_sha256 = str(frozen_production)
-        authorized_production_drift = (
-            control_replacement_epoch and bool(allowed_production_paths)
+        authorized_production_drift = bool(allowed_production_paths) and (
+            control_replacement_epoch or c0154_vc5_failed_job_epoch
         )
         historical_runtime = (
             _allow_unrepaired_tool_drift
@@ -18704,7 +19600,10 @@ def _load_control_epoch_receipt(
             raise ConfigurationError("control epoch 旧 Ledger 停线绑定非法。")
         if not isinstance(old_timing, Mapping):
             raise ConfigurationError("control epoch 前序 Ledger 控制绑定非法。")
-        stop_required_phase = required_phase
+        stop_required_phase = _control_epoch_stop_required_phase(
+            manifest,
+            source,
+        )
         if (
             _historical_ledger_heads
             and control_replacement_epoch
@@ -19283,6 +20182,9 @@ def create_control_epoch(arguments: argparse.Namespace) -> dict[str, Any]:
         campaign_dir,
         load_campaign_manifest(campaign_dir, _control_epoch_bootstrap=True),
     )
+    c0154_vc5_failed_job_epoch = (
+        _is_c0154_vc5_failed_job_control_epoch_campaign(campaign_dir, manifest)
+    )
     phase = str(getattr(arguments, "phase", "candidate"))
     official_sealed_epoch = phase == "official"
     candidate_coordinates = (
@@ -19300,6 +20202,15 @@ def create_control_epoch(arguments: argparse.Namespace) -> dict[str, Any]:
         )
     with _campaign_lock(campaign_dir):
         existing = _control_epoch_files(campaign_dir)
+        if c0154_vc5_failed_job_epoch and (
+            official_sealed_epoch
+            or existing
+            or bool(arguments.repair_runtime_authorization)
+            or bool(getattr(arguments, "final_execution_epoch", False))
+        ):
+            raise ConfigurationError(
+                "VC-5 控制续期只允许 candidate 阶段的第一份且唯一一份 control epoch。"
+            )
         if (
             official_sealed_epoch
             and existing
@@ -19391,12 +20302,16 @@ def create_control_epoch(arguments: argparse.Namespace) -> dict[str, Any]:
             previous_epoch,
         )
         required_phase = _control_epoch_required_phase(source)
+        stop_required_phase = _control_epoch_stop_required_phase(
+            manifest,
+            source,
+        )
         stop, stop_summary = _control_epoch_stop_checkpoint(
             manifest,
             arguments.predecessor_stop_ledger_dir,
             arguments.predecessor_stop_receipt,
             expected_timing=previous_controls.get("upgrade_timing"),
-            required_phase=required_phase,
+            required_phase=stop_required_phase,
         )
         current_tool = (
             replacement_current_tool
@@ -20212,6 +21127,9 @@ def _recovery_rehearsal_target_scenario_override(
     manifest: Mapping[str, Any],
     preflight_dir: Path,
     preflight_manifest: Mapping[str, Any],
+    *,
+    recovery_candidate_id: str | None = None,
+    recovery_attempt_id: str | None = None,
 ) -> dict[str, Any] | None:
     """只允许当前受管场景承接 Formal 的历史规格章节摘要。"""
 
@@ -20264,6 +21182,52 @@ def _recovery_rehearsal_target_scenario_override(
         raise ConfigurationError(
             "恢复 preflight 必须使用当前受管版本化 target 场景原文件。"
         )
+    predecessor = manifest.get("predecessor")
+    c0154_v7_source_verified = False
+    failed_job_recovery = bool(
+        isinstance(predecessor, Mapping)
+        and predecessor.get("reason") == "candidate_failed_job_tool_recovery"
+    )
+    explicit_candidate = recovery_candidate_id is not None
+    explicit_attempt = recovery_attempt_id is not None
+    if explicit_candidate != explicit_attempt:
+        raise ConfigurationError(
+            "v7 失败 Job 恢复的创建来源必须同时提供 Candidate 与 attempt。"
+        )
+    explicit_creation_source = explicit_candidate and explicit_attempt
+    if explicit_creation_source and (
+        not isinstance(recovery_candidate_id, str)
+        or not isinstance(recovery_attempt_id, str)
+    ):
+        raise ConfigurationError("v7 失败 Job 恢复的创建来源坐标非法。")
+    import_path = campaign_dir / "predecessor-import.json"
+    published_runtime_source = import_path.exists() or import_path.is_symlink()
+    if failed_job_recovery:
+        if explicit_creation_source == published_runtime_source:
+            raise ConfigurationError(
+                "v7 失败 Job 恢复必须且只能选择创建来源或已发布导入收据之一。"
+            )
+        if explicit_creation_source:
+            assert isinstance(recovery_candidate_id, str)
+            assert isinstance(recovery_attempt_id, str)
+            _require_c0154_v7_recovery_source_binding(
+                campaign_dir,
+                manifest,
+                candidate_id=recovery_candidate_id,
+                attempt_id=recovery_attempt_id,
+            )
+        else:
+            recovery_candidate_id, recovery_attempt_id = (
+                _published_c0154_v7_recovery_coordinates(
+                    campaign_dir,
+                    manifest,
+                )
+            )
+        c0154_v7_source_verified = True
+    elif explicit_creation_source:
+        raise ConfigurationError(
+            "Candidate／attempt 创建来源只允许 v7 失败 Job 恢复使用。"
+        )
     if frozen == managed:
         return None
 
@@ -20293,6 +21257,15 @@ def _recovery_rehearsal_target_scenario_override(
         raise ConfigurationError("Formal 历史 target 场景缺少 source_spec。")
     normalized_source["sha256"] = managed_binding.source_spec_sha256
     if normalized_frozen != managed:
+        c0154_v7_metadata_only_drift = bool(
+            c0154_v7_source_verified
+            and isinstance(recovery_candidate_id, str)
+            and isinstance(recovery_attempt_id, str)
+            and _scenario_job_execution_contract(frozen)
+            == _scenario_job_execution_contract(managed)
+        )
+        if c0154_v7_metadata_only_drift:
+            return managed
         raise ConfigurationError(
             "Formal 历史 target 场景除 source_spec.sha256 外发生变化。"
         )
@@ -20320,6 +21293,7 @@ def _successor_rehearsal_target_scenario_override(
             reclassification_successor
             or arguments.reason
             in {
+                "candidate_failed_job_tool_recovery",
                 "candidate_recovery_control_refresh",
                 "candidate_recovery_control_replacement",
             }
@@ -20352,11 +21326,26 @@ def _successor_rehearsal_target_scenario_override(
         preflight_dir, preflight_manifest = bound_preflight
     else:
         return None
+    recovery_coordinates: dict[str, str | None] = {}
+    if arguments.reason == "candidate_failed_job_tool_recovery":
+        recovery_coordinates = {
+            "recovery_candidate_id": getattr(
+                arguments,
+                "predecessor_candidate_id",
+                None,
+            ),
+            "recovery_attempt_id": getattr(
+                arguments,
+                "predecessor_attempt_id",
+                None,
+            ),
+        }
     return _recovery_rehearsal_target_scenario_override(
         staging_dir,
         successor_manifest,
         preflight_dir,
         preflight_manifest,
+        **recovery_coordinates,
     )
 
 
@@ -21987,6 +22976,11 @@ def _create_successor_campaign_unadmitted(arguments: argparse.Namespace) -> dict
             _control_epoch_bootstrap=control_replacement_successor,
         ),
     )
+    if getattr(arguments, "command", None) == FORMAL_FAILED_JOB_RECOVERY_COMMAND:
+        _require_c0154_v7_formal_recovery_source(
+            arguments,
+            predecessor_manifest,
+        )
     _reject_repeated_successor_reason(
         predecessor_dir,
         predecessor_manifest,
@@ -22103,6 +23097,20 @@ def _create_successor_campaign_unadmitted(arguments: argparse.Namespace) -> dict
             arguments.predecessor_attempt_id,
         )
     )
+    candidate_vc_recovery = bool(
+        arguments.reason == "candidate_failed_job_tool_recovery"
+        and _requires_complete_vc_artifacts(predecessor_manifest)
+    )
+    predecessor_vc_checkpoints: dict[str, dict[str, Any]] = {}
+    if candidate_vc_recovery:
+        predecessor_plan = _vc_campaign_plan(predecessor_dir, predecessor_manifest)
+        for phase in ("VC-0", "VC-1", "VC-2", "VC-3", "VC-4"):
+            _, predecessor_checkpoint = _replay_vc_checkpoint(
+                predecessor_dir,
+                predecessor_plan,
+                phase,
+            )
+            predecessor_vc_checkpoints[phase] = predecessor_checkpoint
 
     if successor_dir.parent.exists():
         if successor_dir.parent.is_symlink() or not successor_dir.parent.is_dir():
@@ -22137,6 +23145,22 @@ def _create_successor_campaign_unadmitted(arguments: argparse.Namespace) -> dict
                     kind=f"plan_{group_name}",
                     copied_files=copied_files,
                 )
+
+        candidate_build_projection: dict[str, Any] | None = None
+        if candidate_vc_recovery:
+            if (
+                arguments.predecessor_candidate_id is None
+                or arguments.predecessor_attempt_id is None
+            ):
+                raise ConfigurationError("Candidate VC 恢复缺少前序 Candidate／attempt。")
+            candidate_build_projection = _copy_candidate_build_projection(
+                predecessor_dir,
+                staging_dir,
+                predecessor_manifest,
+                candidate_id=str(arguments.predecessor_candidate_id),
+                attempt_id=str(arguments.predecessor_attempt_id),
+                copied_files=copied_files,
+            )
 
         target_scenario_transition = _successor_target_scenario_transition(
             arguments,
@@ -22323,10 +23347,11 @@ def _create_successor_campaign_unadmitted(arguments: argparse.Namespace) -> dict
             successor_manifest,
             target_scenario_override=rehearsal_scenario_override,
         )
+        recovery_source_scope: dict[str, Any] | None = None
         if failed_job_tool_recovery and not control_replacement_successor:
             assert arguments.predecessor_candidate_id is not None
             assert arguments.predecessor_attempt_id is not None
-            _validate_failed_job_tool_recovery_source(
+            recovery_source_scope = _validate_failed_job_tool_recovery_source(
                 predecessor_dir,
                 predecessor_manifest,
                 successor_manifest,
@@ -22343,13 +23368,14 @@ def _create_successor_campaign_unadmitted(arguments: argparse.Namespace) -> dict
             historical_source_spec_binding=historical_source_spec_binding,
         )
         if (
-            official_only_successor
+            (official_only_successor or candidate_vc_recovery)
             and _requires_complete_vc_artifacts(successor_manifest)
         ):
             # 0.154.0 起不能继承前序 vc_control：其中的 Campaign ID、总计划
             # 摘要和 checkpoint 都属于前序。official-only 后继是一个零请求的
             # Campaign 引导过程，因此在新目录重建 VC-0，并把全部 official
-            # Job 作为 reuse 编译到首个 VC-1 no-op 批次。
+            # Job 作为 reuse 编译到首个 VC-1 no-op 批次。Candidate 定向恢复
+            # 同样只重签控制链，绝不重跑已经完成的 VC-0～VC-4。
             vc_arguments = argparse.Namespace(
                 campaign_id=successor_manifest["campaign_id"],
                 campaign_mode=successor_manifest["campaign_mode"],
@@ -22538,20 +23564,26 @@ def _create_successor_campaign_unadmitted(arguments: argparse.Namespace) -> dict
                 _successor_manifest=successor_manifest,
             )
             if (
-                official_only_successor
+                (official_only_successor or candidate_vc_recovery)
                 and _requires_complete_vc_artifacts(successor_manifest)
             ):
-                official_job_ids = sorted(
-                    str(job["id"])
-                    for job in successor_manifest.get("jobs", [])
-                    if isinstance(job, Mapping) and job.get("phase") == "official"
+                vc1_reuse_ids = (
+                    _vc_checkpoint_completed_item_ids(
+                        predecessor_vc_checkpoints["VC-1"]
+                    )
+                    if candidate_vc_recovery
+                    else sorted(
+                        str(job["id"])
+                        for job in successor_manifest.get("jobs", [])
+                        if isinstance(job, Mapping) and job.get("phase") == "official"
+                    )
                 )
                 _complete_vc_phase(
                     staging_dir,
                     successor_manifest,
                     phase="VC-1",
                     stage_receipt_path=official_stage_path.resolve(strict=True),
-                    reuse_item_ids=official_job_ids,
+                    reuse_item_ids=vc1_reuse_ids,
                     live_request_count=0,
                     scanned_bytes=0,
                 )
@@ -22574,12 +23606,63 @@ def _create_successor_campaign_unadmitted(arguments: argparse.Namespace) -> dict
                 "official_diff_sha256",
             ):
                 imported_classification[field] = classification[field]
-            save_stage_result(
+            classification_stage_path = save_stage_result(
                 staging_dir,
                 "classify",
                 imported_classification,
                 _successor_manifest=successor_manifest,
             )
+            if candidate_vc_recovery:
+                _complete_vc_phase(
+                    staging_dir,
+                    successor_manifest,
+                    phase="VC-2",
+                    stage_receipt_path=classification_stage_path.resolve(strict=True),
+                    reuse_item_ids=_vc_checkpoint_completed_item_ids(
+                        predecessor_vc_checkpoints["VC-2"]
+                    ),
+                    live_request_count=0,
+                    scanned_bytes=0,
+                )
+                source_vc3_binding = predecessor_vc_checkpoints["VC-3"].get(
+                    "stage_receipt"
+                )
+                if not isinstance(source_vc3_binding, Mapping):
+                    raise ConfigurationError("前序 VC-3 checkpoint 阶段绑定非法。")
+                source_vc3_raw = Path(str(source_vc3_binding.get("path", "")))
+                source_vc3_path = (
+                    source_vc3_raw
+                    if source_vc3_raw.is_absolute()
+                    else _campaign_file(predecessor_dir, str(source_vc3_binding["path"]))
+                )
+                _complete_vc_phase(
+                    staging_dir,
+                    successor_manifest,
+                    phase="VC-3",
+                    stage_receipt_path=source_vc3_path.resolve(strict=True),
+                    reuse_item_ids=_vc_checkpoint_completed_item_ids(
+                        predecessor_vc_checkpoints["VC-3"]
+                    ),
+                    live_request_count=0,
+                    scanned_bytes=0,
+                )
+                if candidate_build_projection is None:
+                    raise ConfigurationError("Candidate VC 恢复缺少 VC-4 构建投影。")
+                projected_build_path = _campaign_file(
+                    staging_dir,
+                    str(candidate_build_projection["path"]),
+                )
+                _complete_vc_phase(
+                    staging_dir,
+                    successor_manifest,
+                    phase="VC-4",
+                    stage_receipt_path=projected_build_path.resolve(strict=True),
+                    reuse_item_ids=_vc_checkpoint_completed_item_ids(
+                        predecessor_vc_checkpoints["VC-4"]
+                    ),
+                    live_request_count=0,
+                    scanned_bytes=0,
+                )
 
         if successor_dir.exists():
             raise ConfigurationError("后继 Campaign 目录在发布前已被占用。")
@@ -22618,11 +23701,20 @@ def _create_successor_campaign_unadmitted(arguments: argparse.Namespace) -> dict
         "classification_reapproval_required": reclassification_successor,
         "sealed_stage_control_recovered": sealed_stage_recovery_successor,
         "control_replaced": control_replacement_successor,
+        "candidate_id": (
+            str(arguments.predecessor_candidate_id)
+            if candidate_vc_recovery
+            else None
+        ),
+        "candidate_build_projected": candidate_vc_recovery,
+        "vc_reused_through": "VC-4" if candidate_vc_recovery else None,
+        "recovery_scope": recovery_source_scope,
         "executed_job_count": (
             0
             if (
                 sealed_stage_recovery_successor
                 or control_replacement_successor
+                or candidate_vc_recovery
                 or arguments.reason in OFFICIAL_STAGE_REUSE_SUCCESSOR_REASONS
             )
             else None
@@ -22632,6 +23724,7 @@ def _create_successor_campaign_unadmitted(arguments: argparse.Namespace) -> dict
             if (
                 sealed_stage_recovery_successor
                 or control_replacement_successor
+                or candidate_vc_recovery
                 or arguments.reason in OFFICIAL_STAGE_REUSE_SUCCESSOR_REASONS
             )
             else None
@@ -22641,6 +23734,7 @@ def _create_successor_campaign_unadmitted(arguments: argparse.Namespace) -> dict
             if (
                 sealed_stage_recovery_successor
                 or control_replacement_successor
+                or candidate_vc_recovery
                 or arguments.reason in OFFICIAL_STAGE_REUSE_SUCCESSOR_REASONS
             )
             else None
@@ -23287,6 +24381,7 @@ def _successor_copy_expectations(
     *,
     include_classification: bool = True,
     replace_target_scenario: bool = False,
+    abandoned_candidate_attempt: Mapping[str, Any] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """重建后继 Campaign 必须逐字复制的完整文件闭集。"""
 
@@ -23366,6 +24461,63 @@ def _successor_copy_expectations(
         "official_surface",
         target_relative=_SUCCESSOR_OFFICIAL_SURFACE_PATH,
     )
+    predecessor = manifest.get("predecessor")
+    if (
+        isinstance(predecessor, Mapping)
+        and predecessor.get("reason") == "candidate_failed_job_tool_recovery"
+        and _requires_complete_vc_artifacts(manifest)
+    ):
+        abandoned = abandoned_candidate_attempt
+        candidate_id = (
+            abandoned.get("candidate_id") if isinstance(abandoned, Mapping) else None
+        )
+        if not isinstance(candidate_id, str) or not SAFE_ID_RE.fullmatch(candidate_id):
+            raise ConfigurationError("Candidate 恢复复制闭集缺少失败 Candidate 身份。")
+        build_path = _candidate_build_receipt_path(predecessor_dir, candidate_id)
+        build_relative = build_path.relative_to(predecessor_dir).as_posix()
+        if build_path.is_symlink() or not build_path.is_file():
+            raise ConfigurationError("Candidate 恢复复制闭集缺少前序 VC-4 收据。")
+        add(
+            {"path": build_relative, "sha256": file_sha256(build_path)},
+            "candidate_build_projection",
+        )
+        try:
+            build_receipt = codex_upgrade_vc_artifacts.validate_candidate_build_receipt(
+                _read_json(build_path, "前序 Candidate 构建收据"),
+                allow_legacy=(
+                    isinstance(abandoned_candidate_attempt, Mapping)
+                    and isinstance(
+                        abandoned_candidate_attempt.get("attempt_id"), str
+                    )
+                    and _is_c0154_v7_failed_core_source(
+                        predecessor_manifest,
+                        candidate_id=candidate_id,
+                        attempt_id=str(
+                            abandoned_candidate_attempt["attempt_id"]
+                        ),
+                    )
+                ),
+            )
+        except codex_upgrade_vc_artifacts.VCArtifactError as error:
+            raise ConfigurationError(str(error)) from error
+        for name in (
+            "build_inventory",
+            "frontend_provenance",
+            "image_inspection",
+            "capability_probe",
+        ):
+            machine = build_receipt.get(name)
+            if machine is None:
+                continue
+            if not isinstance(machine, Mapping):
+                raise ConfigurationError(f"前序 Candidate {name} 机器收据绑定非法。")
+            add(
+                {
+                    "path": str(machine.get("path", "")),
+                    "sha256": str(machine.get("sha256", "")),
+                },
+                "candidate_build_projection_machine_receipt",
+            )
     return expected
 
 
@@ -24316,6 +25468,7 @@ def _validate_predecessor_import_receipt(
         replace_target_scenario=(
             receipt_schema == PREDECESSOR_RUNTIME_SCENARIO_IMPORT_SCHEMA
         ),
+        abandoned_candidate_attempt=receipt.get("abandoned_candidate_attempt"),
     )
     copied_index: dict[str, dict[str, Any]] = {}
     for row in copied:
@@ -32103,7 +33256,7 @@ def _historical_result_metadata_matches(
         _tool_component_for_path(path) for path in allowed_high_risk_paths
     }
     if not allowed_high_risk.issubset(
-        {"producer", "relay", "runtime", "shared", "scenario"}
+        _RUNTIME_SUCCESSOR_ALLOWED_REBASE_COMPONENTS
     ):
         return False
     historical_raw = _tool_component_digest_map(frozen_tool)
@@ -32716,12 +33869,27 @@ def _prior_complete_results(
     global_tool_unchanged = _tool_signature_matches(frozen_tool, current_tool)
     changed_production_paths: list[str] = []
     path_job_map: dict[str, set[str]] = {}
+    strict_c0154_v7_replay = bool(
+        explicit_historical_source
+        and isinstance(history_candidate_id, str)
+        and isinstance(source_attempt_id, str)
+        and _is_c0154_v7_failed_core_source(
+            frozen_manifest,
+            candidate_id=history_candidate_id,
+            attempt_id=source_attempt_id,
+        )
+    )
     if isinstance(frozen_tool, Mapping):
         (
             exact_affected_job_ids,
             changed_production_paths,
             unmapped_production_paths,
-        ) = _exact_tool_path_impact(jobs, frozen_tool, current_tool)
+        ) = _exact_tool_path_impact(
+            jobs,
+            frozen_tool,
+            current_tool,
+            allow_phase_evaluation_hybrid_drift=strict_c0154_v7_replay,
+        )
         if unmapped_production_paths:
             raise ConfigurationError(
                 "历史结果复用发现未登记的产出侧工具变化："
@@ -34311,6 +35479,36 @@ def _candidate_identity_for_run(
     if deadline is not None:
         deadline.check("candidate-identity:complete")
     return result
+
+
+def _candidate_identity_for_incremental_execution(
+    arguments: argparse.Namespace,
+    manifest: dict[str, Any],
+    classification: dict[str, Any],
+    *,
+    candidate_build_receipt: Mapping[str, Any] | None,
+    candidate_build_binding: Mapping[str, Any] | None,
+    deadline: incremental_recovery.WallClockDeadline | None,
+) -> dict[str, Any]:
+    """重验增量执行身份，并恢复计划阶段已经绑定的 VC-4 构建字段。"""
+
+    verified = _candidate_identity_for_run(
+        arguments,
+        manifest,
+        classification,
+        verify_image=True,
+        deadline=deadline,
+    )
+    if candidate_build_receipt is not None:
+        if candidate_build_binding is None:
+            raise ConfigurationError("Candidate 执行前重验缺少 VC-4 构建收据绑定。")
+        verified = _bind_candidate_identity_to_build_receipt(
+            arguments,
+            verified,
+            candidate_build_receipt,
+            candidate_build_binding,
+        )
+    return verified
 
 
 def _verify_candidate_attempt_identity(
@@ -36447,23 +37645,12 @@ def _run_capture_attempt(
     ):
         # 计划阶段故意不触碰 Docker；只有 scope 与 transition 完全一致后，
         # 才冻结并重验当前运行容器身份。任何漂移都停线，不得混入旧 attempt。
-        verified_identity = _candidate_identity_for_run(
+        verified_identity = _candidate_identity_for_incremental_execution(
             arguments,
             manifest,
             classification or {},
-            verify_image=True,
-            source_tree_sha256_override=(
-                str(classification_candidate_reuse_context["identity"][
-                    "source_tree_sha256"
-                ])
-                if classification_candidate_reuse_context is not None
-                else None
-            ),
-            git_commit_override=(
-                str(classification_candidate_reuse_context["identity"]["git_commit"])
-                if classification_candidate_reuse_context is not None
-                else None
-            ),
+            candidate_build_receipt=candidate_build_receipt,
+            candidate_build_binding=candidate_build_binding,
             deadline=deadline,
         )
         if verified_identity != identity:
@@ -36479,9 +37666,10 @@ def _run_capture_attempt(
         )
 
     if phase == "candidate" and jobs:
-        # 辅助场景排在多个耗时 Job 之后；凭据缺失或即将过期必须在 reservation
-        # 和首个真实请求之前失败，不能等十几分钟后才发现。
-        _validate_candidate_admin_credential(planned_jobs)
+        # 只校验本轮实际执行集合：已完成并只读复用的 aux 不得再次要求凭据；
+        # aux 确实待执行时，凭据缺失或即将过期仍必须在 reservation 和首个
+        # 真实请求之前失败，不能等十几分钟后才发现。
+        _validate_candidate_admin_credential(jobs)
 
     _require_capture_budget_before_data_action(
         deadline,
@@ -39815,14 +41003,14 @@ def _canonical_import_verified_vc5_subject(
         or build_path.stat().st_size != build_reference.get("bytes")
     ):
         raise ConfigurationError("AcceptanceFact 的 VC-4 构建收据摘要漂移。")
-    try:
-        build_receipt = codex_upgrade_vc_artifacts.validate_candidate_build_receipt(
-            _read_json(build_path, "Candidate 构建收据")
-        )
-    except codex_upgrade_vc_artifacts.VCArtifactError as error:
-        raise ConfigurationError(str(error)) from error
+    build_receipt, replayed_build_reference = _replay_candidate_build_receipt(
+        campaign_dir,
+        manifest,
+        candidate_id,
+        build_path,
+    )
     if (
-        build_receipt.get("campaign_id") != manifest.get("campaign_id")
+        replayed_build_reference != build_reference
         or build_receipt.get("candidate_id") != candidate_id
         or build_receipt.get("target_version") != manifest.get("target_version")
         or candidate.get("identity", {}).get("build_receipt") != build_reference
@@ -42732,11 +43920,188 @@ def _resolve_candidate_build_binding_path(campaign_dir: Path, value: Any) -> Pat
     return candidate if candidate.is_absolute() else _campaign_file(campaign_dir, value)
 
 
+def _require_c0154_v7_frozen_legacy_build_receipt(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    candidate_id: str,
+    receipt_path: Path,
+    receipt: Mapping[str, Any],
+) -> dict[str, Any]:
+    """只授权逐字冻结的 v7 构建收据跳过后来新增的 v2 实物校验。"""
+
+    frozen = C0154_V7_RECOVERY_SOURCE
+    _validated_c0154_v7_recovery_source_scope(
+        campaign_dir,
+        manifest,
+        candidate_id=candidate_id,
+        attempt_id=str(frozen["attempt_id"]),
+    )
+    build = receipt.get("build")
+    receipt_sha256 = file_sha256(receipt_path)
+    receipt_bytes = receipt_path.stat().st_size
+    if (
+        receipt.get("schema_version")
+        != codex_upgrade_vc_artifacts.LEGACY_CANDIDATE_BUILD_SCHEMA
+        or receipt.get("campaign_id") != frozen["campaign_id"]
+        or receipt.get("campaign_manifest_sha256")
+        != frozen["campaign_manifest_sha256"]
+        or candidate_id != frozen["candidate_id"]
+        or receipt.get("candidate_id") != frozen["candidate_id"]
+        or receipt.get("target_version") != frozen["target_version"]
+        or receipt_sha256 != frozen["build_receipt_sha256"]
+        or receipt_bytes != frozen["build_receipt_bytes"]
+        or receipt.get("receipt_digest") != frozen["build_receipt_digest"]
+        or not isinstance(build, Mapping)
+        or build.get("parameters_sha256")
+        != frozen["build_parameters_sha256"]
+    ):
+        raise ConfigurationError("Candidate v7 历史构建收据字节或摘要漂移。")
+    return {
+        "path": receipt_path.relative_to(campaign_dir).as_posix(),
+        "sha256": receipt_sha256,
+        "bytes": receipt_bytes,
+    }
+
+
+def _replay_projected_candidate_build_receipt(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    candidate_id: str,
+    expected_path: Path,
+    receipt: Mapping[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """重放由直接前序逐字投影的 VC-4 收据，不把旧事实伪装成新构建。"""
+
+    predecessor = manifest.get("predecessor")
+    if (
+        not isinstance(predecessor, Mapping)
+        or predecessor.get("reason") != "candidate_failed_job_tool_recovery"
+    ):
+        raise ConfigurationError("跨 Campaign VC-4 收据没有受管失败恢复绑定。")
+    classification = _load_stage_result(campaign_dir, "classify")
+    import_binding = classification.get("predecessor_import")
+    _require_file_binding(import_binding, "Candidate 构建投影的前序导入收据")
+    assert isinstance(import_binding, Mapping)
+    if import_binding.get("path") != "predecessor-import.json":
+        raise ConfigurationError("Candidate 构建投影的前序导入路径非法。")
+    import_path = _campaign_file(campaign_dir, str(import_binding["path"]))
+    imported = _read_json(import_path, "Candidate 构建投影的前序导入收据")
+    abandoned = imported.get("abandoned_candidate_attempt")
+    predecessor_binding = imported.get("predecessor_campaign")
+    if (
+        imported.get("schema_version") != PREDECESSOR_RECOVERY_IMPORT_SCHEMA
+        or imported.get("reason") != "candidate_failed_job_tool_recovery"
+        or not isinstance(abandoned, Mapping)
+        or abandoned.get("candidate_id") != candidate_id
+        or not isinstance(abandoned.get("attempt_id"), str)
+        or not isinstance(predecessor_binding, Mapping)
+        or predecessor
+        != {**dict(predecessor_binding), "reason": imported.get("reason")}
+    ):
+        raise ConfigurationError("Candidate 构建投影的恢复来源绑定非法。")
+    source_dir = Path(str(predecessor_binding.get("campaign_dir", "")))
+    if (
+        not source_dir.is_absolute()
+        or source_dir.is_symlink()
+        or not source_dir.is_dir()
+        or source_dir.resolve(strict=True) == campaign_dir.resolve(strict=True)
+    ):
+        raise ConfigurationError("Candidate 构建投影的直接前序路径不可信。")
+    source_dir = source_dir.resolve(strict=True)
+    source_manifest = load_campaign_manifest(
+        source_dir,
+        _control_epoch_bootstrap=True,
+    )
+    if (
+        predecessor_binding.get("campaign_id") != source_manifest.get("campaign_id")
+        or predecessor_binding.get("campaign_manifest_sha256")
+        != file_sha256(source_dir / "campaign.json")
+        or receipt.get("campaign_id") != source_manifest.get("campaign_id")
+        or receipt.get("campaign_manifest_sha256")
+        != file_sha256(source_dir / "campaign.json")
+        or receipt.get("candidate_id") != candidate_id
+        or receipt.get("candidate_purpose") != manifest.get("campaign_purpose")
+        or receipt.get("target_version") != manifest.get("target_version")
+    ):
+        raise ConfigurationError("Candidate 构建投影的前序 Campaign 身份漂移。")
+    source_path = _candidate_build_receipt_path(source_dir, candidate_id)
+    if (
+        source_path.is_symlink()
+        or not source_path.is_file()
+        or source_path.read_bytes() != expected_path.read_bytes()
+    ):
+        raise ConfigurationError("Candidate VC-4 收据投影不是前序文件的逐字副本。")
+    copied_index = {
+        str(row.get("target_path")): row
+        for row in imported.get("copied_files", [])
+        if isinstance(row, Mapping)
+    }
+    expected_relative = expected_path.relative_to(campaign_dir).as_posix()
+    copied_build = copied_index.get(expected_relative)
+    if (
+        not isinstance(copied_build, Mapping)
+        or copied_build.get("kind") != "candidate_build_projection"
+        or copied_build.get("source_path")
+        != source_path.relative_to(source_dir).as_posix()
+        or copied_build.get("sha256") != file_sha256(expected_path)
+        or copied_build.get("bytes") != expected_path.stat().st_size
+    ):
+        raise ConfigurationError("Candidate VC-4 收据投影未进入前序导入复制闭集。")
+    for name in (
+        "build_inventory",
+        "frontend_provenance",
+        "image_inspection",
+        "capability_probe",
+    ):
+        machine = receipt.get(name)
+        if machine is None:
+            continue
+        if not isinstance(machine, Mapping):
+            raise ConfigurationError(f"Candidate {name} 投影绑定非法。")
+        relative = str(machine.get("path", ""))
+        source_machine = _campaign_file(source_dir, relative)
+        current_machine = _campaign_file(campaign_dir, relative)
+        copied_machine = copied_index.get(relative)
+        if (
+            source_machine.is_symlink()
+            or not source_machine.is_file()
+            or current_machine.is_symlink()
+            or not current_machine.is_file()
+            or source_machine.read_bytes() != current_machine.read_bytes()
+            or not isinstance(copied_machine, Mapping)
+            or copied_machine.get("kind")
+            != "candidate_build_projection_machine_receipt"
+            or copied_machine.get("sha256") != machine.get("sha256")
+            or copied_machine.get("bytes") != machine.get("bytes")
+        ):
+            raise ConfigurationError(f"Candidate {name} 机器收据投影漂移。")
+    source_receipt, source_binding = _replay_candidate_build_receipt(
+        source_dir,
+        source_manifest,
+        candidate_id,
+        source_path,
+        _allow_legacy_v7_source=(
+            receipt.get("schema_version")
+            == codex_upgrade_vc_artifacts.LEGACY_CANDIDATE_BUILD_SCHEMA
+        ),
+    )
+    current_binding = {
+        "path": expected_relative,
+        "sha256": file_sha256(expected_path),
+        "bytes": expected_path.stat().st_size,
+    }
+    if source_receipt != dict(receipt) or source_binding != current_binding:
+        raise ConfigurationError("Candidate VC-4 投影与前序完整重放结果不一致。")
+    return dict(receipt), current_binding
+
+
 def _replay_candidate_build_receipt(
     campaign_dir: Path,
     manifest: Mapping[str, Any],
     candidate_id: str,
     receipt_argument: Path | None,
+    *,
+    _allow_legacy_v7_source: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """在 VC-5 请求前或 seal 前完整重放 VC-4 构建收据。"""
 
@@ -42750,15 +44115,46 @@ def _replay_candidate_build_receipt(
         raise ConfigurationError("Candidate 构建收据不存在。") from error
     if supplied_path != canonical_path or supplied_path.is_symlink() or not supplied_path.is_file():
         raise ConfigurationError("--build-receipt 必须指向本 candidate 的规范构建收据。")
+    raw_receipt = _read_json(supplied_path, "Candidate 构建收据")
+    predecessor = manifest.get("predecessor")
+    managed_v7_projection = bool(
+        isinstance(predecessor, Mapping)
+        and predecessor.get("reason") == "candidate_failed_job_tool_recovery"
+        and predecessor.get("campaign_id")
+        == C0154_V7_RECOVERY_SOURCE["campaign_id"]
+        and candidate_id == C0154_V7_RECOVERY_SOURCE["candidate_id"]
+        and raw_receipt.get("campaign_id")
+        == C0154_V7_RECOVERY_SOURCE["campaign_id"]
+        and raw_receipt.get("candidate_id")
+        == C0154_V7_RECOVERY_SOURCE["candidate_id"]
+        and raw_receipt.get("schema_version")
+        == codex_upgrade_vc_artifacts.LEGACY_CANDIDATE_BUILD_SCHEMA
+    )
+    if _allow_legacy_v7_source and not _is_c0154_v7_failed_core_source(
+        manifest,
+        candidate_id=candidate_id,
+        attempt_id=str(C0154_V7_RECOVERY_SOURCE["attempt_id"]),
+    ):
+        raise ConfigurationError(
+            "Candidate v1 构建收据来源不属于已审计 v7 恢复坐标。"
+        )
     try:
         receipt = codex_upgrade_vc_artifacts.validate_candidate_build_receipt(
-            _read_json(supplied_path, "Candidate 构建收据")
+            raw_receipt,
+            allow_legacy=managed_v7_projection or _allow_legacy_v7_source,
         )
     except codex_upgrade_vc_artifacts.VCArtifactError as error:
         raise ConfigurationError(str(error)) from error
+    if receipt.get("campaign_id") != manifest.get("campaign_id"):
+        return _replay_projected_candidate_build_receipt(
+            campaign_dir,
+            manifest,
+            candidate_id,
+            expected_path,
+            receipt,
+        )
     if (
-        receipt.get("campaign_id") != manifest.get("campaign_id")
-        or receipt.get("campaign_manifest_sha256")
+        receipt.get("campaign_manifest_sha256")
         != file_sha256(campaign_dir / "campaign.json")
         or receipt.get("candidate_id") != candidate_id
         or receipt.get("candidate_purpose") != manifest.get("campaign_purpose")
@@ -42926,30 +44322,51 @@ def _replay_candidate_build_receipt(
 
     build_parameters = receipt["build"]["parameters"]
     binary_path = Path(receipt["binary"]["path"])
-    try:
-        build_tree = Path(build_parameters["build_tree"]["root"]).resolve(strict=True)
-        docker_context = Path(
-            build_parameters["docker_build"]["context_root"]
-        ).resolve(strict=True)
-        frontend_dist_source = Path(
-            build_parameters["frontend"]["dist_source_root"]
-        ).resolve(strict=True)
-        build_parameters = codex_upgrade_candidate_build.validate_build_parameters(
-            build_parameters,
-            candidate_id=candidate_id,
-            source_root=resolved_source,
-            git_commit=str(receipt["source"]["git_commit"]),
-            binary_path=binary_path,
-            binary_sha256=str(receipt["binary"]["sha256"]),
-            binary_bytes=int(receipt["binary"]["bytes"]),
-            build_tree=build_tree,
-            docker_context=docker_context,
-            frontend_dist_source=frontend_dist_source,
-            target_architecture=str(receipt["target_architecture"]),
-            image_id=str(receipt["image"]["image_id"]),
+    frozen_v7_legacy_build = bool(
+        _allow_legacy_v7_source is True
+        and receipt.get("schema_version")
+        == codex_upgrade_vc_artifacts.LEGACY_CANDIDATE_BUILD_SCHEMA
+    )
+    if frozen_v7_legacy_build:
+        frozen_binding = _require_c0154_v7_frozen_legacy_build_receipt(
+            campaign_dir,
+            manifest,
+            candidate_id,
+            expected_path,
+            receipt,
         )
-    except (KeyError, OSError, codex_upgrade_candidate_build.CandidateBuildError) as error:
-        raise ConfigurationError(f"Candidate 严格构建参数无法重放：{error}") from error
+        return dict(receipt), frozen_binding
+    else:
+        try:
+            build_tree = Path(build_parameters["build_tree"]["root"]).resolve(strict=True)
+            docker_context = Path(
+                build_parameters["docker_build"]["context_root"]
+            ).resolve(strict=True)
+            frontend_dist_source = Path(
+                build_parameters["frontend"]["dist_source_root"]
+            ).resolve(strict=True)
+            build_parameters = codex_upgrade_candidate_build.validate_build_parameters(
+                build_parameters,
+                candidate_id=candidate_id,
+                source_root=resolved_source,
+                git_commit=str(receipt["source"]["git_commit"]),
+                binary_path=binary_path,
+                binary_sha256=str(receipt["binary"]["sha256"]),
+                binary_bytes=int(receipt["binary"]["bytes"]),
+                build_tree=build_tree,
+                docker_context=docker_context,
+                frontend_dist_source=frontend_dist_source,
+                target_architecture=str(receipt["target_architecture"]),
+                image_id=str(receipt["image"]["image_id"]),
+            )
+        except (
+            KeyError,
+            OSError,
+            codex_upgrade_candidate_build.CandidateBuildError,
+        ) as error:
+            raise ConfigurationError(
+                f"Candidate 严格构建参数无法重放：{error}"
+            ) from error
 
     machine_payloads: dict[str, dict[str, Any]] = {}
     for name in (
@@ -44715,6 +46132,7 @@ def _normalize_legacy_argv(argv: list[str]) -> tuple[list[str], str | None]:
         "canonical-import",
         "canonical-advance",
         "successor",
+        FORMAL_FAILED_JOB_RECOVERY_COMMAND,
         "capture-official",
         "classify",
         "prepare-profile",
@@ -44754,6 +46172,7 @@ def _reject_canonical_legacy_write(
 
     if command not in {
         "successor",
+        FORMAL_FAILED_JOB_RECOVERY_COMMAND,
         "reuse-official-evidence",
         "control-epoch",
         "evaluation-transition",
@@ -44818,6 +46237,18 @@ def _reject_campaign_run_legacy_write(
                 predecessor_manifest = _read_json(predecessor_path, "前序 Campaign 清单")
             except ConfigurationError:
                 predecessor_manifest = None
+    if (
+        command == "control-epoch"
+        and isinstance(campaign_dir, Path)
+        and isinstance(manifest, Mapping)
+        and _is_c0154_vc5_failed_job_control_epoch_campaign(
+            campaign_dir,
+            manifest,
+        )
+    ):
+        # 仅该冻结对象允许从直接 CLI 写入一份零执行 control epoch；
+        # campaign-run 上下文已在上方无条件拒绝，其他 Formal 对象继续 fail-close。
+        return
     # 0.149.1 起的正式 Campaign（含所有未来版本）不再允许旧写入；只有更早的
     # 历史版本目录保留给只读回放和离线兼容测试，避免篡改历史收据语义。
     candidates = [item for item in (manifest, predecessor_manifest) if item]
@@ -44868,6 +46299,7 @@ def _reject_unparented_formal_write(
             )
         return
     direct_control_commands = {
+        FORMAL_FAILED_JOB_RECOVERY_COMMAND,
         "reuse-official-evidence",
         "harden-evidence-permissions",
         "reconcile-supervisor-run",
@@ -45478,6 +46910,11 @@ def _main_without_campaign_lease(argv: list[str] | None = None) -> int:
                 "job_count": len(manifest["jobs"]),
                 **preflight_invalidation,
             }
+            return_code = 0
+        elif command == FORMAL_FAILED_JOB_RECOVERY_COMMAND:
+            if getattr(arguments, "reason", None) != "candidate_failed_job_tool_recovery":
+                raise ConfigurationError("正式失败 Job 恢复入口的 reason 已被篡改。")
+            result = create_successor_campaign(arguments)
             return_code = 0
         elif command == "reuse-official-evidence":
             # §5.3.3：官方证据一旦可信封存就只读复用。这里复用 successor 实现里

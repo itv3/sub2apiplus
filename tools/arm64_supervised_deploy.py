@@ -98,8 +98,16 @@ from typing import Any, Callable, Mapping
 # 可由普通 v2 零请求恢复预览承接，非 no-op batch 可确定性补写停线收据。
 # A2-3：不再硬编码整树摘要。暂存树自算摘要即期望值，候选与生产三向互等；
 # 收据额外写策略 v2 的五个摘要，供 VC-0 收口与 seal 按 wire 身份比对。
+# 2026-09-17（VC-5 失败 Job 定向恢复）：正式入口精确绑定 v7，VC-0～VC-4
+# 只读承接，仅允许重跑 candidate-frozen-core；监督器摘要随之更新。
+# 2026-09-17（VC-5 管理凭据执行闭集修复）：管理凭据只校验本轮实际执行 Job，
+# 已复用的 candidate-frozen-aux 不再误拦截仅执行 core 的恢复批次。
+# 2026-09-17（VC-5 路由映射计数兼容修复）：Candidate readiness 使用 PostgreSQL
+# 实际支持的对象键集合计数，避免静态路由快照在派发前误失败。
+# 2026-09-17（VC-5 对账副本格式兼容修复）：重派门禁分别校验账本副本摘要，
+# 并按 JSON 事实比较 Campaign 与 TimingLedger 副本，避免空白格式差异误报漂移。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "d1bbea57a158feb5fb03615b5faf12791f3ed6e261a51471bbde5d0a8c8a486b"
+    "5ef186522c0aebe57d1ded643a7c7b218516141f13c9aa3d46ce911e426f6780"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "b9ca7b6f48b3c33a63a864a9ce7ebd617335378ea52fe9148ea161ab3b276ada"
@@ -150,6 +158,14 @@ MANAGED_RUNTIME_DOCUMENTS = (
     "egress/maintenance/upstream-codex-0154-vc5-provenance-pcap-owner-20260917-freeze-successor.json",
     "egress/maintenance/upstream-codex-0154-vc5-reconciliation-producer-registration-20260917-freeze-successor.json",
     "egress/maintenance/upstream-codex-0154-classification-successor-vc-control-20260917-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-failed-job-recovery-20260917-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-legacy-build-replay-20260917-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-runtime-rebase-component-20260917-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-historical-result-replay-20260917-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-execution-identity-rebind-20260917-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-admin-execution-scope-20260917-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-routing-count-compat-20260917-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-reconciliation-json-compat-20260917-freeze-successor.json",
 )
 MANAGED_ASSERTION_PREPARER = "prepare_assertion_bundle.sh"
 TARGET_SCENARIO_MANIFEST = "codex_upgrade_scenarios_0_154_0.json"

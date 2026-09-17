@@ -582,7 +582,7 @@ SELECT json_build_object(
   'parent_account_id', (SELECT parent_account_id FROM target_account),
   'token_present', (SELECT length(coalesce(credentials->>'access_token','')) > 0 FROM target_account),
   'model_mapping_type', (SELECT CASE WHEN NOT (credentials ? 'model_mapping') THEN 'missing' ELSE coalesce(jsonb_typeof(credentials->'model_mapping'),'null') END FROM target_account),
-  'model_mapping_count', (SELECT CASE WHEN jsonb_typeof(credentials->'model_mapping') = 'object' THEN jsonb_object_length(credentials->'model_mapping') ELSE 0 END FROM target_account),
+  'model_mapping_count', (SELECT CASE WHEN jsonb_typeof(credentials->'model_mapping') = 'object' THEN (SELECT count(*) FROM jsonb_object_keys(credentials->'model_mapping')) ELSE 0 END FROM target_account),
   'api_key_id', (SELECT id FROM target_key),
   'api_key_status', (SELECT status FROM target_key),
   'group_id', (SELECT group_id FROM target_key),

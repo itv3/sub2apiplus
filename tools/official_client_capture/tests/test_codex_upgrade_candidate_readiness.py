@@ -160,6 +160,45 @@ def probe_kwargs(
 
 
 class CandidateReadinessTests(unittest.TestCase):
+    def test_routing_snapshot_counts_mapping_keys_with_supported_jsonb_api(self) -> None:
+        """PostgreSQL 没有 jsonb_object_length，必须通过键集合计数。"""
+
+        commands: list[list[str]] = []
+
+        def runner(
+            arguments: list[str] | tuple[str, ...],
+        ) -> subprocess.CompletedProcess[str]:
+            values = list(arguments)
+            commands.append(values)
+            if values[:2] == ["docker", "inspect"]:
+                output = json.dumps(
+                    [{"Config": {"Env": ["POSTGRES_USER=u", "POSTGRES_DB=d"]}}]
+                )
+            elif values[:3] == ["docker", "exec", "postgres"]:
+                output = json.dumps(
+                    {
+                        "account_id": 9,
+                        "model_mapping_type": "object",
+                        "model_mapping_count": 0,
+                    }
+                )
+            else:
+                raise AssertionError(f"未预期命令：{values}")
+            return subprocess.CompletedProcess(values, 0, output, "")
+
+        snapshot = readiness._routing_snapshot(configuration(), runner)
+        self.assertEqual(snapshot["model_mapping_count"], 0)
+        sql = commands[1][-1]
+        self.assertIn(
+            "SELECT count(*) FROM jsonb_object_keys(credentials->'model_mapping')",
+            sql,
+        )
+        self.assertNotIn("jsonb_object_length", sql)
+        self.assertIn(
+            "jsonb_typeof(credentials->'model_mapping') = 'object'",
+            sql,
+        )
+
     def test_static_failure_receipt_is_zero_request_and_blocks(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             checks = static_checks()

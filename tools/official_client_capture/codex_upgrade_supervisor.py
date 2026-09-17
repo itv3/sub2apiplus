@@ -4256,6 +4256,7 @@ def _campaign_run_manifest(
         )
         forbidden = {
             "successor",
+            "recover-candidate-failed-jobs",
             "control-epoch",
             "evaluation-transition",
             "terminal-transition-preflight",
@@ -5094,15 +5095,20 @@ def _validate_batched_environment_redispatch_successor(
         campaign_receipt,
         "环境前提失败 Campaign 对账收据",
     )
-    if (
-        _sha256(reconciliation_raw) != reconciliation_binding.get("sha256")
-        or reconciliation_raw != campaign_reconciliation_raw
-    ):
-        raise SupervisorError("环境前提失败的对账收据绑定漂移。")
-    reconciliation = _permission_compensation_json(
+    ledger_reconciliation = _permission_compensation_json(
+        reconciliation_raw,
+        "环境前提失败时间账本对账副本",
+    )
+    campaign_reconciliation = _permission_compensation_json(
         campaign_reconciliation_raw,
         "环境前提失败 Campaign 对账收据",
     )
+    if (
+        _sha256(reconciliation_raw) != reconciliation_binding.get("sha256")
+        or ledger_reconciliation != campaign_reconciliation
+    ):
+        raise SupervisorError("环境前提失败的对账收据绑定漂移。")
+    reconciliation = campaign_reconciliation
     run = reconciliation.get("run")
     if (
         reconciliation.get("schema_version")
