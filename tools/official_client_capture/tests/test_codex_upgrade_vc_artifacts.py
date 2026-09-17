@@ -318,6 +318,31 @@ class CodexUpgradeVCArtifactsTests(unittest.TestCase):
         with self.assertRaisesRegex(artifacts.VCArtifactError, "parameters 摘要"):
             artifacts.validate_candidate_build_receipt(tampered)
 
+    def test_legacy_candidate_build_receipt_remains_replayable(self) -> None:
+        """v7 已封存的 v1 收据没有四份 v2 机器收据，仍须只读重放。"""
+
+        candidate = self._candidate_build_receipt()
+        candidate["schema_version"] = artifacts.LEGACY_CANDIDATE_BUILD_SCHEMA
+        for field in (
+            "build_inventory",
+            "frontend_provenance",
+            "image_inspection",
+            "capability_probe",
+        ):
+            candidate.pop(field)
+        unsigned = dict(candidate)
+        unsigned.pop("receipt_digest")
+        candidate["receipt_digest"] = artifacts.digest(unsigned)
+        with self.assertRaisesRegex(artifacts.VCArtifactError, "受管历史投影"):
+            artifacts.validate_candidate_build_receipt(candidate)
+        self.assertEqual(
+            artifacts.validate_candidate_build_receipt(
+                candidate,
+                allow_legacy=True,
+            ),
+            candidate,
+        )
+
     def test_candidate_delivery_has_distinct_purpose_endpoints(self) -> None:
         build_receipt = self._candidate_build_receipt()
         common = {

@@ -3307,8 +3307,506 @@ class CodexUpgradeControlEpochTest(unittest.TestCase):
                     attempt_root=source_root,
                     attempt=attempt,
                 )
-            self.assertEqual(impact["kind"], "control_epoch")
-            self.assertEqual(impact["affected_job_ids"], ["job-b"])
+        self.assertEqual(impact["kind"], "control_epoch")
+        self.assertEqual(impact["affected_job_ids"], ["job-b"])
+
+    def _c0154_vc5_epoch_source(self) -> dict[str, object]:
+        """构造唯一 VC-5 控制续期的冻结 9/8/1 来源。"""
+
+        planned = list(
+            codex_upgrade.C0154_VC5_FAILED_JOB_CONTROL_EPOCH[
+                "planned_job_ids"
+            ]
+        )
+        execute = [
+            str(
+                codex_upgrade.C0154_VC5_FAILED_JOB_CONTROL_EPOCH[
+                    "execute_job_id"
+                ]
+            )
+        ]
+        return {
+            "candidate_id": codex_upgrade.C0154_VC5_FAILED_JOB_CONTROL_EPOCH[
+                "candidate_id"
+            ],
+            "attempt_id": codex_upgrade.C0154_VC5_FAILED_JOB_CONTROL_EPOCH[
+                "attempt_id"
+            ],
+            "attempt_digest": "1" * 64,
+            "candidate_identity_sha256": "2" * 64,
+            "source_transition": {
+                "path": "predecessor-import.json",
+                "sha256": "3" * 64,
+            },
+            "recovery_scope_sha256": "4" * 64,
+            "planned_job_ids": planned,
+            "execute_job_ids": execute,
+            "reused_job_ids": sorted(set(planned) - set(execute)),
+            "failed_job_ids": execute,
+            "pending_job_ids": [],
+            "production_paths": [
+                codex_upgrade.C0154_VC5_FAILED_JOB_CONTROL_EPOCH[
+                    "production_path"
+                ]
+            ],
+            "target_scenario": {
+                "path": "inputs/target.json",
+                "sha256": "5" * 64,
+            },
+        }
+
+    def test_c0154_vc5_epoch_identity_is_exact(self) -> None:
+        """目录、ID、摘要、版本和 reason 任一漂移都不得获得例外。"""
+
+        identity = codex_upgrade.C0154_VC5_FAILED_JOB_CONTROL_EPOCH
+        with tempfile.TemporaryDirectory() as directory:
+            campaign = Path(directory) / str(identity["campaign_id"])
+            campaign.mkdir()
+            manifest = {
+                "campaign_id": identity["campaign_id"],
+                "campaign_mode": "formal",
+                "target_version": identity["target_version"],
+                "predecessor": {"reason": identity["predecessor_reason"]},
+            }
+            manifest_path = campaign / "campaign.json"
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            digest = codex_upgrade.file_sha256(manifest_path)
+            with mock.patch.dict(
+                identity,
+                {"campaign_manifest_sha256": digest},
+            ):
+                self.assertTrue(
+                    codex_upgrade._is_c0154_vc5_failed_job_control_epoch_campaign(
+                        campaign,
+                        manifest,
+                    )
+                )
+                self.assertFalse(
+                    codex_upgrade._is_c0154_vc5_failed_job_control_epoch_campaign(
+                        campaign,
+                        {**manifest, "campaign_id": "wrong-campaign"},
+                    )
+                )
+                self.assertFalse(
+                    codex_upgrade._is_c0154_vc5_failed_job_control_epoch_campaign(
+                        campaign,
+                        {
+                            **manifest,
+                            "predecessor": {"reason": "wrong-reason"},
+                        },
+                    )
+                )
+            self.assertFalse(
+                codex_upgrade._is_c0154_vc5_failed_job_control_epoch_campaign(
+                    campaign,
+                    manifest,
+                )
+            )
+
+    def test_c0154_vc5_epoch_source_is_exact_9_8_1(self) -> None:
+        """仅接受 9 planned、8 reused、A15 单执行且 pending 为空。"""
+
+        identity = codex_upgrade.C0154_VC5_FAILED_JOB_CONTROL_EPOCH
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            campaign = root / str(identity["campaign_id"])
+            predecessor = root / "predecessor"
+            campaign.mkdir()
+            predecessor.mkdir()
+            (campaign / "campaign.json").write_text("{}\n", encoding="utf-8")
+            (campaign / "predecessor-import.json").write_text(
+                "{}\n",
+                encoding="utf-8",
+            )
+            manifest = {
+                "campaign_id": identity["campaign_id"],
+                "campaign_mode": "formal",
+                "target_version": identity["target_version"],
+                "predecessor": {
+                    "reason": identity["predecessor_reason"],
+                    "campaign_dir": str(predecessor.resolve()),
+                },
+                "inputs": {
+                    "target_discovery_scenarios": {
+                        "path": "inputs/target.json",
+                        "sha256": "5" * 64,
+                    }
+                },
+            }
+            source = self._c0154_vc5_epoch_source()
+            scope = {
+                key: source[key]
+                for key in (
+                    "planned_job_ids",
+                    "reused_job_ids",
+                    "execute_job_ids",
+                    "failed_job_ids",
+                    "pending_job_ids",
+                )
+            }
+            scope.update(
+                reservation_exists=False,
+                live_request_count=0,
+                scanned_bytes=0,
+            )
+            abandoned = {
+                "attempt_digest": "1" * 64,
+                "identity_sha256": "2" * 64,
+            }
+
+            def build(observed_scope: dict[str, object]) -> dict[str, object]:
+                with (
+                    mock.patch.object(
+                        codex_upgrade,
+                        "_is_c0154_vc5_failed_job_control_epoch_campaign",
+                        return_value=True,
+                    ),
+                    mock.patch.object(
+                        codex_upgrade,
+                        "_published_c0154_v7_recovery_coordinates",
+                        return_value=(
+                            identity["candidate_id"],
+                            identity["attempt_id"],
+                        ),
+                    ),
+                    mock.patch.object(
+                        codex_upgrade,
+                        "_require_c0154_v7_recovery_source_binding",
+                        return_value={
+                            "predecessor_manifest": {"campaign_id": "source"},
+                            "abandoned_candidate_attempt": abandoned,
+                        },
+                    ),
+                    mock.patch.object(
+                        codex_upgrade,
+                        "_validate_failed_job_tool_recovery_source",
+                        return_value=observed_scope,
+                    ),
+                ):
+                    return (
+                        codex_upgrade._c0154_vc5_failed_job_control_epoch_source_context(
+                            campaign,
+                            manifest,
+                            candidate_id=str(identity["candidate_id"]),
+                            attempt_id=str(identity["attempt_id"]),
+                        )
+                    )
+
+            observed = build(scope)
+            self.assertEqual(len(observed["planned_job_ids"]), 9)
+            self.assertEqual(len(observed["reused_job_ids"]), 8)
+            self.assertEqual(
+                observed["execute_job_ids"],
+                ["candidate-frozen-core"],
+            )
+            self.assertEqual(observed["pending_job_ids"], [])
+            for field, value in (
+                ("execute_job_ids", ["candidate-core-mitm", "candidate-frozen-core"]),
+                ("reused_job_ids", list(scope["reused_job_ids"])[1:]),
+                ("pending_job_ids", ["candidate-frozen-core"]),
+            ):
+                with self.subTest(field=field):
+                    changed = json.loads(json.dumps(scope))
+                    changed[field] = value
+                    with self.assertRaisesRegex(
+                        codex_upgrade.ConfigurationError,
+                        "9/8/1",
+                    ):
+                        build(changed)
+
+    def test_c0154_vc5_epoch_uses_vc0_stop_and_vc4_successor(self) -> None:
+        """旧 Ledger 只允许 VC-0 stop；新 Ledger 仍必须从 VC-4 继续。"""
+
+        identity = codex_upgrade.C0154_VC5_FAILED_JOB_CONTROL_EPOCH
+        manifest = {
+            "campaign_id": identity["campaign_id"],
+            "target_version": identity["target_version"],
+            "predecessor": {"reason": identity["predecessor_reason"]},
+        }
+        source = self._c0154_vc5_epoch_source()
+        self.assertEqual(
+            codex_upgrade._control_epoch_stop_required_phase(manifest, source),
+            "VC-0",
+        )
+        self.assertEqual(codex_upgrade._control_epoch_required_phase(source), "VC-4")
+        changed = {**source, "pending_job_ids": ["candidate-frozen-core"]}
+        self.assertEqual(
+            codex_upgrade._control_epoch_stop_required_phase(manifest, changed),
+            "VC-4",
+        )
+
+    def test_c0154_vc5_epoch_legacy_boundary_is_single_object_only(self) -> None:
+        """直接入口仅豁免精确对象；campaign-run 和其他 Formal 仍拒绝。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            campaign = Path(directory) / "campaign"
+            campaign.mkdir()
+            (campaign / "campaign.json").write_text(
+                json.dumps(
+                    {
+                        "campaign_mode": "formal",
+                        "target_version": "0.154.0",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            arguments = type(
+                "Arguments",
+                (),
+                {
+                    "campaign_dir": campaign,
+                    "predecessor_campaign_dir": None,
+                },
+            )()
+            with (
+                mock.patch.object(codex_upgrade.os, "environ", {}),
+                mock.patch.object(
+                    codex_upgrade,
+                    "_is_c0154_vc5_failed_job_control_epoch_campaign",
+                    return_value=True,
+                ),
+            ):
+                codex_upgrade._reject_campaign_run_legacy_write(
+                    arguments,
+                    "control-epoch",
+                )
+            with (
+                mock.patch.object(codex_upgrade.os, "environ", {}),
+                mock.patch.object(
+                    codex_upgrade,
+                    "_is_c0154_vc5_failed_job_control_epoch_campaign",
+                    return_value=False,
+                ),
+                self.assertRaisesRegex(
+                    codex_upgrade.ConfigurationError,
+                    "正式 Campaign 禁止旧写入入口",
+                ),
+            ):
+                codex_upgrade._reject_campaign_run_legacy_write(
+                    arguments,
+                    "control-epoch",
+                )
+            with (
+                mock.patch.object(
+                    codex_upgrade.os,
+                    "environ",
+                    {codex_upgrade.codex_upgrade_supervisor.CAMPAIGN_RUN_CONTEXT_ENV: "1"},
+                ),
+                self.assertRaises(codex_upgrade.ConfigurationError),
+            ):
+                codex_upgrade._reject_campaign_run_legacy_write(
+                    arguments,
+                    "control-epoch",
+                )
+
+    def test_campaign_timing_ledger_prefers_effective_epoch_controls(self) -> None:
+        """批次治理必须消费 epoch 的新 Ledger；无 epoch 时仍读取清单。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            campaign = root / "campaign"
+            old = root / "old-ledger"
+            new = root / "new-ledger"
+            campaign.mkdir()
+            old.mkdir()
+            new.mkdir()
+            for ledger, marker in ((old, "old"), (new, "new")):
+                (ledger / "ledger.json").write_text(marker, encoding="utf-8")
+            manifest = {
+                "control_receipts": {
+                    "upgrade_timing": {
+                        "ledger_dir": str(old.resolve()),
+                        "ledger_plan_sha256": codex_upgrade.file_sha256(
+                            old / "ledger.json"
+                        ),
+                    }
+                }
+            }
+            effective = {
+                "successor_controls": {
+                    "upgrade_timing": {
+                        "ledger_dir": str(new.resolve()),
+                        "ledger_plan_sha256": codex_upgrade.file_sha256(
+                            new / "ledger.json"
+                        ),
+                    }
+                }
+            }
+            with mock.patch.object(
+                codex_upgrade,
+                "_load_control_epoch_receipt",
+                return_value=effective,
+            ):
+                self.assertEqual(
+                    codex_upgrade._campaign_timing_ledger_dir(
+                        campaign,
+                        manifest,
+                    ),
+                    new.resolve(),
+                )
+            with mock.patch.object(
+                codex_upgrade,
+                "_load_control_epoch_receipt",
+                return_value=None,
+            ):
+                self.assertEqual(
+                    codex_upgrade._campaign_timing_ledger_dir(
+                        campaign,
+                        manifest,
+                    ),
+                    old.resolve(),
+                )
+
+    def test_c0154_vc5_epoch_preserves_completed_vc0_controls(self) -> None:
+        """控制续期复用既有 P0／发布认证，不把 VC-0～VC-4 重新执行。"""
+
+        frozen = {
+            "p0_gate": {"receipt_digest": "1" * 64},
+            "release_certification": {"receipt_sha256": "2" * 64},
+        }
+        manifest = {
+            "target_version": "0.154.0",
+            "tool_identity": {"policy_version": 6},
+            "control_receipts": frozen,
+        }
+        controls = {
+            "upgrade_timing": {"marker": "new"},
+            "arm64_environment": {"marker": "new"},
+        }
+        with mock.patch.object(
+            codex_upgrade,
+            "_is_c0154_vc5_failed_job_control_epoch_campaign",
+            return_value=True,
+        ):
+            codex_upgrade._preserve_c0154_vc0_control_receipts(
+                Path("/campaign"),
+                manifest,
+                controls,
+            )
+        self.assertEqual(controls["p0_gate"], frozen["p0_gate"])
+        self.assertEqual(
+            controls["release_certification"],
+            frozen["release_certification"],
+        )
+        self.assertIsNot(controls["p0_gate"], frozen["p0_gate"])
+
+    def test_c0154_vc5_epoch_rejects_repair_or_second_epoch(self) -> None:
+        """精确例外不得扩张为 runtime repair 或第二份 epoch。"""
+
+        identity = codex_upgrade.C0154_VC5_FAILED_JOB_CONTROL_EPOCH
+        manifest = {
+            "campaign_id": identity["campaign_id"],
+            "target_version": identity["target_version"],
+            "predecessor": {"reason": identity["predecessor_reason"]},
+        }
+        source = self._c0154_vc5_epoch_source()
+        for extra_name in (
+            codex_upgrade.CONTROL_EPOCH_RUNTIME_REPAIR_FILENAME,
+            "control-epoch-02.json",
+        ):
+            with self.subTest(extra_name=extra_name), tempfile.TemporaryDirectory() as directory:
+                campaign = Path(directory) / "campaign"
+                epoch_root = campaign / codex_upgrade.CONTROL_EPOCH_DIRECTORY
+                epoch_root.mkdir(parents=True)
+                (epoch_root / codex_upgrade.CONTROL_EPOCH_FILENAME).write_text(
+                    "{}\n",
+                    encoding="utf-8",
+                )
+                (epoch_root / extra_name).write_text("{}\n", encoding="utf-8")
+                with (
+                    mock.patch.object(
+                        codex_upgrade,
+                        "_control_epoch_source_context",
+                        return_value=source,
+                    ),
+                    mock.patch.object(
+                        codex_upgrade,
+                        "_is_c0154_vc5_failed_job_control_epoch_campaign",
+                        return_value=True,
+                    ),
+                    self.assertRaisesRegex(
+                        codex_upgrade.ConfigurationError,
+                        "禁止 runtime repair 或第二纪元",
+                    ),
+                ):
+                    codex_upgrade._load_control_epoch_receipt(
+                        campaign,
+                        manifest,
+                    )
+
+    def test_c0154_vc5_epoch_rejects_non_vc0_or_live_stop(self) -> None:
+        """旧 Ledger 必须恰为 VC-0 stopped 且累计 live 为零。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            ledger = Path(directory) / "ledger"
+            ledger.mkdir()
+            receipt = ledger / "stop.json"
+            receipt.write_text("{}\n", encoding="utf-8")
+            timing = {
+                "ledger_dir": str(ledger.resolve()),
+                "upgrade_id": "vc5-control-renewal",
+                "evidence_decision": "reuse",
+            }
+            manifest = {"control_receipts": {"upgrade_timing": timing}}
+            base = {
+                "status": "stopped",
+                "active_phase": "VC-0",
+                "upgrade_id": "vc5-control-renewal",
+                "evidence_decision": "reuse",
+                "head_sequence": 2,
+                "head_sha256": "a" * 64,
+                "total_elapsed_seconds": 60,
+                "total_live_request_count": 0,
+                "total_deadline_at_utc": "2026-09-17T11:07:42+00:00",
+            }
+            for field, value in (
+                ("active_phase", "VC-4"),
+                ("total_live_request_count", 1),
+            ):
+                with self.subTest(field=field):
+                    summary = {**base, field: value}
+                    with (
+                        mock.patch.object(
+                            codex_upgrade.codex_upgrade_timing_ledger,
+                            "replay",
+                            return_value={"summary": summary},
+                        ),
+                        mock.patch.object(
+                            codex_upgrade.codex_upgrade_timing_ledger,
+                            "inspect_ledger",
+                            return_value=summary,
+                        ),
+                        self.assertRaisesRegex(
+                            codex_upgrade.ConfigurationError,
+                            "当前 VC-0 停线终态 head",
+                        ),
+                    ):
+                        codex_upgrade._control_epoch_stop_checkpoint(
+                            manifest,
+                            ledger,
+                            receipt,
+                            expected_timing=timing,
+                            required_phase="VC-0",
+                        )
+
+    def test_control_epoch_rejects_every_nonzero_boundary_counter(self) -> None:
+        """reservation／attempt／checkpoint／live／scan 任一非零均失败关闭。"""
+
+        for field in codex_upgrade._control_epoch_zero_boundary():
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as directory:
+                campaign, manifest, context = self._fixture(Path(directory))
+                path = codex_upgrade._control_epoch_path(campaign)
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                payload["boundary"][field] = 1
+                unsigned = dict(payload)
+                unsigned.pop("receipt_sha256")
+                payload["receipt_sha256"] = codex_upgrade._fingerprint(unsigned)
+                path.write_text(json.dumps(payload), encoding="utf-8")
+                with self.assertRaisesRegex(
+                    codex_upgrade.ConfigurationError,
+                    "发布边界",
+                ):
+                    self._load(campaign, manifest, context)
 
 
 if __name__ == "__main__":
