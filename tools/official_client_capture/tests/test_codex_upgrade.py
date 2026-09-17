@@ -526,7 +526,25 @@ class CodexUpgradeTest(unittest.TestCase):
             )
             self.assertEqual(override, managed)
 
+            # 2026-09-18：preflight 与 Formal 冻结的是同一份历史场景时，只读加载
+            # 按历史场景复算合同（返回 None），不再要求等于当前受管原文件；
+            # 受管场景在同版本内新增 Job 后，旧恢复后继 Campaign 仍能对账。
             self._write_json(preflight_path, historical)
+            preflight_manifest["inputs"]["target_discovery_scenarios"] = (
+                self._binding(preflight_path, "inputs/target.json")
+            )
+            self.assertIsNone(
+                codex_upgrade._recovery_rehearsal_target_scenario_override(
+                    formal_dir,
+                    formal_manifest,
+                    preflight_dir,
+                    preflight_manifest,
+                )
+            )
+            # preflight 既不等于当前受管原文件也不等于 Formal 冻结场景：仍拒绝。
+            stray = json.loads(json.dumps(historical, ensure_ascii=False))
+            stray["profile_id"] = "stray-preflight-profile"
+            self._write_json(preflight_path, stray)
             preflight_manifest["inputs"]["target_discovery_scenarios"] = (
                 self._binding(preflight_path, "inputs/target.json")
             )
