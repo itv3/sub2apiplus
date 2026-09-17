@@ -11389,6 +11389,7 @@ def _job_rehearsal_contract_from_manifest(
     recovery_rehearsal_receipt: Mapping[str, Any] | None = None,
     control_receipts_override: Mapping[str, Any] | None = None,
     _allow_historical_tool_identity: bool = False,
+    _allow_bound_evidence_label_digest: bool = False,
     _require_incremental_noop_preflight_active: bool = True,
     _allow_stopped_metadata_only: bool = False,
 ) -> dict[str, Any]:
@@ -11444,7 +11445,7 @@ def _job_rehearsal_contract_from_manifest(
             wire_producer_sha256=tool_identity.get("wire_producer_sha256"),
             policy_sha256=tool_identity.get("policy_sha256"),
         )
-        if not _allow_historical_tool_identity or not isinstance(
+        if not _allow_bound_evidence_label_digest or not isinstance(
             recovery_rehearsal_receipt, Mapping
         ):
             return current_contract
@@ -11463,9 +11464,9 @@ def _job_rehearsal_contract_from_manifest(
             if current_contract.get(key) != historical_contract.get(key)
         }
         if changed == {"evidence_label_declaration_sha256"}:
-            # 历史 control epoch 已先重放并绑定这份演练收据。证据标签属于
-            # evaluator 身份；只允许承接其旧摘要，Job、场景、环境、工具和
-            # 其他合同字段任一变化仍由后续逐字合同校验失败关闭。
+            # 调用方已按 Campaign／control epoch 的不可变文件绑定重放这份
+            # 演练收据。证据标签属于 evaluator 身份；只允许承接其旧摘要，
+            # Job、场景、环境、工具和其他合同字段任一变化仍按当前合同关闭。
             return historical_contract
         return current_contract
 
@@ -12270,6 +12271,10 @@ def _verify_control_receipts(
                 recovery_rehearsal_receipt=receipt,
                 tool_files_sha256_override=tool_files_sha256_override,
                 _allow_historical_tool_identity=historical_control_tool,
+                # receipt 已在上方按当前有效 control 的 path／sha256／bytes
+                # 重放。只读历史校验可承接其冻结的 evaluator 标签摘要；
+                # 真正执行前仍要求当前标签合同，防止旧演练绕过新 evaluator。
+                _allow_bound_evidence_label_digest=not require_active,
                 # control-epoch 发布前还没有新 epoch。此时旧控制必须按
                 # Campaign 冻结的历史工具身份只读重放；发布后的正常加载
                 # 若直接使用 campaign.json 的冻结控制，也必须走原生清单

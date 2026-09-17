@@ -1540,6 +1540,18 @@ def replay(root: Path, receipt_relative: str) -> dict[str, Any]:
         events,
         as_of=_timestamp(receipt.get("observed_at_utc"), "observed_at_utc"),
     )
+    expected_summary = dict(summary)
+    frozen_summary = receipt.get("summary")
+    legacy_recovery_fields = ("recovery_phase", "recovery_root_cause_id")
+    if (
+        isinstance(frozen_summary, dict)
+        and all(field not in frozen_summary for field in legacy_recovery_fields)
+        and all(expected_summary.get(field) is None for field in legacy_recovery_fields)
+    ):
+        # 早期 v1 checkpoint 在恢复暂停字段加入前已经冻结。只兼容冻结时缺失且
+        # 当前重算仍为空的字段；非空恢复状态与已写入字段的新格式继续严格校验。
+        for field in legacy_recovery_fields:
+            expected_summary.pop(field)
     expected = {
         "schema_version": RECEIPT_SCHEMA,
         "observed_at_utc": receipt["observed_at_utc"],
@@ -1549,7 +1561,7 @@ def replay(root: Path, receipt_relative: str) -> dict[str, Any]:
             "bytes": len(plan_raw),
         },
         "event_head": {"sequence": sequence, "sha256": summary["head_sha256"]},
-        "summary": summary,
+        "summary": expected_summary,
         "producer": receipt.get("producer"),
     }
     if (

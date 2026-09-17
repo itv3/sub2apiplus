@@ -4061,8 +4061,8 @@ class CodexUpgradeTest(unittest.TestCase):
                 require_active=False,
             )
 
-    def test_historical_control_replays_bound_evidence_label_digest(self) -> None:
-        """递归历史控制只承接演练合同冻结的证据标签摘要。"""
+    def test_bound_rehearsal_replays_only_evidence_label_digest(self) -> None:
+        """已绑定重放的演练只承接冻结的证据标签摘要。"""
 
         with tempfile.TemporaryDirectory() as directory:
             campaign_dir = Path(directory)
@@ -4123,7 +4123,7 @@ class CodexUpgradeTest(unittest.TestCase):
                         campaign_dir,
                         manifest,
                         recovery_rehearsal_receipt=rehearsal,
-                        _allow_historical_tool_identity=True,
+                        _allow_bound_evidence_label_digest=True,
                     ),
                     historical_contract,
                 )
@@ -4132,6 +4132,17 @@ class CodexUpgradeTest(unittest.TestCase):
                         campaign_dir,
                         manifest,
                         recovery_rehearsal_receipt=rehearsal,
+                    ),
+                    current_contract,
+                )
+                # 工具历史兼容不能隐式放宽 evaluator 标签摘要；必须由已经
+                # 按 control 文件绑定重放收据的调用点显式授权。
+                self.assertEqual(
+                    codex_upgrade._job_rehearsal_contract_from_manifest(
+                        campaign_dir,
+                        manifest,
+                        recovery_rehearsal_receipt=rehearsal,
+                        _allow_historical_tool_identity=True,
                     ),
                     current_contract,
                 )
@@ -4147,7 +4158,7 @@ class CodexUpgradeTest(unittest.TestCase):
                         recovery_rehearsal_receipt={
                             "execution_contract": drifted
                         },
-                        _allow_historical_tool_identity=True,
+                        _allow_bound_evidence_label_digest=True,
                     ),
                     current_contract,
                 )
@@ -11731,6 +11742,57 @@ class CodexUpgradeTest(unittest.TestCase):
                     require_active=False,
                     _control_override=drifted,
                 )
+
+    def test_frozen_rehearsal_replays_after_evaluator_label_digest_rotation(
+        self,
+    ) -> None:
+        """冻结演练只因 evaluator 标签文件换版时仍可按原合同只读重放。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project_ledger_fixture.install_fixture_ledger(root)
+            arguments = self._campaign_arguments(
+                root / "campaign-root",
+                campaign_id="upgrade-0154-frozen-label-digest",
+                baseline_version="0.151.0",
+                target_version="0.154.0",
+                model="gpt-5.5",
+                lite_model="gpt-6-astra",
+            )
+            codex_upgrade.create_campaign(arguments)
+            campaign_dir = arguments.campaign_dir
+            manifest = codex_upgrade.load_campaign_manifest(campaign_dir)
+            rehearsal = manifest["control_receipts"]["job_rehearsal"]
+            receipt = json.loads(
+                (
+                    Path(rehearsal["evidence_root"])
+                    / rehearsal["receipt"]["path"]
+                ).read_text(encoding="utf-8")
+            )
+            frozen_digest = receipt["execution_contract"][
+                "evidence_label_declaration_sha256"
+            ]
+            rotated_digest = "0" * 64 if frozen_digest != "0" * 64 else "1" * 64
+
+            with mock.patch.object(
+                codex_upgrade_job_rehearsal_receipt,
+                "_target_evidence_label_declaration_sha256",
+                return_value=rotated_digest,
+            ):
+                codex_upgrade._verify_control_receipts(
+                    campaign_dir,
+                    manifest,
+                    require_active=False,
+                )
+                with self.assertRaisesRegex(
+                    codex_upgrade.ConfigurationError,
+                    "Formal 执行合同",
+                ):
+                    codex_upgrade._verify_control_receipts(
+                        campaign_dir,
+                        manifest,
+                        require_active=True,
+                    )
 
     def test_0154_upgrade_pair_model_policy_mutations_fail_closed(self) -> None:
         """0.154 必须用非 Lite 主线和 Astra Lite 轨，错配时立即拒绝。"""

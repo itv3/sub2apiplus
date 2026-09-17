@@ -50,6 +50,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterator, Mapping
 
+from tools.official_client_capture import codex_upgrade_evidence_permissions as evidence_permissions
 from tools.official_client_capture import codex_upgrade_vc0_closeout as closeout
 from tools.official_client_capture import model_condition_receipts
 
@@ -97,6 +98,23 @@ HISTORICAL_RUN_SUMMARY_SHA256 = {
 
 class ProvenanceError(ValueError):
     """证据结构、来源唯一性或计数自洽性被破坏。"""
+
+
+def _trusted_pcap(path: Path, label: str) -> Path:
+    """校验 pcap，并复用封存阶段允许 tcpdump 固定数值属主的边界。"""
+
+    if not path.is_absolute() or path.is_symlink() or not path.is_file():
+        raise ProvenanceError(f"{label}必须是可信绝对普通文件")
+    resolved = path.resolve(strict=True)
+    metadata = resolved.stat()
+    if (
+        not evidence_permissions._owner_allowed(resolved, "file", metadata)
+        or metadata.st_mode & 0o022
+        or metadata.st_nlink != 1
+        or not 25 <= metadata.st_size <= MAX_RELAY_BYTES
+    ):
+        raise ProvenanceError(f"{label}大小、属主、权限或链接数非法")
+    return resolved
 
 
 def _canonical(value: Any) -> bytes:
@@ -881,7 +899,7 @@ def _direct_candidate_branches(root: Path) -> list[dict[str, Any]]:
         ):
             raise ProvenanceError(f"Candidate direct cases[{index}] 非法")
         seen.add(key)
-        pcap = closeout._trusted_file(
+        pcap = _trusted_pcap(
             root / "direct" / f"{subject}-{scenario}" / "egress.pcap",
             "Candidate direct pcap",
         )
@@ -1041,7 +1059,7 @@ def _frozen_candidate_branches(root: Path) -> list[dict[str, Any]]:
             raise ProvenanceError(f"Candidate frozen scenarios[{index}] 非法")
         seen.add(scenario_id)
         scenario_root = root / "scenarios" / scenario_id
-        pcap = closeout._trusted_file(
+        pcap = _trusted_pcap(
             scenario_root / "egress.pcap", "Candidate frozen pcap"
         )
         if pcap.stat().st_size != pcap_bytes or closeout._sha256_file(pcap) != pcap_sha256:

@@ -9,6 +9,7 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from tools.official_client_capture import (
     codex_upgrade_live_request_provenance as provenance,
@@ -242,6 +243,33 @@ class ProvenanceFixture:
 
 
 class LiveRequestProvenanceTests(unittest.TestCase):
+    def test_pcap_trust_reuses_frozen_tcpdump_owner_boundary(self) -> None:
+        """pcap 不要求归当前用户，但必须命中封存阶段的固定属主合同。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            pcap = Path(directory).resolve() / "egress.pcap"
+            pcap.write_bytes(b"pcap" * 8)
+            pcap.chmod(0o600)
+            with mock.patch.object(
+                provenance.evidence_permissions,
+                "_owner_allowed",
+                return_value=True,
+            ) as owner_allowed:
+                self.assertEqual(
+                    provenance._trusted_pcap(pcap, "测试 pcap"),
+                    pcap,
+                )
+            owner_allowed.assert_called_once()
+            with (
+                mock.patch.object(
+                    provenance.evidence_permissions,
+                    "_owner_allowed",
+                    return_value=False,
+                ),
+                self.assertRaisesRegex(provenance.ProvenanceError, "属主"),
+            ):
+                provenance._trusted_pcap(pcap, "测试 pcap")
+
     def test_real_candidate_layouts_are_counted_and_cross_root_paired(self) -> None:
         """真实 v7 的四种产物形状必须闭合，frozen 重试不能因逻辑 run_id 相同而合并。"""
 

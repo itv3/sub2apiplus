@@ -48,6 +48,74 @@ class TimingLedgerTests(unittest.TestCase):
             self.assertEqual(replayed, original)
             self.assertEqual(replayed["summary"]["head_sequence"], 1)
 
+    def test_legacy_checkpoint_without_null_recovery_fields_replays(self) -> None:
+        """旧版摘要未写入新增的空恢复字段时仍可按原始字节重放。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "UpgradeTimingLedger"
+            self._create(root)
+            receipt = ledger.build_checkpoint(root, observed_at_utc=self._at(1))
+            receipt["summary"].pop("recovery_phase")
+            receipt["summary"].pop("recovery_root_cause_id")
+            ledger._write_once(root / "receipts" / "legacy-v1.json", receipt)
+
+            replayed = ledger.replay(root, "receipts/legacy-v1.json")
+
+            self.assertEqual(replayed, receipt)
+            self.assertNotIn("recovery_phase", replayed["summary"])
+            self.assertNotIn("recovery_root_cause_id", replayed["summary"])
+
+    def test_legacy_checkpoint_cannot_omit_non_null_recovery_fields(self) -> None:
+        """当前重算存在恢复状态时，旧格式缺字段也必须拒绝。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "UpgradeTimingLedger"
+            self._create(root)
+            ledger.append_event(
+                root,
+                event_id="vc0-recovery-required",
+                phase="VC-0",
+                event_type="recovery_required",
+                root_cause_id="environment-prerequisite",
+                next_action="reconcile-supervisor-run",
+                recorded_at_utc=self._at(1),
+            )
+            receipt = ledger.build_checkpoint(root, observed_at_utc=self._at(2))
+            receipt["summary"].pop("recovery_phase")
+            receipt["summary"].pop("recovery_root_cause_id")
+            ledger._write_once(root / "receipts" / "invalid-legacy-v1.json", receipt)
+
+            with self.assertRaisesRegex(
+                ledger.TimingLedgerError,
+                "checkpoint 重放结果不一致",
+            ):
+                ledger.replay(root, "receipts/invalid-legacy-v1.json")
+
+    def test_current_checkpoint_recovery_fields_remain_strict(self) -> None:
+        """新格式已写入恢复字段后，字段内容仍参与严格字节校验。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "UpgradeTimingLedger"
+            self._create(root)
+            receipt = ledger.build_checkpoint(root, observed_at_utc=self._at(1))
+            receipt["summary"]["recovery_phase"] = "VC-0"
+            ledger._write_once(root / "receipts" / "tampered-current.json", receipt)
+
+            with self.assertRaisesRegex(
+                ledger.TimingLedgerError,
+                "checkpoint 重放结果不一致",
+            ):
+                ledger.replay(root, "receipts/tampered-current.json")
+
+            partial = ledger.build_checkpoint(root, observed_at_utc=self._at(1))
+            partial["summary"].pop("recovery_phase")
+            ledger._write_once(root / "receipts" / "partial-current.json", partial)
+            with self.assertRaisesRegex(
+                ledger.TimingLedgerError,
+                "checkpoint 重放结果不一致",
+            ):
+                ledger.replay(root, "receipts/partial-current.json")
+
     def test_registered_producer_successor_preserves_frozen_ledger(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "UpgradeTimingLedger"
