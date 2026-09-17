@@ -36556,7 +36556,7 @@ def _materialize_metadata_only_environment_projection(
         phase="candidate",
         candidate_id=candidate_id,
     )
-    if restoration.get("passed") is not True:
+    if restoration.get("status") != "restored":
         raise ConfigurationError("metadata-only 新恢复收据未通过。")
     environment_root = target_evidence_root / "environment"
     return {

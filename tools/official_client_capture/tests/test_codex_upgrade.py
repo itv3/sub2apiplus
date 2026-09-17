@@ -1664,9 +1664,9 @@ class CodexUpgradeTest(unittest.TestCase):
                 report_path = evidence_root / "receipts" / "restoration-report.json"
                 self._write_json(
                     report_path,
-                    {"passed": True, "evidence_root": str(evidence_root)},
+                    {"status": "restored", "evidence_root": str(evidence_root)},
                 )
-                return report_path, {"passed": True}
+                return report_path, {"status": "restored"}
 
             with (
                 mock.patch.object(
