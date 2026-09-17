@@ -120,6 +120,8 @@ from typing import Any, Callable, Mapping
 # 空影响图，并复用同一 Job 已计算的增量元数据；所有身份与摘要门禁保持不变。
 # 2026-09-18（VC-5 metadata-only 恢复收据状态修复）：按规范的
 # status=restored 判定恢复成功，避免误读不存在的 passed 字段。
+# 2026-09-18（VC-5 metadata-only 环境投影修复）：attempt 校验器接受生成器按合同
+# 写入的五份环境绑定，并继续严格校验固定路径、SHA-256 与字节数。
 DEFAULT_SUPERVISOR_DIGEST = (
     "5ef186522c0aebe57d1ded643a7c7b218516141f13c9aa3d46ce911e426f6780"
 )
@@ -187,6 +189,7 @@ MANAGED_RUNTIME_DOCUMENTS = (
     "egress/maintenance/upstream-codex-0154-vc5-post-run-build-projection-gate-20260918-freeze-successor.json",
     "egress/maintenance/upstream-codex-0154-vc5-metadata-preview-latency-20260918-freeze-successor.json",
     "egress/maintenance/upstream-codex-0154-vc5-metadata-restoration-status-20260918-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-metadata-environment-projection-20260918-freeze-successor.json",
 )
 MANAGED_ASSERTION_PREPARER = "prepare_assertion_bundle.sh"
 TARGET_SCENARIO_MANIFEST = "codex_upgrade_scenarios_0_154_0.json"
