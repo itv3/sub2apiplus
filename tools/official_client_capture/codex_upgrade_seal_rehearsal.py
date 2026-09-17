@@ -42,10 +42,12 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Mapping, Sequence
 
-try:  # pragma: no cover - 两种导入方式只影响路径解析
-    import codex_upgrade_supervisor as supervisor
-except ImportError:  # pragma: no cover
-    from . import codex_upgrade_supervisor as supervisor
+# 包名优先：测试与 reconciler 都以 tools.official_client_capture 包名导入，
+# 若这里退回 bare 模块名会得到第二份模块对象，常量与 mock 都会分叉。
+try:
+    from tools.official_client_capture import codex_upgrade_supervisor as supervisor
+except ImportError:  # pragma: no cover - driver 模式直接以文件执行时的兜底
+    import codex_upgrade_supervisor as supervisor  # type: ignore[no-redef]
 
 
 SCHEMA_VERSION = "codex-upgrade-candidate-seal-rehearsal/v1"
@@ -462,9 +464,9 @@ def preflight(*, data_root: Path, alias_roots: Sequence[Path], upper_root: Path)
 def _tool_identity() -> dict[str, Any]:
     # 延迟导入：codex_upgrade 会导入 supervisor，而 supervisor 的门禁又需要本模块。
     try:
-        import codex_upgrade  # type: ignore[import-not-found]
+        from tools.official_client_capture import codex_upgrade
     except ImportError:  # pragma: no cover
-        from . import codex_upgrade  # type: ignore[no-redef]
+        import codex_upgrade  # type: ignore[import-not-found,no-redef]
     identity = codex_upgrade._tool_identity(include_git=False)
     return {
         key: identity.get(key)

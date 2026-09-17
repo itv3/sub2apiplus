@@ -8937,6 +8937,7 @@ class CodexUpgradeTest(unittest.TestCase):
                 "successor",
                 "recover-candidate-failed-jobs",
                 "recover-candidate-post-run-seal",
+                "rehearse-candidate-seal",
                 "capture-official",
                 "classify",
                 "prepare-profile",
@@ -17431,34 +17432,52 @@ class CodexUpgradeTest(unittest.TestCase):
 
         supervisor = codex_upgrade.codex_upgrade_supervisor
         plan = codex_upgrade._vc_campaign_plan(fixture["campaign_dir"], fixture["manifest"])
-        return supervisor.build_batched_campaign_run_manifest(
-            campaign_id=str(fixture["manifest"]["campaign_id"]),
-            campaign_plan_sha256=str(plan["plan_sha256"]),
-            batch_id=f"vc-5-{batch_sequence:04d}",
-            batch_sequence=batch_sequence,
-            batch_sha256=str(batch_sequence) * 64,
-            phase="VC-5",
-            predecessor_checkpoint={
-                "path": "control/vc/vc-4-checkpoint.json",
-                "sha256": "3" * 64,
-                "phase": "VC-4",
-                "checkpoint_sha256": "4" * 64,
-            },
-            original_deadline_at_utc="2099-09-15T08:12:43Z",
-            actions=actions
-            if actions is not None
-            else [
-                {
-                    "action_id": "prepare-candidate-assertion-bundle",
-                    "operation": "VC-5:prepare-candidate-assertion-bundle",
-                    "timeout_seconds": 5.0,
-                    "command": ["/usr/bin/bash", "/tmp/prepare_assertion_bundle.sh"],
-                    "item_ids": ["candidate-seal"],
-                }
-            ],
-            execute_items=["candidate-seal"],
-            reuse_items=self._b0_candidate_job_ids(fixture),
+        campaign_dir = fixture["campaign_dir"]
+        attempt_id = next(
+            path.name
+            for path in (campaign_dir / "candidates" / "cand-1" / "attempts").iterdir()
+            if path.is_dir()
         )
+        # 动作按正式 /usr/bin/env 坐标形式声明；VC-5 seal 预演门禁由
+        # test_codex_upgrade_seal_rehearsal 单独覆盖，这里只测 post-run-tooling
+        # 分类与对账，构造清单时旁路该门禁。
+        with mock.patch.object(supervisor, "_validate_vc5_seal_rehearsal_gate"):
+            return supervisor.build_batched_campaign_run_manifest(
+                campaign_id=str(fixture["manifest"]["campaign_id"]),
+                campaign_plan_sha256=str(plan["plan_sha256"]),
+                batch_id=f"vc-5-{batch_sequence:04d}",
+                batch_sequence=batch_sequence,
+                batch_sha256=str(batch_sequence) * 64,
+                phase="VC-5",
+                predecessor_checkpoint={
+                    "path": "control/vc/vc-4-checkpoint.json",
+                    "sha256": "3" * 64,
+                    "phase": "VC-4",
+                    "checkpoint_sha256": "4" * 64,
+                },
+                original_deadline_at_utc="2099-09-15T08:12:43Z",
+                actions=actions
+                if actions is not None
+                else [
+                    {
+                        "action_id": "prepare-candidate-assertion-bundle",
+                        "operation": "VC-5:prepare-candidate-assertion-bundle",
+                        "timeout_seconds": 5.0,
+                        "command": [
+                            "/usr/bin/env",
+                            f"CAMPAIGN_DIR={campaign_dir}",
+                            f"ATTEMPT_ID={attempt_id}",
+                            "SIDE=candidate",
+                            "CANDIDATE_ID=cand-1",
+                            "/usr/bin/bash",
+                            "/tmp/prepare_assertion_bundle.sh",
+                        ],
+                        "item_ids": ["candidate-seal"],
+                    }
+                ],
+                execute_items=["candidate-seal"],
+                reuse_items=self._b0_candidate_job_ids(fixture),
+            )
 
     def _b0_advance_ledger_to_vc5(self, ledger_dir: Path) -> None:
         for completed, started in (
@@ -17594,18 +17613,10 @@ class CodexUpgradeTest(unittest.TestCase):
                     campaign_dir=campaign_dir,
                 )
             )
+            drifted_actions = json.loads(json.dumps(inner["actions"]))
+            drifted_actions[0]["command"][-1] = "/tmp/other_assertion_bundle.sh"
             drifted = self._b0_seal_batch_manifest(
-                fixture,
-                batch_sequence=2,
-                actions=[
-                    {
-                        "action_id": "prepare-candidate-assertion-bundle",
-                        "operation": "VC-5:prepare-candidate-assertion-bundle",
-                        "timeout_seconds": 5.0,
-                        "command": ["/usr/bin/bash", "/tmp/other.sh"],
-                        "item_ids": ["candidate-seal"],
-                    }
-                ],
+                fixture, batch_sequence=2, actions=drifted_actions
             )
             with self.assertRaisesRegex(supervisor.SupervisorError, "只允许原批次内容重派"):
                 supervisor._validate_batched_environment_redispatch_successor(

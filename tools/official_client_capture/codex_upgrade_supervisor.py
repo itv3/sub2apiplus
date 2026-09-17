@@ -4533,9 +4533,11 @@ def _validate_vc5_seal_rehearsal_gate(
     if not require_bound_files:
         return
     try:
-        import codex_upgrade_seal_rehearsal as seal_rehearsal
+        from tools.official_client_capture import (
+            codex_upgrade_seal_rehearsal as seal_rehearsal,
+        )
     except ImportError:  # pragma: no cover
-        from . import codex_upgrade_seal_rehearsal as seal_rehearsal
+        import codex_upgrade_seal_rehearsal as seal_rehearsal  # type: ignore[no-redef]
     try:
         resolved = campaign_dir.resolve(strict=True)
     except OSError as error:
