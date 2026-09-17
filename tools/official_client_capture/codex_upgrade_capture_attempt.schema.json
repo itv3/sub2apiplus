@@ -360,24 +360,31 @@
             "type": "null"
           },
           "environment": {
-            "type": "object",
-            "properties": {
-              "before_probe": {
-                "type": "null"
+            "allOf": [
+              {
+                "$ref": "#/$defs/environment"
               },
-              "after_probe": {
-                "type": "null"
-              },
-              "restoration_report": {
-                "type": "null"
-              },
-              "arm64_before_receipt": {
-                "type": "null"
-              },
-              "arm64_after_receipt": {
-                "type": "null"
+              {
+                "type": "object",
+                "properties": {
+                  "before_probe": {
+                    "$ref": "#/$defs/fileBindingWithBytes"
+                  },
+                  "after_probe": {
+                    "$ref": "#/$defs/fileBindingWithBytes"
+                  },
+                  "restoration_report": {
+                    "$ref": "#/$defs/fileBindingWithBytes"
+                  },
+                  "arm64_before_receipt": {
+                    "$ref": "#/$defs/fileBindingWithBytes"
+                  },
+                  "arm64_after_receipt": {
+                    "$ref": "#/$defs/fileBindingWithBytes"
+                  }
+                }
               }
-            }
+            ]
           }
         }
       }

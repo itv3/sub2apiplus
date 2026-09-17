@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://sub2apiplus.local/schemas/classification-candidate-reuse-transition-v1.json",
   "title": "分类事实纠正 Candidate 零执行复用 Transition",
-  "description": "只允许已批准的 classification_fact_correction 后继承接直接前序九项全部通过的 Candidate 结果。",
+  "description": "只允许已批准的 classification_fact_correction 或冻结的 candidate_post_run_seal_recovery 后继承接直接前序九项全部通过的 Candidate 结果。",
   "type": "object",
   "additionalProperties": false,
   "required": [

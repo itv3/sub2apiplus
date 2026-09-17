@@ -249,6 +249,57 @@ class EvidencePermissionCloseoutTests(unittest.TestCase):
                     logical_runs_roots=(runs_root,),
                 )
 
+    def test_v2_boundary_tolerates_only_declared_post_run_client_artifacts(self) -> None:
+        """Kilo 后置路径由 checkpoint／finalizer 绑定；相邻的未声明新增项仍须失败。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            attempt_root, runs_root, evidence_roots = self._fixture(root)
+            evidence = attempt_root / "evidence"
+            (evidence / "environment").mkdir(mode=0o700)
+            (evidence / "receipts").mkdir(mode=0o700)
+            receipt_path, _receipt = permissions.close_evidence_permissions(
+                attempt_root,
+                evidence_roots,
+                managed_data_root=runs_root.parent,
+                logical_runs_roots=(runs_root,),
+            )
+            binding = permissions.receipt_binding(attempt_root, receipt_path)
+
+            client = evidence / "client" / "raw"
+            client.mkdir(parents=True, mode=0o700)
+            (client / "kilo-facts.json").write_text("{}\n", encoding="utf-8")
+            (client / "kilo-facts.json").chmod(0o600)
+            client_after = evidence / "environment" / "client-after"
+            client_after.mkdir(mode=0o700)
+            (client_after / "probe-manifest.json").write_text("{}\n", encoding="utf-8")
+            (client_after / "probe-manifest.json").chmod(0o600)
+            restoration = evidence / "receipts" / "client-restoration-report.json"
+            restoration.write_text("{}\n", encoding="utf-8")
+            restoration.chmod(0o600)
+
+            replayed = permissions.replay_evidence_permission_closeout(
+                attempt_root,
+                evidence_roots,
+                binding,
+                managed_data_root=runs_root.parent,
+                logical_runs_roots=(runs_root,),
+            )
+            self.assertEqual(replayed["schema_version"], permissions.SCHEMA_VERSION)
+
+            undeclared = evidence / "receipts" / "late.json"
+            undeclared.write_text("{}\n", encoding="utf-8")
+            undeclared.chmod(0o600)
+            with self.assertRaisesRegex(permissions.EvidencePermissionError, "边界漂移"):
+                permissions.replay_evidence_permission_closeout(
+                    attempt_root,
+                    evidence_roots,
+                    binding,
+                    managed_data_root=runs_root.parent,
+                    logical_runs_roots=(runs_root,),
+                )
+
     def test_v1_receipt_upgrade_chain(self) -> None:
         """v1 收据在 bundle 发布后必然漂移；bundle 发布前升级为 v2 后，链式重放按 v2 通过，篡改或重复升级被拒。"""
 

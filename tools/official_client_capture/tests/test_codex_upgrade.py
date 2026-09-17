@@ -1426,6 +1426,257 @@ class CodexUpgradeTest(unittest.TestCase):
                     source_environment=source_environment,
                 )
 
+    def test_metadata_only_environment_projection_copies_complete_bound_state(
+        self,
+    ) -> None:
+        """新 attempt 投影完整环境，并在新证据根重建恢复收据。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory).resolve()
+            source = base / "source-evidence"
+            target = base / "target-evidence"
+            source.mkdir(mode=0o700)
+            target.mkdir(mode=0o700)
+            source_environment: dict[str, object] = {
+                "evidence_root": str(source),
+            }
+
+            for snapshot_name in ("before", "after"):
+                snapshot_root = source / "environment" / snapshot_name
+                snapshot_root.mkdir(parents=True, mode=0o700)
+                snapshots: list[dict[str, object]] = []
+                for kind, name in codex_upgrade.ENVIRONMENT_STATE_FILES.items():
+                    state_path = snapshot_root / name
+                    self._write_json(
+                        state_path,
+                        {"kind": kind, "snapshot": snapshot_name, "stable": True},
+                    )
+                    snapshots.append(
+                        {
+                            "bytes": state_path.stat().st_size,
+                            "comparison": {"mode": "equal"},
+                            "kind": kind,
+                            "path": name,
+                            "sha256": codex_upgrade.file_sha256(state_path),
+                        }
+                    )
+                probe_path = snapshot_root / "probe-manifest.json"
+                self._write_json(
+                    probe_path,
+                    {
+                        "phase": snapshot_name,
+                        "observed_at_utc": "2026-09-17T00:00:00Z",
+                        "snapshots": snapshots,
+                    },
+                )
+                source_environment[f"{snapshot_name}_probe"] = {
+                    "path": f"environment/{snapshot_name}/probe-manifest.json",
+                    "sha256": codex_upgrade.file_sha256(probe_path),
+                    "bytes": probe_path.stat().st_size,
+                }
+
+                arm64_root = source / "environment" / f"arm64-{snapshot_name}"
+                arm64_root.mkdir(parents=True, mode=0o700)
+                facts_path = arm64_root / "facts.json"
+                receipt_path = arm64_root / "receipt.json"
+                self._write_json(
+                    facts_path,
+                    {"phase": f"attempt_{snapshot_name}", "source": True},
+                )
+                self._write_json(
+                    receipt_path,
+                    {"facts": {"path": "facts.json"}, "source": True},
+                )
+                source_environment[f"arm64_{snapshot_name}_receipt"] = {
+                    "path": f"environment/arm64-{snapshot_name}/receipt.json",
+                    "sha256": codex_upgrade.file_sha256(receipt_path),
+                    "bytes": receipt_path.stat().st_size,
+                }
+
+            def replay_arm64(root: Path, name: str) -> dict[str, object]:
+                self.assertEqual(name, "receipt.json")
+                snapshot_name = root.name.removeprefix("arm64-")
+                return {
+                    "status": "passed",
+                    "phase": f"attempt_{snapshot_name}",
+                    "subject_id": "source-attempt-a",
+                }
+
+            def finalize_restoration(
+                evidence_root: Path,
+                *,
+                phase: str,
+                candidate_id: str | None,
+                **_kwargs: object,
+            ) -> tuple[Path, dict[str, object]]:
+                self.assertEqual(evidence_root, target)
+                self.assertEqual(phase, "candidate")
+                self.assertEqual(candidate_id, "candidate-a")
+                report_path = evidence_root / "receipts" / "restoration-report.json"
+                self._write_json(
+                    report_path,
+                    {"passed": True, "evidence_root": str(evidence_root)},
+                )
+                return report_path, {"passed": True}
+
+            with (
+                mock.patch.object(
+                    codex_upgrade.codex_upgrade_arm64_environment_receipt,
+                    "replay",
+                    side_effect=replay_arm64,
+                ) as replay,
+                mock.patch.object(
+                    codex_upgrade,
+                    "_finalize_attempt_restoration",
+                    side_effect=finalize_restoration,
+                ) as finalize,
+                mock.patch.object(
+                    codex_upgrade,
+                    "_probe_capture_environment",
+                ) as probe,
+                mock.patch.object(
+                    codex_upgrade,
+                    "_capture_arm64_environment_receipt",
+                ) as arm64_probe,
+                mock.patch.object(
+                    codex_upgrade,
+                    "_run_job_with_retry",
+                ) as run_job,
+            ):
+                projected = (
+                    codex_upgrade._materialize_metadata_only_environment_projection(
+                        source,
+                        target,
+                        source_environment,
+                        source_attempt_id="source-attempt-a",
+                        candidate_id="candidate-a",
+                    )
+                )
+
+            self.assertEqual(projected["evidence_root"], str(target))
+            self.assertEqual(replay.call_count, 2)
+            finalize.assert_called_once()
+            probe.assert_not_called()
+            arm64_probe.assert_not_called()
+            run_job.assert_not_called()
+            for snapshot_name in ("before", "after"):
+                for name in sorted(
+                    {
+                        "probe-manifest.json",
+                        *codex_upgrade.ENVIRONMENT_STATE_FILES.values(),
+                    }
+                ):
+                    self.assertEqual(
+                        (
+                            target
+                            / "environment"
+                            / snapshot_name
+                            / name
+                        ).read_bytes(),
+                        (
+                            source
+                            / "environment"
+                            / snapshot_name
+                            / name
+                        ).read_bytes(),
+                    )
+                for name in ("facts.json", "receipt.json"):
+                    self.assertEqual(
+                        (
+                            target
+                            / "environment"
+                            / f"arm64-{snapshot_name}"
+                            / name
+                        ).read_bytes(),
+                        (
+                            source
+                            / "environment"
+                            / f"arm64-{snapshot_name}"
+                            / name
+                        ).read_bytes(),
+                    )
+            self.assertTrue(
+                (target / projected["restoration_report"]["path"]).is_file()
+            )
+            for role in (
+                "before_probe",
+                "after_probe",
+                "restoration_report",
+                "arm64_before_receipt",
+                "arm64_after_receipt",
+            ):
+                self.assertGreater(projected[role]["bytes"], 0)
+                self.assertRegex(projected[role]["sha256"], r"^[0-9a-f]{64}$")
+
+    def test_first_candidate_seal_creates_fresh_client_after_checkpoint(self) -> None:
+        """新 metadata-only attempt 首次 seal 必须真实采集 client-after。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            evidence_root = Path(directory).resolve() / "evidence"
+            evidence_root.mkdir(mode=0o700)
+            observed_at = "2026-09-17T00:10:00Z"
+
+            def probe_environment(
+                _manifest: dict[str, object],
+                output_dir: Path,
+                phase: str,
+            ) -> dict[str, object]:
+                self.assertEqual(output_dir, evidence_root / "environment" / "client-after")
+                self.assertEqual(phase, "after")
+                self._write_json(
+                    output_dir / "probe-manifest.json",
+                    {"phase": "after", "observed_at_utc": observed_at},
+                )
+                return {"phase": phase}
+
+            def finalize_restoration(
+                root: Path,
+                *,
+                phase: str,
+                candidate_id: str | None,
+                before_directory: str,
+                after_directory: str,
+                output_name: str,
+            ) -> tuple[Path, dict[str, object]]:
+                self.assertEqual(root, evidence_root)
+                self.assertEqual(phase, "candidate")
+                self.assertEqual(candidate_id, "candidate-a")
+                self.assertEqual(before_directory, "after")
+                self.assertEqual(after_directory, "client-after")
+                path = root / "receipts" / output_name
+                self._write_json(path, {"passed": True})
+                return path, {"passed": True}
+
+            with (
+                mock.patch.object(
+                    codex_upgrade,
+                    "_probe_capture_environment",
+                    side_effect=probe_environment,
+                ) as probe,
+                mock.patch.object(
+                    codex_upgrade,
+                    "_finalize_attempt_restoration",
+                    side_effect=finalize_restoration,
+                ) as finalize,
+            ):
+                path, receipt, checkpoint_at, created = (
+                    codex_upgrade._candidate_post_client_restoration(
+                        {},
+                        evidence_root,
+                        "candidate-a",
+                    )
+                )
+
+            self.assertTrue(created)
+            self.assertEqual(receipt, {"passed": True})
+            self.assertEqual(checkpoint_at, observed_at)
+            self.assertEqual(
+                path,
+                evidence_root / "receipts" / "client-restoration-report.json",
+            )
+            probe.assert_called_once()
+            finalize.assert_called_once()
+
     def test_evaluation_transition_is_limited_to_one_attempt_and_phase(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             campaign = Path(directory) / "campaign"
@@ -4937,6 +5188,110 @@ class CodexUpgradeTest(unittest.TestCase):
         self.assertIn("candidate_reuse_source_attempt_id", actions)
         self.assertIn("approve_candidate_reuse_sha256", actions)
 
+    def test_post_run_seal_recovery_parser_freezes_a15_source(self) -> None:
+        """专用入口默认绑定 A15 唯一 Candidate／attempt，不能退化为通用 successor。"""
+
+        parser = codex_upgrade._build_parser()
+        arguments = parser.parse_args(
+            [
+                codex_upgrade.FORMAL_POST_RUN_SEAL_RECOVERY_COMMAND,
+                "--predecessor-campaign-dir",
+                str(codex_upgrade.C0154_A15_POST_RUN_SEAL_SOURCE["campaign_dir"]),
+                "--campaign-dir",
+                "/tmp/successor",
+                "--campaign-id",
+                "successor-a",
+                "--codex-account-id",
+                "90",
+                "--job-rehearsal-root",
+                "/tmp/rehearsal",
+                "--job-rehearsal-receipt",
+                "/tmp/rehearsal/receipt.json",
+                "--recovery-timing-ledger-dir",
+                "/tmp/timing",
+                "--recovery-timing-receipt",
+                "/tmp/timing/receipt.json",
+                "--recovery-arm64-environment-root",
+                "/tmp/arm64",
+                "--recovery-arm64-environment-receipt",
+                "/tmp/arm64/receipt.json",
+                "--predecessor-stop-ledger-dir",
+                "/tmp/stop",
+                "--predecessor-stop-receipt",
+                "/tmp/stop/receipt.json",
+            ]
+        )
+        self.assertEqual(
+            arguments.reason,
+            codex_upgrade.POST_RUN_SEAL_RECOVERY_REASON,
+        )
+        self.assertEqual(
+            arguments.predecessor_candidate_id,
+            codex_upgrade.C0154_A15_POST_RUN_SEAL_SOURCE["candidate_id"],
+        )
+        self.assertEqual(
+            arguments.predecessor_attempt_id,
+            codex_upgrade.C0154_A15_POST_RUN_SEAL_SOURCE["attempt_id"],
+        )
+
+    def test_post_run_seal_recovery_rejects_canonicalized_source(self) -> None:
+        """来源切换到 canonical checkpoint 后，专用恢复入口也必须只读。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            predecessor = root / "predecessor"
+            marker = (
+                predecessor
+                / codex_upgrade.CANONICAL_DIRECTORY
+                / codex_upgrade.CANONICAL_IMPORT_RECEIPT_FILENAME
+            )
+            self._write_json(marker, {"status": "complete"})
+            arguments = argparse.Namespace(
+                campaign_dir=root / "successor",
+                predecessor_campaign_dir=predecessor,
+            )
+            with self.assertRaisesRegex(
+                codex_upgrade.ConfigurationError,
+                "canonical checkpoint",
+            ):
+                codex_upgrade._reject_canonical_legacy_write(
+                    arguments,
+                    codex_upgrade.FORMAL_POST_RUN_SEAL_RECOVERY_COMMAND,
+                )
+
+    def test_metadata_only_job_roots_exclude_attempt_evidence_and_logs(self) -> None:
+        """复用边界只能来自九项结果，不得夹带来源 attempt 自身根。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            job_root = base / "job-root"
+            attempt_evidence = base / "attempt" / "evidence"
+            attempt_logs = base / "attempt" / "logs"
+            for path in (job_root, attempt_evidence, attempt_logs):
+                path.mkdir(parents=True, mode=0o700)
+            attempt = {
+                "results": [
+                    {
+                        "id": job_id,
+                        "status": "complete",
+                        "evidence_roots": [str(job_root)],
+                    }
+                    for job_id in sorted(
+                        codex_upgrade.CLASSIFICATION_CANDIDATE_REUSE_JOB_IDS
+                    )
+                ],
+                "evidence_roots": [
+                    str(job_root),
+                    str(attempt_evidence),
+                    str(attempt_logs),
+                ],
+            }
+            roots = codex_upgrade._classification_candidate_job_evidence_roots(
+                attempt,
+                require_existing=True,
+            )
+            self.assertEqual(roots, [job_root.resolve()])
+
     def test_classification_candidate_reuse_preview_stops_before_all_writes(
         self,
     ) -> None:
@@ -5177,8 +5532,20 @@ class CodexUpgradeTest(unittest.TestCase):
                 )
             )
             context["source_attempt"] = {
+                "attempt_id": "source-attempt-a",
                 "status": "awaiting_receipts",
                 "evidence_roots": [str(source_evidence.resolve())],
+                "results": [
+                    {
+                        "id": job.job_id,
+                        "status": "complete",
+                        "evidence_roots": [str(source_evidence.resolve())],
+                    }
+                    for job in jobs
+                ],
+                "environment": {
+                    "evidence_root": str(source_evidence.resolve()),
+                },
             }
             reused = [
                 {
@@ -5204,6 +5571,14 @@ class CodexUpgradeTest(unittest.TestCase):
                 "sha256": "2" * 64,
             }
             source_binding = {**transition_binding, "bytes": 1}
+            projected_environment = {
+                "evidence_root": str((attempt_root / "evidence").resolve()),
+                "before_probe": {"path": "environment/before/probe-manifest.json", "sha256": "7" * 64, "bytes": 1},
+                "after_probe": {"path": "environment/after/probe-manifest.json", "sha256": "8" * 64, "bytes": 1},
+                "restoration_report": {"path": "receipts/restoration-report.json", "sha256": "9" * 64, "bytes": 1},
+                "arm64_before_receipt": {"path": "environment/arm64-before/receipt.json", "sha256": "a" * 64, "bytes": 1},
+                "arm64_after_receipt": {"path": "environment/arm64-after/receipt.json", "sha256": "b" * 64, "bytes": 1},
+            }
             deadline = codex_upgrade._attempt_deadline(
                 argparse.Namespace(max_wall_seconds=60, heartbeat_seconds=5),
                 "candidate",
@@ -5242,6 +5617,10 @@ class CodexUpgradeTest(unittest.TestCase):
                             }
                         },
                     ),
+                    (
+                        "_materialize_metadata_only_environment_projection",
+                        {"return_value": projected_environment},
+                    ),
                 ):
                     stack.enter_context(mock.patch.object(codex_upgrade, target, **options))
                 writer = stack.enter_context(
@@ -5269,18 +5648,7 @@ class CodexUpgradeTest(unittest.TestCase):
                 set(payload["incremental_plan"]["reused_job_ids"]),
                 codex_upgrade.CLASSIFICATION_CANDIDATE_REUSE_JOB_IDS,
             )
-            self.assertTrue(
-                all(
-                    payload["environment"][name] is None
-                    for name in (
-                        "before_probe",
-                        "after_probe",
-                        "restoration_report",
-                        "arm64_before_receipt",
-                        "arm64_after_receipt",
-                    )
-                )
-            )
+            self.assertEqual(payload["environment"], projected_environment)
             probe.assert_not_called()
             arm64_probe.assert_not_called()
             run_job.assert_not_called()
@@ -8258,6 +8626,7 @@ class CodexUpgradeTest(unittest.TestCase):
                 "recover-vc1-interruption",
                 "successor",
                 "recover-candidate-failed-jobs",
+                "recover-candidate-post-run-seal",
                 "capture-official",
                 "classify",
                 "prepare-profile",
@@ -18144,6 +18513,16 @@ class EvidenceManifestTest(unittest.TestCase):
             source_attempt = {
                 "attempt_id": "source-a",
                 "evidence_roots": [str(source_evidence)],
+                "results": [
+                    {
+                        "id": job_id,
+                        "status": "complete",
+                        "evidence_roots": [str(source_evidence)],
+                    }
+                    for job_id in sorted(
+                        codex_upgrade.CLASSIFICATION_CANDIDATE_REUSE_JOB_IDS
+                    )
+                ],
             }
             with (
                 mock.patch.object(codex_upgrade, "_reject_contaminated_campaign"),

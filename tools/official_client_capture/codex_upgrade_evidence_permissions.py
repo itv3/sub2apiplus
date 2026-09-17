@@ -19,9 +19,11 @@ from typing import Any, Mapping, Sequence
 
 
 # v1（历史只读）：边界记录含目录的 mtime_ns／nlink，并枚举证据根内全部条目。
-# v2：目录不记 size／mtime_ns／nlink（子项增删会改变父目录这几项），并跳过证据根顶层的
-# ``assertion-bundle`` 子树——它是 seal 前按 ACC-06 发布进证据根的派生制品，由 seal 用
-# manifest 逐文件摘要另行绑定。v1 边界在 bundle 发布后必然漂移，这是 v2 存在的原因。
+# v2：目录不记 size／mtime_ns／nlink（子项增删会改变父目录这几项），并跳过 run 完成后
+# 才允许发布的固定派生路径。``assertion-bundle`` 由 seal 按 ACC-06 发布并用 manifest
+# 逐文件绑定；``client``、``environment/client-after`` 和客户端恢复收据由 Kilo 双入口完成
+# 后的首次 seal 产生，并由 client checkpoint／finalizer 另行绑定。除此之外的新增项仍必须
+# 导致边界漂移。v1 边界在这些后置制品发布后必然漂移，这是 v2 存在的原因。
 SCHEMA_VERSION_V1 = "codex-upgrade-evidence-permission-closeout/v1"
 SCHEMA_VERSION = "codex-upgrade-evidence-permission-closeout/v2"
 RECEIPT_FILENAME = "evidence-permission-closeout.json"
@@ -29,6 +31,9 @@ RECEIPT_FILENAME = "evidence-permission-closeout.json"
 # 预置的 v1 绑定为前序，此后重放按 v2 规则核对升级收据。
 UPGRADE_FILENAME = "evidence-permission-closeout-upgrade.json"
 ASSERTION_BUNDLE_DIRNAME = "assertion-bundle"
+POST_RUN_TOP_LEVEL_DIRNAMES = frozenset({ASSERTION_BUNDLE_DIRNAME, "client"})
+POST_RUN_NESTED_DIRECTORY_PATHS = frozenset({("environment", "client-after")})
+POST_RUN_FILE_PATHS = frozenset({("receipts", "client-restoration-report.json")})
 BOUNDARY_RULE_V1 = "v1"
 BOUNDARY_RULE_V2 = "v2"
 LOGICAL_RUNS_ROOTS = (
@@ -206,7 +211,7 @@ def _entry_snapshot(
 
 
 def _walk_paths(root: Path, *, rule: str = BOUNDARY_RULE_V2) -> list[Path]:
-    """确定性枚举一棵证据树，不跟随符号链接；v2 跳过根下顶层 assertion-bundle 子树。"""
+    """确定性枚举证据树；v2 只跳过协议规定的 run 后派生路径。"""
 
     paths = [root]
 
@@ -219,9 +224,24 @@ def _walk_paths(root: Path, *, rule: str = BOUNDARY_RULE_V2) -> list[Path]:
         followlinks=False,
         onerror=onerror,
     ):
-        if rule == BOUNDARY_RULE_V2 and Path(current) == root:
+        current_path = Path(current)
+        if rule == BOUNDARY_RULE_V2:
+            relative_parts = current_path.relative_to(root).parts
+            if not relative_parts:
+                directory_names[:] = [
+                    name
+                    for name in directory_names
+                    if name not in POST_RUN_TOP_LEVEL_DIRNAMES
+                ]
             directory_names[:] = [
-                name for name in directory_names if name != ASSERTION_BUNDLE_DIRNAME
+                name
+                for name in directory_names
+                if (*relative_parts, name) not in POST_RUN_NESTED_DIRECTORY_PATHS
+            ]
+            file_names[:] = [
+                name
+                for name in file_names
+                if (*relative_parts, name) not in POST_RUN_FILE_PATHS
             ]
         directory_names.sort()
         file_names.sort()

@@ -106,6 +106,10 @@ from typing import Any, Callable, Mapping
 # 实际支持的对象键集合计数，避免静态路由快照在派发前误失败。
 # 2026-09-17（VC-5 对账副本格式兼容修复）：重派门禁分别校验账本副本摘要，
 # 并按 JSON 事实比较 Campaign 与 TimingLedger 副本，避免空白格式差异误报漂移。
+# 2026-09-17（VC-5 A15 启动身份并发修正）：启动 models 的 suffix 按初始化
+# 并发时序允许缺失或为入口规范值；新增冻结后继随受管运行文档一并部署。
+# 2026-09-17（VC-5 post-run seal 恢复）：A15 九项 Job 只读承接到新的
+# metadata-only attempt，只重新采集 Kilo 后检查点与两条客户端收据。
 DEFAULT_SUPERVISOR_DIGEST = (
     "5ef186522c0aebe57d1ded643a7c7b218516141f13c9aa3d46ce911e426f6780"
 )
@@ -166,6 +170,8 @@ MANAGED_RUNTIME_DOCUMENTS = (
     "egress/maintenance/upstream-codex-0154-vc5-admin-execution-scope-20260917-freeze-successor.json",
     "egress/maintenance/upstream-codex-0154-vc5-routing-count-compat-20260917-freeze-successor.json",
     "egress/maintenance/upstream-codex-0154-vc5-reconciliation-json-compat-20260917-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-a15-startup-identity-20260917-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-post-run-seal-recovery-20260917-freeze-successor.json",
 )
 MANAGED_ASSERTION_PREPARER = "prepare_assertion_bundle.sh"
 TARGET_SCENARIO_MANIFEST = "codex_upgrade_scenarios_0_154_0.json"

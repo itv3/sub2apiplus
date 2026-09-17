@@ -299,6 +299,7 @@ SUCCESSOR_REASONS = frozenset(
         "candidate_recovery_control_refresh",
         "candidate_recovery_control_replacement",
         "candidate_runtime_identity_correction",
+        "candidate_post_run_seal_recovery",
         "classification_fact_correction",
         "sealed_stage_control_recovery",
         # 已封存官方证据只读导入新 Campaign（§5.3.3）：工具修复或身份变化后不再重发
@@ -309,6 +310,8 @@ SUCCESSOR_REASONS = frozenset(
 OFFICIAL_EVIDENCE_REUSE_REASON = "official_evidence_reuse"
 CLASSIFICATION_FACT_CORRECTION_REASON = "classification_fact_correction"
 FORMAL_FAILED_JOB_RECOVERY_COMMAND = "recover-candidate-failed-jobs"
+POST_RUN_SEAL_RECOVERY_REASON = "candidate_post_run_seal_recovery"
+FORMAL_POST_RUN_SEAL_RECOVERY_COMMAND = "recover-candidate-post-run-seal"
 # 这组坐标只为 0.154 v7 的已知 A15 单点失败开放。它不是通用豁免：来源
 # Campaign、Candidate、attempt 和工具身份任一不一致都会回到普通失败关闭路径。
 C0154_V7_RECOVERY_SOURCE = {
@@ -349,6 +352,40 @@ C0154_V7_RECOVERY_SOURCE = {
         "99d7ff903c1d7062631ba9e2f34c1f4e64ea0672dcbcefae47c99a891abfbcd0"
     ),
 }
+# 该坐标只为 A15 已完成九项 Candidate Job、但尚未生成任何 Kilo 收据的
+# awaiting_receipts attempt 开放。恢复入口只能新建 metadata-only 后继，
+# 不得重跑九项 Job，也不得把旧 attempt 自身 evidence/logs 根带入新封存边界。
+C0154_A15_POST_RUN_SEAL_SOURCE = {
+    "campaign_dir": (
+        "/root/docker/capture-cli/data/evidence/campaigns/"
+        "c0154-formal-vc5-a15-20260917t1325z"
+    ),
+    "campaign_id": "c0154-formal-vc5-a15-20260917t1325z",
+    "campaign_manifest_sha256": (
+        "90564066ad4ead1d36965322d81d0bbd03314d3fd010e268442c21078b0b96ec"
+    ),
+    "target_version": "0.154.0",
+    "candidate_id": "c0154-candidate-v7",
+    "attempt_id": "20260917T133744Z-bc9bee6fe1df8d8b",
+    "attempt_sha256": (
+        "5004810b26e885e1f15b445bed70b3418a82b49cfd3dda4e3fb803edb35d8e6b"
+    ),
+    "attempt_digest": (
+        "efc8cb9a65428b9fb4adda622a16b8d60a546e373ad82b29712d6b5a492ac325"
+    ),
+    "identity_sha256": (
+        "88d18b3e9650d88441f6d1762f891081c6e3e7ff43372421f7694bea2af4924a"
+    ),
+    "tool_files_sha256": (
+        "751fc71f2477ebd1c750faea66a5961035d68eed8f57f76da650f728cb27d8bd"
+    ),
+    "job_evidence_roots_sha256": (
+        "08b4867a2c853e280fe1ecfbe95f3d175e8ee4f61e56f4a989bbec4ec73597ae"
+    ),
+    "sorted_results_sha256": (
+        "f5ee448a620e2438a71fc6d19857cb29866e2ac3af38b099d3bc523395226297"
+    ),
+}
 # 该坐标只为已经发布、尚未产生任何 VC-5 执行事实的唯一恢复后继续接
 # 控制链。清单摘要是授权的一部分；同名目录、同版本或同 reason 都不能
 # 单独获得豁免。
@@ -382,6 +419,12 @@ CANDIDATE_INCREMENTAL_SUCCESSOR_REASONS = frozenset(
         "candidate_recovery_control_replacement",
         "candidate_runtime_identity_correction",
     }
+)
+CLASSIFICATION_CANDIDATE_REUSE_SUCCESSOR_REASONS = frozenset(
+    {"classification_fact_correction", POST_RUN_SEAL_RECOVERY_REASON}
+)
+CANDIDATE_VC_PROJECTION_SUCCESSOR_REASONS = frozenset(
+    {"candidate_failed_job_tool_recovery", POST_RUN_SEAL_RECOVERY_REASON}
 )
 RECLASSIFICATION_SUCCESSOR_REASONS = frozenset(
     {"classification_fact_correction", "official_evidence_reuse"}
@@ -4841,6 +4884,7 @@ def _mutable_command_coordinates(
         "status",
         "plan",
         FORMAL_FAILED_JOB_RECOVERY_COMMAND,
+        FORMAL_POST_RUN_SEAL_RECOVERY_COMMAND,
         "terminal-transition-preflight",
         # 只读裁定；两步式权限收口自持 Campaign 排他锁（.campaign.lock），
         # 不能再建 CampaignLease，否则同一进程内会与自身的锁互相等待。
@@ -4923,6 +4967,7 @@ def _mutable_command_coordinates(
         "stage-profile",
         "successor",
         FORMAL_FAILED_JOB_RECOVERY_COMMAND,
+        FORMAL_POST_RUN_SEAL_RECOVERY_COMMAND,
         "reuse-official-evidence",
         "account-sealed-official",
     }:
@@ -5334,6 +5379,57 @@ def _classification_candidate_reuse_requested(
     return True
 
 
+def _classification_candidate_job_evidence_roots(
+    source_attempt: Mapping[str, Any],
+    *,
+    require_existing: bool = False,
+) -> list[Path]:
+    """只从固定九项 Job 结果提取可复用证据根。
+
+    来源 attempt 自身的 ``evidence`` 与 ``logs`` 只承载旧环境、旧 Kilo 和
+    编排日志，绝不能因为出现在 attempt.evidence_roots 中而进入新 Campaign。
+    """
+
+    results = source_attempt.get("results")
+    if not isinstance(results, list):
+        raise ConfigurationError("分类 Candidate 复用来源缺少 Job 结果。")
+    result_ids = [
+        str(item.get("id")) for item in results if isinstance(item, Mapping)
+    ]
+    expected_ids = sorted(CLASSIFICATION_CANDIDATE_REUSE_JOB_IDS)
+    if (
+        len(result_ids) != len(expected_ids)
+        or sorted(result_ids) != expected_ids
+        or len(set(result_ids)) != len(result_ids)
+        or any(
+            not isinstance(item, Mapping) or item.get("status") != "complete"
+            for item in results
+        )
+    ):
+        raise ConfigurationError("分类 Candidate 复用来源不是九项全部 complete。")
+    raw_roots: list[Path] = []
+    for item in results:
+        assert isinstance(item, Mapping)
+        roots = item.get("evidence_roots")
+        if (
+            not isinstance(roots, list)
+            or not roots
+            or any(
+                not isinstance(root, str)
+                or not Path(root).is_absolute()
+                or ".." in Path(root).parts
+                for root in roots
+            )
+        ):
+            raise ConfigurationError("分类 Candidate 复用来源证据根坐标非法。")
+        raw_roots.extend(Path(str(root)) for root in roots)
+    if require_existing:
+        roots = _deduplicate_evidence_roots(raw_roots)
+    else:
+        roots = list({path for path in raw_roots})
+    return sorted(roots, key=lambda path: str(path))
+
+
 def _classification_candidate_reuse_source(
     arguments: argparse.Namespace,
     campaign_dir: Path,
@@ -5351,12 +5447,20 @@ def _classification_candidate_reuse_source(
         manifest.get("campaign_mode") != "formal"
         or predecessor is None
         or not isinstance(predecessor, Mapping)
-        or predecessor.get("reason") != "classification_fact_correction"
+        or predecessor.get("reason")
+        not in CLASSIFICATION_CANDIDATE_REUSE_SUCCESSOR_REASONS
         or classification.get("status") != "complete"
-        or classification.get("predecessor_import") is not None
+        or (
+            predecessor.get("reason") == "classification_fact_correction"
+            and classification.get("predecessor_import") is not None
+        )
+        or (
+            predecessor.get("reason") == POST_RUN_SEAL_RECOVERY_REASON
+            and classification.get("predecessor_import") is None
+        )
     ):
         raise ConfigurationError(
-            "分类 Candidate 复用只允许已批准的 classification_fact_correction 后继。"
+            "分类 Candidate 复用只允许已批准的分类纠正或 A15 seal 恢复后继。"
         )
     source_dir_value = getattr(
         arguments, "candidate_reuse_source_campaign_dir", None
@@ -5472,20 +5576,15 @@ def _classification_candidate_reuse_source(
         )
     ):
         raise ConfigurationError("分类 Candidate 复用来源不是九项全部 complete。")
-    for item in results:
-        assert isinstance(item, Mapping)
-        roots = item.get("evidence_roots")
-        if (
-            not isinstance(roots, list)
-            or not roots
-            or any(
-                not isinstance(root, str)
-                or not Path(root).is_absolute()
-                or ".." in Path(root).parts
-                for root in roots
-            )
-        ):
-            raise ConfigurationError("分类 Candidate 复用来源证据根坐标非法。")
+    _classification_candidate_job_evidence_roots(source_attempt)
+
+    if predecessor.get("reason") == POST_RUN_SEAL_RECOVERY_REASON:
+        _validated_c0154_a15_post_run_seal_source_scope(
+            source_dir,
+            source_manifest,
+            candidate_id=source_candidate_id,
+            attempt_id=source_attempt_id,
+        )
 
     current_candidates_root = campaign_dir / "candidates"
     if current_candidates_root.exists() or current_candidates_root.is_symlink():
@@ -5757,13 +5856,10 @@ def _build_classification_candidate_reuse_preview(
         }
         for item in source_results
     ]
-    evidence_roots = sorted(
-        {
-            root
-            for item in result_bindings
-            for root in item["evidence_roots"]
-        }
-    )
+    evidence_roots = [
+        str(root)
+        for root in _classification_candidate_job_evidence_roots(source_attempt)
+    ]
     source_dir = Path(context["source_campaign_dir"])
     source_root = Path(context["source_root"])
     source_attempt_path = source_root / "attempt.json"
@@ -5919,7 +6015,8 @@ def _load_classification_candidate_reuse_transition(
         or preview.get("candidate_id") != candidate_id
         or preview.get("identity_sha256") != _fingerprint(dict(identity))
         or not isinstance(predecessor, Mapping)
-        or predecessor.get("reason") != "classification_fact_correction"
+        or predecessor.get("reason")
+        not in CLASSIFICATION_CANDIDATE_REUSE_SUCCESSOR_REASONS
         or source_campaign
         != {
             "campaign_dir": predecessor.get("campaign_dir"),
@@ -5958,6 +6055,10 @@ def _load_classification_candidate_reuse_transition(
         str(source_attempt_binding["attempt_id"]),
         _historical_manifest_controls=True,
     )
+    job_roots = [
+        str(root)
+        for root in _classification_candidate_job_evidence_roots(source_attempt)
+    ]
     source_results = sorted(
         (dict(item) for item in source_attempt.get("results", [])),
         key=lambda item: str(item.get("id", "")),
@@ -5980,8 +6081,16 @@ def _load_classification_candidate_reuse_transition(
         or preview.get("source_results_sha256")
         != _fingerprint({"results": source_results})
         or preview.get("result_bindings") != result_bindings
+        or preview.get("evidence_roots") != job_roots
     ):
         raise ConfigurationError("attempt 分类 Candidate 复用来源结果或身份漂移。")
+    if predecessor.get("reason") == POST_RUN_SEAL_RECOVERY_REASON:
+        _validated_c0154_a15_post_run_seal_source_scope(
+            source_dir,
+            _read_json(source_dir / "campaign.json", "A15 seal 恢复前序清单"),
+            candidate_id=str(preview["source_candidate_id"]),
+            attempt_id=str(source_attempt_binding["attempt_id"]),
+        )
     return transition
 
 
@@ -8812,6 +8921,58 @@ def _build_parser() -> argparse.ArgumentParser:
     add_watchdog_options(failed_job_recovery)
     failed_job_recovery.set_defaults(
         reason="candidate_failed_job_tool_recovery",
+        live_attestation_compose_dir=None,
+        live_attestation_compose_files=None,
+        target_scenario_manifest=None,
+        active_timing_ledger_dir=None,
+        active_timing_receipt=None,
+        active_arm64_environment_root=None,
+        active_arm64_environment_receipt=None,
+        predecessor_recovery_transition=None,
+        predecessor_control_epoch=None,
+        predecessor_control_runtime_repair=None,
+        predecessor_unpublished_ledger_dir=None,
+        predecessor_unpublished_stop_receipt=None,
+        predecessor_supervisor_run_dir=None,
+    )
+
+    post_run_seal_recovery = subparsers.add_parser(
+        FORMAL_POST_RUN_SEAL_RECOVERY_COMMAND,
+        help=(
+            "为已完成九项 Candidate Job、尚未生成 Kilo 收据的 A15 attempt "
+            "创建 metadata-only 后继；VC-0～VC-4 和九项 Job 均只读承接"
+        ),
+    )
+    post_run_seal_recovery.add_argument(
+        "--predecessor-campaign-dir", type=Path, required=True
+    )
+    add_campaign_reference(post_run_seal_recovery)
+    post_run_seal_recovery.add_argument("--campaign-id", required=True)
+    post_run_seal_recovery.add_argument(
+        "--codex-account-id", type=int, required=True
+    )
+    post_run_seal_recovery.add_argument(
+        "--predecessor-candidate-id",
+        default=str(C0154_A15_POST_RUN_SEAL_SOURCE["candidate_id"]),
+    )
+    post_run_seal_recovery.add_argument(
+        "--predecessor-attempt-id",
+        default=str(C0154_A15_POST_RUN_SEAL_SOURCE["attempt_id"]),
+    )
+    for option in (
+        "job-rehearsal-root",
+        "job-rehearsal-receipt",
+        "recovery-timing-ledger-dir",
+        "recovery-timing-receipt",
+        "recovery-arm64-environment-root",
+        "recovery-arm64-environment-receipt",
+        "predecessor-stop-ledger-dir",
+        "predecessor-stop-receipt",
+    ):
+        post_run_seal_recovery.add_argument(f"--{option}", type=Path, required=True)
+    add_watchdog_options(post_run_seal_recovery)
+    post_run_seal_recovery.set_defaults(
+        reason=POST_RUN_SEAL_RECOVERY_REASON,
         live_attestation_compose_dir=None,
         live_attestation_compose_files=None,
         target_scenario_manifest=None,
@@ -11671,6 +11832,7 @@ def _job_rehearsal_contract_from_manifest(
                 "candidate_failed_job_tool_recovery",
                 "candidate_recovery_control_refresh",
                 "candidate_recovery_control_replacement",
+                POST_RUN_SEAL_RECOVERY_REASON,
             }
         )
         if recovery_rehearsal_successor:
@@ -12859,7 +13021,10 @@ def _validate_initial_vc_control_artifacts(
                 and predecessor.get("reason")
                 in (
                     OFFICIAL_STAGE_REUSE_SUCCESSOR_REASONS
-                    | {"candidate_failed_job_tool_recovery"}
+                    | {
+                        "candidate_failed_job_tool_recovery",
+                        POST_RUN_SEAL_RECOVERY_REASON,
+                    }
                 )
             )
             expected_execute_ids = [] if reuses_official_stage else official_job_ids
@@ -16538,10 +16703,17 @@ def _copy_candidate_build_projection(
     try:
         receipt = codex_upgrade_vc_artifacts.validate_candidate_build_receipt(
             _read_json(expected_path, "前序 Candidate 构建收据"),
-            allow_legacy=_is_c0154_v7_failed_core_source(
-                predecessor_manifest,
-                candidate_id=candidate_id,
-                attempt_id=attempt_id,
+            allow_legacy=(
+                _is_c0154_v7_failed_core_source(
+                    predecessor_manifest,
+                    candidate_id=candidate_id,
+                    attempt_id=attempt_id,
+                )
+                or _is_c0154_a15_post_run_seal_source(
+                    predecessor_manifest,
+                    candidate_id=candidate_id,
+                    attempt_id=attempt_id,
+                )
             ),
         )
     except codex_upgrade_vc_artifacts.VCArtifactError as error:
@@ -16669,6 +16841,7 @@ def _successor_uses_reclassified_historical_plan_binding(
             "candidate_failed_job_tool_recovery",
             "candidate_recovery_control_refresh",
             "candidate_recovery_control_replacement",
+            POST_RUN_SEAL_RECOVERY_REASON,
         }
     )
     if (
@@ -16775,6 +16948,146 @@ def _successor_abandoned_attempt(
         "identity_sha256": _fingerprint(attempt["identity"]),
         "status": attempt["status"],
     }
+
+
+def _is_c0154_a15_post_run_seal_source(
+    predecessor_manifest: Mapping[str, Any],
+    *,
+    candidate_id: str,
+    attempt_id: str,
+) -> bool:
+    """只识别已经审计冻结的 0.154 A15 九项完成来源。"""
+
+    frozen = C0154_A15_POST_RUN_SEAL_SOURCE
+    tool_identity = predecessor_manifest.get("tool_identity")
+    return bool(
+        predecessor_manifest.get("campaign_id") == frozen["campaign_id"]
+        and predecessor_manifest.get("target_version") == frozen["target_version"]
+        and candidate_id == frozen["candidate_id"]
+        and attempt_id == frozen["attempt_id"]
+        and isinstance(tool_identity, Mapping)
+        and tool_identity.get("files_sha256") == frozen["tool_files_sha256"]
+    )
+
+
+def _validated_c0154_a15_post_run_seal_source_scope(
+    predecessor_dir: Path,
+    predecessor_manifest: Mapping[str, Any],
+    *,
+    candidate_id: str,
+    attempt_id: str,
+) -> dict[str, Any]:
+    """逐字重放 A15 Campaign 与九项完成 attempt。"""
+
+    frozen = C0154_A15_POST_RUN_SEAL_SOURCE
+    expected_dir = Path(str(frozen["campaign_dir"]))
+    try:
+        resolved_dir = predecessor_dir.resolve(strict=True)
+    except (OSError, RuntimeError) as error:
+        raise ConfigurationError("A15 seal 恢复的直接前序路径不可信。") from error
+    if (
+        not predecessor_dir.is_absolute()
+        or predecessor_dir.is_symlink()
+        or not predecessor_dir.is_dir()
+        or resolved_dir != predecessor_dir
+        or predecessor_dir != expected_dir
+    ):
+        raise ConfigurationError("A15 seal 恢复的直接前序路径不可信。")
+    manifest_path = predecessor_dir / "campaign.json"
+    if (
+        manifest_path.is_symlink()
+        or not manifest_path.is_file()
+        or file_sha256(manifest_path) != frozen["campaign_manifest_sha256"]
+        or _read_json(manifest_path, "A15 seal 恢复前序清单")
+        != dict(predecessor_manifest)
+        or not _is_c0154_a15_post_run_seal_source(
+            predecessor_manifest,
+            candidate_id=candidate_id,
+            attempt_id=attempt_id,
+        )
+    ):
+        raise ConfigurationError("A15 seal 恢复的前序清单身份或摘要漂移。")
+    attempt_path = (
+        predecessor_dir
+        / "candidates"
+        / candidate_id
+        / "attempts"
+        / attempt_id
+        / "attempt.json"
+    )
+    _reject_symlink_components(attempt_path, predecessor_dir, "A15 seal 恢复源 attempt")
+    if (
+        attempt_path.is_symlink()
+        or not attempt_path.is_file()
+        or file_sha256(attempt_path) != frozen["attempt_sha256"]
+    ):
+        raise ConfigurationError("A15 seal 恢复的源 attempt 文件摘要漂移。")
+    attempt = _read_json(attempt_path, "A15 seal 恢复源 attempt")
+    unsigned = dict(attempt)
+    attempt_digest = unsigned.pop("attempt_digest", None)
+    identity = attempt.get("identity")
+    sorted_results = sorted(
+        (dict(item) for item in attempt.get("results", []) if isinstance(item, Mapping)),
+        key=lambda item: str(item.get("id", "")),
+    )
+    job_roots = _classification_candidate_job_evidence_roots(
+        attempt,
+        require_existing=True,
+    )
+    if (
+        attempt.get("schema_version") != CAPTURE_ATTEMPT_SCHEMA
+        or attempt.get("campaign_id") != frozen["campaign_id"]
+        or attempt.get("campaign_manifest_sha256")
+        != frozen["campaign_manifest_sha256"]
+        or attempt.get("phase") != "candidate"
+        or attempt.get("candidate_id") != candidate_id
+        or attempt.get("attempt_id") != attempt_id
+        or attempt.get("status") != "awaiting_receipts"
+        or attempt_digest != frozen["attempt_digest"]
+        or _fingerprint(unsigned) != attempt_digest
+        or not isinstance(identity, Mapping)
+        or _fingerprint(dict(identity)) != frozen["identity_sha256"]
+        or _fingerprint({"results": sorted_results})
+        != frozen["sorted_results_sha256"]
+        or _fingerprint({"evidence_roots": [str(root) for root in job_roots]})
+        != frozen["job_evidence_roots_sha256"]
+    ):
+        raise ConfigurationError("A15 seal 恢复源不是冻结的九项完成 attempt。")
+    return {
+        "predecessor_manifest": dict(predecessor_manifest),
+        "source_attempt": attempt,
+        "job_evidence_roots": [str(root) for root in job_roots],
+    }
+
+
+def _require_c0154_a15_formal_post_run_seal_source(
+    arguments: argparse.Namespace,
+    predecessor_manifest: Mapping[str, Any],
+) -> dict[str, Any]:
+    """把正式 post-run seal 入口锁死到 A15 唯一来源。"""
+
+    candidate_id = getattr(arguments, "predecessor_candidate_id", None)
+    attempt_id = getattr(arguments, "predecessor_attempt_id", None)
+    predecessor_dir = getattr(arguments, "predecessor_campaign_dir", None)
+    if (
+        not isinstance(candidate_id, str)
+        or not isinstance(attempt_id, str)
+        or not isinstance(predecessor_dir, Path)
+        or not _is_c0154_a15_post_run_seal_source(
+            predecessor_manifest,
+            candidate_id=candidate_id,
+            attempt_id=attempt_id,
+        )
+    ):
+        raise ConfigurationError(
+            "正式 post-run seal 恢复只允许已审计的 0.154 A15 九项完成来源。"
+        )
+    return _validated_c0154_a15_post_run_seal_source_scope(
+        predecessor_dir,
+        predecessor_manifest,
+        candidate_id=candidate_id,
+        attempt_id=attempt_id,
+    )
 
 
 def _is_c0154_v7_failed_core_source(
@@ -21296,6 +21609,7 @@ def _successor_rehearsal_target_scenario_override(
                 "candidate_failed_job_tool_recovery",
                 "candidate_recovery_control_refresh",
                 "candidate_recovery_control_replacement",
+                POST_RUN_SEAL_RECOVERY_REASON,
             }
         )
     )
@@ -22872,12 +23186,16 @@ def _create_successor_campaign_unadmitted(arguments: argparse.Namespace) -> dict
     control_replacement_successor = (
         arguments.reason == "candidate_recovery_control_replacement"
     )
+    post_run_seal_recovery = arguments.reason == POST_RUN_SEAL_RECOVERY_REASON
     failed_job_tool_recovery = arguments.reason in {
         "candidate_failed_job_tool_recovery",
         "candidate_recovery_control_refresh",
         "candidate_recovery_control_replacement",
     }
-    if failed_job_tool_recovery:
+    candidate_controlled_recovery = (
+        failed_job_tool_recovery or post_run_seal_recovery
+    )
+    if candidate_controlled_recovery:
         required = (
             arguments.predecessor_candidate_id,
             arguments.predecessor_attempt_id,
@@ -22978,6 +23296,11 @@ def _create_successor_campaign_unadmitted(arguments: argparse.Namespace) -> dict
     )
     if getattr(arguments, "command", None) == FORMAL_FAILED_JOB_RECOVERY_COMMAND:
         _require_c0154_v7_formal_recovery_source(
+            arguments,
+            predecessor_manifest,
+        )
+    if getattr(arguments, "command", None) == FORMAL_POST_RUN_SEAL_RECOVERY_COMMAND:
+        _require_c0154_a15_formal_post_run_seal_source(
             arguments,
             predecessor_manifest,
         )
@@ -23098,7 +23421,8 @@ def _create_successor_campaign_unadmitted(arguments: argparse.Namespace) -> dict
         )
     )
     candidate_vc_recovery = bool(
-        arguments.reason == "candidate_failed_job_tool_recovery"
+        arguments.reason
+        in {"candidate_failed_job_tool_recovery", POST_RUN_SEAL_RECOVERY_REASON}
         and _requires_complete_vc_artifacts(predecessor_manifest)
     )
     predecessor_vc_checkpoints: dict[str, dict[str, Any]] = {}
@@ -23331,7 +23655,7 @@ def _create_successor_campaign_unadmitted(arguments: argparse.Namespace) -> dict
         )
         if recovery_scenario_override is not None:
             rehearsal_scenario_override = recovery_scenario_override
-        if failed_job_tool_recovery:
+        if candidate_controlled_recovery:
             _assert_recovery_rehearsal_uses_successor_controls(
                 arguments,
                 successor_manifest,
@@ -23359,6 +23683,29 @@ def _create_successor_campaign_unadmitted(arguments: argparse.Namespace) -> dict
                 attempt_id=arguments.predecessor_attempt_id,
                 reason=arguments.reason,
             )
+        elif post_run_seal_recovery:
+            assert arguments.predecessor_candidate_id is not None
+            assert arguments.predecessor_attempt_id is not None
+            source_scope = _validated_c0154_a15_post_run_seal_source_scope(
+                predecessor_dir,
+                predecessor_manifest,
+                candidate_id=str(arguments.predecessor_candidate_id),
+                attempt_id=str(arguments.predecessor_attempt_id),
+            )
+            source_attempt = source_scope["source_attempt"]
+            planned_ids = sorted(CLASSIFICATION_CANDIDATE_REUSE_JOB_IDS)
+            if sorted(str(item.get("id")) for item in source_attempt["results"]) != planned_ids:
+                raise ConfigurationError("A15 seal 恢复来源九项 Job 闭集漂移。")
+            recovery_source_scope = {
+                "planned_job_ids": planned_ids,
+                "reused_job_ids": planned_ids,
+                "execute_job_ids": [],
+                "failed_job_ids": [],
+                "pending_job_ids": [],
+                "reservation_exists": False,
+                "live_request_count": 0,
+                "scanned_bytes": 0,
+            }
         if sealed_stage_recovery_successor and job_rehearsal_transition is None:
             raise ConfigurationError("已封存阶段控制恢复没有形成新的 Job 演练绑定。")
         _rebuild_successor_plan(
@@ -24464,7 +24811,7 @@ def _successor_copy_expectations(
     predecessor = manifest.get("predecessor")
     if (
         isinstance(predecessor, Mapping)
-        and predecessor.get("reason") == "candidate_failed_job_tool_recovery"
+        and predecessor.get("reason") in CANDIDATE_VC_PROJECTION_SUCCESSOR_REASONS
         and _requires_complete_vc_artifacts(manifest)
     ):
         abandoned = abandoned_candidate_attempt
@@ -24489,12 +24836,21 @@ def _successor_copy_expectations(
                     and isinstance(
                         abandoned_candidate_attempt.get("attempt_id"), str
                     )
-                    and _is_c0154_v7_failed_core_source(
-                        predecessor_manifest,
-                        candidate_id=candidate_id,
-                        attempt_id=str(
-                            abandoned_candidate_attempt["attempt_id"]
-                        ),
+                    and (
+                        _is_c0154_v7_failed_core_source(
+                            predecessor_manifest,
+                            candidate_id=candidate_id,
+                            attempt_id=str(
+                                abandoned_candidate_attempt["attempt_id"]
+                            ),
+                        )
+                        or _is_c0154_a15_post_run_seal_source(
+                            predecessor_manifest,
+                            candidate_id=candidate_id,
+                            attempt_id=str(
+                                abandoned_candidate_attempt["attempt_id"]
+                            ),
+                        )
                     )
                 ),
             )
@@ -35710,41 +36066,48 @@ def _finalize_attempt_restoration(
     return output, receipt
 
 
-def _materialize_metadata_only_after_snapshot(
+def _materialize_metadata_only_probe_snapshot(
     source_evidence_root: Path,
     target_evidence_root: Path,
     source_environment: Mapping[str, Any],
+    *,
+    snapshot_name: str,
 ) -> None:
-    """把来源 attempt 的 after 快照复制到 metadata-only attempt。
+    """逐绑定投影来源 before／after 快照，不复制来源 attempt 根。"""
 
-    metadata-only attempt 没有重新执行环境探针，不能把来源快照冒充为本轮
-    探针。这里仅按来源 attempt 的不可变绑定逐文件复制，目标已存在时只接受
-    字节级相同的文件；任何缺失、漂移、额外文件或符号链接都 fail-close。
-    """
-
-    source_after = source_evidence_root / "environment" / "after"
-    target_after = target_evidence_root / "environment" / "after"
+    if snapshot_name not in {"before", "after"}:
+        raise ConfigurationError("metadata-only 环境快照名称非法。")
+    source_after = source_evidence_root / "environment" / snapshot_name
+    target_after = target_evidence_root / "environment" / snapshot_name
     expected_names = {
         "probe-manifest.json",
         *ENVIRONMENT_STATE_FILES.values(),
     }
     if source_after.is_symlink() or not source_after.is_dir():
-        raise ConfigurationError("metadata-only 来源 after 目录不存在或不可信。")
+        raise ConfigurationError(
+            f"metadata-only 来源 {snapshot_name} 目录不存在或不可信。"
+        )
     names = sorted(entry.name for entry in os.scandir(source_after))
     if names != sorted(expected_names):
-        raise ConfigurationError("metadata-only 来源 after 目录内容不完整或包含额外文件。")
+        raise ConfigurationError(
+            f"metadata-only 来源 {snapshot_name} 目录内容不完整或包含额外文件。"
+        )
 
-    after_binding = source_environment.get("after_probe")
+    binding_name = f"{snapshot_name}_probe"
+    after_binding = source_environment.get(binding_name)
+    expected_path = f"environment/{snapshot_name}/probe-manifest.json"
     if (
         not isinstance(after_binding, Mapping)
         or set(after_binding) != {"path", "sha256", "bytes"}
-        or after_binding.get("path") != "environment/after/probe-manifest.json"
+        or after_binding.get("path") != expected_path
         or not SHA256_RE.fullmatch(str(after_binding.get("sha256", "")))
         or not isinstance(after_binding.get("bytes"), int)
         or isinstance(after_binding.get("bytes"), bool)
         or int(after_binding.get("bytes", 0)) <= 0
     ):
-        raise ConfigurationError("metadata-only 来源缺少可信 after 探针绑定。")
+        raise ConfigurationError(
+            f"metadata-only 来源缺少可信 {snapshot_name} 探针绑定。"
+        )
     source_probe = source_after / "probe-manifest.json"
     if (
         source_probe.is_symlink()
@@ -35752,17 +36115,25 @@ def _materialize_metadata_only_after_snapshot(
         or source_probe.stat().st_size != after_binding["bytes"]
         or file_sha256(source_probe) != after_binding["sha256"]
     ):
-        raise ConfigurationError("metadata-only 来源 after 探针摘要漂移。")
-    probe = _read_json(source_probe, "metadata-only 来源 after 探针")
-    if probe.get("phase") != "after" or not _is_rfc3339_timestamp(
+        raise ConfigurationError(
+            f"metadata-only 来源 {snapshot_name} 探针摘要漂移。"
+        )
+    probe = _read_json(
+        source_probe, f"metadata-only 来源 {snapshot_name} 探针"
+    )
+    if probe.get("phase") != snapshot_name or not _is_rfc3339_timestamp(
         probe.get("observed_at_utc")
     ):
-        raise ConfigurationError("metadata-only 来源 after 探针身份或时间非法。")
+        raise ConfigurationError(
+            f"metadata-only 来源 {snapshot_name} 探针身份或时间非法。"
+        )
     snapshots = probe.get("snapshots")
     if not isinstance(snapshots, list) or len(snapshots) != len(
         ENVIRONMENT_STATE_FILES
     ):
-        raise ConfigurationError("metadata-only 来源 after 快照清单不完整。")
+        raise ConfigurationError(
+            f"metadata-only 来源 {snapshot_name} 快照清单不完整。"
+        )
     snapshot_bindings: dict[str, Mapping[str, Any]] = {}
     for snapshot in snapshots:
         if (
@@ -35778,21 +36149,29 @@ def _materialize_metadata_only_after_snapshot(
             or int(snapshot.get("bytes", 0)) <= 0
             or not SHA256_RE.fullmatch(str(snapshot.get("sha256", "")))
         ):
-            raise ConfigurationError("metadata-only 来源 after 快照绑定非法。")
+            raise ConfigurationError(
+                f"metadata-only 来源 {snapshot_name} 快照绑定非法。"
+            )
         snapshot_bindings[str(snapshot["kind"])] = snapshot
     if set(snapshot_bindings) != set(ENVIRONMENT_STATE_FILES):
-        raise ConfigurationError("metadata-only 来源 after 快照种类不完整。")
+        raise ConfigurationError(
+            f"metadata-only 来源 {snapshot_name} 快照种类不完整。"
+        )
 
     if target_after.exists() or target_after.is_symlink():
         if target_after.is_symlink() or not target_after.is_dir():
-            raise ConfigurationError("metadata-only 当前 after 目录不可信。")
+            raise ConfigurationError(
+                f"metadata-only 当前 {snapshot_name} 目录不可信。"
+            )
     else:
         ensure_private_directory(target_after, target_evidence_root)
     for name in sorted(expected_names):
         source = source_after / name
         destination = target_after / name
         if source.is_symlink() or not source.is_file():
-            raise ConfigurationError(f"metadata-only 来源 after 文件不可信：{name}")
+            raise ConfigurationError(
+                f"metadata-only 来源 {snapshot_name} 文件不可信：{name}"
+            )
         source_digest = file_sha256(source)
         source_bytes = source.stat().st_size
         if name != "probe-manifest.json":
@@ -35800,12 +36179,9 @@ def _materialize_metadata_only_after_snapshot(
                 key for key, value in ENVIRONMENT_STATE_FILES.items() if value == name
             )
             snapshot = snapshot_bindings[kind]
-            if (
-                source_bytes != snapshot["bytes"]
-                or source_digest != snapshot["sha256"]
-            ):
+            if source_bytes != snapshot["bytes"] or source_digest != snapshot["sha256"]:
                 raise ConfigurationError(
-                    f"metadata-only 来源 after 快照摘要漂移：{name}"
+                    f"metadata-only 来源 {snapshot_name} 快照摘要漂移：{name}"
                 )
         if destination.exists() or destination.is_symlink():
             if (
@@ -35815,10 +36191,165 @@ def _materialize_metadata_only_after_snapshot(
                 or file_sha256(destination) != source_digest
             ):
                 raise ConfigurationError(
-                    f"metadata-only 当前 after 文件与来源不一致：{name}"
+                    f"metadata-only 当前 {snapshot_name} 文件与来源不一致：{name}"
                 )
             continue
         _secure_copy_file_once(source, destination)
+
+
+def _materialize_metadata_only_after_snapshot(
+    source_evidence_root: Path,
+    target_evidence_root: Path,
+    source_environment: Mapping[str, Any],
+) -> None:
+    """兼容旧调用：把来源 attempt 的 after 快照逐绑定投影到当前 attempt。
+
+    metadata-only attempt 没有重新执行环境探针，不能把来源快照冒充为本轮
+    探针。这里仅按来源 attempt 的不可变绑定逐文件复制，目标已存在时只接受
+    字节级相同的文件；任何缺失、漂移、额外文件或符号链接都 fail-close。
+    """
+    _materialize_metadata_only_probe_snapshot(
+        source_evidence_root,
+        target_evidence_root,
+        source_environment,
+        snapshot_name="after",
+    )
+
+
+def _materialize_metadata_only_arm64_snapshot(
+    source_evidence_root: Path,
+    target_evidence_root: Path,
+    source_environment: Mapping[str, Any],
+    *,
+    snapshot_name: str,
+    source_attempt_id: str,
+) -> None:
+    """逐字投影 ARM64 facts/receipt，并按来源 attempt 身份重放。"""
+
+    if snapshot_name not in {"before", "after"}:
+        raise ConfigurationError("metadata-only ARM64 快照名称非法。")
+    role = f"arm64_{snapshot_name}_receipt"
+    directory = f"arm64-{snapshot_name}"
+    reference = source_environment.get(role)
+    if (
+        not isinstance(reference, Mapping)
+        or set(reference) != {"path", "sha256", "bytes"}
+        or reference.get("path") != f"environment/{directory}/receipt.json"
+    ):
+        raise ConfigurationError(f"metadata-only 来源缺少可信 {role} 绑定。")
+    source_root = source_evidence_root / "environment" / directory
+    target_root = target_evidence_root / "environment" / directory
+    if source_root.is_symlink() or not source_root.is_dir():
+        raise ConfigurationError(f"metadata-only 来源 {directory} 目录不可信。")
+    names = sorted(entry.name for entry in os.scandir(source_root))
+    if names != ["facts.json", "receipt.json"]:
+        raise ConfigurationError(f"metadata-only 来源 {directory} 内容不闭合。")
+    source_receipt = source_root / "receipt.json"
+    if (
+        source_receipt.is_symlink()
+        or not source_receipt.is_file()
+        or source_receipt.stat().st_size != reference.get("bytes")
+        or file_sha256(source_receipt) != reference.get("sha256")
+    ):
+        raise ConfigurationError(f"metadata-only 来源 {role} 摘要漂移。")
+    try:
+        replayed = codex_upgrade_arm64_environment_receipt.replay(
+            source_root,
+            "receipt.json",
+        )
+    except (
+        OSError,
+        codex_upgrade_arm64_environment_receipt.Arm64EnvironmentReceiptError,
+    ) as error:
+        raise ConfigurationError(f"metadata-only 来源 {role} 无法重放：{error}") from error
+    if (
+        replayed.get("status") != "passed"
+        or replayed.get("phase") != f"attempt_{snapshot_name}"
+        or replayed.get("subject_id") != source_attempt_id
+    ):
+        raise ConfigurationError(f"metadata-only 来源 {role} 身份不一致。")
+    ensure_private_directory(target_root, target_evidence_root)
+    for name in names:
+        source = source_root / name
+        destination = target_root / name
+        if source.is_symlink() or not source.is_file():
+            raise ConfigurationError(f"metadata-only 来源 {directory}/{name} 不可信。")
+        if destination.exists() or destination.is_symlink():
+            if (
+                destination.is_symlink()
+                or not destination.is_file()
+                or destination.read_bytes() != source.read_bytes()
+            ):
+                raise ConfigurationError(
+                    f"metadata-only 当前 {directory}/{name} 与来源不一致。"
+                )
+        else:
+            _secure_copy_file_once(source, destination)
+
+
+def _materialize_metadata_only_environment_projection(
+    source_evidence_root: Path,
+    target_evidence_root: Path,
+    source_environment: Mapping[str, Any],
+    *,
+    source_attempt_id: str,
+    candidate_id: str,
+) -> dict[str, Any]:
+    """投影环境输入并在新 evidence root 内重新生成恢复收据。"""
+
+    try:
+        bound_source_root = Path(str(source_environment.get("evidence_root", ""))).resolve(
+            strict=True
+        )
+    except (OSError, RuntimeError) as error:
+        raise ConfigurationError("metadata-only 来源环境 evidence_root 不可信。") from error
+    if bound_source_root != source_evidence_root.resolve(strict=True):
+        raise ConfigurationError("metadata-only 来源环境 evidence_root 绑定漂移。")
+    for snapshot_name in ("before", "after"):
+        _materialize_metadata_only_probe_snapshot(
+            source_evidence_root,
+            target_evidence_root,
+            source_environment,
+            snapshot_name=snapshot_name,
+        )
+        _materialize_metadata_only_arm64_snapshot(
+            source_evidence_root,
+            target_evidence_root,
+            source_environment,
+            snapshot_name=snapshot_name,
+            source_attempt_id=source_attempt_id,
+        )
+    restoration_path, restoration = _finalize_attempt_restoration(
+        target_evidence_root,
+        phase="candidate",
+        candidate_id=candidate_id,
+    )
+    if restoration.get("passed") is not True:
+        raise ConfigurationError("metadata-only 新恢复收据未通过。")
+    environment_root = target_evidence_root / "environment"
+    return {
+        "evidence_root": str(target_evidence_root.resolve(strict=True)),
+        "before_probe": _attempt_evidence_binding(
+            target_evidence_root,
+            environment_root / "before" / "probe-manifest.json",
+        ),
+        "after_probe": _attempt_evidence_binding(
+            target_evidence_root,
+            environment_root / "after" / "probe-manifest.json",
+        ),
+        "restoration_report": _attempt_evidence_binding(
+            target_evidence_root,
+            restoration_path,
+        ),
+        "arm64_before_receipt": _attempt_evidence_binding(
+            target_evidence_root,
+            environment_root / "arm64-before" / "receipt.json",
+        ),
+        "arm64_after_receipt": _attempt_evidence_binding(
+            target_evidence_root,
+            environment_root / "arm64-after" / "receipt.json",
+        ),
+    }
 
 
 def _candidate_post_client_restoration(
@@ -36479,8 +37010,9 @@ def deep_verify_campaign(
                     attempt,
                 )
             )
-            source_roots = _deduplicate_evidence_roots(
-                Path(value) for value in source_attempt.get("evidence_roots", [])
+            source_roots = _classification_candidate_job_evidence_roots(
+                source_attempt,
+                require_existing=True,
             )
             historical_manifest_path = _evidence_manifest_path(source_root)
             local_manifest_path = (
@@ -37771,18 +38303,23 @@ def _run_capture_attempt(
             raise setup_error
         if checkpoint_store is None:
             raise ConfigurationError("metadata-only attempt 缺少 Job checkpoint 存储。")
-        source_evidence_roots = recovery_source_attempt.get("evidence_roots") if isinstance(
-            recovery_source_attempt, Mapping
-        ) else None
-        if (
-            not isinstance(source_evidence_roots, list)
-            or not source_evidence_roots
-            or any(
-                not isinstance(value, str) or not Path(value).is_absolute()
-                for value in source_evidence_roots
-            )
-        ):
-            raise ConfigurationError("metadata-only attempt 的来源证据根不完整。")
+        if not isinstance(recovery_source_attempt, Mapping):
+            raise ConfigurationError("metadata-only attempt 缺少来源 attempt。")
+        source_job_evidence_roots = _classification_candidate_job_evidence_roots(
+            recovery_source_attempt,
+            require_existing=True,
+        )
+        source_environment = recovery_source_attempt.get("environment")
+        if not isinstance(source_environment, Mapping):
+            raise ConfigurationError("metadata-only attempt 来源环境绑定不完整。")
+        try:
+            source_environment_root = Path(
+                str(source_environment.get("evidence_root", ""))
+            ).resolve(strict=True)
+        except (OSError, RuntimeError) as error:
+            raise ConfigurationError(
+                "metadata-only attempt 来源环境根不可信。"
+            ) from error
         _write_attempt_heartbeat(
             heartbeat_path,
             deadline,
@@ -37825,19 +38362,18 @@ def _run_capture_attempt(
         }
         metadata_evidence_roots = _deduplicate_evidence_roots(
             [
-                *(Path(value) for value in source_evidence_roots),
+                *source_job_evidence_roots,
                 evidence_root,
             ],
             require_nonempty=True,
         )
-        metadata_environment = {
-            "evidence_root": str(evidence_root.resolve(strict=True)),
-            "before_probe": None,
-            "after_probe": None,
-            "restoration_report": None,
-            "arm64_before_receipt": None,
-            "arm64_after_receipt": None,
-        }
+        metadata_environment = _materialize_metadata_only_environment_projection(
+            source_environment_root,
+            evidence_root,
+            source_environment,
+            source_attempt_id=str(recovery_source_attempt.get("attempt_id", "")),
+            candidate_id=str(candidate_id),
+        )
         metadata_permission_closeout: dict[str, Any] | None = None
         metadata_permission_error: BaseException | None = None
         try:
@@ -38958,31 +39494,43 @@ def _seal_capture_attempt(
     metadata_source_evidence_root: Path | None = None
     if metadata_source is not None:
         _source_dir, _source_root, source_attempt, _transition = metadata_source
-        if any(
-            environment.get(name) is not None
-            for name in (
-                "before_probe",
-                "after_probe",
-                "restoration_report",
-                "arm64_before_receipt",
-                "arm64_after_receipt",
-            )
-        ):
-            raise ConfigurationError("metadata-only attempt 不得伪造本轮环境探针。")
         source_environment = source_attempt.get("environment")
         if not isinstance(source_environment, dict):
             raise ConfigurationError("metadata-only attempt 来源缺少环境恢复绑定。")
-        restoration_environment = source_environment
         restoration_subject_id = str(source_attempt.get("attempt_id", ""))
-        restoration_evidence_root = Path(
-            str(source_environment.get("evidence_root", ""))
+        environment_roles = (
+            "before_probe",
+            "after_probe",
+            "restoration_report",
+            "arm64_before_receipt",
+            "arm64_after_receipt",
         )
-        if (
-            not restoration_evidence_root.is_absolute()
-            or restoration_evidence_root.resolve(strict=True) not in roots
-        ):
-            raise ConfigurationError("metadata-only attempt 来源环境根未纳入 seal。")
-        metadata_source_evidence_root = restoration_evidence_root
+        if metadata_source_kind == "classification_candidate":
+            if any(
+                not isinstance(environment.get(name), Mapping)
+                for name in environment_roles
+            ):
+                raise ConfigurationError(
+                    "Candidate metadata-only attempt 缺少新 evidence root 内的完整环境投影。"
+                )
+            # before/after 与 ARM64 facts/receipt 已在 run 阶段逐绑定投影，
+            # restoration-report 也已针对当前绝对 evidence root 重建。ARM64
+            # 收据的 subject_id 保持来源 attempt，首次 seal 则真实采集 client-after。
+            restoration_environment = environment
+            restoration_evidence_root = attempt_evidence_root
+        else:
+            if any(environment.get(name) is not None for name in environment_roles):
+                raise ConfigurationError("官方 metadata-only attempt 不得伪造本轮环境探针。")
+            restoration_environment = source_environment
+            restoration_evidence_root = Path(
+                str(source_environment.get("evidence_root", ""))
+            )
+            if (
+                not restoration_evidence_root.is_absolute()
+                or restoration_evidence_root.resolve(strict=True) not in roots
+            ):
+                raise ConfigurationError("metadata-only attempt 来源环境根未纳入 seal。")
+            metadata_source_evidence_root = restoration_evidence_root
     arm64_receipts: dict[str, dict[str, Any]] = {}
     for role, expected_phase in (
         ("arm64_before_receipt", "attempt_before"),
@@ -39203,8 +39751,9 @@ def _seal_capture_attempt(
     else:
         if metadata_source is not None and metadata_source_kind == "classification_candidate":
             _source_dir, source_root, source_attempt, _transition = metadata_source
-            source_roots = _deduplicate_evidence_roots(
-                Path(value) for value in source_attempt.get("evidence_roots", [])
+            source_roots = _classification_candidate_job_evidence_roots(
+                source_attempt,
+                require_existing=True,
             )
             source_manifest_path = _evidence_manifest_path(source_root)
             if not source_manifest_path.is_file() or source_manifest_path.is_symlink():
@@ -43975,9 +44524,12 @@ def _replay_projected_candidate_build_receipt(
     predecessor = manifest.get("predecessor")
     if (
         not isinstance(predecessor, Mapping)
-        or predecessor.get("reason") != "candidate_failed_job_tool_recovery"
+        or predecessor.get("reason") not in CANDIDATE_VC_PROJECTION_SUCCESSOR_REASONS
     ):
         raise ConfigurationError("跨 Campaign VC-4 收据没有受管失败恢复绑定。")
+    transitive_post_run_projection = (
+        predecessor.get("reason") == POST_RUN_SEAL_RECOVERY_REASON
+    )
     classification = _load_stage_result(campaign_dir, "classify")
     import_binding = classification.get("predecessor_import")
     _require_file_binding(import_binding, "Candidate 构建投影的前序导入收据")
@@ -43990,7 +44542,7 @@ def _replay_projected_candidate_build_receipt(
     predecessor_binding = imported.get("predecessor_campaign")
     if (
         imported.get("schema_version") != PREDECESSOR_RECOVERY_IMPORT_SCHEMA
-        or imported.get("reason") != "candidate_failed_job_tool_recovery"
+        or imported.get("reason") not in CANDIDATE_VC_PROJECTION_SUCCESSOR_REASONS
         or not isinstance(abandoned, Mapping)
         or abandoned.get("candidate_id") != candidate_id
         or not isinstance(abandoned.get("attempt_id"), str)
@@ -44016,9 +44568,15 @@ def _replay_projected_candidate_build_receipt(
         predecessor_binding.get("campaign_id") != source_manifest.get("campaign_id")
         or predecessor_binding.get("campaign_manifest_sha256")
         != file_sha256(source_dir / "campaign.json")
-        or receipt.get("campaign_id") != source_manifest.get("campaign_id")
-        or receipt.get("campaign_manifest_sha256")
-        != file_sha256(source_dir / "campaign.json")
+        or (
+            not transitive_post_run_projection
+            and receipt.get("campaign_id") != source_manifest.get("campaign_id")
+        )
+        or (
+            not transitive_post_run_projection
+            and receipt.get("campaign_manifest_sha256")
+            != file_sha256(source_dir / "campaign.json")
+        )
         or receipt.get("candidate_id") != candidate_id
         or receipt.get("candidate_purpose") != manifest.get("campaign_purpose")
         or receipt.get("target_version") != manifest.get("target_version")
@@ -44083,6 +44641,11 @@ def _replay_projected_candidate_build_receipt(
         _allow_legacy_v7_source=(
             receipt.get("schema_version")
             == codex_upgrade_vc_artifacts.LEGACY_CANDIDATE_BUILD_SCHEMA
+            and _is_c0154_v7_failed_core_source(
+                source_manifest,
+                candidate_id=candidate_id,
+                attempt_id=str(C0154_V7_RECOVERY_SOURCE["attempt_id"]),
+            )
         ),
     )
     current_binding = {
@@ -44130,6 +44693,19 @@ def _replay_candidate_build_receipt(
         and raw_receipt.get("schema_version")
         == codex_upgrade_vc_artifacts.LEGACY_CANDIDATE_BUILD_SCHEMA
     )
+    managed_post_run_projection = bool(
+        isinstance(predecessor, Mapping)
+        and predecessor.get("reason") == POST_RUN_SEAL_RECOVERY_REASON
+        and predecessor.get("campaign_id")
+        == C0154_A15_POST_RUN_SEAL_SOURCE["campaign_id"]
+        and predecessor.get("campaign_manifest_sha256")
+        == C0154_A15_POST_RUN_SEAL_SOURCE["campaign_manifest_sha256"]
+        and candidate_id == C0154_A15_POST_RUN_SEAL_SOURCE["candidate_id"]
+        and raw_receipt.get("campaign_id") == C0154_V7_RECOVERY_SOURCE["campaign_id"]
+        and raw_receipt.get("candidate_id") == C0154_V7_RECOVERY_SOURCE["candidate_id"]
+        and raw_receipt.get("schema_version")
+        == codex_upgrade_vc_artifacts.LEGACY_CANDIDATE_BUILD_SCHEMA
+    )
     if _allow_legacy_v7_source and not _is_c0154_v7_failed_core_source(
         manifest,
         candidate_id=candidate_id,
@@ -44141,7 +44717,11 @@ def _replay_candidate_build_receipt(
     try:
         receipt = codex_upgrade_vc_artifacts.validate_candidate_build_receipt(
             raw_receipt,
-            allow_legacy=managed_v7_projection or _allow_legacy_v7_source,
+            allow_legacy=(
+                managed_v7_projection
+                or managed_post_run_projection
+                or _allow_legacy_v7_source
+            ),
         )
     except codex_upgrade_vc_artifacts.VCArtifactError as error:
         raise ConfigurationError(str(error)) from error
@@ -46133,6 +46713,7 @@ def _normalize_legacy_argv(argv: list[str]) -> tuple[list[str], str | None]:
         "canonical-advance",
         "successor",
         FORMAL_FAILED_JOB_RECOVERY_COMMAND,
+        FORMAL_POST_RUN_SEAL_RECOVERY_COMMAND,
         "capture-official",
         "classify",
         "prepare-profile",
@@ -46173,6 +46754,7 @@ def _reject_canonical_legacy_write(
     if command not in {
         "successor",
         FORMAL_FAILED_JOB_RECOVERY_COMMAND,
+        FORMAL_POST_RUN_SEAL_RECOVERY_COMMAND,
         "reuse-official-evidence",
         "control-epoch",
         "evaluation-transition",
@@ -46300,6 +46882,7 @@ def _reject_unparented_formal_write(
         return
     direct_control_commands = {
         FORMAL_FAILED_JOB_RECOVERY_COMMAND,
+        FORMAL_POST_RUN_SEAL_RECOVERY_COMMAND,
         "reuse-official-evidence",
         "harden-evidence-permissions",
         "reconcile-supervisor-run",
@@ -46914,6 +47497,11 @@ def _main_without_campaign_lease(argv: list[str] | None = None) -> int:
         elif command == FORMAL_FAILED_JOB_RECOVERY_COMMAND:
             if getattr(arguments, "reason", None) != "candidate_failed_job_tool_recovery":
                 raise ConfigurationError("正式失败 Job 恢复入口的 reason 已被篡改。")
+            result = create_successor_campaign(arguments)
+            return_code = 0
+        elif command == FORMAL_POST_RUN_SEAL_RECOVERY_COMMAND:
+            if getattr(arguments, "reason", None) != POST_RUN_SEAL_RECOVERY_REASON:
+                raise ConfigurationError("正式 post-run seal 恢复入口的 reason 已被篡改。")
             result = create_successor_campaign(arguments)
             return_code = 0
         elif command == "reuse-official-evidence":
