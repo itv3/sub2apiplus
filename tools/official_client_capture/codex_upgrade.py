@@ -12062,6 +12062,40 @@ def _job_rehearsal_contract_from_manifest(
                         )
                     ):
                         return approved_contract
+        # 2026-09-18：官方证据只读复用建立的 Formal 在批准场景出现前（VC-2 派发
+        # 之前）没有 classification；受管场景在候选侧演进后（新增
+        # candidate-trace-test），创建时 _build_control_epoch_successor_controls
+        # 按 preflight 快照绑定了演练合同，这里同样按 preflight 快照回退复算。
+        # 只在冻结场景合同与绑定不一致时尝试，且必须与绑定摘要相等才采用。
+        if (
+            isinstance(manifest.get("predecessor"), Mapping)
+            and manifest["predecessor"].get("reason") == OFFICIAL_EVIDENCE_REUSE_REASON
+            and isinstance(recovery_rehearsal_receipt, Mapping)
+        ):
+            try:
+                preflight_dir, preflight_manifest = (
+                    _recovery_rehearsal_preflight_from_receipt(
+                        recovery_rehearsal_receipt,
+                        manifest,
+                    )
+                )
+                reuse_scenario = _recovery_rehearsal_target_scenario_override(
+                    campaign_dir,
+                    manifest,
+                    preflight_dir,
+                    preflight_manifest,
+                    official_only_reuse=True,
+                )
+            except ConfigurationError:
+                reuse_scenario = None
+            if reuse_scenario is not None:
+                reuse_contract = build(reuse_scenario)
+                if bound_contract_sha256 == (
+                    codex_upgrade_job_rehearsal_receipt.execution_contract_sha256(
+                        reuse_contract
+                    )
+                ):
+                    return reuse_contract
         return frozen_contract
     except codex_upgrade_job_rehearsal_receipt.JobRehearsalReceiptError as error:
         raise ConfigurationError(f"Campaign Job 执行合同非法：{error}") from error
