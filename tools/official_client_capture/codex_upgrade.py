@@ -19628,6 +19628,10 @@ def _build_control_epoch_successor_controls(
         manifest,
         preflight_dir,
         preflight_manifest,
+        official_only_reuse=(
+            getattr(arguments, "reason", None)
+            in {OFFICIAL_EVIDENCE_REUSE_REASON, CLASSIFICATION_FACT_CORRECTION_REASON}
+        ),
     )
     expected_contract = _job_rehearsal_contract_from_manifest(
         campaign_dir,
@@ -21689,8 +21693,15 @@ def _recovery_rehearsal_target_scenario_override(
     *,
     recovery_candidate_id: str | None = None,
     recovery_attempt_id: str | None = None,
+    official_only_reuse: bool = False,
 ) -> dict[str, Any] | None:
-    """只允许当前受管场景承接 Formal 的历史规格章节摘要。"""
+    """只允许当前受管场景承接 Formal 的历史规格章节摘要。
+
+    ``official_only_reuse`` 为真（或 manifest 的 predecessor 原因属于 official-only
+    复用）时，Formal 历史场景与当前受管场景只需 official Job 执行合同一致：
+    官方证据按 §5.3.3 只读复用，候选侧 Job 的新增或变化由新 Campaign 自己的
+    VC-2 重分类与全量执行承担。
+    """
 
     target_version = str(manifest.get("target_version", ""))
     if not VERSION_RE.fullmatch(target_version):
@@ -21861,6 +21872,17 @@ def _recovery_rehearsal_target_scenario_override(
             == _scenario_job_execution_contract(managed)
         )
         if c0154_metadata_only_drift:
+            return managed
+        predecessor_reason = (
+            predecessor.get("reason") if isinstance(predecessor, Mapping) else None
+        )
+        official_only = official_only_reuse or predecessor_reason in {
+            OFFICIAL_EVIDENCE_REUSE_REASON,
+            CLASSIFICATION_FACT_CORRECTION_REASON,
+        }
+        if official_only and _fingerprint(
+            _official_scenario_execution_contract(dict(frozen))
+        ) == _fingerprint(_official_scenario_execution_contract(dict(managed))):
             return managed
         raise ConfigurationError(
             "Formal 历史 target 场景除 source_spec.sha256 外发生变化。"

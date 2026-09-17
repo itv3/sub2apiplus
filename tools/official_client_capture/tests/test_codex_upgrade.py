@@ -582,6 +582,83 @@ class CodexUpgradeTest(unittest.TestCase):
                     preflight_manifest,
                 )
 
+    def test_official_only_reuse_accepts_candidate_job_additions(self) -> None:
+        """官方证据只读复用只要求 official Job 执行合同一致；候选侧新增 Job 由新 Campaign 承担。"""
+
+        managed_path = (
+            Path(codex_upgrade.__file__).resolve().parent
+            / "codex_upgrade_scenarios_0_154_0.json"
+        )
+        managed = json.loads(managed_path.read_text(encoding="utf-8"))
+        # 历史 Formal（VC-1 官方证据 Campaign）冻结的是没有 candidate-trace-test 的场景。
+        historical = json.loads(json.dumps(managed, ensure_ascii=False))
+        historical["source_spec"]["sha256"] = "0" * 64
+        historical["capture_jobs"] = [
+            job for job in historical["capture_jobs"] if job["id"] != "candidate-trace-test"
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            formal_dir = root / "formal"
+            preflight_dir = root / "preflight"
+            formal_path = formal_dir / "inputs" / "target.json"
+            preflight_path = preflight_dir / "inputs" / "target.json"
+            self._write_json(formal_path, historical)
+            self._write_json(preflight_path, managed)
+            formal_manifest = {
+                "target_version": "0.154.0",
+                "inputs": {
+                    "target_discovery_scenarios": self._binding(formal_path, "inputs/target.json")
+                },
+            }
+            preflight_manifest = {
+                "target_version": "0.154.0",
+                "inputs": {
+                    "target_discovery_scenarios": self._binding(preflight_path, "inputs/target.json")
+                },
+            }
+            with self.assertRaisesRegex(
+                codex_upgrade.ConfigurationError,
+                "除 source_spec.sha256 外发生变化",
+            ):
+                codex_upgrade._recovery_rehearsal_target_scenario_override(
+                    formal_dir, formal_manifest, preflight_dir, preflight_manifest
+                )
+            override = codex_upgrade._recovery_rehearsal_target_scenario_override(
+                formal_dir,
+                formal_manifest,
+                preflight_dir,
+                preflight_manifest,
+                official_only_reuse=True,
+            )
+            self.assertEqual(override, managed)
+            # manifest 自带 official-only predecessor 原因时同样放行（新 Campaign 的只读加载）。
+            formal_manifest["predecessor"] = {"reason": codex_upgrade.OFFICIAL_EVIDENCE_REUSE_REASON}
+            self.assertEqual(
+                codex_upgrade._recovery_rehearsal_target_scenario_override(
+                    formal_dir, formal_manifest, preflight_dir, preflight_manifest
+                ),
+                managed,
+            )
+            # 官方 Job 执行字段变化仍拒绝。
+            drifted = json.loads(json.dumps(historical, ensure_ascii=False))
+            official = next(job for job in drifted["capture_jobs"] if job["phase"] == "official")
+            official["steps"][0]["timeout_seconds"] = 7
+            self._write_json(formal_path, drifted)
+            formal_manifest["inputs"]["target_discovery_scenarios"] = self._binding(
+                formal_path, "inputs/target.json"
+            )
+            with self.assertRaisesRegex(
+                codex_upgrade.ConfigurationError,
+                "除 source_spec.sha256 外发生变化",
+            ):
+                codex_upgrade._recovery_rehearsal_target_scenario_override(
+                    formal_dir,
+                    formal_manifest,
+                    preflight_dir,
+                    preflight_manifest,
+                    official_only_reuse=True,
+                )
+
     def test_v7_failed_job_recovery_allows_only_non_execution_scenario_drift(
         self,
     ) -> None:
