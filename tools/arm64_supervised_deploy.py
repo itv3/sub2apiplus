@@ -146,6 +146,7 @@ MANAGED_RUNTIME_DOCUMENTS = (
     "egress/maintenance/upstream-codex-0154-vc5-aux-empty-mapping-20260916-freeze-successor.json",
     "egress/maintenance/upstream-codex-0154-vc5-framework-closure-20260917-freeze-successor.json",
     "egress/maintenance/upstream-codex-0154-vc5-stopped-identity-precedence-20260917-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-deploy-metadata-bound-20260917-freeze-successor.json",
 )
 MANAGED_ASSERTION_PREPARER = "prepare_assertion_bundle.sh"
 TARGET_SCENARIO_MANIFEST = "codex_upgrade_scenarios_0_154_0.json"
@@ -587,8 +588,33 @@ def record_step(
         except BaseException:
             pass
         raise
-    client.event_end(operation, metadata=result)
+    client.event_end(operation, metadata=_bounded_event_metadata(result))
     return result
+
+
+def _bounded_event_metadata(value: Mapping[str, Any]) -> dict[str, Any]:
+    """把超长数组压成可复算摘要，避免部署规模增长击穿监督器事件上限。"""
+
+    def compact(item: Any) -> Any:
+        if isinstance(item, list):
+            if len(item) > 32:
+                return {
+                    "item_count": len(item),
+                    "items_sha256": sha256_bytes(
+                        json.dumps(
+                            item,
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ).encode("utf-8")
+                    ),
+                }
+            return [compact(child) for child in item]
+        if isinstance(item, Mapping):
+            return {str(key): compact(child) for key, child in item.items()}
+        return item
+
+    return {str(key): compact(child) for key, child in value.items()}
 
 
 def parse_container_network(output: str, name: str) -> str:
