@@ -5788,6 +5788,10 @@ class CodexUpgradeTest(unittest.TestCase):
                 _attempt_root: Path,
                 payload: dict[str, object],
             ) -> dict[str, object]:
+                codex_upgrade._validate_attempt_incremental_fields(
+                    payload,
+                    {job.job_id for job in jobs},
+                )
                 return {**payload, "attempt_digest": "5" * 64}
 
             # 20 个替身用 ExitStack 逐个进入：Python 3.12 的静态嵌套块上限是 20，
@@ -5848,6 +5852,16 @@ class CodexUpgradeTest(unittest.TestCase):
                 codex_upgrade.CLASSIFICATION_CANDIDATE_REUSE_JOB_IDS,
             )
             self.assertEqual(payload["environment"], projected_environment)
+            invalid_payload = copy.deepcopy(payload)
+            invalid_payload["environment"]["restoration_report"] = None
+            with self.assertRaisesRegex(
+                codex_upgrade.ConfigurationError,
+                "metadata-only attempt 的零执行边界不闭合",
+            ):
+                codex_upgrade._validate_attempt_incremental_fields(
+                    invalid_payload,
+                    {job.job_id for job in jobs},
+                )
             probe.assert_not_called()
             arm64_probe.assert_not_called()
             run_job.assert_not_called()

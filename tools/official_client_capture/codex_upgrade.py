@@ -35115,7 +35115,7 @@ def _validate_attempt_incremental_fields(
             or not isinstance(environment.get("evidence_root"), str)
             or not Path(str(environment["evidence_root"])).is_absolute()
             or any(
-                environment.get(name) is not None
+                environment.get(name) is None
                 for name in expected_environment_fields - {"evidence_root"}
             )
             or not isinstance(plan, Mapping)
@@ -35142,6 +35142,23 @@ def _validate_attempt_incremental_fields(
             )
         ):
             raise ConfigurationError("metadata-only attempt 的零执行边界不闭合。")
+        expected_environment_paths = {
+            "before_probe": "environment/before/probe-manifest.json",
+            "after_probe": "environment/after/probe-manifest.json",
+            "restoration_report": "receipts/restoration-report.json",
+            "arm64_before_receipt": "environment/arm64-before/receipt.json",
+            "arm64_after_receipt": "environment/arm64-after/receipt.json",
+        }
+        for name, expected_path in expected_environment_paths.items():
+            actual_path = _validate_attempt_file_binding(
+                environment.get(name),
+                label=f"metadata-only attempt {name}",
+                allow_null=False,
+            )
+            if actual_path != PurePosixPath(expected_path):
+                raise ConfigurationError(
+                    f"metadata-only attempt {name} 路径非法。"
+                )
     _validate_attempt_watchdog_fields(payload, planned_job_ids)
 
 
