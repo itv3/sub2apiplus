@@ -253,6 +253,18 @@ PRODUCER_FREEZE_SUCCESSORS = (
         "scope": "upstream-codex-0154-vc5-framework-closure-20260917-freeze-successor",
         "result": "manual_actions_required",
     },
+    {
+        "path": "docs/egress/maintenance/upstream-codex-0154-vc5-provenance-pcap-owner-20260917-freeze-successor.json",
+        "base_commit": "949780405997698b944e396f813f65bdcf7a568e",
+        "scope": "upstream-codex-0154-vc5-provenance-pcap-owner-20260917-freeze-successor",
+        "result": "manual_actions_required",
+    },
+    {
+        "path": "docs/egress/maintenance/upstream-codex-0154-vc5-reconciliation-producer-registration-20260917-freeze-successor.json",
+        "base_commit": "f5aeaec617b6913f266555e3900d0cfc4919d2bb",
+        "scope": "upstream-codex-0154-vc5-reconciliation-producer-registration-20260917-freeze-successor",
+        "result": "manual_actions_required",
+    },
 )
 
 
