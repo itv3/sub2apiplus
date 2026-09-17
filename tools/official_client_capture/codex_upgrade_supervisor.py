@@ -4260,7 +4260,6 @@ def _campaign_run_manifest(
             "evaluation-transition",
             "terminal-transition-preflight",
             "plan",
-            "reclassify-official-evidence",
             "reuse-official-evidence",
             "harden-evidence-permissions",
             "reconcile-supervisor-run",

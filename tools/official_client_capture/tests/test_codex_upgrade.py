@@ -7620,7 +7620,6 @@ class CodexUpgradeTest(unittest.TestCase):
                 "record-candidate-build",
                 "capture-candidate",
                 "candidate-runtime-override",
-                "reclassify-official-evidence",
                 "reuse-official-evidence",
                 "compare",
                 "accept",
@@ -13775,7 +13774,7 @@ class CodexUpgradeTest(unittest.TestCase):
             successor_dir = root / "successor"
             return_code, stdout, stderr = self._run_main(
                 [
-                    "reclassify-official-evidence",
+                    "reuse-official-evidence",
                     "--predecessor-campaign-dir",
                     str(predecessor_dir),
                     "--campaign-dir",
@@ -13784,6 +13783,7 @@ class CodexUpgradeTest(unittest.TestCase):
                     "upgrade-0154-classification-successor",
                     "--codex-account-id",
                     "93",
+                    "--classification-fact-correction",
                 ]
             )
             self.assertEqual(return_code, 0, stderr)

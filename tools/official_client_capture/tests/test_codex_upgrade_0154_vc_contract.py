@@ -323,7 +323,6 @@ class CodexUpgrade0154VCContractTests(unittest.TestCase):
         )
         for command in (
             "plan",
-            "reclassify-official-evidence",
             "reuse-official-evidence",
             "compile-vc-batch",
             "compile-vc-interrupted-recovery-batch",

@@ -789,7 +789,6 @@ class SupervisorTests(unittest.TestCase):
         for command in (
             "successor",
             "plan",
-            "reclassify-official-evidence",
             "reuse-official-evidence",
             "harden-evidence-permissions",
             "reconcile-attempt",
