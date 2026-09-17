@@ -4256,6 +4256,7 @@ def _campaign_run_manifest(
         )
         forbidden = {
             "successor",
+            "recover-candidate-failed-jobs",
             "control-epoch",
             "evaluation-transition",
             "terminal-transition-preflight",

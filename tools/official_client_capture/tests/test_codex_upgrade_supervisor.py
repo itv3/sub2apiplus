@@ -788,6 +788,7 @@ class SupervisorTests(unittest.TestCase):
     ) -> None:
         for command in (
             "successor",
+            "recover-candidate-failed-jobs",
             "plan",
             "reuse-official-evidence",
             "harden-evidence-permissions",

@@ -160,6 +160,28 @@
         "job_set_sha256": {"$ref": "#/$defs/sha256"}
       }
     },
+    "p0Gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidence_root", "receipt", "receipt_digest", "upgrade_id"],
+      "properties": {
+        "evidence_root": {"$ref": "#/$defs/absolutePath"},
+        "receipt": {"$ref": "#/$defs/binding"},
+        "receipt_digest": {"$ref": "#/$defs/sha256"},
+        "upgrade_id": {"$ref": "#/$defs/safeId"}
+      }
+    },
+    "releaseCertification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "receipt_sha256", "identity"],
+      "properties": {
+        "path": {"$ref": "#/$defs/absolutePath"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "receipt_sha256": {"$ref": "#/$defs/sha256"},
+        "identity": {"type": "object"}
+      }
+    },
     "controlReceipts": {
       "type": "object",
       "additionalProperties": false,
@@ -167,7 +189,9 @@
       "properties": {
         "upgrade_timing": {"$ref": "#/$defs/timing"},
         "arm64_environment": {"$ref": "#/$defs/arm64"},
-        "job_rehearsal": {"$ref": "#/$defs/rehearsal"}
+        "job_rehearsal": {"$ref": "#/$defs/rehearsal"},
+        "p0_gate": {"$ref": "#/$defs/p0Gate"},
+        "release_certification": {"$ref": "#/$defs/releaseCertification"}
       }
     },
     "stopCheckpoint": {
@@ -188,7 +212,7 @@
         "ledger_dir": {"$ref": "#/$defs/absolutePath"},
         "receipt": {"$ref": "#/$defs/binding"},
         "upgrade_id": {"$ref": "#/$defs/safeId"},
-        "active_phase": {"enum": ["VC-2", "VC-4"]},
+        "active_phase": {"enum": ["VC-0", "VC-2", "VC-4"]},
         "head_sequence": {"type": "integer", "minimum": 1},
         "head_sha256": {"$ref": "#/$defs/sha256"},
         "total_elapsed_seconds": {"type": "integer", "minimum": 0},
