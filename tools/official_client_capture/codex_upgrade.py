@@ -5590,7 +5590,22 @@ def _classification_candidate_reuse_source(
     if current_candidates_root.exists() or current_candidates_root.is_symlink():
         if current_candidates_root.is_symlink() or not current_candidates_root.is_dir():
             raise ConfigurationError("当前 Campaign candidates 路径不可信。")
-        if any(current_candidates_root.iterdir()):
+        candidate_entries = list(current_candidates_root.iterdir())
+        allowed_build_root = current_candidates_root / candidate_id
+        allowed_build_receipt = allowed_build_root / "build-receipt.json"
+        # VC-4 已完成的后继会先在目标 Candidate 目录投影唯一构建收据；
+        # 这不是既有 attempt。只放行这一份普通文件，任何其他 Candidate、
+        # attempts/result、符号链接或额外条目仍按已有运行状态失败关闭。
+        build_projection_only = bool(
+            len(candidate_entries) == 1
+            and candidate_entries[0] == allowed_build_root
+            and allowed_build_root.is_dir()
+            and not allowed_build_root.is_symlink()
+            and list(allowed_build_root.iterdir()) == [allowed_build_receipt]
+            and allowed_build_receipt.is_file()
+            and not allowed_build_receipt.is_symlink()
+        )
+        if candidate_entries and not build_projection_only:
             raise ConfigurationError("当前 Campaign 已有 Candidate／attempt，禁止复用。")
     _, current_result = _stage_path(
         campaign_dir,

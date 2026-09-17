@@ -6048,6 +6048,64 @@ class CodexUpgradeTest(unittest.TestCase):
             self.assertEqual(context["source_attempt_id"], "attempt-source")
             self.assertEqual(context["identity"], fixture["attempt"]["identity"])
 
+    def test_classification_candidate_reuse_allows_only_vc4_build_projection(
+        self,
+    ) -> None:
+        """当前 Candidate 可已有 VC-4 构建收据，但不得已有 attempt 或其他条目。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = self._classification_candidate_reuse_source_fixture(
+                Path(directory)
+            )
+            candidate_root = (
+                fixture["campaign_dir"] / "candidates" / "candidate-target"
+            )
+            candidate_root.mkdir(parents=True)
+            (candidate_root / "build-receipt.json").write_text(
+                "{}\n",
+                encoding="utf-8",
+            )
+            patches = (
+                mock.patch.object(
+                    codex_upgrade,
+                    "load_campaign_manifest",
+                    return_value=fixture["source_manifest"],
+                ),
+                mock.patch.object(
+                    codex_upgrade,
+                    "_load_capture_attempt",
+                    return_value=(fixture["source_attempt_root"], fixture["attempt"]),
+                ),
+                mock.patch.object(
+                    codex_upgrade,
+                    "_load_capture_reservation",
+                    return_value=fixture["reservation"],
+                ),
+            )
+            with patches[0], patches[1], patches[2]:
+                context = codex_upgrade._classification_candidate_reuse_source(
+                    fixture["arguments"],
+                    fixture["campaign_dir"],
+                    fixture["manifest"],
+                    {"status": "complete", "predecessor_import": None},
+                    candidate_id="candidate-target",
+                )
+            self.assertIsNotNone(context)
+
+            (candidate_root / "attempts").mkdir()
+            with patches[0], patches[1], patches[2]:
+                with self.assertRaisesRegex(
+                    codex_upgrade.ConfigurationError,
+                    "已有 Candidate／attempt",
+                ):
+                    codex_upgrade._classification_candidate_reuse_source(
+                        fixture["arguments"],
+                        fixture["campaign_dir"],
+                        fixture["manifest"],
+                        {"status": "complete", "predecessor_import": None},
+                        candidate_id="candidate-target",
+                    )
+
     def test_classification_candidate_reuse_source_rejects_incomplete_job(
         self,
     ) -> None:
