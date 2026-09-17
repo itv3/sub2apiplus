@@ -845,10 +845,51 @@ class JobRehearsalReceiptTests(unittest.TestCase):
             self._rewrite(path, declaration)
             with self.assertRaisesRegex(
                 receipt.JobRehearsalReceiptError,
-                "未精确覆盖正式 Job 集",
+                "未覆盖正式 Job 集",
             ):
                 receipt._target_evidence_label_declaration_sha256(
                     "0.151.0",
+                    scenario,
+                    tool_root=root,
+                )
+
+    def test_evidence_label_declaration_may_declare_extra_jobs(self) -> None:
+        """同版本新增 Job 后，旧 Campaign 冻结的场景仍能用当前标签声明加载。"""
+
+        source = Path(receipt.__file__).with_name(
+            "codex_upgrade_evidence_labels_0_154_0.json"
+        )
+        scenario_path = Path(receipt.__file__).with_name(
+            "codex_upgrade_scenarios_0_154_0.json"
+        )
+        declaration = json.loads(source.read_text(encoding="utf-8"))
+        scenario = json.loads(scenario_path.read_text(encoding="utf-8"))
+        # 旧 Campaign 冻结的场景没有 candidate-trace-test；当前声明多出该 Job。
+        scenario["capture_jobs"] = [
+            job for job in scenario["capture_jobs"] if job["id"] != "candidate-trace-test"
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / source.name
+            self._rewrite(path, declaration)
+            digest = receipt._target_evidence_label_declaration_sha256(
+                "0.154.0",
+                scenario,
+                tool_root=root,
+            )
+            self.assertRegex(digest, r"^[0-9a-f]{64}$")
+            # 阶段不一致仍然拒绝。
+            drifted = json.loads(json.dumps(declaration))
+            for entry in drifted["entries"]:
+                if entry["job_id"] == "candidate-frozen-core":
+                    entry["side"] = "official"
+            self._rewrite(path, drifted)
+            with self.assertRaisesRegex(
+                receipt.JobRehearsalReceiptError,
+                "phase_mismatch=\['candidate-frozen-core'\]",
+            ):
+                receipt._target_evidence_label_declaration_sha256(
+                    "0.154.0",
                     scenario,
                     tool_root=root,
                 )
