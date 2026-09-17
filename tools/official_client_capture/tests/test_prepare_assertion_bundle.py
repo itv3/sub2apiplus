@@ -144,6 +144,34 @@ class PrepareAssertionBundleTests(unittest.TestCase):
         )
         self.assertIn("assertion bundle 权威根闭合：14 个", result.stdout)
 
+    def test_declared_go_test_log_missing_fails_closed(self) -> None:
+        """标签声明了 candidate-go-test.jsonl 而 bundle 没有它：候选侧必须失败关闭。"""
+
+        declaration = json.loads(self.declaration.read_text(encoding="utf-8"))
+        declaration["entries"].append(
+            {
+                "job_id": "candidate-trace-test",
+                "side": "candidate",
+                "rules": [
+                    {
+                        "glob": "candidate-go-test.jsonl",
+                        "scenario_ids": ["S1"],
+                        "kind": "stdout_log",
+                        "parser": "opaque_bound_source",
+                        "labels": {"surface": "test"},
+                        "rationale": "夹具：声明但未产出。",
+                    }
+                ],
+            }
+        )
+        self._write_json(self.declaration, declaration)
+        campaign = json.loads((self.campaign / "campaign.json").read_text(encoding="utf-8"))
+        campaign["jobs"].append({"id": "candidate-trace-test", "phase": "candidate", "required": True})
+        self._write_json(self.campaign / "campaign.json", campaign)
+        result = self._run()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((self.attempt / "evidence" / "assertion-bundle" / "provenance.json").exists())
+
     def test_missing_result_root_fails_before_bundle_publication(self) -> None:
         attempt = json.loads((self.attempt / "attempt.json").read_text(encoding="utf-8"))
         attempt["results"][0]["evidence_roots"] = [str(self.root / "missing-root")]

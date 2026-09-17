@@ -660,8 +660,7 @@ class Codex0151MitmRootCoverageTest(unittest.TestCase):
                 applicable = [
                     rule
                     for rule in rules
-                    if not rule.get("root_suffix")
-                    or root_name.endswith(rule["root_suffix"])
+                    if catalog.root_suffix_matches(root_name, rule.get("root_suffix"))
                 ]
                 self.assertEqual(
                     len(applicable),
@@ -672,3 +671,34 @@ class Codex0151MitmRootCoverageTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Codex0154MitmRootCoverageTest(unittest.TestCase):
+    """0.154 的 MITM 规则不再绑定重试序号：a1 与 a2 的成功根都恰好命中一条声明。"""
+
+    def test_root_suffix_wildcard_semantics(self) -> None:
+        self.assertTrue(catalog.root_suffix_matches("x-codex-http-s1-a1-run", "codex-http-s1-a*-run"))
+        self.assertTrue(catalog.root_suffix_matches("x-codex-http-s1-a2-run", "codex-http-s1-a*-run"))
+        self.assertFalse(catalog.root_suffix_matches("x-codex-http-s2-a1-run", "codex-http-s1-a*-run"))
+        self.assertFalse(catalog.root_suffix_matches("x-codex-http-s1-a1-run.failed-incomplete", "codex-http-s1-a*-run"))
+        # 无通配字符时保持精确后缀语义。
+        self.assertTrue(catalog.root_suffix_matches("x-codex-http-s1-a2-run", "codex-http-s1-a2-run"))
+        self.assertFalse(catalog.root_suffix_matches("x-codex-http-s1-a1-run", "codex-http-s1-a2-run"))
+        self.assertTrue(catalog.root_suffix_matches("anything", None))
+
+    def test_candidate_mitm_rules_cover_any_successful_attempt_once(self) -> None:
+        base = Path(__file__).resolve().parents[1]
+        declaration = catalog.load_label_declaration(
+            base / "codex_upgrade_evidence_labels_0_154_0.json",
+            expected_codex_version="0.154.0",
+        )
+        by_job = {entry["job_id"]: entry for entry in declaration["entries"]}
+        rules = by_job["candidate-core-mitm"]["rules"]
+        for rule in rules:
+            self.assertNotRegex(rule["root_suffix"], r"-a[0-9]+-run$", "root_suffix 不得绑定重试序号")
+        for attempt in ("a1", "a2", "a3"):
+            for subject, scenario in (("codex-http", "s1"), ("codex-http", "s2"), ("codex-http", "s4"), ("codex-ws", "s1"), ("codex-ws", "s2"), ("codex-ws", "s4")):
+                root_name = f"c0154-formal-x-cand-candidate-mitm-core-{subject}-{scenario}-{attempt}-run"
+                applicable = [rule for rule in rules if catalog.root_suffix_matches(root_name, rule.get("root_suffix"))]
+                self.assertEqual(len(applicable), 1, f"{root_name} 必须且只能命中一条声明")
+

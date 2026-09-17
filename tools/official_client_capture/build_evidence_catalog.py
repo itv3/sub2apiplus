@@ -113,6 +113,18 @@ def load_label_declaration(
     return document
 
 
+def root_suffix_matches(root_name: str, root_suffix: Any) -> bool:
+    """规则的 root_suffix 是否命中证据根目录名。
+
+    省略或空值对全部根生效；否则按 fnmatch 通配匹配"任意前缀 + 后缀"。不含
+    通配字符时与旧的精确后缀语义完全相同。
+    """
+
+    if not root_suffix:
+        return True
+    return fnmatch.fnmatchcase(str(root_name), "*" + str(root_suffix))
+
+
 def _validate_rule(
     rule: Any, job_id: str, seen_globs: set[tuple[str, ...]]
 ) -> None:
@@ -139,9 +151,17 @@ def _validate_rule(
         raise EvidenceCatalogError(f"job {job_id} 的 glob 存在路径逃逸：{glob}")
     # 一个 job 可绑定多个证据根（如 official-wham-safe 的 get／safe 双根），
     # root_suffix 按根目录名后缀限定本规则生效范围；省略则对该 job 全部根生效。
+    # 2026-09-18 起后缀支持 fnmatch 通配：MITM 矩阵的成功根形如
+    # codex-http-s1-a<N>-run，N 是场景内重试序号，由 checkpoint 决定、每场景恰好
+    # 一个成功根；把某次历史采集恰好重试到的 a2 写死进标签（0.151 的 s1）会让
+    # 一次成功（a1）的合法根找不到适用规则。
     root_suffix = rule.get("root_suffix")
     if root_suffix is not None:
         _require_str(root_suffix, f"job {job_id} 的 root_suffix")
+        if root_suffix.startswith("/") or "/" in root_suffix:
+            raise EvidenceCatalogError(
+                f"job {job_id} 的 root_suffix 只能是根目录名后缀：{root_suffix}"
+            )
     derive_kind = (rule.get("derive") or {}).get("kind", "")
     receipt_role = rule.get("receipt_role")
     if receipt_role is not None and receipt_role not in RECEIPT_SELECTABLE_ROLES:
@@ -332,8 +352,7 @@ def build_catalog(
             applicable = [
                 rule
                 for rule in by_job[job_id]["rules"]
-                if not rule.get("root_suffix")
-                or root_name.endswith(rule["root_suffix"])
+                if root_suffix_matches(root_name, rule.get("root_suffix"))
             ]
             if not applicable:
                 validation_issues.append(
