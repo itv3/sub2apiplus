@@ -11300,6 +11300,11 @@ def _exact_tool_path_impact(
         # v1 身份没有闭包信息，保持历史豁免语义，历史 Campaign 重放不受影响。
         changed -= hybrid
     changed_paths = sorted(changed)
+    # 没有产出侧路径变化时，影响闭集必然为空。依赖反向图需要递归解析每个
+    # Job 的脚本引用，真实工具树上代价较高；此处提前返回既不减少任何校验，
+    # 也避免零变化预览无意义地构建整张图。
+    if not changed_paths:
+        return [], [], []
     impact_map = _tool_path_job_map(planned, expected_tool, current_tool)
     affected: set[str] = set()
     unmapped: list[str] = []
@@ -33961,13 +33966,20 @@ def _rebase_reused_result(
     *,
     identity: Mapping[str, Any],
     tool_identity: Mapping[str, Any],
+    incremental_metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """把承接结果绑定到本轮 Job 摘要，历史收据本身保持只读。"""
 
-    incremental = _job_incremental_metadata(
-        job,
-        identity=identity,
-        tool_identity=tool_identity,
+    # 调用方若已用同一 Job、身份和工具快照算过元数据，直接复用该结果。
+    # 这避免跨 Campaign rebase 对同一个工具依赖闭包做第二次完整解析。
+    incremental = (
+        dict(incremental_metadata)
+        if incremental_metadata is not None
+        else _job_incremental_metadata(
+            job,
+            identity=identity,
+            tool_identity=tool_identity,
+        )
     )
     rebased = dict(result)
     rebased.update(
@@ -34467,7 +34479,11 @@ def _prior_complete_results(
                 + "、".join(unmapped_production_paths)
                 + "；禁止扩大为全量重跑。"
             )
-        path_job_map = _tool_path_job_map(jobs, frozen_tool, current_tool)
+        path_job_map = (
+            _tool_path_job_map(jobs, frozen_tool, current_tool)
+            if changed_production_paths
+            else {}
+        )
     else:
         exact_affected_job_ids = []
     allowed_statuses = {str(value) for value in allowed_source_statuses}
@@ -34650,6 +34666,7 @@ def _prior_complete_results(
                     expected_job,
                     identity=identity,
                     tool_identity=current_tool,
+                    incremental_metadata=expected_incremental,
                 )
                 if relocated or needs_rebase
                 else dict(item)

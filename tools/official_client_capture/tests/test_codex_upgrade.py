@@ -6203,6 +6203,45 @@ class CodexUpgradeTest(unittest.TestCase):
                 fixture["current_tool"]["files_sha256"],
             )
 
+    def test_reused_result_rebase_uses_precomputed_incremental_metadata(
+        self,
+    ) -> None:
+        """复用结果重绑不得重复解析同一个 Job 的工具依赖闭包。"""
+
+        job = Job(
+            job_id="candidate-core-direct",
+            phase="candidate",
+            suites=("full",),
+            description="candidate-core-direct",
+            steps=({"argv": ["true"], "environment": {}},),
+            evidence_roots=("/tmp/candidate-core-direct",),
+            covers=(),
+        )
+        incremental = {
+            "components": ["producer"],
+            "component_digests": {"producer": "1" * 64},
+            "tool_dependency_files": {"runner.sh": "2" * 64},
+            "dependency_sha256": "3" * 64,
+            "input_sha256": "4" * 64,
+            "environment_sha256": "5" * 64,
+            "result_key": "6" * 64,
+        }
+        with mock.patch.object(
+            codex_upgrade,
+            "_job_incremental_metadata",
+            side_effect=AssertionError("不得重复解析工具依赖"),
+        ) as metadata_builder:
+            rebased = codex_upgrade._rebase_reused_result(
+                {"id": job.job_id, "status": "complete"},
+                job,
+                identity={"candidate_id": "candidate-a"},
+                tool_identity={"files_sha256": "7" * 64},
+                incremental_metadata=incremental,
+            )
+        metadata_builder.assert_not_called()
+        self.assertEqual(rebased["incremental_result_key"], "6" * 64)
+        self.assertEqual(rebased["tool_dependency_files"], {"runner.sh": "2" * 64})
+
     def test_classification_candidate_reuse_rejects_attempt_producer_drift(
         self,
     ) -> None:
@@ -19532,6 +19571,27 @@ class ToolIdentitySideSplitTest(unittest.TestCase):
         self.assertEqual(affected, [])
         self.assertEqual(changed, [])
         self.assertEqual(unmapped, [])
+
+    def test_zero_production_drift_skips_job_dependency_graph(self):
+        """产出路径未变化时不得构建昂贵的 Job 依赖反向图。"""
+
+        path = "codex_upgrade_supervisor.py"
+        expected = self._identity([{"path": path, "sha256": "a" * 64}])
+        current = self._identity([{"path": path, "sha256": "b" * 64}])
+        with mock.patch.object(
+            codex_upgrade,
+            "_tool_path_job_map",
+            side_effect=AssertionError("零变化不应解析 Job 依赖"),
+        ) as dependency_graph:
+            affected, changed, unmapped = codex_upgrade._exact_tool_path_impact(
+                [],
+                expected,
+                current,
+            )
+        self.assertEqual(affected, [])
+        self.assertEqual(changed, [])
+        self.assertEqual(unmapped, [])
+        dependency_graph.assert_not_called()
 
     def test_hybrid_drift_requires_explicit_historical_replay_authorization(self):
         """v2 wire 闭包变化默认停线，仅严格历史恢复可排除阶段混合文件。"""
