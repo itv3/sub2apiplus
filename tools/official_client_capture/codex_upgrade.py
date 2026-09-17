@@ -516,6 +516,7 @@ RUNTIME_SUCCESSOR_CHANGED_TOOL_PATH_JOB_IDS = {
     "run_codex_scenario_target.py": RUNTIME_CODEX_BINARY_JOB_IDS,
     "run_candidate_aux_capture.sh": frozenset({"candidate-frozen-aux"}),
     "run_candidate_core_capture.sh": frozenset({"candidate-frozen-core"}),
+    "run_candidate_trace_test.sh": frozenset({"candidate-trace-test"}),
     # 两项只控制本轮启动前就绪检查／计时收据结构，不会改变已完成 Job 的
     # 请求或证据字节；空集合表示仍需显式恢复来源授权，但不扩大执行闭集。
     "codex_upgrade_candidate_readiness.py": frozenset(),
@@ -3759,6 +3760,8 @@ CLASSIFICATION_CANDIDATE_REUSE_JOB_IDS = frozenset(
         "candidate-frozen-core",
         "candidate-h1-wire",
         "candidate-images-wire",
+        # 2026-09-18：候选同源源码树上的冻结 go test 日志改由独立零请求 Job 产出。
+        "candidate-trace-test",
         "candidate-ws-handshake-repeat",
     }
 )
@@ -10904,6 +10907,8 @@ _PRODUCER_TOOL_FILES = frozenset(
     {
         "build_compaction_model_catalog.py",
         "capture.py",
+        # 候选同源源码树上执行冻结 go test -json，直接产出内部状态证据字节。
+        "run_candidate_trace_test.sh",
         "run_codex_scenario_target.py",
         "pcap_clienthello.py",
         "scrub_raw_bytes.py",

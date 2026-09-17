@@ -169,7 +169,18 @@ class CandidateCoreCaptureScriptTest(unittest.TestCase):
             rules["scenarios/A15/relay/intervention.jsonl"]["parser"],
             "opaque_bound_source",
         )
-        self.assertNotIn("A15", rules["candidate-go-test.jsonl"]["scenario_ids"])
+        # 2026-09-18：go test 日志改由 candidate-trace-test 独立 Job 产出，
+        # candidate-frozen-core 名下不再登记该规则；A15 仍不接受 Go 静态事实。
+        self.assertNotIn("candidate-go-test.jsonl", rules)
+        trace_entry = next(
+            entry
+            for entry in declaration["entries"]
+            if entry["job_id"] == "candidate-trace-test"
+        )
+        trace_rules = {rule["glob"]: rule for rule in trace_entry["rules"]}
+        self.assertEqual(list(trace_rules), ["candidate-go-test.jsonl"])
+        self.assertNotIn("A15", trace_rules["candidate-go-test.jsonl"]["scenario_ids"])
+        self.assertEqual(trace_rules["candidate-go-test.jsonl"]["parser"], "opaque_bound_source")
 
     def test_restoration_is_fail_closed(self) -> None:
         for expected in (

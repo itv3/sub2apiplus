@@ -22,6 +22,13 @@
       "description": "本次升级 Campaign 的不可变安全 ID。"
     },
     {
+      "name": "campaign_dir",
+      "type": "absolute_path",
+      "required": true,
+      "sensitive": false,
+      "description": "本次 Campaign 目录的绝对路径；候选零请求 Job 由此读取 Campaign 内冻结的构建收据。"
+    },
+    {
       "name": "target_version",
       "type": "string",
       "required": true,
@@ -140,6 +147,13 @@
       "required": true,
       "sensitive": false,
       "description": "专用 ingress API Key 数据库 ID；清单中禁止保存 key 值。"
+    },
+    {
+      "name": "candidate_id",
+      "type": "string",
+      "required": false,
+      "sensitive": false,
+      "description": "候选阶段的 Candidate ID；official 阶段为空。候选 Job 用它定位 Campaign 内该 Candidate 的构建收据。"
     },
     {
       "name": "build_id",
@@ -2269,6 +2283,65 @@
       "covers": [
         "SPEC-CONN-001",
         "SPEC-PROTO-002"
+      ],
+      "required_scenario_receipts": []
+    },
+    {
+      "id": "candidate-trace-test",
+      "phase": "candidate",
+      "suites": [
+        "full"
+      ],
+      "scenario_ids": [
+        "A03",
+        "A04",
+        "A05",
+        "A06",
+        "A07",
+        "A08",
+        "A09",
+        "A10",
+        "A11",
+        "A14"
+      ],
+      "description": "Sub2API 候选同源源码树上的冻结 go test -json 内部状态日志：transport_fallback／connection_lifecycle 等抓包面不存在的事实只能由 candidate_test_trace 从这份日志按冻结映射投影；零 live 请求，源码树只认 Campaign 内冻结的构建收据",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_candidate_trace_test.sh"
+          ],
+          "environment": {
+            "CAMPAIGN_DIR": "{campaign_dir}",
+            "CANDIDATE_ID": "{candidate_id}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "CODEX_VERSION": "{target_version}",
+            "RUN_ID": "{campaign_id}-candidate-trace-test"
+          },
+          "timeout_seconds": 1800
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-candidate-trace-test"
+      ],
+      "covers": [
+        "SPEC-BODY-001",
+        "SPEC-BODY-003",
+        "SPEC-BODY-004",
+        "SPEC-CONN-001",
+        "SPEC-EP-001",
+        "SPEC-EP-002",
+        "SPEC-EP-012",
+        "SPEC-EP-015",
+        "SPEC-EP-021",
+        "SPEC-EP-022",
+        "SPEC-EP-023",
+        "SPEC-HDR-001",
+        "SPEC-HDR-008",
+        "SPEC-PROTO-002",
+        "SPEC-WS-004",
+        "SPEC-WS-005"
       ],
       "required_scenario_receipts": []
     },

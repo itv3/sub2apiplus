@@ -201,6 +201,13 @@ if len(matches) > 1:
 print(matches[0] if matches else "")
 PY
   )
+  # 2026-09-18 起该日志由 VC-5 的 candidate-trace-test Job 在同源源码树上产出并
+  # 以 required 规则登记；bundle 里没有它就是 Job 闭集不完整，必须失败关闭，
+  # 不能再静默跳过结构化 trace。
+  if [[ -z $go_test_artifact ]]; then
+    echo "候选 bundle 缺少 candidate-go-test.jsonl：candidate-trace-test Job 未产出或未被证据目录纳入" >&2
+    exit 1
+  fi
   if [[ -n $go_test_artifact ]]; then
     candidate_source_root=${CANDIDATE_SOURCE_ROOT:?含 candidate-go-test 的候选侧必须提供 CANDIDATE_SOURCE_ROOT}
     [[ $candidate_source_root == /* && -d $candidate_source_root && ! -L $candidate_source_root ]] || {

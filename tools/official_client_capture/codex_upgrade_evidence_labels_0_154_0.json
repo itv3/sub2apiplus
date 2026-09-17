@@ -1140,7 +1140,7 @@
       "side": "candidate",
       "rules": [
         {
-        "root_suffix": "codex-http-s1-a2-run",
+          "root_suffix": "codex-http-s1-a2-run",
           "glob": "mitm/codex-http/codex-http.jsonl",
           "scenario_ids": [
             "A01",
@@ -1160,50 +1160,50 @@
           },
           "rationale": "mitm 面由抓包 CA 解密（ca_mode=custom），是代理重构面：判据凡要求客户端原始字节者均以 labels.ca_mode absent 排除本面；provider 由账号类型（OpenAI OAuth）推出。"
         },
-      {
-        "root_suffix": "codex-http-s2-a1-run",
-        "glob": "mitm/codex-http/codex-http.jsonl",
-        "scenario_ids": [
-          "A01",
-          "A09"
-        ],
-        "kind": "wire_dump",
-        "parser": "opaque_bound_source",
-        "derive": {
-          "parser": "mitm_http_jsonl",
-          "kind": "process_trace"
+        {
+          "root_suffix": "codex-http-s2-a1-run",
+          "glob": "mitm/codex-http/codex-http.jsonl",
+          "scenario_ids": [
+            "A01",
+            "A09"
+          ],
+          "kind": "wire_dump",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "mitm_http_jsonl",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "ca_mode": "custom",
+            "surface": "mitm",
+            "provider": "openai_oauth"
+          },
+          "rationale": "mitm 面由抓包 CA 解密（ca_mode=custom），是代理重构面：判据凡要求客户端原始字节者均以 labels.ca_mode absent 排除本面；provider 由账号类型（OpenAI OAuth）推出。"
         },
-        "labels": {
-          "transport": "http",
-          "ca_mode": "custom",
-          "surface": "mitm",
-          "provider": "openai_oauth"
+        {
+          "root_suffix": "codex-http-s4-a1-run",
+          "glob": "mitm/codex-http/codex-http.jsonl",
+          "scenario_ids": [
+            "A01",
+            "A09"
+          ],
+          "kind": "wire_dump",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "mitm_http_jsonl",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "ca_mode": "custom",
+            "surface": "mitm",
+            "provider": "openai_oauth"
+          },
+          "rationale": "mitm 面由抓包 CA 解密（ca_mode=custom），是代理重构面：判据凡要求客户端原始字节者均以 labels.ca_mode absent 排除本面；provider 由账号类型（OpenAI OAuth）推出。"
         },
-        "rationale": "mitm 面由抓包 CA 解密（ca_mode=custom），是代理重构面：判据凡要求客户端原始字节者均以 labels.ca_mode absent 排除本面；provider 由账号类型（OpenAI OAuth）推出。"
-      },
-      {
-        "root_suffix": "codex-http-s4-a1-run",
-        "glob": "mitm/codex-http/codex-http.jsonl",
-        "scenario_ids": [
-          "A01",
-          "A09"
-        ],
-        "kind": "wire_dump",
-        "parser": "opaque_bound_source",
-        "derive": {
-          "parser": "mitm_http_jsonl",
-          "kind": "process_trace"
-        },
-        "labels": {
-          "transport": "http",
-          "ca_mode": "custom",
-          "surface": "mitm",
-          "provider": "openai_oauth"
-        },
-        "rationale": "mitm 面由抓包 CA 解密（ca_mode=custom），是代理重构面：判据凡要求客户端原始字节者均以 labels.ca_mode absent 排除本面；provider 由账号类型（OpenAI OAuth）推出。"
-      },
-      {
-        "root_suffix": "codex-ws-s1-a1-run",
+        {
+          "root_suffix": "codex-ws-s1-a1-run",
           "glob": "ingress/codex-ws/codex-ingress-http.jsonl",
           "scenario_ids": [
             "A02"
@@ -1219,46 +1219,46 @@
             "ca_mode": "custom",
             "surface": "ingress"
           },
-        "rationale": "ws subject 的 ingress 面 HTTP jsonl（WS 升级前的握手请求），由抓包 CA 解密；ingress 是入站面，同样以 ca_mode=custom 被原始字节判据排除。"
-      },
-      {
-        "root_suffix": "codex-ws-s2-a1-run",
-        "glob": "ingress/codex-ws/codex-ingress-http.jsonl",
-        "scenario_ids": [
-          "A02"
-        ],
-        "kind": "wire_dump",
-        "parser": "opaque_bound_source",
-        "derive": {
-          "parser": "mitm_http_jsonl",
-          "kind": "process_trace"
+          "rationale": "ws subject 的 ingress 面 HTTP jsonl（WS 升级前的握手请求），由抓包 CA 解密；ingress 是入站面，同样以 ca_mode=custom 被原始字节判据排除。"
         },
-        "labels": {
-          "transport": "websocket",
-          "ca_mode": "custom",
-          "surface": "ingress"
+        {
+          "root_suffix": "codex-ws-s2-a1-run",
+          "glob": "ingress/codex-ws/codex-ingress-http.jsonl",
+          "scenario_ids": [
+            "A02"
+          ],
+          "kind": "wire_dump",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "mitm_http_jsonl",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "websocket",
+            "ca_mode": "custom",
+            "surface": "ingress"
+          },
+          "rationale": "ws subject 的 ingress 面 HTTP jsonl（WS 升级前的握手请求），由抓包 CA 解密；ingress 是入站面，同样以 ca_mode=custom 被原始字节判据排除。"
         },
-        "rationale": "ws subject 的 ingress 面 HTTP jsonl（WS 升级前的握手请求），由抓包 CA 解密；ingress 是入站面，同样以 ca_mode=custom 被原始字节判据排除。"
-      },
-      {
-        "root_suffix": "codex-ws-s4-a1-run",
-        "glob": "ingress/codex-ws/codex-ingress-http.jsonl",
-        "scenario_ids": [
-          "A02"
-        ],
-        "kind": "wire_dump",
-        "parser": "opaque_bound_source",
-        "derive": {
-          "parser": "mitm_http_jsonl",
-          "kind": "process_trace"
-        },
-        "labels": {
-          "transport": "websocket",
-          "ca_mode": "custom",
-          "surface": "ingress"
-        },
-        "rationale": "ws subject 的 ingress 面 HTTP jsonl（WS 升级前的握手请求），由抓包 CA 解密；ingress 是入站面，同样以 ca_mode=custom 被原始字节判据排除。"
-      }
+        {
+          "root_suffix": "codex-ws-s4-a1-run",
+          "glob": "ingress/codex-ws/codex-ingress-http.jsonl",
+          "scenario_ids": [
+            "A02"
+          ],
+          "kind": "wire_dump",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "mitm_http_jsonl",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "websocket",
+            "ca_mode": "custom",
+            "surface": "ingress"
+          },
+          "rationale": "ws subject 的 ingress 面 HTTP jsonl（WS 升级前的握手请求），由抓包 CA 解密；ingress 是入站面，同样以 ca_mode=custom 被原始字节判据排除。"
+        }
       ]
     },
     {
@@ -1902,7 +1902,13 @@
             "surface": "relay"
           },
           "rationale": "抓包面与 relay 同一跳，TLS ClientHello 由 pcap 直接解析；服务容器已装抓包 CA（ca_mode=custom），pcap 面才标 ca_mode。"
-        },
+        }
+      ]
+    },
+    {
+      "job_id": "candidate-trace-test",
+      "side": "candidate",
+      "rules": [
         {
           "glob": "candidate-go-test.jsonl",
           "scenario_ids": [
@@ -1923,7 +1929,7 @@
             "surface": "test",
             "provider": "openai_oauth"
           },
-          "rationale": "候选部署源码快照的 go test -json 原始日志。SPEC-PROTO-002 等判据要的 transport_fallback／connection_lifecycle 属内部状态记录，抓包面不存在，只能由 candidate_test_trace 从这份日志按冻结映射投影；A15 已改由真实 Codex 进程与 relay 原件证明，不再接受 Go 静态事实。日志本身以 opaque 登记，由派生出的 trace 反向引用为来源，形成可回放的 provenance。"
+          "rationale": "候选同源源码树上由 candidate-trace-test Job 执行的 go test -json 原始日志。SPEC-PROTO-002 等判据要的 transport_fallback／connection_lifecycle 属内部状态记录，抓包面不存在，只能由 candidate_test_trace 从这份日志按冻结映射投影；A15 已改由真实 Codex 进程与 relay 原件证明，不再接受 Go 静态事实。日志本身以 opaque 登记，由派生出的 trace 反向引用为来源，形成可回放的 provenance。2026-09-18 起该日志不再挂在 candidate-frozen-core 名下：它的直接依赖是候选源码树与 go 工具链，与 wire 采集无关。"
         }
       ]
     },
