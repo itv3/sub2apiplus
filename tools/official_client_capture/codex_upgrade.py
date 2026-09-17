@@ -16669,6 +16669,42 @@ def _copy_successor_binding(
     return {"path": destination_relative, "sha256": expected_sha256}
 
 
+def _candidate_build_projection_campaign_binding_matches(
+    predecessor_manifest: Mapping[str, Any],
+    *,
+    predecessor_manifest_sha256: str,
+    receipt: Mapping[str, Any],
+    candidate_id: str,
+    attempt_id: str,
+) -> bool:
+    """校验 VC-4 投影保留的 Campaign 身份是否属于冻结闭集。"""
+
+    accepted_campaign_bindings = {
+        (
+            predecessor_manifest.get("campaign_id"),
+            predecessor_manifest_sha256,
+        )
+    }
+    if _is_c0154_a15_post_run_seal_source(
+        predecessor_manifest,
+        candidate_id=candidate_id,
+        attempt_id=attempt_id,
+    ):
+        # A15 来源的 VC-4 收据是从原始 v7 Campaign 逐字投影而来。它不能
+        # 为了 metadata-only 后继而改写 Campaign 绑定；这里只额外接受已经
+        # 冻结的原始 v7 ID 与清单摘要，其他历史或同名对象仍全部拒绝。
+        accepted_campaign_bindings.add(
+            (
+                C0154_V7_RECOVERY_SOURCE["campaign_id"],
+                C0154_V7_RECOVERY_SOURCE["campaign_manifest_sha256"],
+            )
+        )
+    return (
+        receipt.get("campaign_id"),
+        receipt.get("campaign_manifest_sha256"),
+    ) in accepted_campaign_bindings
+
+
 def _copy_candidate_build_projection(
     predecessor_dir: Path,
     staging_dir: Path,
@@ -16719,9 +16755,15 @@ def _copy_candidate_build_projection(
     except codex_upgrade_vc_artifacts.VCArtifactError as error:
         raise ConfigurationError(str(error)) from error
     if (
-        receipt.get("campaign_id") != predecessor_manifest.get("campaign_id")
-        or receipt.get("campaign_manifest_sha256")
-        != file_sha256(predecessor_dir / "campaign.json")
+        not _candidate_build_projection_campaign_binding_matches(
+            predecessor_manifest,
+            predecessor_manifest_sha256=file_sha256(
+                predecessor_dir / "campaign.json"
+            ),
+            receipt=receipt,
+            candidate_id=candidate_id,
+            attempt_id=attempt_id,
+        )
         or receipt.get("candidate_id") != candidate_id
         or receipt.get("candidate_purpose")
         != predecessor_manifest.get("campaign_purpose")

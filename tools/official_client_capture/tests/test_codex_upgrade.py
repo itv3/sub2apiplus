@@ -5292,6 +5292,56 @@ class CodexUpgradeTest(unittest.TestCase):
             )
             self.assertEqual(roots, [job_root.resolve()])
 
+    def test_post_run_seal_build_projection_accepts_only_frozen_v7_origin(
+        self,
+    ) -> None:
+        """A15 的 VC-4 投影保留原始 v7 绑定，但不得接受其他历史身份。"""
+
+        a15 = codex_upgrade.C0154_A15_POST_RUN_SEAL_SOURCE
+        v7 = codex_upgrade.C0154_V7_RECOVERY_SOURCE
+        manifest = {
+            "campaign_id": a15["campaign_id"],
+            "target_version": a15["target_version"],
+            "campaign_purpose": "production_replacement",
+            "tool_identity": {"files_sha256": a15["tool_files_sha256"]},
+        }
+        receipt = {
+            "campaign_id": v7["campaign_id"],
+            "campaign_manifest_sha256": v7["campaign_manifest_sha256"],
+        }
+        matches = codex_upgrade._candidate_build_projection_campaign_binding_matches
+        self.assertTrue(
+            matches(
+                manifest,
+                predecessor_manifest_sha256=a15["campaign_manifest_sha256"],
+                receipt=receipt,
+                candidate_id=a15["candidate_id"],
+                attempt_id=a15["attempt_id"],
+            )
+        )
+        drifted = dict(receipt)
+        drifted["campaign_manifest_sha256"] = "0" * 64
+        self.assertFalse(
+            matches(
+                manifest,
+                predecessor_manifest_sha256=a15["campaign_manifest_sha256"],
+                receipt=drifted,
+                candidate_id=a15["candidate_id"],
+                attempt_id=a15["attempt_id"],
+            )
+        )
+        unrelated = copy.deepcopy(manifest)
+        unrelated["campaign_id"] = "unrelated-campaign"
+        self.assertFalse(
+            matches(
+                unrelated,
+                predecessor_manifest_sha256="1" * 64,
+                receipt=receipt,
+                candidate_id=a15["candidate_id"],
+                attempt_id=a15["attempt_id"],
+            )
+        )
+
     def test_classification_candidate_reuse_preview_stops_before_all_writes(
         self,
     ) -> None:
