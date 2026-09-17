@@ -17132,6 +17132,135 @@ def _require_c0154_a15_formal_post_run_seal_source(
     )
 
 
+def _require_c0154_a15_post_run_seal_source_binding(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    *,
+    candidate_id: str,
+    attempt_id: str,
+) -> dict[str, Any]:
+    """从后继的不可变 predecessor 绑定重放 A15 seal 恢复来源。"""
+
+    frozen = C0154_A15_POST_RUN_SEAL_SOURCE
+    predecessor = manifest.get("predecessor")
+    if (
+        manifest.get("target_version") != frozen["target_version"]
+        or not isinstance(predecessor, Mapping)
+        or set(predecessor)
+        != {
+            "campaign_dir",
+            "campaign_id",
+            "campaign_manifest_sha256",
+            "reason",
+        }
+        or predecessor.get("reason") != POST_RUN_SEAL_RECOVERY_REASON
+        or predecessor.get("campaign_dir") != frozen["campaign_dir"]
+        or predecessor.get("campaign_id") != frozen["campaign_id"]
+        or predecessor.get("campaign_manifest_sha256")
+        != frozen["campaign_manifest_sha256"]
+        or candidate_id != frozen["candidate_id"]
+        or attempt_id != frozen["attempt_id"]
+    ):
+        raise ConfigurationError("A15 seal 恢复的直接前序绑定不匹配。")
+    predecessor_dir = Path(str(predecessor["campaign_dir"]))
+    if (
+        campaign_dir.exists()
+        and predecessor_dir == campaign_dir.resolve(strict=True)
+    ):
+        raise ConfigurationError("A15 seal 恢复的直接前序路径不可信。")
+    predecessor_manifest = _read_json(
+        predecessor_dir / "campaign.json",
+        "A15 seal 恢复前序清单",
+    )
+    return _validated_c0154_a15_post_run_seal_source_scope(
+        predecessor_dir,
+        predecessor_manifest,
+        candidate_id=candidate_id,
+        attempt_id=attempt_id,
+    )
+
+
+def _published_c0154_a15_post_run_seal_coordinates(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+) -> tuple[str, str]:
+    """从已发布后继的 v6 导入收据重放 A15 Candidate／attempt。"""
+
+    import_path = campaign_dir / "predecessor-import.json"
+    if import_path.is_symlink() or not import_path.is_file():
+        raise ConfigurationError("A15 seal 恢复缺少可信前序导入收据。")
+    imported = _read_json(import_path, "A15 seal 恢复前序导入收据")
+    expected_fields = {
+        "schema_version",
+        "created_at_utc",
+        "reason",
+        "successor_campaign_id",
+        "successor_campaign_manifest_sha256",
+        "predecessor_campaign",
+        "stages",
+        "copied_files",
+        "configuration_transition",
+        "abandoned_candidate_attempt",
+        "job_rehearsal_transition",
+        "recovery_control_transition",
+        "receipt_digest",
+    }
+    unsigned = dict(imported)
+    receipt_digest = unsigned.pop("receipt_digest", None)
+    predecessor = manifest.get("predecessor")
+    predecessor_binding = imported.get("predecessor_campaign")
+    abandoned = imported.get("abandoned_candidate_attempt")
+    frozen = C0154_A15_POST_RUN_SEAL_SOURCE
+    expected_abandoned = {
+        "candidate_id": frozen["candidate_id"],
+        "attempt_id": frozen["attempt_id"],
+        "path": (
+            f"candidates/{frozen['candidate_id']}/attempts/"
+            f"{frozen['attempt_id']}/attempt.json"
+        ),
+        "sha256": frozen["attempt_sha256"],
+        "attempt_digest": frozen["attempt_digest"],
+        "identity_sha256": frozen["identity_sha256"],
+        "status": "awaiting_receipts",
+    }
+    manifest_path = campaign_dir / "campaign.json"
+    if (
+        set(imported) != expected_fields
+        or imported.get("schema_version") != PREDECESSOR_RECOVERY_IMPORT_SCHEMA
+        or not _is_rfc3339_timestamp(imported.get("created_at_utc"))
+        or imported.get("reason") != POST_RUN_SEAL_RECOVERY_REASON
+        or imported.get("successor_campaign_id") != manifest.get("campaign_id")
+        or manifest_path.is_symlink()
+        or not manifest_path.is_file()
+        or imported.get("successor_campaign_manifest_sha256")
+        != file_sha256(manifest_path)
+        or not SHA256_RE.fullmatch(str(receipt_digest or ""))
+        or _fingerprint(unsigned) != receipt_digest
+        or not isinstance(predecessor_binding, Mapping)
+        or predecessor
+        != {
+            **dict(predecessor_binding),
+            "reason": POST_RUN_SEAL_RECOVERY_REASON,
+        }
+        or abandoned != expected_abandoned
+        or not isinstance(imported.get("stages"), Mapping)
+        or not isinstance(imported.get("copied_files"), list)
+        or not isinstance(imported.get("configuration_transition"), Mapping)
+        or not isinstance(imported.get("job_rehearsal_transition"), Mapping)
+        or not isinstance(imported.get("recovery_control_transition"), Mapping)
+    ):
+        raise ConfigurationError("A15 seal 恢复的导入身份或自摘要漂移。")
+    candidate_id = str(frozen["candidate_id"])
+    attempt_id = str(frozen["attempt_id"])
+    _require_c0154_a15_post_run_seal_source_binding(
+        campaign_dir,
+        manifest,
+        candidate_id=candidate_id,
+        attempt_id=attempt_id,
+    )
+    return candidate_id, attempt_id
+
+
 def _is_c0154_v7_failed_core_source(
     predecessor_manifest: Mapping[str, Any],
     *,
@@ -21538,23 +21667,27 @@ def _recovery_rehearsal_target_scenario_override(
             "恢复 preflight 必须使用当前受管版本化 target 场景原文件。"
         )
     predecessor = manifest.get("predecessor")
-    c0154_v7_source_verified = False
+    c0154_metadata_source_verified = False
     failed_job_recovery = bool(
         isinstance(predecessor, Mapping)
         and predecessor.get("reason") == "candidate_failed_job_tool_recovery"
+    )
+    post_run_seal_recovery = bool(
+        isinstance(predecessor, Mapping)
+        and predecessor.get("reason") == POST_RUN_SEAL_RECOVERY_REASON
     )
     explicit_candidate = recovery_candidate_id is not None
     explicit_attempt = recovery_attempt_id is not None
     if explicit_candidate != explicit_attempt:
         raise ConfigurationError(
-            "v7 失败 Job 恢复的创建来源必须同时提供 Candidate 与 attempt。"
+            "恢复的创建来源必须同时提供 Candidate 与 attempt。"
         )
     explicit_creation_source = explicit_candidate and explicit_attempt
     if explicit_creation_source and (
         not isinstance(recovery_candidate_id, str)
         or not isinstance(recovery_attempt_id, str)
     ):
-        raise ConfigurationError("v7 失败 Job 恢复的创建来源坐标非法。")
+        raise ConfigurationError("恢复的创建来源坐标非法。")
     import_path = campaign_dir / "predecessor-import.json"
     published_runtime_source = import_path.exists() or import_path.is_symlink()
     if failed_job_recovery:
@@ -21578,10 +21711,32 @@ def _recovery_rehearsal_target_scenario_override(
                     manifest,
                 )
             )
-        c0154_v7_source_verified = True
+        c0154_metadata_source_verified = True
+    elif post_run_seal_recovery:
+        if explicit_creation_source == published_runtime_source:
+            raise ConfigurationError(
+                "A15 seal 恢复必须且只能选择创建来源或已发布导入收据之一。"
+            )
+        if explicit_creation_source:
+            assert isinstance(recovery_candidate_id, str)
+            assert isinstance(recovery_attempt_id, str)
+            _require_c0154_a15_post_run_seal_source_binding(
+                campaign_dir,
+                manifest,
+                candidate_id=recovery_candidate_id,
+                attempt_id=recovery_attempt_id,
+            )
+        else:
+            recovery_candidate_id, recovery_attempt_id = (
+                _published_c0154_a15_post_run_seal_coordinates(
+                    campaign_dir,
+                    manifest,
+                )
+            )
+        c0154_metadata_source_verified = True
     elif explicit_creation_source:
         raise ConfigurationError(
-            "Candidate／attempt 创建来源只允许 v7 失败 Job 恢复使用。"
+            "Candidate／attempt 创建来源只允许 v7 失败 Job 或 A15 seal 恢复使用。"
         )
     if frozen == managed:
         return None
@@ -21612,14 +21767,14 @@ def _recovery_rehearsal_target_scenario_override(
         raise ConfigurationError("Formal 历史 target 场景缺少 source_spec。")
     normalized_source["sha256"] = managed_binding.source_spec_sha256
     if normalized_frozen != managed:
-        c0154_v7_metadata_only_drift = bool(
-            c0154_v7_source_verified
+        c0154_metadata_only_drift = bool(
+            c0154_metadata_source_verified
             and isinstance(recovery_candidate_id, str)
             and isinstance(recovery_attempt_id, str)
             and _scenario_job_execution_contract(frozen)
             == _scenario_job_execution_contract(managed)
         )
-        if c0154_v7_metadata_only_drift:
+        if c0154_metadata_only_drift:
             return managed
         raise ConfigurationError(
             "Formal 历史 target 场景除 source_spec.sha256 外发生变化。"
@@ -21683,7 +21838,10 @@ def _successor_rehearsal_target_scenario_override(
     else:
         return None
     recovery_coordinates: dict[str, str | None] = {}
-    if arguments.reason == "candidate_failed_job_tool_recovery":
+    if arguments.reason in {
+        "candidate_failed_job_tool_recovery",
+        POST_RUN_SEAL_RECOVERY_REASON,
+    }:
         recovery_coordinates = {
             "recovery_candidate_id": getattr(
                 arguments,

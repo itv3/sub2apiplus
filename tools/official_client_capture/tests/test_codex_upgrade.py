@@ -682,6 +682,109 @@ class CodexUpgradeTest(unittest.TestCase):
                     recovery_attempt_id=source["attempt_id"],
                 )
 
+    def test_a15_post_run_seal_allows_only_non_execution_scenario_drift(
+        self,
+    ) -> None:
+        """A15 seal 后继只可承接执行合同完全相同的场景元数据变化。"""
+
+        managed_path = Path(codex_upgrade.__file__).with_name(
+            "codex_upgrade_scenarios_0_154_0.json"
+        )
+        managed = json.loads(managed_path.read_text(encoding="utf-8"))
+        historical = json.loads(json.dumps(managed, ensure_ascii=False))
+        historical["source_spec"]["sha256"] = "0" * 64
+        historical["capture_jobs"][-1]["description"] = "A15 历史说明"
+        source = codex_upgrade.C0154_A15_POST_RUN_SEAL_SOURCE
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            formal_dir = root / "formal"
+            preflight_dir = root / "preflight"
+            formal_path = formal_dir / "inputs" / "target.json"
+            preflight_path = preflight_dir / "inputs" / "target.json"
+            self._write_json(formal_path, historical)
+            self._write_json(preflight_path, managed)
+            formal_manifest = {
+                "target_version": source["target_version"],
+                "predecessor": {
+                    "campaign_dir": source["campaign_dir"],
+                    "campaign_id": source["campaign_id"],
+                    "campaign_manifest_sha256": source[
+                        "campaign_manifest_sha256"
+                    ],
+                    "reason": codex_upgrade.POST_RUN_SEAL_RECOVERY_REASON,
+                },
+                "inputs": {
+                    "target_discovery_scenarios": self._binding(
+                        formal_path,
+                        "inputs/target.json",
+                    )
+                },
+            }
+            preflight_manifest = {
+                "target_version": source["target_version"],
+                "inputs": {
+                    "target_discovery_scenarios": self._binding(
+                        preflight_path,
+                        "inputs/target.json",
+                    )
+                },
+            }
+
+            with mock.patch.object(
+                codex_upgrade,
+                "_require_c0154_a15_post_run_seal_source_binding",
+                return_value={"source_attempt": {}},
+            ) as source_guard:
+                self.assertEqual(
+                    codex_upgrade._recovery_rehearsal_target_scenario_override(
+                        formal_dir,
+                        formal_manifest,
+                        preflight_dir,
+                        preflight_manifest,
+                        recovery_candidate_id=source["candidate_id"],
+                        recovery_attempt_id=source["attempt_id"],
+                    ),
+                    managed,
+                )
+                source_guard.assert_called_once_with(
+                    formal_dir,
+                    formal_manifest,
+                    candidate_id=source["candidate_id"],
+                    attempt_id=source["attempt_id"],
+                )
+
+            changed_execution = json.loads(
+                json.dumps(historical, ensure_ascii=False)
+            )
+            changed_execution["capture_jobs"][-1]["required"] = not bool(
+                changed_execution["capture_jobs"][-1]["required"]
+            )
+            self._write_json(formal_path, changed_execution)
+            formal_manifest["inputs"]["target_discovery_scenarios"] = self._binding(
+                formal_path,
+                "inputs/target.json",
+            )
+            with (
+                mock.patch.object(
+                    codex_upgrade,
+                    "_require_c0154_a15_post_run_seal_source_binding",
+                    return_value={"source_attempt": {}},
+                ),
+                self.assertRaisesRegex(
+                    codex_upgrade.ConfigurationError,
+                    "除 source_spec.sha256 外发生变化",
+                ),
+            ):
+                codex_upgrade._recovery_rehearsal_target_scenario_override(
+                    formal_dir,
+                    formal_manifest,
+                    preflight_dir,
+                    preflight_manifest,
+                    recovery_candidate_id=source["candidate_id"],
+                    recovery_attempt_id=source["attempt_id"],
+                )
+
     def test_v7_failed_job_recovery_allows_registered_timing_schema_rebase(
         self,
     ) -> None:
@@ -970,6 +1073,52 @@ class CodexUpgradeTest(unittest.TestCase):
             recovery_attempt_id=codex_upgrade.C0154_V7_RECOVERY_SOURCE[
                 "attempt_id"
             ],
+        )
+
+    def test_post_run_seal_recovery_uses_current_preflight_scenario(self) -> None:
+        """A15 seal 正式恢复必须把冻结来源坐标传给场景兼容门禁。"""
+
+        source = codex_upgrade.C0154_A15_POST_RUN_SEAL_SOURCE
+        arguments = argparse.Namespace(
+            reason=codex_upgrade.POST_RUN_SEAL_RECOVERY_REASON,
+            job_rehearsal_root=Path("/control/job-rehearsal"),
+            job_rehearsal_receipt=Path("receipt.json"),
+            predecessor_candidate_id=source["candidate_id"],
+            predecessor_attempt_id=source["attempt_id"],
+        )
+        preflight_dir = Path("/control/preflight")
+        preflight_manifest = {"campaign_mode": "preflight_only"}
+        current_scenario = {"codex_version": "0.154.0"}
+        manifest = {"target_version": "0.154.0"}
+        transition = {"reason": "stopped_to_active"}
+        with (
+            mock.patch.object(
+                codex_upgrade,
+                "_assert_recovery_rehearsal_uses_successor_controls",
+                return_value=(preflight_dir, preflight_manifest),
+            ),
+            mock.patch.object(
+                codex_upgrade,
+                "_recovery_rehearsal_target_scenario_override",
+                return_value=current_scenario,
+            ) as scenario,
+        ):
+            actual = codex_upgrade._successor_rehearsal_target_scenario_override(
+                arguments,
+                Path("/campaign/.successor-staging"),
+                manifest,
+                reclassification_successor=False,
+                recovery_control_transition=transition,
+            )
+
+        self.assertEqual(actual, current_scenario)
+        scenario.assert_called_once_with(
+            Path("/campaign/.successor-staging"),
+            manifest,
+            preflight_dir,
+            preflight_manifest,
+            recovery_candidate_id=source["candidate_id"],
+            recovery_attempt_id=source["attempt_id"],
         )
 
     def test_classification_noop_preflight_does_not_replace_successor_controls(
