@@ -13634,6 +13634,205 @@ class CodexUpgradeTest(unittest.TestCase):
             )
             self.assertFalse((successor_dir / "official" / "attempts").exists())
 
+    def test_0154_classification_successor_rebuilds_official_reuse_vc_chain(
+        self,
+    ) -> None:
+        """0.154 分类纠正后继不得继承前序 VC 坐标或 VC-2+ 制品。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project_ledger_fixture.install_fixture_ledger(root)
+            arguments = self._campaign_arguments(
+                root / "predecessor",
+                campaign_id="upgrade-0154-classification-predecessor",
+                baseline_version="0.151.0",
+                target_version="0.154.0",
+                model="gpt-5.5",
+                lite_model="gpt-6-astra",
+            )
+            predecessor_manifest = codex_upgrade.create_campaign(arguments)
+            predecessor_dir = arguments.campaign_dir
+            timing_ledger = Path(
+                predecessor_manifest["control_receipts"]["upgrade_timing"][
+                    "ledger_dir"
+                ]
+            )
+            codex_upgrade_timing_ledger.append_event(
+                timing_ledger,
+                event_id="classification-successor-complete-vc0",
+                phase="VC-0",
+                event_type="stage_completed",
+            )
+            codex_upgrade_timing_ledger.append_event(
+                timing_ledger,
+                event_id="classification-successor-start-vc1",
+                phase="VC-1",
+                event_type="stage_started",
+            )
+            self._seal_official_stage(
+                root / "predecessor",
+                predecessor_dir,
+                predecessor_manifest,
+            )
+            codex_upgrade_timing_ledger.append_event(
+                timing_ledger,
+                event_id="classification-successor-complete-vc1",
+                phase="VC-1",
+                event_type="stage_completed",
+            )
+            codex_upgrade_timing_ledger.append_event(
+                timing_ledger,
+                event_id="classification-successor-start-vc2",
+                phase="VC-2",
+                event_type="stage_started",
+            )
+
+            rules = tuple(predecessor_manifest["required_rules"])
+            migration_path = root / "rule-migration-0154.json"
+            self._write_json(
+                migration_path,
+                {
+                    "schema_version": codex_upgrade.MIGRATION_SCHEMA,
+                    "baseline_version": "0.151.0",
+                    "target_version": "0.154.0",
+                    "status": "approved",
+                    "entries": [
+                        {
+                            "baseline_rule": rule,
+                            "target_rule": rule,
+                            "classification": "inherit",
+                            "rationale": "测试分类事实纠正后继",
+                            "evidence_refs": ["official-diff.json"],
+                        }
+                        for rule in rules
+                    ],
+                    "discovery_classifications": [],
+                },
+            )
+            catalog_root = (
+                Path(__file__).resolve().parents[3]
+                / "docs/egress/lifecycle/codex-0154-candidate/catalog-stage/"
+                "catalogdata/runtime/profiles"
+            )
+            active_profile = (
+                catalog_root
+                / "0.151.0/dbc65378c80a2ad843ce1ba6253a2e47f0dd5d8bc812bb536a2d24ddb7a59e39.json"
+            )
+            target_profile_payload = json.loads(
+                (
+                    catalog_root
+                    / "0.154.0/33a537a32e6f059bb178b7af581de5c161a3091ed972b4a8aec215cbf977b563.json"
+                ).read_text(encoding="utf-8")
+            )
+            profile_path = root / "profile-0154.json"
+            self._write_json(
+                profile_path,
+                {
+                    "schema_version": codex_upgrade.PROFILE_SCHEMA,
+                    "codex_version": "0.154.0",
+                    "profile_id": "codex-0.154.0-test-v1",
+                    "profile_digest": target_profile_payload["Digest"],
+                    "profile_payload": target_profile_payload,
+                    "profile_payload_sha256": codex_upgrade._fingerprint(
+                        target_profile_payload
+                    ),
+                    "status": "approved",
+                },
+            )
+            assertion_profile = root / "assertion-profile-0154.json"
+            self._write_assertion_profile(
+                assertion_profile,
+                rules,
+                version="0.154.0",
+            )
+            classification_arguments = {
+                "target_rule_manifest": root / "predecessor/target-rules.json",
+                "migration_manifest": migration_path,
+                "scenario_manifest": root / "predecessor/target-scenarios.json",
+                "profile_manifest": profile_path,
+                "assertion_profile_manifest": assertion_profile,
+                "active_profile": active_profile,
+                "profile_patch_manifest": (
+                    Path(__file__).resolve().parents[1]
+                    / "profile_rule_patches_0_154_0.json"
+                ),
+            }
+            preview = codex_upgrade.classify_campaign(
+                predecessor_dir,
+                **classification_arguments,
+            )
+            approved = codex_upgrade.classify_campaign(
+                predecessor_dir,
+                **classification_arguments,
+                approve_manifest_sha256=preview["joint_manifest_sha256"],
+            )
+            self.assertEqual(approved["status"], "complete")
+            self.assertTrue(
+                (predecessor_dir / "control/vc/vc-2-checkpoint.json").is_file()
+            )
+
+            successor_dir = root / "successor"
+            successor_arguments = codex_upgrade._build_parser().parse_args(
+                [
+                    "successor",
+                    "--predecessor-campaign-dir",
+                    str(predecessor_dir),
+                    "--campaign-dir",
+                    str(successor_dir),
+                    "--campaign-id",
+                    "upgrade-0154-classification-successor",
+                    "--codex-account-id",
+                    "93",
+                    "--reason",
+                    "classification_fact_correction",
+                ]
+            )
+            result = codex_upgrade.create_successor_campaign(successor_arguments)
+            self.assertEqual(result["status"], "official_sealed")
+            self.assertEqual(result["executed_job_count"], 0)
+            self.assertEqual(result["live_request_count"], 0)
+
+            manifest = codex_upgrade.load_campaign_manifest(successor_dir)
+            predecessor_plan = codex_upgrade._vc_campaign_plan(
+                predecessor_dir,
+                predecessor_manifest,
+            )
+            plan = codex_upgrade._vc_campaign_plan(successor_dir, manifest)
+            self.assertEqual(
+                plan["campaign_id"],
+                "upgrade-0154-classification-successor",
+            )
+            self.assertNotEqual(plan["plan_sha256"], predecessor_plan["plan_sha256"])
+            control = manifest["vc_control"]
+            batch = json.loads(
+                (successor_dir / control["first_formal_batch"]["path"]).read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(batch["execute_item_ids"], [])
+            self.assertEqual(batch["reuse_item_ids"], ["official-test"])
+            self.assertEqual(batch["actions"], [])
+            _, checkpoint = codex_upgrade._replay_vc_checkpoint(
+                successor_dir,
+                plan,
+                "VC-1",
+            )
+            self.assertEqual(checkpoint["execute_item_ids"], [])
+            self.assertEqual(checkpoint["reuse_item_ids"], ["official-test"])
+            self.assertEqual(
+                checkpoint["metrics"],
+                {"live_request_count": 0, "scanned_bytes": 0},
+            )
+            self.assertEqual(
+                sorted(
+                    path.name
+                    for path in (successor_dir / "control/vc").glob(
+                        "vc-*-checkpoint.json"
+                    )
+                ),
+                ["vc-0-checkpoint.json", "vc-1-checkpoint.json"],
+            )
+
     # ------------------------------------------------------------------
     # A3a：官方证据从 awaiting_receipts 前序 attempt 只读导入
     # ------------------------------------------------------------------

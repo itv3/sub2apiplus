@@ -321,6 +321,13 @@ RECLASSIFICATION_SUCCESSOR_REASONS = frozenset(
 SEALED_STAGE_RECOVERY_SUCCESSOR_REASONS = frozenset(
     {"sealed_stage_control_recovery"}
 )
+# 这些后继都只承接已经封存的 official 阶段，不承接旧分类事实。对 0.154.0
+# 起的完整 VC 链而言，它们必须以同一语义重建新 Campaign 的 VC-0，并把
+# official Job 编译为 VC-1 reuse；不能继承绑定前序 Campaign 的 vc_control。
+OFFICIAL_STAGE_REUSE_SUCCESSOR_REASONS = frozenset(
+    RECLASSIFICATION_SUCCESSOR_REASONS
+    | SEALED_STAGE_RECOVERY_SUCCESSOR_REASONS
+)
 RUNTIME_CODEX_BINARY_JOB_IDS = frozenset(
     {
         "candidate-core-direct",
@@ -12685,7 +12692,8 @@ def _validate_initial_vc_control_artifacts(
             predecessor = manifest.get("predecessor")
             reuses_official_stage = bool(
                 isinstance(predecessor, Mapping)
-                and predecessor.get("reason") == OFFICIAL_EVIDENCE_REUSE_REASON
+                and predecessor.get("reason")
+                in OFFICIAL_STAGE_REUSE_SUCCESSOR_REASONS
             )
             expected_execute_ids = [] if reuses_official_stage else official_job_ids
             expected_reuse_ids = official_job_ids if reuses_official_stage else []
@@ -15681,7 +15689,7 @@ def _bootstrap_noop_first_batch(
 ) -> dict[str, Any] | None:
     """只读导入的 Campaign 在派发第 2 批前，先把零请求 no-op 首批跑成父 run 历史。
 
-    ``reuse-official-evidence`` 只生成“全部 official Job 为 reuse”的 VC-1 no-op 批次
+    official-only 后继只生成“全部 official Job 为 reuse”的 VC-1 no-op 批次
     与 checkpoint，不派发父 run；而监督器要求同一 state-dir 的 batch_sequence 从 1
     连续递增。没有这一步，恢复 Campaign 的 VC-2 首批会被“禁止跳批”拒绝。
     首批含真实动作（普通 Formal 的 capture-official）时不代跑，沿用原拒绝语义。
@@ -22323,12 +22331,12 @@ def _create_successor_campaign_unadmitted(arguments: argparse.Namespace) -> dict
             historical_source_spec_binding=historical_source_spec_binding,
         )
         if (
-            arguments.reason == OFFICIAL_EVIDENCE_REUSE_REASON
+            official_only_successor
             and _requires_complete_vc_artifacts(successor_manifest)
         ):
             # 0.154.0 起不能继承前序 vc_control：其中的 Campaign ID、总计划
-            # 摘要和 checkpoint 都属于前序。官方证据复用是一个零请求的
-            # Campaign 引导命令，因此在新目录重建 VC-0，并把全部 official
+            # 摘要和 checkpoint 都属于前序。official-only 后继是一个零请求的
+            # Campaign 引导过程，因此在新目录重建 VC-0，并把全部 official
             # Job 作为 reuse 编译到首个 VC-1 no-op 批次。
             vc_arguments = argparse.Namespace(
                 campaign_id=successor_manifest["campaign_id"],
@@ -22518,7 +22526,7 @@ def _create_successor_campaign_unadmitted(arguments: argparse.Namespace) -> dict
                 _successor_manifest=successor_manifest,
             )
             if (
-                arguments.reason == OFFICIAL_EVIDENCE_REUSE_REASON
+                official_only_successor
                 and _requires_complete_vc_artifacts(successor_manifest)
             ):
                 official_job_ids = sorted(
@@ -22603,7 +22611,7 @@ def _create_successor_campaign_unadmitted(arguments: argparse.Namespace) -> dict
             if (
                 sealed_stage_recovery_successor
                 or control_replacement_successor
-                or arguments.reason == OFFICIAL_EVIDENCE_REUSE_REASON
+                or arguments.reason in OFFICIAL_STAGE_REUSE_SUCCESSOR_REASONS
             )
             else None
         ),
@@ -22612,7 +22620,7 @@ def _create_successor_campaign_unadmitted(arguments: argparse.Namespace) -> dict
             if (
                 sealed_stage_recovery_successor
                 or control_replacement_successor
-                or arguments.reason == OFFICIAL_EVIDENCE_REUSE_REASON
+                or arguments.reason in OFFICIAL_STAGE_REUSE_SUCCESSOR_REASONS
             )
             else None
         ),
@@ -22621,7 +22629,7 @@ def _create_successor_campaign_unadmitted(arguments: argparse.Namespace) -> dict
             if (
                 sealed_stage_recovery_successor
                 or control_replacement_successor
-                or arguments.reason == OFFICIAL_EVIDENCE_REUSE_REASON
+                or arguments.reason in OFFICIAL_STAGE_REUSE_SUCCESSOR_REASONS
             )
             else None
         ),
