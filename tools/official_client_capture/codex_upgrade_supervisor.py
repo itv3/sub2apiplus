@@ -27,7 +27,7 @@ import tempfile
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Iterator, Mapping, Sequence
 
 if __package__ in {None, ""}:
@@ -4443,6 +4443,118 @@ def _validate_vc1_assertion_seal_gate(
         raise SupervisorError("新 VC-1 批次必须连续声明 assertion bundle 与 seal preview。")
 
 
+def _candidate_seal_chain_coordinates(
+    action: Mapping[str, Any],
+) -> tuple[str, Path, str, str] | None:
+    """识别候选 seal 链动作并解析其绑定坐标。
+
+    返回 ``(kind, campaign_dir, candidate_id, attempt_id)``；``kind`` 是
+    ``assertion``／``checkpoint``／``preview``／``approve``。不属于候选 seal 链
+    的动作返回 None。assertion 动作必须采用与 VC-1 相同的
+    ``/usr/bin/env KEY=value …`` 形式，``bash -c`` 拼接的坐标无法解析，一律拒绝。
+    """
+
+    command = action.get("command")
+    if not isinstance(command, list) or not all(isinstance(value, str) for value in command):
+        return None
+    # ``bash -c "<脚本>"`` 把坐标藏在一整段字符串里，门禁无法解析也不能放行：
+    # 只要脚本文本提到候选 seal 链的入口，就失败关闭，要求改写为 env 形式。
+    if (
+        len(command) >= 3
+        and PurePosixPath(command[0]).name in {"bash", "sh"}
+        and command[1] == "-c"
+        and any(
+            marker in " ".join(command[2:])
+            for marker in ("prepare_assertion_bundle.sh", "capture-candidate")
+        )
+    ):
+        raise SupervisorError(
+            "VC-5 seal 链动作不得用 bash -c 拼接坐标；请改为 "
+            "/usr/bin/env CAMPAIGN_DIR=… ATTEMPT_ID=… SIDE=candidate CANDIDATE_ID=… 形式。"
+        )
+    if any(PurePosixPath(token).name == "prepare_assertion_bundle.sh" for token in command):
+        sides = [token for token in command if token.startswith("SIDE=")]
+        if sides == ["SIDE=official"]:
+            return None
+        if sides != ["SIDE=candidate"]:
+            raise SupervisorError("VC-5 assertion 动作必须唯一声明 SIDE=candidate。")
+        campaign_dir = Path(_command_assignment(command, "CAMPAIGN_DIR"))
+        attempt_id = _safe_id(_command_assignment(command, "ATTEMPT_ID"), "ATTEMPT_ID")
+        candidate_id = _safe_id(_command_assignment(command, "CANDIDATE_ID"), "CANDIDATE_ID")
+        if not campaign_dir.is_absolute() or campaign_dir.is_symlink():
+            raise SupervisorError("VC-5 assertion 只能绑定绝对 Campaign。")
+        return "assertion", campaign_dir, candidate_id, attempt_id
+    if "capture-candidate" in command and "seal" in command:
+        campaign_dir = Path(_command_flag(command, "--campaign-dir"))
+        attempt_id = _safe_id(_command_flag(command, "--attempt-id"), "--attempt-id")
+        candidate_id = _safe_id(_command_flag(command, "--candidate-id"), "--candidate-id")
+        if not campaign_dir.is_absolute() or campaign_dir.is_symlink():
+            raise SupervisorError("VC-5 seal 只能绑定绝对 Campaign。")
+        if any(token == "--approve-seal-sha256" or token.startswith("--approve-seal-sha256=") for token in command):
+            kind = "approve"
+        elif "--capture-manifest" in command:
+            kind = "preview"
+        else:
+            kind = "checkpoint"
+        return kind, campaign_dir, candidate_id, attempt_id
+    return None
+
+
+def _validate_vc5_seal_rehearsal_gate(
+    *,
+    schema_version: str,
+    campaign_id: str,
+    phase: str,
+    actions: Sequence[Mapping[str, Any]],
+    require_bound_files: bool,
+) -> None:
+    """VC-5 候选 seal 零请求链派发前必须持有匹配的隔离预演收据。
+
+    2026-09-18 起：assertion bundle、seal preview、seal approve 任一动作进入批次，
+    都要求同一 Campaign／candidate／attempt 在当前工具身份下已经用
+    ``rehearse-candidate-seal`` 在 OverlayFS 副本上跑通整条链（Framework §5.1.2：
+    修复必须先在冻结夹具上跑通到最终阶段）。只含 Kilo 检查点的批次不受此门禁。
+    """
+
+    if schema_version != CAMPAIGN_RUN_BATCHED_SCHEMA or phase != "VC-5":
+        return
+    chain: list[tuple[str, Path, str, str]] = []
+    for action in actions:
+        coordinates = _candidate_seal_chain_coordinates(action)
+        if coordinates is not None:
+            chain.append(coordinates)
+    gated = [item for item in chain if item[0] in {"assertion", "preview", "approve"}]
+    if not gated:
+        return
+    coordinate_set = {item[1:] for item in chain}
+    if len(coordinate_set) != 1:
+        raise SupervisorError("VC-5 seal 链动作没有绑定同一 Campaign／candidate／attempt。")
+    campaign_dir, candidate_id, attempt_id = next(iter(coordinate_set))
+    if not require_bound_files:
+        return
+    try:
+        import codex_upgrade_seal_rehearsal as seal_rehearsal
+    except ImportError:  # pragma: no cover
+        from . import codex_upgrade_seal_rehearsal as seal_rehearsal
+    try:
+        resolved = campaign_dir.resolve(strict=True)
+    except OSError as error:
+        raise SupervisorError("VC-5 seal 门禁的 Campaign 不存在。") from error
+    campaign = _read_json(resolved / "campaign.json")
+    if campaign.get("campaign_id") != campaign_id:
+        raise SupervisorError("VC-5 seal 门禁的 Campaign 身份不一致。")
+    try:
+        seal_rehearsal.verify_rehearsal_for_batch(
+            resolved,
+            campaign_id=campaign_id,
+            candidate_id=candidate_id,
+            attempt_id=attempt_id,
+            actions=actions,
+        )
+    except seal_rehearsal.SealRehearsalError as error:
+        raise SupervisorError(f"VC-5 seal 预演门禁未通过：{error}") from error
+
+
 def _campaign_run_manifest(
     path: Path,
     *,
@@ -4734,6 +4846,13 @@ def _campaign_run_manifest(
             normalized_action["item_ids"] = list(item_ids)
         normalized_actions.append(normalized_action)
     _validate_vc1_assertion_seal_gate(
+        schema_version=str(schema_version),
+        campaign_id=campaign_id,
+        phase=phase,
+        actions=normalized_actions,
+        require_bound_files=require_bound_files,
+    )
+    _validate_vc5_seal_rehearsal_gate(
         schema_version=str(schema_version),
         campaign_id=campaign_id,
         phase=phase,

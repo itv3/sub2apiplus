@@ -4893,6 +4893,9 @@ def _mutable_command_coordinates(
         # B0 两个 reconciler 自持 Campaign 排他锁与账本目录锁，不建 CampaignLease。
         "reconcile-supervisor-run",
         "reconcile-attempt",
+        # seal 预演在私有 mount namespace 的 OverlayFS 副本上执行，正式目录只读；
+        # 收据写入 control/seal-rehearsal，不触碰 attempt 与账本。
+        "rehearse-candidate-seal",
         "",
     }:
         return None
@@ -9721,6 +9724,42 @@ def _build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="部署收据所在控制根；默认 <宿主数据根>/control。",
     )
+    rehearse_seal = subparsers.add_parser(
+        "rehearse-candidate-seal",
+        help=(
+            "在私有 mount namespace 的 OverlayFS 副本上按正式动作清单跑通 Candidate seal "
+            "零请求后处理链直到最终决策，写预演收据；正式 seal 批次派发前必须持有匹配收据"
+        ),
+    )
+    add_campaign_reference(rehearse_seal)
+    rehearse_seal.add_argument("--candidate-id", required=True)
+    rehearse_seal.add_argument("--attempt-id", required=True)
+    rehearse_seal.add_argument(
+        "--action-plan",
+        type=Path,
+        required=True,
+        help="codex-upgrade-vc-action-plan/v1；必须与随后正式派发的 seal 批次是同一份",
+    )
+    rehearse_seal.add_argument(
+        "--data-root",
+        type=Path,
+        default=Path("/root/docker/capture-cli/data"),
+        help="被 OverlayFS 整体覆盖的宿主数据根",
+    )
+    rehearse_seal.add_argument(
+        "--alias-root",
+        type=Path,
+        action="append",
+        default=[],
+        help="数据根的 bind 别名（如 /root/oauth-capture），namespace 内重新 bind 到 overlay",
+    )
+    rehearse_seal.add_argument("--upper-root", type=Path, required=True)
+    rehearse_seal.add_argument(
+        "--skip-action",
+        action="append",
+        default=None,
+        help="跳过的 live 动作 ID；默认只跳过 candidate-seal-checkpoint",
+    )
     reconcile_attempt = subparsers.add_parser(
         "reconcile-attempt",
         help=(
@@ -10491,6 +10530,9 @@ _CONTROL_PLANE_TOOL_FILES = frozenset(
         "codex_upgrade_pre_a3_certification.py",
         # 零请求 smoke 只在 staging 夹具上跑新命令并写收据。
         "codex_upgrade_zero_request_smoke.py",
+        # Candidate seal 隔离预演：在 OverlayFS 副本上重放正式 seal 链，只写
+        # 预演收据，不产生请求、不解释证据。
+        "codex_upgrade_seal_rehearsal.py",
         # 工具身份四层策略：策略文件与计算模块只改变身份判据，不改变证据字节。
         "codex_upgrade_tool_identity_policy.py",
         "tool_identity_policy_v2.json",
@@ -10562,6 +10604,9 @@ _CANONICAL_EVALUATION_ONLY_FILES = frozenset(
         "codex_upgrade_pre_a3_certification.py",
         # 零请求 smoke 只在 staging 夹具上跑新命令并写收据。
         "codex_upgrade_zero_request_smoke.py",
+        # Candidate seal 隔离预演：在 OverlayFS 副本上重放正式 seal 链，只写
+        # 预演收据，不产生请求、不解释证据。
+        "codex_upgrade_seal_rehearsal.py",
         # 工具身份四层策略：策略文件与计算模块只改变身份判据，不改变证据字节。
         "codex_upgrade_tool_identity_policy.py",
         "tool_identity_policy_v2.json",
@@ -10702,6 +10747,9 @@ _EVALUATION_SIDE_FILES = frozenset(
         "codex_upgrade_pre_a3_certification.py",
         # 零请求 smoke 只在 staging 夹具上跑新命令并写收据。
         "codex_upgrade_zero_request_smoke.py",
+        # Candidate seal 隔离预演：在 OverlayFS 副本上重放正式 seal 链，只写
+        # 预演收据，不产生请求、不解释证据。
+        "codex_upgrade_seal_rehearsal.py",
         # 工具身份四层策略：策略文件与计算模块只改变身份判据，不改变证据字节。
         "codex_upgrade_tool_identity_policy.py",
         "tool_identity_policy_v2.json",
@@ -47136,6 +47184,7 @@ def _reject_unparented_formal_write(
         "harden-evidence-permissions",
         "reconcile-supervisor-run",
         "reconcile-attempt",
+        "rehearse-candidate-seal",
         "wire-transition-intent",
         "wire-transition-final",
         "evaluation-epoch",
@@ -47462,6 +47511,44 @@ def _reconcile_supervisor_run_command(arguments: argparse.Namespace) -> dict[str
         )
     except reconciler.ReconcilerError as error:
         raise ConfigurationError(str(error)) from error
+
+
+def _rehearse_candidate_seal_command(arguments: argparse.Namespace) -> dict[str, Any]:
+    """在 OverlayFS 隔离副本上跑通 Candidate seal 零请求后处理链并写收据。"""
+
+    from tools.official_client_capture import codex_upgrade_seal_rehearsal as rehearsal
+
+    campaign_dir = Path(arguments.campaign_dir).resolve(strict=True)
+    status_command = [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        "status",
+        "--campaign-dir",
+        str(campaign_dir),
+    ]
+    skip = arguments.skip_action
+    try:
+        actions = rehearsal._load_action_plan(Path(arguments.action_plan))
+        result = rehearsal.rehearse(
+            campaign_dir=campaign_dir,
+            candidate_id=str(arguments.candidate_id),
+            attempt_id=str(arguments.attempt_id),
+            actions=actions,
+            data_root=Path(arguments.data_root).resolve(),
+            alias_roots=[Path(item).resolve() for item in arguments.alias_root],
+            upper_root=Path(arguments.upper_root).resolve(),
+            status_command=status_command,
+            skip_action_ids=(
+                list(skip) if skip else list(rehearsal.DEFAULT_SKIP_ACTION_IDS)
+            ),
+        )
+    except rehearsal.SealRehearsalError as error:
+        raise ConfigurationError(str(error)) from error
+    return {
+        key: value
+        for key, value in result.items()
+        if key not in {"lower_snapshot_before", "lower_snapshot_after"}
+    }
 
 
 def _reconcile_attempt_command(arguments: argparse.Namespace) -> dict[str, Any]:
@@ -47922,6 +48009,9 @@ def _main_without_campaign_lease(argv: list[str] | None = None) -> int:
         elif command == "reconcile-attempt":
             result = _reconcile_attempt_command(arguments)
             return_code = 0 if result.get("status") == "recoverable" else 3
+        elif command == "rehearse-candidate-seal":
+            result = _rehearse_candidate_seal_command(arguments)
+            return_code = 0 if result.get("status") == "passed" else 3
         elif command == "account-sealed-official":
             result = _account_sealed_official_command(arguments)
             return_code = 0

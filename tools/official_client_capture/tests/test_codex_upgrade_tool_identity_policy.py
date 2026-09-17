@@ -16,7 +16,7 @@ TOOL_ROOT = Path(__file__).resolve().parents[1]
 class ToolIdentityPolicyTests(unittest.TestCase):
     def test_every_managed_file_is_explicitly_classified(self) -> None:
         policy = tip.load_policy()
-        self.assertEqual(policy["policy_version"], 6)
+        self.assertEqual(policy["policy_version"], 7)
         self.assertEqual(len(policy["policy_sha256"]), 64)
         entries = codex_upgrade._tool_tree_entries(TOOL_ROOT)
         grouped = tip.layer_entries(policy, entries)
@@ -116,7 +116,7 @@ class ToolIdentityPolicyTests(unittest.TestCase):
         expected = tip.compute_identity_v2(policy, TOOL_ROOT, identity["entries"])
         for field in ("policy_version", "policy_sha256", "wire_producer_sha256", "evidence_semantics_sha256", "control_sha256"):
             self.assertEqual(identity[field], expected[field], field)
-        self.assertEqual(identity["policy_version"], 6)
+        self.assertEqual(identity["policy_version"], 7)
         # 旧字段保留，files_sha256 仍是整树
         self.assertEqual(identity["files_sha256"], codex_upgrade._fingerprint({"entries": identity["entries"]}))
 
