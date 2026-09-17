@@ -541,8 +541,9 @@ class CodexUpgradeTest(unittest.TestCase):
                     preflight_manifest,
                 )
             )
-            # preflight 既不等于当前受管原文件也不等于 Formal 冻结场景：仍拒绝。
-            stray = json.loads(json.dumps(historical, ensure_ascii=False))
+            # preflight 是与 Formal 冻结场景有实质差异的历史快照：按快照承接时
+            # 同样只允许 source_spec.sha256 级漂移，实质变化仍拒绝。
+            stray = json.loads(json.dumps(managed, ensure_ascii=False))
             stray["profile_id"] = "stray-preflight-profile"
             self._write_json(preflight_path, stray)
             preflight_manifest["inputs"]["target_discovery_scenarios"] = (
@@ -550,7 +551,7 @@ class CodexUpgradeTest(unittest.TestCase):
             )
             with self.assertRaisesRegex(
                 codex_upgrade.ConfigurationError,
-                "受管版本化 target 场景原文件",
+                "除 source_spec.sha256 外发生变化",
             ):
                 codex_upgrade._recovery_rehearsal_target_scenario_override(
                     formal_dir,

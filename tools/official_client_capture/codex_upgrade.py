@@ -21741,16 +21741,15 @@ def _recovery_rehearsal_target_scenario_override(
         )
     if preflight != managed:
         # 2026-09-18：受管场景可以在同一目标版本内演进（如新增零请求 Job
-        # candidate-trace-test）。已建立的恢复后继 Campaign 其 preflight 与 Formal
-        # 冻结的是同一份历史场景；只读加载与对账按历史场景复算执行合同即可，
-        # 结果与 preflight 收据绑定的摘要一致。是否允许按历史场景派发由 wire
+        # candidate-trace-test）。已建立的恢复后继 Campaign 其 preflight 是创建
+        # 当时的受管场景快照；只读加载与对账按该快照承接 Formal 历史场景复算
+        # 执行合同，结果与 preflight 收据绑定的摘要一致。preflight 与 Formal
+        # 冻结场景相同时直接按历史场景复算。是否允许按历史场景派发由 wire
         # producer 身份门禁另行裁定（场景文件属 wire_producer 层）。创建后继时
         # preflight 由当前受管场景生成，此分支不会触发。
         if preflight == frozen:
             return None
-        raise ConfigurationError(
-            "恢复 preflight 必须使用当前受管版本化 target 场景原文件。"
-        )
+        managed = preflight
     predecessor = manifest.get("predecessor")
     c0154_metadata_source_verified = False
     failed_job_recovery = bool(
