@@ -122,11 +122,14 @@ from typing import Any, Callable, Mapping
 # status=restored 判定恢复成功，避免误读不存在的 passed 字段。
 # 2026-09-18（VC-5 metadata-only 环境投影修复）：attempt 校验器接受生成器按合同
 # 写入的五份环境绑定，并继续严格校验固定路径、SHA-256 与字节数。
+# 2026-09-18（VC-5 零请求后处理链收口）：post-run-tooling 可恢复分类、
+# OverlayFS seal 预演门禁、candidate-trace-test 零请求 Job 与标签 root_suffix
+# 通配；工具身份策略升至 v7。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "5ef186522c0aebe57d1ded643a7c7b218516141f13c9aa3d46ce911e426f6780"
+    "48e565e714e91aa2d033c8b4bd232877173d19f87b1f70704441d4b271aa8631"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
-    "b9ca7b6f48b3c33a63a864a9ce7ebd617335378ea52fe9148ea161ab3b276ada"
+    "ea5500505d49340fe4971b981a8ab1159266c6a54ad0d3724cdf10cd51815fe4"
 )
 RENAME_EXCHANGE = 2
 AT_FDCWD = -100
