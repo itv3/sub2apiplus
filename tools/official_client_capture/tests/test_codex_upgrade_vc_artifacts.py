@@ -194,6 +194,30 @@ class CodexUpgradeVCArtifactsTests(unittest.TestCase):
                 },
                 "receipt_digest": "1" * 64,
             },
+            build_inventory={
+                "path": "candidates/candidate-a/build-evidence/build-inventory.json",
+                "sha256": "2" * 64,
+                "bytes": 10,
+                "receipt_digest": "3" * 64,
+            },
+            frontend_provenance={
+                "path": "candidates/candidate-a/build-evidence/frontend-provenance.json",
+                "sha256": "4" * 64,
+                "bytes": 10,
+                "receipt_digest": "5" * 64,
+            },
+            image_inspection={
+                "path": "candidates/candidate-a/build-evidence/image-inspection.json",
+                "sha256": "6" * 64,
+                "bytes": 10,
+                "receipt_digest": "7" * 64,
+            },
+            capability_probe={
+                "path": "candidates/candidate-a/build-evidence/capability-probe.json",
+                "sha256": "8" * 64,
+                "bytes": 10,
+                "receipt_digest": "9" * 64,
+            },
             built_at_utc="2026-09-12T08:00:00Z",
         )
 

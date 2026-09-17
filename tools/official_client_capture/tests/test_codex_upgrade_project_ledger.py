@@ -1,4 +1,4 @@
-"""项目总账：CAS、operation 幂等、head 缓存、batch 提交与补齐、admission、blocked 白名单、修复收据。"""
+"""项目总账：CAS、operation 幂等、head 缓存、batch 补齐、admission、多根因与追加式历史更正。"""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest import mock
 
 from tools.official_client_capture import codex_upgrade_project_ledger as ledger
 from tools.official_client_capture import codex_upgrade_root_cause as root_cause
@@ -117,6 +118,132 @@ class ProjectLedgerTests(unittest.TestCase):
             again = _register_after_registered(root, campaign_dir)
             self.assertEqual(again["status"], "duplicate")
 
+    def test_candidate_probe_accounting_is_idempotent_and_reservation_uses_head_cas(self) -> None:
+        """probe 逐次计量；预算耗尽或 probe 后 head 并发前进都不得创建 reservation。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            ledger_root = _create(
+                root,
+                initial_identity_keys=[],
+                initial_estimated_count=0,
+                live_request_budget=3,
+            )
+            campaign_dir = _campaign(root, "probe-campaign")
+            _register(root, campaign_dir, "probe-campaign", deadline=_future(24))
+            with ledger.runtime_admission_scope(
+                campaign_dir,
+                require=True,
+            ) as admission:
+                self.assertIsNotNone(admission)
+                assert admission is not None
+                before = admission.head_sha256
+                first = admission.account_candidate_probe(
+                    campaign_id="probe-campaign",
+                    candidate_id="candidate-a",
+                    dispatch_id="dispatch-a",
+                    identity_key="1" * 64,
+                    receipt_sha256="2" * 64,
+                    response_status=200,
+                    expected_head_sha256=before,
+                )
+                self.assertEqual(first["status"], "appended")
+                self.assertEqual(first["remaining_live_requests"], 2)
+                duplicate = admission.account_candidate_probe(
+                    campaign_id="probe-campaign",
+                    candidate_id="candidate-a",
+                    dispatch_id="dispatch-a",
+                    identity_key="1" * 64,
+                    receipt_sha256="2" * 64,
+                    response_status=200,
+                    expected_head_sha256=admission.head_sha256,
+                )
+                self.assertEqual(duplicate["status"], "duplicate")
+                expected_sequence = admission.head_sequence
+                expected_sha256 = admission.head_sha256
+
+                # 模拟一个绕过调用方、但仍受同一项目锁串行化的并发推进；
+                # reservation 必须按 probe 后冻结的 head 拒绝，而不是悄悄接受新 head。
+                ledger.append_project_event(
+                    ledger_root,
+                    operation_id="candidate-probe:concurrent",
+                    event_type="candidate_probe_accounted",
+                    payload={
+                        "campaign_id": "probe-campaign",
+                        "candidate_id": "candidate-a",
+                        "dispatch_id": "dispatch-concurrent",
+                        "accounting_category": "candidate_readiness_models_probe/v1",
+                        "response_status": 200,
+                        "receipt_sha256": "3" * 64,
+                        "request": {
+                            "status": "resolved",
+                            "identity_keys": ["4" * 64],
+                            "estimated_delta": 0,
+                        },
+                    },
+                    source_batch_sha256=None,
+                )
+                with self.assertRaisesRegex(ledger.ProjectLedgerError, "并发前进"):
+                    admission.reservation_cas(
+                        expected_sequence=expected_sequence,
+                        expected_head_sha256=expected_sha256,
+                    )
+
+            head = ledger.replay_head(ledger_root)
+            self.assertEqual(head["precise_total"], 2)
+            self.assertEqual(head["remaining_live_requests"], 1)
+
+    def test_candidate_probe_that_consumes_last_budget_blocks_reservation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            _create(
+                root,
+                initial_identity_keys=[],
+                initial_estimated_count=0,
+                live_request_budget=1,
+            )
+            campaign_dir = _campaign(root, "last-budget")
+            _register(root, campaign_dir, "last-budget", deadline=_future(24))
+            with ledger.runtime_admission_scope(campaign_dir, require=True) as admission:
+                assert admission is not None
+                accounted = admission.account_candidate_probe(
+                    campaign_id="last-budget",
+                    candidate_id="candidate-a",
+                    dispatch_id="dispatch-last",
+                    identity_key="5" * 64,
+                    receipt_sha256="6" * 64,
+                    response_status=200,
+                    expected_head_sha256=admission.head_sha256,
+                )
+                self.assertEqual(accounted["remaining_live_requests"], 0)
+                # 余额归零后既有 operation 仍可幂等重放，但任何新 dispatch
+                # 必须在项目总账层拒绝，不能只依赖 probe 调用方自律。
+                duplicate = admission.account_candidate_probe(
+                    campaign_id="last-budget",
+                    candidate_id="candidate-a",
+                    dispatch_id="dispatch-last",
+                    identity_key="5" * 64,
+                    receipt_sha256="6" * 64,
+                    response_status=200,
+                    expected_head_sha256=admission.head_sha256,
+                )
+                self.assertEqual(duplicate["status"], "duplicate")
+                with self.assertRaisesRegex(ledger.ProjectLedgerError, "预算已耗尽"):
+                    admission.account_candidate_probe(
+                        campaign_id="last-budget",
+                        candidate_id="candidate-a",
+                        dispatch_id="dispatch-over-budget",
+                        identity_key="7" * 64,
+                        receipt_sha256="8" * 64,
+                        response_status=503,
+                        expected_head_sha256=admission.head_sha256,
+                    )
+                with self.assertRaisesRegex(ledger.ProjectLedgerError, "耗尽"):
+                    admission.reservation_cas(
+                        expected_sequence=admission.head_sequence,
+                        expected_head_sha256=admission.head_sha256,
+                    )
+
     def test_cas_conflict_and_duplicate_operation_with_different_payload_are_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
@@ -154,6 +281,93 @@ class ProjectLedgerTests(unittest.TestCase):
             _write_json(cache, payload)
             with self.assertRaisesRegex(ledger.ProjectLedgerError, "同序号但摘要不符"):
                 ledger.replay_head(ledger_root)
+
+    def test_project_history_reads_are_read_only_and_snapshot_does_not_take_lock(
+        self,
+    ) -> None:
+        """历史快照不创建 head；Campaign 锁内使用的入口不获取项目锁。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            ledger_root = _create(root)
+            ledger.append_project_event(
+                ledger_root,
+                operation_id="history-op",
+                event_type="reconciliation_committed",
+                payload={
+                    "request": {
+                        "status": "resolved",
+                        "identity_keys": ["history-key"],
+                        "estimated_delta": 0,
+                    }
+                },
+                source_batch_sha256="d" * 64,
+            )
+            cache = ledger_root / "head.json"
+            cache.unlink()
+
+            def inventory() -> dict[str, tuple[bytes, int]]:
+                return {
+                    str(path.relative_to(ledger_root)): (
+                        path.read_bytes(),
+                        path.stat().st_mtime_ns,
+                    )
+                    for path in sorted(ledger_root.rglob("*"))
+                    if path.is_file()
+                }
+
+            before = inventory()
+            locked = ledger.read_project_history(ledger_root)
+            self.assertEqual(locked["head_sequence"], 1)
+            self.assertFalse(cache.exists())
+            self.assertEqual(inventory(), before)
+
+            with mock.patch.object(
+                ledger,
+                "project_lock",
+                side_effect=AssertionError("只读快照不得获取项目锁"),
+            ):
+                snapshot = ledger.read_project_history_snapshot(ledger_root)
+            self.assertEqual(snapshot, locked)
+            self.assertFalse(cache.exists())
+            self.assertEqual(inventory(), before)
+
+    def test_project_history_snapshot_safely_fails_on_concurrent_temp_event(
+        self,
+    ) -> None:
+        """并发追加的临时 event 最多使快照失败，不得触碰任何文件。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            ledger_root = _create(root)
+            cache = ledger_root / "head.json"
+            cache.unlink()
+            temporary = ledger_root / "events" / ".000001.json.concurrent.tmp"
+            _write_json(temporary, {"concurrent": True})
+
+            before = {
+                str(path.relative_to(ledger_root)): (
+                    path.read_bytes(),
+                    path.stat().st_mtime_ns,
+                )
+                for path in sorted(ledger_root.rglob("*"))
+                if path.is_file()
+            }
+            with self.assertRaisesRegex(
+                ledger.ProjectLedgerError,
+                "event 序号不连续或存在额外文件",
+            ):
+                ledger.read_project_history_snapshot(ledger_root)
+            after = {
+                str(path.relative_to(ledger_root)): (
+                    path.read_bytes(),
+                    path.stat().st_mtime_ns,
+                )
+                for path in sorted(ledger_root.rglob("*"))
+                if path.is_file()
+            }
+            self.assertEqual(after, before)
+            self.assertFalse(cache.exists())
 
     def test_uncommitted_batch_is_not_pushed_and_commit_binds_entries(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -263,6 +477,179 @@ class ProjectLedgerTests(unittest.TestCase):
             report = ledger.reconcile_project_ledger(ledger_root)
             self.assertEqual([r["status"] for r in report["results"] if r["kind"] == "repairs"], ["appended"])
             self.assertEqual(ledger.replay_head(ledger_root)["root_cause_counts"]["rc1-a"], 0)
+
+    def test_multiple_failure_observations_are_deduplicated_and_partial_repair_keeps_uncovered_cause(self) -> None:
+        """同 attempt 同检查的 retry 只计一次；repair 只清零收据绑定的根因子集。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            ledger_root = _create(root)
+            payload = {
+                "request": {"status": "resolved", "identity_keys": [], "estimated_delta": 0},
+                "failure_observations": [
+                    {"check_id": "A15", "failure_code": "cache_miss", "root_cause_id": "rc1-a", "retry": 1},
+                    {"check_id": "A15", "failure_code": "cache_miss", "root_cause_id": "rc1-a", "retry": 2},
+                    {"check_id": "build", "failure_code": "attestation_missing", "root_cause_id": "rc1-b"},
+                ],
+                "root_causes": [
+                    {"root_cause_id": "rc1-a"},
+                    {"root_cause_id": "rc1-a"},
+                    {"root_cause_id": "rc1-b"},
+                ],
+            }
+            ledger.append_project_event(
+                ledger_root,
+                operation_id="attempt-1",
+                event_type="reconciliation_committed",
+                payload=payload,
+                source_batch_sha256="d" * 64,
+            )
+            head = ledger.replay_head(ledger_root)
+            self.assertEqual(head["root_cause_counts"], {"rc1-a": 1, "rc1-b": 1})
+            self.assertEqual(
+                [(item["check_id"], item["failure_code"]) for item in head["failure_observations"]],
+                [("A15", "cache_miss"), ("build", "attestation_missing")],
+            )
+
+            repair = ledger.record_root_cause_repair(
+                ledger_root,
+                root_cause_ids=["rc1-a", "rc1-a"],
+                kind="code",
+                bindings={
+                    "fix_commit_sha": "1" * 40,
+                    "regression_receipt_sha256": "2" * 64,
+                    "deployment_receipt_sha256": "3" * 64,
+                },
+            )
+            head = ledger.replay_head(ledger_root)
+            self.assertEqual(repair["root_cause_ids"], ["rc1-a"])
+            self.assertEqual(head["root_cause_counts"], {"rc1-a": 0, "rc1-b": 1})
+            self.assertEqual([item["root_cause_id"] for item in head["repaired_root_causes"]], ["rc1-a"])
+
+            conflicting = {
+                "request": {"status": "resolved", "identity_keys": [], "estimated_delta": 0},
+                "failure_observations": [
+                    {"check_id": "A15", "failure_code": "cache_miss", "root_cause_id": "rc1-a"},
+                    {"check_id": "A15", "failure_code": "cache_miss", "root_cause_id": "rc1-b"},
+                ],
+                "root_causes": [{"root_cause_id": "rc1-a"}, {"root_cause_id": "rc1-b"}],
+            }
+            with self.assertRaisesRegex(ledger.ProjectLedgerError, r"同一 check_id \+ failure_code"):
+                ledger.append_project_event(
+                    ledger_root,
+                    operation_id="attempt-conflict",
+                    event_type="reconciliation_committed",
+                    payload=conflicting,
+                    source_batch_sha256="d" * 64,
+                )
+
+    def test_historical_reconciliation_and_repair_corrections_are_append_only_and_idempotent(self) -> None:
+        """更正绑定原事件与 payload SHA，不改旧文件，且删除 head 后可得同一重放结果。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            ledger_root = _create(root)
+            ledger.append_project_event(
+                ledger_root,
+                operation_id="legacy-reconciliation",
+                event_type="reconciliation_committed",
+                payload={
+                    "request": {
+                        "status": "resolved",
+                        "identity_keys": [],
+                        "estimated_delta": 0,
+                        "provenance_receipt_sha256": "1" * 64,
+                    },
+                    "root_cause": {"root_cause_id": "rc1-wrong"},
+                },
+                source_batch_sha256="a" * 64,
+            )
+            ledger.append_project_event(
+                ledger_root,
+                operation_id="legacy-repair",
+                event_type="root_cause_repaired",
+                payload={"root_cause_id": "rc1-wrong", "repair_receipt_sha256": "2" * 64},
+                source_batch_sha256="b" * 64,
+            )
+            original_paths = [ledger_root / "events" / "000001.json", ledger_root / "events" / "000002.json"]
+            original_bytes = [path.read_bytes() for path in original_paths]
+            original_events = ledger._load_events(ledger_root)
+            corrected_reconciliation = {
+                "request": {
+                    "status": "resolved",
+                    "identity_keys": ["k-history"],
+                    "estimated_delta": 0,
+                    "provenance_receipt_sha256": "3" * 64,
+                },
+                "failure_observations": [
+                    {"check_id": "A15", "failure_code": "cache_contract", "root_cause_id": "rc1-true"}
+                ],
+                "root_causes": [{"root_cause_id": "rc1-true"}],
+            }
+            first = ledger.record_historical_reconciliation_correction(
+                ledger_root,
+                original_operation_id="legacy-reconciliation",
+                corrected_payload=corrected_reconciliation,
+                reason="候选 provenance 历史更正",
+                original_event_sha256=original_events[0]["event_sha256"],
+                original_payload_sha256=original_events[0]["payload_sha256"],
+            )
+            second = ledger.record_historical_root_cause_repair_correction(
+                ledger_root,
+                original_operation_id="legacy-repair",
+                corrected_payload={"root_cause_ids": ["rc1-true"], "repair_receipt_sha256": "4" * 64},
+                reason="修复收据根因绑定更正",
+                original_event_sha256=original_events[1]["event_sha256"],
+                original_payload_sha256=original_events[1]["payload_sha256"],
+            )
+            head = ledger.replay_head(ledger_root)
+            self.assertEqual((first["status"], second["status"]), ("appended", "appended"))
+            self.assertEqual(head["precise_total"], 3)
+            self.assertNotIn("rc1-wrong", head["root_cause_counts"])
+            self.assertEqual(head["root_cause_counts"]["rc1-true"], 0)
+            self.assertEqual(head["failure_observations"][0]["root_cause_id"], "rc1-true")
+            self.assertEqual(set(head["event_corrections"]), {"legacy-reconciliation", "legacy-repair"})
+            self.assertEqual([path.read_bytes() for path in original_paths], original_bytes)
+
+            sequence = head["sequence"]
+            duplicate_reconciliation = ledger.record_historical_reconciliation_correction(
+                ledger_root,
+                original_operation_id="legacy-reconciliation",
+                corrected_payload=corrected_reconciliation,
+                reason="候选 provenance 历史更正",
+            )
+            duplicate_repair = ledger.record_historical_root_cause_repair_correction(
+                ledger_root,
+                original_operation_id="legacy-repair",
+                corrected_payload={"root_cause_ids": ["rc1-true"], "repair_receipt_sha256": "4" * 64},
+                reason="修复收据根因绑定更正",
+            )
+            self.assertEqual((duplicate_reconciliation["status"], duplicate_repair["status"]), ("duplicate", "duplicate"))
+            self.assertEqual(ledger.replay_head(ledger_root)["sequence"], sequence)
+
+            drifted = json.loads(json.dumps(corrected_reconciliation))
+            drifted["request"]["identity_keys"] = ["k-history", "k-drift"]
+            with self.assertRaisesRegex(ledger.ProjectLedgerError, "payload 不同"):
+                ledger.record_historical_reconciliation_correction(
+                    ledger_root,
+                    original_operation_id="legacy-reconciliation",
+                    corrected_payload=drifted,
+                    reason="候选 provenance 历史更正",
+                )
+            self.assertEqual(ledger.replay_head(ledger_root)["sequence"], sequence)
+            with self.assertRaisesRegex(ledger.ProjectLedgerError, "原事件 SHA 漂移"):
+                ledger.record_historical_reconciliation_correction(
+                    ledger_root,
+                    original_operation_id="legacy-reconciliation",
+                    corrected_payload=corrected_reconciliation,
+                    reason="候选 provenance 历史更正",
+                    original_event_sha256="f" * 64,
+                )
+
+            (ledger_root / "head.json").unlink()
+            replayed = ledger.replay_head(ledger_root)
+            self.assertEqual(replayed, head)
+            self.assertEqual([path.read_bytes() for path in original_paths], original_bytes)
 
     def test_registration_retry_after_head_moved_appends_rejection_without_touching_entries(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

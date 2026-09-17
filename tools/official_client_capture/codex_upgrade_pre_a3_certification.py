@@ -290,7 +290,10 @@ def _accounting_resolved_scenario(staging_root: Path) -> dict[str, Any]:
         evidence_root.mkdir(mode=0o700)
         (evidence_root / "surface.json").write_text('{"records": []}\n', encoding="utf-8")
         (evidence_root / "surface.json").chmod(0o600)
-        attempt_id = case._b0_orphan_attempt(fixture)
+        attempt_id = case._b0_orphan_attempt(
+            fixture,
+            evidence_roots=[evidence_root],
+        )
         result = reconciler.reconcile_attempt(campaign_dir, attempt_id)
         if result["status"] != "permanent_stop" or result["decision"]["terminal_reason"] != "accounting_unresolved":
             raise CertificationError("未决账务未使总账 blocked")

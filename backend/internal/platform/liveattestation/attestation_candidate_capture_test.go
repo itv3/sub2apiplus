@@ -109,3 +109,10 @@ func TestCandidateCaptureProviderReturnsFixedNonSecretAttestation(t *testing.T) 
 		t.Fatalf("Generate() = %q，期望固定验收值", got)
 	}
 }
+
+func TestCandidateCaptureCapabilityProbeExecutesProvider(t *testing.T) {
+	result := ProbeCandidateCaptureCapability()
+	if !result.Available || !result.ProviderCheckPassed || !result.ProviderGeneratePassed {
+		t.Fatalf("candidatecapture capability probe 未实际通过 provider：%+v", result)
+	}
+}

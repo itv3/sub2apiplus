@@ -23,6 +23,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -33,6 +34,7 @@ ROOT_CAUSE_ID_RE = re.compile(r"^rc1-[0-9a-f]{20}$")
 CODE_RE = re.compile(r"^[a-z0-9]+(?:[.-][a-z0-9]+)*$")
 COMPONENT_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 DIMENSION_KEY_RE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+FAILURE_OBSERVATION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 MAX_VALUE_LENGTH = 128
 DEFAULT_CODES_PATH = Path(__file__).resolve().parent / "root_cause_codes.json"
 
@@ -183,6 +185,76 @@ def structured_root_cause(
         stable_dimensions=stable_dimensions,
         codes=codes,
     )["root_cause_id"]
+
+
+def describe_failure_observations(
+    observations: Sequence[Mapping[str, Any]],
+    *,
+    component: str,
+    stable_error_code: str,
+    stable_dimensions: Mapping[str, str],
+    codes: Mapping[str, Any] | None = None,
+) -> tuple[list[dict[str, str]], list[dict[str, Any]]]:
+    """把枚举失败观测归一化为一一对应的稳定根因。
+
+    一次 attempt／动作内，相同 ``check_id + failure_code`` 只保留一项；
+    ``failed_step`` 使用该稳定二元组的摘要，不包含 Campaign、attempt、重试次数、
+    时间或诊断正文，因此同一检查在不同 Campaign 中得到相同根因 ID。
+    """
+
+    if (
+        not isinstance(observations, Sequence)
+        or isinstance(observations, (str, bytes, bytearray))
+        or len(observations) > 64
+    ):
+        raise RootCauseError("failure_observations 必须是至多 64 项的数组")
+    by_key: dict[tuple[str, str], dict[str, str]] = {}
+    for index, item in enumerate(observations):
+        if not isinstance(item, Mapping):
+            raise RootCauseError(f"failure_observations[{index}] 必须是对象")
+        check_id = item.get("check_id")
+        failure_code = item.get("failure_code")
+        if (
+            not isinstance(check_id, str)
+            or FAILURE_OBSERVATION_ID_RE.fullmatch(check_id) is None
+            or not isinstance(failure_code, str)
+            or FAILURE_OBSERVATION_ID_RE.fullmatch(failure_code) is None
+        ):
+            raise RootCauseError(
+                f"failure_observations[{index}] 的 check_id 或 failure_code 非法"
+            )
+        by_key[(check_id, failure_code)] = {
+            "check_id": check_id,
+            "failure_code": failure_code,
+        }
+
+    normalized: list[dict[str, str]] = []
+    causes: list[dict[str, Any]] = []
+    table = codes if codes is not None else load_codes()
+    for key in sorted(by_key):
+        observation = by_key[key]
+        failed_step = "failure-observation-" + _sha256(_canonical(observation))[:20]
+        cause = describe_root_cause(
+            component=component,
+            stable_error_code=stable_error_code,
+            failed_step=failed_step,
+            stable_dimensions=stable_dimensions,
+            codes=table,
+        )
+        normalized.append(
+            {
+                **observation,
+                "root_cause_id": str(cause["root_cause_id"]),
+            }
+        )
+        causes.append(
+            {
+                **cause,
+                "check_id": observation["check_id"],
+                "failure_code": observation["failure_code"],
+            }
+        )
+    return normalized, causes
 
 
 def legacy_root_cause_id(code: str, *, codes: Mapping[str, Any] | None = None) -> str:

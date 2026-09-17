@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import unittest
 from pathlib import Path
@@ -76,13 +77,97 @@ class CandidateCoreCaptureScriptTest(unittest.TestCase):
 
     def test_a15_restarts_service_to_clear_models_manifest_cache(self) -> None:
         """A15 前必须重启候选服务：候选网关按账号 + 出站身份缓存 models 清单，
-        A03～A08 的 responses 已填满缓存，不重启则三种冻结身份零出站。"""
+        A03～A08 的 responses 已填满缓存，不重启则两次启动 models 都会命中。"""
         a10_stop = self.source.index("stop_capture", self.source.index("wait_action A10 responses_http_success 4"))
         a15_start = self.source.index("start_capture A15")
         restart = self.source.index("restart_service", a10_stop)
         self.assertLess(a10_stop, restart)
         self.assertLess(restart, a15_start)
-        self.assertIn("缓存 models 清单", self.source[a10_stop:a15_start])
+        self.assertIn("同一网关缓存", self.source[a10_stop:a15_start])
+
+    def test_a15_uses_real_exec_and_tui_processes_and_no_curl(self) -> None:
+        """A15 入口证据必须来自真实 Codex 子进程，不能手写身份头。"""
+
+        start = self.source.index("# A15 要证明的是 exec 与 PTY TUI")
+        end = self.source.index("# 冻结动作和无生产转发门禁", start)
+        a15 = self.source[start:end]
+        self.assertNotIn("curl", a15.lower())
+        self.assertIn('"exec",\n                *overrides,', a15)
+        self.assertIn('if variant == "tui":', a15)
+        self.assertIn("pty.openpty()", a15)
+        self.assertIn("termios.TIOCSWINSZ", a15)
+        self.assertIn('"codex_exec"', a15)
+        self.assertIn('"codex-tui"', a15)
+        self.assertIn('"codex_cli_rs"', a15)
+        self.assertNotIn('variant == "app-server"', a15)
+        self.assertIn('"auth_mode": "chatgpt"', a15)
+        self.assertNotIn('"auth_mode": "chatgptAuthTokens"', a15)
+        self.assertIn("stdin=subprocess.DEVNULL", a15)
+        self.assertNotIn("stdin=subprocess.PIPE", a15)
+
+    def test_a15_binds_nonce_digests_and_server_cache_counts(self) -> None:
+        start = self.source.index("# A15 要证明的是 exec 与 PTY TUI")
+        end = self.source.index("# 冻结动作和无生产转发门禁", start)
+        a15 = self.source[start:end]
+        for expected in (
+            "openai_base_url=",
+            "chatgpt_base_url=",
+            "secrets.token_hex(16)",
+            '"argv_sha256"',
+            '"launch_sha256"',
+            '"request_sha256"',
+            '"correlation_sha256"',
+            '"upstream_calls_before"',
+            '"upstream_calls_after"',
+            "wait_stable_models_count",
+            'records.extend(launch_one("exec", witness_port, 0, 1))',
+            'records.extend(launch_one("tui", witness_port, 1, 1))',
+            '"tui-post-initialize-identity"',
+            'record_cache_result="not_applicable"',
+            '"models_event": models_event',
+            '"identity_event": identity_event',
+            "observations = observed_models.setdefault(nonce, [])",
+        ):
+            self.assertIn(expected, a15)
+        self.assertIn('"A15": {"models_manifest": 1}', self.source)
+        self.assertIn(
+            'if scenario in {"A03", "A06", "A07", "A15"} and actual != minimum:',
+            self.source,
+        )
+
+    def test_a15_evidence_catalog_is_closed_over_exact_originals(self) -> None:
+        declaration_path = (
+            Path(__file__).parents[1]
+            / "codex_upgrade_evidence_labels_0_154_0.json"
+        )
+        declaration = json.loads(declaration_path.read_text(encoding="utf-8"))
+        candidate_core = next(
+            entry
+            for entry in declaration["entries"]
+            if entry["job_id"] == "candidate-frozen-core"
+        )
+        rules = {rule["glob"]: rule for rule in candidate_core["rules"]}
+        self.assertNotIn(
+            "scenarios/A15/relay/conn*.client_to_upstream.bin",
+            rules,
+        )
+        self.assertEqual(
+            rules["scenarios/A15/relay/conn001.client_to_upstream.bin"]["parser"],
+            "opaque_bound_source",
+        )
+        self.assertEqual(
+            rules["scenarios/A15/process-trace.jsonl"]["labels"]["a15_contract"],
+            "real-entry-cache-v2",
+        )
+        self.assertEqual(
+            rules["scenarios/A15/relay/conn001.upstream_to_client.bin"]["kind"],
+            "wire_dump",
+        )
+        self.assertEqual(
+            rules["scenarios/A15/relay/intervention.jsonl"]["parser"],
+            "opaque_bound_source",
+        )
+        self.assertNotIn("A15", rules["candidate-go-test.jsonl"]["scenario_ids"])
 
     def test_restoration_is_fail_closed(self) -> None:
         for expected in (
@@ -143,7 +228,7 @@ class CandidateCoreCaptureScriptTest(unittest.TestCase):
         self.assertIn("wait_action A06 responses_ws_response_create 3", self.source)
         self.assertIn("resp_candidate_core_a06_0002", self.source)
         self.assertIn("resp_candidate_core_a06_0003", self.source)
-        self.assertIn('scenario in {"A03", "A06", "A07"}', self.source)
+        self.assertIn('scenario in {"A03", "A06", "A07", "A15"}', self.source)
 
     def test_a03_uses_cold_lite_prime_before_cookie_replay(self) -> None:
         prime = self.source.index(
@@ -162,7 +247,7 @@ class CandidateCoreCaptureScriptTest(unittest.TestCase):
         self.assertIn('run_response_request A03 "lite-turn-$turn"', self.source)
         self.assertIn("wait_action A03 responses_http_success 4", self.source)
         self.assertIn('"A03": {"responses_http_success": 4}', self.source)
-        self.assertIn('scenario in {"A03", "A06", "A07"}', self.source)
+        self.assertIn('scenario in {"A03", "A06", "A07", "A15"}', self.source)
         self.assertIn('event.get("set_cookie_names") == ["_cfuvid"]', self.source)
         self.assertIn(
             'any(b"\\r\\ncookie: <secret>" not in request',

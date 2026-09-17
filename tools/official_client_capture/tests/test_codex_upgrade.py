@@ -6740,7 +6740,7 @@ class CodexUpgradeTest(unittest.TestCase):
         )
         attempt_root.mkdir(parents=True, mode=0o700)
         reservation: dict[str, object] = {
-            "schema_version": codex_upgrade.CAPTURE_RESERVATION_SCHEMA,
+            "schema_version": codex_upgrade.LEGACY_CAPTURE_RESERVATION_SCHEMA,
             "campaign_id": campaign_manifest["campaign_id"],
             "campaign_mode": campaign_manifest["campaign_mode"],
             "campaign_purpose": campaign_manifest["campaign_purpose"],
@@ -7626,6 +7626,7 @@ class CodexUpgradeTest(unittest.TestCase):
                 "reconcile-supervisor-run",
                 "reconcile-attempt",
                 "account-sealed-official",
+                "account-sealed-candidate",
                 "status",
                 "resume",
             },
@@ -11522,10 +11523,14 @@ class CodexUpgradeTest(unittest.TestCase):
                 "campaign_id": manifest["campaign_id"],
                 "counting_rule": "codex_model_requests/v2",
                 "estimation_policy": "upper_bound_from_sibling_or_turn_ratio",
-                "requests": [{"identity_key": f"k{i}"} for i in range(3)],
+                "requests": [
+                    {"identity_key": f"k{i}", "job_id": "official-core"}
+                    for i in range(3)
+                ],
                 "jobs": [
                     {
                         "job_id": "official-core",
+                        "phase": "official",
                         "status": "estimated",
                         "roots": [
                             {
@@ -11553,6 +11558,77 @@ class CodexUpgradeTest(unittest.TestCase):
             self.assertEqual(after["root_cause_counts"], before["root_cause_counts"])
             receipt_dir = campaign_dir / "control" / reconciler.RECONCILIATION_DIR
             self.assertTrue(any(p.name.startswith("sealed-official-") for p in receipt_dir.iterdir()))
+
+    def test_account_sealed_candidate_writes_project_ledger_once(self) -> None:
+        """成功 Candidate 封存后有独立的幂等入账入口。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            ledger_root = project_ledger_fixture.install_fixture_ledger(root)
+            arguments = self._campaign_arguments(
+                root / "sealed-candidate",
+                campaign_id="upgrade-0154-sealed-candidate-accounting",
+                baseline_version="0.151.0",
+                target_version="0.154.0",
+                model="gpt-5.5",
+                lite_model="gpt-6-astra",
+            )
+            codex_upgrade.create_campaign(arguments)
+            campaign_dir = arguments.campaign_dir
+            command = argparse.Namespace(
+                campaign_dir=campaign_dir,
+                candidate_id="candidate-a",
+            )
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "尚未封存"):
+                codex_upgrade._account_sealed_candidate_command(command)
+            self._seal_candidate_stage(root / "sealed-candidate", campaign_dir)
+            before = codex_upgrade_project_ledger.replay_head(ledger_root)
+            synthetic = {
+                "schema_version": "live-request-provenance/v2",
+                "campaign_id": "upgrade-0154-sealed-candidate-accounting",
+                "counting_rule": "codex_model_requests/v2",
+                "estimation_policy": "upper_bound_from_sibling_or_turn_ratio",
+                "requests": [
+                    {"identity_key": "candidate-k1", "job_id": "candidate-core"},
+                    {"identity_key": "candidate-k2", "job_id": "candidate-core"},
+                ],
+                "jobs": [
+                    {
+                        "job_id": "candidate-core",
+                        "phase": "candidate",
+                        "status": "resolved",
+                        "roots": [],
+                        "estimated_count": 0,
+                    }
+                ],
+                "unresolved_job_ids": [],
+                "pending_job_ids": [],
+                "pre_request_zero_job_ids": [],
+                "precise_total": 2,
+                "estimated_total": 0,
+            }
+            with mock.patch.object(
+                reconciler.provenance,
+                "collect_campaign_provenance",
+                return_value=dict(synthetic),
+            ):
+                result = codex_upgrade._account_sealed_candidate_command(command)
+                again = codex_upgrade._account_sealed_candidate_command(command)
+            self.assertEqual(result["phase"], "candidate")
+            self.assertEqual(result["candidate_id"], "candidate-a")
+            self.assertEqual(result["request"]["new_identity_keys"], 2)
+            self.assertTrue(again["batch"].get("reused"), again)
+            after = codex_upgrade_project_ledger.replay_head(ledger_root)
+            self.assertEqual(after["precise_total"], before["precise_total"] + 2)
+            receipt_dir = campaign_dir / "control" / reconciler.RECONCILIATION_DIR
+            self.assertTrue(
+                any(
+                    path.name.startswith("sealed-candidate-candidate-a-")
+                    for path in receipt_dir.iterdir()
+                )
+            )
 
     def test_release_certification_requirement_follows_policy_version(self) -> None:
         """发布认证绑定只对策略 v5 起创建的完整 VC 链 Campaign 必需，历史清单按 Job 演练承接。"""
@@ -14337,8 +14413,14 @@ class CodexUpgradeTest(unittest.TestCase):
             "timing_ledger": Path(str(manifest["control_receipts"]["upgrade_timing"]["ledger_dir"])),
         }
 
-    def _b0_orphan_attempt(self, fixture: dict[str, object], *, complete_job: bool = False) -> str:
-        """只发布 reservation 的孤儿 attempt；可选写一条 complete checkpoint 与 Job 收据。"""
+    def _b0_orphan_attempt(
+        self,
+        fixture: dict[str, object],
+        *,
+        complete_job: bool = False,
+        evidence_roots: list[Path] | None = None,
+    ) -> str:
+        """发布孤儿 attempt；可选写 Job 收据，并仅在完整完成时写 checkpoint。"""
 
         campaign_dir = fixture["campaign_dir"]
         manifest = fixture["manifest"]
@@ -14351,7 +14433,7 @@ class CodexUpgradeTest(unittest.TestCase):
             jobs=jobs,
             allow_failed_rerun=True,
         )
-        if complete_job:
+        if complete_job or evidence_roots is not None:
             job = jobs[0]
             result = {
                 "id": job.job_id,
@@ -14362,7 +14444,9 @@ class CodexUpgradeTest(unittest.TestCase):
                 "description": "合成 Job",
                 "duration_seconds": 0.0,
                 "steps": [],
-                "evidence_roots": [],
+                "evidence_roots": [
+                    str(path.resolve(strict=True)) for path in (evidence_roots or [])
+                ],
                 "missing_evidence_patterns": [],
                 "empty_evidence_patterns": [],
                 "covers": [],
@@ -14377,26 +14461,334 @@ class CodexUpgradeTest(unittest.TestCase):
                 "model_condition_receipt_failure": None,
                 "disposition": "executed",
             }
-            store = codex_upgrade.incremental_recovery.CheckpointStore(attempt_root / "checkpoints")
-            store.append(
-                {
-                    "checkpoint_schema_version": codex_upgrade.JOB_CHECKPOINT_SCHEMA,
-                    "campaign_id": manifest["campaign_id"],
-                    "phase": "official",
-                    "attempt_id": attempt_root.name,
-                    "run_nonce": reservation["run_nonce"],
-                    "item_id": job.job_id,
-                    "status": "complete",
-                    "disposition": "executed",
-                    "result_sha256": codex_upgrade.incremental_recovery.digest(result),
-                    "result_key": None,
-                    "result": result,
-                    "source_receipt": None,
-                    "previous_checkpoint_sha256": None,
-                }
-            )
             codex_upgrade._secure_write_json_once(attempt_root / f"job-{job.job_id}.json", result)
+            if complete_job:
+                store = codex_upgrade.incremental_recovery.CheckpointStore(
+                    attempt_root / "checkpoints"
+                )
+                store.append(
+                    {
+                        "checkpoint_schema_version": codex_upgrade.JOB_CHECKPOINT_SCHEMA,
+                        "campaign_id": manifest["campaign_id"],
+                        "phase": "official",
+                        "attempt_id": attempt_root.name,
+                        "run_nonce": reservation["run_nonce"],
+                        "item_id": job.job_id,
+                        "status": "complete",
+                        "disposition": "executed",
+                        "result_sha256": codex_upgrade.incremental_recovery.digest(result),
+                        "result_key": None,
+                        "result": result,
+                        "source_receipt": None,
+                        "previous_checkpoint_sha256": None,
+                    }
+                )
         return attempt_root.name
+
+    def _historical_v7_run_summary(self) -> dict[str, object]:
+        """返回 ARM64 v7 第三次归档的逐字节等价结构化摘要。"""
+
+        scenarios = {
+            "A03": (
+                {"models_manifest": 1, "responses_http_success": 4},
+                46425,
+                "cc09c6f4db410b3efc3b72696eb9803a59c6f48f6219ce7dff8dbded208063d9",
+            ),
+            "A04": (
+                {"models_manifest": 3, "responses_http_success": 4},
+                65323,
+                "0f400552e0aebbb51cd52f3922fee7604f48fe9dbedb24cc1071642922d21bdb",
+            ),
+            "A05": (
+                {
+                    "models_manifest": 1,
+                    "responses_ws_handshake_success": 2,
+                    "responses_ws_response_create": 2,
+                },
+                49394,
+                "17ed44b8a02aec93799e15fcd19f27317ff0c0de365ffefc333b029cbb7c98dc",
+            ),
+            "A06": (
+                {
+                    "responses_ws_handshake_success": 1,
+                    "responses_ws_response_create": 3,
+                },
+                11737,
+                "f9dbe8eb39deebc4c1afd8a5ea8a441819a100211290bf189f16a6e8b7abef3a",
+            ),
+            "A07": (
+                {
+                    "responses_http_fallback_success": 1,
+                    "responses_ws_retryable_failure": 6,
+                },
+                61147,
+                "f8a8f59ac37201fee52e0d5cc385f1eaf66b87e084c01ae51e82bd175dd89aac",
+            ),
+            "A08": (
+                {"models_manifest": 1, "responses_http_success": 3},
+                38270,
+                "2375f4a2c19a12feaf70b7393c20e0619a770bfb791ef08cf34eaf758ee43c17",
+            ),
+            "A10": (
+                {"responses_http_success": 4},
+                42180,
+                "716fdeda87a975a144ac7ffeb947834702b5fbfe8c0c6010aa503dbfeb82b3ce",
+            ),
+            "A15": (
+                {"models_manifest": 1},
+                8151,
+                "d84230edcbace5f9e476d6cb937120d28a44da6a2e5e7abcfa4b2a70fb537998",
+            ),
+        }
+        return {
+            "schema_version": "candidate-core-capture/v1",
+            "codex_version": "0.154.0",
+            "run_id": (
+                "c0154-formal-vc5-recovery-20260916t122646z-"
+                "c0154-candidate-v7-candidate-frozen-core"
+            ),
+            "status": "failed",
+            "exit_code": 1,
+            "synthetic_profile": "candidate-core-v1",
+            "explicit_gate": True,
+            "production_forwarding_enabled": False,
+            "scenarios": [
+                {
+                    "scenario_id": scenario_id,
+                    "actions": scenario_data[0],
+                    "production_forwarded": False,
+                    "pcap_bytes": scenario_data[1],
+                    "pcap_sha256": scenario_data[2],
+                }
+                for scenario_id, scenario_data in scenarios.items()
+            ],
+            "limitations": {
+                "A08": (
+                    "relay 只声明真实跨调用连接；keepalive/断连重试关系由受源码哈希"
+                    "约束的结构化测试补证"
+                ),
+                "A10_token_budget": (
+                    "TokenBudget 零出站只由结构化测试证明，本脚本不伪造不存在的网络请求"
+                ),
+                "A15_surface": (
+                    "relay 证明身份 header 的真实出站；exec/TUI 进程来源由结构化测试证明"
+                ),
+            },
+            "restoration": {
+                "account_proxy_original": "NULL|NULL",
+                "account_proxy_equal": True,
+                "account_extra_equal": True,
+                "hosts_sha256_equal": True,
+                "ca_bundle_sha256_equal": True,
+            },
+        }
+
+    def _b0_historical_v7_attempt(
+        self,
+        fixture: dict[str, object],
+        *,
+        host_runs: Path,
+    ) -> tuple[str, dict[str, object]]:
+        """发布绑定真实 v7 producer 与完整 run-summary 的历史 Candidate attempt。"""
+
+        campaign_dir = fixture["campaign_dir"]
+        manifest = fixture["manifest"]
+        candidate_id = "c0154-candidate-v7"
+        identity = {"candidate_purpose": manifest["campaign_purpose"]}
+        summary = self._historical_v7_run_summary()
+        evidence_name = f"{summary['run_id']}.failed-attempt3"
+        logical_evidence_root = f"/root/oauth-capture/runs/{evidence_name}"
+        job = Job(
+            job_id="candidate-frozen-core",
+            phase="candidate",
+            suites=("full",),
+            description="历史 v7 Candidate frozen core",
+            steps=({"argv": ["bash", "run_candidate_core_capture.sh"]},),
+            evidence_roots=(logical_evidence_root,),
+            covers=(),
+            scenario_ids=("A03", "A04", "A05", "A06", "A07", "A08", "A10", "A15"),
+        )
+        evidence_root = host_runs / evidence_name
+        evidence_root.mkdir(parents=True)
+        summary_path = evidence_root / "run-summary.json"
+        self._write_json(summary_path, summary)
+        summary_path.chmod(0o600)
+        attempt_root, _reservation = codex_upgrade._reserve_capture_attempt(
+            campaign_dir,
+            phase="candidate",
+            candidate_id=candidate_id,
+            identity=identity,
+            jobs=[job],
+            allow_failed_rerun=True,
+        )
+        result = {
+            "id": job.job_id,
+            "phase": "candidate",
+            "required": True,
+            "execution_sha256": codex_upgrade._job_execution_sha256(job),
+            "status": "failed",
+            "description": "历史 v7 A15 失败",
+            "duration_seconds": 0.0,
+            "steps": [{"step": 1, "return_code": 1}],
+            "evidence_roots": list(job.evidence_roots),
+            "missing_evidence_patterns": [],
+            "empty_evidence_patterns": [],
+            "covers": [],
+            "scenario_ids": list(job.scenario_ids),
+            "scenario_receipts": [],
+            "scenario_receipt_failures": [],
+            "track": "main",
+            "model_id": "gpt-5.5",
+            "expected_use_responses_lite": False,
+            "required_model_receipt": False,
+            "model_condition_receipt": None,
+            "model_condition_receipt_failure": None,
+            "tool_dependency_files": {
+                "run_candidate_core_capture.sh": (
+                    "b313b3fd313cd689e56d95f15e54f856"
+                    "78d1b367f6e8d8bd4d8b3d4e53b1d54c"
+                )
+            },
+            "disposition": "executed",
+        }
+        attempt = codex_upgrade._write_capture_attempt(
+            campaign_dir,
+            attempt_root,
+            {
+                "campaign_id": manifest["campaign_id"],
+                "phase": "candidate",
+                "candidate_id": candidate_id,
+                "status": "failed",
+                "identity": identity,
+                "results": [result],
+                "failure_observations": [],
+                "evidence_roots": [],
+                "evidence_permission_closeout": None,
+                "evidence_permission_error": {
+                    "type": "SyntheticFailure",
+                    "message": "合成历史 attempt 不封存证据权限收据。",
+                },
+                "environment": {
+                    "evidence_root": str(attempt_root / "evidence"),
+                    "before_probe": None,
+                    "after_probe": {"status": "passed"},
+                    "restoration_report": {"status": "passed"},
+                    "arm64_before_receipt": None,
+                    "arm64_after_receipt": None,
+                },
+                "binary_verification": None,
+                "execution_error": None,
+                "restoration_error": None,
+                "next_gate": "对账历史 v7 attempt。",
+            },
+        )
+        attempt = dict(attempt)
+        attempt["schema_version"] = codex_upgrade.LEGACY_CAPTURE_ATTEMPT_SCHEMA
+        attempt.pop("failure_observations", None)
+        attempt.pop("root_causes", None)
+        attempt.pop("attempt_digest", None)
+        attempt["attempt_digest"] = codex_upgrade._fingerprint(attempt)
+        attempt_path = attempt_root / "attempt.json"
+        attempt_path.write_text(
+            json.dumps(attempt, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        attempt_path.chmod(0o600)
+        return attempt_root.name, attempt
+
+    def _b0_failed_attempt(
+        self,
+        fixture: dict[str, object],
+        *,
+        scenario_ids: tuple[str, ...] = ("A15",),
+        failure_observations: list[dict[str, str]] | None = None,
+        legacy_without_failure_arrays: bool = False,
+    ) -> tuple[str, dict[str, object]]:
+        """发布已恢复环境下的失败 attempt，可选降级为历史无数组形态。"""
+
+        campaign_dir = fixture["campaign_dir"]
+        manifest = fixture["manifest"]
+        jobs = fixture["jobs"]
+        job = jobs[0]
+        attempt_root, _reservation = codex_upgrade._reserve_capture_attempt(
+            campaign_dir,
+            phase="official",
+            candidate_id=None,
+            identity=dict(manifest["official_identity"]),
+            jobs=jobs,
+            allow_failed_rerun=True,
+        )
+        result = {
+            "id": job.job_id,
+            "phase": "official",
+            "required": True,
+            "execution_sha256": codex_upgrade._job_execution_sha256(job),
+            "status": "failed",
+            "description": "合成失败 Job",
+            "duration_seconds": 0.0,
+            "steps": [],
+            "evidence_roots": [],
+            "missing_evidence_patterns": [],
+            "empty_evidence_patterns": [],
+            "covers": [],
+            "scenario_ids": list(scenario_ids),
+            "scenario_receipts": [],
+            "scenario_receipt_failures": [
+                {"scenario_id": scenario_id, "reason": "合成枚举失败"}
+                for scenario_id in scenario_ids
+            ],
+            "track": "main",
+            "model_id": "gpt-5.5",
+            "expected_use_responses_lite": False,
+            "required_model_receipt": False,
+            "model_condition_receipt": None,
+            "model_condition_receipt_failure": None,
+            "disposition": "executed",
+        }
+        attempt = codex_upgrade._write_capture_attempt(
+            campaign_dir,
+            attempt_root,
+            {
+                "campaign_id": manifest["campaign_id"],
+                "phase": "official",
+                "candidate_id": None,
+                "status": "failed",
+                "identity": dict(manifest["official_identity"]),
+                "results": [result],
+                "failure_observations": list(failure_observations or []),
+                "evidence_roots": [],
+                "evidence_permission_closeout": None,
+                "evidence_permission_error": {
+                    "type": "SyntheticFailure",
+                    "message": "合成失败 attempt 没有证据目录。",
+                },
+                "environment": {
+                    "evidence_root": str(attempt_root / "evidence"),
+                    "before_probe": None,
+                    "after_probe": {"status": "passed"},
+                    "restoration_report": {"status": "passed"},
+                    "arm64_before_receipt": None,
+                    "arm64_after_receipt": None,
+                },
+                "binary_verification": None,
+                "execution_error": None,
+                "restoration_error": None,
+                "next_gate": "对账失败 attempt。",
+            },
+        )
+        if legacy_without_failure_arrays:
+            attempt = dict(attempt)
+            attempt["schema_version"] = codex_upgrade.LEGACY_CAPTURE_ATTEMPT_SCHEMA
+            attempt.pop("failure_observations", None)
+            attempt.pop("root_causes", None)
+            attempt.pop("attempt_digest", None)
+            attempt["attempt_digest"] = codex_upgrade._fingerprint(attempt)
+            (attempt_root / "attempt.json").write_text(
+                json.dumps(attempt, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            (attempt_root / "attempt.json").chmod(0o600)
+        return attempt_root.name, attempt
 
     def _b0_run_dir(
         self,
@@ -14406,6 +14798,8 @@ class CodexUpgradeTest(unittest.TestCase):
         state: str = "failed",
         owner_pid: int | None = None,
         phase: str = "VC-0",
+        failure_class: str | None = None,
+        failure_observations: list[dict[str, str]] | None = None,
     ) -> Path:
         """一个已终止（或仍在运行）的父监督器 run 目录：state、events、minute ledger、run 清单。"""
 
@@ -14480,6 +14874,25 @@ class CodexUpgradeTest(unittest.TestCase):
                 "manifest_sha256": supervisor._sha256(supervisor._canonical(inner)),
             },
         )
+        if failure_class is not None:
+            diagnostic_path = supervisor._action_diagnostic_path(
+                run_dir,
+                "dispatch",
+                create_directory=True,
+            )
+            supervisor._write_action_diagnostic(
+                diagnostic_path,
+                campaign_id=str(fixture["manifest"]["campaign_id"]),
+                phase=phase,
+                action_id="dispatch",
+                owner_pid=owner_pid,
+                owner_nonce="7" * 64,
+                failure_kind="handled-error",
+                failure_class=failure_class,
+                failure_observations=failure_observations,
+                error_type="ConfigurationError",
+                message="机器分类测试失败。",
+            )
         for path in run_dir.rglob("*"):
             path.chmod(0o700 if path.is_dir() else 0o600)
         return run_dir
@@ -14508,6 +14921,726 @@ class CodexUpgradeTest(unittest.TestCase):
             (str(event["event_type"]), str(event["event_id"]))
             for event, _raw in codex_upgrade_timing_ledger._load_events(ledger_dir)
         ]
+
+    def test_recovery_required_before_reservation_reconciles_then_redispatches(self) -> None:
+        """reservation 前环境门禁失败：先暂停，对账只推进一次，再恢复同阶段。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            ledger_dir = fixture["timing_ledger"]
+            codex_upgrade_timing_ledger.append_event(
+                ledger_dir,
+                event_id="pre-reservation-recovery-required",
+                phase="VC-0",
+                event_type="recovery_required",
+                root_cause_id="environment-prerequisite",
+                next_action="reconcile-supervisor-run",
+            )
+            run_dir = self._b0_run_dir(
+                fixture,
+                "e" * 64,
+                failure_class="environment-prerequisite",
+            )
+            head_before = codex_upgrade_project_ledger.replay_head(
+                fixture["ledger"]
+            )
+            self.assertEqual(
+                codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)["status"],
+                "recovery_required",
+            )
+            with self.assertRaisesRegex(
+                codex_upgrade.TimingLedgerGateError,
+                "recovery_required",
+            ):
+                codex_upgrade._timing_ledger_batch_events(
+                    campaign_dir,
+                    fixture["manifest"],
+                    codex_upgrade._vc_campaign_plan(
+                        campaign_dir,
+                        fixture["manifest"],
+                    ),
+                    phase="VC-0",
+                    ledger_dir=ledger_dir,
+                )
+            result = reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
+            self.assertEqual(result["status"], "recoverable")
+            self.assertEqual(result["live_request_count"], 0)
+            self.assertEqual(
+                result["root_cause"]["stable_error_code"],
+                "supervisor-run.interrupted",
+            )
+            head_after = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+            self.assertEqual(head_after["sequence"], head_before["sequence"] + 1)
+            timing_after = codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)
+            self.assertEqual(timing_after["status"], "active")
+            self.assertEqual(timing_after["active_phase"], "VC-0")
+            self.assertEqual(timing_after["next_action"], "redispatch-same-batch")
+            self.assertFalse(list((campaign_dir / "official" / "attempts").glob("*")))
+
+            replay = reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
+            self.assertEqual(replay["status"], "recoverable")
+            self.assertTrue(replay["batch"]["reused"])
+            self.assertEqual(
+                codex_upgrade_project_ledger.replay_head(fixture["ledger"])[
+                    "sequence"
+                ],
+                head_after["sequence"],
+            )
+            self.assertEqual(
+                codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)[
+                    "head_sha256"
+                ],
+                timing_after["head_sha256"],
+            )
+
+    def test_reconcile_supervisor_run_preserves_multiple_readiness_causes(self) -> None:
+        """每个 check_id + failure_code 独立生成稳定根因，并在重放时只计一次。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            ledger_dir = fixture["timing_ledger"]
+            codex_upgrade_timing_ledger.append_event(
+                ledger_dir,
+                event_id="multi-readiness-recovery-required",
+                phase="VC-0",
+                event_type="recovery_required",
+                root_cause_id="campaign-run.action-failed",
+                next_action="reconcile-supervisor-run",
+            )
+            observations = [
+                {
+                    "check_id": "candidate-readiness.image",
+                    "failure_code": "runtime-image-or-capability-mismatch",
+                },
+                {
+                    "check_id": "candidate-readiness.storage",
+                    "failure_code": "host-or-container-path-not-writable",
+                },
+                {
+                    "check_id": "candidate-readiness.image",
+                    "failure_code": "runtime-image-or-capability-mismatch",
+                },
+            ]
+            run_dir = self._b0_run_dir(
+                fixture,
+                "f" * 64,
+                failure_class="environment-prerequisite",
+                failure_observations=observations,
+            )
+            result = reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
+            self.assertEqual(result["status"], "recoverable")
+            self.assertEqual(len(result["failure_observations"]), 2)
+            self.assertEqual(len(result["root_causes"]), 2)
+            self.assertEqual(
+                {item["stable_error_code"] for item in result["root_causes"]},
+                {"campaign-run.action-failed"},
+            )
+            cause_ids = [
+                item["root_cause_id"] for item in result["root_causes"]
+            ]
+            self.assertEqual(len(set(cause_ids)), 2)
+            self.assertEqual(
+                {
+                    item["root_cause_id"]
+                    for item in result["failure_observations"]
+                },
+                set(cause_ids),
+            )
+            head = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+            self.assertEqual(
+                {cause_id: head["root_cause_counts"][cause_id] for cause_id in cause_ids},
+                {cause_id: 1 for cause_id in cause_ids},
+            )
+
+            replay = reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
+            replay_head = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+            self.assertTrue(replay["batch"]["reused"])
+            self.assertEqual(
+                {cause_id: replay_head["root_cause_counts"][cause_id] for cause_id in cause_ids},
+                {cause_id: 1 for cause_id in cause_ids},
+            )
+            regenerated_observations, regenerated_causes = (
+                reconciler._supervisor_run_failures(
+                    {
+                        "phase": "VC-0",
+                        "last_operation": "different-volatile-operation",
+                        "failure_observations": [
+                            {
+                                "check_id": item["check_id"],
+                                "failure_code": item["failure_code"],
+                            }
+                            for item in result["failure_observations"]
+                        ],
+                    }
+                )
+            )
+            self.assertEqual(
+                [item["root_cause_id"] for item in regenerated_observations],
+                [item["root_cause_id"] for item in result["failure_observations"]],
+            )
+            self.assertEqual(
+                [item["root_cause_id"] for item in regenerated_causes],
+                cause_ids,
+            )
+
+    def test_attempt_freezes_deduplicated_failures_with_cross_campaign_ids(self) -> None:
+        """attempt 按 check_id + failure_code 去重，根因身份不含 Campaign 坐标。"""
+
+        observations = [
+            {
+                "check_id": "candidate-readiness.storage",
+                "failure_code": "host-or-container-path-not-writable",
+            },
+            {
+                "check_id": "candidate-readiness.storage",
+                "failure_code": "host-or-container-path-not-writable",
+            },
+            {"check_id": "A15", "failure_code": "scenario-receipt-failed"},
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            first_fixture = self._b0_fixture(
+                root / "first", campaign_id="upgrade-0154-attempt-causes-first"
+            )
+            _first_id, first = self._b0_failed_attempt(
+                first_fixture,
+                failure_observations=observations,
+            )
+            second_fixture = self._b0_fixture(
+                root / "second", campaign_id="upgrade-0154-attempt-causes-second"
+            )
+            _second_id, second = self._b0_failed_attempt(
+                second_fixture,
+                failure_observations=observations,
+            )
+            self.assertEqual(len(first["failure_observations"]), 2)
+            self.assertEqual(len(first["root_causes"]), 2)
+            self.assertEqual(
+                [
+                    (item["check_id"], item["failure_code"])
+                    for item in first["failure_observations"]
+                ],
+                [
+                    ("A15", "scenario-receipt-failed"),
+                    (
+                        "candidate-readiness.storage",
+                        "host-or-container-path-not-writable",
+                    ),
+                ],
+            )
+            self.assertEqual(
+                [item["root_cause_id"] for item in first["root_causes"]],
+                [item["root_cause_id"] for item in second["root_causes"]],
+            )
+
+    def test_historical_candidate_core_summary_recovers_a15_root_cause(self) -> None:
+        """v7 的完整摘要只在旧 producer 与闭合动作矩阵下还原 A15。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            host_runs = Path(directory).resolve() / "runs"
+            summary = self._historical_v7_run_summary()
+            evidence_name = f"{summary['run_id']}.failed-attempt3"
+            evidence_root = host_runs / evidence_name
+            evidence_root.mkdir(parents=True)
+            summary_path = evidence_root / "run-summary.json"
+            self._write_json(
+                summary_path,
+                summary,
+            )
+            summary_path.chmod(0o600)
+            result = {
+                "id": "candidate-frozen-core",
+                "phase": "candidate",
+                "status": "failed",
+                "tool_dependency_files": {
+                    "run_candidate_core_capture.sh": (
+                        "b313b3fd313cd689e56d95f15e54f856"
+                        "78d1b367f6e8d8bd4d8b3d4e53b1d54c"
+                    )
+                },
+                "evidence_roots": [
+                    f"/root/oauth-capture/runs/{evidence_name}"
+                ],
+                "scenario_receipt_failures": [],
+                "model_condition_receipt_failure": None,
+                "missing_evidence_patterns": [],
+                "empty_evidence_patterns": [],
+                "steps": [{"step": 1, "return_code": 1}],
+            }
+            with mock.patch.object(
+                codex_upgrade,
+                "FAILED_JOB_EVIDENCE_HOST_RUN_ROOT",
+                host_runs,
+            ):
+                observations = codex_upgrade._job_failure_observations(result)
+            self.assertEqual(
+                observations,
+                [
+                    {
+                        "check_id": "A15.models_manifest",
+                        "failure_code": "action-count-below-contract",
+                    }
+                ],
+            )
+
+            # 相同摘要若没有登记 producer 身份，只能退回通用 step 根因。
+            unknown = json.loads(json.dumps(result))
+            unknown["tool_dependency_files"][
+                "run_candidate_core_capture.sh"
+            ] = "0" * 64
+            with mock.patch.object(
+                codex_upgrade,
+                "FAILED_JOB_EVIDENCE_HOST_RUN_ROOT",
+                host_runs,
+            ):
+                self.assertEqual(
+                    codex_upgrade._job_failure_observations(unknown),
+                    [
+                        {
+                            "check_id": "job.candidate-frozen-core.step-1",
+                            "failure_code": "nonzero-exit",
+                        }
+                    ],
+                )
+
+            # 已登记 producer 还必须逐字节命中 v7 最终摘要；局部矩阵即使结构
+            # 合法也不能冒充这次事故的精确诊断。
+            partial = json.loads(json.dumps(summary))
+            partial["scenarios"] = partial["scenarios"][:-1]
+            self._write_json(summary_path, partial)
+            summary_path.chmod(0o600)
+            with (
+                mock.patch.object(
+                    codex_upgrade,
+                    "FAILED_JOB_EVIDENCE_HOST_RUN_ROOT",
+                    host_runs,
+                ),
+                self.assertRaisesRegex(
+                    codex_upgrade.ConfigurationError,
+                    "摘要与冻结事故不一致",
+                ),
+            ):
+                codex_upgrade._job_failure_observations(result)
+
+    def test_reconcile_stopped_attempt_preserves_a15_root_cause_once(self) -> None:
+        """真实 v7 摘要在 stopped 下仍还原 A15，且旧 Campaign 永久停线。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            ledger_dir = fixture["timing_ledger"]
+            host_runs = fixture["data"] / "runs"
+            host_runs.mkdir(mode=0o700)
+            with mock.patch.object(
+                codex_upgrade,
+                "FAILED_JOB_EVIDENCE_HOST_RUN_ROOT",
+                host_runs,
+            ):
+                attempt_id, attempt = self._b0_historical_v7_attempt(
+                    fixture,
+                    host_runs=host_runs,
+                )
+            attempt_path = (
+                campaign_dir
+                / "candidates"
+                / "c0154-candidate-v7"
+                / "attempts"
+                / attempt_id
+                / "attempt.json"
+            )
+            attempt_bytes = attempt_path.read_bytes()
+            with mock.patch.object(
+                codex_upgrade,
+                "FAILED_JOB_EVIDENCE_HOST_RUN_ROOT",
+                host_runs,
+            ):
+                derived_observations, derived_causes = (
+                    codex_upgrade._attempt_failure_facts(attempt)
+                )
+            self.assertEqual(len(derived_observations), 1)
+            self.assertEqual(
+                derived_observations[0]["check_id"],
+                "A15.models_manifest",
+            )
+            self.assertEqual(
+                derived_observations[0]["failure_code"],
+                "action-count-below-contract",
+            )
+            a15_cause_id = derived_causes[0]["root_cause_id"]
+            codex_upgrade_timing_ledger.append_event(
+                ledger_dir,
+                event_id=f"v7-attempt-started-{attempt_id}",
+                phase="VC-0",
+                event_type="attempt_started",
+                attempt_id=attempt_id,
+                next_action="capture-official",
+            )
+            codex_upgrade_timing_ledger.append_event(
+                ledger_dir,
+                event_id=f"v7-attempt-failed-{attempt_id}",
+                phase="VC-0",
+                event_type="attempt_failed",
+                attempt_id=attempt_id,
+                root_cause_id=a15_cause_id,
+                next_action="stop-the-line",
+            )
+            codex_upgrade_timing_ledger.append_event(
+                ledger_dir,
+                event_id="v7-stage-abandoned",
+                phase="VC-0",
+                event_type="stage_abandoned",
+                root_cause_id=a15_cause_id,
+                next_action="stop-the-line",
+            )
+            codex_upgrade_timing_ledger.append_event(
+                ledger_dir,
+                event_id="v7-stop-the-line",
+                phase="VC-0",
+                event_type="stop_the_line",
+                root_cause_id=a15_cause_id,
+                next_action="reconcile-attempt",
+            )
+
+            with mock.patch.object(
+                codex_upgrade,
+                "FAILED_JOB_EVIDENCE_HOST_RUN_ROOT",
+                host_runs,
+            ):
+                result = reconciler.reconcile_attempt(campaign_dir, attempt_id)
+            self.assertEqual(result["status"], "permanent_stop")
+            self.assertEqual(
+                result["decision"]["terminal_reason"],
+                "prior_stop_the_line",
+            )
+            self.assertEqual(result["root_cause"]["root_cause_id"], a15_cause_id)
+            self.assertEqual(
+                result["root_cause"]["stable_error_code"],
+                "campaign-run.action-failed",
+            )
+            self.assertEqual(
+                result["failure_observations"][0]["check_id"],
+                "A15.models_manifest",
+            )
+            self.assertEqual(
+                codex_upgrade_project_ledger.replay_head(fixture["ledger"])[
+                    "root_cause_counts"
+                ][a15_cause_id],
+                1,
+            )
+            self.assertEqual(
+                codex_upgrade_project_ledger.replay_head(fixture["ledger"])[
+                    "terminal_campaigns"
+                ][str(fixture["manifest"]["campaign_id"])]["terminal_reason"],
+                "prior_stop_the_line",
+            )
+            with mock.patch.object(
+                codex_upgrade,
+                "FAILED_JOB_EVIDENCE_HOST_RUN_ROOT",
+                host_runs,
+            ):
+                replay = reconciler.reconcile_attempt(campaign_dir, attempt_id)
+            self.assertTrue(replay["batch"]["reused"])
+            self.assertEqual(attempt_path.read_bytes(), attempt_bytes)
+            self.assertEqual(
+                codex_upgrade_project_ledger.replay_head(fixture["ledger"])[
+                    "root_cause_counts"
+                ][a15_cause_id],
+                1,
+            )
+
+    def test_malformed_historical_v7_writes_no_reconciliation_artifact(self) -> None:
+        """历史摘要校验必须先于 provenance 与账本写入，失败时保持零副作用。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            host_runs = fixture["data"] / "runs"
+            host_runs.mkdir(mode=0o700)
+            with mock.patch.object(
+                codex_upgrade,
+                "FAILED_JOB_EVIDENCE_HOST_RUN_ROOT",
+                host_runs,
+            ):
+                attempt_id, _attempt = self._b0_historical_v7_attempt(
+                    fixture,
+                    host_runs=host_runs,
+                )
+            summary = self._historical_v7_run_summary()
+            evidence_root = host_runs / f"{summary['run_id']}.failed-attempt3"
+            summary["scenarios"] = summary["scenarios"][:-1]
+            self._write_json(evidence_root / "run-summary.json", summary)
+            (evidence_root / "run-summary.json").chmod(0o600)
+            head_before = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+            events_before = self._b0_ledger_events(fixture["timing_ledger"])
+            receipt_dir = (
+                fixture["campaign_dir"]
+                / "control"
+                / "reconciliation"
+                / f"attempt-{attempt_id}"
+            )
+
+            with (
+                mock.patch.object(
+                    codex_upgrade,
+                    "FAILED_JOB_EVIDENCE_HOST_RUN_ROOT",
+                    host_runs,
+                ),
+                self.assertRaisesRegex(
+                    reconciler.ReconcilerError,
+                    "历史 attempt 失败观测无法重放.*摘要与冻结事故不一致",
+                ),
+            ):
+                reconciler.reconcile_attempt(fixture["campaign_dir"], attempt_id)
+
+            self.assertFalse(receipt_dir.exists())
+            self.assertEqual(
+                codex_upgrade_project_ledger.replay_head(fixture["ledger"])[
+                    "head_sha256"
+                ],
+                head_before["head_sha256"],
+            )
+            self.assertEqual(
+                self._b0_ledger_events(fixture["timing_ledger"]),
+                events_before,
+            )
+
+    def test_reconcile_attempt_counts_each_observation_once(self) -> None:
+        """同一 attempt 的多个观测分别计数，重复观测与整次对账重放都不增计数。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            observations = [
+                {
+                    "check_id": "candidate-readiness.storage",
+                    "failure_code": "host-or-container-path-not-writable",
+                },
+                {
+                    "check_id": "candidate-readiness.storage",
+                    "failure_code": "host-or-container-path-not-writable",
+                },
+                {"check_id": "A15", "failure_code": "scenario-receipt-failed"},
+            ]
+            attempt_id, _attempt = self._b0_failed_attempt(
+                fixture,
+                failure_observations=observations,
+            )
+            result = reconciler.reconcile_attempt(
+                fixture["campaign_dir"], attempt_id
+            )
+            self.assertEqual(result["status"], "recoverable")
+            self.assertEqual(len(result["failure_observations"]), 2)
+            self.assertEqual(len(result["root_causes"]), 2)
+            cause_ids = [item["root_cause_id"] for item in result["root_causes"]]
+            head = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+            self.assertEqual(
+                {cause_id: head["root_cause_counts"][cause_id] for cause_id in cause_ids},
+                {cause_id: 1 for cause_id in cause_ids},
+            )
+            self.assertEqual(
+                {
+                    (item["check_id"], item["failure_code"])
+                    for item in head["failure_observations"]
+                    if item["operation_id"] == f"reconcile-attempt:{attempt_id}"
+                },
+                {
+                    ("A15", "scenario-receipt-failed"),
+                    (
+                        "candidate-readiness.storage",
+                        "host-or-container-path-not-writable",
+                    ),
+                },
+            )
+            replay = reconciler.reconcile_attempt(
+                fixture["campaign_dir"], attempt_id
+            )
+            self.assertTrue(replay["batch"]["reused"])
+            replay_head = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+            self.assertEqual(
+                {cause_id: replay_head["root_cause_counts"][cause_id] for cause_id in cause_ids},
+                {cause_id: 1 for cause_id in cause_ids},
+            )
+
+    def test_reconcile_historical_attempt_without_failure_arrays(self) -> None:
+        """历史 attempt 不回写，按既有 Job 枚举字段只读派生 A15 根因。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            attempt_id, _attempt = self._b0_failed_attempt(
+                fixture,
+                legacy_without_failure_arrays=True,
+            )
+            attempt_path = (
+                fixture["campaign_dir"]
+                / "official"
+                / "attempts"
+                / attempt_id
+                / "attempt.json"
+            )
+            before = attempt_path.read_bytes()
+            result = reconciler.reconcile_attempt(fixture["campaign_dir"], attempt_id)
+            self.assertEqual(
+                result["root_cause"]["stable_error_code"],
+                "campaign-run.action-failed",
+            )
+            self.assertEqual(result["failure_observations"][0]["check_id"], "A15")
+            self.assertEqual(len(result["root_causes"]), 1)
+            self.assertEqual(attempt_path.read_bytes(), before)
+
+    def test_late_reconcile_stops_but_does_not_relabel_a15_as_deadline(self) -> None:
+        """逾期对账仍永久停线，但 attempt 根因固定在其完成时的 A15。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            attempt_id, attempt = self._b0_failed_attempt(fixture)
+            a15_cause_id = attempt["root_causes"][0]["root_cause_id"]
+            deadline = codex_upgrade_timing_ledger.inspect_ledger(
+                fixture["timing_ledger"]
+            )["total_deadline_at_utc"]
+            later = (
+                datetime.fromisoformat(deadline.replace("Z", "+00:00"))
+                + timedelta(hours=1)
+            ).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+            result = reconciler.reconcile_attempt(
+                fixture["campaign_dir"], attempt_id, now=later
+            )
+            self.assertEqual(result["status"], "permanent_stop")
+            self.assertEqual(
+                result["root_cause"]["stable_error_code"],
+                "campaign-run.action-failed",
+            )
+            self.assertEqual(result["root_cause"]["root_cause_id"], a15_cause_id)
+            self.assertEqual(result["decision"]["terminal_reason"], "deadline_wall_clock")
+            cause_ids = [item["root_cause_id"] for item in result["root_causes"]]
+            self.assertEqual(cause_ids, [a15_cause_id])
+            head = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+            self.assertEqual(
+                {cause_id: head["root_cause_counts"][cause_id] for cause_id in cause_ids},
+                {cause_id: 1 for cause_id in cause_ids},
+            )
+
+    def test_recovery_required_after_reservation_needs_approved_resume(self) -> None:
+        """reservation 后环境前提失败：对账保留暂停，批准在 resume 边界恢复 active。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            ledger_dir = fixture["timing_ledger"]
+            codex_upgrade_timing_ledger.append_event(
+                ledger_dir,
+                event_id="post-reservation-recovery-required",
+                phase="VC-0",
+                event_type="recovery_required",
+                root_cause_id="environment-prerequisite",
+                next_action="reconcile-attempt",
+            )
+            attempt_id = self._b0_orphan_attempt(fixture)
+            result = reconciler.reconcile_attempt(campaign_dir, attempt_id)
+            self.assertEqual(result["status"], "recoverable")
+            preview = result["recovery_preview"]
+            preview_path = Path(result["recovery_preview_path"])
+            self.assertEqual(
+                preview["campaign_ledger_head"]["status"],
+                "recovery_required",
+            )
+            self.assertEqual(
+                preview["project_ledger_head"]["sha256"],
+                result["project_head"]["head_sha256"],
+            )
+            self.assertEqual(
+                codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)["status"],
+                "recovery_required",
+            )
+            with self.assertRaisesRegex(reconciler.ReconcilerError, "尚未批准"):
+                reconciler.load_approved_recovery_preview(
+                    campaign_dir,
+                    preview_path,
+                    phase="official",
+                    candidate_id=None,
+                )
+            reconciler.approve_recovery_preview(
+                campaign_dir,
+                attempt_id,
+                approve_sha256=preview["review_sha256"],
+            )
+            loaded = reconciler.load_approved_recovery_preview(
+                campaign_dir,
+                preview_path,
+                phase="official",
+                candidate_id=None,
+            )
+            self.assertTrue(loaded["timing_recovery_event"]["appended"])
+            timing_after = codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)
+            self.assertEqual(timing_after["status"], "active")
+            replay = reconciler.load_approved_recovery_preview(
+                campaign_dir,
+                preview_path,
+                phase="official",
+                candidate_id=None,
+            )
+            self.assertFalse(replay["timing_recovery_event"]["appended"])
+            self.assertEqual(
+                codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)[
+                    "head_sha256"
+                ],
+                timing_after["head_sha256"],
+            )
+            with codex_upgrade_project_ledger.campaign_ledger_lock(
+                campaign_dir
+            ) as campaign_ledger_dir:
+                codex_upgrade_project_ledger.write_batch(
+                    campaign_ledger_dir,
+                    operation_id="concurrent-head-advance",
+                    event_type="reconciliation_committed",
+                    payload={
+                        "campaign_id": fixture["manifest"]["campaign_id"],
+                        "request": {
+                            "status": "resolved",
+                            "identity_keys": [],
+                            "estimated_delta": 0,
+                            "estimated_sources": [],
+                        },
+                    },
+                    source={"kind": "test", "sha256": "0" * 64},
+                )
+            codex_upgrade_project_ledger.reconcile_project_ledger(
+                fixture["ledger"],
+                campaign_dir=campaign_dir,
+            )
+            with self.assertRaisesRegex(
+                reconciler.ReconcilerError,
+                "项目总账 head 已推进",
+            ):
+                reconciler.load_approved_recovery_preview(
+                    campaign_dir,
+                    preview_path,
+                    phase="official",
+                    candidate_id=None,
+                )
 
     def test_b0_reconcile_attempt_orphan_is_recoverable_and_gates_resume(self) -> None:
         """孤儿 attempt：先入账后判定为可恢复，生成零请求预览；resume 只认已批准预览。"""
@@ -14665,7 +15798,10 @@ class CodexUpgradeTest(unittest.TestCase):
             evidence_root.mkdir(mode=0o700)
             self._write_json(evidence_root / "surface.json", {"records": []})
             (evidence_root / "surface.json").chmod(0o600)
-            attempt_id = self._b0_orphan_attempt(fixture)
+            attempt_id = self._b0_orphan_attempt(
+                fixture,
+                evidence_roots=[evidence_root],
+            )
             result = reconciler.reconcile_attempt(campaign_dir, attempt_id)
             self.assertEqual(result["status"], "permanent_stop")
             self.assertEqual(result["decision"]["terminal_reason"], "accounting_unresolved")
@@ -14752,7 +15888,11 @@ class CodexUpgradeTest(unittest.TestCase):
             )
             self._make_private_tree(capture)
             head_before = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
-            first = self._b0_orphan_attempt(fixture, complete_job=True)
+            first = self._b0_orphan_attempt(
+                fixture,
+                complete_job=True,
+                evidence_roots=[capture],
+            )
             result = reconciler.reconcile_attempt(campaign_dir, first)
             self.assertEqual(result["status"], "recoverable")
             self.assertEqual(result["jobs"]["complete"], ["official-test"])
@@ -16399,4 +17539,3 @@ class ExecutionTreeVerificationTest(unittest.TestCase):
 
         repo_root = Path(codex_upgrade.__file__).resolve().parents[2]
         codex_upgrade._verify_execution_tree(repo_root)
-

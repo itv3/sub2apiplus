@@ -2370,6 +2370,15 @@ print(json.dumps({"status":"passed","namespaces":output},sort_keys=True))
     }
 
 
+def capture_storage_probe(
+    jobs: Iterable[Any],
+    configuration: Mapping[str, Any],
+) -> dict[str, Any]:
+    """公开执行零网络的宿主／容器可写路径探针，供 VC-5 就绪门禁复用。"""
+
+    return _capture_storage_probe(jobs, configuration)
+
+
 def _bwrap_probe(container: str) -> dict[str, Any]:
     version = _run(
         ["docker", "exec", container, "bwrap", "--version"],

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import socket
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -12,6 +14,23 @@ from tools.official_client_capture import codex_upgrade_zero_request_smoke as sm
 
 
 class ZeroRequestSmokeTests(unittest.TestCase):
+    def test_provenance_import_does_not_reenter_test_fixtures(self) -> None:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "from tools.official_client_capture import "
+                    "codex_upgrade_live_request_provenance"
+                ),
+            ],
+            cwd=Path(__file__).resolve().parents[3],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_smoke_passes_on_staging_fixture_and_blocks_network(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve() / "staging" / "smoke"
@@ -22,8 +41,9 @@ class ZeroRequestSmokeTests(unittest.TestCase):
             self.assertTrue(receipt["summary"]["project_ledger"]["admitted"]["seal"])
             self.assertEqual(receipt["summary"]["ledger_close"]["status"], "closed")
             with smoke._NetworkGuard() as guard:
-                with self.assertRaises(smoke.SmokeError):
-                    socket.socket().connect(("127.0.0.1", 9))
+                with socket.socket() as guarded_socket:
+                    with self.assertRaises(smoke.SmokeError):
+                        guarded_socket.connect(("127.0.0.1", 9))
             self.assertEqual(len(guard.attempts), 1)
             # 守卫退出后 socket 恢复原样
             self.assertIs(socket.socket.connect, guard._original_connect)

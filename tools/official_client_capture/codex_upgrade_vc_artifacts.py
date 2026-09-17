@@ -27,7 +27,7 @@ INTERRUPTED_RECOVERY_CONTRACT_SCHEMA = (
 GATE_REQUIREMENTS_SCHEMA = "codex-post-promotion-gate-requirements/v1"
 GATE_MAPPING_SCHEMA = "codex-post-promotion-gate-mapping/v2"
 GATE_PLAN_SCHEMA = "codex-post-promotion-gate-plan/v1"
-CANDIDATE_BUILD_SCHEMA = "codex-upgrade-candidate-build-receipt/v1"
+CANDIDATE_BUILD_SCHEMA = "codex-upgrade-candidate-build-receipt/v2"
 CANDIDATE_DELIVERY_SCHEMA = "codex-upgrade-candidate-delivery-receipt/v1"
 
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -1508,6 +1508,10 @@ def build_candidate_build_receipt(
     gate_requirements: Mapping[str, Any],
     gate_plan: Mapping[str, Any],
     implementation_tests: Mapping[str, Any],
+    build_inventory: Mapping[str, Any],
+    frontend_provenance: Mapping[str, Any],
+    image_inspection: Mapping[str, Any],
+    capability_probe: Mapping[str, Any],
     built_at_utc: str,
 ) -> dict[str, Any]:
     """生成 VC-4 Candidate 构建收据并冻结完整身份。"""
@@ -1538,6 +1542,10 @@ def build_candidate_build_receipt(
         "gate_requirements": dict(gate_requirements),
         "gate_plan": dict(gate_plan),
         "implementation_tests": dict(implementation_tests),
+        "build_inventory": dict(build_inventory),
+        "frontend_provenance": dict(frontend_provenance),
+        "image_inspection": dict(image_inspection),
+        "capability_probe": dict(capability_probe),
         "built_at_utc": built_at_utc,
     }
     payload["receipt_digest"] = digest(payload)
@@ -1567,6 +1575,10 @@ def validate_candidate_build_receipt(value: Any) -> dict[str, Any]:
         "gate_requirements",
         "gate_plan",
         "implementation_tests",
+        "build_inventory",
+        "frontend_provenance",
+        "image_inspection",
+        "capability_probe",
         "built_at_utc",
         "receipt_digest",
     }
@@ -1595,6 +1607,12 @@ def validate_candidate_build_receipt(value: Any) -> dict[str, Any]:
     gate_requirements = payload.get("gate_requirements")
     gate_plan = payload.get("gate_plan")
     implementation_tests = payload.get("implementation_tests")
+    machine_receipts = {
+        "build_inventory": payload.get("build_inventory"),
+        "frontend_provenance": payload.get("frontend_provenance"),
+        "image_inspection": payload.get("image_inspection"),
+        "capability_probe": payload.get("capability_probe"),
+    }
     if not isinstance(source, Mapping) or set(source) != {"root", "tree_sha256", "git_commit"}:
         raise VCArtifactError("Candidate source 身份不闭合")
     _sha256(source.get("tree_sha256"), "Candidate source tree_sha256")
@@ -1695,6 +1713,22 @@ def validate_candidate_build_receipt(value: Any) -> dict[str, Any]:
         implementation_tests.get("receipt_digest"),
         "Candidate implementation_tests.receipt_digest",
     )
+    for name, machine_receipt in machine_receipts.items():
+        if not isinstance(machine_receipt, Mapping) or set(machine_receipt) != {
+            "path",
+            "sha256",
+            "bytes",
+            "receipt_digest",
+        }:
+            raise VCArtifactError(f"Candidate {name} 机器收据绑定不闭合")
+        _relative_path(machine_receipt.get("path"), f"Candidate {name}.path")
+        _sha256(machine_receipt.get("sha256"), f"Candidate {name}.sha256")
+        if not isinstance(machine_receipt.get("bytes"), int) or machine_receipt["bytes"] <= 0:
+            raise VCArtifactError(f"Candidate {name}.bytes 非法")
+        _sha256(
+            machine_receipt.get("receipt_digest"),
+            f"Candidate {name}.receipt_digest",
+        )
     _timestamp(payload.get("built_at_utc"), "Candidate built_at_utc")
     recorded = _sha256(payload.get("receipt_digest"), "Candidate receipt_digest")
     unsigned = dict(payload)

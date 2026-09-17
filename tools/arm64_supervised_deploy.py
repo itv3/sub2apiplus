@@ -99,7 +99,7 @@ from typing import Any, Callable, Mapping
 # A2-3：不再硬编码整树摘要。暂存树自算摘要即期望值，候选与生产三向互等；
 # 收据额外写策略 v2 的五个摘要，供 VC-0 收口与 seal 按 wire 身份比对。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "dc4cf121c5bd29ff058fcb2cc6bec74536804dffd43e3e6a2f43d94877ac080a"
+    "d1bbea57a158feb5fb03615b5faf12791f3ed6e261a51471bbde5d0a8c8a486b"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "b9ca7b6f48b3c33a63a864a9ce7ebd617335378ea52fe9148ea161ab3b276ada"
@@ -144,6 +144,7 @@ MANAGED_RUNTIME_DOCUMENTS = (
     "egress/maintenance/upstream-codex-0154-vc5-client-checkpoint-legal-stop-20260916-freeze-successor.json",
     "egress/maintenance/upstream-codex-0154-vc5-a15-models-cache-restart-20260916-freeze-successor.json",
     "egress/maintenance/upstream-codex-0154-vc5-aux-empty-mapping-20260916-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-framework-closure-20260917-freeze-successor.json",
 )
 MANAGED_ASSERTION_PREPARER = "prepare_assertion_bundle.sh"
 TARGET_SCENARIO_MANIFEST = "codex_upgrade_scenarios_0_154_0.json"

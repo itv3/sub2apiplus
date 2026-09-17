@@ -601,7 +601,7 @@ class CodexUpgrade0154VCContractTests(unittest.TestCase):
             ).isoformat().replace("+00:00", "Z")
             execution_sha256 = "2" * 64
             reservation = {
-                "schema_version": codex_upgrade.CAPTURE_RESERVATION_SCHEMA,
+                "schema_version": codex_upgrade.LEGACY_CAPTURE_RESERVATION_SCHEMA,
                 "campaign_id": manifest["campaign_id"],
                 "campaign_mode": "formal",
                 "campaign_purpose": "validation_only",

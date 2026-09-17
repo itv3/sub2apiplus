@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-candidate-build-receipt-v1.json",
+  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-candidate-build-receipt-v2.json",
   "title": "Codex VC-4 Candidate 同源构建收据",
   "type": "object",
   "additionalProperties": false,
@@ -24,11 +24,15 @@
     "gate_requirements",
     "gate_plan",
     "implementation_tests",
+    "build_inventory",
+    "frontend_provenance",
+    "image_inspection",
+    "capability_probe",
     "built_at_utc",
     "receipt_digest"
   ],
   "properties": {
-    "schema_version": {"const": "codex-upgrade-candidate-build-receipt/v1"},
+    "schema_version": {"const": "codex-upgrade-candidate-build-receipt/v2"},
     "status": {"const": "complete"},
     "campaign_id": {"$ref": "#/$defs/safeId"},
     "campaign_manifest_sha256": {"$ref": "#/$defs/sha256"},
@@ -126,6 +130,10 @@
         "receipt_digest": {"$ref": "#/$defs/sha256"}
       }
     },
+    "build_inventory": {"$ref": "#/$defs/machineReceiptBinding"},
+    "frontend_provenance": {"$ref": "#/$defs/machineReceiptBinding"},
+    "image_inspection": {"$ref": "#/$defs/machineReceiptBinding"},
+    "capability_probe": {"$ref": "#/$defs/machineReceiptBinding"},
     "built_at_utc": {"type": "string", "format": "date-time"},
     "receipt_digest": {"$ref": "#/$defs/sha256"}
   },
@@ -168,6 +176,17 @@
         "path": {"$ref": "#/$defs/relativePath"},
         "sha256": {"$ref": "#/$defs/sha256"},
         "bytes": {"type": "integer", "minimum": 1}
+      }
+    },
+    "machineReceiptBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "bytes", "receipt_digest"],
+      "properties": {
+        "path": {"$ref": "#/$defs/relativePath"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "bytes": {"type": "integer", "minimum": 1},
+        "receipt_digest": {"$ref": "#/$defs/sha256"}
       }
     }
   }

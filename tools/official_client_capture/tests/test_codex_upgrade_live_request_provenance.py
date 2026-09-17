@@ -242,6 +242,235 @@ class ProvenanceFixture:
 
 
 class LiveRequestProvenanceTests(unittest.TestCase):
+    def test_real_candidate_layouts_are_counted_and_cross_root_paired(self) -> None:
+        """真实 v7 的四种产物形状必须闭合，frozen 重试不能因逻辑 run_id 相同而合并。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = ProvenanceFixture(Path(directory).resolve())
+            fixture.build()
+
+            direct = fixture.runs / "v7-candidate-direct-core"
+            pcap = direct / "direct" / "codex-http-s1" / "egress.pcap"
+            pcap.parent.mkdir(parents=True, mode=0o700)
+            pcap.write_bytes(b"pcap" * 8)
+            _write_json(
+                direct / "result" / "codex-http" / "s1" / "summary.json",
+                {"scenario": "s1", "valid": True, "turn_count": 1},
+            )
+            _turn_events(
+                direct / "result" / "codex-http" / "s1" / "turn1-events.jsonl",
+                1,
+            )
+            _write_json(
+                direct / "run-summary.json",
+                {
+                    "schema_version": "sub2api-direct-capture/v1",
+                    "run_id": direct.name,
+                    "status": "complete",
+                    "cases": [
+                        {
+                            "subject": "codex-http",
+                            "scenario": "s1",
+                            "valid": True,
+                            "pcap_bytes": pcap.stat().st_size,
+                            "pcap_sha256": hashlib.sha256(pcap.read_bytes()).hexdigest(),
+                        }
+                    ],
+                },
+            )
+
+            mitm = fixture.runs / "v7-candidate-mitm-core-codex-http-s1-a1-run"
+            http_path = mitm / "mitm" / "codex-http" / "codex-http.jsonl"
+            _write_jsonl(
+                http_path,
+                [
+                    _mitm_http_row(
+                        mitm.name,
+                        "codex-http",
+                        "s1",
+                        "POST",
+                        RESPONSES,
+                        "gpt-5.5",
+                    )
+                ],
+            )
+            http_raw = http_path.read_bytes()
+            _write_json(
+                mitm / "result" / "s1" / "summary.json",
+                {"scenario": "s1", "valid": True, "turn_count": 1},
+            )
+            _turn_events(mitm / "result" / "s1" / "turn1-events.jsonl", 1)
+            _write_json(
+                mitm / "run-summary.json",
+                {
+                    "schema_version": "sub2api-openai-mitm-scenario/v2",
+                    "run_id": mitm.name,
+                    "status": "complete",
+                    "driver_return_code": 0,
+                    "subject": "codex-http",
+                    "scenario": "s1",
+                    "scenario_result": {"valid": True, "error_type": ""},
+                    "jsonl": [
+                        {
+                            "path": "mitm/codex-http/codex-http.jsonl",
+                            "bytes": len(http_raw),
+                            "records": 1,
+                            "sha256": hashlib.sha256(http_raw).hexdigest(),
+                        }
+                    ],
+                },
+            )
+
+            frozen_logical = "v7-candidate-frozen-core"
+            frozen_roots = []
+            for attempt in (1, 2):
+                frozen = fixture.runs / f"{frozen_logical}.failed-attempt{attempt}"
+                frozen_roots.append(frozen)
+                scenario_root = frozen / "scenarios" / "A03"
+                frozen_pcap = scenario_root / "egress.pcap"
+                frozen_pcap.parent.mkdir(parents=True, mode=0o700)
+                frozen_pcap.write_bytes((f"attempt-{attempt}".encode("ascii")) * 4)
+                relay = scenario_root / "relay"
+                relay.mkdir(mode=0o700)
+                (relay / "conn001.client_to_upstream.bin").write_bytes(
+                    _h1_post(RESPONSES, {"model": "gpt-5.5"})
+                )
+                _write_json(
+                    frozen / "run-summary.json",
+                    {
+                        "schema_version": "candidate-core-capture/v1",
+                        "codex_version": "0.154.0",
+                        "run_id": frozen_logical,
+                        "status": "failed",
+                        "explicit_gate": True,
+                        "production_forwarding_enabled": False,
+                        "scenarios": [
+                            {
+                                "scenario_id": "A03",
+                                "actions": {"responses_http_success": 1},
+                                "production_forwarded": False,
+                                "pcap_bytes": frozen_pcap.stat().st_size,
+                                "pcap_sha256": hashlib.sha256(
+                                    frozen_pcap.read_bytes()
+                                ).hexdigest(),
+                            }
+                        ],
+                    },
+                )
+
+            h1 = fixture.runs / "v7-candidate-h1"
+            _write_json(
+                h1 / "h1-wire.json",
+                {
+                    "schema_version": "h1-wire-probe/v1",
+                    "requests": [
+                        {
+                            "request_line": (
+                                "GET /backend-api/codex/models?client_version=0.154.0 "
+                                "HTTP/1.1"
+                            )
+                        },
+                        {
+                            "request_line": (
+                                "GET /backend-api/codex/responses HTTP/1.1"
+                            )
+                        },
+                        {
+                            "request_line": (
+                                "POST /backend-api/codex/images/generations HTTP/1.1"
+                            )
+                        },
+                    ],
+                },
+            )
+
+            attempt = (
+                fixture.campaign_dir
+                / "candidates"
+                / "c0154-candidate-v7"
+                / "attempts"
+                / "20260916T124216Z-f5194abd8934f5af"
+            )
+            _write_json(attempt / "reservation.json", {})
+            _write_json(
+                attempt / "job-candidate-x.json",
+                {
+                    "id": "candidate-x",
+                    "evidence_roots": [
+                        "/capture/runs/v7-candidate-direct-core",
+                        "/capture/runs/v7-candidate-mitm-core-codex-http-s1-a1-run",
+                        "/capture/runs/v7-candidate-frozen-core.failed-attempt2",
+                        "/capture/runs/v7-candidate-h1",
+                    ],
+                },
+            )
+            _chmod_tree(fixture.data)
+
+            receipt = fixture.collect("upper_bound_from_sibling_or_turn_ratio")
+            candidate = next(
+                item for item in receipt["jobs"] if item["job_id"] == "candidate-x"
+            )
+            self.assertEqual(candidate["status"], "estimated")
+            self.assertEqual(candidate["precise_count"], 3)
+            self.assertEqual(candidate["estimated_count"], 1)
+            self.assertEqual(len(candidate["roots"]), 5)
+            frozen_requests = [
+                request
+                for request in receipt["requests"]
+                if request["producer_run_id"].startswith(frozen_logical)
+            ]
+            self.assertEqual(len(frozen_requests), 2)
+            self.assertEqual(
+                len({request["identity_key"] for request in frozen_requests}), 2
+            )
+
+    def test_candidate_job_uses_attempt_receipt_and_counts_all_retry_archives_once(self) -> None:
+        """Candidate 模板根不能替代实际根，全部失败归档与最终根各计一次。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = ProvenanceFixture(Path(directory).resolve())
+            fixture.build()
+            logical = fixture.runs / "candidate-v7-a15"
+            for name in (
+                "candidate-v7-a15.failed-attempt1",
+                "candidate-v7-a15.failed-attempt2",
+                "candidate-v7-a15",
+            ):
+                relay = fixture.runs / name / "relay"
+                relay.mkdir(parents=True, mode=0o700)
+                (relay / "conn001.client_to_upstream.bin").write_bytes(
+                    _h1_post(RESPONSES, {"model": "gpt-5.5"})
+                )
+            attempt = (
+                fixture.campaign_dir
+                / "candidates"
+                / "c0154-candidate-v7"
+                / "attempts"
+                / "20260916T124216Z-f5194abd8934f5af"
+            )
+            _write_json(attempt / "reservation.json", {})
+            _write_json(
+                attempt / "job-candidate-x.json",
+                {
+                    "id": "candidate-x",
+                    "evidence_roots": [
+                        "/capture/runs/candidate-v7-a15.failed-attempt2"
+                    ],
+                },
+            )
+            _chmod_tree(fixture.data)
+
+            receipt = fixture.collect("upper_bound_from_sibling_or_turn_ratio")
+            candidate = next(
+                item for item in receipt["jobs"] if item["job_id"] == "candidate-x"
+            )
+            self.assertEqual(candidate["phase"], "candidate")
+            self.assertEqual(candidate["status"], "resolved")
+            self.assertEqual(candidate["precise_count"], 3)
+            self.assertEqual(len(candidate["roots"]), 3)
+            self.assertEqual(receipt["precise_total"], 13)
+            self.assertEqual(fixture.collect("upper_bound_from_sibling_or_turn_ratio")["precise_total"], 13)
+
     def test_unified_unit_counts_requests_not_turns(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             fixture = ProvenanceFixture(Path(directory).resolve())

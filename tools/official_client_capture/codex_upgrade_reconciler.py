@@ -305,6 +305,46 @@ def _ledger_receipt_bindings(
     return sorted(bindings, key=lambda item: item["role"])
 
 
+def _ledger_recovery_authorization_bindings(
+    ledger_dir: Path,
+    attempt_id: str,
+    preview_path: Path,
+    approval_path: Path,
+) -> list[dict[str, str]]:
+    """把恢复预览与批准复制进时间账本，供 recovery_authorized 重放。"""
+
+    target_dir = ledger_dir / "receipts" / RECONCILIATION_DIR / f"attempt-{attempt_id}"
+    if target_dir.is_symlink():
+        raise ReconcilerError("账本恢复批准目录不可信")
+    target_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    for directory in (
+        ledger_dir / "receipts",
+        ledger_dir / "receipts" / RECONCILIATION_DIR,
+        target_dir,
+    ):
+        if stat.S_IMODE(directory.stat().st_mode) != 0o700:
+            directory.chmod(0o700)
+    bindings: list[dict[str, str]] = []
+    for role, source in (
+        ("recovery_approval", approval_path),
+        ("recovery_preview", preview_path),
+    ):
+        payload = _read_json(source, f"{role} 收据")
+        target = target_dir / source.name
+        try:
+            timing_ledger._publish_once(target, payload, f"{role} 账本副本")
+        except timing_ledger.TimingLedgerError as error:
+            raise ReconcilerError(str(error)) from error
+        bindings.append(
+            {
+                "role": role,
+                "path": target.relative_to(ledger_dir).as_posix(),
+                "sha256": _file_sha256(target),
+            }
+        )
+    return sorted(bindings, key=lambda item: item["role"])
+
+
 def _ledger_facts(ledger_dir: Path, *, now: str) -> dict[str, Any]:
     summary = timing_ledger.inspect_ledger(ledger_dir, now=now)
     active = timing_ledger._active_attempts(timing_ledger._load_events(ledger_dir))
@@ -312,6 +352,8 @@ def _ledger_facts(ledger_dir: Path, *, now: str) -> dict[str, Any]:
         "ledger_dir": str(ledger_dir),
         "status": summary["status"],
         "active_phase": summary.get("active_phase"),
+        "recovery_phase": summary.get("recovery_phase"),
+        "recovery_root_cause_id": summary.get("recovery_root_cause_id"),
         "head_sequence": summary.get("head_sequence"),
         "head_sha256": summary.get("head_sha256"),
         "total_deadline_at_utc": summary.get("total_deadline_at_utc"),
@@ -359,6 +401,7 @@ def _request_part(
     head: Mapping[str, Any],
     project_root: Path,
     now: str,
+    phase: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], Path]:
     """返回 (batch 请求部分, provenance 副本绑定, 副本绝对路径)。
 
@@ -376,6 +419,45 @@ def _request_part(
         )
     except (provenance.ProvenanceError, closeout.VC0CloseoutError, OSError, ValueError) as error:
         raise ReconcilerError(f"provenance 核算失败：{error}") from error
+    if phase is not None:
+        if phase not in {"official", "candidate"}:
+            raise ReconcilerError(f"provenance 阶段过滤非法：{phase!r}")
+        receipt = dict(receipt)
+        filtered_jobs = [
+            dict(item)
+            for item in receipt.get("jobs", [])
+            if isinstance(item, Mapping) and item.get("phase") == phase
+        ]
+        job_ids = {str(item["job_id"]) for item in filtered_jobs}
+        filtered_requests = [
+            dict(item)
+            for item in receipt.get("requests", [])
+            if isinstance(item, Mapping) and item.get("job_id") in job_ids
+        ]
+        receipt["jobs"] = filtered_jobs
+        receipt["requests"] = filtered_requests
+        for field in (
+            "unresolved_job_ids",
+            "pending_job_ids",
+            "pre_request_zero_job_ids",
+        ):
+            receipt[field] = [
+                str(job_id)
+                for job_id in receipt.get(field, [])
+                if str(job_id) in job_ids
+            ]
+        receipt["precise_total"] = len(filtered_requests)
+        receipt["estimated_total"] = sum(
+            int(item.get("estimated_count", 0)) for item in filtered_jobs
+        )
+        receipt["status"] = (
+            "accounting_unresolved"
+            if receipt["unresolved_job_ids"]
+            else "complete"
+        )
+        receipt["identity_keys_sha256"] = _fingerprint(
+            sorted(str(item["identity_key"]) for item in filtered_requests)
+        )
     # 副本文件名按去掉观测时间的稳定摘要命名：中断后重放得到同一份副本，账本与 batch 绑定不漂移。
     stable_sha256 = _fingerprint({key: value for key, value in receipt.items() if key != "observed_at_utc"})
     copy_path = receipt_dir / f"provenance-{stable_sha256[:16]}.json"
@@ -433,8 +515,14 @@ def _request_part(
     return part, binding, copy_path
 
 
-def account_sealed_official(campaign_dir: Path, *, now: str | None = None) -> dict[str, Any]:
-    """把已封存 official 阶段的模型请求写入项目总账（自身零请求，幂等）。
+def _account_sealed_capture(
+    campaign_dir: Path,
+    *,
+    phase: str,
+    candidate_id: str | None,
+    now: str | None,
+) -> dict[str, Any]:
+    """把已封存抓包阶段的请求写入项目总账（自身零请求，幂等）。
 
     总账此前只在失败对账（reconciliation_committed）时入账，成功封存的 Campaign 只停在
     计时账本与 provenance 收据里。这里复用同一套请求部分核算：精确身份键按总账索引与初始
@@ -442,19 +530,32 @@ def account_sealed_official(campaign_dir: Path, *, now: str | None = None) -> di
     并立即推送；同一 attempt 重复执行返回既有 batch。
     """
 
+    if phase not in {"official", "candidate"}:
+        raise ReconcilerError(f"成功抓包入账阶段非法：{phase!r}")
     campaign_dir = Path(campaign_dir).resolve(strict=True)
     manifest = codex_upgrade._require_formal_campaign(campaign_dir)
     if not codex_upgrade._requires_complete_vc_artifacts(manifest):
-        raise ReconcilerError("account-sealed-official 只用于 0.154.0 起的完整 VC 链 Campaign")
+        raise ReconcilerError("成功抓包入账只用于 0.154.0 起的完整 VC 链 Campaign")
+    if phase == "candidate" and (
+        not isinstance(candidate_id, str)
+        or not codex_upgrade.SAFE_ID_RE.fullmatch(candidate_id)
+    ):
+        raise ReconcilerError("account-sealed-candidate 必须提供合法 candidate-id")
+    if phase == "official" and candidate_id is not None:
+        raise ReconcilerError("official 成功入账不得携带 candidate-id")
+    stage = "capture-official" if phase == "official" else "capture-candidate"
     try:
-        official = codex_upgrade._load_stage_result(
-            campaign_dir, "capture-official", _replay_machine_receipts=False
+        sealed = codex_upgrade._load_stage_result(
+            campaign_dir,
+            stage,
+            candidate_id,
+            _replay_machine_receipts=False,
         )
     except codex_upgrade.ConfigurationError as error:
-        raise ReconcilerError(f"official 阶段结果不可用：{error}") from error
-    attempt_binding = official.get("attempt")
-    if official.get("status") != "complete" or not isinstance(attempt_binding, Mapping):
-        raise ReconcilerError("official 阶段尚未封存（official_sealed），先 seal 再入账")
+        raise ReconcilerError(f"{phase} 阶段结果不可用：{error}") from error
+    attempt_binding = sealed.get("attempt")
+    if sealed.get("status") != "complete" or not isinstance(attempt_binding, Mapping):
+        raise ReconcilerError(f"{phase} 阶段尚未完整封存，先 seal 再入账")
     attempt_path = codex_upgrade._campaign_file(campaign_dir, str(attempt_binding.get("path", "")))
     if not attempt_path.is_file() or _file_sha256(attempt_path) != attempt_binding.get("sha256"):
         raise ReconcilerError("official 阶段绑定的 attempt.json 摘要漂移")
@@ -464,30 +565,47 @@ def account_sealed_official(campaign_dir: Path, *, now: str | None = None) -> di
     observed = now or _utc_now()
     project_root = _project_root(campaign_dir)
     plan, head = _project_facts(project_root)
-    receipt_dir = _reconciliation_dir(campaign_dir, f"sealed-official-{attempt_id}")
+    subject = (
+        f"sealed-official-{attempt_id}"
+        if phase == "official"
+        else f"sealed-candidate-{candidate_id}-{attempt_id}"
+    )
+    receipt_dir = _reconciliation_dir(campaign_dir, subject)
     request_part, provenance_binding, _copy_path = _request_part(
-        campaign_dir, manifest, receipt_dir, plan=plan, head=head, project_root=project_root, now=observed
+        campaign_dir,
+        manifest,
+        receipt_dir,
+        plan=plan,
+        head=head,
+        project_root=project_root,
+        now=observed,
+        phase=phase,
     )
     if request_part["status"] == "unresolved":
         raise ReconcilerError(
-            "已封存 official 阶段仍有请求数无法确定的 Job，不能入账："
+            f"已封存 {phase} 阶段仍有请求数无法确定的 Job，不能入账："
             + "、".join(request_part["unresolved_job_ids"])
         )
-    official_path = codex_upgrade._stage_path(campaign_dir, "capture-official")[1]
+    stage_path = codex_upgrade._stage_path(campaign_dir, stage, candidate_id)[1]
+    operation_subject = attempt_id if phase == "official" else f"{candidate_id}:{attempt_id}"
     batch = _commit_batch(
         campaign_dir,
-        operation_id=f"account-sealed-official:{attempt_id}",
+        operation_id=f"account-sealed-{phase}:{operation_subject}",
         event_type="reconciliation_committed",
         payload={
             "campaign_id": str(manifest["campaign_id"]),
-            "subject_kind": "sealed_official_stage",
-            "subject_id": attempt_id,
-            "phase": "official",
+            "subject_kind": f"sealed_{phase}_stage",
+            "subject_id": operation_subject,
+            "phase": phase,
+            "candidate_id": candidate_id,
             "request": request_part,
-            "official_result_sha256": _file_sha256(official_path),
+            "stage_result_sha256": _file_sha256(stage_path),
             "attempt_sha256": str(attempt_binding.get("sha256")),
         },
-        source={"kind": "sealed_official_accounting", "sha256": provenance_binding["sha256"]},
+        source={
+            "kind": f"sealed_{phase}_accounting",
+            "sha256": provenance_binding["sha256"],
+        },
         receipt_bindings=[provenance_binding],
     )
     try:
@@ -499,6 +617,8 @@ def account_sealed_official(campaign_dir: Path, *, now: str | None = None) -> di
     return {
         "status": "accounted",
         "campaign_id": str(manifest["campaign_id"]),
+        "phase": phase,
+        "candidate_id": candidate_id,
         "attempt_id": attempt_id,
         "request": {
             "status": request_part["status"],
@@ -517,6 +637,33 @@ def account_sealed_official(campaign_dir: Path, *, now: str | None = None) -> di
     }
 
 
+def account_sealed_official(campaign_dir: Path, *, now: str | None = None) -> dict[str, Any]:
+    """把已封存 official 阶段的模型请求幂等写入项目总账。"""
+
+    return _account_sealed_capture(
+        campaign_dir,
+        phase="official",
+        candidate_id=None,
+        now=now,
+    )
+
+
+def account_sealed_candidate(
+    campaign_dir: Path,
+    candidate_id: str,
+    *,
+    now: str | None = None,
+) -> dict[str, Any]:
+    """把已封存 Candidate 阶段的模型请求幂等写入项目总账。"""
+
+    return _account_sealed_capture(
+        campaign_dir,
+        phase="candidate",
+        candidate_id=candidate_id,
+        now=now,
+    )
+
+
 # ---------------------------------------------------------------------------
 # 决策表
 # ---------------------------------------------------------------------------
@@ -531,6 +678,7 @@ def _decide(
     environment_status: str,
     campaign_deadline_at_utc: str | None,
     root_cause_id: str,
+    root_cause_ids: Iterable[str] | None = None,
     request_status: str,
     now: str,
 ) -> dict[str, Any]:
@@ -554,8 +702,13 @@ def _decide(
         stop("environment_contaminated", "环境恢复失败或前后环境身份不连续")
     if not identity.get("unchanged"):
         stop("identity_changed", "当前有效 wire 身份或策略摘要已变化")
-    if ledger.get("status") in {"stop_required", "stopped", "complete"}:
-        stop("deadline_wall_clock", f"Campaign 账本状态 {ledger.get('status')}，禁止继续执行 Job")
+    ledger_status = ledger.get("status")
+    if ledger_status == "stop_required":
+        stop("deadline_wall_clock", "Campaign 账本已要求停线，禁止继续执行 Job")
+    elif ledger_status == "stopped":
+        stop("prior_stop_the_line", "Campaign 账本此前已写 stop_the_line，禁止恢复旧 attempt")
+    elif ledger_status == "complete":
+        stop("prior_upgrade_complete", "Campaign 账本此前已完成，禁止再对账旧 attempt")
     if campaign_deadline_at_utc is not None and current >= _timestamp(campaign_deadline_at_utc, "Campaign deadline"):
         stop("deadline_wall_clock", "Campaign 总计划 deadline 已到")
     if current >= _timestamp(plan["absolute_deadline_utc"], "absolute_deadline_utc"):
@@ -563,14 +716,28 @@ def _decide(
     remaining = head.get("remaining_live_requests")
     if remaining is not None and int(remaining) <= 0:
         stop("deadline_live_requests", "项目请求预算已耗尽")
-    if root_cause_id in set(head.get("root_causes_at_limit", [])):
-        stop("root_cause_limit", f"根因 {root_cause_id} 累计失败已达上限")
+    evaluated_root_causes = list(
+        dict.fromkeys(root_cause_ids or [root_cause_id])
+    )
+    at_limit = sorted(
+        set(evaluated_root_causes)
+        & set(head.get("root_causes_at_limit", []))
+    )
+    if at_limit:
+        stop("root_cause_limit", f"根因 {at_limit} 累计失败已达上限")
     decision = DECISION_STOP if terminal_reason is not None else DECISION_RECOVERABLE
+    root_cause_counts = {
+        cause_id: int(
+            dict(head.get("root_cause_counts", {})).get(cause_id, 0)
+        )
+        for cause_id in evaluated_root_causes
+    }
     return {
         "decision": decision,
         "terminal_reason": terminal_reason,
         "reasons": reasons,
-        "root_cause_count": int(dict(head.get("root_cause_counts", {})).get(root_cause_id, 0)),
+        "root_cause_count": root_cause_counts.get(root_cause_id, 0),
+        "root_cause_counts": root_cause_counts,
         "remaining_live_requests": remaining,
         "blocked": bool(head.get("blocked")),
     }
@@ -855,11 +1022,11 @@ def _attempt_root_cause(
     attempt: Mapping[str, Any] | None,
     environment_status: str,
     identity_unchanged: bool,
-    ledger_status: str,
+    deadline_expired: bool,
     request_status: str | None,
     jobs: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """按稳定优先级选 A0a-3 根因；failed_step 只取稳定的 Job ID 或固定步骤名。"""
+    """生成硬停线或历史 fallback 根因；账本 ``stopped`` 本身不是 deadline 证据。"""
 
     groups = jobs["groups"]
     failed_step = "reservation"
@@ -872,20 +1039,14 @@ def _attempt_root_cause(
     elif groups["complete"]:
         failed_step = "after-" + groups["complete"][-1]
     code = "attempt.interrupted"
-    if environment_status == "contaminated":
+    if request_status == "unresolved":
+        code = "attempt.accounting-unresolved"
+    elif environment_status == "contaminated":
         code = "attempt.environment-contaminated"
-    elif ledger_status in {"stop_required", "stopped"} or (
-        attempt is not None
-        and (
-            (isinstance(attempt.get("watchdog"), Mapping) and attempt["watchdog"].get("timeout_checkpoint") is not None)
-            or attempt.get("deadline_orphan_finalization") is not None
-        )
-    ):
-        code = "attempt.deadline-expired"
     elif not identity_unchanged:
         code = "attempt.identity-changed"
-    elif request_status == "unresolved":
-        code = "attempt.accounting-unresolved"
+    elif deadline_expired:
+        code = "attempt.deadline-expired"
     try:
         return root_cause.describe_root_cause(
             component=COMPONENT,
@@ -895,6 +1056,98 @@ def _attempt_root_cause(
         )
     except root_cause.RootCauseError as error:
         raise ReconcilerError(f"根因编码失败：{error}") from error
+
+
+def _attempt_deadline_expired(
+    *,
+    attempt: Mapping[str, Any] | None,
+    ledger: Mapping[str, Any],
+    plan: Mapping[str, Any],
+    campaign_deadline_at_utc: str | None,
+    now: str,
+) -> bool:
+    """只用 attempt 当时的时间或 timeout 收据识别根因，不能从 stopped 倒推。
+
+    已封存 attempt 在次日对账时，``now`` 只能影响是否还允许恢复，不能把此前的
+    Job 故障改写成 deadline 根因；没有 attempt 的 reservation 孤儿才使用对账时间。
+    """
+
+    if attempt is not None and (
+        (
+            isinstance(attempt.get("watchdog"), Mapping)
+            and attempt["watchdog"].get("timeout_checkpoint") is not None
+        )
+        or attempt.get("deadline_orphan_finalization") is not None
+    ):
+        return True
+    reference_value = (
+        attempt.get("completed_at_utc") if attempt is not None else now
+    )
+    reference = _timestamp(
+        str(reference_value),
+        "attempt.completed_at_utc" if attempt is not None else "now",
+    )
+    deadlines = [
+        campaign_deadline_at_utc,
+        ledger.get("total_deadline_at_utc"),
+        ledger.get("stage_deadline_at_utc"),
+        plan.get("absolute_deadline_utc"),
+    ]
+    return any(
+        isinstance(value, str) and reference >= _timestamp(value, "deadline")
+        for value in deadlines
+    )
+
+
+def _attempt_recorded_failures(
+    attempt: Mapping[str, Any] | None,
+) -> tuple[list[dict[str, str]], list[dict[str, Any]], bool]:
+    """读取新数组；历史 attempt 只读地从既有 Job 枚举字段派生。"""
+
+    if attempt is None:
+        return [], [], False
+    if "failure_observations" not in attempt and "root_causes" not in attempt:
+        try:
+            observations, causes = codex_upgrade._attempt_failure_facts(attempt)
+        except codex_upgrade.ConfigurationError as error:
+            raise ReconcilerError(f"历史 attempt 失败观测无法重放：{error}") from error
+        # 历史文件保持原字节不变；只在本次追加式 reconciliation 中发布可复算数组。
+        return observations, causes, bool(observations or causes)
+    raw_observations = attempt.get("failure_observations")
+    raw_causes = attempt.get("root_causes")
+    if not isinstance(raw_observations, list) or not isinstance(raw_causes, list):
+        raise ReconcilerError("attempt 失败观测与根因数组不完整")
+    observations = [dict(item) for item in raw_observations if isinstance(item, Mapping)]
+    causes = [dict(item) for item in raw_causes if isinstance(item, Mapping)]
+    if len(observations) != len(raw_observations) or len(causes) != len(raw_causes):
+        raise ReconcilerError("attempt 失败观测或根因数组含非对象项")
+    observation_ids = [str(item.get("root_cause_id", "")) for item in observations]
+    cause_ids = [str(item.get("root_cause_id", "")) for item in causes]
+    if (
+        len(set(observation_ids)) != len(observation_ids)
+        or any(not root_cause.is_structured(value) for value in observation_ids)
+        or any(not root_cause.is_structured(value) for value in cause_ids)
+        or set(observation_ids) - set(cause_ids)
+    ):
+        raise ReconcilerError("attempt 失败观测与根因身份不闭合")
+    return observations, causes, True
+
+
+def _merge_root_causes(
+    primary: Mapping[str, Any],
+    recorded: Iterable[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """保持主根因在首位，并按稳定 ID 去重。"""
+
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in [primary, *recorded]:
+        cause_id = str(item.get("root_cause_id", ""))
+        if cause_id in seen:
+            continue
+        seen.add(cause_id)
+        merged.append(dict(item))
+    return merged
 
 
 def _recovery_preview(
@@ -911,6 +1164,8 @@ def _recovery_preview(
     provenance_copy: Mapping[str, Any],
     current: Mapping[str, Any],
     reconciliation_receipt_sha256: str,
+    campaign_ledger_head: Mapping[str, Any],
+    project_ledger_head: Mapping[str, Any],
     now: str,
 ) -> dict[str, Any]:
     """零请求恢复预览：冻结四类 Job 闭集与预计新增请求数，等待操作员批准。"""
@@ -931,6 +1186,15 @@ def _recovery_preview(
         "source_attempt_id": attempt_id,
         "source_attempt_receipt_exists": attempt_exists,
         "reconciliation_receipt_sha256": reconciliation_receipt_sha256,
+        "campaign_ledger_head": {
+            "sequence": campaign_ledger_head.get("head_sequence"),
+            "sha256": campaign_ledger_head.get("head_sha256"),
+            "status": campaign_ledger_head.get("status"),
+        },
+        "project_ledger_head": {
+            "sequence": project_ledger_head.get("sequence"),
+            "sha256": project_ledger_head.get("head_sha256"),
+        },
         "planned_job_ids": list(jobs["planned_job_ids"]),
         "complete_job_ids": list(groups["complete"]),
         "failed_job_ids": list(groups["failed"]),
@@ -1050,13 +1314,26 @@ def load_approved_recovery_preview(
     attempt_id = str(preview.get("source_attempt_id", ""))
     if resolved.parent.name != f"attempt-{attempt_id}":
         raise ReconcilerError("恢复预览目录与其来源 attempt 不一致")
-    approved = None
+    approved: dict[str, Any] | None = None
+    approval_path: Path | None = None
     for child in sorted(resolved.parent.iterdir()):
         if APPROVAL_RE.fullmatch(child.name):
             payload = _read_json(child, "恢复批准收据")
-            if payload.get("preview_sha256") == _file_sha256(resolved) and payload.get("approved_sha256") == preview.get("review_sha256"):
+            approval_unsigned = {
+                key: value
+                for key, value in payload.items()
+                if key not in {"approved_at_utc", "receipt_sha256"}
+            }
+            if (
+                payload.get("schema_version") == RECOVERY_APPROVAL_SCHEMA
+                and payload.get("preview_sha256") == _file_sha256(resolved)
+                and payload.get("approved_sha256") == preview.get("review_sha256")
+                and payload.get("receipt_sha256")
+                == _fingerprint(approval_unsigned)
+            ):
                 approved = payload
-    if approved is None:
+                approval_path = child
+    if approved is None or approval_path is None:
         raise ReconcilerError("恢复预览尚未批准；先执行 reconcile-attempt --approve-recovery-sha256 <review_sha256>")
     current = _current_identity()
     identity = preview.get("tool_identity") or {}
@@ -1068,7 +1345,89 @@ def load_approved_recovery_preview(
     receipt_path = resolved.parent / ATTEMPT_RECEIPT_NAME
     if _file_sha256(receipt_path) != preview.get("reconciliation_receipt_sha256"):
         raise ReconcilerError("恢复预览绑定的对账收据已漂移")
-    return {**preview, "approval": approved, "preview_path": str(resolved)}
+
+    # 恢复预览同时冻结 Campaign 与项目总账 head。项目 head 后续有任何并发
+    # 推进都必须重新对账；Campaign head 允许且只允许多出本预览对应的
+    # recovery_authorized 事件，以保证重复 resume 幂等。
+    manifest = codex_upgrade._require_formal_campaign(campaign_dir)
+    ledger_dir = _campaign_ledger_dir(manifest)
+    campaign_head = preview.get("campaign_ledger_head")
+    project_head = preview.get("project_ledger_head")
+    authorization_event: dict[str, Any] | None = None
+    if isinstance(project_head, Mapping):
+        project_root = _project_root(campaign_dir)
+        _plan, current_project_head = _project_facts(project_root)
+        if (
+            current_project_head.get("sequence") != project_head.get("sequence")
+            or current_project_head.get("head_sha256") != project_head.get("sha256")
+        ):
+            raise ReconcilerError("恢复预览生成后项目总账 head 已推进，必须重新对账")
+    if isinstance(campaign_head, Mapping):
+        sequence = campaign_head.get("sequence")
+        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
+            raise ReconcilerError("恢复预览绑定的 Campaign 账本 head 非法")
+        try:
+            frozen_campaign_head = timing_ledger.inspect_ledger(
+                ledger_dir,
+                limit=sequence,
+            )
+        except timing_ledger.TimingLedgerError as error:
+            raise ReconcilerError(f"恢复预览绑定的 Campaign head 无法重放：{error}") from error
+        if (
+            frozen_campaign_head.get("head_sha256") != campaign_head.get("sha256")
+            or frozen_campaign_head.get("status") != campaign_head.get("status")
+        ):
+            raise ReconcilerError("恢复预览绑定的 Campaign 账本 head 已漂移")
+        if campaign_head.get("status") == "recovery_required":
+            event_id = f"recovery-authorized-{attempt_id}-{int(preview['index']):02d}"
+            with codex_upgrade._campaign_lock(campaign_dir):
+                current_campaign_head = _ledger_facts(ledger_dir, now=_utc_now())
+                existing_sha256 = _ledger_event_sha256(ledger_dir, event_id)
+                if current_campaign_head.get("status") == "recovery_required":
+                    if (
+                        current_campaign_head.get("head_sequence") != sequence
+                        or current_campaign_head.get("head_sha256")
+                        != campaign_head.get("sha256")
+                    ):
+                        raise ReconcilerError(
+                            "恢复批准消费前 Campaign 账本 head 已推进，必须重新对账"
+                        )
+                    receipts = _ledger_recovery_authorization_bindings(
+                        ledger_dir,
+                        attempt_id,
+                        resolved,
+                        approval_path,
+                    )
+                    authorization_event = _append_ledger_event(
+                        ledger_dir,
+                        event_id=event_id,
+                        phase=str(current_campaign_head["active_phase"]),
+                        event_type="recovery_authorized",
+                        root_cause_id=str(
+                            current_campaign_head["recovery_root_cause_id"]
+                        ),
+                        receipts=receipts,
+                        next_action="resume-rerun-failed",
+                    )
+                elif (
+                    current_campaign_head.get("status") == "active"
+                    and existing_sha256 is not None
+                ):
+                    authorization_event = {
+                        "event_id": event_id,
+                        "event_sha256": existing_sha256,
+                        "appended": False,
+                    }
+                else:
+                    raise ReconcilerError(
+                        "Campaign 不在 recovery_required，禁止消费恢复批准"
+                    )
+    return {
+        **preview,
+        "approval": approved,
+        "preview_path": str(resolved),
+        "timing_recovery_event": authorization_event,
+    }
 
 
 def reconcile_attempt(
@@ -1117,19 +1476,42 @@ def reconcile_attempt(
     campaign_deadline = codex_upgrade._campaign_plan_deadline(campaign_dir)
     receipt_dir = _reconciliation_dir(campaign_dir, f"attempt-{attempt_id}")
 
-    # 步骤 2 的请求部分先核算（它也是根因 accounting-unresolved 的依据）。
+    # 历史 attempt 的失败数组必须在任何收据落盘前完成只读重放。否则损坏的
+    # run-summary 会让命令失败，却先遗留一个看似可信的 provenance 副本。
+    failure_observations, recorded_root_causes, array_contract = (
+        _attempt_recorded_failures(attempt)
+    )
+
+    # 步骤 2 的请求部分随后核算（它也是根因 accounting-unresolved 的依据）。
     request_part, provenance_binding, provenance_copy_path = _request_part(
         campaign_dir, manifest, receipt_dir, plan=plan, head=head, project_root=project_root, now=observed
     )
-    cause = _attempt_root_cause(
+    fallback_cause = _attempt_root_cause(
         phase=phase,
         attempt=attempt,
         environment_status=environment["status"],
         identity_unchanged=bool(identity["unchanged"]),
-        ledger_status=str(ledger["status"]),
+        deadline_expired=_attempt_deadline_expired(
+            attempt=attempt,
+            ledger=ledger,
+            plan=plan,
+            campaign_deadline_at_utc=campaign_deadline,
+            now=observed,
+        ),
         request_status=request_part["status"],
         jobs=jobs,
     )
+    # 结构化 Job／门禁观测优先于普通 interrupted，也不能被历史 stopped 倒推成
+    # deadline；账务不确定、污染、身份漂移和真实 deadline 仍作为硬停线主根因。
+    if (
+        recorded_root_causes
+        and fallback_cause["stable_error_code"] == "attempt.interrupted"
+    ):
+        cause = dict(recorded_root_causes[0])
+        root_causes = _merge_root_causes(cause, recorded_root_causes)
+    else:
+        cause = fallback_cause
+        root_causes = _merge_root_causes(cause, recorded_root_causes)
 
     # 步骤 1：Campaign 侧写 reconciliation 收据（写一次），再登记账本 attempt_failed。
     receipt = {
@@ -1169,6 +1551,9 @@ def reconcile_attempt(
         "scanned_bytes": 0,
         "observed_at_utc": observed,
     }
+    if array_contract:
+        receipt["failure_observations"] = failure_observations
+        receipt["root_causes"] = root_causes
     receipt_path = receipt_dir / ATTEMPT_RECEIPT_NAME
     with codex_upgrade._campaign_lock(campaign_dir):
         stored = _write_or_verify(
@@ -1187,13 +1572,18 @@ def reconcile_attempt(
         )
         # 中断后重放：根因与请求状态以首次落盘的收据为准，后续步骤按同一根因幂等推进。
         cause = dict(stored["root_cause"])
+        if array_contract:
+            failure_observations = [
+                dict(item) for item in stored["failure_observations"]
+            ]
+            root_causes = [dict(item) for item in stored["root_causes"]]
         receipt_binding = _binding(campaign_dir, receipt_path, "reconciliation")
         ledger_events: list[dict[str, Any]] = []
         ledger_note = "recorded"
         active_ids = {item["attempt_id"] for item in ledger["active_attempts"]}
         if ledger["status"] == "active" and ledger.get("active_phase") is None:
             ledger_note = "skipped:ledger_active_without_phase"
-        elif ledger["status"] == "active":
+        elif ledger["status"] in {"active", "recovery_required"}:
             if attempt_id not in active_ids:
                 ledger_events.append(
                     _append_ledger_event(
@@ -1236,26 +1626,30 @@ def reconcile_attempt(
         )
 
         # 步骤 2：一个 batch 一个事件 reconciliation_committed。
+        reconciliation_payload: dict[str, Any] = {
+            "campaign_id": str(manifest["campaign_id"]),
+            "subject_kind": "attempt",
+            "subject_id": attempt_id,
+            "phase": phase,
+            "request": request_part,
+            "root_cause": {
+                "root_cause_id": cause["root_cause_id"],
+                "stable_error_code": cause["stable_error_code"],
+                "failed_step": cause["failed_step"],
+                "stable_dimensions": cause["stable_dimensions"],
+                "component": cause["component"],
+            },
+            "reconciliation_receipt_sha256": receipt_binding["sha256"],
+            "attempt_failed_event_sha256": failed_sha,
+        }
+        if array_contract:
+            reconciliation_payload["failure_observations"] = failure_observations
+            reconciliation_payload["root_causes"] = root_causes
         batch = _commit_batch(
             campaign_dir,
             operation_id=f"reconcile-attempt:{attempt_id}",
             event_type="reconciliation_committed",
-            payload={
-                "campaign_id": str(manifest["campaign_id"]),
-                "subject_kind": "attempt",
-                "subject_id": attempt_id,
-                "phase": phase,
-                "request": request_part,
-                "root_cause": {
-                    "root_cause_id": cause["root_cause_id"],
-                    "stable_error_code": cause["stable_error_code"],
-                    "failed_step": cause["failed_step"],
-                    "stable_dimensions": cause["stable_dimensions"],
-                    "component": cause["component"],
-                },
-                "reconciliation_receipt_sha256": receipt_binding["sha256"],
-                "attempt_failed_event_sha256": failed_sha,
-            },
+            payload=reconciliation_payload,
             source={"kind": "attempt_reconciliation", "sha256": receipt_binding["sha256"]},
             receipt_bindings=[receipt_binding, provenance_binding],
         )
@@ -1270,6 +1664,7 @@ def reconcile_attempt(
         environment_status=environment["status"],
         campaign_deadline_at_utc=campaign_deadline,
         root_cause_id=cause["root_cause_id"],
+        root_cause_ids=[item["root_cause_id"] for item in root_causes],
         request_status=request_part["status"],
         now=observed,
     )
@@ -1295,11 +1690,15 @@ def reconcile_attempt(
             "blocked": head_after.get("blocked"),
             "remaining_live_requests": head_after.get("remaining_live_requests"),
             "root_cause_count": decision["root_cause_count"],
+            "root_cause_counts": decision["root_cause_counts"],
         },
         "decision": decision,
         "live_request_count": 0,
         "scanned_bytes": 0,
     }
+    if array_contract:
+        result["failure_observations"] = failure_observations
+        result["root_causes"] = root_causes
     # 步骤 6。
     if decision["decision"] == DECISION_RECOVERABLE:
         provenance_copy = _read_json(campaign_dir / provenance_binding["path"], "provenance 副本")
@@ -1316,6 +1715,8 @@ def reconcile_attempt(
             provenance_copy=provenance_copy,
             current=current,
             reconciliation_receipt_sha256=receipt_binding["sha256"],
+            campaign_ledger_head=_ledger_facts(ledger_dir, now=_utc_now()),
+            project_ledger_head=head_after,
             now=observed,
         )
         result["recovery_preview"] = preview
@@ -1409,6 +1810,43 @@ def _run_facts(run_dir: Path, campaign_dir: Path, manifest: Mapping[str, Any]) -
                     last_operation = last["operation"]
             except json.JSONDecodeError:
                 pass
+    action_diagnostic: dict[str, Any] | None = None
+    diagnostic_root = run_dir / "action-diagnostics"
+    if diagnostic_root.exists():
+        if diagnostic_root.is_symlink() or not diagnostic_root.is_dir():
+            raise ReconcilerError("动作失败诊断目录不可信")
+        diagnostic_paths = sorted(diagnostic_root.glob("action-*-failure.json"))
+        if len(diagnostic_paths) > 1:
+            raise ReconcilerError("父 run 含多份动作失败诊断，无法确定唯一失败分类")
+        if diagnostic_paths:
+            diagnostic_path = diagnostic_paths[0]
+            action_id = diagnostic_path.name.removeprefix("action-").removesuffix(
+                "-failure.json"
+            )
+            try:
+                diagnostic = supervisor._validate_action_diagnostic(
+                    diagnostic_path,
+                    run_dir=run_dir,
+                    campaign_id=str(manifest["campaign_id"]),
+                    phase=str(state["phase"]),
+                    action_id=action_id,
+                    owner_pid=int(state["owner_pid"]),
+                    owner_nonce=str(state["owner_nonce"]),
+                )
+            except supervisor.SupervisorError as error:
+                raise ReconcilerError(f"动作失败诊断无法重放：{error}") from error
+            action_diagnostic = {
+                "schema_version": diagnostic["schema_version"],
+                "path": diagnostic_path.relative_to(run_dir).as_posix(),
+                "sha256": diagnostic["diagnostic_sha256"],
+                "action_id": action_id,
+                "failure_kind": diagnostic["failure_kind"],
+                "failure_class": diagnostic["failure_class"],
+                "failure_observations": list(
+                    diagnostic["failure_observations"]
+                ),
+                "error_type": diagnostic["error_type"],
+            }
     return {
         "run_dir": str(run_dir),
         "run_id": run_dir.name,
@@ -1420,6 +1858,9 @@ def _run_facts(run_dir: Path, campaign_dir: Path, manifest: Mapping[str, Any]) -
         "terminal_at_utc": state.get("terminal_at_utc"),
         "manifest_sha256": run_manifest.get("manifest_sha256") if isinstance(run_manifest, Mapping) else None,
         "manifest_schema_version": run_manifest.get("schema_version") if isinstance(run_manifest, Mapping) else None,
+        "batch_id": inner.get("batch_id") if isinstance(inner, Mapping) else None,
+        "batch_sequence": inner.get("batch_sequence") if isinstance(inner, Mapping) else None,
+        "batch_sha256": inner.get("batch_sha256") if isinstance(inner, Mapping) else None,
         "no_op": inner.get("no_op") if isinstance(inner, Mapping) else None,
         "execute_items": list(inner.get("execute_items", [])) if isinstance(inner, Mapping) else [],
         "reuse_items": list(inner.get("reuse_items", [])) if isinstance(inner, Mapping) else [],
@@ -1429,7 +1870,94 @@ def _run_facts(run_dir: Path, campaign_dir: Path, manifest: Mapping[str, Any]) -
         "audit_incomplete": audit.get("audit_incomplete"),
         "integrity_errors": list(events),
         "last_operation": last_operation,
+        "action_diagnostic": action_diagnostic,
+        "failure_class": (
+            action_diagnostic["failure_class"]
+            if action_diagnostic is not None
+            else "legacy-interruption"
+        ),
+        "failure_observations": (
+            list(action_diagnostic["failure_observations"])
+            if action_diagnostic is not None
+            else []
+        ),
     }
+
+
+def _supervisor_run_failures(
+    run: Mapping[str, Any],
+) -> tuple[list[dict[str, str]], list[dict[str, Any]]]:
+    """把动作诊断的每个枚举观测映射为独立、跨 Campaign 稳定根因。
+
+    历史 v1/v2 诊断没有枚举观测，仍保守重放为原来的单一
+    ``supervisor-run.interrupted``；新 v3 诊断不得再按错误正文或最后操作猜测。
+    """
+
+    raw_observations = run.get("failure_observations", [])
+    if not isinstance(raw_observations, list):
+        raise ReconcilerError("父动作 failure_observations 不是数组")
+    if not raw_observations:
+        try:
+            legacy = root_cause.describe_root_cause(
+                component=COMPONENT,
+                stable_error_code="supervisor-run.interrupted",
+                failed_step=str(run["last_operation"]).replace(":", "-")[:128],
+                stable_dimensions={"phase": str(run["phase"])},
+            )
+        except (KeyError, root_cause.RootCauseError) as error:
+            raise ReconcilerError(f"根因编码失败：{error}") from error
+        return [], [legacy]
+
+    observations: list[dict[str, str]] = []
+    causes: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for index, item in enumerate(raw_observations):
+        if not isinstance(item, Mapping) or set(item) != {
+            "check_id",
+            "failure_code",
+        }:
+            raise ReconcilerError(
+                f"父动作 failure_observations[{index}] 字段不闭合"
+            )
+        check_id = item.get("check_id")
+        failure_code = item.get("failure_code")
+        if (
+            not isinstance(check_id, str)
+            or not check_id
+            or not isinstance(failure_code, str)
+            or not failure_code
+        ):
+            raise ReconcilerError(
+                f"父动作 failure_observations[{index}] 身份非法"
+            )
+        key = (check_id, failure_code)
+        if key in seen:
+            continue
+        seen.add(key)
+        observation = {"check_id": check_id, "failure_code": failure_code}
+        failed_step = "failure-observation-" + _fingerprint(observation)[:20]
+        try:
+            cause = root_cause.describe_root_cause(
+                component="supervisor",
+                stable_error_code="campaign-run.action-failed",
+                failed_step=failed_step,
+                stable_dimensions={"phase": str(run["phase"])},
+            )
+        except root_cause.RootCauseError as error:
+            raise ReconcilerError(f"根因编码失败：{error}") from error
+        observations.append(
+            {**observation, "root_cause_id": str(cause["root_cause_id"])}
+        )
+        causes.append(
+            {
+                **cause,
+                "check_id": check_id,
+                "failure_code": failure_code,
+            }
+        )
+    if not causes:
+        raise ReconcilerError("父动作枚举观测没有生成任何根因")
+    return observations, causes
 
 
 def reconcile_supervisor_run(
@@ -1451,6 +1979,13 @@ def reconcile_supervisor_run(
     identity = _identity_facts(campaign_dir, manifest, current)
     ledger_dir = _campaign_ledger_dir(manifest)
     ledger = _ledger_facts(ledger_dir, now=observed)
+    if (
+        ledger.get("status") == "recovery_required"
+        and run.get("failure_class") != "environment-prerequisite"
+    ):
+        raise ReconcilerError(
+            "Campaign 账本处于 recovery_required，但父动作不是环境前提失败"
+        )
     project_root = _project_root(campaign_dir)
     plan, head = _project_facts(project_root)
     deployment = _deployment_receipt(
@@ -1462,20 +1997,14 @@ def reconcile_supervisor_run(
         campaign_dir, manifest, receipt_dir, plan=plan, head=head, project_root=project_root, now=observed
     )
     contamination = codex_upgrade._campaign_contamination_records(campaign_dir, _manifest=manifest)
-    try:
-        cause = root_cause.describe_root_cause(
-            component=COMPONENT,
-            stable_error_code="supervisor-run.interrupted",
-            failed_step=str(run["last_operation"]).replace(":", "-")[:128],
-            stable_dimensions={"phase": str(run["phase"])},
-        )
-    except root_cause.RootCauseError as error:
-        raise ReconcilerError(f"根因编码失败：{error}") from error
+    failure_observations, root_causes = _supervisor_run_failures(run)
+    cause = root_causes[0]
     receipt = {
         "schema_version": SUPERVISOR_RUN_SCHEMA,
         "campaign_id": str(manifest["campaign_id"]),
         "campaign_manifest_sha256": _file_sha256(campaign_dir / "campaign.json"),
         "run": run,
+        "failure_class": run["failure_class"],
         "attempt_events_fabricated": False,
         "tool_identity": identity,
         "deployment_receipt": deployment,
@@ -1496,6 +2025,9 @@ def reconcile_supervisor_run(
         "scanned_bytes": 0,
         "observed_at_utc": observed,
     }
+    if failure_observations:
+        receipt["failure_observations"] = failure_observations
+        receipt["root_causes"] = root_causes
     receipt_path = receipt_dir / SUPERVISOR_RUN_RECEIPT_NAME
     with codex_upgrade._campaign_lock(campaign_dir):
         stored = _write_or_verify(
@@ -1515,27 +2047,36 @@ def reconcile_supervisor_run(
             ),
         )
         cause = dict(stored["root_cause"])
+        if failure_observations:
+            failure_observations = [
+                dict(item) for item in stored["failure_observations"]
+            ]
+            root_causes = [dict(item) for item in stored["root_causes"]]
         receipt_binding = _binding(campaign_dir, receipt_path, "reconciliation")
+        reconciliation_payload: dict[str, Any] = {
+            "campaign_id": str(manifest["campaign_id"]),
+            "subject_kind": "supervisor_run",
+            "subject_id": run["run_id"],
+            "phase": run["phase"],
+            "request": request_part,
+            "root_cause": {
+                "root_cause_id": cause["root_cause_id"],
+                "stable_error_code": cause["stable_error_code"],
+                "failed_step": cause["failed_step"],
+                "stable_dimensions": cause["stable_dimensions"],
+                "component": cause["component"],
+            },
+            "reconciliation_receipt_sha256": receipt_binding["sha256"],
+            "attempt_failed_event_sha256": None,
+        }
+        if failure_observations:
+            reconciliation_payload["failure_observations"] = failure_observations
+            reconciliation_payload["root_causes"] = root_causes
         batch = _commit_batch(
             campaign_dir,
             operation_id=f"reconcile-supervisor-run:{run['run_id']}",
             event_type="reconciliation_committed",
-            payload={
-                "campaign_id": str(manifest["campaign_id"]),
-                "subject_kind": "supervisor_run",
-                "subject_id": run["run_id"],
-                "phase": run["phase"],
-                "request": request_part,
-                "root_cause": {
-                    "root_cause_id": cause["root_cause_id"],
-                    "stable_error_code": cause["stable_error_code"],
-                    "failed_step": cause["failed_step"],
-                    "stable_dimensions": cause["stable_dimensions"],
-                    "component": cause["component"],
-                },
-                "reconciliation_receipt_sha256": receipt_binding["sha256"],
-                "attempt_failed_event_sha256": None,
-            },
+            payload=reconciliation_payload,
             source={"kind": "supervisor_run_reconciliation", "sha256": receipt_binding["sha256"]},
             receipt_bindings=[receipt_binding, provenance_binding],
         )
@@ -1549,6 +2090,7 @@ def reconcile_supervisor_run(
         environment_status=environment_status,
         campaign_deadline_at_utc=campaign_deadline,
         root_cause_id=cause["root_cause_id"],
+        root_cause_ids=[item["root_cause_id"] for item in root_causes],
         request_status=request_part["status"],
         now=observed,
     )
@@ -1569,11 +2111,15 @@ def reconcile_supervisor_run(
             "blocked": head_after.get("blocked"),
             "remaining_live_requests": head_after.get("remaining_live_requests"),
             "root_cause_count": decision["root_cause_count"],
+            "root_cause_counts": decision["root_cause_counts"],
         },
         "decision": decision,
         "live_request_count": 0,
         "scanned_bytes": 0,
     }
+    if failure_observations:
+        result["failure_observations"] = failure_observations
+        result["root_causes"] = root_causes
     if decision["decision"] == DECISION_RECOVERABLE:
         result["ledger_events"] = []
         if ledger.get("active_phase") is not None:

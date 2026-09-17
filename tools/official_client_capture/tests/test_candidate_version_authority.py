@@ -62,9 +62,13 @@ class CandidateVersionAuthorityTest(unittest.TestCase):
         )
         for source in (core, auxiliary):
             self.assertIn('"Version: $codex_version"', source)
-            self.assertIn("client_version=$codex_version", source)
             self.assertNotIn("client_version=0.145.0", source)
             self.assertNotIn("'Version: 0.145.0'", source)
+        self.assertIn(
+            'f"/backend-api/codex/models?client_version={codex_version}"',
+            core,
+        )
+        self.assertIn("client_version=$codex_version", auxiliary)
         self.assertIn('--codex-version "$codex_version"', core)
         self.assertIn('--codex-version "$6"', auxiliary)
         self.assertIn('"$codex_version" \\\n', auxiliary)

@@ -1049,18 +1049,19 @@
             "value": {
               "originator": "codex_exec",
               "user_agent_prefix": "codex_exec/0.154.0",
-              "user_agent_suffix": "(codex_exec; 0.154.0)"
+              "user_agent_suffix": "",
+              "suffix_state": "absent"
             }
           },
-          "description": "exec 使用 codex_exec 前缀与同名 suffix",
+          "description": "exec 启动 models 使用 codex_exec 前缀且尚无 suffix",
           "id": "exec-identity",
           "select": {
             "record_type": "surface_identity",
             "where": [
               {
                 "operator": "equal",
-                "path": "data.surface",
-                "value": "exec"
+                "path": "data.variant",
+                "value": "exec-startup-models"
               }
             ]
           }
@@ -1075,30 +1076,27 @@
               "user_agent_suffix": "(codex-tui; 0.154.0)"
             }
           },
-          "description": "TUI 使用 codex-tui 前缀与同名 suffix",
+          "description": "TUI initialize 后的真实插件 GET 使用 codex-tui 前缀与同名 suffix",
           "id": "tui-identity",
           "select": {
             "record_type": "surface_identity",
             "where": [
               {
                 "operator": "equal",
-                "path": "data.surface",
-                "value": "tui"
+                "path": "data.variant",
+                "value": "tui-post-initialize-identity"
               }
             ]
           }
         },
         {
           "assertion": {
-            "operator": "distinct_values_equal",
+            "operator": "all_equal",
             "path": "data.suffix_state",
-            "value": [
-              "present",
-              "absent"
-            ]
+            "value": "absent"
           },
-          "description": "启动 models 同时覆盖 suffix present 与 absent 官方观测集",
-          "id": "startup-models-suffix-states",
+          "description": "exec 与 TUI 的启动 models 请求都发生在 client info 生效前，均无 suffix",
+          "id": "startup-models-suffix-absent",
           "select": {
             "record_type": "surface_identity",
             "where": [
@@ -1109,9 +1107,28 @@
               }
             ]
           }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.suffix_state",
+            "value": "present"
+          },
+          "description": "同一 TUI 进程 initialize 后的真实插件 GET 带 codex-tui suffix",
+          "id": "post-initialize-suffix-present",
+          "select": {
+            "record_type": "surface_identity",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.variant",
+                "value": "tui-post-initialize-identity"
+              }
+            ]
+          }
         }
       ],
-      "description": "UA 由 surface 前缀和可选 suffix 组成",
+      "description": "启动 models 无 suffix；TUI initialize 后的真实插件请求带 codex-tui suffix",
       "rule_id": "SPEC-HDR-005",
       "scenario_ids": [
         "A15"
@@ -3439,17 +3456,18 @@
       "trigger": "使用生产 service 调用路径执行受控文件上传，create 返回本轮区域 URL"
     },
     {
-      "description": "exec、TUI 与启动 models UA 画像",
+      "description": "exec 与 PTY TUI 启动 models 缓存，以及同一 TUI initialize 后身份画像",
       "preconditions": [
-        "入口 surface 由 process trace 证明",
-        "UA 已解析为前缀和 suffix",
-        "不接受 curl 伪造入口头"
+        "两条启动 models 由真实 Codex 进程与 process trace 证明，exec 首次 miss、TUI 第二次 hit",
+        "TUI initialize 后的插件 GET 与 TUI models 记录共享 PID、argv、nonce 和 CODEX_HOME",
+        "插件 GET 仅由 localhost witness 应答，不转发 Candidate，也不计入缓存或上游次数",
+        "UA 已解析为前缀和 suffix；拒绝 curl、app-server 与 real-entry-cache-v1"
       ],
       "required_artifact_kinds": [
         "process_trace"
       ],
       "scenario_id": "A15",
-      "trigger": "分别由 Codex 0.154.0 exec 和 TUI 入口触发，并取得启动 models 有 suffix 与无 suffix 两种样本"
+      "trigger": "依次由 Codex 0.154.0 exec 与 PTY TUI 触发两次启动 models，再等待同一 TUI 进程 initialize 后发出带 codex-tui suffix 的真实插件 GET"
     }
   ],
   "schema_version": "codex-candidate-rule-expectations/v1",

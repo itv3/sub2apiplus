@@ -68,8 +68,11 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
 # 2026-09-10：openai_gateway_forward.go 在 ensure 之后把模型能力查表结果钉在 ctx，
 # 消除入站归一化与出站画像之间的判定撕裂；本轮只重绑该源码摘要，不改变候选测试、
 # 事实宇宙或断言规则。
+# 2026-09-17：A15 改由真实 codex exec 与 PTY TUI 的两条启动 models、同一 TUI
+# initialize 后插件身份请求及唯一 relay 上游原件证明，删除三条静态
+# surface_identity 事实；其余 31 条测试事实保持不变。
 FROZEN_MAPPING_SHA256 = (
-    "1d13a8fe05707b84ecfb65a546b50040d567f8c967b448dc38fd2c6f3cff6798"
+    "4f0b8409145f69ef3cc0338df0f697e03bcd16fdb0de85f1feb50e20dfbfc41c"
 )
 # 2026-08-11（R8）：与双轨 selector 修订后的冻结断言画像保持同一摘要，
 # 含 BODY-006/nonlite-* 两条补 method=POST 与 responses 路径约束的修订。
@@ -102,10 +105,10 @@ FROZEN_MAPPING_SHA256 = (
 # compact 线序，并重绑当前第二部分摘要；42 条验收规则数量不变。
 # 2026-08-31：断言画像升级为 0.151.0，加入 Files C2PA 条件分支的三条检查，
 # 规则总数仍为 42。
-# 2026-09-12：目标画像升级到 0.154.0 并重绑主手册第二部分摘要；规则、
-# selector、事实映射与验收判据载荷保持不变。
+# 2026-09-17：A15 的 HDR-005 selector 按真实阶段语义拆成启动 models 无 suffix
+# 与 TUI initialize 后插件请求有 suffix；其余规则与事实映射保持不变。
 FROZEN_PROFILE_SHA256 = (
-    "a63263c9f431d95b07371d9aeceb7f01a5db3084783d32ffdfc63fab0cacc635"
+    "d85d792e1c5f2cb0120b6a937006f0a5c9fcf74a99c7ab234c68fb5cd5fdb033"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")

@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	_ "embed"
+	"encoding/json"
 	"errors"
 	"flag"
 	"log"
@@ -19,6 +20,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/handler"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/platform/liveattestation"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/Wei-Shaw/sub2api/internal/setup"
@@ -60,7 +62,35 @@ func main() {
 	// Parse command line flags
 	setupMode := flag.Bool("setup", false, "Run setup wizard in CLI mode")
 	showVersion := flag.Bool("version", false, "Show version information")
+	candidateCaptureCapabilityProbe := flag.Bool(
+		"candidate-capture-capability-probe",
+		false,
+		"Run the offline candidatecapture build capability probe",
+	)
 	flag.Parse()
+
+	if *candidateCaptureCapabilityProbe {
+		result := liveattestation.ProbeCandidateCaptureCapability()
+		payload := map[string]any{
+			"schema_version":           "sub2api-candidate-capture-capability/v1",
+			"capability":               "candidatecapture",
+			"status":                   "unavailable",
+			"provider_check_passed":    result.ProviderCheckPassed,
+			"provider_generate_passed": result.ProviderGeneratePassed,
+			"live_request_count":       0,
+		}
+		if result.Available {
+			payload["status"] = "available"
+		}
+		if err := json.NewEncoder(os.Stdout).Encode(payload); err != nil {
+			log.Printf("Candidate capture capability probe encode failed: %v", err)
+			os.Exit(2)
+		}
+		if !result.Available {
+			os.Exit(3)
+		}
+		return
+	}
 
 	if *showVersion {
 		log.Printf("Sub2API %s (commit: %s, built: %s)\n", Version, Commit, Date)

@@ -49,6 +49,8 @@ EVENT_TYPES = frozenset(
         "attempt_started",
         "attempt_failed",
         "attempt_completed",
+        "recovery_required",
+        "recovery_authorized",
         "receipt_passed",
         "stop_the_line",
         "recovery_verified",
@@ -56,6 +58,7 @@ EVENT_TYPES = frozenset(
     }
 )
 RECOVERY_ROLES = ("clean_p0", "offline_regression", "tool_fix")
+RECOVERY_AUTHORIZATION_ROLES = ("recovery_approval", "recovery_preview")
 SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -242,6 +245,12 @@ PRODUCER_FREEZE_SUCCESSORS = (
         "path": "docs/egress/maintenance/upstream-codex-0154-vc5-aux-empty-mapping-20260916-freeze-successor.json",
         "base_commit": "8c2455ae86312ed3c6000ef73613ff192465c731",
         "scope": "upstream-codex-0154-vc5-aux-empty-mapping-20260916-freeze-successor",
+        "result": "manual_actions_required",
+    },
+    {
+        "path": "docs/egress/maintenance/upstream-codex-0154-vc5-framework-closure-20260917-freeze-successor.json",
+        "base_commit": "ea91d974529bf860c0d1785ce081f796bc4bdacf",
+        "scope": "upstream-codex-0154-vc5-framework-closure-20260917-freeze-successor",
         "result": "manual_actions_required",
     },
 )
@@ -1027,7 +1036,19 @@ def _validate_event_shape(root: Path, event: dict[str, Any], sequence: int) -> d
     normalized = [_validate_binding(root, item, f"event {sequence}.receipts") for item in receipts]
     if event["event_type"] == "recovery_verified" and tuple(roles) != RECOVERY_ROLES:
         raise TimingLedgerError("recovery_verified 必须绑定工具修复、离线回归和干净 P0 三份收据")
-    if event["event_type"] != "recovery_verified" and roles and event["event_type"] not in {"receipt_passed", "stop_the_line", "upgrade_completed"}:
+    if (
+        event["event_type"] == "recovery_authorized"
+        and tuple(roles) != RECOVERY_AUTHORIZATION_ROLES
+    ):
+        raise TimingLedgerError(
+            "recovery_authorized 必须绑定恢复预览与恢复批准两份收据"
+        )
+    if (
+        event["event_type"] not in {"recovery_verified", "recovery_authorized"}
+        and roles
+        and event["event_type"]
+        not in {"receipt_passed", "stop_the_line", "upgrade_completed"}
+    ):
         raise TimingLedgerError(f"{event['event_type']} 不接受 receipts")
     next_action = event.get("next_action")
     if next_action is not None and (not isinstance(next_action, str) or not next_action.strip()):
@@ -1057,6 +1078,9 @@ def _summarize(
     active_phase_started: datetime | None = None
     stopped = False
     completed = False
+    recovery_required = False
+    recovery_phase: str | None = None
+    recovery_root_cause_id: str | None = None
     total_live_requests = 0
     last_time: datetime | None = None
     previous_raw: bytes | None = None
@@ -1080,6 +1104,17 @@ def _summarize(
             raise TimingLedgerError("upgrade_completed 后禁止追加 event")
         if stopped and event_type != "recovery_verified":
             raise TimingLedgerError("stop_the_line 后只能记录 recovery_verified")
+        if recovery_required and event_type not in {
+            "attempt_started",
+            "attempt_failed",
+            "receipt_passed",
+            "recovery_authorized",
+            "stage_abandoned",
+            "stop_the_line",
+        }:
+            raise TimingLedgerError(
+                "recovery_required 期间只允许对账或已批准的恢复动作"
+            )
         if event_type == "stage_started":
             if active_phase is not None or normalized["attempt_id"] is not None or normalized["root_cause_id"] is not None:
                 raise TimingLedgerError("stage_started 身份或阶段状态非法")
@@ -1103,6 +1138,9 @@ def _summarize(
                 )
             active_phase = None
             active_phase_started = None
+            recovery_required = False
+            recovery_phase = None
+            recovery_root_cause_id = None
         elif event_type == "attempt_started":
             attempt_id = normalized["attempt_id"]
             if active_phase != phase or attempt_id is None or attempt_id in attempts:
@@ -1123,10 +1161,62 @@ def _summarize(
                 failure_counts[cause] = failure_counts.get(cause, 0) + 1
             else:
                 attempts[attempt_id]["status"] = "completed"
+        elif event_type == "recovery_required":
+            cause = normalized["root_cause_id"]
+            if (
+                recovery_required
+                or active_phase != phase
+                or normalized["attempt_id"] is not None
+                or cause is None
+                or normalized["receipts"]
+                or not normalized["next_action"]
+            ):
+                raise TimingLedgerError(
+                    "recovery_required 必须暂停当前阶段、登记根因和唯一下一动作"
+                )
+            recovery_required = True
+            recovery_phase = phase
+            recovery_root_cause_id = cause
+        elif event_type == "receipt_passed":
+            if recovery_required:
+                roles = tuple(item["role"] for item in normalized["receipts"])
+                if (
+                    active_phase != phase
+                    or any(item["status"] == "active" for item in attempts.values())
+                    or normalized["attempt_id"] is not None
+                    or normalized["root_cause_id"] is not None
+                    or roles != ("provenance", "reconciliation")
+                    or not normalized["next_action"]
+                ):
+                    raise TimingLedgerError(
+                        "reservation 前恢复必须由对账收据恢复当前阶段"
+                    )
+                recovery_required = False
+                recovery_phase = None
+                recovery_root_cause_id = None
+        elif event_type == "recovery_authorized":
+            cause = normalized["root_cause_id"]
+            if (
+                not recovery_required
+                or active_phase != phase
+                or any(item["status"] == "active" for item in attempts.values())
+                or normalized["attempt_id"] is not None
+                or cause != recovery_root_cause_id
+                or not normalized["next_action"]
+            ):
+                raise TimingLedgerError(
+                    "reservation 后恢复必须绑定当前暂停根因且 attempt 已完成对账"
+                )
+            recovery_required = False
+            recovery_phase = None
+            recovery_root_cause_id = None
         elif event_type == "stop_the_line":
             if not normalized["next_action"]:
                 raise TimingLedgerError("stop_the_line 必须冻结唯一下一动作")
             stopped = True
+            recovery_required = False
+            recovery_phase = None
+            recovery_root_cause_id = None
         elif event_type == "recovery_verified":
             cause = normalized["root_cause_id"]
             if not stopped or cause is None or failure_counts.get(cause, 0) < plan["same_root_cause_retry_limit"]:
@@ -1169,6 +1259,8 @@ def _summarize(
         if stopped
         else "stop_required"
         if budget_exceeded or retry_stop_required
+        else "recovery_required"
+        if recovery_required
         else "active"
     )
     return {
@@ -1179,6 +1271,8 @@ def _summarize(
         "campaign_purpose": plan["campaign_purpose"],
         "evidence_decision": plan["evidence_decision"],
         "active_phase": active_phase,
+        "recovery_phase": recovery_phase,
+        "recovery_root_cause_id": recovery_root_cause_id,
         "head_sequence": len(raw_events),
         "head_sha256": _sha256_bytes(previous_raw),
         "total_elapsed_seconds": total_elapsed,
@@ -1333,6 +1427,17 @@ def append_event(
             allowed_while_stopping.add("attempt_failed")
     if current["status"] in {"stop_required", "stopped"} and event_type not in allowed_while_stopping:
         raise TimingLedgerError("计时或重试门禁已要求停线，禁止继续追加执行事件")
+    if current["status"] == "recovery_required" and event_type not in {
+        "attempt_started",
+        "attempt_failed",
+        "receipt_passed",
+        "recovery_authorized",
+        "stage_abandoned",
+        "stop_the_line",
+    }:
+        raise TimingLedgerError(
+            "recovery_required 期间只允许对账或已批准的恢复动作"
+        )
     sequence = len(raw_events) + 1
     event = {
         "schema_version": EVENT_SCHEMA,

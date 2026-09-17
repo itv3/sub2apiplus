@@ -78,10 +78,28 @@ CAMPAIGN_RUN_EXECUTION_DEADLINE_ENV = (
     "CODEX_UPGRADE_CAMPAIGN_EXECUTION_DEADLINE_AT_EPOCH"
 )
 CAMPAIGN_RUN_CLEANUP_GRACE_ENV = "CODEX_UPGRADE_CAMPAIGN_CLEANUP_GRACE_SECONDS"
-ACTION_DIAGNOSTIC_SCHEMA = "codex-upgrade-campaign-action-diagnostic/v1"
+ACTION_DIAGNOSTIC_SCHEMA = "codex-upgrade-campaign-action-diagnostic/v3"
+ACTION_DIAGNOSTIC_V2_SCHEMA = "codex-upgrade-campaign-action-diagnostic/v2"
+ACTION_DIAGNOSTIC_LEGACY_SCHEMA = "codex-upgrade-campaign-action-diagnostic/v1"
 ACTION_DIAGNOSTIC_FAILURE_KINDS = frozenset(
     {"handled-error", "interrupted", "unexpected-error", "child-returncode"}
 )
+ACTION_DIAGNOSTIC_FAILURE_CLASSES = frozenset(
+    {
+        "environment-prerequisite",
+        "evidence-integrity",
+        "identity-drift",
+        "policy-drift",
+        "request-accounting-uncertain",
+        "environment-contaminated",
+        "restoration-failed",
+        "deadline-expired",
+        "request-budget-exhausted",
+        "root-cause-limit",
+        "execution-failure",
+    }
+)
+RECOVERABLE_ACTION_FAILURE_CLASSES = frozenset({"environment-prerequisite"})
 ACTION_DIAGNOSTIC_FIELDS = frozenset(
     {
         "schema_version",
@@ -91,12 +109,20 @@ ACTION_DIAGNOSTIC_FIELDS = frozenset(
         "owner_pid",
         "owner_nonce",
         "failure_kind",
+        "failure_class",
+        "failure_observations",
         "error_type",
         "message",
         "recorded_at_utc",
         "diagnostic_sha256",
     }
 )
+ACTION_DIAGNOSTIC_V2_FIELDS = ACTION_DIAGNOSTIC_FIELDS - {
+    "failure_observations"
+}
+ACTION_DIAGNOSTIC_LEGACY_FIELDS = ACTION_DIAGNOSTIC_V2_FIELDS - {
+    "failure_class"
+}
 DEFAULT_HEARTBEAT_SECONDS = 5
 DEFAULT_WATCHDOG_TIMEOUT_SECONDS = 20
 DEFAULT_LEDGER_INTERVAL_SECONDS = 60
@@ -515,6 +541,54 @@ def _action_diagnostic_path(
     return expected
 
 
+def _action_failure_observations(value: Any) -> list[dict[str, str]]:
+    """归一化动作枚举观测；同一检查与错误码在一次动作内只保留一项。"""
+
+    if value is None:
+        return []
+    if (
+        not isinstance(value, Sequence)
+        or isinstance(value, (str, bytes, bytearray))
+        or len(value) > 64
+    ):
+        raise SupervisorError("动作失败诊断 failure_observations 非法。")
+    by_key: dict[tuple[str, str], dict[str, str]] = {}
+    for index, item in enumerate(value):
+        if not isinstance(item, Mapping) or set(item) != {
+            "check_id",
+            "failure_code",
+        }:
+            raise SupervisorError(
+                f"动作失败诊断 failure_observations[{index}] 字段不闭合。"
+            )
+        check_id = _safe_id(
+            item.get("check_id"),
+            f"failure_observations[{index}].check_id",
+        )
+        failure_code = _safe_id(
+            item.get("failure_code"),
+            f"failure_observations[{index}].failure_code",
+        )
+        by_key[(check_id, failure_code)] = {
+            "check_id": check_id,
+            "failure_code": failure_code,
+        }
+    return [by_key[key] for key in sorted(by_key)]
+
+
+def _action_failure_class(value: Any) -> str:
+    """把就绪模块的历史别名收敛为冻结的 supervisor 失败分类。"""
+
+    normalized = (
+        "request-accounting-uncertain"
+        if value == "accounting-uncertain"
+        else value
+    )
+    if normalized not in ACTION_DIAGNOSTIC_FAILURE_CLASSES:
+        raise SupervisorError("动作失败诊断 failure_class 非法。")
+    return str(normalized)
+
+
 def _validate_action_diagnostic(
     path: Path,
     *,
@@ -534,18 +608,35 @@ def _validate_action_diagnostic(
         supplied_path=path,
     )
     payload = _read_json(expected)
-    if set(payload) != ACTION_DIAGNOSTIC_FIELDS:
+    schema_version = payload.get("schema_version")
+    if schema_version == ACTION_DIAGNOSTIC_LEGACY_SCHEMA:
+        expected_fields = ACTION_DIAGNOSTIC_LEGACY_FIELDS
+    elif schema_version == ACTION_DIAGNOSTIC_V2_SCHEMA:
+        expected_fields = ACTION_DIAGNOSTIC_V2_FIELDS
+    else:
+        expected_fields = ACTION_DIAGNOSTIC_FIELDS
+    if set(payload) != expected_fields:
         raise SupervisorError("动作失败诊断字段不闭合。")
     unsigned = dict(payload)
     digest = unsigned.pop("diagnostic_sha256", None)
     if (
-        payload.get("schema_version") != ACTION_DIAGNOSTIC_SCHEMA
+        schema_version not in {
+            ACTION_DIAGNOSTIC_SCHEMA,
+            ACTION_DIAGNOSTIC_V2_SCHEMA,
+            ACTION_DIAGNOSTIC_LEGACY_SCHEMA,
+        }
         or payload.get("campaign_id") != campaign_id
         or payload.get("phase") != phase
         or payload.get("action_id") != action_id
         or payload.get("owner_pid") != owner_pid
         or payload.get("owner_nonce") != owner_nonce
         or payload.get("failure_kind") not in ACTION_DIAGNOSTIC_FAILURE_KINDS
+        or (
+            schema_version
+            in {ACTION_DIAGNOSTIC_SCHEMA, ACTION_DIAGNOSTIC_V2_SCHEMA}
+            and payload.get("failure_class")
+            not in ACTION_DIAGNOSTIC_FAILURE_CLASSES
+        )
         or not isinstance(payload.get("error_type"), str)
         or _safe_id(payload.get("error_type"), "error_type")
         != payload.get("error_type")
@@ -555,7 +646,25 @@ def _validate_action_diagnostic(
         or digest != _sha256(_canonical(unsigned))
     ):
         raise SupervisorError("动作失败诊断身份、内容或摘要非法。")
+    if (
+        schema_version == ACTION_DIAGNOSTIC_SCHEMA
+        and payload.get("failure_observations")
+        != _action_failure_observations(payload.get("failure_observations"))
+    ):
+        raise SupervisorError(
+            "动作失败诊断 failure_observations 未按稳定键唯一排序。"
+        )
     _validate_action_diagnostic_timestamp(payload.get("recorded_at_utc"))
+    if schema_version == ACTION_DIAGNOSTIC_LEGACY_SCHEMA:
+        # 历史 v1 没有机器失败分类；只读重放时按不可自动恢复处理，绝不从
+        # message 文本猜测语义。
+        return {
+            **payload,
+            "failure_class": "execution-failure",
+            "failure_observations": [],
+        }
+    if schema_version == ACTION_DIAGNOSTIC_V2_SCHEMA:
+        return {**payload, "failure_observations": []}
     return payload
 
 
@@ -568,6 +677,8 @@ def _write_action_diagnostic(
     owner_pid: int,
     owner_nonce: str,
     failure_kind: str,
+    failure_class: str = "execution-failure",
+    failure_observations: Sequence[Mapping[str, str]] | None = None,
     error_type: str,
     message: str,
 ) -> dict[str, Any]:
@@ -581,6 +692,8 @@ def _write_action_diagnostic(
         raise SupervisorError("动作失败诊断 owner_pid 非法。")
     if failure_kind not in ACTION_DIAGNOSTIC_FAILURE_KINDS:
         raise SupervisorError("动作失败诊断 failure_kind 非法。")
+    failure_class = _action_failure_class(failure_class)
+    observations = _action_failure_observations(failure_observations)
     error_type = _safe_id(error_type, "error_type")
     payload: dict[str, Any] = {
         "schema_version": ACTION_DIAGNOSTIC_SCHEMA,
@@ -590,6 +703,8 @@ def _write_action_diagnostic(
         "owner_pid": owner_pid,
         "owner_nonce": owner_nonce,
         "failure_kind": failure_kind,
+        "failure_class": failure_class,
+        "failure_observations": observations,
         "error_type": error_type,
         "message": _action_diagnostic_message(message),
         "recorded_at_utc": _utc_now(),
@@ -603,6 +718,7 @@ def write_campaign_run_action_diagnostic(
     *,
     failure_kind: str,
     error: BaseException,
+    failure_class: str = "execution-failure",
 ) -> Path | None:
     """由 campaign-run 子进程写入动作专属的脱敏失败诊断。
 
@@ -633,6 +749,8 @@ def write_campaign_run_action_diagnostic(
         owner_pid=client.owner_pid,
         owner_nonce=client.owner_nonce,
         failure_kind=failure_kind,
+        failure_class=failure_class,
+        failure_observations=getattr(error, "failure_observations", None),
         error_type=type(error).__name__,
         message=str(error),
     )
@@ -4819,9 +4937,224 @@ def _validate_batched_official_recovery_preview_successor(
     return True
 
 
+def _validate_batched_environment_redispatch_successor(
+    prior_state: Mapping[str, Any],
+    prior_manifest: Mapping[str, Any],
+    prior_dir: Path,
+    successor_manifest: Mapping[str, Any],
+    *,
+    campaign_dir: Path | None,
+) -> bool:
+    """只允许已对账的 reservation 前环境失败逐字重派原批次内容。
+
+    返回 ``False`` 表示父失败不是 ``environment-prerequisite``，应继续匹配
+    其他既有恢复协议；一旦诊断明确属于环境前提失败，任何对账绑定或批次内容
+    漂移都必须失败关闭，不能退回更宽松的普通后继规则。
+    """
+
+    stop_path = prior_dir / "stop-receipt.json"
+    if stop_path.is_symlink() or not stop_path.is_file():
+        return False
+    stop = _read_json(stop_path)
+    reason = stop.get("reason")
+    if not isinstance(reason, str) or not reason.startswith("action-failed:"):
+        return False
+    action_id = reason.split(":", 1)[1]
+    if not action_id:
+        return False
+    owner_pid = prior_state.get("owner_pid")
+    owner_nonce = prior_state.get("owner_nonce")
+    if (
+        isinstance(owner_pid, bool)
+        or not isinstance(owner_pid, int)
+        or owner_pid <= 0
+        or not isinstance(owner_nonce, str)
+        or not owner_nonce
+    ):
+        return False
+    diagnostic_path = prior_dir / "action-diagnostics" / (
+        f"action-{action_id}-failure.json"
+    )
+    if diagnostic_path.is_symlink() or not diagnostic_path.is_file():
+        return False
+    diagnostic = _validate_action_diagnostic(
+        diagnostic_path,
+        run_dir=prior_dir,
+        campaign_id=str(prior_manifest.get("campaign_id", "")),
+        phase=str(prior_manifest.get("phase", "")),
+        action_id=action_id,
+        owner_pid=owner_pid,
+        owner_nonce=owner_nonce,
+    )
+    if diagnostic.get("failure_class") != "environment-prerequisite":
+        return False
+
+    unsigned_stop = dict(stop)
+    stop_digest = unsigned_stop.pop("receipt_sha256", None)
+    if (
+        stop.get("schema_version") != STOP_SCHEMA
+        or stop.get("event_type") != "failed"
+        or stop.get("campaign_id") != prior_manifest.get("campaign_id")
+        or stop.get("phase") != prior_manifest.get("phase")
+        or stop.get("owner_pid") != owner_pid
+        or stop.get("owner_nonce") != owner_nonce
+        or stop_digest != _sha256(_canonical(unsigned_stop))
+        or prior_state.get("state") != "failed"
+        or prior_state.get("campaign_id") != prior_manifest.get("campaign_id")
+        or prior_state.get("phase") != prior_manifest.get("phase")
+    ):
+        raise SupervisorError("环境前提失败批次的父终态或 stop receipt 漂移。")
+    prior_actions = prior_manifest.get("actions")
+    if (
+        not isinstance(prior_actions, list)
+        or not any(
+            isinstance(action, Mapping) and action.get("action_id") == action_id
+            for action in prior_actions
+        )
+    ):
+        raise SupervisorError("环境前提失败诊断没有对应的原批次动作。")
+    if campaign_dir is None:
+        raise SupervisorError("环境前提失败重派必须绑定 Campaign 目录。")
+    try:
+        campaign_dir = Path(campaign_dir).resolve(strict=True)
+    except OSError as error:
+        raise SupervisorError("环境前提失败重派的 Campaign 目录不存在。") from error
+    campaign_path = campaign_dir / "campaign.json"
+    campaign = _read_json(campaign_path)
+    controls = campaign.get("control_receipts")
+    timing_control = (
+        controls.get("upgrade_timing") if isinstance(controls, Mapping) else None
+    )
+    if (
+        campaign.get("campaign_id") != prior_manifest.get("campaign_id")
+        or not isinstance(timing_control, Mapping)
+        or not isinstance(timing_control.get("ledger_dir"), str)
+    ):
+        raise SupervisorError("环境前提失败重派缺少 Campaign 时间账本绑定。")
+    ledger_dir = Path(str(timing_control["ledger_dir"]))
+    if not ledger_dir.is_absolute() or ledger_dir.is_symlink() or not ledger_dir.is_dir():
+        raise SupervisorError("环境前提失败重派的时间账本目录不可信。")
+    try:
+        ledger_dir = ledger_dir.resolve(strict=True)
+        ledger_plan_path = ledger_dir / "ledger.json"
+        if (
+            ledger_plan_path.is_symlink()
+            or not ledger_plan_path.is_file()
+            or _sha256(ledger_plan_path.read_bytes())
+            != timing_control.get("ledger_plan_sha256")
+        ):
+            raise SupervisorError("环境前提失败重派的时间账本计划绑定漂移。")
+        ledger_summary = timing_ledger.inspect_ledger(ledger_dir)
+        raw_events = timing_ledger._load_events(ledger_dir)
+    except (OSError, timing_ledger.TimingLedgerError) as error:
+        raise SupervisorError(f"环境前提失败重派无法重放时间账本：{error}") from error
+    if not raw_events:
+        raise SupervisorError("环境前提失败重派的时间账本没有事件。")
+    recovery_event = raw_events[-1][0]
+    expected_event_id = f"reconcile-run-passed-{prior_dir.name}"
+    receipts = recovery_event.get("receipts")
+    if (
+        ledger_summary.get("status") != "active"
+        or ledger_summary.get("active_phase") != prior_manifest.get("phase")
+        or ledger_summary.get("next_action") != "redispatch-same-batch"
+        or recovery_event.get("event_type") != "receipt_passed"
+        or recovery_event.get("event_id") != expected_event_id
+        or recovery_event.get("phase") != prior_manifest.get("phase")
+        or not isinstance(receipts, list)
+        or [item.get("role") for item in receipts if isinstance(item, Mapping)]
+        != ["provenance", "reconciliation"]
+    ):
+        raise SupervisorError("环境前提失败尚未形成唯一的原批次重派许可。")
+
+    reconciliation_binding = next(
+        item
+        for item in receipts
+        if isinstance(item, Mapping) and item.get("role") == "reconciliation"
+    )
+    reconciliation_copy = ledger_dir / str(reconciliation_binding.get("path", ""))
+    campaign_receipt = (
+        campaign_dir
+        / "control"
+        / "reconciliation"
+        / f"run-{prior_dir.name}"
+        / "supervisor-run-reconciliation.json"
+    )
+    if (
+        reconciliation_copy.is_symlink()
+        or not reconciliation_copy.is_file()
+        or campaign_receipt.is_symlink()
+        or not campaign_receipt.is_file()
+    ):
+        raise SupervisorError("环境前提失败的对账收据绑定漂移。")
+    reconciliation_raw = _permission_compensation_private_file(
+        reconciliation_copy,
+        "环境前提失败时间账本对账副本",
+    )
+    campaign_reconciliation_raw = _permission_compensation_private_file(
+        campaign_receipt,
+        "环境前提失败 Campaign 对账收据",
+    )
+    if (
+        _sha256(reconciliation_raw) != reconciliation_binding.get("sha256")
+        or reconciliation_raw != campaign_reconciliation_raw
+    ):
+        raise SupervisorError("环境前提失败的对账收据绑定漂移。")
+    reconciliation = _permission_compensation_json(
+        campaign_reconciliation_raw,
+        "环境前提失败 Campaign 对账收据",
+    )
+    run = reconciliation.get("run")
+    if (
+        reconciliation.get("schema_version")
+        != "supervisor-run-reconciliation/v1"
+        or reconciliation.get("campaign_id") != prior_manifest.get("campaign_id")
+        or reconciliation.get("failure_class") != "environment-prerequisite"
+        or reconciliation.get("reservation_exists") is not False
+        or reconciliation.get("live_request_count") != 0
+        or reconciliation.get("scanned_bytes") != 0
+        or not isinstance(run, Mapping)
+        or run.get("run_dir") != str(prior_dir.resolve(strict=True))
+        or run.get("run_id") != prior_dir.name
+        or run.get("state") != "failed"
+        or run.get("phase") != prior_manifest.get("phase")
+        or run.get("batch_id") != prior_manifest.get("batch_id")
+        or run.get("batch_sequence") != prior_manifest.get("batch_sequence")
+        or run.get("batch_sha256") != prior_manifest.get("batch_sha256")
+        or run.get("execute_items") != prior_manifest.get("execute_items")
+        or run.get("reuse_items") != prior_manifest.get("reuse_items")
+        or run.get("failure_class") != "environment-prerequisite"
+    ):
+        raise SupervisorError("环境前提失败的 reservation 前对账事实漂移。")
+
+    immutable_fields = (
+        "campaign_id",
+        "campaign_plan_sha256",
+        "phase",
+        "predecessor_checkpoint",
+        "original_deadline_at_utc",
+        "actions",
+        "execute_items",
+        "reuse_items",
+        "no_op",
+    )
+    drifted = [
+        field
+        for field in immutable_fields
+        if successor_manifest.get(field) != prior_manifest.get(field)
+    ]
+    if drifted:
+        raise SupervisorError(
+            "reservation 前环境恢复只允许原批次内容重派，漂移字段："
+            + "、".join(drifted)
+        )
+    return True
+
+
 def _validate_batched_campaign_history(
     manifest: Mapping[str, Any],
     history: Sequence[tuple[dict[str, Any], dict[str, Any], Path]],
+    *,
+    campaign_dir: Path | None = None,
 ) -> list[tuple[dict[str, Any], dict[str, Any], Path]]:
     """校验 v2/v3 连续链和获批的唯一失败后继。
 
@@ -4904,6 +5237,18 @@ def _validate_batched_campaign_history(
         if (
             prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
             and successor_schema == CAMPAIGN_RUN_RECOVERY_SCHEMA
+        ):
+            continue
+        if (
+            prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
+            and successor_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
+            and _validate_batched_environment_redispatch_successor(
+                state,
+                prior_manifest,
+                _run_dir,
+                successor_manifest,
+                campaign_dir=campaign_dir,
+            )
         ):
             continue
         if (
@@ -4996,8 +5341,9 @@ def _close_failed_campaign_timing_ledger(
     manifest: Mapping[str, Any],
     *,
     failed_action_id: str,
+    failure_class: str = "execution-failure",
 ) -> dict[str, Any]:
-    """把父动作失败确定性映射为 stage_abandoned 与 stop_the_line。"""
+    """按机器失败分类把父动作失败映射为暂停恢复或永久停线。"""
 
     campaign_dir = Path(campaign_dir)
     campaign = _read_json(campaign_dir / "campaign.json")
@@ -5053,6 +5399,8 @@ def _close_failed_campaign_timing_ledger(
     if not isinstance(sequence, int) or isinstance(sequence, bool) or sequence < 1:
         raise SupervisorError("父失败批次序号非法。")
     failed_action_id = _safe_id(failed_action_id, "failed_action_id")
+    if failure_class not in ACTION_DIAGNOSTIC_FAILURE_CLASSES:
+        raise SupervisorError("父动作 failure_class 非法。")
     failure_digest = _sha256(
         _canonical(
             {
@@ -5060,6 +5408,7 @@ def _close_failed_campaign_timing_ledger(
                 "phase": phase,
                 "batch_sequence": sequence,
                 "failed_action_id": failed_action_id,
+                "failure_class": failure_class,
             }
         )
     )
@@ -5073,13 +5422,16 @@ def _close_failed_campaign_timing_ledger(
         stable_dimensions={"phase": phase},
     )
     event_prefix = f"campaign-run-failure-{failure_digest[:20]}"
+    recovery_event_id = f"{event_prefix}-recovery-required"
     abandon_event_id = f"{event_prefix}-stage-abandoned"
     stop_event_id = f"{event_prefix}-stop-the-line"
-    # B9：失败父批次的唯一下一动作是先对账再从最近合法 checkpoint 恢复，而不是
-    # 直接放弃 Campaign；reconciler 判定永久停线时才向项目总账追加终态。
-    next_action = (
+    recovery_next_action = (
+        "reconcile-supervisor-run／reconcile-attempt：先按 reservation 是否存在完成对账；"
+        "reservation 前只允许原批次重派，reservation 后只允许已批准的 resume --rerun-failed。"
+    )
+    permanent_next_action = (
         "resume-from-checkpoint：先执行 reconcile-supervisor-run／reconcile-attempt 对账，"
-        "按判定从最近合法 checkpoint 恢复或永久停线；禁止跳过对账继续当前 Campaign。"
+        "本失败分类不可自动恢复；完成请求与根因入账后永久停线。"
     )
 
     with _timing_closeout_lock(ledger_dir):
@@ -5094,21 +5446,92 @@ def _close_failed_campaign_timing_ledger(
             or before.get("target_version") != campaign.get("target_version")
         ):
             raise SupervisorError("UpgradeTimingLedger 与 Campaign 版本或用途漂移。")
-        if before.get("status") == "stopped":
+        if before.get("status") == "recovery_required":
             if (
-                before.get("last_event_id") != stop_event_id
-                or before.get("next_action") != next_action
+                before.get("last_event_id") != recovery_event_id
+                or before.get("next_action") != recovery_next_action
+                or before.get("recovery_root_cause_id") != root_cause_id
             ):
-                raise SupervisorError("UpgradeTimingLedger 已由其他根因停线。")
+                raise SupervisorError(
+                    "UpgradeTimingLedger 已由其他根因进入 recovery_required。"
+                )
             return {
                 "status": "passed",
+                "ledger_status": "recovery_required",
                 "idempotent": True,
                 "ledger_dir": str(ledger_dir),
                 "head_sequence": before["head_sequence"],
                 "head_sha256": before["head_sha256"],
                 "root_cause_id": root_cause_id,
-                "next_action": next_action,
+                "failure_class": failure_class,
+                "next_action": recovery_next_action,
             }
+        if before.get("status") == "stopped":
+            if (
+                before.get("last_event_id") != stop_event_id
+                or before.get("next_action") != permanent_next_action
+            ):
+                raise SupervisorError("UpgradeTimingLedger 已由其他根因停线。")
+            return {
+                "status": "passed",
+                "ledger_status": "stopped",
+                "idempotent": True,
+                "ledger_dir": str(ledger_dir),
+                "head_sequence": before["head_sequence"],
+                "head_sha256": before["head_sha256"],
+                "root_cause_id": root_cause_id,
+                "failure_class": failure_class,
+                "next_action": permanent_next_action,
+            }
+
+        # 仅精确的环境前提失败可暂停；deadline／重试上限已使账本进入
+        # stop_required 时，即便动作分类可恢复也必须走永久停线分支。
+        if (
+            failure_class in RECOVERABLE_ACTION_FAILURE_CLASSES
+            and before.get("status") == "active"
+        ):
+            if before.get("active_phase") != phase:
+                raise SupervisorError(
+                    "UpgradeTimingLedger 当前阶段与父失败阶段不一致。"
+                )
+            try:
+                timing_ledger.append_event(
+                    ledger_dir,
+                    event_id=recovery_event_id,
+                    phase=phase,
+                    event_type="recovery_required",
+                    root_cause_id=root_cause_id,
+                    live_request_count=0,
+                    next_action=recovery_next_action,
+                )
+                final = timing_ledger.inspect_ledger(ledger_dir)
+            except (OSError, timing_ledger.TimingLedgerError) as error:
+                raise SupervisorError(
+                    f"UpgradeTimingLedger recovery_required 写入失败：{error}"
+                ) from error
+            if (
+                final.get("status") != "recovery_required"
+                or final.get("active_phase") != phase
+                or final.get("last_event_id") != recovery_event_id
+                or final.get("recovery_root_cause_id") != root_cause_id
+                or final.get("next_action") != recovery_next_action
+            ):
+                raise SupervisorError(
+                    "UpgradeTimingLedger 父失败暂停状态未闭合。"
+                )
+            return {
+                "status": "passed",
+                "ledger_status": "recovery_required",
+                "idempotent": False,
+                "ledger_dir": str(ledger_dir),
+                "head_sequence": final["head_sequence"],
+                "head_sha256": final["head_sha256"],
+                "root_cause_id": root_cause_id,
+                "failure_class": failure_class,
+                "next_action": recovery_next_action,
+            }
+
+        next_action = permanent_next_action
 
         if before.get("last_event_id") == abandon_event_id:
             if before.get("active_phase") is not None:
@@ -5161,11 +5584,13 @@ def _close_failed_campaign_timing_ledger(
             raise SupervisorError("UpgradeTimingLedger 父失败终态未闭合。")
         return {
             "status": "passed",
+            "ledger_status": "stopped",
             "idempotent": False,
             "ledger_dir": str(ledger_dir),
             "head_sequence": final["head_sequence"],
             "head_sha256": final["head_sha256"],
             "root_cause_id": root_cause_id,
+            "failure_class": failure_class,
             "next_action": next_action,
         }
 
@@ -5185,6 +5610,7 @@ def _campaign_run_locked(
     reason = "campaign-run-failed"
     timing_closeout: dict[str, Any] | None = None
     active_action_id: str | None = None
+    failed_action_diagnostic: dict[str, Any] | None = None
     try:
         history = _campaign_run_history(state_dir, str(manifest["campaign_id"]))
         if manifest["schema_version"] == CAMPAIGN_RUN_SCHEMA:
@@ -5195,7 +5621,11 @@ def _campaign_run_locked(
                 )
             deadline = time.time() + float(manifest["deadline_seconds"])
         else:
-            _validate_batched_campaign_history(manifest, history)
+            _validate_batched_campaign_history(
+                manifest,
+                history,
+                campaign_dir=campaign_dir,
+            )
             deadline = datetime.fromisoformat(
                 str(manifest["original_deadline_at_utc"]).replace("Z", "+00:00")
             ).timestamp()
@@ -5311,7 +5741,7 @@ def _campaign_run_locked(
                             error_type=type(error).__name__,
                             message="子命令未正常返回。",
                         )
-                    _validate_action_diagnostic(
+                    failed_action_diagnostic = _validate_action_diagnostic(
                         diagnostic_path,
                         run_dir=client.run_dir,
                         campaign_id=str(manifest["campaign_id"]),
@@ -5348,10 +5778,15 @@ def _campaign_run_locked(
                         owner_pid=client.owner_pid,
                         owner_nonce=client.owner_nonce,
                     )
+                    failed_action_diagnostic = diagnostic
                     action_result["diagnostic"] = {
-                        "schema_version": ACTION_DIAGNOSTIC_SCHEMA,
+                        "schema_version": diagnostic["schema_version"],
                         "path": str(diagnostic_path.relative_to(client.run_dir)),
                         "sha256": diagnostic["diagnostic_sha256"],
+                        "failure_class": diagnostic["failure_class"],
+                        "failure_observations": list(
+                            diagnostic["failure_observations"]
+                        ),
                     }
                 results.append(action_result)
                 if result.returncode != 0:
@@ -5367,6 +5802,11 @@ def _campaign_run_locked(
                     campaign_dir,
                     manifest,
                     failed_action_id=reason.split(":", 1)[1],
+                    failure_class=(
+                        str(failed_action_diagnostic["failure_class"])
+                        if failed_action_diagnostic is not None
+                        else "execution-failure"
+                    ),
                 )
             except BaseException as error:
                 timing_closeout = {
@@ -5414,6 +5854,11 @@ def _campaign_run_locked(
                     campaign_dir,
                     manifest,
                     failed_action_id=active_action_id,
+                    failure_class=(
+                        str(failed_action_diagnostic["failure_class"])
+                        if failed_action_diagnostic is not None
+                        else "execution-failure"
+                    ),
                 )
             except BaseException as timing_error:
                 closeout_error = timing_error

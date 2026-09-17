@@ -1,0 +1,188 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/sub2apiplus-candidate-build-parameters-v2.json",
+  "title": "Sub2API Candidate 严格构建参数",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "candidate_id",
+    "source",
+    "build_tree",
+    "frontend",
+    "go_build",
+    "docker_build",
+    "binary"
+  ],
+  "properties": {
+    "schema_version": {"const": "sub2apiplus-candidate-build-parameters/v2"},
+    "candidate_id": {"$ref": "#/$defs/safeId"},
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["root", "git_commit"],
+      "properties": {
+        "root": {"$ref": "#/$defs/absolutePath"},
+        "git_commit": {"$ref": "#/$defs/gitCommit"}
+      }
+    },
+    "build_tree": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["root", "git_commit", "umask"],
+      "properties": {
+        "root": {"$ref": "#/$defs/absolutePath"},
+        "git_commit": {"$ref": "#/$defs/gitCommit"},
+        "umask": {"const": "0022"}
+      }
+    },
+    "frontend": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_root",
+        "package_manifest",
+        "lockfile",
+        "build_command",
+        "node_version",
+        "pnpm_version",
+        "builder",
+        "dist_source_root",
+        "dist_build_tree_path",
+        "toolchain_policy"
+      ],
+      "properties": {
+        "source_root": {"$ref": "#/$defs/relativePath"},
+        "package_manifest": {"$ref": "#/$defs/relativePath"},
+        "lockfile": {"$ref": "#/$defs/relativePath"},
+        "build_command": {"$ref": "#/$defs/command"},
+        "node_version": {"type": "string", "pattern": "^v?[0-9]+(?:\\.[0-9]+){1,2}(?:[-+].*)?$"},
+        "pnpm_version": {"type": "string", "pattern": "^v?[0-9]+(?:\\.[0-9]+){1,2}(?:[-+].*)?$"},
+        "builder": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "identity", "receipt"],
+          "properties": {
+            "kind": {"enum": ["release_pipeline", "approved_local"]},
+            "identity": {"type": "string", "minLength": 1},
+            "receipt": {"$ref": "#/$defs/fileBinding"}
+          }
+        },
+        "dist_source_root": {"$ref": "#/$defs/absolutePath"},
+        "dist_build_tree_path": {"$ref": "#/$defs/relativePath"},
+        "toolchain_policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["required_node_major", "deviation_approval"],
+          "properties": {
+            "required_node_major": {"const": 20},
+            "deviation_approval": {
+              "anyOf": [
+                {"type": "null"},
+                {"$ref": "#/$defs/fileBinding"}
+              ]
+            }
+          }
+        }
+      }
+    },
+    "go_build": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command", "working_directory", "environment", "required_tags"],
+      "properties": {
+        "command": {"$ref": "#/$defs/command"},
+        "working_directory": {"$ref": "#/$defs/relativePath"},
+        "environment": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["CGO_ENABLED", "GOOS", "GOARCH", "GOFLAGS"],
+          "properties": {
+            "CGO_ENABLED": {"type": "string"},
+            "GOOS": {"type": "string", "minLength": 1},
+            "GOARCH": {"type": "string", "minLength": 1},
+            "GOFLAGS": {"type": "string"}
+          }
+        },
+        "required_tags": {
+          "type": "array",
+          "minItems": 2,
+          "uniqueItems": true,
+          "contains": {"const": "candidatecapture"},
+          "items": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "docker_build": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "context_root",
+        "dockerfile",
+        "platform",
+        "image_id",
+        "labels",
+        "entrypoint",
+        "assembly"
+      ],
+      "properties": {
+        "context_root": {"$ref": "#/$defs/absolutePath"},
+        "dockerfile": {"$ref": "#/$defs/relativePath"},
+        "platform": {"type": "string", "pattern": "^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$"},
+        "image_id": {"$ref": "#/$defs/imageId"},
+        "labels": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["org.opencontainers.image.revision", "org.opencontainers.image.version"],
+          "properties": {
+            "org.opencontainers.image.revision": {"$ref": "#/$defs/gitCommit"},
+            "org.opencontainers.image.version": {"type": "string", "minLength": 1}
+          }
+        },
+        "entrypoint": {"const": ["/app/docker-entrypoint.sh"]},
+        "assembly": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["context_path", "source_kind", "source_path"],
+            "properties": {
+              "context_path": {"$ref": "#/$defs/relativePath"},
+              "source_kind": {"enum": ["build_tree", "binary"]},
+              "source_path": {"type": "string", "minLength": 1}
+            }
+          }
+        }
+      }
+    },
+    "binary": {"$ref": "#/$defs/fileBinding"}
+  },
+  "$defs": {
+    "safeId": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+    "gitCommit": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "imageId": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "absolutePath": {"type": "string", "pattern": "^/"},
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$"
+    },
+    "command": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "fileBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "bytes"],
+      "properties": {
+        "path": {"$ref": "#/$defs/absolutePath"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "bytes": {"type": "integer", "minimum": 1}
+      }
+    }
+  }
+}

@@ -345,6 +345,131 @@ class TimingLedgerTests(unittest.TestCase):
                     recorded_at_utc=self._at(1),
                 )
 
+    def test_recovery_required_before_reservation_only_reconcile_can_resume(self) -> None:
+        """reservation 前失败保持当前阶段暂停，普通推进被拒，对账收据恢复 active。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "UpgradeTimingLedger"
+            self._create(root)
+            paused = ledger.append_event(
+                root,
+                event_id="vc0-prerequisite-paused",
+                phase="VC-0",
+                event_type="recovery_required",
+                root_cause_id="environment-prerequisite",
+                next_action="reconcile-supervisor-run",
+                recorded_at_utc=self._at(1),
+            )
+            self.assertEqual(paused["status"], "recovery_required")
+            self.assertEqual(paused["active_phase"], "VC-0")
+            self.assertEqual(paused["recovery_phase"], "VC-0")
+            with self.assertRaisesRegex(
+                ledger.TimingLedgerError,
+                "只允许对账或已批准的恢复动作",
+            ):
+                ledger.append_event(
+                    root,
+                    event_id="illegal-next-stage",
+                    phase="VC-0",
+                    event_type="stage_completed",
+                    recorded_at_utc=self._at(2),
+                )
+
+            bindings = []
+            for role in ("provenance", "reconciliation"):
+                path = root / "receipts" / f"{role}.json"
+                ledger._write_once(path, {"role": role, "status": "passed"})
+                bindings.append(
+                    {
+                        "role": role,
+                        "path": path.relative_to(root).as_posix(),
+                        "sha256": ledger._sha256_file(path),
+                    }
+                )
+            resumed = ledger.append_event(
+                root,
+                event_id="vc0-prerequisite-reconciled",
+                phase="VC-0",
+                event_type="receipt_passed",
+                receipts=bindings,
+                next_action="redispatch-same-batch",
+                recorded_at_utc=self._at(3),
+            )
+            self.assertEqual(resumed["status"], "active")
+            self.assertEqual(resumed["active_phase"], "VC-0")
+            self.assertIsNone(resumed["recovery_root_cause_id"])
+
+    def test_recovery_required_after_reservation_needs_bound_approval(self) -> None:
+        """reservation 后只允许先对账 attempt，再由绑定预览的批准恢复 active。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "UpgradeTimingLedger"
+            self._create(root)
+            ledger.append_event(
+                root,
+                event_id="vc0-attempt-paused",
+                phase="VC-0",
+                event_type="recovery_required",
+                root_cause_id="environment-prerequisite",
+                next_action="reconcile-attempt",
+                recorded_at_utc=self._at(1),
+            )
+            ledger.append_event(
+                root,
+                event_id="attempt-started-by-reconcile",
+                phase="VC-0",
+                event_type="attempt_started",
+                attempt_id="attempt-1",
+                recorded_at_utc=self._at(2),
+            )
+            reconciled = ledger.append_event(
+                root,
+                event_id="attempt-failed-by-reconcile",
+                phase="VC-0",
+                event_type="attempt_failed",
+                attempt_id="attempt-1",
+                root_cause_id="environment-prerequisite",
+                recorded_at_utc=self._at(3),
+            )
+            self.assertEqual(reconciled["status"], "recovery_required")
+            with self.assertRaisesRegex(
+                ledger.TimingLedgerError,
+                "必须绑定恢复预览与恢复批准",
+            ):
+                ledger.append_event(
+                    root,
+                    event_id="unbound-recovery",
+                    phase="VC-0",
+                    event_type="recovery_authorized",
+                    root_cause_id="environment-prerequisite",
+                    next_action="resume-rerun-failed",
+                    recorded_at_utc=self._at(4),
+                )
+
+            bindings = []
+            for role in ("recovery_approval", "recovery_preview"):
+                path = root / "receipts" / f"{role}.json"
+                ledger._write_once(path, {"role": role, "status": "passed"})
+                bindings.append(
+                    {
+                        "role": role,
+                        "path": path.relative_to(root).as_posix(),
+                        "sha256": ledger._sha256_file(path),
+                    }
+                )
+            resumed = ledger.append_event(
+                root,
+                event_id="approved-recovery",
+                phase="VC-0",
+                event_type="recovery_authorized",
+                root_cause_id="environment-prerequisite",
+                receipts=bindings,
+                next_action="resume-rerun-failed",
+                recorded_at_utc=self._at(5),
+            )
+            self.assertEqual(resumed["status"], "active")
+            self.assertEqual(resumed["same_root_cause_failures"], {"environment-prerequisite": 1})
+
     def test_third_same_root_cause_attempt_is_forbidden(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "UpgradeTimingLedger"

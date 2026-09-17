@@ -28,12 +28,6 @@ from tools.official_client_capture import codex_upgrade_project_ledger as projec
 from tools.official_client_capture import codex_upgrade_root_cause as root_cause
 from tools.official_client_capture import codex_upgrade_time_reconciliation as reconciliation
 from tools.official_client_capture import codex_upgrade_timing_ledger as timing_ledger
-from tools.official_client_capture.tests import test_codex_upgrade_campaign_disposition as disposition_tests
-from tools.official_client_capture.tests import test_codex_upgrade_live_request_provenance as provenance_tests
-from tools.official_client_capture.tests import test_codex_upgrade_official_attempt_audit as audit_tests
-from tools.official_client_capture.tests import test_codex_upgrade_time_reconciliation as reconciliation_tests
-from tools.official_client_capture.tests import test_codex_upgrade_timing_ledger_close as close_tests
-
 SCHEMA_VERSION = "zero-request-smoke/v1"
 
 
@@ -77,6 +71,24 @@ def _step(report: list[dict[str, Any]], name: str, action: Callable[[], Any]) ->
 
 
 def run_smoke(staging_root: Path, *, observed_at_utc: str | None = None) -> dict[str, Any]:
+    # 夹具模块会反向导入 provenance 等生产模块；必须等生产模块初始化完成后
+    # 再加载，避免 provenance → pre-a3 → smoke → 测试夹具的循环导入。
+    from tools.official_client_capture.tests import (
+        test_codex_upgrade_campaign_disposition as disposition_tests,
+    )
+    from tools.official_client_capture.tests import (
+        test_codex_upgrade_live_request_provenance as provenance_tests,
+    )
+    from tools.official_client_capture.tests import (
+        test_codex_upgrade_official_attempt_audit as audit_tests,
+    )
+    from tools.official_client_capture.tests import (
+        test_codex_upgrade_time_reconciliation as reconciliation_tests,
+    )
+    from tools.official_client_capture.tests import (
+        test_codex_upgrade_timing_ledger_close as close_tests,
+    )
+
     staging_root = Path(staging_root)
     if project_ledger.STAGING_DIR_NAME not in staging_root.resolve(strict=False).parts:
         raise SmokeError("smoke 夹具根必须位于 staging 目录树内")

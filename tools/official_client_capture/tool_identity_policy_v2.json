@@ -1,7 +1,7 @@
 {
   "schema_version": "tool-identity-policy/v2",
-  "policy_version": 5,
-  "description": "受管工具身份四层策略（方案 A2）。v3：登记 B0 reconciler、A2.6 策略认证与 A2.5 路径认证三个控制层模块；v4：注销已删除的两个 VC-1 权限 alias 一次性收口模块（B2／B3）；v5：登记 C1 发布认证模块 certify_release.py 为控制层，分层规则未变。只有 wire_producer 层作为重采判据；evidence_semantics 变化追加 evaluation epoch；control 变化只重跑控制门禁；files 整树摘要只作溯源与三副本一致性。未被任何规则命中的新文件按最严格的 wire_producer 计。ignored 前缀是其它客户端（Claude）专用工具，对 Codex Campaign 既不产生请求也不解释证据，只进入整树摘要。",
+  "policy_version": 6,
+  "description": "受管工具身份四层策略（方案 A2）。v3：登记 B0 reconciler、A2.6 策略认证与 A2.5 路径认证三个控制层模块；v4：注销已删除的两个 VC-1 权限 alias 一次性收口模块（B2／B3）；v5：登记 C1 发布认证模块 certify_release.py 为控制层；v6：将严格 Candidate 构建收据生成器登记为 control，并将会真实派发 /models 探针的 Candidate readiness 登记为 wire_producer。只有 wire_producer 层作为重采判据；evidence_semantics 变化追加 evaluation epoch；control 变化只重跑控制门禁；files 整树摘要只作溯源与三副本一致性。未被任何规则命中的新文件按最严格的 wire_producer 计。ignored 前缀是其它客户端（Claude）专用工具，对 Codex Campaign 既不产生请求也不解释证据，只进入整树摘要。",
   "ignored_prefixes": [
     "claude_",
     "claude_21220/",
@@ -20,6 +20,7 @@
         "codex_upgrade_arm64_environment_receipt.py",
         "codex_upgrade_campaign_disposition.py",
         "codex_upgrade_campaign_run_rehearsal_receipt.py",
+        "codex_upgrade_candidate_build.py",
         "codex_upgrade_environment_probe.py",
         "codex_upgrade_evidence_permissions.py",
         "codex_upgrade_gate_receipt.py",
@@ -104,6 +105,7 @@
         "build_compaction_model_catalog.py",
         "build_fingerprint_proxy.sh",
         "capture.py",
+        "codex_upgrade_candidate_readiness.py",
         "h1_wire_probe.py",
         "mitm_scenario_checkpoint.py",
         "prewarm_codex_home.py",
