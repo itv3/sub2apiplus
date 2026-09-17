@@ -7620,6 +7620,7 @@ class CodexUpgradeTest(unittest.TestCase):
                 "record-candidate-build",
                 "capture-candidate",
                 "candidate-runtime-override",
+                "reclassify-official-evidence",
                 "reuse-official-evidence",
                 "compare",
                 "accept",
@@ -13772,9 +13773,9 @@ class CodexUpgradeTest(unittest.TestCase):
             )
 
             successor_dir = root / "successor"
-            successor_arguments = codex_upgrade._build_parser().parse_args(
+            return_code, stdout, stderr = self._run_main(
                 [
-                    "successor",
+                    "reclassify-official-evidence",
                     "--predecessor-campaign-dir",
                     str(predecessor_dir),
                     "--campaign-dir",
@@ -13783,11 +13784,10 @@ class CodexUpgradeTest(unittest.TestCase):
                     "upgrade-0154-classification-successor",
                     "--codex-account-id",
                     "93",
-                    "--reason",
-                    "classification_fact_correction",
                 ]
             )
-            result = codex_upgrade.create_successor_campaign(successor_arguments)
+            self.assertEqual(return_code, 0, stderr)
+            result = json.loads(stdout)
             self.assertEqual(result["status"], "official_sealed")
             self.assertEqual(result["executed_job_count"], 0)
             self.assertEqual(result["live_request_count"], 0)

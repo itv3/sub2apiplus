@@ -307,6 +307,7 @@ SUCCESSOR_REASONS = frozenset(
     }
 )
 OFFICIAL_EVIDENCE_REUSE_REASON = "official_evidence_reuse"
+CLASSIFICATION_FACT_CORRECTION_REASON = "classification_fact_correction"
 CANDIDATE_INCREMENTAL_SUCCESSOR_REASONS = frozenset(
     {
         "candidate_failed_job_tool_recovery",
@@ -4842,6 +4843,7 @@ def _mutable_command_coordinates(
         "prepare-profile",
         "stage-profile",
         "successor",
+        "reclassify-official-evidence",
         "reuse-official-evidence",
         "account-sealed-official",
     }:
@@ -8682,6 +8684,73 @@ def _build_parser() -> argparse.ArgumentParser:
         help="仅用于零执行控制替代：已结束且审计完整的父监督器 run 目录。",
     )
     add_watchdog_options(successor)
+
+    reclassify_official = subparsers.add_parser(
+        "reclassify-official-evidence",
+        help=(
+            "把已封存 official 事实导入分类纠正后继；原因固定为 "
+            "classification_fact_correction"
+        ),
+    )
+    reclassify_official.add_argument(
+        "--predecessor-campaign-dir",
+        type=Path,
+        required=True,
+        help="已封存 official 阶段、但分类事实需要重做的只读前序 Campaign。",
+    )
+    add_campaign_reference(reclassify_official)
+    reclassify_official.add_argument("--campaign-id", required=True)
+    reclassify_official.add_argument(
+        "--codex-account-id",
+        type=int,
+        required=True,
+        help="后继 Candidate 运行显式冻结的 Codex 账号 ID。",
+    )
+    reclassify_official.add_argument(
+        "--job-rehearsal-root",
+        type=Path,
+        help="当前工具与场景生成的完整或 incremental-noop Job 演练证据根。",
+    )
+    reclassify_official.add_argument(
+        "--job-rehearsal-receipt",
+        type=Path,
+        help="与 --job-rehearsal-root 配套且可独立重放的演练收据。",
+    )
+    reclassify_official.add_argument("--recovery-timing-ledger-dir", type=Path)
+    reclassify_official.add_argument("--recovery-timing-receipt", type=Path)
+    reclassify_official.add_argument("--recovery-arm64-environment-root", type=Path)
+    reclassify_official.add_argument("--recovery-arm64-environment-receipt", type=Path)
+    reclassify_official.add_argument("--predecessor-stop-ledger-dir", type=Path)
+    reclassify_official.add_argument("--predecessor-stop-receipt", type=Path)
+    add_watchdog_options(reclassify_official)
+    # 正式入口只暴露分类纠正所需控制坐标；运行时身份、场景替换、Candidate
+    # 恢复和 awaiting_receipts 导入参数全部固定为空，不能借此命令扩大后继边界。
+    reclassify_official.set_defaults(
+        reason=CLASSIFICATION_FACT_CORRECTION_REASON,
+        predecessor_candidate_id=None,
+        predecessor_attempt_id=None,
+        live_attestation_compose_dir=None,
+        live_attestation_compose_files=None,
+        target_scenario_manifest=None,
+        active_timing_ledger_dir=None,
+        active_timing_receipt=None,
+        active_arm64_environment_root=None,
+        active_arm64_environment_receipt=None,
+        predecessor_recovery_transition=None,
+        predecessor_control_epoch=None,
+        predecessor_control_runtime_repair=None,
+        predecessor_unpublished_ledger_dir=None,
+        predecessor_unpublished_stop_receipt=None,
+        predecessor_supervisor_run_dir=None,
+        predecessor_official_attempt_id=None,
+        audit_receipt=None,
+        identity_verdict=None,
+        permission_receipt=None,
+        path_certification=None,
+        policy_activation=None,
+        deployment_receipt=None,
+        project_ledger=None,
+    )
 
     reuse_official = subparsers.add_parser(
         "reuse-official-evidence",
@@ -44703,6 +44772,7 @@ def _normalize_legacy_argv(argv: list[str]) -> tuple[list[str], str | None]:
         "canonical-import",
         "canonical-advance",
         "successor",
+        "reclassify-official-evidence",
         "capture-official",
         "classify",
         "prepare-profile",
@@ -44742,6 +44812,7 @@ def _reject_canonical_legacy_write(
 
     if command not in {
         "successor",
+        "reclassify-official-evidence",
         "control-epoch",
         "evaluation-transition",
         "terminal-transition-preflight",
@@ -44855,6 +44926,7 @@ def _reject_unparented_formal_write(
             )
         return
     direct_control_commands = {
+        "reclassify-official-evidence",
         "reuse-official-evidence",
         "harden-evidence-permissions",
         "reconcile-supervisor-run",
@@ -45465,6 +45537,18 @@ def _main_without_campaign_lease(argv: list[str] | None = None) -> int:
                 "job_count": len(manifest["jobs"]),
                 **preflight_invalidation,
             }
+            return_code = 0
+        elif command == "reclassify-official-evidence":
+            # 分类事实纠正是受支持的正式控制面入口：只承接已封存 official，
+            # 原因由子解析器固定，不能退回可任意选 reason 的旧 successor CLI。
+            if (
+                getattr(arguments, "reason", None)
+                != CLASSIFICATION_FACT_CORRECTION_REASON
+            ):
+                raise ConfigurationError(
+                    "reclassify-official-evidence 的原因不可更改。"
+                )
+            result = create_successor_campaign(arguments)
             return_code = 0
         elif command == "reuse-official-evidence":
             # §5.3.3：官方证据一旦可信封存就只读复用。这里复用 successor 实现里
