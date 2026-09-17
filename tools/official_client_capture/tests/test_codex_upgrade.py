@@ -17151,8 +17151,18 @@ class CodexUpgradeTest(unittest.TestCase):
         phase: str = "VC-0",
         failure_class: str | None = None,
         failure_observations: list[dict[str, str]] | None = None,
+        batched_manifest: dict[str, object] | None = None,
+        action_id: str = "dispatch",
+        failure_kind: str = "handled-error",
+        error_type: str = "ConfigurationError",
+        post_run_tooling: bool = False,
+        started_offset_seconds: float = -30.0,
     ) -> Path:
-        """一个已终止（或仍在运行）的父监督器 run 目录：state、events、minute ledger、run 清单。"""
+        """一个已终止（或仍在运行）的父监督器 run 目录：state、events、minute ledger、run 清单。
+
+        ``batched_manifest`` 给出时以它替代默认的 v2 内层清单（seal 段批次等场景）；
+        ``post_run_tooling`` 为真时按父监督器的判据函数写 post-run-tooling 收据。
+        """
 
         supervisor = codex_upgrade.codex_upgrade_supervisor
         run_dir = fixture["control"] / f"run-{name}"
@@ -17162,7 +17172,7 @@ class CodexUpgradeTest(unittest.TestCase):
             finished = subprocess.Popen(["true"])
             finished.wait()
             owner_pid = finished.pid
-        started = time.time() - 30.0
+        started = time.time() + started_offset_seconds
         terminal = started + 1.0
         state_payload: dict[str, object] = {
             "schema_version": supervisor.STATE_SCHEMA,
@@ -17207,7 +17217,7 @@ class CodexUpgradeTest(unittest.TestCase):
             heartbeat_age=None,
             classification="failed" if state != "running" else "active",
         )
-        inner = {
+        inner = batched_manifest or {
             "schema_version": supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA,
             "campaign_id": fixture["manifest"]["campaign_id"],
             "phase": phase,
@@ -17226,27 +17236,252 @@ class CodexUpgradeTest(unittest.TestCase):
             },
         )
         if failure_class is not None:
+            if batched_manifest is not None and state == "failed":
+                # 真实父监督器在动作失败后会写 stop receipt；重派门禁靠它定位
+                # 失败动作，夹具按同一函数写入。
+                supervisor._stop_receipt(
+                    run_dir,
+                    event_type="failed",
+                    reason=f"action-failed:{action_id}",
+                    detected_at_epoch=terminal,
+                    owner_pid=owner_pid,
+                    owner_nonce="7" * 64,
+                    campaign_id=str(fixture["manifest"]["campaign_id"]),
+                    phase=phase,
+                )
             diagnostic_path = supervisor._action_diagnostic_path(
                 run_dir,
-                "dispatch",
+                action_id,
                 create_directory=True,
             )
-            supervisor._write_action_diagnostic(
+            diagnostic = supervisor._write_action_diagnostic(
                 diagnostic_path,
                 campaign_id=str(fixture["manifest"]["campaign_id"]),
                 phase=phase,
-                action_id="dispatch",
+                action_id=action_id,
                 owner_pid=owner_pid,
                 owner_nonce="7" * 64,
-                failure_kind="handled-error",
+                failure_kind=failure_kind,
                 failure_class=failure_class,
                 failure_observations=failure_observations,
-                error_type="ConfigurationError",
+                error_type=error_type,
                 message="机器分类测试失败。",
             )
+            if post_run_tooling:
+                classification = supervisor.post_run_tooling_facts(
+                    fixture["campaign_dir"],
+                    inner,
+                    run_started_at_utc=str(state_payload["started_at_utc"]),
+                )
+                self.assertTrue(classification["qualifies"], classification["reasons"])
+                supervisor._write_post_run_tooling_receipt(
+                    run_dir,
+                    campaign_id=str(fixture["manifest"]["campaign_id"]),
+                    phase=phase,
+                    action_id=action_id,
+                    owner_pid=owner_pid,
+                    owner_nonce="7" * 64,
+                    diagnostic_sha256=str(diagnostic["diagnostic_sha256"]),
+                    facts=classification["facts"],
+                )
         for path in run_dir.rglob("*"):
             path.chmod(0o700 if path.is_dir() else 0o600)
         return run_dir
+
+    @staticmethod
+    def _b0_candidate_job_ids(fixture: dict[str, object]) -> list[str]:
+        """B0 夹具 Campaign 的候选 Job 闭集（合成场景只有 candidate-test）。"""
+
+        return sorted(
+            str(item["id"])
+            for item in fixture["manifest"]["jobs"]
+            if item.get("phase") == "candidate"
+        )
+
+    def _b0_completed_candidate_attempt(self, fixture: dict[str, object]) -> Path:
+        """按正式预约与封存合同发布一个九项 Job 全部 complete、等待 seal 收据的候选 attempt。"""
+
+        campaign_dir = fixture["campaign_dir"]
+        manifest = fixture["manifest"]
+        candidate_id = "cand-1"
+        identity = {"candidate_purpose": manifest["campaign_purpose"]}
+        # 分类阶段未封存时 _campaign_jobs 不可用；按历史 v7 夹具的方式自造 Job，
+        # ID 与 0.154 场景文件的九个候选 Job 一致。
+        jobs = [
+            Job(
+                job_id=job_id,
+                phase="candidate",
+                suites=("full",),
+                description=f"合成候选 Job {job_id}",
+                steps=({"argv": ["bash", f"{job_id}.sh"]},),
+                evidence_roots=(f"/root/oauth-capture/runs/{job_id}",),
+                covers=(),
+                scenario_ids=("A03",),
+            )
+            for job_id in self._b0_candidate_job_ids(fixture)
+        ]
+        self.assertTrue(jobs)
+        attempt_root, reservation = codex_upgrade._reserve_capture_attempt(
+            campaign_dir,
+            phase="candidate",
+            candidate_id=candidate_id,
+            identity=identity,
+            jobs=jobs,
+            allow_failed_rerun=True,
+        )
+        results: list[dict[str, object]] = []
+        store = codex_upgrade.incremental_recovery.CheckpointStore(
+            attempt_root / "checkpoints"
+        )
+        previous_checkpoint_sha256: str | None = None
+        for job in jobs:
+            result = {
+                "id": job.job_id,
+                "phase": "candidate",
+                "required": True,
+                "execution_sha256": codex_upgrade._job_execution_sha256(job),
+                "status": "complete",
+                "description": "只读承接的候选 Job",
+                "duration_seconds": 0.0,
+                "steps": [],
+                "evidence_roots": [],
+                "missing_evidence_patterns": [],
+                "empty_evidence_patterns": [],
+                "covers": [],
+                "scenario_ids": list(job.scenario_ids),
+                "scenario_receipts": [],
+                "scenario_receipt_failures": [],
+                "track": "main",
+                "model_id": "gpt-5.5",
+                "expected_use_responses_lite": False,
+                "required_model_receipt": False,
+                "model_condition_receipt": None,
+                "model_condition_receipt_failure": None,
+                "disposition": "executed",
+            }
+            codex_upgrade._secure_write_json_once(
+                attempt_root / f"job-{job.job_id}.json", result
+            )
+            appended = store.append(
+                {
+                    "checkpoint_schema_version": codex_upgrade.JOB_CHECKPOINT_SCHEMA,
+                    "campaign_id": manifest["campaign_id"],
+                    "phase": "candidate",
+                    "attempt_id": attempt_root.name,
+                    "run_nonce": reservation["run_nonce"],
+                    "item_id": job.job_id,
+                    "status": "complete",
+                    "disposition": "executed",
+                    "result_sha256": codex_upgrade.incremental_recovery.digest(result),
+                    "result_key": None,
+                    "result": result,
+                    "source_receipt": None,
+                    "previous_checkpoint_sha256": previous_checkpoint_sha256,
+                }
+            )
+            previous_checkpoint_sha256 = str(appended["checkpoint_sha256"])
+            results.append(result)
+        # awaiting_receipts 的 v3 attempt 必须带通过的证据权限收口收据：对空的
+        # evidence／logs 目录真实收口一次，绑定与正式流程完全相同。
+        evidence_root = attempt_root / "evidence"
+        logs_root = attempt_root / "logs"
+        evidence_root.mkdir(mode=0o700, exist_ok=True)
+        logs_root.mkdir(mode=0o700, exist_ok=True)
+        closeout_binding = codex_upgrade._close_attempt_evidence_permissions(
+            attempt_root, [evidence_root, logs_root]
+        )
+        codex_upgrade._write_capture_attempt(
+            campaign_dir,
+            attempt_root,
+            {
+                "campaign_id": manifest["campaign_id"],
+                "phase": "candidate",
+                "candidate_id": candidate_id,
+                "status": "awaiting_receipts",
+                "identity": identity,
+                "results": results,
+                "failure_observations": [],
+                "evidence_roots": [str(evidence_root), str(logs_root)],
+                "evidence_permission_closeout": closeout_binding,
+                "evidence_permission_error": None,
+                "environment": {
+                    "evidence_root": str(attempt_root / "evidence"),
+                    "before_probe": None,
+                    "after_probe": {"status": "passed"},
+                    "restoration_report": {"status": "passed"},
+                    "arm64_before_receipt": None,
+                    "arm64_after_receipt": None,
+                },
+                "binary_verification": None,
+                "execution_error": None,
+                "restoration_error": None,
+                "next_gate": "运行 capture manifest finalizer。",
+            },
+        )
+        return attempt_root
+
+    def _b0_seal_batch_manifest(
+        self,
+        fixture: dict[str, object],
+        *,
+        batch_sequence: int = 1,
+        actions: list[dict[str, object]] | None = None,
+    ) -> dict[str, object]:
+        """VC-5 seal 段的 v2 内层清单：execute 只有 candidate-seal，九项 Job 全部复用。"""
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        plan = codex_upgrade._vc_campaign_plan(fixture["campaign_dir"], fixture["manifest"])
+        return supervisor.build_batched_campaign_run_manifest(
+            campaign_id=str(fixture["manifest"]["campaign_id"]),
+            campaign_plan_sha256=str(plan["plan_sha256"]),
+            batch_id=f"vc-5-{batch_sequence:04d}",
+            batch_sequence=batch_sequence,
+            batch_sha256=str(batch_sequence) * 64,
+            phase="VC-5",
+            predecessor_checkpoint={
+                "path": "control/vc/vc-4-checkpoint.json",
+                "sha256": "3" * 64,
+                "phase": "VC-4",
+                "checkpoint_sha256": "4" * 64,
+            },
+            original_deadline_at_utc="2099-09-15T08:12:43Z",
+            actions=actions
+            if actions is not None
+            else [
+                {
+                    "action_id": "prepare-candidate-assertion-bundle",
+                    "operation": "VC-5:prepare-candidate-assertion-bundle",
+                    "timeout_seconds": 5.0,
+                    "command": ["/usr/bin/bash", "/tmp/prepare_assertion_bundle.sh"],
+                    "item_ids": ["candidate-seal"],
+                }
+            ],
+            execute_items=["candidate-seal"],
+            reuse_items=self._b0_candidate_job_ids(fixture),
+        )
+
+    def _b0_advance_ledger_to_vc5(self, ledger_dir: Path) -> None:
+        for completed, started in (
+            ("VC-0", "VC-1"),
+            ("VC-1", "VC-2"),
+            ("VC-2", "VC-3"),
+            ("VC-3", "VC-4"),
+            ("VC-4", "VC-5"),
+        ):
+            codex_upgrade_timing_ledger.append_event(
+                ledger_dir,
+                event_id=f"fixture-{completed.lower()}-completed",
+                phase=completed,
+                event_type="stage_completed",
+                next_action=f"启动 {started}",
+            )
+            codex_upgrade_timing_ledger.append_event(
+                ledger_dir,
+                event_id=f"fixture-{started.lower()}-started",
+                phase=started,
+                event_type="stage_started",
+                next_action="运行父批次",
+            )
 
     @staticmethod
     def _b0_resume(campaign_dir: Path, preview: Path | None = None) -> dict[str, object]:
@@ -17272,6 +17507,152 @@ class CodexUpgradeTest(unittest.TestCase):
             (str(event["event_type"]), str(event["event_id"]))
             for event, _raw in codex_upgrade_timing_ledger._load_events(ledger_dir)
         ]
+
+    def test_post_run_tooling_failure_reconciles_then_allows_verbatim_redispatch(self) -> None:
+        """seal 段零请求失败：父账本暂停而非停线，对账后恢复 VC-5 并只允许逐字重派。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            ledger_dir = fixture["timing_ledger"]
+            self._b0_advance_ledger_to_vc5(ledger_dir)
+            attempt_root = self._b0_completed_candidate_attempt(fixture)
+            inner = self._b0_seal_batch_manifest(fixture)
+            run_dir = self._b0_run_dir(
+                fixture,
+                "f" * 64,
+                phase="VC-5",
+                failure_class="execution-failure",
+                batched_manifest=inner,
+                action_id="prepare-candidate-assertion-bundle",
+                failure_kind="child-returncode",
+                error_type="ChildProcessError",
+                post_run_tooling=True,
+                started_offset_seconds=5.0,
+            )
+            # 父监督器关账：post-run-tooling 只暂停当前阶段，不写 stage_abandoned。
+            closeout = supervisor._close_failed_campaign_timing_ledger(
+                campaign_dir,
+                inner,
+                failed_action_id="prepare-candidate-assertion-bundle",
+                failure_class="post-run-tooling",
+            )
+            self.assertEqual(closeout["ledger_status"], "recovery_required")
+            self.assertEqual(
+                codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)["status"],
+                "recovery_required",
+            )
+            head_before = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+
+            result = reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
+            self.assertEqual(result["status"], "recoverable")
+            self.assertEqual(result["live_request_count"], 0)
+            self.assertIn("逐字重派同一 seal 批次", result["next_command"])
+            receipt = json.loads(
+                (campaign_dir / result["reconciliation_receipt"]["path"]).read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(receipt["failure_class"], "post-run-tooling")
+            diagnostic = receipt["run"]["action_diagnostic"]
+            self.assertEqual(diagnostic["declared_failure_class"], "execution-failure")
+            self.assertEqual(diagnostic["failure_class"], "post-run-tooling")
+            self.assertTrue(diagnostic["post_run_tooling"]["recomputed"])
+            self.assertEqual(diagnostic["post_run_tooling"]["attempt_id"], attempt_root.name)
+            head_after = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+            self.assertEqual(head_after["sequence"], head_before["sequence"] + 1)
+            timing_after = codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)
+            self.assertEqual(timing_after["status"], "active")
+            self.assertEqual(timing_after["active_phase"], "VC-5")
+            self.assertEqual(timing_after["next_action"], "redispatch-same-batch")
+            events = [item[0] for item in self._b0_ledger_events(ledger_dir)]
+            self.assertNotIn("stage_abandoned", events)
+            self.assertNotIn("stop_the_line", events)
+
+            # 幂等：重复对账不推进总账与账本。
+            replay = reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
+            self.assertEqual(replay["status"], "recoverable")
+            self.assertTrue(replay["batch"]["reused"])
+            self.assertEqual(
+                codex_upgrade_project_ledger.replay_head(fixture["ledger"])["sequence"],
+                head_after["sequence"],
+            )
+
+            # 重派门禁：后继批次逐字相同才放行；actions 漂移失败关闭。
+            prior_state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+            successor = self._b0_seal_batch_manifest(fixture, batch_sequence=2)
+            self.assertTrue(
+                supervisor._validate_batched_environment_redispatch_successor(
+                    prior_state,
+                    inner,
+                    run_dir,
+                    successor,
+                    campaign_dir=campaign_dir,
+                )
+            )
+            drifted = self._b0_seal_batch_manifest(
+                fixture,
+                batch_sequence=2,
+                actions=[
+                    {
+                        "action_id": "prepare-candidate-assertion-bundle",
+                        "operation": "VC-5:prepare-candidate-assertion-bundle",
+                        "timeout_seconds": 5.0,
+                        "command": ["/usr/bin/bash", "/tmp/other.sh"],
+                        "item_ids": ["candidate-seal"],
+                    }
+                ],
+            )
+            with self.assertRaisesRegex(supervisor.SupervisorError, "只允许原批次内容重派"):
+                supervisor._validate_batched_environment_redispatch_successor(
+                    prior_state,
+                    inner,
+                    run_dir,
+                    drifted,
+                    campaign_dir=campaign_dir,
+                )
+
+    def test_post_run_tooling_receipt_cannot_revive_stopped_ledger(self) -> None:
+        """账本已 stop_the_line 的旧 run 即便带 post-run-tooling 收据也只能永久停线。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            ledger_dir = fixture["timing_ledger"]
+            self._b0_advance_ledger_to_vc5(ledger_dir)
+            self._b0_completed_candidate_attempt(fixture)
+            inner = self._b0_seal_batch_manifest(fixture)
+            run_dir = self._b0_run_dir(
+                fixture,
+                "e" * 64,
+                phase="VC-5",
+                failure_class="execution-failure",
+                batched_manifest=inner,
+                action_id="prepare-candidate-assertion-bundle",
+                failure_kind="child-returncode",
+                error_type="ChildProcessError",
+                post_run_tooling=True,
+                started_offset_seconds=5.0,
+            )
+            # 父监督器按默认分类关账（例如收据写入后父进程自身异常）：账本停线。
+            closeout = supervisor._close_failed_campaign_timing_ledger(
+                campaign_dir,
+                inner,
+                failed_action_id="prepare-candidate-assertion-bundle",
+                failure_class="execution-failure",
+            )
+            self.assertEqual(closeout["ledger_status"], "stopped")
+            result = reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
+            self.assertEqual(result["status"], "permanent_stop")
+            self.assertEqual(result["decision"]["terminal_reason"], "prior_stop_the_line")
 
     def test_recovery_required_before_reservation_reconciles_then_redispatches(self) -> None:
         """reservation 前环境门禁失败：先暂停，对账只推进一次，再恢复同阶段。"""

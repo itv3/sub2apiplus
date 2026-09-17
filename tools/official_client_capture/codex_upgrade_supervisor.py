@@ -97,9 +97,36 @@ ACTION_DIAGNOSTIC_FAILURE_CLASSES = frozenset(
         "request-budget-exhausted",
         "root-cause-limit",
         "execution-failure",
+        # 2026-09-18：数据面 Job 已全部完成、零请求的后处理动作（seal 四阶段、
+        # compare、逐规则断言、acceptance）因评估／控制工具缺陷失败。该分类
+        # 不由子进程自述，只能由父监督器按 post_run_tooling_facts 的文件事实
+        # 判定并写独立收据；reconciler 与重派门禁复算同一函数。
+        "post-run-tooling",
     }
 )
-RECOVERABLE_ACTION_FAILURE_CLASSES = frozenset({"environment-prerequisite"})
+RECOVERABLE_ACTION_FAILURE_CLASSES = frozenset(
+    {"environment-prerequisite", "post-run-tooling"}
+)
+# 只有子进程以默认 execution-failure 退出（handled-error／child-returncode）
+# 时才允许升级为 post-run-tooling；interrupted／unexpected-error 属于执行控制
+# 丢失，仍按既有规则处理，不得靠后处理分类绕过。
+POST_RUN_TOOLING_UPGRADABLE_FAILURE_KINDS = frozenset(
+    {"handled-error", "child-returncode"}
+)
+# VC-5 里 Candidate Job 之后的零请求阶段项：seal（含 checkpoint／bundle／
+# preview／approve 四阶段）、离线比较、逐规则断言与 acceptance。批次的
+# execute_items 必须完全落在这个集合内，reuse_items 必须覆盖候选 attempt
+# 的全部 Job；集合由工具冻结，不接受动作清单里工程师自定的 action_id。
+POST_RUN_TOOLING_ITEM_IDS = frozenset({"candidate-seal", "compare", "acceptance"})
+POST_RUN_TOOLING_ITEM_PREFIXES = ("assert-",)
+POST_RUN_TOOLING_RECEIPT_SCHEMA = (
+    "codex-upgrade-post-run-tooling-classification/v1"
+)
+POST_RUN_TOOLING_MAX_JSON_BYTES = 4 * 1024 * 1024
+# attempt schema 的 status 枚举只有 awaiting_receipts／failed／
+# environment_contaminated；Job 闭合后直到 seal 完成前 attempt.json 始终是
+# awaiting_receipts（客户端检查点记在 evidence/receipts 下，不改 attempt 状态）。
+POST_RUN_TOOLING_ATTEMPT_STATUSES = frozenset({"awaiting_receipts"})
 ACTION_DIAGNOSTIC_FIELDS = frozenset(
     {
         "schema_version",
@@ -755,6 +782,397 @@ def write_campaign_run_action_diagnostic(
         message=str(error),
     )
     return path
+
+
+# ---------------------------------------------------------------------------
+# 零请求后处理失败（post-run-tooling）的机器判据与收据
+# ---------------------------------------------------------------------------
+#
+# 背景（2026-09-17 事故）：Campaign c0154-formal-vc5-a15 的 9 个 Candidate Job
+# 全部 complete 后，seal 检查点动作在 1.3 秒内因评估工具自身的一致性检查失败
+# 退出，父监督器按默认 execution-failure 直接 stop_the_line，整个 Campaign 永久
+# 终态；为了复用已完成的证据，此后 7 个后继 Campaign 全部消耗在同一段零请求
+# 的后处理链上。Framework §5.3.4 规定控制面／evaluator 工具变化"不改变数据面
+# 身份、只重跑离线门禁"，§5.1.2 规定"从最近合法 checkpoint 重新计算执行闭集，
+# 不通过复制 Campaign 绕过失败"。本节把这条原则落成可复算的机器判据。
+#
+# 判据全部来自批次清单与 attempt 目录内的小文件，不发请求、不读大证据：
+#   1. 批次是 batched／recovery 清单，execute_items 非空且全部是冻结的零请求
+#      后处理阶段项（candidate-seal／compare／assert-*／acceptance）；
+#   2. 候选 attempts 目录里恰好一个 attempt 处于 awaiting_receipts；
+#   3. 该 attempt 的 results 全部 complete、checkpoints 目录里每个 Job 都有
+#      complete 记录（Framework：完成态以 result 与 checkpoint 同时存在为准）、
+#      reuse_items 覆盖全部 Job；
+#   4. reservation 早于本次父 run 开始（本 run 没有创建 reservation）；
+#   5. Kilo 运行窗口不存在，或早于本次父 run 开始（本 run 没有发过 Kilo 请求）。
+# 五条全部成立才允许升级为 post-run-tooling；任何一条不成立都保持原分类。
+
+
+def _read_bounded_json(path: Path, label: str) -> dict[str, Any]:
+    """读取 attempt 内的证据侧小 JSON：拒绝符号链接与超大文件，不强制 0600。
+
+    证据权限收口会把 attempt 内文件收紧为只读，不能沿用监督器自身文件的
+    0600 硬约束；这里只做结构性检查，内容可信度由 SHA 绑定保证。
+    """
+
+    if path.is_symlink() or not path.is_file():
+        raise SupervisorError(f"{label}不存在或不可信：{path.name}")
+    if path.stat().st_size > POST_RUN_TOOLING_MAX_JSON_BYTES:
+        raise SupervisorError(f"{label}超过大小上限：{path.name}")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise SupervisorError(f"{label}不是有效 JSON：{path.name}") from error
+    if not isinstance(payload, dict):
+        raise SupervisorError(f"{label}顶层必须是对象：{path.name}")
+    return payload
+
+
+def _post_run_tooling_item_allowed(item_id: Any) -> bool:
+    if not isinstance(item_id, str) or not item_id:
+        return False
+    if item_id in POST_RUN_TOOLING_ITEM_IDS:
+        return True
+    return any(item_id.startswith(prefix) for prefix in POST_RUN_TOOLING_ITEM_PREFIXES)
+
+
+def _parse_rfc3339_utc(value: Any, label: str) -> datetime:
+    if not isinstance(value, str) or not value:
+        raise SupervisorError(f"{label}缺少 UTC 时间。")
+    text = value[:-1] + "+00:00" if value.endswith("Z") else value
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError as error:
+        raise SupervisorError(f"{label}时间非法。") from error
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise SupervisorError(f"{label}时间缺少时区。")
+    return parsed.astimezone(timezone.utc)
+
+
+def post_run_tooling_facts(
+    campaign_dir: Path,
+    inner_manifest: Mapping[str, Any],
+    *,
+    run_started_at_utc: str,
+) -> dict[str, Any]:
+    """按五条文件事实判定父动作失败能否归为 post-run-tooling。
+
+    返回 ``{"qualifies": bool, "reasons": [...], "facts": {...}}``。``facts``
+    只含稳定的机器事实（含判据文件的 SHA-256），供收据绑定与后续复算；
+    ``reasons`` 只在不满足时给出，用于审计说明，不参与摘要。任何文件缺失或
+    结构非法都记为不满足，而不是抛出——分类失败只意味着沿用原分类。
+    """
+
+    reasons: list[str] = []
+    facts: dict[str, Any] = {
+        "batch_schema_version": inner_manifest.get("schema_version"),
+        "execute_items": [],
+        "reuse_items": [],
+        "attempt_id": None,
+        "candidate_id": None,
+        "attempt_status": None,
+        "job_count": 0,
+        "complete_job_count": 0,
+        "checkpoint_complete_job_count": 0,
+        "checkpoint_record_count": 0,
+        "reservation_started_at_utc": None,
+        "kilo_window_started_at_utc": None,
+        "kilo_window_request_count": None,
+        "run_started_at_utc": run_started_at_utc,
+        "bound_files": [],
+    }
+
+    def fail(note: str) -> dict[str, Any]:
+        reasons.append(note)
+        return {"qualifies": False, "reasons": reasons, "facts": facts}
+
+    try:
+        run_started = _parse_rfc3339_utc(run_started_at_utc, "父 run 开始")
+    except SupervisorError as error:
+        return fail(str(error))
+    if inner_manifest.get("schema_version") not in {
+        CAMPAIGN_RUN_BATCHED_SCHEMA,
+        CAMPAIGN_RUN_RECOVERY_SCHEMA,
+    }:
+        return fail("批次清单不是 batched／recovery 合同")
+    execute_items = inner_manifest.get("execute_items")
+    reuse_items = inner_manifest.get("reuse_items")
+    if (
+        not isinstance(execute_items, list)
+        or not execute_items
+        or not isinstance(reuse_items, list)
+    ):
+        return fail("批次清单缺少 execute_items／reuse_items")
+    facts["execute_items"] = [str(item) for item in execute_items]
+    facts["reuse_items"] = sorted(str(item) for item in reuse_items)
+    if not all(_post_run_tooling_item_allowed(item) for item in execute_items):
+        return fail("execute_items 含非零请求后处理阶段项")
+
+    campaign_dir = Path(campaign_dir)
+    candidates_root = campaign_dir / "candidates"
+    if candidates_root.is_symlink() or not candidates_root.is_dir():
+        return fail("Campaign 没有候选目录")
+    awaiting: list[tuple[str, str, Path]] = []
+    try:
+        for candidate_dir in sorted(candidates_root.iterdir()):
+            attempts_root = candidate_dir / "attempts"
+            if candidate_dir.is_symlink() or not attempts_root.is_dir():
+                continue
+            for attempt_root in sorted(attempts_root.iterdir()):
+                attempt_path = attempt_root / "attempt.json"
+                if attempt_root.is_symlink() or not attempt_path.is_file():
+                    continue
+                payload = _read_bounded_json(attempt_path, "候选 attempt")
+                if payload.get("status") in POST_RUN_TOOLING_ATTEMPT_STATUSES:
+                    awaiting.append(
+                        (candidate_dir.name, attempt_root.name, attempt_root)
+                    )
+    except (OSError, SupervisorError) as error:
+        return fail(f"候选 attempt 目录无法枚举：{error}")
+    if len(awaiting) != 1:
+        return fail(f"等待收据的候选 attempt 数为 {len(awaiting)}，必须恰好一个")
+    candidate_id, attempt_id, attempt_root = awaiting[0]
+    facts["candidate_id"] = candidate_id
+    facts["attempt_id"] = attempt_id
+
+    bound: list[dict[str, str]] = []
+
+    def bind(path: Path, role: str) -> dict[str, Any]:
+        payload = _read_bounded_json(path, role)
+        bound.append(
+            {
+                "role": role,
+                "path": path.relative_to(campaign_dir).as_posix(),
+                "sha256": _sha256(path.read_bytes()),
+            }
+        )
+        return payload
+
+    try:
+        attempt = bind(attempt_root / "attempt.json", "attempt")
+        facts["attempt_status"] = attempt.get("status")
+        if attempt.get("attempt_id") != attempt_id or attempt.get(
+            "candidate_id"
+        ) != candidate_id:
+            return fail("attempt.json 身份与目录不一致")
+        results = attempt.get("results")
+        if not isinstance(results, list) or not results:
+            return fail("attempt 没有 Job 结果")
+        job_ids: list[str] = []
+        complete = 0
+        for item in results:
+            if not isinstance(item, Mapping) or not isinstance(item.get("id"), str):
+                return fail("attempt Job 结果结构非法")
+            job_ids.append(str(item["id"]))
+            if item.get("status") == "complete":
+                complete += 1
+        facts["job_count"] = len(job_ids)
+        facts["complete_job_count"] = complete
+        if complete != len(job_ids):
+            return fail(f"{len(job_ids) - complete} 个 Candidate Job 尚未 complete")
+        if set(job_ids) - set(facts["reuse_items"]):
+            return fail("reuse_items 未覆盖 attempt 的全部 Job")
+        # 完成态以 result 与 checkpoint 同时存在为准：逐条读取追加式 checkpoint，
+        # 每个 Job 至少一条 complete 记录；末条记录文件进入绑定集合。
+        checkpoints_root = attempt_root / "checkpoints"
+        if checkpoints_root.is_symlink() or not checkpoints_root.is_dir():
+            return fail("attempt 没有 Job checkpoint 目录")
+        checkpoint_paths = sorted(
+            path
+            for path in checkpoints_root.iterdir()
+            if path.suffix == ".json" and not path.name.startswith(".")
+        )
+        complete_jobs: set[str] = set()
+        for path in checkpoint_paths:
+            record = _read_bounded_json(path, "Job checkpoint 记录")
+            if record.get("status") == "complete" and isinstance(
+                record.get("item_id"), str
+            ):
+                complete_jobs.add(str(record["item_id"]))
+        facts["checkpoint_record_count"] = len(checkpoint_paths)
+        facts["checkpoint_complete_job_count"] = len(complete_jobs & set(job_ids))
+        if set(job_ids) - complete_jobs:
+            return fail("Job checkpoint 缺少 complete 记录")
+        if checkpoint_paths:
+            bind(checkpoint_paths[-1], "job_checkpoint_tail")
+
+        reservation = bind(attempt_root / "reservation.json", "reservation")
+        reservation_started = _parse_rfc3339_utc(
+            reservation.get("started_at_utc"), "reservation"
+        )
+        facts["reservation_started_at_utc"] = reservation.get("started_at_utc")
+        if reservation_started >= run_started:
+            return fail("reservation 在本次父 run 内创建，属于 attempt 中断")
+
+        kilo_window = attempt_root / "evidence" / "client" / "raw" / "kilo-run-window.json"
+        if kilo_window.exists() or kilo_window.is_symlink():
+            window = bind(kilo_window, "kilo_run_window")
+            facts["kilo_window_started_at_utc"] = window.get("started_at_utc")
+            count = window.get("request_count")
+            facts["kilo_window_request_count"] = (
+                count if isinstance(count, int) and not isinstance(count, bool) else None
+            )
+            window_started = _parse_rfc3339_utc(window.get("started_at_utc"), "Kilo 窗口")
+            if window_started >= run_started:
+                return fail("本次父 run 已启动 Kilo 请求窗口，不是零请求失败")
+    except (OSError, SupervisorError) as error:
+        return fail(f"attempt 判据文件无法读取：{error}")
+    facts["bound_files"] = bound
+    return {"qualifies": True, "reasons": [], "facts": facts}
+
+
+def _post_run_tooling_receipt_path(run_dir: Path, action_id: str) -> Path:
+    run_dir = _validate_state_dir(Path(run_dir), create=False)
+    action_id = _safe_id(action_id, "action_id")
+    return run_dir / "action-diagnostics" / f"action-{action_id}-post-run-tooling.json"
+
+
+def _write_post_run_tooling_receipt(
+    run_dir: Path,
+    *,
+    campaign_id: str,
+    phase: str,
+    action_id: str,
+    owner_pid: int,
+    owner_nonce: str,
+    diagnostic_sha256: str,
+    facts: Mapping[str, Any],
+) -> dict[str, Any]:
+    """以不可覆盖方式写 post-run-tooling 分类收据，绑定原始诊断摘要。"""
+
+    payload: dict[str, Any] = {
+        "schema_version": POST_RUN_TOOLING_RECEIPT_SCHEMA,
+        "campaign_id": _safe_id(campaign_id, "campaign_id"),
+        "phase": _safe_id(phase, "phase", maximum=32),
+        "action_id": _safe_id(action_id, "action_id"),
+        "owner_pid": owner_pid,
+        "owner_nonce": _safe_id(owner_nonce, "owner_nonce", maximum=128),
+        "diagnostic_sha256": diagnostic_sha256,
+        "failure_class": "post-run-tooling",
+        "facts": dict(facts),
+        "recorded_at_utc": _utc_now(),
+    }
+    payload["receipt_sha256"] = _sha256(_canonical(payload))
+    _write_json(_post_run_tooling_receipt_path(run_dir, action_id), payload, replace=False)
+    return payload
+
+
+def load_post_run_tooling_receipt(
+    run_dir: Path,
+    action_id: str,
+    *,
+    campaign_dir: Path,
+    inner_manifest: Mapping[str, Any],
+    campaign_id: str,
+    phase: str,
+    owner_pid: int,
+    owner_nonce: str,
+    diagnostic_sha256: str,
+    run_started_at_utc: str,
+) -> dict[str, Any] | None:
+    """读取并复算 post-run-tooling 收据；不存在返回 None，不可信则抛错。
+
+    复算规则：收据绑定的判据文件当前 SHA 全部未变时，必须重新得到完全相同的
+    事实且 ``qualifies`` 为真；任一判据文件已变化（例如恢复后 seal 已推进
+    attempt）时，只校验收据自摘要与诊断绑定，接受历史事实——失败时刻的分类
+    不因后续推进改写。
+    """
+
+    path = _post_run_tooling_receipt_path(run_dir, action_id)
+    if path.is_symlink():
+        raise SupervisorError("post-run-tooling 收据不得是符号链接。")
+    if not path.exists():
+        return None
+    payload = _read_json(path)
+    unsigned = dict(payload)
+    digest = unsigned.pop("receipt_sha256", None)
+    facts = payload.get("facts")
+    if (
+        payload.get("schema_version") != POST_RUN_TOOLING_RECEIPT_SCHEMA
+        or payload.get("campaign_id") != campaign_id
+        or payload.get("phase") != phase
+        or payload.get("action_id") != action_id
+        or payload.get("owner_pid") != owner_pid
+        or payload.get("owner_nonce") != owner_nonce
+        or payload.get("diagnostic_sha256") != diagnostic_sha256
+        or payload.get("failure_class") != "post-run-tooling"
+        or not isinstance(facts, Mapping)
+        or digest != _sha256(_canonical(unsigned))
+    ):
+        raise SupervisorError("post-run-tooling 收据身份、诊断绑定或摘要非法。")
+    _validate_action_diagnostic_timestamp(payload.get("recorded_at_utc"))
+    bound_files = facts.get("bound_files")
+    if not isinstance(bound_files, list) or not bound_files:
+        raise SupervisorError("post-run-tooling 收据没有绑定判据文件。")
+    campaign_dir = Path(campaign_dir)
+    unchanged = True
+    for item in bound_files:
+        if not isinstance(item, Mapping):
+            raise SupervisorError("post-run-tooling 收据判据文件绑定非法。")
+        target = campaign_dir / str(item.get("path", ""))
+        if (
+            target.is_symlink()
+            or not target.is_file()
+            or _sha256(target.read_bytes()) != item.get("sha256")
+        ):
+            unchanged = False
+            break
+    if unchanged:
+        recomputed = post_run_tooling_facts(
+            campaign_dir,
+            inner_manifest,
+            run_started_at_utc=run_started_at_utc,
+        )
+        if not recomputed["qualifies"] or recomputed["facts"] != dict(facts):
+            raise SupervisorError("post-run-tooling 收据事实与当前复算不一致。")
+    return {
+        **payload,
+        "path": path,
+        "recomputed": unchanged,
+    }
+
+
+def effective_action_failure_class(
+    run_dir: Path,
+    diagnostic: Mapping[str, Any],
+    *,
+    campaign_dir: Path | None,
+    inner_manifest: Mapping[str, Any] | None,
+    campaign_id: str,
+    phase: str,
+    action_id: str,
+    owner_pid: int,
+    owner_nonce: str,
+    run_started_at_utc: str,
+) -> tuple[str, dict[str, Any] | None]:
+    """返回父动作的有效失败分类与（若存在）post-run-tooling 收据。
+
+    诊断文件本身不可覆盖，子进程给出的默认 execution-failure 只能由父监督器
+    以独立收据升级；这里是 reconciler、重派门禁与父监督器共用的唯一入口。
+    """
+
+    declared = str(diagnostic.get("failure_class", "execution-failure"))
+    if campaign_dir is None or inner_manifest is None:
+        return declared, None
+    receipt = load_post_run_tooling_receipt(
+        run_dir,
+        action_id,
+        campaign_dir=campaign_dir,
+        inner_manifest=inner_manifest,
+        campaign_id=campaign_id,
+        phase=phase,
+        owner_pid=owner_pid,
+        owner_nonce=owner_nonce,
+        diagnostic_sha256=str(diagnostic.get("diagnostic_sha256", "")),
+        run_started_at_utc=run_started_at_utc,
+    )
+    if receipt is None:
+        return declared, None
+    if declared != "execution-failure" or (
+        diagnostic.get("failure_kind") not in POST_RUN_TOOLING_UPGRADABLE_FAILURE_KINDS
+    ):
+        raise SupervisorError("post-run-tooling 收据不能覆盖非默认分类或中断类失败。")
+    return "post-run-tooling", receipt
 
 
 def _read_state(run_dir: Path) -> dict[str, Any]:
@@ -4987,7 +5405,25 @@ def _validate_batched_environment_redispatch_successor(
         owner_pid=owner_pid,
         owner_nonce=owner_nonce,
     )
-    if diagnostic.get("failure_class") != "environment-prerequisite":
+    # 有效分类由诊断加 post-run-tooling 收据共同决定：环境前提失败与零请求
+    # 后处理失败共用同一条"对账通过后逐字重派原批次"协议。
+    effective_class, _post_run_receipt = effective_action_failure_class(
+        prior_dir,
+        diagnostic,
+        campaign_dir=(
+            Path(campaign_dir).resolve(strict=True)
+            if campaign_dir is not None and Path(campaign_dir).is_dir()
+            else None
+        ),
+        inner_manifest=prior_manifest,
+        campaign_id=str(prior_manifest.get("campaign_id", "")),
+        phase=str(prior_manifest.get("phase", "")),
+        action_id=action_id,
+        owner_pid=owner_pid,
+        owner_nonce=owner_nonce,
+        run_started_at_utc=str(prior_state.get("started_at_utc", "")),
+    )
+    if effective_class not in RECOVERABLE_ACTION_FAILURE_CLASSES:
         return False
 
     unsigned_stop = dict(stop)
@@ -5114,7 +5550,7 @@ def _validate_batched_environment_redispatch_successor(
         reconciliation.get("schema_version")
         != "supervisor-run-reconciliation/v1"
         or reconciliation.get("campaign_id") != prior_manifest.get("campaign_id")
-        or reconciliation.get("failure_class") != "environment-prerequisite"
+        or reconciliation.get("failure_class") != effective_class
         or reconciliation.get("reservation_exists") is not False
         or reconciliation.get("live_request_count") != 0
         or reconciliation.get("scanned_bytes") != 0
@@ -5128,7 +5564,7 @@ def _validate_batched_environment_redispatch_successor(
         or run.get("batch_sha256") != prior_manifest.get("batch_sha256")
         or run.get("execute_items") != prior_manifest.get("execute_items")
         or run.get("reuse_items") != prior_manifest.get("reuse_items")
-        or run.get("failure_class") != "environment-prerequisite"
+        or run.get("failure_class") != effective_class
     ):
         raise SupervisorError("环境前提失败的 reservation 前对账事实漂移。")
 
@@ -5431,10 +5867,20 @@ def _close_failed_campaign_timing_ledger(
     recovery_event_id = f"{event_prefix}-recovery-required"
     abandon_event_id = f"{event_prefix}-stage-abandoned"
     stop_event_id = f"{event_prefix}-stop-the-line"
-    recovery_next_action = (
-        "reconcile-supervisor-run／reconcile-attempt：先按 reservation 是否存在完成对账；"
-        "reservation 前只允许原批次重派，reservation 后只允许已批准的 resume --rerun-failed。"
-    )
+    if failure_class == "post-run-tooling":
+        # 数据面 Job 已闭合，失败的是零请求后处理动作：修复评估／控制工具并
+        # 受监督部署后，reconcile-supervisor-run 通过即逐字重派同一 seal 批次，
+        # 不重跑 Candidate Job、不新建 Campaign。
+        recovery_next_action = (
+            "reconcile-supervisor-run：零请求后处理动作失败，Candidate Job 结果只读保留；"
+            "修复评估／控制工具并受监督部署后，对账通过即以 compile-and-run-vc-batch "
+            "逐字重派同一批次。"
+        )
+    else:
+        recovery_next_action = (
+            "reconcile-supervisor-run／reconcile-attempt：先按 reservation 是否存在完成对账；"
+            "reservation 前只允许原批次重派，reservation 后只允许已批准的 resume --rerun-failed。"
+        )
     permanent_next_action = (
         "resume-from-checkpoint：先执行 reconcile-supervisor-run／reconcile-attempt 对账，"
         "本失败分类不可自动恢复；完成请求与根因入账后永久停线。"
@@ -5617,6 +6063,7 @@ def _campaign_run_locked(
     timing_closeout: dict[str, Any] | None = None
     active_action_id: str | None = None
     failed_action_diagnostic: dict[str, Any] | None = None
+    failed_action_effective_class = "execution-failure"
     try:
         history = _campaign_run_history(state_dir, str(manifest["campaign_id"]))
         if manifest["schema_version"] == CAMPAIGN_RUN_SCHEMA:
@@ -5794,6 +6241,51 @@ def _campaign_run_locked(
                             diagnostic["failure_observations"]
                         ),
                     }
+                    # 子进程默认的 execution-failure 只在五条文件事实全部成立时
+                    # 升级为 post-run-tooling；诊断文件本身不改，升级以独立收据
+                    # 绑定诊断摘要落盘，供 reconciler 与重派门禁复算。
+                    failed_action_effective_class = str(diagnostic["failure_class"])
+                    if (
+                        campaign_dir is not None
+                        and failed_action_effective_class == "execution-failure"
+                        and diagnostic["failure_kind"]
+                        in POST_RUN_TOOLING_UPGRADABLE_FAILURE_KINDS
+                    ):
+                        classification = post_run_tooling_facts(
+                            campaign_dir,
+                            manifest,
+                            run_started_at_utc=str(
+                                _read_state(client.run_dir)["started_at_utc"]
+                            ),
+                        )
+                        if classification["qualifies"]:
+                            post_run_receipt = _write_post_run_tooling_receipt(
+                                client.run_dir,
+                                campaign_id=str(manifest["campaign_id"]),
+                                phase=str(manifest["phase"]),
+                                action_id=action_id,
+                                owner_pid=client.owner_pid,
+                                owner_nonce=client.owner_nonce,
+                                diagnostic_sha256=str(diagnostic["diagnostic_sha256"]),
+                                facts=classification["facts"],
+                            )
+                            failed_action_effective_class = "post-run-tooling"
+                            action_result["diagnostic"]["post_run_tooling_receipt"] = {
+                                "schema_version": post_run_receipt["schema_version"],
+                                "path": str(
+                                    _post_run_tooling_receipt_path(
+                                        client.run_dir, action_id
+                                    ).relative_to(client.run_dir)
+                                ),
+                                "sha256": post_run_receipt["receipt_sha256"],
+                            }
+                        else:
+                            action_result["diagnostic"][
+                                "post_run_tooling_rejected"
+                            ] = list(classification["reasons"])
+                    action_result["diagnostic"]["effective_failure_class"] = (
+                        failed_action_effective_class
+                    )
                 results.append(action_result)
                 if result.returncode != 0:
                     reason = f"action-failed:{action['action_id']}"
@@ -5809,7 +6301,7 @@ def _campaign_run_locked(
                     manifest,
                     failed_action_id=reason.split(":", 1)[1],
                     failure_class=(
-                        str(failed_action_diagnostic["failure_class"])
+                        failed_action_effective_class
                         if failed_action_diagnostic is not None
                         else "execution-failure"
                     ),

@@ -1842,18 +1842,45 @@ def _run_facts(run_dir: Path, campaign_dir: Path, manifest: Mapping[str, Any]) -
                 )
             except supervisor.SupervisorError as error:
                 raise ReconcilerError(f"动作失败诊断无法重放：{error}") from error
+            # 子进程默认的 execution-failure 可能已被父监督器按文件事实升级为
+            # post-run-tooling；有效分类必须经同一函数复算收据后才能采信。
+            try:
+                effective_class, post_run_receipt = supervisor.effective_action_failure_class(
+                    run_dir,
+                    diagnostic,
+                    campaign_dir=campaign_dir,
+                    inner_manifest=inner if isinstance(inner, Mapping) else None,
+                    campaign_id=str(manifest["campaign_id"]),
+                    phase=str(state["phase"]),
+                    action_id=action_id,
+                    owner_pid=int(state["owner_pid"]),
+                    owner_nonce=str(state["owner_nonce"]),
+                    run_started_at_utc=str(state.get("started_at_utc", "")),
+                )
+            except supervisor.SupervisorError as error:
+                raise ReconcilerError(f"post-run-tooling 收据无法复算：{error}") from error
             action_diagnostic = {
                 "schema_version": diagnostic["schema_version"],
                 "path": diagnostic_path.relative_to(run_dir).as_posix(),
                 "sha256": diagnostic["diagnostic_sha256"],
                 "action_id": action_id,
                 "failure_kind": diagnostic["failure_kind"],
-                "failure_class": diagnostic["failure_class"],
+                "failure_class": effective_class,
+                "declared_failure_class": diagnostic["failure_class"],
                 "failure_observations": list(
                     diagnostic["failure_observations"]
                 ),
                 "error_type": diagnostic["error_type"],
             }
+            if post_run_receipt is not None:
+                action_diagnostic["post_run_tooling"] = {
+                    "schema_version": post_run_receipt["schema_version"],
+                    "path": Path(post_run_receipt["path"]).relative_to(run_dir).as_posix(),
+                    "sha256": post_run_receipt["receipt_sha256"],
+                    "recomputed": bool(post_run_receipt["recomputed"]),
+                    "attempt_id": post_run_receipt["facts"].get("attempt_id"),
+                    "candidate_id": post_run_receipt["facts"].get("candidate_id"),
+                }
     return {
         "run_dir": str(run_dir),
         "run_id": run_dir.name,
@@ -1988,10 +2015,10 @@ def reconcile_supervisor_run(
     ledger = _ledger_facts(ledger_dir, now=observed)
     if (
         ledger.get("status") == "recovery_required"
-        and run.get("failure_class") != "environment-prerequisite"
+        and run.get("failure_class") not in supervisor.RECOVERABLE_ACTION_FAILURE_CLASSES
     ):
         raise ReconcilerError(
-            "Campaign 账本处于 recovery_required，但父动作不是环境前提失败"
+            "Campaign 账本处于 recovery_required，但父动作分类不可恢复"
         )
     project_root = _project_root(campaign_dir)
     plan, head = _project_facts(project_root)
@@ -2142,7 +2169,12 @@ def reconcile_supervisor_run(
                     next_action="redispatch-same-batch",
                 )
             result["ledger_events"] = [event]
-        result["next_command"] = "phase 保持 active：以 compile-and-run-vc-batch 重新派发同一批次"
+        result["next_command"] = (
+            "phase 保持 active：修复评估／控制工具并受监督部署后，以 compile-and-run-vc-batch "
+            "逐字重派同一 seal 批次；Candidate Job 结果只读保留"
+            if run.get("failure_class") == "post-run-tooling"
+            else "phase 保持 active：以 compile-and-run-vc-batch 重新派发同一批次"
+        )
     else:
         with codex_upgrade._campaign_lock(campaign_dir):
             stop = _permanent_stop(

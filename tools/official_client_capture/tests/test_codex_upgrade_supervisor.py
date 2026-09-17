@@ -2211,6 +2211,378 @@ raise SystemExit(9)
                 "recovery_required",
             )
 
+    _POST_RUN_JOB_IDS = (
+        "candidate-compact-direct",
+        "candidate-compact-mitm",
+        "candidate-core-direct",
+        "candidate-core-mitm",
+        "candidate-frozen-aux",
+        "candidate-frozen-core",
+        "candidate-h1-wire",
+        "candidate-images-wire",
+        "candidate-ws-handshake-repeat",
+    )
+
+    def _post_run_tooling_fixture(
+        self,
+        root: Path,
+        *,
+        kilo_window_offset_seconds: float | None = None,
+        incomplete_job: bool = False,
+        reservation_offset_seconds: float = -600.0,
+        execute_items: tuple[str, ...] = ("candidate-seal",),
+        child_command: list[str] | None = None,
+    ) -> tuple[Path, Path, dict[str, object], Path]:
+        """VC-5 active 的 batched Campaign 与一个 Job 全部 complete 的候选 attempt。
+
+        ``kilo_window_offset_seconds`` 相对"现在"写 Kilo 运行窗口：负值表示
+        Kilo 早于即将启动的父 run（零请求失败），正值表示本 run 内发过请求。
+        """
+
+        campaign_dir, ledger_root, _manifest, plan = self._batched_closeout_fixture(root)
+        # 夹具账本停在 VC-1 active；seal 段失败发生在 VC-5，逐阶段推进。
+        for completed, started in (
+            ("VC-1", "VC-2"),
+            ("VC-2", "VC-3"),
+            ("VC-3", "VC-4"),
+            ("VC-4", "VC-5"),
+        ):
+            timing_ledger.append_event(
+                ledger_root,
+                event_id=f"fixture-{completed.lower()}-completed",
+                phase=completed,
+                event_type="stage_completed",
+                next_action=f"启动 {started}",
+            )
+            timing_ledger.append_event(
+                ledger_root,
+                event_id=f"fixture-{started.lower()}-started",
+                phase=started,
+                event_type="stage_started",
+                next_action="运行父批次",
+            )
+        now = time.time()
+        attempt_id = "20260917T190726Z-96ecf4e9a4848948"
+        attempt_root = (
+            campaign_dir / "candidates" / "cand-1" / "attempts" / attempt_id
+        )
+        attempt_root.mkdir(parents=True, mode=0o700)
+        for path in (campaign_dir / "candidates", campaign_dir / "candidates" / "cand-1",
+                     campaign_dir / "candidates" / "cand-1" / "attempts"):
+            path.chmod(0o700)
+        results = [
+            {"id": job_id, "status": "complete", "disposition": "reused"}
+            for job_id in self._POST_RUN_JOB_IDS
+        ]
+        if incomplete_job:
+            results[-1]["status"] = "failed"
+        self._write_json(
+            attempt_root / "attempt.json",
+            {
+                "schema_version": "codex-upgrade-capture-attempt/v3",
+                "attempt_id": attempt_id,
+                "candidate_id": "cand-1",
+                "campaign_id": "campaign-closeout",
+                "phase": "candidate",
+                "status": "awaiting_receipts",
+                "results": results,
+            },
+        )
+        for index, job_id in enumerate(self._POST_RUN_JOB_IDS, 1):
+            self._write_json(
+                attempt_root / "checkpoints" / f"{index:08d}.json",
+                {
+                    "checkpoint_sequence": index,
+                    "item_id": job_id,
+                    "status": "complete",
+                    "disposition": "reused",
+                },
+            )
+        self._write_json(
+            attempt_root / "reservation.json",
+            {
+                "schema_version": "codex-upgrade-capture-reservation/v1",
+                "attempt_id": attempt_id,
+                "started_at_utc": supervisor._epoch_to_utc(now + reservation_offset_seconds),
+                "run_nonce": "8" * 64,
+            },
+        )
+        if kilo_window_offset_seconds is not None:
+            self._write_json(
+                attempt_root / "evidence" / "client" / "raw" / "kilo-run-window.json",
+                {
+                    "schema_version": "vc5-kilo-run-window/v1",
+                    "started_at_utc": supervisor._epoch_to_utc(
+                        now + kilo_window_offset_seconds
+                    ),
+                    "finished_at_utc": supervisor._epoch_to_utc(
+                        now + kilo_window_offset_seconds + 30.0
+                    ),
+                    "request_count": 2,
+                },
+            )
+        manifest = supervisor.build_batched_campaign_run_manifest(
+            campaign_id="campaign-closeout",
+            campaign_plan_sha256=str(plan["plan_sha256"]),
+            batch_id="vc-5-0001",
+            batch_sequence=1,
+            batch_sha256="6" * 64,
+            phase="VC-5",
+            predecessor_checkpoint={
+                "path": "control/vc/vc-4-checkpoint.json",
+                "sha256": "3" * 64,
+                "phase": "VC-4",
+                "checkpoint_sha256": "4" * 64,
+            },
+            original_deadline_at_utc="2099-09-15T08:12:43Z",
+            actions=[
+                {
+                    "action_id": "prepare-candidate-assertion-bundle",
+                    "operation": "VC-5:prepare-candidate-assertion-bundle",
+                    "timeout_seconds": 5.0,
+                    "command": child_command
+                    or [sys.executable, "-c", "raise SystemExit(3)"],
+                    "item_ids": ["candidate-seal"],
+                }
+            ],
+            execute_items=list(execute_items),
+            reuse_items=list(self._POST_RUN_JOB_IDS),
+        )
+        return campaign_dir, ledger_root, manifest, attempt_root
+
+    def _run_post_run_tooling_parent(
+        self, root: Path, manifest: dict[str, object], campaign_dir: Path
+    ) -> tuple[int, dict[str, object], Path]:
+        state_dir = root / "supervisor-state"
+        state_dir.mkdir(mode=0o700)
+        returncode, payload = supervisor._campaign_run_locked(
+            argparse.Namespace(
+                heartbeat_seconds=0.05,
+                watchdog_timeout_seconds=0.5,
+                ledger_interval_seconds=0.05,
+            ),
+            manifest=manifest,
+            state_dir=state_dir,
+            campaign_dir=campaign_dir,
+        )
+        return returncode, payload, Path(str(payload["run_dir"]))
+
+    def test_post_run_tooling_failure_pauses_and_writes_receipt(self) -> None:
+        """Job 全部 complete 后零请求的 seal 段失败：升级为 post-run-tooling 并暂停。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            campaign_dir, ledger_root, manifest, _attempt_root = (
+                self._post_run_tooling_fixture(root, kilo_window_offset_seconds=-120.0)
+            )
+            returncode, payload, run_dir = self._run_post_run_tooling_parent(
+                root, manifest, campaign_dir
+            )
+            self.assertEqual(returncode, 1)
+            self.assertEqual(
+                payload["reason"], "action-failed:prepare-candidate-assertion-bundle"
+            )
+            diagnostic = payload["actions"][0]["diagnostic"]
+            # 诊断文件保持子进程默认分类，升级只体现在有效分类与独立收据上。
+            self.assertEqual(diagnostic["failure_class"], "execution-failure")
+            self.assertEqual(diagnostic["effective_failure_class"], "post-run-tooling")
+            receipt_binding = diagnostic["post_run_tooling_receipt"]
+            receipt_path = run_dir / receipt_binding["path"]
+            self.assertTrue(receipt_path.is_file())
+            self.assertEqual(payload["timing_closeout"]["ledger_status"], "recovery_required")
+            self.assertEqual(payload["timing_closeout"]["failure_class"], "post-run-tooling")
+            self.assertIn("逐字重派同一批次", payload["timing_closeout"]["next_action"])
+            summary = timing_ledger.inspect_ledger(ledger_root)
+            self.assertEqual(summary["status"], "recovery_required")
+            self.assertEqual(summary["active_phase"], "VC-5")
+            events = [
+                event["event_type"] for event, _raw in timing_ledger._load_events(ledger_root)
+            ]
+            self.assertEqual(events[-1], "recovery_required")
+            self.assertNotIn("stage_abandoned", events)
+            self.assertNotIn("stop_the_line", events)
+
+            # 收据复算：判据文件未变时必须得到相同事实，并把有效分类交给对账方。
+            state = supervisor._read_state(run_dir)
+            stored_diagnostic = supervisor._validate_action_diagnostic(
+                run_dir / diagnostic["path"],
+                run_dir=run_dir,
+                campaign_id="campaign-closeout",
+                phase="VC-5",
+                action_id="prepare-candidate-assertion-bundle",
+                owner_pid=int(state["owner_pid"]),
+                owner_nonce=str(state["owner_nonce"]),
+            )
+            effective, receipt = supervisor.effective_action_failure_class(
+                run_dir,
+                stored_diagnostic,
+                campaign_dir=campaign_dir,
+                inner_manifest=manifest,
+                campaign_id="campaign-closeout",
+                phase="VC-5",
+                action_id="prepare-candidate-assertion-bundle",
+                owner_pid=int(state["owner_pid"]),
+                owner_nonce=str(state["owner_nonce"]),
+                run_started_at_utc=str(state["started_at_utc"]),
+            )
+            self.assertEqual(effective, "post-run-tooling")
+            self.assertTrue(receipt["recomputed"])
+            self.assertEqual(receipt["facts"]["attempt_id"], "20260917T190726Z-96ecf4e9a4848948")
+            self.assertEqual(receipt["facts"]["complete_job_count"], 9)
+            self.assertEqual(receipt["facts"]["kilo_window_request_count"], 2)
+            self.assertEqual(
+                [item["role"] for item in receipt["facts"]["bound_files"]],
+                ["attempt", "job_checkpoint_tail", "reservation", "kilo_run_window"],
+            )
+            self.assertEqual(receipt["facts"]["checkpoint_complete_job_count"], 9)
+            # 篡改收据即失败关闭。
+            tampered = json.loads(receipt_path.read_text(encoding="utf-8"))
+            tampered["facts"]["complete_job_count"] = 8
+            receipt_path.write_text(json.dumps(tampered) + "\n", encoding="utf-8")
+            with self.assertRaisesRegex(supervisor.SupervisorError, "摘要非法"):
+                supervisor.effective_action_failure_class(
+                    run_dir,
+                    stored_diagnostic,
+                    campaign_dir=campaign_dir,
+                    inner_manifest=manifest,
+                    campaign_id="campaign-closeout",
+                    phase="VC-5",
+                    action_id="prepare-candidate-assertion-bundle",
+                    owner_pid=int(state["owner_pid"]),
+                    owner_nonce=str(state["owner_nonce"]),
+                    run_started_at_utc=str(state["started_at_utc"]),
+                )
+
+    def test_post_run_tooling_rejects_run_with_kilo_requests(self) -> None:
+        """本次父 run 内启动过 Kilo 窗口的失败不是零请求失败，仍按既有规则停线。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            campaign_dir, ledger_root, manifest, _attempt_root = (
+                self._post_run_tooling_fixture(root, kilo_window_offset_seconds=120.0)
+            )
+            returncode, payload, run_dir = self._run_post_run_tooling_parent(
+                root, manifest, campaign_dir
+            )
+            self.assertEqual(returncode, 1)
+            diagnostic = payload["actions"][0]["diagnostic"]
+            self.assertEqual(diagnostic["effective_failure_class"], "execution-failure")
+            self.assertTrue(
+                any("Kilo" in reason for reason in diagnostic["post_run_tooling_rejected"])
+            )
+            self.assertFalse(
+                list((run_dir / "action-diagnostics").glob("*-post-run-tooling.json"))
+            )
+            self.assertEqual(payload["timing_closeout"]["ledger_status"], "stopped")
+            self.assertEqual(timing_ledger.inspect_ledger(ledger_root)["status"], "stopped")
+
+    def test_post_run_tooling_facts_negative_cases(self) -> None:
+        """五条判据逐条失效时都不得升级，且不抛异常。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            campaign_dir, _ledger_root, manifest, attempt_root = (
+                self._post_run_tooling_fixture(root, incomplete_job=True)
+            )
+            run_started = supervisor._epoch_to_utc(time.time())
+            incomplete = supervisor.post_run_tooling_facts(
+                campaign_dir, manifest, run_started_at_utc=run_started
+            )
+            self.assertFalse(incomplete["qualifies"])
+            self.assertTrue(any("尚未 complete" in note for note in incomplete["reasons"]))
+
+            # execute_items 混入 Candidate Job 本身：不是后处理批次。
+            mixed = dict(manifest)
+            mixed["execute_items"] = ["candidate-seal", "candidate-frozen-core"]
+            rejected = supervisor.post_run_tooling_facts(
+                campaign_dir, mixed, run_started_at_utc=run_started
+            )
+            self.assertTrue(any("非零请求后处理" in note for note in rejected["reasons"]))
+
+            # reuse_items 未覆盖全部 Job。
+            attempt = json.loads((attempt_root / "attempt.json").read_text("utf-8"))
+            for item in attempt["results"]:
+                item["status"] = "complete"
+            self._write_json(attempt_root / "attempt.json", attempt)
+            narrowed = dict(manifest)
+            narrowed["reuse_items"] = list(self._POST_RUN_JOB_IDS[:-1])
+            uncovered = supervisor.post_run_tooling_facts(
+                campaign_dir, narrowed, run_started_at_utc=run_started
+            )
+            self.assertTrue(any("未覆盖" in note for note in uncovered["reasons"]))
+
+            # 某个 Job 缺少 complete checkpoint：result 与 checkpoint 必须同时存在。
+            tail = attempt_root / "checkpoints" / "00000009.json"
+            tail_payload = json.loads(tail.read_text("utf-8"))
+            tail_payload["status"] = "failed"
+            self._write_json(tail, tail_payload)
+            short = supervisor.post_run_tooling_facts(
+                campaign_dir, manifest, run_started_at_utc=run_started
+            )
+            self.assertTrue(any("checkpoint" in note for note in short["reasons"]))
+            tail_payload["status"] = "complete"
+            self._write_json(tail, tail_payload)
+
+            # reservation 在本 run 内创建：属于 attempt 中断。
+            future_run = supervisor._epoch_to_utc(time.time() - 3600.0)
+            interrupted = supervisor.post_run_tooling_facts(
+                campaign_dir, manifest, run_started_at_utc=future_run
+            )
+            self.assertTrue(any("reservation" in note for note in interrupted["reasons"]))
+
+            # 第二个 awaiting_receipts attempt：目标不唯一。
+            second = attempt_root.parent / "20260917T200000Z-0000000000000000"
+            second.mkdir(mode=0o700)
+            self._write_json(second / "attempt.json", {**attempt, "attempt_id": second.name})
+            ambiguous = supervisor.post_run_tooling_facts(
+                campaign_dir, manifest, run_started_at_utc=run_started
+            )
+            self.assertTrue(any("恰好一个" in note for note in ambiguous["reasons"]))
+
+            # 正例：全部判据满足。
+            (second / "attempt.json").unlink()
+            second.rmdir()
+            accepted = supervisor.post_run_tooling_facts(
+                campaign_dir, manifest, run_started_at_utc=run_started
+            )
+            self.assertTrue(accepted["qualifies"], accepted["reasons"])
+            self.assertIsNone(accepted["facts"]["kilo_window_started_at_utc"])
+
+    def test_post_run_tooling_never_overrides_explicit_child_classification(self) -> None:
+        """子进程显式给出的非默认分类（如 evidence-integrity）不得被升级或改写。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            child = (
+                "import sys; "
+                "from tools.official_client_capture import "
+                "codex_upgrade_supervisor as s; "
+                "error=RuntimeError('证据完整性失败'); "
+                "s.write_campaign_run_action_diagnostic("
+                "failure_kind='handled-error', "
+                "failure_class='evidence-integrity', error=error); "
+                "sys.exit(7)"
+            )
+            campaign_dir, ledger_root, manifest, _attempt_root = (
+                self._post_run_tooling_fixture(
+                    root, child_command=[sys.executable, "-c", child]
+                )
+            )
+            returncode, payload, run_dir = self._run_post_run_tooling_parent(
+                root, manifest, campaign_dir
+            )
+            self.assertEqual(returncode, 1)
+            diagnostic = payload["actions"][0]["diagnostic"]
+            self.assertEqual(diagnostic["failure_class"], "evidence-integrity")
+            self.assertEqual(diagnostic["effective_failure_class"], "evidence-integrity")
+            self.assertNotIn("post_run_tooling_receipt", diagnostic)
+            self.assertEqual(payload["timing_closeout"]["ledger_status"], "stopped")
+            self.assertEqual(timing_ledger.inspect_ledger(ledger_root)["status"], "stopped")
+
     def test_batched_failure_closeout_rejects_plan_digest_drift(self) -> None:
         """自摘要不符或计划文件被改写时都必须失败关闭，且账本保持 active。"""
 
