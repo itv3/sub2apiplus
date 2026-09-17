@@ -110,6 +110,8 @@ from typing import Any, Callable, Mapping
 # 并发时序允许缺失或为入口规范值；新增冻结后继随受管运行文档一并部署。
 # 2026-09-17（VC-5 post-run seal 恢复）：A15 九项 Job 只读承接到新的
 # metadata-only attempt，只重新采集 Kilo 后检查点与两条客户端收据。
+# 2026-09-17（VC-5 post-run VC-4 来源修复）：metadata-only 后继继续接受
+# A15 逐字投影的原始 v7 构建收据绑定，不要求改写不可变历史 Campaign 身份。
 DEFAULT_SUPERVISOR_DIGEST = (
     "5ef186522c0aebe57d1ded643a7c7b218516141f13c9aa3d46ce911e426f6780"
 )
@@ -172,6 +174,7 @@ MANAGED_RUNTIME_DOCUMENTS = (
     "egress/maintenance/upstream-codex-0154-vc5-reconciliation-json-compat-20260917-freeze-successor.json",
     "egress/maintenance/upstream-codex-0154-vc5-a15-startup-identity-20260917-freeze-successor.json",
     "egress/maintenance/upstream-codex-0154-vc5-post-run-seal-recovery-20260917-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-post-run-build-origin-20260917-freeze-successor.json",
 )
 MANAGED_ASSERTION_PREPARER = "prepare_assertion_bundle.sh"
 TARGET_SCENARIO_MANIFEST = "codex_upgrade_scenarios_0_154_0.json"
