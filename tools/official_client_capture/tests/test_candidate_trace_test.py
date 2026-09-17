@@ -197,7 +197,9 @@ class CandidateTraceTestScenarioTests(unittest.TestCase):
         self.assertEqual(entry["side"], "candidate")
         self.assertEqual([rule["glob"] for rule in entry["rules"]], ["candidate-go-test.jsonl"])
         self.assertEqual(sorted(entry["rules"][0]["scenario_ids"]), sorted(job["scenario_ids"]))
-        self.assertIn("candidate-trace-test", codex_upgrade.CLASSIFICATION_CANDIDATE_REUSE_JOB_IDS)
+        # 分类 Candidate 复用是 v7 时代的九项冻结闭集，新 Job 不进入。
+        self.assertNotIn("candidate-trace-test", codex_upgrade.CLASSIFICATION_CANDIDATE_REUSE_JOB_IDS)
+        self.assertEqual(len(codex_upgrade.CLASSIFICATION_CANDIDATE_REUSE_JOB_IDS), 9)
         self.assertEqual(
             codex_upgrade.RUNTIME_SUCCESSOR_CHANGED_TOOL_PATH_JOB_IDS["run_candidate_trace_test.sh"],
             frozenset({"candidate-trace-test"}),

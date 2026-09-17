@@ -3760,11 +3760,13 @@ CLASSIFICATION_CANDIDATE_REUSE_JOB_IDS = frozenset(
         "candidate-frozen-core",
         "candidate-h1-wire",
         "candidate-images-wire",
-        # 2026-09-18：候选同源源码树上的冻结 go test 日志改由独立零请求 Job 产出。
-        "candidate-trace-test",
         "candidate-ws-handshake-repeat",
     }
 )
+# 2026-09-18：上面是 0.154 v7 时代"分类 Candidate 复用"的冻结闭集——来源
+# attempt 的九项 Job 结果被只读复用到后继 Campaign。同日新增的零请求 Job
+# candidate-trace-test 不在其中：含该 Job 的 Campaign 是全量执行的新 Candidate，
+# 不走此复用路径；把新 Job 加进闭集会让全部历史复用来源（九项）无法加载。
 CAMPAIGN_LEASE_SCHEMA = "codex-upgrade-campaign-lease/v1"
 CAMPAIGN_LEASE_FILENAME = ".campaign-lease.json"
 CAMPAIGN_LEASE_LOCK_FILENAME = ".campaign-lease.lock"
