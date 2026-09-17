@@ -1146,8 +1146,9 @@ wait_action A10 responses_http_success 4
 stop_capture
 
 # A15 要证明的是 exec 与 PTY TUI 启动 models 共用网关缓存：首次 miss 产生一次上游，
-# 第二次在全新 CODEX_HOME 中仍取得 HTTP 200，但上游计数不增长。TUI 初始化后的
-# 真实插件 GET 只用于证明 codex-tui suffix，由 localhost witness 应答，不进入 Candidate。
+# 第二次在全新 CODEX_HOME 中仍取得 HTTP 200，但上游计数不增长。启动 models 与
+# client info 初始化存在并发顺序，因此 suffix 允许缺失或与入口一致；TUI 初始化后的
+# 真实插件 GET 则必须证明 codex-tui suffix，由 localhost witness 应答，不进入 Candidate。
 # A03～A08 的
 # responses 请求会顺带填充同一网关缓存，因此 A15 前先重启候选服务；账号、proxy
 # 与证据目录均不变。
@@ -1751,7 +1752,7 @@ def launch_one(
             request: dict[str, object],
             expected_originator: str,
             expected_prefix: str,
-            expected_suffix: str,
+            expected_suffixes: tuple[str, ...],
             record_cache_result: str,
             record_before: int | None,
             record_after: int | None,
@@ -1776,10 +1777,10 @@ def launch_one(
                 suffix_match.group(0).strip() if suffix_match else ""
             )
             suffix_state = "present" if suffix_match else "absent"
-            if user_agent_suffix != expected_suffix:
+            if user_agent_suffix not in expected_suffixes:
                 raise RuntimeError(
                     f"A15 {record_variant} UA suffix {user_agent_suffix!r} "
-                    f"!= {expected_suffix!r}"
+                    f"不在允许集合 {expected_suffixes!r}"
                 )
             user_agent_prefix = user_agent.split(" ", 1)[0]
             if user_agent_prefix != expected_prefix:
@@ -1869,7 +1870,7 @@ def launch_one(
                     request=models_request,
                     expected_originator="codex_exec",
                     expected_prefix=f"codex_exec/{codex_version}",
-                    expected_suffix="",
+                    expected_suffixes=("", f"(codex_exec; {codex_version})"),
                     record_cache_result=cache_result,
                     record_before=before,
                     record_after=after,
@@ -1883,8 +1884,8 @@ def launch_one(
                 endpoint="models",
                 request=models_request,
                 expected_originator="codex_cli_rs",
-                expected_prefix=f"codex_cli_rs/{codex_version}",
-                expected_suffix="",
+                expected_prefix=f"codex-tui/{codex_version}",
+                expected_suffixes=("", f"(codex-tui; {codex_version})"),
                 record_cache_result=cache_result,
                 record_before=before,
                 record_after=after,
@@ -1897,7 +1898,7 @@ def launch_one(
                 request=identity_requests[0],
                 expected_originator="codex-tui",
                 expected_prefix=f"codex-tui/{codex_version}",
-                expected_suffix=f"(codex-tui; {codex_version})",
+                expected_suffixes=(f"(codex-tui; {codex_version})",),
                 record_cache_result="not_applicable",
                 record_before=None,
                 record_after=None,

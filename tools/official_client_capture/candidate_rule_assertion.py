@@ -1056,10 +1056,10 @@ def _validate_a15_real_entry_cache_contract(
 ) -> None:
     """验证 A15 两次真实 models 启动、TUI 初始化后身份和一次出站闭环。
 
-    ``codex exec`` 与 TUI 的启动 models 请求发生在 client info 生效前，因而
-    都没有 User-Agent suffix；TUI 初始化后的真实插件 GET 才能证明
-    ``codex-tui`` suffix。插件 GET 只由 localhost witness 应答，绝不能计入
-    Candidate 的 models 缓存或上游次数。
+    ``codex exec`` 与 TUI 的启动 models 请求和 client info 初始化存在并发顺序，
+    因而 suffix 可以缺失，也可以是与入口匹配的规范值；TUI 初始化后的真实插件
+    GET 则必须证明 ``codex-tui`` suffix。插件 GET 只由 localhost witness 应答，
+    绝不能计入 Candidate 的 models 缓存或上游次数。
     """
 
     labelled_artifacts = [
@@ -1169,8 +1169,7 @@ def _validate_a15_real_entry_cache_contract(
             "endpoint": "models",
             "originator": "codex_exec",
             "prefix": f"codex_exec/{expected_codex_version}",
-            "suffix": "",
-            "suffix_state": "absent",
+            "suffixes": ("", f"(codex_exec; {expected_codex_version})"),
             "cache_result": "miss",
             "before": 0,
             "after": 1,
@@ -1183,9 +1182,8 @@ def _validate_a15_real_entry_cache_contract(
             "surface": "tui",
             "endpoint": "models",
             "originator": "codex_cli_rs",
-            "prefix": f"codex_cli_rs/{expected_codex_version}",
-            "suffix": "",
-            "suffix_state": "absent",
+            "prefix": f"codex-tui/{expected_codex_version}",
+            "suffixes": ("", f"(codex-tui; {expected_codex_version})"),
             "cache_result": "fresh_hit",
             "before": 1,
             "after": 1,
@@ -1199,8 +1197,7 @@ def _validate_a15_real_entry_cache_contract(
             "endpoint": "plugin_identity",
             "originator": "codex-tui",
             "prefix": f"codex-tui/{expected_codex_version}",
-            "suffix": f"(codex-tui; {expected_codex_version})",
-            "suffix_state": "present",
+            "suffixes": (f"(codex-tui; {expected_codex_version})",),
             "cache_result": "not_applicable",
             "before": None,
             "after": None,
@@ -1235,8 +1232,6 @@ def _validate_a15_real_entry_cache_contract(
             "endpoint": expected["endpoint"],
             "originator": expected["originator"],
             "user_agent_prefix": expected["prefix"],
-            "user_agent_suffix": expected["suffix"],
-            "suffix_state": expected["suffix_state"],
             "request_method": "GET",
             "version_header": expected["version"],
             "authorization_present": True,
@@ -1258,16 +1253,27 @@ def _validate_a15_real_entry_cache_contract(
                 f"A15 {variant} 入口合同不匹配：{mismatches}"
             )
 
+        user_agent_suffix = data.get("user_agent_suffix")
+        expected_suffixes = expected["suffixes"]
+        expected_suffix_state = "present" if user_agent_suffix else "absent"
+        if (
+            user_agent_suffix not in expected_suffixes
+            or data.get("suffix_state") != expected_suffix_state
+        ):
+            raise AssertionConfigurationError(
+                f"A15 {variant} suffix 不符合入口合同"
+            )
+
         user_agent = data.get("user_agent")
         if (
             not isinstance(user_agent, str)
             or not user_agent.startswith(str(expected["prefix"]) + " ")
             or (
-                expected["suffix"]
-                and not user_agent.endswith(str(expected["suffix"]))
+                user_agent_suffix
+                and not user_agent.endswith(str(user_agent_suffix))
             )
             or (
-                not expected["suffix"]
+                not user_agent_suffix
                 and re.search(r" \([^();]+; [^)]+\)$", user_agent) is not None
             )
         ):

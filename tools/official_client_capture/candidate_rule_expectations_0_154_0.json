@@ -1048,12 +1048,10 @@
             "path": "data",
             "value": {
               "originator": "codex_exec",
-              "user_agent_prefix": "codex_exec/0.154.0",
-              "user_agent_suffix": "",
-              "suffix_state": "absent"
+              "user_agent_prefix": "codex_exec/0.154.0"
             }
           },
-          "description": "exec 启动 models 使用 codex_exec 前缀且尚无 suffix",
+          "description": "exec 启动 models 使用 codex_exec 前缀，suffix 可缺失或为同入口规范值",
           "id": "exec-identity",
           "select": {
             "record_type": "surface_identity",
@@ -1091,19 +1089,38 @@
         },
         {
           "assertion": {
-            "operator": "all_equal",
-            "path": "data.suffix_state",
-            "value": "absent"
+            "operator": "all_match",
+            "path": "data.user_agent_suffix",
+            "value": "^(?:|\\(codex_exec; 0\\.154\\.0\\))$"
           },
-          "description": "exec 与 TUI 的启动 models 请求都发生在 client info 生效前，均无 suffix",
-          "id": "startup-models-suffix-absent",
+          "description": "exec 启动 models 的 suffix 允许缺失或为 codex_exec 规范值",
+          "id": "exec-startup-models-suffix-optional",
           "select": {
             "record_type": "surface_identity",
             "where": [
               {
                 "operator": "equal",
-                "path": "data.endpoint",
-                "value": "models"
+                "path": "data.variant",
+                "value": "exec-startup-models"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_match",
+            "path": "data.user_agent_suffix",
+            "value": "^(?:|\\(codex-tui; 0\\.154\\.0\\))$"
+          },
+          "description": "TUI 启动 models 的 suffix 允许缺失或为 codex-tui 规范值",
+          "id": "tui-startup-models-suffix-optional",
+          "select": {
+            "record_type": "surface_identity",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.variant",
+                "value": "tui-startup-models"
               }
             ]
           }
@@ -1128,7 +1145,7 @@
           }
         }
       ],
-      "description": "启动 models 无 suffix；TUI initialize 后的真实插件请求带 codex-tui suffix",
+      "description": "启动 models 的 suffix 受初始化时序影响而可选；TUI initialize 后的真实插件请求必须带 codex-tui suffix",
       "rule_id": "SPEC-HDR-005",
       "scenario_ids": [
         "A15"

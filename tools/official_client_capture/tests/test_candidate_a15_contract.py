@@ -111,7 +111,7 @@ class CandidateA15ContractTest(unittest.TestCase):
                 "tui",
                 "models",
                 "codex_cli_rs",
-                f"codex_cli_rs/{VERSION}",
+                f"codex-tui/{VERSION}",
                 "",
                 "absent",
                 True,
@@ -435,7 +435,7 @@ class CandidateA15ContractTest(unittest.TestCase):
             with self.assertRaisesRegex(AssertionConfigurationError, "v1"):
                 self._load(fixture)
 
-    def test_exec_startup_models_suffix_is_rejected(self) -> None:
+    def test_exec_startup_models_matching_suffix_is_accepted(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             fixture = self._fixture(Path(directory))
             record = fixture["records"][0]
@@ -446,8 +446,35 @@ class CandidateA15ContractTest(unittest.TestCase):
             data["suffix_state"] = "present"
             self._refresh_surface_digests(record)
             self._write_manifest(fixture)
-            with self.assertRaisesRegex(AssertionConfigurationError, "入口合同不匹配"):
-                self._load(fixture)
+            self.assertEqual(len(self._load(fixture)), 4)
+
+    def test_tui_startup_models_matching_suffix_is_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = self._fixture(Path(directory))
+            record = fixture["records"][1]
+            data = record["data"]
+            suffix = f"(codex-tui; {VERSION})"
+            data["user_agent"] += f" {suffix}"
+            data["user_agent_suffix"] = suffix
+            data["suffix_state"] = "present"
+            self._refresh_surface_digests(record)
+            self._write_manifest(fixture)
+            self.assertEqual(len(self._load(fixture)), 4)
+
+    def test_startup_models_wrong_suffix_is_rejected(self) -> None:
+        for record_index in (0, 1):
+            with self.subTest(record_index=record_index), tempfile.TemporaryDirectory() as directory:
+                fixture = self._fixture(Path(directory))
+                record = fixture["records"][record_index]
+                data = record["data"]
+                suffix = f"(wrong-client; {VERSION})"
+                data["user_agent"] += f" {suffix}"
+                data["user_agent_suffix"] = suffix
+                data["suffix_state"] = "present"
+                self._refresh_surface_digests(record)
+                self._write_manifest(fixture)
+                with self.assertRaisesRegex(AssertionConfigurationError, "suffix"):
+                    self._load(fixture)
 
     def test_tui_startup_models_cannot_claim_post_initialize_identity(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -467,6 +494,23 @@ class CandidateA15ContractTest(unittest.TestCase):
             with self.assertRaisesRegex(AssertionConfigurationError, "入口合同不匹配"):
                 self._load(fixture)
 
+    def test_tui_startup_models_rejects_originator_derived_user_agent(self) -> None:
+        """启动 models 的 Originator 与 User-Agent 属于两个独立身份维度。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = self._fixture(Path(directory))
+            record = fixture["records"][1]
+            data = record["data"]
+            wrong_prefix = f"codex_cli_rs/{VERSION}"
+            data["user_agent_prefix"] = wrong_prefix
+            data["user_agent"] = (
+                f"{wrong_prefix} (Ubuntu 24.4.0; x86_64) unknown"
+            )
+            self._refresh_surface_digests(record)
+            self._write_manifest(fixture)
+            with self.assertRaisesRegex(AssertionConfigurationError, "入口合同不匹配"):
+                self._load(fixture)
+
     def test_tui_post_initialize_identity_requires_suffix(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             fixture = self._fixture(Path(directory))
@@ -477,7 +521,7 @@ class CandidateA15ContractTest(unittest.TestCase):
             data["suffix_state"] = "absent"
             self._refresh_surface_digests(record)
             self._write_manifest(fixture)
-            with self.assertRaisesRegex(AssertionConfigurationError, "入口合同不匹配"):
+            with self.assertRaisesRegex(AssertionConfigurationError, "suffix 不符合入口合同"):
                 self._load(fixture)
 
     def test_tui_records_must_share_one_process_receipt(self) -> None:

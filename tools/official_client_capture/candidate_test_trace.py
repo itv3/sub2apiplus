@@ -105,10 +105,10 @@ FROZEN_MAPPING_SHA256 = (
 # compact 线序，并重绑当前第二部分摘要；42 条验收规则数量不变。
 # 2026-08-31：断言画像升级为 0.151.0，加入 Files C2PA 条件分支的三条检查，
 # 规则总数仍为 42。
-# 2026-09-17：A15 的 HDR-005 selector 按真实阶段语义拆成启动 models 无 suffix
-# 与 TUI initialize 后插件请求有 suffix；其余规则与事实映射保持不变。
+# 2026-09-17：A15 的 HDR-005 selector 按真实并发时序修正为启动 models suffix
+# 可选、TUI initialize 后插件请求必须有 suffix；其余规则与事实映射保持不变。
 FROZEN_PROFILE_SHA256 = (
-    "d85d792e1c5f2cb0120b6a937006f0a5c9fcf74a99c7ab234c68fb5cd5fdb033"
+    "fe9461445c004f602a64abe8726cfcb1a9283fdcfcf535fd2d917b7f41ebd55e"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")

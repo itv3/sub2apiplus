@@ -99,6 +99,8 @@ class CandidateCoreCaptureScriptTest(unittest.TestCase):
         self.assertIn('"codex_exec"', a15)
         self.assertIn('"codex-tui"', a15)
         self.assertIn('"codex_cli_rs"', a15)
+        self.assertIn('expected_suffixes=("", f"(codex_exec; {codex_version})")', a15)
+        self.assertIn('expected_suffixes=("", f"(codex-tui; {codex_version})")', a15)
         self.assertNotIn('variant == "app-server"', a15)
         self.assertIn('"auth_mode": "chatgpt"', a15)
         self.assertNotIn('"auth_mode": "chatgptAuthTokens"', a15)
