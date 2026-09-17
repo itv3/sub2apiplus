@@ -145,6 +145,7 @@ MANAGED_RUNTIME_DOCUMENTS = (
     "egress/maintenance/upstream-codex-0154-vc5-a15-models-cache-restart-20260916-freeze-successor.json",
     "egress/maintenance/upstream-codex-0154-vc5-aux-empty-mapping-20260916-freeze-successor.json",
     "egress/maintenance/upstream-codex-0154-vc5-framework-closure-20260917-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-stopped-identity-precedence-20260917-freeze-successor.json",
 )
 MANAGED_ASSERTION_PREPARER = "prepare_assertion_bundle.sh"
 TARGET_SCENARIO_MANIFEST = "codex_upgrade_scenarios_0_154_0.json"

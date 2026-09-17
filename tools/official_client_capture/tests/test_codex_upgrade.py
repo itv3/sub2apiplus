@@ -15231,7 +15231,7 @@ class CodexUpgradeTest(unittest.TestCase):
                 codex_upgrade._job_failure_observations(result)
 
     def test_reconcile_stopped_attempt_preserves_a15_root_cause_once(self) -> None:
-        """真实 v7 摘要在 stopped 下仍还原 A15，且旧 Campaign 永久停线。"""
+        """真实 v7 在 stopped 与后续身份漂移下仍保留 A15，且只计数一次。"""
 
         from tools.official_client_capture import codex_upgrade_reconciler as reconciler
 
@@ -15312,16 +15312,28 @@ class CodexUpgradeTest(unittest.TestCase):
                 next_action="reconcile-attempt",
             )
 
-            with mock.patch.object(
-                codex_upgrade,
-                "FAILED_JOB_EVIDENCE_HOST_RUN_ROOT",
-                host_runs,
+            with (
+                mock.patch.object(
+                    codex_upgrade,
+                    "FAILED_JOB_EVIDENCE_HOST_RUN_ROOT",
+                    host_runs,
+                ),
+                mock.patch.object(
+                    reconciler,
+                    "_identity_facts",
+                    return_value={"unchanged": False},
+                ),
             ):
                 result = reconciler.reconcile_attempt(campaign_dir, attempt_id)
             self.assertEqual(result["status"], "permanent_stop")
+            self.assertFalse(result["identity_unchanged"])
             self.assertEqual(
                 result["decision"]["terminal_reason"],
                 "prior_stop_the_line",
+            )
+            self.assertIn(
+                "当前有效 wire 身份或策略摘要已变化",
+                result["decision"]["reasons"],
             )
             self.assertEqual(result["root_cause"]["root_cause_id"], a15_cause_id)
             self.assertEqual(
@@ -15344,10 +15356,17 @@ class CodexUpgradeTest(unittest.TestCase):
                 ][str(fixture["manifest"]["campaign_id"])]["terminal_reason"],
                 "prior_stop_the_line",
             )
-            with mock.patch.object(
-                codex_upgrade,
-                "FAILED_JOB_EVIDENCE_HOST_RUN_ROOT",
-                host_runs,
+            with (
+                mock.patch.object(
+                    codex_upgrade,
+                    "FAILED_JOB_EVIDENCE_HOST_RUN_ROOT",
+                    host_runs,
+                ),
+                mock.patch.object(
+                    reconciler,
+                    "_identity_facts",
+                    return_value={"unchanged": False},
+                ),
             ):
                 replay = reconciler.reconcile_attempt(campaign_dir, attempt_id)
             self.assertTrue(replay["batch"]["reused"])
@@ -15358,6 +15377,35 @@ class CodexUpgradeTest(unittest.TestCase):
                 ][a15_cause_id],
                 1,
             )
+
+    def test_stopped_terminal_reason_precedes_later_identity_drift(self) -> None:
+        """旧 Campaign 的既成停线终态不能被部署后的身份漂移覆盖。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        decision = reconciler._decide(
+            head={
+                "blocked": False,
+                "remaining_live_requests": 100,
+                "root_cause_counts": {},
+                "root_causes_at_limit": [],
+            },
+            plan={"absolute_deadline_utc": "2026-09-18T00:00:00Z"},
+            ledger={"status": "stopped"},
+            identity={"unchanged": False},
+            environment_status="restored",
+            campaign_deadline_at_utc="2026-09-18T00:00:00Z",
+            root_cause_id="rc1-a15",
+            request_status="complete",
+            now="2026-09-17T00:00:00Z",
+        )
+
+        self.assertEqual(decision["decision"], "permanent_stop")
+        self.assertEqual(decision["terminal_reason"], "prior_stop_the_line")
+        self.assertIn(
+            "当前有效 wire 身份或策略摘要已变化",
+            decision["reasons"],
+        )
 
     def test_malformed_historical_v7_writes_no_reconciliation_artifact(self) -> None:
         """历史摘要校验必须先于 provenance 与账本写入，失败时保持零副作用。"""

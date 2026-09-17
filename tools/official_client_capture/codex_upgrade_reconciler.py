@@ -700,13 +700,15 @@ def _decide(
         stop("accounting_unresolved", "本次请求账务无法确定")
     if environment_status == "contaminated":
         stop("environment_contaminated", "环境恢复失败或前后环境身份不连续")
+    ledger_status = ledger.get("status")
+    # 已经写入 stop_the_line 的旧 Campaign 不能被后续工具或策略身份变化改写终态。
+    # 身份漂移仍加入 reasons，供审计判断当前工具为何不能恢复旧 attempt。
+    if ledger_status == "stopped":
+        stop("prior_stop_the_line", "Campaign 账本此前已写 stop_the_line，禁止恢复旧 attempt")
     if not identity.get("unchanged"):
         stop("identity_changed", "当前有效 wire 身份或策略摘要已变化")
-    ledger_status = ledger.get("status")
     if ledger_status == "stop_required":
         stop("deadline_wall_clock", "Campaign 账本已要求停线，禁止继续执行 Job")
-    elif ledger_status == "stopped":
-        stop("prior_stop_the_line", "Campaign 账本此前已写 stop_the_line，禁止恢复旧 attempt")
     elif ledger_status == "complete":
         stop("prior_upgrade_complete", "Campaign 账本此前已完成，禁止再对账旧 attempt")
     if campaign_deadline_at_utc is not None and current >= _timestamp(campaign_deadline_at_utc, "Campaign deadline"):
@@ -1502,10 +1504,15 @@ def reconcile_attempt(
         jobs=jobs,
     )
     # 结构化 Job／门禁观测优先于普通 interrupted，也不能被历史 stopped 倒推成
-    # deadline；账务不确定、污染、身份漂移和真实 deadline 仍作为硬停线主根因。
+    # deadline。旧 Campaign 已经 stopped 时，当前部署造成的身份漂移只决定不能恢复，
+    # 不能追溯改写 attempt 当时已经结构化记录的失败根因。
+    recorded_cause_preferred = fallback_cause["stable_error_code"] == "attempt.interrupted" or (
+        ledger.get("status") == "stopped"
+        and fallback_cause["stable_error_code"] == "attempt.identity-changed"
+    )
     if (
         recorded_root_causes
-        and fallback_cause["stable_error_code"] == "attempt.interrupted"
+        and recorded_cause_preferred
     ):
         cause = dict(recorded_root_causes[0])
         root_causes = _merge_root_causes(cause, recorded_root_causes)
