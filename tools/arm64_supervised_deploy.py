@@ -125,6 +125,9 @@ from typing import Any, Callable, Mapping
 # 2026-09-18（VC-5 零请求后处理链收口）：post-run-tooling 可恢复分类、
 # OverlayFS seal 预演门禁、candidate-trace-test 零请求 Job 与标签 root_suffix
 # 通配；工具身份策略升至 v7。
+# 2026-09-18（VC-5 最小闭集：Astra Lite 判定）：候选 relay 合成 /models 补 gpt-6-astra
+# 并使清单 authoritative、A03 Astra Lite 采集省略 effort/summary/text、fact map 重绑三份
+# 源码快照；同步补登记三次 0.151 台账重签的承接边。监督器与断言预处理器未变。
 DEFAULT_SUPERVISOR_DIGEST = (
     "852fde262087b666f46b06e4e4098a3992e6f203cc7c1a6e734204e31a1a14c9"
 )
@@ -217,6 +220,11 @@ MANAGED_RUNTIME_DOCUMENTS = (
     "egress/maintenance/upstream-codex-0154-vc5-rehearsal-mount-order-20260918-freeze-successor.json",
     "egress/maintenance/upstream-codex-0154-vc5-rehearsal-manifest-diff-diag-20260918-freeze-successor.json",
     "egress/maintenance/upstream-codex-0154-vc5-rehearsal-manifest-roots-device-20260918-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-ledger-resign-mount-type-20260918-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-ledger-resign-diff-diag-20260918-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-ledger-resign-roots-device-20260918-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-minimal-fix-20260918-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-deploy-manifest-20260918-freeze-successor.json",
 )
 MANAGED_ASSERTION_PREPARER = "prepare_assertion_bundle.sh"
 TARGET_SCENARIO_MANIFEST = "codex_upgrade_scenarios_0_154_0.json"
