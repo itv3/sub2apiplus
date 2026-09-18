@@ -128,6 +128,8 @@ from typing import Any, Callable, Mapping
 # 2026-09-18（VC-5 最小闭集：Astra Lite 判定）：候选 relay 合成 /models 补 gpt-6-astra
 # 并使清单 authoritative、A03 Astra Lite 采集省略 effort/summary/text、fact map 重绑三份
 # 源码快照；同步补登记三次 0.151 台账重签的承接边。监督器与断言预处理器未变。
+# 2026-09-18（VC-5 最小闭集：VC-2 输入）：EP-019 画像补丁（wham_usage Luna Reserve 与 cookie
+# 槽位）与六条规则的 Astra Lite 精确断言；trace 画像冻结摘要同步。监督器与断言预处理器未变。
 DEFAULT_SUPERVISOR_DIGEST = (
     "852fde262087b666f46b06e4e4098a3992e6f203cc7c1a6e734204e31a1a14c9"
 )
@@ -225,6 +227,8 @@ MANAGED_RUNTIME_DOCUMENTS = (
     "egress/maintenance/upstream-codex-0154-vc5-ledger-resign-roots-device-20260918-freeze-successor.json",
     "egress/maintenance/upstream-codex-0154-vc5-minimal-fix-20260918-freeze-successor.json",
     "egress/maintenance/upstream-codex-0154-vc5-deploy-manifest-20260918-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-ep019-patch-assertions-20260918-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-deploy-manifest-2-20260918-freeze-successor.json",
 )
 MANAGED_ASSERTION_PREPARER = "prepare_assertion_bundle.sh"
 TARGET_SCENARIO_MANIFEST = "codex_upgrade_scenarios_0_154_0.json"
