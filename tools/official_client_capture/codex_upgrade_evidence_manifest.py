@@ -656,6 +656,18 @@ def verify_manifest_boundary(
             and current["metadata_sha256"] != expected["metadata_sha256"]
         )
     ):
+        if rehearsal:
+            # 隔离预演下把首个差异条目写到 stderr，便于区分 overlay 固有差异与真实漂移。
+            import sys
+
+            detail: dict[str, Any] = {"roots_equal": current["roots"] == expected["roots"], "expected_count": len(expected_entries), "current_count": len(current_entries)}
+            for index, (left, right) in enumerate(zip(expected_entries, current_entries)):
+                if left != right:
+                    detail["first_diff_index"] = index
+                    detail["expected"] = left
+                    detail["current"] = right
+                    break
+            sys.stderr.write("EvidenceManifest 隔离预演差异：" + json.dumps(detail, ensure_ascii=False, default=str) + "\n")
         raise EvidenceManifestError("EvidenceManifest 的不可变 stat 边界发生漂移。")
     return {
         "status": "passed",
