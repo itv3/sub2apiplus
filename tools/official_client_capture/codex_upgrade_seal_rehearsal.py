@@ -53,6 +53,9 @@ except ImportError:  # pragma: no cover - driver 模式直接以文件执行时�
 SCHEMA_VERSION = "codex-upgrade-candidate-seal-rehearsal/v1"
 DRIVER_SCHEMA_VERSION = "codex-upgrade-candidate-seal-rehearsal-driver/v1"
 RECEIPT_DIRECTORY = "control/seal-rehearsal"
+# namespace 内动作的预演上下文标记：codex_upgrade 的派发门禁只在数据根确为 OverlayFS
+# 隔离副本时接受它，代替 campaign-run 父监督器上下文（预演没有父 run，也不得 attach）。
+REHEARSAL_CONTEXT_ENV = "CODEX_UPGRADE_SEAL_REHEARSAL_ACTIVE"
 REVIEW_PLACEHOLDER = "@REVIEW_SHA256@"
 APPROVE_FLAG = "--approve-seal-sha256"
 DEFAULT_TTL_SECONDS = 24 * 60 * 60
@@ -339,6 +342,8 @@ def run_driver(arguments: Mapping[str, Any]) -> dict[str, Any]:
     status = "passed"
     environment = dict(os.environ)
     environment.update(dict(arguments.get("environment", {})))
+    environment[REHEARSAL_CONTEXT_ENV] = "1"
+    environment.pop(supervisor.CAMPAIGN_RUN_CONTEXT_ENV, None)
     for action in actions:
         command = list(action["command"])
         if action.get("approve"):

@@ -47498,7 +47498,7 @@ def _reject_unparented_formal_write(
 
     in_campaign_run = (
         os.environ.get(codex_upgrade_supervisor.CAMPAIGN_RUN_CONTEXT_ENV) == "1"
-    )
+    ) or _in_isolated_seal_rehearsal(arguments, command)
     # 0.154.0 起，普通 Formal plan 的创建和首批派发必须由 VC-0 原子收口
     # 工具在同一进程内完成。这里拦住操作员直接执行 CLI plan；原子收口通过
     # Python API 调用 create_campaign，不经过这个命令行边界。历史版本和
@@ -47578,6 +47578,56 @@ def _reject_unparented_formal_write(
         raise ConfigurationError(
             f"目标 {target_version} 的正式命令必须由 campaign-run 派发：{command}"
         )
+
+
+SEAL_REHEARSAL_CONTEXT_ENV = "CODEX_UPGRADE_SEAL_REHEARSAL_ACTIVE"
+SEAL_REHEARSAL_COMMANDS = frozenset({"capture-candidate", "compare", "accept"})
+
+
+def _mount_source_of(path: Path) -> tuple[str, str] | None:
+    """返回覆盖 ``path`` 的最长挂载点的 (fstype, mount_point)，读不到时为 None。"""
+
+    try:
+        rows = Path("/proc/self/mountinfo").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    resolved = str(path.resolve(strict=False))
+    best: tuple[str, str] | None = None
+    for row in rows:
+        left, _, right = row.partition(" - ")
+        fields = left.split()
+        if len(fields) < 5:
+            continue
+        mount_point = fields[4].replace("\\040", " ")
+        fstype = right.split()[0] if right.split() else ""
+        if resolved == mount_point or resolved.startswith(mount_point.rstrip("/") + "/"):
+            if best is None or len(mount_point) > len(best[1]):
+                best = (fstype, mount_point)
+    return best
+
+
+def _in_isolated_seal_rehearsal(arguments: argparse.Namespace, command: str) -> bool:
+    """rehearse-candidate-seal 的 namespace 内动作视同 campaign-run 派发。
+
+    2026-09-18：预演在私有 mount namespace 的 OverlayFS 副本上执行与正式批次同一份
+    动作，正式派发门禁却要求 campaign-run 父监督器上下文（预演没有父 run，也不得
+    attach）。只有同时满足以下条件才放行：预演标记为 1、命令属于零请求的 post-run
+    阶段项命令（seal／compare／accept；capture-candidate run 不在其中，seal 子动作由
+    调用方保证不带 run）、且 Campaign 目录所在挂载点确为 overlay。正式目录（ext4 等）
+    上带着该标记直接执行仍然失败关闭。
+    """
+
+    if os.environ.get(SEAL_REHEARSAL_CONTEXT_ENV) != "1":
+        return False
+    if command not in SEAL_REHEARSAL_COMMANDS:
+        return False
+    if command == "capture-candidate" and getattr(arguments, "capture_action", None) != "seal":
+        return False
+    campaign_dir = getattr(arguments, "campaign_dir", None)
+    if not isinstance(campaign_dir, Path):
+        return False
+    mount = _mount_source_of(campaign_dir)
+    return mount is not None and mount[0] == "overlay"
 
 
 def build_formal_campaign_run_manifest(

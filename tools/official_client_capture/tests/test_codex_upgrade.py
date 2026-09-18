@@ -659,6 +659,33 @@ class CodexUpgradeTest(unittest.TestCase):
                     official_only_reuse=True,
                 )
 
+    def test_isolated_seal_rehearsal_context_only_on_overlay_for_post_run_commands(self) -> None:
+        """预演标记只在 overlay 副本上、且只对零请求 post-run 命令等同 campaign-run 派发。"""
+
+        campaign_dir = Path("/data/evidence/campaigns/c1")
+        seal = argparse.Namespace(campaign_dir=campaign_dir, capture_action="seal")
+        run = argparse.Namespace(campaign_dir=campaign_dir, capture_action="run")
+        compare = argparse.Namespace(campaign_dir=campaign_dir)
+        with mock.patch.dict(os.environ, {codex_upgrade.SEAL_REHEARSAL_CONTEXT_ENV: "1"}):
+            with mock.patch.object(codex_upgrade, "_mount_source_of", return_value=("overlay", "/data")):
+                self.assertTrue(codex_upgrade._in_isolated_seal_rehearsal(seal, "capture-candidate"))
+                self.assertTrue(codex_upgrade._in_isolated_seal_rehearsal(compare, "compare"))
+                self.assertTrue(codex_upgrade._in_isolated_seal_rehearsal(compare, "accept"))
+                # live 采集与非 post-run 命令不放行
+                self.assertFalse(codex_upgrade._in_isolated_seal_rehearsal(run, "capture-candidate"))
+                self.assertFalse(codex_upgrade._in_isolated_seal_rehearsal(compare, "resume"))
+                self.assertFalse(codex_upgrade._in_isolated_seal_rehearsal(compare, "plan"))
+            # 正式目录（非 overlay）上带标记仍失败关闭
+            with mock.patch.object(codex_upgrade, "_mount_source_of", return_value=("ext4", "/")):
+                self.assertFalse(codex_upgrade._in_isolated_seal_rehearsal(seal, "capture-candidate"))
+            with mock.patch.object(codex_upgrade, "_mount_source_of", return_value=None):
+                self.assertFalse(codex_upgrade._in_isolated_seal_rehearsal(seal, "capture-candidate"))
+        # 无标记时一律不放行
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop(codex_upgrade.SEAL_REHEARSAL_CONTEXT_ENV, None)
+            with mock.patch.object(codex_upgrade, "_mount_source_of", return_value=("overlay", "/data")):
+                self.assertFalse(codex_upgrade._in_isolated_seal_rehearsal(seal, "capture-candidate"))
+
     def test_official_reuse_target_scenario_transition_follows_candidate_job_update(
         self,
     ) -> None:
