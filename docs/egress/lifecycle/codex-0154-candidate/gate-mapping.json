@@ -50,6 +50,6 @@
       "working_directory": "."
     }
   ],
-  "requirements_sha256": "fe11e21205e0285809773875a604a2462c230185931c63e1d13b9a65250ed68f",
+  "requirements_sha256": "5ffbedafdc9243ab18152a8804e727bb28b27be8f434e81548aeef822aa814cf",
   "schema_version": "codex-post-promotion-gate-mapping/v2"
 }
