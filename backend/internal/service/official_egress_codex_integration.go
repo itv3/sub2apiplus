@@ -562,6 +562,7 @@ func officialCodexConditionsFromHeaders(headers http.Header) map[string]bool {
 	conditions := map[string]bool{
 		officialCodexConditionCookie:             present("cookie"),
 		officialCodexConditionBetaFeatures:       present("x-codex-beta-features"),
+		officialCodexConditionLunaReserve:        present("x-openai-codex-luna-reserve"),
 		officialCodexConditionResponsesLite:      present(responsesLiteHeader),
 		officialCodexConditionTurnState:          present("x-codex-turn-state"),
 		officialCodexConditionResidency:          present("x-openai-internal-codex-residency"),

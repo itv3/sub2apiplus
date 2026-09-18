@@ -71,8 +71,12 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
 # 2026-09-17：A15 改由真实 codex exec 与 PTY TUI 的两条启动 models、同一 TUI
 # initialize 后插件身份请求及唯一 relay 上游原件证明，删除三条静态
 # surface_identity 事实；其余 31 条测试事实保持不变。
+# 2026-09-18：候选 Lite 判定修复——bundled 快照补 gpt-6-astra、legacy compact 首次出站保留
+# 入站模型、/wham/usage 声明 Luna Reserve 条件，改动 `official_egress_codex_0145_profile.go`、
+# `official_egress_codex_integration.go` 与 `openai_gateway_forward.go`；映射只重绑这三份
+# 源码快照，不改变候选测试、事实宇宙或断言规则。
 FROZEN_MAPPING_SHA256 = (
-    "4f0b8409145f69ef3cc0338df0f697e03bcd16fdb0de85f1feb50e20dfbfc41c"
+    "d4b7b4efef8cd740018ebfe22e93973ea7710ac5347cf7be388b37a1979ae0b0"
 )
 # 2026-08-11（R8）：与双轨 selector 修订后的冻结断言画像保持同一摘要，
 # 含 BODY-006/nonlite-* 两条补 method=POST 与 responses 路径约束的修订。

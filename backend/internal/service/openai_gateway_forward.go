@@ -470,12 +470,12 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 
 	isCompactRequest := compactPath
 	requestedModel := reqModel
+	// legacy /responses/compact 的首次出站保留入站模型：目标画像版本的官方 Codex 对当前
+	// 模型（含 Lite 轨 gpt-6-astra）直接发 compact，body.model 与 x-codex-routing-hint
+	// 同为入站模型。账号显式 compact_model_mapping 已由 resolveOpenAIForwardMappedModels
+	// 优先应用；全局 openai_compact_model 只用于上游明确报模型不可用之后的一次重试
+	// （prepareOpenAICompactFallbackRetry），不再在首次请求就无条件改写。
 	billingModel, upstreamModel := resolveOpenAIForwardMappedModels(account, requestedModel, isCompactRequest)
-	if isCompactRequest {
-		if compactModel := s.resolveOpenAICompactFallbackModel(account, requestedModel); compactModel != "" {
-			upstreamModel = compactModel
-		}
-	}
 	instructions := gjson.GetBytes(body, "instructions")
 	instructionsEmpty := !instructions.Exists() || instructions.Type != gjson.String || strings.TrimSpace(instructions.String()) == ""
 	if instructionsEmpty && account.UsesOpenAICodexProtocol() && !compatMessagesBridge && !nativeDeepSeekResponses && !isInboundOpenAIOfficialClient(c) {

@@ -790,10 +790,17 @@ func codexHeaderConditionEnabled(
 		return conditions.SubagentPresent
 	case profilecontract.ConditionTurnStatePresent:
 		return conditions.TurnStatePresent
+	case conditionLunaReservePresent:
+		return conditions.LunaReservePresent
 	default:
 		return false
 	}
 }
+
+// conditionLunaReservePresent 是目标画像新增的 Header 条件。生成器只从已入库的
+// 快照产出 profilecontract 常量；候选 Snapshot 入库并重跑 -enums 后，本常量应改为
+// 引用 profilecontract.ConditionLunaReservePresent。
+const conditionLunaReservePresent profilecontract.ConditionKind = "luna_reserve_present"
 
 func codexHeaderValue(
 	slot profilecontract.HeaderSlotProfile,
@@ -1247,7 +1254,8 @@ func codexBodyFieldConditionEnabled(
 		profilecontract.ConditionRuntimeMetrics,
 		profilecontract.ConditionSessionIdPresent,
 		profilecontract.ConditionSubagentPresent,
-		profilecontract.ConditionTurnStatePresent:
+		profilecontract.ConditionTurnStatePresent,
+		conditionLunaReservePresent:
 		return codexHeaderConditionEnabled(
 			condition, features, requestConditions, authentication,
 		), nil

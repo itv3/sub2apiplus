@@ -192,7 +192,7 @@ func (s *OpenAIQuotaService) queryUsage(
 	accountID int64,
 	includeResetCreditDetails bool,
 ) (*OpenAIQuotaUsage, error) {
-	accessToken, chatGPTAccountID, proxyURL, _, err := s.prepareUpstreamCall(ctx, accountID)
+	accessToken, chatGPTAccountID, proxyURL, fedRAMP, err := s.prepareUpstreamCall(ctx, accountID)
 	if err != nil {
 		return nil, err
 	}
@@ -250,7 +250,7 @@ func (s *OpenAIQuotaService) queryUsage(
 			accountID,
 			proxyURL,
 			officialCodexEndpointWhamUsage,
-			quotaHeaders,
+			codexQuotaUsageHeaders(quotaHeaders, fedRAMP),
 			nil,
 		)
 		if err != nil {
@@ -754,6 +754,21 @@ func (s *OpenAIQuotaService) isAgentIdentityAccount(ctx context.Context, account
 		}
 	}
 	return account.IsOpenAIAgentIdentity()
+}
+
+// codexQuotaUsageHeaders 只为 GET /wham/usage 声明 Luna Reserve 条件。官方 TUI 读取
+// 账号 rate-limit（周期刷新与手动刷新皆然）时在 ChatGPT 认证且非 FedRAMP 账号下
+// 追加 x-openai-codex-luna-reserve，settings/user、credit details 与 consume 不带。
+// 该头只作为画像条件事实：没有对应槽位的画像不会把它写入 wire。
+func codexQuotaUsageHeaders(headers http.Header, fedRAMP bool) http.Header {
+	usageHeaders := cloneHeader(headers)
+	if usageHeaders == nil {
+		usageHeaders = make(http.Header)
+	}
+	if !fedRAMP {
+		usageHeaders.Set("x-openai-codex-luna-reserve", "1")
+	}
+	return usageHeaders
 }
 
 func (s *OpenAIQuotaService) buildCodexQuotaHeaders(

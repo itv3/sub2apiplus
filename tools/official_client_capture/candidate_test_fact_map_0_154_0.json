@@ -16,7 +16,7 @@
       "source_files": [
         {
           "path": "backend/internal/service/official_egress_codex_0145_profile.go",
-          "sha256": "02ec8fcbb8a567b3c6adb0861bfe4bb7d1803362325d531b1e2b47f3430c8377"
+          "sha256": "5f14e7a4f4b27f9a5d40e68f4f777deb0e7d34e974093daa55a9a392678d34d7"
         },
         {
           "path": "backend/internal/service/official_egress_codex_engine.go",
@@ -24,7 +24,7 @@
         },
         {
           "path": "backend/internal/service/official_egress_codex_integration.go",
-          "sha256": "ddfcbad5951d1292388fc604a7bb3c8a66b410d3f80044d8d708d45a87a8f8a8"
+          "sha256": "6f91c4e9ff10d267e856a79ba42084aeda13c34752357f7306f767c96b486bb4"
         }
       ],
       "facts": [
@@ -291,7 +291,7 @@
       "source_files": [
         {
           "path": "backend/internal/service/openai_gateway_forward.go",
-          "sha256": "8baab9fe6785599eb3a89677bd8d401c2901566adf98fce5f99b994d909a515b"
+          "sha256": "8c684c60bc4c8240a610c9be283aaf737d67b40b4de16df864e81be953d12fb0"
         },
         {
           "path": "backend/internal/service/official_egress_integration.go",
@@ -323,7 +323,7 @@
       "source_files": [
         {
           "path": "backend/internal/service/official_egress_codex_0145_profile.go",
-          "sha256": "02ec8fcbb8a567b3c6adb0861bfe4bb7d1803362325d531b1e2b47f3430c8377"
+          "sha256": "5f14e7a4f4b27f9a5d40e68f4f777deb0e7d34e974093daa55a9a392678d34d7"
         },
         {
           "path": "backend/internal/service/official_egress_codex_engine.go",
@@ -384,7 +384,7 @@
         },
         {
           "path": "backend/internal/service/official_egress_codex_0145_profile.go",
-          "sha256": "02ec8fcbb8a567b3c6adb0861bfe4bb7d1803362325d531b1e2b47f3430c8377"
+          "sha256": "5f14e7a4f4b27f9a5d40e68f4f777deb0e7d34e974093daa55a9a392678d34d7"
         },
         {
           "path": "backend/internal/service/official_egress_codex_engine.go",
@@ -427,7 +427,7 @@
         },
         {
           "path": "backend/internal/service/official_egress_codex_0145_profile.go",
-          "sha256": "02ec8fcbb8a567b3c6adb0861bfe4bb7d1803362325d531b1e2b47f3430c8377"
+          "sha256": "5f14e7a4f4b27f9a5d40e68f4f777deb0e7d34e974093daa55a9a392678d34d7"
         }
       ],
       "facts": [

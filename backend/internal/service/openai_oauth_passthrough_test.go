@@ -1139,8 +1139,19 @@ func TestOpenAIGatewayService_Forward_MissingInstructionsUsesMappedModelTemplate
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Equal(t, "gpt-6-astra", gjson.GetBytes(upstream.lastBody, "model").String())
-	instructions := gjson.GetBytes(upstream.lastBody, "instructions").String()
-	require.True(t, strings.HasPrefix(strings.TrimSpace(instructions), "You are Codex, an agent based on GPT-6."))
+	// gpt-6-astra 是 Lite 模型：合成的 instructions 不再留在顶层，而是按 Lite 画像投影为
+	// input 前缀里的 developer 消息；模板内容仍必须按最终映射模型选取 GPT-6 版本。
+	require.False(t, gjson.GetBytes(upstream.lastBody, "instructions").Exists(),
+		"Lite 出站不得携带顶层 instructions")
+	require.Equal(t, "true", upstream.lastReq.Header.Get("x-openai-internal-codex-responses-lite"))
+	var instructions string
+	for _, item := range gjson.GetBytes(upstream.lastBody, "input").Array() {
+		if item.Get("type").String() == "message" && item.Get("role").String() == "developer" {
+			instructions = item.Get("content.0.text").String()
+			break
+		}
+	}
+	require.True(t, strings.HasPrefix(strings.TrimSpace(instructions), "You are Codex, an agent based on GPT-6."), instructions)
 	require.NotContains(t, instructions, "You are Codex, a coding agent based on GPT-5.")
 }
 

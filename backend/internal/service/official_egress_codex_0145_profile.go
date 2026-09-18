@@ -83,6 +83,7 @@ const (
 	officialCodexConditionCreditID           = "credit_id_present"
 	officialCodexConditionAttestation        = "attestation_present"
 	officialCodexConditionFedRAMP            = "fedramp_account"
+	officialCodexConditionLunaReserve        = "luna_reserve_present"
 
 	officialCodexSourceConstant       = "constant"
 	officialCodexSourceAuthentication = "authentication"

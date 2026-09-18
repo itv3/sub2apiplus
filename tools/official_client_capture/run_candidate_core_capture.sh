@@ -811,7 +811,7 @@ if subagent_header:
     payload["client_metadata"]["x-openai-subagent"] = subagent_header
 if parent_thread_id:
     payload["client_metadata"]["x-codex-parent-thread-id"] = parent_thread_id
-if mode == "lite":
+if mode in {"lite", "lite_manifest_default"}:
     # 目标 Codex 已根据模型 manifest 完成 Lite 定型后才进入严格入口：
     # 顶层 instructions/tools 不存在，开发者指令与工具目录分别成为 input
     # 前缀，且 Lite 固定关闭并行工具调用。严格入口只校验该形态，不代替
@@ -832,6 +832,13 @@ if mode == "lite":
     payload["input"] = [additional_tools, developer_message, *payload["input"]]
     payload["parallel_tool_calls"] = False
     payload["reasoning"]["context"] = "all_turns"
+    if mode == "lite_manifest_default":
+        # A03 的 Lite 请求必须与官方客户端处于同一实验条件：官方 0.154.0 对
+        # gpt-6-astra 不显式发送 effort／summary，由模型清单默认值定型为
+        # effort=medium、summary 缺席，text.verbosity=low 由 Lite 画像派生。
+        # 这里省略三者，交给清单与网关；显式 high／auto 会被网关按"显式优先"
+        # 保留，令候选出站与官方 conn005 在 reasoning 上永远不等价。
+        payload["reasoning"] = {"context": "all_turns"}
 elif mode == "non_lite":
     payload["reasoning"]["context"] = "all_turns"
 else:
@@ -1030,7 +1037,7 @@ run_response_ws_session() {
 # turn-state 闭环。
 start_capture A03
 trigger_root="$work_dir/scenarios/A03/trigger"
-write_request_body "$trigger_root/prime.json" "$lite_model" lite a03-cookie-prime
+write_request_body "$trigger_root/prime.json" "$lite_model" lite_manifest_default a03-cookie-prime
 compress_zstd "$trigger_root/prime.json" "$trigger_root/prime.zst"
 run_response_request A03 prime "$trigger_root/prime.zst" \
   "$exec_ua" codex_exec -H 'Content-Encoding: zstd'
@@ -1038,7 +1045,7 @@ write_request_body "$trigger_root/default.json" "$main_model" non_lite a03-defau
 compress_zstd "$trigger_root/default.json" "$trigger_root/default.zst"
 run_response_request A03 default "$trigger_root/default.zst" \
   "$exec_ua" codex_exec -H 'Content-Encoding: zstd'
-write_request_body "$trigger_root/lite.json" "$lite_model" lite a03-turn
+write_request_body "$trigger_root/lite.json" "$lite_model" lite_manifest_default a03-turn
 compress_zstd "$trigger_root/lite.json" "$trigger_root/lite.zst"
 for turn in 1 2; do
   run_response_request A03 "lite-turn-$turn" "$trigger_root/lite.zst" \

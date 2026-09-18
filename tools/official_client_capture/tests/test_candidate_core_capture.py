@@ -297,7 +297,7 @@ class CandidateCoreCaptureScriptTest(unittest.TestCase):
     def test_lite_fixture_is_already_shaped_like_codex_client(self) -> None:
         """严格入口前的 Lite 夹具必须是官方客户端形态，不能依赖网关迁移字段。"""
         lite_branch = self.source[
-            self.source.index('if mode == "lite":') :
+            self.source.index('if mode in {"lite", "lite_manifest_default"}:') :
             self.source.index('elif mode == "non_lite":')
         ]
         self.assertIn('payload.pop("instructions")', lite_branch)
@@ -307,6 +307,26 @@ class CandidateCoreCaptureScriptTest(unittest.TestCase):
         self.assertIn('"type": "input_text"', lite_branch)
         self.assertIn('payload["parallel_tool_calls"] = False', lite_branch)
         self.assertIn('payload["reasoning"]["context"] = "all_turns"', lite_branch)
+
+    def test_a03_lite_requests_leave_reasoning_defaults_to_manifest(self) -> None:
+        """A03 的 Lite 请求必须与官方客户端同条件：不显式发 effort／summary／text。
+
+        官方对 Lite 模型按清单默认定型（effort=medium、summary 缺席、text.verbosity=low
+        由 Lite 画像派生）；候选若写死 high／auto，网关按"显式优先"保留，出站永远与官方
+        不等价。该模式只用于 A03 的 Astra Lite 请求，其他场景保持原夹具。
+        """
+        lite_branch = self.source[
+            self.source.index('if mode in {"lite", "lite_manifest_default"}:') :
+            self.source.index('elif mode == "non_lite":')
+        ]
+        self.assertIn('if mode == "lite_manifest_default":', lite_branch)
+        self.assertIn('payload["reasoning"] = {"context": "all_turns"}', lite_branch)
+        a03 = self.source[self.source.index("start_capture A03") : self.source.index("start_capture A04")]
+        self.assertIn('"$lite_model" lite_manifest_default a03-cookie-prime', a03)
+        self.assertIn('"$lite_model" lite_manifest_default a03-turn', a03)
+        self.assertIn('"$main_model" non_lite a03-default', a03)
+        rest = self.source[self.source.index("start_capture A04") :]
+        self.assertNotIn("lite_manifest_default", rest, "专用模式不得扩散到 A03 之外")
 
     def test_api_key_is_not_exported_for_driver_or_secret_scan(self) -> None:
         self.assertIn("set +x", self.source)
