@@ -583,6 +583,39 @@ def validate_manifest_document(manifest: Mapping[str, Any]) -> dict[str, Any]:
     return dict(manifest)
 
 
+REHEARSAL_CONTEXT_ENV = "CODEX_UPGRADE_SEAL_REHEARSAL_ACTIVE"
+
+
+def _mount_fstype_of(path: Path) -> str | None:
+    """返回覆盖 ``path`` 的最长挂载点的文件系统类型；读不到 mountinfo 时为 None。"""
+
+    try:
+        rows = Path("/proc/self/mountinfo").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    resolved = str(Path(path).resolve(strict=False))
+    best: tuple[int, str] | None = None
+    for row in rows:
+        left, _, right = row.partition(" - ")
+        fields = left.split()
+        if len(fields) < 5 or not right:
+            continue
+        mount_point = fields[4].replace("\\040", " ")
+        if resolved == mount_point or resolved.startswith(mount_point.rstrip("/") + "/"):
+            if best is None or len(mount_point) > best[0]:
+                best = (len(mount_point), right.split()[0])
+    return None if best is None else best[1]
+
+
+def _isolated_rehearsal_context(roots: Iterable[Path]) -> bool:
+    """只有带预演标记且全部证据根都在 overlay 挂载点上才视为隔离预演。"""
+
+    if os.environ.get(REHEARSAL_CONTEXT_ENV) != "1":
+        return False
+    root_list = [Path(root) for root in roots]
+    return bool(root_list) and all(_mount_fstype_of(root) == "overlay" for root in root_list)
+
+
 def verify_manifest_boundary(
     manifest: Mapping[str, Any], roots: Iterable[Path]
 ) -> dict[str, Any]:
@@ -590,18 +623,27 @@ def verify_manifest_boundary(
 
     expected = validate_manifest_document(manifest)
     current = preflight_evidence_roots(roots)
+    # rehearse-candidate-seal 在 OverlayFS 副本上执行时，所有条目的 st_dev 必然与
+    # 正式目录不同；隔离预演只忽略 device 字段（及由其派生的 metadata_sha256），
+    # 目录项、大小、mtime、inode 等其余 stat 边界仍逐项比较。正式目录上判据不变。
+    rehearsal = _isolated_rehearsal_context(roots)
+    expected_drop = {"sha256"} | ({"device"} if rehearsal else set())
+    current_drop = {"absolute_path"} | ({"device"} if rehearsal else set())
     expected_entries = [
-        {key: value for key, value in item.items() if key != "sha256"}
+        {key: value for key, value in item.items() if key not in expected_drop}
         for item in expected["entries"]
     ]
     current_entries = [
-        {key: value for key, value in item.items() if key != "absolute_path"}
+        {key: value for key, value in item.items() if key not in current_drop}
         for item in current["entries"]
     ]
     if (
         current["roots"] != expected["roots"]
         or current_entries != expected_entries
-        or current["metadata_sha256"] != expected["metadata_sha256"]
+        or (
+            not rehearsal
+            and current["metadata_sha256"] != expected["metadata_sha256"]
+        )
     ):
         raise EvidenceManifestError("EvidenceManifest 的不可变 stat 边界发生漂移。")
     return {

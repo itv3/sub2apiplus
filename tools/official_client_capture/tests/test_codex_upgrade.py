@@ -19499,6 +19499,44 @@ class EvidenceManifestTest(unittest.TestCase):
             )
             self.assertEqual(merged["entry_count"], 2)
 
+    def test_evidence_manifest_boundary_ignores_device_only_in_isolated_rehearsal(self) -> None:
+        """隔离预演（overlay 副本）上 st_dev 必然不同：只在带标记且根在 overlay 上时忽略 device，其余 stat 仍逐项比较。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory).resolve()
+            base.chmod(0o700)
+            root = base / "evidence"
+            self._private_file(root / "a.json", b'{"a":true}\n')
+            manifest = codex_upgrade_evidence_manifest.build_evidence_manifest(
+                [root], checkpoint_path=base / "checkpoint.json"
+            )
+            drifted = json.loads(json.dumps(manifest))
+            for entry in drifted["entries"]:
+                entry["device"] = entry["device"] + 1
+            drifted["metadata_sha256"] = "e" * 64
+            drifted["manifest_digest"] = codex_upgrade_evidence_manifest.canonical_json_sha256(
+                {k: v for k, v in drifted.items() if k != "manifest_digest"}
+            )
+            with self.assertRaisesRegex(codex_upgrade_evidence_manifest.EvidenceManifestError, "stat 边界发生漂移"):
+                codex_upgrade_evidence_manifest.verify_manifest_boundary(drifted, [root])
+            env = {codex_upgrade_evidence_manifest.REHEARSAL_CONTEXT_ENV: "1"}
+            with mock.patch.dict(os.environ, env), mock.patch.object(
+                codex_upgrade_evidence_manifest, "_mount_fstype_of", return_value="ext4"
+            ):
+                with self.assertRaisesRegex(codex_upgrade_evidence_manifest.EvidenceManifestError, "stat 边界发生漂移"):
+                    codex_upgrade_evidence_manifest.verify_manifest_boundary(drifted, [root])
+            with mock.patch.dict(os.environ, env), mock.patch.object(
+                codex_upgrade_evidence_manifest, "_mount_fstype_of", return_value="overlay"
+            ):
+                self.assertEqual(
+                    codex_upgrade_evidence_manifest.verify_manifest_boundary(drifted, [root])["status"],
+                    "passed",
+                )
+                # 隔离预演下其它 stat 字段漂移仍失败关闭
+                (root / "a.json").write_bytes(b'{"a":true,"b":1}\n')
+                with self.assertRaisesRegex(codex_upgrade_evidence_manifest.EvidenceManifestError, "stat 边界发生漂移"):
+                    codex_upgrade_evidence_manifest.verify_manifest_boundary(drifted, [root])
+
     def test_metadata_only_deep_verify_reuses_existing_source_manifest(self) -> None:
         """已有来源 manifest 时，deep-verify 只核对边界，不重扫正文。"""
 
