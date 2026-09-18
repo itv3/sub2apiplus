@@ -111,8 +111,14 @@ FROZEN_MAPPING_SHA256 = (
 # 规则总数仍为 42。
 # 2026-09-17：A15 的 HDR-005 selector 按真实并发时序修正为启动 models suffix
 # 可选、TUI initialize 后插件请求必须有 suffix；其余规则与事实映射保持不变。
+# 2026-09-18：0.154.0 断言画像补 Astra Lite 精确判据——EP-019 的 WHAM GET 头断言按路径拆为
+# usage（携带 x-openai-codex-luna-reserve、cookie 可选）与 credits（不携带）；BODY-006 加 A03 Lite 的
+# body.model／reasoning 清单默认值／summary 省略／text.verbosity；H1-004 与 EP-014 加 Lite 头与
+# routing hint 值；EP-020 加 legacy compact body.model 保留入站模型。验收契约载荷已逐项审核：
+# dual_wire=25／candidate_profile=17、validation_modes、side_restricted_checks、side_coverage 均不变，
+# 仅 expected_check_ids 增加，契约摘要 7aa0c0fcb28c9f8a71e5c6fdc388aea523b4d3fcaafaa1cc129c3aaf26a077a1。
 FROZEN_PROFILE_SHA256 = (
-    "fe9461445c004f602a64abe8726cfcb1a9283fdcfcf535fd2d917b7f41ebd55e"
+    "d388cf11f0d6489d4d4961951d1d43e81bdbc2ddf7acd14d6ff7c4636f44c3b7"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")

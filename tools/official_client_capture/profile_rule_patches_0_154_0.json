@@ -1,7 +1,156 @@
 {
-  "schema_version": "codex-upgrade-profile-rule-patches/v1",
-  "baseline_version": "0.151.0",
-  "target_version": "0.154.0",
   "active_profile_sha256": "f99ffb49b17f34b4c017280acb60618f4f8b12564c6fde9a846b8a4d0156313d",
-  "rule_patches": []
+  "baseline_version": "0.151.0",
+  "rule_patches": [
+    {
+      "after": [
+        {
+          "AlternateGroup": "",
+          "Condition": "always",
+          "Name": "user-agent",
+          "Sequence": 0,
+          "Slot": 10,
+          "Source": "process",
+          "Value": "",
+          "WireName": "user-agent"
+        },
+        {
+          "AlternateGroup": "",
+          "Condition": "always",
+          "Name": "authorization",
+          "Sequence": 0,
+          "Slot": 20,
+          "Source": "authentication",
+          "Value": "",
+          "WireName": "authorization"
+        },
+        {
+          "AlternateGroup": "",
+          "Condition": "always",
+          "Name": "chatgpt-account-id",
+          "Sequence": 0,
+          "Slot": 30,
+          "Source": "account",
+          "Value": "",
+          "WireName": "chatgpt-account-id"
+        },
+        {
+          "AlternateGroup": "",
+          "Condition": "fedramp_account",
+          "Name": "x-openai-fedramp",
+          "Sequence": 0,
+          "Slot": 32,
+          "Source": "account",
+          "Value": "true",
+          "WireName": "x-openai-fedramp"
+        },
+        {
+          "AlternateGroup": "",
+          "Condition": "luna_reserve_present",
+          "Name": "x-openai-codex-luna-reserve",
+          "Sequence": 0,
+          "Slot": 34,
+          "Source": "constant",
+          "Value": "1",
+          "WireName": "x-openai-codex-luna-reserve"
+        },
+        {
+          "AlternateGroup": "",
+          "Condition": "always",
+          "Name": "accept",
+          "Sequence": 0,
+          "Slot": 40,
+          "Source": "constant",
+          "Value": "*/*",
+          "WireName": "accept"
+        },
+        {
+          "AlternateGroup": "",
+          "Condition": "cookie_present",
+          "Name": "cookie",
+          "Sequence": 0,
+          "Slot": 45,
+          "Source": "session",
+          "Value": "",
+          "WireName": "cookie"
+        },
+        {
+          "AlternateGroup": "",
+          "Condition": "auto",
+          "Name": "host",
+          "Sequence": 0,
+          "Slot": 50,
+          "Source": "generated",
+          "Value": "",
+          "WireName": "host"
+        }
+      ],
+      "before": [
+        {
+          "AlternateGroup": "",
+          "Condition": "always",
+          "Name": "user-agent",
+          "Sequence": 0,
+          "Slot": 10,
+          "Source": "process",
+          "Value": "",
+          "WireName": "user-agent"
+        },
+        {
+          "AlternateGroup": "",
+          "Condition": "always",
+          "Name": "authorization",
+          "Sequence": 0,
+          "Slot": 20,
+          "Source": "authentication",
+          "Value": "",
+          "WireName": "authorization"
+        },
+        {
+          "AlternateGroup": "",
+          "Condition": "always",
+          "Name": "chatgpt-account-id",
+          "Sequence": 0,
+          "Slot": 30,
+          "Source": "account",
+          "Value": "",
+          "WireName": "chatgpt-account-id"
+        },
+        {
+          "AlternateGroup": "",
+          "Condition": "fedramp_account",
+          "Name": "x-openai-fedramp",
+          "Sequence": 0,
+          "Slot": 32,
+          "Source": "account",
+          "Value": "true",
+          "WireName": "x-openai-fedramp"
+        },
+        {
+          "AlternateGroup": "",
+          "Condition": "always",
+          "Name": "accept",
+          "Sequence": 0,
+          "Slot": 40,
+          "Source": "constant",
+          "Value": "*/*",
+          "WireName": "accept"
+        },
+        {
+          "AlternateGroup": "",
+          "Condition": "auto",
+          "Name": "host",
+          "Sequence": 0,
+          "Slot": 50,
+          "Source": "generated",
+          "Value": "",
+          "WireName": "host"
+        }
+      ],
+      "path": "/Endpoints/16/Headers",
+      "rule_id": "SPEC-EP-019"
+    }
+  ],
+  "schema_version": "codex-upgrade-profile-rule-patches/v1",
+  "target_version": "0.154.0"
 }

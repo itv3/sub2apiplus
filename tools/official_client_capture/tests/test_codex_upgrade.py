@@ -16127,6 +16127,17 @@ class CodexUpgradeTest(unittest.TestCase):
             )
 
             rules = tuple(predecessor_manifest["required_rules"])
+            patch_manifest_path = (
+                Path(__file__).resolve().parents[1]
+                / "profile_rule_patches_0_154_0.json"
+            )
+            patch_manifest = json.loads(
+                patch_manifest_path.read_text(encoding="utf-8")
+            )
+            patched_rules = []
+            for patch in patch_manifest["rule_patches"]:
+                if patch["rule_id"] not in patched_rules:
+                    patched_rules.append(patch["rule_id"])
             migration_path = root / "rule-migration-0154.json"
             self._write_json(
                 migration_path,
@@ -16139,7 +16150,9 @@ class CodexUpgradeTest(unittest.TestCase):
                         {
                             "baseline_rule": rule,
                             "target_rule": rule,
-                            "classification": "inherit",
+                            "classification": (
+                                "change" if rule in patched_rules else "inherit"
+                            ),
                             "rationale": "测试分类事实纠正后继",
                             "evidence_refs": ["official-diff.json"],
                         }
@@ -16157,11 +16170,19 @@ class CodexUpgradeTest(unittest.TestCase):
                 catalog_root
                 / "0.151.0/dbc65378c80a2ad843ce1ba6253a2e47f0dd5d8bc812bb536a2d24ddb7a59e39.json"
             )
-            target_profile_payload = json.loads(
-                (
-                    catalog_root
-                    / "0.154.0/33a537a32e6f059bb178b7af581de5c161a3091ed972b4a8aec215cbf977b563.json"
-                ).read_text(encoding="utf-8")
+            # 目标画像必须是 active 副本加受管补丁清单：与仓库补丁内容解耦，补丁变化时测试
+            # 仍按同一派生规则成立。
+            target_profile_payload, _ = codex_upgrade._replace_json_string_literal(
+                json.loads(active_profile.read_text(encoding="utf-8")),
+                "0.151.0",
+                "0.154.0",
+            )
+            for patch in patch_manifest["rule_patches"]:
+                codex_upgrade._profile_pointer_replace(
+                    target_profile_payload, patch["path"], patch["after"]
+                )
+            target_profile_payload["Digest"] = codex_upgrade._fingerprint(
+                {"test": "classification-successor", "payload": target_profile_payload}
             )
             profile_path = root / "profile-0154.json"
             self._write_json(

@@ -412,6 +412,19 @@ class CanonicalImportTests(unittest.TestCase):
                 "0.151.0",
                 "0.154.0",
             )
+            # 目标画像 = active 副本 + 受管补丁清单的全部规则补丁；补丁涉及的规则即 affected。
+            patched_rules: list[str] = []
+            for patch in patch_payload["rule_patches"]:
+                self.assertEqual(
+                    codex_upgrade._profile_pointer_value(target_payload, patch["path"]),
+                    patch["before"],
+                    patch["path"],
+                )
+                codex_upgrade._profile_pointer_replace(
+                    target_payload, patch["path"], patch["after"]
+                )
+                if patch["rule_id"] not in patched_rules:
+                    patched_rules.append(patch["rule_id"])
             target_payload["Digest"] = "e" * 64
             target_profile = fixture_root / "target-profile.json"
             migration = fixture_root / "rule-migration.json"
@@ -431,7 +444,15 @@ class CanonicalImportTests(unittest.TestCase):
                             "classification": "inherit",
                             "baseline_rule": "SPEC-CODEX-IDENTITY",
                             "target_rule": "SPEC-CODEX-IDENTITY",
-                        }
+                        },
+                        *(
+                            {
+                                "classification": "change",
+                                "baseline_rule": rule_id,
+                                "target_rule": rule_id,
+                            }
+                            for rule_id in patched_rules
+                        ),
                     ],
                 },
             )
@@ -443,7 +464,12 @@ class CanonicalImportTests(unittest.TestCase):
                 patch_manifest_path=patch_manifest,
             )
             self.assertEqual(result["status"], "complete")
-            self.assertEqual(result["affected_rule_ids"], [])
+            self.assertEqual(result["affected_rule_ids"], sorted(patched_rules))
+            self.assertEqual(
+                set(result["rule_field_paths"]),
+                set(patched_rules),
+                "每条补丁规则都必须绑定画像路径",
+            )
             self.assertEqual(result["live_request_count"], 0)
 
     def test_advance_seals_compares_and_accepts_only_affected_rules(self) -> None:
