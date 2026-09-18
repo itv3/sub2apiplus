@@ -659,6 +659,38 @@ class CodexUpgradeTest(unittest.TestCase):
                     official_only_reuse=True,
                 )
 
+    def test_evaluation_epoch_command_targets_candidate_attempt_when_candidate_id_given(self) -> None:
+        """--candidate-id 让 evaluation-epoch 定位 Candidate attempt；缺省仍是 official attempt。"""
+
+        calls: list[tuple[str, str | None, str]] = []
+
+        def fake_load(campaign_dir, phase, candidate_id, attempt_id, **_kwargs):
+            calls.append((phase, candidate_id, attempt_id))
+            return Path("/attempt-root"), {"status": "awaiting_receipts"}
+
+        with mock.patch.object(codex_upgrade, "_require_formal_campaign", return_value={"campaign_id": "c1"}), mock.patch.object(
+            codex_upgrade, "_load_capture_attempt", side_effect=fake_load
+        ), mock.patch.object(codex_upgrade, "_tool_identity", return_value={"evidence_semantics_sha256": "e" * 64}), mock.patch.object(
+            codex_upgrade.codex_upgrade_wire_transition, "append_epoch", return_value=Path("/attempt-root/evaluation-epoch-01.json")
+        ), mock.patch.object(
+            codex_upgrade.codex_upgrade_wire_transition, "load_epochs", return_value=[{"index": 1, "to_evidence_semantics_sha256": "e" * 64}]
+        ):
+            result = codex_upgrade._evaluation_epoch_command(
+                argparse.Namespace(campaign_dir=Path("/c1"), attempt_id="att-1", reason="r", candidate_id="cand-1")
+            )
+            self.assertEqual(result["status"], "epoch_appended")
+            codex_upgrade._evaluation_epoch_command(
+                argparse.Namespace(campaign_dir=Path("/c1"), attempt_id="att-2", reason="r", candidate_id=None)
+            )
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "candidate-id 格式非法"):
+                codex_upgrade._evaluation_epoch_command(
+                    argparse.Namespace(campaign_dir=Path("/c1"), attempt_id="att-3", reason="r", candidate_id="bad/id")
+                )
+        self.assertEqual(calls, [("candidate", "cand-1", "att-1"), ("official", None, "att-2")])
+        parser = codex_upgrade._build_parser()
+        parsed = parser.parse_args(["evaluation-epoch", "--campaign-dir", "/c1", "--attempt-id", "a", "--reason", "r", "--candidate-id", "cand-1"])
+        self.assertEqual(parsed.candidate_id, "cand-1")
+
     def test_isolated_seal_rehearsal_context_only_on_overlay_for_post_run_commands(self) -> None:
         """预演标记只在 overlay 副本上、且只对零请求 post-run 命令等同 campaign-run 派发。"""
 

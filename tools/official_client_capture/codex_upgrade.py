@@ -9690,6 +9690,10 @@ def _build_parser() -> argparse.ArgumentParser:
     add_campaign_reference(epoch)
     epoch.add_argument("--attempt-id", required=True)
     epoch.add_argument("--reason", required=True)
+    epoch.add_argument(
+        "--candidate-id",
+        help="为 Candidate attempt 追加 epoch（seal／compare／accept 前的 evidence semantics 变化）；缺省为 official attempt。",
+    )
     verdict = subparsers.add_parser(
         "verdict-official-attempt-identity", help="裁定 attempt 执行时的 wire 身份是否等于当前"
     )
@@ -47824,7 +47828,18 @@ def _wire_transition_final_command(arguments: argparse.Namespace) -> dict[str, A
 def _evaluation_epoch_command(arguments: argparse.Namespace) -> dict[str, Any]:
     campaign_dir = arguments.campaign_dir
     manifest = _require_formal_campaign(campaign_dir)
-    attempt_root, _attempt = _load_capture_attempt(campaign_dir, "official", None, arguments.attempt_id)
+    candidate_id = getattr(arguments, "candidate_id", None)
+    # 2026-09-18：seal／compare／accept 对 Candidate attempt 同样要求 evidence semantics
+    # 变化后先追加 evaluation epoch（同一 current_evidence_semantics 判据），此前该命令
+    # 只能定位 official attempt，候选侧无路可走。
+    if candidate_id is not None:
+        if not SAFE_ID_RE.fullmatch(str(candidate_id)):
+            raise ConfigurationError("--candidate-id 格式非法。")
+        attempt_root, _attempt = _load_capture_attempt(
+            campaign_dir, "candidate", str(candidate_id), arguments.attempt_id
+        )
+    else:
+        attempt_root, _attempt = _load_capture_attempt(campaign_dir, "official", None, arguments.attempt_id)
     try:
         path = codex_upgrade_wire_transition.append_epoch(
             attempt_root,
