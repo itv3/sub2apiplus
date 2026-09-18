@@ -613,7 +613,17 @@ def _isolated_rehearsal_context(roots: Iterable[Path]) -> bool:
     if os.environ.get(REHEARSAL_CONTEXT_ENV) != "1":
         return False
     root_list = [Path(root) for root in roots]
-    return bool(root_list) and all(_mount_fstype_of(root) == "overlay" for root in root_list)
+    verdicts = [(str(root), _mount_fstype_of(root)) for root in root_list]
+    isolated = bool(verdicts) and all(fstype == "overlay" for _root, fstype in verdicts)
+    if not isolated:
+        # 带预演标记却不在 overlay 上：把逐根判定写到 stderr，便于定位是哪一个证据根
+        # 没有被 namespace 覆盖（正式目录上执行时也据此失败关闭）。
+        import sys
+
+        sys.stderr.write(
+            "EvidenceManifest 隔离预演判定未成立：" + json.dumps(verdicts, ensure_ascii=False) + "\n"
+        )
+    return isolated
 
 
 def verify_manifest_boundary(
