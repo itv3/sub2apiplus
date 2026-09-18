@@ -1,7 +1,7 @@
 {
   "_source": "Codex CLI 0.154.0 官方源码内置模型目录 codex-rs/models-manager/models.json（rust-v0.154.0，sha256 f3b8104396daf6381bed9d7c4b154a8664f9b5089b44b01a9d54f421566ec9a7）相对 0.151.0 新增的条目；同名模型在 2026-09-15 官方采集 c0154-formal-vc1-recapture-20260915t230327z-lite-http-response 的真实 /backend-api/codex/models 响应中同为 use_responses_lite=true、visibility=list。",
-  "_purpose": "bundledOpenAIModelCapabilities 相对 codex_models_capabilities_0145.json 的增量权威来源：0.154.0 画像升级只新增 gpt-6-astra，其余历史模型的对齐不在本轮范围。default_reasoning_level 取内置目录值（low），与 bundled「随官方客户端画像发布的冷启动快照」语义一致；远端清单接管后以远端值（medium）为准。",
+  "_purpose": "bundledOpenAIModelCapabilities 相对 codex_models_capabilities_0145.json 的增量权威来源：0.154.0 画像升级只新增 gpt-6-astra，其余历史模型的对齐不在本轮范围。default_reasoning_level 取远端真实响应值（medium）：内置目录的离线兜底值为 low，但官方客户端在线时总以远端清单定型，且远端清单接管后同为 medium；bundled 作为冷启动快照必须与官方实际发出的 wire 一致（候选验收曾因首条 Lite 请求 effort=low 在 A03 失败）。",
   "models": [
-    {"slug": "gpt-6-astra", "visibility": "list", "use_responses_lite": true, "supports_parallel_tool_calls": true, "default_reasoning_level": "low", "default_reasoning_summary": "none", "supports_reasoning_summary_parameter": true}
+    {"slug": "gpt-6-astra", "visibility": "list", "use_responses_lite": true, "supports_parallel_tool_calls": true, "default_reasoning_level": "medium", "default_reasoning_summary": "none", "supports_reasoning_summary_parameter": true}
   ]
 }

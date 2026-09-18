@@ -102,11 +102,12 @@ func TestOpenAIResponsesLiteCapabilityResolvesFromBundledWithoutManifest(t *test
 		"别名 gpt-5.6 必须解析到 gpt-5.6-sol 并判为 Lite")
 
 	// 目标版本默认 Lite 模型：无账号 manifest（冷启动或 /models 退避期）时也必须
-	// 判为 Lite，且 reasoning 默认能力位随内置目录给出；公开别名 gpt-6 同样解析到它。
+	// 判为 Lite，且 reasoning 默认能力位与远端真实清单一致（effort=medium，而非内置目录
+	// 的离线兜底值 low），首条请求才不会与官方 wire 分裂；公开别名 gpt-6 同样解析到它。
 	astra := service.resolveOpenAIModelCapabilities(account, []byte(`{"model":"gpt-6-astra"}`))
 	require.True(t, astra.UseResponsesLite, "gpt-6-astra 在无账号 manifest 时必须判为 Lite")
 	require.True(t, astra.ReasoningDefaultsKnown)
-	require.Equal(t, "low", astra.DefaultReasoningLevel)
+	require.Equal(t, "medium", astra.DefaultReasoningLevel)
 	require.Equal(t, "none", astra.DefaultReasoningSummary)
 	require.True(t, astra.SupportsReasoningSummaryParameter)
 	require.True(t,

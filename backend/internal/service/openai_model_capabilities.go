@@ -29,11 +29,14 @@ const (
 // 本次画像升级只新增 gpt-6-astra（官方内置 models-manager 目录相对上一基线的唯一新增
 // slug）；它是目标版本 Codex 的默认 Lite 模型，缺失时 `/models` 拉取失败退避期或冷启动
 // 加载失败会把它当未知模型判成非 Lite，出站丢失 Lite 头与 reasoning.context。
+// reasoning 默认值取远端 `/backend-api/codex/models` 真实响应（effort=medium）而非内置
+// 目录的离线兜底值（low）：官方客户端在线时总以远端清单定型，网关首个请求若在账号
+// manifest 拉取前发出，仍必须与官方 wire 一致，候选验收曾因此在 A03 首条 Lite 请求上失败。
 // 权威来源：testdata/official_egress/codex_models_capabilities_0145.json 与
 // codex_models_capabilities_0154_additions.json，由 fixture 测试逐项对账。
 var bundledOpenAIModelCapabilities = map[string]openAIModelCapabilities{
 	"gpt-6-astra": {
-		UseResponsesLite: true, SupportsParallelToolCalls: true, DefaultReasoningLevel: "low",
+		UseResponsesLite: true, SupportsParallelToolCalls: true, DefaultReasoningLevel: "medium",
 		DefaultReasoningSummary: "none", SupportsReasoningSummaryParameter: true, ReasoningDefaultsKnown: true,
 	},
 	"codex-auto-review": {
