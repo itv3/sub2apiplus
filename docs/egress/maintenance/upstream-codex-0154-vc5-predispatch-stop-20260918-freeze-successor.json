@@ -1,0 +1,45 @@
+{
+  "base_commit": "0d8b1437b4c2f87ed7d38259e350a6794026672e",
+  "changed_path_count": 1,
+  "current_commit": "9d2852d4bc7cb5299147c9c533c6e351485561ef",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 3781,
+  "frozen_path_count": 1399,
+  "identity_sha256": "85c1fcd1a8be81b9c12eb545b9fb9d017c3d69334bb9183c3ac4a5aa4a71bc1a",
+  "issued_at_utc": "2026-09-18T15:57:00Z",
+  "mode": "commit",
+  "required_manual_actions": [
+    {
+      "action_kind": "script_constant",
+      "file": "tools/arm64_supervised_deploy.py",
+      "instruction": "用 tools/arm64_supervised_deploy.py 的 tool_digest() 与 file_sha256() 重算 DEFAULT_TOOL_DIGEST、DEFAULT_SUPERVISOR_DIGEST、DEFAULT_ASSERTION_PREPARER_DIGEST 并更新常量；脚本自身随之变化，须在同一收据或后续收据中登记其后继摘要。",
+      "path": "tools/official_client_capture/codex_upgrade_predispatch_stop.py",
+      "rule_id": "arm64-managed-tool-digests",
+      "verification": [
+        "python3 -m unittest tools.official_client_capture.tests.test_arm64_supervised_deploy"
+      ]
+    }
+  ],
+  "result": "manual_actions_required",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-0154-vc5-predispatch-stop-20260918-freeze-successor",
+  "transitions": [],
+  "unregistered_path_count": 1,
+  "unregistered_paths": [
+    "tools/official_client_capture/codex_upgrade_predispatch_stop.py"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci",
+    "python3 -m unittest tools.official_client_capture.tests.test_arm64_supervised_deploy"
+  ]
+}
