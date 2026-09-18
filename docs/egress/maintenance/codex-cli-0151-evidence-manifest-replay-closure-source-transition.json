@@ -6,7 +6,7 @@
   "predecessor": {
     "kind": "codex_cli_0151_evidence_manifest_order_recovery",
     "path": "docs/egress/maintenance/codex-cli-0151-evidence-manifest-order-recovery-source-transition.json",
-    "sha256": "aec3a6785432b815cb9c1303ef6c7028f2452660c315232f2059215cb2fff705"
+    "sha256": "b367ad8288b5957a22f22db5085adfb5a91c99f50e3070aebc72cf8a2d2603a7"
   },
   "transitions": [
     {
@@ -71,5 +71,5 @@
     "official_egress_profile_changed": false
   },
   "result": "passed_codex_cli_0151_evidence_manifest_replay_closure",
-  "identity_sha256": "e0f24b9100f35ee4108d5754bd41c3959b34054cd981c03990db2b068c99c6b4"
+  "identity_sha256": "a5323d856f59dcfc8e83d551400c7cf780e01effddeb6fe0c1774a626a40e82d"
 }

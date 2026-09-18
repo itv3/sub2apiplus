@@ -6,7 +6,7 @@
   "predecessor": {
     "kind": "codex_cli_0151_framework_clarification",
     "path": "docs/egress/maintenance/codex-cli-0151-framework-clarification-source-transition.json",
-    "sha256": "24c883b4744c8f010fc6db5edface6bcb1f8897fc4c0dcffb54746fe5c726eb3"
+    "sha256": "c8b085edc940d43f3caac9d1cca99bb8ae35aa465da6e189e9db9c12b34e9f73"
   },
   "transitions": [
     {
@@ -46,5 +46,5 @@
     "official_egress_profile_changed": false
   },
   "result": "passed_codex_cli_0151_managed_scenario_recovery",
-  "identity_sha256": "8c613089b516a4c94ca007a43b807399611fe1d90c3ae9fa796d52a1008337da"
+  "identity_sha256": "5e903d89bc7aa639979c9acfa971318fca5e98f145faf4db7e56f67916ab9000"
 }
