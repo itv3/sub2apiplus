@@ -1,0 +1,107 @@
+{
+  "base_commit": "ae66a267616486a73f74f86ea2e195212082840c",
+  "changed_path_count": 5,
+  "current_commit": "c56e5711f23ddd5bc4b3f4390966515753153b41",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 3729,
+  "frozen_path_count": 1399,
+  "identity_sha256": "2916426a65c80cc33bee775696efa503a9a3405d71f4e5ece76cea1b9379ff7e",
+  "issued_at_utc": "2026-09-18T10:14:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-0154-vc5-ledger-resign-mount-type-20260918-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "docs/egress/maintenance/codex-cli-0151-evaluation-recovery-source-transition.json",
+      "predecessor_sha256s": [
+        "62cbbe9e7044d979b97d06a1d29d1a7b60b1dfaaa08b1364c3302c8b8cd6783e"
+      ],
+      "reason": "补登记 2026-09-18 对五份 0.151 评估恢复台账前序链重签（提交 c56e5711f）的冻结承接边；原轮次的 freeze successor 只覆盖了同轮工具修复提交，台账重签提交未承接，致 worktree successor 门禁在该路径链断裂。只登记摘要边，不改变任何画像、Persona、wire 或生产代码 path=docs/egress/maintenance/codex-cli-0151-evaluation-recovery-source-transition.json",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-rehearsal-manifest-device-ledger-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-rehearsal-manifest-diagnostic-20260918-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "a09f321cdaba3ea112d706da437dbb45ced5c4e57e3268e78b102f03eb1f6673"
+    },
+    {
+      "old_path": "",
+      "path": "docs/egress/maintenance/codex-cli-0151-evidence-manifest-order-recovery-source-transition.json",
+      "predecessor_sha256s": [
+        "94efbd5d0a8036f718a993a2e407ac2b074be3acb71112772eeb039a9c212053"
+      ],
+      "reason": "补登记 2026-09-18 对五份 0.151 评估恢复台账前序链重签（提交 c56e5711f）的冻结承接边；原轮次的 freeze successor 只覆盖了同轮工具修复提交，台账重签提交未承接，致 worktree successor 门禁在该路径链断裂。只登记摘要边，不改变任何画像、Persona、wire 或生产代码 path=docs/egress/maintenance/codex-cli-0151-evidence-manifest-order-recovery-source-transition.json",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-rehearsal-manifest-device-ledger-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-rehearsal-manifest-diagnostic-20260918-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "b0910e34df08401391f322cac3fe088d7f4c7cb50a05b3f03cd32a17edb35948"
+    },
+    {
+      "old_path": "",
+      "path": "docs/egress/maintenance/codex-cli-0151-evidence-manifest-replay-closure-source-transition.json",
+      "predecessor_sha256s": [
+        "14be7665cfefc5cbaa27f7b83cfccc512d66a52bdaea1981850e5fb17f7a56b2"
+      ],
+      "reason": "补登记 2026-09-18 对五份 0.151 评估恢复台账前序链重签（提交 c56e5711f）的冻结承接边；原轮次的 freeze successor 只覆盖了同轮工具修复提交，台账重签提交未承接，致 worktree successor 门禁在该路径链断裂。只登记摘要边，不改变任何画像、Persona、wire 或生产代码 path=docs/egress/maintenance/codex-cli-0151-evidence-manifest-replay-closure-source-transition.json",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-rehearsal-manifest-device-ledger-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-rehearsal-manifest-diagnostic-20260918-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "7943b4e4e3e3401f5de9568b1eab86648726fad9ea212ff9569c258b61d8d175"
+    },
+    {
+      "old_path": "",
+      "path": "docs/egress/maintenance/codex-cli-0151-framework-clarification-source-transition.json",
+      "predecessor_sha256s": [
+        "dc667fcf9410e577a57f55955570f173a5bf302429070e0ca29a0ef175d817a6"
+      ],
+      "reason": "补登记 2026-09-18 对五份 0.151 评估恢复台账前序链重签（提交 c56e5711f）的冻结承接边；原轮次的 freeze successor 只覆盖了同轮工具修复提交，台账重签提交未承接，致 worktree successor 门禁在该路径链断裂。只登记摘要边，不改变任何画像、Persona、wire 或生产代码 path=docs/egress/maintenance/codex-cli-0151-framework-clarification-source-transition.json",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-rehearsal-manifest-device-ledger-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-rehearsal-manifest-diagnostic-20260918-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "d6c5472957e923ff1163a870380507d30a66e822deb741577ba3ab384205e4ab"
+    },
+    {
+      "old_path": "",
+      "path": "docs/egress/maintenance/codex-cli-0151-managed-scenario-recovery-source-transition.json",
+      "predecessor_sha256s": [
+        "cc66550d31e4294bf5a6609a8a680c3694e3c720a939f50a2b8f74a109534b9d"
+      ],
+      "reason": "补登记 2026-09-18 对五份 0.151 评估恢复台账前序链重签（提交 c56e5711f）的冻结承接边；原轮次的 freeze successor 只覆盖了同轮工具修复提交，台账重签提交未承接，致 worktree successor 门禁在该路径链断裂。只登记摘要边，不改变任何画像、Persona、wire 或生产代码 path=docs/egress/maintenance/codex-cli-0151-managed-scenario-recovery-source-transition.json",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-rehearsal-manifest-device-ledger-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-rehearsal-manifest-diagnostic-20260918-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "77cf44f931dc5235cee7a0c97aee5e552400fc61b7577625eee6ae58394900a9"
+    }
+  ],
+  "unregistered_path_count": 0,
+  "unregistered_paths": [],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
