@@ -1,8 +1,24 @@
 {
-  "affected_rule_ids": [],
-  "campaign_id": "c0154-formal-vc5-v8-20260918t033142z",
-  "gate_count": 4,
+  "affected_rule_ids": [
+    "SPEC-EP-019"
+  ],
+  "campaign_id": "c0154-formal-vc5-v9-20260918t110644z",
+  "gate_count": 5,
   "gates": [
+    {
+      "command": [
+        "go",
+        "test",
+        "./internal/service",
+        "-run",
+        "^TestCodexWhamUsageLunaReserveReplaysApprovedSemanticsOnTargetRelease$",
+        "-count=1"
+      ],
+      "gate_id": "affected-spec-ep-019",
+      "requirement_sha256": "1f68e3438cca5601bdf9cf736b80ea0246c094ec41c959db4dc9ffcbf21b4045",
+      "test_id": "TestCodexWhamUsageLunaReserveReplaysApprovedSemanticsOnTargetRelease",
+      "working_directory": "backend"
+    },
     {
       "command": [
         "go",
@@ -72,7 +88,6 @@
     "SPEC-EP-013",
     "SPEC-EP-014",
     "SPEC-EP-015",
-    "SPEC-EP-019",
     "SPEC-EP-020",
     "SPEC-EP-021",
     "SPEC-EP-022",
@@ -97,10 +112,10 @@
     "SPEC-WS-004",
     "SPEC-WS-005"
   ],
-  "joint_manifest_sha256": "a9a33a2fe9864966b38ce0c859668590c9ab9fc52ff1b2b433b0698db9a2d57c",
-  "mapping_sha256": "646c3dda5278bedc0cc1f1c477b3093c690adcbedee4ac0736bd80a0eedfc813",
-  "plan_sha256": "6be92c147cbd4f67965ba4745fbee8cd053616d6d258e747d2a1a3d16daf68f2",
-  "requirements_sha256": "4b78d2dfd51064000c9344d30aa2f0d277e02db4655ae005ad72e3a3a3a854c2",
+  "joint_manifest_sha256": "491c6d14fb6ba8311ccd017de54bb3630cf1b97754c60ca188b235445890b00d",
+  "mapping_sha256": "f2b9c7531e913b4011df83b91d43842dc81421a69182c19062c0c44eebff6fcf",
+  "plan_sha256": "492d696948aa407a15a57a90f9da578a60239045851ac84424294fc6ac399f02",
+  "requirements_sha256": "f49d5fc91dc01a4c3a9d2abae4a6f5dbd34402b74ffa67175c046fa01837da88",
   "schema_version": "codex-post-promotion-gate-plan/v1",
   "target_version": "0.154.0"
 }

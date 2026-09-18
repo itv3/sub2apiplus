@@ -3,10 +3,10 @@
   "active_release_digest": "63524474c99a64b409a9bbcbef44e9f5b3d492528a76334002fdef360a7a1091",
   "active_unchanged": true,
   "active_version": "0.151.0",
-  "campaign_id": "c0154-formal-vc5-v8-20260918t033142z",
-  "candidate_release_digest": "9b1d5abab66bba6e62b9d728c032a39ee17e855fd6d2e27314441e91d6feab5c",
+  "campaign_id": "c0154-formal-vc5-v9-20260918t110644z",
+  "candidate_release_digest": "2d238a5abd19be8279de4c59d38f5c97f9a9b0063efed4efe47a55d5e7bd6d0f",
   "candidate_release_mode": "previous",
-  "classification_sha256": "a9a33a2fe9864966b38ce0c859668590c9ab9fc52ff1b2b433b0698db9a2d57c",
+  "classification_sha256": "491c6d14fb6ba8311ccd017de54bb3630cf1b97754c60ca188b235445890b00d",
   "inventory": [
     {
       "path": "catalogdata/runtime/profiles/0.149.1/8c22d3b18b16d249ac041a97efad1b6703c11ef290622b0b1642679a3c010ec3.json",
@@ -24,47 +24,52 @@
       "size": 52594
     },
     {
+      "path": "catalogdata/runtime/profiles/0.154.0/31d8654f6892d37129a2639f1bb48e87b7b8648d67ce754f4ae9379a671b99e3.json",
+      "sha256": "53a946932759a183296c2848106ebd4c881d14a98dc96fb85054060e0e53b66b",
+      "size": 52924
+    },
+    {
       "path": "catalogdata/runtime/profiles/0.154.0/33a537a32e6f059bb178b7af581de5c161a3091ed972b4a8aec215cbf977b563.json",
       "sha256": "84fcb371ac392a0828e2a76bd601b69e70b7d50a3639403eca075164a6521f3f",
       "size": 52594
     },
     {
       "path": "catalogdata/runtime/release-catalog.json",
-      "sha256": "4186f76e8fc4a325aaec4a91fd862622f5ab65b113d66bd4bf0d134ce9cdb45b",
+      "sha256": "70a2a68d4e364954c4eb20e941ba0f24811b80b2b343151541f2a37a1f701685",
       "size": 580
     },
     {
-      "path": "catalogdata/runtime/release-graphs/6a0dc281714de333ba5b8af3603578f0bf9a71c01a76ce3f9e561b13098e4311.json",
-      "sha256": "6a0dc281714de333ba5b8af3603578f0bf9a71c01a76ce3f9e561b13098e4311",
+      "path": "catalogdata/runtime/release-graphs/1229fa7f7a7dc43198b09b96a4ef732d83ab88b258c900f52e2d3c82c07bb452.json",
+      "sha256": "1229fa7f7a7dc43198b09b96a4ef732d83ab88b258c900f52e2d3c82c07bb452",
       "size": 4655
     },
     {
-      "path": "catalogdata/runtime/snapshot-catalogs/74d645eff64146a63f14c3f4970052a52238f13c74727d22101b8430f43b7e51.json",
-      "sha256": "74d645eff64146a63f14c3f4970052a52238f13c74727d22101b8430f43b7e51",
-      "size": 1135
+      "path": "catalogdata/runtime/snapshot-catalogs/e072a7d38d166795dff603d0e3316155da7b13c4b448985ab93e0bd896911479.json",
+      "sha256": "e072a7d38d166795dff603d0e3316155da7b13c4b448985ab93e0bd896911479",
+      "size": 1410
     },
     {
       "path": "profilecontract/testdata/snapshot-catalog.json",
-      "sha256": "1c5f5945540c9325f60936c976315243483af219422bb77a453166f2e45db8b0",
-      "size": 815
+      "sha256": "0d5b93493144f346159649a02b77c84b0c761b043e5ff7e549252dbaa9c3b527",
+      "size": 1010
     },
     {
-      "path": "profilecontract/testdata/snapshots/0.154.0/33a537a32e6f059bb178b7af581de5c161a3091ed972b4a8aec215cbf977b563.json",
-      "sha256": "84fcb371ac392a0828e2a76bd601b69e70b7d50a3639403eca075164a6521f3f",
-      "size": 52594
+      "path": "profilecontract/testdata/snapshots/0.154.0/31d8654f6892d37129a2639f1bb48e87b7b8648d67ce754f4ae9379a671b99e3.json",
+      "sha256": "53a946932759a183296c2848106ebd4c881d14a98dc96fb85054060e0e53b66b",
+      "size": 52924
     },
     {
       "path": "releasecontract/testdata/release-graph.json",
-      "sha256": "6a0dc281714de333ba5b8af3603578f0bf9a71c01a76ce3f9e561b13098e4311",
+      "sha256": "1229fa7f7a7dc43198b09b96a4ef732d83ab88b258c900f52e2d3c82c07bb452",
       "size": 4655
     }
   ],
-  "inventory_sha256": "54052ac99faad0a8a83d03c4701eb0434231cf72a4ac86bb999d5c70b2f1076c",
-  "post_promotion_gate_requirements_sha256": "4b78d2dfd51064000c9344d30aa2f0d277e02db4655ae005ad72e3a3a3a854c2",
+  "inventory_sha256": "2afecedc312deba87bb3191de504a262a3ae2314b573c0bc5dfa7f6ee80d2f47",
+  "post_promotion_gate_requirements_sha256": "f49d5fc91dc01a4c3a9d2abae4a6f5dbd34402b74ffa67175c046fa01837da88",
   "production_selector_changed": false,
-  "profile_derivation_sha256": "8600a308f3d2ef9de94591a82de922c42e14fd09ef4d78f25b2b5fb47a9bbb63",
-  "profile_id": "codex-0.154.0-official-r154-v1",
+  "profile_derivation_sha256": "fd100f4e080bd3adf4ff41d7c6d3a1db8d04524d374404554484249440c3e412",
+  "profile_id": "codex-0.154.0-official-r154-v2",
   "schema_version": "official-egress-catalog-stage/v1",
-  "target_profile_digest": "33a537a32e6f059bb178b7af581de5c161a3091ed972b4a8aec215cbf977b563",
+  "target_profile_digest": "31d8654f6892d37129a2639f1bb48e87b7b8648d67ce754f4ae9379a671b99e3",
   "target_version": "0.154.0"
 }
