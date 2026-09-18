@@ -288,7 +288,8 @@ def _mount_fstype_of(path: Path) -> str | None:
             continue
         mount_point = fields[4].replace("\\040", " ")
         if resolved == mount_point or resolved.startswith(mount_point.rstrip("/") + "/"):
-            if best is None or len(mount_point) > best[0]:
+            # 同一挂载点后挂载的覆盖先挂载的（namespace 内把别名重新 bind 到 overlay），取最后一条。
+            if best is None or len(mount_point) >= best[0]:
                 best = (len(mount_point), right.split()[0])
     return None if best is None else best[1]
 

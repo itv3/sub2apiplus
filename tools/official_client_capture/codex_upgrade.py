@@ -47605,7 +47605,8 @@ def _mount_source_of(path: Path) -> tuple[str, str] | None:
         mount_point = fields[4].replace("\\040", " ")
         fstype = right.split()[0] if right.split() else ""
         if resolved == mount_point or resolved.startswith(mount_point.rstrip("/") + "/"):
-            if best is None or len(mount_point) > len(best[1]):
+            # 同一挂载点后挂载的覆盖先挂载的（namespace 内把别名重新 bind 到 overlay），取最后一条。
+            if best is None or len(mount_point) >= len(best[1]):
                 best = (fstype, mount_point)
     return best
 
