@@ -25562,6 +25562,14 @@ def _validate_predecessor_import_receipt(
     if receipt_schema == PREDECESSOR_RUNTIME_SCENARIO_IMPORT_SCHEMA:
         expected_receipt_fields.add("target_scenario_transition")
     if (
+        receipt.get("reason") == OFFICIAL_EVIDENCE_REUSE_REASON
+        and "official_reuse_target_scenario_transition" in receipt
+    ):
+        # 官方证据复用后继的候选侧 target 场景过渡（可选，见
+        # _official_reuse_target_scenario_transition）；内容由
+        # _validate_official_reuse_target_scenario_import 按两端文件复算。
+        expected_receipt_fields.add("official_reuse_target_scenario_transition")
+    if (
         receipt_schema
         in {
             PREDECESSOR_RECOVERY_IMPORT_SCHEMA,
