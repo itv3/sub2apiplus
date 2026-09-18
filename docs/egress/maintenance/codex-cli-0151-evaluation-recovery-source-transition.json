@@ -94,7 +94,7 @@
     },
     {
       "path": "tools/official_client_capture/codex_upgrade_evidence_manifest.py",
-      "sha256": "5f9a4ad331fd3d1419d88e6f2104d63e8e85ef6f00e5d83837a917413c2859f4",
+      "sha256": "62ce7c1859682f624ef74bb6fcc4045da30bda8d4136ea5c9ee258168d6495d2",
       "reason": "提供有界、可续作、扫描后复核 stat 的 EvidenceManifest 实现；2026-09-18 起 verify_manifest_boundary 在 rehearse-candidate-seal 的 OverlayFS 隔离预演上下文（带标记且全部证据根在 overlay 挂载点）下忽略 st_dev 与由其派生的 metadata_sha256，其余 stat 边界与正式目录判据不变（提交 a374973fc）。"
     }
   ],
@@ -111,5 +111,5 @@
     "official_egress_profile_changed": false
   },
   "result": "passed_codex_cli_0151_evaluation_recovery",
-  "identity_sha256": "d00eae891fb08e89d0085d16b072edc33dbccc2b738dcfd4736524c43996c8d9"
+  "identity_sha256": "16ae622ec2a6e6e0f0afe577cff087877ce330c09f5a660d97ed93408d6ac628"
 }
