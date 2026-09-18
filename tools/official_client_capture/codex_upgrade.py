@@ -25052,23 +25052,49 @@ def _validate_stage_contract(document: dict[str, Any]) -> None:
         ):
             raise ConfigurationError("验收阶段缺少 candidate 外部门禁绑定。")
         identity = document.get("candidate_identity")
+        identity_fields = {
+            "source_tree_sha256",
+            "image_id",
+            "image_reference",
+            "build_id",
+            "deployed_version",
+            "candidate_purpose",
+        }
+        complete_vc_artifacts = _requires_complete_vc_artifacts(
+            str(document.get("target_version", ""))
+        )
+        if complete_vc_artifacts:
+            # accept_campaign 自完整 VC 制品链起在身份投影里同时冻结门禁执行计划
+            # 与 VC-4 构建收据摘要；读侧闭集必须与写侧一致，否则合法验收结果永远
+            # 无法封存。
+            identity_fields |= {"gate_plan", "build_receipt_digest"}
         if (
             not isinstance(identity, dict)
-            or set(identity)
-            != {
-                "source_tree_sha256",
-                "image_id",
-                "image_reference",
-                "build_id",
-                "deployed_version",
-                "candidate_purpose",
-            }
+            or set(identity) != identity_fields
             or not SHA256_RE.fullmatch(str(identity.get("source_tree_sha256", "")))
             or not IMAGE_ID_RE.fullmatch(str(identity.get("image_id", "")))
             or not IMMUTABLE_IMAGE_RE.fullmatch(str(identity.get("image_reference", "")))
             or identity.get("candidate_purpose") != document.get("candidate_purpose")
         ):
             raise ConfigurationError("验收阶段 candidate 身份投影非法。")
+        if complete_vc_artifacts:
+            gate_plan_binding = identity.get("gate_plan")
+            if (
+                not isinstance(gate_plan_binding, dict)
+                or set(gate_plan_binding)
+                != {"path", "sha256", "plan_sha256", "requirements_sha256"}
+                or not isinstance(gate_plan_binding.get("path"), str)
+                or not all(
+                    SHA256_RE.fullmatch(str(gate_plan_binding.get(field, "")))
+                    for field in ("sha256", "plan_sha256", "requirements_sha256")
+                )
+                or not SHA256_RE.fullmatch(
+                    str(identity.get("build_receipt_digest", ""))
+                )
+            ):
+                raise ConfigurationError(
+                    "验收阶段 candidate 身份投影缺少合法的门禁计划或构建收据摘要绑定。"
+                )
         build_reference = document.get("candidate_build_receipt")
         if _requires_complete_vc_artifacts(
             str(document.get("target_version", ""))
