@@ -127,7 +127,7 @@ class CandidateCoreCaptureScriptTest(unittest.TestCase):
         self.assertNotIn("if not observations:\n                observations.append(observation)", a15)
         self.assertIn("observed_models_all.setdefault(nonce, []).append(observation)", a15)
         self.assertIn('witness_path = trace_path.with_name("witness-observations.jsonl")', a15)
-        self.assertIn('"contract_entry": sample in models_requests', a15)
+        self.assertIn('"contract_entry": sample in entry_samples', a15)
         # 合同入口的 originator 断言与"恰好一个入口样本"判定保持不变。
         self.assertIn('expected_originator="codex_cli_rs"', a15)
         self.assertIn("if len(models_requests) != 1:", a15)

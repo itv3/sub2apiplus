@@ -566,6 +566,41 @@ class LiveRequestProvenanceTests(unittest.TestCase):
             self.assertEqual(receipt["estimated_total"], 12)
             self.assertEqual(receipt["precise_total"], 10)
 
+    def test_candidate_trace_test_root_is_zero_request_authority(self) -> None:
+        """candidate-trace-test 的 run-summary 是零请求权威来源；日志摘要或判定不符则失败关闭。"""
+
+        import hashlib
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "runs" / "c1-candidate-trace-test"
+            root.mkdir(parents=True)
+            log = root / "candidate-go-test.jsonl"
+            log.write_bytes(b'{"Action":"run","Test":"TestA"}\n{"Action":"pass","Test":"TestA"}\n')
+            summary = {
+                "schema_version": "candidate-trace-test/v1",
+                "command": ["go", "test", "-json", "-count=1", "-run", "^(TestA)$", "./internal/service"],
+                "go_flags": "-mod=mod",
+                "exit_code": 0,
+                "verdict": "pass",
+                "log_sha256": hashlib.sha256(log.read_bytes()).hexdigest(),
+            }
+            _write_json(root / "run-summary.json", summary)
+            kind, branches = provenance._root_branches(root)
+            self.assertEqual(kind, "candidate_trace_test")
+            self.assertEqual(len(branches), 1)
+            self.assertEqual(branches[0]["status"], "resolved")
+            self.assertEqual(branches[0]["requests"], [])
+            self.assertEqual(branches[0]["authority_source"], "candidate_trace_test_run_summary")
+            # 日志漂移 → 失败关闭
+            log.write_bytes(log.read_bytes() + b'{"Action":"output"}\n')
+            with self.assertRaisesRegex(provenance.ProvenanceError, "日志摘要"):
+                provenance._root_branches(root)
+            # verdict 非 pass → 失败关闭
+            summary["log_sha256"] = hashlib.sha256(log.read_bytes()).hexdigest()
+            summary["verdict"] = "fail missing=[]"
+            _write_json(root / "run-summary.json", summary)
+            with self.assertRaisesRegex(provenance.ProvenanceError, "零请求的离线 go test"):
+                provenance._root_branches(root)
+
     def test_compact_driver_fact_without_error_type_stays_unresolved(self) -> None:
         """turn 0 但驱动没有记录错误类型或协议记录数时，不能当零。"""
 

@@ -74,6 +74,9 @@ COMPACT_SUMMARY_SCHEMA = "codex-compact-capture/v1"
 RELAY_MANIFEST_SCHEMA = "byte-relay/v1"
 DIRECT_RUN_SUMMARY_SCHEMA = "sub2api-direct-capture/v1"
 MITM_SCENARIO_RUN_SUMMARY_SCHEMA = "sub2api-openai-mitm-scenario/v2"
+# 候选零请求 Job candidate-trace-test（run_candidate_trace_test.sh）在同源候选树上以
+# GOPROXY=off 执行冻结的 go test -json，不发送任何模型请求；其 run-summary 是权威零请求来源。
+TRACE_TEST_RUN_SUMMARY_SCHEMA = "candidate-trace-test/v1"
 CANDIDATE_CAPTURE_SCHEMAS = frozenset(
     {"candidate-core-capture/v1", "candidate-aux-capture/v1"}
 )
@@ -1087,6 +1090,45 @@ def _frozen_candidate_branches(root: Path) -> list[dict[str, Any]]:
     return branches
 
 
+def _trace_test_branches(root: Path) -> list[dict[str, Any]]:
+    """candidate-trace-test 的零请求分支：只认 run-summary 证明的离线 go test。"""
+
+    path = root / "run-summary.json"
+    payload, _raw = closeout._load_json(path, "Candidate trace test run-summary")
+    command = payload.get("command")
+    go_flags = str(payload.get("go_flags", ""))
+    if (
+        payload.get("schema_version") != TRACE_TEST_RUN_SUMMARY_SCHEMA
+        or not isinstance(command, list)
+        or len(command) < 3
+        or not str(command[0]).endswith("go")
+        or str(command[1]) != "test"
+        or "-json" not in command
+        or not go_flags.startswith("-mod=")
+        or payload.get("exit_code") != 0
+        or payload.get("verdict") != "pass"
+    ):
+        raise ProvenanceError("Candidate trace test run-summary 不能证明零请求的离线 go test")
+    log_path = root / "candidate-go-test.jsonl"
+    if log_path.is_symlink() or not log_path.is_file():
+        raise ProvenanceError("Candidate trace test 缺少 candidate-go-test.jsonl")
+    if _sha256(log_path.read_bytes()) != payload.get("log_sha256"):
+        raise ProvenanceError("Candidate trace test 日志摘要与 run-summary 不一致")
+    return [
+        {
+            "branch": "candidate-go-test",
+            "kind": "candidate_trace_test",
+            "evidence": "go-test-json",
+            "subject": "candidate-trace-test",
+            "scenario": "",
+            "turn_completed": None,
+            "requests": [],
+            "status": "resolved",
+            "authority_source": "candidate_trace_test_run_summary",
+        }
+    ]
+
+
 def _h1_wire_branches(root: Path) -> list[dict[str, Any]]:
     path = root / "h1-wire.json"
     payload, raw = closeout._load_json(path, "Candidate h1 wire")
@@ -1288,6 +1330,8 @@ def _root_branches(root: Path) -> tuple[str, list[dict[str, Any]]]:
             kinds.append("candidate_mitm")
         elif run_summary_schema in CANDIDATE_CAPTURE_SCHEMAS:
             kinds.append("candidate_frozen")
+        elif run_summary_schema == TRACE_TEST_RUN_SUMMARY_SCHEMA:
+            kinds.append("candidate_trace_test")
     h1_path = root / "h1-wire.json"
     if h1_path.is_file() and not h1_path.is_symlink():
         kinds.append("h1_wire")
@@ -1308,6 +1352,8 @@ def _root_branches(root: Path) -> tuple[str, list[dict[str, Any]]]:
         return kind, _mitm_candidate_branches(root)
     if kind == "candidate_frozen":
         return kind, _frozen_candidate_branches(root)
+    if kind == "candidate_trace_test":
+        return kind, _trace_test_branches(root)
     return kind, _h1_wire_branches(root)
 
 

@@ -790,6 +790,48 @@ class CandidateReadinessTests(unittest.TestCase):
             self.assertEqual(receipt["status"], "passed")
             self.assertEqual(dispatch_count, 1)
 
+    def test_service_image_identity_excludes_container_id(self) -> None:
+        """Live attestation Job 会按设计重建服务容器；稳定身份不得绑定容器 ID，否则后续 Job 的 TOCTOU 复核会误判漂移。"""
+
+        def runner(arguments):
+            values = list(arguments)
+            container_id = values[-1].split(":")[-1]
+            payload = [
+                {
+                    "Id": "container-" + container_id,
+                    "Image": IMAGE_ID,
+                    "State": {"Running": True, "Health": {"Status": "healthy"}},
+                }
+            ]
+            return subprocess.CompletedProcess(values, 0, json.dumps(payload), "")
+
+        facts = [
+            readiness._service_image_fact(
+                {"service_container": f"service:{index}"},
+                {"image_id": IMAGE_ID},
+                "cand-1",
+                "b" * 64,
+                runner,
+            )
+            for index in ("1", "2")
+        ]
+        self.assertNotEqual(facts[0]["container_id"], facts[1]["container_id"])
+        self.assertNotIn("container_id", facts[0]["identity"])
+        self.assertEqual(facts[0]["identity"]["image_id"], IMAGE_ID)
+        self.assertEqual(facts[0]["identity"]["build_receipt_sha256"], "b" * 64)
+        # 容器名不同属于身份差异；同名容器重建后身份相同。
+        self.assertNotEqual(facts[0]["identity"], facts[1]["identity"])
+        rebuilt = readiness._service_image_fact(
+            {"service_container": "service:1"}, {"image_id": IMAGE_ID}, "cand-1", "b" * 64,
+            lambda arguments: subprocess.CompletedProcess(
+                list(arguments), 0,
+                json.dumps([{"Id": "container-9", "Image": IMAGE_ID, "State": {"Running": True, "Health": {"Status": "healthy"}}}]),
+                "",
+            ),
+        )
+        self.assertEqual(rebuilt["identity"], facts[0]["identity"])
+        self.assertNotEqual(rebuilt["container_id"], facts[0]["container_id"])
+
     def test_default_dispatch_disables_proxy_and_redirect(self) -> None:
         class Response:
             status = 302

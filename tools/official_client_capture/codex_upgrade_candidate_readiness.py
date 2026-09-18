@@ -702,7 +702,12 @@ def _service_image_fact(
         "health": health,
         "build_receipt_sha256": build_receipt_sha256,
     }
-    return {**evidence, "identity": evidence}
+    # 2026-09-18：稳定身份只绑定 Candidate／镜像／容器名／构建收据。Live attestation
+    # Job（candidate-frozen-aux）按设计用 compose 重建服务容器两次，容器 ID 必然变化；
+    # 若把它计入身份，后续 Job（如 candidate-images-wire）启动前的 TOCTOU 复核会把
+    # 这次受控重建误判成外部状态漂移。容器 ID 仍作为证据字段记录。
+    identity = {key: value for key, value in evidence.items() if key != "container_id"}
+    return {**evidence, "identity": identity}
 
 
 def collect_static_checks(

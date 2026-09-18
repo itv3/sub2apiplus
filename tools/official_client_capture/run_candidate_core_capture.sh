@@ -1725,24 +1725,6 @@ def launch_one(
         with state_lock:
             models_requests = list(observed_models.get(nonce, []))
             identity_requests = list(observed_identities.get(nonce, []))
-            all_models_requests = list(observed_models_all.get(nonce, []))
-        witness_path = trace_path.with_name("witness-observations.jsonl")
-        with witness_path.open("a", encoding="utf-8") as witness_stream:
-            for sample in all_models_requests:
-                witness_stream.write(
-                    json.dumps(
-                        {
-                            "variant": variant,
-                            "correlation_nonce": nonce,
-                            "contract_entry": sample in models_requests,
-                            **sample,
-                        },
-                        ensure_ascii=False,
-                        separators=(",", ":"),
-                    )
-                    + "\n"
-                )
-        os.chmod(witness_path, 0o600)
         if len(models_requests) != 1:
             raise RuntimeError(
                 f"A15 {variant} 目标 models 请求数 {len(models_requests)} != 1"
@@ -1950,11 +1932,32 @@ def launch_one(
                 pass
         if drain_thread is not None:
             drain_thread.join(timeout=1)
+        # 无论成功、超时还是断言失败，都把 witness 收到的全部 models 样本落盘：
+        # 首跑失败时的样本序列是诊断 TUI 并发预取／core 迟到的唯一线索。
         with state_lock:
+            entry_samples = list(observed_models.get(nonce, []))
+            all_samples = list(observed_models_all.get(nonce, []))
             known_requests.pop(nonce, None)
             observed_models.pop(nonce, None)
             observed_models_all.pop(nonce, None)
             observed_identities.pop(nonce, None)
+        witness_path = trace_path.with_name("witness-observations.jsonl")
+        with witness_path.open("a", encoding="utf-8") as witness_stream:
+            for sample in all_samples:
+                witness_stream.write(
+                    json.dumps(
+                        {
+                            "variant": variant,
+                            "correlation_nonce": nonce,
+                            "contract_entry": sample in entry_samples,
+                            **sample,
+                        },
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                    + "\n"
+                )
+        os.chmod(witness_path, 0o600)
         shutil.rmtree(home, ignore_errors=True)
 
 
