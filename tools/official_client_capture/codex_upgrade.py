@@ -25216,9 +25216,15 @@ def _successor_copy_expectations(
     *,
     include_classification: bool = True,
     replace_target_scenario: bool = False,
+    official_reuse_target_scenario: bool = False,
     abandoned_candidate_attempt: Mapping[str, Any] | None = None,
 ) -> dict[str, dict[str, Any]]:
-    """重建后继 Campaign 必须逐字复制的完整文件闭集。"""
+    """重建后继 Campaign 必须逐字复制的完整文件闭集。
+
+    ``official_reuse_target_scenario`` 为真时，target 场景不再逐字来自前序，而是
+    官方证据复用后继按候选侧演进采用的 preflight 快照（kind
+    ``official_reuse_target_scenario``），其摘要以后继清单绑定为准。
+    """
 
     expected: dict[str, dict[str, Any]] = {}
 
@@ -25259,13 +25265,13 @@ def _successor_copy_expectations(
         for field, reference in predecessor_manifest[group_name].items():
             if reference is not None:
                 if (
-                    replace_target_scenario
+                    (replace_target_scenario or official_reuse_target_scenario)
                     and group_name == "inputs"
                     and field == "target_discovery_scenarios"
                 ):
                     continue
                 add(reference, f"plan_{group_name}")
-    if replace_target_scenario:
+    if replace_target_scenario or official_reuse_target_scenario:
         reference = manifest.get("inputs", {}).get(
             "target_discovery_scenarios"
         )
@@ -25280,7 +25286,11 @@ def _successor_copy_expectations(
         ):
             raise ConfigurationError("后继运行时 target 场景摘要漂移。")
         expected[relative] = {
-            "kind": "runtime_target_scenario",
+            "kind": (
+                "runtime_target_scenario"
+                if replace_target_scenario
+                else "official_reuse_target_scenario"
+            ),
             "source_path": relative,
             "target_path": relative,
             "sha256": reference["sha256"],
@@ -26423,6 +26433,7 @@ def _validate_predecessor_import_receipt(
         replace_target_scenario=(
             receipt_schema == PREDECESSOR_RUNTIME_SCENARIO_IMPORT_SCHEMA
         ),
+        official_reuse_target_scenario=official_reuse_scenario_import,
         abandoned_candidate_attempt=receipt.get("abandoned_candidate_attempt"),
     )
     copied_index: dict[str, dict[str, Any]] = {}
