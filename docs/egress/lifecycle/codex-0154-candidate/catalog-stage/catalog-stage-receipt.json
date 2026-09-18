@@ -3,8 +3,8 @@
   "active_release_digest": "63524474c99a64b409a9bbcbef44e9f5b3d492528a76334002fdef360a7a1091",
   "active_unchanged": true,
   "active_version": "0.151.0",
-  "campaign_id": "c0154-formal-vc5-v12-20260918t172800z",
-  "candidate_release_digest": "f3f8ce5659670662e4958974a684bb410e93eeaa0288d3487e505f741ac68abe",
+  "campaign_id": "c0154-formal-vc5-v13-20260918t181428z",
+  "candidate_release_digest": "62e24e7b1f9b3a7f922f4b22326c51f5f41ca260a5108e5f4aee135139b1a14d",
   "candidate_release_mode": "previous",
   "classification_sha256": "491c6d14fb6ba8311ccd017de54bb3630cf1b97754c60ca188b235445890b00d",
   "inventory": [
@@ -35,12 +35,12 @@
     },
     {
       "path": "catalogdata/runtime/release-catalog.json",
-      "sha256": "3f6c6914f918e3f816fb90d152f5b14a7de0a13dd7ef9282e96effb09d928e20",
+      "sha256": "3e76b07bcac807b3666f83d28c09ea6c10594ea7895cd46a2663ac55388c29e7",
       "size": 581
     },
     {
-      "path": "catalogdata/runtime/release-graphs/da4497bca681c581f6df9050a44c98bc24e5164a5b6481fdd04867194f04e807.json",
-      "sha256": "da4497bca681c581f6df9050a44c98bc24e5164a5b6481fdd04867194f04e807",
+      "path": "catalogdata/runtime/release-graphs/5342dcf4ee90ec4530c3d9cd0752bab0a2ad9741303bbb4a13cade05cdf4fecf.json",
+      "sha256": "5342dcf4ee90ec4530c3d9cd0752bab0a2ad9741303bbb4a13cade05cdf4fecf",
       "size": 4659
     },
     {
@@ -60,14 +60,14 @@
     },
     {
       "path": "releasecontract/testdata/release-graph.json",
-      "sha256": "da4497bca681c581f6df9050a44c98bc24e5164a5b6481fdd04867194f04e807",
+      "sha256": "5342dcf4ee90ec4530c3d9cd0752bab0a2ad9741303bbb4a13cade05cdf4fecf",
       "size": 4659
     }
   ],
-  "inventory_sha256": "7b5541dffb41153e396dd6646e4c15f06543e9881de6793ff2e77308aaa482cd",
-  "post_promotion_gate_requirements_sha256": "a814650f13d06e9edac2bd7d7ce9cd56a08227451b7cd7b67cadd2fa2354823c",
+  "inventory_sha256": "ff8aa95132871fffd8e2f29ec5968aa89d176fc74fd8aff10e9f2a55365ecfc2",
+  "post_promotion_gate_requirements_sha256": "2329d722601f9df3508b43b28a138e8e349dcc8912d86fdfef2b6c6610172ba7",
   "production_selector_changed": false,
-  "profile_derivation_sha256": "040a1dce84058ba3790df7324a6cff6b897baf3a1a73e6f10f6ca2ebd65fbae5",
+  "profile_derivation_sha256": "3f12c0d1382548964b1353a162c0d637e15ddef15beee642790f5d7d65317baa",
   "profile_id": "codex-0.154.0-official-r154-v2",
   "schema_version": "official-egress-catalog-stage/v1",
   "target_profile_digest": "31d8654f6892d37129a2639f1bb48e87b7b8648d67ce754f4ae9379a671b99e3",
