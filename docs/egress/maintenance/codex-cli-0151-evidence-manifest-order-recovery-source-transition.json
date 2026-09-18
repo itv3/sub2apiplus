@@ -6,7 +6,7 @@
   "predecessor": {
     "kind": "codex_cli_0151_managed_scenario_recovery",
     "path": "docs/egress/maintenance/codex-cli-0151-managed-scenario-recovery-source-transition.json",
-    "sha256": "fa9cadd49d038cc9098c6d65b8b1bdce66d3bb3c832ea5c71e0edbad0db10e7f"
+    "sha256": "9f0421a569fb29f3947f99f614a336a50f05a66d7c50a30a7e357426c120b0d2"
   },
   "transitions": [
     {
@@ -59,5 +59,5 @@
     "official_egress_profile_changed": false
   },
   "result": "passed_codex_cli_0151_evidence_manifest_order_recovery",
-  "identity_sha256": "93a85d2e95b22f49bade1d19f473a04d2a06e1b7bd35ccdb919b7ca103e8cecb"
+  "identity_sha256": "36bd944a4568b9b57db051fcab335275f83bf2bd531687bfafe8004c1de38340"
 }
