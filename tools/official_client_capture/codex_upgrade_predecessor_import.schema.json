@@ -60,6 +60,9 @@
     "target_scenario_transition": {
       "$ref": "#/$defs/targetScenarioTransition"
     },
+    "official_reuse_target_scenario_transition": {
+      "$ref": "#/$defs/officialReuseTargetScenarioTransition"
+    },
     "recovery_control_transition": {
       "$ref": "#/$defs/recoveryControlTransition"
     },
@@ -237,6 +240,7 @@
             "plan_analysis",
             "approved_classification",
             "runtime_target_scenario",
+            "official_reuse_target_scenario",
             "official_surface"
           ]
         },
@@ -703,6 +707,67 @@
             "failed",
             "environment_contaminated"
           ]
+        }
+      }
+    },
+    "officialReuseTargetScenarioTransition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reason",
+        "predecessor",
+        "successor",
+        "preflight_campaign",
+        "added_job_ids",
+        "removed_job_ids",
+        "changed_job_ids"
+      ],
+      "properties": {
+        "reason": {
+          "const": "official_evidence_reuse_candidate_job_update"
+        },
+        "predecessor": {
+          "$ref": "#/$defs/fileBinding"
+        },
+        "successor": {
+          "$ref": "#/$defs/fileBinding"
+        },
+        "preflight_campaign": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "campaign_id",
+            "manifest_sha256"
+          ],
+          "properties": {
+            "campaign_id": {
+              "$ref": "#/$defs/safeId"
+            },
+            "manifest_sha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        },
+        "added_job_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/safeId"
+          }
+        },
+        "removed_job_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/safeId"
+          }
+        },
+        "changed_job_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/safeId"
+          }
         }
       }
     }

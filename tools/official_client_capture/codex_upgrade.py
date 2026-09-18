@@ -308,6 +308,9 @@ SUCCESSOR_REASONS = frozenset(
     }
 )
 OFFICIAL_EVIDENCE_REUSE_REASON = "official_evidence_reuse"
+OFFICIAL_REUSE_TARGET_SCENARIO_TRANSITION_REASON = (
+    "official_evidence_reuse_candidate_job_update"
+)
 CLASSIFICATION_FACT_CORRECTION_REASON = "classification_fact_correction"
 FORMAL_FAILED_JOB_RECOVERY_COMMAND = "recover-candidate-failed-jobs"
 POST_RUN_SEAL_RECOVERY_REASON = "candidate_post_run_seal_recovery"
@@ -18226,6 +18229,139 @@ def _approved_scenario_with_formal_execution_contract(
     return effective
 
 
+def _official_reuse_target_scenario_transition(
+    arguments: argparse.Namespace,
+    staging_dir: Path,
+    successor_manifest: dict[str, Any],
+    copied_files: dict[str, dict[str, Any]],
+) -> dict[str, Any] | None:
+    """官方证据只读复用时，让后继的 target 场景跟随当前受管场景的候选侧演进。
+
+    2026-09-18：受管场景在同一目标版本内新增了零请求候选 Job
+    ``candidate-trace-test``。reuse-official-evidence 建出的 Formal 若继续逐字
+    承接前序冻结的 target 场景，其 ``jobs`` 就少一项，而 VC-2 批准的目标场景与
+    ``capture-candidate run`` 已按受管场景执行十项 Job，seal／对账的 provenance
+    核算会因 Job 收据身份不在 Campaign Job 闭集内而失败关闭。这里只在
+    ``_recovery_rehearsal_target_scenario_override(official_only_reuse=True)`` 判定
+    official Job 执行合同逐字一致时，把后继 staging 的 target 场景替换为
+    完整 Job 演练绑定的 preflight 快照（即创建当时的受管场景原文件），并返回
+    可复算的过渡记录写入 predecessor-import。官方证据仍按 §5.3.3 只读复用，
+    候选侧差异由新 Campaign 自己的 VC-2 重分类与 VC-5 全量执行承担。
+    """
+
+    if getattr(arguments, "reason", None) != OFFICIAL_EVIDENCE_REUSE_REASON:
+        return None
+    rehearsal_root = getattr(arguments, "job_rehearsal_root", None)
+    rehearsal_receipt = getattr(arguments, "job_rehearsal_receipt", None)
+    if rehearsal_root is None or rehearsal_receipt is None:
+        return None
+    rehearsal_relative = _control_receipt_relative(
+        rehearsal_root,
+        rehearsal_receipt,
+        "官方证据复用完整 Job 演练收据",
+    )
+    try:
+        rehearsal = codex_upgrade_job_rehearsal_receipt.replay(
+            rehearsal_root,
+            rehearsal_relative,
+        )
+    except (OSError, codex_upgrade_job_rehearsal_receipt.JobRehearsalReceiptError) as error:
+        raise ConfigurationError(
+            f"官方证据复用完整 Job 演练收据无法重放：{error}"
+        ) from error
+    preflight_dir, preflight_manifest = _recovery_rehearsal_preflight_from_receipt(
+        rehearsal,
+        successor_manifest,
+    )
+    override = _recovery_rehearsal_target_scenario_override(
+        staging_dir,
+        successor_manifest,
+        preflight_dir,
+        preflight_manifest,
+        official_only_reuse=True,
+    )
+    if override is None:
+        return None
+    inputs = successor_manifest.get("inputs")
+    reference = (
+        inputs.get("target_discovery_scenarios") if isinstance(inputs, dict) else None
+    )
+    _require_file_binding(reference, "官方证据复用前序 target 场景")
+    assert isinstance(reference, dict)
+    preflight_inputs = preflight_manifest.get("inputs")
+    preflight_reference = (
+        preflight_inputs.get("target_discovery_scenarios")
+        if isinstance(preflight_inputs, Mapping)
+        else None
+    )
+    _require_file_binding(preflight_reference, "官方证据复用 preflight target 场景")
+    assert isinstance(preflight_reference, dict)
+    source = _campaign_file(preflight_dir, str(preflight_reference["path"]))
+    if (
+        source.is_symlink()
+        or not source.is_file()
+        or file_sha256(source) != preflight_reference["sha256"]
+        or _read_json(source, "官方证据复用 preflight target 场景") != override
+    ):
+        raise ConfigurationError("官方证据复用 preflight target 场景原文件与判定结果不一致。")
+    target_relative = str(reference["path"])
+    destination = _campaign_file(staging_dir, target_relative)
+    if (
+        destination.is_symlink()
+        or not destination.is_file()
+        or file_sha256(destination) != reference["sha256"]
+    ):
+        raise ConfigurationError("官方证据复用前序 target 场景副本摘要漂移。")
+    frozen = _read_json(destination, "官方证据复用前序 target 场景副本")
+    frozen_jobs = {
+        str(job.get("id")): job
+        for job in frozen.get("capture_jobs", [])
+        if isinstance(job, dict)
+    }
+    managed_jobs = {
+        str(job.get("id")): job
+        for job in override.get("capture_jobs", [])
+        if isinstance(job, dict)
+    }
+    added = sorted(set(managed_jobs) - set(frozen_jobs))
+    removed = sorted(set(frozen_jobs) - set(managed_jobs))
+    changed = sorted(
+        job_id
+        for job_id in set(managed_jobs) & set(frozen_jobs)
+        if managed_jobs[job_id] != frozen_jobs[job_id]
+    )
+    if any(
+        (managed_jobs.get(job_id) or frozen_jobs.get(job_id) or {}).get("phase") != "candidate"
+        for job_id in (*added, *removed, *changed)
+    ):
+        raise ConfigurationError("官方证据复用只允许候选侧 Job 演进；official Job 不得增删改。")
+    if not (added or removed or changed):
+        return None
+    destination.unlink()
+    copied = _secure_copy_file_once(source, destination)
+    successor_reference = {"path": target_relative, "sha256": copied["sha256"]}
+    inputs["target_discovery_scenarios"] = successor_reference
+    copied_files[target_relative] = {
+        "kind": "official_reuse_target_scenario",
+        "source_path": target_relative,
+        "target_path": target_relative,
+        "sha256": copied["sha256"],
+        "bytes": copied["bytes"],
+    }
+    return {
+        "reason": OFFICIAL_REUSE_TARGET_SCENARIO_TRANSITION_REASON,
+        "predecessor": dict(reference),
+        "successor": successor_reference,
+        "preflight_campaign": {
+            "campaign_id": str(preflight_manifest["campaign_id"]),
+            "manifest_sha256": file_sha256(preflight_dir / "campaign.json"),
+        },
+        "added_job_ids": added,
+        "removed_job_ids": removed,
+        "changed_job_ids": changed,
+    }
+
+
 def _successor_target_scenario_transition(
     arguments: argparse.Namespace,
     predecessor_dir: Path,
@@ -24050,6 +24186,12 @@ def _create_successor_campaign_unadmitted(arguments: argparse.Namespace) -> dict
             }
         if sealed_stage_recovery_successor and job_rehearsal_transition is None:
             raise ConfigurationError("已封存阶段控制恢复没有形成新的 Job 演练绑定。")
+        official_reuse_scenario_transition = _official_reuse_target_scenario_transition(
+            arguments,
+            staging_dir,
+            successor_manifest,
+            copied_files,
+        )
         _rebuild_successor_plan(
             staging_dir,
             successor_dir,
@@ -24182,6 +24324,10 @@ def _create_successor_campaign_unadmitted(arguments: argparse.Namespace) -> dict
         if target_scenario_transition is not None:
             import_receipt["target_scenario_transition"] = (
                 target_scenario_transition
+            )
+        if official_reuse_scenario_transition is not None:
+            import_receipt["official_reuse_target_scenario_transition"] = (
+                official_reuse_scenario_transition
             )
         if recovery_control_transition is not None:
             import_receipt["recovery_control_transition"] = (
@@ -25269,6 +25415,101 @@ def _validate_direct_predecessor_official_attempt(
         raise ConfigurationError("前序官方任务未按原子预约完整执行或结果漂移。")
 
 
+def _validate_official_reuse_target_scenario_import(
+    receipt: Mapping[str, Any],
+    *,
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    predecessor_dir: Path,
+    predecessor_manifest: Mapping[str, Any],
+) -> bool:
+    """复算官方证据复用后继的候选侧 target 场景过渡；返回是否存在该过渡。"""
+
+    transition = receipt.get("official_reuse_target_scenario_transition")
+    if transition is None:
+        return False
+    if receipt.get("reason") != OFFICIAL_EVIDENCE_REUSE_REASON:
+        raise ConfigurationError("只有官方证据复用后继可携带候选侧 target 场景过渡。")
+    predecessor_reference = predecessor_manifest.get("inputs", {}).get(
+        "target_discovery_scenarios"
+    )
+    successor_reference = manifest.get("inputs", {}).get(
+        "target_discovery_scenarios"
+    )
+    if (
+        not isinstance(transition, Mapping)
+        or set(transition)
+        != {
+            "reason",
+            "predecessor",
+            "successor",
+            "preflight_campaign",
+            "added_job_ids",
+            "removed_job_ids",
+            "changed_job_ids",
+        }
+        or transition.get("reason") != OFFICIAL_REUSE_TARGET_SCENARIO_TRANSITION_REASON
+        or transition.get("predecessor") != predecessor_reference
+        or transition.get("successor") != successor_reference
+    ):
+        raise ConfigurationError("官方证据复用候选侧 target 场景过渡收据非法。")
+    _require_file_binding(predecessor_reference, "官方证据复用场景过渡的前序绑定")
+    _require_file_binding(successor_reference, "官方证据复用场景过渡的当前绑定")
+    assert isinstance(predecessor_reference, dict)
+    assert isinstance(successor_reference, dict)
+    predecessor_path = _campaign_file(predecessor_dir, str(predecessor_reference["path"]))
+    successor_path = _campaign_file(campaign_dir, str(successor_reference["path"]))
+    if (
+        predecessor_path.is_symlink()
+        or not predecessor_path.is_file()
+        or file_sha256(predecessor_path) != predecessor_reference["sha256"]
+        or successor_path.is_symlink()
+        or not successor_path.is_file()
+        or file_sha256(successor_path) != successor_reference["sha256"]
+    ):
+        raise ConfigurationError("官方证据复用场景过渡文件摘要漂移。")
+    frozen = _read_json(predecessor_path, "官方证据复用场景过渡的前序文件")
+    managed = _read_json(successor_path, "官方证据复用场景过渡的当前文件")
+    _validate_scenario_manifest_shape(frozen)
+    _validate_scenario_manifest_shape(managed)
+    if _fingerprint(_official_scenario_execution_contract(dict(frozen))) != _fingerprint(
+        _official_scenario_execution_contract(dict(managed))
+    ):
+        raise ConfigurationError("官方证据复用场景过渡改变了 official Job 执行合同。")
+    frozen_jobs = {
+        str(job.get("id")): job for job in frozen.get("capture_jobs", []) if isinstance(job, dict)
+    }
+    managed_jobs = {
+        str(job.get("id")): job for job in managed.get("capture_jobs", []) if isinstance(job, dict)
+    }
+    expected = {
+        "added_job_ids": sorted(set(managed_jobs) - set(frozen_jobs)),
+        "removed_job_ids": sorted(set(frozen_jobs) - set(managed_jobs)),
+        "changed_job_ids": sorted(
+            job_id
+            for job_id in set(managed_jobs) & set(frozen_jobs)
+            if managed_jobs[job_id] != frozen_jobs[job_id]
+        ),
+    }
+    if any(transition.get(key) != value for key, value in expected.items()):
+        raise ConfigurationError("官方证据复用场景过渡 Job 集漂移。")
+    if not any(expected.values()) or any(
+        (managed_jobs.get(job_id) or frozen_jobs.get(job_id) or {}).get("phase") != "candidate"
+        for key in expected
+        for job_id in expected[key]
+    ):
+        raise ConfigurationError("官方证据复用场景过渡只允许候选侧 Job 演进。")
+    preflight = transition.get("preflight_campaign")
+    if (
+        not isinstance(preflight, Mapping)
+        or set(preflight) != {"campaign_id", "manifest_sha256"}
+        or not SAFE_ID_RE.fullmatch(str(preflight.get("campaign_id")))
+        or not SHA256_RE.fullmatch(str(preflight.get("manifest_sha256")))
+    ):
+        raise ConfigurationError("官方证据复用场景过渡缺少 preflight Campaign 绑定。")
+    return True
+
+
 def _validate_predecessor_import_receipt(
     campaign_dir: Path,
     manifest: dict[str, Any],
@@ -25459,6 +25700,13 @@ def _validate_predecessor_import_receipt(
 
     runtime_scenario_import = (
         receipt_schema == PREDECESSOR_RUNTIME_SCENARIO_IMPORT_SCHEMA
+    )
+    official_reuse_scenario_import = _validate_official_reuse_target_scenario_import(
+        receipt,
+        campaign_dir=campaign_dir,
+        manifest=manifest,
+        predecessor_dir=predecessor_dir,
+        predecessor_manifest=predecessor_manifest,
     )
     if runtime_scenario_import:
         transition = receipt.get("target_scenario_transition")
@@ -25950,11 +26198,12 @@ def _validate_predecessor_import_receipt(
         raise ConfigurationError("同版本后继 Campaign 输入绑定不是对象。")
     predecessor_fixed_inputs = dict(predecessor_inputs)
     successor_fixed_inputs = dict(successor_inputs)
-    if runtime_scenario_import:
+    scenario_import = runtime_scenario_import or official_reuse_scenario_import
+    if scenario_import:
         predecessor_fixed_inputs.pop("target_discovery_scenarios", None)
         successor_fixed_inputs.pop("target_discovery_scenarios", None)
     if predecessor_fixed_inputs != successor_fixed_inputs or (
-        not runtime_scenario_import and predecessor_inputs != successor_inputs
+        not scenario_import and predecessor_inputs != successor_inputs
     ):
         raise ConfigurationError("同版本后继 Campaign 改变了未授权的输入绑定。")
 

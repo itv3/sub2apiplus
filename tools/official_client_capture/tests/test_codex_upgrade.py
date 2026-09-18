@@ -659,6 +659,199 @@ class CodexUpgradeTest(unittest.TestCase):
                     official_only_reuse=True,
                 )
 
+    def test_official_reuse_target_scenario_transition_follows_candidate_job_update(
+        self,
+    ) -> None:
+        """官方证据复用后继的 target 场景跟随受管场景的候选侧演进，并可从 predecessor-import 复算。"""
+
+        managed_path = (
+            Path(codex_upgrade.__file__).resolve().parent
+            / "codex_upgrade_scenarios_0_154_0.json"
+        )
+        managed = json.loads(managed_path.read_text(encoding="utf-8"))
+        historical = json.loads(json.dumps(managed, ensure_ascii=False))
+        historical["source_spec"]["sha256"] = "0" * 64
+        historical["capture_jobs"] = [
+            job for job in historical["capture_jobs"] if job["id"] != "candidate-trace-test"
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            predecessor_dir = root / "predecessor"
+            staging_dir = root / "staging"
+            preflight_dir = root / "preflight"
+            for campaign_root in (predecessor_dir, staging_dir, preflight_dir):
+                campaign_root.mkdir(mode=0o700)
+            predecessor_path = predecessor_dir / "inputs" / "target.json"
+            staging_path = staging_dir / "inputs" / "target.json"
+            preflight_path = preflight_dir / "inputs" / "target.json"
+            self._write_json(predecessor_path, historical)
+            self._write_json(staging_path, historical)
+            self._write_json(preflight_path, managed)
+            predecessor_manifest = {
+                "campaign_id": "formal-predecessor",
+                "target_version": "0.154.0",
+                "inputs": {
+                    "target_discovery_scenarios": self._binding(
+                        predecessor_path, "inputs/target.json"
+                    )
+                },
+            }
+            successor_manifest = json.loads(json.dumps(predecessor_manifest))
+            successor_manifest["campaign_id"] = "formal-successor"
+            preflight_manifest = {
+                "campaign_id": "preflight-current",
+                "target_version": "0.154.0",
+                "inputs": {
+                    "target_discovery_scenarios": self._binding(
+                        preflight_path, "inputs/target.json"
+                    )
+                },
+            }
+            self._write_json(preflight_dir / "campaign.json", preflight_manifest)
+            arguments = argparse.Namespace(
+                reason=codex_upgrade.OFFICIAL_EVIDENCE_REUSE_REASON,
+                job_rehearsal_root=root / "rehearsal",
+                job_rehearsal_receipt=Path("receipt.json"),
+            )
+            copied_files: dict[str, dict[str, object]] = {}
+            with mock.patch.object(
+                codex_upgrade, "_control_receipt_relative", return_value="receipt.json"
+            ), mock.patch.object(
+                codex_upgrade.codex_upgrade_job_rehearsal_receipt,
+                "replay",
+                return_value={"preflight_campaign": {"path": str(preflight_dir)}},
+            ), mock.patch.object(
+                codex_upgrade,
+                "_recovery_rehearsal_preflight_from_receipt",
+                return_value=(preflight_dir, preflight_manifest),
+            ):
+                # 非官方证据复用原因：不触发。
+                self.assertIsNone(
+                    codex_upgrade._official_reuse_target_scenario_transition(
+                        argparse.Namespace(reason="classification_fact_correction"),
+                        staging_dir,
+                        successor_manifest,
+                        copied_files,
+                    )
+                )
+                transition = codex_upgrade._official_reuse_target_scenario_transition(
+                    arguments,
+                    staging_dir,
+                    successor_manifest,
+                    copied_files,
+                )
+            self.assertIsNotNone(transition)
+            assert transition is not None
+            self.assertEqual(
+                transition["reason"],
+                codex_upgrade.OFFICIAL_REUSE_TARGET_SCENARIO_TRANSITION_REASON,
+            )
+            self.assertEqual(transition["added_job_ids"], ["candidate-trace-test"])
+            self.assertEqual(transition["removed_job_ids"], [])
+            self.assertEqual(transition["changed_job_ids"], [])
+            self.assertEqual(
+                transition["predecessor"],
+                predecessor_manifest["inputs"]["target_discovery_scenarios"],
+            )
+            self.assertEqual(
+                transition["successor"],
+                {"path": "inputs/target.json", "sha256": codex_upgrade.file_sha256(preflight_path)},
+            )
+            self.assertEqual(
+                transition["preflight_campaign"],
+                {
+                    "campaign_id": "preflight-current",
+                    "manifest_sha256": codex_upgrade.file_sha256(preflight_dir / "campaign.json"),
+                },
+            )
+            # staging 场景已被受管快照逐字替换，manifest 与 copied_files 同步。
+            self.assertEqual(
+                codex_upgrade.file_sha256(staging_path),
+                codex_upgrade.file_sha256(preflight_path),
+            )
+            self.assertEqual(
+                successor_manifest["inputs"]["target_discovery_scenarios"],
+                transition["successor"],
+            )
+            self.assertEqual(
+                copied_files["inputs/target.json"]["kind"],
+                "official_reuse_target_scenario",
+            )
+            schema = json.loads(
+                Path(codex_upgrade.__file__)
+                .with_name("codex_upgrade_predecessor_import.schema.json")
+                .read_text(encoding="utf-8")
+            )
+            self.assertIn(
+                "official_reuse_target_scenario",
+                schema["$defs"]["copiedFile"]["properties"]["kind"]["enum"],
+            )
+            self.assertEqual(
+                set(transition),
+                set(schema["$defs"]["officialReuseTargetScenarioTransition"]["required"]),
+            )
+            # predecessor-import 读取侧按 Git 两端文件复算过渡。
+            receipt = {
+                "reason": codex_upgrade.OFFICIAL_EVIDENCE_REUSE_REASON,
+                "official_reuse_target_scenario_transition": transition,
+            }
+            self.assertTrue(
+                codex_upgrade._validate_official_reuse_target_scenario_import(
+                    receipt,
+                    campaign_dir=staging_dir,
+                    manifest=successor_manifest,
+                    predecessor_dir=predecessor_dir,
+                    predecessor_manifest=predecessor_manifest,
+                )
+            )
+            self.assertFalse(
+                codex_upgrade._validate_official_reuse_target_scenario_import(
+                    {"reason": codex_upgrade.OFFICIAL_EVIDENCE_REUSE_REASON},
+                    campaign_dir=staging_dir,
+                    manifest=successor_manifest,
+                    predecessor_dir=predecessor_dir,
+                    predecessor_manifest=predecessor_manifest,
+                )
+            )
+            tampered = json.loads(json.dumps(transition))
+            tampered["added_job_ids"] = []
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "Job 集漂移"):
+                codex_upgrade._validate_official_reuse_target_scenario_import(
+                    {
+                        "reason": codex_upgrade.OFFICIAL_EVIDENCE_REUSE_REASON,
+                        "official_reuse_target_scenario_transition": tampered,
+                    },
+                    campaign_dir=staging_dir,
+                    manifest=successor_manifest,
+                    predecessor_dir=predecessor_dir,
+                    predecessor_manifest=predecessor_manifest,
+                )
+            # 场景相同（无候选侧演进）时不产生过渡。
+            self._write_json(staging_dir / "inputs" / "same.json", managed)
+            same_manifest = {
+                "campaign_id": "formal-same",
+                "target_version": "0.154.0",
+                "inputs": {
+                    "target_discovery_scenarios": self._binding(
+                        staging_dir / "inputs" / "same.json", "inputs/same.json"
+                    )
+                },
+            }
+            with mock.patch.object(
+                codex_upgrade, "_control_receipt_relative", return_value="receipt.json"
+            ), mock.patch.object(
+                codex_upgrade.codex_upgrade_job_rehearsal_receipt, "replay", return_value={}
+            ), mock.patch.object(
+                codex_upgrade,
+                "_recovery_rehearsal_preflight_from_receipt",
+                return_value=(preflight_dir, preflight_manifest),
+            ):
+                self.assertIsNone(
+                    codex_upgrade._official_reuse_target_scenario_transition(
+                        arguments, staging_dir, same_manifest, {}
+                    )
+                )
+
     def test_v7_failed_job_recovery_allows_only_non_execution_scenario_drift(
         self,
     ) -> None:
