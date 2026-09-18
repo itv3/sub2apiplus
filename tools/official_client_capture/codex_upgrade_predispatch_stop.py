@@ -210,12 +210,13 @@ def _history_summary(
     summaries: list[dict[str, Any]] = []
     for state, prior, run_dir in ordered:
         if (
+            # 续接／收尾条款及其 run schema 已于 2026-09-16 删除；新 Campaign 的父
+            # run 只可能是批次或 v3 恢复两种形态。引用已删除常量会让停线收据永远
+            # 写不出来，派发前失败因此无法封口（v10 accept 重派时实际发生）。
             prior.get("schema_version")
             not in {
                 supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA,
                 supervisor.CAMPAIGN_RUN_RECOVERY_SCHEMA,
-                supervisor.CAMPAIGN_RUN_RECOVERY_CONTINUATION_SCHEMA,
-                supervisor.CAMPAIGN_RUN_RECOVERY_FINALIZATION_SCHEMA,
             }
             or prior.get("campaign_plan_sha256")
             != manifest.get("campaign_plan_sha256")
