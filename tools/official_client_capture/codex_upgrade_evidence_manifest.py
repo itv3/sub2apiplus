@@ -648,8 +648,16 @@ def verify_manifest_boundary(
         {key: value for key, value in item.items() if key not in current_drop}
         for item in current["entries"]
     ]
+    expected_roots = [
+        {key: value for key, value in item.items() if key not in expected_drop}
+        for item in expected["roots"]
+    ]
+    current_roots = [
+        {key: value for key, value in item.items() if key not in expected_drop}
+        for item in current["roots"]
+    ]
     if (
-        current["roots"] != expected["roots"]
+        current_roots != expected_roots
         or current_entries != expected_entries
         or (
             not rehearsal
@@ -660,7 +668,9 @@ def verify_manifest_boundary(
             # 隔离预演下把首个差异条目写到 stderr，便于区分 overlay 固有差异与真实漂移。
             import sys
 
-            detail: dict[str, Any] = {"roots_equal": current["roots"] == expected["roots"], "expected_count": len(expected_entries), "current_count": len(current_entries)}
+            detail: dict[str, Any] = {"roots_equal": current_roots == expected_roots, "expected_count": len(expected_entries), "current_count": len(current_entries)}
+            if current_roots != expected_roots:
+                detail["roots"] = {"expected": expected_roots, "current": current_roots}
             for index, (left, right) in enumerate(zip(expected_entries, current_entries)):
                 if left != right:
                     detail["first_diff_index"] = index
