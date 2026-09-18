@@ -107,6 +107,31 @@ class CandidateCoreCaptureScriptTest(unittest.TestCase):
         self.assertIn("stdin=subprocess.DEVNULL", a15)
         self.assertNotIn("stdin=subprocess.PIPE", a15)
 
+    def test_a15_witness_selects_contract_entry_by_originator(self) -> None:
+        """A15 合同入口按登记的 originator 选样本，TUI 的 codex-tui 并发预取不再抢占首个样本。
+
+        Codex 0.154 的 PTY TUI 会在 core（codex_cli_rs）之前以 originator=codex-tui
+        预取同一 models 清单；按"首个样本"判定曾在两次 Campaign 首跑失败、重试通过
+        （根因 rc1-f71cc39d58ddb64a5a03）。全部样本必须原样落盘为证据，不得丢弃。
+        """
+
+        start = self.source.index("# A15 要证明的是 exec 与 PTY TUI")
+        end = self.source.index("# 冻结动作和无生产转发门禁", start)
+        a15 = self.source[start:end]
+        self.assertIn('"codex_exec" if variant == "exec" else "codex_cli_rs"', a15)
+        self.assertIn('expected_originator = str(known_entry.get("expected_originator", ""))', a15)
+        self.assertIn(
+            'if not observations and observation["originator"] == expected_originator:',
+            a15,
+        )
+        self.assertNotIn("if not observations:\n                observations.append(observation)", a15)
+        self.assertIn("observed_models_all.setdefault(nonce, []).append(observation)", a15)
+        self.assertIn('witness_path = trace_path.with_name("witness-observations.jsonl")', a15)
+        self.assertIn('"contract_entry": sample in models_requests', a15)
+        # 合同入口的 originator 断言与"恰好一个入口样本"判定保持不变。
+        self.assertIn('expected_originator="codex_cli_rs"', a15)
+        self.assertIn("if len(models_requests) != 1:", a15)
+
     def test_a15_binds_nonce_digests_and_server_cache_counts(self) -> None:
         start = self.source.index("# A15 要证明的是 exec 与 PTY TUI")
         end = self.source.index("# 冻结动作和无生产转发门禁", start)

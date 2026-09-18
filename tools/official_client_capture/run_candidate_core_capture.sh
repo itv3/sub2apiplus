@@ -1292,6 +1292,8 @@ def wait_stable_models_count(expected: int, settle_seconds: float = 0.6) -> int:
 state_lock = threading.Lock()
 known_requests: dict[str, dict[str, object]] = {}
 observed_models: dict[str, list[dict[str, object]]] = {}
+# 每个 nonce 收到的全部 models 样本（含非合同入口的并发预取），作为原始证据落盘。
+observed_models_all: dict[str, list[dict[str, object]]] = {}
 observed_identities: dict[str, list[dict[str, object]]] = {}
 
 TUI_PLUGIN_TARGETS = {
@@ -1465,12 +1467,22 @@ class WitnessHandler(http.server.BaseHTTPRequestHandler):
         }
         with state_lock:
             # 真实客户端可能在进程终止前重复刷新同一 models；合同按真实入口
-            # 取首个 HTTP 200 样本，网关上游唯一性另由 conn001 与 intervention
-            # 原件失败关闭，不能把客户端缓存命中误计成新的入口。
+            # 取首个样本，网关上游唯一性另由 conn001 与 intervention 原件
+            # 失败关闭，不能把客户端缓存命中误计成新的入口。
+            # 2026-09-18：Codex 0.154 的 PTY TUI 会在 core 之前以
+            # originator=codex-tui 预取同一 models 清单，与合同入口（core 的
+            # codex_cli_rs）并发到达，按"首个样本"判定会间歇失败（两次 Campaign
+            # 首跑失败、重试通过）。合同入口改为按登记的 expected_originator
+            # 选取首个样本；其余样本逐条保留到 witness-observations.jsonl
+            # 作为原始证据，不丢弃也不伪装成入口。
+            known_entry = known_requests[nonce]
+            expected_originator = str(known_entry.get("expected_originator", ""))
+            observed_models_all.setdefault(nonce, []).append(observation)
             observations = observed_models.setdefault(nonce, [])
-            if not observations:
+            event = None
+            if not observations and observation["originator"] == expected_originator:
                 observations.append(observation)
-            event = known_requests[nonce]["models_event"]
+                event = known_entry["models_event"]
         if isinstance(event, threading.Event):
             event.set()
 
@@ -1630,8 +1642,14 @@ def launch_one(
                 "models_event": models_event,
                 "identity_event": identity_event,
                 "variant": variant,
+                # 合同入口的 originator：exec 由 codex_exec 发起，TUI 启动由 core
+                # （codex_cli_rs）发起；TUI 自身的 codex-tui 预取不是入口。
+                "expected_originator": (
+                    "codex_exec" if variant == "exec" else "codex_cli_rs"
+                ),
             }
             observed_models[nonce] = []
+            observed_models_all[nonce] = []
             observed_identities[nonce] = []
 
         environment = os.environ.copy()
@@ -1707,6 +1725,24 @@ def launch_one(
         with state_lock:
             models_requests = list(observed_models.get(nonce, []))
             identity_requests = list(observed_identities.get(nonce, []))
+            all_models_requests = list(observed_models_all.get(nonce, []))
+        witness_path = trace_path.with_name("witness-observations.jsonl")
+        with witness_path.open("a", encoding="utf-8") as witness_stream:
+            for sample in all_models_requests:
+                witness_stream.write(
+                    json.dumps(
+                        {
+                            "variant": variant,
+                            "correlation_nonce": nonce,
+                            "contract_entry": sample in models_requests,
+                            **sample,
+                        },
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                    + "\n"
+                )
+        os.chmod(witness_path, 0o600)
         if len(models_requests) != 1:
             raise RuntimeError(
                 f"A15 {variant} 目标 models 请求数 {len(models_requests)} != 1"
@@ -1917,6 +1953,7 @@ def launch_one(
         with state_lock:
             known_requests.pop(nonce, None)
             observed_models.pop(nonce, None)
+            observed_models_all.pop(nonce, None)
             observed_identities.pop(nonce, None)
         shutil.rmtree(home, ignore_errors=True)
 
