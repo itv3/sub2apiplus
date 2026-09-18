@@ -323,6 +323,25 @@ def _bind_alias(source: Path, alias: Path) -> None:
         )
 
 
+LEGAL_STOP_STATUSES = frozenset({"approval_required"})
+
+
+def _approval_stop_status(stdout_tail: str) -> str | None:
+    """从动作 stdout 末尾的 JSON 里取合法停靠状态（approval_required），否则 None。"""
+
+    text = stdout_tail.strip()
+    if not text.endswith("}"):
+        return None
+    start = text.rfind("\n{")
+    candidate = text[start + 1 :] if start >= 0 else text
+    try:
+        payload = json.loads(candidate)
+    except json.JSONDecodeError:
+        return None
+    status = payload.get("status") if isinstance(payload, Mapping) else None
+    return status if status in LEGAL_STOP_STATUSES else None
+
+
 def run_driver(arguments: Mapping[str, Any]) -> dict[str, Any]:
     """namespace 内主体：挂 overlay、逐动作执行、取最终 status。
 
@@ -386,17 +405,27 @@ def run_driver(arguments: Mapping[str, Any]) -> dict[str, Any]:
             stdout_tail = _tail(error.stdout.decode("utf-8", "replace") if isinstance(error.stdout, bytes) else str(error.stdout or ""))
             stderr_tail = "动作超时。" + _tail(error.stderr.decode("utf-8", "replace") if isinstance(error.stderr, bytes) else str(error.stderr or ""))
         duration = time.monotonic() - started
+        passed = returncode == 0
+        legal_stop: str | None = None
+        if returncode == 2 and not action.get("approve"):
+            # seal 预览与正式监督器一样，以退出码 2 + status=approval_required 停靠：
+            # 预览已写出 seal-preview.json 与 review_sha256，等待批准，不是失败。
+            legal_stop = _approval_stop_status(stdout_tail)
+            if legal_stop is not None and (attempt_root / "seal-preview.json").is_file():
+                passed = True
         record = {
             "action_id": action["action_id"],
-            "status": "passed" if returncode == 0 else "failed",
+            "status": "passed" if passed else "failed",
             "returncode": returncode,
             "duration_seconds": round(duration, 3),
             "stdout_tail": stdout_tail,
             "stderr_tail": stderr_tail,
             "upper_inventory": upper_inventory(upper_root),
         }
+        if legal_stop is not None and passed:
+            record["legal_stop"] = legal_stop
         results.append(record)
-        if returncode != 0:
+        if not passed:
             status = "failed"
             break
     final: dict[str, Any] | None = None

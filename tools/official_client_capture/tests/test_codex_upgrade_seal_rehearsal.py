@@ -314,6 +314,41 @@ class SealRehearsalTests(unittest.TestCase):
             self.assertEqual(marker.read_text(encoding="utf-8"), f"--approve-seal-sha256 {'c' * 64}")
             self.assertEqual(result["final_status"]["status"], "candidate_sealed")
 
+    def test_driver_treats_preview_approval_required_stop_as_passed_and_injects_context(self) -> None:
+        """seal 预览以退出码 2 + status=approval_required 停靠属于通过；driver 注入预演上下文标记并清除 campaign-run 标记。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            attempt_root = root / "attempt"
+            attempt_root.mkdir()
+            preview = attempt_root / "seal-preview.json"
+            env_marker = root / "env.txt"
+            write_preview_and_stop = (
+                "import json,os,sys; from pathlib import Path; "
+                f"Path({str(preview)!r}).write_text(json.dumps({{'review_sha256': 'd' * 64}})); "
+                f"Path({str(env_marker)!r}).write_text(os.environ.get('CODEX_UPGRADE_SEAL_REHEARSAL_ACTIVE','') + '|' + os.environ.get('CODEX_UPGRADE_CAMPAIGN_RUN_ACTIVE','')); "
+                "print(json.dumps({'status': 'approval_required', 'review_sha256': 'd' * 64})); sys.exit(2)"
+            )
+            stop_without_preview = "import json,sys; print(json.dumps({'status': 'approval_required'})); sys.exit(2)"
+            plain_failure = "import sys; sys.exit(2)"
+            def run(command):
+                actions = rehearsal.normalize_rehearsal_actions(
+                    [{"action_id": "preview", "operation": "x", "timeout_seconds": 5, "command": [sys.executable, "-c", command], "item_ids": ["candidate-seal"]}]
+                )
+                with mock.patch.object(rehearsal, "_mount_overlay"), mock.patch.object(rehearsal, "_bind_alias"), mock.patch.dict(
+                    os.environ, {"CODEX_UPGRADE_CAMPAIGN_RUN_ACTIVE": "1"}
+                ):
+                    return rehearsal.run_driver(
+                        {"overlay_roots": [str(root / "data")], "upper_root": str(root / "upper"), "attempt_root": str(attempt_root), "actions": actions, "status_command": [], "environment": {}}
+                    )
+            result = run(write_preview_and_stop)
+            self.assertEqual(result["status"], "passed")
+            self.assertEqual(result["results"][0]["legal_stop"], "approval_required")
+            self.assertEqual(env_marker.read_text(encoding="utf-8"), "1|")
+            preview.unlink()
+            self.assertEqual(run(stop_without_preview)["status"], "failed")
+            self.assertEqual(run(plain_failure)["status"], "failed")
+
     def test_supervisor_gate_requires_receipt_and_rejects_bash_c(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
