@@ -160,8 +160,7 @@ func EngineSupportedEnumValues() EnumCatalog {
 			string(ConditionSessionIdPresent),
 			string(ConditionSubagentPresent),
 			string(ConditionTurnStatePresent),
-			// wham_usage 的 Luna Reserve 条件槽位；候选快照入库并重跑 -enums 前先以字面量登记。
-			"luna_reserve_present",
+			string(ConditionLunaReservePresent),
 		},
 		EnumDomainHeaderOrderKind: {
 			string(HeaderOrderExplicitOrder),
