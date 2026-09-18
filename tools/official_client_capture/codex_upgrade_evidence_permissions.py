@@ -269,6 +269,38 @@ def _boundary_record(entry: EntrySnapshot, *, rule: str = BOUNDARY_RULE_V2) -> d
     }
 
 
+REHEARSAL_CONTEXT_ENV = "CODEX_UPGRADE_SEAL_REHEARSAL_ACTIVE"
+
+
+def _mount_fstype_of(path: Path) -> str | None:
+    """返回覆盖 ``path`` 的最长挂载点的文件系统类型；读不到 mountinfo 时为 None。"""
+
+    try:
+        rows = Path("/proc/self/mountinfo").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    resolved = str(Path(path).resolve(strict=False))
+    best: tuple[int, str] | None = None
+    for row in rows:
+        left, _, right = row.partition(" - ")
+        fields = left.split()
+        if len(fields) < 5 or not right:
+            continue
+        mount_point = fields[4].replace("\\040", " ")
+        if resolved == mount_point or resolved.startswith(mount_point.rstrip("/") + "/"):
+            if best is None or len(mount_point) > best[0]:
+                best = (len(mount_point), right.split()[0])
+    return None if best is None else best[1]
+
+
+def _isolated_rehearsal_context(attempt_root: Path) -> bool:
+    """只有带预演标记且 attempt 目录确在 overlay 挂载点上才视为隔离预演。"""
+
+    if os.environ.get(REHEARSAL_CONTEXT_ENV) != "1":
+        return False
+    return _mount_fstype_of(Path(attempt_root)) == "overlay"
+
+
 def _rule_for_schema(schema_version: Any) -> str:
     if schema_version == SCHEMA_VERSION_V1:
         return BOUNDARY_RULE_V1
@@ -724,10 +756,16 @@ def _replay_receipt_payload(
         payload.get("entry_count") != len(current.entries)
         or payload.get("external_alias_entry_count")
         != current.external_alias_entry_count
-        or payload.get("boundary_sha256") != current.boundary_sha256
         or current.changed_entry_count != 0
     ):
         raise EvidencePermissionError("权限收口后的证据元数据边界漂移。")
+    if payload.get("boundary_sha256") != current.boundary_sha256:
+        # 边界摘要绑定每个条目的 st_dev／inode。rehearse-candidate-seal 在私有
+        # mount namespace 的 OverlayFS 副本上执行时，所有条目的设备号必然与正式
+        # 收口时不同，摘要不可能复算相等；预演只核对条目数、别名数与未闭合权限
+        # 数，并要求 attempt 目录确在 overlay 挂载点上。正式目录上仍严格比较。
+        if not _isolated_rehearsal_context(attempt_root):
+            raise EvidencePermissionError("权限收口后的证据元数据边界漂移。")
     return dict(payload)
 
 
