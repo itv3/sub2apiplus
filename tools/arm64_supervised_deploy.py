@@ -134,8 +134,13 @@ from typing import Any, Callable, Mapping
 # 水位只记 degraded，v6 收据按显式合同只读重放）；canonical 交接四步进入 post-run-tooling
 # 可恢复分类并按冻结映射从命令提取 attempt，批准摘要只散列 approval_projection。
 # 监督器随之变化；断言预处理器未变。
+# 2026-09-19（升级工具改造第 2 批 M1：批次 staging/WAL）：VC-2～VC-6 批次先写 staging attempt
+# 三件套，父 run 以 prepared 起动，账本事件 → 发布 → COMMIT → running 四步在同一锁内提交；
+# 序号占用只认 control/vc/commits/ 的 COMMIT；取得执行权前的失败（P1～P4）由入口孤儿
+# 对账、monitor 三分类与 reconciler 新分支闭合，不再产生 predispatch-stop/v1；根因编码表
+# 新增四条 code（需项目总账 root-cause-code-migration 收据衔接）。监督器随之变化；断言预处理器未变。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "e39bc4b7ca4c4df378c189d8a7a0f8f39a65d65a80affc8324cfe353a6da1a1b"
+    "df2862d7b34ff92c88765d9206ada8bc5429d9a1724fc5fac8b0034fd650ede1"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "ea5500505d49340fe4971b981a8ab1159266c6a54ad0d3724cdf10cd51815fe4"

@@ -117,6 +117,9 @@ TERMINAL_REASONS = (
     "prior_stop_the_line",
     "prior_upgrade_complete",
     "superseded",
+    # 改造 4：prepared 父 run 的正式 COMMIT 制品完整性异常（自摘要无效、owner nonce 或
+    # run 目录不匹配）。与 identity_changed（wire／策略身份漂移）语义不同，不混用。
+    "integrity_mismatch",
 )
 REQUEST_STATUSES = ("resolved", "estimated", "unresolved")
 BLOCKED_ALLOWED_EVENTS = frozenset(

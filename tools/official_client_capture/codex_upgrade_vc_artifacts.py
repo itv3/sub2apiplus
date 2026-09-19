@@ -30,6 +30,34 @@ GATE_PLAN_SCHEMA = "codex-post-promotion-gate-plan/v1"
 LEGACY_CANDIDATE_BUILD_SCHEMA = "codex-upgrade-candidate-build-receipt/v1"
 CANDIDATE_BUILD_SCHEMA = "codex-upgrade-candidate-build-receipt/v2"
 CANDIDATE_DELIVERY_SCHEMA = "codex-upgrade-candidate-delivery-receipt/v1"
+# 改造 4（staging/WAL）：批次先落 staging，父 run 取得执行权前不占正式序号；
+# 唯一原子提交点是 control/vc/commits/ 下的 COMMIT 记录，永不移动、永不删除。
+VC_COMMIT_SCHEMA = "codex-upgrade-vc-commit/v1"
+STAGING_MARKER_SCHEMA = "codex-upgrade-vc-staging-prepared/v1"
+STAGING_ABORT_SCHEMA = "codex-upgrade-staging-abort/v1"
+PARENT_START_FAILURE_SCHEMA = "codex-upgrade-parent-start-failure/v1"
+# Campaign 总计划的批次模型：legacy = 改造前直接写正式 batch；staging = 先 staging 再 COMMIT。
+# 历史 plan 没有该字段，按 legacy 解释，其 plan_sha256 不变。
+BATCH_MODELS = ("legacy", "staging")
+# ABORT 的 stage：prepare／parent-run-create 是没有父 run 的 P1；parent-run 是父 run
+# prepared 后被遗弃（P2）或 watchdog 中止；其余四个是 commit 四步中 COMMIT 前的失败步骤
+# （与监督器 stop reason ``staging-commit-failed:<step>`` 的后缀同名）。
+STAGING_ABORT_STAGES = (
+    "prepare",
+    "parent-run-create",
+    "parent-run",
+    "nonce-mismatch",
+    "commit-ledger",
+    "commit-publish",
+    "commit-mark",
+)
+STAGING_ABORT_FAILURE_KINDS = (
+    "abandoned",
+    "prepare-failed",
+    "commit-failed",
+    "interrupted",
+)
+PARENT_START_FAILURE_KINDS = ("owner-lost", "state-write-failed")
 
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 RULE_RE = re.compile(r"^SPEC-[A-Z0-9]+-[0-9]{3}$")
@@ -160,8 +188,13 @@ def build_campaign_plan(
     arm64_environment_sha256: str,
     job_rehearsal_sha256: str | None,
     p0_gate_sha256: str | None,
+    batch_model: str | None = "staging",
 ) -> dict[str, Any]:
-    """冻结 VC-0 可知的总计划；禁止预填未来阶段才会产生的身份。"""
+    """冻结 VC-0 可知的总计划；禁止预填未来阶段才会产生的身份。
+
+    ``batch_model`` 默认 ``staging``（改造 4 之后创建的 Campaign）；传 ``None`` 只用于
+    构造与历史 plan 逐字一致的夹具，输出里不带该字段。
+    """
 
     payload = {
         "schema_version": CAMPAIGN_PLAN_SCHEMA,
@@ -200,8 +233,23 @@ def build_campaign_plan(
             ),
         },
     }
+    if batch_model is not None:
+        if batch_model not in BATCH_MODELS:
+            raise VCArtifactError("Campaign 总计划 batch_model 非法")
+        payload["batch_model"] = batch_model
     payload["plan_sha256"] = digest(payload)
     return validate_campaign_plan(payload)
+
+
+def campaign_plan_batch_model(plan: Mapping[str, Any]) -> str:
+    """返回总计划声明的批次模型；历史 plan 缺失即 legacy。"""
+
+    model = plan.get("batch_model")
+    if model is None:
+        return "legacy"
+    if model not in BATCH_MODELS:
+        raise VCArtifactError("Campaign 总计划 batch_model 非法")
+    return str(model)
 
 
 def validate_campaign_plan(value: Any) -> dict[str, Any]:
@@ -221,9 +269,12 @@ def validate_campaign_plan(value: Any) -> dict[str, Any]:
         "controls",
         "plan_sha256",
     }
-    if not isinstance(value, Mapping) or set(value) != required:
+    # batch_model 是唯一可选字段：历史 plan 没有它（legacy），新 plan 必须是合法枚举值。
+    if not isinstance(value, Mapping) or set(value) - {"batch_model"} != required:
         raise VCArtifactError("Campaign 总计划字段不闭合")
     payload = dict(value)
+    if "batch_model" in payload and payload["batch_model"] not in BATCH_MODELS:
+        raise VCArtifactError("Campaign 总计划 batch_model 非法")
     if (
         payload.get("schema_version") != CAMPAIGN_PLAN_SCHEMA
         or payload.get("campaign_mode") not in {"preflight_only", "formal"}
@@ -507,6 +558,352 @@ def validate_vc_batch(
         ):
             raise VCArtifactError("VC batch 未继承同一 Campaign 或原始 deadline")
     _self_digest(payload, "batch_sha256", "VC batch")
+    return payload
+
+
+# ---------------------------------------------------------------------------
+# 改造 4：staging／COMMIT／abort／父启动失败 四种小型控制制品
+# ---------------------------------------------------------------------------
+
+_ROOT_CAUSE_ID_RE = re.compile(r"^rc1-[0-9a-f]{20}$")
+
+
+def _positive_int(value: Any, label: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+        raise VCArtifactError(f"{label} 必须是正整数")
+    return value
+
+
+def _batch_phase(value: Any, label: str) -> str:
+    if value not in VC_PHASES[1:]:
+        raise VCArtifactError(f"{label} 不是可派发的 VC 阶段")
+    return str(value)
+
+
+def build_staging_prepared_marker(
+    *,
+    campaign_id: str,
+    sequence: int,
+    phase: str,
+    attempt: int,
+    batch_sha256: str,
+    manifest_sha256: str,
+    owner_nonce: str,
+    prepared_at_utc: str,
+) -> dict[str, Any]:
+    """staging attempt 的 PREPARED 标记：绑定两份产物与入口预分配的父 run nonce。"""
+
+    payload = {
+        "schema_version": STAGING_MARKER_SCHEMA,
+        "campaign_id": _safe_id(campaign_id, "campaign_id"),
+        "sequence": _positive_int(sequence, "sequence"),
+        "phase": _batch_phase(phase, "phase"),
+        "attempt": _positive_int(attempt, "attempt"),
+        "batch_sha256": _sha256(batch_sha256, "batch_sha256"),
+        "manifest_sha256": _sha256(manifest_sha256, "manifest_sha256"),
+        "owner_nonce": _sha256(owner_nonce, "owner_nonce"),
+        "prepared_at_utc": _timestamp(prepared_at_utc, "prepared_at_utc"),
+    }
+    payload["marker_sha256"] = digest(payload)
+    return validate_staging_prepared_marker(payload)
+
+
+def validate_staging_prepared_marker(value: Any) -> dict[str, Any]:
+    required = {
+        "schema_version",
+        "campaign_id",
+        "sequence",
+        "phase",
+        "attempt",
+        "batch_sha256",
+        "manifest_sha256",
+        "owner_nonce",
+        "prepared_at_utc",
+        "marker_sha256",
+    }
+    if not isinstance(value, Mapping) or set(value) != required:
+        raise VCArtifactError("staging PREPARED 标记字段不闭合")
+    payload = dict(value)
+    if payload.get("schema_version") != STAGING_MARKER_SCHEMA:
+        raise VCArtifactError("staging PREPARED 标记 schema_version 非法")
+    _safe_id(payload.get("campaign_id"), "PREPARED campaign_id")
+    _positive_int(payload.get("sequence"), "PREPARED sequence")
+    _batch_phase(payload.get("phase"), "PREPARED phase")
+    _positive_int(payload.get("attempt"), "PREPARED attempt")
+    _sha256(payload.get("batch_sha256"), "PREPARED batch_sha256")
+    _sha256(payload.get("manifest_sha256"), "PREPARED manifest_sha256")
+    _sha256(payload.get("owner_nonce"), "PREPARED owner_nonce")
+    _timestamp(payload.get("prepared_at_utc"), "PREPARED prepared_at_utc")
+    _self_digest(payload, "marker_sha256", "staging PREPARED 标记")
+    return payload
+
+
+def build_vc_commit(
+    *,
+    campaign_id: str,
+    sequence: int,
+    phase: str,
+    staging_attempt: int,
+    batch_sha256: str,
+    manifest_sha256: str,
+    parent_run_dir: str,
+    owner_nonce: str,
+    ledger_event_ids: Sequence[str],
+    committed_at_utc: str,
+) -> dict[str, Any]:
+    """正式 COMMIT：唯一原子提交点，写入即永久占用序号。"""
+
+    if not isinstance(parent_run_dir, str) or not PurePosixPath(parent_run_dir).is_absolute():
+        raise VCArtifactError("COMMIT parent_run_dir 必须是绝对路径")
+    events = [str(item) for item in ledger_event_ids]
+    if any(not item for item in events) or len(events) != len(set(events)):
+        raise VCArtifactError("COMMIT ledger_event_ids 非法")
+    payload = {
+        "schema_version": VC_COMMIT_SCHEMA,
+        "campaign_id": _safe_id(campaign_id, "campaign_id"),
+        "sequence": _positive_int(sequence, "sequence"),
+        "phase": _batch_phase(phase, "phase"),
+        "staging_attempt": _positive_int(staging_attempt, "staging_attempt"),
+        "batch_sha256": _sha256(batch_sha256, "batch_sha256"),
+        "manifest_sha256": _sha256(manifest_sha256, "manifest_sha256"),
+        "parent_run_dir": parent_run_dir,
+        "owner_nonce": _sha256(owner_nonce, "owner_nonce"),
+        "ledger_event_ids": events,
+        "committed_at_utc": _timestamp(committed_at_utc, "committed_at_utc"),
+    }
+    payload["commit_sha256"] = digest(payload)
+    return validate_vc_commit(payload)
+
+
+def validate_vc_commit(value: Any) -> dict[str, Any]:
+    required = {
+        "schema_version",
+        "campaign_id",
+        "sequence",
+        "phase",
+        "staging_attempt",
+        "batch_sha256",
+        "manifest_sha256",
+        "parent_run_dir",
+        "owner_nonce",
+        "ledger_event_ids",
+        "committed_at_utc",
+        "commit_sha256",
+    }
+    if not isinstance(value, Mapping) or set(value) != required:
+        raise VCArtifactError("VC COMMIT 字段不闭合")
+    payload = dict(value)
+    if payload.get("schema_version") != VC_COMMIT_SCHEMA:
+        raise VCArtifactError("VC COMMIT schema_version 非法")
+    _safe_id(payload.get("campaign_id"), "COMMIT campaign_id")
+    _positive_int(payload.get("sequence"), "COMMIT sequence")
+    _batch_phase(payload.get("phase"), "COMMIT phase")
+    _positive_int(payload.get("staging_attempt"), "COMMIT staging_attempt")
+    _sha256(payload.get("batch_sha256"), "COMMIT batch_sha256")
+    _sha256(payload.get("manifest_sha256"), "COMMIT manifest_sha256")
+    parent_run_dir = payload.get("parent_run_dir")
+    if not isinstance(parent_run_dir, str) or not PurePosixPath(parent_run_dir).is_absolute():
+        raise VCArtifactError("COMMIT parent_run_dir 必须是绝对路径")
+    _sha256(payload.get("owner_nonce"), "COMMIT owner_nonce")
+    events = payload.get("ledger_event_ids")
+    if (
+        not isinstance(events, list)
+        or any(not isinstance(item, str) or not item for item in events)
+        or len(events) != len(set(events))
+    ):
+        raise VCArtifactError("COMMIT ledger_event_ids 非法")
+    _timestamp(payload.get("committed_at_utc"), "COMMIT committed_at_utc")
+    _self_digest(payload, "commit_sha256", "VC COMMIT")
+    return payload
+
+
+def build_staging_abort(
+    *,
+    campaign_id: str,
+    campaign_plan_sha256: str,
+    phase: str,
+    sequence: int,
+    staging_attempt: int,
+    stage: str,
+    failure_kind: str,
+    error_type: str,
+    root_cause_id: str,
+    batch_sha256: str | None,
+    manifest_sha256: str | None,
+    parent_run_dir: str | None,
+    parent_run_state: str | None,
+    reconciliation_receipt: Mapping[str, Any] | None,
+    recorded_at_utc: str,
+) -> dict[str, Any]:
+    """staging 中止事实：只记录发生了什么，不携带任何"可续跑"授权字段。"""
+
+    payload = {
+        "schema_version": STAGING_ABORT_SCHEMA,
+        "campaign_id": _safe_id(campaign_id, "campaign_id"),
+        "campaign_plan_sha256": _sha256(campaign_plan_sha256, "campaign_plan_sha256"),
+        "phase": _batch_phase(phase, "phase"),
+        "sequence": _positive_int(sequence, "sequence"),
+        "staging_attempt": _positive_int(staging_attempt, "staging_attempt"),
+        "stage": stage,
+        "failure_kind": failure_kind,
+        "error_type": error_type,
+        "root_cause_id": root_cause_id,
+        "batch_sha256": batch_sha256,
+        "manifest_sha256": manifest_sha256,
+        "parent_run_dir": parent_run_dir,
+        "parent_run_state": parent_run_state,
+        "reconciliation_receipt": (
+            dict(reconciliation_receipt) if reconciliation_receipt is not None else None
+        ),
+        "live_request_count": 0,
+        "scanned_bytes": 0,
+        "recorded_at_utc": _timestamp(recorded_at_utc, "recorded_at_utc"),
+    }
+    payload["receipt_sha256"] = digest(payload)
+    return validate_staging_abort(payload)
+
+
+def validate_staging_abort(value: Any) -> dict[str, Any]:
+    required = {
+        "schema_version",
+        "campaign_id",
+        "campaign_plan_sha256",
+        "phase",
+        "sequence",
+        "staging_attempt",
+        "stage",
+        "failure_kind",
+        "error_type",
+        "root_cause_id",
+        "batch_sha256",
+        "manifest_sha256",
+        "parent_run_dir",
+        "parent_run_state",
+        "reconciliation_receipt",
+        "live_request_count",
+        "scanned_bytes",
+        "recorded_at_utc",
+        "receipt_sha256",
+    }
+    if not isinstance(value, Mapping) or set(value) != required:
+        raise VCArtifactError("staging-abort 收据字段不闭合")
+    payload = dict(value)
+    if payload.get("schema_version") != STAGING_ABORT_SCHEMA:
+        raise VCArtifactError("staging-abort 收据 schema_version 非法")
+    _safe_id(payload.get("campaign_id"), "staging-abort campaign_id")
+    _sha256(payload.get("campaign_plan_sha256"), "staging-abort campaign_plan_sha256")
+    _batch_phase(payload.get("phase"), "staging-abort phase")
+    _positive_int(payload.get("sequence"), "staging-abort sequence")
+    _positive_int(payload.get("staging_attempt"), "staging-abort staging_attempt")
+    if payload.get("stage") not in STAGING_ABORT_STAGES:
+        raise VCArtifactError("staging-abort stage 非法")
+    if payload.get("failure_kind") not in STAGING_ABORT_FAILURE_KINDS:
+        raise VCArtifactError("staging-abort failure_kind 非法")
+    error_type = payload.get("error_type")
+    if not isinstance(error_type, str) or not error_type or len(error_type) > 128:
+        raise VCArtifactError("staging-abort error_type 非法")
+    root_cause_id = payload.get("root_cause_id")
+    if not isinstance(root_cause_id, str) or not _ROOT_CAUSE_ID_RE.fullmatch(root_cause_id):
+        raise VCArtifactError("staging-abort root_cause_id 非法")
+    for field in ("batch_sha256", "manifest_sha256"):
+        if payload.get(field) is not None:
+            _sha256(payload.get(field), f"staging-abort {field}")
+    for field in ("parent_run_dir", "parent_run_state"):
+        item = payload.get(field)
+        if item is not None and (not isinstance(item, str) or not item):
+            raise VCArtifactError(f"staging-abort {field} 非法")
+    if payload.get("parent_run_dir") is not None and not PurePosixPath(
+        str(payload["parent_run_dir"])
+    ).is_absolute():
+        raise VCArtifactError("staging-abort parent_run_dir 必须是绝对路径")
+    receipt = payload.get("reconciliation_receipt")
+    if receipt is not None:
+        _binding(receipt, "staging-abort reconciliation_receipt")
+    if payload.get("live_request_count") != 0 or payload.get("scanned_bytes") != 0:
+        raise VCArtifactError("staging-abort 必须是零请求零扫描事实")
+    _timestamp(payload.get("recorded_at_utc"), "staging-abort recorded_at_utc")
+    _self_digest(payload, "receipt_sha256", "staging-abort 收据")
+    return payload
+
+
+def build_parent_start_failure(
+    *,
+    campaign_id: str,
+    phase: str,
+    batch_sequence: int,
+    batch_sha256: str,
+    commit_sha256: str,
+    owner_pid: int,
+    owner_nonce: str,
+    failure_kind: str,
+    error_type: str,
+    recorded_at_utc: str,
+) -> dict[str, Any]:
+    """父启动失败诊断：COMMIT 已写但 run 未取得执行权；零动作、零 reservation、零请求。"""
+
+    payload = {
+        "schema_version": PARENT_START_FAILURE_SCHEMA,
+        "campaign_id": _safe_id(campaign_id, "campaign_id"),
+        "phase": _batch_phase(phase, "phase"),
+        "batch_sequence": _positive_int(batch_sequence, "batch_sequence"),
+        "batch_sha256": _sha256(batch_sha256, "batch_sha256"),
+        "commit_sha256": _sha256(commit_sha256, "commit_sha256"),
+        "owner_pid": _positive_int(owner_pid, "owner_pid"),
+        "owner_nonce": _sha256(owner_nonce, "owner_nonce"),
+        "action_started": False,
+        "reservation_exists": False,
+        "live_request_count": 0,
+        "failure_kind": failure_kind,
+        "error_type": error_type,
+        "recorded_at_utc": _timestamp(recorded_at_utc, "recorded_at_utc"),
+    }
+    payload["diagnostic_sha256"] = digest(payload)
+    return validate_parent_start_failure(payload)
+
+
+def validate_parent_start_failure(value: Any) -> dict[str, Any]:
+    required = {
+        "schema_version",
+        "campaign_id",
+        "phase",
+        "batch_sequence",
+        "batch_sha256",
+        "commit_sha256",
+        "owner_pid",
+        "owner_nonce",
+        "action_started",
+        "reservation_exists",
+        "live_request_count",
+        "failure_kind",
+        "error_type",
+        "recorded_at_utc",
+        "diagnostic_sha256",
+    }
+    if not isinstance(value, Mapping) or set(value) != required:
+        raise VCArtifactError("父启动失败诊断字段不闭合")
+    payload = dict(value)
+    if payload.get("schema_version") != PARENT_START_FAILURE_SCHEMA:
+        raise VCArtifactError("父启动失败诊断 schema_version 非法")
+    _safe_id(payload.get("campaign_id"), "父启动失败 campaign_id")
+    _batch_phase(payload.get("phase"), "父启动失败 phase")
+    _positive_int(payload.get("batch_sequence"), "父启动失败 batch_sequence")
+    _sha256(payload.get("batch_sha256"), "父启动失败 batch_sha256")
+    _sha256(payload.get("commit_sha256"), "父启动失败 commit_sha256")
+    _positive_int(payload.get("owner_pid"), "父启动失败 owner_pid")
+    _sha256(payload.get("owner_nonce"), "父启动失败 owner_nonce")
+    if (
+        payload.get("action_started") is not False
+        or payload.get("reservation_exists") is not False
+        or payload.get("live_request_count") != 0
+    ):
+        raise VCArtifactError("父启动失败诊断必须证明零动作、零 reservation、零请求")
+    if payload.get("failure_kind") not in PARENT_START_FAILURE_KINDS:
+        raise VCArtifactError("父启动失败 failure_kind 非法")
+    error_type = payload.get("error_type")
+    if not isinstance(error_type, str) or not error_type or len(error_type) > 128:
+        raise VCArtifactError("父启动失败 error_type 非法")
+    _timestamp(payload.get("recorded_at_utc"), "父启动失败 recorded_at_utc")
+    _self_digest(payload, "diagnostic_sha256", "父启动失败诊断")
     return payload
 
 

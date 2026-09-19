@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-parent-start-failure-v1.json",
+  "title": "Codex 父监督器启动失败诊断（COMMIT 已写、run 未取得执行权；零动作零请求）",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "campaign_id", "phase", "batch_sequence", "batch_sha256", "commit_sha256",
+    "owner_pid", "owner_nonce", "action_started", "reservation_exists", "live_request_count",
+    "failure_kind", "error_type", "recorded_at_utc", "diagnostic_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "codex-upgrade-parent-start-failure/v1"},
+    "campaign_id": {"$ref": "#/$defs/safeId"},
+    "phase": {"enum": ["VC-1", "VC-2", "VC-3", "VC-4", "VC-5", "VC-6"]},
+    "batch_sequence": {"type": "integer", "minimum": 1},
+    "batch_sha256": {"$ref": "#/$defs/sha256"},
+    "commit_sha256": {"$ref": "#/$defs/sha256"},
+    "owner_pid": {"type": "integer", "minimum": 1},
+    "owner_nonce": {"$ref": "#/$defs/sha256"},
+    "action_started": {"const": false},
+    "reservation_exists": {"const": false},
+    "live_request_count": {"const": 0},
+    "failure_kind": {"enum": ["owner-lost", "state-write-failed"]},
+    "error_type": {"type": "string", "minLength": 1, "maxLength": 128},
+    "recorded_at_utc": {"type": "string", "format": "date-time"},
+    "diagnostic_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "safeId": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"}
+  }
+}

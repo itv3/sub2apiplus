@@ -448,6 +448,37 @@ class ProjectLedgerTests(unittest.TestCase):
             with self.assertRaisesRegex(ledger.ProjectLedgerError, "已终态"):
                 ledger.assert_campaign_admitted(campaign_dir, command="seal", require=True)
 
+    def test_campaign_terminal_accepts_integrity_mismatch_and_rejects_unknown_reason(self) -> None:
+        """改造 4：COMMIT／父 run 制品完整性异常是独立终态原因，不复用 identity_changed。"""
+
+        self.assertIn("integrity_mismatch", ledger.TERMINAL_REASONS)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            ledger_root = _create(root)
+            campaign_dir = _campaign(root, "c1")
+            _register(root, campaign_dir, "c1")
+            ledger.append_project_event(
+                ledger_root,
+                operation_id="term-c1",
+                event_type="campaign_terminal",
+                payload={"campaign_id": "c1", "terminal_reason": "integrity_mismatch"},
+                source_batch_sha256=None,
+            )
+            head = ledger.replay_head(ledger_root)
+            self.assertEqual(head["terminal_campaigns"]["c1"]["terminal_reason"], "integrity_mismatch")
+            with self.assertRaisesRegex(ledger.ProjectLedgerError, "已终态"):
+                ledger.assert_campaign_admitted(campaign_dir, command="campaign-run", require=True)
+            other = _campaign(root, "c2")
+            _register(root, other, "c2")
+            with self.assertRaisesRegex(ledger.ProjectLedgerError, "terminal_reason 非法"):
+                ledger.append_project_event(
+                    ledger_root,
+                    operation_id="term-c2",
+                    event_type="campaign_terminal",
+                    payload={"campaign_id": "c2", "terminal_reason": "commit_integrity"},
+                    source_batch_sha256=None,
+                )
+
     def test_root_cause_limit_rejects_and_repair_resets_without_reviving_terminal(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()

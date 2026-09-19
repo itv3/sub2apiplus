@@ -43,7 +43,8 @@
         "p0_gate_sha256": {"$ref": "#/$defs/nullableSha256"}
       }
     },
-    "plan_sha256": {"$ref": "#/$defs/sha256"}
+    "plan_sha256": {"$ref": "#/$defs/sha256"},
+    "batch_model": {"enum": ["legacy", "staging"]}
   },
   "$defs": {
     "safeId": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},

@@ -49,6 +49,7 @@ from tools.official_client_capture import codex_upgrade_root_cause as root_cause
 from tools.official_client_capture import codex_upgrade_supervisor as supervisor
 from tools.official_client_capture import codex_upgrade_timing_ledger as timing_ledger
 from tools.official_client_capture import codex_upgrade_vc0_closeout as closeout
+from tools.official_client_capture import codex_upgrade_vc_artifacts as vc_artifacts
 from tools.official_client_capture import codex_upgrade_wire_transition as wire_transition
 from tools.official_client_capture import incremental_recovery
 
@@ -64,6 +65,16 @@ APPROVAL_RE = re.compile(r"^recovery-approval-(\d{2})\.json$")
 COMPONENT = "reconciler"
 DECISION_RECOVERABLE = "recoverable"
 DECISION_STOP = "permanent_stop"
+# 改造 4：父 run 取得执行权之前的失败分类（无动作诊断，按 state／stop reason 判定）。
+PARENT_PREPARE_ABANDONED_CLASS = "parent-prepare-abandoned"
+PARENT_START_FAILED_CLASS = supervisor.PARENT_START_FAILED_REASON
+COMMIT_INTEGRITY_MISMATCH_CLASS = supervisor.COMMIT_INTEGRITY_MISMATCH_CLASS
+STAGING_FAILURE_CLASSES = frozenset(
+    {PARENT_PREPARE_ABANDONED_CLASS, PARENT_START_FAILED_CLASS, COMMIT_INTEGRITY_MISMATCH_CLASS}
+)
+# 可恢复分类对应的账本 next_action：序号未占 → 同序号重派；序号已占 → 同批次 N+1 重派。
+NEXT_ACTION_SAME_SEQUENCE = "redispatch-same-sequence"
+NEXT_ACTION_SAME_BATCH = "redispatch-same-batch"
 JOB_STATES = ("complete", "failed", "indeterminate", "pending")
 MAX_RECEIPT_BYTES = 16 * 1024 * 1024
 
@@ -681,8 +692,13 @@ def _decide(
     root_cause_ids: Iterable[str] | None = None,
     request_status: str,
     now: str,
+    forced_terminal_reason: str | None = None,
 ) -> dict[str, Any]:
-    """步骤 5：先入账后判定。返回 decision 与 terminal_reason（停线时）。"""
+    """步骤 5：先入账后判定。返回 decision 与 terminal_reason（停线时）。
+
+    ``forced_terminal_reason`` 用于分类本身即不可恢复的对象（改造 4 的 COMMIT 完整性
+    异常）：无论总账与账本状态如何都固定停线，其他原因仍逐条登记供审计。
+    """
 
     current = _timestamp(now, "now")
     reasons: list[str] = []
@@ -694,6 +710,10 @@ def _decide(
         if terminal_reason is None:
             terminal_reason = reason
 
+    if forced_terminal_reason is not None:
+        if forced_terminal_reason not in project_ledger.TERMINAL_REASONS:
+            raise ReconcilerError(f"强制终态原因非法：{forced_terminal_reason}")
+        stop(forced_terminal_reason, "对象分类本身不可恢复（COMMIT／父 run 制品完整性异常）")
     if head.get("blocked"):
         stop("accounting_unresolved", f"总账 blocked：{head.get('unresolved_operation_ids')}")
     elif request_status == "unresolved":
@@ -1784,8 +1804,12 @@ def _run_facts(run_dir: Path, campaign_dir: Path, manifest: Mapping[str, Any]) -
     if isinstance(inner, Mapping) and inner.get("campaign_id") not in {None, manifest.get("campaign_id")}:
         raise ReconcilerError("campaign-run 清单的 campaign_id 与 Campaign 不一致")
     owner_alive = supervisor._owner_alive(int(state["owner_pid"]))
-    if state.get("state") == "running" and owner_alive:
-        raise ReconcilerError("父监督器仍在运行，禁止对账")
+    if state.get("state") in supervisor.ACTIVE_STATES and owner_alive:
+        raise ReconcilerError("父监督器仍在运行（或 prepared 且 owner 在线），禁止对账")
+    if state.get("state") in supervisor.ACTIVE_STATES:
+        raise ReconcilerError(
+            "父 run 尚未终态化；prepared／committed 未启动的孤儿须先由 finalize_prepared_run 封存"
+        )
     started = float(state["started_at_epoch"])
     started_utc = datetime.fromtimestamp(started, tz=timezone.utc)
     reservations_in_window: list[str] = []
@@ -1881,10 +1905,24 @@ def _run_facts(run_dir: Path, campaign_dir: Path, manifest: Mapping[str, Any]) -
                     "attempt_id": post_run_receipt["facts"].get("attempt_id"),
                     "candidate_id": post_run_receipt["facts"].get("candidate_id"),
                 }
+    stop_path = run_dir / "stop-receipt.json"
+    stop_reason: str | None = None
+    if stop_path.is_file() and not stop_path.is_symlink():
+        stop_reason_value = _read_json(stop_path, "stop-receipt").get("reason")
+        stop_reason = stop_reason_value if isinstance(stop_reason_value, str) else None
+    staging = _staging_run_facts(run_dir, state, stop_reason, action_diagnostic)
+    if staging is not None:
+        failure_class = str(staging["failure_class"])
+    elif action_diagnostic is not None:
+        failure_class = str(action_diagnostic["failure_class"])
+    else:
+        failure_class = "legacy-interruption"
     return {
         "run_dir": str(run_dir),
         "run_id": run_dir.name,
         "state": state.get("state"),
+        "stop_reason": stop_reason,
+        "staging": staging,
         "owner_pid": state.get("owner_pid"),
         "owner_alive": owner_alive,
         "phase": state.get("phase"),
@@ -1905,17 +1943,115 @@ def _run_facts(run_dir: Path, campaign_dir: Path, manifest: Mapping[str, Any]) -
         "integrity_errors": list(events),
         "last_operation": last_operation,
         "action_diagnostic": action_diagnostic,
-        "failure_class": (
-            action_diagnostic["failure_class"]
-            if action_diagnostic is not None
-            else "legacy-interruption"
-        ),
+        "failure_class": failure_class,
         "failure_observations": (
             list(action_diagnostic["failure_observations"])
             if action_diagnostic is not None
             else []
         ),
     }
+
+
+def _staging_run_facts(
+    run_dir: Path,
+    state: Mapping[str, Any],
+    stop_reason: str | None,
+    action_diagnostic: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    """改造 4：按 state／stop reason 把取得执行权前的失败归入三类；非 staging run 返回 None。
+
+    - ``aborted_prepared`` + ``prepared-abandoned`` → ``parent-prepare-abandoned``，根因
+      ``staging.abandoned``（stage=parent-run）；
+    - ``aborted_prepared`` + ``staging-commit-failed:<step>`` → 同上分类，根因
+      ``staging.commit-failed``（stage=<step>）；
+    - ``failed`` + 有效 ``parent-start-failure.json`` → ``parent-start-failed``，根因
+      ``parent-start.failed``（维度 phase）；
+    - ``audit-incomplete`` + ``commit-integrity-mismatch`` → 同名分类，根因
+      ``commit.integrity-mismatch``，判定固定永久停线。
+    这四类都不读动作诊断；携带动作诊断的 run 不属于本分类。
+    """
+
+    binding = state.get("staging_binding")
+    if not isinstance(binding, Mapping):
+        return None
+    if action_diagnostic is not None:
+        return None
+    run_state = state.get("state")
+    facts: dict[str, Any] = {
+        "staging_binding": dict(binding),
+        "commit_classification": supervisor.classify_prepared_run(run_dir, state),
+    }
+    if run_state == "aborted_prepared":
+        if stop_reason == supervisor.PREPARED_ABANDONED_REASON:
+            stage = "parent-run"
+            code = "staging.abandoned"
+        elif isinstance(stop_reason, str) and stop_reason.startswith(
+            supervisor.STAGING_COMMIT_FAILED_PREFIX
+        ):
+            stage = stop_reason[len(supervisor.STAGING_COMMIT_FAILED_PREFIX) :]
+            if stage not in supervisor.STAGING_COMMIT_STEPS or stage == "commit-activate":
+                raise ReconcilerError(f"aborted_prepared 的 stop reason 步骤非法：{stop_reason!r}")
+            code = "staging.commit-failed"
+        else:
+            raise ReconcilerError(f"aborted_prepared 父 run 的 stop reason 非法：{stop_reason!r}")
+        if facts["commit_classification"] != "no_commit":
+            raise ReconcilerError("aborted_prepared 父 run 不得拥有自己的 COMMIT")
+        facts.update(
+            {
+                "failure_class": PARENT_PREPARE_ABANDONED_CLASS,
+                "root_cause_component": "orchestrator",
+                "root_cause_code": code,
+                "failed_step": stage,
+                "stable_dimensions": {"phase": str(state["phase"]), "stage": stage},
+                "next_action": NEXT_ACTION_SAME_SEQUENCE,
+            }
+        )
+        return facts
+    if run_state == "failed" and stop_reason == supervisor.PARENT_START_FAILED_REASON:
+        try:
+            diagnostic = supervisor.read_parent_start_failure(run_dir, state)
+        except supervisor.SupervisorError as error:
+            raise ReconcilerError(f"父启动失败诊断无法重放：{error}") from error
+        if diagnostic is None:
+            raise ReconcilerError("parent-start-failed 父 run 缺少 parent-start-failure 诊断")
+        if facts["commit_classification"] != "committed":
+            raise ReconcilerError("parent-start-failed 父 run 的 COMMIT 无效或缺失")
+        commit = supervisor._read_vc_commit(Path(str(binding["commit_path"])))
+        if diagnostic["commit_sha256"] != commit["commit_sha256"]:
+            raise ReconcilerError("父启动失败诊断与 COMMIT 不一致")
+        facts.update(
+            {
+                "failure_class": PARENT_START_FAILED_CLASS,
+                "parent_start_failure": {
+                    "schema_version": diagnostic["schema_version"],
+                    "path": supervisor.PARENT_START_FAILURE_FILENAME,
+                    "sha256": diagnostic["diagnostic_sha256"],
+                    "failure_kind": diagnostic["failure_kind"],
+                    "error_type": diagnostic["error_type"],
+                },
+                "commit_sha256": commit["commit_sha256"],
+                "root_cause_component": "supervisor",
+                "root_cause_code": "parent-start.failed",
+                "failed_step": "commit-activate",
+                "stable_dimensions": {"phase": str(state["phase"])},
+                "next_action": NEXT_ACTION_SAME_BATCH,
+            }
+        )
+        return facts
+    if run_state == "audit-incomplete" and stop_reason == supervisor.COMMIT_INTEGRITY_MISMATCH_REASON:
+        facts.update(
+            {
+                "failure_class": COMMIT_INTEGRITY_MISMATCH_CLASS,
+                "root_cause_component": "supervisor",
+                "root_cause_code": "commit.integrity-mismatch",
+                "failed_step": "commit-verify",
+                "stable_dimensions": {"phase": str(state["phase"])},
+                "next_action": None,
+            }
+        )
+        return facts
+    # 其余 staging run（watchdog／监控异常等）沿用既有中断分类。
+    return None
 
 
 def _supervisor_run_failures(
@@ -1925,8 +2061,21 @@ def _supervisor_run_failures(
 
     历史 v1/v2 诊断没有枚举观测，仍保守重放为原来的单一
     ``supervisor-run.interrupted``；新 v3 诊断不得再按错误正文或最后操作猜测。
+    改造 4 的四类父 run 失败没有动作诊断，根因直接由分类事实生成。
     """
 
+    staging = run.get("staging")
+    if isinstance(staging, Mapping) and staging.get("failure_class") in STAGING_FAILURE_CLASSES:
+        try:
+            cause = root_cause.describe_root_cause(
+                component=str(staging["root_cause_component"]),
+                stable_error_code=str(staging["root_cause_code"]),
+                failed_step=str(staging["failed_step"]),
+                stable_dimensions=dict(staging["stable_dimensions"]),
+            )
+        except root_cause.RootCauseError as error:
+            raise ReconcilerError(f"根因编码失败：{error}") from error
+        return [], [cause]
     raw_observations = run.get("failure_observations", [])
     if not isinstance(raw_observations, list):
         raise ReconcilerError("父动作 failure_observations 不是数组")
@@ -1994,6 +2143,36 @@ def _supervisor_run_failures(
     return observations, causes
 
 
+def _finalize_orphaned_prepared_run(run_dir: Path) -> dict[str, Any] | None:
+    """改造 4：prepared（或 committed 未启动）且 owner 已丢失的父 run，先按三分类封存终态。
+
+    monitor 在线时它自己会封存；这里只覆盖 monitor 也已不在的孤儿。owner 仍在线时
+    不动，由 ``_run_facts`` 拒绝对账。已终态的 run 直接返回 ``None``。
+    """
+
+    try:
+        state = supervisor._read_state(run_dir)
+    except supervisor.SupervisorError as error:
+        raise ReconcilerError(f"监督器 run 目录无法读取：{error}") from error
+    if state.get("state") not in supervisor.ACTIVE_STATES:
+        return None
+    if state.get("staging_binding") is None:
+        return None
+    if supervisor._owner_alive(int(state["owner_pid"])):
+        return None
+    if state.get("state") != supervisor.PREPARED_STATE and not supervisor.committed_run_never_started(
+        run_dir, state
+    ):
+        return None
+    monitor_pid = state.get("monitor_pid")
+    if isinstance(monitor_pid, int) and not isinstance(monitor_pid, bool) and supervisor._owner_alive(monitor_pid):
+        raise ReconcilerError("父 run 的 monitor 仍在线，等待其封存终态后再对账")
+    try:
+        return supervisor.finalize_prepared_run(run_dir, operation="reconciler:finalize-prepared")
+    except supervisor.SupervisorError as error:
+        raise ReconcilerError(f"prepared 父 run 终态化失败：{error}") from error
+
+
 def reconcile_supervisor_run(
     run_dir: Path,
     campaign_dir: Path,
@@ -2008,7 +2187,9 @@ def reconcile_supervisor_run(
     if not codex_upgrade._requires_complete_vc_artifacts(manifest):
         raise ReconcilerError("reconcile-supervisor-run 只用于 0.154.0 起的完整 VC 链 Campaign")
     observed = now or _utc_now()
-    run = _run_facts(Path(run_dir).resolve(strict=True), campaign_dir, manifest)
+    resolved_run_dir = Path(run_dir).resolve(strict=True)
+    _finalize_orphaned_prepared_run(resolved_run_dir)
+    run = _run_facts(resolved_run_dir, campaign_dir, manifest)
     current = _current_identity()
     identity = _identity_facts(campaign_dir, manifest, current)
     ledger_dir = _campaign_ledger_dir(manifest)
@@ -2016,6 +2197,7 @@ def reconcile_supervisor_run(
     if (
         ledger.get("status") == "recovery_required"
         and run.get("failure_class") not in supervisor.RECOVERABLE_ACTION_FAILURE_CLASSES
+        and run.get("failure_class") not in supervisor.RECOVERABLE_PARENT_FAILURE_CLASSES
     ):
         raise ReconcilerError(
             "Campaign 账本处于 recovery_required，但父动作分类不可恢复"
@@ -2127,6 +2309,11 @@ def reconcile_supervisor_run(
         root_cause_ids=[item["root_cause_id"] for item in root_causes],
         request_status=request_part["status"],
         now=observed,
+        forced_terminal_reason=(
+            "integrity_mismatch"
+            if run.get("failure_class") == COMMIT_INTEGRITY_MISMATCH_CLASS
+            else None
+        ),
     )
     result: dict[str, Any] = {
         "schema_version": SUPERVISOR_RUN_SCHEMA,
@@ -2156,6 +2343,12 @@ def reconcile_supervisor_run(
         result["root_causes"] = root_causes
     if decision["decision"] == DECISION_RECOVERABLE:
         result["ledger_events"] = []
+        staging = run.get("staging")
+        ledger_next_action = (
+            str(staging["next_action"])
+            if isinstance(staging, Mapping) and staging.get("next_action")
+            else NEXT_ACTION_SAME_BATCH
+        )
         if ledger.get("active_phase") is not None:
             with codex_upgrade._campaign_lock(campaign_dir):
                 event = _append_ledger_event(
@@ -2166,15 +2359,24 @@ def reconcile_supervisor_run(
                     receipts=_ledger_receipt_bindings(
                         ledger_dir, f"run-{run['run_id']}", receipt_path, provenance_copy_path
                     ),
-                    next_action="redispatch-same-batch",
+                    next_action=ledger_next_action,
                 )
             result["ledger_events"] = [event]
-        result["next_command"] = (
-            "phase 保持 active：修复评估／控制工具并受监督部署后，以 compile-and-run-vc-batch "
-            "逐字重派同一 seal 批次；Candidate Job 结果只读保留"
-            if run.get("failure_class") == "post-run-tooling"
-            else "phase 保持 active：以 compile-and-run-vc-batch 重新派发同一批次"
-        )
+        if run.get("failure_class") == "post-run-tooling":
+            result["next_command"] = (
+                "phase 保持 active：修复评估／控制工具并受监督部署后，以 compile-and-run-vc-batch "
+                "逐字重派同一 seal 批次；Candidate Job 结果只读保留"
+            )
+        elif run.get("failure_class") == PARENT_PREPARE_ABANDONED_CLASS:
+            result["next_command"] = (
+                "序号未占：以 compile-and-run-vc-batch 同序号重新 prepare 新 staging attempt"
+            )
+        elif run.get("failure_class") == PARENT_START_FAILED_CLASS:
+            result["next_command"] = (
+                "序号已占：以 compile-and-run-vc-batch 按 N+1 逐字重派同一批次内容"
+            )
+        else:
+            result["next_command"] = "phase 保持 active：以 compile-and-run-vc-batch 重新派发同一批次"
     else:
         with codex_upgrade._campaign_lock(campaign_dir):
             stop = _permanent_stop(
@@ -2189,6 +2391,166 @@ def reconcile_supervisor_run(
                     ledger_dir, f"run-{run['run_id']}", receipt_path, provenance_copy_path
                 ),
                 live_request_count=len(request_part["identity_keys"]),
+                reconciliation_receipt_sha256=receipt_binding["sha256"],
+                ledger_facts=ledger,
+            )
+        pushed_terminal, head_terminal = _push_and_replay(project_root, campaign_dir, now=observed)
+        result["permanent_stop"] = {**stop, "project_push": pushed_terminal, "head_sha256": head_terminal.get("head_sha256")}
+        result["next_command"] = stop["next_action"]
+    return result
+
+
+# ---------------------------------------------------------------------------
+# 改造 4：无父 run 的 staging 中止（P1）对账
+# ---------------------------------------------------------------------------
+
+STAGING_ABORT_RECONCILIATION_SCHEMA = "staging-abort-reconciliation/v1"
+ZERO_REQUEST_PART = {
+    "status": "resolved",
+    "identity_keys": [],
+    "identity_key_count_total": 0,
+    "estimated_delta": 0,
+    "estimated_sources": [],
+    "unresolved_job_ids": [],
+}
+
+
+def staging_abort_operation_id(sequence: int, staging_attempt: int) -> str:
+    """P1 outbox 的 operation_id：同一 attempt 多次入口重放得到同一 batch（``reused``）。"""
+
+    return f"staging-abort:{int(sequence):04d}:{int(staging_attempt)}"
+
+
+def staging_abort_root_cause(phase: str, stage: str) -> dict[str, Any]:
+    """无父 run 的 staging 中止一律归 ``staging.abandoned``（维度 phase、stage）。"""
+
+    try:
+        return root_cause.describe_root_cause(
+            component="orchestrator",
+            stable_error_code="staging.abandoned",
+            failed_step=stage,
+            stable_dimensions={"phase": phase, "stage": stage},
+        )
+    except root_cause.RootCauseError as error:
+        raise ReconcilerError(f"根因编码失败：{error}") from error
+
+
+def reconcile_staging_abort(
+    campaign_dir: Path,
+    abort_path: Path,
+    *,
+    now: str | None = None,
+) -> dict[str, Any]:
+    """对账一个没有父 run 的 staging attempt 中止（P1）：ABORT 即对账收据。
+
+    步骤与 ``reconcile_supervisor_run`` 同序：outbox ``reconciliation_committed``
+    （请求 0／resolved，根因 ``staging.abandoned``）→ 推总账 → 重放 → 判定；命中永久条件
+    走现有停线合同。各步幂等：outbox 按 operation_id ``reused``、推送 ``duplicate``。
+    """
+
+    campaign_dir = Path(campaign_dir).resolve(strict=True)
+    manifest = codex_upgrade._require_formal_campaign(campaign_dir)
+    if not codex_upgrade._requires_complete_vc_artifacts(manifest):
+        raise ReconcilerError("staging 中止对账只用于 0.154.0 起的完整 VC 链 Campaign")
+    observed = now or _utc_now()
+    abort_path = Path(abort_path).resolve(strict=True)
+    try:
+        abort = vc_artifacts.validate_staging_abort(_read_json(abort_path, "staging-abort 收据"))
+    except vc_artifacts.VCArtifactError as error:
+        raise ReconcilerError(f"staging-abort 收据无法校验：{error}") from error
+    if abort["campaign_id"] != manifest["campaign_id"]:
+        raise ReconcilerError("staging-abort 收据的 campaign_id 与 Campaign 不一致")
+    if abort["parent_run_dir"] is not None:
+        raise ReconcilerError("有父 run 的 staging 中止必须走 reconcile-supervisor-run")
+    cause = staging_abort_root_cause(str(abort["phase"]), str(abort["stage"]))
+    if cause["root_cause_id"] != abort["root_cause_id"]:
+        raise ReconcilerError("staging-abort 收据的根因 ID 与其 phase／stage 不一致")
+    subject_id = (
+        f"staging-{int(abort['sequence']):04d}-{str(abort['phase']).lower()}"
+        f"-attempt-{int(abort['staging_attempt'])}"
+    )
+    current = _current_identity()
+    identity = _identity_facts(campaign_dir, manifest, current)
+    ledger_dir = _campaign_ledger_dir(manifest)
+    ledger = _ledger_facts(ledger_dir, now=observed)
+    project_root = _project_root(campaign_dir)
+    plan, head = _project_facts(project_root)
+    campaign_deadline = codex_upgrade._campaign_plan_deadline(campaign_dir)
+    contamination = codex_upgrade._campaign_contamination_records(campaign_dir, _manifest=manifest)
+    receipt_binding = _binding(campaign_dir, abort_path, "reconciliation")
+    payload = {
+        "campaign_id": str(manifest["campaign_id"]),
+        "subject_kind": "staging_attempt",
+        "subject_id": subject_id,
+        "phase": str(abort["phase"]),
+        "request": dict(ZERO_REQUEST_PART),
+        "root_cause": {
+            "root_cause_id": cause["root_cause_id"],
+            "stable_error_code": cause["stable_error_code"],
+            "failed_step": cause["failed_step"],
+            "stable_dimensions": cause["stable_dimensions"],
+            "component": cause["component"],
+        },
+        "reconciliation_receipt_sha256": receipt_binding["sha256"],
+        "attempt_failed_event_sha256": None,
+    }
+    with codex_upgrade._campaign_lock(campaign_dir):
+        batch = _commit_batch(
+            campaign_dir,
+            operation_id=staging_abort_operation_id(int(abort["sequence"]), int(abort["staging_attempt"])),
+            event_type="reconciliation_committed",
+            payload=payload,
+            source={"kind": "staging_abort", "sha256": receipt_binding["sha256"]},
+            receipt_bindings=[receipt_binding],
+        )
+    pushed, head_after = _push_and_replay(project_root, campaign_dir, now=observed)
+    decision = _decide(
+        head=head_after,
+        plan=plan,
+        ledger=ledger,
+        identity=identity,
+        environment_status="contaminated" if contamination else "restored",
+        campaign_deadline_at_utc=campaign_deadline,
+        root_cause_id=cause["root_cause_id"],
+        request_status="resolved",
+        now=observed,
+    )
+    result: dict[str, Any] = {
+        "schema_version": STAGING_ABORT_RECONCILIATION_SCHEMA,
+        "status": decision["decision"],
+        "campaign_id": str(manifest["campaign_id"]),
+        "subject_id": subject_id,
+        "reconciliation_receipt": receipt_binding,
+        "root_cause": cause,
+        "identity_unchanged": identity["unchanged"],
+        "batch": batch,
+        "project_push": pushed,
+        "project_head": {
+            "sequence": head_after.get("sequence"),
+            "head_sha256": head_after.get("head_sha256"),
+            "blocked": head_after.get("blocked"),
+            "remaining_live_requests": head_after.get("remaining_live_requests"),
+            "root_cause_count": decision["root_cause_count"],
+            "root_cause_counts": decision["root_cause_counts"],
+        },
+        "decision": decision,
+        "live_request_count": 0,
+        "scanned_bytes": 0,
+    }
+    if decision["decision"] == DECISION_RECOVERABLE:
+        result["next_command"] = "序号未占：以 compile-and-run-vc-batch 同序号重新 prepare 新 staging attempt"
+    else:
+        with codex_upgrade._campaign_lock(campaign_dir):
+            stop = _permanent_stop(
+                campaign_dir,
+                manifest,
+                ledger_dir,
+                subject_id=subject_id,
+                root_cause_id=cause["root_cause_id"],
+                terminal_reason=str(decision["terminal_reason"]),
+                receipt_bindings=[receipt_binding],
+                ledger_receipts=[],
+                live_request_count=0,
                 reconciliation_receipt_sha256=receipt_binding["sha256"],
                 ledger_facts=ledger,
             )

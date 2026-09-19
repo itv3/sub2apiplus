@@ -558,11 +558,167 @@ class CodexUpgradeVCArtifactsTests(unittest.TestCase):
             "codex_upgrade_gate_plan.schema.json": artifacts.GATE_PLAN_SCHEMA,
             "codex_upgrade_candidate_build_receipt.schema.json": artifacts.CANDIDATE_BUILD_SCHEMA,
             "codex_upgrade_candidate_delivery_receipt.schema.json": artifacts.CANDIDATE_DELIVERY_SCHEMA,
+            # 改造 4（staging/WAL）四种控制制品。
+            "codex_upgrade_vc_commit.schema.json": artifacts.VC_COMMIT_SCHEMA,
+            "codex_upgrade_vc_staging_marker.schema.json": artifacts.STAGING_MARKER_SCHEMA,
+            "codex_upgrade_staging_abort.schema.json": artifacts.STAGING_ABORT_SCHEMA,
+            "codex_upgrade_parent_start_failure.schema.json": artifacts.PARENT_START_FAILURE_SCHEMA,
         }
         for name, schema_version in expected.items():
             with self.subTest(name=name):
                 schema = json.loads((root / name).read_text(encoding="utf-8"))
                 self.assertEqual(schema["properties"]["schema_version"]["const"], schema_version)
+        abort_schema = json.loads((root / "codex_upgrade_staging_abort.schema.json").read_text(encoding="utf-8"))
+        self.assertEqual(tuple(abort_schema["properties"]["stage"]["enum"]), artifacts.STAGING_ABORT_STAGES)
+        self.assertEqual(tuple(abort_schema["properties"]["failure_kind"]["enum"]), artifacts.STAGING_ABORT_FAILURE_KINDS)
+        failure_schema = json.loads((root / "codex_upgrade_parent_start_failure.schema.json").read_text(encoding="utf-8"))
+        self.assertEqual(tuple(failure_schema["properties"]["failure_kind"]["enum"]), artifacts.PARENT_START_FAILURE_KINDS)
+        plan_schema = json.loads((root / "codex_upgrade_campaign_plan.schema.json").read_text(encoding="utf-8"))
+        self.assertEqual(tuple(plan_schema["properties"]["batch_model"]["enum"]), artifacts.BATCH_MODELS)
+        self.assertNotIn("batch_model", plan_schema["required"])
+
+    # ------------------------------------------------------------------
+    # 改造 4：总计划 batch_model 与四种 staging 制品
+    # ------------------------------------------------------------------
+
+    def _plan_kwargs(self) -> dict[str, object]:
+        return {
+            "campaign_id": "codex-0_154_0-campaign",
+            "campaign_mode": "formal",
+            "campaign_purpose": "validation_only",
+            "baseline_version": "0.151.0",
+            "target_version": "0.154.0",
+            "created_at_utc": "2026-09-14T00:00:00Z",
+            "original_deadline_at_utc": "2026-09-14T12:00:00Z",
+            "timing_checkpoint_sha256": "1" * 64,
+            "arm64_environment_sha256": "2" * 64,
+            "job_rehearsal_sha256": "3" * 64,
+            "p0_gate_sha256": "4" * 64,
+        }
+
+    def test_campaign_plan_batch_model_defaults_to_staging_and_legacy_plan_digest_is_unchanged(self) -> None:
+        staging = artifacts.build_campaign_plan(**self._plan_kwargs())
+        legacy = artifacts.build_campaign_plan(**self._plan_kwargs(), batch_model=None)
+        self.assertEqual(staging["batch_model"], "staging")
+        self.assertNotIn("batch_model", legacy)
+        self.assertEqual(artifacts.campaign_plan_batch_model(staging), "staging")
+        self.assertEqual(artifacts.campaign_plan_batch_model(legacy), "legacy")
+        # 历史 plan（无字段）的自摘要只由既有字段决定：与 legacy 构造完全一致。
+        unsigned = {key: value for key, value in legacy.items() if key != "plan_sha256"}
+        self.assertEqual(artifacts.digest(unsigned), legacy["plan_sha256"])
+        self.assertNotEqual(staging["plan_sha256"], legacy["plan_sha256"])
+        explicit_legacy = artifacts.build_campaign_plan(**self._plan_kwargs(), batch_model="legacy")
+        self.assertEqual(explicit_legacy["batch_model"], "legacy")
+        with self.assertRaisesRegex(artifacts.VCArtifactError, "batch_model"):
+            artifacts.build_campaign_plan(**self._plan_kwargs(), batch_model="wal")
+        tampered = dict(staging)
+        tampered["batch_model"] = "wal"
+        with self.assertRaisesRegex(artifacts.VCArtifactError, "batch_model"):
+            artifacts.validate_campaign_plan(tampered)
+        extra = dict(staging)
+        extra["candidate_revision"] = 1
+        with self.assertRaisesRegex(artifacts.VCArtifactError, "不闭合"):
+            artifacts.validate_campaign_plan(extra)
+
+    def _staging_artifacts(self) -> dict[str, dict[str, object]]:
+        marker = artifacts.build_staging_prepared_marker(
+            campaign_id="codex-0_154_0-campaign",
+            sequence=2,
+            phase="VC-2",
+            attempt=1,
+            batch_sha256="5" * 64,
+            manifest_sha256="6" * 64,
+            owner_nonce="7" * 64,
+            prepared_at_utc="2026-09-19T01:00:00Z",
+        )
+        commit = artifacts.build_vc_commit(
+            campaign_id="codex-0_154_0-campaign",
+            sequence=2,
+            phase="VC-2",
+            staging_attempt=1,
+            batch_sha256="5" * 64,
+            manifest_sha256="6" * 64,
+            parent_run_dir="/srv/state/run-" + "7" * 64,
+            owner_nonce="7" * 64,
+            ledger_event_ids=["vc-batch-0002-vc-2-vc-2-started"],
+            committed_at_utc="2026-09-19T01:00:05Z",
+        )
+        abort = artifacts.build_staging_abort(
+            campaign_id="codex-0_154_0-campaign",
+            campaign_plan_sha256="8" * 64,
+            phase="VC-2",
+            sequence=2,
+            staging_attempt=1,
+            stage="commit-publish",
+            failure_kind="commit-failed",
+            error_type="ConfigurationError",
+            root_cause_id="rc1-" + "9" * 20,
+            batch_sha256="5" * 64,
+            manifest_sha256="6" * 64,
+            parent_run_dir="/srv/state/run-" + "7" * 64,
+            parent_run_state="aborted_prepared",
+            reconciliation_receipt={"path": "control/reconciliation/run-x/supervisor-run-reconciliation.json", "sha256": "a" * 64},
+            recorded_at_utc="2026-09-19T01:01:00Z",
+        )
+        failure = artifacts.build_parent_start_failure(
+            campaign_id="codex-0_154_0-campaign",
+            phase="VC-2",
+            batch_sequence=2,
+            batch_sha256="5" * 64,
+            commit_sha256=str(commit["commit_sha256"]),
+            owner_pid=4242,
+            owner_nonce="7" * 64,
+            failure_kind="owner-lost",
+            error_type="OwnerProcessLost",
+            recorded_at_utc="2026-09-19T01:02:00Z",
+        )
+        return {"marker": marker, "commit": commit, "abort": abort, "failure": failure}
+
+    def test_staging_artifacts_are_closed_and_self_digested(self) -> None:
+        built = self._staging_artifacts()
+        validators = {
+            "marker": (artifacts.validate_staging_prepared_marker, "marker_sha256"),
+            "commit": (artifacts.validate_vc_commit, "commit_sha256"),
+            "abort": (artifacts.validate_staging_abort, "receipt_sha256"),
+            "failure": (artifacts.validate_parent_start_failure, "diagnostic_sha256"),
+        }
+        for name, (validate, digest_field) in validators.items():
+            with self.subTest(name=name):
+                payload = built[name]
+                self.assertEqual(validate(payload), payload)
+                unsigned = {key: value for key, value in payload.items() if key != digest_field}
+                self.assertEqual(artifacts.digest(unsigned), payload[digest_field])
+                extra = dict(payload)
+                extra["adopt"] = True
+                with self.assertRaisesRegex(artifacts.VCArtifactError, "不闭合"):
+                    validate(extra)
+        self.assertEqual(built["abort"]["live_request_count"], 0)
+        self.assertFalse(built["failure"]["action_started"])
+        self.assertFalse(built["failure"]["reservation_exists"])
+
+    def test_staging_artifacts_reject_semantic_tampering(self) -> None:
+        built = self._staging_artifacts()
+        cases = [
+            ("marker", artifacts.validate_staging_prepared_marker, {"attempt": 0}, "marker_sha256"),
+            ("commit", artifacts.validate_vc_commit, {"parent_run_dir": "relative/run"}, "commit_sha256"),
+            ("commit", artifacts.validate_vc_commit, {"ledger_event_ids": ["a", "a"]}, "commit_sha256"),
+            ("abort", artifacts.validate_staging_abort, {"stage": "commit-nonce"}, "receipt_sha256"),
+            ("abort", artifacts.validate_staging_abort, {"live_request_count": 1}, "receipt_sha256"),
+            ("abort", artifacts.validate_staging_abort, {"root_cause_id": "rc2-" + "9" * 20}, "receipt_sha256"),
+            ("failure", artifacts.validate_parent_start_failure, {"action_started": True}, "diagnostic_sha256"),
+            ("failure", artifacts.validate_parent_start_failure, {"failure_kind": "watchdog"}, "diagnostic_sha256"),
+        ]
+        for name, validate, patch, digest_field in cases:
+            with self.subTest(name=name, patch=patch):
+                # 只改字段不改摘要 → 摘要不一致；重算摘要 → 语义校验拒绝。
+                tampered = dict(built[name])
+                tampered.update(patch)
+                with self.assertRaises(artifacts.VCArtifactError):
+                    validate(tampered)
+                unsigned = {key: value for key, value in tampered.items() if key != digest_field}
+                rehashed = {**tampered, digest_field: artifacts.digest(unsigned)}
+                with self.assertRaises(artifacts.VCArtifactError):
+                    validate(rehashed)
 
 
 if __name__ == "__main__":

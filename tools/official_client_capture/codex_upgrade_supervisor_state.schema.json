@@ -37,14 +37,33 @@
     "heartbeat_seconds": {"type": "number", "exclusiveMinimum": 0},
     "watchdog_timeout_seconds": {"type": "number", "exclusiveMinimum": 0},
     "ledger_interval_seconds": {"type": "number", "exclusiveMinimum": 0},
-    "state": {"enum": ["running", "stopped", "failed", "audit-incomplete", "watchdog-aborted"]},
+    "state": {"enum": ["prepared", "running", "stopped", "failed", "audit-incomplete", "watchdog-aborted", "aborted_prepared"]},
     "terminate_owner": {"type": "boolean"},
     "monitor_pid": {"type": "integer", "minimum": 1},
     "terminal_at_utc": {"type": "string", "format": "date-time"},
-    "terminal_at_epoch": {"type": "number", "exclusiveMinimum": 0}
+    "terminal_at_epoch": {"type": "number", "exclusiveMinimum": 0},
+    "campaign_started_at_epoch": {"type": "number", "exclusiveMinimum": 0},
+    "predecessor_run_dir": {"type": ["string", "null"], "minLength": 1},
+    "predecessor_state_sha256": {"anyOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
+    "committed_at_epoch": {"type": "number", "exclusiveMinimum": 0},
+    "commit_sha256": {"$ref": "#/$defs/sha256"},
+    "staging_binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["campaign_dir", "sequence", "phase", "staging_attempt", "commit_path", "prepared_marker_sha256"],
+      "properties": {
+        "campaign_dir": {"type": "string", "minLength": 1},
+        "sequence": {"type": "integer", "minimum": 1},
+        "phase": {"type": "string", "minLength": 1, "maxLength": 32},
+        "staging_attempt": {"type": "integer", "minimum": 1},
+        "commit_path": {"type": "string", "minLength": 1},
+        "prepared_marker_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    }
   },
   "$defs": {
     "safeId": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
-    "nonce": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+    "nonce": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
   }
 }

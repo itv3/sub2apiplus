@@ -107,6 +107,31 @@ ACTION_DIAGNOSTIC_FAILURE_CLASSES = frozenset(
 RECOVERABLE_ACTION_FAILURE_CLASSES = frozenset(
     {"environment-prerequisite", "post-run-tooling"}
 )
+# 改造 4（staging/WAL）：父 run 取得执行权之前的两类失败不是动作失败，没有动作诊断，
+# 由 reconciler 按 state／stop reason 分类；两类都可恢复但恢复目标不同：
+# parent-prepare-abandoned（COMMIT 未写，序号未占）→ 同序号重派；
+# parent-start-failed（COMMIT 已写，序号已占）→ N+1 逐字重派。
+RECOVERABLE_PARENT_FAILURE_CLASSES = frozenset(
+    {"parent-prepare-abandoned", "parent-start-failed"}
+)
+# COMMIT 存在但自摘要无效／nonce 或 run 目录不匹配：完整性异常，永久停线走人工审计。
+COMMIT_INTEGRITY_MISMATCH_CLASS = "commit-integrity-mismatch"
+# prepared 父 run 的 stop reason 字面量（stop-receipt.reason），reconciler 与 history 按其分类。
+PREPARED_ABANDONED_REASON = "prepared-abandoned"
+PARENT_START_FAILED_REASON = "parent-start-failed"
+COMMIT_INTEGRITY_MISMATCH_REASON = "commit-integrity-mismatch"
+STAGING_COMMIT_FAILED_PREFIX = "staging-commit-failed:"
+# commit 四步（nonce 校验 → 账本事件 → 发布正式文件 → 写 COMMIT）的步骤名；
+# 第 4 步 commit-activate 失败时 COMMIT 已存在，按 parent-start-failed 处理。
+STAGING_COMMIT_STEPS = (
+    "nonce-mismatch",
+    "commit-ledger",
+    "commit-publish",
+    "commit-mark",
+    "commit-activate",
+)
+PARENT_START_FAILURE_FILENAME = "parent-start-failure.json"
+PARENT_START_ACTIVATE_RETRIES = 3
 # 只有子进程以默认 execution-failure 退出（handled-error／child-returncode）
 # 时才允许升级为 post-run-tooling；interrupted／unexpected-error 属于执行控制
 # 丢失，仍按既有规则处理，不得靠后处理分类绕过。
@@ -194,8 +219,17 @@ ACTION_DIAGNOSTIC_REDACTION_MARKERS = SENSITIVE_MARKERS + (
     "command line",
 )
 TERMINAL_STATES = frozenset(
-    {"stopped", "failed", "audit-incomplete", "watchdog-aborted"}
+    {"stopped", "failed", "audit-incomplete", "watchdog-aborted", "aborted_prepared"}
 )
+# prepared：v2 批次形态的父 run 已建立但尚未取得执行权（COMMIT 未写）；不派动作、attach 拒绝。
+PREPARED_STATE = "prepared"
+ACTIVE_STATES = frozenset({"running", PREPARED_STATE})
+
+
+def _event_type_for_state(state: str) -> str:
+    """终态名转事件类型：事件 ID 字符集不含下划线，aborted_prepared 记为 aborted-prepared。"""
+
+    return "stopped" if state == "stopped" else state.replace("_", "-")
 STOP_STATUSES = frozenset(TERMINAL_STATES)
 CAMPAIGN_CLASSIFICATIONS = frozenset(
     {"active", "planning", "orchestrator-idle", "waiting"}
@@ -1257,9 +1291,48 @@ def _read_state(run_dir: Path) -> dict[str, Any]:
     )
     if deadline_monotonic_ns <= started_monotonic_ns:
         raise SupervisorError("监督器单调 deadline 必须晚于启动时刻。")
-    if state.get("state") not in {"running", *TERMINAL_STATES}:
+    if state.get("state") not in {*ACTIVE_STATES, *TERMINAL_STATES}:
         raise SupervisorError("监督器 state 状态非法。")
+    binding = state.get("staging_binding")
+    if binding is not None:
+        _validate_staging_binding(binding)
+    if state.get("state") == PREPARED_STATE and binding is None:
+        raise SupervisorError("prepared 父监督器必须携带 staging_binding。")
     return state
+
+
+STAGING_BINDING_FIELDS = frozenset(
+    {
+        "campaign_dir",
+        "sequence",
+        "phase",
+        "staging_attempt",
+        "commit_path",
+        "prepared_marker_sha256",
+    }
+)
+
+
+def _validate_staging_binding(value: Any) -> dict[str, Any]:
+    """校验 prepared 父 run 在 state.json 内持久化的 COMMIT 定位信息。"""
+
+    if not isinstance(value, Mapping) or set(value) != STAGING_BINDING_FIELDS:
+        raise SupervisorError("监督器 staging_binding 字段不闭合。")
+    for field in ("campaign_dir", "commit_path"):
+        item = value.get(field)
+        if not isinstance(item, str) or not item or not PurePosixPath(item).is_absolute():
+            raise SupervisorError(f"监督器 staging_binding.{field} 必须是绝对路径。")
+    for field in ("sequence", "staging_attempt"):
+        item = value.get(field)
+        if isinstance(item, bool) or not isinstance(item, int) or item < 1:
+            raise SupervisorError(f"监督器 staging_binding.{field} 必须是正整数。")
+    _safe_id(value.get("phase"), "staging_binding.phase", maximum=32)
+    digest = value.get("prepared_marker_sha256")
+    if not isinstance(digest, str) or len(digest) != 64 or any(
+        char not in "0123456789abcdef" for char in digest
+    ):
+        raise SupervisorError("监督器 staging_binding.prepared_marker_sha256 非法。")
+    return dict(value)
 
 
 @contextmanager
@@ -1599,7 +1672,8 @@ def _minute_classification(
 
     if state_name in {"watchdog-aborted", "audit-incomplete"}:
         return "audit-incomplete"
-    if state_name == "failed":
+    if state_name in {"failed", "aborted_prepared"}:
+        # aborted_prepared：父 run 从未取得执行权就被中止，零动作；分钟账本按失败终态分类。
         return "failed"
     if heartbeat is None:
         return "waiting"
@@ -1711,6 +1785,338 @@ def _read_stop_request(
         raise SupervisorError("监督器 stop-request 时间非法。")
     request["reason"] = _note(request.get("reason"), "stop reason")
     return request
+
+
+# ---------------------------------------------------------------------------
+# 改造 4：prepared 父 run 的共享判定与终态化（入口孤儿扫描、monitor、reconciler 三处共用）
+# ---------------------------------------------------------------------------
+
+
+class StagingCommitError(SupervisorError):
+    """staging commit 四步中某一步失败；``step`` 用于 stop reason 与 ABORT 的 stage。"""
+
+    def __init__(self, step: str, message: str) -> None:
+        if step not in STAGING_COMMIT_STEPS:
+            raise SupervisorError(f"非法 staging commit 步骤：{step}")
+        super().__init__(message)
+        self.step = step
+
+
+def campaign_batch_model(campaign_dir: Path | None) -> str:
+    """读取 Campaign 总计划声明的批次模型；无 Campaign／无总计划的旧形态一律 legacy。"""
+
+    if campaign_dir is None:
+        return "legacy"
+    campaign_path = Path(campaign_dir) / "campaign.json"
+    if campaign_path.is_symlink() or not campaign_path.is_file():
+        return "legacy"
+    campaign = _read_json(campaign_path)
+    control = campaign.get("vc_control")
+    binding = control.get("campaign_plan") if isinstance(control, Mapping) else None
+    if not isinstance(binding, Mapping) or not isinstance(binding.get("path"), str):
+        return "legacy"
+    plan_path = Path(campaign_dir) / str(binding["path"])
+    if plan_path.is_symlink() or not plan_path.is_file():
+        raise SupervisorError("Campaign 总计划文件不存在或不可信。")
+    try:
+        plan = vc_artifacts.validate_campaign_plan(_read_json(plan_path))
+        return vc_artifacts.campaign_plan_batch_model(plan)
+    except vc_artifacts.VCArtifactError as error:
+        raise SupervisorError(f"Campaign 总计划无法校验：{error}") from error
+
+
+def _read_vc_commit(commit_path: Path) -> dict[str, Any]:
+    """读取并自校验一份正式 COMMIT；任何形态异常都作为 VCArtifactError 抛出。"""
+
+    if commit_path.is_symlink() or not commit_path.is_file():
+        raise vc_artifacts.VCArtifactError("COMMIT 不是可信普通文件")
+    try:
+        payload = json.loads(commit_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise vc_artifacts.VCArtifactError(f"COMMIT 无法读取：{type(error).__name__}") from error
+    return vc_artifacts.validate_vc_commit(payload)
+
+
+def classify_prepared_run(
+    run_dir: Path,
+    state: Mapping[str, Any] | None = None,
+) -> str:
+    """按 state.json 的 staging_binding 判定父 run 的 COMMIT 状态。
+
+    返回 ``no_commit``（COMMIT 不存在，序号未占）、``committed``（COMMIT 有效且
+    owner nonce／run 目录／序号／阶段／attempt 全部匹配，序号已占）或
+    ``integrity_mismatch``（COMMIT 存在但摘要无效或身份不匹配，永久停线，序号视为
+    已占且不可重派）。入口孤儿扫描、monitor 与 reconciler 必须调用同一函数。
+    """
+
+    run_dir = Path(run_dir)
+    if state is None:
+        state = _read_state(run_dir)
+    binding = state.get("staging_binding")
+    if not isinstance(binding, Mapping):
+        raise SupervisorError("父 run 不是 staging 模型：state 缺少 staging_binding。")
+    commit_path = Path(str(binding["commit_path"]))
+    if commit_path.is_symlink():
+        return "integrity_mismatch"
+    if not commit_path.exists():
+        return "no_commit"
+    try:
+        commit = _read_vc_commit(commit_path)
+    except vc_artifacts.VCArtifactError:
+        return "integrity_mismatch"
+    try:
+        resolved_run_dir = str(run_dir.resolve(strict=True))
+    except OSError:
+        return "integrity_mismatch"
+    nonce_matches = commit["owner_nonce"] == state.get("owner_nonce")
+    run_dir_matches = commit["parent_run_dir"] == resolved_run_dir
+    if not nonce_matches and not run_dir_matches:
+        # 同一序号由另一个 attempt 的父 run 合法提交（本 run 早已被遗弃）：
+        # 对本 run 而言序号未由它占用，等价于无 COMMIT。
+        return "no_commit"
+    if (
+        not nonce_matches
+        or not run_dir_matches
+        or commit["campaign_id"] != state.get("campaign_id")
+        or commit["phase"] != binding["phase"]
+        or commit["sequence"] != binding["sequence"]
+        or commit["staging_attempt"] != binding["staging_attempt"]
+    ):
+        return "integrity_mismatch"
+    return "committed"
+
+
+def _action_started_recorded(run_dir: Path) -> bool:
+    """父 run 是否已经开始过任何动作（含 no-op 队列的 incremental-noop）。"""
+
+    path = Path(run_dir) / "events.ndjson"
+    if path.is_symlink() or not path.is_file():
+        return False
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            event = json.loads(line)
+            if isinstance(event, dict) and event.get("event_type") == "action-started":
+                return True
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise SupervisorError(f"父 run 事件账本无法读取：{type(error).__name__}") from error
+    return False
+
+
+def committed_run_never_started(run_dir: Path, state: Mapping[str, Any] | None = None) -> bool:
+    """running 但 COMMIT 已写且尚无任何动作事件：与 prepared+committed 同属父启动失败。"""
+
+    if state is None:
+        state = _read_state(run_dir)
+    return (
+        state.get("state") == "running"
+        and isinstance(state.get("commit_sha256"), str)
+        and not _action_started_recorded(run_dir)
+    )
+
+
+def _parent_start_failure_path(run_dir: Path) -> Path:
+    return Path(run_dir) / PARENT_START_FAILURE_FILENAME
+
+
+def write_parent_start_failure(
+    run_dir: Path,
+    state: Mapping[str, Any],
+    *,
+    failure_kind: str,
+    error_type: str,
+    recorded_at_utc: str | None = None,
+) -> dict[str, Any]:
+    """写 P4 父启动失败诊断（write-once）；已存在时核对身份后原样返回。"""
+
+    run_dir = Path(run_dir)
+    binding = state.get("staging_binding")
+    if not isinstance(binding, Mapping):
+        raise SupervisorError("父启动失败诊断要求 staging_binding。")
+    commit = _read_vc_commit(Path(str(binding["commit_path"])))
+    path = _parent_start_failure_path(run_dir)
+    if path.exists():
+        existing = _read_json(path)
+        try:
+            diagnostic = vc_artifacts.validate_parent_start_failure(existing)
+        except vc_artifacts.VCArtifactError as error:
+            raise SupervisorError(f"既有父启动失败诊断无法校验：{error}") from error
+        if (
+            diagnostic["owner_nonce"] != state.get("owner_nonce")
+            or diagnostic["commit_sha256"] != commit["commit_sha256"]
+        ):
+            raise SupervisorError("既有父启动失败诊断与父 run 或 COMMIT 身份不一致。")
+        return diagnostic
+    try:
+        diagnostic = vc_artifacts.build_parent_start_failure(
+            campaign_id=str(state["campaign_id"]),
+            phase=str(state["phase"]),
+            batch_sequence=int(commit["sequence"]),
+            batch_sha256=str(commit["batch_sha256"]),
+            commit_sha256=str(commit["commit_sha256"]),
+            owner_pid=int(state["owner_pid"]),
+            owner_nonce=str(state["owner_nonce"]),
+            failure_kind=failure_kind,
+            error_type=error_type,
+            recorded_at_utc=recorded_at_utc or _utc_now(),
+        )
+    except vc_artifacts.VCArtifactError as error:
+        raise SupervisorError(f"父启动失败诊断构造失败：{error}") from error
+    _write_json(path, diagnostic, replace=False)
+    return diagnostic
+
+
+def read_parent_start_failure(run_dir: Path, state: Mapping[str, Any]) -> dict[str, Any] | None:
+    """读取并校验父启动失败诊断；不存在返回 ``None``，形态或身份异常即拒绝。"""
+
+    path = _parent_start_failure_path(Path(run_dir))
+    if not path.exists():
+        return None
+    payload = _read_json(path)
+    try:
+        diagnostic = vc_artifacts.validate_parent_start_failure(payload)
+    except vc_artifacts.VCArtifactError as error:
+        raise SupervisorError(f"父启动失败诊断无法校验：{error}") from error
+    if (
+        diagnostic["campaign_id"] != state.get("campaign_id")
+        or diagnostic["phase"] != state.get("phase")
+        or diagnostic["owner_pid"] != state.get("owner_pid")
+        or diagnostic["owner_nonce"] != state.get("owner_nonce")
+    ):
+        raise SupervisorError("父启动失败诊断与父 run 身份不一致。")
+    return diagnostic
+
+
+def _last_minute_bucket_end(run_dir: Path) -> float | None:
+    path = Path(run_dir) / "minute-ledger.ndjson"
+    if path.is_symlink() or not path.is_file():
+        return None
+    last: float | None = None
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        record = json.loads(line)
+        end = record.get("bucket_end_epoch") if isinstance(record, dict) else None
+        if isinstance(end, (int, float)) and not isinstance(end, bool):
+            last = float(end)
+    return last
+
+
+def _finalize_minute_ledger(run_dir: Path, *, now: float, state_name: str) -> None:
+    """monitor 不在线时由终态化方补写分钟账本到终态时刻，避免留下未分类时间段。"""
+
+    state = _read_state(run_dir)
+    started = float(state["started_at_epoch"])
+    start = _last_minute_bucket_end(run_dir)
+    bucket_start = max(started, start) if start is not None else started
+    if now > bucket_start:
+        _write_minute_record(
+            run_dir,
+            bucket_start=bucket_start,
+            bucket_end=now,
+            heartbeat=None,
+            owner_alive=False,
+            heartbeat_age=None,
+            classification=_minute_classification(None, state_name),
+            reason="prepared-run-finalized",
+        )
+
+
+def finalize_prepared_run(
+    run_dir: Path,
+    *,
+    operation: str,
+    now: float | None = None,
+    flush_ledger: Any | None = None,
+) -> dict[str, Any]:
+    """把 owner 已丢失的 prepared（或 committed 未启动）父 run 按三分类封存终态。
+
+    - ``no_commit`` → ``aborted_prepared``（reason ``prepared-abandoned``），序号未占；
+    - ``committed`` → ``failed``（reason ``parent-start-failed``）并写
+      ``parent-start-failure.json``（``owner-lost``），序号已占，后继 N+1；
+    - ``integrity_mismatch`` → ``audit-incomplete``（reason ``commit-integrity-mismatch``），
+      序号视为已占且不可重派，永久停线走人工审计。
+
+    ``flush_ledger`` 由 monitor 传入其闭包；其他调用方留空时补写分钟账本到终态时刻。
+    每一步都幂等：已终态直接返回既有事实。
+    """
+
+    run_dir = Path(run_dir)
+    state = _read_state(run_dir)
+    existing = state.get("state")
+    if existing in TERMINAL_STATES:
+        stop_path = run_dir / "stop-receipt.json"
+        stop = _read_json(stop_path) if stop_path.is_file() else {}
+        return {
+            "classification": None,
+            "state": existing,
+            "reason": stop.get("reason"),
+            "finalized": False,
+        }
+    owner_pid = int(state["owner_pid"])
+    if _owner_alive(owner_pid):
+        raise SupervisorError("父 run 的 owner 仍在线，禁止由第三方终态化。")
+    if existing == PREPARED_STATE:
+        classification = classify_prepared_run(run_dir, state)
+    elif committed_run_never_started(run_dir, state):
+        classification = classify_prepared_run(run_dir, state)
+        if classification == "no_commit":
+            # running 状态只能由 activate_committed 写出，此时 COMMIT 必须存在。
+            classification = "integrity_mismatch"
+    else:
+        raise SupervisorError("父 run 不处于 prepared 或 committed 未启动状态。")
+    detected = time.time() if now is None else float(now)
+    owner_nonce = str(state["owner_nonce"])
+    campaign_id = str(state["campaign_id"])
+    phase = str(state["phase"])
+    if classification == "no_commit":
+        terminal, reason = "aborted_prepared", PREPARED_ABANDONED_REASON
+    elif classification == "committed":
+        terminal, reason = "failed", PARENT_START_FAILED_REASON
+        write_parent_start_failure(
+            run_dir,
+            state,
+            failure_kind="owner-lost",
+            error_type="OwnerProcessLost",
+            recorded_at_utc=_epoch_to_utc(detected),
+        )
+    else:
+        terminal, reason = "audit-incomplete", COMMIT_INTEGRITY_MISMATCH_REASON
+    try:
+        _append_event(
+            run_dir,
+            event_type=_event_type_for_state(terminal),
+            operation=operation,
+            owner_pid=owner_pid,
+            owner_nonce=owner_nonce,
+            campaign_id=campaign_id,
+            phase=phase,
+            status=terminal,
+            reason=reason,
+        )
+        _stop_receipt(
+            run_dir,
+            event_type=terminal,
+            reason=reason,
+            detected_at_epoch=detected,
+            owner_pid=owner_pid,
+            owner_nonce=owner_nonce,
+            campaign_id=campaign_id,
+            phase=phase,
+        )
+    finally:
+        if flush_ledger is not None:
+            flush_ledger(detected, terminal)
+        else:
+            _finalize_minute_ledger(run_dir, now=detected, state_name=terminal)
+        _set_terminal_state(run_dir, state=terminal, terminal_at_epoch=detected)
+    return {
+        "classification": classification,
+        "state": terminal,
+        "reason": reason,
+        "finalized": True,
+    }
 
 
 def _monitor_impl(args: argparse.Namespace) -> int:
@@ -1954,7 +2360,7 @@ def _monitor_impl(args: argparse.Namespace) -> int:
             )
             _append_event(
                 run_dir,
-                event_type=("stopped" if requested_status == "stopped" else requested_status),
+                event_type=_event_type_for_state(requested_status),
                 operation="supervisor:stop",
                 owner_pid=owner_pid,
                 owner_nonce=owner_nonce,
@@ -1991,6 +2397,35 @@ def _monitor_impl(args: argparse.Namespace) -> int:
             continue
 
         if not owner_is_alive:
+            if state.get("state") == PREPARED_STATE or committed_run_never_started(
+                run_dir, state
+            ):
+                # 改造 4：父 run 尚未取得执行权（或 COMMIT 后未开始任何动作）时 owner
+                # 丢失，不是 watchdog 事故：按 COMMIT 三分类封存 aborted_prepared／
+                # failed(parent-start-failed)／audit-incomplete(commit-integrity-mismatch)。
+                try:
+                    finalize_prepared_run(
+                        run_dir,
+                        operation="supervisor:owner-check",
+                        now=now,
+                        flush_ledger=lambda at, name: flush_ledger(
+                            at,
+                            heartbeat,
+                            False,
+                            heartbeat_age,
+                            final=True,
+                            state_name=name,
+                        ),
+                    )
+                    terminal_ledger_finalized = True
+                    terminal_state = str(_read_state(run_dir)["state"])
+                except SupervisorError as error:
+                    abort(
+                        f"prepared-finalize-{type(error).__name__}",
+                        operation="supervisor:owner-check",
+                        now=now,
+                    )
+                continue
             abort(
                 "owner-process-not-alive"
                 if heartbeat_age <= timeout_seconds
@@ -2169,10 +2604,28 @@ class SupervisorClient:
         self._attached = False
         self._stop_completed = False
         self._command_failed = False
+        # 改造 4：prepared 起动的父 run 在 COMMIT 后由 activate_committed 转 running；
+        # commit_step 记录 commit 回调当前所在步骤，供失败分支给出 stop reason。
+        self._prepared = False
+        self._committed = False
+        self.commit_step: str | None = None
 
     @property
     def started(self) -> bool:
         return self._started and self.run_dir is not None
+
+    @property
+    def prepared(self) -> bool:
+        """父 run 已建立但尚未取得执行权（state=prepared）。"""
+
+        return self._prepared and not self._committed
+
+    def begin_commit_step(self, step: str) -> None:
+        """commit 回调在进入每一步前登记步骤名，失败时据此生成 ``staging-commit-failed:<step>``。"""
+
+        if step not in STAGING_COMMIT_STEPS:
+            raise SupervisorError(f"非法 staging commit 步骤：{step}")
+        self.commit_step = step
 
     @property
     def attached(self) -> bool:
@@ -2191,6 +2644,8 @@ class SupervisorClient:
 
         run_dir = _validate_state_dir(Path(run_dir), create=False)
         state = _read_state(run_dir)
+        if state.get("state") == PREPARED_STATE:
+            raise SupervisorError("campaign-run 父监督器尚未取得执行权（prepared），禁止附加。")
         if state.get("state") != "running":
             raise SupervisorError("campaign-run 父监督器不在运行态。")
         owner_pid = int(state["owner_pid"])
@@ -2242,7 +2697,14 @@ class SupervisorClient:
             raise SupervisorError("campaign-run 上下文缺少父 run_dir。")
         return cls.attach(Path(raw_run_dir))
 
-    def start(self) -> "SupervisorClient":
+    def start(
+        self,
+        *,
+        prepared: bool = False,
+        staging_binding: Mapping[str, Any] | None = None,
+    ) -> "SupervisorClient":
+        """启动父监督器；``prepared=True`` 时写 ``state=prepared`` 并持久化 COMMIT 定位。"""
+
         if self.started:
             raise SupervisorError("监督器不得重复启动。")
         if self._stop_completed:
@@ -2251,6 +2713,10 @@ class SupervisorClient:
             raise SupervisorError(
                 "campaign-run 子进程不得启动新的监督器；请附加父 run。"
             )
+        if prepared != (staging_binding is not None):
+            raise SupervisorError("prepared 起动必须且只能携带 staging_binding。")
+        binding = _validate_staging_binding(staging_binding) if prepared else None
+        initial_state = PREPARED_STATE if prepared else "running"
         now = time.time()
         now_monotonic_ns = time.monotonic_ns()
         remaining = self.deadline_at_epoch - now
@@ -2280,19 +2746,23 @@ class SupervisorClient:
             "heartbeat_seconds": self.heartbeat_seconds,
             "watchdog_timeout_seconds": self.watchdog_timeout_seconds,
             "ledger_interval_seconds": self.ledger_interval_seconds,
-            "state": "running",
+            "state": initial_state,
             "terminate_owner": self.terminate_owner,
             "campaign_started_at_epoch": now,
             "predecessor_run_dir": None,
             "predecessor_state_sha256": None,
         }
+        if binding is not None:
+            state["staging_binding"] = binding
         _write_json(run_dir / "state.json", state, replace=False)
         self.run_dir = run_dir
+        self._prepared = prepared
+        # prepared 期间心跳与 watchdog 与 running 同等对待：心跳合同不新增状态值。
         self._write_owner_heartbeat(operation="supervisor:start", state="running", force=True)
         event = self._event(
             "command-started",
             "supervisor:start",
-            status="running",
+            status=initial_state,
         )
         self._last_event_sequence = int(event["sequence"])
         command = [
@@ -2340,6 +2810,66 @@ class SupervisorClient:
             raise SupervisorError("监督器尚未启动。")
         assert self.run_dir is not None
         return self.run_dir
+
+    def activate_committed(self, commit: Mapping[str, Any]) -> dict[str, Any]:
+        """COMMIT 写入后把 prepared 父 run 转为 running（commit 四步的第 4 步）。
+
+        只写 ``state``、``committed_at_epoch``、``commit_sha256`` 三个字段；幂等：
+        已 running 且绑定同一 COMMIT 时直接返回，终态或绑定其他 COMMIT 即拒绝。
+        所有读者从 ``staging_binding.staging_attempt`` 取 attempt，本方法不写顶层字段。
+        """
+
+        run_dir = self._require_started()
+        if self._attached:
+            raise SupervisorError("附加客户端不得激活父 run。")
+        try:
+            record = vc_artifacts.validate_vc_commit(commit)
+        except vc_artifacts.VCArtifactError as error:
+            raise SupervisorError(f"COMMIT 无法校验：{error}") from error
+        if (
+            record["owner_nonce"] != self.owner_nonce
+            or record["campaign_id"] != self.campaign_id
+            or record["phase"] != self.phase
+            or record["parent_run_dir"] != str(run_dir)
+        ):
+            raise SupervisorError("COMMIT 与父 run 身份不一致，拒绝激活。")
+        self._ensure_monitor_alive()
+        with _state_lock(run_dir):
+            current = _read_state(run_dir)
+            existing = current.get("state")
+            if existing in TERMINAL_STATES:
+                raise SupervisorError(f"父 run 已是终态 {existing}，禁止激活。")
+            if existing == "running":
+                if current.get("commit_sha256") != record["commit_sha256"]:
+                    raise SupervisorError("父 run 已绑定其他 COMMIT，禁止重复激活。")
+                self._committed = True
+                return current
+            binding = current.get("staging_binding")
+            if (
+                not isinstance(binding, Mapping)
+                or binding.get("sequence") != record["sequence"]
+                or binding.get("staging_attempt") != record["staging_attempt"]
+                or binding.get("phase") != record["phase"]
+            ):
+                raise SupervisorError("COMMIT 与父 run 的 staging_binding 不一致。")
+            current.update(
+                {
+                    "state": "running",
+                    "committed_at_epoch": time.time(),
+                    "commit_sha256": record["commit_sha256"],
+                }
+            )
+            _write_json(run_dir / "state.json", current, replace=True)
+        self._committed = True
+        event = self._event(
+            "commit-activated",
+            "supervisor:commit-activate",
+            status="running",
+            metadata={"commit_sha256": record["commit_sha256"]},
+        )
+        self._last_event_sequence = int(event["sequence"])
+        self._write_owner_heartbeat(operation="supervisor:commit-activate", force=True)
+        return current
 
     def _mark_monitor_exit(self) -> bool:
         """监控进程异常退出且仍为 running 时立即封存审计缺口。"""
@@ -5224,6 +5754,15 @@ def _campaign_run_history(
             continue
         record_path = state_path.parent / "campaign-run-manifest.json"
         if not record_path.is_file() or record_path.is_symlink():
+            if previous.get("staging_binding") is not None:
+                # 改造 4 P2：prepared 起动后、清单写入前崩溃（或被收口为 failed）的父 run
+                # 没有队列清单，也从未提交 COMMIT、从未派动作；它由入口孤儿扫描
+                # 终态化与对账，不进入历史链。
+                if classify_prepared_run(state_path.parent, previous) == "committed":
+                    raise SupervisorError(
+                        "同一 Campaign 的历史 run 已有 COMMIT 却缺少队列清单，需人工审计。"
+                    )
+                continue
             raise SupervisorError("同一 Campaign 的历史 run 缺少不可变队列清单。")
         record = _read_json(record_path)
         recorded_manifest = record.get("manifest")
@@ -5631,12 +6170,39 @@ def _validate_batched_environment_redispatch_successor(
         )
     ):
         raise SupervisorError("环境前提失败诊断没有对应的原批次动作。")
+    return _validate_reconciled_redispatch_binding(
+        prior_state,
+        prior_manifest,
+        prior_dir,
+        successor_manifest,
+        campaign_dir=campaign_dir,
+        effective_class=effective_class,
+        label="环境前提失败",
+    )
+
+
+def _validate_reconciled_redispatch_binding(
+    prior_state: Mapping[str, Any],
+    prior_manifest: Mapping[str, Any],
+    prior_dir: Path,
+    successor_manifest: Mapping[str, Any],
+    *,
+    campaign_dir: Path | None,
+    effective_class: str,
+    label: str,
+) -> bool:
+    """reservation 前失败的共享重派许可：账本 receipt_passed + 对账收据 + 九个不可变字段。
+
+    环境前提失败／零请求后处理失败与改造 4 的父启动失败共用这段绑定校验；
+    入口条件（stop reason、诊断种类）由各自的协议函数先行判定。
+    """
+
     if campaign_dir is None:
-        raise SupervisorError("环境前提失败重派必须绑定 Campaign 目录。")
+        raise SupervisorError(f"{label}重派必须绑定 Campaign 目录。")
     try:
         campaign_dir = Path(campaign_dir).resolve(strict=True)
     except OSError as error:
-        raise SupervisorError("环境前提失败重派的 Campaign 目录不存在。") from error
+        raise SupervisorError(f"{label}重派的 Campaign 目录不存在。") from error
     campaign_path = campaign_dir / "campaign.json"
     campaign = _read_json(campaign_path)
     controls = campaign.get("control_receipts")
@@ -5648,10 +6214,10 @@ def _validate_batched_environment_redispatch_successor(
         or not isinstance(timing_control, Mapping)
         or not isinstance(timing_control.get("ledger_dir"), str)
     ):
-        raise SupervisorError("环境前提失败重派缺少 Campaign 时间账本绑定。")
+        raise SupervisorError(f"{label}重派缺少 Campaign 时间账本绑定。")
     ledger_dir = Path(str(timing_control["ledger_dir"]))
     if not ledger_dir.is_absolute() or ledger_dir.is_symlink() or not ledger_dir.is_dir():
-        raise SupervisorError("环境前提失败重派的时间账本目录不可信。")
+        raise SupervisorError(f"{label}重派的时间账本目录不可信。")
     try:
         ledger_dir = ledger_dir.resolve(strict=True)
         ledger_plan_path = ledger_dir / "ledger.json"
@@ -5661,28 +6227,42 @@ def _validate_batched_environment_redispatch_successor(
             or _sha256(ledger_plan_path.read_bytes())
             != timing_control.get("ledger_plan_sha256")
         ):
-            raise SupervisorError("环境前提失败重派的时间账本计划绑定漂移。")
+            raise SupervisorError(f"{label}重派的时间账本计划绑定漂移。")
         ledger_summary = timing_ledger.inspect_ledger(ledger_dir)
         raw_events = timing_ledger._load_events(ledger_dir)
     except (OSError, timing_ledger.TimingLedgerError) as error:
-        raise SupervisorError(f"环境前提失败重派无法重放时间账本：{error}") from error
+        raise SupervisorError(f"{label}重派无法重放时间账本：{error}") from error
     if not raw_events:
-        raise SupervisorError("环境前提失败重派的时间账本没有事件。")
-    recovery_event = raw_events[-1][0]
+        raise SupervisorError(f"{label}重派的时间账本没有事件。")
     expected_event_id = f"reconcile-run-passed-{prior_dir.name}"
+    matches = [
+        (index, event)
+        for index, (event, _raw) in enumerate(raw_events)
+        if event.get("event_id") == expected_event_id
+    ]
+    if len(matches) != 1:
+        raise SupervisorError(f"{label}尚未形成唯一的原批次重派许可。")
+    recovery_index, recovery_event = matches[0]
     receipts = recovery_event.get("receipts")
     if (
-        ledger_summary.get("status") != "active"
-        or ledger_summary.get("active_phase") != prior_manifest.get("phase")
-        or ledger_summary.get("next_action") != "redispatch-same-batch"
-        or recovery_event.get("event_type") != "receipt_passed"
-        or recovery_event.get("event_id") != expected_event_id
+        recovery_event.get("event_type") != "receipt_passed"
+        or recovery_event.get("next_action") != "redispatch-same-batch"
         or recovery_event.get("phase") != prior_manifest.get("phase")
         or not isinstance(receipts, list)
         or [item.get("role") for item in receipts if isinstance(item, Mapping)]
         != ["provenance", "reconciliation"]
     ):
-        raise SupervisorError("环境前提失败尚未形成唯一的原批次重派许可。")
+        raise SupervisorError(f"{label}尚未形成唯一的原批次重派许可。")
+    if recovery_index == len(raw_events) - 1:
+        # 直接后继正在派发：账本必须仍处于该阶段的 active 恢复态。
+        if (
+            ledger_summary.get("status") != "active"
+            or ledger_summary.get("active_phase") != prior_manifest.get("phase")
+            or ledger_summary.get("next_action") != "redispatch-same-batch"
+        ):
+            raise SupervisorError(f"{label}尚未形成唯一的原批次重派许可。")
+    # 许可已被后继消费（阶段随后推进）时，历史链再校验只核对许可事件本身与
+    # 收据绑定、九个不可变字段；当前能否派发由治理预检按账本现状判定。
 
     reconciliation_binding = next(
         item
@@ -5703,28 +6283,28 @@ def _validate_batched_environment_redispatch_successor(
         or campaign_receipt.is_symlink()
         or not campaign_receipt.is_file()
     ):
-        raise SupervisorError("环境前提失败的对账收据绑定漂移。")
+        raise SupervisorError(f"{label}的对账收据绑定漂移。")
     reconciliation_raw = _permission_compensation_private_file(
         reconciliation_copy,
-        "环境前提失败时间账本对账副本",
+        f"{label}时间账本对账副本",
     )
     campaign_reconciliation_raw = _permission_compensation_private_file(
         campaign_receipt,
-        "环境前提失败 Campaign 对账收据",
+        f"{label} Campaign 对账收据",
     )
     ledger_reconciliation = _permission_compensation_json(
         reconciliation_raw,
-        "环境前提失败时间账本对账副本",
+        f"{label}时间账本对账副本",
     )
     campaign_reconciliation = _permission_compensation_json(
         campaign_reconciliation_raw,
-        "环境前提失败 Campaign 对账收据",
+        f"{label} Campaign 对账收据",
     )
     if (
         _sha256(reconciliation_raw) != reconciliation_binding.get("sha256")
         or ledger_reconciliation != campaign_reconciliation
     ):
-        raise SupervisorError("环境前提失败的对账收据绑定漂移。")
+        raise SupervisorError(f"{label}的对账收据绑定漂移。")
     reconciliation = campaign_reconciliation
     run = reconciliation.get("run")
     if (
@@ -5747,7 +6327,7 @@ def _validate_batched_environment_redispatch_successor(
         or run.get("reuse_items") != prior_manifest.get("reuse_items")
         or run.get("failure_class") != effective_class
     ):
-        raise SupervisorError("环境前提失败的 reservation 前对账事实漂移。")
+        raise SupervisorError(f"{label}的 reservation 前对账事实漂移。")
 
     immutable_fields = (
         "campaign_id",
@@ -5773,17 +6353,173 @@ def _validate_batched_environment_redispatch_successor(
     return True
 
 
+def _staging_commit_path(campaign_dir: Path, sequence: int, phase: str) -> Path:
+    """正式 COMMIT 的规范路径（唯一原子提交点，永不移动）。"""
+
+    return (
+        Path(campaign_dir)
+        / "control"
+        / "vc"
+        / "commits"
+        / f"{int(sequence):04d}-{str(phase).lower()}.json"
+    )
+
+
+def _staging_commit_for_run(
+    campaign_dir: Path,
+    prior_state: Mapping[str, Any],
+    prior_manifest: Mapping[str, Any],
+    run_dir: Path,
+) -> dict[str, Any] | None:
+    """返回该 run 自己提交的有效 COMMIT；未提交返回 ``None``，完整性异常即拒绝。"""
+
+    classification = classify_prepared_run(run_dir, prior_state)
+    if classification == "no_commit":
+        return None
+    if classification == "integrity_mismatch":
+        raise SupervisorError(
+            f"父 run {run_dir.name} 的 COMMIT 完整性异常，序号已占且不可重派，需人工审计。"
+        )
+    commit = _read_vc_commit(
+        Path(str(prior_state["staging_binding"]["commit_path"]))
+    )
+    sequence = int(prior_manifest.get("batch_sequence", 0))
+    phase = str(prior_manifest.get("phase", ""))
+    formal_manifest = (
+        Path(campaign_dir)
+        / "control"
+        / "vc"
+        / "run-manifests"
+        / f"{sequence:04d}-{phase.lower()}.json"
+    )
+    if formal_manifest.is_symlink() or not formal_manifest.is_file():
+        raise SupervisorError(
+            f"父 run {run_dir.name} 已有 COMMIT 但正式队列清单缺失，需人工审计。"
+        )
+    if (
+        commit["batch_sha256"] != prior_manifest.get("batch_sha256")
+        or commit["sequence"] != sequence
+        or commit["phase"] != phase
+        or commit["manifest_sha256"] != _sha256(_canonical(_read_json(formal_manifest)))
+    ):
+        raise SupervisorError(
+            f"父 run {run_dir.name} 的 COMMIT 与其队列清单不一致，需人工审计。"
+        )
+    expected_path = _staging_commit_path(campaign_dir, sequence, phase)
+    if Path(str(prior_state["staging_binding"]["commit_path"])) != expected_path:
+        raise SupervisorError(f"父 run {run_dir.name} 的 COMMIT 路径不是规范路径。")
+    return commit
+
+
+def _validate_first_batch_binding(
+    campaign_dir: Path,
+    prior_manifest: Mapping[str, Any],
+) -> None:
+    """staging 模型的序号 1 由 VC-0 收口在 campaign.json 内绑定，不经 staging／COMMIT。"""
+
+    campaign = _read_json(Path(campaign_dir) / "campaign.json")
+    control = campaign.get("vc_control")
+    binding = (
+        control.get("first_campaign_run_manifest")
+        if isinstance(control, Mapping)
+        else None
+    )
+    if not isinstance(binding, Mapping) or not isinstance(binding.get("path"), str):
+        raise SupervisorError("staging 模型 Campaign 缺少首批队列清单绑定。")
+    first_path = Path(campaign_dir) / str(binding["path"])
+    if (
+        first_path.is_symlink()
+        or not first_path.is_file()
+        or _sha256(first_path.read_bytes()) != binding.get("sha256")
+    ):
+        raise SupervisorError("staging 模型 Campaign 的首批队列清单绑定漂移。")
+    if _campaign_run_manifest(first_path) != dict(prior_manifest):
+        raise SupervisorError("staging 模型 Campaign 的首批 run 队列清单与 VC-0 绑定不一致。")
+
+
+def _validate_batched_parent_start_redispatch_successor(
+    prior_state: Mapping[str, Any],
+    prior_manifest: Mapping[str, Any],
+    prior_dir: Path,
+    successor_manifest: Mapping[str, Any],
+    *,
+    campaign_dir: Path | None,
+) -> bool:
+    """改造 4 P4：父启动失败（COMMIT 已写、未取得执行权）的 N+1 逐字重派协议。
+
+    返回 ``False`` 表示前序失败不是 ``parent-start-failed``，交给其他协议匹配；
+    一旦 stop reason 命中，诊断、COMMIT、对账收据与账本许可任一缺失即失败关闭，
+    且不得复用 ``action-failed`` 路径伪装。
+    """
+
+    stop_path = prior_dir / "stop-receipt.json"
+    if stop_path.is_symlink() or not stop_path.is_file():
+        return False
+    stop = _read_json(stop_path)
+    if stop.get("reason") != PARENT_START_FAILED_REASON:
+        return False
+    owner_pid = prior_state.get("owner_pid")
+    owner_nonce = prior_state.get("owner_nonce")
+    unsigned_stop = dict(stop)
+    stop_digest = unsigned_stop.pop("receipt_sha256", None)
+    if (
+        stop.get("schema_version") != STOP_SCHEMA
+        or stop.get("event_type") != "failed"
+        or stop.get("campaign_id") != prior_manifest.get("campaign_id")
+        or stop.get("phase") != prior_manifest.get("phase")
+        or stop.get("owner_pid") != owner_pid
+        or stop.get("owner_nonce") != owner_nonce
+        or stop_digest != _sha256(_canonical(unsigned_stop))
+        or prior_state.get("state") != "failed"
+        or prior_state.get("campaign_id") != prior_manifest.get("campaign_id")
+        or prior_state.get("phase") != prior_manifest.get("phase")
+    ):
+        raise SupervisorError("父启动失败批次的父终态或 stop receipt 漂移。")
+    diagnostic_path = prior_dir / "action-diagnostics"
+    if diagnostic_path.exists() and any(diagnostic_path.glob("action-*-failure.json")):
+        raise SupervisorError("父启动失败批次不得携带动作失败诊断。")
+    diagnostic = read_parent_start_failure(prior_dir, prior_state)
+    if diagnostic is None:
+        raise SupervisorError("父启动失败批次缺少 parent-start-failure 诊断。")
+    if campaign_dir is None:
+        raise SupervisorError("父启动失败重派必须绑定 Campaign 目录。")
+    commit = _staging_commit_for_run(Path(campaign_dir), prior_state, prior_manifest, prior_dir)
+    if commit is None:
+        raise SupervisorError("父启动失败批次没有有效 COMMIT，不能按 N+1 重派。")
+    if (
+        diagnostic["commit_sha256"] != commit["commit_sha256"]
+        or diagnostic["batch_sha256"] != prior_manifest.get("batch_sha256")
+        or diagnostic["batch_sequence"] != prior_manifest.get("batch_sequence")
+    ):
+        raise SupervisorError("父启动失败诊断与 COMMIT／队列清单不一致。")
+    return _validate_reconciled_redispatch_binding(
+        prior_state,
+        prior_manifest,
+        prior_dir,
+        successor_manifest,
+        campaign_dir=campaign_dir,
+        effective_class=PARENT_START_FAILED_REASON,
+        label="父启动失败",
+    )
+
+
 def _validate_batched_campaign_history(
     manifest: Mapping[str, Any],
     history: Sequence[tuple[dict[str, Any], dict[str, Any], Path]],
     *,
     campaign_dir: Path | None = None,
+    staging_model: bool | None = None,
 ) -> list[tuple[dict[str, Any], dict[str, Any], Path]]:
     """校验 v2/v3 连续链和获批的唯一失败后继。
 
     B4／B6（2026-09-16）：历史 v4/v5 续接、一次性权限补偿、alias 与预派发后继
     已从执行分支删除；新 Campaign 的失败父批次只能由普通零请求恢复预览或唯一
     v3 承接，其余失败由 reconciler 对账后决定恢复或永久停线。
+
+    改造 4：``staging_model``（None 时按 Campaign 总计划判定）为真时，序号占用只认
+    COMMIT——序号 1 由 VC-0 在 campaign.json 内绑定；序号 ≥2 的 run 必须有自己的有效
+    COMMIT 才进入序号链；无 COMMIT 的 run（``aborted_prepared`` 等）必须已终态且不计
+    序号。旧模型 Campaign 保持原规则，历史链只读重放不变。
     """
 
     if any(
@@ -5795,6 +6531,37 @@ def _validate_batched_campaign_history(
         for _state, prior_manifest, _run_dir in history
     ):
         raise SupervisorError("batched Campaign 不得与历史 v1／v4／v5 run 混用。")
+    if staging_model is None:
+        staging_model = campaign_batch_model(campaign_dir) == "staging"
+    if staging_model:
+        if campaign_dir is None:
+            raise SupervisorError("staging 模型 Campaign 的历史校验必须绑定 Campaign 目录。")
+        chained: list[tuple[dict[str, Any], dict[str, Any], Path]] = []
+        for state, prior_manifest, run_dir in history:
+            sequence = int(prior_manifest.get("batch_sequence", 0))
+            if sequence == 1 and state.get("staging_binding") is None:
+                # VC-0 收口直接写出的首批（campaign-run／no-op 引导派发）：由 campaign.json 绑定。
+                _validate_first_batch_binding(campaign_dir, prior_manifest)
+                chained.append((state, prior_manifest, run_dir))
+                continue
+            if state.get("staging_binding") is None:
+                raise SupervisorError(
+                    f"staging 模型 Campaign 的父 run {run_dir.name} 缺少 staging_binding。"
+                )
+            commit = _staging_commit_for_run(campaign_dir, state, prior_manifest, run_dir)
+            if commit is None:
+                if state.get("state") not in TERMINAL_STATES:
+                    raise SupervisorError(
+                        f"父 run {run_dir.name} 尚未取得执行权也未终态化，先完成孤儿对账。"
+                    )
+                if state.get("state") == "stopped":
+                    raise SupervisorError(
+                        f"父 run {run_dir.name} 无 COMMIT 却已 stopped，历史不可信。"
+                    )
+                # 无 COMMIT 的终态 run 从未占用序号，不进入序号链。
+                continue
+            chained.append((state, prior_manifest, run_dir))
+        history = chained
     ordered = sorted(
         history,
         key=lambda item: int(item[1].get("batch_sequence", 0)),
@@ -5860,6 +6627,18 @@ def _validate_batched_campaign_history(
         if (
             prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
             and successor_schema == CAMPAIGN_RUN_RECOVERY_SCHEMA
+        ):
+            continue
+        if (
+            prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
+            and successor_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
+            and _validate_batched_parent_start_redispatch_successor(
+                state,
+                prior_manifest,
+                _run_dir,
+                successor_manifest,
+                campaign_dir=campaign_dir,
+            )
         ):
             continue
         if (
@@ -6022,7 +6801,10 @@ def _close_failed_campaign_timing_ledger(
     if not isinstance(sequence, int) or isinstance(sequence, bool) or sequence < 1:
         raise SupervisorError("父失败批次序号非法。")
     failed_action_id = _safe_id(failed_action_id, "failed_action_id")
-    if failure_class not in ACTION_DIAGNOSTIC_FAILURE_CLASSES:
+    if (
+        failure_class not in ACTION_DIAGNOSTIC_FAILURE_CLASSES
+        and failure_class not in RECOVERABLE_PARENT_FAILURE_CLASSES
+    ):
         raise SupervisorError("父动作 failure_class 非法。")
     failure_digest = _sha256(
         _canonical(
@@ -6038,12 +6820,22 @@ def _close_failed_campaign_timing_ledger(
     # 根因只由稳定输入生成：同一动作在不同 Campaign 失败得到同一个 ID，
     # 项目总账的同根因上限才能跨 Campaign 累计。failure_digest 仍含
     # campaign_id，只用于让事件 ID 在本账本内唯一。
-    root_cause_id = root_cause.structured_root_cause(
-        component="supervisor",
-        stable_error_code="campaign-run.action-failed",
-        failed_step=failed_action_id,
-        stable_dimensions={"phase": phase},
-    )
+    if failure_class == PARENT_START_FAILED_REASON:
+        # 改造 4 P4：COMMIT 已写但父 run 未取得执行权，不是动作失败；根因按
+        # 父启动失败独立编码（维度只含 phase），与 reconciler 的分支一致。
+        root_cause_id = root_cause.structured_root_cause(
+            component="supervisor",
+            stable_error_code="parent-start.failed",
+            failed_step="commit-activate",
+            stable_dimensions={"phase": phase},
+        )
+    else:
+        root_cause_id = root_cause.structured_root_cause(
+            component="supervisor",
+            stable_error_code="campaign-run.action-failed",
+            failed_step=failed_action_id,
+            stable_dimensions={"phase": phase},
+        )
     event_prefix = f"campaign-run-failure-{failure_digest[:20]}"
     recovery_event_id = f"{event_prefix}-recovery-required"
     abandon_event_id = f"{event_prefix}-stage-abandoned"
@@ -6120,7 +6912,10 @@ def _close_failed_campaign_timing_ledger(
         # 仅精确的环境前提失败可暂停；deadline／重试上限已使账本进入
         # stop_required 时，即便动作分类可恢复也必须走永久停线分支。
         if (
-            failure_class in RECOVERABLE_ACTION_FAILURE_CLASSES
+            (
+                failure_class in RECOVERABLE_ACTION_FAILURE_CLASSES
+                or failure_class in RECOVERABLE_PARENT_FAILURE_CLASSES
+            )
             and before.get("status") == "active"
         ):
             if before.get("active_phase") != phase:
@@ -6228,14 +7023,105 @@ def _close_failed_campaign_timing_ledger(
         }
 
 
+def _commit_prepared_run(
+    client: SupervisorClient,
+    commit: Any,
+) -> dict[str, Any] | None:
+    """执行 staging commit 回调并按"有效 COMMIT 是否存在"分支处理失败。
+
+    返回 ``None`` 表示父 run 已取得执行权（state=running），调用方继续动作循环；
+    否则返回已封存的失败结果（``aborted_prepared``／``failed(parent-start-failed)``／
+    ``audit-incomplete(commit-integrity-mismatch)``），调用方不得进入动作循环。
+    ``KeyboardInterrupt``／``SystemExit`` 在终态化后原样抛出，保持退出语义。
+    """
+
+    run_dir = client._require_started()
+    failure: BaseException | None = None
+    try:
+        commit(client)
+    except BaseException as error:  # noqa: BLE001 - 崩溃点分类需要覆盖全部异常
+        failure = error
+    step = client.commit_step or STAGING_COMMIT_STEPS[0]
+    state = _read_state(run_dir)
+    if failure is None and state.get("state") == "running" and client._committed:
+        return None
+    classification = classify_prepared_run(run_dir, state)
+    error_type = type(failure).__name__ if failure is not None else "CommitNotActivated"
+    if classification == "no_commit":
+        reason = f"{STAGING_COMMIT_FAILED_PREFIX}{step}"
+        client.stop(reason=reason, status="aborted_prepared")
+        if isinstance(failure, (KeyboardInterrupt, SystemExit)):
+            raise failure
+        return {
+            "status": "aborted_prepared",
+            "reason": reason,
+            "commit_step": step,
+            "error_type": error_type,
+            "classification": classification,
+        }
+    if classification == "committed":
+        binding = state["staging_binding"]
+        record = _read_vc_commit(Path(str(binding["commit_path"])))
+        activation_error: str | None = None
+        for _attempt in range(PARENT_START_ACTIVATE_RETRIES):
+            try:
+                client.activate_committed(record)
+                activation_error = None
+                break
+            except SupervisorError as error:
+                activation_error = type(error).__name__
+                continue
+        if activation_error is None and _read_state(run_dir).get("state") == "running":
+            if isinstance(failure, (KeyboardInterrupt, SystemExit)):
+                # 已取得执行权但调用方要求退出：按普通 running 失败收口。
+                client.stop(reason=type(failure).__name__, status="failed")
+                raise failure
+            return None
+        write_parent_start_failure(
+            run_dir,
+            _read_state(run_dir),
+            failure_kind="state-write-failed",
+            error_type=activation_error or error_type,
+        )
+        client.stop(reason=PARENT_START_FAILED_REASON, status="failed")
+        if isinstance(failure, (KeyboardInterrupt, SystemExit)):
+            raise failure
+        return {
+            "status": "failed",
+            "reason": PARENT_START_FAILED_REASON,
+            "commit_step": "commit-activate",
+            "error_type": activation_error or error_type,
+            "classification": classification,
+        }
+    client.stop(reason=COMMIT_INTEGRITY_MISMATCH_REASON, status="audit-incomplete")
+    if isinstance(failure, (KeyboardInterrupt, SystemExit)):
+        raise failure
+    return {
+        "status": "audit-incomplete",
+        "reason": COMMIT_INTEGRITY_MISMATCH_REASON,
+        "commit_step": step,
+        "error_type": error_type,
+        "classification": classification,
+    }
+
+
 def _campaign_run_locked(
     args: argparse.Namespace,
     *,
     manifest: Mapping[str, Any],
     state_dir: Path,
     campaign_dir: Path | None = None,
+    commit: Any | None = None,
+    owner_nonce: str | None = None,
+    staging_binding: Mapping[str, Any] | None = None,
 ) -> tuple[int, dict[str, Any]]:
-    """在调用方已持有 ``.campaign-run.lock`` 时执行一个父动作队列。"""
+    """在调用方已持有 ``.campaign-run.lock`` 时执行一个父动作队列。
+
+    改造 4：``commit`` 非空表示 staging 模型的后继批次——父 run 以 ``prepared`` 起动
+    （``owner_nonce`` 由入口锁内预分配，``staging_binding`` 写入 state.json），写完
+    ``campaign-run-manifest.json`` 后、任何动作前调用 ``commit(client)`` 完成账本事件 →
+    发布 → COMMIT → ``activate_committed`` 四步；失败按 ``_commit_prepared_run`` 分支。
+    """
 
     client: SupervisorClient | None = None
     results: list[dict[str, Any]] = []
@@ -6245,7 +7131,23 @@ def _campaign_run_locked(
     active_action_id: str | None = None
     failed_action_diagnostic: dict[str, Any] | None = None
     failed_action_effective_class = "execution-failure"
+    commit_failure: dict[str, Any] | None = None
     try:
+        staging_model = campaign_batch_model(campaign_dir) == "staging"
+        if commit is not None and not staging_model:
+            raise SupervisorError("legacy 批次模型的 Campaign 不得走 staging 提交。")
+        if (commit is None) != (owner_nonce is None and staging_binding is None):
+            raise SupervisorError("staging 提交必须同时给出 commit 回调、owner_nonce 与 staging_binding。")
+        if (
+            commit is None
+            and staging_model
+            and manifest["schema_version"] != CAMPAIGN_RUN_SCHEMA
+            and int(manifest.get("batch_sequence", 1)) >= 2
+        ):
+            raise SupervisorError(
+                "staging 模型 Campaign 的后继批次必须经 compile-and-run-vc-batch 提交，"
+                "campaign-run 不得直接派发。"
+            )
         history = _campaign_run_history(state_dir, str(manifest["campaign_id"]))
         if manifest["schema_version"] == CAMPAIGN_RUN_SCHEMA:
             # v1 只有相对预算，不能安全承接后续批次；保留历史行为且禁止复用 ID。
@@ -6259,6 +7161,7 @@ def _campaign_run_locked(
                 manifest,
                 history,
                 campaign_dir=campaign_dir,
+                staging_model=staging_model,
             )
             deadline = datetime.fromisoformat(
                 str(manifest["original_deadline_at_utc"]).replace("Z", "+00:00")
@@ -6272,11 +7175,12 @@ def _campaign_run_locked(
             campaign_id=str(manifest["campaign_id"]),
             phase=str(manifest["phase"]),
             deadline_at_epoch=deadline,
+            owner_nonce=owner_nonce,
             heartbeat_seconds=args.heartbeat_seconds,
             watchdog_timeout_seconds=args.watchdog_timeout_seconds,
             ledger_interval_seconds=args.ledger_interval_seconds,
         )
-        client.start()
+        client.start(prepared=commit is not None, staging_binding=staging_binding)
         if client.run_dir is None:
             raise SupervisorError("Campaign 父监督器运行目录尚未建立。")
         # 把归一化后的不可变清单和摘要写入本次 run，便于强停后确认实际
@@ -6290,7 +7194,12 @@ def _campaign_run_locked(
             },
             replace=False,
         )
-        if bool(manifest["no_op"]):
+        if commit is not None:
+            commit_failure = _commit_prepared_run(client, commit)
+        if commit_failure is not None:
+            status = str(commit_failure["status"])
+            reason = str(commit_failure["reason"])
+        elif bool(manifest["no_op"]):
             operation = "campaign:incremental-noop"
             client.event_start(operation)
             client.event_end(operation, metadata={"execute_count": 0})
@@ -6493,7 +7402,28 @@ def _campaign_run_locked(
                     "error_type": type(error).__name__,
                     "message": str(error)[:1000],
                 }
-        client.stop(reason=reason, status=status)
+        elif (
+            commit_failure is not None
+            and reason == PARENT_START_FAILED_REASON
+            and campaign_dir is not None
+        ):
+            # P4：COMMIT 已写、序号已占，账本按可恢复父失败暂停（recovery_required），
+            # 强制 reconciler 先行；aborted_prepared／完整性异常不动账本，由入口／reconciler 处理。
+            try:
+                timing_closeout = _close_failed_campaign_timing_ledger(
+                    campaign_dir,
+                    manifest,
+                    failed_action_id="commit-activate",
+                    failure_class=PARENT_START_FAILED_REASON,
+                )
+            except BaseException as error:
+                timing_closeout = {
+                    "status": "failed",
+                    "error_type": type(error).__name__,
+                    "message": str(error)[:1000],
+                }
+        if commit_failure is None:
+            client.stop(reason=reason, status=status)
         payload = {
             "campaign_id": manifest["campaign_id"],
             "run_dir": str(client.run_dir),
@@ -6503,6 +7433,8 @@ def _campaign_run_locked(
             "execute_items": list(manifest.get("execute_items", [])),
             "reuse_items": list(manifest.get("reuse_items", [])),
         }
+        if commit_failure is not None:
+            payload["commit_failure"] = dict(commit_failure)
         if campaign_dir is not None:
             payload["timing_closeout"] = timing_closeout
         if manifest["schema_version"] in {

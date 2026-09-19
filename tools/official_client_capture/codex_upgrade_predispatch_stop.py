@@ -331,6 +331,7 @@ def _record_locked(
 ) -> tuple[Path, dict[str, Any]]:
     """在调用方已持有 ``.campaign-run.lock`` 时写入停线收据。"""
 
+    _reject_staging_model_campaign(campaign_dir)
     _validate_failure(failure_kind, error_type)
     campaign_dir = _private_directory(campaign_dir, "Campaign 目录")
     state_dir = _private_directory(state_dir, "监督器 state-dir")
@@ -402,6 +403,24 @@ def _record_locked(
     return receipt_path, payload
 
 
+def _reject_staging_model_campaign(campaign_dir: Path) -> None:
+    """改造 4：staging 模型 Campaign 不再产生 predispatch-stop/v1；历史收据只读重放不变。"""
+
+    vc_root = Path(campaign_dir) / "control" / "vc"
+    if (vc_root / "staging").exists() or (vc_root / "commits").exists():
+        raise PredispatchStopError(
+            "staging 模型 Campaign 不再产生预派发停线收据；派发前失败由 staging ABORT 与对账登记。"
+        )
+    try:
+        model = supervisor.campaign_batch_model(Path(campaign_dir))
+    except supervisor.SupervisorError as error:
+        raise PredispatchStopError(str(error)) from error
+    if model == "staging":
+        raise PredispatchStopError(
+            "staging 模型 Campaign 不再产生预派发停线收据；派发前失败由 staging ABORT 与对账登记。"
+        )
+
+
 def record(
     *,
     campaign_dir: Path,
@@ -413,6 +432,7 @@ def record(
 ) -> tuple[Path, dict[str, Any]]:
     """非阻塞取锁并封存一份通用预派发停线收据。"""
 
+    _reject_staging_model_campaign(campaign_dir)
     try:
         descriptor, locked_state_dir = supervisor._campaign_run_lock(state_dir)
     except supervisor.SupervisorError as error:

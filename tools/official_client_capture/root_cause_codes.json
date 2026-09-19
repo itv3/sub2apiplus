@@ -90,6 +90,26 @@
       "stable_dimensions": [],
       "legacy": true,
       "description": "历史字面量：失败证据归档走了宿主别名路径。"
+    },
+    "staging.abandoned": {
+      "component": "orchestrator",
+      "stable_dimensions": ["phase", "stage"],
+      "description": "VC 批次 staging 制品或 prepared 父 run 在取得执行权前被遗弃（进程崩溃、SIGKILL 或 owner 丢失），正式序号未占用。"
+    },
+    "staging.commit-failed": {
+      "component": "orchestrator",
+      "stable_dimensions": ["phase", "stage"],
+      "description": "VC 批次 staging 提交在写入正式 COMMIT 前的某一步失败（nonce 校验、账本事件、发布正式文件、写 COMMIT 标记），正式序号未占用。"
+    },
+    "parent-start.failed": {
+      "component": "supervisor",
+      "stable_dimensions": ["phase"],
+      "description": "正式 COMMIT 已写入但 prepared 父 run 未能转入 running（owner 丢失或状态写入失败），序号已占用，零动作零请求。"
+    },
+    "commit.integrity-mismatch": {
+      "component": "supervisor",
+      "stable_dimensions": ["phase"],
+      "description": "prepared 父 run 对应的正式 COMMIT 存在但自摘要无效、owner nonce 或 run 目录不匹配，属于制品完整性异常，永久停线。"
     }
   }
 }

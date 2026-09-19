@@ -1321,9 +1321,19 @@ def _atomic_compiler(
     checkpoint: Mapping[str, Any],
     checkpoint_path: Path,
 ) -> Any:
-    """返回与正式编译器使用同一 builders 和不可覆盖写入器的离线闭包。"""
+    """返回与正式编译器使用同一 builders 和不可覆盖写入器的离线闭包。
 
-    def compile_batch(arguments: argparse.Namespace) -> dict[str, Any]:
+    改造 4：入口按 Campaign 总计划的 ``batch_model`` 决定调用形态——staging 模型
+    传入 ``staging_attempt_dir`` 与 ``owner_nonce``，闭包用正式编译器同一
+    ``_write_staging_batch_artifacts`` 写 staging 三件套；legacy 形态保持原样。
+    """
+
+    def compile_batch(
+        arguments: argparse.Namespace,
+        *,
+        staging_attempt_dir: Path | None = None,
+        owner_nonce: str | None = None,
+    ) -> dict[str, Any]:
         action_plan = codex_upgrade_vc_artifacts.validate_action_plan(
             _load_json(arguments.action_plan, "原子演练 action plan")
         )
@@ -1357,6 +1367,19 @@ def _atomic_compiler(
         manifest_path = (
             arguments.campaign_dir / "control/vc/run-manifests" / name
         )
+        if (staging_attempt_dir is None) != (owner_nonce is None):
+            raise CampaignRunRehearsalError("原子演练 staging 参数必须成对给出")
+        if staging_attempt_dir is not None:
+            assert owner_nonce is not None
+            return codex_upgrade._write_staging_batch_artifacts(
+                arguments.campaign_dir,
+                staging_attempt_dir,
+                plan=plan,
+                batch=batch,
+                run_manifest=codex_upgrade._vc_run_manifest_from_batch(batch),
+                owner_nonce=owner_nonce,
+                prepared_at_utc=now.isoformat(),
+            )
         codex_upgrade._secure_write_json_once(batch_path, batch)
         manifest = codex_upgrade_supervisor.build_batched_campaign_run_manifest(
             campaign_id=batch["campaign_id"],
@@ -2366,6 +2389,16 @@ def _atomic_expected_inventory_paths(
         "campaign/control/vc/batches",
         "campaign/control/vc/batches/0001-vc-1.json",
         "campaign/control/vc/campaign-plan.json",
+        # 改造 4（staging/WAL）：演练 Campaign 的总计划是 staging 模型，原子入口先写
+        # staging attempt 三件套，COMMIT 后才发布正式 batch／run-manifest。
+        "campaign/control/vc/staging",
+        "campaign/control/vc/staging/0001-vc-1",
+        "campaign/control/vc/staging/0001-vc-1/attempt-1",
+        "campaign/control/vc/staging/0001-vc-1/attempt-1/batch.json",
+        "campaign/control/vc/staging/0001-vc-1/attempt-1/run-manifest.json",
+        "campaign/control/vc/staging/0001-vc-1/attempt-1/PREPARED",
+        "campaign/control/vc/commits",
+        "campaign/control/vc/commits/0001-vc-1.json",
         "campaign/control/vc/run-manifests",
         "campaign/control/vc/run-manifests/0001-vc-1.json",
         "campaign/control/vc/run-manifests/atomic-offline-failure.json",

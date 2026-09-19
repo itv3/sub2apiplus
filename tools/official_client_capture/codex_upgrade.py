@@ -15846,8 +15846,130 @@ def _vc_run_manifest_from_batch(batch: Mapping[str, Any]) -> dict[str, Any]:
     )
 
 
-def compile_vc_batch(arguments: argparse.Namespace) -> dict[str, Any]:
-    """从直接前序 checkpoint 一次生成 batch 和可执行 v2 队列。"""
+# ---------------------------------------------------------------------------
+# 改造 4（staging/WAL）：批次 staging 目录、COMMIT 与序号占用规则
+# ---------------------------------------------------------------------------
+
+STAGING_BATCH_FILENAME = "batch.json"
+STAGING_MANIFEST_FILENAME = "run-manifest.json"
+STAGING_PREPARED_FILENAME = "PREPARED"
+STAGING_ABORT_FILENAME = "ABORT"
+_STAGING_ATTEMPT_RE = re.compile(r"^attempt-([1-9][0-9]*)$")
+_VC_SEQUENCE_FILE_RE = re.compile(r"^([0-9]{4})-(vc-[0-6])\.json$")
+
+
+def _campaign_batch_model(campaign_dir: Path) -> str:
+    """派发入口的模型判定：委托监督器同一函数，无 Campaign／无总计划即 legacy。"""
+
+    try:
+        return codex_upgrade_supervisor.campaign_batch_model(campaign_dir)
+    except codex_upgrade_supervisor.SupervisorError as error:
+        raise ConfigurationError(str(error)) from error
+
+
+def _campaign_uses_staging_model(campaign_dir: Path, plan: Mapping[str, Any]) -> bool:
+    """以总计划 ``batch_model`` 为主判据；legacy Campaign 出现 staging 制品即失败关闭。"""
+
+    try:
+        model = codex_upgrade_vc_artifacts.campaign_plan_batch_model(plan)
+    except codex_upgrade_vc_artifacts.VCArtifactError as error:
+        raise ConfigurationError(str(error)) from error
+    vc_root = campaign_dir / "control" / "vc"
+    if model == "legacy":
+        for name in ("staging", "commits", "staging-aborts"):
+            path = vc_root / name
+            if path.exists() or path.is_symlink():
+                raise ConfigurationError(
+                    f"legacy 批次模型的 Campaign 不得混用 staging 制品：control/vc/{name}"
+                )
+        return False
+    return True
+
+
+def _staging_sequence_dir(campaign_dir: Path, sequence: int, phase: str) -> Path:
+    return campaign_dir / "control" / "vc" / "staging" / f"{sequence:04d}-{phase.lower()}"
+
+
+def _staging_commit_path(campaign_dir: Path, sequence: int, phase: str) -> Path:
+    return codex_upgrade_supervisor._staging_commit_path(campaign_dir, sequence, phase)
+
+
+def _staging_attempt_dirs(sequence_dir: Path) -> list[tuple[int, Path]]:
+    """按 attempt 序号升序枚举一个序号目录下的 staging attempt。"""
+
+    if sequence_dir.is_symlink():
+        raise ConfigurationError(f"staging 序号目录不得是符号链接：{sequence_dir}")
+    if not sequence_dir.is_dir():
+        return []
+    attempts: list[tuple[int, Path]] = []
+    for child in sequence_dir.iterdir():
+        match = _STAGING_ATTEMPT_RE.fullmatch(child.name)
+        if match is None or child.is_symlink() or not child.is_dir():
+            raise ConfigurationError(f"staging 序号目录含非法条目：{child}")
+        attempts.append((int(match.group(1)), child))
+    return sorted(attempts)
+
+
+def _next_staging_attempt(sequence_dir: Path) -> int:
+    attempts = _staging_attempt_dirs(sequence_dir)
+    return (attempts[-1][0] + 1) if attempts else 1
+
+
+def _read_staging_commit(commit_path: Path) -> dict[str, Any]:
+    try:
+        return codex_upgrade_supervisor._read_vc_commit(commit_path)
+    except codex_upgrade_vc_artifacts.VCArtifactError as error:
+        raise ConfigurationError(f"COMMIT 无法校验：{commit_path.name}：{error}") from error
+
+
+def _committed_vc_sequences(campaign_dir: Path, manifest: Mapping[str, Any]) -> list[int]:
+    """staging 模型的序号占用：序号 1 由 VC-0 在 campaign.json 内绑定，其余只认 COMMIT。"""
+
+    committed: list[int] = []
+    control = manifest.get("vc_control")
+    first_binding = control.get("first_formal_batch") if isinstance(control, Mapping) else None
+    if isinstance(first_binding, Mapping) and isinstance(first_binding.get("path"), str):
+        first_path = campaign_dir / str(first_binding["path"])
+        if first_path.is_symlink() or not first_path.is_file():
+            raise ConfigurationError("VC-0 绑定的首批 batch 文件不存在或不可信。")
+        if file_sha256(first_path) != first_binding.get("sha256"):
+            raise ConfigurationError("VC-0 绑定的首批 batch 摘要漂移。")
+        committed.append(1)
+    commits_root = campaign_dir / "control" / "vc" / "commits"
+    if commits_root.is_symlink():
+        raise ConfigurationError("COMMIT 目录不得是符号链接。")
+    if commits_root.is_dir():
+        for path in sorted(commits_root.iterdir()):
+            match = _VC_SEQUENCE_FILE_RE.fullmatch(path.name)
+            if match is None or path.is_symlink() or not path.is_file():
+                raise ConfigurationError(f"COMMIT 目录含非法条目：{path.name}")
+            commit = _read_staging_commit(path)
+            sequence = int(match.group(1))
+            if (
+                commit["sequence"] != sequence
+                or commit["phase"].lower() != match.group(2)
+                or commit["campaign_id"] != manifest.get("campaign_id")
+            ):
+                raise ConfigurationError(f"COMMIT 内容与文件名或 Campaign 不一致：{path.name}")
+            committed.append(sequence)
+    if len(committed) != len(set(committed)):
+        raise ConfigurationError("COMMIT 序号重复。")
+    return sorted(committed)
+
+
+def compile_vc_batch(
+    arguments: argparse.Namespace,
+    *,
+    staging_attempt_dir: Path | None = None,
+    owner_nonce: str | None = None,
+) -> dict[str, Any]:
+    """从直接前序 checkpoint 一次生成 batch 和可执行 v2 队列。
+
+    改造 4：staging 模型的 Campaign 只能由 ``compile-and-run-vc-batch`` 在锁内预分配
+    ``owner_nonce`` 与 staging attempt 目录后调用，产物写到
+    ``control/vc/staging/NNNN-vc-x/attempt-K/{batch.json, run-manifest.json}`` 并以
+    ``PREPARED`` 标记闭合；正式序号只在 COMMIT 写入时占用。legacy 模型保持原行为。
+    """
 
     campaign_dir = arguments.campaign_dir
     manifest = _require_formal_campaign(campaign_dir)
@@ -15868,6 +15990,25 @@ def compile_vc_batch(arguments: argparse.Namespace) -> dict[str, Any]:
         )
     except codex_upgrade_vc_artifacts.VCArtifactError as error:
         raise ConfigurationError(str(error)) from error
+    staging_model = _campaign_uses_staging_model(campaign_dir, plan)
+    if staging_model:
+        if staging_attempt_dir is None or owner_nonce is None:
+            raise ConfigurationError(
+                "staging 模型 Campaign 的批次只能由 compile-and-run-vc-batch 在锁内"
+                "预分配 owner_nonce 与 staging attempt 后编译。"
+            )
+        try:
+            codex_upgrade_vc_artifacts._sha256(owner_nonce, "owner_nonce")
+        except codex_upgrade_vc_artifacts.VCArtifactError as error:
+            raise ConfigurationError(str(error)) from error
+        expected_parent = _staging_sequence_dir(campaign_dir, sequence, phase)
+        if (
+            staging_attempt_dir.parent != expected_parent
+            or _STAGING_ATTEMPT_RE.fullmatch(staging_attempt_dir.name) is None
+        ):
+            raise ConfigurationError("staging attempt 目录不是本序号的规范路径。")
+    elif staging_attempt_dir is not None or owner_nonce is not None:
+        raise ConfigurationError("legacy 批次模型的 Campaign 不接受 staging 参数。")
     predecessor_phase = codex_upgrade_vc_artifacts.VC_PHASES[
         codex_upgrade_vc_artifacts.VC_PHASES.index(phase) - 1
     ]
@@ -15903,11 +16044,16 @@ def compile_vc_batch(arguments: argparse.Namespace) -> dict[str, Any]:
     batches_root = campaign_dir / "control" / "vc" / "batches"
     manifests_root = campaign_dir / "control" / "vc" / "run-manifests"
     existing_sequences: list[int] = []
-    for path in sorted(batches_root.glob("[0-9][0-9][0-9][0-9]-vc-*.json")):
-        try:
-            existing_sequences.append(int(path.name.split("-", 1)[0]))
-        except ValueError as error:
-            raise ConfigurationError("既有 VC batch 文件名非法。") from error
+    if staging_model:
+        # 序号占用 = 存在 COMMIT（序号 1 由 VC-0 绑定）；正式 batches/ 里没有 COMMIT 的
+        # 半产物不计入，由派发入口归档。
+        existing_sequences = _committed_vc_sequences(campaign_dir, manifest)
+    else:
+        for path in sorted(batches_root.glob("[0-9][0-9][0-9][0-9]-vc-*.json")):
+            try:
+                existing_sequences.append(int(path.name.split("-", 1)[0]))
+            except ValueError as error:
+                raise ConfigurationError("既有 VC batch 文件名非法。") from error
     if existing_sequences != list(range(1, sequence)):
         raise ConfigurationError(
             "VC batch 全局序号必须连续；当前既有序号="
@@ -15940,6 +16086,17 @@ def compile_vc_batch(arguments: argparse.Namespace) -> dict[str, Any]:
     except codex_upgrade_vc_artifacts.VCArtifactError as error:
         raise ConfigurationError(str(error)) from error
     run_manifest = _vc_run_manifest_from_batch(batch)
+    if staging_model:
+        assert staging_attempt_dir is not None and owner_nonce is not None
+        return _write_staging_batch_artifacts(
+            campaign_dir,
+            staging_attempt_dir,
+            plan=plan,
+            batch=batch,
+            run_manifest=run_manifest,
+            owner_nonce=owner_nonce,
+            prepared_at_utc=compiled_at,
+        )
     batch_path = batches_root / f"{sequence:04d}-{phase.lower()}.json"
     run_path = manifests_root / f"{sequence:04d}-{phase.lower()}.json"
     ensure_private_directory(batches_root, campaign_dir)
@@ -15962,6 +16119,67 @@ def compile_vc_batch(arguments: argparse.Namespace) -> dict[str, Any]:
         "batch": str(batch_path),
         "batch_sha256": batch["batch_sha256"],
         "campaign_run_manifest": str(run_path),
+        "original_deadline_at_utc": batch["original_deadline_at_utc"],
+        "execute_item_ids": batch["execute_item_ids"],
+        "reuse_item_ids": batch["reuse_item_ids"],
+    }
+
+
+def _write_staging_batch_artifacts(
+    campaign_dir: Path,
+    attempt_dir: Path,
+    *,
+    plan: Mapping[str, Any],
+    batch: Mapping[str, Any],
+    run_manifest: Mapping[str, Any],
+    owner_nonce: str,
+    prepared_at_utc: str,
+) -> dict[str, Any]:
+    """把编译产物写进 staging attempt 目录并以 PREPARED 闭合；不触碰正式路径。"""
+
+    sequence = int(batch["sequence"])
+    phase = str(batch["phase"])
+    staging_root = campaign_dir / "control" / "vc" / "staging"
+    ensure_private_directory(staging_root, campaign_dir)
+    ensure_private_directory(attempt_dir.parent, campaign_dir)
+    if attempt_dir.exists() or attempt_dir.is_symlink():
+        raise ConfigurationError(f"staging attempt 目录已存在，禁止复用：{attempt_dir.name}")
+    ensure_private_directory(attempt_dir, campaign_dir)
+    batch_path = attempt_dir / STAGING_BATCH_FILENAME
+    manifest_path = attempt_dir / STAGING_MANIFEST_FILENAME
+    _secure_write_json_once(batch_path, dict(batch))
+    _secure_write_json_once(manifest_path, dict(run_manifest))
+    attempt = int(_STAGING_ATTEMPT_RE.fullmatch(attempt_dir.name).group(1))  # type: ignore[union-attr]
+    try:
+        marker = codex_upgrade_vc_artifacts.build_staging_prepared_marker(
+            campaign_id=str(plan["campaign_id"]),
+            sequence=sequence,
+            phase=phase,
+            attempt=attempt,
+            batch_sha256=str(batch["batch_sha256"]),
+            manifest_sha256=codex_upgrade_supervisor._sha256(
+                codex_upgrade_supervisor._canonical(run_manifest)
+            ),
+            owner_nonce=owner_nonce,
+            prepared_at_utc=prepared_at_utc,
+        )
+    except codex_upgrade_vc_artifacts.VCArtifactError as error:
+        raise ConfigurationError(str(error)) from error
+    _secure_write_json_once(attempt_dir / STAGING_PREPARED_FILENAME, marker)
+    return {
+        "status": "prepared",
+        "batch_model": "staging",
+        "campaign_id": plan["campaign_id"],
+        "phase": phase,
+        "batch_sequence": sequence,
+        "staging_attempt": attempt,
+        "staging_attempt_dir": str(attempt_dir),
+        "batch": str(batch_path),
+        "batch_sha256": batch["batch_sha256"],
+        "campaign_run_manifest": str(manifest_path),
+        "prepared_marker": str(attempt_dir / STAGING_PREPARED_FILENAME),
+        "prepared_marker_sha256": marker["marker_sha256"],
+        "owner_nonce": owner_nonce,
         "original_deadline_at_utc": batch["original_deadline_at_utc"],
         "execute_item_ids": batch["execute_item_ids"],
         "reuse_item_ids": batch["reuse_item_ids"],
@@ -16249,6 +16467,23 @@ def _prepare_atomic_batch_governance(arguments: argparse.Namespace) -> dict[str,
     }
 
 
+def _empty_batch_governance() -> dict[str, Any]:
+    """零网络生产同形演练（campaign_run_rehearsal_receipt）的治理占位。
+
+    演练作用于合成 Campaign：没有项目总账注册，账本也只是夹具，治理层不适用；
+    正式 CLI 永远走 ``_prepare_atomic_batch_governance``。
+    """
+
+    return {
+        "manifest": {},
+        "plan": {},
+        "ledger_dir": None,
+        "ledger_head_sequence": 0,
+        "ledger_events": [],
+        "admission": None,
+    }
+
+
 def compile_and_run_vc_batch(
     arguments: argparse.Namespace,
     *,
@@ -16262,25 +16497,37 @@ def compile_and_run_vc_batch(
     0.154 起本入口是 VC-2～VC-6 每一批的唯一强制入口，因此项目总账 admission、
     时间账本的阶段推进（``stage_started``／``stage_completed``）都在这里闭合，
     不再依赖操作员人工 ``append``。
+
+    改造 4：按 Campaign 总计划的 ``batch_model`` 分流——``staging`` 走
+    孤儿对账 → prepare → prepared 父 run → commit 四步的新流程；``legacy``
+    （历史 Campaign 与无总计划的夹具）保持原流程，只读重放不变。
     """
+
+    campaign_dir = arguments.campaign_dir
+    if _compiler is None:
+        governance = _prepare_atomic_batch_governance(arguments)
+    else:
+        governance = _empty_batch_governance()
+    if _campaign_batch_model(campaign_dir) == "staging":
+        return _compile_and_run_vc_batch_staging(
+            arguments, governance=governance, _compiler=_compiler
+        )
+    return _compile_and_run_vc_batch_legacy(
+        arguments, governance=governance, _compiler=_compiler
+    )
+
+
+def _compile_and_run_vc_batch_legacy(
+    arguments: argparse.Namespace,
+    *,
+    governance: dict[str, Any],
+    _compiler: Any | None,
+) -> tuple[dict[str, Any], int]:
+    """legacy 批次模型（改造 4 之前创建的 Campaign）的原子派发流程，保持原样。"""
 
     campaign_dir = arguments.campaign_dir
     phase = str(arguments.phase)
     sequence = int(arguments.sequence)
-    if _compiler is None:
-        governance = _prepare_atomic_batch_governance(arguments)
-    else:
-        # 零网络生产同形演练（campaign_run_rehearsal_receipt）作用于合成 preflight
-        # Campaign：没有项目总账注册，账本也只是夹具，治理层不适用；正式 CLI
-        # 永远走上面的分支。
-        governance = {
-            "manifest": {},
-            "plan": {},
-            "ledger_dir": None,
-            "ledger_head_sequence": 0,
-            "ledger_events": [],
-            "admission": None,
-        }
     batch_path = (
         campaign_dir
         / "control"
@@ -16468,6 +16715,980 @@ def compile_and_run_vc_batch(
                 f"{stop_path}，唯一下一动作是完成工具闭合后建立新 VC-0。"
             ) from error
         raise
+    finally:
+        os.close(lock_descriptor)
+
+
+# ---------------------------------------------------------------------------
+# 改造 4：staging 模型的原子派发入口与孤儿对账
+# ---------------------------------------------------------------------------
+
+STAGING_ORPHAN_MONITOR_WAIT_SECONDS = 10.0
+
+
+class StagingStopTheLine(ConfigurationError):
+    """孤儿对账或判定命中永久停线条件；入口以停线错误退出，该序号不得再派。"""
+
+
+def _staging_run_arguments(arguments: argparse.Namespace) -> argparse.Namespace:
+    return argparse.Namespace(
+        heartbeat_seconds=(
+            arguments.heartbeat_seconds
+            if arguments.heartbeat_seconds is not None
+            else codex_upgrade_supervisor.DEFAULT_HEARTBEAT_SECONDS
+        ),
+        watchdog_timeout_seconds=arguments.watchdog_timeout_seconds,
+        ledger_interval_seconds=arguments.ledger_interval_seconds,
+    )
+
+
+def _read_stop_reason(run_dir: Path) -> str | None:
+    path = run_dir / "stop-receipt.json"
+    if path.is_symlink() or not path.is_file():
+        return None
+    reason = _read_json(path, "父 run stop-receipt").get("reason")
+    return reason if isinstance(reason, str) else None
+
+
+def _load_prepared_staging_attempt(
+    campaign_dir: Path,
+    attempt_dir: Path,
+    *,
+    owner_nonce: str | None,
+    sequence: int,
+    phase: str,
+) -> dict[str, Any]:
+    """读取并交叉校验 staging attempt 的 batch／run-manifest／PREPARED 三件套。"""
+
+    batch_path = attempt_dir / STAGING_BATCH_FILENAME
+    manifest_path = attempt_dir / STAGING_MANIFEST_FILENAME
+    marker_path = attempt_dir / STAGING_PREPARED_FILENAME
+    for path in (batch_path, manifest_path, marker_path):
+        if path.is_symlink() or not path.is_file():
+            raise ConfigurationError(f"staging attempt 缺少可信产物：{path.name}")
+    try:
+        batch = codex_upgrade_vc_artifacts.validate_vc_batch(
+            _read_json(batch_path, "staging VC batch")
+        )
+        marker = codex_upgrade_vc_artifacts.validate_staging_prepared_marker(
+            _read_json(marker_path, "staging PREPARED 标记")
+        )
+    except codex_upgrade_vc_artifacts.VCArtifactError as error:
+        raise ConfigurationError(str(error)) from error
+    raw_manifest = _read_json(manifest_path, "staging campaign-run 清单")
+    try:
+        run_manifest = codex_upgrade_supervisor._campaign_run_manifest(manifest_path)
+    except codex_upgrade_supervisor.SupervisorError as error:
+        raise ConfigurationError(str(error)) from error
+    manifest_sha256 = codex_upgrade_supervisor._sha256(
+        codex_upgrade_supervisor._canonical(raw_manifest)
+    )
+    attempt = int(_STAGING_ATTEMPT_RE.fullmatch(attempt_dir.name).group(1))  # type: ignore[union-attr]
+    if (
+        marker["sequence"] != sequence
+        or marker["phase"] != phase
+        or marker["attempt"] != attempt
+        or marker["batch_sha256"] != batch["batch_sha256"]
+        or marker["manifest_sha256"] != manifest_sha256
+        or batch["sequence"] != sequence
+        or batch["phase"] != phase
+        or run_manifest.get("batch_sha256") != batch["batch_sha256"]
+        or run_manifest.get("batch_sequence") != sequence
+        or run_manifest.get("phase") != phase
+    ):
+        raise ConfigurationError("staging attempt 的 PREPARED、batch 与清单不一致。")
+    if owner_nonce is not None and marker["owner_nonce"] != owner_nonce:
+        raise ConfigurationError("staging PREPARED 的 owner_nonce 与入口预分配值不一致。")
+    return {
+        "attempt": attempt,
+        "batch": batch,
+        "run_manifest": run_manifest,
+        "raw_manifest": raw_manifest,
+        "manifest_sha256": manifest_sha256,
+        "marker": marker,
+    }
+
+
+def _publish_staging_file(source: Path, target: Path, campaign_dir: Path) -> None:
+    """把 staging 产物逐字节发布到正式路径（write-once）；已存在且相同即幂等跳过。"""
+
+    payload = _read_json(source, "staging 产物")
+    if target.exists() or target.is_symlink():
+        if target.is_symlink() or not target.is_file():
+            raise ConfigurationError(f"正式产物路径不可信：{target}")
+        if file_sha256(target) != file_sha256(source):
+            raise ConfigurationError(f"正式产物已存在且内容不同，禁止覆盖：{target.name}")
+        return
+    ensure_private_directory(target.parent, campaign_dir)
+    _secure_write_json_once(target, payload)
+    if file_sha256(target) != file_sha256(source):
+        raise ConfigurationError(f"正式产物发布后与 staging 内容不一致：{target.name}")
+
+
+def _write_staging_abort(
+    attempt_dir: Path,
+    *,
+    campaign_id: str,
+    campaign_plan_sha256: str,
+    phase: str,
+    sequence: int,
+    attempt: int,
+    stage: str,
+    failure_kind: str,
+    error_type: str,
+    root_cause_id: str,
+    batch_sha256: str | None,
+    manifest_sha256: str | None,
+    parent_run_dir: str | None,
+    parent_run_state: str | None,
+    reconciliation_receipt: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """写 staging ABORT（write-once）；已存在时校验并原样返回。"""
+
+    abort_path = attempt_dir / STAGING_ABORT_FILENAME
+    if abort_path.exists() or abort_path.is_symlink():
+        if abort_path.is_symlink() or not abort_path.is_file():
+            raise ConfigurationError(f"staging ABORT 路径不可信：{abort_path}")
+        try:
+            existing = codex_upgrade_vc_artifacts.validate_staging_abort(
+                _read_json(abort_path, "staging ABORT")
+            )
+        except codex_upgrade_vc_artifacts.VCArtifactError as error:
+            raise ConfigurationError(f"既有 staging ABORT 无法校验：{error}") from error
+        if (
+            existing["sequence"] != sequence
+            or existing["staging_attempt"] != attempt
+            or existing["phase"] != phase
+        ):
+            raise ConfigurationError("既有 staging ABORT 与 attempt 身份不一致。")
+        return existing
+    try:
+        abort = codex_upgrade_vc_artifacts.build_staging_abort(
+            campaign_id=campaign_id,
+            campaign_plan_sha256=campaign_plan_sha256,
+            phase=phase,
+            sequence=sequence,
+            staging_attempt=attempt,
+            stage=stage,
+            failure_kind=failure_kind,
+            error_type=error_type[:128],
+            root_cause_id=root_cause_id,
+            batch_sha256=batch_sha256,
+            manifest_sha256=manifest_sha256,
+            parent_run_dir=parent_run_dir,
+            parent_run_state=parent_run_state,
+            reconciliation_receipt=reconciliation_receipt,
+            recorded_at_utc=_utc_now(),
+        )
+    except codex_upgrade_vc_artifacts.VCArtifactError as error:
+        raise ConfigurationError(str(error)) from error
+    _secure_write_json_once(abort_path, abort)
+    return abort
+
+
+def _staging_attempt_sha256s(attempt_dir: Path) -> tuple[str | None, str | None]:
+    """从 PREPARED（或半写的产物）取 batch／manifest 摘要；缺失即 None。"""
+
+    marker_path = attempt_dir / STAGING_PREPARED_FILENAME
+    if marker_path.is_file() and not marker_path.is_symlink():
+        try:
+            marker = codex_upgrade_vc_artifacts.validate_staging_prepared_marker(
+                _read_json(marker_path, "staging PREPARED 标记")
+            )
+            return str(marker["batch_sha256"]), str(marker["manifest_sha256"])
+        except (ConfigurationError, codex_upgrade_vc_artifacts.VCArtifactError):
+            return None, None
+    return None, None
+
+
+def _staging_abort_accounted(campaign_dir: Path, sequence: int, attempt: int) -> bool:
+    """态 C 判据：无父 run 的 staging 中止已推入项目总账（operation 在 head.operations 内）。"""
+
+    from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+    root = codex_upgrade_project_ledger.find_project_ledger(campaign_dir)
+    if root is None:
+        return False
+    head = codex_upgrade_project_ledger.replay_head(root)
+    return reconciler.staging_abort_operation_id(sequence, attempt) in head.get("operations", {})
+
+
+def _reconcile_staging_abort_receipt(
+    campaign_dir: Path,
+    attempt_dir: Path,
+    *,
+    sequence: int,
+    phase: str,
+    attempt: int,
+) -> dict[str, Any]:
+    """态 B→C→判定：对已写 ABORT 的无父 run attempt 完成 outbox → 总账 → 判定（各步幂等）。"""
+
+    from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+    abort_path = attempt_dir / STAGING_ABORT_FILENAME
+    try:
+        abort = codex_upgrade_vc_artifacts.validate_staging_abort(
+            _read_json(abort_path, "staging ABORT")
+        )
+        result = reconciler.reconcile_staging_abort(campaign_dir, abort_path)
+    except codex_upgrade_vc_artifacts.VCArtifactError as error:
+        raise ConfigurationError(f"staging ABORT 无法校验：{error}") from error
+    except reconciler.ReconcilerError as error:
+        raise ConfigurationError(f"staging 中止对账失败：{error}") from error
+    outcome = {
+        "kind": "staging-attempt",
+        "sequence": sequence,
+        "phase": phase,
+        "staging_attempt": attempt,
+        "stage": abort["stage"],
+        "abort_sha256": abort["receipt_sha256"],
+        "decision": result["decision"]["decision"],
+        "terminal_reason": result["decision"].get("terminal_reason"),
+        "root_cause_id": abort["root_cause_id"],
+        "root_cause_count": result["project_head"]["root_cause_count"],
+    }
+    if result["status"] != reconciler.DECISION_RECOVERABLE:
+        raise StagingStopTheLine(
+            f"staging attempt {sequence:04d}-{phase.lower()}/attempt-{attempt} 对账命中永久停线："
+            f"{result['decision']['terminal_reason']}；{'；'.join(result['decision']['reasons'])}"
+        )
+    return outcome
+
+
+def _abort_staging_attempt_without_parent(
+    campaign_dir: Path,
+    attempt_dir: Path,
+    *,
+    plan: Mapping[str, Any],
+    sequence: int,
+    phase: str,
+    attempt: int,
+    stage: str,
+    failure_kind: str,
+    error_type: str,
+) -> dict[str, Any] | None:
+    """P1：没有父 run 的 staging attempt → ABORT → outbox → 总账 → 判定（态 A→B→C）。
+
+    attempt 目录不存在（编译在落盘前失败）时没有事实可登记，返回 ``None``。
+    判定命中永久停线时抛 ``StagingStopTheLine``。
+    """
+
+    from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+    if not attempt_dir.exists():
+        return None
+    campaign_id = str(plan["campaign_id"])
+    try:
+        cause = reconciler.staging_abort_root_cause(phase, stage)
+    except reconciler.ReconcilerError as error:
+        raise ConfigurationError(str(error)) from error
+    batch_sha256, manifest_sha256 = _staging_attempt_sha256s(attempt_dir)
+    _write_staging_abort(
+        attempt_dir,
+        campaign_id=campaign_id,
+        campaign_plan_sha256=str(plan["plan_sha256"]),
+        phase=phase,
+        sequence=sequence,
+        attempt=attempt,
+        stage=stage,
+        failure_kind=failure_kind,
+        error_type=error_type,
+        root_cause_id=str(cause["root_cause_id"]),
+        batch_sha256=batch_sha256,
+        manifest_sha256=manifest_sha256,
+        parent_run_dir=None,
+        parent_run_state=None,
+        reconciliation_receipt=None,
+    )
+    return _reconcile_staging_abort_receipt(
+        campaign_dir, attempt_dir, sequence=sequence, phase=phase, attempt=attempt
+    )
+
+
+def _supervisor_run_reconciled(campaign_dir: Path, run_dir: Path) -> bool:
+    """态 E 判据：Campaign 侧收据、outbox COMMIT、总账 operation 与账本事件四者齐全。"""
+
+    from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+    run_id = run_dir.name
+    receipt_path = (
+        campaign_dir
+        / "control"
+        / reconciler.RECONCILIATION_DIR
+        / f"run-{run_id}"
+        / reconciler.SUPERVISOR_RUN_RECEIPT_NAME
+    )
+    if receipt_path.is_symlink() or not receipt_path.is_file():
+        return False
+    operation_id = f"reconcile-supervisor-run:{run_id}"
+    ledger_dir = campaign_dir / codex_upgrade_project_ledger.CAMPAIGN_LEDGER_DIR_NAME
+    outbox = ledger_dir / "outbox"
+    committed = False
+    if outbox.is_dir():
+        for _index, batch_dir in codex_upgrade_project_ledger._batch_dirs(outbox):
+            batch = codex_upgrade_project_ledger._read_batch(batch_dir)
+            if batch["committed"] and batch["commit"]["operation_id"] == operation_id:
+                committed = True
+                break
+    if not committed:
+        return False
+    root = codex_upgrade_project_ledger.find_project_ledger(campaign_dir)
+    if root is None:
+        return False
+    head = codex_upgrade_project_ledger.replay_head(root)
+    if operation_id not in head.get("operations", {}):
+        return False
+    receipt = _read_json(receipt_path, "父 run 对账收据")
+    ledger_facts = receipt.get("campaign_ledger")
+    active_phase = ledger_facts.get("active_phase") if isinstance(ledger_facts, Mapping) else None
+    if active_phase is None:
+        # 对账时阶段未开始（P2 在账本事件前崩溃）：reconciler 不写 receipt_passed。
+        return True
+    campaign = _read_json(campaign_dir / "campaign.json", "Campaign 清单")
+    timing_dir = _campaign_timing_ledger_dir(campaign_dir, campaign)
+    for event, _raw in codex_upgrade_timing_ledger._load_events(timing_dir):
+        if event.get("event_id") == f"reconcile-run-passed-{run_id}":
+            return True
+    # 永久停线分支不写 receipt_passed，而是 stop_the_line；账本已 stopped 也视为闭合。
+    return codex_upgrade_timing_ledger.inspect_ledger(timing_dir).get("status") == "stopped"
+
+
+def _wait_for_monitor_finalization(run_dir: Path, state: Mapping[str, Any]) -> dict[str, Any]:
+    """monitor 仍在线时给它有界时间封存终态，避免与入口重复追加事件。"""
+
+    monitor_pid = state.get("monitor_pid")
+    if not isinstance(monitor_pid, int) or isinstance(monitor_pid, bool) or monitor_pid <= 0:
+        return dict(state)
+    deadline = time.monotonic() + STAGING_ORPHAN_MONITOR_WAIT_SECONDS
+    current = dict(state)
+    while time.monotonic() < deadline:
+        current = codex_upgrade_supervisor._read_state(run_dir)
+        if current.get("state") in codex_upgrade_supervisor.TERMINAL_STATES:
+            return current
+        if not codex_upgrade_supervisor._owner_alive(monitor_pid):
+            return current
+        time.sleep(0.1)
+    current = codex_upgrade_supervisor._read_state(run_dir)
+    if current.get("state") in codex_upgrade_supervisor.ACTIVE_STATES and codex_upgrade_supervisor._owner_alive(
+        monitor_pid
+    ):
+        raise ConfigurationError(
+            f"父 run {run_dir.name} 的 monitor 仍在线且尚未封存终态，请稍后重试派发。"
+        )
+    return current
+
+
+def _archive_uncommitted_formal_artifacts(
+    campaign_dir: Path,
+    *,
+    sequence: int,
+    phase: str,
+    attempt: int,
+) -> list[str]:
+    """态 G：把无 COMMIT 的正式半产物移到 staging-aborts/NNNN-vc-x/attempt-K/（只移动）。"""
+
+    name = f"{sequence:04d}-{phase.lower()}.json"
+    vc_root = campaign_dir / "control" / "vc"
+    commit_path = _staging_commit_path(campaign_dir, sequence, phase)
+    if commit_path.exists():
+        return []
+    archive_dir = vc_root / "staging-aborts" / f"{sequence:04d}-{phase.lower()}" / f"attempt-{attempt}"
+    moved: list[str] = []
+    for source_dir, target_name in (
+        (vc_root / "batches", STAGING_BATCH_FILENAME),
+        (vc_root / "run-manifests", STAGING_MANIFEST_FILENAME),
+    ):
+        source = source_dir / name
+        if source.is_symlink():
+            raise ConfigurationError(f"正式半产物不得是符号链接：{source}")
+        if not source.is_file():
+            continue
+        ensure_private_directory(vc_root / "staging-aborts", campaign_dir)
+        ensure_private_directory(archive_dir.parent, campaign_dir)
+        ensure_private_directory(archive_dir, campaign_dir)
+        target = archive_dir / target_name
+        if target.exists():
+            if file_sha256(target) == file_sha256(source):
+                source.unlink()
+                moved.append(target_name)
+                continue
+            raise ConfigurationError(f"归档目标已存在且内容不同：{target}")
+        os.rename(source, target)
+        moved.append(target_name)
+    return moved
+
+
+def _formal_artifact_attempt(
+    campaign_dir: Path,
+    *,
+    sequence: int,
+    phase: str,
+) -> int | None:
+    """按 batch_sha256 找到无 COMMIT 正式半产物所属的 staging attempt。"""
+
+    name = f"{sequence:04d}-{phase.lower()}.json"
+    batch_path = campaign_dir / "control" / "vc" / "batches" / name
+    manifest_path = campaign_dir / "control" / "vc" / "run-manifests" / name
+    digests: set[str] = set()
+    if batch_path.is_file() and not batch_path.is_symlink():
+        payload = _read_json(batch_path, "正式半产物 batch")
+        if isinstance(payload.get("batch_sha256"), str):
+            digests.add(str(payload["batch_sha256"]))
+    if manifest_path.is_file() and not manifest_path.is_symlink():
+        payload = _read_json(manifest_path, "正式半产物清单")
+        if isinstance(payload.get("batch_sha256"), str):
+            digests.add(str(payload["batch_sha256"]))
+    if not digests:
+        return None
+    if len(digests) != 1:
+        raise ConfigurationError(f"序号 {sequence:04d} 的正式半产物 batch 摘要互相矛盾，需人工审计。")
+    digest = next(iter(digests))
+    for attempt, attempt_dir in _staging_attempt_dirs(_staging_sequence_dir(campaign_dir, sequence, phase)):
+        batch_sha256, _manifest_sha256 = _staging_attempt_sha256s(attempt_dir)
+        if batch_sha256 == digest:
+            return attempt
+    raise ConfigurationError(
+        f"序号 {sequence:04d} 的正式半产物找不到对应的 staging attempt，需人工审计。"
+    )
+
+
+def _reconcile_prepared_parent_run(
+    campaign_dir: Path,
+    run_dir: Path,
+    state: Mapping[str, Any],
+    *,
+    plan: Mapping[str, Any],
+) -> dict[str, Any]:
+    """态 E→F：对一个无 COMMIT 的终态父 run 完成正式对账并写 staging ABORT（绑定收据）。"""
+
+    from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+    binding = state["staging_binding"]
+    sequence = int(binding["sequence"])
+    phase = str(binding["phase"])
+    attempt = int(binding["staging_attempt"])
+    attempt_dir = _staging_sequence_dir(campaign_dir, sequence, phase) / f"attempt-{attempt}"
+    already = _supervisor_run_reconciled(campaign_dir, run_dir)
+    if already:
+        # 态 E 已闭合：只读既有收据取根因与绑定，不重复对账（判定结果由总账终态与 admission 体现）。
+        receipt_path = (
+            campaign_dir
+            / "control"
+            / reconciler.RECONCILIATION_DIR
+            / f"run-{run_dir.name}"
+            / reconciler.SUPERVISOR_RUN_RECEIPT_NAME
+        )
+        receipt = _read_json(receipt_path, "父 run 对账收据")
+        receipt_binding = {
+            "path": receipt_path.resolve(strict=True)
+            .relative_to(campaign_dir.resolve(strict=True))
+            .as_posix(),
+            "sha256": file_sha256(receipt_path),
+        }
+        decision = "closed"
+        terminal_reason = None
+        root_cause_id = str(receipt["root_cause"]["root_cause_id"])
+    else:
+        try:
+            result = reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
+        except reconciler.ReconcilerError as error:
+            raise ConfigurationError(f"父 run {run_dir.name} 对账失败：{error}") from error
+        receipt_binding = result["reconciliation_receipt"]
+        decision = str(result["decision"]["decision"])
+        terminal_reason = result["decision"].get("terminal_reason")
+        root_cause_id = str(result["root_cause"]["root_cause_id"])
+    stop_reason = _read_stop_reason(run_dir) or ""
+    if stop_reason == codex_upgrade_supervisor.PREPARED_ABANDONED_REASON:
+        stage, failure_kind = "parent-run", "abandoned"
+    elif stop_reason.startswith(codex_upgrade_supervisor.STAGING_COMMIT_FAILED_PREFIX):
+        stage = stop_reason[len(codex_upgrade_supervisor.STAGING_COMMIT_FAILED_PREFIX) :]
+        failure_kind = "commit-failed"
+    else:
+        stage, failure_kind = "parent-run", "interrupted"
+    batch_sha256, manifest_sha256 = _staging_attempt_sha256s(attempt_dir)
+    abort_written = False
+    if attempt_dir.is_dir():
+        abort_path = attempt_dir / STAGING_ABORT_FILENAME
+        abort_written = not abort_path.exists()
+        _write_staging_abort(
+            attempt_dir,
+            campaign_id=str(plan["campaign_id"]),
+            campaign_plan_sha256=str(plan["plan_sha256"]),
+            phase=phase,
+            sequence=sequence,
+            attempt=attempt,
+            stage=stage,
+            failure_kind=failure_kind,
+            error_type=stop_reason or "unknown",
+            root_cause_id=root_cause_id,
+            batch_sha256=batch_sha256,
+            manifest_sha256=manifest_sha256,
+            parent_run_dir=str(run_dir),
+            parent_run_state=str(state["state"]),
+            reconciliation_receipt={
+                "path": str(receipt_binding["path"]),
+                "sha256": str(receipt_binding["sha256"]),
+            },
+        )
+    return {
+        "kind": "parent-run",
+        "run_dir": str(run_dir),
+        "run_state": state["state"],
+        "stop_reason": stop_reason,
+        "sequence": sequence,
+        "phase": phase,
+        "staging_attempt": attempt,
+        "already_reconciled": already,
+        "abort_written": abort_written,
+        "decision": decision,
+        "terminal_reason": terminal_reason,
+        "root_cause_id": root_cause_id,
+        "reconciliation_receipt": dict(receipt_binding),
+    }
+
+
+def _reconcile_staging_orphans(
+    campaign_dir: Path,
+    state_dir: Path,
+    *,
+    plan: Mapping[str, Any],
+) -> dict[str, Any]:
+    """派发入口锁内、prepare 前的孤儿处理：按可观测状态逐项幂等续接到闭合。
+
+    对象与顺序：① 同 Campaign 的 staging 父 run（prepared／committed 未启动的先终态化；
+    无 COMMIT 的终态 run 走对账 → ABORT；COMMIT 完整性异常走永久停线；
+    ``failed(parent-start-failed)`` 是 P4，留给 reconcile-supervisor-run，入口不处理）；
+    ② 没有父 run 的 staging attempt（ABORT → outbox → 总账 → 判定）；③ 无 COMMIT 的
+    正式半产物归档。任一对象命中永久停线即在处理完本对象后抛 ``StagingStopTheLine``。
+    """
+
+    from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+    campaign_id = str(plan["campaign_id"])
+    handled: list[dict[str, Any]] = []
+    stops: list[str] = []
+    changed = False
+    referenced_attempts: set[tuple[int, str, int]] = set()
+    supervisor = codex_upgrade_supervisor
+    # ① 父 run
+    for state_path in sorted(state_dir.glob("run-*/state.json")):
+        run_dir = state_path.parent
+        try:
+            state = supervisor._read_state(run_dir)
+        except supervisor.SupervisorError:
+            continue
+        if state.get("campaign_id") != campaign_id:
+            continue
+        binding = state.get("staging_binding")
+        if not isinstance(binding, Mapping):
+            continue
+        referenced_attempts.add(
+            (int(binding["sequence"]), str(binding["phase"]), int(binding["staging_attempt"]))
+        )
+        if state.get("state") in supervisor.ACTIVE_STATES:
+            if supervisor._owner_alive(int(state["owner_pid"])):
+                raise ConfigurationError(
+                    f"父 run {run_dir.name} 的 owner 仍在线，拒绝并发处理。"
+                )
+            if state.get("state") == "running" and not supervisor.committed_run_never_started(
+                run_dir, state
+            ):
+                raise ConfigurationError(
+                    f"父 run {run_dir.name} 已开始动作但 owner 丢失，先执行 reconcile-supervisor-run。"
+                )
+            state = _wait_for_monitor_finalization(run_dir, state)
+            if state.get("state") in supervisor.ACTIVE_STATES:
+                try:
+                    supervisor.finalize_prepared_run(run_dir, operation="orchestrator:orphan-scan")
+                except supervisor.SupervisorError as error:
+                    raise ConfigurationError(f"父 run {run_dir.name} 终态化失败：{error}") from error
+                state = supervisor._read_state(run_dir)
+            changed = True
+        run_state = str(state.get("state"))
+        stop_reason = _read_stop_reason(run_dir)
+        classification = supervisor.classify_prepared_run(run_dir, state)
+        if classification == "integrity_mismatch" or (
+            run_state == "audit-incomplete"
+            and stop_reason == supervisor.COMMIT_INTEGRITY_MISMATCH_REASON
+        ):
+            # 态 I：固定永久停线（reconciler 内部 stage_abandoned + stop_the_line + campaign_terminal）。
+            if run_state in supervisor.ACTIVE_STATES:
+                raise ConfigurationError(f"父 run {run_dir.name} COMMIT 完整性异常且未终态化。")
+            try:
+                result = reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
+            except reconciler.ReconcilerError as error:
+                raise ConfigurationError(f"父 run {run_dir.name} 完整性异常对账失败：{error}") from error
+            handled.append(
+                {
+                    "kind": "parent-run",
+                    "run_dir": str(run_dir),
+                    "run_state": run_state,
+                    "classification": "integrity_mismatch",
+                    "decision": result["decision"]["decision"],
+                    "terminal_reason": result["decision"].get("terminal_reason"),
+                }
+            )
+            changed = True
+            stops.append(
+                f"父 run {run_dir.name} 的 COMMIT 完整性异常，序号 {int(binding['sequence']):04d} 已占且不可重派"
+            )
+            continue
+        if classification == "committed":
+            # 正常历史或 P4（failed + parent-start-failed）：P4 交 reconcile-supervisor-run，入口不处理。
+            continue
+        if run_state == "stopped":
+            raise ConfigurationError(f"父 run {run_dir.name} 无 COMMIT 却已 stopped，历史不可信。")
+        if run_state not in supervisor.TERMINAL_STATES:
+            raise ConfigurationError(f"父 run {run_dir.name} 未终态化。")
+        outcome = _reconcile_prepared_parent_run(campaign_dir, run_dir, state, plan=plan)
+        if outcome["already_reconciled"] and not outcome["abort_written"]:
+            # 完全闭合的历史孤儿：不重复登记。
+            continue
+        handled.append(outcome)
+        changed = True
+        if outcome["decision"] not in {reconciler.DECISION_RECOVERABLE, "closed"}:
+            stops.append(
+                f"父 run {run_dir.name} 对账命中永久停线：{outcome['terminal_reason']}"
+            )
+    # ② 没有父 run 的 staging attempt
+    staging_root = campaign_dir / "control" / "vc" / "staging"
+    if staging_root.is_symlink():
+        raise ConfigurationError("staging 根目录不得是符号链接。")
+    if staging_root.is_dir():
+        for sequence_dir in sorted(staging_root.iterdir()):
+            match = re.fullmatch(r"^([0-9]{4})-(vc-[0-6])$", sequence_dir.name)
+            if match is None or sequence_dir.is_symlink() or not sequence_dir.is_dir():
+                raise ConfigurationError(f"staging 根目录含非法条目：{sequence_dir.name}")
+            sequence = int(match.group(1))
+            phase = match.group(2).upper()
+            commit_path = _staging_commit_path(campaign_dir, sequence, phase)
+            committed_attempt: int | None = None
+            if commit_path.exists():
+                committed_attempt = int(_read_staging_commit(commit_path)["staging_attempt"])
+            for attempt, attempt_dir in _staging_attempt_dirs(sequence_dir):
+                if committed_attempt == attempt:
+                    continue
+                if (sequence, phase, attempt) in referenced_attempts:
+                    # 有父 run 引用：已在 ① 处理（或属于 P4，不写 ABORT）。
+                    continue
+                if (attempt_dir / STAGING_ABORT_FILENAME).exists():
+                    # 态 B／C：ABORT 已写但 outbox／总账尚未闭合（写 ABORT 后崩溃）。
+                    if _staging_abort_accounted(campaign_dir, sequence, attempt):
+                        continue
+                    outcome = _reconcile_staging_abort_receipt(
+                        campaign_dir, attempt_dir, sequence=sequence, phase=phase, attempt=attempt
+                    )
+                    changed = True
+                    handled.append(outcome)
+                    continue
+                outcome = _abort_staging_attempt_without_parent(
+                    campaign_dir,
+                    attempt_dir,
+                    plan=plan,
+                    sequence=sequence,
+                    phase=phase,
+                    attempt=attempt,
+                    stage="prepare",
+                    failure_kind="abandoned",
+                    error_type="StagingAttemptAbandoned",
+                )
+                changed = True
+                if outcome is not None:
+                    handled.append(outcome)
+    # ③ 无 COMMIT 的正式半产物归档
+    vc_root = campaign_dir / "control" / "vc"
+    for source_dir in (vc_root / "batches", vc_root / "run-manifests"):
+        if not source_dir.is_dir():
+            continue
+        for path in sorted(source_dir.iterdir()):
+            match = _VC_SEQUENCE_FILE_RE.fullmatch(path.name)
+            if match is None:
+                continue
+            sequence = int(match.group(1))
+            if sequence == 1:
+                continue
+            phase = match.group(2).upper()
+            if _staging_commit_path(campaign_dir, sequence, phase).exists():
+                continue
+            attempt = _formal_artifact_attempt(campaign_dir, sequence=sequence, phase=phase)
+            if attempt is None:
+                continue
+            moved = _archive_uncommitted_formal_artifacts(
+                campaign_dir, sequence=sequence, phase=phase, attempt=attempt
+            )
+            if moved:
+                changed = True
+                handled.append(
+                    {
+                        "kind": "formal-artifacts-archived",
+                        "sequence": sequence,
+                        "phase": phase,
+                        "staging_attempt": attempt,
+                        "moved": moved,
+                    }
+                )
+    if stops:
+        raise StagingStopTheLine("；".join(stops))
+    return {"changed": changed, "handled": handled}
+
+
+def _compile_and_run_vc_batch_staging(
+    arguments: argparse.Namespace,
+    *,
+    governance: dict[str, Any],
+    _compiler: Any | None,
+) -> tuple[dict[str, Any], int]:
+    """staging 批次模型的原子派发：孤儿对账 → prepare → prepared 父 run → commit 四步。"""
+
+    supervisor = codex_upgrade_supervisor
+    campaign_dir = Path(arguments.campaign_dir)
+    phase = str(arguments.phase)
+    sequence = int(arguments.sequence)
+    formal = _compiler is None
+    campaign = _read_json(campaign_dir / "campaign.json", "Campaign 清单")
+    plan = _vc_campaign_plan(campaign_dir, campaign)
+    if not _campaign_uses_staging_model(campaign_dir, plan):
+        raise ConfigurationError("Campaign 总计划不是 staging 批次模型。")
+    campaign_id = str(plan["campaign_id"])
+    if campaign.get("campaign_id") not in {None, campaign_id}:
+        raise ConfigurationError("Campaign 清单与总计划的 campaign_id 不一致。")
+    name = f"{sequence:04d}-{phase.lower()}.json"
+    batch_path = campaign_dir / "control" / "vc" / "batches" / name
+    manifest_path = campaign_dir / "control" / "vc" / "run-manifests" / name
+    commit_path = _staging_commit_path(campaign_dir, sequence, phase)
+    try:
+        lock_descriptor, state_dir = supervisor._campaign_run_lock(arguments.state_dir)
+    except supervisor.SupervisorError as error:
+        raise ConfigurationError(str(error)) from error
+    run_arguments = _staging_run_arguments(arguments)
+    bootstrap_run: dict[str, Any] | None = None
+    try:
+        if formal:
+            bootstrap_run = _bootstrap_noop_first_batch(
+                campaign_dir,
+                governance["manifest"],
+                sequence=sequence,
+                state_dir=state_dir,
+                run_arguments=run_arguments,
+            )
+        orphans = _reconcile_staging_orphans(campaign_dir, state_dir, plan=plan)
+        if formal and orphans["changed"]:
+            # 孤儿处理推进了总账／账本：重算只读预检与 admission，头序号以此为准。
+            governance = _prepare_atomic_batch_governance(arguments)
+        if commit_path.exists():
+            raise ConfigurationError(
+                f"序号 {sequence:04d} 已有 COMMIT，禁止重复派发；后继请用序号 {sequence + 1:04d}。"
+            )
+        owner_nonce = secrets.token_hex(32)
+        sequence_dir = _staging_sequence_dir(campaign_dir, sequence, phase)
+        attempt = _next_staging_attempt(sequence_dir)
+        attempt_dir = sequence_dir / f"attempt-{attempt}"
+        compiler = compile_vc_batch if _compiler is None else _compiler
+        try:
+            compiled = compiler(
+                arguments, staging_attempt_dir=attempt_dir, owner_nonce=owner_nonce
+            )
+            prepared = _load_prepared_staging_attempt(
+                campaign_dir,
+                attempt_dir,
+                owner_nonce=owner_nonce,
+                sequence=sequence,
+                phase=phase,
+            )
+            start_by = datetime.fromisoformat(
+                str(prepared["batch"]["must_start_by_utc"]).replace("Z", "+00:00")
+            )
+            if datetime.now(timezone.utc) > start_by:
+                raise ConfigurationError("VC batch 的 60 秒启动窗口已过期，拒绝创建父 run。")
+        except BaseException as error:
+            failure_kind = (
+                "interrupted"
+                if isinstance(error, (KeyboardInterrupt, SystemExit))
+                else "prepare-failed"
+            )
+            try:
+                _abort_staging_attempt_without_parent(
+                    campaign_dir,
+                    attempt_dir,
+                    plan=plan,
+                    sequence=sequence,
+                    phase=phase,
+                    attempt=attempt,
+                    stage="prepare",
+                    failure_kind=failure_kind,
+                    error_type=type(error).__name__,
+                )
+            except StagingStopTheLine as stop_error:
+                raise StagingStopTheLine(
+                    f"prepare 失败（{type(error).__name__}）且对账命中永久停线：{stop_error}"
+                ) from error
+            raise
+        staging_binding = {
+            "campaign_dir": str(campaign_dir.resolve(strict=True)),
+            "sequence": sequence,
+            "phase": phase,
+            "staging_attempt": attempt,
+            "commit_path": str(commit_path.resolve(strict=False)),
+            "prepared_marker_sha256": str(prepared["marker"]["marker_sha256"]),
+        }
+        commit_facts: dict[str, Any] = {"ledger_events": []}
+
+        def _commit_staging(client: Any) -> None:
+            client.begin_commit_step("nonce-mismatch")
+            if not (prepared["marker"]["owner_nonce"] == client.owner_nonce == owner_nonce):
+                raise supervisor.StagingCommitError(
+                    "nonce-mismatch", "PREPARED、父 run 与入口预分配的 owner_nonce 不一致。"
+                )
+            client.begin_commit_step("commit-ledger")
+            try:
+                if governance["ledger_dir"] is not None:
+                    commit_facts["ledger_events"] = _append_timing_ledger_batch_events(
+                        governance["ledger_dir"],
+                        governance["ledger_events"],
+                        phase=phase,
+                        sequence=sequence,
+                        expected_head=governance["ledger_head_sequence"],
+                    )
+            except ConfigurationError as error:
+                raise supervisor.StagingCommitError("commit-ledger", str(error)) from error
+            client.begin_commit_step("commit-publish")
+            try:
+                _publish_staging_file(attempt_dir / STAGING_BATCH_FILENAME, batch_path, campaign_dir)
+                _publish_staging_file(
+                    attempt_dir / STAGING_MANIFEST_FILENAME, manifest_path, campaign_dir
+                )
+            except ConfigurationError as error:
+                raise supervisor.StagingCommitError("commit-publish", str(error)) from error
+            client.begin_commit_step("commit-mark")
+            try:
+                commit = codex_upgrade_vc_artifacts.build_vc_commit(
+                    campaign_id=campaign_id,
+                    sequence=sequence,
+                    phase=phase,
+                    staging_attempt=attempt,
+                    batch_sha256=str(prepared["batch"]["batch_sha256"]),
+                    manifest_sha256=str(prepared["manifest_sha256"]),
+                    parent_run_dir=str(client.run_dir),
+                    owner_nonce=client.owner_nonce,
+                    ledger_event_ids=[
+                        str(item["event_id"]) for item in commit_facts["ledger_events"]
+                    ],
+                    committed_at_utc=_utc_now(),
+                )
+                _secure_write_json_once(commit_path, commit)
+            except (ConfigurationError, codex_upgrade_vc_artifacts.VCArtifactError) as error:
+                raise supervisor.StagingCommitError("commit-mark", str(error)) from error
+            commit_facts["commit"] = commit
+            client.begin_commit_step("commit-activate")
+            client.activate_committed(commit)
+
+        try:
+            returncode, run = supervisor._campaign_run_locked(
+                run_arguments,
+                manifest=prepared["run_manifest"],
+                state_dir=state_dir,
+                campaign_dir=campaign_dir,
+                commit=_commit_staging,
+                owner_nonce=owner_nonce,
+                staging_binding=staging_binding,
+            )
+        except BaseException as error:
+            run_dir = state_dir / f"run-{owner_nonce}"
+            if not run_dir.exists():
+                failure_kind = (
+                    "interrupted"
+                    if isinstance(error, (KeyboardInterrupt, SystemExit))
+                    else "prepare-failed"
+                )
+                try:
+                    _abort_staging_attempt_without_parent(
+                        campaign_dir,
+                        attempt_dir,
+                        plan=plan,
+                        sequence=sequence,
+                        phase=phase,
+                        attempt=attempt,
+                        stage="parent-run-create",
+                        failure_kind=failure_kind,
+                        error_type=type(error).__name__,
+                    )
+                except StagingStopTheLine as stop_error:
+                    raise StagingStopTheLine(
+                        f"父 run 创建失败（{type(error).__name__}）且对账命中永久停线：{stop_error}"
+                    ) from error
+            # 父 run 已建立（含 commit 中被中断后已封存 aborted_prepared）：由下次入口的
+            # 孤儿处理幂等续接对账、ABORT 与归档。
+            if isinstance(error, supervisor.SupervisorError):
+                raise ConfigurationError(str(error)) from error
+            raise
+        run_dir = Path(str(run["run_dir"]))
+        run_status = str(run["status"])
+        run_reason = str(run.get("reason", ""))
+        if run_status == "aborted_prepared":
+            # 固定顺序：① 正式对账（收据、outbox、总账、账本）→ ② ABORT（绑定收据）→ ③ 归档半产物。
+            state = supervisor._read_state(run_dir)
+            outcome = _reconcile_prepared_parent_run(campaign_dir, run_dir, state, plan=plan)
+            moved = _archive_uncommitted_formal_artifacts(
+                campaign_dir, sequence=sequence, phase=phase, attempt=attempt
+            )
+            summary = (
+                f"staging commit 在 {run['commit_failure']['commit_step']} 步失败"
+                f"（{run['commit_failure']['error_type']}），父 run {run_dir.name} 已封存 aborted_prepared，"
+                f"序号 {sequence:04d} 未占；对账根因 {outcome['root_cause_id']}"
+            )
+            if outcome["decision"] not in {"recoverable", "closed"}:
+                raise StagingStopTheLine(
+                    f"{summary}；对账命中永久停线：{outcome['terminal_reason']}"
+                )
+            raise ConfigurationError(
+                f"{summary}；已归档 {moved or '无'}，可按同序号重新派发。"
+            )
+        if run_status == "audit-incomplete" and run_reason == supervisor.COMMIT_INTEGRITY_MISMATCH_REASON:
+            from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+            try:
+                reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
+            except reconciler.ReconcilerError as error:
+                raise ConfigurationError(
+                    f"父 run {run_dir.name} COMMIT 完整性异常，且永久停线对账失败：{error}"
+                ) from error
+            raise StagingStopTheLine(
+                f"父 run {run_dir.name} 的 COMMIT 完整性异常，序号 {sequence:04d} 已占且不可重派，已永久停线。"
+            )
+        completion = None
+        if returncode == 0 and governance["ledger_dir"] is not None:
+            completion = _complete_timing_ledger_phase_after_batch(
+                campaign_dir,
+                governance["plan"],
+                phase=phase,
+                sequence=sequence,
+                ledger_dir=governance["ledger_dir"],
+            )
+        return (
+            {
+                "status": run_status,
+                "campaign_id": compiled["campaign_id"],
+                "phase": compiled["phase"],
+                "batch_sequence": compiled["batch_sequence"],
+                "batch_model": "staging",
+                "staging_attempt": attempt,
+                "commit": commit_facts.get("commit"),
+                "compile": compiled,
+                "campaign_run": run,
+                "predispatch_stop": None,
+                "orphans": orphans["handled"],
+                "bootstrap_noop_run": bootstrap_run,
+                "project_ledger": governance["admission"],
+                "timing_ledger": {
+                    "ledger_dir": (
+                        str(governance["ledger_dir"]) if governance["ledger_dir"] is not None else None
+                    ),
+                    "events": commit_facts["ledger_events"],
+                    "completion": completion,
+                },
+            },
+            returncode,
+        )
     finally:
         os.close(lock_descriptor)
 
