@@ -8700,8 +8700,11 @@ def _build_parser() -> argparse.ArgumentParser:
     canonical_import.add_argument(
         "--supervisor-run-dir",
         type=Path,
-        required=True,
-        help="当前独立父监督器 run 目录；canonical checkpoint 继承其原始 deadline。",
+        help=(
+            "父监督器 run 目录；canonical checkpoint 继承其原始 deadline。"
+            "由 campaign-run 派发时可省略并从父上下文解析；离线预览可省略，"
+            "改用 Campaign 总计划冻结的原始 deadline。"
+        ),
     )
     canonical_import.add_argument(
         "--phase",
@@ -41840,6 +41843,119 @@ def _canonical_file_binding(
     return {"path": relative, "sha256": file_sha256(resolved), "bytes": size}
 
 
+# canonical 导入批准摘要只散列 approval_projection：完整 canonical subject 减去
+# 本次父 run 的易变时间坐标。campaign-run 每个批次父 run 的 campaign_started_at_epoch
+# 都是本批次启动时间，budget_seconds 又由它派生，两者随父 run 变化；原始绝对
+# deadline 由 Campaign 总计划冻结、所有批次相同，保留在摘要内。这样离线预览、
+# 父 run B 批准、父 run C 幂等重放得到同一 review_sha256。
+CANONICAL_APPROVAL_VOLATILE_DEADLINE_FIELDS = frozenset(
+    {"started_at_epoch", "budget_seconds"}
+)
+
+
+def _canonical_approval_projection(subject: Mapping[str, Any]) -> dict[str, Any]:
+    """返回 canonical subject 的批准投影：减法定义，新增字段默认进入摘要。"""
+
+    projection = json.loads(json.dumps(dict(subject), ensure_ascii=False))
+    deadline = projection.get("deadline")
+    if not isinstance(deadline, Mapping) or "deadline_at_epoch" not in deadline:
+        raise ConfigurationError("canonical subject 缺少原始 deadline。")
+    projection["deadline"] = {
+        key: value
+        for key, value in deadline.items()
+        if key not in CANONICAL_APPROVAL_VOLATILE_DEADLINE_FIELDS
+    }
+    return projection
+
+
+def _canonical_time_anchor(
+    arguments: argparse.Namespace,
+    campaign_dir: Path,
+) -> dict[str, Any]:
+    """解析 canonical 导入的时间锚与父 run 事实。
+
+    来源按优先级：显式 ``--supervisor-run-dir``（campaign-run 下必须就是派发本
+    命令的父 run）；campaign-run 父上下文（与 state.json 交叉验证 Campaign、
+    phase、owner nonce 与 deadline）；都没有时只允许离线预览，deadline 取
+    Campaign 总计划冻结的 original_deadline_at_utc。有总计划的 Campaign 无论
+    来源如何，deadline 都必须与总计划一致。
+    """
+
+    explicit = getattr(arguments, "supervisor_run_dir", None)
+    in_campaign_run = (
+        os.environ.get(codex_upgrade_supervisor.CAMPAIGN_RUN_CONTEXT_ENV) == "1"
+    )
+    raw_env_run_dir = os.environ.get(codex_upgrade_supervisor.CAMPAIGN_RUN_DIR_ENV)
+    plan_deadline_utc = _campaign_plan_deadline(campaign_dir)
+    plan_deadline_epoch: float | None = None
+    if plan_deadline_utc is not None:
+        try:
+            plan_deadline_epoch = datetime.fromisoformat(
+                plan_deadline_utc.replace("Z", "+00:00")
+            ).timestamp()
+        except ValueError as error:
+            raise ConfigurationError("Campaign 总计划的原始 deadline 非法。") from error
+    run_dir: Path | None
+    if explicit is not None:
+        run_dir = Path(explicit)
+        source = "explicit"
+        if in_campaign_run and (
+            not raw_env_run_dir
+            or not run_dir.is_absolute()
+            or run_dir.is_symlink()
+            or not run_dir.is_dir()
+            or Path(raw_env_run_dir).resolve() != run_dir.resolve()
+        ):
+            raise ConfigurationError(
+                "campaign-run 下 canonical 时间锚必须是派发本命令的父监督器 run 目录。"
+            )
+    elif in_campaign_run:
+        if not raw_env_run_dir:
+            raise ConfigurationError("campaign-run 上下文缺少父 run_dir。")
+        run_dir = Path(raw_env_run_dir)
+        source = "campaign-run"
+    else:
+        run_dir = None
+        source = "campaign-plan"
+    run_facts: dict[str, Any] | None = None
+    if run_dir is not None:
+        deadline: dict[str, Any] = dict(_canonical_supervisor_deadline(run_dir))
+        state = _read_json(run_dir / "state.json", "父监督器状态")
+        if in_campaign_run and (
+            state.get("campaign_id")
+            != os.environ.get(codex_upgrade_supervisor.CAMPAIGN_RUN_ID_ENV)
+            or state.get("phase")
+            != os.environ.get(codex_upgrade_supervisor.CAMPAIGN_RUN_PHASE_ENV)
+            or state.get("owner_nonce")
+            != os.environ.get(codex_upgrade_supervisor.CAMPAIGN_RUN_OWNER_NONCE_ENV)
+            or str(state.get("deadline_at_epoch"))
+            != os.environ.get(codex_upgrade_supervisor.CAMPAIGN_RUN_DEADLINE_ENV)
+        ):
+            raise ConfigurationError("campaign-run 父监督器上下文与 state.json 身份不一致。")
+        owner_nonce = state.get("owner_nonce")
+        if not isinstance(owner_nonce, str) or not owner_nonce:
+            raise ConfigurationError("父监督器 state.json 缺少 owner nonce。")
+        run_facts = {
+            "supervisor_run_dir": str(run_dir),
+            "owner_nonce": owner_nonce,
+        }
+    else:
+        if plan_deadline_epoch is None:
+            raise ConfigurationError(
+                "离线 canonical 预览需要 Campaign 总计划冻结的原始 deadline，"
+                "或显式 --supervisor-run-dir。"
+            )
+        deadline = {"deadline_at_epoch": plan_deadline_epoch}
+    if (
+        plan_deadline_epoch is not None
+        and abs(float(deadline["deadline_at_epoch"]) - plan_deadline_epoch) > 0.001
+    ):
+        raise ConfigurationError(
+            "canonical 时间锚的 deadline 与 Campaign 总计划冻结的原始 deadline 不一致。"
+        )
+    return {"deadline": deadline, "run": run_facts, "source": source}
+
+
 def _canonical_supervisor_deadline(
     supervisor_run_dir: Path,
 ) -> dict[str, float]:
@@ -42314,7 +42430,7 @@ def _canonical_import_verified_vc5_subject(
         },
         "items": sorted(items, key=lambda item: item["item_id"]),
         "evidence_manifest": evidence_manifest,
-        "deadline": _canonical_supervisor_deadline(arguments.supervisor_run_dir),
+        "deadline": _canonical_time_anchor(arguments, campaign_dir)["deadline"],
         "source": {
             "kind": "native",
             "legacy_object_types": [],
@@ -42676,7 +42792,7 @@ def _canonical_import_subject(arguments: argparse.Namespace) -> dict[str, Any]:
         },
         "items": sorted(items, key=lambda item: item["item_id"]),
         "evidence_manifest": evidence_manifest,
-        "deadline": _canonical_supervisor_deadline(arguments.supervisor_run_dir),
+        "deadline": _canonical_time_anchor(arguments, campaign_dir)["deadline"],
         "source": {
             "kind": source_kind,
             "legacy_object_types": legacy_types,
@@ -42690,12 +42806,15 @@ def import_canonical_checkpoint(arguments: argparse.Namespace) -> dict[str, Any]
     """预览或封存一次性初始化；执行过程中不发请求、不扫证据。"""
 
     subject = _canonical_import_subject(arguments)
-    review_sha256 = _fingerprint(subject)
+    review_sha256 = _fingerprint(_canonical_approval_projection(subject))
     summary = {
         **subject["migration"],
         **subject["plan"],
         "source_kind": subject["source"]["kind"],
         "review_sha256": review_sha256,
+        "approval_projection_excluded": sorted(
+            f"deadline.{field}" for field in CANONICAL_APPROVAL_VOLATILE_DEADLINE_FIELDS
+        ),
         "scanned_bytes": 0,
         "live_request_count": 0,
     }
@@ -42703,6 +42822,20 @@ def import_canonical_checkpoint(arguments: argparse.Namespace) -> dict[str, Any]
         return {"status": "approval_required", **summary}
     if arguments.approve_import_sha256 != review_sha256:
         raise ConfigurationError("canonical 导入批准摘要不匹配。")
+    anchor = _canonical_time_anchor(arguments, arguments.campaign_dir)
+    if anchor["run"] is None:
+        raise ConfigurationError(
+            "canonical 导入批准必须由 campaign-run 父监督器派发，或显式给出 --supervisor-run-dir。"
+        )
+    # 批准写入的 checkpoint 记录本次父 run 的完整时间坐标（运行事实）；它们不在
+    # 批准摘要内，因此换一个父 run 重放同一批准仍然幂等。
+    subject = {**subject, "deadline": dict(anchor["deadline"])}
+    approval_run = {
+        **anchor["run"],
+        "started_at_epoch": subject["deadline"]["started_at_epoch"],
+        "budget_seconds": subject["deadline"]["budget_seconds"],
+        "deadline_at_epoch": subject["deadline"]["deadline_at_epoch"],
+    }
 
     canonical_root = arguments.campaign_dir / CANONICAL_DIRECTORY
     ensure_private_directory(canonical_root, arguments.campaign_dir)
@@ -42733,7 +42866,9 @@ def import_canonical_checkpoint(arguments: argparse.Namespace) -> dict[str, Any]
                 "recorded_at_utc",
             }
         }
-        if _fingerprint(unsigned_existing) != review_sha256:
+        # 幂等恢复：从既有 checkpoint 重建同一 approval_projection 再比较，
+        # 首个批准 run 的 started_at／budget 只留在 checkpoint 的运行事实里。
+        if _fingerprint(_canonical_approval_projection(unsigned_existing)) != review_sha256:
             raise ConfigurationError("canonical checkpoint 已存在且导入主题不同。")
         checkpoint = existing
     receipt = {
@@ -42741,6 +42876,7 @@ def import_canonical_checkpoint(arguments: argparse.Namespace) -> dict[str, Any]
         "status": "complete",
         "review_sha256": review_sha256,
         "imported_at_utc": checkpoint["recorded_at_utc"],
+        "approval_run": approval_run,
         "checkpoint": {
             "path": (
                 Path(CANONICAL_CHECKPOINT_DIRECTORY)
@@ -42753,8 +42889,14 @@ def import_canonical_checkpoint(arguments: argparse.Namespace) -> dict[str, Any]
         "live_request_count": 0,
     }
     if receipt_path.exists():
-        if _read_json(receipt_path, "canonical 导入收据") != receipt:
+        existing_receipt = _read_json(receipt_path, "canonical 导入收据")
+        # 导入收据 write-once：只允许后续父 run 幂等重放同一批准，approval_run
+        # 永远记录首个批准 run，不被重放改写。
+        if {key: value for key, value in existing_receipt.items() if key != "approval_run"} != {
+            key: value for key, value in receipt.items() if key != "approval_run"
+        }:
             raise ConfigurationError("canonical 导入收据已经存在且内容不同。")
+        receipt = existing_receipt
     else:
         _secure_write_json_once(receipt_path, receipt)
     return {"status": "complete", **summary, "checkpoint": receipt["checkpoint"]}
@@ -47589,6 +47731,15 @@ def _reject_unparented_formal_write(
     if in_campaign_run:
         return
     if command not in FORMAL_CAMPAIGN_RUN_COMMANDS:
+        return
+    if (
+        command == "canonical-import"
+        and getattr(arguments, "approve_import_sha256", None) is None
+    ):
+        # 不带批准摘要的 canonical-import 只读预览：不写 checkpoint、不发请求，
+        # 只输出 review_sha256 供随后由 campaign-run 派发的批准动作回传。摘要
+        # 只散列 approval_projection，不含父 run 的时间坐标，因此离线预览与
+        # 父批次批准得到同一摘要。
         return
     campaign_dir = getattr(arguments, "campaign_dir", None)
     if not isinstance(campaign_dir, Path):

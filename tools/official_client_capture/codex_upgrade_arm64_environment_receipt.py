@@ -27,7 +27,7 @@ from tools.official_client_capture import incremental_recovery
 FACTS_SCHEMA = "codex-upgrade-arm64-environment-facts/v1"
 RECEIPT_SCHEMA = "codex-upgrade-arm64-environment-receipt/v1"
 PRODUCER_SCHEMA = "codex-upgrade-arm64-environment-producer/v1"
-PRODUCER_VERSION = "6"
+PRODUCER_VERSION = "7"
 PRODUCER_TOOL_RELATIVE = (
     "tools/official_client_capture/codex_upgrade_arm64_environment_receipt.py"
 )
@@ -70,6 +70,15 @@ REGISTERED_REPLAY_PRODUCER_HASHES = {
     "5": frozenset(
         {
             "960172c6ac3263b27ab56d9318455982b22535f41726a936b1bd69ed8db85a52",
+        }
+    ),
+    # v6 首次冻结回程 SYN-ACK MSS 与 Codex Rust TLS 栈就绪性，但对全部 12 个
+    # phase 都执行根盘水位硬门禁：attempt 收尾时根盘只差几 MB 就把整个 attempt
+    # 判成 environment_contaminated。它只能按原字段、原合同和全阶段硬门禁只读
+    # 重放，不能生成新事实。
+    "6": frozenset(
+        {
+            "a4421b7e179de5e8001b213dadc6f90c4b6213ac2234f29dba14f9e6063665f9",
         }
     ),
 }
@@ -115,8 +124,18 @@ LEGACY_V4_NETWORK_CONTRACT_SHA256 = (
 LEGACY_V5_NETWORK_CONTRACT_SHA256 = (
     "1b0130348650881625e47a4f880c3b3b5b3430365d6bbcce4fe3c390088a1e4f"
 )
+LEGACY_V6_NETWORK_CONTRACT_SHA256 = (
+    "e2ab26a2eb1ccc6fa4152e0a78e034645fbc27ff2ea8c7702db1bdc7e1b64936"
+)
 ROOT_MAX_USED_PERCENT = 69
 ROOT_MIN_AVAILABLE_BYTES = 30 * 1024 * 1024 * 1024
+# v7 起：before／p0／deployment_before 等准入阶段保持根盘水位硬门禁；各
+# ``*_after`` 收尾阶段低于水位只把 resource_gate 记为 degraded，收据本身通过，
+# attempt 不因此判污染——连续性身份从不包含磁盘，下一次 before 探针天然复验。
+RESOURCE_GATE_DEGRADABLE_PHASE_SUFFIX = "_after"
+# 与 v6 及更早版本共用的字段形状：v6 的 TLS／WireGuard／Rust readiness 事实结构
+# 与 v7 相同，差别只在合同摘要与 after 阶段的资源门禁语义。
+RUST_TLS_READINESS_PRODUCER_VERSIONS = frozenset({"6", PRODUCER_VERSION})
 PHASES = frozenset(
     {
         "p0",
@@ -403,6 +422,9 @@ def contract_sha256() -> str:
                 },
                 "root_max_used_percent": ROOT_MAX_USED_PERCENT,
                 "root_min_available_bytes": ROOT_MIN_AVAILABLE_BYTES,
+                "resource_gate_degradable_phase_suffix": (
+                    RESOURCE_GATE_DEGRADABLE_PHASE_SUFFIX
+                ),
                 "architecture": "linux/arm64",
             }
         )
@@ -1144,7 +1166,7 @@ def _validate_container(
         "public_egress",
         "raw_sha256",
     }
-    if producer_version in {"5", PRODUCER_VERSION}:
+    if producer_version in {"5", *RUST_TLS_READINESS_PRODUCER_VERSIONS}:
         fields.add("tls_readiness")
     container = _expect(
         value,
@@ -1204,7 +1226,7 @@ def _validate_container(
         )
     if not SHA256_RE.fullmatch(str(egress.get("response_sha256", ""))):
         raise Arm64EnvironmentReceiptError(f"{expected_name} 出口响应摘要非法")
-    if producer_version in {"5", PRODUCER_VERSION}:
+    if producer_version in {"5", *RUST_TLS_READINESS_PRODUCER_VERSIONS}:
         readiness = container.get("tls_readiness")
         if not isinstance(readiness, list) or len(readiness) != len(
             TLS_READINESS_PROBES
@@ -1359,9 +1381,9 @@ def validate_facts(
         "containers",
         "collector",
     }
-    if producer_version in {"3", "4", "5", PRODUCER_VERSION}:
+    if producer_version in {"3", "4", "5", *RUST_TLS_READINESS_PRODUCER_VERSIONS}:
         fact_fields.add("wireguard")
-    if producer_version == PRODUCER_VERSION:
+    if producer_version in RUST_TLS_READINESS_PRODUCER_VERSIONS:
         fact_fields.add("rust_tls_readiness")
     _expect(
         facts,
@@ -1376,6 +1398,9 @@ def validate_facts(
     _rfc3339(facts.get("observed_at_utc"), "facts.observed_at_utc")
     if producer_version == PRODUCER_VERSION:
         expected_contract = contract_sha256()
+        expected_public_egress = EXPECTED_PUBLIC_EGRESS
+    elif producer_version == "6":
+        expected_contract = LEGACY_V6_NETWORK_CONTRACT_SHA256
         expected_public_egress = EXPECTED_PUBLIC_EGRESS
     elif producer_version == "5":
         expected_contract = LEGACY_V5_NETWORK_CONTRACT_SHA256
@@ -1404,12 +1429,19 @@ def validate_facts(
     for key in ("total_bytes", "used_bytes", "available_bytes", "used_percent"):
         if not isinstance(filesystem.get(key), int) or isinstance(filesystem.get(key), bool):
             raise Arm64EnvironmentReceiptError(f"根文件系统 {key} 非整数")
-    if (
-        filesystem["total_bytes"] <= 0
-        or filesystem["used_bytes"] < 0
-        or filesystem["available_bytes"] < ROOT_MIN_AVAILABLE_BYTES
+    if filesystem["total_bytes"] <= 0 or filesystem["used_bytes"] < 0:
+        raise Arm64EnvironmentReceiptError("根文件系统容量事实非法")
+    resource_watermark_reached = (
+        filesystem["available_bytes"] < ROOT_MIN_AVAILABLE_BYTES
         or filesystem["used_percent"] > ROOT_MAX_USED_PERCENT
-    ):
+    )
+    # 只有当前 producer 的 ``*_after`` 收尾阶段允许降级记录；v6 及更早的历史收据
+    # 按生成时的全阶段硬门禁重放，准入阶段（p0／*_before）任何版本都硬失败。
+    resource_gate_degradable = (
+        producer_version == PRODUCER_VERSION
+        and str(facts["phase"]).endswith(RESOURCE_GATE_DEGRADABLE_PHASE_SUFFIX)
+    )
+    if resource_watermark_reached and not resource_gate_degradable:
         raise Arm64EnvironmentReceiptError(
             "ARM64 根文件系统达到停线水位（使用率须低于 70%，可用空间须不少于 30 GiB）"
         )
@@ -1426,7 +1458,7 @@ def validate_facts(
         )
         for item, name in zip(containers, expected_names, strict=True)
     ]
-    if producer_version == PRODUCER_VERSION:
+    if producer_version in RUST_TLS_READINESS_PRODUCER_VERSIONS:
         _validate_rust_tls_readiness(facts.get("rust_tls_readiness"))
     wireguard: dict[str, Any] | None = None
     if producer_version == "3":
@@ -1520,7 +1552,7 @@ def validate_facts(
             raise Arm64EnvironmentReceiptError(
                 "历史 ARM64 wg1 Endpoint、MTU 或 TCPMSS 与 BWG 冻结值不一致"
             )
-    elif producer_version == PRODUCER_VERSION:
+    elif producer_version in RUST_TLS_READINESS_PRODUCER_VERSIONS:
         wireguard = _expect(
             facts.get("wireguard"),
             {
@@ -1629,14 +1661,17 @@ def validate_facts(
         }
         if wireguard is not None:
             continuity_identity["wireguard"] = wireguard
+    resource_gate: dict[str, Any] = {
+        "used_percent": filesystem["used_percent"],
+        "available_bytes": filesystem["available_bytes"],
+        "passed": not resource_watermark_reached,
+    }
+    if resource_watermark_reached:
+        resource_gate["degraded"] = True
     return {
         "producer_version": producer_version,
         "continuity_identity_sha256": _sha256_bytes(_canonical(continuity_identity)),
-        "resource_gate": {
-            "used_percent": filesystem["used_percent"],
-            "available_bytes": filesystem["available_bytes"],
-            "passed": True,
-        },
+        "resource_gate": resource_gate,
     }
 
 

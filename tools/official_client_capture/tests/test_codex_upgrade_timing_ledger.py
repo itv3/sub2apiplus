@@ -626,7 +626,8 @@ class TimingLedgerTests(unittest.TestCase):
             root = Path(directory)
             root.chmod(0o700)
             project_root = root / project_ledger.LEDGER_DIR_NAME
-            started = datetime(2026, 9, 16, tzinfo=timezone.utc)
+            # 总账要求绝对截止晚于创建时刻，固定日期会随时间过期；按"现在"取锚。
+            started = datetime.now(timezone.utc).replace(microsecond=0)
             deadline = started + timedelta(days=3)
             project_ledger.create_project_ledger(
                 project_root,

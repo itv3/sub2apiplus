@@ -61,6 +61,29 @@ PUBLIC_GATES: tuple[tuple[str, str], ...] = (
     ("version-leak-self-test", "验证版本泄漏门禁自身能识别正负夹具"),
 )
 
+# VC-5 步骤 7（production_replacement 的 canonical 交接）四个零请求项到
+# codex_upgrade 子命令的冻结映射。批次里承载这些项的动作必须逐字落在映射内：
+# canonical-import 只能是带批准摘要的 canonical-import，其余三项只能是对应
+# ``--canonical-step`` 的 canonical-advance；反过来，任何 canonical 子命令都
+# 不得挂在别的 item 名下。父监督器把动作失败升级为 post-run-tooling 时按同一
+# 映射从命令里提取 Candidate／attempt，只检查该指定 attempt，不再要求全
+# Campaign 恰好一个等待收据的 attempt。
+CANONICAL_ITEM_COMMANDS: dict[str, tuple[str, str | None]] = {
+    "canonical-import": ("canonical-import", None),
+    "canonical-seal": ("canonical-advance", "seal"),
+    "canonical-compare": ("canonical-advance", "compare"),
+    "canonical-accept": ("canonical-advance", "accept"),
+}
+CANONICAL_ITEM_IDS = frozenset(CANONICAL_ITEM_COMMANDS)
+# 父监督器按动作清单顺序执行，而清单又必须按 action_id 排序；canonical 四步有
+# 严格前后依赖（import → seal → compare → accept），编译期就按这个顺序校验动作
+# 的相对次序，操作员必须用带序号的 action_id（例如 canonical-1-import）表达它。
+CANONICAL_ITEM_ORDER: tuple[str, ...] = tuple(CANONICAL_ITEM_COMMANDS)
+CANONICAL_SUBCOMMANDS = frozenset(
+    subcommand for subcommand, _step in CANONICAL_ITEM_COMMANDS.values()
+)
+UPGRADE_CLI_BASENAMES = frozenset({"codex_upgrade.py", "codex-upgrade"})
+
 
 class VCArtifactError(ValueError):
     """VC 控制制品字段、身份或摘要不可信。"""
@@ -897,12 +920,157 @@ def _positive_seconds(value: Any, label: str) -> float:
     return float(value)
 
 
+def _command_option(command: Sequence[str], name: str) -> str | None:
+    """从冻结命令里提取一个 ``--name value``／``--name=value`` 选项；重复即非法。"""
+
+    values: list[str] = []
+    index = 0
+    while index < len(command):
+        token = command[index]
+        if token == name:
+            if index + 1 >= len(command):
+                raise VCArtifactError(f"canonical 动作选项 {name} 缺少取值")
+            values.append(command[index + 1])
+            index += 2
+            continue
+        if token.startswith(f"{name}="):
+            values.append(token[len(name) + 1 :])
+        index += 1
+    if len(values) > 1:
+        raise VCArtifactError(f"canonical 动作选项 {name} 重复出现")
+    return values[0] if values else None
+
+
+def _upgrade_cli_subcommand(command: Sequence[str]) -> str | None:
+    """返回 codex_upgrade CLI 动作的子命令；不是该 CLI 的动作返回 None。"""
+
+    for index, token in enumerate(command[:4]):
+        if PurePosixPath(token).name in UPGRADE_CLI_BASENAMES:
+            if index + 1 >= len(command):
+                raise VCArtifactError("codex_upgrade 动作缺少子命令")
+            return command[index + 1]
+    return None
+
+
+def canonical_action_binding(action: Mapping[str, Any]) -> dict[str, Any] | None:
+    """按工具冻结映射解析一个 canonical 动作；非 canonical 动作返回 None。
+
+    失败关闭：canonical item 与子命令必须一一对应，动作只能承载一个 canonical
+    item，命令里必须带可信的 ``--campaign-dir``／``--candidate-id``／``--attempt-id``，
+    不得自带 ``--supervisor-run-dir``（时间锚只能来自派发它的父监督器），
+    canonical-import 必须是带批准摘要的写入形态；给别的命令套 canonical item 名，
+    或把 canonical 子命令挂在别的 item 名下，都在这里拒绝。
+    """
+
+    command = [str(item) for item in action.get("command", [])]
+    item_ids = [str(item) for item in action.get("item_ids", [])]
+    canonical_items = sorted(set(item_ids) & CANONICAL_ITEM_IDS)
+    subcommand = _upgrade_cli_subcommand(command)
+    if not canonical_items:
+        if subcommand in CANONICAL_SUBCOMMANDS:
+            raise VCArtifactError(
+                f"canonical 子命令 {subcommand} 必须以冻结的 canonical item 登记"
+            )
+        return None
+    if len(canonical_items) != 1 or item_ids != canonical_items:
+        raise VCArtifactError("canonical 动作只能精确承载一个 canonical item")
+    item_id = canonical_items[0]
+    expected_subcommand, expected_step = CANONICAL_ITEM_COMMANDS[item_id]
+    if subcommand != expected_subcommand:
+        raise VCArtifactError(
+            f"canonical item {item_id} 只能由子命令 {expected_subcommand} 承载"
+        )
+    step = _command_option(command, "--canonical-step")
+    if step != expected_step:
+        raise VCArtifactError(
+            f"canonical item {item_id} 的 --canonical-step 必须是 {expected_step!r}"
+        )
+    if _command_option(command, "--supervisor-run-dir") is not None:
+        raise VCArtifactError(
+            "批次内 canonical 动作不得自带 --supervisor-run-dir；时间锚只能来自父监督器"
+        )
+    campaign_dir = _command_option(command, "--campaign-dir")
+    if campaign_dir is None or not PurePosixPath(campaign_dir).is_absolute():
+        raise VCArtifactError("canonical 动作必须带绝对路径的 --campaign-dir")
+    candidate_id = _safe_id(
+        _command_option(command, "--candidate-id"), "canonical 动作 --candidate-id"
+    )
+    attempt_id = _safe_id(
+        _command_option(command, "--attempt-id"), "canonical 动作 --attempt-id"
+    )
+    phase = _command_option(command, "--phase")
+    if phase is not None and phase not in VC_PHASES:
+        raise VCArtifactError("canonical 动作 --phase 非法")
+    approval = _command_option(command, "--approve-import-sha256")
+    if item_id == "canonical-import":
+        _sha256(approval, "canonical-import 动作 --approve-import-sha256")
+    elif approval is not None:
+        raise VCArtifactError("canonical-advance 动作不接受 --approve-import-sha256")
+    return {
+        "item_id": item_id,
+        "subcommand": expected_subcommand,
+        "canonical_step": expected_step,
+        "campaign_dir": campaign_dir,
+        "candidate_id": candidate_id,
+        "attempt_id": attempt_id,
+        "phase": phase,
+    }
+
+
+def canonical_batch_binding(
+    actions: Sequence[Mapping[str, Any]],
+    *,
+    execute_item_ids: Sequence[str],
+) -> dict[str, Any] | None:
+    """返回一个批次的 canonical 绑定；批次不含 canonical item 时返回 None。
+
+    含 canonical item 的批次必须是纯 canonical 批次：execute 项全部落在冻结
+    映射内，每项恰由一个动作承载，全部动作指向同一 Campaign 目录、Candidate
+    与 attempt。
+    """
+
+    bindings = [
+        binding
+        for binding in (canonical_action_binding(action) for action in actions)
+        if binding is not None
+    ]
+    canonical_execute = sorted(set(execute_item_ids) & CANONICAL_ITEM_IDS)
+    if not bindings and not canonical_execute:
+        return None
+    if sorted(set(execute_item_ids)) != canonical_execute:
+        raise VCArtifactError("canonical 批次不得混入其它 execute 项")
+    if sorted(binding["item_id"] for binding in bindings) != canonical_execute:
+        raise VCArtifactError("canonical execute 项必须各由恰好一个冻结动作承载")
+    expected_order = [item for item in CANONICAL_ITEM_ORDER if item in canonical_execute]
+    if [binding["item_id"] for binding in bindings] != expected_order:
+        raise VCArtifactError(
+            "canonical 动作必须按 import → seal → compare → accept 的次序排列（用带序号的 action_id）"
+        )
+    identities = {
+        (binding["campaign_dir"], binding["candidate_id"], binding["attempt_id"])
+        for binding in bindings
+    }
+    if len(identities) != 1:
+        raise VCArtifactError("canonical 批次的全部动作必须指向同一 Campaign／Candidate／attempt")
+    campaign_dir, candidate_id, attempt_id = next(iter(identities))
+    phases = {binding["phase"] for binding in bindings if binding["phase"] is not None}
+    if len(phases) > 1:
+        raise VCArtifactError("canonical 批次的动作 --phase 不一致")
+    return {
+        "campaign_dir": campaign_dir,
+        "candidate_id": candidate_id,
+        "attempt_id": attempt_id,
+        "phase": next(iter(phases)) if phases else None,
+        "item_ids": canonical_execute,
+    }
+
+
 def _actions(
     value: Any,
     *,
     execute_item_ids: Sequence[str],
 ) -> list[dict[str, Any]]:
-    """校验动作对 execute 项的无重叠完整覆盖。"""
+    """校验动作对 execute 项的无重叠完整覆盖，以及 canonical 项的冻结映射。"""
 
     if not isinstance(value, list) or len(value) > 256:
         raise VCArtifactError("VC batch actions 必须是最多 256 项的数组")
@@ -956,6 +1124,7 @@ def _actions(
         raise VCArtifactError("VC batch actions 必须按 action_id 唯一排序")
     if len(covered) != len(set(covered)) or sorted(covered) != list(execute_item_ids):
         raise VCArtifactError("VC batch actions 未无重叠地精确覆盖 execute_item_ids")
+    canonical_batch_binding(normalized, execute_item_ids=execute_item_ids)
     return normalized
 
 

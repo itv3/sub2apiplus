@@ -114,10 +114,15 @@ POST_RUN_TOOLING_UPGRADABLE_FAILURE_KINDS = frozenset(
     {"handled-error", "child-returncode"}
 )
 # VC-5 里 Candidate Job 之后的零请求阶段项：seal（含 checkpoint／bundle／
-# preview／approve 四阶段）、离线比较、逐规则断言与 acceptance。批次的
-# execute_items 必须完全落在这个集合内，reuse_items 必须覆盖候选 attempt
-# 的全部 Job；集合由工具冻结，不接受动作清单里工程师自定的 action_id。
-POST_RUN_TOOLING_ITEM_IDS = frozenset({"candidate-seal", "compare", "acceptance"})
+# preview／approve 四阶段）、离线比较、逐规则断言与 acceptance，以及
+# production_replacement 交接的 canonical 四步（import／seal／compare／accept，
+# 映射由 vc_artifacts.CANONICAL_ITEM_COMMANDS 冻结）。批次的 execute_items
+# 必须完全落在这个集合内，reuse_items 必须覆盖候选 attempt 的全部 Job；
+# 集合由工具冻结，不接受动作清单里工程师自定的 action_id。
+POST_RUN_TOOLING_ITEM_IDS = (
+    frozenset({"candidate-seal", "compare", "acceptance"})
+    | vc_artifacts.CANONICAL_ITEM_IDS
+)
 POST_RUN_TOOLING_ITEM_PREFIXES = ("assert-",)
 POST_RUN_TOOLING_RECEIPT_SCHEMA = (
     "codex-upgrade-post-run-tooling-classification/v1"
@@ -798,8 +803,12 @@ def write_campaign_run_action_diagnostic(
 #
 # 判据全部来自批次清单与 attempt 目录内的小文件，不发请求、不读大证据：
 #   1. 批次是 batched／recovery 清单，execute_items 非空且全部是冻结的零请求
-#      后处理阶段项（candidate-seal／compare／assert-*／acceptance）；
-#   2. 候选 attempts 目录里恰好一个 attempt 处于 awaiting_receipts；
+#      后处理阶段项（candidate-seal／compare／assert-*／acceptance，或 canonical
+#      交接四步）；
+#   2. 候选 attempts 目录里恰好一个 attempt 处于 awaiting_receipts；canonical
+#      批次改为只检查动作命令按冻结映射指定的那个 attempt（2026-09-19：为同一
+#      Campaign 的多候选留出位置，也禁止给别的命令套 canonical item 名换取
+#      可恢复分类）；
 #   3. 该 attempt 的 results 全部 complete、checkpoints 目录里每个 Job 都有
 #      complete 记录（Framework：完成态以 result 与 checkpoint 同时存在为准）、
 #      reuse_items 覆盖全部 Job；
@@ -912,21 +921,72 @@ def post_run_tooling_facts(
     candidates_root = campaign_dir / "candidates"
     if candidates_root.is_symlink() or not candidates_root.is_dir():
         return fail("Campaign 没有候选目录")
+    # canonical 批次：目标 attempt 由冻结映射从动作命令里提取，只检查该 attempt。
+    actions = inner_manifest.get("actions")
+    try:
+        canonical_binding = vc_artifacts.canonical_batch_binding(
+            [action for action in actions if isinstance(action, Mapping)]
+            if isinstance(actions, list)
+            else [],
+            execute_item_ids=facts["execute_items"],
+        )
+    except vc_artifacts.VCArtifactError as error:
+        return fail(f"canonical 动作不符合冻结映射：{error}")
     awaiting: list[tuple[str, str, Path]] = []
     try:
-        for candidate_dir in sorted(candidates_root.iterdir()):
-            attempts_root = candidate_dir / "attempts"
-            if candidate_dir.is_symlink() or not attempts_root.is_dir():
-                continue
-            for attempt_root in sorted(attempts_root.iterdir()):
-                attempt_path = attempt_root / "attempt.json"
-                if attempt_root.is_symlink() or not attempt_path.is_file():
+        if canonical_binding is not None:
+            bound_campaign_dir = Path(str(canonical_binding["campaign_dir"]))
+            if (
+                bound_campaign_dir.is_symlink()
+                or not bound_campaign_dir.is_dir()
+                or bound_campaign_dir.resolve() != campaign_dir.resolve()
+            ):
+                return fail("canonical 动作的 --campaign-dir 不是本 Campaign")
+            if canonical_binding["phase"] not in {None, inner_manifest.get("phase")}:
+                return fail("canonical 动作的 --phase 与批次阶段不一致")
+            attempt_root = (
+                candidates_root
+                / str(canonical_binding["candidate_id"])
+                / "attempts"
+                / str(canonical_binding["attempt_id"])
+            )
+            attempt_path = attempt_root / "attempt.json"
+            if (
+                attempt_root.is_symlink()
+                or not attempt_root.is_dir()
+                or attempt_path.is_symlink()
+                or not attempt_path.is_file()
+            ):
+                return fail("canonical 动作指定的候选 attempt 不存在")
+            payload = _read_bounded_json(attempt_path, "候选 attempt")
+            if payload.get("status") not in POST_RUN_TOOLING_ATTEMPT_STATUSES:
+                return fail("canonical 动作指定的候选 attempt 不处于等待收据状态")
+            awaiting.append(
+                (
+                    str(canonical_binding["candidate_id"]),
+                    str(canonical_binding["attempt_id"]),
+                    attempt_root,
+                )
+            )
+            facts["canonical_binding"] = {
+                "candidate_id": str(canonical_binding["candidate_id"]),
+                "attempt_id": str(canonical_binding["attempt_id"]),
+                "item_ids": list(canonical_binding["item_ids"]),
+            }
+        else:
+            for candidate_dir in sorted(candidates_root.iterdir()):
+                attempts_root = candidate_dir / "attempts"
+                if candidate_dir.is_symlink() or not attempts_root.is_dir():
                     continue
-                payload = _read_bounded_json(attempt_path, "候选 attempt")
-                if payload.get("status") in POST_RUN_TOOLING_ATTEMPT_STATUSES:
-                    awaiting.append(
-                        (candidate_dir.name, attempt_root.name, attempt_root)
-                    )
+                for attempt_root in sorted(attempts_root.iterdir()):
+                    attempt_path = attempt_root / "attempt.json"
+                    if attempt_root.is_symlink() or not attempt_path.is_file():
+                        continue
+                    payload = _read_bounded_json(attempt_path, "候选 attempt")
+                    if payload.get("status") in POST_RUN_TOOLING_ATTEMPT_STATUSES:
+                        awaiting.append(
+                            (candidate_dir.name, attempt_root.name, attempt_root)
+                        )
     except (OSError, SupervisorError) as error:
         return fail(f"候选 attempt 目录无法枚举：{error}")
     if len(awaiting) != 1:

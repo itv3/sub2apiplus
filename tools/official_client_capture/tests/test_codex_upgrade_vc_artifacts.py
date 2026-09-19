@@ -423,6 +423,128 @@ class CodexUpgradeVCArtifactsTests(unittest.TestCase):
         with self.assertRaisesRegex(artifacts.VCArtifactError, "越过 failed/pending"):
             artifacts.validate_interrupted_recovery_contract(tampered)
 
+    @staticmethod
+    def _canonical_action(item_id: str, **overrides: object) -> dict[str, object]:
+        subcommand, step = artifacts.CANONICAL_ITEM_COMMANDS[item_id]
+        command = [
+            "/usr/bin/python3",
+            "/data/tools/official_client_capture/codex_upgrade.py",
+            subcommand,
+            "--campaign-dir",
+            "/data/evidence/campaigns/c-1",
+            "--candidate-id",
+            "cand-1",
+            "--attempt-id",
+            "20260918T201610Z-2cd24cb43d446278",
+        ]
+        if step is None:
+            command += ["--phase", "VC-5", "--retire-version", "0.149.1", "--approve-import-sha256", "a" * 64]
+        else:
+            command += ["--canonical-step", step]
+        action = {
+            "action_id": f"canonical-{artifacts.CANONICAL_ITEM_ORDER.index(item_id) + 1}-{step or 'import'}",
+            "operation": f"VC-5:{item_id}",
+            "timeout_seconds": 1800,
+            "command": command,
+            "item_ids": [item_id],
+        }
+        action.update(overrides)
+        return action
+
+    def _canonical_plan(self, actions: list[dict[str, object]], execute: list[str]) -> dict[str, object]:
+        return {
+            "schema_version": artifacts.VC_ACTION_PLAN_SCHEMA,
+            "execute_item_ids": sorted(execute),
+            "reuse_item_ids": ["candidate-core-direct"],
+            "actions": sorted(actions, key=lambda item: str(item["action_id"])),
+        }
+
+    def test_canonical_actions_follow_frozen_item_command_mapping(self) -> None:
+        """canonical 四项与子命令一一对应，动作绑定从命令冻结提取，套名双向拒绝。"""
+
+        items = sorted(artifacts.CANONICAL_ITEM_IDS)
+        plan = artifacts.validate_action_plan(
+            self._canonical_plan([self._canonical_action(item) for item in items], items)
+        )
+        self.assertEqual(
+            [action["item_ids"][0] for action in plan["actions"]],
+            list(artifacts.CANONICAL_ITEM_ORDER),
+        )
+        binding = artifacts.canonical_batch_binding(
+            plan["actions"], execute_item_ids=plan["execute_item_ids"]
+        )
+        self.assertEqual(
+            binding,
+            {
+                "campaign_dir": "/data/evidence/campaigns/c-1",
+                "candidate_id": "cand-1",
+                "attempt_id": "20260918T201610Z-2cd24cb43d446278",
+                "phase": "VC-5",
+                "item_ids": items,
+            },
+        )
+        self.assertIsNone(
+            artifacts.canonical_action_binding(
+                {"command": ["/usr/bin/python3", "-c", "raise SystemExit(3)"], "item_ids": ["candidate-seal"]}
+            )
+        )
+
+        def rejected(message: str, actions: list[dict[str, object]], execute: list[str]) -> None:
+            with self.assertRaisesRegex(artifacts.VCArtifactError, message):
+                artifacts.validate_action_plan(self._canonical_plan(actions, execute))
+
+        # 给别的命令套 canonical item 名。
+        rejected(
+            "只能由子命令",
+            [self._canonical_action("canonical-seal", command=["/usr/bin/python3", "-c", "raise SystemExit(0)"])],
+            ["canonical-seal"],
+        )
+        # canonical 子命令挂在别的 item 名下。
+        stray = self._canonical_action("canonical-seal", action_id="candidate-seal", item_ids=["candidate-seal"])
+        rejected("必须以冻结的 canonical item 登记", [stray], ["candidate-seal"])
+        # step 与 item 不符。
+        wrong_step = self._canonical_action("canonical-seal")
+        wrong_step["command"][-1] = "compare"
+        rejected("--canonical-step 必须是", [wrong_step], ["canonical-seal"])
+        # 批次内不得自带时间锚。
+        anchored = self._canonical_action("canonical-import")
+        anchored["command"] += ["--supervisor-run-dir", "/root/canon-anchor/run-x"]
+        rejected("不得自带 --supervisor-run-dir", [anchored], ["canonical-import"])
+        # canonical-import 必须是批准形态。
+        preview = self._canonical_action("canonical-import")
+        preview["command"] = preview["command"][:-2]
+        rejected("approve-import-sha256", [preview], ["canonical-import"])
+        # 一个动作承载两个 canonical 项。
+        doubled = self._canonical_action("canonical-seal", item_ids=["canonical-compare", "canonical-seal"])
+        rejected("只能精确承载一个", [doubled], ["canonical-compare", "canonical-seal"])
+        # 混入其它 execute 项。
+        rejected(
+            "不得混入",
+            [
+                self._canonical_action("canonical-seal"),
+                {
+                    "action_id": "seal",
+                    "operation": "VC-5:seal",
+                    "timeout_seconds": 5,
+                    "command": ["/usr/bin/python3", "-c", "raise SystemExit(0)"],
+                    "item_ids": ["candidate-seal"],
+                },
+            ],
+            ["candidate-seal", "canonical-seal"],
+        )
+        # 次序错误：按字母序排 action_id 会让 accept 先于 import 执行。
+        unordered = [self._canonical_action(item, action_id=item) for item in items]
+        rejected("import → seal → compare → accept", unordered, items)
+        # 动作指向不同 attempt。
+        other = self._canonical_action("canonical-compare")
+        other["command"][other["command"].index("--attempt-id") + 1] = "20260918T000000Z-0000000000000000"
+        rejected("同一 Campaign／Candidate／attempt", [self._canonical_action("canonical-seal"), other], ["canonical-compare", "canonical-seal"])
+        # 缺少 --candidate-id。
+        missing = self._canonical_action("canonical-accept")
+        index = missing["command"].index("--candidate-id")
+        del missing["command"][index : index + 2]
+        rejected("--candidate-id", [missing], ["canonical-accept"])
+
     def test_new_schema_files_match_runtime_versions(self) -> None:
         root = Path(artifacts.__file__).resolve().parent
         expected = {

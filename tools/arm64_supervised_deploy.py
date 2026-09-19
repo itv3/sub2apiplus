@@ -130,8 +130,12 @@ from typing import Any, Callable, Mapping
 # 源码快照；同步补登记三次 0.151 台账重签的承接边。监督器与断言预处理器未变。
 # 2026-09-18（VC-5 最小闭集：VC-2 输入）：EP-019 画像补丁（wham_usage Luna Reserve 与 cookie
 # 槽位）与六条规则的 Astra Lite 精确断言；trace 画像冻结摘要同步。监督器与断言预处理器未变。
+# 2026-09-19（升级工具改造第 1 批）：ARM64 环境收据 producer 升 v7（*_after 阶段低于根盘
+# 水位只记 degraded，v6 收据按显式合同只读重放）；canonical 交接四步进入 post-run-tooling
+# 可恢复分类并按冻结映射从命令提取 attempt，批准摘要只散列 approval_projection。
+# 监督器随之变化；断言预处理器未变。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "852fde262087b666f46b06e4e4098a3992e6f203cc7c1a6e734204e31a1a14c9"
+    "e39bc4b7ca4c4df378c189d8a7a0f8f39a65d65a80affc8324cfe353a6da1a1b"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "ea5500505d49340fe4971b981a8ab1159266c6a54ad0d3724cdf10cd51815fe4"
@@ -236,6 +240,7 @@ MANAGED_RUNTIME_DOCUMENTS = (
     "egress/maintenance/upstream-codex-0154-vc5-deploy-manifest-3-20260918-freeze-successor.json",
     "egress/maintenance/upstream-codex-0154-vc5-predispatch-stop-20260918-freeze-successor.json",
     "egress/maintenance/upstream-codex-0154-vc5-deploy-manifest-4-20260918-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-tooling-batch1-20260919-freeze-successor.json",
 )
 MANAGED_ASSERTION_PREPARER = "prepare_assertion_bundle.sh"
 TARGET_SCENARIO_MANIFEST = "codex_upgrade_scenarios_0_154_0.json"
