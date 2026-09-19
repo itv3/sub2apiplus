@@ -146,8 +146,12 @@ from typing import Any, Callable, Mapping
 # candidate_id（staging 模型必带、legacy 不得带，Campaign 级为 null）；候选级动作失败按三分支
 # 收账（可恢复类不变／永久条件停线／其余 stage_abandoned + candidate_review_required）；失败
 # 批次新增"候选作废 → 新 revision VC-4 首批"后继协议。监督器随之变化；断言预处理器未变。
+# 2026-09-19（第 2 批 M2 审核修正）：候选 revision 后继协议完整重放失败父 run 对账收据与旧候选
+# invalidation.json（schema／身份／项目总账摘要绑定）及新 revision 记录、COMMIT 与账本 stage_revision
+# 的摘要链；失败摘要与 candidate_review_required 事件 id 的构造／解析集中为函数，供作废前对账
+# 绑定本次失败父 run。监督器随之变化；断言预处理器未变。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "64b41ed1258638e2c8bff2451fc7bf9e4ef99814656d31f02bcb692ab0d06aca"
+    "0302b0af5e9c9e7d265a90178565e62249b7b9cc4fe1c65212ff467216e90c2a"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "ea5500505d49340fe4971b981a8ab1159266c6a54ad0d3724cdf10cd51815fe4"

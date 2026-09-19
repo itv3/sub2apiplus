@@ -6230,6 +6230,37 @@ def _validate_batched_environment_redispatch_successor(
     )
 
 
+SUPERVISOR_RUN_RECONCILIATION_SCHEMA = "supervisor-run-reconciliation/v1"
+
+
+def _project_ledger_operation_payload(
+    campaign_dir: Path,
+    operation_id: str,
+    *,
+    label: str,
+) -> dict[str, Any]:
+    """从祖先项目总账取回已入账 operation 的事件 payload；未入账即失败关闭。"""
+
+    root = project_ledger.find_project_ledger(campaign_dir)
+    if root is None:
+        raise SupervisorError(f"{label}：Campaign 不在项目总账内，无法核对入账。")
+    try:
+        head = project_ledger.replay_head(root)
+        recorded = head.get("operations", {}).get(operation_id)
+        if not isinstance(recorded, Mapping):
+            raise SupervisorError(f"{label}：项目总账缺少 operation {operation_id}。")
+        events = project_ledger._load_events(root)
+        sequence = int(recorded["sequence"])
+        event = events[sequence - 1]
+    except project_ledger.ProjectLedgerError as error:
+        raise SupervisorError(f"{label}：项目总账重放失败：{error}") from error
+    except (IndexError, KeyError, TypeError, ValueError) as error:
+        raise SupervisorError(f"{label}：项目总账 operation {operation_id} 的事件不可读。") from error
+    if event.get("operation_id") != operation_id or not isinstance(event.get("payload"), Mapping):
+        raise SupervisorError(f"{label}：项目总账 operation {operation_id} 的事件不一致。")
+    return dict(event["payload"])
+
+
 def _validate_candidate_revision_successor(
     prior_state: Mapping[str, Any],
     prior_manifest: Mapping[str, Any],
@@ -6242,9 +6273,15 @@ def _validate_candidate_revision_successor(
 
     入口条件（不满足返回 ``False``，交给其他协议）：前序是候选级阶段的 ``action-failed``
     终态且清单带候选绑定；后继是 VC-4、``candidate_revision`` 更大且候选不同。入口成立后
-    任何绑定缺失都失败关闭：账本必须依次存在对旧候选的 ``candidate_invalidated`` 与激活
-    新 revision 的 ``stage_revision``（supersedes 指向旧 revision），Campaign 内必须有该
-    失败父 run 的对账收据与旧候选的 ``invalidation.json``。
+    任何绑定缺失都失败关闭，四件事实全部重放：
+    ① 账本依次存在对旧候选的 ``candidate_invalidated`` 与激活新 revision 的 ``stage_revision``
+       （supersedes 指向旧 revision）；
+    ② 失败父 run 的对账收据：schema、Campaign／run／批次身份、失败终态，且项目总账
+       ``reconcile-supervisor-run:<run_id>`` 事件绑定的收据摘要等于当前文件；
+    ③ 旧候选 ``invalidation.json``：schema 与自摘要、Campaign／候选／revision 身份，且项目总账
+       ``invalidate-candidate:<cid>:r<N>`` 事件绑定的摘要等于当前文件；
+    ④ 新 revision 记录与 COMMIT：候选／revision 身份、supersedes 绑定的作废收据摘要与
+       ``candidate_invalidated`` 事件摘要、COMMIT 绑定记录且账本 ``stage_revision`` 引用该 COMMIT。
     """
 
     if prior_state.get("state") != "failed":
@@ -6280,11 +6317,13 @@ def _validate_candidate_revision_successor(
         campaign_dir = Path(campaign_dir).resolve(strict=True)
     except OSError as error:
         raise SupervisorError(f"{label}的 Campaign 目录不存在。") from error
-    campaign = _read_json(campaign_dir / "campaign.json")
+    campaign_path = campaign_dir / "campaign.json"
+    campaign = _read_json(campaign_path)
+    campaign_id = str(prior_manifest.get("campaign_id", ""))
     controls = campaign.get("control_receipts")
     timing_control = controls.get("upgrade_timing") if isinstance(controls, Mapping) else None
     if (
-        campaign.get("campaign_id") != prior_manifest.get("campaign_id")
+        campaign.get("campaign_id") != campaign_id
         or not isinstance(timing_control, Mapping)
         or not isinstance(timing_control.get("ledger_dir"), str)
     ):
@@ -6296,15 +6335,20 @@ def _validate_candidate_revision_successor(
         raw_events = timing_ledger._load_events(ledger_dir.resolve(strict=True))
     except (OSError, timing_ledger.TimingLedgerError) as error:
         raise SupervisorError(f"{label}无法重放时间账本：{error}") from error
+
+    # ① 账本事件顺序与绑定。
     invalidated_index: int | None = None
+    invalidated_sha256: str | None = None
     revision_index: int | None = None
-    for index, (event, _raw) in enumerate(raw_events):
+    revision_commit_sha256: str | None = None
+    for index, (event, raw) in enumerate(raw_events):
         if (
             event.get("event_type") == "candidate_invalidated"
             and event.get("candidate_id") == prior_candidate
             and event.get("revision") == prior_revision
         ):
             invalidated_index = index
+            invalidated_sha256 = timing_ledger._sha256_bytes(raw)
         if (
             event.get("event_type") == "stage_revision"
             and event.get("revision") == successor_revision
@@ -6312,21 +6356,101 @@ def _validate_candidate_revision_successor(
             and event.get("supersedes_revision") == prior_revision
         ):
             revision_index = index
+            revision_commit_sha256 = event.get("revision_commit_sha256")
     if invalidated_index is None or revision_index is None or revision_index < invalidated_index:
         raise SupervisorError(
             f"{label}尚未形成：账本缺少对候选 {prior_candidate}（r{prior_revision}）的 candidate_invalidated "
             f"或其后激活 r{successor_revision} 的 stage_revision。"
         )
+
+    # ② 失败父 run 的对账收据与总账绑定。
     reconciliation = (
         campaign_dir / "control" / "reconciliation" / f"run-{prior_dir.name}" / "supervisor-run-reconciliation.json"
     )
     if reconciliation.is_symlink() or not reconciliation.is_file():
         raise SupervisorError(f"{label}缺少失败父 run {prior_dir.name} 的对账收据。")
+    receipt = _read_json(reconciliation)
+    run = receipt.get("run")
+    if (
+        receipt.get("schema_version") != SUPERVISOR_RUN_RECONCILIATION_SCHEMA
+        or receipt.get("campaign_id") != campaign_id
+        or receipt.get("campaign_manifest_sha256") != _sha256(campaign_path.read_bytes())
+        or not isinstance(run, Mapping)
+        or run.get("run_id") != prior_dir.name
+        or run.get("state") != "failed"
+        or run.get("phase") != prior_phase
+        or run.get("batch_sequence") != prior_manifest.get("batch_sequence")
+        or run.get("batch_sha256") != prior_manifest.get("batch_sha256")
+        or receipt.get("failure_class") != run.get("failure_class")
+        or not isinstance(receipt.get("root_cause"), Mapping)
+    ):
+        raise SupervisorError(f"{label}：失败父 run {prior_dir.name} 的对账收据 schema 或身份不闭合。")
+    reconciliation_payload = _project_ledger_operation_payload(
+        campaign_dir, f"reconcile-supervisor-run:{prior_dir.name}", label=label
+    )
+    if (
+        reconciliation_payload.get("campaign_id") != campaign_id
+        or reconciliation_payload.get("subject_kind") != "supervisor_run"
+        or reconciliation_payload.get("subject_id") != prior_dir.name
+        or reconciliation_payload.get("reconciliation_receipt_sha256") != _sha256(reconciliation.read_bytes())
+    ):
+        raise SupervisorError(f"{label}：失败父 run {prior_dir.name} 的对账收据与项目总账绑定不一致。")
+
+    # ③ 旧候选作废收据与总账绑定。
     invalidation = campaign_dir / "candidates" / prior_candidate / "invalidation.json"
     if invalidation.is_symlink() or not invalidation.is_file():
         raise SupervisorError(f"{label}缺少候选 {prior_candidate} 的 invalidation.json。")
-    if _read_json(invalidation).get("revision") != prior_revision:
-        raise SupervisorError(f"{label}的 invalidation.json 未绑定 r{prior_revision}。")
+    try:
+        invalidation_payload = vc_artifacts.validate_candidate_invalidation(_read_json(invalidation))
+    except vc_artifacts.VCArtifactError as error:
+        raise SupervisorError(f"{label}：候选 {prior_candidate} 的 invalidation.json 非法：{error}") from error
+    if (
+        invalidation_payload.get("campaign_id") != campaign_id
+        or invalidation_payload.get("candidate_id") != prior_candidate
+        or invalidation_payload.get("revision") != prior_revision
+    ):
+        raise SupervisorError(f"{label}：invalidation.json 未绑定候选 {prior_candidate}／r{prior_revision}。")
+    invalidation_sha256 = _sha256(invalidation.read_bytes())
+    invalidation_ledger_payload = _project_ledger_operation_payload(
+        campaign_dir, f"invalidate-candidate:{prior_candidate}:r{prior_revision}", label=label
+    )
+    if (
+        invalidation_ledger_payload.get("campaign_id") != campaign_id
+        or invalidation_ledger_payload.get("subject_kind") != "candidate_invalidation"
+        or invalidation_ledger_payload.get("subject_id") != f"{prior_candidate}:r{prior_revision}"
+        or invalidation_ledger_payload.get("reconciliation_receipt_sha256") != invalidation_sha256
+    ):
+        raise SupervisorError(f"{label}：invalidation.json 与项目总账绑定不一致。")
+
+    # ④ 新 revision 记录、COMMIT 与账本 stage_revision 的摘要链。
+    revision_dir = campaign_dir / "control" / "vc" / "revisions" / f"r{successor_revision}"
+    record_path = revision_dir / "revision.json"
+    commit_path = revision_dir / "COMMIT"
+    for path in (record_path, commit_path):
+        if path.is_symlink() or not path.is_file():
+            raise SupervisorError(f"{label}缺少 r{successor_revision} 的 {path.name}。")
+    try:
+        record = vc_artifacts.validate_candidate_revision(_read_json(record_path))
+        commit = vc_artifacts.validate_candidate_revision_commit(_read_json(commit_path))
+    except vc_artifacts.VCArtifactError as error:
+        raise SupervisorError(f"{label}：r{successor_revision} 记录或 COMMIT 非法：{error}") from error
+    supersedes = record.get("supersedes")
+    if (
+        record.get("campaign_id") != campaign_id
+        or record.get("revision") != successor_revision
+        or record.get("candidate_id") != successor_candidate
+        or not isinstance(supersedes, Mapping)
+        or supersedes.get("revision") != prior_revision
+        or supersedes.get("candidate_id") != prior_candidate
+        or not isinstance(supersedes.get("invalidation_receipt"), Mapping)
+        or supersedes["invalidation_receipt"].get("sha256") != invalidation_sha256
+        or supersedes.get("candidate_invalidated_event_sha256") != invalidated_sha256
+        or commit.get("record_sha256") != record.get("record_sha256")
+        or commit.get("revision") != successor_revision
+        or commit.get("candidate_id") != successor_candidate
+        or commit.get("commit_sha256") != revision_commit_sha256
+    ):
+        raise SupervisorError(f"{label}：r{successor_revision} 记录／COMMIT 与作废收据、账本事件的摘要链不一致。")
     return True
 
 
@@ -6899,6 +7023,53 @@ def _timing_closeout_lock(root: Path) -> Iterator[None]:
         os.close(descriptor)
 
 
+CANDIDATE_REVIEW_EVENT_PREFIX = "campaign-run-failure-"
+CANDIDATE_REVIEW_EVENT_SUFFIX = "-candidate-review-required"
+FAILURE_DIGEST_PREFIX_LENGTH = 20
+
+
+def campaign_run_failure_digest(
+    *,
+    campaign_id: str,
+    phase: str,
+    batch_sequence: int,
+    failed_action_id: str,
+    failure_class: str,
+) -> str:
+    """父动作失败的稳定摘要：账本失败事件 id 与作废前对账绑定都由它派生。"""
+
+    return _sha256(
+        _canonical(
+            {
+                "campaign_id": campaign_id,
+                "phase": phase,
+                "batch_sequence": batch_sequence,
+                "failed_action_id": failed_action_id,
+                "failure_class": failure_class,
+            }
+        )
+    )
+
+
+def candidate_review_event_id(failure_digest: str) -> str:
+    """改造 2：candidate_review_required 事件 id，前缀段绑定引起它的那次父动作失败。"""
+
+    return f"{CANDIDATE_REVIEW_EVENT_PREFIX}{failure_digest[:FAILURE_DIGEST_PREFIX_LENGTH]}{CANDIDATE_REVIEW_EVENT_SUFFIX}"
+
+
+def parse_candidate_review_event_id(event_id: Any) -> str | None:
+    """从 candidate_review_required 事件 id 取回失败摘要前缀；形态不符返回 None。"""
+
+    if not isinstance(event_id, str):
+        return None
+    if not event_id.startswith(CANDIDATE_REVIEW_EVENT_PREFIX) or not event_id.endswith(CANDIDATE_REVIEW_EVENT_SUFFIX):
+        return None
+    prefix = event_id[len(CANDIDATE_REVIEW_EVENT_PREFIX) : -len(CANDIDATE_REVIEW_EVENT_SUFFIX)]
+    if len(prefix) != FAILURE_DIGEST_PREFIX_LENGTH or any(character not in "0123456789abcdef" for character in prefix):
+        return None
+    return prefix
+
+
 PERMANENT_ACTION_FAILURE_CLASSES = frozenset(
     {
         "identity-drift",
@@ -7018,16 +7189,12 @@ def _close_failed_campaign_timing_ledger(
         and failure_class not in RECOVERABLE_PARENT_FAILURE_CLASSES
     ):
         raise SupervisorError("父动作 failure_class 非法。")
-    failure_digest = _sha256(
-        _canonical(
-            {
-                "campaign_id": campaign_id,
-                "phase": phase,
-                "batch_sequence": sequence,
-                "failed_action_id": failed_action_id,
-                "failure_class": failure_class,
-            }
-        )
+    failure_digest = campaign_run_failure_digest(
+        campaign_id=campaign_id,
+        phase=phase,
+        batch_sequence=sequence,
+        failed_action_id=failed_action_id,
+        failure_class=failure_class,
     )
     # 根因只由稳定输入生成：同一动作在不同 Campaign 失败得到同一个 ID，
     # 项目总账的同根因上限才能跨 Campaign 累计。failure_digest 仍含
@@ -7048,7 +7215,7 @@ def _close_failed_campaign_timing_ledger(
             failed_step=failed_action_id,
             stable_dimensions={"phase": phase},
         )
-    event_prefix = f"campaign-run-failure-{failure_digest[:20]}"
+    event_prefix = f"{CANDIDATE_REVIEW_EVENT_PREFIX}{failure_digest[:FAILURE_DIGEST_PREFIX_LENGTH]}"
     recovery_event_id = f"{event_prefix}-recovery-required"
     abandon_event_id = f"{event_prefix}-stage-abandoned"
     stop_event_id = f"{event_prefix}-stop-the-line"
@@ -7177,7 +7344,7 @@ def _close_failed_campaign_timing_ledger(
         # 而是 stage_abandoned + candidate_review_required（只读等待人工：对账入账后
         # invalidate-candidate 或显式停线）。VC-1～VC-3 与 legacy 清单保持现状。
         candidate_id = manifest.get("candidate_id")
-        review_event_id = f"{event_prefix}-candidate-review-required"
+        review_event_id = candidate_review_event_id(failure_digest)
         review_next_action = (
             "candidate_review_required：先按 reservation 分流对账（无 reservation：reconcile-supervisor-run；"
             "有：reconcile-attempt）入账；判为候选源码问题则 invalidate-candidate preview/apply，"

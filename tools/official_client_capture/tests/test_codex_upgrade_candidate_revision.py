@@ -371,6 +371,118 @@ class CandidateRevisionIntegrationTests(_ChainMixin, unittest.TestCase):
             with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "禁止重开"):
                 self._dispatch(fixture, root, "VC-6", 9, tag="vc6-again")
 
+    def _r1_invalidated(self, fixture: dict[str, object], root: Path) -> tuple[Path, Path, dict[str, object]]:
+        """r1：VC-4 成功、VC-5 失败 → 对账 → invalidate apply；返回 (campaign_dir, 失败 run, apply 结果)。"""
+
+        campaign_dir = Path(str(fixture["campaign_dir"]))
+        self._advance_to_vc3(fixture, root)
+        self._open(fixture, R1, initial=True)
+        result, returncode = self._dispatch(fixture, root, "VC-4", 4, tag="vc4-r1")
+        self.assertEqual(returncode, 0, result)
+        failed_run = self._fail_vc5_into_review(fixture, root, sequence=5, tag="vc5-r1-fail")
+        self.assertEqual(reconciler.reconcile_supervisor_run(failed_run, campaign_dir)["status"], "recoverable")
+        source = self._candidate_source(root, "r1")
+        with mock.patch.object(codex_upgrade, "_git_commit", return_value="a" * 40):
+            preview = codex_upgrade.invalidate_candidate(self._invalidate_arguments(fixture, R1, "preview", source=source))
+            applied = codex_upgrade.invalidate_candidate(
+                self._invalidate_arguments(fixture, R1, "apply", approve=str(preview["review_sha256"]), source=source)
+            )
+        self.assertEqual(applied["status"], "applied")
+        return campaign_dir, failed_run, applied
+
+    def test_invalidated_candidate_is_read_only_and_writes_require_active_ledger(self) -> None:
+        """审核阻断 1：作废候选（revision_required 窗口）与非 active 账本下的候选写入门都必须拒绝。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._fixture(root)
+            campaign_dir, _failed_run, _applied = self._r1_invalidated(fixture, root)
+            manifest = codex_upgrade._require_formal_campaign(campaign_dir)
+            self.assertEqual(self._summary(fixture)["status"], "revision_required")
+            # r1 已有 invalidation.json 但尚未被 r2 取代：一切候选级写入口都只读。
+            for action in ("compare", "accept", "deliver-candidate", "capture-candidate run", "record-candidate-build"):
+                with self.subTest(action=action), self.assertRaisesRegex(codex_upgrade.ConfigurationError, "invalidation.json|作废|只读"):
+                    codex_upgrade._require_candidate_in_current_revision(campaign_dir, manifest, R1, action=action)
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "invalidation.json|作废|只读|active"):
+                codex_upgrade._guard_candidate_revision_write(campaign_dir, manifest, R1, action="compare")
+            status = codex_upgrade.campaign_status(campaign_dir)["candidate_revisions"]
+            self.assertEqual(status["revisions"]["r1"]["state"], "invalidated")
+            # r2 激活后账本 active：r2 可写、r1 仍只读。
+            self._open(fixture, R2, supersedes=R1)
+            codex_upgrade._require_candidate_in_current_revision(campaign_dir, manifest, R2, action="compare")
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "invalidation.json|作废|只读"):
+                codex_upgrade._require_candidate_in_current_revision(campaign_dir, manifest, R1, action="compare")
+            # r2 的 VC-5 失败进入 candidate_review_required：账本非 active，r2 的写入口也拒绝。
+            result, returncode = self._dispatch(fixture, root, "VC-4", 6, tag="vc4-r2")
+            self.assertEqual(returncode, 0, result)
+            self._fail_vc5_into_review(fixture, root, sequence=7, tag="vc5-r2-fail", action_id="vc-5-synthetic-b")
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "active"):
+                codex_upgrade._require_candidate_in_current_revision(campaign_dir, manifest, R2, action="compare")
+            status = codex_upgrade.campaign_status(campaign_dir)["candidate_revisions"]
+            self.assertEqual((status["revisions"]["r1"]["state"], status["revisions"]["r2"]["state"]), ("invalidated", "active"))
+
+    def test_successor_replays_receipts_and_review_accounting_binds_current_failed_run(self) -> None:
+        """审核阻断 3／2：新 revision 后继协议必须完整重放两份收据；作废前对账必须绑定本次失败 run。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._fixture(root)
+            campaign_dir, failed_r1, _applied = self._r1_invalidated(fixture, root)
+            self._open(fixture, R2, supersedes=R1)
+            reconciliation = campaign_dir / "control" / "reconciliation" / f"run-{failed_r1.name}" / "supervisor-run-reconciliation.json"
+            invalidation = campaign_dir / "candidates" / R1 / "invalidation.json"
+            originals = {path: path.read_bytes() for path in (reconciliation, invalidation)}
+            manifest = codex_upgrade._require_formal_campaign(campaign_dir)
+            history = supervisor._campaign_run_history(Path(str(fixture["state_dir"])), str(manifest["campaign_id"]))
+            prior_state, prior_manifest, prior_dir = next(item for item in history if item[2].name == failed_r1.name)
+            successor_manifest = {"phase": "VC-4", "candidate_revision": 2, "candidate_id": R2, "campaign_id": manifest["campaign_id"]}
+            # 阻断 3（协议函数级）：完整原件通过；任一收据被替换为形状不完整／未绑定的内容即失败关闭，
+            # 且入口条件不满足（非候选级前序）时返回 False 交给其他协议。
+            self.assertTrue(supervisor._validate_candidate_revision_successor(prior_state, prior_manifest, prior_dir, successor_manifest, campaign_dir=campaign_dir))
+            self.assertFalse(supervisor._validate_candidate_revision_successor(prior_state, dict(prior_manifest, phase="VC-2", candidate_revision=None, candidate_id=None), prior_dir, successor_manifest, campaign_dir=campaign_dir))
+            forgeries = (
+                (reconciliation, b"{}\n", "对账收据 schema 或身份不闭合"),
+                # 任意单字节改动：身份核对或总账摘要绑定至少一处失败关闭。
+                (reconciliation, originals[reconciliation].replace(b'"failed"', b'"stopped"', 1), "身份不闭合|项目总账绑定不一致"),
+                (invalidation, b'{"revision": 1}\n', "invalidation.json 非法"),
+            )
+            for path, forged, message in forgeries:
+                with self.subTest(path=path.name, message=message):
+                    path.write_bytes(forged)
+                    try:
+                        with self.assertRaisesRegex(supervisor.SupervisorError, message):
+                            supervisor._validate_candidate_revision_successor(prior_state, prior_manifest, prior_dir, successor_manifest, campaign_dir=campaign_dir)
+                    finally:
+                        path.write_bytes(originals[path])
+            # 收据内容"合法"但与总账绑定的摘要不同（重签一份字段相同、时间戳不同的作废收据）也拒绝。
+            payload = _read(invalidation)
+            resigned = artifacts.build_candidate_invalidation(
+                campaign_id=str(payload["campaign_id"]), candidate_id=R1, revision=1, diagnosis=payload["diagnosis"], recorded_at_utc="2099-01-01T00:00:00Z"
+            )
+            invalidation.write_text(json.dumps(resigned, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
+            try:
+                with self.assertRaisesRegex(supervisor.SupervisorError, "项目总账绑定不一致"):
+                    supervisor._validate_candidate_revision_successor(prior_state, prior_manifest, prior_dir, successor_manifest, campaign_dir=campaign_dir)
+            finally:
+                invalidation.write_bytes(originals[invalidation])
+            # 阻断 3（派发级）：作废收据被篡改时 r2 的 VC-4 首批在取得执行权前被拒（staging 中止），恢复原件后同序号重派成功。
+            invalidation.write_bytes(b'{"revision": 1}\n')
+            try:
+                with self.assertRaisesRegex((codex_upgrade.ConfigurationError, supervisor.SupervisorError), "候选 revision 后继|invalidation"):
+                    self._dispatch(fixture, root, "VC-4", 6, tag="vc4-r2-forged")
+            finally:
+                invalidation.write_bytes(originals[invalidation])
+            self.assertFalse((campaign_dir / "control" / "vc" / "revisions" / "r2" / "vc-4-checkpoint.json").exists())
+            result, returncode = self._dispatch(fixture, root, "VC-4", 6, tag="vc4-r2")
+            self.assertEqual(returncode, 0, result)
+            self.assertEqual(result["staging_attempt"], 2)
+            # 阻断 2：r2 在 VC-5 以同一动作失败但尚未对账，历史 r1 的同阶段同动作对账收据不得冒充本次。
+            self._fail_vc5_into_review(fixture, root, sequence=7, tag="vc5-r2-fail")
+            source = self._candidate_source(root, "r2")
+            with mock.patch.object(codex_upgrade, "_git_commit", return_value="b" * 40):
+                with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "尚未对账入账"):
+                    codex_upgrade.invalidate_candidate(self._invalidate_arguments(fixture, R2, "preview", source=source))
+
     def test_second_invalidation_with_same_root_cause_hits_limit_and_stops(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()

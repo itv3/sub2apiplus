@@ -40,6 +40,12 @@ class CodexUpgrade0154VCContractTests(unittest.TestCase):
         cls._write(campaign_dir / "control" / "vc" / "vc-4-checkpoint.json", {"fixture": "vc-4"})
 
     @staticmethod
+    def _active_ledger_patch() -> mock._patch:
+        """合成夹具没有账本绑定；候选级写入门要求账本 active，这里显式给出该状态。"""
+
+        return mock.patch.object(codex_upgrade, "_candidate_write_ledger_status", return_value="active")
+
+    @staticmethod
     def _candidate_arguments(
         campaign_dir: Path,
         *,
@@ -102,6 +108,7 @@ class CodexUpgrade0154VCContractTests(unittest.TestCase):
                 build_receipt=None,
             )
             with (
+                self._active_ledger_patch(),
                 mock.patch.object(
                     codex_upgrade,
                     "_apply_candidate_runtime_override",
@@ -148,6 +155,7 @@ class CodexUpgrade0154VCContractTests(unittest.TestCase):
                 build_receipt=receipt_path,
             )
             with (
+                self._active_ledger_patch(),
                 mock.patch.object(
                     codex_upgrade,
                     "_apply_candidate_runtime_override",
@@ -865,6 +873,7 @@ class CodexUpgrade0154VCContractTests(unittest.TestCase):
         return (
             mock.patch.object(codex_upgrade, "_require_formal_campaign", return_value=manifest),
             mock.patch.object(codex_upgrade, "_load_stage_result", side_effect=load_stage),
+            self._active_ledger_patch(),
             mock.patch.object(
                 codex_upgrade,
                 "_capture_stage_attempt_context",
@@ -903,7 +912,7 @@ class CodexUpgrade0154VCContractTests(unittest.TestCase):
                 acceptance=acceptance,
                 acceptance_path=acceptance_path,
             )
-            with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], mock.patch.object(
+            with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], mock.patch.object(
                 codex_upgrade,
                 "_complete_vc_with_receipt",
                 return_value=completion,
@@ -960,7 +969,7 @@ class CodexUpgrade0154VCContractTests(unittest.TestCase):
                 "receipt": {"receipt_digest": "d" * 64},
                 "checkpoint": {"checkpoint_sha256": "e" * 64},
             }
-            with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], mock.patch.object(
+            with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], mock.patch.object(
                 codex_upgrade,
                 "_canonical_latest_checkpoint",
                 return_value=checkpoint,
@@ -1004,7 +1013,7 @@ class CodexUpgrade0154VCContractTests(unittest.TestCase):
                 acceptance=acceptance,
                 acceptance_path=acceptance_path,
             )
-            with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], mock.patch.object(
+            with patches[0], patches[1], patches[2], patches[3], patches[4], patches[5], patches[6], mock.patch.object(
                 codex_upgrade,
                 "_canonical_latest_checkpoint",
                 return_value=checkpoint,

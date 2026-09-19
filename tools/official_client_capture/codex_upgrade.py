@@ -13430,6 +13430,18 @@ def _guard_candidate_revision_write(
     _require_candidate_in_current_revision(campaign_dir, manifest, candidate_id, action=action)
 
 
+def _candidate_write_ledger_status(campaign_dir: Path, manifest: Mapping[str, Any]) -> str:
+    """候选级写入门读取的账本状态；没有账本绑定或账本不可重放即失败关闭。"""
+
+    ledger_dir = _optional_campaign_timing_ledger_dir(campaign_dir, manifest)
+    if ledger_dir is None:
+        raise ConfigurationError("候选级写入需要 Campaign 的 UpgradeTimingLedger 绑定。")
+    try:
+        return str(codex_upgrade_timing_ledger.inspect_ledger(ledger_dir).get("status"))
+    except codex_upgrade_timing_ledger.TimingLedgerError as error:
+        raise ConfigurationError(f"UpgradeTimingLedger 无法重放：{error}") from error
+
+
 def _require_candidate_in_current_revision(
     campaign_dir: Path,
     manifest: Mapping[str, Any],
@@ -13437,7 +13449,12 @@ def _require_candidate_in_current_revision(
     *,
     action: str,
 ) -> tuple[int, dict[str, Any] | None]:
-    """候选级写入前校验候选属于当前 active revision；被取代候选只读。"""
+    """候选级写入前的完整门：候选属于当前 revision、账本 active、候选未作废也未被取代。
+
+    ``invalidation.json`` 只要存在（无论内容有效与否，含符号链接）即视为已作废：作废与
+    取代之间的 ``revision_required`` 窗口里旧候选同样只读。账本非 active（review／
+    revision_required／recovery／停线）时任何候选级写入都拒绝。
+    """
 
     revision, record = _require_candidate_revision(campaign_dir, manifest, action=action)
     if record is not None and record["candidate_id"] != candidate_id:
@@ -13445,9 +13462,20 @@ def _require_candidate_in_current_revision(
             f"{action} 拒绝：候选 {candidate_id} 不属于当前 revision r{revision}"
             f"（当前候选 {record['candidate_id']}）；被取代候选只读。"
         )
-    superseded_marker = campaign_dir / "candidates" / candidate_id / "superseded-by.json"
-    if superseded_marker.exists():
+    candidate_root = campaign_dir / "candidates" / candidate_id
+    invalidation_marker = candidate_root / CANDIDATE_INVALIDATION_FILENAME
+    if invalidation_marker.exists() or invalidation_marker.is_symlink():
+        raise ConfigurationError(
+            f"{action} 拒绝：候选 {candidate_id} 已作废（存在 invalidation.json），只读。"
+        )
+    superseded_marker = candidate_root / "superseded-by.json"
+    if superseded_marker.exists() or superseded_marker.is_symlink():
         raise ConfigurationError(f"{action} 拒绝：候选 {candidate_id} 已被取代，只读。")
+    status = _candidate_write_ledger_status(campaign_dir, manifest)
+    if status != "active":
+        raise ConfigurationError(
+            f"{action} 拒绝：候选级写入要求 UpgradeTimingLedger 为 active（当前 {status}）。"
+        )
     return revision, record
 
 
@@ -18434,11 +18462,18 @@ def _candidate_accounting_checks(
         facts["attempts"].append({"attempt_id": attempt_id, "operation_id": operation_id})
     review = _ledger_last_event_of_type(ledger_dir, "candidate_review_required")
     if review is not None and review[0].get("candidate_id") == candidate_id:
-        # 候选级动作失败进入只读等待：引起 review 的失败父 run 必须已经对账入账。
-        # review 事件的根因由 supervisor 按（阶段，失败动作）编码；对账收据的根因则按
-        # 诊断枚举观测编码，两者不可直接相比——这里用收据里的 run 事实（阶段 + 失败动作）
-        # 重算 supervisor 根因来定位那次失败，再要求总账含对应 operation。
-        cause = str(review[0].get("root_cause_id"))
+        # 候选级动作失败进入只读等待：引起 review 的那一次失败父 run 必须已经对账入账。
+        # review 事件 id 的摘要段由 supervisor 按（Campaign、阶段、批次序号、失败动作、
+        # 失败分类）派生；这里用对账收据里的 run 事实重算同一摘要来定位本次失败，再核对
+        # 该批次的正式清单确属本候选／本 revision、收据文件摘要与总账事件绑定一致，最后
+        # 要求总账含 reconcile-supervisor-run:<run_id>。历史 revision 的同阶段同动作失败
+        # 因批次序号不同而摘要不同，不能冒充本次。
+        review_event = review[0]
+        expected_prefix = codex_upgrade_supervisor.parse_candidate_review_event_id(review_event.get("event_id"))
+        if expected_prefix is None:
+            raise ConfigurationError("candidate_review_required 事件 id 形态非法，无法绑定失败父 run。")
+        review_revision = review_event.get("revision")
+        campaign_id = str(manifest.get("campaign_id", ""))
         reconciliation_root = campaign_dir / "control" / reconciler.RECONCILIATION_DIR
         matched: list[str] = []
         if reconciliation_root.is_dir() and not reconciliation_root.is_symlink():
@@ -18451,26 +18486,63 @@ def _candidate_accounting_checks(
                 diagnostic = run.get("action_diagnostic") if isinstance(run, Mapping) else None
                 if not isinstance(run, Mapping) or not isinstance(diagnostic, Mapping):
                     continue
-                phase = str(run.get("phase", ""))
-                action_id = str(diagnostic.get("action_id", ""))
-                if phase not in CANDIDATE_VC_PHASES or not SAFE_ID_RE.fullmatch(action_id):
-                    continue
-                try:
-                    run_cause = codex_upgrade_root_cause.structured_root_cause(
-                        component="supervisor",
-                        stable_error_code="campaign-run.action-failed",
-                        failed_step=action_id,
-                        stable_dimensions={"phase": phase},
-                    )
-                except codex_upgrade_root_cause.RootCauseError:
-                    continue
                 run_id = run_root.name.removeprefix("run-")
-                if run_cause == cause and f"reconcile-supervisor-run:{run_id}" in operations:
-                    matched.append(run_id)
-        if not matched:
+                phase = str(run.get("phase", ""))
+                sequence = run.get("batch_sequence")
+                action_id = str(diagnostic.get("action_id", ""))
+                if (
+                    receipt.get("schema_version") != reconciler.SUPERVISOR_RUN_SCHEMA
+                    or receipt.get("campaign_id") != campaign_id
+                    or run.get("run_id") != run_id
+                    or run.get("state") != "failed"
+                    or phase not in CANDIDATE_VC_PHASES
+                    or not isinstance(sequence, int)
+                    or isinstance(sequence, bool)
+                    or not SAFE_ID_RE.fullmatch(action_id)
+                ):
+                    continue
+                digest = codex_upgrade_supervisor.campaign_run_failure_digest(
+                    campaign_id=campaign_id,
+                    phase=phase,
+                    batch_sequence=sequence,
+                    failed_action_id=action_id,
+                    failure_class=str(run.get("failure_class", "")),
+                )
+                if digest[: codex_upgrade_supervisor.FAILURE_DIGEST_PREFIX_LENGTH] != expected_prefix:
+                    continue
+                # 该批次的正式清单必须绑定本候选与本 revision。
+                manifest_path = campaign_dir / "control" / "vc" / "run-manifests" / f"{sequence:04d}-{phase.lower()}.json"
+                if manifest_path.is_symlink() or not manifest_path.is_file():
+                    raise ConfigurationError(f"失败父 run {run_id} 的正式批次清单缺失：{manifest_path.name}")
+                run_manifest = _read_json(manifest_path, "父批次清单")
+                if run_manifest.get("candidate_id") != candidate_id or run_manifest.get("candidate_revision") != review_revision:
+                    raise ConfigurationError(
+                        f"失败父 run {run_id} 的批次清单未绑定候选 {candidate_id}／r{review_revision}。"
+                    )
+                operation_id = f"reconcile-supervisor-run:{run_id}"
+                recorded = operations.get(operation_id)
+                if not isinstance(recorded, Mapping):
+                    raise ConfigurationError(
+                        f"候选 {candidate_id} 处于 candidate_review_required，"
+                        f"但引起该状态的失败父 run {run_id} 尚未对账入账；先执行 reconcile-supervisor-run。"
+                    )
+                try:
+                    payload = codex_upgrade_supervisor._project_ledger_operation_payload(
+                        campaign_dir, operation_id, label="作废前对账核对"
+                    )
+                except codex_upgrade_supervisor.SupervisorError as error:
+                    raise ConfigurationError(str(error)) from error
+                if (
+                    payload.get("subject_kind") != "supervisor_run"
+                    or payload.get("subject_id") != run_id
+                    or payload.get("reconciliation_receipt_sha256") != file_sha256(receipt_path)
+                ):
+                    raise ConfigurationError(f"失败父 run {run_id} 的对账收据与项目总账绑定不一致。")
+                matched.append(run_id)
+        if len(matched) != 1:
             raise ConfigurationError(
-                f"候选 {candidate_id} 处于 candidate_review_required（根因 {cause}），"
-                "但引起该状态的失败父 run 尚未对账入账；先执行 reconcile-supervisor-run。"
+                f"候选 {candidate_id} 处于 candidate_review_required（事件 {review_event.get('event_id')}），"
+                f"但引起该状态的失败父 run 尚未对账入账（匹配到 {len(matched)} 份收据）；先执行 reconcile-supervisor-run。"
             )
         facts["failed_runs"] = matched
         facts["zero_request"] = False
@@ -30501,14 +30573,15 @@ def _candidate_revisions_status(
             if isinstance(candidate, str)
             else None
         )
-        if current == revision:
-            state = "active"
-        elif commit is None:
-            state = "opening"
-        elif superseded_marker is not None and superseded_marker.exists():
+        # 作废／取代标记优先：revision_required 窗口里旧候选虽仍是"当前 revision"，但只读。
+        if superseded_marker is not None and superseded_marker.exists():
             state = "superseded"
         elif invalidation is not None and invalidation.exists():
             state = "invalidated"
+        elif current == revision:
+            state = "active"
+        elif commit is None:
+            state = "opening"
         else:
             state = "pending"
         revisions[f"r{revision}"] = {

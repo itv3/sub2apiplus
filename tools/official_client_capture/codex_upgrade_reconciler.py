@@ -53,7 +53,8 @@ from tools.official_client_capture import codex_upgrade_vc_artifacts as vc_artif
 from tools.official_client_capture import codex_upgrade_wire_transition as wire_transition
 from tools.official_client_capture import incremental_recovery
 
-SUPERVISOR_RUN_SCHEMA = "supervisor-run-reconciliation/v1"
+# 与监督器后继协议共用同一常量：改造 2 的候选 revision 后继会完整重放这份收据。
+SUPERVISOR_RUN_SCHEMA = supervisor.SUPERVISOR_RUN_RECONCILIATION_SCHEMA
 ATTEMPT_SCHEMA = "attempt-reconciliation/v1"
 RECOVERY_PREVIEW_SCHEMA = "recovery-preview/v1"
 RECOVERY_APPROVAL_SCHEMA = "recovery-approval/v1"
