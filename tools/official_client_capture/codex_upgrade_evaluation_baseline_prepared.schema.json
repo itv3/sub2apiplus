@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-evaluation-baseline-prepared-v1.json",
+  "title": "评估基线 PREPARED 标记（绑定 recovery.json 自摘要与裁定前的总账 head 快照；不是当前基线）",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "campaign_id",
+    "candidate_id",
+    "candidate_revision",
+    "evaluation_baseline",
+    "recovery_sha256",
+    "project_ledger_head_sequence",
+    "project_ledger_head_sha256",
+    "prepared_at_utc",
+    "marker_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "codex-upgrade-evaluation-baseline-prepared/v1"
+    },
+    "campaign_id": {
+      "$ref": "#/$defs/safeId"
+    },
+    "candidate_id": {
+      "$ref": "#/$defs/safeId"
+    },
+    "candidate_revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "evaluation_baseline": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "recovery_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "project_ledger_head_sequence": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "project_ledger_head_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "prepared_at_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "marker_sha256": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "safeId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    }
+  }
+}

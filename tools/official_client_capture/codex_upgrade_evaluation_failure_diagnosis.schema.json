@@ -1,0 +1,364 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-evaluation-failure-diagnosis-v1.json",
+  "title": "评估失败诊断收据（evaluation-recover preview 由工具签发：失败来源 tagged union、复用授权、failure-scope 定位链、失败父 run 三摘要与动作输出绑定、总账 head）",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "campaign_id",
+    "campaign_manifest_sha256",
+    "candidate_id",
+    "candidate_revision",
+    "evaluation_baseline",
+    "failure_source",
+    "reuse_authority",
+    "failed_step",
+    "failed_run",
+    "action_outputs",
+    "evaluation_run",
+    "failure_scope",
+    "failed_evaluator_digests",
+    "current_evaluator_digests",
+    "admissible_classes",
+    "project_ledger_head_sequence",
+    "project_ledger_head_sha256",
+    "reviewer",
+    "reviewed_at_utc",
+    "review_sha256",
+    "receipt_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "codex-upgrade-evaluation-failure-diagnosis/v1"
+    },
+    "campaign_id": {
+      "$ref": "#/$defs/safeId"
+    },
+    "campaign_manifest_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "candidate_id": {
+      "$ref": "#/$defs/safeId"
+    },
+    "candidate_revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "evaluation_baseline": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "failure_source": {
+      "enum": [
+        "assertion-failed",
+        "offline-compare-failed",
+        "offline-accept-failed"
+      ]
+    },
+    "reuse_authority": {
+      "enum": [
+        "anchored",
+        "none"
+      ]
+    },
+    "failed_step": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "failed_run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "run_id",
+        "run_dir",
+        "manifest_sha256",
+        "state_sha256",
+        "stop_receipt_sha256",
+        "action_id",
+        "action_diagnostic_sha256",
+        "action_outputs_sha256"
+      ],
+      "properties": {
+        "run_id": {
+          "$ref": "#/$defs/safeId"
+        },
+        "run_dir": {
+          "type": "string",
+          "minLength": 1
+        },
+        "manifest_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "state_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "stop_receipt_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "action_id": {
+          "$ref": "#/$defs/safeId"
+        },
+        "action_diagnostic_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "action_outputs_sha256": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "action_outputs": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "path",
+            "sha256",
+            "evaluation_run",
+            "checkpoint_head_sha256"
+          ],
+          "properties": {
+            "path": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "evaluation_run": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/binding"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "checkpoint_head_sha256": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/sha256"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "evaluation_run": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "path",
+            "sha256",
+            "derived"
+          ],
+          "properties": {
+            "path": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "derived": {
+              "type": "boolean"
+            }
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "failure_scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "failed_rules",
+        "failed_checks",
+        "jobs",
+        "rules",
+        "official_refs"
+      ],
+      "properties": {
+        "failed_rules": {
+          "$ref": "#/$defs/ruleArray"
+        },
+        "failed_checks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "rule",
+              "check_id",
+              "evidence_paths",
+              "jobs"
+            ],
+            "properties": {
+              "rule": {
+                "$ref": "#/$defs/ruleId"
+              },
+              "check_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "evidence_paths": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "jobs": {
+                "$ref": "#/$defs/idArray"
+              }
+            }
+          }
+        },
+        "jobs": {
+          "$ref": "#/$defs/idArray"
+        },
+        "rules": {
+          "$ref": "#/$defs/ruleArray"
+        },
+        "official_refs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "failed_evaluator_digests": {
+      "$ref": "#/$defs/evaluatorDigests"
+    },
+    "current_evaluator_digests": {
+      "$ref": "#/$defs/evaluatorDigests"
+    },
+    "admissible_classes": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "evaluator-defect",
+          "transient-environment",
+          "candidate-source",
+          "approval-inputs"
+        ]
+      }
+    },
+    "project_ledger_head_sequence": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "project_ledger_head_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "reviewer": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "reviewed_at_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "review_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "receipt_sha256": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "safeId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "ruleId": {
+      "type": "string",
+      "pattern": "^SPEC-[A-Z0-9]+-[0-9]{3}$"
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "evaluatorDigests": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "checker_sha256",
+        "builder_sha256",
+        "compare_reader_sha256",
+        "accept_reader_sha256"
+      ],
+      "properties": {
+        "checker_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "builder_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "compare_reader_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "accept_reader_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "ruleArray": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/ruleId"
+      }
+    },
+    "idArray": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/safeId"
+      }
+    }
+  }
+}

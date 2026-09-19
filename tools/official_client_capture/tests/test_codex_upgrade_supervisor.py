@@ -920,7 +920,7 @@ class SupervisorTests(unittest.TestCase):
 
     def test_failed_v2_only_allows_direct_v3_successor(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()
             prior_dir = root / "run-prior"
             prior_manifest = {
                 "schema_version": supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA,
@@ -942,14 +942,16 @@ class SupervisorTests(unittest.TestCase):
                 prior_dir / "campaign-run-manifest.json",
                 {"manifest": prior_manifest},
             )
-            self._write_json(
-                prior_dir / "stop-receipt.json",
-                {
-                    "event_type": "failed",
-                    "reason": "KeyboardInterrupt",
-                    "owner_nonce": prior_state["owner_nonce"],
-                    "campaign_id": prior_state["campaign_id"],
-                },
+            # 改造 5：所有 stop-receipt 读点走 read_stop_receipt，夹具必须是自摘要闭合的 v2 收据。
+            supervisor._stop_receipt(
+                prior_dir,
+                event_type="failed",
+                reason="KeyboardInterrupt",
+                detected_at_epoch=1_700_000_000.0,
+                owner_pid=1,
+                owner_nonce=prior_state["owner_nonce"],
+                campaign_id=prior_state["campaign_id"],
+                phase="VC-1",
             )
             recovery = self._recovery_manifest(root)
             recovery["recovery_predecessor"] = supervisor._recovery_predecessor_from_run(

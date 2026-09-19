@@ -155,8 +155,17 @@ from typing import Any, Callable, Mapping
 # 两条分支的收据校验（campaign_run_failure_facts／candidate_reservations_in_run_window／
 # verify_attempt_reconciliation_binding／verify_supervisor_run_reconciliation_binding）集中在监督器，
 # 供 invalidate-candidate 共用。监督器随之变化；断言预处理器未变。
+# 2026-09-20（第 3 批 M1：评估失败局部恢复）：stop-receipt 升 v2（显式 action_outputs_sha256|null，
+# v1 只读兼容，全部读点走 read_stop_receipt）；父监督器在动作退出后 write-once 写动作输出绑定
+# （诊断 → action-output → post-run-tooling 收据）；monitor 对 running 父 run 的 owner 丢失按 R2
+# 四层判定封存为普通 failed／action-failed:<id>（失败身份不完整或绑定不一致仍 watchdog-aborted）；
+# commit 步骤在 nonce-mismatch 后加 evaluator-digests（正式 COMMIT 前核对 evaluator 四项摘要）；
+# campaign-run 清单成对携带 evaluation_baseline／baseline_commit_sha256／evaluator_digests 与动作
+# output_bindings；失败评估批次新增"评估基线后继"协议；reconciler 在锁内对 owner-loss run 复算
+# 三项并补写 post-run-tooling 收据。根因编码表新增 evaluation.rule-failed／attempt.job-transient-failure
+# （需项目总账 migration 000003）。监督器随之变化；断言预处理器未变。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "80d8eea1792f93e1154995c84b45aeff3ea2e6a1fd56c75e2c158982b35f1c1f"
+    "a7053e3874fc89c1e91f18c29d8399835e16ad955e1d96b90cb8bdf43ab2597e"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "ea5500505d49340fe4971b981a8ab1159266c6a54ad0d3724cdf10cd51815fe4"

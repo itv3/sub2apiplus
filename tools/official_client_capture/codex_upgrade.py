@@ -4904,6 +4904,8 @@ def _mutable_command_coordinates(
         # 改造 2：revision 登记与候选作废同样自持 Campaign 排他锁与账本锁。
         "revision-open",
         "invalidate-candidate",
+        # 改造 5：评估失败的分类与评估基线状态机同样自持 Campaign 排他锁与账本锁。
+        "evaluation-recover",
         # seal 预演在私有 mount namespace 的 OverlayFS 副本上执行，正式目录只读；
         # 收据写入 control/seal-rehearsal，不触碰 attempt 与账本。
         "rehearse-candidate-seal",
@@ -9758,6 +9760,29 @@ def _build_parser() -> argparse.ArgumentParser:
         help="旧候选源码树：旧候选既无 build receipt 又无 attempt 身份投影时必填",
     )
     invalidate.add_argument("--approve-sha256", help="apply 必需：preview 输出的 review_sha256")
+    evaluation_recover_parser = subparsers.add_parser(
+        "evaluation-recover",
+        help=(
+            "改造 5：候选证据封存后离线评估失败的分类与局部恢复（零请求，两步式）。preview 输出"
+            "失败来源、复用授权、failure-scope 与诊断草案；apply 以 --approve-sha256 与 --root-cause-class"
+            "开评估基线 b<K>（prepared→authorized→committed）；abandon 作废未 COMMIT 的 PREPARED 基线"
+        ),
+    )
+    evaluation_recover_parser.add_argument("recover_action", choices=("preview", "apply", "abandon"))
+    add_campaign_reference(evaluation_recover_parser)
+    evaluation_recover_parser.add_argument("--candidate-id", required=True)
+    evaluation_recover_parser.add_argument("--reviewer", required=True, help="人工审核人标识（非空即可）")
+    evaluation_recover_parser.add_argument(
+        "--root-cause-class",
+        choices=("evaluator-defect", "transient-environment", "candidate-source", "approval-inputs"),
+        help="apply 必需：人工裁定的类别（须在 preview 给出的 admissible_classes 内）",
+    )
+    evaluation_recover_parser.add_argument("--fix-commit", help="evaluator-defect 必需：完整 40 位修复提交")
+    evaluation_recover_parser.add_argument(
+        "--deployment-receipt", type=Path, help="evaluator-defect 必需：修复已受监督部署的 ARM64 部署收据（绝对路径）"
+    )
+    evaluation_recover_parser.add_argument("--approve-sha256", help="apply 必需：preview 输出的 review_sha256")
+    evaluation_recover_parser.add_argument("--reason", help="abandon 可选：作废原因")
     reconcile_run = subparsers.add_parser(
         "reconcile-supervisor-run",
         help=(
@@ -14766,7 +14791,7 @@ def _validate_recovery_execution_handoff_parent_terminal(
     try:
         state = codex_upgrade_supervisor._read_state(run_dir)
         record = _read_json(record_path, "恢复执行交接父清单")
-        stop = _read_json(stop_path, "恢复执行交接父终态")
+        stop = codex_upgrade_supervisor.read_stop_receipt(run_dir)
     except (OSError, codex_upgrade_supervisor.SupervisorError) as error:
         raise ConfigurationError("恢复执行交接的预览父批次无法重放。") from error
     parent_manifest = record.get("manifest")
@@ -16114,6 +16139,19 @@ def _vc_run_manifest_from_batch(
             "candidate_revision": batch.get("candidate_revision"),
             "candidate_id": batch.get("candidate_id"),
         }
+        # 改造 5：v3 批次的评估基线三字段成对携带（v2 批次没有，清单也不带）。
+        if batch.get("schema_version") == codex_upgrade_vc_artifacts.VC_BATCH_SCHEMA:
+            extra.update(
+                {
+                    "evaluation_baseline": batch.get("evaluation_baseline"),
+                    "baseline_commit_sha256": batch.get("baseline_commit_sha256"),
+                    "evaluator_digests": (
+                        dict(batch["evaluator_digests"])
+                        if batch.get("evaluator_digests") is not None
+                        else None
+                    ),
+                }
+            )
     elif batch_model != "legacy":
         raise ConfigurationError(f"未知批次模型：{batch_model}")
     return codex_upgrade_supervisor.build_batched_campaign_run_manifest(
@@ -16243,6 +16281,67 @@ def _committed_vc_sequences(campaign_dir: Path, manifest: Mapping[str, Any]) -> 
     return sorted(committed)
 
 
+EVALUATION_ACTION_BUILDER_BASENAME = "build_rule_assertion_results.py"
+
+
+def _evaluation_action_kind(command: Sequence[str]) -> str | None:
+    """识别 VC-5 评估动作：``assertion``（builder）、``compare``、``accept``；其余返回 None。"""
+
+    basenames = {Path(token).name for token in command[:4]}
+    if EVALUATION_ACTION_BUILDER_BASENAME in {Path(token).name for token in command}:
+        return "assertion"
+    if basenames & codex_upgrade_vc_artifacts.UPGRADE_CLI_BASENAMES:
+        for token in command:
+            if token in {"compare", "accept"}:
+                return token
+    return None
+
+
+def _freeze_evaluation_output_bindings(
+    campaign_dir: Path,
+    candidate_id: str,
+    baseline: int,
+    actions: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """编译侧为评估动作写死 output_bindings（Campaign 相对）；操作员自带声明必须逐字相等。
+
+    断言 builder：当前基线断言目录的 ``evaluation-run.json`` 与 ``checkpoints``；compare：
+    compare 阶段结果的规范读来源（reused 基线下即前序路径）；accept：accept 阶段结果写目标
+    与其输入 ``evaluation-run.json``。
+    """
+
+    assertions_root = _stage_write_target(campaign_dir, candidate_id, baseline, "assertions")
+    frozen: list[dict[str, Any]] = []
+    for action in actions:
+        normalized = dict(action)
+        kind = _evaluation_action_kind(list(action["command"]))
+        expected: list[str] | None = None
+        if kind == "assertion":
+            expected = [
+                (assertions_root / "checkpoints").relative_to(campaign_dir).as_posix(),
+                (assertions_root / "evaluation-run.json").relative_to(campaign_dir).as_posix(),
+            ]
+        elif kind == "compare":
+            source = _stage_read_source(campaign_dir, candidate_id, baseline, "compare")
+            expected = [Path(source["path"]).relative_to(campaign_dir).as_posix()]
+        elif kind == "accept":
+            target = _stage_write_target(campaign_dir, candidate_id, baseline, "accept")
+            expected = [
+                target.relative_to(campaign_dir).as_posix(),
+                (assertions_root / "evaluation-run.json").relative_to(campaign_dir).as_posix(),
+            ]
+        if expected is not None:
+            expected = sorted(set(expected))
+            declared = action.get("output_bindings")
+            if declared is not None and list(declared) != expected:
+                raise ConfigurationError(
+                    f"动作 {action['action_id']} 自带的 output_bindings 与编译侧冻结声明不一致。"
+                )
+            normalized["output_bindings"] = expected
+        frozen.append(normalized)
+    return frozen
+
+
 def compile_vc_batch(
     arguments: argparse.Namespace,
     *,
@@ -16339,6 +16438,23 @@ def compile_vc_batch(
         )
     except codex_upgrade_vc_artifacts.VCArtifactError as error:
         raise ConfigurationError(str(error)) from error
+    # 改造 5：候选级 VC-5 批次冻结当前评估基线（b0 为 null）与 evaluator 四项直接依赖摘要，
+    # 并为评估动作（断言 builder／compare／accept）固定 output_bindings。
+    evaluation_baseline: int | None = None
+    baseline_commit_sha256: str | None = None
+    evaluator_digests: dict[str, str] | None = None
+    actions = list(action_plan["actions"])
+    if phase == "VC-5":
+        assert candidate_id is not None
+        current_baseline, baseline_commit = _current_evaluation_baseline(campaign_dir, candidate_id)
+        if current_baseline:
+            evaluation_baseline = current_baseline
+            baseline_commit_sha256 = str(baseline_commit["commit_sha256"])  # type: ignore[index]
+        try:
+            evaluator_digests = codex_upgrade_tool_identity_policy.evaluator_dependency_digests()
+        except codex_upgrade_tool_identity_policy.ToolIdentityPolicyError as error:
+            raise ConfigurationError(f"evaluator 依赖摘要无法计算：{error}") from error
+        actions = _freeze_evaluation_output_bindings(campaign_dir, candidate_id, current_baseline, actions)
 
     batches_root = campaign_dir / "control" / "vc" / "batches"
     manifests_root = campaign_dir / "control" / "vc" / "run-manifests"
@@ -16378,11 +16494,14 @@ def compile_vc_batch(
             ),
             execute_item_ids=action_plan["execute_item_ids"],
             reuse_item_ids=action_plan["reuse_item_ids"],
-            actions=action_plan["actions"],
+            actions=actions,
             compiled_at_utc=compiled_at,
             must_start_by_utc=must_start.isoformat(timespec="seconds"),
             candidate_revision=candidate_revision,
             candidate_id=candidate_id,
+            evaluation_baseline=evaluation_baseline,
+            baseline_commit_sha256=baseline_commit_sha256,
+            evaluator_digests=evaluator_digests,
         )
     except codex_upgrade_vc_artifacts.VCArtifactError as error:
         raise ConfigurationError(str(error)) from error
@@ -17086,7 +17205,10 @@ def _read_stop_reason(run_dir: Path) -> str | None:
     path = run_dir / "stop-receipt.json"
     if path.is_symlink() or not path.is_file():
         return None
-    reason = _read_json(path, "父 run stop-receipt").get("reason")
+    try:
+        reason = codex_upgrade_supervisor.read_stop_receipt(run_dir).get("reason")
+    except codex_upgrade_supervisor.SupervisorError as error:
+        raise ConfigurationError(f"父 run stop-receipt 无法校验：{error}") from error
     return reason if isinstance(reason, str) else None
 
 
@@ -17144,6 +17266,23 @@ def _load_prepared_staging_attempt(
         or run_manifest.get("candidate_id") != batch.get("candidate_id")
     ):
         raise ConfigurationError("staging 清单的 candidate_revision／candidate_id 缺失或与 batch 不一致。")
+    # 改造 5：v3 批次的评估基线三字段与动作 output_bindings 必须与清单逐字一致；
+    # v2 批次的清单不得携带评估基线字段。
+    if batch.get("schema_version") == codex_upgrade_vc_artifacts.VC_BATCH_SCHEMA:
+        if (
+            "evaluation_baseline" not in run_manifest
+            or run_manifest.get("evaluation_baseline") != batch.get("evaluation_baseline")
+            or run_manifest.get("baseline_commit_sha256") != batch.get("baseline_commit_sha256")
+            or run_manifest.get("evaluator_digests") != batch.get("evaluator_digests")
+        ):
+            raise ConfigurationError("staging 清单的评估基线字段缺失或与 batch 不一致。")
+    elif "evaluation_baseline" in run_manifest:
+        raise ConfigurationError("v2 批次的 staging 清单不得携带评估基线字段。")
+    manifest_actions = {str(action["action_id"]): action for action in run_manifest.get("actions", [])}
+    for action in batch.get("actions", []):
+        recorded = manifest_actions.get(str(action["action_id"]))
+        if recorded is None or recorded.get("output_bindings") != action.get("output_bindings"):
+            raise ConfigurationError("staging 清单的动作 output_bindings 与 batch 不一致。")
     if owner_nonce is not None and marker["owner_nonce"] != owner_nonce:
         raise ConfigurationError("staging PREPARED 的 owner_nonce 与入口预分配值不一致。")
     return {
@@ -17897,6 +18036,24 @@ def _compile_and_run_vc_batch_staging(
                 raise supervisor.StagingCommitError(
                     "nonce-mismatch", "PREPARED、父 run 与入口预分配的 owner_nonce 不一致。"
                 )
+            # 改造 5：正式 COMMIT 前核对当前 evaluator 四项摘要等于批次冻结值（编译器与这里
+            # 调用同一纯函数）；不等即 aborted_prepared、序号不占、同序号以当前摘要重新编译。
+            client.begin_commit_step("evaluator-digests")
+            frozen_digests = prepared["run_manifest"].get("evaluator_digests")
+            if frozen_digests is not None:
+                try:
+                    current_digests = codex_upgrade_tool_identity_policy.evaluator_dependency_digests()
+                except codex_upgrade_tool_identity_policy.ToolIdentityPolicyError as error:
+                    raise supervisor.StagingCommitError("evaluator-digests", str(error)) from error
+                if current_digests != dict(frozen_digests):
+                    drifted = sorted(
+                        field for field in current_digests if current_digests[field] != frozen_digests.get(field)
+                    )
+                    raise supervisor.StagingCommitError(
+                        "evaluator-digests",
+                        "当前 evaluator 依赖摘要与批次冻结值不一致（编译后工具已变化），"
+                        f"漂移项：{drifted}；请同序号重新编译派发。",
+                    )
             client.begin_commit_step("commit-ledger")
             try:
                 if governance["ledger_dir"] is not None:
@@ -18897,6 +19054,980 @@ def invalidate_candidate(arguments: argparse.Namespace) -> dict[str, Any]:
             }
         )
         result["next_command"] = f"revision-open --candidate-id <new> --supersedes {candidate_id}"
+        return result
+
+
+# ---------------------------------------------------------------------------
+# 改造 5：evaluation-recover preview／apply／abandon——评估失败的分类、评估基线状态机
+# ---------------------------------------------------------------------------
+
+EVALUATION_RECOVER_COMMAND = "evaluation-recover"
+EVALUATION_BASELINE_DIAGNOSIS_FILENAME = "diagnosis.json"
+EVALUATION_ACTION_KINDS_BY_SOURCE = {
+    "assertion": "assertion-failed",
+    "compare": "offline-compare-failed",
+    "accept": "offline-accept-failed",
+}
+# 各失败来源"缺陷所在项"：evaluator-defect 准入要求变化项覆盖之。
+EVALUATION_DEFECT_ITEMS = {
+    "assertion-failed": ("checker_sha256", "builder_sha256"),
+    "offline-compare-failed": ("compare_reader_sha256",),
+    "offline-accept-failed": ("accept_reader_sha256",),
+}
+
+
+def _evaluation_baseline_states(campaign_dir: Path, candidate_id: str) -> dict[int, dict[str, bool]]:
+    """扫描 candidates/<cid>/revisions/b*/：各编号的 PREPARED／AUTHORIZATION／COMMIT／ABANDON 存在性。"""
+
+    revisions_root = campaign_dir / "candidates" / candidate_id / "revisions"
+    if revisions_root.is_symlink():
+        raise ConfigurationError("候选 revisions 目录不得是符号链接。")
+    states: dict[int, dict[str, bool]] = {}
+    if not revisions_root.is_dir():
+        return states
+    for child in sorted(revisions_root.iterdir()):
+        match = _EVALUATION_BASELINE_DIR_RE.fullmatch(child.name)
+        if match is None:
+            # r<N>（候选 revision）等其他目录不属于评估基线。
+            continue
+        if child.is_symlink() or not child.is_dir():
+            raise ConfigurationError(f"评估基线目录不可信：{child}")
+        states[int(match.group(1))] = {
+            name: (child / filename).is_file()
+            for name, filename in (
+                ("prepared", EVALUATION_BASELINE_PREPARED_FILENAME),
+                ("authorization", EVALUATION_BASELINE_AUTHORIZATION_FILENAME),
+                ("commit", EVALUATION_BASELINE_COMMIT_FILENAME),
+                ("abandon", EVALUATION_BASELINE_ABANDON_FILENAME),
+            )
+        }
+    return states
+
+
+def _locate_evaluation_failed_run(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    candidate_id: str,
+    revision: int,
+    baseline: int,
+) -> dict[str, Any]:
+    """定位当前基线的评估失败父 run：候选级 VC-5 COMMIT → parent_run_dir → action-failed 事实。
+
+    只接受失败动作属评估动作（builder／compare／accept）且清单冻结基线等于当前基线的 run；
+    命中多个取序号最大者（同基线重派重现失败）。返回运行事实、内层清单与 stop-receipt。
+    """
+
+    campaign_id = str(manifest.get("campaign_id", ""))
+    commits_root = campaign_dir / "control" / "vc" / "commits"
+    if commits_root.is_symlink():
+        raise ConfigurationError("COMMIT 目录不得是符号链接。")
+    matched: list[dict[str, Any]] = []
+    if commits_root.is_dir():
+        for path in sorted(commits_root.iterdir()):
+            match = _VC_SEQUENCE_FILE_RE.fullmatch(path.name)
+            if match is None or path.is_symlink() or not path.is_file():
+                raise ConfigurationError(f"COMMIT 目录含非法条目：{path.name}")
+            commit = _read_staging_commit(path)
+            if commit["campaign_id"] != campaign_id or str(commit["phase"]) != "VC-5":
+                continue
+            run_dir = Path(str(commit.get("parent_run_dir", "")))
+            if not run_dir.is_absolute():
+                continue
+            try:
+                facts = codex_upgrade_supervisor.campaign_run_failure_facts(run_dir, campaign_dir=campaign_dir)
+            except codex_upgrade_supervisor.SupervisorError as error:
+                raise ConfigurationError(f"父 run {run_dir.name} 的失败事实不可信：{error}") from error
+            if facts is None or facts["candidate_id"] != candidate_id or facts["candidate_revision"] != revision:
+                continue
+            record = _read_json(run_dir / "campaign-run-manifest.json", "campaign-run 清单")
+            inner = record.get("manifest")
+            if not isinstance(inner, Mapping):
+                continue
+            if int(inner.get("evaluation_baseline") or 0) != baseline:
+                continue
+            action = next(
+                (item for item in inner.get("actions", []) if isinstance(item, Mapping) and item.get("action_id") == facts["action_id"]),
+                None,
+            )
+            if action is None:
+                continue
+            kind = _evaluation_action_kind(list(action["command"]))
+            if kind is None:
+                continue
+            matched.append({**facts, "inner_manifest": dict(inner), "action": dict(action), "action_kind": kind})
+    if not matched:
+        raise ConfigurationError(
+            f"候选 {candidate_id} 在评估基线 b{baseline} 没有评估动作失败的父 run；evaluation-recover 只处理封存后的离线评估失败。"
+        )
+    return max(matched, key=lambda item: int(item["batch_sequence"]))
+
+
+def _derive_b0_evaluation_run(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    candidate_id: str,
+    revision: int,
+    classification: Mapping[str, Any],
+    rules: Sequence[str],
+) -> dict[str, Any]:
+    """历史 b0（旧 builder 首 fail 中断、无 checkpoint）：从单侧文档只读派生 evaluation-run.json（derived=true）。"""
+
+    assertions_root = _assertions_root_for_baseline(campaign_dir, candidate_id, 0)
+    validation_modes = _acceptance_validation_modes(campaign_dir, dict(classification), tuple(rules))
+    rows: list[dict[str, Any]] = []
+    for rule in sorted(rules):
+        mode = validation_modes[rule]
+        statuses: list[str] = []
+        for side in ("candidate",) + (("official",) if mode == MODE_DUAL_WIRE else ()):
+            document_path = assertions_root / "machine" / side / f"{rule}.json"
+            if document_path.is_file() and not document_path.is_symlink():
+                document = _read_json(document_path, f"{rule} {side} 单规则文档")
+                statuses.append("pass" if document.get("status") == "pass" else "fail")
+            else:
+                statuses.append("pending")
+        status = "fail" if "fail" in statuses else "pending" if "pending" in statuses else "pass"
+        rows.append(
+            {
+                "rule": rule,
+                "validation_mode": mode,
+                "status": status,
+                "candidate_checkpoint": None,
+                "official_checkpoint": None,
+                "dependency_projection_sha256": None,
+                "reused_from": None,
+            }
+        )
+    try:
+        evaluator = codex_upgrade_tool_identity_policy.evaluator_dependency_digests()
+    except codex_upgrade_tool_identity_policy.ToolIdentityPolicyError as error:
+        raise ConfigurationError(f"evaluator 依赖摘要无法计算：{error}") from error
+    payload = {
+        "schema_version": codex_upgrade_vc_artifacts.EVALUATION_RUN_SCHEMA,
+        "campaign_id": str(manifest["campaign_id"]),
+        "candidate_id": candidate_id,
+        "candidate_revision": revision,
+        "evaluation_baseline": 0,
+        "derived": True,
+        "evaluator": evaluator,
+        "rules": rows,
+        "checkpoint_head_sha256": None,
+        "recorded_at_utc": _utc_now(),
+    }
+    payload["run_sha256"] = codex_upgrade_vc_artifacts.digest(payload)
+    try:
+        return codex_upgrade_vc_artifacts.validate_evaluation_run(payload)
+    except codex_upgrade_vc_artifacts.VCArtifactError as error:
+        raise ConfigurationError(f"派生 evaluation-run.json 非法：{error}") from error
+
+
+def _evaluation_failure_scope(
+    campaign_dir: Path,
+    candidate: Mapping[str, Any],
+    attempt: Mapping[str, Any],
+    evaluation_run: Mapping[str, Any],
+    assertions_root: Path,
+) -> tuple[dict[str, Any], str]:
+    """failure-scope 定位链：失败规则 → 失败 check → evidence_paths → provenance → source_root → 唯一 Job。
+
+    返回 ``(failure_scope, failed_step)``；每步失败关闭，不得退化为全量。J* 取定位到的 Job
+    （候选 Job 间无声明依赖时下游闭集等于本身）；R* 为引用了 J* 任一 artifact 的规则。
+    """
+
+    context = candidate.get("assertion_context")
+    if not isinstance(context, Mapping):
+        raise ConfigurationError("候选阶段结果缺少 assertion_context，无法定位失败证据。")
+    bundle_dir = Path(str(context.get("evidence_root", "")))
+    provenance_path = bundle_dir / "provenance.json"
+    if not bundle_dir.is_absolute() or provenance_path.is_symlink() or not provenance_path.is_file():
+        raise ConfigurationError("候选 assertion bundle 缺少 provenance 收据，无法定位失败证据。")
+    provenance = _read_json(provenance_path, "assertion bundle provenance")
+    by_target: dict[str, str] = {}
+    for entry in provenance.get("entries", []):
+        if not isinstance(entry, Mapping):
+            raise ConfigurationError("provenance 条目非法。")
+        by_target[str(entry.get("target_path"))] = str(entry.get("source_root"))
+    roots_by_name: dict[str, str] = {}
+    for result in attempt.get("results", []):
+        if not isinstance(result, Mapping):
+            continue
+        for root in result.get("evidence_roots", []) or []:
+            name = Path(str(root)).name
+            if name in roots_by_name and roots_by_name[name] != result.get("id"):
+                raise ConfigurationError(f"证据根名称 {name} 被多个 Job 声明，定位链不唯一。")
+            roots_by_name[name] = str(result.get("id"))
+    manifest_path = Path(str(context.get("capture_manifest_path", "")))
+    capture_manifest = _read_json(manifest_path, "候选 capture manifest") if manifest_path.is_file() else {}
+    artifact_jobs: dict[str, str] = {}
+    for artifact in capture_manifest.get("artifacts", []) or []:
+        if isinstance(artifact, Mapping):
+            source_root = by_target.get(str(artifact.get("path")))
+            if source_root is not None and source_root in roots_by_name:
+                artifact_jobs[str(artifact.get("path"))] = roots_by_name[source_root]
+    failed_rules = sorted(row["rule"] for row in evaluation_run["rules"] if row["status"] == "fail")
+    if not failed_rules:
+        raise ConfigurationError("evaluation-run.json 没有 status=fail 的规则。")
+    failed_checks: list[dict[str, Any]] = []
+    jobs: set[str] = set()
+    official_refs: set[str] = set()
+    for rule in failed_rules:
+        document_path = assertions_root / "machine" / "candidate" / f"{rule}.json"
+        if not document_path.is_file():
+            # 候选侧文档缺失（官方侧失败）：只列官方引用，不能定位候选 Job。
+            official_document = assertions_root / "machine" / "official" / f"{rule}.json"
+            if official_document.is_file():
+                for check in _read_json(official_document, f"{rule} 官方文档").get("checks", []):
+                    if isinstance(check, Mapping) and check.get("passed") is False:
+                        official_refs.update(str(path) for path in check.get("evidence_paths", []))
+            continue
+        document = _read_json(document_path, f"{rule} 候选文档")
+        for check in document.get("checks", []):
+            if not isinstance(check, Mapping) or check.get("passed") is not False:
+                continue
+            paths = [str(path) for path in check.get("evidence_paths", [])]
+            check_jobs: set[str] = set()
+            for path in paths:
+                source_root = by_target.get(path)
+                if source_root is None:
+                    raise ConfigurationError(f"失败 check {rule}/{check.get('id')} 引用的证据 {path} 没有 provenance 条目。")
+                job_id = roots_by_name.get(source_root)
+                if job_id is None:
+                    raise ConfigurationError(f"失败 check {rule}/{check.get('id')} 的证据根 {source_root} 无法映射到唯一 Job。")
+                check_jobs.add(job_id)
+            failed_checks.append(
+                {"rule": rule, "check_id": str(check.get("id")), "evidence_paths": sorted(paths), "jobs": sorted(check_jobs)}
+            )
+            jobs.update(check_jobs)
+    affected_rules: set[str] = set(failed_rules)
+    if jobs:
+        for rule in (row["rule"] for row in evaluation_run["rules"]):
+            document_path = assertions_root / "machine" / "candidate" / f"{rule}.json"
+            if not document_path.is_file():
+                continue
+            document = _read_json(document_path, f"{rule} 候选文档")
+            for check in document.get("checks", []):
+                if isinstance(check, Mapping) and any(
+                    artifact_jobs.get(str(path)) in jobs for path in check.get("evidence_paths", [])
+                ):
+                    affected_rules.add(rule)
+    scope = {
+        "failed_rules": failed_rules,
+        "failed_checks": failed_checks,
+        "jobs": sorted(jobs),
+        "rules": sorted(affected_rules),
+        "official_refs": sorted(official_refs),
+    }
+    return scope, failed_rules[0]
+
+
+def _evaluation_failure_diagnosis_facts(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    candidate_id: str,
+    revision: int,
+    baseline: int,
+    *,
+    candidate: Mapping[str, Any],
+    attempt: Mapping[str, Any],
+    classification: Mapping[str, Any],
+    rules: Sequence[str],
+) -> dict[str, Any]:
+    """从失败父 run 推出诊断稳定事实：失败来源（tagged union）、复用授权、绑定、failure-scope。"""
+
+    failed = _locate_evaluation_failed_run(campaign_dir, manifest, candidate_id, revision, baseline)
+    run_dir = Path(str(failed["run_dir"]))
+    failure_source = EVALUATION_ACTION_KINDS_BY_SOURCE[str(failed["action_kind"])]
+    try:
+        stop = codex_upgrade_supervisor.read_stop_receipt(run_dir)
+    except codex_upgrade_supervisor.SupervisorError as error:
+        raise ConfigurationError(f"失败父 run 的 stop-receipt 无法校验：{error}") from error
+    diagnostic_path = run_dir / "action-diagnostics" / f"action-{failed['action_id']}-failure.json"
+    if not diagnostic_path.is_file():
+        raise ConfigurationError("失败父 run 缺少动作诊断。")
+    outputs_sha256 = stop.get("action_outputs_sha256")
+    action_outputs: dict[str, Any] | None = None
+    assertions_root = _assertions_root_for_baseline(campaign_dir, candidate_id, baseline)
+    index_path = assertions_root / EVALUATION_RUN_FILENAME
+    if outputs_sha256 is not None:
+        try:
+            binding = codex_upgrade_supervisor.read_action_output_binding(run_dir, str(failed["action_id"]))
+        except codex_upgrade_supervisor.SupervisorError as error:
+            raise ConfigurationError(f"失败父 run 的动作输出绑定无法读取：{error}") from error
+        if binding["binding_sha256"] != outputs_sha256:
+            raise ConfigurationError("stop-receipt 的 action_outputs_sha256 与动作输出绑定文件不一致。")
+        index_relative = index_path.relative_to(campaign_dir).as_posix()
+        checkpoints_relative = (assertions_root / EVALUATION_CHECKPOINTS_DIRNAME).relative_to(campaign_dir).as_posix()
+        items = {item["path"]: item for item in binding["bindings"]}
+        run_item = items.get(index_relative)
+        head_item = items.get(checkpoints_relative)
+        action_outputs = {
+            "path": str(run_dir / "action-outputs" / f"{failed['action_id']}.json"),
+            "sha256": file_sha256(run_dir / "action-outputs" / f"{failed['action_id']}.json"),
+            "evaluation_run": (
+                {"path": index_relative, "sha256": str(run_item["sha256"])}
+                if run_item is not None and run_item["exists"] and run_item["sha256"] is not None
+                else None
+            ),
+            "checkpoint_head_sha256": (
+                str(head_item["sha256"]) if head_item is not None and head_item["sha256"] is not None else None
+            ),
+        }
+    if failure_source == "offline-compare-failed":
+        reuse_authority = "none"
+    elif action_outputs is not None and action_outputs["evaluation_run"] is not None:
+        reuse_authority = "anchored"
+    else:
+        reuse_authority = "none"
+    evaluation_run_binding: dict[str, Any] | None = None
+    evaluation_run: dict[str, Any] | None = None
+    failed_step: str
+    scope: dict[str, Any] = {"failed_rules": [], "failed_checks": [], "jobs": [], "rules": [], "official_refs": []}
+    admissible = ["approval-inputs", "candidate-source", "evaluator-defect"]
+    if failure_source == "assertion-failed":
+        if index_path.is_file() and not index_path.is_symlink():
+            try:
+                evaluation_run = codex_upgrade_vc_artifacts.validate_evaluation_run(_read_json(index_path, "evaluation-run.json"))
+            except codex_upgrade_vc_artifacts.VCArtifactError as error:
+                raise ConfigurationError(f"evaluation-run.json 无法校验：{error}") from error
+        elif baseline == 0:
+            evaluation_run = _derive_b0_evaluation_run(campaign_dir, manifest, candidate_id, revision, classification, rules)
+            ensure_private_directory(assertions_root, campaign_dir)
+            _secure_write_json_once(index_path, evaluation_run)
+            reuse_authority = "none"
+        else:
+            raise ConfigurationError(
+                f"评估基线 b{baseline} 的断言批次未落 evaluation-run.json（builder 未到批次结束），"
+                "请先同基线逐字重派该批次。"
+            )
+        if action_outputs is not None and action_outputs["evaluation_run"] is not None and (
+            action_outputs["evaluation_run"]["sha256"] != file_sha256(index_path)
+        ):
+            raise ConfigurationError("动作输出绑定记录的 evaluation-run 摘要与当前文件不一致。")
+        if evaluation_run["derived"]:
+            reuse_authority = "none"
+        evaluation_run_binding = {
+            "path": index_path.relative_to(campaign_dir).as_posix(),
+            "sha256": file_sha256(index_path),
+            "derived": bool(evaluation_run["derived"]),
+        }
+        scope, failed_step = _evaluation_failure_scope(campaign_dir, candidate, attempt, evaluation_run, assertions_root)
+        admissible.append("transient-environment")
+    elif failure_source == "offline-compare-failed":
+        failed_step = "compare"
+    else:
+        failed_step = "acceptance"
+        gates_root = _stage_write_target(campaign_dir, candidate_id, baseline, "accept").parent / "attempts"
+        if gates_root.is_dir():
+            for attempt_dir in sorted(gates_root.iterdir()):
+                result_path = attempt_dir / "result.json"
+                if result_path.is_file() and _read_json(result_path, "accept attempt 结果").get("failed_gates"):
+                    raise ConfigurationError(
+                        "accept 因 failed_gates 非零退出，不是本合同的事实；请按指南 4.5.6 补跑外部门禁。"
+                    )
+        if action_outputs is not None and action_outputs["evaluation_run"] is not None and index_path.is_file():
+            evaluation_run_binding = {
+                "path": index_path.relative_to(campaign_dir).as_posix(),
+                "sha256": file_sha256(index_path),
+                "derived": False,
+            }
+    frozen_digests = failed["inner_manifest"].get("evaluator_digests")
+    if not isinstance(frozen_digests, Mapping):
+        raise ConfigurationError("失败父 run 的清单没有冻结 evaluator_digests（非 v3 批次），不能用 evaluation-recover。")
+    try:
+        current_digests = codex_upgrade_tool_identity_policy.evaluator_dependency_digests()
+    except codex_upgrade_tool_identity_policy.ToolIdentityPolicyError as error:
+        raise ConfigurationError(f"evaluator 依赖摘要无法计算：{error}") from error
+    return {
+        "failed": failed,
+        "failure_source": failure_source,
+        "reuse_authority": reuse_authority,
+        "failed_step": failed_step,
+        "failed_run": {
+            "run_id": str(failed["run_id"]),
+            "run_dir": str(run_dir),
+            "manifest_sha256": file_sha256(run_dir / "campaign-run-manifest.json"),
+            "state_sha256": file_sha256(run_dir / "state.json"),
+            "stop_receipt_sha256": file_sha256(run_dir / "stop-receipt.json"),
+            "action_id": str(failed["action_id"]),
+            "action_diagnostic_sha256": file_sha256(diagnostic_path),
+            "action_outputs_sha256": outputs_sha256,
+        },
+        "action_outputs": action_outputs,
+        "evaluation_run": evaluation_run_binding,
+        "evaluation_run_document": evaluation_run,
+        "failure_scope": scope,
+        "failed_evaluator_digests": {field: str(frozen_digests[field]) for field in codex_upgrade_vc_artifacts.EVALUATOR_DIGEST_FIELDS},
+        "current_evaluator_digests": current_digests,
+        "admissible_classes": sorted(admissible),
+    }
+
+
+def _evaluation_defect_admission(
+    arguments: argparse.Namespace,
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    facts: Mapping[str, Any],
+) -> dict[str, Any]:
+    """evaluator-defect 准入：修复提交＋部署收据（passed、wire／policy 等于冻结值）、四项摘要至少一项变化且覆盖缺陷项。"""
+
+    fix_commit = getattr(arguments, "fix_commit", None)
+    receipt_path = getattr(arguments, "deployment_receipt", None)
+    if not isinstance(fix_commit, str) or not re.fullmatch(r"^[0-9a-f]{40}$", fix_commit):
+        raise ConfigurationError("evaluator-defect 必须以 --fix-commit 给出完整 40 位修复提交。")
+    if receipt_path is None or not Path(receipt_path).is_absolute() or Path(receipt_path).is_symlink() or not Path(receipt_path).is_file():
+        raise ConfigurationError("evaluator-defect 必须以 --deployment-receipt 给出可信绝对路径的部署收据。")
+    receipt = _read_json(Path(receipt_path), "部署收据")
+    if receipt.get("status") != "passed":
+        raise ConfigurationError("部署收据 status 不是 passed。")
+    frozen = manifest.get("tool_identity") if isinstance(manifest.get("tool_identity"), Mapping) else {}
+    for field in ("wire_producer_sha256", "policy_sha256"):
+        frozen_value = frozen.get(field)
+        if frozen_value is None or receipt.get(field) != frozen_value:
+            raise ConfigurationError(f"部署收据的 {field} 与 Campaign 冻结值不一致或缺失。")
+    # 部署收据必须就是当前运行工具树的那一份：五摘要等于当前受管身份（修复已部署且正在被使用）。
+    current = _tool_identity(include_git=False)
+    for field, current_field in (
+        ("tool_files_sha256", "files_sha256"),
+        ("policy_sha256", "policy_sha256"),
+        ("wire_producer_sha256", "wire_producer_sha256"),
+        ("evidence_semantics_sha256", "evidence_semantics_sha256"),
+        ("control_sha256", "control_sha256"),
+    ):
+        if receipt.get(field) != current.get(current_field):
+            raise ConfigurationError(f"部署收据的 {field} 不等于当前受管工具树身份；修复尚未部署到当前树。")
+    changed = sorted(
+        field
+        for field in codex_upgrade_vc_artifacts.EVALUATOR_DIGEST_FIELDS
+        if facts["current_evaluator_digests"][field] != facts["failed_evaluator_digests"][field]
+    )
+    if not changed:
+        raise ConfigurationError("evaluator 四项摘要相对失败批次没有任何变化，不能裁定 evaluator-defect。")
+    defect_items = EVALUATION_DEFECT_ITEMS[str(facts["failure_source"])]
+    if not any(item in changed for item in defect_items):
+        raise ConfigurationError(
+            f"变化项 {changed} 未覆盖失败来源 {facts['failure_source']} 声明的缺陷项 {list(defect_items)}。"
+        )
+    return {
+        "fix_commit": fix_commit,
+        "deployment_receipt": {"path": str(Path(receipt_path).resolve(strict=True)), "sha256": file_sha256(Path(receipt_path))},
+        "changed_items": changed,
+    }
+
+
+def _verify_failed_run_reconciled(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    ledger_dir: Path,
+    failed: Mapping[str, Any],
+    *,
+    head: Mapping[str, Any],
+) -> dict[str, Any]:
+    """apply 的账本前提：失败父 run 已由 reconcile-supervisor-run 对账入账且 receipt_passed 存在。"""
+
+    operations = head.get("operations", {})
+    try:
+        reconciled = codex_upgrade_supervisor.verify_supervisor_run_reconciliation_binding(
+            campaign_dir,
+            campaign_id=str(manifest["campaign_id"]),
+            run_id=str(failed["run_id"]),
+            phase=str(failed["phase"]),
+            batch_sequence=int(failed["batch_sequence"]),
+            batch_sha256=str(failed["batch_sha256"]),
+            label="evaluation-recover",
+        )
+    except codex_upgrade_supervisor.SupervisorError as error:
+        raise ConfigurationError(str(error)) from error
+    if reconciled["operation_id"] not in operations:
+        raise ConfigurationError(
+            f"失败父 run {failed['run_id']} 尚未对账入账；先执行 reconcile-supervisor-run。"
+        )
+    events = codex_upgrade_timing_ledger._load_events(ledger_dir)
+    expected_event_id = f"reconcile-run-passed-{failed['run_id']}"
+    matches = [event for event, _raw in events if event.get("event_id") == expected_event_id]
+    if len(matches) != 1 or matches[0].get("event_type") != "receipt_passed":
+        raise ConfigurationError(
+            f"失败父 run {failed['run_id']} 的 receipt_passed 事件不存在或不唯一；对账尚未恢复账本。"
+        )
+    return reconciled
+
+
+def evaluation_recover(arguments: argparse.Namespace) -> dict[str, Any]:
+    """evaluation-recover preview／apply／abandon：候选证据封存后离线评估失败的分类与局部恢复（零请求）。
+
+    preview：admission → 候选属当前 revision → 当前基线与失败父 run 定位 → 失败来源／复用授权／
+    failure-scope → 诊断草案（绑定总账 head）→ review_sha256；不落盘。
+    apply：复验 review_sha256 → 账本 active 且失败 run 已对账（receipt_passed）→ 类别准入 →
+    ① diagnosis.json＋recovery.json＋PREPARED → ② outbox 根因事件（请求 0）→ 推总账 → 二次判定
+    （停线即现有停线合同，基线停在 prepared）→ ③ AUTHORIZATION → ④ COMMIT（stage_sources）→
+    ⑤ 账本 evaluation_baseline。每步 write-once 幂等，续作收敛。
+    abandon：未 COMMIT 的 PREPARED 基线显式作废（编号不复用）。
+    """
+
+    from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+    action = str(getattr(arguments, "recover_action", ""))
+    if action not in {"preview", "apply", "abandon"}:
+        raise ConfigurationError("evaluation-recover 只接受 preview、apply 或 abandon。")
+    campaign_dir = Path(arguments.campaign_dir)
+    manifest = _require_formal_campaign(campaign_dir)
+    if not _requires_complete_vc_artifacts(manifest):
+        raise ConfigurationError("evaluation-recover 只用于 0.154.0 起的完整 VC 链 Campaign。")
+    candidate_id = str(arguments.candidate_id)
+    if not SAFE_ID_RE.fullmatch(candidate_id):
+        raise ConfigurationError("--candidate-id 格式非法。")
+    reviewer = str(getattr(arguments, "reviewer", "") or "").strip()
+    if not reviewer:
+        raise ConfigurationError("--reviewer 不能为空。")
+    approve_sha256 = getattr(arguments, "approve_sha256", None)
+    root_cause_class = getattr(arguments, "root_cause_class", None)
+    if action == "apply":
+        if not (isinstance(approve_sha256, str) and SHA256_RE.fullmatch(approve_sha256)):
+            raise ConfigurationError("apply 必须给出 preview 输出的 --approve-sha256。")
+        if root_cause_class not in codex_upgrade_vc_artifacts.ROOT_CAUSE_CLASSES:
+            raise ConfigurationError("apply 必须以 --root-cause-class 给出人工裁定的类别。")
+    admission = _assert_revision_admission(campaign_dir, manifest, command=EVALUATION_RECOVER_COMMAND)
+    ledger_dir = _campaign_timing_ledger_dir(campaign_dir, manifest)
+    campaign_root = campaign_dir.resolve(strict=True)
+    try:
+        return _evaluation_recover_locked(
+            arguments, action, campaign_dir, campaign_root, manifest, candidate_id, reviewer, approve_sha256, root_cause_class, admission, ledger_dir, reconciler
+        )
+    except codex_upgrade_vc_artifacts.VCArtifactError as error:
+        raise ConfigurationError(f"评估基线制品非法：{error}") from error
+
+
+def _evaluation_recover_locked(
+    arguments: argparse.Namespace,
+    action: str,
+    campaign_dir: Path,
+    campaign_root: Path,
+    manifest: dict[str, Any],
+    candidate_id: str,
+    reviewer: str,
+    approve_sha256: Any,
+    root_cause_class: Any,
+    admission: dict[str, Any] | None,
+    ledger_dir: Path,
+    reconciler: Any,
+) -> dict[str, Any]:
+    with _campaign_lock(campaign_dir):
+        summary = codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)
+        status = str(summary.get("status"))
+        allowed = {"active", "recovery_required"} if action == "preview" else {"active"}
+        if status not in allowed:
+            raise ConfigurationError(
+                f"evaluation-recover {action} 拒绝：账本状态 {status}"
+                + ("；先执行 reconcile-supervisor-run 使账本回到 active" if status == "recovery_required" else "")
+                + "。"
+            )
+        revision, record = _current_candidate_revision_record(campaign_dir, manifest)
+        if revision is None:
+            raise ConfigurationError("没有 active 候选 revision。")
+        current_candidate = record["candidate_id"] if record is not None else _implicit_r1_candidate_id(campaign_dir, manifest)
+        if current_candidate != candidate_id:
+            raise ConfigurationError(
+                f"候选 {candidate_id} 不是当前 revision r{revision} 的候选（当前 {current_candidate}）。"
+            )
+        current_baseline, current_commit = _current_evaluation_baseline(campaign_dir, candidate_id)
+        states = _evaluation_baseline_states(campaign_dir, candidate_id)
+        # 续作对象：PREPARED 且未 ABANDON，且尚未成为当前基线（无 COMMIT，或 COMMIT 已写但账本未引用＝E5）。
+        pending = sorted(
+            number
+            for number, flags in states.items()
+            if flags["prepared"] and not flags["abandon"] and (not flags["commit"] or number > current_baseline)
+        )
+        if action == "abandon":
+            abandonable = [number for number in pending if not states[number]["commit"]]
+            if not abandonable:
+                raise ConfigurationError("没有未 COMMIT 的 PREPARED 评估基线可作废。")
+            number = abandonable[-1]
+            baseline_dir = _evaluation_baseline_dir(campaign_dir, candidate_id, number)
+            recovery = codex_upgrade_vc_artifacts.validate_evaluation_recovery(
+                _read_json(baseline_dir / EVALUATION_BASELINE_RECOVERY_FILENAME, "评估基线 recovery")
+            )
+            reason = str(getattr(arguments, "reason", "") or "").strip() or "operator-abandoned"
+            abandon = codex_upgrade_vc_artifacts.build_evaluation_baseline_abandon(
+                campaign_id=str(manifest["campaign_id"]),
+                candidate_id=candidate_id,
+                candidate_revision=revision,
+                evaluation_baseline=number,
+                recovery_sha256=str(recovery["recovery_sha256"]),
+                reason=reason,
+                abandoned_at_utc=_utc_now(),
+            )
+            _secure_write_json_once(baseline_dir / EVALUATION_BASELINE_ABANDON_FILENAME, abandon)
+            return {
+                "status": "abandoned",
+                "campaign_id": manifest["campaign_id"],
+                "candidate_id": candidate_id,
+                "evaluation_baseline": number,
+                "abandon_sha256": abandon["abandon_sha256"],
+                "current_evaluation_baseline": current_baseline,
+                "live_request_count": 0,
+            }
+        candidate = _load_stage_result(campaign_dir, "capture-candidate", candidate_id)
+        if candidate.get("status") != "complete":
+            raise ConfigurationError("当前基线的候选阶段结果不是 complete；封存前的失败走 resume --rerun-failed。")
+        attempt_root, attempt = _capture_stage_attempt_context(
+            campaign_dir, candidate, phase="candidate", candidate_id=candidate_id
+        )
+        classification = _load_stage_result(campaign_dir, "classify")
+        rules = _approved_rules(campaign_dir, manifest, require_approved=True)
+        project_root = reconciler._project_root(campaign_root)
+        plan, head = reconciler._project_facts(project_root)
+        # 续作：已有 PREPARED 未 COMMIT 的基线以其落盘诊断为准（head 绑定的是当时的总账）。
+        resume_number = pending[-1] if pending else None
+        if len(pending) > 1:
+            raise ConfigurationError(f"存在多个未 COMMIT 的 PREPARED 评估基线：{pending}，状态不可信。")
+        facts = _evaluation_failure_diagnosis_facts(
+            campaign_dir, manifest, candidate_id, revision, current_baseline,
+            candidate=candidate, attempt=attempt, classification=classification, rules=rules,
+        )
+        existing_diagnosis: dict[str, Any] | None = None
+        if resume_number is not None:
+            diagnosis_path = _evaluation_baseline_dir(campaign_dir, candidate_id, resume_number) / EVALUATION_BASELINE_DIAGNOSIS_FILENAME
+            existing_diagnosis = codex_upgrade_vc_artifacts.validate_evaluation_failure_diagnosis(
+                _read_json(diagnosis_path, "评估失败诊断")
+            )
+            diagnosis = existing_diagnosis
+        else:
+            try:
+                diagnosis = codex_upgrade_vc_artifacts.build_evaluation_failure_diagnosis(
+                    campaign_id=str(manifest["campaign_id"]),
+                    campaign_manifest_sha256=file_sha256(campaign_dir / "campaign.json"),
+                    candidate_id=candidate_id,
+                    candidate_revision=revision,
+                    evaluation_baseline=current_baseline,
+                    failure_source=facts["failure_source"],
+                    reuse_authority=facts["reuse_authority"],
+                    failed_step=facts["failed_step"],
+                    failed_run=facts["failed_run"],
+                    action_outputs=facts["action_outputs"],
+                    evaluation_run=facts["evaluation_run"],
+                    failure_scope=facts["failure_scope"],
+                    failed_evaluator_digests=facts["failed_evaluator_digests"],
+                    current_evaluator_digests=facts["current_evaluator_digests"],
+                    admissible_classes=facts["admissible_classes"],
+                    project_ledger_head_sequence=int(head["sequence"]),
+                    project_ledger_head_sha256=str(head["head_sha256"]),
+                    reviewer=reviewer,
+                    reviewed_at_utc=_utc_now(),
+                )
+            except codex_upgrade_vc_artifacts.VCArtifactError as error:
+                raise ConfigurationError(f"诊断草案无法生成：{error}") from error
+        review_sha256 = str(diagnosis["review_sha256"])
+        preview_payload = {
+            "status": "preview",
+            "campaign_id": manifest["campaign_id"],
+            "candidate_id": candidate_id,
+            "revision": revision,
+            "current_evaluation_baseline": current_baseline,
+            "pending_baseline": resume_number,
+            "ledger_status": status,
+            "failed_run": facts["failed_run"],
+            "failure_source": facts["failure_source"],
+            "reuse_authority": facts["reuse_authority"],
+            "failed_step": facts["failed_step"],
+            "failure_scope": facts["failure_scope"],
+            "admissible_classes": facts["admissible_classes"],
+            "diagnosis": diagnosis,
+            "review_sha256": review_sha256,
+            "project_ledger": admission,
+            "live_request_count": 0,
+        }
+        if action == "preview":
+            return preview_payload
+        if approve_sha256 != review_sha256:
+            raise ConfigurationError(
+                "apply 的批准摘要与当前草案不一致（总账 head、失败事实或评估摘要已变化），请重新 preview。"
+            )
+        if root_cause_class not in facts["admissible_classes"]:
+            raise ConfigurationError(f"类别 {root_cause_class} 不在本次失败允许的裁定集合 {facts['admissible_classes']} 内。")
+        if root_cause_class == "candidate-source":
+            return {**preview_payload, "status": "redirect", "next_command": f"invalidate-candidate preview --candidate-id {candidate_id}"}
+        if root_cause_class == "approval-inputs":
+            return {**preview_payload, "status": "redirect", "next_command": "close-campaign-ledger（显式停线）后从 VC-2 建后继 Campaign"}
+        if root_cause_class == "transient-environment":
+            raise ConfigurationError("transient-environment 的准入与 attempt 恢复段在第 3 批 M2 实现；本里程碑不接受。")
+        _verify_failed_run_reconciled(campaign_dir, manifest, ledger_dir, facts["failed"], head=head)
+        defect = _evaluation_defect_admission(arguments, campaign_dir, manifest, facts)
+        # ① 编号与 recovery.json／PREPARED（write-once；续作即校验一致）。
+        number = resume_number if resume_number is not None else (max(states) + 1 if states else 1)
+        if number <= current_baseline:
+            raise ConfigurationError("新评估基线编号必须大于当前基线。")
+        baseline_dir = _evaluation_baseline_dir(campaign_dir, candidate_id, number)
+        ensure_private_directory(baseline_dir.parent, campaign_dir)
+        ensure_private_directory(baseline_dir, campaign_dir)
+        diagnosis_path = baseline_dir / EVALUATION_BASELINE_DIAGNOSIS_FILENAME
+        if existing_diagnosis is None:
+            _secure_write_json_once(diagnosis_path, diagnosis)
+        # 执行集合（三稿 3.2.5）：前序 fail／pending ∪ 逐规则依赖变化。evaluator-only 下投影不变，
+        # checker／builder 任一变化即全部规则的依赖摘要变化 → 全部重跑；只有 reader 变化时只重跑
+        # 非 pass 行，其余引用复用（须 anchored）。builder 执行时仍按判据逐条复核，这里是冻结的预计。
+        evaluation_run_document = facts["evaluation_run_document"]
+        all_rules = sorted(rules)
+        if (
+            facts["reuse_authority"] != "anchored"
+            or evaluation_run_document is None
+            or {"checker_sha256", "builder_sha256"} & set(defect["changed_items"])
+        ):
+            execute_rules = all_rules
+            reuse_rules: list[str] = []
+        else:
+            execute_rules = sorted(
+                {str(row["rule"]) for row in evaluation_run_document["rules"] if row["status"] != "pass"}
+                | (set(all_rules) - {str(row["rule"]) for row in evaluation_run_document["rules"]})
+            )
+            reuse_rules = sorted(set(all_rules) - set(execute_rules))
+        try:
+            root_cause_id = codex_upgrade_root_cause.structured_root_cause(
+                component="evaluator",
+                stable_error_code="evaluation.rule-failed",
+                failed_step=str(facts["failed_step"]),
+                stable_dimensions={"phase": "VC-5"},
+            )
+        except codex_upgrade_root_cause.RootCauseError as error:
+            raise ConfigurationError(f"根因编码失败：{error}") from error
+        recovery_path = baseline_dir / EVALUATION_BASELINE_RECOVERY_FILENAME
+        if recovery_path.is_file():
+            recovery = codex_upgrade_vc_artifacts.validate_evaluation_recovery(_read_json(recovery_path, "评估基线 recovery"))
+        else:
+            try:
+                recovery = codex_upgrade_vc_artifacts.build_evaluation_recovery(
+                    campaign_id=str(manifest["campaign_id"]),
+                    candidate_id=candidate_id,
+                    candidate_revision=revision,
+                    evaluation_baseline=number,
+                    kind="evaluator-only",
+                    diagnosis={"path": diagnosis_path.relative_to(campaign_dir).as_posix(), "sha256": file_sha256(diagnosis_path)},
+                    failure_source=facts["failure_source"],
+                    reuse_authority=facts["reuse_authority"],
+                    root_cause_class="evaluator-defect",
+                    root_cause_id=root_cause_id,
+                    failed_step=str(facts["failed_step"]),
+                    previous_baseline=current_baseline,
+                    previous_baseline_commit_sha256=(str(current_commit["commit_sha256"]) if current_commit is not None else None),
+                    execute_rules=execute_rules,
+                    reuse_rules=reuse_rules,
+                    execute_jobs=[],
+                    reuse_jobs=sorted(str(result.get("id")) for result in attempt.get("results", []) if isinstance(result, Mapping) and isinstance(result.get("id"), str)),
+                    attempt_id=None,
+                    recovery_revision=None,
+                    fix_commit=defect["fix_commit"],
+                    deployment_receipt=defect["deployment_receipt"],
+                    failed_evaluator_digests=facts["failed_evaluator_digests"],
+                    current_evaluator_digests=facts["current_evaluator_digests"],
+                    reviewer=reviewer,
+                    approved_at_utc=_utc_now(),
+                )
+            except codex_upgrade_vc_artifacts.VCArtifactError as error:
+                raise ConfigurationError(f"recovery.json 无法生成：{error}") from error
+            _secure_write_json_once(recovery_path, recovery)
+        prepared_path = baseline_dir / EVALUATION_BASELINE_PREPARED_FILENAME
+        if prepared_path.is_file():
+            prepared = codex_upgrade_vc_artifacts.validate_evaluation_baseline_prepared(_read_json(prepared_path, "评估基线 PREPARED"))
+            if prepared["recovery_sha256"] != recovery["recovery_sha256"]:
+                raise ConfigurationError("PREPARED 绑定的 recovery 摘要与 recovery.json 不一致。")
+        else:
+            prepared = codex_upgrade_vc_artifacts.build_evaluation_baseline_prepared(
+                campaign_id=str(manifest["campaign_id"]),
+                candidate_id=candidate_id,
+                candidate_revision=revision,
+                evaluation_baseline=number,
+                recovery_sha256=str(recovery["recovery_sha256"]),
+                project_ledger_head_sequence=int(head["sequence"]),
+                project_ledger_head_sha256=str(head["head_sha256"]),
+                prepared_at_utc=_utc_now(),
+            )
+            _secure_write_json_once(prepared_path, prepared)
+        # ② outbox 根因事件（请求 0）→ 推总账 → 重放 → 二次判定。
+        receipt_binding = reconciler._binding(campaign_root, recovery_path, "reconciliation")
+        cause = codex_upgrade_root_cause.describe_root_cause(
+            component="evaluator",
+            stable_error_code="evaluation.rule-failed",
+            failed_step=str(facts["failed_step"]),
+            stable_dimensions={"phase": "VC-5"},
+        )
+        operation_id = f"evaluation-recover:{candidate_id}:r{revision}:b{number}"
+        try:
+            batch = reconciler._commit_batch(
+                campaign_root,
+                operation_id=operation_id,
+                event_type="reconciliation_committed",
+                payload={
+                    "campaign_id": str(manifest["campaign_id"]),
+                    "subject_kind": "evaluation_baseline",
+                    "subject_id": f"{candidate_id}:r{revision}:b{number}",
+                    "phase": "VC-5",
+                    "request": dict(reconciler.ZERO_REQUEST_PART),
+                    "root_cause": {
+                        "root_cause_id": cause["root_cause_id"],
+                        "stable_error_code": cause["stable_error_code"],
+                        "failed_step": cause["failed_step"],
+                        "stable_dimensions": cause["stable_dimensions"],
+                        "component": cause["component"],
+                    },
+                    "reconciliation_receipt_sha256": receipt_binding["sha256"],
+                    "attempt_failed_event_sha256": None,
+                },
+                source={"kind": "evaluation_baseline", "sha256": receipt_binding["sha256"]},
+                receipt_bindings=[receipt_binding],
+            )
+            observed = _utc_now()
+            pushed, head_after = reconciler._push_and_replay(project_root, campaign_root, now=observed)
+            identity = reconciler._identity_facts(campaign_root, manifest, reconciler._current_identity())
+            ledger_facts = reconciler._ledger_facts(ledger_dir, now=observed)
+            contamination = _campaign_contamination_records(campaign_dir, _manifest=manifest)
+            decision = reconciler._decide(
+                head=head_after,
+                plan=plan,
+                ledger=ledger_facts,
+                identity=identity,
+                environment_status="contaminated" if contamination else "restored",
+                campaign_deadline_at_utc=_campaign_plan_deadline(campaign_dir),
+                root_cause_id=cause["root_cause_id"],
+                request_status="resolved",
+                now=observed,
+            )
+        except reconciler.ReconcilerError as error:
+            raise ConfigurationError(f"评估基线根因入账失败：{error}") from error
+        result: dict[str, Any] = {
+            "status": "applied",
+            "campaign_id": manifest["campaign_id"],
+            "candidate_id": candidate_id,
+            "revision": revision,
+            "evaluation_baseline": number,
+            "kind": "evaluator-only",
+            "recovery_sha256": recovery["recovery_sha256"],
+            "execute_rules": execute_rules,
+            "reuse_rules": reuse_rules,
+            "root_cause_id": cause["root_cause_id"],
+            "batch": batch,
+            "project_push": pushed,
+            "decision": decision,
+            "live_request_count": 0,
+        }
+        if decision["decision"] != reconciler.DECISION_RECOVERABLE:
+            try:
+                stop = reconciler._permanent_stop(
+                    campaign_root,
+                    manifest,
+                    ledger_dir,
+                    subject_id=f"evaluation-baseline-{candidate_id}-r{revision}-b{number}",
+                    root_cause_id=cause["root_cause_id"],
+                    terminal_reason=str(decision["terminal_reason"]),
+                    receipt_bindings=[receipt_binding],
+                    ledger_receipts=[],
+                    live_request_count=0,
+                    reconciliation_receipt_sha256=receipt_binding["sha256"],
+                    ledger_facts=ledger_facts,
+                )
+                pushed_terminal, head_terminal = reconciler._push_and_replay(project_root, campaign_root, now=observed)
+            except reconciler.ReconcilerError as error:
+                raise ConfigurationError(f"评估基线二次判定停线收口失败：{error}") from error
+            result["status"] = "permanent_stop"
+            result["permanent_stop"] = {**stop, "project_push": pushed_terminal, "head_sha256": head_terminal.get("head_sha256")}
+            result["next_command"] = stop["next_action"]
+            return result
+        # ③ AUTHORIZATION（绑定 outbox 事件摘要、head 与判定）。
+        authorization_path = baseline_dir / EVALUATION_BASELINE_AUTHORIZATION_FILENAME
+        batch_commit_path = Path(str(batch["batch_dir"])) / "COMMIT"
+        if authorization_path.is_file():
+            authorization = codex_upgrade_vc_artifacts.validate_evaluation_baseline_authorization(
+                _read_json(authorization_path, "评估基线 AUTHORIZATION")
+            )
+            if authorization["recovery_sha256"] != recovery["recovery_sha256"]:
+                raise ConfigurationError("AUTHORIZATION 绑定的 recovery 摘要与 recovery.json 不一致。")
+        else:
+            authorization = codex_upgrade_vc_artifacts.build_evaluation_baseline_authorization(
+                campaign_id=str(manifest["campaign_id"]),
+                candidate_id=candidate_id,
+                candidate_revision=revision,
+                evaluation_baseline=number,
+                recovery_sha256=str(recovery["recovery_sha256"]),
+                ledger_operation_id=operation_id,
+                ledger_event_sha256=file_sha256(batch_commit_path),
+                project_ledger_head_sequence=int(head_after["sequence"]),
+                project_ledger_head_sha256=str(head_after["head_sha256"]),
+                root_cause_id=cause["root_cause_id"],
+                root_cause_count=int(decision.get("root_cause_count", 0)),
+                authorized_at_utc=_utc_now(),
+            )
+            _secure_write_json_once(authorization_path, authorization)
+        # ④ COMMIT（stage_sources：capture 恒 reused；compare 按 compare-reader 是否变化；断言／accept local）。
+        commit_path = baseline_dir / EVALUATION_BASELINE_COMMIT_FILENAME
+        if commit_path.is_file():
+            commit = codex_upgrade_vc_artifacts.validate_evaluation_baseline_commit(_read_json(commit_path, "评估基线 COMMIT"))
+        else:
+            capture_source = _stage_read_source(campaign_dir, candidate_id, current_baseline, "capture-candidate")
+            compare_source = _stage_read_source(campaign_dir, candidate_id, current_baseline, "compare")
+            stage_sources: dict[str, Any] = {
+                "capture-candidate": {
+                    "source": "reused",
+                    "baseline": int(capture_source["baseline_of_record"]),
+                    "path": Path(capture_source["path"]).relative_to(campaign_dir).as_posix(),
+                    "sha256": str(capture_source["sha256"]),
+                },
+                "assertions": {"source": "local", "target": f"assertions/{candidate_id}/revisions/b{number}"},
+                "accept": {"source": "local", "target": f"acceptance/{candidate_id}/revisions/b{number}/result.json"},
+            }
+            if "compare_reader_sha256" in defect["changed_items"] or compare_source["status"] != "complete":
+                stage_sources["compare"] = {"source": "local", "target": f"comparisons/{candidate_id}/revisions/b{number}/result.json"}
+            else:
+                stage_sources["compare"] = {
+                    "source": "reused",
+                    "baseline": int(compare_source["baseline_of_record"]),
+                    "path": Path(compare_source["path"]).relative_to(campaign_dir).as_posix(),
+                    "sha256": str(compare_source["sha256"]),
+                }
+            commit = codex_upgrade_vc_artifacts.build_evaluation_baseline_commit(
+                campaign_id=str(manifest["campaign_id"]),
+                candidate_id=candidate_id,
+                candidate_revision=revision,
+                evaluation_baseline=number,
+                kind="evaluator-only",
+                recovery_sha256=str(recovery["recovery_sha256"]),
+                authorization_sha256=str(authorization["authorization_sha256"]),
+                stage_sources=stage_sources,
+                committed_at_utc=_utc_now(),
+            )
+            _secure_write_json_once(commit_path, commit)
+        # ⑤ 账本 evaluation_baseline（幂等：最后一条已引用本 COMMIT 即 appended=false）。
+        last = _ledger_last_event_of_type(ledger_dir, "evaluation_baseline")
+        if (
+            last is not None
+            and last[0].get("candidate_id") == candidate_id
+            and last[0].get("evaluation_baseline") == number
+            and last[0].get("baseline_commit_sha256") == commit["commit_sha256"]
+        ):
+            result["ledger_event"] = {"event_type": "evaluation_baseline", "appended": False}
+        else:
+            try:
+                appended = codex_upgrade_timing_ledger.append_event(
+                    ledger_dir,
+                    event_id=f"evaluation-baseline-{candidate_id}-r{revision}-b{number}",
+                    phase="VC-5",
+                    event_type="evaluation_baseline",
+                    revision=revision,
+                    candidate_id=candidate_id,
+                    evaluation_baseline=number,
+                    baseline_commit_sha256=str(commit["commit_sha256"]),
+                    baseline_kind="evaluator-only",
+                    next_action=f"compile-and-run-vc-batch --phase VC-5（评估基线 b{number}）",
+                )
+            except codex_upgrade_timing_ledger.TimingLedgerError as error:
+                raise ConfigurationError(f"UpgradeTimingLedger 拒绝 evaluation_baseline：{error}") from error
+            result["ledger_event"] = {
+                "event_type": "evaluation_baseline",
+                "appended": True,
+                "head_sequence": appended["head_sequence"],
+                "head_sha256": appended["head_sha256"],
+            }
+        result["commit_sha256"] = commit["commit_sha256"]
+        result["stage_sources"] = commit["stage_sources"]
+        result["next_command"] = f"compile-and-run-vc-batch --phase VC-5（评估基线 b{number}：断言 builder --evaluation-baseline {number}"
+        if reuse_rules:
+            result["next_command"] += f" --reuse-from assertions/{candidate_id}[/revisions/b{current_baseline}]/evaluation-run.json --reuse-authority anchored"
+        result["next_command"] += "）"
         return result
 
 
@@ -23799,12 +24930,12 @@ def _control_replacement_supervisor_audit(run_dir: Path) -> dict[str, Any]:
     events_path = resolved / "events.ndjson"
     minute_path = resolved / "minute-ledger.ndjson"
     state = _read_json(state_path, "控制替代父监督器状态")
-    stop = _read_json(stop_path, "控制替代父监督器停线收据")
-    unsigned_stop = dict(stop)
-    stop_digest = unsigned_stop.pop("receipt_sha256", None)
-    expected_stop_digest = codex_upgrade_supervisor._sha256(
-        codex_upgrade_supervisor._canonical(unsigned_stop)
-    )
+    if stop_path.is_symlink() or not stop_path.is_file():
+        raise ConfigurationError("控制替代父监督器停线收据不存在或不可信。")
+    try:
+        stop = codex_upgrade_supervisor.read_stop_receipt(resolved)
+    except codex_upgrade_supervisor.SupervisorError as error:
+        raise ConfigurationError(f"控制替代父监督器停线收据无法校验：{error}") from error
     terminal_states = {"stopped", "failed"}
     if (
         audit.get("audit_incomplete") is not False
@@ -23813,10 +24944,6 @@ def _control_replacement_supervisor_audit(run_dir: Path) -> dict[str, Any]:
         or state.get("state") != audit.get("state")
         or state.get("state") not in terminal_states
         or not _is_rfc3339_timestamp(state.get("terminal_at_utc"))
-        or stop.get("schema_version")
-        != codex_upgrade_supervisor.STOP_SCHEMA
-        or not SHA256_RE.fullmatch(str(stop_digest))
-        or expected_stop_digest != stop_digest
         or stop.get("campaign_id") != state.get("campaign_id")
         or stop.get("phase") != state.get("phase")
         or stop.get("owner_pid") != state.get("owner_pid")
@@ -27177,33 +28304,239 @@ def _require_formal_campaign(
     return current
 
 
-def _stage_path(
+_STAGE_ALIASES = {
+    "official": "capture-official",
+    "candidate": "capture-candidate",
+    "classification": "classify",
+    "comparison": "compare",
+    "acceptance": "accept",
+}
+_CANDIDATE_STAGE_ROOTS = {
+    "capture-candidate": "candidates",
+    "compare": "comparisons",
+    "accept": "acceptance",
+}
+
+
+def _legacy_stage_path(
     campaign_dir: Path,
     stage: str,
     candidate_id: str | None = None,
 ) -> tuple[str, Path]:
-    aliases = {
-        "official": "capture-official",
-        "candidate": "capture-candidate",
-        "classification": "classify",
-        "comparison": "compare",
-        "acceptance": "accept",
-    }
-    canonical = aliases.get(stage, stage)
+    """改造 5 之前的固定阶段路径（b0 原路径）；候选级三阶段按当前基线解析见 ``_stage_path``。"""
+
+    canonical = _STAGE_ALIASES.get(stage, stage)
     if canonical == "capture-official":
         return canonical, campaign_dir / "official" / "result.json"
     if canonical == "classify":
         return canonical, campaign_dir / "classification" / "result.json"
-    if canonical in {"capture-candidate", "compare", "accept"}:
+    if canonical in _CANDIDATE_STAGE_ROOTS:
         if not candidate_id or not SAFE_ID_RE.fullmatch(candidate_id):
             raise ConfigurationError(f"{canonical} 必须提供合法 candidate-id。")
-        roots = {
-            "capture-candidate": "candidates",
-            "compare": "comparisons",
-            "accept": "acceptance",
-        }
-        return canonical, campaign_dir / roots[canonical] / candidate_id / "result.json"
+        return canonical, campaign_dir / _CANDIDATE_STAGE_ROOTS[canonical] / candidate_id / "result.json"
     raise ConfigurationError(f"未知 Campaign 阶段：{stage}")
+
+
+# ---------------------------------------------------------------------------
+# 改造 5：评估基线 b<K>——当前基线判定、stage_sources 读写分离
+# ---------------------------------------------------------------------------
+
+EVALUATION_BASELINE_RECOVERY_FILENAME = "recovery.json"
+EVALUATION_BASELINE_PREPARED_FILENAME = "PREPARED"
+EVALUATION_BASELINE_AUTHORIZATION_FILENAME = "AUTHORIZATION"
+EVALUATION_BASELINE_COMMIT_FILENAME = "COMMIT"
+EVALUATION_BASELINE_ABANDON_FILENAME = "ABANDON"
+_EVALUATION_BASELINE_DIR_RE = re.compile(r"^b([1-9][0-9]*)$")
+
+
+def _evaluation_baseline_dir(campaign_dir: Path, candidate_id: str, baseline: int) -> Path:
+    """b<K>（K≥1）的目录；b0 隐含为原路径，没有目录。"""
+
+    if not isinstance(baseline, int) or isinstance(baseline, bool) or baseline < 1:
+        raise ConfigurationError("评估基线编号必须是正整数。")
+    if not candidate_id or not SAFE_ID_RE.fullmatch(candidate_id):
+        raise ConfigurationError("评估基线必须提供合法 candidate-id。")
+    return campaign_dir / "candidates" / candidate_id / "revisions" / f"b{baseline}"
+
+
+def _read_evaluation_baseline_commit(
+    campaign_dir: Path, candidate_id: str, baseline: int
+) -> dict[str, Any]:
+    """读取并校验 b<K>/COMMIT（自摘要、候选与编号身份）。"""
+
+    commit_path = _evaluation_baseline_dir(campaign_dir, candidate_id, baseline) / EVALUATION_BASELINE_COMMIT_FILENAME
+    if commit_path.is_symlink() or not commit_path.is_file():
+        raise ConfigurationError(f"评估基线 b{baseline} 没有 COMMIT。")
+    try:
+        commit = codex_upgrade_vc_artifacts.validate_evaluation_baseline_commit(
+            _read_json(commit_path, f"评估基线 b{baseline} COMMIT")
+        )
+    except codex_upgrade_vc_artifacts.VCArtifactError as error:
+        raise ConfigurationError(f"评估基线 b{baseline} COMMIT 无法校验：{error}") from error
+    if commit["candidate_id"] != candidate_id or commit["evaluation_baseline"] != baseline:
+        raise ConfigurationError(f"评估基线 b{baseline} COMMIT 的候选或编号身份不一致。")
+    return commit
+
+
+def _campaign_ledger_summary_for_baseline(campaign_dir: Path) -> dict[str, Any] | None:
+    """轻量读取 Campaign 绑定的时间账本摘要；无 Campaign／无账本绑定返回 None，账本损坏失败关闭。"""
+
+    manifest_path = campaign_dir / "campaign.json"
+    if manifest_path.is_symlink() or not manifest_path.is_file():
+        return None
+    manifest = _read_json(manifest_path, "Campaign 核心清单")
+    controls = manifest.get("control_receipts")
+    epoch = _load_control_epoch_receipt(campaign_dir, manifest)
+    if isinstance(epoch, Mapping):
+        controls = epoch.get("successor_controls")
+    timing = controls.get("upgrade_timing") if isinstance(controls, Mapping) else None
+    if not isinstance(timing, Mapping) or not isinstance(timing.get("ledger_dir"), str):
+        return None
+    ledger_dir = _campaign_timing_ledger_dir(campaign_dir, manifest)
+    try:
+        return codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)
+    except (OSError, codex_upgrade_timing_ledger.TimingLedgerError) as error:
+        raise ConfigurationError(f"Campaign 时间账本无法重放：{error}") from error
+
+
+def _current_evaluation_baseline(
+    campaign_dir: Path,
+    candidate_id: str,
+) -> tuple[int, dict[str, Any] | None]:
+    """当前评估基线：只由账本最后一条 ``evaluation_baseline`` 事件决定。
+
+    返回 ``(K, COMMIT | None)``：无事件或事件属于其他候选（已作废 revision）恒为 ``(0, None)``；
+    有事件时 ``b<K>/COMMIT`` 必须存在且自摘要等于事件绑定的 ``baseline_commit_sha256``，否则
+    失败关闭。PREPARED／ABANDON 目录不影响当前基线。
+    """
+
+    summary = _campaign_ledger_summary_for_baseline(campaign_dir)
+    if summary is None:
+        return 0, None
+    current = summary.get("current_evaluation_baseline")
+    if not isinstance(current, Mapping) or current.get("candidate_id") != candidate_id:
+        return 0, None
+    baseline = int(current["evaluation_baseline"])
+    commit = _read_evaluation_baseline_commit(campaign_dir, candidate_id, baseline)
+    if commit["commit_sha256"] != current.get("baseline_commit_sha256"):
+        raise ConfigurationError(
+            f"账本引用的评估基线 b{baseline} COMMIT 摘要与目录内 COMMIT 不一致。"
+        )
+    return baseline, commit
+
+
+def _stage_read_source(
+    campaign_dir: Path,
+    candidate_id: str,
+    baseline: int,
+    stage: str,
+) -> dict[str, Any]:
+    """按 ``stage_sources`` 递归解析阶段结果的读来源，直到 local 或 b0。
+
+    返回 ``{baseline_of_record, path, sha256 | None, status: complete | pending}``；``reused``
+    的合法性（更小编号、已 committed、规范解析路径、摘要相等）在每次读取时都校验。
+    """
+
+    canonical = _STAGE_ALIASES.get(stage, stage)
+    if canonical not in codex_upgrade_vc_artifacts.EVALUATION_STAGES:
+        raise ConfigurationError(f"{stage} 不是评估阶段。")
+    if baseline == 0:
+        if canonical == "assertions":
+            path = campaign_dir / "assertions" / candidate_id / "results.json"
+        else:
+            _, path = _legacy_stage_path(campaign_dir, canonical, candidate_id)
+        exists = path.is_file() and not path.is_symlink()
+        return {
+            "baseline_of_record": 0,
+            "path": path,
+            "sha256": file_sha256(path) if exists else None,
+            "status": "complete" if exists else "pending",
+        }
+    commit = _read_evaluation_baseline_commit(campaign_dir, candidate_id, baseline)
+    source = commit["stage_sources"][canonical]
+    if source["source"] == "local":
+        target = campaign_dir / source["target"]
+        if canonical == "assertions":
+            target = target / "results.json"
+        exists = target.is_file() and not target.is_symlink()
+        return {
+            "baseline_of_record": baseline,
+            "path": target,
+            "sha256": file_sha256(target) if exists else None,
+            "status": "complete" if exists else "pending",
+        }
+    reused_baseline = int(source["baseline"])
+    if reused_baseline >= baseline:
+        raise ConfigurationError(f"评估基线 b{baseline} 的 {canonical} 只能引用更小编号的基线。")
+    resolved = _stage_read_source(campaign_dir, candidate_id, reused_baseline, canonical)
+    if resolved["path"] != campaign_dir / source["path"]:
+        raise ConfigurationError(
+            f"评估基线 b{baseline} 的 {canonical} reused 路径不是 b{reused_baseline} 的规范解析结果。"
+        )
+    if resolved["status"] != "complete" or resolved["sha256"] != source["sha256"]:
+        raise ConfigurationError(
+            f"评估基线 b{baseline} 的 {canonical} reused 引用的文件缺失或摘要漂移。"
+        )
+    return resolved
+
+
+def _stage_write_target(
+    campaign_dir: Path,
+    candidate_id: str,
+    baseline: int,
+    stage: str,
+) -> Path:
+    """只返回 local 写目标；b0 为原路径，reused 阶段拒绝写入。"""
+
+    canonical = _STAGE_ALIASES.get(stage, stage)
+    if canonical not in codex_upgrade_vc_artifacts.EVALUATION_STAGES:
+        raise ConfigurationError(f"{stage} 不是评估阶段。")
+    if baseline == 0:
+        if canonical == "assertions":
+            return campaign_dir / "assertions" / candidate_id
+        return _legacy_stage_path(campaign_dir, canonical, candidate_id)[1]
+    commit = _read_evaluation_baseline_commit(campaign_dir, candidate_id, baseline)
+    source = commit["stage_sources"][canonical]
+    if source["source"] != "local":
+        raise ConfigurationError(
+            f"评估基线 b{baseline} 的 {canonical} 阶段引用前序基线（reused），禁止写入。"
+        )
+    return campaign_dir / source["target"]
+
+
+def _assertions_root(campaign_dir: Path, candidate_id: str) -> Path:
+    """当前基线的断言目录（b0：assertions/<cid>/；b≥1：COMMIT 冻结的 local 目标）。"""
+
+    baseline, _commit = _current_evaluation_baseline(campaign_dir, candidate_id)
+    return _stage_write_target(campaign_dir, candidate_id, baseline, "assertions")
+
+
+def _stage_path(
+    campaign_dir: Path,
+    stage: str,
+    candidate_id: str | None = None,
+    *,
+    mode: str = "read",
+) -> tuple[str, Path]:
+    """阶段结果路径。
+
+    Campaign 级阶段（capture-official／classify）路径固定。候选级三阶段（capture-candidate／
+    compare／accept）改造 5 起按当前评估基线解析：``mode="read"`` 走 ``_stage_read_source``
+    （reused 递归到 local 或 b0），``mode="write"`` 走 ``_stage_write_target``（reused 拒绝）。
+    """
+
+    canonical, legacy_path = _legacy_stage_path(campaign_dir, stage, candidate_id)
+    if canonical not in _CANDIDATE_STAGE_ROOTS:
+        return canonical, legacy_path
+    if mode not in {"read", "write"}:
+        raise ConfigurationError("阶段路径解析模式只能是 read 或 write。")
+    assert candidate_id is not None
+    baseline, _commit = _current_evaluation_baseline(campaign_dir, candidate_id)
+    if baseline == 0:
+        return canonical, legacy_path
+    if mode == "write":
+        return canonical, _stage_write_target(campaign_dir, candidate_id, baseline, canonical)
+    return canonical, _stage_read_source(campaign_dir, candidate_id, baseline, canonical)["path"]
 
 
 def _require_file_binding(value: Any, label: str) -> None:
@@ -27632,7 +28965,7 @@ def save_stage_result(
             campaign_dir,
             _successor_manifest,
         )
-    canonical, path = _stage_path(campaign_dir, stage, candidate_id)
+    canonical, path = _stage_path(campaign_dir, stage, candidate_id, mode="write")
     _reject_symlink_components(path.parent, campaign_dir, f"{canonical} 阶段目录")
     if path.exists():
         raise ConfigurationError(f"阶段结果已存在，禁止覆盖：{path}")
@@ -29252,9 +30585,12 @@ def _load_stage_result(
     _skip_evidence_scan: bool = False,
     _historical_manifest_controls: bool = False,
     _verified_campaign_manifest: Mapping[str, Any] | None = None,
+    _baseline: int | None = None,
 ) -> dict[str, Any]:
     # control epoch 的源上下文由外层清单校验触发。重放已写入 epoch 时若在这里
     # 再加载同一清单，会重新进入 control receipt 校验并形成无限递归。
+    # 改造 5：``_baseline`` 显式给出时按该评估基线的 stage_sources 递归解析读来源
+    # （accept 复用行的历史 inventory），否则按当前基线。
     campaign_manifest = _require_formal_campaign(
         campaign_dir,
         (
@@ -29267,6 +30603,9 @@ def _load_stage_result(
         ),
     )
     canonical, path = _stage_path(campaign_dir, stage, candidate_id)
+    if _baseline is not None and canonical in _CANDIDATE_STAGE_ROOTS:
+        assert candidate_id is not None
+        path = Path(_stage_read_source(campaign_dir, candidate_id, _baseline, canonical)["path"])
     _reject_symlink_components(path, campaign_dir, f"{canonical} 阶段结果")
     if not path.is_file() or path.is_symlink():
         raise ConfigurationError(f"阶段尚未封存：{canonical}")
@@ -30574,7 +31913,69 @@ def campaign_status(
     revisions_status = _candidate_revisions_status(campaign_dir, manifest)
     if revisions_status is not None:
         result["candidate_revisions"] = revisions_status
+    if candidate_id is not None:
+        baselines_status = _evaluation_baselines_status(campaign_dir, manifest, candidate_id)
+        if baselines_status is not None:
+            result["evaluation_baselines"] = baselines_status
     return result
+
+
+def _evaluation_baselines_status(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    candidate_id: str,
+) -> dict[str, Any] | None:
+    """改造 5：只读列出候选各评估基线的 kind／状态／stage_sources／pending 阶段与执行／复用规则数。"""
+
+    if not _requires_complete_vc_artifacts(manifest) or not SAFE_ID_RE.fullmatch(candidate_id):
+        return None
+    try:
+        states = _evaluation_baseline_states(campaign_dir, candidate_id)
+        current, _commit = _current_evaluation_baseline(campaign_dir, candidate_id)
+    except ConfigurationError as error:
+        return {"current_evaluation_baseline": None, "error": str(error)[:500], "baselines": {}}
+    baselines: dict[str, Any] = {}
+    for number in sorted(states):
+        flags = states[number]
+        directory = _evaluation_baseline_dir(campaign_dir, candidate_id, number)
+        state = (
+            "abandoned" if flags["abandon"]
+            else "committed" if flags["commit"]
+            else "authorized" if flags["authorization"]
+            else "prepared" if flags["prepared"]
+            else "empty"
+        )
+        entry: dict[str, Any] = {"state": state, "current": number == current}
+        recovery_path = directory / EVALUATION_BASELINE_RECOVERY_FILENAME
+        if recovery_path.is_file():
+            try:
+                recovery = codex_upgrade_vc_artifacts.validate_evaluation_recovery(_read_json(recovery_path, "评估基线 recovery"))
+                entry.update(
+                    {
+                        "kind": recovery["kind"],
+                        "failure_source": recovery["failure_source"],
+                        "reuse_authority": recovery["reuse_authority"],
+                        "execute_rule_count": len(recovery["execute_rules"]),
+                        "reuse_rule_count": len(recovery["reuse_rules"]),
+                        "execute_job_count": len(recovery["execute_jobs"]),
+                    }
+                )
+            except (ConfigurationError, codex_upgrade_vc_artifacts.VCArtifactError) as error:
+                entry["error"] = str(error)[:300]
+        if flags["commit"]:
+            try:
+                commit = _read_evaluation_baseline_commit(campaign_dir, candidate_id, number)
+                entry["stage_sources"] = commit["stage_sources"]
+                entry["stages"] = {
+                    stage: _stage_read_source(campaign_dir, candidate_id, number, stage)["status"]
+                    for stage in codex_upgrade_vc_artifacts.EVALUATION_STAGES
+                }
+            except ConfigurationError as error:
+                entry["error"] = str(error)[:300]
+        baselines[f"b{number}"] = entry
+    if not baselines and current == 0:
+        return None
+    return {"current_evaluation_baseline": current, "baselines": baselines}
 
 
 def _candidate_revisions_status(
@@ -48804,7 +50205,7 @@ def compare_campaign(campaign_dir: Path, candidate_id: str) -> dict[str, Any]:
         "offline_only": True,
     }
     assertion_root = ensure_private_directory(
-        campaign_dir / "assertions" / candidate_id, campaign_dir
+        _assertions_root(campaign_dir, candidate_id), campaign_dir
     )
     skeleton_path = assertion_root / "results.template.json"
     _, comparison_path = _stage_path(campaign_dir, "compare", candidate_id)
@@ -49345,8 +50746,23 @@ def _campaign_machine_command(
     rule: str,
     output: Path,
     side: str,
+    projection: Path | None = None,
+    context_override: Mapping[str, Any] | None = None,
 ) -> list[str]:
-    context = capture_stage.get("assertion_context")
+    """重建 accept 期望的 checker 命令。
+
+    改造 5：``projection`` 给出时追加 ``--capture-manifest-projection``；``context_override``
+    （历史 checkpoint 的 ``context``：capture_manifest.path／evidence_root）给出时代替当前
+    capture 阶段的 assertion_context，用于复用行以历史 context 重建命令。
+    """
+
+    if context_override is not None:
+        context = {
+            "capture_manifest_path": str(context_override["capture_manifest"]["path"]),
+            "evidence_root": str(context_override["evidence_root"]),
+        }
+    else:
+        context = capture_stage.get("assertion_context")
     if not isinstance(context, dict):
         raise ConfigurationError("抓包阶段缺少 assertion_context。")
     profile_reference = classification.get("assertion_profile_manifest")
@@ -49364,6 +50780,7 @@ def _campaign_machine_command(
         expected_codex_version=manifest["target_version"],
         expected_profile_sha256=str(profile_reference.get("sha256", "")),
         side=side,
+        capture_manifest_projection=(str(projection.resolve()) if projection is not None else None),
         output=str(output.resolve()),
     )
 
@@ -49433,7 +50850,16 @@ def _validate_machine_assertion(
     bound_paths: set[str],
     *,
     side: str,
+    checkpoint: Mapping[str, Any] | None = None,
+    reused: bool = False,
 ) -> set[str]:
+    """校验一侧机器结果。
+
+    改造 5：``checkpoint`` 给出时期望命令带该 checkpoint 的投影输入；``reused`` 行以历史
+    checkpoint 的 context 重建命令、比摘要、校验文档 sha，**不重放 checker**（防伪依据是
+    write-once checkpoint 链＋父 run 绑定＋锚点链，由调用方先行验证）。
+    """
+
     label = "官方" if side == "official" else "候选"
     reference = row.get(f"{side}_machine_result")
     if not isinstance(reference, dict) or set(reference) != {"path", "sha256"}:
@@ -49465,6 +50891,18 @@ def _validate_machine_assertion(
     context = capture_stage.get("assertion_context")
     if not isinstance(context, dict):
         raise ConfigurationError(f"{label}抓包阶段缺少 assertion_context。")
+    projection_path: Path | None = None
+    if checkpoint is not None:
+        projection_path = _campaign_file(campaign_dir, str(checkpoint["input_projection"]["path"]))
+        if (
+            not projection_path.is_file()
+            or projection_path.is_symlink()
+            or file_sha256(projection_path) != checkpoint["input_projection"]["sha256"]
+            or result.get("projection_sha256") != checkpoint["projection_sha256"]
+            or checkpoint["document"]["sha256"] != reference.get("sha256")
+            or _campaign_file(campaign_dir, str(checkpoint["document"]["path"])) != result_path
+        ):
+            raise ConfigurationError(f"逐规则断言 {rule} {label}机器结果未绑定 checkpoint 的投影输入或文档。")
     expected_command = _campaign_machine_command(
         campaign_dir,
         manifest,
@@ -49473,11 +50911,15 @@ def _validate_machine_assertion(
         rule=rule,
         output=result_path,
         side=side,
+        projection=projection_path,
+        context_override=(checkpoint["context"] if reused and checkpoint is not None else None),
     )
     if command != expected_command:
         raise ConfigurationError(f"逐规则断言 {rule} {label}机器命令未精确绑定当前版本 Campaign。")
     if machine_command_sha256(command) != result.get("command_sha256"):
         raise ConfigurationError(f"逐规则断言 {rule} {label}命令摘要不一致。")
+    if checkpoint is not None and checkpoint["command_sha256"] != result.get("command_sha256"):
+        raise ConfigurationError(f"逐规则断言 {rule} {label}checkpoint 命令摘要与文档不一致。")
     pinned_checkers = {
         entry.get("path"): entry.get("sha256")
         for entry in manifest.get("tool_identity", {}).get("entries", [])
@@ -49517,8 +50959,163 @@ def _validate_machine_assertion(
         if len(logical_paths) != len(evidence_paths) or not logical_paths.issubset(bound_paths):
             raise ConfigurationError(f"逐规则断言 {rule} {label}机器检查未精确引用封存证据。")
         check_ids.add(check_id)
-    _rerun_machine_assertion(command, result, rule=rule, label=label)
+    if not reused:
+        _rerun_machine_assertion(command, result, rule=rule, label=label)
     return check_ids
+
+
+EVALUATION_RUN_FILENAME = "evaluation-run.json"
+EVALUATION_CHECKPOINTS_DIRNAME = "checkpoints"
+
+
+def _assertions_root_for_baseline(campaign_dir: Path, candidate_id: str, baseline: int) -> Path:
+    root = campaign_dir / "assertions" / candidate_id
+    return root / "revisions" / f"b{baseline}" if baseline > 0 else root
+
+
+def _replay_evaluation_checkpoint_chain(assertions_root: Path) -> list[dict[str, Any]]:
+    """重放 checkpoints 目录链（自摘要、previous 链接、序号连续、文件名一致）。"""
+
+    directory = assertions_root / EVALUATION_CHECKPOINTS_DIRNAME
+    if directory.is_symlink():
+        raise ConfigurationError("checkpoints 目录不得是符号链接。")
+    if not directory.is_dir():
+        return []
+    files = sorted(
+        path for path in directory.iterdir()
+        if path.suffix == ".json" and not path.name.endswith("-input.json") and path.is_file() and not path.is_symlink()
+    )
+    chain: list[dict[str, Any]] = []
+    previous: str | None = None
+    for index, path in enumerate(files, 1):
+        try:
+            checkpoint = codex_upgrade_vc_artifacts.validate_evaluation_checkpoint(_read_json(path, "评估 checkpoint"))
+        except codex_upgrade_vc_artifacts.VCArtifactError as error:
+            raise ConfigurationError(f"评估 checkpoint 无法校验：{path.name}：{error}") from error
+        if (
+            checkpoint["sequence"] != index
+            or checkpoint["previous_checkpoint_sha256"] != previous
+            or path.name != f"{index:04d}-{checkpoint['rule']}-{checkpoint['side']}.json"
+        ):
+            raise ConfigurationError(f"评估 checkpoint 链断裂：{path.name}")
+        previous = str(checkpoint["checkpoint_sha256"])
+        chain.append(checkpoint)
+    return chain
+
+
+def _load_evaluation_run_index(
+    campaign_dir: Path, candidate_id: str, baseline: int
+) -> tuple[dict[str, Any], dict[tuple[str, str], dict[str, Any]]] | None:
+    """读取 b<K> 的 evaluation-run.json 并重放其 checkpoint 链；b0 没有索引时返回 None。"""
+
+    assertions_root = _assertions_root_for_baseline(campaign_dir, candidate_id, baseline)
+    index_path = assertions_root / EVALUATION_RUN_FILENAME
+    if index_path.is_symlink():
+        raise ConfigurationError("evaluation-run.json 不得是符号链接。")
+    if not index_path.is_file():
+        if baseline > 0:
+            raise ConfigurationError(f"评估基线 b{baseline} 缺少 evaluation-run.json。")
+        return None
+    try:
+        run = codex_upgrade_vc_artifacts.validate_evaluation_run(_read_json(index_path, "evaluation-run.json"))
+    except codex_upgrade_vc_artifacts.VCArtifactError as error:
+        raise ConfigurationError(f"evaluation-run.json 无法校验：{error}") from error
+    if run["candidate_id"] != candidate_id or run["evaluation_baseline"] != baseline:
+        raise ConfigurationError("evaluation-run.json 的候选或基线身份不一致。")
+    chain = _replay_evaluation_checkpoint_chain(assertions_root)
+    head = str(chain[-1]["checkpoint_sha256"]) if chain else None
+    if run["checkpoint_head_sha256"] != head:
+        raise ConfigurationError("evaluation-run.json 的 checkpoint head 与 checkpoints 目录不一致。")
+    by_side: dict[tuple[str, str], dict[str, Any]] = {}
+    for checkpoint in chain:
+        by_side[(str(checkpoint["rule"]), str(checkpoint["side"]))] = checkpoint
+    for row in run["rules"]:
+        for side in ("candidate", "official"):
+            binding = row.get(f"{side}_checkpoint")
+            if binding is None:
+                continue
+            checkpoint = by_side.get((str(row["rule"]), side))
+            path = _campaign_file(campaign_dir, str(binding["path"]))
+            if (
+                checkpoint is None
+                or file_sha256(path) != binding["sha256"]
+                or path != assertions_root / EVALUATION_CHECKPOINTS_DIRNAME / f"{int(checkpoint['sequence']):04d}-{row['rule']}-{side}.json"
+            ):
+                raise ConfigurationError(f"evaluation-run.json 引用的 {row['rule']} {side} checkpoint 漂移。")
+    return run, by_side
+
+
+def _verify_reuse_anchor_chain(
+    campaign_dir: Path,
+    candidate_id: str,
+    current_baseline: int,
+    current_commit: Mapping[str, Any],
+    reused_baseline: int,
+) -> dict[str, Any]:
+    """复用行的锚点链：账本事件 → COMMIT → AUTHORIZATION → recovery.json → 诊断 → 失败 run 动作输出绑定。
+
+    要求 recovery 冻结 ``reuse_authority=anchored`` 且 ``previous_baseline`` 等于被复用基线；诊断绑定的
+    动作输出绑定文件当前自摘要等于 stop-receipt 记录值，其中 ``evaluation_run`` 摘要与
+    ``checkpoint_head_sha256`` 必须等于被复用基线当前的索引摘要与链 head。返回 recovery。
+    """
+
+    baseline_dir = _evaluation_baseline_dir(campaign_dir, candidate_id, current_baseline)
+    try:
+        recovery = codex_upgrade_vc_artifacts.validate_evaluation_recovery(
+            _read_json(baseline_dir / EVALUATION_BASELINE_RECOVERY_FILENAME, "评估基线 recovery")
+        )
+        authorization = codex_upgrade_vc_artifacts.validate_evaluation_baseline_authorization(
+            _read_json(baseline_dir / EVALUATION_BASELINE_AUTHORIZATION_FILENAME, "评估基线 AUTHORIZATION")
+        )
+    except codex_upgrade_vc_artifacts.VCArtifactError as error:
+        raise ConfigurationError(f"评估基线 b{current_baseline} 锚点链无法校验：{error}") from error
+    if (
+        recovery["recovery_sha256"] != current_commit["recovery_sha256"]
+        or authorization["authorization_sha256"] != current_commit["authorization_sha256"]
+        or authorization["recovery_sha256"] != recovery["recovery_sha256"]
+        or recovery["reuse_authority"] != "anchored"
+        or recovery["previous_baseline"] != reused_baseline
+    ):
+        raise ConfigurationError(
+            f"评估基线 b{current_baseline} 的复用授权或前序绑定与复用行不一致。"
+        )
+    diagnosis_path = _campaign_file(campaign_dir, str(recovery["diagnosis"]["path"]))
+    if file_sha256(diagnosis_path) != recovery["diagnosis"]["sha256"]:
+        raise ConfigurationError("评估失败诊断收据摘要漂移。")
+    try:
+        diagnosis = codex_upgrade_vc_artifacts.validate_evaluation_failure_diagnosis(
+            _read_json(diagnosis_path, "评估失败诊断")
+        )
+    except codex_upgrade_vc_artifacts.VCArtifactError as error:
+        raise ConfigurationError(f"评估失败诊断无法校验：{error}") from error
+    outputs = diagnosis.get("action_outputs")
+    failed_run = diagnosis["failed_run"]
+    if (
+        diagnosis["reuse_authority"] != "anchored"
+        or diagnosis["evaluation_baseline"] != reused_baseline
+        or not isinstance(outputs, Mapping)
+        or failed_run["action_outputs_sha256"] is None
+        or outputs["evaluation_run"] is None
+    ):
+        raise ConfigurationError("评估失败诊断没有可锚定的动作输出绑定。")
+    binding_path = Path(str(failed_run["run_dir"])) / "action-outputs" / f"{failed_run['action_id']}.json"
+    try:
+        binding = codex_upgrade_supervisor.read_action_output_binding(Path(str(failed_run["run_dir"])), str(failed_run["action_id"]))
+    except codex_upgrade_supervisor.SupervisorError as error:
+        raise ConfigurationError(f"失败父 run 的动作输出绑定无法读取：{error}") from error
+    if binding["binding_sha256"] != failed_run["action_outputs_sha256"] or file_sha256(binding_path) != outputs["sha256"]:
+        raise ConfigurationError("失败父 run 的动作输出绑定摘要与诊断不一致。")
+    previous_root = _assertions_root_for_baseline(campaign_dir, candidate_id, reused_baseline)
+    previous_index = previous_root / EVALUATION_RUN_FILENAME
+    previous_chain = _replay_evaluation_checkpoint_chain(previous_root)
+    previous_head = str(previous_chain[-1]["checkpoint_sha256"]) if previous_chain else None
+    if (
+        _campaign_file(campaign_dir, str(outputs["evaluation_run"]["path"])) != previous_index
+        or file_sha256(previous_index) != outputs["evaluation_run"]["sha256"]
+        or outputs["checkpoint_head_sha256"] != previous_head
+    ):
+        raise ConfigurationError("动作输出绑定记录的 evaluation-run 摘要或 checkpoint head 与被复用基线不一致。")
+    return recovery
 
 
 def _validate_assertion_results(
@@ -49588,6 +51185,20 @@ def _validate_assertion_results(
         campaign_dir, classification, rules
     )
     official_authority = _classification_official_authority(classification)
+    # 改造 5：先读当前基线的 evaluation-run.json 判定行类型（executed／reused）；
+    # b0 没有索引时全部按 executed 走既有流程。
+    current_baseline, current_commit = _current_evaluation_baseline(campaign_dir, candidate_id)
+    loaded_index = _load_evaluation_run_index(campaign_dir, candidate_id, current_baseline)
+    index_rows: dict[str, dict[str, Any]] = {}
+    checkpoints_by_side: dict[tuple[str, str], dict[str, Any]] = {}
+    if loaded_index is not None:
+        evaluation_run, checkpoints_by_side = loaded_index
+        index_rows = {str(item["rule"]): dict(item) for item in evaluation_run["rules"]}
+        if any(item["status"] != "pass" for item in index_rows.values()):
+            raise ConfigurationError("当前评估基线的 evaluation-run.json 含未通过或未完成规则，不得接受。")
+    historical_inventories: dict[int, dict[str, str]] = {}
+    historical_indexes: dict[int, dict[str, dict[str, Any]]] = {}
+    anchored_baselines: set[int] = set()
     seen: list[str] = []
     passed = 0
     for index, row in enumerate(rows, 1):
@@ -49597,6 +51208,56 @@ def _validate_assertion_results(
         if rule not in rules:
             raise ConfigurationError(f"逐规则断言 {index} 引用清单外规则。")
         mode = validation_modes[str(rule)]
+        index_row = index_rows.get(str(rule)) if index_rows else None
+        if index_rows and index_row is None:
+            raise ConfigurationError(f"逐规则断言 {rule} 不在当前评估基线的 evaluation-run.json 内。")
+        reused_from = index_row.get("reused_from") if index_row is not None else None
+        row_checkpoints: dict[str, dict[str, Any]] = {}
+        if index_row is not None:
+            for side in ("candidate", "official"):
+                if index_row.get(f"{side}_checkpoint") is not None:
+                    row_checkpoints[side] = checkpoints_by_side[(str(rule), side)]
+        row_candidate_inventory = candidate_inventory
+        if reused_from is not None:
+            reused_baseline = int(reused_from["baseline"])
+            assert current_commit is not None
+            if reused_baseline not in anchored_baselines:
+                _verify_reuse_anchor_chain(campaign_dir, candidate_id, current_baseline, current_commit, reused_baseline)
+                anchored_baselines.add(reused_baseline)
+            if reused_baseline not in historical_indexes:
+                previous = _load_evaluation_run_index(campaign_dir, candidate_id, reused_baseline)
+                if previous is None:
+                    raise ConfigurationError(f"被复用的评估基线 b{reused_baseline} 没有 evaluation-run.json。")
+                historical_indexes[reused_baseline] = {str(item["rule"]): dict(item) for item in previous[0]["rules"]}
+                historical_stage = _load_stage_result(
+                    campaign_dir, "capture-candidate", candidate_id, _baseline=reused_baseline
+                )
+                historical_inventories[reused_baseline] = _inventory_index(historical_stage, f"b{reused_baseline} 候选")
+            previous_row = historical_indexes[reused_baseline].get(str(rule))
+            if (
+                previous_row is None
+                or previous_row["status"] != "pass"
+                or previous_row["dependency_projection_sha256"] != index_row["dependency_projection_sha256"]
+            ):
+                raise ConfigurationError(f"逐规则断言 {rule} 的复用行与被复用基线的依赖摘要不一致。")
+            for side, checkpoint in row_checkpoints.items():
+                past_binding = previous_row.get(f"{side}_checkpoint")
+                if (
+                    checkpoint["reused_from"] is None
+                    or checkpoint["reused_from"]["baseline"] != reused_baseline
+                    or checkpoint["reused_from"]["checkpoint_sha256"] != reused_from["checkpoint_sha256"] and side == "candidate"
+                    or past_binding is None
+                ):
+                    raise ConfigurationError(f"逐规则断言 {rule} {side} 复用 checkpoint 未绑定被复用基线。")
+                past_path = _campaign_file(campaign_dir, str(past_binding["path"]))
+                past = _read_json(past_path, "历史 checkpoint")
+                if (
+                    past.get("checkpoint_sha256") != checkpoint["reused_from"]["checkpoint_sha256"]
+                    or past.get("document") != checkpoint["document"]
+                    or past.get("status") != "pass"
+                ):
+                    raise ConfigurationError(f"逐规则断言 {rule} {side} 复用 checkpoint 与历史 checkpoint 不一致。")
+            row_candidate_inventory = historical_inventories[reused_baseline]
         if row.get("validation_mode") != mode:
             raise ConfigurationError(
                 f"逐规则断言 {rule} 的 validation_mode 与验收契约不一致。"
@@ -49635,7 +51296,7 @@ def _validate_assertion_results(
         )
         candidate_paths = _validate_evidence_bindings(
             row.get("candidate_evidence_refs"),
-            candidate_inventory,
+            row_candidate_inventory,
             rule=str(rule),
             label="候选",
         )
@@ -49648,6 +51309,8 @@ def _validate_assertion_results(
             str(rule),
             candidate_paths,
             side="candidate",
+            checkpoint=row_checkpoints.get("candidate"),
+            reused=reused_from is not None,
         )
         if candidate_check_ids != candidate_expected_check_ids:
             raise ConfigurationError(
@@ -49669,6 +51332,8 @@ def _validate_assertion_results(
                 str(rule),
                 official_paths,
                 side="official",
+                checkpoint=row_checkpoints.get("official"),
+                reused=reused_from is not None,
             )
             official_expected_check_ids = set(
                 _acceptance_expected_check_ids(
@@ -49688,6 +51353,8 @@ def _validate_assertion_results(
         passed += 1
     if sorted(seen) != sorted(rules) or len(seen) != len(set(seen)):
         raise ConfigurationError("逐规则断言未使目标规则全集唯一闭环。")
+    if index_rows and sorted(index_rows) != sorted(seen):
+        raise ConfigurationError("逐规则断言与当前评估基线 evaluation-run.json 的规则集合不一致。")
     return {
         "complete": True,
         "rule_count": len(rules),
@@ -49732,7 +51399,7 @@ def _write_blocked_acceptance_attempt(
     if not SAFE_ID_RE.fullmatch(candidate_id):
         raise ConfigurationError("accept candidate-id 格式非法。")
     attempts_root = ensure_private_directory(
-        campaign_dir / "acceptance" / candidate_id / "attempts",
+        _stage_path(campaign_dir, "accept", candidate_id, mode="write")[1].parent / "attempts",
         campaign_dir,
     )
     attempt_id = (
@@ -50129,9 +51796,9 @@ def accept_campaign(
         result["candidate_build_receipt"] = candidate_build_binding
     if accepted:
         acceptance_root = ensure_private_directory(
-            campaign_dir / "acceptance" / candidate_id, campaign_dir
+            _stage_path(campaign_dir, "accept", candidate_id, mode="write")[1].parent, campaign_dir
         )
-        canonical_assertions = campaign_dir / "assertions" / candidate_id / "results.json"
+        canonical_assertions = _assertions_root(campaign_dir, candidate_id) / "results.json"
         if assertions_path.resolve(strict=True) != canonical_assertions.resolve(strict=False):
             if canonical_assertions.exists():
                 existing_assertions = _read_json(
@@ -50231,6 +51898,7 @@ def _normalize_legacy_argv(argv: list[str]) -> tuple[list[str], str | None]:
         "deliver-candidate",
         "revision-open",
         "invalidate-candidate",
+        "evaluation-recover",
         "all",
         "status",
         "resume",
@@ -50401,6 +52069,8 @@ def _reject_unparented_formal_write(
         # 改造 2：revision 登记与候选作废是两个 campaign-run 之间的控制面命令。
         "revision-open",
         "invalidate-candidate",
+        # 改造 5：评估失败分类与评估基线状态机同样是批次之间的控制面命令。
+        "evaluation-recover",
     }
     if command in direct_control_commands:
         if in_campaign_run:
@@ -50618,7 +52288,7 @@ def _resolve_classification_inputs(
 
 
 def _default_assertions_path(campaign_dir: Path, candidate_id: str) -> Path:
-    return campaign_dir / "assertions" / candidate_id / "results.json"
+    return _assertions_root(campaign_dir, candidate_id) / "results.json"
 
 
 def _require_candidate_launch_arguments(
@@ -51292,6 +52962,9 @@ def _main_without_campaign_lease(argv: list[str] | None = None) -> int:
         elif command == "invalidate-candidate":
             result = invalidate_candidate(arguments)
             return_code = 0 if result.get("status") in {"preview", "applied"} else 3
+        elif command == "evaluation-recover":
+            result = evaluation_recover(arguments)
+            return_code = 0 if result.get("status") in {"preview", "applied", "abandoned", "redirect"} else 3
         elif command == "reconcile-attempt":
             result = _reconcile_attempt_command(arguments)
             return_code = 0 if result.get("status") == "recoverable" else 3

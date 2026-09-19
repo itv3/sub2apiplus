@@ -9326,6 +9326,7 @@ class CodexUpgradeTest(unittest.TestCase):
                 # 改造 2：候选级 revision 的两个零请求控制命令。
                 "revision-open",
                 "invalidate-candidate",
+                "evaluation-recover",
                 "status",
                 "resume",
             },

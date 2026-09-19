@@ -363,3 +363,68 @@ def layer_drift(
         layer = classify_path(policy, path)
         drift[layer if layer is not None else "ignored"].append(path)
     return drift
+
+
+# ---------------------------------------------------------------------------
+# 改造 5（评估失败局部恢复）：evaluator 四项直接依赖摘要
+# ---------------------------------------------------------------------------
+
+EVALUATOR_CHECKER_RELATIVE = "candidate_rule_assertion.py"
+EVALUATOR_BUILDER_RELATIVE = "build_rule_assertion_results.py"
+EVALUATOR_COMPARE_READER_ROOTS = ("compare_campaign",)
+EVALUATOR_ACCEPT_READER_ROOTS = ("accept_campaign",)
+EVALUATOR_DIGEST_FIELDS = (
+    "checker_sha256",
+    "builder_sha256",
+    "compare_reader_sha256",
+    "accept_reader_sha256",
+)
+
+
+def _managed_tree_digests(tool_root: Path) -> dict[str, str]:
+    """按受管口径列出工具树文件摘要（与 ``codex_upgrade._tool_tree_entries`` 同一口径）。"""
+
+    root = Path(tool_root)
+    digests: dict[str, str] = {}
+    for path in sorted(root.rglob("*")):
+        if not path.is_file() or path.is_symlink() or path.suffix not in {".py", ".sh", ".json"}:
+            continue
+        parts = path.relative_to(root).parts
+        if "tests" in parts or "versions" in parts or "__pycache__" in parts:
+            continue
+        digests[path.relative_to(root).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return digests
+
+
+def evaluator_dependency_digests(
+    tool_root: Path | None = None,
+    policy: Mapping[str, Any] | None = None,
+) -> dict[str, str]:
+    """evaluator 四项直接依赖摘要（编译器冻结进 batch v3、COMMIT 前核对、evaluation-run 记录）。
+
+    * ``checker_sha256``：``candidate_rule_assertion.py`` 整文件摘要；
+    * ``builder_sha256``：``build_rule_assertion_results.py`` 整文件摘要（三方裁定的强制口径）；
+    * ``compare_reader_sha256``／``accept_reader_sha256``：``codex_upgrade.py`` 中 ``compare_campaign``／
+      ``accept_campaign`` 函数根的静态符号闭包摘要，``layer=None`` 计入闭包引用的全部受管模块。
+
+    编译器与派发入口的 commit 回调调用同一个纯函数，保证"冻结值"与"核对值"口径一致。
+    """
+
+    root = Path(tool_root) if tool_root is not None else Path(__file__).resolve().parent
+    active_policy = dict(policy) if policy is not None else load_policy(root / POLICY_FILENAME)
+    digests = _managed_tree_digests(root)
+    for relative in (EVALUATOR_CHECKER_RELATIVE, EVALUATOR_BUILDER_RELATIVE):
+        if relative not in digests:
+            raise ToolIdentityPolicyError(f"evaluator 直接依赖不在工具树内：{relative}")
+    compare_closure = orchestrator_closure(
+        active_policy, root, list(EVALUATOR_COMPARE_READER_ROOTS), digests, layer=None
+    )
+    accept_closure = orchestrator_closure(
+        active_policy, root, list(EVALUATOR_ACCEPT_READER_ROOTS), digests, layer=None
+    )
+    return {
+        "checker_sha256": digests[EVALUATOR_CHECKER_RELATIVE],
+        "builder_sha256": digests[EVALUATOR_BUILDER_RELATIVE],
+        "compare_reader_sha256": compare_closure["closure_sha256"],
+        "accept_reader_sha256": accept_closure["closure_sha256"],
+    }

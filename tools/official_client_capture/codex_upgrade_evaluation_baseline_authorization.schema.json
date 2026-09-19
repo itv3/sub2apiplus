@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-evaluation-baseline-authorization-v1.json",
+  "title": "评估基线 AUTHORIZATION（总账二次判定通过后签发：绑定根因事件、head 与判定）",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "campaign_id",
+    "candidate_id",
+    "candidate_revision",
+    "evaluation_baseline",
+    "recovery_sha256",
+    "ledger_operation_id",
+    "ledger_event_sha256",
+    "project_ledger_head_sequence",
+    "project_ledger_head_sha256",
+    "decision",
+    "root_cause_id",
+    "root_cause_count",
+    "authorized_at_utc",
+    "authorization_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "codex-upgrade-evaluation-baseline-authorization/v1"
+    },
+    "campaign_id": {
+      "$ref": "#/$defs/safeId"
+    },
+    "candidate_id": {
+      "$ref": "#/$defs/safeId"
+    },
+    "candidate_revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "evaluation_baseline": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "recovery_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "ledger_operation_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "ledger_event_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "project_ledger_head_sequence": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "project_ledger_head_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "decision": {
+      "const": "recoverable"
+    },
+    "root_cause_id": {
+      "$ref": "#/$defs/rootCauseId"
+    },
+    "root_cause_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "authorized_at_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "authorization_sha256": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "safeId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "rootCauseId": {
+      "type": "string",
+      "pattern": "^rc1-[0-9a-f]{20}$"
+    }
+  }
+}

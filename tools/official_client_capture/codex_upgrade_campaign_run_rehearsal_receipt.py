@@ -2156,10 +2156,10 @@ def _replay_atomic_failing_parent(
     except codex_upgrade_supervisor.SupervisorError as error:
         raise CampaignRunRehearsalError("原子演练失败父 run 无法重放") from error
     state = _load_json(run_dir / "state.json", "原子演练失败父状态")
-    stop_receipt = _load_json(
-        run_dir / "stop-receipt.json",
-        "原子演练失败父 stop receipt",
-    )
+    try:
+        stop_receipt = codex_upgrade_supervisor.read_stop_receipt(run_dir)
+    except codex_upgrade_supervisor.SupervisorError as error:
+        raise CampaignRunRehearsalError(f"原子演练失败父 stop receipt 无法校验：{error}") from error
     if (
         audit.get("state") != "failed"
         or audit.get("audit_incomplete") is not False

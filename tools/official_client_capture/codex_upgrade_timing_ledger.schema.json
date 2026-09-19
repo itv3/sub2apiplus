@@ -123,6 +123,104 @@
             ]
           }
         },
+        "current_evaluation_baseline": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "evaluation_baseline",
+                "baseline_commit_sha256",
+                "baseline_kind",
+                "recovery_revision",
+                "candidate_id",
+                "revision"
+              ],
+              "properties": {
+                "evaluation_baseline": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "baseline_commit_sha256": {
+                  "$ref": "#/$defs/sha256"
+                },
+                "baseline_kind": {
+                  "enum": [
+                    "evaluator-only",
+                    "attempt-recovery"
+                  ]
+                },
+                "recovery_revision": {
+                  "oneOf": [
+                    {
+                      "type": "string",
+                      "pattern": "^ar[1-9][0-9]*$"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "candidate_id": {
+                  "$ref": "#/$defs/safeId"
+                },
+                "revision": {
+                  "oneOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "attempt_recoveries": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "attempt_id",
+              "recovery_revision",
+              "status",
+              "root_cause_id"
+            ],
+            "properties": {
+              "attempt_id": {
+                "$ref": "#/$defs/safeId"
+              },
+              "recovery_revision": {
+                "type": "string",
+                "pattern": "^ar[1-9][0-9]*$"
+              },
+              "status": {
+                "enum": [
+                  "active",
+                  "completed",
+                  "failed"
+                ]
+              },
+              "root_cause_id": {
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/safeId"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          }
+        },
         "upgrade_id": {
           "$ref": "#/$defs/safeId"
         },

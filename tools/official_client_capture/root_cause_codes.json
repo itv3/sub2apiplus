@@ -115,6 +115,16 @@
       "component": "candidate",
       "stable_dimensions": ["phase"],
       "description": "人工审核判定候选实现需要改源码（invalidate-candidate 显式作废）：同阶段的候选源码变更需求跨 revision 累计，达上限即停线。"
+    },
+    "evaluation.rule-failed": {
+      "component": "evaluator",
+      "stable_dimensions": ["phase"],
+      "description": "候选证据封存后的离线评估失败（evaluation-recover apply 以 evaluator-defect 开评估基线）：failed_step 为首条失败规则 id，compare／accept 动作的工具异常分别为冻结动作 id compare／acceptance；同阶段跨基线累计，达上限即停线。"
+    },
+    "attempt.job-transient-failure": {
+      "component": "reconciler",
+      "stable_dimensions": ["phase"],
+      "description": "评估失败被裁定为临时环境／Job 故障（evaluation-recover apply 以 transient-environment 开 attempt-recovery 基线）：failed_step 为首个受影响 Job id；同阶段跨恢复段累计，达上限即停线。"
     }
   }
 }

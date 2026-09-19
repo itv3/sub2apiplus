@@ -148,6 +148,8 @@ CONSUMER_COMMANDS = frozenset(
         # 改造 2：候选级 revision 的登记与显式作废都是总账消费者。
         "revision-open",
         "invalidate-candidate",
+        # 改造 5：评估失败分类与评估基线状态机是总账消费者（outbox 根因事件 + 二次判定）。
+        "evaluation-recover",
     }
 )
 ESTIMATION_POLICIES = ("none", "upper_bound_from_sibling", "upper_bound_from_sibling_or_turn_ratio")

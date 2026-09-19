@@ -1,0 +1,140 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-effective-results-v1.json",
+  "title": "评估基线唯一有效 Job 结果集（每个候选 Job 恰一条：reused 引用前序结果、recovered 指向 ar<k> 结果）",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "campaign_id",
+    "candidate_id",
+    "candidate_revision",
+    "evaluation_baseline",
+    "results",
+    "recorded_at_utc",
+    "results_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "codex-upgrade-effective-results/v1"
+    },
+    "campaign_id": {
+      "$ref": "#/$defs/safeId"
+    },
+    "candidate_id": {
+      "$ref": "#/$defs/safeId"
+    },
+    "candidate_revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "evaluation_baseline": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "results": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "job_id",
+          "source",
+          "baseline",
+          "recovery_revision",
+          "result",
+          "evidence_roots",
+          "disposition"
+        ],
+        "properties": {
+          "job_id": {
+            "$ref": "#/$defs/safeId"
+          },
+          "source": {
+            "enum": [
+              "reused",
+              "recovered"
+            ]
+          },
+          "baseline": {
+            "oneOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "recovery_revision": {
+            "oneOf": [
+              {
+                "$ref": "#/$defs/recoveryRevision"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "result": {
+            "$ref": "#/$defs/binding"
+          },
+          "evidence_roots": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "disposition": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          }
+        }
+      }
+    },
+    "recorded_at_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "results_sha256": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "safeId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "recoveryRevision": {
+      "type": "string",
+      "pattern": "^ar[1-9][0-9]*$"
+    }
+  }
+}

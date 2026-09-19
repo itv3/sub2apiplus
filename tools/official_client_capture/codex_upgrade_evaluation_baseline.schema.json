@@ -1,0 +1,256 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-evaluation-baseline-v1.json",
+  "title": "评估基线 recovery.json（evaluation-recover apply 冻结的恢复合同：类别、诊断绑定、执行／复用集合、修复证据）",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "campaign_id",
+    "candidate_id",
+    "candidate_revision",
+    "evaluation_baseline",
+    "kind",
+    "diagnosis",
+    "failure_source",
+    "reuse_authority",
+    "root_cause_class",
+    "root_cause_id",
+    "failed_step",
+    "previous_baseline",
+    "previous_baseline_commit_sha256",
+    "execute_rules",
+    "reuse_rules",
+    "execute_jobs",
+    "reuse_jobs",
+    "attempt_id",
+    "recovery_revision",
+    "fix_commit",
+    "deployment_receipt",
+    "failed_evaluator_digests",
+    "current_evaluator_digests",
+    "reviewer",
+    "approved_at_utc",
+    "recovery_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "codex-upgrade-evaluation-baseline/v1"
+    },
+    "campaign_id": {
+      "$ref": "#/$defs/safeId"
+    },
+    "candidate_id": {
+      "$ref": "#/$defs/safeId"
+    },
+    "candidate_revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "evaluation_baseline": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "kind": {
+      "enum": [
+        "evaluator-only",
+        "attempt-recovery"
+      ]
+    },
+    "diagnosis": {
+      "$ref": "#/$defs/binding"
+    },
+    "failure_source": {
+      "enum": [
+        "assertion-failed",
+        "offline-compare-failed",
+        "offline-accept-failed"
+      ]
+    },
+    "reuse_authority": {
+      "enum": [
+        "anchored",
+        "none"
+      ]
+    },
+    "root_cause_class": {
+      "enum": [
+        "evaluator-defect",
+        "transient-environment"
+      ]
+    },
+    "root_cause_id": {
+      "$ref": "#/$defs/rootCauseId"
+    },
+    "failed_step": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "previous_baseline": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "previous_baseline_commit_sha256": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/sha256"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "execute_rules": {
+      "$ref": "#/$defs/ruleArray"
+    },
+    "reuse_rules": {
+      "$ref": "#/$defs/ruleArray"
+    },
+    "execute_jobs": {
+      "$ref": "#/$defs/idArray"
+    },
+    "reuse_jobs": {
+      "$ref": "#/$defs/idArray"
+    },
+    "attempt_id": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/safeId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "recovery_revision": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/recoveryRevision"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "fix_commit": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/gitCommit"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "deployment_receipt": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/binding"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "failed_evaluator_digests": {
+      "$ref": "#/$defs/evaluatorDigests"
+    },
+    "current_evaluator_digests": {
+      "$ref": "#/$defs/evaluatorDigests"
+    },
+    "reviewer": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "approved_at_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "recovery_sha256": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "safeId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "ruleId": {
+      "type": "string",
+      "pattern": "^SPEC-[A-Z0-9]+-[0-9]{3}$"
+    },
+    "gitCommit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "rootCauseId": {
+      "type": "string",
+      "pattern": "^rc1-[0-9a-f]{20}$"
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "evaluatorDigests": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "checker_sha256",
+        "builder_sha256",
+        "compare_reader_sha256",
+        "accept_reader_sha256"
+      ],
+      "properties": {
+        "checker_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "builder_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "compare_reader_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "accept_reader_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "ruleArray": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/ruleId"
+      }
+    },
+    "idArray": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/safeId"
+      }
+    },
+    "recoveryRevision": {
+      "type": "string",
+      "pattern": "^ar[1-9][0-9]*$"
+    }
+  }
+}

@@ -1556,6 +1556,142 @@ def _validate_a15_real_entry_cache_contract(
         )
 
 
+PROJECTION_FLAG = "--capture-manifest-projection"
+
+
+def canonical_projection_bytes(projection: Mapping[str, Any]) -> bytes:
+    """投影 manifest 的规范字节：builder 写文件与 checker 逐字比较都用这一种序列化。"""
+
+    return json.dumps(
+        projection, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+
+
+def projection_sha256(projection: Mapping[str, Any]) -> str:
+    return hashlib.sha256(canonical_projection_bytes(projection)).hexdigest()
+
+
+def project_capture_manifest(
+    profile: Mapping[str, Any],
+    rule_id: str,
+    manifest: Mapping[str, Any],
+    evidence_root: Path,
+    expected_codex_version: str = CODEX_VERSION,
+) -> dict[str, Any]:
+    """按规则从完整 capture manifest 构造 per-rule 投影（改造 5，builder 与 checker 同源）。
+
+    * ``A0`` = 场景与规则场景相交的 artifact；
+    * 对 ``A`` 中每个结构化 artifact 按同一 parser 读取正文并复用 ``_trace_observations`` 的
+      记录级校验，把每条记录 ``source_artifacts`` 对应的 manifest 条目并入 ``A``，直到不变
+      （缺引用即失败关闭）；
+    * 投影 = 顶层字段逐字沿用（schema_version／codex_version／capture_id／status）+ ``artifacts(A)``
+      条目逐字、按原 manifest 顺序；不加任何新顶层字段（三方约束：``projection_sha256`` 只放在
+      checkpoint 与单规则结果里）。
+    * 自检：对每个规则场景，``A`` 中该场景的 kind 集合等于整份 manifest 上的集合（由构造保证）。
+    """
+
+    rules = {
+        rule["rule_id"]: rule
+        for rule in profile["rules"]
+        if isinstance(rule, dict) and isinstance(rule.get("rule_id"), str)
+    }
+    if rule_id not in rules:
+        raise AssertionConfigurationError(f"冻结画像不包含规则：{rule_id}")
+    rule_scenarios = set(rules[rule_id]["scenario_ids"])
+    artifacts = _validate_capture_manifest(dict(manifest), expected_codex_version)
+    by_path = {artifact["path"]: artifact for artifact in artifacts}
+    declared_artifact_scenarios = {
+        artifact["path"]: set(artifact["scenario_ids"]) for artifact in artifacts
+    }
+    selected = {
+        artifact["path"]
+        for artifact in artifacts
+        if rule_scenarios & set(artifact["scenario_ids"])
+    }
+    if not selected:
+        raise AssertionConfigurationError(f"规则 {rule_id} 的场景在 capture manifest 中没有任何 artifact")
+    resolved: dict[str, Path] = {}
+    pending = sorted(selected)
+    while pending:
+        artifact_path = pending.pop(0)
+        artifact = by_path[artifact_path]
+        if artifact_path not in resolved:
+            path = _resolve_evidence_file(
+                evidence_root, _relative_path(artifact_path, "artifact.path"), artifact_path
+            )
+            if file_sha256(path) != artifact["sha256"]:
+                raise AssertionConfigurationError(f"artifact SHA-256 不匹配：{artifact_path}")
+            resolved[artifact_path] = path
+        parser = artifact["parser"]
+        if parser in {"opaque_bound_source", "pcap_client_hello", "h1_request_stream"}:
+            continue
+        observations = _trace_observations(
+            resolved[artifact_path],
+            artifact_path,
+            parser,
+            artifact["scenario_ids"],
+            artifact["labels"],
+            declared_artifact_scenarios,
+            artifact.get("frame_labels"),
+        )
+        for observation in observations:
+            for referenced in observation.evidence_paths:
+                if referenced not in selected:
+                    selected.add(referenced)
+                    pending.append(referenced)
+    projected_artifacts = [
+        json.loads(json.dumps(artifact, ensure_ascii=False))
+        for artifact in artifacts
+        if artifact["path"] in selected
+    ]
+    for scenario_id in sorted(rule_scenarios):
+        full_kinds = {a["kind"] for a in artifacts if scenario_id in a["scenario_ids"]}
+        projected_kinds = {a["kind"] for a in projected_artifacts if scenario_id in a["scenario_ids"]}
+        if full_kinds != projected_kinds:
+            raise AssertionConfigurationError(
+                f"规则 {rule_id} 场景 {scenario_id} 的投影 kind 集合与整份 manifest 不一致"
+            )
+    return {
+        "schema_version": manifest["schema_version"],
+        "codex_version": manifest["codex_version"],
+        "capture_id": manifest["capture_id"],
+        "status": manifest["status"],
+        "artifacts": projected_artifacts,
+    }
+
+
+def verify_capture_manifest_projection(
+    profile: Mapping[str, Any],
+    rule_id: str,
+    capture_manifest_path: Path,
+    projection_path: Path,
+    evidence_root: Path,
+    expected_codex_version: str = CODEX_VERSION,
+) -> tuple[dict[str, Any], str, str]:
+    """checker 投影模式的等价证明：以原始完整 manifest 重算期望投影，规范字节必须与投影文件逐字相等。
+
+    返回 ``(投影文档, projection_sha256, capture_manifest_sha256)``；不等即 ``projection-mismatch``
+    失败关闭。随后调用方只用投影执行 ``load_observations`` 与 ``evaluate_rule``。
+    """
+
+    manifest = _load_json(capture_manifest_path, "capture manifest")
+    expected = project_capture_manifest(
+        profile, rule_id, manifest, evidence_root, expected_codex_version
+    )
+    if projection_path.is_symlink() or not projection_path.is_file():
+        raise AssertionConfigurationError(f"投影 manifest 必须是普通文件：{projection_path}")
+    actual_bytes = projection_path.read_bytes()
+    if actual_bytes != canonical_projection_bytes(expected):
+        raise AssertionConfigurationError(
+            f"projection-mismatch：投影 manifest 与按完整 manifest 重算的期望投影不一致：{projection_path}"
+        )
+    return (
+        expected,
+        hashlib.sha256(actual_bytes).hexdigest(),
+        file_sha256(capture_manifest_path),
+    )
+
+
 def load_observations(
     capture_manifest_path: Path,
     evidence_root: Path,
@@ -2129,8 +2265,13 @@ def build_assertion_command(
     expected_codex_version: str | None = None,
     expected_profile_sha256: str | None = None,
     side: str | None = None,
+    capture_manifest_projection: str | None = None,
 ) -> list[str]:
-    """构造应写入验收 submission 的稳定 checker 参数数组。"""
+    """构造应写入验收 submission 的稳定 checker 参数数组。
+
+    改造 5：给出 ``capture_manifest_projection`` 时在 ``--output`` 前追加
+    ``--capture-manifest-projection <path>``；``command_sha256`` 仍按完整命令计算。
+    """
 
     command = [
         "python3",
@@ -2152,6 +2293,8 @@ def build_assertion_command(
         command.extend(["--expected-profile-sha256", expected_profile_sha256])
     if side is not None:
         command.extend(["--side", side])
+    if capture_manifest_projection is not None:
+        command.extend([PROJECTION_FLAG, capture_manifest_projection])
     command.extend(["--output", output])
     return command
 
@@ -2163,11 +2306,17 @@ def build_assertion_result(
     command: Sequence[str],
     started_at: str,
     finished_at: str,
+    projection_sha256: str | None = None,
+    capture_manifest_sha256: str | None = None,
 ) -> dict[str, Any]:
-    """生成最终门禁可读取的单规则断言结果。"""
+    """生成最终门禁可读取的单规则断言结果。
+
+    改造 5：投影模式下附带 ``projection_sha256``（投影文件字节摘要）与
+    ``capture_manifest_sha256``（原始完整 manifest 文件摘要）；整份模式的文档没有两字段。
+    """
 
     passed = bool(checks) and all(check.get("passed") is True for check in checks)
-    return {
+    result: dict[str, Any] = {
         "schema_version": ASSERTION_SCHEMA_VERSION,
         "rule_id": rule_id,
         "status": "pass" if passed else "fail",
@@ -2178,6 +2327,12 @@ def build_assertion_result(
         "command_sha256": command_sha256(command),
         "checks": [dict(check) for check in checks],
     }
+    if (projection_sha256 is None) != (capture_manifest_sha256 is None):
+        raise AssertionConfigurationError("投影模式必须同时给出投影摘要与原始 manifest 摘要")
+    if projection_sha256 is not None:
+        result["projection_sha256"] = projection_sha256
+        result["capture_manifest_sha256"] = capture_manifest_sha256
+    return result
 
 
 def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
@@ -2211,6 +2366,12 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=("official", "candidate"),
         help="验收侧；给出时跳过契约登记为本侧不适用的 check",
     )
+    parser.add_argument(
+        PROJECTION_FLAG,
+        dest="capture_manifest_projection",
+        type=Path,
+        help="改造 5：per-rule 投影 manifest；给出时以完整 manifest 重算并逐字比对，再只用投影解析证据",
+    )
     parser.add_argument("--output", type=Path, required=True)
     return parser
 
@@ -2219,6 +2380,8 @@ def main(argv: Iterable[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     started_at = utc_now()
     checks: list[dict[str, Any]]
+    projection_digest: str | None = None
+    manifest_digest: str | None = None
     try:
         expected_version = args.expected_codex_version or CODEX_VERSION
         profile = load_profile(
@@ -2228,8 +2391,19 @@ def main(argv: Iterable[str] | None = None) -> int:
             expected_codex_version=expected_version,
             expected_profile_sha256=args.expected_profile_sha256,
         )
+        observation_manifest = args.capture_manifest
+        if args.capture_manifest_projection is not None:
+            _projection, projection_digest, manifest_digest = verify_capture_manifest_projection(
+                profile,
+                args.rule_id,
+                args.capture_manifest,
+                args.capture_manifest_projection,
+                args.evidence_root,
+                expected_version,
+            )
+            observation_manifest = args.capture_manifest_projection
         capture_manifest, observations = load_observations(
-            args.capture_manifest,
+            observation_manifest,
             args.evidence_root,
             expected_version,
         )
@@ -2257,6 +2431,11 @@ def main(argv: Iterable[str] | None = None) -> int:
         expected_codex_version=args.expected_codex_version,
         expected_profile_sha256=args.expected_profile_sha256,
         side=args.side,
+        capture_manifest_projection=(
+            str(args.capture_manifest_projection)
+            if args.capture_manifest_projection is not None
+            else None
+        ),
         output=str(args.output),
     )
     result = build_assertion_result(
@@ -2265,6 +2444,8 @@ def main(argv: Iterable[str] | None = None) -> int:
         command=command,
         started_at=started_at,
         finished_at=finished_at,
+        projection_sha256=projection_digest,
+        capture_manifest_sha256=manifest_digest,
     )
     _write_json(args.output, result)
     json.dump(result, sys.stdout, ensure_ascii=False, indent=2)

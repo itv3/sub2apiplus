@@ -1,0 +1,193 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-evaluation-checkpoint-v1.json",
+  "title": "逐规则逐侧 write-once 评估 checkpoint（绑定单规则文档、投影输入、历史 context、逐规则依赖摘要与执行父 run）",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "sequence",
+    "rule",
+    "side",
+    "status",
+    "document",
+    "input_projection",
+    "projection_sha256",
+    "checker_sha256",
+    "command_sha256",
+    "context",
+    "dependency_projection_sha256",
+    "executed_by",
+    "reused_from",
+    "recorded_at_utc",
+    "previous_checkpoint_sha256",
+    "checkpoint_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "codex-upgrade-evaluation-checkpoint/v1"
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "rule": {
+      "$ref": "#/$defs/ruleId"
+    },
+    "side": {
+      "enum": [
+        "candidate",
+        "official"
+      ]
+    },
+    "status": {
+      "enum": [
+        "pass",
+        "fail"
+      ]
+    },
+    "document": {
+      "$ref": "#/$defs/binding"
+    },
+    "input_projection": {
+      "$ref": "#/$defs/binding"
+    },
+    "projection_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "checker_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "command_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "capture_manifest",
+        "evidence_root",
+        "profile_sha256",
+        "rule_manifest_sha256"
+      ],
+      "properties": {
+        "capture_manifest": {
+          "$ref": "#/$defs/binding"
+        },
+        "evidence_root": {
+          "type": "string",
+          "minLength": 1
+        },
+        "profile_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "rule_manifest_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "dependency_projection_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "executed_by": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "builder_sha256",
+        "run_dir",
+        "owner_nonce",
+        "run_manifest_sha256"
+      ],
+      "properties": {
+        "builder_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "run_dir": {
+          "type": "string",
+          "minLength": 1
+        },
+        "owner_nonce": {
+          "$ref": "#/$defs/sha256"
+        },
+        "run_manifest_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "reused_from": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/reusedFrom"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "recorded_at_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "previous_checkpoint_sha256": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/sha256"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "checkpoint_sha256": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "ruleId": {
+      "type": "string",
+      "pattern": "^SPEC-[A-Z0-9]+-[0-9]{3}$"
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "reusedFrom": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "baseline",
+        "checkpoint_sha256",
+        "document_sha256"
+      ],
+      "properties": {
+        "baseline": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "checkpoint_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "document_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    }
+  }
+}

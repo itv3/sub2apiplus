@@ -29,6 +29,13 @@ from tools.official_client_capture.tests import test_codex_upgrade
 ORDER = artifacts.VC_PHASES
 R1 = "candidate-r1"
 R2 = "candidate-r2"
+# 改造 5：候选级 VC-5 批次必须冻结 evaluator 四项直接依赖摘要；单测夹具用固定值。
+EVALUATOR_DIGESTS = {
+    "checker_sha256": "a1" * 32,
+    "builder_sha256": "b2" * 32,
+    "compare_reader_sha256": "c3" * 32,
+    "accept_reader_sha256": "d4" * 32,
+}
 R3 = "candidate-r3"
 
 
@@ -785,12 +792,18 @@ class CandidateRevisionUnitTests(_ChainMixin, unittest.TestCase):
             artifacts.build_vc_batch(phase="VC-2", candidate_revision=1, candidate_id=R1, **campaign_level)
         campaign_batch = artifacts.build_vc_batch(phase="VC-2", **campaign_level)
         self.assertEqual((campaign_batch["candidate_revision"], campaign_batch["candidate_id"]), (None, None))
-        # v1 只读兼容：历史 batch 没有两字段，校验通过且不被补写。
-        legacy = {key: value for key, value in campaign_batch.items() if key not in {"candidate_revision", "candidate_id", "batch_sha256"}}
+        # v1 只读兼容：历史 batch 没有两字段（改造 5 后也没有评估基线三字段），校验通过且不被补写。
+        evaluation_fields = {"evaluation_baseline", "baseline_commit_sha256", "evaluator_digests"}
+        legacy = {key: value for key, value in campaign_batch.items() if key not in {"candidate_revision", "candidate_id", "batch_sha256"} | evaluation_fields}
         legacy["schema_version"] = artifacts.VC_BATCH_LEGACY_SCHEMA
         legacy["batch_sha256"] = artifacts.digest(legacy)
         validated = artifacts.validate_vc_batch(legacy, plan)
         self.assertNotIn("candidate_revision", validated)
+        # v2 只读兼容：改造 2 的 batch 只有候选两字段。
+        v2 = {key: value for key, value in campaign_batch.items() if key not in {"batch_sha256"} | evaluation_fields}
+        v2["schema_version"] = artifacts.VC_BATCH_V2_SCHEMA
+        v2["batch_sha256"] = artifacts.digest(v2)
+        self.assertNotIn("evaluator_digests", artifacts.validate_vc_batch(v2, plan))
         # 篡改 v2 两字段即摘要不符。
         tampered = dict(batch, candidate_id=R1)
         with self.assertRaisesRegex(artifacts.VCArtifactError, "batch_sha256|摘要"):
@@ -834,7 +847,7 @@ class CandidateRevisionUnitTests(_ChainMixin, unittest.TestCase):
             with self.assertRaisesRegex(supervisor.SupervisorError, "候选级阶段"):
                 load(dict(staging_manifest, candidate_revision=None, candidate_id=None))
             with self.assertRaisesRegex(supervisor.SupervisorError, "Campaign 级阶段"):
-                load(dict(null_manifest, candidate_revision=1, candidate_id=R1))
+                load(dict(null_manifest, candidate_revision=1, candidate_id=R1, evaluator_digests=EVALUATOR_DIGESTS))
 
     def test_staging_attempt_rejects_manifest_candidate_binding_drift(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -846,7 +859,7 @@ class CandidateRevisionUnitTests(_ChainMixin, unittest.TestCase):
             attempt_dir = campaign_dir / "control" / "vc" / "staging" / "0002-vc-2" / "attempt-1"
             loaded = codex_upgrade._load_prepared_staging_attempt(campaign_dir, attempt_dir, owner_nonce=None, sequence=2, phase="VC-2")
             self.assertEqual((loaded["run_manifest"]["candidate_revision"], loaded["run_manifest"]["candidate_id"]), (None, None))
-            drifted = dict(loaded["run_manifest"], candidate_revision=1, candidate_id=R1)
+            drifted = dict(loaded["run_manifest"], candidate_revision=1, candidate_id=R1, evaluator_digests=EVALUATOR_DIGESTS)
             with mock.patch.object(supervisor, "_campaign_run_manifest", return_value=drifted):
                 with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "candidate_revision／candidate_id 缺失或与 batch 不一致"):
                     codex_upgrade._load_prepared_staging_attempt(campaign_dir, attempt_dir, owner_nonce=None, sequence=2, phase="VC-2")
@@ -1025,6 +1038,7 @@ class CandidateRevisionUnitTests(_ChainMixin, unittest.TestCase):
                 must_start_by_utc=str(plan["original_deadline_at_utc"]),
                 candidate_revision=1,
                 candidate_id=R1,
+                evaluator_digests=EVALUATOR_DIGESTS,
             )
             run_manifest = codex_upgrade._vc_run_manifest_from_batch(batch, batch_model="staging")
 
@@ -1040,7 +1054,7 @@ class CandidateRevisionUnitTests(_ChainMixin, unittest.TestCase):
                 fixture2, campaign2, manifest2 = self._r1_ready(Path(second).resolve())
                 ledger2 = Path(str(fixture2["timing_ledger"]))
                 plan2 = codex_upgrade._vc_campaign_plan(campaign2, manifest2)
-                batch2 = artifacts.build_vc_batch(campaign_plan=plan2, phase="VC-5", sequence=5, predecessor_checkpoint=batch["predecessor_checkpoint"], execute_item_ids=["seal"], reuse_item_ids=[], actions=batch["actions"], compiled_at_utc="2026-09-14T01:00:00Z", must_start_by_utc=str(plan2["original_deadline_at_utc"]), candidate_revision=1, candidate_id=R1)
+                batch2 = artifacts.build_vc_batch(campaign_plan=plan2, phase="VC-5", sequence=5, predecessor_checkpoint=batch["predecessor_checkpoint"], execute_item_ids=["seal"], reuse_item_ids=[], actions=batch["actions"], compiled_at_utc="2026-09-14T01:00:00Z", must_start_by_utc=str(plan2["original_deadline_at_utc"]), candidate_revision=1, candidate_id=R1, evaluator_digests=EVALUATOR_DIGESTS)
                 manifest_2 = codex_upgrade._vc_run_manifest_from_batch(batch2, batch_model="staging")
                 timing_ledger.append_event(ledger2, event_id="s5", phase="VC-5", event_type="stage_started", next_action="x")
                 stopped = supervisor._close_failed_campaign_timing_ledger(campaign2, manifest_2, failed_action_id="seal", failure_class="identity-drift")
@@ -1051,7 +1065,7 @@ class CandidateRevisionUnitTests(_ChainMixin, unittest.TestCase):
                 fixture3, campaign3, manifest3 = self._r1_ready(Path(third).resolve())
                 ledger3 = Path(str(fixture3["timing_ledger"]))
                 plan3 = codex_upgrade._vc_campaign_plan(campaign3, manifest3)
-                batch3 = artifacts.build_vc_batch(campaign_plan=plan3, phase="VC-5", sequence=5, predecessor_checkpoint=batch["predecessor_checkpoint"], execute_item_ids=["seal"], reuse_item_ids=[], actions=batch["actions"], compiled_at_utc="2026-09-14T01:00:00Z", must_start_by_utc=str(plan3["original_deadline_at_utc"]), candidate_revision=1, candidate_id=R1)
+                batch3 = artifacts.build_vc_batch(campaign_plan=plan3, phase="VC-5", sequence=5, predecessor_checkpoint=batch["predecessor_checkpoint"], execute_item_ids=["seal"], reuse_item_ids=[], actions=batch["actions"], compiled_at_utc="2026-09-14T01:00:00Z", must_start_by_utc=str(plan3["original_deadline_at_utc"]), candidate_revision=1, candidate_id=R1, evaluator_digests=EVALUATOR_DIGESTS)
                 manifest_3 = codex_upgrade._vc_run_manifest_from_batch(batch3, batch_model="staging")
                 timing_ledger.append_event(ledger3, event_id="s5", phase="VC-5", event_type="stage_started", next_action="x")
                 real_head = project_ledger.replay_head
@@ -1063,7 +1077,7 @@ class CandidateRevisionUnitTests(_ChainMixin, unittest.TestCase):
                 fixture4, campaign4, manifest4 = self._r1_ready(Path(fourth).resolve())
                 ledger4 = Path(str(fixture4["timing_ledger"]))
                 plan4 = codex_upgrade._vc_campaign_plan(campaign4, manifest4)
-                batch4 = artifacts.build_vc_batch(campaign_plan=plan4, phase="VC-5", sequence=5, predecessor_checkpoint=batch["predecessor_checkpoint"], execute_item_ids=["seal"], reuse_item_ids=[], actions=batch["actions"], compiled_at_utc="2026-09-14T01:00:00Z", must_start_by_utc=str(plan4["original_deadline_at_utc"]), candidate_revision=1, candidate_id=R1)
+                batch4 = artifacts.build_vc_batch(campaign_plan=plan4, phase="VC-5", sequence=5, predecessor_checkpoint=batch["predecessor_checkpoint"], execute_item_ids=["seal"], reuse_item_ids=[], actions=batch["actions"], compiled_at_utc="2026-09-14T01:00:00Z", must_start_by_utc=str(plan4["original_deadline_at_utc"]), candidate_revision=1, candidate_id=R1, evaluator_digests=EVALUATOR_DIGESTS)
                 manifest_4 = codex_upgrade._vc_run_manifest_from_batch(batch4, batch_model="staging")
                 timing_ledger.append_event(ledger4, event_id="s5", phase="VC-5", event_type="stage_started", next_action="x")
                 review = supervisor._close_failed_campaign_timing_ledger(campaign4, manifest_4, failed_action_id="seal", failure_class="execution-failure")
@@ -1082,7 +1096,7 @@ class CandidateRevisionUnitTests(_ChainMixin, unittest.TestCase):
                 fixture5, campaign5, manifest5 = self._r1_ready(Path(fifth).resolve())
                 ledger5 = Path(str(fixture5["timing_ledger"]))
                 plan5 = codex_upgrade._vc_campaign_plan(campaign5, manifest5)
-                batch5 = artifacts.build_vc_batch(campaign_plan=plan5, phase="VC-5", sequence=5, predecessor_checkpoint=batch["predecessor_checkpoint"], execute_item_ids=["seal"], reuse_item_ids=[], actions=batch["actions"], compiled_at_utc="2026-09-14T01:00:00Z", must_start_by_utc=str(plan5["original_deadline_at_utc"]), candidate_revision=1, candidate_id=R1)
+                batch5 = artifacts.build_vc_batch(campaign_plan=plan5, phase="VC-5", sequence=5, predecessor_checkpoint=batch["predecessor_checkpoint"], execute_item_ids=["seal"], reuse_item_ids=[], actions=batch["actions"], compiled_at_utc="2026-09-14T01:00:00Z", must_start_by_utc=str(plan5["original_deadline_at_utc"]), candidate_revision=1, candidate_id=R1, evaluator_digests=EVALUATOR_DIGESTS)
                 timing_ledger.append_event(ledger5, event_id="s5", phase="VC-5", event_type="stage_started", next_action="x")
                 stopped = supervisor._close_failed_campaign_timing_ledger(campaign5, codex_upgrade._vc_run_manifest_from_batch(batch5, batch_model="legacy"), failed_action_id="seal", failure_class="execution-failure")
                 self.assertEqual(stopped["ledger_status"], "stopped")

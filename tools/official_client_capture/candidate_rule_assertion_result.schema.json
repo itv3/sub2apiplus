@@ -47,6 +47,16 @@
       "description": "对 UTF-8 编码的紧凑 JSON 命令参数数组计算 SHA-256。",
       "pattern": "^[0-9a-f]{64}$"
     },
+    "projection_sha256": {
+      "type": "string",
+      "description": "改造 5：checker 以 --capture-manifest-projection 投影模式执行时，投影文档（规范 JSON 字节）的 SHA-256；整份 manifest 模式的历史文档没有该字段。",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "capture_manifest_sha256": {
+      "type": "string",
+      "description": "改造 5：投影模式下原始完整 capture manifest 文件的 SHA-256（只作审计绑定，不进逐规则依赖摘要）。",
+      "pattern": "^[0-9a-f]{64}$"
+    },
     "checks": {
       "type": "array",
       "minItems": 1,

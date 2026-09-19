@@ -1908,9 +1908,15 @@ def _run_facts(run_dir: Path, campaign_dir: Path, manifest: Mapping[str, Any]) -
                 }
     stop_path = run_dir / "stop-receipt.json"
     stop_reason: str | None = None
+    stop_action_outputs_sha256: str | None = None
     if stop_path.is_file() and not stop_path.is_symlink():
-        stop_reason_value = _read_json(stop_path, "stop-receipt").get("reason")
+        try:
+            stop_receipt = supervisor.read_stop_receipt(run_dir)
+        except supervisor.SupervisorError as error:
+            raise ReconcilerError(f"stop-receipt 无法校验：{error}") from error
+        stop_reason_value = stop_receipt.get("reason")
         stop_reason = stop_reason_value if isinstance(stop_reason_value, str) else None
+        stop_action_outputs_sha256 = stop_receipt.get("action_outputs_sha256")
     staging = _staging_run_facts(run_dir, state, stop_reason, action_diagnostic)
     if staging is not None:
         failure_class = str(staging["failure_class"])
@@ -1923,6 +1929,7 @@ def _run_facts(run_dir: Path, campaign_dir: Path, manifest: Mapping[str, Any]) -
         "run_id": run_dir.name,
         "state": state.get("state"),
         "stop_reason": stop_reason,
+        "stop_action_outputs_sha256": stop_action_outputs_sha256,
         "staging": staging,
         "owner_pid": state.get("owner_pid"),
         "owner_alive": owner_alive,
@@ -2174,6 +2181,103 @@ def _finalize_orphaned_prepared_run(run_dir: Path) -> dict[str, Any] | None:
         raise ReconcilerError(f"prepared 父 run 终态化失败：{error}") from error
 
 
+def _backfill_orphaned_action_failure(
+    run_dir: Path,
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """改造 5（R2）前置锁段：owner 丢失后由 monitor 封存的 ``failed／action-failed:<id>`` run。
+
+    Campaign 锁内：① 复算 ``evaluation_orphan_facts`` 并要求与 stop-receipt 的
+    ``action_outputs_sha256`` 一致（不一致即失败关闭、不入账）；② 缺失 post-run-tooling 收据时
+    以同一 ``post_run_tooling_facts`` 复算并 write-once 补写；解锁后由既有只读 ``_run_facts``
+    重新生成事实。非 action-failed 终态或 owner 仍在线的 run 直接返回 None。
+    """
+
+    state = supervisor._read_state(run_dir)
+    if state.get("state") != "failed":
+        return None
+    stop_path = run_dir / "stop-receipt.json"
+    if stop_path.is_symlink() or not stop_path.is_file():
+        return None
+    try:
+        stop = supervisor.read_stop_receipt(run_dir)
+    except supervisor.SupervisorError as error:
+        raise ReconcilerError(f"stop-receipt 无法校验：{error}") from error
+    reason = stop.get("reason")
+    if not isinstance(reason, str) or not reason.startswith("action-failed:"):
+        return None
+    if supervisor._owner_alive(int(state["owner_pid"])):
+        return None
+    # 只有 monitor 的 R2 确定性封存才留下 operation=supervisor:owner-check 的 failed 事件；
+    # owner 自己经 stop-request 封存的 run（operation=supervisor:stop）与历史夹具沿用既有对账。
+    try:
+        events = supervisor.load_events(run_dir)
+    except supervisor.SupervisorError as error:
+        raise ReconcilerError(f"父 run 事件账本无法重放：{error}") from error
+    if not any(
+        event.get("event_type") == "failed" and event.get("operation") == "supervisor:owner-check"
+        for event in events
+    ):
+        return None
+    manifest_path = run_dir / "campaign-run-manifest.json"
+    if manifest_path.is_symlink() or not manifest_path.is_file():
+        return None
+    record = _read_json(manifest_path, "campaign-run 清单")
+    inner = record.get("manifest")
+    if not isinstance(inner, Mapping):
+        return None
+    with codex_upgrade._campaign_lock(campaign_dir):
+        try:
+            orphan = supervisor.evaluation_orphan_facts(run_dir, state, inner)
+        except supervisor.SupervisorError as error:
+            raise ReconcilerError(f"owner 丢失 run 的失败身份无法复算：{error}") from error
+        if not orphan["complete"] or orphan["binding_mismatch"]:
+            raise ReconcilerError(
+                "failed／action-failed 终态的父 run 失败身份不完整或动作输出绑定不一致："
+                + "、".join(orphan["reasons"])
+            )
+        if orphan["action_outputs_sha256"] != stop.get("action_outputs_sha256"):
+            raise ReconcilerError(
+                "stop-receipt 的 action_outputs_sha256 与当前动作输出绑定复算结果不一致"
+            )
+        action_id = str(orphan["action_id"])
+        diagnostic_path = run_dir / "action-diagnostics" / f"action-{action_id}-failure.json"
+        try:
+            diagnostic = supervisor._validate_action_diagnostic(
+                diagnostic_path,
+                run_dir=run_dir,
+                campaign_id=str(manifest["campaign_id"]),
+                phase=str(state["phase"]),
+                action_id=action_id,
+                owner_pid=int(state["owner_pid"]),
+                owner_nonce=str(state["owner_nonce"]),
+            )
+            receipt, backfilled = supervisor.ensure_post_run_tooling_receipt(
+                run_dir,
+                diagnostic,
+                campaign_dir=campaign_dir,
+                inner_manifest=inner,
+                campaign_id=str(manifest["campaign_id"]),
+                phase=str(state["phase"]),
+                action_id=action_id,
+                owner_pid=int(state["owner_pid"]),
+                owner_nonce=str(state["owner_nonce"]),
+                run_started_at_utc=str(state.get("started_at_utc", "")),
+                owner_alive=False,
+            )
+        except supervisor.SupervisorError as error:
+            raise ReconcilerError(f"post-run-tooling 收据无法复算或补写：{error}") from error
+    return {
+        "orphan_facts": {
+            "action_id": action_id,
+            "action_outputs_sha256": orphan["action_outputs_sha256"],
+        },
+        "backfilled": backfilled,
+        "post_run_tooling_receipt_sha256": receipt["receipt_sha256"] if receipt is not None else None,
+    }
+
+
 def reconcile_supervisor_run(
     run_dir: Path,
     campaign_dir: Path,
@@ -2190,7 +2294,13 @@ def reconcile_supervisor_run(
     observed = now or _utc_now()
     resolved_run_dir = Path(run_dir).resolve(strict=True)
     _finalize_orphaned_prepared_run(resolved_run_dir)
+    orphan_backfill = _backfill_orphaned_action_failure(resolved_run_dir, campaign_dir, manifest)
     run = _run_facts(resolved_run_dir, campaign_dir, manifest)
+    if orphan_backfill is not None:
+        action_diagnostic = run.get("action_diagnostic")
+        if isinstance(action_diagnostic, dict) and isinstance(action_diagnostic.get("post_run_tooling"), dict):
+            action_diagnostic["post_run_tooling"]["backfilled"] = bool(orphan_backfill["backfilled"])
+        run["orphan_facts"] = orphan_backfill["orphan_facts"]
     current = _current_identity()
     identity = _identity_facts(campaign_dir, manifest, current)
     ledger_dir = _campaign_ledger_dir(manifest)

@@ -21,8 +21,44 @@ CAMPAIGN_PLAN_SCHEMA = "codex-upgrade-campaign-plan/v1"
 VC_CHECKPOINT_SCHEMA = "codex-upgrade-vc-checkpoint/v1"
 # 改造 2（候选级 revision）：batch v2 新增 candidate_revision／candidate_id（候选级阶段必填，
 # Campaign 级阶段为 null）；v1 只读兼容。
-VC_BATCH_SCHEMA = "codex-upgrade-vc-batch/v2"
+# 改造 5（评估失败局部恢复）：batch v3 再加 evaluation_baseline／baseline_commit_sha256
+# （候选级 VC-5 的 b0 与 Campaign 级为 null）、evaluator_digests（候选级 VC-5 必填四项，其余
+# null）与动作可选 output_bindings；v2／v1 只读兼容。
+VC_BATCH_SCHEMA = "codex-upgrade-vc-batch/v3"
+VC_BATCH_V2_SCHEMA = "codex-upgrade-vc-batch/v2"
 VC_BATCH_LEGACY_SCHEMA = "codex-upgrade-vc-batch/v1"
+# 改造 5：评估基线 b<K>（候选内 append-only 的离线评估维度）控制制品。
+EVALUATION_BASELINE_SCHEMA = "codex-upgrade-evaluation-baseline/v1"
+EVALUATION_BASELINE_PREPARED_SCHEMA = "codex-upgrade-evaluation-baseline-prepared/v1"
+EVALUATION_BASELINE_AUTHORIZATION_SCHEMA = (
+    "codex-upgrade-evaluation-baseline-authorization/v1"
+)
+EVALUATION_BASELINE_COMMIT_SCHEMA = "codex-upgrade-evaluation-baseline-commit/v1"
+EVALUATION_BASELINE_ABANDON_SCHEMA = "codex-upgrade-evaluation-baseline-abandon/v1"
+EVALUATION_CHECKPOINT_SCHEMA = "codex-upgrade-evaluation-checkpoint/v1"
+EVALUATION_RUN_SCHEMA = "codex-upgrade-evaluation-run/v1"
+EVALUATION_FAILURE_DIAGNOSIS_SCHEMA = "codex-upgrade-evaluation-failure-diagnosis/v1"
+ACTION_OUTPUT_BINDING_SCHEMA = "codex-upgrade-action-output-binding/v1"
+MANIFEST_PROJECTION_SCHEMA = "codex-upgrade-evidence-manifest-projection/v1"
+EFFECTIVE_RESULTS_SCHEMA = "codex-upgrade-effective-results/v1"
+EVALUATION_BASELINE_KINDS = ("evaluator-only", "attempt-recovery")
+# 失败来源只由失败父 run 的动作推出（三者互斥）；复用授权只由 stop-receipt 的
+# action_outputs_sha256 是否为 null 决定，读侧不得以字段缺失表达语义。
+FAILURE_SOURCES = ("assertion-failed", "offline-compare-failed", "offline-accept-failed")
+REUSE_AUTHORITIES = ("anchored", "none")
+ROOT_CAUSE_CLASSES = (
+    "evaluator-defect",
+    "transient-environment",
+    "candidate-source",
+    "approval-inputs",
+)
+EVALUATION_STAGES = ("capture-candidate", "compare", "assertions", "accept")
+EVALUATOR_DIGEST_FIELDS = (
+    "checker_sha256",
+    "builder_sha256",
+    "compare_reader_sha256",
+    "accept_reader_sha256",
+)
 CANDIDATE_PHASES = ("VC-4", "VC-5", "VC-6")
 CANDIDATE_REVISION_SCHEMA = "codex-upgrade-candidate-revision/v1"
 CANDIDATE_REVISION_COMMIT_SCHEMA = "codex-upgrade-candidate-revision-commit/v1"
@@ -51,13 +87,16 @@ PARENT_START_FAILURE_SCHEMA = "codex-upgrade-parent-start-failure/v1"
 # 历史 plan 没有该字段，按 legacy 解释，其 plan_sha256 不变。
 BATCH_MODELS = ("legacy", "staging")
 # ABORT 的 stage：prepare／parent-run-create 是没有父 run 的 P1；parent-run 是父 run
-# prepared 后被遗弃（P2）或 watchdog 中止；其余四个是 commit 四步中 COMMIT 前的失败步骤
-# （与监督器 stop reason ``staging-commit-failed:<step>`` 的后缀同名）。
+# prepared 后被遗弃（P2）或 watchdog 中止；其余五个是 commit 步骤中 COMMIT 前的失败步骤
+# （与监督器 stop reason ``staging-commit-failed:<step>`` 的后缀同名）。改造 5 在
+# nonce-mismatch 之后插入 evaluator-digests：正式 COMMIT 前核对当前 evaluator 四项摘要
+# 等于批次冻结值，不等即中止、序号不占、同序号重新编译。
 STAGING_ABORT_STAGES = (
     "prepare",
     "parent-run-create",
     "parent-run",
     "nonce-mismatch",
+    "evaluator-digests",
     "commit-ledger",
     "commit-publish",
     "commit-mark",
@@ -462,10 +501,15 @@ def build_vc_batch(
     must_start_by_utc: str,
     candidate_revision: int | None = None,
     candidate_id: str | None = None,
+    evaluation_baseline: int | None = None,
+    baseline_commit_sha256: str | None = None,
+    evaluator_digests: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """从前序 checkpoint 编译同一 Campaign 的一个不可变执行批次（v2）。
+    """从前序 checkpoint 编译同一 Campaign 的一个不可变执行批次（v3）。
 
     候选级阶段（VC-4～VC-6）必须绑定当前 revision 与其候选；Campaign 级阶段两字段为 null。
+    改造 5：候选级 VC-5 批次冻结当前评估基线（b0 为 null）与 evaluator 四项直接依赖摘要，
+    其余阶段三字段为 null；动作可声明 output_bindings（Campaign 相对路径）。
     """
 
     plan = validate_campaign_plan(campaign_plan)
@@ -482,15 +526,53 @@ def build_vc_batch(
         ),
         "execute_item_ids": sorted(set(execute_item_ids)),
         "reuse_item_ids": sorted(set(reuse_item_ids)),
-        "actions": [json.loads(json.dumps(dict(item), ensure_ascii=False)) for item in actions],
+        # 动作经同一规范化（output_bindings 排序），保证 batch 与由它生成的清单逐字一致。
+        "actions": _actions(
+            [json.loads(json.dumps(dict(item), ensure_ascii=False)) for item in actions],
+            execute_item_ids=sorted(set(execute_item_ids)),
+            allow_output_bindings=True,
+        ),
         "compiled_at_utc": _timestamp(compiled_at_utc, "compiled_at_utc"),
         "must_start_by_utc": _timestamp(must_start_by_utc, "must_start_by_utc"),
         "original_deadline_at_utc": plan["original_deadline_at_utc"],
         "candidate_revision": candidate_revision,
         "candidate_id": candidate_id,
+        "evaluation_baseline": evaluation_baseline,
+        "baseline_commit_sha256": baseline_commit_sha256,
+        "evaluator_digests": (
+            json.loads(json.dumps(dict(evaluator_digests), ensure_ascii=False))
+            if evaluator_digests is not None
+            else None
+        ),
     }
     payload["batch_sha256"] = digest(payload)
     return validate_vc_batch(payload, plan)
+
+
+def validate_evaluator_digests(value: Any, label: str) -> dict[str, str]:
+    """evaluator 四项直接依赖摘要的精确闭集：checker／builder／compare-reader／accept-reader。"""
+
+    if not isinstance(value, Mapping) or set(value) != set(EVALUATOR_DIGEST_FIELDS):
+        raise VCArtifactError(f"{label} evaluator_digests 字段不闭合")
+    return {field: _sha256(value.get(field), f"{label} evaluator_digests.{field}") for field in EVALUATOR_DIGEST_FIELDS}
+
+
+def validate_batch_evaluation_binding(payload: Mapping[str, Any], phase: str, label: str) -> None:
+    """改造 5：评估基线两字段成对（b0／Campaign 级为 null）；evaluator_digests 只在候选级 VC-5 非 null。"""
+
+    baseline = payload.get("evaluation_baseline")
+    commit_sha256 = payload.get("baseline_commit_sha256")
+    digests = payload.get("evaluator_digests")
+    if phase == "VC-5":
+        if (baseline is None) != (commit_sha256 is None):
+            raise VCArtifactError(f"{label} evaluation_baseline 与 baseline_commit_sha256 必须成对")
+        if baseline is not None:
+            if isinstance(baseline, bool) or not isinstance(baseline, int) or baseline < 1:
+                raise VCArtifactError(f"{label} evaluation_baseline 必须是正整数或 null")
+            _sha256(commit_sha256, f"{label} baseline_commit_sha256")
+        validate_evaluator_digests(digests, label)
+    elif baseline is not None or commit_sha256 is not None or digests is not None:
+        raise VCArtifactError(f"{label} 非 VC-5 阶段不得绑定评估基线或 evaluator_digests")
 
 
 def _validate_batch_candidate_binding(payload: Mapping[str, Any], phase: str, label: str) -> None:
@@ -530,6 +612,14 @@ def validate_vc_batch(
         raise VCArtifactError("VC batch 字段不闭合")
     schema_version = value.get("schema_version")
     if schema_version == VC_BATCH_SCHEMA:
+        required = required | {
+            "candidate_revision",
+            "candidate_id",
+            "evaluation_baseline",
+            "baseline_commit_sha256",
+            "evaluator_digests",
+        }
+    elif schema_version == VC_BATCH_V2_SCHEMA:
         required = required | {"candidate_revision", "candidate_id"}
     elif schema_version != VC_BATCH_LEGACY_SCHEMA:
         raise VCArtifactError("VC batch schema、阶段、序号或身份非法")
@@ -538,8 +628,10 @@ def validate_vc_batch(
     payload = dict(value)
     sequence = payload.get("sequence")
     phase = payload.get("phase")
-    if schema_version == VC_BATCH_SCHEMA:
+    if schema_version in {VC_BATCH_SCHEMA, VC_BATCH_V2_SCHEMA}:
         _validate_batch_candidate_binding(payload, str(phase), "VC batch")
+    if schema_version == VC_BATCH_SCHEMA:
+        validate_batch_evaluation_binding(payload, str(phase), "VC batch")
     if (
         phase not in VC_PHASES[1:]
         or not isinstance(sequence, int)
@@ -583,6 +675,7 @@ def validate_vc_batch(
     actions = _actions(
         payload.get("actions"),
         execute_item_ids=payload["execute_item_ids"],
+        allow_output_bindings=(schema_version == VC_BATCH_SCHEMA),
     )
     if payload["execute_item_ids"] and not actions:
         raise VCArtifactError("VC batch 有 execute 项却没有动作")
@@ -1418,6 +1511,857 @@ def validate_candidate_invalidation(value: Any) -> dict[str, Any]:
     return payload
 
 
+# ---------------------------------------------------------------------------
+# 改造 5（评估失败局部恢复）：评估基线 b<K> 五件套、checkpoint／run 索引、动作输出绑定
+# ---------------------------------------------------------------------------
+
+RECOVERY_REVISION_RE = re.compile(r"^ar[1-9][0-9]*$")
+GIT_COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
+ROOT_CAUSE_ID_RE = re.compile(r"^rc1-[0-9a-f]{20}$")
+EVALUATION_SIDES = ("candidate", "official")
+EVALUATION_RULE_STATUSES = ("pass", "fail", "pending")
+VALIDATION_MODES = ("dual_wire", "candidate_profile")
+
+
+def _non_negative_int(value: Any, label: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise VCArtifactError(f"{label} 必须是非负整数")
+    return value
+
+
+def _sorted_safe_ids(values: Any, label: str) -> list[str]:
+    if (
+        not isinstance(values, list)
+        or values != sorted(set(values))
+        or not all(isinstance(item, str) and SAFE_ID_RE.fullmatch(item) for item in values)
+    ):
+        raise VCArtifactError(f"{label} 必须是排序且无重复的安全标识数组")
+    return list(values)
+
+
+def _optional_binding(value: Any, label: str) -> dict[str, Any] | None:
+    return None if value is None else _binding(value, label)
+
+
+def _recovery_revision(value: Any, label: str) -> str:
+    if not isinstance(value, str) or not RECOVERY_REVISION_RE.fullmatch(value):
+        raise VCArtifactError(f"{label} 不是 ar<k> 形式的恢复段编号")
+    return value
+
+
+def _baseline_identity(payload: Mapping[str, Any], label: str) -> None:
+    """评估基线制品共用的候选／基线身份四字段。"""
+
+    _safe_id(payload.get("campaign_id"), f"{label} campaign_id")
+    _safe_id(payload.get("candidate_id"), f"{label} candidate_id")
+    _positive_int(payload.get("candidate_revision"), f"{label} candidate_revision")
+    _positive_int(payload.get("evaluation_baseline"), f"{label} evaluation_baseline")
+
+
+def validate_stage_source(value: Any, stage: str, label: str) -> dict[str, Any]:
+    """COMMIT.stage_sources 的 tagged union：reused 绑定历史 path＋sha256，local 只冻结规范写目标。"""
+
+    if stage not in EVALUATION_STAGES:
+        raise VCArtifactError(f"{label} 阶段 {stage} 不在评估阶段闭集内")
+    if not isinstance(value, Mapping):
+        raise VCArtifactError(f"{label}.{stage} 必须是对象")
+    source = value.get("source")
+    if source == "reused":
+        if set(value) != {"source", "baseline", "path", "sha256"}:
+            raise VCArtifactError(f"{label}.{stage} reused 字段不闭合")
+        if stage in {"assertions", "accept"}:
+            raise VCArtifactError(f"{label}.{stage} 评估基线一定重算断言与 accept，不得 reused")
+        return {
+            "source": "reused",
+            "baseline": _non_negative_int(value.get("baseline"), f"{label}.{stage}.baseline"),
+            "path": _relative_path(value.get("path"), f"{label}.{stage}.path"),
+            "sha256": _sha256(value.get("sha256"), f"{label}.{stage}.sha256"),
+        }
+    if source == "local":
+        if set(value) != {"source", "target"}:
+            raise VCArtifactError(f"{label}.{stage} local 字段不闭合")
+        return {
+            "source": "local",
+            "target": _relative_path(value.get("target"), f"{label}.{stage}.target"),
+        }
+    raise VCArtifactError(f"{label}.{stage}.source 只能是 reused 或 local")
+
+
+def validate_stage_sources(value: Any, *, kind: str, label: str) -> dict[str, dict[str, Any]]:
+    if not isinstance(value, Mapping) or set(value) != set(EVALUATION_STAGES):
+        raise VCArtifactError(f"{label} stage_sources 必须覆盖全部四个评估阶段")
+    normalized = {stage: validate_stage_source(value.get(stage), stage, label) for stage in EVALUATION_STAGES}
+    if kind == "evaluator-only":
+        if normalized["capture-candidate"]["source"] != "reused":
+            raise VCArtifactError(f"{label} evaluator-only 基线的 capture-candidate 必须 reused")
+    elif kind == "attempt-recovery":
+        if normalized["capture-candidate"]["source"] != "local" or normalized["compare"]["source"] != "local":
+            raise VCArtifactError(f"{label} attempt-recovery 基线的 capture-candidate 与 compare 必须 local")
+    else:
+        raise VCArtifactError(f"{label} kind 非法")
+    return normalized
+
+
+def build_evaluation_recovery(
+    *,
+    campaign_id: str,
+    candidate_id: str,
+    candidate_revision: int,
+    evaluation_baseline: int,
+    kind: str,
+    diagnosis: Mapping[str, Any],
+    failure_source: str,
+    reuse_authority: str,
+    root_cause_class: str,
+    root_cause_id: str,
+    failed_step: str,
+    previous_baseline: int,
+    previous_baseline_commit_sha256: str | None,
+    execute_rules: Sequence[str],
+    reuse_rules: Sequence[str],
+    execute_jobs: Sequence[str],
+    reuse_jobs: Sequence[str],
+    attempt_id: str | None,
+    recovery_revision: str | None,
+    fix_commit: str | None,
+    deployment_receipt: Mapping[str, Any] | None,
+    failed_evaluator_digests: Mapping[str, Any],
+    current_evaluator_digests: Mapping[str, Any],
+    reviewer: str,
+    approved_at_utc: str,
+) -> dict[str, Any]:
+    """revisions/b<K>/recovery.json：apply 冻结的恢复合同（write-once）。"""
+
+    payload = {
+        "schema_version": EVALUATION_BASELINE_SCHEMA,
+        "campaign_id": campaign_id,
+        "candidate_id": candidate_id,
+        "candidate_revision": candidate_revision,
+        "evaluation_baseline": evaluation_baseline,
+        "kind": kind,
+        "diagnosis": dict(diagnosis),
+        "failure_source": failure_source,
+        "reuse_authority": reuse_authority,
+        "root_cause_class": root_cause_class,
+        "root_cause_id": root_cause_id,
+        "failed_step": failed_step,
+        "previous_baseline": previous_baseline,
+        "previous_baseline_commit_sha256": previous_baseline_commit_sha256,
+        "execute_rules": sorted(set(execute_rules)),
+        "reuse_rules": sorted(set(reuse_rules)),
+        "execute_jobs": sorted(set(execute_jobs)),
+        "reuse_jobs": sorted(set(reuse_jobs)),
+        "attempt_id": attempt_id,
+        "recovery_revision": recovery_revision,
+        "fix_commit": fix_commit,
+        "deployment_receipt": dict(deployment_receipt) if deployment_receipt is not None else None,
+        "failed_evaluator_digests": dict(failed_evaluator_digests),
+        "current_evaluator_digests": dict(current_evaluator_digests),
+        "reviewer": reviewer,
+        "approved_at_utc": approved_at_utc,
+    }
+    payload["recovery_sha256"] = digest(payload)
+    return validate_evaluation_recovery(payload)
+
+
+def validate_evaluation_recovery(value: Any) -> dict[str, Any]:
+    required = {
+        "schema_version", "campaign_id", "candidate_id", "candidate_revision", "evaluation_baseline", "kind",
+        "diagnosis", "failure_source", "reuse_authority", "root_cause_class", "root_cause_id", "failed_step",
+        "previous_baseline", "previous_baseline_commit_sha256", "execute_rules", "reuse_rules", "execute_jobs",
+        "reuse_jobs", "attempt_id", "recovery_revision", "fix_commit", "deployment_receipt",
+        "failed_evaluator_digests", "current_evaluator_digests", "reviewer", "approved_at_utc", "recovery_sha256",
+    }
+    if not isinstance(value, Mapping) or set(value) != required:
+        raise VCArtifactError("评估基线 recovery 字段不闭合")
+    payload = dict(value)
+    label = "评估基线 recovery"
+    if payload.get("schema_version") != EVALUATION_BASELINE_SCHEMA:
+        raise VCArtifactError(f"{label} schema_version 非法")
+    _baseline_identity(payload, label)
+    kind = payload.get("kind")
+    if kind not in EVALUATION_BASELINE_KINDS:
+        raise VCArtifactError(f"{label} kind 非法")
+    _binding(payload.get("diagnosis"), f"{label} diagnosis")
+    if payload.get("failure_source") not in FAILURE_SOURCES:
+        raise VCArtifactError(f"{label} failure_source 非法")
+    if payload.get("reuse_authority") not in REUSE_AUTHORITIES:
+        raise VCArtifactError(f"{label} reuse_authority 非法")
+    root_cause_class = payload.get("root_cause_class")
+    if root_cause_class not in {"evaluator-defect", "transient-environment"}:
+        raise VCArtifactError(f"{label} root_cause_class 只允许 evaluator-defect／transient-environment")
+    if (root_cause_class == "evaluator-defect") != (kind == "evaluator-only"):
+        raise VCArtifactError(f"{label} root_cause_class 与 kind 不对应")
+    if not isinstance(payload.get("root_cause_id"), str) or not ROOT_CAUSE_ID_RE.fullmatch(payload["root_cause_id"]):
+        raise VCArtifactError(f"{label} root_cause_id 非法")
+    failed_step = payload.get("failed_step")
+    if not isinstance(failed_step, str) or not failed_step or len(failed_step) > 128:
+        raise VCArtifactError(f"{label} failed_step 非法")
+    previous = _non_negative_int(payload.get("previous_baseline"), f"{label} previous_baseline")
+    if previous >= payload["evaluation_baseline"]:
+        raise VCArtifactError(f"{label} previous_baseline 必须小于本基线编号")
+    previous_commit = _optional_sha256(
+        payload.get("previous_baseline_commit_sha256"), f"{label} previous_baseline_commit_sha256"
+    )
+    if (previous == 0) != (previous_commit is None):
+        raise VCArtifactError(f"{label} 只有 b0 前序没有 COMMIT 摘要")
+    execute_rules = _rule_ids(payload.get("execute_rules"), f"{label} execute_rules")
+    reuse_rules = _rule_ids(payload.get("reuse_rules"), f"{label} reuse_rules")
+    if set(execute_rules) & set(reuse_rules):
+        raise VCArtifactError(f"{label} execute_rules 与 reuse_rules 相交")
+    execute_jobs = _sorted_safe_ids(payload.get("execute_jobs"), f"{label} execute_jobs")
+    reuse_jobs = _sorted_safe_ids(payload.get("reuse_jobs"), f"{label} reuse_jobs")
+    if set(execute_jobs) & set(reuse_jobs):
+        raise VCArtifactError(f"{label} execute_jobs 与 reuse_jobs 相交")
+    attempt_id = _optional_safe_id(payload.get("attempt_id"), f"{label} attempt_id")
+    recovery_revision = payload.get("recovery_revision")
+    if kind == "attempt-recovery":
+        if attempt_id is None or not execute_jobs:
+            raise VCArtifactError(f"{label} attempt-recovery 必须绑定原 attempt 与非空 execute_jobs")
+        _recovery_revision(recovery_revision, f"{label} recovery_revision")
+        if payload.get("failure_source") != "assertion-failed":
+            raise VCArtifactError(f"{label} attempt-recovery 只能由断言失败触发")
+        if payload.get("fix_commit") is not None or payload.get("deployment_receipt") is not None:
+            raise VCArtifactError(f"{label} attempt-recovery 不绑定修复提交或部署收据")
+    else:
+        if attempt_id is not None or recovery_revision is not None or execute_jobs:
+            raise VCArtifactError(f"{label} evaluator-only 不得绑定 attempt、恢复段或重采 Job")
+        fix_commit = payload.get("fix_commit")
+        if not isinstance(fix_commit, str) or not GIT_COMMIT_RE.fullmatch(fix_commit):
+            raise VCArtifactError(f"{label} evaluator-defect 必须绑定完整修复提交")
+        if payload.get("deployment_receipt") is None:
+            raise VCArtifactError(f"{label} evaluator-defect 必须绑定部署收据")
+    _optional_binding(payload.get("deployment_receipt"), f"{label} deployment_receipt")
+    validate_evaluator_digests(payload.get("failed_evaluator_digests"), f"{label} failed")
+    validate_evaluator_digests(payload.get("current_evaluator_digests"), f"{label} current")
+    if payload.get("reuse_authority") == "none" and reuse_rules:
+        raise VCArtifactError(f"{label} reuse_authority=none 时不得声明任何复用规则")
+    reviewer = payload.get("reviewer")
+    if not isinstance(reviewer, str) or not reviewer or len(reviewer) > 128:
+        raise VCArtifactError(f"{label} reviewer 非法")
+    _timestamp(payload.get("approved_at_utc"), f"{label} approved_at_utc")
+    _self_digest(payload, "recovery_sha256", label)
+    return payload
+
+
+def build_evaluation_baseline_prepared(
+    *,
+    campaign_id: str,
+    candidate_id: str,
+    candidate_revision: int,
+    evaluation_baseline: int,
+    recovery_sha256: str,
+    project_ledger_head_sequence: int,
+    project_ledger_head_sha256: str,
+    prepared_at_utc: str,
+) -> dict[str, Any]:
+    """PREPARED：绑定 recovery 自摘要与裁定前的总账 head 快照；此时 b<K> 不是当前基线。"""
+
+    payload = {
+        "schema_version": EVALUATION_BASELINE_PREPARED_SCHEMA,
+        "campaign_id": campaign_id,
+        "candidate_id": candidate_id,
+        "candidate_revision": candidate_revision,
+        "evaluation_baseline": evaluation_baseline,
+        "recovery_sha256": recovery_sha256,
+        "project_ledger_head_sequence": project_ledger_head_sequence,
+        "project_ledger_head_sha256": project_ledger_head_sha256,
+        "prepared_at_utc": prepared_at_utc,
+    }
+    payload["marker_sha256"] = digest(payload)
+    return validate_evaluation_baseline_prepared(payload)
+
+
+def validate_evaluation_baseline_prepared(value: Any) -> dict[str, Any]:
+    required = {
+        "schema_version", "campaign_id", "candidate_id", "candidate_revision", "evaluation_baseline",
+        "recovery_sha256", "project_ledger_head_sequence", "project_ledger_head_sha256", "prepared_at_utc",
+        "marker_sha256",
+    }
+    if not isinstance(value, Mapping) or set(value) != required:
+        raise VCArtifactError("评估基线 PREPARED 字段不闭合")
+    payload = dict(value)
+    label = "评估基线 PREPARED"
+    if payload.get("schema_version") != EVALUATION_BASELINE_PREPARED_SCHEMA:
+        raise VCArtifactError(f"{label} schema_version 非法")
+    _baseline_identity(payload, label)
+    _sha256(payload.get("recovery_sha256"), f"{label} recovery_sha256")
+    _non_negative_int(payload.get("project_ledger_head_sequence"), f"{label} project_ledger_head_sequence")
+    _sha256(payload.get("project_ledger_head_sha256"), f"{label} project_ledger_head_sha256")
+    _timestamp(payload.get("prepared_at_utc"), f"{label} prepared_at_utc")
+    _self_digest(payload, "marker_sha256", label)
+    return payload
+
+
+def build_evaluation_baseline_authorization(
+    *,
+    campaign_id: str,
+    candidate_id: str,
+    candidate_revision: int,
+    evaluation_baseline: int,
+    recovery_sha256: str,
+    ledger_operation_id: str,
+    ledger_event_sha256: str,
+    project_ledger_head_sequence: int,
+    project_ledger_head_sha256: str,
+    root_cause_id: str,
+    root_cause_count: int,
+    authorized_at_utc: str,
+) -> dict[str, Any]:
+    """AUTHORIZATION：总账二次判定通过后签发，绑定根因事件摘要、head 与判定。"""
+
+    payload = {
+        "schema_version": EVALUATION_BASELINE_AUTHORIZATION_SCHEMA,
+        "campaign_id": campaign_id,
+        "candidate_id": candidate_id,
+        "candidate_revision": candidate_revision,
+        "evaluation_baseline": evaluation_baseline,
+        "recovery_sha256": recovery_sha256,
+        "ledger_operation_id": ledger_operation_id,
+        "ledger_event_sha256": ledger_event_sha256,
+        "project_ledger_head_sequence": project_ledger_head_sequence,
+        "project_ledger_head_sha256": project_ledger_head_sha256,
+        "decision": "recoverable",
+        "root_cause_id": root_cause_id,
+        "root_cause_count": root_cause_count,
+        "authorized_at_utc": authorized_at_utc,
+    }
+    payload["authorization_sha256"] = digest(payload)
+    return validate_evaluation_baseline_authorization(payload)
+
+
+def validate_evaluation_baseline_authorization(value: Any) -> dict[str, Any]:
+    required = {
+        "schema_version", "campaign_id", "candidate_id", "candidate_revision", "evaluation_baseline",
+        "recovery_sha256", "ledger_operation_id", "ledger_event_sha256", "project_ledger_head_sequence",
+        "project_ledger_head_sha256", "decision", "root_cause_id", "root_cause_count", "authorized_at_utc",
+        "authorization_sha256",
+    }
+    if not isinstance(value, Mapping) or set(value) != required:
+        raise VCArtifactError("评估基线 AUTHORIZATION 字段不闭合")
+    payload = dict(value)
+    label = "评估基线 AUTHORIZATION"
+    if payload.get("schema_version") != EVALUATION_BASELINE_AUTHORIZATION_SCHEMA:
+        raise VCArtifactError(f"{label} schema_version 非法")
+    _baseline_identity(payload, label)
+    _sha256(payload.get("recovery_sha256"), f"{label} recovery_sha256")
+    operation = payload.get("ledger_operation_id")
+    if not isinstance(operation, str) or not operation or len(operation) > 256:
+        raise VCArtifactError(f"{label} ledger_operation_id 非法")
+    _sha256(payload.get("ledger_event_sha256"), f"{label} ledger_event_sha256")
+    _non_negative_int(payload.get("project_ledger_head_sequence"), f"{label} project_ledger_head_sequence")
+    _sha256(payload.get("project_ledger_head_sha256"), f"{label} project_ledger_head_sha256")
+    if payload.get("decision") != "recoverable":
+        raise VCArtifactError(f"{label} 只在二次判定可恢复时签发")
+    if not isinstance(payload.get("root_cause_id"), str) or not ROOT_CAUSE_ID_RE.fullmatch(payload["root_cause_id"]):
+        raise VCArtifactError(f"{label} root_cause_id 非法")
+    _non_negative_int(payload.get("root_cause_count"), f"{label} root_cause_count")
+    _timestamp(payload.get("authorized_at_utc"), f"{label} authorized_at_utc")
+    _self_digest(payload, "authorization_sha256", label)
+    return payload
+
+
+def build_evaluation_baseline_commit(
+    *,
+    campaign_id: str,
+    candidate_id: str,
+    candidate_revision: int,
+    evaluation_baseline: int,
+    kind: str,
+    recovery_sha256: str,
+    authorization_sha256: str,
+    stage_sources: Mapping[str, Any],
+    committed_at_utc: str,
+) -> dict[str, Any]:
+    """COMMIT：绑定 recovery 与 AUTHORIZATION，并冻结逐阶段 stage_sources。"""
+
+    payload = {
+        "schema_version": EVALUATION_BASELINE_COMMIT_SCHEMA,
+        "campaign_id": campaign_id,
+        "candidate_id": candidate_id,
+        "candidate_revision": candidate_revision,
+        "evaluation_baseline": evaluation_baseline,
+        "kind": kind,
+        "recovery_sha256": recovery_sha256,
+        "authorization_sha256": authorization_sha256,
+        "stage_sources": {stage: dict(stage_sources[stage]) for stage in EVALUATION_STAGES},
+        "committed_at_utc": committed_at_utc,
+    }
+    payload["commit_sha256"] = digest(payload)
+    return validate_evaluation_baseline_commit(payload)
+
+
+def validate_evaluation_baseline_commit(value: Any) -> dict[str, Any]:
+    required = {
+        "schema_version", "campaign_id", "candidate_id", "candidate_revision", "evaluation_baseline", "kind",
+        "recovery_sha256", "authorization_sha256", "stage_sources", "committed_at_utc", "commit_sha256",
+    }
+    if not isinstance(value, Mapping) or set(value) != required:
+        raise VCArtifactError("评估基线 COMMIT 字段不闭合")
+    payload = dict(value)
+    label = "评估基线 COMMIT"
+    if payload.get("schema_version") != EVALUATION_BASELINE_COMMIT_SCHEMA:
+        raise VCArtifactError(f"{label} schema_version 非法")
+    _baseline_identity(payload, label)
+    if payload.get("kind") not in EVALUATION_BASELINE_KINDS:
+        raise VCArtifactError(f"{label} kind 非法")
+    _sha256(payload.get("recovery_sha256"), f"{label} recovery_sha256")
+    _sha256(payload.get("authorization_sha256"), f"{label} authorization_sha256")
+    sources = validate_stage_sources(payload.get("stage_sources"), kind=str(payload["kind"]), label=label)
+    for stage, source in sources.items():
+        if source["source"] == "reused" and source["baseline"] >= payload["evaluation_baseline"]:
+            raise VCArtifactError(f"{label}.{stage} reused 只能指向更小编号的基线")
+    _timestamp(payload.get("committed_at_utc"), f"{label} committed_at_utc")
+    _self_digest(payload, "commit_sha256", label)
+    return payload
+
+
+def build_evaluation_baseline_abandon(
+    *,
+    campaign_id: str,
+    candidate_id: str,
+    candidate_revision: int,
+    evaluation_baseline: int,
+    recovery_sha256: str,
+    reason: str,
+    abandoned_at_utc: str,
+) -> dict[str, Any]:
+    """ABANDON：未 COMMIT 的 PREPARED 基线显式作废，编号不复用。"""
+
+    payload = {
+        "schema_version": EVALUATION_BASELINE_ABANDON_SCHEMA,
+        "campaign_id": campaign_id,
+        "candidate_id": candidate_id,
+        "candidate_revision": candidate_revision,
+        "evaluation_baseline": evaluation_baseline,
+        "recovery_sha256": recovery_sha256,
+        "reason": reason,
+        "abandoned_at_utc": abandoned_at_utc,
+    }
+    payload["abandon_sha256"] = digest(payload)
+    return validate_evaluation_baseline_abandon(payload)
+
+
+def validate_evaluation_baseline_abandon(value: Any) -> dict[str, Any]:
+    required = {
+        "schema_version", "campaign_id", "candidate_id", "candidate_revision", "evaluation_baseline",
+        "recovery_sha256", "reason", "abandoned_at_utc", "abandon_sha256",
+    }
+    if not isinstance(value, Mapping) or set(value) != required:
+        raise VCArtifactError("评估基线 ABANDON 字段不闭合")
+    payload = dict(value)
+    label = "评估基线 ABANDON"
+    if payload.get("schema_version") != EVALUATION_BASELINE_ABANDON_SCHEMA:
+        raise VCArtifactError(f"{label} schema_version 非法")
+    _baseline_identity(payload, label)
+    _sha256(payload.get("recovery_sha256"), f"{label} recovery_sha256")
+    reason = payload.get("reason")
+    if not isinstance(reason, str) or not reason or len(reason) > 512:
+        raise VCArtifactError(f"{label} reason 非法")
+    _timestamp(payload.get("abandoned_at_utc"), f"{label} abandoned_at_utc")
+    _self_digest(payload, "abandon_sha256", label)
+    return payload
+
+
+def _reused_from(value: Any, label: str) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping) or set(value) != {"baseline", "checkpoint_sha256", "document_sha256"}:
+        raise VCArtifactError(f"{label} reused_from 字段不闭合")
+    return {
+        "baseline": _non_negative_int(value.get("baseline"), f"{label} reused_from.baseline"),
+        "checkpoint_sha256": _sha256(value.get("checkpoint_sha256"), f"{label} reused_from.checkpoint_sha256"),
+        "document_sha256": _sha256(value.get("document_sha256"), f"{label} reused_from.document_sha256"),
+    }
+
+
+def validate_evaluation_checkpoint(value: Any) -> dict[str, Any]:
+    """逐规则逐侧 write-once checkpoint（builder 写、accept 与恢复链读）。"""
+
+    required = {
+        "schema_version", "sequence", "rule", "side", "status", "document", "input_projection",
+        "projection_sha256", "checker_sha256", "command_sha256", "context", "dependency_projection_sha256",
+        "executed_by", "reused_from", "recorded_at_utc", "previous_checkpoint_sha256", "checkpoint_sha256",
+    }
+    if not isinstance(value, Mapping) or set(value) != required:
+        raise VCArtifactError("评估 checkpoint 字段不闭合")
+    payload = dict(value)
+    label = "评估 checkpoint"
+    if payload.get("schema_version") != EVALUATION_CHECKPOINT_SCHEMA:
+        raise VCArtifactError(f"{label} schema_version 非法")
+    _positive_int(payload.get("sequence"), f"{label} sequence")
+    rule = payload.get("rule")
+    if not isinstance(rule, str) or not RULE_RE.fullmatch(rule):
+        raise VCArtifactError(f"{label} rule 非法")
+    if payload.get("side") not in EVALUATION_SIDES:
+        raise VCArtifactError(f"{label} side 非法")
+    if payload.get("status") not in {"pass", "fail"}:
+        raise VCArtifactError(f"{label} status 非法")
+    _binding(payload.get("document"), f"{label} document")
+    projection = _binding(payload.get("input_projection"), f"{label} input_projection")
+    if _sha256(payload.get("projection_sha256"), f"{label} projection_sha256") != projection["sha256"]:
+        raise VCArtifactError(f"{label} projection_sha256 必须等于投影文件摘要")
+    _sha256(payload.get("checker_sha256"), f"{label} checker_sha256")
+    _sha256(payload.get("command_sha256"), f"{label} command_sha256")
+    context = payload.get("context")
+    if not isinstance(context, Mapping) or set(context) != {
+        "capture_manifest", "evidence_root", "profile_sha256", "rule_manifest_sha256",
+    }:
+        raise VCArtifactError(f"{label} context 字段不闭合")
+    _binding(context.get("capture_manifest"), f"{label} context.capture_manifest")
+    if not isinstance(context.get("evidence_root"), str) or not context["evidence_root"]:
+        raise VCArtifactError(f"{label} context.evidence_root 非法")
+    _sha256(context.get("profile_sha256"), f"{label} context.profile_sha256")
+    _sha256(context.get("rule_manifest_sha256"), f"{label} context.rule_manifest_sha256")
+    _sha256(payload.get("dependency_projection_sha256"), f"{label} dependency_projection_sha256")
+    executed_by = payload.get("executed_by")
+    if not isinstance(executed_by, Mapping) or set(executed_by) != {
+        "builder_sha256", "run_dir", "owner_nonce", "run_manifest_sha256",
+    }:
+        raise VCArtifactError(f"{label} executed_by 字段不闭合")
+    _sha256(executed_by.get("builder_sha256"), f"{label} executed_by.builder_sha256")
+    if not isinstance(executed_by.get("run_dir"), str) or not executed_by["run_dir"]:
+        raise VCArtifactError(f"{label} executed_by.run_dir 非法")
+    _sha256(executed_by.get("owner_nonce"), f"{label} executed_by.owner_nonce")
+    _sha256(executed_by.get("run_manifest_sha256"), f"{label} executed_by.run_manifest_sha256")
+    reused = _reused_from(payload.get("reused_from"), label)
+    if reused is not None and payload.get("status") != "pass":
+        raise VCArtifactError(f"{label} 复用 checkpoint 只能是 pass")
+    _timestamp(payload.get("recorded_at_utc"), f"{label} recorded_at_utc")
+    _optional_sha256(payload.get("previous_checkpoint_sha256"), f"{label} previous_checkpoint_sha256")
+    _self_digest(payload, "checkpoint_sha256", label)
+    return payload
+
+
+def validate_evaluation_run(value: Any) -> dict[str, Any]:
+    """evaluation-run.json：只汇总 checkpoint 的评估运行索引。"""
+
+    required = {
+        "schema_version", "campaign_id", "candidate_id", "candidate_revision", "evaluation_baseline", "derived",
+        "evaluator", "rules", "checkpoint_head_sha256", "recorded_at_utc", "run_sha256",
+    }
+    if not isinstance(value, Mapping) or set(value) != required:
+        raise VCArtifactError("evaluation-run 字段不闭合")
+    payload = dict(value)
+    label = "evaluation-run"
+    if payload.get("schema_version") != EVALUATION_RUN_SCHEMA:
+        raise VCArtifactError(f"{label} schema_version 非法")
+    _safe_id(payload.get("campaign_id"), f"{label} campaign_id")
+    _safe_id(payload.get("candidate_id"), f"{label} candidate_id")
+    _positive_int(payload.get("candidate_revision"), f"{label} candidate_revision")
+    baseline = _non_negative_int(payload.get("evaluation_baseline"), f"{label} evaluation_baseline")
+    derived = payload.get("derived")
+    if not isinstance(derived, bool):
+        raise VCArtifactError(f"{label} derived 必须是布尔值")
+    if derived and baseline != 0:
+        raise VCArtifactError(f"{label} 只有 b0 允许只读派生索引")
+    validate_evaluator_digests(payload.get("evaluator"), label)
+    rules = payload.get("rules")
+    if not isinstance(rules, list):
+        raise VCArtifactError(f"{label} rules 必须是数组")
+    seen: list[str] = []
+    for index, row in enumerate(rules, 1):
+        if not isinstance(row, Mapping) or set(row) != {
+            "rule", "validation_mode", "status", "candidate_checkpoint", "official_checkpoint",
+            "dependency_projection_sha256", "reused_from",
+        }:
+            raise VCArtifactError(f"{label} 第 {index} 行字段不闭合")
+        rule = row.get("rule")
+        if not isinstance(rule, str) or not RULE_RE.fullmatch(rule):
+            raise VCArtifactError(f"{label} 第 {index} 行 rule 非法")
+        seen.append(rule)
+        if row.get("validation_mode") not in VALIDATION_MODES:
+            raise VCArtifactError(f"{label} {rule} validation_mode 非法")
+        status = row.get("status")
+        if status not in EVALUATION_RULE_STATUSES:
+            raise VCArtifactError(f"{label} {rule} status 非法")
+        candidate = _optional_binding(row.get("candidate_checkpoint"), f"{label} {rule} candidate_checkpoint")
+        official = _optional_binding(row.get("official_checkpoint"), f"{label} {rule} official_checkpoint")
+        _optional_sha256(row.get("dependency_projection_sha256"), f"{label} {rule} dependency_projection_sha256")
+        reused = _reused_from(row.get("reused_from"), f"{label} {rule}")
+        if derived:
+            if candidate is not None or official is not None or reused is not None:
+                raise VCArtifactError(f"{label} 派生索引不得引用 checkpoint 或复用")
+        elif status == "pending":
+            if reused is not None:
+                raise VCArtifactError(f"{label} {rule} pending 行不得声明复用")
+        elif candidate is None:
+            raise VCArtifactError(f"{label} {rule} 已执行行必须绑定候选侧 checkpoint")
+        if reused is not None and status != "pass":
+            raise VCArtifactError(f"{label} {rule} 复用行只能是 pass")
+    if seen != sorted(set(seen)):
+        raise VCArtifactError(f"{label} rules 必须按规则编号唯一排序")
+    _optional_sha256(payload.get("checkpoint_head_sha256"), f"{label} checkpoint_head_sha256")
+    _timestamp(payload.get("recorded_at_utc"), f"{label} recorded_at_utc")
+    _self_digest(payload, "run_sha256", label)
+    return payload
+
+
+EVALUATION_DIAGNOSIS_REVIEW_FIELDS = (
+    "schema_version",
+    "campaign_id",
+    "campaign_manifest_sha256",
+    "candidate_id",
+    "candidate_revision",
+    "evaluation_baseline",
+    "failure_source",
+    "reuse_authority",
+    "failed_step",
+    "failed_run",
+    "action_outputs",
+    "evaluation_run",
+    "failure_scope",
+    "failed_evaluator_digests",
+    "admissible_classes",
+    "project_ledger_head_sequence",
+    "project_ledger_head_sha256",
+)
+
+
+def evaluation_diagnosis_review_sha256(payload: Mapping[str, Any]) -> str:
+    """诊断的稳定字段摘要（apply 以 ``--approve-sha256`` 复算比对；不含 reviewer／时间／当前摘要）。"""
+
+    return digest({field: payload[field] for field in EVALUATION_DIAGNOSIS_REVIEW_FIELDS})
+
+
+def build_evaluation_failure_diagnosis(
+    *,
+    campaign_id: str,
+    campaign_manifest_sha256: str,
+    candidate_id: str,
+    candidate_revision: int,
+    evaluation_baseline: int,
+    failure_source: str,
+    reuse_authority: str,
+    failed_step: str,
+    failed_run: Mapping[str, Any],
+    action_outputs: Mapping[str, Any] | None,
+    evaluation_run: Mapping[str, Any] | None,
+    failure_scope: Mapping[str, Any],
+    failed_evaluator_digests: Mapping[str, Any],
+    current_evaluator_digests: Mapping[str, Any],
+    admissible_classes: Sequence[str],
+    project_ledger_head_sequence: int,
+    project_ledger_head_sha256: str,
+    reviewer: str,
+    reviewed_at_utc: str,
+) -> dict[str, Any]:
+    """evaluation-recover preview 签发的诊断收据（write-once；apply 复算 review_sha256）。"""
+
+    payload: dict[str, Any] = {
+        "schema_version": EVALUATION_FAILURE_DIAGNOSIS_SCHEMA,
+        "campaign_id": campaign_id,
+        "campaign_manifest_sha256": campaign_manifest_sha256,
+        "candidate_id": candidate_id,
+        "candidate_revision": candidate_revision,
+        "evaluation_baseline": evaluation_baseline,
+        "failure_source": failure_source,
+        "reuse_authority": reuse_authority,
+        "failed_step": failed_step,
+        "failed_run": json.loads(json.dumps(dict(failed_run), ensure_ascii=False)),
+        "action_outputs": (
+            json.loads(json.dumps(dict(action_outputs), ensure_ascii=False)) if action_outputs is not None else None
+        ),
+        "evaluation_run": (
+            json.loads(json.dumps(dict(evaluation_run), ensure_ascii=False)) if evaluation_run is not None else None
+        ),
+        "failure_scope": json.loads(json.dumps(dict(failure_scope), ensure_ascii=False)),
+        "failed_evaluator_digests": dict(failed_evaluator_digests),
+        "current_evaluator_digests": dict(current_evaluator_digests),
+        "admissible_classes": sorted(set(admissible_classes)),
+        "project_ledger_head_sequence": project_ledger_head_sequence,
+        "project_ledger_head_sha256": project_ledger_head_sha256,
+        "reviewer": reviewer,
+        "reviewed_at_utc": reviewed_at_utc,
+    }
+    payload["review_sha256"] = evaluation_diagnosis_review_sha256(payload)
+    payload["receipt_sha256"] = digest(payload)
+    return validate_evaluation_failure_diagnosis(payload)
+
+
+def validate_evaluation_failure_diagnosis(value: Any) -> dict[str, Any]:
+    required = {
+        "schema_version", "campaign_id", "campaign_manifest_sha256", "candidate_id", "candidate_revision",
+        "evaluation_baseline", "failure_source", "reuse_authority", "failed_step", "failed_run", "action_outputs",
+        "evaluation_run", "failure_scope", "failed_evaluator_digests", "current_evaluator_digests",
+        "admissible_classes", "project_ledger_head_sequence", "project_ledger_head_sha256", "reviewer",
+        "reviewed_at_utc", "review_sha256", "receipt_sha256",
+    }
+    if not isinstance(value, Mapping) or set(value) != required:
+        raise VCArtifactError("评估失败诊断字段不闭合")
+    payload = dict(value)
+    label = "评估失败诊断"
+    if payload.get("schema_version") != EVALUATION_FAILURE_DIAGNOSIS_SCHEMA:
+        raise VCArtifactError(f"{label} schema_version 非法")
+    _safe_id(payload.get("campaign_id"), f"{label} campaign_id")
+    _sha256(payload.get("campaign_manifest_sha256"), f"{label} campaign_manifest_sha256")
+    _safe_id(payload.get("candidate_id"), f"{label} candidate_id")
+    _positive_int(payload.get("candidate_revision"), f"{label} candidate_revision")
+    _non_negative_int(payload.get("evaluation_baseline"), f"{label} evaluation_baseline")
+    source = payload.get("failure_source")
+    if source not in FAILURE_SOURCES:
+        raise VCArtifactError(f"{label} failure_source 非法")
+    authority = payload.get("reuse_authority")
+    if authority not in REUSE_AUTHORITIES:
+        raise VCArtifactError(f"{label} reuse_authority 非法")
+    failed_step = payload.get("failed_step")
+    if not isinstance(failed_step, str) or not failed_step or len(failed_step) > 128:
+        raise VCArtifactError(f"{label} failed_step 非法")
+    if source == "offline-compare-failed" and (failed_step != "compare" or authority != "none"):
+        raise VCArtifactError(f"{label} compare 工具异常的 failed_step 固定为 compare 且禁止复用")
+    if source == "offline-accept-failed" and failed_step != "acceptance":
+        raise VCArtifactError(f"{label} accept 工具异常的 failed_step 固定为 acceptance")
+    if source == "assertion-failed" and not RULE_RE.fullmatch(failed_step):
+        raise VCArtifactError(f"{label} 断言失败的 failed_step 必须是首条失败规则编号")
+    failed_run = payload.get("failed_run")
+    if not isinstance(failed_run, Mapping) or set(failed_run) != {
+        "run_id", "run_dir", "manifest_sha256", "state_sha256", "stop_receipt_sha256", "action_id",
+        "action_diagnostic_sha256", "action_outputs_sha256",
+    }:
+        raise VCArtifactError(f"{label} failed_run 字段不闭合")
+    _safe_id(failed_run.get("run_id"), f"{label} failed_run.run_id")
+    if not isinstance(failed_run.get("run_dir"), str) or not failed_run["run_dir"]:
+        raise VCArtifactError(f"{label} failed_run.run_dir 非法")
+    for field in ("manifest_sha256", "state_sha256", "stop_receipt_sha256", "action_diagnostic_sha256"):
+        _sha256(failed_run.get(field), f"{label} failed_run.{field}")
+    _safe_id(failed_run.get("action_id"), f"{label} failed_run.action_id")
+    outputs_sha256 = _optional_sha256(failed_run.get("action_outputs_sha256"), f"{label} failed_run.action_outputs_sha256")
+    outputs = payload.get("action_outputs")
+    if outputs is not None:
+        if not isinstance(outputs, Mapping) or set(outputs) != {"path", "sha256", "evaluation_run", "checkpoint_head_sha256"}:
+            raise VCArtifactError(f"{label} action_outputs 字段不闭合")
+        if not isinstance(outputs.get("path"), str) or not outputs["path"]:
+            raise VCArtifactError(f"{label} action_outputs.path 非法")
+        _sha256(outputs.get("sha256"), f"{label} action_outputs.sha256")
+        _optional_binding(outputs.get("evaluation_run"), f"{label} action_outputs.evaluation_run")
+        _optional_sha256(outputs.get("checkpoint_head_sha256"), f"{label} action_outputs.checkpoint_head_sha256")
+    if (outputs_sha256 is None) != (outputs is None):
+        raise VCArtifactError(f"{label} action_outputs 与 failed_run.action_outputs_sha256 必须同时存在或同时为 null")
+    if authority == "anchored" and (outputs is None or outputs.get("evaluation_run") is None):
+        raise VCArtifactError(f"{label} anchored 授权必须由动作输出绑定中的 evaluation-run 摘要支撑")
+    run_binding = payload.get("evaluation_run")
+    if run_binding is not None:
+        if not isinstance(run_binding, Mapping) or set(run_binding) != {"path", "sha256", "derived"}:
+            raise VCArtifactError(f"{label} evaluation_run 字段不闭合")
+        if not isinstance(run_binding.get("path"), str) or not run_binding["path"]:
+            raise VCArtifactError(f"{label} evaluation_run.path 非法")
+        _sha256(run_binding.get("sha256"), f"{label} evaluation_run.sha256")
+        if not isinstance(run_binding.get("derived"), bool):
+            raise VCArtifactError(f"{label} evaluation_run.derived 非法")
+    scope = payload.get("failure_scope")
+    if not isinstance(scope, Mapping) or set(scope) != {"failed_rules", "failed_checks", "jobs", "rules", "official_refs"}:
+        raise VCArtifactError(f"{label} failure_scope 字段不闭合")
+    _rule_ids(scope.get("failed_rules"), f"{label} failure_scope.failed_rules")
+    _rule_ids(scope.get("rules"), f"{label} failure_scope.rules")
+    _sorted_safe_ids(scope.get("jobs"), f"{label} failure_scope.jobs")
+    checks = scope.get("failed_checks")
+    if not isinstance(checks, list):
+        raise VCArtifactError(f"{label} failure_scope.failed_checks 必须是数组")
+    for item in checks:
+        if not isinstance(item, Mapping) or set(item) != {"rule", "check_id", "evidence_paths", "jobs"}:
+            raise VCArtifactError(f"{label} failure_scope.failed_checks 条目字段不闭合")
+        if not isinstance(item.get("rule"), str) or not RULE_RE.fullmatch(item["rule"]):
+            raise VCArtifactError(f"{label} failure_scope.failed_checks.rule 非法")
+        if not isinstance(item.get("check_id"), str) or not item["check_id"]:
+            raise VCArtifactError(f"{label} failure_scope.failed_checks.check_id 非法")
+        if not isinstance(item.get("evidence_paths"), list) or any(
+            not isinstance(path, str) or not path for path in item["evidence_paths"]
+        ):
+            raise VCArtifactError(f"{label} failure_scope.failed_checks.evidence_paths 非法")
+        _sorted_safe_ids(item.get("jobs"), f"{label} failure_scope.failed_checks.jobs")
+    refs = scope.get("official_refs")
+    if not isinstance(refs, list) or any(not isinstance(path, str) or not path for path in refs):
+        raise VCArtifactError(f"{label} failure_scope.official_refs 非法")
+    if source != "assertion-failed" and (scope["failed_rules"] or scope["jobs"] or scope["rules"] or checks):
+        raise VCArtifactError(f"{label} 离线动作失败的 failure-scope 规则集与 Job 集必须为空")
+    validate_evaluator_digests(payload.get("failed_evaluator_digests"), f"{label} failed")
+    validate_evaluator_digests(payload.get("current_evaluator_digests"), f"{label} current")
+    classes = payload.get("admissible_classes")
+    if (
+        not isinstance(classes, list)
+        or classes != sorted(set(classes))
+        or not classes
+        or any(item not in ROOT_CAUSE_CLASSES for item in classes)
+    ):
+        raise VCArtifactError(f"{label} admissible_classes 非法")
+    if source != "assertion-failed" and "transient-environment" in classes:
+        raise VCArtifactError(f"{label} 离线动作失败不允许裁定 transient-environment")
+    _non_negative_int(payload.get("project_ledger_head_sequence"), f"{label} project_ledger_head_sequence")
+    _sha256(payload.get("project_ledger_head_sha256"), f"{label} project_ledger_head_sha256")
+    reviewer = payload.get("reviewer")
+    if not isinstance(reviewer, str) or not reviewer or len(reviewer) > 128:
+        raise VCArtifactError(f"{label} reviewer 非法")
+    _timestamp(payload.get("reviewed_at_utc"), f"{label} reviewed_at_utc")
+    if _sha256(payload.get("review_sha256"), f"{label} review_sha256") != evaluation_diagnosis_review_sha256(payload):
+        raise VCArtifactError(f"{label} review_sha256 与稳定字段不一致")
+    _self_digest(payload, "receipt_sha256", label)
+    return payload
+
+
+def build_action_output_binding(
+    *,
+    campaign_id: str,
+    phase: str,
+    action_id: str,
+    run_manifest_sha256: str,
+    owner_nonce: str,
+    bindings: Sequence[Mapping[str, Any]],
+    recorded_at_utc: str,
+) -> dict[str, Any]:
+    """run-<id>/action-outputs/<action_id>.json：动作退出后、stop-receipt 前 write-once 写出的产物绑定。"""
+
+    payload = {
+        "schema_version": ACTION_OUTPUT_BINDING_SCHEMA,
+        "campaign_id": campaign_id,
+        "phase": phase,
+        "action_id": action_id,
+        "run_manifest_sha256": run_manifest_sha256,
+        "owner_nonce": owner_nonce,
+        "bindings": [dict(item) for item in bindings],
+        "recorded_at_utc": recorded_at_utc,
+    }
+    payload["binding_sha256"] = digest(payload)
+    return validate_action_output_binding(payload)
+
+
+def validate_action_output_binding(value: Any) -> dict[str, Any]:
+    required = {
+        "schema_version", "campaign_id", "phase", "action_id", "run_manifest_sha256", "owner_nonce",
+        "bindings", "recorded_at_utc", "binding_sha256",
+    }
+    if not isinstance(value, Mapping) or set(value) != required:
+        raise VCArtifactError("动作输出绑定字段不闭合")
+    payload = dict(value)
+    label = "动作输出绑定"
+    if payload.get("schema_version") != ACTION_OUTPUT_BINDING_SCHEMA:
+        raise VCArtifactError(f"{label} schema_version 非法")
+    _safe_id(payload.get("campaign_id"), f"{label} campaign_id")
+    phase = payload.get("phase")
+    if not isinstance(phase, str) or not phase or len(phase) > 32:
+        raise VCArtifactError(f"{label} phase 非法")
+    _safe_id(payload.get("action_id"), f"{label} action_id")
+    _sha256(payload.get("run_manifest_sha256"), f"{label} run_manifest_sha256")
+    _sha256(payload.get("owner_nonce"), f"{label} owner_nonce")
+    bindings = payload.get("bindings")
+    if not isinstance(bindings, list) or not bindings or len(bindings) > 64:
+        raise VCArtifactError(f"{label} bindings 必须是 1～64 项的数组")
+    paths: list[str] = []
+    for index, item in enumerate(bindings, 1):
+        if not isinstance(item, Mapping) or set(item) != {"path", "exists", "sha256"}:
+            raise VCArtifactError(f"{label} 第 {index} 项字段不闭合")
+        paths.append(_relative_path(item.get("path"), f"{label} 第 {index} 项 path"))
+        if not isinstance(item.get("exists"), bool):
+            raise VCArtifactError(f"{label} 第 {index} 项 exists 必须是布尔值")
+        _optional_sha256(item.get("sha256"), f"{label} 第 {index} 项 sha256")
+        if not item["exists"] and item.get("sha256") is not None:
+            raise VCArtifactError(f"{label} 第 {index} 项不存在的产物不得有摘要")
+    if paths != sorted(set(paths)):
+        raise VCArtifactError(f"{label} bindings 必须按路径唯一排序")
+    _timestamp(payload.get("recorded_at_utc"), f"{label} recorded_at_utc")
+    _self_digest(payload, "binding_sha256", label)
+    return payload
+
+
 def build_interrupted_recovery_contract(
     *,
     campaign_plan: Mapping[str, Any],
@@ -1973,12 +2917,30 @@ def canonical_batch_binding(
     }
 
 
+ACTION_FIELDS = frozenset({"action_id", "operation", "timeout_seconds", "command", "item_ids"})
+
+
+def validate_output_bindings(value: Any, label: str) -> list[str]:
+    """改造 5：动作声明的产物路径闭集——Campaign 相对、规范、去重、有序、最多 64 项。"""
+
+    if not isinstance(value, list) or not value or len(value) > 64:
+        raise VCArtifactError(f"{label} output_bindings 必须是 1～64 项的数组")
+    paths = [_relative_path(item, f"{label} output_bindings") for item in value]
+    if len(set(paths)) != len(paths):
+        raise VCArtifactError(f"{label} output_bindings 不得重复")
+    return sorted(paths)
+
+
 def _actions(
     value: Any,
     *,
     execute_item_ids: Sequence[str],
+    allow_output_bindings: bool = True,
 ) -> list[dict[str, Any]]:
-    """校验动作对 execute 项的无重叠完整覆盖，以及 canonical 项的冻结映射。"""
+    """校验动作对 execute 项的无重叠完整覆盖，以及 canonical 项的冻结映射。
+
+    改造 5：动作可携带可选 ``output_bindings``（v3 批次与 action plan 允许，v2／v1 批次不得出现）。
+    """
 
     if not isinstance(value, list) or len(value) > 256:
         raise VCArtifactError("VC batch actions 必须是最多 256 项的数组")
@@ -1986,13 +2948,10 @@ def _actions(
     action_ids: list[str] = []
     covered: list[str] = []
     for index, raw in enumerate(value, 1):
-        if not isinstance(raw, Mapping) or set(raw) != {
-            "action_id",
-            "operation",
-            "timeout_seconds",
-            "command",
-            "item_ids",
-        }:
+        if not isinstance(raw, Mapping) or not (
+            set(raw) == ACTION_FIELDS
+            or (allow_output_bindings and set(raw) == ACTION_FIELDS | {"output_bindings"})
+        ):
             raise VCArtifactError(f"VC batch action 第 {index} 项字段不闭合")
         action_id = _safe_id(raw.get("action_id"), f"action[{index}].action_id")
         operation = raw.get("operation")
@@ -2014,18 +2973,21 @@ def _actions(
             or not all(isinstance(item, str) and SAFE_ID_RE.fullmatch(item) for item in item_ids)
         ):
             raise VCArtifactError(f"VC batch action {action_id} item_ids 非法")
-        normalized.append(
-            {
-                "action_id": action_id,
-                "operation": operation,
-                "timeout_seconds": _positive_seconds(
-                    raw.get("timeout_seconds"),
-                    f"action[{index}].timeout_seconds",
-                ),
-                "command": list(command),
-                "item_ids": list(item_ids),
-            }
-        )
+        normalized_action = {
+            "action_id": action_id,
+            "operation": operation,
+            "timeout_seconds": _positive_seconds(
+                raw.get("timeout_seconds"),
+                f"action[{index}].timeout_seconds",
+            ),
+            "command": list(command),
+            "item_ids": list(item_ids),
+        }
+        if "output_bindings" in raw:
+            normalized_action["output_bindings"] = validate_output_bindings(
+                raw.get("output_bindings"), f"VC batch action {action_id}"
+            )
+        normalized.append(normalized_action)
         action_ids.append(action_id)
         covered.extend(item_ids)
     if action_ids != sorted(set(action_ids)):

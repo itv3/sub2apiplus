@@ -17,7 +17,7 @@
     "phase": {"enum": ["VC-1", "VC-2", "VC-3", "VC-4", "VC-5", "VC-6"]},
     "sequence": {"type": "integer", "minimum": 1},
     "staging_attempt": {"type": "integer", "minimum": 1},
-    "stage": {"enum": ["prepare", "parent-run-create", "parent-run", "nonce-mismatch", "commit-ledger", "commit-publish", "commit-mark"]},
+    "stage": {"enum": ["prepare", "parent-run-create", "parent-run", "nonce-mismatch", "evaluator-digests", "commit-ledger", "commit-publish", "commit-mark"]},
     "failure_kind": {"enum": ["abandoned", "prepare-failed", "commit-failed", "interrupted"]},
     "error_type": {"type": "string", "minLength": 1, "maxLength": 128},
     "root_cause_id": {"type": "string", "pattern": "^rc1-[0-9a-f]{20}$"},

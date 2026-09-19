@@ -473,8 +473,8 @@ class OfficialCompactionRecoveryTest(unittest.TestCase):
 
     def test_handoff_parent_must_finish_queue_complete(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            run_dir = Path(directory) / "run"
-            run_dir.mkdir()
+            run_dir = Path(directory).resolve() / "run"
+            run_dir.mkdir(mode=0o700)
             manifest = {
                 "schema_version": codex_upgrade_supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA,
                 "batch_sequence": 2,
@@ -485,16 +485,16 @@ class OfficialCompactionRecoveryTest(unittest.TestCase):
             record = {"manifest_sha256": manifest_sha256, "manifest": manifest}
             record_path = run_dir / "campaign-run-manifest.json"
             record_path.write_text(json.dumps(record), encoding="utf-8")
-            stop_path = run_dir / "stop-receipt.json"
-            stop_path.write_text(
-                json.dumps(
-                    {
-                        "event_type": "stopped",
-                        "reason": "action-failed",
-                        "owner_nonce": "a" * 64,
-                    }
-                ),
-                encoding="utf-8",
+            # 改造 5：读点统一走 read_stop_receipt，夹具须是自摘要闭合的 v2 收据（终态不是 queue-complete）。
+            codex_upgrade_supervisor._stop_receipt(
+                run_dir,
+                event_type="stopped",
+                reason="action-failed",
+                detected_at_epoch=1_700_000_000.0,
+                owner_pid=1,
+                owner_nonce="a" * 64,
+                campaign_id="campaign-handoff",
+                phase="VC-1",
             )
             parent = {
                 "run_dir": str(run_dir),

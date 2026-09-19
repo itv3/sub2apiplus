@@ -49,7 +49,15 @@ EVENT_SCHEMA = "codex-upgrade-supervisor-event/v1"
 HEARTBEAT_SCHEMA = "codex-upgrade-supervisor-heartbeat/v1"
 WATCHDOG_HEARTBEAT_SCHEMA = "codex-upgrade-supervisor-watchdog-heartbeat/v1"
 MINUTE_SCHEMA = "codex-upgrade-supervisor-minute/v1"
+# 改造 5：stop-request 保持 v1（STOP_SCHEMA 是它的别名，只用于 stop-request 与 legacy
+# 读侧）；stop-receipt 升 v2，显式携带 action_outputs_sha256（摘要或 null），v1 收据只读兼容
+# 且读侧一律归一化为 null，不得以字段缺失表达语义。
 STOP_SCHEMA = "codex-upgrade-supervisor-stop/v1"
+STOP_REQUEST_SCHEMA = STOP_SCHEMA
+STOP_RECEIPT_SCHEMA = "codex-upgrade-supervisor-stop/v2"
+STOP_RECEIPT_LEGACY_SCHEMA = STOP_SCHEMA
+ACTION_OUTPUT_BINDING_SCHEMA = "codex-upgrade-action-output-binding/v1"
+ACTION_OUTPUTS_DIRNAME = "action-outputs"
 STATE_SCHEMA = "codex-upgrade-supervisor-state/v1"
 CAMPAIGN_ACTIVITY_SCHEMA = "codex-upgrade-campaign-activity/v1"
 CAMPAIGN_FINISH_SCHEMA = "codex-upgrade-campaign-finish/v1"
@@ -121,10 +129,13 @@ PREPARED_ABANDONED_REASON = "prepared-abandoned"
 PARENT_START_FAILED_REASON = "parent-start-failed"
 COMMIT_INTEGRITY_MISMATCH_REASON = "commit-integrity-mismatch"
 STAGING_COMMIT_FAILED_PREFIX = "staging-commit-failed:"
-# commit 四步（nonce 校验 → 账本事件 → 发布正式文件 → 写 COMMIT）的步骤名；
-# 第 4 步 commit-activate 失败时 COMMIT 已存在，按 parent-start-failed 处理。
+# commit 步骤（nonce 校验 → evaluator 摘要核对 → 账本事件 → 发布正式文件 → 写 COMMIT）的
+# 步骤名；最后一步 commit-activate 失败时 COMMIT 已存在，按 parent-start-failed 处理。
+# 改造 5：evaluator-digests 在正式 COMMIT 前核对当前 evaluator 四项摘要等于批次冻结值，
+# 不等即 aborted_prepared、序号不占、同序号重新编译。
 STAGING_COMMIT_STEPS = (
     "nonce-mismatch",
+    "evaluator-digests",
     "commit-ledger",
     "commit-publish",
     "commit-mark",
@@ -1155,6 +1166,84 @@ def _write_post_run_tooling_receipt(
     return payload
 
 
+def ensure_post_run_tooling_receipt(
+    run_dir: Path,
+    diagnostic: Mapping[str, Any],
+    *,
+    campaign_dir: Path,
+    inner_manifest: Mapping[str, Any],
+    campaign_id: str,
+    phase: str,
+    action_id: str,
+    owner_pid: int,
+    owner_nonce: str,
+    run_started_at_utc: str,
+    owner_alive: bool,
+) -> tuple[dict[str, Any] | None, bool]:
+    """改造 5（R2）：owner 在写 post-run-tooling 收据前丢失时由对账在 Campaign 锁内补写。
+
+    返回 ``(receipt | None, backfilled)``：收据已存在 → 经 ``load_post_run_tooling_receipt``
+    复算后返回；缺失且 owner 已死、诊断 declared 为 execution-failure 且 failure_kind 可升级
+    → 以同一 ``post_run_tooling_facts`` 复算，``qualifies`` 才用同一写函数 write-once 补写
+    （owner 身份取自 state）；其余情况不写、返回 ``(None, False)``，有效分类保持
+    execution-failure。``effective_action_failure_class`` 本身保持只读不变。
+    """
+
+    diagnostic_sha256 = str(diagnostic.get("diagnostic_sha256", ""))
+    existing = load_post_run_tooling_receipt(
+        run_dir,
+        action_id,
+        campaign_dir=campaign_dir,
+        inner_manifest=inner_manifest,
+        campaign_id=campaign_id,
+        phase=phase,
+        owner_pid=owner_pid,
+        owner_nonce=owner_nonce,
+        diagnostic_sha256=diagnostic_sha256,
+        run_started_at_utc=run_started_at_utc,
+    )
+    if existing is not None:
+        return existing, False
+    if (
+        owner_alive
+        or diagnostic.get("failure_class") != "execution-failure"
+        or diagnostic.get("failure_kind") not in POST_RUN_TOOLING_UPGRADABLE_FAILURE_KINDS
+    ):
+        return None, False
+    classification = post_run_tooling_facts(
+        campaign_dir,
+        inner_manifest,
+        run_started_at_utc=run_started_at_utc,
+    )
+    if not classification["qualifies"]:
+        return None, False
+    _write_post_run_tooling_receipt(
+        run_dir,
+        campaign_id=campaign_id,
+        phase=phase,
+        action_id=action_id,
+        owner_pid=owner_pid,
+        owner_nonce=owner_nonce,
+        diagnostic_sha256=diagnostic_sha256,
+        facts=classification["facts"],
+    )
+    receipt = load_post_run_tooling_receipt(
+        run_dir,
+        action_id,
+        campaign_dir=campaign_dir,
+        inner_manifest=inner_manifest,
+        campaign_id=campaign_id,
+        phase=phase,
+        owner_pid=owner_pid,
+        owner_nonce=owner_nonce,
+        diagnostic_sha256=diagnostic_sha256,
+        run_started_at_utc=run_started_at_utc,
+    )
+    if receipt is None:
+        raise SupervisorError("post-run-tooling 收据补写后无法回读。")
+    return receipt, True
+
+
 def load_post_run_tooling_receipt(
     run_dir: Path,
     action_id: str,
@@ -1733,9 +1822,19 @@ def _stop_receipt(
     owner_nonce: str,
     campaign_id: str,
     phase: str,
+    action_outputs_sha256: str | None = None,
 ) -> dict[str, Any]:
+    """写 v2 stop-receipt（write-once）。
+
+    改造 5：``action_outputs_sha256`` 只在 ``reason`` 为 ``action-failed:<id>`` 时绑定该失败
+    动作的输出绑定文件自摘要（文件不存在即 ``null``）；其他任何终态固定为 ``null``。
+    取值由调用方经 ``action_outputs_sha256_for_reason`` 解析，这里只落盘并进入自摘要链。
+    """
+
+    if not reason.startswith("action-failed:") and action_outputs_sha256 is not None:
+        raise SupervisorError("只有 action-failed 终态才能绑定动作输出摘要。")
     payload = {
-        "schema_version": STOP_SCHEMA,
+        "schema_version": STOP_RECEIPT_SCHEMA,
         "event_type": event_type,
         "reason": _note(reason, "reason"),
         "detected_at_utc": _epoch_to_utc(detected_at_epoch),
@@ -1744,6 +1843,7 @@ def _stop_receipt(
         "owner_nonce": owner_nonce,
         "campaign_id": campaign_id,
         "phase": phase,
+        "action_outputs_sha256": action_outputs_sha256,
     }
     payload["receipt_sha256"] = _sha256(_canonical(payload))
     path = run_dir / "stop-receipt.json"
@@ -1755,6 +1855,306 @@ def _stop_receipt(
         return existing
     _write_json(path, payload, replace=False)
     return payload
+
+
+STOP_RECEIPT_V1_FIELDS = frozenset(
+    {
+        "schema_version",
+        "event_type",
+        "reason",
+        "detected_at_utc",
+        "detected_at_epoch",
+        "owner_pid",
+        "owner_nonce",
+        "campaign_id",
+        "phase",
+        "receipt_sha256",
+    }
+)
+STOP_RECEIPT_V2_FIELDS = STOP_RECEIPT_V1_FIELDS | {"action_outputs_sha256"}
+
+
+def read_stop_receipt(run_dir: Path) -> dict[str, Any]:
+    """读取并校验 stop-receipt（v2；v1 只读兼容）。
+
+    返回的字典里 ``action_outputs_sha256`` 一定存在：v1 收据归一化为 ``None``（改造前的
+    run 一律视为 ``reuse_authority=none``），``schema_version`` 原样保留供审计。自摘要按各自
+    版本的字段集合复算，任何字段缺失、多余或摘要不符都失败关闭。
+    """
+
+    run_dir = Path(run_dir)
+    path = run_dir / "stop-receipt.json"
+    if path.is_symlink() or not path.is_file():
+        raise SupervisorError("stop-receipt 不存在或不可信。")
+    payload = _read_json(path)
+    schema = payload.get("schema_version")
+    if schema == STOP_RECEIPT_SCHEMA:
+        expected = STOP_RECEIPT_V2_FIELDS
+    elif schema == STOP_RECEIPT_LEGACY_SCHEMA:
+        expected = STOP_RECEIPT_V1_FIELDS
+    else:
+        raise SupervisorError("stop-receipt schema_version 不受支持。")
+    if set(payload) != expected:
+        raise SupervisorError("stop-receipt 字段不闭合。")
+    unsigned = dict(payload)
+    digest = unsigned.pop("receipt_sha256", None)
+    if digest != _sha256(_canonical(unsigned)):
+        raise SupervisorError("stop-receipt 自摘要不一致。")
+    for field in ("event_type", "reason", "campaign_id", "phase", "owner_nonce", "detected_at_utc"):
+        if not isinstance(payload.get(field), str) or not payload[field]:
+            raise SupervisorError(f"stop-receipt {field} 非法。")
+    owner_pid = payload.get("owner_pid")
+    if isinstance(owner_pid, bool) or not isinstance(owner_pid, int) or owner_pid <= 0:
+        raise SupervisorError("stop-receipt owner_pid 非法。")
+    _parse_epoch(payload.get("detected_at_epoch"), "stop-receipt detected_at_epoch")
+    outputs = payload.get("action_outputs_sha256") if schema == STOP_RECEIPT_SCHEMA else None
+    if outputs is not None and (
+        not isinstance(outputs, str)
+        or len(outputs) != 64
+        or any(character not in "0123456789abcdef" for character in outputs)
+    ):
+        raise SupervisorError("stop-receipt action_outputs_sha256 非法。")
+    if outputs is not None and not str(payload["reason"]).startswith("action-failed:"):
+        raise SupervisorError("stop-receipt 只有 action-failed 终态才能绑定动作输出摘要。")
+    normalized = dict(payload)
+    normalized["action_outputs_sha256"] = outputs
+    return normalized
+
+
+def stop_receipt_digest(run_dir: Path) -> str:
+    """stop-receipt 文件字节摘要（供 predecessor／诊断绑定），先经 reader 校验。"""
+
+    read_stop_receipt(run_dir)
+    return _sha256((Path(run_dir) / "stop-receipt.json").read_bytes())
+
+
+# ---------------------------------------------------------------------------
+# 改造 5：父监督器动作输出绑定（动作退出后、stop-receipt 前 write-once）与 R2 孤儿判定
+# ---------------------------------------------------------------------------
+
+
+def _action_outputs_path(run_dir: Path, action_id: str) -> Path:
+    return Path(run_dir) / ACTION_OUTPUTS_DIRNAME / f"{action_id}.json"
+
+
+def _checkpoint_chain_head(directory: Path) -> str | None:
+    """checkpoints/ 目录的链 head：按文件名排序的最后一个 checkpoint 的自摘要；空目录为 None。"""
+
+    entries = sorted(
+        path for path in directory.iterdir()
+        if path.is_file() and not path.is_symlink() and path.suffix == ".json" and not path.name.endswith("-input.json")
+    )
+    if not entries:
+        return None
+    payload = _read_json(entries[-1])
+    head = payload.get("checkpoint_sha256")
+    if not isinstance(head, str) or len(head) != 64:
+        raise SupervisorError(f"checkpoint 目录末项缺少自摘要：{entries[-1].name}")
+    return head
+
+
+def _output_binding_item(campaign_dir: Path, relative: str) -> dict[str, Any]:
+    target = Path(campaign_dir) / relative
+    if target.is_symlink():
+        raise SupervisorError(f"动作输出绑定路径不得是符号链接：{relative}")
+    if target.is_dir():
+        return {"path": relative, "exists": True, "sha256": _checkpoint_chain_head(target)}
+    if target.is_file():
+        return {"path": relative, "exists": True, "sha256": _sha256(target.read_bytes())}
+    return {"path": relative, "exists": False, "sha256": None}
+
+
+def write_action_output_binding(
+    run_dir: Path,
+    *,
+    campaign_dir: Path,
+    campaign_id: str,
+    phase: str,
+    action_id: str,
+    run_manifest_sha256: str,
+    owner_nonce: str,
+    output_bindings: Sequence[str],
+) -> dict[str, Any]:
+    """write-once 写 ``run-<id>/action-outputs/<action_id>.json``；已存在时逐字段核对不可变事实。"""
+
+    run_dir = Path(run_dir)
+    directory = run_dir / ACTION_OUTPUTS_DIRNAME
+    if directory.is_symlink():
+        raise SupervisorError("action-outputs 目录不得是符号链接。")
+    directory.mkdir(mode=0o700, exist_ok=True)
+    items = [_output_binding_item(campaign_dir, relative) for relative in sorted(set(output_bindings))]
+    try:
+        payload = vc_artifacts.build_action_output_binding(
+            campaign_id=campaign_id,
+            phase=phase,
+            action_id=action_id,
+            run_manifest_sha256=run_manifest_sha256,
+            owner_nonce=owner_nonce,
+            bindings=items,
+            recorded_at_utc=_utc_now(),
+        )
+    except vc_artifacts.VCArtifactError as error:
+        raise SupervisorError(str(error)) from error
+    path = _action_outputs_path(run_dir, action_id)
+    if path.exists() or path.is_symlink():
+        existing = read_action_output_binding(run_dir, action_id)
+        immutable = {key: value for key, value in existing.items() if key not in {"recorded_at_utc", "binding_sha256"}}
+        expected = {key: value for key, value in payload.items() if key not in {"recorded_at_utc", "binding_sha256"}}
+        if immutable != expected:
+            raise SupervisorError(f"动作输出绑定已存在且事实不同，禁止覆盖：{action_id}")
+        return existing
+    _write_json(path, payload, replace=False)
+    return payload
+
+
+def read_action_output_binding(run_dir: Path, action_id: str) -> dict[str, Any]:
+    path = _action_outputs_path(run_dir, action_id)
+    if path.is_symlink() or not path.is_file():
+        raise SupervisorError(f"动作输出绑定不存在或不可信：{action_id}")
+    try:
+        payload = vc_artifacts.validate_action_output_binding(_read_json(path))
+    except vc_artifacts.VCArtifactError as error:
+        raise SupervisorError(str(error)) from error
+    if payload["action_id"] != action_id:
+        raise SupervisorError("动作输出绑定的 action_id 与文件名不一致。")
+    return payload
+
+
+def action_outputs_sha256_for_reason(run_dir: Path, reason: str) -> str | None:
+    """stop-receipt 取值合同：``action-failed:<id>`` 且绑定文件存在有效即其自摘要，不存在即 None；
+    其他终态固定 None。文件存在但自摘要或动作身份不符时抛错（由调用方按失败关闭处理）。"""
+
+    if not reason.startswith("action-failed:"):
+        return None
+    action_id = reason.split(":", 1)[1]
+    if not action_id:
+        return None
+    path = _action_outputs_path(run_dir, action_id)
+    if not path.exists() and not path.is_symlink():
+        return None
+    return str(read_action_output_binding(run_dir, action_id)["binding_sha256"])
+
+
+ACTION_LIFECYCLE_EVENT_TYPES = frozenset({"action-started", "action-finished", "action-failed"})
+
+
+def _run_inner_manifest(run_dir: Path) -> dict[str, Any] | None:
+    """run 目录内 campaign-run-manifest.json 的内层清单；缺失或不可信返回 None。"""
+
+    path = Path(run_dir) / "campaign-run-manifest.json"
+    if path.is_symlink() or not path.is_file():
+        return None
+    try:
+        record = _read_json(path)
+    except SupervisorError:
+        return None
+    inner = record.get("manifest")
+    if not isinstance(inner, Mapping) or record.get("manifest_sha256") != _sha256(_canonical(dict(inner))):
+        return None
+    return dict(inner)
+
+
+def _evaluation_orphan_facts_for_monitor(run_dir: Path, state: Mapping[str, Any]) -> dict[str, Any]:
+    """monitor 侧包装：任何读取异常都按失败身份不完整处理，绝不让 watchdog 自身崩溃。"""
+
+    try:
+        return evaluation_orphan_facts(run_dir, state, _run_inner_manifest(run_dir))
+    except (SupervisorError, OSError, ValueError, TypeError) as error:
+        return {
+            "complete": False,
+            "action_id": None,
+            "action_outputs_sha256": None,
+            "binding_mismatch": False,
+            "reasons": [f"orphan-facts-error:{type(error).__name__}"],
+        }
+
+
+def evaluation_orphan_facts(
+    run_dir: Path,
+    state: Mapping[str, Any],
+    inner_manifest: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """R2 确定性封存判定（monitor、reconciler、后继协议共用；只读 run 目录）。
+
+    四层：a. 失败身份——唯一动作失败诊断且可重放、事件链最后一条动作生命周期事件是该动作的
+    ``action-failed``、动作属正式清单冻结动作；b. 绑定文件不存在 → ``action_outputs_sha256=None``
+    （仍可恢复、禁复用）；c. 文件有效且声明路径与清单 ``output_bindings`` 逐字一致 → 绑定摘要；
+    d. 文件存在但自摘要、动作身份、清单摘要或声明路径不符 → ``binding_mismatch``（失败关闭）。
+    monitor 追加的 ``failed``／``watchdog-aborted`` 等非生命周期事件不影响判定，封存前后复算相同。
+    """
+
+    run_dir = Path(run_dir)
+    facts: dict[str, Any] = {
+        "complete": False,
+        "action_id": None,
+        "action_outputs_sha256": None,
+        "binding_mismatch": False,
+        "reasons": [],
+    }
+    diagnostic_root = run_dir / "action-diagnostics"
+    if diagnostic_root.is_symlink() or not diagnostic_root.is_dir():
+        facts["reasons"].append("no-action-diagnostic")
+        return facts
+    diagnostics = sorted(diagnostic_root.glob("action-*-failure.json"))
+    if len(diagnostics) != 1:
+        facts["reasons"].append("action-diagnostic-not-unique")
+        return facts
+    action_id = diagnostics[0].name.removeprefix("action-").removesuffix("-failure.json")
+    try:
+        _validate_action_diagnostic(
+            diagnostics[0],
+            run_dir=run_dir,
+            campaign_id=str(state.get("campaign_id", "")),
+            phase=str(state.get("phase", "")),
+            action_id=action_id,
+            owner_pid=int(state.get("owner_pid", 0) or 0),
+            owner_nonce=str(state.get("owner_nonce", "")),
+        )
+    except (SupervisorError, ValueError) as error:
+        facts["reasons"].append(f"action-diagnostic-invalid:{type(error).__name__}")
+        return facts
+    facts["action_id"] = action_id
+    try:
+        events = load_events(run_dir)
+    except SupervisorError as error:
+        facts["reasons"].append(f"events-invalid:{type(error).__name__}")
+        return facts
+    lifecycle = [event for event in events if event.get("event_type") in ACTION_LIFECYCLE_EVENT_TYPES]
+    if not lifecycle or lifecycle[-1].get("event_type") != "action-failed" or lifecycle[-1].get("job_id") != action_id:
+        facts["reasons"].append("last-lifecycle-event-not-action-failed")
+        return facts
+    actions = inner_manifest.get("actions") if isinstance(inner_manifest, Mapping) else None
+    declared = None
+    if isinstance(actions, list):
+        for action in actions:
+            if isinstance(action, Mapping) and action.get("action_id") == action_id:
+                declared = action
+                break
+    if declared is None:
+        facts["reasons"].append("action-not-in-frozen-manifest")
+        return facts
+    facts["complete"] = True
+    path = _action_outputs_path(run_dir, action_id)
+    if not path.exists() and not path.is_symlink():
+        return facts
+    try:
+        binding = read_action_output_binding(run_dir, action_id)
+    except SupervisorError as error:
+        facts["binding_mismatch"] = True
+        facts["reasons"].append(f"action-output-binding-invalid:{type(error).__name__}")
+        return facts
+    manifest_sha256 = _sha256(_canonical(dict(inner_manifest))) if isinstance(inner_manifest, Mapping) else None
+    declared_paths = list(declared.get("output_bindings") or [])
+    if (
+        binding.get("run_manifest_sha256") != manifest_sha256
+        or binding.get("owner_nonce") != state.get("owner_nonce")
+        or [item["path"] for item in binding["bindings"]] != sorted(set(declared_paths))
+    ):
+        facts["binding_mismatch"] = True
+        facts["reasons"].append("action-output-binding-mismatch")
+        return facts
+    facts["action_outputs_sha256"] = str(binding["binding_sha256"])
+    return facts
 
 
 def _read_stop_request(
@@ -1778,7 +2178,7 @@ def _read_stop_request(
     if set(request) != expected:
         raise SupervisorError("监督器 stop-request 字段不闭合。")
     if (
-        request.get("schema_version") != STOP_SCHEMA
+        request.get("schema_version") != STOP_REQUEST_SCHEMA
         or request.get("owner_pid") != owner_pid
         or request.get("owner_nonce") != owner_nonce
         or request.get("status") not in STOP_STATUSES
@@ -1898,6 +2298,36 @@ def classify_prepared_run(
     ):
         return "integrity_mismatch"
     return "committed"
+
+
+def load_events(run_dir: Path) -> list[dict[str, Any]]:
+    """重放 ``events.ndjson`` 完整事件链（序号连续、自摘要与链摘要成立），任一处断裂即失败关闭。"""
+
+    path = Path(run_dir) / "events.ndjson"
+    if path.is_symlink() or not path.is_file():
+        raise SupervisorError("父 run 事件账本不存在或不可信。")
+    events: list[dict[str, Any]] = []
+    previous_digest: str | None = None
+    try:
+        for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if not line.strip():
+                continue
+            event = json.loads(line)
+            if not isinstance(event, dict):
+                raise SupervisorError(f"事件账本第 {line_number} 行不是对象。")
+            if event.get("sequence") != len(events) + 1:
+                raise SupervisorError("事件序号不连续。")
+            unsigned = dict(event)
+            digest = unsigned.pop("event_sha256", None)
+            if not isinstance(digest, str) or _sha256(_canonical(unsigned)) != digest:
+                raise SupervisorError(f"事件 {event.get('sequence')} 摘要不一致。")
+            if event.get("previous_event_sha256") != previous_digest:
+                raise SupervisorError(f"事件 {event.get('sequence')} 摘要链断裂。")
+            previous_digest = digest
+            events.append(event)
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise SupervisorError(f"父 run 事件账本无法读取：{type(error).__name__}") from error
+    return events
 
 
 def _action_started_recorded(run_dir: Path) -> bool:
@@ -2061,7 +2491,7 @@ def finalize_prepared_run(
     existing = state.get("state")
     if existing in TERMINAL_STATES:
         stop_path = run_dir / "stop-receipt.json"
-        stop = _read_json(stop_path) if stop_path.is_file() else {}
+        stop = read_stop_receipt(run_dir) if stop_path.is_file() else {}
         return {
             "classification": None,
             "state": existing,
@@ -2361,6 +2791,17 @@ def _monitor_impl(args: argparse.Namespace) -> int:
                 continue
             requested_status = str(request["status"])
             reason = str(request["reason"])
+            try:
+                # 改造 5：只有 action-failed 终态绑定失败动作的输出绑定摘要（缺文件即 null）；
+                # 文件存在但自摘要或动作身份不符属绑定不一致，失败关闭为 watchdog 终态。
+                action_outputs_sha256 = action_outputs_sha256_for_reason(run_dir, reason)
+            except SupervisorError as error:
+                abort(
+                    f"action-output-binding-mismatch-{type(error).__name__}",
+                    operation="supervisor:stop-request",
+                    now=now,
+                )
+                continue
             _append_event(
                 run_dir,
                 event_type="stop-requested",
@@ -2392,6 +2833,7 @@ def _monitor_impl(args: argparse.Namespace) -> int:
                 owner_nonce=owner_nonce,
                 campaign_id=campaign_id,
                 phase=phase,
+                action_outputs_sha256=action_outputs_sha256,
             )
             # 先把终态覆盖区间持久化，再发布 state 终态。这样调用方读到
             # failed/stopped 后立即执行 audit 也不会观察到瞬时缺口。
@@ -2440,10 +2882,57 @@ def _monitor_impl(args: argparse.Namespace) -> int:
                         now=now,
                     )
                 continue
+            # 改造 5（R2）：running 父 run 的 owner 在失败动作退出后、stop-request 前丢失。
+            # 失败身份完整（唯一诊断＋末条动作生命周期事件为该动作 action-failed＋动作属
+            # 冻结清单）时确定性封存为普通 failed／action-failed:<id>，随后沿用既有对账与
+            # 重派协议；绑定文件不存在按 O1（null、禁复用）仍可恢复；绑定不一致或失败身份
+            # 不完整维持 watchdog-aborted 失败关闭。monitor 只写 run-local stop-receipt 与
+            # run 事件／state，不写 post-run-tooling 收据、对账收据及 Campaign 账本。
+            orphan = _evaluation_orphan_facts_for_monitor(run_dir, state)
+            if orphan["complete"] and not orphan["binding_mismatch"]:
+                reason = f"action-failed:{orphan['action_id']}"
+                _append_event(
+                    run_dir,
+                    event_type="failed",
+                    operation="supervisor:owner-check",
+                    owner_pid=owner_pid,
+                    owner_nonce=owner_nonce,
+                    campaign_id=campaign_id,
+                    phase=phase,
+                    status="failed",
+                    reason=reason,
+                )
+                _stop_receipt(
+                    run_dir,
+                    event_type="failed",
+                    reason=reason,
+                    detected_at_epoch=now,
+                    owner_pid=owner_pid,
+                    owner_nonce=owner_nonce,
+                    campaign_id=campaign_id,
+                    phase=phase,
+                    action_outputs_sha256=orphan["action_outputs_sha256"],
+                )
+                flush_ledger(
+                    now,
+                    heartbeat,
+                    False,
+                    heartbeat_age,
+                    final=True,
+                    state_name="failed",
+                )
+                terminal_ledger_finalized = True
+                resulting = _set_terminal_state(run_dir, state="failed", terminal_at_epoch=now)
+                terminal_state = str(resulting.get("state", "failed"))
+                continue
             abort(
-                "owner-process-not-alive"
-                if heartbeat_age <= timeout_seconds
-                else "owner-process-not-alive-after-heartbeat-gap",
+                (
+                    "action-output-binding-mismatch"
+                    if orphan["binding_mismatch"]
+                    else "owner-process-not-alive"
+                    if heartbeat_age <= timeout_seconds
+                    else "owner-process-not-alive-after-heartbeat-gap"
+                ),
                 operation="supervisor:owner-check",
                 now=now,
             )
@@ -3317,7 +3806,7 @@ class SupervisorClient:
                 return
         request_path = run_dir / "stop-request.json"
         request = {
-            "schema_version": STOP_SCHEMA,
+            "schema_version": STOP_REQUEST_SCHEMA,
             "requested_at_utc": _utc_now(),
             "requested_at_epoch": time.time(),
             "reason": reason,
@@ -5231,7 +5720,14 @@ def _campaign_run_manifest(
                 }
             )
         # 改造 2：候选级绑定两字段成对可选；是否必须存在由派发时的批次模型决定。
-        optional = {"candidate_revision", "candidate_id"}
+        # 改造 5：评估基线三字段成对可选（与候选绑定同时出现，legacy 模型没有）。
+        optional = {
+            "candidate_revision",
+            "candidate_id",
+            "evaluation_baseline",
+            "baseline_commit_sha256",
+            "evaluator_digests",
+        }
     else:
         raise SupervisorError("Campaign run manifest schema_version 不受支持。")
     if (
@@ -5245,6 +5741,19 @@ def _campaign_run_manifest(
         raise SupervisorError("Campaign run manifest 的 candidate_revision 与 candidate_id 必须成对出现。")
     if "candidate_revision" in payload:
         _validate_manifest_candidate_binding(payload, phase)
+    evaluation_fields = ("evaluation_baseline", "baseline_commit_sha256", "evaluator_digests")
+    evaluation_present = [field in payload for field in evaluation_fields]
+    if any(evaluation_present) and not all(evaluation_present):
+        raise SupervisorError(
+            "Campaign run manifest 的 evaluation_baseline、baseline_commit_sha256 与 evaluator_digests 必须成对出现。"
+        )
+    if all(evaluation_present):
+        if "candidate_revision" not in payload:
+            raise SupervisorError("Campaign run manifest 的评估基线字段只能与候选绑定同时出现。")
+        try:
+            vc_artifacts.validate_batch_evaluation_binding(payload, phase, "campaign-run 清单")
+        except vc_artifacts.VCArtifactError as error:
+            raise SupervisorError(str(error)) from error
     deadline_seconds: float | None = None
     original_deadline_at_utc: str | None = None
     original_deadline_at_epoch: float | None = None
@@ -5372,7 +5881,12 @@ def _campaign_run_manifest(
             CAMPAIGN_RUN_RECOVERY_SCHEMA,
         }:
             expected_action_fields.add("item_ids")
-        if not isinstance(raw, dict) or set(raw) != expected_action_fields:
+        # 改造 5：batched 清单的动作可携带 output_bindings（Campaign 相对路径闭集）。
+        allow_output_bindings = schema_version == CAMPAIGN_RUN_BATCHED_SCHEMA
+        if not isinstance(raw, dict) or not (
+            set(raw) == expected_action_fields
+            or (allow_output_bindings and set(raw) == expected_action_fields | {"output_bindings"})
+        ):
             raise SupervisorError(f"Campaign run action 第 {index} 项字段不闭合。")
         action_id = _safe_id(raw.get("action_id"), f"action[{index}].action_id")
         if action_id in seen_ids:
@@ -5472,6 +5986,13 @@ def _campaign_run_manifest(
                     f"Campaign run action 第 {index} 项 item_ids 非法。"
                 )
             normalized_action["item_ids"] = list(item_ids)
+        if "output_bindings" in raw:
+            try:
+                normalized_action["output_bindings"] = vc_artifacts.validate_output_bindings(
+                    raw.get("output_bindings"), f"Campaign run action {action_id}"
+                )
+            except vc_artifacts.VCArtifactError as error:
+                raise SupervisorError(str(error)) from error
         normalized_actions.append(normalized_action)
     _validate_vc1_assertion_seal_gate(
         schema_version=str(schema_version),
@@ -5581,6 +6102,13 @@ def _campaign_run_manifest(
             # 改造 2：候选级绑定原样保留（Campaign 级为 null），派发时按批次模型判定存在性。
             normalized["candidate_revision"] = payload["candidate_revision"]
             normalized["candidate_id"] = payload["candidate_id"]
+        if "evaluation_baseline" in payload:
+            # 改造 5：评估基线三字段原样保留（b0／非 VC-5 为 null）。
+            normalized["evaluation_baseline"] = payload["evaluation_baseline"]
+            normalized["baseline_commit_sha256"] = payload["baseline_commit_sha256"]
+            normalized["evaluator_digests"] = (
+                dict(payload["evaluator_digests"]) if payload["evaluator_digests"] is not None else None
+            )
         if schema_version == CAMPAIGN_RUN_RECOVERY_SCHEMA:
             normalized.update(
                 {
@@ -5684,7 +6212,13 @@ def build_batched_campaign_run_manifest(
     绑定（Campaign 级阶段为 null）；legacy 模型不传，清单里就没有这两个字段。
     """
 
-    unknown = set(candidate_binding) - {"candidate_revision", "candidate_id"}
+    unknown = set(candidate_binding) - {
+        "candidate_revision",
+        "candidate_id",
+        "evaluation_baseline",
+        "baseline_commit_sha256",
+        "evaluator_digests",
+    }
     if unknown:
         raise SupervisorError(f"campaign-run 清单不接受字段：{sorted(unknown)}")
     payload = {
@@ -5703,10 +6237,16 @@ def build_batched_campaign_run_manifest(
         "reuse_items": list(reuse_items),
     }
     if candidate_binding:
-        if set(candidate_binding) != {"candidate_revision", "candidate_id"}:
+        if not {"candidate_revision", "candidate_id"} <= set(candidate_binding):
             raise SupervisorError("candidate_revision 与 candidate_id 必须同时给出。")
         payload["candidate_revision"] = candidate_binding["candidate_revision"]
         payload["candidate_id"] = candidate_binding["candidate_id"]
+        evaluation_keys = {"evaluation_baseline", "baseline_commit_sha256", "evaluator_digests"}
+        given = evaluation_keys & set(candidate_binding)
+        if given and given != evaluation_keys:
+            raise SupervisorError("评估基线三字段必须同时给出。")
+        for key in sorted(given):
+            payload[key] = candidate_binding[key]
     # 使用与 CLI 完全相同的校验器，避免生成器与执行器对字段或闭集理解不同。
     descriptor, temporary_name = tempfile.mkstemp(prefix=".campaign-run-v2-", suffix=".json")
     temporary = Path(temporary_name)
@@ -5844,7 +6384,7 @@ def _recovery_predecessor_from_run(
         for path in (state_path, manifest_path, stop_path)
     ):
         raise SupervisorError("中断恢复前序缺少可信 state／manifest／stop 收据。")
-    stop = _read_json(stop_path)
+    stop = read_stop_receipt(run_dir)
     if (
         state.get("state") != "failed"
         or stop.get("event_type") != "failed"
@@ -6085,24 +6625,21 @@ def _validate_batched_official_recovery_preview_successor(
     ):
         raise SupervisorError("VC-1 普通恢复预览的父终态或 owner 身份漂移。")
 
-    stop = _permission_compensation_json(
-        _permission_compensation_private_file(
-            prior_dir / "stop-receipt.json",
-            "VC-1 普通恢复预览前序 stop receipt",
-        ),
+    _permission_compensation_private_file(
+        prior_dir / "stop-receipt.json",
         "VC-1 普通恢复预览前序 stop receipt",
     )
-    unsigned_stop = dict(stop)
-    stop_digest = unsigned_stop.pop("receipt_sha256", None)
+    try:
+        stop = read_stop_receipt(prior_dir)
+    except SupervisorError as error:
+        raise SupervisorError(f"VC-1 普通恢复预览的父 stop receipt 漂移：{error}") from error
     if (
-        stop.get("schema_version") != STOP_SCHEMA
-        or stop.get("event_type") != "failed"
+        stop.get("event_type") != "failed"
         or stop.get("reason") != "action-failed:capture-official"
         or stop.get("campaign_id") != prior_state.get("campaign_id")
         or stop.get("phase") != "VC-1"
         or stop.get("owner_pid") != owner_pid
         or stop.get("owner_nonce") != owner_nonce
-        or stop_digest != _sha256(_canonical(unsigned_stop))
     ):
         raise SupervisorError("VC-1 普通恢复预览的父 stop receipt 漂移。")
 
@@ -6147,7 +6684,7 @@ def _validate_batched_environment_redispatch_successor(
     stop_path = prior_dir / "stop-receipt.json"
     if stop_path.is_symlink() or not stop_path.is_file():
         return False
-    stop = _read_json(stop_path)
+    stop = read_stop_receipt(prior_dir)
     reason = stop.get("reason")
     if not isinstance(reason, str) or not reason.startswith("action-failed:"):
         return False
@@ -6199,16 +6736,12 @@ def _validate_batched_environment_redispatch_successor(
     if effective_class not in RECOVERABLE_ACTION_FAILURE_CLASSES:
         return False
 
-    unsigned_stop = dict(stop)
-    stop_digest = unsigned_stop.pop("receipt_sha256", None)
     if (
-        stop.get("schema_version") != STOP_SCHEMA
-        or stop.get("event_type") != "failed"
+        stop.get("event_type") != "failed"
         or stop.get("campaign_id") != prior_manifest.get("campaign_id")
         or stop.get("phase") != prior_manifest.get("phase")
         or stop.get("owner_pid") != owner_pid
         or stop.get("owner_nonce") != owner_nonce
-        or stop_digest != _sha256(_canonical(unsigned_stop))
         or prior_state.get("state") != "failed"
         or prior_state.get("campaign_id") != prior_manifest.get("campaign_id")
         or prior_state.get("phase") != prior_manifest.get("phase")
@@ -6285,7 +6818,7 @@ def campaign_run_failure_facts(run_dir: Path, *, campaign_dir: Path) -> dict[str
     stop_path = run_dir / "stop-receipt.json"
     if stop_path.is_symlink() or not stop_path.is_file():
         return None
-    reason = _read_json(stop_path).get("reason")
+    reason = read_stop_receipt(run_dir).get("reason")
     if not isinstance(reason, str) or not reason.startswith("action-failed:"):
         return None
     action_id = reason.split(":", 1)[1]
@@ -6522,7 +7055,7 @@ def _validate_candidate_revision_successor(
     stop_path = prior_dir / "stop-receipt.json"
     if stop_path.is_symlink() or not stop_path.is_file():
         return False
-    reason = _read_json(stop_path).get("reason")
+    reason = read_stop_receipt(prior_dir).get("reason")
     if not isinstance(reason, str) or not reason.startswith("action-failed:"):
         return False
     prior_phase = str(prior_manifest.get("phase", ""))
@@ -6679,6 +7212,204 @@ def _validate_candidate_revision_successor(
         or commit.get("commit_sha256") != revision_commit_sha256
     ):
         raise SupervisorError(f"{label}：r{successor_revision} 记录／COMMIT 与作废收据、账本事件的摘要链不一致。")
+    return True
+
+
+EVALUATION_ACTION_BUILDER_BASENAME = "build_rule_assertion_results.py"
+
+
+def _evaluation_action_kind(command: Sequence[str]) -> str | None:
+    """与派发入口同一识别：断言 builder／compare／accept 三种评估动作；其余 None。"""
+
+    if any(PurePosixPath(token).name == EVALUATION_ACTION_BUILDER_BASENAME for token in command):
+        return "assertion"
+    if {PurePosixPath(token).name for token in command[:4]} & vc_artifacts.UPGRADE_CLI_BASENAMES:
+        for token in command:
+            if token in {"compare", "accept"}:
+                return token
+    return None
+
+
+def _evaluation_baseline_chain(campaign_dir: Path, candidate_id: str, prior: int, successor: int, *, label: str) -> None:
+    """前序与后继基线之间的每个编号必须是完整的 PREPARED＋ABANDON 链（跳号只能来自显式作废）。"""
+
+    for number in range(prior + 1, successor):
+        baseline_dir = campaign_dir / "candidates" / candidate_id / "revisions" / f"b{number}"
+        prepared = baseline_dir / "PREPARED"
+        abandon = baseline_dir / "ABANDON"
+        commit = baseline_dir / "COMMIT"
+        if not prepared.is_file() or not abandon.is_file() or commit.exists():
+            raise SupervisorError(f"{label}：b{prior} 与 b{successor} 之间的 b{number} 不是完整的 PREPARED＋ABANDON 链。")
+        try:
+            marker = vc_artifacts.validate_evaluation_baseline_prepared(_read_json(prepared))
+            abandoned = vc_artifacts.validate_evaluation_baseline_abandon(_read_json(abandon))
+        except vc_artifacts.VCArtifactError as error:
+            raise SupervisorError(f"{label}：b{number} 的 PREPARED／ABANDON 非法：{error}") from error
+        if marker["recovery_sha256"] != abandoned["recovery_sha256"] or marker["candidate_id"] != candidate_id:
+            raise SupervisorError(f"{label}：b{number} 的 ABANDON 未绑定其 PREPARED。")
+
+
+def _validate_evaluation_baseline_successor(
+    prior_state: Mapping[str, Any],
+    prior_manifest: Mapping[str, Any],
+    prior_dir: Path,
+    successor_manifest: Mapping[str, Any],
+    *,
+    campaign_dir: Path | None,
+) -> bool:
+    """改造 5：失败评估批次 → 评估基线批次的后继协议（第六种）。
+
+    入口：前序是候选级 VC-5 的 ``action-failed`` 终态，失败动作 ∈ 评估动作（断言 builder／compare／
+    accept）且清单带候选绑定；后继是 VC-5、同候选同 revision、``evaluation_baseline`` 非 null。
+    入口不成立返回 False（继续匹配既有协议）；成立后失败关闭，重放：① 后继基线等于账本当前激活
+    基线（最后一条 ``evaluation_baseline`` 事件）且大于前序基线，跳号之间每个编号为完整 PREPARED＋
+    ABANDON 链；② 失败父 run 的 ``reconcile-supervisor-run`` 收据与总账绑定；③ 诊断收据；
+    ④ ``b<K>/COMMIT`` 摘要 == 后继清单 ``baseline_commit_sha256`` 且 AUTHORIZATION 引用的总账事件存在；
+    ⑤ 候选 revision 记录（同候选同 revision）；⑥ 账本事件引用该 COMMIT；⑦ ``stage_sources`` 规范性。
+    """
+
+    if prior_state.get("state") != "failed":
+        return False
+    stop_path = prior_dir / "stop-receipt.json"
+    if stop_path.is_symlink() or not stop_path.is_file():
+        return False
+    reason = read_stop_receipt(prior_dir).get("reason")
+    if not isinstance(reason, str) or not reason.startswith("action-failed:"):
+        return False
+    action_id = reason.split(":", 1)[1]
+    prior_action = next(
+        (item for item in prior_manifest.get("actions", []) if isinstance(item, Mapping) and item.get("action_id") == action_id),
+        None,
+    )
+    if prior_action is None or _evaluation_action_kind(list(prior_action.get("command", []))) is None:
+        return False
+    successor_baseline = successor_manifest.get("evaluation_baseline")
+    if (
+        prior_manifest.get("phase") != "VC-5"
+        or successor_manifest.get("phase") != "VC-5"
+        or not manifest_has_candidate_binding(prior_manifest)
+        or not manifest_has_candidate_binding(successor_manifest)
+        or successor_baseline is None
+    ):
+        return False
+    label = "评估基线后继"
+    if isinstance(successor_baseline, bool) or not isinstance(successor_baseline, int) or successor_baseline < 1:
+        raise SupervisorError(f"{label}：后继清单 evaluation_baseline 非法。")
+    prior_baseline = int(prior_manifest.get("evaluation_baseline") or 0)
+    candidate_id = str(prior_manifest.get("candidate_id"))
+    revision = prior_manifest.get("candidate_revision")
+    if (
+        successor_manifest.get("candidate_id") != candidate_id
+        or successor_manifest.get("candidate_revision") != revision
+        or successor_baseline <= prior_baseline
+    ):
+        raise SupervisorError(f"{label}：后继批次必须同候选同 revision 且基线大于前序（b{prior_baseline}）。")
+    if campaign_dir is None:
+        raise SupervisorError(f"{label}必须绑定 Campaign 目录。")
+    try:
+        campaign_dir = Path(campaign_dir).resolve(strict=True)
+    except OSError as error:
+        raise SupervisorError(f"{label}的 Campaign 目录不存在。") from error
+    campaign = _read_json(campaign_dir / "campaign.json")
+    campaign_id = str(prior_manifest.get("campaign_id", ""))
+    controls = campaign.get("control_receipts")
+    timing_control = controls.get("upgrade_timing") if isinstance(controls, Mapping) else None
+    if (
+        campaign.get("campaign_id") != campaign_id
+        or not isinstance(timing_control, Mapping)
+        or not isinstance(timing_control.get("ledger_dir"), str)
+    ):
+        raise SupervisorError(f"{label}缺少 Campaign 时间账本绑定。")
+    ledger_dir = Path(str(timing_control["ledger_dir"]))
+    if not ledger_dir.is_absolute() or ledger_dir.is_symlink() or not ledger_dir.is_dir():
+        raise SupervisorError(f"{label}的时间账本目录不可信。")
+    try:
+        ledger_dir = ledger_dir.resolve(strict=True)
+        summary = timing_ledger.inspect_ledger(ledger_dir)
+        raw_events = timing_ledger._load_events(ledger_dir)
+    except (OSError, timing_ledger.TimingLedgerError) as error:
+        raise SupervisorError(f"{label}无法重放时间账本：{error}") from error
+
+    # ① 后继基线 == 账本当前激活基线且大于前序；跳号链完整。
+    current = summary.get("current_evaluation_baseline")
+    if (
+        not isinstance(current, Mapping)
+        or current.get("candidate_id") != candidate_id
+        or current.get("evaluation_baseline") != successor_baseline
+        or current.get("baseline_commit_sha256") != successor_manifest.get("baseline_commit_sha256")
+    ):
+        raise SupervisorError(f"{label}：后继基线 b{successor_baseline} 不是账本当前激活的评估基线。")
+    _evaluation_baseline_chain(campaign_dir, candidate_id, prior_baseline, successor_baseline, label=label)
+
+    # ② 失败父 run 的对账收据与总账绑定（评估批次属 post-run-tooling，只认 reconcile-supervisor-run）。
+    verify_supervisor_run_reconciliation_binding(
+        campaign_dir,
+        campaign_id=campaign_id,
+        run_id=prior_dir.name,
+        phase="VC-5",
+        batch_sequence=prior_manifest.get("batch_sequence"),
+        batch_sha256=prior_manifest.get("batch_sha256"),
+        label=label,
+    )
+
+    # ③④⑤⑦ 基线目录四件套与 stage_sources；诊断绑定失败父 run 的三摘要。
+    baseline_dir = campaign_dir / "candidates" / candidate_id / "revisions" / f"b{successor_baseline}"
+    try:
+        commit = vc_artifacts.validate_evaluation_baseline_commit(_read_json(baseline_dir / "COMMIT"))
+        authorization = vc_artifacts.validate_evaluation_baseline_authorization(_read_json(baseline_dir / "AUTHORIZATION"))
+        recovery = vc_artifacts.validate_evaluation_recovery(_read_json(baseline_dir / "recovery.json"))
+        diagnosis_path = campaign_dir / str(recovery["diagnosis"]["path"])
+        diagnosis = vc_artifacts.validate_evaluation_failure_diagnosis(_read_json(diagnosis_path))
+    except (SupervisorError, vc_artifacts.VCArtifactError) as error:
+        raise SupervisorError(f"{label}：b{successor_baseline} 的基线制品无法重放：{error}") from error
+    if (
+        commit["commit_sha256"] != successor_manifest.get("baseline_commit_sha256")
+        or commit["candidate_id"] != candidate_id
+        or commit["candidate_revision"] != revision
+        or commit["recovery_sha256"] != recovery["recovery_sha256"]
+        or commit["authorization_sha256"] != authorization["authorization_sha256"]
+        or authorization["recovery_sha256"] != recovery["recovery_sha256"]
+        or recovery["previous_baseline"] != prior_baseline
+        or recovery["candidate_id"] != candidate_id
+        or recovery["candidate_revision"] != revision
+        or _sha256(diagnosis_path.read_bytes()) != recovery["diagnosis"]["sha256"]
+    ):
+        raise SupervisorError(f"{label}：b{successor_baseline} 的 COMMIT／AUTHORIZATION／recovery／诊断摘要链不一致。")
+    failed_run = diagnosis["failed_run"]
+    if (
+        failed_run["run_id"] != prior_dir.name
+        or failed_run["action_id"] != action_id
+        or failed_run["manifest_sha256"] != _sha256((prior_dir / "campaign-run-manifest.json").read_bytes())
+        or failed_run["state_sha256"] != _sha256((prior_dir / "state.json").read_bytes())
+        or failed_run["stop_receipt_sha256"] != _sha256(stop_path.read_bytes())
+    ):
+        raise SupervisorError(f"{label}：诊断绑定的失败父 run 不是本前序批次。")
+    authorization_payload = _project_ledger_operation_payload(
+        campaign_dir, str(authorization["ledger_operation_id"]), label=label
+    )
+    if (
+        authorization_payload.get("subject_kind") != "evaluation_baseline"
+        or authorization_payload.get("subject_id") != f"{candidate_id}:r{revision}:b{successor_baseline}"
+        or authorization_payload.get("reconciliation_receipt_sha256") != _sha256((baseline_dir / "recovery.json").read_bytes())
+    ):
+        raise SupervisorError(f"{label}：AUTHORIZATION 引用的总账事件与 recovery.json 不一致。")
+    for stage, source in commit["stage_sources"].items():
+        if source["source"] != "reused":
+            continue
+        target = campaign_dir / str(source["path"])
+        if target.is_symlink() or not target.is_file() or _sha256(target.read_bytes()) != source["sha256"]:
+            raise SupervisorError(f"{label}：stage_sources.{stage} 引用的前序文件缺失或摘要漂移。")
+    # ⑥ 账本 evaluation_baseline 事件引用该 COMMIT（且在最后一条对账事件之后）。
+    baseline_event = None
+    for event, _raw in raw_events:
+        if (
+            event.get("event_type") == "evaluation_baseline"
+            and event.get("candidate_id") == candidate_id
+            and event.get("evaluation_baseline") == successor_baseline
+        ):
+            baseline_event = event
+    if baseline_event is None or baseline_event.get("baseline_commit_sha256") != commit["commit_sha256"]:
+        raise SupervisorError(f"{label}：账本没有引用 b{successor_baseline} COMMIT 的 evaluation_baseline 事件。")
     return True
 
 
@@ -6846,6 +7577,12 @@ def _validate_reconciled_redispatch_binding(
         for field in immutable_fields
         if successor_manifest.get(field) != prior_manifest.get(field)
     ]
+    # 改造 5：同基线逐字重派还要求候选绑定与评估基线三字段逐字相等——工具变化后的重派不是
+    # "逐字"，只能经 evaluation-recover 开新基线承接。
+    for field in ("candidate_revision", "candidate_id", "evaluation_baseline", "baseline_commit_sha256", "evaluator_digests"):
+        if field in prior_manifest or field in successor_manifest:
+            if successor_manifest.get(field) != prior_manifest.get(field):
+                drifted.append(field)
     if drifted:
         raise SupervisorError(
             "reservation 前环境恢复只允许原批次内容重派，漂移字段："
@@ -6956,21 +7693,17 @@ def _validate_batched_parent_start_redispatch_successor(
     stop_path = prior_dir / "stop-receipt.json"
     if stop_path.is_symlink() or not stop_path.is_file():
         return False
-    stop = _read_json(stop_path)
+    stop = read_stop_receipt(prior_dir)
     if stop.get("reason") != PARENT_START_FAILED_REASON:
         return False
     owner_pid = prior_state.get("owner_pid")
     owner_nonce = prior_state.get("owner_nonce")
-    unsigned_stop = dict(stop)
-    stop_digest = unsigned_stop.pop("receipt_sha256", None)
     if (
-        stop.get("schema_version") != STOP_SCHEMA
-        or stop.get("event_type") != "failed"
+        stop.get("event_type") != "failed"
         or stop.get("campaign_id") != prior_manifest.get("campaign_id")
         or stop.get("phase") != prior_manifest.get("phase")
         or stop.get("owner_pid") != owner_pid
         or stop.get("owner_nonce") != owner_nonce
-        or stop_digest != _sha256(_canonical(unsigned_stop))
         or prior_state.get("state") != "failed"
         or prior_state.get("campaign_id") != prior_manifest.get("campaign_id")
         or prior_state.get("phase") != prior_manifest.get("phase")
@@ -7134,6 +7867,18 @@ def _validate_batched_campaign_history(
             prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
             and successor_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
             and _validate_batched_parent_start_redispatch_successor(
+                state,
+                prior_manifest,
+                _run_dir,
+                successor_manifest,
+                campaign_dir=campaign_dir,
+            )
+        ):
+            continue
+        if (
+            prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
+            and successor_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
+            and _validate_evaluation_baseline_successor(
                 state,
                 prior_manifest,
                 _run_dir,
@@ -7867,11 +8612,12 @@ def _campaign_run_locked(
             raise SupervisorError("Campaign 父监督器运行目录尚未建立。")
         # 把归一化后的不可变清单和摘要写入本次 run，便于强停后确认实际
         # 执行的是哪一条队列；该写入发生在任何动作启动之前。
+        run_manifest_sha256 = _sha256(_canonical(manifest))
         _write_json(
             client.run_dir / "campaign-run-manifest.json",
             {
                 "schema_version": manifest["schema_version"],
-                "manifest_sha256": _sha256(_canonical(manifest)),
+                "manifest_sha256": run_manifest_sha256,
                 "manifest": manifest,
             },
             replace=False,
@@ -7981,6 +8727,33 @@ def _campaign_run_locked(
                     "returncode": int(result.returncode),
                     "status": "passed" if result.returncode == 0 else "failed",
                 }
+                # 改造 5：动作退出后（诊断落盘之后、post-run-tooling 收据之前）write-once
+                # 写动作输出绑定；父进程顺序固定为 诊断 → action-output → 收据，供恢复
+                # 链与崩溃注入测试依赖。声明缺失的动作不写。
+                if action.get("output_bindings") and campaign_dir is not None:
+                    if result.returncode != 0 and not diagnostic_path.exists():
+                        _write_action_diagnostic(
+                            diagnostic_path,
+                            campaign_id=str(manifest["campaign_id"]),
+                            phase=str(manifest["phase"]),
+                            action_id=action_id,
+                            owner_pid=client.owner_pid,
+                            owner_nonce=client.owner_nonce,
+                            failure_kind="child-returncode",
+                            error_type="ChildProcessError",
+                            message="子命令以非零状态退出，未提供进一步的脱敏诊断。",
+                        )
+                    output_binding = write_action_output_binding(
+                        client.run_dir,
+                        campaign_dir=Path(campaign_dir),
+                        campaign_id=str(manifest["campaign_id"]),
+                        phase=str(manifest["phase"]),
+                        action_id=action_id,
+                        run_manifest_sha256=run_manifest_sha256,
+                        owner_nonce=str(client.owner_nonce),
+                        output_bindings=list(action["output_bindings"]),
+                    )
+                    action_result["action_outputs_sha256"] = output_binding["binding_sha256"]
                 if result.returncode != 0:
                     if not diagnostic_path.exists():
                         _write_action_diagnostic(

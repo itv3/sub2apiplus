@@ -59,6 +59,12 @@ EVENT_TYPES = frozenset(
         "candidate_review_required",
         "candidate_invalidated",
         "stage_revision",
+        # 改造 5（评估失败局部恢复）：评估基线 b<K> 激活与 attempt 恢复段 ar<k> 的三个事件；
+        # 都在 VC-5 active 内发生，不新增账本状态。
+        "evaluation_baseline",
+        "attempt_recovery_started",
+        "attempt_recovery_completed",
+        "attempt_recovery_failed",
     }
 )
 # 候选级阶段：VC-4～VC-6 的阶段／attempt 事件按 revision 归属；VC-0～VC-3 是 Campaign 级。
@@ -73,12 +79,33 @@ CANDIDATE_STAGE_EVENT_TYPES = frozenset(
         "attempt_completed",
         "candidate_review_required",
         "candidate_invalidated",
+        "evaluation_baseline",
+        "attempt_recovery_started",
+        "attempt_recovery_completed",
+        "attempt_recovery_failed",
     }
 )
 # 事件的可选 revision 字段：历史事件没有这些字段，回放时候选级事件缺失视为 r1。
+# 改造 5 再加四个：evaluation_baseline／baseline_commit_sha256／baseline_kind 只属于
+# evaluation_baseline 事件；recovery_revision 属于 evaluation_baseline（attempt-recovery 基线）
+# 与三个 attempt_recovery_* 事件。
 EVENT_REVISION_FIELDS = frozenset(
-    {"revision", "candidate_id", "revision_commit_sha256", "supersedes_revision"}
+    {
+        "revision",
+        "candidate_id",
+        "revision_commit_sha256",
+        "supersedes_revision",
+        "evaluation_baseline",
+        "baseline_commit_sha256",
+        "baseline_kind",
+        "recovery_revision",
+    }
 )
+EVALUATION_BASELINE_KINDS = ("evaluator-only", "attempt-recovery")
+ATTEMPT_RECOVERY_EVENT_TYPES = frozenset(
+    {"attempt_recovery_started", "attempt_recovery_completed", "attempt_recovery_failed"}
+)
+RECOVERY_REVISION_RE = re.compile(r"^ar[1-9][0-9]*$")
 REVIEW_REQUIRED_ALLOWED_EVENTS = frozenset(
     {"attempt_failed", "receipt_passed", "candidate_invalidated", "stage_abandoned", "stop_the_line"}
 )
@@ -322,6 +349,12 @@ PRODUCER_FREEZE_SUCCESSORS = (
         "path": "docs/egress/maintenance/upstream-codex-0154-vc5-tooling-batch2-m2-20260919-freeze-successor.json",
         "base_commit": "8415fcd530926dd7ed2ef2945bdbf51fcd2bb0bc",
         "scope": "upstream-codex-0154-vc5-tooling-batch2-m2-20260919-freeze-successor",
+        "result": "manual_actions_required",
+    },
+    {
+        "path": "docs/egress/maintenance/upstream-codex-0154-vc5-tooling-batch3-m1-20260920-freeze-successor.json",
+        "base_commit": "3f9ffb12e8b59e627b425cdc001f2873689c15dc",
+        "scope": "upstream-codex-0154-vc5-tooling-batch3-m1-20260920-freeze-successor",
         "result": "manual_actions_required",
     },
 )
@@ -1085,6 +1118,55 @@ def _validate_event_revision_fields(event: dict[str, Any], sequence: int) -> Non
         raise TimingLedgerError(f"event {sequence}.supersedes_revision 必须是正整数或 null")
     event_type = event.get("event_type")
     phase = event.get("phase")
+    # 改造 5：四个评估基线／恢复段字段只属于对应事件；其他事件出现即拒绝。
+    baseline = event.get("evaluation_baseline")
+    if baseline is not None and (isinstance(baseline, bool) or not isinstance(baseline, int) or baseline < 1):
+        raise TimingLedgerError(f"event {sequence}.evaluation_baseline 必须是正整数或 null")
+    baseline_commit = event.get("baseline_commit_sha256")
+    if baseline_commit is not None and (
+        not isinstance(baseline_commit, str) or not SHA256_RE.fullmatch(baseline_commit)
+    ):
+        raise TimingLedgerError(f"event {sequence}.baseline_commit_sha256 非法")
+    baseline_kind = event.get("baseline_kind")
+    if baseline_kind is not None and baseline_kind not in EVALUATION_BASELINE_KINDS:
+        raise TimingLedgerError(f"event {sequence}.baseline_kind 非法")
+    recovery_revision = event.get("recovery_revision")
+    if recovery_revision is not None and (
+        not isinstance(recovery_revision, str) or not RECOVERY_REVISION_RE.fullmatch(recovery_revision)
+    ):
+        raise TimingLedgerError(f"event {sequence}.recovery_revision 必须是 ar<k> 或 null")
+    if event_type == "evaluation_baseline":
+        if (
+            phase != "VC-5"
+            or revision is None
+            or candidate_id is None
+            or baseline is None
+            or baseline_commit is None
+            or baseline_kind is None
+        ):
+            raise TimingLedgerError(
+                f"event {sequence} evaluation_baseline 必须在 VC-5 且携带 revision、candidate_id、"
+                "evaluation_baseline、baseline_commit_sha256 与 baseline_kind"
+            )
+        if (baseline_kind == "attempt-recovery") != (recovery_revision is not None):
+            raise TimingLedgerError(
+                f"event {sequence} evaluation_baseline 只有 attempt-recovery 基线携带 recovery_revision"
+            )
+        if commit is not None or supersedes is not None:
+            raise TimingLedgerError(f"event {sequence} evaluation_baseline 不接受 revision 提交字段")
+        return
+    if event_type in ATTEMPT_RECOVERY_EVENT_TYPES:
+        if phase != "VC-5" or revision is None or candidate_id is None or recovery_revision is None:
+            raise TimingLedgerError(
+                f"event {sequence} {event_type} 必须在 VC-5 且携带 revision、candidate_id 与 recovery_revision"
+            )
+        if baseline is not None or baseline_commit is not None or baseline_kind is not None:
+            raise TimingLedgerError(f"event {sequence} {event_type} 不接受评估基线字段")
+        if commit is not None or supersedes is not None:
+            raise TimingLedgerError(f"event {sequence} {event_type} 不接受 revision 提交字段")
+        return
+    if baseline is not None or baseline_commit is not None or baseline_kind is not None or recovery_revision is not None:
+        raise TimingLedgerError(f"event {sequence} {event_type} 不接受评估基线或恢复段字段")
     if event_type == "stage_revision":
         if phase != "VC-4" or revision is None or candidate_id is None or commit is None:
             raise TimingLedgerError(
@@ -1209,6 +1291,10 @@ def _summarize(
     last_invalidated: tuple[int, str] | None = None
     revision_commits: dict[int, str] = {}
     campaign_completed_phases: list[str] = []
+    # 改造 5：当前评估基线只由最后一条 evaluation_baseline 决定，随候选 revision 切换归零；
+    # attempt 恢复段以 (attempt_id, ar<k>) 为键记录段状态，段 active 时阶段不得关闭。
+    current_evaluation_baseline: dict[str, Any] | None = None
+    attempt_recoveries: dict[str, dict[str, Any]] = {}
     total_live_requests = 0
     last_time: datetime | None = None
     previous_raw: bytes | None = None
@@ -1293,7 +1379,11 @@ def _summarize(
             active_phase_started = recorded
             active_phase_revision = event_revision if candidate_level else None
         elif event_type == "stage_completed":
-            if active_phase != phase or any(item["status"] == "active" for item in attempts.values()):
+            if (
+                active_phase != phase
+                or any(item["status"] == "active" for item in attempts.values())
+                or any(item["status"] == "active" for item in attempt_recoveries.values())
+            ):
                 raise TimingLedgerError("stage_completed 与当前阶段或 attempt 状态不一致")
             if candidate_level:
                 assert event_revision is not None
@@ -1305,6 +1395,7 @@ def _summarize(
             if (
                 active_phase != phase
                 or any(item["status"] == "active" for item in attempts.values())
+                or any(item["status"] == "active" for item in attempt_recoveries.values())
                 or normalized["attempt_id"] is not None
                 or normalized["root_cause_id"] is None
                 or not normalized["next_action"]
@@ -1381,6 +1472,79 @@ def _summarize(
             current_revision = revision
             revision_required = False
             review_required = False
+            # 候选 revision 切换后旧候选的全部评估基线只读；新候选从 b0 开始。
+            current_evaluation_baseline = None
+            attempt_recoveries = {}
+        elif event_type == "evaluation_baseline":
+            # 只在 VC-5 进行中、无 active attempt／恢复段时切换当前基线，不改变 active_phase。
+            baseline = int(normalized["evaluation_baseline"])
+            if (
+                active_phase != "VC-5"
+                or phase != "VC-5"
+                or normalized["attempt_id"] is not None
+                or normalized["root_cause_id"] is not None
+                or any(item["status"] == "active" for item in attempts.values())
+                or any(item["status"] == "active" for item in attempt_recoveries.values())
+            ):
+                raise TimingLedgerError("evaluation_baseline 只能在 VC-5 进行中且无 active attempt／恢复段时登记")
+            previous_baseline = (
+                int(current_evaluation_baseline["evaluation_baseline"])
+                if current_evaluation_baseline is not None
+                else 0
+            )
+            if baseline <= previous_baseline:
+                raise TimingLedgerError(
+                    f"evaluation_baseline 必须大于当前基线 b{previous_baseline}，收到 b{baseline}"
+                )
+            current_evaluation_baseline = {
+                "evaluation_baseline": baseline,
+                "baseline_commit_sha256": str(normalized["baseline_commit_sha256"]),
+                "baseline_kind": str(normalized["baseline_kind"]),
+                "recovery_revision": normalized.get("recovery_revision"),
+                "candidate_id": str(normalized["candidate_id"]),
+                "revision": int(event_revision) if event_revision is not None else None,
+            }
+        elif event_type in ATTEMPT_RECOVERY_EVENT_TYPES:
+            attempt_id = normalized["attempt_id"]
+            recovery_revision = str(normalized["recovery_revision"])
+            if attempt_id is None or phase != "VC-5":
+                raise TimingLedgerError(f"{event_type} 必须绑定原 attempt 且在 VC-5")
+            key = f"{attempt_id}:{recovery_revision}"
+            if event_type == "attempt_recovery_started":
+                if (
+                    active_phase != phase
+                    or attempts.get(attempt_id, {}).get("status") != "completed"
+                    or key in attempt_recoveries
+                    or any(item["status"] == "active" for item in attempts.values())
+                    or any(item["status"] == "active" for item in attempt_recoveries.values())
+                    or current_evaluation_baseline is None
+                    or current_evaluation_baseline["baseline_kind"] != "attempt-recovery"
+                    or current_evaluation_baseline["recovery_revision"] != recovery_revision
+                ):
+                    raise TimingLedgerError(
+                        "attempt_recovery_started 必须承接已完成的原 attempt、当前 attempt-recovery 基线的恢复段，且同段不得重开"
+                    )
+                cause = normalized["root_cause_id"]
+                if cause is not None and failure_counts.get(cause, 0) >= plan["same_root_cause_retry_limit"]:
+                    raise TimingLedgerError("同一根因已连续失败两次，禁止第三次恢复段")
+                attempt_recoveries[key] = {
+                    "attempt_id": attempt_id,
+                    "recovery_revision": recovery_revision,
+                    "status": "active",
+                    "root_cause_id": cause,
+                }
+            else:
+                if attempt_recoveries.get(key, {}).get("status") != "active":
+                    raise TimingLedgerError(f"{event_type} 没有对应的 active 恢复段")
+                if event_type == "attempt_recovery_failed":
+                    cause = normalized["root_cause_id"]
+                    if cause is None:
+                        raise TimingLedgerError("attempt_recovery_failed 必须登记 root_cause_id")
+                    attempt_recoveries[key]["status"] = "failed"
+                    attempt_recoveries[key]["root_cause_id"] = cause
+                    failure_counts[cause] = failure_counts.get(cause, 0) + 1
+                else:
+                    attempt_recoveries[key]["status"] = "completed"
         elif event_type == "attempt_started":
             attempt_id = normalized["attempt_id"]
             if active_phase != phase or attempt_id is None or attempt_id in attempts:
@@ -1464,7 +1628,11 @@ def _summarize(
             failure_counts[cause] = 0
             stopped = False
         elif event_type == "upgrade_completed":
-            if active_phase != phase or any(item["status"] == "active" for item in attempts.values()):
+            if (
+                active_phase != phase
+                or any(item["status"] == "active" for item in attempts.values())
+                or any(item["status"] == "active" for item in attempt_recoveries.values())
+            ):
                 raise TimingLedgerError("upgrade_completed 时仍有未关闭阶段或 attempt")
             completed = True
         if normalized["receipts"]:
@@ -1533,6 +1701,10 @@ def _summarize(
             for revision, states in sorted(revision_phase_state.items())
         },
         "campaign_completed_phases": list(campaign_completed_phases),
+        "current_evaluation_baseline": (
+            dict(current_evaluation_baseline) if current_evaluation_baseline is not None else None
+        ),
+        "attempt_recoveries": {key: dict(value) for key, value in sorted(attempt_recoveries.items())},
         "head_sequence": len(raw_events),
         "head_sha256": _sha256_bytes(previous_raw),
         "total_elapsed_seconds": total_elapsed,
@@ -1676,6 +1848,10 @@ def append_event(
     candidate_id: str | None = None,
     revision_commit_sha256: str | None = None,
     supersedes_revision: int | None = None,
+    evaluation_baseline: int | None = None,
+    baseline_commit_sha256: str | None = None,
+    baseline_kind: str | None = None,
+    recovery_revision: str | None = None,
 ) -> dict[str, Any]:
     root = _private_ledger(root, must_exist=True)
     plan, _ = _load_plan(root)
@@ -1741,6 +1917,10 @@ def append_event(
         "candidate_id": candidate_id,
         "revision_commit_sha256": revision_commit_sha256,
         "supersedes_revision": supersedes_revision,
+        "evaluation_baseline": evaluation_baseline,
+        "baseline_commit_sha256": baseline_commit_sha256,
+        "baseline_kind": baseline_kind,
+        "recovery_revision": recovery_revision,
     }
     candidate_raw = _canonical(event)
     _summarize(root, plan, [*raw_events, (event, candidate_raw)], as_of=recorded)
@@ -1851,6 +2031,17 @@ def replay(root: Path, receipt_relative: str) -> dict[str, Any]:
         # 改造 2 之前冻结的 checkpoint 没有 revision 字段；只兼容重算结果仍是
         # "无 revision 或隐含 r1"的历史语义，出现 r2 及以上的账本必须带新字段。
         for field in legacy_revision_fields:
+            expected_summary.pop(field)
+    legacy_evaluation_fields = ("current_evaluation_baseline", "attempt_recoveries")
+    if (
+        isinstance(frozen_summary, dict)
+        and all(field not in frozen_summary for field in legacy_evaluation_fields)
+        and expected_summary.get("current_evaluation_baseline") is None
+        and not expected_summary.get("attempt_recoveries")
+    ):
+        # 改造 5 之前冻结的 checkpoint 没有评估基线字段；只兼容重算结果仍是
+        # "无基线、无恢复段"的历史语义，出现 b≥1 或恢复段的账本必须带新字段。
+        for field in legacy_evaluation_fields:
             expected_summary.pop(field)
     expected = {
         "schema_version": RECEIPT_SCHEMA,
