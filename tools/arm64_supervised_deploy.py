@@ -253,6 +253,8 @@ MANAGED_RUNTIME_DOCUMENTS = (
     "egress/maintenance/upstream-codex-0154-vc5-deploy-manifest-5-20260919-freeze-successor.json",
     "egress/maintenance/upstream-codex-0154-vc5-tooling-batch2-m1-20260919-freeze-successor.json",
     "egress/maintenance/upstream-codex-0154-vc5-deploy-manifest-6-20260919-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-tooling-batch2-m1-fix-20260919-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-deploy-manifest-7-20260919-freeze-successor.json",
 )
 MANAGED_ASSERTION_PREPARER = "prepare_assertion_bundle.sh"
 TARGET_SCENARIO_MANIFEST = "codex_upgrade_scenarios_0_154_0.json"
