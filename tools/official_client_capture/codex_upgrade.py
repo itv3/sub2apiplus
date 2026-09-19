@@ -16843,25 +16843,15 @@ def _write_staging_abort(
     parent_run_state: str | None,
     reconciliation_receipt: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
-    """写 staging ABORT（write-once）；已存在时校验并原样返回。"""
+    """写 staging ABORT（write-once + 内容核对）：已存在时逐字段核对当前事实，不同即失败关闭。
+
+    只有 ``recorded_at_utc`` 与自摘要 ``receipt_sha256`` 是易变字段；其余字段（Campaign、
+    总计划摘要、阶段、序号、attempt、stage、failure_kind、error_type、根因、产物摘要、父 run
+    绑定、对账收据绑定、零请求断言）必须与既有收据完全一致，避免孤儿对账把错误的根因或
+    收据绑定到既有 ABORT 上。
+    """
 
     abort_path = attempt_dir / STAGING_ABORT_FILENAME
-    if abort_path.exists() or abort_path.is_symlink():
-        if abort_path.is_symlink() or not abort_path.is_file():
-            raise ConfigurationError(f"staging ABORT 路径不可信：{abort_path}")
-        try:
-            existing = codex_upgrade_vc_artifacts.validate_staging_abort(
-                _read_json(abort_path, "staging ABORT")
-            )
-        except codex_upgrade_vc_artifacts.VCArtifactError as error:
-            raise ConfigurationError(f"既有 staging ABORT 无法校验：{error}") from error
-        if (
-            existing["sequence"] != sequence
-            or existing["staging_attempt"] != attempt
-            or existing["phase"] != phase
-        ):
-            raise ConfigurationError("既有 staging ABORT 与 attempt 身份不一致。")
-        return existing
     try:
         abort = codex_upgrade_vc_artifacts.build_staging_abort(
             campaign_id=campaign_id,
@@ -16882,6 +16872,27 @@ def _write_staging_abort(
         )
     except codex_upgrade_vc_artifacts.VCArtifactError as error:
         raise ConfigurationError(str(error)) from error
+    if abort_path.exists() or abort_path.is_symlink():
+        if abort_path.is_symlink() or not abort_path.is_file():
+            raise ConfigurationError(f"staging ABORT 路径不可信：{abort_path}")
+        try:
+            existing = codex_upgrade_vc_artifacts.validate_staging_abort(
+                _read_json(abort_path, "staging ABORT")
+            )
+        except codex_upgrade_vc_artifacts.VCArtifactError as error:
+            raise ConfigurationError(f"既有 staging ABORT 无法校验：{error}") from error
+        volatile = {"recorded_at_utc", "receipt_sha256"}
+        drifted = sorted(
+            field
+            for field in abort
+            if field not in volatile and existing.get(field) != abort[field]
+        )
+        if drifted:
+            raise ConfigurationError(
+                "既有 staging ABORT 与当前事实不一致，拒绝覆盖或复用；漂移字段："
+                + "、".join(drifted)
+            )
+        return existing
     _secure_write_json_once(abort_path, abort)
     return abort
 

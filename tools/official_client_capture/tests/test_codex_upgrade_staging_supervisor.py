@@ -548,6 +548,81 @@ class StagingSupervisorTests(unittest.TestCase):
             self.assertNotEqual(supervisor.classify_prepared_run(run_dir), "no_commit")
             self.assertEqual(plan["batch_model"], "staging")
 
+    def test_classify_treats_only_same_subject_other_attempt_commit_as_no_commit(self) -> None:
+        """外来／被替换的 COMMIT 一律完整性异常；只有同 Campaign／阶段／序号／规范路径的另一 attempt 才算无 COMMIT。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            campaign_dir, _plan = self._staging_campaign(root)
+            client = self._client(root)
+            client.start(prepared=True, staging_binding=self._binding(campaign_dir))
+            try:
+                run_dir = client.run_dir
+                commit_path = Path(str(supervisor._read_state(run_dir)["staging_binding"]["commit_path"]))
+
+                def write_commit(**overrides: object) -> None:
+                    payload = dict(
+                        campaign_id=CAMPAIGN_ID,
+                        sequence=2,
+                        phase="VC-2",
+                        staging_attempt=2,
+                        batch_sha256="5" * 64,
+                        manifest_sha256="6" * 64,
+                        parent_run_dir=str(root / "supervisor" / f"run-{'c' * 64}"),
+                        owner_nonce="c" * 64,
+                        ledger_event_ids=[],
+                        committed_at_utc=datetime.now(timezone.utc).isoformat(),
+                    )
+                    payload.update(overrides)
+                    commit_path.unlink(missing_ok=True)
+                    self._write_json(commit_path, artifacts.build_vc_commit(**payload))
+
+                # 同 Campaign／阶段／序号／规范路径，另一 attempt，nonce 与 run_dir 都不同 → no_commit。
+                write_commit()
+                self.assertEqual(supervisor.classify_prepared_run(run_dir), "no_commit")
+                # 同 attempt 却 nonce／run_dir 都不同：同一 attempt 只能有一个父 run → 完整性异常。
+                write_commit(staging_attempt=1)
+                self.assertEqual(supervisor.classify_prepared_run(run_dir), "integrity_mismatch")
+                # Campaign／阶段／序号任一不同（外来 COMMIT 被放到本序号路径）→ 完整性异常。
+                write_commit(campaign_id="other-campaign")
+                self.assertEqual(supervisor.classify_prepared_run(run_dir), "integrity_mismatch")
+                write_commit(phase="VC-3")
+                self.assertEqual(supervisor.classify_prepared_run(run_dir), "integrity_mismatch")
+                write_commit(sequence=3)
+                self.assertEqual(supervisor.classify_prepared_run(run_dir), "integrity_mismatch")
+                write_commit(campaign_id="other-campaign", phase="VC-3", sequence=7, staging_attempt=9)
+                self.assertEqual(supervisor.classify_prepared_run(run_dir), "integrity_mismatch")
+                # 只有 nonce 匹配而 run_dir 不匹配（或反之）→ 完整性异常。
+                write_commit(staging_attempt=1, owner_nonce=client.owner_nonce)
+                self.assertEqual(supervisor.classify_prepared_run(run_dir), "integrity_mismatch")
+                write_commit(staging_attempt=1, parent_run_dir=str(run_dir))
+                self.assertEqual(supervisor.classify_prepared_run(run_dir), "integrity_mismatch")
+                # binding 指向非规范路径上的一份"合法"COMMIT → 完整性异常。
+                commit_path.unlink()
+                stray = campaign_dir / "control" / "vc" / "commits" / "stray.json"
+                self._write_json(
+                    stray,
+                    artifacts.build_vc_commit(
+                        campaign_id=CAMPAIGN_ID,
+                        sequence=2,
+                        phase="VC-2",
+                        staging_attempt=2,
+                        batch_sha256="5" * 64,
+                        manifest_sha256="6" * 64,
+                        parent_run_dir=str(root / "supervisor" / f"run-{'c' * 64}"),
+                        owner_nonce="c" * 64,
+                        ledger_event_ids=[],
+                        committed_at_utc=datetime.now(timezone.utc).isoformat(),
+                    ),
+                )
+                state_path = run_dir / "state.json"
+                state = json.loads(state_path.read_text(encoding="utf-8"))
+                state["staging_binding"]["commit_path"] = str(stray)
+                self._write_json(state_path, state)
+                self.assertEqual(supervisor.classify_prepared_run(run_dir), "integrity_mismatch")
+            finally:
+                client.stop(reason="test-complete", status="aborted_prepared")
+
     def test_finalize_prepared_run_is_idempotent_and_refuses_live_owner(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()

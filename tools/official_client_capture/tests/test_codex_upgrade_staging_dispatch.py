@@ -722,6 +722,56 @@ class StagingDispatchTests(unittest.TestCase):
                 self._dispatch(fixture, root, "VC-2", 3, tag="-integrity-next")
 
     # ------------------------------------------------------------------
+    # ABORT write-once + 内容核对
+    # ------------------------------------------------------------------
+
+    def test_staging_abort_write_once_verifies_full_content(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            attempt_dir = Path(directory).resolve() / "attempt-1"
+            attempt_dir.mkdir(mode=0o700)
+            facts = {
+                "campaign_id": "abort-campaign",
+                "campaign_plan_sha256": "1" * 64,
+                "phase": "VC-2",
+                "sequence": 2,
+                "attempt": 1,
+                "stage": "prepare",
+                "failure_kind": "abandoned",
+                "error_type": "StagingAttemptAbandoned",
+                "root_cause_id": "rc1-" + "a" * 20,
+                "batch_sha256": "2" * 64,
+                "manifest_sha256": "3" * 64,
+                "parent_run_dir": None,
+                "parent_run_state": None,
+                "reconciliation_receipt": None,
+            }
+            first = codex_upgrade._write_staging_abort(attempt_dir, **facts)
+            raw_before = (attempt_dir / "ABORT").read_bytes()
+            # 相同事实（只有时间不同）→ 返回既有收据，文件字节不变。
+            again = codex_upgrade._write_staging_abort(attempt_dir, **facts)
+            self.assertEqual(again, first)
+            self.assertEqual((attempt_dir / "ABORT").read_bytes(), raw_before)
+            # 任一非易变字段不同 → 失败关闭并点名漂移字段，文件仍不变。
+            drifts = [
+                ({"campaign_id": "other-campaign"}, "campaign_id"),
+                ({"campaign_plan_sha256": "9" * 64}, "campaign_plan_sha256"),
+                ({"stage": "parent-run", "failure_kind": "interrupted"}, "failure_kind、stage"),
+                ({"root_cause_id": "rc1-" + "b" * 20}, "root_cause_id"),
+                ({"reconciliation_receipt": {"path": "control/reconciliation/run-x/supervisor-run-reconciliation.json", "sha256": "4" * 64}}, "reconciliation_receipt"),
+                ({"parent_run_dir": "/srv/state/run-x", "parent_run_state": "aborted_prepared"}, "parent_run_dir、parent_run_state"),
+                ({"batch_sha256": None}, "batch_sha256"),
+                ({"error_type": "RuntimeError"}, "error_type"),
+            ]
+            for patch, expected in drifts:
+                with self.subTest(patch=patch):
+                    with self.assertRaisesRegex(codex_upgrade.ConfigurationError, f"漂移字段：{expected}$"):
+                        codex_upgrade._write_staging_abort(attempt_dir, **{**facts, **patch})
+                    self.assertEqual((attempt_dir / "ABORT").read_bytes(), raw_before)
+            # attempt 身份不同也是漂移（sequence／attempt／phase 参与核对）。
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "漂移字段：attempt|漂移字段：staging_attempt"):
+                codex_upgrade._write_staging_abort(attempt_dir, **{**facts, "attempt": 2})
+
+    # ------------------------------------------------------------------
     # T4.8：账本对同序号重派的幂等
     # ------------------------------------------------------------------
 

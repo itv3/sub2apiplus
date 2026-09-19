@@ -1870,16 +1870,26 @@ def classify_prepared_run(
         return "integrity_mismatch"
     nonce_matches = commit["owner_nonce"] == state.get("owner_nonce")
     run_dir_matches = commit["parent_run_dir"] == resolved_run_dir
+    canonical_path = _staging_commit_path(
+        Path(str(binding["campaign_dir"])), int(binding["sequence"]), str(binding["phase"])
+    )
+    subject_matches = (
+        commit["campaign_id"] == state.get("campaign_id")
+        and commit["phase"] == binding["phase"]
+        and commit["sequence"] == binding["sequence"]
+        and commit_path == canonical_path
+    )
     if not nonce_matches and not run_dir_matches:
-        # 同一序号由另一个 attempt 的父 run 合法提交（本 run 早已被遗弃）：
-        # 对本 run 而言序号未由它占用，等价于无 COMMIT。
-        return "no_commit"
+        # 只有 Campaign／阶段／序号／规范路径完全一致、且 COMMIT 确实属于同序号的
+        # 另一个 attempt（本 run 早已被遗弃）时，才算"序号未由本 run 占用"；
+        # 其余任何不一致都是外来或被替换的 COMMIT，按完整性异常永久停线。
+        if subject_matches and commit["staging_attempt"] != binding["staging_attempt"]:
+            return "no_commit"
+        return "integrity_mismatch"
     if (
         not nonce_matches
         or not run_dir_matches
-        or commit["campaign_id"] != state.get("campaign_id")
-        or commit["phase"] != binding["phase"]
-        or commit["sequence"] != binding["sequence"]
+        or not subject_matches
         or commit["staging_attempt"] != binding["staging_attempt"]
     ):
         return "integrity_mismatch"
