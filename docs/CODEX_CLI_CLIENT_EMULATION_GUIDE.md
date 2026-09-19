@@ -2525,7 +2525,8 @@ seal 绑定为同一 AcceptanceFact。全部通过后，工具只写一次地保
 `candidate_external` 或 AcceptanceFact；命令即使能读取更小输入集合，也禁止借此绕过上述门禁。
 
 生产用途先用下列动作体生成零扫描、零请求预览；`--retire-version` 只冻结 VC-6 将处理的旧 Previous，不在
-本阶段删除任何画像：
+本阶段删除任何画像。不带批准摘要的预览是只读操作，可在 `campaign-run` 之外直接执行；此时可省略
+`--supervisor-run-dir`，deadline 取 `control/vc/campaign-plan.json` 冻结的 `original_deadline_at_utc`：
 
 ~~~bash
 python3 tools/official_client_capture/codex_upgrade.py canonical-import \
@@ -2536,16 +2537,26 @@ python3 tools/official_client_capture/codex_upgrade.py canonical-import \
   --active-profile /绝对路径/production-active-profile.json \
   --profile-patch-manifest /绝对路径/profile-rule-patches.json \
   --profile-activation-fact /绝对路径/profile-activation-fact.json \
-  --supervisor-run-dir /绝对路径/campaign-run \
   --phase VC-5 \
   --retire-version <旧-previous-version>
 ~~~
 
 预览必须逐项给出 affected／inherited、execute／reuse、来源类型和 `review_sha256`，同时保持
-`scanned_bytes=0`、`live_request_count=0`。复核后以完全相同参数追加
-`--approve-import-sha256 <review_sha256>`，只写一次初始化 checkpoint；不得复制证据或修改既有 attempt。
+`scanned_bytes=0`、`live_request_count=0`。`review_sha256` 只散列 approval projection：完整导入主题减去
+派发它的父 run 的 `started_at_epoch` 与派生的 `budget_seconds`，原始绝对 deadline 保留；因此离线预览、
+父批次批准与换一个父 run 重放同一批准得到同一摘要，checkpoint 已存在时按同一投影比较即幂等。复核后
+以完全相同参数追加 `--approve-import-sha256 <review_sha256>`，只写一次初始化 checkpoint；不得复制证据
+或修改既有 attempt。批准必须由 `campaign-run` 派发：时间锚从父 run 上下文解析并与其 `state.json`
+交叉验证，批次内动作不得自带 `--supervisor-run-dir`。
 
-随后仍由 `campaign-run` 按顺序派发三个动作体：
+批准与随后三步在同一个纯 canonical 批次内派发：execute 项固定为 `canonical-import`、`canonical-seal`、
+`canonical-compare`、`canonical-accept`，各由恰好一个动作承载，动作命令按工具冻结的映射逐字对应
+（`canonical-import` 带批准摘要；其余三项是对应 `--canonical-step` 的 `canonical-advance`），并用带序号的
+`action_id` 保证 import → seal → compare → accept 的次序；批次不得混入其它 execute 项，也不得给别的命令
+套 canonical item 名。任一 canonical 动作失败时，父监督器按文件事实把它归为 post-run-tooling：修复工具并
+受监督部署后，`reconcile-supervisor-run` 通过即逐字重派同一批次，不新建 Campaign、Candidate 或 attempt。
+
+批次内随后按顺序派发的三个动作体：
 
 ~~~bash
 python3 tools/official_client_capture/codex_upgrade.py canonical-advance \
