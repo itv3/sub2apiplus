@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -252,6 +253,8 @@ type Keeper struct {
 	runWG               sync.WaitGroup
 	runCtxMu            sync.RWMutex
 	runCtx              context.Context
+	// 上次成功落盘的 state 序列化指纹；内容未变时 saveStateLocked 跳过写盘。
+	lastSavedStateSum [32]byte
 }
 
 type runtimeLayout struct {
@@ -1277,6 +1280,12 @@ func (k *Keeper) saveStateLocked() {
 		log.Printf("序列化状态失败: %v", err)
 		return
 	}
+	// 保活关闭时 syncTargetsLocked 每个扫描周期仍会调到这里，而 state 完全没变；
+	// 不比对就会把含全部历史会话的 state（可达数 MB）原样重写一遍，长期运行累计写入量极大。
+	sum := sha256.Sum256(raw)
+	if sum == k.lastSavedStateSum {
+		return
+	}
 	tmp := k.cfg.StatePath + ".tmp"
 	if err := os.WriteFile(tmp, raw, 0600); err != nil {
 		log.Printf("写状态文件失败: %v", err)
@@ -1284,7 +1293,10 @@ func (k *Keeper) saveStateLocked() {
 	}
 	if err := os.Rename(tmp, k.cfg.StatePath); err != nil {
 		log.Printf("替换状态文件失败: %v", err)
+		return
 	}
+	// 只有 rename 成功才记录指纹，写入失败时下个周期会重试。
+	k.lastSavedStateSum = sum
 }
 
 func (k *Keeper) snapshotLocked() any {

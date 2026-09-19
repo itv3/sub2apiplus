@@ -385,6 +385,56 @@ func TestRepairCodexArg0PermissionsSets755(t *testing.T) {
 	}
 }
 
+func TestSaveStateSkipsWriteWhenUnchanged(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	k := &Keeper{
+		cfg: Config{StatePath: statePath},
+		state: State{Targets: map[string]*TargetState{
+			"1": {Name: "account-1", AccountID: 1, Enabled: true},
+		}},
+		location: time.UTC,
+	}
+
+	k.mu.Lock()
+	k.saveStateLocked()
+	k.mu.Unlock()
+	first, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("首次保存后读取状态文件失败: %v", err)
+	}
+
+	// 在文件里留下篡改痕迹：若 state 未变时仍重写，痕迹会被覆盖回 first。
+	if err := os.WriteFile(statePath, []byte("tampered"), 0600); err != nil {
+		t.Fatalf("写入篡改内容失败: %v", err)
+	}
+	k.mu.Lock()
+	k.saveStateLocked()
+	k.mu.Unlock()
+	if got, _ := os.ReadFile(statePath); string(got) != "tampered" {
+		t.Fatalf("state 未变化时仍重写了状态文件, got=%q", got)
+	}
+
+	// state 变化后必须照常落盘。
+	k.mu.Lock()
+	k.state.Targets["1"].Enabled = false
+	k.saveStateLocked()
+	k.mu.Unlock()
+	second, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("变更后读取状态文件失败: %v", err)
+	}
+	if string(second) == "tampered" || string(second) == string(first) {
+		t.Fatalf("state 变化后未重写状态文件")
+	}
+	var saved State
+	if err := json.Unmarshal(second, &saved); err != nil {
+		t.Fatalf("变更后的状态文件不是合法 JSON: %v", err)
+	}
+	if saved.Targets["1"].Enabled {
+		t.Fatalf("变更后的状态文件未包含最新 state")
+	}
+}
+
 func TestTargetStateMergesCompatibleLegacyNameKeyWhenCanonicalExists(t *testing.T) {
 	olderStarted := time.Date(2026, 7, 7, 23, 49, 47, 0, time.UTC)
 	olderCompleted := time.Date(2026, 7, 7, 23, 52, 46, 0, time.UTC)
