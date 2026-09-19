@@ -1334,9 +1334,11 @@ VC-2～VC-6 每一批的唯一强制入口，四层治理在它内部闭合，�
 （1）取 state-dir 锁与任何落盘之前先经项目总账 admission，与 `campaign-run` CLI 同一底层门禁
 （未注册、blocked、根因达上限、超绝对截止一律拒绝且无副作用）；（2）只读预检 Campaign 绑定的
 UpgradeTimingLedger：必须 active 且版本、用途一致，目标阶段不得倒退，尚未登记完成的前序阶段必须已有成功封存的
-checkpoint；（3）batch 与 manifest 可信落盘后、父 run 创建前，在账本收口锁内按序补写前序 `stage_completed` 与目标
-阶段 `stage_started`（只读导入的 Campaign 会在 VC-2 首批一次补齐 VC-0／VC-1），账本此刻拒绝即走通用预派发停线，
-`error_type` 记为 `TimingLedgerGateError`；（4）父 run 成功且本阶段 checkpoint 已封存则写 `stage_completed`，同阶段
+checkpoint；（3）batch 与 manifest 先落到 staging attempt，父 run 以 `prepared` 起动后，在同一把锁内的提交四步
+第一步（`commit-ledger`）于账本收口锁内按序补写前序 `stage_completed` 与目标阶段 `stage_started`（只读导入的
+Campaign 会在 VC-2 首批一次补齐 VC-0／VC-1），随后发布正式产物、写 COMMIT、父 run 转 `running`；账本此刻拒绝
+即提交四步失败（P3），父 run 封存为 `aborted_prepared`（`staging-commit-failed:commit-ledger`）、序号未占、同序号
+重派，不再产生预派发停线收据；（4）父 run 成功且本阶段 checkpoint 已封存则写 `stage_completed`，同阶段
 多批时只在封存批写一次，幂等。只读导入的 Campaign 第 2 批派发前，入口在同一锁内先把零请求 no-op 首批跑成父 run
 历史，满足监督器“batch_sequence 从 1 连续”的要求；首批含真实动作时不代跑。父动作失败的账本收口按
 阶段分层：VC-1～VC-3（Campaign 级阶段）仍由监督器写 `stage_abandoned`＋`stop_the_line`，此后本 Campaign
@@ -1351,12 +1353,13 @@ checkpoint；（3）batch 与 manifest 可信落盘后、父 run 创建前，在
 （`codex-upgrade-vc-commit/v1`，绑定 batch／manifest 摘要、父 run 目录、owner nonce 与账本事件 id）→
 父 run 转 `running` 四步；**正式序号只由 COMMIT 占用**（序号 1 由 VC-0 在 `campaign.json` 内绑定），
 `batches/` 里没有 COMMIT 的半产物不计入序号并由下一次入口归档。取得执行权前的失败分四类处置：
-P1 prepare 之后、父 run 之前失败——入口写 `codex-upgrade-staging-abort/v1`（`ABORT`，write-once 且逐字段
-内容核对）并自行对账入账（`staging-abort-reconciliation/v1`，根因 `staging.abandoned`／
-`staging.commit-failed`，维度 `phase`＋`stage`），序号未占，同序号以新 staging attempt 重新 prepare；
+P1 prepare 之后、父 run 之前失败（没有父 run）——入口写 `codex-upgrade-staging-abort/v1`（`ABORT`，write-once
+且逐字段内容核对）并自行对账入账（`staging-abort-reconciliation/v1`，根因一律 `staging.abandoned`，维度
+`phase`＋`stage`），序号未占，同序号以新 staging attempt 重新 prepare；
 P2 父 run `prepared` 后 owner 丢失——monitor 或 reconciler 把它封存为 `aborted_prepared`
-（`prepared-abandoned`），同序号重派；P3 提交四步中途失败——按 `staging-commit-failed:<step>` 封存为
-`aborted_prepared`，同序号重派；P4 COMMIT 已写但父 run 未取得执行权（`owner-lost`／`state-write-failed`，
+（`prepared-abandoned`，`reconcile-supervisor-run` 归根因 `staging.abandoned`，stage=`parent-run`），同序号重派；
+P3 提交四步中途失败——按 `staging-commit-failed:<step>` 封存为 `aborted_prepared`（根因
+`staging.commit-failed`，stage=失败的那一步），同序号重派；P4 COMMIT 已写但父 run 未取得执行权（`owner-lost`／`state-write-failed`，
 `codex-upgrade-parent-start-failure/v1`）——序号已占，账本按可恢复父失败暂停（`recovery_required`，根因
 `parent-start.failed`），对账通过后只能以 N+1 逐字重派同一批次内容（九个不可变字段逐字相等）。
 COMMIT 存在但自摘要无效、owner nonce／run 目录不匹配、Campaign／阶段／序号／规范路径任一不一致的外来
@@ -1388,14 +1391,14 @@ VC-5／VC-6 的前序为同 revision 的上一阶段；账本 `completed_phases`
 只读等待：禁止派发与新 attempt，只允许对账、候选作废、`stage_abandoned` 与 `stop_the_line`。对账按
 reservation 分流：父 run 期间为该候选发布过 reservation 的只认 `reconcile-attempt`，否则只认
 `reconcile-supervisor-run`（该状态下对账只入账，不写 `receipt_passed`）。判为候选源码问题时以两步式
-`invalidate-candidate --campaign-dir … --candidate-id <id> --reviewer <人> [--evidence …] [--candidate-source …]`
-作废：`preview` 依次做 admission（与 `plan` 同集合，加总计划 deadline）、候选属当前 revision 且未
+`invalidate-candidate preview|apply --campaign-dir … --candidate-id <id> --reviewer <人> [--evidence …] [--candidate-source …]`
+（`preview`／`apply` 是第一个位置参数）作废：`preview` 依次做 admission（与 `plan` 同集合，加总计划 deadline）、候选属当前 revision 且未
 accepted、入账核对（已 seal 候选必须有 `account-sealed-candidate:<cid>:<attempt>`；每个未 seal attempt 必须有
 `attempt-reconciliation/v1` 收据与 `reconcile-attempt:<id>` 总账摘要绑定；引起 review 的失败父 run 由正式
 COMMIT→`parent_run_dir`→失败摘要唯一定位，再按上述分流核对收据与总账摘要）、身份快照（构建收据 →
 attempt 身份 → `--candidate-source`，commit 与源码树摘要都取不到即拒绝）、诊断草案
 （`candidate-invalidation-diagnosis/v1`，绑定项目总账 head，`review_sha256` 只散列稳定字段），不落盘；
-`apply --approve-sha256 <review_sha256>` 重跑同集合 admission 并复验草案（总账 head、身份快照或证据变化即
+`invalidate-candidate apply … --approve-sha256 <review_sha256>` 重跑同集合 admission 并复验草案（总账 head、身份快照或证据变化即
 摘要不同而拒绝），write-once 写 `candidates/<id>/invalidation.json`
 （`codex-upgrade-candidate-invalidation/v1`），候选级阶段仍 active 时先 `stage_abandoned`，以零请求
 `reconciliation_committed`（根因 `candidate.source-change-required`，维度 `phase`）推入总账并二次判定：命中
@@ -1623,7 +1626,8 @@ python3 tools/official_client_capture/codex_upgrade.py compile-and-run-vc-batch 
 ~~~
 
 原子入口从取得 `.campaign-run.lock` 到父 run 取得执行权始终持有同一把锁，只接受规范直接前序 checkpoint
-（候选级阶段按当前 revision 解析：VC-4 前序是 Campaign 级 VC-3，VC-5／VC-6 前序是同 revision 的上一阶段），
+（候选级阶段按当前 revision 解析：VC-4 前序是 Campaign 级 VC-3，VC-5／VC-6 前序是同 revision 的上一阶段，
+r≥2 时 `--predecessor-checkpoint` 指向 `control/vc/revisions/r<N>/vc-{4,5}-checkpoint.json`），
 且本阶段在当前 revision 尚未存在 checkpoint；不允许跳号、延长 deadline、重编已封存批次或由 `campaign-run`
 内部调用。该入口不创建外层 `CampaignLease`，也不接受第二个相对 `--max-wall-seconds`；唯一监督器是它立即
 启动的父 `campaign-run`，唯一墙钟边界是 Campaign plan 已冻结的原始绝对 deadline。
@@ -2123,10 +2127,13 @@ VC-3 只生成未入库的候选 Catalog；纳入同源 candidate 树并构建�
 - **操作与工具**：只实现批准闭集，把画像、测试和代码纳入同一最终源码树，绑定门禁需求后再从该树构建目标架构制品。
 - **产物**：候选源码树、版本专属测试资产、post-promotion 门禁执行计划、source transition、构建收据和完整 Candidate 身份元组。
 - **完成标志**：实现闭集通过，源码、构建、镜像和 Profile 身份可复算，生产 Active 未改变且尚未发起候选请求。
-- **失败恢复**：固定后的源码、构建、镜像或 Profile 发生变化时建立新 candidate，只重做受影响闭集；
-  2026-09-19 改造 2 起新 candidate 在同一 Campaign 内以候选 revision 承接（`invalidate-candidate` 作废旧候选 →
-  `revision-open --supersedes` 开 r(N+1) → 从 VC-4 首批重来），VC-0～VC-3 的证据、账本与总账全部保留，
-  不再重建 Campaign。
+- **失败恢复**：固定后的源码、构建、镜像或 Profile 发生变化时建立新 candidate，只重做受影响闭集。
+  2026-09-19 改造 2 起，**只有候选源码变化**（新候选的 `git_commit` 或 `source_tree_sha256` 至少一项与作废
+  收据冻结的旧快照不同）且候选树内 Catalog stage 收据与 Campaign 级 VC-3 阶段收据逐字节一致时，新 candidate
+  才在同一 Campaign 内以候选 revision 承接（`invalidate-candidate` 作废旧候选 → `revision-open --supersedes`
+  开 r(N+1) → 从 VC-4 首批重来，VC-0～VC-3 的证据、账本与总账全部保留）；源码不变而只换构建参数或镜像
+  的候选在 `record-candidate-build` 的 revision-seal 被拒绝（"不是新候选"），Profile／Catalog 变化属于
+  VC-3 输出变化，按 Framework §5.3.4 建立后继 Campaign，都不能靠 revision 承接。
 
 ### 4.4.1 入库与实现边界
 
@@ -2270,9 +2277,11 @@ r≥2 还要以旧候选 `invalidation.json` 冻结的身份快照为基准证�
 | 画像 | `profile_id`、`profile_digest` |
 
 任一字段变化都表示原 Candidate 已失去同一性，必须建立新 candidate；不得通过改写收据维持旧 ID。
-新 candidate 在同一 Campaign 内以候选 revision 建立：旧候选先经 `invalidate-candidate preview／apply` 作废
-（作废收据冻结旧身份快照），再 `revision-open --candidate-id <新> --supersedes <旧>`；被作废与被取代的
-候选只读，`compare`／`accept`／`deliver-candidate` 等写入口一律拒绝。
+新 candidate 只在源码层身份（`git_commit`／`source_tree_sha256`）变化且画像层身份不变时才能在同一 Campaign
+内以候选 revision 建立：旧候选先经 `invalidate-candidate preview／apply` 作废（作废收据冻结旧身份快照），再
+`revision-open --candidate-id <新> --supersedes <旧>`；仅构建层或镜像层变化的候选会被 revision-seal 拒绝，
+画像层变化必须建立后继 Campaign。被作废与被取代的候选只读，`compare`／`accept`／`deliver-candidate` 等
+写入口一律拒绝。
 
 仅容器名、Codex 二进制路径或 Compose 坐标与 Campaign 冻结值不同时，才允许在该 candidate 首个
 attempt 前登记一份写一次的运行坐标覆盖收据；`run` 与 `seal` 必须从同一收据读取生效值，磁盘清单与
@@ -2635,8 +2644,9 @@ revision、账本非 active、候选已作废或已被取代时一律拒绝；�
 生产或完成回滚演练。
 
 两个用途都必须生成
-`control/vc/receipts/<candidate-id>/vc5-completion.json` 并以它封存
-`control/vc/vc-5-checkpoint.json`，不能在本阶段宣称已经交付或上线。
+`control/vc/receipts/<candidate-id>/vc5-completion.json` 并以它封存当前 revision 的 VC-5 checkpoint
+（r1 为 `control/vc/vc-5-checkpoint.json`，r≥2 为 `control/vc/revisions/r<N>/vc-5-checkpoint.json`），
+不能在本阶段宣称已经交付或上线。
 `validation_only` 的 `accept` 成功后直接生成这两份制品，保持
 `accepted_not_activated`，不创建 canonical 生产链。`production_replacement` 则在
 `canonical-advance --canonical-step accept` 重放 AcceptanceFact 后生成完成收据和 VC-5 checkpoint。
@@ -3023,8 +3033,9 @@ python3 tools/official_client_capture/codex_upgrade.py deliver-candidate \
 生产用途第一次不携归档／清理收据调用 `deliver-candidate` 时，合法终止于
 `production_archive_pending`，且不得生成 VC-6 checkpoint。第二次必须同时携带两张收据；只给一张、
 收据不在本 Campaign 内、主体不一致或证据摘要漂移时全部失败关闭。两张收据重放通过后，
-才生成 `control/vc/receipts/<candidate-id>/vc6-completion.json` 和
-`control/vc/vc-6-checkpoint.json`，`status --candidate-id` 才能报告最终完成。
+才生成 `control/vc/receipts/<candidate-id>/vc6-completion.json` 和当前 revision 的 VC-6 checkpoint
+（r1 为 `control/vc/vc-6-checkpoint.json`，r≥2 为 `control/vc/revisions/r<N>/vc-6-checkpoint.json`），
+`status --candidate-id` 才能报告最终完成。
 
 ---
 
