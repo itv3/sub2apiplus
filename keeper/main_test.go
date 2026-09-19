@@ -385,6 +385,118 @@ func TestRepairCodexArg0PermissionsSets755(t *testing.T) {
 	}
 }
 
+// 读取状态文件内容；文件不存在时返回空串。
+func readStateFile(t *testing.T, path string) string {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("读取状态文件失败: %v", err)
+	}
+	return string(raw)
+}
+
+func TestRefreshTargetsSkipsSyncWhenTargetsUnchanged(t *testing.T) {
+	// 用 accounts 变量控制 sub2apiplus 返回的账号列表：先为空（保活关闭），再放入一个账号。
+	accounts := `[]`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"code":0,"data":{"accounts":` + accounts + `}}`))
+	}))
+	defer server.Close()
+
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	k := &Keeper{
+		cfg: Config{
+			StatePath:    statePath,
+			ProjectsRoot: t.TempDir(),
+			Sub2APIPlus:  Sub2APIPlusConfig{BaseURL: server.URL, InternalToken: "secret"},
+		},
+		state: State{Targets: map[string]*TargetState{
+			"9": {Name: "stale", AccountID: 9, Enabled: true},
+		}},
+		httpClient: server.Client(),
+		location:   time.UTC,
+	}
+
+	// 保活关闭：列表为空且与初始 cfg.Targets（nil）等价，连续两个周期都不应触碰状态文件。
+	for i := 0; i < 2; i++ {
+		if err := k.refreshTargets(context.Background()); err != nil {
+			t.Fatalf("refreshTargets error = %v", err)
+		}
+		if got := readStateFile(t, statePath); got != "" {
+			t.Fatalf("保活关闭时第 %d 次 refreshTargets 仍写了状态文件: %q", i+1, got)
+		}
+	}
+
+	// 保活打开：列表变化，必须同步并落盘，且状态文件里出现新账号。
+	accounts = `[{"id":3,"name":"BWG_OpenAI","platform":"openai","type":"apikey","enabled":true,"executor":"codex","model":"gpt-5.5","mode":"fresh","workspace":"homeproxy","interval_minutes":8,"work_start":"00:00","work_end":"24:00","proxy_token":"proxy-openai"}]`
+	if err := k.refreshTargets(context.Background()); err != nil {
+		t.Fatalf("refreshTargets error = %v", err)
+	}
+	first := readStateFile(t, statePath)
+	if first == "" {
+		t.Fatalf("账号列表变化后未写状态文件")
+	}
+	var saved State
+	if err := json.Unmarshal([]byte(first), &saved); err != nil {
+		t.Fatalf("状态文件不是合法 JSON: %v", err)
+	}
+	if got := saved.Targets["3"]; got == nil || !got.Enabled || got.AccountID != 3 {
+		t.Fatalf("状态文件未包含新同步的账号 3: %+v", got)
+	}
+
+	// 列表未变：再次刷新不应重写状态文件（篡改法验证）。
+	if err := os.WriteFile(statePath, []byte("tampered"), 0600); err != nil {
+		t.Fatalf("写入篡改内容失败: %v", err)
+	}
+	if err := k.refreshTargets(context.Background()); err != nil {
+		t.Fatalf("refreshTargets error = %v", err)
+	}
+	if got := readStateFile(t, statePath); got != "tampered" {
+		t.Fatalf("账号列表未变化时仍重写了状态文件: %q", got)
+	}
+}
+
+func TestScanReturnsEarlyWithoutTargets(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	k := &Keeper{
+		cfg: Config{StatePath: statePath},
+		state: State{Targets: map[string]*TargetState{
+			"9": {Name: "stale", AccountID: 9, Enabled: true, Running: true},
+		}},
+		location: time.UTC,
+	}
+
+	k.scan(context.Background())
+
+	if got := readStateFile(t, statePath); got != "" {
+		t.Fatalf("没有目标时 scan 仍写了状态文件: %q", got)
+	}
+	if !k.state.Targets["9"].Running {
+		t.Fatalf("没有目标时 scan 不应触碰残留的 state")
+	}
+}
+
+func TestTickIntervalSlowsDownWithoutTargets(t *testing.T) {
+	target := TargetConfig{Name: "BWG_OpenAI", AccountID: 3, Enabled: true}
+	cases := []struct {
+		name     string
+		targets  []TargetConfig
+		interval int
+		want     time.Duration
+	}{
+		{name: "保活关闭且配置间隔小于空闲间隔", targets: nil, interval: 30, want: idleScanInterval},
+		{name: "保活关闭且配置间隔大于空闲间隔", targets: nil, interval: 120, want: 120 * time.Second},
+		{name: "保活开启按配置间隔", targets: []TargetConfig{target}, interval: 30, want: 30 * time.Second},
+	}
+	for _, tc := range cases {
+		k := &Keeper{cfg: Config{ScanIntervalSeconds: tc.interval, Targets: tc.targets}}
+		if got := k.tickInterval(); got != tc.want {
+			t.Fatalf("%s: tickInterval() = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestSaveStateSkipsWriteWhenUnchanged(t *testing.T) {
 	statePath := filepath.Join(t.TempDir(), "state.json")
 	k := &Keeper{

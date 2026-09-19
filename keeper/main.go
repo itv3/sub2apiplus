@@ -36,6 +36,9 @@ const (
 	defaultMaxOutputBytes       = 1 << 20
 	defaultKeepaliveMode        = "resume_last"
 	defaultKeepaliveMaxTokens   = 512
+	// 保活关闭（sub2apiplus 侧没有任何启用账号）时的扫描间隔下限：此时每个周期只剩一次账号列表查询，
+	// 用于发现保活被重新打开，放慢到 1 分钟即可。
+	idleScanInterval = time.Minute
 )
 
 type Config struct {
@@ -472,7 +475,7 @@ func (k *Keeper) Run(ctx context.Context) {
 	defer k.runWG.Wait()
 	k.refreshTargets(ctx)
 	k.scan(ctx)
-	ticker := time.NewTicker(time.Duration(k.cfg.ScanIntervalSeconds) * time.Second)
+	ticker := time.NewTicker(k.tickInterval())
 	defer ticker.Stop()
 	for {
 		select {
@@ -481,13 +484,28 @@ func (k *Keeper) Run(ctx context.Context) {
 		case <-ticker.C:
 			k.refreshTargets(ctx)
 			k.scan(ctx)
+			ticker.Reset(k.tickInterval())
 		}
 	}
 }
 
+// tickInterval 返回下一个扫描周期的间隔：有启用账号时按配置的 scan_interval_seconds；
+// 保活关闭时放慢到 idleScanInterval（配置值更大时取配置值），减少空转。
+func (k *Keeper) tickInterval() time.Duration {
+	interval := time.Duration(k.cfg.ScanIntervalSeconds) * time.Second
+	if len(k.currentTargets()) == 0 && interval < idleScanInterval {
+		return idleScanInterval
+	}
+	return interval
+}
+
 func (k *Keeper) scan(ctx context.Context) {
-	now := time.Now().In(k.location)
 	targets := k.currentTargets()
+	// 保活关闭时没有任何目标，不进入扫描逻辑。
+	if len(targets) == 0 {
+		return
+	}
+	now := time.Now().In(k.location)
 	for _, target := range targets {
 		target := target
 		if !target.Enabled || target.AccountID <= 0 {
@@ -1486,11 +1504,31 @@ func (k *Keeper) refreshTargets(ctx context.Context) error {
 		return err
 	}
 	k.mu.Lock()
+	// 保活关闭（列表为空）或账号列表与上个周期完全相同时，state 不会有任何变化：
+	// 跳过同步、持久化与 executor 清理，让扫描周期只剩下这一次账号列表查询。
+	changed := !targetsEqual(k.cfg.Targets, targets)
 	k.cfg.Targets = targets
-	k.syncTargetsLocked()
+	if changed {
+		k.syncTargetsLocked()
+	}
 	k.mu.Unlock()
-	k.reconcilePersistentExecutors(targets)
+	if changed {
+		k.reconcilePersistentExecutors(targets)
+	}
 	return nil
+}
+
+// targetsEqual 逐项比较两份保活账号列表；TargetConfig 的字段全部可比较，直接用 == 即可。
+func targetsEqual(a, b []TargetConfig) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (k *Keeper) fetchTargets(ctx context.Context) ([]TargetConfig, error) {
