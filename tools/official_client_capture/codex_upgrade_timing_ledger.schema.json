@@ -70,10 +70,58 @@
           "enum": [
             "active",
             "recovery_required",
+            "candidate_review_required",
+            "revision_required",
             "stop_required",
             "stopped",
             "complete"
           ]
+        },
+        "current_revision": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "revision_phase_state": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^[1-9][0-9]*$"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "propertyNames": {
+              "enum": [
+                "VC-4",
+                "VC-5",
+                "VC-6"
+              ]
+            },
+            "additionalProperties": {
+              "enum": [
+                "started",
+                "completed",
+                "abandoned"
+              ]
+            }
+          }
+        },
+        "campaign_completed_phases": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "VC-0",
+              "VC-1",
+              "VC-2",
+              "VC-3"
+            ]
+          }
         },
         "upgrade_id": {
           "$ref": "#/$defs/safeId"

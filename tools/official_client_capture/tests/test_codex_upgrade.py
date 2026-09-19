@@ -323,6 +323,17 @@ class CodexUpgradeTest(unittest.TestCase):
                     event_type="stage_completed",
                 )
                 next_phase = f"VC-{index + 1}"
+                if next_phase == "VC-4":
+                    # 改造 2：候选级阶段开工前账本必须先激活 r1。
+                    codex_upgrade_timing_ledger.append_event(
+                        ledger_root,
+                        event_id="stage-revision-r1",
+                        phase="VC-4",
+                        event_type="stage_revision",
+                        revision=1,
+                        candidate_id="cand-1",
+                        revision_commit_sha256="6" * 64,
+                    )
                 codex_upgrade_timing_ledger.append_event(
                     ledger_root,
                     event_id=f"start-{index + 1}-{next_phase.lower()}",
@@ -9312,6 +9323,9 @@ class CodexUpgradeTest(unittest.TestCase):
                 "reconcile-attempt",
                 "account-sealed-official",
                 "account-sealed-candidate",
+                # 改造 2：候选级 revision 的两个零请求控制命令。
+                "revision-open",
+                "invalidate-candidate",
                 "status",
                 "resume",
             },
@@ -11654,6 +11668,17 @@ class CodexUpgradeTest(unittest.TestCase):
                     phase=phase,
                     event_type="stage_completed",
                 )
+                if index == 3:
+                    # 改造 2：候选级阶段开工前账本必须先激活 r1。
+                    codex_upgrade_timing_ledger.append_event(
+                        predecessor_ledger,
+                        event_id="stage-revision-r1",
+                        phase="VC-4",
+                        event_type="stage_revision",
+                        revision=1,
+                        candidate_id="cand-1",
+                        revision_commit_sha256="6" * 64,
+                    )
                 codex_upgrade_timing_ledger.append_event(
                     predecessor_ledger,
                     event_id=f"start-vc{index + 1}",
@@ -11768,11 +11793,12 @@ class CodexUpgradeTest(unittest.TestCase):
                 import_receipt["schema_version"],
                 codex_upgrade.PREDECESSOR_RECOVERY_IMPORT_SCHEMA,
             )
+            # 8 条阶段事件 + 1 条 stage_revision（改造 2）+ 1 条 stop_the_line = 11。
             self.assertEqual(
                 import_receipt["recovery_control_transition"]["stop_checkpoint"][
                     "head_sequence"
                 ],
-                10,
+                11,
             )
 
     def test_campaign_fixture_package_is_independent_of_wall_clock(self) -> None:
@@ -17863,6 +17889,18 @@ class CodexUpgradeTest(unittest.TestCase):
                 event_type="stage_completed",
                 next_action=f"启动 {started}",
             )
+            if started == "VC-4":
+                # 改造 2：候选级阶段开工前账本必须先激活 r1。
+                codex_upgrade_timing_ledger.append_event(
+                    ledger_dir,
+                    event_id="fixture-stage-revision-r1",
+                    phase="VC-4",
+                    event_type="stage_revision",
+                    revision=1,
+                    candidate_id="cand-1",
+                    revision_commit_sha256="6" * 64,
+                    next_action="派发 VC-4 首批",
+                )
             codex_upgrade_timing_ledger.append_event(
                 ledger_dir,
                 event_id=f"fixture-{started.lower()}-started",
@@ -19385,6 +19423,13 @@ class CodexUpgradeTest(unittest.TestCase):
             head_before = codex_upgrade_project_ledger.replay_head(fixture["ledger"])["sequence"]
             order = codex_upgrade_vc_artifacts.VC_PHASES
             for sequence, phase in enumerate(order[2:], start=2):
+                if phase == "VC-4":
+                    # 改造 2：候选级首批派发前必须先激活 r1（零请求、幂等）。
+                    opened = codex_upgrade.open_candidate_revision(
+                        argparse.Namespace(campaign_dir=campaign_dir, candidate_id="candidate-r1", initial=True, supersedes=None)
+                    )
+                    self.assertEqual((opened["revision"], opened["idempotent"]), (1, False))
+                    self.assertTrue((campaign_dir / "control" / "vc" / "revisions" / "r1" / "COMMIT").is_file())
                 action_plan = self._vc_chain_action_plan(root, campaign_dir, phase)
                 result, returncode = codex_upgrade.compile_and_run_vc_batch(
                     self._vc_chain_arguments(fixture, phase, sequence, action_plan)
@@ -19414,7 +19459,7 @@ class CodexUpgradeTest(unittest.TestCase):
             # 恢复账本停在 active VC-0：VC-2 首批一次补齐 VC-0／VC-1 完成再开 VC-2；
             # 之后每批各写一次 started／completed。
             self.assertEqual(
-                events[1:9],
+                events[1:10],
                 [
                     ("stage_completed", "vc-batch-0002-vc-2-vc-0-completed"),
                     ("stage_started", "vc-batch-0002-vc-2-vc-1-started"),
@@ -19423,14 +19468,16 @@ class CodexUpgradeTest(unittest.TestCase):
                     ("stage_completed", "vc-batch-0002-vc-2-completed"),
                     ("stage_started", "vc-batch-0003-vc-3-vc-3-started"),
                     ("stage_completed", "vc-batch-0003-vc-3-completed"),
+                    ("stage_revision", "stage-revision-r1"),
                     ("stage_started", "vc-batch-0004-vc-4-vc-4-started"),
                 ],
             )
             self.assertEqual(events[-1], ("stage_completed", "vc-batch-0006-vc-6-completed"))
             # 派发本身不写项目总账事件；admission 只读重放 head。
             self.assertEqual(codex_upgrade_project_ledger.replay_head(fixture["ledger"])["sequence"], head_before)
-            # 已封存阶段不得重编：VC-6 已有 checkpoint。
-            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "已有 checkpoint"):
+            # 已封存阶段不得重编：改造 2 起账本门在编译前就拒绝重开当前 revision 已完成的阶段
+            # （比原先 compile 期的"已有 checkpoint"更早，不写任何制品）。
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "已登记 VC-6 在当前 revision 完成，禁止重开"):
                 codex_upgrade.compile_and_run_vc_batch(
                     self._vc_chain_arguments(fixture, "VC-6", 7, self._vc_chain_action_plan(root / "again", campaign_dir, "VC-6"))
                 )

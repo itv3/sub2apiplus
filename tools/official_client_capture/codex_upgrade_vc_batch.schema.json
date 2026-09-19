@@ -1,17 +1,19 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-vc-batch-v1.json",
-  "title": "Codex VC 不可变执行批次",
+  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-vc-batch-v2.json",
+  "title": "Codex VC 不可变执行批次（v2：候选级阶段绑定 candidate_revision／candidate_id；v1 只读兼容）",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "schema_version", "campaign_id", "campaign_plan_sha256", "batch_id",
     "sequence", "phase", "predecessor_checkpoint", "execute_item_ids",
     "reuse_item_ids", "actions", "compiled_at_utc", "must_start_by_utc",
-    "original_deadline_at_utc", "batch_sha256"
+    "original_deadline_at_utc", "batch_sha256", "candidate_revision", "candidate_id"
   ],
   "properties": {
-    "schema_version": {"const": "codex-upgrade-vc-batch/v1"},
+    "schema_version": {"const": "codex-upgrade-vc-batch/v2"},
+    "candidate_revision": {"oneOf": [{"type": "integer", "minimum": 1}, {"type": "null"}]},
+    "candidate_id": {"oneOf": [{"$ref": "#/$defs/safeId"}, {"type": "null"}]},
     "campaign_id": {"$ref": "#/$defs/safeId"},
     "campaign_plan_sha256": {"$ref": "#/$defs/sha256"},
     "batch_id": {"$ref": "#/$defs/safeId"},

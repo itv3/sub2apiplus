@@ -714,6 +714,162 @@ class TimingLedgerTests(unittest.TestCase):
             self.assertIsNone(state["active_phase"])
             self.assertEqual(state["head_sequence"], 4)
 
+    # ------------------------------------------------------------------
+    # 改造 2：候选级 revision
+    # ------------------------------------------------------------------
+
+    def _advance_to_vc3(self, root: Path) -> int:
+        """VC-0～VC-3 依次完成，返回下一个可用分钟数。"""
+
+        minute = 1
+        ledger.append_event(root, event_id="c0", phase="VC-0", event_type="stage_completed", next_action="x", recorded_at_utc=self._at(minute))
+        for phase in ("VC-1", "VC-2", "VC-3"):
+            minute += 1
+            ledger.append_event(root, event_id=f"s-{phase}", phase=phase, event_type="stage_started", next_action="x", recorded_at_utc=self._at(minute))
+            minute += 1
+            ledger.append_event(root, event_id=f"c-{phase}", phase=phase, event_type="stage_completed", next_action="x", recorded_at_utc=self._at(minute))
+        return minute + 1
+
+    def test_candidate_stage_requires_revision_and_initial_stage_revision_activates_r1(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "UpgradeTimingLedger"
+            self._create(root)
+            minute = self._advance_to_vc3(root)
+            # 新 Campaign：没有 revision 时候选级 stage_started 被拒。
+            with self.assertRaisesRegex(ledger.TimingLedgerError, "revision-open --initial"):
+                ledger.append_event(root, event_id="s4-early", phase="VC-4", event_type="stage_started", next_action="x", recorded_at_utc=self._at(minute))
+            # 首个 stage_revision 必须是 r1 且不取代。
+            with self.assertRaisesRegex(ledger.TimingLedgerError, "首个 stage_revision"):
+                ledger.append_event(root, event_id="r2-early", phase="VC-4", event_type="stage_revision", revision=2, candidate_id="cand-b", revision_commit_sha256="a" * 64, next_action="x", recorded_at_utc=self._at(minute))
+            summary = ledger.append_event(root, event_id="r1", phase="VC-4", event_type="stage_revision", revision=1, candidate_id="cand-a", revision_commit_sha256="a" * 64, next_action="x", recorded_at_utc=self._at(minute))
+            self.assertEqual(summary["current_revision"], 1)
+            self.assertEqual(summary["status"], "active")
+            # 候选级事件自动绑定当前 revision；显式给错 revision 被拒。
+            with self.assertRaisesRegex(ledger.TimingLedgerError, "不是当前 revision"):
+                ledger.append_event(root, event_id="s4-bad", phase="VC-4", event_type="stage_started", revision=2, next_action="x", recorded_at_utc=self._at(minute + 1))
+            ledger.append_event(root, event_id="s4", phase="VC-4", event_type="stage_started", next_action="x", recorded_at_utc=self._at(minute + 1))
+            events = ledger._load_events(root)
+            self.assertEqual(events[-1][0]["revision"], 1)
+            self.assertIsNone(events[-1][0]["candidate_id"])
+            ledger.append_event(root, event_id="c4", phase="VC-4", event_type="stage_completed", next_action="x", recorded_at_utc=self._at(minute + 2))
+            state = ledger.phase_ledger_state(root, now=self._at(minute + 3))
+            self.assertEqual(state["completed_phases"], ["VC-0", "VC-1", "VC-2", "VC-3", "VC-4"])
+            self.assertEqual(state["revision_phase_state"], {"1": {"VC-4": "completed"}})
+            # 同 revision 不得重开已完成阶段。
+            with self.assertRaisesRegex(ledger.TimingLedgerError, "同一 revision 不得重开"):
+                ledger.append_event(root, event_id="s4-again", phase="VC-4", event_type="stage_started", next_action="x", recorded_at_utc=self._at(minute + 3))
+            # Campaign 级阶段不接受 revision 字段。
+            with self.assertRaisesRegex(ledger.TimingLedgerError, "只有候选级阶段事件"):
+                ledger.append_event(root, event_id="bad-campaign", phase="VC-2", event_type="receipt_passed", revision=1, next_action="x", recorded_at_utc=self._at(minute + 3))
+
+    def test_review_invalidate_and_stage_revision_transition_table(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "UpgradeTimingLedger"
+            self._create(root)
+            minute = self._advance_to_vc3(root)
+            ledger.append_event(root, event_id="r1", phase="VC-4", event_type="stage_revision", revision=1, candidate_id="cand-a", revision_commit_sha256="a" * 64, next_action="x", recorded_at_utc=self._at(minute))
+            ledger.append_event(root, event_id="s4", phase="VC-4", event_type="stage_started", next_action="x", recorded_at_utc=self._at(minute + 1))
+            ledger.append_event(root, event_id="c4", phase="VC-4", event_type="stage_completed", next_action="x", recorded_at_utc=self._at(minute + 5))
+            ledger.append_event(root, event_id="s5", phase="VC-5", event_type="stage_started", next_action="x", recorded_at_utc=self._at(minute + 6))
+            # candidate_review_required 必须在阶段关闭后。
+            with self.assertRaisesRegex(ledger.TimingLedgerError, "阶段已关闭"):
+                ledger.append_event(root, event_id="crr-early", phase="VC-5", event_type="candidate_review_required", candidate_id="cand-a", root_cause_id="rc1-a", next_action="x", recorded_at_utc=self._at(minute + 7))
+            ledger.append_event(root, event_id="a5", phase="VC-5", event_type="stage_abandoned", root_cause_id="rc1-a", next_action="x", recorded_at_utc=self._at(minute + 8))
+            summary = ledger.append_event(root, event_id="crr", phase="VC-5", event_type="candidate_review_required", candidate_id="cand-a", root_cause_id="rc1-a", next_action="invalidate-candidate", recorded_at_utc=self._at(minute + 9))
+            self.assertEqual(summary["status"], "candidate_review_required")
+            # 只读等待：禁止派发（stage_started／attempt_started），允许对账 receipt_passed。
+            with self.assertRaisesRegex(ledger.TimingLedgerError, "candidate_review_required 期间"):
+                ledger.append_event(root, event_id="s5-again", phase="VC-5", event_type="stage_started", next_action="x", recorded_at_utc=self._at(minute + 10))
+            with self.assertRaisesRegex(ledger.TimingLedgerError, "candidate_review_required 期间"):
+                ledger.append_event(root, event_id="r2-early", phase="VC-4", event_type="stage_revision", revision=2, candidate_id="cand-b", revision_commit_sha256="b" * 64, supersedes_revision=1, next_action="x", recorded_at_utc=self._at(minute + 10))
+            ledger.append_event(root, event_id="rp", phase="VC-5", event_type="receipt_passed", next_action="x", recorded_at_utc=self._at(minute + 10))
+            self.assertEqual(ledger.inspect_ledger(root, now=self._at(minute + 10))["status"], "candidate_review_required")
+            summary = ledger.append_event(root, event_id="inv", phase="VC-5", event_type="candidate_invalidated", candidate_id="cand-a", root_cause_id="rc1-inv", next_action="revision-open --supersedes cand-a", recorded_at_utc=self._at(minute + 11))
+            self.assertEqual(summary["status"], "revision_required")
+            # revision_required：禁止派发；同候选幂等 candidate_invalidated 允许；其他候选拒绝。
+            with self.assertRaisesRegex(ledger.TimingLedgerError, "revision_required 期间"):
+                ledger.append_event(root, event_id="s4-r", phase="VC-4", event_type="stage_started", next_action="x", recorded_at_utc=self._at(minute + 12))
+            ledger.append_event(root, event_id="inv-again", phase="VC-5", event_type="candidate_invalidated", candidate_id="cand-a", root_cause_id="rc1-inv", next_action="x", recorded_at_utc=self._at(minute + 12))
+            with self.assertRaisesRegex(ledger.TimingLedgerError, "幂等重复"):
+                ledger.append_event(root, event_id="inv-other", phase="VC-5", event_type="candidate_invalidated", candidate_id="cand-z", root_cause_id="rc1-inv", next_action="x", recorded_at_utc=self._at(minute + 12))
+            # stage_revision：必须 r2、取代 r1、新候选 id 不同。
+            for bad in (
+                {"revision": 3, "supersedes_revision": 1, "candidate_id": "cand-b"},
+                {"revision": 2, "supersedes_revision": None, "candidate_id": "cand-b"},
+                {"revision": 2, "supersedes_revision": 1, "candidate_id": "cand-a"},
+            ):
+                with self.subTest(bad=bad), self.assertRaises(ledger.TimingLedgerError):
+                    ledger.append_event(root, event_id="r2-bad", phase="VC-4", event_type="stage_revision", revision_commit_sha256="b" * 64, next_action="x", recorded_at_utc=self._at(minute + 13), **bad)
+            summary = ledger.append_event(root, event_id="r2", phase="VC-4", event_type="stage_revision", revision=2, candidate_id="cand-b", revision_commit_sha256="b" * 64, supersedes_revision=1, next_action="x", recorded_at_utc=self._at(minute + 13))
+            self.assertEqual((summary["status"], summary["current_revision"]), ("active", 2))
+            # 新 revision 从 VC-4 重新开始：completed_phases 只含 Campaign 级 + r2 完成。
+            state = ledger.phase_ledger_state(root, now=self._at(minute + 13))
+            self.assertEqual(state["completed_phases"], ["VC-0", "VC-1", "VC-2", "VC-3"])
+            self.assertEqual(state["revision_phase_state"], {"1": {"VC-4": "completed", "VC-5": "abandoned"}})
+            ledger.append_event(root, event_id="s4-r2", phase="VC-4", event_type="stage_started", next_action="x", recorded_at_utc=self._at(minute + 14))
+            # 阶段耗时跨 revision 累计：r1 的 VC-4 用了 4 分钟，r2 的 VC-4 段从 14 分起，
+            # 本段 deadline = 段起点 + (VC-4 阶段预算 − 4 分)。
+            summary = ledger.inspect_ledger(root, now=self._at(minute + 15))
+            self.assertEqual(summary["stage_elapsed_seconds"], 4 * 60 + 60)
+            budget = ledger.DEFAULT_STAGE_BUDGETS["VC-4"]
+            expected_deadline = datetime.fromisoformat(self._at(minute + 14)) + timedelta(minutes=budget) - timedelta(minutes=4)
+            self.assertEqual(datetime.fromisoformat(summary["stage_deadline_at_utc"]), expected_deadline)
+            started = datetime.fromisoformat(self.START)
+            self.assertEqual(datetime.fromisoformat(summary["total_deadline_at_utc"]), started + timedelta(minutes=ledger.DEFAULT_TOTAL_BUDGET_MINUTES))
+            ledger.append_event(root, event_id="c4-r2", phase="VC-4", event_type="stage_completed", next_action="x", recorded_at_utc=self._at(minute + 16))
+            state = ledger.phase_ledger_state(root, now=self._at(minute + 17))
+            self.assertEqual(state["completed_phases"], ["VC-0", "VC-1", "VC-2", "VC-3", "VC-4"])
+            self.assertEqual(state["current_revision"], 2)
+            # r2 与 r1 都在 checkpoint 摘要里，且能重放。
+            receipt = ledger.build_checkpoint(root, observed_at_utc=self._at(minute + 18))
+            ledger._write_once(root / "receipts" / "r2.json", receipt)
+            self.assertEqual(ledger.replay(root, "receipts/r2.json"), receipt)
+            self.assertEqual(receipt["summary"]["revision_phase_state"]["2"], {"VC-4": "completed"})
+
+    def test_legacy_ledger_without_revision_fields_replays_as_implicit_r1(self) -> None:
+        """历史账本的候选级事件没有 revision 字段：回放为隐含 r1，旧 checkpoint 仍可重放。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "UpgradeTimingLedger"
+            self._create(root)
+            minute = self._advance_to_vc3(root)
+            # 直接构造没有 revision 字段的候选级事件（模拟改造 2 之前写出的账本）。
+            for event_id, phase, event_type, offset in (
+                ("s4", "VC-4", "stage_started", 0),
+                ("c4", "VC-4", "stage_completed", 1),
+                ("s5", "VC-5", "stage_started", 2),
+            ):
+                raw_events = ledger._load_events(root)
+                event = {
+                    "schema_version": ledger.EVENT_SCHEMA,
+                    "sequence": len(raw_events) + 1,
+                    "event_id": event_id,
+                    "recorded_at_utc": self._at(minute + offset),
+                    "phase": phase,
+                    "event_type": event_type,
+                    "attempt_id": None,
+                    "root_cause_id": None,
+                    "live_request_count": 0,
+                    "receipts": [],
+                    "next_action": "x",
+                    "previous_event_sha256": ledger._sha256_bytes(raw_events[-1][1]),
+                }
+                ledger._write_once(root / "events" / f"{len(raw_events) + 1:06d}.json", event)
+            summary = ledger.inspect_ledger(root, now=self._at(minute + 3))
+            self.assertEqual((summary["status"], summary["active_phase"], summary["current_revision"]), ("active", "VC-5", 1))
+            self.assertEqual(summary["revision_phase_state"], {"1": {"VC-4": "completed", "VC-5": "started"}})
+            state = ledger.phase_ledger_state(root, now=self._at(minute + 3))
+            self.assertEqual(state["completed_phases"], ["VC-0", "VC-1", "VC-2", "VC-3", "VC-4"])
+            # 旧格式 checkpoint（没有 revision 摘要字段）按历史语义重放。
+            receipt = ledger.build_checkpoint(root, observed_at_utc=self._at(minute + 3))
+            for field in ("current_revision", "revision_phase_state", "campaign_completed_phases"):
+                receipt["summary"].pop(field)
+            ledger._write_once(root / "receipts" / "legacy-r1.json", receipt)
+            self.assertEqual(ledger.replay(root, "receipts/legacy-r1.json"), receipt)
+            # 历史账本上继续追加候选级事件：自动归 r1。
+            ledger.append_event(root, event_id="c5", phase="VC-5", event_type="stage_completed", next_action="x", recorded_at_utc=self._at(minute + 4))
+            self.assertEqual(ledger._load_events(root)[-1][0]["revision"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

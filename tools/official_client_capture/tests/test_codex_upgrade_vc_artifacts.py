@@ -563,11 +563,52 @@ class CodexUpgradeVCArtifactsTests(unittest.TestCase):
             "codex_upgrade_vc_staging_marker.schema.json": artifacts.STAGING_MARKER_SCHEMA,
             "codex_upgrade_staging_abort.schema.json": artifacts.STAGING_ABORT_SCHEMA,
             "codex_upgrade_parent_start_failure.schema.json": artifacts.PARENT_START_FAILURE_SCHEMA,
+            # 改造 2（候选级 revision）五种控制制品。
+            "codex_upgrade_candidate_revision.schema.json": artifacts.CANDIDATE_REVISION_SCHEMA,
+            "codex_upgrade_candidate_revision_commit.schema.json": artifacts.CANDIDATE_REVISION_COMMIT_SCHEMA,
+            "codex_upgrade_candidate_revision_seal.schema.json": artifacts.CANDIDATE_REVISION_SEAL_SCHEMA,
+            "codex_upgrade_candidate_invalidation_diagnosis.schema.json": artifacts.CANDIDATE_INVALIDATION_DIAGNOSIS_SCHEMA,
+            "codex_upgrade_candidate_invalidation.schema.json": artifacts.CANDIDATE_INVALIDATION_SCHEMA,
         }
         for name, schema_version in expected.items():
             with self.subTest(name=name):
                 schema = json.loads((root / name).read_text(encoding="utf-8"))
                 self.assertEqual(schema["properties"]["schema_version"]["const"], schema_version)
+        # batch/v2：两字段必填（Campaign 级为 null）；v1 只读兼容由 validate_vc_batch 覆盖。
+        batch_schema = json.loads((root / "codex_upgrade_vc_batch.schema.json").read_text(encoding="utf-8"))
+        self.assertEqual(batch_schema["properties"]["schema_version"]["const"], artifacts.VC_BATCH_SCHEMA)
+        self.assertEqual(artifacts.VC_BATCH_SCHEMA, "codex-upgrade-vc-batch/v2")
+        self.assertEqual(artifacts.VC_BATCH_LEGACY_SCHEMA, "codex-upgrade-vc-batch/v1")
+        self.assertTrue({"candidate_revision", "candidate_id"} <= set(batch_schema["required"]))
+        # campaign-run v2／v3 清单：两字段成对可选（存在性由批次模型决定）。
+        run_schema = json.loads((root / "codex_upgrade_campaign_run.schema.json").read_text(encoding="utf-8"))
+        for version in ("v2", "v3"):
+            definition = run_schema["$defs"][version]
+            self.assertIn("candidate_revision", definition["properties"])
+            self.assertIn("candidate_id", definition["properties"])
+            self.assertNotIn("candidate_revision", definition.get("required", []))
+        # 计时账本：两个新状态与三个 revision 摘要字段。
+        ledger_schema = json.loads((root / "codex_upgrade_timing_ledger.schema.json").read_text(encoding="utf-8"))
+        summary = ledger_schema["properties"]["summary"]["properties"]
+        self.assertEqual(
+            summary["status"]["enum"],
+            ["active", "recovery_required", "candidate_review_required", "revision_required", "stop_required", "stopped", "complete"],
+        )
+        for field in ("current_revision", "revision_phase_state", "campaign_completed_phases"):
+            self.assertIn(field, summary)
+        self.assertEqual(
+            tuple(summary["revision_phase_state"]["additionalProperties"]["propertyNames"]["enum"]),
+            artifacts.CANDIDATE_PHASES,
+        )
+        from tools.official_client_capture import codex_upgrade_timing_ledger as timing_ledger
+
+        self.assertEqual(timing_ledger.CANDIDATE_PHASES, artifacts.CANDIDATE_PHASES)
+        self.assertTrue({"candidate_review_required", "candidate_invalidated", "stage_revision"} <= set(timing_ledger.EVENT_TYPES))
+        # 根因表：候选源码变更根因已登记（component candidate，维度 phase）。
+        from tools.official_client_capture import codex_upgrade_root_cause as root_cause
+
+        entry = root_cause.load_codes()["codes"]["candidate.source-change-required"]
+        self.assertEqual((entry["component"], tuple(entry["stable_dimensions"])), ("candidate", ("phase",)))
         abort_schema = json.loads((root / "codex_upgrade_staging_abort.schema.json").read_text(encoding="utf-8"))
         self.assertEqual(tuple(abort_schema["properties"]["stage"]["enum"]), artifacts.STAGING_ABORT_STAGES)
         self.assertEqual(tuple(abort_schema["properties"]["failure_kind"]["enum"]), artifacts.STAGING_ABORT_FAILURE_KINDS)

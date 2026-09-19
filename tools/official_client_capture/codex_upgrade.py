@@ -4901,6 +4901,9 @@ def _mutable_command_coordinates(
         # B0 两个 reconciler 自持 Campaign 排他锁与账本目录锁，不建 CampaignLease。
         "reconcile-supervisor-run",
         "reconcile-attempt",
+        # 改造 2：revision 登记与候选作废同样自持 Campaign 排他锁与账本锁。
+        "revision-open",
+        "invalidate-candidate",
         # seal 预演在私有 mount namespace 的 OverlayFS 副本上执行，正式目录只读；
         # 收据写入 control/seal-rehearsal，不触碰 attempt 与账本。
         "rehearse-candidate-seal",
@@ -9725,6 +9728,36 @@ def _build_parser() -> argparse.ArgumentParser:
         "--approve-sha256",
         help="apply 必需：preview 输出的 review_sha256。",
     )
+    revision_open = subparsers.add_parser(
+        "revision-open",
+        help=(
+            "改造 2：登记并激活一个候选级 revision（零请求、幂等）。--initial 在 VC-4 首批前建立 r1；"
+            "--supersedes 在 invalidate-candidate 之后开 r(N+1)"
+        ),
+    )
+    add_campaign_reference(revision_open)
+    revision_open.add_argument("--candidate-id", required=True)
+    revision_mode = revision_open.add_mutually_exclusive_group(required=True)
+    revision_mode.add_argument("--initial", action="store_true", help="新 Campaign 的 r1")
+    revision_mode.add_argument("--supersedes", metavar="OLD_CANDIDATE_ID", help="被作废候选的 ID")
+    invalidate = subparsers.add_parser(
+        "invalidate-candidate",
+        help=(
+            "改造 2：显式作废当前候选（两步式，零请求）。preview 输出诊断草案与 review_sha256；"
+            "apply 以 --approve-sha256 落盘、推送根因并二次判定，通过后账本进入 revision_required"
+        ),
+    )
+    invalidate.add_argument("invalidate_action", choices=("preview", "apply"))
+    add_campaign_reference(invalidate)
+    invalidate.add_argument("--candidate-id", required=True)
+    invalidate.add_argument("--reviewer", required=True, help="人工审核人标识（非空即可）")
+    invalidate.add_argument("--evidence", type=Path, action="append", default=[], help="证据文件（可重复），只作 evidence_refs")
+    invalidate.add_argument(
+        "--candidate-source",
+        type=Path,
+        help="旧候选源码树：旧候选既无 build receipt 又无 attempt 身份投影时必填",
+    )
+    invalidate.add_argument("--approve-sha256", help="apply 必需：preview 输出的 review_sha256")
     reconcile_run = subparsers.add_parser(
         "reconcile-supervisor-run",
         help=(
@@ -13019,18 +13052,10 @@ def _create_initial_vc_control_artifacts(
         batch_path = batches_root / "0001-vc-1.json"
         _secure_write_json_once(batch_path, batch)
         result["first_formal_batch"] = _vc_control_binding(campaign_dir, batch_path)
-        run_manifest = codex_upgrade_supervisor.build_batched_campaign_run_manifest(
-            campaign_id=plan["campaign_id"],
-            campaign_plan_sha256=plan["plan_sha256"],
-            batch_id=batch["batch_id"],
-            batch_sequence=batch["sequence"],
-            batch_sha256=batch["batch_sha256"],
-            phase=batch["phase"],
-            predecessor_checkpoint=batch["predecessor_checkpoint"],
-            original_deadline_at_utc=batch["original_deadline_at_utc"],
-            actions=batch["actions"],
-            execute_items=batch["execute_item_ids"],
-            reuse_items=batch["reuse_item_ids"],
+        # 首批清单按总计划的批次模型生成：staging 模型携带（null 的）候选级绑定字段。
+        run_manifest = _vc_run_manifest_from_batch(
+            batch,
+            batch_model=codex_upgrade_vc_artifacts.campaign_plan_batch_model(plan),
         )
         manifests_root = ensure_private_directory(
             vc_root / "run-manifests",
@@ -13166,18 +13191,10 @@ def _validate_initial_vc_control_artifacts(
                 "first_campaign_run_manifest",
                 "首个 VC-1 campaign-run 清单",
             )
-            expected_run = codex_upgrade_supervisor.build_batched_campaign_run_manifest(
-                campaign_id=plan["campaign_id"],
-                campaign_plan_sha256=plan["plan_sha256"],
-                batch_id=batch["batch_id"],
-                batch_sequence=batch["sequence"],
-                batch_sha256=batch["batch_sha256"],
-                phase=batch["phase"],
-                predecessor_checkpoint=batch["predecessor_checkpoint"],
-                original_deadline_at_utc=batch["original_deadline_at_utc"],
-                actions=batch["actions"],
-                execute_items=batch["execute_item_ids"],
-                reuse_items=batch["reuse_item_ids"],
+            # 与生成侧同一函数重建：staging 模型首批清单携带 null 的候选级绑定字段。
+            expected_run = _vc_run_manifest_from_batch(
+                {**batch, "campaign_id": plan["campaign_id"], "campaign_plan_sha256": plan["plan_sha256"]},
+                batch_model=codex_upgrade_vc_artifacts.campaign_plan_batch_model(plan),
             )
             if run_raw != expected_run:
                 raise ConfigurationError("首个 campaign-run 清单未由 VC-1 批次确定性编译。")
@@ -13227,10 +13244,211 @@ def _assert_initial_vc1_handoff_window(
         )
 
 
-def _vc_checkpoint_path(campaign_dir: Path, phase: str) -> Path:
+CANDIDATE_VC_PHASES = codex_upgrade_vc_artifacts.CANDIDATE_PHASES
+REVISIONS_DIRNAME = "revisions"
+
+
+def _vc_checkpoint_path(campaign_dir: Path, phase: str, *, revision: int | None = None) -> Path:
+    """阶段 checkpoint 路径：VC-0～VC-3 Campaign 级；VC-4～VC-6 按候选 revision。
+
+    r1 保持原路径（历史 Campaign 隐含 r1 只读兼容），r≥2 落在
+    ``control/vc/revisions/r<N>/<phase>-checkpoint.json``。
+    """
+
     if phase not in codex_upgrade_vc_artifacts.VC_PHASES:
         raise ConfigurationError(f"未知 VC 阶段：{phase}")
+    if phase in CANDIDATE_VC_PHASES and revision is not None:
+        if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:
+            raise ConfigurationError("候选 revision 必须是正整数。")
+        if revision >= 2:
+            return _candidate_revision_dir(campaign_dir, revision) / f"{phase.lower()}-checkpoint.json"
     return campaign_dir / "control" / "vc" / f"{phase.lower()}-checkpoint.json"
+
+
+def _candidate_revisions_root(campaign_dir: Path) -> Path:
+    return campaign_dir / "control" / "vc" / REVISIONS_DIRNAME
+
+
+def _candidate_revision_dir(campaign_dir: Path, revision: int) -> Path:
+    return _candidate_revisions_root(campaign_dir) / f"r{int(revision)}"
+
+
+def _read_candidate_revision_record(
+    campaign_dir: Path,
+    revision: int,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """读取 revision 目录的 revision.json 与 COMMIT（缺失返回 None，形态异常即拒绝）。"""
+
+    directory = _candidate_revision_dir(campaign_dir, revision)
+    record_path = directory / "revision.json"
+    commit_path = directory / "COMMIT"
+    record: dict[str, Any] | None = None
+    commit: dict[str, Any] | None = None
+    if record_path.exists() or record_path.is_symlink():
+        if record_path.is_symlink() or not record_path.is_file():
+            raise ConfigurationError(f"候选 revision r{revision} 记录路径不可信。")
+        try:
+            record = codex_upgrade_vc_artifacts.validate_candidate_revision(
+                _read_json(record_path, f"候选 revision r{revision} 记录")
+            )
+        except codex_upgrade_vc_artifacts.VCArtifactError as error:
+            raise ConfigurationError(str(error)) from error
+        if record["revision"] != revision:
+            raise ConfigurationError(f"候选 revision r{revision} 记录的 revision 与目录不一致。")
+    if commit_path.exists() or commit_path.is_symlink():
+        if commit_path.is_symlink() or not commit_path.is_file():
+            raise ConfigurationError(f"候选 revision r{revision} COMMIT 路径不可信。")
+        try:
+            commit = codex_upgrade_vc_artifacts.validate_candidate_revision_commit(
+                _read_json(commit_path, f"候选 revision r{revision} COMMIT")
+            )
+        except codex_upgrade_vc_artifacts.VCArtifactError as error:
+            raise ConfigurationError(str(error)) from error
+        if record is None or commit["record_sha256"] != record["record_sha256"] or commit["revision"] != revision:
+            raise ConfigurationError(f"候选 revision r{revision} COMMIT 未绑定同目录的 revision.json。")
+    return record, commit
+
+
+def _ledger_last_stage_revision(ledger_dir: Path) -> dict[str, Any] | None:
+    """账本最后一条 stage_revision 事件（显式激活的 revision）；没有则 None。"""
+
+    last: dict[str, Any] | None = None
+    try:
+        for event, _raw in codex_upgrade_timing_ledger._load_events(ledger_dir):
+            if event.get("event_type") == "stage_revision":
+                last = dict(event)
+    except codex_upgrade_timing_ledger.TimingLedgerError as error:
+        raise ConfigurationError(f"UpgradeTimingLedger 无法读取 stage_revision：{error}") from error
+    return last
+
+
+def _optional_campaign_timing_ledger_dir(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+) -> Path | None:
+    """有账本绑定时返回账本目录；没有绑定（历史／合成夹具）返回 None。"""
+
+    controls = manifest.get("control_receipts")
+    effective_epoch = _load_control_epoch_receipt(campaign_dir, manifest)
+    if isinstance(effective_epoch, Mapping):
+        controls = effective_epoch.get("successor_controls")
+    timing = controls.get("upgrade_timing") if isinstance(controls, Mapping) else None
+    if not isinstance(timing, Mapping):
+        return None
+    return _campaign_timing_ledger_dir(campaign_dir, manifest)
+
+
+def _current_candidate_revision_record(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+) -> tuple[int | None, dict[str, Any] | None]:
+    """当前候选 revision 及其 revision.json。
+
+    由账本最后一条有效 ``stage_revision`` 决定（目录 COMMIT 摘要必须与事件一致，即 active）；
+    历史 Campaign（已有原路径 VC-4 checkpoint 且无 ``control/vc/revisions/`` 目录）隐含 r1，
+    记录为 None；两者都不成立返回 ``(None, None)``——调用方必须拒绝并提示先
+    ``revision-open --initial``。
+    """
+
+    ledger_dir = _optional_campaign_timing_ledger_dir(campaign_dir, manifest)
+    if ledger_dir is not None:
+        last = _ledger_last_stage_revision(ledger_dir)
+        if last is not None:
+            revision = int(last["revision"])
+            record, commit = _read_candidate_revision_record(campaign_dir, revision)
+            if record is None or commit is None:
+                raise ConfigurationError(
+                    f"账本已激活候选 revision r{revision}，但 revision 目录缺少记录或 COMMIT。"
+                )
+            if commit["commit_sha256"] != last.get("revision_commit_sha256"):
+                raise ConfigurationError(
+                    f"候选 revision r{revision} 的 COMMIT 与账本 stage_revision 不一致。"
+                )
+            if record["candidate_id"] != last.get("candidate_id"):
+                raise ConfigurationError(
+                    f"候选 revision r{revision} 的候选与账本 stage_revision 不一致。"
+                )
+            return revision, record
+    revisions_root = _candidate_revisions_root(campaign_dir)
+    legacy_vc4 = campaign_dir / "control" / "vc" / "vc-4-checkpoint.json"
+    if (
+        not (revisions_root.exists() or revisions_root.is_symlink())
+        and legacy_vc4.is_file()
+        and not legacy_vc4.is_symlink()
+    ):
+        # 改造 2 之前的历史 Campaign：隐含 r1，只读重放。
+        return 1, None
+    return None, None
+
+
+def _current_candidate_revision(campaign_dir: Path, manifest: Mapping[str, Any]) -> int | None:
+    return _current_candidate_revision_record(campaign_dir, manifest)[0]
+
+
+def _implicit_r1_candidate_id(campaign_dir: Path, manifest: Mapping[str, Any]) -> str:
+    """历史隐含 r1 的候选：由原路径 VC-4 checkpoint 绑定的构建收据给出。"""
+
+    plan = _vc_campaign_plan(campaign_dir, manifest)
+    _path, checkpoint = _replay_vc_checkpoint(campaign_dir, plan, "VC-4", revision=1)
+    binding = checkpoint.get("stage_receipt")
+    if not isinstance(binding, Mapping):
+        raise ConfigurationError("VC-4 checkpoint 缺少构建收据绑定。")
+    raw = Path(str(binding.get("path", "")))
+    receipt_path = raw if raw.is_absolute() else _campaign_file(campaign_dir, str(binding.get("path", "")))
+    receipt = _read_json(receipt_path, "VC-4 构建收据")
+    candidate_id = receipt.get("candidate_id")
+    if not isinstance(candidate_id, str) or not SAFE_ID_RE.fullmatch(candidate_id):
+        raise ConfigurationError("VC-4 构建收据缺少合法 candidate_id。")
+    return candidate_id
+
+
+def _require_candidate_revision(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    *,
+    action: str,
+) -> tuple[int, dict[str, Any] | None]:
+    revision, record = _current_candidate_revision_record(campaign_dir, manifest)
+    if revision is None:
+        raise ConfigurationError(
+            f"{action} 需要激活的候选 revision；请先执行 revision-open --initial。"
+        )
+    return revision, record
+
+
+def _guard_candidate_revision_write(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    candidate_id: str,
+    *,
+    action: str,
+) -> None:
+    """候选级写入的 revision 门：只对 0.154.0 起的完整 VC 链 Campaign 生效。"""
+
+    if not _requires_complete_vc_artifacts(manifest):
+        return
+    _require_candidate_in_current_revision(campaign_dir, manifest, candidate_id, action=action)
+
+
+def _require_candidate_in_current_revision(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    candidate_id: str,
+    *,
+    action: str,
+) -> tuple[int, dict[str, Any] | None]:
+    """候选级写入前校验候选属于当前 active revision；被取代候选只读。"""
+
+    revision, record = _require_candidate_revision(campaign_dir, manifest, action=action)
+    if record is not None and record["candidate_id"] != candidate_id:
+        raise ConfigurationError(
+            f"{action} 拒绝：候选 {candidate_id} 不属于当前 revision r{revision}"
+            f"（当前候选 {record['candidate_id']}）；被取代候选只读。"
+        )
+    superseded_marker = campaign_dir / "candidates" / candidate_id / "superseded-by.json"
+    if superseded_marker.exists():
+        raise ConfigurationError(f"{action} 拒绝：候选 {candidate_id} 已被取代，只读。")
+    return revision, record
 
 
 def _vc_campaign_plan(
@@ -13440,7 +13658,8 @@ def _replay_vc_completion(
     ):
         raise ConfigurationError(f"{phase} 完成收据身份漂移。")
     plan = _vc_campaign_plan(campaign_dir, manifest)
-    _, checkpoint = _replay_vc_checkpoint(campaign_dir, plan, phase)
+    revision = _current_candidate_revision(campaign_dir, manifest) if phase in CANDIDATE_VC_PHASES else None
+    _, checkpoint = _replay_vc_checkpoint(campaign_dir, plan, phase, revision=revision)
     expected_binding = _vc_control_binding(campaign_dir, receipt_path)
     if checkpoint.get("stage_receipt") != expected_binding:
         raise ConfigurationError(f"{phase} checkpoint 未绑定规范完成收据。")
@@ -13451,10 +13670,16 @@ def _replay_vc_checkpoint(
     campaign_dir: Path,
     plan: Mapping[str, Any],
     phase: str,
+    *,
+    revision: int | None = None,
 ) -> tuple[Path, dict[str, Any]]:
-    """重放一个规范阶段 checkpoint 及其直接前序文件绑定。"""
+    """重放一个规范阶段 checkpoint 及其直接前序文件绑定。
 
-    path = _vc_checkpoint_path(campaign_dir, phase)
+    候选级阶段按 ``revision`` 定位；VC-4 的直接前序固定为 Campaign 级 VC-3，
+    VC-5／VC-6 的前序为同 revision 的上一阶段。
+    """
+
+    path = _vc_checkpoint_path(campaign_dir, phase, revision=revision)
     if path.is_symlink() or not path.is_file():
         raise ConfigurationError(f"{phase} checkpoint 缺失或路径不可信。")
     try:
@@ -13489,6 +13714,7 @@ def _replay_vc_checkpoint(
             campaign_dir,
             plan,
             predecessor_phase,
+            revision=revision if predecessor_phase in CANDIDATE_VC_PHASES else None,
         )
         if checkpoint.get("predecessor_checkpoint") != _vc_checkpoint_reference(
             campaign_dir,
@@ -13508,13 +13734,25 @@ def _complete_vc_phase(
     reuse_item_ids: Iterable[str] = (),
     live_request_count: int = 0,
     scanned_bytes: int = 0,
+    revision: int | None = None,
 ) -> dict[str, Any] | None:
-    """在阶段终点写一次 checkpoint；旧版本 Campaign 保持原合同。"""
+    """在阶段终点写一次 checkpoint；旧版本 Campaign 保持原合同。
+
+    候选级阶段（VC-4～VC-6）按候选 revision 落盘：未显式给出时取当前 active revision，
+    没有 active revision 即拒绝；漂移比较只在同一 revision 内进行。
+    """
 
     if not _requires_complete_vc_artifacts(manifest):
         return None
     if phase == "VC-0" or phase not in codex_upgrade_vc_artifacts.VC_PHASES:
         raise ConfigurationError("阶段完成器只接受 VC-1～VC-6。")
+    if phase in CANDIDATE_VC_PHASES:
+        if revision is None:
+            revision, _record = _require_candidate_revision(
+                campaign_dir, manifest, action=f"{phase} 阶段完成"
+            )
+    else:
+        revision = None
     control = manifest.get("vc_control")
     plan_reference = control.get("campaign_plan") if isinstance(control, Mapping) else None
     _require_file_binding(plan_reference, "Campaign 总计划")
@@ -13535,6 +13773,7 @@ def _complete_vc_phase(
         campaign_dir,
         plan,
         predecessor_phase,
+        revision=revision if predecessor_phase in CANDIDATE_VC_PHASES else None,
     )
     if (
         not stage_receipt_path.is_absolute()
@@ -13570,7 +13809,9 @@ def _complete_vc_phase(
         )
     except codex_upgrade_vc_artifacts.VCArtifactError as error:
         raise ConfigurationError(str(error)) from error
-    output = _vc_checkpoint_path(campaign_dir, phase)
+    output = _vc_checkpoint_path(campaign_dir, phase, revision=revision)
+    if revision is not None and revision >= 2:
+        ensure_private_directory(output.parent, campaign_dir)
     if output.exists() or output.is_symlink():
         if output.is_symlink() or not output.is_file():
             raise ConfigurationError(f"{phase} checkpoint 路径不可信。")
@@ -15828,9 +16069,25 @@ def recover_vc1_interruption(arguments: argparse.Namespace) -> dict[str, Any]:
     }
 
 
-def _vc_run_manifest_from_batch(batch: Mapping[str, Any]) -> dict[str, Any]:
-    """从已校验 VC batch 确定性重建唯一父 run 清单。"""
+def _vc_run_manifest_from_batch(
+    batch: Mapping[str, Any],
+    *,
+    batch_model: str = "legacy",
+) -> dict[str, Any]:
+    """从已校验 VC batch 确定性重建唯一父 run 清单。
 
+    staging 模型清单携带 ``candidate_revision``／``candidate_id``（与 batch 逐字一致，
+    候选级阶段非空、Campaign 级阶段 null）；legacy 模型清单不含两字段（混用即拒绝）。
+    """
+
+    extra: dict[str, Any] = {}
+    if batch_model == "staging":
+        extra = {
+            "candidate_revision": batch.get("candidate_revision"),
+            "candidate_id": batch.get("candidate_id"),
+        }
+    elif batch_model != "legacy":
+        raise ConfigurationError(f"未知批次模型：{batch_model}")
     return codex_upgrade_supervisor.build_batched_campaign_run_manifest(
         campaign_id=str(batch["campaign_id"]),
         campaign_plan_sha256=str(batch["campaign_plan_sha256"]),
@@ -15843,6 +16100,7 @@ def _vc_run_manifest_from_batch(batch: Mapping[str, Any]) -> dict[str, Any]:
         actions=batch["actions"],
         execute_items=batch["execute_item_ids"],
         reuse_items=batch["reuse_item_ids"],
+        **extra,
     )
 
 
@@ -16012,10 +16270,23 @@ def compile_vc_batch(
     predecessor_phase = codex_upgrade_vc_artifacts.VC_PHASES[
         codex_upgrade_vc_artifacts.VC_PHASES.index(phase) - 1
     ]
+    # 改造 2：候选级阶段的批次绑定当前 active revision 与其候选；VC-4 的前序是
+    # Campaign 级 VC-3，VC-5／VC-6 的前序是同 revision 的上一阶段。
+    candidate_revision: int | None = None
+    candidate_id: str | None = None
+    if phase in CANDIDATE_VC_PHASES:
+        candidate_revision, revision_record = _require_candidate_revision(
+            campaign_dir, manifest, action=f"{phase} 批次编译"
+        )
+        if revision_record is not None:
+            candidate_id = str(revision_record["candidate_id"])
+        else:
+            candidate_id = _implicit_r1_candidate_id(campaign_dir, manifest)
     predecessor_path, predecessor = _replay_vc_checkpoint(
         campaign_dir,
         plan,
         predecessor_phase,
+        revision=candidate_revision if predecessor_phase in CANDIDATE_VC_PHASES else None,
     )
     try:
         supplied_predecessor = arguments.predecessor_checkpoint.resolve(strict=True)
@@ -16025,7 +16296,7 @@ def compile_vc_batch(
         raise ConfigurationError(
             f"{phase} batch 必须引用规范 {predecessor_phase} checkpoint。"
         )
-    completed_path = _vc_checkpoint_path(campaign_dir, phase)
+    completed_path = _vc_checkpoint_path(campaign_dir, phase, revision=candidate_revision)
     if completed_path.exists() or completed_path.is_symlink():
         raise ConfigurationError(f"{phase} 已有 checkpoint，禁止再编译执行批次。")
     if (
@@ -16082,10 +16353,12 @@ def compile_vc_batch(
             actions=action_plan["actions"],
             compiled_at_utc=compiled_at,
             must_start_by_utc=must_start.isoformat(timespec="seconds"),
+            candidate_revision=candidate_revision,
+            candidate_id=candidate_id,
         )
     except codex_upgrade_vc_artifacts.VCArtifactError as error:
         raise ConfigurationError(str(error)) from error
-    run_manifest = _vc_run_manifest_from_batch(batch)
+    run_manifest = _vc_run_manifest_from_batch(batch, batch_model="staging" if staging_model else "legacy")
     if staging_model:
         assert staging_attempt_dir is not None and owner_nonce is not None
         return _write_staging_batch_artifacts(
@@ -16246,6 +16519,19 @@ def _timing_ledger_batch_events(
     order = codex_upgrade_vc_artifacts.VC_PHASES
     target_index = order.index(phase)
     active = state.get("active_phase")
+    # 改造 2：候选级阶段必须有 active revision；账本 completed_phases 已按当前 revision
+    # 计算，被作废 revision 完成的 VC-4～VC-6 不算数。目标阶段序低于已完成最大阶段时，
+    # 只有当前 revision 尚未完成该阶段、且最后一条 stage_revision 的阶段不超过目标阶段
+    # （stage_revision 固定在 VC-4）才放行。
+    current_revision: int | None = None
+    if phase in CANDIDATE_VC_PHASES:
+        current_revision, _record = _require_candidate_revision(
+            campaign_dir, manifest, action=f"{phase} 批次派发"
+        )
+        if state.get("current_revision") not in {None, current_revision}:
+            raise TimingLedgerGateError(
+                f"UpgradeTimingLedger 当前 revision {state.get('current_revision')} 与 Campaign 当前 revision r{current_revision} 不一致。"
+            )
     if active == phase:
         return int(state["head_sequence"]), []
     if isinstance(active, str) and active in order and order.index(active) > target_index:
@@ -16253,12 +16539,32 @@ def _timing_ledger_batch_events(
             f"UpgradeTimingLedger 当前阶段 {active} 已越过 {phase}，禁止阶段倒退。"
         )
     completed = set(state.get("completed_phases", []))
+    if phase in completed:
+        raise TimingLedgerGateError(
+            f"UpgradeTimingLedger 已登记 {phase} 在当前 revision 完成，禁止重开。"
+        )
+    highest_completed = max((order.index(item) for item in completed), default=-1)
+    if highest_completed > target_index:
+        last_revision_event = _ledger_last_stage_revision(ledger_dir)
+        if (
+            current_revision is None
+            or last_revision_event is None
+            or order.index(str(last_revision_event.get("phase"))) > target_index
+        ):
+            raise TimingLedgerGateError(
+                f"UpgradeTimingLedger 已完成的阶段越过 {phase}，且没有 stage_revision 授权回到该阶段。"
+            )
     events: list[tuple[str, str]] = []
     for earlier in order[:target_index]:
         if earlier in completed:
             continue
         # 补登记的前序阶段必须已有成功封存的 checkpoint；缺失即拒绝，不得跳过阶段。
-        _replay_vc_checkpoint(campaign_dir, plan, earlier)
+        _replay_vc_checkpoint(
+            campaign_dir,
+            plan,
+            earlier,
+            revision=current_revision if earlier in CANDIDATE_VC_PHASES else None,
+        )
         if active == earlier:
             events.append(("stage_completed", earlier))
         else:
@@ -16330,10 +16636,16 @@ def _complete_timing_ledger_phase_after_batch(
     批次）时不写事件。同阶段重复调用幂等。
     """
 
-    path = _vc_checkpoint_path(campaign_dir, phase)
+    revision: int | None = None
+    if phase in CANDIDATE_VC_PHASES:
+        campaign = _read_json(campaign_dir / "campaign.json", "Campaign 清单")
+        revision = _current_candidate_revision(campaign_dir, campaign)
+        if revision is None:
+            return None
+    path = _vc_checkpoint_path(campaign_dir, phase, revision=revision)
     if path.is_symlink() or not path.is_file():
         return None
-    _replay_vc_checkpoint(campaign_dir, plan, phase)
+    _replay_vc_checkpoint(campaign_dir, plan, phase, revision=revision)
     try:
         with codex_upgrade_supervisor._timing_closeout_lock(ledger_dir):
             state = codex_upgrade_timing_ledger.phase_ledger_state(ledger_dir)
@@ -16797,6 +17109,13 @@ def _load_prepared_staging_attempt(
         or run_manifest.get("phase") != phase
     ):
         raise ConfigurationError("staging attempt 的 PREPARED、batch 与清单不一致。")
+    # 改造 2：staging 清单必须携带候选级绑定，且与正式 batch 逐字一致。
+    if (
+        not codex_upgrade_supervisor.manifest_has_candidate_binding(run_manifest)
+        or run_manifest.get("candidate_revision") != batch.get("candidate_revision")
+        or run_manifest.get("candidate_id") != batch.get("candidate_id")
+    ):
+        raise ConfigurationError("staging 清单的 candidate_revision／candidate_id 缺失或与 batch 不一致。")
     if owner_nonce is not None and marker["owner_nonce"] != owner_nonce:
         raise ConfigurationError("staging PREPARED 的 owner_nonce 与入口预分配值不一致。")
     return {
@@ -17702,6 +18021,820 @@ def _compile_and_run_vc_batch_staging(
         )
     finally:
         os.close(lock_descriptor)
+
+
+# ---------------------------------------------------------------------------
+# 改造 2：候选级 revision 的登记（revision-open）与显式作废（invalidate-candidate）
+# ---------------------------------------------------------------------------
+
+REVISION_OPEN_COMMAND = "revision-open"
+INVALIDATE_CANDIDATE_COMMAND = "invalidate-candidate"
+CANDIDATE_INVALIDATION_FILENAME = "invalidation.json"
+
+
+def _assert_revision_admission(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    *,
+    command: str,
+) -> dict[str, Any] | None:
+    """与 plan／reuse-official-evidence 同集合的 admission，外加总计划 deadline。"""
+
+    try:
+        admission = codex_upgrade_project_ledger.assert_campaign_admitted(
+            campaign_dir,
+            command=command,
+            require=_project_ledger_required(manifest.get("campaign_mode"), manifest.get("target_version")),
+        )
+    except codex_upgrade_project_ledger.ProjectLedgerError as error:
+        raise ConfigurationError(f"项目总账拒绝 {command}：{error}") from error
+    deadline = _campaign_plan_deadline(campaign_dir)
+    if deadline is not None:
+        expiry = datetime.fromisoformat(str(deadline).replace("Z", "+00:00"))
+        if datetime.now(timezone.utc) >= expiry:
+            raise ConfigurationError(f"{command} 拒绝：Campaign 总计划 deadline 已到。")
+    return admission
+
+
+def _ledger_last_event_of_type(ledger_dir: Path, event_type: str) -> tuple[dict[str, Any], str] | None:
+    """账本最后一条指定类型事件及其原始字节摘要。"""
+
+    last: tuple[dict[str, Any], str] | None = None
+    try:
+        for event, raw in codex_upgrade_timing_ledger._load_events(ledger_dir):
+            if event.get("event_type") == event_type:
+                last = (dict(event), codex_upgrade_timing_ledger._sha256_bytes(raw))
+    except codex_upgrade_timing_ledger.TimingLedgerError as error:
+        raise ConfigurationError(f"UpgradeTimingLedger 无法读取：{error}") from error
+    return last
+
+
+def _write_candidate_revision_pending(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    *,
+    revision: int,
+    candidate_id: str,
+    supersedes: Mapping[str, Any] | None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """写 revision 目录的 revision.json 与 COMMIT（pending）；已存在时内容核对。"""
+
+    plan = _vc_campaign_plan(campaign_dir, manifest)
+    vc3_path, vc3 = _replay_vc_checkpoint(campaign_dir, plan, "VC-3")
+    vc3_binding = vc3.get("stage_receipt")
+    if not isinstance(vc3_binding, Mapping):
+        raise ConfigurationError("VC-3 checkpoint 阶段收据绑定非法。")
+    previous_sha256: str | None = None
+    if revision >= 2:
+        previous_record, previous_commit = _read_candidate_revision_record(campaign_dir, revision - 1)
+        if previous_record is None or previous_commit is None:
+            raise ConfigurationError(f"候选 revision r{revision - 1} 记录或 COMMIT 缺失，无法登记 r{revision}。")
+        previous_sha256 = str(previous_record["record_sha256"])
+    try:
+        record = codex_upgrade_vc_artifacts.build_candidate_revision(
+            campaign_id=str(plan["campaign_id"]),
+            revision=revision,
+            candidate_id=candidate_id,
+            opened_at_utc=_utc_now(),
+            previous_revision_sha256=previous_sha256,
+            vc3_checkpoint=_vc_checkpoint_reference(campaign_dir, vc3_path, vc3),
+            vc3_stage_receipt={"path": str(vc3_binding["path"]), "sha256": str(vc3_binding["sha256"])},
+            supersedes=supersedes,
+        )
+    except codex_upgrade_vc_artifacts.VCArtifactError as error:
+        raise ConfigurationError(f"候选 revision 记录无法生成：{error}") from error
+    directory = _candidate_revision_dir(campaign_dir, revision)
+    ensure_private_directory(_candidate_revisions_root(campaign_dir), campaign_dir)
+    ensure_private_directory(directory, campaign_dir)
+    record_path = directory / "revision.json"
+    try:
+        _write_or_verify_json_ignoring(record_path, record, volatile=("opened_at_utc", "record_sha256"))
+    except ConfigurationError as error:
+        raise ConfigurationError(
+            f"候选 revision r{revision} 已有登记且内容不一致（候选、VC-3 绑定或取代关系漂移），拒绝覆盖：{error}"
+        ) from error
+    try:
+        record = codex_upgrade_vc_artifacts.validate_candidate_revision(
+            _read_json(record_path, "候选 revision 记录")
+        )
+        commit = codex_upgrade_vc_artifacts.build_candidate_revision_commit(
+            campaign_id=str(plan["campaign_id"]),
+            revision=revision,
+            candidate_id=candidate_id,
+            record_sha256=str(record["record_sha256"]),
+            committed_at_utc=_utc_now(),
+        )
+    except codex_upgrade_vc_artifacts.VCArtifactError as error:
+        raise ConfigurationError(str(error)) from error
+    _write_or_verify_json_ignoring(directory / "COMMIT", commit, volatile=("committed_at_utc", "commit_sha256"))
+    commit = codex_upgrade_vc_artifacts.validate_candidate_revision_commit(
+        _read_json(directory / "COMMIT", "候选 revision COMMIT")
+    )
+    return record, commit
+
+
+def open_candidate_revision(arguments: argparse.Namespace) -> dict[str, Any]:
+    """revision-open：登记并激活一个候选级 revision（零请求，幂等）。
+
+    ``--initial``：新 Campaign 在 VC-4 首批前建立 r1（导入型后继 Campaign 的 r1 目录已由
+    successor 在暂存区写成 pending，这里只补账本 stage_revision）；``--supersedes <old>``：
+    账本处于 revision_required 且旧候选已 candidate_invalidated 时开 r(N+1)。
+    admission → 绑定 VC-3 → revision.json + COMMIT（pending）→ 账本 stage_revision（active）。
+    """
+
+    campaign_dir = Path(arguments.campaign_dir)
+    manifest = _require_formal_campaign(campaign_dir)
+    if not _requires_complete_vc_artifacts(manifest):
+        raise ConfigurationError("revision-open 只用于 0.154.0 起的完整 VC 链 Campaign。")
+    candidate_id = str(arguments.candidate_id)
+    if not SAFE_ID_RE.fullmatch(candidate_id):
+        raise ConfigurationError("--candidate-id 格式非法。")
+    initial = bool(getattr(arguments, "initial", False))
+    supersedes_id = getattr(arguments, "supersedes", None)
+    if initial == bool(supersedes_id):
+        raise ConfigurationError("revision-open 必须且只能给出 --initial 或 --supersedes 之一。")
+    admission = _assert_revision_admission(campaign_dir, manifest, command=REVISION_OPEN_COMMAND)
+    ledger_dir = _campaign_timing_ledger_dir(campaign_dir, manifest)
+    with _campaign_lock(campaign_dir):
+        summary = codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)
+        last_stage_revision = _ledger_last_stage_revision(ledger_dir)
+        supersedes: dict[str, Any] | None = None
+        if initial:
+            if last_stage_revision is not None:
+                if int(last_stage_revision["revision"]) != 1 or last_stage_revision.get("candidate_id") != candidate_id:
+                    raise ConfigurationError(
+                        f"Campaign 已激活 revision r{last_stage_revision['revision']}"
+                        f"（候选 {last_stage_revision.get('candidate_id')}），--initial 只能幂等重放 r1。"
+                    )
+            elif summary.get("current_revision") is not None:
+                raise ConfigurationError(
+                    "历史 Campaign 的候选级事件已隐含 r1，只读重放，不得再登记 revision。"
+                )
+            elif summary.get("status") != "active":
+                raise ConfigurationError(
+                    f"revision-open --initial 要求账本 active（当前 {summary.get('status')}）。"
+                )
+            legacy_vc4 = campaign_dir / "control" / "vc" / "vc-4-checkpoint.json"
+            if legacy_vc4.exists() and not _candidate_revisions_root(campaign_dir).exists():
+                raise ConfigurationError("历史 Campaign 已有隐含 r1 的 VC-4 checkpoint，只读重放。")
+            for other in _existing_candidate_revisions(campaign_dir):
+                if other != 1:
+                    raise ConfigurationError(f"Campaign 已存在 r{other} 目录，--initial 只能登记 r1。")
+            revision = 1
+        else:
+            supersedes_id = str(supersedes_id)
+            if not SAFE_ID_RE.fullmatch(supersedes_id):
+                raise ConfigurationError("--supersedes 格式非法。")
+            if supersedes_id == candidate_id:
+                raise ConfigurationError("新候选不得与被取代候选同名。")
+            current = summary.get("current_revision")
+            if current is None or last_stage_revision is None:
+                raise ConfigurationError("没有可取代的 active revision；新 Campaign 请用 --initial。")
+            already_active = (
+                last_stage_revision.get("candidate_id") == candidate_id
+                and last_stage_revision.get("supersedes_revision") is not None
+            )
+            if already_active:
+                # 幂等重放：最后一条 stage_revision 已由本命令以同一候选激活，被取代的
+                # revision 由事件自身给出（此时账本 current_revision 已是新值）。
+                revision = int(last_stage_revision["revision"])
+                current = int(last_stage_revision["supersedes_revision"])
+            else:
+                if summary.get("status") != "revision_required":
+                    raise ConfigurationError(
+                        f"revision-open --supersedes 要求账本 revision_required（当前 {summary.get('status')}）；"
+                        "先完成对账并执行 invalidate-candidate。"
+                    )
+                revision = int(current) + 1
+            next_revision = revision
+            existing_next = _read_candidate_revision_record(campaign_dir, next_revision)[0]
+            invalidated = _ledger_last_event_of_type(ledger_dir, "candidate_invalidated")
+            if (
+                invalidated is None
+                or invalidated[0].get("candidate_id") != supersedes_id
+                or int(invalidated[0].get("revision") or 0) != int(current)
+            ):
+                raise ConfigurationError(
+                    f"账本没有对候选 {supersedes_id}（r{current}）的 candidate_invalidated 事件。"
+                )
+            invalidation_path = campaign_dir / "candidates" / supersedes_id / CANDIDATE_INVALIDATION_FILENAME
+            if invalidation_path.is_symlink() or not invalidation_path.is_file():
+                raise ConfigurationError(f"被取代候选 {supersedes_id} 缺少 invalidation.json。")
+            try:
+                invalidation = codex_upgrade_vc_artifacts.validate_candidate_invalidation(
+                    _read_json(invalidation_path, "候选作废记录")
+                )
+            except codex_upgrade_vc_artifacts.VCArtifactError as error:
+                raise ConfigurationError(str(error)) from error
+            if invalidation["candidate_id"] != supersedes_id or invalidation["revision"] != int(current):
+                raise ConfigurationError("invalidation.json 与被取代候选／revision 不一致。")
+            supersedes = {
+                "revision": int(current),
+                "candidate_id": supersedes_id,
+                "invalidation_receipt": {
+                    "path": invalidation_path.resolve(strict=True)
+                    .relative_to(campaign_dir.resolve(strict=True))
+                    .as_posix(),
+                    "sha256": file_sha256(invalidation_path),
+                },
+                "candidate_invalidated_event_sha256": invalidated[1],
+            }
+            if existing_next is not None and existing_next.get("candidate_id") != candidate_id:
+                raise ConfigurationError(
+                    f"r{next_revision} 已登记候选 {existing_next.get('candidate_id')}，与 --candidate-id 不一致。"
+                )
+        record, commit = _write_candidate_revision_pending(
+            campaign_dir,
+            manifest,
+            revision=revision,
+            candidate_id=candidate_id,
+            supersedes=supersedes,
+        )
+        ledger_event: dict[str, Any]
+        idempotent = False
+        if (
+            last_stage_revision is not None
+            and int(last_stage_revision["revision"]) == revision
+            and last_stage_revision.get("candidate_id") == candidate_id
+        ):
+            if last_stage_revision.get("revision_commit_sha256") != commit["commit_sha256"]:
+                raise ConfigurationError(
+                    f"账本已激活的 r{revision} 引用的 COMMIT 与目录 COMMIT 不一致。"
+                )
+            ledger_event = {"event_id": last_stage_revision["event_id"], "appended": False}
+            idempotent = True
+        else:
+            try:
+                result_summary = codex_upgrade_timing_ledger.append_event(
+                    ledger_dir,
+                    event_id=f"stage-revision-r{revision}",
+                    phase="VC-4",
+                    event_type="stage_revision",
+                    revision=revision,
+                    candidate_id=candidate_id,
+                    revision_commit_sha256=str(commit["commit_sha256"]),
+                    supersedes_revision=(int(supersedes["revision"]) if supersedes is not None else None),
+                    next_action=(
+                        f"r{revision} 已激活：以 compile-and-run-vc-batch 派发 VC-4 首批"
+                        "（plan-candidate-gates），然后 record-candidate-build（含 revision-seal）"
+                    ),
+                )
+            except codex_upgrade_timing_ledger.TimingLedgerError as error:
+                raise ConfigurationError(f"UpgradeTimingLedger 拒绝 stage_revision：{error}") from error
+            ledger_event = {
+                "event_id": f"stage-revision-r{revision}",
+                "appended": True,
+                "head_sequence": result_summary["head_sequence"],
+                "head_sha256": result_summary["head_sha256"],
+            }
+    return {
+        "status": "complete",
+        "idempotent": idempotent,
+        "campaign_id": manifest["campaign_id"],
+        "revision": revision,
+        "candidate_id": candidate_id,
+        "supersedes": supersedes,
+        "revision_record": str(_candidate_revision_dir(campaign_dir, revision) / "revision.json"),
+        "record_sha256": record["record_sha256"],
+        "commit_sha256": commit["commit_sha256"],
+        "ledger_event": ledger_event,
+        "project_ledger": admission,
+        "live_request_count": 0,
+    }
+
+
+def _candidate_identity_snapshot(
+    campaign_dir: Path,
+    candidate_id: str,
+    candidate_source: Path | None,
+) -> dict[str, Any]:
+    """旧候选身份快照（来源优先级：build receipt → attempt candidate_identity → --candidate-source）。
+
+    git_commit 与 source_tree_sha256 至少一项必须取得，两项都取不到即失败关闭。
+    """
+
+    snapshot: dict[str, Any] = {
+        "git_commit": None,
+        "source_tree_sha256": None,
+        "image_id": None,
+        "build_receipt_sha256": None,
+        "snapshot_sources": [],
+    }
+    build_path = _candidate_build_receipt_path(campaign_dir, candidate_id)
+    if build_path.is_file() and not build_path.is_symlink():
+        receipt = _read_json(build_path, "Candidate 构建收据")
+        source = receipt.get("source")
+        image = receipt.get("image")
+        commit = source.get("git_commit") if isinstance(source, Mapping) else None
+        tree = source.get("tree_sha256") if isinstance(source, Mapping) else None
+        if isinstance(commit, str) and re.fullmatch(r"^[0-9a-f]{40}$", commit):
+            snapshot["git_commit"] = commit
+        if isinstance(tree, str) and SHA256_RE.fullmatch(tree):
+            snapshot["source_tree_sha256"] = tree
+        image_id = image.get("image_id") if isinstance(image, Mapping) else None
+        if isinstance(image_id, str) and image_id:
+            snapshot["image_id"] = image_id
+        snapshot["build_receipt_sha256"] = file_sha256(build_path)
+        snapshot["snapshot_sources"].append("build_receipt")
+    if snapshot["git_commit"] is None or snapshot["source_tree_sha256"] is None:
+        attempts_root = campaign_dir / "candidates" / candidate_id / "attempts"
+        latest_identity: Mapping[str, Any] | None = None
+        if attempts_root.is_dir() and not attempts_root.is_symlink():
+            for attempt_root in sorted(attempts_root.iterdir()):
+                attempt_path = attempt_root / "attempt.json"
+                if attempt_root.is_symlink() or not attempt_path.is_file() or attempt_path.is_symlink():
+                    continue
+                identity = _read_json(attempt_path, "候选 attempt 收据").get("identity")
+                if isinstance(identity, Mapping):
+                    latest_identity = identity
+        if latest_identity is not None:
+            commit = latest_identity.get("git_commit")
+            tree = latest_identity.get("source_tree_sha256")
+            image_id = latest_identity.get("image_id")
+            used = False
+            if snapshot["git_commit"] is None and isinstance(commit, str) and re.fullmatch(r"^[0-9a-f]{40}$", commit):
+                snapshot["git_commit"] = commit
+                used = True
+            if snapshot["source_tree_sha256"] is None and isinstance(tree, str) and SHA256_RE.fullmatch(tree):
+                snapshot["source_tree_sha256"] = tree
+                used = True
+            if snapshot["image_id"] is None and isinstance(image_id, str) and image_id:
+                snapshot["image_id"] = image_id
+                used = True
+            if used:
+                snapshot["snapshot_sources"].append("attempt_candidate_identity")
+    if snapshot["git_commit"] is None or snapshot["source_tree_sha256"] is None:
+        if candidate_source is not None:
+            root = Path(candidate_source)
+            if not root.is_absolute() or root.is_symlink() or not root.is_dir():
+                raise ConfigurationError("--candidate-source 必须是可信绝对目录。")
+            root = root.resolve(strict=True)
+            commit = _git_commit(root)
+            tree = _directory_tree_digest(root)
+            used = False
+            if snapshot["git_commit"] is None and isinstance(commit, str) and re.fullmatch(r"^[0-9a-f]{40}$", commit):
+                snapshot["git_commit"] = commit
+                used = True
+            if snapshot["source_tree_sha256"] is None:
+                snapshot["source_tree_sha256"] = tree
+                used = True
+            if used:
+                snapshot["snapshot_sources"].append("candidate_source")
+        elif snapshot["git_commit"] is None and snapshot["source_tree_sha256"] is None:
+            raise ConfigurationError(
+                "旧候选既无 build receipt 也无 attempt 身份投影，必须提供 --candidate-source 指向旧候选源码树。"
+            )
+    if snapshot["git_commit"] is None and snapshot["source_tree_sha256"] is None:
+        raise ConfigurationError("旧候选身份快照无法取得 git_commit 与 source_tree_sha256，拒绝作废。")
+    return snapshot
+
+
+def _candidate_accounting_checks(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    candidate_id: str,
+    *,
+    head: Mapping[str, Any],
+    ledger_dir: Path,
+) -> dict[str, Any]:
+    """作废前提：候选已有的请求全部入账；失败父 run 与未 seal attempt 均已对账。"""
+
+    from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+    operations = head.get("operations", {})
+    facts: dict[str, Any] = {"sealed": None, "attempts": [], "failed_runs": [], "zero_request": True}
+    result_path = campaign_dir / "candidates" / candidate_id / "result.json"
+    sealed_attempt: str | None = None
+    if result_path.is_file() and not result_path.is_symlink():
+        sealed = _read_json(result_path, "候选阶段结果")
+        attempt_binding = sealed.get("attempt")
+        if sealed.get("status") == "complete" and isinstance(attempt_binding, Mapping):
+            attempt_path = _campaign_file(campaign_dir, str(attempt_binding.get("path", "")))
+            sealed_attempt = attempt_path.parent.name
+            operation_id = f"account-sealed-candidate:{candidate_id}:{sealed_attempt}"
+            if operation_id not in operations:
+                raise ConfigurationError(
+                    f"候选 {candidate_id} 已 seal 但尚未入账（缺 {operation_id}）；先执行 account-sealed-candidate。"
+                )
+            facts["sealed"] = {"attempt_id": sealed_attempt, "operation_id": operation_id}
+            facts["zero_request"] = False
+    for phase, current_candidate, attempt_root in _campaign_attempt_roots(campaign_dir):
+        if phase != "candidate" or current_candidate != candidate_id:
+            continue
+        attempt_id = attempt_root.name
+        if attempt_id == sealed_attempt:
+            continue
+        facts["zero_request"] = False
+        operation_id = f"reconcile-attempt:{attempt_id}"
+        receipt = reconciler._reconciliation_dir(campaign_dir, f"attempt-{attempt_id}") / reconciler.ATTEMPT_RECEIPT_NAME
+        if not (receipt.is_file() and not receipt.is_symlink()) or operation_id not in operations:
+            raise ConfigurationError(
+                f"候选 {candidate_id} 的 attempt {attempt_id} 未 seal 且尚未对账入账；先执行 reconcile-attempt。"
+            )
+        facts["attempts"].append({"attempt_id": attempt_id, "operation_id": operation_id})
+    review = _ledger_last_event_of_type(ledger_dir, "candidate_review_required")
+    if review is not None and review[0].get("candidate_id") == candidate_id:
+        # 候选级动作失败进入只读等待：引起 review 的失败父 run 必须已经对账入账。
+        # review 事件的根因由 supervisor 按（阶段，失败动作）编码；对账收据的根因则按
+        # 诊断枚举观测编码，两者不可直接相比——这里用收据里的 run 事实（阶段 + 失败动作）
+        # 重算 supervisor 根因来定位那次失败，再要求总账含对应 operation。
+        cause = str(review[0].get("root_cause_id"))
+        reconciliation_root = campaign_dir / "control" / reconciler.RECONCILIATION_DIR
+        matched: list[str] = []
+        if reconciliation_root.is_dir() and not reconciliation_root.is_symlink():
+            for run_root in sorted(reconciliation_root.glob("run-*")):
+                receipt_path = run_root / reconciler.SUPERVISOR_RUN_RECEIPT_NAME
+                if run_root.is_symlink() or not receipt_path.is_file() or receipt_path.is_symlink():
+                    continue
+                receipt = _read_json(receipt_path, "父 run 对账收据")
+                run = receipt.get("run")
+                diagnostic = run.get("action_diagnostic") if isinstance(run, Mapping) else None
+                if not isinstance(run, Mapping) or not isinstance(diagnostic, Mapping):
+                    continue
+                phase = str(run.get("phase", ""))
+                action_id = str(diagnostic.get("action_id", ""))
+                if phase not in CANDIDATE_VC_PHASES or not SAFE_ID_RE.fullmatch(action_id):
+                    continue
+                try:
+                    run_cause = codex_upgrade_root_cause.structured_root_cause(
+                        component="supervisor",
+                        stable_error_code="campaign-run.action-failed",
+                        failed_step=action_id,
+                        stable_dimensions={"phase": phase},
+                    )
+                except codex_upgrade_root_cause.RootCauseError:
+                    continue
+                run_id = run_root.name.removeprefix("run-")
+                if run_cause == cause and f"reconcile-supervisor-run:{run_id}" in operations:
+                    matched.append(run_id)
+        if not matched:
+            raise ConfigurationError(
+                f"候选 {candidate_id} 处于 candidate_review_required（根因 {cause}），"
+                "但引起该状态的失败父 run 尚未对账入账；先执行 reconcile-supervisor-run。"
+            )
+        facts["failed_runs"] = matched
+        facts["zero_request"] = False
+    return facts
+
+
+def _invalidation_phase(summary: Mapping[str, Any], ledger_dir: Path) -> str:
+    """根因维度 phase：当前阶段，或最后一条已关闭候选级阶段，或 VC-4。"""
+
+    active = summary.get("active_phase")
+    if isinstance(active, str) and active in CANDIDATE_VC_PHASES:
+        return active
+    for event_type in ("stage_abandoned", "stage_completed"):
+        last = _ledger_last_event_of_type(ledger_dir, event_type)
+        if last is not None and str(last[0].get("phase")) in CANDIDATE_VC_PHASES:
+            return str(last[0]["phase"])
+    return "VC-4"
+
+
+def invalidate_candidate(arguments: argparse.Namespace) -> dict[str, Any]:
+    """invalidate-candidate preview／apply：本批唯一的候选作废入口（零请求，两步式）。
+
+    preview：admission → 候选属于当前 revision 且未 accepted → 入账核对 → 身份快照 →
+    诊断草案（绑定总账 head）→ review_sha256；不落盘。
+    apply：重跑同集合 admission、复验 head 与 --candidate-source → invalidation.json（write-once）
+    → 若候选级阶段 active 则 stage_abandoned → outbox reconciliation_committed（请求 0，根因
+    candidate.source-change-required）→ 推总账 → 二次判定 → 命中即现有停线合同（不写
+    candidate_invalidated）；通过 → candidate_invalidated → revision_required；幂等。
+    """
+
+    from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+    action = str(getattr(arguments, "invalidate_action", ""))
+    if action not in {"preview", "apply"}:
+        raise ConfigurationError("invalidate-candidate 只接受 preview 或 apply。")
+    campaign_dir = Path(arguments.campaign_dir)
+    manifest = _require_formal_campaign(campaign_dir)
+    if not _requires_complete_vc_artifacts(manifest):
+        raise ConfigurationError("invalidate-candidate 只用于 0.154.0 起的完整 VC 链 Campaign。")
+    candidate_id = str(arguments.candidate_id)
+    if not SAFE_ID_RE.fullmatch(candidate_id):
+        raise ConfigurationError("--candidate-id 格式非法。")
+    reviewer = str(getattr(arguments, "reviewer", "") or "").strip()
+    if not reviewer:
+        raise ConfigurationError("--reviewer 不能为空。")
+    evidence_paths = [Path(item) for item in (getattr(arguments, "evidence", None) or [])]
+    candidate_source = getattr(arguments, "candidate_source", None)
+    approve_sha256 = getattr(arguments, "approve_sha256", None)
+    if action == "apply" and not (isinstance(approve_sha256, str) and SHA256_RE.fullmatch(approve_sha256)):
+        raise ConfigurationError("apply 必须给出 preview 输出的 --approve-sha256。")
+
+    admission = _assert_revision_admission(campaign_dir, manifest, command=INVALIDATE_CANDIDATE_COMMAND)
+    ledger_dir = _campaign_timing_ledger_dir(campaign_dir, manifest)
+    campaign_root = campaign_dir.resolve(strict=True)
+    with _campaign_lock(campaign_dir):
+        summary = codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)
+        status = str(summary.get("status"))
+        if status not in {"active", "candidate_review_required", "revision_required"}:
+            hint = {
+                "recovery_required": "先执行 reconcile-supervisor-run／reconcile-attempt 对账",
+                "stop_required": "账本已要求停线，按停线合同收口",
+                "stopped": "Campaign 已停线，只读",
+                "complete": "升级已完成，只读",
+            }.get(status, "")
+            raise ConfigurationError(f"invalidate-candidate 拒绝：账本状态 {status}；{hint}。")
+        revision, record = _current_candidate_revision_record(campaign_dir, manifest)
+        if revision is None:
+            raise ConfigurationError("没有 active 候选 revision，无候选可作废。")
+        current_candidate = record["candidate_id"] if record is not None else _implicit_r1_candidate_id(campaign_dir, manifest)
+        if current_candidate != candidate_id:
+            raise ConfigurationError(
+                f"候选 {candidate_id} 不是当前 revision r{revision} 的候选（当前 {current_candidate}）。"
+            )
+        acceptance_path = campaign_dir / "acceptance" / candidate_id / "result.json"
+        if acceptance_path.is_file() and not acceptance_path.is_symlink():
+            accepted = _read_json(acceptance_path, "验收结果")
+            if accepted.get("accepted") is True or accepted.get("status") == "accepted":
+                raise ConfigurationError(f"候选 {candidate_id} 已 accepted，不得作废。")
+        project_root = reconciler._project_root(campaign_root)
+        plan, head = reconciler._project_facts(project_root)
+        accounting = _candidate_accounting_checks(
+            campaign_dir, manifest, candidate_id, head=head, ledger_dir=ledger_dir
+        )
+        snapshot = _candidate_identity_snapshot(campaign_dir, candidate_id, candidate_source)
+        evidence_refs: list[dict[str, Any]] = []
+        for path in evidence_paths:
+            if not path.is_absolute() or path.is_symlink() or not path.is_file():
+                raise ConfigurationError(f"--evidence 必须是可信绝对普通文件：{path}")
+            resolved = path.resolve(strict=True)
+            relative = (
+                resolved.relative_to(campaign_root).as_posix()
+                if resolved.is_relative_to(campaign_root)
+                else str(resolved)
+            )
+            evidence_refs.append({"path": relative, "sha256": file_sha256(resolved)})
+        evidence_refs.sort(key=lambda item: item["path"])
+        phase = _invalidation_phase(summary, ledger_dir)
+        try:
+            root_cause_id = codex_upgrade_root_cause.structured_root_cause(
+                component="candidate",
+                stable_error_code="candidate.source-change-required",
+                failed_step=f"candidate-source-change-{phase.lower()}",
+                stable_dimensions={"phase": phase},
+            )
+        except codex_upgrade_root_cause.RootCauseError as error:
+            raise ConfigurationError(f"根因编码失败：{error}") from error
+        invalidation_path = campaign_dir / "candidates" / candidate_id / CANDIDATE_INVALIDATION_FILENAME
+        existing_invalidation: dict[str, Any] | None = None
+        if invalidation_path.exists() or invalidation_path.is_symlink():
+            if invalidation_path.is_symlink() or not invalidation_path.is_file():
+                raise ConfigurationError("invalidation.json 路径不可信。")
+            try:
+                existing_invalidation = codex_upgrade_vc_artifacts.validate_candidate_invalidation(
+                    _read_json(invalidation_path, "候选作废记录")
+                )
+            except codex_upgrade_vc_artifacts.VCArtifactError as error:
+                raise ConfigurationError(str(error)) from error
+        if existing_invalidation is not None:
+            # 幂等重放以已落盘的诊断为准（head 绑定的是当时的总账）。
+            diagnosis = dict(existing_invalidation["diagnosis"])
+        else:
+            try:
+                diagnosis = codex_upgrade_vc_artifacts.build_candidate_invalidation_diagnosis(
+                    campaign_id=str(manifest["campaign_id"]),
+                    campaign_manifest_sha256=file_sha256(campaign_dir / "campaign.json"),
+                    candidate_id=candidate_id,
+                    revision=revision,
+                    reviewer=reviewer,
+                    reviewed_at_utc=_utc_now(),
+                    evidence_refs=evidence_refs,
+                    project_ledger_head_sha256=str(head["head_sha256"]),
+                    project_ledger_head_sequence=int(head["sequence"]),
+                    root_cause_id=root_cause_id,
+                    identity_snapshot=snapshot,
+                )
+            except codex_upgrade_vc_artifacts.VCArtifactError as error:
+                raise ConfigurationError(f"诊断草案无法生成：{error}") from error
+        review_sha256 = str(diagnosis["review_sha256"])
+        preview_payload = {
+            "status": "preview",
+            "campaign_id": manifest["campaign_id"],
+            "candidate_id": candidate_id,
+            "revision": revision,
+            "ledger_status": status,
+            "accounting": accounting,
+            "diagnosis": diagnosis,
+            "review_sha256": review_sha256,
+            "project_ledger": admission,
+            "live_request_count": 0,
+        }
+        if action == "preview":
+            return preview_payload
+        if approve_sha256 != review_sha256:
+            raise ConfigurationError(
+                "apply 的批准摘要与当前草案不一致（总账 head、身份快照或证据已变化），请重新 preview。"
+            )
+        if existing_invalidation is None:
+            # apply 首次落盘前：head 与 --candidate-source 已在本次重算的草案里复验（不一致
+            # 即 review_sha256 不同）；这里写 invalidation.json（write-once）。
+            try:
+                invalidation = codex_upgrade_vc_artifacts.build_candidate_invalidation(
+                    campaign_id=str(manifest["campaign_id"]),
+                    candidate_id=candidate_id,
+                    revision=revision,
+                    diagnosis=diagnosis,
+                    recorded_at_utc=_utc_now(),
+                )
+            except codex_upgrade_vc_artifacts.VCArtifactError as error:
+                raise ConfigurationError(str(error)) from error
+            ensure_private_directory(invalidation_path.parent, campaign_dir)
+            _secure_write_json_once(invalidation_path, invalidation)
+        else:
+            invalidation = existing_invalidation
+        # 若候选级阶段 active，先关闭阶段（根因 = 作废根因）。
+        ledger_events: list[dict[str, Any]] = []
+        current = codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)
+        active = current.get("active_phase")
+        if isinstance(active, str) and active in CANDIDATE_VC_PHASES:
+            try:
+                codex_upgrade_timing_ledger.append_event(
+                    ledger_dir,
+                    event_id=f"candidate-invalidation-{candidate_id}-r{revision}-stage-abandoned",
+                    phase=active,
+                    event_type="stage_abandoned",
+                    root_cause_id=root_cause_id,
+                    next_action="invalidate-candidate apply：推送根因后二次判定",
+                )
+            except codex_upgrade_timing_ledger.TimingLedgerError as error:
+                raise ConfigurationError(f"UpgradeTimingLedger 拒绝 stage_abandoned：{error}") from error
+            ledger_events.append({"event_type": "stage_abandoned", "phase": active})
+        # outbox 根因事件（请求 0）→ 推总账 → 重放 → 二次判定。
+        receipt_binding = reconciler._binding(campaign_root, invalidation_path, "reconciliation")
+        cause = codex_upgrade_root_cause.describe_root_cause(
+            component="candidate",
+            stable_error_code="candidate.source-change-required",
+            failed_step=f"candidate-source-change-{phase.lower()}",
+            stable_dimensions={"phase": phase},
+        )
+        operation_id = f"invalidate-candidate:{candidate_id}:r{revision}"
+        try:
+            batch = reconciler._commit_batch(
+                campaign_root,
+                operation_id=operation_id,
+                event_type="reconciliation_committed",
+                payload={
+                    "campaign_id": str(manifest["campaign_id"]),
+                    "subject_kind": "candidate_invalidation",
+                    "subject_id": f"{candidate_id}:r{revision}",
+                    "phase": phase,
+                    "request": dict(reconciler.ZERO_REQUEST_PART),
+                    "root_cause": {
+                        "root_cause_id": cause["root_cause_id"],
+                        "stable_error_code": cause["stable_error_code"],
+                        "failed_step": cause["failed_step"],
+                        "stable_dimensions": cause["stable_dimensions"],
+                        "component": cause["component"],
+                    },
+                    "reconciliation_receipt_sha256": receipt_binding["sha256"],
+                    "attempt_failed_event_sha256": None,
+                },
+                source={"kind": "candidate_invalidation", "sha256": receipt_binding["sha256"]},
+                receipt_bindings=[receipt_binding],
+            )
+            observed = _utc_now()
+            pushed, head_after = reconciler._push_and_replay(project_root, campaign_root, now=observed)
+            identity = reconciler._identity_facts(campaign_root, manifest, reconciler._current_identity())
+            ledger_facts = reconciler._ledger_facts(ledger_dir, now=observed)
+            contamination = _campaign_contamination_records(campaign_dir, _manifest=manifest)
+            decision = reconciler._decide(
+                head=head_after,
+                plan=plan,
+                ledger=ledger_facts,
+                identity=identity,
+                environment_status="contaminated" if contamination else "restored",
+                campaign_deadline_at_utc=_campaign_plan_deadline(campaign_dir),
+                root_cause_id=cause["root_cause_id"],
+                request_status="resolved",
+                now=observed,
+            )
+        except reconciler.ReconcilerError as error:
+            raise ConfigurationError(f"候选作废入账失败：{error}") from error
+        result: dict[str, Any] = {
+            "status": "applied",
+            "idempotent": False,
+            "campaign_id": manifest["campaign_id"],
+            "candidate_id": candidate_id,
+            "revision": revision,
+            "invalidation_receipt": receipt_binding,
+            "root_cause_id": cause["root_cause_id"],
+            "batch": batch,
+            "project_push": pushed,
+            "decision": decision,
+            "ledger_events": ledger_events,
+            "live_request_count": 0,
+        }
+        if decision["decision"] != reconciler.DECISION_RECOVERABLE:
+            try:
+                stop = reconciler._permanent_stop(
+                    campaign_root,
+                    manifest,
+                    ledger_dir,
+                    subject_id=f"candidate-invalidation-{candidate_id}-r{revision}",
+                    root_cause_id=cause["root_cause_id"],
+                    terminal_reason=str(decision["terminal_reason"]),
+                    receipt_bindings=[receipt_binding],
+                    ledger_receipts=[],
+                    live_request_count=0,
+                    reconciliation_receipt_sha256=receipt_binding["sha256"],
+                    ledger_facts=ledger_facts,
+                )
+                pushed_terminal, head_terminal = reconciler._push_and_replay(project_root, campaign_root, now=observed)
+            except reconciler.ReconcilerError as error:
+                raise ConfigurationError(f"候选作废后永久停线收口失败：{error}") from error
+            result["status"] = "permanent_stop"
+            result["permanent_stop"] = {**stop, "project_push": pushed_terminal, "head_sha256": head_terminal.get("head_sha256")}
+            result["next_command"] = stop["next_action"]
+            return result
+        # 通过：candidate_invalidated（绑定 invalidation.json 与 outbox batch COMMIT 的账本副本）→ revision_required。
+        last_invalidated = _ledger_last_event_of_type(ledger_dir, "candidate_invalidated")
+        if (
+            last_invalidated is not None
+            and last_invalidated[0].get("candidate_id") == candidate_id
+            and int(last_invalidated[0].get("revision") or 0) == revision
+        ):
+            result["idempotent"] = True
+            result["ledger_events"].append({"event_type": "candidate_invalidated", "appended": False})
+            result["next_command"] = f"revision-open --candidate-id <new> --supersedes {candidate_id}"
+            return result
+        receipts = _publish_ledger_receipt_copies(
+            ledger_dir,
+            f"candidate-{candidate_id}-r{revision}",
+            {
+                "invalidation": invalidation_path,
+                "reconciliation": Path(str(batch["batch_dir"])) / "COMMIT",
+            },
+        )
+        try:
+            appended = codex_upgrade_timing_ledger.append_event(
+                ledger_dir,
+                event_id=f"candidate-invalidated-{candidate_id}-r{revision}",
+                phase=phase,
+                event_type="candidate_invalidated",
+                revision=revision,
+                candidate_id=candidate_id,
+                root_cause_id=cause["root_cause_id"],
+                receipts=receipts,
+                next_action=f"revision-open --candidate-id <new> --supersedes {candidate_id}",
+            )
+        except codex_upgrade_timing_ledger.TimingLedgerError as error:
+            raise ConfigurationError(f"UpgradeTimingLedger 拒绝 candidate_invalidated：{error}") from error
+        result["ledger_events"].append(
+            {
+                "event_type": "candidate_invalidated",
+                "appended": True,
+                "head_sequence": appended["head_sequence"],
+                "head_sha256": appended["head_sha256"],
+                "ledger_status": appended["status"],
+            }
+        )
+        result["next_command"] = f"revision-open --candidate-id <new> --supersedes {candidate_id}"
+        return result
+
+
+def _publish_ledger_receipt_copies(
+    ledger_dir: Path,
+    subject: str,
+    sources: Mapping[str, Path],
+) -> list[dict[str, str]]:
+    """把收据逐字节发布到账本目录内（write-once），供账本事件 receipts 绑定。"""
+
+    target_dir = ledger_dir / "receipts" / "reconciliation" / subject
+    if target_dir.is_symlink():
+        raise ConfigurationError("账本收据目录不可信。")
+    target_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    for directory in (ledger_dir / "receipts", ledger_dir / "receipts" / "reconciliation", target_dir):
+        if stat.S_IMODE(directory.stat().st_mode) != 0o700:
+            directory.chmod(0o700)
+    bindings: list[dict[str, str]] = []
+    for role, source in sorted(sources.items()):
+        payload = _read_json(source, f"{role} 收据")
+        target = target_dir / f"{role}.json"
+        try:
+            codex_upgrade_timing_ledger._publish_once(target, payload, f"{role} 账本副本")
+        except codex_upgrade_timing_ledger.TimingLedgerError as error:
+            raise ConfigurationError(str(error)) from error
+        bindings.append(
+            {"role": role, "path": target.relative_to(ledger_dir).as_posix(), "sha256": file_sha256(target)}
+        )
+    return bindings
+
+
+def _existing_candidate_revisions(campaign_dir: Path) -> list[int]:
+    root = _candidate_revisions_root(campaign_dir)
+    if root.is_symlink():
+        raise ConfigurationError("候选 revisions 目录不得是符号链接。")
+    if not root.is_dir():
+        return []
+    found: list[int] = []
+    for child in root.iterdir():
+        match = re.fullmatch(r"^r([1-9][0-9]*)$", child.name)
+        if match is None or child.is_symlink() or not child.is_dir():
+            raise ConfigurationError(f"候选 revisions 目录含非法条目：{child.name}")
+        found.append(int(match.group(1)))
+    return sorted(found)
 
 
 def _project_ledger_required(campaign_mode: Any, target_version: Any) -> bool:
@@ -25145,11 +26278,13 @@ def _create_successor_campaign_unadmitted(arguments: argparse.Namespace) -> dict
     predecessor_vc_checkpoints: dict[str, dict[str, Any]] = {}
     if candidate_vc_recovery:
         predecessor_plan = _vc_campaign_plan(predecessor_dir, predecessor_manifest)
+        predecessor_revision = _current_candidate_revision(predecessor_dir, predecessor_manifest)
         for phase in ("VC-0", "VC-1", "VC-2", "VC-3", "VC-4"):
             _, predecessor_checkpoint = _replay_vc_checkpoint(
                 predecessor_dir,
                 predecessor_plan,
                 phase,
+                revision=predecessor_revision if phase in CANDIDATE_VC_PHASES else None,
             )
             predecessor_vc_checkpoints[phase] = predecessor_checkpoint
 
@@ -25726,6 +26861,17 @@ def _create_successor_campaign_unadmitted(arguments: argparse.Namespace) -> dict
                     staging_dir,
                     str(candidate_build_projection["path"]),
                 )
+                # 改造 2：导入的 VC-4 属于后继 Campaign 的 r1。这里只在暂存区建立
+                # pending 的 r1 目录（revision.json + COMMIT），账本 stage_revision 由
+                # 发布后的 revision-open --initial 补写（幂等分支），避免暂存区发布失败
+                # 时恢复账本引用一个已被清理的 COMMIT。
+                _write_candidate_revision_pending(
+                    staging_dir,
+                    successor_manifest,
+                    revision=1,
+                    candidate_id=str(arguments.predecessor_candidate_id),
+                    supersedes=None,
+                )
                 _complete_vc_phase(
                     staging_dir,
                     successor_manifest,
@@ -25736,6 +26882,7 @@ def _create_successor_campaign_unadmitted(arguments: argparse.Namespace) -> dict
                     ),
                     live_request_count=0,
                     scanned_bytes=0,
+                    revision=1,
                 )
 
         if successor_dir.exists():
@@ -29067,7 +30214,11 @@ def campaign_status(
                             current_candidate_id,
                         )
                         if delivery is not None:
-                            vc6_path = _vc_checkpoint_path(campaign_dir, "VC-6")
+                            vc6_path = _vc_checkpoint_path(
+                                campaign_dir,
+                                "VC-6",
+                                revision=_current_candidate_revision(campaign_dir, manifest),
+                            )
                             if vc6_path.exists() or vc6_path.is_symlink():
                                 _replay_vc_completion(
                                     campaign_dir,
@@ -29282,7 +30433,7 @@ def campaign_status(
                 "项目总账 blocked：只允许 accounting_resolved／root_cause_repaired／"
                 "reconciliation_committed／campaign_terminal，禁止注册、派发、resume、复用与 seal"
             )
-    return {
+    result = {
         "schema_version": "codex-upgrade-status/v2",
         "verification_mode": "shallow",
         "raw_evidence_scanned_bytes": 0,
@@ -29314,6 +30465,63 @@ def campaign_status(
         "project_ledger": project_ledger_status,
         "next_command": next_command,
     }
+    revisions_status = _candidate_revisions_status(campaign_dir, manifest)
+    if revisions_status is not None:
+        result["candidate_revisions"] = revisions_status
+    return result
+
+
+def _candidate_revisions_status(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """改造 2：只读列出各 revision 的候选状态；没有 revision 目录的历史 Campaign 返回 None。"""
+
+    if not _requires_complete_vc_artifacts(manifest):
+        return None
+    revisions_root = _candidate_revisions_root(campaign_dir)
+    if not revisions_root.is_dir() or revisions_root.is_symlink():
+        return None
+    try:
+        current, _record = _current_candidate_revision_record(campaign_dir, manifest)
+    except ConfigurationError as error:
+        return {"current_revision": None, "error": str(error)[:500], "revisions": {}}
+    revisions: dict[str, Any] = {}
+    for revision in _existing_candidate_revisions(campaign_dir):
+        record, commit = _read_candidate_revision_record(campaign_dir, revision)
+        directory = _candidate_revision_dir(campaign_dir, revision)
+        candidate = record.get("candidate_id") if record is not None else None
+        superseded_marker = (
+            campaign_dir / "candidates" / str(candidate) / "superseded-by.json"
+            if isinstance(candidate, str)
+            else None
+        )
+        invalidation = (
+            campaign_dir / "candidates" / str(candidate) / CANDIDATE_INVALIDATION_FILENAME
+            if isinstance(candidate, str)
+            else None
+        )
+        if current == revision:
+            state = "active"
+        elif commit is None:
+            state = "opening"
+        elif superseded_marker is not None and superseded_marker.exists():
+            state = "superseded"
+        elif invalidation is not None and invalidation.exists():
+            state = "invalidated"
+        else:
+            state = "pending"
+        revisions[f"r{revision}"] = {
+            "candidate_id": candidate,
+            "state": state,
+            "sealed": (directory / "seal.json").is_file(),
+            "checkpoints": sorted(
+                path.name
+                for path in directory.glob("vc-*-checkpoint.json")
+                if path.is_file()
+            ),
+        }
+    return {"current_revision": current, "revisions": revisions}
 
 
 def _campaign_arguments(
@@ -39308,6 +40516,12 @@ def _run_capture_attempt(
     if phase == "official":
         _assert_initial_vc1_handoff_window(arguments.campaign_dir, manifest)
     if phase == "candidate":
+        _guard_candidate_revision_write(
+            arguments.campaign_dir,
+            manifest,
+            str(getattr(arguments, "candidate_id", "") or ""),
+            action="capture-candidate run",
+        )
         # 候选层运行坐标覆盖在这里一次性生效；后续 Job 模板、环境探针、二进制
         # 校验和容器身份都只读这份副本，run 与 seal 因此看到同一组坐标。
         manifest = _apply_candidate_runtime_override(
@@ -41185,6 +42399,7 @@ def _seal_capture_attempt(
         raise ConfigurationError("seal 必须提供 --attempt-id。")
     candidate_id = arguments.candidate_id if phase == "candidate" else None
     if candidate_id:
+        _guard_candidate_revision_write(campaign_dir, manifest, str(candidate_id), action="capture-candidate seal")
         manifest = _apply_candidate_runtime_override(campaign_dir, manifest, candidate_id)
     attempt_root, attempt = _load_capture_attempt(
         campaign_dir, phase, candidate_id, attempt_id
@@ -43710,6 +44925,9 @@ def _canonical_import_subject(arguments: argparse.Namespace) -> dict[str, Any]:
         manifest = _require_formal_campaign(campaign_dir)
         if arguments.phase != "VC-5":
             raise ConfigurationError("0.154.0 起 canonical-import 必须固定使用 phase=VC-5。")
+        _require_candidate_in_current_revision(
+            campaign_dir, manifest, str(arguments.candidate_id), action="canonical-import"
+        )
         return _canonical_import_verified_vc5_subject(
             arguments,
             manifest,
@@ -44204,7 +45422,9 @@ def _ensure_production_vc5_completion(
         raise ConfigurationError("生产 VC-5 完成器只接受 production_replacement。")
     candidate_id = str(campaign.get("candidate_id", ""))
     attempt_id = str(campaign.get("attempt_id", ""))
-    existing_checkpoint = _vc_checkpoint_path(campaign_dir, "VC-5")
+    existing_checkpoint = _vc_checkpoint_path(
+        campaign_dir, "VC-5", revision=_current_candidate_revision(campaign_dir, manifest)
+    )
     if existing_checkpoint.exists() or existing_checkpoint.is_symlink():
         return _replay_vc_completion(
             campaign_dir,
@@ -45093,6 +46313,7 @@ def deliver_candidate(arguments: argparse.Namespace) -> dict[str, Any]:
         str(arguments.attempt_id)
     ):
         raise ConfigurationError("Candidate 交付的 candidate-id 或 attempt-id 非法。")
+    _require_candidate_in_current_revision(campaign_dir, manifest, candidate_id, action="deliver-candidate")
     candidate = _load_stage_result(
         campaign_dir,
         "capture-candidate",
@@ -46114,6 +47335,9 @@ def plan_candidate_gates(arguments: argparse.Namespace) -> dict[str, Any]:
         raise ConfigurationError("--candidate-id 格式非法。")
     if campaign_status(campaign_dir).get("status") != "profile_approved":
         raise ConfigurationError("门禁执行计划只能从 profile_approved 状态生成。")
+    _require_candidate_in_current_revision(
+        campaign_dir, manifest, str(arguments.candidate_id), action="plan-candidate-gates"
+    )
     source_root = arguments.candidate_source
     if not source_root.is_absolute() or source_root.is_symlink() or not source_root.is_dir():
         raise ConfigurationError("--candidate-source 必须是可信绝对目录。")
@@ -46187,6 +47411,11 @@ def record_candidate_build(arguments: argparse.Namespace) -> dict[str, Any]:
         raise ConfigurationError("Candidate 构建收据只能从 profile_approved 状态生成。")
     if _active_unsealed_attempts(campaign_dir, "candidate"):
         raise ConfigurationError("VC-4 已出现 Candidate attempt，禁止补写构建收据。")
+    # 改造 2：候选必须属于当前 active revision；有 revision 记录时在同一事务内执行
+    # revision-seal（VC-3 字节一致 + r≥2 同一性变化证明）。历史隐含 r1 不追溯。
+    revision, revision_record = _require_candidate_in_current_revision(
+        campaign_dir, manifest, candidate_id, action="record-candidate-build"
+    )
 
     source_root = arguments.candidate_source
     if not source_root.is_absolute() or source_root.is_symlink() or not source_root.is_dir():
@@ -46258,6 +47487,15 @@ def record_candidate_build(arguments: argparse.Namespace) -> dict[str, Any]:
     catalog_receipt_path = catalog_root / "catalog-stage-receipt.json"
     catalog_receipt = _read_json(catalog_receipt_path, "候选 Catalog stage 收据")
     _verify_catalog_stage_output(catalog_root, catalog_receipt)
+    if revision_record is not None:
+        # revision-seal 第 2 步：候选树内 Catalog stage 收据必须与 revision 绑定的
+        # Campaign 级 VC-3 阶段收据逐字节相同；不一致属于规则分类或目标画像变化。
+        expected_vc3_sha256 = str(revision_record["vc3_stage_receipt"]["sha256"])
+        if file_sha256(catalog_receipt_path) != expected_vc3_sha256:
+            raise ConfigurationError(
+                "revision-seal 拒绝：候选树内 catalog-stage-receipt.json 与 Campaign VC-3 阶段收据"
+                "不一致；这属于规则分类或目标画像变化，按 §5.3.4 建立后继 Campaign。"
+            )
     source_transition, source_transition_binding = _external_json_object(
         arguments.source_transition,
         "Candidate source transition",
@@ -46486,23 +47724,134 @@ def record_candidate_build(arguments: argparse.Namespace) -> dict[str, Any]:
         built_at_utc=_utc_now(),
     )
     ensure_private_directory(output.parent, campaign_dir)
-    _secure_write_json_once(output, receipt)
+    seal: dict[str, Any] | None = None
+    if revision_record is not None:
+        # revision-seal 第 3～4 步：r≥2 以 invalidation.json 冻结的旧候选身份快照为基准
+        # 证明同一性变化（commit／tree 任一可比字段变化即通过，全同拒绝；image 不强制），
+        # 先写 seal.json（write-once + 内容核对），再写 build receipt 与 VC-4 checkpoint。
+        seal = _seal_candidate_revision(
+            campaign_dir,
+            revision_record,
+            candidate_commit=git_commit,
+            source_tree_sha256=source_tree_sha256,
+            image_id=str(arguments.candidate_image_id),
+            build_receipt_sha256=codex_upgrade_vc_artifacts.digest(
+                {key: value for key, value in receipt.items() if key not in {"built_at_utc", "receipt_digest"}}
+            ),
+            vc3_stage_receipt_sha256=str(revision_record["vc3_stage_receipt"]["sha256"]),
+        )
+    _write_or_verify_json_ignoring(output, receipt, volatile=("built_at_utc", "receipt_digest"))
+    receipt = _read_json(output, "Candidate 构建收据")
     _complete_vc_phase(
         campaign_dir,
         manifest,
         phase="VC-4",
         stage_receipt_path=output.resolve(strict=True),
         reuse_item_ids=requirements.get("inherited_rule_ids", ()),
+        revision=revision,
     )
     return {
         "status": "complete",
         "candidate_id": candidate_id,
+        "candidate_revision": revision,
+        "revision_seal": seal,
         "build_receipt": str(output),
         "receipt_digest": receipt["receipt_digest"],
         "source_tree_sha256": source_tree_sha256,
         "image_reference": receipt["image"]["reference"],
         "live_request_count": 0,
     }
+
+
+def _write_or_verify_json_ignoring(
+    path: Path,
+    payload: Mapping[str, Any],
+    *,
+    volatile: Iterable[str],
+) -> None:
+    """write-once + 内容核对：已存在时只豁免易变字段（时间戳、自摘要），其余逐字段一致。"""
+
+    skip = set(volatile)
+    if path.exists() or path.is_symlink():
+        if path.is_symlink() or not path.is_file():
+            raise ConfigurationError(f"派生封存文件路径不可信：{path}")
+        existing = _read_json(path, "派生封存文件")
+        left = {key: value for key, value in existing.items() if key not in skip}
+        right = {key: value for key, value in payload.items() if key not in skip}
+        if left != right:
+            raise ConfigurationError(f"派生封存文件已经存在且内容不一致：{path}")
+        return
+    _secure_write_json_once(path, dict(payload))
+
+
+def _seal_candidate_revision(
+    campaign_dir: Path,
+    revision_record: Mapping[str, Any],
+    *,
+    candidate_commit: str | None,
+    source_tree_sha256: str,
+    image_id: str | None,
+    build_receipt_sha256: str,
+    vc3_stage_receipt_sha256: str,
+) -> dict[str, Any]:
+    """写当前 revision 的 seal.json（同一性变化证明），已存在时按内容核对。"""
+
+    revision = int(revision_record["revision"])
+    superseded: dict[str, Any] | None = None
+    supersedes = revision_record.get("supersedes")
+    if isinstance(supersedes, Mapping):
+        old_candidate_id = str(supersedes["candidate_id"])
+        invalidation_path = campaign_dir / "candidates" / old_candidate_id / "invalidation.json"
+        if invalidation_path.is_symlink() or not invalidation_path.is_file():
+            raise ConfigurationError(f"被取代候选 {old_candidate_id} 缺少 invalidation.json。")
+        try:
+            invalidation = codex_upgrade_vc_artifacts.validate_candidate_invalidation(
+                _read_json(invalidation_path, "候选作废记录")
+            )
+        except codex_upgrade_vc_artifacts.VCArtifactError as error:
+            raise ConfigurationError(str(error)) from error
+        if file_sha256(invalidation_path) != str(supersedes["invalidation_receipt"]["sha256"]):
+            raise ConfigurationError("被取代候选的 invalidation.json 与 revision 记录绑定漂移。")
+        snapshot = invalidation["identity_snapshot"]
+        superseded = {
+            "revision": int(supersedes["revision"]),
+            "candidate_id": old_candidate_id,
+            "git_commit": snapshot.get("git_commit"),
+            "source_tree_sha256": snapshot.get("source_tree_sha256"),
+            "image_id": snapshot.get("image_id"),
+        }
+    try:
+        seal = codex_upgrade_vc_artifacts.build_candidate_revision_seal(
+            campaign_id=str(revision_record["campaign_id"]),
+            revision=revision,
+            candidate_id=str(revision_record["candidate_id"]),
+            candidate_commit=candidate_commit,
+            source_tree_sha256=source_tree_sha256,
+            image_id=image_id,
+            build_receipt_sha256=build_receipt_sha256,
+            vc3_stage_receipt_sha256=vc3_stage_receipt_sha256,
+            superseded=superseded,
+            sealed_at_utc=_utc_now(),
+        )
+    except codex_upgrade_vc_artifacts.VCArtifactError as error:
+        raise ConfigurationError(f"revision-seal 拒绝：{error}") from error
+    seal_path = _candidate_revision_dir(campaign_dir, revision) / "seal.json"
+    _write_or_verify_json_ignoring(seal_path, seal, volatile=("sealed_at_utc", "seal_sha256"))
+    stored = _read_json(seal_path, "候选 revision seal")
+    if isinstance(supersedes, Mapping):
+        marker = campaign_dir / "candidates" / str(supersedes["candidate_id"]) / "superseded-by.json"
+        _write_or_verify_json(
+            marker,
+            {
+                "schema_version": "codex-upgrade-candidate-superseded/v1",
+                "candidate_id": str(supersedes["candidate_id"]),
+                "superseded_by": {
+                    "revision": revision,
+                    "candidate_id": str(revision_record["candidate_id"]),
+                },
+            },
+        )
+    return stored
 
 
 def _resolve_candidate_build_binding_path(campaign_dir: Path, value: Any) -> Path:
@@ -47226,6 +48575,7 @@ def compare_campaign(campaign_dir: Path, candidate_id: str) -> dict[str, Any]:
 
     _reject_contaminated_campaign(campaign_dir)
     manifest = _require_formal_campaign(campaign_dir)
+    _guard_candidate_revision_write(campaign_dir, manifest, candidate_id, action="compare")
     candidate = _load_stage_result(
         campaign_dir, "capture-candidate", candidate_id
     )
@@ -48399,6 +49749,7 @@ def accept_campaign(
     if assertions_path.is_symlink() or not assertions_path.is_file():
         raise ConfigurationError("逐规则断言结果必须是非符号链接普通文件。")
     manifest = _require_formal_campaign(campaign_dir)
+    _guard_candidate_revision_write(campaign_dir, manifest, candidate_id, action="accept")
     candidate = _load_stage_result(
         campaign_dir, "capture-candidate", candidate_id
     )
@@ -48771,6 +50122,8 @@ def _normalize_legacy_argv(argv: list[str]) -> tuple[list[str], str | None]:
         "compare",
         "accept",
         "deliver-candidate",
+        "revision-open",
+        "invalidate-candidate",
         "all",
         "status",
         "resume",
@@ -48938,6 +50291,9 @@ def _reject_unparented_formal_write(
         "compile-vc-batch",
         "compile-and-run-vc-batch",
         "compile-vc-interrupted-recovery-batch",
+        # 改造 2：revision 登记与候选作废是两个 campaign-run 之间的控制面命令。
+        "revision-open",
+        "invalidate-candidate",
     }
     if command in direct_control_commands:
         if in_campaign_run:
@@ -49823,6 +51179,12 @@ def _main_without_campaign_lease(argv: list[str] | None = None) -> int:
         elif command == "reconcile-supervisor-run":
             result = _reconcile_supervisor_run_command(arguments)
             return_code = 0 if result.get("status") == "recoverable" else 3
+        elif command == "revision-open":
+            result = open_candidate_revision(arguments)
+            return_code = 0
+        elif command == "invalidate-candidate":
+            result = invalidate_candidate(arguments)
+            return_code = 0 if result.get("status") in {"preview", "applied"} else 3
         elif command == "reconcile-attempt":
             result = _reconcile_attempt_command(arguments)
             return_code = 0 if result.get("status") == "recoverable" else 3

@@ -491,7 +491,7 @@ class AtomicDispatchTests(unittest.TestCase):
             with mock.patch.object(
                 codex_upgrade,
                 "_replay_vc_checkpoint",
-                side_effect=lambda _dir, _plan, phase: replayed.append(phase) or (root / phase, {}),
+                side_effect=lambda _dir, _plan, phase, revision=None: replayed.append(phase) or (root / phase, {}),
             ):
                 head, events = codex_upgrade._timing_ledger_batch_events(
                     root, self._campaign_manifest(), {}, phase="VC-2", ledger_dir=ledger_dir

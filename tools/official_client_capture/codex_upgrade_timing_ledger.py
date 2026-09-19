@@ -55,7 +55,35 @@ EVENT_TYPES = frozenset(
         "stop_the_line",
         "recovery_verified",
         "upgrade_completed",
+        # 改造 2（候选级 revision）：候选动作失败后的只读等待、显式作废与新 revision 激活。
+        "candidate_review_required",
+        "candidate_invalidated",
+        "stage_revision",
     }
+)
+# 候选级阶段：VC-4～VC-6 的阶段／attempt 事件按 revision 归属；VC-0～VC-3 是 Campaign 级。
+CANDIDATE_PHASES = ("VC-4", "VC-5", "VC-6")
+CANDIDATE_STAGE_EVENT_TYPES = frozenset(
+    {
+        "stage_started",
+        "stage_completed",
+        "stage_abandoned",
+        "attempt_started",
+        "attempt_failed",
+        "attempt_completed",
+        "candidate_review_required",
+        "candidate_invalidated",
+    }
+)
+# 事件的可选 revision 字段：历史事件没有这些字段，回放时候选级事件缺失视为 r1。
+EVENT_REVISION_FIELDS = frozenset(
+    {"revision", "candidate_id", "revision_commit_sha256", "supersedes_revision"}
+)
+REVIEW_REQUIRED_ALLOWED_EVENTS = frozenset(
+    {"attempt_failed", "receipt_passed", "candidate_invalidated", "stage_abandoned", "stop_the_line"}
+)
+REVISION_REQUIRED_ALLOWED_EVENTS = frozenset(
+    {"candidate_invalidated", "stage_revision", "stop_the_line"}
 )
 RECOVERY_ROLES = ("clean_p0", "offline_regression", "tool_fix")
 RECOVERY_AUTHORIZATION_ROLES = ("recovery_approval", "recovery_preview")
@@ -287,6 +315,13 @@ PRODUCER_FREEZE_SUCCESSORS = (
         "path": "docs/egress/maintenance/upstream-codex-0154-vc5-runtime-rebase-component-20260917-freeze-successor.json",
         "base_commit": "e422e021850c4eeee0a68692d7a6d20e798105d1",
         "scope": "upstream-codex-0154-vc5-runtime-rebase-component-20260917-freeze-successor",
+        "result": "manual_actions_required",
+    },
+    {
+        # 改造 2（候选级 revision）：账本新增三类事件、两个状态与 revision 摘要字段。
+        "path": "docs/egress/maintenance/upstream-codex-0154-vc5-tooling-batch2-m2-20260919-freeze-successor.json",
+        "base_commit": "8415fcd530926dd7ed2ef2945bdbf51fcd2bb0bc",
+        "scope": "upstream-codex-0154-vc5-tooling-batch2-m2-20260919-freeze-successor",
         "result": "manual_actions_required",
     },
 )
@@ -1031,25 +1066,69 @@ def _load_events(root: Path, *, limit: int | None = None) -> list[tuple[dict[str
     return [_load_json(path, f"event {path.name}") for path in paths]
 
 
+def _validate_event_revision_fields(event: dict[str, Any], sequence: int) -> None:
+    """校验改造 2 的四个可选字段；缺失即 None（历史事件），存在则类型与语义闭合。"""
+
+    revision = event.get("revision")
+    if revision is not None and (isinstance(revision, bool) or not isinstance(revision, int) or revision < 1):
+        raise TimingLedgerError(f"event {sequence}.revision 必须是正整数或 null")
+    candidate_id = event.get("candidate_id")
+    if candidate_id is not None:
+        _safe_id(candidate_id, f"event {sequence}.candidate_id")
+    commit = event.get("revision_commit_sha256")
+    if commit is not None and (not isinstance(commit, str) or not SHA256_RE.fullmatch(commit)):
+        raise TimingLedgerError(f"event {sequence}.revision_commit_sha256 非法")
+    supersedes = event.get("supersedes_revision")
+    if supersedes is not None and (
+        isinstance(supersedes, bool) or not isinstance(supersedes, int) or supersedes < 1
+    ):
+        raise TimingLedgerError(f"event {sequence}.supersedes_revision 必须是正整数或 null")
+    event_type = event.get("event_type")
+    phase = event.get("phase")
+    if event_type == "stage_revision":
+        if phase != "VC-4" or revision is None or candidate_id is None or commit is None:
+            raise TimingLedgerError(
+                f"event {sequence} stage_revision 必须在 VC-4 且携带 revision、candidate_id 与 revision_commit_sha256"
+            )
+        if supersedes is not None and supersedes >= revision:
+            raise TimingLedgerError(f"event {sequence} stage_revision 的 supersedes_revision 必须小于 revision")
+    elif event_type in {"candidate_review_required", "candidate_invalidated"}:
+        if phase not in CANDIDATE_PHASES or revision is None or candidate_id is None:
+            raise TimingLedgerError(
+                f"event {sequence} {event_type} 必须在候选级阶段且携带 revision 与 candidate_id"
+            )
+        if commit is not None or supersedes is not None:
+            raise TimingLedgerError(f"event {sequence} {event_type} 不接受 revision 提交字段")
+    else:
+        if commit is not None or supersedes is not None:
+            raise TimingLedgerError(f"event {sequence} {event_type} 不接受 revision 提交字段")
+        if revision is not None and (phase not in CANDIDATE_PHASES or event_type not in CANDIDATE_STAGE_EVENT_TYPES):
+            raise TimingLedgerError(f"event {sequence} 只有候选级阶段事件才能绑定 revision")
+        if candidate_id is not None and event_type not in CANDIDATE_STAGE_EVENT_TYPES:
+            raise TimingLedgerError(f"event {sequence} {event_type} 不接受 candidate_id")
+
+
 def _validate_event_shape(root: Path, event: dict[str, Any], sequence: int) -> dict[str, Any]:
-    _expect(
-        event,
-        {
-            "schema_version",
-            "sequence",
-            "event_id",
-            "recorded_at_utc",
-            "phase",
-            "event_type",
-            "attempt_id",
-            "root_cause_id",
-            "live_request_count",
-            "receipts",
-            "next_action",
-            "previous_event_sha256",
-        },
-        f"event {sequence}",
-    )
+    required = {
+        "schema_version",
+        "sequence",
+        "event_id",
+        "recorded_at_utc",
+        "phase",
+        "event_type",
+        "attempt_id",
+        "root_cause_id",
+        "live_request_count",
+        "receipts",
+        "next_action",
+        "previous_event_sha256",
+    }
+    if not isinstance(event, dict):
+        raise TimingLedgerError(f"event {sequence} 必须是对象")
+    extra = set(event) - required - EVENT_REVISION_FIELDS
+    if extra or not required.issubset(event):
+        raise TimingLedgerError(f"event {sequence} 字段不闭合")
+    _validate_event_revision_fields(event, sequence)
     if event.get("schema_version") != EVENT_SCHEMA or event.get("sequence") != sequence:
         raise TimingLedgerError(f"event {sequence} schema 或序号不一致")
     _safe_id(event.get("event_id"), f"event {sequence}.event_id")
@@ -1083,7 +1162,7 @@ def _validate_event_shape(root: Path, event: dict[str, Any], sequence: int) -> d
         event["event_type"] not in {"recovery_verified", "recovery_authorized"}
         and roles
         and event["event_type"]
-        not in {"receipt_passed", "stop_the_line", "upgrade_completed"}
+        not in {"receipt_passed", "stop_the_line", "upgrade_completed", "candidate_invalidated"}
     ):
         raise TimingLedgerError(f"{event['event_type']} 不接受 receipts")
     next_action = event.get("next_action")
@@ -1112,16 +1191,41 @@ def _summarize(
     failure_counts: dict[str, int] = {}
     active_phase: str | None = None
     active_phase_started: datetime | None = None
+    active_phase_revision: int | None = None
     stopped = False
     completed = False
     recovery_required = False
     recovery_phase: str | None = None
     recovery_root_cause_id: str | None = None
+    # 改造 2：当前 revision 只由最后一条有效 stage_revision 决定；历史账本（无 revision
+    # 字段）在第一条候选级事件出现时隐含为 r1。revision_phase_state[r][phase] 记录
+    # 该 revision 各候选级阶段的最后状态；phase_elapsed 按 (revision, phase) 累计已关闭
+    # 段的耗时，同一 phase 在其他 revision 的耗时计入当前段的阶段预算。
+    current_revision: int | None = None
+    revision_phase_state: dict[int, dict[str, str]] = {}
+    phase_elapsed: dict[tuple[int | None, str], int] = {}
+    review_required = False
+    revision_required = False
+    last_invalidated: tuple[int, str] | None = None
+    revision_commits: dict[int, str] = {}
+    campaign_completed_phases: list[str] = []
     total_live_requests = 0
     last_time: datetime | None = None
     previous_raw: bytes | None = None
     last_successful_receipt: dict[str, Any] | None = None
     last_event: dict[str, Any] | None = None
+
+    def close_active_phase(recorded_at: datetime) -> None:
+        nonlocal active_phase, active_phase_started, active_phase_revision
+        assert active_phase is not None and active_phase_started is not None
+        key = (active_phase_revision, active_phase)
+        phase_elapsed[key] = phase_elapsed.get(key, 0) + max(
+            0, int((recorded_at - active_phase_started).total_seconds())
+        )
+        active_phase = None
+        active_phase_started = None
+        active_phase_revision = None
+
     for sequence, (event, raw) in enumerate(raw_events, 1):
         normalized = _validate_event_shape(root, event, sequence)
         recorded = _timestamp(normalized["recorded_at_utc"], "event time")
@@ -1136,6 +1240,22 @@ def _summarize(
         event_ids.add(normalized["event_id"])
         event_type = normalized["event_type"]
         phase = normalized["phase"]
+        candidate_level = phase in CANDIDATE_PHASES and event_type in CANDIDATE_STAGE_EVENT_TYPES
+        event_revision = normalized.get("revision")
+        if candidate_level:
+            if event_revision is None:
+                # 历史账本：候选级事件没有 revision 字段，一律归 r1。
+                if current_revision is None:
+                    current_revision = 1
+                event_revision = current_revision
+            elif current_revision is None:
+                raise TimingLedgerError(
+                    f"event {sequence} 候选级阶段事件出现在任何 revision 激活之前"
+                )
+            elif event_revision != current_revision:
+                raise TimingLedgerError(
+                    f"event {sequence} 的 revision {event_revision} 不是当前 revision {current_revision}"
+                )
         if completed:
             raise TimingLedgerError("upgrade_completed 后禁止追加 event")
         if stopped and event_type != "recovery_verified":
@@ -1151,16 +1271,36 @@ def _summarize(
             raise TimingLedgerError(
                 "recovery_required 期间只允许对账或已批准的恢复动作"
             )
+        if revision_required and event_type not in REVISION_REQUIRED_ALLOWED_EVENTS:
+            raise TimingLedgerError(
+                "revision_required 期间只允许 candidate_invalidated、stage_revision 或 stop_the_line"
+            )
+        if review_required and event_type not in REVIEW_REQUIRED_ALLOWED_EVENTS:
+            raise TimingLedgerError(
+                "candidate_review_required 期间只允许对账、候选作废、stage_abandoned 或 stop_the_line"
+            )
         if event_type == "stage_started":
             if active_phase is not None or normalized["attempt_id"] is not None or normalized["root_cause_id"] is not None:
                 raise TimingLedgerError("stage_started 身份或阶段状态非法")
+            if candidate_level:
+                assert event_revision is not None
+                if revision_phase_state.get(event_revision, {}).get(phase) == "completed":
+                    raise TimingLedgerError(
+                        f"revision {event_revision} 的 {phase} 已完成，同一 revision 不得重开阶段"
+                    )
+                revision_phase_state.setdefault(event_revision, {})[phase] = "started"
             active_phase = phase
             active_phase_started = recorded
+            active_phase_revision = event_revision if candidate_level else None
         elif event_type == "stage_completed":
             if active_phase != phase or any(item["status"] == "active" for item in attempts.values()):
                 raise TimingLedgerError("stage_completed 与当前阶段或 attempt 状态不一致")
-            active_phase = None
-            active_phase_started = None
+            if candidate_level:
+                assert event_revision is not None
+                revision_phase_state.setdefault(event_revision, {})[phase] = "completed"
+            elif phase not in campaign_completed_phases:
+                campaign_completed_phases.append(phase)
+            close_active_phase(recorded)
         elif event_type == "stage_abandoned":
             if (
                 active_phase != phase
@@ -1172,11 +1312,75 @@ def _summarize(
                 raise TimingLedgerError(
                     "stage_abandoned 必须关闭当前阶段、登记根因和唯一下一动作"
                 )
-            active_phase = None
-            active_phase_started = None
+            if candidate_level:
+                assert event_revision is not None
+                revision_phase_state.setdefault(event_revision, {})[phase] = "abandoned"
+            close_active_phase(recorded)
             recovery_required = False
             recovery_phase = None
             recovery_root_cause_id = None
+        elif event_type == "candidate_review_required":
+            if (
+                active_phase is not None
+                or normalized["attempt_id"] is not None
+                or normalized["root_cause_id"] is None
+                or not normalized["next_action"]
+                or any(item["status"] == "active" for item in attempts.values())
+            ):
+                raise TimingLedgerError(
+                    "candidate_review_required 必须在阶段已关闭后登记根因与唯一下一动作"
+                )
+            review_required = True
+        elif event_type == "candidate_invalidated":
+            if (
+                active_phase is not None
+                or normalized["attempt_id"] is not None
+                or normalized["root_cause_id"] is None
+                or not normalized["next_action"]
+                or any(item["status"] == "active" for item in attempts.values())
+            ):
+                raise TimingLedgerError(
+                    "candidate_invalidated 必须在阶段已关闭后登记根因与唯一下一动作"
+                )
+            assert event_revision is not None
+            key = (event_revision, str(normalized["candidate_id"]))
+            if revision_required and last_invalidated != key:
+                raise TimingLedgerError("revision_required 期间只允许对同一候选幂等重复 candidate_invalidated")
+            last_invalidated = key
+            revision_required = True
+            review_required = False
+        elif event_type == "stage_revision":
+            revision = int(normalized["revision"])
+            supersedes = normalized.get("supersedes_revision")
+            # Campaign 级阶段（导入型后继 Campaign 常停在 active VC-0）进行中允许登记 r1；
+            # 候选级阶段进行中不得切换 revision。
+            if (
+                active_phase in CANDIDATE_PHASES
+                or normalized["attempt_id"] is not None
+                or normalized["root_cause_id"] is not None
+            ):
+                raise TimingLedgerError("stage_revision 不得在候选级阶段进行中登记")
+            if current_revision is None:
+                if revision != 1 or supersedes is not None:
+                    raise TimingLedgerError("首个 stage_revision 必须是 r1 且不取代任何 revision")
+            else:
+                if (
+                    not revision_required
+                    or revision != current_revision + 1
+                    or supersedes != current_revision
+                    or last_invalidated is None
+                    or last_invalidated[0] != current_revision
+                    or last_invalidated[1] == normalized["candidate_id"]
+                ):
+                    raise TimingLedgerError(
+                        "stage_revision 必须在 revision_required 下以新候选顺序取代已作废的当前 revision"
+                    )
+            if revision in revision_commits:
+                raise TimingLedgerError(f"revision {revision} 已经激活过")
+            revision_commits[revision] = str(normalized["revision_commit_sha256"])
+            current_revision = revision
+            revision_required = False
+            review_required = False
         elif event_type == "attempt_started":
             attempt_id = normalized["attempt_id"]
             if active_phase != phase or attempt_id is None or attempt_id in attempts:
@@ -1278,10 +1482,20 @@ def _summarize(
     stage_elapsed = None
     stage_deadline = None
     if active_phase is not None and active_phase_started is not None:
-        stage_elapsed = max(0, int((as_of - active_phase_started).total_seconds()))
+        # 同一 phase 在其他 revision 已消耗的耗时计入本段：阶段预算跨 revision 累计，
+        # 总 deadline 不变。同 revision 内（历史账本）保持按本段起算。
+        carried = sum(
+            seconds
+            for (revision, phase_name), seconds in phase_elapsed.items()
+            if phase_name == active_phase
+            and active_phase_revision is not None
+            and revision is not None
+            and revision != active_phase_revision
+        )
+        stage_elapsed = carried + max(0, int((as_of - active_phase_started).total_seconds()))
         stage_deadline = active_phase_started + timedelta(
             minutes=plan["stage_budgets_minutes"][active_phase]
-        )
+        ) - timedelta(seconds=carried)
     budget_exceeded = as_of >= total_deadline or (
         stage_deadline is not None and as_of >= stage_deadline
     )
@@ -1297,6 +1511,10 @@ def _summarize(
         if budget_exceeded or retry_stop_required
         else "recovery_required"
         if recovery_required
+        else "revision_required"
+        if revision_required
+        else "candidate_review_required"
+        if review_required
         else "active"
     )
     return {
@@ -1309,6 +1527,12 @@ def _summarize(
         "active_phase": active_phase,
         "recovery_phase": recovery_phase,
         "recovery_root_cause_id": recovery_root_cause_id,
+        "current_revision": current_revision,
+        "revision_phase_state": {
+            str(revision): dict(sorted(states.items()))
+            for revision, states in sorted(revision_phase_state.items())
+        },
+        "campaign_completed_phases": list(campaign_completed_phases),
         "head_sequence": len(raw_events),
         "head_sha256": _sha256_bytes(previous_raw),
         "total_elapsed_seconds": total_elapsed,
@@ -1423,12 +1647,16 @@ def phase_ledger_state(root: Path, *, now: str | None = None) -> dict[str, Any]:
 
     root = _private_ledger(root, must_exist=True)
     summary = inspect_ledger(root, now=now)
-    completed: list[str] = []
-    for event, _raw in _load_events(root):
-        if event.get("event_type") == "stage_completed":
-            phase = str(event.get("phase"))
-            if phase not in completed:
+    # 改造 2：已完成阶段 = Campaign 级完成 ∪ 当前 revision 完成的候选级阶段；被作废
+    # revision 的完成不算数，新 revision 从 VC-4 重新开始。
+    completed = list(summary.get("campaign_completed_phases", []))
+    current = summary.get("current_revision")
+    if current is not None:
+        states = summary.get("revision_phase_state", {}).get(str(current), {})
+        for phase in PHASE_ORDER:
+            if states.get(phase) == "completed" and phase not in completed:
                 completed.append(phase)
+    completed.sort(key=PHASE_ORDER.index)
     return {**summary, "completed_phases": completed}
 
 
@@ -1444,6 +1672,10 @@ def append_event(
     receipts: list[dict[str, str]] | None = None,
     next_action: str | None = None,
     recorded_at_utc: str | None = None,
+    revision: int | None = None,
+    candidate_id: str | None = None,
+    revision_commit_sha256: str | None = None,
+    supersedes_revision: int | None = None,
 ) -> dict[str, Any]:
     root = _private_ledger(root, must_exist=True)
     plan, _ = _load_plan(root)
@@ -1451,6 +1683,15 @@ def append_event(
     recorded_raw = recorded_at_utc or _utc_now()
     recorded = _timestamp(recorded_raw, "recorded_at_utc")
     current = _summarize(root, plan, raw_events, as_of=recorded)
+    if phase in CANDIDATE_PHASES and event_type in CANDIDATE_STAGE_EVENT_TYPES:
+        # 候选级阶段事件必须绑定 revision：未显式给出时取当前 revision；没有当前
+        # revision 的新 Campaign 必须先 revision-open --initial。
+        if revision is None:
+            revision = current.get("current_revision")
+        if revision is None:
+            raise TimingLedgerError(
+                f"{phase} 的 {event_type} 必须绑定候选 revision；请先执行 revision-open --initial"
+            )
     allowed_while_stopping = {"stop_the_line", "recovery_verified"}
     # 阶段或总预算已经要求停线时，仍必须先把 active 阶段显式废弃，随后才能
     # 写 stop_the_line；否则父编排器失败会永久留下 active/VC-x 假象。
@@ -1474,6 +1715,14 @@ def append_event(
         raise TimingLedgerError(
             "recovery_required 期间只允许对账或已批准的恢复动作"
         )
+    if current["status"] == "revision_required" and event_type not in REVISION_REQUIRED_ALLOWED_EVENTS:
+        raise TimingLedgerError(
+            "revision_required 期间只允许 candidate_invalidated、stage_revision 或 stop_the_line"
+        )
+    if current["status"] == "candidate_review_required" and event_type not in REVIEW_REQUIRED_ALLOWED_EVENTS:
+        raise TimingLedgerError(
+            "candidate_review_required 期间只允许对账、候选作废、stage_abandoned 或 stop_the_line"
+        )
     sequence = len(raw_events) + 1
     event = {
         "schema_version": EVENT_SCHEMA,
@@ -1488,6 +1737,10 @@ def append_event(
         "receipts": sorted(receipts or [], key=lambda item: item["role"]),
         "next_action": next_action,
         "previous_event_sha256": _sha256_bytes(raw_events[-1][1]),
+        "revision": revision,
+        "candidate_id": candidate_id,
+        "revision_commit_sha256": revision_commit_sha256,
+        "supersedes_revision": supersedes_revision,
     }
     candidate_raw = _canonical(event)
     _summarize(root, plan, [*raw_events, (event, candidate_raw)], as_of=recorded)
@@ -1587,6 +1840,17 @@ def replay(root: Path, receipt_relative: str) -> dict[str, Any]:
         # 早期 v1 checkpoint 在恢复暂停字段加入前已经冻结。只兼容冻结时缺失且
         # 当前重算仍为空的字段；非空恢复状态与已写入字段的新格式继续严格校验。
         for field in legacy_recovery_fields:
+            expected_summary.pop(field)
+    legacy_revision_fields = ("current_revision", "revision_phase_state", "campaign_completed_phases")
+    if (
+        isinstance(frozen_summary, dict)
+        and all(field not in frozen_summary for field in legacy_revision_fields)
+        and expected_summary.get("current_revision") in {None, 1}
+        and set(expected_summary.get("revision_phase_state", {})) <= {"1"}
+    ):
+        # 改造 2 之前冻结的 checkpoint 没有 revision 字段；只兼容重算结果仍是
+        # "无 revision 或隐含 r1"的历史语义，出现 r2 及以上的账本必须带新字段。
+        for field in legacy_revision_fields:
             expected_summary.pop(field)
     expected = {
         "schema_version": RECEIPT_SCHEMA,

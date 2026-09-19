@@ -145,6 +145,9 @@ CONSUMER_COMMANDS = frozenset(
         "compare",
         "accept",
         "canonical-advance",
+        # 改造 2：候选级 revision 的登记与显式作废都是总账消费者。
+        "revision-open",
+        "invalidate-candidate",
     }
 )
 ESTIMATION_POLICIES = ("none", "upper_bound_from_sibling", "upper_bound_from_sibling_or_turn_ratio")

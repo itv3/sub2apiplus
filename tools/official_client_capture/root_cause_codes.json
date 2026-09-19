@@ -110,6 +110,11 @@
       "component": "supervisor",
       "stable_dimensions": ["phase"],
       "description": "prepared 父 run 对应的正式 COMMIT 存在但自摘要无效、owner nonce 或 run 目录不匹配，属于制品完整性异常，永久停线。"
+    },
+    "candidate.source-change-required": {
+      "component": "candidate",
+      "stable_dimensions": ["phase"],
+      "description": "人工审核判定候选实现需要改源码（invalidate-candidate 显式作废）：同阶段的候选源码变更需求跨 revision 累计，达上限即停线。"
     }
   }
 }

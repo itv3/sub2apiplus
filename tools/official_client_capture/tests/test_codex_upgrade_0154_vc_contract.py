@@ -33,6 +33,12 @@ class CodexUpgrade0154VCContractTests(unittest.TestCase):
             "target_version": version,
         }
 
+    @classmethod
+    def _mark_implicit_r1(cls, campaign_dir: Path) -> None:
+        """改造 2 之前的历史 Campaign 形态：已有原路径 VC-4 checkpoint 且无 revisions 目录 → 隐含 r1。"""
+
+        cls._write(campaign_dir / "control" / "vc" / "vc-4-checkpoint.json", {"fixture": "vc-4"})
+
     @staticmethod
     def _candidate_arguments(
         campaign_dir: Path,
@@ -90,6 +96,7 @@ class CodexUpgrade0154VCContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             campaign_dir = Path(directory) / "campaign"
             campaign_dir.mkdir(mode=0o700)
+            self._mark_implicit_r1(campaign_dir)
             arguments = self._candidate_arguments(
                 campaign_dir,
                 build_receipt=None,
@@ -135,6 +142,7 @@ class CodexUpgrade0154VCContractTests(unittest.TestCase):
             receipt_path.parent.mkdir(parents=True, mode=0o700)
             receipt_path.write_text(json.dumps({"tampered": True}) + "\n", encoding="utf-8")
             receipt_path.chmod(0o600)
+            self._mark_implicit_r1(campaign_dir)
             arguments = self._candidate_arguments(
                 campaign_dir,
                 build_receipt=receipt_path,
@@ -800,6 +808,7 @@ class CodexUpgrade0154VCContractTests(unittest.TestCase):
         campaign_dir = root / "campaign"
         campaign_dir.mkdir(mode=0o700)
         self._write(campaign_dir / "campaign.json", {"fixture": True})
+        self._mark_implicit_r1(campaign_dir)
         candidate_id = "candidate-a"
         attempt_id = "attempt-a"
         build_path = campaign_dir / "candidates" / candidate_id / "build-receipt.json"

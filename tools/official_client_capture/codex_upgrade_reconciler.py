@@ -2362,7 +2362,14 @@ def reconcile_supervisor_run(
                     next_action=ledger_next_action,
                 )
             result["ledger_events"] = [event]
-        if run.get("failure_class") == "post-run-tooling":
+        if ledger.get("status") == "candidate_review_required":
+            # 改造 2：候选级动作失败已把阶段关闭并进入只读等待，对账只负责入账；
+            # 下一步由人工裁定：候选源码问题走 invalidate-candidate，否则显式停线。
+            result["next_command"] = (
+                "candidate_review_required：对账已入账；判为候选源码问题则 invalidate-candidate "
+                "preview/apply，否则以 close-campaign-ledger 显式停线"
+            )
+        elif run.get("failure_class") == "post-run-tooling":
             result["next_command"] = (
                 "phase 保持 active：修复评估／控制工具并受监督部署后，以 compile-and-run-vc-batch "
                 "逐字重派同一 seal 批次；Candidate Job 结果只读保留"

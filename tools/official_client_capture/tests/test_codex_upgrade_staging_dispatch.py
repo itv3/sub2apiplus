@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import subprocess
@@ -99,8 +100,18 @@ class StagingDispatchTests(unittest.TestCase):
     def _plan(self, root: Path, campaign_dir: Path, phase: str, *, tag: str = "") -> Path:
         return self.helper._vc_chain_action_plan(root / f"plans{tag}", campaign_dir, phase)
 
+    def _open_r1(self, fixture: dict[str, object]) -> None:
+        """改造 2：候选级首批（VC-4）派发前先激活 r1；幂等，可重复调用。"""
+
+        opened = codex_upgrade.open_candidate_revision(
+            argparse.Namespace(campaign_dir=fixture["campaign_dir"], candidate_id="candidate-r1", initial=True, supersedes=None)
+        )
+        self.assertEqual(opened["revision"], 1)
+
     def _dispatch(self, fixture: dict[str, object], root: Path, phase: str, sequence: int, *, tag: str = ""):
         campaign_dir = fixture["campaign_dir"]
+        if phase == "VC-4":
+            self._open_r1(fixture)
         action_plan = self._plan(root, campaign_dir, phase, tag=tag)
         return codex_upgrade.compile_and_run_vc_batch(self._arguments(fixture, phase, sequence, action_plan))
 
@@ -235,8 +246,9 @@ class StagingDispatchTests(unittest.TestCase):
             self.assertFalse((campaign_dir / "control" / "vc" / "predispatch-stops").exists())
             self.assertFalse((attempt_dir / "ABORT").exists())
             self.assertEqual(self._head(fixture)["sequence"], head_before)
-            # 同序号重派被拒（已有 COMMIT），并且不会留下新的 staging attempt。
-            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "已有 COMMIT|已有 checkpoint"):
+            # 同序号重派被拒（改造 2 起账本门先拒绝重开当前 revision 已完成阶段；
+            # 更早的实现由"已有 COMMIT"拒绝），并且不会留下新的 staging attempt。
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "已有 COMMIT|禁止重开"):
                 self._dispatch(fixture, root, "VC-2", 2, tag="-again")
             self.assertEqual([p.name for p in sorted(self._staging_dir(campaign_dir, 2, "VC-2").iterdir())], ["attempt-1"])
             # predispatch_stop.record 对 staging 模型 Campaign 拒绝（T4.7）。

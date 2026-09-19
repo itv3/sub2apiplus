@@ -1376,7 +1376,7 @@ def _atomic_compiler(
                 staging_attempt_dir,
                 plan=plan,
                 batch=batch,
-                run_manifest=codex_upgrade._vc_run_manifest_from_batch(batch),
+                run_manifest=codex_upgrade._vc_run_manifest_from_batch(batch, batch_model="staging"),
                 owner_nonce=owner_nonce,
                 prepared_at_utc=now.isoformat(),
             )
@@ -2678,19 +2678,26 @@ def _replay_atomic_instance(
         manifest = codex_upgrade_supervisor._campaign_run_manifest(manifest_path)
     except codex_upgrade_supervisor.SupervisorError as error:
         raise CampaignRunRehearsalError("原子演练 VC-1 manifest 非法") from error
-    expected_manifest = codex_upgrade_supervisor.build_batched_campaign_run_manifest(
-        campaign_id=campaign_id,
-        campaign_plan_sha256=str(plan["plan_sha256"]),
-        batch_id=str(batch["batch_id"]),
-        batch_sequence=1,
-        batch_sha256=str(batch["batch_sha256"]),
-        phase="VC-1",
-        predecessor_checkpoint=predecessor,
-        original_deadline_at_utc=str(plan["original_deadline_at_utc"]),
-        actions=[action],
-        execute_items=["atomic-offline-execute"],
-        reuse_items=["atomic-offline-reuse"],
-    )
+    # 与生成侧同一函数按演练 Campaign 的批次模型重建：staging 模型清单携带 null 的
+    # 候选级绑定字段，legacy 模型不含。
+    try:
+        expected_manifest = codex_upgrade._vc_run_manifest_from_batch(
+            {
+                **batch,
+                "campaign_id": campaign_id,
+                "campaign_plan_sha256": str(plan["plan_sha256"]),
+                "sequence": 1,
+                "phase": "VC-1",
+                "predecessor_checkpoint": predecessor,
+                "original_deadline_at_utc": str(plan["original_deadline_at_utc"]),
+                "actions": [action],
+                "execute_item_ids": ["atomic-offline-execute"],
+                "reuse_item_ids": ["atomic-offline-reuse"],
+            },
+            batch_model=codex_upgrade_vc_artifacts.campaign_plan_batch_model(plan),
+        )
+    except (codex_upgrade.ConfigurationError, codex_upgrade_supervisor.SupervisorError) as error:
+        raise CampaignRunRehearsalError("原子演练 VC-1 manifest 无法按批次模型重建") from error
     if manifest != expected_manifest:
         raise CampaignRunRehearsalError("原子演练 VC-1 manifest 未由 batch 确定性编译")
 

@@ -142,8 +142,12 @@ from typing import Any, Callable, Mapping
 # 2026-09-19（第 2 批 M1 审核修正）：classify_prepared_run 只把"同 Campaign／阶段／序号／
 # 规范路径、且属于同序号另一 attempt"的 COMMIT 视为 no_commit，其余外来 COMMIT 一律完整性
 # 异常；staging ABORT 的 write-once 改为逐字段内容核对。监督器随之变化；断言预处理器未变。
+# 2026-09-19（第 2 批 M2：候选级 revision）：campaign-run 清单成对携带 candidate_revision／
+# candidate_id（staging 模型必带、legacy 不得带，Campaign 级为 null）；候选级动作失败按三分支
+# 收账（可恢复类不变／永久条件停线／其余 stage_abandoned + candidate_review_required）；失败
+# 批次新增"候选作废 → 新 revision VC-4 首批"后继协议。监督器随之变化；断言预处理器未变。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "9269b56c1d29aea9d3bcbc4de57b6938d6ddefb7a353c459983e354e40a46e5d"
+    "64b41ed1258638e2c8bff2451fc7bf9e4ef99814656d31f02bcb692ab0d06aca"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "ea5500505d49340fe4971b981a8ab1159266c6a54ad0d3724cdf10cd51815fe4"

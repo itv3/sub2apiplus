@@ -2256,6 +2256,18 @@ raise SystemExit(9)
                 event_type="stage_completed",
                 next_action=f"启动 {started}",
             )
+            if started == "VC-4":
+                # 改造 2：候选级阶段开工前账本必须先激活 r1。
+                timing_ledger.append_event(
+                    ledger_root,
+                    event_id="fixture-stage-revision-r1",
+                    phase="VC-4",
+                    event_type="stage_revision",
+                    revision=1,
+                    candidate_id="cand-1",
+                    revision_commit_sha256="6" * 64,
+                    next_action="派发 VC-4 首批",
+                )
             timing_ledger.append_event(
                 ledger_root,
                 event_id=f"fixture-{started.lower()}-started",
@@ -2330,6 +2342,9 @@ raise SystemExit(9)
             batch_sequence=1,
             batch_sha256="6" * 64,
             phase="VC-5",
+            # 改造 2：staging 模型的候选级清单绑定 r1／cand-1。
+            candidate_revision=1,
+            candidate_id="cand-1",
             predecessor_checkpoint={
                 "path": "control/vc/vc-4-checkpoint.json",
                 "sha256": "3" * 64,
@@ -2479,8 +2494,10 @@ raise SystemExit(9)
             self.assertFalse(
                 list((run_dir / "action-diagnostics").glob("*-post-run-tooling.json"))
             )
-            self.assertEqual(payload["timing_closeout"]["ledger_status"], "stopped")
-            self.assertEqual(timing_ledger.inspect_ledger(ledger_root)["status"], "stopped")
+            # 改造 2：候选级（VC-5）execution-failure 未命中永久条件时不再直接停线，
+            # 而是 stage_abandoned + candidate_review_required（只读等待人工对账／作废）。
+            self.assertEqual(payload["timing_closeout"]["ledger_status"], "candidate_review_required")
+            self.assertEqual(timing_ledger.inspect_ledger(ledger_root)["status"], "candidate_review_required")
 
     def test_post_run_tooling_facts_negative_cases(self) -> None:
         """五条判据逐条失效时都不得升级，且不抛异常。"""
@@ -2616,6 +2633,8 @@ raise SystemExit(9)
                 batch_sequence=2,
                 batch_sha256="7" * 64,
                 phase="VC-5",
+                candidate_revision=1,
+                candidate_id="cand-1",
                 predecessor_checkpoint=dict(seed["predecessor_checkpoint"]),
                 original_deadline_at_utc="2099-09-15T08:12:43Z",
                 actions=actions,
@@ -2728,6 +2747,8 @@ raise SystemExit(9)
                 batch_sequence=1,
                 batch_sha256="7" * 64,
                 phase="VC-5",
+                candidate_revision=1,
+                candidate_id="cand-1",
                 predecessor_checkpoint=dict(seed["predecessor_checkpoint"]),
                 original_deadline_at_utc="2099-09-15T08:12:43Z",
                 actions=[

@@ -19,7 +19,18 @@ from typing import Any
 DISCOVERY_INVENTORY_SCHEMA = "codex-upgrade-discovery-inventory/v1"
 CAMPAIGN_PLAN_SCHEMA = "codex-upgrade-campaign-plan/v1"
 VC_CHECKPOINT_SCHEMA = "codex-upgrade-vc-checkpoint/v1"
-VC_BATCH_SCHEMA = "codex-upgrade-vc-batch/v1"
+# 改造 2（候选级 revision）：batch v2 新增 candidate_revision／candidate_id（候选级阶段必填，
+# Campaign 级阶段为 null）；v1 只读兼容。
+VC_BATCH_SCHEMA = "codex-upgrade-vc-batch/v2"
+VC_BATCH_LEGACY_SCHEMA = "codex-upgrade-vc-batch/v1"
+CANDIDATE_PHASES = ("VC-4", "VC-5", "VC-6")
+CANDIDATE_REVISION_SCHEMA = "codex-upgrade-candidate-revision/v1"
+CANDIDATE_REVISION_COMMIT_SCHEMA = "codex-upgrade-candidate-revision-commit/v1"
+CANDIDATE_REVISION_SEAL_SCHEMA = "codex-upgrade-candidate-revision-seal/v1"
+CANDIDATE_INVALIDATION_SCHEMA = "codex-upgrade-candidate-invalidation/v1"
+CANDIDATE_INVALIDATION_DIAGNOSIS_SCHEMA = "candidate-invalidation-diagnosis/v1"
+CANDIDATE_INVALIDATION_CONCLUSION = "candidate_source_change_required"
+IDENTITY_SNAPSHOT_SOURCES = ("build_receipt", "attempt_candidate_identity", "candidate_source")
 VC_ACTION_PLAN_SCHEMA = "codex-upgrade-vc-action-plan/v1"
 INTERRUPTED_RECOVERY_CONTRACT_SCHEMA = (
     "codex-upgrade-interrupted-recovery-contract/v1"
@@ -449,8 +460,13 @@ def build_vc_batch(
     actions: Sequence[Mapping[str, Any]],
     compiled_at_utc: str,
     must_start_by_utc: str,
+    candidate_revision: int | None = None,
+    candidate_id: str | None = None,
 ) -> dict[str, Any]:
-    """从前序 checkpoint 编译同一 Campaign 的一个不可变执行批次。"""
+    """从前序 checkpoint 编译同一 Campaign 的一个不可变执行批次（v2）。
+
+    候选级阶段（VC-4～VC-6）必须绑定当前 revision 与其候选；Campaign 级阶段两字段为 null。
+    """
 
     plan = validate_campaign_plan(campaign_plan)
     payload = {
@@ -470,9 +486,24 @@ def build_vc_batch(
         "compiled_at_utc": _timestamp(compiled_at_utc, "compiled_at_utc"),
         "must_start_by_utc": _timestamp(must_start_by_utc, "must_start_by_utc"),
         "original_deadline_at_utc": plan["original_deadline_at_utc"],
+        "candidate_revision": candidate_revision,
+        "candidate_id": candidate_id,
     }
     payload["batch_sha256"] = digest(payload)
     return validate_vc_batch(payload, plan)
+
+
+def _validate_batch_candidate_binding(payload: Mapping[str, Any], phase: str, label: str) -> None:
+    """候选级阶段必须绑定正整数 revision 与候选 ID；Campaign 级阶段两者必须为 null。"""
+
+    revision = payload.get("candidate_revision")
+    candidate_id = payload.get("candidate_id")
+    if phase in CANDIDATE_PHASES:
+        if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:
+            raise VCArtifactError(f"{label} 候选级阶段必须绑定正整数 candidate_revision")
+        _safe_id(candidate_id, f"{label} candidate_id")
+    elif revision is not None or candidate_id is not None:
+        raise VCArtifactError(f"{label} Campaign 级阶段不得绑定 candidate_revision／candidate_id")
 
 
 def validate_vc_batch(
@@ -495,14 +526,22 @@ def validate_vc_batch(
         "original_deadline_at_utc",
         "batch_sha256",
     }
-    if not isinstance(value, Mapping) or set(value) != required:
+    if not isinstance(value, Mapping):
+        raise VCArtifactError("VC batch 字段不闭合")
+    schema_version = value.get("schema_version")
+    if schema_version == VC_BATCH_SCHEMA:
+        required = required | {"candidate_revision", "candidate_id"}
+    elif schema_version != VC_BATCH_LEGACY_SCHEMA:
+        raise VCArtifactError("VC batch schema、阶段、序号或身份非法")
+    if set(value) != required:
         raise VCArtifactError("VC batch 字段不闭合")
     payload = dict(value)
     sequence = payload.get("sequence")
     phase = payload.get("phase")
+    if schema_version == VC_BATCH_SCHEMA:
+        _validate_batch_candidate_binding(payload, str(phase), "VC batch")
     if (
-        payload.get("schema_version") != VC_BATCH_SCHEMA
-        or phase not in VC_PHASES[1:]
+        phase not in VC_PHASES[1:]
         or not isinstance(sequence, int)
         or isinstance(sequence, bool)
         or sequence < 1
@@ -904,6 +943,478 @@ def validate_parent_start_failure(value: Any) -> dict[str, Any]:
         raise VCArtifactError("父启动失败 error_type 非法")
     _timestamp(payload.get("recorded_at_utc"), "父启动失败 recorded_at_utc")
     _self_digest(payload, "diagnostic_sha256", "父启动失败诊断")
+    return payload
+
+
+# ---------------------------------------------------------------------------
+# 改造 2：候选级 revision 的四种控制制品（revision.json／COMMIT／seal.json／invalidation.json）
+# ---------------------------------------------------------------------------
+
+
+def _optional_sha256(value: Any, label: str) -> str | None:
+    return None if value is None else _sha256(value, label)
+
+
+def _optional_safe_id(value: Any, label: str) -> str | None:
+    return None if value is None else _safe_id(value, label)
+
+
+def _identity_snapshot(value: Any, label: str) -> dict[str, Any]:
+    """旧候选身份快照：git_commit 与 source_tree_sha256 至少一项必须取得。"""
+
+    fields = {"git_commit", "source_tree_sha256", "image_id", "build_receipt_sha256", "snapshot_sources"}
+    if not isinstance(value, Mapping) or set(value) != fields:
+        raise VCArtifactError(f"{label} 身份快照字段不闭合")
+    commit = value.get("git_commit")
+    if commit is not None and (not isinstance(commit, str) or not re.fullmatch(r"^[0-9a-f]{40}$", commit)):
+        raise VCArtifactError(f"{label}.git_commit 非法")
+    tree = _optional_sha256(value.get("source_tree_sha256"), f"{label}.source_tree_sha256")
+    image = value.get("image_id")
+    if image is not None and (not isinstance(image, str) or not image or len(image) > 256):
+        raise VCArtifactError(f"{label}.image_id 非法")
+    build = _optional_sha256(value.get("build_receipt_sha256"), f"{label}.build_receipt_sha256")
+    sources = value.get("snapshot_sources")
+    if (
+        not isinstance(sources, list)
+        or not sources
+        or any(item not in IDENTITY_SNAPSHOT_SOURCES for item in sources)
+        or len(sources) != len(set(sources))
+    ):
+        raise VCArtifactError(f"{label}.snapshot_sources 非法")
+    if commit is None and tree is None:
+        raise VCArtifactError(f"{label} 身份快照必须至少含 git_commit 或 source_tree_sha256")
+    return {
+        "git_commit": commit,
+        "source_tree_sha256": tree,
+        "image_id": image,
+        "build_receipt_sha256": build,
+        "snapshot_sources": list(sources),
+    }
+
+
+def build_candidate_revision(
+    *,
+    campaign_id: str,
+    revision: int,
+    candidate_id: str,
+    opened_at_utc: str,
+    previous_revision_sha256: str | None,
+    vc3_checkpoint: Mapping[str, Any],
+    vc3_stage_receipt: Mapping[str, Any],
+    supersedes: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """revision.json：一次候选级 revision 的登记事实（write-once，COMMIT 前是 pending）。"""
+
+    payload = {
+        "schema_version": CANDIDATE_REVISION_SCHEMA,
+        "campaign_id": _safe_id(campaign_id, "campaign_id"),
+        "revision": _positive_int(revision, "revision"),
+        "candidate_id": _safe_id(candidate_id, "candidate_id"),
+        "opened_at_utc": _timestamp(opened_at_utc, "opened_at_utc"),
+        "previous_revision_sha256": _optional_sha256(previous_revision_sha256, "previous_revision_sha256"),
+        "vc3_checkpoint": _checkpoint_reference(vc3_checkpoint, "vc3_checkpoint"),
+        "vc3_stage_receipt": _binding(vc3_stage_receipt, "vc3_stage_receipt"),
+        "supersedes": dict(supersedes) if supersedes is not None else None,
+    }
+    payload["record_sha256"] = digest(payload)
+    return validate_candidate_revision(payload)
+
+
+def validate_candidate_revision(value: Any) -> dict[str, Any]:
+    required = {
+        "schema_version",
+        "campaign_id",
+        "revision",
+        "candidate_id",
+        "opened_at_utc",
+        "previous_revision_sha256",
+        "vc3_checkpoint",
+        "vc3_stage_receipt",
+        "supersedes",
+        "record_sha256",
+    }
+    if not isinstance(value, Mapping) or set(value) != required:
+        raise VCArtifactError("候选 revision 记录字段不闭合")
+    payload = dict(value)
+    if payload.get("schema_version") != CANDIDATE_REVISION_SCHEMA:
+        raise VCArtifactError("候选 revision 记录 schema_version 非法")
+    _safe_id(payload.get("campaign_id"), "revision campaign_id")
+    revision = _positive_int(payload.get("revision"), "revision")
+    _safe_id(payload.get("candidate_id"), "revision candidate_id")
+    _timestamp(payload.get("opened_at_utc"), "revision opened_at_utc")
+    previous = _optional_sha256(payload.get("previous_revision_sha256"), "previous_revision_sha256")
+    checkpoint = _checkpoint_reference(payload.get("vc3_checkpoint"), "vc3_checkpoint")
+    if checkpoint["phase"] != "VC-3":
+        raise VCArtifactError("候选 revision 必须绑定 Campaign 级 VC-3 checkpoint")
+    _binding(payload.get("vc3_stage_receipt"), "vc3_stage_receipt")
+    supersedes = payload.get("supersedes")
+    if revision == 1:
+        if supersedes is not None or previous is not None:
+            raise VCArtifactError("r1 不取代任何 revision")
+    else:
+        if not isinstance(supersedes, Mapping) or set(supersedes) != {
+            "revision",
+            "candidate_id",
+            "invalidation_receipt",
+            "candidate_invalidated_event_sha256",
+        }:
+            raise VCArtifactError("r≥2 必须登记被取代的 revision")
+        if supersedes.get("revision") != revision - 1:
+            raise VCArtifactError("被取代的 revision 必须是直接前序")
+        _safe_id(supersedes.get("candidate_id"), "supersedes.candidate_id")
+        if supersedes.get("candidate_id") == payload.get("candidate_id"):
+            raise VCArtifactError("新 revision 的候选不得与被取代候选同名")
+        _binding(supersedes.get("invalidation_receipt"), "supersedes.invalidation_receipt")
+        _sha256(supersedes.get("candidate_invalidated_event_sha256"), "supersedes.candidate_invalidated_event_sha256")
+        if previous is None:
+            raise VCArtifactError("r≥2 必须绑定前一 revision 的 record_sha256")
+    _self_digest(payload, "record_sha256", "候选 revision 记录")
+    return payload
+
+
+def build_candidate_revision_commit(
+    *,
+    campaign_id: str,
+    revision: int,
+    candidate_id: str,
+    record_sha256: str,
+    committed_at_utc: str,
+) -> dict[str, Any]:
+    """revision 目录 COMMIT：目录有 COMMIT = pending，账本 stage_revision 引用其摘要 = active。"""
+
+    payload = {
+        "schema_version": CANDIDATE_REVISION_COMMIT_SCHEMA,
+        "campaign_id": _safe_id(campaign_id, "campaign_id"),
+        "revision": _positive_int(revision, "revision"),
+        "candidate_id": _safe_id(candidate_id, "candidate_id"),
+        "record_sha256": _sha256(record_sha256, "record_sha256"),
+        "committed_at_utc": _timestamp(committed_at_utc, "committed_at_utc"),
+    }
+    payload["commit_sha256"] = digest(payload)
+    return validate_candidate_revision_commit(payload)
+
+
+def validate_candidate_revision_commit(value: Any) -> dict[str, Any]:
+    required = {
+        "schema_version",
+        "campaign_id",
+        "revision",
+        "candidate_id",
+        "record_sha256",
+        "committed_at_utc",
+        "commit_sha256",
+    }
+    if not isinstance(value, Mapping) or set(value) != required:
+        raise VCArtifactError("候选 revision COMMIT 字段不闭合")
+    payload = dict(value)
+    if payload.get("schema_version") != CANDIDATE_REVISION_COMMIT_SCHEMA:
+        raise VCArtifactError("候选 revision COMMIT schema_version 非法")
+    _safe_id(payload.get("campaign_id"), "revision COMMIT campaign_id")
+    _positive_int(payload.get("revision"), "revision COMMIT revision")
+    _safe_id(payload.get("candidate_id"), "revision COMMIT candidate_id")
+    _sha256(payload.get("record_sha256"), "revision COMMIT record_sha256")
+    _timestamp(payload.get("committed_at_utc"), "revision COMMIT committed_at_utc")
+    _self_digest(payload, "commit_sha256", "候选 revision COMMIT")
+    return payload
+
+
+def build_candidate_revision_seal(
+    *,
+    campaign_id: str,
+    revision: int,
+    candidate_id: str,
+    candidate_commit: str | None,
+    source_tree_sha256: str,
+    image_id: str | None,
+    build_receipt_sha256: str,
+    vc3_stage_receipt_sha256: str,
+    superseded: Mapping[str, Any] | None,
+    sealed_at_utc: str,
+) -> dict[str, Any]:
+    """seal.json：revision-seal 的结论——新候选最终身份、VC-3 字节一致与同一性变化证明。"""
+
+    superseded_payload: dict[str, Any] | None = None
+    identity_change: dict[str, Any] | None = None
+    if superseded is not None:
+        superseded_payload = {
+            "revision": _positive_int(superseded.get("revision"), "superseded.revision"),
+            "candidate_id": _safe_id(superseded.get("candidate_id"), "superseded.candidate_id"),
+            "git_commit": superseded.get("git_commit"),
+            "source_tree_sha256": _optional_sha256(superseded.get("source_tree_sha256"), "superseded.source_tree_sha256"),
+            "image_id": superseded.get("image_id"),
+        }
+        identity_change = {
+            "git_commit_changed": (
+                None
+                if superseded_payload["git_commit"] is None or candidate_commit is None
+                else superseded_payload["git_commit"] != candidate_commit
+            ),
+            "source_tree_changed": (
+                None
+                if superseded_payload["source_tree_sha256"] is None
+                else superseded_payload["source_tree_sha256"] != source_tree_sha256
+            ),
+            "image_changed": (
+                None
+                if superseded_payload["image_id"] is None or image_id is None
+                else superseded_payload["image_id"] != image_id
+            ),
+        }
+    payload = {
+        "schema_version": CANDIDATE_REVISION_SEAL_SCHEMA,
+        "campaign_id": _safe_id(campaign_id, "campaign_id"),
+        "revision": _positive_int(revision, "revision"),
+        "candidate_id": _safe_id(candidate_id, "candidate_id"),
+        "candidate_commit": candidate_commit,
+        "source_tree_sha256": _sha256(source_tree_sha256, "source_tree_sha256"),
+        "image_id": image_id,
+        "build_receipt_sha256": _sha256(build_receipt_sha256, "build_receipt_sha256"),
+        "vc3_stage_receipt_sha256": _sha256(vc3_stage_receipt_sha256, "vc3_stage_receipt_sha256"),
+        "superseded": superseded_payload,
+        "identity_change": identity_change,
+        "sealed_at_utc": _timestamp(sealed_at_utc, "sealed_at_utc"),
+    }
+    payload["seal_sha256"] = digest(payload)
+    return validate_candidate_revision_seal(payload)
+
+
+def validate_candidate_revision_seal(value: Any) -> dict[str, Any]:
+    required = {
+        "schema_version",
+        "campaign_id",
+        "revision",
+        "candidate_id",
+        "candidate_commit",
+        "source_tree_sha256",
+        "image_id",
+        "build_receipt_sha256",
+        "vc3_stage_receipt_sha256",
+        "superseded",
+        "identity_change",
+        "sealed_at_utc",
+        "seal_sha256",
+    }
+    if not isinstance(value, Mapping) or set(value) != required:
+        raise VCArtifactError("候选 revision seal 字段不闭合")
+    payload = dict(value)
+    if payload.get("schema_version") != CANDIDATE_REVISION_SEAL_SCHEMA:
+        raise VCArtifactError("候选 revision seal schema_version 非法")
+    _safe_id(payload.get("campaign_id"), "seal campaign_id")
+    revision = _positive_int(payload.get("revision"), "seal revision")
+    _safe_id(payload.get("candidate_id"), "seal candidate_id")
+    commit = payload.get("candidate_commit")
+    if commit is not None and (not isinstance(commit, str) or not re.fullmatch(r"^[0-9a-f]{40}$", commit)):
+        raise VCArtifactError("seal candidate_commit 非法")
+    _sha256(payload.get("source_tree_sha256"), "seal source_tree_sha256")
+    image = payload.get("image_id")
+    if image is not None and (not isinstance(image, str) or not image):
+        raise VCArtifactError("seal image_id 非法")
+    _sha256(payload.get("build_receipt_sha256"), "seal build_receipt_sha256")
+    _sha256(payload.get("vc3_stage_receipt_sha256"), "seal vc3_stage_receipt_sha256")
+    superseded = payload.get("superseded")
+    change = payload.get("identity_change")
+    if revision == 1:
+        if superseded is not None or change is not None:
+            raise VCArtifactError("r1 seal 不得携带被取代候选")
+    else:
+        if not isinstance(superseded, Mapping) or set(superseded) != {
+            "revision",
+            "candidate_id",
+            "git_commit",
+            "source_tree_sha256",
+            "image_id",
+        }:
+            raise VCArtifactError("r≥2 seal 必须登记被取代候选身份")
+        if superseded.get("revision") != revision - 1:
+            raise VCArtifactError("seal 被取代的 revision 必须是直接前序")
+        if not isinstance(change, Mapping) or set(change) != {
+            "git_commit_changed",
+            "source_tree_changed",
+            "image_changed",
+        }:
+            raise VCArtifactError("r≥2 seal 必须登记同一性变化证明")
+        comparable = [flag for flag in (change.get("git_commit_changed"), change.get("source_tree_changed")) if flag is not None]
+        if not comparable or not any(comparable):
+            raise VCArtifactError("被取代候选的 git_commit／source_tree_sha256 全部相同或不可比：不是新候选")
+    _timestamp(payload.get("sealed_at_utc"), "seal sealed_at_utc")
+    _self_digest(payload, "seal_sha256", "候选 revision seal")
+    return payload
+
+
+def candidate_invalidation_review_sha256(draft: Mapping[str, Any]) -> str:
+    """preview 输出的可复核摘要：只散列稳定字段，不含审核时间与自摘要。"""
+
+    stable = {
+        key: draft[key]
+        for key in (
+            "campaign_id",
+            "campaign_manifest_sha256",
+            "candidate_id",
+            "revision",
+            "reviewer",
+            "conclusion",
+            "evidence_refs",
+            "project_ledger_head_sha256",
+            "project_ledger_head_sequence",
+            "root_cause_id",
+            "identity_snapshot",
+        )
+    }
+    return digest(stable)
+
+
+def build_candidate_invalidation_diagnosis(
+    *,
+    campaign_id: str,
+    campaign_manifest_sha256: str,
+    candidate_id: str,
+    revision: int,
+    reviewer: str,
+    reviewed_at_utc: str,
+    evidence_refs: Sequence[Mapping[str, Any]],
+    project_ledger_head_sha256: str,
+    project_ledger_head_sequence: int,
+    root_cause_id: str,
+    identity_snapshot: Mapping[str, Any],
+) -> dict[str, Any]:
+    """工具签发的候选作废诊断收据：绑定当时总账 head 与旧候选身份快照。"""
+
+    if not isinstance(reviewer, str) or not reviewer.strip() or len(reviewer) > 128:
+        raise VCArtifactError("reviewer 非法")
+    if isinstance(project_ledger_head_sequence, bool) or not isinstance(project_ledger_head_sequence, int) or project_ledger_head_sequence < 0:
+        raise VCArtifactError("project_ledger_head_sequence 非法")
+    refs = [_binding(item, "evidence_refs") for item in evidence_refs]
+    if [item["path"] for item in refs] != sorted(item["path"] for item in refs) or len({item["path"] for item in refs}) != len(refs):
+        raise VCArtifactError("evidence_refs 必须按 path 唯一排序")
+    if not isinstance(root_cause_id, str) or not _ROOT_CAUSE_ID_RE.fullmatch(root_cause_id):
+        raise VCArtifactError("root_cause_id 非法")
+    payload = {
+        "schema_version": CANDIDATE_INVALIDATION_DIAGNOSIS_SCHEMA,
+        "campaign_id": _safe_id(campaign_id, "campaign_id"),
+        "campaign_manifest_sha256": _sha256(campaign_manifest_sha256, "campaign_manifest_sha256"),
+        "candidate_id": _safe_id(candidate_id, "candidate_id"),
+        "revision": _positive_int(revision, "revision"),
+        "reviewer": reviewer.strip(),
+        "reviewed_at_utc": _timestamp(reviewed_at_utc, "reviewed_at_utc"),
+        "conclusion": CANDIDATE_INVALIDATION_CONCLUSION,
+        "evidence_refs": refs,
+        "project_ledger_head_sha256": _sha256(project_ledger_head_sha256, "project_ledger_head_sha256"),
+        "project_ledger_head_sequence": project_ledger_head_sequence,
+        "root_cause_id": root_cause_id,
+        "identity_snapshot": _identity_snapshot(identity_snapshot, "诊断"),
+    }
+    payload["review_sha256"] = candidate_invalidation_review_sha256(payload)
+    payload["receipt_sha256"] = digest(payload)
+    return validate_candidate_invalidation_diagnosis(payload)
+
+
+def validate_candidate_invalidation_diagnosis(value: Any) -> dict[str, Any]:
+    required = {
+        "schema_version",
+        "campaign_id",
+        "campaign_manifest_sha256",
+        "candidate_id",
+        "revision",
+        "reviewer",
+        "reviewed_at_utc",
+        "conclusion",
+        "evidence_refs",
+        "project_ledger_head_sha256",
+        "project_ledger_head_sequence",
+        "root_cause_id",
+        "identity_snapshot",
+        "review_sha256",
+        "receipt_sha256",
+    }
+    if not isinstance(value, Mapping) or set(value) != required:
+        raise VCArtifactError("候选作废诊断收据字段不闭合")
+    payload = dict(value)
+    if payload.get("schema_version") != CANDIDATE_INVALIDATION_DIAGNOSIS_SCHEMA:
+        raise VCArtifactError("候选作废诊断收据 schema_version 非法")
+    if payload.get("conclusion") != CANDIDATE_INVALIDATION_CONCLUSION:
+        raise VCArtifactError("候选作废诊断结论非法")
+    _safe_id(payload.get("campaign_id"), "诊断 campaign_id")
+    _sha256(payload.get("campaign_manifest_sha256"), "诊断 campaign_manifest_sha256")
+    _safe_id(payload.get("candidate_id"), "诊断 candidate_id")
+    _positive_int(payload.get("revision"), "诊断 revision")
+    reviewer = payload.get("reviewer")
+    if not isinstance(reviewer, str) or not reviewer.strip():
+        raise VCArtifactError("诊断 reviewer 非法")
+    _timestamp(payload.get("reviewed_at_utc"), "诊断 reviewed_at_utc")
+    refs = payload.get("evidence_refs")
+    if not isinstance(refs, list):
+        raise VCArtifactError("诊断 evidence_refs 必须是数组")
+    for item in refs:
+        _binding(item, "诊断 evidence_refs")
+    _sha256(payload.get("project_ledger_head_sha256"), "诊断 project_ledger_head_sha256")
+    sequence = payload.get("project_ledger_head_sequence")
+    if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 0:
+        raise VCArtifactError("诊断 project_ledger_head_sequence 非法")
+    root_cause_id = payload.get("root_cause_id")
+    if not isinstance(root_cause_id, str) or not _ROOT_CAUSE_ID_RE.fullmatch(root_cause_id):
+        raise VCArtifactError("诊断 root_cause_id 非法")
+    _identity_snapshot(payload.get("identity_snapshot"), "诊断")
+    if payload.get("review_sha256") != candidate_invalidation_review_sha256(payload):
+        raise VCArtifactError("诊断 review_sha256 与稳定字段不一致")
+    _self_digest(payload, "receipt_sha256", "候选作废诊断收据")
+    return payload
+
+
+def build_candidate_invalidation(
+    *,
+    campaign_id: str,
+    candidate_id: str,
+    revision: int,
+    diagnosis: Mapping[str, Any],
+    recorded_at_utc: str,
+) -> dict[str, Any]:
+    """candidates/<id>/invalidation.json：绑定诊断收据与旧候选身份快照（write-once）。"""
+
+    receipt = validate_candidate_invalidation_diagnosis(diagnosis)
+    if receipt["campaign_id"] != campaign_id or receipt["candidate_id"] != candidate_id or receipt["revision"] != revision:
+        raise VCArtifactError("诊断收据与作废对象身份不一致")
+    payload = {
+        "schema_version": CANDIDATE_INVALIDATION_SCHEMA,
+        "campaign_id": _safe_id(campaign_id, "campaign_id"),
+        "candidate_id": _safe_id(candidate_id, "candidate_id"),
+        "revision": _positive_int(revision, "revision"),
+        "diagnosis": receipt,
+        "identity_snapshot": dict(receipt["identity_snapshot"]),
+        "root_cause_id": receipt["root_cause_id"],
+        "recorded_at_utc": _timestamp(recorded_at_utc, "recorded_at_utc"),
+    }
+    payload["receipt_sha256"] = digest(payload)
+    return validate_candidate_invalidation(payload)
+
+
+def validate_candidate_invalidation(value: Any) -> dict[str, Any]:
+    required = {
+        "schema_version",
+        "campaign_id",
+        "candidate_id",
+        "revision",
+        "diagnosis",
+        "identity_snapshot",
+        "root_cause_id",
+        "recorded_at_utc",
+        "receipt_sha256",
+    }
+    if not isinstance(value, Mapping) or set(value) != required:
+        raise VCArtifactError("候选作废记录字段不闭合")
+    payload = dict(value)
+    if payload.get("schema_version") != CANDIDATE_INVALIDATION_SCHEMA:
+        raise VCArtifactError("候选作废记录 schema_version 非法")
+    diagnosis = validate_candidate_invalidation_diagnosis(payload.get("diagnosis"))
+    if (
+        diagnosis["campaign_id"] != payload.get("campaign_id")
+        or diagnosis["candidate_id"] != payload.get("candidate_id")
+        or diagnosis["revision"] != payload.get("revision")
+        or diagnosis["root_cause_id"] != payload.get("root_cause_id")
+        or dict(diagnosis["identity_snapshot"]) != payload.get("identity_snapshot")
+    ):
+        raise VCArtifactError("候选作废记录与诊断收据不一致")
+    _timestamp(payload.get("recorded_at_utc"), "作废记录 recorded_at_utc")
+    _self_digest(payload, "receipt_sha256", "候选作废记录")
     return payload
 
 

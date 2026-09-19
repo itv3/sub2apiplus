@@ -146,7 +146,14 @@ class StagingSupervisorTests(unittest.TestCase):
         )
 
     def _v2_manifest(self, plan: dict[str, object], *, sequence: int = 1, actions: list[dict[str, object]] | None = None) -> dict[str, object]:
+        # 改造 2：staging 模型清单携带（Campaign 级为 null 的）候选绑定字段，legacy 不含。
+        binding: dict[str, object] = (
+            {"candidate_revision": None, "candidate_id": None}
+            if artifacts.campaign_plan_batch_model(plan) == "staging"
+            else {}
+        )
         return supervisor.build_batched_campaign_run_manifest(
+            **binding,
             campaign_id=CAMPAIGN_ID,
             campaign_plan_sha256=str(plan["plan_sha256"]),
             batch_id=f"vc-2-{sequence:04d}",

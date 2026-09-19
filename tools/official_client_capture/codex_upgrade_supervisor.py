@@ -5157,6 +5157,23 @@ def _validate_vc5_seal_rehearsal_gate(
         raise SupervisorError(f"VC-5 seal 预演门禁未通过：{error}") from error
 
 
+def _validate_manifest_candidate_binding(payload: Mapping[str, Any], phase: str) -> None:
+    """候选级阶段（VC-4～VC-6）两字段非空且合法；Campaign 级阶段必须都为 null。"""
+
+    revision = payload.get("candidate_revision")
+    candidate_id = payload.get("candidate_id")
+    if phase in vc_artifacts.CANDIDATE_PHASES:
+        if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:
+            raise SupervisorError("候选级阶段的 campaign-run 清单必须绑定正整数 candidate_revision。")
+        _safe_id(candidate_id, "candidate_id")
+    elif revision is not None or candidate_id is not None:
+        raise SupervisorError("Campaign 级阶段的 campaign-run 清单不得绑定 candidate_revision／candidate_id。")
+
+
+def manifest_has_candidate_binding(manifest: Mapping[str, Any]) -> bool:
+    return "candidate_revision" in manifest and "candidate_id" in manifest
+
+
 def _campaign_run_manifest(
     path: Path,
     *,
@@ -5209,7 +5226,8 @@ def _campaign_run_manifest(
                     "recovery_predecessor",
                 }
             )
-        optional = set()
+        # 改造 2：候选级绑定两字段成对可选；是否必须存在由派发时的批次模型决定。
+        optional = {"candidate_revision", "candidate_id"}
     else:
         raise SupervisorError("Campaign run manifest schema_version 不受支持。")
     if (
@@ -5219,6 +5237,10 @@ def _campaign_run_manifest(
         raise SupervisorError("Campaign run manifest 字段或 schema 不闭合。")
     campaign_id = _safe_id(payload.get("campaign_id"), "campaign_id")
     phase = _safe_id(payload.get("phase"), "phase", maximum=32)
+    if ("candidate_revision" in payload) != ("candidate_id" in payload):
+        raise SupervisorError("Campaign run manifest 的 candidate_revision 与 candidate_id 必须成对出现。")
+    if "candidate_revision" in payload:
+        _validate_manifest_candidate_binding(payload, phase)
     deadline_seconds: float | None = None
     original_deadline_at_utc: str | None = None
     original_deadline_at_epoch: float | None = None
@@ -5551,6 +5573,10 @@ def _campaign_run_manifest(
                 "original_deadline_at_utc": original_deadline_at_utc,
             }
         )
+        if "candidate_revision" in payload:
+            # 改造 2：候选级绑定原样保留（Campaign 级为 null），派发时按批次模型判定存在性。
+            normalized["candidate_revision"] = payload["candidate_revision"]
+            normalized["candidate_id"] = payload["candidate_id"]
         if schema_version == CAMPAIGN_RUN_RECOVERY_SCHEMA:
             normalized.update(
                 {
@@ -5646,9 +5672,17 @@ def build_batched_campaign_run_manifest(
     actions: Sequence[Mapping[str, Any]],
     execute_items: Sequence[str],
     reuse_items: Sequence[str],
+    **candidate_binding: Any,
 ) -> dict[str, Any]:
-    """把已冻结 VC batch 编译成使用绝对总截止时间的 v2 队列。"""
+    """把已冻结 VC batch 编译成使用绝对总截止时间的 v2 队列。
 
+    改造 2：staging 模型清单以关键字 ``candidate_revision``／``candidate_id`` 携带候选级
+    绑定（Campaign 级阶段为 null）；legacy 模型不传，清单里就没有这两个字段。
+    """
+
+    unknown = set(candidate_binding) - {"candidate_revision", "candidate_id"}
+    if unknown:
+        raise SupervisorError(f"campaign-run 清单不接受字段：{sorted(unknown)}")
     payload = {
         "schema_version": CAMPAIGN_RUN_BATCHED_SCHEMA,
         "campaign_id": campaign_id,
@@ -5664,6 +5698,11 @@ def build_batched_campaign_run_manifest(
         "execute_items": list(execute_items),
         "reuse_items": list(reuse_items),
     }
+    if candidate_binding:
+        if set(candidate_binding) != {"candidate_revision", "candidate_id"}:
+            raise SupervisorError("candidate_revision 与 candidate_id 必须同时给出。")
+        payload["candidate_revision"] = candidate_binding["candidate_revision"]
+        payload["candidate_id"] = candidate_binding["candidate_id"]
     # 使用与 CLI 完全相同的校验器，避免生成器与执行器对字段或闭集理解不同。
     descriptor, temporary_name = tempfile.mkstemp(prefix=".campaign-run-v2-", suffix=".json")
     temporary = Path(temporary_name)
@@ -6191,6 +6230,106 @@ def _validate_batched_environment_redispatch_successor(
     )
 
 
+def _validate_candidate_revision_successor(
+    prior_state: Mapping[str, Any],
+    prior_manifest: Mapping[str, Any],
+    prior_dir: Path,
+    successor_manifest: Mapping[str, Any],
+    *,
+    campaign_dir: Path | None,
+) -> bool:
+    """改造 2：候选级动作失败 → 候选作废 → 新 revision 的 VC-4 首批作为失败批次的后继。
+
+    入口条件（不满足返回 ``False``，交给其他协议）：前序是候选级阶段的 ``action-failed``
+    终态且清单带候选绑定；后继是 VC-4、``candidate_revision`` 更大且候选不同。入口成立后
+    任何绑定缺失都失败关闭：账本必须依次存在对旧候选的 ``candidate_invalidated`` 与激活
+    新 revision 的 ``stage_revision``（supersedes 指向旧 revision），Campaign 内必须有该
+    失败父 run 的对账收据与旧候选的 ``invalidation.json``。
+    """
+
+    if prior_state.get("state") != "failed":
+        return False
+    stop_path = prior_dir / "stop-receipt.json"
+    if stop_path.is_symlink() or not stop_path.is_file():
+        return False
+    reason = _read_json(stop_path).get("reason")
+    if not isinstance(reason, str) or not reason.startswith("action-failed:"):
+        return False
+    prior_phase = str(prior_manifest.get("phase", ""))
+    prior_revision = prior_manifest.get("candidate_revision")
+    prior_candidate = prior_manifest.get("candidate_id")
+    successor_revision = successor_manifest.get("candidate_revision")
+    successor_candidate = successor_manifest.get("candidate_id")
+    if (
+        prior_phase not in vc_artifacts.CANDIDATE_PHASES
+        or not isinstance(prior_revision, int)
+        or isinstance(prior_revision, bool)
+        or not isinstance(prior_candidate, str)
+        or successor_manifest.get("phase") != "VC-4"
+        or not isinstance(successor_revision, int)
+        or isinstance(successor_revision, bool)
+        or successor_revision <= prior_revision
+        or not isinstance(successor_candidate, str)
+        or successor_candidate == prior_candidate
+    ):
+        return False
+    label = "候选 revision 后继"
+    if campaign_dir is None:
+        raise SupervisorError(f"{label}必须绑定 Campaign 目录。")
+    try:
+        campaign_dir = Path(campaign_dir).resolve(strict=True)
+    except OSError as error:
+        raise SupervisorError(f"{label}的 Campaign 目录不存在。") from error
+    campaign = _read_json(campaign_dir / "campaign.json")
+    controls = campaign.get("control_receipts")
+    timing_control = controls.get("upgrade_timing") if isinstance(controls, Mapping) else None
+    if (
+        campaign.get("campaign_id") != prior_manifest.get("campaign_id")
+        or not isinstance(timing_control, Mapping)
+        or not isinstance(timing_control.get("ledger_dir"), str)
+    ):
+        raise SupervisorError(f"{label}缺少 Campaign 时间账本绑定。")
+    ledger_dir = Path(str(timing_control["ledger_dir"]))
+    if not ledger_dir.is_absolute() or ledger_dir.is_symlink() or not ledger_dir.is_dir():
+        raise SupervisorError(f"{label}的时间账本目录不可信。")
+    try:
+        raw_events = timing_ledger._load_events(ledger_dir.resolve(strict=True))
+    except (OSError, timing_ledger.TimingLedgerError) as error:
+        raise SupervisorError(f"{label}无法重放时间账本：{error}") from error
+    invalidated_index: int | None = None
+    revision_index: int | None = None
+    for index, (event, _raw) in enumerate(raw_events):
+        if (
+            event.get("event_type") == "candidate_invalidated"
+            and event.get("candidate_id") == prior_candidate
+            and event.get("revision") == prior_revision
+        ):
+            invalidated_index = index
+        if (
+            event.get("event_type") == "stage_revision"
+            and event.get("revision") == successor_revision
+            and event.get("candidate_id") == successor_candidate
+            and event.get("supersedes_revision") == prior_revision
+        ):
+            revision_index = index
+    if invalidated_index is None or revision_index is None or revision_index < invalidated_index:
+        raise SupervisorError(
+            f"{label}尚未形成：账本缺少对候选 {prior_candidate}（r{prior_revision}）的 candidate_invalidated "
+            f"或其后激活 r{successor_revision} 的 stage_revision。"
+        )
+    reconciliation = (
+        campaign_dir / "control" / "reconciliation" / f"run-{prior_dir.name}" / "supervisor-run-reconciliation.json"
+    )
+    if reconciliation.is_symlink() or not reconciliation.is_file():
+        raise SupervisorError(f"{label}缺少失败父 run {prior_dir.name} 的对账收据。")
+    invalidation = campaign_dir / "candidates" / prior_candidate / "invalidation.json"
+    if invalidation.is_symlink() or not invalidation.is_file():
+        raise SupervisorError(f"{label}缺少候选 {prior_candidate} 的 invalidation.json。")
+    if _read_json(invalidation).get("revision") != prior_revision:
+        raise SupervisorError(f"{label}的 invalidation.json 未绑定 r{prior_revision}。")
+    return True
+
+
 def _validate_reconciled_redispatch_binding(
     prior_state: Mapping[str, Any],
     prior_manifest: Mapping[str, Any],
@@ -6674,6 +6813,18 @@ def _validate_batched_campaign_history(
             )
         ):
             continue
+        if (
+            prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
+            and successor_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
+            and _validate_candidate_revision_successor(
+                state,
+                prior_manifest,
+                _run_dir,
+                successor_manifest,
+                campaign_dir=campaign_dir,
+            )
+        ):
+            continue
         if prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA:
             raise SupervisorError("失败批次只能由唯一直接 v3 恢复后继承接。")
         raise SupervisorError("失败批次没有被唯一允许的直接恢复后继承接。")
@@ -6746,6 +6897,57 @@ def _timing_closeout_lock(root: Path) -> Iterator[None]:
         yield
     finally:
         os.close(descriptor)
+
+
+PERMANENT_ACTION_FAILURE_CLASSES = frozenset(
+    {
+        "identity-drift",
+        "policy-drift",
+        "environment-contaminated",
+        "restoration-failed",
+        "deadline-expired",
+        "request-budget-exhausted",
+        "root-cause-limit",
+        "evidence-integrity",
+    }
+)
+
+
+def _candidate_failure_hits_permanent_condition(
+    campaign_dir: Path,
+    ledger_summary: Mapping[str, Any],
+    *,
+    failure_class: str,
+) -> bool:
+    """改造 2 三分支的"永久条件"：总账 blocked／账务未决／绝对截止／预算／根因上限，
+    账本 deadline（stop_required），以及诊断给出的身份或环境类不可恢复分类。"""
+
+    if failure_class in PERMANENT_ACTION_FAILURE_CLASSES:
+        return True
+    if ledger_summary.get("status") in {"stop_required", "stopped", "complete"}:
+        return True
+    root = project_ledger.find_project_ledger(Path(campaign_dir))
+    if root is None:
+        return False
+    try:
+        head = project_ledger.replay_head(root)
+        with project_ledger.project_lock(root):
+            plan, _raw = project_ledger._load_plan(root)
+    except project_ledger.ProjectLedgerError as error:
+        raise SupervisorError(f"项目总账重放失败：{error}") from error
+    if head.get("blocked") or head.get("unresolved_operation_ids"):
+        return True
+    remaining = head.get("remaining_live_requests")
+    if remaining is not None and int(remaining) <= 0:
+        return True
+    if head.get("root_causes_at_limit"):
+        return True
+    absolute = plan.get("absolute_deadline_utc")
+    if isinstance(absolute, str):
+        expiry = datetime.fromisoformat(absolute.replace("Z", "+00:00"))
+        if datetime.now(timezone.utc) >= expiry:
+            return True
+    return False
 
 
 def _close_failed_campaign_timing_ledger(
@@ -6971,6 +7173,41 @@ def _close_failed_campaign_timing_ledger(
 
         next_action = permanent_next_action
 
+        # 改造 2：候选级阶段（VC-4～VC-6）的不可恢复动作失败，在永久条件未命中时不停线，
+        # 而是 stage_abandoned + candidate_review_required（只读等待人工：对账入账后
+        # invalidate-candidate 或显式停线）。VC-1～VC-3 与 legacy 清单保持现状。
+        candidate_id = manifest.get("candidate_id")
+        review_event_id = f"{event_prefix}-candidate-review-required"
+        review_next_action = (
+            "candidate_review_required：先按 reservation 分流对账（无 reservation：reconcile-supervisor-run；"
+            "有：reconcile-attempt）入账；判为候选源码问题则 invalidate-candidate preview/apply，"
+            "否则以 close-campaign-ledger 显式停线。"
+        )
+        candidate_review = (
+            phase in vc_artifacts.CANDIDATE_PHASES
+            and isinstance(candidate_id, str)
+            and bool(candidate_id)
+            and not _candidate_failure_hits_permanent_condition(
+                campaign_dir, before, failure_class=failure_class
+            )
+        )
+        if candidate_review:
+            if before.get("status") == "candidate_review_required":
+                if before.get("last_event_id") != review_event_id:
+                    raise SupervisorError("UpgradeTimingLedger 已由其他根因进入 candidate_review_required。")
+                return {
+                    "status": "passed",
+                    "ledger_status": "candidate_review_required",
+                    "idempotent": True,
+                    "ledger_dir": str(ledger_dir),
+                    "head_sequence": before["head_sequence"],
+                    "head_sha256": before["head_sha256"],
+                    "root_cause_id": root_cause_id,
+                    "failure_class": failure_class,
+                    "next_action": review_next_action,
+                }
+            next_action = review_next_action
+
         if before.get("last_event_id") == abandon_event_id:
             if before.get("active_phase") is not None:
                 raise SupervisorError("stage_abandoned 部分终态仍残留 active 阶段。")
@@ -6999,6 +7236,35 @@ def _close_failed_campaign_timing_ledger(
                 or middle.get("active_phase") is not None
             ):
                 raise SupervisorError("UpgradeTimingLedger stage_abandoned 未稳定落盘。")
+            if candidate_review:
+                timing_ledger.append_event(
+                    ledger_dir,
+                    event_id=review_event_id,
+                    phase=phase,
+                    event_type="candidate_review_required",
+                    candidate_id=str(candidate_id),
+                    root_cause_id=root_cause_id,
+                    live_request_count=0,
+                    next_action=review_next_action,
+                )
+                final = timing_ledger.inspect_ledger(ledger_dir)
+                if (
+                    final.get("status") != "candidate_review_required"
+                    or final.get("active_phase") is not None
+                    or final.get("last_event_id") != review_event_id
+                ):
+                    raise SupervisorError("UpgradeTimingLedger candidate_review_required 未闭合。")
+                return {
+                    "status": "passed",
+                    "ledger_status": "candidate_review_required",
+                    "idempotent": False,
+                    "ledger_dir": str(ledger_dir),
+                    "head_sequence": final["head_sequence"],
+                    "head_sha256": final["head_sha256"],
+                    "root_cause_id": root_cause_id,
+                    "failure_class": failure_class,
+                    "next_action": review_next_action,
+                }
             timing_ledger.append_event(
                 ledger_dir,
                 event_id=stop_event_id,
@@ -7146,6 +7412,17 @@ def _campaign_run_locked(
         staging_model = campaign_batch_model(campaign_dir) == "staging"
         if commit is not None and not staging_model:
             raise SupervisorError("legacy 批次模型的 Campaign 不得走 staging 提交。")
+        if manifest["schema_version"] != CAMPAIGN_RUN_SCHEMA:
+            # 改造 2：staging 模型清单必须携带候选级绑定（Campaign 级为 null），
+            # legacy 模型清单必须不含两字段——两种模型不得混用。
+            if staging_model and not manifest_has_candidate_binding(manifest):
+                raise SupervisorError(
+                    "staging 模型 Campaign 的 campaign-run 清单必须携带 candidate_revision／candidate_id。"
+                )
+            if not staging_model and manifest_has_candidate_binding(manifest):
+                raise SupervisorError(
+                    "legacy 模型 Campaign 的 campaign-run 清单不得携带 candidate_revision／candidate_id。"
+                )
         if (commit is None) != (owner_nonce is None and staging_binding is None):
             raise SupervisorError("staging 提交必须同时给出 commit 回调、owner_nonce 与 staging_binding。")
         if (
