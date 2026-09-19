@@ -228,7 +228,10 @@ class CandidateRevisionIntegrationTests(_ChainMixin, unittest.TestCase):
                     codex_upgrade.invalidate_candidate(self._invalidate_arguments(fixture, R1, "preview"))
                 preview = codex_upgrade.invalidate_candidate(self._invalidate_arguments(fixture, R1, "preview", source=source_r1))
                 self.assertEqual((preview["status"], preview["revision"], preview["ledger_status"]), ("preview", 1, "candidate_review_required"))
-                self.assertEqual(preview["accounting"]["failed_runs"], [failed_run.name])
+                self.assertEqual(
+                    [(item["run_id"], item["reconciliation"]) for item in preview["accounting"]["failed_runs"]],
+                    [(failed_run.name, "supervisor-run")],
+                )
                 self.assertFalse(preview["accounting"]["zero_request"])
                 self.assertEqual(preview["diagnosis"]["identity_snapshot"]["snapshot_sources"], ["candidate_source"])
                 self.assertFalse((campaign_dir / "candidates" / R1 / "invalidation.json").exists())
@@ -480,8 +483,126 @@ class CandidateRevisionIntegrationTests(_ChainMixin, unittest.TestCase):
             self._fail_vc5_into_review(fixture, root, sequence=7, tag="vc5-r2-fail")
             source = self._candidate_source(root, "r2")
             with mock.patch.object(codex_upgrade, "_git_commit", return_value="b" * 40):
-                with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "尚未对账入账"):
+                with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "尚未对账"):
                     codex_upgrade.invalidate_candidate(self._invalidate_arguments(fixture, R2, "preview", source=source))
+
+    def _reservation_fail_plan(self, root: Path, campaign_dir: Path, *, tag: str, action_id: str, failed_job: bool) -> Path:
+        """VC-5 合成动作：在父 run 内为 R1／R2 发布候选 reservation（可选再写一份 failed Job 收据）后非零退出。
+
+        这就是"候选 Job 已产生 reservation 后失败"的真实形态：父 run 对账被拒，只能 reconcile-attempt。
+        """
+
+        base = self._plan(root, campaign_dir, "VC-5", tag=tag, fail=True, action_id=action_id)
+        plan = _read(base)
+        repo_root = Path(codex_upgrade.__file__).resolve().parents[2]
+        script = (
+            "import json, sys\n"
+            "from pathlib import Path\n"
+            "sys.path.insert(0, sys.argv[4])\n"
+            "from unittest import mock\n"
+            "from tools.official_client_capture import codex_upgrade\n"
+            "from tools.official_client_capture import codex_upgrade_job_rehearsal_receipt as rehearsal\n"
+            "campaign_dir = Path(sys.argv[1]); candidate_id = sys.argv[2]; failed_job = sys.argv[3] == '1'\n"
+            "with mock.patch.object(rehearsal, '_target_evidence_label_declaration_sha256', return_value='d' * 64):\n"
+            "    manifest = codex_upgrade._require_formal_campaign(campaign_dir)\n"
+            "    jobs = codex_upgrade._campaign_jobs(campaign_dir, manifest, 'official')\n"
+            "    identity = {'candidate_purpose': manifest['campaign_purpose'], 'candidate_id': candidate_id}\n"
+            "    attempt_root, reservation = codex_upgrade._reserve_capture_attempt(campaign_dir, phase='candidate', candidate_id=candidate_id, identity=identity, jobs=jobs, allow_failed_rerun=True)\n"
+            "    if failed_job:\n"
+            "        # 用 failed checkpoint 让第二次 attempt 的根因 failed_step 落到 Job id（与第一次的 reservation 不同）。\n"
+            "        job = jobs[0]\n"
+            "        store = codex_upgrade.incremental_recovery.CheckpointStore(attempt_root / 'checkpoints')\n"
+            "        store.append({'checkpoint_schema_version': codex_upgrade.JOB_CHECKPOINT_SCHEMA, 'campaign_id': manifest['campaign_id'], 'phase': 'candidate', 'attempt_id': attempt_root.name, 'run_nonce': reservation['run_nonce'], 'item_id': job.job_id, 'status': 'failed', 'disposition': 'executed', 'result_sha256': None, 'result_key': None, 'result': None, 'source_receipt': None, 'previous_checkpoint_sha256': None})\n"
+            "sys.exit(3)\n"
+        )
+        plan["actions"][0]["command"] = [sys.executable, "-c", script, str(campaign_dir), R1 if not failed_job else R2, "1" if failed_job else "0", str(repo_root)]
+        target = base.with_name(f"{base.stem}-reservation.json")
+        target.write_text(json.dumps(plan, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        target.chmod(0o600)
+        return target
+
+    def test_reservation_failure_reconciles_by_attempt_then_supersedes_and_continues_on_r2(self) -> None:
+        """审核阻断（reservation 分流）：候选 Job 产生 reservation 后失败 → reconcile-attempt → invalidate → r2 → VC-4 续跑。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._fixture(root)
+            campaign_dir = Path(str(fixture["campaign_dir"]))
+            self._advance_to_vc3(fixture, root)
+            self._open(fixture, R1, initial=True)
+            result, returncode = self._dispatch(fixture, root, "VC-4", 4, tag="vc4-r1")
+            self.assertEqual(returncode, 0, result)
+            # r1：VC-5 动作在父 run 内发布 reservation 后失败 → candidate_review_required。
+            plan = self._reservation_fail_plan(root, campaign_dir, tag="vc5-r1-reservation", action_id="vc-5-capture-a", failed_job=False)
+            result, returncode = codex_upgrade.compile_and_run_vc_batch(self._arguments(fixture, "VC-5", 5, plan))
+            self.assertEqual((returncode, result["campaign_run"]["timing_closeout"]["ledger_status"]), (1, "candidate_review_required"), result)
+            failed_r1 = Path(str(result["campaign_run"]["run_dir"]))
+            attempts_r1 = sorted(path.name for path in (campaign_dir / "candidates" / R1 / "attempts").iterdir())
+            self.assertEqual(len(attempts_r1), 1)
+            attempt_r1 = attempts_r1[0]
+            # 有 reservation：父 run 对账被拒，只能 reconcile-attempt。
+            with self.assertRaisesRegex(reconciler.ReconcilerError, "reconcile-attempt"):
+                reconciler.reconcile_supervisor_run(failed_r1, campaign_dir)
+            source_r1 = self._candidate_source(root, "r1")
+            with mock.patch.object(codex_upgrade, "_git_commit", return_value="a" * 40):
+                with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "reconcile-attempt"):
+                    codex_upgrade.invalidate_candidate(self._invalidate_arguments(fixture, R1, "preview", source=source_r1))
+                outcome = reconciler.reconcile_attempt(campaign_dir, attempt_r1)
+                self.assertEqual(outcome["status"], "recoverable", outcome)
+                self.assertIn(f"reconcile-attempt:{attempt_r1}", self._head(fixture)["operations"])
+                self.assertEqual(self._summary(fixture)["status"], "candidate_review_required")
+                preview = codex_upgrade.invalidate_candidate(self._invalidate_arguments(fixture, R1, "preview", source=source_r1))
+                self.assertEqual(
+                    [(item["run_id"], item["reconciliation"], item["attempts"]) for item in preview["accounting"]["failed_runs"]],
+                    [(failed_r1.name, "attempt", [attempt_r1])],
+                )
+                self.assertEqual([item["attempt_id"] for item in preview["accounting"]["attempts"]], [attempt_r1])
+                self.assertFalse(preview["accounting"]["zero_request"])
+                applied = codex_upgrade.invalidate_candidate(
+                    self._invalidate_arguments(fixture, R1, "apply", approve=str(preview["review_sha256"]), source=source_r1)
+                )
+            self.assertEqual((applied["status"], self._summary(fixture)["status"]), ("applied", "revision_required"))
+            # r2：--supersedes → VC-4 首批（后继协议走 attempt 对账分支）→ 续跑成功。
+            opened = self._open(fixture, R2, supersedes=R1)
+            self.assertEqual(opened["revision"], 2)
+            manifest = codex_upgrade._require_formal_campaign(campaign_dir)
+            history = supervisor._campaign_run_history(Path(str(fixture["state_dir"])), str(manifest["campaign_id"]))
+            prior_state, prior_manifest, prior_dir = next(item for item in history if item[2].name == failed_r1.name)
+            successor_manifest = {"phase": "VC-4", "candidate_revision": 2, "candidate_id": R2, "campaign_id": manifest["campaign_id"]}
+            self.assertTrue(supervisor._validate_candidate_revision_successor(prior_state, prior_manifest, prior_dir, successor_manifest, campaign_dir=campaign_dir))
+            # 协议级负例：attempt 对账收据被替换即拒绝（不再看父 run 收据）。
+            attempt_receipt = campaign_dir / "control" / "reconciliation" / f"attempt-{attempt_r1}" / "attempt-reconciliation.json"
+            original = attempt_receipt.read_bytes()
+            attempt_receipt.write_bytes(b"{}\n")
+            try:
+                with self.assertRaisesRegex(supervisor.SupervisorError, "attempt .* 的对账收据"):
+                    supervisor._validate_candidate_revision_successor(prior_state, prior_manifest, prior_dir, successor_manifest, campaign_dir=campaign_dir)
+            finally:
+                attempt_receipt.write_bytes(original)
+            self.assertFalse((campaign_dir / "control" / "reconciliation" / f"run-{failed_r1.name}").exists())
+            result, returncode = self._dispatch(fixture, root, "VC-4", 6, tag="vc4-r2")
+            self.assertEqual(returncode, 0, result)
+            self.assertTrue((campaign_dir / "control" / "vc" / "revisions" / "r2" / "vc-4-checkpoint.json").is_file())
+            # r2：再次 reservation 后失败（带 failed Job 收据 → 不同 attempt 根因）；历史 r1 的已对账 attempt
+            # 不能冒充本次：preview 拒绝，直到 r2 自己的 attempt 完成 reconcile-attempt。
+            plan = self._reservation_fail_plan(root, campaign_dir, tag="vc5-r2-reservation", action_id="vc-5-capture-b", failed_job=True)
+            result, returncode = codex_upgrade.compile_and_run_vc_batch(self._arguments(fixture, "VC-5", 7, plan))
+            self.assertEqual((returncode, result["campaign_run"]["timing_closeout"]["ledger_status"]), (1, "candidate_review_required"), result)
+            failed_r2 = Path(str(result["campaign_run"]["run_dir"]))
+            attempt_r2 = sorted(path.name for path in (campaign_dir / "candidates" / R2 / "attempts").iterdir())[0]
+            source_r2 = self._candidate_source(root, "r2")
+            with mock.patch.object(codex_upgrade, "_git_commit", return_value="b" * 40):
+                with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "reconcile-attempt"):
+                    codex_upgrade.invalidate_candidate(self._invalidate_arguments(fixture, R2, "preview", source=source_r2))
+                outcome = reconciler.reconcile_attempt(campaign_dir, attempt_r2)
+                self.assertEqual(outcome["status"], "recoverable", outcome)
+                preview = codex_upgrade.invalidate_candidate(self._invalidate_arguments(fixture, R2, "preview", source=source_r2))
+            self.assertEqual(
+                [(item["run_id"], item["reconciliation"], item["attempts"]) for item in preview["accounting"]["failed_runs"]],
+                [(failed_r2.name, "attempt", [attempt_r2])],
+            )
+            # 无关历史 attempt（r1 的）与本次无关：不在本候选目录下，也不在 r2 失败父 run 窗口内。
+            self.assertEqual([item["attempt_id"] for item in preview["accounting"]["attempts"]], [attempt_r2])
 
     def test_second_invalidation_with_same_root_cause_hits_limit_and_stops(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

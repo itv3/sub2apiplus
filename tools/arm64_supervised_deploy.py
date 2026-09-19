@@ -150,8 +150,13 @@ from typing import Any, Callable, Mapping
 # invalidation.json（schema／身份／项目总账摘要绑定）及新 revision 记录、COMMIT 与账本 stage_revision
 # 的摘要链；失败摘要与 candidate_review_required 事件 id 的构造／解析集中为函数，供作废前对账
 # 绑定本次失败父 run。监督器随之变化；断言预处理器未变。
+# 2026-09-19（第 2 批 M2 审核修正二：reservation 分流）：失败父 run 期间为旧候选发布过 reservation 的，
+# 后继协议与作废前对账只认 reconcile-attempt 的收据与总账绑定，否则只认 reconcile-supervisor-run；
+# 两条分支的收据校验（campaign_run_failure_facts／candidate_reservations_in_run_window／
+# verify_attempt_reconciliation_binding／verify_supervisor_run_reconciliation_binding）集中在监督器，
+# 供 invalidate-candidate 共用。监督器随之变化；断言预处理器未变。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "0302b0af5e9c9e7d265a90178565e62249b7b9cc4fe1c65212ff467216e90c2a"
+    "80d8eea1792f93e1154995c84b45aeff3ea2e6a1fd56c75e2c158982b35f1c1f"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "ea5500505d49340fe4971b981a8ab1159266c6a54ad0d3724cdf10cd51815fe4"

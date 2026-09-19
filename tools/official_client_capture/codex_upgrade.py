@@ -18417,6 +18417,61 @@ def _candidate_identity_snapshot(
     return snapshot
 
 
+def _candidate_failed_run_for_review(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    candidate_id: str,
+    review_event: Mapping[str, Any],
+) -> dict[str, Any]:
+    """由 candidate_review_required 事件定位引起它的那一次失败父 run（不依赖对账收据）。
+
+    遍历本 Campaign 候选级阶段的正式 COMMIT → ``parent_run_dir`` → 父 run 的动作失败事实，
+    用与监督器收账相同的失败摘要（Campaign／阶段／批次序号／失败动作／失败分类）比对事件
+    id 的摘要段，并要求内层清单绑定本候选／本 revision；必须恰好命中一个。
+    """
+
+    expected_prefix = codex_upgrade_supervisor.parse_candidate_review_event_id(review_event.get("event_id"))
+    if expected_prefix is None:
+        raise ConfigurationError("candidate_review_required 事件 id 形态非法，无法绑定失败父 run。")
+    review_revision = review_event.get("revision")
+    campaign_id = str(manifest.get("campaign_id", ""))
+    commits_root = campaign_dir / "control" / "vc" / "commits"
+    if commits_root.is_symlink():
+        raise ConfigurationError("COMMIT 目录不得是符号链接。")
+    matched: list[dict[str, Any]] = []
+    if commits_root.is_dir():
+        for path in sorted(commits_root.iterdir()):
+            match = _VC_SEQUENCE_FILE_RE.fullmatch(path.name)
+            if match is None or path.is_symlink() or not path.is_file():
+                raise ConfigurationError(f"COMMIT 目录含非法条目：{path.name}")
+            commit = _read_staging_commit(path)
+            if commit["campaign_id"] != campaign_id or str(commit["phase"]) not in CANDIDATE_VC_PHASES:
+                continue
+            run_dir = Path(str(commit.get("parent_run_dir", "")))
+            if not run_dir.is_absolute():
+                continue
+            try:
+                facts = codex_upgrade_supervisor.campaign_run_failure_facts(run_dir, campaign_dir=campaign_dir)
+            except codex_upgrade_supervisor.SupervisorError as error:
+                raise ConfigurationError(f"父 run {run_dir.name} 的失败事实不可信：{error}") from error
+            if facts is None:
+                continue
+            if (
+                facts["candidate_id"] != candidate_id
+                or facts["candidate_revision"] != review_revision
+                or facts["batch_sequence"] != commit["sequence"]
+                or facts["failure_digest"][: codex_upgrade_supervisor.FAILURE_DIGEST_PREFIX_LENGTH] != expected_prefix
+            ):
+                continue
+            matched.append(facts)
+    if len(matched) != 1:
+        raise ConfigurationError(
+            f"candidate_review_required（事件 {review_event.get('event_id')}）无法唯一定位候选 {candidate_id} 的失败父 run"
+            f"（命中 {len(matched)} 个）。"
+        )
+    return matched[0]
+
+
 def _candidate_accounting_checks(
     campaign_dir: Path,
     manifest: Mapping[str, Any],
@@ -18425,11 +18480,15 @@ def _candidate_accounting_checks(
     head: Mapping[str, Any],
     ledger_dir: Path,
 ) -> dict[str, Any]:
-    """作废前提：候选已有的请求全部入账；失败父 run 与未 seal attempt 均已对账。"""
+    """作废前提：候选已有的请求全部入账；失败父 run 与未 seal attempt 均已对账。
 
-    from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+    attempt 对账与父 run 对账都完整重放收据 schema／身份／项目总账摘要绑定；引起
+    ``candidate_review_required`` 的失败按 reservation 分流：父 run 期间发布过 reservation 的
+    只认 ``reconcile-attempt``，否则只认 ``reconcile-supervisor-run``（分解稿 T2.6）。
+    """
 
     operations = head.get("operations", {})
+    campaign_id = str(manifest.get("campaign_id", ""))
     facts: dict[str, Any] = {"sealed": None, "attempts": [], "failed_runs": [], "zero_request": True}
     result_path = campaign_dir / "candidates" / candidate_id / "result.json"
     sealed_attempt: str | None = None
@@ -18446,6 +18505,7 @@ def _candidate_accounting_checks(
                 )
             facts["sealed"] = {"attempt_id": sealed_attempt, "operation_id": operation_id}
             facts["zero_request"] = False
+    reconciled_attempts: dict[str, dict[str, Any]] = {}
     for phase, current_candidate, attempt_root in _campaign_attempt_roots(campaign_dir):
         if phase != "candidate" or current_candidate != candidate_id:
             continue
@@ -18453,98 +18513,72 @@ def _candidate_accounting_checks(
         if attempt_id == sealed_attempt:
             continue
         facts["zero_request"] = False
-        operation_id = f"reconcile-attempt:{attempt_id}"
-        receipt = reconciler._reconciliation_dir(campaign_dir, f"attempt-{attempt_id}") / reconciler.ATTEMPT_RECEIPT_NAME
-        if not (receipt.is_file() and not receipt.is_symlink()) or operation_id not in operations:
+        try:
+            reconciled = codex_upgrade_supervisor.verify_attempt_reconciliation_binding(
+                campaign_dir,
+                campaign_id=campaign_id,
+                candidate_id=candidate_id,
+                attempt_root=attempt_root,
+                label="作废前对账核对",
+            )
+        except codex_upgrade_supervisor.SupervisorError as error:
+            raise ConfigurationError(str(error)) from error
+        if reconciled["operation_id"] not in operations:
             raise ConfigurationError(
                 f"候选 {candidate_id} 的 attempt {attempt_id} 未 seal 且尚未对账入账；先执行 reconcile-attempt。"
             )
-        facts["attempts"].append({"attempt_id": attempt_id, "operation_id": operation_id})
+        reconciled_attempts[attempt_id] = reconciled
+        facts["attempts"].append(reconciled)
     review = _ledger_last_event_of_type(ledger_dir, "candidate_review_required")
     if review is not None and review[0].get("candidate_id") == candidate_id:
-        # 候选级动作失败进入只读等待：引起 review 的那一次失败父 run 必须已经对账入账。
-        # review 事件 id 的摘要段由 supervisor 按（Campaign、阶段、批次序号、失败动作、
-        # 失败分类）派生；这里用对账收据里的 run 事实重算同一摘要来定位本次失败，再核对
-        # 该批次的正式清单确属本候选／本 revision、收据文件摘要与总账事件绑定一致，最后
-        # 要求总账含 reconcile-supervisor-run:<run_id>。历史 revision 的同阶段同动作失败
-        # 因批次序号不同而摘要不同，不能冒充本次。
-        review_event = review[0]
-        expected_prefix = codex_upgrade_supervisor.parse_candidate_review_event_id(review_event.get("event_id"))
-        if expected_prefix is None:
-            raise ConfigurationError("candidate_review_required 事件 id 形态非法，无法绑定失败父 run。")
-        review_revision = review_event.get("revision")
-        campaign_id = str(manifest.get("campaign_id", ""))
-        reconciliation_root = campaign_dir / "control" / reconciler.RECONCILIATION_DIR
-        matched: list[str] = []
-        if reconciliation_root.is_dir() and not reconciliation_root.is_symlink():
-            for run_root in sorted(reconciliation_root.glob("run-*")):
-                receipt_path = run_root / reconciler.SUPERVISOR_RUN_RECEIPT_NAME
-                if run_root.is_symlink() or not receipt_path.is_file() or receipt_path.is_symlink():
-                    continue
-                receipt = _read_json(receipt_path, "父 run 对账收据")
-                run = receipt.get("run")
-                diagnostic = run.get("action_diagnostic") if isinstance(run, Mapping) else None
-                if not isinstance(run, Mapping) or not isinstance(diagnostic, Mapping):
-                    continue
-                run_id = run_root.name.removeprefix("run-")
-                phase = str(run.get("phase", ""))
-                sequence = run.get("batch_sequence")
-                action_id = str(diagnostic.get("action_id", ""))
-                if (
-                    receipt.get("schema_version") != reconciler.SUPERVISOR_RUN_SCHEMA
-                    or receipt.get("campaign_id") != campaign_id
-                    or run.get("run_id") != run_id
-                    or run.get("state") != "failed"
-                    or phase not in CANDIDATE_VC_PHASES
-                    or not isinstance(sequence, int)
-                    or isinstance(sequence, bool)
-                    or not SAFE_ID_RE.fullmatch(action_id)
-                ):
-                    continue
-                digest = codex_upgrade_supervisor.campaign_run_failure_digest(
-                    campaign_id=campaign_id,
-                    phase=phase,
-                    batch_sequence=sequence,
-                    failed_action_id=action_id,
-                    failure_class=str(run.get("failure_class", "")),
+        failed_run = _candidate_failed_run_for_review(campaign_dir, manifest, candidate_id, review[0])
+        reservations = codex_upgrade_supervisor.candidate_reservations_in_run_window(
+            campaign_dir,
+            candidate_id=candidate_id,
+            started_at_epoch=float(failed_run["started_at_epoch"]),
+        )
+        if reservations:
+            # 有 reservation：attempt 中断，只认 reconcile-attempt（上面的循环已完整重放）。
+            missing = [attempt_id for attempt_id, _root in reservations if attempt_id not in reconciled_attempts]
+            if missing:
+                raise ConfigurationError(
+                    f"候选 {candidate_id} 处于 candidate_review_required，失败父 run {failed_run['run_id']} 期间的 "
+                    f"attempt {missing} 尚未对账入账；先执行 reconcile-attempt。"
                 )
-                if digest[: codex_upgrade_supervisor.FAILURE_DIGEST_PREFIX_LENGTH] != expected_prefix:
-                    continue
-                # 该批次的正式清单必须绑定本候选与本 revision。
-                manifest_path = campaign_dir / "control" / "vc" / "run-manifests" / f"{sequence:04d}-{phase.lower()}.json"
-                if manifest_path.is_symlink() or not manifest_path.is_file():
-                    raise ConfigurationError(f"失败父 run {run_id} 的正式批次清单缺失：{manifest_path.name}")
-                run_manifest = _read_json(manifest_path, "父批次清单")
-                if run_manifest.get("candidate_id") != candidate_id or run_manifest.get("candidate_revision") != review_revision:
-                    raise ConfigurationError(
-                        f"失败父 run {run_id} 的批次清单未绑定候选 {candidate_id}／r{review_revision}。"
-                    )
-                operation_id = f"reconcile-supervisor-run:{run_id}"
-                recorded = operations.get(operation_id)
-                if not isinstance(recorded, Mapping):
-                    raise ConfigurationError(
-                        f"候选 {candidate_id} 处于 candidate_review_required，"
-                        f"但引起该状态的失败父 run {run_id} 尚未对账入账；先执行 reconcile-supervisor-run。"
-                    )
-                try:
-                    payload = codex_upgrade_supervisor._project_ledger_operation_payload(
-                        campaign_dir, operation_id, label="作废前对账核对"
-                    )
-                except codex_upgrade_supervisor.SupervisorError as error:
-                    raise ConfigurationError(str(error)) from error
-                if (
-                    payload.get("subject_kind") != "supervisor_run"
-                    or payload.get("subject_id") != run_id
-                    or payload.get("reconciliation_receipt_sha256") != file_sha256(receipt_path)
-                ):
-                    raise ConfigurationError(f"失败父 run {run_id} 的对账收据与项目总账绑定不一致。")
-                matched.append(run_id)
-        if len(matched) != 1:
-            raise ConfigurationError(
-                f"候选 {candidate_id} 处于 candidate_review_required（事件 {review_event.get('event_id')}），"
-                f"但引起该状态的失败父 run 尚未对账入账（匹配到 {len(matched)} 份收据）；先执行 reconcile-supervisor-run。"
-            )
-        facts["failed_runs"] = matched
+            facts["failed_runs"] = [
+                {
+                    "run_id": failed_run["run_id"],
+                    "batch_sequence": failed_run["batch_sequence"],
+                    "reconciliation": "attempt",
+                    "attempts": [attempt_id for attempt_id, _root in reservations],
+                }
+            ]
+        else:
+            try:
+                reconciled_run = codex_upgrade_supervisor.verify_supervisor_run_reconciliation_binding(
+                    campaign_dir,
+                    campaign_id=campaign_id,
+                    run_id=failed_run["run_id"],
+                    phase=failed_run["phase"],
+                    batch_sequence=failed_run["batch_sequence"],
+                    batch_sha256=failed_run["batch_sha256"],
+                    label="作废前对账核对",
+                )
+            except codex_upgrade_supervisor.SupervisorError as error:
+                raise ConfigurationError(str(error)) from error
+            if reconciled_run["operation_id"] not in operations:
+                raise ConfigurationError(
+                    f"候选 {candidate_id} 处于 candidate_review_required，但失败父 run {failed_run['run_id']} 尚未对账入账；"
+                    "先执行 reconcile-supervisor-run。"
+                )
+            facts["failed_runs"] = [
+                {
+                    "run_id": failed_run["run_id"],
+                    "batch_sequence": failed_run["batch_sequence"],
+                    "reconciliation": "supervisor-run",
+                    "operation_id": reconciled_run["operation_id"],
+                }
+            ]
         facts["zero_request"] = False
     return facts
 

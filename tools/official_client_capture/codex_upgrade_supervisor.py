@@ -336,6 +336,10 @@ def _reject_symlink_components(path: Path) -> None:
             raise SupervisorError(f"监督器路径不得包含符号链接：{current}")
 
 
+def _is_safe_id(value: Any, *, maximum: int = 128) -> bool:
+    return isinstance(value, str) and 0 < len(value) <= maximum and all(char in SAFE_ID_CHARS for char in value)
+
+
 def _safe_id(value: Any, label: str, *, maximum: int = 128) -> str:
     if not isinstance(value, str) or not value or len(value) > maximum:
         raise SupervisorError(f"{label} 非法。")
@@ -6261,6 +6265,235 @@ def _project_ledger_operation_payload(
     return dict(event["payload"])
 
 
+ATTEMPT_RECONCILIATION_SCHEMA = "attempt-reconciliation/v1"
+
+
+def campaign_run_failure_facts(run_dir: Path, *, campaign_dir: Path) -> dict[str, Any] | None:
+    """已终态父 run 的动作失败事实：用于按失败摘要定位引起 candidate_review_required 的那次失败。
+
+    只读 state.json、stop-receipt、内层清单与动作诊断；非 ``action-failed`` 终态返回 None。
+    失败分类用与父监督器收账相同的 ``effective_action_failure_class`` 重算，摘要用
+    ``campaign_run_failure_digest``——两者与 ``_close_failed_campaign_timing_ledger`` 一致。
+    """
+
+    run_dir = Path(run_dir)
+    if run_dir.is_symlink() or not run_dir.is_dir():
+        return None
+    state = _read_state(run_dir)
+    if state.get("state") != "failed":
+        return None
+    stop_path = run_dir / "stop-receipt.json"
+    if stop_path.is_symlink() or not stop_path.is_file():
+        return None
+    reason = _read_json(stop_path).get("reason")
+    if not isinstance(reason, str) or not reason.startswith("action-failed:"):
+        return None
+    action_id = reason.split(":", 1)[1]
+    manifest_path = run_dir / "campaign-run-manifest.json"
+    if manifest_path.is_symlink() or not manifest_path.is_file():
+        return None
+    inner = _read_json(manifest_path).get("manifest")
+    if not isinstance(inner, Mapping):
+        return None
+    campaign_id = str(state.get("campaign_id", ""))
+    phase = str(state.get("phase", ""))
+    owner_pid = state.get("owner_pid")
+    owner_nonce = state.get("owner_nonce")
+    if (
+        inner.get("campaign_id") != campaign_id
+        or inner.get("phase") != phase
+        or not isinstance(owner_pid, int)
+        or isinstance(owner_pid, bool)
+        or not isinstance(owner_nonce, str)
+        or not _is_safe_id(action_id)
+    ):
+        return None
+    diagnostic_path = _action_diagnostic_path(run_dir, action_id, create_directory=False)
+    if diagnostic_path.is_symlink() or not diagnostic_path.is_file():
+        failure_class = "execution-failure"
+    else:
+        diagnostic = _validate_action_diagnostic(
+            diagnostic_path,
+            run_dir=run_dir,
+            campaign_id=campaign_id,
+            phase=phase,
+            action_id=action_id,
+            owner_pid=owner_pid,
+            owner_nonce=owner_nonce,
+        )
+        failure_class, _receipt = effective_action_failure_class(
+            run_dir,
+            diagnostic,
+            campaign_dir=Path(campaign_dir).resolve(strict=True),
+            inner_manifest=inner,
+            campaign_id=campaign_id,
+            phase=phase,
+            action_id=action_id,
+            owner_pid=owner_pid,
+            owner_nonce=owner_nonce,
+            run_started_at_utc=str(state.get("started_at_utc", "")),
+        )
+    sequence = inner.get("batch_sequence")
+    if not isinstance(sequence, int) or isinstance(sequence, bool):
+        return None
+    return {
+        "run_id": run_dir.name,
+        "run_dir": str(run_dir),
+        "campaign_id": campaign_id,
+        "phase": phase,
+        "batch_sequence": sequence,
+        "batch_sha256": inner.get("batch_sha256"),
+        "candidate_id": inner.get("candidate_id"),
+        "candidate_revision": inner.get("candidate_revision"),
+        "action_id": action_id,
+        "failure_class": failure_class,
+        "failure_digest": campaign_run_failure_digest(
+            campaign_id=campaign_id,
+            phase=phase,
+            batch_sequence=sequence,
+            failed_action_id=action_id,
+            failure_class=failure_class,
+        ),
+        "started_at_epoch": float(state.get("started_at_epoch", 0.0)),
+    }
+
+
+def candidate_reservations_in_run_window(
+    campaign_dir: Path,
+    *,
+    candidate_id: str,
+    started_at_epoch: float,
+) -> list[tuple[str, Path]]:
+    """父 run 期间为该候选发布的 reservation（与 reconciler 父 run 对账用同一判据：
+    ``reservation.started_at_utc`` 不早于父 run 开始时刻）。"""
+
+    started = datetime.fromtimestamp(float(started_at_epoch), tz=timezone.utc)
+    attempts_root = Path(campaign_dir) / "candidates" / _safe_id(candidate_id, "candidate_id") / "attempts"
+    if attempts_root.is_symlink() or not attempts_root.is_dir():
+        return []
+    found: list[tuple[str, Path]] = []
+    for attempt_root in sorted(attempts_root.iterdir()):
+        reservation_path = attempt_root / "reservation.json"
+        if attempt_root.is_symlink() or not attempt_root.is_dir() or not _is_safe_id(attempt_root.name):
+            continue
+        if reservation_path.is_symlink() or not reservation_path.is_file():
+            continue
+        begun_raw = _read_json(reservation_path).get("started_at_utc")
+        if not isinstance(begun_raw, str):
+            continue
+        try:
+            begun = datetime.fromisoformat(begun_raw.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if begun.tzinfo is None:
+            continue
+        if begun >= started:
+            found.append((attempt_root.name, attempt_root))
+    return found
+
+
+def verify_attempt_reconciliation_binding(
+    campaign_dir: Path,
+    *,
+    campaign_id: str,
+    candidate_id: str,
+    attempt_root: Path,
+    label: str,
+) -> dict[str, Any]:
+    """完整重放一个候选 attempt 的对账收据：schema、Campaign／候选／attempt 身份、reservation
+    绑定，以及项目总账 ``reconcile-attempt:<id>`` 事件对收据摘要的绑定。"""
+
+    campaign_dir = Path(campaign_dir).resolve(strict=True)
+    attempt_id = attempt_root.name
+    receipt_path = campaign_dir / "control" / "reconciliation" / f"attempt-{attempt_id}" / "attempt-reconciliation.json"
+    if receipt_path.is_symlink() or not receipt_path.is_file():
+        raise SupervisorError(f"{label}：候选 {candidate_id} 的 attempt {attempt_id} 尚未对账（缺 attempt-reconciliation.json）；先执行 reconcile-attempt。")
+    receipt = _read_json(receipt_path)
+    reservation_path = attempt_root / "reservation.json"
+    if reservation_path.is_symlink() or not reservation_path.is_file():
+        raise SupervisorError(f"{label}：attempt {attempt_id} 缺少 reservation.json。")
+    reservation = receipt.get("reservation")
+    if (
+        receipt.get("schema_version") != ATTEMPT_RECONCILIATION_SCHEMA
+        or receipt.get("campaign_id") != campaign_id
+        or receipt.get("campaign_manifest_sha256") != _sha256((campaign_dir / "campaign.json").read_bytes())
+        or receipt.get("phase") != "candidate"
+        or receipt.get("candidate_id") != candidate_id
+        or receipt.get("attempt_id") != attempt_id
+        or receipt.get("reservation_exists") is not True
+        or not isinstance(reservation, Mapping)
+        or reservation.get("sha256") != _sha256(reservation_path.read_bytes())
+        or reservation.get("run_nonce") != _read_json(reservation_path).get("run_nonce")
+        or not isinstance(receipt.get("root_cause"), Mapping)
+    ):
+        raise SupervisorError(f"{label}：attempt {attempt_id} 的对账收据 schema 或身份不闭合。")
+    operation_id = f"reconcile-attempt:{attempt_id}"
+    payload = _project_ledger_operation_payload(campaign_dir, operation_id, label=label)
+    if (
+        payload.get("campaign_id") != campaign_id
+        or payload.get("subject_kind") != "attempt"
+        or payload.get("subject_id") != attempt_id
+        or payload.get("reconciliation_receipt_sha256") != _sha256(receipt_path.read_bytes())
+    ):
+        raise SupervisorError(f"{label}：attempt {attempt_id} 的对账收据与项目总账绑定不一致。")
+    return {
+        "attempt_id": attempt_id,
+        "operation_id": operation_id,
+        "receipt_sha256": payload["reconciliation_receipt_sha256"],
+        "root_cause_id": receipt["root_cause"].get("root_cause_id"),
+    }
+
+
+def verify_supervisor_run_reconciliation_binding(
+    campaign_dir: Path,
+    *,
+    campaign_id: str,
+    run_id: str,
+    phase: str,
+    batch_sequence: Any,
+    batch_sha256: Any,
+    label: str,
+) -> dict[str, Any]:
+    """完整重放一个失败父 run 的对账收据：schema、Campaign／run／批次身份、失败终态，
+    以及项目总账 ``reconcile-supervisor-run:<run_id>`` 事件对收据摘要的绑定。"""
+
+    campaign_dir = Path(campaign_dir).resolve(strict=True)
+    reconciliation = campaign_dir / "control" / "reconciliation" / f"run-{run_id}" / "supervisor-run-reconciliation.json"
+    if reconciliation.is_symlink() or not reconciliation.is_file():
+        raise SupervisorError(f"{label}：失败父 run {run_id} 尚未对账（缺对账收据）；先执行 reconcile-supervisor-run。")
+    receipt = _read_json(reconciliation)
+    run = receipt.get("run")
+    if (
+        receipt.get("schema_version") != SUPERVISOR_RUN_RECONCILIATION_SCHEMA
+        or receipt.get("campaign_id") != campaign_id
+        or receipt.get("campaign_manifest_sha256") != _sha256((campaign_dir / "campaign.json").read_bytes())
+        or not isinstance(run, Mapping)
+        or run.get("run_id") != run_id
+        or run.get("state") != "failed"
+        or run.get("phase") != phase
+        or run.get("batch_sequence") != batch_sequence
+        or run.get("batch_sha256") != batch_sha256
+        or receipt.get("failure_class") != run.get("failure_class")
+        or not isinstance(receipt.get("root_cause"), Mapping)
+    ):
+        raise SupervisorError(f"{label}：失败父 run {run_id} 的对账收据 schema 或身份不闭合。")
+    operation_id = f"reconcile-supervisor-run:{run_id}"
+    payload = _project_ledger_operation_payload(campaign_dir, operation_id, label=label)
+    if (
+        payload.get("campaign_id") != campaign_id
+        or payload.get("subject_kind") != "supervisor_run"
+        or payload.get("subject_id") != run_id
+        or payload.get("reconciliation_receipt_sha256") != _sha256(reconciliation.read_bytes())
+    ):
+        raise SupervisorError(f"{label}：失败父 run {run_id} 的对账收据与项目总账绑定不一致。")
+    return {
+        "run_id": run_id,
+        "operation_id": operation_id,
+        "receipt_sha256": payload["reconciliation_receipt_sha256"],
+        "root_cause_id": receipt["root_cause"].get("root_cause_id"),
+    }
+
+
 def _validate_candidate_revision_successor(
     prior_state: Mapping[str, Any],
     prior_manifest: Mapping[str, Any],
@@ -6363,38 +6596,33 @@ def _validate_candidate_revision_successor(
             f"或其后激活 r{successor_revision} 的 stage_revision。"
         )
 
-    # ② 失败父 run 的对账收据与总账绑定。
-    reconciliation = (
-        campaign_dir / "control" / "reconciliation" / f"run-{prior_dir.name}" / "supervisor-run-reconciliation.json"
+    # ② 失败父 run 的对账：按 reservation 分流（分解稿 T2.6）。父 run 期间为旧候选发布过
+    # reservation 的，属于 attempt 中断，只认 reconcile-attempt 的收据与总账绑定；否则只认
+    # reconcile-supervisor-run 的收据与总账绑定。两条分支都完整重放 schema／身份／摘要。
+    reservations = candidate_reservations_in_run_window(
+        campaign_dir,
+        candidate_id=prior_candidate,
+        started_at_epoch=float(prior_state.get("started_at_epoch", 0.0)),
     )
-    if reconciliation.is_symlink() or not reconciliation.is_file():
-        raise SupervisorError(f"{label}缺少失败父 run {prior_dir.name} 的对账收据。")
-    receipt = _read_json(reconciliation)
-    run = receipt.get("run")
-    if (
-        receipt.get("schema_version") != SUPERVISOR_RUN_RECONCILIATION_SCHEMA
-        or receipt.get("campaign_id") != campaign_id
-        or receipt.get("campaign_manifest_sha256") != _sha256(campaign_path.read_bytes())
-        or not isinstance(run, Mapping)
-        or run.get("run_id") != prior_dir.name
-        or run.get("state") != "failed"
-        or run.get("phase") != prior_phase
-        or run.get("batch_sequence") != prior_manifest.get("batch_sequence")
-        or run.get("batch_sha256") != prior_manifest.get("batch_sha256")
-        or receipt.get("failure_class") != run.get("failure_class")
-        or not isinstance(receipt.get("root_cause"), Mapping)
-    ):
-        raise SupervisorError(f"{label}：失败父 run {prior_dir.name} 的对账收据 schema 或身份不闭合。")
-    reconciliation_payload = _project_ledger_operation_payload(
-        campaign_dir, f"reconcile-supervisor-run:{prior_dir.name}", label=label
-    )
-    if (
-        reconciliation_payload.get("campaign_id") != campaign_id
-        or reconciliation_payload.get("subject_kind") != "supervisor_run"
-        or reconciliation_payload.get("subject_id") != prior_dir.name
-        or reconciliation_payload.get("reconciliation_receipt_sha256") != _sha256(reconciliation.read_bytes())
-    ):
-        raise SupervisorError(f"{label}：失败父 run {prior_dir.name} 的对账收据与项目总账绑定不一致。")
+    if reservations:
+        for _attempt_id, attempt_root in reservations:
+            verify_attempt_reconciliation_binding(
+                campaign_dir,
+                campaign_id=campaign_id,
+                candidate_id=prior_candidate,
+                attempt_root=attempt_root,
+                label=label,
+            )
+    else:
+        verify_supervisor_run_reconciliation_binding(
+            campaign_dir,
+            campaign_id=campaign_id,
+            run_id=prior_dir.name,
+            phase=prior_phase,
+            batch_sequence=prior_manifest.get("batch_sequence"),
+            batch_sha256=prior_manifest.get("batch_sha256"),
+            label=label,
+        )
 
     # ③ 旧候选作废收据与总账绑定。
     invalidation = campaign_dir / "candidates" / prior_candidate / "invalidation.json"
