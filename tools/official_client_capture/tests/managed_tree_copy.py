@@ -130,15 +130,52 @@ def inject_compare_defect(tree_root: Path, marker: str = "injected-compare-defec
     return _inject_after_docstring(tree_root, COMPARE_DEFECT_ANCHOR, f'raise ConfigurationError("{marker}")')
 
 
+# 采集执行位置是合同常量（execution_contract.capture_root＝/root/oauth-capture）。有生产执行副本的机器上，
+# 副本受管树建 Campaign 时 _verify_execution_tree 会拿该位置与副本树逐字比对；不放宽校验，而是让每个
+# 受管子进程在自己的 mount namespace 里把该固定路径绑定到当前副本树（老板 2026-09-20 二次拍板）。
+PRODUCTION_CAPTURE_ROOT = Path("/root/oauth-capture")
+PRODUCTION_EXECUTION_TREE = PRODUCTION_CAPTURE_ROOT / "tools" / "official_client_capture"
+GO_TOOLCHAIN_BIN = Path("/usr/local/go/bin")
+
+
+def execution_tree_binding_required() -> bool:
+    return PRODUCTION_EXECUTION_TREE.is_dir()
+
+
+def execution_tree_binding_available() -> bool:
+    return execution_tree_binding_required() and os.geteuid() == 0 and shutil.which("unshare") is not None and sys.platform.startswith("linux")
+
+
 def subprocess_env(tree_root: Path, extra: Mapping[str, str] | None = None) -> dict[str, str]:
-    """副本子进程环境：PYTHONPATH 只含副本仓库根，禁止回落导入原仓库。"""
+    """副本子进程环境：PYTHONPATH 只含副本仓库根，禁止回落导入原仓库；go 工具链不在 PATH 时前置。"""
 
     env = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
     env["PYTHONPATH"] = str(Path(tree_root))
-    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    # 字节码缓存写到副本树之外（按源文件绝对路径镜像，各副本树互不串用）：副本树内不出现 __pycache__，
+    # 又免去每个受管子进程重新编译 codex_upgrade.py 的开销（ARM64 上每步约 20 秒）。
+    env["PYTHONPYCACHEPREFIX"] = str(Path(tree_root).parent / ".pycache-prefix")
+    if shutil.which("go") is None and (GO_TOOLCHAIN_BIN / "go").is_file():
+        env["PATH"] = f"{GO_TOOLCHAIN_BIN}:{env.get('PATH', '')}"
     if extra:
         env.update(extra)
     return env
+
+
+def python_command(tree_root: Path, arguments: Sequence[str]) -> list[str]:
+    """副本子进程命令：需要绑定执行位置时以独立 mount namespace 把固定 capture_root 绑定到本副本树。"""
+
+    command = [sys.executable, *arguments]
+    if execution_tree_binding_required():
+        if not execution_tree_binding_available():
+            raise ManagedTreeCopyError(
+                f"本机存在固定采集执行副本 {PRODUCTION_EXECUTION_TREE}，但无法建立 mount namespace（需要 root 与 unshare）"
+            )
+        return [
+            "unshare", "-m", "--propagation", "private", "sh", "-c",
+            f'mount --bind "$0" {PRODUCTION_CAPTURE_ROOT} && exec "$@"',
+            str(Path(tree_root)), *command,
+        ]
+    return command
 
 
 def run_python(
@@ -149,10 +186,10 @@ def run_python(
     input_text: str | None = None,
     timeout: float | None = None,
 ) -> subprocess.CompletedProcess:
-    """在副本仓库根下运行 ``python3 <arguments>``（cwd＝副本根）。"""
+    """在副本仓库根下运行 ``python3 <arguments>``（cwd＝副本根；必要时在绑定了执行位置的 mount namespace 内）。"""
 
     return subprocess.run(
-        [sys.executable, *arguments],
+        python_command(tree_root, arguments),
         capture_output=True,
         text=True,
         cwd=str(Path(tree_root)),

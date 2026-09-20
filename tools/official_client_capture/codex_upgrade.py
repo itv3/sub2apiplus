@@ -52106,12 +52106,38 @@ def accept_campaign(
             "path": seal_path.relative_to(campaign_dir).as_posix(),
             "sha256": file_sha256(seal_path),
         }
-        acceptance_path = save_stage_result(
-            campaign_dir,
-            "accept",
-            result,
-            candidate_id=candidate_id,
-        )
+        # 改造 5（C1）：验收结果已封存而 VC-5 completion 尚未写出（写出前崩溃）时续跑——
+        # 全部封存事实重放一致即复用既有文件、不重写，只补下面的 completion；任一字段不同
+        # 仍失败关闭。
+        _, acceptance_path = _stage_path(campaign_dir, "accept", candidate_id, mode="write")
+        if acceptance_path.is_file() and not acceptance_path.is_symlink():
+            existing_acceptance = _read_json(acceptance_path, "已封存验收结果")
+            # 封存文档由 save_stage_result 把 schema_version 改写为阶段 schema、原值移到
+            # result_schema_version，其余字段逐一按 JSON 归一化后比较。
+            expected_document = {
+                **json.loads(json.dumps(result, ensure_ascii=False, sort_keys=True)),
+                "schema_version": STAGE_SCHEMA,
+                "result_schema_version": ACCEPTANCE_SCHEMA,
+                "stage": "accept",
+                "candidate_id": candidate_id,
+                "campaign_id": manifest["campaign_id"],
+            }
+            drifted = sorted(
+                key
+                for key, value in expected_document.items()
+                if existing_acceptance.get(key) != value
+            )
+            if drifted:
+                raise ConfigurationError(
+                    "验收结果已经封存且内容不同，禁止覆盖：" + "、".join(drifted[:8])
+                )
+        else:
+            acceptance_path = save_stage_result(
+                campaign_dir,
+                "accept",
+                result,
+                candidate_id=candidate_id,
+            )
         if (
             _requires_complete_vc_artifacts(manifest)
             and manifest["campaign_purpose"] == "validation_only"

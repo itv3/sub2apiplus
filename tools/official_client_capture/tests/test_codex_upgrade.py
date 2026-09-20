@@ -8793,6 +8793,7 @@ class CodexUpgradeTest(unittest.TestCase):
         rules: tuple[str, ...] | None = None,
         assertion_profile_payload: dict[str, object] | None = None,
         version: str = "0.147.0",
+        profile_payload: dict[str, object] | None = None,
     ) -> tuple[Path, Path, Path, Path, Path, tuple[str, ...]]:
         # 改造 5 M1 审核修正（真实评估链）：``rules`` 覆盖目标规则集合（默认 0.145.0 全集），
         # ``assertion_profile_payload`` 直接给出断言画像（默认由冻结画像裁剪）；默认行为不变。
@@ -8847,10 +8848,11 @@ class CodexUpgradeTest(unittest.TestCase):
             version=version,
             name=scenario_manifest.name,
         )
-        profile_payload = {
-            "transport": "codex-official-egress",
-            "rule_count": len(rules),
-        }
+        if profile_payload is None:
+            profile_payload = {
+                "transport": "codex-official-egress",
+                "rule_count": len(rules),
+            }
         self._write_json(
             profile_manifest,
             {
@@ -19389,8 +19391,12 @@ class CodexUpgradeTest(unittest.TestCase):
         return {**fixture, "state_dir": state_dir}
 
     @staticmethod
-    def _vc_chain_action_plan(root: Path, campaign_dir: Path, phase: str, *, fail: bool = False) -> Path:
-        """合成动作：子进程用当前工具封存本阶段 checkpoint；``fail`` 时以非零退出。"""
+    def _vc_chain_action_plan(root: Path, campaign_dir: Path, phase: str, *, fail: bool = False, stage_receipt_source: Path | None = None) -> Path:
+        """合成动作：子进程用当前工具封存本阶段 checkpoint；``fail`` 时以非零退出。
+
+        ``stage_receipt_source`` 给出时，本阶段收据取该文件的逐字节副本（真实评估链让 VC-3 阶段收据
+        等于候选树内 Catalog stage 收据，供 record-candidate-build 的 revision-seal 字节比对）。
+        """
 
         repo_root = Path(codex_upgrade.__file__).resolve().parents[2]
         if fail:
@@ -19401,12 +19407,16 @@ class CodexUpgradeTest(unittest.TestCase):
                 "from pathlib import Path\n"
                 "sys.path.insert(0, sys.argv[3])\n"
                 "campaign_dir = Path(sys.argv[1]); phase = sys.argv[2]\n"
+                "source = Path(sys.argv[4]) if len(sys.argv) > 4 and sys.argv[4] else None\n"
                 "try:\n"
                 "    from unittest import mock\n"
                 "    from tools.official_client_capture import codex_upgrade\n"
                 "    from tools.official_client_capture import codex_upgrade_job_rehearsal_receipt as rehearsal\n"
                 "    receipt = campaign_dir / 'control' / 'vc-chain' / f'{phase.lower()}-stage-result.json'\n"
-                "    receipt.write_text(json.dumps({'phase': phase, 'status': 'complete'}) + '\\n', encoding='utf-8')\n"
+                "    if source is not None:\n"
+                "        receipt.write_bytes(source.read_bytes())\n"
+                "    else:\n"
+                "        receipt.write_text(json.dumps({'phase': phase, 'status': 'complete'}) + '\\n', encoding='utf-8')\n"
                 "    receipt.chmod(0o600)\n"
                 "    # 与父测试 setUp 一致：0.154 合成 Campaign 不走正式证据标签声明。\n"
                 "    with mock.patch.object(rehearsal, '_target_evidence_label_declaration_sha256', return_value='d' * 64):\n"
@@ -19426,7 +19436,10 @@ class CodexUpgradeTest(unittest.TestCase):
                     "action_id": item_id,
                     "operation": f"{phase}:synthetic-checkpoint",
                     "timeout_seconds": 120,
-                    "command": [sys.executable, "-c", script, str(campaign_dir), phase, str(repo_root)],
+                    "command": [
+                        sys.executable, "-c", script, str(campaign_dir), phase, str(repo_root),
+                        *([str(stage_receipt_source)] if stage_receipt_source is not None else []),
+                    ],
                     "item_ids": [item_id],
                 }
             ],

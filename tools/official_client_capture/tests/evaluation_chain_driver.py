@@ -182,15 +182,29 @@ def stage_init(arguments: argparse.Namespace) -> dict[str, Any]:
         prepare_evidence=_prepare_side_evidence(None),
         extra_artifacts=_extra_artifacts(False),
     )
-    # 合成 classify 阶段结果：五件套真实文件 + 联合摘要（画像＝e2e 简化画像，绑定真实 source_spec 摘要）。
+    # 最小完整候选身份（老板二次拍板 A 受限版）：docker／go 可用时真实执行 plan-candidate-gates 与
+    # record-candidate-build（VC-4 构建收据 + VC-4 checkpoint），accept 可走到 VC-5 completion；不可用时
+    # 退回 VC-4 合成动作，accept 段由用例按 candidate_identity_fixture.available() 跳过。
+    from tools.official_client_capture.tests import candidate_identity_fixture as cif
+
+    identity_fixture: cif.CandidateIdentityFixture | None = None
+    if cif.available() and not arguments.no_candidate_identity:
+        identity_fixture = cif.CandidateIdentityFixture(
+            root / "candidate-identity", candidate_id=CANDIDATE_ID, target_version=TARGET_VERSION, baseline_version=str(manifest["baseline_version"])
+        )
+        identity_fixture.create_source_tree()
+
+    # 合成 classify 阶段结果：五件套真实文件 + 联合摘要（画像＝e2e 简化画像，绑定真实 source_spec 摘要）；
+    # 0.154 起还绑定画像派生收据与 post-promotion 门禁需求（候选身份夹具在场时）。
     profile_payload = json.loads(json.dumps(e2e.PROFILE))
     profile_payload["codex_version"] = TARGET_VERSION
     spec_path = Path(codex_upgrade.__file__).resolve().parents[2] / "docs" / "CODEX_CLI_CLIENT_EMULATION_GUIDE.md"
     if not spec_path.is_file():
         spec_path = Path(arguments.spec_path).resolve()
     profile_payload["source_spec_sha256"] = codex_upgrade.source_spec_section_sha256(spec_path, "第二章")
+    runtime_profile_payload = {"transport": "codex-official-egress", "rule_count": len(RULES), "Version": TARGET_VERSION, "Digest": "c" * 64}
     target, migration, scenario, profile, assertion_profile, _rules = case._write_classification_manifests(
-        root, rules=RULES, assertion_profile_payload=profile_payload, version=TARGET_VERSION
+        root, rules=RULES, assertion_profile_payload=profile_payload, version=TARGET_VERSION, profile_payload=runtime_profile_payload
     )
     approved_root = campaign_dir / "classification" / "approved"
     approved_root.mkdir(parents=True, mode=0o700)
@@ -207,44 +221,97 @@ def stage_init(arguments: argparse.Namespace) -> dict[str, Any]:
         destination.chmod(0o600)
         references[key] = {"path": destination.relative_to(campaign_dir).as_posix(), "sha256": _sha(destination)}
     joint = codex_upgrade._fingerprint({key: value["sha256"] for key, value in references.items()})
-    codex_upgrade.save_stage_result(
-        campaign_dir,
-        "classify",
-        {
-            "status": "complete",
-            **references,
-            "joint_manifest_sha256": joint,
-            "baseline_rule_count": len(manifest["required_rules"]),
-            "target_rule_count": len(RULES),
-            "migration": {"blocked": False},
-            "source_diff_sha256": "0" * 64,
-            "official_diff_sha256": "0" * 64,
-        },
-    )
-    # VC-2／VC-3 合成动作 → r1 → VC-4 合成动作（与既有 VC 链用例同一派发入口）。
+    classify_payload: dict[str, Any] = {
+        "status": "complete",
+        **references,
+        "joint_manifest_sha256": joint,
+        "baseline_rule_count": len(manifest["required_rules"]),
+        "target_rule_count": len(RULES),
+        # 与真实 classify 的 migration 摘要同形（accept 的 classification_unblocked 门要求 unclassified_count＝0）。
+        "migration": {"blocked": False, "entry_count": 0, "discovery_count": 0, "unclassified_count": 0},
+        "source_diff_sha256": "0" * 64,
+        "official_diff_sha256": "0" * 64,
+    }
+    requirements: dict[str, Any] | None = None
+    if identity_fixture is not None:
+        extras = cif.classification_extras(
+            campaign_dir, approved_root, manifest=manifest, migration_path=approved_root / "migration.json",
+            profile_manifest_path=approved_root / "profile.json", joint_manifest_sha256=joint, migration_reference=references["migration_manifest"],
+        )
+        requirements = extras.pop("requirements")
+        classify_payload.update(extras)
+    codex_upgrade.save_stage_result(campaign_dir, "classify", classify_payload)
+    # VC-2 合成动作；VC-3 合成动作的阶段收据＝候选树内 Catalog stage 收据字节（record-candidate-build 的
+    # revision-seal 要求二者逐字节一致），无候选身份夹具时沿用合成收据。
+    vc3_receipt_source = identity_fixture.catalog_receipt_path if identity_fixture is not None else None
     for sequence, phase in ((2, "VC-2"), (3, "VC-3")):
-        plan = case._vc_chain_action_plan(root, campaign_dir, phase)
+        plan = case._vc_chain_action_plan(root, campaign_dir, phase, stage_receipt_source=(vc3_receipt_source if phase == "VC-3" else None))
         result, returncode = codex_upgrade.compile_and_run_vc_batch(case._vc_chain_arguments({**fixture, "state_dir": state_dir}, phase, sequence, plan))
         if returncode != 0:
             raise SystemExit(f"{phase} 合成批次失败：{json.dumps(result, ensure_ascii=False, default=str)[:2000]}")
     codex_upgrade.open_candidate_revision(argparse.Namespace(campaign_dir=campaign_dir, candidate_id=CANDIDATE_ID, initial=True, supersedes=None))
-    plan = case._vc_chain_action_plan(root, campaign_dir, "VC-4")
-    result, returncode = codex_upgrade.compile_and_run_vc_batch(case._vc_chain_arguments({**fixture, "state_dir": state_dir}, "VC-4", 4, plan))
-    if returncode != 0:
-        raise SystemExit(f"VC-4 合成批次失败：{json.dumps(result, ensure_ascii=False, default=str)[:2000]}")
+    identity: dict[str, Any]
+    if identity_fixture is not None:
+        assert requirements is not None
+        mapping_path = identity_fixture.write_gate_mapping(requirements)
+        identity_fixture.plan_gates(campaign_dir, mapping_path)
+        identity_fixture.commit_candidate()
+        identity_fixture.build_binary()
+        identity_fixture.assemble_trees()
+        identity_fixture.build_image()
+        identity_fixture.write_builder_receipt()
+        parameters_path = identity_fixture.build_parameters()
+        identity_fixture.write_source_transition()
+        timing = manifest["control_receipts"]["upgrade_timing"]
+        implementation_root, implementation_receipt = identity_fixture.write_implementation_receipt(
+            upgrade_id=str(timing["upgrade_id"]), campaign_id=str(manifest["campaign_id"]), campaign_purpose=str(manifest["campaign_purpose"]),
+            source_tree_sha256=codex_upgrade._directory_tree_digest(identity_fixture.source),
+        )
+        recorded = identity_fixture.record_build(
+            campaign_dir, manifest, build_parameters=parameters_path, implementation_root=implementation_root, implementation_receipt=implementation_receipt
+        )
+        receipt_path = Path(str(recorded["build_receipt"]))
+        receipt = _read(receipt_path)
+        identity = {
+            "git_commit": receipt["source"]["git_commit"],
+            "source_root": receipt["source"]["root"],
+            "source_tree_sha256": receipt["source"]["tree_sha256"],
+            "image_reference": receipt["image"]["reference"],
+            "image_digest": receipt["image"]["manifest_digest"],
+            "image_id": receipt["image"]["image_id"],
+            "build_id": receipt["build"]["build_id"],
+            "deployed_version": receipt["deployed_version"],
+            "profile_id": receipt["profile"]["profile_id"],
+            "profile_digest": receipt["profile"]["profile_digest"],
+            "candidate_purpose": receipt["candidate_purpose"],
+            "target_architecture": receipt["target_architecture"],
+            "binary": dict(receipt["binary"]),
+            "build_parameters_sha256": receipt["build"]["parameters_sha256"],
+            "catalog_stage": dict(receipt["catalog_stage"]),
+            "source_transition": dict(receipt["source_transition"]),
+            "gate_requirements": dict(receipt["gate_requirements"]),
+            "gate_plan": dict(receipt["gate_plan"]),
+            "build_receipt": {"path": receipt_path.relative_to(campaign_dir).as_posix(), "sha256": _sha(receipt_path), "bytes": receipt_path.stat().st_size},
+            "build_receipt_digest": receipt["receipt_digest"],
+        }
+    else:
+        plan = case._vc_chain_action_plan(root, campaign_dir, "VC-4")
+        result, returncode = codex_upgrade.compile_and_run_vc_batch(case._vc_chain_arguments({**fixture, "state_dir": state_dir}, "VC-4", 4, plan))
+        if returncode != 0:
+            raise SystemExit(f"VC-4 合成批次失败：{json.dumps(result, ensure_ascii=False, default=str)[:2000]}")
+        identity = {
+            "git_commit": "f" * 40,
+            "source_tree_sha256": "d" * 64,
+            "image_reference": f"sub2apiplus@sha256:{'9' * 64}",
+            "image_digest": f"sha256:{'9' * 64}",
+            "image_id": f"sha256:{'e' * 64}",
+            "build_id": "build-0154-test",
+            "deployed_version": TARGET_VERSION,
+            "profile_id": f"codex-{TARGET_VERSION}-test-v1",
+            "profile_digest": "c" * 64,
+            "candidate_purpose": manifest["campaign_purpose"],
+        }
     # 候选 seal（真实 bundle 作证据根；候选证据 surface 由参数决定，全程不再更换）。
-    identity = {
-        "git_commit": "f" * 40,
-        "source_tree_sha256": "d" * 64,
-        "image_reference": f"sub2apiplus@sha256:{'9' * 64}",
-        "image_digest": f"sha256:{'9' * 64}",
-        "image_id": f"sha256:{'e' * 64}",
-        "build_id": "build-0154-test",
-        "deployed_version": TARGET_VERSION,
-        "profile_id": f"codex-{TARGET_VERSION}-test-v1",
-        "profile_digest": "c" * 64,
-        "candidate_purpose": manifest["campaign_purpose"],
-    }
     case._write_capture_stage(
         campaign_dir,
         campaign_dir / "candidate-evidence",
@@ -297,6 +364,7 @@ def stage_init(arguments: argparse.Namespace) -> dict[str, Any]:
         "job_ids": [str(item["id"]) for item in attempt_payload["results"]],
         "attempt_id": attempt_root.name,
         "rules": list(RULES),
+        "candidate_identity": identity_fixture.identity_state() if identity_fixture is not None else None,
     }
     _write(root / "chain-state.json", state)
     case.doCleanups()
@@ -411,11 +479,17 @@ def stage_dispatch(arguments: argparse.Namespace) -> dict[str, Any]:
     plan_path = Path(state["root"]) / f"plans-{arguments.tag}" / "vc-5.json"
     _write(plan_path, plan_doc)
     predecessor = codex_upgrade._vc_checkpoint_path(campaign_dir, "VC-4", revision=1)
+    # 全局批次序号由既有 COMMIT 序号推算（真实 record-candidate-build 不占批次序号，有无候选身份夹具时
+    # VC-5 首批序号不同）；显式 --sequence 只作核对。
+    manifest = codex_upgrade._require_formal_campaign(campaign_dir)
+    sequence = max(codex_upgrade._committed_vc_sequences(campaign_dir, manifest), default=0) + 1
+    if arguments.sequence is not None and int(arguments.sequence) != sequence:
+        raise SystemExit(f"dispatch 序号核对失败：请求 {arguments.sequence}，既有 COMMIT 推算为 {sequence}。")
     namespace = argparse.Namespace(
         campaign_dir=campaign_dir,
         state_dir=Path(state["state_dir"]),
         phase="VC-5",
-        sequence=int(arguments.sequence),
+        sequence=sequence,
         predecessor_checkpoint=predecessor,
         action_plan=plan_path.resolve(),
         heartbeat_seconds=0.2,
@@ -520,6 +594,37 @@ def stage_epoch(arguments: argparse.Namespace) -> dict[str, Any]:
     )
 
 
+def stage_accept_direct(arguments: argparse.Namespace) -> dict[str, Any]:
+    """在本副本树进程内直接调用真实 ``accept_campaign``（不经父监督器），供 C1 崩溃注入：
+    ``--crash-at completion`` 让 accept 结果已封存、VC-5 completion 写出前 SIGKILL。"""
+
+    from tools.official_client_capture import codex_upgrade
+
+    state = _load_state(arguments)
+    if not state.get("gate_root"):
+        raise SystemExit("accept-direct 前必须先在本副本树上执行 gate 阶段生成外部门禁收据。")
+    campaign_dir = Path(state["campaign_dir"])
+    candidate_id = str(state["candidate_id"])
+    if arguments.crash_at == "completion":
+        _crash_patch(codex_upgrade, "_complete_vc_with_receipt").start()
+    elif arguments.crash_at:
+        raise SystemExit(f"accept-direct 不支持崩溃点：{arguments.crash_at}")
+    try:
+        result = codex_upgrade.accept_campaign(
+            campaign_dir, candidate_id, codex_upgrade._default_assertions_path(campaign_dir, candidate_id),
+            Path(state["gate_root"]), Path(state["gate_receipt"]),
+        )
+    except codex_upgrade.ConfigurationError as error:
+        return {"status": "error", "error": str(error)}
+    return {
+        "status": "accepted" if result.get("accepted") else "rejected",
+        "accepted": result.get("accepted"),
+        "vc5_checkpoint_sha256": result.get("vc5_checkpoint_sha256"),
+        "vc5_completion_receipt_digest": result.get("vc5_completion_receipt_digest"),
+        "failed_gates": result.get("failed_gates"),
+    }
+
+
 def stage_gate(arguments: argparse.Namespace) -> dict[str, Any]:
     """在本副本树上生成候选外部门禁收据（收据 producer 绑定 finalizer 的绝对路径与摘要，accept 必须在同一树重放）。"""
 
@@ -569,8 +674,9 @@ def _parser() -> argparse.ArgumentParser:
     init.add_argument("--campaign-id", default="upgrade-0154-eval-chain")
     init.add_argument("--candidate-surface", default="codex")
     init.add_argument("--spec-path", default="")
+    init.add_argument("--no-candidate-identity", action="store_true")
     dispatch = subparsers.add_parser("dispatch")
-    dispatch.add_argument("--sequence", type=int, required=True)
+    dispatch.add_argument("--sequence", type=int, default=None)
     dispatch.add_argument("--tag", required=True)
     dispatch.add_argument("--actions", nargs="+", required=True, choices=("compare", "assert", "accept"))
     dispatch.add_argument("--baseline", type=int, default=0)
@@ -594,6 +700,8 @@ def _parser() -> argparse.ArgumentParser:
     epoch.add_argument("--reason", required=True)
     gate = subparsers.add_parser("gate")
     gate.add_argument("--tag", required=True)
+    accept_direct = subparsers.add_parser("accept-direct")
+    accept_direct.add_argument("--crash-at", default="")
     subparsers.add_parser("identity")
     return parser
 
@@ -609,6 +717,7 @@ def main(argv: list[str] | None = None) -> int:
         "recover": stage_recover,
         "epoch": stage_epoch,
         "gate": stage_gate,
+        "accept-direct": stage_accept_direct,
         "identity": stage_identity,
     }
     result = stages[arguments.stage](arguments)

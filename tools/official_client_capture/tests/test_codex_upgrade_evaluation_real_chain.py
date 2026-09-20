@@ -4,18 +4,27 @@
 动作是真实 CLI ``compare``／真实 builder＋真实 checker／真实 CLI ``accept``；父进程只准备非受管输入
 （副本树、部署收据 fixture）并断言结果，不用原仓库创建或推进受管 Campaign（老板拍板 4.1）。
 
+候选身份（老板 2026-09-20 二次拍板 A 受限版）：docker 与 go 可用（linux/arm64）时，驱动 ``init`` 以真实
+``plan-candidate-gates``／``record-candidate-build`` 建立 0.154 候选身份（真实源码树、二进制、镜像与
+VC-4 构建收据），accept 因而真实运行到 AcceptanceFact 与 VC-5 completion；不可用时（开发机无 docker）
+用例 1～3 只验证到 b1 断言，随后如实标记 skip（accept／completion 段未执行，不把失败当预期）。
+有固定采集执行副本（``/root/oauth-capture``）的机器上，每个受管子进程在独立 mount namespace 内把该固定
+路径绑定到当前副本树，执行树一致性校验原样生效，不放宽（``managed_tree_copy.python_command``）。
+
 * 用例 1（checker 缺陷）：正式 Campaign 在缺陷副本 A（checker 对 SPEC-EP-006 误判）下建立并执行 b0 →
   父 run failed（post-run-tooling）→ reconcile → 修复副本 B（原 checker）：无 epoch 的 apply 被拒 →
   ``evaluation-epoch`` → apply（evaluator-defect，部署收据按 B 身份）→ b1 committed（两条规则全部重跑）→
-  派发 b1（后继协议）→ compare 重跑、断言全部重跑全 pass、accept 真实 CLI 动作执行至候选生产合同
-  （VC-4 构建收据）——候选证据全程不换；
+  派发 b1（后继协议）→ compare 重跑、断言全部重跑全 pass、accept 真实 CLI 动作通过 → VC-5 completion
+  绑定 b1 的 AcceptanceFact——候选证据全程不换；
 * 用例 2（accept-reader 缺陷，副本 C）：b0 断言全 pass、accept 动作失败 → offline-accept-failed／anchored →
-  apply（accept_reader 变化、无需 epoch）→ b1 断言全部复用（零 checker）；
+  apply（accept_reader 变化、无需 epoch）→ b1 断言全部复用（零 checker）、accept 通过 → completion；
 * 用例 3（compare-reader 缺陷，副本 D）：b0 compare 动作失败 → offline-compare-failed／none → apply →
-  b1 compare 重跑、断言全部 pending 重跑；
+  b1 compare 重跑、断言全部 pending 重跑、accept 通过 → completion；
 * R2／R2-b：父进程在 post-run-tooling 收据前／动作输出绑定前被 SIGKILL → monitor 封存 → reconciler 补写
   → 继续恢复到 b1；
 * E1～E5：apply 在状态机五个写点逐点崩溃并续作收敛；
+* C1：accept 结果已封存、VC-5 completion 写出前崩溃（副本树子进程内 patch ``_complete_vc_with_receipt``）
+  → 续跑 accept：既有 AcceptanceFact 字节不变，只补 completion；
 * 后继协议伪造负例（篡改 b1 COMMIT）。
 
 本文件位于 tests/，不进受管摘要。
@@ -23,6 +32,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import tempfile
 import time
@@ -32,6 +42,7 @@ from pathlib import Path
 
 from tools.official_client_capture import codex_upgrade_timing_ledger as timing_ledger
 from tools.official_client_capture import codex_upgrade_vc_artifacts as artifacts
+from tools.official_client_capture.tests import candidate_identity_fixture as cif
 from tools.official_client_capture.tests import managed_tree_copy as mtc
 
 DRIVER = "tools.official_client_capture.tests.evaluation_chain_driver"
@@ -40,8 +51,17 @@ CANDIDATE = "candidate-r1"
 RULES = ("SPEC-H1-001", "SPEC-EP-006")
 
 
+# 候选身份夹具（docker + go，linux/arm64）可用时 accept／VC-5 completion 段真实执行；模块导入时判定一次。
+CANDIDATE_IDENTITY_AVAILABLE = cif.available()
+ACCEPT_SKIP_REASON = "accept／VC-5 completion 段需要候选身份夹具（docker 与 go，linux/arm64），本机不可用"
+
+
 def _read(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 class _RealChainHarness:
@@ -180,13 +200,64 @@ class _RealChainHarness:
     def b0_index_path(self) -> Path:
         return self.campaign_dir() / "assertions" / CANDIDATE / "evaluation-run.json"
 
+    def batch(self, dispatched: dict) -> dict:
+        return _read(self.campaign_dir() / "control" / "vc" / "batches" / f"{int(dispatched['batch_sequence']):04d}-vc-5.json")
+
+    def acceptance_path(self, baseline: int) -> Path:
+        base = self.campaign_dir() / "acceptance" / CANDIDATE
+        return base / "result.json" if baseline == 0 else base / "revisions" / f"b{baseline}" / "result.json"
+
+    def vc5_checkpoint_path(self) -> Path:
+        return self.campaign_dir() / "control" / "vc" / "vc-5-checkpoint.json"
+
+    def vc5_completion_path(self) -> Path:
+        return self.campaign_dir() / "control" / "vc" / "receipts" / CANDIDATE / "vc5-completion.json"
+
+    def assert_accepted_to_completion(self, baseline: int) -> dict:
+        """AcceptanceFact 通过、VC-5 checkpoint 与 completion 收据存在且逐字节绑定该基线的验收结果。"""
+
+        acceptance_path = self.acceptance_path(baseline)
+        self.case.assertTrue(acceptance_path.is_file(), acceptance_path)
+        acceptance = _read(acceptance_path)
+        self.case.assertEqual((acceptance["accepted"], acceptance["status"], acceptance["failed_gates"]), (True, "complete", []), acceptance.get("gates"))
+        self.case.assertTrue(all(acceptance["gates"].values()), acceptance["gates"])
+        self.case.assertEqual(acceptance["candidate_identity"]["build_receipt_digest"], self.state()["identity"]["build_receipt_digest"])
+        self.case.assertTrue(acceptance_path.with_name("evidence-seal.json").is_file())
+        checkpoint = _read(self.vc5_checkpoint_path())
+        self.case.assertEqual((checkpoint["phase"], checkpoint["status"]), ("VC-5", "complete"))
+        self.case.assertEqual(checkpoint["stage_receipt"]["path"], self.vc5_completion_path().relative_to(self.campaign_dir()).as_posix())
+        self.case.assertEqual(checkpoint["stage_receipt"]["sha256"], _sha256(self.vc5_completion_path()))
+        completion = _read(self.vc5_completion_path())
+        self.case.assertEqual((completion["kind"], completion["status"], completion["assertions"]["acceptance_passed"]), ("vc5_completion", "complete", True))
+        self.case.assertEqual(
+            [(row["role"], row["path"], row["sha256"]) for row in completion["evidence"]],
+            [("acceptance_fact", acceptance_path.relative_to(self.campaign_dir()).as_posix(), _sha256(acceptance_path))],
+        )
+        self.case.assertEqual(completion["subject"]["candidate_id"], CANDIDATE)
+        return acceptance
+
+    def accept_direct(self, tree_root: Path, *, crash_at: str = "", expect_exit: int = 0) -> dict:
+        arguments = ["accept-direct"]
+        if crash_at:
+            arguments.extend(["--crash-at", crash_at])
+        return self.run(tree_root, *arguments, expect_exit=expect_exit)
+
     # ---- 常用链段 ---------------------------------------------------------------
 
     def init(self, tree_root: Path, *, candidate_surface: str = "codex") -> dict:
-        return self.run(tree_root, "init", "--candidate-surface", candidate_surface)
+        arguments = ["init", "--candidate-surface", candidate_surface]
+        if not CANDIDATE_IDENTITY_AVAILABLE:
+            arguments.append("--no-candidate-identity")
+        state = self.run(tree_root, *arguments)
+        identity = state.get("candidate_identity")
+        if identity:
+            # 一次性 registry 容器与候选镜像属非受管夹具，测试结束时由父进程清理。
+            self.case.addCleanup(cif.cleanup_identity, identity)
+        return state
 
-    def dispatch(self, tree_root: Path, sequence: int, tag: str, actions: list[str], *, baseline: int = 0, reuse_from: Path | None = None, authority: str = "none", reuse_items: list[str] | None = None, crash_at: str = "", expect_exit: int = 0) -> dict:
-        arguments = ["dispatch", "--sequence", str(sequence), "--tag", tag, "--actions", *actions, "--baseline", str(baseline), "--authority", authority]
+    def dispatch(self, tree_root: Path, tag: str, actions: list[str], *, baseline: int = 0, reuse_from: Path | None = None, authority: str = "none", reuse_items: list[str] | None = None, crash_at: str = "", expect_exit: int = 0) -> dict:
+        # 全局批次序号由驱动按既有 COMMIT 推算（真实 record-candidate-build 不占序号）。
+        arguments = ["dispatch", "--tag", tag, "--actions", *actions, "--baseline", str(baseline), "--authority", authority]
         if reuse_from is not None:
             arguments.extend(["--reuse-from", str(reuse_from)])
         if reuse_items:
@@ -207,16 +278,12 @@ class _RealChainHarness:
         return self.run(tree_root, *arguments, expect_exit=expect_exit)
 
 
-# 采集执行位置是合同常量（execution_contract.capture_root 必须等于 /root/oauth-capture）；有生产执行副本的
-# 机器上，副本受管树建 Campaign 时 _verify_execution_tree 会拿该副本与副本树逐字比对而必然不一致。
-# 真实链因此只能在没有执行副本的机器（开发机／CI）运行，真机上如实跳过，不得为此放宽执行树校验。
-PRODUCTION_EXECUTION_TREE = Path("/root/oauth-capture/tools/official_client_capture")
-
-
 class RealEvaluationChainTests(unittest.TestCase):
     def setUp(self) -> None:
-        if PRODUCTION_EXECUTION_TREE.is_dir():
-            self.skipTest(f"本机存在固定采集执行副本 {PRODUCTION_EXECUTION_TREE}，副本受管树 Campaign 的执行树校验必然不一致")
+        # 采集执行位置是合同常量（execution_contract.capture_root＝/root/oauth-capture）。有固定执行副本的机器上
+        # 受管子进程在独立 mount namespace 内把该路径绑定到当前副本树（需要 root 与 unshare）；建不起来才跳过。
+        if mtc.execution_tree_binding_required() and not mtc.execution_tree_binding_available():
+            self.skipTest(f"本机存在固定采集执行副本 {mtc.PRODUCTION_EXECUTION_TREE}，但无法建立 mount namespace 绑定（需要 root 与 unshare）")
         self._temporary = tempfile.TemporaryDirectory(prefix="eval-real-chain-")
         self.addCleanup(self._temporary.cleanup)
         self.work = Path(self._temporary.name).resolve()
@@ -237,9 +304,9 @@ class RealEvaluationChainTests(unittest.TestCase):
         # ---- 缺陷副本 A：建 Campaign（plan 冻结 A 的身份）、compare、b0 断言失败 ----
         h.init(tree_a)
         h.run(tree_a, "gate", "--tag", "a")
-        compare0 = h.dispatch(tree_a, 5, "compare0", ["compare"])
+        compare0 = h.dispatch(tree_a, "compare0", ["compare"])
         self.assertEqual((compare0["returncode"], compare0["campaign_run"]["reason"]), (0, "queue-complete"))
-        b0 = h.dispatch(tree_a, 6, "b0", ["assert", "accept"], reuse_items=["compare"])
+        b0 = h.dispatch(tree_a, "b0", ["assert", "accept"], reuse_items=["compare"])
         self.assertEqual((b0["returncode"], b0["campaign_run"]["reason"]), (1, "action-failed:vc5-1-assert"), b0)
         self.assertEqual(b0["campaign_run"]["actions"][0]["effective_failure_class"], "post-run-tooling")
         self.assertEqual(len(b0["campaign_run"]["actions"]), 1)  # accept 未执行
@@ -251,7 +318,7 @@ class RealEvaluationChainTests(unittest.TestCase):
             document = _read(h.campaign_dir() / checkpoint["document"]["path"])
             self.assertEqual(document["checker_sha256"], digests_a["checker_sha256"])  # 三者一致
         self.assertEqual(h.summary()["status"], "recovery_required")
-        batch0 = _read(h.campaign_dir() / "control" / "vc" / "batches" / "0006-vc-5.json")
+        batch0 = h.batch(b0)
         self.assertEqual(batch0["evaluator_digests"], digests_a)
         self.assertIsNone(batch0["evaluation_baseline"])
 
@@ -298,14 +365,15 @@ class RealEvaluationChainTests(unittest.TestCase):
         summary = h.summary()
         self.assertEqual((summary["status"], summary["current_evaluation_baseline"]["evaluation_baseline"]), ("active", 1))
 
-        # ---- 派发 b1（评估基线后继协议）：compare 重跑 → 断言全部重跑全 pass → accept 真实 CLI 动作 ----
-        compare1 = h.dispatch(tree_b, 7, "compare1", ["compare"], baseline=1)
+        # ---- 派发 b1（评估基线后继协议）：compare 重跑 → 断言全部重跑全 pass → accept 真实 CLI 动作 → completion ----
+        compare1 = h.dispatch(tree_b, "compare1", ["compare"], baseline=1)
         self.assertEqual((compare1["returncode"], compare1["campaign_run"]["reason"]), (0, "queue-complete"), compare1)
-        batch7 = _read(h.campaign_dir() / "control" / "vc" / "batches" / "0007-vc-5.json")
-        self.assertEqual((batch7["evaluation_baseline"], batch7["baseline_commit_sha256"], batch7["evaluator_digests"]), (1, applied["commit_sha256"], digests_b))
+        batch1 = h.batch(compare1)
+        self.assertEqual((batch1["evaluation_baseline"], batch1["baseline_commit_sha256"], batch1["evaluator_digests"]), (1, applied["commit_sha256"], digests_b))
         self.assertTrue((h.campaign_dir() / "comparisons" / CANDIDATE / "revisions" / "b1" / "result.json").is_file())
         h.run(tree_b, "gate", "--tag", "b")
-        b1 = h.dispatch(tree_b, 8, "b1", ["assert", "accept"], baseline=1, reuse_from=h.b0_index_path(), authority="anchored", reuse_items=["compare"])
+        b1_actions = ["assert", "accept"] if CANDIDATE_IDENTITY_AVAILABLE else ["assert"]
+        b1 = h.dispatch(tree_b, "b1", b1_actions, baseline=1, reuse_from=h.b0_index_path(), authority="anchored", reuse_items=["compare"])
         actions = {action["action_id"]: action for action in b1["campaign_run"]["actions"]}
         self.assertEqual(actions["vc5-1-assert"]["status"], "passed", b1)
         index1 = h.index(1)
@@ -314,12 +382,14 @@ class RealEvaluationChainTests(unittest.TestCase):
         self.assertTrue((h.campaign_dir() / "assertions" / CANDIDATE / "revisions" / "b1" / "results.json").is_file())
         for checkpoint in h.checkpoints(1):
             self.assertEqual(checkpoint["checker_sha256"], digests_b["checker_sha256"])
+        if not CANDIDATE_IDENTITY_AVAILABLE:
+            self.skipTest(ACCEPT_SKIP_REASON)
         # accept 真实 CLI 动作在正式监督器内执行：断言读侧（基线授权身份、checkpoint 一致、epoch 回读、
-        # 复用锚点）全部通过，止于候选身份的 VC-4 构建收据（0.154 生产合同，非 evaluator 侧；合成
-        # Campaign 没有该收据——见汇报第五节）。
-        self.assertEqual(actions["vc5-2-accept"]["status"], "failed", b1)
-        diagnostic = h.diagnostics(b1["campaign_run"]["run_dir"])["vc5-2-accept"]
-        self.assertIn("VC-4 构建收据", diagnostic["message"])
+        # 复用锚点）与候选身份（VC-4 构建收据真实重放）全部通过 → AcceptanceFact → VC-5 completion 绑定 b1。
+        self.assertEqual((b1["returncode"], b1["campaign_run"]["reason"], actions["vc5-2-accept"]["status"]), (0, "queue-complete", "passed"), b1)
+        acceptance = h.assert_accepted_to_completion(1)
+        self.assertEqual(acceptance["assertions"], {"complete": True, "failed_rules": [], "not_applicable_count": 0, "pass_count": len(RULES), "rule_count": len(RULES)})
+        self.assertFalse(h.acceptance_path(0).exists())  # b0 从未到达 accept
 
     # ------------------------------------------------------------------
     # 用例 2：accept-reader 缺陷 → offline-accept-failed／anchored → b1 全部复用、零 checker
@@ -334,8 +404,8 @@ class RealEvaluationChainTests(unittest.TestCase):
         self.assertEqual(digests_c["compare_reader_sha256"], digests_b["compare_reader_sha256"])
         h.init(tree_c)
         h.run(tree_c, "gate", "--tag", "c")
-        self.assertEqual(h.dispatch(tree_c, 5, "compare0", ["compare"])["returncode"], 0)
-        b0 = h.dispatch(tree_c, 6, "b0", ["assert", "accept"], reuse_items=["compare"])
+        self.assertEqual(h.dispatch(tree_c, "compare0", ["compare"])["returncode"], 0)
+        b0 = h.dispatch(tree_c, "b0", ["assert", "accept"], reuse_items=["compare"])
         actions = {action["action_id"]: action for action in b0["campaign_run"]["actions"]}
         self.assertEqual(actions["vc5-1-assert"]["status"], "passed", b0)
         self.assertEqual((actions["vc5-2-accept"]["status"], actions["vc5-2-accept"]["effective_failure_class"]), ("failed", "post-run-tooling"))
@@ -353,9 +423,10 @@ class RealEvaluationChainTests(unittest.TestCase):
         self.assertEqual(applied["reuse_rules"], sorted(RULES))
         self.assertEqual(applied["stage_sources"]["compare"]["source"], "reused")
         self.assertIsNone(_read(h.campaign_dir() / "candidates" / CANDIDATE / "revisions" / "b1" / "recovery.json")["evaluation_epoch"])
-        # b1：断言批次全部复用（reused checkpoint 指向 b0 链，checker 调用 0），accept 真实 CLI 动作。
+        # b1：断言批次全部复用（reused checkpoint 指向 b0 链，checker 调用 0），accept 真实 CLI 动作 → completion。
         h.run(tree_b, "gate", "--tag", "b")
-        b1 = h.dispatch(tree_b, 7, "b1", ["assert", "accept"], baseline=1, reuse_from=h.b0_index_path(), authority="anchored", reuse_items=["compare"])
+        b1_actions = ["assert", "accept"] if CANDIDATE_IDENTITY_AVAILABLE else ["assert"]
+        b1 = h.dispatch(tree_b, "b1", b1_actions, baseline=1, reuse_from=h.b0_index_path(), authority="anchored", reuse_items=["compare"])
         actions = {action["action_id"]: action for action in b1["campaign_run"]["actions"]}
         self.assertEqual(actions["vc5-1-assert"]["status"], "passed", b1)
         index1 = h.index(1)
@@ -363,8 +434,12 @@ class RealEvaluationChainTests(unittest.TestCase):
         b1_machine = h.campaign_dir() / "assertions" / CANDIDATE / "revisions" / "b1" / "machine"
         self.assertFalse((b1_machine / "candidate" / "SPEC-H1-001.json").exists())  # 零 checker：没有新文档
         self.assertTrue(all(checkpoint["reused_from"] is not None for checkpoint in h.checkpoints(1)))
-        self.assertEqual(actions["vc5-2-accept"]["status"], "failed")
-        self.assertIn("VC-4 构建收据", h.diagnostics(b1["campaign_run"]["run_dir"])["vc5-2-accept"]["message"])
+        if not CANDIDATE_IDENTITY_AVAILABLE:
+            self.skipTest(ACCEPT_SKIP_REASON)
+        self.assertEqual((b1["returncode"], b1["campaign_run"]["reason"], actions["vc5-2-accept"]["status"]), (0, "queue-complete", "passed"), b1)
+        h.assert_accepted_to_completion(1)
+        # b0 的 accept 动作在注入缺陷处失败关闭，没有留下（阻断）验收结果。
+        self.assertFalse(h.acceptance_path(0).exists())
 
     # ------------------------------------------------------------------
     # 用例 3：compare-reader 缺陷 → offline-compare-failed／none → b1 全部 pending 重跑
@@ -374,7 +449,7 @@ class RealEvaluationChainTests(unittest.TestCase):
         h = self.harness
         tree_d, tree_b = h.tree_d(), h.tree_b()
         h.init(tree_d)
-        compare0 = h.dispatch(tree_d, 5, "compare0", ["compare"])
+        compare0 = h.dispatch(tree_d, "compare0", ["compare"])
         self.assertEqual((compare0["returncode"], compare0["campaign_run"]["reason"]), (1, "action-failed:vc5-1-compare"), compare0)
         self.assertEqual(compare0["campaign_run"]["actions"][0]["effective_failure_class"], "post-run-tooling")
         self.assertIn("injected-compare-defect", h.diagnostics(compare0["campaign_run"]["run_dir"])["vc5-1-compare"]["message"])
@@ -387,13 +462,19 @@ class RealEvaluationChainTests(unittest.TestCase):
         self.assertEqual(applied["execute_rules"], sorted(RULES))
         self.assertEqual(applied["reuse_rules"], [])
         self.assertEqual(applied["stage_sources"]["compare"]["source"], "local")
-        compare1 = h.dispatch(tree_b, 6, "compare1", ["compare"], baseline=1)
+        compare1 = h.dispatch(tree_b, "compare1", ["compare"], baseline=1)
         self.assertEqual((compare1["returncode"], compare1["campaign_run"]["reason"]), (0, "queue-complete"), compare1)
-        b1 = h.dispatch(tree_b, 7, "b1", ["assert"], baseline=1, authority="none", reuse_items=["compare"])
+        h.run(tree_b, "gate", "--tag", "b")
+        b1_actions = ["assert", "accept"] if CANDIDATE_IDENTITY_AVAILABLE else ["assert"]
+        b1 = h.dispatch(tree_b, "b1", b1_actions, baseline=1, authority="none", reuse_items=["compare"])
         self.assertEqual((b1["returncode"], b1["campaign_run"]["reason"]), (0, "queue-complete"), b1)
         index1 = h.index(1)
         self.assertTrue(all(row["status"] == "pass" and row["reused_from"] is None for row in index1["rules"]))
         self.assertTrue((h.campaign_dir() / "assertions" / CANDIDATE / "revisions" / "b1" / "results.json").is_file())
+        if not CANDIDATE_IDENTITY_AVAILABLE:
+            self.skipTest(ACCEPT_SKIP_REASON)
+        self.assertEqual({action["action_id"]: action["status"] for action in b1["campaign_run"]["actions"]}, {"vc5-1-assert": "passed", "vc5-2-accept": "passed"})
+        h.assert_accepted_to_completion(1)
 
     # ------------------------------------------------------------------
     # R2：父进程在 post-run-tooling 收据前 SIGKILL → monitor 封存 → reconciler 补写 → 恢复到 b1
@@ -403,8 +484,8 @@ class RealEvaluationChainTests(unittest.TestCase):
         h = self.harness
         tree_a, tree_b = h.tree_a(), h.tree_b()
         h.init(tree_a)
-        self.assertEqual(h.dispatch(tree_a, 5, "compare0", ["compare"])["returncode"], 0)
-        crashed = h.dispatch(tree_a, 6, "b0", ["assert"], reuse_items=["compare"], crash_at="post-run-tooling", expect_exit=137)
+        self.assertEqual(h.dispatch(tree_a, "compare0", ["compare"])["returncode"], 0)
+        crashed = h.dispatch(tree_a, "b0", ["assert"], reuse_items=["compare"], crash_at="post-run-tooling", expect_exit=137)
         self.assertEqual(crashed["returncode"], 137)
         run_dirs = sorted(p for p in Path(h.state()["state_dir"]).iterdir() if p.name.startswith("run-"))
         run_dir = max(run_dirs, key=lambda p: p.stat().st_mtime)
@@ -427,8 +508,8 @@ class RealEvaluationChainTests(unittest.TestCase):
         h.run(tree_b, "epoch", "--attempt-id", h.state()["attempt_id"], "--reason", "evaluator checker fix")
         applied = h.apply_fix(tree_b, h.deployment_receipt(tree_b, "fix-b"))
         self.assertEqual((applied["status"], applied["evaluation_baseline"]), ("applied", 1), applied)
-        self.assertEqual(h.dispatch(tree_b, 7, "compare1", ["compare"], baseline=1)["returncode"], 0)
-        b1 = h.dispatch(tree_b, 8, "b1", ["assert"], baseline=1, reuse_from=h.b0_index_path(), authority="anchored", reuse_items=["compare"])
+        self.assertEqual(h.dispatch(tree_b, "compare1", ["compare"], baseline=1)["returncode"], 0)
+        b1 = h.dispatch(tree_b, "b1", ["assert"], baseline=1, reuse_from=h.b0_index_path(), authority="anchored", reuse_items=["compare"])
         self.assertEqual((b1["returncode"], b1["campaign_run"]["reason"]), (0, "queue-complete"), b1)
         self.assertTrue(all(row["status"] == "pass" and row["reused_from"] is None for row in h.index(1)["rules"]))
 
@@ -436,8 +517,8 @@ class RealEvaluationChainTests(unittest.TestCase):
         h = self.harness
         tree_a, tree_b = h.tree_a(), h.tree_b()
         h.init(tree_a)
-        self.assertEqual(h.dispatch(tree_a, 5, "compare0", ["compare"])["returncode"], 0)
-        h.dispatch(tree_a, 6, "b0", ["assert"], reuse_items=["compare"], crash_at="before-binding", expect_exit=137)
+        self.assertEqual(h.dispatch(tree_a, "compare0", ["compare"])["returncode"], 0)
+        h.dispatch(tree_a, "b0", ["assert"], reuse_items=["compare"], crash_at="before-binding", expect_exit=137)
         run_dir = max((p for p in Path(h.state()["state_dir"]).iterdir() if p.name.startswith("run-")), key=lambda p: p.stat().st_mtime)
         state = h.wait_run_state(str(run_dir), {"failed", "watchdog-aborted"})
         self.assertEqual(state["state"], "failed", state)
@@ -452,8 +533,8 @@ class RealEvaluationChainTests(unittest.TestCase):
         self.assertEqual((applied["status"], applied["reuse_rules"]), ("applied", []), applied)
         recovery = _read(h.campaign_dir() / "candidates" / CANDIDATE / "revisions" / "b1" / "recovery.json")
         self.assertEqual(recovery["reuse_authority"], "none")
-        self.assertEqual(h.dispatch(tree_b, 7, "compare1", ["compare"], baseline=1)["returncode"], 0)
-        b1 = h.dispatch(tree_b, 8, "b1", ["assert"], baseline=1, authority="none", reuse_items=["compare"])
+        self.assertEqual(h.dispatch(tree_b, "compare1", ["compare"], baseline=1)["returncode"], 0)
+        b1 = h.dispatch(tree_b, "b1", ["assert"], baseline=1, authority="none", reuse_items=["compare"])
         self.assertEqual(b1["returncode"], 0, b1)
         self.assertTrue(all(row["reused_from"] is None for row in h.index(1)["rules"]))
 
@@ -465,8 +546,8 @@ class RealEvaluationChainTests(unittest.TestCase):
         h = self.harness
         tree_a, tree_b = h.tree_a(), h.tree_b()
         h.init(tree_a)
-        self.assertEqual(h.dispatch(tree_a, 5, "compare0", ["compare"])["returncode"], 0)
-        b0 = h.dispatch(tree_a, 6, "b0", ["assert"], reuse_items=["compare"])
+        self.assertEqual(h.dispatch(tree_a, "compare0", ["compare"])["returncode"], 0)
+        b0 = h.dispatch(tree_a, "b0", ["assert"], reuse_items=["compare"])
         self.assertEqual(b0["returncode"], 1)
         self.assertEqual(h.run(tree_a, "reconcile", "--run-dir", b0["campaign_run"]["run_dir"])["status"], "recoverable")
         h.run(tree_b, "epoch", "--attempt-id", h.state()["attempt_id"], "--reason", "evaluator checker fix")
@@ -514,6 +595,43 @@ class RealEvaluationChainTests(unittest.TestCase):
         self.assertIn("没有未 COMMIT", abandon["error"])
 
     # ------------------------------------------------------------------
+    # C1：accept 结果已封存、VC-5 completion 写出前崩溃 → 续跑只补 completion，AcceptanceFact 字节不变
+    # ------------------------------------------------------------------
+
+    def test_c1_accept_sealed_completion_crash_resumes_without_rewriting_acceptance(self) -> None:
+        if not CANDIDATE_IDENTITY_AVAILABLE:
+            self.skipTest(ACCEPT_SKIP_REASON)
+        h = self.harness
+        tree_b = h.tree_b()
+        h.init(tree_b)
+        self.assertEqual(h.dispatch(tree_b, "compare0", ["compare"])["returncode"], 0)
+        h.run(tree_b, "gate", "--tag", "b")
+        b0 = h.dispatch(tree_b, "b0", ["assert"], reuse_items=["compare"])
+        self.assertEqual((b0["returncode"], b0["campaign_run"]["reason"]), (0, "queue-complete"), b0)
+        # 副本树子进程内 patch _complete_vc_with_receipt → SIGKILL 语义：AcceptanceFact 与证据封印已落盘，
+        # VC-5 checkpoint／completion 收据不存在。
+        h.accept_direct(tree_b, crash_at="completion", expect_exit=137)
+        acceptance_path = h.acceptance_path(0)
+        self.assertTrue(acceptance_path.is_file())
+        self.assertTrue(acceptance_path.with_name("evidence-seal.json").is_file())
+        self.assertFalse(h.vc5_checkpoint_path().exists())
+        self.assertFalse(h.vc5_completion_path().exists())
+        sealed_bytes = acceptance_path.read_bytes()
+        seal_bytes = acceptance_path.with_name("evidence-seal.json").read_bytes()
+        self.assertTrue(_read(acceptance_path)["accepted"])
+        # 续跑：全部封存事实重放一致 → 复用既有 AcceptanceFact（字节不变）、只补 completion。
+        resumed = h.accept_direct(tree_b)
+        self.assertEqual((resumed["status"], resumed["accepted"], resumed["failed_gates"]), ("accepted", True, []), resumed)
+        self.assertEqual(acceptance_path.read_bytes(), sealed_bytes)
+        self.assertEqual(acceptance_path.with_name("evidence-seal.json").read_bytes(), seal_bytes)
+        h.assert_accepted_to_completion(0)
+        self.assertEqual(_read(h.vc5_checkpoint_path())["checkpoint_sha256"], resumed["vc5_checkpoint_sha256"])
+        self.assertEqual(_read(h.vc5_completion_path())["receipt_digest"], resumed["vc5_completion_receipt_digest"])
+        # VC-5 已终态：合同禁止再编译执行批次（不是幂等续跑的入口）。
+        rejected = h.dispatch(tree_b, "after-completion", ["accept"], reuse_items=["compare", "assert-rules"], expect_exit=1)
+        self.assertIn("VC-5 已有 checkpoint", rejected["stderr"])
+
+    # ------------------------------------------------------------------
     # 后继协议伪造负例：篡改 b1 COMMIT 后派发被拒
     # ------------------------------------------------------------------
 
@@ -521,8 +639,8 @@ class RealEvaluationChainTests(unittest.TestCase):
         h = self.harness
         tree_a, tree_b = h.tree_a(), h.tree_b()
         h.init(tree_a)
-        self.assertEqual(h.dispatch(tree_a, 5, "compare0", ["compare"])["returncode"], 0)
-        b0 = h.dispatch(tree_a, 6, "b0", ["assert"], reuse_items=["compare"])
+        self.assertEqual(h.dispatch(tree_a, "compare0", ["compare"])["returncode"], 0)
+        b0 = h.dispatch(tree_a, "b0", ["assert"], reuse_items=["compare"])
         self.assertEqual(h.run(tree_a, "reconcile", "--run-dir", b0["campaign_run"]["run_dir"])["status"], "recoverable")
         h.run(tree_b, "epoch", "--attempt-id", h.state()["attempt_id"], "--reason", "evaluator checker fix")
         applied = h.apply_fix(tree_b, h.deployment_receipt(tree_b, "fix-b"))
@@ -534,10 +652,10 @@ class RealEvaluationChainTests(unittest.TestCase):
         forged["commit_sha256"] = artifacts.digest({k: v for k, v in forged.items() if k != "commit_sha256"})
         commit_path.chmod(0o600)
         commit_path.write_bytes(json.dumps(forged, ensure_ascii=False).encode("utf-8"))
-        rejected = h.dispatch(tree_b, 7, "forged", ["compare"], baseline=1, expect_exit=1)
+        rejected = h.dispatch(tree_b, "forged", ["compare"], baseline=1, expect_exit=1)
         self.assertIn("COMMIT", rejected["stderr"])
         commit_path.write_bytes(original)
-        compare1 = h.dispatch(tree_b, 7, "compare1", ["compare"], baseline=1)
+        compare1 = h.dispatch(tree_b, "compare1", ["compare"], baseline=1)
         self.assertEqual(compare1["returncode"], 0, compare1)
 
 
