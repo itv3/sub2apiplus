@@ -24,7 +24,9 @@ from tools.official_client_capture import candidate_rule_assertion as assertion
 from tools.official_client_capture import codex_upgrade
 from tools.official_client_capture import codex_upgrade_supervisor as supervisor
 from tools.official_client_capture import codex_upgrade_vc_artifacts as artifacts
+from tools.official_client_capture import codex_upgrade_tool_identity_policy as policy_module
 from tools.official_client_capture import derive_official_observations as derive
+from tools.official_client_capture.tests import managed_tree_copy
 from tools.official_client_capture.tests import test_acceptance_end_to_end as e2e
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -52,12 +54,9 @@ class EvaluationBuilderFixture:
         self.profile_sha256 = _file_sha256(self.profile_path)
         self.official = self._side("official", surface="codex")
         self.candidate = self._side("candidate", surface="other")
-        self.digests = {
-            "checker_sha256": _file_sha256(CHECKER),
-            "builder_sha256": _file_sha256(BUILDER),
-            "compare_reader_sha256": "c3" * 32,
-            "accept_reader_sha256": "d4" * 32,
-        }
+        # 批次冻结值必须等于 builder 运行时重算的当前受管树四项（builder 互校，三方 P1-1）；
+        # 夹具取仓库树的真实值，checker 变化的用例改在副本树上运行。
+        self.digests = dict(policy_module.evaluator_dependency_digests())
 
     def _side(self, side: str, *, surface: str) -> Path:
         candidate_side = side.startswith("candidate")
@@ -164,9 +163,12 @@ class EvaluationBuilderFixture:
         path.write_text(json.dumps(config, ensure_ascii=False), encoding="utf-8")
         return path
 
-    def run_builder(self, run_dir: Path, *, baseline: int, reuse_from: Path | None = None, authority: str = "none", env_override: dict | None = None) -> subprocess.CompletedProcess:
+    def run_builder(self, run_dir: Path, *, baseline: int, reuse_from: Path | None = None, authority: str = "none", env_override: dict | None = None, tree_root: Path | None = None) -> subprocess.CompletedProcess:
+        """运行真实 builder 子进程；``tree_root`` 给出时在该副本受管树上运行（PYTHONPATH／cwd／脚本路径都指向副本）。"""
+
+        builder = BUILDER if tree_root is None else managed_tree_copy.tool_root(tree_root) / managed_tree_copy.BUILDER_RELATIVE
         command = [
-            sys.executable, str(BUILDER),
+            sys.executable, str(builder),
             "--config", str(self.config(baseline)),
             "--output", str(self.assertions_root(baseline) / "results.json"),
             "--results-dir", str(self.assertions_root(baseline) / "machine"),
@@ -175,11 +177,11 @@ class EvaluationBuilderFixture:
         ]
         if reuse_from is not None:
             command.extend(["--reuse-from", str(reuse_from)])
-        env = dict(os.environ)
+        env = dict(os.environ) if tree_root is None else managed_tree_copy.subprocess_env(tree_root)
         env["CODEX_UPGRADE_CAMPAIGN_RUN_DIR"] = str(run_dir)
         env["CODEX_UPGRADE_CAMPAIGN_OWNER_NONCE"] = "8" * 64
         env.update(env_override or {})
-        return subprocess.run(command, capture_output=True, text=True, cwd=REPO_ROOT, env=env)
+        return subprocess.run(command, capture_output=True, text=True, cwd=str(REPO_ROOT if tree_root is None else tree_root), env=env)
 
     def index(self, baseline: int) -> dict:
         return json.loads((self.assertions_root(baseline) / "evaluation-run.json").read_text(encoding="utf-8"))
@@ -285,15 +287,35 @@ class EvaluationBuilderTests(unittest.TestCase):
         rows = {row["rule"]: row for row in index2["rules"]}
         self.assertEqual(rows["SPEC-H1-001"]["reused_from"]["baseline"], 0)
         self.assertEqual(rows["SPEC-EP-006"]["status"], "fail")
-        # checker 摘要变化（批次冻结值不同）：复用判据不成立，全部重跑。
-        changed = dict(self.fixture.digests, checker_sha256="e5" * 32)
-        run_b3 = self.fixture.run_dir("run-b3", baseline=3, digests=changed)
-        rerun = self.fixture.run_builder(run_b3, baseline=3, reuse_from=b0_index, authority="anchored")
+        # 冻结值与当前树不一致（伪造 checker 摘要）：builder 互校失败关闭，不写任何 checkpoint／投影。
+        forged = dict(self.fixture.digests, checker_sha256="e5" * 32)
+        run_forged = self.fixture.run_dir("run-forged", baseline=3, digests=forged)
+        rejected = self.fixture.run_builder(run_forged, baseline=3, reuse_from=b0_index, authority="anchored")
+        self.assertEqual(rejected.returncode, 1)
+        self.assertIn("builder 拒绝执行", rejected.stderr)
+        self.assertFalse((self.fixture.assertions_root(3) / "checkpoints").exists())
+        # checker 真实变化（副本受管树：checker 文件末尾追加注释，冻结值＝副本树真实摘要）：
+        # 复用判据不成立，全部重跑，checkpoint 记录的 checker 摘要＝副本 checker 文件摘要。
+        copy_root = managed_tree_copy.copy_managed_tree(self.root / "tree-checker-changed", include_tests=False)
+        managed_tree_copy.append_comment(copy_root, managed_tree_copy.CHECKER_RELATIVE, "evaluator fix: no behavior change")
+        managed_tree_copy.assert_tree_binding(copy_root)
+        changed = managed_tree_copy.evaluator_digests(copy_root)
+        self.assertNotEqual(changed["checker_sha256"], self.fixture.digests["checker_sha256"])
+        self.assertEqual(changed["builder_sha256"], self.fixture.digests["builder_sha256"])
+        run_b3 = self.fixture.run_dir("run-b3", baseline=4, digests=changed)
+        rerun = self.fixture.run_builder(run_b3, baseline=4, reuse_from=b0_index, authority="anchored", tree_root=copy_root)
         self.assertEqual(rerun.returncode, 1, rerun.stderr)
-        b3 = [json.loads(p.read_text(encoding="utf-8")) for p in self.fixture.checkpoints(3)]
+        b3 = [json.loads(p.read_text(encoding="utf-8")) for p in self.fixture.checkpoints(4)]
         self.assertEqual(len(b3), 3)
         self.assertTrue(all(c["reused_from"] is None for c in b3))
-        self.assertTrue(all(c["checker_sha256"] == "e5" * 32 for c in b3))
+        checker_copy = managed_tree_copy.tool_root(copy_root) / managed_tree_copy.CHECKER_RELATIVE
+        self.assertTrue(all(c["checker_sha256"] == _file_sha256(checker_copy) for c in b3))
+        index3 = artifacts.validate_evaluation_run(self.fixture.index(4))
+        self.assertEqual(index3["evaluator"], changed)
+        for checkpoint in b3:
+            document = json.loads((self.fixture.campaign_dir / checkpoint["document"]["path"]).read_text(encoding="utf-8"))
+            # 三者一致：单规则文档（checker 自记）＝checkpoint＝index。
+            self.assertEqual(document["checker_sha256"], checkpoint["checker_sha256"])
 
     def test_fixed_evidence_changes_projection_and_full_pass_writes_results(self) -> None:
         run_b0 = self.fixture.run_dir("run-b0", baseline=0)
@@ -341,8 +363,11 @@ class AcceptReuseBranchTests(unittest.TestCase):
             "identity": {"profile_id": "codex-eval-v1", "profile_digest": "d" * 64},
         }
 
-    def _anchor_chain(self, run_b0: Path, b0_digests: dict) -> tuple[dict, Path]:
-        """b1 的 recovery／AUTHORIZATION／COMMIT／diagnosis 与失败 run 的动作输出绑定（accept 复用行的锚点链）。"""
+    def _anchor_chain(self, run_b0: Path, b0_digests: dict, current: dict) -> tuple[dict, Path]:
+        """b1 的 recovery／AUTHORIZATION／COMMIT／diagnosis 与失败 run 的动作输出绑定（accept 复用行的锚点链）。
+
+        ``current``：修复后（accept 读侧真实变化的副本树）的 evaluator 四项，作为 b1 授权口径冻结进 recovery。
+        """
 
         campaign_dir = self.fixture.campaign_dir
         b0_root = self.fixture.assertions_root(0)
@@ -354,13 +379,12 @@ class AcceptReuseBranchTests(unittest.TestCase):
         binding = supervisor.write_action_output_binding(
             run_b0, campaign_dir=campaign_dir, campaign_id="campaign-eval", phase="VC-5", action_id="acceptance",
             run_manifest_sha256=inner["manifest_sha256"], owner_nonce="8" * 64,
-            output_bindings=[f"acceptance/{CANDIDATE}/result.json", f"assertions/{CANDIDATE}/evaluation-run.json", f"assertions/{CANDIDATE}/checkpoints"],
+            output_bindings=sorted([f"acceptance/{CANDIDATE}/result.json", f"assertions/{CANDIDATE}/checkpoints", f"assertions/{CANDIDATE}/evaluation-run.json"]),
         )
         supervisor._stop_receipt(run_b0, event_type="failed", reason="action-failed:acceptance", detected_at_epoch=1.0, owner_pid=1, owner_nonce="8" * 64, campaign_id="campaign-eval", phase="VC-5", action_outputs_sha256=binding["binding_sha256"])
         diagnostic = run_b0 / "action-diagnostics" / "action-acceptance-failure.json"
         diagnostic.parent.mkdir(mode=0o700, exist_ok=True)
         supervisor._write_action_diagnostic(diagnostic, campaign_id="campaign-eval", phase="VC-5", action_id="acceptance", owner_pid=1, owner_nonce="8" * 64, failure_kind="child-returncode", error_type="ChildProcessError", message="子命令以非零状态退出，未提供进一步的脱敏诊断。")
-        current = dict(b0_digests, accept_reader_sha256="e5" * 32)
         baseline_dir = campaign_dir / "candidates" / CANDIDATE / "revisions" / "b1"
         baseline_dir.mkdir(parents=True)
         diagnosis = artifacts.build_evaluation_failure_diagnosis(
@@ -381,7 +405,8 @@ class AcceptReuseBranchTests(unittest.TestCase):
             failure_source="offline-accept-failed", reuse_authority="anchored", root_cause_class="evaluator-defect", root_cause_id="rc1-" + "0" * 20,
             failed_step="acceptance", previous_baseline=0, previous_baseline_commit_sha256=None, execute_rules=[], reuse_rules=["SPEC-EP-006", "SPEC-H1-001"],
             execute_jobs=[], reuse_jobs=["job-a"], attempt_id=None, recovery_revision=None, fix_commit="a" * 40,
-            deployment_receipt={"path": "/deploy/receipt.json", "sha256": "3" * 64}, failed_evaluator_digests=b0_digests, current_evaluator_digests=current,
+            deployment_receipt={"path": "/deploy/receipt.json", "sha256": "3" * 64}, evaluation_epoch=None,
+            failed_evaluator_digests=b0_digests, current_evaluator_digests=current,
             reviewer="boss", approved_at_utc="2026-09-19T00:00:00Z",
         )
         (baseline_dir / "recovery.json").write_text(json.dumps(recovery), encoding="utf-8")
@@ -411,19 +436,34 @@ class AcceptReuseBranchTests(unittest.TestCase):
         run_b0 = self.fixture.run_dir("run-b0", baseline=0)
         self.assertEqual(self.fixture.run_builder(run_b0, baseline=0).returncode, 0)
         b0_index = self.fixture.assertions_root(0) / "evaluation-run.json"
-        commit, baseline_dir = self._anchor_chain(run_b0, self.fixture.digests)
-        current = dict(self.fixture.digests, accept_reader_sha256="e5" * 32)
+        # accept 读侧真实变化的副本树（只有 accept_reader 闭包摘要变；checker／builder 不变）。
+        fixed_tree = managed_tree_copy.copy_managed_tree(self.root / "tree-accept-fixed", include_tests=False)
+        managed_tree_copy.mutate_accept_reader(fixed_tree)
+        managed_tree_copy.assert_tree_binding(fixed_tree)
+        current = managed_tree_copy.evaluator_digests(fixed_tree)
+        self.assertNotEqual(current["accept_reader_sha256"], self.fixture.digests["accept_reader_sha256"])
+        self.assertEqual(current["checker_sha256"], self.fixture.digests["checker_sha256"])
+        commit, baseline_dir = self._anchor_chain(run_b0, self.fixture.digests, current)
         run_b1 = self.fixture.run_dir("run-b1", baseline=1, digests=current)
-        completed = self.fixture.run_builder(run_b1, baseline=1, reuse_from=b0_index, authority="anchored")
+        completed = self.fixture.run_builder(run_b1, baseline=1, reuse_from=b0_index, authority="anchored", tree_root=fixed_tree)
         self.assertEqual(completed.returncode, 0, completed.stderr)
         index_b1 = artifacts.validate_evaluation_run(self.fixture.index(1))
         self.assertTrue(all(row["reused_from"] is not None for row in index_b1["rules"]))
         results = json.loads((self.fixture.assertions_root(1) / "results.json").read_text(encoding="utf-8"))
         campaign_dir = self.fixture.campaign_dir
+        current_identity = codex_upgrade._tool_identity(include_git=False)
         manifest = {
             "target_version": e2e.TARGET_VERSION,
-            "tool_identity": {"entries": [{"path": "candidate_rule_assertion.py", "sha256": _file_sha256(CHECKER)}]},
+            "tool_identity": {
+                "entries": [
+                    {"path": "candidate_rule_assertion.py", "sha256": _file_sha256(CHECKER)},
+                    {"path": "build_rule_assertion_results.py", "sha256": _file_sha256(BUILDER)},
+                ],
+                "evidence_semantics_sha256": current_identity["evidence_semantics_sha256"],
+            },
         }
+        attempt_root = self.root / "candidate-attempt"
+        attempt_root.mkdir(mode=0o700)
         classification = {
             "assertion_profile_manifest": {"path": "control/assertion-profile.json", "sha256": self.fixture.profile_sha256},
             "target_rule_manifest": {"path": "control/target-rules.json", "sha256": _file_sha256(self.fixture.rule_manifest_path)},
@@ -448,6 +488,7 @@ class AcceptReuseBranchTests(unittest.TestCase):
         # 官方权威三摘要单独从 classification 派生（builder config 用的是 e2e.AUTHORITY）。
         with mock.patch.object(codex_upgrade, "_current_evaluation_baseline", return_value=(1, commit)), \
              mock.patch.object(codex_upgrade, "_load_stage_result", side_effect=stage_result), \
+             mock.patch.object(codex_upgrade, "_capture_stage_attempt_context", return_value=(attempt_root, {})), \
              mock.patch.object(codex_upgrade, "_rerun_machine_assertion", side_effect=rerun), \
              mock.patch.object(codex_upgrade, "_classification_official_authority", return_value=dict(e2e.AUTHORITY)), \
              mock.patch.object(codex_upgrade, "_acceptance_contract_sha256", return_value=results["acceptance_contract_sha256"]):

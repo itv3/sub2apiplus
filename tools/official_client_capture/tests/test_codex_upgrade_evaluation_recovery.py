@@ -1,14 +1,16 @@
-"""改造 5（评估失败局部恢复）M1：evaluator-only 端到端集成（T5.8～T5.10，走正式派发）。
+"""改造 5（评估失败局部恢复）M1：evaluator-only 派发入口的附属用例（合成候选证据、父进程调用入口）。
 
-链路：VC 链夹具 → r1 → VC-2～VC-4 → VC-5 断言批次（真实 builder＋真实 checker，2 条规则 1 条 fail）
-→ 父 run failed（post-run-tooling，动作输出绑定 anchored）→ reconcile-supervisor-run → receipt_passed
-→ evaluation-recover preview（assertion-failed／anchored／failure-scope）→ apply（evaluator-defect，
-fixture 部署收据；checker 摘要变化以 patch 编译侧纯函数模拟）→ b1 committed → 派发 b1 评估批次
-（评估基线后继协议）→ builder 两条规则全部重跑 → 全 pass → results.json。
+正式的端到端链（真实 checker 修复、真实 CLI compare／accept 动作、R2／E1～E5 崩溃续作、后继协议篡改）
+在 ``test_codex_upgrade_evaluation_real_chain.py``（副本受管树 + 子进程）。本文件只保留三类不需要
+"真实 evaluator 修复"的入口级用例：
 
-附属：同基线幂等重入（零 checker、重现同一失败）；崩溃点 E1～E5 幂等续作；后继协议七类伪造拒绝；
-R2 对账侧补写 post-run-tooling 收据。候选阶段结果与分类收据以合成对象提供（只影响 evaluation-recover
-的只读读取，派发链全部真实）。
+* COMMIT 前 evaluator 摘要漂移 → ``aborted_prepared`` 且同序号重编（以 patch 摘要序列模拟"编译后工具变化"，
+  这是对入口核对逻辑的模拟，不是 evaluator 修复正例）；
+* 评估基线后继协议的七类伪造拒绝（b1 由 patch 摘要制造，只用于产生被篡改对象；真实 b1 与篡改 COMMIT 的
+  负例见真实链用例）；
+* 同基线幂等重入（零 checker、重现同一失败）与第二次对账即 ``permanent_stop``。
+
+候选阶段结果与分类收据以合成对象提供（只影响 evaluation-recover 的只读读取，派发链全部真实）。
 """
 
 from __future__ import annotations
@@ -318,139 +320,6 @@ class EvaluationRecoveryIntegrationTests(_EvaluationChainMixin, unittest.TestCas
         self.assertEqual(returncode, 0, result)
         context = self._prepare_candidate(fixture, root)
         return fixture, context
-
-    def test_evaluator_only_chain_from_failed_assertion_to_b1_full_pass(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory).resolve()
-            fixture, context = self._ready_vc4(root)
-            campaign_dir = context["campaign_dir"]
-
-            # ---- b0：断言批次真实执行，SPEC-EP-006 fail → 父 run failed（post-run-tooling）----
-            plan_b0 = self._assertion_plan(context, root, baseline=0, candidate_bundle=context["candidate"], tag="b0")
-            result, returncode = self._dispatch_plan(fixture, 5, plan_b0)
-            self.assertEqual(returncode, 1, result)
-            self.assertEqual(result["status"], "failed")
-            run_b0 = Path(str(result["campaign_run"]["run_dir"]))
-            self.assertEqual(result["campaign_run"]["timing_closeout"]["failure_class"], "post-run-tooling", result["campaign_run"]["timing_closeout"])
-            batch_b0 = _read(campaign_dir / "control" / "vc" / "batches" / "0005-vc-5.json")
-            self.assertEqual(batch_b0["schema_version"], artifacts.VC_BATCH_SCHEMA)
-            self.assertIsNone(batch_b0["evaluation_baseline"])
-            self.assertEqual(set(batch_b0["evaluator_digests"]), set(artifacts.EVALUATOR_DIGEST_FIELDS))
-            self.assertEqual(batch_b0["actions"][0]["output_bindings"], [f"assertions/{R1}/checkpoints", f"assertions/{R1}/evaluation-run.json"])
-            index_b0 = artifacts.validate_evaluation_run(_read(campaign_dir / "assertions" / R1 / "evaluation-run.json"))
-            self.assertEqual({row["rule"]: row["status"] for row in index_b0["rules"]}, {"SPEC-EP-006": "fail", "SPEC-H1-001": "pass"})
-            receipt = supervisor.read_stop_receipt(run_b0)
-            self.assertEqual(receipt["reason"], "action-failed:assert-rules")
-            binding = supervisor.read_action_output_binding(run_b0, "assert-rules")
-            self.assertEqual(receipt["action_outputs_sha256"], binding["binding_sha256"])
-            bound = {item["path"]: item for item in binding["bindings"]}
-            self.assertEqual(bound[f"assertions/{R1}/evaluation-run.json"]["sha256"], _sha(campaign_dir / "assertions" / R1 / "evaluation-run.json"))
-            self.assertEqual(bound[f"assertions/{R1}/checkpoints"]["sha256"], index_b0["checkpoint_head_sha256"])
-            self.assertEqual(self._summary(fixture)["status"], "recovery_required")
-
-            # ---- 账本 recovery_required：preview 允许、apply 拒绝 ----
-            patches = self._stage_patches(context, context["candidate"])
-            for patcher in patches:
-                patcher.start()
-                self.addCleanup(patcher.stop)
-            preview = codex_upgrade.evaluation_recover(self._recover_arguments(fixture, "preview"))
-            self.assertEqual((preview["status"], preview["failure_source"], preview["reuse_authority"]), ("preview", "assertion-failed", "anchored"))
-            self.assertEqual(preview["failed_step"], "SPEC-EP-006")
-            self.assertEqual(preview["failure_scope"]["failed_rules"], ["SPEC-EP-006"])
-            self.assertEqual(preview["failure_scope"]["jobs"], [context["job_ids"][0]])
-            self.assertIn("transient-environment", preview["admissible_classes"])
-            self.assertEqual(preview["failed_run"]["run_id"], run_b0.name)
-            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "recovery_required"):
-                codex_upgrade.evaluation_recover(self._recover_arguments(fixture, "apply", root_cause_class="evaluator-defect", approve_sha256=preview["review_sha256"]))
-
-            # ---- reconcile → receipt_passed → active ----
-            outcome = reconciler.reconcile_supervisor_run(run_b0, campaign_dir)
-            self.assertEqual(outcome["status"], "recoverable")
-            self.assertEqual(self._summary(fixture)["status"], "active")
-            self.assertIn(("receipt_passed", f"reconcile-run-passed-{run_b0.name}"), self._events(fixture))
-
-            # ---- apply：类别集合、准入负例、evaluator-defect 正例（checker 摘要变化） ----
-            preview = codex_upgrade.evaluation_recover(self._recover_arguments(fixture, "preview"))
-            approve = preview["review_sha256"]
-            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "批准摘要"):
-                codex_upgrade.evaluation_recover(self._recover_arguments(fixture, "apply", root_cause_class="evaluator-defect", approve_sha256="0" * 64))
-            redirect = codex_upgrade.evaluation_recover(self._recover_arguments(fixture, "apply", root_cause_class="candidate-source", approve_sha256=approve))
-            self.assertEqual(redirect["status"], "redirect")
-            self.assertIn("invalidate-candidate", redirect["next_command"])
-            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "--fix-commit"):
-                codex_upgrade.evaluation_recover(self._recover_arguments(fixture, "apply", root_cause_class="evaluator-defect", approve_sha256=approve))
-            deployment = Path(str(fixture["deployment"]))
-            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "没有任何变化"):
-                codex_upgrade.evaluation_recover(self._recover_arguments(fixture, "apply", root_cause_class="evaluator-defect", approve_sha256=approve, fix_commit="a" * 40, deployment_receipt=deployment))
-            original_digests = policy_module.evaluator_dependency_digests()
-            reader_only = dict(original_digests, accept_reader_sha256="e5" * 32)
-            with mock.patch.object(policy_module, "evaluator_dependency_digests", return_value=reader_only):
-                # 变化项未覆盖断言失败声明的缺陷项（checker／builder）。
-                preview_reader = codex_upgrade.evaluation_recover(self._recover_arguments(fixture, "preview"))
-                with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "未覆盖"):
-                    codex_upgrade.evaluation_recover(self._recover_arguments(fixture, "apply", root_cause_class="evaluator-defect", approve_sha256=preview_reader["review_sha256"], fix_commit="a" * 40, deployment_receipt=deployment))
-            fixed_digests = dict(original_digests, checker_sha256="f6" * 32)
-            with mock.patch.object(policy_module, "evaluator_dependency_digests", return_value=fixed_digests):
-                preview_fixed = codex_upgrade.evaluation_recover(self._recover_arguments(fixture, "preview"))
-                apply_arguments = self._recover_arguments(fixture, "apply", root_cause_class="evaluator-defect", approve_sha256=preview_fixed["review_sha256"], fix_commit="a" * 40, deployment_receipt=deployment)
-                baseline_dir = campaign_dir / "candidates" / R1 / "revisions" / "b1"
-                # E3：AUTHORIZATION 写出前崩溃 → PREPARED＋outbox 已落盘，b1 不是当前基线，编译被拒；续作收敛。
-                with mock.patch.object(artifacts, "build_evaluation_baseline_authorization", side_effect=artifacts.VCArtifactError("crash-e3")):
-                    with self.assertRaises(codex_upgrade.ConfigurationError):
-                        codex_upgrade.evaluation_recover(apply_arguments)
-                self.assertTrue((baseline_dir / "PREPARED").is_file())
-                self.assertFalse((baseline_dir / "COMMIT").exists())
-                self.assertEqual(codex_upgrade._current_evaluation_baseline(campaign_dir, R1)[0], 0)
-                recovery_bytes = (baseline_dir / "recovery.json").read_bytes()
-                # E5：COMMIT 已写、账本事件未写 → 编译仍被拒（账本未引用）；续作只补账本事件。
-                with mock.patch.object(timing_ledger, "append_event", side_effect=timing_ledger.TimingLedgerError("crash-e5")):
-                    with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "拒绝 evaluation_baseline"):
-                        codex_upgrade.evaluation_recover(apply_arguments)
-                self.assertTrue((baseline_dir / "COMMIT").is_file())
-                self.assertEqual(codex_upgrade._current_evaluation_baseline(campaign_dir, R1)[0], 0)
-                self.assertEqual((baseline_dir / "recovery.json").read_bytes(), recovery_bytes)
-                applied = codex_upgrade.evaluation_recover(apply_arguments)
-                self.assertEqual((applied["status"], applied["evaluation_baseline"], applied["kind"]), ("applied", 1, "evaluator-only"))
-                self.assertTrue(applied["ledger_event"]["appended"])
-                self.assertEqual((baseline_dir / "recovery.json").read_bytes(), recovery_bytes)
-                self.assertEqual(applied["execute_rules"], ["SPEC-EP-006", "SPEC-H1-001"])
-                self.assertEqual(applied["reuse_rules"], [])
-                self.assertEqual(applied["stage_sources"]["capture-candidate"]["source"], "reused")
-                self.assertEqual(applied["stage_sources"]["compare"]["source"], "local")
-                baseline_dir = campaign_dir / "candidates" / R1 / "revisions" / "b1"
-                for name in ("diagnosis.json", "recovery.json", "PREPARED", "AUTHORIZATION", "COMMIT"):
-                    self.assertTrue((baseline_dir / name).is_file(), name)
-                self.assertEqual(codex_upgrade._current_evaluation_baseline(campaign_dir, R1)[0], 1)
-                summary = self._summary(fixture)
-                self.assertEqual((summary["status"], summary["active_phase"], summary["current_evaluation_baseline"]["evaluation_baseline"]), ("active", "VC-5", 1))
-                # 基线已激活：再 apply 没有新的失败 run 可处理；没有可 abandon 的基线。
-                with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "没有评估动作失败的父 run"):
-                    codex_upgrade.evaluation_recover(apply_arguments)
-                with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "没有未 COMMIT"):
-                    codex_upgrade.evaluation_recover(self._recover_arguments(fixture, "abandon"))
-
-                # ---- b1 评估批次：后继协议 → 两条规则全部重跑（checker 变化）→ 全 pass ----
-                fixed_bundle = self._bundle(campaign_dir / "candidate-evidence-fixed", surface="codex", candidate_side=True)
-                plan_b1 = self._assertion_plan(context, root, baseline=1, candidate_bundle=fixed_bundle, tag="b1", reuse_from=campaign_dir / "assertions" / R1 / "evaluation-run.json", authority="anchored")
-                result_b1, returncode_b1 = self._dispatch_plan(fixture, 6, plan_b1)
-            self.assertEqual(returncode_b1, 0, result_b1)
-            batch_b1 = _read(campaign_dir / "control" / "vc" / "batches" / "0006-vc-5.json")
-            self.assertEqual((batch_b1["evaluation_baseline"], batch_b1["baseline_commit_sha256"]), (1, applied["commit_sha256"]))
-            self.assertEqual(batch_b1["evaluator_digests"]["checker_sha256"], "f6" * 32)
-            b1_root = campaign_dir / "assertions" / R1 / "revisions" / "b1"
-            index_b1 = artifacts.validate_evaluation_run(_read(b1_root / "evaluation-run.json"))
-            self.assertTrue(all(row["status"] == "pass" and row["reused_from"] is None for row in index_b1["rules"]))
-            self.assertTrue((b1_root / "results.json").is_file())
-            self.assertEqual(index_b1["evaluator"]["checker_sha256"], "f6" * 32)
-            # 编译侧按账本当前基线冻结：动作里写错 --evaluation-baseline 0 的批次仍冻结 b1，builder 以清单冻结值
-            # 校验不一致而失败关闭（不会写 b0 目录）。
-            plan_stale = self._assertion_plan(context, root, baseline=0, candidate_bundle=context["candidate"], tag="stale")
-            with mock.patch.object(policy_module, "evaluator_dependency_digests", return_value=fixed_digests):
-                result_stale, returncode_stale = self._dispatch_plan(fixture, 7, plan_stale)
-            self.assertEqual(returncode_stale, 1, result_stale)
-            batch_stale = _read(campaign_dir / "control" / "vc" / "batches" / "0007-vc-5.json")
-            self.assertEqual(batch_stale["evaluation_baseline"], 1)
-            self.assertEqual(sorted(p.name for p in (campaign_dir / "assertions" / R1 / "checkpoints").iterdir() if not p.name.endswith("-input.json")), sorted(p.name for p in (campaign_dir / "assertions" / R1 / "checkpoints").iterdir() if not p.name.endswith("-input.json")))
 
     def test_evaluator_digest_drift_after_compile_aborts_before_commit_and_same_sequence_recompiles(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

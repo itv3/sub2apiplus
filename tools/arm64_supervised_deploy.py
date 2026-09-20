@@ -164,8 +164,11 @@ from typing import Any, Callable, Mapping
 # output_bindings；失败评估批次新增"评估基线后继"协议；reconciler 在锁内对 owner-loss run 复算
 # 三项并补写 post-run-tooling 收据。根因编码表新增 evaluation.rule-failed／attempt.job-transient-failure
 # （需项目总账 migration 000003）。监督器随之变化；断言预处理器未变。
+# 2026-09-20（第 3 批 M1 审核修正）：动作执行前核对 evaluator 四项摘要（不等即动作不执行、父 run
+# failed／identity-drift）；动作输出绑定按声明原顺序写出（清单校验已失败关闭，不再归一化）。
+# 监督器随之变化；断言预处理器未变。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "a7053e3874fc89c1e91f18c29d8399835e16ad955e1d96b90cb8bdf43ab2597e"
+    "b0496ab938db25454eaf6ab8dfa6e20a229e7f7ae67a5cd728bc7f66b7487a7a"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "ea5500505d49340fe4971b981a8ab1159266c6a54ad0d3724cdf10cd51815fe4"

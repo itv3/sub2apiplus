@@ -1602,6 +1602,31 @@ def validate_stage_sources(value: Any, *, kind: str, label: str) -> dict[str, di
     return normalized
 
 
+def validate_evaluation_epoch_binding(value: Any, label: str) -> dict[str, Any] | None:
+    """recovery 采用的 evaluation-epoch 绑定：Campaign 相对路径、文件摘要、链内序号、目标 evidence 摘要。"""
+
+    if value is None:
+        return None
+    if not isinstance(value, Mapping) or set(value) != {"path", "sha256", "index", "to_evidence_semantics_sha256"}:
+        raise VCArtifactError(f"{label} 字段不闭合")
+    path = _relative_path(value.get("path"), f"{label} path")
+    if not re.fullmatch(r"^.+/evaluation-epoch-\d{2}\.json$", path):
+        raise VCArtifactError(f"{label} path 必须指向 attempt 目录内的 evaluation-epoch-NN.json")
+    _sha256(value.get("sha256"), f"{label} sha256")
+    index = value.get("index")
+    if not isinstance(index, int) or isinstance(index, bool) or index < 1 or index > 99:
+        raise VCArtifactError(f"{label} index 必须是 1～99 的整数")
+    if int(path[-7:-5]) != index:
+        raise VCArtifactError(f"{label} index 与 path 序号不一致")
+    _sha256(value.get("to_evidence_semantics_sha256"), f"{label} to_evidence_semantics_sha256")
+    return {
+        "path": path,
+        "sha256": str(value["sha256"]),
+        "index": index,
+        "to_evidence_semantics_sha256": str(value["to_evidence_semantics_sha256"]),
+    }
+
+
 def build_evaluation_recovery(
     *,
     campaign_id: str,
@@ -1625,12 +1650,17 @@ def build_evaluation_recovery(
     recovery_revision: str | None,
     fix_commit: str | None,
     deployment_receipt: Mapping[str, Any] | None,
+    evaluation_epoch: Mapping[str, Any] | None,
     failed_evaluator_digests: Mapping[str, Any],
     current_evaluator_digests: Mapping[str, Any],
     reviewer: str,
     approved_at_utc: str,
 ) -> dict[str, Any]:
-    """revisions/b<K>/recovery.json：apply 冻结的恢复合同（write-once）。"""
+    """revisions/b<K>/recovery.json：apply 冻结的恢复合同（write-once）。
+
+    ``evaluation_epoch``：evaluator-defect 下候选 attempt evaluation-epoch 链末的绑定
+    （path／sha256／index／to_evidence_semantics_sha256），evidence 未变化（链为空）时为 None。
+    """
 
     payload = {
         "schema_version": EVALUATION_BASELINE_SCHEMA,
@@ -1655,6 +1685,7 @@ def build_evaluation_recovery(
         "recovery_revision": recovery_revision,
         "fix_commit": fix_commit,
         "deployment_receipt": dict(deployment_receipt) if deployment_receipt is not None else None,
+        "evaluation_epoch": dict(evaluation_epoch) if evaluation_epoch is not None else None,
         "failed_evaluator_digests": dict(failed_evaluator_digests),
         "current_evaluator_digests": dict(current_evaluator_digests),
         "reviewer": reviewer,
@@ -1669,7 +1700,7 @@ def validate_evaluation_recovery(value: Any) -> dict[str, Any]:
         "schema_version", "campaign_id", "candidate_id", "candidate_revision", "evaluation_baseline", "kind",
         "diagnosis", "failure_source", "reuse_authority", "root_cause_class", "root_cause_id", "failed_step",
         "previous_baseline", "previous_baseline_commit_sha256", "execute_rules", "reuse_rules", "execute_jobs",
-        "reuse_jobs", "attempt_id", "recovery_revision", "fix_commit", "deployment_receipt",
+        "reuse_jobs", "attempt_id", "recovery_revision", "fix_commit", "deployment_receipt", "evaluation_epoch",
         "failed_evaluator_digests", "current_evaluator_digests", "reviewer", "approved_at_utc", "recovery_sha256",
     }
     if not isinstance(value, Mapping) or set(value) != required:
@@ -1732,6 +1763,9 @@ def validate_evaluation_recovery(value: Any) -> dict[str, Any]:
         if payload.get("deployment_receipt") is None:
             raise VCArtifactError(f"{label} evaluator-defect 必须绑定部署收据")
     _optional_binding(payload.get("deployment_receipt"), f"{label} deployment_receipt")
+    validate_evaluation_epoch_binding(payload.get("evaluation_epoch"), f"{label} evaluation_epoch")
+    if kind == "attempt-recovery" and payload.get("evaluation_epoch") is not None:
+        raise VCArtifactError(f"{label} attempt-recovery 不绑定 evaluation-epoch")
     validate_evaluator_digests(payload.get("failed_evaluator_digests"), f"{label} failed")
     validate_evaluator_digests(payload.get("current_evaluator_digests"), f"{label} current")
     if payload.get("reuse_authority") == "none" and reuse_rules:
@@ -2921,14 +2955,20 @@ ACTION_FIELDS = frozenset({"action_id", "operation", "timeout_seconds", "command
 
 
 def validate_output_bindings(value: Any, label: str) -> list[str]:
-    """改造 5：动作声明的产物路径闭集——Campaign 相对、规范、去重、有序、最多 64 项。"""
+    """改造 5：动作声明的产物路径闭集——Campaign 相对、规范、去重、已排序、最多 64 项。
+
+    失败关闭：未按字节序排列或有重复一律拒绝，不做任何归一化（操作员声明必须与编译侧
+    冻结声明逐字相等，全链保持声明顺序）。
+    """
 
     if not isinstance(value, list) or not value or len(value) > 64:
         raise VCArtifactError(f"{label} output_bindings 必须是 1～64 项的数组")
     paths = [_relative_path(item, f"{label} output_bindings") for item in value]
     if len(set(paths)) != len(paths):
         raise VCArtifactError(f"{label} output_bindings 不得重复")
-    return sorted(paths)
+    if paths != sorted(paths):
+        raise VCArtifactError(f"{label} output_bindings 必须按字节序排列（不做归一化）")
+    return list(paths)
 
 
 def _actions(

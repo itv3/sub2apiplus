@@ -450,18 +450,28 @@ def parent_run_binding() -> dict[str, str]:
 
 
 def evaluator_digests_for_run(inner_manifest: Mapping[str, Any]) -> dict[str, str]:
-    """evaluator 四项摘要：取批次冻结值（父监督器在正式 COMMIT 前已核对其等于当前工具）。
+    """evaluator 四项摘要：批次冻结值与当前受管树互校，任一项不等即失败关闭。
 
-    冻结值是逐规则依赖摘要与复用判据的唯一 checker／builder 口径；无冻结值（非 v3 批次）时
-    以当前受管树重算。
+    冻结值（batch v3 ``evaluator_digests``）是逐规则依赖摘要与复用判据的唯一 checker／builder
+    口径，但 builder 自己必须重算当前树（``evaluator_dependency_digests()``：checker／builder 整文件
+    摘要与 compare／accept 读侧闭包）并逐项核对——父监督器在动作执行前与 COMMIT 前的核对
+    不能代替 builder 的自证，否则冻结值与实际执行的 checker 可以脱钩。无冻结值（非 v3 批次）
+    时以当前受管树为口径。
     """
 
-    frozen = inner_manifest.get("evaluator_digests")
-    if isinstance(frozen, Mapping) and set(frozen) == set(EVALUATOR_DIGEST_FIELDS):
-        return {field: str(frozen[field]) for field in EVALUATOR_DIGEST_FIELDS}
     from tools.official_client_capture import codex_upgrade_tool_identity_policy as policy_module
 
-    return dict(policy_module.evaluator_dependency_digests())
+    current = {field: str(value) for field, value in policy_module.evaluator_dependency_digests().items()}
+    frozen = inner_manifest.get("evaluator_digests")
+    if not isinstance(frozen, Mapping) or set(frozen) != set(EVALUATOR_DIGEST_FIELDS):
+        return current
+    drift = sorted(field for field in EVALUATOR_DIGEST_FIELDS if str(frozen[field]) != current[field])
+    if drift:
+        raise RuleAssertionError(
+            "批次冻结的 evaluator 摘要与当前受管树不一致，builder 拒绝执行："
+            + "、".join(f"{field} 冻结 {str(frozen[field])[:12]} 当前 {current[field][:12]}" for field in drift)
+        )
+    return {field: str(frozen[field]) for field in EVALUATOR_DIGEST_FIELDS}
 
 
 class EvaluationRun:
@@ -875,6 +885,7 @@ def evaluate_rule_with_checkpoints(
                 document_path = evaluation.campaign_root / existing["document"]["path"]
                 if (
                     existing["reused_from"] is None
+                    and existing["checker_sha256"] == evaluation.checker_sha256
                     and document_path.is_file()
                     and _file_sha256(document_path) == existing["document"]["sha256"]
                     and existing["projection_sha256"] == projection_digest
@@ -911,6 +922,11 @@ def evaluate_rule_with_checkpoints(
             )
             if document.get("projection_sha256") != projection_digest:
                 raise RuleAssertionError(f"{rule_id} {side} 单规则文档未绑定本次投影摘要")
+            # 三者一致：checker 自记的实际文件摘要（单规则文档）＝批次冻结值（checkpoint／index 口径）。
+            if document.get("checker_sha256") != evaluation.checker_sha256:
+                raise RuleAssertionError(
+                    f"{rule_id} {side} 单规则文档记录的 checker 摘要与批次冻结值不一致，拒绝写 checkpoint"
+                )
             checkpoints[side] = evaluation.write_checkpoint(
                 rule_id=rule_id,
                 side=side,

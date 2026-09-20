@@ -27,6 +27,7 @@
     "recovery_revision",
     "fix_commit",
     "deployment_receipt",
+    "evaluation_epoch",
     "failed_evaluator_digests",
     "current_evaluator_digests",
     "reviewer",
@@ -153,6 +154,16 @@
         }
       ]
     },
+    "evaluation_epoch": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/evaluationEpochBinding"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "failed_evaluator_digests": {
       "$ref": "#/$defs/evaluatorDigests"
     },
@@ -206,6 +217,33 @@
           "minLength": 1
         },
         "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "evaluationEpochBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256",
+        "index",
+        "to_evidence_semantics_sha256"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^.+/evaluation-epoch-[0-9]{2}\\.json$"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "index": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 99
+        },
+        "to_evidence_semantics_sha256": {
           "$ref": "#/$defs/sha256"
         }
       }

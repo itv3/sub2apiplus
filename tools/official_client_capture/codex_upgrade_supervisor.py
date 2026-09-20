@@ -1982,7 +1982,8 @@ def write_action_output_binding(
     if directory.is_symlink():
         raise SupervisorError("action-outputs 目录不得是符号链接。")
     directory.mkdir(mode=0o700, exist_ok=True)
-    items = [_output_binding_item(campaign_dir, relative) for relative in sorted(set(output_bindings))]
+    # 声明顺序即链上顺序：清单校验已要求 output_bindings 唯一且按字节序排列，这里不再归一化。
+    items = [_output_binding_item(campaign_dir, relative) for relative in output_bindings]
     try:
         payload = vc_artifacts.build_action_output_binding(
             campaign_id=campaign_id,
@@ -8094,6 +8095,32 @@ def _candidate_failure_hits_permanent_condition(
     return False
 
 
+def _evaluator_identity_drift(frozen: Any) -> list[str]:
+    """清单冻结的 evaluator 四项摘要与当前受管树的差异项；无冻结值返回空列表。
+
+    与编译器、COMMIT 前核对调用同一纯函数 ``evaluator_dependency_digests()``；这里是动作执行前
+    的最后一道核对，任何差异都让动作不执行（identity-drift）。
+    """
+
+    if frozen is None:
+        return []
+    if not isinstance(frozen, Mapping) or set(frozen) != set(vc_artifacts.EVALUATOR_DIGEST_FIELDS):
+        raise SupervisorError("清单 evaluator_digests 字段不闭合。")
+    if __package__ in {None, ""}:
+        import codex_upgrade_tool_identity_policy as identity_policy
+    else:
+        from . import codex_upgrade_tool_identity_policy as identity_policy
+    try:
+        current = identity_policy.evaluator_dependency_digests()
+    except identity_policy.ToolIdentityPolicyError as error:
+        raise SupervisorError(f"当前 evaluator 依赖摘要无法计算：{error}") from error
+    return sorted(
+        f"{field} 冻结 {str(frozen[field])[:12]} 当前 {str(current[field])[:12]}"
+        for field in vc_artifacts.EVALUATOR_DIGEST_FIELDS
+        if str(frozen[field]) != str(current[field])
+    )
+
+
 def _close_failed_campaign_timing_ledger(
     campaign_dir: Path,
     manifest: Mapping[str, Any],
@@ -8674,6 +8701,55 @@ def _campaign_run_locked(
                 diagnostic_path = diagnostic_dir / (
                     f"action-{action_id}-failure.json"
                 )
+                # 改造 5（T5.9）：动作执行前核对当前受管树 evaluator 四项摘要等于清单冻结值。
+                # 不等即该动作不执行、父 run failed（identity-drift，永久失败类，不可 evaluation-recover）；
+                # 动作未执行，不写动作输出绑定（stop-receipt 记 null）。
+                identity_drift = _evaluator_identity_drift(manifest.get("evaluator_digests"))
+                if identity_drift:
+                    _write_action_diagnostic(
+                        diagnostic_path,
+                        campaign_id=str(manifest["campaign_id"]),
+                        phase=str(manifest["phase"]),
+                        action_id=action_id,
+                        owner_pid=client.owner_pid,
+                        owner_nonce=client.owner_nonce,
+                        failure_kind="handled-error",
+                        failure_class="identity-drift",
+                        error_type="EvaluatorIdentityDrift",
+                        message=(
+                            "动作执行前核对：当前受管树 evaluator 摘要与批次冻结值不一致，动作未执行："
+                            + "、".join(identity_drift)
+                        ),
+                    )
+                    diagnostic = _validate_action_diagnostic(
+                        diagnostic_path,
+                        run_dir=client.run_dir,
+                        campaign_id=str(manifest["campaign_id"]),
+                        phase=str(manifest["phase"]),
+                        action_id=action_id,
+                        owner_pid=client.owner_pid,
+                        owner_nonce=client.owner_nonce,
+                    )
+                    failed_action_diagnostic = diagnostic
+                    failed_action_effective_class = "identity-drift"
+                    results.append(
+                        {
+                            "action_id": action_id,
+                            "returncode": None,
+                            "status": "failed",
+                            "executed": False,
+                            "diagnostic": {
+                                "schema_version": diagnostic["schema_version"],
+                                "path": str(diagnostic_path.relative_to(client.run_dir)),
+                                "sha256": diagnostic["diagnostic_sha256"],
+                                "failure_class": diagnostic["failure_class"],
+                                "failure_observations": list(diagnostic["failure_observations"]),
+                                "effective_failure_class": "identity-drift",
+                            },
+                        }
+                    )
+                    reason = f"action-failed:{action_id}"
+                    break
                 action_environment = dict(child_environment)
                 action_environment.update(
                     {

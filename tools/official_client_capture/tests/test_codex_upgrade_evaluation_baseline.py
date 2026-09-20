@@ -7,6 +7,7 @@ v1 只读兼容、动作输出绑定 write-once、R2 四层判定与 monitor 封
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import os
@@ -23,6 +24,7 @@ from tools.official_client_capture import candidate_rule_assertion as assertion
 from tools.official_client_capture import codex_upgrade
 from tools.official_client_capture import codex_upgrade_supervisor as supervisor
 from tools.official_client_capture import codex_upgrade_timing_ledger as ledger
+from tools.official_client_capture import codex_upgrade_tool_identity_policy as policy_module
 from tools.official_client_capture import codex_upgrade_vc_artifacts as artifacts
 
 DIGESTS = {
@@ -108,14 +110,22 @@ class BatchV3ContractTests(unittest.TestCase):
     def test_action_output_bindings_closed_set(self) -> None:
         plan = self._plan()
         common = self._common(plan, "VC-5", 5)
-        action = dict(common["actions"][0], output_bindings=["assertions/cand/evaluation-run.json", "assertions/cand/checkpoints"])
+        action = dict(common["actions"][0], output_bindings=["assertions/cand/checkpoints", "assertions/cand/evaluation-run.json"])
         batch = artifacts.build_vc_batch(
             phase="VC-5", candidate_revision=1, candidate_id="cand", evaluator_digests=DIGESTS,
             **{**common, "actions": [action]},
         )
+        # 声明按原顺序逐字保留（已排序即原顺序）。
         self.assertEqual(batch["actions"][0]["output_bindings"], ["assertions/cand/checkpoints", "assertions/cand/evaluation-run.json"])
-        for bad in (["/abs/path"], ["a/../b"], [], ["x", "x"]):
-            with self.assertRaises(artifacts.VCArtifactError):
+        # 失败关闭：未排序、重复、越界、空一律拒绝，不做归一化。
+        for bad, pattern in (
+            (["assertions/cand/evaluation-run.json", "assertions/cand/checkpoints"], "按字节序"),
+            (["x", "x"], "不得重复"),
+            (["/abs/path"], "output_bindings"),
+            (["a/../b"], "output_bindings"),
+            ([], "1～64"),
+        ):
+            with self.assertRaisesRegex(artifacts.VCArtifactError, pattern):
                 artifacts.build_vc_batch(
                     phase="VC-5", candidate_revision=1, candidate_id="cand", evaluator_digests=DIGESTS,
                     **{**common, "actions": [dict(common["actions"][0], output_bindings=bad)]},
@@ -160,6 +170,46 @@ class BatchV3ContractTests(unittest.TestCase):
                 actions=[dict(action, output_bindings=["../escape"])], execute_items=["item"], reuse_items=[],
                 candidate_revision=1, candidate_id="cand", evaluation_baseline=None, baseline_commit_sha256=None, evaluator_digests=DIGESTS,
             )
+
+
+    def test_recovery_binds_evaluation_epoch_or_null(self) -> None:
+        """老板拍板 4.2：recovery.json 必填 ``evaluation_epoch``（path／sha256／index／to_evidence_semantics_sha256 或 null）。"""
+
+        def recovery(epoch: dict | None, *, kind: str = "evaluator-only") -> dict:
+            common = dict(
+                campaign_id="campaign-r2", candidate_id="cand", candidate_revision=1, evaluation_baseline=1, kind=kind,
+                diagnosis={"path": "candidates/cand/revisions/b1/diagnosis.json", "sha256": "1" * 64},
+                failure_source="assertion-failed", reuse_authority="anchored",
+                root_cause_class="evaluator-defect" if kind == "evaluator-only" else "transient-environment",
+                root_cause_id="rc1-" + "0" * 20, failed_step="SPEC-EP-006", previous_baseline=0, previous_baseline_commit_sha256=None,
+                execute_rules=["SPEC-EP-006"], reuse_rules=["SPEC-H1-001"], execute_jobs=[] if kind == "evaluator-only" else ["job-a"],
+                reuse_jobs=[], attempt_id=None if kind == "evaluator-only" else "attempt-a", recovery_revision=None if kind == "evaluator-only" else "ar1",
+                fix_commit="a" * 40 if kind == "evaluator-only" else None,
+                deployment_receipt={"path": "/deploy/receipt.json", "sha256": "3" * 64} if kind == "evaluator-only" else None,
+                evaluation_epoch=epoch, failed_evaluator_digests=DIGESTS, current_evaluator_digests=dict(DIGESTS, checker_sha256="f6" * 32),
+                reviewer="boss", approved_at_utc="2026-09-20T00:00:00Z",
+            )
+            return artifacts.build_evaluation_recovery(**common)
+
+        epoch = {"path": "candidates/cand/attempts/a1/evaluation-epoch-02.json", "sha256": "4" * 64, "index": 2, "to_evidence_semantics_sha256": "5" * 64}
+        payload = recovery(epoch)
+        self.assertEqual(payload["evaluation_epoch"], epoch)
+        self.assertIsNone(recovery(None)["evaluation_epoch"])
+        for bad, pattern in (
+            (dict(epoch, index=3), "序号不一致"),
+            (dict(epoch, path="candidates/cand/attempts/a1/epoch.json"), "evaluation-epoch-NN"),
+            ({k: v for k, v in epoch.items() if k != "sha256"}, "字段不闭合"),
+            (dict(epoch, to_evidence_semantics_sha256="x"), "to_evidence_semantics_sha256"),
+        ):
+            with self.assertRaisesRegex(artifacts.VCArtifactError, pattern):
+                recovery(bad)
+        # 缺字段（旧形态）不闭合；attempt-recovery 不绑定 epoch。
+        legacy = {k: v for k, v in payload.items() if k != "evaluation_epoch"}
+        legacy["recovery_sha256"] = artifacts.digest({k: v for k, v in legacy.items() if k != "recovery_sha256"})
+        with self.assertRaisesRegex(artifacts.VCArtifactError, "字段不闭合"):
+            artifacts.validate_evaluation_recovery(legacy)
+        with self.assertRaisesRegex(artifacts.VCArtifactError, "attempt-recovery 不绑定"):
+            recovery(epoch, kind="attempt-recovery")
 
 
 class TimingLedgerEvaluationEventsTests(unittest.TestCase):
@@ -527,6 +577,82 @@ class MonitorOrphanSealingTests(unittest.TestCase):
             state = self._wait_state(run_dir, {"failed", "watchdog-aborted"})
             self.assertEqual(state["state"], "watchdog-aborted")
             self.assertIn("owner-process-not-alive", supervisor.read_stop_receipt(run_dir)["reason"])
+
+
+class PreActionIdentityCheckTests(unittest.TestCase):
+    """T5.9：动作执行前核对 evaluator 四项摘要——清单冻结值与当前受管树不一致时动作不执行、父 run failed（identity-drift）。"""
+
+    def _run(self, root: Path, *, digests: dict, marker: Path) -> tuple[int, dict]:
+        from tools.official_client_capture.tests import test_codex_upgrade_staging_supervisor as staging_tests
+
+        helper = staging_tests.StagingSupervisorTests("test_commit_failure_before_commit_is_aborted_prepared_with_step")
+        campaign_dir, plan = helper._staging_campaign(root)
+        state_dir = root / "supervisor"
+        state_dir.mkdir(mode=0o700, exist_ok=True)
+        action = {
+            "action_id": "assert-rules", "operation": "VC-5:assert", "timeout_seconds": 5.0,
+            "command": [sys.executable, "-c", f"open({str(marker)!r}, 'w').write('ran')"], "item_ids": ["assert-rules"],
+            "output_bindings": ["assertions/cand/evaluation-run.json"],
+        }
+        manifest = supervisor.build_batched_campaign_run_manifest(
+            candidate_revision=1, candidate_id="cand", evaluation_baseline=None, baseline_commit_sha256=None, evaluator_digests=digests,
+            campaign_id=staging_tests.CAMPAIGN_ID, campaign_plan_sha256=str(plan["plan_sha256"]), batch_id="vc-5-0001", batch_sequence=1,
+            batch_sha256="1".zfill(64), phase="VC-5",
+            predecessor_checkpoint={"path": "control/vc/vc-4-checkpoint.json", "sha256": "4" * 64, "phase": "VC-4", "checkpoint_sha256": "5" * 64},
+            original_deadline_at_utc=str(plan["original_deadline_at_utc"]), actions=[action], execute_items=["assert-rules"], reuse_items=[],
+        )
+        binding = {
+            "campaign_dir": str(campaign_dir.resolve()), "sequence": 1, "phase": "VC-5", "staging_attempt": 1,
+            "commit_path": str(supervisor._staging_commit_path(campaign_dir.resolve(), 1, "VC-5")), "prepared_marker_sha256": "3" * 64,
+        }
+
+        def committing(client: supervisor.SupervisorClient) -> None:
+            client.begin_commit_step("commit-publish")
+            formal = campaign_dir / "control" / "vc" / "run-manifests" / "0001-vc-5.json"
+            helper._write_json(formal, manifest)
+            client.begin_commit_step("commit-mark")
+            commit = artifacts.build_vc_commit(
+                campaign_id=staging_tests.CAMPAIGN_ID, sequence=1, phase="VC-5", staging_attempt=1, batch_sha256="1".zfill(64),
+                manifest_sha256=supervisor._sha256(supervisor._canonical(manifest)), parent_run_dir=str(client.run_dir),
+                owner_nonce=client.owner_nonce, ledger_event_ids=[], committed_at_utc=datetime.now(timezone.utc).isoformat(),
+            )
+            helper._write_json(Path(str(supervisor._read_state(client.run_dir)["staging_binding"]["commit_path"])), commit)
+            client.begin_commit_step("commit-activate")
+            client.activate_committed(commit)
+
+        return supervisor._campaign_run_locked(
+            argparse.Namespace(heartbeat_seconds=0.05, watchdog_timeout_seconds=1.0, ledger_interval_seconds=0.05),
+            manifest=manifest, state_dir=state_dir, campaign_dir=campaign_dir, commit=committing, owner_nonce="a" * 64, staging_binding=binding,
+        )
+
+    def test_drifted_evaluator_digests_skip_action_and_fail_as_identity_drift(self) -> None:
+        current = dict(policy_module.evaluator_dependency_digests())
+        # 冻结值＝当前树：动作执行。
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            marker = root / "executed.txt"
+            returncode, payload = self._run(root, digests=current, marker=marker)
+            self.assertEqual((returncode, payload["reason"]), (0, "queue-complete"), payload)
+            self.assertTrue(marker.is_file())
+        # 冻结值与当前树不一致：动作不执行、诊断 identity-drift、stop-receipt action_outputs_sha256=None、无绑定文件。
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            marker = root / "executed.txt"
+            returncode, payload = self._run(root, digests=dict(current, checker_sha256="e5" * 32), marker=marker)
+            self.assertEqual((returncode, payload["reason"]), (1, "action-failed:assert-rules"), payload)
+            self.assertFalse(marker.exists())
+            result = payload["actions"][0]
+            self.assertEqual(
+                (result["status"], result["executed"], result["diagnostic"]["failure_class"], result["diagnostic"]["effective_failure_class"]),
+                ("failed", False, "identity-drift", "identity-drift"),
+            )
+            run_dir = Path(payload["run_dir"])
+            receipt = supervisor.read_stop_receipt(run_dir)
+            self.assertEqual((receipt["reason"], receipt["action_outputs_sha256"]), ("action-failed:assert-rules", None))
+            self.assertFalse((run_dir / "action-outputs" / "assert-rules.json").exists())
+            diagnostic = json.loads((run_dir / "action-diagnostics" / "action-assert-rules-failure.json").read_text(encoding="utf-8"))
+            self.assertIn("checker_sha256", diagnostic["message"])
+            self.assertIn("identity-drift", supervisor.PERMANENT_ACTION_FAILURE_CLASSES)
 
 
 class ReconcilerOrphanBackfillTests(unittest.TestCase):

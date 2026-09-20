@@ -16454,6 +16454,11 @@ def compile_vc_batch(
             evaluator_digests = codex_upgrade_tool_identity_policy.evaluator_dependency_digests()
         except codex_upgrade_tool_identity_policy.ToolIdentityPolicyError as error:
             raise ConfigurationError(f"evaluator 依赖摘要无法计算：{error}") from error
+        # 起点防伪：b0 的 checker／builder 冻结值必须等于 plan 工具身份的规范 entry；
+        # b≥1 四项必须等于该基线 recovery.json 授权值。不等即拒绝编译，不做归一化。
+        _verify_evaluator_digests_authorized(
+            campaign_dir, manifest, candidate_id, current_baseline, evaluator_digests, label="编译冻结 evaluator 摘要"
+        )
         actions = _freeze_evaluation_output_bindings(campaign_dir, candidate_id, current_baseline, actions)
 
     batches_root = campaign_dir / "control" / "vc" / "batches"
@@ -19154,6 +19159,12 @@ def _locate_evaluation_failed_run(
             kind = _evaluation_action_kind(list(action["command"]))
             if kind is None:
                 continue
+            if facts["failure_class"] in codex_upgrade_supervisor.PERMANENT_ACTION_FAILURE_CLASSES:
+                # identity-drift 等永久失败类不是 evaluator 缺陷（动作根本没有执行或环境不可信），
+                # 只能走既有停线／人工审计，不进入评估基线状态机。
+                raise ConfigurationError(
+                    f"父 run {run_dir.name} 的失败分类 {facts['failure_class']} 属永久失败类，evaluation-recover 不受理。"
+                )
             matched.append({**facts, "inner_manifest": dict(inner), "action": dict(action), "action_kind": kind})
     if not matched:
         raise ConfigurationError(
@@ -19424,10 +19435,22 @@ def _evaluation_failure_diagnosis_facts(
                         "accept 因 failed_gates 非零退出，不是本合同的事实；请按指南 4.5.6 补跑外部门禁。"
                     )
         if action_outputs is not None and action_outputs["evaluation_run"] is not None and index_path.is_file():
+            # accept 失败时断言批次已全部 pass：索引就是 b<K+1> 复用的依据（anchored），必须与
+            # 动作输出绑定记录的摘要一致并可校验，否则复用集合退化为全部重跑。
+            if action_outputs["evaluation_run"]["sha256"] != file_sha256(index_path):
+                raise ConfigurationError("动作输出绑定记录的 evaluation-run 摘要与当前文件不一致。")
+            try:
+                evaluation_run = codex_upgrade_vc_artifacts.validate_evaluation_run(_read_json(index_path, "evaluation-run.json"))
+            except codex_upgrade_vc_artifacts.VCArtifactError as error:
+                raise ConfigurationError(f"evaluation-run.json 无法校验：{error}") from error
+            if evaluation_run["candidate_id"] != candidate_id or evaluation_run["evaluation_baseline"] != baseline:
+                raise ConfigurationError("evaluation-run.json 的候选或基线身份与失败批次不一致。")
+            if evaluation_run["derived"]:
+                reuse_authority = "none"
             evaluation_run_binding = {
                 "path": index_path.relative_to(campaign_dir).as_posix(),
                 "sha256": file_sha256(index_path),
-                "derived": False,
+                "derived": bool(evaluation_run["derived"]),
             }
     frozen_digests = failed["inner_manifest"].get("evaluator_digests")
     if not isinstance(frozen_digests, Mapping):
@@ -19466,8 +19489,17 @@ def _evaluation_defect_admission(
     campaign_dir: Path,
     manifest: Mapping[str, Any],
     facts: Mapping[str, Any],
+    *,
+    attempt_root: Path,
 ) -> dict[str, Any]:
-    """evaluator-defect 准入：修复提交＋部署收据（passed、wire／policy 等于冻结值）、四项摘要至少一项变化且覆盖缺陷项。"""
+    """evaluator-defect 准入：修复提交＋部署收据（passed、wire／policy 等于冻结值、五摘要等于当前树）、
+    四项摘要至少一项变化且覆盖缺陷项、候选 attempt 的 evaluation-epoch 链已覆盖当前 evidence 摘要。
+
+    既有 A2 合同：evidence semantics 变化后评估类操作要求先对当前 attempt 追加 ``evaluation-epoch``。
+    apply 不代写 epoch（仍由 ``evaluation-epoch --candidate-id`` 生成），只重放完整 append-only 链并把
+    采用的 epoch（path／sha256／index／to_evidence_semantics_sha256）冻结进 recovery.json，经
+    AUTHORIZATION／COMMIT 的 ``recovery_sha256`` 传递绑定，供 accept 读侧回读复核。
+    """
 
     fix_commit = getattr(arguments, "fix_commit", None)
     receipt_path = getattr(arguments, "deployment_receipt", None)
@@ -19506,10 +19538,52 @@ def _evaluation_defect_admission(
         raise ConfigurationError(
             f"变化项 {changed} 未覆盖失败来源 {facts['failure_source']} 声明的缺陷项 {list(defect_items)}。"
         )
+    evaluation_epoch = _evaluation_epoch_for_recovery(
+        campaign_dir, manifest, attempt_root, current_evidence=str(current["evidence_semantics_sha256"])
+    )
     return {
         "fix_commit": fix_commit,
         "deployment_receipt": {"path": str(Path(receipt_path).resolve(strict=True)), "sha256": file_sha256(Path(receipt_path))},
         "changed_items": changed,
+        "evaluation_epoch": evaluation_epoch,
+    }
+
+
+def _evaluation_epoch_for_recovery(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    attempt_root: Path,
+    *,
+    current_evidence: str,
+) -> dict[str, Any] | None:
+    """重放候选 attempt 的完整 evaluation-epoch 链并给出 recovery 采用的 epoch 绑定。
+
+    链末 ``to_evidence_semantics_sha256``（无链即 Campaign 冻结值）必须等于当前受管树的 evidence
+    摘要；否则 evidence 已变化而 epoch 未追加（或追加后又变化），失败关闭。链为空返回 None。
+    """
+
+    try:
+        chain = codex_upgrade_wire_transition.load_epochs(attempt_root)
+    except codex_upgrade_wire_transition.WireTransitionError as error:
+        raise ConfigurationError(f"候选 attempt 的 evaluation-epoch 链无法重放：{error}") from error
+    frozen = manifest.get("tool_identity", {}).get("evidence_semantics_sha256") if isinstance(manifest.get("tool_identity"), Mapping) else None
+    effective = str(chain[-1]["to_evidence_semantics_sha256"]) if chain else (str(frozen) if frozen is not None else None)
+    if effective != current_evidence:
+        raise ConfigurationError(
+            "当前受管树的 evidence semantics 摘要与候选 attempt 的 evaluation-epoch 链末不一致；"
+            "先执行 evaluation-epoch --candidate-id 追加覆盖当前 evidence 摘要的 epoch，再 apply。"
+        )
+    if not chain:
+        return None
+    last = chain[-1]
+    path = attempt_root / f"evaluation-epoch-{int(last['index']):02d}.json"
+    if path.is_symlink() or not path.is_file():
+        raise ConfigurationError("evaluation-epoch 链末文件不存在。")
+    return {
+        "path": path.relative_to(campaign_dir).as_posix(),
+        "sha256": file_sha256(path),
+        "index": int(last["index"]),
+        "to_evidence_semantics_sha256": str(last["to_evidence_semantics_sha256"]),
     }
 
 
@@ -19749,7 +19823,7 @@ def _evaluation_recover_locked(
         if root_cause_class == "transient-environment":
             raise ConfigurationError("transient-environment 的准入与 attempt 恢复段在第 3 批 M2 实现；本里程碑不接受。")
         _verify_failed_run_reconciled(campaign_dir, manifest, ledger_dir, facts["failed"], head=head)
-        defect = _evaluation_defect_admission(arguments, campaign_dir, manifest, facts)
+        defect = _evaluation_defect_admission(arguments, campaign_dir, manifest, facts, attempt_root=attempt_root)
         # ① 编号与 recovery.json／PREPARED（write-once；续作即校验一致）。
         number = resume_number if resume_number is not None else (max(states) + 1 if states else 1)
         if number <= current_baseline:
@@ -19814,6 +19888,7 @@ def _evaluation_recover_locked(
                     recovery_revision=None,
                     fix_commit=defect["fix_commit"],
                     deployment_receipt=defect["deployment_receipt"],
+                    evaluation_epoch=defect["evaluation_epoch"],
                     failed_evaluator_digests=facts["failed_evaluator_digests"],
                     current_evaluator_digests=facts["current_evaluator_digests"],
                     reviewer=reviewer,
@@ -28423,6 +28498,96 @@ def _current_evaluation_baseline(
             f"账本引用的评估基线 b{baseline} COMMIT 摘要与目录内 COMMIT 不一致。"
         )
     return baseline, commit
+
+
+def _load_evaluation_baseline_recovery(
+    campaign_dir: Path, candidate_id: str, baseline: int
+) -> dict[str, Any]:
+    """读取并校验 b<K>/recovery.json（自摘要、候选与编号身份）。"""
+
+    recovery_path = _evaluation_baseline_dir(campaign_dir, candidate_id, baseline) / EVALUATION_BASELINE_RECOVERY_FILENAME
+    if recovery_path.is_symlink() or not recovery_path.is_file():
+        raise ConfigurationError(f"评估基线 b{baseline} 没有 recovery.json。")
+    try:
+        recovery = codex_upgrade_vc_artifacts.validate_evaluation_recovery(
+            _read_json(recovery_path, f"评估基线 b{baseline} recovery")
+        )
+    except codex_upgrade_vc_artifacts.VCArtifactError as error:
+        raise ConfigurationError(f"评估基线 b{baseline} recovery 无法校验：{error}") from error
+    if recovery["candidate_id"] != candidate_id or recovery["evaluation_baseline"] != baseline:
+        raise ConfigurationError(f"评估基线 b{baseline} recovery 的候选或编号身份不一致。")
+    return recovery
+
+
+def _plan_evaluator_entry_digests(manifest: Mapping[str, Any]) -> dict[str, str]:
+    """plan 冻结的 ``tool_identity.entries`` 中 checker／builder 各有且仅有一个规范 entry 的摘要。
+
+    这是 b0 评估批次的起点防伪口径：编译冻结值、当前文件、plan entry 三者必须相等，任一不等
+    即失败关闭，不做归一化。
+    """
+
+    identity = manifest.get("tool_identity")
+    entries = identity.get("entries") if isinstance(identity, Mapping) else None
+    if not isinstance(entries, list):
+        raise ConfigurationError("plan 工具身份缺少 entries，无法冻结 b0 evaluator 摘要。")
+    digests: dict[str, str] = {}
+    for field, relative in (
+        ("checker_sha256", codex_upgrade_tool_identity_policy.EVALUATOR_CHECKER_RELATIVE),
+        ("builder_sha256", codex_upgrade_tool_identity_policy.EVALUATOR_BUILDER_RELATIVE),
+    ):
+        matches = [
+            entry for entry in entries if isinstance(entry, Mapping) and entry.get("path") == relative
+        ]
+        if len(matches) != 1:
+            raise ConfigurationError(f"plan 工具身份中 {relative} 必须有且仅有一个规范 entry（实际 {len(matches)} 个）。")
+        value = matches[0].get("sha256")
+        if not isinstance(value, str) or not SHA256_RE.fullmatch(value):
+            raise ConfigurationError(f"plan 工具身份中 {relative} 的摘要非法。")
+        digests[field] = value
+    return digests
+
+
+def _authorized_evaluator_digests(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    candidate_id: str,
+    baseline: int,
+) -> dict[str, str]:
+    """评估基线授权的 evaluator 摘要口径。
+
+    b≥1：该基线 ``recovery.json.current_evaluator_digests`` 四项（apply 时以当前树与部署收据
+    冻结）；b0：plan ``tool_identity`` 中 checker／builder 两项（compare／accept 读侧闭包在 plan
+    没有登记，b0 不对其设口径）。
+    """
+
+    if baseline == 0:
+        return _plan_evaluator_entry_digests(manifest)
+    recovery = _load_evaluation_baseline_recovery(campaign_dir, candidate_id, baseline)
+    return {
+        field: str(recovery["current_evaluator_digests"][field])
+        for field in codex_upgrade_vc_artifacts.EVALUATOR_DIGEST_FIELDS
+    }
+
+
+def _verify_evaluator_digests_authorized(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    candidate_id: str,
+    baseline: int,
+    digests: Mapping[str, Any],
+    *,
+    label: str,
+) -> None:
+    """``digests``（编译冻结值或 evaluation-run 记录值）必须等于基线授权口径，不等即失败关闭。"""
+
+    authorized = _authorized_evaluator_digests(campaign_dir, manifest, candidate_id, baseline)
+    drift = sorted(field for field, value in authorized.items() if str(digests.get(field)) != value)
+    if drift:
+        origin = "plan 工具身份" if baseline == 0 else f"b{baseline} recovery.json 授权"
+        raise ConfigurationError(
+            f"{label}：evaluator 摘要与{origin}不一致（{'、'.join(drift)}）；"
+            + ("当前树已偏离 plan，b0 评估批次不能再编译或接受。" if baseline == 0 else "先以 evaluation-recover 开新基线或恢复授权时的工具树。")
+        )
 
 
 def _stage_read_source(
@@ -50852,12 +51017,17 @@ def _validate_machine_assertion(
     side: str,
     checkpoint: Mapping[str, Any] | None = None,
     reused: bool = False,
+    expected_checker_sha256: str | None = None,
 ) -> set[str]:
     """校验一侧机器结果。
 
     改造 5：``checkpoint`` 给出时期望命令带该 checkpoint 的投影输入；``reused`` 行以历史
     checkpoint 的 context 重建命令、比摘要、校验文档 sha，**不重放 checker**（防伪依据是
     write-once checkpoint 链＋父 run 绑定＋锚点链，由调用方先行验证）。
+
+    ``expected_checker_sha256``：评估基线授权的 checker 口径（b≥1 为该基线 recovery.json 的
+    ``current_evaluator_digests.checker_sha256``）；为 None 时沿用 plan 冻结的工具身份（b0）。
+    文档记录的 checker 摘要与当前 checker 文件都必须等于该口径。
     """
 
     label = "官方" if side == "official" else "候选"
@@ -50920,17 +51090,19 @@ def _validate_machine_assertion(
         raise ConfigurationError(f"逐规则断言 {rule} {label}命令摘要不一致。")
     if checkpoint is not None and checkpoint["command_sha256"] != result.get("command_sha256"):
         raise ConfigurationError(f"逐规则断言 {rule} {label}checkpoint 命令摘要与文档不一致。")
-    pinned_checkers = {
-        entry.get("path"): entry.get("sha256")
-        for entry in manifest.get("tool_identity", {}).get("entries", [])
-        if isinstance(entry, dict)
-    }
-    checker_sha = pinned_checkers.get("candidate_rule_assertion.py")
-    if not checker_sha or checker_sha != result.get("checker_sha256"):
-        raise ConfigurationError(f"逐规则断言 {rule} checker 未绑定 plan 工具摘要。")
+    if expected_checker_sha256 is None:
+        checker_sha = _plan_evaluator_entry_digests(manifest)["checker_sha256"]
+        origin = "plan 工具摘要"
+    else:
+        checker_sha = expected_checker_sha256
+        origin = "评估基线授权的 checker 摘要"
+    if checker_sha != result.get("checker_sha256"):
+        raise ConfigurationError(f"逐规则断言 {rule} checker 未绑定{origin}。")
+    if checkpoint is not None and checkpoint.get("checker_sha256") != checker_sha:
+        raise ConfigurationError(f"逐规则断言 {rule} {label}checkpoint 记录的 checker 摘要与{origin}不一致。")
     checker_path = Path(__file__).resolve().parent / "candidate_rule_assertion.py"
     if not checker_path.is_file() or file_sha256(checker_path) != checker_sha:
-        raise ConfigurationError(f"逐规则断言 {rule} checker 文件在 plan 后漂移。")
+        raise ConfigurationError(f"逐规则断言 {rule} checker 文件与{origin}不一致（授权后漂移）。")
     checks = result.get("checks")
     if not isinstance(checks, list) or not checks:
         raise ConfigurationError(f"逐规则断言 {rule} 没有机器检查项。")
@@ -51045,6 +51217,62 @@ def _load_evaluation_run_index(
     return run, by_side
 
 
+def _verify_baseline_evaluation_epoch(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    candidate_id: str,
+    baseline: int,
+    *,
+    candidate: Mapping[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """回读 b<K> recovery.json 冻结的 evaluation-epoch 绑定并与 attempt 链末、当前树 evidence 摘要复核。
+
+    recovery → AUTHORIZATION → COMMIT 的 ``recovery_sha256`` 链已把该绑定传递到当前基线；这里核对
+    绑定文件仍在且摘要一致、序号与 attempt 链末相同、目标 evidence 摘要等于当前受管树。绑定为
+    None 时要求 attempt 没有 epoch 链且当前 evidence 摘要等于 Campaign 冻结值。
+    """
+
+    recovery = _load_evaluation_baseline_recovery(campaign_dir, candidate_id, baseline)
+    epoch = recovery.get("evaluation_epoch")
+    current_evidence = str(_tool_identity(include_git=False)["evidence_semantics_sha256"])
+    identity = manifest.get("tool_identity") if isinstance(manifest.get("tool_identity"), Mapping) else {}
+    frozen_evidence = identity.get("evidence_semantics_sha256")
+    if candidate is None:
+        candidate = _load_stage_result(campaign_dir, "capture-candidate", candidate_id)
+    attempt_root, _attempt = _capture_stage_attempt_context(
+        campaign_dir, dict(candidate), phase="candidate", candidate_id=candidate_id
+    )
+    try:
+        chain = codex_upgrade_wire_transition.load_epochs(attempt_root)
+    except codex_upgrade_wire_transition.WireTransitionError as error:
+        raise ConfigurationError(f"候选 attempt 的 evaluation-epoch 链无法重放：{error}") from error
+    if epoch is None:
+        if chain or (frozen_evidence is not None and current_evidence != str(frozen_evidence)):
+            raise ConfigurationError(
+                f"评估基线 b{baseline} 授权时没有 evaluation-epoch，但候选 attempt 现有 epoch 链或当前 evidence 摘要已偏离 Campaign 冻结值；需要新的评估基线。"
+            )
+        return None
+    path = _campaign_file(campaign_dir, str(epoch["path"]))
+    if path.is_symlink() or not path.is_file() or file_sha256(path) != epoch["sha256"]:
+        raise ConfigurationError(f"评估基线 b{baseline} 绑定的 evaluation-epoch 文件缺失或摘要漂移。")
+    if path.parent != attempt_root:
+        raise ConfigurationError(f"评估基线 b{baseline} 绑定的 evaluation-epoch 不属于当前候选 attempt。")
+    last = chain[-1] if chain else None
+    if (
+        last is None
+        or int(last["index"]) != int(epoch["index"])
+        or str(last["to_evidence_semantics_sha256"]) != epoch["to_evidence_semantics_sha256"]
+    ):
+        raise ConfigurationError(
+            f"评估基线 b{baseline} 绑定的 evaluation-epoch 不再是候选 attempt 链末；evidence 已再次变化，需要新的评估基线。"
+        )
+    if epoch["to_evidence_semantics_sha256"] != current_evidence:
+        raise ConfigurationError(
+            f"评估基线 b{baseline} 授权的 evidence 摘要与当前受管树不一致；恢复授权时的工具树或开新基线。"
+        )
+    return dict(epoch)
+
+
 def _verify_reuse_anchor_chain(
     campaign_dir: Path,
     candidate_id: str,
@@ -51112,9 +51340,21 @@ def _verify_reuse_anchor_chain(
     if (
         _campaign_file(campaign_dir, str(outputs["evaluation_run"]["path"])) != previous_index
         or file_sha256(previous_index) != outputs["evaluation_run"]["sha256"]
-        or outputs["checkpoint_head_sha256"] != previous_head
     ):
-        raise ConfigurationError("动作输出绑定记录的 evaluation-run 摘要或 checkpoint head 与被复用基线不一致。")
+        raise ConfigurationError("动作输出绑定记录的 evaluation-run 摘要与被复用基线不一致。")
+    # checkpoint head：断言动作的绑定直接记录 checkpoints 目录的链 head；compare／accept 动作的绑定
+    # 不含 checkpoints 目录（冻结声明只绑定其输入 evaluation-run.json），此时以 write-once 索引内
+    # 记录的 head 为准——索引摘要已被绑定锁定，索引内 head 与目录链一致由 _load_evaluation_run_index 保证。
+    bound_head = outputs["checkpoint_head_sha256"]
+    if bound_head is None:
+        try:
+            bound_head = codex_upgrade_vc_artifacts.validate_evaluation_run(
+                _read_json(previous_index, "evaluation-run.json")
+            )["checkpoint_head_sha256"]
+        except codex_upgrade_vc_artifacts.VCArtifactError as error:
+            raise ConfigurationError(f"被复用基线的 evaluation-run.json 无法校验：{error}") from error
+    if bound_head != previous_head:
+        raise ConfigurationError("动作输出绑定记录的 checkpoint head 与被复用基线不一致。")
     return recovery
 
 
@@ -51189,10 +51429,26 @@ def _validate_assertion_results(
     # b0 没有索引时全部按 executed 走既有流程。
     current_baseline, current_commit = _current_evaluation_baseline(campaign_dir, candidate_id)
     loaded_index = _load_evaluation_run_index(campaign_dir, candidate_id, current_baseline)
+    # 评估基线授权的 evaluator 口径：b≥1 取 recovery.json 授权四项（并回读其冻结的 evaluation-epoch），
+    # b0 取 plan 工具身份的 checker／builder entry。索引、checkpoint、单规则文档记录的 checker 摘要
+    # 与当前 checker 文件都必须等于该口径。
+    authorized_digests = _authorized_evaluator_digests(campaign_dir, manifest, candidate_id, current_baseline)
+    expected_checker_sha256 = authorized_digests["checker_sha256"] if current_baseline else None
+    if current_baseline:
+        _verify_baseline_evaluation_epoch(campaign_dir, manifest, candidate_id, current_baseline, candidate=candidate)
     index_rows: dict[str, dict[str, Any]] = {}
     checkpoints_by_side: dict[tuple[str, str], dict[str, Any]] = {}
     if loaded_index is not None:
         evaluation_run, checkpoints_by_side = loaded_index
+        _verify_evaluator_digests_authorized(
+            campaign_dir, manifest, candidate_id, current_baseline, evaluation_run["evaluator"],
+            label="当前评估基线 evaluation-run.json",
+        )
+        for (checkpoint_rule, checkpoint_side), checkpoint in checkpoints_by_side.items():
+            if checkpoint["checker_sha256"] != evaluation_run["evaluator"]["checker_sha256"]:
+                raise ConfigurationError(
+                    f"逐规则断言 {checkpoint_rule} {checkpoint_side} checkpoint 的 checker 摘要与 evaluation-run.json 不一致。"
+                )
         index_rows = {str(item["rule"]): dict(item) for item in evaluation_run["rules"]}
         if any(item["status"] != "pass" for item in index_rows.values()):
             raise ConfigurationError("当前评估基线的 evaluation-run.json 含未通过或未完成规则，不得接受。")
@@ -51228,6 +51484,13 @@ def _validate_assertion_results(
                 previous = _load_evaluation_run_index(campaign_dir, candidate_id, reused_baseline)
                 if previous is None:
                     raise ConfigurationError(f"被复用的评估基线 b{reused_baseline} 没有 evaluation-run.json。")
+                # 被复用基线的索引也必须与其自身授权口径一致，且 checker 与当前基线相同（复用判据）。
+                _verify_evaluator_digests_authorized(
+                    campaign_dir, manifest, candidate_id, reused_baseline, previous[0]["evaluator"],
+                    label=f"被复用评估基线 b{reused_baseline} evaluation-run.json",
+                )
+                if previous[0]["evaluator"]["checker_sha256"] != authorized_digests["checker_sha256"]:
+                    raise ConfigurationError(f"被复用评估基线 b{reused_baseline} 的 checker 与当前基线授权不同，复用无效。")
                 historical_indexes[reused_baseline] = {str(item["rule"]): dict(item) for item in previous[0]["rules"]}
                 historical_stage = _load_stage_result(
                     campaign_dir, "capture-candidate", candidate_id, _baseline=reused_baseline
@@ -51311,6 +51574,7 @@ def _validate_assertion_results(
             side="candidate",
             checkpoint=row_checkpoints.get("candidate"),
             reused=reused_from is not None,
+            expected_checker_sha256=expected_checker_sha256,
         )
         if candidate_check_ids != candidate_expected_check_ids:
             raise ConfigurationError(
@@ -51334,6 +51598,7 @@ def _validate_assertion_results(
                 side="official",
                 checkpoint=row_checkpoints.get("official"),
                 reused=reused_from is not None,
+                expected_checker_sha256=expected_checker_sha256,
             )
             official_expected_check_ids = set(
                 _acceptance_expected_check_ids(

@@ -18,6 +18,7 @@ import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Callable
 from unittest import mock
 
 from tools.official_client_capture import candidate_evidence_guard
@@ -57,6 +58,10 @@ from tools.official_client_capture.tests.control_receipt_fixtures import (
 
 
 class CodexUpgradeTest(unittest.TestCase):
+    # 合成场景的两个 Job id。默认值与历史用例一致；真实评估链夹具（改造 5 M1 审核修正）把它们改为
+    # 正式 0.154 声明覆盖的 Job id，使受管子进程（CLI）的证据标签声明校验无需 mock 即可通过。
+    synthetic_job_ids: dict[str, str] = {"official": "official-test", "candidate": "candidate-test"}
+
     def setUp(self) -> None:
         super().setUp()
         # 公共 Campaign 夹具使用 0.147 离线合成数据；0.151 与其他版本
@@ -72,7 +77,12 @@ class CodexUpgradeTest(unittest.TestCase):
             **kwargs: object,
         ) -> str:
             if target_version in {"0.147.0", "0.154.0"}:
-                return "d" * 64
+                # 合成 Job id 不在正式声明内时回退固定摘要（历史行为）；真实评估链夹具用正式
+                # Job id，真实声明可算出即用真实值（子进程 CLI 无 patch 也能一致）。
+                try:
+                    return original(target_version, target_scenario, **kwargs)
+                except codex_upgrade_job_rehearsal_receipt.JobRehearsalReceiptError:
+                    return "d" * 64
             return original(target_version, target_scenario, **kwargs)
 
         patcher = mock.patch.object(
@@ -7440,7 +7450,7 @@ class CodexUpgradeTest(unittest.TestCase):
                 ],
                 "capture_jobs": [
                     {
-                        "id": "official-test",
+                        "id": self.synthetic_job_ids["official"],
                         "phase": "official",
                         "suites": ["full"],
                         "description": "测试官方抓包阶段",
@@ -7460,7 +7470,7 @@ class CodexUpgradeTest(unittest.TestCase):
                         "required_scenario_receipts": [],
                     },
                     {
-                        "id": "candidate-test",
+                        "id": self.synthetic_job_ids["candidate"],
                         "phase": "candidate",
                         "suites": ["full"],
                         "description": "测试候选抓包阶段",
@@ -7680,10 +7690,18 @@ class CodexUpgradeTest(unittest.TestCase):
         if campaign_mode == "formal":
             # 旧版本只用于离线合成 Campaign；目标标签声明门禁由 0.151
             # 专项测试覆盖，不能为即将退休的 0.147 新增生产声明。
+            original_declaration = codex_upgrade_job_rehearsal_receipt._target_evidence_label_declaration_sha256
+
+            def declaration_or_fixed(target_version_arg: str, target_scenario_arg: object, **kwargs: object) -> str:
+                try:
+                    return original_declaration(target_version_arg, target_scenario_arg, **kwargs)
+                except codex_upgrade_job_rehearsal_receipt.JobRehearsalReceiptError:
+                    return "d" * 64
+
             with mock.patch.object(
                 codex_upgrade_job_rehearsal_receipt,
                 "_target_evidence_label_declaration_sha256",
-                return_value="d" * 64,
+                side_effect=declaration_or_fixed,
             ):
                 contract = (
                     codex_upgrade_job_rehearsal_receipt.build_execution_contract(
@@ -7873,11 +7891,24 @@ class CodexUpgradeTest(unittest.TestCase):
         evaluation_recovery_controls: dict[str, object] | None = None,
         seal: bool = True,
         bind_environment: bool = False,
+        prepare_evidence: Callable[[Path], None] | None = None,
+        extra_artifacts: list[dict[str, object]] | Callable[[Path], list[dict[str, object]]] | None = None,
     ) -> None:
+        # 改造 5 M1 审核修正（真实评估链）：``prepare_evidence`` 在证据根建立后、扫描前放入真实
+        # 断言证据（e2e H1 流 bundle）；``extra_artifacts`` 追加进 capture manifest，供真实 checker
+        # 按场景交集投影与评估。默认不传时行为与既有用例完全一致。
+        # ``prepare_evidence`` 先于目录创建调用：真实断言 bundle 要求证据根由它全新建立
+        # （bundle 目录＝证据根，manifest 内 artifact 路径相对证据根）。
+        if prepare_evidence is not None:
+            prepare_evidence(evidence_root)
         evidence_root.mkdir(parents=True, exist_ok=True)
+        if callable(extra_artifacts):
+            extra_artifacts = extra_artifacts(evidence_root)
         campaign_manifest = codex_upgrade.load_campaign_manifest(campaign_dir)
         target_version = str(campaign_manifest["target_version"])
         campaign_configuration = campaign_manifest["configuration"]
+        # 第三方入口（Kilo）收据的 model 必须等于 Campaign 的 Lite 轨（历史 Campaign 回退主轨）。
+        third_party_model = codex_upgrade._third_party_client_model(campaign_configuration)
         attempt_id = (
             "20260731T000000Z-1111111111111111"
             if phase == "official"
@@ -7989,7 +8020,8 @@ class CodexUpgradeTest(unittest.TestCase):
                         "parser": "observation_json",
                         "scenario_ids": ["A01"],
                         "labels": {"side": phase},
-                    }
+                    },
+                    *[dict(item) for item in (extra_artifacts or [])],
                 ],
             },
         )
@@ -8016,7 +8048,7 @@ class CodexUpgradeTest(unittest.TestCase):
                     "attempt_id": attempt_id,
                     "run_nonce": run_nonce,
                     "candidate_id": candidate_id,
-                    "target_version": "0.147.0",
+                    "target_version": target_version,
                     "profile_id": identity["profile_id"],
                     "profile_digest": identity["profile_digest"],
                     "image_id": identity["image_id"],
@@ -8095,9 +8127,9 @@ class CodexUpgradeTest(unittest.TestCase):
                         "client_version": "kilo-test-1",
                         "protocol": protocol,
                         "entrypoint": entrypoint,
-                        "model": "gpt-5.6-luna",
+                        "model": third_party_model,
                         "candidate_id": candidate_id,
-                        "target_version": "0.147.0",
+                        "target_version": target_version,
                         "received_at_utc": timestamp(20),
                     },
                 )
@@ -8119,9 +8151,9 @@ class CodexUpgradeTest(unittest.TestCase):
                         "client_id": client,
                         "protocol": protocol,
                         "entrypoint": entrypoint,
-                        "model": "gpt-5.6-luna",
+                        "model": third_party_model,
                         "candidate_id": candidate_id,
-                        "target_version": "0.147.0",
+                        "target_version": target_version,
                         "profile_id": identity["profile_id"],
                         "profile_digest": identity["profile_digest"],
                         "image_id": identity["image_id"],
@@ -8187,14 +8219,14 @@ class CodexUpgradeTest(unittest.TestCase):
                         client_checkpoint_at_utc=client_checkpoint_at_utc,
                         client_id=client,
                         candidate_id=candidate_id,
-                        target_version="0.147.0",
+                        target_version=target_version,
                         profile_id=identity["profile_id"],
                         profile_digest=identity["profile_digest"],
                         candidate_image_id=identity["image_id"],
                         source_tree_sha256=identity["source_tree_sha256"],
                         build_id=identity["build_id"],
                         deployed_version=identity["deployed_version"],
-                        model="gpt-5.6-luna",
+                        model=third_party_model,
                         installation=Path(installation_path.name),
                         ingress=Path(ingress_path.name),
                         runtime_audit=Path(runtime_path.name),
@@ -8215,7 +8247,7 @@ class CodexUpgradeTest(unittest.TestCase):
                     attempt_started_at_utc=attempt_started_at_utc,
                     client_checkpoint_at_utc=client_checkpoint_at_utc,
                     candidate_id=candidate_id,
-                    target_version="0.147.0",
+                    target_version=target_version,
                     profile_id=identity["profile_id"],
                     profile_digest=identity["profile_digest"],
                     image_id=identity["image_id"],
@@ -8297,7 +8329,7 @@ class CodexUpgradeTest(unittest.TestCase):
                     attempt_started_at_utc=attempt_started_at_utc,
                     client_checkpoint_at_utc=client_checkpoint_at_utc,
                     candidate_id=str(candidate_id),
-                    target_version="0.147.0",
+                    target_version=target_version,
                     expected_profile_id=str(identity["profile_id"]),
                     expected_profile_digest=str(identity["profile_digest"]),
                     image_id=str(identity["image_id"]),
@@ -8316,8 +8348,8 @@ class CodexUpgradeTest(unittest.TestCase):
                 attempt_started_at_utc=attempt_started_at_utc,
                 client_checkpoint_at_utc=client_checkpoint_at_utc,
                 candidate_id=str(candidate_id),
-                target_version="0.147.0",
-                model="gpt-5.6-luna",
+                target_version=target_version,
+                model=third_party_model,
                 identity=identity,
             )
         normalized_surface = codex_upgrade.scan_evidence(
@@ -8345,13 +8377,13 @@ class CodexUpgradeTest(unittest.TestCase):
                     profile_id=str(identity.get("profile_id", "")),
                     profile_digest=str(identity.get("profile_digest", "")),
                 )
-                if job.job_id == f"{phase}-test"
+                if job.job_id == self.synthetic_job_ids[phase]
             )
             execution_sha256 = codex_upgrade._job_execution_sha256(planned_job)
         except codex_upgrade.ConfigurationError:
             execution_sha256 = "0" * 64
         result_item = {
-            "id": f"{phase}-test",
+            "id": self.synthetic_job_ids[phase],
             "phase": phase,
             "required": True,
             "execution_sha256": execution_sha256,
@@ -8758,12 +8790,18 @@ class CodexUpgradeTest(unittest.TestCase):
         *,
         omit_last: bool = False,
         blocked_rule: str | None = None,
+        rules: tuple[str, ...] | None = None,
+        assertion_profile_payload: dict[str, object] | None = None,
+        version: str = "0.147.0",
     ) -> tuple[Path, Path, Path, Path, Path, tuple[str, ...]]:
+        # 改造 5 M1 审核修正（真实评估链）：``rules`` 覆盖目标规则集合（默认 0.145.0 全集），
+        # ``assertion_profile_payload`` 直接给出断言画像（默认由冻结画像裁剪）；默认行为不变。
         baseline_manifest = (
             Path(__file__).resolve().parents[1]
             / "codex_upgrade_rules_0_145_0.json"
         )
-        rules = load_rule_manifest(baseline_manifest, "0.145.0")
+        if rules is None:
+            rules = load_rule_manifest(baseline_manifest, "0.145.0")
         target_manifest = root / "target-rules.json"
         migration_manifest = root / "rule-migration.json"
         scenario_manifest = root / "target-scenarios.json"
@@ -8773,7 +8811,7 @@ class CodexUpgradeTest(unittest.TestCase):
             target_manifest,
             {
                 "schema_version": codex_upgrade.RULE_SCHEMA,
-                "codex_version": "0.147.0",
+                "codex_version": version,
                 "required_rules": list(rules),
             },
         )
@@ -8796,7 +8834,7 @@ class CodexUpgradeTest(unittest.TestCase):
             {
                 "schema_version": codex_upgrade.MIGRATION_SCHEMA,
                 "baseline_version": "0.145.0",
-                "target_version": "0.147.0",
+                "target_version": version,
                 "status": "approved",
                 "entries": entries,
                 "discovery_classifications": [],
@@ -8806,7 +8844,7 @@ class CodexUpgradeTest(unittest.TestCase):
             root,
             target_manifest,
             rules,
-            version="0.147.0",
+            version=version,
             name=scenario_manifest.name,
         )
         profile_payload = {
@@ -8817,8 +8855,8 @@ class CodexUpgradeTest(unittest.TestCase):
             profile_manifest,
             {
                 "schema_version": codex_upgrade.PROFILE_SCHEMA,
-                "codex_version": "0.147.0",
-                "profile_id": "codex-0.147.0-test-v1",
+                "codex_version": version,
+                "profile_id": f"codex-{version}-test-v1",
                 "profile_digest": "c" * 64,
                 "profile_payload": profile_payload,
                 "profile_payload_sha256": codex_upgrade._fingerprint(
@@ -8827,11 +8865,14 @@ class CodexUpgradeTest(unittest.TestCase):
                 "status": "approved",
             },
         )
-        self._write_assertion_profile(
-            assertion_profile_manifest,
-            rules,
-            version="0.147.0",
-        )
+        if assertion_profile_payload is not None:
+            self._write_json(assertion_profile_manifest, assertion_profile_payload)
+        else:
+            self._write_assertion_profile(
+                assertion_profile_manifest,
+                rules,
+                version=version,
+            )
         return (
             target_manifest,
             migration_manifest,
