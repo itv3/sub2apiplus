@@ -25,7 +25,8 @@ VC-4 构建收据），accept 因而真实运行到 AcceptanceFact 与 VC-5 comp
 * E1～E5：apply 在状态机五个写点逐点崩溃并续作收敛；
 * C1：正式监督器批次内的 accept 动作（真实 CLI）在 VC-5 completion 写出前崩溃（子进程内按开关文件 patch
   ``_complete_vc_with_receipt``）→ 父 run failed／stop-receipt → reconcile → 环境恢复重派（与原批次逐字
-  相同）→ accept 整份重放一致即复用既有 AcceptanceFact（字节不变）只补 completion；另有三条漂移负例；
+  相同）→ accept 整份重放一致即复用既有 AcceptanceFact（字节不变）只补 completion；b0 变体带三条漂移负例，
+  b1 变体在 evaluator 恢复链之后以 ``[assert, accept]`` 整批崩溃／整批重派（assert 零 checker）；
 * 后继协议伪造负例（篡改 b1 COMMIT）。
 
 本文件位于 tests/，不进受管摘要。
@@ -698,6 +699,69 @@ class RealEvaluationChainTests(unittest.TestCase):
         self.assertEqual((again["status"], again["accepted"]), ("accepted", True), again)
         self.assertEqual(acceptance_path.read_bytes(), sealed_bytes)
         self.assertEqual(_read(h.vc5_checkpoint_path())["checkpoint_sha256"], again["vc5_checkpoint_sha256"])
+
+    # ------------------------------------------------------------------
+    # C1（b1 同批次）：b0 evaluator 失败 → 对账／epoch／apply 进入 b1 → b1 正式批次 [assert, accept] 在 accept
+    # completion 前崩溃 → 对账 recoverable（VC-5:accept 与前次 VC-5:assert 是不同根因）→ 逐字重派同一批次：
+    # assert 零 checker、checkpoint／索引不重写，AcceptanceFact 字节不变，只补 VC-5 completion（绑定 b1）
+    # ------------------------------------------------------------------
+
+    def test_c1_on_b1_batch_accept_crash_redispatches_same_batch_with_zero_checker(self) -> None:
+        if not CANDIDATE_IDENTITY_AVAILABLE:
+            self.skipTest(ACCEPT_SKIP_REASON)
+        h = self.harness
+        tree_a, tree_b = h.tree_a(), h.tree_b()
+        digests_b = mtc.evaluator_digests(tree_b)
+        # ---- b0：缺陷副本 A 断言失败 → 对账 → epoch → apply → b1 ----
+        h.init(tree_a)
+        self.assertEqual(h.dispatch(tree_a, "compare0", ["compare"])["returncode"], 0)
+        b0 = h.dispatch(tree_a, "b0", ["assert"], reuse_items=["compare"])
+        self.assertEqual((b0["returncode"], b0["campaign_run"]["reason"]), (1, "action-failed:vc5-1-assert"), b0)
+        self.assertEqual(h.run(tree_a, "reconcile", "--run-dir", b0["campaign_run"]["run_dir"])["status"], "recoverable")
+        h.run(tree_b, "epoch", "--attempt-id", h.state()["attempt_id"], "--reason", "evaluator checker fix")
+        applied = h.apply_fix(tree_b, h.deployment_receipt(tree_b, "fix-b"))
+        self.assertEqual((applied["status"], applied["evaluation_baseline"]), ("applied", 1), applied)
+        self.assertEqual(h.dispatch(tree_b, "compare1", ["compare"], baseline=1)["returncode"], 0)
+        h.run(tree_b, "gate", "--tag", "b")
+        # ---- b1 正式批次 [assert, accept]：assert 全部重跑全 pass，accept 动作在 completion 写出前崩溃 ----
+        batch_arguments = dict(baseline=1, reuse_from=h.b0_index_path(), authority="anchored", reuse_items=["compare"], accept_wrapper=True)
+        crashed = h.dispatch(tree_b, "b1", ["assert", "accept"], crash_at="accept-completion", **batch_arguments)
+        self.assertEqual((crashed["returncode"], crashed["campaign_run"]["status"], crashed["campaign_run"]["reason"]), (1, "failed", "action-failed:vc5-2-accept"), crashed)
+        actions = {action["action_id"]: action for action in crashed["campaign_run"]["actions"]}
+        self.assertEqual((actions["vc5-1-assert"]["status"], actions["vc5-2-accept"]["status"], actions["vc5-2-accept"]["effective_failure_class"]), ("passed", "failed", "post-run-tooling"))
+        index_path = h.campaign_dir() / "assertions" / CANDIDATE / "revisions" / "b1" / "evaluation-run.json"
+        index1 = h.index(1)
+        self.assertTrue(all(row["status"] == "pass" and row["reused_from"] is None for row in index1["rules"]))
+        self.assertEqual(index1["evaluator"], digests_b)
+        acceptance_path = h.acceptance_path(1)
+        seal_path = acceptance_path.with_name("evidence-seal.json")
+        self.assertTrue(acceptance_path.is_file() and seal_path.is_file())
+        self.assertFalse(h.vc5_checkpoint_path().exists())
+        self.assertFalse(h.vc5_completion_path().exists())
+        # 快照：b1 索引／checkpoint 链／checker 机器文档／AcceptanceFact 的字节与 mtime。
+        b1_root = h.campaign_dir() / "assertions" / CANDIDATE / "revisions" / "b1"
+        index_bytes = index_path.read_bytes()
+        checkpoint_stamps = {path.name: (path.stat().st_mtime_ns, path.read_bytes()) for path in (b1_root / "checkpoints").iterdir()}
+        machine_stamps = {path.relative_to(b1_root).as_posix(): path.stat().st_mtime_ns for path in (b1_root / "machine").rglob("*.json")}
+        self.assertTrue(machine_stamps)  # b1 确实跑过 checker（全部重跑）
+        sealed_bytes, seal_bytes = acceptance_path.read_bytes(), seal_path.read_bytes()
+        # ---- 对账：本 revision 第二次失败对账，但 VC-5:accept 与 VC-5:assert 根因不同 → recoverable ----
+        reconciled = h.run(tree_b, "reconcile", "--run-dir", crashed["campaign_run"]["run_dir"])
+        self.assertEqual((reconciled["status"], reconciled["decision"]["decision"]), ("recoverable", "recoverable"), reconciled)
+        self.assertEqual(reconciled["decision"]["root_cause_count"], 2, reconciled["decision"])
+        self.assertEqual(h.summary()["status"], "active")
+        # ---- 逐字重派同一 [assert, accept] 批次（同 tag → 同 builder config／同命令；开关文件已删）----
+        resumed = h.dispatch(tree_b, "b1", ["assert", "accept"], **batch_arguments)
+        self.assertEqual((resumed["returncode"], resumed["campaign_run"]["reason"]), (0, "queue-complete"), resumed)
+        self.assertEqual({action["action_id"]: action["status"] for action in resumed["campaign_run"]["actions"]}, {"vc5-1-assert": "passed", "vc5-2-accept": "passed"})
+        # assert 同基线重入：索引与 checkpoint 链字节／mtime 不变，机器文档 mtime 不变（checker 调用为零）。
+        self.assertEqual(index_path.read_bytes(), index_bytes)
+        self.assertEqual({path.name: (path.stat().st_mtime_ns, path.read_bytes()) for path in (b1_root / "checkpoints").iterdir()}, checkpoint_stamps)
+        self.assertEqual({path.relative_to(b1_root).as_posix(): path.stat().st_mtime_ns for path in (b1_root / "machine").rglob("*.json")}, machine_stamps)
+        # accept 整份重放一致：AcceptanceFact 与证据封印字节不变，只补 completion（绑定 b1）。
+        self.assertEqual(acceptance_path.read_bytes(), sealed_bytes)
+        self.assertEqual(seal_path.read_bytes(), seal_bytes)
+        h.assert_accepted_to_completion(1)
 
     # ------------------------------------------------------------------
     # 后继协议伪造负例：篡改 b1 COMMIT 后派发被拒
