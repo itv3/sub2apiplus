@@ -26,6 +26,8 @@ from tools.official_client_capture.capturelib.security import (
 
 MANIFEST_SCHEMA = "codex-upgrade-evidence-manifest/v1"
 CHECKPOINT_SCHEMA = "codex-upgrade-evidence-manifest-checkpoint/v2"
+# 改造 5 M2：按整根投影旧清单的来源收据（attempt-recovery 增量封存用）。
+PROJECTION_SCHEMA = "codex-upgrade-evidence-manifest-projection/v1"
 
 
 class EvidenceManifestError(ValueError):
@@ -390,11 +392,161 @@ def build_evidence_manifest(
     return manifest
 
 
+def project_evidence_manifest(
+    manifest: Mapping[str, Any],
+    *,
+    keep_roots: Iterable[str | Path],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """按**整根**投影已验证的旧清单：只保留 ``keep_roots``，不读任何文件正文。
+
+    改造 5 M2（attempt-recovery 增量封存）：被重采 Job 的根与旧 attempt 的派生根整根丢弃，
+    保留根的 ``prefix`` 与全部条目逐字沿用，``entries／inventory／security`` 按根过滤并重算计数，
+    ``scan`` 记为零扫描（全部字节视为复用）。返回投影清单（通过 ``validate_manifest_document``）
+    与投影来源收据（``PROJECTION_SCHEMA``：来源摘要、保留根、丢弃根、投影摘要）。
+    保留根必须逐一存在于来源 ``roots``，不允许子树裁剪；``keep_roots`` 可为空（全部 Job 重采）。
+    """
+
+    source = validate_manifest_document(manifest)
+    requested = [str(Path(str(value))) for value in keep_roots]
+    if len(set(requested)) != len(requested):
+        raise EvidenceManifestError("投影保留根重复。")
+    keep = set(requested)
+    source_paths = [str(row["path"]) for row in source["roots"]]
+    missing = sorted(keep - set(source_paths))
+    if missing:
+        raise EvidenceManifestError(
+            "投影保留根不在来源 EvidenceManifest 的 roots 内：" + ", ".join(missing)
+        )
+    kept_rows = [dict(row) for row in source["roots"] if str(row["path"]) in keep]
+    kept_prefixes = {str(row["prefix"]) for row in kept_rows}
+    entries = [
+        dict(row)
+        for row in source["entries"]
+        if str(row["path"]).partition("/")[0] in kept_prefixes
+    ]
+    dropped = sorted(path for path in source_paths if path not in keep)
+    inventory_entries = [
+        {"path": item["path"], "size": item["size"], "sha256": item["sha256"]}
+        for item in entries
+    ]
+    total_bytes = sum(int(item["size"]) for item in entries)
+    source_security = source["security"]
+    metadata_view = {
+        "roots": kept_rows,
+        "entries": [
+            {key: value for key, value in entry.items() if key != "sha256"}
+            for entry in entries
+        ],
+    }
+    projected: dict[str, Any] = {
+        "schema_version": MANIFEST_SCHEMA,
+        "created_at_utc": source["created_at_utc"],
+        "completed_at_utc": _utc_now(),
+        "roots": kept_rows,
+        "metadata_sha256": canonical_json_sha256(metadata_view),
+        "entry_count": len(entries),
+        "total_bytes": total_bytes,
+        "entries": entries,
+        "inventory": {
+            "entry_count": len(inventory_entries),
+            "entries": inventory_entries,
+            "digest": canonical_json_sha256({"entries": inventory_entries}),
+        },
+        "security": {
+            "known_secret_scan_passed": True,
+            "known_secret_env_names": list(source_security["known_secret_env_names"]),
+            "file_count": len(entries),
+            "scanned_bytes": total_bytes,
+            "findings": [],
+            "limitation": source_security.get("limitation"),
+        },
+        "scan": {
+            "full_scan_count": 1,
+            "scanned_bytes": 0,
+            "reused_bytes": total_bytes,
+            "total_bytes": total_bytes,
+            "elapsed_seconds": 0.0,
+        },
+    }
+    projected["manifest_digest"] = canonical_json_sha256(projected)
+    projected = validate_manifest_document(projected)
+    receipt = {
+        "schema_version": PROJECTION_SCHEMA,
+        "source_manifest_digest": str(source["manifest_digest"]),
+        "kept_roots": sorted(keep),
+        "dropped_roots": dropped,
+        "kept_entry_count": len(entries),
+        "dropped_entry_count": int(source["entry_count"]) - len(entries),
+        "projected_manifest_digest": str(projected["manifest_digest"]),
+    }
+    return projected, receipt
+
+
+def validate_projection_receipt(
+    receipt: Mapping[str, Any],
+    *,
+    source_manifest: Mapping[str, Any],
+    projected_manifest: Mapping[str, Any],
+    expected_dropped_roots: Iterable[str | Path],
+) -> dict[str, Any]:
+    """重放投影收据：字段闭集、来源／投影摘要绑定、``dropped_roots`` 与期望集合精确相等。"""
+
+    expected_keys = {
+        "schema_version",
+        "source_manifest_digest",
+        "kept_roots",
+        "dropped_roots",
+        "kept_entry_count",
+        "dropped_entry_count",
+        "projected_manifest_digest",
+    }
+    if not isinstance(receipt, Mapping) or set(receipt) != expected_keys:
+        raise EvidenceManifestError("投影收据字段不闭合。")
+    if receipt.get("schema_version") != PROJECTION_SCHEMA:
+        raise EvidenceManifestError("投影收据 schema 不受支持。")
+    source = validate_manifest_document(source_manifest)
+    projected = validate_manifest_document(projected_manifest)
+    if receipt.get("source_manifest_digest") != source["manifest_digest"]:
+        raise EvidenceManifestError("投影收据未绑定来源 EvidenceManifest 摘要。")
+    if receipt.get("projected_manifest_digest") != projected["manifest_digest"]:
+        raise EvidenceManifestError("投影收据未绑定投影 EvidenceManifest 摘要。")
+    kept = receipt.get("kept_roots")
+    dropped = receipt.get("dropped_roots")
+    if (
+        not isinstance(kept, list)
+        or not isinstance(dropped, list)
+        or kept != sorted(str(row["path"]) for row in projected["roots"])
+        or sorted(kept) != kept
+        or sorted(dropped) != dropped
+        or set(kept) | set(dropped) != {str(row["path"]) for row in source["roots"]}
+        or set(kept) & set(dropped)
+    ):
+        raise EvidenceManifestError("投影收据的保留根／丢弃根与两份清单不一致。")
+    expected_dropped = sorted({str(Path(str(value))) for value in expected_dropped_roots})
+    if dropped != expected_dropped:
+        raise EvidenceManifestError(
+            f"投影丢弃根与恢复基线冻结的集合不精确相等：实际={dropped}，期望={expected_dropped}"
+        )
+    if (
+        receipt.get("kept_entry_count") != projected["entry_count"]
+        or receipt.get("dropped_entry_count") != source["entry_count"] - projected["entry_count"]
+    ):
+        raise EvidenceManifestError("投影收据条目计数与清单不一致。")
+    return dict(receipt)
+
+
 def merge_evidence_manifests(
     reused_manifest: Mapping[str, Any],
     delta_manifest: Mapping[str, Any],
+    *,
+    preserve_prefixes: bool = False,
 ) -> dict[str, Any]:
-    """合并已验证的来源清单与本轮小型增量清单，不重读来源文件内容。"""
+    """合并已验证的来源清单与本轮小型增量清单，不重读来源文件内容。
+
+    ``preserve_prefixes=True``（改造 5 M2 增量封存）：来源清单（投影）的根前缀逐字沿用、
+    条目路径不重写，增量清单的根沿用自身前缀且不得与来源前缀冲突；默认分支仍对全部根
+    按既有规则重算前缀。
+    """
 
     reused = validate_manifest_document(reused_manifest)
     delta = validate_manifest_document(delta_manifest)
@@ -412,10 +564,23 @@ def merge_evidence_manifests(
             prefix_map[prefix] = path
         old_prefix_to_root.append(prefix_map)
 
-    prefix_by_root = {
-        str(root): prefix
-        for root, prefix in _root_map(Path(path) for path in root_rows)
-    }
+    if preserve_prefixes:
+        reused_prefixes = set(old_prefix_to_root[0])
+        conflicts = sorted(reused_prefixes & set(old_prefix_to_root[1]))
+        if conflicts:
+            raise EvidenceManifestError(
+                "增量 EvidenceManifest 的根前缀与保留根前缀冲突：" + ", ".join(conflicts)
+            )
+        prefix_by_root = {
+            path: prefix
+            for prefix_map in old_prefix_to_root
+            for prefix, path in prefix_map.items()
+        }
+    else:
+        prefix_by_root = {
+            str(root): prefix
+            for root, prefix in _root_map(Path(path) for path in root_rows)
+        }
     roots = [
         {**root_rows[path], "prefix": prefix_by_root[path]}
         for path in sorted(root_rows)

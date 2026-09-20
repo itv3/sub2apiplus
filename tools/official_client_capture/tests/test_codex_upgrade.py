@@ -19654,6 +19654,90 @@ class EvidenceManifestTest(unittest.TestCase):
             )
             self.assertEqual(merged["entry_count"], 2)
 
+    def _projection_fixture(self, base: Path) -> tuple[Path, Path, Path, dict, dict]:
+        """两根来源清单（job-a／job-b）与一根增量清单（recovery 段）。"""
+
+        job_a = base / "attempt" / "job-a"
+        job_b = base / "attempt" / "job-b"
+        delta_root = base / "attempt" / "recovery-ar1" / "job-b"
+        self._private_file(job_a / "a.json", b'{"job":"a"}\n')
+        self._private_file(job_a / "nested" / "a2.json", b'{"job":"a2"}\n')
+        self._private_file(job_b / "b.json", b'{"job":"b","old":true}\n')
+        self._private_file(delta_root / "b.json", b'{"job":"b","recovered":true}\n')
+        source = codex_upgrade_evidence_manifest.build_evidence_manifest(
+            [job_a, job_b], checkpoint_path=base / "source-checkpoint.json"
+        )
+        delta = codex_upgrade_evidence_manifest.build_evidence_manifest(
+            [delta_root], checkpoint_path=base / "delta-checkpoint.json"
+        )
+        return job_a, job_b, delta_root, source, delta
+
+    def test_projection_keeps_whole_roots_only_and_records_dropped_roots(self) -> None:
+        """改造 5 M2：投影只按整根保留，前缀与条目逐字沿用，零扫描；收据精确记录丢弃根。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory).resolve()
+            job_a, job_b, _delta_root, source, _delta = self._projection_fixture(base)
+            with mock.patch.object(codex_upgrade_evidence_manifest, "_hash_and_scan") as scanner:
+                projected, receipt = codex_upgrade_evidence_manifest.project_evidence_manifest(
+                    source, keep_roots=[job_a]
+                )
+            scanner.assert_not_called()
+            source_row = next(row for row in source["roots"] if row["path"] == str(job_a))
+            self.assertEqual(projected["roots"], [source_row])  # 保留根行（含 stat 边界与 prefix）逐字沿用
+            self.assertEqual(
+                [entry["path"] for entry in projected["entries"]],
+                [entry["path"] for entry in source["entries"] if entry["path"].startswith(f"{source_row['prefix']}/")],
+            )
+            self.assertEqual(projected["entry_count"], 2)
+            self.assertEqual(projected["scan"], {"full_scan_count": 1, "scanned_bytes": 0, "reused_bytes": projected["total_bytes"], "total_bytes": projected["total_bytes"], "elapsed_seconds": 0.0})
+            self.assertEqual(projected["security"]["file_count"], 2)
+            self.assertEqual(receipt["schema_version"], codex_upgrade_evidence_manifest.PROJECTION_SCHEMA)
+            self.assertEqual((receipt["kept_roots"], receipt["dropped_roots"]), ([str(job_a)], [str(job_b)]))
+            self.assertEqual((receipt["kept_entry_count"], receipt["dropped_entry_count"]), (2, 1))
+            self.assertEqual((receipt["source_manifest_digest"], receipt["projected_manifest_digest"]), (source["manifest_digest"], projected["manifest_digest"]))
+            # 收据重放：丢弃根必须与恢复基线冻结的集合精确相等。
+            codex_upgrade_evidence_manifest.validate_projection_receipt(
+                receipt, source_manifest=source, projected_manifest=projected, expected_dropped_roots=[job_b]
+            )
+            with self.assertRaisesRegex(codex_upgrade_evidence_manifest.EvidenceManifestError, "不精确相等"):
+                codex_upgrade_evidence_manifest.validate_projection_receipt(
+                    receipt, source_manifest=source, projected_manifest=projected, expected_dropped_roots=[job_b, job_a]
+                )
+            # 条目级裁剪（保留根给成子目录）与不存在的根都拒绝；空保留集合合法（全部 Job 重采）。
+            with self.assertRaisesRegex(codex_upgrade_evidence_manifest.EvidenceManifestError, "不在来源"):
+                codex_upgrade_evidence_manifest.project_evidence_manifest(source, keep_roots=[job_a / "nested"])
+            with self.assertRaisesRegex(codex_upgrade_evidence_manifest.EvidenceManifestError, "不在来源"):
+                codex_upgrade_evidence_manifest.project_evidence_manifest(source, keep_roots=[base / "missing"])
+            empty, empty_receipt = codex_upgrade_evidence_manifest.project_evidence_manifest(source, keep_roots=[])
+            self.assertEqual((empty["roots"], empty["entry_count"], empty["total_bytes"]), ([], 0, 0))
+            self.assertEqual(empty_receipt["dropped_roots"], sorted([str(job_a), str(job_b)]))
+
+    def test_merge_preserve_prefixes_keeps_projected_prefixes_and_rejects_conflicts(self) -> None:
+        """改造 5 M2：preserve_prefixes 合并沿用投影前缀、只扫描增量、根集合恰为并集；前缀冲突拒绝。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory).resolve()
+            job_a, job_b, delta_root, source, delta = self._projection_fixture(base)
+            projected, _receipt = codex_upgrade_evidence_manifest.project_evidence_manifest(source, keep_roots=[job_a])
+            with mock.patch.object(codex_upgrade_evidence_manifest, "_hash_and_scan") as scanner:
+                merged = codex_upgrade_evidence_manifest.merge_evidence_manifests(projected, delta, preserve_prefixes=True)
+                boundary = codex_upgrade_evidence_manifest.verify_manifest_boundary(merged, [job_a, delta_root])
+            scanner.assert_not_called()
+            self.assertEqual(boundary["scanned_bytes"], 0)
+            self.assertEqual({row["path"]: row["prefix"] for row in merged["roots"]}, {str(job_a): "job-a", str(delta_root): "job-b"})
+            self.assertEqual(sorted(entry["path"] for entry in merged["entries"]), sorted([*(e["path"] for e in projected["entries"]), *(e["path"] for e in delta["entries"])]))
+            self.assertEqual((merged["scan"]["scanned_bytes"], merged["scan"]["reused_bytes"]), (delta["total_bytes"], projected["total_bytes"]))
+            self.assertEqual(merged["total_bytes"], projected["total_bytes"] + delta["total_bytes"])
+            # 增量根与保留根同名（前缀冲突）：preserve 模式拒绝；默认模式仍按既有规则重算为 001-／002-。
+            conflict_root = base / "other" / "job-a"
+            self._private_file(conflict_root / "c.json", b'{"c":true}\n')
+            conflict = codex_upgrade_evidence_manifest.build_evidence_manifest([conflict_root], checkpoint_path=base / "conflict-checkpoint.json")
+            with self.assertRaisesRegex(codex_upgrade_evidence_manifest.EvidenceManifestError, "前缀冲突"):
+                codex_upgrade_evidence_manifest.merge_evidence_manifests(projected, conflict, preserve_prefixes=True)
+            renumbered = codex_upgrade_evidence_manifest.merge_evidence_manifests(projected, conflict)
+            self.assertEqual(sorted(row["prefix"] for row in renumbered["roots"]), ["001-job-a", "002-job-a"])
+
     def test_evidence_manifest_boundary_ignores_device_only_in_isolated_rehearsal(self) -> None:
         """隔离预演（overlay 副本）上 st_dev 必然不同：只在带标记且根在 overlay 上时忽略 device，其余 stat 仍逐项比较。"""
 
