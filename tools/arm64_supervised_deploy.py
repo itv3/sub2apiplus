@@ -170,11 +170,14 @@ from typing import Any, Callable, Mapping
 # 2026-09-20（第 3 批 M2 attempt-recovery）：父 run 窗口扫描识别恢复段预约（键 <attempt>:ar<k>）、
 # attempt 对账绑定校验接受恢复段目录；断言预处理器新增 BASELINE=b<K> 模式（证据根改读
 # effective-results，bundle 落本基线私有根）。监督器与断言预处理器均随之变化。
+# 2026-09-21（第 3 批 M2 T5.18 端到端）：恢复段 run 动作失败归可恢复（recovery_required，不进候选
+# review）；第七种后继协议（失败段批次只能由同 attempt 后继段批次承接）；评估基线后继协议按账本
+# 事件历史核对基线；断言预处理器的基线私有根改名 baseline-evidence。监督器与断言预处理器均随之变化。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "2e9af5a8c672d5f490b15ed83cf16a9ef087b37df1949be0351a49e8552b19e0"
+    "ea6bbdb0d07d046ed8fc3a649e0b288422c85145366d83c88c88d9f10c7c1878"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
-    "37f4c5803994e48a0ba81400331c5d5d71f7afde4860368116b236383494bc05"
+    "c8020cadd3ee08f67236313a0913dbc3730805b46c3f6b720cdf7ace77f9fec1"
 )
 RENAME_EXCHANGE = 2
 AT_FDCWD = -100

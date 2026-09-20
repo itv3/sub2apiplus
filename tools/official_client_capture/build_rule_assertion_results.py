@@ -808,6 +808,7 @@ def evaluate_rule_with_checkpoints(
     target_version: str,
     expected_profile_sha256: str,
     official_authority: dict[str, str],
+    reuse_candidate_prefix: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     """一条规则的完整评估：两侧投影 → 依赖摘要 → 复用或执行 → 逐侧 checkpoint → 索引行（+ v2 行）。"""
 
@@ -956,6 +957,12 @@ def evaluate_rule_with_checkpoints(
         return index_row, None
     document_paths = {side: evaluation.campaign_root / checkpoints[side]["document"]["path"] for side in sides}
     evidence_roots = {side: Path(checkpoints[side]["context"]["evidence_root"]) for side in sides}
+    # 复用行由历史事实重建：候选证据引用的逻辑前缀属于被复用基线的候选阶段（attempt-recovery 基线的候选
+    # 证据前缀与被复用基线不同；accept 按被复用基线 inventory 核对），由配置的 reuse_candidate_evidence_prefix
+    # 给出；未给出时沿用当前前缀（同一候选阶段的复用，与既有行为一致）。
+    row_prefixes = dict(prefixes)
+    if historical is not None and reuse_candidate_prefix:
+        row_prefixes["candidate"] = reuse_candidate_prefix
     if mode == MODE_DUAL_WIRE:
         result_row = build_dual_wire_result(
             rule_id=rule_id,
@@ -965,8 +972,8 @@ def evaluate_rule_with_checkpoints(
             candidate=(commands["candidate"], documents["candidate"], document_paths["candidate"]),
             official_root=evidence_roots["official"],
             candidate_root=evidence_roots["candidate"],
-            official_prefix=prefixes["official"],
-            candidate_prefix=prefixes["candidate"],
+            official_prefix=row_prefixes["official"],
+            candidate_prefix=row_prefixes["candidate"],
             results_root=results_root,
             rationale=(
                 f"{rule_id} 在官方 {target_version} 证据与候选证据上分别由 "
@@ -980,7 +987,7 @@ def evaluate_rule_with_checkpoints(
             expected_check_ids=candidate_expected_check_ids,
             candidate=(commands["candidate"], documents["candidate"], document_paths["candidate"]),
             candidate_root=evidence_roots["candidate"],
-            candidate_prefix=prefixes["candidate"],
+            candidate_prefix=row_prefixes["candidate"],
             official_authority=official_authority,
             results_root=results_root,
             rationale=(
@@ -1042,6 +1049,12 @@ def main() -> int:
     candidate_manifest = Path(config["candidate_capture_manifest"]).resolve(strict=True)
     official_prefix = str(config["official_evidence_prefix"])
     candidate_prefix = str(config["candidate_evidence_prefix"])
+    # 改造 5 M2：--reuse-from 引用的被复用基线若是另一份候选阶段结果（attempt-recovery 基线之前的基线），
+    # 复用行的候选证据引用要用该基线的逻辑路径前缀；同一候选阶段的复用可不给（沿用当前前缀）。
+    reuse_candidate_prefix_raw = config.get("reuse_candidate_evidence_prefix")
+    if reuse_candidate_prefix_raw is not None and (not isinstance(reuse_candidate_prefix_raw, str) or not reuse_candidate_prefix_raw.strip()):
+        raise SystemExit("配置非法：reuse_candidate_evidence_prefix 必须是非空字符串")
+    reuse_candidate_prefix = reuse_candidate_prefix_raw
     target_version = str(config["target_version"])
     rule_ids = list(config["rules"])
     try:
@@ -1131,6 +1144,7 @@ def main() -> int:
                 target_version=target_version,
                 expected_profile_sha256=expected_profile_sha256,
                 official_authority=official_authority,
+                reuse_candidate_prefix=reuse_candidate_prefix,
             )
             index_rows.append(index_row)
             if result_row is not None:

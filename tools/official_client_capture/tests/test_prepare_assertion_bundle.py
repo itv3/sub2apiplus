@@ -148,7 +148,7 @@ class PrepareAssertionBundleTests(unittest.TestCase):
         self._write_json(baseline_dir / "effective-results.json", {"schema_version": "codex-upgrade-effective-results/v1", "entries": entries})
         result = self._run(baseline="b1")
         self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
-        bundle = baseline_dir / "evidence" / "assertion-bundle"
+        bundle = baseline_dir / "baseline-evidence" / "assertion-bundle"
         self.assertTrue((bundle / "capture-manifest.json").is_file())
         self.assertFalse((self.attempt / "evidence" / "assertion-bundle").exists())
         provenance = json.loads((bundle / "provenance.json").read_text(encoding="utf-8"))

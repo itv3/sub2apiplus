@@ -12,7 +12,7 @@
 # 改造 5 M2（attempt-recovery 基线的增量封存）：候选侧再给 BASELINE=b<K>（K≥1）时，
 # 证据根改读 `candidates/<cid>/revisions/b<K>/effective-results.json`（每 Job 恰一条，
 # reused 引用前序结果、recovered 指向恢复段结果），bundle 落在
-# `candidates/<cid>/revisions/b<K>/evidence/assertion-bundle/`（本基线私有根）。
+# `candidates/<cid>/revisions/b<K>/baseline-evidence/assertion-bundle/`（本基线私有根；不叫 evidence，避免与恢复段证据根同名）。
 set -euo pipefail
 umask 077
 
@@ -39,7 +39,7 @@ if [[ -n $baseline ]]; then
   baseline_dir="$campaign_dir/candidates/$candidate_id/revisions/$baseline"
   results_json="$baseline_dir/effective-results.json"
   [[ -f $results_json && ! -L $results_json ]] || { echo "找不到 effective-results: $results_json" >&2; exit 1; }
-  evidence_dir="$baseline_dir/evidence"
+  evidence_dir="$baseline_dir/baseline-evidence"
   if [[ ! -e $evidence_dir ]]; then mkdir -m 0700 "$evidence_dir"; fi
 else
   results_json="$attempt_dir/attempt.json"

@@ -144,6 +144,7 @@ class AttemptRecoveryTests(recovery_tests._EvaluationChainMixin, unittest.TestCa
         return argparse.Namespace(
             campaign_dir=campaign_dir, candidate_id=R1, capture_action="run", attempt_recovery=recovery_revision,
             capture_root=None, rerun_failed=False, max_wall_seconds=600, heartbeat_seconds=1, candidate_purpose="validation_only",
+            acknowledge_live_requests=True,
         )
 
     def test_transient_apply_opens_attempt_recovery_baseline(self) -> None:
@@ -260,10 +261,15 @@ class AttemptRecoveryTests(recovery_tests._EvaluationChainMixin, unittest.TestCa
             self.assertIn(("attempt_recovery_started", attempt_root.name, "ar1"), events)
             self.assertIn(("attempt_recovery_completed", attempt_root.name, "ar1"), events)
             self.assertEqual(timing_ledger.inspect_ledger(Path(str(fixture["timing_ledger"])))["attempt_recoveries"][f"{attempt_root.name}:ar1"]["status"], "completed")
-            # 同段重开被拒；重验读取一致。
+            # 成功段的同段重派按幂等返回（崩溃矩阵 R2 的 attempt-recovery 变体：零请求、不重跑 Job、摘要不变、
+            # 账本无新事件）；重验读取一致。
             with self._segment_patches_started(context, source_jobs):
-                with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "已存在，禁止重开"):
-                    codex_upgrade._run_capture_attempt(self._run_arguments(campaign_dir, "ar1"), "candidate")
+                with mock.patch.object(codex_upgrade, "run_job", side_effect=AssertionError("幂等重派不得重跑 Job")):
+                    replayed = codex_upgrade._run_capture_attempt(self._run_arguments(campaign_dir, "ar1"), "candidate")
+            self.assertEqual((replayed["status"], replayed["idempotent_replay"], replayed["live_request_count"]), ("awaiting_receipts", True, 0))
+            self.assertEqual(replayed["attempt_recovery_digest"], summary_doc["attempt_recovery_digest"])
+            self.assertEqual(replayed["ledger_events"], [])
+            self.assertEqual(_read(segment / "attempt-recovery.json"), summary_doc)
             with self._segment_patches_started(context, source_jobs):
                 loaded_root, loaded_reservation, loaded_summary = codex_upgrade._load_attempt_recovery_segment(campaign_dir, R1, attempt_root.name, "ar1")
             self.assertEqual((loaded_root, loaded_reservation["run_nonce"], loaded_summary["attempt_recovery_digest"]), (segment, reservation["run_nonce"], summary_doc["attempt_recovery_digest"]))
@@ -314,11 +320,18 @@ class AttemptRecoveryTests(recovery_tests._EvaluationChainMixin, unittest.TestCa
 
             found = supervisor.candidate_reservations_in_run_window(campaign_dir, candidate_id=R1, started_at_epoch=0.0)
             self.assertIn((f"{attempt_root.name}:ar1", segment), found)
-            # 同段续跑被拒。
+            # 失败段禁止同段续跑／重开：不带 --rerun-failed 重派同段被拒，带 --rerun-failed 指向首段亦被拒。
             with self._segment_patches_started(context, failing_jobs):
-                with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "不支持同段续跑"):
+                with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "状态为 failed，禁止重开"):
+                    codex_upgrade._run_capture_attempt(self._run_arguments(campaign_dir, "ar1"), "candidate")
+                with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "只用于开失败段的后继段"):
                     codex_upgrade._run_capture_attempt(
                         argparse.Namespace(**{**vars(self._run_arguments(campaign_dir, "ar1")), "rerun_failed": True}), "candidate"
+                    )
+                # 后继段必须等失败段对账入账后才能开。
+                with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "不是已对账的失败终态"):
+                    codex_upgrade._run_capture_attempt(
+                        argparse.Namespace(**{**vars(self._run_arguments(campaign_dir, "ar2")), "rerun_failed": True}), "candidate"
                     )
             # 段对账：收据、operation、账本事件、判定（重放段 run-summary 的权限收口需同一 runs 别名注入）。
             with self._segment_patches_started(context, failing_jobs), mock.patch.object(reconciler, "_deployment_receipt", return_value=None):
@@ -345,6 +358,54 @@ class AttemptRecoveryTests(recovery_tests._EvaluationChainMixin, unittest.TestCa
                 campaign_dir, campaign_id=str(fixture["manifest"]["campaign_id"]), candidate_id=R1, attempt_root=segment, label="核对"
             )
             self.assertEqual((bound["attempt_id"], bound["recovery_revision"], bound["operation_id"]), (attempt_root.name, "ar1", f"reconcile-attempt:{attempt_root.name}:ar1"))
+            # 崩溃矩阵 A1：失败段对账入账后，以 --rerun-failed 开后继段 ar2（同一基线冻结的 J* 全量补跑，不重复
+            # 裁定根因）；ar2 成功收口，账本 ar1 failed／ar2 completed；跳号（ar3）与不带 --rerun-failed 都被拒。
+            with self._segment_patches_started(context, failing_jobs):
+                with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "后继恢复段编号必须紧接已有段"):
+                    codex_upgrade._run_capture_attempt(
+                        argparse.Namespace(**{**vars(self._run_arguments(campaign_dir, "ar3")), "rerun_failed": True}), "candidate"
+                    )
+                with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "冻结的恢复段是 ar1，不是 ar2"):
+                    codex_upgrade._run_capture_attempt(self._run_arguments(campaign_dir, "ar2"), "candidate")
+            successor_jobs = [
+                Job(
+                    job_id=job_id, phase="candidate", suites=("full",), description=f"合成候选 Job {job_id}",
+                    steps=_job_steps(job_id, original_roots[job_id][0]), evidence_roots=(original_roots[job_id][0],), covers=(), scenario_ids=("A03",),
+                )
+                for job_id in job_ids
+            ]
+            preview_path = Path(reconciled["recovery_preview_path"])
+            with self._segment_patches_started(context, successor_jobs):
+                # B0：后继段必须持有前序失败段已批准的零请求恢复预览。
+                with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "必须提供前序失败段 ar1 已批准的恢复预览"):
+                    codex_upgrade._run_capture_attempt(
+                        argparse.Namespace(**{**vars(self._run_arguments(campaign_dir, "ar2")), "rerun_failed": True}), "candidate"
+                    )
+                with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "尚未批准"):
+                    codex_upgrade._run_capture_attempt(
+                        argparse.Namespace(**{**vars(self._run_arguments(campaign_dir, "ar2")), "rerun_failed": True, "recovery_preview": preview_path}),
+                        "candidate",
+                    )
+            with self._segment_patches_started(context, failing_jobs), mock.patch.object(reconciler, "_deployment_receipt", return_value=None):
+                approval = reconciler.approve_recovery_preview(
+                    campaign_dir, attempt_root.name, approve_sha256=reconciled["recovery_preview"]["review_sha256"], recovery_revision="ar1"
+                )
+            self.assertEqual(approval["approved_sha256"], reconciled["recovery_preview"]["review_sha256"])
+            with self._segment_patches_started(context, successor_jobs):
+                successor_run = codex_upgrade._run_capture_attempt(
+                    argparse.Namespace(**{**vars(self._run_arguments(campaign_dir, "ar2")), "rerun_failed": True, "recovery_preview": preview_path}),
+                    "candidate",
+                )
+            self.assertEqual((successor_run["status"], successor_run["recovery_revision"], successor_run["execute_jobs"]), ("awaiting_receipts", "ar2", [job_ids[0]]))
+            successor_segment = attempt_root / "recovery" / "ar2"
+            successor_summary = _read(successor_segment / "attempt-recovery.json")
+            self.assertEqual(successor_summary["status"], "awaiting_receipts")
+            self.assertTrue(all(root.endswith("-recovery-ar2") for row in successor_summary["results"] for root in row["evidence_roots"]))
+            self.assertEqual(_read(successor_segment / "recovery-reservation.json")["recovery_revision"], "ar2")
+            ledger = timing_ledger.inspect_ledger(Path(str(fixture["timing_ledger"])))
+            self.assertEqual(ledger["attempt_recoveries"][f"{attempt_root.name}:ar1"]["status"], "failed")
+            self.assertEqual(ledger["attempt_recoveries"][f"{attempt_root.name}:ar2"]["status"], "completed")
+            self.assertEqual(ledger["current_evaluation_baseline"]["recovery_revision"], "ar1")
 
     # ---- 夹具辅助 -------------------------------------------------------------------
 

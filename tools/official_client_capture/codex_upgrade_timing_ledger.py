@@ -15,7 +15,7 @@ import sys
 import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any, Iterator
+from typing import Any, Iterator, Mapping
 
 
 PLAN_SCHEMA = "codex-upgrade-timing-ledger-plan/v1"
@@ -105,6 +105,41 @@ EVALUATION_BASELINE_KINDS = ("evaluator-only", "attempt-recovery")
 ATTEMPT_RECOVERY_EVENT_TYPES = frozenset(
     {"attempt_recovery_started", "attempt_recovery_completed", "attempt_recovery_failed"}
 )
+
+
+def _attempt_recovery_revision_admissible(
+    attempt_id: str,
+    recovery_revision: str,
+    *,
+    frozen_revision: object,
+    attempt_recoveries: Mapping[str, Mapping[str, object]],
+) -> bool:
+    """改造 5 M2（崩溃矩阵 A1）：恢复段编号要么等于当前基线冻结的段（首段），要么是该 attempt 已登记段的
+    下一个后继段——此时首段必须已登记且该 attempt 的全部已登记段都是 failed 终态（段中断／失败经
+    ``reconcile-attempt --recovery-revision`` 入账后，同一基线下以新段全量补跑，不重复裁定根因）。"""
+
+    if recovery_revision == frozen_revision:
+        return True
+    if not isinstance(frozen_revision, str):
+        return False
+    prefix = f"{attempt_id}:"
+    segments = {
+        key[len(prefix):]: item for key, item in attempt_recoveries.items() if key.startswith(prefix)
+    }
+    if frozen_revision not in segments:
+        return False
+    if any(item.get("status") != "failed" for item in segments.values()):
+        return False
+    numbers: list[int] = []
+    for revision in segments:
+        if not revision.startswith("ar") or not revision[2:].isdigit():
+            return False
+        numbers.append(int(revision[2:]))
+    if not recovery_revision.startswith("ar") or not recovery_revision[2:].isdigit():
+        return False
+    return int(recovery_revision[2:]) == max(numbers) + 1
+
+
 RECOVERY_REVISION_RE = re.compile(r"^ar[1-9][0-9]*$")
 REVIEW_REQUIRED_ALLOWED_EVENTS = frozenset(
     {"attempt_failed", "receipt_passed", "candidate_invalidated", "stage_abandoned", "stop_the_line"}
@@ -355,6 +390,12 @@ PRODUCER_FREEZE_SUCCESSORS = (
         "path": "docs/egress/maintenance/upstream-codex-0154-vc5-tooling-batch3-m1-20260920-freeze-successor.json",
         "base_commit": "3f9ffb12e8b59e627b425cdc001f2873689c15dc",
         "scope": "upstream-codex-0154-vc5-tooling-batch3-m1-20260920-freeze-successor",
+        "result": "manual_actions_required",
+    },
+    {
+        "path": "docs/egress/maintenance/upstream-codex-0154-vc5-tooling-batch3-m2-t518-20260921-freeze-successor.json",
+        "base_commit": "932111bc7b6a69b24fc986180e9da3f6c93da3c1",
+        "scope": "upstream-codex-0154-vc5-tooling-batch3-m2-t518-20260921-freeze-successor",
         "result": "manual_actions_required",
     },
 )
@@ -1349,6 +1390,8 @@ def _summarize(
         if recovery_required and event_type not in {
             "attempt_started",
             "attempt_failed",
+            # 改造 5 M2：恢复段动作失败进入 recovery_required 后，段对账登记 attempt_recovery_failed。
+            "attempt_recovery_failed",
             "receipt_passed",
             "recovery_authorized",
             "stage_abandoned",
@@ -1519,10 +1562,16 @@ def _summarize(
                     or any(item["status"] == "active" for item in attempt_recoveries.values())
                     or current_evaluation_baseline is None
                     or current_evaluation_baseline["baseline_kind"] != "attempt-recovery"
-                    or current_evaluation_baseline["recovery_revision"] != recovery_revision
+                    or not _attempt_recovery_revision_admissible(
+                        attempt_id,
+                        recovery_revision,
+                        frozen_revision=current_evaluation_baseline["recovery_revision"],
+                        attempt_recoveries=attempt_recoveries,
+                    )
                 ):
                     raise TimingLedgerError(
-                        "attempt_recovery_started 必须承接已完成的原 attempt、当前 attempt-recovery 基线的恢复段，且同段不得重开"
+                        "attempt_recovery_started 必须承接已完成的原 attempt、当前 attempt-recovery 基线的恢复段"
+                        "（或其失败段的下一个后继段），且同段不得重开"
                     )
                 cause = normalized["root_cause_id"]
                 if cause is not None and failure_counts.get(cause, 0) >= plan["same_root_cause_retry_limit"]:
@@ -1883,6 +1932,7 @@ def append_event(
     if current["status"] == "recovery_required" and event_type not in {
         "attempt_started",
         "attempt_failed",
+        "attempt_recovery_failed",
         "receipt_passed",
         "recovery_authorized",
         "stage_abandoned",

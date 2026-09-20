@@ -7877,6 +7877,311 @@ class CodexUpgradeTest(unittest.TestCase):
         )
         return evidence_root
 
+    def _synthesize_candidate_receipts(
+        self,
+        evidence_root: Path,
+        *,
+        campaign_manifest: dict[str, object],
+        attempt_id: str,
+        run_nonce: str,
+        attempt_started_at_utc: str,
+        client_checkpoint_at_utc: str,
+        identity: dict[str, object],
+        candidate_id: str,
+        target_version: str,
+        third_party_model: str,
+        timestamp: Callable[[int], str],
+        receipts_subdir: str = "",
+    ) -> tuple[Path, list[str], Path]:
+        """合成候选侧机器收据（运行画像审计→两份 Kilo 五件套→observed-profile／Kilo finalizer→Kilo 后恢复报告→client-after 探针），
+        全部落在 ``evidence_root``（``receipts_subdir`` 非空时落在其子目录，finalizer 的 producer.evidence_root 仍是
+        ``evidence_root``）；返回 (observed_profile_path, client_receipts, post_client_restoration_report)。
+        M2 的恢复段增量封存用例复用本方法把收据合成到恢复段证据根的 client/ 子树（v3 权限收口只允许该派生路径新增）。"""
+
+        self.assertIsNotNone(candidate_id)
+        receipts_root = evidence_root / receipts_subdir if receipts_subdir else evidence_root
+        receipts_root.mkdir(parents=True, exist_ok=True)
+
+        def relative(path: Path) -> Path:
+            return path.relative_to(evidence_root)
+
+        observed_runtime_path = (
+            receipts_root / "observed-profile-runtime-audit.json"
+        )
+        self._write_json(
+            observed_runtime_path,
+            {
+                "schema_version": (
+                    codex_upgrade_receipt_finalizer.RUNTIME_AUDIT_SCHEMA
+                ),
+                "source": "sub2api-runtime",
+                "event_type": "profile_activated",
+                "event_id": "profile-event-1",
+                "campaign_id": campaign_manifest["campaign_id"],
+                "attempt_id": attempt_id,
+                "run_nonce": run_nonce,
+                "candidate_id": candidate_id,
+                "target_version": target_version,
+                "profile_id": identity["profile_id"],
+                "profile_digest": identity["profile_digest"],
+                "image_id": identity["image_id"],
+                "image_reference": identity["image_reference"],
+                "source_tree_sha256": identity["source_tree_sha256"],
+                "build_id": identity["build_id"],
+                "deployed_version": identity["deployed_version"],
+                "observed_at_utc": timestamp(10),
+            },
+        )
+        observed_profile_path = receipts_root / "observed-profile.json"
+        client_receipts: list[str] = []
+        kilo_arguments: list[argparse.Namespace] = []
+        clients = (
+            (
+                "kilo-compatible",
+                "openai-compatible",
+                "/v1/chat/completions",
+            ),
+            (
+                "kilo-responses",
+                "openai-responses",
+                "/v1/responses",
+            ),
+        )
+        for client, protocol, entrypoint in clients:
+            installation_id = f"installation-{client}"
+            request_id = f"request-{client}"
+            response_id = f"response-{client}"
+            ingress_witness_id = f"ingress-{client}"
+            transport = (
+                "http" if client == "kilo-compatible" else "websocket"
+            )
+            installation_path = (
+                receipts_root / f"{client}-installation.json"
+            )
+            ingress_path = receipts_root / f"{client}-ingress.json"
+            runtime_path = receipts_root / f"{client}-runtime-audit.json"
+            response_path = (
+                receipts_root / f"{client}-response-witness.json"
+            )
+            usage_path = receipts_root / f"{client}-usage-audit.json"
+            self._write_json(
+                installation_path,
+                {
+                    "schema_version": (
+                        codex_upgrade_receipt_finalizer.KILO_INSTALLATION_SCHEMA
+                    ),
+                    "source": "kilo-installation",
+                    "installation_id": installation_id,
+                    "product_id": "kilo",
+                    "display_name": "Kilo Code",
+                    "client_version": "kilo-test-1",
+                    "executable_path": (
+                        "/Applications/Kilo Code.app/Contents/MacOS/Kilo"
+                    ),
+                    "executable_sha256": hashlib.sha256(
+                        client.encode()
+                    ).hexdigest(),
+                    "observed_at_utc": timestamp(-3600),
+                },
+            )
+            self._write_json(
+                ingress_path,
+                {
+                    "schema_version": (
+                        codex_upgrade_receipt_finalizer.KILO_INGRESS_SCHEMA
+                    ),
+                    "source": "kilo-ingress",
+                    "witness_id": ingress_witness_id,
+                    "request_id": request_id,
+                    "campaign_id": campaign_manifest["campaign_id"],
+                    "attempt_id": attempt_id,
+                    "run_nonce": run_nonce,
+                    "installation_id": installation_id,
+                    "client_id": client,
+                    "client_version": "kilo-test-1",
+                    "protocol": protocol,
+                    "entrypoint": entrypoint,
+                    "model": third_party_model,
+                    "candidate_id": candidate_id,
+                    "target_version": target_version,
+                    "received_at_utc": timestamp(20),
+                },
+            )
+            self._write_json(
+                runtime_path,
+                {
+                    "schema_version": (
+                        codex_upgrade_receipt_finalizer.RUNTIME_AUDIT_SCHEMA
+                    ),
+                    "source": "sub2api-runtime",
+                    "event_type": "oauth_request_forwarded",
+                    "event_id": f"runtime-{client}",
+                    "request_id": request_id,
+                    "campaign_id": campaign_manifest["campaign_id"],
+                    "attempt_id": attempt_id,
+                    "run_nonce": run_nonce,
+                    "ingress_witness_id": ingress_witness_id,
+                    "installation_id": installation_id,
+                    "client_id": client,
+                    "protocol": protocol,
+                    "entrypoint": entrypoint,
+                    "model": third_party_model,
+                    "candidate_id": candidate_id,
+                    "target_version": target_version,
+                    "profile_id": identity["profile_id"],
+                    "profile_digest": identity["profile_digest"],
+                    "image_id": identity["image_id"],
+                    "source_tree_sha256": identity["source_tree_sha256"],
+                    "build_id": identity["build_id"],
+                    "deployed_version": identity["deployed_version"],
+                    "auth_mode": "oauth",
+                    "oauth_account_id": 90,
+                    "upstream_endpoint": "/backend-api/codex/responses",
+                    "transport": transport,
+                    "affected_branches": [transport],
+                    "observed_at_utc": timestamp(30),
+                },
+            )
+            self._write_json(
+                response_path,
+                {
+                    "schema_version": (
+                        codex_upgrade_receipt_finalizer.KILO_RESPONSE_SCHEMA
+                    ),
+                    "source": "kilo-response",
+                    "witness_id": f"response-witness-{client}",
+                    "request_id": request_id,
+                    "campaign_id": campaign_manifest["campaign_id"],
+                    "attempt_id": attempt_id,
+                    "run_nonce": run_nonce,
+                    "installation_id": installation_id,
+                    "client_id": client,
+                    "candidate_id": candidate_id,
+                    "http_status": 200,
+                    "response_id": response_id,
+                    "completed_at_utc": timestamp(40),
+                },
+            )
+            self._write_json(
+                usage_path,
+                {
+                    "schema_version": (
+                        codex_upgrade_receipt_finalizer.USAGE_AUDIT_SCHEMA
+                    ),
+                    "source": "sub2api-usage",
+                    "event_id": f"usage-event-{client}",
+                    "request_id": request_id,
+                    "campaign_id": campaign_manifest["campaign_id"],
+                    "attempt_id": attempt_id,
+                    "run_nonce": run_nonce,
+                    "response_id": response_id,
+                    "candidate_id": candidate_id,
+                    "usage_id": f"usage-{client}",
+                    "oauth_account_id": 90,
+                    "recorded_at_utc": timestamp(50),
+                },
+            )
+            receipt_path = receipts_root / f"{client}.json"
+            kilo_arguments.append(
+                argparse.Namespace(
+                    evidence_root=evidence_root,
+                    output=relative(receipt_path),
+                    campaign_id=campaign_manifest["campaign_id"],
+                    attempt_id=attempt_id,
+                    run_nonce=run_nonce,
+                    attempt_started_at_utc=attempt_started_at_utc,
+                    client_checkpoint_at_utc=client_checkpoint_at_utc,
+                    client_id=client,
+                    candidate_id=candidate_id,
+                    target_version=target_version,
+                    profile_id=identity["profile_id"],
+                    profile_digest=identity["profile_digest"],
+                    candidate_image_id=identity["image_id"],
+                    source_tree_sha256=identity["source_tree_sha256"],
+                    build_id=identity["build_id"],
+                    deployed_version=identity["deployed_version"],
+                    model=third_party_model,
+                    installation=relative(installation_path),
+                    ingress=relative(ingress_path),
+                    runtime_audit=relative(runtime_path),
+                    response_witness=relative(response_path),
+                    usage_audit=relative(usage_path),
+                )
+            )
+            client_receipts.append(f"{client}={receipt_path}")
+
+        self._make_private_tree(receipts_root)
+        codex_upgrade_receipt_finalizer.finalize_observed_profile(
+            argparse.Namespace(
+                evidence_root=evidence_root,
+                output=relative(observed_profile_path),
+                campaign_id=campaign_manifest["campaign_id"],
+                attempt_id=attempt_id,
+                run_nonce=run_nonce,
+                attempt_started_at_utc=attempt_started_at_utc,
+                client_checkpoint_at_utc=client_checkpoint_at_utc,
+                candidate_id=candidate_id,
+                target_version=target_version,
+                profile_id=identity["profile_id"],
+                profile_digest=identity["profile_digest"],
+                image_id=identity["image_id"],
+                image_reference=identity["image_reference"],
+                source_tree_sha256=identity["source_tree_sha256"],
+                build_id=identity["build_id"],
+                deployed_version=identity["deployed_version"],
+                runtime_audit=relative(observed_runtime_path),
+            )
+        )
+        for arguments in kilo_arguments:
+            codex_upgrade_receipt_finalizer.finalize_kilo_binding(arguments)
+        # v3 权限收口只放行 receipts/client-restoration-report.json 与 environment/client-after/ 这两个固定
+        # 派生路径：子目录模式（M2 恢复段）按生产落点写，默认模式保持既有 evidence 根顶层写法。
+        post_client_restoration_report = (
+            evidence_root / "receipts" / "client-restoration-report.json"
+            if receipts_subdir
+            else receipts_root / "client-restoration-report.json"
+        )
+        post_client_restoration_report.parent.mkdir(parents=True, exist_ok=True)
+        post_client_arguments: dict[str, object] = {
+            "evidence_root": evidence_root,
+            "output": relative(post_client_restoration_report),
+            "phase": "candidate",
+            "candidate_id": candidate_id,
+        }
+        for check_id, before_name, after_name, comparator in (
+            codex_upgrade_receipt_finalizer.RESTORATION_INPUTS
+        ):
+            before_path = receipts_root / f"client-{before_name}.json"
+            after_path = receipts_root / f"client-{after_name}.json"
+            if comparator == "before_subset":
+                before_state = self._database_state(after=True)
+                after_state = self._database_state(after=True)
+            else:
+                before_state = {
+                    "probe_kind": f"post_client_{check_id}",
+                    "stable_value": "restored",
+                }
+                after_state = dict(before_state)
+            self._write_state_snapshot(before_path, before_state)
+            self._write_state_snapshot(after_path, after_state)
+            post_client_arguments[before_name] = relative(before_path)
+            post_client_arguments[after_name] = relative(after_path)
+        codex_upgrade_receipt_finalizer.finalize_restoration(
+            argparse.Namespace(**post_client_arguments)
+        )
+        self._write_json(
+            evidence_root
+            / "environment"
+            / "client-after"
+            / "probe-manifest.json",
+            {
+                "schema_version": "codex-upgrade-environment-probe/v1",
+                "phase": "after",
+                "observed_at_utc": client_checkpoint_at_utc,
+            },
+        )
+        return observed_profile_path, client_receipts, post_client_restoration_report
+
     def _write_capture_stage(
         self,
         campaign_dir: Path,
@@ -8031,276 +8336,20 @@ class CodexUpgradeTest(unittest.TestCase):
         client_receipts: list[str] = []
         post_client_restoration_report: Path | None = None
         if phase == "candidate":
-            self.assertIsNotNone(candidate_id)
-            observed_runtime_path = (
-                evidence_root / "observed-profile-runtime-audit.json"
+            observed_profile_path, client_receipts, post_client_restoration_report = self._synthesize_candidate_receipts(
+                evidence_root,
+                campaign_manifest=campaign_manifest,
+                attempt_id=attempt_id,
+                run_nonce=run_nonce,
+                attempt_started_at_utc=attempt_started_at_utc,
+                client_checkpoint_at_utc=client_checkpoint_at_utc,
+                identity=identity,
+                candidate_id=str(candidate_id),
+                target_version=target_version,
+                third_party_model=third_party_model,
+                timestamp=timestamp,
             )
-            self._write_json(
-                observed_runtime_path,
-                {
-                    "schema_version": (
-                        codex_upgrade_receipt_finalizer.RUNTIME_AUDIT_SCHEMA
-                    ),
-                    "source": "sub2api-runtime",
-                    "event_type": "profile_activated",
-                    "event_id": "profile-event-1",
-                    "campaign_id": campaign_manifest["campaign_id"],
-                    "attempt_id": attempt_id,
-                    "run_nonce": run_nonce,
-                    "candidate_id": candidate_id,
-                    "target_version": target_version,
-                    "profile_id": identity["profile_id"],
-                    "profile_digest": identity["profile_digest"],
-                    "image_id": identity["image_id"],
-                    "image_reference": identity["image_reference"],
-                    "source_tree_sha256": identity["source_tree_sha256"],
-                    "build_id": identity["build_id"],
-                    "deployed_version": identity["deployed_version"],
-                    "observed_at_utc": timestamp(10),
-                },
-            )
-            observed_profile_path = evidence_root / "observed-profile.json"
-            kilo_arguments: list[argparse.Namespace] = []
-            clients = (
-                (
-                    "kilo-compatible",
-                    "openai-compatible",
-                    "/v1/chat/completions",
-                ),
-                (
-                    "kilo-responses",
-                    "openai-responses",
-                    "/v1/responses",
-                ),
-            )
-            for client, protocol, entrypoint in clients:
-                installation_id = f"installation-{client}"
-                request_id = f"request-{client}"
-                response_id = f"response-{client}"
-                ingress_witness_id = f"ingress-{client}"
-                transport = (
-                    "http" if client == "kilo-compatible" else "websocket"
-                )
-                installation_path = (
-                    evidence_root / f"{client}-installation.json"
-                )
-                ingress_path = evidence_root / f"{client}-ingress.json"
-                runtime_path = evidence_root / f"{client}-runtime-audit.json"
-                response_path = (
-                    evidence_root / f"{client}-response-witness.json"
-                )
-                usage_path = evidence_root / f"{client}-usage-audit.json"
-                self._write_json(
-                    installation_path,
-                    {
-                        "schema_version": (
-                            codex_upgrade_receipt_finalizer.KILO_INSTALLATION_SCHEMA
-                        ),
-                        "source": "kilo-installation",
-                        "installation_id": installation_id,
-                        "product_id": "kilo",
-                        "display_name": "Kilo Code",
-                        "client_version": "kilo-test-1",
-                        "executable_path": (
-                            "/Applications/Kilo Code.app/Contents/MacOS/Kilo"
-                        ),
-                        "executable_sha256": hashlib.sha256(
-                            client.encode()
-                        ).hexdigest(),
-                        "observed_at_utc": timestamp(-3600),
-                    },
-                )
-                self._write_json(
-                    ingress_path,
-                    {
-                        "schema_version": (
-                            codex_upgrade_receipt_finalizer.KILO_INGRESS_SCHEMA
-                        ),
-                        "source": "kilo-ingress",
-                        "witness_id": ingress_witness_id,
-                        "request_id": request_id,
-                        "campaign_id": campaign_manifest["campaign_id"],
-                        "attempt_id": attempt_id,
-                        "run_nonce": run_nonce,
-                        "installation_id": installation_id,
-                        "client_id": client,
-                        "client_version": "kilo-test-1",
-                        "protocol": protocol,
-                        "entrypoint": entrypoint,
-                        "model": third_party_model,
-                        "candidate_id": candidate_id,
-                        "target_version": target_version,
-                        "received_at_utc": timestamp(20),
-                    },
-                )
-                self._write_json(
-                    runtime_path,
-                    {
-                        "schema_version": (
-                            codex_upgrade_receipt_finalizer.RUNTIME_AUDIT_SCHEMA
-                        ),
-                        "source": "sub2api-runtime",
-                        "event_type": "oauth_request_forwarded",
-                        "event_id": f"runtime-{client}",
-                        "request_id": request_id,
-                        "campaign_id": campaign_manifest["campaign_id"],
-                        "attempt_id": attempt_id,
-                        "run_nonce": run_nonce,
-                        "ingress_witness_id": ingress_witness_id,
-                        "installation_id": installation_id,
-                        "client_id": client,
-                        "protocol": protocol,
-                        "entrypoint": entrypoint,
-                        "model": third_party_model,
-                        "candidate_id": candidate_id,
-                        "target_version": target_version,
-                        "profile_id": identity["profile_id"],
-                        "profile_digest": identity["profile_digest"],
-                        "image_id": identity["image_id"],
-                        "source_tree_sha256": identity["source_tree_sha256"],
-                        "build_id": identity["build_id"],
-                        "deployed_version": identity["deployed_version"],
-                        "auth_mode": "oauth",
-                        "oauth_account_id": 90,
-                        "upstream_endpoint": "/backend-api/codex/responses",
-                        "transport": transport,
-                        "affected_branches": [transport],
-                        "observed_at_utc": timestamp(30),
-                    },
-                )
-                self._write_json(
-                    response_path,
-                    {
-                        "schema_version": (
-                            codex_upgrade_receipt_finalizer.KILO_RESPONSE_SCHEMA
-                        ),
-                        "source": "kilo-response",
-                        "witness_id": f"response-witness-{client}",
-                        "request_id": request_id,
-                        "campaign_id": campaign_manifest["campaign_id"],
-                        "attempt_id": attempt_id,
-                        "run_nonce": run_nonce,
-                        "installation_id": installation_id,
-                        "client_id": client,
-                        "candidate_id": candidate_id,
-                        "http_status": 200,
-                        "response_id": response_id,
-                        "completed_at_utc": timestamp(40),
-                    },
-                )
-                self._write_json(
-                    usage_path,
-                    {
-                        "schema_version": (
-                            codex_upgrade_receipt_finalizer.USAGE_AUDIT_SCHEMA
-                        ),
-                        "source": "sub2api-usage",
-                        "event_id": f"usage-event-{client}",
-                        "request_id": request_id,
-                        "campaign_id": campaign_manifest["campaign_id"],
-                        "attempt_id": attempt_id,
-                        "run_nonce": run_nonce,
-                        "response_id": response_id,
-                        "candidate_id": candidate_id,
-                        "usage_id": f"usage-{client}",
-                        "oauth_account_id": 90,
-                        "recorded_at_utc": timestamp(50),
-                    },
-                )
-                receipt_path = evidence_root / f"{client}.json"
-                kilo_arguments.append(
-                    argparse.Namespace(
-                        evidence_root=evidence_root,
-                        output=Path(receipt_path.name),
-                        campaign_id=campaign_manifest["campaign_id"],
-                        attempt_id=attempt_id,
-                        run_nonce=run_nonce,
-                        attempt_started_at_utc=attempt_started_at_utc,
-                        client_checkpoint_at_utc=client_checkpoint_at_utc,
-                        client_id=client,
-                        candidate_id=candidate_id,
-                        target_version=target_version,
-                        profile_id=identity["profile_id"],
-                        profile_digest=identity["profile_digest"],
-                        candidate_image_id=identity["image_id"],
-                        source_tree_sha256=identity["source_tree_sha256"],
-                        build_id=identity["build_id"],
-                        deployed_version=identity["deployed_version"],
-                        model=third_party_model,
-                        installation=Path(installation_path.name),
-                        ingress=Path(ingress_path.name),
-                        runtime_audit=Path(runtime_path.name),
-                        response_witness=Path(response_path.name),
-                        usage_audit=Path(usage_path.name),
-                    )
-                )
-                client_receipts.append(f"{client}={receipt_path}")
 
-            self._make_private_tree(evidence_root)
-            codex_upgrade_receipt_finalizer.finalize_observed_profile(
-                argparse.Namespace(
-                    evidence_root=evidence_root,
-                    output=Path(observed_profile_path.name),
-                    campaign_id=campaign_manifest["campaign_id"],
-                    attempt_id=attempt_id,
-                    run_nonce=run_nonce,
-                    attempt_started_at_utc=attempt_started_at_utc,
-                    client_checkpoint_at_utc=client_checkpoint_at_utc,
-                    candidate_id=candidate_id,
-                    target_version=target_version,
-                    profile_id=identity["profile_id"],
-                    profile_digest=identity["profile_digest"],
-                    image_id=identity["image_id"],
-                    image_reference=identity["image_reference"],
-                    source_tree_sha256=identity["source_tree_sha256"],
-                    build_id=identity["build_id"],
-                    deployed_version=identity["deployed_version"],
-                    runtime_audit=Path(observed_runtime_path.name),
-                )
-            )
-            for arguments in kilo_arguments:
-                codex_upgrade_receipt_finalizer.finalize_kilo_binding(arguments)
-            post_client_restoration_report = (
-                evidence_root / "client-restoration-report.json"
-            )
-            post_client_arguments: dict[str, object] = {
-                "evidence_root": evidence_root,
-                "output": Path(post_client_restoration_report.name),
-                "phase": "candidate",
-                "candidate_id": candidate_id,
-            }
-            for check_id, before_name, after_name, comparator in (
-                codex_upgrade_receipt_finalizer.RESTORATION_INPUTS
-            ):
-                before_path = evidence_root / f"client-{before_name}.json"
-                after_path = evidence_root / f"client-{after_name}.json"
-                if comparator == "before_subset":
-                    before_state = self._database_state(after=True)
-                    after_state = self._database_state(after=True)
-                else:
-                    before_state = {
-                        "probe_kind": f"post_client_{check_id}",
-                        "stable_value": "restored",
-                    }
-                    after_state = dict(before_state)
-                self._write_state_snapshot(before_path, before_state)
-                self._write_state_snapshot(after_path, after_state)
-                post_client_arguments[before_name] = Path(before_path.name)
-                post_client_arguments[after_name] = Path(after_path.name)
-            codex_upgrade_receipt_finalizer.finalize_restoration(
-                argparse.Namespace(**post_client_arguments)
-            )
-            self._write_json(
-                evidence_root
-                / "environment"
-                / "client-after"
-                / "probe-manifest.json",
-                {
-                    "schema_version": "codex-upgrade-environment-probe/v1",
-                    "phase": "after",
-                    "observed_at_utc": client_checkpoint_at_utc,
-                },
-            )
 
         self._make_private_tree(evidence_root)
         restoration = codex_upgrade._validate_restoration_report(

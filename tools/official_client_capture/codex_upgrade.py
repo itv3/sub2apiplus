@@ -4940,7 +4940,15 @@ def _mutable_command_coordinates(
         "account-sealed-candidate",
         "all",
     }:
-        return command, "candidate", str(arguments.candidate_id), False
+        # 改造 5 M2：恢复段后继段（capture-candidate run --attempt-recovery ar<k+1> --rerun-failed）接管
+        # 中断段留下的过期 lease；其它候选级命令保持不接管。
+        allow_stale = (
+            command == "capture-candidate"
+            and bool(getattr(arguments, "rerun_failed", False))
+            and getattr(arguments, "capture_action", None) == "run"
+            and bool(getattr(arguments, "attempt_recovery", None))
+        )
+        return command, "candidate", str(arguments.candidate_id), allow_stale
     if command in {"evaluation-transition", "control-epoch"}:
         phase = str(arguments.phase)
         return command, phase, (
@@ -7314,11 +7322,16 @@ def _validate_capture_job_results(
         _validate_incremental_job_result(result, label=f"{phase}:{job_id}")
         if job_id in expected:
             expected_job = expected[job_id]
+            # 改造 5 M2：恢复段补跑的 Job 按重定位后的定义执行（execution_sha256 属于段预约），其
+            # source_execution_sha256 才是 Campaign 冻结场景的原执行定义摘要；段预约已把二者逐 Job 绑定。
+            source_execution = result.get("source_execution_sha256")
+            if source_execution is not None and not SHA256_RE.fullmatch(str(source_execution)):
+                raise ConfigurationError(f"{phase} 抓包任务 {job_id} 的原执行定义摘要非法。")
+            effective_execution = source_execution if source_execution is not None else result.get("execution_sha256")
             if (
                 result.get("phase") != phase
                 or result.get("status") != "complete"
-                or result.get("execution_sha256")
-                != _job_execution_sha256(expected_job)
+                or effective_execution != _job_execution_sha256(expected_job)
             ):
                 raise ConfigurationError(
                     f"{phase} 必需抓包任务 {job_id} 未完成或执行定义漂移。"
@@ -9485,6 +9498,17 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="ar<k>",
         help="改造 5 M2：只补跑当前 attempt-recovery 基线冻结的 execute_jobs（run）或增量封存该恢复段（seal）。",
     )
+    candidate.add_argument(
+        "--rerun-failed",
+        action="store_true",
+        help="改造 5 M2（崩溃矩阵 A1）：中断／失败的恢复段经 reconcile-attempt --recovery-revision 对账后，"
+        "开其后继段 ar<k+1> 全量补跑并接管过期的 Campaign lease；只与 --attempt-recovery 组合使用。",
+    )
+    candidate.add_argument(
+        "--recovery-preview",
+        type=Path,
+        help="改造 5 M2：开后继恢复段时必须提供前序失败段已批准的零请求恢复预览（B0 合同）。",
+    )
 
     runtime_override = subparsers.add_parser(
         "candidate-runtime-override",
@@ -9854,6 +9878,12 @@ def _build_parser() -> argparse.ArgumentParser:
     reconcile_attempt.add_argument(
         "--approve-recovery-sha256",
         help="按 recovery-preview 的 review_sha256 批准冻结的恢复闭集。",
+    )
+    reconcile_attempt.add_argument(
+        "--authorize-recovery-preview",
+        type=Path,
+        metavar="PATH",
+        help="改造 5 M2：消费已批准的恢复预览（账本 recovery_required → active），使后继恢复段批次可派发。",
     )
     account_sealed = subparsers.add_parser(
         "account-sealed-official",
@@ -19317,6 +19347,23 @@ def _evaluation_failure_scope(
         if not isinstance(entry, Mapping):
             raise ConfigurationError("provenance 条目非法。")
         by_target[str(entry.get("target_path"))] = str(entry.get("source_root"))
+    # 派生观测（derived/…，由 relay 流等原始证据按派生收据生成）沿派生收据的 source 回到原始条目，
+    # 再由原始条目的 source_root 定位 Job；派生收据缺失或 source 未登记即失败关闭。
+    derived_receipt_path = bundle_dir / "derived" / "derived-provenance.json"
+    if derived_receipt_path.exists() or derived_receipt_path.is_symlink():
+        if derived_receipt_path.is_symlink() or not derived_receipt_path.is_file():
+            raise ConfigurationError("assertion bundle 的派生收据不可信。")
+        derived_receipt = _read_json(derived_receipt_path, "assertion bundle 派生收据")
+        for entry in derived_receipt.get("entries", []):
+            if not isinstance(entry, Mapping):
+                raise ConfigurationError("派生收据条目非法。")
+            source = str(entry.get("source"))
+            target = str(entry.get("target"))
+            if source not in by_target:
+                raise ConfigurationError(f"派生观测 {target} 的来源 {source} 没有 provenance 条目。")
+            if target in by_target and by_target[target] != by_target[source]:
+                raise ConfigurationError(f"派生观测 {target} 同时被原始条目登记且来源根不一致。")
+            by_target[target] = by_target[source]
     roots_by_name: dict[str, str] = {}
     for result in attempt.get("results", []):
         if not isinstance(result, Mapping):
@@ -28891,6 +28938,25 @@ def _stage_path(
     return canonical, _stage_read_source(campaign_dir, candidate_id, baseline, canonical)["path"]
 
 
+def _require_recovery_binding(value: Any) -> None:
+    """增量封存结果的 ``recovery`` 绑定：文件绑定两字段之外还带段号、基线与 recovery_sha256（闭集）。"""
+
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"path", "sha256", "recovery_revision", "evaluation_baseline", "recovery_sha256"}
+        or not isinstance(value.get("path"), str)
+        or not value["path"]
+        or not SHA256_RE.fullmatch(str(value.get("sha256")))
+        or not isinstance(value.get("recovery_revision"), str)
+        or not codex_upgrade_vc_artifacts.RECOVERY_REVISION_RE.fullmatch(value["recovery_revision"])
+        or isinstance(value.get("evaluation_baseline"), bool)
+        or not isinstance(value.get("evaluation_baseline"), int)
+        or int(value["evaluation_baseline"]) < 1
+        or not SHA256_RE.fullmatch(str(value.get("recovery_sha256")))
+    ):
+        raise ConfigurationError("恢复段 run-summary 绑定非法。")
+
+
 def _require_file_binding(value: Any, label: str) -> None:
     if (
         not isinstance(value, dict)
@@ -31209,6 +31275,21 @@ def _verify_capture_seal_preview(
         attempt_id,
         _historical_manifest_controls=_historical_manifest_controls,
     )
+    recovery_reference = stage.get("recovery")
+    if phase == "candidate" and isinstance(recovery_reference, Mapping):
+        # 改造 5 M2：增量封存结果的 seal 预览／草案落在恢复段目录，预览绑定的是段 run-summary 的
+        # attempt_recovery_digest（seal 时以段视图作为 attempt 参与预览）。
+        _require_recovery_binding(recovery_reference)
+        segment_root, _segment_reservation, segment_summary = _load_attempt_recovery_segment(
+            campaign_dir, str(candidate_id), attempt_id, str(recovery_reference.get("recovery_revision", ""))
+        )
+        if file_sha256(segment_root / ATTEMPT_RECOVERY_SUMMARY_FILENAME) != recovery_reference.get("sha256"):
+            raise ConfigurationError("阶段结果绑定的恢复段 run-summary 摘要漂移。")
+        attempt_root = segment_root
+        attempt = {
+            **{key: value for key, value in segment_summary.items() if key != "attempt_recovery_digest"},
+            "attempt_digest": str(segment_summary["attempt_recovery_digest"]),
+        }
     preview_path = _campaign_file(
         campaign_dir,
         str(stage["seal_preview"]["path"]),
@@ -40350,8 +40431,14 @@ def _active_unsealed_attempts(
     phase: str,
     *,
     _manifest: Mapping[str, Any] | None = None,
+    _baseline: int | None = None,
 ) -> list[str]:
-    """列出未完成预约或未被阶段结果绑定的 attempt。"""
+    """列出未完成预约或未被阶段结果绑定的 attempt。
+
+    改造 5 M2：attempt 恢复段进行期间，当前评估基线 b<K> 的 capture-candidate 读来源是尚未写出的
+    local 目标；已封存 attempt 的绑定要按 ``_baseline``（前序基线）的读来源解析，否则会误报
+    「阶段尚未封存」。普通调用不传即按当前基线。
+    """
 
     scopes: list[tuple[str | None, Path]] = []
     if phase == "official":
@@ -40381,6 +40468,8 @@ def _active_unsealed_attempts(
             }
             if _manifest is not None:
                 stage_kwargs["_verified_campaign_manifest"] = _manifest
+            if _baseline is not None and phase == "candidate":
+                stage_kwargs["_baseline"] = _baseline
             stage = _load_stage_result(
                 campaign_dir,
                 "capture-official" if phase == "official" else "capture-candidate",
@@ -42430,8 +42519,17 @@ def _current_attempt_recovery_baseline(
     campaign_dir: Path,
     candidate_id: str,
     recovery_revision: str,
+    *,
+    allow_successor: bool = False,
+    recovery_preview: Path | None = None,
+    require_preview: bool = False,
 ) -> tuple[int, dict[str, Any], dict[str, Any]]:
-    """当前基线必须是 committed 的 attempt-recovery 基线且恢复段编号相符。"""
+    """当前基线必须是 committed 的 attempt-recovery 基线且恢复段编号相符。
+
+    改造 5 M2（崩溃矩阵 A1）：``allow_successor`` 时段编号也可以是基线冻结段的后继段——前提是冻结段与
+    其后的每个既有段都已失败终态并经 ``reconcile-attempt --recovery-revision`` 对账入账；后继段以同一
+    基线冻结的 ``execute_jobs`` 全量补跑，不重复裁定根因。
+    """
 
     baseline, commit = _current_evaluation_baseline(campaign_dir, candidate_id)
     if baseline == 0 or commit is None:
@@ -42439,11 +42537,119 @@ def _current_attempt_recovery_baseline(
     recovery = _load_evaluation_baseline_recovery(campaign_dir, candidate_id, baseline)
     if recovery["kind"] != "attempt-recovery":
         raise ConfigurationError(f"当前评估基线 b{baseline} 不是 attempt-recovery 基线，禁止开恢复段。")
-    if recovery["recovery_revision"] != recovery_revision:
-        raise ConfigurationError(
-            f"当前评估基线 b{baseline} 冻结的恢复段是 {recovery['recovery_revision']}，不是 {recovery_revision}。"
+    frozen_revision = str(recovery["recovery_revision"])
+    if frozen_revision != recovery_revision:
+        if not allow_successor:
+            raise ConfigurationError(
+                f"当前评估基线 b{baseline} 冻结的恢复段是 {frozen_revision}，不是 {recovery_revision}。"
+            )
+        _require_attempt_recovery_successor_segment(
+            campaign_dir, candidate_id=candidate_id, recovery=recovery, recovery_revision=recovery_revision,
+            recovery_preview=recovery_preview, require_preview=require_preview,
         )
     return baseline, commit, recovery
+
+
+def _attempt_recovery_segment_reconciled(
+    campaign_dir: Path,
+    *,
+    candidate_id: str,
+    segment_root: Path,
+) -> dict[str, Any] | None:
+    """恢复段是否已由 ``reconcile-attempt --recovery-revision`` 对账入账（收据、总账绑定完整重放）。"""
+
+    manifest = load_campaign_manifest(campaign_dir)
+    try:
+        return codex_upgrade_supervisor.verify_attempt_reconciliation_binding(
+            campaign_dir,
+            campaign_id=str(manifest["campaign_id"]),
+            candidate_id=candidate_id,
+            attempt_root=segment_root,
+            label=f"恢复段 {segment_root.name} 对账",
+        )
+    except codex_upgrade_supervisor.SupervisorError:
+        return None
+
+
+def _attempt_recovery_segment_terminal_failed(
+    campaign_dir: Path,
+    *,
+    candidate_id: str,
+    attempt_id: str,
+    segment_root: Path,
+) -> bool:
+    """段处于失败终态：摘要缺失（中断）或 status 非 awaiting_receipts／有失败 Job，且已对账入账。"""
+
+    summary_path = segment_root / ATTEMPT_RECOVERY_SUMMARY_FILENAME
+    if summary_path.exists() or summary_path.is_symlink():
+        _segment, _reservation, summary = _load_attempt_recovery_segment(
+            campaign_dir, candidate_id, attempt_id, segment_root.name
+        )
+        if summary.get("status") == ATTEMPT_RECOVERY_SUCCESS_STATUS and not _failed_job_ids(summary.get("results")):
+            return False
+    return _attempt_recovery_segment_reconciled(campaign_dir, candidate_id=candidate_id, segment_root=segment_root) is not None
+
+
+def _require_attempt_recovery_successor_segment(
+    campaign_dir: Path,
+    *,
+    candidate_id: str,
+    recovery: Mapping[str, Any],
+    recovery_revision: str,
+    recovery_preview: Path | None = None,
+    require_preview: bool = False,
+) -> None:
+    """后继段编号必须紧接该 attempt 已有的最大段号，且冻结段与其后每个既有段都是已对账的失败终态；
+    开段（``require_preview``）还必须持有直接前序失败段已批准的零请求恢复预览（B0：人工批准后才补跑）。"""
+
+    frozen_revision = str(recovery["recovery_revision"])
+    attempt_id = str(recovery["attempt_id"])
+    attempt_root = campaign_dir / "candidates" / candidate_id / "attempts" / attempt_id
+    recovery_root = attempt_root / ATTEMPT_RECOVERY_DIRNAME
+    if recovery_root.is_symlink() or not recovery_root.is_dir():
+        raise ConfigurationError(f"当前评估基线冻结的恢复段 {frozen_revision} 尚未开段，禁止直接开后继段 {recovery_revision}。")
+    existing = sorted(
+        (int(entry.name[2:]), entry)
+        for entry in recovery_root.iterdir()
+        if entry.is_dir() and not entry.is_symlink() and codex_upgrade_vc_artifacts.RECOVERY_REVISION_RE.fullmatch(entry.name)
+    )
+    numbers = [number for number, _entry in existing]
+    frozen_number = int(frozen_revision[2:])
+    target_number = int(recovery_revision[2:])
+    if frozen_number not in numbers:
+        raise ConfigurationError(f"当前评估基线冻结的恢复段 {frozen_revision} 尚未开段，禁止直接开后继段 {recovery_revision}。")
+    # 开段前后继段编号紧接已有最大段号；段已开（seal／入账读取）时它本身就是最大段号。
+    if target_number <= frozen_number or target_number not in {max(numbers) + 1, max(numbers)}:
+        raise ConfigurationError(
+            f"后继恢复段编号必须紧接已有段：已有 {[f'ar{n}' for n in numbers]}，收到 {recovery_revision}。"
+        )
+    for number, entry in existing:
+        if number < frozen_number or number >= target_number:
+            continue
+        if not _attempt_recovery_segment_terminal_failed(
+            campaign_dir, candidate_id=candidate_id, attempt_id=attempt_id, segment_root=entry
+        ):
+            raise ConfigurationError(
+                f"恢复段 {entry.name} 不是已对账的失败终态（成功段禁止再开后继段；中断／失败段须先 "
+                f"reconcile-attempt --recovery-revision {entry.name}）。"
+            )
+    if require_preview:
+        previous_revision = f"ar{max(numbers)}"
+        if recovery_preview is None:
+            raise ConfigurationError(
+                f"开后继恢复段 {recovery_revision} 必须提供前序失败段 {previous_revision} 已批准的恢复预览："
+                "--recovery-preview <control/reconciliation/attempt-<id>-ar<k>/recovery-preview-NN.json>。"
+            )
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        try:
+            preview = reconciler.load_approved_recovery_preview(
+                campaign_dir, recovery_preview, phase="candidate", candidate_id=candidate_id, recovery_revision=previous_revision
+            )
+        except reconciler.ReconcilerError as error:
+            raise ConfigurationError(f"后继恢复段的恢复预览不可用：{error}") from error
+        if str(preview.get("source_attempt_id")) != attempt_id:
+            raise ConfigurationError("恢复预览绑定的 attempt 与当前 attempt-recovery 基线不一致。")
 
 
 def _load_attempt_recovery_reservation(
@@ -42481,6 +42687,7 @@ def _reserve_attempt_recovery(
     original_attempt: Mapping[str, Any],
     original_reservation: Mapping[str, Any],
     recovery: Mapping[str, Any],
+    recovery_revision: str,
     baseline: int,
     baseline_commit_sha256: str,
     jobs: Sequence[Job],
@@ -42489,9 +42696,9 @@ def _reserve_attempt_recovery(
     lease: CampaignLease | None,
     deadline: incremental_recovery.WallClockDeadline,
 ) -> tuple[Path, dict[str, Any]]:
-    """在 Campaign 锁内原子发布恢复段预约：段目录不存在、同 attempt 无其它 active 恢复段。"""
+    """在 Campaign 锁内原子发布恢复段预约：段目录不存在、同 attempt 无其它 active 恢复段。
+    ``recovery_revision`` 是本段实际编号（基线冻结的首段或其失败段的后继段）。"""
 
-    recovery_revision = str(recovery["recovery_revision"])
     deadline.check("attempt-recovery:reserve:start")
     with _campaign_lock(campaign_dir, deadline=deadline):
         _reject_contaminated_campaign(campaign_dir)
@@ -42505,10 +42712,19 @@ def _reserve_attempt_recovery(
             for existing in sorted(recovery_root.iterdir()):
                 if existing.is_symlink() or not existing.is_dir():
                     raise ConfigurationError("attempt 恢复段目录含不可信条目。")
-                summary_path = existing / ATTEMPT_RECOVERY_SUMMARY_FILENAME
-                if not summary_path.is_file():
-                    raise ConfigurationError(f"attempt 存在未收口的恢复段 {existing.name}，禁止并行开段。")
-        active = _active_unsealed_attempts(campaign_dir, "candidate", _manifest=manifest)
+                # 既有段只能是已对账的失败终态（中断段先 reconcile-attempt --recovery-revision）；成功段
+                # 意味着本基线已有可封存结果，禁止再开段。
+                if not _attempt_recovery_segment_terminal_failed(
+                    campaign_dir, candidate_id=candidate_id, attempt_id=attempt_root.name, segment_root=existing
+                ):
+                    raise ConfigurationError(
+                        f"attempt 存在未收口或未对账的恢复段 {existing.name}，禁止并行开段"
+                        f"（中断／失败段先 reconcile-attempt --recovery-revision {existing.name}）。"
+                    )
+        # 当前基线 b<K> 的候选阶段目标要等段 seal 才写出：已封存 attempt 按前序基线的读来源解析。
+        active = _active_unsealed_attempts(
+            campaign_dir, "candidate", _manifest=manifest, _baseline=int(recovery["previous_baseline"])
+        )
         if active:
             raise ConfigurationError(f"Campaign 存在未封存预约或 attempt，禁止开恢复段：{active}")
         expected_execution = {
@@ -42792,8 +43008,15 @@ EFFECTIVE_RESULTS_FILENAME = "effective-results.json"
 MANIFEST_PROJECTION_FILENAME = "manifest-projection.json"
 
 
+BASELINE_PRIVATE_EVIDENCE_DIRNAME = "baseline-evidence"
+
+
 def _baseline_private_root(campaign_dir: Path, candidate_id: str, baseline: int) -> Path:
-    return _evaluation_baseline_dir(campaign_dir, candidate_id, baseline) / "evidence"
+    """本基线私有证据根（bundle 与增量封存的 delta 根之一）。目录名不能叫 ``evidence``：EvidenceManifest
+    的逻辑前缀取根目录名，与恢复段的 ``evidence`` 根同名会退化为编号前缀，收据绑定（按单根前缀
+    ``evidence/…``）就对不上封存清单。"""
+
+    return _evaluation_baseline_dir(campaign_dir, candidate_id, baseline) / BASELINE_PRIVATE_EVIDENCE_DIRNAME
 
 
 def _previous_capture_facts(
@@ -42862,7 +43085,7 @@ def _effective_results_document(
                 {
                     "job_id": job_id,
                     "source": "recovered",
-                    "recovery_revision": str(recovery["recovery_revision"]),
+                    "recovery_revision": segment_root.name,
                     "result": segment_binding,
                     "result_sha256": incremental_recovery.digest(result),
                     "disposition": str(result.get("disposition", "executed")),
@@ -42893,7 +43116,7 @@ def _effective_results_document(
         "evaluation_baseline": baseline,
         "recovery_sha256": str(recovery["recovery_sha256"]),
         "attempt_id": str(recovery["attempt_id"]),
-        "recovery_revision": str(recovery["recovery_revision"]),
+        "recovery_revision": segment_root.name,
         "entries": entries,
     }
     document["effective_results_sha256"] = _fingerprint(document)
@@ -42970,7 +43193,7 @@ def _seal_attempt_recovery_segment(
 
     四阶段同普通候选 seal：① Kilo 后检查点（段证据根内）→ ``client_checkpoint_created``；② 受管 finalizer 以
     effective-results 生成本基线 bundle／capture manifest／observed-profile／Kilo 收据（收据落在段证据根，bundle
-    落在 ``revisions/b<K>/evidence``）；③ 投影＋delta＋保留前缀合并生成 ``revisions/b<K>/evidence-manifest.json``
+    落在 ``revisions/b<K>/baseline-evidence``）；③ 投影＋delta＋保留前缀合并生成 ``revisions/b<K>/evidence-manifest.json``
     与投影收据，``scanned_bytes`` 只计 delta；④ 预览批准后写 ``revisions/b<K>/result.json``（``stage_sources``
     的 local 目标），绑定原 attempt、段 run-summary、effective-results、投影收据与五类根。
     """
@@ -42987,7 +43210,9 @@ def _seal_attempt_recovery_segment(
     _guard_candidate_revision_write(campaign_dir, manifest, candidate_id, action="capture-candidate seal")
     manifest = _apply_candidate_runtime_override(campaign_dir, manifest, candidate_id)
     _reject_contaminated_campaign(campaign_dir)
-    baseline, commit, recovery = _current_attempt_recovery_baseline(campaign_dir, candidate_id, recovery_revision)
+    baseline, commit, recovery = _current_attempt_recovery_baseline(
+        campaign_dir, candidate_id, recovery_revision, allow_successor=True
+    )
     if str(recovery["attempt_id"]) != str(attempt_id):
         raise ConfigurationError(f"当前 attempt-recovery 基线绑定的原 attempt 是 {recovery['attempt_id']}，不是 {attempt_id}。")
     attempt_root, original_attempt = _load_capture_attempt(campaign_dir, "candidate", candidate_id, str(attempt_id))
@@ -42999,6 +43224,17 @@ def _seal_attempt_recovery_segment(
     failed_result_ids = _failed_job_ids(segment_summary.get("results"))
     if failed_result_ids:
         raise ConfigurationError("恢复段仍有失败 Job，禁止增量封存：" + "、".join(failed_result_ids))
+    # 段预约逐 Job 绑定：execution_sha256（重定位后）→ source_execution_sha256（Campaign 冻结原定义）。
+    planned_source_execution: dict[str, str] = {}
+    for planned in segment_reservation.get("planned_jobs", []):
+        if not isinstance(planned, Mapping):
+            raise ConfigurationError("恢复段预约的 planned_jobs 非法。")
+        planned_source_execution[str(planned.get("id"))] = str(planned.get("source_execution_sha256"))
+    for row in segment_summary.get("results", []):
+        if isinstance(row, Mapping) and str(row.get("id")) in planned_source_execution:
+            planned_row = next(item for item in segment_reservation["planned_jobs"] if item.get("id") == row.get("id"))
+            if row.get("execution_sha256") != planned_row.get("execution_sha256"):
+                raise ConfigurationError(f"恢复段 Job {row.get('id')} 的结果执行摘要与段预约不一致。")
     if segment_reservation.get("baseline_commit_sha256") != commit["commit_sha256"]:
         raise ConfigurationError("恢复段预约绑定的基线 COMMIT 与当前基线不一致。")
     stage_target = _stage_write_target(campaign_dir, candidate_id, baseline, "capture-candidate")
@@ -43041,7 +43277,15 @@ def _seal_attempt_recovery_segment(
         campaign_dir, candidate_id, previous_baseline
     )
     baseline_dir = _evaluation_baseline_dir(campaign_dir, candidate_id, baseline)
-    private_root = ensure_private_directory(_baseline_private_root(campaign_dir, candidate_id, baseline), campaign_dir)
+    # 本基线 private 根是 delta 根之一（EvidenceManifest 记录其 stat 边界）：已存在时只校验不 chmod，
+    # 否则 preview → approve 两次 seal 之间目录 ctime 漂移会让不可变 stat 边界校验失败。
+    private_root = _baseline_private_root(campaign_dir, candidate_id, baseline)
+    if private_root.exists() or private_root.is_symlink():
+        _reject_symlink_components(private_root, campaign_dir, "评估基线 evidence 根")
+        if not private_root.is_dir() or stat.S_IMODE(private_root.stat().st_mode) != 0o700:
+            raise ConfigurationError("评估基线 evidence 根必须是 0700 目录。")
+    else:
+        private_root = ensure_private_directory(private_root, campaign_dir)
     effective_path = baseline_dir / EFFECTIVE_RESULTS_FILENAME
     effective = _effective_results_document(
         campaign_dir,
@@ -43154,7 +43398,7 @@ def _seal_attempt_recovery_segment(
     )
     bundle_root = Path(str(assertion_context.get("evidence_root", "")))
     if not bundle_root.is_absolute() or private_root.resolve(strict=True) not in bundle_root.resolve(strict=True).parents:
-        raise ConfigurationError("恢复段增量封存的断言证据包必须位于本基线 evidence 目录内。")
+        raise ConfigurationError("恢复段增量封存的断言证据包必须位于本基线 baseline-evidence 目录内。")
     assertion_gate = _run_seal_assertion_gate(assertion_context, roots, phase="candidate", target_version=manifest["target_version"])
     if post_client_path is None or client_checkpoint_at is None:
         raise ConfigurationError("恢复段增量封存缺少 Kilo 后检查点。")
@@ -43264,16 +43508,26 @@ def _seal_attempt_recovery_segment(
             "path": str(effective_path.relative_to(campaign_dir)),
             "sha256": file_sha256(effective_path),
         },
-        # results 展开为每 Job 的结果对象（compare／provenance／bundle 按 results[].evidence_roots 读取）。
+        # results 展开为每 Job 的结果对象（compare／provenance／bundle 按 results[].evidence_roots 读取）；
+        # 复用 Job 按结果合同带 source_receipt（前序阶段结果文件的 path／sha256／bytes）。
         "results": [
-            {
-                **(
-                    next(item for item in segment_summary["results"] if item.get("id") == entry["job_id"])
-                    if entry["source"] == "recovered"
-                    else next(item for item in previous_stage["results"] if item.get("id") == entry["job_id"])
-                ),
-                "disposition": entry["disposition"],
-            }
+            (
+                {
+                    **next(item for item in segment_summary["results"] if item.get("id") == entry["job_id"]),
+                    "disposition": entry["disposition"],
+                    "source_execution_sha256": planned_source_execution[entry["job_id"]],
+                }
+                if entry["source"] == "recovered"
+                else {
+                    **next(item for item in previous_stage["results"] if item.get("id") == entry["job_id"]),
+                    "disposition": "reused",
+                    "source_receipt": {
+                        "path": str(previous_stage_path.relative_to(campaign_dir)),
+                        "sha256": file_sha256(previous_stage_path),
+                        "bytes": previous_stage_path.stat().st_size,
+                    },
+                }
+            )
             for entry in effective["entries"]
         ],
         "evidence_roots": [str(root) for root in roots],
@@ -43327,6 +43581,81 @@ def _seal_attempt_recovery_segment(
 
 
 
+def _replay_sealed_attempt_recovery_segment(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    *,
+    candidate_id: str,
+    attempt_id: str,
+    recovery_revision: str,
+    baseline: int,
+) -> dict[str, Any]:
+    """同段目录已存在时的幂等重派：只有 awaiting_receipts 且无失败 Job 的段才按既有摘要返回；账本段状态
+    仍 active（摘要已写、completed 事件未写的崩溃窗口）时补写 completed；其余情况失败关闭。"""
+
+    segment_root = _attempt_recovery_segment_root(
+        campaign_dir / "candidates" / candidate_id / "attempts" / attempt_id, recovery_revision
+    )
+    summary_path = segment_root / ATTEMPT_RECOVERY_SUMMARY_FILENAME
+    if not summary_path.is_file() or summary_path.is_symlink():
+        raise ConfigurationError(
+            f"恢复段 {recovery_revision} 已预约但未收口（中断），禁止同段续跑：先 reconcile-attempt "
+            f"--recovery-revision {recovery_revision} 对账，再 capture-candidate run --attempt-recovery ar<k+1> --rerun-failed。"
+        )
+    _segment_root, reservation, summary = _load_attempt_recovery_segment(campaign_dir, candidate_id, attempt_id, recovery_revision)
+    if summary.get("status") != ATTEMPT_RECOVERY_SUCCESS_STATUS or _failed_job_ids(summary.get("results")):
+        raise ConfigurationError(
+            f"恢复段 {recovery_revision} 状态为 {summary.get('status')}，禁止重开：先 reconcile-attempt "
+            f"--recovery-revision {recovery_revision} 对账，再开后继段。"
+        )
+    if int(summary.get("evaluation_baseline", -1)) != baseline:
+        raise ConfigurationError(f"恢复段 {recovery_revision} 摘要绑定的评估基线与当前基线 b{baseline} 不一致。")
+    ledger_dir = _campaign_timing_ledger_dir(campaign_dir, manifest)
+    ledger_events: list[dict[str, Any]] = []
+    key = f"{attempt_id}:{recovery_revision}"
+    try:
+        with codex_upgrade_supervisor._timing_closeout_lock(ledger_dir):
+            state = codex_upgrade_timing_ledger.phase_ledger_state(ledger_dir)
+            segment_state = dict(state.get("attempt_recoveries", {})).get(key)
+            status = segment_state.get("status") if isinstance(segment_state, Mapping) else None
+            if status == "active":
+                ledger_events.append(
+                    _append_attempt_recovery_ledger_event(
+                        ledger_dir,
+                        event_type="attempt_recovery_completed",
+                        attempt_id=attempt_id,
+                        recovery_revision=recovery_revision,
+                        candidate_id=candidate_id,
+                        revision=_current_candidate_revision(campaign_dir, manifest),
+                        live_request_count=0,
+                        next_action="恢复段完成（幂等重派补写）；入账后增量封存",
+                    )
+                )
+            elif status != "completed":
+                raise ConfigurationError(f"账本中恢复段 {recovery_revision} 的状态是 {status}，与已收口的段摘要不一致。")
+    except (codex_upgrade_timing_ledger.TimingLedgerError, codex_upgrade_supervisor.SupervisorError) as error:
+        raise ConfigurationError(f"UpgradeTimingLedger 拒绝幂等承接恢复段：{error}") from error
+    return {
+        "status": ATTEMPT_RECOVERY_SUCCESS_STATUS,
+        "phase": "candidate",
+        "candidate_id": candidate_id,
+        "attempt_id": attempt_id,
+        "recovery_revision": recovery_revision,
+        "evaluation_baseline": baseline,
+        "segment": str(segment_root),
+        "attempt_recovery_digest": summary["attempt_recovery_digest"],
+        "run_nonce": reservation["run_nonce"],
+        "started_at_utc": reservation["started_at_utc"],
+        "execute_jobs": list(summary.get("execute_jobs", [])),
+        "reuse_jobs": list(summary.get("reuse_jobs", [])),
+        "results": list(summary.get("results", [])),
+        "ledger_events": ledger_events,
+        "idempotent_replay": True,
+        "live_request_count": 0,
+        "next_command": f"account-sealed-candidate --candidate-id {candidate_id} --attempt-recovery {recovery_revision}",
+    }
+
+
 def _run_attempt_recovery_segment(
     arguments: argparse.Namespace,
     *,
@@ -43363,21 +43692,34 @@ def _run_attempt_recovery_segment(
     manifest = _manifest or _require_formal_campaign(campaign_dir)
     if not _requires_complete_vc_artifacts(manifest):
         raise ConfigurationError("attempt 恢复段只用于 0.154.0 起的完整 VC 链 Campaign。")
+    # 恢复段的 job 收据与账本段状态都是 write-once：同段目录不能续跑。段中断／失败先
+    # reconcile-attempt --recovery-revision 对账入账，再以 --rerun-failed 开后继段 ar<k+1>（同一基线冻结的
+    # execute_jobs 全量补跑；--rerun-failed 同时接管中断留下的过期 Campaign lease，不重复裁定根因）。
+    # 后继段先消费已批准的恢复预览（账本 recovery_required → recovery_authorized → active），再过候选级写入门。
+    rerun_failed = bool(getattr(arguments, "rerun_failed", False))
+    baseline, commit, recovery = _current_attempt_recovery_baseline(
+        campaign_dir, candidate_id, recovery_revision, allow_successor=rerun_failed,
+        recovery_preview=getattr(arguments, "recovery_preview", None), require_preview=rerun_failed,
+    )
     _guard_candidate_revision_write(campaign_dir, manifest, candidate_id, action="capture-candidate run")
     manifest = _apply_candidate_runtime_override(campaign_dir, manifest, candidate_id)
     _reject_contaminated_campaign(campaign_dir)
     deadline = _bind_attempt_deadline_metadata(_deadline or _attempt_deadline(arguments, "candidate"), "candidate")
-    if getattr(arguments, "rerun_failed", False):
-        # 恢复段的 job 收据与账本段状态（同段不得重开）都是 write-once：同段目录不能续跑。段失败／中断
-        # 先 reconcile-attempt --recovery-revision 对账入账，可恢复时由新的 evaluation-recover 裁定开
-        # 下一段 ar<k+1>（同 attempt 新段，等价于 attempt 级 resume 建新 attempt）。
+    if rerun_failed and str(recovery["recovery_revision"]) == recovery_revision:
         raise ConfigurationError(
-            "恢复段不支持同段续跑：请先 reconcile-attempt --recovery-revision 对账，再按判定开新的恢复段。"
+            f"--rerun-failed 只用于开失败段的后继段：{recovery_revision} 是当前基线冻结的首段，"
+            "请直接 capture-candidate run --attempt-recovery（首段）或改用后继段编号。"
         )
-
-    baseline, commit, recovery = _current_attempt_recovery_baseline(campaign_dir, candidate_id, recovery_revision)
     attempt_id = str(recovery["attempt_id"])
     attempt_root, original_attempt = _load_capture_attempt(campaign_dir, "candidate", candidate_id, attempt_id)
+    existing_segment = _attempt_recovery_segment_root(attempt_root, recovery_revision)
+    if existing_segment.exists() or existing_segment.is_symlink():
+        # 同段目录已存在：成功收口的段按幂等重派返回（父 run 在动作退出后崩溃、环境恢复重派同一批次，
+        # 崩溃矩阵 R2 的 attempt-recovery 变体，零请求）；未收口的段禁止续跑。
+        return _replay_sealed_attempt_recovery_segment(
+            campaign_dir, manifest, candidate_id=candidate_id, attempt_id=attempt_id, recovery_revision=recovery_revision,
+            baseline=baseline,
+        )
     original_reservation = _load_capture_reservation(
         campaign_dir, attempt_root, phase="candidate", candidate_id=candidate_id, _manifest=manifest
     )
@@ -43417,6 +43759,8 @@ def _run_attempt_recovery_segment(
     if set(execute_ids) | set(recovery["reuse_jobs"]) != set(original_results):
         raise ConfigurationError("恢复基线的 execute_jobs ∪ reuse_jobs 必须恰好等于原 attempt 的 Job 全集。")
     jobs = [_relocate_job_for_recovery(source_jobs[job_id], recovery_revision) for job_id in execute_ids]
+    if not getattr(arguments, "acknowledge_live_requests", False):
+        raise ConfigurationError("恢复段补跑会产生真实请求，必须同时确认 --acknowledge-live-requests。")
     _verify_execution_tree(getattr(arguments, "capture_root", None))
     _validate_candidate_admin_credential(jobs)
     _require_capture_budget_before_data_action(deadline, operation="attempt-recovery:reservation-admission", reservation=True)
@@ -43428,6 +43772,7 @@ def _run_attempt_recovery_segment(
         original_attempt=original_attempt,
         original_reservation=original_reservation,
         recovery=recovery,
+        recovery_revision=recovery_revision,
         baseline=baseline,
         baseline_commit_sha256=str(commit["commit_sha256"]),
         jobs=jobs,
@@ -52360,7 +52705,7 @@ def _candidate_stage_receipt_boundary(
     recovery_reference = stage.get("recovery")
     if isinstance(recovery_reference, Mapping):
         # 改造 5 M2：增量封存结果的收据根与 Kilo 后检查点来自恢复段（段 run-summary 的环境证据根）。
-        _require_file_binding(recovery_reference, "恢复段 run-summary")
+        _require_recovery_binding(recovery_reference)
         _segment_root, _segment_reservation, attempt = _load_attempt_recovery_segment(
             campaign_dir, candidate_id, attempt_id, str(recovery_reference.get("recovery_revision", ""))
         )
@@ -53107,6 +53452,7 @@ def _validate_assertion_results(
         if any(item["status"] != "pass" for item in index_rows.values()):
             raise ConfigurationError("当前评估基线的 evaluation-run.json 含未通过或未完成规则，不得接受。")
     historical_inventories: dict[int, dict[str, str]] = {}
+    historical_stages: dict[int, dict[str, Any]] = {}
     historical_indexes: dict[int, dict[str, dict[str, Any]]] = {}
     anchored_baselines: set[int] = set()
     seen: list[str] = []
@@ -53128,6 +53474,9 @@ def _validate_assertion_results(
                 if index_row.get(f"{side}_checkpoint") is not None:
                     row_checkpoints[side] = checkpoints_by_side[(str(rule), side)]
         row_candidate_inventory = candidate_inventory
+        # 改造 5 M2：复用行的候选证据（引用、前缀、机器命令 context）都属于被复用基线的候选阶段——
+        # attempt-recovery 基线的候选证据前缀与被复用基线不同，机器检查的逻辑路径按历史阶段映射。
+        row_candidate_stage = candidate
         if reused_from is not None:
             reused_baseline = int(reused_from["baseline"])
             assert current_commit is not None
@@ -53150,6 +53499,7 @@ def _validate_assertion_results(
                     campaign_dir, "capture-candidate", candidate_id, _baseline=reused_baseline
                 )
                 historical_inventories[reused_baseline] = _inventory_index(historical_stage, f"b{reused_baseline} 候选")
+                historical_stages[reused_baseline] = historical_stage
             previous_row = historical_indexes[reused_baseline].get(str(rule))
             if (
                 previous_row is None
@@ -53175,6 +53525,7 @@ def _validate_assertion_results(
                 ):
                     raise ConfigurationError(f"逐规则断言 {rule} {side} 复用 checkpoint 与历史 checkpoint 不一致。")
             row_candidate_inventory = historical_inventories[reused_baseline]
+            row_candidate_stage = historical_stages[reused_baseline]
         if row.get("validation_mode") != mode:
             raise ConfigurationError(
                 f"逐规则断言 {rule} 的 validation_mode 与验收契约不一致。"
@@ -53221,7 +53572,7 @@ def _validate_assertion_results(
             campaign_dir,
             manifest,
             classification,
-            candidate,
+            row_candidate_stage,
             row,
             str(rule),
             candidate_paths,
@@ -54482,6 +54833,16 @@ def _reconcile_attempt_command(arguments: argparse.Namespace) -> dict[str, Any]:
     from tools.official_client_capture import codex_upgrade_reconciler as reconciler
 
     try:
+        authorize = getattr(arguments, "authorize_recovery_preview", None)
+        if authorize is not None:
+            if getattr(arguments, "approve_recovery_sha256", None) is not None:
+                raise ConfigurationError("--authorize-recovery-preview 与 --approve-recovery-sha256 不能同时使用。")
+            return reconciler.authorize_recovery_preview(
+                arguments.campaign_dir,
+                str(arguments.attempt_id),
+                Path(authorize),
+                recovery_revision=getattr(arguments, "recovery_revision", None),
+            )
         return reconciler.reconcile_attempt(
             arguments.campaign_dir,
             str(arguments.attempt_id),
@@ -54944,7 +55305,7 @@ def _main_without_campaign_lease(argv: list[str] | None = None) -> int:
             return_code = 0 if result.get("status") in {"preview", "applied", "abandoned", "redirect"} else 3
         elif command == "reconcile-attempt":
             result = _reconcile_attempt_command(arguments)
-            return_code = 0 if result.get("status") == "recoverable" else 3
+            return_code = 0 if result.get("status") in {"recoverable", "authorized"} else 3
         elif command == "rehearse-candidate-seal":
             result = _rehearse_candidate_seal_command(arguments)
             return_code = 0 if result.get("status") == "passed" else 3
@@ -54986,6 +55347,19 @@ def _main_without_campaign_lease(argv: list[str] | None = None) -> int:
         return 1
 
 
+def _reject_capture_candidate_rerun_without_segment(arguments: argparse.Namespace, command: str) -> None:
+    """``capture-candidate --rerun-failed`` 只属于恢复段后继段；失败 attempt 的补跑仍走 ``resume --rerun-failed``
+    （B0：已批准的零请求恢复预览冻结闭集）。在取得 Campaign lease 之前拒绝，避免无谓接管过期 lease。"""
+
+    if command != "capture-candidate" or not getattr(arguments, "rerun_failed", False):
+        return
+    if getattr(arguments, "capture_action", None) != "run" or not getattr(arguments, "attempt_recovery", None):
+        raise ConfigurationError(
+            "capture-candidate --rerun-failed 只用于 run --attempt-recovery ar<k+1>（失败段的后继段）；"
+            "失败 attempt 的补跑请用 resume --rerun-failed。"
+        )
+
+
 def _main_with_campaign_lease(argv: list[str] | None = None) -> int:
     """带 Campaign lease 的 CLI 入口。
 
@@ -55007,6 +55381,7 @@ def _main_with_campaign_lease(argv: list[str] | None = None) -> int:
     try:
         _reject_campaign_run_legacy_write(arguments, str(arguments.command))
         _reject_unparented_formal_write(arguments, str(arguments.command))
+        _reject_capture_candidate_rerun_without_segment(arguments, str(arguments.command))
     except ConfigurationError as error:
         _record_campaign_run_action_failure("handled-error", error)
         print(f"升级审计失败：{error}", file=sys.stderr)

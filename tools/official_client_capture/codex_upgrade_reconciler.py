@@ -322,10 +322,13 @@ def _ledger_recovery_authorization_bindings(
     attempt_id: str,
     preview_path: Path,
     approval_path: Path,
+    *,
+    recovery_revision: str | None = None,
 ) -> list[dict[str, str]]:
-    """把恢复预览与批准复制进时间账本，供 recovery_authorized 重放。"""
+    """把恢复预览与批准复制进时间账本，供 recovery_authorized 重放（恢复段按 attempt-<id>-ar<k> 存放）。"""
 
-    target_dir = ledger_dir / "receipts" / RECONCILIATION_DIR / f"attempt-{attempt_id}"
+    subject = _recovery_segment_subject(attempt_id, recovery_revision).replace(":", "-")
+    target_dir = ledger_dir / "receipts" / RECONCILIATION_DIR / f"attempt-{subject}"
     if target_dir.is_symlink():
         raise ReconcilerError("账本恢复批准目录不可信")
     target_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -1442,7 +1445,11 @@ def load_approved_recovery_preview(
         ):
             raise ReconcilerError("恢复预览绑定的 Campaign 账本 head 已漂移")
         if campaign_head.get("status") == "recovery_required":
-            event_id = f"recovery-authorized-{attempt_id}-{int(preview['index']):02d}"
+            event_id = (
+                f"recovery-authorized-{attempt_id}-{int(preview['index']):02d}"
+                if recovery_revision is None
+                else f"recovery-authorized-{attempt_id}-{recovery_revision}-{int(preview['index']):02d}"
+            )
             with codex_upgrade._campaign_lock(campaign_dir):
                 current_campaign_head = _ledger_facts(ledger_dir, now=_utc_now())
                 existing_sha256 = _ledger_event_sha256(ledger_dir, event_id)
@@ -1460,6 +1467,7 @@ def load_approved_recovery_preview(
                         attempt_id,
                         resolved,
                         approval_path,
+                        recovery_revision=recovery_revision,
                     )
                     authorization_event = _append_ledger_event(
                         ledger_dir,
@@ -1495,6 +1503,43 @@ def load_approved_recovery_preview(
 
 def _recovery_segment_subject(attempt_id: str, recovery_revision: str | None) -> str:
     return attempt_id if recovery_revision is None else f"{attempt_id}:{recovery_revision}"
+
+
+def authorize_recovery_preview(
+    campaign_dir: Path,
+    attempt_id: str,
+    preview_path: Path,
+    *,
+    recovery_revision: str | None = None,
+) -> dict[str, Any]:
+    """改造 5 M2：消费已批准的恢复预览（账本 recovery_required → recovery_authorized → active），
+    使后继恢复段的批次可以编译派发；幂等（已 active 且授权事件存在时不重复写）。"""
+
+    campaign_dir = Path(campaign_dir)
+    phase, candidate_id, _attempt_root = _locate_attempt(campaign_dir, attempt_id)
+    if recovery_revision is not None and (phase != "candidate" or candidate_id is None):
+        raise ReconcilerError("恢复段只存在于候选 attempt")
+    consumed = load_approved_recovery_preview(
+        campaign_dir, Path(preview_path), phase=phase, candidate_id=candidate_id, recovery_revision=recovery_revision
+    )
+    if str(consumed.get("source_attempt_id")) != attempt_id:
+        raise ReconcilerError("恢复预览绑定的 attempt 与 --attempt-id 不一致")
+    return {
+        "schema_version": ATTEMPT_SCHEMA,
+        "status": "authorized",
+        "campaign_id": str(consumed.get("campaign_id", "")),
+        "attempt_id": attempt_id,
+        "recovery_revision": recovery_revision,
+        "preview_path": consumed["preview_path"],
+        "review_sha256": consumed.get("review_sha256"),
+        "timing_recovery_event": consumed.get("timing_recovery_event"),
+        "live_request_count": 0,
+        "next_command": (
+            f"capture-candidate run --attempt-recovery ar{int(recovery_revision[2:]) + 1} --rerun-failed --recovery-preview {consumed['preview_path']}"
+            if recovery_revision is not None
+            else f"resume --rerun-failed --recovery-preview {consumed['preview_path']}"
+        ),
+    }
 
 
 def reconcile_attempt(
@@ -1865,16 +1910,21 @@ def reconcile_attempt(
         )
         result["recovery_preview"] = preview
         result["recovery_preview_path"] = str(receipt_dir / f"recovery-preview-{int(preview['index']):02d}.json")
-        segment_flag = f" --attempt-recovery {recovery_revision}" if recovery_revision is not None else ""
+        if recovery_revision is not None:
+            # 改造 5 M2：中断／失败的恢复段不同段续跑，批准后以后继段 ar<k+1> 全量补跑同一基线冻结的 J*。
+            number = int(recovery_revision[2:])
+            resume_command = f"capture-candidate run --attempt-recovery ar{number + 1} --rerun-failed"
+        else:
+            resume_command = "resume --rerun-failed"
         result["next_command"] = (
             f"reconcile-attempt --approve-recovery-sha256 {preview['review_sha256']} 后 "
-            f"resume --rerun-failed{segment_flag} --recovery-preview <preview path>"
+            f"{resume_command} --recovery-preview <preview path>"
         )
         if approve_recovery_sha256 is not None:
             result["recovery_approval"] = approve_recovery_preview(
                 campaign_dir, attempt_id, approve_sha256=approve_recovery_sha256, recovery_revision=recovery_revision
             )
-            result["next_command"] = f"resume --rerun-failed{segment_flag} --recovery-preview {result['recovery_preview_path']}"
+            result["next_command"] = f"{resume_command} --recovery-preview {result['recovery_preview_path']}"
     else:
         if approve_recovery_sha256 is not None:
             raise ReconcilerError("判定为永久停线，不接受恢复批准")
@@ -1942,9 +1992,37 @@ def _run_facts(run_dir: Path, campaign_dir: Path, manifest: Mapping[str, Any]) -
             continue
         if begun >= started_utc:
             reservations_in_window.append(attempt_root.name)
+    # 改造 5 M2：父 run 期间发布的恢复段预约同样分流到 reconcile-attempt --recovery-revision，但只针对
+    # 未成功收口的段；已 awaiting_receipts 的段不是中断（父 run 在动作退出后崩溃属崩溃矩阵 R2 的
+    # attempt-recovery 变体：父 run 对账后环境恢复重派，段 run 幂等返回）。
+    for _phase, _candidate, attempt_root in codex_upgrade._campaign_attempt_roots(campaign_dir):
+        recovery_root = attempt_root / codex_upgrade.ATTEMPT_RECOVERY_DIRNAME
+        if recovery_root.is_symlink() or not recovery_root.is_dir():
+            continue
+        for segment_root in sorted(recovery_root.iterdir()):
+            if segment_root.is_symlink() or not segment_root.is_dir():
+                continue
+            if not vc_artifacts.RECOVERY_REVISION_RE.fullmatch(segment_root.name):
+                continue
+            reservation_path = segment_root / codex_upgrade.ATTEMPT_RECOVERY_RESERVATION_FILENAME
+            if not reservation_path.is_file():
+                continue
+            payload = _read_json(reservation_path, "恢复段预约收据")
+            try:
+                begun = _timestamp(payload.get("started_at_utc"), "recovery-reservation.started_at_utc")
+            except ReconcilerError:
+                continue
+            if begun < started_utc:
+                continue
+            summary_path = segment_root / codex_upgrade.ATTEMPT_RECOVERY_SUMMARY_FILENAME
+            if summary_path.is_file():
+                summary = _read_json(summary_path, "恢复段 run-summary")
+                if summary.get("status") == "awaiting_receipts" and not codex_upgrade._failed_job_ids(summary.get("results")):
+                    continue
+            reservations_in_window.append(f"{attempt_root.name}:{segment_root.name}")
     if reservations_in_window:
         raise ReconcilerError(
-            "该 run 期间已产生 reservation，属于 attempt 中断；请改用 reconcile-attempt："
+            "该 run 期间已产生 reservation，属于 attempt 中断；请改用 reconcile-attempt（恢复段加 --recovery-revision）："
             + "、".join(reservations_in_window)
         )
     events = audit.get("integrity_errors", [])
@@ -2080,18 +2158,27 @@ def _run_facts(run_dir: Path, campaign_dir: Path, manifest: Mapping[str, Any]) -
     }
 
 
-def _failed_action_operation(inner: Any, action_id: str) -> str:
-    """从 campaign-run 内层清单定位失败动作的 ``operation``；清单缺失或找不到该动作即失败关闭。"""
+def _failed_action_operation(inner: Any, action_id: str) -> str | None:
+    """从 campaign-run 内层清单定位失败动作的 ``operation``。
+
+    批次清单里的动作都带 operation；清单没有 actions 数组或找不到该动作（历史合成的单动作 run）时
+    没有动作级操作名，返回 None，根因仍按父 run 最后事件编码。
+    """
 
     if not isinstance(inner, Mapping):
         raise ReconcilerError(f"父动作 {action_id} 失败但 run 清单缺失，无法定位动作操作名")
-    for action in inner.get("actions", []):
+    actions = inner.get("actions")
+    if not isinstance(actions, list):
+        return None
+    for action in actions:
         if isinstance(action, Mapping) and action.get("action_id") == action_id:
             operation = action.get("operation")
             if not isinstance(operation, str) or not operation:
                 raise ReconcilerError(f"父动作 {action_id} 的 operation 非法")
             return operation
-    raise ReconcilerError(f"父动作 {action_id} 不在 run 清单的 actions 中")
+    # 清单里没有该动作（历史合成的单动作 run：actions 为空、action_id 为 dispatch）：没有动作级操作名，
+    # 根因退回父 run 最后事件编码；这不是放宽——清单本身缺失仍失败关闭。
+    return None
 
 
 def _staging_run_facts(

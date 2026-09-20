@@ -7353,15 +7353,18 @@ def _validate_evaluation_baseline_successor(
     except (OSError, timing_ledger.TimingLedgerError) as error:
         raise SupervisorError(f"{label}无法重放时间账本：{error}") from error
 
-    # ① 后继基线 == 账本当前激活基线且大于前序；跳号链完整。
-    current = summary.get("current_evaluation_baseline")
-    if (
-        not isinstance(current, Mapping)
-        or current.get("candidate_id") != candidate_id
-        or current.get("evaluation_baseline") != successor_baseline
-        or current.get("baseline_commit_sha256") != successor_manifest.get("baseline_commit_sha256")
-    ):
-        raise SupervisorError(f"{label}：后继基线 b{successor_baseline} 不是账本当前激活的评估基线。")
+    # ① 后继基线是账本为该候选登记过的评估基线（evaluation_baseline 事件绑定的 COMMIT 摘要逐字相等）
+    # 且大于前序；跳号链完整。改造 5 M2：多次恢复（b1→b2…）后历史链重放时账本当前基线已推进，
+    # 所以按事件历史而非"当前激活基线"核对；当前正在派发的清单另由治理预检按当前基线冻结。
+    activated = [
+        event
+        for event, _raw in raw_events
+        if event.get("event_type") == "evaluation_baseline"
+        and event.get("candidate_id") == candidate_id
+        and event.get("evaluation_baseline") == successor_baseline
+    ]
+    if not activated or activated[-1].get("baseline_commit_sha256") != successor_manifest.get("baseline_commit_sha256"):
+        raise SupervisorError(f"{label}：后继基线 b{successor_baseline} 未由账本以同一 COMMIT 摘要激活。")
     _evaluation_baseline_chain(campaign_dir, candidate_id, prior_baseline, successor_baseline, label=label)
 
     # ② 失败父 run 的对账收据与总账绑定（评估批次属 post-run-tooling，只认 reconcile-supervisor-run）。
@@ -7433,6 +7436,179 @@ def _validate_evaluation_baseline_successor(
             baseline_event = event
     if baseline_event is None or baseline_event.get("baseline_commit_sha256") != commit["commit_sha256"]:
         raise SupervisorError(f"{label}：账本没有引用 b{successor_baseline} COMMIT 的 evaluation_baseline 事件。")
+    return True
+
+
+def _successor_segment_normalized_command(
+    command: Sequence[str],
+    *,
+    prior_revision: str,
+    successor_revision: str,
+) -> tuple[list[str], str | None]:
+    """把后继段 run 命令归一化回前序段命令：``--attempt-recovery ar<k+1>``→``ar<k>``，去掉且只去掉一次
+    ``--rerun-failed`` 与 ``--recovery-preview <path>``；返回 (归一化命令, 预览路径)。"""
+
+    normalized: list[str] = []
+    preview: str | None = None
+    rerun_seen = False
+    index = 0
+    tokens = list(command)
+    while index < len(tokens):
+        token = tokens[index]
+        if token == "--rerun-failed" and not rerun_seen:
+            rerun_seen = True
+            index += 1
+            continue
+        if token == "--recovery-preview" and preview is None and index + 1 < len(tokens):
+            preview = tokens[index + 1]
+            index += 2
+            continue
+        if token == "--attempt-recovery" and index + 1 < len(tokens) and tokens[index + 1] == successor_revision:
+            normalized.extend([token, prior_revision])
+            index += 2
+            continue
+        normalized.append(token)
+        index += 1
+    if not rerun_seen or preview is None:
+        raise SupervisorError("后继恢复段动作必须带 --rerun-failed 与 --recovery-preview。")
+    return normalized, preview
+
+
+def _validate_attempt_recovery_segment_successor(
+    prior_state: Mapping[str, Any],
+    prior_manifest: Mapping[str, Any],
+    prior_dir: Path,
+    successor_manifest: Mapping[str, Any],
+    *,
+    campaign_dir: Path | None,
+) -> bool:
+    """改造 5 M2（崩溃矩阵 A1）：恢复段 run 动作失败／中断的批次，只能由同一 attempt 的后继段批次承接。
+
+    返回 ``False`` 表示前序失败动作不是恢复段 run，应继续匹配其他协议；一旦是，任何漂移都失败关闭：
+    段对账（``reconcile-attempt --recovery-revision ar<k>``）与批准的恢复预览已被账本 ``recovery_authorized``
+    消费（事件绑定预览与批准的账本副本），后继批次除失败动作外逐字相同，失败动作只允许把
+    ``--attempt-recovery ar<k>`` 改为 ``ar<k+1>`` 并追加 ``--rerun-failed --recovery-preview <该预览>``。
+    """
+
+    stop_path = prior_dir / "stop-receipt.json"
+    if stop_path.is_symlink() or not stop_path.is_file():
+        return False
+    stop = read_stop_receipt(prior_dir)
+    reason = stop.get("reason")
+    if not isinstance(reason, str) or not reason.startswith("action-failed:"):
+        return False
+    action_id = reason.split(":", 1)[1]
+    prior_revision = _attempt_recovery_run_revision(prior_manifest, action_id) if action_id else None
+    if prior_revision is None:
+        return False
+    if campaign_dir is None:
+        raise SupervisorError("后继恢复段批次必须绑定 Campaign 目录。")
+    if prior_state.get("state") != "failed":
+        raise SupervisorError("后继恢复段只能承接 failed 终态的段 run 批次。")
+    successor_revision = f"ar{int(prior_revision[2:]) + 1}"
+    prior_actions = prior_manifest.get("actions")
+    successor_actions = successor_manifest.get("actions")
+    if (
+        not isinstance(prior_actions, list)
+        or not isinstance(successor_actions, list)
+        or len(prior_actions) != len(successor_actions)
+    ):
+        raise SupervisorError("后继恢复段批次的动作数量与失败批次不一致。")
+    preview_argument: str | None = None
+    normalized_actions: list[Any] = []
+    for prior_action, successor_action in zip(prior_actions, successor_actions):
+        if not isinstance(prior_action, Mapping) or not isinstance(successor_action, Mapping):
+            raise SupervisorError("后继恢复段批次的动作非法。")
+        if successor_action.get("action_id") != action_id:
+            normalized_actions.append(successor_action)
+            continue
+        command = successor_action.get("command")
+        if not isinstance(command, list) or not all(isinstance(token, str) for token in command):
+            raise SupervisorError("后继恢复段动作命令非法。")
+        normalized_command, preview_argument = _successor_segment_normalized_command(
+            command, prior_revision=prior_revision, successor_revision=successor_revision
+        )
+        normalized_action = {**successor_action, "command": normalized_command}
+        bindings = successor_action.get("output_bindings")
+        if isinstance(bindings, list):
+            # 动作输出绑定（段 run-summary 路径）随段号变化：按同一映射归一化回前序段。
+            normalized_action["output_bindings"] = [
+                str(item).replace(f"/recovery/{successor_revision}/", f"/recovery/{prior_revision}/") if isinstance(item, str) else item
+                for item in bindings
+            ]
+        normalized_actions.append(normalized_action)
+    normalized_manifest = {**successor_manifest, "actions": normalized_actions}
+    immutable_fields = (
+        "campaign_id",
+        "campaign_plan_sha256",
+        "phase",
+        "predecessor_checkpoint",
+        "original_deadline_at_utc",
+        "actions",
+        "execute_items",
+        "reuse_items",
+        "no_op",
+        "candidate_revision",
+        "candidate_id",
+        "evaluation_baseline",
+        "baseline_commit_sha256",
+        "evaluator_digests",
+    )
+    drifted = [field for field in immutable_fields if normalized_manifest.get(field) != prior_manifest.get(field)]
+    if drifted:
+        raise SupervisorError("后继恢复段批次只允许失败动作换段号并追加恢复预览，漂移字段：" + "、".join(drifted))
+    if preview_argument is None:
+        raise SupervisorError("后继恢复段批次没有携带恢复预览。")
+
+    # 许可：账本 recovery_authorized 事件绑定该段（ar<k>）的预览与批准副本，且与命令里的预览逐字节一致。
+    campaign_dir = Path(campaign_dir).resolve(strict=True)
+    campaign = _read_json(campaign_dir / "campaign.json")
+    controls = campaign.get("control_receipts")
+    timing_control = controls.get("upgrade_timing") if isinstance(controls, Mapping) else None
+    if not isinstance(timing_control, Mapping) or not isinstance(timing_control.get("ledger_dir"), str):
+        raise SupervisorError("后继恢复段批次缺少 Campaign 时间账本绑定。")
+    ledger_dir = Path(str(timing_control["ledger_dir"]))
+    try:
+        ledger_dir = ledger_dir.resolve(strict=True)
+        raw_events = timing_ledger._load_events(ledger_dir)
+    except (OSError, timing_ledger.TimingLedgerError) as error:
+        raise SupervisorError(f"后继恢复段批次无法重放时间账本：{error}") from error
+    preview_path = Path(preview_argument)
+    if not preview_path.is_absolute() or preview_path.is_symlink() or not preview_path.is_file():
+        raise SupervisorError("后继恢复段批次的恢复预览路径不可信。")
+    attempt_id: str | None = None
+    try:
+        preview_document = _read_json(preview_path)
+        attempt_id = str(preview_document.get("source_attempt_id", ""))
+        review_sha256 = str(preview_document.get("review_sha256", ""))
+        if preview_document.get("recovery_revision") != prior_revision or not review_sha256:
+            raise SupervisorError("后继恢复段批次的恢复预览不属于失败段。")
+    except SupervisorError:
+        raise
+    except Exception as error:  # noqa: BLE001 - 失败关闭
+        raise SupervisorError(f"后继恢复段批次的恢复预览不可读：{error}") from error
+    expected_prefix = f"recovery-authorized-{attempt_id}-{prior_revision}-"
+    authorized = [
+        event
+        for event, _raw in raw_events
+        if event.get("event_type") == "recovery_authorized" and str(event.get("event_id", "")).startswith(expected_prefix)
+    ]
+    if not authorized:
+        raise SupervisorError(f"后继恢复段批次缺少账本 recovery_authorized（{prior_revision} 的段对账预览尚未批准消费）。")
+    bound = False
+    for event in authorized:
+        for receipt in event.get("receipts", []) or []:
+            if not isinstance(receipt, Mapping) or receipt.get("role") != "recovery_preview":
+                continue
+            copy_path = ledger_dir / str(receipt.get("path", ""))
+            if copy_path.is_symlink() or not copy_path.is_file():
+                continue
+            if _sha256(copy_path.read_bytes()) != receipt.get("sha256"):
+                raise SupervisorError("账本 recovery_authorized 绑定的恢复预览副本漂移。")
+            if str(_read_json(copy_path).get("review_sha256", "")) == review_sha256:
+                bound = True
+    if not bound:
+        raise SupervisorError("后继恢复段批次携带的恢复预览与账本 recovery_authorized 绑定的预览不一致。")
     return True
 
 
@@ -7945,6 +8121,18 @@ def _validate_batched_campaign_history(
             )
         ):
             continue
+        if (
+            prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
+            and successor_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
+            and _validate_attempt_recovery_segment_successor(
+                state,
+                prior_manifest,
+                _run_dir,
+                successor_manifest,
+                campaign_dir=campaign_dir,
+            )
+        ):
+            continue
         if prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA:
             raise SupervisorError("失败批次只能由唯一直接 v3 恢复后继承接。")
         raise SupervisorError("失败批次没有被唯一允许的直接恢复后继承接。")
@@ -8143,6 +8331,31 @@ def _evaluator_identity_drift(frozen: Any) -> list[str]:
     )
 
 
+def _attempt_recovery_run_revision(manifest: Mapping[str, Any], action_id: str) -> str | None:
+    """失败动作是恢复段 run（``capture-candidate run --attempt-recovery ar<k>``）时返回段编号，否则 None。"""
+
+    actions = manifest.get("actions")
+    if not isinstance(actions, list):
+        return None
+    for action in actions:
+        if not isinstance(action, Mapping) or action.get("action_id") != action_id:
+            continue
+        command = action.get("command")
+        if not isinstance(command, list) or not all(isinstance(token, str) for token in command):
+            return None
+        if "capture-candidate" not in command or "run" not in command:
+            return None
+        for index, token in enumerate(command):
+            if token == "--attempt-recovery" and index + 1 < len(command):
+                candidate = command[index + 1]
+                return candidate if vc_artifacts.RECOVERY_REVISION_RE.fullmatch(candidate) else None
+            if token.startswith("--attempt-recovery="):
+                candidate = token.partition("=")[2]
+                return candidate if vc_artifacts.RECOVERY_REVISION_RE.fullmatch(candidate) else None
+        return None
+    return None
+
+
 def _close_failed_campaign_timing_ledger(
     campaign_dir: Path,
     manifest: Mapping[str, Any],
@@ -8241,7 +8454,21 @@ def _close_failed_campaign_timing_ledger(
     recovery_event_id = f"{event_prefix}-recovery-required"
     abandon_event_id = f"{event_prefix}-stage-abandoned"
     stop_event_id = f"{event_prefix}-stop-the-line"
-    if failure_class == "post-run-tooling":
+    # 改造 5 M2（崩溃矩阵 A1）：恢复段 run 动作（capture-candidate run --attempt-recovery ar<k>）失败或中断
+    # 不是候选级失败——它是 transient-environment 裁定后的补跑，失败对象是环境瞬态而非候选源码；
+    # 阶段保持 active 进入 recovery_required，由段对账（同根因计数）与批准的恢复预览决定是否开后继段。
+    recovery_segment = _attempt_recovery_run_revision(manifest, failed_action_id) if failure_class == "execution-failure" else None
+    if recovery_segment is not None:
+        try:
+            successor = f"ar{int(recovery_segment[2:]) + 1}"
+        except ValueError:
+            successor = "ar<k+1>"
+        recovery_next_action = (
+            f"reconcile-attempt --recovery-revision {recovery_segment}：恢复段动作失败／中断，段对账入账并批准"
+            f"恢复预览后，以 capture-candidate run --attempt-recovery {successor} --rerun-failed --recovery-preview 开后继段；"
+            "同根因达上限即停线。"
+        )
+    elif failure_class == "post-run-tooling":
         # 数据面 Job 已闭合，失败的是零请求后处理动作：修复评估／控制工具并
         # 受监督部署后，reconcile-supervisor-run 通过即逐字重派同一 seal 批次，
         # 不重跑 Candidate Job、不新建 Campaign。
@@ -8316,6 +8543,7 @@ def _close_failed_campaign_timing_ledger(
             (
                 failure_class in RECOVERABLE_ACTION_FAILURE_CLASSES
                 or failure_class in RECOVERABLE_PARENT_FAILURE_CLASSES
+                or recovery_segment is not None
             )
             and before.get("status") == "active"
         ):

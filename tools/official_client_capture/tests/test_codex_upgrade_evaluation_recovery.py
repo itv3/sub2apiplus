@@ -394,9 +394,9 @@ class EvaluationRecoveryIntegrationTests(_EvaluationChainMixin, unittest.TestCas
             # 不带基线字段：入口不成立（交给既有逐字重派协议判定）。
             self.assertFalse(check(dict(successor, evaluation_baseline=None, baseline_commit_sha256=None)))
             # 七类伪造各拒。
-            with self.assertRaisesRegex(supervisor.SupervisorError, "不是账本当前激活"):
+            with self.assertRaisesRegex(supervisor.SupervisorError, "未由账本以同一 COMMIT 摘要激活"):
                 check(dict(successor, baseline_commit_sha256="0" * 64))
-            with self.assertRaisesRegex(supervisor.SupervisorError, "不是账本当前激活"):
+            with self.assertRaisesRegex(supervisor.SupervisorError, "未由账本以同一 COMMIT 摘要激活"):
                 check(dict(successor, evaluation_baseline=2))
             with self.assertRaisesRegex(supervisor.SupervisorError, "同候选同 revision"):
                 check(dict(successor, candidate_revision=2))
@@ -428,7 +428,7 @@ class EvaluationRecoveryIntegrationTests(_EvaluationChainMixin, unittest.TestCas
                 supervisor._write_json(stop_path, json.loads(original_stop), replace=True)
             self.assertTrue(check(successor))
             # 跳号：b2 未经完整 PREPARED＋ABANDON 链即拒；补链后仍要求后继等于账本当前基线。
-            with self.assertRaisesRegex(supervisor.SupervisorError, "不是账本当前激活"):
+            with self.assertRaisesRegex(supervisor.SupervisorError, "未由账本以同一 COMMIT 摘要激活"):
                 check(dict(successor, evaluation_baseline=3, baseline_commit_sha256=applied["commit_sha256"]))
             self.assertTrue(check(successor))
 
