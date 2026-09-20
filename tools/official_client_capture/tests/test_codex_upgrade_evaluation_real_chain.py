@@ -207,8 +207,16 @@ class _RealChainHarness:
         return self.run(tree_root, *arguments, expect_exit=expect_exit)
 
 
+# 采集执行位置是合同常量（execution_contract.capture_root 必须等于 /root/oauth-capture）；有生产执行副本的
+# 机器上，副本受管树建 Campaign 时 _verify_execution_tree 会拿该副本与副本树逐字比对而必然不一致。
+# 真实链因此只能在没有执行副本的机器（开发机／CI）运行，真机上如实跳过，不得为此放宽执行树校验。
+PRODUCTION_EXECUTION_TREE = Path("/root/oauth-capture/tools/official_client_capture")
+
+
 class RealEvaluationChainTests(unittest.TestCase):
     def setUp(self) -> None:
+        if PRODUCTION_EXECUTION_TREE.is_dir():
+            self.skipTest(f"本机存在固定采集执行副本 {PRODUCTION_EXECUTION_TREE}，副本受管树 Campaign 的执行树校验必然不一致")
         self._temporary = tempfile.TemporaryDirectory(prefix="eval-real-chain-")
         self.addCleanup(self._temporary.cleanup)
         self.work = Path(self._temporary.name).resolve()
