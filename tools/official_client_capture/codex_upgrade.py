@@ -9480,6 +9480,11 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="CLIENT=PATH",
     )
     candidate.add_argument("--acknowledge-live-requests", action="store_true")
+    candidate.add_argument(
+        "--attempt-recovery",
+        metavar="ar<k>",
+        help="改造 5 M2：只补跑当前 attempt-recovery 基线冻结的 execute_jobs（run）或增量封存该恢复段（seal）。",
+    )
 
     runtime_override = subparsers.add_parser(
         "candidate-runtime-override",
@@ -19549,6 +19554,81 @@ def _evaluation_defect_admission(
     }
 
 
+def _next_recovery_revision(attempt_root: Path) -> str:
+    """原 attempt 下一个恢复段编号 ar<k>：已存在的段目录（含未收口）编号最大值 + 1。"""
+
+    recovery_root = attempt_root / ATTEMPT_RECOVERY_DIRNAME
+    highest = 0
+    if recovery_root.exists():
+        if recovery_root.is_symlink() or not recovery_root.is_dir():
+            raise ConfigurationError("attempt 恢复段目录不可信。")
+        for entry in recovery_root.iterdir():
+            if entry.is_symlink() or not entry.is_dir() or not codex_upgrade_vc_artifacts.RECOVERY_REVISION_RE.fullmatch(entry.name):
+                raise ConfigurationError(f"attempt 恢复段目录含非法条目：{entry.name}")
+            highest = max(highest, int(entry.name[2:]))
+    return f"ar{highest + 1}"
+
+
+def _transient_environment_admission(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    facts: Mapping[str, Any],
+    *,
+    attempt_root: Path,
+    attempt: Mapping[str, Any],
+) -> dict[str, Any]:
+    """transient-environment 准入（三稿 3.4／分解稿 T5.17）：
+
+    候选五层身份等于冻结值；原 attempt 的 after 探针与恢复收据存在且 ``restoration_error=null``；
+    Campaign 无污染记录；``J*`` 非空且每个 Job 已沿 failure-scope 定位链证明（定位链本身失败关闭，
+    全部 Job 亦允许）；``J*`` 与其余 Job 恰好划分原 attempt 的 Job 全集。根因 ``attempt.job-transient-failure``
+    的上限由 apply 的 outbox 入账后二次判定处理。返回冻结进 recovery.json 的段计划。
+    """
+
+    if facts["failure_source"] != "assertion-failed":
+        raise ConfigurationError("transient-environment 只能由断言失败触发（离线 compare／accept 工具异常不是环境故障）。")
+    identity = attempt.get("identity")
+    if not isinstance(identity, Mapping):
+        raise ConfigurationError("原 attempt 缺少候选身份，不能裁定 transient-environment。")
+    _verify_candidate_attempt_identity(manifest, identity)
+    if attempt.get("status") != ATTEMPT_RECOVERY_SUCCESS_STATUS:
+        raise ConfigurationError(f"原 attempt 状态为 {attempt.get('status')}，不是 awaiting_receipts。")
+    environment = attempt.get("environment")
+    if (
+        not isinstance(environment, Mapping)
+        or not isinstance(environment.get("after_probe"), Mapping)
+        or not isinstance(environment.get("restoration_report"), Mapping)
+        or attempt.get("restoration_error") is not None
+    ):
+        raise ConfigurationError("原 attempt 缺少 after 探针或恢复收据，或恢复曾失败；环境事实不足以裁定 transient-environment。")
+    contamination = _campaign_contamination_records(campaign_dir, _manifest=manifest)
+    if contamination:
+        raise ConfigurationError("Campaign 存在环境污染记录，不能裁定 transient-environment。")
+    scope = facts["failure_scope"]
+    if not isinstance(scope, Mapping):
+        raise ConfigurationError("失败事实缺少 failure-scope，不能裁定 transient-environment。")
+    execute_jobs = sorted(str(job_id) for job_id in scope.get("jobs", []))
+    if not execute_jobs:
+        raise ConfigurationError("failure-scope 没有定位到任何候选 Job（J* 为空），不能裁定 transient-environment。")
+    all_jobs = sorted(
+        str(result.get("id"))
+        for result in attempt.get("results", [])
+        if isinstance(result, Mapping) and isinstance(result.get("id"), str)
+    )
+    unknown = sorted(set(execute_jobs) - set(all_jobs))
+    if unknown:
+        raise ConfigurationError(f"failure-scope 定位到的 Job 不在原 attempt 内：{unknown}")
+    reuse_jobs = sorted(set(all_jobs) - set(execute_jobs))
+    return {
+        "attempt_id": attempt_root.name,
+        "recovery_revision": _next_recovery_revision(attempt_root),
+        "execute_jobs": execute_jobs,
+        "reuse_jobs": reuse_jobs,
+        "affected_rules": sorted(str(rule) for rule in scope.get("rules", [])),
+        "failed_step": execute_jobs[0],
+    }
+
+
 def _evaluation_epoch_for_recovery(
     campaign_dir: Path,
     manifest: Mapping[str, Any],
@@ -19820,10 +19900,18 @@ def _evaluation_recover_locked(
             return {**preview_payload, "status": "redirect", "next_command": f"invalidate-candidate preview --candidate-id {candidate_id}"}
         if root_cause_class == "approval-inputs":
             return {**preview_payload, "status": "redirect", "next_command": "close-campaign-ledger（显式停线）后从 VC-2 建后继 Campaign"}
-        if root_cause_class == "transient-environment":
-            raise ConfigurationError("transient-environment 的准入与 attempt 恢复段在第 3 批 M2 实现；本里程碑不接受。")
         _verify_failed_run_reconciled(campaign_dir, manifest, ledger_dir, facts["failed"], head=head)
-        defect = _evaluation_defect_admission(arguments, campaign_dir, manifest, facts, attempt_root=attempt_root)
+        transient: dict[str, Any] | None = None
+        defect: dict[str, Any] | None = None
+        if root_cause_class == "transient-environment":
+            # 改造 5 M2（T5.17）：临时环境／Job 故障 → attempt-recovery 基线，零请求裁定，段本身才发请求。
+            transient = _transient_environment_admission(campaign_dir, manifest, facts, attempt_root=attempt_root, attempt=attempt)
+            baseline_kind = "attempt-recovery"
+            cause_component, cause_code, cause_step = "reconciler", "attempt.job-transient-failure", str(transient["failed_step"])
+        else:
+            defect = _evaluation_defect_admission(arguments, campaign_dir, manifest, facts, attempt_root=attempt_root)
+            baseline_kind = "evaluator-only"
+            cause_component, cause_code, cause_step = "evaluator", "evaluation.rule-failed", str(facts["failed_step"])
         # ① 编号与 recovery.json／PREPARED（write-once；续作即校验一致）。
         number = resume_number if resume_number is not None else (max(states) + 1 if states else 1)
         if number <= current_baseline:
@@ -19839,13 +19927,26 @@ def _evaluation_recover_locked(
         # 非 pass 行，其余引用复用（须 anchored）。builder 执行时仍按判据逐条复核，这里是冻结的预计。
         evaluation_run_document = facts["evaluation_run_document"]
         all_rules = sorted(rules)
-        if (
+        if transient is not None:
+            # attempt-recovery：重采 J* 后其证据变化，引用 J* 的规则（含失败规则）进入 execute；其余 pass 行
+            # 在 anchored 下复用。builder 执行时仍按逐规则依赖判据逐条复核。
+            if facts["reuse_authority"] != "anchored" or evaluation_run_document is None:
+                execute_rules = all_rules
+                reuse_rules: list[str] = []
+            else:
+                execute_rules = sorted(
+                    set(transient["affected_rules"])
+                    | {str(row["rule"]) for row in evaluation_run_document["rules"] if row["status"] != "pass"}
+                    | (set(all_rules) - {str(row["rule"]) for row in evaluation_run_document["rules"]})
+                )
+                reuse_rules = sorted(set(all_rules) - set(execute_rules))
+        elif (
             facts["reuse_authority"] != "anchored"
             or evaluation_run_document is None
             or {"checker_sha256", "builder_sha256"} & set(defect["changed_items"])
         ):
             execute_rules = all_rules
-            reuse_rules: list[str] = []
+            reuse_rules = []
         else:
             execute_rules = sorted(
                 {str(row["rule"]) for row in evaluation_run_document["rules"] if row["status"] != "pass"}
@@ -19854,9 +19955,9 @@ def _evaluation_recover_locked(
             reuse_rules = sorted(set(all_rules) - set(execute_rules))
         try:
             root_cause_id = codex_upgrade_root_cause.structured_root_cause(
-                component="evaluator",
-                stable_error_code="evaluation.rule-failed",
-                failed_step=str(facts["failed_step"]),
+                component=cause_component,
+                stable_error_code=cause_code,
+                failed_step=cause_step,
                 stable_dimensions={"phase": "VC-5"},
             )
         except codex_upgrade_root_cause.RootCauseError as error:
@@ -19871,24 +19972,28 @@ def _evaluation_recover_locked(
                     candidate_id=candidate_id,
                     candidate_revision=revision,
                     evaluation_baseline=number,
-                    kind="evaluator-only",
+                    kind=baseline_kind,
                     diagnosis={"path": diagnosis_path.relative_to(campaign_dir).as_posix(), "sha256": file_sha256(diagnosis_path)},
                     failure_source=facts["failure_source"],
                     reuse_authority=facts["reuse_authority"],
-                    root_cause_class="evaluator-defect",
+                    root_cause_class=root_cause_class,
                     root_cause_id=root_cause_id,
-                    failed_step=str(facts["failed_step"]),
+                    failed_step=cause_step,
                     previous_baseline=current_baseline,
                     previous_baseline_commit_sha256=(str(current_commit["commit_sha256"]) if current_commit is not None else None),
                     execute_rules=execute_rules,
                     reuse_rules=reuse_rules,
-                    execute_jobs=[],
-                    reuse_jobs=sorted(str(result.get("id")) for result in attempt.get("results", []) if isinstance(result, Mapping) and isinstance(result.get("id"), str)),
-                    attempt_id=None,
-                    recovery_revision=None,
-                    fix_commit=defect["fix_commit"],
-                    deployment_receipt=defect["deployment_receipt"],
-                    evaluation_epoch=defect["evaluation_epoch"],
+                    execute_jobs=list(transient["execute_jobs"]) if transient is not None else [],
+                    reuse_jobs=(
+                        list(transient["reuse_jobs"])
+                        if transient is not None
+                        else sorted(str(result.get("id")) for result in attempt.get("results", []) if isinstance(result, Mapping) and isinstance(result.get("id"), str))
+                    ),
+                    attempt_id=str(transient["attempt_id"]) if transient is not None else None,
+                    recovery_revision=str(transient["recovery_revision"]) if transient is not None else None,
+                    fix_commit=defect["fix_commit"] if defect is not None else None,
+                    deployment_receipt=defect["deployment_receipt"] if defect is not None else None,
+                    evaluation_epoch=defect["evaluation_epoch"] if defect is not None else None,
                     failed_evaluator_digests=facts["failed_evaluator_digests"],
                     current_evaluator_digests=facts["current_evaluator_digests"],
                     reviewer=reviewer,
@@ -19917,9 +20022,9 @@ def _evaluation_recover_locked(
         # ② outbox 根因事件（请求 0）→ 推总账 → 重放 → 二次判定。
         receipt_binding = reconciler._binding(campaign_root, recovery_path, "reconciliation")
         cause = codex_upgrade_root_cause.describe_root_cause(
-            component="evaluator",
-            stable_error_code="evaluation.rule-failed",
-            failed_step=str(facts["failed_step"]),
+            component=cause_component,
+            stable_error_code=cause_code,
+            failed_step=cause_step,
             stable_dimensions={"phase": "VC-5"},
         )
         operation_id = f"evaluation-recover:{candidate_id}:r{revision}:b{number}"
@@ -19971,10 +20076,14 @@ def _evaluation_recover_locked(
             "candidate_id": candidate_id,
             "revision": revision,
             "evaluation_baseline": number,
-            "kind": "evaluator-only",
+            "kind": baseline_kind,
             "recovery_sha256": recovery["recovery_sha256"],
             "execute_rules": execute_rules,
             "reuse_rules": reuse_rules,
+            "execute_jobs": list(recovery["execute_jobs"]),
+            "reuse_jobs": list(recovery["reuse_jobs"]),
+            "attempt_id": recovery["attempt_id"],
+            "recovery_revision": recovery["recovery_revision"],
             "root_cause_id": cause["root_cause_id"],
             "batch": batch,
             "project_push": pushed,
@@ -20036,16 +20145,25 @@ def _evaluation_recover_locked(
             capture_source = _stage_read_source(campaign_dir, candidate_id, current_baseline, "capture-candidate")
             compare_source = _stage_read_source(campaign_dir, candidate_id, current_baseline, "compare")
             stage_sources: dict[str, Any] = {
-                "capture-candidate": {
-                    "source": "reused",
-                    "baseline": int(capture_source["baseline_of_record"]),
-                    "path": Path(capture_source["path"]).relative_to(campaign_dir).as_posix(),
-                    "sha256": str(capture_source["sha256"]),
-                },
+                "capture-candidate": (
+                    # attempt-recovery：本基线增量封存出新的候选阶段结果（local）。
+                    {"source": "local", "target": f"candidates/{candidate_id}/revisions/b{number}/result.json"}
+                    if transient is not None
+                    else {
+                        "source": "reused",
+                        "baseline": int(capture_source["baseline_of_record"]),
+                        "path": Path(capture_source["path"]).relative_to(campaign_dir).as_posix(),
+                        "sha256": str(capture_source["sha256"]),
+                    }
+                ),
                 "assertions": {"source": "local", "target": f"assertions/{candidate_id}/revisions/b{number}"},
                 "accept": {"source": "local", "target": f"acceptance/{candidate_id}/revisions/b{number}/result.json"},
             }
-            if "compare_reader_sha256" in defect["changed_items"] or compare_source["status"] != "complete":
+            if (
+                transient is not None
+                or "compare_reader_sha256" in defect["changed_items"]
+                or compare_source["status"] != "complete"
+            ):
                 stage_sources["compare"] = {"source": "local", "target": f"comparisons/{candidate_id}/revisions/b{number}/result.json"}
             else:
                 stage_sources["compare"] = {
@@ -20059,7 +20177,7 @@ def _evaluation_recover_locked(
                 candidate_id=candidate_id,
                 candidate_revision=revision,
                 evaluation_baseline=number,
-                kind="evaluator-only",
+                kind=baseline_kind,
                 recovery_sha256=str(recovery["recovery_sha256"]),
                 authorization_sha256=str(authorization["authorization_sha256"]),
                 stage_sources=stage_sources,
@@ -20086,8 +20204,13 @@ def _evaluation_recover_locked(
                     candidate_id=candidate_id,
                     evaluation_baseline=number,
                     baseline_commit_sha256=str(commit["commit_sha256"]),
-                    baseline_kind="evaluator-only",
-                    next_action=f"compile-and-run-vc-batch --phase VC-5（评估基线 b{number}）",
+                    baseline_kind=baseline_kind,
+                    recovery_revision=recovery["recovery_revision"],
+                    next_action=(
+                        f"capture-candidate run --attempt-recovery {recovery['recovery_revision']}（评估基线 b{number}）"
+                        if transient is not None
+                        else f"compile-and-run-vc-batch --phase VC-5（评估基线 b{number}）"
+                    ),
                 )
             except codex_upgrade_timing_ledger.TimingLedgerError as error:
                 raise ConfigurationError(f"UpgradeTimingLedger 拒绝 evaluation_baseline：{error}") from error
@@ -20099,6 +20222,15 @@ def _evaluation_recover_locked(
             }
         result["commit_sha256"] = commit["commit_sha256"]
         result["stage_sources"] = commit["stage_sources"]
+        if transient is not None:
+            result["next_command"] = (
+                f"compile-and-run-vc-batch --phase VC-5（评估基线 b{number}：capture-candidate run --attempt-recovery "
+                f"{recovery['recovery_revision']} 只补跑 {'、'.join(recovery['execute_jobs'])} → account-sealed-candidate "
+                f"--attempt-recovery → capture-candidate seal --attempt-recovery → 断言 builder --evaluation-baseline {number}"
+                + (f" --reuse-from …/evaluation-run.json --reuse-authority anchored" if reuse_rules else "")
+                + "）"
+            )
+            return result
         result["next_command"] = f"compile-and-run-vc-batch --phase VC-5（评估基线 b{number}：断言 builder --evaluation-baseline {number}"
         if reuse_rules:
             result["next_command"] += f" --reuse-from assertions/{candidate_id}[/revisions/b{current_baseline}]/evaluation-run.json --reuse-authority anchored"
@@ -42142,6 +42274,887 @@ def _seal_preview(
     return preview, True
 
 
+# ---------------------------------------------------------------------------
+# 改造 5 M2（T5.12）：attempt 恢复段 ar<k>
+#
+# 同一 attempt 只补跑 ``recovery.json.execute_jobs``；段目录
+# ``attempts/<attempt_id>/recovery/ar<k>/`` 自成闭包（段预约、只有 execute_jobs 的
+# ``job-*.json``、新的 checkpoint 链、``logs/``、``evidence/``（自身 before／after 探针、
+# 恢复收据、run 末权限收口）、段级 run-summary ``attempt-recovery.json``）；
+# 旧 attempt 目录与旧 Job 证据根只读不触碰。证据根重定位：真实 Job 的输出目录由
+# ``RUN_ID``／``RUN_ID_PREFIX`` 与 ``CAPTURE_ROOT/runs`` 拼出、RUN_ID 不能含路径分隔符，
+# 因此新根取 ``<原根父目录>/<原根名>-recovery-ar<k>``（同级新目录），Job 定义里出现的
+# 根名（证据根模式、argv、环境值）一并替换，执行摘要随之变化并在段预约里逐 Job 绑定
+# 原预约的执行摘要。
+# ---------------------------------------------------------------------------
+
+ATTEMPT_RECOVERY_RESERVATION_SCHEMA = "codex-upgrade-attempt-recovery-reservation/v1"
+ATTEMPT_RECOVERY_SUMMARY_SCHEMA = "codex-upgrade-attempt-recovery/v1"
+ATTEMPT_RECOVERY_DIRNAME = "recovery"
+ATTEMPT_RECOVERY_RESERVATION_FILENAME = "recovery-reservation.json"
+ATTEMPT_RECOVERY_SUMMARY_FILENAME = "attempt-recovery.json"
+ATTEMPT_RECOVERY_SUCCESS_STATUS = "awaiting_receipts"
+
+
+def _require_recovery_revision(value: Any) -> str:
+    if not isinstance(value, str) or not codex_upgrade_vc_artifacts.RECOVERY_REVISION_RE.fullmatch(value):
+        raise ConfigurationError("--attempt-recovery 必须是 ar<k>（k≥1）形式的恢复段编号。")
+    return value
+
+
+def _attempt_recovery_segment_root(attempt_root: Path, recovery_revision: str) -> Path:
+    return attempt_root / ATTEMPT_RECOVERY_DIRNAME / recovery_revision
+
+
+def _recovery_root_suffix(recovery_revision: str) -> str:
+    return f"-recovery-{recovery_revision}"
+
+
+def _job_recovery_root_keys(job: Job) -> list[str]:
+    """Job 证据根模式的稳定目录名（glob 之前的最后一段），作为段重定位的替换键。"""
+
+    keys: list[str] = []
+    for pattern in job.evidence_roots:
+        stem = str(pattern).split("*", 1)[0].rstrip("-")
+        name = Path(stem).name
+        if not name or "/" in name:
+            raise ConfigurationError(f"Job {job.job_id} 的证据根模式无法推导稳定目录名：{pattern}")
+        if name not in keys:
+            keys.append(name)
+    if not keys:
+        raise ConfigurationError(f"Job {job.job_id} 没有证据根模式，无法进入恢复段。")
+    return keys
+
+
+def _relocate_job_for_recovery(job: Job, recovery_revision: str) -> Job:
+    """把 Job 的证据根与命令里出现的根名改写为 ``<根名>-recovery-ar<k>``（同级新目录）。"""
+
+    keys = _job_recovery_root_keys(job)
+    suffix = _recovery_root_suffix(recovery_revision)
+    for key in keys:
+        if key.endswith(suffix):
+            raise ConfigurationError(f"Job {job.job_id} 的证据根已带恢复段后缀，禁止嵌套：{key}")
+
+    def relocate_component(part: str) -> str:
+        # 只改写整段等于根名、或以根名开头且紧跟 glob 尾巴（如 <名>-*-run）的路径分量／取值；
+        # 子串命中（runs 含 run）一律不动。
+        for key in keys:
+            if part == key:
+                return f"{key}{suffix}"
+            remainder = part[len(key):]
+            if part.startswith(key) and remainder.startswith("-*"):
+                return f"{key}{suffix}{remainder}"
+        return part
+
+    def relocate(value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        return "/".join(relocate_component(part) for part in value.split("/"))
+
+    steps: list[dict[str, Any]] = []
+    for raw_step in job.steps:
+        step = dict(raw_step)
+        argv = raw_step.get("argv")
+        if isinstance(argv, (list, tuple)):
+            step["argv"] = [relocate(item) for item in argv]
+        environment = raw_step.get("environment")
+        if isinstance(environment, Mapping):
+            step["environment"] = {str(k): relocate(v) for k, v in environment.items()}
+        steps.append(step)
+    relocated = replace(
+        job,
+        steps=tuple(steps),
+        evidence_roots=tuple(relocate(pattern) for pattern in job.evidence_roots),
+    )
+    if relocated.evidence_roots == job.evidence_roots:
+        raise ConfigurationError(f"Job {job.job_id} 的证据根未被重定位到恢复段。")
+    return relocated
+
+
+def _current_attempt_recovery_baseline(
+    campaign_dir: Path,
+    candidate_id: str,
+    recovery_revision: str,
+) -> tuple[int, dict[str, Any], dict[str, Any]]:
+    """当前基线必须是 committed 的 attempt-recovery 基线且恢复段编号相符。"""
+
+    baseline, commit = _current_evaluation_baseline(campaign_dir, candidate_id)
+    if baseline == 0 or commit is None:
+        raise ConfigurationError("当前评估基线是 b0，没有已 COMMIT 的 attempt-recovery 基线，禁止开恢复段。")
+    recovery = _load_evaluation_baseline_recovery(campaign_dir, candidate_id, baseline)
+    if recovery["kind"] != "attempt-recovery":
+        raise ConfigurationError(f"当前评估基线 b{baseline} 不是 attempt-recovery 基线，禁止开恢复段。")
+    if recovery["recovery_revision"] != recovery_revision:
+        raise ConfigurationError(
+            f"当前评估基线 b{baseline} 冻结的恢复段是 {recovery['recovery_revision']}，不是 {recovery_revision}。"
+        )
+    return baseline, commit, recovery
+
+
+def _load_attempt_recovery_reservation(
+    campaign_dir: Path,
+    segment_root: Path,
+    *,
+    candidate_id: str,
+    attempt_id: str,
+    recovery_revision: str,
+) -> dict[str, Any]:
+    path = segment_root / ATTEMPT_RECOVERY_RESERVATION_FILENAME
+    _reject_symlink_components(path, campaign_dir, "恢复段预约")
+    if not path.is_file():
+        raise ConfigurationError(f"恢复段 {recovery_revision} 没有预约收据。")
+    payload = _read_json(path, "恢复段预约")
+    unsigned = dict(payload)
+    digest = unsigned.pop("reservation_digest", None)
+    if (
+        payload.get("schema_version") != ATTEMPT_RECOVERY_RESERVATION_SCHEMA
+        or payload.get("candidate_id") != candidate_id
+        or payload.get("attempt_id") != attempt_id
+        or payload.get("recovery_revision") != recovery_revision
+        or digest != _fingerprint(unsigned)
+    ):
+        raise ConfigurationError(f"恢复段 {recovery_revision} 预约身份或自摘要不一致。")
+    return payload
+
+
+def _reserve_attempt_recovery(
+    campaign_dir: Path,
+    *,
+    manifest: Mapping[str, Any],
+    candidate_id: str,
+    attempt_root: Path,
+    original_attempt: Mapping[str, Any],
+    original_reservation: Mapping[str, Any],
+    recovery: Mapping[str, Any],
+    baseline: int,
+    baseline_commit_sha256: str,
+    jobs: Sequence[Job],
+    source_jobs: Mapping[str, Job],
+    identity: Mapping[str, Any],
+    lease: CampaignLease | None,
+    deadline: incremental_recovery.WallClockDeadline,
+) -> tuple[Path, dict[str, Any]]:
+    """在 Campaign 锁内原子发布恢复段预约：段目录不存在、同 attempt 无其它 active 恢复段。"""
+
+    recovery_revision = str(recovery["recovery_revision"])
+    deadline.check("attempt-recovery:reserve:start")
+    with _campaign_lock(campaign_dir, deadline=deadline):
+        _reject_contaminated_campaign(campaign_dir)
+        recovery_root = attempt_root / ATTEMPT_RECOVERY_DIRNAME
+        segment_root = _attempt_recovery_segment_root(attempt_root, recovery_revision)
+        if segment_root.exists() or segment_root.is_symlink():
+            raise ConfigurationError(f"恢复段 {recovery_revision} 已存在，禁止重开；段内续跑请用 resume --rerun-failed --attempt-recovery。")
+        if recovery_root.exists():
+            if recovery_root.is_symlink() or not recovery_root.is_dir():
+                raise ConfigurationError("attempt 恢复段目录不可信。")
+            for existing in sorted(recovery_root.iterdir()):
+                if existing.is_symlink() or not existing.is_dir():
+                    raise ConfigurationError("attempt 恢复段目录含不可信条目。")
+                summary_path = existing / ATTEMPT_RECOVERY_SUMMARY_FILENAME
+                if not summary_path.is_file():
+                    raise ConfigurationError(f"attempt 存在未收口的恢复段 {existing.name}，禁止并行开段。")
+        active = _active_unsealed_attempts(campaign_dir, "candidate", _manifest=manifest)
+        if active:
+            raise ConfigurationError(f"Campaign 存在未封存预约或 attempt，禁止开恢复段：{active}")
+        expected_execution = {
+            str(item.get("id")): str(item.get("execution_sha256"))
+            for item in original_reservation.get("planned_jobs", [])
+            if isinstance(item, Mapping)
+        }
+        planned_jobs: list[dict[str, Any]] = []
+        for job in jobs:
+            source = source_jobs.get(job.job_id)
+            if source is None or expected_execution.get(job.job_id) != _job_execution_sha256(source):
+                raise ConfigurationError(f"恢复段 Job {job.job_id} 的原执行摘要与原预约不一致。")
+            planned_jobs.append(
+                {
+                    "id": job.job_id,
+                    "required": job.required,
+                    "execution_sha256": _job_execution_sha256(job),
+                    "source_execution_sha256": expected_execution[job.job_id],
+                }
+            )
+        run_nonce = secrets.token_hex(32)
+        reservation: dict[str, Any] = {
+            "schema_version": ATTEMPT_RECOVERY_RESERVATION_SCHEMA,
+            "campaign_id": manifest["campaign_id"],
+            "campaign_mode": manifest["campaign_mode"],
+            "campaign_purpose": manifest["campaign_purpose"],
+            "campaign_manifest_sha256": file_sha256(campaign_dir / "campaign.json"),
+            "phase": "candidate",
+            "candidate_id": candidate_id,
+            "candidate_purpose": manifest["campaign_purpose"],
+            "attempt_id": attempt_root.name,
+            "recovery_revision": recovery_revision,
+            "evaluation_baseline": baseline,
+            "baseline_commit_sha256": baseline_commit_sha256,
+            "recovery_sha256": str(recovery["recovery_sha256"]),
+            "run_nonce": run_nonce,
+            "started_at_utc": _utc_now(),
+            "identity_sha256": _fingerprint(dict(identity)),
+            "original_reservation": {
+                "path": str((attempt_root / "reservation.json").relative_to(campaign_dir)),
+                "sha256": file_sha256(attempt_root / "reservation.json"),
+                "run_nonce": str(original_reservation["run_nonce"]),
+            },
+            "original_attempt": {
+                "path": str((attempt_root / "attempt.json").relative_to(campaign_dir)),
+                "sha256": file_sha256(attempt_root / "attempt.json"),
+                "attempt_digest": str(original_attempt["attempt_digest"]),
+            },
+            "planned_jobs": planned_jobs,
+            "reuse_jobs": list(recovery["reuse_jobs"]),
+        }
+        if lease is not None:
+            if not lease.acquired:
+                raise ConfigurationError("恢复段预约缺少 active Campaign lease。")
+            owner_nonce = lease.payload.get("owner_nonce")
+            if lease.payload.get("campaign_id") != manifest.get("campaign_id") or not isinstance(owner_nonce, str):
+                raise ConfigurationError("恢复段预约与 Campaign lease 身份不一致。")
+            reservation["campaign_lease"] = {
+                "path": CAMPAIGN_LEASE_FILENAME,
+                "owner_nonce": owner_nonce,
+                "deadline_at_utc": str(lease.payload.get("deadline_at_utc")),
+            }
+        reservation["reservation_digest"] = _fingerprint(reservation)
+        ensure_private_directory(recovery_root, campaign_dir)
+        temporary_root = Path(tempfile.mkdtemp(prefix=f".{recovery_revision}-", dir=recovery_root))
+        temporary_root.chmod(0o700)
+        try:
+            _secure_write_json_once(temporary_root / ATTEMPT_RECOVERY_RESERVATION_FILENAME, reservation)
+            os.rename(temporary_root, segment_root)
+            descriptor = os.open(recovery_root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0))
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+        except BaseException:
+            if temporary_root.exists() and not temporary_root.is_symlink():
+                (temporary_root / ATTEMPT_RECOVERY_RESERVATION_FILENAME).unlink(missing_ok=True)
+                try:
+                    temporary_root.rmdir()
+                except OSError:
+                    pass
+            raise
+    deadline.check("attempt-recovery:reserve:complete")
+    return segment_root, reservation
+
+
+def _backfill_original_attempt_ledger_events(
+    ledger_dir: Path,
+    *,
+    attempt_id: str,
+    live_request_count: int,
+) -> list[dict[str, Any]]:
+    """账本追认原 attempt：正常 run 不写 attempt 事件，而 attempt_recovery_started 要求原 attempt 已 completed。"""
+
+    state = codex_upgrade_timing_ledger.phase_ledger_state(ledger_dir)
+    recorded: str | None = None
+    for event, _raw in codex_upgrade_timing_ledger._load_events(ledger_dir):
+        if event.get("attempt_id") != attempt_id:
+            continue
+        event_type = event.get("event_type")
+        if event_type == "attempt_started":
+            recorded = "active"
+        elif event_type == "attempt_completed":
+            recorded = "completed"
+        elif event_type == "attempt_failed":
+            recorded = "failed"
+    written: list[dict[str, Any]] = []
+    if recorded is not None:
+        if recorded != "completed":
+            raise ConfigurationError(f"账本中原 attempt {attempt_id} 的状态是 {recorded}，不能开恢复段。")
+        return written
+    phase = str(state.get("active_phase"))
+    for event_type, extra in (
+        ("attempt_started", {}),
+        ("attempt_completed", {"live_request_count": int(live_request_count)}),
+    ):
+        summary = codex_upgrade_timing_ledger.append_event(
+            ledger_dir,
+            event_id=f"attempt-{attempt_id}-{event_type.split('_', 1)[1]}-backfill",
+            phase=phase,
+            event_type=event_type,
+            attempt_id=attempt_id,
+            next_action="恢复段开段前追认已封存的原 attempt",
+            **extra,
+        )
+        written.append({"event_type": event_type, "head_sequence": summary["head_sequence"], "head_sha256": summary["head_sha256"]})
+    return written
+
+
+def _append_attempt_recovery_ledger_event(
+    ledger_dir: Path,
+    *,
+    event_type: str,
+    attempt_id: str,
+    recovery_revision: str,
+    candidate_id: str,
+    revision: int | None,
+    root_cause_id: str | None = None,
+    live_request_count: int | None = None,
+    next_action: str,
+) -> dict[str, Any]:
+    extra: dict[str, Any] = {}
+    if root_cause_id is not None:
+        extra["root_cause_id"] = root_cause_id
+    if live_request_count is not None:
+        extra["live_request_count"] = int(live_request_count)
+    if revision is not None:
+        extra["revision"] = int(revision)
+    summary = codex_upgrade_timing_ledger.append_event(
+        ledger_dir,
+        event_id=f"attempt-recovery-{attempt_id}-{recovery_revision}-{event_type.rsplit('_', 1)[1]}",
+        phase="VC-5",
+        event_type=event_type,
+        attempt_id=attempt_id,
+        recovery_revision=recovery_revision,
+        candidate_id=candidate_id,
+        next_action=next_action,
+        **extra,
+    )
+    return {"event_type": event_type, "head_sequence": summary["head_sequence"], "head_sha256": summary["head_sha256"]}
+
+
+def _write_attempt_recovery_summary(
+    campaign_dir: Path,
+    segment_root: Path,
+    reservation: Mapping[str, Any],
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """只写一次恢复段 run-summary（形同 attempt.json，绑定段预约）。"""
+
+    planned = {item["id"]: item["execution_sha256"] for item in reservation["planned_jobs"]}
+    for result in payload.get("results", []):
+        if (
+            not isinstance(result, dict)
+            or result.get("id") not in planned
+            or result.get("execution_sha256") != planned[result["id"]]
+        ):
+            raise ConfigurationError("恢复段任务不在段预约内或执行摘要漂移。")
+    document = dict(payload)
+    document["schema_version"] = ATTEMPT_RECOVERY_SUMMARY_SCHEMA
+    document["campaign_mode"] = reservation["campaign_mode"]
+    document["campaign_purpose"] = reservation["campaign_purpose"]
+    document["candidate_purpose"] = reservation["candidate_purpose"]
+    document["campaign_manifest_sha256"] = file_sha256(campaign_dir / "campaign.json")
+    document["attempt_id"] = reservation["attempt_id"]
+    document["recovery_revision"] = reservation["recovery_revision"]
+    document["evaluation_baseline"] = reservation["evaluation_baseline"]
+    document["baseline_commit_sha256"] = reservation["baseline_commit_sha256"]
+    document["run_nonce"] = reservation["run_nonce"]
+    document["started_at_utc"] = reservation["started_at_utc"]
+    document["completed_at_utc"] = _utc_now()
+    document["reservation"] = {
+        "path": str((segment_root / ATTEMPT_RECOVERY_RESERVATION_FILENAME).relative_to(campaign_dir)),
+        "sha256": file_sha256(segment_root / ATTEMPT_RECOVERY_RESERVATION_FILENAME),
+    }
+    document["original_attempt"] = dict(reservation["original_attempt"])
+    failure_observations, root_causes = _attempt_failure_facts(document)
+    document["failure_observations"] = failure_observations
+    document["root_causes"] = root_causes
+    _replay_attempt_recovery_evidence_permissions(segment_root, document)
+    document["attempt_recovery_digest"] = _fingerprint(document)
+    _secure_write_json_once(segment_root / ATTEMPT_RECOVERY_SUMMARY_FILENAME, document)
+    return document
+
+
+def _replay_attempt_recovery_evidence_permissions(
+    segment_root: Path,
+    payload: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """重放恢复段的权限收口（同 v3 Attempt 口径：awaiting_receipts 必须有通过的收口收据）。"""
+
+    binding = payload.get("evidence_permission_closeout")
+    permission_error = payload.get("evidence_permission_error")
+    if payload.get("status") == ATTEMPT_RECOVERY_SUCCESS_STATUS and (
+        not isinstance(binding, Mapping) or permission_error is not None
+    ):
+        raise ConfigurationError("awaiting_receipts 恢复段缺少通过的证据权限收口收据。")
+    if binding is None:
+        return None
+    raw_roots = payload.get("evidence_roots")
+    if not isinstance(raw_roots, list) or not raw_roots or any(not isinstance(value, str) for value in raw_roots):
+        raise ConfigurationError("恢复段权限收口缺少证据根。")
+    try:
+        return _replay_evidence_permission_closeout(segment_root, [Path(value) for value in raw_roots], binding)
+    except (OSError, codex_upgrade_evidence_permissions.EvidencePermissionError) as error:
+        raise ConfigurationError(f"恢复段证据权限收口收据未通过：{error}") from error
+
+
+def _replay_evidence_permission_closeout(
+    attempt_root: Path,
+    evidence_roots: Sequence[Path],
+    binding: Mapping[str, Any],
+) -> dict[str, Any]:
+    """权限收口重放的单一入口（测试可在此注入 runs 别名，不改合同常量）。"""
+
+    return codex_upgrade_evidence_permissions.replay_evidence_permission_closeout(
+        attempt_root, list(evidence_roots), binding
+    )
+
+
+def _load_attempt_recovery_segment(
+    campaign_dir: Path,
+    candidate_id: str,
+    attempt_id: str,
+    recovery_revision: str,
+) -> tuple[Path, dict[str, Any], dict[str, Any]]:
+    """读取并重验恢复段（预约 + run-summary）。"""
+
+    attempt_root = _capture_attempt_path(campaign_dir, "candidate", candidate_id, attempt_id)
+    segment_root = _attempt_recovery_segment_root(attempt_root, _require_recovery_revision(recovery_revision))
+    if segment_root.is_symlink() or not segment_root.is_dir():
+        raise ConfigurationError(f"恢复段不存在或不可信：{recovery_revision}")
+    reservation = _load_attempt_recovery_reservation(
+        campaign_dir, segment_root, candidate_id=candidate_id, attempt_id=attempt_id, recovery_revision=recovery_revision
+    )
+    path = segment_root / ATTEMPT_RECOVERY_SUMMARY_FILENAME
+    _reject_symlink_components(path, campaign_dir, "恢复段 run-summary")
+    payload = _read_json(path, "恢复段 run-summary")
+    unsigned = dict(payload)
+    digest = unsigned.pop("attempt_recovery_digest", None)
+    if (
+        payload.get("schema_version") != ATTEMPT_RECOVERY_SUMMARY_SCHEMA
+        or payload.get("attempt_id") != attempt_id
+        or payload.get("recovery_revision") != recovery_revision
+        or payload.get("candidate_id") != candidate_id
+        or payload.get("run_nonce") != reservation["run_nonce"]
+        or digest != _fingerprint(unsigned)
+        or payload.get("reservation", {}).get("sha256") != file_sha256(segment_root / ATTEMPT_RECOVERY_RESERVATION_FILENAME)
+    ):
+        raise ConfigurationError(f"恢复段 {recovery_revision} run-summary 身份、预约绑定或自摘要不一致。")
+    _replay_attempt_recovery_evidence_permissions(segment_root, payload)
+    return segment_root, reservation, payload
+
+
+def _run_attempt_recovery_segment(
+    arguments: argparse.Namespace,
+    *,
+    _lease: CampaignLease | None = None,
+    _manifest: dict[str, Any] | None = None,
+    _deadline: incremental_recovery.WallClockDeadline | None = None,
+) -> dict[str, Any]:
+    """``capture-candidate run --attempt-recovery ar<k>``：当前 attempt-recovery 基线的恢复段。"""
+
+    recovery_revision = _require_recovery_revision(getattr(arguments, "attempt_recovery", None))
+    campaign_dir = arguments.campaign_dir
+    candidate_id = str(getattr(arguments, "candidate_id", "") or "")
+    if _lease is None and _ACTIVE_CAMPAIGN_LEASE is not None:
+        active = _ACTIVE_CAMPAIGN_LEASE
+        if not _lease_identity_matches(active, campaign_dir, phase="candidate", candidate_id=candidate_id):
+            raise ConfigurationError("恢复段与当前 Campaign lease 的 phase／candidate 不一致。")
+        _lease = active
+        _manifest = _manifest or _require_formal_campaign(campaign_dir)
+        _deadline = _bind_attempt_deadline_metadata(_deadline or active.deadline, "candidate")
+    if _lease is None:
+        manifest = _manifest or _require_formal_campaign(campaign_dir)
+        deadline = _deadline or _attempt_deadline(arguments, "candidate")
+        with CampaignLease(
+            campaign_dir,
+            phase="candidate",
+            candidate_id=candidate_id,
+            deadline=deadline,
+            command="capture-candidate",
+            allow_stale_recovery=bool(getattr(arguments, "rerun_failed", False)),
+            campaign_id=str(manifest.get("campaign_id", "")),
+        ) as lease:
+            return _run_attempt_recovery_segment(arguments, _lease=lease, _manifest=manifest, _deadline=deadline)
+
+    manifest = _manifest or _require_formal_campaign(campaign_dir)
+    if not _requires_complete_vc_artifacts(manifest):
+        raise ConfigurationError("attempt 恢复段只用于 0.154.0 起的完整 VC 链 Campaign。")
+    _guard_candidate_revision_write(campaign_dir, manifest, candidate_id, action="capture-candidate run")
+    manifest = _apply_candidate_runtime_override(campaign_dir, manifest, candidate_id)
+    _reject_contaminated_campaign(campaign_dir)
+    deadline = _bind_attempt_deadline_metadata(_deadline or _attempt_deadline(arguments, "candidate"), "candidate")
+    if getattr(arguments, "rerun_failed", False):
+        raise ConfigurationError("恢复段内续跑（resume --rerun-failed --attempt-recovery）在段内中断对账后另行提供。")
+
+    baseline, commit, recovery = _current_attempt_recovery_baseline(campaign_dir, candidate_id, recovery_revision)
+    attempt_id = str(recovery["attempt_id"])
+    attempt_root, original_attempt = _load_capture_attempt(campaign_dir, "candidate", candidate_id, attempt_id)
+    original_reservation = _load_capture_reservation(
+        campaign_dir, attempt_root, phase="candidate", candidate_id=candidate_id, _manifest=manifest
+    )
+    if original_attempt.get("status") != ATTEMPT_RECOVERY_SUCCESS_STATUS:
+        raise ConfigurationError(f"原 attempt {attempt_id} 状态为 {original_attempt.get('status')}，只有 awaiting_receipts 且已封存的 attempt 可开恢复段。")
+    previous_source = _stage_read_source(campaign_dir, candidate_id, int(recovery["previous_baseline"]), "capture-candidate")
+    if previous_source["status"] != "complete":
+        raise ConfigurationError("前序基线的 capture-candidate 阶段尚未封存，禁止开恢复段。")
+    identity = original_attempt.get("identity")
+    if not isinstance(identity, dict):
+        raise ConfigurationError("原 attempt 缺少候选身份。")
+    _verify_candidate_attempt_identity(manifest, identity)
+    tool_identity = _tool_identity(include_git=False)
+
+    all_jobs = _campaign_jobs(
+        campaign_dir,
+        manifest,
+        "candidate",
+        candidate_id=candidate_id,
+        runtime_image=identity.get("image_reference"),
+        profile_id=identity.get("profile_id"),
+        profile_digest=identity.get("profile_digest"),
+        build_id=identity.get("build_id"),
+        deployed_version=identity.get("deployed_version"),
+        candidate_image_id=identity.get("image_id"),
+        source_tree_sha256=identity.get("source_tree_sha256"),
+        candidate_purpose=identity.get("candidate_purpose"),
+    )
+    source_jobs = {job.job_id: job for job in all_jobs}
+    execute_ids = list(recovery["execute_jobs"])
+    missing = sorted(set(execute_ids) - set(source_jobs))
+    if missing:
+        raise ConfigurationError(f"恢复基线冻结的 execute_jobs 不在候选 Job 全集内：{missing}")
+    original_results = {
+        str(item.get("id")): item for item in original_attempt.get("results", []) if isinstance(item, Mapping)
+    }
+    if set(execute_ids) | set(recovery["reuse_jobs"]) != set(original_results):
+        raise ConfigurationError("恢复基线的 execute_jobs ∪ reuse_jobs 必须恰好等于原 attempt 的 Job 全集。")
+    jobs = [_relocate_job_for_recovery(source_jobs[job_id], recovery_revision) for job_id in execute_ids]
+    _verify_execution_tree(getattr(arguments, "capture_root", None))
+    _validate_candidate_admin_credential(jobs)
+    _require_capture_budget_before_data_action(deadline, operation="attempt-recovery:reservation-admission", reservation=True)
+    segment_root, reservation = _reserve_attempt_recovery(
+        campaign_dir,
+        manifest=manifest,
+        candidate_id=candidate_id,
+        attempt_root=attempt_root,
+        original_attempt=original_attempt,
+        original_reservation=original_reservation,
+        recovery=recovery,
+        baseline=baseline,
+        baseline_commit_sha256=str(commit["commit_sha256"]),
+        jobs=jobs,
+        source_jobs=source_jobs,
+        identity=identity,
+        lease=_lease,
+        deadline=deadline,
+    )
+    ledger_dir = _campaign_timing_ledger_dir(campaign_dir, manifest)
+    revision = _current_candidate_revision(campaign_dir, manifest)
+    previous_stage = _read_json(Path(previous_source["path"]), "前序 capture-candidate 阶段结果")
+    ledger_events: list[dict[str, Any]] = []
+    try:
+        with codex_upgrade_supervisor._timing_closeout_lock(ledger_dir):
+            ledger_events.extend(
+                _backfill_original_attempt_ledger_events(
+                    ledger_dir,
+                    attempt_id=attempt_id,
+                    live_request_count=int(previous_stage.get("live_request_count", 0) or 0),
+                )
+            )
+            ledger_events.append(
+                _append_attempt_recovery_ledger_event(
+                    ledger_dir,
+                    event_type="attempt_recovery_started",
+                    attempt_id=attempt_id,
+                    recovery_revision=recovery_revision,
+                    candidate_id=candidate_id,
+                    revision=revision,
+                    root_cause_id=str(recovery["root_cause_id"]),
+                    next_action=f"执行恢复段 {recovery_revision}：{'、'.join(execute_ids)}",
+                )
+            )
+    except (codex_upgrade_timing_ledger.TimingLedgerError, codex_upgrade_supervisor.SupervisorError) as error:
+        raise ConfigurationError(f"UpgradeTimingLedger 拒绝登记恢复段开段：{error}") from error
+
+    log_root = ensure_private_directory(segment_root / "logs", campaign_dir)
+    evidence_root = ensure_private_directory(segment_root / "evidence", campaign_dir)
+    environment_root = ensure_private_directory(evidence_root / "environment", evidence_root)
+    heartbeat_path = segment_root / "watchdog-heartbeat.json"
+    checkpoint_store = _job_checkpoint_store(segment_root)
+    _write_attempt_heartbeat(heartbeat_path, deadline, operation="attempt-recovery:reserved", force=True, attempt_root=segment_root)
+
+    def heartbeat(operation: str) -> None:
+        _write_attempt_heartbeat(heartbeat_path, deadline, operation=operation, attempt_root=segment_root)
+
+    results: list[dict[str, Any]] = []
+    execution_error: BaseException | None = None
+    restoration_error: BaseException | None = None
+    before_manifest: dict[str, Any] | None = None
+    after_manifest: dict[str, Any] | None = None
+    restoration_path: Path | None = None
+    restoration_receipt: dict[str, Any] | None = None
+    arm64_before_path: Path | None = None
+    arm64_before_receipt: dict[str, Any] | None = None
+    arm64_after_path: Path | None = None
+    arm64_after_receipt: dict[str, Any] | None = None
+    timeout_checkpoint_path: Path | None = None
+    try:
+        deadline.check("attempt-recovery:before")
+        arm64_before_path, arm64_before_receipt = _invoke_with_optional_deadline(
+            _capture_arm64_environment_receipt,
+            environment_root / "arm64-before",
+            phase="attempt_before",
+            subject_id=f"{attempt_id}.{recovery_revision}",
+            deadline=deadline,
+            heartbeat=heartbeat,
+        )
+        deadline.check("attempt-recovery:before-probe")
+        before_manifest = _invoke_with_optional_deadline(
+            _probe_capture_environment, manifest, environment_root / "before", "before", deadline=deadline, heartbeat=heartbeat
+        )
+        scenario_context = ScenarioReceiptContext(
+            campaign_id=str(manifest["campaign_id"]),
+            attempt_id=f"{attempt_id}.{recovery_revision}",
+            run_nonce=str(reservation["run_nonce"]),
+            evidence_root=evidence_root,
+            campaign_dir=campaign_dir,
+        )
+        for job in jobs:
+            _require_capture_budget_before_data_action(deadline, operation=f"job:{job.job_id}:admission")
+            heartbeat(f"job:{job.job_id}:start")
+            result = _run_job_with_retry(
+                job, log_root, scenario_context, identity=identity, tool_identity=tool_identity, deadline=deadline, heartbeat=heartbeat
+            )
+            results.append(result)
+            records = checkpoint_store.records()
+            checkpoint_store.append(
+                {
+                    "checkpoint_schema_version": JOB_CHECKPOINT_SCHEMA,
+                    "campaign_id": manifest["campaign_id"],
+                    "phase": "candidate",
+                    "attempt_id": f"{attempt_id}.{recovery_revision}",
+                    "run_nonce": reservation["run_nonce"],
+                    "item_id": job.job_id,
+                    "status": "complete" if result.get("status") == "complete" else "failed",
+                    "disposition": result.get("disposition", "executed"),
+                    "result_sha256": incremental_recovery.digest(result),
+                    "result_key": result.get("incremental_result_key"),
+                    "result": result,
+                    "previous_checkpoint_sha256": records[-1].get("checkpoint_sha256") if records else None,
+                }
+            )
+            _secure_write_json_once(segment_root / f"job-{job.job_id}.json", result)
+            _write_attempt_heartbeat(
+                heartbeat_path, deadline, operation=f"job:{job.job_id}:complete", last_completed_job_id=job.job_id, force=True, attempt_root=segment_root
+            )
+            if result.get("error") == CAMPAIGN_GLOBAL_PRECONDITION_ERROR:
+                raise CampaignGlobalPreconditionError("Campaign 全局前置条件失败，已停止恢复段后续 Job。")
+    except BaseException as error:
+        if execution_error is None:
+            execution_error = error
+    finally:
+        try:
+            if not deadline.expired:
+                deadline.check("attempt-recovery:after-probe")
+                after_manifest = _invoke_with_optional_deadline(
+                    _probe_capture_environment, manifest, environment_root / "after", "after", deadline=deadline, heartbeat=heartbeat
+                )
+                deadline.check("attempt-recovery:restoration")
+                restoration_path, restoration_receipt = _finalize_attempt_restoration(
+                    evidence_root, phase="candidate", candidate_id=candidate_id
+                )
+        except BaseException as error:
+            restoration_error = error
+        try:
+            if not deadline.expired:
+                deadline.check("attempt-recovery:arm64-after")
+                arm64_after_path, arm64_after_receipt = _invoke_with_optional_deadline(
+                    _capture_arm64_environment_receipt,
+                    environment_root / "arm64-after",
+                    phase="attempt_after",
+                    subject_id=f"{attempt_id}.{recovery_revision}",
+                    deadline=deadline,
+                    heartbeat=heartbeat,
+                )
+                if (
+                    arm64_before_receipt is None
+                    or arm64_before_receipt.get("continuity_identity_sha256") != arm64_after_receipt.get("continuity_identity_sha256")
+                ):
+                    raise ConfigurationError("恢复段前后 ARM64 网络或运行身份漂移。")
+        except BaseException as error:
+            if restoration_error is None:
+                restoration_error = error
+
+    if isinstance(execution_error, incremental_recovery.WallClockTimeoutError) or deadline.expired:
+        try:
+            _write_attempt_heartbeat(heartbeat_path, deadline, operation="attempt-recovery:timeout", force=True, allow_expired=True, attempt_root=segment_root)
+            timeout_checkpoint_path = _write_timeout_checkpoint(
+                segment_root,
+                deadline,
+                operation=(
+                    execution_error.operation
+                    if isinstance(execution_error, incremental_recovery.WallClockTimeoutError)
+                    else "attempt-recovery:deadline"
+                ),
+                last_completed_job_id=getattr(deadline, "last_completed_job_id", None),
+            )
+        except BaseException as error:
+            if execution_error is None:
+                execution_error = error
+
+    result_by_id = {item.get("id"): item for item in results if isinstance(item, dict)}
+    required_jobs_ok = execution_error is None and all(
+        result_by_id.get(job.job_id, {}).get("status") == "complete"
+        and result_by_id[job.job_id].get("execution_sha256") == _job_execution_sha256(job)
+        for job in jobs
+    )
+    try:
+        job_evidence_roots = _deduplicate_evidence_roots(
+            (Path(root) for item in results for root in item.get("evidence_roots", [])),
+            require_nonempty=required_jobs_ok,
+        )
+    except ConfigurationError as error:
+        if execution_error is None:
+            execution_error = error
+        required_jobs_ok = False
+        job_evidence_roots = []
+    evidence_roots = _deduplicate_evidence_roots([*job_evidence_roots, evidence_root, log_root], require_nonempty=False)
+    environment: dict[str, Any] = {
+        "evidence_root": str(evidence_root.resolve(strict=True)),
+        "before_probe": _attempt_evidence_binding(evidence_root, environment_root / "before" / "probe-manifest.json") if before_manifest is not None else None,
+        "after_probe": _attempt_evidence_binding(evidence_root, environment_root / "after" / "probe-manifest.json") if after_manifest is not None else None,
+        "restoration_report": _attempt_evidence_binding(evidence_root, restoration_path) if restoration_path is not None and restoration_receipt is not None else None,
+        "arm64_before_receipt": _attempt_evidence_binding(evidence_root, arm64_before_path) if arm64_before_path is not None and arm64_before_receipt is not None else None,
+        "arm64_after_receipt": _attempt_evidence_binding(evidence_root, arm64_after_path) if arm64_after_path is not None and arm64_after_receipt is not None else None,
+    }
+    contamination: dict[str, Any] | None = None
+    if before_manifest is not None and restoration_error is not None:
+        contamination = {
+            "schema_version": "codex-upgrade-environment-contamination/v1",
+            "phase": "candidate",
+            "candidate_id": candidate_id,
+            "attempt_id": f"{attempt_id}.{recovery_revision}",
+            "reason": f"恢复段独立 after 探针或恢复 finalizer 未通过：{type(restoration_error).__name__}",
+        }
+    checkpoint_records = checkpoint_store.records()
+    job_checkpoint = {
+        "schema_version": JOB_CHECKPOINT_SCHEMA,
+        "campaign_id": manifest["campaign_id"],
+        "phase": "candidate",
+        "attempt_id": f"{attempt_id}.{recovery_revision}",
+        "run_nonce": reservation["run_nonce"],
+        "path": str(checkpoint_store.root.resolve(strict=True).relative_to(campaign_dir.resolve(strict=True))),
+        "record_count": len(checkpoint_records),
+        "last_sequence": checkpoint_records[-1].get("checkpoint_sequence") if checkpoint_records else None,
+        "last_sha256": checkpoint_records[-1].get("checkpoint_sha256") if checkpoint_records else None,
+    }
+    watchdog = {
+        "schema_version": WATCHDOG_HEARTBEAT_SCHEMA,
+        "budget_seconds": deadline.budget_seconds,
+        "heartbeat_seconds": getattr(deadline, "heartbeat_seconds", DEFAULT_HEARTBEAT_SECONDS),
+        "elapsed_seconds": round(deadline.elapsed_seconds, 3),
+        "remaining_seconds": round(deadline.remaining_seconds, 3),
+        "heartbeat": (
+            {"path": str(heartbeat_path.relative_to(campaign_dir)), "sha256": file_sha256(heartbeat_path), "bytes": heartbeat_path.stat().st_size}
+            if heartbeat_path.is_file() and not heartbeat_path.is_symlink()
+            else None
+        ),
+        "timeout_checkpoint": (
+            {"path": str(timeout_checkpoint_path.relative_to(campaign_dir)), "sha256": file_sha256(timeout_checkpoint_path), "bytes": timeout_checkpoint_path.stat().st_size}
+            if timeout_checkpoint_path is not None and timeout_checkpoint_path.is_file()
+            else None
+        ),
+        "last_completed_job_id": getattr(deadline, "last_completed_job_id", None),
+    }
+    failed_result_ids = _failed_job_ids(results)
+    status = (
+        "environment_contaminated"
+        if contamination is not None
+        else ATTEMPT_RECOVERY_SUCCESS_STATUS
+        if required_jobs_ok and not failed_result_ids and restoration_receipt is not None
+        else "failed"
+    )
+    evidence_permission_closeout: dict[str, Any] | None = None
+    evidence_permission_error: BaseException | None = None
+    try:
+        evidence_permission_closeout = _close_attempt_evidence_permissions(segment_root, evidence_roots)
+    except BaseException as error:
+        evidence_permission_error = error
+        if execution_error is None:
+            execution_error = error
+        if status != "environment_contaminated":
+            status = "failed"
+    summary = _write_attempt_recovery_summary(
+        campaign_dir,
+        segment_root,
+        reservation,
+        {
+            "campaign_id": manifest["campaign_id"],
+            "phase": "candidate",
+            "candidate_id": candidate_id,
+            "status": status,
+            "tool_components": tool_identity.get("components") if isinstance(tool_identity, Mapping) else None,
+            "identity": identity,
+            "execute_jobs": list(execute_ids),
+            "reuse_jobs": list(recovery["reuse_jobs"]),
+            "results": results,
+            "evidence_roots": [str(root) for root in evidence_roots],
+            "evidence_permission_closeout": evidence_permission_closeout,
+            "evidence_permission_error": (
+                {"type": type(evidence_permission_error).__name__, "message": str(evidence_permission_error)[:1000]}
+                if evidence_permission_error is not None
+                else None
+            ),
+            "environment": environment,
+            "watchdog": watchdog,
+            "job_checkpoint": job_checkpoint,
+            "ledger_events": ledger_events,
+            "execution_error": (
+                {"type": type(execution_error).__name__, "message": str(execution_error)[:1000]} if execution_error is not None else None
+            ),
+            "restoration_error": (
+                {"type": type(restoration_error).__name__, "message": str(restoration_error)[:1000]} if restoration_error is not None else None
+            ),
+            "next_gate": (
+                "account-sealed-candidate --attempt-recovery 后执行 capture-candidate seal --attempt-recovery（增量封存）。"
+                if status == ATTEMPT_RECOVERY_SUCCESS_STATUS
+                else "reconcile-attempt --recovery-revision 对账后按判定续跑或停线。"
+            ),
+        },
+    )
+    if status == ATTEMPT_RECOVERY_SUCCESS_STATUS:
+        try:
+            with codex_upgrade_supervisor._timing_closeout_lock(ledger_dir):
+                ledger_events.append(
+                    _append_attempt_recovery_ledger_event(
+                        ledger_dir,
+                        event_type="attempt_recovery_completed",
+                        attempt_id=attempt_id,
+                        recovery_revision=recovery_revision,
+                        candidate_id=candidate_id,
+                        revision=revision,
+                        live_request_count=0,
+                        next_action="恢复段完成；入账后增量封存",
+                    )
+                )
+        except (codex_upgrade_timing_ledger.TimingLedgerError, codex_upgrade_supervisor.SupervisorError) as error:
+            raise ConfigurationError(f"UpgradeTimingLedger 拒绝登记恢复段完成：{error}") from error
+    if contamination is not None:
+        try:
+            _secure_write_json_once(campaign_dir / "environment-contaminated.json", contamination)
+        except (ConfigurationError, OSError):
+            pass
+        raise RuntimeError(contamination["reason"])
+    if execution_error is not None:
+        raise execution_error
+    return {
+        "status": status,
+        "phase": "candidate",
+        "candidate_id": candidate_id,
+        "attempt_id": attempt_id,
+        "recovery_revision": recovery_revision,
+        "evaluation_baseline": baseline,
+        "segment": str(segment_root),
+        "attempt_recovery_digest": summary["attempt_recovery_digest"],
+        "run_nonce": reservation["run_nonce"],
+        "started_at_utc": reservation["started_at_utc"],
+        "execute_jobs": list(execute_ids),
+        "reuse_jobs": list(recovery["reuse_jobs"]),
+        "results": results,
+        "ledger_events": ledger_events,
+        "next_command": (
+            f"account-sealed-candidate --candidate-id {candidate_id} --attempt-recovery {recovery_revision}"
+            if status == ATTEMPT_RECOVERY_SUCCESS_STATUS
+            else f"reconcile-attempt --attempt-id {attempt_id} --recovery-revision {recovery_revision}"
+        ),
+    }
+
+
+
 def _run_capture_attempt(
     arguments: argparse.Namespace,
     phase: str,
@@ -42151,6 +43164,10 @@ def _run_capture_attempt(
     _deadline: incremental_recovery.WallClockDeadline | None = None,
 ) -> dict[str, Any]:
     """执行真实抓包，并以独立前后探针自动证明环境恢复。"""
+
+    # 改造 5 M2：恢复段入口（同 attempt 只补跑 execute_jobs），与普通 run 互斥。
+    if phase == "candidate" and getattr(arguments, "attempt_recovery", None):
+        return _run_attempt_recovery_segment(arguments, _lease=_lease, _manifest=_manifest, _deadline=_deadline)
 
     # main/resume 已经取得 Campaign lease 时，递归入口必须复用同一 owner；
     # 再次 acquire 会在同一进程内触发 flock 死锁/误报，并破坏单一 deadline。

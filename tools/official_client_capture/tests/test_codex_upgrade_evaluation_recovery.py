@@ -23,6 +23,7 @@ import sys
 import tempfile
 import time
 import unittest
+from typing import Callable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
@@ -60,6 +61,10 @@ def _sha(path: Path) -> str:
 class _EvaluationChainMixin(_ChainMixin):
     """在 VC 链夹具上合成候选 attempt、两侧 bundle、批准画像与断言批次动作计划。"""
 
+    # M2：子类可指定合成候选 Job 的步骤工厂 (job_id, evidence_root) -> steps，让恢复段真实执行并写证据；
+    # 默认保持 M1 的占位步骤。
+    candidate_job_steps: Callable[[str, str], tuple[dict, ...]] | None = None
+
     def _prepare_candidate(self, fixture: dict, root: Path) -> dict:
         campaign_dir = Path(str(fixture["campaign_dir"]))
         profile = json.loads(json.dumps(e2e.PROFILE))
@@ -73,16 +78,18 @@ class _EvaluationChainMixin(_ChainMixin):
         rules_path.write_text(json.dumps(rule_manifest, ensure_ascii=False), encoding="utf-8")
         for path in (profile_path, rules_path):
             path.chmod(0o600)
-        # 证据根必须落在宿主数据根内（provenance 按冻结 CAPTURE_ROOT／宿主数据根映射）：bundle 建在 Campaign 目录下。
+        # 证据根必须落在宿主数据根内（provenance 按冻结 CAPTURE_ROOT／宿主数据根映射）：bundle 建在 Campaign 目录下
+        # （M2 恢复段用例改放到宿主 runs 根下，见 _candidate_evidence_parent）。
         official = self._bundle(campaign_dir / "official-evidence-eval", surface="codex", candidate_side=False)
-        candidate = self._bundle(campaign_dir / "candidate-evidence", surface="other", candidate_side=True)
+        candidate_parent = self._candidate_evidence_parent(fixture, campaign_dir)
+        candidate = self._bundle(candidate_parent, surface="other", candidate_side=True)
         job_ids = _candidate_job_ids(fixture)
         self.assertTrue(job_ids)  # type: ignore[attr-defined]
         # 首个候选 Job 的证据根就是候选 bundle 的来源根（目录名 run，与 provenance source_root 对应）。
-        evidence_roots = {job_ids[0]: str(campaign_dir / "candidate-evidence" / "run")}
+        evidence_roots = {job_ids[0]: str(candidate_parent / "run")}
         for extra in job_ids[1:]:
-            (campaign_dir / "candidate-evidence" / f"run-{extra}").mkdir(exist_ok=True)
-            evidence_roots[extra] = str(campaign_dir / "candidate-evidence" / f"run-{extra}")
+            (candidate_parent / f"run-{extra}").mkdir(exist_ok=True)
+            evidence_roots[extra] = str(candidate_parent / f"run-{extra}")
         attempt_root, attempt = self._completed_candidate_attempt(fixture, evidence_roots=evidence_roots)
         # b0 候选阶段结果文件真实落盘（stage_sources.capture-candidate 的 reused 引用按其规范路径与摘要绑定）；
         # 其字段级语义由 _load_stage_result 的合成对象提供。
@@ -99,19 +106,29 @@ class _EvaluationChainMixin(_ChainMixin):
             "attempt": attempt,
         }
 
+    def _candidate_evidence_parent(self, fixture: dict, campaign_dir: Path) -> Path:
+        """候选 bundle／Job 证据根的父目录；默认在 Campaign 目录下，子类可改到宿主 runs 根。"""
+
+        return campaign_dir / "candidate-evidence"
+
     def _completed_candidate_attempt(self, fixture: dict, *, evidence_roots: dict[str, str]) -> tuple[Path, dict]:
         """按正式预约与封存合同发布 Job 全部 complete、等待 seal 收据的候选 attempt（同 B0 夹具，候选为 R1）。"""
 
         campaign_dir = Path(str(fixture["campaign_dir"]))
         manifest = fixture["manifest"]
         identity = {"candidate_purpose": manifest["campaign_purpose"]}
+        steps_factory = type(self).candidate_job_steps
         jobs = [
             Job(
                 job_id=job_id,
                 phase="candidate",
                 suites=("full",),
                 description=f"合成候选 Job {job_id}",
-                steps=({"argv": ["bash", f"{job_id}.sh"]},),
+                steps=(
+                    steps_factory(job_id, evidence_roots[job_id])
+                    if steps_factory is not None
+                    else ({"argv": ["bash", f"{job_id}.sh"]},)
+                ),
                 evidence_roots=(evidence_roots[job_id],),
                 covers=(),
                 scenario_ids=("A03",),
