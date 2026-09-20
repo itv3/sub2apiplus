@@ -29,6 +29,23 @@ CANDIDATE_ID = "candidate-r1"
 RULES = ("SPEC-H1-001", "SPEC-EP-006")
 TARGET_VERSION = "0.154.0"
 CRASH_EXIT_CODE = 137
+# C1 动作级崩溃注入：accept 动作仍是真实 CLI（同一 argv 交给 codex_upgrade.main），只是子进程内在
+# 崩溃开关文件（argv[1]）存在时把 VC-5 completion 的写出点换成 SIGKILL 语义——AcceptanceFact 与证据
+# 封印已落盘、completion 未写；父 run 因此按 action-failed 进入正式 stop-receipt／对账／重派链。
+# 开关放在文件而不是命令里：环境恢复重派合同要求与原批次**逐字相同**的 actions，两次派发的命令因此
+# 一致，只是续跑前删掉开关文件。
+ACCEPT_WRAPPER_SCRIPT = (
+    "import os, sys\n"
+    "from unittest import mock\n"
+    "from tools.official_client_capture import codex_upgrade\n"
+    "def crash(*args, **kwargs):\n"
+    f"    os._exit({CRASH_EXIT_CODE})\n"
+    "if os.path.exists(sys.argv[1]):\n"
+    "    with mock.patch.object(codex_upgrade, '_complete_vc_with_receipt', side_effect=crash):\n"
+    "        raise SystemExit(codex_upgrade.main(sys.argv[2:]))\n"
+    "raise SystemExit(codex_upgrade.main(sys.argv[2:]))\n"
+)
+ACCEPT_CRASH_FLAG = "accept-completion-crash.flag"
 
 
 def _assert_tree_binding() -> Path:
@@ -452,10 +469,21 @@ def _actions(state: dict[str, Any], arguments: argparse.Namespace) -> list[dict[
         elif kind == "accept":
             if not state.get("gate_root"):
                 raise SystemExit("accept 动作前必须先在本副本树上执行 gate 阶段生成外部门禁收据。")
-            command = [
-                sys.executable, cli, "accept", "--campaign-dir", str(campaign_dir), "--candidate-id", candidate_id,
+            cli_arguments = [
+                "accept", "--campaign-dir", str(campaign_dir), "--candidate-id", candidate_id,
                 "--external-gate-root", state["gate_root"], "--external-gate-receipt", state["gate_receipt"],
             ]
+            if getattr(arguments, "accept_wrapper", False):
+                flag = Path(state["root"]) / ACCEPT_CRASH_FLAG
+                if getattr(arguments, "crash_at", "") == "accept-completion":
+                    flag.write_text("crash\n", encoding="utf-8")
+                elif flag.exists():
+                    flag.unlink()
+                command = [sys.executable, "-c", ACCEPT_WRAPPER_SCRIPT, str(flag), *cli_arguments]
+            elif getattr(arguments, "crash_at", "") == "accept-completion":
+                raise SystemExit("accept-completion 崩溃点需要 --accept-wrapper（两次派发命令逐字相同）。")
+            else:
+                command = [sys.executable, cli, *cli_arguments]
         else:
             raise SystemExit(f"未知动作：{kind}")
         actions.append({"action_id": action_id, "operation": f"VC-5:{kind}", "timeout_seconds": 900, "command": command, "item_ids": [item_ids[kind]]})
@@ -503,6 +531,8 @@ def stage_dispatch(arguments: argparse.Namespace) -> dict[str, Any]:
     elif arguments.crash_at == "before-binding":
         # R2-b：只有诊断落盘、动作输出绑定未写。
         patches.append(_crash_patch(supervisor, "write_action_output_binding"))
+    elif arguments.crash_at == "accept-completion":
+        pass  # C1：崩溃点在 accept 动作子进程内（见 _actions），父监督器不打补丁。
     elif arguments.crash_at:
         raise SystemExit(f"dispatch 不支持崩溃点：{arguments.crash_at}")
     for patcher in patches:
@@ -677,6 +707,7 @@ def _parser() -> argparse.ArgumentParser:
     init.add_argument("--no-candidate-identity", action="store_true")
     dispatch = subparsers.add_parser("dispatch")
     dispatch.add_argument("--sequence", type=int, default=None)
+    dispatch.add_argument("--accept-wrapper", action="store_true")
     dispatch.add_argument("--tag", required=True)
     dispatch.add_argument("--actions", nargs="+", required=True, choices=("compare", "assert", "accept"))
     dispatch.add_argument("--baseline", type=int, default=0)

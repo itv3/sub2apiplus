@@ -29101,6 +29101,51 @@ def _validate_stage_contract(document: dict[str, Any]) -> None:
             raise ConfigurationError("验收阶段必须显式记录 accepted_not_activated。")
 
 
+def _stage_result_document(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    canonical: str,
+    payload: Mapping[str, Any],
+    *,
+    candidate_id: str | None,
+) -> dict[str, Any]:
+    """阶段结果的规范文档（封存前形态）：payload 加 Campaign 信封字段。
+
+    ``save_stage_result`` 在此之上再补证据清单、``sealed_at_utc`` 与 ``package_digest``；
+    accept 的 C1 续跑用同一构造与既有封存文档做整份比较，两处不得各写一份。
+    """
+
+    document = dict(payload)
+    for field in ("campaign_mode", "campaign_purpose"):
+        provided = document.get(field)
+        if provided is not None and provided != manifest[field]:
+            raise ConfigurationError(f"阶段收据 {field} 与 Campaign 不一致。")
+        document[field] = manifest[field]
+    expected_candidate_purpose = (
+        manifest["campaign_purpose"]
+        if canonical in {"capture-candidate", "compare", "accept"}
+        else None
+    )
+    if document.get("candidate_purpose") not in {
+        None,
+        expected_candidate_purpose,
+    }:
+        raise ConfigurationError("阶段收据 candidate purpose 与 Campaign 不一致。")
+    document["candidate_purpose"] = expected_candidate_purpose
+    result_schema = document.pop("schema_version", None)
+    document["schema_version"] = STAGE_SCHEMA
+    if result_schema and result_schema != STAGE_SCHEMA:
+        document["result_schema_version"] = result_schema
+    document["stage"] = canonical
+    document["campaign_id"] = manifest["campaign_id"]
+    if candidate_id is not None:
+        document["candidate_id"] = candidate_id
+    document["campaign_manifest_sha256"] = file_sha256(
+        campaign_dir / "campaign.json"
+    )
+    return document
+
+
 def save_stage_result(
     campaign_dir: Path,
     stage: str,
@@ -29137,23 +29182,9 @@ def save_stage_result(
     if path.parent.exists() and path.parent.is_symlink():
         raise ConfigurationError(f"阶段目录不可信：{path.parent}")
     ensure_private_directory(path.parent, campaign_dir)
-    document = dict(payload)
-    for field in ("campaign_mode", "campaign_purpose"):
-        provided = document.get(field)
-        if provided is not None and provided != manifest[field]:
-            raise ConfigurationError(f"阶段收据 {field} 与 Campaign 不一致。")
-        document[field] = manifest[field]
-    expected_candidate_purpose = (
-        manifest["campaign_purpose"]
-        if canonical in {"capture-candidate", "compare", "accept"}
-        else None
+    document = _stage_result_document(
+        campaign_dir, manifest, canonical, payload, candidate_id=candidate_id
     )
-    if document.get("candidate_purpose") not in {
-        None,
-        expected_candidate_purpose,
-    }:
-        raise ConfigurationError("阶段收据 candidate purpose 与 Campaign 不一致。")
-    document["candidate_purpose"] = expected_candidate_purpose
     evidence_roots = [Path(value) for value in document.get("evidence_roots", [])]
     has_evidence_manifest = isinstance(document.get("evidence_manifest"), dict)
     if canonical in {"capture-official", "capture-candidate"} and evidence_roots:
@@ -29168,17 +29199,6 @@ def save_stage_result(
             security = document.setdefault("security", _evidence_security(evidence_roots))
             if not security.get("known_secret_scan_passed"):
                 raise ConfigurationError(f"{canonical} 证据秘密扫描未通过。")
-    result_schema = document.pop("schema_version", None)
-    document["schema_version"] = STAGE_SCHEMA
-    if result_schema and result_schema != STAGE_SCHEMA:
-        document["result_schema_version"] = result_schema
-    document["stage"] = canonical
-    document["campaign_id"] = manifest["campaign_id"]
-    if candidate_id is not None:
-        document["candidate_id"] = candidate_id
-    document["campaign_manifest_sha256"] = file_sha256(
-        campaign_dir / "campaign.json"
-    )
     with _campaign_lock(campaign_dir):
         _reject_contaminated_campaign(campaign_dir)
         _reject_symlink_components(path.parent, campaign_dir, f"{canonical} 阶段目录")
@@ -51775,6 +51795,53 @@ def _replay_bound_candidate_external_gate(
     return payload
 
 
+def _verify_sealed_acceptance_identical(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    candidate_id: str,
+    acceptance_path: Path,
+    result: Mapping[str, Any],
+) -> None:
+    """C1 续跑：既有封存验收结果必须与本次重放构成的规范文档**整份**相等。
+
+    规范文档由 ``_stage_result_document`` 按 ``save_stage_result`` 的同一构造得出；既有文档只允许
+    多出封存步骤自己附加的两个字段（``sealed_at_utc``、``package_digest``），且 ``package_digest``
+    必须等于按封存算法对既有文档复算的摘要。任何字段缺失、多出、不同（含 ``campaign_manifest_sha256``）
+    或封存摘要不自洽都失败关闭，不做逐字段放宽。
+    """
+
+    existing = _read_json(acceptance_path, "已封存验收结果")
+    expected = _stage_result_document(
+        campaign_dir,
+        manifest,
+        "accept",
+        json.loads(json.dumps(result, ensure_ascii=False, sort_keys=True)),
+        candidate_id=candidate_id,
+    )
+    sealed_at = existing.get("sealed_at_utc")
+    package_digest = existing.get("package_digest")
+    if not isinstance(sealed_at, str) or not isinstance(package_digest, str):
+        raise ConfigurationError("验收结果已经封存但缺少封存时间或 package digest，禁止续跑。")
+    stripped = {
+        key: value
+        for key, value in existing.items()
+        if key not in {"sealed_at_utc", "package_digest"}
+    }
+    if _fingerprint({**stripped, "sealed_at_utc": sealed_at}) != package_digest:
+        raise ConfigurationError("验收结果已经封存但 package digest 与内容不符，禁止续跑。")
+    if stripped != expected:
+        missing = sorted(set(expected) - set(stripped))
+        extra = sorted(set(stripped) - set(expected))
+        changed = sorted(
+            key for key in set(expected) & set(stripped) if expected[key] != stripped[key]
+        )
+        raise ConfigurationError(
+            "验收结果已经封存且与本次重放不完全一致，禁止续跑："
+            f"缺失={missing[:8]}，多余={extra[:8]}，不同={changed[:8]}"
+        )
+    _validate_stage_contract(existing)
+
+
 def accept_campaign(
     campaign_dir: Path,
     candidate_id: str,
@@ -52111,26 +52178,9 @@ def accept_campaign(
         # 仍失败关闭。
         _, acceptance_path = _stage_path(campaign_dir, "accept", candidate_id, mode="write")
         if acceptance_path.is_file() and not acceptance_path.is_symlink():
-            existing_acceptance = _read_json(acceptance_path, "已封存验收结果")
-            # 封存文档由 save_stage_result 把 schema_version 改写为阶段 schema、原值移到
-            # result_schema_version，其余字段逐一按 JSON 归一化后比较。
-            expected_document = {
-                **json.loads(json.dumps(result, ensure_ascii=False, sort_keys=True)),
-                "schema_version": STAGE_SCHEMA,
-                "result_schema_version": ACCEPTANCE_SCHEMA,
-                "stage": "accept",
-                "candidate_id": candidate_id,
-                "campaign_id": manifest["campaign_id"],
-            }
-            drifted = sorted(
-                key
-                for key, value in expected_document.items()
-                if existing_acceptance.get(key) != value
+            _verify_sealed_acceptance_identical(
+                campaign_dir, manifest, candidate_id, acceptance_path, result
             )
-            if drifted:
-                raise ConfigurationError(
-                    "验收结果已经封存且内容不同，禁止覆盖：" + "、".join(drifted[:8])
-                )
         else:
             acceptance_path = save_stage_result(
                 campaign_dir,
