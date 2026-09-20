@@ -1889,6 +1889,9 @@ def _run_facts(run_dir: Path, campaign_dir: Path, manifest: Mapping[str, Any]) -
                 "path": diagnostic_path.relative_to(run_dir).as_posix(),
                 "sha256": diagnostic["diagnostic_sha256"],
                 "action_id": action_id,
+                # 失败动作的稳定操作名（如 VC-5:accept）：无枚举观测时的根因 failed_step 用它，
+                # 而不是父 run 最后事件（恒为 supervisor-stop）或带批内序号的 action_id。
+                "operation": _failed_action_operation(inner, action_id),
                 "failure_kind": diagnostic["failure_kind"],
                 "failure_class": effective_class,
                 "declared_failure_class": diagnostic["failure_class"],
@@ -1958,6 +1961,20 @@ def _run_facts(run_dir: Path, campaign_dir: Path, manifest: Mapping[str, Any]) -
             else []
         ),
     }
+
+
+def _failed_action_operation(inner: Any, action_id: str) -> str:
+    """从 campaign-run 内层清单定位失败动作的 ``operation``；清单缺失或找不到该动作即失败关闭。"""
+
+    if not isinstance(inner, Mapping):
+        raise ReconcilerError(f"父动作 {action_id} 失败但 run 清单缺失，无法定位动作操作名")
+    for action in inner.get("actions", []):
+        if isinstance(action, Mapping) and action.get("action_id") == action_id:
+            operation = action.get("operation")
+            if not isinstance(operation, str) or not operation:
+                raise ReconcilerError(f"父动作 {action_id} 的 operation 非法")
+            return operation
+    raise ReconcilerError(f"父动作 {action_id} 不在 run 清单的 actions 中")
 
 
 def _staging_run_facts(
@@ -2088,11 +2105,18 @@ def _supervisor_run_failures(
     if not isinstance(raw_observations, list):
         raise ReconcilerError("父动作 failure_observations 不是数组")
     if not raw_observations:
+        # 动作失败（有诊断、无枚举观测，如子进程非零退出／被杀）的稳定步骤是失败动作的
+        # operation：父 run 最后事件恒为 supervisor-stop，会把 VC-5:assert 与 VC-5:accept 的失败
+        # 编成同一根因，逐字重派后另一动作失败即被误判为同根因第二次而停线（M2-G0 真机暴露）。
+        # 非动作失败（owner-loss／中断）仍按父 run 最后事件编码。
+        diagnostic = run.get("action_diagnostic")
+        operation = diagnostic.get("operation") if isinstance(diagnostic, Mapping) else None
+        step_source = operation if isinstance(operation, str) and operation else run["last_operation"]
         try:
             legacy = root_cause.describe_root_cause(
                 component=COMPONENT,
                 stable_error_code="supervisor-run.interrupted",
-                failed_step=str(run["last_operation"]).replace(":", "-")[:128],
+                failed_step=str(step_source).replace(":", "-")[:128],
                 stable_dimensions={"phase": str(run["phase"])},
             )
         except (KeyError, root_cause.RootCauseError) as error:

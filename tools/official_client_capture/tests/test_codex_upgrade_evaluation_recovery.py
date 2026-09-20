@@ -424,7 +424,15 @@ class EvaluationRecoveryIntegrationTests(_EvaluationChainMixin, unittest.TestCas
             result, returncode = self._dispatch_plan(fixture, 5, plan_b0)
             self.assertEqual(returncode, 1, result)
             run_b0 = Path(str(result["campaign_run"]["run_dir"]))
-            self.assertEqual(reconciler.reconcile_supervisor_run(run_b0, campaign_dir)["status"], "recoverable")
+            reconciled = reconciler.reconcile_supervisor_run(run_b0, campaign_dir)
+            self.assertEqual(reconciled["status"], "recoverable")
+            # M2-G0 修正：无枚举观测的动作失败，根因 failed_step 取失败动作的 operation（VC-5:assert-rules），
+            # 不再取父 run 最后事件（supervisor-stop）——否则同批次内另一动作（accept）失败会被编成同一
+            # 根因、逐字重派后被误判为同根因第二次而停线。
+            self.assertEqual(reconciled["root_cause"]["stable_error_code"], "supervisor-run.interrupted")
+            self.assertEqual(reconciled["root_cause"]["failed_step"], "VC-5-assert-rules")
+            receipt_run = _read(campaign_dir / reconciled["reconciliation_receipt"]["path"])["run"]
+            self.assertEqual(receipt_run["action_diagnostic"]["operation"], "VC-5:assert-rules")
             machine = campaign_dir / "assertions" / R1 / "machine"
             stamps = {p: p.stat().st_mtime_ns for p in machine.rglob("*.json")}
             checkpoints_before = sorted(p.name for p in (campaign_dir / "assertions" / R1 / "checkpoints").iterdir())
@@ -438,9 +446,11 @@ class EvaluationRecoveryIntegrationTests(_EvaluationChainMixin, unittest.TestCas
             self.assertEqual(sorted(p.name for p in (campaign_dir / "assertions" / R1 / "checkpoints").iterdir()), checkpoints_before)
             index = artifacts.validate_evaluation_run(_read(campaign_dir / "assertions" / R1 / "evaluation-run.json"))
             self.assertEqual({row["rule"]: row["status"] for row in index["rules"]}, {"SPEC-EP-006": "fail", "SPEC-H1-001": "pass"})
-            # 再对账即同根因第二次 → 按 root_causes_at_limit 停线（门禁正确行为，不进恢复主链）。
+            # 再对账即同根因第二次（同一动作 VC-5:assert-rules 再次失败）→ 按 root_causes_at_limit 停线
+            # （门禁正确行为，不进恢复主链）。
             second = reconciler.reconcile_supervisor_run(run_b0_again, campaign_dir)
             self.assertEqual(second["status"], "permanent_stop")
+            self.assertEqual(second["root_cause"]["root_cause_id"], reconciled["root_cause"]["root_cause_id"])
             self.assertIn("permanent_stop", second)
 
 

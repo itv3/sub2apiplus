@@ -717,7 +717,9 @@ class RealEvaluationChainTests(unittest.TestCase):
         self.assertEqual(h.dispatch(tree_a, "compare0", ["compare"])["returncode"], 0)
         b0 = h.dispatch(tree_a, "b0", ["assert"], reuse_items=["compare"])
         self.assertEqual((b0["returncode"], b0["campaign_run"]["reason"]), (1, "action-failed:vc5-1-assert"), b0)
-        self.assertEqual(h.run(tree_a, "reconcile", "--run-dir", b0["campaign_run"]["run_dir"])["status"], "recoverable")
+        reconciled_b0 = h.run(tree_a, "reconcile", "--run-dir", b0["campaign_run"]["run_dir"])
+        self.assertEqual(reconciled_b0["status"], "recoverable")
+        self.assertEqual(reconciled_b0["root_cause"]["failed_step"], "VC-5-assert")
         h.run(tree_b, "epoch", "--attempt-id", h.state()["attempt_id"], "--reason", "evaluator checker fix")
         applied = h.apply_fix(tree_b, h.deployment_receipt(tree_b, "fix-b"))
         self.assertEqual((applied["status"], applied["evaluation_baseline"]), ("applied", 1), applied)
@@ -745,10 +747,13 @@ class RealEvaluationChainTests(unittest.TestCase):
         machine_stamps = {path.relative_to(b1_root).as_posix(): path.stat().st_mtime_ns for path in (b1_root / "machine").rglob("*.json")}
         self.assertTrue(machine_stamps)  # b1 确实跑过 checker（全部重跑）
         sealed_bytes, seal_bytes = acceptance_path.read_bytes(), seal_path.read_bytes()
-        # ---- 对账：本 revision 第二次失败对账，但 VC-5:accept 与 VC-5:assert 根因不同 → recoverable ----
+        # ---- 对账：本 revision 第二次失败对账，但失败动作是 VC-5:accept，与 b0 的 VC-5:assert 是不同根因
+        # （无枚举观测时 failed_step 取失败动作的 operation，不再取父 run 最后事件）→ recoverable ----
         reconciled = h.run(tree_b, "reconcile", "--run-dir", crashed["campaign_run"]["run_dir"])
         self.assertEqual((reconciled["status"], reconciled["decision"]["decision"]), ("recoverable", "recoverable"), reconciled)
-        self.assertEqual(reconciled["decision"]["root_cause_count"], 2, reconciled["decision"])
+        self.assertEqual(reconciled["root_cause"]["failed_step"], "VC-5-accept")
+        self.assertNotEqual(reconciled["root_cause"]["root_cause_id"], reconciled_b0["root_cause"]["root_cause_id"])
+        self.assertEqual(reconciled["decision"]["root_cause_counts"].get(reconciled["root_cause"]["root_cause_id"]), 1, reconciled["decision"])
         self.assertEqual(h.summary()["status"], "active")
         # ---- 逐字重派同一 [assert, accept] 批次（同 tag → 同 builder config／同命令；开关文件已删）----
         resumed = h.dispatch(tree_b, "b1", ["assert", "accept"], **batch_arguments)
