@@ -94,8 +94,8 @@
     },
     {
       "path": "tools/official_client_capture/codex_upgrade_evidence_manifest.py",
-      "sha256": "f0238deda7411cd4793d419b8970aa017f4198999a5913d17cb680ea6d7424db",
-      "reason": "提供有界、可续作、扫描后复核 stat 的 EvidenceManifest 实现；2026-09-18 起 verify_manifest_boundary 在 rehearse-candidate-seal 的 OverlayFS 隔离预演上下文（带标记且全部证据根在 overlay 挂载点）下忽略 st_dev 与由其派生的 metadata_sha256，其余 stat 边界与正式目录判据不变（提交 a374973fc）。"
+      "sha256": "c8e452779bd18a868aeb78e1f43a87e7b9fb23b3645186c8df5f3078fd074829",
+      "reason": "提供有界、可续作、扫描后复核 stat 的 EvidenceManifest 实现；2026-09-18 起 verify_manifest_boundary 在 rehearse-candidate-seal 的 OverlayFS 隔离预演上下文（带标记且全部证据根在 overlay 挂载点）下忽略 st_dev 与由其派生的 metadata_sha256，其余 stat 边界与正式目录判据不变（提交 a374973fc）。2026-09-20 起新增 PROJECTION_SCHEMA、project_evidence_manifest 与 validate_projection_receipt，merge_evidence_manifests 增加 preserve_prefixes：改造 5 M2 attempt-recovery 增量封存对已验证旧清单按整根投影（只保留复用 Job 的根、零扫描、出具投影收据并可重放核对）并与恢复段新清单按保留前缀合并（第 3 批 M2 T5.15，提交 83c0d7077）；stat 边界复核、隔离预演判据与正式目录判据不变。"
     }
   ],
   "verification": [
@@ -111,5 +111,5 @@
     "official_egress_profile_changed": false
   },
   "result": "passed_codex_cli_0151_evaluation_recovery",
-  "identity_sha256": "59ea9d68634087d42d403e3d8c07854f140bd5971beb2e95a53798465a8d3a90"
+  "identity_sha256": "a697c322740922d47020f920042dc61bb9e18848240fd28dc82c07bb34ed7fcd"
 }

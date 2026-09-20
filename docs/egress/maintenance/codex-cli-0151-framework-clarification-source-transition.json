@@ -6,7 +6,7 @@
   "predecessor": {
     "kind": "codex_cli_0151_evaluation_recovery",
     "path": "docs/egress/maintenance/codex-cli-0151-evaluation-recovery-source-transition.json",
-    "sha256": "24e6e429fbccc1b0f298b875fdcc5fb54cdbc3edaa7298de6259450584ed3293"
+    "sha256": "e76d2aeb609816ed7f3cd3525e0456b2802c16012e642f3e273ff576f73316b2"
   },
   "transitions": [
     {
@@ -40,5 +40,5 @@
     "official_egress_profile_changed": false
   },
   "result": "passed_codex_cli_0151_framework_clarification",
-  "identity_sha256": "2db6180f4de8a96ab169d4b47e8073d4b2c96d6711af6038f5844b9e017e7f49"
+  "identity_sha256": "df8a39c5a609478035e002c64a204ac9c31f81d056089f456c4345487d0600ae"
 }
