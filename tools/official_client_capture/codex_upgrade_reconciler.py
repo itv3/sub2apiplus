@@ -533,6 +533,7 @@ def _account_sealed_capture(
     phase: str,
     candidate_id: str | None,
     now: str | None,
+    recovery_revision: str | None = None,
 ) -> dict[str, Any]:
     """把已封存抓包阶段的请求写入项目总账（自身零请求，幂等）。
 
@@ -555,6 +556,10 @@ def _account_sealed_capture(
         raise ReconcilerError("account-sealed-candidate 必须提供合法 candidate-id")
     if phase == "official" and candidate_id is not None:
         raise ReconcilerError("official 成功入账不得携带 candidate-id")
+    if recovery_revision is not None and (
+        phase != "candidate" or not vc_artifacts.RECOVERY_REVISION_RE.fullmatch(recovery_revision)
+    ):
+        raise ReconcilerError("--attempt-recovery 只用于候选阶段且必须是 ar<k>")
     stage = "capture-official" if phase == "official" else "capture-candidate"
     try:
         sealed = codex_upgrade._load_stage_result(
@@ -574,6 +579,17 @@ def _account_sealed_capture(
     attempt_id = attempt_path.parent.name
     if not codex_upgrade.SAFE_ID_RE.fullmatch(attempt_id):
         raise ReconcilerError("attempt_id 格式非法")
+    # 改造 5 M2：attempt-recovery 基线的增量封存结果绑定恢复段 run-summary；入账按段幂等，
+    # 只记本段新增请求（精确身份键按总账索引去重）。
+    recovery_binding = sealed.get("recovery")
+    if recovery_revision is not None:
+        if not isinstance(recovery_binding, Mapping) or recovery_binding.get("recovery_revision") != recovery_revision:
+            raise ReconcilerError(f"当前候选阶段结果不是恢复段 {recovery_revision} 的增量封存结果")
+        recovery_path = codex_upgrade._campaign_file(campaign_dir, str(recovery_binding.get("path", "")))
+        if not recovery_path.is_file() or _file_sha256(recovery_path) != recovery_binding.get("sha256"):
+            raise ReconcilerError("阶段结果绑定的 attempt-recovery.json 摘要漂移")
+    elif isinstance(recovery_binding, Mapping):
+        raise ReconcilerError("当前候选阶段结果是恢复段的增量封存结果，请以 --attempt-recovery ar<k> 入账")
     observed = now or _utc_now()
     project_root = _project_root(campaign_dir)
     plan, head = _project_facts(project_root)
@@ -581,6 +597,7 @@ def _account_sealed_capture(
         f"sealed-official-{attempt_id}"
         if phase == "official"
         else f"sealed-candidate-{candidate_id}-{attempt_id}"
+        + (f"-{recovery_revision}" if recovery_revision is not None else "")
     )
     receipt_dir = _reconciliation_dir(campaign_dir, subject)
     request_part, provenance_binding, _copy_path = _request_part(
@@ -600,20 +617,26 @@ def _account_sealed_capture(
         )
     stage_path = codex_upgrade._stage_path(campaign_dir, stage, candidate_id)[1]
     operation_subject = attempt_id if phase == "official" else f"{candidate_id}:{attempt_id}"
+    if recovery_revision is not None:
+        operation_subject = f"{operation_subject}:{recovery_revision}"
+    payload = {
+        "campaign_id": str(manifest["campaign_id"]),
+        "subject_kind": f"sealed_{phase}_stage",
+        "subject_id": operation_subject,
+        "phase": phase,
+        "candidate_id": candidate_id,
+        "request": request_part,
+        "stage_result_sha256": _file_sha256(stage_path),
+        "attempt_sha256": str(attempt_binding.get("sha256")),
+    }
+    if recovery_revision is not None:
+        payload["recovery_revision"] = recovery_revision
+        payload["attempt_recovery_sha256"] = str(recovery_binding.get("sha256"))
     batch = _commit_batch(
         campaign_dir,
         operation_id=f"account-sealed-{phase}:{operation_subject}",
         event_type="reconciliation_committed",
-        payload={
-            "campaign_id": str(manifest["campaign_id"]),
-            "subject_kind": f"sealed_{phase}_stage",
-            "subject_id": operation_subject,
-            "phase": phase,
-            "candidate_id": candidate_id,
-            "request": request_part,
-            "stage_result_sha256": _file_sha256(stage_path),
-            "attempt_sha256": str(attempt_binding.get("sha256")),
-        },
+        payload=payload,
         source={
             "kind": f"sealed_{phase}_accounting",
             "sha256": provenance_binding["sha256"],
@@ -632,6 +655,7 @@ def _account_sealed_capture(
         "phase": phase,
         "candidate_id": candidate_id,
         "attempt_id": attempt_id,
+        "recovery_revision": recovery_revision,
         "request": {
             "status": request_part["status"],
             "new_identity_keys": len(request_part["identity_keys"]),
@@ -665,14 +689,16 @@ def account_sealed_candidate(
     candidate_id: str,
     *,
     now: str | None = None,
+    recovery_revision: str | None = None,
 ) -> dict[str, Any]:
-    """把已封存 Candidate 阶段的模型请求幂等写入项目总账。"""
+    """把已封存 Candidate 阶段的模型请求幂等写入项目总账（``recovery_revision``：恢复段的增量封存）。"""
 
     return _account_sealed_capture(
         campaign_dir,
         phase="candidate",
         candidate_id=candidate_id,
         now=now,
+        recovery_revision=recovery_revision,
     )
 
 
@@ -1190,8 +1216,9 @@ def _recovery_preview(
     campaign_ledger_head: Mapping[str, Any],
     project_ledger_head: Mapping[str, Any],
     now: str,
+    recovery_revision: str | None = None,
 ) -> dict[str, Any]:
-    """零请求恢复预览：冻结四类 Job 闭集与预计新增请求数，等待操作员批准。"""
+    """零请求恢复预览：冻结四类 Job 闭集与预计新增请求数，等待操作员批准（段模式携带 recovery_revision）。"""
 
     groups = jobs["groups"]
     reusable = list(groups["complete"]) if (attempt_exists and environment_status == "restored") else []
@@ -1207,6 +1234,7 @@ def _recovery_preview(
         "phase": phase,
         "candidate_id": candidate_id,
         "source_attempt_id": attempt_id,
+        "recovery_revision": recovery_revision,
         "source_attempt_receipt_exists": attempt_exists,
         "reconciliation_receipt_sha256": reconciliation_receipt_sha256,
         "campaign_ledger_head": {
@@ -1258,12 +1286,18 @@ def _recovery_preview(
     return preview
 
 
-def approve_recovery_preview(campaign_dir: Path, attempt_id: str, *, approve_sha256: str) -> dict[str, Any]:
+def approve_recovery_preview(
+    campaign_dir: Path,
+    attempt_id: str,
+    *,
+    approve_sha256: str,
+    recovery_revision: str | None = None,
+) -> dict[str, Any]:
     """操作员按 review_sha256 批准恢复预览；批准收据只写一次，幂等返回既有。"""
 
     if not codex_upgrade.SHA256_RE.fullmatch(str(approve_sha256)):
         raise ReconcilerError("--approve-recovery-sha256 格式非法")
-    receipt_dir = _reconciliation_dir(campaign_dir, f"attempt-{attempt_id}")
+    receipt_dir = _reconciliation_dir(campaign_dir, f"attempt-{_recovery_segment_subject(attempt_id, recovery_revision).replace(':', '-')}")
     matched: tuple[int, Path, dict[str, Any]] | None = None
     if receipt_dir.is_dir():
         for child in sorted(receipt_dir.iterdir()):
@@ -1288,11 +1322,14 @@ def approve_recovery_preview(campaign_dir: Path, attempt_id: str, *, approve_sha
         or preview.get("tool_identity", {}).get("policy_sha256") != current.get("policy_sha256")
     ):
         raise ReconcilerError("恢复预览生成后工具身份已变化，必须重新对账生成新预览")
+    if preview.get("recovery_revision") != recovery_revision:
+        raise ReconcilerError("恢复预览的恢复段编号与批准请求不一致")
     approval = {
         "schema_version": RECOVERY_APPROVAL_SCHEMA,
         "index": approval_index + 1,
         "campaign_id": preview.get("campaign_id"),
         "source_attempt_id": preview.get("source_attempt_id"),
+        "recovery_revision": recovery_revision,
         "preview_index": index,
         "preview_path": preview_path.relative_to(campaign_dir).as_posix(),
         "preview_sha256": _file_sha256(preview_path),
@@ -1312,8 +1349,9 @@ def load_approved_recovery_preview(
     *,
     phase: str,
     candidate_id: str | None,
+    recovery_revision: str | None = None,
 ) -> dict[str, Any]:
-    """resume 衔接：只接受当前 Campaign 内、已批准、工具身份仍相同的恢复预览。"""
+    """resume 衔接：只接受当前 Campaign 内、已批准、工具身份仍相同的恢复预览（段模式按 ar<k> 定位）。"""
 
     if not isinstance(preview_path, Path):
         raise ReconcilerError("resume --rerun-failed 必须提供 --recovery-preview（已批准的 recovery-preview/v1）")
@@ -1335,8 +1373,10 @@ def load_approved_recovery_preview(
     ):
         raise ReconcilerError("恢复预览自摘要、阶段或零请求边界不满足")
     attempt_id = str(preview.get("source_attempt_id", ""))
-    if resolved.parent.name != f"attempt-{attempt_id}":
-        raise ReconcilerError("恢复预览目录与其来源 attempt 不一致")
+    if preview.get("recovery_revision") != recovery_revision:
+        raise ReconcilerError("恢复预览的恢复段编号与 resume 请求不一致")
+    if resolved.parent.name != f"attempt-{_recovery_segment_subject(attempt_id, recovery_revision).replace(':', '-')}":
+        raise ReconcilerError("恢复预览目录与其来源 attempt／恢复段不一致")
     approved: dict[str, Any] | None = None
     approval_path: Path | None = None
     for child in sorted(resolved.parent.iterdir()):
@@ -1453,6 +1493,10 @@ def load_approved_recovery_preview(
     }
 
 
+def _recovery_segment_subject(attempt_id: str, recovery_revision: str | None) -> str:
+    return attempt_id if recovery_revision is None else f"{attempt_id}:{recovery_revision}"
+
+
 def reconcile_attempt(
     campaign_dir: Path,
     attempt_id: str,
@@ -1460,8 +1504,14 @@ def reconcile_attempt(
     control_root: Path | None = None,
     approve_recovery_sha256: str | None = None,
     now: str | None = None,
+    recovery_revision: str | None = None,
 ) -> dict[str, Any]:
-    """对账一个 reservation 之后中断的 attempt（步骤 1～6）。"""
+    """对账一个 reservation 之后中断的 attempt（步骤 1～6）。
+
+    改造 5 M2：``recovery_revision=ar<k>`` 时对账的是该 attempt 的恢复段（段预约之后中断／失败）：
+    定位 ``recovery/ar<k>/``，收据带 ``recovery_revision``，operation ``reconcile-attempt:<id>:ar<k>``，
+    账本写 ``attempt_recovery_failed``（原 attempt 事件不动），恢复预览只在段内按 failed ∪ pending 续跑。
+    """
 
     campaign_dir = Path(campaign_dir).resolve(strict=True)
     manifest = codex_upgrade._require_formal_campaign(campaign_dir)
@@ -1469,24 +1519,51 @@ def reconcile_attempt(
         raise ReconcilerError("reconcile-attempt 只用于 0.154.0 起的完整 VC 链 Campaign")
     observed = now or _utc_now()
     phase, candidate_id, attempt_root = _locate_attempt(campaign_dir, attempt_id)
-    reservation = codex_upgrade._load_capture_reservation(
-        campaign_dir, attempt_root, phase=phase, candidate_id=candidate_id, _manifest=manifest
-    )
     attempt: dict[str, Any] | None = None
-    attempt_path = attempt_root / "attempt.json"
-    if attempt_path.exists() or attempt_path.is_symlink():
-        _root, attempt = codex_upgrade._load_capture_attempt(
-            campaign_dir, phase, candidate_id, attempt_id, _verified_campaign_manifest=manifest
+    if recovery_revision is not None:
+        if phase != "candidate" or candidate_id is None:
+            raise ReconcilerError("恢复段只存在于候选 attempt")
+        if not vc_artifacts.RECOVERY_REVISION_RE.fullmatch(recovery_revision):
+            raise ReconcilerError("--recovery-revision 必须是 ar<k>")
+        segment_root = codex_upgrade._attempt_recovery_segment_root(attempt_root, recovery_revision)
+        if segment_root.is_symlink() or not segment_root.is_dir():
+            raise ReconcilerError(f"attempt {attempt_id} 没有恢复段 {recovery_revision}")
+        reservation = codex_upgrade._load_attempt_recovery_reservation(
+            campaign_dir, segment_root, candidate_id=candidate_id, attempt_id=attempt_id, recovery_revision=recovery_revision
         )
-        if attempt.get("status") == "awaiting_receipts" and not codex_upgrade._failed_job_ids(attempt.get("results")):
-            raise ReconcilerError("attempt 正等待 seal，不是中断；reconcile-attempt 只处理失败或中断的 attempt")
-    stage_result = codex_upgrade._stage_path(campaign_dir, "capture-official" if phase == "official" else "capture-candidate", candidate_id)[1]
-    if stage_result.exists():
-        raise ReconcilerError("该阶段已封存，attempt 不再属于可对账的中断")
-    records, latest_checkpoints, chain = _checkpoint_facts(attempt_root)
-    jobs = _classify_jobs(campaign_dir, manifest, reservation, attempt, latest_checkpoints, attempt_root)
+        summary_path = segment_root / codex_upgrade.ATTEMPT_RECOVERY_SUMMARY_FILENAME
+        if summary_path.exists() or summary_path.is_symlink():
+            _segment, _reservation, attempt = codex_upgrade._load_attempt_recovery_segment(
+                campaign_dir, candidate_id, attempt_id, recovery_revision
+            )
+            if attempt.get("status") == "awaiting_receipts" and not codex_upgrade._failed_job_ids(attempt.get("results")):
+                raise ReconcilerError("恢复段正等待增量封存，不是中断；reconcile-attempt 只处理失败或中断的恢复段")
+        current_stage = codex_upgrade._stage_path(campaign_dir, "capture-candidate", candidate_id)[1]
+        if current_stage.is_file():
+            sealed_recovery = _read_json(current_stage, "候选阶段结果").get("recovery")
+            if isinstance(sealed_recovery, Mapping) and sealed_recovery.get("recovery_revision") == recovery_revision:
+                raise ReconcilerError("该恢复段已增量封存，不再属于可对账的中断")
+        work_root = segment_root
+    else:
+        reservation = codex_upgrade._load_capture_reservation(
+            campaign_dir, attempt_root, phase=phase, candidate_id=candidate_id, _manifest=manifest
+        )
+        attempt_path = attempt_root / "attempt.json"
+        if attempt_path.exists() or attempt_path.is_symlink():
+            _root, attempt = codex_upgrade._load_capture_attempt(
+                campaign_dir, phase, candidate_id, attempt_id, _verified_campaign_manifest=manifest
+            )
+            if attempt.get("status") == "awaiting_receipts" and not codex_upgrade._failed_job_ids(attempt.get("results")):
+                raise ReconcilerError("attempt 正等待 seal，不是中断；reconcile-attempt 只处理失败或中断的 attempt")
+        stage_result = codex_upgrade._stage_path(campaign_dir, "capture-official" if phase == "official" else "capture-candidate", candidate_id)[1]
+        if stage_result.exists():
+            raise ReconcilerError("该阶段已封存，attempt 不再属于可对账的中断")
+        work_root = attempt_root
+    subject = _recovery_segment_subject(attempt_id, recovery_revision)
+    records, latest_checkpoints, chain = _checkpoint_facts(work_root)
+    jobs = _classify_jobs(campaign_dir, manifest, reservation, attempt, latest_checkpoints, work_root)
     contamination = codex_upgrade._campaign_contamination_records(campaign_dir, _manifest=manifest)
-    environment = _environment_facts(campaign_dir, attempt_root, attempt, contamination)
+    environment = _environment_facts(campaign_dir, work_root, attempt, contamination)
     current = _current_identity()
     identity = _identity_facts(campaign_dir, manifest, current)
     ledger_dir = _campaign_ledger_dir(manifest)
@@ -1497,7 +1574,7 @@ def reconcile_attempt(
         _control_root(campaign_dir, control_root), current, required=not bool(plan.get("fixture_only"))
     )
     campaign_deadline = codex_upgrade._campaign_plan_deadline(campaign_dir)
-    receipt_dir = _reconciliation_dir(campaign_dir, f"attempt-{attempt_id}")
+    receipt_dir = _reconciliation_dir(campaign_dir, f"attempt-{subject.replace(':', '-')}")
 
     # 历史 attempt 的失败数组必须在任何收据落盘前完成只读重放。否则损坏的
     # run-summary 会让命令失败，却先遗留一个看似可信的 provenance 副本。
@@ -1549,12 +1626,21 @@ def reconcile_attempt(
         "phase": phase,
         "candidate_id": candidate_id,
         "attempt_id": attempt_id,
+        "recovery_revision": recovery_revision,
         "attempt_receipt_exists": attempt is not None,
         "attempt_status": attempt.get("status") if attempt is not None else None,
-        "attempt_digest": attempt.get("attempt_digest") if attempt is not None else None,
+        "attempt_digest": (
+            attempt.get("attempt_recovery_digest" if recovery_revision is not None else "attempt_digest")
+            if attempt is not None
+            else None
+        ),
         "reservation": {
-            "path": (attempt_root / "reservation.json").relative_to(campaign_dir).as_posix(),
-            "sha256": _file_sha256(attempt_root / "reservation.json"),
+            "path": (
+                work_root / (codex_upgrade.ATTEMPT_RECOVERY_RESERVATION_FILENAME if recovery_revision is not None else "reservation.json")
+            ).relative_to(campaign_dir).as_posix(),
+            "sha256": _file_sha256(
+                work_root / (codex_upgrade.ATTEMPT_RECOVERY_RESERVATION_FILENAME if recovery_revision is not None else "reservation.json")
+            ),
             "run_nonce": reservation["run_nonce"],
             "started_at_utc": reservation["started_at_utc"],
         },
@@ -1609,7 +1695,28 @@ def reconcile_attempt(
         ledger_events: list[dict[str, Any]] = []
         ledger_note = "recorded"
         active_ids = {item["attempt_id"] for item in ledger["active_attempts"]}
-        if ledger["status"] == "active" and ledger.get("active_phase") is None:
+        if recovery_revision is not None:
+            # 恢复段失败／中断：原 attempt 事件不动，只把 active 的恢复段登记为 failed（带根因，计入同根因）。
+            segment_state = timing_ledger.inspect_ledger(ledger_dir, now=observed).get("attempt_recoveries", {}).get(
+                f"{attempt_id}:{recovery_revision}", {}
+            )
+            if segment_state.get("status") == "active" and ledger["status"] in {"active", "recovery_required"}:
+                ledger_events.append(
+                    _append_ledger_event(
+                        ledger_dir,
+                        event_id=f"reconcile-attempt-recovery-failed-{attempt_id}-{recovery_revision}",
+                        phase="VC-5",
+                        event_type="attempt_recovery_failed",
+                        attempt_id=attempt_id,
+                        root_cause_id=cause["root_cause_id"],
+                        next_action="reconcile-attempt --recovery-revision",
+                        recovery_revision=recovery_revision,
+                        candidate_id=candidate_id,
+                    )
+                )
+            else:
+                ledger_note = f"skipped:recovery_segment_{segment_state.get('status') or 'unknown'}"
+        elif ledger["status"] == "active" and ledger.get("active_phase") is None:
             ledger_note = "skipped:ledger_active_without_phase"
         elif ledger["status"] in {"active", "recovery_required"}:
             if attempt_id not in active_ids:
@@ -1648,16 +1755,21 @@ def reconcile_attempt(
             )
         else:
             ledger_note = f"skipped:ledger_{ledger['status']}_without_active_attempt"
+        failed_event_id = (
+            f"reconcile-attempt-recovery-failed-{attempt_id}-{recovery_revision}"
+            if recovery_revision is not None
+            else f"reconcile-attempt-failed-{attempt_id}"
+        )
         failed_sha = next(
-            (item["event_sha256"] for item in ledger_events if item["event_id"] == f"reconcile-attempt-failed-{attempt_id}"),
-            _ledger_event_sha256(ledger_dir, f"reconcile-attempt-failed-{attempt_id}"),
+            (item["event_sha256"] for item in ledger_events if item["event_id"] == failed_event_id),
+            _ledger_event_sha256(ledger_dir, failed_event_id),
         )
 
         # 步骤 2：一个 batch 一个事件 reconciliation_committed。
         reconciliation_payload: dict[str, Any] = {
             "campaign_id": str(manifest["campaign_id"]),
-            "subject_kind": "attempt",
-            "subject_id": attempt_id,
+            "subject_kind": "attempt" if recovery_revision is None else "attempt_recovery",
+            "subject_id": subject,
             "phase": phase,
             "request": request_part,
             "root_cause": {
@@ -1673,9 +1785,11 @@ def reconcile_attempt(
         if array_contract:
             reconciliation_payload["failure_observations"] = failure_observations
             reconciliation_payload["root_causes"] = root_causes
+        if recovery_revision is not None:
+            reconciliation_payload["recovery_revision"] = recovery_revision
         batch = _commit_batch(
             campaign_dir,
-            operation_id=f"reconcile-attempt:{attempt_id}",
+            operation_id=f"reconcile-attempt:{subject}",
             event_type="reconciliation_committed",
             payload=reconciliation_payload,
             source={"kind": "attempt_reconciliation", "sha256": receipt_binding["sha256"]},
@@ -1701,6 +1815,7 @@ def reconcile_attempt(
         "status": decision["decision"],
         "campaign_id": str(manifest["campaign_id"]),
         "attempt_id": attempt_id,
+        "recovery_revision": recovery_revision,
         "phase": phase,
         "reconciliation_receipt": receipt_binding,
         "provenance_receipt": provenance_binding,
@@ -1735,6 +1850,7 @@ def reconcile_attempt(
             receipt_dir,
             manifest=manifest,
             attempt_id=attempt_id,
+            recovery_revision=recovery_revision,
             phase=phase,
             candidate_id=candidate_id,
             attempt_exists=attempt is not None,
@@ -1749,15 +1865,16 @@ def reconcile_attempt(
         )
         result["recovery_preview"] = preview
         result["recovery_preview_path"] = str(receipt_dir / f"recovery-preview-{int(preview['index']):02d}.json")
+        segment_flag = f" --attempt-recovery {recovery_revision}" if recovery_revision is not None else ""
         result["next_command"] = (
             f"reconcile-attempt --approve-recovery-sha256 {preview['review_sha256']} 后 "
-            "resume --rerun-failed --recovery-preview <preview path>"
+            f"resume --rerun-failed{segment_flag} --recovery-preview <preview path>"
         )
         if approve_recovery_sha256 is not None:
             result["recovery_approval"] = approve_recovery_preview(
-                campaign_dir, attempt_id, approve_sha256=approve_recovery_sha256
+                campaign_dir, attempt_id, approve_sha256=approve_recovery_sha256, recovery_revision=recovery_revision
             )
-            result["next_command"] = f"resume --rerun-failed --recovery-preview {result['recovery_preview_path']}"
+            result["next_command"] = f"resume --rerun-failed{segment_flag} --recovery-preview {result['recovery_preview_path']}"
     else:
         if approve_recovery_sha256 is not None:
             raise ReconcilerError("判定为永久停线，不接受恢复批准")

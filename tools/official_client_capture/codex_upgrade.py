@@ -9847,6 +9847,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     add_campaign_reference(reconcile_attempt)
     reconcile_attempt.add_argument("--attempt-id", required=True)
+    reconcile_attempt.add_argument(
+        "--recovery-revision", metavar="ar<k>", help="改造 5 M2：对账该 attempt 的恢复段（段预约之后中断／失败）。"
+    )
     reconcile_attempt.add_argument("--control-root", type=Path)
     reconcile_attempt.add_argument(
         "--approve-recovery-sha256",
@@ -9869,6 +9872,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     add_campaign_reference(account_sealed_candidate)
     account_sealed_candidate.add_argument("--candidate-id", required=True)
+    account_sealed_candidate.add_argument(
+        "--attempt-recovery", metavar="ar<k>", help="改造 5 M2：入账恢复段 ar<k> 的增量封存结果（只记本段新增请求）。"
+    )
     resume = subparsers.add_parser("resume", help="按最近稳定状态续跑失败阶段")
     add_campaign_reference(resume)
     resume.add_argument("--candidate-id")
@@ -18673,10 +18679,59 @@ def _candidate_accounting_checks(
             facts["sealed"] = {"attempt_id": sealed_attempt, "operation_id": operation_id}
             facts["zero_request"] = False
     reconciled_attempts: dict[str, dict[str, Any]] = {}
+    # 改造 5 M2：恢复段（attempts/<id>/recovery/ar<k>）——已增量封存的段要求段级入账
+    # account-sealed-candidate:<cid>:<id>:ar<k>，未封存的段要求段级对账 reconcile-attempt:<id>:ar<k>。
+    sealed_segments: set[str] = set()
+    revisions_root = campaign_dir / "candidates" / candidate_id / "revisions"
+    if revisions_root.is_dir() and not revisions_root.is_symlink():
+        for baseline_dir in sorted(revisions_root.iterdir()):
+            baseline_result = baseline_dir / "result.json"
+            if not baseline_result.is_file() or baseline_result.is_symlink():
+                continue
+            baseline_sealed = _read_json(baseline_result, "候选基线阶段结果")
+            recovery_binding = baseline_sealed.get("recovery")
+            attempt_binding = baseline_sealed.get("attempt")
+            if baseline_sealed.get("status") != "complete" or not isinstance(recovery_binding, Mapping) or not isinstance(attempt_binding, Mapping):
+                continue
+            segment_attempt = _campaign_file(campaign_dir, str(attempt_binding.get("path", ""))).parent.name
+            segment_revision = str(recovery_binding.get("recovery_revision"))
+            operation_id = f"account-sealed-candidate:{candidate_id}:{segment_attempt}:{segment_revision}"
+            if operation_id not in operations:
+                raise ConfigurationError(
+                    f"候选 {candidate_id} 的恢复段 {segment_attempt}:{segment_revision} 已增量封存但尚未入账（缺 {operation_id}）；"
+                    "先执行 account-sealed-candidate --attempt-recovery。"
+                )
+            sealed_segments.add(f"{segment_attempt}:{segment_revision}")
+            facts["zero_request"] = False
     for phase, current_candidate, attempt_root in _campaign_attempt_roots(campaign_dir):
         if phase != "candidate" or current_candidate != candidate_id:
             continue
         attempt_id = attempt_root.name
+        recovery_root = attempt_root / ATTEMPT_RECOVERY_DIRNAME
+        if recovery_root.is_dir() and not recovery_root.is_symlink():
+            for segment_root in sorted(recovery_root.iterdir()):
+                if segment_root.is_symlink() or not segment_root.is_dir():
+                    continue
+                segment_key = f"{attempt_id}:{segment_root.name}"
+                if segment_key in sealed_segments:
+                    continue
+                facts["zero_request"] = False
+                try:
+                    reconciled_segment = codex_upgrade_supervisor.verify_attempt_reconciliation_binding(
+                        campaign_dir,
+                        campaign_id=campaign_id,
+                        candidate_id=candidate_id,
+                        attempt_root=segment_root,
+                        label="作废前对账核对",
+                    )
+                except codex_upgrade_supervisor.SupervisorError as error:
+                    raise ConfigurationError(str(error)) from error
+                if reconciled_segment["operation_id"] not in operations:
+                    raise ConfigurationError(
+                        f"候选 {candidate_id} 的恢复段 {segment_key} 未封存且尚未对账入账；先执行 reconcile-attempt --recovery-revision。"
+                    )
+                reconciled_attempts[segment_key] = reconciled_segment
+                facts["attempts"].append(reconciled_segment)
         if attempt_id == sealed_attempt:
             continue
         facts["zero_request"] = False
@@ -42769,7 +42824,12 @@ def _run_attempt_recovery_segment(
     _reject_contaminated_campaign(campaign_dir)
     deadline = _bind_attempt_deadline_metadata(_deadline or _attempt_deadline(arguments, "candidate"), "candidate")
     if getattr(arguments, "rerun_failed", False):
-        raise ConfigurationError("恢复段内续跑（resume --rerun-failed --attempt-recovery）在段内中断对账后另行提供。")
+        # 恢复段的 job 收据与账本段状态（同段不得重开）都是 write-once：同段目录不能续跑。段失败／中断
+        # 先 reconcile-attempt --recovery-revision 对账入账，可恢复时由新的 evaluation-recover 裁定开
+        # 下一段 ar<k+1>（同 attempt 新段，等价于 attempt 级 resume 建新 attempt）。
+        raise ConfigurationError(
+            "恢复段不支持同段续跑：请先 reconcile-attempt --recovery-revision 对账，再按判定开新的恢复段。"
+        )
 
     baseline, commit, recovery = _current_attempt_recovery_baseline(campaign_dir, candidate_id, recovery_revision)
     attempt_id = str(recovery["attempt_id"])
@@ -53870,6 +53930,7 @@ def _reconcile_attempt_command(arguments: argparse.Namespace) -> dict[str, Any]:
             str(arguments.attempt_id),
             control_root=getattr(arguments, "control_root", None),
             approve_recovery_sha256=getattr(arguments, "approve_recovery_sha256", None),
+            recovery_revision=getattr(arguments, "recovery_revision", None),
         )
     except reconciler.ReconcilerError as error:
         raise ConfigurationError(str(error)) from error
@@ -53895,6 +53956,7 @@ def _account_sealed_candidate_command(arguments: argparse.Namespace) -> dict[str
         return reconciler.account_sealed_candidate(
             arguments.campaign_dir,
             str(arguments.candidate_id),
+            recovery_revision=getattr(arguments, "attempt_recovery", None),
         )
     except reconciler.ReconcilerError as error:
         raise ConfigurationError(str(error)) from error

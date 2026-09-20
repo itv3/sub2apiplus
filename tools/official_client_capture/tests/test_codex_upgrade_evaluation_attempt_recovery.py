@@ -268,6 +268,84 @@ class AttemptRecoveryTests(recovery_tests._EvaluationChainMixin, unittest.TestCa
                 loaded_root, loaded_reservation, loaded_summary = codex_upgrade._load_attempt_recovery_segment(campaign_dir, R1, attempt_root.name, "ar1")
             self.assertEqual((loaded_root, loaded_reservation["run_nonce"], loaded_summary["attempt_recovery_digest"]), (segment, reservation["run_nonce"], summary_doc["attempt_recovery_digest"]))
 
+    def test_recovery_segment_failure_and_interruption_are_reconciled_per_segment(self) -> None:
+        """T5.13／T5.14：段内 Job 失败 → reconcile-attempt --recovery-revision（收据带段号、operation 带段号、
+        账本 attempt_recovery_failed、总账入账、判定）；段内中断（无 run-summary）同样按段对账；
+        provenance 枚举段目录；同段续跑被拒；父 run 窗口扫描识别段预约。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture, context = self._failed_b0_and_reconciled(root)
+            campaign_dir = context["campaign_dir"]
+            attempt_root = context["attempt_root"]
+            job_ids = context["job_ids"]
+            original_roots = {str(item["id"]): list(item["evidence_roots"]) for item in context["attempt"]["results"]}
+            applied = self._apply_transient(fixture, context)
+            self.assertEqual(applied["status"], "applied", applied)
+            # 段 Job 真实执行但失败（步骤退出 3，且不写证据）。
+            failing_jobs = [
+                Job(
+                    job_id=job_id, phase="candidate", suites=("full",), description=f"合成候选 Job {job_id}",
+                    steps=_job_steps(job_id, original_roots[job_id][0]), evidence_roots=(original_roots[job_id][0],), covers=(), scenario_ids=("A03",),
+                )
+                for job_id in job_ids
+            ]
+            with self._segment_patches_started(context, failing_jobs):
+                with mock.patch.object(codex_upgrade, "run_job", side_effect=lambda job, *a, **k: {
+                    "id": job.job_id, "phase": "candidate", "required": True, "execution_sha256": codex_upgrade._job_execution_sha256(job),
+                    "status": "failed", "description": job.description, "duration_seconds": 0.0, "steps": [{"argv": ["sh"], "return_code": 3, "log": ""}],
+                    "evidence_roots": [], "missing_evidence_patterns": list(job.evidence_roots), "empty_evidence_patterns": [], "covers": [],
+                    "scenario_ids": list(job.scenario_ids), "scenario_receipts": [], "scenario_receipt_failures": [], "track": "main", "model_id": "",
+                    "expected_use_responses_lite": False, "required_model_receipt": False, "model_condition_receipt": None,
+                    "model_condition_receipt_failure": None, "disposition": "executed",
+                }):
+                    failed_run = codex_upgrade._run_capture_attempt(self._run_arguments(campaign_dir, "ar1"), "candidate")
+            self.assertEqual(failed_run["status"], "failed")
+            self.assertTrue(failed_run["next_command"].startswith("reconcile-attempt"))
+            segment = attempt_root / "recovery" / "ar1"
+            summary_doc = _read(segment / "attempt-recovery.json")
+            self.assertEqual(summary_doc["status"], "failed")
+            # provenance 枚举到段目录（段预约已发布）。
+            from tools.official_client_capture import codex_upgrade_live_request_provenance as provenance
+
+            self.assertIn(segment.resolve(), provenance._attempt_directories(campaign_dir, "candidate"))
+            # 父 run 窗口扫描识别段预约（键 <attempt>:<ar>）。
+            from tools.official_client_capture import codex_upgrade_supervisor as supervisor
+
+            found = supervisor.candidate_reservations_in_run_window(campaign_dir, candidate_id=R1, started_at_epoch=0.0)
+            self.assertIn((f"{attempt_root.name}:ar1", segment), found)
+            # 同段续跑被拒。
+            with self._segment_patches_started(context, failing_jobs):
+                with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "不支持同段续跑"):
+                    codex_upgrade._run_capture_attempt(
+                        argparse.Namespace(**{**vars(self._run_arguments(campaign_dir, "ar1")), "rerun_failed": True}), "candidate"
+                    )
+            # 段对账：收据、operation、账本事件、判定（重放段 run-summary 的权限收口需同一 runs 别名注入）。
+            with self._segment_patches_started(context, failing_jobs), mock.patch.object(reconciler, "_deployment_receipt", return_value=None):
+                reconciled = reconciler.reconcile_attempt(campaign_dir, attempt_root.name, recovery_revision="ar1")
+            self.assertEqual(reconciled["recovery_revision"], "ar1")
+            self.assertEqual(reconciled["status"], "recoverable", reconciled.get("decision"))
+            receipt = _read(campaign_dir / reconciled["reconciliation_receipt"]["path"])
+            self.assertEqual((receipt["recovery_revision"], receipt["attempt_id"]), ("ar1", attempt_root.name))
+            self.assertTrue(receipt["reservation"]["path"].endswith("recovery/ar1/recovery-reservation.json"))
+            self.assertEqual(reconciled["jobs"]["failed"], [job_ids[0]])
+            self.assertEqual(reconciled["batch"]["batch_dir"].split("/")[-1].startswith("batch-"), True)
+            operations = _read(Path(reconciled["batch"]["batch_dir"]) / "COMMIT") if (Path(reconciled["batch"]["batch_dir"]) / "COMMIT").is_file() else {}
+            self.assertIn("ar1", json.dumps(operations))
+            ledger = timing_ledger.inspect_ledger(Path(str(fixture["timing_ledger"])))
+            self.assertEqual(ledger["attempt_recoveries"][f"{attempt_root.name}:ar1"]["status"], "failed")
+            self.assertEqual(ledger["attempt_recoveries"][f"{attempt_root.name}:ar1"]["root_cause_id"], reconciled["root_cause"]["root_cause_id"])
+            # 幂等：再次对账返回同一收据；预览目录按段命名。
+            with self._segment_patches_started(context, failing_jobs), mock.patch.object(reconciler, "_deployment_receipt", return_value=None):
+                again = reconciler.reconcile_attempt(campaign_dir, attempt_root.name, recovery_revision="ar1")
+            self.assertEqual(again["reconciliation_receipt"], reconciled["reconciliation_receipt"])
+            self.assertTrue(again["recovery_preview_path"].split("/")[-2].endswith(f"{attempt_root.name}-ar1"))
+            # 段级对账绑定校验（作废前核对用）。
+            bound = supervisor.verify_attempt_reconciliation_binding(
+                campaign_dir, campaign_id=str(fixture["manifest"]["campaign_id"]), candidate_id=R1, attempt_root=segment, label="核对"
+            )
+            self.assertEqual((bound["attempt_id"], bound["recovery_revision"], bound["operation_id"]), (attempt_root.name, "ar1", f"reconcile-attempt:{attempt_root.name}:ar1"))
+
     # ---- 夹具辅助 -------------------------------------------------------------------
 
     def _segment_patches_started(self, context: dict, jobs: list[Job]):

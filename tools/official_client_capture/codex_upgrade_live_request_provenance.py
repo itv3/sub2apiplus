@@ -1388,8 +1388,11 @@ def _all_attempt_roots(base: Path) -> list[Path]:
     return roots
 
 
+RECOVERY_REVISION_RE = re.compile(r"^ar[1-9][0-9]*$")
+
+
 def _attempt_directories(campaign_dir: Path, phase: str) -> list[Path]:
-    """返回指定阶段已经发布 reservation 的 attempt 目录。"""
+    """返回指定阶段已经发布 reservation 的 attempt 目录（含已发布段预约的恢复段目录）。"""
 
     if phase == "official":
         attempt_roots = [campaign_dir / "official" / "attempts"]
@@ -1422,6 +1425,20 @@ def _attempt_directories(campaign_dir: Path, phase: str) -> list[Path]:
                 raise ProvenanceError(f"Formal {phase} attempt ID 非法")
             if (attempt / "reservation.json").is_file():
                 attempts.append(attempt.resolve(strict=True))
+            # 改造 5 M2：attempt 恢复段 ar<k>（同 attempt 只补跑部分 Job）自成目录闭包，段内
+            # job-*.json 与 logs/ 同样是请求账务事实；段以 recovery-reservation.json 发布。
+            recovery_root = attempt / "recovery"
+            if not recovery_root.exists():
+                continue
+            if recovery_root.is_symlink() or not recovery_root.is_dir():
+                raise ProvenanceError(f"Formal {phase} attempt 恢复段根不可信")
+            for segment in recovery_root.iterdir():
+                if segment.is_symlink() or not segment.is_dir():
+                    raise ProvenanceError(f"Formal {phase} attempt 恢复段不可信")
+                if not RECOVERY_REVISION_RE.fullmatch(segment.name):
+                    raise ProvenanceError(f"Formal {phase} attempt 恢复段编号非法")
+                if (segment / "recovery-reservation.json").is_file():
+                    attempts.append(segment.resolve(strict=True))
     return sorted(attempts)
 
 

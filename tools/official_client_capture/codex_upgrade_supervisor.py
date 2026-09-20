@@ -6906,23 +6906,33 @@ def candidate_reservations_in_run_window(
     if attempts_root.is_symlink() or not attempts_root.is_dir():
         return []
     found: list[tuple[str, Path]] = []
-    for attempt_root in sorted(attempts_root.iterdir()):
-        reservation_path = attempt_root / "reservation.json"
-        if attempt_root.is_symlink() or not attempt_root.is_dir() or not _is_safe_id(attempt_root.name):
-            continue
+
+    def begun_in_window(reservation_path: Path) -> bool:
         if reservation_path.is_symlink() or not reservation_path.is_file():
-            continue
+            return False
         begun_raw = _read_json(reservation_path).get("started_at_utc")
         if not isinstance(begun_raw, str):
-            continue
+            return False
         try:
             begun = datetime.fromisoformat(begun_raw.replace("Z", "+00:00"))
         except ValueError:
+            return False
+        return begun.tzinfo is not None and begun >= started
+
+    for attempt_root in sorted(attempts_root.iterdir()):
+        if attempt_root.is_symlink() or not attempt_root.is_dir() or not _is_safe_id(attempt_root.name):
             continue
-        if begun.tzinfo is None:
-            continue
-        if begun >= started:
+        if begun_in_window(attempt_root / "reservation.json"):
             found.append((attempt_root.name, attempt_root))
+        # 改造 5 M2：父 run 期间发布的恢复段预约同样把失败分流到 reconcile-attempt --recovery-revision。
+        recovery_root = attempt_root / "recovery"
+        if recovery_root.is_symlink() or not recovery_root.is_dir():
+            continue
+        for segment_root in sorted(recovery_root.iterdir()):
+            if segment_root.is_symlink() or not segment_root.is_dir():
+                continue
+            if begun_in_window(segment_root / "recovery-reservation.json"):
+                found.append((f"{attempt_root.name}:{segment_root.name}", segment_root))
     return found
 
 
@@ -6938,14 +6948,24 @@ def verify_attempt_reconciliation_binding(
     绑定，以及项目总账 ``reconcile-attempt:<id>`` 事件对收据摘要的绑定。"""
 
     campaign_dir = Path(campaign_dir).resolve(strict=True)
-    attempt_id = attempt_root.name
-    receipt_path = campaign_dir / "control" / "reconciliation" / f"attempt-{attempt_id}" / "attempt-reconciliation.json"
+    # 改造 5 M2：attempt_root 也可以是恢复段目录 attempts/<id>/recovery/ar<k>（段预约文件不同，
+    # 收据带 recovery_revision，subject 为 <id>:ar<k>）。
+    recovery_revision: str | None = None
+    if attempt_root.parent.name == "recovery" and attempt_root.parent.parent.parent.name == "attempts":
+        recovery_revision = attempt_root.name
+        attempt_id = attempt_root.parent.parent.name
+        reservation_path = attempt_root / "recovery-reservation.json"
+        subject = f"{attempt_id}:{recovery_revision}"
+    else:
+        attempt_id = attempt_root.name
+        reservation_path = attempt_root / "reservation.json"
+        subject = attempt_id
+    receipt_path = campaign_dir / "control" / "reconciliation" / f"attempt-{subject.replace(':', '-')}" / "attempt-reconciliation.json"
     if receipt_path.is_symlink() or not receipt_path.is_file():
-        raise SupervisorError(f"{label}：候选 {candidate_id} 的 attempt {attempt_id} 尚未对账（缺 attempt-reconciliation.json）；先执行 reconcile-attempt。")
+        raise SupervisorError(f"{label}：候选 {candidate_id} 的 attempt {subject} 尚未对账（缺 attempt-reconciliation.json）；先执行 reconcile-attempt。")
     receipt = _read_json(receipt_path)
-    reservation_path = attempt_root / "reservation.json"
     if reservation_path.is_symlink() or not reservation_path.is_file():
-        raise SupervisorError(f"{label}：attempt {attempt_id} 缺少 reservation.json。")
+        raise SupervisorError(f"{label}：attempt {subject} 缺少预约收据。")
     reservation = receipt.get("reservation")
     if (
         receipt.get("schema_version") != ATTEMPT_RECONCILIATION_SCHEMA
@@ -6954,24 +6974,26 @@ def verify_attempt_reconciliation_binding(
         or receipt.get("phase") != "candidate"
         or receipt.get("candidate_id") != candidate_id
         or receipt.get("attempt_id") != attempt_id
+        or receipt.get("recovery_revision") != recovery_revision
         or receipt.get("reservation_exists") is not True
         or not isinstance(reservation, Mapping)
         or reservation.get("sha256") != _sha256(reservation_path.read_bytes())
         or reservation.get("run_nonce") != _read_json(reservation_path).get("run_nonce")
         or not isinstance(receipt.get("root_cause"), Mapping)
     ):
-        raise SupervisorError(f"{label}：attempt {attempt_id} 的对账收据 schema 或身份不闭合。")
-    operation_id = f"reconcile-attempt:{attempt_id}"
+        raise SupervisorError(f"{label}：attempt {subject} 的对账收据 schema 或身份不闭合。")
+    operation_id = f"reconcile-attempt:{subject}"
     payload = _project_ledger_operation_payload(campaign_dir, operation_id, label=label)
     if (
         payload.get("campaign_id") != campaign_id
-        or payload.get("subject_kind") != "attempt"
-        or payload.get("subject_id") != attempt_id
+        or payload.get("subject_kind") != ("attempt" if recovery_revision is None else "attempt_recovery")
+        or payload.get("subject_id") != subject
         or payload.get("reconciliation_receipt_sha256") != _sha256(receipt_path.read_bytes())
     ):
-        raise SupervisorError(f"{label}：attempt {attempt_id} 的对账收据与项目总账绑定不一致。")
+        raise SupervisorError(f"{label}：attempt {subject} 的对账收据与项目总账绑定不一致。")
     return {
         "attempt_id": attempt_id,
+        "recovery_revision": recovery_revision,
         "operation_id": operation_id,
         "receipt_sha256": payload["reconciliation_receipt_sha256"],
         "root_cause_id": receipt["root_cause"].get("root_cause_id"),
