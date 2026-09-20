@@ -578,6 +578,134 @@ class MonitorOrphanSealingTests(unittest.TestCase):
             self.assertEqual(state["state"], "watchdog-aborted")
             self.assertIn("owner-process-not-alive", supervisor.read_stop_receipt(run_dir)["reason"])
 
+    # ------------------------------------------------------------------
+    # 崩溃矩阵 R2 的 attempt-recovery 变体（2026-09-21 审核 P1）：正式单动作恢复段 run 已成功、动作输出绑定
+    # 已写（段摘要 exists=true）、父 run 终态前 owner 丢失 → monitor 确定性封存 failed／parent-finalize-lost；
+    # 嵌套 Job 事件允许；多动作批次、缺绑定、exists=false、绑定漂移、动作进行中都维持 watchdog-aborted。
+    # ------------------------------------------------------------------
+
+    AR_SUMMARY_RELATIVE = "candidates/cand/attempts/att-1/recovery/ar1/attempt-recovery.json"
+
+    def _ar_action(self, action_id: str = "vc5-1-ar-run", *, recovery_revision: str = "ar1") -> dict:
+        return {
+            "action_id": action_id, "operation": "VC-5:capture-candidate", "timeout_seconds": 5.0,
+            "command": [
+                sys.executable, "cli.py", "capture-candidate", "run", "--campaign-dir", "x", "--candidate-id", "cand",
+                "--candidate-purpose", "validation_only", "--attempt-recovery", recovery_revision, "--acknowledge-live-requests",
+            ],
+            "item_ids": ["job-a"], "output_bindings": [self.AR_SUMMARY_RELATIVE],
+        }
+
+    def _prepare_recovery_orphan(self, root: Path, *, variant: str = "ok") -> tuple[Path, dict, Path, dict]:
+        """variant：ok／nested（正例，nested 追加嵌套 Job 事件）；multi／missing-binding／exists-false／corrupt-binding／in-progress（负例）。"""
+
+        payload = self._campaign_start(root)
+        run_dir = Path(str(payload["run_dir"]))
+        state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+        owner_pid = int(state["owner_pid"])
+        owner_nonce = str(state["owner_nonce"])
+        actions = [self._ar_action()]
+        if variant == "multi":
+            actions.append({**self._ar_action("vc5-2-ar-seal"), "operation": "VC-5:capture-candidate-seal", "command": ["true"], "output_bindings": ["candidates/cand/revisions/b1/result.json"]})
+        inner = {"schema_version": supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA, "campaign_id": "campaign-r2", "phase": "VC-5", "candidate_id": "cand", "actions": actions}
+        manifest_sha256 = supervisor._sha256(supervisor._canonical(inner))
+        supervisor._write_json(run_dir / "campaign-run-manifest.json", {"schema_version": inner["schema_version"], "manifest_sha256": manifest_sha256, "manifest": inner}, replace=False)
+        campaign_dir = root / "campaign-dir"
+        summary_path = campaign_dir / self.AR_SUMMARY_RELATIVE
+        summary_path.parent.mkdir(parents=True)
+        if variant != "exists-false":
+            summary = {"schema_version": "codex-upgrade-attempt-recovery/v1", "status": "awaiting_receipts", "recovery_revision": "ar1", "results": [{"id": "job-a", "status": "complete"}]}
+            summary_path.write_text(json.dumps(summary, sort_keys=True) + "\n", encoding="utf-8")
+
+        def event(event_type: str, *, operation: str, job_id: str, status: str) -> None:
+            supervisor._append_event(run_dir, event_type=event_type, operation=operation, owner_pid=owner_pid, owner_nonce=owner_nonce, campaign_id="campaign-r2", phase="VC-5", job_id=job_id, status=status, reason=None)
+
+        event("action-started", operation="VC-5:capture-candidate", job_id="vc5-1-ar-run", status="running")
+        if variant == "nested":
+            # 段 run 子进程经 lease 写进同一 events.ndjson 的 Job 级生命周期事件（不计入父动作投影）。
+            event("action-started", operation="job:job-a:attempt-1", job_id="job-a", status="running")
+            event("action-finished", operation="job:job-a:attempt-1", job_id="job-a", status="passed")
+        if variant != "in-progress":
+            event("action-finished", operation="VC-5:capture-candidate", job_id="vc5-1-ar-run", status="passed")
+        binding: dict = {}
+        if variant != "missing-binding":
+            binding = supervisor.write_action_output_binding(
+                run_dir, campaign_dir=campaign_dir, campaign_id="campaign-r2", phase="VC-5", action_id="vc5-1-ar-run",
+                run_manifest_sha256=manifest_sha256, owner_nonce=owner_nonce, output_bindings=[self.AR_SUMMARY_RELATIVE],
+            )
+            if variant == "corrupt-binding":
+                # 自摘要被破坏。
+                path = run_dir / "action-outputs" / "vc5-1-ar-run.json"
+                corrupted = json.loads(path.read_text(encoding="utf-8"))
+                corrupted["bindings"][0]["path"] = "candidates/cand/attempts/att-1/recovery/ar2/attempt-recovery.json"
+                supervisor._write_json(path, corrupted, replace=True)
+            elif variant == "drift-binding":
+                # 自摘要合法但绑定路径不是清单声明的段摘要（漂移）。
+                path = run_dir / "action-outputs" / "vc5-1-ar-run.json"
+                drifted = artifacts.build_action_output_binding(
+                    campaign_id="campaign-r2", phase="VC-5", action_id="vc5-1-ar-run", run_manifest_sha256=manifest_sha256,
+                    owner_nonce=owner_nonce, recorded_at_utc=binding["recorded_at_utc"],
+                    bindings=[{"path": "candidates/cand/attempts/att-1/recovery/ar2/attempt-recovery.json", "exists": True, "sha256": "5" * 64}],
+                )
+                supervisor._write_json(path, drifted, replace=True)
+        facts_before = supervisor.attempt_recovery_orphan_facts(run_dir, state, inner)
+        os.kill(owner_pid, signal.SIGKILL)
+        return run_dir, binding, campaign_dir, facts_before
+
+    def test_recovery_segment_owner_loss_after_success_is_sealed_parent_finalize_lost(self) -> None:
+        for variant in ("ok", "nested"):
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                run_dir, binding, campaign_dir, facts_before = self._prepare_recovery_orphan(root, variant=variant)
+                self.assertTrue(facts_before["complete"], facts_before)
+                state = self._wait_state(run_dir, {"failed", "watchdog-aborted"})
+                self.assertEqual(state["state"], "failed", (variant, state))
+                receipt = supervisor.read_stop_receipt(run_dir)
+                self.assertEqual((receipt["event_type"], receipt["reason"], receipt["action_outputs_sha256"]), ("failed", supervisor.PARENT_FINALIZE_LOST_REASON, None))
+                sealing = [e for e in supervisor.load_events(run_dir) if e["event_type"] == "failed" and e["operation"] == "supervisor:owner-check"]
+                self.assertEqual(len(sealing), 1)
+                # 封存前后同一判定逐字相同；绑定摘要与 output 摘要来自绑定文件。
+                inner = json.loads((run_dir / "campaign-run-manifest.json").read_text(encoding="utf-8"))["manifest"]
+                facts_after = supervisor.attempt_recovery_orphan_facts(run_dir, state, inner)
+                self.assertEqual(facts_after, facts_before)
+                self.assertEqual((facts_after["binding_sha256"], facts_after["output_sha256"]), (binding["binding_sha256"], binding["bindings"][0]["sha256"]))
+                self.assertEqual((facts_after["action_id"], facts_after["recovery_revision"], facts_after["binding_path"]), ("vc5-1-ar-run", "ar1", self.AR_SUMMARY_RELATIVE))
+                # R2 失败身份不成立（无诊断），不会被误封存为 action-failed。
+                self.assertFalse(supervisor.evaluation_orphan_facts(run_dir, state, inner)["complete"])
+                # Campaign 目录内复算：段摘要当前字节一致且为成功终态。
+                verified = supervisor.verify_attempt_recovery_orphan_output(campaign_dir, facts_after)
+                self.assertEqual((verified["status"], verified["job_count"], verified["sha256"]), ("awaiting_receipts", 1, facts_after["output_sha256"]))
+                summary_path = campaign_dir / self.AR_SUMMARY_RELATIVE
+                original = summary_path.read_bytes()
+                changed = json.loads(original)
+                changed["results"][0]["status"] = "failed"
+                summary_path.write_bytes(json.dumps(changed, sort_keys=True).encode("utf-8") + b"\n")
+                with self.assertRaisesRegex(supervisor.SupervisorError, "当前字节与封存时不一致"):
+                    supervisor.verify_attempt_recovery_orphan_output(campaign_dir, facts_after)
+                summary_path.write_bytes(original)
+                with self.assertRaisesRegex(supervisor.SupervisorError, "判定不成立"):
+                    supervisor.verify_attempt_recovery_orphan_output(campaign_dir, {**facts_after, "binding_mismatch": True})
+
+    def test_recovery_segment_owner_loss_negatives_stay_watchdog_aborted(self) -> None:
+        expectations = {
+            "multi": ("not-single-action-batch", "owner-process-not-alive"),
+            "missing-binding": ("action-output-binding-missing", "owner-process-not-alive"),
+            "exists-false": ("action-output-not-present", "owner-process-not-alive"),
+            "corrupt-binding": ("action-output-binding-invalid:SupervisorError", "action-output-binding-mismatch"),
+            "drift-binding": ("action-output-binding-mismatch", "action-output-binding-mismatch"),
+            "in-progress": ("action-lifecycle-not-started-finished-pair", "owner-process-not-alive"),
+        }
+        for variant, (fact_reason, stop_reason) in expectations.items():
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                run_dir, _binding, _campaign_dir, facts_before = self._prepare_recovery_orphan(root, variant=variant)
+                self.assertFalse(facts_before["complete"], (variant, facts_before))
+                self.assertIn(fact_reason, facts_before["reasons"], (variant, facts_before))
+                self.assertEqual(facts_before["binding_mismatch"], variant in {"corrupt-binding", "drift-binding"}, (variant, facts_before))
+                state = self._wait_state(run_dir, {"failed", "watchdog-aborted"})
+                self.assertEqual(state["state"], "watchdog-aborted", (variant, state))
+                self.assertIn(stop_reason, supervisor.read_stop_receipt(run_dir)["reason"], variant)
+
 
 class PreActionIdentityCheckTests(unittest.TestCase):
     """T5.9：动作执行前核对 evaluator 四项摘要——清单冻结值与当前受管树不一致时动作不执行、父 run failed（identity-drift）。"""

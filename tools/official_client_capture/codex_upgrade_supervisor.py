@@ -18,6 +18,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import secrets
 import signal
 import stat
@@ -119,8 +120,12 @@ RECOVERABLE_ACTION_FAILURE_CLASSES = frozenset(
 # 由 reconciler 按 state／stop reason 分类；两类都可恢复但恢复目标不同：
 # parent-prepare-abandoned（COMMIT 未写，序号未占）→ 同序号重派；
 # parent-start-failed（COMMIT 已写，序号已占）→ N+1 逐字重派。
+# 改造 5 M2（崩溃矩阵 R2 的 attempt-recovery 变体）：正式单动作恢复段 run 批次的动作已成功退出、动作
+# 输出绑定已写，父 run 在写终态前 owner 丢失。段本身已可信收口（绑定的段摘要为成功终态），逐字重派同一
+# 批次只会命中段 run 的幂等返回（零请求）；按 parent-start-failed 同构走"对账许可 + N+1 逐字重派"。
+PARENT_FINALIZE_LOST_REASON = "parent-finalize-lost"
 RECOVERABLE_PARENT_FAILURE_CLASSES = frozenset(
-    {"parent-prepare-abandoned", "parent-start-failed"}
+    {"parent-prepare-abandoned", "parent-start-failed", PARENT_FINALIZE_LOST_REASON}
 )
 # COMMIT 存在但自摘要无效／nonce 或 run 目录不匹配：完整性异常，永久停线走人工审计。
 COMMIT_INTEGRITY_MISMATCH_CLASS = "commit-integrity-mismatch"
@@ -2158,6 +2163,192 @@ def evaluation_orphan_facts(
     return facts
 
 
+ATTEMPT_RECOVERY_SUMMARY_BINDING_RE = re.compile(
+    r"^candidates/(?P<candidate_id>[^/]+)/attempts/(?P<attempt_id>[^/]+)/recovery/(?P<recovery_revision>ar[1-9][0-9]*)/attempt-recovery\.json$"
+)
+
+
+def _attempt_recovery_orphan_facts_for_monitor(run_dir: Path, state: Mapping[str, Any]) -> dict[str, Any]:
+    """monitor 侧包装：任何读取异常都按判定不成立处理，绝不让 watchdog 自身崩溃。"""
+
+    try:
+        return attempt_recovery_orphan_facts(run_dir, state, _run_inner_manifest(run_dir))
+    except (SupervisorError, OSError, ValueError, TypeError) as error:
+        return {
+            "complete": False,
+            "action_id": None,
+            "operation": None,
+            "recovery_revision": None,
+            "binding_path": None,
+            "binding_sha256": None,
+            "output_sha256": None,
+            "binding_mismatch": False,
+            "reasons": [f"recovery-orphan-facts-error:{type(error).__name__}"],
+        }
+
+
+def attempt_recovery_orphan_facts(
+    run_dir: Path,
+    state: Mapping[str, Any],
+    inner_manifest: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """崩溃矩阵 R2 的 attempt-recovery 变体判定（monitor、reconciler、后继协议共用；只读 run 目录）。
+
+    只承认**正式单动作批次**且该动作是恢复段 run（``capture-candidate run --attempt-recovery ar<k>``）：
+    a. 无任何动作失败诊断；b. 重放完整 ``events.ndjson``，按冻结动作的 ``job_id + operation`` 投影后恰为一对
+    ``action-started``／``action-finished``（嵌套 Job 事件 ``job:*`` 允许存在，不计入投影）；c. 动作输出绑定
+    必须存在、自摘要有效、清单摘要与 owner nonce 一致、唯一绑定路径等于清单声明且是规范段摘要路径
+    ``candidates/<cid>/attempts/<id>/recovery/ar<k>/attempt-recovery.json``、``exists=true``、``sha256`` 非空。
+    多动作批次、非段 run 动作、缺绑定、``exists=false`` → ``complete=False``；绑定存在但自摘要／身份／路径
+    不符 → ``binding_mismatch``。两者在 monitor 侧都维持 ``watchdog-aborted``。monitor 追加的 ``failed`` 等
+    非生命周期事件不影响判定，封存前后复算相同。段摘要当前字节与绑定摘要的一致性、段摘要为成功终态由
+    reconciler／后继协议在 Campaign 目录内另行核对（monitor 只读 run 目录）。
+    """
+
+    run_dir = Path(run_dir)
+    facts: dict[str, Any] = {
+        "complete": False,
+        "action_id": None,
+        "operation": None,
+        "recovery_revision": None,
+        "binding_path": None,
+        "binding_sha256": None,
+        "output_sha256": None,
+        "binding_mismatch": False,
+        "reasons": [],
+    }
+    diagnostic_root = run_dir / "action-diagnostics"
+    if diagnostic_root.is_symlink():
+        facts["reasons"].append("action-diagnostic-root-untrusted")
+        return facts
+    if diagnostic_root.is_dir() and any(diagnostic_root.glob("action-*-failure.json")):
+        facts["reasons"].append("action-diagnostic-present")
+        return facts
+    actions = inner_manifest.get("actions") if isinstance(inner_manifest, Mapping) else None
+    if not isinstance(actions, list) or len(actions) != 1 or not isinstance(actions[0], Mapping):
+        facts["reasons"].append("not-single-action-batch")
+        return facts
+    action = actions[0]
+    action_id = action.get("action_id")
+    operation = action.get("operation")
+    if not isinstance(action_id, str) or not action_id or not isinstance(operation, str) or not operation:
+        facts["reasons"].append("action-identity-invalid")
+        return facts
+    recovery_revision = _attempt_recovery_run_revision(inner_manifest, action_id)
+    if recovery_revision is None:
+        facts["reasons"].append("action-not-attempt-recovery-run")
+        return facts
+    facts.update({"action_id": action_id, "operation": operation, "recovery_revision": recovery_revision})
+    try:
+        events = load_events(run_dir)
+    except SupervisorError as error:
+        facts["reasons"].append(f"events-invalid:{type(error).__name__}")
+        return facts
+    projected = [
+        event.get("event_type")
+        for event in events
+        if event.get("event_type") in ACTION_LIFECYCLE_EVENT_TYPES
+        and event.get("job_id") == action_id
+        and event.get("operation") == operation
+    ]
+    if projected != ["action-started", "action-finished"]:
+        facts["reasons"].append("action-lifecycle-not-started-finished-pair")
+        return facts
+    declared = action.get("output_bindings")
+    if not isinstance(declared, list) or len(declared) != 1 or not isinstance(declared[0], str):
+        facts["reasons"].append("output-binding-declaration-not-single")
+        return facts
+    declared_path = declared[0]
+    match = ATTEMPT_RECOVERY_SUMMARY_BINDING_RE.fullmatch(declared_path)
+    if match is None or match.group("recovery_revision") != recovery_revision:
+        facts["reasons"].append("output-binding-not-recovery-summary")
+        return facts
+    candidate_id = inner_manifest.get("candidate_id") if isinstance(inner_manifest, Mapping) else None
+    if isinstance(candidate_id, str) and candidate_id and match.group("candidate_id") != candidate_id:
+        facts["reasons"].append("output-binding-candidate-mismatch")
+        return facts
+    path = _action_outputs_path(run_dir, action_id)
+    if not path.exists() and not path.is_symlink():
+        facts["reasons"].append("action-output-binding-missing")
+        return facts
+    try:
+        binding = read_action_output_binding(run_dir, action_id)
+    except SupervisorError as error:
+        facts["binding_mismatch"] = True
+        facts["reasons"].append(f"action-output-binding-invalid:{type(error).__name__}")
+        return facts
+    manifest_sha256 = _sha256(_canonical(dict(inner_manifest))) if isinstance(inner_manifest, Mapping) else None
+    bindings = binding.get("bindings")
+    if (
+        binding.get("run_manifest_sha256") != manifest_sha256
+        or binding.get("owner_nonce") != state.get("owner_nonce")
+        or not isinstance(bindings, list)
+        or len(bindings) != 1
+        or not isinstance(bindings[0], Mapping)
+        or bindings[0].get("path") != declared_path
+    ):
+        facts["binding_mismatch"] = True
+        facts["reasons"].append("action-output-binding-mismatch")
+        return facts
+    output_sha256 = bindings[0].get("sha256")
+    if (
+        bindings[0].get("exists") is not True
+        or not isinstance(output_sha256, str)
+        or len(output_sha256) != 64
+        or any(character not in "0123456789abcdef" for character in output_sha256)
+    ):
+        facts["reasons"].append("action-output-not-present")
+        return facts
+    facts.update(
+        {
+            "complete": True,
+            "binding_path": declared_path,
+            "binding_sha256": str(binding["binding_sha256"]),
+            "output_sha256": output_sha256,
+        }
+    )
+    return facts
+
+
+def verify_attempt_recovery_orphan_output(
+    campaign_dir: Path,
+    facts: Mapping[str, Any],
+) -> dict[str, Any]:
+    """reconciler／后继协议：在 Campaign 目录内重算绑定的段摘要文件摘要并确认段为成功终态（无失败 Job）。
+
+    只有段摘要当前字节等于封存时绑定的摘要、``status == awaiting_receipts`` 且 ``results`` 无 failed，
+    逐字重派同一批次才必然命中段 run 的幂等返回（零请求）。任一不成立即失败关闭。
+    """
+
+    if not facts.get("complete") or facts.get("binding_mismatch"):
+        raise SupervisorError("父终态化丢失批次的恢复段判定不成立。")
+    campaign_dir = Path(campaign_dir)
+    relative = str(facts.get("binding_path") or "")
+    if not relative or ATTEMPT_RECOVERY_SUMMARY_BINDING_RE.fullmatch(relative) is None:
+        raise SupervisorError("父终态化丢失批次的段摘要绑定路径非法。")
+    summary_path = campaign_dir / relative
+    if summary_path.is_symlink() or not summary_path.is_file():
+        raise SupervisorError("父终态化丢失批次绑定的段摘要文件不存在或不可信。")
+    raw = summary_path.read_bytes()
+    if _sha256(raw) != facts.get("output_sha256"):
+        raise SupervisorError("父终态化丢失批次绑定的段摘要当前字节与封存时不一致。")
+    try:
+        summary = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise SupervisorError("父终态化丢失批次绑定的段摘要不是有效 JSON。") from error
+    results = summary.get("results") if isinstance(summary, Mapping) else None
+    if (
+        not isinstance(summary, Mapping)
+        or summary.get("status") != "awaiting_receipts"
+        or summary.get("recovery_revision") != facts.get("recovery_revision")
+        or not isinstance(results, list)
+        or not results
+        or any(not isinstance(row, Mapping) or row.get("status") != "complete" for row in results)
+    ):
+        raise SupervisorError("父终态化丢失批次绑定的段摘要不是无失败 Job 的成功终态。")
+    return {"path": relative, "sha256": facts["output_sha256"], "status": "awaiting_receipts", "job_count": len(results)}
+
+
 def _read_stop_request(
     run_dir: Path,
     *,
@@ -2926,10 +3117,54 @@ def _monitor_impl(args: argparse.Namespace) -> int:
                 resulting = _set_terminal_state(run_dir, state="failed", terminal_at_epoch=now)
                 terminal_state = str(resulting.get("state", "failed"))
                 continue
+            # 改造 5 M2（R2 的 attempt-recovery 变体）：正式单动作恢复段 run 已成功退出、动作输出绑定已写
+            # （绑定的段摘要存在且摘要非空）、父 run 写终态前 owner 丢失 → 确定性封存 failed／parent-finalize-lost，
+            # 由 reconciler 对账许可后按 N+1 逐字重派同一批次（段 run 幂等返回，零请求）。多动作批次、非段 run、
+            # 缺绑定、exists=false 与绑定漂移都维持 watchdog-aborted 失败关闭。
+            recovery_orphan = _attempt_recovery_orphan_facts_for_monitor(run_dir, state)
+            if (
+                not orphan["binding_mismatch"]
+                and recovery_orphan["complete"]
+                and not recovery_orphan["binding_mismatch"]
+            ):
+                reason = PARENT_FINALIZE_LOST_REASON
+                _append_event(
+                    run_dir,
+                    event_type="failed",
+                    operation="supervisor:owner-check",
+                    owner_pid=owner_pid,
+                    owner_nonce=owner_nonce,
+                    campaign_id=campaign_id,
+                    phase=phase,
+                    status="failed",
+                    reason=reason,
+                )
+                _stop_receipt(
+                    run_dir,
+                    event_type="failed",
+                    reason=reason,
+                    detected_at_epoch=now,
+                    owner_pid=owner_pid,
+                    owner_nonce=owner_nonce,
+                    campaign_id=campaign_id,
+                    phase=phase,
+                )
+                flush_ledger(
+                    now,
+                    heartbeat,
+                    False,
+                    heartbeat_age,
+                    final=True,
+                    state_name="failed",
+                )
+                terminal_ledger_finalized = True
+                resulting = _set_terminal_state(run_dir, state="failed", terminal_at_epoch=now)
+                terminal_state = str(resulting.get("state", "failed"))
+                continue
             abort(
                 (
                     "action-output-binding-mismatch"
-                    if orphan["binding_mismatch"]
+                    if orphan["binding_mismatch"] or recovery_orphan["binding_mismatch"]
                     else "owner-process-not-alive"
                     if heartbeat_age <= timeout_seconds
                     else "owner-process-not-alive-after-heartbeat-gap"
@@ -7474,6 +7709,97 @@ def _successor_segment_normalized_command(
     return normalized, preview
 
 
+def _require_segment_preview_scope_matches_frozen_jobs(
+    campaign_dir: Path,
+    prior_manifest: Mapping[str, Any],
+    *,
+    attempt_id: str,
+    prior_revision: str,
+    preview: Mapping[str, Any],
+) -> list[str]:
+    """P1（授权闭包）：后继段预览批准的范围必须等于权威链取得的 J*，且不复用任何段内 Job。
+
+    权威链与 CLI／reconciler 完全相同：失败段预约（``evaluation_baseline``／``baseline_commit_sha256``／
+    ``recovery_sha256`` 三元组，自摘要重放）→ ``b<K>/COMMIT``（``commit_sha256`` 与 ``recovery_sha256``
+    等于预约值，且等于前序批次清单冻结的基线与 COMMIT）→ ``recovery.json``（自摘要等于 COMMIT 绑定值、
+    attempt 身份一致）→ ``execute_jobs``。任一环不等即失败关闭，不直接信任预览或当前账本。
+    """
+
+    candidate_id = prior_manifest.get("candidate_id")
+    if not isinstance(candidate_id, str) or not candidate_id:
+        raise SupervisorError("后继恢复段批次的前序清单缺少 candidate_id。")
+    reservation_path = (
+        campaign_dir / "candidates" / candidate_id / "attempts" / attempt_id / "recovery" / prior_revision
+        / "recovery-reservation.json"
+    )
+    if reservation_path.is_symlink() or not reservation_path.is_file():
+        raise SupervisorError(f"后继恢复段批次缺少失败段 {prior_revision} 的预约收据。")
+    reservation = _read_json(reservation_path)
+    unsigned = {key: value for key, value in reservation.items() if key != "reservation_digest"}
+    # 段预约由 codex_upgrade._fingerprint（compact、键排序、无尾换行）自签，这里只读重放同一形态。
+    if (
+        reservation.get("schema_version") != "codex-upgrade-attempt-recovery-reservation/v1"
+        or reservation.get("candidate_id") != candidate_id
+        or reservation.get("attempt_id") != attempt_id
+        or reservation.get("recovery_revision") != prior_revision
+        or reservation.get("reservation_digest") != _sha256(_legacy_compact_canonical(unsigned))
+    ):
+        raise SupervisorError(f"失败段 {prior_revision} 的预约身份或自摘要不一致。")
+    baseline = reservation.get("evaluation_baseline")
+    if isinstance(baseline, bool) or not isinstance(baseline, int) or baseline < 1:
+        raise SupervisorError(f"失败段 {prior_revision} 的预约缺少 evaluation_baseline。")
+    if (
+        prior_manifest.get("evaluation_baseline") != baseline
+        or prior_manifest.get("baseline_commit_sha256") != reservation.get("baseline_commit_sha256")
+    ):
+        raise SupervisorError("失败段预约绑定的基线／COMMIT 与前序批次清单冻结值不一致。")
+    baseline_dir = campaign_dir / "candidates" / candidate_id / "revisions" / f"b{baseline}"
+    commit_path = baseline_dir / "COMMIT"
+    recovery_path = baseline_dir / "recovery.json"
+    if any(path.is_symlink() or not path.is_file() for path in (commit_path, recovery_path)):
+        raise SupervisorError(f"评估基线 b{baseline} 缺少 COMMIT 或 recovery.json。")
+    try:
+        commit = vc_artifacts.validate_evaluation_baseline_commit(_read_json(commit_path))
+        recovery = vc_artifacts.validate_evaluation_recovery(_read_json(recovery_path))
+    except vc_artifacts.VCArtifactError as error:
+        raise SupervisorError(f"评估基线 b{baseline} 的 COMMIT／recovery 无法校验：{error}") from error
+    if (
+        commit.get("candidate_id") != candidate_id
+        or commit.get("evaluation_baseline") != baseline
+        or commit.get("commit_sha256") != reservation.get("baseline_commit_sha256")
+        or commit.get("recovery_sha256") != reservation.get("recovery_sha256")
+    ):
+        raise SupervisorError(f"失败段预约绑定的 COMMIT／recovery_sha256 与 b{baseline}/COMMIT 不一致。")
+    if (
+        recovery.get("recovery_sha256") != commit.get("recovery_sha256")
+        or recovery.get("candidate_id") != candidate_id
+        or recovery.get("evaluation_baseline") != baseline
+        or recovery.get("kind") != "attempt-recovery"
+        or str(recovery.get("attempt_id")) != attempt_id
+    ):
+        raise SupervisorError(f"评估基线 b{baseline} 的 recovery.json 与 COMMIT 绑定的 recovery_sha256 或 attempt 身份不一致。")
+    frozen = sorted(str(item) for item in recovery.get("execute_jobs", []))
+    planned = preview.get("planned_job_ids")
+    execute = preview.get("execute_job_ids")
+    reuse = preview.get("reuse_job_ids")
+    if (
+        not frozen
+        or not isinstance(planned, list)
+        or not isinstance(execute, list)
+        or not isinstance(reuse, list)
+        or sorted(str(item) for item in planned) != frozen
+        or sorted(str(item) for item in execute) != frozen
+        or len(set(planned)) != len(planned)
+        or len(set(execute)) != len(execute)
+        or reuse != []
+    ):
+        raise SupervisorError(
+            f"后继恢复段批次的恢复预览批准范围（planned={planned}，execute={execute}，reuse={reuse}）"
+            f"不等于基线冻结的 J*={frozen}。"
+        )
+    return frozen
+
+
 def _validate_attempt_recovery_segment_successor(
     prior_state: Mapping[str, Any],
     prior_manifest: Mapping[str, Any],
@@ -7609,6 +7935,10 @@ def _validate_attempt_recovery_segment_successor(
                 bound = True
     if not bound:
         raise SupervisorError("后继恢复段批次携带的恢复预览与账本 recovery_authorized 绑定的预览不一致。")
+    # P1（授权闭包）：预览批准的执行范围必须恰好等于权威链取得的 J*（reuse 恒空），与 CLI 开段口径一致。
+    _require_segment_preview_scope_matches_frozen_jobs(
+        campaign_dir, prior_manifest, attempt_id=str(attempt_id), prior_revision=prior_revision, preview=preview_document
+    )
     return True
 
 
@@ -7874,6 +8204,62 @@ def _validate_first_batch_binding(
         raise SupervisorError("staging 模型 Campaign 的首批 run 队列清单与 VC-0 绑定不一致。")
 
 
+def _validate_batched_parent_finalize_redispatch_successor(
+    prior_state: Mapping[str, Any],
+    prior_manifest: Mapping[str, Any],
+    prior_dir: Path,
+    successor_manifest: Mapping[str, Any],
+    *,
+    campaign_dir: Path | None,
+) -> bool:
+    """改造 5 M2（R2 的 attempt-recovery 变体）：父终态化丢失（单动作段 run 已成功、终态未写）的 N+1 逐字重派协议。
+
+    返回 ``False`` 表示前序失败不是 ``parent-finalize-lost``，交给其他协议匹配；一旦 stop reason 命中，
+    段 run 判定（单动作、投影事件成对、绑定存在且有效）、段摘要当前字节与绑定一致且为成功终态、COMMIT、
+    对账收据与账本许可任一缺失即失败关闭，且不得复用 ``action-failed`` 路径伪装。
+    """
+
+    stop_path = prior_dir / "stop-receipt.json"
+    if stop_path.is_symlink() or not stop_path.is_file():
+        return False
+    stop = read_stop_receipt(prior_dir)
+    if stop.get("reason") != PARENT_FINALIZE_LOST_REASON:
+        return False
+    owner_pid = prior_state.get("owner_pid")
+    owner_nonce = prior_state.get("owner_nonce")
+    if (
+        stop.get("event_type") != "failed"
+        or stop.get("campaign_id") != prior_manifest.get("campaign_id")
+        or stop.get("phase") != prior_manifest.get("phase")
+        or stop.get("owner_pid") != owner_pid
+        or stop.get("owner_nonce") != owner_nonce
+        or stop.get("action_outputs_sha256") is not None
+        or prior_state.get("state") != "failed"
+        or prior_state.get("campaign_id") != prior_manifest.get("campaign_id")
+        or prior_state.get("phase") != prior_manifest.get("phase")
+    ):
+        raise SupervisorError("父终态化丢失批次的父终态或 stop receipt 漂移。")
+    facts = attempt_recovery_orphan_facts(prior_dir, prior_state, prior_manifest)
+    if not facts["complete"] or facts["binding_mismatch"]:
+        raise SupervisorError("父终态化丢失批次的恢复段判定不成立：" + "、".join(facts["reasons"]))
+    if campaign_dir is None:
+        raise SupervisorError("父终态化丢失重派必须绑定 Campaign 目录。")
+    campaign_dir = Path(campaign_dir)
+    verify_attempt_recovery_orphan_output(campaign_dir, facts)
+    commit = _staging_commit_for_run(campaign_dir, prior_state, prior_manifest, prior_dir)
+    if commit is None:
+        raise SupervisorError("父终态化丢失批次没有有效 COMMIT，不能按 N+1 重派。")
+    return _validate_reconciled_redispatch_binding(
+        prior_state,
+        prior_manifest,
+        prior_dir,
+        successor_manifest,
+        campaign_dir=campaign_dir,
+        effective_class=PARENT_FINALIZE_LOST_REASON,
+        label="父终态化丢失",
+    )
+
+
 def _validate_batched_parent_start_redispatch_successor(
     prior_state: Mapping[str, Any],
     prior_manifest: Mapping[str, Any],
@@ -8066,6 +8452,18 @@ def _validate_batched_campaign_history(
             prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
             and successor_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
             and _validate_batched_parent_start_redispatch_successor(
+                state,
+                prior_manifest,
+                _run_dir,
+                successor_manifest,
+                campaign_dir=campaign_dir,
+            )
+        ):
+            continue
+        if (
+            prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
+            and successor_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
+            and _validate_batched_parent_finalize_redispatch_successor(
                 state,
                 prior_manifest,
                 _run_dir,

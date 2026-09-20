@@ -40,7 +40,7 @@ import re
 import stat
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, Sequence
 
 from tools.official_client_capture import codex_upgrade
 from tools.official_client_capture import codex_upgrade_live_request_provenance as provenance
@@ -69,9 +69,16 @@ DECISION_STOP = "permanent_stop"
 # 改造 4：父 run 取得执行权之前的失败分类（无动作诊断，按 state／stop reason 判定）。
 PARENT_PREPARE_ABANDONED_CLASS = "parent-prepare-abandoned"
 PARENT_START_FAILED_CLASS = supervisor.PARENT_START_FAILED_REASON
+# 改造 5 M2（R2 的 attempt-recovery 变体）：单动作恢复段 run 已成功、父 run 终态化前 owner 丢失。
+PARENT_FINALIZE_LOST_CLASS = supervisor.PARENT_FINALIZE_LOST_REASON
 COMMIT_INTEGRITY_MISMATCH_CLASS = supervisor.COMMIT_INTEGRITY_MISMATCH_CLASS
 STAGING_FAILURE_CLASSES = frozenset(
-    {PARENT_PREPARE_ABANDONED_CLASS, PARENT_START_FAILED_CLASS, COMMIT_INTEGRITY_MISMATCH_CLASS}
+    {
+        PARENT_PREPARE_ABANDONED_CLASS,
+        PARENT_START_FAILED_CLASS,
+        PARENT_FINALIZE_LOST_CLASS,
+        COMMIT_INTEGRITY_MISMATCH_CLASS,
+    }
 )
 # 可恢复分类对应的账本 next_action：序号未占 → 同序号重派；序号已占 → 同批次 N+1 重派。
 NEXT_ACTION_SAME_SEQUENCE = "redispatch-same-sequence"
@@ -1220,12 +1227,29 @@ def _recovery_preview(
     project_ledger_head: Mapping[str, Any],
     now: str,
     recovery_revision: str | None = None,
+    recovery_execute_jobs: Sequence[str] | None = None,
 ) -> dict[str, Any]:
-    """零请求恢复预览：冻结四类 Job 闭集与预计新增请求数，等待操作员批准（段模式携带 recovery_revision）。"""
+    """零请求恢复预览：冻结四类 Job 闭集与预计新增请求数，等待操作员批准（段模式携带 recovery_revision）。
+
+    段模式（P1 授权闭包）：后继段整段重做基线冻结的 J*，段内 complete Job 不复用——预览的 ``planned_job_ids``
+    与 ``execute_job_ids`` 必须都等于权威链（段预约 → COMMIT → recovery.json）取得的 ``execute_jobs``，
+    ``reuse_job_ids`` 恒空，请求估算覆盖完整 J*；否则会出现"批准 1 个请求、实际执行 2 个"的授权边界错误。
+    """
 
     groups = jobs["groups"]
-    reusable = list(groups["complete"]) if (attempt_exists and environment_status == "restored") else []
-    execute = sorted(set(jobs["planned_job_ids"]) - set(reusable))
+    if recovery_revision is not None:
+        if recovery_execute_jobs is None:
+            raise ReconcilerError("恢复段预览必须提供权威链取得的 execute_jobs")
+        frozen = sorted(str(item) for item in recovery_execute_jobs)
+        if sorted(str(item) for item in jobs["planned_job_ids"]) != frozen or len(set(frozen)) != len(frozen):
+            raise ReconcilerError(
+                f"恢复段预约的 planned_jobs {sorted(jobs['planned_job_ids'])} 与基线冻结的 J* {frozen} 不一致"
+            )
+        reusable = []
+        execute = list(frozen)
+    else:
+        reusable = list(groups["complete"]) if (attempt_exists and environment_status == "restored") else []
+        execute = sorted(set(jobs["planned_job_ids"]) - set(reusable))
     per_job: dict[str, int] = {}
     for job in provenance_copy.get("jobs", []):
         if isinstance(job, Mapping) and isinstance(job.get("job_id"), str):
@@ -1257,7 +1281,9 @@ def _recovery_preview(
         "reuse_job_ids": reusable,
         "execute_job_ids": execute,
         "reuse_basis": (
-            "source attempt 环境已恢复，complete Job 只读复用"
+            "失败段不可变，后继段整段重做基线冻结的 J*；段内 complete Job 不复用"
+            if recovery_revision is not None
+            else "source attempt 环境已恢复，complete Job 只读复用"
             if reusable
             else "source attempt 无 after 探针或环境未恢复，证据前提不成立，不复用"
         ),
@@ -1555,7 +1581,8 @@ def reconcile_attempt(
 
     改造 5 M2：``recovery_revision=ar<k>`` 时对账的是该 attempt 的恢复段（段预约之后中断／失败）：
     定位 ``recovery/ar<k>/``，收据带 ``recovery_revision``，operation ``reconcile-attempt:<id>:ar<k>``，
-    账本写 ``attempt_recovery_failed``（原 attempt 事件不动），恢复预览只在段内按 failed ∪ pending 续跑。
+    账本写 ``attempt_recovery_failed``（原 attempt 事件不动），恢复预览按基线冻结的 J* 全量生成（reuse 恒空），
+    批准后由后继段 ar<k+1> 整段重做。
     """
 
     campaign_dir = Path(campaign_dir).resolve(strict=True)
@@ -1576,6 +1603,14 @@ def reconcile_attempt(
         reservation = codex_upgrade._load_attempt_recovery_reservation(
             campaign_dir, segment_root, candidate_id=candidate_id, attempt_id=attempt_id, recovery_revision=recovery_revision
         )
+        # P1（授权闭包）：J* 只沿权威链取（段预约三元组 → COMMIT → recovery.json），任一环不等即失败关闭。
+        try:
+            _baseline, _commit, authoritative_recovery = codex_upgrade._authoritative_recovery_execute_jobs(
+                campaign_dir, candidate_id, reservation
+            )
+        except codex_upgrade.ConfigurationError as error:
+            raise ReconcilerError(f"恢复段 {recovery_revision} 的 J* 权威链不成立：{error}") from error
+        recovery_execute_jobs = [str(item) for item in authoritative_recovery["execute_jobs"]]
         summary_path = segment_root / codex_upgrade.ATTEMPT_RECOVERY_SUMMARY_FILENAME
         if summary_path.exists() or summary_path.is_symlink():
             _segment, _reservation, attempt = codex_upgrade._load_attempt_recovery_segment(
@@ -1604,6 +1639,7 @@ def reconcile_attempt(
         if stage_result.exists():
             raise ReconcilerError("该阶段已封存，attempt 不再属于可对账的中断")
         work_root = attempt_root
+        recovery_execute_jobs = None
     subject = _recovery_segment_subject(attempt_id, recovery_revision)
     records, latest_checkpoints, chain = _checkpoint_facts(work_root)
     jobs = _classify_jobs(campaign_dir, manifest, reservation, attempt, latest_checkpoints, work_root)
@@ -1907,6 +1943,7 @@ def reconcile_attempt(
             campaign_ledger_head=_ledger_facts(ledger_dir, now=_utc_now()),
             project_ledger_head=head_after,
             now=observed,
+            recovery_execute_jobs=recovery_execute_jobs,
         )
         result["recovery_preview"] = preview
         result["recovery_preview_path"] = str(receipt_dir / f"recovery-preview-{int(preview['index']):02d}.json")
@@ -2115,7 +2152,7 @@ def _run_facts(run_dir: Path, campaign_dir: Path, manifest: Mapping[str, Any]) -
         stop_reason_value = stop_receipt.get("reason")
         stop_reason = stop_reason_value if isinstance(stop_reason_value, str) else None
         stop_action_outputs_sha256 = stop_receipt.get("action_outputs_sha256")
-    staging = _staging_run_facts(run_dir, state, stop_reason, action_diagnostic)
+    staging = _staging_run_facts(run_dir, state, stop_reason, action_diagnostic, campaign_dir=campaign_dir)
     if staging is not None:
         failure_class = str(staging["failure_class"])
     elif action_diagnostic is not None:
@@ -2186,8 +2223,14 @@ def _staging_run_facts(
     state: Mapping[str, Any],
     stop_reason: str | None,
     action_diagnostic: Mapping[str, Any] | None,
+    *,
+    campaign_dir: Path | None = None,
 ) -> dict[str, Any] | None:
     """改造 4：按 state／stop reason 把取得执行权前的失败归入三类；非 staging run 返回 None。
+
+    改造 5 M2 追加第四类（取得执行权之后）：``failed`` + ``parent-finalize-lost`` → 同名分类，根因复用
+    ``supervisor-run.interrupted``（failed_step=parent-finalize），``next_action`` 同批次 N+1 逐字重派——
+    单动作恢复段 run 已成功、绑定的段摘要当前字节一致且为成功终态，重派只会命中段 run 幂等返回（零请求）。
 
     - ``aborted_prepared`` + ``prepared-abandoned`` → ``parent-prepare-abandoned``，根因
       ``staging.abandoned``（stage=parent-run）；
@@ -2262,6 +2305,38 @@ def _staging_run_facts(
                 "root_cause_component": "supervisor",
                 "root_cause_code": "parent-start.failed",
                 "failed_step": "commit-activate",
+                "stable_dimensions": {"phase": str(state["phase"])},
+                "next_action": NEXT_ACTION_SAME_BATCH,
+            }
+        )
+        return facts
+    if run_state == "failed" and stop_reason == supervisor.PARENT_FINALIZE_LOST_REASON:
+        if facts["commit_classification"] != "committed":
+            raise ReconcilerError("parent-finalize-lost 父 run 的 COMMIT 无效或缺失")
+        orphan = supervisor.attempt_recovery_orphan_facts(run_dir, state, supervisor._run_inner_manifest(run_dir))
+        if not orphan["complete"] or orphan["binding_mismatch"]:
+            raise ReconcilerError(
+                "parent-finalize-lost 父 run 的恢复段判定不成立：" + "、".join(orphan["reasons"])
+            )
+        if campaign_dir is None:
+            raise ReconcilerError("parent-finalize-lost 对账必须绑定 Campaign 目录")
+        try:
+            output = supervisor.verify_attempt_recovery_orphan_output(campaign_dir, orphan)
+        except supervisor.SupervisorError as error:
+            raise ReconcilerError(f"parent-finalize-lost 父 run 绑定的段摘要无法复算：{error}") from error
+        facts.update(
+            {
+                "failure_class": PARENT_FINALIZE_LOST_CLASS,
+                "attempt_recovery": {
+                    "action_id": orphan["action_id"],
+                    "operation": orphan["operation"],
+                    "recovery_revision": orphan["recovery_revision"],
+                    "binding_sha256": orphan["binding_sha256"],
+                    "summary": output,
+                },
+                "root_cause_component": "reconciler",
+                "root_cause_code": "supervisor-run.interrupted",
+                "failed_step": "parent-finalize",
                 "stable_dimensions": {"phase": str(state["phase"])},
                 "next_action": NEXT_ACTION_SAME_BATCH,
             }
@@ -2720,6 +2795,11 @@ def reconcile_supervisor_run(
         elif run.get("failure_class") == PARENT_START_FAILED_CLASS:
             result["next_command"] = (
                 "序号已占：以 compile-and-run-vc-batch 按 N+1 逐字重派同一批次内容"
+            )
+        elif run.get("failure_class") == PARENT_FINALIZE_LOST_CLASS:
+            result["next_command"] = (
+                "序号已占：以 compile-and-run-vc-batch 按 N+1 逐字重派同一批次内容"
+                "（恢复段 run 幂等返回，零请求；随后按段 seal 批次继续）"
             )
         else:
             result["next_command"] = "phase 保持 active：以 compile-and-run-vc-batch 重新派发同一批次"

@@ -19787,6 +19787,96 @@ class EvidenceManifestTest(unittest.TestCase):
             renumbered = codex_upgrade_evidence_manifest.merge_evidence_manifests(projected, conflict)
             self.assertEqual(sorted(row["prefix"] for row in renumbered["roots"]), ["001-job-a", "002-job-a"])
 
+    def test_segment_seal_s1_delta_scan_interruption_resumes_without_rereading_and_reprojects_identically(self) -> None:
+        """崩溃矩阵 S1（段 seal 第 3 阶段）：投影已写、delta 扫描中途中断 → 续作时已完成条目不重读（逐文件
+        checkpoint），投影纯函数重算逐字相同（投影收据 write-or-verify 通过），合并结果与一次成功扫描相同。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory).resolve()
+            job_a, job_b, delta_root, source, _delta = self._projection_fixture(base)
+            self._private_file(delta_root / "nested" / "b2.json", b'{"job":"b2","recovered":true}\n')
+            self._private_file(delta_root / "nested" / "b3.json", b'{"job":"b3","recovered":true}\n')
+            projected, receipt = codex_upgrade_evidence_manifest.project_evidence_manifest(source, keep_roots=[job_a])
+            checkpoint = base / "segment-delta-checkpoint.json"
+            original_scan = codex_upgrade_evidence_manifest._hash_and_scan
+            scanned: list[str] = []
+
+            def interrupted_scan(path, logical_path, known_secrets):
+                if len(scanned) == 2:
+                    raise OSError("simulated delta scan interruption")
+                scanned.append(logical_path)
+                return original_scan(path, logical_path, known_secrets)
+
+            with mock.patch.object(codex_upgrade_evidence_manifest, "_hash_and_scan", side_effect=interrupted_scan):
+                with self.assertRaisesRegex(OSError, "simulated delta scan interruption"):
+                    codex_upgrade_evidence_manifest.build_evidence_manifest([delta_root], checkpoint_path=checkpoint)
+            self.assertEqual(len(scanned), 2)
+            self.assertTrue(checkpoint.is_file())
+            completed_before = sorted(item["path"] for item in json.loads(checkpoint.read_text(encoding="utf-8"))["completed"])
+            self.assertEqual(completed_before, sorted(scanned))
+            # 续作：只扫描剩余条目，已完成条目不重读。
+            resumed: list[str] = []
+
+            def resumed_scan(path, logical_path, known_secrets):
+                resumed.append(logical_path)
+                return original_scan(path, logical_path, known_secrets)
+
+            with mock.patch.object(codex_upgrade_evidence_manifest, "_hash_and_scan", side_effect=resumed_scan):
+                delta = codex_upgrade_evidence_manifest.build_evidence_manifest([delta_root], checkpoint_path=checkpoint)
+            self.assertEqual(set(resumed) & set(completed_before), set())
+            self.assertEqual(sorted(resumed + completed_before), sorted(entry["path"] for entry in delta["entries"]))
+            self.assertEqual(delta["entry_count"], 3)
+            # 投影纯函数：中断后重算逐字相同 → 投影收据 write-or-verify 不会冲突。
+            reprojected, receipt_again = codex_upgrade_evidence_manifest.project_evidence_manifest(source, keep_roots=[job_a])
+            self.assertEqual((reprojected, receipt_again), (projected, receipt))
+            # 合并结果与一次成功扫描相同（不含 elapsed／完成时间等易变字段的条目与摘要）。
+            clean = codex_upgrade_evidence_manifest.build_evidence_manifest([delta_root], checkpoint_path=base / "clean-checkpoint.json")
+            merged = codex_upgrade_evidence_manifest.merge_evidence_manifests(projected, delta, preserve_prefixes=True)
+            merged_clean = codex_upgrade_evidence_manifest.merge_evidence_manifests(projected, clean, preserve_prefixes=True)
+            for field in ("roots", "entries", "inventory", "security", "total_bytes", "entry_count"):
+                self.assertEqual(merged[field], merged_clean[field], field)
+            # 续作只重新扫描剩余条目的字节；已完成条目与投影根都记为复用。
+            resumed_bytes = sum(entry["size"] for entry in delta["entries"] if entry["path"] in resumed)
+            self.assertEqual((delta["scan"]["scanned_bytes"], delta["scan"]["reused_bytes"]), (resumed_bytes, delta["total_bytes"] - resumed_bytes))
+            self.assertEqual((merged["scan"]["scanned_bytes"], merged["scan"]["reused_bytes"]), (resumed_bytes, projected["total_bytes"] + delta["total_bytes"] - resumed_bytes))
+            self.assertEqual(merged["scan"]["total_bytes"], projected["total_bytes"] + delta["total_bytes"])
+
+    def test_segment_seal_s2_written_merged_manifest_is_reused_without_rescan(self) -> None:
+        """崩溃矩阵 S2（段 seal 第 3 阶段）：合并清单与投影收据已写、result 未写 → 第二次 seal 只读回清单并复核
+        stat 边界（零扫描、不再投影／合并），清单字节不变即可直接进第 4 阶段。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory).resolve()
+            job_a, _job_b, delta_root, source, delta = self._projection_fixture(base)
+            baseline_dir = base / "b1"
+            baseline_dir.mkdir(mode=0o700)
+            projected, receipt = codex_upgrade_evidence_manifest.project_evidence_manifest(source, keep_roots=[job_a])
+            merged = codex_upgrade_evidence_manifest.merge_evidence_manifests(projected, delta, preserve_prefixes=True)
+            manifest_path = codex_upgrade._evidence_manifest_path(baseline_dir)
+            projection_path = baseline_dir / codex_upgrade.MANIFEST_PROJECTION_FILENAME
+            codex_upgrade._write_or_verify_json(projection_path, receipt)
+            codex_upgrade._write_or_verify_json(manifest_path, merged)
+            manifest_bytes = manifest_path.read_bytes()
+            # 第二次进入第 3 阶段：与 _seal_attempt_recovery_segment 的"清单已存在"分支同口径。
+            with mock.patch.object(codex_upgrade_evidence_manifest, "_hash_and_scan") as scanner, \
+                    mock.patch.object(codex_upgrade_evidence_manifest, "project_evidence_manifest") as project, \
+                    mock.patch.object(codex_upgrade_evidence_manifest, "merge_evidence_manifests") as merge:
+                loaded = codex_upgrade._load_evidence_manifest(manifest_path)
+                loaded_receipt = codex_upgrade._read_json(projection_path, "投影收据")
+                boundary = codex_upgrade_evidence_manifest.verify_manifest_boundary(loaded, [job_a, delta_root])
+            scanner.assert_not_called()
+            project.assert_not_called()
+            merge.assert_not_called()
+            self.assertEqual(boundary["scanned_bytes"], 0)
+            self.assertEqual(loaded["manifest_digest"], merged["manifest_digest"])
+            self.assertEqual(loaded_receipt, receipt)
+            self.assertEqual(manifest_path.read_bytes(), manifest_bytes)
+            # 同一内容 write-or-verify 幂等；漂移内容拒绝覆盖。
+            codex_upgrade._write_or_verify_json(manifest_path, merged)
+            self.assertEqual(manifest_path.read_bytes(), manifest_bytes)
+            with self.assertRaises(codex_upgrade.ConfigurationError):
+                codex_upgrade._write_or_verify_json(manifest_path, {**merged, "entry_count": merged["entry_count"] + 1})
+
     def test_evidence_manifest_boundary_ignores_device_only_in_isolated_rehearsal(self) -> None:
         """隔离预演（overlay 副本）上 st_dev 必然不同：只在带标记且根在 overlay 上时忽略 device，其余 stat 仍逐项比较。"""
 

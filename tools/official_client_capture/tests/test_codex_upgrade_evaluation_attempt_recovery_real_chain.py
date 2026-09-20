@@ -527,6 +527,90 @@ class RealAttemptRecoveryChainTests(unittest.TestCase):
         h.assert_b1_one_reused_one_rerun(1, rerun={RULE_A}, reused={RULE_B})
         h.assert_accepted_to_completion(1)
 
+    # ------------------------------------------------------------------
+    # R2 的 attempt-recovery 变体（2026-09-21 审核 P1）：单动作段 run 已成功、动作输出绑定已写、父 run 写终态前
+    # owner 丢失（SIGKILL）→ 真实 monitor 封存 failed／parent-finalize-lost → reconcile-supervisor-run 可恢复
+    # （根因 supervisor-run.interrupted[parent-finalize]、账本 receipt_passed／redispatch-same-batch）→ N+1 逐字
+    # 重派同一批次 → 段 run 幂等返回（零请求：段摘要、checkpoint、绑定输出摘要不变，账本段事件不重复）→
+    # 段 seal／入账／b1 继续到 completion（真机；本机无 OverlayFS 到幂等重派为止）。
+    # ------------------------------------------------------------------
+
+    def test_r2_segment_success_then_owner_loss_is_sealed_reconciled_and_redispatched_idempotently(self) -> None:
+        import hashlib
+
+        from tools.official_client_capture import codex_upgrade_supervisor as supervisor
+
+        h = self.harness
+        tree = h.tree_b()
+        state = h.init_ar(tree, candidate_surface="other")
+        self.assertEqual(h.dispatch(tree, "compare0", ["compare"])["returncode"], 0)
+        h.run(tree, "gate", "--tag", "b")
+        b0 = h.dispatch(tree, "b0", ["assert"], reuse_items=["compare"])
+        self.assertEqual(b0["returncode"], 1)
+        self.assertEqual(h.run(tree, "reconcile", "--run-dir", b0["campaign_run"]["run_dir"])["status"], "recoverable")
+        applied = h.apply_transient(tree)
+        self.assertEqual(applied["status"], "applied", applied)
+        crashed = h.ar_run(tree, "ar-run-crash", applied, crash_at="after-binding", expect_exit=137)
+        self.assertEqual(crashed["returncode"], 137, crashed)
+        run_dir = max((p for p in Path(h.state()["state_dir"]).iterdir() if p.name.startswith("run-")), key=lambda p: p.stat().st_mtime)
+        run_state = h.wait_run_state(str(run_dir), {"failed", "watchdog-aborted"})
+        self.assertEqual(run_state["state"], "failed", run_state)
+        receipt = supervisor.read_stop_receipt(run_dir)
+        self.assertEqual((receipt["event_type"], receipt["reason"], receipt["action_outputs_sha256"]), ("failed", "parent-finalize-lost", None))
+        # 段已成功收口：绑定的段摘要 exists=true 且摘要等于当前文件；账本段事件各一次、阶段 active。
+        summary_before = h.assert_segment_awaiting_receipts("ar1", execute_jobs=[JOB_A])
+        segment = h.segment_root("ar1")
+        summary_sha256 = hashlib.sha256((segment / "attempt-recovery.json").read_bytes()).hexdigest()
+        binding = supervisor.read_action_output_binding(run_dir, "vc5-1-ar-run")
+        self.assertEqual((binding["bindings"][0]["exists"], binding["bindings"][0]["sha256"]), (True, summary_sha256), binding)
+        checkpoints_before = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted((segment / "checkpoints").iterdir()) if p.is_file()}
+        self.assertTrue(checkpoints_before)
+        self.assertEqual(h.ledger_event_types().count("attempt_recovery_started"), 1)
+        self.assertEqual(h.ledger_event_types().count("attempt_recovery_completed"), 1)
+        ledger = h.summary()
+        self.assertEqual((ledger["status"], ledger["active_phase"]), ("active", "VC-5"), ledger)
+        live_before = ledger["total_live_request_count"]
+        receipt_passed_before = h.ledger_event_types().count("receipt_passed")
+        # 受管对账／许可：parent-finalize-lost 可恢复，根因复用 supervisor-run.interrupted[parent-finalize]。
+        reconciled = h.run(tree, "reconcile", "--run-dir", str(run_dir))
+        self.assertEqual(reconciled["status"], "recoverable", reconciled)
+        self.assertEqual((reconciled["root_cause"]["stable_error_code"], reconciled["root_cause"]["failed_step"]), ("supervisor-run.interrupted", "parent-finalize"))
+        self.assertIn("逐字重派同一批次", reconciled["next_command"])
+        receipt_payload = _read(h.campaign_dir() / reconciled["reconciliation_receipt"]["path"])
+        self.assertEqual(receipt_payload["failure_class"], "parent-finalize-lost")
+        self.assertEqual(receipt_payload["run"]["staging"]["attempt_recovery"]["summary"]["sha256"], summary_sha256)
+        ledger = h.summary()
+        self.assertEqual((ledger["status"], ledger["next_action"]), ("active", "redispatch-same-batch"), ledger)
+        self.assertEqual(h.ledger_event_types().count("receipt_passed"), receipt_passed_before + 1)
+        # N+1 逐字重派同一批次：段 run 幂等返回——段摘要／checkpoint 逐字节不变、绑定输出摘要相同、账本段事件
+        # 不重复、真实请求数不变。
+        redo = h.ar_run(tree, "ar-run-redo", applied)
+        self.assertEqual((redo["returncode"], redo["campaign_run"]["reason"]), (0, "queue-complete"), redo)
+        self.assertEqual(h.segment_summary("ar1")["attempt_recovery_digest"], summary_before["attempt_recovery_digest"])
+        self.assertEqual(hashlib.sha256((segment / "attempt-recovery.json").read_bytes()).hexdigest(), summary_sha256)
+        checkpoints_after = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted((segment / "checkpoints").iterdir()) if p.is_file()}
+        self.assertEqual(checkpoints_after, checkpoints_before)
+        redo_binding = supervisor.read_action_output_binding(Path(redo["campaign_run"]["run_dir"]), "vc5-1-ar-run")
+        self.assertEqual(redo_binding["bindings"][0]["sha256"], summary_sha256)
+        self.assertEqual(h.ledger_event_types().count("attempt_recovery_started"), 1)
+        self.assertEqual(h.ledger_event_types().count("attempt_recovery_completed"), 1)
+        self.assertEqual(h.summary()["total_live_request_count"], live_before)
+        self.assertEqual(h.summary()["attempt_recoveries"][f"{state['attempt_id']}:ar1"]["status"], "completed")
+        if not self._segment_stage_available():
+            self.skipTest(SEGMENT_SKIP_REASON)
+        # 可以继续后续流程：段 seal → 入账 → compare1 → b1 一条复用一条重跑 → completion。
+        h.ar_prepare(tree, applied)
+        sealed = h.ar_seal(tree, "ar-seal", applied)
+        self.assertEqual((sealed["returncode"], sealed["campaign_run"]["reason"]), (0, "queue-complete"), sealed)
+        accounted = h.ar_account(tree)
+        self.assertEqual(accounted["recovery_revision"], "ar1", accounted)
+        self.assertEqual(h.dispatch(tree, "compare1", ["compare"], baseline=1)["returncode"], 0)
+        h.run(tree, "gate", "--tag", "b1")
+        b1 = h.dispatch(tree, "b1", ["assert", "accept"], baseline=1, reuse_from=h.b0_index_path(), authority="anchored", reuse_items=["compare"])
+        self.assertEqual((b1["returncode"], b1["campaign_run"]["reason"]), (0, "queue-complete"), b1)
+        h.assert_b1_one_reused_one_rerun(1, rerun={RULE_A}, reused={RULE_B})
+        h.assert_accepted_to_completion(1)
+
 
 if __name__ == "__main__":
     unittest.main()

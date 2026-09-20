@@ -173,8 +173,13 @@ from typing import Any, Callable, Mapping
 # 2026-09-21（第 3 批 M2 T5.18 端到端）：恢复段 run 动作失败归可恢复（recovery_required，不进候选
 # review）；第七种后继协议（失败段批次只能由同 attempt 后继段批次承接）；评估基线后继协议按账本
 # 事件历史核对基线；断言预处理器的基线私有根改名 baseline-evidence。监督器与断言预处理器均随之变化。
+# 2026-09-21（第 3 批 M2 审核修正：2 个 P1）：后继段预览批准范围必须等于权威链（段预约三元组 → COMMIT
+# → recovery.json）取得的 J*、reuse 恒空（第七种协议重放）；崩溃矩阵 R2 的 attempt-recovery 变体——
+# 正式单动作恢复段 run 已成功、动作输出绑定已写（段摘要 exists=true）、父 run 终态前 owner 丢失时 monitor
+# 确定性封存 failed／parent-finalize-lost，新增"父终态化丢失"N+1 逐字重派协议（走既有对账许可绑定）。
+# 监督器随之变化；断言预处理器未变。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "ea6bbdb0d07d046ed8fc3a649e0b288422c85145366d83c88c88d9f10c7c1878"
+    "912a2ec5ed9f4f4735424f167b9f40813d20d1095be261f50f7c2a643cd660e3"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "c8020cadd3ee08f67236313a0913dbc3730805b46c3f6b720cdf7ace77f9fec1"

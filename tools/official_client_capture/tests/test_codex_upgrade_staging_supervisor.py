@@ -15,6 +15,7 @@ import unittest.mock
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from tools.official_client_capture import codex_upgrade_reconciler as reconciler
 from tools.official_client_capture import codex_upgrade_supervisor as supervisor
 from tools.official_client_capture import codex_upgrade_vc_artifacts as artifacts
 from tools.official_client_capture.codex_upgrade_supervisor import SupervisorClient, SupervisorError
@@ -852,6 +853,76 @@ class StagingSupervisorTests(unittest.TestCase):
                     state, prior_manifest, run_dir, self._v2_manifest(plan, sequence=3), campaign_dir=campaign_dir
                 )
             )
+
+    def test_parent_finalize_successor_rejects_disguise_without_segment_facts(self) -> None:
+        """伪装：state failed + stop reason parent-finalize-lost 但批次不是单动作恢复段 run／无绑定，必须失败关闭；
+        stop-receipt 带 action_outputs_sha256 也拒绝；其他 reason 让协议返回 False。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            campaign_dir, plan = self._staging_campaign(root)
+            prior_manifest = self._v2_manifest(plan, sequence=2)
+            run_dir = root / "supervisor" / f"run-{'a' * 64}"
+            run_dir.mkdir(parents=True, mode=0o700)
+            now = time.time()
+            state = {
+                "schema_version": supervisor.STATE_SCHEMA,
+                "supervisor_schema_version": supervisor.SCHEMA_VERSION,
+                "campaign_id": CAMPAIGN_ID,
+                "phase": "VC-2",
+                "owner_pid": 1,
+                "owner_nonce": "a" * 64,
+                "started_at_utc": supervisor._epoch_to_utc(now - 10),
+                "started_at_epoch": now - 10,
+                "started_monotonic_ns": 1,
+                "deadline_at_epoch": now + 100,
+                "deadline_monotonic_ns": 2,
+                "heartbeat_seconds": 1,
+                "watchdog_timeout_seconds": 2,
+                "ledger_interval_seconds": 1,
+                "terminate_owner": False,
+                "campaign_started_at_epoch": now - 10,
+                "predecessor_run_dir": None,
+                "predecessor_state_sha256": None,
+                "terminal_at_utc": supervisor._epoch_to_utc(now - 1),
+                "terminal_at_epoch": now - 1,
+                "state": "failed",
+                "staging_binding": self._binding(campaign_dir, sequence=2),
+            }
+            self._write_json(run_dir / "state.json", state)
+            stop = {
+                "schema_version": supervisor.STOP_SCHEMA,
+                "event_type": "failed",
+                "reason": supervisor.PARENT_FINALIZE_LOST_REASON,
+                "detected_at_utc": supervisor._epoch_to_utc(now - 1),
+                "detected_at_epoch": now - 1,
+                "owner_pid": 1,
+                "owner_nonce": "a" * 64,
+                "campaign_id": CAMPAIGN_ID,
+                "phase": "VC-2",
+            }
+            stop["receipt_sha256"] = supervisor._sha256(supervisor._canonical(stop))
+            self._write_json(run_dir / "stop-receipt.json", stop)
+            # 前序批次不是单动作恢复段 run（普通 v2 批次）→ 判定不成立，失败关闭。
+            with self.assertRaisesRegex(SupervisorError, "恢复段判定不成立"):
+                supervisor._validate_batched_parent_finalize_redispatch_successor(
+                    state, prior_manifest, run_dir, self._v2_manifest(plan, sequence=3), campaign_dir=campaign_dir
+                )
+            # 非 parent-finalize-lost 的 stop reason → False（交其他协议）。
+            other = dict(stop)
+            other["reason"] = "action-failed:item-a"
+            other.pop("receipt_sha256")
+            other["receipt_sha256"] = supervisor._sha256(supervisor._canonical(other))
+            self._write_json(run_dir / "stop-receipt.json", other)
+            self.assertFalse(
+                supervisor._validate_batched_parent_finalize_redispatch_successor(
+                    state, prior_manifest, run_dir, self._v2_manifest(plan, sequence=3), campaign_dir=campaign_dir
+                )
+            )
+            # reconciler 同一分类：伪装同样失败关闭（先核 COMMIT，再核恢复段判定）。
+            self._write_json(run_dir / "stop-receipt.json", stop)
+            with self.assertRaisesRegex(reconciler.ReconcilerError, "COMMIT 无效或缺失|恢复段判定不成立"):
+                reconciler._staging_run_facts(run_dir, state, supervisor.PARENT_FINALIZE_LOST_REASON, None, campaign_dir=campaign_dir)
 
     def test_timing_closeout_pauses_ledger_for_parent_start_failure(self) -> None:
         """P4 让账本进入 recovery_required（根因 parent-start.failed），强制 reconciler 先行。"""

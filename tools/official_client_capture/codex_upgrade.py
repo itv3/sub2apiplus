@@ -42535,6 +42535,11 @@ def _current_attempt_recovery_baseline(
     if baseline == 0 or commit is None:
         raise ConfigurationError("当前评估基线是 b0，没有已 COMMIT 的 attempt-recovery 基线，禁止开恢复段。")
     recovery = _load_evaluation_baseline_recovery(campaign_dir, candidate_id, baseline)
+    if str(recovery.get("recovery_sha256")) != str(commit.get("recovery_sha256")):
+        # P1（授权闭包）：recovery.json 自摘要合法但不是 COMMIT 绑定的那一份，J* 不可信。
+        raise ConfigurationError(
+            f"评估基线 b{baseline} 的 recovery.json 自摘要与 COMMIT 绑定的 recovery_sha256 不一致。"
+        )
     if recovery["kind"] != "attempt-recovery":
         raise ConfigurationError(f"当前评估基线 b{baseline} 不是 attempt-recovery 基线，禁止开恢复段。")
     frozen_revision = str(recovery["recovery_revision"])
@@ -42548,6 +42553,66 @@ def _current_attempt_recovery_baseline(
             recovery_preview=recovery_preview, require_preview=require_preview,
         )
     return baseline, commit, recovery
+
+
+def _authoritative_recovery_execute_jobs(
+    campaign_dir: Path,
+    candidate_id: str,
+    reservation: Mapping[str, Any],
+) -> tuple[int, dict[str, Any], dict[str, Any]]:
+    """改造 5 M2（P1 授权闭包）：从恢复段预约三元组沿唯一权威链取 J*。
+
+    链：段 reservation（``evaluation_baseline``／``baseline_commit_sha256``／``recovery_sha256``）→ ``b<K>/COMMIT``
+    （``commit_sha256`` 等于预约值，且 COMMIT 绑定的 ``recovery_sha256`` 等于预约值）→ ``recovery.json``
+    （自摘要等于 COMMIT 的 ``recovery_sha256``、kind 与 attempt 身份一致）→ ``execute_jobs``。
+    预览生成、CLI 开后继段与监督器后继协议都只认这条链，任一环不等即失败关闭。返回 ``(K, COMMIT, recovery)``。
+    """
+
+    try:
+        baseline = int(reservation["evaluation_baseline"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise ConfigurationError("恢复段预约缺少 evaluation_baseline。") from error
+    commit = _read_evaluation_baseline_commit(campaign_dir, candidate_id, baseline)
+    if str(commit.get("commit_sha256")) != str(reservation.get("baseline_commit_sha256")):
+        raise ConfigurationError(f"恢复段预约绑定的基线 COMMIT 与 b{baseline}/COMMIT 不一致。")
+    if str(commit.get("recovery_sha256")) != str(reservation.get("recovery_sha256")):
+        raise ConfigurationError(f"恢复段预约绑定的 recovery_sha256 与 b{baseline}/COMMIT 不一致。")
+    recovery = _load_evaluation_baseline_recovery(campaign_dir, candidate_id, baseline)
+    if str(recovery.get("recovery_sha256")) != str(commit.get("recovery_sha256")):
+        raise ConfigurationError(
+            f"评估基线 b{baseline} 的 recovery.json 自摘要与 COMMIT 绑定的 recovery_sha256 不一致。"
+        )
+    if recovery.get("kind") != "attempt-recovery" or str(recovery.get("attempt_id")) != str(reservation.get("attempt_id")):
+        raise ConfigurationError(f"评估基线 b{baseline} 的 recovery 不是该 attempt 的 attempt-recovery 基线。")
+    return baseline, commit, recovery
+
+
+def _require_recovery_preview_scope_equals_frozen_jobs(
+    preview: Mapping[str, Any],
+    execute_jobs: Sequence[str],
+    *,
+    label: str,
+) -> None:
+    """P1（授权闭包）：后继段预览批准的范围必须恰好等于权威链取得的 J*，且不复用任何段内 Job。"""
+
+    frozen = sorted(str(item) for item in execute_jobs)
+    planned = preview.get("planned_job_ids")
+    execute = preview.get("execute_job_ids")
+    reuse = preview.get("reuse_job_ids")
+    if (
+        not isinstance(planned, list)
+        or not isinstance(execute, list)
+        or not isinstance(reuse, list)
+        or sorted(str(item) for item in planned) != frozen
+        or sorted(str(item) for item in execute) != frozen
+        or len(set(planned)) != len(planned)
+        or len(set(execute)) != len(execute)
+        or reuse != []
+    ):
+        raise ConfigurationError(
+            f"{label}：恢复预览批准的执行范围（planned={planned}，execute={execute}，reuse={reuse}）"
+            f"不等于基线冻结的 J*={frozen}，拒绝开后继段。"
+        )
 
 
 def _attempt_recovery_segment_reconciled(
@@ -42650,6 +42715,20 @@ def _require_attempt_recovery_successor_segment(
             raise ConfigurationError(f"后继恢复段的恢复预览不可用：{error}") from error
         if str(preview.get("source_attempt_id")) != attempt_id:
             raise ConfigurationError("恢复预览绑定的 attempt 与当前 attempt-recovery 基线不一致。")
+        # P1（授权闭包）：J* 只从前序失败段预约的三元组沿权威链取（COMMIT → recovery.json），不直接信任
+        # 调用方传入的 recovery；预览批准范围必须恰好等于 J* 且 reuse 为空，否则"批准 1 个、执行 2 个"。
+        previous_root = _attempt_recovery_segment_root(attempt_root, previous_revision)
+        previous_reservation = _load_attempt_recovery_reservation(
+            campaign_dir, previous_root, candidate_id=candidate_id, attempt_id=attempt_id, recovery_revision=previous_revision
+        )
+        _baseline, _commit, authoritative = _authoritative_recovery_execute_jobs(
+            campaign_dir, candidate_id, previous_reservation
+        )
+        if str(authoritative.get("recovery_sha256")) != str(recovery.get("recovery_sha256")):
+            raise ConfigurationError("前序失败段预约绑定的基线 recovery 与当前 attempt-recovery 基线不一致。")
+        _require_recovery_preview_scope_equals_frozen_jobs(
+            preview, list(authoritative["execute_jobs"]), label=f"后继恢复段 {recovery_revision}"
+        )
 
 
 def _load_attempt_recovery_reservation(
@@ -42705,7 +42784,11 @@ def _reserve_attempt_recovery(
         recovery_root = attempt_root / ATTEMPT_RECOVERY_DIRNAME
         segment_root = _attempt_recovery_segment_root(attempt_root, recovery_revision)
         if segment_root.exists() or segment_root.is_symlink():
-            raise ConfigurationError(f"恢复段 {recovery_revision} 已存在，禁止重开；段内续跑请用 resume --rerun-failed --attempt-recovery。")
+            raise ConfigurationError(
+                f"恢复段 {recovery_revision} 已存在，禁止重开；成功段由逐字重派幂等返回，失败段先 "
+                f"reconcile-attempt --recovery-revision {recovery_revision} 对账，再以后继段 ar<k+1> "
+                "--rerun-failed --recovery-preview 承接。"
+            )
         if recovery_root.exists():
             if recovery_root.is_symlink() or not recovery_root.is_dir():
                 raise ConfigurationError("attempt 恢复段目录不可信。")
