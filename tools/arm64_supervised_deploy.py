@@ -167,11 +167,14 @@ from typing import Any, Callable, Mapping
 # 2026-09-20（第 3 批 M1 审核修正）：动作执行前核对 evaluator 四项摘要（不等即动作不执行、父 run
 # failed／identity-drift）；动作输出绑定按声明原顺序写出（清单校验已失败关闭，不再归一化）。
 # 监督器随之变化；断言预处理器未变。
+# 2026-09-20（第 3 批 M2 attempt-recovery）：父 run 窗口扫描识别恢复段预约（键 <attempt>:ar<k>）、
+# attempt 对账绑定校验接受恢复段目录；断言预处理器新增 BASELINE=b<K> 模式（证据根改读
+# effective-results，bundle 落本基线私有根）。监督器与断言预处理器均随之变化。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "b0496ab938db25454eaf6ab8dfa6e20a229e7f7ae67a5cd728bc7f66b7487a7a"
+    "2e9af5a8c672d5f490b15ed83cf16a9ef087b37df1949be0351a49e8552b19e0"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
-    "ea5500505d49340fe4971b981a8ab1159266c6a54ad0d3724cdf10cd51815fe4"
+    "37f4c5803994e48a0ba81400331c5d5d71f7afde4860368116b236383494bc05"
 )
 RENAME_EXCHANGE = 2
 AT_FDCWD = -100

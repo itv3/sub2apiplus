@@ -42783,6 +42783,550 @@ def _load_attempt_recovery_segment(
     return segment_root, reservation, payload
 
 
+# ---------------------------------------------------------------------------
+# 改造 5 M2（T5.16）：effective-results、五类根集合与恢复段的增量封存
+# ---------------------------------------------------------------------------
+
+EFFECTIVE_RESULTS_SCHEMA = "codex-upgrade-effective-results/v1"
+EFFECTIVE_RESULTS_FILENAME = "effective-results.json"
+MANIFEST_PROJECTION_FILENAME = "manifest-projection.json"
+
+
+def _baseline_private_root(campaign_dir: Path, candidate_id: str, baseline: int) -> Path:
+    return _evaluation_baseline_dir(campaign_dir, candidate_id, baseline) / "evidence"
+
+
+def _previous_capture_facts(
+    campaign_dir: Path,
+    candidate_id: str,
+    previous_baseline: int,
+) -> tuple[dict[str, Any], Path, dict[str, Any], Path]:
+    """前序基线的候选阶段结果、其绑定的 EvidenceManifest 与每 Job 结果（b0＝attempt.json.results）。"""
+
+    source = _stage_read_source(campaign_dir, candidate_id, previous_baseline, "capture-candidate")
+    if source["status"] != "complete":
+        raise ConfigurationError(f"前序基线 b{previous_baseline} 的候选阶段尚未封存。")
+    stage_path = Path(source["path"])
+    stage = _read_json(stage_path, f"前序基线 b{previous_baseline} 候选阶段结果")
+    binding = stage.get("evidence_manifest")
+    _require_file_binding(binding, "前序 EvidenceManifest")
+    manifest_path = _campaign_file(campaign_dir, str(binding["path"]))
+    if manifest_path.is_symlink() or not manifest_path.is_file() or file_sha256(manifest_path) != binding["sha256"]:
+        raise ConfigurationError("前序 EvidenceManifest 文件绑定漂移。")
+    previous_manifest = _load_evidence_manifest(manifest_path)
+    return stage, stage_path, previous_manifest, manifest_path
+
+
+def _effective_results_document(
+    campaign_dir: Path,
+    *,
+    manifest: Mapping[str, Any],
+    candidate_id: str,
+    baseline: int,
+    recovery: Mapping[str, Any],
+    previous_stage: Mapping[str, Any],
+    previous_stage_path: Path,
+    segment_root: Path,
+    segment_summary: Mapping[str, Any],
+) -> dict[str, Any]:
+    """每个候选 Job 恰一条：reused 引用前序阶段结果里的 Job 结果（不复制证据），recovered 指向 ar<k> 结果。"""
+
+    previous_results = {
+        str(item.get("id")): item
+        for item in previous_stage.get("results", [])
+        if isinstance(item, Mapping) and isinstance(item.get("id"), str)
+    }
+    segment_results = {
+        str(item.get("id")): item
+        for item in segment_summary.get("results", [])
+        if isinstance(item, Mapping) and isinstance(item.get("id"), str)
+    }
+    execute_jobs = list(recovery["execute_jobs"])
+    reuse_jobs = list(recovery["reuse_jobs"])
+    if set(execute_jobs) != set(segment_results):
+        raise ConfigurationError("恢复段的 Job 结果集合与基线冻结的 execute_jobs 不一致。")
+    missing = sorted(set(reuse_jobs) - set(previous_results))
+    if missing:
+        raise ConfigurationError(f"前序阶段结果缺少复用 Job：{missing}")
+    previous_binding = {
+        "path": previous_stage_path.relative_to(campaign_dir).as_posix(),
+        "sha256": file_sha256(previous_stage_path),
+    }
+    summary_path = segment_root / ATTEMPT_RECOVERY_SUMMARY_FILENAME
+    segment_binding = {"path": summary_path.relative_to(campaign_dir).as_posix(), "sha256": file_sha256(summary_path)}
+    entries: list[dict[str, Any]] = []
+    for job_id in sorted(set(execute_jobs) | set(reuse_jobs)):
+        if job_id in segment_results:
+            result = segment_results[job_id]
+            entries.append(
+                {
+                    "job_id": job_id,
+                    "source": "recovered",
+                    "recovery_revision": str(recovery["recovery_revision"]),
+                    "result": segment_binding,
+                    "result_sha256": incremental_recovery.digest(result),
+                    "disposition": str(result.get("disposition", "executed")),
+                    "status": str(result.get("status")),
+                    "evidence_roots": [str(root) for root in result.get("evidence_roots", [])],
+                }
+            )
+        else:
+            result = previous_results[job_id]
+            entries.append(
+                {
+                    "job_id": job_id,
+                    "source": "reused",
+                    "baseline": int(recovery["previous_baseline"]),
+                    "result": previous_binding,
+                    "result_sha256": incremental_recovery.digest(result),
+                    "disposition": "reused",
+                    "status": str(result.get("status")),
+                    "evidence_roots": [str(root) for root in result.get("evidence_roots", [])],
+                }
+            )
+        if entries[-1]["status"] != "complete" or not entries[-1]["evidence_roots"]:
+            raise ConfigurationError(f"effective-results 中 Job {job_id} 不是 complete 或缺少证据根。")
+    document = {
+        "schema_version": EFFECTIVE_RESULTS_SCHEMA,
+        "campaign_id": str(manifest["campaign_id"]),
+        "candidate_id": candidate_id,
+        "evaluation_baseline": baseline,
+        "recovery_sha256": str(recovery["recovery_sha256"]),
+        "attempt_id": str(recovery["attempt_id"]),
+        "recovery_revision": str(recovery["recovery_revision"]),
+        "entries": entries,
+    }
+    document["effective_results_sha256"] = _fingerprint(document)
+    return document
+
+
+def _validate_effective_results(document: Mapping[str, Any], *, expected_job_ids: Iterable[str]) -> dict[str, Any]:
+    """集合恰等于候选 Job 全集、无重复、自摘要一致。"""
+
+    unsigned = dict(document)
+    digest = unsigned.pop("effective_results_sha256", None)
+    if document.get("schema_version") != EFFECTIVE_RESULTS_SCHEMA or digest != _fingerprint(unsigned):
+        raise ConfigurationError("effective-results schema 或自摘要非法。")
+    entries = document.get("entries")
+    if not isinstance(entries, list):
+        raise ConfigurationError("effective-results entries 非数组。")
+    ids = [str(item.get("job_id")) for item in entries if isinstance(item, Mapping)]
+    if len(ids) != len(entries) or len(set(ids)) != len(ids):
+        raise ConfigurationError("effective-results 存在重复或非法条目。")
+    if set(ids) != set(expected_job_ids):
+        raise ConfigurationError(
+            f"effective-results 的 Job 集合与候选 Job 全集不相等：{sorted(set(ids) ^ set(expected_job_ids))}"
+        )
+    return dict(document)
+
+
+def _recovery_root_sets(
+    *,
+    previous_manifest: Mapping[str, Any],
+    previous_job_roots: Mapping[str, Sequence[str]],
+    execute_jobs: Sequence[str],
+    segment_summary: Mapping[str, Any],
+    segment_root: Path,
+    baseline_private_root: Path,
+) -> dict[str, list[str]]:
+    """五稿 3.7 的根集合（精确根路径）：dropped = 重采 Job 根 ∪ superseded；delta = recovered ∪ control ∪ {private}。"""
+
+    previous_roots = [str(row["path"]) for row in previous_manifest["roots"]]
+    all_previous_job_roots = sorted({root for roots in previous_job_roots.values() for root in roots})
+    missing = sorted(set(all_previous_job_roots) - set(previous_roots))
+    if missing:
+        raise ConfigurationError(f"前序 Job 证据根不在前序 EvidenceManifest 内：{missing}")
+    reexecuted_job_roots = sorted({root for job_id in execute_jobs for root in previous_job_roots.get(job_id, [])})
+    reused_job_roots = sorted(set(all_previous_job_roots) - set(reexecuted_job_roots))
+    superseded_stage_roots = sorted(set(previous_roots) - set(all_previous_job_roots))
+    recovered_job_roots = sorted(
+        {str(root) for item in segment_summary.get("results", []) if isinstance(item, Mapping) for root in item.get("evidence_roots", [])}
+    )
+    recovery_control_roots = sorted({str((segment_root / "evidence").resolve(strict=True)), str((segment_root / "logs").resolve(strict=True))})
+    private_root = str(baseline_private_root.resolve(strict=True))
+    dropped = sorted(set(reexecuted_job_roots) | set(superseded_stage_roots))
+    delta = sorted(set(recovered_job_roots) | set(recovery_control_roots) | {private_root})
+    if set(reused_job_roots) & set(delta):
+        raise ConfigurationError("复用根与增量根相交。")
+    return {
+        "previous_roots": sorted(previous_roots),
+        "previous_job_roots": all_previous_job_roots,
+        "reused_job_roots": reused_job_roots,
+        "reexecuted_job_roots": reexecuted_job_roots,
+        "superseded_stage_roots": superseded_stage_roots,
+        "recovered_job_roots": recovered_job_roots,
+        "recovery_control_roots": recovery_control_roots,
+        "baseline_private_root": [private_root],
+        "dropped_roots": dropped,
+        "delta_roots": delta,
+        "final_roots": sorted(set(reused_job_roots) | set(delta)),
+    }
+
+
+def _seal_attempt_recovery_segment(
+    arguments: argparse.Namespace,
+) -> dict[str, Any]:
+    """``capture-candidate seal --attempt-id <id> --attempt-recovery ar<k>``：增量封存出 b<K> 的候选阶段结果。
+
+    四阶段同普通候选 seal：① Kilo 后检查点（段证据根内）→ ``client_checkpoint_created``；② 受管 finalizer 以
+    effective-results 生成本基线 bundle／capture manifest／observed-profile／Kilo 收据（收据落在段证据根，bundle
+    落在 ``revisions/b<K>/evidence``）；③ 投影＋delta＋保留前缀合并生成 ``revisions/b<K>/evidence-manifest.json``
+    与投影收据，``scanned_bytes`` 只计 delta；④ 预览批准后写 ``revisions/b<K>/result.json``（``stage_sources``
+    的 local 目标），绑定原 attempt、段 run-summary、effective-results、投影收据与五类根。
+    """
+
+    campaign_dir = arguments.campaign_dir
+    manifest = _require_formal_campaign(campaign_dir)
+    candidate_id = str(getattr(arguments, "candidate_id", "") or "")
+    recovery_revision = _require_recovery_revision(getattr(arguments, "attempt_recovery", None))
+    attempt_id = getattr(arguments, "attempt_id", None)
+    if not attempt_id:
+        raise ConfigurationError("seal 必须提供 --attempt-id。")
+    if not _requires_complete_vc_artifacts(manifest):
+        raise ConfigurationError("恢复段增量封存只用于 0.154.0 起的完整 VC 链 Campaign。")
+    _guard_candidate_revision_write(campaign_dir, manifest, candidate_id, action="capture-candidate seal")
+    manifest = _apply_candidate_runtime_override(campaign_dir, manifest, candidate_id)
+    _reject_contaminated_campaign(campaign_dir)
+    baseline, commit, recovery = _current_attempt_recovery_baseline(campaign_dir, candidate_id, recovery_revision)
+    if str(recovery["attempt_id"]) != str(attempt_id):
+        raise ConfigurationError(f"当前 attempt-recovery 基线绑定的原 attempt 是 {recovery['attempt_id']}，不是 {attempt_id}。")
+    attempt_root, original_attempt = _load_capture_attempt(campaign_dir, "candidate", candidate_id, str(attempt_id))
+    segment_root, segment_reservation, segment_summary = _load_attempt_recovery_segment(
+        campaign_dir, candidate_id, str(attempt_id), recovery_revision
+    )
+    if segment_summary.get("status") != ATTEMPT_RECOVERY_SUCCESS_STATUS:
+        raise ConfigurationError(f"恢复段 {recovery_revision} 状态为 {segment_summary.get('status')}，禁止增量封存。")
+    failed_result_ids = _failed_job_ids(segment_summary.get("results"))
+    if failed_result_ids:
+        raise ConfigurationError("恢复段仍有失败 Job，禁止增量封存：" + "、".join(failed_result_ids))
+    if segment_reservation.get("baseline_commit_sha256") != commit["commit_sha256"]:
+        raise ConfigurationError("恢复段预约绑定的基线 COMMIT 与当前基线不一致。")
+    stage_target = _stage_write_target(campaign_dir, candidate_id, baseline, "capture-candidate")
+    if stage_target.exists() or stage_target.is_symlink():
+        raise ConfigurationError(f"评估基线 b{baseline} 的候选阶段已封存，禁止覆盖。")
+    identity = original_attempt.get("identity")
+    if not isinstance(identity, dict):
+        raise ConfigurationError("原 attempt 缺少候选身份。")
+    build_receipt, build_binding = _replay_candidate_build_receipt(
+        campaign_dir, manifest, candidate_id, getattr(arguments, "build_receipt", None)
+    )
+    expected_build_identity = {
+        "build_receipt": build_binding,
+        "build_receipt_digest": build_receipt["receipt_digest"],
+        "binary": build_receipt["binary"],
+        "target_architecture": build_receipt["target_architecture"],
+        "gate_plan": build_receipt["gate_plan"],
+    }
+    if any(identity.get(field) != expected for field, expected in expected_build_identity.items()):
+        raise ConfigurationError("原 attempt 未逐项绑定 VC-4 构建收据。")
+    _verify_candidate_attempt_identity(manifest, identity)
+    classification = _load_stage_result(campaign_dir, "classify")
+    if classification.get("status") != "complete":
+        raise ConfigurationError("目标画像尚未批准，禁止候选 seal。")
+    if getattr(arguments, "candidate_purpose", None) is None:
+        raise ConfigurationError("候选 seal 必须重申 --candidate-purpose。")
+    if arguments.candidate_purpose != identity.get("candidate_purpose"):
+        raise ConfigurationError("seal 参数 --candidate-purpose 与 run 身份不一致。")
+    approved_profile_id, approved_profile_digest = _profile_binding_from_manifest(campaign_dir, classification)
+    if identity.get("profile_id") != approved_profile_id or identity.get("profile_digest") != approved_profile_digest:
+        raise ConfigurationError("候选 attempt 与当前批准画像不一致。")
+    tool_impact = _verify_plan_identity(
+        campaign_dir, manifest, operation="capture-candidate-seal", attempt_root=attempt_root, attempt=original_attempt
+    )
+    evaluation_transition = _stage_evaluation_transition_binding(tool_impact)
+
+    # ---- effective-results（write-once）与五类根集合 ----
+    previous_baseline = int(recovery["previous_baseline"])
+    previous_stage, previous_stage_path, previous_manifest, _previous_manifest_path = _previous_capture_facts(
+        campaign_dir, candidate_id, previous_baseline
+    )
+    baseline_dir = _evaluation_baseline_dir(campaign_dir, candidate_id, baseline)
+    private_root = ensure_private_directory(_baseline_private_root(campaign_dir, candidate_id, baseline), campaign_dir)
+    effective_path = baseline_dir / EFFECTIVE_RESULTS_FILENAME
+    effective = _effective_results_document(
+        campaign_dir,
+        manifest=manifest,
+        candidate_id=candidate_id,
+        baseline=baseline,
+        recovery=recovery,
+        previous_stage=previous_stage,
+        previous_stage_path=previous_stage_path,
+        segment_root=segment_root,
+        segment_summary=segment_summary,
+    )
+    job_ids = [job.job_id for job in _campaign_jobs(
+        campaign_dir,
+        manifest,
+        "candidate",
+        candidate_id=candidate_id,
+        runtime_image=str(identity.get("image_reference", "")),
+        profile_id=str(identity.get("profile_id", "")),
+        profile_digest=str(identity.get("profile_digest", "")),
+        build_id=str(identity.get("build_id", "")),
+        deployed_version=str(identity.get("deployed_version", "")),
+        candidate_image_id=str(identity.get("image_id", "")),
+        source_tree_sha256=str(identity.get("source_tree_sha256", "")),
+        candidate_purpose=str(identity.get("candidate_purpose", "")),
+    )]
+    expected_job_ids = [job_id for job_id in job_ids if job_id in set(recovery["execute_jobs"]) | set(recovery["reuse_jobs"])]
+    if set(expected_job_ids) != set(recovery["execute_jobs"]) | set(recovery["reuse_jobs"]):
+        raise ConfigurationError("基线冻结的 Job 集合不在候选 Job 全集内。")
+    _validate_effective_results(effective, expected_job_ids=expected_job_ids)
+    _write_or_verify_json(effective_path, effective)
+    previous_job_roots = {
+        str(item.get("id")): [str(root) for root in item.get("evidence_roots", [])]
+        for item in previous_stage.get("results", [])
+        if isinstance(item, Mapping) and isinstance(item.get("id"), str)
+    }
+    root_sets = _recovery_root_sets(
+        previous_manifest=previous_manifest,
+        previous_job_roots=previous_job_roots,
+        execute_jobs=list(recovery["execute_jobs"]),
+        segment_summary=segment_summary,
+        segment_root=segment_root,
+        baseline_private_root=private_root,
+    )
+    roots = _deduplicate_evidence_roots(Path(value) for value in root_sets["final_roots"])
+    segment_evidence_root = Path(str(segment_summary.get("environment", {}).get("evidence_root", "")))
+    if not segment_evidence_root.is_absolute() or segment_evidence_root.resolve(strict=True) not in roots:
+        raise ConfigurationError("恢复段的环境证据根未纳入增量封存。")
+    for role in ("arm64_before_receipt", "arm64_after_receipt", "after_probe"):
+        if not isinstance(segment_summary.get("environment", {}).get(role), Mapping):
+            raise ConfigurationError(f"恢复段缺少 {role} 环境绑定。")
+    restoration_reference = segment_summary.get("environment", {}).get("restoration_report")
+    if not isinstance(restoration_reference, dict) or set(restoration_reference) != {"path", "sha256", "bytes"}:
+        raise ConfigurationError("恢复段缺少恢复收据绑定。")
+    restoration_path = segment_evidence_root / str(restoration_reference.get("path", ""))
+    if (
+        restoration_path.is_symlink()
+        or not restoration_path.is_file()
+        or restoration_path.stat().st_size != restoration_reference.get("bytes")
+        or file_sha256(restoration_path) != restoration_reference.get("sha256")
+    ):
+        raise ConfigurationError("恢复段的恢复收据绑定漂移。")
+
+    # ---- ① Kilo 后检查点（段证据根） ----
+    segment_view: dict[str, Any] = {
+        **{key: value for key, value in segment_summary.items() if key not in {"attempt_recovery_digest"}},
+        "attempt_digest": str(segment_summary["attempt_recovery_digest"]),
+        "evidence_roots": [str(root) for root in roots],
+    }
+    try:
+        with _campaign_lock(campaign_dir):
+            _reject_contaminated_campaign(campaign_dir)
+            post_client_path, _, client_checkpoint_at, client_checkpoint_created = _candidate_post_client_restoration(
+                manifest, segment_evidence_root, candidate_id
+            )
+        if _rfc3339_datetime(client_checkpoint_at, "Kilo 后检查点时间") < _rfc3339_datetime(
+            segment_summary["completed_at_utc"], "attempt-recovery.completed_at_utc"
+        ):
+            raise ConfigurationError("Kilo 后检查点早于恢复段完成时间。")
+    except (ConfigurationError, EnvironmentProbeError, ReceiptFinalizerError, OSError, ValueError) as error:
+        raise RuntimeError("Kilo 后环境恢复门禁失败。") from error
+    if client_checkpoint_created:
+        return {
+            "status": "client_checkpoint_created",
+            "phase": "candidate",
+            "campaign_id": segment_summary["campaign_id"],
+            "candidate_id": candidate_id,
+            "attempt_id": str(attempt_id),
+            "recovery_revision": recovery_revision,
+            "evaluation_baseline": baseline,
+            "run_nonce": segment_summary["run_nonce"],
+            "attempt_started_at_utc": segment_summary["started_at_utc"],
+            "client_checkpoint_at_utc": client_checkpoint_at,
+            "evidence_root": str(segment_evidence_root),
+            "effective_results": str(effective_path),
+            "baseline_private_root": str(private_root),
+            "next_command": (
+                "以 effective-results 生成本基线 assertion bundle（prepare_assertion_bundle.sh BASELINE=b<K>）、"
+                "observed-profile 与两份 Kilo 收据（落在恢复段证据根）后重新执行 capture-candidate seal --attempt-recovery。"
+            ),
+        }
+
+    # ---- ② finalizer 产物：恢复收据、断言上下文、观测画像、Kilo 收据 ----
+    restoration = _validate_restoration_report(restoration_path, roots, phase="candidate", candidate_id=candidate_id)
+    assertion_context = _capture_assertion_context(
+        getattr(arguments, "capture_manifest", None),
+        getattr(arguments, "assertion_evidence_root", None),
+        roots,
+        target_version=manifest["target_version"],
+    )
+    bundle_root = Path(str(assertion_context.get("evidence_root", "")))
+    if not bundle_root.is_absolute() or private_root.resolve(strict=True) not in bundle_root.resolve(strict=True).parents:
+        raise ConfigurationError("恢复段增量封存的断言证据包必须位于本基线 evidence 目录内。")
+    assertion_gate = _run_seal_assertion_gate(assertion_context, roots, phase="candidate", target_version=manifest["target_version"])
+    if post_client_path is None or client_checkpoint_at is None:
+        raise ConfigurationError("恢复段增量封存缺少 Kilo 后检查点。")
+    receipt_identity = dict(
+        campaign_id=segment_summary["campaign_id"],
+        attempt_id=str(segment_summary["attempt_id"]),
+        run_nonce=str(segment_summary["run_nonce"]),
+        attempt_started_at_utc=str(segment_summary["started_at_utc"]),
+        client_checkpoint_at_utc=client_checkpoint_at,
+        candidate_id=candidate_id,
+        target_version=manifest["target_version"],
+    )
+    observed_profile, observed_receipt = _validate_observed_profile_receipt(
+        getattr(arguments, "observed_profile_receipt", None),
+        [segment_evidence_root],
+        expected_profile_id=str(identity["profile_id"]),
+        expected_profile_digest=str(identity["profile_digest"]),
+        image_id=str(identity["image_id"]),
+        image_reference=str(identity["image_reference"]),
+        source_tree_sha256=str(identity["source_tree_sha256"]),
+        build_id=str(identity["build_id"]),
+        deployed_version=str(identity["deployed_version"]),
+        **receipt_identity,
+    )
+    if observed_receipt.get("profile_id") != identity["profile_id"] or observed_receipt.get("profile_digest") != identity["profile_digest"]:
+        raise ConfigurationError("运行画像收据与 attempt 身份不一致。")
+    client_bindings = _parse_client_evidence(
+        arguments.client_evidence,
+        [segment_evidence_root],
+        model=_third_party_client_model(manifest["configuration"]),
+        identity=identity,
+        **receipt_identity,
+    )
+    required_clients = _required_client_bindings(campaign_dir, classification)
+    observed_clients = {item["client_id"] for item in client_bindings}
+    if not required_clients.issubset(observed_clients):
+        raise ConfigurationError(
+            f"候选 seal 缺少目标场景要求的第三方客户端收据：{sorted(required_clients - observed_clients)}"
+        )
+    restoration["post_client"] = _validate_restoration_report(post_client_path, roots, phase="candidate", candidate_id=candidate_id)
+
+    # ---- ③ 投影 + delta + 保留前缀合并（唯一一次深度扫描只覆盖 delta 根） ----
+    manifest_path = _evidence_manifest_path(baseline_dir)
+    projection_path = baseline_dir / MANIFEST_PROJECTION_FILENAME
+    if manifest_path.exists() or manifest_path.is_symlink():
+        evidence_manifest = _load_evidence_manifest(manifest_path)
+        projection_receipt = _read_json(projection_path, "投影收据")
+        try:
+            codex_upgrade_evidence_manifest.verify_manifest_boundary(evidence_manifest, list(roots))
+        except codex_upgrade_evidence_manifest.EvidenceManifestError as error:
+            raise ConfigurationError(str(error)) from error
+    else:
+        try:
+            projected, projection_receipt = codex_upgrade_evidence_manifest.project_evidence_manifest(
+                previous_manifest, keep_roots=root_sets["reused_job_roots"]
+            )
+            codex_upgrade_evidence_manifest.validate_projection_receipt(
+                projection_receipt,
+                source_manifest=previous_manifest,
+                projected_manifest=projected,
+                expected_dropped_roots=root_sets["dropped_roots"],
+            )
+            delta_manifest = codex_upgrade_evidence_manifest.build_evidence_manifest(
+                [Path(value) for value in root_sets["delta_roots"]],
+                checkpoint_path=_evidence_manifest_checkpoint_path(baseline_dir),
+                secret_env_names=_secret_environment_names(),
+            )
+            evidence_manifest = codex_upgrade_evidence_manifest.merge_evidence_manifests(
+                projected, delta_manifest, preserve_prefixes=True
+            )
+            codex_upgrade_evidence_manifest.verify_manifest_boundary(evidence_manifest, list(roots))
+        except codex_upgrade_evidence_manifest.EvidenceManifestError as error:
+            raise ConfigurationError(str(error)) from error
+        merged_roots = sorted(str(row["path"]) for row in evidence_manifest["roots"])
+        if merged_roots != root_sets["final_roots"]:
+            raise ConfigurationError(
+                f"合并清单的根集合不等于 reused ∪ delta：多={sorted(set(merged_roots) - set(root_sets['final_roots']))}，"
+                f"少={sorted(set(root_sets['final_roots']) - set(merged_roots))}"
+            )
+        _write_or_verify_json(projection_path, projection_receipt)
+        _write_or_verify_json(manifest_path, evidence_manifest)
+    evidence_inventory = evidence_manifest["inventory"]
+    security = evidence_manifest["security"]
+    if not security["known_secret_scan_passed"]:
+        raise ConfigurationError(f"候选证据秘密扫描失败：{len(security['findings'])} 个命中。")
+    sealed_surface, surface_binding = _load_or_build_attempt_surface(
+        campaign_dir, segment_root, segment_view, evidence_manifest, label="target-sub2api"
+    )
+    payload: dict[str, Any] = {
+        "status": "complete",
+        "campaign_mode": manifest["campaign_mode"],
+        "campaign_purpose": manifest["campaign_purpose"],
+        "candidate_purpose": identity.get("candidate_purpose"),
+        "identity": {key: value for key, value in identity.items() if key != "source_root"},
+        "attempt": {
+            "path": str((attempt_root / "attempt.json").relative_to(campaign_dir)),
+            "sha256": file_sha256(attempt_root / "attempt.json"),
+        },
+        "recovery": {
+            "path": str((segment_root / ATTEMPT_RECOVERY_SUMMARY_FILENAME).relative_to(campaign_dir)),
+            "sha256": file_sha256(segment_root / ATTEMPT_RECOVERY_SUMMARY_FILENAME),
+            "recovery_revision": recovery_revision,
+            "evaluation_baseline": baseline,
+            "recovery_sha256": str(recovery["recovery_sha256"]),
+        },
+        "effective_results": {
+            "path": str(effective_path.relative_to(campaign_dir)),
+            "sha256": file_sha256(effective_path),
+        },
+        # results 展开为每 Job 的结果对象（compare／provenance／bundle 按 results[].evidence_roots 读取）。
+        "results": [
+            {
+                **(
+                    next(item for item in segment_summary["results"] if item.get("id") == entry["job_id"])
+                    if entry["source"] == "recovered"
+                    else next(item for item in previous_stage["results"] if item.get("id") == entry["job_id"])
+                ),
+                "disposition": entry["disposition"],
+            }
+            for entry in effective["entries"]
+        ],
+        "evidence_roots": [str(root) for root in roots],
+        "root_sets": root_sets,
+        "manifest_projection": {
+            "path": str(projection_path.relative_to(campaign_dir)),
+            "sha256": file_sha256(projection_path),
+        },
+        "evidence_inventory": evidence_inventory,
+        "evidence_manifest": {
+            "path": str(manifest_path.relative_to(campaign_dir)),
+            "sha256": file_sha256(manifest_path),
+        },
+        "scan_summary": evidence_manifest["scan"],
+        "surface": surface_binding,
+        "client_bindings": client_bindings,
+        "assertion_context": assertion_context,
+        "assertion_gate": assertion_gate,
+        "restoration": restoration,
+        "observed_profile": observed_profile,
+        "security": {"raw_evidence_private": True, **security},
+    }
+    if evaluation_transition is not None:
+        payload["evaluation_transition"] = evaluation_transition
+    preview, approved = _seal_preview(
+        campaign_dir,
+        segment_root,
+        phase="candidate",
+        candidate_id=candidate_id,
+        attempt=segment_view,
+        stage_payload=payload,
+        approve_sha256=getattr(arguments, "approve_seal_sha256", None),
+    )
+    preview_path = _seal_preview_path(segment_root, _seal_transition_index(payload.get("evaluation_transition")))
+    if not approved:
+        return {
+            "status": "approval_required",
+            "phase": "candidate",
+            "candidate_id": candidate_id,
+            "attempt_id": str(attempt_id),
+            "recovery_revision": recovery_revision,
+            "evaluation_baseline": baseline,
+            "seal_preview": str(preview_path),
+            "review_sha256": preview["review_sha256"],
+            "scan_summary": evidence_manifest["scan"],
+            "message": "复核机器 finalizer 事实后，以同一摘要再次执行 seal --attempt-recovery。",
+        }
+    payload["seal_preview"] = {"path": str(preview_path.relative_to(campaign_dir)), "sha256": file_sha256(preview_path)}
+    stage_path = save_stage_result(campaign_dir, "capture-candidate", payload, candidate_id=candidate_id)
+    return {**payload, "status": "complete", "review_sha256": preview["review_sha256"], "stage_result": str(stage_path)}
+
+
+
 def _run_attempt_recovery_segment(
     arguments: argparse.Namespace,
     *,
@@ -45162,6 +45706,9 @@ def _seal_capture_attempt(
 ) -> dict[str, Any]:
     """从不可变 attempt 与机器收据构建预览，并经摘要复核后封存阶段。"""
 
+    # 改造 5 M2：恢复段增量封存（b<K> 的候选阶段结果）与普通 seal 互斥。
+    if phase == "candidate" and getattr(arguments, "attempt_recovery", None):
+        return _seal_attempt_recovery_segment(arguments)
     campaign_dir = arguments.campaign_dir
     manifest = _require_formal_campaign(campaign_dir)
     attempt_id = getattr(arguments, "attempt_id", None)
@@ -51810,12 +52357,22 @@ def _candidate_stage_receipt_boundary(
     attempt_relative = Path(str(attempt_reference["path"]))
     attempt_id = attempt_relative.parent.name
     candidate_id = str(stage.get("candidate_id", ""))
-    _, attempt = _load_capture_attempt(
-        campaign_dir,
-        "candidate",
-        candidate_id,
-        attempt_id,
-    )
+    recovery_reference = stage.get("recovery")
+    if isinstance(recovery_reference, Mapping):
+        # 改造 5 M2：增量封存结果的收据根与 Kilo 后检查点来自恢复段（段 run-summary 的环境证据根）。
+        _require_file_binding(recovery_reference, "恢复段 run-summary")
+        _segment_root, _segment_reservation, attempt = _load_attempt_recovery_segment(
+            campaign_dir, candidate_id, attempt_id, str(recovery_reference.get("recovery_revision", ""))
+        )
+        if file_sha256(_segment_root / ATTEMPT_RECOVERY_SUMMARY_FILENAME) != recovery_reference.get("sha256"):
+            raise ConfigurationError("阶段结果绑定的恢复段 run-summary 摘要漂移。")
+    else:
+        _, attempt = _load_capture_attempt(
+            campaign_dir,
+            "candidate",
+            candidate_id,
+            attempt_id,
+        )
     environment = attempt.get("environment")
     if not isinstance(environment, dict):
         raise ConfigurationError("候选 attempt 缺少环境证据边界。")
