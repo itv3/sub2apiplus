@@ -36,7 +36,7 @@ from pathlib import Path
 
 from tools.official_client_capture.tests import candidate_identity_fixture as cif
 from tools.official_client_capture.tests import managed_tree_copy as mtc
-from tools.official_client_capture.tests.test_codex_upgrade_evaluation_real_chain import (
+from tools.official_client_capture.tests.real_chains.test_codex_upgrade_evaluation_real_chain import (
     CANDIDATE,
     CANDIDATE_IDENTITY_AVAILABLE,
     RULES,
