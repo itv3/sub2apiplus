@@ -1,4 +1,4 @@
-.PHONY: codex-p0-rehearsal build build-backend build-frontend test test-backend test-frontend test-frontend-critical test-capture-tools test-official-client-control test-upstream-merge-tools upstream-preflight upstream-baseline-seal upstream-baseline-validate upstream-revision-preflight upstream-source-transition upstream-source-transition-validate check-egress-spec check-egress-spec-ci check-egress-spec-local-source check-egress-bootstrap-replay check-egress-seal
+.PHONY: codex-p0-rehearsal build build-backend build-frontend test test-backend test-frontend test-frontend-critical test-capture-tools test-capture-real-chains test-official-client-control test-upstream-merge-tools upstream-preflight upstream-baseline-seal upstream-baseline-validate upstream-revision-preflight upstream-source-transition upstream-source-transition-validate check-egress-spec check-egress-spec-ci check-egress-spec-local-source check-egress-bootstrap-replay check-egress-seal
 
 EGRESS_BOOTSTRAP_COMMIT := 38a9929eac35a39c86de2f27de8f7a805d7dae52
 EGRESS_BOOTSTRAP_BASELINE := $(CURDIR)/docs/egress/foundation/sink-baseline.json
@@ -236,6 +236,18 @@ test-capture-tools:
 	@CLAUDE_AST_TYPESCRIPT_MODULE="$(CAPTURE_TYPESCRIPT_MODULE)" \
 		PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
 		-s tools/official_client_capture/tests -p 'test_*.py'
+
+# 升级控制工具的真实评估链（副本受管树 + 正式监督器子进程，每条链在 ARM64 上约 10 分钟）
+# 属于工具发布／部署验证，不属于候选门禁的默认 `make test`：2026-09-21 v14r2 实测它们让
+# 候选 target-platform 门禁在 ARM64 上跑到 5 小时、必然超出 VC-5 阶段预算。它们放在
+# tests/real_chains/（无 __init__.py，unittest discover 不会递归进入），由本目标显式逐模块
+# 执行；不删除、不 skip。防回流由 tests/test_capture_test_layering.py 保证。
+CAPTURE_REAL_CHAIN_MODULES := \
+	tools.official_client_capture.tests.real_chains.test_codex_upgrade_evaluation_real_chain \
+	tools.official_client_capture.tests.real_chains.test_codex_upgrade_evaluation_attempt_recovery_real_chain
+test-capture-real-chains:
+	@CLAUDE_AST_TYPESCRIPT_MODULE="$(CAPTURE_TYPESCRIPT_MODULE)" \
+		PYTHONDONTWRITEBYTECODE=1 python3 -m unittest $(CAPTURE_REAL_CHAIN_MODULES)
 
 # FW-D 通用受管工具链只使用当前 Codex 不可变制品和合成 Persona 数据，
 # 不联网、不读取凭据、不查询或生成任何新 Persona 的官方画像。
