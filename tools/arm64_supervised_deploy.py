@@ -178,8 +178,12 @@ from typing import Any, Callable, Mapping
 # 正式单动作恢复段 run 已成功、动作输出绑定已写（段摘要 exists=true）、父 run 终态前 owner 丢失时 monitor
 # 确定性封存 failed／parent-finalize-lost，新增"父终态化丢失"N+1 逐字重派协议（走既有对账许可绑定）。
 # 监督器随之变化；断言预处理器未变。
+# 2026-09-21（第 3 批 M2 审核修正三审：2 个 P1）：后继段预览的请求估算（known_by_job ∪ unknown_job_ids == J*、
+# 不相交、known_total == Σknown）与范围等式合并为 recovery_preview_scope_violation（CLI 与第七种协议共用）；
+# parent-finalize-lost 的段摘要重验改用与幂等重派相同强度的段加载校验并要求结果 Job 集合恰等于权威链 J*。
+# 监督器随之变化；断言预处理器未变。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "912a2ec5ed9f4f4735424f167b9f40813d20d1095be261f50f7c2a643cd660e3"
+    "30dacdbd8dfb7c7955e2b396a23fef91b2363a67e70c6d784efa63444101990f"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "c8020cadd3ee08f67236313a0913dbc3730805b46c3f6b720cdf7ace77f9fec1"

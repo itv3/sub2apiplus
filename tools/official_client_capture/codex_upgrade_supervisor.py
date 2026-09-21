@@ -2314,17 +2314,24 @@ def verify_attempt_recovery_orphan_output(
     campaign_dir: Path,
     facts: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """reconciler／后继协议：在 Campaign 目录内重算绑定的段摘要文件摘要并确认段为成功终态（无失败 Job）。
+    """reconciler／后继协议：在 Campaign 目录内以幂等重派同等强度重验绑定的段摘要，并确认段为成功终态。
 
-    只有段摘要当前字节等于封存时绑定的摘要、``status == awaiting_receipts`` 且 ``results`` 无 failed，
-    逐字重派同一批次才必然命中段 run 的幂等返回（零请求）。任一不成立即失败关闭。
+    步骤：① 段摘要当前字节等于封存时绑定的摘要；② 与段 run 幂等重派同一入口
+    ``codex_upgrade._load_attempt_recovery_segment``（schema、attempt／候选／段号身份、run_nonce 与预约一致、
+    自摘要、预约文件绑定、权限收口重放）；③ 结果 Job 集合恰等于权威链（段预约三元组 → COMMIT →
+    recovery.json）冻结的 J*、``status == awaiting_receipts`` 且全部 complete。任一不成立即失败关闭——
+    只有这样，逐字重派同一批次才必然命中段 run 的幂等返回（零请求）。
     """
+
+    # 延迟导入：codex_upgrade 在模块顶层导入本模块，运行期再反向引用不会形成导入环。
+    from tools.official_client_capture import codex_upgrade as _codex_upgrade
 
     if not facts.get("complete") or facts.get("binding_mismatch"):
         raise SupervisorError("父终态化丢失批次的恢复段判定不成立。")
     campaign_dir = Path(campaign_dir)
     relative = str(facts.get("binding_path") or "")
-    if not relative or ATTEMPT_RECOVERY_SUMMARY_BINDING_RE.fullmatch(relative) is None:
+    match = ATTEMPT_RECOVERY_SUMMARY_BINDING_RE.fullmatch(relative) if relative else None
+    if match is None:
         raise SupervisorError("父终态化丢失批次的段摘要绑定路径非法。")
     summary_path = campaign_dir / relative
     if summary_path.is_symlink() or not summary_path.is_file():
@@ -2332,21 +2339,42 @@ def verify_attempt_recovery_orphan_output(
     raw = summary_path.read_bytes()
     if _sha256(raw) != facts.get("output_sha256"):
         raise SupervisorError("父终态化丢失批次绑定的段摘要当前字节与封存时不一致。")
+    candidate_id = match.group("candidate_id")
+    attempt_id = match.group("attempt_id")
+    recovery_revision = match.group("recovery_revision")
+    if recovery_revision != facts.get("recovery_revision"):
+        raise SupervisorError("父终态化丢失批次绑定的段号与动作命令不一致。")
     try:
-        summary = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise SupervisorError("父终态化丢失批次绑定的段摘要不是有效 JSON。") from error
-    results = summary.get("results") if isinstance(summary, Mapping) else None
+        _segment_root, reservation, summary = _codex_upgrade._load_attempt_recovery_segment(
+            campaign_dir, candidate_id, attempt_id, recovery_revision
+        )
+        _baseline, _commit, recovery = _codex_upgrade._authoritative_recovery_execute_jobs(
+            campaign_dir, candidate_id, reservation
+        )
+    except _codex_upgrade.ConfigurationError as error:
+        raise SupervisorError(f"父终态化丢失批次绑定的段摘要无法按段加载校验重验：{error}") from error
+    frozen = sorted(str(item) for item in recovery.get("execute_jobs", []))
+    results = summary.get("results")
     if (
-        not isinstance(summary, Mapping)
-        or summary.get("status") != "awaiting_receipts"
-        or summary.get("recovery_revision") != facts.get("recovery_revision")
+        summary.get("status") != _codex_upgrade.ATTEMPT_RECOVERY_SUCCESS_STATUS
         or not isinstance(results, list)
         or not results
         or any(not isinstance(row, Mapping) or row.get("status") != "complete" for row in results)
     ):
         raise SupervisorError("父终态化丢失批次绑定的段摘要不是无失败 Job 的成功终态。")
-    return {"path": relative, "sha256": facts["output_sha256"], "status": "awaiting_receipts", "job_count": len(results)}
+    result_ids = sorted(str(row.get("id")) for row in results)
+    if not frozen or result_ids != frozen or len(set(result_ids)) != len(result_ids):
+        raise SupervisorError(
+            f"父终态化丢失批次绑定的段摘要结果 Job 集合 {result_ids} 不等于基线冻结的 J*={frozen}。"
+        )
+    return {
+        "path": relative,
+        "sha256": facts["output_sha256"],
+        "status": str(summary["status"]),
+        "job_count": len(results),
+        "execute_jobs": frozen,
+        "attempt_recovery_digest": str(summary.get("attempt_recovery_digest")),
+    }
 
 
 def _read_stop_request(
@@ -7709,6 +7737,57 @@ def _successor_segment_normalized_command(
     return normalized, preview
 
 
+def recovery_preview_scope_violation(preview: Mapping[str, Any], execute_jobs: Sequence[str]) -> str | None:
+    """P1（授权闭包）：后继段预览的批准范围与请求估算必须恰好覆盖权威链取得的 J*（CLI 与监督器共用）。
+
+    范围：``planned_job_ids == execute_job_ids == J*``（无重复）、``reuse_job_ids == []``；
+    估算：``expected_new_requests.known_by_job`` 的键 ∪ ``unknown_job_ids`` == J*、两者不相交且无重复、
+    ``known_total == sum(known_by_job.values())``、计数为非负整数。返回违规说明，合法返回 ``None``。
+    """
+
+    frozen = sorted(str(item) for item in execute_jobs)
+    if not frozen or len(set(frozen)) != len(frozen):
+        return f"基线冻结的 J* 非法：{frozen}"
+    planned = preview.get("planned_job_ids")
+    execute = preview.get("execute_job_ids")
+    reuse = preview.get("reuse_job_ids")
+    if (
+        not isinstance(planned, list)
+        or not isinstance(execute, list)
+        or not isinstance(reuse, list)
+        or sorted(str(item) for item in planned) != frozen
+        or sorted(str(item) for item in execute) != frozen
+        or len(set(planned)) != len(planned)
+        or len(set(execute)) != len(execute)
+        or reuse != []
+    ):
+        return f"批准的执行范围（planned={planned}，execute={execute}，reuse={reuse}）不等于基线冻结的 J*={frozen}"
+    estimate = preview.get("expected_new_requests")
+    if not isinstance(estimate, Mapping):
+        return "请求估算缺失"
+    known = estimate.get("known_by_job")
+    unknown = estimate.get("unknown_job_ids")
+    known_total = estimate.get("known_total")
+    if (
+        not isinstance(known, Mapping)
+        or not isinstance(unknown, list)
+        or any(not isinstance(key, str) for key in known)
+        or any(isinstance(value, bool) or not isinstance(value, int) or value < 0 for value in known.values())
+        or any(not isinstance(item, str) for item in unknown)
+        or len(set(unknown)) != len(unknown)
+        or set(known) & set(unknown)
+        or sorted(set(known) | set(unknown)) != frozen
+        or isinstance(known_total, bool)
+        or not isinstance(known_total, int)
+        or known_total != sum(int(value) for value in known.values())
+    ):
+        return (
+            f"请求估算未覆盖完整 J*={frozen}（known_by_job={dict(known) if isinstance(known, Mapping) else known}，"
+            f"unknown_job_ids={unknown}，known_total={known_total}）"
+        )
+    return None
+
+
 def _require_segment_preview_scope_matches_frozen_jobs(
     campaign_dir: Path,
     prior_manifest: Mapping[str, Any],
@@ -7779,24 +7858,9 @@ def _require_segment_preview_scope_matches_frozen_jobs(
     ):
         raise SupervisorError(f"评估基线 b{baseline} 的 recovery.json 与 COMMIT 绑定的 recovery_sha256 或 attempt 身份不一致。")
     frozen = sorted(str(item) for item in recovery.get("execute_jobs", []))
-    planned = preview.get("planned_job_ids")
-    execute = preview.get("execute_job_ids")
-    reuse = preview.get("reuse_job_ids")
-    if (
-        not frozen
-        or not isinstance(planned, list)
-        or not isinstance(execute, list)
-        or not isinstance(reuse, list)
-        or sorted(str(item) for item in planned) != frozen
-        or sorted(str(item) for item in execute) != frozen
-        or len(set(planned)) != len(planned)
-        or len(set(execute)) != len(execute)
-        or reuse != []
-    ):
-        raise SupervisorError(
-            f"后继恢复段批次的恢复预览批准范围（planned={planned}，execute={execute}，reuse={reuse}）"
-            f"不等于基线冻结的 J*={frozen}。"
-        )
+    violation = recovery_preview_scope_violation(preview, frozen)
+    if violation is not None:
+        raise SupervisorError(f"后继恢复段批次的恢复预览{violation}。")
     return frozen
 
 

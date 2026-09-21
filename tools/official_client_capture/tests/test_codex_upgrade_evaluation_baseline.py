@@ -672,9 +672,10 @@ class MonitorOrphanSealingTests(unittest.TestCase):
                 self.assertEqual((facts_after["action_id"], facts_after["recovery_revision"], facts_after["binding_path"]), ("vc5-1-ar-run", "ar1", self.AR_SUMMARY_RELATIVE))
                 # R2 失败身份不成立（无诊断），不会被误封存为 action-failed。
                 self.assertFalse(supervisor.evaluation_orphan_facts(run_dir, state, inner)["complete"])
-                # Campaign 目录内复算：段摘要当前字节一致且为成功终态。
-                verified = supervisor.verify_attempt_recovery_orphan_output(campaign_dir, facts_after)
-                self.assertEqual((verified["status"], verified["job_count"], verified["sha256"]), ("awaiting_receipts", 1, facts_after["output_sha256"]))
+                # Campaign 目录内复算：合成的段摘要（无预约／自摘要）过不了段加载强度校验——只有真实段能通过
+                # （见 test_codex_upgrade_evaluation_attempt_recovery 的 parent-finalize-lost 用例）。
+                with self.assertRaisesRegex(supervisor.SupervisorError, "无法按段加载校验重验"):
+                    supervisor.verify_attempt_recovery_orphan_output(campaign_dir, facts_after)
                 summary_path = campaign_dir / self.AR_SUMMARY_RELATIVE
                 original = summary_path.read_bytes()
                 changed = json.loads(original)

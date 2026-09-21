@@ -42593,26 +42593,12 @@ def _require_recovery_preview_scope_equals_frozen_jobs(
     *,
     label: str,
 ) -> None:
-    """P1（授权闭包）：后继段预览批准的范围必须恰好等于权威链取得的 J*，且不复用任何段内 Job。"""
+    """P1（授权闭包）：后继段预览批准的范围与请求估算必须恰好覆盖权威链取得的 J*，且不复用任何段内 Job
+    （与监督器第七种协议共用 ``recovery_preview_scope_violation``）。"""
 
-    frozen = sorted(str(item) for item in execute_jobs)
-    planned = preview.get("planned_job_ids")
-    execute = preview.get("execute_job_ids")
-    reuse = preview.get("reuse_job_ids")
-    if (
-        not isinstance(planned, list)
-        or not isinstance(execute, list)
-        or not isinstance(reuse, list)
-        or sorted(str(item) for item in planned) != frozen
-        or sorted(str(item) for item in execute) != frozen
-        or len(set(planned)) != len(planned)
-        or len(set(execute)) != len(execute)
-        or reuse != []
-    ):
-        raise ConfigurationError(
-            f"{label}：恢复预览批准的执行范围（planned={planned}，execute={execute}，reuse={reuse}）"
-            f"不等于基线冻结的 J*={frozen}，拒绝开后继段。"
-        )
+    violation = codex_upgrade_supervisor.recovery_preview_scope_violation(preview, list(execute_jobs))
+    if violation is not None:
+        raise ConfigurationError(f"{label}：恢复预览{violation}，拒绝开后继段。")
 
 
 def _attempt_recovery_segment_reconciled(

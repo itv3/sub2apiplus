@@ -497,22 +497,48 @@ class AttemptRecoveryTests(recovery_tests._EvaluationChainMixin, unittest.TestCa
                 frozen,
             )
             codex_upgrade._require_recovery_preview_scope_equals_frozen_jobs(preview, frozen, label="核对")
-            # 篡改：合法自摘要但只批准 failed Job、复用 complete Job（"批准 1 个、执行 2 个"）。
+            # 估算合同：known_by_job ∪ unknown_job_ids == J*、不相交、known_total == Σknown。
+            estimate = preview["expected_new_requests"]
+            self.assertEqual(estimate["known_total"], sum(estimate["known_by_job"].values()))
+            self.assertEqual(set(estimate["known_by_job"]) & set(estimate["unknown_job_ids"]), set())
             preview_dir = Path(reconciled["recovery_preview_path"]).parent
-            tampered = {k: v for k, v in preview.items() if k not in {"created_at_utc", "review_sha256", "index"}}
-            tampered.update({"reuse_job_ids": list(frozen), "execute_job_ids": [], "index": int(preview["index"]) + 1})
-            tampered["created_at_utc"] = preview["created_at_utc"]
-            tampered["review_sha256"] = reconciler._fingerprint({k: v for k, v in tampered.items() if k not in {"created_at_utc", "review_sha256"}})
-            tampered_path = preview_dir / f"recovery-preview-{tampered['index']:02d}.json"
-            tampered_path.write_text(json.dumps(tampered, ensure_ascii=False, sort_keys=True, indent=2) + "\n", encoding="utf-8")
-            tampered_path.chmod(0o600)
-            with self._segment_patches_started(context, failing_jobs), mock.patch.object(reconciler, "_deployment_receipt", return_value=None):
-                approval = reconciler.approve_recovery_preview(campaign_dir, attempt_root.name, approve_sha256=tampered["review_sha256"], recovery_revision="ar1")
-            self.assertEqual(approval["approved_sha256"], tampered["review_sha256"])
+
+            def write_tampered(index: int, **changes) -> tuple[dict, Path]:
+                document = {k: v for k, v in preview.items() if k not in {"created_at_utc", "review_sha256", "index"}}
+                document.update(changes)
+                document["index"] = index
+                document["created_at_utc"] = preview["created_at_utc"]
+                document["review_sha256"] = reconciler._fingerprint({k: v for k, v in document.items() if k not in {"created_at_utc", "review_sha256"}})
+                path = preview_dir / f"recovery-preview-{index:02d}.json"
+                path.write_text(json.dumps(document, ensure_ascii=False, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+                path.chmod(0o600)
+                return document, path
+
+            # 篡改 1：合法自摘要但只批准 failed Job、复用 complete Job（"批准 1 个、执行 2 个"）→ 函数级双拒绝。
+            drifted, _drifted_path = write_tampered(int(preview["index"]) + 1, reuse_job_ids=list(frozen), execute_job_ids=[])
             with self.assertRaisesRegex(supervisor.SupervisorError, r"不等于基线冻结的 J\*"):
-                supervisor._require_segment_preview_scope_matches_frozen_jobs(campaign_dir, prior_manifest, attempt_id=attempt_root.name, prior_revision="ar1", preview=tampered)
+                supervisor._require_segment_preview_scope_matches_frozen_jobs(campaign_dir, prior_manifest, attempt_id=attempt_root.name, prior_revision="ar1", preview=drifted)
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, r"不等于基线冻结的 J\*"):
+                codex_upgrade._require_recovery_preview_scope_equals_frozen_jobs(drifted, frozen, label="核对")
+            # 篡改 2：known_total 与 Σknown 不等 → 函数级双拒绝。
+            wrong_total, _ = write_tampered(int(preview["index"]) + 2, expected_new_requests={**estimate, "known_total": int(estimate["known_total"]) + 1})
+            with self.assertRaisesRegex(supervisor.SupervisorError, r"请求估算未覆盖完整 J\*"):
+                supervisor._require_segment_preview_scope_matches_frozen_jobs(campaign_dir, prior_manifest, attempt_id=attempt_root.name, prior_revision="ar1", preview=wrong_total)
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, r"请求估算未覆盖完整 J\*"):
+                codex_upgrade._require_recovery_preview_scope_equals_frozen_jobs(wrong_total, frozen, label="核对")
+            # 篡改 3（批准并走 CLI 端到端）：Job 范围正确但估算少一项（known 与 unknown 都不含该 Job）。
+            missing_estimate, tampered_path = write_tampered(
+                int(preview["index"]) + 3,
+                expected_new_requests={**estimate, "known_by_job": {}, "unknown_job_ids": [], "known_total": 0},
+            )
+            self.assertEqual((sorted(missing_estimate["planned_job_ids"]), sorted(missing_estimate["execute_job_ids"]), missing_estimate["reuse_job_ids"]), (frozen, frozen, []))
+            with self._segment_patches_started(context, failing_jobs), mock.patch.object(reconciler, "_deployment_receipt", return_value=None):
+                approval = reconciler.approve_recovery_preview(campaign_dir, attempt_root.name, approve_sha256=missing_estimate["review_sha256"], recovery_revision="ar1")
+            self.assertEqual(approval["approved_sha256"], missing_estimate["review_sha256"])
+            with self.assertRaisesRegex(supervisor.SupervisorError, r"请求估算未覆盖完整 J\*"):
+                supervisor._require_segment_preview_scope_matches_frozen_jobs(campaign_dir, prior_manifest, attempt_id=attempt_root.name, prior_revision="ar1", preview=missing_estimate)
             with self._segment_patches_started(context, failing_jobs):
-                with self.assertRaisesRegex(codex_upgrade.ConfigurationError, r"不等于基线冻结的 J\*"):
+                with self.assertRaisesRegex(codex_upgrade.ConfigurationError, r"请求估算未覆盖完整 J\*"):
                     codex_upgrade._run_capture_attempt(
                         argparse.Namespace(**{**vars(self._run_arguments(campaign_dir, "ar2")), "rerun_failed": True, "recovery_preview": tampered_path}),
                         "candidate",
@@ -544,6 +570,114 @@ class AttemptRecoveryTests(recovery_tests._EvaluationChainMixin, unittest.TestCa
             finally:
                 recovery_path.write_bytes(original_recovery)
             self.assertEqual(codex_upgrade._current_attempt_recovery_baseline(campaign_dir, R1, "ar1")[0], 1)
+
+    def test_parent_finalize_lost_summary_is_verified_with_segment_load_strength_and_frozen_jobs(self) -> None:
+        """R2 attempt-recovery 变体（2026-09-21 三审 P1）：对账／后继协议对绑定的段摘要用与幂等重派相同强度的
+        段加载校验（自摘要、身份、预约绑定、权限收口重放）并要求结果 Job 集合恰等于权威链 J*；
+        伪摘要（自摘要重签但预约绑定伪造）、自摘要损坏、缺 Job／多 Job 都拒绝。"""
+
+        import hashlib
+        import sys
+
+        from tools.official_client_capture import codex_upgrade_supervisor as supervisor
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture, context = self._failed_b0_and_reconciled(root)
+            campaign_dir = context["campaign_dir"]
+            attempt_root = context["attempt_root"]
+            job_ids = context["job_ids"]
+            original_roots = {str(item["id"]): list(item["evidence_roots"]) for item in context["attempt"]["results"]}
+            source_jobs = [
+                Job(
+                    job_id=job_id, phase="candidate", suites=("full",), description=f"合成候选 Job {job_id}",
+                    steps=_job_steps(job_id, original_roots[job_id][0]), evidence_roots=(original_roots[job_id][0],), covers=(), scenario_ids=("A03",),
+                )
+                for job_id in job_ids
+            ]
+            applied = self._apply_transient(fixture, context)
+            self.assertEqual(applied["status"], "applied", applied)
+            with self._segment_patches_started(context, source_jobs):
+                result = codex_upgrade._run_capture_attempt(self._run_arguments(campaign_dir, "ar1"), "candidate")
+            self.assertEqual((result["status"], result["execute_jobs"]), ("awaiting_receipts", [job_ids[0]]))
+            segment = attempt_root / "recovery" / "ar1"
+            summary_path = segment / "attempt-recovery.json"
+            original = summary_path.read_bytes()
+            relative = summary_path.relative_to(campaign_dir).as_posix()
+
+            def facts_for(raw: bytes) -> dict:
+                return {
+                    "complete": True, "binding_mismatch": False, "action_id": "vc5-1-ar-run", "operation": "VC-5:capture-candidate",
+                    "recovery_revision": "ar1", "binding_path": relative, "binding_sha256": "1" * 64,
+                    "output_sha256": hashlib.sha256(raw).hexdigest(), "reasons": [],
+                }
+
+            with self._segment_patches_started(context, source_jobs):
+                verified = supervisor.verify_attempt_recovery_orphan_output(campaign_dir, facts_for(original))
+            self.assertEqual((verified["status"], verified["job_count"], verified["execute_jobs"]), ("awaiting_receipts", 1, sorted(applied["execute_jobs"])))
+            self.assertEqual(verified["attempt_recovery_digest"], _read(summary_path)["attempt_recovery_digest"])
+
+            def resign(document: dict) -> bytes:
+                unsigned = {k: v for k, v in document.items() if k != "attempt_recovery_digest"}
+                signed = dict(unsigned)
+                signed["attempt_recovery_digest"] = codex_upgrade._fingerprint(unsigned)
+                return (json.dumps(signed, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode("utf-8")
+
+            base = _read(summary_path)
+            forged_cases = {
+                # ① 伪摘要：自摘要重签，但预约绑定摘要被换掉（不再指向本段预约）。
+                "伪摘要": resign({**base, "reservation": {**base["reservation"], "sha256": "2" * 64}}),
+                # ② 自摘要损坏：改结果状态但不重签。
+                "自摘要损坏": (json.dumps({**base, "results": [{**base["results"][0], "status": "complete", "duration_seconds": 1.0}]}, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode("utf-8"),
+                # ③ 缺 Job：结果集合为空（自摘要重签）。
+                "缺 Job": resign({**base, "results": []}),
+                # ④ 多 Job：结果集合多出冻结 J* 之外的 Job（自摘要重签）。
+                "多 Job": resign({**base, "results": [*base["results"], {**base["results"][0], "id": f"{job_ids[0]}-extra"}]}),
+            }
+            try:
+                for label, forged in forged_cases.items():
+                    summary_path.write_bytes(forged)
+                    with self._segment_patches_started(context, source_jobs):
+                        with self.assertRaises(supervisor.SupervisorError, msg=label) as raised:
+                            supervisor.verify_attempt_recovery_orphan_output(campaign_dir, facts_for(forged))
+                    message = str(raised.exception)
+                    if label in {"伪摘要", "自摘要损坏"}:
+                        self.assertIn("无法按段加载校验重验", message, label)
+                    elif label == "缺 Job":
+                        self.assertIn("不是无失败 Job 的成功终态", message, label)
+                    else:
+                        self.assertIn("不等于基线冻结的 J*", message, label)
+                    # 浅层 JSON 校验会把这些都判为成功（status／results 看起来合法）——这正是三审指出的缺口。
+                    document = json.loads(forged)
+                    self.assertEqual(document["status"], "awaiting_receipts")
+            finally:
+                summary_path.write_bytes(original)
+            # 封存时绑定的摘要与当前文件不一致（文件被改写但绑定未变）→ 先于段加载拒绝。
+            with self.assertRaisesRegex(supervisor.SupervisorError, "当前字节与封存时不一致"):
+                supervisor.verify_attempt_recovery_orphan_output(campaign_dir, {**facts_for(original), "output_sha256": "3" * 64})
+            # reconciler 的 parent-finalize-lost 分类走同一函数：合成父 run 目录（单动作 ar-run、绑定指向本段摘要）。
+            run_dir = root / "run-finalize-lost"
+            run_dir.mkdir(mode=0o700)
+            owner_nonce = "8" * 64
+            action = {
+                "action_id": "vc5-1-ar-run", "operation": "VC-5:capture-candidate", "timeout_seconds": 5.0,
+                "command": [sys.executable, "cli.py", "capture-candidate", "run", "--campaign-dir", str(campaign_dir), "--candidate-id", R1, "--attempt-recovery", "ar1", "--acknowledge-live-requests"],
+                "item_ids": [job_ids[0]], "output_bindings": [relative],
+            }
+            inner = {"schema_version": supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA, "campaign_id": str(fixture["manifest"]["campaign_id"]), "phase": "VC-5", "candidate_id": R1, "actions": [action]}
+            manifest_sha256 = supervisor._sha256(supervisor._canonical(inner))
+            supervisor._write_json(run_dir / "campaign-run-manifest.json", {"schema_version": inner["schema_version"], "manifest_sha256": manifest_sha256, "manifest": inner}, replace=False)
+            state = {"state": "failed", "campaign_id": inner["campaign_id"], "phase": "VC-5", "owner_pid": 1, "owner_nonce": owner_nonce}
+            for event_type, status in (("action-started", "running"), ("action-finished", "passed")):
+                supervisor._append_event(run_dir, event_type=event_type, operation="VC-5:capture-candidate", owner_pid=1, owner_nonce=owner_nonce, campaign_id=inner["campaign_id"], phase="VC-5", job_id="vc5-1-ar-run", status=status, reason=None)
+            supervisor.write_action_output_binding(
+                run_dir, campaign_dir=campaign_dir, campaign_id=inner["campaign_id"], phase="VC-5", action_id="vc5-1-ar-run",
+                run_manifest_sha256=manifest_sha256, owner_nonce=owner_nonce, output_bindings=[relative],
+            )
+            facts = supervisor.attempt_recovery_orphan_facts(run_dir, state, inner)
+            self.assertTrue(facts["complete"], facts)
+            with self._segment_patches_started(context, source_jobs):
+                self.assertEqual(supervisor.verify_attempt_recovery_orphan_output(campaign_dir, facts)["execute_jobs"], sorted(applied["execute_jobs"]))
 
     # ---- 夹具辅助 -------------------------------------------------------------------
 
