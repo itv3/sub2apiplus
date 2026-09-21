@@ -1617,7 +1617,9 @@ PREPARED 基线可 `evaluation-recover abandon` 作废（写 `ABANDON`，编号�
 
 **批次 v3 字段。** `codex-upgrade-vc-batch` 与 `campaign-run/v2` 清单成对携带 `evaluation_baseline`、
 `baseline_commit_sha256` 与 `evaluator_digests`（checker／builder／compare reader／accept reader 四项摘要，
-b0 取 plan entry 冻结值，b<K> 取 COMMIT 冻结值）；每个评估动作声明 `output_bindings`（该动作产出的评估
+编译时一律取当前受管树的直接依赖摘要；授权口径分两种——b0 只有 checker／builder 两项必须等于 plan
+`tool_identity` 的规范 entry，compare reader／accept reader 在 plan 未登记、b0 不对其设口径；b≥1 四项都必须等于
+该基线 `recovery.json.current_evaluator_digests`，不等即拒绝编译）；每个评估动作声明 `output_bindings`（该动作产出的评估
 制品相对路径，如 `assertions/<cid>/revisions/b<K>/evaluation-run.json`）。父监督器在动作执行前核对当前
 受管树的 evaluator 四项摘要与清单冻结值，不等即动作不执行、父 run `failed`／`identity-drift`；动作退出后
 按固定顺序 诊断 → `run-<id>/action-outputs/<action_id>.json`（`codex-upgrade-action-output-binding/v1`，
@@ -1631,8 +1633,12 @@ write-once，逐路径记录 `exists／sha256`，目录取 checkpoint 链 head�
 dependency_projection_sha256`）。规则的依赖投影摘要含规则文档、checker 摘要、候选与官方证据的 capture
 manifest 投影（`--capture-manifest-projection`）；`--reuse-from <前序基线 evaluation-run.json>` 且
 `reuse_authority=anchored` 时，投影相等的 pass 规则引用式复用（`reused_from=b<K-1>`，checker 调用数为 0），
-投影不等或 `reuse_authority=none`（失败 run 的动作输出绑定缺失）的规则全部重跑；同基线重入时已有
-`evaluation-run.json` 即视为完成，按既有 fail index 重现同一失败、不覆盖。
+投影不等或 `reuse_authority=none` 的规则全部重跑；同基线重入时已有
+`evaluation-run.json` 即视为完成，按既有 fail index 重现同一失败、不覆盖。`reuse_authority` 由失败父 run 推出：
+`offline-compare-failed` 恒为 `none`；`assertion-failed`／`offline-accept-failed` 只有在失败动作的输出绑定存在、
+且绑定条目指向一份存在的 `evaluation-run.json`（`exists=true`、摘要非空）时才为 `anchored`，绑定缺失
+（O1／R2-b）或未绑定该索引为 `none`；绑定记录的索引摘要与当前文件不一致直接失败关闭；b0 首批未落索引时由
+批准清单派生的索引（`derived=true`）强制 `none`。
 
 **失败分类与局部恢复（零请求）。** 失败父 run 对账（`reconcile-supervisor-run`，`receipt_passed`）之后：
 
@@ -1654,23 +1660,25 @@ failure-scope（失败规则、失败 check、沿 provenance——含 `derived/`
 摘要至少一项变化且覆盖缺陷项、修复提交已受监督部署（`--fix-commit`／`--deployment-receipt`）、候选 attempt 的
 `evaluation-epoch` 链已覆盖当前 evidence 摘要（`evaluation-epoch --campaign-dir --candidate-id --attempt-id --reason`
 不由 apply 代写），开 `evaluator-only` 基线并以根因 `evaluation.rule-failed` 推入总账；`transient-environment`
-要求 failure-scope 定位到的 Job 集合非空且严格等于 J*，开 `attempt-recovery` 基线（`recovery_revision=ar1`、
+要求 failure-scope 定位到的 Job 集合非空且严格等于 J*，开 `attempt-recovery` 基线（`recovery_revision=ar<k>`
+由 apply 返回：原 attempt 已有恢复段目录（含未收口）的最大编号 + 1，首次无历史段时才是 `ar1`；
 `execute_jobs=J*`、`reuse_jobs` 为其余 Job、`execute_rules` 为引用 J* 证据的规则），根因
 `attempt.job-transient-failure`。两类都在同阶段跨基线／跨恢复段累计，达 `same_root_cause_retry_limit` 即在 apply 的
 二次判定中永久停线（基线停在 prepared）。apply 五步 write-once：diagnosis＋recovery＋PREPARED → outbox
 根因事件（请求 0）→ 推总账并二次判定 → AUTHORIZATION → COMMIT（`stage_sources`）→ 账本
 `evaluation_baseline`；崩溃矩阵 E1～E5 分别在五个写点崩溃后重跑同一命令收敛，不重复推账。
 
-**恢复段 ar<k>（attempt-recovery 基线，改造 5 M2）。** 只补跑 J*、不改写原 attempt：
+**恢复段 ar<k>（attempt-recovery 基线，改造 5 M2）。** 只补跑 J*、不改写原 attempt；`ar<k>` 一律使用
+`evaluation-recover apply` 返回的 `recovery_revision`（首次无历史段时才是 `ar1`）：
 
 ```bash
 python3 -m tools.official_client_capture.codex_upgrade capture-candidate run \
   --campaign-dir "$CAMPAIGN_DIR" --candidate-id <cid> --candidate-purpose <用途> \
-  --attempt-recovery ar1 --acknowledge-live-requests            # 正式批次内的单动作
+  --attempt-recovery ar<k> --acknowledge-live-requests           # 正式批次内的单动作
 python3 -m tools.official_client_capture.codex_upgrade capture-candidate seal \
-  --campaign-dir "$CAMPAIGN_DIR" --candidate-id <cid> --attempt-id <id> --attempt-recovery ar1
+  --campaign-dir "$CAMPAIGN_DIR" --candidate-id <cid> --attempt-id <id> --attempt-recovery ar<k>
 python3 -m tools.official_client_capture.codex_upgrade account-sealed-candidate \
-  --campaign-dir "$CAMPAIGN_DIR" --candidate-id <cid> --attempt-id <id> --attempt-recovery ar1
+  --campaign-dir "$CAMPAIGN_DIR" --candidate-id <cid> --attempt-id <id> --attempt-recovery ar<k>
 ```
 
 段目录 `candidates/<cid>/attempts/<id>/recovery/ar<k>/`：`recovery-reservation.json`
@@ -2757,7 +2765,8 @@ checker 摘要＋builder 摘要），批次结束写 `evaluation-run.json`（`co
 ### 4.5.6 外部门禁与 accept
 
 **accept 对逐规则断言行的两种校验（2026-09-20 改造 5）。** 当前评估基线有 `evaluation-run.json` 时，accept
-先核对其 evaluator 四项摘要属该基线授权（b0 取 plan entry，b≥1 取 COMMIT）、各 checkpoint 的 checker 摘要与之
+先核对其 evaluator 摘要属该基线授权（b0 只核 checker／builder 等于 plan `tool_identity` 规范 entry，
+b≥1 四项等于 `recovery.json.current_evaluator_digests`）、各 checkpoint 的 checker 摘要与之
 一致、全部规则 `status=pass`，再逐行分两类：**executed 行**（`reused_from=null`）在当前基线的候选阶段与
 inventory 上核对——机器命令必须等于 `build_assertion_command` 权威构造器按当前投影复算的期望命令、
 checkpoint 绑定的文档摘要与结果行一致、证据引用落在当前候选 inventory；**reused 行**
@@ -2902,9 +2911,12 @@ accept）；封存前的 Job 失败按 §4.5.1 走 `reconcile-attempt` + `resume
 **1. 失败来源与复用授权。** 失败父 run 的动作推出三者互斥的 `failure_source`：`assertion-failed`（断言
 动作，builder 已落 `evaluation-run.json` 含 fail 行；b0 首批未落时由 preview／apply 按 b0 批准清单派生并固定
 `reuse_authority=none`）、
-`offline-compare-failed`、`offline-accept-failed`。`reuse_authority` 只由该失败 run 的 stop-receipt
-`action_outputs_sha256` 是否为 `null` 决定：绑定存在（动作输出已 write-once 绑定）为 `anchored`，允许下一
-基线引用式复用；`null`（O1／R2-b：绑定未写即崩溃）为 `none`，下一基线全部规则重跑。失败 run 必须先
+`offline-compare-failed`、`offline-accept-failed`。`reuse_authority` 由该失败 run 推出，四条规则：
+①`offline-compare-failed` 恒为 `none`；②`assertion-failed`／`offline-accept-failed` 只有在 stop-receipt
+`action_outputs_sha256` 非 `null`、且该输出绑定的条目指向一份存在的 `evaluation-run.json`（`exists=true`、摘要
+非空）时才为 `anchored`，允许下一基线引用式复用——绑定缺失（O1／R2-b：绑定未写即崩溃）或绑定中没有该
+索引为 `none`，下一基线全部规则重跑；③绑定记录的索引摘要与当前 `evaluation-run.json` 不一致直接失败关闭；
+④b0 首批未落索引、由批准清单派生的索引强制 `none`。失败 run 必须先
 `reconcile-supervisor-run` 对账到 `receipt_passed`，`evaluation-recover apply` 才受理。
 
 **2. failure-scope 定位链。** 从失败规则→失败 check→check 引用的证据 artifact→provenance 条目（派生观测
@@ -2918,7 +2930,8 @@ Job 的失败（如 compare／accept 工具异常）没有 `transient-environmen
   链已覆盖当前 evidence 摘要。出口：`evaluator-only` 基线 b<K>，根因 `evaluation.rule-failed`；
   `stage_sources` 中 capture 恒 `reuse`，compare 按 compare reader 是否变化，断言／accept `local`。
 - `transient-environment`：failure-scope 定位到的 Job 集合 J* 非空。出口：`attempt-recovery` 基线 b<K>
-  （`recovery_revision=ar1`、`execute_jobs=J*`、`reuse_jobs` 其余、`execute_rules` 为引用 J* 证据的规则），
+  （`recovery_revision=ar<k>` 由 apply 按已有段最大编号 + 1 返回，首次才是 `ar1`；`execute_jobs=J*`、`reuse_jobs` 其余、
+  `execute_rules` 为引用 J* 证据的规则），
   根因 `attempt.job-transient-failure`；随后走第 6 项恢复段。
 - `candidate-source`：候选源码问题，`redirect` 到 `invalidate-candidate preview`（改造 2 三分支）。
 - `approval-inputs`：批准输入（画像、场景、规则）问题，`redirect` 到显式停线后从 VC-2 建后继 Campaign。
@@ -2961,7 +2974,9 @@ monitor 封存 `failed／parent-finalize-lost`）：`reconcile-supervisor-run` �
 按 §4.5.6 重新执行门禁并生成新收据，不开评估基线、不进入 `evaluation-recover`；同样不在本合同内的还有
 候选源码问题（改造 2 `invalidate-candidate`／`revision-open`）与取得执行权前的父 run 失败（改造 4）。
 `recover-candidate-failed-jobs`（0.154.0 首轮 v7 失败 Job 的后继 Campaign 恢复入口）只接受代码冻结的那一次
-历史来源（`c0154-formal-vc5-failed-job-recovery-20260917t0527z`），是历史只读入口，不得用于新 Campaign；
+历史直接来源（Campaign `c0154-formal-vc5-recovery-20260916t122646z`、候选 `c0154-candidate-v7`；
+`c0154-formal-vc5-failed-job-recovery-20260917t0527z` 是它生成的后继／control epoch），是历史只读入口，
+不得用于新 Campaign；
 临时环境故障一律走本节第 3／6 项的恢复段。
 
 <a id="codex-vc-6"></a>
