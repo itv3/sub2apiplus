@@ -826,7 +826,8 @@ images、alpha-search、legacy compact、realtime 和条件 Header 只在各自�
   `backend-client/src/client.rs:226-245`、`backend-client/src/client.rs:463-480`、
   `backend-client/src/client.rs:642-646`。0.154.0 的 Luna Reserve 分支见 [L1]
   `backend-client/src/client/rate_limit_resets.rs:75`（`get_rate_limit_status(supports_luna_reserve)`）、
-  `app-server/src/account_processor.rs:1152`（分派条件）与 `tui/src/background_requests.rs:811`
+  `app-server/src/request_processors/account_processor.rs:1152`（分派条件）与
+  `tui/src/app/background_requests.rs:811`
   （周期与手动刷新均传 true）；0.151.0 源码对该符号 0 命中。最终线序仍由 wire 确认。
 - **实测**：正式 k80 Campaign 的 A12 取得三种 GET 与安全 consume；12 份冻结证据的
   `wham-get-paths` 断言通过；0.149.1 HTTP Main 又取得 `settings/user`，其余机器事实沿用已批准
