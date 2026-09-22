@@ -94,8 +94,8 @@
     },
     {
       "path": "tools/official_client_capture/codex_upgrade_evidence_manifest.py",
-      "sha256": "c8e452779bd18a868aeb78e1f43a87e7b9fb23b3645186c8df5f3078fd074829",
-      "reason": "提供有界、可续作、扫描后复核 stat 的 EvidenceManifest 实现；2026-09-18 起 verify_manifest_boundary 在 rehearse-candidate-seal 的 OverlayFS 隔离预演上下文（带标记且全部证据根在 overlay 挂载点）下忽略 st_dev 与由其派生的 metadata_sha256，其余 stat 边界与正式目录判据不变（提交 a374973fc）。2026-09-20 起新增 PROJECTION_SCHEMA、project_evidence_manifest 与 validate_projection_receipt，merge_evidence_manifests 增加 preserve_prefixes：改造 5 M2 attempt-recovery 增量封存对已验证旧清单按整根投影（只保留复用 Job 的根、零扫描、出具投影收据并可重放核对）并与恢复段新清单按保留前缀合并（第 3 批 M2 T5.15，提交 83c0d7077）；stat 边界复核、隔离预演判据与正式目录判据不变。"
+      "sha256": "d23b05103a2d8d960159d259005440fc9b65cbd9134c9d2e1e0e14be8a5f9e83",
+      "reason": "提供有界、可续作、扫描后复核 stat 的 EvidenceManifest 实现；2026-09-18 起 verify_manifest_boundary 在 rehearse-candidate-seal 的 OverlayFS 隔离预演上下文（带标记且全部证据根在 overlay 挂载点）下忽略 st_dev 与由其派生的 metadata_sha256，其余 stat 边界与正式目录判据不变（提交 a374973fc）。2026-09-20 起新增 PROJECTION_SCHEMA、project_evidence_manifest 与 validate_projection_receipt，merge_evidence_manifests 增加 preserve_prefixes：改造 5 M2 attempt-recovery 增量封存对已验证旧清单按整根投影（只保留复用 Job 的根、零扫描、出具投影收据并可重放核对）并与恢复段新清单按保留前缀合并（第 3 批 M2 T5.15，提交 83c0d7077）；stat 边界复核、隔离预演判据与正式目录判据不变。2026-09-22 起新增 EvidenceManifestBoundaryDriftError（failure_class=evidence-integrity、观测 evidence-manifest.boundary／stat-boundary-drift）并由 verify_manifest_boundary 在不可变 stat 边界漂移时抛出：v14r4 批次 15 事故（seal 之后驱动脚本再次 chmod 已封存证据，ctime_ns 漂移）此前被包成通用错误并升级为可重派的 post-run-tooling；生产者明确给出机器失败分类后父监督器直接停线、reconciler 固定终态 integrity_mismatch（提交 7b31d83c9）；边界比较规则、隔离预演判据与正式目录判据不变。"
     }
   ],
   "verification": [
@@ -111,5 +111,5 @@
     "official_egress_profile_changed": false
   },
   "result": "passed_codex_cli_0151_evaluation_recovery",
-  "identity_sha256": "a697c322740922d47020f920042dc61bb9e18848240fd28dc82c07bb34ed7fcd"
+  "identity_sha256": "e15bdb24967679978fe59cc139409debc6254c8a380de8a6dcbbd3d6b514f354"
 }
