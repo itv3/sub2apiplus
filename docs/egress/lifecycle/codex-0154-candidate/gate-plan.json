@@ -2,7 +2,7 @@
   "affected_rule_ids": [
     "SPEC-EP-019"
   ],
-  "campaign_id": "c0154-formal-vc5-v14r3-20260921t221209z",
+  "campaign_id": "c0154-formal-vc5-v14r4-20260922t003824z",
   "gate_count": 5,
   "gates": [
     {
@@ -113,9 +113,9 @@
     "SPEC-WS-005"
   ],
   "joint_manifest_sha256": "491c6d14fb6ba8311ccd017de54bb3630cf1b97754c60ca188b235445890b00d",
-  "mapping_sha256": "9c9787404aba15648de3ce0b8d0c074db7c7b683f7ecc63e7e74fb9fc31c1d7e",
-  "plan_sha256": "f552eff4d4a16e0b95412fd1af20e2743b05d660e8702c419308624448f77f7c",
-  "requirements_sha256": "fe26c30debcdf9573fb306c41f72a744518080160d32bed2660de52dfc3e9a62",
+  "mapping_sha256": "396855595607cf16c35a4cc708e4d17c344dae2735ba28fc35658b913cbb8fe2",
+  "plan_sha256": "ec25f227576e3a9421563d6dbe7aaacd99858f1f8d9eeff4cde66f59a347ad37",
+  "requirements_sha256": "738aeec83033f081d2b84715793c12aa060d4bafbf475624cb214556799b4621",
   "schema_version": "codex-post-promotion-gate-plan/v1",
   "target_version": "0.154.0"
 }
