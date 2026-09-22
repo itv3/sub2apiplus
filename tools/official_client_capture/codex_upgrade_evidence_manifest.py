@@ -34,6 +34,36 @@ class EvidenceManifestError(ValueError):
     """证据边界、权限、检查点或内容摘要不可信。"""
 
 
+# 2026-09-22（v14r4 事故）：已封存 EvidenceManifest 绑定的证据在 seal 之后被再次 chmod，
+# 16 个条目 ctime_ns 漂移，accept 读侧只抛通用 EvidenceManifestError，父监督器按默认
+# execution-failure 又把它升级成"可修工具后逐字重派"的 post-run-tooling。ctime 不可合法
+# 回写、manifest 是 write-once 产物，这类漂移对当前 attempt 永远不可恢复，必须由生产者
+# 明确给出机器失败分类，监督器与 reconciler 只校验记录、不从 message 反推。
+BOUNDARY_DRIFT_CHECK_ID = "evidence-manifest.boundary"
+BOUNDARY_DRIFT_FAILURE_CODE = "stat-boundary-drift"
+
+
+class EvidenceManifestBoundaryDriftError(EvidenceManifestError):
+    """既有 EvidenceManifest 的不可变 stat 边界与当前证据根不一致。
+
+    ``failure_class``／``failure_observations`` 与 ``CandidateReadinessError`` 同构，
+    供 ``write_campaign_run_action_diagnostic`` 直接写入动作诊断（v3）：分类固定为
+    永久失败类 ``evidence-integrity``，观测二元组固定为
+    ``evidence-manifest.boundary／stat-boundary-drift``，reconciler 据此生成稳定根因。
+    """
+
+    failure_class = "evidence-integrity"
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.failure_observations = [
+            {
+                "check_id": BOUNDARY_DRIFT_CHECK_ID,
+                "failure_code": BOUNDARY_DRIFT_FAILURE_CODE,
+            }
+        ]
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -843,7 +873,9 @@ def verify_manifest_boundary(
                     detail["current"] = right
                     break
             sys.stderr.write("EvidenceManifest 隔离预演差异：" + json.dumps(detail, ensure_ascii=False, default=str) + "\n")
-        raise EvidenceManifestError("EvidenceManifest 的不可变 stat 边界发生漂移。")
+        raise EvidenceManifestBoundaryDriftError(
+            "EvidenceManifest 的不可变 stat 边界发生漂移。"
+        )
     return {
         "status": "passed",
         "entry_count": current["entry_count"],

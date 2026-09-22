@@ -1271,8 +1271,9 @@ head；`events/NNNNNN.json` 只有六种事件：`campaign_registered`、`campai
 `reconciliation_committed`、`accounting_resolved`、`root_cause_repaired`、`campaign_terminal`
 （`terminal_reason` 只能是 `deadline_wall_clock`、`deadline_live_requests`、`root_cause_limit`、
 `accounting_unresolved`、`environment_contaminated`、`identity_changed`、`superseded`、
-`prior_stop_the_line`、`prior_upgrade_complete`，以及 2026-09-19 改造 4 为 COMMIT／父 run 制品完整性
-异常新增的 `integrity_mismatch`）。权威数据是
+`prior_stop_the_line`、`prior_upgrade_complete`，以及 2026-09-19 改造 4 新增的 `integrity_mismatch`——
+不可变控制或证据制品完整性异常：COMMIT／父 run 制品完整性异常，2026-09-22 起还包括已封存
+EvidenceManifest 的不可变 stat 边界漂移，即动作诊断 `failure_class=evidence-integrity`）。权威数据是
 plan 加 events，`head.json` 只是缓存：写入时在目录锁内完整重放并以 head sha 做 CAS，缓存缺失或落后可
 重建，超前或同序号摘要不符失败关闭。Campaign 账本（`UpgradeTimingLedger`）继续记录本 Campaign 的阶段、
 attempt 与停线；跨账本事务由 Campaign 目录 `ledger/outbox/batch-NNNNNN/` 承担：若干 `entry-NN.json`
@@ -1388,6 +1389,16 @@ VC-4 首批、`plan-candidate-gates` 与 `record-candidate-build` 前必须先�
 VC-5／VC-6 的前序为同 revision 的上一阶段；账本 `completed_phases` 只算 Campaign 级阶段与当前 revision，
 同 revision 已完成的阶段不得重开，越过目标阶段回到 VC-4 必须由 `stage_revision` 授权。
 
+证据完整性（`evidence-integrity`）由生产者明确给出、监督器只校验记录不反推：候选 compare／accept 等读侧
+复核已封存 `evidence-manifest.json` 的不可变 stat 边界（目录项、大小、mtime／ctime、inode、mode 与 metadata
+摘要）不一致时，`verify_manifest_boundary` 抛 `EvidenceManifestBoundaryDriftError`，codex_upgrade 以
+`EvidenceIntegrityError` 原样携带 `failure_class=evidence-integrity` 与观测
+`evidence-manifest.boundary／stat-boundary-drift` 写入动作诊断（v3）；父监督器不把它升级为
+`post-run-tooling`、不写 post-run-tooling 收据，账本直接 `stop_the_line`；`evaluation-recover` 与逐字重派
+门禁一律拒绝；reconciler 固定终态 `integrity_mismatch`（2026-09-22 v14r4 批次 15：seal 之后驱动脚本再次
+chmod 已封存证据，16 个条目 ctime_ns 漂移，ctime 不可合法回写、manifest 为 write-once 产物，当前 attempt
+不可恢复，只能停线并修复后重建 Campaign）。
+
 候选级阶段的父动作失败按三分支收口：可恢复类（环境前提、零请求后处理、父启动失败）保持
 `recovery_required` 不变；命中永久条件（身份／策略漂移、环境污染、恢复失败、deadline、请求预算、根因
 上限、证据完整性，或账本已 `stop_required`／总账 blocked／账务未决／绝对截止已到／根因已达上限）走
@@ -1435,7 +1446,9 @@ attempt（run 期间已产生 reservation 时拒绝并指向 attempt 入口）�
 `staging.commit-failed`，可恢复 → 账本 `receipt_passed` 的下一动作为 `redispatch-same-sequence`，同序号重新
 prepare）、`parent-start-failed`（COMMIT 已写、父 run 未取得执行权，根因 `parent-start.failed`，可恢复 →
 `redispatch-same-batch`，按 N+1 逐字重派）、`commit-integrity-mismatch`（固定永久停线
-`integrity_mismatch`）；无父 run 的 staging 中止（P1）不经该入口，由 `compile-and-run-vc-batch` 下一次派发时
+`integrity_mismatch`）；2026-09-22 起动作诊断 declared 为 `evidence-integrity` 的父 run 同样固定终态
+`integrity_mismatch`（无论总账与账本状态），对账不补写 post-run-tooling 收据、`next_command` 只给
+`permanent-stop-integrity_mismatch`，不给出任何同批次重派建议；无父 run 的 staging 中止（P1）不经该入口，由 `compile-and-run-vc-batch` 下一次派发时
 自行对账入账。2026-09-21 改造 5 M2 起它还承接取得执行权之后的第四类父 run 失败 `parent-finalize-lost`
 （正式单动作恢复段 run 已成功、动作输出绑定已写、父 run 写终态前 owner 丢失；根因复用
 `supervisor-run.interrupted`、`failed_step=parent-finalize`；可恢复 → `redispatch-same-batch`，逐字重派命中段 run 的
@@ -2638,7 +2651,12 @@ Kilo Responses 的 `@ai-sdk/openai` provider 必须显式设置 `options.websock
 2. **生成收据**：在 candidate 源码树外运行受管生成器，形成 capture manifest、Go test trace、
    observed-profile 和两份 Kilo 收据。`build_*` 产物只是 finalizer 输入，不能直接提交给 seal；
    正式收据必须由受管 finalizer 生成。activation fact 必须由运行服务产生；测试 trace 必须来自
-   同源树上的冻结测试日志，生成器不得合成二者。
+   同源树上的冻结测试日志，生成器不得合成二者。驱动脚本的权限收口（`0700／0600`、属主）必须在
+   本步骤内、步骤 3 生成 `evidence-manifest.json` 之前完成；manifest 存在后，它绑定的所有证据根
+   （`evidence/**`）一律不得再 chmod／chown／改写——即便模式不变，ctime 也会漂移，读侧复核即判
+   `evidence-integrity` 永久停线。attempt 根之外或未纳入 manifest 的控制制品仍按各自合同 write-once，
+   不因此笼统禁止 attempt 目录内的其他写入；驱动脚本重跑必须按阶段状态续跑（收据已存在即跳过、
+   目标平台门禁重跑不得再进入 seal 链）。
 3. **生成预览并完成唯一深度扫描**：
 
    ~~~bash

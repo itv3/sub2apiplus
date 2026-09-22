@@ -72,6 +72,15 @@ PARENT_START_FAILED_CLASS = supervisor.PARENT_START_FAILED_REASON
 # 改造 5 M2（R2 的 attempt-recovery 变体）：单动作恢复段 run 已成功、父 run 终态化前 owner 丢失。
 PARENT_FINALIZE_LOST_CLASS = supervisor.PARENT_FINALIZE_LOST_REASON
 COMMIT_INTEGRITY_MISMATCH_CLASS = supervisor.COMMIT_INTEGRITY_MISMATCH_CLASS
+# 2026-09-22：动作诊断 declared 为 evidence-integrity（生产者：EvidenceManifest 不可变 stat 边界
+# 漂移，见 codex_upgrade.EvidenceIntegrityError）的父 run 与 COMMIT 完整性异常同属"不可变控制或
+# 证据制品完整性异常"：无论总账与账本状态如何都固定终态 integrity_mismatch，不生成
+# post-run-tooling 收据、不给出同批次重派建议（v14r4 批次 15 事故：ctime 不可回写、manifest
+# write-once，当前 attempt 不可恢复）。
+EVIDENCE_INTEGRITY_CLASS = "evidence-integrity"
+INTEGRITY_MISMATCH_FAILURE_CLASSES = frozenset(
+    {COMMIT_INTEGRITY_MISMATCH_CLASS, EVIDENCE_INTEGRITY_CLASS}
+)
 STAGING_FAILURE_CLASSES = frozenset(
     {
         PARENT_PREPARE_ABANDONED_CLASS,
@@ -734,6 +743,7 @@ def _decide(
     """步骤 5：先入账后判定。返回 decision 与 terminal_reason（停线时）。
 
     ``forced_terminal_reason`` 用于分类本身即不可恢复的对象（改造 4 的 COMMIT 完整性
+    异常，以及 2026-09-22 起动作诊断 declared 为 evidence-integrity 的已封存证据完整性
     异常）：无论总账与账本状态如何都固定停线，其他原因仍逐条登记供审计。
     """
 
@@ -750,7 +760,7 @@ def _decide(
     if forced_terminal_reason is not None:
         if forced_terminal_reason not in project_ledger.TERMINAL_REASONS:
             raise ReconcilerError(f"强制终态原因非法：{forced_terminal_reason}")
-        stop(forced_terminal_reason, "对象分类本身不可恢复（COMMIT／父 run 制品完整性异常）")
+        stop(forced_terminal_reason, "对象分类本身不可恢复（不可变控制或证据制品完整性异常）")
     if head.get("blocked"):
         stop("accounting_unresolved", f"总账 blocked：{head.get('unresolved_operation_ids')}")
     elif request_status == "unresolved":
@@ -2725,7 +2735,7 @@ def reconcile_supervisor_run(
         now=observed,
         forced_terminal_reason=(
             "integrity_mismatch"
-            if run.get("failure_class") == COMMIT_INTEGRITY_MISMATCH_CLASS
+            if run.get("failure_class") in INTEGRITY_MISMATCH_FAILURE_CLASSES
             else None
         ),
     )

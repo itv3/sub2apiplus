@@ -3743,6 +3743,46 @@ class CampaignGlobalPreconditionError(ConfigurationError):
     failure_class = "environment-prerequisite"
 
 
+class EvidenceIntegrityError(ConfigurationError):
+    """已封存证据或不可变控制制品的完整性异常（永久失败类 ``evidence-integrity``）。
+
+    2026-09-22：候选 accept 读侧复核 EvidenceManifest 时发现 stat 边界漂移（v14r4：
+    seal 之后再次 chmod 使 16 个条目 ctime_ns 变化）。此前它被包成通用 ConfigurationError，
+    父监督器按默认 execution-failure 升级为 post-run-tooling 并建议逐字重派，而 ctime 不可
+    合法回写、manifest 为 write-once 产物，当前 attempt 根本不可恢复。生产者
+    （``codex_upgrade_evidence_manifest.EvidenceManifestBoundaryDriftError``）明确给出
+    ``failure_class`` 与 ``failure_observations``，这里原样携带到 campaign-run 的动作诊断，
+    监督器与 reconciler 只校验记录，不从 message 反推。
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        failure_class: str,
+        failure_observations: Sequence[Mapping[str, str]],
+    ) -> None:
+        super().__init__(message)
+        self.failure_class = str(failure_class)
+        self.failure_observations = [dict(item) for item in failure_observations]
+
+
+def _evidence_manifest_configuration_error(
+    error: codex_upgrade_evidence_manifest.EvidenceManifestError,
+) -> ConfigurationError:
+    """把 EvidenceManifest 异常包成 ConfigurationError，保留生产者给出的机器失败分类。"""
+
+    failure_class = getattr(error, "failure_class", None)
+    observations = getattr(error, "failure_observations", None)
+    if isinstance(failure_class, str) and isinstance(observations, list):
+        return EvidenceIntegrityError(
+            str(error),
+            failure_class=failure_class,
+            failure_observations=observations,
+        )
+    return ConfigurationError(str(error))
+
+
 class CampaignCleanupRequested(RuntimeError):
     """父监督器要求停止数据面并在原 deadline 内展开 attempt 清理。"""
 
@@ -41779,7 +41819,7 @@ def _stage_evidence_manifest(
                 roots,
             )
         except codex_upgrade_evidence_manifest.EvidenceManifestError as error:
-            raise ConfigurationError(str(error)) from error
+            raise _evidence_manifest_configuration_error(error) from error
     return manifest
 
 
@@ -41944,7 +41984,7 @@ def _materialize_stage_evidence_manifest(
                 roots,
             )
         except codex_upgrade_evidence_manifest.EvidenceManifestError as error:
-            raise ConfigurationError(str(error)) from error
+            raise _evidence_manifest_configuration_error(error) from error
     else:
         try:
             evidence_manifest = codex_upgrade_evidence_manifest.build_evidence_manifest(
@@ -42131,7 +42171,7 @@ def deep_verify_campaign(
                     source_roots,
                 )
             except codex_upgrade_evidence_manifest.EvidenceManifestError as error:
-                raise ConfigurationError(str(error)) from error
+                raise _evidence_manifest_configuration_error(error) from error
             if scan["full_scan_count"] == 0:
                 scan["reused_bytes"] = int(source_manifest["total_bytes"])
                 scan["total_bytes"] = int(source_manifest["total_bytes"])
@@ -43518,7 +43558,7 @@ def _seal_attempt_recovery_segment(
         try:
             codex_upgrade_evidence_manifest.verify_manifest_boundary(evidence_manifest, list(roots))
         except codex_upgrade_evidence_manifest.EvidenceManifestError as error:
-            raise ConfigurationError(str(error)) from error
+            raise _evidence_manifest_configuration_error(error) from error
     else:
         try:
             projected, projection_receipt = codex_upgrade_evidence_manifest.project_evidence_manifest(
@@ -43540,7 +43580,7 @@ def _seal_attempt_recovery_segment(
             )
             codex_upgrade_evidence_manifest.verify_manifest_boundary(evidence_manifest, list(roots))
         except codex_upgrade_evidence_manifest.EvidenceManifestError as error:
-            raise ConfigurationError(str(error)) from error
+            raise _evidence_manifest_configuration_error(error) from error
         merged_roots = sorted(str(row["path"]) for row in evidence_manifest["roots"])
         if merged_roots != root_sets["final_roots"]:
             raise ConfigurationError(
@@ -46597,7 +46637,7 @@ def _seal_capture_attempt(
                 roots,
             )
         except codex_upgrade_evidence_manifest.EvidenceManifestError as error:
-            raise ConfigurationError(str(error)) from error
+            raise _evidence_manifest_configuration_error(error) from error
     else:
         if metadata_source is not None and metadata_source_kind == "classification_candidate":
             _source_dir, source_root, source_attempt, _transition = metadata_source
@@ -46644,7 +46684,7 @@ def _seal_capture_attempt(
                     roots,
                 )
             except codex_upgrade_evidence_manifest.EvidenceManifestError as error:
-                raise ConfigurationError(str(error)) from error
+                raise _evidence_manifest_configuration_error(error) from error
         else:
             try:
                 evidence_manifest = (

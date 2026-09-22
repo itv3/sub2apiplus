@@ -117,8 +117,10 @@ TERMINAL_REASONS = (
     "prior_stop_the_line",
     "prior_upgrade_complete",
     "superseded",
-    # 改造 4：prepared 父 run 的正式 COMMIT 制品完整性异常（自摘要无效、owner nonce 或
-    # run 目录不匹配）。与 identity_changed（wire／策略身份漂移）语义不同，不混用。
+    # 不可变控制或证据制品完整性异常。改造 4：prepared 父 run 的正式 COMMIT 制品（自摘要
+    # 无效、owner nonce 或 run 目录不匹配）；2026-09-22 起还包括已封存 EvidenceManifest 的
+    # 不可变 stat 边界漂移（动作诊断 failure_class=evidence-integrity，reconciler 固定映射）。
+    # 与 identity_changed（wire／策略身份漂移）语义不同，不混用。
     "integrity_mismatch",
 )
 REQUEST_STATUSES = ("resolved", "estimated", "unresolved")
