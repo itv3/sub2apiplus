@@ -2748,7 +2748,15 @@ active SnapshotCatalog 的裁剪必须是确定性的：以退休前的快照为
 
 写入 §4.6.8 终态收据时，`retired_runtime_profiles` 只登记第 3 类（已删除）画像——通用终态门禁会逐条
 断言该清单里的路径**已不存在**；第 1 类与第 2 类分别用 `retained_runtime_profiles` 与
-`relocated_runtime_profiles` 登记，退休事实以 RemovalReceipt 为准。审计索引必须由
+`relocated_runtime_profiles` 登记，退休事实以 RemovalReceipt 为准。第 1 类还会让运行目录出现不在
+`cmd/egressruntimedump` 闭集内的文件，因此"运行闭集相等"不是裸 diff：`check-egress-spec` 用
+`tools/check_runtime_catalog_projection.py` 比较，只有同时满足下列条件的文件才不参与比较——
+两份收据（当前 Active 终态收据与其 `runtime_profile_removal` 绑定的 RemovalReceipt）自摘要、
+绑定摘要与 Campaign 身份一致；路径严格位于该退休版本的
+`catalogdata/runtime/profiles/<版本>/` 下、无路径穿越、是普通文件且非符号链接；两份收据的
+路径、摘要与状态一一对应；文件当前摘要与收据一致；该文件既不在导出结果中，也不被当前 Catalog
+引用。排除之后其余文件仍必须与导出结果逐字节完全一致，任何未经收据批准的多余文件、摘要漂移或
+缺失都失败关闭。审计索引必须由
 `tools/codex_audit_index.py generate` 产出（schema `codex-upgrade-audit-index/v1`），终态收据登记它的
 坐标并以 `audit_index_identity_sha256` 绑定其自摘要；手工编造的索引会被 `codex_audit_index.py check`
 在 `check-egress-spec` 内拒绝。

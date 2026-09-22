@@ -172,10 +172,16 @@ check-egress-spec-ci: check-egress-bootstrap-replay check-egress-seal test-offic
 		-run '^(TestBuildTransportWithCustomDialKeepsHTTP2Disabled|TestSharedPoolGuardPreservesOutOfScopeWireAndResult)$$' -count=1
 	@# 防快照与生成文件陈旧：临时导出后比对。
 	@# 用 mktemp -d 而非固定 /tmp 路径，避免并行 CI 互相覆盖。
+	@# 比较不再是裸 diff：退休旧 Previous 时，被更早终态收据冻结为逐文件校验制品的画像
+	@# 必须原地保留，会成为运行目录里不在 dump 闭集内的文件。排除项只能来自当前 Active
+	@# 终态收据的 retained_runtime_profiles，并与其绑定的 RemovalReceipt 逐条交叉验证；
+	@# 排除之后其余文件仍必须与导出结果逐字节完全一致。
+	@python3 tools/check_runtime_catalog_projection.py --self-test
 	@cd backend && d=$$(mktemp -d) && trap "rm -rf $$d" EXIT; \
-		go run ./cmd/egressruntimedump -output $$d/runtime >/dev/null && \
-		diff -qr $$d/runtime internal/officialegress/catalogdata/runtime >/dev/null || \
-		{ echo "🔴 正式版本数据已漂移，请重跑 cmd/egressruntimedump 更新 catalogdata/runtime"; exit 1; }
+		go run ./cmd/egressruntimedump -output $$d/runtime >/dev/null || \
+		{ echo "🔴 正式版本数据导出失败，请检查 cmd/egressruntimedump"; exit 1; }; \
+		python3 ../tools/check_runtime_catalog_projection.py \
+			--root .. --dump $$d/runtime --repo internal/officialegress/catalogdata/runtime >/dev/null
 	@cd backend && d=$$(mktemp -d) && trap "rm -rf $$d" EXIT; \
 		go run ./cmd/egressprofiledump $$d/snap.json >/dev/null && \
 		key=$$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["Version"] + "/" + d["Digest"])' $$d/snap.json) && \
