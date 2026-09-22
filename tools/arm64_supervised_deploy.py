@@ -187,8 +187,12 @@ from typing import Any, Callable, Mapping
 # 动作诊断，reconciler 固定终态 integrity_mismatch；0.151 评估恢复台账随 evidence_manifest 重签；ARM64 抓包驱动链
 # 入库（tools/arm64_capture_driver，非受管目录，组合安装收据绑定本部署收据）。受管工具树与 evidence 层摘要随之
 # 变化；监督器与断言预处理器未变。
+# 2026-09-22（VC-6 canonical 派发闭包）：冻结映射拆成 VC-5／VC-6 两组，退休项按 retire-<版本> 动态识别并与
+# --retire-version 精确匹配；VC-6 三步必须带绝对路径 --step-receipt，批次按组校验且不得混组、次序为生产激活 →
+# 回滚验证 → 退休；监督器 post-run-tooling 闭集按冻结判定接纳 VC-6 三项，使退休动作失败仍归可恢复类。
+# 受管工具树与监督器随之变化；断言预处理器未变。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "30dacdbd8dfb7c7955e2b396a23fef91b2363a67e70c6d784efa63444101990f"
+    "1d0525b3082188ecd4102cd0a73c30e710ccb93c07bac55451d11fd7b2bc52f7"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "c8020cadd3ee08f67236313a0913dbc3730805b46c3f6b720cdf7ace77f9fec1"
