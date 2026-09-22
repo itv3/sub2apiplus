@@ -1,0 +1,127 @@
+{
+  "base_commit": "5f75028d790ac3e9cf16e8fb030a772723392656",
+  "changed_path_count": 5,
+  "current_commit": "bd710d401e42a29805efdd8a4aaf34245b3c6d53",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 3930,
+  "frozen_path_count": 1399,
+  "identity_sha256": "58a2d6c64404a7dadc78e10f24d7ad2308eab5418481962a127534e823bda33a",
+  "issued_at_utc": "2026-09-22T06:31:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-0154-vc5-ledger-resign-evidence-integrity-20260922-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "docs/egress/maintenance/codex-cli-0151-evaluation-recovery-source-transition.json",
+      "predecessor_sha256s": [
+        "e76d2aeb609816ed7f3cd3525e0456b2802c16012e642f3e273ff576f73316b2"
+      ],
+      "reason": "登记 EvidenceManifest 边界漂移分类（7b31d83c9）的 0.151 评估恢复台账 addition 摘要更新与 framework-clarification→managed-scenario-recovery→evidence-manifest-order-recovery→evidence-manifest-replay-closure 前序链重签（提交 bd710d401）的冻结承接边；不改变任何画像、Persona、wire 或生产代码 path=docs/egress/maintenance/codex-cli-0151-evaluation-recovery-source-transition.json",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-ledger-resign-diff-diag-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-ledger-resign-mount-type-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-ledger-resign-roots-device-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-ledger-resign-t515-20260921-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-rehearsal-manifest-device-ledger-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-rehearsal-manifest-diagnostic-20260918-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "a28f17faf76c42a614ab07a34a45348af5a2bed2c1b309184dab7ff142536962"
+    },
+    {
+      "old_path": "",
+      "path": "docs/egress/maintenance/codex-cli-0151-evidence-manifest-order-recovery-source-transition.json",
+      "predecessor_sha256s": [
+        "f0af77ba58230ab4c75f38210e9709d41acb9f2f6612fd2b9bc90c0785fba171"
+      ],
+      "reason": "登记 EvidenceManifest 边界漂移分类（7b31d83c9）的 0.151 评估恢复台账 addition 摘要更新与 framework-clarification→managed-scenario-recovery→evidence-manifest-order-recovery→evidence-manifest-replay-closure 前序链重签（提交 bd710d401）的冻结承接边；不改变任何画像、Persona、wire 或生产代码 path=docs/egress/maintenance/codex-cli-0151-evidence-manifest-order-recovery-source-transition.json",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-ledger-resign-diff-diag-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-ledger-resign-mount-type-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-ledger-resign-roots-device-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-ledger-resign-t515-20260921-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-rehearsal-manifest-device-ledger-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-rehearsal-manifest-diagnostic-20260918-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "73234f87c5e1f75f5febff13784972ee134e87ef10e61a29bfdfd3b6f7f34fd9"
+    },
+    {
+      "old_path": "",
+      "path": "docs/egress/maintenance/codex-cli-0151-evidence-manifest-replay-closure-source-transition.json",
+      "predecessor_sha256s": [
+        "04d52b9f71592b182073c8159cc8d082435ae722217d2fc8cf698b429268d776"
+      ],
+      "reason": "登记 EvidenceManifest 边界漂移分类（7b31d83c9）的 0.151 评估恢复台账 addition 摘要更新与 framework-clarification→managed-scenario-recovery→evidence-manifest-order-recovery→evidence-manifest-replay-closure 前序链重签（提交 bd710d401）的冻结承接边；不改变任何画像、Persona、wire 或生产代码 path=docs/egress/maintenance/codex-cli-0151-evidence-manifest-replay-closure-source-transition.json",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-ledger-resign-diff-diag-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-ledger-resign-mount-type-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-ledger-resign-roots-device-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-ledger-resign-t515-20260921-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-rehearsal-manifest-device-ledger-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-rehearsal-manifest-diagnostic-20260918-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "89c80fcb590b5df336bed337380642a3b79253d71f1417aac1fae79dee15a23c"
+    },
+    {
+      "old_path": "",
+      "path": "docs/egress/maintenance/codex-cli-0151-framework-clarification-source-transition.json",
+      "predecessor_sha256s": [
+        "188191ea03fc72c31149ae3a5eb7a95d44b515f24ccdf6db4b21632534e7c2e4"
+      ],
+      "reason": "登记 EvidenceManifest 边界漂移分类（7b31d83c9）的 0.151 评估恢复台账 addition 摘要更新与 framework-clarification→managed-scenario-recovery→evidence-manifest-order-recovery→evidence-manifest-replay-closure 前序链重签（提交 bd710d401）的冻结承接边；不改变任何画像、Persona、wire 或生产代码 path=docs/egress/maintenance/codex-cli-0151-framework-clarification-source-transition.json",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-ledger-resign-diff-diag-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-ledger-resign-mount-type-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-ledger-resign-roots-device-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-ledger-resign-t515-20260921-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-rehearsal-manifest-device-ledger-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-rehearsal-manifest-diagnostic-20260918-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "594a39f2f1ec4a1a648d9c7987e0965e9910a6f70626e7bc40e519123ec627a2"
+    },
+    {
+      "old_path": "",
+      "path": "docs/egress/maintenance/codex-cli-0151-managed-scenario-recovery-source-transition.json",
+      "predecessor_sha256s": [
+        "a7c66a09790b6d872003835b24a8962ea568ad583ec03ddca91e460414c3f78a"
+      ],
+      "reason": "登记 EvidenceManifest 边界漂移分类（7b31d83c9）的 0.151 评估恢复台账 addition 摘要更新与 framework-clarification→managed-scenario-recovery→evidence-manifest-order-recovery→evidence-manifest-replay-closure 前序链重签（提交 bd710d401）的冻结承接边；不改变任何画像、Persona、wire 或生产代码 path=docs/egress/maintenance/codex-cli-0151-managed-scenario-recovery-source-transition.json",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-ledger-resign-diff-diag-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-ledger-resign-mount-type-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-ledger-resign-roots-device-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-ledger-resign-t515-20260921-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-rehearsal-manifest-device-ledger-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-rehearsal-manifest-diagnostic-20260918-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "44ae646196dab0a7fee988a2df354658ac253ef51c08389bc6f821b67d8416b4"
+    }
+  ],
+  "unregistered_path_count": 0,
+  "unregistered_paths": [],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
