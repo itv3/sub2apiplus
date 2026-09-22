@@ -68,8 +68,11 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
 # 基线规则、场景与机器判据载荷保持不变。
 # 2026-09-12 主手册重整第一、第二部分的说明结构后，再次重绑第二部分摘要；
 # 0.149.1 基线规则、场景、selector 与验收判据载荷保持不变。
+# 2026-09-22 主手册把当前生产身份对齐 0.154.0 并补 SPEC-EP-019 的 Luna Reserve 规则后，
+# 第二部分摘要变为 46501af0…，四份场景／预期清单的 source_spec_sha256 随之重绑；
+# 0.149.1 基线的规则、场景、selector 与验收判据载荷逐字不变（diff 仅该一行）。
 FROZEN_PROFILE_SHA256 = (
-    "f89aadcacd2be608fc32ac1ed54205d5ec062fc689daca77ec016a01d2d5d47f"
+    "5cace56c6d5c4de203596bb09e4294086b8f564c950b6538358a7d27c83e26ab"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 RULE_ID_RE = re.compile(r"^SPEC-[A-Z0-9]+-[0-9]{3}$")

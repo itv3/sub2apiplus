@@ -117,8 +117,10 @@ FROZEN_MAPPING_SHA256 = (
 # routing hint 值；EP-020 加 legacy compact body.model 保留入站模型。验收契约载荷已逐项审核：
 # dual_wire=25／candidate_profile=17、validation_modes、side_restricted_checks、side_coverage 均不变，
 # 仅 expected_check_ids 增加，契约摘要 7aa0c0fcb28c9f8a71e5c6fdc388aea523b4d3fcaafaa1cc129c3aaf26a077a1。
+# 2026-09-22：随主手册第二部分摘要重绑（见 candidate_rule_assertion 同日注释）；
+# 0.154.0 断言画像的规则、场景与判据载荷逐字不变，漂移只来自 source_spec_sha256。
 FROZEN_PROFILE_SHA256 = (
-    "d388cf11f0d6489d4d4961951d1d43e81bdbc2ddf7acd14d6ff7c4636f44c3b7"
+    "6001b9eb2d6a446ad94bcfd01f6f88f173b153432170b54e5075274cb4428fc6"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
