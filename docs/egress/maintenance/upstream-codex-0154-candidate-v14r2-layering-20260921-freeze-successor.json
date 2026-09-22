@@ -1,0 +1,50 @@
+{
+  "base_commit": "c58f48425c051c98cde32fbb059b41a6a6115073",
+  "changed_path_count": 1,
+  "current_commit": "830553d5b32b7eacb2336a3eeec51afb23289a88",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 3919,
+  "frozen_path_count": 1399,
+  "identity_sha256": "3c9069495cac962c50867937a4e6b2f3a9f728d115d6013a671c885f0e7813e9",
+  "issued_at_utc": "2026-09-21T14:45:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-0154-candidate-v14r2-layering-20260921-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "Makefile",
+      "predecessor_sha256s": [
+        "7c005516012f87d7ccf14067505b56cd76881ea0b47cabaa73d0c1dca6f11f42"
+      ],
+      "reason": "按上游合并流程规则登记测试分层提交（真实评估链移出默认 make test，Makefile 为冻结路径）的精确后继摘要（codex-0154-candidate-v14r2-layering-20260921）；旧收据保持只读，不改变官方客户端画像、Persona、wire 或生产代码。 path=Makefile",
+      "source_receipts": [
+        "docs/egress/maintenance/claude-offline-ci-stabilization-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-arm64-typescript-dependency-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-codex-upgrade-batch1-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "4a906190ca153c596252ee5fcfd324f07b78fda7b13effb98477258509996a2b"
+    }
+  ],
+  "unregistered_path_count": 0,
+  "unregistered_paths": [],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}

@@ -1,0 +1,143 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-evaluation-baseline-commit-v1.json",
+  "title": "评估基线 COMMIT（绑定 recovery.json 与 AUTHORIZATION；stage_sources 为 tagged union：reused 引用历史 path＋sha，local 只冻结规范写目标）",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "campaign_id",
+    "candidate_id",
+    "candidate_revision",
+    "evaluation_baseline",
+    "kind",
+    "recovery_sha256",
+    "authorization_sha256",
+    "stage_sources",
+    "committed_at_utc",
+    "commit_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "codex-upgrade-evaluation-baseline-commit/v1"
+    },
+    "campaign_id": {
+      "$ref": "#/$defs/safeId"
+    },
+    "candidate_id": {
+      "$ref": "#/$defs/safeId"
+    },
+    "candidate_revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "evaluation_baseline": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "kind": {
+      "enum": [
+        "evaluator-only",
+        "attempt-recovery"
+      ]
+    },
+    "recovery_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "authorization_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "stage_sources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "capture-candidate",
+        "compare",
+        "assertions",
+        "accept"
+      ],
+      "properties": {
+        "capture-candidate": {
+          "$ref": "#/$defs/stageSource"
+        },
+        "compare": {
+          "$ref": "#/$defs/stageSource"
+        },
+        "assertions": {
+          "$ref": "#/$defs/stageSource"
+        },
+        "accept": {
+          "$ref": "#/$defs/stageSource"
+        }
+      }
+    },
+    "committed_at_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "commit_sha256": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "safeId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^(?!/)(?!.*(^|/)\\.\\.?(/|$)).+$"
+    },
+    "stageSource": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "source",
+            "baseline",
+            "path",
+            "sha256"
+          ],
+          "properties": {
+            "source": {
+              "const": "reused"
+            },
+            "baseline": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "path": {
+              "$ref": "#/$defs/relativePath"
+            },
+            "sha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "source",
+            "target"
+          ],
+          "properties": {
+            "source": {
+              "const": "local"
+            },
+            "target": {
+              "$ref": "#/$defs/relativePath"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

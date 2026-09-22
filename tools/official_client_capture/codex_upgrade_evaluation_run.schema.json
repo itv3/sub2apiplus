@@ -1,0 +1,212 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-evaluation-run-v1.json",
+  "title": "评估运行索引（只汇总 checkpoint；有 fail／pending 先落本索引再非零退出；b0 无 checkpoint 时为只读派生）",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "campaign_id",
+    "candidate_id",
+    "candidate_revision",
+    "evaluation_baseline",
+    "derived",
+    "evaluator",
+    "rules",
+    "checkpoint_head_sha256",
+    "recorded_at_utc",
+    "run_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "codex-upgrade-evaluation-run/v1"
+    },
+    "campaign_id": {
+      "$ref": "#/$defs/safeId"
+    },
+    "candidate_id": {
+      "$ref": "#/$defs/safeId"
+    },
+    "candidate_revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "evaluation_baseline": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "derived": {
+      "type": "boolean"
+    },
+    "evaluator": {
+      "$ref": "#/$defs/evaluatorDigests"
+    },
+    "rules": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "rule",
+          "validation_mode",
+          "status",
+          "candidate_checkpoint",
+          "official_checkpoint",
+          "dependency_projection_sha256",
+          "reused_from"
+        ],
+        "properties": {
+          "rule": {
+            "$ref": "#/$defs/ruleId"
+          },
+          "validation_mode": {
+            "enum": [
+              "dual_wire",
+              "candidate_profile"
+            ]
+          },
+          "status": {
+            "enum": [
+              "pass",
+              "fail",
+              "pending"
+            ]
+          },
+          "candidate_checkpoint": {
+            "oneOf": [
+              {
+                "$ref": "#/$defs/binding"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "official_checkpoint": {
+            "oneOf": [
+              {
+                "$ref": "#/$defs/binding"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "dependency_projection_sha256": {
+            "oneOf": [
+              {
+                "$ref": "#/$defs/sha256"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reused_from": {
+            "oneOf": [
+              {
+                "$ref": "#/$defs/reusedFrom"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "checkpoint_head_sha256": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/sha256"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "recorded_at_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "run_sha256": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "safeId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "ruleId": {
+      "type": "string",
+      "pattern": "^SPEC-[A-Z0-9]+-[0-9]{3}$"
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "evaluatorDigests": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "checker_sha256",
+        "builder_sha256",
+        "compare_reader_sha256",
+        "accept_reader_sha256"
+      ],
+      "properties": {
+        "checker_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "builder_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "compare_reader_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "accept_reader_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "reusedFrom": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "baseline",
+        "checkpoint_sha256",
+        "document_sha256"
+      ],
+      "properties": {
+        "baseline": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "checkpoint_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "document_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    }
+  }
+}

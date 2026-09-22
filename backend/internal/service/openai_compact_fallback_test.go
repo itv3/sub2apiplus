@@ -73,16 +73,19 @@ func TestResolveOpenAICompactFallbackModelPrefersAccountMapping(t *testing.T) {
 	require.Equal(t, "global-compact", svc.resolveOpenAICompactFallbackModel(account, "unmapped-model"))
 }
 
-func TestOpenAIGatewayForwardUsesGlobalCompactModelOnInitialLegacyRequest(t *testing.T) {
+// 目标画像版本的官方 Codex 对当前模型直接发 legacy compact（body.model 与 routing hint
+// 同为入站模型）。首次 compact 出站必须保留入站模型；全局 openai_compact_model 只在
+// 上游明确报模型不可用后的一次重试里使用。
+func TestOpenAIGatewayForwardKeepsRequestedModelOnInitialLegacyCompact(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	body := []byte(`{"model":"gpt-5.5","stream":false,"instructions":"compact-test","input":[]}`)
+	body := []byte(`{"model":"gpt-6-astra","stream":false,"instructions":"compact-test","input":[]}`)
 	c := newOpenAICompactFallbackTestContext(t, "/v1/responses/compact")
 	c.Request.Body = io.NopCloser(bytes.NewReader(body))
 	c.Request.Header.Set("Content-Type", "application/json")
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
-		Body:       io.NopCloser(strings.NewReader(`{"id":"resp_compact","status":"completed","model":"global-compact","output":[],"usage":{"input_tokens":1,"output_tokens":1}}`)),
+		Body:       io.NopCloser(strings.NewReader(`{"id":"resp_compact","status":"completed","model":"gpt-6-astra","output":[],"usage":{"input_tokens":1,"output_tokens":1}}`)),
 	}}
 	svc := &OpenAIGatewayService{
 		cfg:          &config.Config{Gateway: config.GatewayConfig{OpenAICompactModel: "global-compact"}},
@@ -99,8 +102,113 @@ func TestOpenAIGatewayForwardUsesGlobalCompactModelOnInitialLegacyRequest(t *tes
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Len(t, upstream.bodies, 1)
-	require.Equal(t, "global-compact", gjson.GetBytes(upstream.bodies[0], "model").String())
+	require.Equal(t, "gpt-6-astra", gjson.GetBytes(upstream.bodies[0], "model").String(),
+		"首次 legacy compact 不得改写为全局 compact 模型")
 	require.Contains(t, upstream.requests[0].URL.Path, "/compact")
+}
+
+// 账号显式 compact_model_mapping 仍在首次请求就生效（它是运营者的明确意图，不是兜底）。
+func TestOpenAIGatewayForwardAppliesAccountCompactMappingOnInitialLegacyCompact(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"model":"gpt-6-astra","stream":false,"instructions":"compact-test","input":[]}`)
+	c := newOpenAICompactFallbackTestContext(t, "/v1/responses/compact")
+	c.Request.Body = io.NopCloser(bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"id":"resp_compact","status":"completed","model":"account-compact","output":[],"usage":{"input_tokens":1,"output_tokens":1}}`)),
+	}}
+	svc := &OpenAIGatewayService{
+		cfg:          &config.Config{Gateway: config.GatewayConfig{OpenAICompactModel: "global-compact"}},
+		httpUpstream: upstream,
+	}
+	account := &Account{
+		ID: 1, Name: "openai-oauth", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "oauth-token", "chatgpt_account_id": "chatgpt-account",
+			"compact_model_mapping": map[string]any{"gpt-6-astra": "account-compact"},
+		},
+		Status: StatusActive, Schedulable: true,
+	}
+
+	result, err := svc.Forward(context.Background(), c, account, body)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, upstream.bodies, 1)
+	require.Equal(t, "account-compact", gjson.GetBytes(upstream.bodies[0], "model").String())
+}
+
+// 上游明确报模型不可用时才允许一次全局 fallback 重试，且重试仍在 /compact 路径。
+func TestOpenAIGatewayForwardLegacyCompactFallsBackOnceAfterModelUnavailable(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"model":"gpt-6-astra","stream":false,"instructions":"compact-test","input":[]}`)
+	c := newOpenAICompactFallbackTestContext(t, "/v1/responses/compact")
+	c.Request.Body = io.NopCloser(bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	upstream := &httpUpstreamRecorder{responses: []*http.Response{
+		{
+			StatusCode: http.StatusNotFound,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"error":{"code":"model_not_found","message":"The model gpt-6-astra does not exist"}}`)),
+		},
+		{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"id":"resp_compact","status":"completed","model":"global-compact","output":[],"usage":{"input_tokens":1,"output_tokens":1}}`)),
+		},
+	}}
+	svc := &OpenAIGatewayService{
+		cfg:          &config.Config{Gateway: config.GatewayConfig{OpenAICompactModel: "global-compact"}},
+		httpUpstream: upstream,
+	}
+	account := &Account{
+		ID: 1, Name: "openai-oauth", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
+		Credentials: map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "chatgpt-account"},
+		Status:      StatusActive, Schedulable: true,
+	}
+
+	result, err := svc.Forward(context.Background(), c, account, body)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, upstream.bodies, 2)
+	require.Equal(t, "gpt-6-astra", gjson.GetBytes(upstream.bodies[0], "model").String())
+	require.Equal(t, "global-compact", gjson.GetBytes(upstream.bodies[1], "model").String())
+	require.Contains(t, upstream.requests[1].URL.Path, "/compact")
+}
+
+// passthrough 路径同样：首次 legacy compact 保留入站模型，不套全局 fallback。
+func TestOpenAIPassthroughKeepsRequestedModelOnInitialLegacyCompact(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"model":"gpt-6-astra","stream":false,"instructions":"compact-test","input":[]}`)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses/compact", nil)
+	c.Request.Header.Set("Content-Type", "application/json")
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"id":"resp_compact","status":"completed","model":"gpt-6-astra","output":[],"usage":{"input_tokens":1,"output_tokens":1}}`)),
+	}}
+	svc := &OpenAIGatewayService{
+		cfg:          &config.Config{Gateway: config.GatewayConfig{OpenAICompactModel: "global-compact"}},
+		httpUpstream: upstream,
+	}
+	account, _ := compactFallbackManagedProxyAccount()
+	bodyContract, contractErr := captureOfficialOpenAIHTTPBodyContractForRequest(c, body)
+	require.NoError(t, contractErr)
+
+	result, err := svc.forwardOpenAIPassthrough(
+		context.Background(), c, account, body, body, "gpt-6-astra", false, nil, false, time.Now(), bodyContract,
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, upstream.bodies, 1)
+	require.Equal(t, "gpt-6-astra", gjson.GetBytes(upstream.bodies[0], "model").String(),
+		"passthrough 首次 legacy compact 不得改写为全局 compact 模型")
 }
 
 func TestPrepareOpenAICompactFallbackRetryLegacyPathAndSingleAttemptGuard(t *testing.T) {

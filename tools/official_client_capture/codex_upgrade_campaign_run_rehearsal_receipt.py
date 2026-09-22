@@ -1321,9 +1321,19 @@ def _atomic_compiler(
     checkpoint: Mapping[str, Any],
     checkpoint_path: Path,
 ) -> Any:
-    """返回与正式编译器使用同一 builders 和不可覆盖写入器的离线闭包。"""
+    """返回与正式编译器使用同一 builders 和不可覆盖写入器的离线闭包。
 
-    def compile_batch(arguments: argparse.Namespace) -> dict[str, Any]:
+    改造 4：入口按 Campaign 总计划的 ``batch_model`` 决定调用形态——staging 模型
+    传入 ``staging_attempt_dir`` 与 ``owner_nonce``，闭包用正式编译器同一
+    ``_write_staging_batch_artifacts`` 写 staging 三件套；legacy 形态保持原样。
+    """
+
+    def compile_batch(
+        arguments: argparse.Namespace,
+        *,
+        staging_attempt_dir: Path | None = None,
+        owner_nonce: str | None = None,
+    ) -> dict[str, Any]:
         action_plan = codex_upgrade_vc_artifacts.validate_action_plan(
             _load_json(arguments.action_plan, "原子演练 action plan")
         )
@@ -1357,6 +1367,19 @@ def _atomic_compiler(
         manifest_path = (
             arguments.campaign_dir / "control/vc/run-manifests" / name
         )
+        if (staging_attempt_dir is None) != (owner_nonce is None):
+            raise CampaignRunRehearsalError("原子演练 staging 参数必须成对给出")
+        if staging_attempt_dir is not None:
+            assert owner_nonce is not None
+            return codex_upgrade._write_staging_batch_artifacts(
+                arguments.campaign_dir,
+                staging_attempt_dir,
+                plan=plan,
+                batch=batch,
+                run_manifest=codex_upgrade._vc_run_manifest_from_batch(batch, batch_model="staging"),
+                owner_nonce=owner_nonce,
+                prepared_at_utc=now.isoformat(),
+            )
         codex_upgrade._secure_write_json_once(batch_path, batch)
         manifest = codex_upgrade_supervisor.build_batched_campaign_run_manifest(
             campaign_id=batch["campaign_id"],
@@ -2133,10 +2156,10 @@ def _replay_atomic_failing_parent(
     except codex_upgrade_supervisor.SupervisorError as error:
         raise CampaignRunRehearsalError("原子演练失败父 run 无法重放") from error
     state = _load_json(run_dir / "state.json", "原子演练失败父状态")
-    stop_receipt = _load_json(
-        run_dir / "stop-receipt.json",
-        "原子演练失败父 stop receipt",
-    )
+    try:
+        stop_receipt = codex_upgrade_supervisor.read_stop_receipt(run_dir)
+    except codex_upgrade_supervisor.SupervisorError as error:
+        raise CampaignRunRehearsalError(f"原子演练失败父 stop receipt 无法校验：{error}") from error
     if (
         audit.get("state") != "failed"
         or audit.get("audit_incomplete") is not False
@@ -2366,6 +2389,16 @@ def _atomic_expected_inventory_paths(
         "campaign/control/vc/batches",
         "campaign/control/vc/batches/0001-vc-1.json",
         "campaign/control/vc/campaign-plan.json",
+        # 改造 4（staging/WAL）：演练 Campaign 的总计划是 staging 模型，原子入口先写
+        # staging attempt 三件套，COMMIT 后才发布正式 batch／run-manifest。
+        "campaign/control/vc/staging",
+        "campaign/control/vc/staging/0001-vc-1",
+        "campaign/control/vc/staging/0001-vc-1/attempt-1",
+        "campaign/control/vc/staging/0001-vc-1/attempt-1/batch.json",
+        "campaign/control/vc/staging/0001-vc-1/attempt-1/run-manifest.json",
+        "campaign/control/vc/staging/0001-vc-1/attempt-1/PREPARED",
+        "campaign/control/vc/commits",
+        "campaign/control/vc/commits/0001-vc-1.json",
         "campaign/control/vc/run-manifests",
         "campaign/control/vc/run-manifests/0001-vc-1.json",
         "campaign/control/vc/run-manifests/atomic-offline-failure.json",
@@ -2645,19 +2678,26 @@ def _replay_atomic_instance(
         manifest = codex_upgrade_supervisor._campaign_run_manifest(manifest_path)
     except codex_upgrade_supervisor.SupervisorError as error:
         raise CampaignRunRehearsalError("原子演练 VC-1 manifest 非法") from error
-    expected_manifest = codex_upgrade_supervisor.build_batched_campaign_run_manifest(
-        campaign_id=campaign_id,
-        campaign_plan_sha256=str(plan["plan_sha256"]),
-        batch_id=str(batch["batch_id"]),
-        batch_sequence=1,
-        batch_sha256=str(batch["batch_sha256"]),
-        phase="VC-1",
-        predecessor_checkpoint=predecessor,
-        original_deadline_at_utc=str(plan["original_deadline_at_utc"]),
-        actions=[action],
-        execute_items=["atomic-offline-execute"],
-        reuse_items=["atomic-offline-reuse"],
-    )
+    # 与生成侧同一函数按演练 Campaign 的批次模型重建：staging 模型清单携带 null 的
+    # 候选级绑定字段，legacy 模型不含。
+    try:
+        expected_manifest = codex_upgrade._vc_run_manifest_from_batch(
+            {
+                **batch,
+                "campaign_id": campaign_id,
+                "campaign_plan_sha256": str(plan["plan_sha256"]),
+                "sequence": 1,
+                "phase": "VC-1",
+                "predecessor_checkpoint": predecessor,
+                "original_deadline_at_utc": str(plan["original_deadline_at_utc"]),
+                "actions": [action],
+                "execute_item_ids": ["atomic-offline-execute"],
+                "reuse_item_ids": ["atomic-offline-reuse"],
+            },
+            batch_model=codex_upgrade_vc_artifacts.campaign_plan_batch_model(plan),
+        )
+    except (codex_upgrade.ConfigurationError, codex_upgrade_supervisor.SupervisorError) as error:
+        raise CampaignRunRehearsalError("原子演练 VC-1 manifest 无法按批次模型重建") from error
     if manifest != expected_manifest:
         raise CampaignRunRehearsalError("原子演练 VC-1 manifest 未由 batch 确定性编译")
 

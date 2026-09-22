@@ -98,11 +98,104 @@ from typing import Any, Callable, Mapping
 # 可由普通 v2 零请求恢复预览承接，非 no-op batch 可确定性补写停线收据。
 # A2-3：不再硬编码整树摘要。暂存树自算摘要即期望值，候选与生产三向互等；
 # 收据额外写策略 v2 的五个摘要，供 VC-0 收口与 seal 按 wire 身份比对。
+# 2026-09-17（VC-5 失败 Job 定向恢复）：正式入口精确绑定 v7，VC-0～VC-4
+# 只读承接，仅允许重跑 candidate-frozen-core；监督器摘要随之更新。
+# 2026-09-17（VC-5 管理凭据执行闭集修复）：管理凭据只校验本轮实际执行 Job，
+# 已复用的 candidate-frozen-aux 不再误拦截仅执行 core 的恢复批次。
+# 2026-09-17（VC-5 路由映射计数兼容修复）：Candidate readiness 使用 PostgreSQL
+# 实际支持的对象键集合计数，避免静态路由快照在派发前误失败。
+# 2026-09-17（VC-5 对账副本格式兼容修复）：重派门禁分别校验账本副本摘要，
+# 并按 JSON 事实比较 Campaign 与 TimingLedger 副本，避免空白格式差异误报漂移。
+# 2026-09-17（VC-5 A15 启动身份并发修正）：启动 models 的 suffix 按初始化
+# 并发时序允许缺失或为入口规范值；新增冻结后继随受管运行文档一并部署。
+# 2026-09-17（VC-5 post-run seal 恢复）：A15 九项 Job 只读承接到新的
+# metadata-only attempt，只重新采集 Kilo 后检查点与两条客户端收据。
+# 2026-09-17（VC-5 post-run VC-4 来源修复）：metadata-only 后继继续接受
+# A15 逐字投影的原始 v7 构建收据绑定，不要求改写不可变历史 Campaign 身份。
+# 2026-09-18（VC-5 post-run 场景兼容修复）：只在 A15 唯一来源与九项 Job
+# 执行合同完全相同时承接场景说明元数据变化；任何执行字段变化仍失败关闭。
+# 2026-09-18（VC-5 post-run 构建投影门禁修复）：允许 metadata-only 后继在
+# 新 attempt 前仅保留 VC-4 构建收据；attempt、结果或其他条目仍失败关闭。
+# 2026-09-18（VC-5 metadata-only 预览时延修复）：产出路径无变化时跳过
+# 空影响图，并复用同一 Job 已计算的增量元数据；所有身份与摘要门禁保持不变。
+# 2026-09-18（VC-5 metadata-only 恢复收据状态修复）：按规范的
+# status=restored 判定恢复成功，避免误读不存在的 passed 字段。
+# 2026-09-18（VC-5 metadata-only 环境投影修复）：attempt 校验器接受生成器按合同
+# 写入的五份环境绑定，并继续严格校验固定路径、SHA-256 与字节数。
+# 2026-09-18（VC-5 零请求后处理链收口）：post-run-tooling 可恢复分类、
+# OverlayFS seal 预演门禁、candidate-trace-test 零请求 Job 与标签 root_suffix
+# 通配；工具身份策略升至 v7。
+# 2026-09-18（VC-5 最小闭集：Astra Lite 判定）：候选 relay 合成 /models 补 gpt-6-astra
+# 并使清单 authoritative、A03 Astra Lite 采集省略 effort/summary/text、fact map 重绑三份
+# 源码快照；同步补登记三次 0.151 台账重签的承接边。监督器与断言预处理器未变。
+# 2026-09-18（VC-5 最小闭集：VC-2 输入）：EP-019 画像补丁（wham_usage Luna Reserve 与 cookie
+# 槽位）与六条规则的 Astra Lite 精确断言；trace 画像冻结摘要同步。监督器与断言预处理器未变。
+# 2026-09-19（升级工具改造第 1 批）：ARM64 环境收据 producer 升 v7（*_after 阶段低于根盘
+# 水位只记 degraded，v6 收据按显式合同只读重放）；canonical 交接四步进入 post-run-tooling
+# 可恢复分类并按冻结映射从命令提取 attempt，批准摘要只散列 approval_projection。
+# 监督器随之变化；断言预处理器未变。
+# 2026-09-19（升级工具改造第 2 批 M1：批次 staging/WAL）：VC-2～VC-6 批次先写 staging attempt
+# 三件套，父 run 以 prepared 起动，账本事件 → 发布 → COMMIT → running 四步在同一锁内提交；
+# 序号占用只认 control/vc/commits/ 的 COMMIT；取得执行权前的失败（P1～P4）由入口孤儿
+# 对账、monitor 三分类与 reconciler 新分支闭合，不再产生 predispatch-stop/v1；根因编码表
+# 新增四条 code（需项目总账 root-cause-code-migration 收据衔接）。监督器随之变化；断言预处理器未变。
+# 2026-09-19（第 2 批 M1 审核修正）：classify_prepared_run 只把"同 Campaign／阶段／序号／
+# 规范路径、且属于同序号另一 attempt"的 COMMIT 视为 no_commit，其余外来 COMMIT 一律完整性
+# 异常；staging ABORT 的 write-once 改为逐字段内容核对。监督器随之变化；断言预处理器未变。
+# 2026-09-19（第 2 批 M2：候选级 revision）：campaign-run 清单成对携带 candidate_revision／
+# candidate_id（staging 模型必带、legacy 不得带，Campaign 级为 null）；候选级动作失败按三分支
+# 收账（可恢复类不变／永久条件停线／其余 stage_abandoned + candidate_review_required）；失败
+# 批次新增"候选作废 → 新 revision VC-4 首批"后继协议。监督器随之变化；断言预处理器未变。
+# 2026-09-19（第 2 批 M2 审核修正）：候选 revision 后继协议完整重放失败父 run 对账收据与旧候选
+# invalidation.json（schema／身份／项目总账摘要绑定）及新 revision 记录、COMMIT 与账本 stage_revision
+# 的摘要链；失败摘要与 candidate_review_required 事件 id 的构造／解析集中为函数，供作废前对账
+# 绑定本次失败父 run。监督器随之变化；断言预处理器未变。
+# 2026-09-19（第 2 批 M2 审核修正二：reservation 分流）：失败父 run 期间为旧候选发布过 reservation 的，
+# 后继协议与作废前对账只认 reconcile-attempt 的收据与总账绑定，否则只认 reconcile-supervisor-run；
+# 两条分支的收据校验（campaign_run_failure_facts／candidate_reservations_in_run_window／
+# verify_attempt_reconciliation_binding／verify_supervisor_run_reconciliation_binding）集中在监督器，
+# 供 invalidate-candidate 共用。监督器随之变化；断言预处理器未变。
+# 2026-09-20（第 3 批 M1：评估失败局部恢复）：stop-receipt 升 v2（显式 action_outputs_sha256|null，
+# v1 只读兼容，全部读点走 read_stop_receipt）；父监督器在动作退出后 write-once 写动作输出绑定
+# （诊断 → action-output → post-run-tooling 收据）；monitor 对 running 父 run 的 owner 丢失按 R2
+# 四层判定封存为普通 failed／action-failed:<id>（失败身份不完整或绑定不一致仍 watchdog-aborted）；
+# commit 步骤在 nonce-mismatch 后加 evaluator-digests（正式 COMMIT 前核对 evaluator 四项摘要）；
+# campaign-run 清单成对携带 evaluation_baseline／baseline_commit_sha256／evaluator_digests 与动作
+# output_bindings；失败评估批次新增"评估基线后继"协议；reconciler 在锁内对 owner-loss run 复算
+# 三项并补写 post-run-tooling 收据。根因编码表新增 evaluation.rule-failed／attempt.job-transient-failure
+# （需项目总账 migration 000003）。监督器随之变化；断言预处理器未变。
+# 2026-09-20（第 3 批 M1 审核修正）：动作执行前核对 evaluator 四项摘要（不等即动作不执行、父 run
+# failed／identity-drift）；动作输出绑定按声明原顺序写出（清单校验已失败关闭，不再归一化）。
+# 监督器随之变化；断言预处理器未变。
+# 2026-09-20（第 3 批 M2 attempt-recovery）：父 run 窗口扫描识别恢复段预约（键 <attempt>:ar<k>）、
+# attempt 对账绑定校验接受恢复段目录；断言预处理器新增 BASELINE=b<K> 模式（证据根改读
+# effective-results，bundle 落本基线私有根）。监督器与断言预处理器均随之变化。
+# 2026-09-21（第 3 批 M2 T5.18 端到端）：恢复段 run 动作失败归可恢复（recovery_required，不进候选
+# review）；第七种后继协议（失败段批次只能由同 attempt 后继段批次承接）；评估基线后继协议按账本
+# 事件历史核对基线；断言预处理器的基线私有根改名 baseline-evidence。监督器与断言预处理器均随之变化。
+# 2026-09-21（第 3 批 M2 审核修正：2 个 P1）：后继段预览批准范围必须等于权威链（段预约三元组 → COMMIT
+# → recovery.json）取得的 J*、reuse 恒空（第七种协议重放）；崩溃矩阵 R2 的 attempt-recovery 变体——
+# 正式单动作恢复段 run 已成功、动作输出绑定已写（段摘要 exists=true）、父 run 终态前 owner 丢失时 monitor
+# 确定性封存 failed／parent-finalize-lost，新增"父终态化丢失"N+1 逐字重派协议（走既有对账许可绑定）。
+# 监督器随之变化；断言预处理器未变。
+# 2026-09-21（第 3 批 M2 审核修正三审：2 个 P1）：后继段预览的请求估算（known_by_job ∪ unknown_job_ids == J*、
+# 不相交、known_total == Σknown）与范围等式合并为 recovery_preview_scope_violation（CLI 与第七种协议共用）；
+# parent-finalize-lost 的段摘要重验改用与幂等重派相同强度的段加载校验并要求结果 Job 集合恰等于权威链 J*。
+# 监督器随之变化；断言预处理器未变。
+# 2026-09-22（EvidenceManifest 边界漂移分类）：verify_manifest_boundary 的不可变 stat 边界漂移由生产者给出
+# failure_class=evidence-integrity 与观测 evidence-manifest.boundary／stat-boundary-drift，codex_upgrade 原样携带到
+# 动作诊断，reconciler 固定终态 integrity_mismatch；0.151 评估恢复台账随 evidence_manifest 重签；ARM64 抓包驱动链
+# 入库（tools/arm64_capture_driver，非受管目录，组合安装收据绑定本部署收据）。受管工具树与 evidence 层摘要随之
+# 变化；监督器与断言预处理器未变。
+# 2026-09-22（VC-6 canonical 派发闭包）：冻结映射拆成 VC-5／VC-6 两组，退休项按 retire-<版本> 动态识别并与
+# --retire-version 精确匹配；VC-6 三步必须带绝对路径 --step-receipt，批次按组校验且不得混组、次序为生产激活 →
+# 回滚验证 → 退休；监督器 post-run-tooling 闭集按冻结判定接纳 VC-6 三项，使退休动作失败仍归可恢复类。
+# 受管工具树与监督器随之变化；断言预处理器未变。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "dc4cf121c5bd29ff058fcb2cc6bec74536804dffd43e3e6a2f43d94877ac080a"
+    "1d0525b3082188ecd4102cd0a73c30e710ccb93c07bac55451d11fd7b2bc52f7"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
-    "b9ca7b6f48b3c33a63a864a9ce7ebd617335378ea52fe9148ea161ab3b276ada"
+    "c8020cadd3ee08f67236313a0913dbc3730805b46c3f6b720cdf7ace77f9fec1"
 )
 RENAME_EXCHANGE = 2
 AT_FDCWD = -100
@@ -144,6 +237,111 @@ MANAGED_RUNTIME_DOCUMENTS = (
     "egress/maintenance/upstream-codex-0154-vc5-client-checkpoint-legal-stop-20260916-freeze-successor.json",
     "egress/maintenance/upstream-codex-0154-vc5-a15-models-cache-restart-20260916-freeze-successor.json",
     "egress/maintenance/upstream-codex-0154-vc5-aux-empty-mapping-20260916-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-framework-closure-20260917-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-stopped-identity-precedence-20260917-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-deploy-metadata-bound-20260917-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-provenance-pcap-owner-20260917-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-reconciliation-producer-registration-20260917-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-classification-successor-vc-control-20260917-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-failed-job-recovery-20260917-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-legacy-build-replay-20260917-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-runtime-rebase-component-20260917-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-historical-result-replay-20260917-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-execution-identity-rebind-20260917-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-admin-execution-scope-20260917-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-routing-count-compat-20260917-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-reconciliation-json-compat-20260917-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-a15-startup-identity-20260917-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-post-run-seal-recovery-20260917-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-post-run-build-origin-20260917-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-post-run-scenario-compat-20260918-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-post-run-build-projection-gate-20260918-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-metadata-preview-latency-20260918-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-metadata-restoration-status-20260918-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-metadata-environment-projection-20260918-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-post-run-closure-20260918-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-post-run-closure-import-fix-20260918-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-post-run-closure-runtime-docs-20260918-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-label-coverage-compat-20260918-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-recovery-scenario-readonly-20260918-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-recovery-scenario-snapshot-20260918-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-reuse-closure-frozen-20260918-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-official-only-reuse-20260918-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-official-reuse-contract-fallback-20260918-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-official-reuse-scenario-followup-20260918-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-official-reuse-import-fields-20260918-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-official-reuse-copy-closure-20260918-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-a15-witness-originator-20260918-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-zero-request-provenance-readiness-20260918-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-seal-rehearsal-dispatch-context-20260918-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-rehearsal-boundary-device-20260918-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-rehearsal-approval-stop-20260918-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-rehearsal-manifest-device-20260918-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-rehearsal-manifest-device-ledger-20260918-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-candidate-evaluation-epoch-20260918-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-rehearsal-manifest-diagnostic-20260918-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-rehearsal-mount-order-20260918-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-rehearsal-manifest-diff-diag-20260918-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-rehearsal-manifest-roots-device-20260918-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-ledger-resign-mount-type-20260918-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-ledger-resign-diff-diag-20260918-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-ledger-resign-roots-device-20260918-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-minimal-fix-20260918-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-deploy-manifest-20260918-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-ep019-patch-assertions-20260918-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-deploy-manifest-2-20260918-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-candidate-v9-20260918-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-astra-reasoning-default-20260918-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-candidate-v10-20260918-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-accept-identity-20260918-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-deploy-manifest-3-20260918-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-predispatch-stop-20260918-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-deploy-manifest-4-20260918-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-tooling-batch1-20260919-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-canonical-guide-457-20260919-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-deploy-manifest-5-20260919-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-tooling-batch2-m1-20260919-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-deploy-manifest-6-20260919-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-tooling-batch2-m1-fix-20260919-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-deploy-manifest-7-20260919-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-tooling-batch2-m2-20260919-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-deploy-manifest-8-20260919-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-tooling-batch2-m2-fix-20260919-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-deploy-manifest-9-20260919-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-tooling-batch2-m2-fix2-20260919-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-deploy-manifest-10-20260919-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-tooling-batch2-m3-guide-20260919-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-deploy-manifest-11-20260919-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-tooling-batch2-m3-guide-fix-20260919-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-deploy-manifest-12-20260919-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-tooling-batch3-m1-20260920-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-deploy-manifest-13-20260920-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-tooling-batch3-m1-fix-20260920-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-deploy-manifest-14-20260920-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-tooling-batch3-m1-fix2-20260920-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-deploy-manifest-15-20260920-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-tooling-batch3-m1-fix3-20260920-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-deploy-manifest-16-20260920-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-tooling-batch3-m2-g0-20260920-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-tooling-batch3-m2-t515-20260920-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-tooling-batch3-m2-t512-20260920-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-tooling-batch3-m2-t513-20260920-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-tooling-batch3-m2-t516-20260920-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-tooling-batch3-m2-t518-20260921-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-deploy-manifest-17-20260921-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-ledger-resign-t515-20260921-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-deploy-manifest-18-20260921-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-tooling-batch3-m2-review-fix-20260921-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-tooling-batch3-m2-review-fix2-20260921-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-tooling-batch3-m3-guide-20260921-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-deploy-manifest-19-20260921-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-tooling-batch3-m3-guide-fix-20260921-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-deploy-manifest-20-20260921-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-tooling-batch3-m3-guide-fix2-20260921-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-deploy-manifest-21-20260921-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-evidence-integrity-20260922-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-ledger-resign-evidence-integrity-20260922-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-deploy-manifest-22-20260922-freeze-successor.json",
 )
 MANAGED_ASSERTION_PREPARER = "prepare_assertion_bundle.sh"
 TARGET_SCENARIO_MANIFEST = "codex_upgrade_scenarios_0_154_0.json"
@@ -585,8 +783,33 @@ def record_step(
         except BaseException:
             pass
         raise
-    client.event_end(operation, metadata=result)
+    client.event_end(operation, metadata=_bounded_event_metadata(result))
     return result
+
+
+def _bounded_event_metadata(value: Mapping[str, Any]) -> dict[str, Any]:
+    """把超长数组压成可复算摘要，避免部署规模增长击穿监督器事件上限。"""
+
+    def compact(item: Any) -> Any:
+        if isinstance(item, list):
+            if len(item) > 32:
+                return {
+                    "item_count": len(item),
+                    "items_sha256": sha256_bytes(
+                        json.dumps(
+                            item,
+                            ensure_ascii=False,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ).encode("utf-8")
+                    ),
+                }
+            return [compact(child) for child in item]
+        if isinstance(item, Mapping):
+            return {str(key): compact(child) for key, child in item.items()}
+        return item
+
+    return {str(key): compact(child) for key, child in value.items()}
 
 
 def parse_container_network(output: str, name: str) -> str:

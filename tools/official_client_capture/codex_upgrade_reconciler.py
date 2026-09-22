@@ -40,7 +40,7 @@ import re
 import stat
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, Sequence
 
 from tools.official_client_capture import codex_upgrade
 from tools.official_client_capture import codex_upgrade_live_request_provenance as provenance
@@ -49,11 +49,13 @@ from tools.official_client_capture import codex_upgrade_root_cause as root_cause
 from tools.official_client_capture import codex_upgrade_supervisor as supervisor
 from tools.official_client_capture import codex_upgrade_timing_ledger as timing_ledger
 from tools.official_client_capture import codex_upgrade_vc0_closeout as closeout
+from tools.official_client_capture import codex_upgrade_vc_artifacts as vc_artifacts
 from tools.official_client_capture import codex_upgrade_wire_transition as wire_transition
 from tools.official_client_capture import incremental_recovery
 
-SUPERVISOR_RUN_SCHEMA = "supervisor-run-reconciliation/v1"
-ATTEMPT_SCHEMA = "attempt-reconciliation/v1"
+# 与监督器后继协议共用同一常量：改造 2 的候选 revision 后继会完整重放这份收据。
+SUPERVISOR_RUN_SCHEMA = supervisor.SUPERVISOR_RUN_RECONCILIATION_SCHEMA
+ATTEMPT_SCHEMA = supervisor.ATTEMPT_RECONCILIATION_SCHEMA
 RECOVERY_PREVIEW_SCHEMA = "recovery-preview/v1"
 RECOVERY_APPROVAL_SCHEMA = "recovery-approval/v1"
 RECONCILIATION_DIR = "reconciliation"
@@ -64,6 +66,32 @@ APPROVAL_RE = re.compile(r"^recovery-approval-(\d{2})\.json$")
 COMPONENT = "reconciler"
 DECISION_RECOVERABLE = "recoverable"
 DECISION_STOP = "permanent_stop"
+# 改造 4：父 run 取得执行权之前的失败分类（无动作诊断，按 state／stop reason 判定）。
+PARENT_PREPARE_ABANDONED_CLASS = "parent-prepare-abandoned"
+PARENT_START_FAILED_CLASS = supervisor.PARENT_START_FAILED_REASON
+# 改造 5 M2（R2 的 attempt-recovery 变体）：单动作恢复段 run 已成功、父 run 终态化前 owner 丢失。
+PARENT_FINALIZE_LOST_CLASS = supervisor.PARENT_FINALIZE_LOST_REASON
+COMMIT_INTEGRITY_MISMATCH_CLASS = supervisor.COMMIT_INTEGRITY_MISMATCH_CLASS
+# 2026-09-22：动作诊断 declared 为 evidence-integrity（生产者：EvidenceManifest 不可变 stat 边界
+# 漂移，见 codex_upgrade.EvidenceIntegrityError）的父 run 与 COMMIT 完整性异常同属"不可变控制或
+# 证据制品完整性异常"：无论总账与账本状态如何都固定终态 integrity_mismatch，不生成
+# post-run-tooling 收据、不给出同批次重派建议（v14r4 批次 15 事故：ctime 不可回写、manifest
+# write-once，当前 attempt 不可恢复）。
+EVIDENCE_INTEGRITY_CLASS = "evidence-integrity"
+INTEGRITY_MISMATCH_FAILURE_CLASSES = frozenset(
+    {COMMIT_INTEGRITY_MISMATCH_CLASS, EVIDENCE_INTEGRITY_CLASS}
+)
+STAGING_FAILURE_CLASSES = frozenset(
+    {
+        PARENT_PREPARE_ABANDONED_CLASS,
+        PARENT_START_FAILED_CLASS,
+        PARENT_FINALIZE_LOST_CLASS,
+        COMMIT_INTEGRITY_MISMATCH_CLASS,
+    }
+)
+# 可恢复分类对应的账本 next_action：序号未占 → 同序号重派；序号已占 → 同批次 N+1 重派。
+NEXT_ACTION_SAME_SEQUENCE = "redispatch-same-sequence"
+NEXT_ACTION_SAME_BATCH = "redispatch-same-batch"
 JOB_STATES = ("complete", "failed", "indeterminate", "pending")
 MAX_RECEIPT_BYTES = 16 * 1024 * 1024
 
@@ -305,6 +333,49 @@ def _ledger_receipt_bindings(
     return sorted(bindings, key=lambda item: item["role"])
 
 
+def _ledger_recovery_authorization_bindings(
+    ledger_dir: Path,
+    attempt_id: str,
+    preview_path: Path,
+    approval_path: Path,
+    *,
+    recovery_revision: str | None = None,
+) -> list[dict[str, str]]:
+    """把恢复预览与批准复制进时间账本，供 recovery_authorized 重放（恢复段按 attempt-<id>-ar<k> 存放）。"""
+
+    subject = _recovery_segment_subject(attempt_id, recovery_revision).replace(":", "-")
+    target_dir = ledger_dir / "receipts" / RECONCILIATION_DIR / f"attempt-{subject}"
+    if target_dir.is_symlink():
+        raise ReconcilerError("账本恢复批准目录不可信")
+    target_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    for directory in (
+        ledger_dir / "receipts",
+        ledger_dir / "receipts" / RECONCILIATION_DIR,
+        target_dir,
+    ):
+        if stat.S_IMODE(directory.stat().st_mode) != 0o700:
+            directory.chmod(0o700)
+    bindings: list[dict[str, str]] = []
+    for role, source in (
+        ("recovery_approval", approval_path),
+        ("recovery_preview", preview_path),
+    ):
+        payload = _read_json(source, f"{role} 收据")
+        target = target_dir / source.name
+        try:
+            timing_ledger._publish_once(target, payload, f"{role} 账本副本")
+        except timing_ledger.TimingLedgerError as error:
+            raise ReconcilerError(str(error)) from error
+        bindings.append(
+            {
+                "role": role,
+                "path": target.relative_to(ledger_dir).as_posix(),
+                "sha256": _file_sha256(target),
+            }
+        )
+    return sorted(bindings, key=lambda item: item["role"])
+
+
 def _ledger_facts(ledger_dir: Path, *, now: str) -> dict[str, Any]:
     summary = timing_ledger.inspect_ledger(ledger_dir, now=now)
     active = timing_ledger._active_attempts(timing_ledger._load_events(ledger_dir))
@@ -312,6 +383,8 @@ def _ledger_facts(ledger_dir: Path, *, now: str) -> dict[str, Any]:
         "ledger_dir": str(ledger_dir),
         "status": summary["status"],
         "active_phase": summary.get("active_phase"),
+        "recovery_phase": summary.get("recovery_phase"),
+        "recovery_root_cause_id": summary.get("recovery_root_cause_id"),
         "head_sequence": summary.get("head_sequence"),
         "head_sha256": summary.get("head_sha256"),
         "total_deadline_at_utc": summary.get("total_deadline_at_utc"),
@@ -359,6 +432,7 @@ def _request_part(
     head: Mapping[str, Any],
     project_root: Path,
     now: str,
+    phase: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], Path]:
     """返回 (batch 请求部分, provenance 副本绑定, 副本绝对路径)。
 
@@ -376,6 +450,45 @@ def _request_part(
         )
     except (provenance.ProvenanceError, closeout.VC0CloseoutError, OSError, ValueError) as error:
         raise ReconcilerError(f"provenance 核算失败：{error}") from error
+    if phase is not None:
+        if phase not in {"official", "candidate"}:
+            raise ReconcilerError(f"provenance 阶段过滤非法：{phase!r}")
+        receipt = dict(receipt)
+        filtered_jobs = [
+            dict(item)
+            for item in receipt.get("jobs", [])
+            if isinstance(item, Mapping) and item.get("phase") == phase
+        ]
+        job_ids = {str(item["job_id"]) for item in filtered_jobs}
+        filtered_requests = [
+            dict(item)
+            for item in receipt.get("requests", [])
+            if isinstance(item, Mapping) and item.get("job_id") in job_ids
+        ]
+        receipt["jobs"] = filtered_jobs
+        receipt["requests"] = filtered_requests
+        for field in (
+            "unresolved_job_ids",
+            "pending_job_ids",
+            "pre_request_zero_job_ids",
+        ):
+            receipt[field] = [
+                str(job_id)
+                for job_id in receipt.get(field, [])
+                if str(job_id) in job_ids
+            ]
+        receipt["precise_total"] = len(filtered_requests)
+        receipt["estimated_total"] = sum(
+            int(item.get("estimated_count", 0)) for item in filtered_jobs
+        )
+        receipt["status"] = (
+            "accounting_unresolved"
+            if receipt["unresolved_job_ids"]
+            else "complete"
+        )
+        receipt["identity_keys_sha256"] = _fingerprint(
+            sorted(str(item["identity_key"]) for item in filtered_requests)
+        )
     # 副本文件名按去掉观测时间的稳定摘要命名：中断后重放得到同一份副本，账本与 batch 绑定不漂移。
     stable_sha256 = _fingerprint({key: value for key, value in receipt.items() if key != "observed_at_utc"})
     copy_path = receipt_dir / f"provenance-{stable_sha256[:16]}.json"
@@ -433,8 +546,15 @@ def _request_part(
     return part, binding, copy_path
 
 
-def account_sealed_official(campaign_dir: Path, *, now: str | None = None) -> dict[str, Any]:
-    """把已封存 official 阶段的模型请求写入项目总账（自身零请求，幂等）。
+def _account_sealed_capture(
+    campaign_dir: Path,
+    *,
+    phase: str,
+    candidate_id: str | None,
+    now: str | None,
+    recovery_revision: str | None = None,
+) -> dict[str, Any]:
+    """把已封存抓包阶段的请求写入项目总账（自身零请求，幂等）。
 
     总账此前只在失败对账（reconciliation_committed）时入账，成功封存的 Campaign 只停在
     计时账本与 provenance 收据里。这里复用同一套请求部分核算：精确身份键按总账索引与初始
@@ -442,52 +562,104 @@ def account_sealed_official(campaign_dir: Path, *, now: str | None = None) -> di
     并立即推送；同一 attempt 重复执行返回既有 batch。
     """
 
+    if phase not in {"official", "candidate"}:
+        raise ReconcilerError(f"成功抓包入账阶段非法：{phase!r}")
     campaign_dir = Path(campaign_dir).resolve(strict=True)
     manifest = codex_upgrade._require_formal_campaign(campaign_dir)
     if not codex_upgrade._requires_complete_vc_artifacts(manifest):
-        raise ReconcilerError("account-sealed-official 只用于 0.154.0 起的完整 VC 链 Campaign")
+        raise ReconcilerError("成功抓包入账只用于 0.154.0 起的完整 VC 链 Campaign")
+    if phase == "candidate" and (
+        not isinstance(candidate_id, str)
+        or not codex_upgrade.SAFE_ID_RE.fullmatch(candidate_id)
+    ):
+        raise ReconcilerError("account-sealed-candidate 必须提供合法 candidate-id")
+    if phase == "official" and candidate_id is not None:
+        raise ReconcilerError("official 成功入账不得携带 candidate-id")
+    if recovery_revision is not None and (
+        phase != "candidate" or not vc_artifacts.RECOVERY_REVISION_RE.fullmatch(recovery_revision)
+    ):
+        raise ReconcilerError("--attempt-recovery 只用于候选阶段且必须是 ar<k>")
+    stage = "capture-official" if phase == "official" else "capture-candidate"
     try:
-        official = codex_upgrade._load_stage_result(
-            campaign_dir, "capture-official", _replay_machine_receipts=False
+        sealed = codex_upgrade._load_stage_result(
+            campaign_dir,
+            stage,
+            candidate_id,
+            _replay_machine_receipts=False,
         )
     except codex_upgrade.ConfigurationError as error:
-        raise ReconcilerError(f"official 阶段结果不可用：{error}") from error
-    attempt_binding = official.get("attempt")
-    if official.get("status") != "complete" or not isinstance(attempt_binding, Mapping):
-        raise ReconcilerError("official 阶段尚未封存（official_sealed），先 seal 再入账")
+        raise ReconcilerError(f"{phase} 阶段结果不可用：{error}") from error
+    attempt_binding = sealed.get("attempt")
+    if sealed.get("status") != "complete" or not isinstance(attempt_binding, Mapping):
+        raise ReconcilerError(f"{phase} 阶段尚未完整封存，先 seal 再入账")
     attempt_path = codex_upgrade._campaign_file(campaign_dir, str(attempt_binding.get("path", "")))
     if not attempt_path.is_file() or _file_sha256(attempt_path) != attempt_binding.get("sha256"):
         raise ReconcilerError("official 阶段绑定的 attempt.json 摘要漂移")
     attempt_id = attempt_path.parent.name
     if not codex_upgrade.SAFE_ID_RE.fullmatch(attempt_id):
         raise ReconcilerError("attempt_id 格式非法")
+    # 改造 5 M2：attempt-recovery 基线的增量封存结果绑定恢复段 run-summary；入账按段幂等，
+    # 只记本段新增请求（精确身份键按总账索引去重）。
+    recovery_binding = sealed.get("recovery")
+    if recovery_revision is not None:
+        if not isinstance(recovery_binding, Mapping) or recovery_binding.get("recovery_revision") != recovery_revision:
+            raise ReconcilerError(f"当前候选阶段结果不是恢复段 {recovery_revision} 的增量封存结果")
+        recovery_path = codex_upgrade._campaign_file(campaign_dir, str(recovery_binding.get("path", "")))
+        if not recovery_path.is_file() or _file_sha256(recovery_path) != recovery_binding.get("sha256"):
+            raise ReconcilerError("阶段结果绑定的 attempt-recovery.json 摘要漂移")
+    elif isinstance(recovery_binding, Mapping):
+        raise ReconcilerError("当前候选阶段结果是恢复段的增量封存结果，请以 --attempt-recovery ar<k> 入账")
     observed = now or _utc_now()
     project_root = _project_root(campaign_dir)
     plan, head = _project_facts(project_root)
-    receipt_dir = _reconciliation_dir(campaign_dir, f"sealed-official-{attempt_id}")
+    subject = (
+        f"sealed-official-{attempt_id}"
+        if phase == "official"
+        else f"sealed-candidate-{candidate_id}-{attempt_id}"
+        + (f"-{recovery_revision}" if recovery_revision is not None else "")
+    )
+    receipt_dir = _reconciliation_dir(campaign_dir, subject)
     request_part, provenance_binding, _copy_path = _request_part(
-        campaign_dir, manifest, receipt_dir, plan=plan, head=head, project_root=project_root, now=observed
+        campaign_dir,
+        manifest,
+        receipt_dir,
+        plan=plan,
+        head=head,
+        project_root=project_root,
+        now=observed,
+        phase=phase,
     )
     if request_part["status"] == "unresolved":
         raise ReconcilerError(
-            "已封存 official 阶段仍有请求数无法确定的 Job，不能入账："
+            f"已封存 {phase} 阶段仍有请求数无法确定的 Job，不能入账："
             + "、".join(request_part["unresolved_job_ids"])
         )
-    official_path = codex_upgrade._stage_path(campaign_dir, "capture-official")[1]
+    stage_path = codex_upgrade._stage_path(campaign_dir, stage, candidate_id)[1]
+    operation_subject = attempt_id if phase == "official" else f"{candidate_id}:{attempt_id}"
+    if recovery_revision is not None:
+        operation_subject = f"{operation_subject}:{recovery_revision}"
+    payload = {
+        "campaign_id": str(manifest["campaign_id"]),
+        "subject_kind": f"sealed_{phase}_stage",
+        "subject_id": operation_subject,
+        "phase": phase,
+        "candidate_id": candidate_id,
+        "request": request_part,
+        "stage_result_sha256": _file_sha256(stage_path),
+        "attempt_sha256": str(attempt_binding.get("sha256")),
+    }
+    if recovery_revision is not None:
+        payload["recovery_revision"] = recovery_revision
+        payload["attempt_recovery_sha256"] = str(recovery_binding.get("sha256"))
     batch = _commit_batch(
         campaign_dir,
-        operation_id=f"account-sealed-official:{attempt_id}",
+        operation_id=f"account-sealed-{phase}:{operation_subject}",
         event_type="reconciliation_committed",
-        payload={
-            "campaign_id": str(manifest["campaign_id"]),
-            "subject_kind": "sealed_official_stage",
-            "subject_id": attempt_id,
-            "phase": "official",
-            "request": request_part,
-            "official_result_sha256": _file_sha256(official_path),
-            "attempt_sha256": str(attempt_binding.get("sha256")),
+        payload=payload,
+        source={
+            "kind": f"sealed_{phase}_accounting",
+            "sha256": provenance_binding["sha256"],
         },
-        source={"kind": "sealed_official_accounting", "sha256": provenance_binding["sha256"]},
         receipt_bindings=[provenance_binding],
     )
     try:
@@ -499,7 +671,10 @@ def account_sealed_official(campaign_dir: Path, *, now: str | None = None) -> di
     return {
         "status": "accounted",
         "campaign_id": str(manifest["campaign_id"]),
+        "phase": phase,
+        "candidate_id": candidate_id,
         "attempt_id": attempt_id,
+        "recovery_revision": recovery_revision,
         "request": {
             "status": request_part["status"],
             "new_identity_keys": len(request_part["identity_keys"]),
@@ -517,6 +692,35 @@ def account_sealed_official(campaign_dir: Path, *, now: str | None = None) -> di
     }
 
 
+def account_sealed_official(campaign_dir: Path, *, now: str | None = None) -> dict[str, Any]:
+    """把已封存 official 阶段的模型请求幂等写入项目总账。"""
+
+    return _account_sealed_capture(
+        campaign_dir,
+        phase="official",
+        candidate_id=None,
+        now=now,
+    )
+
+
+def account_sealed_candidate(
+    campaign_dir: Path,
+    candidate_id: str,
+    *,
+    now: str | None = None,
+    recovery_revision: str | None = None,
+) -> dict[str, Any]:
+    """把已封存 Candidate 阶段的模型请求幂等写入项目总账（``recovery_revision``：恢复段的增量封存）。"""
+
+    return _account_sealed_capture(
+        campaign_dir,
+        phase="candidate",
+        candidate_id=candidate_id,
+        now=now,
+        recovery_revision=recovery_revision,
+    )
+
+
 # ---------------------------------------------------------------------------
 # 决策表
 # ---------------------------------------------------------------------------
@@ -531,10 +735,17 @@ def _decide(
     environment_status: str,
     campaign_deadline_at_utc: str | None,
     root_cause_id: str,
+    root_cause_ids: Iterable[str] | None = None,
     request_status: str,
     now: str,
+    forced_terminal_reason: str | None = None,
 ) -> dict[str, Any]:
-    """步骤 5：先入账后判定。返回 decision 与 terminal_reason（停线时）。"""
+    """步骤 5：先入账后判定。返回 decision 与 terminal_reason（停线时）。
+
+    ``forced_terminal_reason`` 用于分类本身即不可恢复的对象（改造 4 的 COMMIT 完整性
+    异常，以及 2026-09-22 起动作诊断 declared 为 evidence-integrity 的已封存证据完整性
+    异常）：无论总账与账本状态如何都固定停线，其他原因仍逐条登记供审计。
+    """
 
     current = _timestamp(now, "now")
     reasons: list[str] = []
@@ -546,16 +757,27 @@ def _decide(
         if terminal_reason is None:
             terminal_reason = reason
 
+    if forced_terminal_reason is not None:
+        if forced_terminal_reason not in project_ledger.TERMINAL_REASONS:
+            raise ReconcilerError(f"强制终态原因非法：{forced_terminal_reason}")
+        stop(forced_terminal_reason, "对象分类本身不可恢复（不可变控制或证据制品完整性异常）")
     if head.get("blocked"):
         stop("accounting_unresolved", f"总账 blocked：{head.get('unresolved_operation_ids')}")
     elif request_status == "unresolved":
         stop("accounting_unresolved", "本次请求账务无法确定")
     if environment_status == "contaminated":
         stop("environment_contaminated", "环境恢复失败或前后环境身份不连续")
+    ledger_status = ledger.get("status")
+    # 已经写入 stop_the_line 的旧 Campaign 不能被后续工具或策略身份变化改写终态。
+    # 身份漂移仍加入 reasons，供审计判断当前工具为何不能恢复旧 attempt。
+    if ledger_status == "stopped":
+        stop("prior_stop_the_line", "Campaign 账本此前已写 stop_the_line，禁止恢复旧 attempt")
     if not identity.get("unchanged"):
         stop("identity_changed", "当前有效 wire 身份或策略摘要已变化")
-    if ledger.get("status") in {"stop_required", "stopped", "complete"}:
-        stop("deadline_wall_clock", f"Campaign 账本状态 {ledger.get('status')}，禁止继续执行 Job")
+    if ledger_status == "stop_required":
+        stop("deadline_wall_clock", "Campaign 账本已要求停线，禁止继续执行 Job")
+    elif ledger_status == "complete":
+        stop("prior_upgrade_complete", "Campaign 账本此前已完成，禁止再对账旧 attempt")
     if campaign_deadline_at_utc is not None and current >= _timestamp(campaign_deadline_at_utc, "Campaign deadline"):
         stop("deadline_wall_clock", "Campaign 总计划 deadline 已到")
     if current >= _timestamp(plan["absolute_deadline_utc"], "absolute_deadline_utc"):
@@ -563,14 +785,28 @@ def _decide(
     remaining = head.get("remaining_live_requests")
     if remaining is not None and int(remaining) <= 0:
         stop("deadline_live_requests", "项目请求预算已耗尽")
-    if root_cause_id in set(head.get("root_causes_at_limit", [])):
-        stop("root_cause_limit", f"根因 {root_cause_id} 累计失败已达上限")
+    evaluated_root_causes = list(
+        dict.fromkeys(root_cause_ids or [root_cause_id])
+    )
+    at_limit = sorted(
+        set(evaluated_root_causes)
+        & set(head.get("root_causes_at_limit", []))
+    )
+    if at_limit:
+        stop("root_cause_limit", f"根因 {at_limit} 累计失败已达上限")
     decision = DECISION_STOP if terminal_reason is not None else DECISION_RECOVERABLE
+    root_cause_counts = {
+        cause_id: int(
+            dict(head.get("root_cause_counts", {})).get(cause_id, 0)
+        )
+        for cause_id in evaluated_root_causes
+    }
     return {
         "decision": decision,
         "terminal_reason": terminal_reason,
         "reasons": reasons,
-        "root_cause_count": int(dict(head.get("root_cause_counts", {})).get(root_cause_id, 0)),
+        "root_cause_count": root_cause_counts.get(root_cause_id, 0),
+        "root_cause_counts": root_cause_counts,
         "remaining_live_requests": remaining,
         "blocked": bool(head.get("blocked")),
     }
@@ -855,11 +1091,11 @@ def _attempt_root_cause(
     attempt: Mapping[str, Any] | None,
     environment_status: str,
     identity_unchanged: bool,
-    ledger_status: str,
+    deadline_expired: bool,
     request_status: str | None,
     jobs: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """按稳定优先级选 A0a-3 根因；failed_step 只取稳定的 Job ID 或固定步骤名。"""
+    """生成硬停线或历史 fallback 根因；账本 ``stopped`` 本身不是 deadline 证据。"""
 
     groups = jobs["groups"]
     failed_step = "reservation"
@@ -872,20 +1108,14 @@ def _attempt_root_cause(
     elif groups["complete"]:
         failed_step = "after-" + groups["complete"][-1]
     code = "attempt.interrupted"
-    if environment_status == "contaminated":
+    if request_status == "unresolved":
+        code = "attempt.accounting-unresolved"
+    elif environment_status == "contaminated":
         code = "attempt.environment-contaminated"
-    elif ledger_status in {"stop_required", "stopped"} or (
-        attempt is not None
-        and (
-            (isinstance(attempt.get("watchdog"), Mapping) and attempt["watchdog"].get("timeout_checkpoint") is not None)
-            or attempt.get("deadline_orphan_finalization") is not None
-        )
-    ):
-        code = "attempt.deadline-expired"
     elif not identity_unchanged:
         code = "attempt.identity-changed"
-    elif request_status == "unresolved":
-        code = "attempt.accounting-unresolved"
+    elif deadline_expired:
+        code = "attempt.deadline-expired"
     try:
         return root_cause.describe_root_cause(
             component=COMPONENT,
@@ -895,6 +1125,98 @@ def _attempt_root_cause(
         )
     except root_cause.RootCauseError as error:
         raise ReconcilerError(f"根因编码失败：{error}") from error
+
+
+def _attempt_deadline_expired(
+    *,
+    attempt: Mapping[str, Any] | None,
+    ledger: Mapping[str, Any],
+    plan: Mapping[str, Any],
+    campaign_deadline_at_utc: str | None,
+    now: str,
+) -> bool:
+    """只用 attempt 当时的时间或 timeout 收据识别根因，不能从 stopped 倒推。
+
+    已封存 attempt 在次日对账时，``now`` 只能影响是否还允许恢复，不能把此前的
+    Job 故障改写成 deadline 根因；没有 attempt 的 reservation 孤儿才使用对账时间。
+    """
+
+    if attempt is not None and (
+        (
+            isinstance(attempt.get("watchdog"), Mapping)
+            and attempt["watchdog"].get("timeout_checkpoint") is not None
+        )
+        or attempt.get("deadline_orphan_finalization") is not None
+    ):
+        return True
+    reference_value = (
+        attempt.get("completed_at_utc") if attempt is not None else now
+    )
+    reference = _timestamp(
+        str(reference_value),
+        "attempt.completed_at_utc" if attempt is not None else "now",
+    )
+    deadlines = [
+        campaign_deadline_at_utc,
+        ledger.get("total_deadline_at_utc"),
+        ledger.get("stage_deadline_at_utc"),
+        plan.get("absolute_deadline_utc"),
+    ]
+    return any(
+        isinstance(value, str) and reference >= _timestamp(value, "deadline")
+        for value in deadlines
+    )
+
+
+def _attempt_recorded_failures(
+    attempt: Mapping[str, Any] | None,
+) -> tuple[list[dict[str, str]], list[dict[str, Any]], bool]:
+    """读取新数组；历史 attempt 只读地从既有 Job 枚举字段派生。"""
+
+    if attempt is None:
+        return [], [], False
+    if "failure_observations" not in attempt and "root_causes" not in attempt:
+        try:
+            observations, causes = codex_upgrade._attempt_failure_facts(attempt)
+        except codex_upgrade.ConfigurationError as error:
+            raise ReconcilerError(f"历史 attempt 失败观测无法重放：{error}") from error
+        # 历史文件保持原字节不变；只在本次追加式 reconciliation 中发布可复算数组。
+        return observations, causes, bool(observations or causes)
+    raw_observations = attempt.get("failure_observations")
+    raw_causes = attempt.get("root_causes")
+    if not isinstance(raw_observations, list) or not isinstance(raw_causes, list):
+        raise ReconcilerError("attempt 失败观测与根因数组不完整")
+    observations = [dict(item) for item in raw_observations if isinstance(item, Mapping)]
+    causes = [dict(item) for item in raw_causes if isinstance(item, Mapping)]
+    if len(observations) != len(raw_observations) or len(causes) != len(raw_causes):
+        raise ReconcilerError("attempt 失败观测或根因数组含非对象项")
+    observation_ids = [str(item.get("root_cause_id", "")) for item in observations]
+    cause_ids = [str(item.get("root_cause_id", "")) for item in causes]
+    if (
+        len(set(observation_ids)) != len(observation_ids)
+        or any(not root_cause.is_structured(value) for value in observation_ids)
+        or any(not root_cause.is_structured(value) for value in cause_ids)
+        or set(observation_ids) - set(cause_ids)
+    ):
+        raise ReconcilerError("attempt 失败观测与根因身份不闭合")
+    return observations, causes, True
+
+
+def _merge_root_causes(
+    primary: Mapping[str, Any],
+    recorded: Iterable[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """保持主根因在首位，并按稳定 ID 去重。"""
+
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in [primary, *recorded]:
+        cause_id = str(item.get("root_cause_id", ""))
+        if cause_id in seen:
+            continue
+        seen.add(cause_id)
+        merged.append(dict(item))
+    return merged
 
 
 def _recovery_preview(
@@ -911,13 +1233,33 @@ def _recovery_preview(
     provenance_copy: Mapping[str, Any],
     current: Mapping[str, Any],
     reconciliation_receipt_sha256: str,
+    campaign_ledger_head: Mapping[str, Any],
+    project_ledger_head: Mapping[str, Any],
     now: str,
+    recovery_revision: str | None = None,
+    recovery_execute_jobs: Sequence[str] | None = None,
 ) -> dict[str, Any]:
-    """零请求恢复预览：冻结四类 Job 闭集与预计新增请求数，等待操作员批准。"""
+    """零请求恢复预览：冻结四类 Job 闭集与预计新增请求数，等待操作员批准（段模式携带 recovery_revision）。
+
+    段模式（P1 授权闭包）：后继段整段重做基线冻结的 J*，段内 complete Job 不复用——预览的 ``planned_job_ids``
+    与 ``execute_job_ids`` 必须都等于权威链（段预约 → COMMIT → recovery.json）取得的 ``execute_jobs``，
+    ``reuse_job_ids`` 恒空，请求估算覆盖完整 J*；否则会出现"批准 1 个请求、实际执行 2 个"的授权边界错误。
+    """
 
     groups = jobs["groups"]
-    reusable = list(groups["complete"]) if (attempt_exists and environment_status == "restored") else []
-    execute = sorted(set(jobs["planned_job_ids"]) - set(reusable))
+    if recovery_revision is not None:
+        if recovery_execute_jobs is None:
+            raise ReconcilerError("恢复段预览必须提供权威链取得的 execute_jobs")
+        frozen = sorted(str(item) for item in recovery_execute_jobs)
+        if sorted(str(item) for item in jobs["planned_job_ids"]) != frozen or len(set(frozen)) != len(frozen):
+            raise ReconcilerError(
+                f"恢复段预约的 planned_jobs {sorted(jobs['planned_job_ids'])} 与基线冻结的 J* {frozen} 不一致"
+            )
+        reusable = []
+        execute = list(frozen)
+    else:
+        reusable = list(groups["complete"]) if (attempt_exists and environment_status == "restored") else []
+        execute = sorted(set(jobs["planned_job_ids"]) - set(reusable))
     per_job: dict[str, int] = {}
     for job in provenance_copy.get("jobs", []):
         if isinstance(job, Mapping) and isinstance(job.get("job_id"), str):
@@ -929,8 +1271,18 @@ def _recovery_preview(
         "phase": phase,
         "candidate_id": candidate_id,
         "source_attempt_id": attempt_id,
+        "recovery_revision": recovery_revision,
         "source_attempt_receipt_exists": attempt_exists,
         "reconciliation_receipt_sha256": reconciliation_receipt_sha256,
+        "campaign_ledger_head": {
+            "sequence": campaign_ledger_head.get("head_sequence"),
+            "sha256": campaign_ledger_head.get("head_sha256"),
+            "status": campaign_ledger_head.get("status"),
+        },
+        "project_ledger_head": {
+            "sequence": project_ledger_head.get("sequence"),
+            "sha256": project_ledger_head.get("head_sha256"),
+        },
         "planned_job_ids": list(jobs["planned_job_ids"]),
         "complete_job_ids": list(groups["complete"]),
         "failed_job_ids": list(groups["failed"]),
@@ -939,7 +1291,9 @@ def _recovery_preview(
         "reuse_job_ids": reusable,
         "execute_job_ids": execute,
         "reuse_basis": (
-            "source attempt 环境已恢复，complete Job 只读复用"
+            "失败段不可变，后继段整段重做基线冻结的 J*；段内 complete Job 不复用"
+            if recovery_revision is not None
+            else "source attempt 环境已恢复，complete Job 只读复用"
             if reusable
             else "source attempt 无 after 探针或环境未恢复，证据前提不成立，不复用"
         ),
@@ -971,12 +1325,18 @@ def _recovery_preview(
     return preview
 
 
-def approve_recovery_preview(campaign_dir: Path, attempt_id: str, *, approve_sha256: str) -> dict[str, Any]:
+def approve_recovery_preview(
+    campaign_dir: Path,
+    attempt_id: str,
+    *,
+    approve_sha256: str,
+    recovery_revision: str | None = None,
+) -> dict[str, Any]:
     """操作员按 review_sha256 批准恢复预览；批准收据只写一次，幂等返回既有。"""
 
     if not codex_upgrade.SHA256_RE.fullmatch(str(approve_sha256)):
         raise ReconcilerError("--approve-recovery-sha256 格式非法")
-    receipt_dir = _reconciliation_dir(campaign_dir, f"attempt-{attempt_id}")
+    receipt_dir = _reconciliation_dir(campaign_dir, f"attempt-{_recovery_segment_subject(attempt_id, recovery_revision).replace(':', '-')}")
     matched: tuple[int, Path, dict[str, Any]] | None = None
     if receipt_dir.is_dir():
         for child in sorted(receipt_dir.iterdir()):
@@ -1001,11 +1361,14 @@ def approve_recovery_preview(campaign_dir: Path, attempt_id: str, *, approve_sha
         or preview.get("tool_identity", {}).get("policy_sha256") != current.get("policy_sha256")
     ):
         raise ReconcilerError("恢复预览生成后工具身份已变化，必须重新对账生成新预览")
+    if preview.get("recovery_revision") != recovery_revision:
+        raise ReconcilerError("恢复预览的恢复段编号与批准请求不一致")
     approval = {
         "schema_version": RECOVERY_APPROVAL_SCHEMA,
         "index": approval_index + 1,
         "campaign_id": preview.get("campaign_id"),
         "source_attempt_id": preview.get("source_attempt_id"),
+        "recovery_revision": recovery_revision,
         "preview_index": index,
         "preview_path": preview_path.relative_to(campaign_dir).as_posix(),
         "preview_sha256": _file_sha256(preview_path),
@@ -1025,8 +1388,9 @@ def load_approved_recovery_preview(
     *,
     phase: str,
     candidate_id: str | None,
+    recovery_revision: str | None = None,
 ) -> dict[str, Any]:
-    """resume 衔接：只接受当前 Campaign 内、已批准、工具身份仍相同的恢复预览。"""
+    """resume 衔接：只接受当前 Campaign 内、已批准、工具身份仍相同的恢复预览（段模式按 ar<k> 定位）。"""
 
     if not isinstance(preview_path, Path):
         raise ReconcilerError("resume --rerun-failed 必须提供 --recovery-preview（已批准的 recovery-preview/v1）")
@@ -1048,15 +1412,30 @@ def load_approved_recovery_preview(
     ):
         raise ReconcilerError("恢复预览自摘要、阶段或零请求边界不满足")
     attempt_id = str(preview.get("source_attempt_id", ""))
-    if resolved.parent.name != f"attempt-{attempt_id}":
-        raise ReconcilerError("恢复预览目录与其来源 attempt 不一致")
-    approved = None
+    if preview.get("recovery_revision") != recovery_revision:
+        raise ReconcilerError("恢复预览的恢复段编号与 resume 请求不一致")
+    if resolved.parent.name != f"attempt-{_recovery_segment_subject(attempt_id, recovery_revision).replace(':', '-')}":
+        raise ReconcilerError("恢复预览目录与其来源 attempt／恢复段不一致")
+    approved: dict[str, Any] | None = None
+    approval_path: Path | None = None
     for child in sorted(resolved.parent.iterdir()):
         if APPROVAL_RE.fullmatch(child.name):
             payload = _read_json(child, "恢复批准收据")
-            if payload.get("preview_sha256") == _file_sha256(resolved) and payload.get("approved_sha256") == preview.get("review_sha256"):
+            approval_unsigned = {
+                key: value
+                for key, value in payload.items()
+                if key not in {"approved_at_utc", "receipt_sha256"}
+            }
+            if (
+                payload.get("schema_version") == RECOVERY_APPROVAL_SCHEMA
+                and payload.get("preview_sha256") == _file_sha256(resolved)
+                and payload.get("approved_sha256") == preview.get("review_sha256")
+                and payload.get("receipt_sha256")
+                == _fingerprint(approval_unsigned)
+            ):
                 approved = payload
-    if approved is None:
+                approval_path = child
+    if approved is None or approval_path is None:
         raise ReconcilerError("恢复预览尚未批准；先执行 reconcile-attempt --approve-recovery-sha256 <review_sha256>")
     current = _current_identity()
     identity = preview.get("tool_identity") or {}
@@ -1068,7 +1447,135 @@ def load_approved_recovery_preview(
     receipt_path = resolved.parent / ATTEMPT_RECEIPT_NAME
     if _file_sha256(receipt_path) != preview.get("reconciliation_receipt_sha256"):
         raise ReconcilerError("恢复预览绑定的对账收据已漂移")
-    return {**preview, "approval": approved, "preview_path": str(resolved)}
+
+    # 恢复预览同时冻结 Campaign 与项目总账 head。项目 head 后续有任何并发
+    # 推进都必须重新对账；Campaign head 允许且只允许多出本预览对应的
+    # recovery_authorized 事件，以保证重复 resume 幂等。
+    manifest = codex_upgrade._require_formal_campaign(campaign_dir)
+    ledger_dir = _campaign_ledger_dir(manifest)
+    campaign_head = preview.get("campaign_ledger_head")
+    project_head = preview.get("project_ledger_head")
+    authorization_event: dict[str, Any] | None = None
+    if isinstance(project_head, Mapping):
+        project_root = _project_root(campaign_dir)
+        _plan, current_project_head = _project_facts(project_root)
+        if (
+            current_project_head.get("sequence") != project_head.get("sequence")
+            or current_project_head.get("head_sha256") != project_head.get("sha256")
+        ):
+            raise ReconcilerError("恢复预览生成后项目总账 head 已推进，必须重新对账")
+    if isinstance(campaign_head, Mapping):
+        sequence = campaign_head.get("sequence")
+        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 1:
+            raise ReconcilerError("恢复预览绑定的 Campaign 账本 head 非法")
+        try:
+            frozen_campaign_head = timing_ledger.inspect_ledger(
+                ledger_dir,
+                limit=sequence,
+            )
+        except timing_ledger.TimingLedgerError as error:
+            raise ReconcilerError(f"恢复预览绑定的 Campaign head 无法重放：{error}") from error
+        if (
+            frozen_campaign_head.get("head_sha256") != campaign_head.get("sha256")
+            or frozen_campaign_head.get("status") != campaign_head.get("status")
+        ):
+            raise ReconcilerError("恢复预览绑定的 Campaign 账本 head 已漂移")
+        if campaign_head.get("status") == "recovery_required":
+            event_id = (
+                f"recovery-authorized-{attempt_id}-{int(preview['index']):02d}"
+                if recovery_revision is None
+                else f"recovery-authorized-{attempt_id}-{recovery_revision}-{int(preview['index']):02d}"
+            )
+            with codex_upgrade._campaign_lock(campaign_dir):
+                current_campaign_head = _ledger_facts(ledger_dir, now=_utc_now())
+                existing_sha256 = _ledger_event_sha256(ledger_dir, event_id)
+                if current_campaign_head.get("status") == "recovery_required":
+                    if (
+                        current_campaign_head.get("head_sequence") != sequence
+                        or current_campaign_head.get("head_sha256")
+                        != campaign_head.get("sha256")
+                    ):
+                        raise ReconcilerError(
+                            "恢复批准消费前 Campaign 账本 head 已推进，必须重新对账"
+                        )
+                    receipts = _ledger_recovery_authorization_bindings(
+                        ledger_dir,
+                        attempt_id,
+                        resolved,
+                        approval_path,
+                        recovery_revision=recovery_revision,
+                    )
+                    authorization_event = _append_ledger_event(
+                        ledger_dir,
+                        event_id=event_id,
+                        phase=str(current_campaign_head["active_phase"]),
+                        event_type="recovery_authorized",
+                        root_cause_id=str(
+                            current_campaign_head["recovery_root_cause_id"]
+                        ),
+                        receipts=receipts,
+                        next_action="resume-rerun-failed",
+                    )
+                elif (
+                    current_campaign_head.get("status") == "active"
+                    and existing_sha256 is not None
+                ):
+                    authorization_event = {
+                        "event_id": event_id,
+                        "event_sha256": existing_sha256,
+                        "appended": False,
+                    }
+                else:
+                    raise ReconcilerError(
+                        "Campaign 不在 recovery_required，禁止消费恢复批准"
+                    )
+    return {
+        **preview,
+        "approval": approved,
+        "preview_path": str(resolved),
+        "timing_recovery_event": authorization_event,
+    }
+
+
+def _recovery_segment_subject(attempt_id: str, recovery_revision: str | None) -> str:
+    return attempt_id if recovery_revision is None else f"{attempt_id}:{recovery_revision}"
+
+
+def authorize_recovery_preview(
+    campaign_dir: Path,
+    attempt_id: str,
+    preview_path: Path,
+    *,
+    recovery_revision: str | None = None,
+) -> dict[str, Any]:
+    """改造 5 M2：消费已批准的恢复预览（账本 recovery_required → recovery_authorized → active），
+    使后继恢复段的批次可以编译派发；幂等（已 active 且授权事件存在时不重复写）。"""
+
+    campaign_dir = Path(campaign_dir)
+    phase, candidate_id, _attempt_root = _locate_attempt(campaign_dir, attempt_id)
+    if recovery_revision is not None and (phase != "candidate" or candidate_id is None):
+        raise ReconcilerError("恢复段只存在于候选 attempt")
+    consumed = load_approved_recovery_preview(
+        campaign_dir, Path(preview_path), phase=phase, candidate_id=candidate_id, recovery_revision=recovery_revision
+    )
+    if str(consumed.get("source_attempt_id")) != attempt_id:
+        raise ReconcilerError("恢复预览绑定的 attempt 与 --attempt-id 不一致")
+    return {
+        "schema_version": ATTEMPT_SCHEMA,
+        "status": "authorized",
+        "campaign_id": str(consumed.get("campaign_id", "")),
+        "attempt_id": attempt_id,
+        "recovery_revision": recovery_revision,
+        "preview_path": consumed["preview_path"],
+        "review_sha256": consumed.get("review_sha256"),
+        "timing_recovery_event": consumed.get("timing_recovery_event"),
+        "live_request_count": 0,
+        "next_command": (
+            f"capture-candidate run --attempt-recovery ar{int(recovery_revision[2:]) + 1} --rerun-failed --recovery-preview {consumed['preview_path']}"
+            if recovery_revision is not None
+            else f"resume --rerun-failed --recovery-preview {consumed['preview_path']}"
+        ),
+    }
 
 
 def reconcile_attempt(
@@ -1078,8 +1585,15 @@ def reconcile_attempt(
     control_root: Path | None = None,
     approve_recovery_sha256: str | None = None,
     now: str | None = None,
+    recovery_revision: str | None = None,
 ) -> dict[str, Any]:
-    """对账一个 reservation 之后中断的 attempt（步骤 1～6）。"""
+    """对账一个 reservation 之后中断的 attempt（步骤 1～6）。
+
+    改造 5 M2：``recovery_revision=ar<k>`` 时对账的是该 attempt 的恢复段（段预约之后中断／失败）：
+    定位 ``recovery/ar<k>/``，收据带 ``recovery_revision``，operation ``reconcile-attempt:<id>:ar<k>``，
+    账本写 ``attempt_recovery_failed``（原 attempt 事件不动），恢复预览按基线冻结的 J* 全量生成（reuse 恒空），
+    批准后由后继段 ar<k+1> 整段重做。
+    """
 
     campaign_dir = Path(campaign_dir).resolve(strict=True)
     manifest = codex_upgrade._require_formal_campaign(campaign_dir)
@@ -1087,24 +1601,60 @@ def reconcile_attempt(
         raise ReconcilerError("reconcile-attempt 只用于 0.154.0 起的完整 VC 链 Campaign")
     observed = now or _utc_now()
     phase, candidate_id, attempt_root = _locate_attempt(campaign_dir, attempt_id)
-    reservation = codex_upgrade._load_capture_reservation(
-        campaign_dir, attempt_root, phase=phase, candidate_id=candidate_id, _manifest=manifest
-    )
     attempt: dict[str, Any] | None = None
-    attempt_path = attempt_root / "attempt.json"
-    if attempt_path.exists() or attempt_path.is_symlink():
-        _root, attempt = codex_upgrade._load_capture_attempt(
-            campaign_dir, phase, candidate_id, attempt_id, _verified_campaign_manifest=manifest
+    if recovery_revision is not None:
+        if phase != "candidate" or candidate_id is None:
+            raise ReconcilerError("恢复段只存在于候选 attempt")
+        if not vc_artifacts.RECOVERY_REVISION_RE.fullmatch(recovery_revision):
+            raise ReconcilerError("--recovery-revision 必须是 ar<k>")
+        segment_root = codex_upgrade._attempt_recovery_segment_root(attempt_root, recovery_revision)
+        if segment_root.is_symlink() or not segment_root.is_dir():
+            raise ReconcilerError(f"attempt {attempt_id} 没有恢复段 {recovery_revision}")
+        reservation = codex_upgrade._load_attempt_recovery_reservation(
+            campaign_dir, segment_root, candidate_id=candidate_id, attempt_id=attempt_id, recovery_revision=recovery_revision
         )
-        if attempt.get("status") == "awaiting_receipts" and not codex_upgrade._failed_job_ids(attempt.get("results")):
-            raise ReconcilerError("attempt 正等待 seal，不是中断；reconcile-attempt 只处理失败或中断的 attempt")
-    stage_result = codex_upgrade._stage_path(campaign_dir, "capture-official" if phase == "official" else "capture-candidate", candidate_id)[1]
-    if stage_result.exists():
-        raise ReconcilerError("该阶段已封存，attempt 不再属于可对账的中断")
-    records, latest_checkpoints, chain = _checkpoint_facts(attempt_root)
-    jobs = _classify_jobs(campaign_dir, manifest, reservation, attempt, latest_checkpoints, attempt_root)
+        # P1（授权闭包）：J* 只沿权威链取（段预约三元组 → COMMIT → recovery.json），任一环不等即失败关闭。
+        try:
+            _baseline, _commit, authoritative_recovery = codex_upgrade._authoritative_recovery_execute_jobs(
+                campaign_dir, candidate_id, reservation
+            )
+        except codex_upgrade.ConfigurationError as error:
+            raise ReconcilerError(f"恢复段 {recovery_revision} 的 J* 权威链不成立：{error}") from error
+        recovery_execute_jobs = [str(item) for item in authoritative_recovery["execute_jobs"]]
+        summary_path = segment_root / codex_upgrade.ATTEMPT_RECOVERY_SUMMARY_FILENAME
+        if summary_path.exists() or summary_path.is_symlink():
+            _segment, _reservation, attempt = codex_upgrade._load_attempt_recovery_segment(
+                campaign_dir, candidate_id, attempt_id, recovery_revision
+            )
+            if attempt.get("status") == "awaiting_receipts" and not codex_upgrade._failed_job_ids(attempt.get("results")):
+                raise ReconcilerError("恢复段正等待增量封存，不是中断；reconcile-attempt 只处理失败或中断的恢复段")
+        current_stage = codex_upgrade._stage_path(campaign_dir, "capture-candidate", candidate_id)[1]
+        if current_stage.is_file():
+            sealed_recovery = _read_json(current_stage, "候选阶段结果").get("recovery")
+            if isinstance(sealed_recovery, Mapping) and sealed_recovery.get("recovery_revision") == recovery_revision:
+                raise ReconcilerError("该恢复段已增量封存，不再属于可对账的中断")
+        work_root = segment_root
+    else:
+        reservation = codex_upgrade._load_capture_reservation(
+            campaign_dir, attempt_root, phase=phase, candidate_id=candidate_id, _manifest=manifest
+        )
+        attempt_path = attempt_root / "attempt.json"
+        if attempt_path.exists() or attempt_path.is_symlink():
+            _root, attempt = codex_upgrade._load_capture_attempt(
+                campaign_dir, phase, candidate_id, attempt_id, _verified_campaign_manifest=manifest
+            )
+            if attempt.get("status") == "awaiting_receipts" and not codex_upgrade._failed_job_ids(attempt.get("results")):
+                raise ReconcilerError("attempt 正等待 seal，不是中断；reconcile-attempt 只处理失败或中断的 attempt")
+        stage_result = codex_upgrade._stage_path(campaign_dir, "capture-official" if phase == "official" else "capture-candidate", candidate_id)[1]
+        if stage_result.exists():
+            raise ReconcilerError("该阶段已封存，attempt 不再属于可对账的中断")
+        work_root = attempt_root
+        recovery_execute_jobs = None
+    subject = _recovery_segment_subject(attempt_id, recovery_revision)
+    records, latest_checkpoints, chain = _checkpoint_facts(work_root)
+    jobs = _classify_jobs(campaign_dir, manifest, reservation, attempt, latest_checkpoints, work_root)
     contamination = codex_upgrade._campaign_contamination_records(campaign_dir, _manifest=manifest)
-    environment = _environment_facts(campaign_dir, attempt_root, attempt, contamination)
+    environment = _environment_facts(campaign_dir, work_root, attempt, contamination)
     current = _current_identity()
     identity = _identity_facts(campaign_dir, manifest, current)
     ledger_dir = _campaign_ledger_dir(manifest)
@@ -1115,21 +1665,49 @@ def reconcile_attempt(
         _control_root(campaign_dir, control_root), current, required=not bool(plan.get("fixture_only"))
     )
     campaign_deadline = codex_upgrade._campaign_plan_deadline(campaign_dir)
-    receipt_dir = _reconciliation_dir(campaign_dir, f"attempt-{attempt_id}")
+    receipt_dir = _reconciliation_dir(campaign_dir, f"attempt-{subject.replace(':', '-')}")
 
-    # 步骤 2 的请求部分先核算（它也是根因 accounting-unresolved 的依据）。
+    # 历史 attempt 的失败数组必须在任何收据落盘前完成只读重放。否则损坏的
+    # run-summary 会让命令失败，却先遗留一个看似可信的 provenance 副本。
+    failure_observations, recorded_root_causes, array_contract = (
+        _attempt_recorded_failures(attempt)
+    )
+
+    # 步骤 2 的请求部分随后核算（它也是根因 accounting-unresolved 的依据）。
     request_part, provenance_binding, provenance_copy_path = _request_part(
         campaign_dir, manifest, receipt_dir, plan=plan, head=head, project_root=project_root, now=observed
     )
-    cause = _attempt_root_cause(
+    fallback_cause = _attempt_root_cause(
         phase=phase,
         attempt=attempt,
         environment_status=environment["status"],
         identity_unchanged=bool(identity["unchanged"]),
-        ledger_status=str(ledger["status"]),
+        deadline_expired=_attempt_deadline_expired(
+            attempt=attempt,
+            ledger=ledger,
+            plan=plan,
+            campaign_deadline_at_utc=campaign_deadline,
+            now=observed,
+        ),
         request_status=request_part["status"],
         jobs=jobs,
     )
+    # 结构化 Job／门禁观测优先于普通 interrupted，也不能被历史 stopped 倒推成
+    # deadline。旧 Campaign 已经 stopped 时，当前部署造成的身份漂移只决定不能恢复，
+    # 不能追溯改写 attempt 当时已经结构化记录的失败根因。
+    recorded_cause_preferred = fallback_cause["stable_error_code"] == "attempt.interrupted" or (
+        ledger.get("status") == "stopped"
+        and fallback_cause["stable_error_code"] == "attempt.identity-changed"
+    )
+    if (
+        recorded_root_causes
+        and recorded_cause_preferred
+    ):
+        cause = dict(recorded_root_causes[0])
+        root_causes = _merge_root_causes(cause, recorded_root_causes)
+    else:
+        cause = fallback_cause
+        root_causes = _merge_root_causes(cause, recorded_root_causes)
 
     # 步骤 1：Campaign 侧写 reconciliation 收据（写一次），再登记账本 attempt_failed。
     receipt = {
@@ -1139,12 +1717,21 @@ def reconcile_attempt(
         "phase": phase,
         "candidate_id": candidate_id,
         "attempt_id": attempt_id,
+        "recovery_revision": recovery_revision,
         "attempt_receipt_exists": attempt is not None,
         "attempt_status": attempt.get("status") if attempt is not None else None,
-        "attempt_digest": attempt.get("attempt_digest") if attempt is not None else None,
+        "attempt_digest": (
+            attempt.get("attempt_recovery_digest" if recovery_revision is not None else "attempt_digest")
+            if attempt is not None
+            else None
+        ),
         "reservation": {
-            "path": (attempt_root / "reservation.json").relative_to(campaign_dir).as_posix(),
-            "sha256": _file_sha256(attempt_root / "reservation.json"),
+            "path": (
+                work_root / (codex_upgrade.ATTEMPT_RECOVERY_RESERVATION_FILENAME if recovery_revision is not None else "reservation.json")
+            ).relative_to(campaign_dir).as_posix(),
+            "sha256": _file_sha256(
+                work_root / (codex_upgrade.ATTEMPT_RECOVERY_RESERVATION_FILENAME if recovery_revision is not None else "reservation.json")
+            ),
             "run_nonce": reservation["run_nonce"],
             "started_at_utc": reservation["started_at_utc"],
         },
@@ -1169,6 +1756,9 @@ def reconcile_attempt(
         "scanned_bytes": 0,
         "observed_at_utc": observed,
     }
+    if array_contract:
+        receipt["failure_observations"] = failure_observations
+        receipt["root_causes"] = root_causes
     receipt_path = receipt_dir / ATTEMPT_RECEIPT_NAME
     with codex_upgrade._campaign_lock(campaign_dir):
         stored = _write_or_verify(
@@ -1187,13 +1777,39 @@ def reconcile_attempt(
         )
         # 中断后重放：根因与请求状态以首次落盘的收据为准，后续步骤按同一根因幂等推进。
         cause = dict(stored["root_cause"])
+        if array_contract:
+            failure_observations = [
+                dict(item) for item in stored["failure_observations"]
+            ]
+            root_causes = [dict(item) for item in stored["root_causes"]]
         receipt_binding = _binding(campaign_dir, receipt_path, "reconciliation")
         ledger_events: list[dict[str, Any]] = []
         ledger_note = "recorded"
         active_ids = {item["attempt_id"] for item in ledger["active_attempts"]}
-        if ledger["status"] == "active" and ledger.get("active_phase") is None:
+        if recovery_revision is not None:
+            # 恢复段失败／中断：原 attempt 事件不动，只把 active 的恢复段登记为 failed（带根因，计入同根因）。
+            segment_state = timing_ledger.inspect_ledger(ledger_dir, now=observed).get("attempt_recoveries", {}).get(
+                f"{attempt_id}:{recovery_revision}", {}
+            )
+            if segment_state.get("status") == "active" and ledger["status"] in {"active", "recovery_required"}:
+                ledger_events.append(
+                    _append_ledger_event(
+                        ledger_dir,
+                        event_id=f"reconcile-attempt-recovery-failed-{attempt_id}-{recovery_revision}",
+                        phase="VC-5",
+                        event_type="attempt_recovery_failed",
+                        attempt_id=attempt_id,
+                        root_cause_id=cause["root_cause_id"],
+                        next_action="reconcile-attempt --recovery-revision",
+                        recovery_revision=recovery_revision,
+                        candidate_id=candidate_id,
+                    )
+                )
+            else:
+                ledger_note = f"skipped:recovery_segment_{segment_state.get('status') or 'unknown'}"
+        elif ledger["status"] == "active" and ledger.get("active_phase") is None:
             ledger_note = "skipped:ledger_active_without_phase"
-        elif ledger["status"] == "active":
+        elif ledger["status"] in {"active", "recovery_required"}:
             if attempt_id not in active_ids:
                 ledger_events.append(
                     _append_ledger_event(
@@ -1230,32 +1846,43 @@ def reconcile_attempt(
             )
         else:
             ledger_note = f"skipped:ledger_{ledger['status']}_without_active_attempt"
+        failed_event_id = (
+            f"reconcile-attempt-recovery-failed-{attempt_id}-{recovery_revision}"
+            if recovery_revision is not None
+            else f"reconcile-attempt-failed-{attempt_id}"
+        )
         failed_sha = next(
-            (item["event_sha256"] for item in ledger_events if item["event_id"] == f"reconcile-attempt-failed-{attempt_id}"),
-            _ledger_event_sha256(ledger_dir, f"reconcile-attempt-failed-{attempt_id}"),
+            (item["event_sha256"] for item in ledger_events if item["event_id"] == failed_event_id),
+            _ledger_event_sha256(ledger_dir, failed_event_id),
         )
 
         # 步骤 2：一个 batch 一个事件 reconciliation_committed。
+        reconciliation_payload: dict[str, Any] = {
+            "campaign_id": str(manifest["campaign_id"]),
+            "subject_kind": "attempt" if recovery_revision is None else "attempt_recovery",
+            "subject_id": subject,
+            "phase": phase,
+            "request": request_part,
+            "root_cause": {
+                "root_cause_id": cause["root_cause_id"],
+                "stable_error_code": cause["stable_error_code"],
+                "failed_step": cause["failed_step"],
+                "stable_dimensions": cause["stable_dimensions"],
+                "component": cause["component"],
+            },
+            "reconciliation_receipt_sha256": receipt_binding["sha256"],
+            "attempt_failed_event_sha256": failed_sha,
+        }
+        if array_contract:
+            reconciliation_payload["failure_observations"] = failure_observations
+            reconciliation_payload["root_causes"] = root_causes
+        if recovery_revision is not None:
+            reconciliation_payload["recovery_revision"] = recovery_revision
         batch = _commit_batch(
             campaign_dir,
-            operation_id=f"reconcile-attempt:{attempt_id}",
+            operation_id=f"reconcile-attempt:{subject}",
             event_type="reconciliation_committed",
-            payload={
-                "campaign_id": str(manifest["campaign_id"]),
-                "subject_kind": "attempt",
-                "subject_id": attempt_id,
-                "phase": phase,
-                "request": request_part,
-                "root_cause": {
-                    "root_cause_id": cause["root_cause_id"],
-                    "stable_error_code": cause["stable_error_code"],
-                    "failed_step": cause["failed_step"],
-                    "stable_dimensions": cause["stable_dimensions"],
-                    "component": cause["component"],
-                },
-                "reconciliation_receipt_sha256": receipt_binding["sha256"],
-                "attempt_failed_event_sha256": failed_sha,
-            },
+            payload=reconciliation_payload,
             source={"kind": "attempt_reconciliation", "sha256": receipt_binding["sha256"]},
             receipt_bindings=[receipt_binding, provenance_binding],
         )
@@ -1270,6 +1897,7 @@ def reconcile_attempt(
         environment_status=environment["status"],
         campaign_deadline_at_utc=campaign_deadline,
         root_cause_id=cause["root_cause_id"],
+        root_cause_ids=[item["root_cause_id"] for item in root_causes],
         request_status=request_part["status"],
         now=observed,
     )
@@ -1278,6 +1906,7 @@ def reconcile_attempt(
         "status": decision["decision"],
         "campaign_id": str(manifest["campaign_id"]),
         "attempt_id": attempt_id,
+        "recovery_revision": recovery_revision,
         "phase": phase,
         "reconciliation_receipt": receipt_binding,
         "provenance_receipt": provenance_binding,
@@ -1295,11 +1924,15 @@ def reconcile_attempt(
             "blocked": head_after.get("blocked"),
             "remaining_live_requests": head_after.get("remaining_live_requests"),
             "root_cause_count": decision["root_cause_count"],
+            "root_cause_counts": decision["root_cause_counts"],
         },
         "decision": decision,
         "live_request_count": 0,
         "scanned_bytes": 0,
     }
+    if array_contract:
+        result["failure_observations"] = failure_observations
+        result["root_causes"] = root_causes
     # 步骤 6。
     if decision["decision"] == DECISION_RECOVERABLE:
         provenance_copy = _read_json(campaign_dir / provenance_binding["path"], "provenance 副本")
@@ -1308,6 +1941,7 @@ def reconcile_attempt(
             receipt_dir,
             manifest=manifest,
             attempt_id=attempt_id,
+            recovery_revision=recovery_revision,
             phase=phase,
             candidate_id=candidate_id,
             attempt_exists=attempt is not None,
@@ -1316,19 +1950,28 @@ def reconcile_attempt(
             provenance_copy=provenance_copy,
             current=current,
             reconciliation_receipt_sha256=receipt_binding["sha256"],
+            campaign_ledger_head=_ledger_facts(ledger_dir, now=_utc_now()),
+            project_ledger_head=head_after,
             now=observed,
+            recovery_execute_jobs=recovery_execute_jobs,
         )
         result["recovery_preview"] = preview
         result["recovery_preview_path"] = str(receipt_dir / f"recovery-preview-{int(preview['index']):02d}.json")
+        if recovery_revision is not None:
+            # 改造 5 M2：中断／失败的恢复段不同段续跑，批准后以后继段 ar<k+1> 全量补跑同一基线冻结的 J*。
+            number = int(recovery_revision[2:])
+            resume_command = f"capture-candidate run --attempt-recovery ar{number + 1} --rerun-failed"
+        else:
+            resume_command = "resume --rerun-failed"
         result["next_command"] = (
             f"reconcile-attempt --approve-recovery-sha256 {preview['review_sha256']} 后 "
-            "resume --rerun-failed --recovery-preview <preview path>"
+            f"{resume_command} --recovery-preview <preview path>"
         )
         if approve_recovery_sha256 is not None:
             result["recovery_approval"] = approve_recovery_preview(
-                campaign_dir, attempt_id, approve_sha256=approve_recovery_sha256
+                campaign_dir, attempt_id, approve_sha256=approve_recovery_sha256, recovery_revision=recovery_revision
             )
-            result["next_command"] = f"resume --rerun-failed --recovery-preview {result['recovery_preview_path']}"
+            result["next_command"] = f"{resume_command} --recovery-preview {result['recovery_preview_path']}"
     else:
         if approve_recovery_sha256 is not None:
             raise ReconcilerError("判定为永久停线，不接受恢复批准")
@@ -1376,8 +2019,12 @@ def _run_facts(run_dir: Path, campaign_dir: Path, manifest: Mapping[str, Any]) -
     if isinstance(inner, Mapping) and inner.get("campaign_id") not in {None, manifest.get("campaign_id")}:
         raise ReconcilerError("campaign-run 清单的 campaign_id 与 Campaign 不一致")
     owner_alive = supervisor._owner_alive(int(state["owner_pid"]))
-    if state.get("state") == "running" and owner_alive:
-        raise ReconcilerError("父监督器仍在运行，禁止对账")
+    if state.get("state") in supervisor.ACTIVE_STATES and owner_alive:
+        raise ReconcilerError("父监督器仍在运行（或 prepared 且 owner 在线），禁止对账")
+    if state.get("state") in supervisor.ACTIVE_STATES:
+        raise ReconcilerError(
+            "父 run 尚未终态化；prepared／committed 未启动的孤儿须先由 finalize_prepared_run 封存"
+        )
     started = float(state["started_at_epoch"])
     started_utc = datetime.fromtimestamp(started, tz=timezone.utc)
     reservations_in_window: list[str] = []
@@ -1392,9 +2039,37 @@ def _run_facts(run_dir: Path, campaign_dir: Path, manifest: Mapping[str, Any]) -
             continue
         if begun >= started_utc:
             reservations_in_window.append(attempt_root.name)
+    # 改造 5 M2：父 run 期间发布的恢复段预约同样分流到 reconcile-attempt --recovery-revision，但只针对
+    # 未成功收口的段；已 awaiting_receipts 的段不是中断（父 run 在动作退出后崩溃属崩溃矩阵 R2 的
+    # attempt-recovery 变体：父 run 对账后环境恢复重派，段 run 幂等返回）。
+    for _phase, _candidate, attempt_root in codex_upgrade._campaign_attempt_roots(campaign_dir):
+        recovery_root = attempt_root / codex_upgrade.ATTEMPT_RECOVERY_DIRNAME
+        if recovery_root.is_symlink() or not recovery_root.is_dir():
+            continue
+        for segment_root in sorted(recovery_root.iterdir()):
+            if segment_root.is_symlink() or not segment_root.is_dir():
+                continue
+            if not vc_artifacts.RECOVERY_REVISION_RE.fullmatch(segment_root.name):
+                continue
+            reservation_path = segment_root / codex_upgrade.ATTEMPT_RECOVERY_RESERVATION_FILENAME
+            if not reservation_path.is_file():
+                continue
+            payload = _read_json(reservation_path, "恢复段预约收据")
+            try:
+                begun = _timestamp(payload.get("started_at_utc"), "recovery-reservation.started_at_utc")
+            except ReconcilerError:
+                continue
+            if begun < started_utc:
+                continue
+            summary_path = segment_root / codex_upgrade.ATTEMPT_RECOVERY_SUMMARY_FILENAME
+            if summary_path.is_file():
+                summary = _read_json(summary_path, "恢复段 run-summary")
+                if summary.get("status") == "awaiting_receipts" and not codex_upgrade._failed_job_ids(summary.get("results")):
+                    continue
+            reservations_in_window.append(f"{attempt_root.name}:{segment_root.name}")
     if reservations_in_window:
         raise ReconcilerError(
-            "该 run 期间已产生 reservation，属于 attempt 中断；请改用 reconcile-attempt："
+            "该 run 期间已产生 reservation，属于 attempt 中断；请改用 reconcile-attempt（恢复段加 --recovery-revision）："
             + "、".join(reservations_in_window)
         )
     events = audit.get("integrity_errors", [])
@@ -1409,10 +2084,98 @@ def _run_facts(run_dir: Path, campaign_dir: Path, manifest: Mapping[str, Any]) -
                     last_operation = last["operation"]
             except json.JSONDecodeError:
                 pass
+    action_diagnostic: dict[str, Any] | None = None
+    diagnostic_root = run_dir / "action-diagnostics"
+    if diagnostic_root.exists():
+        if diagnostic_root.is_symlink() or not diagnostic_root.is_dir():
+            raise ReconcilerError("动作失败诊断目录不可信")
+        diagnostic_paths = sorted(diagnostic_root.glob("action-*-failure.json"))
+        if len(diagnostic_paths) > 1:
+            raise ReconcilerError("父 run 含多份动作失败诊断，无法确定唯一失败分类")
+        if diagnostic_paths:
+            diagnostic_path = diagnostic_paths[0]
+            action_id = diagnostic_path.name.removeprefix("action-").removesuffix(
+                "-failure.json"
+            )
+            try:
+                diagnostic = supervisor._validate_action_diagnostic(
+                    diagnostic_path,
+                    run_dir=run_dir,
+                    campaign_id=str(manifest["campaign_id"]),
+                    phase=str(state["phase"]),
+                    action_id=action_id,
+                    owner_pid=int(state["owner_pid"]),
+                    owner_nonce=str(state["owner_nonce"]),
+                )
+            except supervisor.SupervisorError as error:
+                raise ReconcilerError(f"动作失败诊断无法重放：{error}") from error
+            # 子进程默认的 execution-failure 可能已被父监督器按文件事实升级为
+            # post-run-tooling；有效分类必须经同一函数复算收据后才能采信。
+            try:
+                effective_class, post_run_receipt = supervisor.effective_action_failure_class(
+                    run_dir,
+                    diagnostic,
+                    campaign_dir=campaign_dir,
+                    inner_manifest=inner if isinstance(inner, Mapping) else None,
+                    campaign_id=str(manifest["campaign_id"]),
+                    phase=str(state["phase"]),
+                    action_id=action_id,
+                    owner_pid=int(state["owner_pid"]),
+                    owner_nonce=str(state["owner_nonce"]),
+                    run_started_at_utc=str(state.get("started_at_utc", "")),
+                )
+            except supervisor.SupervisorError as error:
+                raise ReconcilerError(f"post-run-tooling 收据无法复算：{error}") from error
+            action_diagnostic = {
+                "schema_version": diagnostic["schema_version"],
+                "path": diagnostic_path.relative_to(run_dir).as_posix(),
+                "sha256": diagnostic["diagnostic_sha256"],
+                "action_id": action_id,
+                # 失败动作的稳定操作名（如 VC-5:accept）：无枚举观测时的根因 failed_step 用它，
+                # 而不是父 run 最后事件（恒为 supervisor-stop）或带批内序号的 action_id。
+                "operation": _failed_action_operation(inner, action_id),
+                "failure_kind": diagnostic["failure_kind"],
+                "failure_class": effective_class,
+                "declared_failure_class": diagnostic["failure_class"],
+                "failure_observations": list(
+                    diagnostic["failure_observations"]
+                ),
+                "error_type": diagnostic["error_type"],
+            }
+            if post_run_receipt is not None:
+                action_diagnostic["post_run_tooling"] = {
+                    "schema_version": post_run_receipt["schema_version"],
+                    "path": Path(post_run_receipt["path"]).relative_to(run_dir).as_posix(),
+                    "sha256": post_run_receipt["receipt_sha256"],
+                    "recomputed": bool(post_run_receipt["recomputed"]),
+                    "attempt_id": post_run_receipt["facts"].get("attempt_id"),
+                    "candidate_id": post_run_receipt["facts"].get("candidate_id"),
+                }
+    stop_path = run_dir / "stop-receipt.json"
+    stop_reason: str | None = None
+    stop_action_outputs_sha256: str | None = None
+    if stop_path.is_file() and not stop_path.is_symlink():
+        try:
+            stop_receipt = supervisor.read_stop_receipt(run_dir)
+        except supervisor.SupervisorError as error:
+            raise ReconcilerError(f"stop-receipt 无法校验：{error}") from error
+        stop_reason_value = stop_receipt.get("reason")
+        stop_reason = stop_reason_value if isinstance(stop_reason_value, str) else None
+        stop_action_outputs_sha256 = stop_receipt.get("action_outputs_sha256")
+    staging = _staging_run_facts(run_dir, state, stop_reason, action_diagnostic, campaign_dir=campaign_dir)
+    if staging is not None:
+        failure_class = str(staging["failure_class"])
+    elif action_diagnostic is not None:
+        failure_class = str(action_diagnostic["failure_class"])
+    else:
+        failure_class = "legacy-interruption"
     return {
         "run_dir": str(run_dir),
         "run_id": run_dir.name,
         "state": state.get("state"),
+        "stop_reason": stop_reason,
+        "stop_action_outputs_sha256": stop_action_outputs_sha256,
+        "staging": staging,
         "owner_pid": state.get("owner_pid"),
         "owner_alive": owner_alive,
         "phase": state.get("phase"),
@@ -1420,6 +2183,9 @@ def _run_facts(run_dir: Path, campaign_dir: Path, manifest: Mapping[str, Any]) -
         "terminal_at_utc": state.get("terminal_at_utc"),
         "manifest_sha256": run_manifest.get("manifest_sha256") if isinstance(run_manifest, Mapping) else None,
         "manifest_schema_version": run_manifest.get("schema_version") if isinstance(run_manifest, Mapping) else None,
+        "batch_id": inner.get("batch_id") if isinstance(inner, Mapping) else None,
+        "batch_sequence": inner.get("batch_sequence") if isinstance(inner, Mapping) else None,
+        "batch_sha256": inner.get("batch_sha256") if isinstance(inner, Mapping) else None,
         "no_op": inner.get("no_op") if isinstance(inner, Mapping) else None,
         "execute_items": list(inner.get("execute_items", [])) if isinstance(inner, Mapping) else [],
         "reuse_items": list(inner.get("reuse_items", [])) if isinstance(inner, Mapping) else [],
@@ -1429,6 +2195,399 @@ def _run_facts(run_dir: Path, campaign_dir: Path, manifest: Mapping[str, Any]) -
         "audit_incomplete": audit.get("audit_incomplete"),
         "integrity_errors": list(events),
         "last_operation": last_operation,
+        "action_diagnostic": action_diagnostic,
+        "failure_class": failure_class,
+        "failure_observations": (
+            list(action_diagnostic["failure_observations"])
+            if action_diagnostic is not None
+            else []
+        ),
+    }
+
+
+def _failed_action_operation(inner: Any, action_id: str) -> str | None:
+    """从 campaign-run 内层清单定位失败动作的 ``operation``。
+
+    批次清单里的动作都带 operation；清单没有 actions 数组或找不到该动作（历史合成的单动作 run）时
+    没有动作级操作名，返回 None，根因仍按父 run 最后事件编码。
+    """
+
+    if not isinstance(inner, Mapping):
+        raise ReconcilerError(f"父动作 {action_id} 失败但 run 清单缺失，无法定位动作操作名")
+    actions = inner.get("actions")
+    if not isinstance(actions, list):
+        return None
+    for action in actions:
+        if isinstance(action, Mapping) and action.get("action_id") == action_id:
+            operation = action.get("operation")
+            if not isinstance(operation, str) or not operation:
+                raise ReconcilerError(f"父动作 {action_id} 的 operation 非法")
+            return operation
+    # 清单里没有该动作（历史合成的单动作 run：actions 为空、action_id 为 dispatch）：没有动作级操作名，
+    # 根因退回父 run 最后事件编码；这不是放宽——清单本身缺失仍失败关闭。
+    return None
+
+
+def _staging_run_facts(
+    run_dir: Path,
+    state: Mapping[str, Any],
+    stop_reason: str | None,
+    action_diagnostic: Mapping[str, Any] | None,
+    *,
+    campaign_dir: Path | None = None,
+) -> dict[str, Any] | None:
+    """改造 4：按 state／stop reason 把取得执行权前的失败归入三类；非 staging run 返回 None。
+
+    改造 5 M2 追加第四类（取得执行权之后）：``failed`` + ``parent-finalize-lost`` → 同名分类，根因复用
+    ``supervisor-run.interrupted``（failed_step=parent-finalize），``next_action`` 同批次 N+1 逐字重派——
+    单动作恢复段 run 已成功、绑定的段摘要当前字节一致且为成功终态，重派只会命中段 run 幂等返回（零请求）。
+
+    - ``aborted_prepared`` + ``prepared-abandoned`` → ``parent-prepare-abandoned``，根因
+      ``staging.abandoned``（stage=parent-run）；
+    - ``aborted_prepared`` + ``staging-commit-failed:<step>`` → 同上分类，根因
+      ``staging.commit-failed``（stage=<step>）；
+    - ``failed`` + 有效 ``parent-start-failure.json`` → ``parent-start-failed``，根因
+      ``parent-start.failed``（维度 phase）；
+    - ``audit-incomplete`` + ``commit-integrity-mismatch`` → 同名分类，根因
+      ``commit.integrity-mismatch``，判定固定永久停线。
+    这四类都不读动作诊断；携带动作诊断的 run 不属于本分类。
+    """
+
+    binding = state.get("staging_binding")
+    if not isinstance(binding, Mapping):
+        return None
+    if action_diagnostic is not None:
+        return None
+    run_state = state.get("state")
+    facts: dict[str, Any] = {
+        "staging_binding": dict(binding),
+        "commit_classification": supervisor.classify_prepared_run(run_dir, state),
+    }
+    if run_state == "aborted_prepared":
+        if stop_reason == supervisor.PREPARED_ABANDONED_REASON:
+            stage = "parent-run"
+            code = "staging.abandoned"
+        elif isinstance(stop_reason, str) and stop_reason.startswith(
+            supervisor.STAGING_COMMIT_FAILED_PREFIX
+        ):
+            stage = stop_reason[len(supervisor.STAGING_COMMIT_FAILED_PREFIX) :]
+            if stage not in supervisor.STAGING_COMMIT_STEPS or stage == "commit-activate":
+                raise ReconcilerError(f"aborted_prepared 的 stop reason 步骤非法：{stop_reason!r}")
+            code = "staging.commit-failed"
+        else:
+            raise ReconcilerError(f"aborted_prepared 父 run 的 stop reason 非法：{stop_reason!r}")
+        if facts["commit_classification"] != "no_commit":
+            raise ReconcilerError("aborted_prepared 父 run 不得拥有自己的 COMMIT")
+        facts.update(
+            {
+                "failure_class": PARENT_PREPARE_ABANDONED_CLASS,
+                "root_cause_component": "orchestrator",
+                "root_cause_code": code,
+                "failed_step": stage,
+                "stable_dimensions": {"phase": str(state["phase"]), "stage": stage},
+                "next_action": NEXT_ACTION_SAME_SEQUENCE,
+            }
+        )
+        return facts
+    if run_state == "failed" and stop_reason == supervisor.PARENT_START_FAILED_REASON:
+        try:
+            diagnostic = supervisor.read_parent_start_failure(run_dir, state)
+        except supervisor.SupervisorError as error:
+            raise ReconcilerError(f"父启动失败诊断无法重放：{error}") from error
+        if diagnostic is None:
+            raise ReconcilerError("parent-start-failed 父 run 缺少 parent-start-failure 诊断")
+        if facts["commit_classification"] != "committed":
+            raise ReconcilerError("parent-start-failed 父 run 的 COMMIT 无效或缺失")
+        commit = supervisor._read_vc_commit(Path(str(binding["commit_path"])))
+        if diagnostic["commit_sha256"] != commit["commit_sha256"]:
+            raise ReconcilerError("父启动失败诊断与 COMMIT 不一致")
+        facts.update(
+            {
+                "failure_class": PARENT_START_FAILED_CLASS,
+                "parent_start_failure": {
+                    "schema_version": diagnostic["schema_version"],
+                    "path": supervisor.PARENT_START_FAILURE_FILENAME,
+                    "sha256": diagnostic["diagnostic_sha256"],
+                    "failure_kind": diagnostic["failure_kind"],
+                    "error_type": diagnostic["error_type"],
+                },
+                "commit_sha256": commit["commit_sha256"],
+                "root_cause_component": "supervisor",
+                "root_cause_code": "parent-start.failed",
+                "failed_step": "commit-activate",
+                "stable_dimensions": {"phase": str(state["phase"])},
+                "next_action": NEXT_ACTION_SAME_BATCH,
+            }
+        )
+        return facts
+    if run_state == "failed" and stop_reason == supervisor.PARENT_FINALIZE_LOST_REASON:
+        if facts["commit_classification"] != "committed":
+            raise ReconcilerError("parent-finalize-lost 父 run 的 COMMIT 无效或缺失")
+        orphan = supervisor.attempt_recovery_orphan_facts(run_dir, state, supervisor._run_inner_manifest(run_dir))
+        if not orphan["complete"] or orphan["binding_mismatch"]:
+            raise ReconcilerError(
+                "parent-finalize-lost 父 run 的恢复段判定不成立：" + "、".join(orphan["reasons"])
+            )
+        if campaign_dir is None:
+            raise ReconcilerError("parent-finalize-lost 对账必须绑定 Campaign 目录")
+        try:
+            output = supervisor.verify_attempt_recovery_orphan_output(campaign_dir, orphan)
+        except supervisor.SupervisorError as error:
+            raise ReconcilerError(f"parent-finalize-lost 父 run 绑定的段摘要无法复算：{error}") from error
+        facts.update(
+            {
+                "failure_class": PARENT_FINALIZE_LOST_CLASS,
+                "attempt_recovery": {
+                    "action_id": orphan["action_id"],
+                    "operation": orphan["operation"],
+                    "recovery_revision": orphan["recovery_revision"],
+                    "binding_sha256": orphan["binding_sha256"],
+                    "summary": output,
+                },
+                "root_cause_component": "reconciler",
+                "root_cause_code": "supervisor-run.interrupted",
+                "failed_step": "parent-finalize",
+                "stable_dimensions": {"phase": str(state["phase"])},
+                "next_action": NEXT_ACTION_SAME_BATCH,
+            }
+        )
+        return facts
+    if run_state == "audit-incomplete" and stop_reason == supervisor.COMMIT_INTEGRITY_MISMATCH_REASON:
+        facts.update(
+            {
+                "failure_class": COMMIT_INTEGRITY_MISMATCH_CLASS,
+                "root_cause_component": "supervisor",
+                "root_cause_code": "commit.integrity-mismatch",
+                "failed_step": "commit-verify",
+                "stable_dimensions": {"phase": str(state["phase"])},
+                "next_action": None,
+            }
+        )
+        return facts
+    # 其余 staging run（watchdog／监控异常等）沿用既有中断分类。
+    return None
+
+
+def _supervisor_run_failures(
+    run: Mapping[str, Any],
+) -> tuple[list[dict[str, str]], list[dict[str, Any]]]:
+    """把动作诊断的每个枚举观测映射为独立、跨 Campaign 稳定根因。
+
+    历史 v1/v2 诊断没有枚举观测，仍保守重放为原来的单一
+    ``supervisor-run.interrupted``；新 v3 诊断不得再按错误正文或最后操作猜测。
+    改造 4 的四类父 run 失败没有动作诊断，根因直接由分类事实生成。
+    """
+
+    staging = run.get("staging")
+    if isinstance(staging, Mapping) and staging.get("failure_class") in STAGING_FAILURE_CLASSES:
+        try:
+            cause = root_cause.describe_root_cause(
+                component=str(staging["root_cause_component"]),
+                stable_error_code=str(staging["root_cause_code"]),
+                failed_step=str(staging["failed_step"]),
+                stable_dimensions=dict(staging["stable_dimensions"]),
+            )
+        except root_cause.RootCauseError as error:
+            raise ReconcilerError(f"根因编码失败：{error}") from error
+        return [], [cause]
+    raw_observations = run.get("failure_observations", [])
+    if not isinstance(raw_observations, list):
+        raise ReconcilerError("父动作 failure_observations 不是数组")
+    if not raw_observations:
+        # 动作失败（有诊断、无枚举观测，如子进程非零退出／被杀）的稳定步骤是失败动作的
+        # operation：父 run 最后事件恒为 supervisor-stop，会把 VC-5:assert 与 VC-5:accept 的失败
+        # 编成同一根因，逐字重派后另一动作失败即被误判为同根因第二次而停线（M2-G0 真机暴露）。
+        # 非动作失败（owner-loss／中断）仍按父 run 最后事件编码。
+        diagnostic = run.get("action_diagnostic")
+        operation = diagnostic.get("operation") if isinstance(diagnostic, Mapping) else None
+        step_source = operation if isinstance(operation, str) and operation else run["last_operation"]
+        try:
+            legacy = root_cause.describe_root_cause(
+                component=COMPONENT,
+                stable_error_code="supervisor-run.interrupted",
+                failed_step=str(step_source).replace(":", "-")[:128],
+                stable_dimensions={"phase": str(run["phase"])},
+            )
+        except (KeyError, root_cause.RootCauseError) as error:
+            raise ReconcilerError(f"根因编码失败：{error}") from error
+        return [], [legacy]
+
+    observations: list[dict[str, str]] = []
+    causes: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for index, item in enumerate(raw_observations):
+        if not isinstance(item, Mapping) or set(item) != {
+            "check_id",
+            "failure_code",
+        }:
+            raise ReconcilerError(
+                f"父动作 failure_observations[{index}] 字段不闭合"
+            )
+        check_id = item.get("check_id")
+        failure_code = item.get("failure_code")
+        if (
+            not isinstance(check_id, str)
+            or not check_id
+            or not isinstance(failure_code, str)
+            or not failure_code
+        ):
+            raise ReconcilerError(
+                f"父动作 failure_observations[{index}] 身份非法"
+            )
+        key = (check_id, failure_code)
+        if key in seen:
+            continue
+        seen.add(key)
+        observation = {"check_id": check_id, "failure_code": failure_code}
+        failed_step = "failure-observation-" + _fingerprint(observation)[:20]
+        try:
+            cause = root_cause.describe_root_cause(
+                component="supervisor",
+                stable_error_code="campaign-run.action-failed",
+                failed_step=failed_step,
+                stable_dimensions={"phase": str(run["phase"])},
+            )
+        except root_cause.RootCauseError as error:
+            raise ReconcilerError(f"根因编码失败：{error}") from error
+        observations.append(
+            {**observation, "root_cause_id": str(cause["root_cause_id"])}
+        )
+        causes.append(
+            {
+                **cause,
+                "check_id": check_id,
+                "failure_code": failure_code,
+            }
+        )
+    if not causes:
+        raise ReconcilerError("父动作枚举观测没有生成任何根因")
+    return observations, causes
+
+
+def _finalize_orphaned_prepared_run(run_dir: Path) -> dict[str, Any] | None:
+    """改造 4：prepared（或 committed 未启动）且 owner 已丢失的父 run，先按三分类封存终态。
+
+    monitor 在线时它自己会封存；这里只覆盖 monitor 也已不在的孤儿。owner 仍在线时
+    不动，由 ``_run_facts`` 拒绝对账。已终态的 run 直接返回 ``None``。
+    """
+
+    try:
+        state = supervisor._read_state(run_dir)
+    except supervisor.SupervisorError as error:
+        raise ReconcilerError(f"监督器 run 目录无法读取：{error}") from error
+    if state.get("state") not in supervisor.ACTIVE_STATES:
+        return None
+    if state.get("staging_binding") is None:
+        return None
+    if supervisor._owner_alive(int(state["owner_pid"])):
+        return None
+    if state.get("state") != supervisor.PREPARED_STATE and not supervisor.committed_run_never_started(
+        run_dir, state
+    ):
+        return None
+    monitor_pid = state.get("monitor_pid")
+    if isinstance(monitor_pid, int) and not isinstance(monitor_pid, bool) and supervisor._owner_alive(monitor_pid):
+        raise ReconcilerError("父 run 的 monitor 仍在线，等待其封存终态后再对账")
+    try:
+        return supervisor.finalize_prepared_run(run_dir, operation="reconciler:finalize-prepared")
+    except supervisor.SupervisorError as error:
+        raise ReconcilerError(f"prepared 父 run 终态化失败：{error}") from error
+
+
+def _backfill_orphaned_action_failure(
+    run_dir: Path,
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """改造 5（R2）前置锁段：owner 丢失后由 monitor 封存的 ``failed／action-failed:<id>`` run。
+
+    Campaign 锁内：① 复算 ``evaluation_orphan_facts`` 并要求与 stop-receipt 的
+    ``action_outputs_sha256`` 一致（不一致即失败关闭、不入账）；② 缺失 post-run-tooling 收据时
+    以同一 ``post_run_tooling_facts`` 复算并 write-once 补写；解锁后由既有只读 ``_run_facts``
+    重新生成事实。非 action-failed 终态或 owner 仍在线的 run 直接返回 None。
+    """
+
+    state = supervisor._read_state(run_dir)
+    if state.get("state") != "failed":
+        return None
+    stop_path = run_dir / "stop-receipt.json"
+    if stop_path.is_symlink() or not stop_path.is_file():
+        return None
+    try:
+        stop = supervisor.read_stop_receipt(run_dir)
+    except supervisor.SupervisorError as error:
+        raise ReconcilerError(f"stop-receipt 无法校验：{error}") from error
+    reason = stop.get("reason")
+    if not isinstance(reason, str) or not reason.startswith("action-failed:"):
+        return None
+    if supervisor._owner_alive(int(state["owner_pid"])):
+        return None
+    # 只有 monitor 的 R2 确定性封存才留下 operation=supervisor:owner-check 的 failed 事件；
+    # owner 自己经 stop-request 封存的 run（operation=supervisor:stop）与历史夹具沿用既有对账。
+    try:
+        events = supervisor.load_events(run_dir)
+    except supervisor.SupervisorError as error:
+        raise ReconcilerError(f"父 run 事件账本无法重放：{error}") from error
+    if not any(
+        event.get("event_type") == "failed" and event.get("operation") == "supervisor:owner-check"
+        for event in events
+    ):
+        return None
+    manifest_path = run_dir / "campaign-run-manifest.json"
+    if manifest_path.is_symlink() or not manifest_path.is_file():
+        return None
+    record = _read_json(manifest_path, "campaign-run 清单")
+    inner = record.get("manifest")
+    if not isinstance(inner, Mapping):
+        return None
+    with codex_upgrade._campaign_lock(campaign_dir):
+        try:
+            orphan = supervisor.evaluation_orphan_facts(run_dir, state, inner)
+        except supervisor.SupervisorError as error:
+            raise ReconcilerError(f"owner 丢失 run 的失败身份无法复算：{error}") from error
+        if not orphan["complete"] or orphan["binding_mismatch"]:
+            raise ReconcilerError(
+                "failed／action-failed 终态的父 run 失败身份不完整或动作输出绑定不一致："
+                + "、".join(orphan["reasons"])
+            )
+        if orphan["action_outputs_sha256"] != stop.get("action_outputs_sha256"):
+            raise ReconcilerError(
+                "stop-receipt 的 action_outputs_sha256 与当前动作输出绑定复算结果不一致"
+            )
+        action_id = str(orphan["action_id"])
+        diagnostic_path = run_dir / "action-diagnostics" / f"action-{action_id}-failure.json"
+        try:
+            diagnostic = supervisor._validate_action_diagnostic(
+                diagnostic_path,
+                run_dir=run_dir,
+                campaign_id=str(manifest["campaign_id"]),
+                phase=str(state["phase"]),
+                action_id=action_id,
+                owner_pid=int(state["owner_pid"]),
+                owner_nonce=str(state["owner_nonce"]),
+            )
+            receipt, backfilled = supervisor.ensure_post_run_tooling_receipt(
+                run_dir,
+                diagnostic,
+                campaign_dir=campaign_dir,
+                inner_manifest=inner,
+                campaign_id=str(manifest["campaign_id"]),
+                phase=str(state["phase"]),
+                action_id=action_id,
+                owner_pid=int(state["owner_pid"]),
+                owner_nonce=str(state["owner_nonce"]),
+                run_started_at_utc=str(state.get("started_at_utc", "")),
+                owner_alive=False,
+            )
+        except supervisor.SupervisorError as error:
+            raise ReconcilerError(f"post-run-tooling 收据无法复算或补写：{error}") from error
+    return {
+        "orphan_facts": {
+            "action_id": action_id,
+            "action_outputs_sha256": orphan["action_outputs_sha256"],
+        },
+        "backfilled": backfilled,
+        "post_run_tooling_receipt_sha256": receipt["receipt_sha256"] if receipt is not None else None,
     }
 
 
@@ -1446,11 +2605,27 @@ def reconcile_supervisor_run(
     if not codex_upgrade._requires_complete_vc_artifacts(manifest):
         raise ReconcilerError("reconcile-supervisor-run 只用于 0.154.0 起的完整 VC 链 Campaign")
     observed = now or _utc_now()
-    run = _run_facts(Path(run_dir).resolve(strict=True), campaign_dir, manifest)
+    resolved_run_dir = Path(run_dir).resolve(strict=True)
+    _finalize_orphaned_prepared_run(resolved_run_dir)
+    orphan_backfill = _backfill_orphaned_action_failure(resolved_run_dir, campaign_dir, manifest)
+    run = _run_facts(resolved_run_dir, campaign_dir, manifest)
+    if orphan_backfill is not None:
+        action_diagnostic = run.get("action_diagnostic")
+        if isinstance(action_diagnostic, dict) and isinstance(action_diagnostic.get("post_run_tooling"), dict):
+            action_diagnostic["post_run_tooling"]["backfilled"] = bool(orphan_backfill["backfilled"])
+        run["orphan_facts"] = orphan_backfill["orphan_facts"]
     current = _current_identity()
     identity = _identity_facts(campaign_dir, manifest, current)
     ledger_dir = _campaign_ledger_dir(manifest)
     ledger = _ledger_facts(ledger_dir, now=observed)
+    if (
+        ledger.get("status") == "recovery_required"
+        and run.get("failure_class") not in supervisor.RECOVERABLE_ACTION_FAILURE_CLASSES
+        and run.get("failure_class") not in supervisor.RECOVERABLE_PARENT_FAILURE_CLASSES
+    ):
+        raise ReconcilerError(
+            "Campaign 账本处于 recovery_required，但父动作分类不可恢复"
+        )
     project_root = _project_root(campaign_dir)
     plan, head = _project_facts(project_root)
     deployment = _deployment_receipt(
@@ -1462,20 +2637,14 @@ def reconcile_supervisor_run(
         campaign_dir, manifest, receipt_dir, plan=plan, head=head, project_root=project_root, now=observed
     )
     contamination = codex_upgrade._campaign_contamination_records(campaign_dir, _manifest=manifest)
-    try:
-        cause = root_cause.describe_root_cause(
-            component=COMPONENT,
-            stable_error_code="supervisor-run.interrupted",
-            failed_step=str(run["last_operation"]).replace(":", "-")[:128],
-            stable_dimensions={"phase": str(run["phase"])},
-        )
-    except root_cause.RootCauseError as error:
-        raise ReconcilerError(f"根因编码失败：{error}") from error
+    failure_observations, root_causes = _supervisor_run_failures(run)
+    cause = root_causes[0]
     receipt = {
         "schema_version": SUPERVISOR_RUN_SCHEMA,
         "campaign_id": str(manifest["campaign_id"]),
         "campaign_manifest_sha256": _file_sha256(campaign_dir / "campaign.json"),
         "run": run,
+        "failure_class": run["failure_class"],
         "attempt_events_fabricated": False,
         "tool_identity": identity,
         "deployment_receipt": deployment,
@@ -1496,6 +2665,9 @@ def reconcile_supervisor_run(
         "scanned_bytes": 0,
         "observed_at_utc": observed,
     }
+    if failure_observations:
+        receipt["failure_observations"] = failure_observations
+        receipt["root_causes"] = root_causes
     receipt_path = receipt_dir / SUPERVISOR_RUN_RECEIPT_NAME
     with codex_upgrade._campaign_lock(campaign_dir):
         stored = _write_or_verify(
@@ -1515,27 +2687,36 @@ def reconcile_supervisor_run(
             ),
         )
         cause = dict(stored["root_cause"])
+        if failure_observations:
+            failure_observations = [
+                dict(item) for item in stored["failure_observations"]
+            ]
+            root_causes = [dict(item) for item in stored["root_causes"]]
         receipt_binding = _binding(campaign_dir, receipt_path, "reconciliation")
+        reconciliation_payload: dict[str, Any] = {
+            "campaign_id": str(manifest["campaign_id"]),
+            "subject_kind": "supervisor_run",
+            "subject_id": run["run_id"],
+            "phase": run["phase"],
+            "request": request_part,
+            "root_cause": {
+                "root_cause_id": cause["root_cause_id"],
+                "stable_error_code": cause["stable_error_code"],
+                "failed_step": cause["failed_step"],
+                "stable_dimensions": cause["stable_dimensions"],
+                "component": cause["component"],
+            },
+            "reconciliation_receipt_sha256": receipt_binding["sha256"],
+            "attempt_failed_event_sha256": None,
+        }
+        if failure_observations:
+            reconciliation_payload["failure_observations"] = failure_observations
+            reconciliation_payload["root_causes"] = root_causes
         batch = _commit_batch(
             campaign_dir,
             operation_id=f"reconcile-supervisor-run:{run['run_id']}",
             event_type="reconciliation_committed",
-            payload={
-                "campaign_id": str(manifest["campaign_id"]),
-                "subject_kind": "supervisor_run",
-                "subject_id": run["run_id"],
-                "phase": run["phase"],
-                "request": request_part,
-                "root_cause": {
-                    "root_cause_id": cause["root_cause_id"],
-                    "stable_error_code": cause["stable_error_code"],
-                    "failed_step": cause["failed_step"],
-                    "stable_dimensions": cause["stable_dimensions"],
-                    "component": cause["component"],
-                },
-                "reconciliation_receipt_sha256": receipt_binding["sha256"],
-                "attempt_failed_event_sha256": None,
-            },
+            payload=reconciliation_payload,
             source={"kind": "supervisor_run_reconciliation", "sha256": receipt_binding["sha256"]},
             receipt_bindings=[receipt_binding, provenance_binding],
         )
@@ -1549,8 +2730,14 @@ def reconcile_supervisor_run(
         environment_status=environment_status,
         campaign_deadline_at_utc=campaign_deadline,
         root_cause_id=cause["root_cause_id"],
+        root_cause_ids=[item["root_cause_id"] for item in root_causes],
         request_status=request_part["status"],
         now=observed,
+        forced_terminal_reason=(
+            "integrity_mismatch"
+            if run.get("failure_class") in INTEGRITY_MISMATCH_FAILURE_CLASSES
+            else None
+        ),
     )
     result: dict[str, Any] = {
         "schema_version": SUPERVISOR_RUN_SCHEMA,
@@ -1569,13 +2756,23 @@ def reconcile_supervisor_run(
             "blocked": head_after.get("blocked"),
             "remaining_live_requests": head_after.get("remaining_live_requests"),
             "root_cause_count": decision["root_cause_count"],
+            "root_cause_counts": decision["root_cause_counts"],
         },
         "decision": decision,
         "live_request_count": 0,
         "scanned_bytes": 0,
     }
+    if failure_observations:
+        result["failure_observations"] = failure_observations
+        result["root_causes"] = root_causes
     if decision["decision"] == DECISION_RECOVERABLE:
         result["ledger_events"] = []
+        staging = run.get("staging")
+        ledger_next_action = (
+            str(staging["next_action"])
+            if isinstance(staging, Mapping) and staging.get("next_action")
+            else NEXT_ACTION_SAME_BATCH
+        )
         if ledger.get("active_phase") is not None:
             with codex_upgrade._campaign_lock(campaign_dir):
                 event = _append_ledger_event(
@@ -1586,10 +2783,36 @@ def reconcile_supervisor_run(
                     receipts=_ledger_receipt_bindings(
                         ledger_dir, f"run-{run['run_id']}", receipt_path, provenance_copy_path
                     ),
-                    next_action="redispatch-same-batch",
+                    next_action=ledger_next_action,
                 )
             result["ledger_events"] = [event]
-        result["next_command"] = "phase 保持 active：以 compile-and-run-vc-batch 重新派发同一批次"
+        if ledger.get("status") == "candidate_review_required":
+            # 改造 2：候选级动作失败已把阶段关闭并进入只读等待，对账只负责入账；
+            # 下一步由人工裁定：候选源码问题走 invalidate-candidate，否则显式停线。
+            result["next_command"] = (
+                "candidate_review_required：对账已入账；判为候选源码问题则 invalidate-candidate "
+                "preview/apply，否则以 close-campaign-ledger 显式停线"
+            )
+        elif run.get("failure_class") == "post-run-tooling":
+            result["next_command"] = (
+                "phase 保持 active：修复评估／控制工具并受监督部署后，以 compile-and-run-vc-batch "
+                "逐字重派同一 seal 批次；Candidate Job 结果只读保留"
+            )
+        elif run.get("failure_class") == PARENT_PREPARE_ABANDONED_CLASS:
+            result["next_command"] = (
+                "序号未占：以 compile-and-run-vc-batch 同序号重新 prepare 新 staging attempt"
+            )
+        elif run.get("failure_class") == PARENT_START_FAILED_CLASS:
+            result["next_command"] = (
+                "序号已占：以 compile-and-run-vc-batch 按 N+1 逐字重派同一批次内容"
+            )
+        elif run.get("failure_class") == PARENT_FINALIZE_LOST_CLASS:
+            result["next_command"] = (
+                "序号已占：以 compile-and-run-vc-batch 按 N+1 逐字重派同一批次内容"
+                "（恢复段 run 幂等返回，零请求；随后按段 seal 批次继续）"
+            )
+        else:
+            result["next_command"] = "phase 保持 active：以 compile-and-run-vc-batch 重新派发同一批次"
     else:
         with codex_upgrade._campaign_lock(campaign_dir):
             stop = _permanent_stop(
@@ -1604,6 +2827,166 @@ def reconcile_supervisor_run(
                     ledger_dir, f"run-{run['run_id']}", receipt_path, provenance_copy_path
                 ),
                 live_request_count=len(request_part["identity_keys"]),
+                reconciliation_receipt_sha256=receipt_binding["sha256"],
+                ledger_facts=ledger,
+            )
+        pushed_terminal, head_terminal = _push_and_replay(project_root, campaign_dir, now=observed)
+        result["permanent_stop"] = {**stop, "project_push": pushed_terminal, "head_sha256": head_terminal.get("head_sha256")}
+        result["next_command"] = stop["next_action"]
+    return result
+
+
+# ---------------------------------------------------------------------------
+# 改造 4：无父 run 的 staging 中止（P1）对账
+# ---------------------------------------------------------------------------
+
+STAGING_ABORT_RECONCILIATION_SCHEMA = "staging-abort-reconciliation/v1"
+ZERO_REQUEST_PART = {
+    "status": "resolved",
+    "identity_keys": [],
+    "identity_key_count_total": 0,
+    "estimated_delta": 0,
+    "estimated_sources": [],
+    "unresolved_job_ids": [],
+}
+
+
+def staging_abort_operation_id(sequence: int, staging_attempt: int) -> str:
+    """P1 outbox 的 operation_id：同一 attempt 多次入口重放得到同一 batch（``reused``）。"""
+
+    return f"staging-abort:{int(sequence):04d}:{int(staging_attempt)}"
+
+
+def staging_abort_root_cause(phase: str, stage: str) -> dict[str, Any]:
+    """无父 run 的 staging 中止一律归 ``staging.abandoned``（维度 phase、stage）。"""
+
+    try:
+        return root_cause.describe_root_cause(
+            component="orchestrator",
+            stable_error_code="staging.abandoned",
+            failed_step=stage,
+            stable_dimensions={"phase": phase, "stage": stage},
+        )
+    except root_cause.RootCauseError as error:
+        raise ReconcilerError(f"根因编码失败：{error}") from error
+
+
+def reconcile_staging_abort(
+    campaign_dir: Path,
+    abort_path: Path,
+    *,
+    now: str | None = None,
+) -> dict[str, Any]:
+    """对账一个没有父 run 的 staging attempt 中止（P1）：ABORT 即对账收据。
+
+    步骤与 ``reconcile_supervisor_run`` 同序：outbox ``reconciliation_committed``
+    （请求 0／resolved，根因 ``staging.abandoned``）→ 推总账 → 重放 → 判定；命中永久条件
+    走现有停线合同。各步幂等：outbox 按 operation_id ``reused``、推送 ``duplicate``。
+    """
+
+    campaign_dir = Path(campaign_dir).resolve(strict=True)
+    manifest = codex_upgrade._require_formal_campaign(campaign_dir)
+    if not codex_upgrade._requires_complete_vc_artifacts(manifest):
+        raise ReconcilerError("staging 中止对账只用于 0.154.0 起的完整 VC 链 Campaign")
+    observed = now or _utc_now()
+    abort_path = Path(abort_path).resolve(strict=True)
+    try:
+        abort = vc_artifacts.validate_staging_abort(_read_json(abort_path, "staging-abort 收据"))
+    except vc_artifacts.VCArtifactError as error:
+        raise ReconcilerError(f"staging-abort 收据无法校验：{error}") from error
+    if abort["campaign_id"] != manifest["campaign_id"]:
+        raise ReconcilerError("staging-abort 收据的 campaign_id 与 Campaign 不一致")
+    if abort["parent_run_dir"] is not None:
+        raise ReconcilerError("有父 run 的 staging 中止必须走 reconcile-supervisor-run")
+    cause = staging_abort_root_cause(str(abort["phase"]), str(abort["stage"]))
+    if cause["root_cause_id"] != abort["root_cause_id"]:
+        raise ReconcilerError("staging-abort 收据的根因 ID 与其 phase／stage 不一致")
+    subject_id = (
+        f"staging-{int(abort['sequence']):04d}-{str(abort['phase']).lower()}"
+        f"-attempt-{int(abort['staging_attempt'])}"
+    )
+    current = _current_identity()
+    identity = _identity_facts(campaign_dir, manifest, current)
+    ledger_dir = _campaign_ledger_dir(manifest)
+    ledger = _ledger_facts(ledger_dir, now=observed)
+    project_root = _project_root(campaign_dir)
+    plan, head = _project_facts(project_root)
+    campaign_deadline = codex_upgrade._campaign_plan_deadline(campaign_dir)
+    contamination = codex_upgrade._campaign_contamination_records(campaign_dir, _manifest=manifest)
+    receipt_binding = _binding(campaign_dir, abort_path, "reconciliation")
+    payload = {
+        "campaign_id": str(manifest["campaign_id"]),
+        "subject_kind": "staging_attempt",
+        "subject_id": subject_id,
+        "phase": str(abort["phase"]),
+        "request": dict(ZERO_REQUEST_PART),
+        "root_cause": {
+            "root_cause_id": cause["root_cause_id"],
+            "stable_error_code": cause["stable_error_code"],
+            "failed_step": cause["failed_step"],
+            "stable_dimensions": cause["stable_dimensions"],
+            "component": cause["component"],
+        },
+        "reconciliation_receipt_sha256": receipt_binding["sha256"],
+        "attempt_failed_event_sha256": None,
+    }
+    with codex_upgrade._campaign_lock(campaign_dir):
+        batch = _commit_batch(
+            campaign_dir,
+            operation_id=staging_abort_operation_id(int(abort["sequence"]), int(abort["staging_attempt"])),
+            event_type="reconciliation_committed",
+            payload=payload,
+            source={"kind": "staging_abort", "sha256": receipt_binding["sha256"]},
+            receipt_bindings=[receipt_binding],
+        )
+    pushed, head_after = _push_and_replay(project_root, campaign_dir, now=observed)
+    decision = _decide(
+        head=head_after,
+        plan=plan,
+        ledger=ledger,
+        identity=identity,
+        environment_status="contaminated" if contamination else "restored",
+        campaign_deadline_at_utc=campaign_deadline,
+        root_cause_id=cause["root_cause_id"],
+        request_status="resolved",
+        now=observed,
+    )
+    result: dict[str, Any] = {
+        "schema_version": STAGING_ABORT_RECONCILIATION_SCHEMA,
+        "status": decision["decision"],
+        "campaign_id": str(manifest["campaign_id"]),
+        "subject_id": subject_id,
+        "reconciliation_receipt": receipt_binding,
+        "root_cause": cause,
+        "identity_unchanged": identity["unchanged"],
+        "batch": batch,
+        "project_push": pushed,
+        "project_head": {
+            "sequence": head_after.get("sequence"),
+            "head_sha256": head_after.get("head_sha256"),
+            "blocked": head_after.get("blocked"),
+            "remaining_live_requests": head_after.get("remaining_live_requests"),
+            "root_cause_count": decision["root_cause_count"],
+            "root_cause_counts": decision["root_cause_counts"],
+        },
+        "decision": decision,
+        "live_request_count": 0,
+        "scanned_bytes": 0,
+    }
+    if decision["decision"] == DECISION_RECOVERABLE:
+        result["next_command"] = "序号未占：以 compile-and-run-vc-batch 同序号重新 prepare 新 staging attempt"
+    else:
+        with codex_upgrade._campaign_lock(campaign_dir):
+            stop = _permanent_stop(
+                campaign_dir,
+                manifest,
+                ledger_dir,
+                subject_id=subject_id,
+                root_cause_id=cause["root_cause_id"],
+                terminal_reason=str(decision["terminal_reason"]),
+                receipt_bindings=[receipt_binding],
+                ledger_receipts=[],
+                live_request_count=0,
                 reconciliation_receipt_sha256=receipt_binding["sha256"],
                 ledger_facts=ledger,
             )

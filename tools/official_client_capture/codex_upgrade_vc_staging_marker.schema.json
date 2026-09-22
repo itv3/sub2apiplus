@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-vc-staging-prepared-v1.json",
+  "title": "Codex VC 批次 staging PREPARED 标记（write-once；无 COMMIT 即不占正式序号）",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "campaign_id", "sequence", "phase", "attempt",
+    "batch_sha256", "manifest_sha256", "owner_nonce", "prepared_at_utc", "marker_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "codex-upgrade-vc-staging-prepared/v1"},
+    "campaign_id": {"$ref": "#/$defs/safeId"},
+    "sequence": {"type": "integer", "minimum": 1},
+    "phase": {"enum": ["VC-1", "VC-2", "VC-3", "VC-4", "VC-5", "VC-6"]},
+    "attempt": {"type": "integer", "minimum": 1},
+    "batch_sha256": {"$ref": "#/$defs/sha256"},
+    "manifest_sha256": {"$ref": "#/$defs/sha256"},
+    "owner_nonce": {"$ref": "#/$defs/sha256"},
+    "prepared_at_utc": {"type": "string", "format": "date-time"},
+    "marker_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "safeId": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"}
+  }
+}

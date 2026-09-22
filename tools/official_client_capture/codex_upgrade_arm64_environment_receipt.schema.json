@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://sub2apiplus.local/schemas/codex-upgrade-arm64-environment-receipt-v1.json",
-  "title": "Codex 升级 ARM64 网络与磁盘硬门禁收据",
+  "title": "Codex 升级 ARM64 网络与磁盘硬门禁收据（producer v6 只读重放／v7 生成）",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -62,13 +62,17 @@
       "properties": {
         "used_percent": {
           "type": "integer",
-          "maximum": 69
+          "minimum": 0,
+          "maximum": 100
         },
         "available_bytes": {
           "type": "integer",
-          "minimum": 32212254720
+          "minimum": 0
         },
         "passed": {
+          "type": "boolean"
+        },
+        "degraded": {
           "const": true
         }
       }
@@ -97,7 +101,10 @@
           "$ref": "#/$defs/sha256"
         },
         "version": {
-          "const": "6"
+          "enum": [
+            "6",
+            "7"
+          ]
         }
       }
     }
@@ -133,5 +140,167 @@
         }
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "$comment": "producer v6：全部阶段保持硬门禁，只读重放。",
+      "if": {
+        "properties": {
+          "producer": {
+            "properties": {
+              "version": {
+                "const": "6"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "resource_gate": {
+            "properties": {
+              "used_percent": {
+                "maximum": 69
+              },
+              "available_bytes": {
+                "minimum": 32212254720
+              },
+              "passed": {
+                "const": true
+              }
+            },
+            "not": {
+              "required": [
+                "degraded"
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "$comment": "producer v7 准入阶段（p0／*_before）：硬门禁。",
+      "if": {
+        "properties": {
+          "producer": {
+            "properties": {
+              "version": {
+                "const": "7"
+              }
+            }
+          },
+          "phase": {
+            "enum": [
+              "p0",
+              "attempt_before",
+              "kilo_before",
+              "gate_before",
+              "canary_before",
+              "deployment_before"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "resource_gate": {
+            "properties": {
+              "used_percent": {
+                "maximum": 69
+              },
+              "available_bytes": {
+                "minimum": 32212254720
+              },
+              "passed": {
+                "const": true
+              }
+            },
+            "not": {
+              "required": [
+                "degraded"
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "$comment": "producer v7 收尾阶段（*_after）：低于水位记 degraded，收据仍通过。",
+      "if": {
+        "properties": {
+          "producer": {
+            "properties": {
+              "version": {
+                "const": "7"
+              }
+            }
+          },
+          "phase": {
+            "enum": [
+              "attempt_after",
+              "kilo_after",
+              "gate_after",
+              "canary_after",
+              "deployment_after"
+            ]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "resource_gate": {
+            "oneOf": [
+              {
+                "properties": {
+                  "used_percent": {
+                    "maximum": 69
+                  },
+                  "available_bytes": {
+                    "minimum": 32212254720
+                  },
+                  "passed": {
+                    "const": true
+                  }
+                },
+                "not": {
+                  "required": [
+                    "degraded"
+                  ]
+                }
+              },
+              {
+                "required": [
+                  "degraded"
+                ],
+                "properties": {
+                  "passed": {
+                    "const": false
+                  },
+                  "degraded": {
+                    "const": true
+                  }
+                },
+                "anyOf": [
+                  {
+                    "properties": {
+                      "used_percent": {
+                        "minimum": 70
+                      }
+                    }
+                  },
+                  {
+                    "properties": {
+                      "available_bytes": {
+                        "maximum": 32212254719
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    }
+  ]
 }

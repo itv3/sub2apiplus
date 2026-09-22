@@ -1,0 +1,143 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-candidate-invalidation-v1.json",
+  "title": "候选作废记录（candidates/<id>/invalidation.json，write-once：诊断收据 + 旧候选身份快照）",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "campaign_id",
+    "candidate_id",
+    "revision",
+    "diagnosis",
+    "identity_snapshot",
+    "root_cause_id",
+    "recorded_at_utc",
+    "receipt_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "codex-upgrade-candidate-invalidation/v1"
+    },
+    "campaign_id": {
+      "$ref": "#/$defs/safeId"
+    },
+    "candidate_id": {
+      "$ref": "#/$defs/safeId"
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "diagnosis": {
+      "$ref": "codex_upgrade_candidate_invalidation_diagnosis.schema.json"
+    },
+    "identity_snapshot": {
+      "$ref": "#/$defs/identitySnapshot"
+    },
+    "root_cause_id": {
+      "type": "string",
+      "pattern": "^rc1-[0-9a-f]{20}$"
+    },
+    "recorded_at_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "receipt_sha256": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "safeId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "gitCommit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "identitySnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "git_commit",
+        "source_tree_sha256",
+        "image_id",
+        "build_receipt_sha256",
+        "snapshot_sources"
+      ],
+      "properties": {
+        "git_commit": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/gitCommit"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source_tree_sha256": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "image_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "build_receipt_sha256": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "snapshot_sources": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "build_receipt",
+              "attempt_candidate_identity",
+              "candidate_source"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

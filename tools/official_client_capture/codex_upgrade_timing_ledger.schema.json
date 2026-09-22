@@ -51,6 +51,8 @@
         "campaign_purpose",
         "evidence_decision",
         "active_phase",
+        "recovery_phase",
+        "recovery_root_cause_id",
         "head_sequence",
         "head_sha256",
         "total_elapsed_seconds",
@@ -67,10 +69,157 @@
         "status": {
           "enum": [
             "active",
+            "recovery_required",
+            "candidate_review_required",
+            "revision_required",
             "stop_required",
             "stopped",
             "complete"
           ]
+        },
+        "current_revision": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "revision_phase_state": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^[1-9][0-9]*$"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "propertyNames": {
+              "enum": [
+                "VC-4",
+                "VC-5",
+                "VC-6"
+              ]
+            },
+            "additionalProperties": {
+              "enum": [
+                "started",
+                "completed",
+                "abandoned"
+              ]
+            }
+          }
+        },
+        "campaign_completed_phases": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "VC-0",
+              "VC-1",
+              "VC-2",
+              "VC-3"
+            ]
+          }
+        },
+        "current_evaluation_baseline": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "evaluation_baseline",
+                "baseline_commit_sha256",
+                "baseline_kind",
+                "recovery_revision",
+                "candidate_id",
+                "revision"
+              ],
+              "properties": {
+                "evaluation_baseline": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "baseline_commit_sha256": {
+                  "$ref": "#/$defs/sha256"
+                },
+                "baseline_kind": {
+                  "enum": [
+                    "evaluator-only",
+                    "attempt-recovery"
+                  ]
+                },
+                "recovery_revision": {
+                  "oneOf": [
+                    {
+                      "type": "string",
+                      "pattern": "^ar[1-9][0-9]*$"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "candidate_id": {
+                  "$ref": "#/$defs/safeId"
+                },
+                "revision": {
+                  "oneOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "attempt_recoveries": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "attempt_id",
+              "recovery_revision",
+              "status",
+              "root_cause_id"
+            ],
+            "properties": {
+              "attempt_id": {
+                "$ref": "#/$defs/safeId"
+              },
+              "recovery_revision": {
+                "type": "string",
+                "pattern": "^ar[1-9][0-9]*$"
+              },
+              "status": {
+                "enum": [
+                  "active",
+                  "completed",
+                  "failed"
+                ]
+              },
+              "root_cause_id": {
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/safeId"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          }
         },
         "upgrade_id": {
           "$ref": "#/$defs/safeId"
@@ -105,6 +254,34 @@
                 "VC-5",
                 "VC-6"
               ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "recovery_phase": {
+          "oneOf": [
+            {
+              "enum": [
+                "VC-0",
+                "VC-1",
+                "VC-2",
+                "VC-3",
+                "VC-4",
+                "VC-5",
+                "VC-6"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "recovery_root_cause_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/safeId"
             },
             {
               "type": "null"

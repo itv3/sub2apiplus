@@ -141,7 +141,9 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	upstreamPassthroughModel := ""
 	isCompact := isOpenAIResponsesCompactPath(c)
 	if isCompact {
-		compactMappedModel := s.resolveOpenAICompactFallbackModel(account, reqModel)
+		// 与 Forward 一致：首次 compact 只应用账号显式 compact_model_mapping，保留入站
+		// 模型；全局 openai_compact_model 只在上游明确报模型不可用后的一次重试中使用。
+		compactMappedModel := resolveOpenAICompactForwardModel(account, reqModel)
 		if compactMappedModel != "" && compactMappedModel != reqModel {
 			nextBody, setErr := sjson.SetBytes(body, "model", compactMappedModel)
 			if setErr != nil {

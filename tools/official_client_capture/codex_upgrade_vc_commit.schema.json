@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-vc-commit-v1.json",
+  "title": "Codex VC 批次正式 COMMIT（唯一原子提交点，write-once，永不移动）",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "campaign_id", "sequence", "phase", "staging_attempt",
+    "batch_sha256", "manifest_sha256", "parent_run_dir", "owner_nonce",
+    "ledger_event_ids", "committed_at_utc", "commit_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "codex-upgrade-vc-commit/v1"},
+    "campaign_id": {"$ref": "#/$defs/safeId"},
+    "sequence": {"type": "integer", "minimum": 1},
+    "phase": {"enum": ["VC-1", "VC-2", "VC-3", "VC-4", "VC-5", "VC-6"]},
+    "staging_attempt": {"type": "integer", "minimum": 1},
+    "batch_sha256": {"$ref": "#/$defs/sha256"},
+    "manifest_sha256": {"$ref": "#/$defs/sha256"},
+    "parent_run_dir": {"type": "string", "minLength": 1},
+    "owner_nonce": {"$ref": "#/$defs/sha256"},
+    "ledger_event_ids": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "committed_at_utc": {"type": "string", "format": "date-time"},
+    "commit_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "safeId": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"}
+  }
+}

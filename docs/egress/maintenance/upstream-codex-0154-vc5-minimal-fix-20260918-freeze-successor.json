@@ -1,0 +1,356 @@
+{
+  "base_commit": "a2bb33ba96f5311daf74da934533aa3ec2a0b3a4",
+  "changed_path_count": 23,
+  "current_commit": "8a88a90e9707c69549e9c36ab34da16cacdf498f",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 3709,
+  "frozen_path_count": 1399,
+  "identity_sha256": "7a61e78bb728a7abf8c6d8834c2c37553a5f11192ab479830b3fada4cb1a76df",
+  "issued_at_utc": "2026-09-18T10:10:00Z",
+  "mode": "commit",
+  "required_manual_actions": [
+    {
+      "action_kind": "script_constant",
+      "file": "tools/arm64_supervised_deploy.py",
+      "instruction": "用 tools/arm64_supervised_deploy.py 的 tool_digest() 与 file_sha256() 重算 DEFAULT_TOOL_DIGEST、DEFAULT_SUPERVISOR_DIGEST、DEFAULT_ASSERTION_PREPARER_DIGEST 并更新常量；脚本自身随之变化，须在同一收据或后续收据中登记其后继摘要。",
+      "path": "tools/official_client_capture/candidate_test_fact_map_0_154_0.json",
+      "rule_id": "arm64-managed-tool-digests",
+      "verification": [
+        "python3 -m unittest tools.official_client_capture.tests.test_arm64_supervised_deploy"
+      ]
+    },
+    {
+      "action_kind": "script_constant",
+      "file": "tools/arm64_supervised_deploy.py",
+      "instruction": "用 tools/arm64_supervised_deploy.py 的 tool_digest() 与 file_sha256() 重算 DEFAULT_TOOL_DIGEST、DEFAULT_SUPERVISOR_DIGEST、DEFAULT_ASSERTION_PREPARER_DIGEST 并更新常量；脚本自身随之变化，须在同一收据或后续收据中登记其后继摘要。",
+      "path": "tools/official_client_capture/candidate_test_trace.py",
+      "rule_id": "arm64-managed-tool-digests",
+      "verification": [
+        "python3 -m unittest tools.official_client_capture.tests.test_arm64_supervised_deploy"
+      ]
+    },
+    {
+      "action_kind": "script_constant",
+      "file": "tools/arm64_supervised_deploy.py",
+      "instruction": "用 tools/arm64_supervised_deploy.py 的 tool_digest() 与 file_sha256() 重算 DEFAULT_TOOL_DIGEST、DEFAULT_SUPERVISOR_DIGEST、DEFAULT_ASSERTION_PREPARER_DIGEST 并更新常量；脚本自身随之变化，须在同一收据或后续收据中登记其后继摘要。",
+      "path": "tools/official_client_capture/run_candidate_core_capture.sh",
+      "rule_id": "arm64-managed-tool-digests",
+      "verification": [
+        "python3 -m unittest tools.official_client_capture.tests.test_arm64_supervised_deploy"
+      ]
+    },
+    {
+      "action_kind": "script_constant",
+      "file": "tools/arm64_supervised_deploy.py",
+      "instruction": "用 tools/arm64_supervised_deploy.py 的 tool_digest() 与 file_sha256() 重算 DEFAULT_TOOL_DIGEST、DEFAULT_SUPERVISOR_DIGEST、DEFAULT_ASSERTION_PREPARER_DIGEST 并更新常量；脚本自身随之变化，须在同一收据或后续收据中登记其后继摘要。",
+      "path": "tools/official_client_capture/upstream_byte_relay.py",
+      "rule_id": "arm64-managed-tool-digests",
+      "verification": [
+        "python3 -m unittest tools.official_client_capture.tests.test_arm64_supervised_deploy"
+      ]
+    },
+    {
+      "action_kind": "manual_required",
+      "file": "tools/official_client_capture/candidate_test_fact_map_0_151_0.json",
+      "instruction": "工具不得自动登记；这些路径变化会改变 Campaign 工具身份，须老板确认后按官方客户端升级流程处理 fact map 与 trace 的快照。",
+      "path": "backend/internal/service/official_egress_codex_0145_profile.go",
+      "rule_id": "codex-0151-campaign-fact-map",
+      "verification": [
+        "python3 -m unittest tools.official_client_capture.tests.test_candidate_test_trace"
+      ]
+    },
+    {
+      "action_kind": "manual_required",
+      "file": "tools/official_client_capture/candidate_test_fact_map_0_151_0.json",
+      "instruction": "工具不得自动登记；这些路径变化会改变 Campaign 工具身份，须老板确认后按官方客户端升级流程处理 fact map 与 trace 的快照。",
+      "path": "backend/internal/service/official_egress_codex_integration.go",
+      "rule_id": "codex-0151-campaign-fact-map",
+      "verification": [
+        "python3 -m unittest tools.official_client_capture.tests.test_candidate_test_trace"
+      ]
+    },
+    {
+      "action_kind": "manual_required",
+      "file": "tools/official_client_capture/candidate_test_fact_map_0_151_0.json",
+      "instruction": "工具不得自动登记；这些路径变化会改变 Campaign 工具身份，须老板确认后按官方客户端升级流程处理 fact map 与 trace 的快照。",
+      "path": "backend/internal/service/openai_gateway_forward.go",
+      "rule_id": "codex-0151-campaign-fact-map",
+      "verification": [
+        "python3 -m unittest tools.official_client_capture.tests.test_candidate_test_trace"
+      ]
+    }
+  ],
+  "result": "manual_actions_required",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-0154-vc5-minimal-fix-20260918-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/compiler.go",
+      "predecessor_sha256s": [
+        "6f8bbc3cfdfb641d646e4068d4d014a81c7a4d147ac2e07c351ba36ee3447b49"
+      ],
+      "reason": "Codex 0.154 VC-5 最小闭集：Astra 合成清单与 A03 Lite 采集条件（wire producer）、bundled Astra、legacy compact 首次保留入站模型、/wham/usage Luna Reserve 条件；不改变官方客户端画像 Active、Persona、生产配置 path=backend/internal/officialegress/compiler.go",
+      "source_receipts": [
+        "docs/egress/maintenance/ci-repair-source-transition.json",
+        "docs/egress/maintenance/compiler-static-url-closure-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/multi-persona-control-source-transition-v2.json",
+        "docs/egress/maintenance/multi-persona-control-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "4a5bb4e8fc7fe978e7d132c916ecf219a8eb82478ae32b09cd535cd8a9abd8fb"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/identity.go",
+      "predecessor_sha256s": [
+        "4b03a103065f9e9251a0a87c1da5e3762aabc0d221a993a1c5d062526e17ec67"
+      ],
+      "reason": "Codex 0.154 VC-5 最小闭集：Astra 合成清单与 A03 Lite 采集条件（wire producer）、bundled Astra、legacy compact 首次保留入站模型、/wham/usage Luna Reserve 条件；不改变官方客户端画像 Active、Persona、生产配置 path=backend/internal/officialegress/identity.go",
+      "source_receipts": [
+        "docs/egress/maintenance/historical-source-drift-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "6facb95f888b0315be3c29c1f1585648d02bc31bc1a2235b6245b8f9ddc491a6"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/profilecontract/enumcatalog.go",
+      "predecessor_sha256s": [
+        "c15abd4786bc58803179331e44c23ca7f13bda9512991f40462c37c3ca171e49"
+      ],
+      "reason": "Codex 0.154 VC-5 最小闭集：Astra 合成清单与 A03 Lite 采集条件（wire producer）、bundled Astra、legacy compact 首次保留入站模型、/wham/usage Luna Reserve 条件；不改变官方客户端画像 Active、Persona、生产配置 path=backend/internal/officialegress/profilecontract/enumcatalog.go",
+      "source_receipts": [
+        "docs/egress/maintenance/historical-source-drift-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "c9d72d8cb34f89baaa7869cd149c9726c5e5bc7cc820a8be5bf34ae5675feb38"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/official_egress_codex_0145_profile.go",
+      "predecessor_sha256s": [
+        "02ec8fcbb8a567b3c6adb0861bfe4bb7d1803362325d531b1e2b47f3430c8377"
+      ],
+      "reason": "Codex 0.154 VC-5 最小闭集：Astra 合成清单与 A03 Lite 采集条件（wire producer）、bundled Astra、legacy compact 首次保留入站模型、/wham/usage Luna Reserve 条件；不改变官方客户端画像 Active、Persona、生产配置 path=backend/internal/service/official_egress_codex_0145_profile.go",
+      "source_receipts": [
+        "docs/egress/maintenance/historical-source-drift-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "5f14e7a4f4b27f9a5d40e68f4f777deb0e7d34e974093daa55a9a392678d34d7"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/official_egress_codex_integration.go",
+      "predecessor_sha256s": [
+        "ddfcbad5951d1292388fc604a7bb3c8a66b410d3f80044d8d708d45a87a8f8a8"
+      ],
+      "reason": "Codex 0.154 VC-5 最小闭集：Astra 合成清单与 A03 Lite 采集条件（wire producer）、bundled Astra、legacy compact 首次保留入站模型、/wham/usage Luna Reserve 条件；不改变官方客户端画像 Active、Persona、生产配置 path=backend/internal/service/official_egress_codex_integration.go",
+      "source_receipts": [
+        "docs/egress/maintenance/historical-source-drift-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "6f91c4e9ff10d267e856a79ba42084aeda13c34752357f7306f767c96b486bb4"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/official_egress_identity_authority.go",
+      "predecessor_sha256s": [
+        "b52c107746c754184307fd5a0b145576fd45ab9c146b2ffcb3f3a958dfd06748"
+      ],
+      "reason": "Codex 0.154 VC-5 最小闭集：Astra 合成清单与 A03 Lite 采集条件（wire producer）、bundled Astra、legacy compact 首次保留入站模型、/wham/usage Luna Reserve 条件；不改变官方客户端画像 Active、Persona、生产配置 path=backend/internal/service/official_egress_identity_authority.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-request-compression-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/http-cookie-finalization-source-transition.json",
+        "docs/egress/maintenance/runtime-reliability-repair-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "e2fed2fa5cdee297b0dab24e2b4d0375828f5f5529509231c23d16b65cf949aa"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_compact_fallback.go",
+      "predecessor_sha256s": [
+        "2096d1da637c5739ac3d924f927fcae0f1e57eda3bbaee1eb684a18723711c24"
+      ],
+      "reason": "Codex 0.154 VC-5 最小闭集：Astra 合成清单与 A03 Lite 采集条件（wire producer）、bundled Astra、legacy compact 首次保留入站模型、/wham/usage Luna Reserve 条件；不改变官方客户端画像 Active、Persona、生产配置 path=backend/internal/service/openai_compact_fallback.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "66b76258c8e4b1e39ea49fa7a54f9f695f3afac33ffd7316d42f47688f954d09"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_compact_fallback_test.go",
+      "predecessor_sha256s": [
+        "92339ec0149323ce35d455cec3014fc1f10b518bb2dc12f47efce874100fdaf8"
+      ],
+      "reason": "Codex 0.154 VC-5 最小闭集：Astra 合成清单与 A03 Lite 采集条件（wire producer）、bundled Astra、legacy compact 首次保留入站模型、/wham/usage Luna Reserve 条件；不改变官方客户端画像 Active、Persona、生产配置 path=backend/internal/service/openai_compact_fallback_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "80eddc56cb4466aac291a8c7597916ad210c138493aa9f375aa78f9662b8d31a"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_forward.go",
+      "predecessor_sha256s": [
+        "8baab9fe6785599eb3a89677bd8d401c2901566adf98fce5f99b994d909a515b"
+      ],
+      "reason": "Codex 0.154 VC-5 最小闭集：Astra 合成清单与 A03 Lite 采集条件（wire producer）、bundled Astra、legacy compact 首次保留入站模型、/wham/usage Luna Reserve 条件；不改变官方客户端画像 Active、Persona、生产配置 path=backend/internal/service/openai_gateway_forward.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/openai-replay-oom-repair-source-transition.json",
+        "docs/egress/maintenance/openai-ws-reconnect-repair-source-transition.json",
+        "docs/egress/maintenance/upstream-capability-pin-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "8c684c60bc4c8240a610c9be283aaf737d67b40b4de16df864e81be953d12fb0"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_passthrough.go",
+      "predecessor_sha256s": [
+        "70bba6fd80cca657488d3635f49e5ba5fc48c48723aa8140d90dfbdef523c23d"
+      ],
+      "reason": "Codex 0.154 VC-5 最小闭集：Astra 合成清单与 A03 Lite 采集条件（wire producer）、bundled Astra、legacy compact 首次保留入站模型、/wham/usage Luna Reserve 条件；不改变官方客户端画像 Active、Persona、生产配置 path=backend/internal/service/openai_gateway_passthrough.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "130749942493b7b4738b4ff6e5036e4b67920f2e500f117ba9d0445792473b0f"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_model_capabilities.go",
+      "predecessor_sha256s": [
+        "37284914f0d76c509cb45123f1d615341d73dd19383a7dc600e32a0252434acb"
+      ],
+      "reason": "Codex 0.154 VC-5 最小闭集：Astra 合成清单与 A03 Lite 采集条件（wire producer）、bundled Astra、legacy compact 首次保留入站模型、/wham/usage Luna Reserve 条件；不改变官方客户端画像 Active、Persona、生产配置 path=backend/internal/service/openai_model_capabilities.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-capability-pin-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "3b4d170660cab31565efdc30a58f7745d850551a52dc4e6aa0402616855d623f"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_oauth_passthrough_test.go",
+      "predecessor_sha256s": [
+        "5eefc8c83c6e0a4197afb092408223438d17648d54b57ac9f2c1de0245604b14"
+      ],
+      "reason": "Codex 0.154 VC-5 最小闭集：Astra 合成清单与 A03 Lite 采集条件（wire producer）、bundled Astra、legacy compact 首次保留入站模型、/wham/usage Luna Reserve 条件；不改变官方客户端画像 Active、Persona、生产配置 path=backend/internal/service/openai_oauth_passthrough_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-flaky-test-repair-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "dc17f57bef1ac92a5e65d00ce20cf06fe7509f936ffa845ea2dc7f8812ffe45a"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_quota_service.go",
+      "predecessor_sha256s": [
+        "e969b409ef50311ec2fe5a7fbfa7045c32ba917311c9e9d8f8e4b5353a112193"
+      ],
+      "reason": "Codex 0.154 VC-5 最小闭集：Astra 合成清单与 A03 Lite 采集条件（wire producer）、bundled Astra、legacy compact 首次保留入站模型、/wham/usage Luna Reserve 条件；不改变官方客户端画像 Active、Persona、生产配置 path=backend/internal/service/openai_quota_service.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "d3294a32c614ad69a372e14125c395324786f04889846fc3417c35835cb89824"
+    },
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/candidate_test_trace.py",
+      "predecessor_sha256s": [
+        "d97d1b6dda066e52dd44bb70dd05792c83de59e0687321def68c32f23606574b"
+      ],
+      "reason": "Codex 0.154 VC-5 最小闭集：Astra 合成清单与 A03 Lite 采集条件（wire producer）、bundled Astra、legacy compact 首次保留入站模型、/wham/usage Luna Reserve 条件；不改变官方客户端画像 Active、Persona、生产配置 path=tools/official_client_capture/candidate_test_trace.py",
+      "source_receipts": [
+        "docs/egress/maintenance/client-vc-stage-navigation-20260912-freeze-successor.json",
+        "docs/egress/maintenance/codex-cli-0151-formal-recovery-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-test-trace-preflight-tool-successor-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-capability-pin-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-emulation-upgrade-20260911-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-a15-startup-identity-20260917-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-framework-closure-20260917-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-vc-final-alignment-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-tool-identity-sync-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "dd052a8d9e056aeec333acea4490623458d376b9b1f54455f6f1fe21c039b697"
+    },
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/tests/test_main_track_models.py",
+      "predecessor_sha256s": [
+        "a19186da3b1868fa068de2760e5d3e3da13f77b2254129664afded86ac377076"
+      ],
+      "reason": "Codex 0.154 VC-5 最小闭集：Astra 合成清单与 A03 Lite 采集条件（wire producer）、bundled Astra、legacy compact 首次保留入站模型、/wham/usage Luna Reserve 条件；不改变官方客户端画像 Active、Persona、生产配置 path=tools/official_client_capture/tests/test_main_track_models.py",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-model-policy-tool-successor-source-transition.json",
+        "docs/egress/maintenance/upstream-codex-0154-emulation-upgrade-20260911-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "9a3d89c1bac799c571f8a875af1cfbdc69fc871e8e59b29cf0d98b50b780f3f1"
+    },
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/upstream_byte_relay.py",
+      "predecessor_sha256s": [
+        "f12ffef88aff255718fa1ecdbeb586aa5f60160fd8e6f7f0a7514ee0706fdd35"
+      ],
+      "reason": "Codex 0.154 VC-5 最小闭集：Astra 合成清单与 A03 Lite 采集条件（wire producer）、bundled Astra、legacy compact 首次保留入站模型、/wham/usage Luna Reserve 条件；不改变官方客户端画像 Active、Persona、生产配置 path=tools/official_client_capture/upstream_byte_relay.py",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-c2pa-capture-tool-successor-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "7b6ca12298a310005fbe2d3b04711c89903bc29d83926bff82bf22abaecfee66"
+    }
+  ],
+  "unregistered_path_count": 7,
+  "unregistered_paths": [
+    "backend/internal/officialegress/compiler_luna_reserve_test.go",
+    "backend/internal/service/openai_model_capabilities_fixture_test.go",
+    "backend/internal/service/openai_quota_luna_reserve_test.go",
+    "backend/internal/service/testdata/official_egress/codex_models_capabilities_0154_additions.json",
+    "tools/official_client_capture/candidate_test_fact_map_0_154_0.json",
+    "tools/official_client_capture/run_candidate_core_capture.sh",
+    "tools/official_client_capture/tests/test_candidate_core_capture.py"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci",
+    "python3 -m unittest tools.official_client_capture.tests.test_arm64_supervised_deploy",
+    "python3 -m unittest tools.official_client_capture.tests.test_candidate_test_trace"
+  ]
+}

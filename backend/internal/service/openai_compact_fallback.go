@@ -52,6 +52,10 @@ func isExplicitOpenAICompactRequest(c *gin.Context, body []byte) bool {
 // resolveOpenAICompactFallbackModel prefers the account's compact-only rule
 // for the client-visible model. The process-wide fallback is used only when
 // that account has no matching compact rule.
+//
+// 该结果只供上游明确报模型不可用后的一次重试（prepareOpenAICompactFallbackRetry）
+// 使用。首次 compact 出站不再调用它：Forward 与 passthrough 都只应用账号显式
+// compact_model_mapping 并保留入站模型，与目标画像版本官方 Codex 的 compact wire 一致。
 func (s *OpenAIGatewayService) resolveOpenAICompactFallbackModel(account *Account, requestedModel string) string {
 	requestedModel = strings.TrimSpace(requestedModel)
 	if account != nil {

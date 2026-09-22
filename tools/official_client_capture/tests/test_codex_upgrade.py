@@ -18,6 +18,7 @@ import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Callable
 from unittest import mock
 
 from tools.official_client_capture import candidate_evidence_guard
@@ -57,6 +58,10 @@ from tools.official_client_capture.tests.control_receipt_fixtures import (
 
 
 class CodexUpgradeTest(unittest.TestCase):
+    # 合成场景的两个 Job id。默认值与历史用例一致；真实评估链夹具（改造 5 M1 审核修正）把它们改为
+    # 正式 0.154 声明覆盖的 Job id，使受管子进程（CLI）的证据标签声明校验无需 mock 即可通过。
+    synthetic_job_ids: dict[str, str] = {"official": "official-test", "candidate": "candidate-test"}
+
     def setUp(self) -> None:
         super().setUp()
         # 公共 Campaign 夹具使用 0.147 离线合成数据；0.151 与其他版本
@@ -72,7 +77,12 @@ class CodexUpgradeTest(unittest.TestCase):
             **kwargs: object,
         ) -> str:
             if target_version in {"0.147.0", "0.154.0"}:
-                return "d" * 64
+                # 合成 Job id 不在正式声明内时回退固定摘要（历史行为）；真实评估链夹具用正式
+                # Job id，真实声明可算出即用真实值（子进程 CLI 无 patch 也能一致）。
+                try:
+                    return original(target_version, target_scenario, **kwargs)
+                except codex_upgrade_job_rehearsal_receipt.JobRehearsalReceiptError:
+                    return "d" * 64
             return original(target_version, target_scenario, **kwargs)
 
         patcher = mock.patch.object(
@@ -323,6 +333,17 @@ class CodexUpgradeTest(unittest.TestCase):
                     event_type="stage_completed",
                 )
                 next_phase = f"VC-{index + 1}"
+                if next_phase == "VC-4":
+                    # 改造 2：候选级阶段开工前账本必须先激活 r1。
+                    codex_upgrade_timing_ledger.append_event(
+                        ledger_root,
+                        event_id="stage-revision-r1",
+                        phase="VC-4",
+                        event_type="stage_revision",
+                        revision=1,
+                        candidate_id="cand-1",
+                        revision_commit_sha256="6" * 64,
+                    )
                 codex_upgrade_timing_ledger.append_event(
                     ledger_root,
                     event_id=f"start-{index + 1}-{next_phase.lower()}",
@@ -526,13 +547,32 @@ class CodexUpgradeTest(unittest.TestCase):
             )
             self.assertEqual(override, managed)
 
+            # 2026-09-18：preflight 与 Formal 冻结的是同一份历史场景时，只读加载
+            # 按历史场景复算合同（返回 None），不再要求等于当前受管原文件；
+            # 受管场景在同版本内新增 Job 后，旧恢复后继 Campaign 仍能对账。
             self._write_json(preflight_path, historical)
+            preflight_manifest["inputs"]["target_discovery_scenarios"] = (
+                self._binding(preflight_path, "inputs/target.json")
+            )
+            self.assertIsNone(
+                codex_upgrade._recovery_rehearsal_target_scenario_override(
+                    formal_dir,
+                    formal_manifest,
+                    preflight_dir,
+                    preflight_manifest,
+                )
+            )
+            # preflight 是与 Formal 冻结场景有实质差异的历史快照：按快照承接时
+            # 同样只允许 source_spec.sha256 级漂移，实质变化仍拒绝。
+            stray = json.loads(json.dumps(managed, ensure_ascii=False))
+            stray["profile_id"] = "stray-preflight-profile"
+            self._write_json(preflight_path, stray)
             preflight_manifest["inputs"]["target_discovery_scenarios"] = (
                 self._binding(preflight_path, "inputs/target.json")
             )
             with self.assertRaisesRegex(
                 codex_upgrade.ConfigurationError,
-                "受管版本化 target 场景原文件",
+                "除 source_spec.sha256 外发生变化",
             ):
                 codex_upgrade._recovery_rehearsal_target_scenario_override(
                     formal_dir,
@@ -562,6 +602,703 @@ class CodexUpgradeTest(unittest.TestCase):
                     preflight_dir,
                     preflight_manifest,
                 )
+
+    def test_official_only_reuse_accepts_candidate_job_additions(self) -> None:
+        """官方证据只读复用只要求 official Job 执行合同一致；候选侧新增 Job 由新 Campaign 承担。"""
+
+        managed_path = (
+            Path(codex_upgrade.__file__).resolve().parent
+            / "codex_upgrade_scenarios_0_154_0.json"
+        )
+        managed = json.loads(managed_path.read_text(encoding="utf-8"))
+        # 历史 Formal（VC-1 官方证据 Campaign）冻结的是没有 candidate-trace-test 的场景。
+        historical = json.loads(json.dumps(managed, ensure_ascii=False))
+        historical["source_spec"]["sha256"] = "0" * 64
+        historical["capture_jobs"] = [
+            job for job in historical["capture_jobs"] if job["id"] != "candidate-trace-test"
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            formal_dir = root / "formal"
+            preflight_dir = root / "preflight"
+            formal_path = formal_dir / "inputs" / "target.json"
+            preflight_path = preflight_dir / "inputs" / "target.json"
+            self._write_json(formal_path, historical)
+            self._write_json(preflight_path, managed)
+            formal_manifest = {
+                "target_version": "0.154.0",
+                "inputs": {
+                    "target_discovery_scenarios": self._binding(formal_path, "inputs/target.json")
+                },
+            }
+            preflight_manifest = {
+                "target_version": "0.154.0",
+                "inputs": {
+                    "target_discovery_scenarios": self._binding(preflight_path, "inputs/target.json")
+                },
+            }
+            with self.assertRaisesRegex(
+                codex_upgrade.ConfigurationError,
+                "除 source_spec.sha256 外发生变化",
+            ):
+                codex_upgrade._recovery_rehearsal_target_scenario_override(
+                    formal_dir, formal_manifest, preflight_dir, preflight_manifest
+                )
+            override = codex_upgrade._recovery_rehearsal_target_scenario_override(
+                formal_dir,
+                formal_manifest,
+                preflight_dir,
+                preflight_manifest,
+                official_only_reuse=True,
+            )
+            self.assertEqual(override, managed)
+            # manifest 自带 official-only predecessor 原因时同样放行（新 Campaign 的只读加载）。
+            formal_manifest["predecessor"] = {"reason": codex_upgrade.OFFICIAL_EVIDENCE_REUSE_REASON}
+            self.assertEqual(
+                codex_upgrade._recovery_rehearsal_target_scenario_override(
+                    formal_dir, formal_manifest, preflight_dir, preflight_manifest
+                ),
+                managed,
+            )
+            # 官方 Job 执行字段变化仍拒绝。
+            drifted = json.loads(json.dumps(historical, ensure_ascii=False))
+            official = next(job for job in drifted["capture_jobs"] if job["phase"] == "official")
+            official["steps"][0]["timeout_seconds"] = 7
+            self._write_json(formal_path, drifted)
+            formal_manifest["inputs"]["target_discovery_scenarios"] = self._binding(
+                formal_path, "inputs/target.json"
+            )
+            with self.assertRaisesRegex(
+                codex_upgrade.ConfigurationError,
+                "除 source_spec.sha256 外发生变化",
+            ):
+                codex_upgrade._recovery_rehearsal_target_scenario_override(
+                    formal_dir,
+                    formal_manifest,
+                    preflight_dir,
+                    preflight_manifest,
+                    official_only_reuse=True,
+                )
+
+    def test_evaluation_epoch_command_targets_candidate_attempt_when_candidate_id_given(self) -> None:
+        """--candidate-id 让 evaluation-epoch 定位 Candidate attempt；缺省仍是 official attempt。"""
+
+        calls: list[tuple[str, str | None, str]] = []
+
+        def fake_load(campaign_dir, phase, candidate_id, attempt_id, **_kwargs):
+            calls.append((phase, candidate_id, attempt_id))
+            return Path("/attempt-root"), {"status": "awaiting_receipts"}
+
+        with mock.patch.object(codex_upgrade, "_require_formal_campaign", return_value={"campaign_id": "c1"}), mock.patch.object(
+            codex_upgrade, "_load_capture_attempt", side_effect=fake_load
+        ), mock.patch.object(codex_upgrade, "_tool_identity", return_value={"evidence_semantics_sha256": "e" * 64}), mock.patch.object(
+            codex_upgrade.codex_upgrade_wire_transition, "append_epoch", return_value=Path("/attempt-root/evaluation-epoch-01.json")
+        ), mock.patch.object(
+            codex_upgrade.codex_upgrade_wire_transition, "load_epochs", return_value=[{"index": 1, "to_evidence_semantics_sha256": "e" * 64}]
+        ):
+            result = codex_upgrade._evaluation_epoch_command(
+                argparse.Namespace(campaign_dir=Path("/c1"), attempt_id="att-1", reason="r", candidate_id="cand-1")
+            )
+            self.assertEqual(result["status"], "epoch_appended")
+            codex_upgrade._evaluation_epoch_command(
+                argparse.Namespace(campaign_dir=Path("/c1"), attempt_id="att-2", reason="r", candidate_id=None)
+            )
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "candidate-id 格式非法"):
+                codex_upgrade._evaluation_epoch_command(
+                    argparse.Namespace(campaign_dir=Path("/c1"), attempt_id="att-3", reason="r", candidate_id="bad/id")
+                )
+        self.assertEqual(calls, [("candidate", "cand-1", "att-1"), ("official", None, "att-2")])
+        parser = codex_upgrade._build_parser()
+        parsed = parser.parse_args(["evaluation-epoch", "--campaign-dir", "/c1", "--attempt-id", "a", "--reason", "r", "--candidate-id", "cand-1"])
+        self.assertEqual(parsed.candidate_id, "cand-1")
+
+    def test_isolated_seal_rehearsal_context_only_on_overlay_for_post_run_commands(self) -> None:
+        """预演标记只在 overlay 副本上、且只对零请求 post-run 命令等同 campaign-run 派发。"""
+
+        campaign_dir = Path("/data/evidence/campaigns/c1")
+        seal = argparse.Namespace(campaign_dir=campaign_dir, capture_action="seal")
+        run = argparse.Namespace(campaign_dir=campaign_dir, capture_action="run")
+        compare = argparse.Namespace(campaign_dir=campaign_dir)
+        with mock.patch.dict(os.environ, {codex_upgrade.SEAL_REHEARSAL_CONTEXT_ENV: "1"}):
+            with mock.patch.object(codex_upgrade, "_mount_source_of", return_value=("overlay", "/data")):
+                self.assertTrue(codex_upgrade._in_isolated_seal_rehearsal(seal, "capture-candidate"))
+                self.assertTrue(codex_upgrade._in_isolated_seal_rehearsal(compare, "compare"))
+                self.assertTrue(codex_upgrade._in_isolated_seal_rehearsal(compare, "accept"))
+                # live 采集与非 post-run 命令不放行
+                self.assertFalse(codex_upgrade._in_isolated_seal_rehearsal(run, "capture-candidate"))
+                self.assertFalse(codex_upgrade._in_isolated_seal_rehearsal(compare, "resume"))
+                self.assertFalse(codex_upgrade._in_isolated_seal_rehearsal(compare, "plan"))
+            # 正式目录（非 overlay）上带标记仍失败关闭
+            with mock.patch.object(codex_upgrade, "_mount_source_of", return_value=("ext4", "/")):
+                self.assertFalse(codex_upgrade._in_isolated_seal_rehearsal(seal, "capture-candidate"))
+            with mock.patch.object(codex_upgrade, "_mount_source_of", return_value=None):
+                self.assertFalse(codex_upgrade._in_isolated_seal_rehearsal(seal, "capture-candidate"))
+        # 无标记时一律不放行
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop(codex_upgrade.SEAL_REHEARSAL_CONTEXT_ENV, None)
+            with mock.patch.object(codex_upgrade, "_mount_source_of", return_value=("overlay", "/data")):
+                self.assertFalse(codex_upgrade._in_isolated_seal_rehearsal(seal, "capture-candidate"))
+
+    def test_official_reuse_target_scenario_transition_follows_candidate_job_update(
+        self,
+    ) -> None:
+        """官方证据复用后继的 target 场景跟随受管场景的候选侧演进，并可从 predecessor-import 复算。"""
+
+        managed_path = (
+            Path(codex_upgrade.__file__).resolve().parent
+            / "codex_upgrade_scenarios_0_154_0.json"
+        )
+        managed = json.loads(managed_path.read_text(encoding="utf-8"))
+        historical = json.loads(json.dumps(managed, ensure_ascii=False))
+        historical["source_spec"]["sha256"] = "0" * 64
+        historical["capture_jobs"] = [
+            job for job in historical["capture_jobs"] if job["id"] != "candidate-trace-test"
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            predecessor_dir = root / "predecessor"
+            staging_dir = root / "staging"
+            preflight_dir = root / "preflight"
+            for campaign_root in (predecessor_dir, staging_dir, preflight_dir):
+                campaign_root.mkdir(mode=0o700)
+            predecessor_path = predecessor_dir / "inputs" / "target.json"
+            staging_path = staging_dir / "inputs" / "target.json"
+            preflight_path = preflight_dir / "inputs" / "target.json"
+            self._write_json(predecessor_path, historical)
+            self._write_json(staging_path, historical)
+            self._write_json(preflight_path, managed)
+            predecessor_manifest = {
+                "campaign_id": "formal-predecessor",
+                "target_version": "0.154.0",
+                "inputs": {
+                    "target_discovery_scenarios": self._binding(
+                        predecessor_path, "inputs/target.json"
+                    )
+                },
+            }
+            successor_manifest = json.loads(json.dumps(predecessor_manifest))
+            successor_manifest["campaign_id"] = "formal-successor"
+            preflight_manifest = {
+                "campaign_id": "preflight-current",
+                "target_version": "0.154.0",
+                "inputs": {
+                    "target_discovery_scenarios": self._binding(
+                        preflight_path, "inputs/target.json"
+                    )
+                },
+            }
+            self._write_json(preflight_dir / "campaign.json", preflight_manifest)
+            arguments = argparse.Namespace(
+                reason=codex_upgrade.OFFICIAL_EVIDENCE_REUSE_REASON,
+                job_rehearsal_root=root / "rehearsal",
+                job_rehearsal_receipt=Path("receipt.json"),
+            )
+            copied_files: dict[str, dict[str, object]] = {}
+            with mock.patch.object(
+                codex_upgrade, "_control_receipt_relative", return_value="receipt.json"
+            ), mock.patch.object(
+                codex_upgrade.codex_upgrade_job_rehearsal_receipt,
+                "replay",
+                return_value={"preflight_campaign": {"path": str(preflight_dir)}},
+            ), mock.patch.object(
+                codex_upgrade,
+                "_recovery_rehearsal_preflight_from_receipt",
+                return_value=(preflight_dir, preflight_manifest),
+            ):
+                # 非官方证据复用原因：不触发。
+                self.assertIsNone(
+                    codex_upgrade._official_reuse_target_scenario_transition(
+                        argparse.Namespace(reason="classification_fact_correction"),
+                        staging_dir,
+                        successor_manifest,
+                        copied_files,
+                    )
+                )
+                transition = codex_upgrade._official_reuse_target_scenario_transition(
+                    arguments,
+                    staging_dir,
+                    successor_manifest,
+                    copied_files,
+                )
+            self.assertIsNotNone(transition)
+            assert transition is not None
+            self.assertEqual(
+                transition["reason"],
+                codex_upgrade.OFFICIAL_REUSE_TARGET_SCENARIO_TRANSITION_REASON,
+            )
+            self.assertEqual(transition["added_job_ids"], ["candidate-trace-test"])
+            self.assertEqual(transition["removed_job_ids"], [])
+            self.assertEqual(transition["changed_job_ids"], [])
+            self.assertEqual(
+                transition["predecessor"],
+                predecessor_manifest["inputs"]["target_discovery_scenarios"],
+            )
+            self.assertEqual(
+                transition["successor"],
+                {"path": "inputs/target.json", "sha256": codex_upgrade.file_sha256(preflight_path)},
+            )
+            self.assertEqual(
+                transition["preflight_campaign"],
+                {
+                    "campaign_id": "preflight-current",
+                    "manifest_sha256": codex_upgrade.file_sha256(preflight_dir / "campaign.json"),
+                },
+            )
+            # staging 场景已被受管快照逐字替换，manifest 与 copied_files 同步。
+            self.assertEqual(
+                codex_upgrade.file_sha256(staging_path),
+                codex_upgrade.file_sha256(preflight_path),
+            )
+            self.assertEqual(
+                successor_manifest["inputs"]["target_discovery_scenarios"],
+                transition["successor"],
+            )
+            self.assertEqual(
+                copied_files["inputs/target.json"]["kind"],
+                "official_reuse_target_scenario",
+            )
+            schema = json.loads(
+                Path(codex_upgrade.__file__)
+                .with_name("codex_upgrade_predecessor_import.schema.json")
+                .read_text(encoding="utf-8")
+            )
+            self.assertIn(
+                "official_reuse_target_scenario",
+                schema["$defs"]["copiedFile"]["properties"]["kind"]["enum"],
+            )
+            self.assertEqual(
+                set(transition),
+                set(schema["$defs"]["officialReuseTargetScenarioTransition"]["required"]),
+            )
+            # predecessor-import 读取侧按 Git 两端文件复算过渡。
+            receipt = {
+                "reason": codex_upgrade.OFFICIAL_EVIDENCE_REUSE_REASON,
+                "official_reuse_target_scenario_transition": transition,
+            }
+            self.assertTrue(
+                codex_upgrade._validate_official_reuse_target_scenario_import(
+                    receipt,
+                    campaign_dir=staging_dir,
+                    manifest=successor_manifest,
+                    predecessor_dir=predecessor_dir,
+                    predecessor_manifest=predecessor_manifest,
+                )
+            )
+            self.assertFalse(
+                codex_upgrade._validate_official_reuse_target_scenario_import(
+                    {"reason": codex_upgrade.OFFICIAL_EVIDENCE_REUSE_REASON},
+                    campaign_dir=staging_dir,
+                    manifest=successor_manifest,
+                    predecessor_dir=predecessor_dir,
+                    predecessor_manifest=predecessor_manifest,
+                )
+            )
+            tampered = json.loads(json.dumps(transition))
+            tampered["added_job_ids"] = []
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "Job 集漂移"):
+                codex_upgrade._validate_official_reuse_target_scenario_import(
+                    {
+                        "reason": codex_upgrade.OFFICIAL_EVIDENCE_REUSE_REASON,
+                        "official_reuse_target_scenario_transition": tampered,
+                    },
+                    campaign_dir=staging_dir,
+                    manifest=successor_manifest,
+                    predecessor_dir=predecessor_dir,
+                    predecessor_manifest=predecessor_manifest,
+                )
+            # 场景相同（无候选侧演进）时不产生过渡。
+            self._write_json(staging_dir / "inputs" / "same.json", managed)
+            same_manifest = {
+                "campaign_id": "formal-same",
+                "target_version": "0.154.0",
+                "inputs": {
+                    "target_discovery_scenarios": self._binding(
+                        staging_dir / "inputs" / "same.json", "inputs/same.json"
+                    )
+                },
+            }
+            with mock.patch.object(
+                codex_upgrade, "_control_receipt_relative", return_value="receipt.json"
+            ), mock.patch.object(
+                codex_upgrade.codex_upgrade_job_rehearsal_receipt, "replay", return_value={}
+            ), mock.patch.object(
+                codex_upgrade,
+                "_recovery_rehearsal_preflight_from_receipt",
+                return_value=(preflight_dir, preflight_manifest),
+            ):
+                self.assertIsNone(
+                    codex_upgrade._official_reuse_target_scenario_transition(
+                        arguments, staging_dir, same_manifest, {}
+                    )
+                )
+
+    def test_v7_failed_job_recovery_allows_only_non_execution_scenario_drift(
+        self,
+    ) -> None:
+        """v7 定向恢复只可承接执行合同完全相同的场景元数据变化。"""
+
+        managed_path = Path(codex_upgrade.__file__).with_name(
+            "codex_upgrade_scenarios_0_154_0.json"
+        )
+        managed = json.loads(managed_path.read_text(encoding="utf-8"))
+        historical = json.loads(json.dumps(managed, ensure_ascii=False))
+        historical["source_spec"]["sha256"] = "0" * 64
+        historical["capture_jobs"][-1]["description"] = "v7 历史说明"
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            formal_dir = root / "formal"
+            preflight_dir = root / "preflight"
+            formal_path = formal_dir / "inputs" / "target.json"
+            preflight_path = preflight_dir / "inputs" / "target.json"
+            self._write_json(formal_path, historical)
+            self._write_json(preflight_path, managed)
+            formal_manifest = {
+                "target_version": "0.154.0",
+                "predecessor": {
+                    "reason": "candidate_failed_job_tool_recovery",
+                    "campaign_id": codex_upgrade.C0154_V7_RECOVERY_SOURCE[
+                        "campaign_id"
+                    ],
+                },
+                "inputs": {
+                    "target_discovery_scenarios": self._binding(
+                        formal_path,
+                        "inputs/target.json",
+                    )
+                },
+            }
+            preflight_manifest = {
+                "target_version": "0.154.0",
+                "inputs": {
+                    "target_discovery_scenarios": self._binding(
+                        preflight_path,
+                        "inputs/target.json",
+                    )
+                },
+            }
+
+            source = codex_upgrade.C0154_V7_RECOVERY_SOURCE
+            with mock.patch.object(
+                codex_upgrade,
+                "_require_c0154_v7_recovery_source_binding",
+                return_value={"campaign_id": source["campaign_id"]},
+            ) as source_guard:
+                self.assertEqual(
+                    codex_upgrade._recovery_rehearsal_target_scenario_override(
+                        formal_dir,
+                        formal_manifest,
+                        preflight_dir,
+                        preflight_manifest,
+                        recovery_candidate_id=source["candidate_id"],
+                        recovery_attempt_id=source["attempt_id"],
+                    ),
+                    managed,
+                )
+                source_guard.assert_called_once_with(
+                    formal_dir,
+                    formal_manifest,
+                    candidate_id=source["candidate_id"],
+                    attempt_id=source["attempt_id"],
+                )
+
+            formal_manifest["predecessor"]["campaign_id"] = "another-campaign"
+            with self.assertRaisesRegex(
+                codex_upgrade.ConfigurationError,
+                "v7 失败 Job 恢复",
+            ):
+                codex_upgrade._recovery_rehearsal_target_scenario_override(
+                    formal_dir,
+                    formal_manifest,
+                    preflight_dir,
+                    preflight_manifest,
+                    recovery_candidate_id=source["candidate_id"],
+                    recovery_attempt_id=source["attempt_id"],
+                )
+
+            formal_manifest["predecessor"]["campaign_id"] = (
+                codex_upgrade.C0154_V7_RECOVERY_SOURCE["campaign_id"]
+            )
+
+            changed_execution = json.loads(
+                json.dumps(historical, ensure_ascii=False)
+            )
+            changed_execution["capture_jobs"][-1]["required"] = not bool(
+                changed_execution["capture_jobs"][-1]["required"]
+            )
+            self._write_json(formal_path, changed_execution)
+            formal_manifest["inputs"]["target_discovery_scenarios"] = self._binding(
+                formal_path,
+                "inputs/target.json",
+            )
+            with (
+                mock.patch.object(
+                    codex_upgrade,
+                    "_require_c0154_v7_recovery_source_binding",
+                    return_value={"campaign_id": source["campaign_id"]},
+                ),
+                self.assertRaisesRegex(
+                    codex_upgrade.ConfigurationError,
+                    "除 source_spec.sha256 外发生变化",
+                ),
+            ):
+                codex_upgrade._recovery_rehearsal_target_scenario_override(
+                    formal_dir,
+                    formal_manifest,
+                    preflight_dir,
+                    preflight_manifest,
+                    recovery_candidate_id=source["candidate_id"],
+                    recovery_attempt_id=source["attempt_id"],
+                )
+
+    def test_a15_post_run_seal_allows_only_non_execution_scenario_drift(
+        self,
+    ) -> None:
+        """A15 seal 后继只可承接执行合同完全相同的场景元数据变化。"""
+
+        managed_path = Path(codex_upgrade.__file__).with_name(
+            "codex_upgrade_scenarios_0_154_0.json"
+        )
+        managed = json.loads(managed_path.read_text(encoding="utf-8"))
+        historical = json.loads(json.dumps(managed, ensure_ascii=False))
+        historical["source_spec"]["sha256"] = "0" * 64
+        historical["capture_jobs"][-1]["description"] = "A15 历史说明"
+        source = codex_upgrade.C0154_A15_POST_RUN_SEAL_SOURCE
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            formal_dir = root / "formal"
+            preflight_dir = root / "preflight"
+            formal_path = formal_dir / "inputs" / "target.json"
+            preflight_path = preflight_dir / "inputs" / "target.json"
+            self._write_json(formal_path, historical)
+            self._write_json(preflight_path, managed)
+            formal_manifest = {
+                "target_version": source["target_version"],
+                "predecessor": {
+                    "campaign_dir": source["campaign_dir"],
+                    "campaign_id": source["campaign_id"],
+                    "campaign_manifest_sha256": source[
+                        "campaign_manifest_sha256"
+                    ],
+                    "reason": codex_upgrade.POST_RUN_SEAL_RECOVERY_REASON,
+                },
+                "inputs": {
+                    "target_discovery_scenarios": self._binding(
+                        formal_path,
+                        "inputs/target.json",
+                    )
+                },
+            }
+            preflight_manifest = {
+                "target_version": source["target_version"],
+                "inputs": {
+                    "target_discovery_scenarios": self._binding(
+                        preflight_path,
+                        "inputs/target.json",
+                    )
+                },
+            }
+
+            with mock.patch.object(
+                codex_upgrade,
+                "_require_c0154_a15_post_run_seal_source_binding",
+                return_value={"source_attempt": {}},
+            ) as source_guard:
+                self.assertEqual(
+                    codex_upgrade._recovery_rehearsal_target_scenario_override(
+                        formal_dir,
+                        formal_manifest,
+                        preflight_dir,
+                        preflight_manifest,
+                        recovery_candidate_id=source["candidate_id"],
+                        recovery_attempt_id=source["attempt_id"],
+                    ),
+                    managed,
+                )
+                source_guard.assert_called_once_with(
+                    formal_dir,
+                    formal_manifest,
+                    candidate_id=source["candidate_id"],
+                    attempt_id=source["attempt_id"],
+                )
+
+            changed_execution = json.loads(
+                json.dumps(historical, ensure_ascii=False)
+            )
+            changed_execution["capture_jobs"][-1]["required"] = not bool(
+                changed_execution["capture_jobs"][-1]["required"]
+            )
+            self._write_json(formal_path, changed_execution)
+            formal_manifest["inputs"]["target_discovery_scenarios"] = self._binding(
+                formal_path,
+                "inputs/target.json",
+            )
+            with (
+                mock.patch.object(
+                    codex_upgrade,
+                    "_require_c0154_a15_post_run_seal_source_binding",
+                    return_value={"source_attempt": {}},
+                ),
+                self.assertRaisesRegex(
+                    codex_upgrade.ConfigurationError,
+                    "除 source_spec.sha256 外发生变化",
+                ),
+            ):
+                codex_upgrade._recovery_rehearsal_target_scenario_override(
+                    formal_dir,
+                    formal_manifest,
+                    preflight_dir,
+                    preflight_manifest,
+                    recovery_candidate_id=source["candidate_id"],
+                    recovery_attempt_id=source["attempt_id"],
+                )
+
+    def test_v7_failed_job_recovery_allows_registered_timing_schema_rebase(
+        self,
+    ) -> None:
+        """登记为零执行控制前提的 timing schema 可重基，普通控制工具仍拒绝。"""
+
+        registered_paths = {
+            "run_candidate_core_capture.sh",
+            "codex_upgrade_candidate_readiness.py",
+            "codex_upgrade_scenarios_0_154_0.json",
+            "codex_upgrade_timing_ledger.schema.json",
+        }
+        components = {
+            codex_upgrade._tool_component_for_path(path)
+            for path in registered_paths
+        }
+        self.assertEqual(
+            components,
+            {"relay", "shared", "scenario", "evaluator"},
+        )
+        self.assertTrue(
+            components.issubset(
+                codex_upgrade._RUNTIME_SUCCESSOR_ALLOWED_REBASE_COMPONENTS
+            )
+        )
+        self.assertNotIn(
+            codex_upgrade._tool_component_for_path(
+                "codex_upgrade_supervisor.py"
+            ),
+            codex_upgrade._RUNTIME_SUCCESSOR_ALLOWED_REBASE_COMPONENTS,
+        )
+
+    def test_v7_failed_job_recovery_requires_exactly_one_source_mode(
+        self,
+    ) -> None:
+        """场景无漂移时也必须在创建来源与发布收据之间严格二选一。"""
+
+        managed_path = Path(codex_upgrade.__file__).with_name(
+            "codex_upgrade_scenarios_0_154_0.json"
+        )
+        managed = json.loads(managed_path.read_text(encoding="utf-8"))
+        source = codex_upgrade.C0154_V7_RECOVERY_SOURCE
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            formal_dir = root / "formal"
+            preflight_dir = root / "preflight"
+            formal_path = formal_dir / "inputs" / "target.json"
+            preflight_path = preflight_dir / "inputs" / "target.json"
+            self._write_json(formal_path, managed)
+            self._write_json(preflight_path, managed)
+            formal_manifest = {
+                "campaign_id": "successor-a",
+                "target_version": source["target_version"],
+                "predecessor": {
+                    "campaign_dir": source["campaign_dir"],
+                    "campaign_id": source["campaign_id"],
+                    "campaign_manifest_sha256": source[
+                        "campaign_manifest_sha256"
+                    ],
+                    "reason": "candidate_failed_job_tool_recovery",
+                },
+                "inputs": {
+                    "target_discovery_scenarios": self._binding(
+                        formal_path,
+                        "inputs/target.json",
+                    )
+                },
+            }
+            preflight_manifest = {
+                "target_version": source["target_version"],
+                "inputs": {
+                    "target_discovery_scenarios": self._binding(
+                        preflight_path,
+                        "inputs/target.json",
+                    )
+                },
+            }
+
+            with mock.patch.object(
+                codex_upgrade,
+                "_require_c0154_v7_recovery_source_binding",
+                return_value={"abandoned_candidate_attempt": {}},
+            ) as creation_source:
+                self.assertIsNone(
+                    codex_upgrade._recovery_rehearsal_target_scenario_override(
+                        formal_dir,
+                        formal_manifest,
+                        preflight_dir,
+                        preflight_manifest,
+                        recovery_candidate_id=source["candidate_id"],
+                        recovery_attempt_id=source["attempt_id"],
+                    )
+                )
+                creation_source.assert_called_once()
+
+            with self.assertRaisesRegex(
+                codex_upgrade.ConfigurationError,
+                "必须同时提供 Candidate 与 attempt",
+            ):
+                codex_upgrade._recovery_rehearsal_target_scenario_override(
+                    formal_dir,
+                    formal_manifest,
+                    preflight_dir,
+                    preflight_manifest,
+                    recovery_candidate_id=source["candidate_id"],
+                )
+
+            with self.assertRaisesRegex(
+                codex_upgrade.ConfigurationError,
+                "必须且只能选择",
+            ):
+                codex_upgrade._recovery_rehearsal_target_scenario_override(
+                    formal_dir,
+                    formal_manifest,
+                    preflight_dir,
+                    preflight_manifest,
+                )
+
+            self._write_json(formal_dir / "predecessor-import.json", {})
+            with self.assertRaisesRegex(
+                codex_upgrade.ConfigurationError,
+                "必须且只能选择",
+            ):
+                codex_upgrade._recovery_rehearsal_target_scenario_override(
+                    formal_dir,
+                    formal_manifest,
+                    preflight_dir,
+                    preflight_manifest,
+                    recovery_candidate_id=source["candidate_id"],
+                    recovery_attempt_id=source["attempt_id"],
+                )
+
+            with mock.patch.object(
+                codex_upgrade,
+                "_published_c0154_v7_recovery_coordinates",
+                return_value=(source["candidate_id"], source["attempt_id"]),
+            ) as runtime_source:
+                self.assertIsNone(
+                    codex_upgrade._recovery_rehearsal_target_scenario_override(
+                        formal_dir,
+                        formal_manifest,
+                        preflight_dir,
+                        preflight_manifest,
+                    )
+                )
+                runtime_source.assert_called_once_with(formal_dir, formal_manifest)
 
     def test_reclassification_explicit_noop_uses_preflight_scenario_without_recovery_transition(
         self,
@@ -651,6 +1388,106 @@ class CodexUpgradeTest(unittest.TestCase):
             manifest,
             preflight_dir,
             preflight_manifest,
+        )
+
+    def test_failed_job_recovery_uses_current_preflight_scenario(self) -> None:
+        """失败 Job 正式恢复必须用当前 preflight 场景复算演练合同。"""
+
+        arguments = argparse.Namespace(
+            reason="candidate_failed_job_tool_recovery",
+            job_rehearsal_root=Path("/control/job-rehearsal"),
+            job_rehearsal_receipt=Path("receipt.json"),
+            predecessor_candidate_id=codex_upgrade.C0154_V7_RECOVERY_SOURCE[
+                "candidate_id"
+            ],
+            predecessor_attempt_id=codex_upgrade.C0154_V7_RECOVERY_SOURCE[
+                "attempt_id"
+            ],
+        )
+        preflight_dir = Path("/control/preflight")
+        preflight_manifest = {"campaign_mode": "preflight_only"}
+        current_scenario = {"codex_version": "0.154.0"}
+        manifest = {"target_version": "0.154.0"}
+        transition = {"reason": "stopped_to_active"}
+        with (
+            mock.patch.object(
+                codex_upgrade,
+                "_assert_recovery_rehearsal_uses_successor_controls",
+                return_value=(preflight_dir, preflight_manifest),
+            ) as controls,
+            mock.patch.object(
+                codex_upgrade,
+                "_recovery_rehearsal_target_scenario_override",
+                return_value=current_scenario,
+            ) as scenario,
+        ):
+            actual = codex_upgrade._successor_rehearsal_target_scenario_override(
+                arguments,
+                Path("/campaign/.successor-staging"),
+                manifest,
+                reclassification_successor=False,
+                recovery_control_transition=transition,
+            )
+
+        self.assertEqual(actual, current_scenario)
+        controls.assert_called_once_with(arguments, manifest)
+        scenario.assert_called_once_with(
+            Path("/campaign/.successor-staging"),
+            manifest,
+            preflight_dir,
+            preflight_manifest,
+            recovery_candidate_id=codex_upgrade.C0154_V7_RECOVERY_SOURCE[
+                "candidate_id"
+            ],
+            recovery_attempt_id=codex_upgrade.C0154_V7_RECOVERY_SOURCE[
+                "attempt_id"
+            ],
+        )
+
+    def test_post_run_seal_recovery_uses_current_preflight_scenario(self) -> None:
+        """A15 seal 正式恢复必须把冻结来源坐标传给场景兼容门禁。"""
+
+        source = codex_upgrade.C0154_A15_POST_RUN_SEAL_SOURCE
+        arguments = argparse.Namespace(
+            reason=codex_upgrade.POST_RUN_SEAL_RECOVERY_REASON,
+            job_rehearsal_root=Path("/control/job-rehearsal"),
+            job_rehearsal_receipt=Path("receipt.json"),
+            predecessor_candidate_id=source["candidate_id"],
+            predecessor_attempt_id=source["attempt_id"],
+        )
+        preflight_dir = Path("/control/preflight")
+        preflight_manifest = {"campaign_mode": "preflight_only"}
+        current_scenario = {"codex_version": "0.154.0"}
+        manifest = {"target_version": "0.154.0"}
+        transition = {"reason": "stopped_to_active"}
+        with (
+            mock.patch.object(
+                codex_upgrade,
+                "_assert_recovery_rehearsal_uses_successor_controls",
+                return_value=(preflight_dir, preflight_manifest),
+            ),
+            mock.patch.object(
+                codex_upgrade,
+                "_recovery_rehearsal_target_scenario_override",
+                return_value=current_scenario,
+            ) as scenario,
+        ):
+            actual = codex_upgrade._successor_rehearsal_target_scenario_override(
+                arguments,
+                Path("/campaign/.successor-staging"),
+                manifest,
+                reclassification_successor=False,
+                recovery_control_transition=transition,
+            )
+
+        self.assertEqual(actual, current_scenario)
+        scenario.assert_called_once_with(
+            Path("/campaign/.successor-staging"),
+            manifest,
+            preflight_dir,
+            preflight_manifest,
+            recovery_candidate_id=source["candidate_id"],
+            recovery_attempt_id=source["attempt_id"],
         )
 
     def test_classification_noop_preflight_does_not_replace_successor_controls(
@@ -1106,6 +1943,257 @@ class CodexUpgradeTest(unittest.TestCase):
                     source_evidence_root=source,
                     source_environment=source_environment,
                 )
+
+    def test_metadata_only_environment_projection_copies_complete_bound_state(
+        self,
+    ) -> None:
+        """新 attempt 投影完整环境，并在新证据根重建恢复收据。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory).resolve()
+            source = base / "source-evidence"
+            target = base / "target-evidence"
+            source.mkdir(mode=0o700)
+            target.mkdir(mode=0o700)
+            source_environment: dict[str, object] = {
+                "evidence_root": str(source),
+            }
+
+            for snapshot_name in ("before", "after"):
+                snapshot_root = source / "environment" / snapshot_name
+                snapshot_root.mkdir(parents=True, mode=0o700)
+                snapshots: list[dict[str, object]] = []
+                for kind, name in codex_upgrade.ENVIRONMENT_STATE_FILES.items():
+                    state_path = snapshot_root / name
+                    self._write_json(
+                        state_path,
+                        {"kind": kind, "snapshot": snapshot_name, "stable": True},
+                    )
+                    snapshots.append(
+                        {
+                            "bytes": state_path.stat().st_size,
+                            "comparison": {"mode": "equal"},
+                            "kind": kind,
+                            "path": name,
+                            "sha256": codex_upgrade.file_sha256(state_path),
+                        }
+                    )
+                probe_path = snapshot_root / "probe-manifest.json"
+                self._write_json(
+                    probe_path,
+                    {
+                        "phase": snapshot_name,
+                        "observed_at_utc": "2026-09-17T00:00:00Z",
+                        "snapshots": snapshots,
+                    },
+                )
+                source_environment[f"{snapshot_name}_probe"] = {
+                    "path": f"environment/{snapshot_name}/probe-manifest.json",
+                    "sha256": codex_upgrade.file_sha256(probe_path),
+                    "bytes": probe_path.stat().st_size,
+                }
+
+                arm64_root = source / "environment" / f"arm64-{snapshot_name}"
+                arm64_root.mkdir(parents=True, mode=0o700)
+                facts_path = arm64_root / "facts.json"
+                receipt_path = arm64_root / "receipt.json"
+                self._write_json(
+                    facts_path,
+                    {"phase": f"attempt_{snapshot_name}", "source": True},
+                )
+                self._write_json(
+                    receipt_path,
+                    {"facts": {"path": "facts.json"}, "source": True},
+                )
+                source_environment[f"arm64_{snapshot_name}_receipt"] = {
+                    "path": f"environment/arm64-{snapshot_name}/receipt.json",
+                    "sha256": codex_upgrade.file_sha256(receipt_path),
+                    "bytes": receipt_path.stat().st_size,
+                }
+
+            def replay_arm64(root: Path, name: str) -> dict[str, object]:
+                self.assertEqual(name, "receipt.json")
+                snapshot_name = root.name.removeprefix("arm64-")
+                return {
+                    "status": "passed",
+                    "phase": f"attempt_{snapshot_name}",
+                    "subject_id": "source-attempt-a",
+                }
+
+            def finalize_restoration(
+                evidence_root: Path,
+                *,
+                phase: str,
+                candidate_id: str | None,
+                **_kwargs: object,
+            ) -> tuple[Path, dict[str, object]]:
+                self.assertEqual(evidence_root, target)
+                self.assertEqual(phase, "candidate")
+                self.assertEqual(candidate_id, "candidate-a")
+                report_path = evidence_root / "receipts" / "restoration-report.json"
+                self._write_json(
+                    report_path,
+                    {"status": "restored", "evidence_root": str(evidence_root)},
+                )
+                return report_path, {"status": "restored"}
+
+            with (
+                mock.patch.object(
+                    codex_upgrade.codex_upgrade_arm64_environment_receipt,
+                    "replay",
+                    side_effect=replay_arm64,
+                ) as replay,
+                mock.patch.object(
+                    codex_upgrade,
+                    "_finalize_attempt_restoration",
+                    side_effect=finalize_restoration,
+                ) as finalize,
+                mock.patch.object(
+                    codex_upgrade,
+                    "_probe_capture_environment",
+                ) as probe,
+                mock.patch.object(
+                    codex_upgrade,
+                    "_capture_arm64_environment_receipt",
+                ) as arm64_probe,
+                mock.patch.object(
+                    codex_upgrade,
+                    "_run_job_with_retry",
+                ) as run_job,
+            ):
+                projected = (
+                    codex_upgrade._materialize_metadata_only_environment_projection(
+                        source,
+                        target,
+                        source_environment,
+                        source_attempt_id="source-attempt-a",
+                        candidate_id="candidate-a",
+                    )
+                )
+
+            self.assertEqual(projected["evidence_root"], str(target))
+            self.assertEqual(replay.call_count, 2)
+            finalize.assert_called_once()
+            probe.assert_not_called()
+            arm64_probe.assert_not_called()
+            run_job.assert_not_called()
+            for snapshot_name in ("before", "after"):
+                for name in sorted(
+                    {
+                        "probe-manifest.json",
+                        *codex_upgrade.ENVIRONMENT_STATE_FILES.values(),
+                    }
+                ):
+                    self.assertEqual(
+                        (
+                            target
+                            / "environment"
+                            / snapshot_name
+                            / name
+                        ).read_bytes(),
+                        (
+                            source
+                            / "environment"
+                            / snapshot_name
+                            / name
+                        ).read_bytes(),
+                    )
+                for name in ("facts.json", "receipt.json"):
+                    self.assertEqual(
+                        (
+                            target
+                            / "environment"
+                            / f"arm64-{snapshot_name}"
+                            / name
+                        ).read_bytes(),
+                        (
+                            source
+                            / "environment"
+                            / f"arm64-{snapshot_name}"
+                            / name
+                        ).read_bytes(),
+                    )
+            self.assertTrue(
+                (target / projected["restoration_report"]["path"]).is_file()
+            )
+            for role in (
+                "before_probe",
+                "after_probe",
+                "restoration_report",
+                "arm64_before_receipt",
+                "arm64_after_receipt",
+            ):
+                self.assertGreater(projected[role]["bytes"], 0)
+                self.assertRegex(projected[role]["sha256"], r"^[0-9a-f]{64}$")
+
+    def test_first_candidate_seal_creates_fresh_client_after_checkpoint(self) -> None:
+        """新 metadata-only attempt 首次 seal 必须真实采集 client-after。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            evidence_root = Path(directory).resolve() / "evidence"
+            evidence_root.mkdir(mode=0o700)
+            observed_at = "2026-09-17T00:10:00Z"
+
+            def probe_environment(
+                _manifest: dict[str, object],
+                output_dir: Path,
+                phase: str,
+            ) -> dict[str, object]:
+                self.assertEqual(output_dir, evidence_root / "environment" / "client-after")
+                self.assertEqual(phase, "after")
+                self._write_json(
+                    output_dir / "probe-manifest.json",
+                    {"phase": "after", "observed_at_utc": observed_at},
+                )
+                return {"phase": phase}
+
+            def finalize_restoration(
+                root: Path,
+                *,
+                phase: str,
+                candidate_id: str | None,
+                before_directory: str,
+                after_directory: str,
+                output_name: str,
+            ) -> tuple[Path, dict[str, object]]:
+                self.assertEqual(root, evidence_root)
+                self.assertEqual(phase, "candidate")
+                self.assertEqual(candidate_id, "candidate-a")
+                self.assertEqual(before_directory, "after")
+                self.assertEqual(after_directory, "client-after")
+                path = root / "receipts" / output_name
+                self._write_json(path, {"passed": True})
+                return path, {"passed": True}
+
+            with (
+                mock.patch.object(
+                    codex_upgrade,
+                    "_probe_capture_environment",
+                    side_effect=probe_environment,
+                ) as probe,
+                mock.patch.object(
+                    codex_upgrade,
+                    "_finalize_attempt_restoration",
+                    side_effect=finalize_restoration,
+                ) as finalize,
+            ):
+                path, receipt, checkpoint_at, created = (
+                    codex_upgrade._candidate_post_client_restoration(
+                        {},
+                        evidence_root,
+                        "candidate-a",
+                    )
+                )
+
+            self.assertTrue(created)
+            self.assertEqual(receipt, {"passed": True})
+            self.assertEqual(checkpoint_at, observed_at)
+            self.assertEqual(
+                path,
+                evidence_root / "receipts" / "client-restoration-report.json",
+            )
+            probe.assert_called_once()
+            finalize.assert_called_once()
 
     def test_evaluation_transition_is_limited_to_one_attempt_and_phase(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -3089,6 +4177,190 @@ class CodexUpgradeTest(unittest.TestCase):
                 {},
             )
 
+    def test_incremental_execution_rebinds_verified_identity_to_build_receipt(
+        self,
+    ) -> None:
+        """Docker 重验后的基础身份必须补回 VC-4 构建字段再参与等值校验。"""
+
+        base_identity = {
+            "git_commit": "a" * 40,
+            "source_root": "/candidate/source",
+            "source_tree_sha256": "b" * 64,
+            "image_reference": f"candidate@sha256:{'c' * 64}",
+            "image_digest": f"sha256:{'c' * 64}",
+            "image_id": f"sha256:{'d' * 64}",
+            "build_id": "build-a",
+            "deployed_version": "0.154.0",
+            "profile_id": "profile-a",
+            "profile_digest": "e" * 64,
+            "candidate_purpose": "production_replacement",
+        }
+        bound_identity = {
+            **base_identity,
+            "target_architecture": "linux/arm64",
+            "binary": {"sha256": "f" * 64},
+            "build_receipt": {
+                "path": "candidates/candidate-a/build-receipt.json",
+                "sha256": "1" * 64,
+                "bytes": 1,
+            },
+        }
+        receipt = {"schema_version": "candidate-build-receipt/v2"}
+        binding = {
+            "path": "candidates/candidate-a/build-receipt.json",
+            "sha256": "1" * 64,
+            "bytes": 1,
+        }
+        with (
+            mock.patch.object(
+                codex_upgrade,
+                "_candidate_identity_for_run",
+                return_value=base_identity,
+            ) as verify,
+            mock.patch.object(
+                codex_upgrade,
+                "_bind_candidate_identity_to_build_receipt",
+                return_value=bound_identity,
+            ) as bind,
+        ):
+            actual = codex_upgrade._candidate_identity_for_incremental_execution(
+                argparse.Namespace(),
+                {},
+                {},
+                candidate_build_receipt=receipt,
+                candidate_build_binding=binding,
+                deadline=None,
+            )
+        self.assertEqual(actual, bound_identity)
+        self.assertTrue(verify.call_args.kwargs["verify_image"])
+        bind.assert_called_once_with(
+            mock.ANY,
+            base_identity,
+            receipt,
+            binding,
+        )
+
+    def test_incremental_admin_credential_checks_only_executed_jobs(self) -> None:
+        """复用 aux、只执行 core 时不得误要求管理凭据。"""
+
+        class ReservationReached(RuntimeError):
+            pass
+
+        with tempfile.TemporaryDirectory() as directory:
+            campaign_dir = Path(directory) / "campaign"
+            campaign_dir.mkdir()
+            identity = {
+                "git_commit": "a" * 40,
+                "source_root": "/candidate/source",
+                "source_tree_sha256": "b" * 64,
+                "image_reference": f"candidate@sha256:{'c' * 64}",
+                "image_digest": f"sha256:{'c' * 64}",
+                "image_id": f"sha256:{'d' * 64}",
+                "build_id": "build-a",
+                "deployed_version": "0.154.0",
+                "profile_id": "profile-a",
+                "profile_digest": "e" * 64,
+                "candidate_purpose": "production_replacement",
+            }
+            manifest = {
+                "campaign_id": "campaign-a",
+                "campaign_mode": "formal",
+                "campaign_purpose": "production_replacement",
+                "tool_identity": {},
+            }
+            planned_jobs = [
+                Job(
+                    job_id=job_id,
+                    phase="candidate",
+                    suites=("full",),
+                    description=job_id,
+                    steps=(),
+                    evidence_roots=(f"/tmp/evidence/{job_id}",),
+                    covers=(),
+                )
+                for job_id in ("candidate-frozen-aux", "candidate-frozen-core")
+            ]
+            arguments = argparse.Namespace(
+                campaign_dir=campaign_dir,
+                candidate_id="candidate-a",
+                candidate_image_id=identity["image_id"],
+                rerun_failed=True,
+                recovery_preview_payload={
+                    "source_attempt_receipt_exists": False,
+                    "execute_job_ids": ["candidate-frozen-core"],
+                    "reuse_job_ids": [],
+                },
+                preview_recovery=False,
+                acknowledge_live_requests=True,
+                capture_root=Path("/root/oauth-capture"),
+            )
+            deadline = codex_upgrade.incremental_recovery.WallClockDeadline(120)
+            with contextlib.ExitStack() as stack:
+                stack.enter_context(mock.patch.dict(os.environ, {}, clear=True))
+                for target, options in (
+                    ("_apply_candidate_runtime_override", {"return_value": manifest}),
+                    ("_reject_contaminated_campaign", {}),
+                    ("_load_stage_result", {"return_value": {"status": "complete"}}),
+                    ("_requires_complete_vc_artifacts", {"return_value": False}),
+                    ("_active_unsealed_attempts", {"return_value": []}),
+                    ("_classification_candidate_reuse_source", {"return_value": None}),
+                    ("_candidate_identity_for_run", {"return_value": identity}),
+                    ("_campaign_jobs", {"return_value": planned_jobs}),
+                    ("_tool_identity", {"return_value": {"files_sha256": "f" * 64}}),
+                    (
+                        "_cheap_capture_tool_impact",
+                        {
+                            "return_value": {
+                                "kind": "unchanged",
+                                "affected_job_ids": [],
+                                "changed_components": [],
+                            }
+                        },
+                    ),
+                    ("_latest_failed_attempt_for_identity", {"return_value": None}),
+                    ("_runtime_successor_recovery_source", {"return_value": None}),
+                    ("_verify_plan_identity", {"return_value": {"kind": "unchanged"}}),
+                    (
+                        "_candidate_identity_for_incremental_execution",
+                        {"return_value": identity},
+                    ),
+                    ("_verify_execution_tree", {}),
+                    ("_require_capture_budget_before_data_action", {}),
+                    ("_reserve_capture_attempt", {"side_effect": ReservationReached}),
+                ):
+                    stack.enter_context(mock.patch.object(codex_upgrade, target, **options))
+                with self.assertRaises(ReservationReached):
+                    codex_upgrade._run_capture_attempt(
+                        arguments,
+                        "candidate",
+                        _lease=mock.Mock(),
+                        _manifest=manifest,
+                        _deadline=deadline,
+                    )
+
+    def test_incremental_admin_credential_still_required_when_aux_executes(
+        self,
+    ) -> None:
+        """本轮执行集合包含 aux 时仍必须严格要求管理凭据。"""
+
+        aux = Job(
+            job_id="candidate-frozen-aux",
+            phase="candidate",
+            suites=("full",),
+            description="candidate-frozen-aux",
+            steps=(),
+            evidence_roots=("/tmp/evidence/candidate-frozen-aux",),
+            covers=(),
+        )
+        with (
+            mock.patch.dict(os.environ, {}, clear=True),
+            self.assertRaisesRegex(
+                codex_upgrade.ConfigurationError,
+                "candidate-frozen-aux",
+            ),
+        ):
+            codex_upgrade._validate_candidate_admin_credential([aux])
+
     def test_checked_in_baseline_scenario_bindings_match_sources(self) -> None:
         tool_root = Path(__file__).resolve().parents[1]
         repo_root = tool_root.parents[1]
@@ -3641,6 +4913,7 @@ class CodexUpgradeTest(unittest.TestCase):
             scenario_path = campaign_dir / "inputs/target.json"
             self._write_json(scenario_path, {"marker": "historical"})
             current_contract = {"scenario": "current"}
+            rehearsal = {"preflight_campaign": {"campaign_id": "preflight"}}
             manifest = {
                 "target_version": "0.151.0",
                 "target_sha256": "a" * 64,
@@ -3792,6 +5065,100 @@ class CodexUpgradeTest(unittest.TestCase):
                 require_active=True,
             )
             scenario_override.assert_called_once()
+
+    def test_published_failed_job_recovery_replays_bound_noop_scenario(
+        self,
+    ) -> None:
+        """失败 Job 后继运行时必须继续使用 no-op preflight 当前场景。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            campaign_dir = Path(directory)
+            scenario_path = campaign_dir / "inputs/target.json"
+            self._write_json(scenario_path, {"marker": "historical"})
+            current_contract = {"scenario": "current"}
+            rehearsal = {"preflight_campaign": {"campaign_id": "preflight"}}
+            manifest = {
+                "target_version": "0.154.0",
+                "target_sha256": "a" * 64,
+                "suite": "full",
+                "inputs": {
+                    "target_discovery_scenarios": {
+                        "path": "inputs/target.json",
+                    },
+                    "extra_jobs": None,
+                },
+                "official_identity": {
+                    "package": {
+                        "asset_sha256": "b" * 64,
+                        "code_mode_host_sha256": "c" * 64,
+                    }
+                },
+                "configuration": {},
+                "tool_identity": {"files_sha256": "d" * 64},
+                "control_receipts": {
+                    "job_rehearsal": {
+                        "execution_contract_sha256": "e" * 64,
+                    }
+                },
+                "predecessor": {
+                    "reason": "candidate_failed_job_tool_recovery",
+                },
+            }
+
+            def build_contract(**values):
+                return {"scenario": values["target_scenario"]["marker"]}
+
+            with (
+                mock.patch.object(
+                    codex_upgrade_job_rehearsal_receipt,
+                    "build_execution_contract",
+                    side_effect=build_contract,
+                ),
+                mock.patch.object(
+                    codex_upgrade_job_rehearsal_receipt,
+                    "execution_contract_sha256",
+                    side_effect=lambda contract: (
+                        "e" * 64 if contract == current_contract else "f" * 64
+                    ),
+                ),
+                mock.patch.object(
+                    codex_upgrade,
+                    "_recovery_rehearsal_preflight_from_receipt",
+                    return_value=(campaign_dir / "preflight", {}),
+                ) as bound_preflight,
+                mock.patch.object(
+                    codex_upgrade,
+                    "_recovery_rehearsal_target_scenario_override",
+                    return_value={"marker": "current"},
+                ) as scenario_override,
+            ):
+                contract = codex_upgrade._job_rehearsal_contract_from_manifest(
+                    campaign_dir,
+                    manifest,
+                    recovery_rehearsal_receipt=rehearsal,
+                )
+
+            self.assertEqual(contract, current_contract)
+            bound_preflight.assert_called_once_with(
+                rehearsal,
+                manifest,
+            )
+            scenario_override.assert_called_once()
+            with (
+                mock.patch.object(
+                    codex_upgrade_job_rehearsal_receipt,
+                    "build_execution_contract",
+                    return_value={"scenario": "historical"},
+                ),
+                self.assertRaisesRegex(
+                    codex_upgrade.ConfigurationError,
+                    "恢复后继必须从绑定的 preflight/no-op 收据",
+                ),
+            ):
+                codex_upgrade._job_rehearsal_contract_from_manifest(
+                    campaign_dir,
+                    manifest,
+                )
 
     def test_read_only_reclassification_contract_allows_stopped_noop_preflight(
         self,
@@ -4061,8 +5428,8 @@ class CodexUpgradeTest(unittest.TestCase):
                 require_active=False,
             )
 
-    def test_historical_control_replays_bound_evidence_label_digest(self) -> None:
-        """递归历史控制只承接演练合同冻结的证据标签摘要。"""
+    def test_bound_rehearsal_replays_only_evidence_label_digest(self) -> None:
+        """已绑定重放的演练只承接冻结的证据标签摘要。"""
 
         with tempfile.TemporaryDirectory() as directory:
             campaign_dir = Path(directory)
@@ -4123,7 +5490,7 @@ class CodexUpgradeTest(unittest.TestCase):
                         campaign_dir,
                         manifest,
                         recovery_rehearsal_receipt=rehearsal,
-                        _allow_historical_tool_identity=True,
+                        _allow_bound_evidence_label_digest=True,
                     ),
                     historical_contract,
                 )
@@ -4132,6 +5499,17 @@ class CodexUpgradeTest(unittest.TestCase):
                         campaign_dir,
                         manifest,
                         recovery_rehearsal_receipt=rehearsal,
+                    ),
+                    current_contract,
+                )
+                # 工具历史兼容不能隐式放宽 evaluator 标签摘要；必须由已经
+                # 按 control 文件绑定重放收据的调用点显式授权。
+                self.assertEqual(
+                    codex_upgrade._job_rehearsal_contract_from_manifest(
+                        campaign_dir,
+                        manifest,
+                        recovery_rehearsal_receipt=rehearsal,
+                        _allow_historical_tool_identity=True,
                     ),
                     current_contract,
                 )
@@ -4147,7 +5525,7 @@ class CodexUpgradeTest(unittest.TestCase):
                         recovery_rehearsal_receipt={
                             "execution_contract": drifted
                         },
-                        _allow_historical_tool_identity=True,
+                        _allow_bound_evidence_label_digest=True,
                     ),
                     current_contract,
                 )
@@ -4327,6 +5705,160 @@ class CodexUpgradeTest(unittest.TestCase):
         self.assertIn("candidate_reuse_source_candidate_id", actions)
         self.assertIn("candidate_reuse_source_attempt_id", actions)
         self.assertIn("approve_candidate_reuse_sha256", actions)
+
+    def test_post_run_seal_recovery_parser_freezes_a15_source(self) -> None:
+        """专用入口默认绑定 A15 唯一 Candidate／attempt，不能退化为通用 successor。"""
+
+        parser = codex_upgrade._build_parser()
+        arguments = parser.parse_args(
+            [
+                codex_upgrade.FORMAL_POST_RUN_SEAL_RECOVERY_COMMAND,
+                "--predecessor-campaign-dir",
+                str(codex_upgrade.C0154_A15_POST_RUN_SEAL_SOURCE["campaign_dir"]),
+                "--campaign-dir",
+                "/tmp/successor",
+                "--campaign-id",
+                "successor-a",
+                "--codex-account-id",
+                "90",
+                "--job-rehearsal-root",
+                "/tmp/rehearsal",
+                "--job-rehearsal-receipt",
+                "/tmp/rehearsal/receipt.json",
+                "--recovery-timing-ledger-dir",
+                "/tmp/timing",
+                "--recovery-timing-receipt",
+                "/tmp/timing/receipt.json",
+                "--recovery-arm64-environment-root",
+                "/tmp/arm64",
+                "--recovery-arm64-environment-receipt",
+                "/tmp/arm64/receipt.json",
+                "--predecessor-stop-ledger-dir",
+                "/tmp/stop",
+                "--predecessor-stop-receipt",
+                "/tmp/stop/receipt.json",
+            ]
+        )
+        self.assertEqual(
+            arguments.reason,
+            codex_upgrade.POST_RUN_SEAL_RECOVERY_REASON,
+        )
+        self.assertEqual(
+            arguments.predecessor_candidate_id,
+            codex_upgrade.C0154_A15_POST_RUN_SEAL_SOURCE["candidate_id"],
+        )
+        self.assertEqual(
+            arguments.predecessor_attempt_id,
+            codex_upgrade.C0154_A15_POST_RUN_SEAL_SOURCE["attempt_id"],
+        )
+
+    def test_post_run_seal_recovery_rejects_canonicalized_source(self) -> None:
+        """来源切换到 canonical checkpoint 后，专用恢复入口也必须只读。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            predecessor = root / "predecessor"
+            marker = (
+                predecessor
+                / codex_upgrade.CANONICAL_DIRECTORY
+                / codex_upgrade.CANONICAL_IMPORT_RECEIPT_FILENAME
+            )
+            self._write_json(marker, {"status": "complete"})
+            arguments = argparse.Namespace(
+                campaign_dir=root / "successor",
+                predecessor_campaign_dir=predecessor,
+            )
+            with self.assertRaisesRegex(
+                codex_upgrade.ConfigurationError,
+                "canonical checkpoint",
+            ):
+                codex_upgrade._reject_canonical_legacy_write(
+                    arguments,
+                    codex_upgrade.FORMAL_POST_RUN_SEAL_RECOVERY_COMMAND,
+                )
+
+    def test_metadata_only_job_roots_exclude_attempt_evidence_and_logs(self) -> None:
+        """复用边界只能来自九项结果，不得夹带来源 attempt 自身根。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            job_root = base / "job-root"
+            attempt_evidence = base / "attempt" / "evidence"
+            attempt_logs = base / "attempt" / "logs"
+            for path in (job_root, attempt_evidence, attempt_logs):
+                path.mkdir(parents=True, mode=0o700)
+            attempt = {
+                "results": [
+                    {
+                        "id": job_id,
+                        "status": "complete",
+                        "evidence_roots": [str(job_root)],
+                    }
+                    for job_id in sorted(
+                        codex_upgrade.CLASSIFICATION_CANDIDATE_REUSE_JOB_IDS
+                    )
+                ],
+                "evidence_roots": [
+                    str(job_root),
+                    str(attempt_evidence),
+                    str(attempt_logs),
+                ],
+            }
+            roots = codex_upgrade._classification_candidate_job_evidence_roots(
+                attempt,
+                require_existing=True,
+            )
+            self.assertEqual(roots, [job_root.resolve()])
+
+    def test_post_run_seal_build_projection_accepts_only_frozen_v7_origin(
+        self,
+    ) -> None:
+        """A15 的 VC-4 投影保留原始 v7 绑定，但不得接受其他历史身份。"""
+
+        a15 = codex_upgrade.C0154_A15_POST_RUN_SEAL_SOURCE
+        v7 = codex_upgrade.C0154_V7_RECOVERY_SOURCE
+        manifest = {
+            "campaign_id": a15["campaign_id"],
+            "target_version": a15["target_version"],
+            "campaign_purpose": "production_replacement",
+            "tool_identity": {"files_sha256": a15["tool_files_sha256"]},
+        }
+        receipt = {
+            "campaign_id": v7["campaign_id"],
+            "campaign_manifest_sha256": v7["campaign_manifest_sha256"],
+        }
+        matches = codex_upgrade._candidate_build_projection_campaign_binding_matches
+        self.assertTrue(
+            matches(
+                manifest,
+                predecessor_manifest_sha256=a15["campaign_manifest_sha256"],
+                receipt=receipt,
+                candidate_id=a15["candidate_id"],
+                attempt_id=a15["attempt_id"],
+            )
+        )
+        drifted = dict(receipt)
+        drifted["campaign_manifest_sha256"] = "0" * 64
+        self.assertFalse(
+            matches(
+                manifest,
+                predecessor_manifest_sha256=a15["campaign_manifest_sha256"],
+                receipt=drifted,
+                candidate_id=a15["candidate_id"],
+                attempt_id=a15["attempt_id"],
+            )
+        )
+        unrelated = copy.deepcopy(manifest)
+        unrelated["campaign_id"] = "unrelated-campaign"
+        self.assertFalse(
+            matches(
+                unrelated,
+                predecessor_manifest_sha256="1" * 64,
+                receipt=receipt,
+                candidate_id=a15["candidate_id"],
+                attempt_id=a15["attempt_id"],
+            )
+        )
 
     def test_classification_candidate_reuse_preview_stops_before_all_writes(
         self,
@@ -4568,8 +6100,20 @@ class CodexUpgradeTest(unittest.TestCase):
                 )
             )
             context["source_attempt"] = {
+                "attempt_id": "source-attempt-a",
                 "status": "awaiting_receipts",
                 "evidence_roots": [str(source_evidence.resolve())],
+                "results": [
+                    {
+                        "id": job.job_id,
+                        "status": "complete",
+                        "evidence_roots": [str(source_evidence.resolve())],
+                    }
+                    for job in jobs
+                ],
+                "environment": {
+                    "evidence_root": str(source_evidence.resolve()),
+                },
             }
             reused = [
                 {
@@ -4595,6 +6139,14 @@ class CodexUpgradeTest(unittest.TestCase):
                 "sha256": "2" * 64,
             }
             source_binding = {**transition_binding, "bytes": 1}
+            projected_environment = {
+                "evidence_root": str((attempt_root / "evidence").resolve()),
+                "before_probe": {"path": "environment/before/probe-manifest.json", "sha256": "7" * 64, "bytes": 1},
+                "after_probe": {"path": "environment/after/probe-manifest.json", "sha256": "8" * 64, "bytes": 1},
+                "restoration_report": {"path": "receipts/restoration-report.json", "sha256": "9" * 64, "bytes": 1},
+                "arm64_before_receipt": {"path": "environment/arm64-before/receipt.json", "sha256": "a" * 64, "bytes": 1},
+                "arm64_after_receipt": {"path": "environment/arm64-after/receipt.json", "sha256": "b" * 64, "bytes": 1},
+            }
             deadline = codex_upgrade._attempt_deadline(
                 argparse.Namespace(max_wall_seconds=60, heartbeat_seconds=5),
                 "candidate",
@@ -4605,6 +6157,10 @@ class CodexUpgradeTest(unittest.TestCase):
                 _attempt_root: Path,
                 payload: dict[str, object],
             ) -> dict[str, object]:
+                codex_upgrade._validate_attempt_incremental_fields(
+                    payload,
+                    {job.job_id for job in jobs},
+                )
                 return {**payload, "attempt_digest": "5" * 64}
 
             # 20 个替身用 ExitStack 逐个进入：Python 3.12 的静态嵌套块上限是 20，
@@ -4633,6 +6189,10 @@ class CodexUpgradeTest(unittest.TestCase):
                             }
                         },
                     ),
+                    (
+                        "_materialize_metadata_only_environment_projection",
+                        {"return_value": projected_environment},
+                    ),
                 ):
                     stack.enter_context(mock.patch.object(codex_upgrade, target, **options))
                 writer = stack.enter_context(
@@ -4660,18 +6220,17 @@ class CodexUpgradeTest(unittest.TestCase):
                 set(payload["incremental_plan"]["reused_job_ids"]),
                 codex_upgrade.CLASSIFICATION_CANDIDATE_REUSE_JOB_IDS,
             )
-            self.assertTrue(
-                all(
-                    payload["environment"][name] is None
-                    for name in (
-                        "before_probe",
-                        "after_probe",
-                        "restoration_report",
-                        "arm64_before_receipt",
-                        "arm64_after_receipt",
-                    )
+            self.assertEqual(payload["environment"], projected_environment)
+            invalid_payload = copy.deepcopy(payload)
+            invalid_payload["environment"]["restoration_report"] = None
+            with self.assertRaisesRegex(
+                codex_upgrade.ConfigurationError,
+                "metadata-only attempt 的零执行边界不闭合",
+            ):
+                codex_upgrade._validate_attempt_incremental_fields(
+                    invalid_payload,
+                    {job.job_id for job in jobs},
                 )
-            )
             probe.assert_not_called()
             arm64_probe.assert_not_called()
             run_job.assert_not_called()
@@ -4872,6 +6431,64 @@ class CodexUpgradeTest(unittest.TestCase):
             self.assertEqual(context["source_attempt_id"], "attempt-source")
             self.assertEqual(context["identity"], fixture["attempt"]["identity"])
 
+    def test_classification_candidate_reuse_allows_only_vc4_build_projection(
+        self,
+    ) -> None:
+        """当前 Candidate 可已有 VC-4 构建收据，但不得已有 attempt 或其他条目。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = self._classification_candidate_reuse_source_fixture(
+                Path(directory)
+            )
+            candidate_root = (
+                fixture["campaign_dir"] / "candidates" / "candidate-target"
+            )
+            candidate_root.mkdir(parents=True)
+            (candidate_root / "build-receipt.json").write_text(
+                "{}\n",
+                encoding="utf-8",
+            )
+            patches = (
+                mock.patch.object(
+                    codex_upgrade,
+                    "load_campaign_manifest",
+                    return_value=fixture["source_manifest"],
+                ),
+                mock.patch.object(
+                    codex_upgrade,
+                    "_load_capture_attempt",
+                    return_value=(fixture["source_attempt_root"], fixture["attempt"]),
+                ),
+                mock.patch.object(
+                    codex_upgrade,
+                    "_load_capture_reservation",
+                    return_value=fixture["reservation"],
+                ),
+            )
+            with patches[0], patches[1], patches[2]:
+                context = codex_upgrade._classification_candidate_reuse_source(
+                    fixture["arguments"],
+                    fixture["campaign_dir"],
+                    fixture["manifest"],
+                    {"status": "complete", "predecessor_import": None},
+                    candidate_id="candidate-target",
+                )
+            self.assertIsNotNone(context)
+
+            (candidate_root / "attempts").mkdir()
+            with patches[0], patches[1], patches[2]:
+                with self.assertRaisesRegex(
+                    codex_upgrade.ConfigurationError,
+                    "已有 Candidate／attempt",
+                ):
+                    codex_upgrade._classification_candidate_reuse_source(
+                        fixture["arguments"],
+                        fixture["campaign_dir"],
+                        fixture["manifest"],
+                        {"status": "complete", "predecessor_import": None},
+                        candidate_id="candidate-target",
+                    )
+
     def test_classification_candidate_reuse_source_rejects_incomplete_job(
         self,
     ) -> None:
@@ -4968,6 +6585,45 @@ class CodexUpgradeTest(unittest.TestCase):
                 frozen["files_sha256"],
                 fixture["current_tool"]["files_sha256"],
             )
+
+    def test_reused_result_rebase_uses_precomputed_incremental_metadata(
+        self,
+    ) -> None:
+        """复用结果重绑不得重复解析同一个 Job 的工具依赖闭包。"""
+
+        job = Job(
+            job_id="candidate-core-direct",
+            phase="candidate",
+            suites=("full",),
+            description="candidate-core-direct",
+            steps=({"argv": ["true"], "environment": {}},),
+            evidence_roots=("/tmp/candidate-core-direct",),
+            covers=(),
+        )
+        incremental = {
+            "components": ["producer"],
+            "component_digests": {"producer": "1" * 64},
+            "tool_dependency_files": {"runner.sh": "2" * 64},
+            "dependency_sha256": "3" * 64,
+            "input_sha256": "4" * 64,
+            "environment_sha256": "5" * 64,
+            "result_key": "6" * 64,
+        }
+        with mock.patch.object(
+            codex_upgrade,
+            "_job_incremental_metadata",
+            side_effect=AssertionError("不得重复解析工具依赖"),
+        ) as metadata_builder:
+            rebased = codex_upgrade._rebase_reused_result(
+                {"id": job.job_id, "status": "complete"},
+                job,
+                identity={"candidate_id": "candidate-a"},
+                tool_identity={"files_sha256": "7" * 64},
+                incremental_metadata=incremental,
+            )
+        metadata_builder.assert_not_called()
+        self.assertEqual(rebased["incremental_result_key"], "6" * 64)
+        self.assertEqual(rebased["tool_dependency_files"], {"runner.sh": "2" * 64})
 
     def test_classification_candidate_reuse_rejects_attempt_producer_drift(
         self,
@@ -5387,6 +7043,53 @@ class CodexUpgradeTest(unittest.TestCase):
             encoding="utf-8",
         )
 
+    def _write_c0154_v7_source_attempt(
+        self,
+        predecessor_dir: Path,
+        source: Mapping[str, object],
+        campaign_manifest_sha256: str,
+    ) -> tuple[dict[str, str], dict[str, object]]:
+        """生成固定来源校验的最小自摘要 attempt 夹具。"""
+
+        identity = {"candidate": source["candidate_id"]}
+        attempt: dict[str, object] = {
+            "schema_version": codex_upgrade.CAPTURE_ATTEMPT_SCHEMA,
+            "campaign_id": source["campaign_id"],
+            "campaign_manifest_sha256": campaign_manifest_sha256,
+            "phase": "candidate",
+            "candidate_id": source["candidate_id"],
+            "attempt_id": source["attempt_id"],
+            "status": "failed",
+            "identity": identity,
+        }
+        attempt["attempt_digest"] = codex_upgrade._fingerprint(attempt)
+        attempt_path = (
+            predecessor_dir
+            / "candidates"
+            / str(source["candidate_id"])
+            / "attempts"
+            / str(source["attempt_id"])
+            / "attempt.json"
+        )
+        self._write_json(attempt_path, attempt)
+        attempt_sha256 = codex_upgrade.file_sha256(attempt_path)
+        identity_sha256 = codex_upgrade._fingerprint(identity)
+        overrides = {
+            "attempt_sha256": attempt_sha256,
+            "attempt_digest": str(attempt["attempt_digest"]),
+            "identity_sha256": identity_sha256,
+        }
+        abandoned: dict[str, object] = {
+            "candidate_id": source["candidate_id"],
+            "attempt_id": source["attempt_id"],
+            "path": attempt_path.relative_to(predecessor_dir).as_posix(),
+            "sha256": attempt_sha256,
+            "attempt_digest": attempt["attempt_digest"],
+            "identity_sha256": identity_sha256,
+            "status": "failed",
+        }
+        return overrides, abandoned
+
     @staticmethod
     def _write_state_snapshot(path: Path, state: dict[str, object]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -5747,7 +7450,7 @@ class CodexUpgradeTest(unittest.TestCase):
                 ],
                 "capture_jobs": [
                     {
-                        "id": "official-test",
+                        "id": self.synthetic_job_ids["official"],
                         "phase": "official",
                         "suites": ["full"],
                         "description": "测试官方抓包阶段",
@@ -5767,7 +7470,7 @@ class CodexUpgradeTest(unittest.TestCase):
                         "required_scenario_receipts": [],
                     },
                     {
-                        "id": "candidate-test",
+                        "id": self.synthetic_job_ids["candidate"],
                         "phase": "candidate",
                         "suites": ["full"],
                         "description": "测试候选抓包阶段",
@@ -5987,10 +7690,18 @@ class CodexUpgradeTest(unittest.TestCase):
         if campaign_mode == "formal":
             # 旧版本只用于离线合成 Campaign；目标标签声明门禁由 0.151
             # 专项测试覆盖，不能为即将退休的 0.147 新增生产声明。
+            original_declaration = codex_upgrade_job_rehearsal_receipt._target_evidence_label_declaration_sha256
+
+            def declaration_or_fixed(target_version_arg: str, target_scenario_arg: object, **kwargs: object) -> str:
+                try:
+                    return original_declaration(target_version_arg, target_scenario_arg, **kwargs)
+                except codex_upgrade_job_rehearsal_receipt.JobRehearsalReceiptError:
+                    return "d" * 64
+
             with mock.patch.object(
                 codex_upgrade_job_rehearsal_receipt,
                 "_target_evidence_label_declaration_sha256",
-                return_value="d" * 64,
+                side_effect=declaration_or_fixed,
             ):
                 contract = (
                     codex_upgrade_job_rehearsal_receipt.build_execution_contract(
@@ -6166,6 +7877,311 @@ class CodexUpgradeTest(unittest.TestCase):
         )
         return evidence_root
 
+    def _synthesize_candidate_receipts(
+        self,
+        evidence_root: Path,
+        *,
+        campaign_manifest: dict[str, object],
+        attempt_id: str,
+        run_nonce: str,
+        attempt_started_at_utc: str,
+        client_checkpoint_at_utc: str,
+        identity: dict[str, object],
+        candidate_id: str,
+        target_version: str,
+        third_party_model: str,
+        timestamp: Callable[[int], str],
+        receipts_subdir: str = "",
+    ) -> tuple[Path, list[str], Path]:
+        """合成候选侧机器收据（运行画像审计→两份 Kilo 五件套→observed-profile／Kilo finalizer→Kilo 后恢复报告→client-after 探针），
+        全部落在 ``evidence_root``（``receipts_subdir`` 非空时落在其子目录，finalizer 的 producer.evidence_root 仍是
+        ``evidence_root``）；返回 (observed_profile_path, client_receipts, post_client_restoration_report)。
+        M2 的恢复段增量封存用例复用本方法把收据合成到恢复段证据根的 client/ 子树（v3 权限收口只允许该派生路径新增）。"""
+
+        self.assertIsNotNone(candidate_id)
+        receipts_root = evidence_root / receipts_subdir if receipts_subdir else evidence_root
+        receipts_root.mkdir(parents=True, exist_ok=True)
+
+        def relative(path: Path) -> Path:
+            return path.relative_to(evidence_root)
+
+        observed_runtime_path = (
+            receipts_root / "observed-profile-runtime-audit.json"
+        )
+        self._write_json(
+            observed_runtime_path,
+            {
+                "schema_version": (
+                    codex_upgrade_receipt_finalizer.RUNTIME_AUDIT_SCHEMA
+                ),
+                "source": "sub2api-runtime",
+                "event_type": "profile_activated",
+                "event_id": "profile-event-1",
+                "campaign_id": campaign_manifest["campaign_id"],
+                "attempt_id": attempt_id,
+                "run_nonce": run_nonce,
+                "candidate_id": candidate_id,
+                "target_version": target_version,
+                "profile_id": identity["profile_id"],
+                "profile_digest": identity["profile_digest"],
+                "image_id": identity["image_id"],
+                "image_reference": identity["image_reference"],
+                "source_tree_sha256": identity["source_tree_sha256"],
+                "build_id": identity["build_id"],
+                "deployed_version": identity["deployed_version"],
+                "observed_at_utc": timestamp(10),
+            },
+        )
+        observed_profile_path = receipts_root / "observed-profile.json"
+        client_receipts: list[str] = []
+        kilo_arguments: list[argparse.Namespace] = []
+        clients = (
+            (
+                "kilo-compatible",
+                "openai-compatible",
+                "/v1/chat/completions",
+            ),
+            (
+                "kilo-responses",
+                "openai-responses",
+                "/v1/responses",
+            ),
+        )
+        for client, protocol, entrypoint in clients:
+            installation_id = f"installation-{client}"
+            request_id = f"request-{client}"
+            response_id = f"response-{client}"
+            ingress_witness_id = f"ingress-{client}"
+            transport = (
+                "http" if client == "kilo-compatible" else "websocket"
+            )
+            installation_path = (
+                receipts_root / f"{client}-installation.json"
+            )
+            ingress_path = receipts_root / f"{client}-ingress.json"
+            runtime_path = receipts_root / f"{client}-runtime-audit.json"
+            response_path = (
+                receipts_root / f"{client}-response-witness.json"
+            )
+            usage_path = receipts_root / f"{client}-usage-audit.json"
+            self._write_json(
+                installation_path,
+                {
+                    "schema_version": (
+                        codex_upgrade_receipt_finalizer.KILO_INSTALLATION_SCHEMA
+                    ),
+                    "source": "kilo-installation",
+                    "installation_id": installation_id,
+                    "product_id": "kilo",
+                    "display_name": "Kilo Code",
+                    "client_version": "kilo-test-1",
+                    "executable_path": (
+                        "/Applications/Kilo Code.app/Contents/MacOS/Kilo"
+                    ),
+                    "executable_sha256": hashlib.sha256(
+                        client.encode()
+                    ).hexdigest(),
+                    "observed_at_utc": timestamp(-3600),
+                },
+            )
+            self._write_json(
+                ingress_path,
+                {
+                    "schema_version": (
+                        codex_upgrade_receipt_finalizer.KILO_INGRESS_SCHEMA
+                    ),
+                    "source": "kilo-ingress",
+                    "witness_id": ingress_witness_id,
+                    "request_id": request_id,
+                    "campaign_id": campaign_manifest["campaign_id"],
+                    "attempt_id": attempt_id,
+                    "run_nonce": run_nonce,
+                    "installation_id": installation_id,
+                    "client_id": client,
+                    "client_version": "kilo-test-1",
+                    "protocol": protocol,
+                    "entrypoint": entrypoint,
+                    "model": third_party_model,
+                    "candidate_id": candidate_id,
+                    "target_version": target_version,
+                    "received_at_utc": timestamp(20),
+                },
+            )
+            self._write_json(
+                runtime_path,
+                {
+                    "schema_version": (
+                        codex_upgrade_receipt_finalizer.RUNTIME_AUDIT_SCHEMA
+                    ),
+                    "source": "sub2api-runtime",
+                    "event_type": "oauth_request_forwarded",
+                    "event_id": f"runtime-{client}",
+                    "request_id": request_id,
+                    "campaign_id": campaign_manifest["campaign_id"],
+                    "attempt_id": attempt_id,
+                    "run_nonce": run_nonce,
+                    "ingress_witness_id": ingress_witness_id,
+                    "installation_id": installation_id,
+                    "client_id": client,
+                    "protocol": protocol,
+                    "entrypoint": entrypoint,
+                    "model": third_party_model,
+                    "candidate_id": candidate_id,
+                    "target_version": target_version,
+                    "profile_id": identity["profile_id"],
+                    "profile_digest": identity["profile_digest"],
+                    "image_id": identity["image_id"],
+                    "source_tree_sha256": identity["source_tree_sha256"],
+                    "build_id": identity["build_id"],
+                    "deployed_version": identity["deployed_version"],
+                    "auth_mode": "oauth",
+                    "oauth_account_id": 90,
+                    "upstream_endpoint": "/backend-api/codex/responses",
+                    "transport": transport,
+                    "affected_branches": [transport],
+                    "observed_at_utc": timestamp(30),
+                },
+            )
+            self._write_json(
+                response_path,
+                {
+                    "schema_version": (
+                        codex_upgrade_receipt_finalizer.KILO_RESPONSE_SCHEMA
+                    ),
+                    "source": "kilo-response",
+                    "witness_id": f"response-witness-{client}",
+                    "request_id": request_id,
+                    "campaign_id": campaign_manifest["campaign_id"],
+                    "attempt_id": attempt_id,
+                    "run_nonce": run_nonce,
+                    "installation_id": installation_id,
+                    "client_id": client,
+                    "candidate_id": candidate_id,
+                    "http_status": 200,
+                    "response_id": response_id,
+                    "completed_at_utc": timestamp(40),
+                },
+            )
+            self._write_json(
+                usage_path,
+                {
+                    "schema_version": (
+                        codex_upgrade_receipt_finalizer.USAGE_AUDIT_SCHEMA
+                    ),
+                    "source": "sub2api-usage",
+                    "event_id": f"usage-event-{client}",
+                    "request_id": request_id,
+                    "campaign_id": campaign_manifest["campaign_id"],
+                    "attempt_id": attempt_id,
+                    "run_nonce": run_nonce,
+                    "response_id": response_id,
+                    "candidate_id": candidate_id,
+                    "usage_id": f"usage-{client}",
+                    "oauth_account_id": 90,
+                    "recorded_at_utc": timestamp(50),
+                },
+            )
+            receipt_path = receipts_root / f"{client}.json"
+            kilo_arguments.append(
+                argparse.Namespace(
+                    evidence_root=evidence_root,
+                    output=relative(receipt_path),
+                    campaign_id=campaign_manifest["campaign_id"],
+                    attempt_id=attempt_id,
+                    run_nonce=run_nonce,
+                    attempt_started_at_utc=attempt_started_at_utc,
+                    client_checkpoint_at_utc=client_checkpoint_at_utc,
+                    client_id=client,
+                    candidate_id=candidate_id,
+                    target_version=target_version,
+                    profile_id=identity["profile_id"],
+                    profile_digest=identity["profile_digest"],
+                    candidate_image_id=identity["image_id"],
+                    source_tree_sha256=identity["source_tree_sha256"],
+                    build_id=identity["build_id"],
+                    deployed_version=identity["deployed_version"],
+                    model=third_party_model,
+                    installation=relative(installation_path),
+                    ingress=relative(ingress_path),
+                    runtime_audit=relative(runtime_path),
+                    response_witness=relative(response_path),
+                    usage_audit=relative(usage_path),
+                )
+            )
+            client_receipts.append(f"{client}={receipt_path}")
+
+        self._make_private_tree(receipts_root)
+        codex_upgrade_receipt_finalizer.finalize_observed_profile(
+            argparse.Namespace(
+                evidence_root=evidence_root,
+                output=relative(observed_profile_path),
+                campaign_id=campaign_manifest["campaign_id"],
+                attempt_id=attempt_id,
+                run_nonce=run_nonce,
+                attempt_started_at_utc=attempt_started_at_utc,
+                client_checkpoint_at_utc=client_checkpoint_at_utc,
+                candidate_id=candidate_id,
+                target_version=target_version,
+                profile_id=identity["profile_id"],
+                profile_digest=identity["profile_digest"],
+                image_id=identity["image_id"],
+                image_reference=identity["image_reference"],
+                source_tree_sha256=identity["source_tree_sha256"],
+                build_id=identity["build_id"],
+                deployed_version=identity["deployed_version"],
+                runtime_audit=relative(observed_runtime_path),
+            )
+        )
+        for arguments in kilo_arguments:
+            codex_upgrade_receipt_finalizer.finalize_kilo_binding(arguments)
+        # v3 权限收口只放行 receipts/client-restoration-report.json 与 environment/client-after/ 这两个固定
+        # 派生路径：子目录模式（M2 恢复段）按生产落点写，默认模式保持既有 evidence 根顶层写法。
+        post_client_restoration_report = (
+            evidence_root / "receipts" / "client-restoration-report.json"
+            if receipts_subdir
+            else receipts_root / "client-restoration-report.json"
+        )
+        post_client_restoration_report.parent.mkdir(parents=True, exist_ok=True)
+        post_client_arguments: dict[str, object] = {
+            "evidence_root": evidence_root,
+            "output": relative(post_client_restoration_report),
+            "phase": "candidate",
+            "candidate_id": candidate_id,
+        }
+        for check_id, before_name, after_name, comparator in (
+            codex_upgrade_receipt_finalizer.RESTORATION_INPUTS
+        ):
+            before_path = receipts_root / f"client-{before_name}.json"
+            after_path = receipts_root / f"client-{after_name}.json"
+            if comparator == "before_subset":
+                before_state = self._database_state(after=True)
+                after_state = self._database_state(after=True)
+            else:
+                before_state = {
+                    "probe_kind": f"post_client_{check_id}",
+                    "stable_value": "restored",
+                }
+                after_state = dict(before_state)
+            self._write_state_snapshot(before_path, before_state)
+            self._write_state_snapshot(after_path, after_state)
+            post_client_arguments[before_name] = relative(before_path)
+            post_client_arguments[after_name] = relative(after_path)
+        codex_upgrade_receipt_finalizer.finalize_restoration(
+            argparse.Namespace(**post_client_arguments)
+        )
+        self._write_json(
+            evidence_root
+            / "environment"
+            / "client-after"
+            / "probe-manifest.json",
+            {
+                "schema_version": "codex-upgrade-environment-probe/v1",
+                "phase": "after",
+                "observed_at_utc": client_checkpoint_at_utc,
+            },
+        )
+        return observed_profile_path, client_receipts, post_client_restoration_report
+
     def _write_capture_stage(
         self,
         campaign_dir: Path,
@@ -6180,11 +8196,24 @@ class CodexUpgradeTest(unittest.TestCase):
         evaluation_recovery_controls: dict[str, object] | None = None,
         seal: bool = True,
         bind_environment: bool = False,
+        prepare_evidence: Callable[[Path], None] | None = None,
+        extra_artifacts: list[dict[str, object]] | Callable[[Path], list[dict[str, object]]] | None = None,
     ) -> None:
+        # 改造 5 M1 审核修正（真实评估链）：``prepare_evidence`` 在证据根建立后、扫描前放入真实
+        # 断言证据（e2e H1 流 bundle）；``extra_artifacts`` 追加进 capture manifest，供真实 checker
+        # 按场景交集投影与评估。默认不传时行为与既有用例完全一致。
+        # ``prepare_evidence`` 先于目录创建调用：真实断言 bundle 要求证据根由它全新建立
+        # （bundle 目录＝证据根，manifest 内 artifact 路径相对证据根）。
+        if prepare_evidence is not None:
+            prepare_evidence(evidence_root)
         evidence_root.mkdir(parents=True, exist_ok=True)
+        if callable(extra_artifacts):
+            extra_artifacts = extra_artifacts(evidence_root)
         campaign_manifest = codex_upgrade.load_campaign_manifest(campaign_dir)
         target_version = str(campaign_manifest["target_version"])
         campaign_configuration = campaign_manifest["configuration"]
+        # 第三方入口（Kilo）收据的 model 必须等于 Campaign 的 Lite 轨（历史 Campaign 回退主轨）。
+        third_party_model = codex_upgrade._third_party_client_model(campaign_configuration)
         attempt_id = (
             "20260731T000000Z-1111111111111111"
             if phase == "official"
@@ -6296,7 +8325,8 @@ class CodexUpgradeTest(unittest.TestCase):
                         "parser": "observation_json",
                         "scenario_ids": ["A01"],
                         "labels": {"side": phase},
-                    }
+                    },
+                    *[dict(item) for item in (extra_artifacts or [])],
                 ],
             },
         )
@@ -6306,276 +8336,20 @@ class CodexUpgradeTest(unittest.TestCase):
         client_receipts: list[str] = []
         post_client_restoration_report: Path | None = None
         if phase == "candidate":
-            self.assertIsNotNone(candidate_id)
-            observed_runtime_path = (
-                evidence_root / "observed-profile-runtime-audit.json"
+            observed_profile_path, client_receipts, post_client_restoration_report = self._synthesize_candidate_receipts(
+                evidence_root,
+                campaign_manifest=campaign_manifest,
+                attempt_id=attempt_id,
+                run_nonce=run_nonce,
+                attempt_started_at_utc=attempt_started_at_utc,
+                client_checkpoint_at_utc=client_checkpoint_at_utc,
+                identity=identity,
+                candidate_id=str(candidate_id),
+                target_version=target_version,
+                third_party_model=third_party_model,
+                timestamp=timestamp,
             )
-            self._write_json(
-                observed_runtime_path,
-                {
-                    "schema_version": (
-                        codex_upgrade_receipt_finalizer.RUNTIME_AUDIT_SCHEMA
-                    ),
-                    "source": "sub2api-runtime",
-                    "event_type": "profile_activated",
-                    "event_id": "profile-event-1",
-                    "campaign_id": campaign_manifest["campaign_id"],
-                    "attempt_id": attempt_id,
-                    "run_nonce": run_nonce,
-                    "candidate_id": candidate_id,
-                    "target_version": "0.147.0",
-                    "profile_id": identity["profile_id"],
-                    "profile_digest": identity["profile_digest"],
-                    "image_id": identity["image_id"],
-                    "image_reference": identity["image_reference"],
-                    "source_tree_sha256": identity["source_tree_sha256"],
-                    "build_id": identity["build_id"],
-                    "deployed_version": identity["deployed_version"],
-                    "observed_at_utc": timestamp(10),
-                },
-            )
-            observed_profile_path = evidence_root / "observed-profile.json"
-            kilo_arguments: list[argparse.Namespace] = []
-            clients = (
-                (
-                    "kilo-compatible",
-                    "openai-compatible",
-                    "/v1/chat/completions",
-                ),
-                (
-                    "kilo-responses",
-                    "openai-responses",
-                    "/v1/responses",
-                ),
-            )
-            for client, protocol, entrypoint in clients:
-                installation_id = f"installation-{client}"
-                request_id = f"request-{client}"
-                response_id = f"response-{client}"
-                ingress_witness_id = f"ingress-{client}"
-                transport = (
-                    "http" if client == "kilo-compatible" else "websocket"
-                )
-                installation_path = (
-                    evidence_root / f"{client}-installation.json"
-                )
-                ingress_path = evidence_root / f"{client}-ingress.json"
-                runtime_path = evidence_root / f"{client}-runtime-audit.json"
-                response_path = (
-                    evidence_root / f"{client}-response-witness.json"
-                )
-                usage_path = evidence_root / f"{client}-usage-audit.json"
-                self._write_json(
-                    installation_path,
-                    {
-                        "schema_version": (
-                            codex_upgrade_receipt_finalizer.KILO_INSTALLATION_SCHEMA
-                        ),
-                        "source": "kilo-installation",
-                        "installation_id": installation_id,
-                        "product_id": "kilo",
-                        "display_name": "Kilo Code",
-                        "client_version": "kilo-test-1",
-                        "executable_path": (
-                            "/Applications/Kilo Code.app/Contents/MacOS/Kilo"
-                        ),
-                        "executable_sha256": hashlib.sha256(
-                            client.encode()
-                        ).hexdigest(),
-                        "observed_at_utc": timestamp(-3600),
-                    },
-                )
-                self._write_json(
-                    ingress_path,
-                    {
-                        "schema_version": (
-                            codex_upgrade_receipt_finalizer.KILO_INGRESS_SCHEMA
-                        ),
-                        "source": "kilo-ingress",
-                        "witness_id": ingress_witness_id,
-                        "request_id": request_id,
-                        "campaign_id": campaign_manifest["campaign_id"],
-                        "attempt_id": attempt_id,
-                        "run_nonce": run_nonce,
-                        "installation_id": installation_id,
-                        "client_id": client,
-                        "client_version": "kilo-test-1",
-                        "protocol": protocol,
-                        "entrypoint": entrypoint,
-                        "model": "gpt-5.6-luna",
-                        "candidate_id": candidate_id,
-                        "target_version": "0.147.0",
-                        "received_at_utc": timestamp(20),
-                    },
-                )
-                self._write_json(
-                    runtime_path,
-                    {
-                        "schema_version": (
-                            codex_upgrade_receipt_finalizer.RUNTIME_AUDIT_SCHEMA
-                        ),
-                        "source": "sub2api-runtime",
-                        "event_type": "oauth_request_forwarded",
-                        "event_id": f"runtime-{client}",
-                        "request_id": request_id,
-                        "campaign_id": campaign_manifest["campaign_id"],
-                        "attempt_id": attempt_id,
-                        "run_nonce": run_nonce,
-                        "ingress_witness_id": ingress_witness_id,
-                        "installation_id": installation_id,
-                        "client_id": client,
-                        "protocol": protocol,
-                        "entrypoint": entrypoint,
-                        "model": "gpt-5.6-luna",
-                        "candidate_id": candidate_id,
-                        "target_version": "0.147.0",
-                        "profile_id": identity["profile_id"],
-                        "profile_digest": identity["profile_digest"],
-                        "image_id": identity["image_id"],
-                        "source_tree_sha256": identity["source_tree_sha256"],
-                        "build_id": identity["build_id"],
-                        "deployed_version": identity["deployed_version"],
-                        "auth_mode": "oauth",
-                        "oauth_account_id": 90,
-                        "upstream_endpoint": "/backend-api/codex/responses",
-                        "transport": transport,
-                        "affected_branches": [transport],
-                        "observed_at_utc": timestamp(30),
-                    },
-                )
-                self._write_json(
-                    response_path,
-                    {
-                        "schema_version": (
-                            codex_upgrade_receipt_finalizer.KILO_RESPONSE_SCHEMA
-                        ),
-                        "source": "kilo-response",
-                        "witness_id": f"response-witness-{client}",
-                        "request_id": request_id,
-                        "campaign_id": campaign_manifest["campaign_id"],
-                        "attempt_id": attempt_id,
-                        "run_nonce": run_nonce,
-                        "installation_id": installation_id,
-                        "client_id": client,
-                        "candidate_id": candidate_id,
-                        "http_status": 200,
-                        "response_id": response_id,
-                        "completed_at_utc": timestamp(40),
-                    },
-                )
-                self._write_json(
-                    usage_path,
-                    {
-                        "schema_version": (
-                            codex_upgrade_receipt_finalizer.USAGE_AUDIT_SCHEMA
-                        ),
-                        "source": "sub2api-usage",
-                        "event_id": f"usage-event-{client}",
-                        "request_id": request_id,
-                        "campaign_id": campaign_manifest["campaign_id"],
-                        "attempt_id": attempt_id,
-                        "run_nonce": run_nonce,
-                        "response_id": response_id,
-                        "candidate_id": candidate_id,
-                        "usage_id": f"usage-{client}",
-                        "oauth_account_id": 90,
-                        "recorded_at_utc": timestamp(50),
-                    },
-                )
-                receipt_path = evidence_root / f"{client}.json"
-                kilo_arguments.append(
-                    argparse.Namespace(
-                        evidence_root=evidence_root,
-                        output=Path(receipt_path.name),
-                        campaign_id=campaign_manifest["campaign_id"],
-                        attempt_id=attempt_id,
-                        run_nonce=run_nonce,
-                        attempt_started_at_utc=attempt_started_at_utc,
-                        client_checkpoint_at_utc=client_checkpoint_at_utc,
-                        client_id=client,
-                        candidate_id=candidate_id,
-                        target_version="0.147.0",
-                        profile_id=identity["profile_id"],
-                        profile_digest=identity["profile_digest"],
-                        candidate_image_id=identity["image_id"],
-                        source_tree_sha256=identity["source_tree_sha256"],
-                        build_id=identity["build_id"],
-                        deployed_version=identity["deployed_version"],
-                        model="gpt-5.6-luna",
-                        installation=Path(installation_path.name),
-                        ingress=Path(ingress_path.name),
-                        runtime_audit=Path(runtime_path.name),
-                        response_witness=Path(response_path.name),
-                        usage_audit=Path(usage_path.name),
-                    )
-                )
-                client_receipts.append(f"{client}={receipt_path}")
 
-            self._make_private_tree(evidence_root)
-            codex_upgrade_receipt_finalizer.finalize_observed_profile(
-                argparse.Namespace(
-                    evidence_root=evidence_root,
-                    output=Path(observed_profile_path.name),
-                    campaign_id=campaign_manifest["campaign_id"],
-                    attempt_id=attempt_id,
-                    run_nonce=run_nonce,
-                    attempt_started_at_utc=attempt_started_at_utc,
-                    client_checkpoint_at_utc=client_checkpoint_at_utc,
-                    candidate_id=candidate_id,
-                    target_version="0.147.0",
-                    profile_id=identity["profile_id"],
-                    profile_digest=identity["profile_digest"],
-                    image_id=identity["image_id"],
-                    image_reference=identity["image_reference"],
-                    source_tree_sha256=identity["source_tree_sha256"],
-                    build_id=identity["build_id"],
-                    deployed_version=identity["deployed_version"],
-                    runtime_audit=Path(observed_runtime_path.name),
-                )
-            )
-            for arguments in kilo_arguments:
-                codex_upgrade_receipt_finalizer.finalize_kilo_binding(arguments)
-            post_client_restoration_report = (
-                evidence_root / "client-restoration-report.json"
-            )
-            post_client_arguments: dict[str, object] = {
-                "evidence_root": evidence_root,
-                "output": Path(post_client_restoration_report.name),
-                "phase": "candidate",
-                "candidate_id": candidate_id,
-            }
-            for check_id, before_name, after_name, comparator in (
-                codex_upgrade_receipt_finalizer.RESTORATION_INPUTS
-            ):
-                before_path = evidence_root / f"client-{before_name}.json"
-                after_path = evidence_root / f"client-{after_name}.json"
-                if comparator == "before_subset":
-                    before_state = self._database_state(after=True)
-                    after_state = self._database_state(after=True)
-                else:
-                    before_state = {
-                        "probe_kind": f"post_client_{check_id}",
-                        "stable_value": "restored",
-                    }
-                    after_state = dict(before_state)
-                self._write_state_snapshot(before_path, before_state)
-                self._write_state_snapshot(after_path, after_state)
-                post_client_arguments[before_name] = Path(before_path.name)
-                post_client_arguments[after_name] = Path(after_path.name)
-            codex_upgrade_receipt_finalizer.finalize_restoration(
-                argparse.Namespace(**post_client_arguments)
-            )
-            self._write_json(
-                evidence_root
-                / "environment"
-                / "client-after"
-                / "probe-manifest.json",
-                {
-                    "schema_version": "codex-upgrade-environment-probe/v1",
-                    "phase": "after",
-                    "observed_at_utc": client_checkpoint_at_utc,
-                },
-            )
 
         self._make_private_tree(evidence_root)
         restoration = codex_upgrade._validate_restoration_report(
@@ -6604,7 +8378,7 @@ class CodexUpgradeTest(unittest.TestCase):
                     attempt_started_at_utc=attempt_started_at_utc,
                     client_checkpoint_at_utc=client_checkpoint_at_utc,
                     candidate_id=str(candidate_id),
-                    target_version="0.147.0",
+                    target_version=target_version,
                     expected_profile_id=str(identity["profile_id"]),
                     expected_profile_digest=str(identity["profile_digest"]),
                     image_id=str(identity["image_id"]),
@@ -6623,8 +8397,8 @@ class CodexUpgradeTest(unittest.TestCase):
                 attempt_started_at_utc=attempt_started_at_utc,
                 client_checkpoint_at_utc=client_checkpoint_at_utc,
                 candidate_id=str(candidate_id),
-                target_version="0.147.0",
-                model="gpt-5.6-luna",
+                target_version=target_version,
+                model=third_party_model,
                 identity=identity,
             )
         normalized_surface = codex_upgrade.scan_evidence(
@@ -6652,13 +8426,13 @@ class CodexUpgradeTest(unittest.TestCase):
                     profile_id=str(identity.get("profile_id", "")),
                     profile_digest=str(identity.get("profile_digest", "")),
                 )
-                if job.job_id == f"{phase}-test"
+                if job.job_id == self.synthetic_job_ids[phase]
             )
             execution_sha256 = codex_upgrade._job_execution_sha256(planned_job)
         except codex_upgrade.ConfigurationError:
             execution_sha256 = "0" * 64
         result_item = {
-            "id": f"{phase}-test",
+            "id": self.synthetic_job_ids[phase],
             "phase": phase,
             "required": True,
             "execution_sha256": execution_sha256,
@@ -6740,7 +8514,7 @@ class CodexUpgradeTest(unittest.TestCase):
         )
         attempt_root.mkdir(parents=True, mode=0o700)
         reservation: dict[str, object] = {
-            "schema_version": codex_upgrade.CAPTURE_RESERVATION_SCHEMA,
+            "schema_version": codex_upgrade.LEGACY_CAPTURE_RESERVATION_SCHEMA,
             "campaign_id": campaign_manifest["campaign_id"],
             "campaign_mode": campaign_manifest["campaign_mode"],
             "campaign_purpose": campaign_manifest["campaign_purpose"],
@@ -7065,12 +8839,19 @@ class CodexUpgradeTest(unittest.TestCase):
         *,
         omit_last: bool = False,
         blocked_rule: str | None = None,
+        rules: tuple[str, ...] | None = None,
+        assertion_profile_payload: dict[str, object] | None = None,
+        version: str = "0.147.0",
+        profile_payload: dict[str, object] | None = None,
     ) -> tuple[Path, Path, Path, Path, Path, tuple[str, ...]]:
+        # 改造 5 M1 审核修正（真实评估链）：``rules`` 覆盖目标规则集合（默认 0.145.0 全集），
+        # ``assertion_profile_payload`` 直接给出断言画像（默认由冻结画像裁剪）；默认行为不变。
         baseline_manifest = (
             Path(__file__).resolve().parents[1]
             / "codex_upgrade_rules_0_145_0.json"
         )
-        rules = load_rule_manifest(baseline_manifest, "0.145.0")
+        if rules is None:
+            rules = load_rule_manifest(baseline_manifest, "0.145.0")
         target_manifest = root / "target-rules.json"
         migration_manifest = root / "rule-migration.json"
         scenario_manifest = root / "target-scenarios.json"
@@ -7080,7 +8861,7 @@ class CodexUpgradeTest(unittest.TestCase):
             target_manifest,
             {
                 "schema_version": codex_upgrade.RULE_SCHEMA,
-                "codex_version": "0.147.0",
+                "codex_version": version,
                 "required_rules": list(rules),
             },
         )
@@ -7103,7 +8884,7 @@ class CodexUpgradeTest(unittest.TestCase):
             {
                 "schema_version": codex_upgrade.MIGRATION_SCHEMA,
                 "baseline_version": "0.145.0",
-                "target_version": "0.147.0",
+                "target_version": version,
                 "status": "approved",
                 "entries": entries,
                 "discovery_classifications": [],
@@ -7113,19 +8894,20 @@ class CodexUpgradeTest(unittest.TestCase):
             root,
             target_manifest,
             rules,
-            version="0.147.0",
+            version=version,
             name=scenario_manifest.name,
         )
-        profile_payload = {
-            "transport": "codex-official-egress",
-            "rule_count": len(rules),
-        }
+        if profile_payload is None:
+            profile_payload = {
+                "transport": "codex-official-egress",
+                "rule_count": len(rules),
+            }
         self._write_json(
             profile_manifest,
             {
                 "schema_version": codex_upgrade.PROFILE_SCHEMA,
-                "codex_version": "0.147.0",
-                "profile_id": "codex-0.147.0-test-v1",
+                "codex_version": version,
+                "profile_id": f"codex-{version}-test-v1",
                 "profile_digest": "c" * 64,
                 "profile_payload": profile_payload,
                 "profile_payload_sha256": codex_upgrade._fingerprint(
@@ -7134,11 +8916,14 @@ class CodexUpgradeTest(unittest.TestCase):
                 "status": "approved",
             },
         )
-        self._write_assertion_profile(
-            assertion_profile_manifest,
-            rules,
-            version="0.147.0",
-        )
+        if assertion_profile_payload is not None:
+            self._write_json(assertion_profile_manifest, assertion_profile_payload)
+        else:
+            self._write_assertion_profile(
+                assertion_profile_manifest,
+                rules,
+                version=version,
+            )
         return (
             target_manifest,
             migration_manifest,
@@ -7601,6 +9386,9 @@ class CodexUpgradeTest(unittest.TestCase):
                 "compile-vc-interrupted-recovery-batch",
                 "recover-vc1-interruption",
                 "successor",
+                "recover-candidate-failed-jobs",
+                "recover-candidate-post-run-seal",
+                "rehearse-candidate-seal",
                 "capture-official",
                 "classify",
                 "prepare-profile",
@@ -7626,10 +9414,616 @@ class CodexUpgradeTest(unittest.TestCase):
                 "reconcile-supervisor-run",
                 "reconcile-attempt",
                 "account-sealed-official",
+                "account-sealed-candidate",
+                # 改造 2：候选级 revision 的两个零请求控制命令。
+                "revision-open",
+                "invalidate-candidate",
+                "evaluation-recover",
                 "status",
                 "resume",
             },
         )
+
+    def test_formal_failed_job_recovery_cli_fixes_reason_and_candidate(self) -> None:
+        """正式恢复入口不暴露 reason，且默认保持 v7 Candidate 身份。"""
+
+        parser = codex_upgrade._build_parser()
+        arguments = parser.parse_args(
+            [
+                "recover-candidate-failed-jobs",
+                "--predecessor-campaign-dir",
+                "/campaign/source",
+                "--campaign-dir",
+                "/campaign/successor",
+                "--campaign-id",
+                "successor-a",
+                "--codex-account-id",
+                "90",
+                "--predecessor-attempt-id",
+                "attempt-a",
+                "--job-rehearsal-root",
+                "/control/rehearsal",
+                "--job-rehearsal-receipt",
+                "/control/rehearsal/receipt.json",
+                "--recovery-timing-ledger-dir",
+                "/control/timing",
+                "--recovery-timing-receipt",
+                "/control/timing/receipt.json",
+                "--recovery-arm64-environment-root",
+                "/control/arm64",
+                "--recovery-arm64-environment-receipt",
+                "/control/arm64/receipt.json",
+                "--predecessor-stop-ledger-dir",
+                "/control/stopped",
+                "--predecessor-stop-receipt",
+                "/control/stopped/receipt.json",
+            ]
+        )
+        self.assertEqual(
+            arguments.reason,
+            "candidate_failed_job_tool_recovery",
+        )
+        self.assertEqual(arguments.predecessor_candidate_id, "c0154-candidate-v7")
+        with self.assertRaises(SystemExit):
+            parser.parse_args(
+                [
+                    "recover-candidate-failed-jobs",
+                    "--reason",
+                    "candidate_runtime_identity_correction",
+                ]
+            )
+
+    def test_formal_failed_job_recovery_rejects_non_v7_source(self) -> None:
+        """专用入口必须锁定固定路径、清单、Candidate、attempt 与工具摘要。"""
+
+        source = codex_upgrade.C0154_V7_RECOVERY_SOURCE
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            predecessor_dir = root / str(source["campaign_id"])
+            predecessor_dir.mkdir()
+            predecessor_path = predecessor_dir / "campaign.json"
+            manifest = {
+                "campaign_id": source["campaign_id"],
+                "target_version": source["target_version"],
+                "tool_identity": {"files_sha256": source["tool_files_sha256"]},
+            }
+            self._write_json(predecessor_path, manifest)
+            arguments = argparse.Namespace(
+                predecessor_campaign_dir=predecessor_dir,
+                predecessor_candidate_id=source["candidate_id"],
+                predecessor_attempt_id=source["attempt_id"],
+            )
+            attempt_overrides, abandoned = self._write_c0154_v7_source_attempt(
+                predecessor_dir,
+                source,
+                codex_upgrade.file_sha256(predecessor_path),
+            )
+            fixed = {
+                "campaign_dir": str(predecessor_dir),
+                "campaign_manifest_sha256": codex_upgrade.file_sha256(
+                    predecessor_path
+                ),
+                **attempt_overrides,
+            }
+            with mock.patch.dict(source, fixed):
+                actual = codex_upgrade._require_c0154_v7_formal_recovery_source(
+                    arguments,
+                    manifest,
+                )
+                self.assertEqual(actual["abandoned_candidate_attempt"], abandoned)
+
+                for field, value in (
+                    ("campaign_id", "another-campaign"),
+                    ("target_version", "0.155.0"),
+                    ("tool_identity", {"files_sha256": "0" * 64}),
+                ):
+                    changed = copy.deepcopy(manifest)
+                    changed[field] = value
+                    with self.assertRaisesRegex(
+                        codex_upgrade.ConfigurationError,
+                        "只允许已审计",
+                    ):
+                        codex_upgrade._require_c0154_v7_formal_recovery_source(
+                            arguments,
+                            changed,
+                        )
+                for field, value in (
+                    ("predecessor_candidate_id", "another-candidate"),
+                    ("predecessor_attempt_id", "another-attempt"),
+                ):
+                    changed = copy.copy(arguments)
+                    setattr(changed, field, value)
+                    with self.assertRaisesRegex(
+                        codex_upgrade.ConfigurationError,
+                        "只允许已审计",
+                    ):
+                        codex_upgrade._require_c0154_v7_formal_recovery_source(
+                            changed,
+                            manifest,
+                        )
+
+                wrong_path = copy.copy(arguments)
+                wrong_path.predecessor_campaign_dir = root / "same-id-copy" / str(
+                    source["campaign_id"]
+                )
+                wrong_path.predecessor_campaign_dir.mkdir(parents=True)
+                self._write_json(
+                    wrong_path.predecessor_campaign_dir / "campaign.json",
+                    manifest,
+                )
+                with self.assertRaisesRegex(
+                    codex_upgrade.ConfigurationError,
+                    "直接前序路径不可信",
+                ):
+                    codex_upgrade._require_c0154_v7_formal_recovery_source(
+                        wrong_path,
+                        manifest,
+                    )
+
+                with mock.patch.dict(
+                    source,
+                    {"campaign_manifest_sha256": "0" * 64},
+                ):
+                    with self.assertRaisesRegex(
+                        codex_upgrade.ConfigurationError,
+                        "前序清单摘要漂移",
+                    ):
+                        codex_upgrade._require_c0154_v7_formal_recovery_source(
+                            arguments,
+                            manifest,
+                        )
+
+    def test_v7_recovery_source_binding_rejects_version_hash_candidate_and_tool_drift(
+        self,
+    ) -> None:
+        """场景元数据例外必须锁死完整 v7 来源坐标。"""
+
+        source = codex_upgrade.C0154_V7_RECOVERY_SOURCE
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            predecessor_dir = root / str(source["campaign_id"])
+            predecessor_dir.mkdir()
+            predecessor_path = predecessor_dir / "campaign.json"
+            predecessor_manifest = {
+                "campaign_id": source["campaign_id"],
+                "target_version": source["target_version"],
+                "tool_identity": {"files_sha256": source["tool_files_sha256"]},
+            }
+            self._write_json(predecessor_path, predecessor_manifest)
+            source_manifest_sha256 = codex_upgrade.file_sha256(predecessor_path)
+            manifest = {
+                "target_version": source["target_version"],
+                "predecessor": {
+                    "campaign_dir": str(predecessor_dir),
+                    "campaign_id": source["campaign_id"],
+                    "campaign_manifest_sha256": source_manifest_sha256,
+                    "reason": "candidate_failed_job_tool_recovery",
+                },
+            }
+            attempt_overrides, abandoned = self._write_c0154_v7_source_attempt(
+                predecessor_dir,
+                source,
+                source_manifest_sha256,
+            )
+
+            with mock.patch.dict(
+                source,
+                {
+                    "campaign_dir": str(predecessor_dir),
+                    "campaign_manifest_sha256": source_manifest_sha256,
+                    **attempt_overrides,
+                },
+            ):
+                actual = codex_upgrade._require_c0154_v7_recovery_source_binding(
+                    root / ".successor-staging",
+                    manifest,
+                    candidate_id=source["candidate_id"],
+                    attempt_id=source["attempt_id"],
+                )
+                self.assertEqual(actual["predecessor_manifest"], predecessor_manifest)
+                self.assertEqual(actual["abandoned_candidate_attempt"], abandoned)
+
+                changed = copy.deepcopy(manifest)
+                changed["target_version"] = "0.151.0"
+                with self.assertRaisesRegex(
+                    codex_upgrade.ConfigurationError,
+                    "直接前序绑定不匹配",
+                ):
+                    codex_upgrade._require_c0154_v7_recovery_source_binding(
+                        root / ".successor-staging",
+                        changed,
+                        candidate_id=source["candidate_id"],
+                        attempt_id=source["attempt_id"],
+                    )
+
+                changed = copy.deepcopy(manifest)
+                changed["predecessor"]["campaign_manifest_sha256"] = "0" * 64
+                with self.assertRaisesRegex(
+                    codex_upgrade.ConfigurationError,
+                    "直接前序绑定不匹配",
+                ):
+                    codex_upgrade._require_c0154_v7_recovery_source_binding(
+                        root / ".successor-staging",
+                        changed,
+                        candidate_id=source["candidate_id"],
+                        attempt_id=source["attempt_id"],
+                    )
+
+                with self.assertRaisesRegex(
+                    codex_upgrade.ConfigurationError,
+                    "Candidate 或 attempt 身份漂移",
+                ):
+                    codex_upgrade._require_c0154_v7_recovery_source_binding(
+                        root / ".successor-staging",
+                        manifest,
+                        candidate_id="another-candidate",
+                        attempt_id=source["attempt_id"],
+                    )
+
+                changed = copy.deepcopy(manifest)
+                changed["predecessor"]["campaign_dir"] = str(root / "copy")
+                with self.assertRaisesRegex(
+                    codex_upgrade.ConfigurationError,
+                    "直接前序绑定不匹配",
+                ):
+                    codex_upgrade._require_c0154_v7_recovery_source_binding(
+                        root / ".successor-staging",
+                        changed,
+                        candidate_id=source["candidate_id"],
+                        attempt_id=source["attempt_id"],
+                    )
+
+                predecessor_manifest["tool_identity"]["files_sha256"] = "0" * 64
+                self._write_json(predecessor_path, predecessor_manifest)
+                changed_manifest_sha256 = codex_upgrade.file_sha256(
+                    predecessor_path
+                )
+                tool_drift_manifest = copy.deepcopy(manifest)
+                tool_drift_manifest["predecessor"][
+                    "campaign_manifest_sha256"
+                ] = changed_manifest_sha256
+                with (
+                    mock.patch.dict(
+                        source,
+                        {
+                            "campaign_manifest_sha256": changed_manifest_sha256
+                        },
+                    ),
+                    self.assertRaisesRegex(
+                        codex_upgrade.ConfigurationError,
+                        "工具.*身份漂移",
+                    ),
+                ):
+                    codex_upgrade._require_c0154_v7_recovery_source_binding(
+                        root / ".successor-staging",
+                        tool_drift_manifest,
+                        candidate_id=source["candidate_id"],
+                        attempt_id=source["attempt_id"],
+                    )
+
+    def test_v7_legacy_build_receipt_requires_explicit_source_authority(
+        self,
+    ) -> None:
+        """未进入固定 v7 来源重放时，v1 构建收据必须默认拒绝。"""
+
+        source = codex_upgrade.C0154_V7_RECOVERY_SOURCE
+        with tempfile.TemporaryDirectory() as directory:
+            campaign_dir = Path(directory).resolve()
+            receipt_path = (
+                campaign_dir
+                / "candidates"
+                / str(source["candidate_id"])
+                / "build-receipt.json"
+            )
+            self._write_json(
+                receipt_path,
+                {
+                    "schema_version": (
+                        codex_upgrade_vc_artifacts.LEGACY_CANDIDATE_BUILD_SCHEMA
+                    )
+                },
+            )
+            with self.assertRaisesRegex(
+                codex_upgrade.ConfigurationError,
+                "受管历史投影",
+            ):
+                codex_upgrade._replay_candidate_build_receipt(
+                    campaign_dir,
+                    {},
+                    str(source["candidate_id"]),
+                    receipt_path,
+                )
+
+    def test_v7_frozen_legacy_build_receipt_rejects_each_fixed_field_drift(
+        self,
+    ) -> None:
+        """v1 兼容必须同时锁死来源、文件字节及两层自摘要。"""
+
+        source = codex_upgrade.C0154_V7_RECOVERY_SOURCE
+        with tempfile.TemporaryDirectory() as directory:
+            campaign_dir = Path(directory).resolve()
+            receipt_path = (
+                campaign_dir
+                / "candidates"
+                / str(source["candidate_id"])
+                / "build-receipt.json"
+            )
+            receipt = {
+                "schema_version": (
+                    codex_upgrade_vc_artifacts.LEGACY_CANDIDATE_BUILD_SCHEMA
+                ),
+                "campaign_id": source["campaign_id"],
+                "campaign_manifest_sha256": "1" * 64,
+                "candidate_id": source["candidate_id"],
+                "target_version": source["target_version"],
+                "receipt_digest": "2" * 64,
+                "build": {"parameters_sha256": "3" * 64},
+            }
+            self._write_json(receipt_path, receipt)
+            fixed = {
+                "campaign_dir": str(campaign_dir),
+                "campaign_manifest_sha256": receipt[
+                    "campaign_manifest_sha256"
+                ],
+                "build_receipt_sha256": codex_upgrade.file_sha256(receipt_path),
+                "build_receipt_bytes": receipt_path.stat().st_size,
+                "build_receipt_digest": receipt["receipt_digest"],
+                "build_parameters_sha256": receipt["build"][
+                    "parameters_sha256"
+                ],
+            }
+            manifest = {
+                "campaign_id": source["campaign_id"],
+                "target_version": source["target_version"],
+            }
+
+            with (
+                mock.patch.dict(source, fixed),
+                mock.patch.object(
+                    codex_upgrade,
+                    "_validated_c0154_v7_recovery_source_scope",
+                    return_value={},
+                ) as source_guard,
+            ):
+                binding = (
+                    codex_upgrade._require_c0154_v7_frozen_legacy_build_receipt(
+                        campaign_dir,
+                        manifest,
+                        str(source["candidate_id"]),
+                        receipt_path,
+                        receipt,
+                    )
+                )
+                self.assertEqual(
+                    binding,
+                    {
+                        "path": receipt_path.relative_to(campaign_dir).as_posix(),
+                        "sha256": source["build_receipt_sha256"],
+                        "bytes": source["build_receipt_bytes"],
+                    },
+                )
+                source_guard.assert_called_once_with(
+                    campaign_dir,
+                    manifest,
+                    candidate_id=source["candidate_id"],
+                    attempt_id=source["attempt_id"],
+                )
+
+                receipt_drifts = {
+                    "schema_version": {
+                        "schema_version": codex_upgrade_vc_artifacts.CANDIDATE_BUILD_SCHEMA
+                    },
+                    "campaign_id": {"campaign_id": "another-campaign"},
+                    "campaign_manifest_sha256": {
+                        "campaign_manifest_sha256": "4" * 64
+                    },
+                    "candidate_id": {"candidate_id": "another-candidate"},
+                    "target_version": {"target_version": "0.155.0"},
+                    "receipt_digest": {"receipt_digest": "5" * 64},
+                    "parameters_sha256": {
+                        "build": {"parameters_sha256": "6" * 64}
+                    },
+                }
+                for field, changes in receipt_drifts.items():
+                    with self.subTest(field=field):
+                        changed = copy.deepcopy(receipt)
+                        changed.update(changes)
+                        with self.assertRaisesRegex(
+                            codex_upgrade.ConfigurationError,
+                            "历史构建收据.*漂移",
+                        ):
+                            codex_upgrade._require_c0154_v7_frozen_legacy_build_receipt(
+                                campaign_dir,
+                                manifest,
+                                str(source["candidate_id"]),
+                                receipt_path,
+                                changed,
+                            )
+
+                for field, value in (
+                    ("build_receipt_sha256", "7" * 64),
+                    ("build_receipt_bytes", receipt_path.stat().st_size + 1),
+                ):
+                    with (
+                        self.subTest(field=field),
+                        mock.patch.dict(source, {field: value}),
+                        self.assertRaisesRegex(
+                            codex_upgrade.ConfigurationError,
+                            "历史构建收据.*漂移",
+                        ),
+                    ):
+                        codex_upgrade._require_c0154_v7_frozen_legacy_build_receipt(
+                            campaign_dir,
+                            manifest,
+                            str(source["candidate_id"]),
+                            receipt_path,
+                            receipt,
+                        )
+
+                with self.assertRaisesRegex(
+                    codex_upgrade.ConfigurationError,
+                    "历史构建收据.*漂移",
+                ):
+                    codex_upgrade._require_c0154_v7_frozen_legacy_build_receipt(
+                        campaign_dir,
+                        manifest,
+                        "another-candidate",
+                        receipt_path,
+                        receipt,
+                    )
+
+            with (
+                mock.patch.dict(source, fixed),
+                mock.patch.object(
+                    codex_upgrade,
+                    "_validated_c0154_v7_recovery_source_scope",
+                    side_effect=codex_upgrade.ConfigurationError(
+                        "v7 失败 Job 恢复的直接前序路径不可信。"
+                    ),
+                ),
+                self.assertRaisesRegex(
+                    codex_upgrade.ConfigurationError,
+                    "直接前序路径不可信",
+                ),
+            ):
+                codex_upgrade._require_c0154_v7_frozen_legacy_build_receipt(
+                    campaign_dir,
+                    manifest,
+                    str(source["candidate_id"]),
+                    receipt_path,
+                    receipt,
+                )
+
+    def test_published_v7_recovery_coordinates_replay_abandoned_attempt(self) -> None:
+        """已发布后继必须从严格 v6 收据完整重放唯一源 attempt。"""
+
+        source = codex_upgrade.C0154_V7_RECOVERY_SOURCE
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            predecessor_dir = root / str(source["campaign_id"])
+            campaign_dir = root / "successor"
+            predecessor_dir.mkdir()
+            campaign_dir.mkdir()
+            predecessor_manifest = {
+                "campaign_id": source["campaign_id"],
+                "target_version": source["target_version"],
+                "tool_identity": {"files_sha256": source["tool_files_sha256"]},
+            }
+            predecessor_path = predecessor_dir / "campaign.json"
+            self._write_json(predecessor_path, predecessor_manifest)
+            predecessor_sha256 = codex_upgrade.file_sha256(predecessor_path)
+            manifest = {
+                "campaign_id": "successor-a",
+                "target_version": source["target_version"],
+                "predecessor": {
+                    "campaign_dir": str(predecessor_dir),
+                    "campaign_id": source["campaign_id"],
+                    "campaign_manifest_sha256": predecessor_sha256,
+                    "reason": "candidate_failed_job_tool_recovery",
+                },
+            }
+            successor_path = campaign_dir / "campaign.json"
+            self._write_json(successor_path, manifest)
+            attempt_overrides, abandoned = self._write_c0154_v7_source_attempt(
+                predecessor_dir,
+                source,
+                predecessor_sha256,
+            )
+            predecessor_binding = {
+                "campaign_dir": str(predecessor_dir),
+                "campaign_id": source["campaign_id"],
+                "campaign_manifest_sha256": predecessor_sha256,
+            }
+            imported = {
+                "schema_version": codex_upgrade.PREDECESSOR_RECOVERY_IMPORT_SCHEMA,
+                "created_at_utc": "2026-09-17T05:28:07Z",
+                "reason": "candidate_failed_job_tool_recovery",
+                "successor_campaign_id": manifest["campaign_id"],
+                "successor_campaign_manifest_sha256": codex_upgrade.file_sha256(
+                    successor_path
+                ),
+                "predecessor_campaign": predecessor_binding,
+                "stages": {},
+                "copied_files": [],
+                "configuration_transition": {},
+                "abandoned_candidate_attempt": abandoned,
+                "job_rehearsal_transition": {},
+                "recovery_control_transition": {},
+            }
+            imported["receipt_digest"] = codex_upgrade._fingerprint(imported)
+            import_path = campaign_dir / "predecessor-import.json"
+
+            def write_import(value: dict[str, object]) -> None:
+                unsigned = {
+                    key: item
+                    for key, item in value.items()
+                    if key != "receipt_digest"
+                }
+                value["receipt_digest"] = codex_upgrade._fingerprint(unsigned)
+                self._write_json(import_path, value)
+
+            with mock.patch.dict(
+                source,
+                {
+                    "campaign_dir": str(predecessor_dir),
+                    "campaign_manifest_sha256": predecessor_sha256,
+                    **attempt_overrides,
+                },
+            ):
+                write_import(imported)
+                self.assertEqual(
+                    codex_upgrade._published_c0154_v7_recovery_coordinates(
+                        campaign_dir,
+                        manifest,
+                    ),
+                    (source["candidate_id"], source["attempt_id"]),
+                )
+
+                extra_field = copy.deepcopy(imported)
+                extra_field["unexpected"] = True
+                write_import(extra_field)
+                with self.assertRaisesRegex(
+                    codex_upgrade.ConfigurationError,
+                    "导入身份",
+                ):
+                    codex_upgrade._published_c0154_v7_recovery_coordinates(
+                        campaign_dir,
+                        manifest,
+                    )
+
+                missing_field = copy.deepcopy(imported)
+                missing_field.pop("job_rehearsal_transition")
+                write_import(missing_field)
+                with self.assertRaisesRegex(
+                    codex_upgrade.ConfigurationError,
+                    "导入身份",
+                ):
+                    codex_upgrade._published_c0154_v7_recovery_coordinates(
+                        campaign_dir,
+                        manifest,
+                    )
+
+                write_import(imported)
+                attempt_path = predecessor_dir / str(abandoned["path"])
+                drifted_attempt = json.loads(
+                    attempt_path.read_text(encoding="utf-8")
+                )
+                drifted_attempt["unexpected"] = True
+                self._write_json(attempt_path, drifted_attempt)
+                with (
+                    mock.patch.dict(
+                        source,
+                        {"attempt_sha256": codex_upgrade.file_sha256(attempt_path)},
+                    ),
+                    self.assertRaisesRegex(
+                        codex_upgrade.ConfigurationError,
+                        "源 attempt 完整身份漂移",
+                    ),
+                ):
+                    codex_upgrade._published_c0154_v7_recovery_coordinates(
+                        campaign_dir,
+                        manifest,
+                    )
 
     def test_runtime_target_scenario_allows_only_five_codex_bin_bindings(
         self,
@@ -7878,7 +10272,8 @@ class CodexUpgradeTest(unittest.TestCase):
             self.assertEqual(
                 recovery["allowed_high_risk_path_changes"],
                 sorted(
-                    codex_upgrade.RUNTIME_SUCCESSOR_CHANGED_TOOL_PATH_JOB_IDS
+                    set(codex_upgrade.RUNTIME_SUCCESSOR_CHANGED_TOOL_PATH_JOB_IDS)
+                    & set(source_files)
                 ),
             )
             self.assertEqual(
@@ -8446,6 +10841,169 @@ class CodexUpgradeTest(unittest.TestCase):
                     epoch_production_sha256
                 ),
             )
+        )
+
+    def test_v7_preview_replays_hybrid_and_evaluator_drift(self) -> None:
+        """v7 严格预览应承接旧结果，不得把混合文件或 timing schema 判成重跑。"""
+
+        def tool_identity(
+            values: dict[str, str],
+            *,
+            wire_closure: str,
+            files_sha256: str | None = None,
+        ) -> dict[str, object]:
+            entries = [
+                {"path": path, "sha256": digest}
+                for path, digest in sorted(values.items())
+            ]
+            components = codex_upgrade._tool_component_identities(entries)
+            return {
+                "entry_count": len(entries),
+                "files_sha256": files_sha256
+                or codex_upgrade._fingerprint({"entries": entries}),
+                "entries": entries,
+                "components": components["components"],
+                **codex_upgrade._tool_identity_sides(entries),
+                "orchestrator_closures": {
+                    "wire_producer": {"closure_sha256": wire_closure}
+                },
+            }
+
+        source = codex_upgrade.C0154_V7_RECOVERY_SOURCE
+        frozen_files = {
+            "candidate_rule_expectations_0_154_0.json": "1" * 64,
+            "codex_upgrade.py": "2" * 64,
+            "codex_upgrade_timing_ledger.schema.json": "3" * 64,
+            "run_candidate_core_capture.sh": "4" * 64,
+            "run_h1_wire_probe.sh": "5" * 64,
+        }
+        current_files = {
+            path: (digest if path == "run_h1_wire_probe.sh" else "6" * 64)
+            for path, digest in frozen_files.items()
+        }
+        frozen_tool = tool_identity(
+            frozen_files,
+            wire_closure="7" * 64,
+        )
+        current_tool = tool_identity(current_files, wire_closure="8" * 64)
+        job = Job(
+            job_id="candidate-h1-wire",
+            phase="candidate",
+            suites=("full",),
+            description="h1",
+            steps=(
+                {
+                    "argv": [
+                        "bash",
+                        "/capture/tools/official_client_capture/run_h1_wire_probe.sh",
+                    ],
+                    "environment": {},
+                },
+            ),
+            evidence_roots=("/capture/h1",),
+            covers=(),
+        )
+        identity = {"runtime": "same"}
+        metadata = codex_upgrade._job_incremental_metadata(
+            job,
+            identity=identity,
+            tool_identity=frozen_tool,
+        )
+        result = {
+            "id": job.job_id,
+            "status": "complete",
+            "execution_sha256": metadata["input_sha256"],
+            "tool_components": metadata["components"],
+            "tool_component_digests": metadata["component_digests"],
+            "tool_dependency_files": metadata["tool_dependency_files"],
+            "input_sha256": metadata["input_sha256"],
+            "environment_sha256": metadata["environment_sha256"],
+            "dependency_sha256": metadata["dependency_sha256"],
+            "incremental_result_key": metadata["result_key"],
+        }
+        attempt = {
+            "status": "failed",
+            "identity": identity,
+            "results": [result],
+        }
+        frozen_manifest = {
+            "campaign_id": source["campaign_id"],
+            "target_version": source["target_version"],
+            "tool_identity": frozen_tool,
+        }
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source_dir = root / "source"
+            current_dir = root / "current"
+            attempt_root = (
+                source_dir
+                / "candidates"
+                / str(source["candidate_id"])
+                / "attempts"
+                / str(source["attempt_id"])
+            )
+            attempt_root.mkdir(parents=True)
+            (attempt_root / "attempt.json").write_text("{}\n", encoding="utf-8")
+            current_dir.mkdir()
+            with (
+                mock.patch.dict(
+                    source,
+                    {"tool_files_sha256": frozen_tool["files_sha256"]},
+                ),
+                mock.patch.object(
+                    codex_upgrade,
+                    "load_campaign_manifest",
+                    side_effect=[
+                        frozen_manifest,
+                        {"campaign_id": "current-campaign"},
+                    ],
+                ),
+                mock.patch.object(
+                    codex_upgrade,
+                    "_ordered_capture_attempts",
+                    return_value=[(attempt_root, {})],
+                ),
+                mock.patch.object(
+                    codex_upgrade,
+                    "_load_capture_attempt",
+                    return_value=(attempt_root, attempt),
+                ),
+            ):
+                reused = codex_upgrade._prior_complete_results(
+                    current_dir,
+                    Path("candidates/current-candidate"),
+                    [job],
+                    phase="candidate",
+                    candidate_id="current-candidate",
+                    identity=identity,
+                    tool_identity=current_tool,
+                    expected_reuse_job_ids=[job.job_id],
+                    source_attempt_id=str(source["attempt_id"]),
+                    source_campaign_dir=source_dir,
+                    source_candidate_id=str(source["candidate_id"]),
+                    allowed_high_risk_path_changes={
+                        "codex_upgrade_timing_ledger.schema.json",
+                        "run_candidate_core_capture.sh",
+                    },
+                    validated_current_production_sha256=(
+                        codex_upgrade._tool_identity_side_digest_excluding(
+                            current_tool,
+                            "production",
+                            codex_upgrade._PHASE_EVALUATION_HYBRID_FILES,
+                        )
+                    ),
+                    allow_unbound_cross_campaign_preview=True,
+                )
+
+        self.assertEqual([item["id"] for item in reused], [job.job_id])
+        self.assertEqual(
+            reused[0]["incremental_result_key"],
+            codex_upgrade._job_incremental_metadata(
+                job,
+                identity=identity,
+                tool_identity=current_tool,
+            )["result_key"],
         )
 
     def test_plan_identity_does_not_load_transition_from_cross_campaign_failure(
@@ -9203,6 +11761,17 @@ class CodexUpgradeTest(unittest.TestCase):
                     phase=phase,
                     event_type="stage_completed",
                 )
+                if index == 3:
+                    # 改造 2：候选级阶段开工前账本必须先激活 r1。
+                    codex_upgrade_timing_ledger.append_event(
+                        predecessor_ledger,
+                        event_id="stage-revision-r1",
+                        phase="VC-4",
+                        event_type="stage_revision",
+                        revision=1,
+                        candidate_id="cand-1",
+                        revision_commit_sha256="6" * 64,
+                    )
                 codex_upgrade_timing_ledger.append_event(
                     predecessor_ledger,
                     event_id=f"start-vc{index + 1}",
@@ -9317,11 +11886,12 @@ class CodexUpgradeTest(unittest.TestCase):
                 import_receipt["schema_version"],
                 codex_upgrade.PREDECESSOR_RECOVERY_IMPORT_SCHEMA,
             )
+            # 8 条阶段事件 + 1 条 stage_revision（改造 2）+ 1 条 stop_the_line = 11。
             self.assertEqual(
                 import_receipt["recovery_control_transition"]["stop_checkpoint"][
                     "head_sequence"
                 ],
-                10,
+                11,
             )
 
     def test_campaign_fixture_package_is_independent_of_wall_clock(self) -> None:
@@ -11522,10 +14092,14 @@ class CodexUpgradeTest(unittest.TestCase):
                 "campaign_id": manifest["campaign_id"],
                 "counting_rule": "codex_model_requests/v2",
                 "estimation_policy": "upper_bound_from_sibling_or_turn_ratio",
-                "requests": [{"identity_key": f"k{i}"} for i in range(3)],
+                "requests": [
+                    {"identity_key": f"k{i}", "job_id": "official-core"}
+                    for i in range(3)
+                ],
                 "jobs": [
                     {
                         "job_id": "official-core",
+                        "phase": "official",
                         "status": "estimated",
                         "roots": [
                             {
@@ -11553,6 +14127,77 @@ class CodexUpgradeTest(unittest.TestCase):
             self.assertEqual(after["root_cause_counts"], before["root_cause_counts"])
             receipt_dir = campaign_dir / "control" / reconciler.RECONCILIATION_DIR
             self.assertTrue(any(p.name.startswith("sealed-official-") for p in receipt_dir.iterdir()))
+
+    def test_account_sealed_candidate_writes_project_ledger_once(self) -> None:
+        """成功 Candidate 封存后有独立的幂等入账入口。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            ledger_root = project_ledger_fixture.install_fixture_ledger(root)
+            arguments = self._campaign_arguments(
+                root / "sealed-candidate",
+                campaign_id="upgrade-0154-sealed-candidate-accounting",
+                baseline_version="0.151.0",
+                target_version="0.154.0",
+                model="gpt-5.5",
+                lite_model="gpt-6-astra",
+            )
+            codex_upgrade.create_campaign(arguments)
+            campaign_dir = arguments.campaign_dir
+            command = argparse.Namespace(
+                campaign_dir=campaign_dir,
+                candidate_id="candidate-a",
+            )
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "尚未封存"):
+                codex_upgrade._account_sealed_candidate_command(command)
+            self._seal_candidate_stage(root / "sealed-candidate", campaign_dir)
+            before = codex_upgrade_project_ledger.replay_head(ledger_root)
+            synthetic = {
+                "schema_version": "live-request-provenance/v2",
+                "campaign_id": "upgrade-0154-sealed-candidate-accounting",
+                "counting_rule": "codex_model_requests/v2",
+                "estimation_policy": "upper_bound_from_sibling_or_turn_ratio",
+                "requests": [
+                    {"identity_key": "candidate-k1", "job_id": "candidate-core"},
+                    {"identity_key": "candidate-k2", "job_id": "candidate-core"},
+                ],
+                "jobs": [
+                    {
+                        "job_id": "candidate-core",
+                        "phase": "candidate",
+                        "status": "resolved",
+                        "roots": [],
+                        "estimated_count": 0,
+                    }
+                ],
+                "unresolved_job_ids": [],
+                "pending_job_ids": [],
+                "pre_request_zero_job_ids": [],
+                "precise_total": 2,
+                "estimated_total": 0,
+            }
+            with mock.patch.object(
+                reconciler.provenance,
+                "collect_campaign_provenance",
+                return_value=dict(synthetic),
+            ):
+                result = codex_upgrade._account_sealed_candidate_command(command)
+                again = codex_upgrade._account_sealed_candidate_command(command)
+            self.assertEqual(result["phase"], "candidate")
+            self.assertEqual(result["candidate_id"], "candidate-a")
+            self.assertEqual(result["request"]["new_identity_keys"], 2)
+            self.assertTrue(again["batch"].get("reused"), again)
+            after = codex_upgrade_project_ledger.replay_head(ledger_root)
+            self.assertEqual(after["precise_total"], before["precise_total"] + 2)
+            receipt_dir = campaign_dir / "control" / reconciler.RECONCILIATION_DIR
+            self.assertTrue(
+                any(
+                    path.name.startswith("sealed-candidate-candidate-a-")
+                    for path in receipt_dir.iterdir()
+                )
+            )
 
     def test_release_certification_requirement_follows_policy_version(self) -> None:
         """发布认证绑定只对策略 v5 起创建的完整 VC 链 Campaign 必需，历史清单按 Job 演练承接。"""
@@ -11655,6 +14300,57 @@ class CodexUpgradeTest(unittest.TestCase):
                     require_active=False,
                     _control_override=drifted,
                 )
+
+    def test_frozen_rehearsal_replays_after_evaluator_label_digest_rotation(
+        self,
+    ) -> None:
+        """冻结演练只因 evaluator 标签文件换版时仍可按原合同只读重放。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project_ledger_fixture.install_fixture_ledger(root)
+            arguments = self._campaign_arguments(
+                root / "campaign-root",
+                campaign_id="upgrade-0154-frozen-label-digest",
+                baseline_version="0.151.0",
+                target_version="0.154.0",
+                model="gpt-5.5",
+                lite_model="gpt-6-astra",
+            )
+            codex_upgrade.create_campaign(arguments)
+            campaign_dir = arguments.campaign_dir
+            manifest = codex_upgrade.load_campaign_manifest(campaign_dir)
+            rehearsal = manifest["control_receipts"]["job_rehearsal"]
+            receipt = json.loads(
+                (
+                    Path(rehearsal["evidence_root"])
+                    / rehearsal["receipt"]["path"]
+                ).read_text(encoding="utf-8")
+            )
+            frozen_digest = receipt["execution_contract"][
+                "evidence_label_declaration_sha256"
+            ]
+            rotated_digest = "0" * 64 if frozen_digest != "0" * 64 else "1" * 64
+
+            with mock.patch.object(
+                codex_upgrade_job_rehearsal_receipt,
+                "_target_evidence_label_declaration_sha256",
+                return_value=rotated_digest,
+            ):
+                codex_upgrade._verify_control_receipts(
+                    campaign_dir,
+                    manifest,
+                    require_active=False,
+                )
+                with self.assertRaisesRegex(
+                    codex_upgrade.ConfigurationError,
+                    "Formal 执行合同",
+                ):
+                    codex_upgrade._verify_control_receipts(
+                        campaign_dir,
+                        manifest,
+                        require_active=True,
+                    )
 
     def test_0154_upgrade_pair_model_policy_mutations_fail_closed(self) -> None:
         """0.154 必须用非 Lite 主线和 Astra Lite 轨，错配时立即拒绝。"""
@@ -13496,6 +16192,226 @@ class CodexUpgradeTest(unittest.TestCase):
             )
             self.assertFalse((successor_dir / "official" / "attempts").exists())
 
+    def test_0154_classification_successor_rebuilds_official_reuse_vc_chain(
+        self,
+    ) -> None:
+        """0.154 分类纠正后继不得继承前序 VC 坐标或 VC-2+ 制品。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project_ledger_fixture.install_fixture_ledger(root)
+            arguments = self._campaign_arguments(
+                root / "predecessor",
+                campaign_id="upgrade-0154-classification-predecessor",
+                baseline_version="0.151.0",
+                target_version="0.154.0",
+                model="gpt-5.5",
+                lite_model="gpt-6-astra",
+            )
+            predecessor_manifest = codex_upgrade.create_campaign(arguments)
+            predecessor_dir = arguments.campaign_dir
+            timing_ledger = Path(
+                predecessor_manifest["control_receipts"]["upgrade_timing"][
+                    "ledger_dir"
+                ]
+            )
+            codex_upgrade_timing_ledger.append_event(
+                timing_ledger,
+                event_id="classification-successor-complete-vc0",
+                phase="VC-0",
+                event_type="stage_completed",
+            )
+            codex_upgrade_timing_ledger.append_event(
+                timing_ledger,
+                event_id="classification-successor-start-vc1",
+                phase="VC-1",
+                event_type="stage_started",
+            )
+            self._seal_official_stage(
+                root / "predecessor",
+                predecessor_dir,
+                predecessor_manifest,
+            )
+            codex_upgrade_timing_ledger.append_event(
+                timing_ledger,
+                event_id="classification-successor-complete-vc1",
+                phase="VC-1",
+                event_type="stage_completed",
+            )
+            codex_upgrade_timing_ledger.append_event(
+                timing_ledger,
+                event_id="classification-successor-start-vc2",
+                phase="VC-2",
+                event_type="stage_started",
+            )
+
+            rules = tuple(predecessor_manifest["required_rules"])
+            patch_manifest_path = (
+                Path(__file__).resolve().parents[1]
+                / "profile_rule_patches_0_154_0.json"
+            )
+            patch_manifest = json.loads(
+                patch_manifest_path.read_text(encoding="utf-8")
+            )
+            patched_rules = []
+            for patch in patch_manifest["rule_patches"]:
+                if patch["rule_id"] not in patched_rules:
+                    patched_rules.append(patch["rule_id"])
+            migration_path = root / "rule-migration-0154.json"
+            self._write_json(
+                migration_path,
+                {
+                    "schema_version": codex_upgrade.MIGRATION_SCHEMA,
+                    "baseline_version": "0.151.0",
+                    "target_version": "0.154.0",
+                    "status": "approved",
+                    "entries": [
+                        {
+                            "baseline_rule": rule,
+                            "target_rule": rule,
+                            "classification": (
+                                "change" if rule in patched_rules else "inherit"
+                            ),
+                            "rationale": "测试分类事实纠正后继",
+                            "evidence_refs": ["official-diff.json"],
+                        }
+                        for rule in rules
+                    ],
+                    "discovery_classifications": [],
+                },
+            )
+            catalog_root = (
+                Path(__file__).resolve().parents[3]
+                / "docs/egress/lifecycle/codex-0154-candidate/catalog-stage/"
+                "catalogdata/runtime/profiles"
+            )
+            active_profile = (
+                catalog_root
+                / "0.151.0/dbc65378c80a2ad843ce1ba6253a2e47f0dd5d8bc812bb536a2d24ddb7a59e39.json"
+            )
+            # 目标画像必须是 active 副本加受管补丁清单：与仓库补丁内容解耦，补丁变化时测试
+            # 仍按同一派生规则成立。
+            target_profile_payload, _ = codex_upgrade._replace_json_string_literal(
+                json.loads(active_profile.read_text(encoding="utf-8")),
+                "0.151.0",
+                "0.154.0",
+            )
+            for patch in patch_manifest["rule_patches"]:
+                codex_upgrade._profile_pointer_replace(
+                    target_profile_payload, patch["path"], patch["after"]
+                )
+            target_profile_payload["Digest"] = codex_upgrade._fingerprint(
+                {"test": "classification-successor", "payload": target_profile_payload}
+            )
+            profile_path = root / "profile-0154.json"
+            self._write_json(
+                profile_path,
+                {
+                    "schema_version": codex_upgrade.PROFILE_SCHEMA,
+                    "codex_version": "0.154.0",
+                    "profile_id": "codex-0.154.0-test-v1",
+                    "profile_digest": target_profile_payload["Digest"],
+                    "profile_payload": target_profile_payload,
+                    "profile_payload_sha256": codex_upgrade._fingerprint(
+                        target_profile_payload
+                    ),
+                    "status": "approved",
+                },
+            )
+            assertion_profile = root / "assertion-profile-0154.json"
+            self._write_assertion_profile(
+                assertion_profile,
+                rules,
+                version="0.154.0",
+            )
+            classification_arguments = {
+                "target_rule_manifest": root / "predecessor/target-rules.json",
+                "migration_manifest": migration_path,
+                "scenario_manifest": root / "predecessor/target-scenarios.json",
+                "profile_manifest": profile_path,
+                "assertion_profile_manifest": assertion_profile,
+                "active_profile": active_profile,
+                "profile_patch_manifest": (
+                    Path(__file__).resolve().parents[1]
+                    / "profile_rule_patches_0_154_0.json"
+                ),
+            }
+            preview = codex_upgrade.classify_campaign(
+                predecessor_dir,
+                **classification_arguments,
+            )
+            approved = codex_upgrade.classify_campaign(
+                predecessor_dir,
+                **classification_arguments,
+                approve_manifest_sha256=preview["joint_manifest_sha256"],
+            )
+            self.assertEqual(approved["status"], "complete")
+            self.assertTrue(
+                (predecessor_dir / "control/vc/vc-2-checkpoint.json").is_file()
+            )
+
+            successor_dir = root / "successor"
+            return_code, stdout, stderr = self._run_main(
+                [
+                    "reuse-official-evidence",
+                    "--predecessor-campaign-dir",
+                    str(predecessor_dir),
+                    "--campaign-dir",
+                    str(successor_dir),
+                    "--campaign-id",
+                    "upgrade-0154-classification-successor",
+                    "--codex-account-id",
+                    "93",
+                    "--classification-fact-correction",
+                ]
+            )
+            self.assertEqual(return_code, 0, stderr)
+            result = json.loads(stdout)
+            self.assertEqual(result["status"], "official_sealed")
+            self.assertEqual(result["executed_job_count"], 0)
+            self.assertEqual(result["live_request_count"], 0)
+
+            manifest = codex_upgrade.load_campaign_manifest(successor_dir)
+            predecessor_plan = codex_upgrade._vc_campaign_plan(
+                predecessor_dir,
+                predecessor_manifest,
+            )
+            plan = codex_upgrade._vc_campaign_plan(successor_dir, manifest)
+            self.assertEqual(
+                plan["campaign_id"],
+                "upgrade-0154-classification-successor",
+            )
+            self.assertNotEqual(plan["plan_sha256"], predecessor_plan["plan_sha256"])
+            control = manifest["vc_control"]
+            batch = json.loads(
+                (successor_dir / control["first_formal_batch"]["path"]).read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(batch["execute_item_ids"], [])
+            self.assertEqual(batch["reuse_item_ids"], ["official-test"])
+            self.assertEqual(batch["actions"], [])
+            _, checkpoint = codex_upgrade._replay_vc_checkpoint(
+                successor_dir,
+                plan,
+                "VC-1",
+            )
+            self.assertEqual(checkpoint["execute_item_ids"], [])
+            self.assertEqual(checkpoint["reuse_item_ids"], ["official-test"])
+            self.assertEqual(
+                checkpoint["metrics"],
+                {"live_request_count": 0, "scanned_bytes": 0},
+            )
+            self.assertEqual(
+                sorted(
+                    path.name
+                    for path in (successor_dir / "control/vc").glob(
+                        "vc-*-checkpoint.json"
+                    )
+                ),
+                ["vc-0-checkpoint.json", "vc-1-checkpoint.json"],
+            )
+
     # ------------------------------------------------------------------
     # A3a：官方证据从 awaiting_receipts 前序 attempt 只读导入
     # ------------------------------------------------------------------
@@ -14337,8 +17253,14 @@ class CodexUpgradeTest(unittest.TestCase):
             "timing_ledger": Path(str(manifest["control_receipts"]["upgrade_timing"]["ledger_dir"])),
         }
 
-    def _b0_orphan_attempt(self, fixture: dict[str, object], *, complete_job: bool = False) -> str:
-        """只发布 reservation 的孤儿 attempt；可选写一条 complete checkpoint 与 Job 收据。"""
+    def _b0_orphan_attempt(
+        self,
+        fixture: dict[str, object],
+        *,
+        complete_job: bool = False,
+        evidence_roots: list[Path] | None = None,
+    ) -> str:
+        """发布孤儿 attempt；可选写 Job 收据，并仅在完整完成时写 checkpoint。"""
 
         campaign_dir = fixture["campaign_dir"]
         manifest = fixture["manifest"]
@@ -14351,7 +17273,7 @@ class CodexUpgradeTest(unittest.TestCase):
             jobs=jobs,
             allow_failed_rerun=True,
         )
-        if complete_job:
+        if complete_job or evidence_roots is not None:
             job = jobs[0]
             result = {
                 "id": job.job_id,
@@ -14362,7 +17284,9 @@ class CodexUpgradeTest(unittest.TestCase):
                 "description": "合成 Job",
                 "duration_seconds": 0.0,
                 "steps": [],
-                "evidence_roots": [],
+                "evidence_roots": [
+                    str(path.resolve(strict=True)) for path in (evidence_roots or [])
+                ],
                 "missing_evidence_patterns": [],
                 "empty_evidence_patterns": [],
                 "covers": [],
@@ -14377,26 +17301,334 @@ class CodexUpgradeTest(unittest.TestCase):
                 "model_condition_receipt_failure": None,
                 "disposition": "executed",
             }
-            store = codex_upgrade.incremental_recovery.CheckpointStore(attempt_root / "checkpoints")
-            store.append(
-                {
-                    "checkpoint_schema_version": codex_upgrade.JOB_CHECKPOINT_SCHEMA,
-                    "campaign_id": manifest["campaign_id"],
-                    "phase": "official",
-                    "attempt_id": attempt_root.name,
-                    "run_nonce": reservation["run_nonce"],
-                    "item_id": job.job_id,
-                    "status": "complete",
-                    "disposition": "executed",
-                    "result_sha256": codex_upgrade.incremental_recovery.digest(result),
-                    "result_key": None,
-                    "result": result,
-                    "source_receipt": None,
-                    "previous_checkpoint_sha256": None,
-                }
-            )
             codex_upgrade._secure_write_json_once(attempt_root / f"job-{job.job_id}.json", result)
+            if complete_job:
+                store = codex_upgrade.incremental_recovery.CheckpointStore(
+                    attempt_root / "checkpoints"
+                )
+                store.append(
+                    {
+                        "checkpoint_schema_version": codex_upgrade.JOB_CHECKPOINT_SCHEMA,
+                        "campaign_id": manifest["campaign_id"],
+                        "phase": "official",
+                        "attempt_id": attempt_root.name,
+                        "run_nonce": reservation["run_nonce"],
+                        "item_id": job.job_id,
+                        "status": "complete",
+                        "disposition": "executed",
+                        "result_sha256": codex_upgrade.incremental_recovery.digest(result),
+                        "result_key": None,
+                        "result": result,
+                        "source_receipt": None,
+                        "previous_checkpoint_sha256": None,
+                    }
+                )
         return attempt_root.name
+
+    def _historical_v7_run_summary(self) -> dict[str, object]:
+        """返回 ARM64 v7 第三次归档的逐字节等价结构化摘要。"""
+
+        scenarios = {
+            "A03": (
+                {"models_manifest": 1, "responses_http_success": 4},
+                46425,
+                "cc09c6f4db410b3efc3b72696eb9803a59c6f48f6219ce7dff8dbded208063d9",
+            ),
+            "A04": (
+                {"models_manifest": 3, "responses_http_success": 4},
+                65323,
+                "0f400552e0aebbb51cd52f3922fee7604f48fe9dbedb24cc1071642922d21bdb",
+            ),
+            "A05": (
+                {
+                    "models_manifest": 1,
+                    "responses_ws_handshake_success": 2,
+                    "responses_ws_response_create": 2,
+                },
+                49394,
+                "17ed44b8a02aec93799e15fcd19f27317ff0c0de365ffefc333b029cbb7c98dc",
+            ),
+            "A06": (
+                {
+                    "responses_ws_handshake_success": 1,
+                    "responses_ws_response_create": 3,
+                },
+                11737,
+                "f9dbe8eb39deebc4c1afd8a5ea8a441819a100211290bf189f16a6e8b7abef3a",
+            ),
+            "A07": (
+                {
+                    "responses_http_fallback_success": 1,
+                    "responses_ws_retryable_failure": 6,
+                },
+                61147,
+                "f8a8f59ac37201fee52e0d5cc385f1eaf66b87e084c01ae51e82bd175dd89aac",
+            ),
+            "A08": (
+                {"models_manifest": 1, "responses_http_success": 3},
+                38270,
+                "2375f4a2c19a12feaf70b7393c20e0619a770bfb791ef08cf34eaf758ee43c17",
+            ),
+            "A10": (
+                {"responses_http_success": 4},
+                42180,
+                "716fdeda87a975a144ac7ffeb947834702b5fbfe8c0c6010aa503dbfeb82b3ce",
+            ),
+            "A15": (
+                {"models_manifest": 1},
+                8151,
+                "d84230edcbace5f9e476d6cb937120d28a44da6a2e5e7abcfa4b2a70fb537998",
+            ),
+        }
+        return {
+            "schema_version": "candidate-core-capture/v1",
+            "codex_version": "0.154.0",
+            "run_id": (
+                "c0154-formal-vc5-recovery-20260916t122646z-"
+                "c0154-candidate-v7-candidate-frozen-core"
+            ),
+            "status": "failed",
+            "exit_code": 1,
+            "synthetic_profile": "candidate-core-v1",
+            "explicit_gate": True,
+            "production_forwarding_enabled": False,
+            "scenarios": [
+                {
+                    "scenario_id": scenario_id,
+                    "actions": scenario_data[0],
+                    "production_forwarded": False,
+                    "pcap_bytes": scenario_data[1],
+                    "pcap_sha256": scenario_data[2],
+                }
+                for scenario_id, scenario_data in scenarios.items()
+            ],
+            "limitations": {
+                "A08": (
+                    "relay 只声明真实跨调用连接；keepalive/断连重试关系由受源码哈希"
+                    "约束的结构化测试补证"
+                ),
+                "A10_token_budget": (
+                    "TokenBudget 零出站只由结构化测试证明，本脚本不伪造不存在的网络请求"
+                ),
+                "A15_surface": (
+                    "relay 证明身份 header 的真实出站；exec/TUI 进程来源由结构化测试证明"
+                ),
+            },
+            "restoration": {
+                "account_proxy_original": "NULL|NULL",
+                "account_proxy_equal": True,
+                "account_extra_equal": True,
+                "hosts_sha256_equal": True,
+                "ca_bundle_sha256_equal": True,
+            },
+        }
+
+    def _b0_historical_v7_attempt(
+        self,
+        fixture: dict[str, object],
+        *,
+        host_runs: Path,
+    ) -> tuple[str, dict[str, object]]:
+        """发布绑定真实 v7 producer 与完整 run-summary 的历史 Candidate attempt。"""
+
+        campaign_dir = fixture["campaign_dir"]
+        manifest = fixture["manifest"]
+        candidate_id = "c0154-candidate-v7"
+        identity = {"candidate_purpose": manifest["campaign_purpose"]}
+        summary = self._historical_v7_run_summary()
+        evidence_name = f"{summary['run_id']}.failed-attempt3"
+        logical_evidence_root = f"/root/oauth-capture/runs/{evidence_name}"
+        job = Job(
+            job_id="candidate-frozen-core",
+            phase="candidate",
+            suites=("full",),
+            description="历史 v7 Candidate frozen core",
+            steps=({"argv": ["bash", "run_candidate_core_capture.sh"]},),
+            evidence_roots=(logical_evidence_root,),
+            covers=(),
+            scenario_ids=("A03", "A04", "A05", "A06", "A07", "A08", "A10", "A15"),
+        )
+        evidence_root = host_runs / evidence_name
+        evidence_root.mkdir(parents=True)
+        summary_path = evidence_root / "run-summary.json"
+        self._write_json(summary_path, summary)
+        summary_path.chmod(0o600)
+        attempt_root, _reservation = codex_upgrade._reserve_capture_attempt(
+            campaign_dir,
+            phase="candidate",
+            candidate_id=candidate_id,
+            identity=identity,
+            jobs=[job],
+            allow_failed_rerun=True,
+        )
+        result = {
+            "id": job.job_id,
+            "phase": "candidate",
+            "required": True,
+            "execution_sha256": codex_upgrade._job_execution_sha256(job),
+            "status": "failed",
+            "description": "历史 v7 A15 失败",
+            "duration_seconds": 0.0,
+            "steps": [{"step": 1, "return_code": 1}],
+            "evidence_roots": list(job.evidence_roots),
+            "missing_evidence_patterns": [],
+            "empty_evidence_patterns": [],
+            "covers": [],
+            "scenario_ids": list(job.scenario_ids),
+            "scenario_receipts": [],
+            "scenario_receipt_failures": [],
+            "track": "main",
+            "model_id": "gpt-5.5",
+            "expected_use_responses_lite": False,
+            "required_model_receipt": False,
+            "model_condition_receipt": None,
+            "model_condition_receipt_failure": None,
+            "tool_dependency_files": {
+                "run_candidate_core_capture.sh": (
+                    "b313b3fd313cd689e56d95f15e54f856"
+                    "78d1b367f6e8d8bd4d8b3d4e53b1d54c"
+                )
+            },
+            "disposition": "executed",
+        }
+        attempt = codex_upgrade._write_capture_attempt(
+            campaign_dir,
+            attempt_root,
+            {
+                "campaign_id": manifest["campaign_id"],
+                "phase": "candidate",
+                "candidate_id": candidate_id,
+                "status": "failed",
+                "identity": identity,
+                "results": [result],
+                "failure_observations": [],
+                "evidence_roots": [],
+                "evidence_permission_closeout": None,
+                "evidence_permission_error": {
+                    "type": "SyntheticFailure",
+                    "message": "合成历史 attempt 不封存证据权限收据。",
+                },
+                "environment": {
+                    "evidence_root": str(attempt_root / "evidence"),
+                    "before_probe": None,
+                    "after_probe": {"status": "passed"},
+                    "restoration_report": {"status": "passed"},
+                    "arm64_before_receipt": None,
+                    "arm64_after_receipt": None,
+                },
+                "binary_verification": None,
+                "execution_error": None,
+                "restoration_error": None,
+                "next_gate": "对账历史 v7 attempt。",
+            },
+        )
+        attempt = dict(attempt)
+        attempt["schema_version"] = codex_upgrade.LEGACY_CAPTURE_ATTEMPT_SCHEMA
+        attempt.pop("failure_observations", None)
+        attempt.pop("root_causes", None)
+        attempt.pop("attempt_digest", None)
+        attempt["attempt_digest"] = codex_upgrade._fingerprint(attempt)
+        attempt_path = attempt_root / "attempt.json"
+        attempt_path.write_text(
+            json.dumps(attempt, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        attempt_path.chmod(0o600)
+        return attempt_root.name, attempt
+
+    def _b0_failed_attempt(
+        self,
+        fixture: dict[str, object],
+        *,
+        scenario_ids: tuple[str, ...] = ("A15",),
+        failure_observations: list[dict[str, str]] | None = None,
+        legacy_without_failure_arrays: bool = False,
+    ) -> tuple[str, dict[str, object]]:
+        """发布已恢复环境下的失败 attempt，可选降级为历史无数组形态。"""
+
+        campaign_dir = fixture["campaign_dir"]
+        manifest = fixture["manifest"]
+        jobs = fixture["jobs"]
+        job = jobs[0]
+        attempt_root, _reservation = codex_upgrade._reserve_capture_attempt(
+            campaign_dir,
+            phase="official",
+            candidate_id=None,
+            identity=dict(manifest["official_identity"]),
+            jobs=jobs,
+            allow_failed_rerun=True,
+        )
+        result = {
+            "id": job.job_id,
+            "phase": "official",
+            "required": True,
+            "execution_sha256": codex_upgrade._job_execution_sha256(job),
+            "status": "failed",
+            "description": "合成失败 Job",
+            "duration_seconds": 0.0,
+            "steps": [],
+            "evidence_roots": [],
+            "missing_evidence_patterns": [],
+            "empty_evidence_patterns": [],
+            "covers": [],
+            "scenario_ids": list(scenario_ids),
+            "scenario_receipts": [],
+            "scenario_receipt_failures": [
+                {"scenario_id": scenario_id, "reason": "合成枚举失败"}
+                for scenario_id in scenario_ids
+            ],
+            "track": "main",
+            "model_id": "gpt-5.5",
+            "expected_use_responses_lite": False,
+            "required_model_receipt": False,
+            "model_condition_receipt": None,
+            "model_condition_receipt_failure": None,
+            "disposition": "executed",
+        }
+        attempt = codex_upgrade._write_capture_attempt(
+            campaign_dir,
+            attempt_root,
+            {
+                "campaign_id": manifest["campaign_id"],
+                "phase": "official",
+                "candidate_id": None,
+                "status": "failed",
+                "identity": dict(manifest["official_identity"]),
+                "results": [result],
+                "failure_observations": list(failure_observations or []),
+                "evidence_roots": [],
+                "evidence_permission_closeout": None,
+                "evidence_permission_error": {
+                    "type": "SyntheticFailure",
+                    "message": "合成失败 attempt 没有证据目录。",
+                },
+                "environment": {
+                    "evidence_root": str(attempt_root / "evidence"),
+                    "before_probe": None,
+                    "after_probe": {"status": "passed"},
+                    "restoration_report": {"status": "passed"},
+                    "arm64_before_receipt": None,
+                    "arm64_after_receipt": None,
+                },
+                "binary_verification": None,
+                "execution_error": None,
+                "restoration_error": None,
+                "next_gate": "对账失败 attempt。",
+            },
+        )
+        if legacy_without_failure_arrays:
+            attempt = dict(attempt)
+            attempt["schema_version"] = codex_upgrade.LEGACY_CAPTURE_ATTEMPT_SCHEMA
+            attempt.pop("failure_observations", None)
+            attempt.pop("root_causes", None)
+            attempt.pop("attempt_digest", None)
+            attempt["attempt_digest"] = codex_upgrade._fingerprint(attempt)
+            (attempt_root / "attempt.json").write_text(
+                json.dumps(attempt, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            (attempt_root / "attempt.json").chmod(0o600)
+        return attempt_root.name, attempt
 
     def _b0_run_dir(
         self,
@@ -14406,8 +17638,20 @@ class CodexUpgradeTest(unittest.TestCase):
         state: str = "failed",
         owner_pid: int | None = None,
         phase: str = "VC-0",
+        failure_class: str | None = None,
+        failure_observations: list[dict[str, str]] | None = None,
+        batched_manifest: dict[str, object] | None = None,
+        action_id: str = "dispatch",
+        failure_kind: str = "handled-error",
+        error_type: str = "ConfigurationError",
+        post_run_tooling: bool = False,
+        started_offset_seconds: float = -30.0,
     ) -> Path:
-        """一个已终止（或仍在运行）的父监督器 run 目录：state、events、minute ledger、run 清单。"""
+        """一个已终止（或仍在运行）的父监督器 run 目录：state、events、minute ledger、run 清单。
+
+        ``batched_manifest`` 给出时以它替代默认的 v2 内层清单（seal 段批次等场景）；
+        ``post_run_tooling`` 为真时按父监督器的判据函数写 post-run-tooling 收据。
+        """
 
         supervisor = codex_upgrade.codex_upgrade_supervisor
         run_dir = fixture["control"] / f"run-{name}"
@@ -14417,7 +17661,7 @@ class CodexUpgradeTest(unittest.TestCase):
             finished = subprocess.Popen(["true"])
             finished.wait()
             owner_pid = finished.pid
-        started = time.time() - 30.0
+        started = time.time() + started_offset_seconds
         terminal = started + 1.0
         state_payload: dict[str, object] = {
             "schema_version": supervisor.STATE_SCHEMA,
@@ -14462,7 +17706,7 @@ class CodexUpgradeTest(unittest.TestCase):
             heartbeat_age=None,
             classification="failed" if state != "running" else "active",
         )
-        inner = {
+        inner = batched_manifest or {
             "schema_version": supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA,
             "campaign_id": fixture["manifest"]["campaign_id"],
             "phase": phase,
@@ -14480,9 +17724,283 @@ class CodexUpgradeTest(unittest.TestCase):
                 "manifest_sha256": supervisor._sha256(supervisor._canonical(inner)),
             },
         )
+        if failure_class is not None:
+            if batched_manifest is not None and state == "failed":
+                # 真实父监督器在动作失败后会写 stop receipt；重派门禁靠它定位
+                # 失败动作，夹具按同一函数写入。
+                supervisor._stop_receipt(
+                    run_dir,
+                    event_type="failed",
+                    reason=f"action-failed:{action_id}",
+                    detected_at_epoch=terminal,
+                    owner_pid=owner_pid,
+                    owner_nonce="7" * 64,
+                    campaign_id=str(fixture["manifest"]["campaign_id"]),
+                    phase=phase,
+                )
+            diagnostic_path = supervisor._action_diagnostic_path(
+                run_dir,
+                action_id,
+                create_directory=True,
+            )
+            diagnostic = supervisor._write_action_diagnostic(
+                diagnostic_path,
+                campaign_id=str(fixture["manifest"]["campaign_id"]),
+                phase=phase,
+                action_id=action_id,
+                owner_pid=owner_pid,
+                owner_nonce="7" * 64,
+                failure_kind=failure_kind,
+                failure_class=failure_class,
+                failure_observations=failure_observations,
+                error_type=error_type,
+                message="机器分类测试失败。",
+            )
+            if post_run_tooling:
+                classification = supervisor.post_run_tooling_facts(
+                    fixture["campaign_dir"],
+                    inner,
+                    run_started_at_utc=str(state_payload["started_at_utc"]),
+                )
+                self.assertTrue(classification["qualifies"], classification["reasons"])
+                supervisor._write_post_run_tooling_receipt(
+                    run_dir,
+                    campaign_id=str(fixture["manifest"]["campaign_id"]),
+                    phase=phase,
+                    action_id=action_id,
+                    owner_pid=owner_pid,
+                    owner_nonce="7" * 64,
+                    diagnostic_sha256=str(diagnostic["diagnostic_sha256"]),
+                    facts=classification["facts"],
+                )
         for path in run_dir.rglob("*"):
             path.chmod(0o700 if path.is_dir() else 0o600)
         return run_dir
+
+    @staticmethod
+    def _b0_candidate_job_ids(fixture: dict[str, object]) -> list[str]:
+        """B0 夹具 Campaign 的候选 Job 闭集（合成场景只有 candidate-test）。"""
+
+        return sorted(
+            str(item["id"])
+            for item in fixture["manifest"]["jobs"]
+            if item.get("phase") == "candidate"
+        )
+
+    def _b0_completed_candidate_attempt(self, fixture: dict[str, object]) -> Path:
+        """按正式预约与封存合同发布一个九项 Job 全部 complete、等待 seal 收据的候选 attempt。"""
+
+        campaign_dir = fixture["campaign_dir"]
+        manifest = fixture["manifest"]
+        candidate_id = "cand-1"
+        identity = {"candidate_purpose": manifest["campaign_purpose"]}
+        # 分类阶段未封存时 _campaign_jobs 不可用；按历史 v7 夹具的方式自造 Job，
+        # ID 与 0.154 场景文件的九个候选 Job 一致。
+        jobs = [
+            Job(
+                job_id=job_id,
+                phase="candidate",
+                suites=("full",),
+                description=f"合成候选 Job {job_id}",
+                steps=({"argv": ["bash", f"{job_id}.sh"]},),
+                evidence_roots=(f"/root/oauth-capture/runs/{job_id}",),
+                covers=(),
+                scenario_ids=("A03",),
+            )
+            for job_id in self._b0_candidate_job_ids(fixture)
+        ]
+        self.assertTrue(jobs)
+        attempt_root, reservation = codex_upgrade._reserve_capture_attempt(
+            campaign_dir,
+            phase="candidate",
+            candidate_id=candidate_id,
+            identity=identity,
+            jobs=jobs,
+            allow_failed_rerun=True,
+        )
+        results: list[dict[str, object]] = []
+        store = codex_upgrade.incremental_recovery.CheckpointStore(
+            attempt_root / "checkpoints"
+        )
+        previous_checkpoint_sha256: str | None = None
+        for job in jobs:
+            result = {
+                "id": job.job_id,
+                "phase": "candidate",
+                "required": True,
+                "execution_sha256": codex_upgrade._job_execution_sha256(job),
+                "status": "complete",
+                "description": "只读承接的候选 Job",
+                "duration_seconds": 0.0,
+                "steps": [],
+                "evidence_roots": [],
+                "missing_evidence_patterns": [],
+                "empty_evidence_patterns": [],
+                "covers": [],
+                "scenario_ids": list(job.scenario_ids),
+                "scenario_receipts": [],
+                "scenario_receipt_failures": [],
+                "track": "main",
+                "model_id": "gpt-5.5",
+                "expected_use_responses_lite": False,
+                "required_model_receipt": False,
+                "model_condition_receipt": None,
+                "model_condition_receipt_failure": None,
+                "disposition": "executed",
+            }
+            codex_upgrade._secure_write_json_once(
+                attempt_root / f"job-{job.job_id}.json", result
+            )
+            appended = store.append(
+                {
+                    "checkpoint_schema_version": codex_upgrade.JOB_CHECKPOINT_SCHEMA,
+                    "campaign_id": manifest["campaign_id"],
+                    "phase": "candidate",
+                    "attempt_id": attempt_root.name,
+                    "run_nonce": reservation["run_nonce"],
+                    "item_id": job.job_id,
+                    "status": "complete",
+                    "disposition": "executed",
+                    "result_sha256": codex_upgrade.incremental_recovery.digest(result),
+                    "result_key": None,
+                    "result": result,
+                    "source_receipt": None,
+                    "previous_checkpoint_sha256": previous_checkpoint_sha256,
+                }
+            )
+            previous_checkpoint_sha256 = str(appended["checkpoint_sha256"])
+            results.append(result)
+        # awaiting_receipts 的 v3 attempt 必须带通过的证据权限收口收据：对空的
+        # evidence／logs 目录真实收口一次，绑定与正式流程完全相同。
+        evidence_root = attempt_root / "evidence"
+        logs_root = attempt_root / "logs"
+        evidence_root.mkdir(mode=0o700, exist_ok=True)
+        logs_root.mkdir(mode=0o700, exist_ok=True)
+        closeout_binding = codex_upgrade._close_attempt_evidence_permissions(
+            attempt_root, [evidence_root, logs_root]
+        )
+        codex_upgrade._write_capture_attempt(
+            campaign_dir,
+            attempt_root,
+            {
+                "campaign_id": manifest["campaign_id"],
+                "phase": "candidate",
+                "candidate_id": candidate_id,
+                "status": "awaiting_receipts",
+                "identity": identity,
+                "results": results,
+                "failure_observations": [],
+                "evidence_roots": [str(evidence_root), str(logs_root)],
+                "evidence_permission_closeout": closeout_binding,
+                "evidence_permission_error": None,
+                "environment": {
+                    "evidence_root": str(attempt_root / "evidence"),
+                    "before_probe": None,
+                    "after_probe": {"status": "passed"},
+                    "restoration_report": {"status": "passed"},
+                    "arm64_before_receipt": None,
+                    "arm64_after_receipt": None,
+                },
+                "binary_verification": None,
+                "execution_error": None,
+                "restoration_error": None,
+                "next_gate": "运行 capture manifest finalizer。",
+            },
+        )
+        return attempt_root
+
+    def _b0_seal_batch_manifest(
+        self,
+        fixture: dict[str, object],
+        *,
+        batch_sequence: int = 1,
+        actions: list[dict[str, object]] | None = None,
+    ) -> dict[str, object]:
+        """VC-5 seal 段的 v2 内层清单：execute 只有 candidate-seal，九项 Job 全部复用。"""
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        plan = codex_upgrade._vc_campaign_plan(fixture["campaign_dir"], fixture["manifest"])
+        campaign_dir = fixture["campaign_dir"]
+        attempt_id = next(
+            path.name
+            for path in (campaign_dir / "candidates" / "cand-1" / "attempts").iterdir()
+            if path.is_dir()
+        )
+        # 动作按正式 /usr/bin/env 坐标形式声明；VC-5 seal 预演门禁由
+        # test_codex_upgrade_seal_rehearsal 单独覆盖，这里只测 post-run-tooling
+        # 分类与对账，构造清单时旁路该门禁。
+        with mock.patch.object(supervisor, "_validate_vc5_seal_rehearsal_gate"):
+            return supervisor.build_batched_campaign_run_manifest(
+                campaign_id=str(fixture["manifest"]["campaign_id"]),
+                campaign_plan_sha256=str(plan["plan_sha256"]),
+                batch_id=f"vc-5-{batch_sequence:04d}",
+                batch_sequence=batch_sequence,
+                batch_sha256=str(batch_sequence) * 64,
+                phase="VC-5",
+                predecessor_checkpoint={
+                    "path": "control/vc/vc-4-checkpoint.json",
+                    "sha256": "3" * 64,
+                    "phase": "VC-4",
+                    "checkpoint_sha256": "4" * 64,
+                },
+                original_deadline_at_utc="2099-09-15T08:12:43Z",
+                actions=actions
+                if actions is not None
+                else [
+                    {
+                        "action_id": "prepare-candidate-assertion-bundle",
+                        "operation": "VC-5:prepare-candidate-assertion-bundle",
+                        "timeout_seconds": 5.0,
+                        "command": [
+                            "/usr/bin/env",
+                            f"CAMPAIGN_DIR={campaign_dir}",
+                            f"ATTEMPT_ID={attempt_id}",
+                            "SIDE=candidate",
+                            "CANDIDATE_ID=cand-1",
+                            "/usr/bin/bash",
+                            "/tmp/prepare_assertion_bundle.sh",
+                        ],
+                        "item_ids": ["candidate-seal"],
+                    }
+                ],
+                execute_items=["candidate-seal"],
+                reuse_items=self._b0_candidate_job_ids(fixture),
+            )
+
+    def _b0_advance_ledger_to_vc5(self, ledger_dir: Path) -> None:
+        for completed, started in (
+            ("VC-0", "VC-1"),
+            ("VC-1", "VC-2"),
+            ("VC-2", "VC-3"),
+            ("VC-3", "VC-4"),
+            ("VC-4", "VC-5"),
+        ):
+            codex_upgrade_timing_ledger.append_event(
+                ledger_dir,
+                event_id=f"fixture-{completed.lower()}-completed",
+                phase=completed,
+                event_type="stage_completed",
+                next_action=f"启动 {started}",
+            )
+            if started == "VC-4":
+                # 改造 2：候选级阶段开工前账本必须先激活 r1。
+                codex_upgrade_timing_ledger.append_event(
+                    ledger_dir,
+                    event_id="fixture-stage-revision-r1",
+                    phase="VC-4",
+                    event_type="stage_revision",
+                    revision=1,
+                    candidate_id="cand-1",
+                    revision_commit_sha256="6" * 64,
+                    next_action="派发 VC-4 首批",
+                )
+            codex_upgrade_timing_ledger.append_event(
+                ledger_dir,
+                event_id=f"fixture-{started.lower()}-started",
+                phase=started,
+                event_type="stage_started",
+                next_action="运行父批次",
+            )
 
     @staticmethod
     def _b0_resume(campaign_dir: Path, preview: Path | None = None) -> dict[str, object]:
@@ -14508,6 +18026,912 @@ class CodexUpgradeTest(unittest.TestCase):
             (str(event["event_type"]), str(event["event_id"]))
             for event, _raw in codex_upgrade_timing_ledger._load_events(ledger_dir)
         ]
+
+    def test_post_run_tooling_failure_reconciles_then_allows_verbatim_redispatch(self) -> None:
+        """seal 段零请求失败：父账本暂停而非停线，对账后恢复 VC-5 并只允许逐字重派。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            ledger_dir = fixture["timing_ledger"]
+            self._b0_advance_ledger_to_vc5(ledger_dir)
+            attempt_root = self._b0_completed_candidate_attempt(fixture)
+            inner = self._b0_seal_batch_manifest(fixture)
+            run_dir = self._b0_run_dir(
+                fixture,
+                "f" * 64,
+                phase="VC-5",
+                failure_class="execution-failure",
+                batched_manifest=inner,
+                action_id="prepare-candidate-assertion-bundle",
+                failure_kind="child-returncode",
+                error_type="ChildProcessError",
+                post_run_tooling=True,
+                started_offset_seconds=5.0,
+            )
+            # 父监督器关账：post-run-tooling 只暂停当前阶段，不写 stage_abandoned。
+            closeout = supervisor._close_failed_campaign_timing_ledger(
+                campaign_dir,
+                inner,
+                failed_action_id="prepare-candidate-assertion-bundle",
+                failure_class="post-run-tooling",
+            )
+            self.assertEqual(closeout["ledger_status"], "recovery_required")
+            self.assertEqual(
+                codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)["status"],
+                "recovery_required",
+            )
+            head_before = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+
+            result = reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
+            self.assertEqual(result["status"], "recoverable")
+            self.assertEqual(result["live_request_count"], 0)
+            self.assertIn("逐字重派同一 seal 批次", result["next_command"])
+            receipt = json.loads(
+                (campaign_dir / result["reconciliation_receipt"]["path"]).read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(receipt["failure_class"], "post-run-tooling")
+            diagnostic = receipt["run"]["action_diagnostic"]
+            self.assertEqual(diagnostic["declared_failure_class"], "execution-failure")
+            self.assertEqual(diagnostic["failure_class"], "post-run-tooling")
+            self.assertTrue(diagnostic["post_run_tooling"]["recomputed"])
+            self.assertEqual(diagnostic["post_run_tooling"]["attempt_id"], attempt_root.name)
+            head_after = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+            self.assertEqual(head_after["sequence"], head_before["sequence"] + 1)
+            timing_after = codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)
+            self.assertEqual(timing_after["status"], "active")
+            self.assertEqual(timing_after["active_phase"], "VC-5")
+            self.assertEqual(timing_after["next_action"], "redispatch-same-batch")
+            events = [item[0] for item in self._b0_ledger_events(ledger_dir)]
+            self.assertNotIn("stage_abandoned", events)
+            self.assertNotIn("stop_the_line", events)
+
+            # 幂等：重复对账不推进总账与账本。
+            replay = reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
+            self.assertEqual(replay["status"], "recoverable")
+            self.assertTrue(replay["batch"]["reused"])
+            self.assertEqual(
+                codex_upgrade_project_ledger.replay_head(fixture["ledger"])["sequence"],
+                head_after["sequence"],
+            )
+
+            # 重派门禁：后继批次逐字相同才放行；actions 漂移失败关闭。
+            prior_state = json.loads((run_dir / "state.json").read_text(encoding="utf-8"))
+            successor = self._b0_seal_batch_manifest(fixture, batch_sequence=2)
+            self.assertTrue(
+                supervisor._validate_batched_environment_redispatch_successor(
+                    prior_state,
+                    inner,
+                    run_dir,
+                    successor,
+                    campaign_dir=campaign_dir,
+                )
+            )
+            drifted_actions = json.loads(json.dumps(inner["actions"]))
+            drifted_actions[0]["command"][-1] = "/tmp/other_assertion_bundle.sh"
+            drifted = self._b0_seal_batch_manifest(
+                fixture, batch_sequence=2, actions=drifted_actions
+            )
+            with self.assertRaisesRegex(supervisor.SupervisorError, "只允许原批次内容重派"):
+                supervisor._validate_batched_environment_redispatch_successor(
+                    prior_state,
+                    inner,
+                    run_dir,
+                    drifted,
+                    campaign_dir=campaign_dir,
+                )
+
+    def test_post_run_tooling_receipt_cannot_revive_stopped_ledger(self) -> None:
+        """账本已 stop_the_line 的旧 run 即便带 post-run-tooling 收据也只能永久停线。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            ledger_dir = fixture["timing_ledger"]
+            self._b0_advance_ledger_to_vc5(ledger_dir)
+            self._b0_completed_candidate_attempt(fixture)
+            inner = self._b0_seal_batch_manifest(fixture)
+            run_dir = self._b0_run_dir(
+                fixture,
+                "e" * 64,
+                phase="VC-5",
+                failure_class="execution-failure",
+                batched_manifest=inner,
+                action_id="prepare-candidate-assertion-bundle",
+                failure_kind="child-returncode",
+                error_type="ChildProcessError",
+                post_run_tooling=True,
+                started_offset_seconds=5.0,
+            )
+            # 父监督器按默认分类关账（例如收据写入后父进程自身异常）：账本停线。
+            closeout = supervisor._close_failed_campaign_timing_ledger(
+                campaign_dir,
+                inner,
+                failed_action_id="prepare-candidate-assertion-bundle",
+                failure_class="execution-failure",
+            )
+            self.assertEqual(closeout["ledger_status"], "stopped")
+            result = reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
+            self.assertEqual(result["status"], "permanent_stop")
+            self.assertEqual(result["decision"]["terminal_reason"], "prior_stop_the_line")
+
+    def test_recovery_required_before_reservation_reconciles_then_redispatches(self) -> None:
+        """reservation 前环境门禁失败：先暂停，对账只推进一次，再恢复同阶段。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            ledger_dir = fixture["timing_ledger"]
+            codex_upgrade_timing_ledger.append_event(
+                ledger_dir,
+                event_id="pre-reservation-recovery-required",
+                phase="VC-0",
+                event_type="recovery_required",
+                root_cause_id="environment-prerequisite",
+                next_action="reconcile-supervisor-run",
+            )
+            run_dir = self._b0_run_dir(
+                fixture,
+                "e" * 64,
+                failure_class="environment-prerequisite",
+            )
+            head_before = codex_upgrade_project_ledger.replay_head(
+                fixture["ledger"]
+            )
+            self.assertEqual(
+                codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)["status"],
+                "recovery_required",
+            )
+            with self.assertRaisesRegex(
+                codex_upgrade.TimingLedgerGateError,
+                "recovery_required",
+            ):
+                codex_upgrade._timing_ledger_batch_events(
+                    campaign_dir,
+                    fixture["manifest"],
+                    codex_upgrade._vc_campaign_plan(
+                        campaign_dir,
+                        fixture["manifest"],
+                    ),
+                    phase="VC-0",
+                    ledger_dir=ledger_dir,
+                )
+            result = reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
+            self.assertEqual(result["status"], "recoverable")
+            self.assertEqual(result["live_request_count"], 0)
+            self.assertEqual(
+                result["root_cause"]["stable_error_code"],
+                "supervisor-run.interrupted",
+            )
+            head_after = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+            self.assertEqual(head_after["sequence"], head_before["sequence"] + 1)
+            timing_after = codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)
+            self.assertEqual(timing_after["status"], "active")
+            self.assertEqual(timing_after["active_phase"], "VC-0")
+            self.assertEqual(timing_after["next_action"], "redispatch-same-batch")
+            self.assertFalse(list((campaign_dir / "official" / "attempts").glob("*")))
+
+            replay = reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
+            self.assertEqual(replay["status"], "recoverable")
+            self.assertTrue(replay["batch"]["reused"])
+            self.assertEqual(
+                codex_upgrade_project_ledger.replay_head(fixture["ledger"])[
+                    "sequence"
+                ],
+                head_after["sequence"],
+            )
+            self.assertEqual(
+                codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)[
+                    "head_sha256"
+                ],
+                timing_after["head_sha256"],
+            )
+
+    def test_reconcile_supervisor_run_preserves_multiple_readiness_causes(self) -> None:
+        """每个 check_id + failure_code 独立生成稳定根因，并在重放时只计一次。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            ledger_dir = fixture["timing_ledger"]
+            codex_upgrade_timing_ledger.append_event(
+                ledger_dir,
+                event_id="multi-readiness-recovery-required",
+                phase="VC-0",
+                event_type="recovery_required",
+                root_cause_id="campaign-run.action-failed",
+                next_action="reconcile-supervisor-run",
+            )
+            observations = [
+                {
+                    "check_id": "candidate-readiness.image",
+                    "failure_code": "runtime-image-or-capability-mismatch",
+                },
+                {
+                    "check_id": "candidate-readiness.storage",
+                    "failure_code": "host-or-container-path-not-writable",
+                },
+                {
+                    "check_id": "candidate-readiness.image",
+                    "failure_code": "runtime-image-or-capability-mismatch",
+                },
+            ]
+            run_dir = self._b0_run_dir(
+                fixture,
+                "f" * 64,
+                failure_class="environment-prerequisite",
+                failure_observations=observations,
+            )
+            result = reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
+            self.assertEqual(result["status"], "recoverable")
+            self.assertEqual(len(result["failure_observations"]), 2)
+            self.assertEqual(len(result["root_causes"]), 2)
+            self.assertEqual(
+                {item["stable_error_code"] for item in result["root_causes"]},
+                {"campaign-run.action-failed"},
+            )
+            cause_ids = [
+                item["root_cause_id"] for item in result["root_causes"]
+            ]
+            self.assertEqual(len(set(cause_ids)), 2)
+            self.assertEqual(
+                {
+                    item["root_cause_id"]
+                    for item in result["failure_observations"]
+                },
+                set(cause_ids),
+            )
+            head = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+            self.assertEqual(
+                {cause_id: head["root_cause_counts"][cause_id] for cause_id in cause_ids},
+                {cause_id: 1 for cause_id in cause_ids},
+            )
+
+            replay = reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
+            replay_head = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+            self.assertTrue(replay["batch"]["reused"])
+            self.assertEqual(
+                {cause_id: replay_head["root_cause_counts"][cause_id] for cause_id in cause_ids},
+                {cause_id: 1 for cause_id in cause_ids},
+            )
+            regenerated_observations, regenerated_causes = (
+                reconciler._supervisor_run_failures(
+                    {
+                        "phase": "VC-0",
+                        "last_operation": "different-volatile-operation",
+                        "failure_observations": [
+                            {
+                                "check_id": item["check_id"],
+                                "failure_code": item["failure_code"],
+                            }
+                            for item in result["failure_observations"]
+                        ],
+                    }
+                )
+            )
+            self.assertEqual(
+                [item["root_cause_id"] for item in regenerated_observations],
+                [item["root_cause_id"] for item in result["failure_observations"]],
+            )
+            self.assertEqual(
+                [item["root_cause_id"] for item in regenerated_causes],
+                cause_ids,
+            )
+
+    def test_attempt_freezes_deduplicated_failures_with_cross_campaign_ids(self) -> None:
+        """attempt 按 check_id + failure_code 去重，根因身份不含 Campaign 坐标。"""
+
+        observations = [
+            {
+                "check_id": "candidate-readiness.storage",
+                "failure_code": "host-or-container-path-not-writable",
+            },
+            {
+                "check_id": "candidate-readiness.storage",
+                "failure_code": "host-or-container-path-not-writable",
+            },
+            {"check_id": "A15", "failure_code": "scenario-receipt-failed"},
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            first_fixture = self._b0_fixture(
+                root / "first", campaign_id="upgrade-0154-attempt-causes-first"
+            )
+            _first_id, first = self._b0_failed_attempt(
+                first_fixture,
+                failure_observations=observations,
+            )
+            second_fixture = self._b0_fixture(
+                root / "second", campaign_id="upgrade-0154-attempt-causes-second"
+            )
+            _second_id, second = self._b0_failed_attempt(
+                second_fixture,
+                failure_observations=observations,
+            )
+            self.assertEqual(len(first["failure_observations"]), 2)
+            self.assertEqual(len(first["root_causes"]), 2)
+            self.assertEqual(
+                [
+                    (item["check_id"], item["failure_code"])
+                    for item in first["failure_observations"]
+                ],
+                [
+                    ("A15", "scenario-receipt-failed"),
+                    (
+                        "candidate-readiness.storage",
+                        "host-or-container-path-not-writable",
+                    ),
+                ],
+            )
+            self.assertEqual(
+                [item["root_cause_id"] for item in first["root_causes"]],
+                [item["root_cause_id"] for item in second["root_causes"]],
+            )
+
+    def test_historical_candidate_core_summary_recovers_a15_root_cause(self) -> None:
+        """v7 的完整摘要只在旧 producer 与闭合动作矩阵下还原 A15。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            host_runs = Path(directory).resolve() / "runs"
+            summary = self._historical_v7_run_summary()
+            evidence_name = f"{summary['run_id']}.failed-attempt3"
+            evidence_root = host_runs / evidence_name
+            evidence_root.mkdir(parents=True)
+            summary_path = evidence_root / "run-summary.json"
+            self._write_json(
+                summary_path,
+                summary,
+            )
+            summary_path.chmod(0o600)
+            result = {
+                "id": "candidate-frozen-core",
+                "phase": "candidate",
+                "status": "failed",
+                "tool_dependency_files": {
+                    "run_candidate_core_capture.sh": (
+                        "b313b3fd313cd689e56d95f15e54f856"
+                        "78d1b367f6e8d8bd4d8b3d4e53b1d54c"
+                    )
+                },
+                "evidence_roots": [
+                    f"/root/oauth-capture/runs/{evidence_name}"
+                ],
+                "scenario_receipt_failures": [],
+                "model_condition_receipt_failure": None,
+                "missing_evidence_patterns": [],
+                "empty_evidence_patterns": [],
+                "steps": [{"step": 1, "return_code": 1}],
+            }
+            with mock.patch.object(
+                codex_upgrade,
+                "FAILED_JOB_EVIDENCE_HOST_RUN_ROOT",
+                host_runs,
+            ):
+                observations = codex_upgrade._job_failure_observations(result)
+            self.assertEqual(
+                observations,
+                [
+                    {
+                        "check_id": "A15.models_manifest",
+                        "failure_code": "action-count-below-contract",
+                    }
+                ],
+            )
+
+            # 相同摘要若没有登记 producer 身份，只能退回通用 step 根因。
+            unknown = json.loads(json.dumps(result))
+            unknown["tool_dependency_files"][
+                "run_candidate_core_capture.sh"
+            ] = "0" * 64
+            with mock.patch.object(
+                codex_upgrade,
+                "FAILED_JOB_EVIDENCE_HOST_RUN_ROOT",
+                host_runs,
+            ):
+                self.assertEqual(
+                    codex_upgrade._job_failure_observations(unknown),
+                    [
+                        {
+                            "check_id": "job.candidate-frozen-core.step-1",
+                            "failure_code": "nonzero-exit",
+                        }
+                    ],
+                )
+
+            # 已登记 producer 还必须逐字节命中 v7 最终摘要；局部矩阵即使结构
+            # 合法也不能冒充这次事故的精确诊断。
+            partial = json.loads(json.dumps(summary))
+            partial["scenarios"] = partial["scenarios"][:-1]
+            self._write_json(summary_path, partial)
+            summary_path.chmod(0o600)
+            with (
+                mock.patch.object(
+                    codex_upgrade,
+                    "FAILED_JOB_EVIDENCE_HOST_RUN_ROOT",
+                    host_runs,
+                ),
+                self.assertRaisesRegex(
+                    codex_upgrade.ConfigurationError,
+                    "摘要与冻结事故不一致",
+                ),
+            ):
+                codex_upgrade._job_failure_observations(result)
+
+    def test_reconcile_stopped_attempt_preserves_a15_root_cause_once(self) -> None:
+        """真实 v7 在 stopped 与后续身份漂移下仍保留 A15，且只计数一次。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            ledger_dir = fixture["timing_ledger"]
+            host_runs = fixture["data"] / "runs"
+            host_runs.mkdir(mode=0o700)
+            with mock.patch.object(
+                codex_upgrade,
+                "FAILED_JOB_EVIDENCE_HOST_RUN_ROOT",
+                host_runs,
+            ):
+                attempt_id, attempt = self._b0_historical_v7_attempt(
+                    fixture,
+                    host_runs=host_runs,
+                )
+            attempt_path = (
+                campaign_dir
+                / "candidates"
+                / "c0154-candidate-v7"
+                / "attempts"
+                / attempt_id
+                / "attempt.json"
+            )
+            attempt_bytes = attempt_path.read_bytes()
+            with mock.patch.object(
+                codex_upgrade,
+                "FAILED_JOB_EVIDENCE_HOST_RUN_ROOT",
+                host_runs,
+            ):
+                derived_observations, derived_causes = (
+                    codex_upgrade._attempt_failure_facts(attempt)
+                )
+            self.assertEqual(len(derived_observations), 1)
+            self.assertEqual(
+                derived_observations[0]["check_id"],
+                "A15.models_manifest",
+            )
+            self.assertEqual(
+                derived_observations[0]["failure_code"],
+                "action-count-below-contract",
+            )
+            a15_cause_id = derived_causes[0]["root_cause_id"]
+            codex_upgrade_timing_ledger.append_event(
+                ledger_dir,
+                event_id=f"v7-attempt-started-{attempt_id}",
+                phase="VC-0",
+                event_type="attempt_started",
+                attempt_id=attempt_id,
+                next_action="capture-official",
+            )
+            codex_upgrade_timing_ledger.append_event(
+                ledger_dir,
+                event_id=f"v7-attempt-failed-{attempt_id}",
+                phase="VC-0",
+                event_type="attempt_failed",
+                attempt_id=attempt_id,
+                root_cause_id=a15_cause_id,
+                next_action="stop-the-line",
+            )
+            codex_upgrade_timing_ledger.append_event(
+                ledger_dir,
+                event_id="v7-stage-abandoned",
+                phase="VC-0",
+                event_type="stage_abandoned",
+                root_cause_id=a15_cause_id,
+                next_action="stop-the-line",
+            )
+            codex_upgrade_timing_ledger.append_event(
+                ledger_dir,
+                event_id="v7-stop-the-line",
+                phase="VC-0",
+                event_type="stop_the_line",
+                root_cause_id=a15_cause_id,
+                next_action="reconcile-attempt",
+            )
+
+            with (
+                mock.patch.object(
+                    codex_upgrade,
+                    "FAILED_JOB_EVIDENCE_HOST_RUN_ROOT",
+                    host_runs,
+                ),
+                mock.patch.object(
+                    reconciler,
+                    "_identity_facts",
+                    return_value={"unchanged": False},
+                ),
+            ):
+                result = reconciler.reconcile_attempt(campaign_dir, attempt_id)
+            self.assertEqual(result["status"], "permanent_stop")
+            self.assertFalse(result["identity_unchanged"])
+            self.assertEqual(
+                result["decision"]["terminal_reason"],
+                "prior_stop_the_line",
+            )
+            self.assertIn(
+                "当前有效 wire 身份或策略摘要已变化",
+                result["decision"]["reasons"],
+            )
+            self.assertEqual(result["root_cause"]["root_cause_id"], a15_cause_id)
+            self.assertEqual(
+                result["root_cause"]["stable_error_code"],
+                "campaign-run.action-failed",
+            )
+            self.assertEqual(
+                result["failure_observations"][0]["check_id"],
+                "A15.models_manifest",
+            )
+            self.assertEqual(
+                codex_upgrade_project_ledger.replay_head(fixture["ledger"])[
+                    "root_cause_counts"
+                ][a15_cause_id],
+                1,
+            )
+            self.assertEqual(
+                codex_upgrade_project_ledger.replay_head(fixture["ledger"])[
+                    "terminal_campaigns"
+                ][str(fixture["manifest"]["campaign_id"])]["terminal_reason"],
+                "prior_stop_the_line",
+            )
+            with (
+                mock.patch.object(
+                    codex_upgrade,
+                    "FAILED_JOB_EVIDENCE_HOST_RUN_ROOT",
+                    host_runs,
+                ),
+                mock.patch.object(
+                    reconciler,
+                    "_identity_facts",
+                    return_value={"unchanged": False},
+                ),
+            ):
+                replay = reconciler.reconcile_attempt(campaign_dir, attempt_id)
+            self.assertTrue(replay["batch"]["reused"])
+            self.assertEqual(attempt_path.read_bytes(), attempt_bytes)
+            self.assertEqual(
+                codex_upgrade_project_ledger.replay_head(fixture["ledger"])[
+                    "root_cause_counts"
+                ][a15_cause_id],
+                1,
+            )
+
+    def test_stopped_terminal_reason_precedes_later_identity_drift(self) -> None:
+        """旧 Campaign 的既成停线终态不能被部署后的身份漂移覆盖。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        decision = reconciler._decide(
+            head={
+                "blocked": False,
+                "remaining_live_requests": 100,
+                "root_cause_counts": {},
+                "root_causes_at_limit": [],
+            },
+            plan={"absolute_deadline_utc": "2026-09-18T00:00:00Z"},
+            ledger={"status": "stopped"},
+            identity={"unchanged": False},
+            environment_status="restored",
+            campaign_deadline_at_utc="2026-09-18T00:00:00Z",
+            root_cause_id="rc1-a15",
+            request_status="complete",
+            now="2026-09-17T00:00:00Z",
+        )
+
+        self.assertEqual(decision["decision"], "permanent_stop")
+        self.assertEqual(decision["terminal_reason"], "prior_stop_the_line")
+        self.assertIn(
+            "当前有效 wire 身份或策略摘要已变化",
+            decision["reasons"],
+        )
+
+    def test_malformed_historical_v7_writes_no_reconciliation_artifact(self) -> None:
+        """历史摘要校验必须先于 provenance 与账本写入，失败时保持零副作用。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            host_runs = fixture["data"] / "runs"
+            host_runs.mkdir(mode=0o700)
+            with mock.patch.object(
+                codex_upgrade,
+                "FAILED_JOB_EVIDENCE_HOST_RUN_ROOT",
+                host_runs,
+            ):
+                attempt_id, _attempt = self._b0_historical_v7_attempt(
+                    fixture,
+                    host_runs=host_runs,
+                )
+            summary = self._historical_v7_run_summary()
+            evidence_root = host_runs / f"{summary['run_id']}.failed-attempt3"
+            summary["scenarios"] = summary["scenarios"][:-1]
+            self._write_json(evidence_root / "run-summary.json", summary)
+            (evidence_root / "run-summary.json").chmod(0o600)
+            head_before = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+            events_before = self._b0_ledger_events(fixture["timing_ledger"])
+            receipt_dir = (
+                fixture["campaign_dir"]
+                / "control"
+                / "reconciliation"
+                / f"attempt-{attempt_id}"
+            )
+
+            with (
+                mock.patch.object(
+                    codex_upgrade,
+                    "FAILED_JOB_EVIDENCE_HOST_RUN_ROOT",
+                    host_runs,
+                ),
+                self.assertRaisesRegex(
+                    reconciler.ReconcilerError,
+                    "历史 attempt 失败观测无法重放.*摘要与冻结事故不一致",
+                ),
+            ):
+                reconciler.reconcile_attempt(fixture["campaign_dir"], attempt_id)
+
+            self.assertFalse(receipt_dir.exists())
+            self.assertEqual(
+                codex_upgrade_project_ledger.replay_head(fixture["ledger"])[
+                    "head_sha256"
+                ],
+                head_before["head_sha256"],
+            )
+            self.assertEqual(
+                self._b0_ledger_events(fixture["timing_ledger"]),
+                events_before,
+            )
+
+    def test_reconcile_attempt_counts_each_observation_once(self) -> None:
+        """同一 attempt 的多个观测分别计数，重复观测与整次对账重放都不增计数。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            observations = [
+                {
+                    "check_id": "candidate-readiness.storage",
+                    "failure_code": "host-or-container-path-not-writable",
+                },
+                {
+                    "check_id": "candidate-readiness.storage",
+                    "failure_code": "host-or-container-path-not-writable",
+                },
+                {"check_id": "A15", "failure_code": "scenario-receipt-failed"},
+            ]
+            attempt_id, _attempt = self._b0_failed_attempt(
+                fixture,
+                failure_observations=observations,
+            )
+            result = reconciler.reconcile_attempt(
+                fixture["campaign_dir"], attempt_id
+            )
+            self.assertEqual(result["status"], "recoverable")
+            self.assertEqual(len(result["failure_observations"]), 2)
+            self.assertEqual(len(result["root_causes"]), 2)
+            cause_ids = [item["root_cause_id"] for item in result["root_causes"]]
+            head = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+            self.assertEqual(
+                {cause_id: head["root_cause_counts"][cause_id] for cause_id in cause_ids},
+                {cause_id: 1 for cause_id in cause_ids},
+            )
+            self.assertEqual(
+                {
+                    (item["check_id"], item["failure_code"])
+                    for item in head["failure_observations"]
+                    if item["operation_id"] == f"reconcile-attempt:{attempt_id}"
+                },
+                {
+                    ("A15", "scenario-receipt-failed"),
+                    (
+                        "candidate-readiness.storage",
+                        "host-or-container-path-not-writable",
+                    ),
+                },
+            )
+            replay = reconciler.reconcile_attempt(
+                fixture["campaign_dir"], attempt_id
+            )
+            self.assertTrue(replay["batch"]["reused"])
+            replay_head = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+            self.assertEqual(
+                {cause_id: replay_head["root_cause_counts"][cause_id] for cause_id in cause_ids},
+                {cause_id: 1 for cause_id in cause_ids},
+            )
+
+    def test_reconcile_historical_attempt_without_failure_arrays(self) -> None:
+        """历史 attempt 不回写，按既有 Job 枚举字段只读派生 A15 根因。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            attempt_id, _attempt = self._b0_failed_attempt(
+                fixture,
+                legacy_without_failure_arrays=True,
+            )
+            attempt_path = (
+                fixture["campaign_dir"]
+                / "official"
+                / "attempts"
+                / attempt_id
+                / "attempt.json"
+            )
+            before = attempt_path.read_bytes()
+            result = reconciler.reconcile_attempt(fixture["campaign_dir"], attempt_id)
+            self.assertEqual(
+                result["root_cause"]["stable_error_code"],
+                "campaign-run.action-failed",
+            )
+            self.assertEqual(result["failure_observations"][0]["check_id"], "A15")
+            self.assertEqual(len(result["root_causes"]), 1)
+            self.assertEqual(attempt_path.read_bytes(), before)
+
+    def test_late_reconcile_stops_but_does_not_relabel_a15_as_deadline(self) -> None:
+        """逾期对账仍永久停线，但 attempt 根因固定在其完成时的 A15。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            attempt_id, attempt = self._b0_failed_attempt(fixture)
+            a15_cause_id = attempt["root_causes"][0]["root_cause_id"]
+            deadline = codex_upgrade_timing_ledger.inspect_ledger(
+                fixture["timing_ledger"]
+            )["total_deadline_at_utc"]
+            later = (
+                datetime.fromisoformat(deadline.replace("Z", "+00:00"))
+                + timedelta(hours=1)
+            ).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+            result = reconciler.reconcile_attempt(
+                fixture["campaign_dir"], attempt_id, now=later
+            )
+            self.assertEqual(result["status"], "permanent_stop")
+            self.assertEqual(
+                result["root_cause"]["stable_error_code"],
+                "campaign-run.action-failed",
+            )
+            self.assertEqual(result["root_cause"]["root_cause_id"], a15_cause_id)
+            self.assertEqual(result["decision"]["terminal_reason"], "deadline_wall_clock")
+            cause_ids = [item["root_cause_id"] for item in result["root_causes"]]
+            self.assertEqual(cause_ids, [a15_cause_id])
+            head = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+            self.assertEqual(
+                {cause_id: head["root_cause_counts"][cause_id] for cause_id in cause_ids},
+                {cause_id: 1 for cause_id in cause_ids},
+            )
+
+    def test_recovery_required_after_reservation_needs_approved_resume(self) -> None:
+        """reservation 后环境前提失败：对账保留暂停，批准在 resume 边界恢复 active。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            ledger_dir = fixture["timing_ledger"]
+            codex_upgrade_timing_ledger.append_event(
+                ledger_dir,
+                event_id="post-reservation-recovery-required",
+                phase="VC-0",
+                event_type="recovery_required",
+                root_cause_id="environment-prerequisite",
+                next_action="reconcile-attempt",
+            )
+            attempt_id = self._b0_orphan_attempt(fixture)
+            result = reconciler.reconcile_attempt(campaign_dir, attempt_id)
+            self.assertEqual(result["status"], "recoverable")
+            preview = result["recovery_preview"]
+            preview_path = Path(result["recovery_preview_path"])
+            self.assertEqual(
+                preview["campaign_ledger_head"]["status"],
+                "recovery_required",
+            )
+            self.assertEqual(
+                preview["project_ledger_head"]["sha256"],
+                result["project_head"]["head_sha256"],
+            )
+            self.assertEqual(
+                codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)["status"],
+                "recovery_required",
+            )
+            with self.assertRaisesRegex(reconciler.ReconcilerError, "尚未批准"):
+                reconciler.load_approved_recovery_preview(
+                    campaign_dir,
+                    preview_path,
+                    phase="official",
+                    candidate_id=None,
+                )
+            reconciler.approve_recovery_preview(
+                campaign_dir,
+                attempt_id,
+                approve_sha256=preview["review_sha256"],
+            )
+            loaded = reconciler.load_approved_recovery_preview(
+                campaign_dir,
+                preview_path,
+                phase="official",
+                candidate_id=None,
+            )
+            self.assertTrue(loaded["timing_recovery_event"]["appended"])
+            timing_after = codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)
+            self.assertEqual(timing_after["status"], "active")
+            replay = reconciler.load_approved_recovery_preview(
+                campaign_dir,
+                preview_path,
+                phase="official",
+                candidate_id=None,
+            )
+            self.assertFalse(replay["timing_recovery_event"]["appended"])
+            self.assertEqual(
+                codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)[
+                    "head_sha256"
+                ],
+                timing_after["head_sha256"],
+            )
+            with codex_upgrade_project_ledger.campaign_ledger_lock(
+                campaign_dir
+            ) as campaign_ledger_dir:
+                codex_upgrade_project_ledger.write_batch(
+                    campaign_ledger_dir,
+                    operation_id="concurrent-head-advance",
+                    event_type="reconciliation_committed",
+                    payload={
+                        "campaign_id": fixture["manifest"]["campaign_id"],
+                        "request": {
+                            "status": "resolved",
+                            "identity_keys": [],
+                            "estimated_delta": 0,
+                            "estimated_sources": [],
+                        },
+                    },
+                    source={"kind": "test", "sha256": "0" * 64},
+                )
+            codex_upgrade_project_ledger.reconcile_project_ledger(
+                fixture["ledger"],
+                campaign_dir=campaign_dir,
+            )
+            with self.assertRaisesRegex(
+                reconciler.ReconcilerError,
+                "项目总账 head 已推进",
+            ):
+                reconciler.load_approved_recovery_preview(
+                    campaign_dir,
+                    preview_path,
+                    phase="official",
+                    candidate_id=None,
+                )
 
     def test_b0_reconcile_attempt_orphan_is_recoverable_and_gates_resume(self) -> None:
         """孤儿 attempt：先入账后判定为可恢复，生成零请求预览；resume 只认已批准预览。"""
@@ -14665,7 +19089,10 @@ class CodexUpgradeTest(unittest.TestCase):
             evidence_root.mkdir(mode=0o700)
             self._write_json(evidence_root / "surface.json", {"records": []})
             (evidence_root / "surface.json").chmod(0o600)
-            attempt_id = self._b0_orphan_attempt(fixture)
+            attempt_id = self._b0_orphan_attempt(
+                fixture,
+                evidence_roots=[evidence_root],
+            )
             result = reconciler.reconcile_attempt(campaign_dir, attempt_id)
             self.assertEqual(result["status"], "permanent_stop")
             self.assertEqual(result["decision"]["terminal_reason"], "accounting_unresolved")
@@ -14752,7 +19179,11 @@ class CodexUpgradeTest(unittest.TestCase):
             )
             self._make_private_tree(capture)
             head_before = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
-            first = self._b0_orphan_attempt(fixture, complete_job=True)
+            first = self._b0_orphan_attempt(
+                fixture,
+                complete_job=True,
+                evidence_roots=[capture],
+            )
             result = reconciler.reconcile_attempt(campaign_dir, first)
             self.assertEqual(result["status"], "recoverable")
             self.assertEqual(result["jobs"]["complete"], ["official-test"])
@@ -15009,8 +19440,12 @@ class CodexUpgradeTest(unittest.TestCase):
         return {**fixture, "state_dir": state_dir}
 
     @staticmethod
-    def _vc_chain_action_plan(root: Path, campaign_dir: Path, phase: str, *, fail: bool = False) -> Path:
-        """合成动作：子进程用当前工具封存本阶段 checkpoint；``fail`` 时以非零退出。"""
+    def _vc_chain_action_plan(root: Path, campaign_dir: Path, phase: str, *, fail: bool = False, stage_receipt_source: Path | None = None) -> Path:
+        """合成动作：子进程用当前工具封存本阶段 checkpoint；``fail`` 时以非零退出。
+
+        ``stage_receipt_source`` 给出时，本阶段收据取该文件的逐字节副本（真实评估链让 VC-3 阶段收据
+        等于候选树内 Catalog stage 收据，供 record-candidate-build 的 revision-seal 字节比对）。
+        """
 
         repo_root = Path(codex_upgrade.__file__).resolve().parents[2]
         if fail:
@@ -15021,12 +19456,16 @@ class CodexUpgradeTest(unittest.TestCase):
                 "from pathlib import Path\n"
                 "sys.path.insert(0, sys.argv[3])\n"
                 "campaign_dir = Path(sys.argv[1]); phase = sys.argv[2]\n"
+                "source = Path(sys.argv[4]) if len(sys.argv) > 4 and sys.argv[4] else None\n"
                 "try:\n"
                 "    from unittest import mock\n"
                 "    from tools.official_client_capture import codex_upgrade\n"
                 "    from tools.official_client_capture import codex_upgrade_job_rehearsal_receipt as rehearsal\n"
                 "    receipt = campaign_dir / 'control' / 'vc-chain' / f'{phase.lower()}-stage-result.json'\n"
-                "    receipt.write_text(json.dumps({'phase': phase, 'status': 'complete'}) + '\\n', encoding='utf-8')\n"
+                "    if source is not None:\n"
+                "        receipt.write_bytes(source.read_bytes())\n"
+                "    else:\n"
+                "        receipt.write_text(json.dumps({'phase': phase, 'status': 'complete'}) + '\\n', encoding='utf-8')\n"
                 "    receipt.chmod(0o600)\n"
                 "    # 与父测试 setUp 一致：0.154 合成 Campaign 不走正式证据标签声明。\n"
                 "    with mock.patch.object(rehearsal, '_target_evidence_label_declaration_sha256', return_value='d' * 64):\n"
@@ -15046,7 +19485,10 @@ class CodexUpgradeTest(unittest.TestCase):
                     "action_id": item_id,
                     "operation": f"{phase}:synthetic-checkpoint",
                     "timeout_seconds": 120,
-                    "command": [sys.executable, "-c", script, str(campaign_dir), phase, str(repo_root)],
+                    "command": [
+                        sys.executable, "-c", script, str(campaign_dir), phase, str(repo_root),
+                        *([str(stage_receipt_source)] if stage_receipt_source is not None else []),
+                    ],
                     "item_ids": [item_id],
                 }
             ],
@@ -15085,6 +19527,13 @@ class CodexUpgradeTest(unittest.TestCase):
             head_before = codex_upgrade_project_ledger.replay_head(fixture["ledger"])["sequence"]
             order = codex_upgrade_vc_artifacts.VC_PHASES
             for sequence, phase in enumerate(order[2:], start=2):
+                if phase == "VC-4":
+                    # 改造 2：候选级首批派发前必须先激活 r1（零请求、幂等）。
+                    opened = codex_upgrade.open_candidate_revision(
+                        argparse.Namespace(campaign_dir=campaign_dir, candidate_id="candidate-r1", initial=True, supersedes=None)
+                    )
+                    self.assertEqual((opened["revision"], opened["idempotent"]), (1, False))
+                    self.assertTrue((campaign_dir / "control" / "vc" / "revisions" / "r1" / "COMMIT").is_file())
                 action_plan = self._vc_chain_action_plan(root, campaign_dir, phase)
                 result, returncode = codex_upgrade.compile_and_run_vc_batch(
                     self._vc_chain_arguments(fixture, phase, sequence, action_plan)
@@ -15114,7 +19563,7 @@ class CodexUpgradeTest(unittest.TestCase):
             # 恢复账本停在 active VC-0：VC-2 首批一次补齐 VC-0／VC-1 完成再开 VC-2；
             # 之后每批各写一次 started／completed。
             self.assertEqual(
-                events[1:9],
+                events[1:10],
                 [
                     ("stage_completed", "vc-batch-0002-vc-2-vc-0-completed"),
                     ("stage_started", "vc-batch-0002-vc-2-vc-1-started"),
@@ -15123,14 +19572,16 @@ class CodexUpgradeTest(unittest.TestCase):
                     ("stage_completed", "vc-batch-0002-vc-2-completed"),
                     ("stage_started", "vc-batch-0003-vc-3-vc-3-started"),
                     ("stage_completed", "vc-batch-0003-vc-3-completed"),
+                    ("stage_revision", "stage-revision-r1"),
                     ("stage_started", "vc-batch-0004-vc-4-vc-4-started"),
                 ],
             )
             self.assertEqual(events[-1], ("stage_completed", "vc-batch-0006-vc-6-completed"))
             # 派发本身不写项目总账事件；admission 只读重放 head。
             self.assertEqual(codex_upgrade_project_ledger.replay_head(fixture["ledger"])["sequence"], head_before)
-            # 已封存阶段不得重编：VC-6 已有 checkpoint。
-            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "已有 checkpoint"):
+            # 已封存阶段不得重编：改造 2 起账本门在编译前就拒绝重开当前 revision 已完成的阶段
+            # （比原先 compile 期的"已有 checkpoint"更早，不写任何制品）。
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "已登记 VC-6 在当前 revision 完成，禁止重开"):
                 codex_upgrade.compile_and_run_vc_batch(
                     self._vc_chain_arguments(fixture, "VC-6", 7, self._vc_chain_action_plan(root / "again", campaign_dir, "VC-6"))
                 )
@@ -15252,6 +19703,218 @@ class EvidenceManifestTest(unittest.TestCase):
             )
             self.assertEqual(merged["entry_count"], 2)
 
+    def _projection_fixture(self, base: Path) -> tuple[Path, Path, Path, dict, dict]:
+        """两根来源清单（job-a／job-b）与一根增量清单（recovery 段）。"""
+
+        job_a = base / "attempt" / "job-a"
+        job_b = base / "attempt" / "job-b"
+        delta_root = base / "attempt" / "recovery-ar1" / "job-b"
+        self._private_file(job_a / "a.json", b'{"job":"a"}\n')
+        self._private_file(job_a / "nested" / "a2.json", b'{"job":"a2"}\n')
+        self._private_file(job_b / "b.json", b'{"job":"b","old":true}\n')
+        self._private_file(delta_root / "b.json", b'{"job":"b","recovered":true}\n')
+        source = codex_upgrade_evidence_manifest.build_evidence_manifest(
+            [job_a, job_b], checkpoint_path=base / "source-checkpoint.json"
+        )
+        delta = codex_upgrade_evidence_manifest.build_evidence_manifest(
+            [delta_root], checkpoint_path=base / "delta-checkpoint.json"
+        )
+        return job_a, job_b, delta_root, source, delta
+
+    def test_projection_keeps_whole_roots_only_and_records_dropped_roots(self) -> None:
+        """改造 5 M2：投影只按整根保留，前缀与条目逐字沿用，零扫描；收据精确记录丢弃根。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory).resolve()
+            job_a, job_b, _delta_root, source, _delta = self._projection_fixture(base)
+            with mock.patch.object(codex_upgrade_evidence_manifest, "_hash_and_scan") as scanner:
+                projected, receipt = codex_upgrade_evidence_manifest.project_evidence_manifest(
+                    source, keep_roots=[job_a]
+                )
+            scanner.assert_not_called()
+            source_row = next(row for row in source["roots"] if row["path"] == str(job_a))
+            self.assertEqual(projected["roots"], [source_row])  # 保留根行（含 stat 边界与 prefix）逐字沿用
+            self.assertEqual(
+                [entry["path"] for entry in projected["entries"]],
+                [entry["path"] for entry in source["entries"] if entry["path"].startswith(f"{source_row['prefix']}/")],
+            )
+            self.assertEqual(projected["entry_count"], 2)
+            self.assertEqual(projected["scan"], {"full_scan_count": 1, "scanned_bytes": 0, "reused_bytes": projected["total_bytes"], "total_bytes": projected["total_bytes"], "elapsed_seconds": 0.0})
+            self.assertEqual(projected["security"]["file_count"], 2)
+            self.assertEqual(receipt["schema_version"], codex_upgrade_evidence_manifest.PROJECTION_SCHEMA)
+            self.assertEqual((receipt["kept_roots"], receipt["dropped_roots"]), ([str(job_a)], [str(job_b)]))
+            self.assertEqual((receipt["kept_entry_count"], receipt["dropped_entry_count"]), (2, 1))
+            self.assertEqual((receipt["source_manifest_digest"], receipt["projected_manifest_digest"]), (source["manifest_digest"], projected["manifest_digest"]))
+            # 收据重放：丢弃根必须与恢复基线冻结的集合精确相等。
+            codex_upgrade_evidence_manifest.validate_projection_receipt(
+                receipt, source_manifest=source, projected_manifest=projected, expected_dropped_roots=[job_b]
+            )
+            with self.assertRaisesRegex(codex_upgrade_evidence_manifest.EvidenceManifestError, "不精确相等"):
+                codex_upgrade_evidence_manifest.validate_projection_receipt(
+                    receipt, source_manifest=source, projected_manifest=projected, expected_dropped_roots=[job_b, job_a]
+                )
+            # 条目级裁剪（保留根给成子目录）与不存在的根都拒绝；空保留集合合法（全部 Job 重采）。
+            with self.assertRaisesRegex(codex_upgrade_evidence_manifest.EvidenceManifestError, "不在来源"):
+                codex_upgrade_evidence_manifest.project_evidence_manifest(source, keep_roots=[job_a / "nested"])
+            with self.assertRaisesRegex(codex_upgrade_evidence_manifest.EvidenceManifestError, "不在来源"):
+                codex_upgrade_evidence_manifest.project_evidence_manifest(source, keep_roots=[base / "missing"])
+            empty, empty_receipt = codex_upgrade_evidence_manifest.project_evidence_manifest(source, keep_roots=[])
+            self.assertEqual((empty["roots"], empty["entry_count"], empty["total_bytes"]), ([], 0, 0))
+            self.assertEqual(empty_receipt["dropped_roots"], sorted([str(job_a), str(job_b)]))
+
+    def test_merge_preserve_prefixes_keeps_projected_prefixes_and_rejects_conflicts(self) -> None:
+        """改造 5 M2：preserve_prefixes 合并沿用投影前缀、只扫描增量、根集合恰为并集；前缀冲突拒绝。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory).resolve()
+            job_a, job_b, delta_root, source, delta = self._projection_fixture(base)
+            projected, _receipt = codex_upgrade_evidence_manifest.project_evidence_manifest(source, keep_roots=[job_a])
+            with mock.patch.object(codex_upgrade_evidence_manifest, "_hash_and_scan") as scanner:
+                merged = codex_upgrade_evidence_manifest.merge_evidence_manifests(projected, delta, preserve_prefixes=True)
+                boundary = codex_upgrade_evidence_manifest.verify_manifest_boundary(merged, [job_a, delta_root])
+            scanner.assert_not_called()
+            self.assertEqual(boundary["scanned_bytes"], 0)
+            self.assertEqual({row["path"]: row["prefix"] for row in merged["roots"]}, {str(job_a): "job-a", str(delta_root): "job-b"})
+            self.assertEqual(sorted(entry["path"] for entry in merged["entries"]), sorted([*(e["path"] for e in projected["entries"]), *(e["path"] for e in delta["entries"])]))
+            self.assertEqual((merged["scan"]["scanned_bytes"], merged["scan"]["reused_bytes"]), (delta["total_bytes"], projected["total_bytes"]))
+            self.assertEqual(merged["total_bytes"], projected["total_bytes"] + delta["total_bytes"])
+            # 增量根与保留根同名（前缀冲突）：preserve 模式拒绝；默认模式仍按既有规则重算为 001-／002-。
+            conflict_root = base / "other" / "job-a"
+            self._private_file(conflict_root / "c.json", b'{"c":true}\n')
+            conflict = codex_upgrade_evidence_manifest.build_evidence_manifest([conflict_root], checkpoint_path=base / "conflict-checkpoint.json")
+            with self.assertRaisesRegex(codex_upgrade_evidence_manifest.EvidenceManifestError, "前缀冲突"):
+                codex_upgrade_evidence_manifest.merge_evidence_manifests(projected, conflict, preserve_prefixes=True)
+            renumbered = codex_upgrade_evidence_manifest.merge_evidence_manifests(projected, conflict)
+            self.assertEqual(sorted(row["prefix"] for row in renumbered["roots"]), ["001-job-a", "002-job-a"])
+
+    def test_segment_seal_s1_delta_scan_interruption_resumes_without_rereading_and_reprojects_identically(self) -> None:
+        """崩溃矩阵 S1（段 seal 第 3 阶段）：投影已写、delta 扫描中途中断 → 续作时已完成条目不重读（逐文件
+        checkpoint），投影纯函数重算逐字相同（投影收据 write-or-verify 通过），合并结果与一次成功扫描相同。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory).resolve()
+            job_a, job_b, delta_root, source, _delta = self._projection_fixture(base)
+            self._private_file(delta_root / "nested" / "b2.json", b'{"job":"b2","recovered":true}\n')
+            self._private_file(delta_root / "nested" / "b3.json", b'{"job":"b3","recovered":true}\n')
+            projected, receipt = codex_upgrade_evidence_manifest.project_evidence_manifest(source, keep_roots=[job_a])
+            checkpoint = base / "segment-delta-checkpoint.json"
+            original_scan = codex_upgrade_evidence_manifest._hash_and_scan
+            scanned: list[str] = []
+
+            def interrupted_scan(path, logical_path, known_secrets):
+                if len(scanned) == 2:
+                    raise OSError("simulated delta scan interruption")
+                scanned.append(logical_path)
+                return original_scan(path, logical_path, known_secrets)
+
+            with mock.patch.object(codex_upgrade_evidence_manifest, "_hash_and_scan", side_effect=interrupted_scan):
+                with self.assertRaisesRegex(OSError, "simulated delta scan interruption"):
+                    codex_upgrade_evidence_manifest.build_evidence_manifest([delta_root], checkpoint_path=checkpoint)
+            self.assertEqual(len(scanned), 2)
+            self.assertTrue(checkpoint.is_file())
+            completed_before = sorted(item["path"] for item in json.loads(checkpoint.read_text(encoding="utf-8"))["completed"])
+            self.assertEqual(completed_before, sorted(scanned))
+            # 续作：只扫描剩余条目，已完成条目不重读。
+            resumed: list[str] = []
+
+            def resumed_scan(path, logical_path, known_secrets):
+                resumed.append(logical_path)
+                return original_scan(path, logical_path, known_secrets)
+
+            with mock.patch.object(codex_upgrade_evidence_manifest, "_hash_and_scan", side_effect=resumed_scan):
+                delta = codex_upgrade_evidence_manifest.build_evidence_manifest([delta_root], checkpoint_path=checkpoint)
+            self.assertEqual(set(resumed) & set(completed_before), set())
+            self.assertEqual(sorted(resumed + completed_before), sorted(entry["path"] for entry in delta["entries"]))
+            self.assertEqual(delta["entry_count"], 3)
+            # 投影纯函数：中断后重算逐字相同 → 投影收据 write-or-verify 不会冲突。
+            reprojected, receipt_again = codex_upgrade_evidence_manifest.project_evidence_manifest(source, keep_roots=[job_a])
+            self.assertEqual((reprojected, receipt_again), (projected, receipt))
+            # 合并结果与一次成功扫描相同（不含 elapsed／完成时间等易变字段的条目与摘要）。
+            clean = codex_upgrade_evidence_manifest.build_evidence_manifest([delta_root], checkpoint_path=base / "clean-checkpoint.json")
+            merged = codex_upgrade_evidence_manifest.merge_evidence_manifests(projected, delta, preserve_prefixes=True)
+            merged_clean = codex_upgrade_evidence_manifest.merge_evidence_manifests(projected, clean, preserve_prefixes=True)
+            for field in ("roots", "entries", "inventory", "security", "total_bytes", "entry_count"):
+                self.assertEqual(merged[field], merged_clean[field], field)
+            # 续作只重新扫描剩余条目的字节；已完成条目与投影根都记为复用。
+            resumed_bytes = sum(entry["size"] for entry in delta["entries"] if entry["path"] in resumed)
+            self.assertEqual((delta["scan"]["scanned_bytes"], delta["scan"]["reused_bytes"]), (resumed_bytes, delta["total_bytes"] - resumed_bytes))
+            self.assertEqual((merged["scan"]["scanned_bytes"], merged["scan"]["reused_bytes"]), (resumed_bytes, projected["total_bytes"] + delta["total_bytes"] - resumed_bytes))
+            self.assertEqual(merged["scan"]["total_bytes"], projected["total_bytes"] + delta["total_bytes"])
+
+    def test_segment_seal_s2_written_merged_manifest_is_reused_without_rescan(self) -> None:
+        """崩溃矩阵 S2（段 seal 第 3 阶段）：合并清单与投影收据已写、result 未写 → 第二次 seal 只读回清单并复核
+        stat 边界（零扫描、不再投影／合并），清单字节不变即可直接进第 4 阶段。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory).resolve()
+            job_a, _job_b, delta_root, source, delta = self._projection_fixture(base)
+            baseline_dir = base / "b1"
+            baseline_dir.mkdir(mode=0o700)
+            projected, receipt = codex_upgrade_evidence_manifest.project_evidence_manifest(source, keep_roots=[job_a])
+            merged = codex_upgrade_evidence_manifest.merge_evidence_manifests(projected, delta, preserve_prefixes=True)
+            manifest_path = codex_upgrade._evidence_manifest_path(baseline_dir)
+            projection_path = baseline_dir / codex_upgrade.MANIFEST_PROJECTION_FILENAME
+            codex_upgrade._write_or_verify_json(projection_path, receipt)
+            codex_upgrade._write_or_verify_json(manifest_path, merged)
+            manifest_bytes = manifest_path.read_bytes()
+            # 第二次进入第 3 阶段：与 _seal_attempt_recovery_segment 的"清单已存在"分支同口径。
+            with mock.patch.object(codex_upgrade_evidence_manifest, "_hash_and_scan") as scanner, \
+                    mock.patch.object(codex_upgrade_evidence_manifest, "project_evidence_manifest") as project, \
+                    mock.patch.object(codex_upgrade_evidence_manifest, "merge_evidence_manifests") as merge:
+                loaded = codex_upgrade._load_evidence_manifest(manifest_path)
+                loaded_receipt = codex_upgrade._read_json(projection_path, "投影收据")
+                boundary = codex_upgrade_evidence_manifest.verify_manifest_boundary(loaded, [job_a, delta_root])
+            scanner.assert_not_called()
+            project.assert_not_called()
+            merge.assert_not_called()
+            self.assertEqual(boundary["scanned_bytes"], 0)
+            self.assertEqual(loaded["manifest_digest"], merged["manifest_digest"])
+            self.assertEqual(loaded_receipt, receipt)
+            self.assertEqual(manifest_path.read_bytes(), manifest_bytes)
+            # 同一内容 write-or-verify 幂等；漂移内容拒绝覆盖。
+            codex_upgrade._write_or_verify_json(manifest_path, merged)
+            self.assertEqual(manifest_path.read_bytes(), manifest_bytes)
+            with self.assertRaises(codex_upgrade.ConfigurationError):
+                codex_upgrade._write_or_verify_json(manifest_path, {**merged, "entry_count": merged["entry_count"] + 1})
+
+    def test_evidence_manifest_boundary_ignores_device_only_in_isolated_rehearsal(self) -> None:
+        """隔离预演（overlay 副本）上 st_dev 必然不同：只在带标记且根在 overlay 上时忽略 device，其余 stat 仍逐项比较。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory).resolve()
+            base.chmod(0o700)
+            root = base / "evidence"
+            self._private_file(root / "a.json", b'{"a":true}\n')
+            manifest = codex_upgrade_evidence_manifest.build_evidence_manifest(
+                [root], checkpoint_path=base / "checkpoint.json"
+            )
+            drifted = json.loads(json.dumps(manifest))
+            for entry in drifted["entries"]:
+                entry["device"] = entry["device"] + 1
+            drifted["metadata_sha256"] = "e" * 64
+            drifted["manifest_digest"] = codex_upgrade_evidence_manifest.canonical_json_sha256(
+                {k: v for k, v in drifted.items() if k != "manifest_digest"}
+            )
+            with self.assertRaisesRegex(codex_upgrade_evidence_manifest.EvidenceManifestError, "stat 边界发生漂移"):
+                codex_upgrade_evidence_manifest.verify_manifest_boundary(drifted, [root])
+            env = {codex_upgrade_evidence_manifest.REHEARSAL_CONTEXT_ENV: "1"}
+            with mock.patch.dict(os.environ, env), mock.patch.object(
+                codex_upgrade_evidence_manifest, "_mount_fstype_of", return_value="ext4"
+            ):
+                with self.assertRaisesRegex(codex_upgrade_evidence_manifest.EvidenceManifestError, "stat 边界发生漂移"):
+                    codex_upgrade_evidence_manifest.verify_manifest_boundary(drifted, [root])
+            with mock.patch.dict(os.environ, env), mock.patch.object(
+                codex_upgrade_evidence_manifest, "_mount_fstype_of", return_value="overlay"
+            ):
+                self.assertEqual(
+                    codex_upgrade_evidence_manifest.verify_manifest_boundary(drifted, [root])["status"],
+                    "passed",
+                )
+                # 隔离预演下其它 stat 字段漂移仍失败关闭
+                (root / "a.json").write_bytes(b'{"a":true,"b":1}\n')
+                with self.assertRaisesRegex(codex_upgrade_evidence_manifest.EvidenceManifestError, "stat 边界发生漂移"):
+                    codex_upgrade_evidence_manifest.verify_manifest_boundary(drifted, [root])
+
     def test_metadata_only_deep_verify_reuses_existing_source_manifest(self) -> None:
         """已有来源 manifest 时，deep-verify 只核对边界，不重扫正文。"""
 
@@ -15284,6 +19947,16 @@ class EvidenceManifestTest(unittest.TestCase):
             source_attempt = {
                 "attempt_id": "source-a",
                 "evidence_roots": [str(source_evidence)],
+                "results": [
+                    {
+                        "id": job_id,
+                        "status": "complete",
+                        "evidence_roots": [str(source_evidence)],
+                    }
+                    for job_id in sorted(
+                        codex_upgrade.CLASSIFICATION_CANDIDATE_REUSE_JOB_IDS
+                    )
+                ],
             }
             with (
                 mock.patch.object(codex_upgrade, "_reject_contaminated_campaign"),
@@ -16037,6 +20710,65 @@ class ToolIdentitySideSplitTest(unittest.TestCase):
         self.assertEqual(changed, [])
         self.assertEqual(unmapped, [])
 
+    def test_zero_production_drift_skips_job_dependency_graph(self):
+        """产出路径未变化时不得构建昂贵的 Job 依赖反向图。"""
+
+        path = "codex_upgrade_supervisor.py"
+        expected = self._identity([{"path": path, "sha256": "a" * 64}])
+        current = self._identity([{"path": path, "sha256": "b" * 64}])
+        with mock.patch.object(
+            codex_upgrade,
+            "_tool_path_job_map",
+            side_effect=AssertionError("零变化不应解析 Job 依赖"),
+        ) as dependency_graph:
+            affected, changed, unmapped = codex_upgrade._exact_tool_path_impact(
+                [],
+                expected,
+                current,
+            )
+        self.assertEqual(affected, [])
+        self.assertEqual(changed, [])
+        self.assertEqual(unmapped, [])
+        dependency_graph.assert_not_called()
+
+    def test_hybrid_drift_requires_explicit_historical_replay_authorization(self):
+        """v2 wire 闭包变化默认停线，仅严格历史恢复可排除阶段混合文件。"""
+
+        paths = {
+            "candidate_rule_expectations_0_154_0.json",
+            "codex_upgrade.py",
+        }
+        expected = self._identity(
+            [{"path": path, "sha256": "a" * 64} for path in sorted(paths)]
+        )
+        current = self._identity(
+            [{"path": path, "sha256": "b" * 64} for path in sorted(paths)]
+        )
+        expected["orchestrator_closures"] = {
+            "wire_producer": {"closure_sha256": "c" * 64}
+        }
+        current["orchestrator_closures"] = {
+            "wire_producer": {"closure_sha256": "d" * 64}
+        }
+
+        _affected, changed, unmapped = codex_upgrade._exact_tool_path_impact(
+            [],
+            expected,
+            current,
+        )
+        self.assertEqual(set(changed), paths)
+        self.assertEqual(set(unmapped), paths)
+
+        affected, changed, unmapped = codex_upgrade._exact_tool_path_impact(
+            [],
+            expected,
+            current,
+            allow_phase_evaluation_hybrid_drift=True,
+        )
+        self.assertEqual(affected, [])
+        self.assertEqual(changed, [])
+        self.assertEqual(unmapped, [])
+
     def test_control_and_environment_schemas_are_evaluation_side(self):
         """控制／环境收据 Schema 变化不得使已封存官方证据失效。"""
         paths = {
@@ -16399,4 +21131,3 @@ class ExecutionTreeVerificationTest(unittest.TestCase):
 
         repo_root = Path(codex_upgrade.__file__).resolve().parents[2]
         codex_upgrade._verify_execution_tree(repo_root)
-

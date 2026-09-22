@@ -790,6 +790,8 @@ func codexHeaderConditionEnabled(
 		return conditions.SubagentPresent
 	case profilecontract.ConditionTurnStatePresent:
 		return conditions.TurnStatePresent
+	case profilecontract.ConditionLunaReservePresent:
+		return conditions.LunaReservePresent
 	default:
 		return false
 	}
@@ -1247,7 +1249,8 @@ func codexBodyFieldConditionEnabled(
 		profilecontract.ConditionRuntimeMetrics,
 		profilecontract.ConditionSessionIdPresent,
 		profilecontract.ConditionSubagentPresent,
-		profilecontract.ConditionTurnStatePresent:
+		profilecontract.ConditionTurnStatePresent,
+		profilecontract.ConditionLunaReservePresent:
 		return codexHeaderConditionEnabled(
 			condition, features, requestConditions, authentication,
 		), nil

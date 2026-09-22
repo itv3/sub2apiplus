@@ -62,6 +62,7 @@ relay_tool="$capture_mount/tools/official_client_capture/upstream_byte_relay.py"
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 scrub_tool="$script_dir/scrub_raw_bytes.py"
 gateway_ws_driver="$script_dir/drive_candidate_gateway_ws.py"
+codex_bin=${CODEX_BIN:-"/opt/codex-$codex_version/bin/codex"}
 
 if [[ -e $work_dir ]]; then
   echo "抓包目录已存在，拒绝覆盖：$work_dir" >&2
@@ -337,7 +338,7 @@ payload = {
     "limitations": {
         "A08": "relay 只声明真实跨调用连接；keepalive/断连重试关系由受源码哈希约束的结构化测试补证",
         "A10_token_budget": "TokenBudget 零出站只由结构化测试证明，本脚本不伪造不存在的网络请求",
-        "A15_surface": "relay 证明身份 header 的真实出站；exec/TUI 进程来源由结构化测试证明",
+        "A15_surface": "真实 exec 与 PTY TUI 启动 models 均取得 HTTP 200，首次 miss、第二次 hit；同一 TUI 初始化后插件 GET 独立证明 codex-tui suffix，且不转发 Candidate",
     },
     "restoration": {
         "account_proxy_original": sys.argv[5],
@@ -529,6 +530,26 @@ if [[ ! $service_port =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 service_base_url=${SERVICE_BASE_URL:-"http://127.0.0.1:$service_port"}
+
+if [[ $codex_bin != /* || -L $codex_bin || ! -f $codex_bin || ! -x $codex_bin ]]; then
+  echo "CODEX_BIN 必须是存在、可执行、非符号链接的绝对文件：$codex_bin" >&2
+  exit 1
+fi
+canonical_codex_bin=$(realpath "$codex_bin")
+if [[ $canonical_codex_bin != "$codex_bin" ]]; then
+  echo "CODEX_BIN 必须是规范绝对路径：$codex_bin" >&2
+  exit 1
+fi
+codex_version_output=$("$codex_bin" --version 2>/dev/null || true)
+if [[ $codex_version_output != "codex-cli $codex_version" ]]; then
+  echo "Codex 二进制版本不一致：预期 codex-cli $codex_version，实际 ${codex_version_output:-<空>}。" >&2
+  exit 1
+fi
+codex_bin_sha256=$(sha256sum "$codex_bin" | awk '{print $1}')
+if [[ ! $codex_bin_sha256 =~ ^[0-9a-f]{64}$ ]]; then
+  echo "无法计算 Codex 二进制 SHA-256。" >&2
+  exit 1
+fi
 
 if ! docker exec "$service_container" getent hosts "$capture_container" >/dev/null; then
   echo "候选服务容器无法解析受控 capture 容器。" >&2
@@ -790,7 +811,7 @@ if subagent_header:
     payload["client_metadata"]["x-openai-subagent"] = subagent_header
 if parent_thread_id:
     payload["client_metadata"]["x-codex-parent-thread-id"] = parent_thread_id
-if mode == "lite":
+if mode in {"lite", "lite_manifest_default"}:
     # 目标 Codex 已根据模型 manifest 完成 Lite 定型后才进入严格入口：
     # 顶层 instructions/tools 不存在，开发者指令与工具目录分别成为 input
     # 前缀，且 Lite 固定关闭并行工具调用。严格入口只校验该形态，不代替
@@ -811,6 +832,13 @@ if mode == "lite":
     payload["input"] = [additional_tools, developer_message, *payload["input"]]
     payload["parallel_tool_calls"] = False
     payload["reasoning"]["context"] = "all_turns"
+    if mode == "lite_manifest_default":
+        # A03 的 Lite 请求必须与官方客户端处于同一实验条件：官方 0.154.0 对
+        # gpt-6-astra 不显式发送 effort／summary，由模型清单默认值定型为
+        # effort=medium、summary 缺席，text.verbosity=low 由 Lite 画像派生。
+        # 这里省略三者，交给清单与网关；显式 high／auto 会被网关按"显式优先"
+        # 保留，令候选出站与官方 conn005 在 reasoning 上永远不等价。
+        payload["reasoning"] = {"context": "all_turns"}
 elif mode == "non_lite":
     payload["reasoning"]["context"] = "all_turns"
 else:
@@ -1009,7 +1037,7 @@ run_response_ws_session() {
 # turn-state 闭环。
 start_capture A03
 trigger_root="$work_dir/scenarios/A03/trigger"
-write_request_body "$trigger_root/prime.json" "$lite_model" lite a03-cookie-prime
+write_request_body "$trigger_root/prime.json" "$lite_model" lite_manifest_default a03-cookie-prime
 compress_zstd "$trigger_root/prime.json" "$trigger_root/prime.zst"
 run_response_request A03 prime "$trigger_root/prime.zst" \
   "$exec_ua" codex_exec -H 'Content-Encoding: zstd'
@@ -1017,7 +1045,7 @@ write_request_body "$trigger_root/default.json" "$main_model" non_lite a03-defau
 compress_zstd "$trigger_root/default.json" "$trigger_root/default.zst"
 run_response_request A03 default "$trigger_root/default.zst" \
   "$exec_ua" codex_exec -H 'Content-Encoding: zstd'
-write_request_body "$trigger_root/lite.json" "$lite_model" lite a03-turn
+write_request_body "$trigger_root/lite.json" "$lite_model" lite_manifest_default a03-turn
 compress_zstd "$trigger_root/lite.json" "$trigger_root/lite.zst"
 for turn in 1 2; do
   run_response_request A03 "lite-turn-$turn" "$trigger_root/lite.zst" \
@@ -1124,31 +1152,1013 @@ done
 wait_action A10 responses_http_success 4
 stop_capture
 
-# A15 需要三种冻结身份各自真实出站一次，而候选网关会按「账号 + 出站身份」缓存 models 清单
-#（60 秒新鲜、5 分钟陈旧），A03～A08 的 responses 请求已顺带拉取并填满该缓存，A15 会被缓存
-# 吸收成零出站。与 A07 后同理：重启只清理进程态缓存，账号、proxy 与证据均不变。
+# A15 要证明的是 exec 与 PTY TUI 启动 models 共用网关缓存：首次 miss 产生一次上游，
+# 第二次在全新 CODEX_HOME 中仍取得 HTTP 200，但上游计数不增长。启动 models 与
+# client info 初始化存在并发顺序，因此 suffix 允许缺失或与入口一致；TUI 初始化后的
+# 真实插件 GET 则必须证明 codex-tui suffix，由 localhost witness 应答，不进入 Candidate。
+# A03～A08 的
+# responses 请求会顺带填充同一网关缓存，因此 A15 前先重启候选服务；账号、proxy
+# 与证据目录均不变。
 restart_service
 
-# A15：三种冻结身份经生产入口生成真实出站。进程来源本身只由 test trace 证明。
+# A15：宿主机 witness 只转发真实 Codex 进程的 models GET；每个进程的随机 nonce
+# 同时出现在 argv 与实际请求路径中。witness 在转发时去掉 nonce 前缀，使两次
+# models 请求进入网关后仍具有完全相同的缓存键。API Key 只通过 fd 3 交给 harness。
 start_capture A15
 trigger_root="$work_dir/scenarios/A15/trigger"
-for variant in exec-suffix tui-suffix initial-no-suffix; do
-  case "$variant" in
-    exec-suffix) ua=$exec_ua; originator=codex_exec ;;
-    tui-suffix) ua=$tui_ua; originator=codex-tui ;;
-    initial-no-suffix)
-      ua="codex_exec/$codex_version (Ubuntu 24.4.0; x86_64) unknown"
-      originator=codex_cli_rs
-      ;;
-  esac
-  code=$(request_with_token "$api_key" --output "$trigger_root/models-$variant.json" \
-    --write-out '%{http_code}' -H "User-Agent: $ua" -H "Originator: $originator" \
-    -H "Version: $codex_version" \
-    "$service_base_url/backend-api/codex/models?client_version=$codex_version")
-  assert_2xx "A15-models-$variant" "$code"
-done
-wait_action A15 models_manifest 3
+python3 - \
+  "$work_dir" "$runtime_dir" "$service_base_url" "$codex_bin" \
+  "$codex_bin_sha256" "$codex_version_output" "$codex_version" "$run_id" \
+  3< <(printf '%s' "$api_key") <<'PY'
+import datetime as dt
+import fcntl
+import hashlib
+import http.client
+import http.server
+import json
+import os
+import pty
+import re
+import secrets
+import shutil
+import signal
+import struct
+import subprocess
+import sys
+import tempfile
+import termios
+import threading
+import time
+from pathlib import Path
+from urllib.parse import parse_qsl, urlsplit
+
+
+(
+    work_dir_raw,
+    runtime_dir_raw,
+    service_base_url,
+    codex_bin,
+    codex_bin_sha256,
+    codex_version_output,
+    codex_version,
+    run_id,
+) = sys.argv[1:]
+work_dir = Path(work_dir_raw)
+runtime_dir = Path(runtime_dir_raw)
+trace_path = work_dir / "scenarios" / "A15" / "process-trace.jsonl"
+intervention_path = (
+    work_dir / "scenarios" / "A15" / "relay-private" / "intervention.jsonl"
+)
+api_key = os.fdopen(3, "rb").read().decode("utf-8")
+if not api_key:
+    raise SystemExit("A15 未收到候选网关 API Key")
+
+service = urlsplit(service_base_url)
+if service.scheme not in {"http", "https"} or not service.hostname:
+    raise SystemExit("A15 SERVICE_BASE_URL 必须是可解析的 HTTP(S) URL")
+service_port = service.port or (443 if service.scheme == "https" else 80)
+service_prefix = service.path.rstrip("/")
+
+
+def utc_now() -> str:
+    """返回稳定的 UTC RFC 3339 时间。"""
+
+    return dt.datetime.now(dt.timezone.utc).isoformat(timespec="milliseconds")
+
+
+def canonical_sha256(value: object) -> str:
+    """对 JSON 可表示值计算排序紧凑摘要。"""
+
+    encoded = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def read_interventions() -> list[dict[str, object]]:
+    """读取 relay 事件；不接受半条 JSON 或非对象事件。"""
+
+    if not intervention_path.is_file():
+        return []
+    events: list[dict[str, object]] = []
+    for line_number, line in enumerate(
+        intervention_path.read_text(encoding="utf-8").split("\n"), start=1
+    ):
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError as error:
+            raise RuntimeError(
+                f"A15 intervention 第 {line_number} 行不完整：{error}"
+            ) from error
+        if not isinstance(event, dict):
+            raise RuntimeError("A15 intervention 事件必须是 JSON 对象")
+        events.append(event)
+    return events
+
+
+def models_manifest_count() -> int:
+    return sum(
+        event.get("action") == "models_manifest"
+        for event in read_interventions()
+    )
+
+
+def wait_stable_models_count(expected: int, settle_seconds: float = 0.6) -> int:
+    """等待上游计数达到预期并保持稳定，超出即失败。"""
+
+    deadline = time.monotonic() + 8.0
+    stable_since: float | None = None
+    while time.monotonic() < deadline:
+        try:
+            actual = models_manifest_count()
+        except (OSError, UnicodeError, RuntimeError):
+            time.sleep(0.05)
+            continue
+        if actual > expected:
+            raise RuntimeError(
+                f"A15 models_manifest 计数 {actual} 超出预期 {expected}"
+            )
+        if actual == expected:
+            if stable_since is None:
+                stable_since = time.monotonic()
+            if time.monotonic() - stable_since >= settle_seconds:
+                return actual
+        else:
+            stable_since = None
+        time.sleep(0.05)
+    raise RuntimeError(
+        f"A15 models_manifest 未在时限内稳定到 {expected}"
+    )
+
+
+state_lock = threading.Lock()
+known_requests: dict[str, dict[str, object]] = {}
+observed_models: dict[str, list[dict[str, object]]] = {}
+# 每个 nonce 收到的全部 models 样本（含非合同入口的并发预取），作为原始证据落盘。
+observed_models_all: dict[str, list[dict[str, object]]] = {}
+observed_identities: dict[str, list[dict[str, object]]] = {}
+
+TUI_PLUGIN_TARGETS = {
+    "/backend-api/ps/plugins/list?scope=GLOBAL&limit=200",
+    "/backend-api/ps/plugins/installed?limit=200",
+    "/backend-api/ps/plugins/installed?limit=200&includeDownloadUrls=true",
+    "/backend-api/ps/plugins/suggested/codex?scope=GLOBAL",
+}
+TUI_AUXILIARY_PLUGIN_TARGETS = {
+    "/backend-api/plugins/featured?platform=codex",
+}
+
+
+class WitnessHandler(http.server.BaseHTTPRequestHandler):
+    """仅向 Candidate 转发 models；插件 GET 在 localhost 受控应答。"""
+
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, _format: str, *_args: object) -> None:
+        return
+
+    def _blocked(self) -> None:
+        body = b'{"error":"A15 witness path is not allowlisted"}'
+        self.send_response(421)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(body)))
+        self.send_header("connection", "close")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler 协议名
+        self._blocked()
+
+    def do_PUT(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler 协议名
+        self._blocked()
+
+    def do_DELETE(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler 协议名
+        self._blocked()
+
+    def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler 协议名
+        parsed = urlsplit(self.path)
+        match = re.fullmatch(
+            r"/a15/([0-9a-f]{32})(/backend-api/.*)",
+            parsed.path,
+        )
+        if match is None:
+            self._blocked()
+            return
+        nonce = match.group(1)
+        public_target = match.group(2)
+        if parsed.query:
+            public_target += "?" + parsed.query
+        with state_lock:
+            known = known_requests.get(nonce)
+        if known is None:
+            self._blocked()
+            return
+
+        if public_target in TUI_PLUGIN_TARGETS | TUI_AUXILIARY_PLUGIN_TARGETS:
+            body = b'{"items":[]}'
+            self.send_response(200)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(body)))
+            self.send_header("connection", "close")
+            self.end_headers()
+            self.wfile.write(body)
+
+            user_agent = self.headers.get("user-agent", "")
+            originator = self.headers.get("originator", "")
+            expected_suffix = f"(codex-tui; {codex_version})"
+            eligible = (
+                public_target in TUI_PLUGIN_TARGETS
+                and originator == "codex-tui"
+                and user_agent.startswith(f"codex-tui/{codex_version} ")
+                and user_agent.endswith(expected_suffix)
+            )
+            if eligible:
+                observation = {
+                    "method": "GET",
+                    "target": self.path,
+                    "user_agent": user_agent,
+                    "originator": originator,
+                    "version": self.headers.get("version", ""),
+                    "authorization_present": bool(self.headers.get("authorization")),
+                    "http_status": 200,
+                    "response_body_sha256": hashlib.sha256(body).hexdigest(),
+                    "response_body_bytes": len(body),
+                    "observed_at": utc_now(),
+                }
+                with state_lock:
+                    observations = observed_identities.setdefault(nonce, [])
+                    if not observations:
+                        observations.append(observation)
+                    event = known.get("identity_event")
+                if isinstance(event, threading.Event):
+                    event.set()
+            return
+
+        query_pairs = parse_qsl(parsed.query, keep_blank_values=True)
+        if (
+            public_target
+            != f"/backend-api/codex/models?client_version={codex_version}"
+            or query_pairs != [("client_version", codex_version)]
+        ):
+            self._blocked()
+            return
+
+        forwarded_headers: dict[str, str] = {}
+        for name in (
+            "authorization",
+            "accept",
+            "accept-encoding",
+            "chatgpt-account-id",
+            "if-none-match",
+            "originator",
+            "user-agent",
+            "version",
+        ):
+            value = self.headers.get(name)
+            if value is not None:
+                forwarded_headers[name] = value
+        target = (
+            service_prefix
+            + "/backend-api/codex/models?client_version="
+            + codex_version
+        )
+        connection_type = (
+            http.client.HTTPSConnection
+            if service.scheme == "https"
+            else http.client.HTTPConnection
+        )
+        connection = connection_type(service.hostname, service_port, timeout=12)
+        try:
+            connection.request("GET", target, headers=forwarded_headers)
+            response = connection.getresponse()
+            body = response.read()
+            response_headers = {
+                name.lower(): value for name, value in response.getheaders()
+            }
+            status = response.status
+        except Exception as error:
+            body = json.dumps(
+                {"error": f"candidate gateway unavailable: {type(error).__name__}"},
+                separators=(",", ":"),
+            ).encode("utf-8")
+            response_headers = {"content-type": "application/json"}
+            status = 502
+        finally:
+            connection.close()
+
+        self.send_response(status)
+        for name in ("content-type", "content-encoding", "etag", "cache-control"):
+            if name in response_headers:
+                self.send_header(name, response_headers[name])
+        self.send_header("content-length", str(len(body)))
+        self.send_header("connection", "close")
+        self.end_headers()
+        self.wfile.write(body)
+
+        observation = {
+            "method": "GET",
+            "target": self.path,
+            "user_agent": self.headers.get("user-agent", ""),
+            "originator": self.headers.get("originator", ""),
+            "version": self.headers.get("version", ""),
+            "authorization_present": bool(self.headers.get("authorization")),
+            "http_status": status,
+            "response_body_sha256": hashlib.sha256(body).hexdigest(),
+            "response_body_bytes": len(body),
+            "observed_at": utc_now(),
+        }
+        with state_lock:
+            # 真实客户端可能在进程终止前重复刷新同一 models；合同按真实入口
+            # 取首个样本，网关上游唯一性另由 conn001 与 intervention 原件
+            # 失败关闭，不能把客户端缓存命中误计成新的入口。
+            # 2026-09-18：Codex 0.154 的 PTY TUI 会在 core 之前以
+            # originator=codex-tui 预取同一 models 清单，与合同入口（core 的
+            # codex_cli_rs）并发到达，按"首个样本"判定会间歇失败（两次 Campaign
+            # 首跑失败、重试通过）。合同入口改为按登记的 expected_originator
+            # 选取首个样本；其余样本逐条保留到 witness-observations.jsonl
+            # 作为原始证据，不丢弃也不伪装成入口。
+            known_entry = known_requests[nonce]
+            expected_originator = str(known_entry.get("expected_originator", ""))
+            observed_models_all.setdefault(nonce, []).append(observation)
+            observations = observed_models.setdefault(nonce, [])
+            event = None
+            if not observations and observation["originator"] == expected_originator:
+                observations.append(observation)
+                event = known_entry["models_event"]
+        if isinstance(event, threading.Event):
+            event.set()
+
+
+class WitnessServer(http.server.ThreadingHTTPServer):
+    daemon_threads = True
+
+
+def drain_pty(master_fd: int) -> None:
+    """持续排空 TUI PTY，防止终端缓冲区反压启动进程。"""
+
+    while True:
+        try:
+            chunk = os.read(master_fd, 65536)
+        except OSError:
+            return
+        if not chunk:
+            return
+
+
+def stop_process(process: subprocess.Popen[bytes]) -> int:
+    """终止已取得 models 200 的整个进程组。"""
+
+    if process.poll() is None:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    try:
+        return process.wait(timeout=4)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        return process.wait(timeout=4)
+
+
+def write_codex_home(home: Path, workspace: Path) -> None:
+    """写入仅在当次进程存活期间存在的短期外部 ChatGPT 认证。"""
+
+    workspace.mkdir(mode=0o700)
+    id_token = (
+        "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0."
+        "eyJlbWFpbCI6InVzZXJAZXhhbXBsZS5jb20iLCJodHRwczovL2FwaS5v"
+        "cGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9wbGFuX3R5cGUiOiJwcm8i"
+        "LCJjaGF0Z3B0X3VzZXJfaWQiOiJ1c2VyLWlkIiwiY2hhdGdwdF9hY2Nv"
+        "dW50X2lkIjoiYWNjb3VudC1pZCJ9fQ.c2ln"
+    )
+    auth = {
+        "auth_mode": "chatgpt",
+        "OPENAI_API_KEY": None,
+        "tokens": {
+            "id_token": id_token,
+            "access_token": api_key,
+            "refresh_token": "",
+            "account_id": "candidate-core-a15",
+        },
+        "last_refresh": utc_now(),
+    }
+    auth_path = home / "auth.json"
+    auth_path.write_text(
+        json.dumps(auth, ensure_ascii=False, separators=(",", ":")),
+        encoding="utf-8",
+    )
+    os.chmod(auth_path, 0o600)
+    workspace_key = json.dumps(str(workspace), ensure_ascii=False)
+    config = (
+        'cli_auth_credentials_store = "file"\n'
+        'approval_policy = "never"\n'
+        'sandbox_mode = "read-only"\n'
+        'check_for_update_on_startup = false\n'
+        'feedback_enabled = false\n'
+        '[analytics]\n'
+        'enabled = false\n'
+        f'[projects.{workspace_key}]\n'
+        'trust_level = "trusted"\n'
+    )
+    config_path = home / "config.toml"
+    config_path.write_text(config, encoding="utf-8")
+    os.chmod(config_path, 0o600)
+
+
+def process_argv(
+    variant: str,
+    nonce: str,
+    workspace: Path,
+    witness_port: int,
+) -> tuple[list[str], bool]:
+    openai_base = (
+        f'openai_base_url="http://127.0.0.1:{witness_port}/a15/{nonce}'
+        '/backend-api/codex"'
+    )
+    chatgpt_base = (
+        f'chatgpt_base_url="http://127.0.0.1:{witness_port}/a15/{nonce}'
+        '/backend-api"'
+    )
+    overrides = ["-c", openai_base, "-c", chatgpt_base]
+    if variant == "exec":
+        return (
+            [
+                codex_bin,
+                "exec",
+                *overrides,
+                "--ephemeral",
+                "--skip-git-repo-check",
+                "-C",
+                str(workspace),
+                "-s",
+                "read-only",
+                "A15 仅验证启动 models 清单",
+            ],
+            False,
+        )
+    if variant == "tui":
+        return (
+            [
+                codex_bin,
+                *overrides,
+                "-C",
+                str(workspace),
+                "-s",
+                "read-only",
+                "--no-alt-screen",
+            ],
+            True,
+        )
+    raise RuntimeError(f"未知 A15 入口：{variant}")
+
+
+def launch_one(
+    variant: str,
+    witness_port: int,
+    expected_before: int,
+    expected_after: int,
+) -> list[dict[str, object]]:
+    """启动真实 exec 或 PTY TUI，并生成真实网络请求与进程关联记录。"""
+
+    before = models_manifest_count()
+    if before != expected_before:
+        raise RuntimeError(
+            f"A15 {variant} 启动前上游计数 {before} != {expected_before}"
+        )
+    nonce = secrets.token_hex(16)
+    home = Path(tempfile.mkdtemp(prefix=f"a15-{variant}-", dir=runtime_dir))
+    workspace = home / "workspace"
+    process: subprocess.Popen[bytes] | None = None
+    master_fd: int | None = None
+    drain_thread: threading.Thread | None = None
+    try:
+        write_codex_home(home, workspace)
+        argv, use_pty = process_argv(variant, nonce, workspace, witness_port)
+        models_event = threading.Event()
+        identity_event = threading.Event() if variant == "tui" else None
+        with state_lock:
+            known_requests[nonce] = {
+                "models_event": models_event,
+                "identity_event": identity_event,
+                "variant": variant,
+                # 合同入口的 originator：exec 由 codex_exec 发起，TUI 启动由 core
+                # （codex_cli_rs）发起；TUI 自身的 codex-tui 预取不是入口。
+                "expected_originator": (
+                    "codex_exec" if variant == "exec" else "codex_cli_rs"
+                ),
+            }
+            observed_models[nonce] = []
+            observed_models_all[nonce] = []
+            observed_identities[nonce] = []
+
+        environment = os.environ.copy()
+        environment["CODEX_HOME"] = str(home)
+        environment["TERM"] = "xterm-256color"
+        environment["NO_PROXY"] = "127.0.0.1,localhost"
+        environment["no_proxy"] = "127.0.0.1,localhost"
+        for name in (
+            "CODEX_API_KEY",
+            "CODEX_APP_SERVER_CHATGPT_BASE_URL",
+            "CODEX_INTERNAL_ORIGINATOR_OVERRIDE",
+            "OPENAI_API_KEY",
+            "OPENAI_BASE_URL",
+        ):
+            environment.pop(name, None)
+
+        started_at = utc_now()
+        if use_pty:
+            master_fd, slave_fd = pty.openpty()
+            fcntl.ioctl(
+                slave_fd,
+                termios.TIOCSWINSZ,
+                struct.pack("HHHH", 40, 120, 0, 0),
+            )
+            process = subprocess.Popen(
+                argv,
+                stdin=slave_fd,
+                stdout=slave_fd,
+                stderr=slave_fd,
+                cwd=workspace,
+                env=environment,
+                start_new_session=True,
+                close_fds=True,
+            )
+            os.close(slave_fd)
+            drain_thread = threading.Thread(
+                target=drain_pty,
+                args=(master_fd,),
+                daemon=True,
+            )
+            drain_thread.start()
+        else:
+            process = subprocess.Popen(
+                argv,
+                # exec 在 stdin 为未关闭 PIPE 时会等待“附加输入”而不启动请求。
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                cwd=workspace,
+                env=environment,
+                start_new_session=True,
+                close_fds=True,
+            )
+
+        deadline = time.monotonic() + 35.0
+        while not (
+            models_event.is_set()
+            and (identity_event is None or identity_event.is_set())
+        ):
+            if process.poll() is not None:
+                raise RuntimeError(
+                    f"A15 {variant} 在目标请求齐全前退出：{process.returncode}"
+                )
+            if time.monotonic() >= deadline:
+                missing = ["models"] if not models_event.is_set() else []
+                if identity_event is not None and not identity_event.is_set():
+                    missing.append("TUI 初始化后身份")
+                raise RuntimeError(
+                    f"A15 {variant} 未在 35 秒内取得：{', '.join(missing)}"
+                )
+            time.sleep(0.05)
+
+        with state_lock:
+            models_requests = list(observed_models.get(nonce, []))
+            identity_requests = list(observed_identities.get(nonce, []))
+        if len(models_requests) != 1:
+            raise RuntimeError(
+                f"A15 {variant} 目标 models 请求数 {len(models_requests)} != 1"
+            )
+        models_request = models_requests[0]
+        if models_request["http_status"] != 200:
+            raise RuntimeError(
+                f"A15 {variant} models HTTP {models_request['http_status']} != 200"
+            )
+        if variant == "tui" and len(identity_requests) != 1:
+            raise RuntimeError(
+                f"A15 TUI 初始化后身份请求数 {len(identity_requests)} != 1"
+            )
+        if variant == "exec" and identity_requests:
+            raise RuntimeError("A15 exec 不得生成 TUI 初始化后身份记录")
+        after = wait_stable_models_count(expected_after)
+        cache_result = "miss" if after == before + 1 else "fresh_hit"
+        if cache_result != ("miss" if variant == "exec" else "fresh_hit"):
+            raise RuntimeError(f"A15 {variant} 缓存结果与合同不一致")
+
+        returncode = stop_process(process)
+        finished_at = utc_now()
+        argv_sha256 = canonical_sha256(argv)
+        launch_payload = {
+            "argv": argv,
+            "codex_binary_path": codex_bin,
+            "codex_binary_sha256": codex_bin_sha256,
+            "codex_version_output": codex_version_output,
+            "pid": process.pid,
+            "started_at": started_at,
+            "codex_home": str(home),
+            "pty": use_pty,
+            "correlation_nonce": nonce,
+        }
+        launch_sha256 = canonical_sha256(launch_payload)
+
+        def make_record(
+            *,
+            record_variant: str,
+            record_id: str,
+            surface: str,
+            endpoint: str,
+            request: dict[str, object],
+            expected_originator: str,
+            expected_prefix: str,
+            expected_suffixes: tuple[str, ...],
+            record_cache_result: str,
+            record_before: int | None,
+            record_after: int | None,
+        ) -> dict[str, object]:
+            """把 witness 原始观察与同一真实进程收据绑定。"""
+
+            user_agent = str(request["user_agent"])
+            originator = str(request["originator"])
+            if originator != expected_originator:
+                raise RuntimeError(
+                    f"A15 {record_variant} Originator {originator!r} "
+                    f"!= {expected_originator!r}"
+                )
+            if endpoint == "models" and str(request["version"]) != codex_version:
+                raise RuntimeError(f"A15 {record_variant} Version 头与目标版本不一致")
+            if endpoint == "plugin_identity" and str(request["version"]) != "":
+                raise RuntimeError("A15 TUI 初始化后插件 GET 不应伪造 Version 头")
+            if not request["authorization_present"]:
+                raise RuntimeError(f"A15 {record_variant} 缺少 Authorization")
+            suffix_match = re.search(r" \(([^();]+); ([^)]+)\)$", user_agent)
+            user_agent_suffix = (
+                suffix_match.group(0).strip() if suffix_match else ""
+            )
+            suffix_state = "present" if suffix_match else "absent"
+            if user_agent_suffix not in expected_suffixes:
+                raise RuntimeError(
+                    f"A15 {record_variant} UA suffix {user_agent_suffix!r} "
+                    f"不在允许集合 {expected_suffixes!r}"
+                )
+            user_agent_prefix = user_agent.split(" ", 1)[0]
+            if user_agent_prefix != expected_prefix:
+                raise RuntimeError(
+                    f"A15 {record_variant} UA 前缀 {user_agent_prefix!r} "
+                    f"!= {expected_prefix!r}"
+                )
+            request_payload = {
+                "method": request["method"],
+                "target": request["target"],
+                "user_agent": user_agent,
+                "originator": originator,
+                "version": request["version"],
+                "authorization_present": request["authorization_present"],
+                "http_status": request["http_status"],
+                "response_body_sha256": request["response_body_sha256"],
+                "response_body_bytes": request["response_body_bytes"],
+                "observed_at": request["observed_at"],
+            }
+            request_sha256 = canonical_sha256(request_payload)
+            correlation_sha256 = canonical_sha256(
+                {
+                    "argv_sha256": argv_sha256,
+                    "launch_sha256": launch_sha256,
+                    "request_sha256": request_sha256,
+                    "correlation_nonce": nonce,
+                    "pid": process.pid,
+                }
+            )
+            termination_reason = (
+                "models_http_200_observed"
+                if variant == "exec"
+                else "models_and_post_initialize_identity_observed"
+            )
+            return {
+                "schema_version": "codex-candidate-observation/v1",
+                "record_id": record_id,
+                "scenario_id": "A15",
+                "record_type": "surface_identity",
+                "data": {
+                    "contract_version": "real-entry-cache-v2",
+                    "variant": record_variant,
+                    "surface": surface,
+                    "endpoint": endpoint,
+                    "originator": originator,
+                    "user_agent": user_agent,
+                    "user_agent_prefix": user_agent_prefix,
+                    "user_agent_suffix": user_agent_suffix,
+                    "suffix_state": suffix_state,
+                    "request_method": request["method"],
+                    "request_target": request["target"],
+                    "version_header": request["version"],
+                    "authorization_present": request["authorization_present"],
+                    "http_status": request["http_status"],
+                    "response_body_sha256": request["response_body_sha256"],
+                    "response_body_bytes": request["response_body_bytes"],
+                    "cache_result": record_cache_result,
+                    "upstream_calls_before": record_before,
+                    "upstream_calls_after": record_after,
+                    "codex_binary_path": codex_bin,
+                    "codex_binary_sha256": codex_bin_sha256,
+                    "codex_version_output": codex_version_output,
+                    "pid": process.pid,
+                    "started_at": started_at,
+                    "observed_at": request["observed_at"],
+                    "finished_at": finished_at,
+                    "returncode": returncode,
+                    "termination_reason": termination_reason,
+                    "codex_home": str(home),
+                    "argv": argv,
+                    "pty": use_pty,
+                    "correlation_nonce": nonce,
+                    "argv_sha256": argv_sha256,
+                    "launch_sha256": launch_sha256,
+                    "request_sha256": request_sha256,
+                    "correlation_sha256": correlation_sha256,
+                },
+            }
+
+        if variant == "exec":
+            return [
+                make_record(
+                    record_variant="exec-startup-models",
+                    record_id="a15-exec-startup-models",
+                    surface="exec",
+                    endpoint="models",
+                    request=models_request,
+                    expected_originator="codex_exec",
+                    expected_prefix=f"codex_exec/{codex_version}",
+                    expected_suffixes=("", f"(codex_exec; {codex_version})"),
+                    record_cache_result=cache_result,
+                    record_before=before,
+                    record_after=after,
+                )
+            ]
+        return [
+            make_record(
+                record_variant="tui-startup-models",
+                record_id="a15-tui-startup-models",
+                surface="tui",
+                endpoint="models",
+                request=models_request,
+                expected_originator="codex_cli_rs",
+                expected_prefix=f"codex-tui/{codex_version}",
+                expected_suffixes=("", f"(codex-tui; {codex_version})"),
+                record_cache_result=cache_result,
+                record_before=before,
+                record_after=after,
+            ),
+            make_record(
+                record_variant="tui-post-initialize-identity",
+                record_id="a15-tui-post-initialize-identity",
+                surface="tui",
+                endpoint="plugin_identity",
+                request=identity_requests[0],
+                expected_originator="codex-tui",
+                expected_prefix=f"codex-tui/{codex_version}",
+                expected_suffixes=(f"(codex-tui; {codex_version})",),
+                record_cache_result="not_applicable",
+                record_before=None,
+                record_after=None,
+            ),
+        ]
+    finally:
+        if process is not None and process.poll() is None:
+            stop_process(process)
+        if master_fd is not None:
+            try:
+                os.close(master_fd)
+            except OSError:
+                pass
+        if drain_thread is not None:
+            drain_thread.join(timeout=1)
+        # 无论成功、超时还是断言失败，都把 witness 收到的全部 models 样本落盘：
+        # 首跑失败时的样本序列是诊断 TUI 并发预取／core 迟到的唯一线索。
+        with state_lock:
+            entry_samples = list(observed_models.get(nonce, []))
+            all_samples = list(observed_models_all.get(nonce, []))
+            known_requests.pop(nonce, None)
+            observed_models.pop(nonce, None)
+            observed_models_all.pop(nonce, None)
+            observed_identities.pop(nonce, None)
+        witness_path = trace_path.with_name("witness-observations.jsonl")
+        with witness_path.open("a", encoding="utf-8") as witness_stream:
+            for sample in all_samples:
+                witness_stream.write(
+                    json.dumps(
+                        {
+                            "variant": variant,
+                            "correlation_nonce": nonce,
+                            "contract_entry": sample in entry_samples,
+                            **sample,
+                        },
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                    + "\n"
+                )
+        os.chmod(witness_path, 0o600)
+        shutil.rmtree(home, ignore_errors=True)
+
+
+server = WitnessServer(("127.0.0.1", 0), WitnessHandler)
+server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+server_thread.start()
+records: list[dict[str, object]] = []
+try:
+    witness_port = int(server.server_address[1])
+    records.extend(launch_one("exec", witness_port, 0, 1))
+    records.extend(launch_one("tui", witness_port, 1, 1))
+finally:
+    server.shutdown()
+    server.server_close()
+    server_thread.join(timeout=2)
+    api_key = ""
+
+trace_path.write_text(
+    "".join(
+        json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n"
+        for record in records
+    ),
+    encoding="utf-8",
+)
+os.chmod(trace_path, 0o600)
+PY
+wait_action A15 models_manifest 1
 stop_capture
+
+# relay 停止并脱敏后，再把公开原件摘要绑定到 A15 聚合记录。这样 trace 不会
+# 引用已删除的 relay-private，也不会把未脱敏 Authorization 写入证据。
+python3 - "$work_dir" "$run_id" "$codex_version" \
+  "$codex_bin" "$codex_bin_sha256" "$codex_version_output" <<'PY'
+import hashlib
+import json
+import os
+import re
+import sys
+from pathlib import Path
+
+
+(
+    work_dir_raw,
+    run_id,
+    codex_version,
+    codex_bin,
+    codex_bin_sha256,
+    codex_version_output,
+) = sys.argv[1:]
+root = Path(work_dir_raw)
+scenario_root = root / "scenarios" / "A15"
+relay_root = scenario_root / "relay"
+trace_path = scenario_root / "process-trace.jsonl"
+
+
+def file_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def canonical_sha256(value: object) -> str:
+    encoded = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+records = [
+    json.loads(line)
+    for line in trace_path.read_text(encoding="utf-8").split("\n")
+    if line.strip()
+]
+if [record.get("record_id") for record in records] != [
+    "a15-exec-startup-models",
+    "a15-tui-startup-models",
+    "a15-tui-post-initialize-identity",
+]:
+    raise SystemExit("A15 两条启动 models 与 TUI 初始化后身份记录不完整或顺序错误")
+
+request_files = sorted(relay_root.glob("conn*.client_to_upstream.bin"))
+if request_files != [relay_root / "conn001.client_to_upstream.bin"]:
+    raise SystemExit(
+        f"A15 必须恰好一次网关上游，实际请求文件为 {[p.name for p in request_files]}"
+    )
+request_path = request_files[0]
+response_path = relay_root / "conn001.upstream_to_client.bin"
+intervention_path = relay_root / "intervention.jsonl"
+for path in (request_path, response_path, intervention_path):
+    if path.is_symlink() or not path.is_file() or path.stat().st_size == 0:
+        raise SystemExit(f"A15 原件缺失或不可信：{path}")
+
+request_head = request_path.read_bytes().split(b"\r\n\r\n", 1)[0]
+request_lines = request_head.decode("iso-8859-1").split("\r\n")
+expected_target = f"/backend-api/codex/models?client_version={codex_version}"
+if not request_lines or request_lines[0] != f"GET {expected_target} HTTP/1.1":
+    raise SystemExit("A15 relay 不是唯一的目标 models GET")
+headers: dict[str, list[str]] = {}
+for line in request_lines[1:]:
+    name, separator, value = line.partition(":")
+    if not separator:
+        raise SystemExit("A15 relay 请求头格式非法")
+    headers.setdefault(name.lower(), []).append(value.strip())
+for name in ("user-agent", "originator", "version"):
+    if len(headers.get(name, [])) != 1:
+        raise SystemExit(f"A15 relay 请求的 {name} 头不唯一")
+upstream_user_agent = headers["user-agent"][0]
+upstream_originator = headers["originator"][0]
+upstream_version = headers["version"][0]
+expected_ua = re.compile(
+    rf"^codex_exec/{re.escape(codex_version)} "
+    rf"\(Ubuntu 24\.4\.0; (?:aarch64|x86_64)\) unknown "
+    rf"\(codex_exec; {re.escape(codex_version)}\)$"
+)
+if (
+    expected_ua.fullmatch(upstream_user_agent) is None
+    or upstream_originator != "codex_exec"
+    or upstream_version != codex_version
+):
+    raise SystemExit("A15 relay 出站未归一为规范 Candidate 身份")
+
+response_status = response_path.read_bytes().split(b"\r\n", 1)[0]
+if re.fullmatch(rb"HTTP/1\.[01] 200(?: .*)?", response_status) is None:
+    raise SystemExit("A15 relay 上游响应不是 HTTP 200")
+
+events = [
+    json.loads(line)
+    for line in intervention_path.read_text(encoding="utf-8").split("\n")
+    if line.strip()
+]
+if (
+    len(events) != 1
+    or events[0].get("type") != "synthetic_core_response"
+    or events[0].get("action") != "models_manifest"
+    or events[0].get("production_forwarded") is not False
+):
+    raise SystemExit("A15 intervention 必须恰好记录一次本地 models_manifest")
+
+entry_records = records[:2]
+entry_data = [record["data"] for record in entry_records]
+response_digests = {data.get("response_body_sha256") for data in entry_data}
+if len(response_digests) != 1:
+    raise SystemExit("A15 两次候选网关 models 响应体摘要不一致")
+prefix = run_id
+request_source = f"{prefix}/scenarios/A15/relay/{request_path.name}"
+response_source = f"{prefix}/scenarios/A15/relay/{response_path.name}"
+intervention_source = f"{prefix}/scenarios/A15/relay/{intervention_path.name}"
+aggregate_data = {
+    "contract_version": "real-entry-cache-v2",
+    "entry_record_ids": [record["record_id"] for record in entry_records],
+    "post_initialize_identity_record_id": records[2]["record_id"],
+    "entry_count": 2,
+    "success_count": sum(data.get("http_status") == 200 for data in entry_data),
+    "cache_hit_count": sum(data.get("cache_result") == "fresh_hit" for data in entry_data),
+    "upstream_call_count": len(events),
+    "response_body_sha256": next(iter(response_digests)),
+    "codex_binary_path": codex_bin,
+    "codex_binary_sha256": codex_bin_sha256,
+    "codex_version_output": codex_version_output,
+    "relay_request_path": request_source,
+    "relay_request_sha256": file_sha256(request_path),
+    "relay_response_path": response_source,
+    "relay_response_sha256": file_sha256(response_path),
+    "intervention_path": intervention_source,
+    "intervention_sha256": file_sha256(intervention_path),
+    "canonical_upstream_user_agent": upstream_user_agent,
+    "canonical_upstream_originator": upstream_originator,
+    "canonical_upstream_version": upstream_version,
+}
+aggregate_data["contract_sha256"] = canonical_sha256(aggregate_data)
+records.append(
+    {
+        "schema_version": "codex-candidate-observation/v1",
+        "record_id": "a15-real-entry-cache-contract-v2",
+        "scenario_id": "A15",
+        "record_type": "connection_lifecycle",
+        "data": aggregate_data,
+        "source_artifacts": [
+            request_source,
+            response_source,
+            intervention_source,
+        ],
+    }
+)
+trace_path.write_text(
+    "".join(
+        json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n"
+        for record in records
+    ),
+    encoding="utf-8",
+)
+os.chmod(trace_path, 0o600)
+PY
 
 # 冻结动作和无生产转发门禁。A03 的 zstd 与 A10 的 trigger 直接在 scrubbed raw 中复核。
 python3 - "$work_dir" "$ws_failure_count" "$codex_version" <<'PY'
@@ -1168,7 +2178,7 @@ minimums = {
     "A07": {"responses_ws_retryable_failure": ws_failures, "responses_http_fallback_success": 1},
     "A08": {"responses_http_success": 3},
     "A10": {"responses_http_success": 4},
-    "A15": {"models_manifest": 3},
+    "A15": {"models_manifest": 1},
 }
 for scenario, wanted in minimums.items():
     scenario_root = root / "scenarios" / scenario / "relay"
@@ -1199,7 +2209,7 @@ for scenario, wanted in minimums.items():
         counts[event["action"]] += 1
     for action, minimum in wanted.items():
         actual = counts[action]
-        if scenario in {"A03", "A06", "A07"} and actual != minimum:
+        if scenario in {"A03", "A06", "A07", "A15"} and actual != minimum:
             raise SystemExit(f"{scenario} {action} 次数 {actual} != {minimum}")
         if actual < minimum:
             raise SystemExit(f"{scenario} {action} 次数 {actual} < {minimum}")

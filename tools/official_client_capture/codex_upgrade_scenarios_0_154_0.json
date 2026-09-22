@@ -6,7 +6,7 @@
   "source_spec": {
     "path": "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md",
     "fragment": "第二章",
-    "sha256": "8dfdd3a96df7297a62285f7ae2bd23741baa4dd73d166e5f22cea53475359515"
+    "sha256": "46501af0d75a05b5f684864b5d9d4b24449e8110a4a5e9f915cec54baada3a1b"
   },
   "rule_manifest": {
     "path": "tools/official_client_capture/codex_upgrade_rules_0_154_0.json",
@@ -20,6 +20,13 @@
       "required": true,
       "sensitive": false,
       "description": "本次升级 Campaign 的不可变安全 ID。"
+    },
+    {
+      "name": "campaign_dir",
+      "type": "absolute_path",
+      "required": true,
+      "sensitive": false,
+      "description": "本次 Campaign 目录的绝对路径；候选零请求 Job 由此读取 Campaign 内冻结的构建收据。"
     },
     {
       "name": "target_version",
@@ -140,6 +147,13 @@
       "required": true,
       "sensitive": false,
       "description": "专用 ingress API Key 数据库 ID；清单中禁止保存 key 值。"
+    },
+    {
+      "name": "candidate_id",
+      "type": "string",
+      "required": false,
+      "sensitive": false,
+      "description": "候选阶段的 Candidate ID；official 阶段为空。候选 Job 用它定位 Campaign 内该 Candidate 的构建收据。"
     },
     {
       "name": "build_id",
@@ -565,12 +579,13 @@
     },
     {
       "scenario_id": "A15",
-      "description": "exec、TUI 与启动 models UA 画像",
-      "trigger": "分别由 目标 Codex CLI exec 和 TUI 入口触发，并取得启动 models 有 suffix 与无 suffix 两种样本。",
+      "description": "exec 与 PTY TUI 启动 models 缓存，以及同一 TUI initialize 后身份画像",
+      "trigger": "依次由目标 Codex CLI exec 与 PTY TUI 触发两次启动 models，再等待同一 TUI 进程 initialize 后发出带 codex-tui suffix 的真实插件 GET。",
       "preconditions": [
-        "入口 surface 由 process trace 证明",
-        "UA 已解析为前缀和 suffix",
-        "不接受 curl 伪造入口头"
+        "两条启动 models 由真实 Codex 进程与 process trace 证明，exec 首次 miss、TUI 第二次 hit",
+        "TUI initialize 后的插件 GET 与 TUI models 记录共享 PID、argv、nonce 和 CODEX_HOME",
+        "插件 GET 仅由 localhost witness 应答，不转发 Candidate，也不计入缓存或上游次数",
+        "UA 已解析为前缀和 suffix；拒绝 curl、app-server 与 real-entry-cache-v1"
       ],
       "required_artifact_kinds": [
         "process_trace"
@@ -2268,6 +2283,65 @@
       "covers": [
         "SPEC-CONN-001",
         "SPEC-PROTO-002"
+      ],
+      "required_scenario_receipts": []
+    },
+    {
+      "id": "candidate-trace-test",
+      "phase": "candidate",
+      "suites": [
+        "full"
+      ],
+      "scenario_ids": [
+        "A03",
+        "A04",
+        "A05",
+        "A06",
+        "A07",
+        "A08",
+        "A09",
+        "A10",
+        "A11",
+        "A14"
+      ],
+      "description": "Sub2API 候选同源源码树上的冻结 go test -json 内部状态日志：transport_fallback／connection_lifecycle 等抓包面不存在的事实只能由 candidate_test_trace 从这份日志按冻结映射投影；零 live 请求，源码树只认 Campaign 内冻结的构建收据",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_candidate_trace_test.sh"
+          ],
+          "environment": {
+            "CAMPAIGN_DIR": "{campaign_dir}",
+            "CANDIDATE_ID": "{candidate_id}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "CODEX_VERSION": "{target_version}",
+            "RUN_ID": "{campaign_id}-candidate-trace-test"
+          },
+          "timeout_seconds": 1800
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-candidate-trace-test"
+      ],
+      "covers": [
+        "SPEC-BODY-001",
+        "SPEC-BODY-003",
+        "SPEC-BODY-004",
+        "SPEC-CONN-001",
+        "SPEC-EP-001",
+        "SPEC-EP-002",
+        "SPEC-EP-012",
+        "SPEC-EP-015",
+        "SPEC-EP-021",
+        "SPEC-EP-022",
+        "SPEC-EP-023",
+        "SPEC-HDR-001",
+        "SPEC-HDR-008",
+        "SPEC-PROTO-002",
+        "SPEC-WS-004",
+        "SPEC-WS-005"
       ],
       "required_scenario_receipts": []
     },

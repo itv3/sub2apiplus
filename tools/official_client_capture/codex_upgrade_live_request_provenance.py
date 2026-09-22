@@ -47,9 +47,10 @@ import re
 import sys
 import zlib
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Iterator, Mapping
 
+from tools.official_client_capture import codex_upgrade_evidence_permissions as evidence_permissions
 from tools.official_client_capture import codex_upgrade_vc0_closeout as closeout
 from tools.official_client_capture import model_condition_receipts
 
@@ -71,15 +72,52 @@ ESTIMATION_POLICIES = (
 CAPTURE_MANIFEST_SCHEMA = "official-client-capture/v1"
 COMPACT_SUMMARY_SCHEMA = "codex-compact-capture/v1"
 RELAY_MANIFEST_SCHEMA = "byte-relay/v1"
+DIRECT_RUN_SUMMARY_SCHEMA = "sub2api-direct-capture/v1"
+MITM_SCENARIO_RUN_SUMMARY_SCHEMA = "sub2api-openai-mitm-scenario/v2"
+# 候选零请求 Job candidate-trace-test（run_candidate_trace_test.sh）在同源候选树上以
+# GOPROXY=off 执行冻结的 go test -json，不发送任何模型请求；其 run-summary 是权威零请求来源。
+TRACE_TEST_RUN_SUMMARY_SCHEMA = "candidate-trace-test/v1"
+CANDIDATE_CAPTURE_SCHEMAS = frozenset(
+    {"candidate-core-capture/v1", "candidate-aux-capture/v1"}
+)
+H1_WIRE_SCHEMA = "h1-wire-probe/v1"
 MAX_JSONL_BYTES = 256 * 1024 * 1024
 MAX_RELAY_BYTES = 512 * 1024 * 1024
 SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 CONN_FILE_RE = re.compile(r"^(conn\d+)\.client_to_upstream\.bin$")
 TURN_EVENTS_RE = re.compile(r"^turn(\d+)-events\.jsonl$")
+FAILED_ATTEMPT_ROOT_RE = re.compile(
+    r"^(?P<base>.+)\.failed-attempt(?P<attempt>[1-9][0-9]*)(?:-(?P<collision>[1-9][0-9]*))?$"
+)
+# v7 第三次 frozen-core 摘要已经由历史 producer 合同冻结。provenance 对同一
+# 事故也必须绑定这份字节事实，不能只凭同名 schema 接受替代摘要。
+HISTORICAL_RUN_SUMMARY_SHA256 = {
+    (
+        "c0154-formal-vc5-recovery-20260916t122646z-c0154-candidate-v7-"
+        "candidate-frozen-core.failed-attempt3"
+    ): "5e2f8b6b68fef0eeb18b44ec35b3241853d7302ab2b5775d02835c93f2dccd75",
+}
 
 
 class ProvenanceError(ValueError):
     """证据结构、来源唯一性或计数自洽性被破坏。"""
+
+
+def _trusted_pcap(path: Path, label: str) -> Path:
+    """校验 pcap，并复用封存阶段允许 tcpdump 固定数值属主的边界。"""
+
+    if not path.is_absolute() or path.is_symlink() or not path.is_file():
+        raise ProvenanceError(f"{label}必须是可信绝对普通文件")
+    resolved = path.resolve(strict=True)
+    metadata = resolved.stat()
+    if (
+        not evidence_permissions._owner_allowed(resolved, "file", metadata)
+        or metadata.st_mode & 0o022
+        or metadata.st_nlink != 1
+        or not 25 <= metadata.st_size <= MAX_RELAY_BYTES
+    ):
+        raise ProvenanceError(f"{label}大小、属主、权限或链接数非法")
+    return resolved
 
 
 def _canonical(value: Any) -> bytes:
@@ -625,13 +663,31 @@ def _ws_client_messages(raw: bytes) -> Iterator[dict[str, Any]]:
         pos = cur + length
 
 
-def _relay_branches(root: Path) -> list[dict[str, Any]]:
-    relay_root = root / "relay"
+def _relay_branches(
+    root: Path,
+    *,
+    relay_root: Path | None = None,
+    producer_run_id: str | None = None,
+    coordinate_prefix: Mapping[str, Any] | None = None,
+    branch_name: str = "relay",
+    subject: str = "relay",
+    scenario: str = "",
+) -> list[dict[str, Any]]:
+    """解析一个 relay 目录。
+
+    ``root`` 是物理运行根；Candidate frozen capture 的 relay 位于
+    ``scenarios/<Axx>/relay``，因此调用方可显式传入目录与场景坐标。身份中的
+    producer 始终保留物理根名（含 ``.failed-attemptN``），避免把三次真实重试
+    因摘要里的逻辑 run_id 相同而错误合并。
+    """
+
+    relay_root = relay_root or root / "relay"
     if not relay_root.exists():
         return []
     if relay_root.is_symlink() or not relay_root.is_dir():
         raise ProvenanceError("relay evidence root 不可信")
-    run_id = root.name
+    run_id = producer_run_id or root.name
+    prefix = dict(coordinate_prefix or {})
     conn_paths = sorted(
         p for p in relay_root.iterdir() if CONN_FILE_RE.fullmatch(p.name)
     )
@@ -647,8 +703,11 @@ def _relay_branches(root: Path) -> list[dict[str, Any]]:
             raise ProvenanceError("relay 没有请求字节且零连接 manifest 非法")
         return [
             {
-                "branch": "relay",
+                "branch": branch_name,
+                "kind": "relay",
                 "evidence": "relay",
+                "subject": subject,
+                "scenario": scenario,
                 "status": "resolved",
                 "authority_source": "relay_zero_connections",
                 "requests": [],
@@ -671,6 +730,7 @@ def _relay_branches(root: Path) -> list[dict[str, Any]]:
                 continue
             context = _payload_context(model_condition_receipts._json_body(message))
             coordinate = {
+                **prefix,
                 "connection": connection,
                 "transport": "http",
                 "message_ordinal": http_ordinal,
@@ -693,6 +753,7 @@ def _relay_branches(root: Path) -> list[dict[str, Any]]:
                 continue
             context = _payload_context(payload)
             coordinate = {
+                **prefix,
                 "connection": connection,
                 "transport": "ws",
                 "message_ordinal": message["ordinal"],
@@ -711,12 +772,407 @@ def _relay_branches(root: Path) -> list[dict[str, Any]]:
             )
     return [
         {
-            "branch": "relay",
+            "branch": branch_name,
+            "kind": "relay",
             "evidence": "relay",
+            "subject": subject,
+            "scenario": scenario,
             "status": "resolved",
             "authority_source": "relay",
             "requests": requests,
             "turn_completed": None,
+        }
+    ]
+
+
+# ---------------------------------------------------------------------------
+# 0.154 Candidate 真实产物
+# ---------------------------------------------------------------------------
+
+
+def _logical_run_name(root: Path) -> str:
+    match = FAILED_ATTEMPT_ROOT_RE.fullmatch(root.name)
+    return match.group("base") if match is not None else root.name
+
+
+def _candidate_pairing_group(root: Path, subject: str, scenario: str) -> str | None:
+    """把 direct 与其独立执行的 MITM sibling 约束在同一 Candidate 运行组。"""
+
+    name = _logical_run_name(root)
+    direct_suffixes = {
+        "-candidate-direct-core": "core",
+        # repeat 是 core 的独立 direct 重放，仍由同组 MITM 场景给出上界。
+        "-candidate-ws-repeat": "core",
+        "-candidate-direct-compact": "compact",
+    }
+    for suffix, family in direct_suffixes.items():
+        if name.endswith(suffix):
+            prefix = name[: -len(suffix)]
+            return f"{prefix}|{family}" if prefix else None
+    for family in ("core", "compact"):
+        marker = f"-candidate-mitm-{family}-{subject}-{scenario}-"
+        if marker not in name:
+            continue
+        prefix, ordinal = name.rsplit(marker, 1)
+        if prefix and re.fullmatch(r"a[1-9][0-9]*-run", ordinal):
+            return f"{prefix}|{family}"
+    return None
+
+
+def _load_run_summary(root: Path) -> tuple[dict[str, Any], bytes]:
+    payload, raw = closeout._load_json(root / "run-summary.json", "Candidate run-summary")
+    expected_digest = HISTORICAL_RUN_SUMMARY_SHA256.get(root.name)
+    if expected_digest is not None and _sha256(raw) != expected_digest:
+        raise ProvenanceError("历史 v7 run-summary 摘要与冻结事故不一致")
+    run_id = payload.get("run_id")
+    if run_id != _logical_run_name(root):
+        raise ProvenanceError("Candidate run-summary 的 run_id 与物理证据根不一致")
+    return payload, raw
+
+
+def _scenario_turn_count(
+    root: Path,
+    subject: str,
+    scenario: str,
+    *,
+    split_by_subject: bool = True,
+) -> int:
+    result_root = (
+        root / "result" / subject / scenario
+        if split_by_subject
+        else root / "result" / scenario
+    )
+    summary_path = result_root / "summary.json"
+    payload, _raw = closeout._load_json(summary_path, "Candidate 场景摘要")
+    if payload.get("schema_version") == COMPACT_SUMMARY_SCHEMA:
+        turns = payload.get("turn_completed_count")
+    else:
+        if payload.get("scenario") != scenario or payload.get("valid") is not True:
+            raise ProvenanceError("Candidate 场景摘要的身份或状态非法")
+        turns = payload.get("turn_count")
+    if not isinstance(turns, int) or isinstance(turns, bool) or turns < 0:
+        raise ProvenanceError("Candidate 场景摘要的完成 turn 数非法")
+
+    event_count = 0
+    event_files = 0
+    for path in sorted(result_root.glob("turn*-events.jsonl")):
+        if not TURN_EVENTS_RE.fullmatch(path.name):
+            continue
+        event_files += 1
+        for _index, record in _read_jsonl(path, "Candidate turn 事件"):
+            if record.get("type") == "turn.completed":
+                event_count += 1
+    if event_files and event_count != turns:
+        raise ProvenanceError("Candidate 场景摘要与 turn 事件计数不一致")
+    return turns
+
+
+def _direct_candidate_branches(root: Path) -> list[dict[str, Any]]:
+    summary, _raw = _load_run_summary(root)
+    cases = summary.get("cases")
+    if (
+        summary.get("schema_version") != DIRECT_RUN_SUMMARY_SCHEMA
+        or summary.get("status") != "complete"
+        or not isinstance(cases, list)
+        or not cases
+    ):
+        raise ProvenanceError("Candidate direct run-summary 形状或状态非法")
+    branches: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for index, case in enumerate(cases):
+        if not isinstance(case, Mapping):
+            raise ProvenanceError(f"Candidate direct cases[{index}] 不是对象")
+        subject = case.get("subject")
+        scenario = case.get("scenario")
+        pcap_bytes = case.get("pcap_bytes")
+        pcap_sha256 = case.get("pcap_sha256")
+        key = (str(subject), str(scenario))
+        if (
+            not isinstance(subject, str)
+            or not SAFE_ID_RE.fullmatch(subject)
+            or not isinstance(scenario, str)
+            or not SAFE_ID_RE.fullmatch(scenario)
+            or key in seen
+            or case.get("valid") is not True
+            or not isinstance(pcap_bytes, int)
+            or isinstance(pcap_bytes, bool)
+            or pcap_bytes <= 24
+            or not isinstance(pcap_sha256, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", pcap_sha256)
+        ):
+            raise ProvenanceError(f"Candidate direct cases[{index}] 非法")
+        seen.add(key)
+        pcap = _trusted_pcap(
+            root / "direct" / f"{subject}-{scenario}" / "egress.pcap",
+            "Candidate direct pcap",
+        )
+        if pcap.stat().st_size != pcap_bytes or closeout._sha256_file(pcap) != pcap_sha256:
+            raise ProvenanceError("Candidate direct pcap 与 run-summary 不一致")
+        branches.append(
+            {
+                "branch": f"direct/{subject}/{scenario}",
+                "kind": "candidate_direct",
+                "evidence": "direct",
+                "subject": subject,
+                "scenario": scenario,
+                "turn_completed": _scenario_turn_count(root, subject, scenario),
+                "requests": [],
+                "status": "pending_estimate",
+                "pairing_group": _candidate_pairing_group(root, subject, scenario),
+            }
+        )
+    return branches
+
+
+def _validate_summary_jsonl(root: Path, entries: Any) -> None:
+    if not isinstance(entries, list):
+        raise ProvenanceError("Candidate MITM run-summary 缺少 jsonl 清单")
+    seen: set[str] = set()
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, Mapping):
+            raise ProvenanceError(f"Candidate MITM jsonl[{index}] 不是对象")
+        value = entry.get("path")
+        pure = PurePosixPath(value) if isinstance(value, str) else PurePosixPath(".")
+        if (
+            not isinstance(value, str)
+            or not pure.parts
+            or pure.is_absolute()
+            or "\\" in value
+            or str(pure) != value
+            or any(part in {"", ".", ".."} for part in pure.parts)
+            or value in seen
+        ):
+            raise ProvenanceError(f"Candidate MITM jsonl[{index}] 路径非法")
+        seen.add(value)
+        path = closeout._trusted_file(root / Path(*pure.parts), "Candidate MITM JSONL")
+        raw = closeout._read_stable_file(path, "Candidate MITM JSONL", maximum=MAX_JSONL_BYTES)
+        records = sum(1 for line in raw.split(b"\n") if line.strip())
+        if (
+            entry.get("bytes") != len(raw)
+            or entry.get("records") != records
+            or entry.get("sha256") != _sha256(raw)
+        ):
+            raise ProvenanceError("Candidate MITM JSONL 与 run-summary 不一致")
+
+
+def _mitm_candidate_branches(root: Path) -> list[dict[str, Any]]:
+    summary, _raw = _load_run_summary(root)
+    subject = summary.get("subject")
+    scenario = summary.get("scenario")
+    scenario_result = summary.get("scenario_result")
+    if (
+        summary.get("schema_version") != MITM_SCENARIO_RUN_SUMMARY_SCHEMA
+        or summary.get("status") != "complete"
+        or summary.get("driver_return_code") != 0
+        or not isinstance(subject, str)
+        or not SAFE_ID_RE.fullmatch(subject)
+        or not isinstance(scenario, str)
+        or not SAFE_ID_RE.fullmatch(scenario)
+        or not isinstance(scenario_result, Mapping)
+        or scenario_result.get("valid") is not True
+    ):
+        raise ProvenanceError("Candidate MITM run-summary 形状或状态非法")
+    _validate_summary_jsonl(root, summary.get("jsonl"))
+    directory = root / "mitm" / subject
+    prefix = {"evidence": "mitm", "subject": subject, "scenario": scenario}
+    requests: list[dict[str, Any]] = []
+    http_path = directory / "codex-http.jsonl"
+    ws_path = directory / "codex-ws.jsonl"
+    if http_path.is_file():
+        requests.extend(
+            _mitm_http_requests(
+                http_path,
+                producer_run_id=root.name,
+                source_kind="candidate_mitm",
+                coordinate_prefix=prefix,
+            )
+        )
+    if ws_path.is_file():
+        requests.extend(
+            _mitm_ws_requests(
+                ws_path,
+                producer_run_id=root.name,
+                source_kind="candidate_mitm",
+                coordinate_prefix=prefix,
+            )
+        )
+    if not http_path.is_file() and not ws_path.is_file():
+        raise ProvenanceError("Candidate MITM 根没有可识别的 codex JSONL")
+    return [
+        {
+            "branch": f"mitm/{subject}/{scenario}",
+            "kind": "candidate_mitm",
+            "evidence": "mitm",
+            "subject": subject,
+            "scenario": scenario,
+            "turn_completed": _scenario_turn_count(
+                root, subject, scenario, split_by_subject=False
+            ),
+            "requests": requests,
+            "status": "resolved",
+            "authority_source": "candidate_mitm",
+            "pairing_group": _candidate_pairing_group(root, subject, scenario),
+        }
+    ]
+
+
+def _frozen_candidate_branches(root: Path) -> list[dict[str, Any]]:
+    summary, _raw = _load_run_summary(root)
+    schema = summary.get("schema_version")
+    scenarios = summary.get("scenarios")
+    if (
+        schema not in CANDIDATE_CAPTURE_SCHEMAS
+        or summary.get("status") not in {"complete", "failed"}
+        or summary.get("codex_version") != "0.154.0"
+        or summary.get("explicit_gate") is not True
+        or summary.get("production_forwarding_enabled") is not False
+        or not isinstance(scenarios, list)
+        or not scenarios
+    ):
+        raise ProvenanceError("Candidate frozen run-summary 形状或状态非法")
+    branches: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, item in enumerate(scenarios):
+        if not isinstance(item, Mapping):
+            raise ProvenanceError(f"Candidate frozen scenarios[{index}] 不是对象")
+        scenario_id = item.get("scenario_id")
+        actions = item.get("actions")
+        pcap_bytes = item.get("pcap_bytes")
+        pcap_sha256 = item.get("pcap_sha256")
+        if (
+            not isinstance(scenario_id, str)
+            or not SAFE_ID_RE.fullmatch(scenario_id)
+            or scenario_id in seen
+            or not isinstance(actions, Mapping)
+            or any(
+                not isinstance(action, str)
+                or not SAFE_ID_RE.fullmatch(action)
+                or not isinstance(count, int)
+                or isinstance(count, bool)
+                or count < 0
+                for action, count in actions.items()
+            )
+            or item.get("production_forwarded") is not False
+            or not isinstance(pcap_bytes, int)
+            or isinstance(pcap_bytes, bool)
+            or pcap_bytes <= 24
+            or not isinstance(pcap_sha256, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", pcap_sha256)
+        ):
+            raise ProvenanceError(f"Candidate frozen scenarios[{index}] 非法")
+        seen.add(scenario_id)
+        scenario_root = root / "scenarios" / scenario_id
+        pcap = _trusted_pcap(
+            scenario_root / "egress.pcap", "Candidate frozen pcap"
+        )
+        if pcap.stat().st_size != pcap_bytes or closeout._sha256_file(pcap) != pcap_sha256:
+            raise ProvenanceError("Candidate frozen pcap 与 run-summary 不一致")
+        parsed = _relay_branches(
+            root,
+            relay_root=scenario_root / "relay",
+            producer_run_id=root.name,
+            coordinate_prefix={"scenario_id": scenario_id},
+            branch_name=f"relay/{scenario_id}",
+            subject=str(schema).removesuffix("/v1"),
+            scenario=scenario_id,
+        )
+        if len(parsed) != 1:
+            raise ProvenanceError("Candidate frozen 场景缺少唯一 relay 权威来源")
+        branches.extend(parsed)
+    scenario_root = root / "scenarios"
+    actual = {
+        path.name
+        for path in scenario_root.iterdir()
+        if path.is_dir() and not path.is_symlink()
+    }
+    if actual != seen:
+        raise ProvenanceError("Candidate frozen 场景目录与 run-summary 不一致")
+    return branches
+
+
+def _trace_test_branches(root: Path) -> list[dict[str, Any]]:
+    """candidate-trace-test 的零请求分支：只认 run-summary 证明的离线 go test。"""
+
+    path = root / "run-summary.json"
+    payload, _raw = closeout._load_json(path, "Candidate trace test run-summary")
+    command = payload.get("command")
+    go_flags = str(payload.get("go_flags", ""))
+    if (
+        payload.get("schema_version") != TRACE_TEST_RUN_SUMMARY_SCHEMA
+        or not isinstance(command, list)
+        or len(command) < 3
+        or not str(command[0]).endswith("go")
+        or str(command[1]) != "test"
+        or "-json" not in command
+        or not go_flags.startswith("-mod=")
+        or payload.get("exit_code") != 0
+        or payload.get("verdict") != "pass"
+    ):
+        raise ProvenanceError("Candidate trace test run-summary 不能证明零请求的离线 go test")
+    log_path = root / "candidate-go-test.jsonl"
+    if log_path.is_symlink() or not log_path.is_file():
+        raise ProvenanceError("Candidate trace test 缺少 candidate-go-test.jsonl")
+    if _sha256(log_path.read_bytes()) != payload.get("log_sha256"):
+        raise ProvenanceError("Candidate trace test 日志摘要与 run-summary 不一致")
+    return [
+        {
+            "branch": "candidate-go-test",
+            "kind": "candidate_trace_test",
+            "evidence": "go-test-json",
+            "subject": "candidate-trace-test",
+            "scenario": "",
+            "turn_completed": None,
+            "requests": [],
+            "status": "resolved",
+            "authority_source": "candidate_trace_test_run_summary",
+        }
+    ]
+
+
+def _h1_wire_branches(root: Path) -> list[dict[str, Any]]:
+    path = root / "h1-wire.json"
+    payload, raw = closeout._load_json(path, "Candidate h1 wire")
+    records = payload.get("requests")
+    if payload.get("schema_version") != H1_WIRE_SCHEMA or not isinstance(records, list):
+        raise ProvenanceError("Candidate h1 wire 形状非法")
+    requests: list[dict[str, Any]] = []
+    digest = _sha256(raw)
+    for index, record in enumerate(records):
+        request_line = record.get("request_line") if isinstance(record, Mapping) else None
+        parts = request_line.split(" ") if isinstance(request_line, str) else []
+        if len(parts) != 3 or not parts[0] or not parts[1] or not parts[2].startswith("HTTP/"):
+            raise ProvenanceError(f"Candidate h1 wire requests[{index}] 请求行非法")
+        method, target, _protocol = parts
+        endpoint = _path_without_query(target)
+        if method != "POST" or endpoint not in MODEL_ENDPOINTS:
+            continue
+        requests.append(
+            _request(
+                producer_run_id=root.name,
+                source_kind="h1_wire",
+                native_coordinate={
+                    "record_index": index,
+                    "transport": "http",
+                    "method": method,
+                    "path": endpoint,
+                },
+                source_file=path,
+                source_sha256=digest,
+                record_offset=index,
+                context={"model": None, "thread_source": None, "request_kind": None},
+            )
+        )
+    return [
+        {
+            "branch": "h1-wire",
+            "kind": "h1_wire",
+            "evidence": "h1",
+            "subject": "h1-wire",
+            "scenario": "",
+            "turn_completed": None,
+            "requests": requests,
+            "status": "resolved",
+            "authority_source": "h1_wire",
         }
     ]
 
@@ -739,17 +1195,38 @@ def _apply_estimation(
     这类只跑 direct 的证据根没有同根 sibling，只能靠第二级；turn 数为零时仍未决。
     """
 
-    ratio_by_subject: dict[str, float] = {}
+    ratio_by_subject: dict[tuple[str, str], float] = {}
+    paired_precise: dict[tuple[str, str, str], tuple[int, str]] = {}
     for _root, _kind, branches in roots:
         for branch in branches:
             if branch["status"] != "resolved" or branch["evidence"] != "mitm":
                 continue
+            pairing_group = branch.get("pairing_group")
+            if isinstance(pairing_group, str):
+                pairing_key = (
+                    pairing_group,
+                    str(branch["subject"]),
+                    str(branch["scenario"]),
+                )
+                if pairing_key in paired_precise:
+                    raise ProvenanceError(
+                        "Candidate direct/MITM 配对存在多个权威 MITM sibling："
+                        f"{pairing_key}"
+                    )
+                paired_precise[pairing_key] = (
+                    len(branch["requests"]),
+                    str(branch["branch"]),
+                )
             turns = int(branch.get("turn_completed") or 0)
             if turns <= 0:
                 continue
             ratio = len(branch["requests"]) / turns
             subject = str(branch["subject"])
-            ratio_by_subject[subject] = max(ratio_by_subject.get(subject, 0.0), ratio)
+            ratio_scope = str(pairing_group or "")
+            ratio_key = (ratio_scope, subject)
+            ratio_by_subject[ratio_key] = max(
+                ratio_by_subject.get(ratio_key, 0.0), ratio
+            )
     for _root, _kind, branches in roots:
         precise_in_root: dict[tuple[str, str], int] = {}
         for branch in branches:
@@ -764,13 +1241,29 @@ def _apply_estimation(
                 branch["status"] = "unresolved"
                 branch["reason"] = "direct 分支无法解析请求，估计政策为 none"
                 continue
+            pairing_group = branch.get("pairing_group")
+            if isinstance(pairing_group, str):
+                pairing_key = (
+                    pairing_group,
+                    str(branch["subject"]),
+                    str(branch["scenario"]),
+                )
+                sibling = paired_precise.get(pairing_key)
+                if sibling is not None:
+                    branch["status"] = "estimated"
+                    branch["estimation"] = "upper_bound_from_sibling"
+                    branch["estimated_count"] = sibling[0]
+                    branch["estimation_basis"] = sibling[1]
+                    continue
             if key in precise_in_root:
                 branch["status"] = "estimated"
                 branch["estimation"] = "upper_bound_from_sibling"
                 branch["estimated_count"] = precise_in_root[key]
                 branch["estimation_basis"] = f"mitm/{key[0]}/{key[1]}"
                 continue
-            ratio = ratio_by_subject.get(branch["subject"])
+            ratio = ratio_by_subject.get(
+                (str(branch.get("pairing_group") or ""), str(branch["subject"]))
+            )
             if (
                 estimation_policy == "upper_bound_from_sibling_or_turn_ratio"
                 and ratio is not None
@@ -824,6 +1317,24 @@ def _root_branches(root: Path) -> tuple[str, list[dict[str, Any]]]:
         kinds.append("compact")
     if (root / "relay").exists():
         kinds.append("relay")
+    run_summary_path = root / "run-summary.json"
+    run_summary_schema = None
+    if run_summary_path.is_file() and not run_summary_path.is_symlink():
+        run_summary, _raw = closeout._load_json(
+            run_summary_path, "Candidate run-summary 类型识别"
+        )
+        run_summary_schema = run_summary.get("schema_version")
+        if run_summary_schema == DIRECT_RUN_SUMMARY_SCHEMA:
+            kinds.append("candidate_direct")
+        elif run_summary_schema == MITM_SCENARIO_RUN_SUMMARY_SCHEMA:
+            kinds.append("candidate_mitm")
+        elif run_summary_schema in CANDIDATE_CAPTURE_SCHEMAS:
+            kinds.append("candidate_frozen")
+        elif run_summary_schema == TRACE_TEST_RUN_SUMMARY_SCHEMA:
+            kinds.append("candidate_trace_test")
+    h1_path = root / "h1-wire.json"
+    if h1_path.is_file() and not h1_path.is_symlink():
+        kinds.append("h1_wire")
     if len(kinds) > 1:
         raise ProvenanceError(f"证据根 {root} 同时具备多种权威来源：{kinds}")
     if not kinds:
@@ -833,7 +1344,178 @@ def _root_branches(root: Path) -> tuple[str, list[dict[str, Any]]]:
         return kind, _capture_branches(root)
     if kind == "compact":
         return kind, _compact_branches(root)
-    return kind, _relay_branches(root)
+    if kind == "relay":
+        return kind, _relay_branches(root)
+    if kind == "candidate_direct":
+        return kind, _direct_candidate_branches(root)
+    if kind == "candidate_mitm":
+        return kind, _mitm_candidate_branches(root)
+    if kind == "candidate_frozen":
+        return kind, _frozen_candidate_branches(root)
+    if kind == "candidate_trace_test":
+        return kind, _trace_test_branches(root)
+    return kind, _h1_wire_branches(root)
+
+
+def _all_attempt_roots(base: Path) -> list[Path]:
+    """枚举同一逻辑运行根的当前目录与全部失败重试归档。"""
+
+    match = FAILED_ATTEMPT_ROOT_RE.fullmatch(base.name)
+    logical_base = base.with_name(match.group("base")) if match is not None else base
+    candidates: list[tuple[int, int, Path]] = []
+    if logical_base.exists() or logical_base.is_symlink():
+        candidates.append((0, 0, logical_base))
+    parent = logical_base.parent
+    if parent.is_dir() and not parent.is_symlink():
+        for path in parent.iterdir():
+            archive = FAILED_ATTEMPT_ROOT_RE.fullmatch(path.name)
+            if archive is None or archive.group("base") != logical_base.name:
+                continue
+            candidates.append(
+                (
+                    int(archive.group("attempt")),
+                    int(archive.group("collision") or 0),
+                    path,
+                )
+            )
+    roots: list[Path] = []
+    for _attempt, _collision, path in sorted(candidates):
+        if path.is_symlink() or not path.is_dir():
+            raise ProvenanceError(f"live 请求审计遇到不可信 evidence root：{path}")
+        resolved = path.resolve(strict=True)
+        if resolved not in roots:
+            roots.append(resolved)
+    return roots
+
+
+RECOVERY_REVISION_RE = re.compile(r"^ar[1-9][0-9]*$")
+
+
+def _attempt_directories(campaign_dir: Path, phase: str) -> list[Path]:
+    """返回指定阶段已经发布 reservation 的 attempt 目录（含已发布段预约的恢复段目录）。"""
+
+    if phase == "official":
+        attempt_roots = [campaign_dir / "official" / "attempts"]
+    elif phase == "candidate":
+        candidates_root = campaign_dir / "candidates"
+        if not candidates_root.exists():
+            return []
+        if candidates_root.is_symlink() or not candidates_root.is_dir():
+            raise ProvenanceError("Formal Candidate 根不可信")
+        attempt_roots = []
+        for candidate in candidates_root.iterdir():
+            if candidate.is_symlink() or not candidate.is_dir():
+                raise ProvenanceError("Formal Candidate 目录不可信")
+            if not SAFE_ID_RE.fullmatch(candidate.name):
+                raise ProvenanceError("Formal Candidate ID 非法")
+            attempt_roots.append(candidate / "attempts")
+    else:
+        raise ProvenanceError(f"未知 Job phase：{phase!r}")
+
+    attempts: list[Path] = []
+    for root in attempt_roots:
+        if not root.exists():
+            continue
+        if root.is_symlink() or not root.is_dir():
+            raise ProvenanceError(f"Formal {phase} attempts 根不可信")
+        for attempt in root.iterdir():
+            if attempt.is_symlink() or not attempt.is_dir():
+                raise ProvenanceError(f"Formal {phase} attempt 不可信")
+            if not SAFE_ID_RE.fullmatch(attempt.name):
+                raise ProvenanceError(f"Formal {phase} attempt ID 非法")
+            if (attempt / "reservation.json").is_file():
+                attempts.append(attempt.resolve(strict=True))
+            # 改造 5 M2：attempt 恢复段 ar<k>（同 attempt 只补跑部分 Job）自成目录闭包，段内
+            # job-*.json 与 logs/ 同样是请求账务事实；段以 recovery-reservation.json 发布。
+            recovery_root = attempt / "recovery"
+            if not recovery_root.exists():
+                continue
+            if recovery_root.is_symlink() or not recovery_root.is_dir():
+                raise ProvenanceError(f"Formal {phase} attempt 恢复段根不可信")
+            for segment in recovery_root.iterdir():
+                if segment.is_symlink() or not segment.is_dir():
+                    raise ProvenanceError(f"Formal {phase} attempt 恢复段不可信")
+                if not RECOVERY_REVISION_RE.fullmatch(segment.name):
+                    raise ProvenanceError(f"Formal {phase} attempt 恢复段编号非法")
+                if (segment / "recovery-reservation.json").is_file():
+                    attempts.append(segment.resolve(strict=True))
+    return sorted(attempts)
+
+
+def _attempt_job_facts(
+    campaign_dir: Path,
+    *,
+    capture_root: Path,
+    host_data_root: Path,
+    job_phases: Mapping[str, str],
+) -> tuple[dict[str, list[Path]], dict[str, list[Path]], dict[str, bool]]:
+    """从不可变 Job 收据读取实际证据根，避免使用 Campaign 模板路径。"""
+
+    roots_by_job: dict[str, list[Path]] = {}
+    logs_by_job: dict[str, list[Path]] = {}
+    attempts_present = {"official": False, "candidate": False}
+    log_pattern_cache: dict[str, re.Pattern[str]] = {}
+    for phase in ("official", "candidate"):
+        attempts = _attempt_directories(campaign_dir, phase)
+        attempts_present[phase] = bool(attempts)
+        for attempt in attempts:
+            logs_root = attempt / "logs"
+            if logs_root.exists():
+                if logs_root.is_symlink() or not logs_root.is_dir():
+                    raise ProvenanceError(f"Formal {phase} attempt logs 根不可信")
+                for job_id, job_phase in job_phases.items():
+                    if job_phase != phase:
+                        continue
+                    pattern = log_pattern_cache.setdefault(
+                        job_id,
+                        re.compile(re.escape(job_id) + r"(?:-retry[0-9]+)?-[0-9]+\.log"),
+                    )
+                    for path in logs_root.iterdir():
+                        if pattern.fullmatch(path.name):
+                            logs_by_job.setdefault(job_id, []).append(
+                                closeout._trusted_file(
+                                    path,
+                                    f"Formal {phase} Job 日志",
+                                    allow_empty=True,
+                                )
+                            )
+
+            for job_path in sorted(attempt.glob("job-*.json")):
+                if job_path.is_symlink() or not job_path.is_file():
+                    raise ProvenanceError(f"Formal {phase} Job 收据不可信")
+                payload, _raw = closeout._load_json(
+                    job_path, f"Formal {phase} Job 收据"
+                )
+                job_id = payload.get("id")
+                if (
+                    not isinstance(job_id, str)
+                    or not SAFE_ID_RE.fullmatch(job_id)
+                    or job_path.name != f"job-{job_id}.json"
+                    or job_phases.get(job_id) != phase
+                ):
+                    raise ProvenanceError(f"Formal {phase} Job 收据身份不一致")
+                evidence_roots = payload.get("evidence_roots")
+                if not isinstance(evidence_roots, list) or any(
+                    not isinstance(value, str) for value in evidence_roots
+                ):
+                    raise ProvenanceError(f"{job_id} Job 收据 evidence_roots 非字符串数组")
+                resolved_roots = roots_by_job.setdefault(job_id, [])
+                for value in evidence_roots:
+                    candidate = Path(value)
+                    if candidate.is_absolute() and (
+                        candidate == host_data_root or host_data_root in candidate.parents
+                    ):
+                        mapped = candidate
+                    else:
+                        mapped = closeout._map_container_evidence_root(
+                            value,
+                            capture_root=capture_root,
+                            host_data_root=host_data_root,
+                        )
+                    for root in _all_attempt_roots(mapped):
+                        if root not in resolved_roots:
+                            resolved_roots.append(root)
+    return roots_by_job, logs_by_job, attempts_present
 
 
 def collect_campaign_provenance(
@@ -843,7 +1525,7 @@ def collect_campaign_provenance(
     estimation_policy: str = "none",
     observed_at_utc: str | None = None,
 ) -> dict[str, Any]:
-    """按统一计量单位核算一个 Formal Campaign 的全部官方请求。"""
+    """按统一计量单位核算一个 Formal Campaign 的全部正式请求。"""
 
     if estimation_policy not in ESTIMATION_POLICIES:
         raise ProvenanceError(f"估计政策非法：{estimation_policy!r}")
@@ -887,40 +1569,70 @@ def collect_campaign_provenance(
     if not capture_root.is_absolute() or capture_root == Path("/"):
         raise ProvenanceError("Formal Campaign CAPTURE_ROOT 非法")
 
+    job_phases: dict[str, str] = {}
+    for item in jobs:
+        if not isinstance(item, Mapping):
+            raise ProvenanceError("Formal Campaign Job 非对象")
+        job_id = item.get("id")
+        phase = item.get("phase")
+        if (
+            not isinstance(job_id, str)
+            or not SAFE_ID_RE.fullmatch(job_id)
+            or phase not in {"official", "candidate"}
+            or job_id in job_phases
+        ):
+            raise ProvenanceError("Formal Campaign Job 身份、阶段或唯一性非法")
+        job_phases[job_id] = str(phase)
+    actual_roots, attempt_logs, attempts_present = _attempt_job_facts(
+        campaign_dir,
+        capture_root=capture_root,
+        host_data_root=host_data_root,
+        job_phases=job_phases,
+    )
+
     # 第一遍：发现每个 Job 的证据根与执行分支，不做估计。
     job_plans: list[dict[str, Any]] = []
     collected_roots: list[tuple[Path, str, list[dict[str, Any]]]] = []
     root_cache: dict[Path, tuple[str, list[dict[str, Any]]]] = {}
     for item in jobs:
-        if not isinstance(item, Mapping) or item.get("phase") != "official":
+        phase = str(item.get("phase"))
+        if phase == "candidate" and not attempts_present["candidate"]:
+            # 尚未进入 Candidate 阶段的 Campaign 不应把未来计划误记为未决账务。
             continue
         job_id = str(item.get("id", ""))
-        if not SAFE_ID_RE.fullmatch(job_id):
-            raise ProvenanceError("Formal official Job ID 非法")
-        evidence_roots = item.get("evidence_roots")
-        if not isinstance(evidence_roots, list):
-            raise ProvenanceError(f"{job_id} evidence_roots 非数组")
-        roots: list[Path] = []
-        for value in evidence_roots:
-            candidate = Path(str(value))
-            # 与 attempt 审计同一规则：已经落在宿主数据根内的证据根按宿主路径记录，
-            # 只有容器坐标才需要按冻结 CAPTURE_ROOT 映射。
-            if candidate.is_absolute() and (
-                candidate == host_data_root or host_data_root in candidate.parents
-            ):
-                base = candidate
-            else:
-                base = closeout._map_container_evidence_root(
-                    value, capture_root=capture_root, host_data_root=host_data_root
-                )
-            roots.extend(closeout._failed_attempt_roots(base))
+        if attempts_present[phase]:
+            # 一旦有真实 attempt，证据根只能来自不可变 Job 收据；Campaign 中的
+            # evidence_roots 是模板，Candidate ID 尚未展开，不能作为账务事实。
+            roots = list(actual_roots.get(job_id, []))
+            logs = list(attempt_logs.get(job_id, []))
+        else:
+            evidence_roots = item.get("evidence_roots")
+            if not isinstance(evidence_roots, list):
+                raise ProvenanceError(f"{job_id} evidence_roots 非数组")
+            roots = []
+            for value in evidence_roots:
+                candidate = Path(str(value))
+                if candidate.is_absolute() and (
+                    candidate == host_data_root or host_data_root in candidate.parents
+                ):
+                    base = candidate
+                else:
+                    base = closeout._map_container_evidence_root(
+                        value,
+                        capture_root=capture_root,
+                        host_data_root=host_data_root,
+                    )
+                roots.extend(_all_attempt_roots(base))
+            logs = closeout._job_logs(campaign_dir, job_id)
         for root in roots:
             if root not in root_cache:
                 kind, branches = _root_branches(root)
                 root_cache[root] = (kind, branches)
                 if kind != "unsupported":
                     collected_roots.append((root, kind, branches))
-        job_plans.append({"job_id": job_id, "roots": roots, "logs": closeout._job_logs(campaign_dir, job_id)})
+        job_plans.append(
+            {"job_id": job_id, "phase": phase, "roots": roots, "logs": logs}
+        )
     _apply_estimation(collected_roots, estimation_policy=estimation_policy)
 
     # 第二遍：按 Job 汇总，同一证据根首次归属的 Job 拥有其请求与估计。
@@ -932,6 +1644,7 @@ def collect_campaign_provenance(
         logs = plan["logs"]
         job_entry: dict[str, Any] = {
             "job_id": job_id,
+            "phase": plan["phase"],
             "roots": [],
             "precise_count": 0,
             "estimated_count": 0,

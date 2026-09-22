@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,34 @@ import (
 
 func approvedProfileManifestForStageTest(t *testing.T) []byte {
 	return approvedProfileManifestForStageVersionTest(t, "0.148.0")
+}
+
+// activeStageVersionForTest 返回当前 Active 版本，供“禁止重复导入 Active”的负例使用。
+func activeStageVersionForTest(t *testing.T) string {
+	t.Helper()
+	active, err := officialegress.DefaultReleaseCatalog().Resolve(officialegress.ReleaseModeActive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return active.Version()
+}
+
+// stageTargetVersionAfterActiveForTest 从当前 Active 动态推导一个合法的候选目标版本，
+// 不硬编码具体版本号：次版本号 +1 同时满足两个条件——既不等于 Active（否则按设计被
+// BuildStagedReleaseCatalog 拒绝重复导入），又落在 requiresCompleteVCArtifacts 为真的
+// 区间（0.154.0 起），从而继续覆盖“0.154 起必须绑定 VC-3 两项摘要”的合同。
+// 0.154 晋升为 Active 之后，写死 0.154.0 的旧夹具会被正确地拒绝，本函数消除该耦合。
+func stageTargetVersionAfterActiveForTest(t *testing.T) string {
+	t.Helper()
+	version := activeStageVersionForTest(t)
+	var major, minor, patch int
+	if _, err := fmt.Sscanf(version, "%d.%d.%d", &major, &minor, &patch); err != nil {
+		t.Fatalf("无法解析 Active 版本 %q：%v", version, err)
+	}
+	if major == 0 && minor < 154 {
+		minor = 154
+	}
+	return fmt.Sprintf("%d.%d.0", major, minor+1)
 }
 
 func approvedProfileManifestForStageVersionTest(t *testing.T, targetVersion string) []byte {
@@ -107,10 +136,12 @@ func TestStageApprovedProfileWritesCompleteImmutableCandidateDirectory(t *testin
 	}
 }
 
-func TestStageApprovedProfileBindsVC3ArtifactsFor0154(t *testing.T) {
+// TestStageApprovedProfileBindsVC3ArtifactsSince0154 覆盖“0.154 起的目标版本必须绑定
+// VC-3 画像派生与 post-promotion 门禁需求两项摘要”的合同；目标版本从当前 Active 推导。
+func TestStageApprovedProfileBindsVC3ArtifactsSince0154(t *testing.T) {
 	root := t.TempDir()
 	manifestPath := filepath.Join(root, "profile.json")
-	manifestRaw := approvedProfileManifestForStageVersionTest(t, "0.154.0")
+	manifestRaw := approvedProfileManifestForStageVersionTest(t, stageTargetVersionAfterActiveForTest(t))
 	if err := os.WriteFile(manifestPath, manifestRaw, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +153,7 @@ func TestStageApprovedProfileBindsVC3ArtifactsFor0154(t *testing.T) {
 	requirementsSHA := strings.Repeat("c", 64)
 	receipt, err := stageApprovedProfile(
 		manifestPath,
-		"codex-0-154-stage-test",
+		"codex-stage-vc3-test",
 		strings.Repeat("a", 64),
 		derivationSHA,
 		requirementsSHA,
@@ -137,10 +168,11 @@ func TestStageApprovedProfileBindsVC3ArtifactsFor0154(t *testing.T) {
 	}
 }
 
-func TestStageApprovedProfileRejectsMissingVC3ArtifactsFor0154(t *testing.T) {
+func TestStageApprovedProfileRejectsMissingVC3ArtifactsSince0154(t *testing.T) {
 	root := t.TempDir()
 	manifestPath := filepath.Join(root, "profile.json")
-	manifestRaw := approvedProfileManifestForStageVersionTest(t, "0.154.0")
+	targetVersion := stageTargetVersionAfterActiveForTest(t)
+	manifestRaw := approvedProfileManifestForStageVersionTest(t, targetVersion)
 	if err := os.WriteFile(manifestPath, manifestRaw, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -150,13 +182,43 @@ func TestStageApprovedProfileRejectsMissingVC3ArtifactsFor0154(t *testing.T) {
 	}
 	if _, err := stageApprovedProfile(
 		manifestPath,
-		"codex-0-154-stage-test",
+		"codex-stage-vc3-test",
 		strings.Repeat("a", 64),
 		"",
 		"",
 		filepath.Join(resolvedRoot, "catalog-stage"),
 	); err == nil {
-		t.Fatal("0.154.0 缺少 VC-3 摘要时未失败关闭")
+		t.Fatalf("%s 缺少 VC-3 摘要时未失败关闭", targetVersion)
+	}
+}
+
+// TestStageApprovedProfileRejectsActiveVersionReimport 固化产品行为：已经是 Active 的版本
+// 不得再作为候选导入。晋升后旧夹具正是撞上这条规则，这里把它变成显式负例。
+func TestStageApprovedProfileRejectsActiveVersionReimport(t *testing.T) {
+	root := t.TempDir()
+	manifestPath := filepath.Join(root, "profile.json")
+	activeVersion := activeStageVersionForTest(t)
+	manifestRaw := approvedProfileManifestForStageVersionTest(t, activeVersion)
+	if err := os.WriteFile(manifestPath, manifestRaw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, stageErr := stageApprovedProfile(
+		manifestPath,
+		"codex-stage-active-reimport-test",
+		strings.Repeat("a", 64),
+		strings.Repeat("b", 64),
+		strings.Repeat("c", 64),
+		filepath.Join(resolvedRoot, "catalog-stage"),
+	)
+	if stageErr == nil {
+		t.Fatalf("Active 版本 %s 被错误地接受为候选", activeVersion)
+	}
+	if !strings.Contains(stageErr.Error(), "目标版本已经是 Active") {
+		t.Fatalf("拒绝原因不是重复导入 Active：%v", stageErr)
 	}
 }
 

@@ -109,7 +109,7 @@ class PrepareAssertionBundleTests(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
-    def _run(self) -> subprocess.CompletedProcess[str]:
+    def _run(self, *, baseline: str | None = None) -> subprocess.CompletedProcess[str]:
         environment = os.environ.copy()
         environment.update(
             {
@@ -121,6 +121,8 @@ class PrepareAssertionBundleTests(unittest.TestCase):
                 "REPO_ROOT": str(self.repo_root),
             }
         )
+        if baseline is not None:
+            environment["BASELINE"] = baseline
         return subprocess.run(
             ["bash", str(self.script)],
             check=False,
@@ -129,6 +131,35 @@ class PrepareAssertionBundleTests(unittest.TestCase):
             env=environment,
             timeout=10,
         )
+
+    def test_baseline_mode_reads_effective_results_and_publishes_under_baseline_private_root(self) -> None:
+        """改造 5 M2：BASELINE=b<K> 时证据根来自 effective-results（reused 引用 + recovered 段根），
+        bundle 落在 revisions/b<K>/evidence/assertion-bundle。"""
+
+        attempt = json.loads((self.attempt / "attempt.json").read_text(encoding="utf-8"))
+        recovered_root = self._make_root("executed-root-9-recovery-ar1")
+        entries = []
+        for result in attempt["results"]:
+            if result["id"] == "candidate-job-9":
+                entries.append({"job_id": result["id"], "source": "recovered", "recovery_revision": "ar1", "status": "complete", "disposition": "executed", "evidence_roots": [str(recovered_root)]})
+            else:
+                entries.append({"job_id": result["id"], "source": "reused", "baseline": 0, "status": "complete", "disposition": "reused", "evidence_roots": list(result["evidence_roots"])})
+        baseline_dir = self.campaign / "candidates" / self.candidate_id / "revisions" / "b1"
+        self._write_json(baseline_dir / "effective-results.json", {"schema_version": "codex-upgrade-effective-results/v1", "entries": entries})
+        result = self._run(baseline="b1")
+        self.assertEqual(result.returncode, 0, result.stderr or result.stdout)
+        bundle = baseline_dir / "baseline-evidence" / "assertion-bundle"
+        self.assertTrue((bundle / "capture-manifest.json").is_file())
+        self.assertFalse((self.attempt / "evidence" / "assertion-bundle").exists())
+        provenance = json.loads((bundle / "provenance.json").read_text(encoding="utf-8"))
+        source_roots = {entry["source_root"] for entry in provenance["entries"]}
+        self.assertIn("executed-root-9-recovery-ar1", source_roots)
+        self.assertNotIn("executed-root-7", source_roots)
+        self.assertEqual(len(source_roots), 14)
+        # 非法 BASELINE 与 official 侧的 BASELINE 都失败关闭。
+        bad = self._run(baseline="ar1")
+        self.assertEqual(bad.returncode, 2)
+        self.assertIn("BASELINE 必须是 b<K>", bad.stderr)
 
     def test_uses_all_fourteen_result_roots_instead_of_top_level_roots(self) -> None:
         result = self._run()
@@ -143,6 +174,34 @@ class PrepareAssertionBundleTests(unittest.TestCase):
             | {f"executed-root-{index}" for index in range(1, 8)},
         )
         self.assertIn("assertion bundle 权威根闭合：14 个", result.stdout)
+
+    def test_declared_go_test_log_missing_fails_closed(self) -> None:
+        """标签声明了 candidate-go-test.jsonl 而 bundle 没有它：候选侧必须失败关闭。"""
+
+        declaration = json.loads(self.declaration.read_text(encoding="utf-8"))
+        declaration["entries"].append(
+            {
+                "job_id": "candidate-trace-test",
+                "side": "candidate",
+                "rules": [
+                    {
+                        "glob": "candidate-go-test.jsonl",
+                        "scenario_ids": ["S1"],
+                        "kind": "stdout_log",
+                        "parser": "opaque_bound_source",
+                        "labels": {"surface": "test"},
+                        "rationale": "夹具：声明但未产出。",
+                    }
+                ],
+            }
+        )
+        self._write_json(self.declaration, declaration)
+        campaign = json.loads((self.campaign / "campaign.json").read_text(encoding="utf-8"))
+        campaign["jobs"].append({"id": "candidate-trace-test", "phase": "candidate", "required": True})
+        self._write_json(self.campaign / "campaign.json", campaign)
+        result = self._run()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse((self.attempt / "evidence" / "assertion-bundle" / "provenance.json").exists())
 
     def test_missing_result_root_fails_before_bundle_publication(self) -> None:
         attempt = json.loads((self.attempt / "attempt.json").read_text(encoding="utf-8"))

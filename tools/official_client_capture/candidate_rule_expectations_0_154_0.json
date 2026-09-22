@@ -522,6 +522,68 @@
               }
             ]
           }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.header_values.x-openai-internal-codex-responses-lite",
+            "value": [
+              "true"
+            ]
+          },
+          "description": "Lite 默认样本 x-openai-internal-codex-responses-lite 值为 true",
+          "id": "responses-lite-header-value",
+          "select": {
+            "record_type": "http_request",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.variant",
+                "value": "http_default"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.track",
+                "value": "lite"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.header_values.x-codex-routing-hint",
+            "value": [
+              "model=gpt-6-astra"
+            ]
+          },
+          "description": "Lite 默认样本 x-codex-routing-hint 携带本轮 Lite 轨模型",
+          "id": "responses-routing-hint-value",
+          "select": {
+            "record_type": "http_request",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.variant",
+                "value": "http_default"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.track",
+                "value": "lite"
+              }
+            ]
+          }
         }
       ],
       "description": "用户 header 使用逐端点冻结的 HeaderMap 最终线序",
@@ -1048,19 +1110,18 @@
             "path": "data",
             "value": {
               "originator": "codex_exec",
-              "user_agent_prefix": "codex_exec/0.154.0",
-              "user_agent_suffix": "(codex_exec; 0.154.0)"
+              "user_agent_prefix": "codex_exec/0.154.0"
             }
           },
-          "description": "exec 使用 codex_exec 前缀与同名 suffix",
+          "description": "exec 启动 models 使用 codex_exec 前缀，suffix 可缺失或为同入口规范值",
           "id": "exec-identity",
           "select": {
             "record_type": "surface_identity",
             "where": [
               {
                 "operator": "equal",
-                "path": "data.surface",
-                "value": "exec"
+                "path": "data.variant",
+                "value": "exec-startup-models"
               }
             ]
           }
@@ -1075,43 +1136,78 @@
               "user_agent_suffix": "(codex-tui; 0.154.0)"
             }
           },
-          "description": "TUI 使用 codex-tui 前缀与同名 suffix",
+          "description": "TUI initialize 后的真实插件 GET 使用 codex-tui 前缀与同名 suffix",
           "id": "tui-identity",
           "select": {
             "record_type": "surface_identity",
             "where": [
               {
                 "operator": "equal",
-                "path": "data.surface",
-                "value": "tui"
+                "path": "data.variant",
+                "value": "tui-post-initialize-identity"
               }
             ]
           }
         },
         {
           "assertion": {
-            "operator": "distinct_values_equal",
-            "path": "data.suffix_state",
-            "value": [
-              "present",
-              "absent"
-            ]
+            "operator": "all_match",
+            "path": "data.user_agent_suffix",
+            "value": "^(?:|\\(codex_exec; 0\\.154\\.0\\))$"
           },
-          "description": "启动 models 同时覆盖 suffix present 与 absent 官方观测集",
-          "id": "startup-models-suffix-states",
+          "description": "exec 启动 models 的 suffix 允许缺失或为 codex_exec 规范值",
+          "id": "exec-startup-models-suffix-optional",
           "select": {
             "record_type": "surface_identity",
             "where": [
               {
                 "operator": "equal",
-                "path": "data.endpoint",
-                "value": "models"
+                "path": "data.variant",
+                "value": "exec-startup-models"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_match",
+            "path": "data.user_agent_suffix",
+            "value": "^(?:|\\(codex-tui; 0\\.154\\.0\\))$"
+          },
+          "description": "TUI 启动 models 的 suffix 允许缺失或为 codex-tui 规范值",
+          "id": "tui-startup-models-suffix-optional",
+          "select": {
+            "record_type": "surface_identity",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.variant",
+                "value": "tui-startup-models"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.suffix_state",
+            "value": "present"
+          },
+          "description": "同一 TUI 进程 initialize 后的真实插件 GET 带 codex-tui suffix",
+          "id": "post-initialize-suffix-present",
+          "select": {
+            "record_type": "surface_identity",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.variant",
+                "value": "tui-post-initialize-identity"
               }
             ]
           }
         }
       ],
-      "description": "UA 由 surface 前缀和可选 suffix 组成",
+      "description": "启动 models 的 suffix 受初始化时序影响而可选；TUI initialize 后的真实插件请求必须带 codex-tui suffix",
       "rule_id": "SPEC-HDR-005",
       "scenario_ids": [
         "A15"
@@ -1942,6 +2038,156 @@
               }
             ]
           }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.body.shape.model",
+            "value": "str:gpt-6-astra"
+          },
+          "description": "Lite 请求 body.model 为本轮 Lite 轨模型 gpt-6-astra",
+          "id": "lite-model-is-lite-track-model",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A03"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.mode",
+                "value": "lite"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.track",
+                "value": "lite"
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              },
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_subset",
+            "path": "data.body.shape.reasoning",
+            "value": {
+              "effort": "str:medium",
+              "context": "str:all_turns"
+            }
+          },
+          "description": "Lite 请求 reasoning 按模型清单默认定型：effort=medium、context=all_turns",
+          "id": "lite-reasoning-manifest-defaults",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A03"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.mode",
+                "value": "lite"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.track",
+                "value": "lite"
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              },
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_absent",
+            "path": "data.body.shape.reasoning.summary"
+          },
+          "description": "Lite 请求 reasoning.summary 按清单默认 none 以 Option 省略",
+          "id": "lite-reasoning-summary-omitted",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A03"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.mode",
+                "value": "lite"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.track",
+                "value": "lite"
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              },
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.body.shape.text.verbosity",
+            "value": "str:low"
+          },
+          "description": "Lite 请求携带 text.verbosity=low",
+          "id": "lite-text-verbosity-low",
+          "select": {
+            "record_type": "http_request",
+            "scenario_ids": [
+              "A03"
+            ],
+            "where": [
+              {
+                "operator": "equal",
+                "path": "labels.mode",
+                "value": "lite"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.track",
+                "value": "lite"
+              },
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "POST"
+              },
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses"
+              }
+            ]
+          }
         }
       ],
       "description": "HTTP Responses 的 Lite/非 Lite 字段与 Option 省略规则",
@@ -2653,6 +2899,68 @@
               }
             ]
           }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.header_values.x-openai-internal-codex-responses-lite",
+            "value": [
+              "true"
+            ]
+          },
+          "description": "默认 legacy compact 的 x-openai-internal-codex-responses-lite 值为 true",
+          "id": "legacy-default-lite-header-value",
+          "select": {
+            "record_type": "http_request",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses/compact"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.variant",
+                "value": "default"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.track",
+                "value": "lite"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.header_values.x-codex-routing-hint",
+            "value": [
+              "model=gpt-6-astra"
+            ]
+          },
+          "description": "默认 legacy compact 的 x-codex-routing-hint 携带入站 Lite 轨模型（不得改写为全局 compact 模型）",
+          "id": "legacy-default-routing-hint-value",
+          "select": {
+            "record_type": "http_request",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses/compact"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.variant",
+                "value": "default"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.track",
+                "value": "lite"
+              }
+            ]
+          }
         }
       ],
       "description": "legacy compact 默认与两个条件插槽具有精确线序",
@@ -2774,18 +3082,28 @@
         },
         {
           "assertion": {
-            "operator": "all_equal",
+            "operator": "all_ordered_subset_of",
             "path": "data.header_names_in_order",
-            "value": [
+            "allowed": [
               "user-agent",
               "authorization",
               "chatgpt-account-id",
+              "x-openai-codex-luna-reserve",
+              "accept",
+              "cookie",
+              "host"
+            ],
+            "required": [
+              "user-agent",
+              "authorization",
+              "chatgpt-account-id",
+              "x-openai-codex-luna-reserve",
               "accept",
               "host"
             ]
           },
-          "description": "前两个 GET 使用 backend-client 精确线序",
-          "id": "wham-get-headers",
+          "description": "usage GET 使用 backend-client 精确线序，并在 chatgpt-account-id 之后携带 Luna Reserve 头；Cookie jar 建立后在 accept 与 host 之间携带 cookie",
+          "id": "wham-usage-headers",
           "select": {
             "record_type": "http_request",
             "where": [
@@ -2804,9 +3122,83 @@
                 "path": "labels.ca_mode"
               },
               {
-                "operator": "not_equal",
+                "operator": "equal",
                 "path": "data.path",
-                "value": "/backend-api/wham/settings/user"
+                "value": "/backend-api/wham/usage"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.header_values.x-openai-codex-luna-reserve",
+            "value": [
+              "1"
+            ]
+          },
+          "description": "usage GET 的 x-openai-codex-luna-reserve 值固定为 1",
+          "id": "wham-usage-luna-reserve-value",
+          "select": {
+            "record_type": "http_request",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "GET"
+              },
+              {
+                "operator": "match",
+                "path": "data.path",
+                "value": "^/backend-api/wham/"
+              },
+              {
+                "operator": "absent",
+                "path": "labels.ca_mode"
+              },
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/wham/usage"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.header_names_in_order",
+            "value": [
+              "user-agent",
+              "authorization",
+              "chatgpt-account-id",
+              "accept",
+              "host"
+            ]
+          },
+          "description": "rate-limit-reset-credits GET 使用 backend-client 精确线序且不携带 Luna Reserve 头",
+          "id": "wham-credits-headers",
+          "select": {
+            "record_type": "http_request",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.method",
+                "value": "GET"
+              },
+              {
+                "operator": "match",
+                "path": "data.path",
+                "value": "^/backend-api/wham/"
+              },
+              {
+                "operator": "absent",
+                "path": "labels.ca_mode"
+              },
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/wham/rate-limit-reset-credits"
               }
             ]
           }
@@ -2863,7 +3255,7 @@
           }
         }
       ],
-      "description": "WHAM 三个 GET 与安全 consume 使用独立 backend-client 形态",
+      "description": "WHAM 三个 GET 与安全 consume 使用独立 backend-client 形态；usage 在 ChatGPT 认证且非 FedRAMP 时携带 Luna Reserve 头",
       "rule_id": "SPEC-EP-019",
       "scenario_ids": [
         "A12"
@@ -2920,6 +3312,35 @@
           },
           "description": "默认样本字段与官方 0.154.0 wire 子集一致",
           "id": "legacy-observed-subset",
+          "select": {
+            "record_type": "http_request",
+            "where": [
+              {
+                "operator": "equal",
+                "path": "data.path",
+                "value": "/backend-api/codex/responses/compact"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.variant",
+                "value": "default"
+              },
+              {
+                "operator": "equal",
+                "path": "labels.track",
+                "value": "lite"
+              }
+            ]
+          }
+        },
+        {
+          "assertion": {
+            "operator": "all_equal",
+            "path": "data.body.shape.model",
+            "value": "str:gpt-6-astra"
+          },
+          "description": "默认 legacy compact 的 body.model 保留入站 Lite 轨模型 gpt-6-astra",
+          "id": "legacy-body-model-is-requested-model",
           "select": {
             "record_type": "http_request",
             "where": [
@@ -3439,20 +3860,21 @@
       "trigger": "使用生产 service 调用路径执行受控文件上传，create 返回本轮区域 URL"
     },
     {
-      "description": "exec、TUI 与启动 models UA 画像",
+      "description": "exec 与 PTY TUI 启动 models 缓存，以及同一 TUI initialize 后身份画像",
       "preconditions": [
-        "入口 surface 由 process trace 证明",
-        "UA 已解析为前缀和 suffix",
-        "不接受 curl 伪造入口头"
+        "两条启动 models 由真实 Codex 进程与 process trace 证明，exec 首次 miss、TUI 第二次 hit",
+        "TUI initialize 后的插件 GET 与 TUI models 记录共享 PID、argv、nonce 和 CODEX_HOME",
+        "插件 GET 仅由 localhost witness 应答，不转发 Candidate，也不计入缓存或上游次数",
+        "UA 已解析为前缀和 suffix；拒绝 curl、app-server 与 real-entry-cache-v1"
       ],
       "required_artifact_kinds": [
         "process_trace"
       ],
       "scenario_id": "A15",
-      "trigger": "分别由 Codex 0.154.0 exec 和 TUI 入口触发，并取得启动 models 有 suffix 与无 suffix 两种样本"
+      "trigger": "依次由 Codex 0.154.0 exec 与 PTY TUI 触发两次启动 models，再等待同一 TUI 进程 initialize 后发出带 codex-tui suffix 的真实插件 GET"
     }
   ],
   "schema_version": "codex-candidate-rule-expectations/v1",
   "source_spec": "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md#第二章",
-  "source_spec_sha256": "8dfdd3a96df7297a62285f7ae2bd23741baa4dd73d166e5f22cea53475359515"
+  "source_spec_sha256": "46501af0d75a05b5f684864b5d9d4b24449e8110a4a5e9f915cec54baada3a1b"
 }

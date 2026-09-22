@@ -442,7 +442,7 @@ class CandidateTestTraceTest(unittest.TestCase):
             for fact in test.facts
         }
         self.assertEqual(len(tests), 12)
-        self.assertEqual(len(fact_ids), 34)
+        self.assertEqual(len(fact_ids), 31)
         self.assertIn("a07.oauth-fallback", fact_ids)
         self.assertIn("a08.connection-lifecycle", fact_ids)
         self.assertIn("a14.file-upload-url-chain", fact_ids)

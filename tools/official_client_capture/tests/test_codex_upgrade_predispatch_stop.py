@@ -62,6 +62,8 @@ class PredispatchStopTests(unittest.TestCase):
             arm64_environment_sha256="2" * 64,
             job_rehearsal_sha256="3" * 64,
             p0_gate_sha256="4" * 64,
+            # 预派发停线收据只属于改造 4 之前的 legacy 批次模型：历史 v10 收据只读重放。
+            batch_model=None,
         )
         plan_path = campaign_dir / "control/vc/campaign-plan.json"
         self._write_json(plan_path, plan)

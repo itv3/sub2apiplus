@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-staging-abort-v1.json",
+  "title": "Codex VC 批次 staging 中止事实（只记事实，不携带授权字段；正式序号未占用）",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "campaign_id", "campaign_plan_sha256", "phase", "sequence", "staging_attempt",
+    "stage", "failure_kind", "error_type", "root_cause_id", "batch_sha256", "manifest_sha256",
+    "parent_run_dir", "parent_run_state", "reconciliation_receipt",
+    "live_request_count", "scanned_bytes", "recorded_at_utc", "receipt_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": "codex-upgrade-staging-abort/v1"},
+    "campaign_id": {"$ref": "#/$defs/safeId"},
+    "campaign_plan_sha256": {"$ref": "#/$defs/sha256"},
+    "phase": {"enum": ["VC-1", "VC-2", "VC-3", "VC-4", "VC-5", "VC-6"]},
+    "sequence": {"type": "integer", "minimum": 1},
+    "staging_attempt": {"type": "integer", "minimum": 1},
+    "stage": {"enum": ["prepare", "parent-run-create", "parent-run", "nonce-mismatch", "evaluator-digests", "commit-ledger", "commit-publish", "commit-mark"]},
+    "failure_kind": {"enum": ["abandoned", "prepare-failed", "commit-failed", "interrupted"]},
+    "error_type": {"type": "string", "minLength": 1, "maxLength": 128},
+    "root_cause_id": {"type": "string", "pattern": "^rc1-[0-9a-f]{20}$"},
+    "batch_sha256": {"anyOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
+    "manifest_sha256": {"anyOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
+    "parent_run_dir": {"type": ["string", "null"], "minLength": 1},
+    "parent_run_state": {"type": ["string", "null"], "minLength": 1},
+    "reconciliation_receipt": {
+      "anyOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["path", "sha256"],
+          "properties": {"path": {"type": "string", "minLength": 1}, "sha256": {"$ref": "#/$defs/sha256"}}
+        }
+      ]
+    },
+    "live_request_count": {"const": 0},
+    "scanned_bytes": {"const": 0},
+    "recorded_at_utc": {"type": "string", "format": "date-time"},
+    "receipt_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "safeId": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"}
+  }
+}

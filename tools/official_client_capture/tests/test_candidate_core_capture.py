@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import unittest
 from pathlib import Path
@@ -76,13 +77,135 @@ class CandidateCoreCaptureScriptTest(unittest.TestCase):
 
     def test_a15_restarts_service_to_clear_models_manifest_cache(self) -> None:
         """A15 前必须重启候选服务：候选网关按账号 + 出站身份缓存 models 清单，
-        A03～A08 的 responses 已填满缓存，不重启则三种冻结身份零出站。"""
+        A03～A08 的 responses 已填满缓存，不重启则两次启动 models 都会命中。"""
         a10_stop = self.source.index("stop_capture", self.source.index("wait_action A10 responses_http_success 4"))
         a15_start = self.source.index("start_capture A15")
         restart = self.source.index("restart_service", a10_stop)
         self.assertLess(a10_stop, restart)
         self.assertLess(restart, a15_start)
-        self.assertIn("缓存 models 清单", self.source[a10_stop:a15_start])
+        self.assertIn("同一网关缓存", self.source[a10_stop:a15_start])
+
+    def test_a15_uses_real_exec_and_tui_processes_and_no_curl(self) -> None:
+        """A15 入口证据必须来自真实 Codex 子进程，不能手写身份头。"""
+
+        start = self.source.index("# A15 要证明的是 exec 与 PTY TUI")
+        end = self.source.index("# 冻结动作和无生产转发门禁", start)
+        a15 = self.source[start:end]
+        self.assertNotIn("curl", a15.lower())
+        self.assertIn('"exec",\n                *overrides,', a15)
+        self.assertIn('if variant == "tui":', a15)
+        self.assertIn("pty.openpty()", a15)
+        self.assertIn("termios.TIOCSWINSZ", a15)
+        self.assertIn('"codex_exec"', a15)
+        self.assertIn('"codex-tui"', a15)
+        self.assertIn('"codex_cli_rs"', a15)
+        self.assertIn('expected_suffixes=("", f"(codex_exec; {codex_version})")', a15)
+        self.assertIn('expected_suffixes=("", f"(codex-tui; {codex_version})")', a15)
+        self.assertNotIn('variant == "app-server"', a15)
+        self.assertIn('"auth_mode": "chatgpt"', a15)
+        self.assertNotIn('"auth_mode": "chatgptAuthTokens"', a15)
+        self.assertIn("stdin=subprocess.DEVNULL", a15)
+        self.assertNotIn("stdin=subprocess.PIPE", a15)
+
+    def test_a15_witness_selects_contract_entry_by_originator(self) -> None:
+        """A15 合同入口按登记的 originator 选样本，TUI 的 codex-tui 并发预取不再抢占首个样本。
+
+        Codex 0.154 的 PTY TUI 会在 core（codex_cli_rs）之前以 originator=codex-tui
+        预取同一 models 清单；按"首个样本"判定曾在两次 Campaign 首跑失败、重试通过
+        （根因 rc1-f71cc39d58ddb64a5a03）。全部样本必须原样落盘为证据，不得丢弃。
+        """
+
+        start = self.source.index("# A15 要证明的是 exec 与 PTY TUI")
+        end = self.source.index("# 冻结动作和无生产转发门禁", start)
+        a15 = self.source[start:end]
+        self.assertIn('"codex_exec" if variant == "exec" else "codex_cli_rs"', a15)
+        self.assertIn('expected_originator = str(known_entry.get("expected_originator", ""))', a15)
+        self.assertIn(
+            'if not observations and observation["originator"] == expected_originator:',
+            a15,
+        )
+        self.assertNotIn("if not observations:\n                observations.append(observation)", a15)
+        self.assertIn("observed_models_all.setdefault(nonce, []).append(observation)", a15)
+        self.assertIn('witness_path = trace_path.with_name("witness-observations.jsonl")', a15)
+        self.assertIn('"contract_entry": sample in entry_samples', a15)
+        # 合同入口的 originator 断言与"恰好一个入口样本"判定保持不变。
+        self.assertIn('expected_originator="codex_cli_rs"', a15)
+        self.assertIn("if len(models_requests) != 1:", a15)
+
+    def test_a15_binds_nonce_digests_and_server_cache_counts(self) -> None:
+        start = self.source.index("# A15 要证明的是 exec 与 PTY TUI")
+        end = self.source.index("# 冻结动作和无生产转发门禁", start)
+        a15 = self.source[start:end]
+        for expected in (
+            "openai_base_url=",
+            "chatgpt_base_url=",
+            "secrets.token_hex(16)",
+            '"argv_sha256"',
+            '"launch_sha256"',
+            '"request_sha256"',
+            '"correlation_sha256"',
+            '"upstream_calls_before"',
+            '"upstream_calls_after"',
+            "wait_stable_models_count",
+            'records.extend(launch_one("exec", witness_port, 0, 1))',
+            'records.extend(launch_one("tui", witness_port, 1, 1))',
+            '"tui-post-initialize-identity"',
+            'record_cache_result="not_applicable"',
+            '"models_event": models_event',
+            '"identity_event": identity_event',
+            "observations = observed_models.setdefault(nonce, [])",
+        ):
+            self.assertIn(expected, a15)
+        self.assertIn('"A15": {"models_manifest": 1}', self.source)
+        self.assertIn(
+            'if scenario in {"A03", "A06", "A07", "A15"} and actual != minimum:',
+            self.source,
+        )
+
+    def test_a15_evidence_catalog_is_closed_over_exact_originals(self) -> None:
+        declaration_path = (
+            Path(__file__).parents[1]
+            / "codex_upgrade_evidence_labels_0_154_0.json"
+        )
+        declaration = json.loads(declaration_path.read_text(encoding="utf-8"))
+        candidate_core = next(
+            entry
+            for entry in declaration["entries"]
+            if entry["job_id"] == "candidate-frozen-core"
+        )
+        rules = {rule["glob"]: rule for rule in candidate_core["rules"]}
+        self.assertNotIn(
+            "scenarios/A15/relay/conn*.client_to_upstream.bin",
+            rules,
+        )
+        self.assertEqual(
+            rules["scenarios/A15/relay/conn001.client_to_upstream.bin"]["parser"],
+            "opaque_bound_source",
+        )
+        self.assertEqual(
+            rules["scenarios/A15/process-trace.jsonl"]["labels"]["a15_contract"],
+            "real-entry-cache-v2",
+        )
+        self.assertEqual(
+            rules["scenarios/A15/relay/conn001.upstream_to_client.bin"]["kind"],
+            "wire_dump",
+        )
+        self.assertEqual(
+            rules["scenarios/A15/relay/intervention.jsonl"]["parser"],
+            "opaque_bound_source",
+        )
+        # 2026-09-18：go test 日志改由 candidate-trace-test 独立 Job 产出，
+        # candidate-frozen-core 名下不再登记该规则；A15 仍不接受 Go 静态事实。
+        self.assertNotIn("candidate-go-test.jsonl", rules)
+        trace_entry = next(
+            entry
+            for entry in declaration["entries"]
+            if entry["job_id"] == "candidate-trace-test"
+        )
+        trace_rules = {rule["glob"]: rule for rule in trace_entry["rules"]}
+        self.assertEqual(list(trace_rules), ["candidate-go-test.jsonl"])
+        self.assertNotIn("A15", trace_rules["candidate-go-test.jsonl"]["scenario_ids"])
+        self.assertEqual(trace_rules["candidate-go-test.jsonl"]["parser"], "opaque_bound_source")
 
     def test_restoration_is_fail_closed(self) -> None:
         for expected in (
@@ -143,7 +266,7 @@ class CandidateCoreCaptureScriptTest(unittest.TestCase):
         self.assertIn("wait_action A06 responses_ws_response_create 3", self.source)
         self.assertIn("resp_candidate_core_a06_0002", self.source)
         self.assertIn("resp_candidate_core_a06_0003", self.source)
-        self.assertIn('scenario in {"A03", "A06", "A07"}', self.source)
+        self.assertIn('scenario in {"A03", "A06", "A07", "A15"}', self.source)
 
     def test_a03_uses_cold_lite_prime_before_cookie_replay(self) -> None:
         prime = self.source.index(
@@ -162,7 +285,7 @@ class CandidateCoreCaptureScriptTest(unittest.TestCase):
         self.assertIn('run_response_request A03 "lite-turn-$turn"', self.source)
         self.assertIn("wait_action A03 responses_http_success 4", self.source)
         self.assertIn('"A03": {"responses_http_success": 4}', self.source)
-        self.assertIn('scenario in {"A03", "A06", "A07"}', self.source)
+        self.assertIn('scenario in {"A03", "A06", "A07", "A15"}', self.source)
         self.assertIn('event.get("set_cookie_names") == ["_cfuvid"]', self.source)
         self.assertIn(
             'any(b"\\r\\ncookie: <secret>" not in request',
@@ -174,7 +297,7 @@ class CandidateCoreCaptureScriptTest(unittest.TestCase):
     def test_lite_fixture_is_already_shaped_like_codex_client(self) -> None:
         """严格入口前的 Lite 夹具必须是官方客户端形态，不能依赖网关迁移字段。"""
         lite_branch = self.source[
-            self.source.index('if mode == "lite":') :
+            self.source.index('if mode in {"lite", "lite_manifest_default"}:') :
             self.source.index('elif mode == "non_lite":')
         ]
         self.assertIn('payload.pop("instructions")', lite_branch)
@@ -184,6 +307,26 @@ class CandidateCoreCaptureScriptTest(unittest.TestCase):
         self.assertIn('"type": "input_text"', lite_branch)
         self.assertIn('payload["parallel_tool_calls"] = False', lite_branch)
         self.assertIn('payload["reasoning"]["context"] = "all_turns"', lite_branch)
+
+    def test_a03_lite_requests_leave_reasoning_defaults_to_manifest(self) -> None:
+        """A03 的 Lite 请求必须与官方客户端同条件：不显式发 effort／summary／text。
+
+        官方对 Lite 模型按清单默认定型（effort=medium、summary 缺席、text.verbosity=low
+        由 Lite 画像派生）；候选若写死 high／auto，网关按"显式优先"保留，出站永远与官方
+        不等价。该模式只用于 A03 的 Astra Lite 请求，其他场景保持原夹具。
+        """
+        lite_branch = self.source[
+            self.source.index('if mode in {"lite", "lite_manifest_default"}:') :
+            self.source.index('elif mode == "non_lite":')
+        ]
+        self.assertIn('if mode == "lite_manifest_default":', lite_branch)
+        self.assertIn('payload["reasoning"] = {"context": "all_turns"}', lite_branch)
+        a03 = self.source[self.source.index("start_capture A03") : self.source.index("start_capture A04")]
+        self.assertIn('"$lite_model" lite_manifest_default a03-cookie-prime', a03)
+        self.assertIn('"$lite_model" lite_manifest_default a03-turn', a03)
+        self.assertIn('"$main_model" non_lite a03-default', a03)
+        rest = self.source[self.source.index("start_capture A04") :]
+        self.assertNotIn("lite_manifest_default", rest, "专用模式不得扩散到 A03 之外")
 
     def test_api_key_is_not_exported_for_driver_or_secret_scan(self) -> None:
         self.assertIn("set +x", self.source)

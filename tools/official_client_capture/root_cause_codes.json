@@ -90,6 +90,41 @@
       "stable_dimensions": [],
       "legacy": true,
       "description": "历史字面量：失败证据归档走了宿主别名路径。"
+    },
+    "staging.abandoned": {
+      "component": "orchestrator",
+      "stable_dimensions": ["phase", "stage"],
+      "description": "VC 批次 staging 制品或 prepared 父 run 在取得执行权前被遗弃（进程崩溃、SIGKILL 或 owner 丢失），正式序号未占用。"
+    },
+    "staging.commit-failed": {
+      "component": "orchestrator",
+      "stable_dimensions": ["phase", "stage"],
+      "description": "VC 批次 staging 提交在写入正式 COMMIT 前的某一步失败（nonce 校验、账本事件、发布正式文件、写 COMMIT 标记），正式序号未占用。"
+    },
+    "parent-start.failed": {
+      "component": "supervisor",
+      "stable_dimensions": ["phase"],
+      "description": "正式 COMMIT 已写入但 prepared 父 run 未能转入 running（owner 丢失或状态写入失败），序号已占用，零动作零请求。"
+    },
+    "commit.integrity-mismatch": {
+      "component": "supervisor",
+      "stable_dimensions": ["phase"],
+      "description": "prepared 父 run 对应的正式 COMMIT 存在但自摘要无效、owner nonce 或 run 目录不匹配，属于制品完整性异常，永久停线。"
+    },
+    "candidate.source-change-required": {
+      "component": "candidate",
+      "stable_dimensions": ["phase"],
+      "description": "人工审核判定候选实现需要改源码（invalidate-candidate 显式作废）：同阶段的候选源码变更需求跨 revision 累计，达上限即停线。"
+    },
+    "evaluation.rule-failed": {
+      "component": "evaluator",
+      "stable_dimensions": ["phase"],
+      "description": "候选证据封存后的离线评估失败（evaluation-recover apply 以 evaluator-defect 开评估基线）：failed_step 为首条失败规则 id，compare／accept 动作的工具异常分别为冻结动作 id compare／acceptance；同阶段跨基线累计，达上限即停线。"
+    },
+    "attempt.job-transient-failure": {
+      "component": "reconciler",
+      "stable_dimensions": ["phase"],
+      "description": "评估失败被裁定为临时环境／Job 故障（evaluation-recover apply 以 transient-environment 开 attempt-recovery 基线）：failed_step 为首个受影响 Job id；同阶段跨恢复段累计，达上限即停线。"
     }
   }
 }

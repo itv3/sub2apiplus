@@ -33,13 +33,9 @@ const candidateTraceFactPrefix = "CANDIDATE_TRACE_FACT "
 //   - 主仓库：active 与 previous 同为 0.145.0，本函数返回 0.145.0；
 //   - 候选源码树：active=0.145.0、previous=目标版本，本函数返回目标版本。
 //
-// surface identity 事实（a15.*）的 user_agent_prefix 必须随目标画像变化，否则
-// 候选验收侧的 SPEC-HDR-005 会拿到上一版本的 UA。写死版本号则两侧只能满足一
-// 侧：写 0.145 候选侧判据失败，写 0.147 主仓库根本没有该画像、测试直接报
-// 「未知 Codex 官方出站版本画像」。
-//
-// 这里不额外断言"必须是 0.147"：目标版本是候选树的属性，测试不重复声明它。
-// 版本若解析错误，产出的 user_agent_prefix 随即不符，accept 重放照样失败关闭。
+// 这里不额外断言具体目标版本：目标版本是候选树的属性，测试不重复
+// 声明它。版本若解析错误，画像自身断言会立即失败关闭。A15 的入口身份则必须由
+// 真实 Codex 进程和网关线证联合证明，不再从本测试生成静态 surface_identity 事实。
 func candidateTraceTargetProfile(t *testing.T) *officialCodexVersionProfile {
 	t.Helper()
 	profile, err := resolveCodexVersionProfileForMode(officialClientProfileModePrevious)
@@ -109,31 +105,6 @@ func TestCandidateTraceCodex0145RuntimeAndBoundaryFacts(t *testing.T) {
 	require.Equal(t, officialCodexProcessPhaseInitialized, modelsState.ProcessPhase)
 	require.True(t, modelsState.UserAgentSuffixEnabled)
 	require.Equal(t, "codex_exec", modelsState.Originator)
-
-	candidateTraceLogFact(t, "a15.surface-exec", "A15", "surface_identity", map[string]any{
-		"endpoint":          "models",
-		"originator":        "codex_exec",
-		"surface":           "exec",
-		"suffix_state":      "present",
-		"user_agent_prefix": strings.Fields(execUserAgent)[0],
-		"user_agent_suffix": execUserAgent[strings.LastIndex(execUserAgent, "("):],
-	})
-	candidateTraceLogFact(t, "a15.surface-tui", "A15", "surface_identity", map[string]any{
-		"endpoint":          "models",
-		"originator":        "codex-tui",
-		"surface":           "tui",
-		"suffix_state":      "present",
-		"user_agent_prefix": strings.Fields(tuiUserAgent)[0],
-		"user_agent_suffix": tuiUserAgent[strings.LastIndex(tuiUserAgent, "("):],
-	})
-	candidateTraceLogFact(t, "a15.models-no-suffix", "A15", "surface_identity", map[string]any{
-		"endpoint":          "models",
-		"originator":        "codex_cli_rs",
-		"surface":           "exec",
-		"suffix_state":      "absent",
-		"user_agent_prefix": strings.Fields(modelsWithoutSuffix)[0],
-		"user_agent_suffix": "",
-	})
 
 	account := officialEgressTestAccount(145, PlatformOpenAI)
 	account.Extra[officialCodexRuntimeMetricsAccountExtra] = true

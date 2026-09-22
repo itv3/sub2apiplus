@@ -160,6 +160,7 @@ func EngineSupportedEnumValues() EnumCatalog {
 			string(ConditionSessionIdPresent),
 			string(ConditionSubagentPresent),
 			string(ConditionTurnStatePresent),
+			string(ConditionLunaReservePresent),
 		},
 		EnumDomainHeaderOrderKind: {
 			string(HeaderOrderExplicitOrder),

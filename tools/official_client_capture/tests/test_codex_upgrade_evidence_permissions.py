@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 from tools.official_client_capture import codex_upgrade_evidence_permissions as permissions
 
@@ -90,6 +91,50 @@ class EvidencePermissionCloseoutTests(unittest.TestCase):
             )
             self.assertEqual(replayed, receipt)
             self.assertEqual(replayed["boundary_sha256"], receipt["boundary_sha256"])
+
+    def test_isolated_rehearsal_context_skips_only_device_bound_boundary_digest(self) -> None:
+        """OverlayFS 预演副本上边界摘要（含 st_dev）不可复算；隔离预演只跳过摘要比较，其余判据与正式目录相同。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            attempt_root, runs_root, evidence_roots = self._fixture(root)
+            receipt_path, receipt = permissions.close_evidence_permissions(
+                attempt_root,
+                evidence_roots,
+                managed_data_root=runs_root.parent,
+                logical_runs_roots=(runs_root,),
+            )
+            binding = permissions.receipt_binding(attempt_root, receipt_path)
+            # 收据文件名固定；用"摘要被改写"的同名收据模拟 overlay 副本上必然不同的设备号。
+            tampered = dict(receipt)
+            tampered["boundary_sha256"] = "f" * 64
+            unsigned = {k: v for k, v in tampered.items() if k != "receipt_sha256"}
+            tampered["receipt_sha256"] = permissions._sha256_bytes(permissions._canonical(unsigned))
+            receipt_path.write_text(json.dumps(tampered, ensure_ascii=False), encoding="utf-8")
+            receipt_path.chmod(0o600)
+            tampered_binding = permissions.receipt_binding(attempt_root, receipt_path)
+            replay = lambda b: permissions.replay_evidence_permission_closeout(  # noqa: E731
+                attempt_root, evidence_roots, b,
+                managed_data_root=runs_root.parent, logical_runs_roots=(runs_root,),
+            )
+            # 正式目录：摘要不一致即失败。
+            with self.assertRaisesRegex(permissions.EvidencePermissionError, "边界漂移"):
+                replay(tampered_binding)
+            # 带预演标记但不在 overlay 上：仍失败关闭。
+            with mock.patch.dict(os.environ, {permissions.REHEARSAL_CONTEXT_ENV: "1"}), mock.patch.object(
+                permissions, "_mount_fstype_of", return_value="ext4"
+            ):
+                with self.assertRaisesRegex(permissions.EvidencePermissionError, "边界漂移"):
+                    replay(tampered_binding)
+            # 隔离预演：跳过摘要比较，但条目数漂移仍失败。
+            with mock.patch.dict(os.environ, {permissions.REHEARSAL_CONTEXT_ENV: "1"}), mock.patch.object(
+                permissions, "_mount_fstype_of", return_value="overlay"
+            ):
+                self.assertEqual(replay(tampered_binding)["entry_count"], receipt["entry_count"])
+                (evidence_roots[0] / "extra-drift.bin").write_bytes(b"x")
+                with self.assertRaisesRegex(permissions.EvidencePermissionError, "边界漂移"):
+                    replay(tampered_binding)
 
     def test_rejects_symlink_and_regular_file_hardlink(self) -> None:
         """符号链接与边界外硬链接都必须在 chmod 前失败。"""
@@ -240,6 +285,57 @@ class EvidencePermissionCloseoutTests(unittest.TestCase):
             self.assertEqual(replayed["schema_version"], permissions.SCHEMA_VERSION)
             (attempt_root / "evidence" / "late.json").write_text("{}\n", encoding="utf-8")
             (attempt_root / "evidence" / "late.json").chmod(0o600)
+            with self.assertRaisesRegex(permissions.EvidencePermissionError, "边界漂移"):
+                permissions.replay_evidence_permission_closeout(
+                    attempt_root,
+                    evidence_roots,
+                    binding,
+                    managed_data_root=runs_root.parent,
+                    logical_runs_roots=(runs_root,),
+                )
+
+    def test_v2_boundary_tolerates_only_declared_post_run_client_artifacts(self) -> None:
+        """Kilo 后置路径由 checkpoint／finalizer 绑定；相邻的未声明新增项仍须失败。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            attempt_root, runs_root, evidence_roots = self._fixture(root)
+            evidence = attempt_root / "evidence"
+            (evidence / "environment").mkdir(mode=0o700)
+            (evidence / "receipts").mkdir(mode=0o700)
+            receipt_path, _receipt = permissions.close_evidence_permissions(
+                attempt_root,
+                evidence_roots,
+                managed_data_root=runs_root.parent,
+                logical_runs_roots=(runs_root,),
+            )
+            binding = permissions.receipt_binding(attempt_root, receipt_path)
+
+            client = evidence / "client" / "raw"
+            client.mkdir(parents=True, mode=0o700)
+            (client / "kilo-facts.json").write_text("{}\n", encoding="utf-8")
+            (client / "kilo-facts.json").chmod(0o600)
+            client_after = evidence / "environment" / "client-after"
+            client_after.mkdir(mode=0o700)
+            (client_after / "probe-manifest.json").write_text("{}\n", encoding="utf-8")
+            (client_after / "probe-manifest.json").chmod(0o600)
+            restoration = evidence / "receipts" / "client-restoration-report.json"
+            restoration.write_text("{}\n", encoding="utf-8")
+            restoration.chmod(0o600)
+
+            replayed = permissions.replay_evidence_permission_closeout(
+                attempt_root,
+                evidence_roots,
+                binding,
+                managed_data_root=runs_root.parent,
+                logical_runs_roots=(runs_root,),
+            )
+            self.assertEqual(replayed["schema_version"], permissions.SCHEMA_VERSION)
+
+            undeclared = evidence / "receipts" / "late.json"
+            undeclared.write_text("{}\n", encoding="utf-8")
+            undeclared.chmod(0o600)
             with self.assertRaisesRegex(permissions.EvidencePermissionError, "边界漂移"):
                 permissions.replay_evidence_permission_closeout(
                     attempt_root,

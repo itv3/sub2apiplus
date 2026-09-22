@@ -210,12 +210,13 @@ def _history_summary(
     summaries: list[dict[str, Any]] = []
     for state, prior, run_dir in ordered:
         if (
+            # 续接／收尾条款及其 run schema 已于 2026-09-16 删除；新 Campaign 的父
+            # run 只可能是批次或 v3 恢复两种形态。引用已删除常量会让停线收据永远
+            # 写不出来，派发前失败因此无法封口（v10 accept 重派时实际发生）。
             prior.get("schema_version")
             not in {
                 supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA,
                 supervisor.CAMPAIGN_RUN_RECOVERY_SCHEMA,
-                supervisor.CAMPAIGN_RUN_RECOVERY_CONTINUATION_SCHEMA,
-                supervisor.CAMPAIGN_RUN_RECOVERY_FINALIZATION_SCHEMA,
             }
             or prior.get("campaign_plan_sha256")
             != manifest.get("campaign_plan_sha256")
@@ -330,6 +331,7 @@ def _record_locked(
 ) -> tuple[Path, dict[str, Any]]:
     """在调用方已持有 ``.campaign-run.lock`` 时写入停线收据。"""
 
+    _reject_staging_model_campaign(campaign_dir)
     _validate_failure(failure_kind, error_type)
     campaign_dir = _private_directory(campaign_dir, "Campaign 目录")
     state_dir = _private_directory(state_dir, "监督器 state-dir")
@@ -401,6 +403,24 @@ def _record_locked(
     return receipt_path, payload
 
 
+def _reject_staging_model_campaign(campaign_dir: Path) -> None:
+    """改造 4：staging 模型 Campaign 不再产生 predispatch-stop/v1；历史收据只读重放不变。"""
+
+    vc_root = Path(campaign_dir) / "control" / "vc"
+    if (vc_root / "staging").exists() or (vc_root / "commits").exists():
+        raise PredispatchStopError(
+            "staging 模型 Campaign 不再产生预派发停线收据；派发前失败由 staging ABORT 与对账登记。"
+        )
+    try:
+        model = supervisor.campaign_batch_model(Path(campaign_dir))
+    except supervisor.SupervisorError as error:
+        raise PredispatchStopError(str(error)) from error
+    if model == "staging":
+        raise PredispatchStopError(
+            "staging 模型 Campaign 不再产生预派发停线收据；派发前失败由 staging ABORT 与对账登记。"
+        )
+
+
 def record(
     *,
     campaign_dir: Path,
@@ -412,6 +432,7 @@ def record(
 ) -> tuple[Path, dict[str, Any]]:
     """非阻塞取锁并封存一份通用预派发停线收据。"""
 
+    _reject_staging_model_campaign(campaign_dir)
     try:
         descriptor, locked_state_dir = supervisor._campaign_run_lock(state_dir)
     except supervisor.SupervisorError as error:

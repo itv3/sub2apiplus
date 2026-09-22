@@ -151,6 +151,10 @@ type CodexRequestConditions struct {
 	CompressionEligible     bool
 	ModelSupportsLite       bool
 	BetaFeaturesPresent     bool
+	// LunaReservePresent 冻结官方 TUI 入站是否携带 x-openai-codex-luna-reserve：
+	// 官方只在 account/rateLimits/read 以 supports_luna_reserve=true、ChatGPT 认证且
+	// 非 fedramp 时对 /wham/usage 追加该头，出站按画像槽位以常量值复刻。
+	LunaReservePresent bool
 }
 
 // CodexIdentityFacts 是 invocation 级不可变身份投影。它没有 map、service.Account、

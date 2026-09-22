@@ -539,20 +539,26 @@ def _target_evidence_label_declaration_sha256(
         for item in declaration["entries"]
         if isinstance(item, dict)
     }
+    # 声明必须覆盖 Campaign 冻结场景里的每个 Job 且阶段一致；声明多出的 Job
+    # 允许存在。标签文件来自部署树当前版本，而场景冻结在 Campaign 内：同一目标
+    # 版本新增 Job（2026-09-18 candidate-trace-test）后，旧 Campaign 的只读对账、
+    # 状态查询若仍要求精确相等就会被整体锁死。多出的声明对旧 Campaign 无害——
+    # 证据目录只按 Campaign 自己的 Job 取声明。
+    missing = sorted(set(scenario_jobs) - set(declared_jobs))
+    mismatched = sorted(
+        job_id
+        for job_id in set(scenario_jobs) & set(declared_jobs)
+        if scenario_jobs[job_id] != declared_jobs[job_id]
+    )
     if (
         len(scenario_jobs) != len(raw_jobs)
         or len(declared_jobs) != len(declaration["entries"])
-        or declared_jobs != scenario_jobs
+        or missing
+        or mismatched
     ):
-        missing = sorted(set(scenario_jobs) - set(declared_jobs))
         extra = sorted(set(declared_jobs) - set(scenario_jobs))
-        mismatched = sorted(
-            job_id
-            for job_id in set(scenario_jobs) & set(declared_jobs)
-            if scenario_jobs[job_id] != declared_jobs[job_id]
-        )
         raise JobRehearsalReceiptError(
-            "目标证据标签声明未精确覆盖正式 Job 集："
+            "目标证据标签声明未覆盖正式 Job 集："
             f"missing={missing} extra={extra} phase_mismatch={mismatched}"
         )
     return _sha256_file(path)
@@ -2368,6 +2374,15 @@ print(json.dumps({"status":"passed","namespaces":output},sort_keys=True))
         "job_roots_sha256": _fingerprint(job_roots),
         "job_roots": job_roots,
     }
+
+
+def capture_storage_probe(
+    jobs: Iterable[Any],
+    configuration: Mapping[str, Any],
+) -> dict[str, Any]:
+    """公开执行零网络的宿主／容器可写路径探针，供 VC-5 就绪门禁复用。"""
+
+    return _capture_storage_probe(jobs, configuration)
 
 
 def _bwrap_probe(container: str) -> dict[str, Any]:

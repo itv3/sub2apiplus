@@ -233,7 +233,7 @@ class Arm64SupervisedDeployTest(unittest.TestCase):
         # A2-3：整树摘要不再硬编码；暂存树自算即期望。策略 v2 五摘要须可从树内策略算出。
         self.assertFalse(hasattr(deploy, "DEFAULT_TOOL_DIGEST"))
         identity = deploy.staging_identity_v2(tool_root)
-        self.assertEqual(identity["policy_version"], 5)
+        self.assertEqual(identity["policy_version"], 7)
         self.assertEqual({len(identity[k]) for k in ("policy_sha256", "wire_producer_sha256", "evidence_semantics_sha256", "control_sha256")}, {64})
         self.assertEqual(
             deploy.DEFAULT_SUPERVISOR_DIGEST,
@@ -246,6 +246,33 @@ class Arm64SupervisedDeployTest(unittest.TestCase):
             deploy.DEFAULT_ASSERTION_PREPARER_DIGEST,
             deploy.file_sha256(assertion_preparer),
         )
+
+    def test_record_step_summarizes_metadata_arrays_over_supervisor_limit(self) -> None:
+        """受管文档超过 32 项后，事件写摘要但调用方仍获得完整结果。"""
+
+        client = mock.Mock()
+        bindings = [
+            {"path": f"receipt-{index}.json", "sha256": f"{index:064x}"}
+            for index in range(33)
+        ]
+
+        result = deploy.record_step(
+            client,
+            "enable:test-long-metadata",
+            lambda: {"runtime_document_bindings": bindings},
+        )
+
+        self.assertEqual(result["runtime_document_bindings"], bindings)
+        metadata = client.event_end.call_args.kwargs["metadata"]
+        self.assertEqual(
+            metadata["runtime_document_bindings"]["item_count"],
+            len(bindings),
+        )
+        self.assertEqual(
+            len(metadata["runtime_document_bindings"]["items_sha256"]),
+            64,
+        )
+        supervisor._metadata(metadata)
 
     def test_load_supervisor_binds_all_staged_sibling_dependencies(self) -> None:
         """importlib 加载必须复现监督器脚本的全部同目录依赖。"""
@@ -403,7 +430,7 @@ class Arm64SupervisedDeployTest(unittest.TestCase):
         self.assertEqual(supervisor._metadata(payload), payload)
 
     def test_prepared_document_metadata_passes_supervisor_cleaning(self) -> None:
-        """候选准备函数的真实返回值必须能直接写入监督器事件。"""
+        """候选准备结果经边界压缩后必须能写入监督器事件。"""
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -423,7 +450,12 @@ class Arm64SupervisedDeployTest(unittest.TestCase):
                     production_docs,
                     transaction,
                 )
-            self.assertEqual(supervisor._metadata(result), result)
+            metadata = deploy._bounded_event_metadata(result)
+            self.assertEqual(supervisor._metadata(metadata), metadata)
+            self.assertEqual(
+                metadata["runtime_document_bindings"]["item_count"],
+                len(deploy.MANAGED_RUNTIME_DOCUMENTS),
+            )
             self.assertEqual(
                 [item["path"] for item in result["runtime_document_bindings"]],
                 list(deploy.MANAGED_RUNTIME_DOCUMENTS),

@@ -2,7 +2,7 @@
 
 > **适用范围**：Sub2API 使用 OpenAI OAuth 账号的 Codex CLI 客户端仿真
 >
-> **当前版本**：Active 为 `codex-cli 0.151.0`，Previous 为 `codex-cli 0.149.1`；`0.147.0` 已退出 Runtime Catalog。完整生产身份见本文 §3.2。
+> **当前版本**：Active 为 `codex-cli 0.154.0`，Previous 为 `codex-cli 0.151.0`；`0.149.1` 已退出 Runtime Catalog（运行投影已移除，画像字节按 §4.6.7 第 1 类保留为冻结历史制品）。完整生产身份见本文 §3.2。
 >
 > **权威入口**：共享目标、证据生命周期、升级、发布与回滚以
 > [`OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md`](OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md) 为准；依赖基线见
@@ -12,7 +12,7 @@
 正式 Campaign 的阶段动作只允许由 `codex_upgrade_supervisor.py campaign-run` 派发；`plan`、
 `reuse-official-evidence` 和 `compile-and-run-vc-batch` 是三个受限的 Campaign 引导／批次控制命令；
 `compile-vc-batch` 仅保留给历史读取和内部测试，0.154.0 起 Formal CLI 会失败关闭。适用边界见
-第四部分公共执行约定和 Framework §5.1.2、§5.3.2～§5.3.4。历史恢复入口仅供解释旧收据，不得用于新
+第四部分开头的公共执行约定摘要、[§4.7](#codex-4-7) 与 Framework §5.1.2、§5.3.2～§5.3.4。历史恢复入口仅供解释旧收据，不得用于新
 Campaign，兼容边界见附录 A。
 
 ---
@@ -51,9 +51,10 @@ Campaign，兼容边界见附录 A。
 
 # 第二部分 Codex CLI 客户端规则画像
 
-本部分定义规则成立所需的证据标准、观测边界和 53 个编号项。当前生产 active 为 0.151.0，
-previous 为 0.149.1；本轮差异规则、ARM64 身份事实和 Files C2PA 条件分支均已完成生产激活、
-精确回滚、目标恢复和 0.147 Runtime Catalog 退休。
+本部分定义规则成立所需的证据标准、观测边界和 53 个编号项。当前生产 active 为 0.154.0，
+previous 为 0.151.0；本轮唯一的差异规则 SPEC-EP-019（`/backend-api/wham/usage` 的 Luna Reserve 条件头）
+与 ARM64 身份事实均已完成生产激活、精确回滚、目标恢复和 0.149.1 Runtime Catalog 退休，机器事实见
+[`0.154 终态收据`](egress/maintenance/CODEX_CLI_0151_TO_0154_TERMINAL_STATE_RECEIPT.json)。
 
 ## 2.1 规则证据与准入标准
 
@@ -93,7 +94,7 @@ previous 为 0.149.1；本轮差异规则、ARM64 身份事实和 Files C2PA 条
 - 自定义 CA、代理和受控失败等条件样本不能外推为默认路径或自然成功链；
 - 全集、缺失和连接完整性结论必须基于无预设过滤的完整双向样本。
 
-**遥测零流量判定（当前 active 0.151.0）。** Framework §1.2、§3.2 的公共规则适用；只有下列配置和
+**遥测零流量判定（当前 active 0.154.0）。** Framework §1.2、§3.2 的公共规则适用；只有下列配置和
 源码链均已冻结时，未产生的遥测才可排除在 strict 分母之外：
 
 | 组件 | 关闭条件与源码闭环 |
@@ -813,13 +814,31 @@ images、alpha-search、legacy compact、realtime 和条件 Header 只在各自�
   settings/user 在 account-id 后增加 `cache-control: no-cache, no-store`，并在有会话
   cookie 时于 `accept` 后发送 `cookie`；
   consume 再含 `content-type, content-length` 与 `redeem_request_id` body。
+  **0.154.0 change**：`/backend-api/wham/usage` 在 `x-openai-fedramp` 之后追加条件头
+  `x-openai-codex-luna-reserve: 1`（画像 Slot 34，constant，条件 `luna_reserve_present`）；
+  分派条件是 `params.supports_luna_reserve && auth_mode == Chatgpt && !is_fedramp_account`，
+  TUI 的周期刷新与手动刷新都传 `supports_luna_reserve=true`。该头只出现在 usage，
+  `rate-limit-reset-credits` 与 `settings/user` 都不带；0.151.0 及更早画像无此槽位，
+  回滚到 previous 时不得泄漏该头。会话 cookie 建立后 usage 与 settings/user 一样在
+  `accept` 与 `host` 之间发送 `cookie`（settings/user 的 cookie 规则见上，画像 Slot 45）。
 - **源码**：[L1] `backend-client/src/client/rate_limit_resets.rs:15-19`、
   `backend-client/src/client/rate_limit_resets.rs:31-109`、
   `backend-client/src/client.rs:226-245`、`backend-client/src/client.rs:463-480`、
   `backend-client/src/client.rs:642-646`。最终线序仍由 wire 确认。
 - **实测**：正式 k80 Campaign 的 A12 取得三种 GET 与安全 consume；12 份冻结证据的
   `wham-get-paths` 断言通过；0.149.1 HTTP Main 又取得 `settings/user`，其余机器事实沿用已批准
-  0.147 Campaign 验收回执与证据归档。
+  0.147 Campaign 验收回执与证据归档。0.154.0 的 change 由 Campaign
+  `c0154-formal-vc1-recapture-20260915t230327z` 的 `official-wham-wire` 三份 `/wham/usage`
+  样本（conn003／conn013／conn015）闭环：三者都带 `x-openai-codex-luna-reserve: 1`，
+  conn013／conn015 在 cookie jar 建立后于 `accept` 与 `host` 之间带 `cookie`；同轮
+  `rate-limit-reset-credits`（conn002）与 `settings/user`（conn007／conn010）均不带该头。
+  候选侧由 `c0154-formal-vc5-v14r5-20260922t073614z` 的 `assert-SPEC-EP-019`（evidence_level=full）
+  通过，是本轮 42 条规则里唯一的 change。0.154.0 的源码坐标（本条不进上面的源码字段：锚点清单
+  `tools/spec_ref_anchors.json` 以本地固化的 0.149.1 基线为准，这三处在该基线中不存在）为
+  backend-client/src/client/rate_limit_resets.rs 第 75 行的
+  `get_rate_limit_status(supports_luna_reserve)`、app-server/src/request_processors/account_processor.rs
+  第 1152 行的分派条件，以及 tui/src/app/background_requests.rs 第 811 行（周期与手动刷新均传 true）；
+  0.151.0 源码对该符号 0 命中。
 - **实现**：使用 backend-client 独立 header 形态；不得套用 Codex 主模型端点线序。
 - **状态**：✅ 源码部分；抓包充分。
 
@@ -924,7 +943,7 @@ Key、Group、账号路由和计费沿用 Framework §1.3 的业务所有权；�
 | 版本发现与入口归一化 | GitHub `/releases/latest`／列表回退、6 小时节流与启动防抖、UA/version 配对和账号 UA 兼容、`openai_codex_client_version_synced`、管理端候选值、客户端名和环境指纹 | active ReleaseCatalog、画像摘要、最终 version 和 wire 契约 |
 | 生产 strict wire | ReleaseCatalog、ReleaseBundle、Compiler、Executor 和受信 adapter 定型 URL、Header、Body、顺序、压缩、传输、状态与连接 | 被候选版本、管理员／账号 UA 或入站身份覆盖 |
 
-当前 active strict wire 是 Codex CLI 0.151.0；自动同步只更新候选值，active ReleaseCatalog 只能经证据验收后显式发布。
+当前 active strict wire 是 Codex CLI 0.154.0；自动同步只更新候选值，active ReleaseCatalog 只能经证据验收后显式发布。
 
 | persona／状态 | 端点范围 | 逻辑出口 | 约束 |
 |---|---|---|---|
@@ -968,27 +987,35 @@ MCP，就原样进入官方 Persona wire。接入时必须冻结第三方产品�
 顺序或条件变化即视为新目录，未重新批准前 fail-close。该路径只能主张“目标 Codex CLI + 冻结 MCP
 配置”的等价性，不能冒充默认无 MCP 的官方客户端，也不是 Codex Persona 上线的前置条件。
 
-## 3.2 Codex 0.151.0 active 画像与发布执行契约
+## 3.2 Codex 0.154.0 active 画像与发布执行契约
 
 active／previous 画像均以内容寻址 Snapshot 保存 exec／TUI 身份、feature、端点、Header／Body
 闭集与顺序、压缩、TLS、连接、条件状态和文件上传编排：
 
 | mode | 版本与画像摘要 | 端点闭集 | 用途 |
 |---|---|---|---|
-| active | 0.151.0；`dbc65378c80a2ad843ce1ba6253a2e47f0dd5d8bc812bb536a2d24ddb7a59e39` | 16 个静态端点（含 `wham_settings_user`）+ 1 个 ReturnedURL 动态端点 | 生产默认 |
-| previous | 0.149.1；`8c22d3b18b16d249ac041a97efad1b6703c11ef290622b0b1642679a3c010ec3` | 16 个静态端点（含 `wham_settings_user`）+ 1 个 ReturnedURL 动态端点 | 受控回滚和历史复算 |
+| active | 0.154.0；`31d8654f6892d37129a2639f1bb48e87b7b8648d67ce754f4ae9379a671b99e3` | 16 个静态端点（含 `wham_settings_user`）+ 1 个 ReturnedURL 动态端点 | 生产默认 |
+| previous | 0.151.0；`dbc65378c80a2ad843ce1ba6253a2e47f0dd5d8bc812bb536a2d24ddb7a59e39` | 16 个静态端点（含 `wham_settings_user`）+ 1 个 ReturnedURL 动态端点 | 受控回滚和历史复算 |
 
-当前 Active 的官方目标身份为 tag `rust-v0.151.0`（commit
-`78c290807ce710180111df227df3b7a4fe845452`）、`aarch64-unknown-linux-musl` 包和 ARM64 二进制
-SHA-256 `56f026015ccc3ebc12895282200d89c216892bf6fa15fa7f228e6e0c6ad6ce76`。原始证据源为 Campaign
-`c0151-formal-20260831t0220z-r8` 的 attempt `20260831T022126Z-901dd6612631b7bf`；29 个 Job、权限、
-秘密扫描、环境恢复及 `172.30.0.10／172.25.0.3 → 179.255.100.158` 出口门禁均已封存。后续分类纠正、
-验收和生产激活统一由 `c0151-formal-rule-correction-20260905t0033z` 的 canonical 链承接。
+当前 Active 的官方目标身份为 tag `rust-v0.154.0`（commit
+`6b9826e3aa83b1a5947db50f4332cb9c65f1b340`）、`aarch64-unknown-linux-musl` 包
+SHA-256 `97d93e11df72d3c26772db019e6ea8bb72c246500d46b98c760839f3240355e6` 和 ARM64 二进制
+SHA-256 `9b7c1c7abdc26fc3c4f47c77656a8e9121def5483dbae830ef1ee561758448a9`。原始证据源为 Campaign
+`c0154-formal-vc1-recapture-20260915t230327z` 的 attempt `20260915T231339Z-1e2ec44a775a2970`；
+29 个 Job 全部 complete，权限、秘密扫描、环境恢复及 ARM64 经 DMIT 的出口门禁均已封存。该 Campaign
+的官方证据由 `reuse-official-evidence` 只读导入，后续分类、验收、生产激活与 0.149.1 退休统一由
+`c0154-formal-vc5-v14r5-20260922t073614z` 的 canonical 链承接（候选 `c0154-candidate-v14r5`，
+attempt `20260922T081201Z-6b19d215a302dbd4`，42 条规则中 41 条 inherit、1 条 change）。
 
-当前生产镜像 ID 为 `sha256:2589b419055073fc0d9f3b0c47d3efe3e0f0f93fac798604c91355d9a9e088ae`；
-canonical checkpoint 为 `00000009`，执行集合为空。机器事实分别见
-[`0.147 Runtime Profile 退休收据`](egress/maintenance/CODEX_CLI_01491_TO_0151_RUNTIME_PROFILE_REMOVAL_RECEIPT.json)
-和 [`0.151 终态收据`](egress/maintenance/CODEX_CLI_01491_TO_0151_TERMINAL_STATE_RECEIPT.json)。
+当前生产镜像 ID 为 `sha256:3429200a5cb9d75edcb4115c515132bd3af9c94d5f85d8ef1716842020b56cf1`
+（退休 0.149.1 运行投影后重建；四阶段激活演练所用镜像为
+`sha256:d3da9a8a7ec7313e18dfae02675506d36198d8b60ca7f4a6961b1aa9dad49a90`，固定回滚镜像为
+`ghcr.io/itv3/sub2apiplus@sha256:298b5933740a379c1f18816adfb662e780c960e1641953e44c8b0ce4657b74ec`）；
+canonical checkpoint 为 `00000008`，执行集合为空。机器事实分别见
+[`0.149.1 Runtime Profile 退休收据`](egress/maintenance/CODEX_CLI_0151_TO_0154_RUNTIME_PROFILE_REMOVAL_RECEIPT.json)
+和 [`0.154 终态收据`](egress/maintenance/CODEX_CLI_0151_TO_0154_TERMINAL_STATE_RECEIPT.json)。
+0.149.1 按 §4.6.7 第 1 类退休：Catalog、selector 与运行投影均已移除，两份画像字节因被
+`0.147→0.149.1` 终态收据登记为逐文件校验制品而原地保留，不得据此认为文件已删除。
 
 启动期解码、结构校验或摘要核对失败即阻止启动；运行时只读不可变快照，需改写的数据按次深拷贝。
 
@@ -1105,7 +1132,7 @@ make check-egress-spec
 | 路径组 | 责任 |
 |---|---|
 | `backend/internal/officialegress/` | ReleaseCatalog、RouteCatalog、Scope、Compiler、Executor、Guard、FinalizationToken 与画像契约 |
-| `backend/internal/service/official_egress_codex_*`、`official_client_profile_registry.go` | 0.149.1／0.151.0 不可变 Snapshot、可信 release Build 运行态投影、发布投影、端点编排、Files 与模型能力 |
+| `backend/internal/service/official_egress_codex_*`、`official_client_profile_registry.go` | 0.151.0／0.154.0 不可变 Snapshot、可信 release Build 运行态投影、发布投影、端点编排、Files 与模型能力 |
 | `backend/internal/service/official_egress_openai_http.go`、`official_egress_openai_ws.go` | HTTP／WS 统一入口归一化：保留业务语义，重建动态身份，禁止官方／第三方入口形成两套 wire 权威 |
 | `backend/internal/service/official_egress_*invocation.go`、`official_egress_transport_adapters.go` | HTTP／WS invocation、attempt 和受信 terminal adapter |
 | `backend/internal/service/official_egress_upstream_identity_bridge.go` | 把上游身份设施的 canonical/version 读取源单向桥接到 active 已验收 ReleaseBundle |
@@ -1234,314 +1261,19 @@ Framework §5.3 是升级总操作入口并规定 `VC-0～VC-6` 顺序；本部�
 | VC-5 | 定向验证 | [§4.5](#codex-vc-5) |
 | VC-6 | 交付或生产激活 | [§4.6](#codex-vc-6) |
 
-## 第四部分公共执行约定（非独立阶段）
+## 第四部分公共执行约定（摘要）
+
+完整条款见本部分末尾的 [§4.7 公共控制面与恢复约定](#codex-4-7)；下列四条是进入任何 VC 阶段前
+必须先成立的前提，其余机制（项目总账与两层预算、工具身份策略 v2、staging／WAL 批次模型、评估失败
+局部恢复、连续监督与时间账本、受管文档部署）都在 §4.7 展开。
 
 1. VC-0 冻结 Campaign 总计划、身份、阶段依赖、预算和原始 deadline；每个阶段或恢复批次只在前序
-   checkpoint 封存后编译本批次不可变清单。不得在 VC-0 预填后续尚未产生的批准摘要、candidate／attempt
-   ID、镜像 digest 或收据摘要，也不得在批次启动后补写。总计划是 Formal plan 产物，不是批次动作清单。
-2. 阶段动作的唯一派发入口是 `codex_upgrade_supervisor.py campaign-run`。本部分的阶段命令块均为已冻结
-   v2 清单中的 `action.command`，不是操作员可绕过监督器直接执行的入口。只有以下控制面动作不进入
-   阶段队列：VC-0 的 `preflight_only plan` 只创建离线预检；Formal `plan` 只能由
-   `codex_upgrade_vc0_closeout.py` 在原子收口进程内调用；`reuse-official-evidence` 创建全新 Campaign，
-   以零请求导入已封存官方证据，并生成“全部 official Job 为 reuse”的 VC-1 no-op 批次及 checkpoint；
-   `compile-and-run-vc-batch` 在同一个非阻塞 state-dir 锁内编译下一批并立即创建父 run；
-   `compile-vc-batch` 仅允许历史读取和内部测试，不得用于新的 Formal 批次；
-   `compile-vc-interrupted-recovery-batch` 与 `recover-vc1-interruption` 是 0.154.0 首轮事故链的 v3 历史入口，
-   只保留给历史回归，新 Campaign 的中断统一由 reconciler 承接；
-   sequence 4 预派发封口与 deadline 孤儿直接封口两个一次性入口已于 2026-09-16 删除，其历史收据只按
-   [历史审计](CODEX_CLI_CLIENT_EMULATION_HISTORY_AUDIT.md#codex-0154-retired-entrypoints)读取。
-   这些入口都不得放入 `campaign-run` 动作队列，
-   不得延长原始 deadline 或执行阶段数据面动作。
-3. 身份变化、失败恢复和 `execute／reuse` 计算统一执行 Framework §5.1.2、§5.3.2～§5.3.4；各阶段只写
-   Codex 专用触发条件，不重复建立身份或恢复矩阵。
-4. `validation_only` 和 `production_replacement` 都必须经过 VC-6。前者只完成只读交付出口，后者继续
-   production promotion、canary、切流、实际回滚和目标恢复。
+   checkpoint 封存后编译本批次不可变清单，不得预填或补写后续摘要与 ID。
+2. 阶段动作的唯一派发入口是 `codex_upgrade_supervisor.py campaign-run`；`plan`、
+   `reuse-official-evidence` 与 `compile-and-run-vc-batch` 是仅有的三个控制面例外，历史恢复入口只读。
+3. 身份变化、失败恢复和 `execute／reuse` 计算统一执行 Framework §5.1.2、§5.3.2～§5.3.4。
+4. `validation_only` 与 `production_replacement` 都必须经过 VC-6。
 
-### Codex 0.154 起的项目总账、工具身份策略 v2、对账与只读导入
-
-本节是 2026-09-15 改造方案（A0～A3b）落地后的最小规范；下列行为自 0.154.0 起对 Formal Campaign 强制
-生效，早于 0.154.0 的 Campaign 只按各自冻结的历史合同只读回放。0.154.0 首轮事故链的 sequence 专用入口、
-权限别名补偿与 deadline 孤儿封口条款已删除，v3 中断孤儿恢复与两条过渡恢复条款已移入历史审计，均只作只读解释。
-
-**两层预算与项目总账。** 每个升级项目在宿主数据根建立追加式项目总账 `upgrade-project-ledger/`：
-`plan.json` 一次写死 `absolute_deadline_utc`（老板批准，记录批准人与时间）、可选 `live_request_budget`、
-`same_root_cause_retry_limit`、`root_cause_codes_sha256` 与算法版本、`estimation_policy`、`fixture_only`、
-初始精确／估计请求数、初始身份键清单摘要、初始根因计数、`bootstrap_cutover` 与已关闭 Campaign 账本
-head；`events/NNNNNN.json` 只有六种事件：`campaign_registered`、`campaign_registration_rejected`、
-`reconciliation_committed`、`accounting_resolved`、`root_cause_repaired`、`campaign_terminal`
-（`terminal_reason` 只能是 `deadline_wall_clock`、`deadline_live_requests`、`root_cause_limit`、
-`accounting_unresolved`、`environment_contaminated`、`identity_changed`、`superseded`）。权威数据是
-plan 加 events，`head.json` 只是缓存：写入时在目录锁内完整重放并以 head sha 做 CAS，缓存缺失或落后可
-重建，超前或同序号摘要不符失败关闭。Campaign 账本（`UpgradeTimingLedger`）继续记录本 Campaign 的阶段、
-attempt 与停线；跨账本事务由 Campaign 目录 `ledger/outbox/batch-NNNNNN/` 承担：若干 `entry-NN.json`
-是同一项目事件 payload 的分片，`COMMIT` 绑定 `entry_count`、末项 SHA 与 batch SHA，**一个 batch 严格
-对应一个项目事件**；补齐器 `reconcile-project-ledger` 只推送带 `COMMIT` 的 batch，缺项、断链、篡改、
-COMMIT 后追加 entry 即失败关闭，`bootstrap_cutover` 已吸收的 batch 不再推送。锁顺序固定先项目锁后
-Campaign 账本锁。`plan`、`reuse-official-evidence` 在项目锁内做 admission（总账 blocked、剩余预算为 0、
-根因达上限、超过 `formal_open_limit`、Campaign deadline 超过绝对截止即拒绝并追加拒绝事件）；
-`campaign-run`、`resume`、`capture-official seal` 开始前先执行补齐器再锁内重放，本 Campaign 必须有注册
-事件且无拒绝、终态事件。`fixture_only` 总账只允许 staging 路径内的 Campaign。
-
-**统一计量单位与账务状态。** 官方请求只由 `live-request-provenance/v2` 逐请求核算：计量单位是 HTTP
-POST 模型端点或 client 方向 WebSocket `response.create`；身份键为 producer run ID、来源类别与原生记录
-坐标，realpath 与 SHA 只作完整性；同一 Job 只有一个权威来源，capture／compact 的 mitm 分支与 relay 精确，
-direct 分支按总账冻结的 `estimation_policy` 计上界并标记，无同场景可解析分支即 `unresolved`。请求部分
-状态只有 `resolved`、`estimated`、`unresolved`；`unresolved` 使总账 blocked，blocked 期间只允许
-`accounting_resolved`、`root_cause_repaired`、`reconciliation_committed`、`campaign_terminal`，禁止注册、
-派发、resume、复用与 seal。`accounting_resolved` 必须绑定原 operation、新 provenance 审计、准确身份键
-清单与 delta，逐个原子补账，集合清空才解除。身份键全局去重，估计按来源（producer run）去重。
-
-**根因编码。** 所有生产者与消费者使用受管 `root_cause_codes.json`，根因 ID 只由
-`component`、`stable_error_code`、`failed_step` 与错误码登记的稳定维度生成（`rc1-` 前缀），诊断全文
-只进审计详情；枚举表或算法变化必须携带旧新映射收据并继承累计次数。代码缺陷的修复以
-`root-cause-repair/v1` 收据绑定修复提交、定向回归与部署收据，产生 `root_cause_repaired` 事件清零，
-不激活历史 Campaign。
-
-枚举表 `root_cause_codes.json`（`codex-upgrade-root-cause-codes/v1`，算法 `structured-root-cause/v1`）
-当前登记 16 个稳定错误码：8 个结构化码——`campaign-run.action-failed`（supervisor，维度 `phase`）、
-`vc0-closeout.step-failed`（vc0-closeout）、`supervisor-run.interrupted`、`attempt.interrupted`、
-`attempt.deadline-expired`、`attempt.accounting-unresolved`、`attempt.environment-contaminated`、
-`attempt.identity-changed`（均为 reconciler，维度 `phase`）——以及 8 个只读 `legacy` 字面量，后者只用于
-把 0.151／0.154 历史账本的旧根因映射进同一计数空间，不得由新工具产生。项目总账冻结
-`root_cause_codes_sha256` 与 `root_cause_algorithm_version`；同根因在同一项目内跨 Campaign 累计，达到
-`same_root_cause_retry_limit`（默认 2）即拒绝注册、派发、恢复、复用与封存，直到修复收据清零。生产者
-只能通过 `codex_upgrade_root_cause.structured_root_cause` 生成根因 ID，禁止手写字面量。
-
-**工具身份策略 v2。** 受管目录内的 `tool_identity_policy_v2.json` 把受管文件分为 `wire_producer`、
-`evidence_semantics`、`control` 三层加 `ignored`，编排器 `codex_upgrade.py` 按函数闭包分别归入 wire
-与 evidence 根；`plan` 把策略写入 `campaign.json` 并单独记录 `policy_sha256`，工具身份同时输出
-`files_sha256`、`wire_producer_sha256`、`evidence_semantics_sha256`、`control_sha256` 与
-`policy_sha256`。只有 wire producer 层是重采判据：wire 身份变化必须经两阶段 transition，`intent`
-冻结受影响 Job 闭集（受影响等于全部即拒签，改用普通 Formal 后继），批准后闭集 Job 用新身份补跑，
-`final` 绑定该 attempt 全部 Job complete；`evidence_semantics` 变化只在 seal／评估前追加单调的
-`evaluation-epoch-<n>` 链；`control` 变化只重跑控制门禁并留痕；`policy_sha256` 变化不得沿用既有
-Campaign，必须升级 `policy_version` 并经 `policy-compatibility-receipt/v1` 与
-`policy-activation-certification/v1` 后以新 Campaign 承接。旧 Campaign 无策略摘要按 v1 整树比较。
-部署收据、执行合同、VC-0 收口与 control epoch 一律比当前有效 wire 身份与 `policy_sha256`；
-`_verify_execution_tree`、三副本互等、finalizer 与账本的 producer 溯源仍比整树。
-`verdict-official-attempt-identity` 从后一份部署收据的 `rollback_backup` 副本按策略重算历史 wire
-身份裁定 `equal／different`；没有副本时只有 v1 整树相等才算相等。
-
-**VC-2～VC-6 原子入口治理与账本预算（2026-09-16 增补）。** 0.154.0 起 `compile-and-run-vc-batch` 是
-VC-2～VC-6 每一批的唯一强制入口，四层治理在它内部闭合，不再依赖操作员人工 `append`：
-（1）取 state-dir 锁与任何落盘之前先经项目总账 admission，与 `campaign-run` CLI 同一底层门禁
-（未注册、blocked、根因达上限、超绝对截止一律拒绝且无副作用）；（2）只读预检 Campaign 绑定的
-UpgradeTimingLedger：必须 active 且版本、用途一致，目标阶段不得倒退，尚未登记完成的前序阶段必须已有成功封存的
-checkpoint；（3）batch 与 manifest 可信落盘后、父 run 创建前，在账本收口锁内按序补写前序 `stage_completed` 与目标
-阶段 `stage_started`（只读导入的 Campaign 会在 VC-2 首批一次补齐 VC-0／VC-1），账本此刻拒绝即走通用预派发停线，
-`error_type` 记为 `TimingLedgerGateError`；（4）父 run 成功且本阶段 checkpoint 已封存则写 `stage_completed`，同阶段
-多批时只在封存批写一次，幂等。只读导入的 Campaign 第 2 批派发前，入口在同一锁内先把零请求 no-op 首批跑成父 run
-历史，满足监督器“batch_sequence 从 1 连续”的要求；首批含真实动作时不代跑。父动作失败仍由监督器写
-`stage_abandoned`＋`stop_the_line`，此后本 Campaign 的任何批次都被拒绝，唯一下一动作是对账。
-
-Campaign 账本自 0.154.0 起可在 `create` 时以 `--project-ledger-dir` 绑定项目总账：绑定后总预算上限是账本开始到总账
-绝对截止的整分钟数，阶段预算由 Campaign 计划在总预算内以 `--stage-budget-minutes VC-N=分钟` 规定；未绑定的账本沿用
-总 360 分钟与各阶段默认上限。VC-2 起的人工核对（分类草案、联合摘要、比较结果）发生在批次之间，阶段之间账本
-`active_phase` 为空、不计阶段墙钟，因此阶段预算按含人工核对的实际节奏设置，不得为同一工作对象新建账本重置计时
-（框架 §5.3.5：数值由客户端指南或已批准的 Campaign 计划规定，先到即停线）。项目总账的消费者门禁除
-`plan`、`reuse-official-evidence`、`campaign-run`、`resume`、official seal、`compare`、`accept` 外，还包括候选
-`capture-candidate seal` 与 `canonical-advance`（其 seal／compare／accept 步骤映射到同名消费者，VC-6 生产步骤按
-`canonical-advance` 本身准入），不得成为绕开门禁的旁路。
-
-**对账（reconciler）。** 中断只有两种入口，各自输出独立不可变收据，自身模型请求为零：
-`reconcile-supervisor-run --run-dir --campaign-dir` 处理派发前失败、父监督器 SIGKILL 或中断且尚无
-attempt（run 期间已产生 reservation 时拒绝并指向 attempt 入口），输出 `supervisor-run-reconciliation/v1`，
-不伪造 attempt 事件；`reconcile-attempt --campaign-dir --attempt-id` 处理 reservation 之后的任何中断，
-输出 `attempt-reconciliation/v1`，不回写 `attempt.json`，不新增 attempt 状态枚举。Job 完成态：
-`complete` 必须同时有有效 result 与对应 checkpoint；有证据目录但无终态 checkpoint 为 `indeterminate`
-并归入失败集合；证据目录只用于请求计数。成功封存的 official 阶段不经对账，其模型请求由
-`account-sealed-official --campaign-dir` 以同一套 provenance 核算（精确身份键按总账去重、估计上界按来源去重）
-写入一份不带根因的 `reconciliation_committed` batch 并推送总账，按 attempt 幂等。统一顺序（每步幂等，
-中断后从第一步重放）：
-
-1. Campaign 侧写收据；attempt 分支在 Campaign 账本追加无收据的 `attempt_failed`（带根因）。账本此前
-   未登记该 attempt 时先补登 `attempt_started`；账本已 `stop_required` 且无 active attempt 时无法登记，
-   如实记录为跳过，禁止执行 Job。
-2. 写一个 outbox batch，目标事件 `reconciliation_committed`：请求部分是 provenance 核算的未入账身份键
-   与估计 delta（supervisor-run 通常为 0 但必须写；无法精确且无估计依据时 `unresolved`，不写 0），
-   根因部分是根因编码；entry 绑定收据 SHA，attempt 分支还绑定 `attempt_failed` 事件 SHA；写 `COMMIT`。
-3. 执行补齐器把 batch 推成一个项目事件。
-4. 锁内重放总账，得到根因计数、累计请求、剩余预算与 blocked。
-5. 判定：总账 blocked 或本次账务 `unresolved` → 永久停线；身份不变（当前有效 wire 身份与
-   `policy_sha256` 相等）、环境已恢复或可恢复（无污染记录、无 restoration_error）、Campaign 账本仍
-   active、Campaign 与项目 deadline 未到、剩余请求预算大于 0、该根因累计未达上限 → 可恢复；否则
-   永久停线，`terminal_reason` 按首个命中的条件取值。
-6. 可恢复：supervisor-run 在 Campaign 账本追加 `receipt_passed` 绑定账本内收据副本，phase 保持
-   active，可重新派发同一批次；attempt 生成零请求 `recovery-preview/v1`（冻结
-   `complete／failed／indeterminate／pending` 四类闭集、`reuse／execute` 集合、按 provenance 逐 Job 给出
-   的预计新增请求数、`reservation_exists=false`、`live_request_count=0`、`scanned_bytes=0`），操作员以
-   `reconcile-attempt --approve-recovery-sha256 <review_sha256>` 批准后才能
-   `resume --rerun-failed --recovery-preview <path>`。永久停线：账本 `stage_abandoned` 与
-   `stop_the_line`（绑定账本内收据副本），再写 `campaign_terminal` batch 并推入总账。
-
-来源 attempt 没有 after 探针或环境未恢复时，`complete` Job 也不复用，恢复预览的 execute 为全部计划
-Job；已对账的孤儿 attempt 以对账收据为终态，不再阻塞新 reservation。`resume` 对中断状态一律先
-reconcile；0.154 起失败或已对账 attempt 的 `--rerun-failed` 必须携带已批准且工具身份未变的预览，源
-attempt 冻结闭集须与预览逐项相等，否则拒绝。
-
-**权限收口。** `harden-evidence-permissions preview／apply --approve-sha256／replay` 两步式：preview 输出
-前后 mode 清单、逐文件内容摘要与变更摘要；apply 持 Campaign 排他锁，只把 mode 改为 0700／0600，
-禁止网络与内容写入，内容摘要不变才落收据；收据写在 `control/evidence-permissions/<attempt_id>/`，
-不回写 `attempt.json`；中断后幂等重放。
-
-**run 末权限边界与 assertion bundle。** `capture-official run` 结束时写入的
-`evidence-permission-closeout/v2` 边界只记文件的 inode、大小、mtime、链接数与属主；目录只记 inode 与
-属主，并跳过证据根顶层的 `assertion-bundle` 子树——bundle 是 seal 前按 ACC-06 发布进证据根的派生制品，
-由 seal 用 manifest 逐文件摘要另行绑定。历史 v1 边界含目录 mtime／链接数与全部子树，bundle 一经发布
-必然漂移；已绑定 v1 收据的 attempt 必须在 bundle 发布前用
-`harden-evidence-permissions upgrade-closeout` 升级：v1 仍能逐字重放时写一次
-`evidence-permission-closeout-upgrade.json`（以 v1 绑定为前序），此后所有重放按 v2 核对升级收据。
-
-**从 `awaiting_receipts` 只读导入。** 前序官方阶段已封存时 `reuse-official-evidence` 直接承接官方阶段；
-前序停在 `awaiting_receipts` 时必须同时提供 `--predecessor-official-attempt-id`、`--audit-receipt`
-（`official-attempt-audit/v1` 五段全部通过且绑定该 attempt.json）、`--identity-verdict`
-（`official-attempt-identity-verdict/v1` 为 `equal` 且裁定时工具即当前工具）、`--permission-receipt`
-（该 attempt 最新一份 apply 收据）、`--path-certification`（`pre-a3-path-certification/v1`）、
-`--policy-activation`（`policy-activation-certification/v1`）、`--deployment-receipt`（五摘要等于当前
-工具）与 `--project-ledger`（后继目录祖先处的总账）；只接受单一前序 attempt，不做逐 Job 合并。导入
-收据（`codex-upgrade-predecessor-import/v11`，`import_mode=official_attempt_reuse`）显式绑定源
-attempt 摘要、A1a inventory、权限收据与前后 mode 清单、现场重算的内容不变证明、部署收据五摘要、两份
-认证与总账 head；后继目录内合成零执行的 v3 official attempt（results 只做 campaign_id 坐标迁移并
-重绑当前 key，`disposition=reused`，证据根引用前序宿主路径，环境探针为空），由新 Campaign 的
-`capture-official seal` 按 metadata-only 规则封存（环境、恢复与 ARM64 收据来自前序 attempt，证据清单
-按前序证据根现场构建）并完成 VC-1，`reuse_item_ids` 按 `disposition=reused` 统计。
-
-**认证收据。** `pre-a3-path-certification/v1`：`status=passed`，`identity` 五摘要（含
-`tool_files_sha256`）、`deployment_receipt{path,sha256}`、`scenarios`、`receipt_sha256` 自摘要。
-`policy-activation-certification/v1`：`status=active`、`policy_version`、`policy_sha256`、`identity`
-五摘要、`deployment_receipt`、`authorized_scopes`、`superseded_by`（为空才有效）、`receipt_sha256`。
-`policy-compatibility-receipt/v1`：旧新 `policy_version`／`policy_sha256`、逐层分类差异、既有 Campaign
-影响面与处置、`receipt_sha256`。三者都绑定同一份 ARM64 部署收据，五摘要必须等于当前工具身份。
-
-**历史处置与时间对账。** `build-campaign-disposition` 为目标版本的全部历史 Campaign 出唯一处置
-（`reuse_primary`、`reuse_backup`、`read_only_archive`、`preflight_archive`）并列出待关闭账本；
-`reconcile-upgrade-time` 只取 git 提交、账本事件、部署收据、Campaign 创建与监督器事件作可信边界，
-区间分类为执行、工具修复、部署、Campaign 创建、停线间隙、无活动或 `unclassified`，人工分类收据
-`upgrade-time-manual-classification/v1` 必须绑定支撑证据且不得覆盖证据区间；`unclassified` 大于 0
-时项目总账不得封存。
-
-### Codex 依赖键、监督器与恢复
-
-Framework §5.1.2 规定共享恢复语义；Codex 的结果键固定为：
-
-```text
-result_key = item_id + input_sha256 + environment_sha256 + direct_dependency_sha256
-```
-
-逐文件依赖必须登记到 `producer／evaluator／control／scenario／runtime／network／gate` 之一。正式阶段动作队列
-唯一派发入口是 `tools/official_client_capture/codex_upgrade_supervisor.py campaign-run`；VC-0～VC-6 新流程使用
-`codex-upgrade-campaign-run/v2`，并绑定 Campaign 总计划、批次、直接前序 checkpoint 和原始绝对 deadline。
-`codex-upgrade-campaign-run/v3` 是 0.154.0 首轮事故链的历史恢复版本（见历史审计），新 Campaign 不再生成；
-失败父批次统一先对账再从最近合法 checkpoint 恢复。
-历史 `codex-upgrade-campaign-run/v4`／`v5` 续接与收尾版本已于 2026-09-16 删除：监督器不再接受这两种
-清单，其历史 run 目录只读保留并按历史审计解释。
-
-通用工具闭合后不得再增加 sequence 专用恢复版本；新批次若在编译完成后、父 run 创建前失败，只能由
-`codex_upgrade_predispatch_stop.py record` 写入 `codex-upgrade-predispatch-stop/v1` 停线收据。该收据固定
-`source_run_created=false`、`successor_eligible=false`、`live_request_count=0`、`scanned_bytes=0`，唯一
-下一动作是完成工具闭合后建立新 VC-0，绝不能作为后继批次输入。
-
-原子入口能捕获的失败会自动写收据；只有进程被 `SIGKILL` 等不可捕获方式终止、且两个编译制品已经完整
-落盘而父 run 尚不存在时，才允许在原 Campaign 上补写一次。命令固定为：
-
-```bash
-CAMPAIGN_DIR=/绝对路径/campaign
-STATE_DIR=/绝对路径/本轮Campaign-supervisor
-BATCH_NAME=0002-vc-2.json
-
-python3 -m tools.official_client_capture.codex_upgrade_predispatch_stop record \
-  --campaign-dir "$CAMPAIGN_DIR" \
-  --state-dir "$STATE_DIR" \
-  --batch "$CAMPAIGN_DIR/control/vc/batches/$BATCH_NAME" \
-  --manifest "$CAMPAIGN_DIR/control/vc/run-manifests/$BATCH_NAME" \
-  --failure-kind operator-recovery \
-  --error-type ProcessExit
-
-python3 -m tools.official_client_capture.codex_upgrade_predispatch_stop replay \
-  --campaign-dir "$CAMPAIGN_DIR" \
-  --state-dir "$STATE_DIR" \
-  --receipt "$CAMPAIGN_DIR/control/vc/predispatch-stops/$BATCH_NAME"
-```
-
-`BATCH_NAME` 的序号必须使用四位十进制，阶段使用小写形式。`record`
-会非阻塞取得同一把 `.campaign-run.lock`，验证 Campaign plan、batch、manifest 和全部既有父 run；任何字段、
-路径、摘要、历史或锁状态不一致均拒绝写入。补写和重放均不得运行 action，也不得恢复当前 Campaign。
-`codex-upgrade-campaign-run/v1` 只保留给历史兼容与离线回归；`campaign-start`、`campaign-mark`、
-`campaign-exec` 不得编排新 Campaign。
-
-`campaign-run` 必须向动作注入父 `run_dir`、Campaign 身份、owner nonce 和原始 deadline；动作内的
-`codex_upgrade.py` 只能附加到该父监督器，不能再创建 `CampaignLease`、`.supervisor/run-*` 或重置计时。
-清单分别声明 `execute_items` 和 `reuse_items`。普通执行／恢复批次的前者为空时，必须在 reservation 前
-写入 `incremental-noop`，并以 `scanned_bytes=0`、`live_request_count=0` 退出；唯一不创建 reservation 的
-情况是 `reuse-official-evidence` 引导出的首个 VC-1 no-op 批次，它由导入收据和 VC-1 checkpoint 直接证明
-全部 official Job 已复用且请求、扫描、执行均为零。正式上下文在取得 lease 前拒绝 `successor`、
-`control-epoch`、`evaluation-transition`、`terminal-transition-preflight` 和旧写入入口；0.151 formal 的
-capture、classify、profile、compare、accept、resume 及 canonical 写命令没有父上下文时同样拒绝。
-
-0.154.0 首轮事故链留下的两条过渡恢复条款（metadata-only seal 例外、`permanent-stop-*` 来源 Ledger 的
-只读承接）已于 2026-09-16 移入[历史审计](CODEX_CLI_CLIENT_EMULATION_HISTORY_AUDIT.md#codex-0154-transitional-recovery-clauses)，
-只作只读解释，不是新 Campaign 的执行入口。
-
-旧恢复机制及 Kilo 历史事实只按
-[历史审计](CODEX_CLI_CLIENT_EMULATION_HISTORY_AUDIT.md#codex-0151-historical-recovery)读取，不得成为新 Campaign
-的前置条件。
-
-#### VC-1 中断孤儿的 v3 单次恢复（历史只读）
-
-0.154.0 首轮事故链为 `KeyboardInterrupt` 孤儿增加的 v3 单次恢复条款已于 2026-09-16 移入
-[历史审计](CODEX_CLI_CLIENT_EMULATION_HISTORY_AUDIT.md#codex-0154-transitional-recovery-clauses)。0.154.0 起
-reservation 之后的任何中断统一由 `reconcile-attempt` 对账，真实补跑必须携带已批准的 `recovery-preview/v1`；
-`compile-vc-interrupted-recovery-batch`／`recover-vc1-interruption` 与 `codex-upgrade-campaign-run/v3` 只保留给历史
-回归与只读解释，不得用于新的 Formal 批次。
-
-### Codex 连续监督、时间账本与文档部署
-
-VC-0 冻结 Campaign 总计划、阶段依赖、身份、预算和原始 deadline；每个阶段或恢复批次只根据前序封存
-checkpoint 编译本批次清单。总计划不能预填未来的 approval SHA、Candidate／attempt ID、镜像 digest
-或收据摘要；后续批次必须继承同一 Campaign ID、时间账本和 deadline。
-
-每个批次使用独立父监督器并绑定同一 Campaign 控制链。监督器实时落盘：
-
-- 动作开始、结束和失败事件立即追加并 `fsync`；
-- 每 5 秒记录监督器和 worker 心跳；
-- 每 60 秒把时间区间归类为 `planning／active／waiting`；新流程不得写 `orchestrator-idle`；
-- worker 失联 20 秒、动作超时或编排器 15 秒未派发下一动作时立即停线；
-- v2 及后续批次在原始总 deadline 前预留 120 秒 attempt 清理窗口，并再保留最多 5 秒父监督器终态排空；
-  数据面执行截止到达时先向 Python worker 发送 `SIGUSR1` 展开 `finally`，清理窗口耗尽才强停进程组；
-- 正常停止、信号、会话断开和主机失联都必须留下可审计终态或明确缺口。
-
-编排状态机固定为 `dispatching → executing → evaluating → terminal`。批次内部按冻结队列连续执行，禁止
-人工补派或用 `post-action-idle` 保持心跳；阶段完成后以封存输出编译下一批次。每阶段立即记录起止时间、
-耗时、execute／reuse、失败项、live 请求、扫描次数与字节及下一动作；出现无法分类的分钟即
-`audit-incomplete`，禁止部署。
-
-除 VC-0 已自动生成的首个 VC-1 批次外，每次交接先由操作员审核下一阶段的
-`codex-upgrade-vc-action-plan/v1`，再直接运行下面的原子入口；账本的阶段推进（前序 `stage_completed`、本阶段
-`stage_started`／`stage_completed`）由该入口按本部分“VC-2～VC-6 原子入口治理”写入，操作员只在对账与停线恢复时
-人工 `append`：
-
-~~~bash
-python3 tools/official_client_capture/codex_upgrade.py compile-and-run-vc-batch \
-  --campaign-dir /绝对路径/campaign \
-  --state-dir /绝对路径/本轮Campaign-supervisor \
-  --phase <VC-2...VC-6> \
-  --sequence <全局连续序号，从 2 开始> \
-  --predecessor-checkpoint /绝对路径/campaign/control/vc/<前序>-checkpoint.json \
-  --action-plan /绝对路径/action-plan.json
-~~~
-
-原子入口从取得 `.campaign-run.lock` 到父 run 创建始终持有同一把锁，只接受规范直接前序 checkpoint，
-且本阶段尚未存在 checkpoint；不允许跳号、延长 deadline、重编已封存批次或由 `campaign-run` 内部调用。
-该入口不创建外层 `CampaignLease`，也不接受第二个相对 `--max-wall-seconds`；唯一监督器是它立即启动的父
-`campaign-run`，唯一墙钟边界是 Campaign plan 已冻结的原始绝对 deadline。
-编译后父 run 创建前的任何可捕获失败都会写通用预派发停线收据；SIGKILL 后可由同一工具的 `record` 子命令
-补写，但不能继续原 Campaign。动作返回
-`awaiting_receipts`、`approval_required`、classify 草案的 `draft`，以及候选 seal 第一步的
-`client_checkpoint_created` 时，父 `campaign-run` 将其视为本批合法停靠点并正常封存；
-同一命令绕过父监督器直接运行仍以退出码 2 提示未到终态。
-
-Codex 工具运行时读取的 Framework 和客户端指南属于受管依赖。部署清单必须登记规范路径和摘要，与工具树
-在同一可回滚事务中切换，并从生产运行根完成重放测试；具体生产步骤见 §4.6。
 
 <a id="codex-vc-0"></a>
 ## 4.0 VC-0 冻结升级输入
@@ -1558,7 +1290,7 @@ candidate，也不改生产 selector；这些工作分别从 VC-1、VC-3、VC-4 
 ### 4.0.1 DOC-PRE 与 P0：冻结清单和执行边界
 
 通用冻结、恢复语义、环境与数据安全和时间控制分别以 Framework §5.3.1、§5.1.2、§5.1.4～§5.1.5
-和 §5.3.5 为准；Codex 监督器规则见本部分公共执行约定，固定 ARM64 坐标见 §4.0.3。本节只列 Codex
+和 §5.3.5 为准；Codex 监督器规则见 [§4.7](#codex-4-7)，固定 ARM64 坐标见 §4.0.3。本节只列 Codex
 Campaign 在 P0 中必须落盘的具体输入。
 
 DOC-PRE 先登记并审核本次 maintenance transition；合并后从干净 HEAD 执行 P0。路径级
@@ -2027,6 +1759,12 @@ VC-3 只生成未入库的候选 Catalog；纳入同源 candidate 树并构建�
 - **产物**：候选源码树、版本专属测试资产、post-promotion 门禁执行计划、source transition、构建收据和完整 Candidate 身份元组。
 - **完成标志**：实现闭集通过，源码、构建、镜像和 Profile 身份可复算，生产 Active 未改变且尚未发起候选请求。
 - **失败恢复**：固定后的源码、构建、镜像或 Profile 发生变化时建立新 candidate，只重做受影响闭集。
+  2026-09-19 改造 2 起，**只有候选源码变化**（新候选的 `git_commit` 或 `source_tree_sha256` 至少一项与作废
+  收据冻结的旧快照不同）且候选树内 Catalog stage 收据与 Campaign 级 VC-3 阶段收据逐字节一致时，新 candidate
+  才在同一 Campaign 内以候选 revision 承接（`invalidate-candidate` 作废旧候选 → `revision-open --supersedes`
+  开 r(N+1) → 从 VC-4 首批重来，VC-0～VC-3 的证据、账本与总账全部保留）；源码不变而只换构建参数或镜像
+  的候选在 `record-candidate-build` 的 revision-seal 被拒绝（"不是新候选"），Profile／Catalog 变化属于
+  VC-3 输出变化，按 Framework §5.3.4 建立后继 Campaign，都不能靠 revision 承接。
 
 ### 4.4.1 入库与实现边界
 
@@ -2118,7 +1856,9 @@ python3 tools/official_client_capture/codex_upgrade_vc_receipt.py replay \
   --receipt implementation-tests.receipt.json
 ~~~
 
-构建完成后、创建任何 Candidate attempt 之前，执行：
+构建完成后、创建任何 Candidate attempt 之前，先确认候选 revision 已激活（新 Campaign 在 VC-4 首批前执行
+`revision-open --campaign-dir /绝对路径/campaign --candidate-id <candidate-id> --initial`；作废后的新候选用
+`--supersedes <旧 candidate-id>`），再执行：
 
 ~~~bash
 python3 tools/official_client_capture/codex_upgrade.py record-candidate-build \
@@ -2143,7 +1883,17 @@ python3 tools/official_client_capture/codex_upgrade.py record-candidate-build \
 工具复算干净 Git commit、源码树、二进制、不可变镜像、Catalog、画像派生、动态需求、执行计划和
 source transition，并独立重放实现测试收据及其两份证据后，只写一次生成
 `<campaign>/candidates/<candidate-id>/build-receipt.json`；失败时不得创建 attempt 或发送请求。
-成功时同时封存 `control/vc/vc-4-checkpoint.json`。
+成功时同时封存当前 revision 的 VC-4 checkpoint（r1 为 `control/vc/vc-4-checkpoint.json`，r≥2 为
+`control/vc/revisions/r<N>/vc-4-checkpoint.json`）。
+
+`record-candidate-build` 在同一事务内执行 **revision-seal**（改造 2）：候选必须属于当前 active revision且账本
+active；候选树内的 `catalog-stage-receipt.json` 必须与 revision 记录绑定的 Campaign 级 VC-3 阶段收据逐字节
+相同（不一致属于规则分类或目标画像变化，按 Framework §5.3.4 建立后继 Campaign，不能靠 revision 承接）；
+r≥2 还要以旧候选 `invalidation.json` 冻结的身份快照为基准证明同一性变化——`git_commit` 与
+`source_tree_sha256` 任一可比字段变化即通过，全部相同（只换 image）拒绝——先写 write-once 的
+`revisions/r<N>/seal.json` 与旧候选目录的 `superseded-by.json`，再写构建收据与 VC-4 checkpoint；
+`seal.json` 已写但收据未写、收据已写但 checkpoint 未写两种断点重跑同一命令都幂等收敛。历史隐含 r1
+（改造前的 Campaign）不追溯执行字节校验。
 
 ### 4.4.3 Candidate 身份冻结与 VC-5 交接
 
@@ -2158,6 +1908,11 @@ source transition，并独立重放实现测试收据及其两份证据后，只
 | 画像 | `profile_id`、`profile_digest` |
 
 任一字段变化都表示原 Candidate 已失去同一性，必须建立新 candidate；不得通过改写收据维持旧 ID。
+新 candidate 只在源码层身份（`git_commit`／`source_tree_sha256`）变化且画像层身份不变时才能在同一 Campaign
+内以候选 revision 建立：旧候选先经 `invalidate-candidate preview／apply` 作废（作废收据冻结旧身份快照），再
+`revision-open --candidate-id <新> --supersedes <旧>`；仅构建层或镜像层变化的候选会被 revision-seal 拒绝，
+画像层变化必须建立后继 Campaign。被作废与被取代的候选只读，`compare`／`accept`／`deliver-candidate` 等
+写入口一律拒绝。
 
 仅容器名、Codex 二进制路径或 Compose 坐标与 Campaign 冻结值不同时，才允许在该 candidate 首个
 attempt 前登记一份写一次的运行坐标覆盖收据；`run` 与 `seal` 必须从同一收据读取生效值，磁盘清单与
@@ -2199,7 +1954,11 @@ VC-4 只在构建收据中冻结最终制品，不调用“只落盘身份”的
   `vc5-completion.json`、VC-5 checkpoint 和生产用途所需的 canonical checkpoint。
 - **完成标志**：受影响规则全部通过、继承规则可重放，Campaign 达到 `ready／accepted_not_activated`；
   VC-5 完成收据与 checkpoint 可重放。生产用途的 canonical 剩余集合必须精确为三个 VC-6 项。
-- **失败恢复**：按 Framework §5.3.4 只执行失败、未完成或依赖变化项；继承结果只读复用。
+- **失败恢复**：按 Framework §5.3.4 只执行失败、未完成或依赖变化项；继承结果只读复用。候选级父动作失败
+  按本部分“候选级 revision”三分支收口：可恢复类暂停对账后重派，永久条件停线，其余进入
+  `candidate_review_required` 只读等待——按 reservation 分流对账入账后，判为候选源码问题即
+  `invalidate-candidate preview／apply` 作废并以新 revision 从 VC-4 重来（账本 `revision_required` →
+  `revision-open --supersedes`），否则以 `close-campaign-ledger` 显式停线。
 
 本阶段用 VC-4 的固定制品运行目标画像，并从批准场景和真实第三方入口收集候选证据。候选按
 `candidate_release_mode=previous` 显式选择目标 Release，不得借当前 Active 或客户端自报版本选择画像。
@@ -2264,12 +2023,16 @@ Campaign 与 candidate ID 会和场景后缀、主体及 16 字符 UTC 窗口拼
 seal 之间不得修改 candidate 源码树；`runs/` 及 evidence root 的目录权限至多 `0700`、文件至多
 `0600`。确认必败时执行受管停止和环境恢复，不得强杀并丢失 after 探针。
 
-失败补跑先执行 `resume --rerun-failed --preview-recovery`。预览中的 execute／reuse 必须等于上述依赖
-计算结果，并明确 `reservation_exists=false`、`live_request_count=0`、`scanned_bytes=0`；不得再固定为
-“两个失败、七个复用”等某次历史数量。预览与正式补跑须提供逐字一致的 runtime image、image ID、source、
-build、版本、profile、purpose 和 VC-4 build receipt。身份不变的临时失败才能续跑；身份或首个 attempt
-后的运行坐标变化时，
-按 Framework §5.3.4 建立新 candidate 或新 Campaign，旧 candidate 只读保留。
+失败从哪里接着跑，按候选证据是否已封存分界：**封存前**（reservation 之后、`capture-candidate seal` 之前）
+的 Job 失败或中断，先 `reconcile-attempt --campaign-dir … --attempt-id <id>` 对账并以
+`--approve-recovery-sha256 <review_sha256>` 批准零请求恢复预览，再 `resume --rerun-failed --recovery-preview <path>`
+补跑；预览中的 execute／reuse 必须等于上述依赖计算结果，并明确 `reservation_exists=false`、
+`live_request_count=0`、`scanned_bytes=0`；不得再固定为“两个失败、七个复用”等某次历史数量。预览与正式
+补跑须提供逐字一致的 runtime image、image ID、source、build、版本、profile、purpose 和 VC-4 build receipt。
+**封存后**（compare、逐规则断言、accept）的失败不走 `resume`：按 §4.5.8 以 `evaluation-recover` 分类，
+evaluator 缺陷只重跑受影响规则，临时环境故障只在恢复段 ar<k> 补跑受影响 Job 闭集。身份不变的临时失败才能
+续跑；身份或首个 attempt 后的运行坐标变化时，按 Framework §5.3.4 建立新 candidate 或新 Campaign，旧
+candidate 只读保留。
 
 ### 4.5.2 定向场景、模型双轨与第三方入口
 
@@ -2347,7 +2110,12 @@ Kilo Responses 的 `@ai-sdk/openai` provider 必须显式设置 `options.websock
 2. **生成收据**：在 candidate 源码树外运行受管生成器，形成 capture manifest、Go test trace、
    observed-profile 和两份 Kilo 收据。`build_*` 产物只是 finalizer 输入，不能直接提交给 seal；
    正式收据必须由受管 finalizer 生成。activation fact 必须由运行服务产生；测试 trace 必须来自
-   同源树上的冻结测试日志，生成器不得合成二者。
+   同源树上的冻结测试日志，生成器不得合成二者。驱动脚本的权限收口（`0700／0600`、属主）必须在
+   本步骤内、步骤 3 生成 `evidence-manifest.json` 之前完成；manifest 存在后，它绑定的所有证据根
+   （`evidence/**`）一律不得再 chmod／chown／改写——即便模式不变，ctime 也会漂移，读侧复核即判
+   `evidence-integrity` 永久停线。attempt 根之外或未纳入 manifest 的控制制品仍按各自合同 write-once，
+   不因此笼统禁止 attempt 目录内的其他写入；驱动脚本重跑必须按阶段状态续跑（收据已存在即跳过、
+   目标平台门禁重跑不得再进入 seal 链）。
 3. **生成预览并完成唯一深度扫描**：
 
    ~~~bash
@@ -2454,7 +2222,36 @@ selector 选择的 `record_type` 可能承载多个事实时，必须在 `where`
 收据重放。每条规则最终均为 `status=pass`、`evidence_level=full`；不允许 fail、N／A、手写通过、
 未绑定 inventory 的证据路径，或把继承规则伪装成本轮执行。
 
+**checker 投影输入模式与 `evaluation-run.json`（2026-09-20 改造 5）。** builder 对每条规则、每一侧先由
+`candidate_rule_assertion.project_capture_manifest` 从完整 capture manifest 构造 per-rule 投影（A0 为与规则
+场景相交的 artifact，再沿结构化 artifact 记录的 `source_artifacts` 闭包并入引用条目；顶层字段逐字沿用，
+条目按原顺序，不加新顶层字段），写为 checkpoint 绑定的 `input_projection` 文件，checker 以
+`--capture-manifest-projection <投影路径>` 执行——checker 按同一函数从完整 manifest 重算期望投影，不等即
+`projection-mismatch` 失败关闭，`projection_sha256` 只记录在 checkpoint 与单规则结果里。每条规则每一侧一份
+`codex-upgrade-evaluation-checkpoint/v1`（write-once、链式自摘要，绑定投影摘要、命令摘要、checker 摘要、
+`dependency_projection_sha256`＝规则 id＋validation_mode＋候选／官方投影摘要＋官方权威＋规则契约摘要＋
+checker 摘要＋builder 摘要），批次结束写 `evaluation-run.json`（`codex-upgrade-evaluation-run/v1`，逐规则
+`status／reused_from／dependency_projection_sha256` 与 evaluator 四项摘要）。路径按基线分两种：b0 为
+`assertions/<candidate-id>/`（`results.json`、`checkpoints/`、`evaluation-run.json`），b≥1 为
+`assertions/<candidate-id>/revisions/b<K>/`。`--reuse-from <前序基线 evaluation-run.json>` 且
+`reuse_authority=anchored` 时，`dependency_projection_sha256` 相等的 pass 规则引用式复用（行记
+`reused_from={baseline, checkpoint_sha256}`，checker 调用数为 0）；checker、规则契约或投影任一变化即该规则
+重跑。同基线重入：已有 `evaluation-run.json` 即视为完成，校验各行 checkpoint 与链 head 后按其状态退出、
+不覆盖、零 checker。失败后从哪里接着跑见 §4.5.8。
+
 ### 4.5.6 外部门禁与 accept
+
+**accept 对逐规则断言行的两种校验（2026-09-20 改造 5）。** 当前评估基线有 `evaluation-run.json` 时，accept
+先核对其 evaluator 摘要属该基线授权（b0 只核 checker／builder 等于 plan `tool_identity` 规范 entry，
+b≥1 四项等于 `recovery.json.current_evaluator_digests`）、各 checkpoint 的 checker 摘要与之
+一致、全部规则 `status=pass`，再逐行分两类：**executed 行**（`reused_from=null`）在当前基线的候选阶段与
+inventory 上核对——机器命令必须等于 `build_assertion_command` 权威构造器按当前投影复算的期望命令、
+checkpoint 绑定的文档摘要与结果行一致、证据引用落在当前候选 inventory；**reused 行**
+（`reused_from={baseline, checkpoint_sha256}`）先重放复用锚链（被复用基线 b<J> 到当前基线的 COMMIT 链），
+再核对被复用基线的 `evaluation-run.json` 同样经其自身授权、checker 与当前基线相同、该规则在 b<J> 为 pass
+且 `dependency_projection_sha256` 相等、两侧复用 checkpoint 逐字绑定 b<J> 的历史 checkpoint（摘要、文档、
+状态），并把候选证据引用、前缀与机器命令 context 全部映射到 b<J> 的候选阶段与 inventory（attempt-recovery
+基线的候选前缀与被复用基线不同，不得用当前阶段核对复用行）。任一不成立即拒绝，不得以“历史通过”代替。
 
 在同一 candidate 源码树执行 `make check-egress-spec`、`make test` 和目标平台测试。首次 attempt 必须
 执行全部三项；每次 attempt 均在首项门禁前和末项门禁后生成 `gate_before／gate_after` ARM64 环境
@@ -2506,7 +2303,8 @@ python3 tools/official_client_capture/codex_upgrade.py accept \
 seal 绑定为同一 AcceptanceFact。全部通过后，工具只写一次地保存断言、`accepted=true`、
 `failed_gates=[]`、`production_state=accepted_not_activated` 和 evidence seal，Campaign 进入 `ready`；
 收据事后漂移会使 `status` 重新退回非 ready。
-失败 attempt 不可覆盖，Campaign 保持 `compared`。
+失败 attempt 不可覆盖，Campaign 保持 `compared`。`accept` 与 `compare` 都是候选级写入口：候选不属当前
+revision、账本非 active、候选已作废或已被取代时一律拒绝；已 `accepted` 的候选不得再被作废。
 
 ### 4.5.7 ready 与 canonical 交接
 
@@ -2515,8 +2313,9 @@ seal 绑定为同一 AcceptanceFact。全部通过后，工具只写一次地保
 生产或完成回滚演练。
 
 两个用途都必须生成
-`control/vc/receipts/<candidate-id>/vc5-completion.json` 并以它封存
-`control/vc/vc-5-checkpoint.json`，不能在本阶段宣称已经交付或上线。
+`control/vc/receipts/<candidate-id>/vc5-completion.json` 并以它封存当前 revision 的 VC-5 checkpoint
+（r1 为 `control/vc/vc-5-checkpoint.json`，r≥2 为 `control/vc/revisions/r<N>/vc-5-checkpoint.json`），
+不能在本阶段宣称已经交付或上线。
 `validation_only` 的 `accept` 成功后直接生成这两份制品，保持
 `accepted_not_activated`，不创建 canonical 生产链。`production_replacement` 则在
 `canonical-advance --canonical-step accept` 重放 AcceptanceFact 后生成完成收据和 VC-5 checkpoint。
@@ -2525,7 +2324,8 @@ seal 绑定为同一 AcceptanceFact。全部通过后，工具只写一次地保
 `candidate_external` 或 AcceptanceFact；命令即使能读取更小输入集合，也禁止借此绕过上述门禁。
 
 生产用途先用下列动作体生成零扫描、零请求预览；`--retire-version` 只冻结 VC-6 将处理的旧 Previous，不在
-本阶段删除任何画像：
+本阶段删除任何画像。不带批准摘要的预览是只读操作，可在 `campaign-run` 之外直接执行；此时可省略
+`--supervisor-run-dir`，deadline 取 `control/vc/campaign-plan.json` 冻结的 `original_deadline_at_utc`：
 
 ~~~bash
 python3 tools/official_client_capture/codex_upgrade.py canonical-import \
@@ -2536,16 +2336,26 @@ python3 tools/official_client_capture/codex_upgrade.py canonical-import \
   --active-profile /绝对路径/production-active-profile.json \
   --profile-patch-manifest /绝对路径/profile-rule-patches.json \
   --profile-activation-fact /绝对路径/profile-activation-fact.json \
-  --supervisor-run-dir /绝对路径/campaign-run \
   --phase VC-5 \
   --retire-version <旧-previous-version>
 ~~~
 
 预览必须逐项给出 affected／inherited、execute／reuse、来源类型和 `review_sha256`，同时保持
-`scanned_bytes=0`、`live_request_count=0`。复核后以完全相同参数追加
-`--approve-import-sha256 <review_sha256>`，只写一次初始化 checkpoint；不得复制证据或修改既有 attempt。
+`scanned_bytes=0`、`live_request_count=0`。`review_sha256` 只散列 approval projection：完整导入主题减去
+派发它的父 run 的 `started_at_epoch` 与派生的 `budget_seconds`，原始绝对 deadline 保留；因此离线预览、
+父批次批准与换一个父 run 重放同一批准得到同一摘要，checkpoint 已存在时按同一投影比较即幂等。复核后
+以完全相同参数追加 `--approve-import-sha256 <review_sha256>`，只写一次初始化 checkpoint；不得复制证据
+或修改既有 attempt。批准必须由 `campaign-run` 派发：时间锚从父 run 上下文解析并与其 `state.json`
+交叉验证，批次内动作不得自带 `--supervisor-run-dir`。
 
-随后仍由 `campaign-run` 按顺序派发三个动作体：
+批准与随后三步在同一个纯 canonical 批次内派发：execute 项固定为 `canonical-import`、`canonical-seal`、
+`canonical-compare`、`canonical-accept`，各由恰好一个动作承载，动作命令按工具冻结的映射逐字对应
+（`canonical-import` 带批准摘要；其余三项是对应 `--canonical-step` 的 `canonical-advance`），并用带序号的
+`action_id` 保证 import → seal → compare → accept 的次序；批次不得混入其它 execute 项，也不得给别的命令
+套 canonical item 名。任一 canonical 动作失败时，父监督器按文件事实把它归为 post-run-tooling：修复工具并
+受监督部署后，`reconcile-supervisor-run` 通过即逐字重派同一批次，不新建 Campaign、Candidate 或 attempt。
+
+批次内随后按顺序派发的三个动作体：
 
 ~~~bash
 python3 tools/official_client_capture/codex_upgrade.py canonical-advance \
@@ -2568,6 +2378,83 @@ python3 tools/official_client_capture/codex_upgrade.py canonical-advance \
 `production_status=accepted_not_activated` 并明确提示 §4.6；在 promotion、canary、activation 和
 rollback 收据完成前不得宣称升级完成。
 候选验证镜像以 `previous` 运行，只证明候选规则，不能直接作为默认 `active` 的生产镜像。
+
+### 4.5.8 评估失败的分类与局部恢复
+
+本节是 §4.5.5～§4.5.7 之后“坏在哪里、从哪里接着跑”的操作合同；机制细节见 [§4.7](#codex-4-7)
+“Codex 评估失败局部恢复与断点续跑”。适用对象只有候选证据封存之后的离线评估失败（compare、逐规则断言、
+accept）；封存前的 Job 失败按 §4.5.1 走 `reconcile-attempt` + `resume --rerun-failed --recovery-preview`。
+
+**1. 失败来源与复用授权。** 失败父 run 的动作推出三者互斥的 `failure_source`：`assertion-failed`（断言
+动作，builder 已落 `evaluation-run.json` 含 fail 行；b0 首批未落时由 preview／apply 按 b0 批准清单派生并固定
+`reuse_authority=none`）、
+`offline-compare-failed`、`offline-accept-failed`。`reuse_authority` 由该失败 run 推出，四条规则：
+①`offline-compare-failed` 恒为 `none`；②`assertion-failed`／`offline-accept-failed` 只有在 stop-receipt
+`action_outputs_sha256` 非 `null`、且该输出绑定的条目指向一份存在的 `evaluation-run.json`（`exists=true`、摘要
+非空）时才为 `anchored`，允许下一基线引用式复用——绑定缺失（O1／R2-b：绑定未写即崩溃）或绑定中没有该
+索引为 `none`，下一基线全部规则重跑；③绑定记录的索引摘要与当前 `evaluation-run.json` 不一致直接失败关闭；
+④b0 首批未落索引、由批准清单派生的索引强制 `none`。失败 run 必须先
+`reconcile-supervisor-run` 对账到 `receipt_passed`，`evaluation-recover apply` 才受理。
+
+**2. failure-scope 定位链。** 从失败规则→失败 check→check 引用的证据 artifact→provenance 条目（派生观测
+`derived/…` 沿派生收据的 source 回到原始条目）→产出该证据的候选 Job；官方侧引用只记录不入 J*。定位不到
+Job 的失败（如 compare／accept 工具异常）没有 `transient-environment` 准入。
+
+**3. 四类裁定与出口。** `evaluation-recover preview` 给出 `admissible_classes`，`apply --root-cause-class`
+只能取其中之一：
+- `evaluator-defect`：checker／builder／compare reader／accept reader 缺陷。前提：四项摘要至少一项变化且覆盖
+  缺陷项、修复提交已受监督部署（`--fix-commit`／`--deployment-receipt`）、候选 attempt 的 `evaluation-epoch`
+  链已覆盖当前 evidence 摘要。出口：`evaluator-only` 基线 b<K>，根因 `evaluation.rule-failed`；
+  `stage_sources` 中 capture 恒 `reuse`，compare 按 compare reader 是否变化，断言／accept `local`。
+- `transient-environment`：failure-scope 定位到的 Job 集合 J* 非空。出口：`attempt-recovery` 基线 b<K>
+  （`recovery_revision=ar<k>` 由 apply 按已有段最大编号 + 1 返回，首次才是 `ar1`；`execute_jobs=J*`、`reuse_jobs` 其余、
+  `execute_rules` 为引用 J* 证据的规则），
+  根因 `attempt.job-transient-failure`；随后走第 6 项恢复段。
+- `candidate-source`：候选源码问题，`redirect` 到 `invalidate-candidate preview`（改造 2 三分支）。
+- `approval-inputs`：批准输入（画像、场景、规则）问题，`redirect` 到显式停线后从 VC-2 建后继 Campaign。
+两类真实出口的根因在同阶段跨基线／跨恢复段累计，达 `same_root_cause_retry_limit` 即在 apply 二次判定中
+永久停线（基线停在 prepared，可 `abandon`）。
+
+**4. 基线状态机与 `stage_sources`。** `revisions/b<K>/`：`PREPARED`（diagnosis＋recovery 已写）→
+`AUTHORIZATION`（根因事件已推入项目总账）→ `COMMIT`（`stage_sources` 冻结、账本 `evaluation_baseline`
+激活）；未 COMMIT 的基线只能 `evaluation-recover abandon`（写 `ABANDON`，编号不复用）。当前基线只由账本
+最后一条 `evaluation_baseline` 事件决定；读入口按 `stage_sources` 逐级回溯（`reuse` 只接受已封存的规范结果）；
+批次清单成对携带 `evaluation_baseline／baseline_commit_sha256／evaluator_digests`，评估基线的历史链后继协议
+按账本 `evaluation_baseline` 事件历史核对。
+
+**5. 投影输入与逐规则复用。** 见 §4.5.5：b<K> 的断言批次以 `--reuse-from b<K-1>/evaluation-run.json`
+派发，`anchored` 下依赖投影摘要相等的 pass 规则复用、其余重跑；accept 对 executed／reused 行的校验见
+§4.5.6。C1（accept 动作崩溃）：环境恢复后逐字重派同一批次，builder 零 checker、accept 已封存一致才放行到
+completion。
+
+**6. 恢复段 ar<k> 与增量封存。** `capture-candidate run --attempt-recovery ar<k> --acknowledge-live-requests`
+只补跑 J*（证据根 `<原根>-recovery-ar<k>`，原 attempt 不变），成功段 `awaiting_receipts`，同段逐字重派幂等；
+`capture-candidate seal --attempt-id <id> --attempt-recovery ar<k>` 做增量封存，五类根等式必须成立：
+`dropped_roots = reexecuted_job_roots ∪ superseded_stage_roots`、`delta_roots = recovered_job_roots ∪
+recovery_control_roots(段 evidence／logs) ∪ baseline_private_root`、`reused_job_roots ∩ delta_roots = ∅`、
+`final_roots = reused_job_roots ∪ delta_roots`、投影收据 `dropped_roots` 与基线冻结集合精确相等；S1（投影已
+写、delta 扫描中断）续作不重读已完成条目，S2（合并清单已写、result 未写）直接进第 4 阶段。
+`account-sealed-candidate --attempt-recovery ar<k>` 段级入账后，b<K> 的 compare 重跑（local），断言按第 5 项
+复用，completion 绑定 b<K>。
+
+**7. 段失败与后继段。** 段内 Job 失败或段预约之后中断：`reconcile-attempt --attempt-id <id>
+--recovery-revision ar<k>`（账本 `attempt_recovery_failed`，根因 `attempt.interrupted`）→ 零请求预览按权威链
+（段预约三元组 → `b<K>/COMMIT` → `recovery.json`）取 J*，`planned == execute == J*`、`reuse` 恒空、请求估算
+`known_by_job ∪ unknown_job_ids == J*` 且 `known_total = Σknown` → `--approve-recovery-sha256` 批准 →
+`--authorize-recovery-preview <path>` 消费（`recovery_required → recovery_authorized → active`）→
+`capture-candidate run … --attempt-recovery ar<k+1> --rerun-failed --recovery-preview <path>` 整段重做 J*。
+CLI 与监督器后继协议都重放上述等式。R2 的 attempt-recovery 变体（段动作已成功、父 run 终态前 owner 丢失，
+monitor 封存 `failed／parent-finalize-lost`）：`reconcile-supervisor-run` 可恢复后按 N+1 逐字重派同一批次，段 run
+幂等返回（零请求），再继续段 seal。
+
+**8. 不在本合同内。** `failed_gates` 与 §4.5.6 的外部门禁失败不是评估失败：门禁收据以 attempt 为主体、
+按 §4.5.6 重新执行门禁并生成新收据，不开评估基线、不进入 `evaluation-recover`；同样不在本合同内的还有
+候选源码问题（改造 2 `invalidate-candidate`／`revision-open`）与取得执行权前的父 run 失败（改造 4）。
+`recover-candidate-failed-jobs`（0.154.0 首轮 v7 失败 Job 的后继 Campaign 恢复入口）只接受代码冻结的那一次
+历史直接来源（Campaign `c0154-formal-vc5-recovery-20260916t122646z`、候选 `c0154-candidate-v7`；
+`c0154-formal-vc5-failed-job-recovery-20260917t0527z` 是它生成的后继／control epoch），是历史只读入口，
+不得用于新 Campaign；
+临时环境故障一律走本节第 3／6 项的恢复段。
 
 <a id="codex-vc-6"></a>
 ## 4.6 VC-6 交付或生产激活
@@ -2839,6 +2726,41 @@ RemovalReceipt 必须证明 Catalog、selector 和未知消费者均为零、运
 最新 checkpoint 的 `plan.execute_item_ids=[]` 后，生产激活链才完成并进入 §4.6.8；这仍不授权删除远端
 升级文件，也不是 VC-6 的最终完成事件。
 
+“运行投影已移除”指被退休版本不再出现在 selector、其指向的 ReleaseGraph 与 SnapshotCatalog，以及
+`cmd/egressruntimedump` 导出的运行闭集中；它不等于删除画像字节。退休当轮的处置按下面的闭集判定，
+RemovalReceipt 必须逐份登记被退休画像的路径、删除前摘要与处置状态：
+
+1. 被任一历史终态收据（`docs/egress/maintenance/CODEX_CLI_*_TERMINAL_STATE_RECEIPT.json`）登记为
+   `runtime_catalog.active_profile` 或其它逐文件校验制品的画像，**不得删除、不得改名、不得移动**，
+   只从 Catalog、selector 与运行投影中移除，状态记为 `retained_as_frozen_terminal_artifact`；
+2. 未被历史终态收据引用、但被 `catalogdata/version-route-migration-receipts.json` 的
+   `profile_digests` 引用的画像，迁入 `catalogdata/version-route-migration-artifacts/frozen-profiles/`
+   并在收据中记 `historical_route_profile_preserved=true` 与引用数（0.147 退休即此形态）；
+3. 两类引用都没有的画像才允许直接删除，状态记为 `absent` 并给出 `deleted_in_commit`。
+
+active SnapshotCatalog 的裁剪必须是确定性的：以退休前的快照为输入，仅去掉被退休版本的条目，其余条目
+逐字保留，按 `json.dumps(sort_keys=False, separators=(",", ":"), ensure_ascii=False)` 加尾换行重新
+编码，文件名取其 SHA-256；同轮的历史 ReleaseGraph 与历史 SnapshotCatalog 一律逐字不变。晋升时产出的
+中间快照仍含被退休版本，必须以 `promotion_intermediate_snapshot_catalog` 单列，不得回改。
+
+第 1 类的判定优先于操作员偏好：历史终态收据与冻结源码台账的护栏不因一次退休而重签，凡需要改写它们
+才能删除的画像一律按第 1 类处置。
+
+写入 §4.6.8 终态收据时，`retired_runtime_profiles` 只登记第 3 类（已删除）画像——通用终态门禁会逐条
+断言该清单里的路径**已不存在**；第 1 类与第 2 类分别用 `retained_runtime_profiles` 与
+`relocated_runtime_profiles` 登记，退休事实以 RemovalReceipt 为准。第 1 类还会让运行目录出现不在
+`cmd/egressruntimedump` 闭集内的文件，因此"运行闭集相等"不是裸 diff：`check-egress-spec` 用
+`tools/check_runtime_catalog_projection.py` 比较，只有同时满足下列条件的文件才不参与比较——
+两份收据（当前 Active 终态收据与其 `runtime_profile_removal` 绑定的 RemovalReceipt）自摘要、
+绑定摘要与 Campaign 身份一致；路径严格位于该退休版本的
+`catalogdata/runtime/profiles/<版本>/` 下、无路径穿越、是普通文件且非符号链接；两份收据的
+路径、摘要与状态一一对应；文件当前摘要与收据一致；该文件既不在导出结果中，也不被当前 Catalog
+引用。排除之后其余文件仍必须与导出结果逐字节完全一致，任何未经收据批准的多余文件、摘要漂移或
+缺失都失败关闭。审计索引必须由
+`tools/codex_audit_index.py generate` 产出（schema `codex-upgrade-audit-index/v1`），终态收据登记它的
+坐标并以 `audit_index_identity_sha256` 绑定其自摘要；手工编造的索引会被 `codex_audit_index.py check`
+在 `check-egress-spec` 内拒绝。
+
 ### 4.6.8 私有归档与远端清理
 
 归档前必须把原始抓包、Campaign、AcceptanceFact、promotion、post-promotion、activation 和
@@ -2892,8 +2814,548 @@ python3 tools/official_client_capture/codex_upgrade.py deliver-candidate \
 生产用途第一次不携归档／清理收据调用 `deliver-candidate` 时，合法终止于
 `production_archive_pending`，且不得生成 VC-6 checkpoint。第二次必须同时携带两张收据；只给一张、
 收据不在本 Campaign 内、主体不一致或证据摘要漂移时全部失败关闭。两张收据重放通过后，
-才生成 `control/vc/receipts/<candidate-id>/vc6-completion.json` 和
-`control/vc/vc-6-checkpoint.json`，`status --candidate-id` 才能报告最终完成。
+才生成 `control/vc/receipts/<candidate-id>/vc6-completion.json` 和当前 revision 的 VC-6 checkpoint
+（r1 为 `control/vc/vc-6-checkpoint.json`，r≥2 为 `control/vc/revisions/r<N>/vc-6-checkpoint.json`），
+`status --candidate-id` 才能报告最终完成。
+
+---
+
+<a id="codex-4-7"></a>
+## 4.7 公共控制面与恢复约定
+
+本节是第四部分全部阶段共用的控制面合同（非独立阶段），从 VC-0 前移到这里，以免读者在进入 VC-0 之前先翻过全部公共条款；进入阶段前的四条前提见第四部分开头的摘要。历史只读条款不在本节，统一见[历史审计](CODEX_CLI_CLIENT_EMULATION_HISTORY_AUDIT.md#codex-0154-transitional-recovery-clauses)。
+
+1. VC-0 冻结 Campaign 总计划、身份、阶段依赖、预算和原始 deadline；每个阶段或恢复批次只在前序
+   checkpoint 封存后编译本批次不可变清单。不得在 VC-0 预填后续尚未产生的批准摘要、candidate／attempt
+   ID、镜像 digest 或收据摘要，也不得在批次启动后补写。总计划是 Formal plan 产物，不是批次动作清单。
+2. 阶段动作的唯一派发入口是 `codex_upgrade_supervisor.py campaign-run`。本部分的阶段命令块均为已冻结
+   v2 清单中的 `action.command`，不是操作员可绕过监督器直接执行的入口。只有以下控制面动作不进入
+   阶段队列：VC-0 的 `preflight_only plan` 只创建离线预检；Formal `plan` 只能由
+   `codex_upgrade_vc0_closeout.py` 在原子收口进程内调用；`reuse-official-evidence` 创建全新 Campaign，
+   以零请求导入已封存官方证据，并生成“全部 official Job 为 reuse”的 VC-1 no-op 批次及 checkpoint；
+   `compile-and-run-vc-batch` 在同一个非阻塞 state-dir 锁内编译下一批并立即创建父 run；
+   `compile-vc-batch` 仅允许历史读取和内部测试，不得用于新的 Formal 批次；
+   `compile-vc-interrupted-recovery-batch` 与 `recover-vc1-interruption` 是 0.154.0 首轮事故链的 v3 历史入口，
+   只保留给历史回归，新 Campaign 的中断统一由 reconciler 承接；
+   sequence 4 预派发封口与 deadline 孤儿直接封口两个一次性入口已于 2026-09-16 删除，其历史收据只按
+   [历史审计](CODEX_CLI_CLIENT_EMULATION_HISTORY_AUDIT.md#codex-0154-retired-entrypoints)读取。
+   这些入口都不得放入 `campaign-run` 动作队列，
+   不得延长原始 deadline 或执行阶段数据面动作。
+3. 身份变化、失败恢复和 `execute／reuse` 计算统一执行 Framework §5.1.2、§5.3.2～§5.3.4；各阶段只写
+   Codex 专用触发条件，不重复建立身份或恢复矩阵。
+4. `validation_only` 和 `production_replacement` 都必须经过 VC-6。前者只完成只读交付出口，后者继续
+   production promotion、canary、切流、实际回滚和目标恢复。
+
+### Codex 0.154 起的项目总账、工具身份策略 v2、对账与只读导入
+
+本节是 2026-09-15 改造方案（A0～A3b）落地后的最小规范；下列行为自 0.154.0 起对 Formal Campaign 强制
+生效，早于 0.154.0 的 Campaign 只按各自冻结的历史合同只读回放。0.154.0 首轮事故链的 sequence 专用入口、
+权限别名补偿与 deadline 孤儿封口条款已删除，v3 中断孤儿恢复与两条过渡恢复条款已移入历史审计，均只作只读解释。
+
+**两层预算与项目总账。** 每个升级项目在宿主数据根建立追加式项目总账 `upgrade-project-ledger/`：
+`plan.json` 一次写死 `absolute_deadline_utc`（老板批准，记录批准人与时间）、可选 `live_request_budget`、
+`same_root_cause_retry_limit`、`root_cause_codes_sha256` 与算法版本、`estimation_policy`、`fixture_only`、
+初始精确／估计请求数、初始身份键清单摘要、初始根因计数、`bootstrap_cutover` 与已关闭 Campaign 账本
+head；`events/NNNNNN.json` 只有六种事件：`campaign_registered`、`campaign_registration_rejected`、
+`reconciliation_committed`、`accounting_resolved`、`root_cause_repaired`、`campaign_terminal`
+（`terminal_reason` 只能是 `deadline_wall_clock`、`deadline_live_requests`、`root_cause_limit`、
+`accounting_unresolved`、`environment_contaminated`、`identity_changed`、`superseded`、
+`prior_stop_the_line`、`prior_upgrade_complete`，以及 2026-09-19 改造 4 新增的 `integrity_mismatch`——
+不可变控制或证据制品完整性异常：COMMIT／父 run 制品完整性异常，2026-09-22 起还包括已封存
+EvidenceManifest 的不可变 stat 边界漂移，即动作诊断 `failure_class=evidence-integrity`）。权威数据是
+plan 加 events，`head.json` 只是缓存：写入时在目录锁内完整重放并以 head sha 做 CAS，缓存缺失或落后可
+重建，超前或同序号摘要不符失败关闭。Campaign 账本（`UpgradeTimingLedger`）继续记录本 Campaign 的阶段、
+attempt 与停线；跨账本事务由 Campaign 目录 `ledger/outbox/batch-NNNNNN/` 承担：若干 `entry-NN.json`
+是同一项目事件 payload 的分片，`COMMIT` 绑定 `entry_count`、末项 SHA 与 batch SHA，**一个 batch 严格
+对应一个项目事件**；补齐器 `reconcile-project-ledger` 只推送带 `COMMIT` 的 batch，缺项、断链、篡改、
+COMMIT 后追加 entry 即失败关闭，`bootstrap_cutover` 已吸收的 batch 不再推送。锁顺序固定先项目锁后
+Campaign 账本锁。`plan`、`reuse-official-evidence` 在项目锁内做 admission（总账 blocked、剩余预算为 0、
+根因达上限、超过 `formal_open_limit`、Campaign deadline 超过绝对截止即拒绝并追加拒绝事件）；
+`campaign-run`、`resume`、`capture-official seal` 开始前先执行补齐器再锁内重放，本 Campaign 必须有注册
+事件且无拒绝、终态事件。`fixture_only` 总账只允许 staging 路径内的 Campaign。
+
+**统一计量单位与账务状态。** 官方请求只由 `live-request-provenance/v2` 逐请求核算：计量单位是 HTTP
+POST 模型端点或 client 方向 WebSocket `response.create`；身份键为 producer run ID、来源类别与原生记录
+坐标，realpath 与 SHA 只作完整性；同一 Job 只有一个权威来源，capture／compact 的 mitm 分支与 relay 精确，
+direct 分支按总账冻结的 `estimation_policy` 计上界并标记，无同场景可解析分支即 `unresolved`。请求部分
+状态只有 `resolved`、`estimated`、`unresolved`；`unresolved` 使总账 blocked，blocked 期间只允许
+`accounting_resolved`、`root_cause_repaired`、`reconciliation_committed`、`campaign_terminal`，禁止注册、
+派发、resume、复用与 seal。`accounting_resolved` 必须绑定原 operation、新 provenance 审计、准确身份键
+清单与 delta，逐个原子补账，集合清空才解除。身份键全局去重，估计按来源（producer run）去重。
+
+**根因编码。** 所有生产者与消费者使用受管 `root_cause_codes.json`，根因 ID 只由
+`component`、`stable_error_code`、`failed_step` 与错误码登记的稳定维度生成（`rc1-` 前缀），诊断全文
+只进审计详情；枚举表或算法变化必须携带旧新映射收据并继承累计次数。代码缺陷的修复以
+`root-cause-repair/v1` 收据绑定修复提交、定向回归与部署收据，产生 `root_cause_repaired` 事件清零，
+不激活历史 Campaign。
+
+枚举表 `root_cause_codes.json`（`codex-upgrade-root-cause-codes/v1`，算法 `structured-root-cause/v1`）
+当前登记 23 个稳定错误码：15 个结构化码——`campaign-run.action-failed`（supervisor，维度 `phase`）、
+`vc0-closeout.step-failed`（vc0-closeout）、`supervisor-run.interrupted`、`attempt.interrupted`、
+`attempt.deadline-expired`、`attempt.accounting-unresolved`、`attempt.environment-contaminated`、
+`attempt.identity-changed`（均为 reconciler，维度 `phase`），2026-09-19 改造 4 新增的
+`staging.abandoned`、`staging.commit-failed`（orchestrator，维度 `phase`＋`stage`）、`parent-start.failed`、
+`commit.integrity-mismatch`（supervisor，维度 `phase`），改造 2 新增的 `candidate.source-change-required`
+（candidate，维度 `phase`，只由 `invalidate-candidate apply` 产生），以及 2026-09-20 改造 5 新增的
+`evaluation.rule-failed`（evaluator，维度 `phase`，`failed_step` 为首条失败规则 id，compare／accept 的工具异常
+分别为冻结动作 id `compare`／`acceptance`，只由 `evaluation-recover apply --root-cause-class evaluator-defect`
+产生）与 `attempt.job-transient-failure`（reconciler，维度 `phase`，`failed_step` 为首个受影响 Job id，只由
+`… --root-cause-class transient-environment` 产生；项目总账 migration `000003`）——以及 8 个只读 `legacy` 字面量，后者只用于
+把 0.151／0.154 历史账本的旧根因映射进同一计数空间，不得由新工具产生。枚举表每次变化都必须在部署前
+紧邻写入项目总账 `migrations/NNNNNN.json`（`root-cause-code-migration/v1`，绑定旧新表摘要与 ID 映射），
+否则新工具拒绝读取生产总账。项目总账冻结
+`root_cause_codes_sha256` 与 `root_cause_algorithm_version`；同根因在同一项目内跨 Campaign 累计，达到
+`same_root_cause_retry_limit`（默认 2）即拒绝注册、派发、恢复、复用与封存，直到修复收据清零。生产者
+只能通过 `codex_upgrade_root_cause.structured_root_cause` 生成根因 ID，禁止手写字面量。
+
+**工具身份策略 v2。** 受管目录内的 `tool_identity_policy_v2.json` 把受管文件分为 `wire_producer`、
+`evidence_semantics`、`control` 三层加 `ignored`，编排器 `codex_upgrade.py` 按函数闭包分别归入 wire
+与 evidence 根；`plan` 把策略写入 `campaign.json` 并单独记录 `policy_sha256`，工具身份同时输出
+`files_sha256`、`wire_producer_sha256`、`evidence_semantics_sha256`、`control_sha256` 与
+`policy_sha256`。只有 wire producer 层是重采判据：wire 身份变化必须经两阶段 transition，`intent`
+冻结受影响 Job 闭集（受影响等于全部即拒签，改用普通 Formal 后继），批准后闭集 Job 用新身份补跑，
+`final` 绑定该 attempt 全部 Job complete；`evidence_semantics` 变化只在 seal／评估前追加单调的
+`evaluation-epoch-<n>` 链；`control` 变化只重跑控制门禁并留痕；`policy_sha256` 变化不得沿用既有
+Campaign，必须升级 `policy_version` 并经 `policy-compatibility-receipt/v1` 与
+`policy-activation-certification/v1` 后以新 Campaign 承接。旧 Campaign 无策略摘要按 v1 整树比较。
+部署收据、执行合同、VC-0 收口与 control epoch 一律比当前有效 wire 身份与 `policy_sha256`；
+`_verify_execution_tree`、三副本互等、finalizer 与账本的 producer 溯源仍比整树。
+`verdict-official-attempt-identity` 从后一份部署收据的 `rollback_backup` 副本按策略重算历史 wire
+身份裁定 `equal／different`；没有副本时只有 v1 整树相等才算相等。
+
+**VC-2～VC-6 原子入口治理与账本预算（2026-09-16 增补）。** 0.154.0 起 `compile-and-run-vc-batch` 是
+VC-2～VC-6 每一批的唯一强制入口，四层治理在它内部闭合，不再依赖操作员人工 `append`：
+（1）取 state-dir 锁与任何落盘之前先经项目总账 admission，与 `campaign-run` CLI 同一底层门禁
+（未注册、blocked、根因达上限、超绝对截止一律拒绝且无副作用）；（2）只读预检 Campaign 绑定的
+UpgradeTimingLedger：必须 active 且版本、用途一致，目标阶段不得倒退，尚未登记完成的前序阶段必须已有成功封存的
+checkpoint；（3）batch 与 manifest 先落到 staging attempt，父 run 以 `prepared` 起动后，在同一把锁内的提交四步
+第一步（`commit-ledger`）于账本收口锁内按序补写前序 `stage_completed` 与目标阶段 `stage_started`（只读导入的
+Campaign 会在 VC-2 首批一次补齐 VC-0／VC-1），随后发布正式产物、写 COMMIT、父 run 转 `running`；账本此刻拒绝
+即提交四步失败（P3），父 run 封存为 `aborted_prepared`（`staging-commit-failed:commit-ledger`）、序号未占、同序号
+重派，不再产生预派发停线收据；（4）父 run 成功且本阶段 checkpoint 已封存则写 `stage_completed`，同阶段
+多批时只在封存批写一次，幂等。只读导入的 Campaign 第 2 批派发前，入口在同一锁内先把零请求 no-op 首批跑成父 run
+历史，满足监督器“batch_sequence 从 1 连续”的要求；首批含真实动作时不代跑。父动作失败的账本收口按
+阶段分层：VC-1～VC-3（Campaign 级阶段）仍由监督器写 `stage_abandoned`＋`stop_the_line`，此后本 Campaign
+的任何批次都被拒绝，唯一下一动作是对账；VC-4～VC-6（候选级阶段）按下文“候选级 revision”的三分支收口。
+
+**批次 staging／WAL 与唯一提交点（2026-09-19 改造 4）。** 0.154.0 起总计划以 `batch_model=staging`
+创建的 Campaign（历史 plan 无该字段即 `legacy`，只读回放不变），VC-2～VC-6 每批的编译产物先落到
+`control/vc/staging/NNNN-vc-x/attempt-K/`（`batch.json`、`run-manifest.json` 与
+`codex-upgrade-vc-staging-prepared/v1` 的 `PREPARED` 标记，绑定入口预分配的父 run owner nonce），父 run 以
+`prepared` 状态起动；写完 `campaign-run-manifest.json` 后、执行任何动作前，在同一把锁内依次完成
+账本事件 → 发布正式 `batches/`／`run-manifests/` → 写 `control/vc/commits/NNNN-vc-x.json`
+（`codex-upgrade-vc-commit/v1`，绑定 batch／manifest 摘要、父 run 目录、owner nonce 与账本事件 id）→
+父 run 转 `running` 四步；**正式序号只由 COMMIT 占用**（序号 1 由 VC-0 在 `campaign.json` 内绑定），
+`batches/` 里没有 COMMIT 的半产物不计入序号并由下一次入口归档。取得执行权前的失败分四类处置：
+P1 prepare 之后、父 run 之前失败（没有父 run）——入口写 `codex-upgrade-staging-abort/v1`（`ABORT`，write-once
+且逐字段内容核对）并自行对账入账（`staging-abort-reconciliation/v1`，根因一律 `staging.abandoned`，维度
+`phase`＋`stage`），序号未占，同序号以新 staging attempt 重新 prepare；
+P2 父 run `prepared` 后 owner 丢失——monitor 或 reconciler 把它封存为 `aborted_prepared`
+（`prepared-abandoned`，`reconcile-supervisor-run` 归根因 `staging.abandoned`，stage=`parent-run`），同序号重派；
+P3 提交四步中途失败——按 `staging-commit-failed:<step>` 封存为 `aborted_prepared`（根因
+`staging.commit-failed`，stage=失败的那一步），同序号重派；P4 COMMIT 已写但父 run 未取得执行权（`owner-lost`／`state-write-failed`，
+`codex-upgrade-parent-start-failure/v1`）——序号已占，账本按可恢复父失败暂停（`recovery_required`，根因
+`parent-start.failed`），对账通过后只能以 N+1 逐字重派同一批次内容（九个不可变字段逐字相等）。
+COMMIT 存在但自摘要无效、owner nonce／run 目录不匹配、Campaign／阶段／序号／规范路径任一不一致的外来
+COMMIT 一律 `commit-integrity-mismatch`：永久停线（`terminal_reason=integrity_mismatch`），序号视为已占且
+不可重派；只有同 Campaign／阶段／序号／规范路径且确属同序号另一 attempt 的 COMMIT 才算“本 run 未占序号”。
+`codex-upgrade-predispatch-stop/v1` 自此只作历史只读：`codex_upgrade_predispatch_stop.py record／replay`
+对 staging 模型 Campaign 一律拒绝。
+
+**候选级 revision（2026-09-19 改造 2）。** VC-4～VC-6 的产物按候选 revision 分层：r1 保持原路径
+`control/vc/vc-{4,5,6}-checkpoint.json`，r≥2 落在 `control/vc/revisions/r<N>/<phase>-checkpoint.json`；
+每个 revision 目录还含 `revision.json`（`codex-upgrade-candidate-revision/v1`：候选、绑定的 Campaign 级
+VC-3 checkpoint 与阶段收据、r≥2 的 `supersedes` 指向被取代 revision 及其作废收据与账本事件摘要）、
+`COMMIT`（`codex-upgrade-candidate-revision-commit/v1`，绑定 `revision.json` 自摘要）与
+`record-candidate-build` 写出的 `seal.json`（`codex-upgrade-candidate-revision-seal/v1`）。当前 revision 只由
+账本最后一条 `stage_revision` 事件决定，且目录 COMMIT 摘要必须与事件一致；改造前的历史 Campaign
+（已有原路径 VC-4 checkpoint 且无 `revisions/` 目录）隐含 r1 只读重放；两者都不成立的新 Campaign 在
+VC-4 首批、`plan-candidate-gates` 与 `record-candidate-build` 前必须先执行
+`revision-open --campaign-dir … --candidate-id <id> --initial`（admission → 绑定 VC-3 → `revision.json`＋
+`COMMIT` → 账本 `stage_revision`，幂等）。VC 批次自 `codex-upgrade-vc-batch/v2` 起携带
+`candidate_revision`／`candidate_id`（Campaign 级阶段为 null）；staging 模型的 `campaign-run` 清单成对携带
+同样两字段并与正式 batch 逐字一致，legacy 模型清单不得携带。VC-4 的前序固定为 Campaign 级 VC-3，
+VC-5／VC-6 的前序为同 revision 的上一阶段；账本 `completed_phases` 只算 Campaign 级阶段与当前 revision，
+同 revision 已完成的阶段不得重开，越过目标阶段回到 VC-4 必须由 `stage_revision` 授权。
+
+证据完整性（`evidence-integrity`）由生产者明确给出、监督器只校验记录不反推：候选 compare／accept 等读侧
+复核已封存 `evidence-manifest.json` 的不可变 stat 边界（目录项、大小、mtime／ctime、inode、mode 与 metadata
+摘要）不一致时，`verify_manifest_boundary` 抛 `EvidenceManifestBoundaryDriftError`，codex_upgrade 以
+`EvidenceIntegrityError` 原样携带 `failure_class=evidence-integrity` 与观测
+`evidence-manifest.boundary／stat-boundary-drift` 写入动作诊断（v3）；父监督器不把它升级为
+`post-run-tooling`、不写 post-run-tooling 收据，账本直接 `stop_the_line`；`evaluation-recover` 与逐字重派
+门禁一律拒绝；reconciler 固定终态 `integrity_mismatch`（2026-09-22 v14r4 批次 15：seal 之后驱动脚本再次
+chmod 已封存证据，16 个条目 ctime_ns 漂移，ctime 不可合法回写、manifest 为 write-once 产物，当前 attempt
+不可恢复，只能停线并修复后重建 Campaign）。
+
+候选级阶段的父动作失败按三分支收口：可恢复类（环境前提、零请求后处理、父启动失败）保持
+`recovery_required` 不变；命中永久条件（身份／策略漂移、环境污染、恢复失败、deadline、请求预算、根因
+上限、证据完整性，或账本已 `stop_required`／总账 blocked／账务未决／绝对截止已到／根因已达上限）走
+现有停线合同；其余写 `stage_abandoned`＋`candidate_review_required`（不写 `stop_the_line`），账本进入
+只读等待：禁止派发与新 attempt，只允许对账、候选作废、`stage_abandoned` 与 `stop_the_line`。对账按
+reservation 分流：父 run 期间为该候选发布过 reservation 的只认 `reconcile-attempt`，否则只认
+`reconcile-supervisor-run`（该状态下对账只入账，不写 `receipt_passed`）。判为候选源码问题时以两步式
+`invalidate-candidate preview|apply --campaign-dir … --candidate-id <id> --reviewer <人> [--evidence …] [--candidate-source …]`
+（`preview`／`apply` 是第一个位置参数）作废：`preview` 依次做 admission（与 `plan` 同集合，加总计划 deadline）、候选属当前 revision 且未
+accepted、入账核对（已 seal 候选必须有 `account-sealed-candidate:<cid>:<attempt>`；每个未 seal attempt 必须有
+`attempt-reconciliation/v1` 收据与 `reconcile-attempt:<id>` 总账摘要绑定；引起 review 的失败父 run 由正式
+COMMIT→`parent_run_dir`→失败摘要唯一定位，再按上述分流核对收据与总账摘要）、身份快照（构建收据 →
+attempt 身份 → `--candidate-source`，commit 与源码树摘要都取不到即拒绝）、诊断草案
+（`candidate-invalidation-diagnosis/v1`，绑定项目总账 head，`review_sha256` 只散列稳定字段），不落盘；
+`invalidate-candidate apply … --approve-sha256 <review_sha256>` 重跑同集合 admission 并复验草案（总账 head、身份快照或证据变化即
+摘要不同而拒绝），write-once 写 `candidates/<id>/invalidation.json`
+（`codex-upgrade-candidate-invalidation/v1`），候选级阶段仍 active 时先 `stage_abandoned`，以零请求
+`reconciliation_committed`（根因 `candidate.source-change-required`，维度 `phase`）推入总账并二次判定：命中
+停线条件即现有停线合同（不写 `candidate_invalidated`），否则账本 `candidate_invalidated`（绑定作废收据与
+outbox COMMIT 副本）进入 `revision_required`，只允许幂等重复的 `candidate_invalidated`、`stage_revision` 与
+`stop_the_line`。随后 `revision-open --candidate-id <新> --supersedes <旧>` 开 r(N+1)（账本必须
+`revision_required` 且旧候选已作废），新 revision 从 VC-4 首批重新开始；监督器历史链把“候选级失败批次 →
+新 revision 的 VC-4 首批”作为失败批次的合法后继，前提是完整重放旧候选作废收据、失败 run 对账收据
+（按 reservation 分流）、新 revision 记录与 COMMIT 及账本事件的摘要链。作废与被取代的候选只读：八个候选级
+写入口（`plan-candidate-gates`、`record-candidate-build`、`capture-candidate run／seal`、`compare`、`accept`、
+`deliver-candidate`、`canonical-import`）都要求候选属当前 revision、账本 active、且不存在
+`invalidation.json` 与 `superseded-by.json`。同阶段的作废根因跨 revision 在项目总账累计，达到
+`same_root_cause_retry_limit` 即在第二次 `apply` 的二次判定中永久停线；`campaign_status` 以
+`candidate_revisions` 列出各 revision 的候选与状态（`active`／`invalidated`／`superseded`／`pending`／`opening`）。
+
+Campaign 账本自 0.154.0 起可在 `create` 时以 `--project-ledger-dir` 绑定项目总账：绑定后总预算上限是账本开始到总账
+绝对截止的整分钟数，阶段预算由 Campaign 计划在总预算内以 `--stage-budget-minutes VC-N=分钟` 规定；未绑定的账本沿用
+总 360 分钟与各阶段默认上限。VC-2 起的人工核对（分类草案、联合摘要、比较结果）发生在批次之间，阶段之间账本
+`active_phase` 为空、不计阶段墙钟，因此阶段预算按含人工核对的实际节奏设置，不得为同一工作对象新建账本重置计时
+（框架 §5.3.5：数值由客户端指南或已批准的 Campaign 计划规定，先到即停线）。项目总账的消费者门禁除
+`plan`、`reuse-official-evidence`、`campaign-run`、`resume`、official seal、`compare`、`accept` 外，还包括候选
+`capture-candidate seal` 与 `canonical-advance`（其 seal／compare／accept 步骤映射到同名消费者，VC-6 生产步骤按
+`canonical-advance` 本身准入），不得成为绕开门禁的旁路。
+
+**对账（reconciler）。** 中断只有两种入口，各自输出独立不可变收据，自身模型请求为零：
+`reconcile-supervisor-run --run-dir --campaign-dir` 处理派发前失败、父监督器 SIGKILL 或中断且尚无
+attempt（run 期间已产生 reservation 时拒绝并指向 attempt 入口），输出 `supervisor-run-reconciliation/v1`，
+不伪造 attempt 事件；2026-09-19 改造 4 起它还承接取得执行权前的三类父 run 失败（不读动作诊断，根因直接由
+分类事实生成）：`parent-prepare-abandoned`（`aborted_prepared` 终态，根因 `staging.abandoned` 或
+`staging.commit-failed`，可恢复 → 账本 `receipt_passed` 的下一动作为 `redispatch-same-sequence`，同序号重新
+prepare）、`parent-start-failed`（COMMIT 已写、父 run 未取得执行权，根因 `parent-start.failed`，可恢复 →
+`redispatch-same-batch`，按 N+1 逐字重派）、`commit-integrity-mismatch`（固定永久停线
+`integrity_mismatch`）；2026-09-22 起动作诊断 declared 为 `evidence-integrity` 的父 run 同样固定终态
+`integrity_mismatch`（无论总账与账本状态），对账不补写 post-run-tooling 收据、`next_command` 只给
+`permanent-stop-integrity_mismatch`，不给出任何同批次重派建议；无父 run 的 staging 中止（P1）不经该入口，由 `compile-and-run-vc-batch` 下一次派发时
+自行对账入账。2026-09-21 改造 5 M2 起它还承接取得执行权之后的第四类父 run 失败 `parent-finalize-lost`
+（正式单动作恢复段 run 已成功、动作输出绑定已写、父 run 写终态前 owner 丢失；根因复用
+`supervisor-run.interrupted`、`failed_step=parent-finalize`；可恢复 → `redispatch-same-batch`，逐字重派命中段 run 的
+幂等返回，零请求；见本部分“评估失败局部恢复与断点续跑”）。`reconcile-attempt --campaign-dir --attempt-id`
+处理 reservation 之后的任何中断，输出 `attempt-reconciliation/v1`，不回写 `attempt.json`，不新增 attempt
+状态枚举；改造 5 M2 起加 `--recovery-revision ar<k>` 对账恢复段（段预约之后的中断／失败，见下文）；候选级阶段处于
+`candidate_review_required` 时两个入口都只入账、不写 `receipt_passed`（阶段已关闭，下一动作是
+`invalidate-candidate` 或显式停线）。Job 完成态：
+`complete` 必须同时有有效 result 与对应 checkpoint；有证据目录但无终态 checkpoint 为 `indeterminate`
+并归入失败集合；证据目录只用于请求计数。成功封存的 official 阶段不经对账，其模型请求由
+`account-sealed-official --campaign-dir` 以同一套 provenance 核算（精确身份键按总账去重、估计上界按来源去重）
+写入一份不带根因的 `reconciliation_committed` batch 并推送总账，按 attempt 幂等。统一顺序（每步幂等，
+中断后从第一步重放）：
+
+1. Campaign 侧写收据；attempt 分支在 Campaign 账本追加无收据的 `attempt_failed`（带根因）。账本此前
+   未登记该 attempt 时先补登 `attempt_started`；账本已 `stop_required` 且无 active attempt 时无法登记，
+   如实记录为跳过，禁止执行 Job。
+2. 写一个 outbox batch，目标事件 `reconciliation_committed`：请求部分是 provenance 核算的未入账身份键
+   与估计 delta（supervisor-run 通常为 0 但必须写；无法精确且无估计依据时 `unresolved`，不写 0），
+   根因部分是根因编码；entry 绑定收据 SHA，attempt 分支还绑定 `attempt_failed` 事件 SHA；写 `COMMIT`。
+3. 执行补齐器把 batch 推成一个项目事件。
+4. 锁内重放总账，得到根因计数、累计请求、剩余预算与 blocked。
+5. 判定：总账 blocked 或本次账务 `unresolved` → 永久停线；身份不变（当前有效 wire 身份与
+   `policy_sha256` 相等）、环境已恢复或可恢复（无污染记录、无 restoration_error）、Campaign 账本仍
+   active、Campaign 与项目 deadline 未到、剩余请求预算大于 0、该根因累计未达上限 → 可恢复；否则
+   永久停线，`terminal_reason` 按首个命中的条件取值。
+6. 可恢复：supervisor-run 在 Campaign 账本追加 `receipt_passed` 绑定账本内收据副本，phase 保持
+   active，可重新派发同一批次；attempt 生成零请求 `recovery-preview/v1`（冻结
+   `complete／failed／indeterminate／pending` 四类闭集、`reuse／execute` 集合、按 provenance 逐 Job 给出
+   的预计新增请求数、`reservation_exists=false`、`live_request_count=0`、`scanned_bytes=0`），操作员以
+   `reconcile-attempt --approve-recovery-sha256 <review_sha256>` 批准后才能
+   `resume --rerun-failed --recovery-preview <path>`。永久停线：账本 `stage_abandoned` 与
+   `stop_the_line`（绑定账本内收据副本），再写 `campaign_terminal` batch 并推入总账。
+
+来源 attempt 没有 after 探针或环境未恢复时，`complete` Job 也不复用，恢复预览的 execute 为全部计划
+Job；已对账的孤儿 attempt 以对账收据为终态，不再阻塞新 reservation。`resume` 对中断状态一律先
+reconcile；0.154 起失败或已对账 attempt 的 `--rerun-failed` 必须携带已批准且工具身份未变的预览，源
+attempt 冻结闭集须与预览逐项相等，否则拒绝。
+
+**权限收口。** `harden-evidence-permissions preview／apply --approve-sha256／replay` 两步式：preview 输出
+前后 mode 清单、逐文件内容摘要与变更摘要；apply 持 Campaign 排他锁，只把 mode 改为 0700／0600，
+禁止网络与内容写入，内容摘要不变才落收据；收据写在 `control/evidence-permissions/<attempt_id>/`，
+不回写 `attempt.json`；中断后幂等重放。
+
+**run 末权限边界与 assertion bundle。** `capture-official run` 结束时写入的
+`evidence-permission-closeout/v2` 边界只记文件的 inode、大小、mtime、链接数与属主；目录只记 inode 与
+属主，并跳过证据根顶层的 `assertion-bundle` 子树——bundle 是 seal 前按 ACC-06 发布进证据根的派生制品，
+由 seal 用 manifest 逐文件摘要另行绑定。历史 v1 边界含目录 mtime／链接数与全部子树，bundle 一经发布
+必然漂移；已绑定 v1 收据的 attempt 必须在 bundle 发布前用
+`harden-evidence-permissions upgrade-closeout` 升级：v1 仍能逐字重放时写一次
+`evidence-permission-closeout-upgrade.json`（以 v1 绑定为前序），此后所有重放按 v2 核对升级收据。
+
+**从 `awaiting_receipts` 只读导入。** 前序官方阶段已封存时 `reuse-official-evidence` 直接承接官方阶段；
+前序停在 `awaiting_receipts` 时必须同时提供 `--predecessor-official-attempt-id`、`--audit-receipt`
+（`official-attempt-audit/v1` 五段全部通过且绑定该 attempt.json）、`--identity-verdict`
+（`official-attempt-identity-verdict/v1` 为 `equal` 且裁定时工具即当前工具）、`--permission-receipt`
+（该 attempt 最新一份 apply 收据）、`--path-certification`（`pre-a3-path-certification/v1`）、
+`--policy-activation`（`policy-activation-certification/v1`）、`--deployment-receipt`（五摘要等于当前
+工具）与 `--project-ledger`（后继目录祖先处的总账）；只接受单一前序 attempt，不做逐 Job 合并。导入
+收据（`codex-upgrade-predecessor-import/v11`，`import_mode=official_attempt_reuse`）显式绑定源
+attempt 摘要、A1a inventory、权限收据与前后 mode 清单、现场重算的内容不变证明、部署收据五摘要、两份
+认证与总账 head；后继目录内合成零执行的 v3 official attempt（results 只做 campaign_id 坐标迁移并
+重绑当前 key，`disposition=reused`，证据根引用前序宿主路径，环境探针为空），由新 Campaign 的
+`capture-official seal` 按 metadata-only 规则封存（环境、恢复与 ARM64 收据来自前序 attempt，证据清单
+按前序证据根现场构建）并完成 VC-1，`reuse_item_ids` 按 `disposition=reused` 统计。
+
+**认证收据。** `pre-a3-path-certification/v1`：`status=passed`，`identity` 五摘要（含
+`tool_files_sha256`）、`deployment_receipt{path,sha256}`、`scenarios`、`receipt_sha256` 自摘要。
+`policy-activation-certification/v1`：`status=active`、`policy_version`、`policy_sha256`、`identity`
+五摘要、`deployment_receipt`、`authorized_scopes`、`superseded_by`（为空才有效）、`receipt_sha256`。
+`policy-compatibility-receipt/v1`：旧新 `policy_version`／`policy_sha256`、逐层分类差异、既有 Campaign
+影响面与处置、`receipt_sha256`。三者都绑定同一份 ARM64 部署收据，五摘要必须等于当前工具身份。
+
+**历史处置与时间对账。** `build-campaign-disposition` 为目标版本的全部历史 Campaign 出唯一处置
+（`reuse_primary`、`reuse_backup`、`read_only_archive`、`preflight_archive`）并列出待关闭账本；
+`reconcile-upgrade-time` 只取 git 提交、账本事件、部署收据、Campaign 创建与监督器事件作可信边界，
+区间分类为执行、工具修复、部署、Campaign 创建、停线间隙、无活动或 `unclassified`，人工分类收据
+`upgrade-time-manual-classification/v1` 必须绑定支撑证据且不得覆盖证据区间；`unclassified` 大于 0
+时项目总账不得封存。
+
+### Codex 依赖键、监督器与恢复
+
+Framework §5.1.2 规定共享恢复语义；Codex 的结果键固定为：
+
+```text
+result_key = item_id + input_sha256 + environment_sha256 + direct_dependency_sha256
+```
+
+逐文件依赖必须登记到 `producer／evaluator／control／scenario／runtime／network／gate` 之一。正式阶段动作队列
+唯一派发入口是 `tools/official_client_capture/codex_upgrade_supervisor.py campaign-run`；VC-0～VC-6 新流程使用
+`codex-upgrade-campaign-run/v2`，并绑定 Campaign 总计划、批次、直接前序 checkpoint 和原始绝对 deadline。
+`codex-upgrade-campaign-run/v3` 是 0.154.0 首轮事故链的历史恢复版本（见历史审计），新 Campaign 不再生成；
+失败父批次统一先对账再从最近合法 checkpoint 恢复。
+历史 `codex-upgrade-campaign-run/v4`／`v5` 续接与收尾版本已于 2026-09-16 删除：监督器不再接受这两种
+清单，其历史 run 目录只读保留并按历史审计解释。
+
+通用工具闭合后不得再增加 sequence 专用恢复版本。2026-09-19 改造 4 起，新批次在编译完成后、父 run 取得
+执行权前的失败不再产生停线收据：编译产物先落 staging attempt，父 run 以 `prepared` 起动并在同一把锁内完成
+账本事件 → 发布 → COMMIT → `running` 四步；P1～P4 四类失败分别由入口自行对账（`staging-abort/v1`＋
+`staging-abort-reconciliation/v1`，序号未占、同序号重新 prepare）、monitor／reconciler 封存为
+`aborted_prepared` 后同序号重派、`parent-start-failure/v1` 对账后 N+1 逐字重派，完整性异常永久停线；
+详见本部分“批次 staging／WAL 与唯一提交点”。`codex-upgrade-predispatch-stop/v1` 及
+`codex_upgrade_predispatch_stop.py record／replay` 只保留给 legacy 批次模型的历史收据只读解释，对
+`batch_model=staging` 的 Campaign 一律拒绝。
+`codex-upgrade-campaign-run/v1` 只保留给历史兼容与离线回归；`campaign-start`、`campaign-mark`、
+`campaign-exec` 不得编排新 Campaign。
+
+legacy 批次模型的预派发停线收据补写条款，以及 0.154.0 首轮事故链为 `KeyboardInterrupt` 孤儿增加的
+v3 单次恢复条款，都只对历史 Campaign 有效，已于 2026-09-22 移入
+[历史审计 §5.3／§5.4](CODEX_CLI_CLIENT_EMULATION_HISTORY_AUDIT.md#codex-0154-transitional-recovery-clauses)；
+新 Campaign 的中断统一由 `reconcile-attempt` 对账承接。
+
+### Codex 评估失败局部恢复与断点续跑（2026-09-20 改造 5）
+
+候选证据封存之后的离线评估（compare、逐规则断言、accept）失败不再一律作废候选或重新抓包：改造 5 把评估
+结果按**评估基线 b<K>** 分层，失败后只重做受影响的部分，其余引用式复用。全部新增制品都是 write-once、
+自摘要绑定、中断后从第一步重放收敛；自身模型请求为零，只有恢复段补跑真实 Job 时才产生请求。
+
+**评估基线。** 候选目录 `candidates/<cid>/revisions/b<K>/`：b0 是 plan entry（VC-5 首次评估，无目录），
+b<K>（K≥1）由 `evaluation-recover apply` 开出，含 `diagnosis.json`
+（`codex-upgrade-evaluation-failure-diagnosis/v1`）、`recovery.json`（`codex-upgrade-evaluation-baseline/v1`，
+`kind ∈ {evaluator-only, attempt-recovery}`，冻结 `execute_jobs／reuse_jobs／execute_rules／reuse_rules`、
+`previous_baseline`、`evaluation_epoch`、失败与当前 evaluator 四项摘要）、`PREPARED`、`AUTHORIZATION`
+（绑定推入项目总账的根因事件）与 `COMMIT`（`codex-upgrade-evaluation-baseline-commit/v1`，绑定
+`recovery_sha256` 与 `stage_sources`：每个评估阶段 `capture-candidate／compare／assertions／accept` 的读来源是本基线
+`local` 还是 `reuse` 自前序基线）。当前基线只由 Campaign 账本最后一条 `evaluation_baseline` 事件决定
+（`baseline_kind`、`recovery_revision`、`baseline_commit_sha256` 与目录内 COMMIT 逐字相等）；未 COMMIT 的
+PREPARED 基线可 `evaluation-recover abandon` 作废（写 `ABANDON`，编号不复用）。评估类读入口按
+`stage_sources` 逐级回溯读取（`reuse` 必须指向已封存的规范结果，不接受非规范来源）。
+
+**批次 v3 字段。** `codex-upgrade-vc-batch` 与 `campaign-run/v2` 清单成对携带 `evaluation_baseline`、
+`baseline_commit_sha256` 与 `evaluator_digests`（checker／builder／compare reader／accept reader 四项摘要，
+编译时一律取当前受管树的直接依赖摘要；授权口径分两种——b0 只有 checker／builder 两项必须等于 plan
+`tool_identity` 的规范 entry，compare reader／accept reader 在 plan 未登记、b0 不对其设口径；b≥1 四项都必须等于
+该基线 `recovery.json.current_evaluator_digests`，不等即拒绝编译）；每个评估动作声明 `output_bindings`（该动作产出的评估
+制品相对路径，如 `assertions/<cid>/revisions/b<K>/evaluation-run.json`）。父监督器在动作执行前核对当前
+受管树的 evaluator 四项摘要与清单冻结值，不等即动作不执行、父 run `failed`／`identity-drift`；动作退出后
+按固定顺序 诊断 → `run-<id>/action-outputs/<action_id>.json`（`codex-upgrade-action-output-binding/v1`，
+write-once，逐路径记录 `exists／sha256`，目录取 checkpoint 链 head）→ post-run-tooling 收据。stop-receipt 升为
+`codex-upgrade-supervisor-stop/v2`：`action-failed:<id>` 终态显式携带 `action_outputs_sha256`（绑定文件缺失即
+`null`），其他终态固定 `null`；v1 只读兼容，全部读点走 `read_stop_receipt`。
+
+**逐规则断言的 checkpoint 与复用。** `build_rule_assertion_results.py` 每条规则写一份
+`codex-upgrade-evaluation-checkpoint/v1`（`assertions/<cid>/revisions/b<K>/checkpoints/`，链式自摘要），批次
+结束写 `evaluation-run.json`（`codex-upgrade-evaluation-run/v1`，逐规则 `status／reused_from／
+dependency_projection_sha256`）。规则的依赖投影摘要含规则文档、checker 摘要、候选与官方证据的 capture
+manifest 投影（`--capture-manifest-projection`）；`--reuse-from <前序基线 evaluation-run.json>` 且
+`reuse_authority=anchored` 时，投影相等的 pass 规则引用式复用（`reused_from=b<K-1>`，checker 调用数为 0），
+投影不等或 `reuse_authority=none` 的规则全部重跑；同基线重入时已有
+`evaluation-run.json` 即视为完成，按既有 fail index 重现同一失败、不覆盖。`reuse_authority` 由失败父 run 推出：
+`offline-compare-failed` 恒为 `none`；`assertion-failed`／`offline-accept-failed` 只有在失败动作的输出绑定存在、
+且绑定条目指向一份存在的 `evaluation-run.json`（`exists=true`、摘要非空）时才为 `anchored`，绑定缺失
+（O1／R2-b）或未绑定该索引为 `none`；绑定记录的索引摘要与当前文件不一致直接失败关闭；b0 首批未落索引时由
+批准清单派生的索引（`derived=true`）强制 `none`。
+
+**失败分类与局部恢复（零请求）。** 失败父 run 对账（`reconcile-supervisor-run`，`receipt_passed`）之后：
+
+```bash
+python3 -m tools.official_client_capture.codex_upgrade evaluation-recover preview \
+  --campaign-dir "$CAMPAIGN_DIR" --candidate-id <cid> --reviewer <人>
+python3 -m tools.official_client_capture.codex_upgrade evaluation-recover apply \
+  --campaign-dir "$CAMPAIGN_DIR" --candidate-id <cid> --reviewer <人> \
+  --root-cause-class evaluator-defect|transient-environment|candidate-source|approval-inputs \
+  --approve-sha256 <review_sha256> [--fix-commit <40 位> --deployment-receipt <绝对路径>]
+```
+
+`preview` 做 admission、定位当前基线与失败父 run，推出三者互斥的 `failure_source`
+（`assertion-failed／offline-compare-failed／offline-accept-failed`）、`reuse_authority`（`anchored／none`）与
+failure-scope（失败规则、失败 check、沿 provenance——含 `derived/` 派生收据回溯——定位到的 Job、官方引用）、
+给出 `admissible_classes` 与诊断草案 `review_sha256`，不落盘。`apply` 复验草案（总账 head、失败事实或评估摘要
+变化即拒绝）后按类别处置：`candidate-source` 与 `approval-inputs` 只 `redirect`（分别指向
+`invalidate-candidate preview` 与显式停线后从 VC-2 建后继 Campaign）；`evaluator-defect` 要求 evaluator 四项
+摘要至少一项变化且覆盖缺陷项、修复提交已受监督部署（`--fix-commit`／`--deployment-receipt`）、候选 attempt 的
+`evaluation-epoch` 链已覆盖当前 evidence 摘要（`evaluation-epoch --campaign-dir --candidate-id --attempt-id --reason`
+不由 apply 代写），开 `evaluator-only` 基线并以根因 `evaluation.rule-failed` 推入总账；`transient-environment`
+要求 failure-scope 定位到的 Job 集合非空且严格等于 J*，开 `attempt-recovery` 基线（`recovery_revision=ar<k>`
+由 apply 返回：原 attempt 已有恢复段目录（含未收口）的最大编号 + 1，首次无历史段时才是 `ar1`；
+`execute_jobs=J*`、`reuse_jobs` 为其余 Job、`execute_rules` 为引用 J* 证据的规则），根因
+`attempt.job-transient-failure`。两类都在同阶段跨基线／跨恢复段累计，达 `same_root_cause_retry_limit` 即在 apply 的
+二次判定中永久停线（基线停在 prepared）。apply 五步 write-once：diagnosis＋recovery＋PREPARED → outbox
+根因事件（请求 0）→ 推总账并二次判定 → AUTHORIZATION → COMMIT（`stage_sources`）→ 账本
+`evaluation_baseline`；崩溃矩阵 E1～E5 分别在五个写点崩溃后重跑同一命令收敛，不重复推账。
+
+**恢复段 ar<k>（attempt-recovery 基线，改造 5 M2）。** 只补跑 J*、不改写原 attempt；`ar<k>` 一律使用
+`evaluation-recover apply` 返回的 `recovery_revision`（首次无历史段时才是 `ar1`）：
+
+```bash
+python3 -m tools.official_client_capture.codex_upgrade capture-candidate run \
+  --campaign-dir "$CAMPAIGN_DIR" --candidate-id <cid> --candidate-purpose <用途> \
+  --attempt-recovery ar<k> --acknowledge-live-requests           # 正式批次内的单动作
+python3 -m tools.official_client_capture.codex_upgrade capture-candidate seal \
+  --campaign-dir "$CAMPAIGN_DIR" --candidate-id <cid> --attempt-id <id> --attempt-recovery ar<k>
+python3 -m tools.official_client_capture.codex_upgrade account-sealed-candidate \
+  --campaign-dir "$CAMPAIGN_DIR" --candidate-id <cid> --attempt-id <id> --attempt-recovery ar<k>
+```
+
+段目录 `candidates/<cid>/attempts/<id>/recovery/ar<k>/`：`recovery-reservation.json`
+（`codex-upgrade-attempt-recovery-reservation/v1`，绑定 `evaluation_baseline／baseline_commit_sha256／
+recovery_sha256` 三元组、原 attempt 与原预约摘要、逐 Job 的 `execution_sha256`（重定位后）与
+`source_execution_sha256`（Campaign 冻结原定义）、`run_nonce` 与 Campaign lease）、`job-<id>.json`、
+`checkpoints/`、`logs/`、`evidence/`（段自己的环境探针、恢复报告与 run 末权限收口 `evidence-permission-closeout`）
+与段 run-summary `attempt-recovery.json`（`codex-upgrade-attempt-recovery/v1`，自摘要 `attempt_recovery_digest`，
+成功终态 `awaiting_receipts`）。被重采 Job 的证据根重定位为 `<原根>-recovery-ar<k>`，原根与原 `attempt.json`
+字节不变；段 run 只允许原 attempt 已封存且前序基线的候选阶段 `complete`，J* 必须属候选 Job 全集且
+`execute_jobs ∪ reuse_jobs` 恰为原 attempt 全集。账本事件 `attempt_recovery_started／completed／failed`
+（`<attempt>:ar<k>`），开段前先补登原 attempt 的 `attempt_started／completed`。成功段的同段逐字重派按幂等返回
+（`idempotent_replay=true`、`live_request_count=0`、不重跑 Job、摘要不变、账本无新事件）。
+
+段增量封存四阶段：① Kilo 后检查点（段证据根内）→ `client_checkpoint_created`；② 受管 finalizer 以
+`revisions/b<K>/effective-results.json`（`codex-upgrade-effective-results/v1`，逐 Job `reused／recovered`）生成本
+基线 bundle／capture manifest／observed-profile／Kilo 收据（bundle 落基线私有根 `revisions/b<K>/baseline-evidence/`，
+`prepare_assertion_bundle.sh BASELINE=b<K>`；Kilo／observed 收据落段证据根 `client/`——v3 权限收口 run 后只放行
+`client/`、`environment/client-after/`、`receipts/client-restoration-report.json`）；③ 对前序基线已验证的
+EvidenceManifest 按**整根**投影（只保留复用 Job 的根，零扫描，`manifest-projection.json`＝
+`codex-upgrade-evidence-manifest-projection/v1`，`dropped_roots` 与基线冻结集合精确相等），对 delta 根
+（重采 Job 根、段 `evidence`／`logs`、基线私有根）做唯一一次深度扫描（逐文件 checkpoint 续作，S1：中断后已完成条目
+不重读）并以 `preserve_prefixes` 合并，`scanned_bytes` 只计 delta；合并清单已写而 result 未写时（S2）直接进
+第 4 阶段；④ seal 预演（`rehearse-candidate-seal`，与普通 seal 同一门禁）通过后写 `revisions/b<K>/result.json`
+（`stage_sources` 的 local 目标，绑定原 attempt、段 run-summary、effective-results、投影收据与五类根）。段级
+入账 `account-sealed-candidate --attempt-recovery ar<k>` 只记本段新增请求。随后 b<K> 的 `compare` 为 local
+须重跑，逐规则断言以 `--reuse-from` 前序基线的 `evaluation-run.json`：只有引用 J* 证据的规则重跑，其余复用
+（builder 配置 `reuse_candidate_evidence_prefix` 指向被复用基线的候选前缀，accept 的复用行按被复用基线阶段
+核对机器检查路径）；VC-5 completion 绑定 b<K>。
+
+**段失败、后继段与授权闭包。** 段内 Job 失败（`status=failed`）或段预约之后中断的段以
+`reconcile-attempt --attempt-id <id> --recovery-revision ar<k>` 对账（收据、operation 与总账摘要都带段号，
+账本 `attempt_recovery_failed`，根因 `attempt.interrupted[<failed_step>]`）；失败段不可变、禁止同段续跑。
+恢复段 run 动作在正式批次里失败不是候选级失败（对象是环境瞬态而非候选源码）：阶段保持 active、账本
+`recovery_required`，父 run 对账被分流到段对账。对账生成的零请求 `recovery-preview/v1`（段模式）**按权威链取
+J\*：段预约三元组 → `b<K>/COMMIT`（`commit_sha256` 与 `recovery_sha256` 等于预约值）→ `recovery.json`（自摘要等于
+COMMIT 绑定值）→ `execute_jobs`**；预览 `planned_job_ids == execute_job_ids == J*`、`reuse_job_ids` 恒空（段内
+complete Job 不复用，后继段整段重做），请求估算 `known_by_job` 的键 ∪ `unknown_job_ids` == J*、不相交、
+`known_total == Σknown`。批准（`--approve-recovery-sha256`）后以
+`reconcile-attempt … --authorize-recovery-preview <path>` 消费（账本 `recovery_required → recovery_authorized →
+active`），再开紧接编号的后继段：
+
+```bash
+python3 -m tools.official_client_capture.codex_upgrade capture-candidate run … \
+  --attempt-recovery ar<k+1> --rerun-failed --recovery-preview <已批准预览> --acknowledge-live-requests
+```
+
+CLI 开后继段与监督器的后继协议（失败段批次只能由同 attempt 的后继段批次承接：除失败动作外逐字相同，失败
+动作只允许换段号并追加 `--rerun-failed --recovery-preview`，预览须被账本 `recovery_authorized` 绑定）都重放
+上述范围与估算等式，任一不等即拒绝；后继段以同一基线冻结的 J* 全量补跑，不重复裁定根因，段 seal／入账用实际
+段号（基线 `recovery.json` 仍记首段）。段对账根因两次即按上限停线。
+
+**崩溃矩阵。** R2（失败动作退出后、post-run-tooling 收据前 owner 丢失）：monitor 按四层判定确定性封存为普通
+`failed`／`action-failed:<id>`（a. 唯一动作失败诊断且末条动作生命周期事件为该动作 `action-failed`、动作属冻结清单；
+b. 绑定文件不存在 → `action_outputs_sha256=null`、仍可恢复但 `reuse_authority=none`；c. 绑定有效且与清单声明
+逐字一致 → 绑定摘要；d. 绑定不一致 → `watchdog-aborted`），reconciler 在锁内复算一致并补写 post-run-tooling
+收据（`backfilled=true`）。R2 的 attempt-recovery 变体（2026-09-21）：正式**单动作**恢复段 run 已成功、动作
+输出绑定已写（唯一绑定路径为规范段摘要路径且 `exists=true`）、父 run 写终态前 owner 丢失 → monitor 封存
+`failed`／`parent-finalize-lost`（事件按冻结动作 `job_id + operation` 投影后恰为一对
+`action-started／action-finished`，段 run 子进程写入同一 `events.ndjson` 的 Job 级事件不计入），多动作批次、
+非段 run 动作、缺绑定、`exists=false`、绑定漂移都维持 `watchdog-aborted`；`reconcile-supervisor-run` 以与幂等
+重派相同强度的段加载校验重验绑定的段摘要（自摘要、身份、预约绑定、权限收口重放）并要求结果 Job 集合恰等于
+权威链 J*、全部 complete，可恢复 → `receipt_passed`（`redispatch-same-batch`）→ N+1 逐字重派命中段 run 幂等
+返回（段摘要、checkpoint、绑定输出摘要不变，账本段事件不重复）→ 继续段 seal。A1（段 run 动作在 Job 证据落盘
+后、段摘要写出前 SIGKILL）→ 段对账 → 批准／授权 → 后继段。C1（accept 动作崩溃）→ 环境恢复后逐字重派同一
+批次，accept 已封存一致才放行到 completion。O1（动作退出后绑定未写即崩溃）→ stop-receipt
+`action_outputs_sha256=null`、`reuse_authority=none`。评估基线的历史链后继协议按账本 `evaluation_baseline`
+事件历史核对基线（多次恢复 b1→b2 后重放不依赖“当前基线”）。
+
+### Codex 连续监督、时间账本与文档部署
+
+VC-0 冻结 Campaign 总计划、阶段依赖、身份、预算和原始 deadline；每个阶段或恢复批次只根据前序封存
+checkpoint 编译本批次清单。总计划不能预填未来的 approval SHA、Candidate／attempt ID、镜像 digest
+或收据摘要；后续批次必须继承同一 Campaign ID、时间账本和 deadline。
+
+每个批次使用独立父监督器并绑定同一 Campaign 控制链。监督器实时落盘：
+
+- 动作开始、结束和失败事件立即追加并 `fsync`；
+- 每 5 秒记录监督器和 worker 心跳；
+- 每 60 秒把时间区间归类为 `planning／active／waiting`；新流程不得写 `orchestrator-idle`；
+- worker 失联 20 秒、动作超时或编排器 15 秒未派发下一动作时立即停线；
+- v2 及后续批次在原始总 deadline 前预留 120 秒 attempt 清理窗口，并再保留最多 5 秒父监督器终态排空；
+  数据面执行截止到达时先向 Python worker 发送 `SIGUSR1` 展开 `finally`，清理窗口耗尽才强停进程组；
+- 正常停止、信号、会话断开和主机失联都必须留下可审计终态或明确缺口。
+
+编排状态机固定为 `dispatching → executing → evaluating → terminal`。批次内部按冻结队列连续执行，禁止
+人工补派或用 `post-action-idle` 保持心跳；阶段完成后以封存输出编译下一批次。每阶段立即记录起止时间、
+耗时、execute／reuse、失败项、live 请求、扫描次数与字节及下一动作；出现无法分类的分钟即
+`audit-incomplete`，禁止部署。
+
+除 VC-0 已自动生成的首个 VC-1 批次外，每次交接先由操作员审核下一阶段的
+`codex-upgrade-vc-action-plan/v1`，再直接运行下面的原子入口；账本的阶段推进（前序 `stage_completed`、本阶段
+`stage_started`／`stage_completed`）由该入口按本部分“VC-2～VC-6 原子入口治理”写入，操作员只在对账与停线恢复时
+人工 `append`：
+
+~~~bash
+python3 tools/official_client_capture/codex_upgrade.py compile-and-run-vc-batch \
+  --campaign-dir /绝对路径/campaign \
+  --state-dir /绝对路径/本轮Campaign-supervisor \
+  --phase <VC-2...VC-6> \
+  --sequence <全局连续序号，从 2 开始> \
+  --predecessor-checkpoint /绝对路径/campaign/control/vc/<前序>-checkpoint.json \
+  --action-plan /绝对路径/action-plan.json
+~~~
+
+原子入口从取得 `.campaign-run.lock` 到父 run 取得执行权始终持有同一把锁，只接受规范直接前序 checkpoint
+（候选级阶段按当前 revision 解析：VC-4 前序是 Campaign 级 VC-3，VC-5／VC-6 前序是同 revision 的上一阶段，
+r≥2 时 `--predecessor-checkpoint` 指向 `control/vc/revisions/r<N>/vc-{4,5}-checkpoint.json`），
+且本阶段在当前 revision 尚未存在 checkpoint；不允许跳号、延长 deadline、重编已封存批次或由 `campaign-run`
+内部调用。该入口不创建外层 `CampaignLease`，也不接受第二个相对 `--max-wall-seconds`；唯一监督器是它立即
+启动的父 `campaign-run`，唯一墙钟边界是 Campaign plan 已冻结的原始绝对 deadline。
+2026-09-19 改造 4 起入口按 staging 模型工作：先扫描并对账本序号的孤儿（无父 run 的 staging 中止、
+`prepared`／`committed` 后 owner 丢失的父 run），再把本批编译到新的 staging attempt，父 run 以 `prepared`
+起动，并在同一把锁内完成账本事件 → 发布正式产物 → COMMIT → `running`；四步任一失败都按 P1～P4 合同
+封存与对账，不再写预派发停线收据，也不需要 SIGKILL 后的人工补写。候选级阶段（VC-4～VC-6）派发前还要求
+存在 active 的候选 revision（新 Campaign 先 `revision-open --initial`），批次与父 run 清单成对携带
+`candidate_revision`／`candidate_id`。动作返回
+`awaiting_receipts`、`approval_required`、classify 草案的 `draft`，以及候选 seal 第一步的
+`client_checkpoint_created` 时，父 `campaign-run` 将其视为本批合法停靠点并正常封存；
+同一命令绕过父监督器直接运行仍以退出码 2 提示未到终态。
+
+Codex 工具运行时读取的 Framework 和客户端指南属于受管依赖。部署清单必须登记规范路径和摘要，与工具树
+在同一可回滚事务中切换，并从生产运行根完成重放测试；具体生产步骤见 §4.6。
+
 
 ---
 

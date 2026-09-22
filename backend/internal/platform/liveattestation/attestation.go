@@ -16,6 +16,15 @@ type Provider interface {
 	Generate(ctx context.Context) (string, error)
 }
 
+// CandidateCaptureCapabilityProbeResult 是候选镜像的离线能力探针结果。
+// 探针不访问网络；普通发布构建会返回 available=false，只有真正编入
+// candidatecapture provider 的二进制才会在实际执行 Check/Generate 后返回 true。
+type CandidateCaptureCapabilityProbeResult struct {
+	Available              bool
+	ProviderCheckPassed    bool
+	ProviderGeneratePassed bool
+}
+
 type candidateCaptureScopeContextKey struct{}
 
 // CandidateCaptureScope 把一次 Live 调用绑定到专用验收身份和已配置代理的账号。

@@ -8,10 +8,13 @@
   计数、``bootstrap_cutover``（已吸收的 Campaign 账本 head、batch SHA、operation ID、
   身份键清单 SHA，补齐器不得再推送）、三个账本关闭后的 head、时间对账与处置清单收据
   摘要，以及自摘要 ``plan_sha256``。
-* ``events/NNNNNN.json`` 摘要链追加，事件类型只有六种：``campaign_registered``、
+* ``events/NNNNNN.json`` 摘要链追加，事件类型包括 ``campaign_registered``、
   ``campaign_registration_rejected``、``reconciliation_committed``、``accounting_resolved``、
-  ``root_cause_repaired``、``campaign_terminal``。每个事件带 ``operation_id``，重复推送时
-  核对类型与 payload 摘要；每个事件反向绑定来源 batch SHA。
+  ``root_cause_repaired``、``campaign_terminal``，以及只能追加的
+  ``reconciliation_corrected`` / ``root_cause_repair_corrected`` 历史更正。每个事件带
+  ``operation_id``，重复推送时核对类型与 payload 摘要；每个事件反向绑定
+  来源 batch SHA。历史更正同时绑定原事件及原 payload SHA，重放时覆盖原事件
+  的业务解释，但不修改原事件字节。
 * ``head.json`` 只是缓存：写入时在目录锁内完整重放得到 head，并以 head SHA 做 CAS；
   缓存缺失或落后可重建，超前或同序号不符失败关闭。
 
@@ -20,7 +23,8 @@
 记录；``unresolved`` 把 operation 加入未决集合并置 blocked；``accounting_resolved`` 绑定
 原 operation、新 provenance 审计收据、准确身份键清单与 delta，原子补账并移除该 operation，
 集合清空才解除 blocked。blocked 时仍允许 ``accounting_resolved``、``root_cause_repaired``、
-``reconciliation_committed``、``campaign_terminal``；禁止注册、派发、resume、复用、seal。
+``reconciliation_committed``、``campaign_terminal`` 与两类历史更正；禁止注册、派发、
+resume、复用、seal。
 
 Campaign 侧 ``<campaign_dir>/ledger/``：``plan.json`` 记 ``registration_operation_id`` 与
 ``admission_head_sha256``；``outbox/batch-NNNNNN/`` 内是若干 ``entry-NN.json`` 与 ``COMMIT``。
@@ -43,8 +47,13 @@ Campaign 锁写 ``ledger/plan.json``、写注册 batch 并 COMMIT、追加 ``cam
 Campaign；Campaign deadline 不超过总账绝对截止。总账按祖先目录查找（最多六层），生产
 规范布局 ``<data_root>/evidence/campaigns/<id>`` 与 staging 布局都能命中。
 
+根因计数：一个 reconciliation operation 可携带 ``failure_observations`` 与
+``root_causes`` 数组；同一 operation 内相同 ``check_id + failure_code`` 的重试只保留一个
+observation，相同根因 ID 也只计一次。旧 ``root_cause`` 单值仍可重放。
+
 修复收据 ``root-cause-repair/v1``：代码缺陷绑定修复提交 SHA、定向回归测试收据、对应
-部署收据；环境缺陷绑定环境修复收据与干净环境复核收据。经总账自己的
+部署收据；环境缺陷绑定环境修复收据与干净环境复核收据。收据明确绑定
+实际修复的根因子集，只清零该子集；未覆盖根因保留计数。经总账自己的
 ``repairs/outbox/batch-NNNNNN/`` 推送 ``root_cause_repaired``，不属于任何 Campaign，不激活
 历史 Campaign。
 """
@@ -94,6 +103,9 @@ EVENT_TYPES = (
     "accounting_resolved",
     "root_cause_repaired",
     "campaign_terminal",
+    "reconciliation_corrected",
+    "root_cause_repair_corrected",
+    "candidate_probe_accounted",
 )
 TERMINAL_REASONS = (
     "deadline_wall_clock",
@@ -102,16 +114,45 @@ TERMINAL_REASONS = (
     "accounting_unresolved",
     "environment_contaminated",
     "identity_changed",
+    "prior_stop_the_line",
+    "prior_upgrade_complete",
     "superseded",
+    # 不可变控制或证据制品完整性异常。改造 4：prepared 父 run 的正式 COMMIT 制品（自摘要
+    # 无效、owner nonce 或 run 目录不匹配）；2026-09-22 起还包括已封存 EvidenceManifest 的
+    # 不可变 stat 边界漂移（动作诊断 failure_class=evidence-integrity，reconciler 固定映射）。
+    # 与 identity_changed（wire／策略身份漂移）语义不同，不混用。
+    "integrity_mismatch",
 )
 REQUEST_STATUSES = ("resolved", "estimated", "unresolved")
 BLOCKED_ALLOWED_EVENTS = frozenset(
-    {"accounting_resolved", "root_cause_repaired", "reconciliation_committed", "campaign_terminal"}
+    {
+        "accounting_resolved",
+        "root_cause_repaired",
+        "reconciliation_committed",
+        "campaign_terminal",
+        "reconciliation_corrected",
+        "root_cause_repair_corrected",
+    }
 )
 # B9：compare／accept 也是总账消费者，写收据前先经准入门禁。
 # canonical-advance 的 VC-6 生产步骤按命令本身准入；其 seal／compare／accept 步骤映射到同名消费者。
 CONSUMER_COMMANDS = frozenset(
-    {"plan", "reuse-official-evidence", "campaign-run", "resume", "seal", "compare", "accept", "canonical-advance"}
+    {
+        "plan",
+        "reuse-official-evidence",
+        "recover-candidate-failed-jobs",
+        "campaign-run",
+        "resume",
+        "seal",
+        "compare",
+        "accept",
+        "canonical-advance",
+        # 改造 2：候选级 revision 的登记与显式作废都是总账消费者。
+        "revision-open",
+        "invalidate-candidate",
+        # 改造 5：评估失败分类与评估基线状态机是总账消费者（outbox 根因事件 + 二次判定）。
+        "evaluation-recover",
+    }
 )
 ESTIMATION_POLICIES = ("none", "upper_bound_from_sibling", "upper_bound_from_sibling_or_turn_ratio")
 REPAIR_KINDS = ("code", "environment")
@@ -128,6 +169,18 @@ RFC3339_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-
 BATCH_DIR_RE = re.compile(r"^batch-(\d{6})$")
 ENTRY_FILE_RE = re.compile(r"^entry-(\d{2})\.json$")
 LIST_PAYLOAD_FIELDS = frozenset({"identity_keys"})
+CORRECTION_TARGET_EVENT = {
+    "reconciliation_corrected": "reconciliation_committed",
+    "root_cause_repair_corrected": "root_cause_repaired",
+}
+CORRECTION_PAYLOAD_FIELDS = {
+    "original_operation_id",
+    "original_event_sha256",
+    "original_payload_sha256",
+    "corrected_payload",
+    "corrected_payload_sha256",
+    "reason",
+}
 
 
 class ProjectLedgerError(ValueError):
@@ -658,9 +711,181 @@ def _apply_request_part(state: dict[str, Any], part: Mapping[str, Any], operatio
             state["unresolved_operation_ids"].append(operation_id)
 
 
+def _cause_id(value: Any, label: str) -> str:
+    """从根因对象或字符串取稳定 ID；允许丰富根因对象保留其他审计字段。"""
+
+    candidate = value.get("root_cause_id") if isinstance(value, Mapping) else value
+    if not isinstance(candidate, str) or not candidate:
+        raise ProjectLedgerError(f"{label} 缺少 root_cause_id")
+    return candidate
+
+
+def _reconciliation_failures(payload: Mapping[str, Any], operation_id: str) -> tuple[list[dict[str, Any]], list[str]]:
+    """解析一次 operation 的失败观测与根因，并在 operation 内去重。
+
+    observation 的稳定键是 ``check_id + failure_code``；同键的多次 retry
+    只留一次。如果同键却声称两个不同根因，则失败关闭，避免重放受
+    retry 顺序影响。旧 ``root_cause`` 单值与新数组可并存，最终按根因 ID
+    去重计数。
+    """
+
+    raw_observations = payload.get("failure_observations", [])
+    if not isinstance(raw_observations, list):
+        raise ProjectLedgerError("reconciliation_committed.failure_observations 必须是列表")
+    observations_by_key: dict[tuple[str, str], dict[str, Any]] = {}
+    for index, item in enumerate(raw_observations):
+        if not isinstance(item, Mapping):
+            raise ProjectLedgerError(f"failure_observations[{index}] 必须是对象")
+        check_id = item.get("check_id")
+        failure_code = item.get("failure_code")
+        if not isinstance(check_id, str) or not check_id or not isinstance(failure_code, str) or not failure_code:
+            raise ProjectLedgerError(f"failure_observations[{index}] 缺少 check_id 或 failure_code")
+        nested_cause = item.get("root_cause")
+        direct_cause = item.get("root_cause_id")
+        if direct_cause is not None and nested_cause is not None:
+            direct_id = _cause_id(direct_cause, f"failure_observations[{index}].root_cause_id")
+            nested_id = _cause_id(nested_cause, f"failure_observations[{index}].root_cause")
+            if direct_id != nested_id:
+                raise ProjectLedgerError(f"failure_observations[{index}] 的根因 ID 自相矛盾")
+            cause_id: str | None = direct_id
+        elif direct_cause is not None:
+            cause_id = _cause_id(direct_cause, f"failure_observations[{index}].root_cause_id")
+        elif nested_cause is not None:
+            cause_id = _cause_id(nested_cause, f"failure_observations[{index}].root_cause")
+        else:
+            cause_id = None
+        key = (check_id, failure_code)
+        existing = observations_by_key.get(key)
+        if existing is not None:
+            existing_id = existing.get("root_cause_id")
+            if existing_id is not None and cause_id is not None and existing_id != cause_id:
+                raise ProjectLedgerError(
+                    f"operation {operation_id} 的同一 check_id + failure_code 映射到不同根因"
+                )
+            if existing_id is None and cause_id is not None:
+                existing["root_cause_id"] = cause_id
+            continue
+        observation = {"check_id": check_id, "failure_code": failure_code}
+        if cause_id is not None:
+            observation["root_cause_id"] = cause_id
+        observations_by_key[key] = observation
+
+    raw_causes = payload.get("root_causes", [])
+    if not isinstance(raw_causes, list):
+        raise ProjectLedgerError("reconciliation_committed.root_causes 必须是列表")
+    cause_ids: list[str] = []
+    seen_causes: set[str] = set()
+
+    def add_cause(value: Any, label: str) -> None:
+        cause_id = _cause_id(value, label)
+        if cause_id not in seen_causes:
+            seen_causes.add(cause_id)
+            cause_ids.append(cause_id)
+
+    legacy_cause = payload.get("root_cause")
+    if legacy_cause is not None:
+        add_cause(legacy_cause, "reconciliation_committed.root_cause")
+    for index, item in enumerate(raw_causes):
+        add_cause(item, f"reconciliation_committed.root_causes[{index}]")
+    declared_causes = set(cause_ids)
+    cause_to_observation: dict[str, tuple[str, str]] = {}
+    for key, observation in observations_by_key.items():
+        cause_id = observation.get("root_cause_id")
+        if cause_id is None:
+            raise ProjectLedgerError("failure_observations 每项都必须绑定 root_cause_id")
+        preceding_key = cause_to_observation.get(cause_id)
+        if preceding_key is not None and preceding_key != key:
+            raise ProjectLedgerError("不同 check_id + failure_code 不得共用同一根因 ID")
+        cause_to_observation[cause_id] = key
+        if raw_causes and cause_id not in declared_causes:
+            raise ProjectLedgerError("failure_observations 的根因未出现在 root_causes 中")
+        add_cause(cause_id, "failure_observations.root_cause_id")
+    if observations_by_key and not cause_ids:
+        raise ProjectLedgerError("failure_observations 非空时必须绑定至少一个根因")
+    return list(observations_by_key.values()), cause_ids
+
+
+def _repair_root_cause_ids(payload: Mapping[str, Any], label: str) -> list[str]:
+    """返回 repair 明确绑定的根因子集；旧单值形态仍可重放。"""
+
+    raw_ids = payload.get("root_cause_ids")
+    if raw_ids is not None and (not isinstance(raw_ids, list) or not raw_ids):
+        raise ProjectLedgerError(f"{label}.root_cause_ids 必须是非空列表")
+    values: list[Any] = list(raw_ids or [])
+    legacy = payload.get("root_cause_id")
+    if legacy is not None and raw_ids is not None:
+        legacy_id = _cause_id(legacy, f"{label}.root_cause_id")
+        declared_ids = {_cause_id(value, f"{label}.root_cause_ids") for value in raw_ids}
+        if legacy_id not in declared_ids:
+            raise ProjectLedgerError(f"{label} 单值根因与子集不一致")
+    if legacy is not None:
+        values.insert(0, legacy)
+    if not values:
+        raise ProjectLedgerError(f"{label} 缺少根因子集")
+    result: list[str] = []
+    seen: set[str] = set()
+    for index, value in enumerate(values):
+        cause_id = _cause_id(value, f"{label}.root_cause_ids[{index}]")
+        if cause_id not in seen:
+            seen.add(cause_id)
+            result.append(cause_id)
+    return result
+
+
+def _correction_overlays(events: list[dict[str, Any]]) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+    """校验追加式历史更正，返回原 operation 的有效 payload 覆盖与审计索引。"""
+
+    preceding: dict[str, dict[str, Any]] = {}
+    overlays: dict[str, dict[str, Any]] = {}
+    audit: dict[str, dict[str, Any]] = {}
+    for event in events:
+        operation_id = event["operation_id"]
+        if operation_id in preceding:
+            raise ProjectLedgerError(f"operation_id 重复出现在事件链中：{operation_id}")
+        event_type = event["event_type"]
+        if event_type in CORRECTION_TARGET_EVENT:
+            payload = _expect(dict(event["payload"]), CORRECTION_PAYLOAD_FIELDS, event_type)
+            original_operation_id = payload["original_operation_id"]
+            if not isinstance(original_operation_id, str) or not original_operation_id:
+                raise ProjectLedgerError(f"{event_type}.original_operation_id 非法")
+            original = preceding.get(original_operation_id)
+            if original is None:
+                raise ProjectLedgerError(f"{event_type} 只能绑定更正事件之前的原事件")
+            if original["event_type"] != CORRECTION_TARGET_EVENT[event_type]:
+                raise ProjectLedgerError(f"{event_type} 绑定的原事件类型非法")
+            _sha_field(payload["original_event_sha256"], f"{event_type}.original_event_sha256")
+            _sha_field(payload["original_payload_sha256"], f"{event_type}.original_payload_sha256")
+            _sha_field(payload["corrected_payload_sha256"], f"{event_type}.corrected_payload_sha256")
+            if payload["original_event_sha256"] != original["event_sha256"]:
+                raise ProjectLedgerError(f"{event_type} 绑定的原事件 SHA 漂移")
+            if payload["original_payload_sha256"] != original["payload_sha256"]:
+                raise ProjectLedgerError(f"{event_type} 绑定的原 payload SHA 漂移")
+            corrected_payload = payload["corrected_payload"]
+            if not isinstance(corrected_payload, dict):
+                raise ProjectLedgerError(f"{event_type}.corrected_payload 必须是对象")
+            if payload["corrected_payload_sha256"] != _digest(corrected_payload):
+                raise ProjectLedgerError(f"{event_type} 的 corrected_payload SHA 不一致")
+            reason = payload["reason"]
+            if not isinstance(reason, str) or not reason.strip():
+                raise ProjectLedgerError(f"{event_type}.reason 不得为空")
+            if original_operation_id in overlays:
+                raise ProjectLedgerError(f"原 operation 已有历史更正，禁止二次更正：{original_operation_id}")
+            overlays[original_operation_id] = corrected_payload
+            audit[original_operation_id] = {
+                "correction_operation_id": operation_id,
+                "correction_event_type": event_type,
+                "original_event_sha256": original["event_sha256"],
+                "original_payload_sha256": original["payload_sha256"],
+                "corrected_payload_sha256": payload["corrected_payload_sha256"],
+            }
+        preceding[operation_id] = event
+    return overlays, audit
+
+
 def _replay(root: Path, plan: Mapping[str, Any], events: list[dict[str, Any]], *, rebuild_cache: bool) -> dict[str, Any]:
     """从 plan 加 events 重放权威 head；缓存只在锁内由本函数刷新。"""
 
+    correction_overlays, correction_audit = _correction_overlays(events)
     state: dict[str, Any] = {
         "precise_total": int(plan["initial_precise_count"]),
         "estimated_total": int(plan["initial_estimated_count"]),
@@ -675,10 +900,10 @@ def _replay(root: Path, plan: Mapping[str, Any], events: list[dict[str, Any]], *
         "unresolved_operation_ids": [],
         "operations": {},
         "repaired_root_causes": [],
+        "failure_observations": [],
     }
     for event in events:
         event_type = event["event_type"]
-        payload = event["payload"]
         operation_id = event["operation_id"]
         if operation_id in state["operations"]:
             raise ProjectLedgerError(f"operation_id 重复出现在事件链中：{operation_id}")
@@ -686,6 +911,11 @@ def _replay(root: Path, plan: Mapping[str, Any], events: list[dict[str, Any]], *
         blocked = bool(state["unresolved_operation_ids"])
         if blocked and event_type not in BLOCKED_ALLOWED_EVENTS:
             raise ProjectLedgerError(f"总账 blocked 期间出现禁止事件：{event_type}")
+        if event_type in CORRECTION_TARGET_EVENT:
+            # 更正事件自身不叠加业务数据；它在本轮重放开始时已将原事件的
+            # payload 解释替换为 corrected_payload。
+            continue
+        payload = correction_overlays.get(operation_id, event["payload"])
         if event_type == "campaign_registered":
             campaign_id = _safe_id(payload.get("campaign_id"), "campaign_registered.campaign_id")
             if campaign_id in state["registered_campaigns"]:
@@ -707,14 +937,13 @@ def _replay(root: Path, plan: Mapping[str, Any], events: list[dict[str, Any]], *
             }
         elif event_type == "reconciliation_committed":
             request = payload.get("request")
-            cause = payload.get("root_cause")
             if not isinstance(request, dict):
                 raise ProjectLedgerError("reconciliation_committed 缺少请求部分")
             _apply_request_part(state, request, operation_id, "reconciliation_committed")
-            if cause is not None:
-                if not isinstance(cause, dict) or not isinstance(cause.get("root_cause_id"), str):
-                    raise ProjectLedgerError("reconciliation_committed 根因部分形态非法")
-                rc = cause["root_cause_id"]
+            observations, cause_ids = _reconciliation_failures(payload, operation_id)
+            for observation in observations:
+                state["failure_observations"].append({"operation_id": operation_id, **observation})
+            for rc in cause_ids:
                 state["root_cause_counts"][rc] = state["root_cause_counts"].get(rc, 0) + 1
         elif event_type == "accounting_resolved":
             resolved = payload.get("resolved_operation_id")
@@ -726,11 +955,16 @@ def _replay(root: Path, plan: Mapping[str, Any], events: list[dict[str, Any]], *
             _apply_request_part(state, request, operation_id, "accounting_resolved")
             state["unresolved_operation_ids"].remove(resolved)
         elif event_type == "root_cause_repaired":
-            rc = payload.get("root_cause_id")
-            if not isinstance(rc, str):
-                raise ProjectLedgerError("root_cause_repaired 缺少 root_cause_id")
-            state["root_cause_counts"][rc] = 0
-            state["repaired_root_causes"].append({"root_cause_id": rc, "operation_id": operation_id})
+            for rc in _repair_root_cause_ids(payload, "root_cause_repaired"):
+                state["root_cause_counts"][rc] = 0
+                state["repaired_root_causes"].append({"root_cause_id": rc, "operation_id": operation_id})
+        elif event_type == "candidate_probe_accounted":
+            request = payload.get("request")
+            if not isinstance(request, dict):
+                raise ProjectLedgerError("candidate_probe_accounted 缺少请求部分")
+            if payload.get("accounting_category") != "candidate_readiness_models_probe/v1":
+                raise ProjectLedgerError("candidate_probe_accounted 计量类别非法")
+            _apply_request_part(state, request, operation_id, "candidate_probe_accounted")
         elif event_type == "campaign_terminal":
             campaign_id = _safe_id(payload.get("campaign_id"), "campaign_terminal.campaign_id")
             if payload.get("terminal_reason") not in TERMINAL_REASONS:
@@ -769,6 +1003,8 @@ def _replay(root: Path, plan: Mapping[str, Any], events: list[dict[str, Any]], *
         "live_request_budget": budget,
         "remaining_live_requests": (None if budget is None else max(int(budget) - consumed, 0)),
         "repaired_root_causes": state["repaired_root_causes"],
+        "failure_observations": state["failure_observations"],
+        "event_corrections": correction_audit,
     }
     cache_path = root / "head.json"
     if cache_path.exists() or cache_path.is_symlink():
@@ -793,6 +1029,50 @@ def replay_head(root: Path) -> dict[str, Any]:
     with project_lock(root):
         plan, _raw = _load_plan(root)
         return _replay(root, plan, _load_events(root), rebuild_cache=True)
+
+
+def _read_project_history_snapshot(root: Path) -> dict[str, Any]:
+    """不取锁地重放一份只读项目历史快照。
+
+    event 以同目录临时文件加硬链接原子发布，且发布后不可变；
+    因此并发追加时本函数要么看到旧前缀，要么看到新前缀。若列目录恰好
+    观测到尚未发布的临时文件，``_load_events`` 会失败关闭；本函数不会
+    删除临时文件、刷新 head 缓存或追加事件。
+
+    这份快照只适合证明历史 head 仍是事件链祖先，不能作为新写入的
+    CAS 基准。
+    """
+
+    plan, _raw = _load_plan(root)
+    events = _load_events(root)
+    head = _replay(root, plan, events, rebuild_cache=False)
+    return {
+        "plan_sha256": str(plan["plan_sha256"]),
+        "events": json.loads(json.dumps(events, ensure_ascii=False)),
+        "head_sequence": int(head["sequence"]),
+        "head_sha256": str(head["head_sha256"]),
+    }
+
+
+def read_project_history_snapshot(root: Path) -> dict[str, Any]:
+    """返回不获取项目锁的只读历史快照。
+
+    Candidate reservation 可能在已持有 Campaign 锁时被历史重放；
+    此入口避免形成 ``Campaign 锁 → 项目锁`` 的反向等待。
+    """
+
+    return _read_project_history_snapshot(root)
+
+
+def read_project_history(root: Path) -> dict[str, Any]:
+    """锁内只读返回已验真的 plan 身份、事件链与当前 head。
+
+    需要与并发写入严格串行化的调用方使用此入口。Candidate reservation
+    的历史重放必须使用 ``read_project_history_snapshot``，以避免锁顺序反转。
+    """
+
+    with project_lock(root):
+        return _read_project_history_snapshot(root)
 
 
 def append_project_event(
@@ -1325,6 +1605,226 @@ class Admission:
         )
 
 
+class RuntimeAdmission:
+    """抓包派发的项目锁作用域。
+
+    该对象从候选就绪 probe 开始一直持有项目锁，直到调用方在 Campaign 锁内
+    发布 reservation。probe 入账会更新这里保存的 head；reservation 发布前
+    必须以 ``reservation_cas`` 再次重放并核对 sequence 与 SHA，关闭
+    “probe 已计账、锁已释放、reservation 仍按旧预算创建”的窗口。
+    """
+
+    def __init__(
+        self,
+        root: Path,
+        plan: Mapping[str, Any],
+        head: Mapping[str, Any],
+        campaign_plan: Mapping[str, Any],
+    ) -> None:
+        self.root = root
+        self.plan = dict(plan)
+        self.head = dict(head)
+        self.campaign_plan = dict(campaign_plan)
+
+    @property
+    def head_sequence(self) -> int:
+        return int(self.head["sequence"])
+
+    @property
+    def head_sha256(self) -> str:
+        return str(self.head["head_sha256"])
+
+    @property
+    def remaining_live_requests(self) -> int | None:
+        value = self.head.get("remaining_live_requests")
+        return int(value) if value is not None else None
+
+    def refresh(self) -> dict[str, Any]:
+        """在仍持有的项目锁内重放最新 head。"""
+
+        self.head = _replay(
+            self.root,
+            self.plan,
+            _load_events(self.root),
+            rebuild_cache=True,
+        )
+        return dict(self.head)
+
+    def account_candidate_probe(
+        self,
+        *,
+        campaign_id: str,
+        candidate_id: str,
+        dispatch_id: str,
+        identity_key: str,
+        receipt_sha256: str,
+        response_status: int,
+        expected_head_sha256: str,
+    ) -> dict[str, Any]:
+        """把一次已经落盘的 ``/models`` wire dispatch 幂等计入总账。"""
+
+        _safe_id(campaign_id, "candidate probe campaign_id")
+        _safe_id(candidate_id, "candidate probe candidate_id")
+        _safe_id(dispatch_id, "candidate probe dispatch_id")
+        if not isinstance(identity_key, str) or not SHA256_RE.fullmatch(identity_key):
+            raise ProjectLedgerError("candidate probe identity_key 不是 SHA-256")
+        _sha_field(receipt_sha256, "candidate probe receipt_sha256")
+        if (
+            isinstance(response_status, bool)
+            or not isinstance(response_status, int)
+            or response_status < 100
+            or response_status > 599
+        ):
+            raise ProjectLedgerError("candidate probe HTTP 状态码非法")
+        operation_id = f"candidate-probe:{hashlib.sha256(dispatch_id.encode('utf-8')).hexdigest()[:32]}"
+        payload = {
+            "campaign_id": campaign_id,
+            "candidate_id": candidate_id,
+            "dispatch_id": dispatch_id,
+            "accounting_category": "candidate_readiness_models_probe/v1",
+            "response_status": response_status,
+            "receipt_sha256": receipt_sha256,
+            "request": {
+                "status": "resolved",
+                "identity_keys": [identity_key],
+                "estimated_delta": 0,
+            },
+        }
+        existing = self.head.get("operations", {}).get(operation_id)
+        remaining = self.remaining_live_requests
+        if existing is None and remaining is not None and remaining <= 0:
+            # 重放既有 operation 必须始终允许，以便崩溃后补齐幂等核验；
+            # 只有会新增一个真实 dispatch 事件时才执行项目预算硬门禁。
+            raise ProjectLedgerError(
+                "candidate probe 项目请求预算已耗尽，拒绝新增计量事件"
+            )
+        new_head, status = append_project_event(
+            self.root,
+            operation_id=operation_id,
+            event_type="candidate_probe_accounted",
+            payload=payload,
+            source_batch_sha256=None,
+            expected_head_sha256=expected_head_sha256,
+        )
+        self.head = dict(new_head)
+        return {
+            "operation_id": operation_id,
+            "status": status,
+            "head_sequence": self.head_sequence,
+            "head_sha256": self.head_sha256,
+            "remaining_live_requests": self.head.get("remaining_live_requests"),
+        }
+
+    def reservation_cas(
+        self,
+        *,
+        expected_sequence: int,
+        expected_head_sha256: str,
+    ) -> dict[str, Any]:
+        """在 reservation 前复核 probe 后 head 与剩余额度。"""
+
+        _sha_field(expected_head_sha256, "reservation expected_head_sha256")
+        if (
+            isinstance(expected_sequence, bool)
+            or not isinstance(expected_sequence, int)
+            or expected_sequence < 0
+        ):
+            raise ProjectLedgerError("reservation expected_sequence 非法")
+        current = self.refresh()
+        if (
+            current["sequence"] != expected_sequence
+            or current["head_sha256"] != expected_head_sha256
+        ):
+            raise ProjectLedgerError("probe 入账后项目总账 head 已并发前进，拒绝 reservation")
+        if current["blocked"]:
+            raise ProjectLedgerError("probe 入账后项目总账 blocked，拒绝 reservation")
+        remaining = current.get("remaining_live_requests")
+        if remaining is not None and remaining <= 0:
+            raise ProjectLedgerError("probe 已耗尽项目请求预算，拒绝 reservation")
+        if current["root_causes_at_limit"]:
+            raise ProjectLedgerError("probe 入账后存在达到上限的根因，拒绝 reservation")
+        return dict(current)
+
+
+def _runtime_admission_problems(
+    plan: Mapping[str, Any],
+    head: Mapping[str, Any],
+    campaign_plan: Mapping[str, Any],
+    *,
+    now: datetime | None,
+) -> list[str]:
+    """抓包派发门禁；同时检查项目与 Campaign 的绝对截止。"""
+
+    problems: list[str] = []
+    campaign_id = str(campaign_plan["campaign_id"])
+    if campaign_id in head["rejected_campaigns"]:
+        problems.append("Campaign 注册已被追加拒绝")
+    if campaign_id not in head["registered_campaigns"]:
+        problems.append("Campaign 缺少注册事件")
+    if campaign_id in head["terminal_campaigns"]:
+        problems.append("Campaign 已终态")
+    if head["blocked"]:
+        problems.append(f"总账 blocked：{head['unresolved_operation_ids']}")
+    remaining = head.get("remaining_live_requests")
+    if remaining is not None and remaining <= 0:
+        problems.append("项目请求预算为 0")
+    if head["root_causes_at_limit"]:
+        problems.append(f"根因达上限：{head['root_causes_at_limit']}")
+    current = now or datetime.now(timezone.utc)
+    project_deadline = _timestamp(
+        plan["absolute_deadline_utc"], "absolute_deadline_utc"
+    )
+    if current >= project_deadline:
+        problems.append("项目绝对截止时间已到")
+    campaign_deadline = campaign_plan.get("deadline_at_utc")
+    if isinstance(campaign_deadline, str):
+        parsed = _timestamp(campaign_deadline, "deadline_at_utc")
+        if parsed > project_deadline:
+            problems.append("Campaign deadline 超过项目绝对截止时间")
+        if current >= parsed:
+            problems.append("Campaign deadline 已到")
+    return problems
+
+
+@contextlib.contextmanager
+def runtime_admission_scope(
+    campaign_dir: Path,
+    *,
+    require: bool,
+    command: str = "capture-run",
+    now: datetime | None = None,
+) -> Iterator[RuntimeAdmission | None]:
+    """从候选 probe 到 reservation 持续占用项目锁的运行期准入作用域。"""
+
+    root = find_project_ledger(campaign_dir)
+    if root is None:
+        if require:
+            raise ProjectLedgerError(f"{command} 拒绝：项目总账不存在")
+        yield None
+        return
+    # 先补齐已经 COMMIT 的 Campaign batch；随后重新获取并持续持有项目锁。
+    reconcile_project_ledger(root, campaign_dir=campaign_dir, now=now)
+    with project_lock(root):
+        plan, _raw = _load_plan(root)
+        _check_fixture_only(root, plan, campaign_dir)
+        head = _replay(root, plan, _load_events(root), rebuild_cache=True)
+        ledger_dir = campaign_dir / CAMPAIGN_LEDGER_DIR_NAME
+        campaign_plan = _campaign_plan(ledger_dir) if ledger_dir.exists() else None
+        if campaign_plan is None:
+            raise ProjectLedgerError(
+                f"{command} 拒绝：Campaign 未在项目总账注册（缺少账本 plan）"
+            )
+        problems = _runtime_admission_problems(
+            plan,
+            head,
+            campaign_plan,
+            now=now,
+        )
+        if problems:
+            raise ProjectLedgerError(f"{command} 拒绝：" + "；".join(problems))
+        yield RuntimeAdmission(root, plan, head, campaign_plan)
+
+
 @contextlib.contextmanager
 def admission_scope(
     campaign_dir: Path,
@@ -1424,15 +1924,23 @@ def assert_campaign_admitted(campaign_dir: Path, *, command: str, require: bool,
 def record_root_cause_repair(
     root: Path,
     *,
-    root_cause_id: str,
+    root_cause_id: str | None = None,
+    root_cause_ids: list[str] | None = None,
     kind: str,
     bindings: Mapping[str, Any],
     note: str | None = None,
     now: str | None = None,
 ) -> dict[str, Any]:
-    """写 root-cause-repair/v1 收据，经 repairs outbox 推送 root_cause_repaired。"""
+    """写 root-cause-repair/v1 收据，只清零收据明确绑定的根因子集。"""
 
-    _safe_id(root_cause_id, "root_cause_id")
+    cause_payload: dict[str, Any] = {}
+    if root_cause_id is not None:
+        cause_payload["root_cause_id"] = root_cause_id
+    if root_cause_ids is not None:
+        cause_payload["root_cause_ids"] = list(root_cause_ids)
+    cause_ids = _repair_root_cause_ids(cause_payload, "root-cause-repair/v1")
+    for cause_id in cause_ids:
+        _safe_id(cause_id, "root_cause_id")
     if kind not in REPAIR_KINDS:
         raise ProjectLedgerError("修复类型只能是 code 或 environment")
     required = (
@@ -1451,11 +1959,13 @@ def record_root_cause_repair(
     with project_lock(root):
         plan, _raw = _load_plan(root)
         head = _replay(root, plan, _load_events(root), rebuild_cache=False)
-        if root_cause_id not in head["root_cause_counts"]:
-            raise ProjectLedgerError(f"根因 {root_cause_id} 未在总账出现过，无从修复")
+        missing = [cause_id for cause_id in cause_ids if cause_id not in head["root_cause_counts"]]
+        if missing:
+            raise ProjectLedgerError(f"根因 {missing} 未在总账出现过，无从修复")
+        receipt_causes = {"root_cause_id": cause_ids[0]} if len(cause_ids) == 1 else {"root_cause_ids": cause_ids}
         receipt = {
             "schema_version": REPAIR_SCHEMA,
-            "root_cause_id": root_cause_id,
+            **receipt_causes,
             "kind": kind,
             "bindings": dict(bindings),
             "note": note,
@@ -1463,20 +1973,140 @@ def record_root_cause_repair(
             "root_cause_codes_sha256": plan["root_cause_codes_sha256"],
         }
         receipt_sha256 = _digest(receipt)
-        operation_id = f"repair:{root_cause_id}:{receipt_sha256[:16]}"
+        operation_subject = cause_ids[0] if len(cause_ids) == 1 else f"set-{_digest(cause_ids)[:16]}"
+        operation_id = f"repair:{operation_subject}:{receipt_sha256[:16]}"
         receipts_root = _private_dir(root / "repairs" / "receipts", "修复收据目录", create=True)
         receipt_path = receipts_root / f"{operation_id.replace(':', '-')}.json"
         if not receipt_path.exists():
             _write_once(receipt_path, receipt)
+        event_causes = {"root_cause_id": cause_ids[0]} if len(cause_ids) == 1 else {"root_cause_ids": cause_ids}
         batch = write_batch(
             _private_dir(root / "repairs", "repairs 目录"),
             operation_id=operation_id,
             event_type="root_cause_repaired",
-            payload={"root_cause_id": root_cause_id, "kind": kind, "repair_receipt_sha256": receipt_sha256, "bindings": dict(bindings)},
+            payload={**event_causes, "kind": kind, "repair_receipt_sha256": receipt_sha256, "bindings": dict(bindings)},
             source={"kind": "repair_receipt", "sha256": receipt_sha256},
         )
         report = reconcile_project_ledger(root)
-    return {"operation_id": operation_id, "receipt_path": str(receipt_path), "receipt_sha256": receipt_sha256, "batch_sha256": batch["batch_sha256"], "head_sequence": report["head_sequence"]}
+    return {
+        "operation_id": operation_id,
+        "root_cause_ids": cause_ids,
+        "receipt_path": str(receipt_path),
+        "receipt_sha256": receipt_sha256,
+        "batch_sha256": batch["batch_sha256"],
+        "head_sequence": report["head_sequence"],
+    }
+
+
+def _record_historical_correction(
+    root: Path,
+    *,
+    original_operation_id: str,
+    corrected_payload: Mapping[str, Any],
+    correction_event_type: str,
+    reason: str,
+    original_event_sha256: str | None = None,
+    original_payload_sha256: str | None = None,
+) -> dict[str, Any]:
+    """追加历史更正；固定 operation ID 使同 payload 重试幂等、任何漂移失败。"""
+
+    if correction_event_type not in CORRECTION_TARGET_EVENT:
+        raise ProjectLedgerError(f"历史更正事件类型非法：{correction_event_type}")
+    _safe_id(original_operation_id, "original_operation_id")
+    if not isinstance(corrected_payload, Mapping):
+        raise ProjectLedgerError("corrected_payload 必须是对象")
+    if not isinstance(reason, str) or not reason.strip():
+        raise ProjectLedgerError("历史更正 reason 不得为空")
+    if original_event_sha256 is not None:
+        _sha_field(original_event_sha256, "original_event_sha256")
+    if original_payload_sha256 is not None:
+        _sha_field(original_payload_sha256, "original_payload_sha256")
+    with project_lock(root):
+        plan, _raw = _load_plan(root)
+        events = _load_events(root)
+        # 先完整重放，保证不在已损坏或已存在歧义更正的事件链上继续追加。
+        _replay(root, plan, events, rebuild_cache=False)
+        original = next((event for event in events if event["operation_id"] == original_operation_id), None)
+        if original is None:
+            raise ProjectLedgerError(f"原 operation 不存在：{original_operation_id}")
+        expected_type = CORRECTION_TARGET_EVENT[correction_event_type]
+        if original["event_type"] != expected_type:
+            raise ProjectLedgerError(f"原 operation 不是 {expected_type}：{original_operation_id}")
+        if original_event_sha256 is not None and original_event_sha256 != original["event_sha256"]:
+            raise ProjectLedgerError("调用方绑定的原事件 SHA 漂移")
+        if original_payload_sha256 is not None and original_payload_sha256 != original["payload_sha256"]:
+            raise ProjectLedgerError("调用方绑定的原 payload SHA 漂移")
+        corrected = json.loads(_canonical(corrected_payload))
+        correction_payload = {
+            "original_operation_id": original_operation_id,
+            "original_event_sha256": original["event_sha256"],
+            "original_payload_sha256": original["payload_sha256"],
+            "corrected_payload": corrected,
+            "corrected_payload_sha256": _digest(corrected),
+            "reason": reason.strip(),
+        }
+        operation_id = f"{correction_event_type}:{original['event_sha256']}"
+        new_head, status = append_project_event(
+            root,
+            operation_id=operation_id,
+            event_type=correction_event_type,
+            payload=correction_payload,
+            source_batch_sha256=None,
+        )
+    return {
+        "operation_id": operation_id,
+        "status": status,
+        "original_operation_id": original_operation_id,
+        "original_event_sha256": original["event_sha256"],
+        "original_payload_sha256": original["payload_sha256"],
+        "corrected_payload_sha256": correction_payload["corrected_payload_sha256"],
+        "head_sequence": new_head["sequence"],
+        "head_sha256": new_head["head_sha256"],
+    }
+
+
+def record_historical_reconciliation_correction(
+    root: Path,
+    *,
+    original_operation_id: str,
+    corrected_payload: Mapping[str, Any],
+    reason: str,
+    original_event_sha256: str | None = None,
+    original_payload_sha256: str | None = None,
+) -> dict[str, Any]:
+    """追加 reconciliation 历史更正，不改写原事件。"""
+
+    return _record_historical_correction(
+        root,
+        original_operation_id=original_operation_id,
+        corrected_payload=corrected_payload,
+        correction_event_type="reconciliation_corrected",
+        reason=reason,
+        original_event_sha256=original_event_sha256,
+        original_payload_sha256=original_payload_sha256,
+    )
+
+
+def record_historical_root_cause_repair_correction(
+    root: Path,
+    *,
+    original_operation_id: str,
+    corrected_payload: Mapping[str, Any],
+    reason: str,
+    original_event_sha256: str | None = None,
+    original_payload_sha256: str | None = None,
+) -> dict[str, Any]:
+    """追加 root-cause repair 历史更正，不改写原事件。"""
+
+    return _record_historical_correction(
+        root,
+        original_operation_id=original_operation_id,
+        corrected_payload=corrected_payload,
+        correction_event_type="root_cause_repair_corrected",
+        reason=reason,
+        original_event_sha256=original_event_sha256,
+        original_payload_sha256=original_payload_sha256,
+    )
 
 
 def create_supersede_approval(
@@ -1655,7 +2285,7 @@ def register_existing_campaign(campaign_dir: Path, *, now: datetime | None = Non
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="追加式项目总账：创建、状态、补齐、修复收据。")
+    parser = argparse.ArgumentParser(description="追加式项目总账：创建、状态、补齐、修复收据与历史更正。")
     subparsers = parser.add_subparsers(dest="command", required=True)
     create = subparsers.add_parser("create-project-ledger", help="创建只写一次的项目总账")
     create.add_argument("--ledger-dir", type=Path, required=True)
@@ -1675,10 +2305,30 @@ def build_parser() -> argparse.ArgumentParser:
     reconcile.add_argument("--campaign-dir", type=Path)
     repair = subparsers.add_parser("record-root-cause-repair", help="写修复收据并推送 root_cause_repaired")
     repair.add_argument("--ledger-dir", type=Path, required=True)
-    repair.add_argument("--root-cause-id", required=True)
+    repair.add_argument("--root-cause-id", action="append", required=True, help="实际修复的根因 ID，可重复指定")
     repair.add_argument("--kind", choices=REPAIR_KINDS, required=True)
     repair.add_argument("--binding", action="append", default=[], help="KEY=VALUE，可重复")
     repair.add_argument("--note")
+    reconciliation_correction = subparsers.add_parser(
+        "record-reconciliation-correction",
+        help="追加 reconciliation 历史更正，不改写原事件",
+    )
+    reconciliation_correction.add_argument("--ledger-dir", type=Path, required=True)
+    reconciliation_correction.add_argument("--original-operation-id", required=True)
+    reconciliation_correction.add_argument("--corrected-payload-json", type=Path, required=True)
+    reconciliation_correction.add_argument("--reason", required=True)
+    reconciliation_correction.add_argument("--original-event-sha256")
+    reconciliation_correction.add_argument("--original-payload-sha256")
+    repair_correction = subparsers.add_parser(
+        "record-root-cause-repair-correction",
+        help="追加 root-cause repair 历史更正，不改写原事件",
+    )
+    repair_correction.add_argument("--ledger-dir", type=Path, required=True)
+    repair_correction.add_argument("--original-operation-id", required=True)
+    repair_correction.add_argument("--corrected-payload-json", type=Path, required=True)
+    repair_correction.add_argument("--reason", required=True)
+    repair_correction.add_argument("--original-event-sha256")
+    repair_correction.add_argument("--original-payload-sha256")
     admitted = subparsers.add_parser("assert-campaign-admitted", help="消费者门禁只读检查")
     admitted.add_argument("--campaign-dir", type=Path, required=True)
     admitted.add_argument("--consumer", choices=sorted(CONSUMER_COMMANDS), required=True)
@@ -1729,7 +2379,33 @@ def main(argv: list[str] | None = None) -> int:
                 if not separator:
                     raise ProjectLedgerError("--binding 必须为 KEY=VALUE")
                 bindings[key] = value
-            result = record_root_cause_repair(arguments.ledger_dir, root_cause_id=arguments.root_cause_id, kind=arguments.kind, bindings=bindings, note=arguments.note)
+            result = record_root_cause_repair(
+                arguments.ledger_dir,
+                root_cause_ids=arguments.root_cause_id,
+                kind=arguments.kind,
+                bindings=bindings,
+                note=arguments.note,
+            )
+        elif arguments.command == "record-reconciliation-correction":
+            corrected_payload = _load_json_file(arguments.corrected_payload_json, "reconciliation 更正 payload")
+            result = record_historical_reconciliation_correction(
+                arguments.ledger_dir,
+                original_operation_id=arguments.original_operation_id,
+                corrected_payload=corrected_payload,
+                reason=arguments.reason,
+                original_event_sha256=arguments.original_event_sha256,
+                original_payload_sha256=arguments.original_payload_sha256,
+            )
+        elif arguments.command == "record-root-cause-repair-correction":
+            corrected_payload = _load_json_file(arguments.corrected_payload_json, "repair 更正 payload")
+            result = record_historical_root_cause_repair_correction(
+                arguments.ledger_dir,
+                original_operation_id=arguments.original_operation_id,
+                corrected_payload=corrected_payload,
+                reason=arguments.reason,
+                original_event_sha256=arguments.original_event_sha256,
+                original_payload_sha256=arguments.original_payload_sha256,
+            )
         elif arguments.command == "supersede-approval-create":
             result = create_supersede_approval(arguments.ledger_dir, superseded_campaign_id=arguments.campaign_id, approved_by=arguments.approved_by)
         elif arguments.command == "supersede-approval-apply":

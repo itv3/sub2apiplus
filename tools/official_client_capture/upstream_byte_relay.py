@@ -70,6 +70,52 @@ _SYNTHETIC_CORE_CFUV_COOKIE = (
     "_cfuvid=candidate-core-0145; Path=/; Domain=.chatgpt.com; "
     "Secure; HttpOnly; SameSite=None"
 )
+# 候选合成 /models 清单的模型元数据。字段值逐条对齐真实上游 0.154.0 对账号返回的
+# 清单（c0154-formal-vc1-recapture-20260915t230327z-lite-http-response/relay/conn001）。
+#
+# 必须携带 visibility=list：Sub2API 与官方 models-manager 都只在清单含至少一个
+# visibility=list 的模型时让远端清单整体接管；否则网关回落 bundled 快照，候选与
+# 官方（真实上游 authoritative）的 Lite 判定路径就不等价——0.154 把 Lite 轨换成
+# gpt-6-astra 后，旧清单缺该模型又无 visibility，网关走未知模型 fallback 判成非
+# Lite，VC-5 的 H1-004／EP-014 因此失败。接管后每个模型不再以 bundled 打底，
+# 缺 default_reasoning_level 即 effort 为空、缺 default_reasoning_summary 即 serde
+# 默认 auto，所以保留的每条都必须补全五个能力位。
+# 改动必须同步 capturelib.model 的轨道政策；tests/test_main_track_models.py 锁定。
+_SYNTHETIC_MODEL_METADATA: tuple[tuple[str, str, bool, str], ...] = (
+    # (slug, display_name, use_responses_lite, default_reasoning_level)
+    ("gpt-6-astra", "GPT-6 Astra", True, "medium"),
+    ("gpt-5.6-sol", "GPT-5.6 Sol", True, "low"),
+    ("gpt-5.6-luna", "GPT-5.6 Luna", True, "medium"),
+    ("gpt-5.5", "GPT-5.5", False, "medium"),
+)
+_SYNTHETIC_CORE_MODEL_SLUGS = ("gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.5")
+_SYNTHETIC_AUX_MODEL_SLUGS = ("gpt-6-astra", "gpt-5.6-luna")
+
+
+def synthetic_models_payload(slugs: tuple[str, ...]) -> bytes:
+    """按固定字段顺序生成合成 /models 清单字节，供 core／aux 两个 profile 复用。"""
+
+    by_slug = {entry[0]: entry for entry in _SYNTHETIC_MODEL_METADATA}
+    models = []
+    for slug in slugs:
+        _, display_name, use_responses_lite, default_reasoning_level = by_slug[slug]
+        models.append(
+            {
+                "slug": slug,
+                "display_name": display_name,
+                "visibility": "list",
+                "use_responses_lite": use_responses_lite,
+                "supports_parallel_tool_calls": True,
+                "default_reasoning_level": default_reasoning_level,
+                "default_reasoning_summary": "none",
+                "supports_reasoning_summary_parameter": True,
+            }
+        )
+    return json.dumps({"models": models}, separators=(",", ":")).encode("utf-8")
+
+
+SYNTHETIC_CORE_MODELS_BODY = synthetic_models_payload(_SYNTHETIC_CORE_MODEL_SLUGS)
+SYNTHETIC_AUX_MODELS_BODY = synthetic_models_payload(_SYNTHETIC_AUX_MODEL_SLUGS)
 _SYNTHETIC_CORE_SCENARIOS = frozenset(
     {"A03", "A04", "A05", "A06", "A07", "A08", "A10", "A15"}
 )
@@ -664,13 +710,14 @@ def _synthetic_aux_response(
             "/backend-api/codex/models",
             [("client_version", codex_version)],
         ):
-            payload = (
-                b'{"models":[{"slug":"gpt-5.6-luna","display_name":"GPT-5.6 Luna",'
-                b'"use_responses_lite":true}]}'
-            )
             return SyntheticAuxResponse(
                 "models_manifest",
-                _h1_response(200, "OK", payload, headers=(("etag", 'W/"candidate-aux-0145"'),)),
+                _h1_response(
+                    200,
+                    "OK",
+                    SYNTHETIC_AUX_MODELS_BODY,
+                    headers=(("etag", 'W/"candidate-aux-0145"'),),
+                ),
             )
         if method == "POST" and path == "/backend-api/codex/responses/compact" and not query_pairs:
             payload = (
@@ -822,24 +869,14 @@ def _synthetic_aux_response(
 
 
 def _synthetic_core_models_response() -> SyntheticCoreResponse:
-    """返回覆盖本轮 Lite/非 Lite 模型的冻结 manifest。"""
+    """返回覆盖本轮 Lite/非 Lite 模型的冻结 manifest（authoritative，字段齐全）。"""
 
-    payload = (
-        b'{"models":['
-        b'{"slug":"gpt-5.5","display_name":"GPT-5.5",'
-        b'"use_responses_lite":false,"supports_parallel_tool_calls":true},'
-        b'{"slug":"gpt-5.6-luna","display_name":"GPT-5.6 Luna",'
-        b'"use_responses_lite":true,"supports_parallel_tool_calls":true},'
-        b'{"slug":"gpt-5.6-sol","display_name":"GPT-5.6 Sol",'
-        b'"use_responses_lite":true,"supports_parallel_tool_calls":true}'
-        b']}'
-    )
     return SyntheticCoreResponse(
         "models_manifest",
         _h1_response(
             200,
             "OK",
-            payload,
+            SYNTHETIC_CORE_MODELS_BODY,
             headers=(("etag", 'W/"candidate-core-0145"'),),
         ),
     )

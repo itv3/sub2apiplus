@@ -68,8 +68,15 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
 # 2026-09-10：openai_gateway_forward.go 在 ensure 之后把模型能力查表结果钉在 ctx，
 # 消除入站归一化与出站画像之间的判定撕裂；本轮只重绑该源码摘要，不改变候选测试、
 # 事实宇宙或断言规则。
+# 2026-09-17：A15 改由真实 codex exec 与 PTY TUI 的两条启动 models、同一 TUI
+# initialize 后插件身份请求及唯一 relay 上游原件证明，删除三条静态
+# surface_identity 事实；其余 31 条测试事实保持不变。
+# 2026-09-18：候选 Lite 判定修复——bundled 快照补 gpt-6-astra、legacy compact 首次出站保留
+# 入站模型、/wham/usage 声明 Luna Reserve 条件，改动 `official_egress_codex_0145_profile.go`、
+# `official_egress_codex_integration.go` 与 `openai_gateway_forward.go`；映射只重绑这三份
+# 源码快照，不改变候选测试、事实宇宙或断言规则。
 FROZEN_MAPPING_SHA256 = (
-    "1d13a8fe05707b84ecfb65a546b50040d567f8c967b448dc38fd2c6f3cff6798"
+    "d4b7b4efef8cd740018ebfe22e93973ea7710ac5347cf7be388b37a1979ae0b0"
 )
 # 2026-08-11（R8）：与双轨 selector 修订后的冻结断言画像保持同一摘要，
 # 含 BODY-006/nonlite-* 两条补 method=POST 与 responses 路径约束的修订。
@@ -102,10 +109,18 @@ FROZEN_MAPPING_SHA256 = (
 # compact 线序，并重绑当前第二部分摘要；42 条验收规则数量不变。
 # 2026-08-31：断言画像升级为 0.151.0，加入 Files C2PA 条件分支的三条检查，
 # 规则总数仍为 42。
-# 2026-09-12：目标画像升级到 0.154.0 并重绑主手册第二部分摘要；规则、
-# selector、事实映射与验收判据载荷保持不变。
+# 2026-09-17：A15 的 HDR-005 selector 按真实并发时序修正为启动 models suffix
+# 可选、TUI initialize 后插件请求必须有 suffix；其余规则与事实映射保持不变。
+# 2026-09-18：0.154.0 断言画像补 Astra Lite 精确判据——EP-019 的 WHAM GET 头断言按路径拆为
+# usage（携带 x-openai-codex-luna-reserve、cookie 可选）与 credits（不携带）；BODY-006 加 A03 Lite 的
+# body.model／reasoning 清单默认值／summary 省略／text.verbosity；H1-004 与 EP-014 加 Lite 头与
+# routing hint 值；EP-020 加 legacy compact body.model 保留入站模型。验收契约载荷已逐项审核：
+# dual_wire=25／candidate_profile=17、validation_modes、side_restricted_checks、side_coverage 均不变，
+# 仅 expected_check_ids 增加，契约摘要 7aa0c0fcb28c9f8a71e5c6fdc388aea523b4d3fcaafaa1cc129c3aaf26a077a1。
+# 2026-09-22：随主手册第二部分摘要重绑（见 candidate_rule_assertion 同日注释）；
+# 0.154.0 断言画像的规则、场景与判据载荷逐字不变，漂移只来自 source_spec_sha256。
 FROZEN_PROFILE_SHA256 = (
-    "a63263c9f431d95b07371d9aeceb7f01a5db3084783d32ffdfc63fab0cacc635"
+    "6001b9eb2d6a446ad94bcfd01f6f88f173b153432170b54e5075274cb4428fc6"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")

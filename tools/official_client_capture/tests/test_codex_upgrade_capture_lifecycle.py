@@ -1626,7 +1626,7 @@ class CaptureLifecycleTest(unittest.TestCase):
             # 抓包 attempt 必须先有原子预约收据；seal 只接受预约与 attempt
             # 身份一致的目录，测试夹具也按生产收据契约构造。
             reservation = {
-                "schema_version": codex_upgrade.CAPTURE_RESERVATION_SCHEMA,
+                "schema_version": codex_upgrade.LEGACY_CAPTURE_RESERVATION_SCHEMA,
                 "campaign_id": "campaign-a",
                 "campaign_mode": "formal",
                 "campaign_purpose": "production_replacement",

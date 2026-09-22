@@ -9,6 +9,10 @@
 # 用法：
 #   CAMPAIGN_DIR=... ATTEMPT_ID=... SIDE=official|candidate \
 #   bash prepare_assertion_bundle.sh
+# 改造 5 M2（attempt-recovery 基线的增量封存）：候选侧再给 BASELINE=b<K>（K≥1）时，
+# 证据根改读 `candidates/<cid>/revisions/b<K>/effective-results.json`（每 Job 恰一条，
+# reused 引用前序结果、recovered 指向恢复段结果），bundle 落在
+# `candidates/<cid>/revisions/b<K>/baseline-evidence/assertion-bundle/`（本基线私有根；不叫 evidence，避免与恢复段证据根同名）。
 set -euo pipefail
 umask 077
 
@@ -21,6 +25,7 @@ side=${SIDE:-official}
 repo_root=${REPO_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)}
 tool_root=${TOOL_ROOT:-"$repo_root/tools/official_client_capture"}
 
+baseline=${BASELINE:-}
 case "$side" in
   official) attempt_dir="$campaign_dir/official/attempts/$attempt_id" ;;
   candidate)
@@ -28,6 +33,18 @@ case "$side" in
     attempt_dir="$campaign_dir/candidates/$candidate_id/attempts/$attempt_id" ;;
   *) echo "未知 SIDE: $side" >&2; exit 2 ;;
 esac
+if [[ -n $baseline ]]; then
+  [[ $side == candidate ]] || { echo "BASELINE 只用于候选侧" >&2; exit 2; }
+  [[ $baseline =~ ^b[1-9][0-9]*$ ]] || { echo "BASELINE 必须是 b<K>（K≥1）：$baseline" >&2; exit 2; }
+  baseline_dir="$campaign_dir/candidates/$candidate_id/revisions/$baseline"
+  results_json="$baseline_dir/effective-results.json"
+  [[ -f $results_json && ! -L $results_json ]] || { echo "找不到 effective-results: $results_json" >&2; exit 1; }
+  evidence_dir="$baseline_dir/baseline-evidence"
+  if [[ ! -e $evidence_dir ]]; then mkdir -m 0700 "$evidence_dir"; fi
+else
+  results_json="$attempt_dir/attempt.json"
+  evidence_dir="$attempt_dir/evidence"
+fi
 
 attempt_json="$attempt_dir/attempt.json"
 [[ -f $attempt_json ]] || { echo "找不到 attempt: $attempt_json" >&2; exit 1; }
@@ -52,9 +69,8 @@ declaration=${DECLARATION:-"$tool_root/codex_upgrade_evidence_labels_${version_k
   exit 1
 }
 
-bundle_dir="$attempt_dir/evidence/assertion-bundle"
+bundle_dir="$evidence_dir/assertion-bundle"
 [[ -e $bundle_dir ]] && { echo "断言证据包已存在，拒绝覆盖：$bundle_dir" >&2; exit 1; }
-evidence_dir="$attempt_dir/evidence"
 [[ -d $evidence_dir && ! -L $evidence_dir ]] || {
   echo "attempt 证据目录不存在或不可信：$evidence_dir" >&2
   exit 1
@@ -67,13 +83,20 @@ trap 'rm -rf "$work_dir"' EXIT
 staged_bundle="$work_dir/assertion-bundle"
 
 # 1) 唯一从逐 Job 结果读取权威证据根；顶层 evidence_roots 和 Campaign 名称
-# 不能覆盖跨 Campaign 的复用根。
-python3 - "$campaign_dir" "$attempt_dir" "$side" > "$work_dir/jobroots.txt" <<'PY'
+# 不能覆盖跨 Campaign 的复用根。BASELINE 模式下结果来自 effective-results（entries）。
+python3 - "$campaign_dir" "$results_json" "$side" > "$work_dir/jobroots.txt" <<'PY'
 import json, re, sys, pathlib
 campaign = json.loads((pathlib.Path(sys.argv[1]) / "campaign.json").read_text())
-attempt = json.loads((pathlib.Path(sys.argv[2]) / "attempt.json").read_text())
+source = json.loads(pathlib.Path(sys.argv[2]).read_text())
 side = sys.argv[3]
-results = attempt.get("results")
+if source.get("schema_version") == "codex-upgrade-effective-results/v1":
+    results = [
+        {"id": entry.get("job_id"), "status": entry.get("status"), "required": True, "evidence_roots": entry.get("evidence_roots")}
+        for entry in source.get("entries", [])
+        if isinstance(entry, dict)
+    ]
+else:
+    results = source.get("results")
 if not isinstance(results, list):
     raise SystemExit("attempt results 必须是数组")
 result_by_job = {}
@@ -201,6 +224,26 @@ if len(matches) > 1:
 print(matches[0] if matches else "")
 PY
   )
+  # 2026-09-18 起该日志由 VC-5 的 candidate-trace-test Job 在同源源码树上产出并
+  # 以 required 规则登记；只要目标版本的证据标签声明了这份日志，bundle 里没有
+  # 它就是 Job 闭集不完整，必须失败关闭，不能再静默跳过结构化 trace。判据取
+  # 自标签声明而不是版本号，未声明该日志的历史夹具保持原语义。
+  go_test_declared=$(python3 - "$declaration" <<'PY'
+import json, pathlib, sys
+
+declaration = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+declared = any(
+    entry.get("side") == "candidate"
+    and any(rule.get("glob") == "candidate-go-test.jsonl" for rule in entry.get("rules", []))
+    for entry in declaration.get("entries", [])
+)
+print("yes" if declared else "no")
+PY
+  )
+  if [[ $go_test_declared == yes && -z $go_test_artifact ]]; then
+    echo "候选 bundle 缺少 candidate-go-test.jsonl：candidate-trace-test Job 未产出或未被证据目录纳入" >&2
+    exit 1
+  fi
   if [[ -n $go_test_artifact ]]; then
     candidate_source_root=${CANDIDATE_SOURCE_ROOT:?含 candidate-go-test 的候选侧必须提供 CANDIDATE_SOURCE_ROOT}
     [[ $candidate_source_root == /* && -d $candidate_source_root && ! -L $candidate_source_root ]] || {

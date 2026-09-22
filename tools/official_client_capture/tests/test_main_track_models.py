@@ -12,17 +12,45 @@ import re
 import unittest
 from pathlib import Path
 
-from tools.official_client_capture import extract_compaction_reason, h1_wire_probe
+from tools.official_client_capture import (
+    extract_compaction_reason,
+    h1_wire_probe,
+    upstream_byte_relay,
+)
 from tools.official_client_capture.capturelib.model import (
     LITE_TRACK_MODELS,
     MAIN_TRACK_MODELS,
     track_models_for_version,
 )
 
+# 候选 relay 合成 /models 清单接管后每条模型必须齐备的字段：缺任何一个都会让网关
+# 按 serde 默认值定型（effort 为空、summary=auto），与真实上游 authoritative 清单
+# 的形态脱节。
+SYNTHETIC_MODEL_REQUIRED_FIELDS = (
+    "visibility",
+    "use_responses_lite",
+    "supports_parallel_tool_calls",
+    "default_reasoning_level",
+    "default_reasoning_summary",
+    "supports_reasoning_summary_parameter",
+)
+# 真实上游 0.154.0 清单（官方 lite-http-response conn001）的默认 effort。
+SYNTHETIC_MODEL_EXPECTED_EFFORT = {
+    "gpt-6-astra": "medium",
+    "gpt-5.6-sol": "low",
+    "gpt-5.6-luna": "medium",
+    "gpt-5.5": "medium",
+}
+
 
 def probe_models() -> dict[str, bool]:
     payload = json.loads(h1_wire_probe.MODELS_BODY.decode())
     return {item["slug"]: item["use_responses_lite"] for item in payload["models"]}
+
+
+def synthetic_models(body: bytes) -> dict[str, dict]:
+    payload = json.loads(body.decode())
+    return {item["slug"]: item for item in payload["models"]}
 
 
 class MainTrackModelTests(unittest.TestCase):
@@ -87,6 +115,51 @@ class MainTrackModelTests(unittest.TestCase):
                 True,
                 f"{model} 属 Lite 轨，use_responses_lite 必须为 true",
             )
+
+    def test_relay_synthetic_models_are_authoritative_and_complete(self) -> None:
+        """候选 relay 的 core／aux 合成 /models 必须与官方采集条件等价。
+
+        官方采集走真实上游，清单含 visibility=list 而被整体接管；候选合成清单若缺
+        visibility 或缺 Lite 轨模型，网关就回落 bundled 快照并把新模型当未知模型
+        判成非 Lite（0.154 gpt-6-astra 的 VC-5 失败根因）。这里锁定：两份清单都
+        覆盖目标版本 Lite 轨，core 还覆盖主轨；每条模型五个能力位齐全且
+        visibility=list；lite 标志与轨道一致，并与 h1 探针受控清单同 slug 一致；
+        默认 effort 与真实上游一致。
+        """
+
+        probe = probe_models()
+        core = synthetic_models(upstream_byte_relay.SYNTHETIC_CORE_MODELS_BODY)
+        aux = synthetic_models(upstream_byte_relay.SYNTHETIC_AUX_MODELS_BODY)
+        lite_0154 = track_models_for_version("0.154.0", "lite")
+        main_0154 = track_models_for_version("0.154.0", "main")
+        for name, manifest, required in (
+            ("core", core, lite_0154 + main_0154),
+            ("aux", aux, lite_0154),
+        ):
+            for model in required:
+                self.assertIn(model, manifest, f"relay {name} 合成 /models 缺 {model}")
+            self.assertTrue(
+                any(item["visibility"] == "list" for item in manifest.values()),
+                f"relay {name} 合成 /models 无 visibility=list，清单不会被接管",
+            )
+            for slug, item in manifest.items():
+                for field in SYNTHETIC_MODEL_REQUIRED_FIELDS:
+                    self.assertIn(field, item, f"relay {name} 合成 /models 的 {slug} 缺 {field}")
+                self.assertEqual(item["visibility"], "list", slug)
+                self.assertIs(item["supports_parallel_tool_calls"], True, slug)
+                self.assertIs(item["supports_reasoning_summary_parameter"], True, slug)
+                self.assertEqual(item["default_reasoning_summary"], "none", slug)
+                self.assertEqual(
+                    item["default_reasoning_level"],
+                    SYNTHETIC_MODEL_EXPECTED_EFFORT[slug],
+                    f"{slug} 默认 effort 与真实上游 0.154.0 清单不一致",
+                )
+                if slug in probe:
+                    self.assertIs(item["use_responses_lite"], probe[slug], slug)
+                if slug in LITE_TRACK_MODELS:
+                    self.assertIs(item["use_responses_lite"], True, slug)
+                if slug in MAIN_TRACK_MODELS:
+                    self.assertIs(item["use_responses_lite"], False, slug)
 
     def test_compaction_allowed_models_cover_both_tracks(self) -> None:
         missing = (set(MAIN_TRACK_MODELS) | set(LITE_TRACK_MODELS)) - (

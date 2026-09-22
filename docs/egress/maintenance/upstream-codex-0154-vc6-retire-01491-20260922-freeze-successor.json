@@ -1,0 +1,75 @@
+{
+  "base_commit": "fb9ef310b26c015e3f2ce1cb3ee1246fc9327351",
+  "changed_path_count": 4,
+  "current_commit": "8f4a4ba9c6ed06563f4030503ca916be093b0145",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 3951,
+  "frozen_path_count": 1399,
+  "identity_sha256": "b9e9e762e1608fbb88e47d8866a670114a2dbf2fd8e64f1f7d51e734acbf4485",
+  "issued_at_utc": "2026-09-22T14:08:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-upstream-codex-0154-vc6-retire-01491-20260922-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/catalogdata/runtime/release-catalog.json",
+      "predecessor_sha256s": [
+        "7f6721a2ba06ffee92f8888a6ed285123fdcde8da4b0e1b4efca9ac89ac6c14f"
+      ],
+      "reason": "登记 VC-6 §4.6.7 退休步骤（提交 8f4a4ba9c）的冻结承接边：移除 0.149.1 两份运行画像、按 0.151 轮先例确定性裁剪 active snapshot catalog 为 434f41b3…、selector 切换并记为本轮 Campaign 的 retirement；历史 release-graph 与历史 snapshot catalog 逐字不变，画像字节保留在 git 历史与 Campaign 证据中 path=backend/internal/officialegress/catalogdata/runtime/release-catalog.json",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-formal-recovery-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-r9-candidate-readiness-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v10-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v11-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v12-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v13-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v14-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v14r-20260921-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v14r2-20260921-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v14r3-20260921-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v14r4-20260921-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v14r5-20260922-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v2-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v3-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v4-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v5-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v6-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v7-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v8-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v8r3-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v8r5-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v8r6-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v8r7-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v9-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-v14r5-production-tree-20260922-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "60569092735f92dbbde607dac119050e13c0c03a81f36e05a28b47d93e2ca68d"
+    }
+  ],
+  "unregistered_path_count": 3,
+  "unregistered_paths": [
+    "backend/internal/officialegress/catalogdata/runtime/profiles/0.149.1/8c22d3b18b16d249ac041a97efad1b6703c11ef290622b0b1642679a3c010ec3.json",
+    "backend/internal/officialegress/catalogdata/runtime/profiles/0.149.1/8e59b38e2ad90a1fd4eb7520c2c54f01fc62f802690d45a2cdab5f91f249fb60.json",
+    "backend/internal/officialegress/catalogdata/runtime/snapshot-catalogs/434f41b3d0d546ac702c2d7ca5e3507c1bd4463bf29181fbebc8c60671c290aa.json"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}

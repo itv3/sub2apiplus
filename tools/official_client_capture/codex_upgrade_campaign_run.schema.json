@@ -60,7 +60,26 @@
           "maxItems": 256,
           "uniqueItems": true,
           "items": {"$ref": "#/$defs/safeId"}
+        },
+        "output_bindings": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/relativePath"}
         }
+      }
+    },
+    "relativePath": {"type": "string", "minLength": 1, "maxLength": 512, "pattern": "^(?!/)(?!.*(^|/)\\.\\.?(/|$)).+$"},
+    "evaluatorDigests": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["checker_sha256", "builder_sha256", "compare_reader_sha256", "accept_reader_sha256"],
+      "properties": {
+        "checker_sha256": {"$ref": "#/$defs/sha256"},
+        "builder_sha256": {"$ref": "#/$defs/sha256"},
+        "compare_reader_sha256": {"$ref": "#/$defs/sha256"},
+        "accept_reader_sha256": {"$ref": "#/$defs/sha256"}
       }
     },
     "checkpointReference": {
@@ -244,7 +263,12 @@
         "actions": {"type": "array", "maxItems": 256, "items": {"$ref": "#/$defs/actionV2"}},
         "execute_items": {"$ref": "#/$defs/idArray"},
         "reuse_items": {"$ref": "#/$defs/idArray"},
-        "no_op": {"type": "boolean"}
+        "no_op": {"type": "boolean"},
+        "candidate_revision": {"oneOf": [{"type": "integer", "minimum": 1}, {"type": "null"}]},
+        "candidate_id": {"oneOf": [{"$ref": "#/$defs/safeId"}, {"type": "null"}]},
+        "evaluation_baseline": {"oneOf": [{"type": "integer", "minimum": 1}, {"type": "null"}]},
+        "baseline_commit_sha256": {"oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
+        "evaluator_digests": {"oneOf": [{"$ref": "#/$defs/evaluatorDigests"}, {"type": "null"}]}
       }
     },
     "v3": {
@@ -272,7 +296,12 @@
         "actions": {"type": "array", "minItems": 1, "maxItems": 1, "items": {"$ref": "#/$defs/actionV2"}},
         "execute_items": {"$ref": "#/$defs/idArray"},
         "reuse_items": {"$ref": "#/$defs/idArray"},
-        "no_op": {"const": false}
+        "no_op": {"const": false},
+        "candidate_revision": {"oneOf": [{"type": "integer", "minimum": 1}, {"type": "null"}]},
+        "candidate_id": {"oneOf": [{"$ref": "#/$defs/safeId"}, {"type": "null"}]},
+        "evaluation_baseline": {"oneOf": [{"type": "integer", "minimum": 1}, {"type": "null"}]},
+        "baseline_commit_sha256": {"oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
+        "evaluator_digests": {"oneOf": [{"$ref": "#/$defs/evaluatorDigests"}, {"type": "null"}]}
       }
     },
     "v4": {

@@ -6,6 +6,20 @@
         "test",
         "./internal/service",
         "-run",
+        "^TestCodexWhamUsageLunaReserveReplaysApprovedSemanticsOnTargetRelease$",
+        "-count=1"
+      ],
+      "gate_id": "affected-spec-ep-019",
+      "requirement_sha256": "1f68e3438cca5601bdf9cf736b80ea0246c094ec41c959db4dc9ffcbf21b4045",
+      "test_id": "TestCodexWhamUsageLunaReserveReplaysApprovedSemanticsOnTargetRelease",
+      "working_directory": "backend"
+    },
+    {
+      "command": [
+        "go",
+        "test",
+        "./internal/service",
+        "-run",
         "^TestOfficialCodexProjectionUsesFormalReleaseCatalog$",
         "-count=1"
       ],
@@ -50,6 +64,6 @@
       "working_directory": "."
     }
   ],
-  "requirements_sha256": "927d9463d96003bcf09940eec73a995f14b936500bb209187140fd40a56ed7e9",
+  "requirements_sha256": "f8875cb49e4834a09d06250b079df1f9c0e86d5ce594eb6232e5c9c6637f44bf",
   "schema_version": "codex-post-promotion-gate-mapping/v2"
 }

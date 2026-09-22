@@ -68,11 +68,91 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
 # 基线规则、场景与机器判据载荷保持不变。
 # 2026-09-12 主手册重整第一、第二部分的说明结构后，再次重绑第二部分摘要；
 # 0.149.1 基线规则、场景、selector 与验收判据载荷保持不变。
+# 2026-09-22 主手册把当前生产身份对齐 0.154.0 并补 SPEC-EP-019 的 Luna Reserve 规则后，
+# 第二部分摘要变为 46501af0…，四份场景／预期清单的 source_spec_sha256 随之重绑；
+# 0.149.1 基线的规则、场景、selector 与验收判据载荷逐字不变（diff 仅该一行）。
 FROZEN_PROFILE_SHA256 = (
-    "f89aadcacd2be608fc32ac1ed54205d5ec062fc689daca77ec016a01d2d5d47f"
+    "5cace56c6d5c4de203596bb09e4294086b8f564c950b6538358a7d27c83e26ab"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 RULE_ID_RE = re.compile(r"^SPEC-[A-Z0-9]+-[0-9]{3}$")
+A15_REAL_ENTRY_CACHE_LABEL = "real-entry-cache-v2"
+A15_LEGACY_REAL_ENTRY_CACHE_LABELS = frozenset({"real-entry-cache-v1"})
+A15_TUI_IDENTITY_PATHS = frozenset(
+    {
+        "/backend-api/ps/plugins/list?scope=GLOBAL&limit=200",
+        "/backend-api/ps/plugins/installed?limit=200",
+        "/backend-api/ps/plugins/installed?limit=200&includeDownloadUrls=true",
+        "/backend-api/ps/plugins/suggested/codex?scope=GLOBAL",
+    }
+)
+
+A15_SURFACE_DATA_KEYS = frozenset(
+    {
+        "contract_version",
+        "variant",
+        "surface",
+        "endpoint",
+        "originator",
+        "user_agent",
+        "user_agent_prefix",
+        "user_agent_suffix",
+        "suffix_state",
+        "request_method",
+        "request_target",
+        "version_header",
+        "authorization_present",
+        "http_status",
+        "response_body_sha256",
+        "response_body_bytes",
+        "cache_result",
+        "upstream_calls_before",
+        "upstream_calls_after",
+        "codex_binary_path",
+        "codex_binary_sha256",
+        "codex_version_output",
+        "pid",
+        "started_at",
+        "observed_at",
+        "finished_at",
+        "returncode",
+        "termination_reason",
+        "codex_home",
+        "argv",
+        "pty",
+        "correlation_nonce",
+        "argv_sha256",
+        "launch_sha256",
+        "request_sha256",
+        "correlation_sha256",
+    }
+)
+
+A15_AGGREGATE_DATA_KEYS = frozenset(
+    {
+        "contract_version",
+        "entry_record_ids",
+        "post_initialize_identity_record_id",
+        "entry_count",
+        "success_count",
+        "cache_hit_count",
+        "upstream_call_count",
+        "response_body_sha256",
+        "codex_binary_path",
+        "codex_binary_sha256",
+        "codex_version_output",
+        "relay_request_path",
+        "relay_request_sha256",
+        "relay_response_path",
+        "relay_response_sha256",
+        "intervention_path",
+        "intervention_sha256",
+        "canonical_upstream_user_agent",
+        "canonical_upstream_originator",
+        "canonical_upstream_version",
+        "contract_sha256",
+    }
+)
 
 STRUCTURED_TRACE_KINDS = frozenset(
     {
@@ -927,6 +1007,694 @@ def _trace_observations(
     return observations
 
 
+def _canonical_json_sha256(value: Any) -> str:
+    """按 A15 producer 的排序紧凑 JSON 算法计算摘要。"""
+
+    try:
+        encoded = json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    except (TypeError, ValueError) as error:
+        raise AssertionConfigurationError(
+            f"A15 摘要载荷不可 JSON 序列化：{error}"
+        ) from error
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _a15_contract_prefix(artifact_path: str) -> str:
+    """从 bundle 内 trace 路径取出证据根逻辑前缀。"""
+
+    parts = PurePosixPath(artifact_path).parts
+    suffix = ("scenarios", "A15", "process-trace.jsonl")
+    if len(parts) <= len(suffix) or tuple(parts[-len(suffix) :]) != suffix:
+        raise AssertionConfigurationError(
+            "A15 真实入口 trace 必须位于 "
+            "<evidence-root>/scenarios/A15/process-trace.jsonl"
+        )
+    return "/".join(parts[: -len(suffix)])
+
+
+def _a15_parse_timestamp(value: Any, description: str) -> datetime:
+    """解析带时区的 A15 RFC 3339 时间。"""
+
+    if not isinstance(value, str) or not value:
+        raise AssertionConfigurationError(f"{description}必须是非空时间字符串")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise AssertionConfigurationError(f"{description}不是 RFC 3339 时间") from error
+    if parsed.tzinfo is None:
+        raise AssertionConfigurationError(f"{description}必须包含时区")
+    return parsed
+
+
+def _validate_a15_real_entry_cache_contract(
+    artifacts: Sequence[Mapping[str, Any]],
+    resolved: Mapping[str, Path],
+    evidence_root: Path,
+    expected_codex_version: str,
+) -> None:
+    """验证 A15 两次真实 models 启动、TUI 初始化后身份和一次出站闭环。
+
+    ``codex exec`` 与 TUI 的启动 models 请求和 client info 初始化存在并发顺序，
+    因而 suffix 可以缺失，也可以是与入口匹配的规范值；TUI 初始化后的真实插件
+    GET 则必须证明 ``codex-tui`` suffix。插件 GET 只由 localhost witness 应答，
+    绝不能计入 Candidate 的 models 缓存或上游次数。
+    """
+
+    labelled_artifacts = [
+        artifact
+        for artifact in artifacts
+        if isinstance(artifact.get("labels", {}).get("a15_contract"), str)
+    ]
+    legacy_artifacts = [
+        artifact
+        for artifact in labelled_artifacts
+        if artifact.get("labels", {}).get("a15_contract")
+        in A15_LEGACY_REAL_ENTRY_CACHE_LABELS
+    ]
+    if legacy_artifacts:
+        raise AssertionConfigurationError("A15 已拒绝不可达的 real-entry-cache-v1 合同")
+    unknown_artifacts = [
+        artifact
+        for artifact in labelled_artifacts
+        if artifact.get("labels", {}).get("a15_contract")
+        != A15_REAL_ENTRY_CACHE_LABEL
+    ]
+    if unknown_artifacts:
+        raise AssertionConfigurationError("A15 a15_contract 标签版本不受支持")
+    contract_artifacts = labelled_artifacts
+    if not contract_artifacts:
+        return
+    if len(contract_artifacts) != 1:
+        raise AssertionConfigurationError("A15 真实入口合同 trace 必须恰好一份")
+
+    trace_artifact = contract_artifacts[0]
+    trace_path_text = trace_artifact.get("path")
+    if (
+        not isinstance(trace_path_text, str)
+        or trace_artifact.get("kind") != "process_trace"
+        or trace_artifact.get("parser") != "observation_jsonl"
+        or "A15" not in trace_artifact.get("scenario_ids", [])
+    ):
+        raise AssertionConfigurationError(
+            "A15 真实入口合同必须是 A15 process_trace/observation_jsonl"
+        )
+    prefix = _a15_contract_prefix(trace_path_text)
+    expected_paths = {
+        "request": f"{prefix}/scenarios/A15/relay/conn001.client_to_upstream.bin",
+        "response": f"{prefix}/scenarios/A15/relay/conn001.upstream_to_client.bin",
+        "intervention": f"{prefix}/scenarios/A15/relay/intervention.jsonl",
+    }
+    artifact_by_path = {
+        artifact.get("path"): artifact
+        for artifact in artifacts
+        if isinstance(artifact.get("path"), str)
+    }
+    expected_shapes = {
+        expected_paths["request"]: ("relay_binary", "opaque_bound_source"),
+        expected_paths["response"]: ("wire_dump", "opaque_bound_source"),
+        expected_paths["intervention"]: ("stdout_log", "opaque_bound_source"),
+    }
+    for path_text, (kind, parser) in expected_shapes.items():
+        artifact = artifact_by_path.get(path_text)
+        if (
+            artifact is None
+            or artifact.get("kind") != kind
+            or artifact.get("parser") != parser
+            or "A15" not in artifact.get("scenario_ids", [])
+        ):
+            raise AssertionConfigurationError(
+                f"A15 合同缺少精确原件声明：{path_text} ({kind}/{parser})"
+            )
+
+    relay_directory = resolved[expected_paths["request"]].parent
+    relay_requests = sorted(relay_directory.glob("conn*.client_to_upstream.bin"))
+    if relay_requests != [resolved[expected_paths["request"]]]:
+        raise AssertionConfigurationError(
+            "A15 relay 目录必须恰好包含 conn001 一次上游请求"
+        )
+
+    records = _structured_records(resolved[trace_path_text], "observation_jsonl")
+    surface_records: list[Mapping[str, Any]] = []
+    aggregate_records: list[Mapping[str, Any]] = []
+    for index, record in enumerate(records):
+        if not isinstance(record, dict):
+            raise AssertionConfigurationError(
+                f"A15 trace 第 {index + 1} 条记录必须是对象"
+            )
+        if (
+            record.get("schema_version") != OBSERVATION_SCHEMA_VERSION
+            or record.get("scenario_id") != "A15"
+            or not isinstance(record.get("record_id"), str)
+        ):
+            raise AssertionConfigurationError(f"A15 trace 第 {index + 1} 条记录包装非法")
+        if record.get("record_type") == "surface_identity":
+            surface_records.append(record)
+        elif record.get("record_type") == "connection_lifecycle":
+            aggregate_records.append(record)
+        else:
+            raise AssertionConfigurationError(
+                f"A15 真实入口 trace 含未允许记录类型：{record.get('record_type')}"
+            )
+    if len(surface_records) != 3 or len(aggregate_records) != 1:
+        raise AssertionConfigurationError(
+            "A15 必须恰好包含三条 surface_identity 和一条 connection_lifecycle"
+        )
+
+    expected_variants = {
+        "exec-startup-models": {
+            "record_id": "a15-exec-startup-models",
+            "surface": "exec",
+            "endpoint": "models",
+            "originator": "codex_exec",
+            "prefix": f"codex_exec/{expected_codex_version}",
+            "suffixes": ("", f"(codex_exec; {expected_codex_version})"),
+            "cache_result": "miss",
+            "before": 0,
+            "after": 1,
+            "pty": False,
+            "version": expected_codex_version,
+            "termination_reason": "models_http_200_observed",
+        },
+        "tui-startup-models": {
+            "record_id": "a15-tui-startup-models",
+            "surface": "tui",
+            "endpoint": "models",
+            "originator": "codex_cli_rs",
+            "prefix": f"codex-tui/{expected_codex_version}",
+            "suffixes": ("", f"(codex-tui; {expected_codex_version})"),
+            "cache_result": "fresh_hit",
+            "before": 1,
+            "after": 1,
+            "pty": True,
+            "version": expected_codex_version,
+            "termination_reason": "models_and_post_initialize_identity_observed",
+        },
+        "tui-post-initialize-identity": {
+            "record_id": "a15-tui-post-initialize-identity",
+            "surface": "tui",
+            "endpoint": "plugin_identity",
+            "originator": "codex-tui",
+            "prefix": f"codex-tui/{expected_codex_version}",
+            "suffixes": (f"(codex-tui; {expected_codex_version})",),
+            "cache_result": "not_applicable",
+            "before": None,
+            "after": None,
+            "pty": True,
+            "version": "",
+            "termination_reason": "models_and_post_initialize_identity_observed",
+        },
+    }
+    by_variant: dict[str, Mapping[str, Any]] = {}
+    binary_identity: tuple[str, str, str] | None = None
+    models_response_digests: set[str] = set()
+
+    for record in surface_records:
+        data = record.get("data")
+        if not isinstance(data, dict):
+            raise AssertionConfigurationError("A15 surface_identity.data 必须是对象")
+        _require_exact_keys(
+            data,
+            required=set(A15_SURFACE_DATA_KEYS),
+            description=f"A15 {record.get('record_id')} data",
+        )
+        variant = data.get("variant")
+        if variant not in expected_variants or variant in by_variant:
+            raise AssertionConfigurationError(f"A15 入口缺失或重复：{variant!r}")
+        expected = expected_variants[variant]
+        by_variant[variant] = record
+        if record.get("record_id") != expected["record_id"]:
+            raise AssertionConfigurationError(f"A15 {variant} record_id 不符合合同")
+        exact_values = {
+            "contract_version": A15_REAL_ENTRY_CACHE_LABEL,
+            "surface": expected["surface"],
+            "endpoint": expected["endpoint"],
+            "originator": expected["originator"],
+            "user_agent_prefix": expected["prefix"],
+            "request_method": "GET",
+            "version_header": expected["version"],
+            "authorization_present": True,
+            "http_status": 200,
+            "cache_result": expected["cache_result"],
+            "upstream_calls_before": expected["before"],
+            "upstream_calls_after": expected["after"],
+            "codex_version_output": f"codex-cli {expected_codex_version}",
+            "termination_reason": expected["termination_reason"],
+            "pty": expected["pty"],
+        }
+        mismatches = {
+            key: {"expected": value, "actual": data.get(key)}
+            for key, value in exact_values.items()
+            if data.get(key) != value
+        }
+        if mismatches:
+            raise AssertionConfigurationError(
+                f"A15 {variant} 入口合同不匹配：{mismatches}"
+            )
+
+        user_agent_suffix = data.get("user_agent_suffix")
+        expected_suffixes = expected["suffixes"]
+        expected_suffix_state = "present" if user_agent_suffix else "absent"
+        if (
+            user_agent_suffix not in expected_suffixes
+            or data.get("suffix_state") != expected_suffix_state
+        ):
+            raise AssertionConfigurationError(
+                f"A15 {variant} suffix 不符合入口合同"
+            )
+
+        user_agent = data.get("user_agent")
+        if (
+            not isinstance(user_agent, str)
+            or not user_agent.startswith(str(expected["prefix"]) + " ")
+            or (
+                user_agent_suffix
+                and not user_agent.endswith(str(user_agent_suffix))
+            )
+            or (
+                not user_agent_suffix
+                and re.search(r" \([^();]+; [^)]+\)$", user_agent) is not None
+            )
+        ):
+            raise AssertionConfigurationError(f"A15 {variant} User-Agent 不符合入口身份")
+        nonce = data.get("correlation_nonce")
+        if not isinstance(nonce, str) or re.fullmatch(r"[0-9a-f]{32}", nonce) is None:
+            raise AssertionConfigurationError(f"A15 {variant} correlation_nonce 非法")
+        if expected["endpoint"] == "models":
+            expected_target = (
+                f"/a15/{nonce}/backend-api/codex/models?"
+                f"client_version={expected_codex_version}"
+            )
+            if data.get("request_target") != expected_target:
+                raise AssertionConfigurationError(
+                    f"A15 {variant} nonce 未绑定真实 models 路径"
+                )
+        else:
+            target = data.get("request_target")
+            if not isinstance(target, str) or not target.startswith(f"/a15/{nonce}"):
+                raise AssertionConfigurationError("A15 TUI 身份请求未绑定进程 nonce")
+            public_target = target.removeprefix(f"/a15/{nonce}")
+            if public_target not in A15_TUI_IDENTITY_PATHS:
+                raise AssertionConfigurationError("A15 TUI 身份请求路径不在允许集合")
+
+        argv = data.get("argv")
+        binary_path = data.get("codex_binary_path")
+        binary_sha256 = data.get("codex_binary_sha256")
+        version_output = data.get("codex_version_output")
+        if (
+            not isinstance(argv, list)
+            or not argv
+            or any(not isinstance(item, str) or not item for item in argv)
+            or not isinstance(binary_path, str)
+            or not Path(binary_path).is_absolute()
+            or Path(binary_path).name != "codex"
+            or argv[0] != binary_path
+            or not isinstance(binary_sha256, str)
+            or SHA256_RE.fullmatch(binary_sha256) is None
+        ):
+            raise AssertionConfigurationError(f"A15 {variant} 未绑定真实 Codex 二进制")
+        if any(Path(argument).name == "curl" for argument in argv):
+            raise AssertionConfigurationError("A15 禁止以 curl argv 冒充 Codex 入口")
+        if not any(f"/a15/{nonce}/backend-api/codex" in argument for argument in argv):
+            raise AssertionConfigurationError(f"A15 {variant} nonce 未绑定到 argv")
+        if variant == "exec-startup-models" and (len(argv) < 2 or argv[1] != "exec"):
+            raise AssertionConfigurationError("A15 exec 记录不是 codex exec")
+        if variant.startswith("tui-") and (
+            len(argv) < 2
+            or argv[1] in {"exec", "app-server"}
+            or "--no-alt-screen" not in argv
+        ):
+            raise AssertionConfigurationError("A15 TUI 记录不是真实交互入口")
+
+        pid = data.get("pid")
+        returncode = data.get("returncode")
+        codex_home = data.get("codex_home")
+        if (
+            not isinstance(pid, int)
+            or isinstance(pid, bool)
+            or pid <= 0
+            or not isinstance(returncode, int)
+            or isinstance(returncode, bool)
+            or not isinstance(codex_home, str)
+            or not Path(codex_home).is_absolute()
+        ):
+            raise AssertionConfigurationError(f"A15 {variant} 进程收据非法")
+        started = _a15_parse_timestamp(data.get("started_at"), f"A15 {variant}.started_at")
+        observed = _a15_parse_timestamp(data.get("observed_at"), f"A15 {variant}.observed_at")
+        finished = _a15_parse_timestamp(data.get("finished_at"), f"A15 {variant}.finished_at")
+        if not started <= observed <= finished:
+            raise AssertionConfigurationError(f"A15 {variant} 进程时间序非法")
+
+        response_sha256 = data.get("response_body_sha256")
+        response_bytes = data.get("response_body_bytes")
+        if (
+            not isinstance(response_sha256, str)
+            or SHA256_RE.fullmatch(response_sha256) is None
+            or not isinstance(response_bytes, int)
+            or isinstance(response_bytes, bool)
+            or response_bytes <= 0
+        ):
+            raise AssertionConfigurationError(f"A15 {variant} 响应体收据非法")
+        if expected["endpoint"] == "models":
+            models_response_digests.add(response_sha256)
+
+        expected_argv_sha256 = _canonical_json_sha256(argv)
+        launch_payload = {
+            "argv": argv,
+            "codex_binary_path": binary_path,
+            "codex_binary_sha256": binary_sha256,
+            "codex_version_output": version_output,
+            "pid": pid,
+            "started_at": data["started_at"],
+            "codex_home": codex_home,
+            "pty": data["pty"],
+            "correlation_nonce": nonce,
+        }
+        expected_launch_sha256 = _canonical_json_sha256(launch_payload)
+        request_payload = {
+            "method": data["request_method"],
+            "target": data["request_target"],
+            "user_agent": user_agent,
+            "originator": data["originator"],
+            "version": data["version_header"],
+            "authorization_present": data["authorization_present"],
+            "http_status": data["http_status"],
+            "response_body_sha256": response_sha256,
+            "response_body_bytes": response_bytes,
+            "observed_at": data["observed_at"],
+        }
+        expected_request_sha256 = _canonical_json_sha256(request_payload)
+        expected_correlation_sha256 = _canonical_json_sha256(
+            {
+                "argv_sha256": expected_argv_sha256,
+                "launch_sha256": expected_launch_sha256,
+                "request_sha256": expected_request_sha256,
+                "correlation_nonce": nonce,
+                "pid": pid,
+            }
+        )
+        digest_values = {
+            "argv_sha256": expected_argv_sha256,
+            "launch_sha256": expected_launch_sha256,
+            "request_sha256": expected_request_sha256,
+            "correlation_sha256": expected_correlation_sha256,
+        }
+        if any(data.get(name) != value for name, value in digest_values.items()):
+            raise AssertionConfigurationError(f"A15 {variant} 进程/请求关联摘要不可复算")
+
+        identity = (binary_path, binary_sha256, str(version_output))
+        if binary_identity is None:
+            binary_identity = identity
+        elif binary_identity != identity:
+            raise AssertionConfigurationError("A15 三条记录必须使用同一 Codex 二进制")
+
+    if set(by_variant) != set(expected_variants):
+        raise AssertionConfigurationError("A15 两条 startup models 与一条 TUI 身份记录必须齐全")
+    if len(models_response_digests) != 1:
+        raise AssertionConfigurationError("A15 两次 models HTTP 200 响应体必须完全相同")
+
+    exec_data = by_variant["exec-startup-models"]["data"]
+    tui_models_data = by_variant["tui-startup-models"]["data"]
+    tui_identity_data = by_variant["tui-post-initialize-identity"]["data"]
+    if exec_data["correlation_nonce"] == tui_models_data["correlation_nonce"]:
+        raise AssertionConfigurationError("A15 exec 与 TUI 必须使用独立 nonce")
+    if exec_data["codex_home"] == tui_models_data["codex_home"]:
+        raise AssertionConfigurationError("A15 exec 与 TUI 必须使用独立 CODEX_HOME")
+    shared_tui_fields = (
+        "pid",
+        "argv",
+        "argv_sha256",
+        "launch_sha256",
+        "correlation_nonce",
+        "codex_home",
+        "started_at",
+        "finished_at",
+        "returncode",
+    )
+    if any(tui_models_data[name] != tui_identity_data[name] for name in shared_tui_fields):
+        raise AssertionConfigurationError("A15 TUI models 与初始化后身份记录的进程收据漂移")
+
+    aggregate = aggregate_records[0]
+    aggregate_data = aggregate.get("data")
+    if not isinstance(aggregate_data, dict):
+        raise AssertionConfigurationError("A15 connection_lifecycle.data 必须是对象")
+    _require_exact_keys(
+        aggregate_data,
+        required=set(A15_AGGREGATE_DATA_KEYS),
+        description="A15 connection_lifecycle.data",
+    )
+    ordered_variants = ["exec-startup-models", "tui-startup-models"]
+    ordered_record_ids = [by_variant[name]["record_id"] for name in ordered_variants]
+    aggregate_expected = {
+        "contract_version": A15_REAL_ENTRY_CACHE_LABEL,
+        "entry_record_ids": ordered_record_ids,
+        "post_initialize_identity_record_id": by_variant[
+            "tui-post-initialize-identity"
+        ]["record_id"],
+        "entry_count": 2,
+        "success_count": 2,
+        "cache_hit_count": 1,
+        "upstream_call_count": 1,
+        "response_body_sha256": next(iter(models_response_digests)),
+        "codex_binary_path": binary_identity[0] if binary_identity else None,
+        "codex_binary_sha256": binary_identity[1] if binary_identity else None,
+        "codex_version_output": binary_identity[2] if binary_identity else None,
+        "relay_request_path": expected_paths["request"],
+        "relay_response_path": expected_paths["response"],
+        "intervention_path": expected_paths["intervention"],
+        "canonical_upstream_originator": "codex_exec",
+        "canonical_upstream_version": expected_codex_version,
+    }
+    aggregate_mismatches = {
+        key: {"expected": value, "actual": aggregate_data.get(key)}
+        for key, value in aggregate_expected.items()
+        if aggregate_data.get(key) != value
+    }
+    if aggregate_mismatches:
+        raise AssertionConfigurationError(
+            f"A15 聚合缓存合同不匹配：{aggregate_mismatches}"
+        )
+    source_artifacts = aggregate.get("source_artifacts")
+    expected_sources = [
+        expected_paths["request"],
+        expected_paths["response"],
+        expected_paths["intervention"],
+    ]
+    if source_artifacts != expected_sources:
+        raise AssertionConfigurationError("A15 聚合记录未精确绑定三份原件")
+
+    artifact_digest_fields = {
+        "relay_request_sha256": expected_paths["request"],
+        "relay_response_sha256": expected_paths["response"],
+        "intervention_sha256": expected_paths["intervention"],
+    }
+    for field, path_text in artifact_digest_fields.items():
+        if aggregate_data.get(field) != file_sha256(resolved[path_text]):
+            raise AssertionConfigurationError(f"A15 {field} 与原件不一致")
+    contract_payload = dict(aggregate_data)
+    contract_sha256 = contract_payload.pop("contract_sha256", None)
+    if contract_sha256 != _canonical_json_sha256(contract_payload):
+        raise AssertionConfigurationError("A15 contract_sha256 不可复算")
+
+    try:
+        requests = parse_h1_stream(resolved[expected_paths["request"]].read_bytes())
+    except SystemExit as error:
+        raise AssertionConfigurationError(f"A15 relay 请求无法解析：{error}") from error
+    if len(requests) != 1:
+        raise AssertionConfigurationError("A15 relay 必须恰好包含一条 HTTP 请求")
+    request_line = _parse_request_line(requests[0].get("request_line"))
+    if (
+        request_line["method"] != "GET"
+        or request_line["path"] != "/backend-api/codex/models"
+        or request_line["query_pairs"]
+        != [["client_version", expected_codex_version]]
+    ):
+        raise AssertionConfigurationError("A15 relay 唯一请求不是冻结 models GET")
+    header_values = _header_values(requests[0])
+    for name in ("authorization", "originator", "user-agent", "version"):
+        if len(header_values.get(name, [])) != 1:
+            raise AssertionConfigurationError(f"A15 relay 唯一请求缺少唯一 {name} 头")
+    upstream_user_agent = header_values["user-agent"][0]
+    upstream_originator = header_values["originator"][0]
+    upstream_version = header_values["version"][0]
+    canonical_ua = re.compile(
+        rf"^codex_exec/{re.escape(expected_codex_version)} "
+        rf"\(Ubuntu 24\.4\.0; (?:aarch64|x86_64)\) unknown "
+        rf"\(codex_exec; {re.escape(expected_codex_version)}\)$"
+    )
+    if (
+        not isinstance(upstream_user_agent, str)
+        or canonical_ua.fullmatch(upstream_user_agent) is None
+        or upstream_originator != "codex_exec"
+        or upstream_version != expected_codex_version
+    ):
+        raise AssertionConfigurationError("A15 relay 出站不是规范 Candidate 身份")
+    if (
+        aggregate_data.get("canonical_upstream_user_agent") != upstream_user_agent
+        or aggregate_data.get("canonical_upstream_originator") != upstream_originator
+        or aggregate_data.get("canonical_upstream_version") != upstream_version
+    ):
+        raise AssertionConfigurationError("A15 聚合记录与 relay 身份不一致")
+
+    raw_response = resolved[expected_paths["response"]].read_bytes()
+    response_status = raw_response.split(b"\r\n", 1)[0]
+    if re.fullmatch(rb"HTTP/1\.[01] 200(?: .*)?", response_status) is None:
+        raise AssertionConfigurationError("A15 relay 上游响应必须是 HTTP 200")
+    interventions = _structured_records(
+        resolved[expected_paths["intervention"]], "observation_jsonl"
+    )
+    if (
+        len(interventions) != 1
+        or not isinstance(interventions[0], dict)
+        or interventions[0].get("type") != "synthetic_core_response"
+        or interventions[0].get("action") != "models_manifest"
+        or interventions[0].get("production_forwarded") is not False
+    ):
+        raise AssertionConfigurationError(
+            "A15 intervention 必须恰好证明一次本地 models_manifest"
+        )
+
+
+PROJECTION_FLAG = "--capture-manifest-projection"
+
+
+def canonical_projection_bytes(projection: Mapping[str, Any]) -> bytes:
+    """投影 manifest 的规范字节：builder 写文件与 checker 逐字比较都用这一种序列化。"""
+
+    return json.dumps(
+        projection, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+
+
+def projection_sha256(projection: Mapping[str, Any]) -> str:
+    return hashlib.sha256(canonical_projection_bytes(projection)).hexdigest()
+
+
+def project_capture_manifest(
+    profile: Mapping[str, Any],
+    rule_id: str,
+    manifest: Mapping[str, Any],
+    evidence_root: Path,
+    expected_codex_version: str = CODEX_VERSION,
+) -> dict[str, Any]:
+    """按规则从完整 capture manifest 构造 per-rule 投影（改造 5，builder 与 checker 同源）。
+
+    * ``A0`` = 场景与规则场景相交的 artifact；
+    * 对 ``A`` 中每个结构化 artifact 按同一 parser 读取正文并复用 ``_trace_observations`` 的
+      记录级校验，把每条记录 ``source_artifacts`` 对应的 manifest 条目并入 ``A``，直到不变
+      （缺引用即失败关闭）；
+    * 投影 = 顶层字段逐字沿用（schema_version／codex_version／capture_id／status）+ ``artifacts(A)``
+      条目逐字、按原 manifest 顺序；不加任何新顶层字段（三方约束：``projection_sha256`` 只放在
+      checkpoint 与单规则结果里）。
+    * 自检：对每个规则场景，``A`` 中该场景的 kind 集合等于整份 manifest 上的集合（由构造保证）。
+    """
+
+    rules = {
+        rule["rule_id"]: rule
+        for rule in profile["rules"]
+        if isinstance(rule, dict) and isinstance(rule.get("rule_id"), str)
+    }
+    if rule_id not in rules:
+        raise AssertionConfigurationError(f"冻结画像不包含规则：{rule_id}")
+    rule_scenarios = set(rules[rule_id]["scenario_ids"])
+    artifacts = _validate_capture_manifest(dict(manifest), expected_codex_version)
+    by_path = {artifact["path"]: artifact for artifact in artifacts}
+    declared_artifact_scenarios = {
+        artifact["path"]: set(artifact["scenario_ids"]) for artifact in artifacts
+    }
+    selected = {
+        artifact["path"]
+        for artifact in artifacts
+        if rule_scenarios & set(artifact["scenario_ids"])
+    }
+    if not selected:
+        raise AssertionConfigurationError(f"规则 {rule_id} 的场景在 capture manifest 中没有任何 artifact")
+    resolved: dict[str, Path] = {}
+    pending = sorted(selected)
+    while pending:
+        artifact_path = pending.pop(0)
+        artifact = by_path[artifact_path]
+        if artifact_path not in resolved:
+            path = _resolve_evidence_file(
+                evidence_root, _relative_path(artifact_path, "artifact.path"), artifact_path
+            )
+            if file_sha256(path) != artifact["sha256"]:
+                raise AssertionConfigurationError(f"artifact SHA-256 不匹配：{artifact_path}")
+            resolved[artifact_path] = path
+        parser = artifact["parser"]
+        if parser in {"opaque_bound_source", "pcap_client_hello", "h1_request_stream"}:
+            continue
+        observations = _trace_observations(
+            resolved[artifact_path],
+            artifact_path,
+            parser,
+            artifact["scenario_ids"],
+            artifact["labels"],
+            declared_artifact_scenarios,
+            artifact.get("frame_labels"),
+        )
+        for observation in observations:
+            for referenced in observation.evidence_paths:
+                if referenced not in selected:
+                    selected.add(referenced)
+                    pending.append(referenced)
+    projected_artifacts = [
+        json.loads(json.dumps(artifact, ensure_ascii=False))
+        for artifact in artifacts
+        if artifact["path"] in selected
+    ]
+    for scenario_id in sorted(rule_scenarios):
+        full_kinds = {a["kind"] for a in artifacts if scenario_id in a["scenario_ids"]}
+        projected_kinds = {a["kind"] for a in projected_artifacts if scenario_id in a["scenario_ids"]}
+        if full_kinds != projected_kinds:
+            raise AssertionConfigurationError(
+                f"规则 {rule_id} 场景 {scenario_id} 的投影 kind 集合与整份 manifest 不一致"
+            )
+    return {
+        "schema_version": manifest["schema_version"],
+        "codex_version": manifest["codex_version"],
+        "capture_id": manifest["capture_id"],
+        "status": manifest["status"],
+        "artifacts": projected_artifacts,
+    }
+
+
+def verify_capture_manifest_projection(
+    profile: Mapping[str, Any],
+    rule_id: str,
+    capture_manifest_path: Path,
+    projection_path: Path,
+    evidence_root: Path,
+    expected_codex_version: str = CODEX_VERSION,
+) -> tuple[dict[str, Any], str, str]:
+    """checker 投影模式的等价证明：以原始完整 manifest 重算期望投影，规范字节必须与投影文件逐字相等。
+
+    返回 ``(投影文档, projection_sha256, capture_manifest_sha256)``；不等即 ``projection-mismatch``
+    失败关闭。随后调用方只用投影执行 ``load_observations`` 与 ``evaluate_rule``。
+    """
+
+    manifest = _load_json(capture_manifest_path, "capture manifest")
+    expected = project_capture_manifest(
+        profile, rule_id, manifest, evidence_root, expected_codex_version
+    )
+    if projection_path.is_symlink() or not projection_path.is_file():
+        raise AssertionConfigurationError(f"投影 manifest 必须是普通文件：{projection_path}")
+    actual_bytes = projection_path.read_bytes()
+    if actual_bytes != canonical_projection_bytes(expected):
+        raise AssertionConfigurationError(
+            f"projection-mismatch：投影 manifest 与按完整 manifest 重算的期望投影不一致：{projection_path}"
+        )
+    return (
+        expected,
+        hashlib.sha256(actual_bytes).hexdigest(),
+        file_sha256(capture_manifest_path),
+    )
+
+
 def load_observations(
     capture_manifest_path: Path,
     evidence_root: Path,
@@ -952,6 +1720,13 @@ def load_observations(
                 f"artifact SHA-256 不匹配：{artifact['path']}"
             )
         resolved[artifact["path"]] = path
+
+    _validate_a15_real_entry_cache_contract(
+        artifacts,
+        resolved,
+        evidence_root,
+        expected_codex_version,
+    )
 
     observations: list[Observation] = []
     opaque_paths: set[str] = set()
@@ -1493,8 +2268,13 @@ def build_assertion_command(
     expected_codex_version: str | None = None,
     expected_profile_sha256: str | None = None,
     side: str | None = None,
+    capture_manifest_projection: str | None = None,
 ) -> list[str]:
-    """构造应写入验收 submission 的稳定 checker 参数数组。"""
+    """构造应写入验收 submission 的稳定 checker 参数数组。
+
+    改造 5：给出 ``capture_manifest_projection`` 时在 ``--output`` 前追加
+    ``--capture-manifest-projection <path>``；``command_sha256`` 仍按完整命令计算。
+    """
 
     command = [
         "python3",
@@ -1516,6 +2296,8 @@ def build_assertion_command(
         command.extend(["--expected-profile-sha256", expected_profile_sha256])
     if side is not None:
         command.extend(["--side", side])
+    if capture_manifest_projection is not None:
+        command.extend([PROJECTION_FLAG, capture_manifest_projection])
     command.extend(["--output", output])
     return command
 
@@ -1527,11 +2309,17 @@ def build_assertion_result(
     command: Sequence[str],
     started_at: str,
     finished_at: str,
+    projection_sha256: str | None = None,
+    capture_manifest_sha256: str | None = None,
 ) -> dict[str, Any]:
-    """生成最终门禁可读取的单规则断言结果。"""
+    """生成最终门禁可读取的单规则断言结果。
+
+    改造 5：投影模式下附带 ``projection_sha256``（投影文件字节摘要）与
+    ``capture_manifest_sha256``（原始完整 manifest 文件摘要）；整份模式的文档没有两字段。
+    """
 
     passed = bool(checks) and all(check.get("passed") is True for check in checks)
-    return {
+    result: dict[str, Any] = {
         "schema_version": ASSERTION_SCHEMA_VERSION,
         "rule_id": rule_id,
         "status": "pass" if passed else "fail",
@@ -1542,6 +2330,12 @@ def build_assertion_result(
         "command_sha256": command_sha256(command),
         "checks": [dict(check) for check in checks],
     }
+    if (projection_sha256 is None) != (capture_manifest_sha256 is None):
+        raise AssertionConfigurationError("投影模式必须同时给出投影摘要与原始 manifest 摘要")
+    if projection_sha256 is not None:
+        result["projection_sha256"] = projection_sha256
+        result["capture_manifest_sha256"] = capture_manifest_sha256
+    return result
 
 
 def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
@@ -1575,6 +2369,12 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=("official", "candidate"),
         help="验收侧；给出时跳过契约登记为本侧不适用的 check",
     )
+    parser.add_argument(
+        PROJECTION_FLAG,
+        dest="capture_manifest_projection",
+        type=Path,
+        help="改造 5：per-rule 投影 manifest；给出时以完整 manifest 重算并逐字比对，再只用投影解析证据",
+    )
     parser.add_argument("--output", type=Path, required=True)
     return parser
 
@@ -1583,6 +2383,8 @@ def main(argv: Iterable[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     started_at = utc_now()
     checks: list[dict[str, Any]]
+    projection_digest: str | None = None
+    manifest_digest: str | None = None
     try:
         expected_version = args.expected_codex_version or CODEX_VERSION
         profile = load_profile(
@@ -1592,8 +2394,19 @@ def main(argv: Iterable[str] | None = None) -> int:
             expected_codex_version=expected_version,
             expected_profile_sha256=args.expected_profile_sha256,
         )
+        observation_manifest = args.capture_manifest
+        if args.capture_manifest_projection is not None:
+            _projection, projection_digest, manifest_digest = verify_capture_manifest_projection(
+                profile,
+                args.rule_id,
+                args.capture_manifest,
+                args.capture_manifest_projection,
+                args.evidence_root,
+                expected_version,
+            )
+            observation_manifest = args.capture_manifest_projection
         capture_manifest, observations = load_observations(
-            args.capture_manifest,
+            observation_manifest,
             args.evidence_root,
             expected_version,
         )
@@ -1621,6 +2434,11 @@ def main(argv: Iterable[str] | None = None) -> int:
         expected_codex_version=args.expected_codex_version,
         expected_profile_sha256=args.expected_profile_sha256,
         side=args.side,
+        capture_manifest_projection=(
+            str(args.capture_manifest_projection)
+            if args.capture_manifest_projection is not None
+            else None
+        ),
         output=str(args.output),
     )
     result = build_assertion_result(
@@ -1629,6 +2447,8 @@ def main(argv: Iterable[str] | None = None) -> int:
         command=command,
         started_at=started_at,
         finished_at=finished_at,
+        projection_sha256=projection_digest,
+        capture_manifest_sha256=manifest_digest,
     )
     _write_json(args.output, result)
     json.dump(result, sys.stdout, ensure_ascii=False, indent=2)

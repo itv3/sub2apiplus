@@ -130,6 +130,47 @@ class StructuredRootCauseTests(unittest.TestCase):
                         stable_dimensions={"phase": value},
                     )
 
+    def test_staging_wal_codes_are_registered_with_expected_components_and_dimensions(self) -> None:
+        """改造 4 登记的四条 code：组件与稳定维度闭合，且能生成跨 Campaign 稳定的 ID。"""
+
+        expected = {
+            "staging.abandoned": ("orchestrator", ("phase", "stage")),
+            "staging.commit-failed": ("orchestrator", ("phase", "stage")),
+            "parent-start.failed": ("supervisor", ("phase",)),
+            "commit.integrity-mismatch": ("supervisor", ("phase",)),
+        }
+        codes = root_cause.load_codes()["codes"]
+        for code, (component, dimensions) in expected.items():
+            with self.subTest(code=code):
+                self.assertEqual(codes[code]["component"], component)
+                self.assertEqual(codes[code]["stable_dimensions"], dimensions)
+                self.assertFalse(codes[code]["legacy"])
+                payload = {"phase": "VC-2"}
+                if "stage" in dimensions:
+                    payload["stage"] = "commit-publish"
+                first = root_cause.structured_root_cause(
+                    component=component, stable_error_code=code, failed_step="commit-publish", stable_dimensions=payload
+                )
+                second = root_cause.structured_root_cause(
+                    component=component, stable_error_code=code, failed_step="commit-publish", stable_dimensions=payload
+                )
+                self.assertEqual(first, second)
+                with self.assertRaisesRegex(root_cause.RootCauseError, "不能由"):
+                    root_cause.structured_root_cause(
+                        component="reconciler", stable_error_code=code, failed_step="x", stable_dimensions=payload
+                    )
+        # 同 code 不同 stage 是不同根因；abandoned 与 commit-failed 互不累计。
+        abandoned = root_cause.structured_root_cause(
+            component="orchestrator", stable_error_code="staging.abandoned", failed_step="prepare", stable_dimensions={"phase": "VC-2", "stage": "prepare"}
+        )
+        parent_run = root_cause.structured_root_cause(
+            component="orchestrator", stable_error_code="staging.abandoned", failed_step="parent-run", stable_dimensions={"phase": "VC-2", "stage": "parent-run"}
+        )
+        commit_failed = root_cause.structured_root_cause(
+            component="orchestrator", stable_error_code="staging.commit-failed", failed_step="prepare", stable_dimensions={"phase": "VC-2", "stage": "prepare"}
+        )
+        self.assertEqual(len({abandoned, parent_run, commit_failed}), 3)
+
     def test_legacy_literals_map_to_structured_ids(self) -> None:
         mapped = root_cause.legacy_root_cause_id("vc1-parent-lease-deadline-missing")
         self.assertTrue(root_cause.is_structured(mapped))

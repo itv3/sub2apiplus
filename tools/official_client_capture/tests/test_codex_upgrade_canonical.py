@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import tempfile
 import time
 import unittest
@@ -11,6 +12,7 @@ from pathlib import Path
 from unittest import mock
 
 from tools.official_client_capture import codex_upgrade
+from tools.official_client_capture import codex_upgrade_supervisor
 from tools.official_client_capture import incremental_recovery
 
 
@@ -198,6 +200,9 @@ class CanonicalImportTests(unittest.TestCase):
             supervisor / "state.json",
             {
                 "state": "running",
+                "campaign_id": "campaign-151",
+                "phase": "VC-5",
+                "owner_nonce": "0" * 64,
                 "campaign_started_at_epoch": started,
                 "started_at_epoch": started,
                 "deadline_at_epoch": started + 3600,
@@ -375,6 +380,277 @@ class CanonicalImportTests(unittest.TestCase):
             self.assertEqual(lease["campaign_id"], "campaign-151")
             self.assertEqual(lease["state"], "released")
 
+    def _write_parent_run(
+        self,
+        root: Path,
+        name: str,
+        *,
+        started_offset_seconds: float,
+        deadline_at_epoch: float,
+        owner_nonce: str,
+        campaign_id: str = "campaign-151",
+        phase: str = "VC-5",
+    ) -> Path:
+        """写一个处于 running 态的父监督器 run 目录（只含时间锚测试需要的字段）。"""
+
+        run_dir = root / name
+        run_dir.mkdir(mode=0o700)
+        started = time.time() - started_offset_seconds
+        self._write(
+            run_dir / "state.json",
+            {
+                "state": "running",
+                "campaign_id": campaign_id,
+                "phase": phase,
+                "owner_nonce": owner_nonce,
+                "campaign_started_at_epoch": started,
+                "started_at_epoch": started,
+                "deadline_at_epoch": deadline_at_epoch,
+            },
+        )
+        return run_dir
+
+    @staticmethod
+    def _campaign_run_environment(run_dir: Path, state: dict[str, object]) -> dict[str, str]:
+        return {
+            codex_upgrade_supervisor.CAMPAIGN_RUN_CONTEXT_ENV: "1",
+            codex_upgrade_supervisor.CAMPAIGN_RUN_DIR_ENV: str(run_dir),
+            codex_upgrade_supervisor.CAMPAIGN_RUN_ID_ENV: str(state["campaign_id"]),
+            codex_upgrade_supervisor.CAMPAIGN_RUN_PHASE_ENV: str(state["phase"]),
+            codex_upgrade_supervisor.CAMPAIGN_RUN_OWNER_NONCE_ENV: str(state["owner_nonce"]),
+            codex_upgrade_supervisor.CAMPAIGN_RUN_DEADLINE_ENV: str(state["deadline_at_epoch"]),
+        }
+
+    def test_approval_projection_survives_parent_run_change(self) -> None:
+        """父 run A 预览 → 父 run B 批准 → 父 run C 幂等重放：start／budget 不同，review_sha256 相同。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            arguments = self._fixture(root)
+            deadline = time.time() + 7200
+            run_a = self._write_parent_run(
+                root, "run-a", started_offset_seconds=3600, deadline_at_epoch=deadline, owner_nonce="a" * 64
+            )
+            run_b = self._write_parent_run(
+                root, "run-b", started_offset_seconds=600, deadline_at_epoch=deadline, owner_nonce="b" * 64
+            )
+            run_c = self._write_parent_run(
+                root, "run-c", started_offset_seconds=30, deadline_at_epoch=deadline, owner_nonce="c" * 64
+            )
+            anchors = [
+                codex_upgrade._canonical_supervisor_deadline(run) for run in (run_a, run_b, run_c)
+            ]
+            self.assertEqual(len({anchor["started_at_epoch"] for anchor in anchors}), 3)
+            self.assertEqual(len({anchor["budget_seconds"] for anchor in anchors}), 3)
+            self.assertEqual(len({anchor["deadline_at_epoch"] for anchor in anchors}), 1)
+
+            arguments.supervisor_run_dir = run_a
+            preview = codex_upgrade.import_canonical_checkpoint(arguments)
+            self.assertEqual(preview["status"], "approval_required")
+            self.assertEqual(
+                preview["approval_projection_excluded"],
+                ["deadline.budget_seconds", "deadline.started_at_epoch"],
+            )
+
+            arguments.supervisor_run_dir = run_b
+            arguments.approve_import_sha256 = preview["review_sha256"]
+            approved = codex_upgrade.import_canonical_checkpoint(arguments)
+            self.assertEqual(approved["status"], "complete")
+            self.assertEqual(approved["review_sha256"], preview["review_sha256"])
+            checkpoint = incremental_recovery.CanonicalCheckpointStore(
+                arguments.campaign_dir / "canonical" / "checkpoints", create=False
+            ).latest()
+            assert checkpoint is not None
+            # 运行事实只进 checkpoint：记录的是批准 run B 的时间坐标。
+            self.assertEqual(checkpoint["deadline"], anchors[1])
+            receipt = json.loads(
+                (arguments.campaign_dir / "canonical" / "import-receipt.json").read_text("utf-8")
+            )
+            self.assertEqual(receipt["approval_run"]["supervisor_run_dir"], str(run_b))
+            self.assertEqual(receipt["approval_run"]["owner_nonce"], "b" * 64)
+            self.assertEqual(receipt["approval_run"]["started_at_epoch"], anchors[1]["started_at_epoch"])
+
+            arguments.supervisor_run_dir = run_c
+            replayed = codex_upgrade.import_canonical_checkpoint(arguments)
+            self.assertEqual(replayed["status"], "complete")
+            self.assertEqual(replayed["checkpoint"], approved["checkpoint"])
+            self.assertEqual(
+                json.loads(
+                    (arguments.campaign_dir / "canonical" / "import-receipt.json").read_text("utf-8")
+                ),
+                receipt,
+            )
+            self.assertEqual(
+                len(list((arguments.campaign_dir / "canonical" / "checkpoints").iterdir())), 1
+            )
+
+    def test_review_sha256_changes_with_semantic_fields_and_original_deadline(self) -> None:
+        """任一语义字段或原始 deadline 变化都改变 review_sha256；只有 run 时间坐标不计入。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            arguments = self._fixture(root)
+            deadline = time.time() + 7200
+            arguments.supervisor_run_dir = self._write_parent_run(
+                root, "run-a", started_offset_seconds=60, deadline_at_epoch=deadline, owner_nonce="a" * 64
+            )
+            baseline = codex_upgrade.import_canonical_checkpoint(arguments)["review_sha256"]
+            subject = codex_upgrade._canonical_import_subject(arguments)
+            projection = codex_upgrade._canonical_approval_projection(subject)
+            self.assertEqual(projection["deadline"], {"deadline_at_epoch": deadline})
+            self.assertEqual(codex_upgrade._fingerprint(projection), baseline)
+            for section in ("campaign", "phase", "migration", "plan", "items", "evidence_manifest", "source", "metrics"):
+                self.assertIn(section, projection)
+
+            # 原始 deadline 不同：不同的 Campaign 时间锚，摘要必须不同。
+            arguments.supervisor_run_dir = self._write_parent_run(
+                root, "run-d", started_offset_seconds=60, deadline_at_epoch=deadline + 1, owner_nonce="d" * 64
+            )
+            self.assertNotEqual(
+                codex_upgrade.import_canonical_checkpoint(arguments)["review_sha256"], baseline
+            )
+            arguments.supervisor_run_dir = self._write_parent_run(
+                root, "run-e", started_offset_seconds=1800, deadline_at_epoch=deadline, owner_nonce="e" * 64
+            )
+            self.assertEqual(
+                codex_upgrade.import_canonical_checkpoint(arguments)["review_sha256"], baseline
+            )
+            # 语义字段：退休版本、attempt 身份、迁移分区各改一处。
+            arguments.retire_version = "0.145.0"
+            self.assertNotEqual(
+                codex_upgrade.import_canonical_checkpoint(arguments)["review_sha256"], baseline
+            )
+            arguments.retire_version = "0.147.0"
+            attempt_path = (
+                arguments.campaign_dir
+                / "candidates"
+                / arguments.candidate_id
+                / "attempts"
+                / arguments.attempt_id
+                / "attempt.json"
+            )
+            attempt = json.loads(attempt_path.read_text("utf-8"))
+            attempt["results"][0]["incremental_result_key"] = "9" * 64
+            self._write(attempt_path, attempt)
+            self.assertNotEqual(
+                codex_upgrade.import_canonical_checkpoint(arguments)["review_sha256"], baseline
+            )
+            # 新增 subject 字段默认进入摘要（失败关闭）。
+            extended = dict(subject)
+            extended["new_semantic_field"] = {"x": 1}
+            self.assertNotEqual(
+                codex_upgrade._fingerprint(codex_upgrade._canonical_approval_projection(extended)),
+                baseline,
+            )
+
+    def test_time_anchor_resolves_from_campaign_run_parent_and_cross_checks_identity(self) -> None:
+        """省略 --supervisor-run-dir 时从 campaign-run 父上下文解析，并与 state.json 交叉验证。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            arguments = self._fixture(root)
+            deadline = time.time() + 7200
+            arguments.supervisor_run_dir = self._write_parent_run(
+                root, "run-a", started_offset_seconds=60, deadline_at_epoch=deadline, owner_nonce="a" * 64
+            )
+            preview = codex_upgrade.import_canonical_checkpoint(arguments)
+            run_b = self._write_parent_run(
+                root, "run-b", started_offset_seconds=10, deadline_at_epoch=deadline, owner_nonce="b" * 64
+            )
+            state_b = json.loads((run_b / "state.json").read_text("utf-8"))
+            environment = self._campaign_run_environment(run_b, state_b)
+            arguments.supervisor_run_dir = None
+            arguments.approve_import_sha256 = preview["review_sha256"]
+            with mock.patch.dict(os.environ, environment, clear=False):
+                anchor = codex_upgrade._canonical_time_anchor(arguments, arguments.campaign_dir)
+                self.assertEqual(anchor["source"], "campaign-run")
+                self.assertEqual(anchor["run"]["supervisor_run_dir"], str(run_b))
+                self.assertEqual(anchor["run"]["owner_nonce"], "b" * 64)
+                approved = codex_upgrade.import_canonical_checkpoint(arguments)
+                self.assertEqual(approved["status"], "complete")
+            receipt = json.loads(
+                (arguments.campaign_dir / "canonical" / "import-receipt.json").read_text("utf-8")
+            )
+            self.assertEqual(receipt["approval_run"]["supervisor_run_dir"], str(run_b))
+
+            # 父 run 身份不一致（owner nonce 被换）：拒绝。
+            with mock.patch.dict(
+                os.environ,
+                {**environment, codex_upgrade_supervisor.CAMPAIGN_RUN_OWNER_NONCE_ENV: "f" * 64},
+                clear=False,
+            ):
+                with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "身份不一致"):
+                    codex_upgrade._canonical_time_anchor(arguments, arguments.campaign_dir)
+            # campaign-run 下显式指向别的 run（v13 的 anchor 做法）：拒绝。
+            arguments.supervisor_run_dir = root / "run-a"
+            with mock.patch.dict(os.environ, environment, clear=False):
+                with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "派发本命令的父监督器"):
+                    codex_upgrade._canonical_time_anchor(arguments, arguments.campaign_dir)
+
+    def test_offline_preview_uses_campaign_plan_deadline_and_approval_needs_parent_run(self) -> None:
+        """没有父 run 时只允许离线预览，deadline 取总计划冻结值；批准必须由父 run 派发。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            arguments = self._fixture(root)
+            arguments.supervisor_run_dir = None
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "总计划冻结的原始 deadline"):
+                codex_upgrade.import_canonical_checkpoint(arguments)
+            deadline_utc = "2099-09-19T12:00:00Z"
+            deadline_epoch = codex_upgrade.datetime.fromisoformat(
+                deadline_utc.replace("Z", "+00:00")
+            ).timestamp()
+            self._write(
+                arguments.campaign_dir / "control" / "vc" / "campaign-plan.json",
+                {"original_deadline_at_utc": deadline_utc},
+            )
+            offline = codex_upgrade.import_canonical_checkpoint(arguments)
+            self.assertEqual(offline["status"], "approval_required")
+            # 与显式父 run（同一原始 deadline）预览得到同一摘要。
+            run_a = self._write_parent_run(
+                root, "run-a", started_offset_seconds=60, deadline_at_epoch=deadline_epoch, owner_nonce="a" * 64
+            )
+            arguments.supervisor_run_dir = run_a
+            self.assertEqual(
+                codex_upgrade.import_canonical_checkpoint(arguments)["review_sha256"],
+                offline["review_sha256"],
+            )
+            # 父 run 的 deadline 与总计划不一致：拒绝。
+            arguments.supervisor_run_dir = self._write_parent_run(
+                root, "run-x", started_offset_seconds=60, deadline_at_epoch=deadline_epoch + 5, owner_nonce="x" * 64
+            )
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "总计划冻结的原始 deadline 不一致"):
+                codex_upgrade.import_canonical_checkpoint(arguments)
+            # 离线批准：拒绝，checkpoint 不得建立。
+            arguments.supervisor_run_dir = None
+            arguments.approve_import_sha256 = offline["review_sha256"]
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "campaign-run 父监督器派发"):
+                codex_upgrade.import_canonical_checkpoint(arguments)
+            self.assertFalse((arguments.campaign_dir / "canonical").exists())
+
+    def test_unparented_canonical_import_preview_is_read_only_exempt(self) -> None:
+        """不带批准摘要的 canonical-import 预览可直接 CLI 执行；带摘要的批准仍必须由 campaign-run 派发。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            campaign = Path(directory) / "campaign"
+            campaign.mkdir(mode=0o700)
+            self._write(
+                campaign / "campaign.json",
+                {"campaign_mode": "formal", "campaign_id": "c", "target_version": "0.154.0"},
+            )
+            preview = argparse.Namespace(campaign_dir=campaign, approve_import_sha256=None)
+            with mock.patch.dict(os.environ, {}, clear=False):
+                os.environ.pop(codex_upgrade_supervisor.CAMPAIGN_RUN_CONTEXT_ENV, None)
+                codex_upgrade._reject_unparented_formal_write(preview, "canonical-import")
+                approve = argparse.Namespace(campaign_dir=campaign, approve_import_sha256="0" * 64)
+                with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "必须由 campaign-run 派发"):
+                    codex_upgrade._reject_unparented_formal_write(approve, "canonical-import")
+                with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "必须由 campaign-run 派发"):
+                    codex_upgrade._reject_unparented_formal_write(
+                        argparse.Namespace(campaign_dir=campaign, canonical_step="seal"),
+                        "canonical-advance",
+                    )
+
     def test_incomplete_0154_fixture_cannot_initialize_native_checkpoint(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             arguments = self._fixture(Path(directory))
@@ -412,6 +688,19 @@ class CanonicalImportTests(unittest.TestCase):
                 "0.151.0",
                 "0.154.0",
             )
+            # 目标画像 = active 副本 + 受管补丁清单的全部规则补丁；补丁涉及的规则即 affected。
+            patched_rules: list[str] = []
+            for patch in patch_payload["rule_patches"]:
+                self.assertEqual(
+                    codex_upgrade._profile_pointer_value(target_payload, patch["path"]),
+                    patch["before"],
+                    patch["path"],
+                )
+                codex_upgrade._profile_pointer_replace(
+                    target_payload, patch["path"], patch["after"]
+                )
+                if patch["rule_id"] not in patched_rules:
+                    patched_rules.append(patch["rule_id"])
             target_payload["Digest"] = "e" * 64
             target_profile = fixture_root / "target-profile.json"
             migration = fixture_root / "rule-migration.json"
@@ -431,7 +720,15 @@ class CanonicalImportTests(unittest.TestCase):
                             "classification": "inherit",
                             "baseline_rule": "SPEC-CODEX-IDENTITY",
                             "target_rule": "SPEC-CODEX-IDENTITY",
-                        }
+                        },
+                        *(
+                            {
+                                "classification": "change",
+                                "baseline_rule": rule_id,
+                                "target_rule": rule_id,
+                            }
+                            for rule_id in patched_rules
+                        ),
                     ],
                 },
             )
@@ -443,7 +740,12 @@ class CanonicalImportTests(unittest.TestCase):
                 patch_manifest_path=patch_manifest,
             )
             self.assertEqual(result["status"], "complete")
-            self.assertEqual(result["affected_rule_ids"], [])
+            self.assertEqual(result["affected_rule_ids"], sorted(patched_rules))
+            self.assertEqual(
+                set(result["rule_field_paths"]),
+                set(patched_rules),
+                "每条补丁规则都必须绑定画像路径",
+            )
             self.assertEqual(result["live_request_count"], 0)
 
     def test_advance_seals_compares_and_accepts_only_affected_rules(self) -> None:

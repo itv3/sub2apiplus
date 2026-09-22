@@ -91,10 +91,13 @@ from tools.official_client_capture import codex_upgrade_evidence_manifest
 from tools.official_client_capture import codex_upgrade_job_rehearsal_receipt
 from tools.official_client_capture import codex_upgrade_timing_ledger
 from tools.official_client_capture import codex_upgrade_project_ledger
+from tools.official_client_capture import codex_upgrade_root_cause
 from tools.official_client_capture import codex_upgrade_tool_identity_policy
 from tools.official_client_capture import codex_upgrade_wire_transition
 from tools.official_client_capture import codex_upgrade_vc_artifacts
 from tools.official_client_capture import codex_upgrade_vc_receipt
+from tools.official_client_capture import codex_upgrade_candidate_build
+from tools.official_client_capture import codex_upgrade_candidate_readiness
 from tools.official_client_capture import codex_upgrade_supervisor
 from tools.official_client_capture import codex_upgrade_predispatch_stop
 from tools.official_client_capture import codex_upgrade_legacy_boundary
@@ -153,7 +156,11 @@ CLIENT_RESPONSE_PROOF_SCHEMA = "codex-egress-client-response-evidence/v1"
 RESTORATION_SCHEMA = FINALIZED_RESTORATION_SCHEMA
 LEGACY_CAPTURE_ATTEMPT_SCHEMA = "codex-upgrade-capture-attempt/v2"
 CAPTURE_ATTEMPT_SCHEMA = "codex-upgrade-capture-attempt/v3"
-CAPTURE_RESERVATION_SCHEMA = "codex-upgrade-capture-reservation/v2"
+LEGACY_CAPTURE_RESERVATION_SCHEMA = "codex-upgrade-capture-reservation/v2"
+CAPTURE_RESERVATION_SCHEMA = "codex-upgrade-capture-reservation/v3"
+CANDIDATE_READINESS_BINDING_SCHEMA = (
+    "codex-upgrade-candidate-readiness-binding/v1"
+)
 SEAL_FAILURE_SCHEMA = "codex-upgrade-seal-failure/v2"
 LEGACY_SEAL_PREVIEW_SCHEMA = "codex-upgrade-seal-preview/v2"
 SEAL_PREVIEW_SCHEMA = "codex-upgrade-seal-preview/v3"
@@ -292,6 +299,7 @@ SUCCESSOR_REASONS = frozenset(
         "candidate_recovery_control_refresh",
         "candidate_recovery_control_replacement",
         "candidate_runtime_identity_correction",
+        "candidate_post_run_seal_recovery",
         "classification_fact_correction",
         "sealed_stage_control_recovery",
         # 已封存官方证据只读导入新 Campaign（§5.3.3）：工具修复或身份变化后不再重发
@@ -300,6 +308,113 @@ SUCCESSOR_REASONS = frozenset(
     }
 )
 OFFICIAL_EVIDENCE_REUSE_REASON = "official_evidence_reuse"
+OFFICIAL_REUSE_TARGET_SCENARIO_TRANSITION_REASON = (
+    "official_evidence_reuse_candidate_job_update"
+)
+CLASSIFICATION_FACT_CORRECTION_REASON = "classification_fact_correction"
+FORMAL_FAILED_JOB_RECOVERY_COMMAND = "recover-candidate-failed-jobs"
+POST_RUN_SEAL_RECOVERY_REASON = "candidate_post_run_seal_recovery"
+FORMAL_POST_RUN_SEAL_RECOVERY_COMMAND = "recover-candidate-post-run-seal"
+# 这组坐标只为 0.154 v7 的已知 A15 单点失败开放。它不是通用豁免：来源
+# Campaign、Candidate、attempt 和工具身份任一不一致都会回到普通失败关闭路径。
+C0154_V7_RECOVERY_SOURCE = {
+    "campaign_dir": (
+        "/root/docker/capture-cli/data/evidence/campaigns/"
+        "c0154-formal-vc5-recovery-20260916t122646z"
+    ),
+    "campaign_id": "c0154-formal-vc5-recovery-20260916t122646z",
+    "campaign_manifest_sha256": (
+        "19dc30b85623907f836c425ef9feac9256c426b3335f88629ae5082e40e8d4d2"
+    ),
+    "target_version": "0.154.0",
+    "candidate_id": "c0154-candidate-v7",
+    "attempt_id": "20260916T124216Z-f5194abd8934f5af",
+    "attempt_sha256": (
+        "84d070952cbd4a14903f9fc2cd0b96f8740a439d35988fb49547aca2f4f48c91"
+    ),
+    "attempt_digest": (
+        "60fc49339121996dcd67581ab3482c138d3f3c9f74945c0e71e7b0d06c9b7b79"
+    ),
+    "identity_sha256": (
+        "88d18b3e9650d88441f6d1762f891081c6e3e7ff43372421f7694bea2af4924a"
+    ),
+    "tool_files_sha256": (
+        "96f79c9e26aaf61c7a226ba87e6c4f5e34e0d8636e6f7ec02de25f993479f8c1"
+    ),
+    # v7 在严格构建参数 v2 上线前已经完成 VC-4，因此其不可变构建收据仍是
+    # v1。只允许下面这一个逐字冻结的历史收据跳过 v2 参数重放；外层仍会
+    # 重验源码树、Git commit、二进制、镜像、Catalog、门禁和实现测试。
+    "build_receipt_sha256": (
+        "735304910bebb1b6b000150f93fe4a2bee0c74b2a2a0b65834eab4cf7a4b52e4"
+    ),
+    "build_receipt_bytes": 7895,
+    "build_receipt_digest": (
+        "23e65465a85e1133751ae2ac14e68bf6ef939fd25772ea5e26d64b7738fad9b1"
+    ),
+    "build_parameters_sha256": (
+        "99d7ff903c1d7062631ba9e2f34c1f4e64ea0672dcbcefae47c99a891abfbcd0"
+    ),
+}
+# 该坐标只为 A15 已完成九项 Candidate Job、但尚未生成任何 Kilo 收据的
+# awaiting_receipts attempt 开放。恢复入口只能新建 metadata-only 后继，
+# 不得重跑九项 Job，也不得把旧 attempt 自身 evidence/logs 根带入新封存边界。
+C0154_A15_POST_RUN_SEAL_SOURCE = {
+    "campaign_dir": (
+        "/root/docker/capture-cli/data/evidence/campaigns/"
+        "c0154-formal-vc5-a15-20260917t1325z"
+    ),
+    "campaign_id": "c0154-formal-vc5-a15-20260917t1325z",
+    "campaign_manifest_sha256": (
+        "90564066ad4ead1d36965322d81d0bbd03314d3fd010e268442c21078b0b96ec"
+    ),
+    "target_version": "0.154.0",
+    "candidate_id": "c0154-candidate-v7",
+    "attempt_id": "20260917T133744Z-bc9bee6fe1df8d8b",
+    "attempt_sha256": (
+        "5004810b26e885e1f15b445bed70b3418a82b49cfd3dda4e3fb803edb35d8e6b"
+    ),
+    "attempt_digest": (
+        "efc8cb9a65428b9fb4adda622a16b8d60a546e373ad82b29712d6b5a492ac325"
+    ),
+    "identity_sha256": (
+        "88d18b3e9650d88441f6d1762f891081c6e3e7ff43372421f7694bea2af4924a"
+    ),
+    "tool_files_sha256": (
+        "751fc71f2477ebd1c750faea66a5961035d68eed8f57f76da650f728cb27d8bd"
+    ),
+    "job_evidence_roots_sha256": (
+        "08b4867a2c853e280fe1ecfbe95f3d175e8ee4f61e56f4a989bbec4ec73597ae"
+    ),
+    "sorted_results_sha256": (
+        "f5ee448a620e2438a71fc6d19857cb29866e2ac3af38b099d3bc523395226297"
+    ),
+}
+# 该坐标只为已经发布、尚未产生任何 VC-5 执行事实的唯一恢复后继续接
+# 控制链。清单摘要是授权的一部分；同名目录、同版本或同 reason 都不能
+# 单独获得豁免。
+C0154_VC5_FAILED_JOB_CONTROL_EPOCH = {
+    "campaign_id": "c0154-formal-vc5-failed-job-recovery-20260917t0527z",
+    "campaign_manifest_sha256": (
+        "74af19e396db4d7cc2e6e6c86c01cb9ca188dbc1f13904d953b39dea25cff0d5"
+    ),
+    "target_version": "0.154.0",
+    "predecessor_reason": "candidate_failed_job_tool_recovery",
+    "candidate_id": "c0154-candidate-v7",
+    "attempt_id": "20260916T124216Z-f5194abd8934f5af",
+    "execute_job_id": "candidate-frozen-core",
+    "production_path": "run_candidate_core_capture.sh",
+    "planned_job_ids": (
+        "candidate-compact-direct",
+        "candidate-compact-mitm",
+        "candidate-core-direct",
+        "candidate-core-mitm",
+        "candidate-frozen-aux",
+        "candidate-frozen-core",
+        "candidate-h1-wire",
+        "candidate-images-wire",
+        "candidate-ws-handshake-repeat",
+    ),
+}
 CANDIDATE_INCREMENTAL_SUCCESSOR_REASONS = frozenset(
     {
         "candidate_failed_job_tool_recovery",
@@ -308,11 +423,24 @@ CANDIDATE_INCREMENTAL_SUCCESSOR_REASONS = frozenset(
         "candidate_runtime_identity_correction",
     }
 )
+CLASSIFICATION_CANDIDATE_REUSE_SUCCESSOR_REASONS = frozenset(
+    {"classification_fact_correction", POST_RUN_SEAL_RECOVERY_REASON}
+)
+CANDIDATE_VC_PROJECTION_SUCCESSOR_REASONS = frozenset(
+    {"candidate_failed_job_tool_recovery", POST_RUN_SEAL_RECOVERY_REASON}
+)
 RECLASSIFICATION_SUCCESSOR_REASONS = frozenset(
     {"classification_fact_correction", "official_evidence_reuse"}
 )
 SEALED_STAGE_RECOVERY_SUCCESSOR_REASONS = frozenset(
     {"sealed_stage_control_recovery"}
+)
+# 这些后继都只承接已经封存的 official 阶段，不承接旧分类事实。对 0.154.0
+# 起的完整 VC 链而言，它们必须以同一语义重建新 Campaign 的 VC-0，并把
+# official Job 编译为 VC-1 reuse；不能继承绑定前序 Campaign 的 vc_control。
+OFFICIAL_STAGE_REUSE_SUCCESSOR_REASONS = frozenset(
+    RECLASSIFICATION_SUCCESSOR_REASONS
+    | SEALED_STAGE_RECOVERY_SUCCESSOR_REASONS
 )
 RUNTIME_CODEX_BINARY_JOB_IDS = frozenset(
     {
@@ -390,6 +518,12 @@ RUNTIME_SUCCESSOR_CHANGED_TOOL_PATH_JOB_IDS = {
     ),
     "run_codex_scenario_target.py": RUNTIME_CODEX_BINARY_JOB_IDS,
     "run_candidate_aux_capture.sh": frozenset({"candidate-frozen-aux"}),
+    "run_candidate_core_capture.sh": frozenset({"candidate-frozen-core"}),
+    "run_candidate_trace_test.sh": frozenset({"candidate-trace-test"}),
+    # 两项只控制本轮启动前就绪检查／计时收据结构，不会改变已完成 Job 的
+    # 请求或证据字节；空集合表示仍需显式恢复来源授权，但不扩大执行闭集。
+    "codex_upgrade_candidate_readiness.py": frozenset(),
+    "codex_upgrade_timing_ledger.schema.json": frozenset(),
     "runtime_scripts/run_fingerprint_mitm_pair.sh": frozenset(
         {"candidate-core-mitm", "candidate-compact-mitm"}
     ),
@@ -397,6 +531,12 @@ RUNTIME_SUCCESSOR_CHANGED_TOOL_PATH_JOB_IDS = {
         {"candidate-core-mitm", "candidate-compact-mitm"}
     ),
 }
+# 失败 Job 后继需要把已审计的历史产出身份重基到当前组件身份。这里的
+# ``evaluator`` 只承接上表中明确登记、且不扩大执行闭集的 schema（当前为
+# timing ledger schema）；普通 control/environment/orchestrator 漂移仍然拒绝。
+_RUNTIME_SUCCESSOR_ALLOWED_REBASE_COMPONENTS = frozenset(
+    {"producer", "relay", "runtime", "shared", "scenario", "evaluator"}
+)
 OFFICIAL_COMPACTION_LITE_RECOVERY_FILES = {
     "build_compaction_model_catalog.py": {
         "from_sha256": None,
@@ -3469,6 +3609,96 @@ FAILED_JOB_EVIDENCE_CONTAINER_RUN_ROOTS = (
 FAILED_JOB_EVIDENCE_HOST_RUN_ROOT = Path(
     "/root/docker/capture-cli/data/runs"
 )
+# 历史失败 attempt 只能按冻结 producer 的逐文件摘要解释结构化摘要；不能用当前
+# 脚本语义回读旧证据，也不能从 stderr 文本猜根因。每个登记项同时冻结完整场景／
+# 动作矩阵，缺场景、缺动作或多出未知动作时一律拒绝解释。
+HISTORICAL_RUN_SUMMARY_MAX_BYTES = 256 * 1024
+HISTORICAL_RUN_SUMMARY_CONTRACTS: dict[str, dict[str, Any]] = {
+    # 提交 5600c118cbf6ba139370f0bd469edf7c6b5533a3 的生产脚本。
+    "b313b3fd313cd689e56d95f15e54f85678d1b367f6e8d8bd4d8b3d4e53b1d54c": {
+        "dependency_path": "run_candidate_core_capture.sh",
+        "job_id": "candidate-frozen-core",
+        "phase": "candidate",
+        "schema_version": "candidate-core-capture/v1",
+        "synthetic_profile": "candidate-core-v1",
+        "codex_version": "0.154.0",
+        "run_id": (
+            "c0154-formal-vc5-recovery-20260916t122646z-"
+            "c0154-candidate-v7-candidate-frozen-core"
+        ),
+        # v7 最终 Job 收据只绑定第三次失败归档。绑定逻辑路径与摘要，避免把
+        # 同 producer 的任意合成 JSON 冒充为这次历史事故的结构化事实。
+        "trusted_summaries": {
+            (
+                "/root/oauth-capture/runs/"
+                "c0154-formal-vc5-recovery-20260916t122646z-"
+                "c0154-candidate-v7-candidate-frozen-core.failed-attempt3"
+            ): "5e2f8b6b68fef0eeb18b44ec35b3241853d7302ab2b5775d02835c93f2dccd75",
+        },
+        "minimum_actions": {
+            "A03": {"responses_http_success": 4},
+            "A04": {"responses_http_success": 4},
+            "A05": {
+                "responses_ws_handshake_success": 1,
+                "responses_ws_response_create": 2,
+            },
+            "A06": {
+                "responses_ws_handshake_success": 1,
+                "responses_ws_response_create": 3,
+            },
+            "A07": {
+                "responses_http_fallback_success": 1,
+                "responses_ws_retryable_failure": 6,
+            },
+            "A08": {"responses_http_success": 3},
+            "A10": {"responses_http_success": 4},
+            "A15": {"models_manifest": 3},
+        },
+        # run-summary 会列出 relay 观察到的全部白名单动作，不只列 producer
+        # 最终门禁检查的动作。以下集合来自 v7 三次不可变摘要；未知动作仍拒绝。
+        "allowed_actions": {
+            "A03": {"models_manifest", "responses_http_success"},
+            "A04": {"models_manifest", "responses_http_success"},
+            "A05": {
+                "models_manifest",
+                "responses_ws_handshake_success",
+                "responses_ws_response_create",
+            },
+            "A06": {
+                "responses_ws_handshake_success",
+                "responses_ws_response_create",
+            },
+            "A07": {
+                "responses_http_fallback_success",
+                "responses_ws_retryable_failure",
+            },
+            "A08": {"models_manifest", "responses_http_success"},
+            "A10": {"responses_http_success"},
+            "A15": {"models_manifest"},
+        },
+        # 旧 producer 对这三个场景使用 ``!=``，其余场景使用下界比较。
+        "exact_scenarios": ("A03", "A06", "A07"),
+        "limitations": {
+            "A08": (
+                "relay 只声明真实跨调用连接；keepalive/断连重试关系由受源码哈希"
+                "约束的结构化测试补证"
+            ),
+            "A10_token_budget": (
+                "TokenBudget 零出站只由结构化测试证明，本脚本不伪造不存在的网络请求"
+            ),
+            "A15_surface": (
+                "relay 证明身份 header 的真实出站；exec/TUI 进程来源由结构化测试证明"
+            ),
+        },
+        "restoration": {
+            "account_proxy_original": "NULL|NULL",
+            "account_proxy_equal": True,
+            "account_extra_equal": True,
+            "hosts_sha256_equal": True,
+            "ca_bundle_sha256_equal": True,
+        },
+    },
+}
 DEFAULT_ATTEMPT_WALL_SECONDS = 90 * 60
 MAX_ATTEMPT_WALL_SECONDS = 6 * 60 * 60
 # 审计规范固定为 5 秒 owner 心跳；独立监督器在 20 秒内判定失联。
@@ -3510,6 +3740,48 @@ CLASSIFICATION_CANDIDATE_REUSE_TRANSITION_SCHEMA = (
 class CampaignGlobalPreconditionError(ConfigurationError):
     """所有后续 Job 共用的 Campaign 启动前置条件已经失败。"""
 
+    failure_class = "environment-prerequisite"
+
+
+class EvidenceIntegrityError(ConfigurationError):
+    """已封存证据或不可变控制制品的完整性异常（永久失败类 ``evidence-integrity``）。
+
+    2026-09-22：候选 accept 读侧复核 EvidenceManifest 时发现 stat 边界漂移（v14r4：
+    seal 之后再次 chmod 使 16 个条目 ctime_ns 变化）。此前它被包成通用 ConfigurationError，
+    父监督器按默认 execution-failure 升级为 post-run-tooling 并建议逐字重派，而 ctime 不可
+    合法回写、manifest 为 write-once 产物，当前 attempt 根本不可恢复。生产者
+    （``codex_upgrade_evidence_manifest.EvidenceManifestBoundaryDriftError``）明确给出
+    ``failure_class`` 与 ``failure_observations``，这里原样携带到 campaign-run 的动作诊断，
+    监督器与 reconciler 只校验记录，不从 message 反推。
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        failure_class: str,
+        failure_observations: Sequence[Mapping[str, str]],
+    ) -> None:
+        super().__init__(message)
+        self.failure_class = str(failure_class)
+        self.failure_observations = [dict(item) for item in failure_observations]
+
+
+def _evidence_manifest_configuration_error(
+    error: codex_upgrade_evidence_manifest.EvidenceManifestError,
+) -> ConfigurationError:
+    """把 EvidenceManifest 异常包成 ConfigurationError，保留生产者给出的机器失败分类。"""
+
+    failure_class = getattr(error, "failure_class", None)
+    observations = getattr(error, "failure_observations", None)
+    if isinstance(failure_class, str) and isinstance(observations, list):
+        return EvidenceIntegrityError(
+            str(error),
+            failure_class=failure_class,
+            failure_observations=observations,
+        )
+    return ConfigurationError(str(error))
+
 
 class CampaignCleanupRequested(RuntimeError):
     """父监督器要求停止数据面并在原 deadline 内展开 attempt 清理。"""
@@ -3534,6 +3806,10 @@ CLASSIFICATION_CANDIDATE_REUSE_JOB_IDS = frozenset(
         "candidate-ws-handshake-repeat",
     }
 )
+# 2026-09-18：上面是 0.154 v7 时代"分类 Candidate 复用"的冻结闭集——来源
+# attempt 的九项 Job 结果被只读复用到后继 Campaign。同日新增的零请求 Job
+# candidate-trace-test 不在其中：含该 Job 的 Campaign 是全量执行的新 Candidate，
+# 不走此复用路径；把新 Job 加进闭集会让全部历史复用来源（九项）无法加载。
 CAMPAIGN_LEASE_SCHEMA = "codex-upgrade-campaign-lease/v1"
 CAMPAIGN_LEASE_FILENAME = ".campaign-lease.json"
 CAMPAIGN_LEASE_LOCK_FILENAME = ".campaign-lease.lock"
@@ -4655,6 +4931,8 @@ def _mutable_command_coordinates(
     if command in {
         "status",
         "plan",
+        FORMAL_FAILED_JOB_RECOVERY_COMMAND,
+        FORMAL_POST_RUN_SEAL_RECOVERY_COMMAND,
         "terminal-transition-preflight",
         # 只读裁定；两步式权限收口自持 Campaign 排他锁（.campaign.lock），
         # 不能再建 CampaignLease，否则同一进程内会与自身的锁互相等待。
@@ -4663,6 +4941,14 @@ def _mutable_command_coordinates(
         # B0 两个 reconciler 自持 Campaign 排他锁与账本目录锁，不建 CampaignLease。
         "reconcile-supervisor-run",
         "reconcile-attempt",
+        # 改造 2：revision 登记与候选作废同样自持 Campaign 排他锁与账本锁。
+        "revision-open",
+        "invalidate-candidate",
+        # 改造 5：评估失败的分类与评估基线状态机同样自持 Campaign 排他锁与账本锁。
+        "evaluation-recover",
+        # seal 预演在私有 mount namespace 的 OverlayFS 副本上执行，正式目录只读；
+        # 收据写入 control/seal-rehearsal，不触碰 attempt 与账本。
+        "rehearse-candidate-seal",
         "",
     }:
         return None
@@ -4691,9 +4977,18 @@ def _mutable_command_coordinates(
         "record-candidate-build",
         "capture-candidate",
         "deliver-candidate",
+        "account-sealed-candidate",
         "all",
     }:
-        return command, "candidate", str(arguments.candidate_id), False
+        # 改造 5 M2：恢复段后继段（capture-candidate run --attempt-recovery ar<k+1> --rerun-failed）接管
+        # 中断段留下的过期 lease；其它候选级命令保持不接管。
+        allow_stale = (
+            command == "capture-candidate"
+            and bool(getattr(arguments, "rerun_failed", False))
+            and getattr(arguments, "capture_action", None) == "run"
+            and bool(getattr(arguments, "attempt_recovery", None))
+        )
+        return command, "candidate", str(arguments.candidate_id), allow_stale
     if command in {"evaluation-transition", "control-epoch"}:
         phase = str(arguments.phase)
         return command, phase, (
@@ -4735,6 +5030,8 @@ def _mutable_command_coordinates(
         "prepare-profile",
         "stage-profile",
         "successor",
+        FORMAL_FAILED_JOB_RECOVERY_COMMAND,
+        FORMAL_POST_RUN_SEAL_RECOVERY_COMMAND,
         "reuse-official-evidence",
         "account-sealed-official",
     }:
@@ -5146,6 +5443,57 @@ def _classification_candidate_reuse_requested(
     return True
 
 
+def _classification_candidate_job_evidence_roots(
+    source_attempt: Mapping[str, Any],
+    *,
+    require_existing: bool = False,
+) -> list[Path]:
+    """只从固定九项 Job 结果提取可复用证据根。
+
+    来源 attempt 自身的 ``evidence`` 与 ``logs`` 只承载旧环境、旧 Kilo 和
+    编排日志，绝不能因为出现在 attempt.evidence_roots 中而进入新 Campaign。
+    """
+
+    results = source_attempt.get("results")
+    if not isinstance(results, list):
+        raise ConfigurationError("分类 Candidate 复用来源缺少 Job 结果。")
+    result_ids = [
+        str(item.get("id")) for item in results if isinstance(item, Mapping)
+    ]
+    expected_ids = sorted(CLASSIFICATION_CANDIDATE_REUSE_JOB_IDS)
+    if (
+        len(result_ids) != len(expected_ids)
+        or sorted(result_ids) != expected_ids
+        or len(set(result_ids)) != len(result_ids)
+        or any(
+            not isinstance(item, Mapping) or item.get("status") != "complete"
+            for item in results
+        )
+    ):
+        raise ConfigurationError("分类 Candidate 复用来源不是九项全部 complete。")
+    raw_roots: list[Path] = []
+    for item in results:
+        assert isinstance(item, Mapping)
+        roots = item.get("evidence_roots")
+        if (
+            not isinstance(roots, list)
+            or not roots
+            or any(
+                not isinstance(root, str)
+                or not Path(root).is_absolute()
+                or ".." in Path(root).parts
+                for root in roots
+            )
+        ):
+            raise ConfigurationError("分类 Candidate 复用来源证据根坐标非法。")
+        raw_roots.extend(Path(str(root)) for root in roots)
+    if require_existing:
+        roots = _deduplicate_evidence_roots(raw_roots)
+    else:
+        roots = list({path for path in raw_roots})
+    return sorted(roots, key=lambda path: str(path))
+
+
 def _classification_candidate_reuse_source(
     arguments: argparse.Namespace,
     campaign_dir: Path,
@@ -5163,12 +5511,20 @@ def _classification_candidate_reuse_source(
         manifest.get("campaign_mode") != "formal"
         or predecessor is None
         or not isinstance(predecessor, Mapping)
-        or predecessor.get("reason") != "classification_fact_correction"
+        or predecessor.get("reason")
+        not in CLASSIFICATION_CANDIDATE_REUSE_SUCCESSOR_REASONS
         or classification.get("status") != "complete"
-        or classification.get("predecessor_import") is not None
+        or (
+            predecessor.get("reason") == "classification_fact_correction"
+            and classification.get("predecessor_import") is not None
+        )
+        or (
+            predecessor.get("reason") == POST_RUN_SEAL_RECOVERY_REASON
+            and classification.get("predecessor_import") is None
+        )
     ):
         raise ConfigurationError(
-            "分类 Candidate 复用只允许已批准的 classification_fact_correction 后继。"
+            "分类 Candidate 复用只允许已批准的分类纠正或 A15 seal 恢复后继。"
         )
     source_dir_value = getattr(
         arguments, "candidate_reuse_source_campaign_dir", None
@@ -5284,26 +5640,36 @@ def _classification_candidate_reuse_source(
         )
     ):
         raise ConfigurationError("分类 Candidate 复用来源不是九项全部 complete。")
-    for item in results:
-        assert isinstance(item, Mapping)
-        roots = item.get("evidence_roots")
-        if (
-            not isinstance(roots, list)
-            or not roots
-            or any(
-                not isinstance(root, str)
-                or not Path(root).is_absolute()
-                or ".." in Path(root).parts
-                for root in roots
-            )
-        ):
-            raise ConfigurationError("分类 Candidate 复用来源证据根坐标非法。")
+    _classification_candidate_job_evidence_roots(source_attempt)
+
+    if predecessor.get("reason") == POST_RUN_SEAL_RECOVERY_REASON:
+        _validated_c0154_a15_post_run_seal_source_scope(
+            source_dir,
+            source_manifest,
+            candidate_id=source_candidate_id,
+            attempt_id=source_attempt_id,
+        )
 
     current_candidates_root = campaign_dir / "candidates"
     if current_candidates_root.exists() or current_candidates_root.is_symlink():
         if current_candidates_root.is_symlink() or not current_candidates_root.is_dir():
             raise ConfigurationError("当前 Campaign candidates 路径不可信。")
-        if any(current_candidates_root.iterdir()):
+        candidate_entries = list(current_candidates_root.iterdir())
+        allowed_build_root = current_candidates_root / candidate_id
+        allowed_build_receipt = allowed_build_root / "build-receipt.json"
+        # VC-4 已完成的后继会先在目标 Candidate 目录投影唯一构建收据；
+        # 这不是既有 attempt。只放行这一份普通文件，任何其他 Candidate、
+        # attempts/result、符号链接或额外条目仍按已有运行状态失败关闭。
+        build_projection_only = bool(
+            len(candidate_entries) == 1
+            and candidate_entries[0] == allowed_build_root
+            and allowed_build_root.is_dir()
+            and not allowed_build_root.is_symlink()
+            and list(allowed_build_root.iterdir()) == [allowed_build_receipt]
+            and allowed_build_receipt.is_file()
+            and not allowed_build_receipt.is_symlink()
+        )
+        if candidate_entries and not build_projection_only:
             raise ConfigurationError("当前 Campaign 已有 Candidate／attempt，禁止复用。")
     _, current_result = _stage_path(
         campaign_dir,
@@ -5569,13 +5935,10 @@ def _build_classification_candidate_reuse_preview(
         }
         for item in source_results
     ]
-    evidence_roots = sorted(
-        {
-            root
-            for item in result_bindings
-            for root in item["evidence_roots"]
-        }
-    )
+    evidence_roots = [
+        str(root)
+        for root in _classification_candidate_job_evidence_roots(source_attempt)
+    ]
     source_dir = Path(context["source_campaign_dir"])
     source_root = Path(context["source_root"])
     source_attempt_path = source_root / "attempt.json"
@@ -5731,7 +6094,8 @@ def _load_classification_candidate_reuse_transition(
         or preview.get("candidate_id") != candidate_id
         or preview.get("identity_sha256") != _fingerprint(dict(identity))
         or not isinstance(predecessor, Mapping)
-        or predecessor.get("reason") != "classification_fact_correction"
+        or predecessor.get("reason")
+        not in CLASSIFICATION_CANDIDATE_REUSE_SUCCESSOR_REASONS
         or source_campaign
         != {
             "campaign_dir": predecessor.get("campaign_dir"),
@@ -5770,6 +6134,10 @@ def _load_classification_candidate_reuse_transition(
         str(source_attempt_binding["attempt_id"]),
         _historical_manifest_controls=True,
     )
+    job_roots = [
+        str(root)
+        for root in _classification_candidate_job_evidence_roots(source_attempt)
+    ]
     source_results = sorted(
         (dict(item) for item in source_attempt.get("results", [])),
         key=lambda item: str(item.get("id", "")),
@@ -5792,8 +6160,16 @@ def _load_classification_candidate_reuse_transition(
         or preview.get("source_results_sha256")
         != _fingerprint({"results": source_results})
         or preview.get("result_bindings") != result_bindings
+        or preview.get("evidence_roots") != job_roots
     ):
         raise ConfigurationError("attempt 分类 Candidate 复用来源结果或身份漂移。")
+    if predecessor.get("reason") == POST_RUN_SEAL_RECOVERY_REASON:
+        _validated_c0154_a15_post_run_seal_source_scope(
+            source_dir,
+            _read_json(source_dir / "campaign.json", "A15 seal 恢复前序清单"),
+            candidate_id=str(preview["source_candidate_id"]),
+            attempt_id=str(source_attempt_binding["attempt_id"]),
+        )
     return transition
 
 
@@ -6056,7 +6432,13 @@ def _runtime_successor_recovery_source(
             for path in replacement_epoch_source.get("production_paths", [])
         )
     else:
-        high_risk_paths = production_paths - set(_PHASE_EVALUATION_HYBRID_FILES)
+        high_risk_paths = _failed_job_recovery_high_risk_paths(
+            predecessor_dir,
+            predecessor_manifest,
+            manifest,
+            candidate_id=predecessor_candidate_id,
+            attempt_id=predecessor_attempt_id,
+        )
     unknown_paths = high_risk_paths - set(
         RUNTIME_SUCCESSOR_CHANGED_TOOL_PATH_JOB_IDS
     )
@@ -6107,11 +6489,20 @@ def _runtime_successor_recovery_source(
         raise ConfigurationError(
             "v9 后继的产出侧工具变化触及复用 Job；不得放宽粗粒度组件摘要。"
         )
+    permitted_rebase_paths = set(high_risk_paths)
+    if _is_c0154_v7_failed_core_source(
+        predecessor_manifest,
+        candidate_id=predecessor_candidate_id,
+        attempt_id=predecessor_attempt_id,
+    ):
+        permitted_rebase_paths.update(
+            production_paths - set(_PHASE_EVALUATION_HYBRID_FILES)
+        )
     allowed_high_risk_components = {
-        _tool_component_for_path(path) for path in high_risk_paths
+        _tool_component_for_path(path) for path in permitted_rebase_paths
     }
     if not allowed_high_risk_components.issubset(
-        {"producer", "relay", "runtime", "shared", "scenario"}
+        _RUNTIME_SUCCESSOR_ALLOWED_REBASE_COMPONENTS
     ):
         raise ConfigurationError("v9 后继的高风险工具组件分类非法。")
 
@@ -6128,7 +6519,7 @@ def _runtime_successor_recovery_source(
         "allowed_high_risk_component_changes": sorted(
             allowed_high_risk_components
         ),
-        "allowed_high_risk_path_changes": sorted(high_risk_paths),
+        "allowed_high_risk_path_changes": sorted(permitted_rebase_paths),
         "validated_current_production_sha256": (
             validated_current_production_sha256
         ),
@@ -6834,6 +7225,7 @@ def _run_job_with_retry(
     """在同一 attempt 内对失败任务做有限补跑，返回最后一次的收据。"""
 
     attempt_index = 1
+    observed_failures: list[dict[str, str]] = []
     while True:
         if deadline is not None:
             deadline.check(f"job:{job.job_id}:attempt-{attempt_index}")
@@ -6877,18 +7269,28 @@ def _run_job_with_retry(
             scenario_context,
             **run_kwargs,
         )
+        if result.get("status") != "complete":
+            observed_failures.extend(_job_failure_observations(result))
+            observed_failures = _normalize_failure_observations(
+                observed_failures,
+                phase=job.phase,
+            )
         if result.get("status") == "complete":
+            if observed_failures:
+                result["failure_observations"] = list(observed_failures)
             return result
         if _cloud_config_bundle_global_failure(result):
             # 当前 Job 的失败证据仍须先归档，随后由 attempt 主循环写入 checkpoint
             # 并停止；稳定分类码不复制原始 stderr，避免把响应或凭据带入控制面。
             result["error"] = CAMPAIGN_GLOBAL_PRECONDITION_ERROR
             _archive_failed_job_evidence(result, attempt_index)
+            result["failure_observations"] = list(observed_failures)
             return result
         if not job.required or attempt_index > JOB_RETRY_LIMIT:
             # 最后一份失败证据也必须归档。否则跨 attempt 的显式 resume 会使用
             # 同一固定证据根并被“禁止覆盖”门禁永久卡死。
             _archive_failed_job_evidence(result, attempt_index)
+            result["failure_observations"] = list(observed_failures)
             return result
         _archive_failed_job_evidence(result, attempt_index)
         attempt_index += 1
@@ -6960,11 +7362,16 @@ def _validate_capture_job_results(
         _validate_incremental_job_result(result, label=f"{phase}:{job_id}")
         if job_id in expected:
             expected_job = expected[job_id]
+            # 改造 5 M2：恢复段补跑的 Job 按重定位后的定义执行（execution_sha256 属于段预约），其
+            # source_execution_sha256 才是 Campaign 冻结场景的原执行定义摘要；段预约已把二者逐 Job 绑定。
+            source_execution = result.get("source_execution_sha256")
+            if source_execution is not None and not SHA256_RE.fullmatch(str(source_execution)):
+                raise ConfigurationError(f"{phase} 抓包任务 {job_id} 的原执行定义摘要非法。")
+            effective_execution = source_execution if source_execution is not None else result.get("execution_sha256")
             if (
                 result.get("phase") != phase
                 or result.get("status") != "complete"
-                or result.get("execution_sha256")
-                != _job_execution_sha256(expected_job)
+                or effective_execution != _job_execution_sha256(expected_job)
             ):
                 raise ConfigurationError(
                     f"{phase} 必需抓包任务 {job_id} 未完成或执行定义漂移。"
@@ -7005,6 +7412,327 @@ def _failed_job_ids(results: Any) -> list[str]:
             and result.get("status") == "failed"
         }
     )
+
+
+def _normalize_failure_observations(
+    observations: Sequence[Mapping[str, Any]],
+    *,
+    phase: str,
+) -> list[dict[str, str]]:
+    """校验并按稳定二元组排序去重，不保留重试次数或诊断正文。"""
+
+    try:
+        normalized, _causes = (
+            codex_upgrade_root_cause.describe_failure_observations(
+                observations,
+                component="supervisor",
+                stable_error_code="campaign-run.action-failed",
+                stable_dimensions={"phase": phase},
+            )
+        )
+    except codex_upgrade_root_cause.RootCauseError as error:
+        raise ConfigurationError(f"attempt 失败观测非法：{error}") from error
+    return [
+        {
+            "check_id": item["check_id"],
+            "failure_code": item["failure_code"],
+        }
+        for item in normalized
+    ]
+
+
+def _historical_run_summary_failure_observations(
+    result: Mapping[str, Any],
+) -> list[dict[str, str]]:
+    """从摘要绑定的旧 producer 与 ``run-summary`` 还原场景／动作根因。
+
+    这里只接受显式登记的 producer SHA，并读取失败 Job 已登记证据根中的结构化
+    计数。未知 producer 继续走通用 Job fallback；一旦命中登记合同，摘要缺失、
+    形状不闭合或出现未知场景／动作都失败关闭，不能退回日志文字猜测。
+    """
+
+    if result.get("status") != "failed":
+        return []
+    dependencies = result.get("tool_dependency_files")
+    if not isinstance(dependencies, Mapping):
+        return []
+    matched: list[tuple[str, Mapping[str, Any]]] = []
+    for producer_sha256, contract in HISTORICAL_RUN_SUMMARY_CONTRACTS.items():
+        dependency_path = contract["dependency_path"]
+        if (
+            dependencies.get(dependency_path) == producer_sha256
+            and result.get("id") == contract["job_id"]
+            and result.get("phase") == contract["phase"]
+        ):
+            matched.append((producer_sha256, contract))
+    if not matched:
+        return []
+    if len(matched) != 1:
+        raise ConfigurationError("历史 run-summary producer 合同匹配不唯一。")
+    _producer_sha256, contract = matched[0]
+    raw_roots = result.get("evidence_roots")
+    if not isinstance(raw_roots, list) or not raw_roots:
+        raise ConfigurationError("已登记的历史 run-summary 失败缺少 evidence_roots。")
+    trusted_summaries = contract["trusted_summaries"]
+    if raw_roots != list(trusted_summaries):
+        raise ConfigurationError("已登记的历史 producer 证据根与冻结事故不一致。")
+
+    summaries: list[Mapping[str, Any]] = []
+    for raw_root in raw_roots:
+        host_root, _relative = _failed_job_evidence_host_route(raw_root)
+        _reject_symlink_components(
+            host_root,
+            FAILED_JOB_EVIDENCE_HOST_RUN_ROOT,
+            "历史 run-summary 证据根",
+        )
+        if host_root.is_symlink() or not host_root.is_dir():
+            continue
+        summary_path = host_root / "run-summary.json"
+        _reject_symlink_components(
+            summary_path,
+            FAILED_JOB_EVIDENCE_HOST_RUN_ROOT,
+            "历史 run-summary",
+        )
+        if not summary_path.exists():
+            continue
+        metadata = summary_path.stat()
+        if (
+            summary_path.is_symlink()
+            or not summary_path.is_file()
+            or metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+            or metadata.st_size <= 0
+            or metadata.st_size > HISTORICAL_RUN_SUMMARY_MAX_BYTES
+        ):
+            raise ConfigurationError("历史 run-summary 权限、属主或大小非法。")
+        if file_sha256(summary_path) != trusted_summaries[raw_root]:
+            raise ConfigurationError("历史 run-summary 摘要与冻结事故不一致。")
+        summaries.append(_read_json(summary_path, "历史 run-summary"))
+    if len(summaries) != 1:
+        raise ConfigurationError("已登记的历史 producer 必须恰有一份可信 run-summary。")
+
+    summary = summaries[0]
+    expected_top_level = {
+        "schema_version",
+        "codex_version",
+        "run_id",
+        "status",
+        "exit_code",
+        "synthetic_profile",
+        "explicit_gate",
+        "production_forwarding_enabled",
+        "scenarios",
+        "limitations",
+        "restoration",
+    }
+    scenarios = summary.get("scenarios")
+    if (
+        set(summary) != expected_top_level
+        or summary.get("schema_version") != contract["schema_version"]
+        or summary.get("codex_version") != contract["codex_version"]
+        or summary.get("run_id") != contract["run_id"]
+        or summary.get("status") != "failed"
+        or not isinstance(summary.get("exit_code"), int)
+        or isinstance(summary.get("exit_code"), bool)
+        or int(summary["exit_code"]) == 0
+        or summary.get("synthetic_profile") != contract["synthetic_profile"]
+        or summary.get("explicit_gate") is not True
+        or summary.get("production_forwarding_enabled") is not False
+        or summary.get("limitations") != contract["limitations"]
+        or summary.get("restoration") != contract["restoration"]
+        or not isinstance(scenarios, list)
+    ):
+        raise ConfigurationError("历史 run-summary 身份、结构或终态非法。")
+
+    minimum_actions = contract["minimum_actions"]
+    allowed_actions = contract["allowed_actions"]
+    expected_scenario_ids = list(minimum_actions)
+    if [item.get("scenario_id") if isinstance(item, Mapping) else None for item in scenarios] != expected_scenario_ids:
+        raise ConfigurationError("历史 run-summary 场景集合或顺序不闭合。")
+
+    observations: list[dict[str, str]] = []
+    exact_scenarios = set(contract["exact_scenarios"])
+    for scenario_id, item in zip(expected_scenario_ids, scenarios, strict=True):
+        assert isinstance(item, Mapping)
+        actions = item.get("actions")
+        expected_actions = minimum_actions[scenario_id]
+        pcap_bytes = item.get("pcap_bytes")
+        pcap_sha256 = item.get("pcap_sha256")
+        if (
+            set(item)
+            != {
+                "scenario_id",
+                "actions",
+                "production_forwarded",
+                "pcap_bytes",
+                "pcap_sha256",
+            }
+            or item.get("production_forwarded") is not False
+            or not isinstance(actions, Mapping)
+            or set(actions) != set(allowed_actions[scenario_id])
+            or any(
+                not isinstance(value, int)
+                or isinstance(value, bool)
+                or value < 0
+                for value in actions.values()
+            )
+            or not isinstance(pcap_bytes, int)
+            or isinstance(pcap_bytes, bool)
+            # libpcap 全局头本身是 24 字节；更短或等长不可能证明该场景
+            # 实际捕获到任何数据包。
+            or pcap_bytes <= 24
+            or not isinstance(pcap_sha256, str)
+            or (
+                pcap_bytes > 0
+                and SHA256_RE.fullmatch(pcap_sha256) is None
+            )
+        ):
+            raise ConfigurationError(
+                f"历史 run-summary 的 {scenario_id} 动作矩阵或 pcap 身份不闭合。"
+            )
+        for action, minimum in expected_actions.items():
+            actual = int(actions[action])
+            failure_code: str | None = None
+            if actual < minimum:
+                failure_code = "action-count-below-contract"
+            elif scenario_id in exact_scenarios and actual > minimum:
+                failure_code = "action-count-above-contract"
+            if failure_code is not None:
+                observations.append(
+                    {
+                        "check_id": f"{scenario_id}.{action}",
+                        "failure_code": failure_code,
+                    }
+                )
+    return observations
+
+
+def _job_failure_observations(result: Mapping[str, Any]) -> list[dict[str, str]]:
+    """从 Job 收据的枚举字段提取稳定失败观测，禁止使用错误正文或路径。"""
+
+    phase = str(result.get("phase", ""))
+    job_id = str(result.get("id", ""))
+    raw: list[Mapping[str, Any]] = []
+    supplied = result.get("failure_observations", [])
+    if not isinstance(supplied, list):
+        raise ConfigurationError("Job failure_observations 必须是数组。")
+    raw.extend(item for item in supplied if isinstance(item, Mapping))
+    if len(raw) != len(supplied):
+        raise ConfigurationError("Job failure_observations 含非对象项。")
+
+    scenario_failures = result.get("scenario_receipt_failures", [])
+    if isinstance(scenario_failures, list):
+        for item in scenario_failures:
+            scenario_id = item.get("scenario_id") if isinstance(item, Mapping) else None
+            if isinstance(scenario_id, str) and scenario_id:
+                raw.append(
+                    {
+                        "check_id": scenario_id,
+                        "failure_code": "scenario-receipt-failed",
+                    }
+                )
+    if result.get("model_condition_receipt_failure") is not None and job_id:
+        raw.append(
+            {
+                "check_id": f"job.{job_id}.model-condition",
+                "failure_code": "receipt-invalid",
+            }
+        )
+    precise_summary = _historical_run_summary_failure_observations(result)
+    if precise_summary:
+        generic_step_prefix = f"job.{job_id}.step-"
+        raw = [
+            item
+            for item in raw
+            if not (
+                item.get("failure_code") == "nonzero-exit"
+                and isinstance(item.get("check_id"), str)
+                and str(item["check_id"]).startswith(generic_step_prefix)
+            )
+        ]
+        raw.extend(precise_summary)
+    if result.get("missing_evidence_patterns") and job_id:
+        raw.append(
+            {
+                "check_id": f"job.{job_id}.evidence",
+                "failure_code": "missing",
+            }
+        )
+    if result.get("empty_evidence_patterns") and job_id:
+        raw.append(
+            {
+                "check_id": f"job.{job_id}.evidence",
+                "failure_code": "empty",
+            }
+        )
+    # 精确摘要命中时，step 非零只是同一故障的汇总出口；其它历史 Job 仍保留
+    # 原有 step 观测，避免因为另一个独立枚举失败而吞掉执行步骤根因。
+    steps = result.get("steps", [])
+    if not precise_summary and isinstance(steps, list):
+        for item in steps:
+            if (
+                isinstance(item, Mapping)
+                and isinstance(item.get("step"), int)
+                and not isinstance(item.get("step"), bool)
+                and item.get("return_code") != 0
+                and job_id
+            ):
+                raw.append(
+                    {
+                        "check_id": f"job.{job_id}.step-{item['step']}",
+                        "failure_code": "nonzero-exit",
+                    }
+                )
+    if result.get("status") == "failed" and not raw and job_id:
+        raw.append({"check_id": f"job.{job_id}", "failure_code": "failed"})
+    return _normalize_failure_observations(raw, phase=phase) if raw else []
+
+
+def _attempt_failure_facts(
+    payload: Mapping[str, Any],
+) -> tuple[list[dict[str, str]], list[dict[str, Any]]]:
+    """汇总 attempt 与各次 Job 的结构化观测，并生成一一对应的根因。"""
+
+    phase = str(payload.get("phase", ""))
+    raw = payload.get("failure_observations", [])
+    if not isinstance(raw, list):
+        raise ConfigurationError("attempt failure_observations 必须是数组。")
+    observations: list[Mapping[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, Mapping):
+            raise ConfigurationError("attempt failure_observations 含非对象项。")
+        observations.append(item)
+    results = payload.get("results", [])
+    if isinstance(results, list):
+        for result in results:
+            if isinstance(result, Mapping):
+                observations.extend(_job_failure_observations(result))
+    try:
+        return codex_upgrade_root_cause.describe_failure_observations(
+            observations,
+            component="supervisor",
+            stable_error_code="campaign-run.action-failed",
+            stable_dimensions={"phase": phase},
+        )
+    except codex_upgrade_root_cause.RootCauseError as error:
+        raise ConfigurationError(f"attempt 失败根因编码失败：{error}") from error
+
+
+def _validate_attempt_failure_facts(payload: Mapping[str, Any]) -> None:
+    """新 attempt 重放数组闭集；没有数组的历史 v2/v3 继续只读兼容。"""
+
+    has_observations = "failure_observations" in payload
+    has_causes = "root_causes" in payload
+    if not has_observations and not has_causes:
+        return
+    if not has_observations or not has_causes:
+        raise ConfigurationError("attempt 失败观测与根因数组必须同时存在。")
+    expected_observations, expected_causes = _attempt_failure_facts(payload)
+    if (
+        payload.get("failure_observations") != expected_observations
+        or payload.get("root_causes") != expected_causes
+    ):
+        raise ConfigurationError("attempt 失败观测或根因数组漂移。")
 
 
 def _capture_attempt_incremental_plan(
@@ -7135,6 +7863,10 @@ def _validate_incremental_job_result(
         str(result.get("carried_from_attempt", ""))
     ):
         raise ConfigurationError(f"{label} 承接来源 attempt 非法。")
+    if "failure_observations" in result:
+        expected = _job_failure_observations(result)
+        if result.get("failure_observations") != expected:
+            raise ConfigurationError(f"{label} failure_observations 未按稳定键去重排序。")
 
 
 def _validate_attempt_file_binding(
@@ -8026,8 +8758,11 @@ def _build_parser() -> argparse.ArgumentParser:
     canonical_import.add_argument(
         "--supervisor-run-dir",
         type=Path,
-        required=True,
-        help="当前独立父监督器 run 目录；canonical checkpoint 继承其原始 deadline。",
+        help=(
+            "父监督器 run 目录；canonical checkpoint 继承其原始 deadline。"
+            "由 campaign-run 派发时可省略并从父上下文解析；离线预览可省略，"
+            "改用 Campaign 总计划冻结的原始 deadline。"
+        ),
     )
     canonical_import.add_argument(
         "--phase",
@@ -8240,6 +8975,106 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     add_watchdog_options(successor)
 
+    failed_job_recovery = subparsers.add_parser(
+        FORMAL_FAILED_JOB_RECOVERY_COMMAND,
+        help=(
+            "为 0.154 起的失败 Candidate Job 创建正式定向恢复后继；"
+            "VC-0～VC-4 只读承接并重签，不重发请求"
+        ),
+    )
+    failed_job_recovery.add_argument(
+        "--predecessor-campaign-dir", type=Path, required=True
+    )
+    add_campaign_reference(failed_job_recovery)
+    failed_job_recovery.add_argument("--campaign-id", required=True)
+    failed_job_recovery.add_argument("--codex-account-id", type=int, required=True)
+    failed_job_recovery.add_argument(
+        "--predecessor-candidate-id",
+        default=str(C0154_V7_RECOVERY_SOURCE["candidate_id"]),
+        help="前序失败 Candidate；VC-5 v7 恢复默认保持原 Candidate ID。",
+    )
+    failed_job_recovery.add_argument("--predecessor-attempt-id", required=True)
+    for option in (
+        "job-rehearsal-root",
+        "job-rehearsal-receipt",
+        "recovery-timing-ledger-dir",
+        "recovery-timing-receipt",
+        "recovery-arm64-environment-root",
+        "recovery-arm64-environment-receipt",
+        "predecessor-stop-ledger-dir",
+        "predecessor-stop-receipt",
+    ):
+        failed_job_recovery.add_argument(f"--{option}", type=Path, required=True)
+    add_watchdog_options(failed_job_recovery)
+    failed_job_recovery.set_defaults(
+        reason="candidate_failed_job_tool_recovery",
+        live_attestation_compose_dir=None,
+        live_attestation_compose_files=None,
+        target_scenario_manifest=None,
+        active_timing_ledger_dir=None,
+        active_timing_receipt=None,
+        active_arm64_environment_root=None,
+        active_arm64_environment_receipt=None,
+        predecessor_recovery_transition=None,
+        predecessor_control_epoch=None,
+        predecessor_control_runtime_repair=None,
+        predecessor_unpublished_ledger_dir=None,
+        predecessor_unpublished_stop_receipt=None,
+        predecessor_supervisor_run_dir=None,
+    )
+
+    post_run_seal_recovery = subparsers.add_parser(
+        FORMAL_POST_RUN_SEAL_RECOVERY_COMMAND,
+        help=(
+            "为已完成九项 Candidate Job、尚未生成 Kilo 收据的 A15 attempt "
+            "创建 metadata-only 后继；VC-0～VC-4 和九项 Job 均只读承接"
+        ),
+    )
+    post_run_seal_recovery.add_argument(
+        "--predecessor-campaign-dir", type=Path, required=True
+    )
+    add_campaign_reference(post_run_seal_recovery)
+    post_run_seal_recovery.add_argument("--campaign-id", required=True)
+    post_run_seal_recovery.add_argument(
+        "--codex-account-id", type=int, required=True
+    )
+    post_run_seal_recovery.add_argument(
+        "--predecessor-candidate-id",
+        default=str(C0154_A15_POST_RUN_SEAL_SOURCE["candidate_id"]),
+    )
+    post_run_seal_recovery.add_argument(
+        "--predecessor-attempt-id",
+        default=str(C0154_A15_POST_RUN_SEAL_SOURCE["attempt_id"]),
+    )
+    for option in (
+        "job-rehearsal-root",
+        "job-rehearsal-receipt",
+        "recovery-timing-ledger-dir",
+        "recovery-timing-receipt",
+        "recovery-arm64-environment-root",
+        "recovery-arm64-environment-receipt",
+        "predecessor-stop-ledger-dir",
+        "predecessor-stop-receipt",
+    ):
+        post_run_seal_recovery.add_argument(f"--{option}", type=Path, required=True)
+    add_watchdog_options(post_run_seal_recovery)
+    post_run_seal_recovery.set_defaults(
+        reason=POST_RUN_SEAL_RECOVERY_REASON,
+        live_attestation_compose_dir=None,
+        live_attestation_compose_files=None,
+        target_scenario_manifest=None,
+        active_timing_ledger_dir=None,
+        active_timing_receipt=None,
+        active_arm64_environment_root=None,
+        active_arm64_environment_receipt=None,
+        predecessor_recovery_transition=None,
+        predecessor_control_epoch=None,
+        predecessor_control_runtime_repair=None,
+        predecessor_unpublished_ledger_dir=None,
+        predecessor_unpublished_stop_receipt=None,
+        predecessor_supervisor_run_dir=None,
+    )
+
     reuse_official = subparsers.add_parser(
         "reuse-official-evidence",
         help=(
@@ -8262,6 +9097,16 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         required=True,
         help="新 Campaign 候选运行必须显式冻结的可用 Codex 账号 ID。",
+    )
+    reuse_official.add_argument(
+        "--classification-fact-correction",
+        dest="reason",
+        action="store_const",
+        const=CLASSIFICATION_FACT_CORRECTION_REASON,
+        help=(
+            "把已封存 official 事实导入 classification_fact_correction 后继；"
+            "不复制旧批准五件套，后继必须重新完成 VC-2 分类。"
+        ),
     )
     reuse_official.add_argument(
         "--job-rehearsal-root",
@@ -8322,7 +9167,8 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     add_watchdog_options(reuse_official)
     # 复用 create_successor_campaign 的 official-only 导入分支；其余 successor
-    # 专用参数固定为空，原因固定为 official_evidence_reuse。
+    # 专用参数固定为空。默认原因是 official_evidence_reuse，显式分类纠错开关
+    # 只把原因收窄为 classification_fact_correction。
     reuse_official.set_defaults(
         reason=OFFICIAL_EVIDENCE_REUSE_REASON,
         predecessor_candidate_id=None,
@@ -8603,7 +9449,25 @@ def _build_parser() -> argparse.ArgumentParser:
         "--build-parameters",
         type=Path,
         required=True,
-        help="记录离线构建参数的 JSON 对象。",
+        help="严格 sub2apiplus-candidate-build-parameters/v2 构建参数。",
+    )
+    candidate_build.add_argument(
+        "--build-tree",
+        type=Path,
+        required=True,
+        help="实际参与编译的 build tree 绝对目录；将逐项扫描内容与权限。",
+    )
+    candidate_build.add_argument(
+        "--docker-context",
+        type=Path,
+        required=True,
+        help="最终传给 Docker 的 context 绝对目录；将逐项扫描并复算装配关系。",
+    )
+    candidate_build.add_argument(
+        "--frontend-dist-source",
+        type=Path,
+        required=True,
+        help="前端 builder 产出的原始 dist 目录；必须与注入 build tree 的 dist 完全一致。",
     )
     candidate_build.add_argument(
         "--catalog-stage-dir",
@@ -8669,6 +9533,22 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="CLIENT=PATH",
     )
     candidate.add_argument("--acknowledge-live-requests", action="store_true")
+    candidate.add_argument(
+        "--attempt-recovery",
+        metavar="ar<k>",
+        help="改造 5 M2：只补跑当前 attempt-recovery 基线冻结的 execute_jobs（run）或增量封存该恢复段（seal）。",
+    )
+    candidate.add_argument(
+        "--rerun-failed",
+        action="store_true",
+        help="改造 5 M2（崩溃矩阵 A1）：中断／失败的恢复段经 reconcile-attempt --recovery-revision 对账后，"
+        "开其后继段 ar<k+1> 全量补跑并接管过期的 Campaign lease；只与 --attempt-recovery 组合使用。",
+    )
+    candidate.add_argument(
+        "--recovery-preview",
+        type=Path,
+        help="改造 5 M2：开后继恢复段时必须提供前序失败段已批准的零请求恢复预览（B0 合同）。",
+    )
 
     runtime_override = subparsers.add_parser(
         "candidate-runtime-override",
@@ -8887,6 +9767,10 @@ def _build_parser() -> argparse.ArgumentParser:
     add_campaign_reference(epoch)
     epoch.add_argument("--attempt-id", required=True)
     epoch.add_argument("--reason", required=True)
+    epoch.add_argument(
+        "--candidate-id",
+        help="为 Candidate attempt 追加 epoch（seal／compare／accept 前的 evidence semantics 变化）；缺省为 official attempt。",
+    )
     verdict = subparsers.add_parser(
         "verdict-official-attempt-identity", help="裁定 attempt 执行时的 wire 身份是否等于当前"
     )
@@ -8915,6 +9799,59 @@ def _build_parser() -> argparse.ArgumentParser:
         "--approve-sha256",
         help="apply 必需：preview 输出的 review_sha256。",
     )
+    revision_open = subparsers.add_parser(
+        "revision-open",
+        help=(
+            "改造 2：登记并激活一个候选级 revision（零请求、幂等）。--initial 在 VC-4 首批前建立 r1；"
+            "--supersedes 在 invalidate-candidate 之后开 r(N+1)"
+        ),
+    )
+    add_campaign_reference(revision_open)
+    revision_open.add_argument("--candidate-id", required=True)
+    revision_mode = revision_open.add_mutually_exclusive_group(required=True)
+    revision_mode.add_argument("--initial", action="store_true", help="新 Campaign 的 r1")
+    revision_mode.add_argument("--supersedes", metavar="OLD_CANDIDATE_ID", help="被作废候选的 ID")
+    invalidate = subparsers.add_parser(
+        "invalidate-candidate",
+        help=(
+            "改造 2：显式作废当前候选（两步式，零请求）。preview 输出诊断草案与 review_sha256；"
+            "apply 以 --approve-sha256 落盘、推送根因并二次判定，通过后账本进入 revision_required"
+        ),
+    )
+    invalidate.add_argument("invalidate_action", choices=("preview", "apply"))
+    add_campaign_reference(invalidate)
+    invalidate.add_argument("--candidate-id", required=True)
+    invalidate.add_argument("--reviewer", required=True, help="人工审核人标识（非空即可）")
+    invalidate.add_argument("--evidence", type=Path, action="append", default=[], help="证据文件（可重复），只作 evidence_refs")
+    invalidate.add_argument(
+        "--candidate-source",
+        type=Path,
+        help="旧候选源码树：旧候选既无 build receipt 又无 attempt 身份投影时必填",
+    )
+    invalidate.add_argument("--approve-sha256", help="apply 必需：preview 输出的 review_sha256")
+    evaluation_recover_parser = subparsers.add_parser(
+        "evaluation-recover",
+        help=(
+            "改造 5：候选证据封存后离线评估失败的分类与局部恢复（零请求，两步式）。preview 输出"
+            "失败来源、复用授权、failure-scope 与诊断草案；apply 以 --approve-sha256 与 --root-cause-class"
+            "开评估基线 b<K>（prepared→authorized→committed）；abandon 作废未 COMMIT 的 PREPARED 基线"
+        ),
+    )
+    evaluation_recover_parser.add_argument("recover_action", choices=("preview", "apply", "abandon"))
+    add_campaign_reference(evaluation_recover_parser)
+    evaluation_recover_parser.add_argument("--candidate-id", required=True)
+    evaluation_recover_parser.add_argument("--reviewer", required=True, help="人工审核人标识（非空即可）")
+    evaluation_recover_parser.add_argument(
+        "--root-cause-class",
+        choices=("evaluator-defect", "transient-environment", "candidate-source", "approval-inputs"),
+        help="apply 必需：人工裁定的类别（须在 preview 给出的 admissible_classes 内）",
+    )
+    evaluation_recover_parser.add_argument("--fix-commit", help="evaluator-defect 必需：完整 40 位修复提交")
+    evaluation_recover_parser.add_argument(
+        "--deployment-receipt", type=Path, help="evaluator-defect 必需：修复已受监督部署的 ARM64 部署收据（绝对路径）"
+    )
+    evaluation_recover_parser.add_argument("--approve-sha256", help="apply 必需：preview 输出的 review_sha256")
+    evaluation_recover_parser.add_argument("--reason", help="abandon 可选：作废原因")
     reconcile_run = subparsers.add_parser(
         "reconcile-supervisor-run",
         help=(
@@ -8929,6 +9866,42 @@ def _build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="部署收据所在控制根；默认 <宿主数据根>/control。",
     )
+    rehearse_seal = subparsers.add_parser(
+        "rehearse-candidate-seal",
+        help=(
+            "在私有 mount namespace 的 OverlayFS 副本上按正式动作清单跑通 Candidate seal "
+            "零请求后处理链直到最终决策，写预演收据；正式 seal 批次派发前必须持有匹配收据"
+        ),
+    )
+    add_campaign_reference(rehearse_seal)
+    rehearse_seal.add_argument("--candidate-id", required=True)
+    rehearse_seal.add_argument("--attempt-id", required=True)
+    rehearse_seal.add_argument(
+        "--action-plan",
+        type=Path,
+        required=True,
+        help="codex-upgrade-vc-action-plan/v1；必须与随后正式派发的 seal 批次是同一份",
+    )
+    rehearse_seal.add_argument(
+        "--data-root",
+        type=Path,
+        default=Path("/root/docker/capture-cli/data"),
+        help="被 OverlayFS 整体覆盖的宿主数据根",
+    )
+    rehearse_seal.add_argument(
+        "--alias-root",
+        type=Path,
+        action="append",
+        default=[],
+        help="数据根的 bind 别名（如 /root/oauth-capture），namespace 内重新 bind 到 overlay",
+    )
+    rehearse_seal.add_argument("--upper-root", type=Path, required=True)
+    rehearse_seal.add_argument(
+        "--skip-action",
+        action="append",
+        default=None,
+        help="跳过的 live 动作 ID；默认只跳过 candidate-seal-checkpoint",
+    )
     reconcile_attempt = subparsers.add_parser(
         "reconcile-attempt",
         help=(
@@ -8938,10 +9911,19 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     add_campaign_reference(reconcile_attempt)
     reconcile_attempt.add_argument("--attempt-id", required=True)
+    reconcile_attempt.add_argument(
+        "--recovery-revision", metavar="ar<k>", help="改造 5 M2：对账该 attempt 的恢复段（段预约之后中断／失败）。"
+    )
     reconcile_attempt.add_argument("--control-root", type=Path)
     reconcile_attempt.add_argument(
         "--approve-recovery-sha256",
         help="按 recovery-preview 的 review_sha256 批准冻结的恢复闭集。",
+    )
+    reconcile_attempt.add_argument(
+        "--authorize-recovery-preview",
+        type=Path,
+        metavar="PATH",
+        help="改造 5 M2：消费已批准的恢复预览（账本 recovery_required → active），使后继恢复段批次可派发。",
     )
     account_sealed = subparsers.add_parser(
         "account-sealed-official",
@@ -8951,6 +9933,18 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     add_campaign_reference(account_sealed)
+    account_sealed_candidate = subparsers.add_parser(
+        "account-sealed-candidate",
+        help=(
+            "把已封存 Candidate 阶段的模型请求写入项目总账；"
+            "自身零请求，按 Candidate 与 attempt 幂等"
+        ),
+    )
+    add_campaign_reference(account_sealed_candidate)
+    account_sealed_candidate.add_argument("--candidate-id", required=True)
+    account_sealed_candidate.add_argument(
+        "--attempt-recovery", metavar="ar<k>", help="改造 5 M2：入账恢复段 ar<k> 的增量封存结果（只记本段新增请求）。"
+    )
     resume = subparsers.add_parser("resume", help="按最近稳定状态续跑失败阶段")
     add_campaign_reference(resume)
     resume.add_argument("--candidate-id")
@@ -9690,6 +10684,9 @@ _CONTROL_PLANE_TOOL_FILES = frozenset(
         "codex_upgrade_pre_a3_certification.py",
         # 零请求 smoke 只在 staging 夹具上跑新命令并写收据。
         "codex_upgrade_zero_request_smoke.py",
+        # Candidate seal 隔离预演：在 OverlayFS 副本上重放正式 seal 链，只写
+        # 预演收据，不产生请求、不解释证据。
+        "codex_upgrade_seal_rehearsal.py",
         # 工具身份四层策略：策略文件与计算模块只改变身份判据，不改变证据字节。
         "codex_upgrade_tool_identity_policy.py",
         "tool_identity_policy_v2.json",
@@ -9699,6 +10696,10 @@ _CONTROL_PLANE_TOOL_FILES = frozenset(
         "codex_upgrade_harden_evidence_permissions.py",
         "codex_upgrade_campaign_run_rehearsal_receipt.py",
         "codex_upgrade_predispatch_stop.py",
+        # Candidate 构建实物复算只扫描构建输入、镜像和离线 capability，
+        # 不生成任何官方／候选请求字节。
+        "codex_upgrade_candidate_build.py",
+        "codex_upgrade_candidate_build_parameters.schema.json",
         "codex_upgrade_campaign_lease.schema.json",
         "codex_upgrade_campaign_lease_stop.schema.json",
         "codex_upgrade_control_epoch.schema.json",
@@ -9757,6 +10758,9 @@ _CANONICAL_EVALUATION_ONLY_FILES = frozenset(
         "codex_upgrade_pre_a3_certification.py",
         # 零请求 smoke 只在 staging 夹具上跑新命令并写收据。
         "codex_upgrade_zero_request_smoke.py",
+        # Candidate seal 隔离预演：在 OverlayFS 副本上重放正式 seal 链，只写
+        # 预演收据，不产生请求、不解释证据。
+        "codex_upgrade_seal_rehearsal.py",
         # 工具身份四层策略：策略文件与计算模块只改变身份判据，不改变证据字节。
         "codex_upgrade_tool_identity_policy.py",
         "tool_identity_policy_v2.json",
@@ -9772,7 +10776,9 @@ _CANONICAL_EVALUATION_ONLY_FILES = frozenset(
         "codex_upgrade_gate_mapping.schema.json",
         "codex_upgrade_gate_plan.schema.json",
         "codex_upgrade_candidate_build_receipt.schema.json",
+        "codex_upgrade_candidate_build_parameters.schema.json",
         "codex_upgrade_candidate_delivery_receipt.schema.json",
+        "codex_upgrade_candidate_build.py",
         "codex_upgrade_vc_artifacts.py",
         "codex_upgrade_legacy_boundary.py",
         "production_activation_receipt.py",
@@ -9869,7 +10875,9 @@ _EVALUATION_SIDE_FILES = frozenset(
         "codex_upgrade_gate_mapping.schema.json",
         "codex_upgrade_gate_plan.schema.json",
         "codex_upgrade_candidate_build_receipt.schema.json",
+        "codex_upgrade_candidate_build_parameters.schema.json",
         "codex_upgrade_candidate_delivery_receipt.schema.json",
+        "codex_upgrade_candidate_build.py",
         "codex_upgrade_vc_artifacts.py",
         "codex_upgrade_vc_receipt.py",
         "codex_upgrade_vc_receipt.schema.json",
@@ -9893,6 +10901,9 @@ _EVALUATION_SIDE_FILES = frozenset(
         "codex_upgrade_pre_a3_certification.py",
         # 零请求 smoke 只在 staging 夹具上跑新命令并写收据。
         "codex_upgrade_zero_request_smoke.py",
+        # Candidate seal 隔离预演：在 OverlayFS 副本上重放正式 seal 链，只写
+        # 预演收据，不产生请求、不解释证据。
+        "codex_upgrade_seal_rehearsal.py",
         # 工具身份四层策略：策略文件与计算模块只改变身份判据，不改变证据字节。
         "codex_upgrade_tool_identity_policy.py",
         "tool_identity_policy_v2.json",
@@ -10047,6 +11058,8 @@ _PRODUCER_TOOL_FILES = frozenset(
     {
         "build_compaction_model_catalog.py",
         "capture.py",
+        # 候选同源源码树上执行冻结 go test -json，直接产出内部状态证据字节。
+        "run_candidate_trace_test.sh",
         "run_codex_scenario_target.py",
         "pcap_clienthello.py",
         "scrub_raw_bytes.py",
@@ -10464,8 +11477,14 @@ def _exact_tool_path_impact(
     jobs: Iterable[Job],
     expected_tool: Mapping[str, Any],
     current_tool: Mapping[str, Any],
+    *,
+    allow_phase_evaluation_hybrid_drift: bool = False,
 ) -> tuple[list[str], list[str], list[str]]:
-    """按逐文件传递依赖计算 Job 失效集合；未知产出文件保持停线。"""
+    """按逐文件传递依赖计算 Job 失效集合；未知产出文件保持停线。
+
+    ``allow_phase_evaluation_hybrid_drift`` 只能由已经逐坐标验真的历史恢复源
+    打开。普通 v2 身份仍以 wire 闭包摘要为准，不能借混合文件分类绕过停线。
+    """
 
     planned = list(jobs)
     drift = _tool_identity_drift(current_tool, expected_tool)
@@ -10473,7 +11492,9 @@ def _exact_tool_path_impact(
     hybrid = set(_PHASE_EVALUATION_HYBRID_FILES)
     expected_closure = _wire_closure_sha256(expected_tool)
     current_closure = _wire_closure_sha256(current_tool)
-    if expected_closure is not None and current_closure is not None:
+    if allow_phase_evaluation_hybrid_drift:
+        changed -= hybrid
+    elif expected_closure is not None and current_closure is not None:
         # A2-8：v2 身份按编排器 wire 闭包判定混合文件。闭包未变，codex_upgrade.py 的
         # 变化不算产出变化；闭包变了，它映射不到具体 Job，进入 unmapped 让调用方按
         # 「映射不到则全部 Job 受影响」处理，不再静默豁免。
@@ -10483,6 +11504,11 @@ def _exact_tool_path_impact(
         # v1 身份没有闭包信息，保持历史豁免语义，历史 Campaign 重放不受影响。
         changed -= hybrid
     changed_paths = sorted(changed)
+    # 没有产出侧路径变化时，影响闭集必然为空。依赖反向图需要递归解析每个
+    # Job 的脚本引用，真实工具树上代价较高；此处提前返回既不减少任何校验，
+    # 也避免零变化预览无意义地构建整张图。
+    if not changed_paths:
+        return [], [], []
     impact_map = _tool_path_job_map(planned, expected_tool, current_tool)
     affected: set[str] = set()
     unmapped: list[str] = []
@@ -10918,6 +11944,7 @@ def _job_rehearsal_contract_from_manifest(
     recovery_rehearsal_receipt: Mapping[str, Any] | None = None,
     control_receipts_override: Mapping[str, Any] | None = None,
     _allow_historical_tool_identity: bool = False,
+    _allow_bound_evidence_label_digest: bool = False,
     _require_incremental_noop_preflight_active: bool = True,
     _allow_stopped_metadata_only: bool = False,
 ) -> dict[str, Any]:
@@ -10973,7 +12000,7 @@ def _job_rehearsal_contract_from_manifest(
             wire_producer_sha256=tool_identity.get("wire_producer_sha256"),
             policy_sha256=tool_identity.get("policy_sha256"),
         )
-        if not _allow_historical_tool_identity or not isinstance(
+        if not _allow_bound_evidence_label_digest or not isinstance(
             recovery_rehearsal_receipt, Mapping
         ):
             return current_contract
@@ -10992,9 +12019,9 @@ def _job_rehearsal_contract_from_manifest(
             if current_contract.get(key) != historical_contract.get(key)
         }
         if changed == {"evidence_label_declaration_sha256"}:
-            # 历史 control epoch 已先重放并绑定这份演练收据。证据标签属于
-            # evaluator 身份；只允许承接其旧摘要，Job、场景、环境、工具和
-            # 其他合同字段任一变化仍由后续逐字合同校验失败关闭。
+            # 调用方已按 Campaign／control epoch 的不可变文件绑定重放这份
+            # 演练收据。证据标签属于 evaluator 身份；只允许承接其旧摘要，
+            # Job、场景、环境、工具和其他合同字段任一变化仍按当前合同关闭。
             return historical_contract
         return current_contract
 
@@ -11022,18 +12049,20 @@ def _job_rehearsal_contract_from_manifest(
             isinstance(predecessor, Mapping)
             and predecessor.get("reason") == "classification_fact_correction"
         )
-        control_refresh = bool(
+        recovery_rehearsal_successor = bool(
             isinstance(predecessor, Mapping)
             and predecessor.get("reason")
             in {
+                "candidate_failed_job_tool_recovery",
                 "candidate_recovery_control_refresh",
                 "candidate_recovery_control_replacement",
+                POST_RUN_SEAL_RECOVERY_REASON,
             }
         )
-        if control_refresh:
+        if recovery_rehearsal_successor:
             if not isinstance(recovery_rehearsal_receipt, Mapping):
                 raise ConfigurationError(
-                    "控制刷新必须从绑定的 preflight/no-op 收据复算当前执行合同。"
+                    "恢复后继必须从绑定的 preflight/no-op 收据复算当前执行合同。"
                 )
             control_manifest: Mapping[str, Any] = manifest
             if control_receipts_override is not None:
@@ -11098,7 +12127,7 @@ def _job_rehearsal_contract_from_manifest(
                 )
             ):
                 raise ConfigurationError(
-                    "控制刷新绑定的 preflight/no-op 执行合同摘要不一致。"
+                    "恢复后继绑定的 preflight/no-op 执行合同摘要不一致。"
                 )
             return current_contract
         if classification_noop_successor:
@@ -11182,6 +12211,40 @@ def _job_rehearsal_contract_from_manifest(
                         )
                     ):
                         return approved_contract
+        # 2026-09-18：官方证据只读复用建立的 Formal 在批准场景出现前（VC-2 派发
+        # 之前）没有 classification；受管场景在候选侧演进后（新增
+        # candidate-trace-test），创建时 _build_control_epoch_successor_controls
+        # 按 preflight 快照绑定了演练合同，这里同样按 preflight 快照回退复算。
+        # 只在冻结场景合同与绑定不一致时尝试，且必须与绑定摘要相等才采用。
+        if (
+            isinstance(manifest.get("predecessor"), Mapping)
+            and manifest["predecessor"].get("reason") == OFFICIAL_EVIDENCE_REUSE_REASON
+            and isinstance(recovery_rehearsal_receipt, Mapping)
+        ):
+            try:
+                preflight_dir, preflight_manifest = (
+                    _recovery_rehearsal_preflight_from_receipt(
+                        recovery_rehearsal_receipt,
+                        manifest,
+                    )
+                )
+                reuse_scenario = _recovery_rehearsal_target_scenario_override(
+                    campaign_dir,
+                    manifest,
+                    preflight_dir,
+                    preflight_manifest,
+                    official_only_reuse=True,
+                )
+            except ConfigurationError:
+                reuse_scenario = None
+            if reuse_scenario is not None:
+                reuse_contract = build(reuse_scenario)
+                if bound_contract_sha256 == (
+                    codex_upgrade_job_rehearsal_receipt.execution_contract_sha256(
+                        reuse_contract
+                    )
+                ):
+                    return reuse_contract
         return frozen_contract
     except codex_upgrade_job_rehearsal_receipt.JobRehearsalReceiptError as error:
         raise ConfigurationError(f"Campaign Job 执行合同非法：{error}") from error
@@ -11799,6 +12862,10 @@ def _verify_control_receipts(
                 recovery_rehearsal_receipt=receipt,
                 tool_files_sha256_override=tool_files_sha256_override,
                 _allow_historical_tool_identity=historical_control_tool,
+                # receipt 已在上方按当前有效 control 的 path／sha256／bytes
+                # 重放。只读历史校验可承接其冻结的 evaluator 标签摘要；
+                # 真正执行前仍要求当前标签合同，防止旧演练绕过新 evaluator。
+                _allow_bound_evidence_label_digest=not require_active,
                 # control-epoch 发布前还没有新 epoch。此时旧控制必须按
                 # Campaign 冻结的历史工具身份只读重放；发布后的正常加载
                 # 若直接使用 campaign.json 的冻结控制，也必须走原生清单
@@ -12091,18 +13158,10 @@ def _create_initial_vc_control_artifacts(
         batch_path = batches_root / "0001-vc-1.json"
         _secure_write_json_once(batch_path, batch)
         result["first_formal_batch"] = _vc_control_binding(campaign_dir, batch_path)
-        run_manifest = codex_upgrade_supervisor.build_batched_campaign_run_manifest(
-            campaign_id=plan["campaign_id"],
-            campaign_plan_sha256=plan["plan_sha256"],
-            batch_id=batch["batch_id"],
-            batch_sequence=batch["sequence"],
-            batch_sha256=batch["batch_sha256"],
-            phase=batch["phase"],
-            predecessor_checkpoint=batch["predecessor_checkpoint"],
-            original_deadline_at_utc=batch["original_deadline_at_utc"],
-            actions=batch["actions"],
-            execute_items=batch["execute_item_ids"],
-            reuse_items=batch["reuse_item_ids"],
+        # 首批清单按总计划的批次模型生成：staging 模型携带（null 的）候选级绑定字段。
+        run_manifest = _vc_run_manifest_from_batch(
+            batch,
+            batch_model=codex_upgrade_vc_artifacts.campaign_plan_batch_model(plan),
         )
         manifests_root = ensure_private_directory(
             vc_root / "run-manifests",
@@ -12209,7 +13268,14 @@ def _validate_initial_vc_control_artifacts(
             predecessor = manifest.get("predecessor")
             reuses_official_stage = bool(
                 isinstance(predecessor, Mapping)
-                and predecessor.get("reason") == OFFICIAL_EVIDENCE_REUSE_REASON
+                and predecessor.get("reason")
+                in (
+                    OFFICIAL_STAGE_REUSE_SUCCESSOR_REASONS
+                    | {
+                        "candidate_failed_job_tool_recovery",
+                        POST_RUN_SEAL_RECOVERY_REASON,
+                    }
+                )
             )
             expected_execute_ids = [] if reuses_official_stage else official_job_ids
             expected_reuse_ids = official_job_ids if reuses_official_stage else []
@@ -12231,18 +13297,10 @@ def _validate_initial_vc_control_artifacts(
                 "first_campaign_run_manifest",
                 "首个 VC-1 campaign-run 清单",
             )
-            expected_run = codex_upgrade_supervisor.build_batched_campaign_run_manifest(
-                campaign_id=plan["campaign_id"],
-                campaign_plan_sha256=plan["plan_sha256"],
-                batch_id=batch["batch_id"],
-                batch_sequence=batch["sequence"],
-                batch_sha256=batch["batch_sha256"],
-                phase=batch["phase"],
-                predecessor_checkpoint=batch["predecessor_checkpoint"],
-                original_deadline_at_utc=batch["original_deadline_at_utc"],
-                actions=batch["actions"],
-                execute_items=batch["execute_item_ids"],
-                reuse_items=batch["reuse_item_ids"],
+            # 与生成侧同一函数重建：staging 模型首批清单携带 null 的候选级绑定字段。
+            expected_run = _vc_run_manifest_from_batch(
+                {**batch, "campaign_id": plan["campaign_id"], "campaign_plan_sha256": plan["plan_sha256"]},
+                batch_model=codex_upgrade_vc_artifacts.campaign_plan_batch_model(plan),
             )
             if run_raw != expected_run:
                 raise ConfigurationError("首个 campaign-run 清单未由 VC-1 批次确定性编译。")
@@ -12292,10 +13350,239 @@ def _assert_initial_vc1_handoff_window(
         )
 
 
-def _vc_checkpoint_path(campaign_dir: Path, phase: str) -> Path:
+CANDIDATE_VC_PHASES = codex_upgrade_vc_artifacts.CANDIDATE_PHASES
+REVISIONS_DIRNAME = "revisions"
+
+
+def _vc_checkpoint_path(campaign_dir: Path, phase: str, *, revision: int | None = None) -> Path:
+    """阶段 checkpoint 路径：VC-0～VC-3 Campaign 级；VC-4～VC-6 按候选 revision。
+
+    r1 保持原路径（历史 Campaign 隐含 r1 只读兼容），r≥2 落在
+    ``control/vc/revisions/r<N>/<phase>-checkpoint.json``。
+    """
+
     if phase not in codex_upgrade_vc_artifacts.VC_PHASES:
         raise ConfigurationError(f"未知 VC 阶段：{phase}")
+    if phase in CANDIDATE_VC_PHASES and revision is not None:
+        if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:
+            raise ConfigurationError("候选 revision 必须是正整数。")
+        if revision >= 2:
+            return _candidate_revision_dir(campaign_dir, revision) / f"{phase.lower()}-checkpoint.json"
     return campaign_dir / "control" / "vc" / f"{phase.lower()}-checkpoint.json"
+
+
+def _candidate_revisions_root(campaign_dir: Path) -> Path:
+    return campaign_dir / "control" / "vc" / REVISIONS_DIRNAME
+
+
+def _candidate_revision_dir(campaign_dir: Path, revision: int) -> Path:
+    return _candidate_revisions_root(campaign_dir) / f"r{int(revision)}"
+
+
+def _read_candidate_revision_record(
+    campaign_dir: Path,
+    revision: int,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """读取 revision 目录的 revision.json 与 COMMIT（缺失返回 None，形态异常即拒绝）。"""
+
+    directory = _candidate_revision_dir(campaign_dir, revision)
+    record_path = directory / "revision.json"
+    commit_path = directory / "COMMIT"
+    record: dict[str, Any] | None = None
+    commit: dict[str, Any] | None = None
+    if record_path.exists() or record_path.is_symlink():
+        if record_path.is_symlink() or not record_path.is_file():
+            raise ConfigurationError(f"候选 revision r{revision} 记录路径不可信。")
+        try:
+            record = codex_upgrade_vc_artifacts.validate_candidate_revision(
+                _read_json(record_path, f"候选 revision r{revision} 记录")
+            )
+        except codex_upgrade_vc_artifacts.VCArtifactError as error:
+            raise ConfigurationError(str(error)) from error
+        if record["revision"] != revision:
+            raise ConfigurationError(f"候选 revision r{revision} 记录的 revision 与目录不一致。")
+    if commit_path.exists() or commit_path.is_symlink():
+        if commit_path.is_symlink() or not commit_path.is_file():
+            raise ConfigurationError(f"候选 revision r{revision} COMMIT 路径不可信。")
+        try:
+            commit = codex_upgrade_vc_artifacts.validate_candidate_revision_commit(
+                _read_json(commit_path, f"候选 revision r{revision} COMMIT")
+            )
+        except codex_upgrade_vc_artifacts.VCArtifactError as error:
+            raise ConfigurationError(str(error)) from error
+        if record is None or commit["record_sha256"] != record["record_sha256"] or commit["revision"] != revision:
+            raise ConfigurationError(f"候选 revision r{revision} COMMIT 未绑定同目录的 revision.json。")
+    return record, commit
+
+
+def _ledger_last_stage_revision(ledger_dir: Path) -> dict[str, Any] | None:
+    """账本最后一条 stage_revision 事件（显式激活的 revision）；没有则 None。"""
+
+    last: dict[str, Any] | None = None
+    try:
+        for event, _raw in codex_upgrade_timing_ledger._load_events(ledger_dir):
+            if event.get("event_type") == "stage_revision":
+                last = dict(event)
+    except codex_upgrade_timing_ledger.TimingLedgerError as error:
+        raise ConfigurationError(f"UpgradeTimingLedger 无法读取 stage_revision：{error}") from error
+    return last
+
+
+def _optional_campaign_timing_ledger_dir(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+) -> Path | None:
+    """有账本绑定时返回账本目录；没有绑定（历史／合成夹具）返回 None。"""
+
+    controls = manifest.get("control_receipts")
+    effective_epoch = _load_control_epoch_receipt(campaign_dir, manifest)
+    if isinstance(effective_epoch, Mapping):
+        controls = effective_epoch.get("successor_controls")
+    timing = controls.get("upgrade_timing") if isinstance(controls, Mapping) else None
+    if not isinstance(timing, Mapping):
+        return None
+    return _campaign_timing_ledger_dir(campaign_dir, manifest)
+
+
+def _current_candidate_revision_record(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+) -> tuple[int | None, dict[str, Any] | None]:
+    """当前候选 revision 及其 revision.json。
+
+    由账本最后一条有效 ``stage_revision`` 决定（目录 COMMIT 摘要必须与事件一致，即 active）；
+    历史 Campaign（已有原路径 VC-4 checkpoint 且无 ``control/vc/revisions/`` 目录）隐含 r1，
+    记录为 None；两者都不成立返回 ``(None, None)``——调用方必须拒绝并提示先
+    ``revision-open --initial``。
+    """
+
+    ledger_dir = _optional_campaign_timing_ledger_dir(campaign_dir, manifest)
+    if ledger_dir is not None:
+        last = _ledger_last_stage_revision(ledger_dir)
+        if last is not None:
+            revision = int(last["revision"])
+            record, commit = _read_candidate_revision_record(campaign_dir, revision)
+            if record is None or commit is None:
+                raise ConfigurationError(
+                    f"账本已激活候选 revision r{revision}，但 revision 目录缺少记录或 COMMIT。"
+                )
+            if commit["commit_sha256"] != last.get("revision_commit_sha256"):
+                raise ConfigurationError(
+                    f"候选 revision r{revision} 的 COMMIT 与账本 stage_revision 不一致。"
+                )
+            if record["candidate_id"] != last.get("candidate_id"):
+                raise ConfigurationError(
+                    f"候选 revision r{revision} 的候选与账本 stage_revision 不一致。"
+                )
+            return revision, record
+    revisions_root = _candidate_revisions_root(campaign_dir)
+    legacy_vc4 = campaign_dir / "control" / "vc" / "vc-4-checkpoint.json"
+    if (
+        not (revisions_root.exists() or revisions_root.is_symlink())
+        and legacy_vc4.is_file()
+        and not legacy_vc4.is_symlink()
+    ):
+        # 改造 2 之前的历史 Campaign：隐含 r1，只读重放。
+        return 1, None
+    return None, None
+
+
+def _current_candidate_revision(campaign_dir: Path, manifest: Mapping[str, Any]) -> int | None:
+    return _current_candidate_revision_record(campaign_dir, manifest)[0]
+
+
+def _implicit_r1_candidate_id(campaign_dir: Path, manifest: Mapping[str, Any]) -> str:
+    """历史隐含 r1 的候选：由原路径 VC-4 checkpoint 绑定的构建收据给出。"""
+
+    plan = _vc_campaign_plan(campaign_dir, manifest)
+    _path, checkpoint = _replay_vc_checkpoint(campaign_dir, plan, "VC-4", revision=1)
+    binding = checkpoint.get("stage_receipt")
+    if not isinstance(binding, Mapping):
+        raise ConfigurationError("VC-4 checkpoint 缺少构建收据绑定。")
+    raw = Path(str(binding.get("path", "")))
+    receipt_path = raw if raw.is_absolute() else _campaign_file(campaign_dir, str(binding.get("path", "")))
+    receipt = _read_json(receipt_path, "VC-4 构建收据")
+    candidate_id = receipt.get("candidate_id")
+    if not isinstance(candidate_id, str) or not SAFE_ID_RE.fullmatch(candidate_id):
+        raise ConfigurationError("VC-4 构建收据缺少合法 candidate_id。")
+    return candidate_id
+
+
+def _require_candidate_revision(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    *,
+    action: str,
+) -> tuple[int, dict[str, Any] | None]:
+    revision, record = _current_candidate_revision_record(campaign_dir, manifest)
+    if revision is None:
+        raise ConfigurationError(
+            f"{action} 需要激活的候选 revision；请先执行 revision-open --initial。"
+        )
+    return revision, record
+
+
+def _guard_candidate_revision_write(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    candidate_id: str,
+    *,
+    action: str,
+) -> None:
+    """候选级写入的 revision 门：只对 0.154.0 起的完整 VC 链 Campaign 生效。"""
+
+    if not _requires_complete_vc_artifacts(manifest):
+        return
+    _require_candidate_in_current_revision(campaign_dir, manifest, candidate_id, action=action)
+
+
+def _candidate_write_ledger_status(campaign_dir: Path, manifest: Mapping[str, Any]) -> str:
+    """候选级写入门读取的账本状态；没有账本绑定或账本不可重放即失败关闭。"""
+
+    ledger_dir = _optional_campaign_timing_ledger_dir(campaign_dir, manifest)
+    if ledger_dir is None:
+        raise ConfigurationError("候选级写入需要 Campaign 的 UpgradeTimingLedger 绑定。")
+    try:
+        return str(codex_upgrade_timing_ledger.inspect_ledger(ledger_dir).get("status"))
+    except codex_upgrade_timing_ledger.TimingLedgerError as error:
+        raise ConfigurationError(f"UpgradeTimingLedger 无法重放：{error}") from error
+
+
+def _require_candidate_in_current_revision(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    candidate_id: str,
+    *,
+    action: str,
+) -> tuple[int, dict[str, Any] | None]:
+    """候选级写入前的完整门：候选属于当前 revision、账本 active、候选未作废也未被取代。
+
+    ``invalidation.json`` 只要存在（无论内容有效与否，含符号链接）即视为已作废：作废与
+    取代之间的 ``revision_required`` 窗口里旧候选同样只读。账本非 active（review／
+    revision_required／recovery／停线）时任何候选级写入都拒绝。
+    """
+
+    revision, record = _require_candidate_revision(campaign_dir, manifest, action=action)
+    if record is not None and record["candidate_id"] != candidate_id:
+        raise ConfigurationError(
+            f"{action} 拒绝：候选 {candidate_id} 不属于当前 revision r{revision}"
+            f"（当前候选 {record['candidate_id']}）；被取代候选只读。"
+        )
+    candidate_root = campaign_dir / "candidates" / candidate_id
+    invalidation_marker = candidate_root / CANDIDATE_INVALIDATION_FILENAME
+    if invalidation_marker.exists() or invalidation_marker.is_symlink():
+        raise ConfigurationError(
+            f"{action} 拒绝：候选 {candidate_id} 已作废（存在 invalidation.json），只读。"
+        )
+    superseded_marker = candidate_root / "superseded-by.json"
+    if superseded_marker.exists() or superseded_marker.is_symlink():
+        raise ConfigurationError(f"{action} 拒绝：候选 {candidate_id} 已被取代，只读。")
+    status = _candidate_write_ledger_status(campaign_dir, manifest)
+    if status != "active":
+        raise ConfigurationError(
+            f"{action} 拒绝：候选级写入要求 UpgradeTimingLedger 为 active（当前 {status}）。"
+        )
+    return revision, record
 
 
 def _vc_campaign_plan(
@@ -12505,7 +13792,8 @@ def _replay_vc_completion(
     ):
         raise ConfigurationError(f"{phase} 完成收据身份漂移。")
     plan = _vc_campaign_plan(campaign_dir, manifest)
-    _, checkpoint = _replay_vc_checkpoint(campaign_dir, plan, phase)
+    revision = _current_candidate_revision(campaign_dir, manifest) if phase in CANDIDATE_VC_PHASES else None
+    _, checkpoint = _replay_vc_checkpoint(campaign_dir, plan, phase, revision=revision)
     expected_binding = _vc_control_binding(campaign_dir, receipt_path)
     if checkpoint.get("stage_receipt") != expected_binding:
         raise ConfigurationError(f"{phase} checkpoint 未绑定规范完成收据。")
@@ -12516,10 +13804,16 @@ def _replay_vc_checkpoint(
     campaign_dir: Path,
     plan: Mapping[str, Any],
     phase: str,
+    *,
+    revision: int | None = None,
 ) -> tuple[Path, dict[str, Any]]:
-    """重放一个规范阶段 checkpoint 及其直接前序文件绑定。"""
+    """重放一个规范阶段 checkpoint 及其直接前序文件绑定。
 
-    path = _vc_checkpoint_path(campaign_dir, phase)
+    候选级阶段按 ``revision`` 定位；VC-4 的直接前序固定为 Campaign 级 VC-3，
+    VC-5／VC-6 的前序为同 revision 的上一阶段。
+    """
+
+    path = _vc_checkpoint_path(campaign_dir, phase, revision=revision)
     if path.is_symlink() or not path.is_file():
         raise ConfigurationError(f"{phase} checkpoint 缺失或路径不可信。")
     try:
@@ -12554,6 +13848,7 @@ def _replay_vc_checkpoint(
             campaign_dir,
             plan,
             predecessor_phase,
+            revision=revision if predecessor_phase in CANDIDATE_VC_PHASES else None,
         )
         if checkpoint.get("predecessor_checkpoint") != _vc_checkpoint_reference(
             campaign_dir,
@@ -12573,13 +13868,25 @@ def _complete_vc_phase(
     reuse_item_ids: Iterable[str] = (),
     live_request_count: int = 0,
     scanned_bytes: int = 0,
+    revision: int | None = None,
 ) -> dict[str, Any] | None:
-    """在阶段终点写一次 checkpoint；旧版本 Campaign 保持原合同。"""
+    """在阶段终点写一次 checkpoint；旧版本 Campaign 保持原合同。
+
+    候选级阶段（VC-4～VC-6）按候选 revision 落盘：未显式给出时取当前 active revision，
+    没有 active revision 即拒绝；漂移比较只在同一 revision 内进行。
+    """
 
     if not _requires_complete_vc_artifacts(manifest):
         return None
     if phase == "VC-0" or phase not in codex_upgrade_vc_artifacts.VC_PHASES:
         raise ConfigurationError("阶段完成器只接受 VC-1～VC-6。")
+    if phase in CANDIDATE_VC_PHASES:
+        if revision is None:
+            revision, _record = _require_candidate_revision(
+                campaign_dir, manifest, action=f"{phase} 阶段完成"
+            )
+    else:
+        revision = None
     control = manifest.get("vc_control")
     plan_reference = control.get("campaign_plan") if isinstance(control, Mapping) else None
     _require_file_binding(plan_reference, "Campaign 总计划")
@@ -12600,6 +13907,7 @@ def _complete_vc_phase(
         campaign_dir,
         plan,
         predecessor_phase,
+        revision=revision if predecessor_phase in CANDIDATE_VC_PHASES else None,
     )
     if (
         not stage_receipt_path.is_absolute()
@@ -12635,7 +13943,9 @@ def _complete_vc_phase(
         )
     except codex_upgrade_vc_artifacts.VCArtifactError as error:
         raise ConfigurationError(str(error)) from error
-    output = _vc_checkpoint_path(campaign_dir, phase)
+    output = _vc_checkpoint_path(campaign_dir, phase, revision=revision)
+    if revision is not None and revision >= 2:
+        ensure_private_directory(output.parent, campaign_dir)
     if output.exists() or output.is_symlink():
         if output.is_symlink() or not output.is_file():
             raise ConfigurationError(f"{phase} checkpoint 路径不可信。")
@@ -12654,6 +13964,22 @@ def _complete_vc_phase(
             raise ConfigurationError(str(error)) from error
     _secure_write_json_once(output, checkpoint)
     return checkpoint
+
+
+def _vc_checkpoint_completed_item_ids(checkpoint: Mapping[str, Any]) -> list[str]:
+    """把前序 checkpoint 的 execute∪reuse 规范化为后继零执行复用闭集。"""
+
+    execute = checkpoint.get("execute_item_ids")
+    reuse = checkpoint.get("reuse_item_ids")
+    if not isinstance(execute, list) or not isinstance(reuse, list):
+        raise ConfigurationError("前序 VC checkpoint 缺少 execute／reuse 闭集。")
+    completed = [*execute, *reuse]
+    if (
+        any(not isinstance(value, str) or not SAFE_ID_RE.fullmatch(value) for value in completed)
+        or len(completed) != len(set(completed))
+    ):
+        raise ConfigurationError("前序 VC checkpoint 的完成项非法或重复。")
+    return sorted(completed)
 
 
 def _interrupted_recovery_campaign_plan(
@@ -13546,7 +14872,7 @@ def _validate_recovery_execution_handoff_parent_terminal(
     try:
         state = codex_upgrade_supervisor._read_state(run_dir)
         record = _read_json(record_path, "恢复执行交接父清单")
-        stop = _read_json(stop_path, "恢复执行交接父终态")
+        stop = codex_upgrade_supervisor.read_stop_receipt(run_dir)
     except (OSError, codex_upgrade_supervisor.SupervisorError) as error:
         raise ConfigurationError("恢复执行交接的预览父批次无法重放。") from error
     parent_manifest = record.get("manifest")
@@ -14877,9 +16203,38 @@ def recover_vc1_interruption(arguments: argparse.Namespace) -> dict[str, Any]:
     }
 
 
-def _vc_run_manifest_from_batch(batch: Mapping[str, Any]) -> dict[str, Any]:
-    """从已校验 VC batch 确定性重建唯一父 run 清单。"""
+def _vc_run_manifest_from_batch(
+    batch: Mapping[str, Any],
+    *,
+    batch_model: str = "legacy",
+) -> dict[str, Any]:
+    """从已校验 VC batch 确定性重建唯一父 run 清单。
 
+    staging 模型清单携带 ``candidate_revision``／``candidate_id``（与 batch 逐字一致，
+    候选级阶段非空、Campaign 级阶段 null）；legacy 模型清单不含两字段（混用即拒绝）。
+    """
+
+    extra: dict[str, Any] = {}
+    if batch_model == "staging":
+        extra = {
+            "candidate_revision": batch.get("candidate_revision"),
+            "candidate_id": batch.get("candidate_id"),
+        }
+        # 改造 5：v3 批次的评估基线三字段成对携带（v2 批次没有，清单也不带）。
+        if batch.get("schema_version") == codex_upgrade_vc_artifacts.VC_BATCH_SCHEMA:
+            extra.update(
+                {
+                    "evaluation_baseline": batch.get("evaluation_baseline"),
+                    "baseline_commit_sha256": batch.get("baseline_commit_sha256"),
+                    "evaluator_digests": (
+                        dict(batch["evaluator_digests"])
+                        if batch.get("evaluator_digests") is not None
+                        else None
+                    ),
+                }
+            )
+    elif batch_model != "legacy":
+        raise ConfigurationError(f"未知批次模型：{batch_model}")
     return codex_upgrade_supervisor.build_batched_campaign_run_manifest(
         campaign_id=str(batch["campaign_id"]),
         campaign_plan_sha256=str(batch["campaign_plan_sha256"]),
@@ -14892,11 +16247,195 @@ def _vc_run_manifest_from_batch(batch: Mapping[str, Any]) -> dict[str, Any]:
         actions=batch["actions"],
         execute_items=batch["execute_item_ids"],
         reuse_items=batch["reuse_item_ids"],
+        **extra,
     )
 
 
-def compile_vc_batch(arguments: argparse.Namespace) -> dict[str, Any]:
-    """从直接前序 checkpoint 一次生成 batch 和可执行 v2 队列。"""
+# ---------------------------------------------------------------------------
+# 改造 4（staging/WAL）：批次 staging 目录、COMMIT 与序号占用规则
+# ---------------------------------------------------------------------------
+
+STAGING_BATCH_FILENAME = "batch.json"
+STAGING_MANIFEST_FILENAME = "run-manifest.json"
+STAGING_PREPARED_FILENAME = "PREPARED"
+STAGING_ABORT_FILENAME = "ABORT"
+_STAGING_ATTEMPT_RE = re.compile(r"^attempt-([1-9][0-9]*)$")
+_VC_SEQUENCE_FILE_RE = re.compile(r"^([0-9]{4})-(vc-[0-6])\.json$")
+
+
+def _campaign_batch_model(campaign_dir: Path) -> str:
+    """派发入口的模型判定：委托监督器同一函数，无 Campaign／无总计划即 legacy。"""
+
+    try:
+        return codex_upgrade_supervisor.campaign_batch_model(campaign_dir)
+    except codex_upgrade_supervisor.SupervisorError as error:
+        raise ConfigurationError(str(error)) from error
+
+
+def _campaign_uses_staging_model(campaign_dir: Path, plan: Mapping[str, Any]) -> bool:
+    """以总计划 ``batch_model`` 为主判据；legacy Campaign 出现 staging 制品即失败关闭。"""
+
+    try:
+        model = codex_upgrade_vc_artifacts.campaign_plan_batch_model(plan)
+    except codex_upgrade_vc_artifacts.VCArtifactError as error:
+        raise ConfigurationError(str(error)) from error
+    vc_root = campaign_dir / "control" / "vc"
+    if model == "legacy":
+        for name in ("staging", "commits", "staging-aborts"):
+            path = vc_root / name
+            if path.exists() or path.is_symlink():
+                raise ConfigurationError(
+                    f"legacy 批次模型的 Campaign 不得混用 staging 制品：control/vc/{name}"
+                )
+        return False
+    return True
+
+
+def _staging_sequence_dir(campaign_dir: Path, sequence: int, phase: str) -> Path:
+    return campaign_dir / "control" / "vc" / "staging" / f"{sequence:04d}-{phase.lower()}"
+
+
+def _staging_commit_path(campaign_dir: Path, sequence: int, phase: str) -> Path:
+    return codex_upgrade_supervisor._staging_commit_path(campaign_dir, sequence, phase)
+
+
+def _staging_attempt_dirs(sequence_dir: Path) -> list[tuple[int, Path]]:
+    """按 attempt 序号升序枚举一个序号目录下的 staging attempt。"""
+
+    if sequence_dir.is_symlink():
+        raise ConfigurationError(f"staging 序号目录不得是符号链接：{sequence_dir}")
+    if not sequence_dir.is_dir():
+        return []
+    attempts: list[tuple[int, Path]] = []
+    for child in sequence_dir.iterdir():
+        match = _STAGING_ATTEMPT_RE.fullmatch(child.name)
+        if match is None or child.is_symlink() or not child.is_dir():
+            raise ConfigurationError(f"staging 序号目录含非法条目：{child}")
+        attempts.append((int(match.group(1)), child))
+    return sorted(attempts)
+
+
+def _next_staging_attempt(sequence_dir: Path) -> int:
+    attempts = _staging_attempt_dirs(sequence_dir)
+    return (attempts[-1][0] + 1) if attempts else 1
+
+
+def _read_staging_commit(commit_path: Path) -> dict[str, Any]:
+    try:
+        return codex_upgrade_supervisor._read_vc_commit(commit_path)
+    except codex_upgrade_vc_artifacts.VCArtifactError as error:
+        raise ConfigurationError(f"COMMIT 无法校验：{commit_path.name}：{error}") from error
+
+
+def _committed_vc_sequences(campaign_dir: Path, manifest: Mapping[str, Any]) -> list[int]:
+    """staging 模型的序号占用：序号 1 由 VC-0 在 campaign.json 内绑定，其余只认 COMMIT。"""
+
+    committed: list[int] = []
+    control = manifest.get("vc_control")
+    first_binding = control.get("first_formal_batch") if isinstance(control, Mapping) else None
+    if isinstance(first_binding, Mapping) and isinstance(first_binding.get("path"), str):
+        first_path = campaign_dir / str(first_binding["path"])
+        if first_path.is_symlink() or not first_path.is_file():
+            raise ConfigurationError("VC-0 绑定的首批 batch 文件不存在或不可信。")
+        if file_sha256(first_path) != first_binding.get("sha256"):
+            raise ConfigurationError("VC-0 绑定的首批 batch 摘要漂移。")
+        committed.append(1)
+    commits_root = campaign_dir / "control" / "vc" / "commits"
+    if commits_root.is_symlink():
+        raise ConfigurationError("COMMIT 目录不得是符号链接。")
+    if commits_root.is_dir():
+        for path in sorted(commits_root.iterdir()):
+            match = _VC_SEQUENCE_FILE_RE.fullmatch(path.name)
+            if match is None or path.is_symlink() or not path.is_file():
+                raise ConfigurationError(f"COMMIT 目录含非法条目：{path.name}")
+            commit = _read_staging_commit(path)
+            sequence = int(match.group(1))
+            if (
+                commit["sequence"] != sequence
+                or commit["phase"].lower() != match.group(2)
+                or commit["campaign_id"] != manifest.get("campaign_id")
+            ):
+                raise ConfigurationError(f"COMMIT 内容与文件名或 Campaign 不一致：{path.name}")
+            committed.append(sequence)
+    if len(committed) != len(set(committed)):
+        raise ConfigurationError("COMMIT 序号重复。")
+    return sorted(committed)
+
+
+EVALUATION_ACTION_BUILDER_BASENAME = "build_rule_assertion_results.py"
+
+
+def _evaluation_action_kind(command: Sequence[str]) -> str | None:
+    """识别 VC-5 评估动作：``assertion``（builder）、``compare``、``accept``；其余返回 None。"""
+
+    basenames = {Path(token).name for token in command[:4]}
+    if EVALUATION_ACTION_BUILDER_BASENAME in {Path(token).name for token in command}:
+        return "assertion"
+    if basenames & codex_upgrade_vc_artifacts.UPGRADE_CLI_BASENAMES:
+        for token in command:
+            if token in {"compare", "accept"}:
+                return token
+    return None
+
+
+def _freeze_evaluation_output_bindings(
+    campaign_dir: Path,
+    candidate_id: str,
+    baseline: int,
+    actions: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """编译侧为评估动作写死 output_bindings（Campaign 相对）；操作员自带声明必须逐字相等。
+
+    断言 builder：当前基线断言目录的 ``evaluation-run.json`` 与 ``checkpoints``；compare：
+    compare 阶段结果的规范读来源（reused 基线下即前序路径）；accept：accept 阶段结果写目标
+    与其输入 ``evaluation-run.json``。
+    """
+
+    assertions_root = _stage_write_target(campaign_dir, candidate_id, baseline, "assertions")
+    frozen: list[dict[str, Any]] = []
+    for action in actions:
+        normalized = dict(action)
+        kind = _evaluation_action_kind(list(action["command"]))
+        expected: list[str] | None = None
+        if kind == "assertion":
+            expected = [
+                (assertions_root / "checkpoints").relative_to(campaign_dir).as_posix(),
+                (assertions_root / "evaluation-run.json").relative_to(campaign_dir).as_posix(),
+            ]
+        elif kind == "compare":
+            source = _stage_read_source(campaign_dir, candidate_id, baseline, "compare")
+            expected = [Path(source["path"]).relative_to(campaign_dir).as_posix()]
+        elif kind == "accept":
+            target = _stage_write_target(campaign_dir, candidate_id, baseline, "accept")
+            expected = [
+                target.relative_to(campaign_dir).as_posix(),
+                (assertions_root / "evaluation-run.json").relative_to(campaign_dir).as_posix(),
+            ]
+        if expected is not None:
+            expected = sorted(set(expected))
+            declared = action.get("output_bindings")
+            if declared is not None and list(declared) != expected:
+                raise ConfigurationError(
+                    f"动作 {action['action_id']} 自带的 output_bindings 与编译侧冻结声明不一致。"
+                )
+            normalized["output_bindings"] = expected
+        frozen.append(normalized)
+    return frozen
+
+
+def compile_vc_batch(
+    arguments: argparse.Namespace,
+    *,
+    staging_attempt_dir: Path | None = None,
+    owner_nonce: str | None = None,
+) -> dict[str, Any]:
+    """从直接前序 checkpoint 一次生成 batch 和可执行 v2 队列。
+
+    改造 4：staging 模型的 Campaign 只能由 ``compile-and-run-vc-batch`` 在锁内预分配
+    ``owner_nonce`` 与 staging attempt 目录后调用，产物写到
+    ``control/vc/staging/NNNN-vc-x/attempt-K/{batch.json, run-manifest.json}`` 并以
+    ``PREPARED`` 标记闭合；正式序号只在 COMMIT 写入时占用。legacy 模型保持原行为。
+    """
 
     campaign_dir = arguments.campaign_dir
     manifest = _require_formal_campaign(campaign_dir)
@@ -14917,13 +16456,45 @@ def compile_vc_batch(arguments: argparse.Namespace) -> dict[str, Any]:
         )
     except codex_upgrade_vc_artifacts.VCArtifactError as error:
         raise ConfigurationError(str(error)) from error
+    staging_model = _campaign_uses_staging_model(campaign_dir, plan)
+    if staging_model:
+        if staging_attempt_dir is None or owner_nonce is None:
+            raise ConfigurationError(
+                "staging 模型 Campaign 的批次只能由 compile-and-run-vc-batch 在锁内"
+                "预分配 owner_nonce 与 staging attempt 后编译。"
+            )
+        try:
+            codex_upgrade_vc_artifacts._sha256(owner_nonce, "owner_nonce")
+        except codex_upgrade_vc_artifacts.VCArtifactError as error:
+            raise ConfigurationError(str(error)) from error
+        expected_parent = _staging_sequence_dir(campaign_dir, sequence, phase)
+        if (
+            staging_attempt_dir.parent != expected_parent
+            or _STAGING_ATTEMPT_RE.fullmatch(staging_attempt_dir.name) is None
+        ):
+            raise ConfigurationError("staging attempt 目录不是本序号的规范路径。")
+    elif staging_attempt_dir is not None or owner_nonce is not None:
+        raise ConfigurationError("legacy 批次模型的 Campaign 不接受 staging 参数。")
     predecessor_phase = codex_upgrade_vc_artifacts.VC_PHASES[
         codex_upgrade_vc_artifacts.VC_PHASES.index(phase) - 1
     ]
+    # 改造 2：候选级阶段的批次绑定当前 active revision 与其候选；VC-4 的前序是
+    # Campaign 级 VC-3，VC-5／VC-6 的前序是同 revision 的上一阶段。
+    candidate_revision: int | None = None
+    candidate_id: str | None = None
+    if phase in CANDIDATE_VC_PHASES:
+        candidate_revision, revision_record = _require_candidate_revision(
+            campaign_dir, manifest, action=f"{phase} 批次编译"
+        )
+        if revision_record is not None:
+            candidate_id = str(revision_record["candidate_id"])
+        else:
+            candidate_id = _implicit_r1_candidate_id(campaign_dir, manifest)
     predecessor_path, predecessor = _replay_vc_checkpoint(
         campaign_dir,
         plan,
         predecessor_phase,
+        revision=candidate_revision if predecessor_phase in CANDIDATE_VC_PHASES else None,
     )
     try:
         supplied_predecessor = arguments.predecessor_checkpoint.resolve(strict=True)
@@ -14933,7 +16504,7 @@ def compile_vc_batch(arguments: argparse.Namespace) -> dict[str, Any]:
         raise ConfigurationError(
             f"{phase} batch 必须引用规范 {predecessor_phase} checkpoint。"
         )
-    completed_path = _vc_checkpoint_path(campaign_dir, phase)
+    completed_path = _vc_checkpoint_path(campaign_dir, phase, revision=candidate_revision)
     if completed_path.exists() or completed_path.is_symlink():
         raise ConfigurationError(f"{phase} 已有 checkpoint，禁止再编译执行批次。")
     if (
@@ -14944,19 +16515,47 @@ def compile_vc_batch(arguments: argparse.Namespace) -> dict[str, Any]:
         raise ConfigurationError("--action-plan 必须是可信绝对普通文件。")
     try:
         action_plan = codex_upgrade_vc_artifacts.validate_action_plan(
-            _read_json(arguments.action_plan, "VC action plan")
+            _read_json(arguments.action_plan, "VC action plan"),
+            phase=phase,
         )
     except codex_upgrade_vc_artifacts.VCArtifactError as error:
         raise ConfigurationError(str(error)) from error
+    # 改造 5：候选级 VC-5 批次冻结当前评估基线（b0 为 null）与 evaluator 四项直接依赖摘要，
+    # 并为评估动作（断言 builder／compare／accept）固定 output_bindings。
+    evaluation_baseline: int | None = None
+    baseline_commit_sha256: str | None = None
+    evaluator_digests: dict[str, str] | None = None
+    actions = list(action_plan["actions"])
+    if phase == "VC-5":
+        assert candidate_id is not None
+        current_baseline, baseline_commit = _current_evaluation_baseline(campaign_dir, candidate_id)
+        if current_baseline:
+            evaluation_baseline = current_baseline
+            baseline_commit_sha256 = str(baseline_commit["commit_sha256"])  # type: ignore[index]
+        try:
+            evaluator_digests = codex_upgrade_tool_identity_policy.evaluator_dependency_digests()
+        except codex_upgrade_tool_identity_policy.ToolIdentityPolicyError as error:
+            raise ConfigurationError(f"evaluator 依赖摘要无法计算：{error}") from error
+        # 起点防伪：b0 的 checker／builder 冻结值必须等于 plan 工具身份的规范 entry；
+        # b≥1 四项必须等于该基线 recovery.json 授权值。不等即拒绝编译，不做归一化。
+        _verify_evaluator_digests_authorized(
+            campaign_dir, manifest, candidate_id, current_baseline, evaluator_digests, label="编译冻结 evaluator 摘要"
+        )
+        actions = _freeze_evaluation_output_bindings(campaign_dir, candidate_id, current_baseline, actions)
 
     batches_root = campaign_dir / "control" / "vc" / "batches"
     manifests_root = campaign_dir / "control" / "vc" / "run-manifests"
     existing_sequences: list[int] = []
-    for path in sorted(batches_root.glob("[0-9][0-9][0-9][0-9]-vc-*.json")):
-        try:
-            existing_sequences.append(int(path.name.split("-", 1)[0]))
-        except ValueError as error:
-            raise ConfigurationError("既有 VC batch 文件名非法。") from error
+    if staging_model:
+        # 序号占用 = 存在 COMMIT（序号 1 由 VC-0 绑定）；正式 batches/ 里没有 COMMIT 的
+        # 半产物不计入，由派发入口归档。
+        existing_sequences = _committed_vc_sequences(campaign_dir, manifest)
+    else:
+        for path in sorted(batches_root.glob("[0-9][0-9][0-9][0-9]-vc-*.json")):
+            try:
+                existing_sequences.append(int(path.name.split("-", 1)[0]))
+            except ValueError as error:
+                raise ConfigurationError("既有 VC batch 文件名非法。") from error
     if existing_sequences != list(range(1, sequence)):
         raise ConfigurationError(
             "VC batch 全局序号必须连续；当前既有序号="
@@ -14982,13 +16581,29 @@ def compile_vc_batch(arguments: argparse.Namespace) -> dict[str, Any]:
             ),
             execute_item_ids=action_plan["execute_item_ids"],
             reuse_item_ids=action_plan["reuse_item_ids"],
-            actions=action_plan["actions"],
+            actions=actions,
             compiled_at_utc=compiled_at,
             must_start_by_utc=must_start.isoformat(timespec="seconds"),
+            candidate_revision=candidate_revision,
+            candidate_id=candidate_id,
+            evaluation_baseline=evaluation_baseline,
+            baseline_commit_sha256=baseline_commit_sha256,
+            evaluator_digests=evaluator_digests,
         )
     except codex_upgrade_vc_artifacts.VCArtifactError as error:
         raise ConfigurationError(str(error)) from error
-    run_manifest = _vc_run_manifest_from_batch(batch)
+    run_manifest = _vc_run_manifest_from_batch(batch, batch_model="staging" if staging_model else "legacy")
+    if staging_model:
+        assert staging_attempt_dir is not None and owner_nonce is not None
+        return _write_staging_batch_artifacts(
+            campaign_dir,
+            staging_attempt_dir,
+            plan=plan,
+            batch=batch,
+            run_manifest=run_manifest,
+            owner_nonce=owner_nonce,
+            prepared_at_utc=compiled_at,
+        )
     batch_path = batches_root / f"{sequence:04d}-{phase.lower()}.json"
     run_path = manifests_root / f"{sequence:04d}-{phase.lower()}.json"
     ensure_private_directory(batches_root, campaign_dir)
@@ -15017,14 +16632,81 @@ def compile_vc_batch(arguments: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def _write_staging_batch_artifacts(
+    campaign_dir: Path,
+    attempt_dir: Path,
+    *,
+    plan: Mapping[str, Any],
+    batch: Mapping[str, Any],
+    run_manifest: Mapping[str, Any],
+    owner_nonce: str,
+    prepared_at_utc: str,
+) -> dict[str, Any]:
+    """把编译产物写进 staging attempt 目录并以 PREPARED 闭合；不触碰正式路径。"""
+
+    sequence = int(batch["sequence"])
+    phase = str(batch["phase"])
+    staging_root = campaign_dir / "control" / "vc" / "staging"
+    ensure_private_directory(staging_root, campaign_dir)
+    ensure_private_directory(attempt_dir.parent, campaign_dir)
+    if attempt_dir.exists() or attempt_dir.is_symlink():
+        raise ConfigurationError(f"staging attempt 目录已存在，禁止复用：{attempt_dir.name}")
+    ensure_private_directory(attempt_dir, campaign_dir)
+    batch_path = attempt_dir / STAGING_BATCH_FILENAME
+    manifest_path = attempt_dir / STAGING_MANIFEST_FILENAME
+    _secure_write_json_once(batch_path, dict(batch))
+    _secure_write_json_once(manifest_path, dict(run_manifest))
+    attempt = int(_STAGING_ATTEMPT_RE.fullmatch(attempt_dir.name).group(1))  # type: ignore[union-attr]
+    try:
+        marker = codex_upgrade_vc_artifacts.build_staging_prepared_marker(
+            campaign_id=str(plan["campaign_id"]),
+            sequence=sequence,
+            phase=phase,
+            attempt=attempt,
+            batch_sha256=str(batch["batch_sha256"]),
+            manifest_sha256=codex_upgrade_supervisor._sha256(
+                codex_upgrade_supervisor._canonical(run_manifest)
+            ),
+            owner_nonce=owner_nonce,
+            prepared_at_utc=prepared_at_utc,
+        )
+    except codex_upgrade_vc_artifacts.VCArtifactError as error:
+        raise ConfigurationError(str(error)) from error
+    _secure_write_json_once(attempt_dir / STAGING_PREPARED_FILENAME, marker)
+    return {
+        "status": "prepared",
+        "batch_model": "staging",
+        "campaign_id": plan["campaign_id"],
+        "phase": phase,
+        "batch_sequence": sequence,
+        "staging_attempt": attempt,
+        "staging_attempt_dir": str(attempt_dir),
+        "batch": str(batch_path),
+        "batch_sha256": batch["batch_sha256"],
+        "campaign_run_manifest": str(manifest_path),
+        "prepared_marker": str(attempt_dir / STAGING_PREPARED_FILENAME),
+        "prepared_marker_sha256": marker["marker_sha256"],
+        "owner_nonce": owner_nonce,
+        "original_deadline_at_utc": batch["original_deadline_at_utc"],
+        "execute_item_ids": batch["execute_item_ids"],
+        "reuse_item_ids": batch["reuse_item_ids"],
+    }
+
+
 class TimingLedgerGateError(ConfigurationError):
     """UpgradeTimingLedger 拒绝为本批次推进阶段；作为预派发停线的 error_type 留痕。"""
 
 
-def _campaign_timing_ledger_dir(manifest: Mapping[str, Any]) -> Path:
-    """从 Campaign 清单的 VC-0 控制绑定取时间账本目录，并核对 plan 摘要未漂移。"""
+def _campaign_timing_ledger_dir(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+) -> Path:
+    """解析当前有效时间账本；control epoch 存在时不得退回清单旧控制。"""
 
     controls = manifest.get("control_receipts")
+    effective_epoch = _load_control_epoch_receipt(campaign_dir, manifest)
+    if isinstance(effective_epoch, Mapping):
+        controls = effective_epoch.get("successor_controls")
     timing = controls.get("upgrade_timing") if isinstance(controls, Mapping) else None
     if not isinstance(timing, Mapping):
         raise ConfigurationError("Campaign 缺少 UpgradeTimingLedger 控制绑定。")
@@ -15071,6 +16753,19 @@ def _timing_ledger_batch_events(
     order = codex_upgrade_vc_artifacts.VC_PHASES
     target_index = order.index(phase)
     active = state.get("active_phase")
+    # 改造 2：候选级阶段必须有 active revision；账本 completed_phases 已按当前 revision
+    # 计算，被作废 revision 完成的 VC-4～VC-6 不算数。目标阶段序低于已完成最大阶段时，
+    # 只有当前 revision 尚未完成该阶段、且最后一条 stage_revision 的阶段不超过目标阶段
+    # （stage_revision 固定在 VC-4）才放行。
+    current_revision: int | None = None
+    if phase in CANDIDATE_VC_PHASES:
+        current_revision, _record = _require_candidate_revision(
+            campaign_dir, manifest, action=f"{phase} 批次派发"
+        )
+        if state.get("current_revision") not in {None, current_revision}:
+            raise TimingLedgerGateError(
+                f"UpgradeTimingLedger 当前 revision {state.get('current_revision')} 与 Campaign 当前 revision r{current_revision} 不一致。"
+            )
     if active == phase:
         return int(state["head_sequence"]), []
     if isinstance(active, str) and active in order and order.index(active) > target_index:
@@ -15078,12 +16773,32 @@ def _timing_ledger_batch_events(
             f"UpgradeTimingLedger 当前阶段 {active} 已越过 {phase}，禁止阶段倒退。"
         )
     completed = set(state.get("completed_phases", []))
+    if phase in completed:
+        raise TimingLedgerGateError(
+            f"UpgradeTimingLedger 已登记 {phase} 在当前 revision 完成，禁止重开。"
+        )
+    highest_completed = max((order.index(item) for item in completed), default=-1)
+    if highest_completed > target_index:
+        last_revision_event = _ledger_last_stage_revision(ledger_dir)
+        if (
+            current_revision is None
+            or last_revision_event is None
+            or order.index(str(last_revision_event.get("phase"))) > target_index
+        ):
+            raise TimingLedgerGateError(
+                f"UpgradeTimingLedger 已完成的阶段越过 {phase}，且没有 stage_revision 授权回到该阶段。"
+            )
     events: list[tuple[str, str]] = []
     for earlier in order[:target_index]:
         if earlier in completed:
             continue
         # 补登记的前序阶段必须已有成功封存的 checkpoint；缺失即拒绝，不得跳过阶段。
-        _replay_vc_checkpoint(campaign_dir, plan, earlier)
+        _replay_vc_checkpoint(
+            campaign_dir,
+            plan,
+            earlier,
+            revision=current_revision if earlier in CANDIDATE_VC_PHASES else None,
+        )
         if active == earlier:
             events.append(("stage_completed", earlier))
         else:
@@ -15155,10 +16870,16 @@ def _complete_timing_ledger_phase_after_batch(
     批次）时不写事件。同阶段重复调用幂等。
     """
 
-    path = _vc_checkpoint_path(campaign_dir, phase)
+    revision: int | None = None
+    if phase in CANDIDATE_VC_PHASES:
+        campaign = _read_json(campaign_dir / "campaign.json", "Campaign 清单")
+        revision = _current_candidate_revision(campaign_dir, campaign)
+        if revision is None:
+            return None
+    path = _vc_checkpoint_path(campaign_dir, phase, revision=revision)
     if path.is_symlink() or not path.is_file():
         return None
-    _replay_vc_checkpoint(campaign_dir, plan, phase)
+    _replay_vc_checkpoint(campaign_dir, plan, phase, revision=revision)
     try:
         with codex_upgrade_supervisor._timing_closeout_lock(ledger_dir):
             state = codex_upgrade_timing_ledger.phase_ledger_state(ledger_dir)
@@ -15205,7 +16926,7 @@ def _bootstrap_noop_first_batch(
 ) -> dict[str, Any] | None:
     """只读导入的 Campaign 在派发第 2 批前，先把零请求 no-op 首批跑成父 run 历史。
 
-    ``reuse-official-evidence`` 只生成“全部 official Job 为 reuse”的 VC-1 no-op 批次
+    official-only 后继只生成“全部 official Job 为 reuse”的 VC-1 no-op 批次
     与 checkpoint，不派发父 run；而监督器要求同一 state-dir 的 batch_sequence 从 1
     连续递增。没有这一步，恢复 Campaign 的 VC-2 首批会被“禁止跳批”拒绝。
     首批含真实动作（普通 Formal 的 capture-official）时不代跑，沿用原拒绝语义。
@@ -15274,7 +16995,7 @@ def _prepare_atomic_batch_governance(arguments: argparse.Namespace) -> dict[str,
     except codex_upgrade_project_ledger.ProjectLedgerError as error:
         raise ConfigurationError(f"项目总账拒绝派发：{error}") from error
     plan = _vc_campaign_plan(campaign_dir, manifest)
-    ledger_dir = _campaign_timing_ledger_dir(manifest)
+    ledger_dir = _campaign_timing_ledger_dir(campaign_dir, manifest)
     head_sequence, events = _timing_ledger_batch_events(
         campaign_dir,
         manifest,
@@ -15292,6 +17013,23 @@ def _prepare_atomic_batch_governance(arguments: argparse.Namespace) -> dict[str,
     }
 
 
+def _empty_batch_governance() -> dict[str, Any]:
+    """零网络生产同形演练（campaign_run_rehearsal_receipt）的治理占位。
+
+    演练作用于合成 Campaign：没有项目总账注册，账本也只是夹具，治理层不适用；
+    正式 CLI 永远走 ``_prepare_atomic_batch_governance``。
+    """
+
+    return {
+        "manifest": {},
+        "plan": {},
+        "ledger_dir": None,
+        "ledger_head_sequence": 0,
+        "ledger_events": [],
+        "admission": None,
+    }
+
+
 def compile_and_run_vc_batch(
     arguments: argparse.Namespace,
     *,
@@ -15305,25 +17043,37 @@ def compile_and_run_vc_batch(
     0.154 起本入口是 VC-2～VC-6 每一批的唯一强制入口，因此项目总账 admission、
     时间账本的阶段推进（``stage_started``／``stage_completed``）都在这里闭合，
     不再依赖操作员人工 ``append``。
+
+    改造 4：按 Campaign 总计划的 ``batch_model`` 分流——``staging`` 走
+    孤儿对账 → prepare → prepared 父 run → commit 四步的新流程；``legacy``
+    （历史 Campaign 与无总计划的夹具）保持原流程，只读重放不变。
     """
+
+    campaign_dir = arguments.campaign_dir
+    if _compiler is None:
+        governance = _prepare_atomic_batch_governance(arguments)
+    else:
+        governance = _empty_batch_governance()
+    if _campaign_batch_model(campaign_dir) == "staging":
+        return _compile_and_run_vc_batch_staging(
+            arguments, governance=governance, _compiler=_compiler
+        )
+    return _compile_and_run_vc_batch_legacy(
+        arguments, governance=governance, _compiler=_compiler
+    )
+
+
+def _compile_and_run_vc_batch_legacy(
+    arguments: argparse.Namespace,
+    *,
+    governance: dict[str, Any],
+    _compiler: Any | None,
+) -> tuple[dict[str, Any], int]:
+    """legacy 批次模型（改造 4 之前创建的 Campaign）的原子派发流程，保持原样。"""
 
     campaign_dir = arguments.campaign_dir
     phase = str(arguments.phase)
     sequence = int(arguments.sequence)
-    if _compiler is None:
-        governance = _prepare_atomic_batch_governance(arguments)
-    else:
-        # 零网络生产同形演练（campaign_run_rehearsal_receipt）作用于合成 preflight
-        # Campaign：没有项目总账注册，账本也只是夹具，治理层不适用；正式 CLI
-        # 永远走上面的分支。
-        governance = {
-            "manifest": {},
-            "plan": {},
-            "ledger_dir": None,
-            "ledger_head_sequence": 0,
-            "ledger_events": [],
-            "admission": None,
-        }
     batch_path = (
         campaign_dir
         / "control"
@@ -15513,6 +17263,3165 @@ def compile_and_run_vc_batch(
         raise
     finally:
         os.close(lock_descriptor)
+
+
+# ---------------------------------------------------------------------------
+# 改造 4：staging 模型的原子派发入口与孤儿对账
+# ---------------------------------------------------------------------------
+
+STAGING_ORPHAN_MONITOR_WAIT_SECONDS = 10.0
+
+
+class StagingStopTheLine(ConfigurationError):
+    """孤儿对账或判定命中永久停线条件；入口以停线错误退出，该序号不得再派。"""
+
+
+def _staging_run_arguments(arguments: argparse.Namespace) -> argparse.Namespace:
+    return argparse.Namespace(
+        heartbeat_seconds=(
+            arguments.heartbeat_seconds
+            if arguments.heartbeat_seconds is not None
+            else codex_upgrade_supervisor.DEFAULT_HEARTBEAT_SECONDS
+        ),
+        watchdog_timeout_seconds=arguments.watchdog_timeout_seconds,
+        ledger_interval_seconds=arguments.ledger_interval_seconds,
+    )
+
+
+def _read_stop_reason(run_dir: Path) -> str | None:
+    path = run_dir / "stop-receipt.json"
+    if path.is_symlink() or not path.is_file():
+        return None
+    try:
+        reason = codex_upgrade_supervisor.read_stop_receipt(run_dir).get("reason")
+    except codex_upgrade_supervisor.SupervisorError as error:
+        raise ConfigurationError(f"父 run stop-receipt 无法校验：{error}") from error
+    return reason if isinstance(reason, str) else None
+
+
+def _load_prepared_staging_attempt(
+    campaign_dir: Path,
+    attempt_dir: Path,
+    *,
+    owner_nonce: str | None,
+    sequence: int,
+    phase: str,
+) -> dict[str, Any]:
+    """读取并交叉校验 staging attempt 的 batch／run-manifest／PREPARED 三件套。"""
+
+    batch_path = attempt_dir / STAGING_BATCH_FILENAME
+    manifest_path = attempt_dir / STAGING_MANIFEST_FILENAME
+    marker_path = attempt_dir / STAGING_PREPARED_FILENAME
+    for path in (batch_path, manifest_path, marker_path):
+        if path.is_symlink() or not path.is_file():
+            raise ConfigurationError(f"staging attempt 缺少可信产物：{path.name}")
+    try:
+        batch = codex_upgrade_vc_artifacts.validate_vc_batch(
+            _read_json(batch_path, "staging VC batch")
+        )
+        marker = codex_upgrade_vc_artifacts.validate_staging_prepared_marker(
+            _read_json(marker_path, "staging PREPARED 标记")
+        )
+    except codex_upgrade_vc_artifacts.VCArtifactError as error:
+        raise ConfigurationError(str(error)) from error
+    raw_manifest = _read_json(manifest_path, "staging campaign-run 清单")
+    try:
+        run_manifest = codex_upgrade_supervisor._campaign_run_manifest(manifest_path)
+    except codex_upgrade_supervisor.SupervisorError as error:
+        raise ConfigurationError(str(error)) from error
+    manifest_sha256 = codex_upgrade_supervisor._sha256(
+        codex_upgrade_supervisor._canonical(raw_manifest)
+    )
+    attempt = int(_STAGING_ATTEMPT_RE.fullmatch(attempt_dir.name).group(1))  # type: ignore[union-attr]
+    if (
+        marker["sequence"] != sequence
+        or marker["phase"] != phase
+        or marker["attempt"] != attempt
+        or marker["batch_sha256"] != batch["batch_sha256"]
+        or marker["manifest_sha256"] != manifest_sha256
+        or batch["sequence"] != sequence
+        or batch["phase"] != phase
+        or run_manifest.get("batch_sha256") != batch["batch_sha256"]
+        or run_manifest.get("batch_sequence") != sequence
+        or run_manifest.get("phase") != phase
+    ):
+        raise ConfigurationError("staging attempt 的 PREPARED、batch 与清单不一致。")
+    # 改造 2：staging 清单必须携带候选级绑定，且与正式 batch 逐字一致。
+    if (
+        not codex_upgrade_supervisor.manifest_has_candidate_binding(run_manifest)
+        or run_manifest.get("candidate_revision") != batch.get("candidate_revision")
+        or run_manifest.get("candidate_id") != batch.get("candidate_id")
+    ):
+        raise ConfigurationError("staging 清单的 candidate_revision／candidate_id 缺失或与 batch 不一致。")
+    # 改造 5：v3 批次的评估基线三字段与动作 output_bindings 必须与清单逐字一致；
+    # v2 批次的清单不得携带评估基线字段。
+    if batch.get("schema_version") == codex_upgrade_vc_artifacts.VC_BATCH_SCHEMA:
+        if (
+            "evaluation_baseline" not in run_manifest
+            or run_manifest.get("evaluation_baseline") != batch.get("evaluation_baseline")
+            or run_manifest.get("baseline_commit_sha256") != batch.get("baseline_commit_sha256")
+            or run_manifest.get("evaluator_digests") != batch.get("evaluator_digests")
+        ):
+            raise ConfigurationError("staging 清单的评估基线字段缺失或与 batch 不一致。")
+    elif "evaluation_baseline" in run_manifest:
+        raise ConfigurationError("v2 批次的 staging 清单不得携带评估基线字段。")
+    manifest_actions = {str(action["action_id"]): action for action in run_manifest.get("actions", [])}
+    for action in batch.get("actions", []):
+        recorded = manifest_actions.get(str(action["action_id"]))
+        if recorded is None or recorded.get("output_bindings") != action.get("output_bindings"):
+            raise ConfigurationError("staging 清单的动作 output_bindings 与 batch 不一致。")
+    if owner_nonce is not None and marker["owner_nonce"] != owner_nonce:
+        raise ConfigurationError("staging PREPARED 的 owner_nonce 与入口预分配值不一致。")
+    return {
+        "attempt": attempt,
+        "batch": batch,
+        "run_manifest": run_manifest,
+        "raw_manifest": raw_manifest,
+        "manifest_sha256": manifest_sha256,
+        "marker": marker,
+    }
+
+
+def _publish_staging_file(source: Path, target: Path, campaign_dir: Path) -> None:
+    """把 staging 产物逐字节发布到正式路径（write-once）；已存在且相同即幂等跳过。"""
+
+    payload = _read_json(source, "staging 产物")
+    if target.exists() or target.is_symlink():
+        if target.is_symlink() or not target.is_file():
+            raise ConfigurationError(f"正式产物路径不可信：{target}")
+        if file_sha256(target) != file_sha256(source):
+            raise ConfigurationError(f"正式产物已存在且内容不同，禁止覆盖：{target.name}")
+        return
+    ensure_private_directory(target.parent, campaign_dir)
+    _secure_write_json_once(target, payload)
+    if file_sha256(target) != file_sha256(source):
+        raise ConfigurationError(f"正式产物发布后与 staging 内容不一致：{target.name}")
+
+
+def _write_staging_abort(
+    attempt_dir: Path,
+    *,
+    campaign_id: str,
+    campaign_plan_sha256: str,
+    phase: str,
+    sequence: int,
+    attempt: int,
+    stage: str,
+    failure_kind: str,
+    error_type: str,
+    root_cause_id: str,
+    batch_sha256: str | None,
+    manifest_sha256: str | None,
+    parent_run_dir: str | None,
+    parent_run_state: str | None,
+    reconciliation_receipt: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """写 staging ABORT（write-once + 内容核对）：已存在时逐字段核对当前事实，不同即失败关闭。
+
+    只有 ``recorded_at_utc`` 与自摘要 ``receipt_sha256`` 是易变字段；其余字段（Campaign、
+    总计划摘要、阶段、序号、attempt、stage、failure_kind、error_type、根因、产物摘要、父 run
+    绑定、对账收据绑定、零请求断言）必须与既有收据完全一致，避免孤儿对账把错误的根因或
+    收据绑定到既有 ABORT 上。
+    """
+
+    abort_path = attempt_dir / STAGING_ABORT_FILENAME
+    try:
+        abort = codex_upgrade_vc_artifacts.build_staging_abort(
+            campaign_id=campaign_id,
+            campaign_plan_sha256=campaign_plan_sha256,
+            phase=phase,
+            sequence=sequence,
+            staging_attempt=attempt,
+            stage=stage,
+            failure_kind=failure_kind,
+            error_type=error_type[:128],
+            root_cause_id=root_cause_id,
+            batch_sha256=batch_sha256,
+            manifest_sha256=manifest_sha256,
+            parent_run_dir=parent_run_dir,
+            parent_run_state=parent_run_state,
+            reconciliation_receipt=reconciliation_receipt,
+            recorded_at_utc=_utc_now(),
+        )
+    except codex_upgrade_vc_artifacts.VCArtifactError as error:
+        raise ConfigurationError(str(error)) from error
+    if abort_path.exists() or abort_path.is_symlink():
+        if abort_path.is_symlink() or not abort_path.is_file():
+            raise ConfigurationError(f"staging ABORT 路径不可信：{abort_path}")
+        try:
+            existing = codex_upgrade_vc_artifacts.validate_staging_abort(
+                _read_json(abort_path, "staging ABORT")
+            )
+        except codex_upgrade_vc_artifacts.VCArtifactError as error:
+            raise ConfigurationError(f"既有 staging ABORT 无法校验：{error}") from error
+        volatile = {"recorded_at_utc", "receipt_sha256"}
+        drifted = sorted(
+            field
+            for field in abort
+            if field not in volatile and existing.get(field) != abort[field]
+        )
+        if drifted:
+            raise ConfigurationError(
+                "既有 staging ABORT 与当前事实不一致，拒绝覆盖或复用；漂移字段："
+                + "、".join(drifted)
+            )
+        return existing
+    _secure_write_json_once(abort_path, abort)
+    return abort
+
+
+def _staging_attempt_sha256s(attempt_dir: Path) -> tuple[str | None, str | None]:
+    """从 PREPARED（或半写的产物）取 batch／manifest 摘要；缺失即 None。"""
+
+    marker_path = attempt_dir / STAGING_PREPARED_FILENAME
+    if marker_path.is_file() and not marker_path.is_symlink():
+        try:
+            marker = codex_upgrade_vc_artifacts.validate_staging_prepared_marker(
+                _read_json(marker_path, "staging PREPARED 标记")
+            )
+            return str(marker["batch_sha256"]), str(marker["manifest_sha256"])
+        except (ConfigurationError, codex_upgrade_vc_artifacts.VCArtifactError):
+            return None, None
+    return None, None
+
+
+def _staging_abort_accounted(campaign_dir: Path, sequence: int, attempt: int) -> bool:
+    """态 C 判据：无父 run 的 staging 中止已推入项目总账（operation 在 head.operations 内）。"""
+
+    from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+    root = codex_upgrade_project_ledger.find_project_ledger(campaign_dir)
+    if root is None:
+        return False
+    head = codex_upgrade_project_ledger.replay_head(root)
+    return reconciler.staging_abort_operation_id(sequence, attempt) in head.get("operations", {})
+
+
+def _reconcile_staging_abort_receipt(
+    campaign_dir: Path,
+    attempt_dir: Path,
+    *,
+    sequence: int,
+    phase: str,
+    attempt: int,
+) -> dict[str, Any]:
+    """态 B→C→判定：对已写 ABORT 的无父 run attempt 完成 outbox → 总账 → 判定（各步幂等）。"""
+
+    from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+    abort_path = attempt_dir / STAGING_ABORT_FILENAME
+    try:
+        abort = codex_upgrade_vc_artifacts.validate_staging_abort(
+            _read_json(abort_path, "staging ABORT")
+        )
+        result = reconciler.reconcile_staging_abort(campaign_dir, abort_path)
+    except codex_upgrade_vc_artifacts.VCArtifactError as error:
+        raise ConfigurationError(f"staging ABORT 无法校验：{error}") from error
+    except reconciler.ReconcilerError as error:
+        raise ConfigurationError(f"staging 中止对账失败：{error}") from error
+    outcome = {
+        "kind": "staging-attempt",
+        "sequence": sequence,
+        "phase": phase,
+        "staging_attempt": attempt,
+        "stage": abort["stage"],
+        "abort_sha256": abort["receipt_sha256"],
+        "decision": result["decision"]["decision"],
+        "terminal_reason": result["decision"].get("terminal_reason"),
+        "root_cause_id": abort["root_cause_id"],
+        "root_cause_count": result["project_head"]["root_cause_count"],
+    }
+    if result["status"] != reconciler.DECISION_RECOVERABLE:
+        raise StagingStopTheLine(
+            f"staging attempt {sequence:04d}-{phase.lower()}/attempt-{attempt} 对账命中永久停线："
+            f"{result['decision']['terminal_reason']}；{'；'.join(result['decision']['reasons'])}"
+        )
+    return outcome
+
+
+def _abort_staging_attempt_without_parent(
+    campaign_dir: Path,
+    attempt_dir: Path,
+    *,
+    plan: Mapping[str, Any],
+    sequence: int,
+    phase: str,
+    attempt: int,
+    stage: str,
+    failure_kind: str,
+    error_type: str,
+) -> dict[str, Any] | None:
+    """P1：没有父 run 的 staging attempt → ABORT → outbox → 总账 → 判定（态 A→B→C）。
+
+    attempt 目录不存在（编译在落盘前失败）时没有事实可登记，返回 ``None``。
+    判定命中永久停线时抛 ``StagingStopTheLine``。
+    """
+
+    from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+    if not attempt_dir.exists():
+        return None
+    campaign_id = str(plan["campaign_id"])
+    try:
+        cause = reconciler.staging_abort_root_cause(phase, stage)
+    except reconciler.ReconcilerError as error:
+        raise ConfigurationError(str(error)) from error
+    batch_sha256, manifest_sha256 = _staging_attempt_sha256s(attempt_dir)
+    _write_staging_abort(
+        attempt_dir,
+        campaign_id=campaign_id,
+        campaign_plan_sha256=str(plan["plan_sha256"]),
+        phase=phase,
+        sequence=sequence,
+        attempt=attempt,
+        stage=stage,
+        failure_kind=failure_kind,
+        error_type=error_type,
+        root_cause_id=str(cause["root_cause_id"]),
+        batch_sha256=batch_sha256,
+        manifest_sha256=manifest_sha256,
+        parent_run_dir=None,
+        parent_run_state=None,
+        reconciliation_receipt=None,
+    )
+    return _reconcile_staging_abort_receipt(
+        campaign_dir, attempt_dir, sequence=sequence, phase=phase, attempt=attempt
+    )
+
+
+def _supervisor_run_reconciled(campaign_dir: Path, run_dir: Path) -> bool:
+    """态 E 判据：Campaign 侧收据、outbox COMMIT、总账 operation 与账本事件四者齐全。"""
+
+    from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+    run_id = run_dir.name
+    receipt_path = (
+        campaign_dir
+        / "control"
+        / reconciler.RECONCILIATION_DIR
+        / f"run-{run_id}"
+        / reconciler.SUPERVISOR_RUN_RECEIPT_NAME
+    )
+    if receipt_path.is_symlink() or not receipt_path.is_file():
+        return False
+    operation_id = f"reconcile-supervisor-run:{run_id}"
+    ledger_dir = campaign_dir / codex_upgrade_project_ledger.CAMPAIGN_LEDGER_DIR_NAME
+    outbox = ledger_dir / "outbox"
+    committed = False
+    if outbox.is_dir():
+        for _index, batch_dir in codex_upgrade_project_ledger._batch_dirs(outbox):
+            batch = codex_upgrade_project_ledger._read_batch(batch_dir)
+            if batch["committed"] and batch["commit"]["operation_id"] == operation_id:
+                committed = True
+                break
+    if not committed:
+        return False
+    root = codex_upgrade_project_ledger.find_project_ledger(campaign_dir)
+    if root is None:
+        return False
+    head = codex_upgrade_project_ledger.replay_head(root)
+    if operation_id not in head.get("operations", {}):
+        return False
+    receipt = _read_json(receipt_path, "父 run 对账收据")
+    ledger_facts = receipt.get("campaign_ledger")
+    active_phase = ledger_facts.get("active_phase") if isinstance(ledger_facts, Mapping) else None
+    if active_phase is None:
+        # 对账时阶段未开始（P2 在账本事件前崩溃）：reconciler 不写 receipt_passed。
+        return True
+    campaign = _read_json(campaign_dir / "campaign.json", "Campaign 清单")
+    timing_dir = _campaign_timing_ledger_dir(campaign_dir, campaign)
+    for event, _raw in codex_upgrade_timing_ledger._load_events(timing_dir):
+        if event.get("event_id") == f"reconcile-run-passed-{run_id}":
+            return True
+    # 永久停线分支不写 receipt_passed，而是 stop_the_line；账本已 stopped 也视为闭合。
+    return codex_upgrade_timing_ledger.inspect_ledger(timing_dir).get("status") == "stopped"
+
+
+def _wait_for_monitor_finalization(run_dir: Path, state: Mapping[str, Any]) -> dict[str, Any]:
+    """monitor 仍在线时给它有界时间封存终态，避免与入口重复追加事件。"""
+
+    monitor_pid = state.get("monitor_pid")
+    if not isinstance(monitor_pid, int) or isinstance(monitor_pid, bool) or monitor_pid <= 0:
+        return dict(state)
+    deadline = time.monotonic() + STAGING_ORPHAN_MONITOR_WAIT_SECONDS
+    current = dict(state)
+    while time.monotonic() < deadline:
+        current = codex_upgrade_supervisor._read_state(run_dir)
+        if current.get("state") in codex_upgrade_supervisor.TERMINAL_STATES:
+            return current
+        if not codex_upgrade_supervisor._owner_alive(monitor_pid):
+            return current
+        time.sleep(0.1)
+    current = codex_upgrade_supervisor._read_state(run_dir)
+    if current.get("state") in codex_upgrade_supervisor.ACTIVE_STATES and codex_upgrade_supervisor._owner_alive(
+        monitor_pid
+    ):
+        raise ConfigurationError(
+            f"父 run {run_dir.name} 的 monitor 仍在线且尚未封存终态，请稍后重试派发。"
+        )
+    return current
+
+
+def _archive_uncommitted_formal_artifacts(
+    campaign_dir: Path,
+    *,
+    sequence: int,
+    phase: str,
+    attempt: int,
+) -> list[str]:
+    """态 G：把无 COMMIT 的正式半产物移到 staging-aborts/NNNN-vc-x/attempt-K/（只移动）。"""
+
+    name = f"{sequence:04d}-{phase.lower()}.json"
+    vc_root = campaign_dir / "control" / "vc"
+    commit_path = _staging_commit_path(campaign_dir, sequence, phase)
+    if commit_path.exists():
+        return []
+    archive_dir = vc_root / "staging-aborts" / f"{sequence:04d}-{phase.lower()}" / f"attempt-{attempt}"
+    moved: list[str] = []
+    for source_dir, target_name in (
+        (vc_root / "batches", STAGING_BATCH_FILENAME),
+        (vc_root / "run-manifests", STAGING_MANIFEST_FILENAME),
+    ):
+        source = source_dir / name
+        if source.is_symlink():
+            raise ConfigurationError(f"正式半产物不得是符号链接：{source}")
+        if not source.is_file():
+            continue
+        ensure_private_directory(vc_root / "staging-aborts", campaign_dir)
+        ensure_private_directory(archive_dir.parent, campaign_dir)
+        ensure_private_directory(archive_dir, campaign_dir)
+        target = archive_dir / target_name
+        if target.exists():
+            if file_sha256(target) == file_sha256(source):
+                source.unlink()
+                moved.append(target_name)
+                continue
+            raise ConfigurationError(f"归档目标已存在且内容不同：{target}")
+        os.rename(source, target)
+        moved.append(target_name)
+    return moved
+
+
+def _formal_artifact_attempt(
+    campaign_dir: Path,
+    *,
+    sequence: int,
+    phase: str,
+) -> int | None:
+    """按 batch_sha256 找到无 COMMIT 正式半产物所属的 staging attempt。"""
+
+    name = f"{sequence:04d}-{phase.lower()}.json"
+    batch_path = campaign_dir / "control" / "vc" / "batches" / name
+    manifest_path = campaign_dir / "control" / "vc" / "run-manifests" / name
+    digests: set[str] = set()
+    if batch_path.is_file() and not batch_path.is_symlink():
+        payload = _read_json(batch_path, "正式半产物 batch")
+        if isinstance(payload.get("batch_sha256"), str):
+            digests.add(str(payload["batch_sha256"]))
+    if manifest_path.is_file() and not manifest_path.is_symlink():
+        payload = _read_json(manifest_path, "正式半产物清单")
+        if isinstance(payload.get("batch_sha256"), str):
+            digests.add(str(payload["batch_sha256"]))
+    if not digests:
+        return None
+    if len(digests) != 1:
+        raise ConfigurationError(f"序号 {sequence:04d} 的正式半产物 batch 摘要互相矛盾，需人工审计。")
+    digest = next(iter(digests))
+    for attempt, attempt_dir in _staging_attempt_dirs(_staging_sequence_dir(campaign_dir, sequence, phase)):
+        batch_sha256, _manifest_sha256 = _staging_attempt_sha256s(attempt_dir)
+        if batch_sha256 == digest:
+            return attempt
+    raise ConfigurationError(
+        f"序号 {sequence:04d} 的正式半产物找不到对应的 staging attempt，需人工审计。"
+    )
+
+
+def _reconcile_prepared_parent_run(
+    campaign_dir: Path,
+    run_dir: Path,
+    state: Mapping[str, Any],
+    *,
+    plan: Mapping[str, Any],
+) -> dict[str, Any]:
+    """态 E→F：对一个无 COMMIT 的终态父 run 完成正式对账并写 staging ABORT（绑定收据）。"""
+
+    from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+    binding = state["staging_binding"]
+    sequence = int(binding["sequence"])
+    phase = str(binding["phase"])
+    attempt = int(binding["staging_attempt"])
+    attempt_dir = _staging_sequence_dir(campaign_dir, sequence, phase) / f"attempt-{attempt}"
+    already = _supervisor_run_reconciled(campaign_dir, run_dir)
+    if already:
+        # 态 E 已闭合：只读既有收据取根因与绑定，不重复对账（判定结果由总账终态与 admission 体现）。
+        receipt_path = (
+            campaign_dir
+            / "control"
+            / reconciler.RECONCILIATION_DIR
+            / f"run-{run_dir.name}"
+            / reconciler.SUPERVISOR_RUN_RECEIPT_NAME
+        )
+        receipt = _read_json(receipt_path, "父 run 对账收据")
+        receipt_binding = {
+            "path": receipt_path.resolve(strict=True)
+            .relative_to(campaign_dir.resolve(strict=True))
+            .as_posix(),
+            "sha256": file_sha256(receipt_path),
+        }
+        decision = "closed"
+        terminal_reason = None
+        root_cause_id = str(receipt["root_cause"]["root_cause_id"])
+    else:
+        try:
+            result = reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
+        except reconciler.ReconcilerError as error:
+            raise ConfigurationError(f"父 run {run_dir.name} 对账失败：{error}") from error
+        receipt_binding = result["reconciliation_receipt"]
+        decision = str(result["decision"]["decision"])
+        terminal_reason = result["decision"].get("terminal_reason")
+        root_cause_id = str(result["root_cause"]["root_cause_id"])
+    stop_reason = _read_stop_reason(run_dir) or ""
+    if stop_reason == codex_upgrade_supervisor.PREPARED_ABANDONED_REASON:
+        stage, failure_kind = "parent-run", "abandoned"
+    elif stop_reason.startswith(codex_upgrade_supervisor.STAGING_COMMIT_FAILED_PREFIX):
+        stage = stop_reason[len(codex_upgrade_supervisor.STAGING_COMMIT_FAILED_PREFIX) :]
+        failure_kind = "commit-failed"
+    else:
+        stage, failure_kind = "parent-run", "interrupted"
+    batch_sha256, manifest_sha256 = _staging_attempt_sha256s(attempt_dir)
+    abort_written = False
+    if attempt_dir.is_dir():
+        abort_path = attempt_dir / STAGING_ABORT_FILENAME
+        abort_written = not abort_path.exists()
+        _write_staging_abort(
+            attempt_dir,
+            campaign_id=str(plan["campaign_id"]),
+            campaign_plan_sha256=str(plan["plan_sha256"]),
+            phase=phase,
+            sequence=sequence,
+            attempt=attempt,
+            stage=stage,
+            failure_kind=failure_kind,
+            error_type=stop_reason or "unknown",
+            root_cause_id=root_cause_id,
+            batch_sha256=batch_sha256,
+            manifest_sha256=manifest_sha256,
+            parent_run_dir=str(run_dir),
+            parent_run_state=str(state["state"]),
+            reconciliation_receipt={
+                "path": str(receipt_binding["path"]),
+                "sha256": str(receipt_binding["sha256"]),
+            },
+        )
+    return {
+        "kind": "parent-run",
+        "run_dir": str(run_dir),
+        "run_state": state["state"],
+        "stop_reason": stop_reason,
+        "sequence": sequence,
+        "phase": phase,
+        "staging_attempt": attempt,
+        "already_reconciled": already,
+        "abort_written": abort_written,
+        "decision": decision,
+        "terminal_reason": terminal_reason,
+        "root_cause_id": root_cause_id,
+        "reconciliation_receipt": dict(receipt_binding),
+    }
+
+
+def _reconcile_staging_orphans(
+    campaign_dir: Path,
+    state_dir: Path,
+    *,
+    plan: Mapping[str, Any],
+) -> dict[str, Any]:
+    """派发入口锁内、prepare 前的孤儿处理：按可观测状态逐项幂等续接到闭合。
+
+    对象与顺序：① 同 Campaign 的 staging 父 run（prepared／committed 未启动的先终态化；
+    无 COMMIT 的终态 run 走对账 → ABORT；COMMIT 完整性异常走永久停线；
+    ``failed(parent-start-failed)`` 是 P4，留给 reconcile-supervisor-run，入口不处理）；
+    ② 没有父 run 的 staging attempt（ABORT → outbox → 总账 → 判定）；③ 无 COMMIT 的
+    正式半产物归档。任一对象命中永久停线即在处理完本对象后抛 ``StagingStopTheLine``。
+    """
+
+    from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+    campaign_id = str(plan["campaign_id"])
+    handled: list[dict[str, Any]] = []
+    stops: list[str] = []
+    changed = False
+    referenced_attempts: set[tuple[int, str, int]] = set()
+    supervisor = codex_upgrade_supervisor
+    # ① 父 run
+    for state_path in sorted(state_dir.glob("run-*/state.json")):
+        run_dir = state_path.parent
+        try:
+            state = supervisor._read_state(run_dir)
+        except supervisor.SupervisorError:
+            continue
+        if state.get("campaign_id") != campaign_id:
+            continue
+        binding = state.get("staging_binding")
+        if not isinstance(binding, Mapping):
+            continue
+        referenced_attempts.add(
+            (int(binding["sequence"]), str(binding["phase"]), int(binding["staging_attempt"]))
+        )
+        if state.get("state") in supervisor.ACTIVE_STATES:
+            if supervisor._owner_alive(int(state["owner_pid"])):
+                raise ConfigurationError(
+                    f"父 run {run_dir.name} 的 owner 仍在线，拒绝并发处理。"
+                )
+            if state.get("state") == "running" and not supervisor.committed_run_never_started(
+                run_dir, state
+            ):
+                raise ConfigurationError(
+                    f"父 run {run_dir.name} 已开始动作但 owner 丢失，先执行 reconcile-supervisor-run。"
+                )
+            state = _wait_for_monitor_finalization(run_dir, state)
+            if state.get("state") in supervisor.ACTIVE_STATES:
+                try:
+                    supervisor.finalize_prepared_run(run_dir, operation="orchestrator:orphan-scan")
+                except supervisor.SupervisorError as error:
+                    raise ConfigurationError(f"父 run {run_dir.name} 终态化失败：{error}") from error
+                state = supervisor._read_state(run_dir)
+            changed = True
+        run_state = str(state.get("state"))
+        stop_reason = _read_stop_reason(run_dir)
+        classification = supervisor.classify_prepared_run(run_dir, state)
+        if classification == "integrity_mismatch" or (
+            run_state == "audit-incomplete"
+            and stop_reason == supervisor.COMMIT_INTEGRITY_MISMATCH_REASON
+        ):
+            # 态 I：固定永久停线（reconciler 内部 stage_abandoned + stop_the_line + campaign_terminal）。
+            if run_state in supervisor.ACTIVE_STATES:
+                raise ConfigurationError(f"父 run {run_dir.name} COMMIT 完整性异常且未终态化。")
+            try:
+                result = reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
+            except reconciler.ReconcilerError as error:
+                raise ConfigurationError(f"父 run {run_dir.name} 完整性异常对账失败：{error}") from error
+            handled.append(
+                {
+                    "kind": "parent-run",
+                    "run_dir": str(run_dir),
+                    "run_state": run_state,
+                    "classification": "integrity_mismatch",
+                    "decision": result["decision"]["decision"],
+                    "terminal_reason": result["decision"].get("terminal_reason"),
+                }
+            )
+            changed = True
+            stops.append(
+                f"父 run {run_dir.name} 的 COMMIT 完整性异常，序号 {int(binding['sequence']):04d} 已占且不可重派"
+            )
+            continue
+        if classification == "committed":
+            # 正常历史或 P4（failed + parent-start-failed）：P4 交 reconcile-supervisor-run，入口不处理。
+            continue
+        if run_state == "stopped":
+            raise ConfigurationError(f"父 run {run_dir.name} 无 COMMIT 却已 stopped，历史不可信。")
+        if run_state not in supervisor.TERMINAL_STATES:
+            raise ConfigurationError(f"父 run {run_dir.name} 未终态化。")
+        outcome = _reconcile_prepared_parent_run(campaign_dir, run_dir, state, plan=plan)
+        if outcome["already_reconciled"] and not outcome["abort_written"]:
+            # 完全闭合的历史孤儿：不重复登记。
+            continue
+        handled.append(outcome)
+        changed = True
+        if outcome["decision"] not in {reconciler.DECISION_RECOVERABLE, "closed"}:
+            stops.append(
+                f"父 run {run_dir.name} 对账命中永久停线：{outcome['terminal_reason']}"
+            )
+    # ② 没有父 run 的 staging attempt
+    staging_root = campaign_dir / "control" / "vc" / "staging"
+    if staging_root.is_symlink():
+        raise ConfigurationError("staging 根目录不得是符号链接。")
+    if staging_root.is_dir():
+        for sequence_dir in sorted(staging_root.iterdir()):
+            match = re.fullmatch(r"^([0-9]{4})-(vc-[0-6])$", sequence_dir.name)
+            if match is None or sequence_dir.is_symlink() or not sequence_dir.is_dir():
+                raise ConfigurationError(f"staging 根目录含非法条目：{sequence_dir.name}")
+            sequence = int(match.group(1))
+            phase = match.group(2).upper()
+            commit_path = _staging_commit_path(campaign_dir, sequence, phase)
+            committed_attempt: int | None = None
+            if commit_path.exists():
+                committed_attempt = int(_read_staging_commit(commit_path)["staging_attempt"])
+            for attempt, attempt_dir in _staging_attempt_dirs(sequence_dir):
+                if committed_attempt == attempt:
+                    continue
+                if (sequence, phase, attempt) in referenced_attempts:
+                    # 有父 run 引用：已在 ① 处理（或属于 P4，不写 ABORT）。
+                    continue
+                if (attempt_dir / STAGING_ABORT_FILENAME).exists():
+                    # 态 B／C：ABORT 已写但 outbox／总账尚未闭合（写 ABORT 后崩溃）。
+                    if _staging_abort_accounted(campaign_dir, sequence, attempt):
+                        continue
+                    outcome = _reconcile_staging_abort_receipt(
+                        campaign_dir, attempt_dir, sequence=sequence, phase=phase, attempt=attempt
+                    )
+                    changed = True
+                    handled.append(outcome)
+                    continue
+                outcome = _abort_staging_attempt_without_parent(
+                    campaign_dir,
+                    attempt_dir,
+                    plan=plan,
+                    sequence=sequence,
+                    phase=phase,
+                    attempt=attempt,
+                    stage="prepare",
+                    failure_kind="abandoned",
+                    error_type="StagingAttemptAbandoned",
+                )
+                changed = True
+                if outcome is not None:
+                    handled.append(outcome)
+    # ③ 无 COMMIT 的正式半产物归档
+    vc_root = campaign_dir / "control" / "vc"
+    for source_dir in (vc_root / "batches", vc_root / "run-manifests"):
+        if not source_dir.is_dir():
+            continue
+        for path in sorted(source_dir.iterdir()):
+            match = _VC_SEQUENCE_FILE_RE.fullmatch(path.name)
+            if match is None:
+                continue
+            sequence = int(match.group(1))
+            if sequence == 1:
+                continue
+            phase = match.group(2).upper()
+            if _staging_commit_path(campaign_dir, sequence, phase).exists():
+                continue
+            attempt = _formal_artifact_attempt(campaign_dir, sequence=sequence, phase=phase)
+            if attempt is None:
+                continue
+            moved = _archive_uncommitted_formal_artifacts(
+                campaign_dir, sequence=sequence, phase=phase, attempt=attempt
+            )
+            if moved:
+                changed = True
+                handled.append(
+                    {
+                        "kind": "formal-artifacts-archived",
+                        "sequence": sequence,
+                        "phase": phase,
+                        "staging_attempt": attempt,
+                        "moved": moved,
+                    }
+                )
+    if stops:
+        raise StagingStopTheLine("；".join(stops))
+    return {"changed": changed, "handled": handled}
+
+
+def _compile_and_run_vc_batch_staging(
+    arguments: argparse.Namespace,
+    *,
+    governance: dict[str, Any],
+    _compiler: Any | None,
+) -> tuple[dict[str, Any], int]:
+    """staging 批次模型的原子派发：孤儿对账 → prepare → prepared 父 run → commit 四步。"""
+
+    supervisor = codex_upgrade_supervisor
+    campaign_dir = Path(arguments.campaign_dir)
+    phase = str(arguments.phase)
+    sequence = int(arguments.sequence)
+    formal = _compiler is None
+    campaign = _read_json(campaign_dir / "campaign.json", "Campaign 清单")
+    plan = _vc_campaign_plan(campaign_dir, campaign)
+    if not _campaign_uses_staging_model(campaign_dir, plan):
+        raise ConfigurationError("Campaign 总计划不是 staging 批次模型。")
+    campaign_id = str(plan["campaign_id"])
+    if campaign.get("campaign_id") not in {None, campaign_id}:
+        raise ConfigurationError("Campaign 清单与总计划的 campaign_id 不一致。")
+    name = f"{sequence:04d}-{phase.lower()}.json"
+    batch_path = campaign_dir / "control" / "vc" / "batches" / name
+    manifest_path = campaign_dir / "control" / "vc" / "run-manifests" / name
+    commit_path = _staging_commit_path(campaign_dir, sequence, phase)
+    try:
+        lock_descriptor, state_dir = supervisor._campaign_run_lock(arguments.state_dir)
+    except supervisor.SupervisorError as error:
+        raise ConfigurationError(str(error)) from error
+    run_arguments = _staging_run_arguments(arguments)
+    bootstrap_run: dict[str, Any] | None = None
+    try:
+        if formal:
+            bootstrap_run = _bootstrap_noop_first_batch(
+                campaign_dir,
+                governance["manifest"],
+                sequence=sequence,
+                state_dir=state_dir,
+                run_arguments=run_arguments,
+            )
+        orphans = _reconcile_staging_orphans(campaign_dir, state_dir, plan=plan)
+        if formal and orphans["changed"]:
+            # 孤儿处理推进了总账／账本：重算只读预检与 admission，头序号以此为准。
+            governance = _prepare_atomic_batch_governance(arguments)
+        if commit_path.exists():
+            raise ConfigurationError(
+                f"序号 {sequence:04d} 已有 COMMIT，禁止重复派发；后继请用序号 {sequence + 1:04d}。"
+            )
+        owner_nonce = secrets.token_hex(32)
+        sequence_dir = _staging_sequence_dir(campaign_dir, sequence, phase)
+        attempt = _next_staging_attempt(sequence_dir)
+        attempt_dir = sequence_dir / f"attempt-{attempt}"
+        compiler = compile_vc_batch if _compiler is None else _compiler
+        try:
+            compiled = compiler(
+                arguments, staging_attempt_dir=attempt_dir, owner_nonce=owner_nonce
+            )
+            prepared = _load_prepared_staging_attempt(
+                campaign_dir,
+                attempt_dir,
+                owner_nonce=owner_nonce,
+                sequence=sequence,
+                phase=phase,
+            )
+            start_by = datetime.fromisoformat(
+                str(prepared["batch"]["must_start_by_utc"]).replace("Z", "+00:00")
+            )
+            if datetime.now(timezone.utc) > start_by:
+                raise ConfigurationError("VC batch 的 60 秒启动窗口已过期，拒绝创建父 run。")
+        except BaseException as error:
+            failure_kind = (
+                "interrupted"
+                if isinstance(error, (KeyboardInterrupt, SystemExit))
+                else "prepare-failed"
+            )
+            try:
+                _abort_staging_attempt_without_parent(
+                    campaign_dir,
+                    attempt_dir,
+                    plan=plan,
+                    sequence=sequence,
+                    phase=phase,
+                    attempt=attempt,
+                    stage="prepare",
+                    failure_kind=failure_kind,
+                    error_type=type(error).__name__,
+                )
+            except StagingStopTheLine as stop_error:
+                raise StagingStopTheLine(
+                    f"prepare 失败（{type(error).__name__}）且对账命中永久停线：{stop_error}"
+                ) from error
+            raise
+        staging_binding = {
+            "campaign_dir": str(campaign_dir.resolve(strict=True)),
+            "sequence": sequence,
+            "phase": phase,
+            "staging_attempt": attempt,
+            "commit_path": str(commit_path.resolve(strict=False)),
+            "prepared_marker_sha256": str(prepared["marker"]["marker_sha256"]),
+        }
+        commit_facts: dict[str, Any] = {"ledger_events": []}
+
+        def _commit_staging(client: Any) -> None:
+            client.begin_commit_step("nonce-mismatch")
+            if not (prepared["marker"]["owner_nonce"] == client.owner_nonce == owner_nonce):
+                raise supervisor.StagingCommitError(
+                    "nonce-mismatch", "PREPARED、父 run 与入口预分配的 owner_nonce 不一致。"
+                )
+            # 改造 5：正式 COMMIT 前核对当前 evaluator 四项摘要等于批次冻结值（编译器与这里
+            # 调用同一纯函数）；不等即 aborted_prepared、序号不占、同序号以当前摘要重新编译。
+            client.begin_commit_step("evaluator-digests")
+            frozen_digests = prepared["run_manifest"].get("evaluator_digests")
+            if frozen_digests is not None:
+                try:
+                    current_digests = codex_upgrade_tool_identity_policy.evaluator_dependency_digests()
+                except codex_upgrade_tool_identity_policy.ToolIdentityPolicyError as error:
+                    raise supervisor.StagingCommitError("evaluator-digests", str(error)) from error
+                if current_digests != dict(frozen_digests):
+                    drifted = sorted(
+                        field for field in current_digests if current_digests[field] != frozen_digests.get(field)
+                    )
+                    raise supervisor.StagingCommitError(
+                        "evaluator-digests",
+                        "当前 evaluator 依赖摘要与批次冻结值不一致（编译后工具已变化），"
+                        f"漂移项：{drifted}；请同序号重新编译派发。",
+                    )
+            client.begin_commit_step("commit-ledger")
+            try:
+                if governance["ledger_dir"] is not None:
+                    commit_facts["ledger_events"] = _append_timing_ledger_batch_events(
+                        governance["ledger_dir"],
+                        governance["ledger_events"],
+                        phase=phase,
+                        sequence=sequence,
+                        expected_head=governance["ledger_head_sequence"],
+                    )
+            except ConfigurationError as error:
+                raise supervisor.StagingCommitError("commit-ledger", str(error)) from error
+            client.begin_commit_step("commit-publish")
+            try:
+                _publish_staging_file(attempt_dir / STAGING_BATCH_FILENAME, batch_path, campaign_dir)
+                _publish_staging_file(
+                    attempt_dir / STAGING_MANIFEST_FILENAME, manifest_path, campaign_dir
+                )
+            except ConfigurationError as error:
+                raise supervisor.StagingCommitError("commit-publish", str(error)) from error
+            client.begin_commit_step("commit-mark")
+            try:
+                commit = codex_upgrade_vc_artifacts.build_vc_commit(
+                    campaign_id=campaign_id,
+                    sequence=sequence,
+                    phase=phase,
+                    staging_attempt=attempt,
+                    batch_sha256=str(prepared["batch"]["batch_sha256"]),
+                    manifest_sha256=str(prepared["manifest_sha256"]),
+                    parent_run_dir=str(client.run_dir),
+                    owner_nonce=client.owner_nonce,
+                    ledger_event_ids=[
+                        str(item["event_id"]) for item in commit_facts["ledger_events"]
+                    ],
+                    committed_at_utc=_utc_now(),
+                )
+                _secure_write_json_once(commit_path, commit)
+            except (ConfigurationError, codex_upgrade_vc_artifacts.VCArtifactError) as error:
+                raise supervisor.StagingCommitError("commit-mark", str(error)) from error
+            commit_facts["commit"] = commit
+            client.begin_commit_step("commit-activate")
+            client.activate_committed(commit)
+
+        try:
+            returncode, run = supervisor._campaign_run_locked(
+                run_arguments,
+                manifest=prepared["run_manifest"],
+                state_dir=state_dir,
+                campaign_dir=campaign_dir,
+                commit=_commit_staging,
+                owner_nonce=owner_nonce,
+                staging_binding=staging_binding,
+            )
+        except BaseException as error:
+            run_dir = state_dir / f"run-{owner_nonce}"
+            if not run_dir.exists():
+                failure_kind = (
+                    "interrupted"
+                    if isinstance(error, (KeyboardInterrupt, SystemExit))
+                    else "prepare-failed"
+                )
+                try:
+                    _abort_staging_attempt_without_parent(
+                        campaign_dir,
+                        attempt_dir,
+                        plan=plan,
+                        sequence=sequence,
+                        phase=phase,
+                        attempt=attempt,
+                        stage="parent-run-create",
+                        failure_kind=failure_kind,
+                        error_type=type(error).__name__,
+                    )
+                except StagingStopTheLine as stop_error:
+                    raise StagingStopTheLine(
+                        f"父 run 创建失败（{type(error).__name__}）且对账命中永久停线：{stop_error}"
+                    ) from error
+            # 父 run 已建立（含 commit 中被中断后已封存 aborted_prepared）：由下次入口的
+            # 孤儿处理幂等续接对账、ABORT 与归档。
+            if isinstance(error, supervisor.SupervisorError):
+                raise ConfigurationError(str(error)) from error
+            raise
+        run_dir = Path(str(run["run_dir"]))
+        run_status = str(run["status"])
+        run_reason = str(run.get("reason", ""))
+        if run_status == "aborted_prepared":
+            # 固定顺序：① 正式对账（收据、outbox、总账、账本）→ ② ABORT（绑定收据）→ ③ 归档半产物。
+            state = supervisor._read_state(run_dir)
+            outcome = _reconcile_prepared_parent_run(campaign_dir, run_dir, state, plan=plan)
+            moved = _archive_uncommitted_formal_artifacts(
+                campaign_dir, sequence=sequence, phase=phase, attempt=attempt
+            )
+            summary = (
+                f"staging commit 在 {run['commit_failure']['commit_step']} 步失败"
+                f"（{run['commit_failure']['error_type']}），父 run {run_dir.name} 已封存 aborted_prepared，"
+                f"序号 {sequence:04d} 未占；对账根因 {outcome['root_cause_id']}"
+            )
+            if outcome["decision"] not in {"recoverable", "closed"}:
+                raise StagingStopTheLine(
+                    f"{summary}；对账命中永久停线：{outcome['terminal_reason']}"
+                )
+            raise ConfigurationError(
+                f"{summary}；已归档 {moved or '无'}，可按同序号重新派发。"
+            )
+        if run_status == "audit-incomplete" and run_reason == supervisor.COMMIT_INTEGRITY_MISMATCH_REASON:
+            from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+            try:
+                reconciler.reconcile_supervisor_run(run_dir, campaign_dir)
+            except reconciler.ReconcilerError as error:
+                raise ConfigurationError(
+                    f"父 run {run_dir.name} COMMIT 完整性异常，且永久停线对账失败：{error}"
+                ) from error
+            raise StagingStopTheLine(
+                f"父 run {run_dir.name} 的 COMMIT 完整性异常，序号 {sequence:04d} 已占且不可重派，已永久停线。"
+            )
+        completion = None
+        if returncode == 0 and governance["ledger_dir"] is not None:
+            completion = _complete_timing_ledger_phase_after_batch(
+                campaign_dir,
+                governance["plan"],
+                phase=phase,
+                sequence=sequence,
+                ledger_dir=governance["ledger_dir"],
+            )
+        return (
+            {
+                "status": run_status,
+                "campaign_id": compiled["campaign_id"],
+                "phase": compiled["phase"],
+                "batch_sequence": compiled["batch_sequence"],
+                "batch_model": "staging",
+                "staging_attempt": attempt,
+                "commit": commit_facts.get("commit"),
+                "compile": compiled,
+                "campaign_run": run,
+                "predispatch_stop": None,
+                "orphans": orphans["handled"],
+                "bootstrap_noop_run": bootstrap_run,
+                "project_ledger": governance["admission"],
+                "timing_ledger": {
+                    "ledger_dir": (
+                        str(governance["ledger_dir"]) if governance["ledger_dir"] is not None else None
+                    ),
+                    "events": commit_facts["ledger_events"],
+                    "completion": completion,
+                },
+            },
+            returncode,
+        )
+    finally:
+        os.close(lock_descriptor)
+
+
+# ---------------------------------------------------------------------------
+# 改造 2：候选级 revision 的登记（revision-open）与显式作废（invalidate-candidate）
+# ---------------------------------------------------------------------------
+
+REVISION_OPEN_COMMAND = "revision-open"
+INVALIDATE_CANDIDATE_COMMAND = "invalidate-candidate"
+CANDIDATE_INVALIDATION_FILENAME = "invalidation.json"
+
+
+def _assert_revision_admission(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    *,
+    command: str,
+) -> dict[str, Any] | None:
+    """与 plan／reuse-official-evidence 同集合的 admission，外加总计划 deadline。"""
+
+    try:
+        admission = codex_upgrade_project_ledger.assert_campaign_admitted(
+            campaign_dir,
+            command=command,
+            require=_project_ledger_required(manifest.get("campaign_mode"), manifest.get("target_version")),
+        )
+    except codex_upgrade_project_ledger.ProjectLedgerError as error:
+        raise ConfigurationError(f"项目总账拒绝 {command}：{error}") from error
+    deadline = _campaign_plan_deadline(campaign_dir)
+    if deadline is not None:
+        expiry = datetime.fromisoformat(str(deadline).replace("Z", "+00:00"))
+        if datetime.now(timezone.utc) >= expiry:
+            raise ConfigurationError(f"{command} 拒绝：Campaign 总计划 deadline 已到。")
+    return admission
+
+
+def _ledger_last_event_of_type(ledger_dir: Path, event_type: str) -> tuple[dict[str, Any], str] | None:
+    """账本最后一条指定类型事件及其原始字节摘要。"""
+
+    last: tuple[dict[str, Any], str] | None = None
+    try:
+        for event, raw in codex_upgrade_timing_ledger._load_events(ledger_dir):
+            if event.get("event_type") == event_type:
+                last = (dict(event), codex_upgrade_timing_ledger._sha256_bytes(raw))
+    except codex_upgrade_timing_ledger.TimingLedgerError as error:
+        raise ConfigurationError(f"UpgradeTimingLedger 无法读取：{error}") from error
+    return last
+
+
+def _write_candidate_revision_pending(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    *,
+    revision: int,
+    candidate_id: str,
+    supersedes: Mapping[str, Any] | None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """写 revision 目录的 revision.json 与 COMMIT（pending）；已存在时内容核对。"""
+
+    plan = _vc_campaign_plan(campaign_dir, manifest)
+    vc3_path, vc3 = _replay_vc_checkpoint(campaign_dir, plan, "VC-3")
+    vc3_binding = vc3.get("stage_receipt")
+    if not isinstance(vc3_binding, Mapping):
+        raise ConfigurationError("VC-3 checkpoint 阶段收据绑定非法。")
+    previous_sha256: str | None = None
+    if revision >= 2:
+        previous_record, previous_commit = _read_candidate_revision_record(campaign_dir, revision - 1)
+        if previous_record is None or previous_commit is None:
+            raise ConfigurationError(f"候选 revision r{revision - 1} 记录或 COMMIT 缺失，无法登记 r{revision}。")
+        previous_sha256 = str(previous_record["record_sha256"])
+    try:
+        record = codex_upgrade_vc_artifacts.build_candidate_revision(
+            campaign_id=str(plan["campaign_id"]),
+            revision=revision,
+            candidate_id=candidate_id,
+            opened_at_utc=_utc_now(),
+            previous_revision_sha256=previous_sha256,
+            vc3_checkpoint=_vc_checkpoint_reference(campaign_dir, vc3_path, vc3),
+            vc3_stage_receipt={"path": str(vc3_binding["path"]), "sha256": str(vc3_binding["sha256"])},
+            supersedes=supersedes,
+        )
+    except codex_upgrade_vc_artifacts.VCArtifactError as error:
+        raise ConfigurationError(f"候选 revision 记录无法生成：{error}") from error
+    directory = _candidate_revision_dir(campaign_dir, revision)
+    ensure_private_directory(_candidate_revisions_root(campaign_dir), campaign_dir)
+    ensure_private_directory(directory, campaign_dir)
+    record_path = directory / "revision.json"
+    try:
+        _write_or_verify_json_ignoring(record_path, record, volatile=("opened_at_utc", "record_sha256"))
+    except ConfigurationError as error:
+        raise ConfigurationError(
+            f"候选 revision r{revision} 已有登记且内容不一致（候选、VC-3 绑定或取代关系漂移），拒绝覆盖：{error}"
+        ) from error
+    try:
+        record = codex_upgrade_vc_artifacts.validate_candidate_revision(
+            _read_json(record_path, "候选 revision 记录")
+        )
+        commit = codex_upgrade_vc_artifacts.build_candidate_revision_commit(
+            campaign_id=str(plan["campaign_id"]),
+            revision=revision,
+            candidate_id=candidate_id,
+            record_sha256=str(record["record_sha256"]),
+            committed_at_utc=_utc_now(),
+        )
+    except codex_upgrade_vc_artifacts.VCArtifactError as error:
+        raise ConfigurationError(str(error)) from error
+    _write_or_verify_json_ignoring(directory / "COMMIT", commit, volatile=("committed_at_utc", "commit_sha256"))
+    commit = codex_upgrade_vc_artifacts.validate_candidate_revision_commit(
+        _read_json(directory / "COMMIT", "候选 revision COMMIT")
+    )
+    return record, commit
+
+
+def open_candidate_revision(arguments: argparse.Namespace) -> dict[str, Any]:
+    """revision-open：登记并激活一个候选级 revision（零请求，幂等）。
+
+    ``--initial``：新 Campaign 在 VC-4 首批前建立 r1（导入型后继 Campaign 的 r1 目录已由
+    successor 在暂存区写成 pending，这里只补账本 stage_revision）；``--supersedes <old>``：
+    账本处于 revision_required 且旧候选已 candidate_invalidated 时开 r(N+1)。
+    admission → 绑定 VC-3 → revision.json + COMMIT（pending）→ 账本 stage_revision（active）。
+    """
+
+    campaign_dir = Path(arguments.campaign_dir)
+    manifest = _require_formal_campaign(campaign_dir)
+    if not _requires_complete_vc_artifacts(manifest):
+        raise ConfigurationError("revision-open 只用于 0.154.0 起的完整 VC 链 Campaign。")
+    candidate_id = str(arguments.candidate_id)
+    if not SAFE_ID_RE.fullmatch(candidate_id):
+        raise ConfigurationError("--candidate-id 格式非法。")
+    initial = bool(getattr(arguments, "initial", False))
+    supersedes_id = getattr(arguments, "supersedes", None)
+    if initial == bool(supersedes_id):
+        raise ConfigurationError("revision-open 必须且只能给出 --initial 或 --supersedes 之一。")
+    admission = _assert_revision_admission(campaign_dir, manifest, command=REVISION_OPEN_COMMAND)
+    ledger_dir = _campaign_timing_ledger_dir(campaign_dir, manifest)
+    with _campaign_lock(campaign_dir):
+        summary = codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)
+        last_stage_revision = _ledger_last_stage_revision(ledger_dir)
+        supersedes: dict[str, Any] | None = None
+        if initial:
+            if last_stage_revision is not None:
+                if int(last_stage_revision["revision"]) != 1 or last_stage_revision.get("candidate_id") != candidate_id:
+                    raise ConfigurationError(
+                        f"Campaign 已激活 revision r{last_stage_revision['revision']}"
+                        f"（候选 {last_stage_revision.get('candidate_id')}），--initial 只能幂等重放 r1。"
+                    )
+            elif summary.get("current_revision") is not None:
+                raise ConfigurationError(
+                    "历史 Campaign 的候选级事件已隐含 r1，只读重放，不得再登记 revision。"
+                )
+            elif summary.get("status") != "active":
+                raise ConfigurationError(
+                    f"revision-open --initial 要求账本 active（当前 {summary.get('status')}）。"
+                )
+            legacy_vc4 = campaign_dir / "control" / "vc" / "vc-4-checkpoint.json"
+            if legacy_vc4.exists() and not _candidate_revisions_root(campaign_dir).exists():
+                raise ConfigurationError("历史 Campaign 已有隐含 r1 的 VC-4 checkpoint，只读重放。")
+            for other in _existing_candidate_revisions(campaign_dir):
+                if other != 1:
+                    raise ConfigurationError(f"Campaign 已存在 r{other} 目录，--initial 只能登记 r1。")
+            revision = 1
+        else:
+            supersedes_id = str(supersedes_id)
+            if not SAFE_ID_RE.fullmatch(supersedes_id):
+                raise ConfigurationError("--supersedes 格式非法。")
+            if supersedes_id == candidate_id:
+                raise ConfigurationError("新候选不得与被取代候选同名。")
+            current = summary.get("current_revision")
+            if current is None or last_stage_revision is None:
+                raise ConfigurationError("没有可取代的 active revision；新 Campaign 请用 --initial。")
+            already_active = (
+                last_stage_revision.get("candidate_id") == candidate_id
+                and last_stage_revision.get("supersedes_revision") is not None
+            )
+            if already_active:
+                # 幂等重放：最后一条 stage_revision 已由本命令以同一候选激活，被取代的
+                # revision 由事件自身给出（此时账本 current_revision 已是新值）。
+                revision = int(last_stage_revision["revision"])
+                current = int(last_stage_revision["supersedes_revision"])
+            else:
+                if summary.get("status") != "revision_required":
+                    raise ConfigurationError(
+                        f"revision-open --supersedes 要求账本 revision_required（当前 {summary.get('status')}）；"
+                        "先完成对账并执行 invalidate-candidate。"
+                    )
+                revision = int(current) + 1
+            next_revision = revision
+            existing_next = _read_candidate_revision_record(campaign_dir, next_revision)[0]
+            invalidated = _ledger_last_event_of_type(ledger_dir, "candidate_invalidated")
+            if (
+                invalidated is None
+                or invalidated[0].get("candidate_id") != supersedes_id
+                or int(invalidated[0].get("revision") or 0) != int(current)
+            ):
+                raise ConfigurationError(
+                    f"账本没有对候选 {supersedes_id}（r{current}）的 candidate_invalidated 事件。"
+                )
+            invalidation_path = campaign_dir / "candidates" / supersedes_id / CANDIDATE_INVALIDATION_FILENAME
+            if invalidation_path.is_symlink() or not invalidation_path.is_file():
+                raise ConfigurationError(f"被取代候选 {supersedes_id} 缺少 invalidation.json。")
+            try:
+                invalidation = codex_upgrade_vc_artifacts.validate_candidate_invalidation(
+                    _read_json(invalidation_path, "候选作废记录")
+                )
+            except codex_upgrade_vc_artifacts.VCArtifactError as error:
+                raise ConfigurationError(str(error)) from error
+            if invalidation["candidate_id"] != supersedes_id or invalidation["revision"] != int(current):
+                raise ConfigurationError("invalidation.json 与被取代候选／revision 不一致。")
+            supersedes = {
+                "revision": int(current),
+                "candidate_id": supersedes_id,
+                "invalidation_receipt": {
+                    "path": invalidation_path.resolve(strict=True)
+                    .relative_to(campaign_dir.resolve(strict=True))
+                    .as_posix(),
+                    "sha256": file_sha256(invalidation_path),
+                },
+                "candidate_invalidated_event_sha256": invalidated[1],
+            }
+            if existing_next is not None and existing_next.get("candidate_id") != candidate_id:
+                raise ConfigurationError(
+                    f"r{next_revision} 已登记候选 {existing_next.get('candidate_id')}，与 --candidate-id 不一致。"
+                )
+        record, commit = _write_candidate_revision_pending(
+            campaign_dir,
+            manifest,
+            revision=revision,
+            candidate_id=candidate_id,
+            supersedes=supersedes,
+        )
+        ledger_event: dict[str, Any]
+        idempotent = False
+        if (
+            last_stage_revision is not None
+            and int(last_stage_revision["revision"]) == revision
+            and last_stage_revision.get("candidate_id") == candidate_id
+        ):
+            if last_stage_revision.get("revision_commit_sha256") != commit["commit_sha256"]:
+                raise ConfigurationError(
+                    f"账本已激活的 r{revision} 引用的 COMMIT 与目录 COMMIT 不一致。"
+                )
+            ledger_event = {"event_id": last_stage_revision["event_id"], "appended": False}
+            idempotent = True
+        else:
+            try:
+                result_summary = codex_upgrade_timing_ledger.append_event(
+                    ledger_dir,
+                    event_id=f"stage-revision-r{revision}",
+                    phase="VC-4",
+                    event_type="stage_revision",
+                    revision=revision,
+                    candidate_id=candidate_id,
+                    revision_commit_sha256=str(commit["commit_sha256"]),
+                    supersedes_revision=(int(supersedes["revision"]) if supersedes is not None else None),
+                    next_action=(
+                        f"r{revision} 已激活：以 compile-and-run-vc-batch 派发 VC-4 首批"
+                        "（plan-candidate-gates），然后 record-candidate-build（含 revision-seal）"
+                    ),
+                )
+            except codex_upgrade_timing_ledger.TimingLedgerError as error:
+                raise ConfigurationError(f"UpgradeTimingLedger 拒绝 stage_revision：{error}") from error
+            ledger_event = {
+                "event_id": f"stage-revision-r{revision}",
+                "appended": True,
+                "head_sequence": result_summary["head_sequence"],
+                "head_sha256": result_summary["head_sha256"],
+            }
+    return {
+        "status": "complete",
+        "idempotent": idempotent,
+        "campaign_id": manifest["campaign_id"],
+        "revision": revision,
+        "candidate_id": candidate_id,
+        "supersedes": supersedes,
+        "revision_record": str(_candidate_revision_dir(campaign_dir, revision) / "revision.json"),
+        "record_sha256": record["record_sha256"],
+        "commit_sha256": commit["commit_sha256"],
+        "ledger_event": ledger_event,
+        "project_ledger": admission,
+        "live_request_count": 0,
+    }
+
+
+def _candidate_identity_snapshot(
+    campaign_dir: Path,
+    candidate_id: str,
+    candidate_source: Path | None,
+) -> dict[str, Any]:
+    """旧候选身份快照（来源优先级：build receipt → attempt candidate_identity → --candidate-source）。
+
+    git_commit 与 source_tree_sha256 至少一项必须取得，两项都取不到即失败关闭。
+    """
+
+    snapshot: dict[str, Any] = {
+        "git_commit": None,
+        "source_tree_sha256": None,
+        "image_id": None,
+        "build_receipt_sha256": None,
+        "snapshot_sources": [],
+    }
+    build_path = _candidate_build_receipt_path(campaign_dir, candidate_id)
+    if build_path.is_file() and not build_path.is_symlink():
+        receipt = _read_json(build_path, "Candidate 构建收据")
+        source = receipt.get("source")
+        image = receipt.get("image")
+        commit = source.get("git_commit") if isinstance(source, Mapping) else None
+        tree = source.get("tree_sha256") if isinstance(source, Mapping) else None
+        if isinstance(commit, str) and re.fullmatch(r"^[0-9a-f]{40}$", commit):
+            snapshot["git_commit"] = commit
+        if isinstance(tree, str) and SHA256_RE.fullmatch(tree):
+            snapshot["source_tree_sha256"] = tree
+        image_id = image.get("image_id") if isinstance(image, Mapping) else None
+        if isinstance(image_id, str) and image_id:
+            snapshot["image_id"] = image_id
+        snapshot["build_receipt_sha256"] = file_sha256(build_path)
+        snapshot["snapshot_sources"].append("build_receipt")
+    if snapshot["git_commit"] is None or snapshot["source_tree_sha256"] is None:
+        attempts_root = campaign_dir / "candidates" / candidate_id / "attempts"
+        latest_identity: Mapping[str, Any] | None = None
+        if attempts_root.is_dir() and not attempts_root.is_symlink():
+            for attempt_root in sorted(attempts_root.iterdir()):
+                attempt_path = attempt_root / "attempt.json"
+                if attempt_root.is_symlink() or not attempt_path.is_file() or attempt_path.is_symlink():
+                    continue
+                identity = _read_json(attempt_path, "候选 attempt 收据").get("identity")
+                if isinstance(identity, Mapping):
+                    latest_identity = identity
+        if latest_identity is not None:
+            commit = latest_identity.get("git_commit")
+            tree = latest_identity.get("source_tree_sha256")
+            image_id = latest_identity.get("image_id")
+            used = False
+            if snapshot["git_commit"] is None and isinstance(commit, str) and re.fullmatch(r"^[0-9a-f]{40}$", commit):
+                snapshot["git_commit"] = commit
+                used = True
+            if snapshot["source_tree_sha256"] is None and isinstance(tree, str) and SHA256_RE.fullmatch(tree):
+                snapshot["source_tree_sha256"] = tree
+                used = True
+            if snapshot["image_id"] is None and isinstance(image_id, str) and image_id:
+                snapshot["image_id"] = image_id
+                used = True
+            if used:
+                snapshot["snapshot_sources"].append("attempt_candidate_identity")
+    if snapshot["git_commit"] is None or snapshot["source_tree_sha256"] is None:
+        if candidate_source is not None:
+            root = Path(candidate_source)
+            if not root.is_absolute() or root.is_symlink() or not root.is_dir():
+                raise ConfigurationError("--candidate-source 必须是可信绝对目录。")
+            root = root.resolve(strict=True)
+            commit = _git_commit(root)
+            tree = _directory_tree_digest(root)
+            used = False
+            if snapshot["git_commit"] is None and isinstance(commit, str) and re.fullmatch(r"^[0-9a-f]{40}$", commit):
+                snapshot["git_commit"] = commit
+                used = True
+            if snapshot["source_tree_sha256"] is None:
+                snapshot["source_tree_sha256"] = tree
+                used = True
+            if used:
+                snapshot["snapshot_sources"].append("candidate_source")
+        elif snapshot["git_commit"] is None and snapshot["source_tree_sha256"] is None:
+            raise ConfigurationError(
+                "旧候选既无 build receipt 也无 attempt 身份投影，必须提供 --candidate-source 指向旧候选源码树。"
+            )
+    if snapshot["git_commit"] is None and snapshot["source_tree_sha256"] is None:
+        raise ConfigurationError("旧候选身份快照无法取得 git_commit 与 source_tree_sha256，拒绝作废。")
+    return snapshot
+
+
+def _candidate_failed_run_for_review(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    candidate_id: str,
+    review_event: Mapping[str, Any],
+) -> dict[str, Any]:
+    """由 candidate_review_required 事件定位引起它的那一次失败父 run（不依赖对账收据）。
+
+    遍历本 Campaign 候选级阶段的正式 COMMIT → ``parent_run_dir`` → 父 run 的动作失败事实，
+    用与监督器收账相同的失败摘要（Campaign／阶段／批次序号／失败动作／失败分类）比对事件
+    id 的摘要段，并要求内层清单绑定本候选／本 revision；必须恰好命中一个。
+    """
+
+    expected_prefix = codex_upgrade_supervisor.parse_candidate_review_event_id(review_event.get("event_id"))
+    if expected_prefix is None:
+        raise ConfigurationError("candidate_review_required 事件 id 形态非法，无法绑定失败父 run。")
+    review_revision = review_event.get("revision")
+    campaign_id = str(manifest.get("campaign_id", ""))
+    commits_root = campaign_dir / "control" / "vc" / "commits"
+    if commits_root.is_symlink():
+        raise ConfigurationError("COMMIT 目录不得是符号链接。")
+    matched: list[dict[str, Any]] = []
+    if commits_root.is_dir():
+        for path in sorted(commits_root.iterdir()):
+            match = _VC_SEQUENCE_FILE_RE.fullmatch(path.name)
+            if match is None or path.is_symlink() or not path.is_file():
+                raise ConfigurationError(f"COMMIT 目录含非法条目：{path.name}")
+            commit = _read_staging_commit(path)
+            if commit["campaign_id"] != campaign_id or str(commit["phase"]) not in CANDIDATE_VC_PHASES:
+                continue
+            run_dir = Path(str(commit.get("parent_run_dir", "")))
+            if not run_dir.is_absolute():
+                continue
+            try:
+                facts = codex_upgrade_supervisor.campaign_run_failure_facts(run_dir, campaign_dir=campaign_dir)
+            except codex_upgrade_supervisor.SupervisorError as error:
+                raise ConfigurationError(f"父 run {run_dir.name} 的失败事实不可信：{error}") from error
+            if facts is None:
+                continue
+            if (
+                facts["candidate_id"] != candidate_id
+                or facts["candidate_revision"] != review_revision
+                or facts["batch_sequence"] != commit["sequence"]
+                or facts["failure_digest"][: codex_upgrade_supervisor.FAILURE_DIGEST_PREFIX_LENGTH] != expected_prefix
+            ):
+                continue
+            matched.append(facts)
+    if len(matched) != 1:
+        raise ConfigurationError(
+            f"candidate_review_required（事件 {review_event.get('event_id')}）无法唯一定位候选 {candidate_id} 的失败父 run"
+            f"（命中 {len(matched)} 个）。"
+        )
+    return matched[0]
+
+
+def _candidate_accounting_checks(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    candidate_id: str,
+    *,
+    head: Mapping[str, Any],
+    ledger_dir: Path,
+) -> dict[str, Any]:
+    """作废前提：候选已有的请求全部入账；失败父 run 与未 seal attempt 均已对账。
+
+    attempt 对账与父 run 对账都完整重放收据 schema／身份／项目总账摘要绑定；引起
+    ``candidate_review_required`` 的失败按 reservation 分流：父 run 期间发布过 reservation 的
+    只认 ``reconcile-attempt``，否则只认 ``reconcile-supervisor-run``（分解稿 T2.6）。
+    """
+
+    operations = head.get("operations", {})
+    campaign_id = str(manifest.get("campaign_id", ""))
+    facts: dict[str, Any] = {"sealed": None, "attempts": [], "failed_runs": [], "zero_request": True}
+    result_path = campaign_dir / "candidates" / candidate_id / "result.json"
+    sealed_attempt: str | None = None
+    if result_path.is_file() and not result_path.is_symlink():
+        sealed = _read_json(result_path, "候选阶段结果")
+        attempt_binding = sealed.get("attempt")
+        if sealed.get("status") == "complete" and isinstance(attempt_binding, Mapping):
+            attempt_path = _campaign_file(campaign_dir, str(attempt_binding.get("path", "")))
+            sealed_attempt = attempt_path.parent.name
+            operation_id = f"account-sealed-candidate:{candidate_id}:{sealed_attempt}"
+            if operation_id not in operations:
+                raise ConfigurationError(
+                    f"候选 {candidate_id} 已 seal 但尚未入账（缺 {operation_id}）；先执行 account-sealed-candidate。"
+                )
+            facts["sealed"] = {"attempt_id": sealed_attempt, "operation_id": operation_id}
+            facts["zero_request"] = False
+    reconciled_attempts: dict[str, dict[str, Any]] = {}
+    # 改造 5 M2：恢复段（attempts/<id>/recovery/ar<k>）——已增量封存的段要求段级入账
+    # account-sealed-candidate:<cid>:<id>:ar<k>，未封存的段要求段级对账 reconcile-attempt:<id>:ar<k>。
+    sealed_segments: set[str] = set()
+    revisions_root = campaign_dir / "candidates" / candidate_id / "revisions"
+    if revisions_root.is_dir() and not revisions_root.is_symlink():
+        for baseline_dir in sorted(revisions_root.iterdir()):
+            baseline_result = baseline_dir / "result.json"
+            if not baseline_result.is_file() or baseline_result.is_symlink():
+                continue
+            baseline_sealed = _read_json(baseline_result, "候选基线阶段结果")
+            recovery_binding = baseline_sealed.get("recovery")
+            attempt_binding = baseline_sealed.get("attempt")
+            if baseline_sealed.get("status") != "complete" or not isinstance(recovery_binding, Mapping) or not isinstance(attempt_binding, Mapping):
+                continue
+            segment_attempt = _campaign_file(campaign_dir, str(attempt_binding.get("path", ""))).parent.name
+            segment_revision = str(recovery_binding.get("recovery_revision"))
+            operation_id = f"account-sealed-candidate:{candidate_id}:{segment_attempt}:{segment_revision}"
+            if operation_id not in operations:
+                raise ConfigurationError(
+                    f"候选 {candidate_id} 的恢复段 {segment_attempt}:{segment_revision} 已增量封存但尚未入账（缺 {operation_id}）；"
+                    "先执行 account-sealed-candidate --attempt-recovery。"
+                )
+            sealed_segments.add(f"{segment_attempt}:{segment_revision}")
+            facts["zero_request"] = False
+    for phase, current_candidate, attempt_root in _campaign_attempt_roots(campaign_dir):
+        if phase != "candidate" or current_candidate != candidate_id:
+            continue
+        attempt_id = attempt_root.name
+        recovery_root = attempt_root / ATTEMPT_RECOVERY_DIRNAME
+        if recovery_root.is_dir() and not recovery_root.is_symlink():
+            for segment_root in sorted(recovery_root.iterdir()):
+                if segment_root.is_symlink() or not segment_root.is_dir():
+                    continue
+                segment_key = f"{attempt_id}:{segment_root.name}"
+                if segment_key in sealed_segments:
+                    continue
+                facts["zero_request"] = False
+                try:
+                    reconciled_segment = codex_upgrade_supervisor.verify_attempt_reconciliation_binding(
+                        campaign_dir,
+                        campaign_id=campaign_id,
+                        candidate_id=candidate_id,
+                        attempt_root=segment_root,
+                        label="作废前对账核对",
+                    )
+                except codex_upgrade_supervisor.SupervisorError as error:
+                    raise ConfigurationError(str(error)) from error
+                if reconciled_segment["operation_id"] not in operations:
+                    raise ConfigurationError(
+                        f"候选 {candidate_id} 的恢复段 {segment_key} 未封存且尚未对账入账；先执行 reconcile-attempt --recovery-revision。"
+                    )
+                reconciled_attempts[segment_key] = reconciled_segment
+                facts["attempts"].append(reconciled_segment)
+        if attempt_id == sealed_attempt:
+            continue
+        facts["zero_request"] = False
+        try:
+            reconciled = codex_upgrade_supervisor.verify_attempt_reconciliation_binding(
+                campaign_dir,
+                campaign_id=campaign_id,
+                candidate_id=candidate_id,
+                attempt_root=attempt_root,
+                label="作废前对账核对",
+            )
+        except codex_upgrade_supervisor.SupervisorError as error:
+            raise ConfigurationError(str(error)) from error
+        if reconciled["operation_id"] not in operations:
+            raise ConfigurationError(
+                f"候选 {candidate_id} 的 attempt {attempt_id} 未 seal 且尚未对账入账；先执行 reconcile-attempt。"
+            )
+        reconciled_attempts[attempt_id] = reconciled
+        facts["attempts"].append(reconciled)
+    review = _ledger_last_event_of_type(ledger_dir, "candidate_review_required")
+    if review is not None and review[0].get("candidate_id") == candidate_id:
+        failed_run = _candidate_failed_run_for_review(campaign_dir, manifest, candidate_id, review[0])
+        reservations = codex_upgrade_supervisor.candidate_reservations_in_run_window(
+            campaign_dir,
+            candidate_id=candidate_id,
+            started_at_epoch=float(failed_run["started_at_epoch"]),
+        )
+        if reservations:
+            # 有 reservation：attempt 中断，只认 reconcile-attempt（上面的循环已完整重放）。
+            missing = [attempt_id for attempt_id, _root in reservations if attempt_id not in reconciled_attempts]
+            if missing:
+                raise ConfigurationError(
+                    f"候选 {candidate_id} 处于 candidate_review_required，失败父 run {failed_run['run_id']} 期间的 "
+                    f"attempt {missing} 尚未对账入账；先执行 reconcile-attempt。"
+                )
+            facts["failed_runs"] = [
+                {
+                    "run_id": failed_run["run_id"],
+                    "batch_sequence": failed_run["batch_sequence"],
+                    "reconciliation": "attempt",
+                    "attempts": [attempt_id for attempt_id, _root in reservations],
+                }
+            ]
+        else:
+            try:
+                reconciled_run = codex_upgrade_supervisor.verify_supervisor_run_reconciliation_binding(
+                    campaign_dir,
+                    campaign_id=campaign_id,
+                    run_id=failed_run["run_id"],
+                    phase=failed_run["phase"],
+                    batch_sequence=failed_run["batch_sequence"],
+                    batch_sha256=failed_run["batch_sha256"],
+                    label="作废前对账核对",
+                )
+            except codex_upgrade_supervisor.SupervisorError as error:
+                raise ConfigurationError(str(error)) from error
+            if reconciled_run["operation_id"] not in operations:
+                raise ConfigurationError(
+                    f"候选 {candidate_id} 处于 candidate_review_required，但失败父 run {failed_run['run_id']} 尚未对账入账；"
+                    "先执行 reconcile-supervisor-run。"
+                )
+            facts["failed_runs"] = [
+                {
+                    "run_id": failed_run["run_id"],
+                    "batch_sequence": failed_run["batch_sequence"],
+                    "reconciliation": "supervisor-run",
+                    "operation_id": reconciled_run["operation_id"],
+                }
+            ]
+        facts["zero_request"] = False
+    return facts
+
+
+def _invalidation_phase(summary: Mapping[str, Any], ledger_dir: Path) -> str:
+    """根因维度 phase：当前阶段，或最后一条已关闭候选级阶段，或 VC-4。"""
+
+    active = summary.get("active_phase")
+    if isinstance(active, str) and active in CANDIDATE_VC_PHASES:
+        return active
+    for event_type in ("stage_abandoned", "stage_completed"):
+        last = _ledger_last_event_of_type(ledger_dir, event_type)
+        if last is not None and str(last[0].get("phase")) in CANDIDATE_VC_PHASES:
+            return str(last[0]["phase"])
+    return "VC-4"
+
+
+def invalidate_candidate(arguments: argparse.Namespace) -> dict[str, Any]:
+    """invalidate-candidate preview／apply：本批唯一的候选作废入口（零请求，两步式）。
+
+    preview：admission → 候选属于当前 revision 且未 accepted → 入账核对 → 身份快照 →
+    诊断草案（绑定总账 head）→ review_sha256；不落盘。
+    apply：重跑同集合 admission、复验 head 与 --candidate-source → invalidation.json（write-once）
+    → 若候选级阶段 active 则 stage_abandoned → outbox reconciliation_committed（请求 0，根因
+    candidate.source-change-required）→ 推总账 → 二次判定 → 命中即现有停线合同（不写
+    candidate_invalidated）；通过 → candidate_invalidated → revision_required；幂等。
+    """
+
+    from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+    action = str(getattr(arguments, "invalidate_action", ""))
+    if action not in {"preview", "apply"}:
+        raise ConfigurationError("invalidate-candidate 只接受 preview 或 apply。")
+    campaign_dir = Path(arguments.campaign_dir)
+    manifest = _require_formal_campaign(campaign_dir)
+    if not _requires_complete_vc_artifacts(manifest):
+        raise ConfigurationError("invalidate-candidate 只用于 0.154.0 起的完整 VC 链 Campaign。")
+    candidate_id = str(arguments.candidate_id)
+    if not SAFE_ID_RE.fullmatch(candidate_id):
+        raise ConfigurationError("--candidate-id 格式非法。")
+    reviewer = str(getattr(arguments, "reviewer", "") or "").strip()
+    if not reviewer:
+        raise ConfigurationError("--reviewer 不能为空。")
+    evidence_paths = [Path(item) for item in (getattr(arguments, "evidence", None) or [])]
+    candidate_source = getattr(arguments, "candidate_source", None)
+    approve_sha256 = getattr(arguments, "approve_sha256", None)
+    if action == "apply" and not (isinstance(approve_sha256, str) and SHA256_RE.fullmatch(approve_sha256)):
+        raise ConfigurationError("apply 必须给出 preview 输出的 --approve-sha256。")
+
+    admission = _assert_revision_admission(campaign_dir, manifest, command=INVALIDATE_CANDIDATE_COMMAND)
+    ledger_dir = _campaign_timing_ledger_dir(campaign_dir, manifest)
+    campaign_root = campaign_dir.resolve(strict=True)
+    with _campaign_lock(campaign_dir):
+        summary = codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)
+        status = str(summary.get("status"))
+        if status not in {"active", "candidate_review_required", "revision_required"}:
+            hint = {
+                "recovery_required": "先执行 reconcile-supervisor-run／reconcile-attempt 对账",
+                "stop_required": "账本已要求停线，按停线合同收口",
+                "stopped": "Campaign 已停线，只读",
+                "complete": "升级已完成，只读",
+            }.get(status, "")
+            raise ConfigurationError(f"invalidate-candidate 拒绝：账本状态 {status}；{hint}。")
+        revision, record = _current_candidate_revision_record(campaign_dir, manifest)
+        if revision is None:
+            raise ConfigurationError("没有 active 候选 revision，无候选可作废。")
+        current_candidate = record["candidate_id"] if record is not None else _implicit_r1_candidate_id(campaign_dir, manifest)
+        if current_candidate != candidate_id:
+            raise ConfigurationError(
+                f"候选 {candidate_id} 不是当前 revision r{revision} 的候选（当前 {current_candidate}）。"
+            )
+        acceptance_path = campaign_dir / "acceptance" / candidate_id / "result.json"
+        if acceptance_path.is_file() and not acceptance_path.is_symlink():
+            accepted = _read_json(acceptance_path, "验收结果")
+            if accepted.get("accepted") is True or accepted.get("status") == "accepted":
+                raise ConfigurationError(f"候选 {candidate_id} 已 accepted，不得作废。")
+        project_root = reconciler._project_root(campaign_root)
+        plan, head = reconciler._project_facts(project_root)
+        accounting = _candidate_accounting_checks(
+            campaign_dir, manifest, candidate_id, head=head, ledger_dir=ledger_dir
+        )
+        snapshot = _candidate_identity_snapshot(campaign_dir, candidate_id, candidate_source)
+        evidence_refs: list[dict[str, Any]] = []
+        for path in evidence_paths:
+            if not path.is_absolute() or path.is_symlink() or not path.is_file():
+                raise ConfigurationError(f"--evidence 必须是可信绝对普通文件：{path}")
+            resolved = path.resolve(strict=True)
+            relative = (
+                resolved.relative_to(campaign_root).as_posix()
+                if resolved.is_relative_to(campaign_root)
+                else str(resolved)
+            )
+            evidence_refs.append({"path": relative, "sha256": file_sha256(resolved)})
+        evidence_refs.sort(key=lambda item: item["path"])
+        phase = _invalidation_phase(summary, ledger_dir)
+        try:
+            root_cause_id = codex_upgrade_root_cause.structured_root_cause(
+                component="candidate",
+                stable_error_code="candidate.source-change-required",
+                failed_step=f"candidate-source-change-{phase.lower()}",
+                stable_dimensions={"phase": phase},
+            )
+        except codex_upgrade_root_cause.RootCauseError as error:
+            raise ConfigurationError(f"根因编码失败：{error}") from error
+        invalidation_path = campaign_dir / "candidates" / candidate_id / CANDIDATE_INVALIDATION_FILENAME
+        existing_invalidation: dict[str, Any] | None = None
+        if invalidation_path.exists() or invalidation_path.is_symlink():
+            if invalidation_path.is_symlink() or not invalidation_path.is_file():
+                raise ConfigurationError("invalidation.json 路径不可信。")
+            try:
+                existing_invalidation = codex_upgrade_vc_artifacts.validate_candidate_invalidation(
+                    _read_json(invalidation_path, "候选作废记录")
+                )
+            except codex_upgrade_vc_artifacts.VCArtifactError as error:
+                raise ConfigurationError(str(error)) from error
+        if existing_invalidation is not None:
+            # 幂等重放以已落盘的诊断为准（head 绑定的是当时的总账）。
+            diagnosis = dict(existing_invalidation["diagnosis"])
+        else:
+            try:
+                diagnosis = codex_upgrade_vc_artifacts.build_candidate_invalidation_diagnosis(
+                    campaign_id=str(manifest["campaign_id"]),
+                    campaign_manifest_sha256=file_sha256(campaign_dir / "campaign.json"),
+                    candidate_id=candidate_id,
+                    revision=revision,
+                    reviewer=reviewer,
+                    reviewed_at_utc=_utc_now(),
+                    evidence_refs=evidence_refs,
+                    project_ledger_head_sha256=str(head["head_sha256"]),
+                    project_ledger_head_sequence=int(head["sequence"]),
+                    root_cause_id=root_cause_id,
+                    identity_snapshot=snapshot,
+                )
+            except codex_upgrade_vc_artifacts.VCArtifactError as error:
+                raise ConfigurationError(f"诊断草案无法生成：{error}") from error
+        review_sha256 = str(diagnosis["review_sha256"])
+        preview_payload = {
+            "status": "preview",
+            "campaign_id": manifest["campaign_id"],
+            "candidate_id": candidate_id,
+            "revision": revision,
+            "ledger_status": status,
+            "accounting": accounting,
+            "diagnosis": diagnosis,
+            "review_sha256": review_sha256,
+            "project_ledger": admission,
+            "live_request_count": 0,
+        }
+        if action == "preview":
+            return preview_payload
+        if approve_sha256 != review_sha256:
+            raise ConfigurationError(
+                "apply 的批准摘要与当前草案不一致（总账 head、身份快照或证据已变化），请重新 preview。"
+            )
+        if existing_invalidation is None:
+            # apply 首次落盘前：head 与 --candidate-source 已在本次重算的草案里复验（不一致
+            # 即 review_sha256 不同）；这里写 invalidation.json（write-once）。
+            try:
+                invalidation = codex_upgrade_vc_artifacts.build_candidate_invalidation(
+                    campaign_id=str(manifest["campaign_id"]),
+                    candidate_id=candidate_id,
+                    revision=revision,
+                    diagnosis=diagnosis,
+                    recorded_at_utc=_utc_now(),
+                )
+            except codex_upgrade_vc_artifacts.VCArtifactError as error:
+                raise ConfigurationError(str(error)) from error
+            ensure_private_directory(invalidation_path.parent, campaign_dir)
+            _secure_write_json_once(invalidation_path, invalidation)
+        else:
+            invalidation = existing_invalidation
+        # 若候选级阶段 active，先关闭阶段（根因 = 作废根因）。
+        ledger_events: list[dict[str, Any]] = []
+        current = codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)
+        active = current.get("active_phase")
+        if isinstance(active, str) and active in CANDIDATE_VC_PHASES:
+            try:
+                codex_upgrade_timing_ledger.append_event(
+                    ledger_dir,
+                    event_id=f"candidate-invalidation-{candidate_id}-r{revision}-stage-abandoned",
+                    phase=active,
+                    event_type="stage_abandoned",
+                    root_cause_id=root_cause_id,
+                    next_action="invalidate-candidate apply：推送根因后二次判定",
+                )
+            except codex_upgrade_timing_ledger.TimingLedgerError as error:
+                raise ConfigurationError(f"UpgradeTimingLedger 拒绝 stage_abandoned：{error}") from error
+            ledger_events.append({"event_type": "stage_abandoned", "phase": active})
+        # outbox 根因事件（请求 0）→ 推总账 → 重放 → 二次判定。
+        receipt_binding = reconciler._binding(campaign_root, invalidation_path, "reconciliation")
+        cause = codex_upgrade_root_cause.describe_root_cause(
+            component="candidate",
+            stable_error_code="candidate.source-change-required",
+            failed_step=f"candidate-source-change-{phase.lower()}",
+            stable_dimensions={"phase": phase},
+        )
+        operation_id = f"invalidate-candidate:{candidate_id}:r{revision}"
+        try:
+            batch = reconciler._commit_batch(
+                campaign_root,
+                operation_id=operation_id,
+                event_type="reconciliation_committed",
+                payload={
+                    "campaign_id": str(manifest["campaign_id"]),
+                    "subject_kind": "candidate_invalidation",
+                    "subject_id": f"{candidate_id}:r{revision}",
+                    "phase": phase,
+                    "request": dict(reconciler.ZERO_REQUEST_PART),
+                    "root_cause": {
+                        "root_cause_id": cause["root_cause_id"],
+                        "stable_error_code": cause["stable_error_code"],
+                        "failed_step": cause["failed_step"],
+                        "stable_dimensions": cause["stable_dimensions"],
+                        "component": cause["component"],
+                    },
+                    "reconciliation_receipt_sha256": receipt_binding["sha256"],
+                    "attempt_failed_event_sha256": None,
+                },
+                source={"kind": "candidate_invalidation", "sha256": receipt_binding["sha256"]},
+                receipt_bindings=[receipt_binding],
+            )
+            observed = _utc_now()
+            pushed, head_after = reconciler._push_and_replay(project_root, campaign_root, now=observed)
+            identity = reconciler._identity_facts(campaign_root, manifest, reconciler._current_identity())
+            ledger_facts = reconciler._ledger_facts(ledger_dir, now=observed)
+            contamination = _campaign_contamination_records(campaign_dir, _manifest=manifest)
+            decision = reconciler._decide(
+                head=head_after,
+                plan=plan,
+                ledger=ledger_facts,
+                identity=identity,
+                environment_status="contaminated" if contamination else "restored",
+                campaign_deadline_at_utc=_campaign_plan_deadline(campaign_dir),
+                root_cause_id=cause["root_cause_id"],
+                request_status="resolved",
+                now=observed,
+            )
+        except reconciler.ReconcilerError as error:
+            raise ConfigurationError(f"候选作废入账失败：{error}") from error
+        result: dict[str, Any] = {
+            "status": "applied",
+            "idempotent": False,
+            "campaign_id": manifest["campaign_id"],
+            "candidate_id": candidate_id,
+            "revision": revision,
+            "invalidation_receipt": receipt_binding,
+            "root_cause_id": cause["root_cause_id"],
+            "batch": batch,
+            "project_push": pushed,
+            "decision": decision,
+            "ledger_events": ledger_events,
+            "live_request_count": 0,
+        }
+        if decision["decision"] != reconciler.DECISION_RECOVERABLE:
+            try:
+                stop = reconciler._permanent_stop(
+                    campaign_root,
+                    manifest,
+                    ledger_dir,
+                    subject_id=f"candidate-invalidation-{candidate_id}-r{revision}",
+                    root_cause_id=cause["root_cause_id"],
+                    terminal_reason=str(decision["terminal_reason"]),
+                    receipt_bindings=[receipt_binding],
+                    ledger_receipts=[],
+                    live_request_count=0,
+                    reconciliation_receipt_sha256=receipt_binding["sha256"],
+                    ledger_facts=ledger_facts,
+                )
+                pushed_terminal, head_terminal = reconciler._push_and_replay(project_root, campaign_root, now=observed)
+            except reconciler.ReconcilerError as error:
+                raise ConfigurationError(f"候选作废后永久停线收口失败：{error}") from error
+            result["status"] = "permanent_stop"
+            result["permanent_stop"] = {**stop, "project_push": pushed_terminal, "head_sha256": head_terminal.get("head_sha256")}
+            result["next_command"] = stop["next_action"]
+            return result
+        # 通过：candidate_invalidated（绑定 invalidation.json 与 outbox batch COMMIT 的账本副本）→ revision_required。
+        last_invalidated = _ledger_last_event_of_type(ledger_dir, "candidate_invalidated")
+        if (
+            last_invalidated is not None
+            and last_invalidated[0].get("candidate_id") == candidate_id
+            and int(last_invalidated[0].get("revision") or 0) == revision
+        ):
+            result["idempotent"] = True
+            result["ledger_events"].append({"event_type": "candidate_invalidated", "appended": False})
+            result["next_command"] = f"revision-open --candidate-id <new> --supersedes {candidate_id}"
+            return result
+        receipts = _publish_ledger_receipt_copies(
+            ledger_dir,
+            f"candidate-{candidate_id}-r{revision}",
+            {
+                "invalidation": invalidation_path,
+                "reconciliation": Path(str(batch["batch_dir"])) / "COMMIT",
+            },
+        )
+        try:
+            appended = codex_upgrade_timing_ledger.append_event(
+                ledger_dir,
+                event_id=f"candidate-invalidated-{candidate_id}-r{revision}",
+                phase=phase,
+                event_type="candidate_invalidated",
+                revision=revision,
+                candidate_id=candidate_id,
+                root_cause_id=cause["root_cause_id"],
+                receipts=receipts,
+                next_action=f"revision-open --candidate-id <new> --supersedes {candidate_id}",
+            )
+        except codex_upgrade_timing_ledger.TimingLedgerError as error:
+            raise ConfigurationError(f"UpgradeTimingLedger 拒绝 candidate_invalidated：{error}") from error
+        result["ledger_events"].append(
+            {
+                "event_type": "candidate_invalidated",
+                "appended": True,
+                "head_sequence": appended["head_sequence"],
+                "head_sha256": appended["head_sha256"],
+                "ledger_status": appended["status"],
+            }
+        )
+        result["next_command"] = f"revision-open --candidate-id <new> --supersedes {candidate_id}"
+        return result
+
+
+# ---------------------------------------------------------------------------
+# 改造 5：evaluation-recover preview／apply／abandon——评估失败的分类、评估基线状态机
+# ---------------------------------------------------------------------------
+
+EVALUATION_RECOVER_COMMAND = "evaluation-recover"
+EVALUATION_BASELINE_DIAGNOSIS_FILENAME = "diagnosis.json"
+EVALUATION_ACTION_KINDS_BY_SOURCE = {
+    "assertion": "assertion-failed",
+    "compare": "offline-compare-failed",
+    "accept": "offline-accept-failed",
+}
+# 各失败来源"缺陷所在项"：evaluator-defect 准入要求变化项覆盖之。
+EVALUATION_DEFECT_ITEMS = {
+    "assertion-failed": ("checker_sha256", "builder_sha256"),
+    "offline-compare-failed": ("compare_reader_sha256",),
+    "offline-accept-failed": ("accept_reader_sha256",),
+}
+
+
+def _evaluation_baseline_states(campaign_dir: Path, candidate_id: str) -> dict[int, dict[str, bool]]:
+    """扫描 candidates/<cid>/revisions/b*/：各编号的 PREPARED／AUTHORIZATION／COMMIT／ABANDON 存在性。"""
+
+    revisions_root = campaign_dir / "candidates" / candidate_id / "revisions"
+    if revisions_root.is_symlink():
+        raise ConfigurationError("候选 revisions 目录不得是符号链接。")
+    states: dict[int, dict[str, bool]] = {}
+    if not revisions_root.is_dir():
+        return states
+    for child in sorted(revisions_root.iterdir()):
+        match = _EVALUATION_BASELINE_DIR_RE.fullmatch(child.name)
+        if match is None:
+            # r<N>（候选 revision）等其他目录不属于评估基线。
+            continue
+        if child.is_symlink() or not child.is_dir():
+            raise ConfigurationError(f"评估基线目录不可信：{child}")
+        states[int(match.group(1))] = {
+            name: (child / filename).is_file()
+            for name, filename in (
+                ("prepared", EVALUATION_BASELINE_PREPARED_FILENAME),
+                ("authorization", EVALUATION_BASELINE_AUTHORIZATION_FILENAME),
+                ("commit", EVALUATION_BASELINE_COMMIT_FILENAME),
+                ("abandon", EVALUATION_BASELINE_ABANDON_FILENAME),
+            )
+        }
+    return states
+
+
+def _locate_evaluation_failed_run(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    candidate_id: str,
+    revision: int,
+    baseline: int,
+) -> dict[str, Any]:
+    """定位当前基线的评估失败父 run：候选级 VC-5 COMMIT → parent_run_dir → action-failed 事实。
+
+    只接受失败动作属评估动作（builder／compare／accept）且清单冻结基线等于当前基线的 run；
+    命中多个取序号最大者（同基线重派重现失败）。返回运行事实、内层清单与 stop-receipt。
+    """
+
+    campaign_id = str(manifest.get("campaign_id", ""))
+    commits_root = campaign_dir / "control" / "vc" / "commits"
+    if commits_root.is_symlink():
+        raise ConfigurationError("COMMIT 目录不得是符号链接。")
+    matched: list[dict[str, Any]] = []
+    if commits_root.is_dir():
+        for path in sorted(commits_root.iterdir()):
+            match = _VC_SEQUENCE_FILE_RE.fullmatch(path.name)
+            if match is None or path.is_symlink() or not path.is_file():
+                raise ConfigurationError(f"COMMIT 目录含非法条目：{path.name}")
+            commit = _read_staging_commit(path)
+            if commit["campaign_id"] != campaign_id or str(commit["phase"]) != "VC-5":
+                continue
+            run_dir = Path(str(commit.get("parent_run_dir", "")))
+            if not run_dir.is_absolute():
+                continue
+            try:
+                facts = codex_upgrade_supervisor.campaign_run_failure_facts(run_dir, campaign_dir=campaign_dir)
+            except codex_upgrade_supervisor.SupervisorError as error:
+                raise ConfigurationError(f"父 run {run_dir.name} 的失败事实不可信：{error}") from error
+            if facts is None or facts["candidate_id"] != candidate_id or facts["candidate_revision"] != revision:
+                continue
+            record = _read_json(run_dir / "campaign-run-manifest.json", "campaign-run 清单")
+            inner = record.get("manifest")
+            if not isinstance(inner, Mapping):
+                continue
+            if int(inner.get("evaluation_baseline") or 0) != baseline:
+                continue
+            action = next(
+                (item for item in inner.get("actions", []) if isinstance(item, Mapping) and item.get("action_id") == facts["action_id"]),
+                None,
+            )
+            if action is None:
+                continue
+            kind = _evaluation_action_kind(list(action["command"]))
+            if kind is None:
+                continue
+            if facts["failure_class"] in codex_upgrade_supervisor.PERMANENT_ACTION_FAILURE_CLASSES:
+                # identity-drift 等永久失败类不是 evaluator 缺陷（动作根本没有执行或环境不可信），
+                # 只能走既有停线／人工审计，不进入评估基线状态机。
+                raise ConfigurationError(
+                    f"父 run {run_dir.name} 的失败分类 {facts['failure_class']} 属永久失败类，evaluation-recover 不受理。"
+                )
+            matched.append({**facts, "inner_manifest": dict(inner), "action": dict(action), "action_kind": kind})
+    if not matched:
+        raise ConfigurationError(
+            f"候选 {candidate_id} 在评估基线 b{baseline} 没有评估动作失败的父 run；evaluation-recover 只处理封存后的离线评估失败。"
+        )
+    return max(matched, key=lambda item: int(item["batch_sequence"]))
+
+
+def _derive_b0_evaluation_run(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    candidate_id: str,
+    revision: int,
+    classification: Mapping[str, Any],
+    rules: Sequence[str],
+) -> dict[str, Any]:
+    """历史 b0（旧 builder 首 fail 中断、无 checkpoint）：从单侧文档只读派生 evaluation-run.json（derived=true）。"""
+
+    assertions_root = _assertions_root_for_baseline(campaign_dir, candidate_id, 0)
+    validation_modes = _acceptance_validation_modes(campaign_dir, dict(classification), tuple(rules))
+    rows: list[dict[str, Any]] = []
+    for rule in sorted(rules):
+        mode = validation_modes[rule]
+        statuses: list[str] = []
+        for side in ("candidate",) + (("official",) if mode == MODE_DUAL_WIRE else ()):
+            document_path = assertions_root / "machine" / side / f"{rule}.json"
+            if document_path.is_file() and not document_path.is_symlink():
+                document = _read_json(document_path, f"{rule} {side} 单规则文档")
+                statuses.append("pass" if document.get("status") == "pass" else "fail")
+            else:
+                statuses.append("pending")
+        status = "fail" if "fail" in statuses else "pending" if "pending" in statuses else "pass"
+        rows.append(
+            {
+                "rule": rule,
+                "validation_mode": mode,
+                "status": status,
+                "candidate_checkpoint": None,
+                "official_checkpoint": None,
+                "dependency_projection_sha256": None,
+                "reused_from": None,
+            }
+        )
+    try:
+        evaluator = codex_upgrade_tool_identity_policy.evaluator_dependency_digests()
+    except codex_upgrade_tool_identity_policy.ToolIdentityPolicyError as error:
+        raise ConfigurationError(f"evaluator 依赖摘要无法计算：{error}") from error
+    payload = {
+        "schema_version": codex_upgrade_vc_artifacts.EVALUATION_RUN_SCHEMA,
+        "campaign_id": str(manifest["campaign_id"]),
+        "candidate_id": candidate_id,
+        "candidate_revision": revision,
+        "evaluation_baseline": 0,
+        "derived": True,
+        "evaluator": evaluator,
+        "rules": rows,
+        "checkpoint_head_sha256": None,
+        "recorded_at_utc": _utc_now(),
+    }
+    payload["run_sha256"] = codex_upgrade_vc_artifacts.digest(payload)
+    try:
+        return codex_upgrade_vc_artifacts.validate_evaluation_run(payload)
+    except codex_upgrade_vc_artifacts.VCArtifactError as error:
+        raise ConfigurationError(f"派生 evaluation-run.json 非法：{error}") from error
+
+
+def _evaluation_failure_scope(
+    campaign_dir: Path,
+    candidate: Mapping[str, Any],
+    attempt: Mapping[str, Any],
+    evaluation_run: Mapping[str, Any],
+    assertions_root: Path,
+) -> tuple[dict[str, Any], str]:
+    """failure-scope 定位链：失败规则 → 失败 check → evidence_paths → provenance → source_root → 唯一 Job。
+
+    返回 ``(failure_scope, failed_step)``；每步失败关闭，不得退化为全量。J* 取定位到的 Job
+    （候选 Job 间无声明依赖时下游闭集等于本身）；R* 为引用了 J* 任一 artifact 的规则。
+    """
+
+    context = candidate.get("assertion_context")
+    if not isinstance(context, Mapping):
+        raise ConfigurationError("候选阶段结果缺少 assertion_context，无法定位失败证据。")
+    bundle_dir = Path(str(context.get("evidence_root", "")))
+    provenance_path = bundle_dir / "provenance.json"
+    if not bundle_dir.is_absolute() or provenance_path.is_symlink() or not provenance_path.is_file():
+        raise ConfigurationError("候选 assertion bundle 缺少 provenance 收据，无法定位失败证据。")
+    provenance = _read_json(provenance_path, "assertion bundle provenance")
+    by_target: dict[str, str] = {}
+    for entry in provenance.get("entries", []):
+        if not isinstance(entry, Mapping):
+            raise ConfigurationError("provenance 条目非法。")
+        by_target[str(entry.get("target_path"))] = str(entry.get("source_root"))
+    # 派生观测（derived/…，由 relay 流等原始证据按派生收据生成）沿派生收据的 source 回到原始条目，
+    # 再由原始条目的 source_root 定位 Job；派生收据缺失或 source 未登记即失败关闭。
+    derived_receipt_path = bundle_dir / "derived" / "derived-provenance.json"
+    if derived_receipt_path.exists() or derived_receipt_path.is_symlink():
+        if derived_receipt_path.is_symlink() or not derived_receipt_path.is_file():
+            raise ConfigurationError("assertion bundle 的派生收据不可信。")
+        derived_receipt = _read_json(derived_receipt_path, "assertion bundle 派生收据")
+        for entry in derived_receipt.get("entries", []):
+            if not isinstance(entry, Mapping):
+                raise ConfigurationError("派生收据条目非法。")
+            source = str(entry.get("source"))
+            target = str(entry.get("target"))
+            if source not in by_target:
+                raise ConfigurationError(f"派生观测 {target} 的来源 {source} 没有 provenance 条目。")
+            if target in by_target and by_target[target] != by_target[source]:
+                raise ConfigurationError(f"派生观测 {target} 同时被原始条目登记且来源根不一致。")
+            by_target[target] = by_target[source]
+    roots_by_name: dict[str, str] = {}
+    for result in attempt.get("results", []):
+        if not isinstance(result, Mapping):
+            continue
+        for root in result.get("evidence_roots", []) or []:
+            name = Path(str(root)).name
+            if name in roots_by_name and roots_by_name[name] != result.get("id"):
+                raise ConfigurationError(f"证据根名称 {name} 被多个 Job 声明，定位链不唯一。")
+            roots_by_name[name] = str(result.get("id"))
+    manifest_path = Path(str(context.get("capture_manifest_path", "")))
+    capture_manifest = _read_json(manifest_path, "候选 capture manifest") if manifest_path.is_file() else {}
+    artifact_jobs: dict[str, str] = {}
+    for artifact in capture_manifest.get("artifacts", []) or []:
+        if isinstance(artifact, Mapping):
+            source_root = by_target.get(str(artifact.get("path")))
+            if source_root is not None and source_root in roots_by_name:
+                artifact_jobs[str(artifact.get("path"))] = roots_by_name[source_root]
+    failed_rules = sorted(row["rule"] for row in evaluation_run["rules"] if row["status"] == "fail")
+    if not failed_rules:
+        raise ConfigurationError("evaluation-run.json 没有 status=fail 的规则。")
+    failed_checks: list[dict[str, Any]] = []
+    jobs: set[str] = set()
+    official_refs: set[str] = set()
+    for rule in failed_rules:
+        document_path = assertions_root / "machine" / "candidate" / f"{rule}.json"
+        if not document_path.is_file():
+            # 候选侧文档缺失（官方侧失败）：只列官方引用，不能定位候选 Job。
+            official_document = assertions_root / "machine" / "official" / f"{rule}.json"
+            if official_document.is_file():
+                for check in _read_json(official_document, f"{rule} 官方文档").get("checks", []):
+                    if isinstance(check, Mapping) and check.get("passed") is False:
+                        official_refs.update(str(path) for path in check.get("evidence_paths", []))
+            continue
+        document = _read_json(document_path, f"{rule} 候选文档")
+        for check in document.get("checks", []):
+            if not isinstance(check, Mapping) or check.get("passed") is not False:
+                continue
+            paths = [str(path) for path in check.get("evidence_paths", [])]
+            check_jobs: set[str] = set()
+            for path in paths:
+                source_root = by_target.get(path)
+                if source_root is None:
+                    raise ConfigurationError(f"失败 check {rule}/{check.get('id')} 引用的证据 {path} 没有 provenance 条目。")
+                job_id = roots_by_name.get(source_root)
+                if job_id is None:
+                    raise ConfigurationError(f"失败 check {rule}/{check.get('id')} 的证据根 {source_root} 无法映射到唯一 Job。")
+                check_jobs.add(job_id)
+            failed_checks.append(
+                {"rule": rule, "check_id": str(check.get("id")), "evidence_paths": sorted(paths), "jobs": sorted(check_jobs)}
+            )
+            jobs.update(check_jobs)
+    affected_rules: set[str] = set(failed_rules)
+    if jobs:
+        for rule in (row["rule"] for row in evaluation_run["rules"]):
+            document_path = assertions_root / "machine" / "candidate" / f"{rule}.json"
+            if not document_path.is_file():
+                continue
+            document = _read_json(document_path, f"{rule} 候选文档")
+            for check in document.get("checks", []):
+                if isinstance(check, Mapping) and any(
+                    artifact_jobs.get(str(path)) in jobs for path in check.get("evidence_paths", [])
+                ):
+                    affected_rules.add(rule)
+    scope = {
+        "failed_rules": failed_rules,
+        "failed_checks": failed_checks,
+        "jobs": sorted(jobs),
+        "rules": sorted(affected_rules),
+        "official_refs": sorted(official_refs),
+    }
+    return scope, failed_rules[0]
+
+
+def _evaluation_failure_diagnosis_facts(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    candidate_id: str,
+    revision: int,
+    baseline: int,
+    *,
+    candidate: Mapping[str, Any],
+    attempt: Mapping[str, Any],
+    classification: Mapping[str, Any],
+    rules: Sequence[str],
+) -> dict[str, Any]:
+    """从失败父 run 推出诊断稳定事实：失败来源（tagged union）、复用授权、绑定、failure-scope。"""
+
+    failed = _locate_evaluation_failed_run(campaign_dir, manifest, candidate_id, revision, baseline)
+    run_dir = Path(str(failed["run_dir"]))
+    failure_source = EVALUATION_ACTION_KINDS_BY_SOURCE[str(failed["action_kind"])]
+    try:
+        stop = codex_upgrade_supervisor.read_stop_receipt(run_dir)
+    except codex_upgrade_supervisor.SupervisorError as error:
+        raise ConfigurationError(f"失败父 run 的 stop-receipt 无法校验：{error}") from error
+    diagnostic_path = run_dir / "action-diagnostics" / f"action-{failed['action_id']}-failure.json"
+    if not diagnostic_path.is_file():
+        raise ConfigurationError("失败父 run 缺少动作诊断。")
+    outputs_sha256 = stop.get("action_outputs_sha256")
+    action_outputs: dict[str, Any] | None = None
+    assertions_root = _assertions_root_for_baseline(campaign_dir, candidate_id, baseline)
+    index_path = assertions_root / EVALUATION_RUN_FILENAME
+    if outputs_sha256 is not None:
+        try:
+            binding = codex_upgrade_supervisor.read_action_output_binding(run_dir, str(failed["action_id"]))
+        except codex_upgrade_supervisor.SupervisorError as error:
+            raise ConfigurationError(f"失败父 run 的动作输出绑定无法读取：{error}") from error
+        if binding["binding_sha256"] != outputs_sha256:
+            raise ConfigurationError("stop-receipt 的 action_outputs_sha256 与动作输出绑定文件不一致。")
+        index_relative = index_path.relative_to(campaign_dir).as_posix()
+        checkpoints_relative = (assertions_root / EVALUATION_CHECKPOINTS_DIRNAME).relative_to(campaign_dir).as_posix()
+        items = {item["path"]: item for item in binding["bindings"]}
+        run_item = items.get(index_relative)
+        head_item = items.get(checkpoints_relative)
+        action_outputs = {
+            "path": str(run_dir / "action-outputs" / f"{failed['action_id']}.json"),
+            "sha256": file_sha256(run_dir / "action-outputs" / f"{failed['action_id']}.json"),
+            "evaluation_run": (
+                {"path": index_relative, "sha256": str(run_item["sha256"])}
+                if run_item is not None and run_item["exists"] and run_item["sha256"] is not None
+                else None
+            ),
+            "checkpoint_head_sha256": (
+                str(head_item["sha256"]) if head_item is not None and head_item["sha256"] is not None else None
+            ),
+        }
+    if failure_source == "offline-compare-failed":
+        reuse_authority = "none"
+    elif action_outputs is not None and action_outputs["evaluation_run"] is not None:
+        reuse_authority = "anchored"
+    else:
+        reuse_authority = "none"
+    evaluation_run_binding: dict[str, Any] | None = None
+    evaluation_run: dict[str, Any] | None = None
+    failed_step: str
+    scope: dict[str, Any] = {"failed_rules": [], "failed_checks": [], "jobs": [], "rules": [], "official_refs": []}
+    admissible = ["approval-inputs", "candidate-source", "evaluator-defect"]
+    if failure_source == "assertion-failed":
+        if index_path.is_file() and not index_path.is_symlink():
+            try:
+                evaluation_run = codex_upgrade_vc_artifacts.validate_evaluation_run(_read_json(index_path, "evaluation-run.json"))
+            except codex_upgrade_vc_artifacts.VCArtifactError as error:
+                raise ConfigurationError(f"evaluation-run.json 无法校验：{error}") from error
+        elif baseline == 0:
+            evaluation_run = _derive_b0_evaluation_run(campaign_dir, manifest, candidate_id, revision, classification, rules)
+            ensure_private_directory(assertions_root, campaign_dir)
+            _secure_write_json_once(index_path, evaluation_run)
+            reuse_authority = "none"
+        else:
+            raise ConfigurationError(
+                f"评估基线 b{baseline} 的断言批次未落 evaluation-run.json（builder 未到批次结束），"
+                "请先同基线逐字重派该批次。"
+            )
+        if action_outputs is not None and action_outputs["evaluation_run"] is not None and (
+            action_outputs["evaluation_run"]["sha256"] != file_sha256(index_path)
+        ):
+            raise ConfigurationError("动作输出绑定记录的 evaluation-run 摘要与当前文件不一致。")
+        if evaluation_run["derived"]:
+            reuse_authority = "none"
+        evaluation_run_binding = {
+            "path": index_path.relative_to(campaign_dir).as_posix(),
+            "sha256": file_sha256(index_path),
+            "derived": bool(evaluation_run["derived"]),
+        }
+        scope, failed_step = _evaluation_failure_scope(campaign_dir, candidate, attempt, evaluation_run, assertions_root)
+        admissible.append("transient-environment")
+    elif failure_source == "offline-compare-failed":
+        failed_step = "compare"
+    else:
+        failed_step = "acceptance"
+        gates_root = _stage_write_target(campaign_dir, candidate_id, baseline, "accept").parent / "attempts"
+        if gates_root.is_dir():
+            for attempt_dir in sorted(gates_root.iterdir()):
+                result_path = attempt_dir / "result.json"
+                if result_path.is_file() and _read_json(result_path, "accept attempt 结果").get("failed_gates"):
+                    raise ConfigurationError(
+                        "accept 因 failed_gates 非零退出，不是本合同的事实；请按指南 4.5.6 补跑外部门禁。"
+                    )
+        if action_outputs is not None and action_outputs["evaluation_run"] is not None and index_path.is_file():
+            # accept 失败时断言批次已全部 pass：索引就是 b<K+1> 复用的依据（anchored），必须与
+            # 动作输出绑定记录的摘要一致并可校验，否则复用集合退化为全部重跑。
+            if action_outputs["evaluation_run"]["sha256"] != file_sha256(index_path):
+                raise ConfigurationError("动作输出绑定记录的 evaluation-run 摘要与当前文件不一致。")
+            try:
+                evaluation_run = codex_upgrade_vc_artifacts.validate_evaluation_run(_read_json(index_path, "evaluation-run.json"))
+            except codex_upgrade_vc_artifacts.VCArtifactError as error:
+                raise ConfigurationError(f"evaluation-run.json 无法校验：{error}") from error
+            if evaluation_run["candidate_id"] != candidate_id or evaluation_run["evaluation_baseline"] != baseline:
+                raise ConfigurationError("evaluation-run.json 的候选或基线身份与失败批次不一致。")
+            if evaluation_run["derived"]:
+                reuse_authority = "none"
+            evaluation_run_binding = {
+                "path": index_path.relative_to(campaign_dir).as_posix(),
+                "sha256": file_sha256(index_path),
+                "derived": bool(evaluation_run["derived"]),
+            }
+    frozen_digests = failed["inner_manifest"].get("evaluator_digests")
+    if not isinstance(frozen_digests, Mapping):
+        raise ConfigurationError("失败父 run 的清单没有冻结 evaluator_digests（非 v3 批次），不能用 evaluation-recover。")
+    try:
+        current_digests = codex_upgrade_tool_identity_policy.evaluator_dependency_digests()
+    except codex_upgrade_tool_identity_policy.ToolIdentityPolicyError as error:
+        raise ConfigurationError(f"evaluator 依赖摘要无法计算：{error}") from error
+    return {
+        "failed": failed,
+        "failure_source": failure_source,
+        "reuse_authority": reuse_authority,
+        "failed_step": failed_step,
+        "failed_run": {
+            "run_id": str(failed["run_id"]),
+            "run_dir": str(run_dir),
+            "manifest_sha256": file_sha256(run_dir / "campaign-run-manifest.json"),
+            "state_sha256": file_sha256(run_dir / "state.json"),
+            "stop_receipt_sha256": file_sha256(run_dir / "stop-receipt.json"),
+            "action_id": str(failed["action_id"]),
+            "action_diagnostic_sha256": file_sha256(diagnostic_path),
+            "action_outputs_sha256": outputs_sha256,
+        },
+        "action_outputs": action_outputs,
+        "evaluation_run": evaluation_run_binding,
+        "evaluation_run_document": evaluation_run,
+        "failure_scope": scope,
+        "failed_evaluator_digests": {field: str(frozen_digests[field]) for field in codex_upgrade_vc_artifacts.EVALUATOR_DIGEST_FIELDS},
+        "current_evaluator_digests": current_digests,
+        "admissible_classes": sorted(admissible),
+    }
+
+
+def _evaluation_defect_admission(
+    arguments: argparse.Namespace,
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    facts: Mapping[str, Any],
+    *,
+    attempt_root: Path,
+) -> dict[str, Any]:
+    """evaluator-defect 准入：修复提交＋部署收据（passed、wire／policy 等于冻结值、五摘要等于当前树）、
+    四项摘要至少一项变化且覆盖缺陷项、候选 attempt 的 evaluation-epoch 链已覆盖当前 evidence 摘要。
+
+    既有 A2 合同：evidence semantics 变化后评估类操作要求先对当前 attempt 追加 ``evaluation-epoch``。
+    apply 不代写 epoch（仍由 ``evaluation-epoch --candidate-id`` 生成），只重放完整 append-only 链并把
+    采用的 epoch（path／sha256／index／to_evidence_semantics_sha256）冻结进 recovery.json，经
+    AUTHORIZATION／COMMIT 的 ``recovery_sha256`` 传递绑定，供 accept 读侧回读复核。
+    """
+
+    fix_commit = getattr(arguments, "fix_commit", None)
+    receipt_path = getattr(arguments, "deployment_receipt", None)
+    if not isinstance(fix_commit, str) or not re.fullmatch(r"^[0-9a-f]{40}$", fix_commit):
+        raise ConfigurationError("evaluator-defect 必须以 --fix-commit 给出完整 40 位修复提交。")
+    if receipt_path is None or not Path(receipt_path).is_absolute() or Path(receipt_path).is_symlink() or not Path(receipt_path).is_file():
+        raise ConfigurationError("evaluator-defect 必须以 --deployment-receipt 给出可信绝对路径的部署收据。")
+    receipt = _read_json(Path(receipt_path), "部署收据")
+    if receipt.get("status") != "passed":
+        raise ConfigurationError("部署收据 status 不是 passed。")
+    frozen = manifest.get("tool_identity") if isinstance(manifest.get("tool_identity"), Mapping) else {}
+    for field in ("wire_producer_sha256", "policy_sha256"):
+        frozen_value = frozen.get(field)
+        if frozen_value is None or receipt.get(field) != frozen_value:
+            raise ConfigurationError(f"部署收据的 {field} 与 Campaign 冻结值不一致或缺失。")
+    # 部署收据必须就是当前运行工具树的那一份：五摘要等于当前受管身份（修复已部署且正在被使用）。
+    current = _tool_identity(include_git=False)
+    for field, current_field in (
+        ("tool_files_sha256", "files_sha256"),
+        ("policy_sha256", "policy_sha256"),
+        ("wire_producer_sha256", "wire_producer_sha256"),
+        ("evidence_semantics_sha256", "evidence_semantics_sha256"),
+        ("control_sha256", "control_sha256"),
+    ):
+        if receipt.get(field) != current.get(current_field):
+            raise ConfigurationError(f"部署收据的 {field} 不等于当前受管工具树身份；修复尚未部署到当前树。")
+    changed = sorted(
+        field
+        for field in codex_upgrade_vc_artifacts.EVALUATOR_DIGEST_FIELDS
+        if facts["current_evaluator_digests"][field] != facts["failed_evaluator_digests"][field]
+    )
+    if not changed:
+        raise ConfigurationError("evaluator 四项摘要相对失败批次没有任何变化，不能裁定 evaluator-defect。")
+    defect_items = EVALUATION_DEFECT_ITEMS[str(facts["failure_source"])]
+    if not any(item in changed for item in defect_items):
+        raise ConfigurationError(
+            f"变化项 {changed} 未覆盖失败来源 {facts['failure_source']} 声明的缺陷项 {list(defect_items)}。"
+        )
+    evaluation_epoch = _evaluation_epoch_for_recovery(
+        campaign_dir, manifest, attempt_root, current_evidence=str(current["evidence_semantics_sha256"])
+    )
+    return {
+        "fix_commit": fix_commit,
+        "deployment_receipt": {"path": str(Path(receipt_path).resolve(strict=True)), "sha256": file_sha256(Path(receipt_path))},
+        "changed_items": changed,
+        "evaluation_epoch": evaluation_epoch,
+    }
+
+
+def _next_recovery_revision(attempt_root: Path) -> str:
+    """原 attempt 下一个恢复段编号 ar<k>：已存在的段目录（含未收口）编号最大值 + 1。"""
+
+    recovery_root = attempt_root / ATTEMPT_RECOVERY_DIRNAME
+    highest = 0
+    if recovery_root.exists():
+        if recovery_root.is_symlink() or not recovery_root.is_dir():
+            raise ConfigurationError("attempt 恢复段目录不可信。")
+        for entry in recovery_root.iterdir():
+            if entry.is_symlink() or not entry.is_dir() or not codex_upgrade_vc_artifacts.RECOVERY_REVISION_RE.fullmatch(entry.name):
+                raise ConfigurationError(f"attempt 恢复段目录含非法条目：{entry.name}")
+            highest = max(highest, int(entry.name[2:]))
+    return f"ar{highest + 1}"
+
+
+def _transient_environment_admission(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    facts: Mapping[str, Any],
+    *,
+    attempt_root: Path,
+    attempt: Mapping[str, Any],
+) -> dict[str, Any]:
+    """transient-environment 准入（三稿 3.4／分解稿 T5.17）：
+
+    候选五层身份等于冻结值；原 attempt 的 after 探针与恢复收据存在且 ``restoration_error=null``；
+    Campaign 无污染记录；``J*`` 非空且每个 Job 已沿 failure-scope 定位链证明（定位链本身失败关闭，
+    全部 Job 亦允许）；``J*`` 与其余 Job 恰好划分原 attempt 的 Job 全集。根因 ``attempt.job-transient-failure``
+    的上限由 apply 的 outbox 入账后二次判定处理。返回冻结进 recovery.json 的段计划。
+    """
+
+    if facts["failure_source"] != "assertion-failed":
+        raise ConfigurationError("transient-environment 只能由断言失败触发（离线 compare／accept 工具异常不是环境故障）。")
+    identity = attempt.get("identity")
+    if not isinstance(identity, Mapping):
+        raise ConfigurationError("原 attempt 缺少候选身份，不能裁定 transient-environment。")
+    _verify_candidate_attempt_identity(manifest, identity)
+    if attempt.get("status") != ATTEMPT_RECOVERY_SUCCESS_STATUS:
+        raise ConfigurationError(f"原 attempt 状态为 {attempt.get('status')}，不是 awaiting_receipts。")
+    environment = attempt.get("environment")
+    if (
+        not isinstance(environment, Mapping)
+        or not isinstance(environment.get("after_probe"), Mapping)
+        or not isinstance(environment.get("restoration_report"), Mapping)
+        or attempt.get("restoration_error") is not None
+    ):
+        raise ConfigurationError("原 attempt 缺少 after 探针或恢复收据，或恢复曾失败；环境事实不足以裁定 transient-environment。")
+    contamination = _campaign_contamination_records(campaign_dir, _manifest=manifest)
+    if contamination:
+        raise ConfigurationError("Campaign 存在环境污染记录，不能裁定 transient-environment。")
+    scope = facts["failure_scope"]
+    if not isinstance(scope, Mapping):
+        raise ConfigurationError("失败事实缺少 failure-scope，不能裁定 transient-environment。")
+    execute_jobs = sorted(str(job_id) for job_id in scope.get("jobs", []))
+    if not execute_jobs:
+        raise ConfigurationError("failure-scope 没有定位到任何候选 Job（J* 为空），不能裁定 transient-environment。")
+    all_jobs = sorted(
+        str(result.get("id"))
+        for result in attempt.get("results", [])
+        if isinstance(result, Mapping) and isinstance(result.get("id"), str)
+    )
+    unknown = sorted(set(execute_jobs) - set(all_jobs))
+    if unknown:
+        raise ConfigurationError(f"failure-scope 定位到的 Job 不在原 attempt 内：{unknown}")
+    reuse_jobs = sorted(set(all_jobs) - set(execute_jobs))
+    return {
+        "attempt_id": attempt_root.name,
+        "recovery_revision": _next_recovery_revision(attempt_root),
+        "execute_jobs": execute_jobs,
+        "reuse_jobs": reuse_jobs,
+        "affected_rules": sorted(str(rule) for rule in scope.get("rules", [])),
+        "failed_step": execute_jobs[0],
+    }
+
+
+def _evaluation_epoch_for_recovery(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    attempt_root: Path,
+    *,
+    current_evidence: str,
+) -> dict[str, Any] | None:
+    """重放候选 attempt 的完整 evaluation-epoch 链并给出 recovery 采用的 epoch 绑定。
+
+    链末 ``to_evidence_semantics_sha256``（无链即 Campaign 冻结值）必须等于当前受管树的 evidence
+    摘要；否则 evidence 已变化而 epoch 未追加（或追加后又变化），失败关闭。链为空返回 None。
+    """
+
+    try:
+        chain = codex_upgrade_wire_transition.load_epochs(attempt_root)
+    except codex_upgrade_wire_transition.WireTransitionError as error:
+        raise ConfigurationError(f"候选 attempt 的 evaluation-epoch 链无法重放：{error}") from error
+    frozen = manifest.get("tool_identity", {}).get("evidence_semantics_sha256") if isinstance(manifest.get("tool_identity"), Mapping) else None
+    effective = str(chain[-1]["to_evidence_semantics_sha256"]) if chain else (str(frozen) if frozen is not None else None)
+    if effective != current_evidence:
+        raise ConfigurationError(
+            "当前受管树的 evidence semantics 摘要与候选 attempt 的 evaluation-epoch 链末不一致；"
+            "先执行 evaluation-epoch --candidate-id 追加覆盖当前 evidence 摘要的 epoch，再 apply。"
+        )
+    if not chain:
+        return None
+    last = chain[-1]
+    path = attempt_root / f"evaluation-epoch-{int(last['index']):02d}.json"
+    if path.is_symlink() or not path.is_file():
+        raise ConfigurationError("evaluation-epoch 链末文件不存在。")
+    return {
+        "path": path.relative_to(campaign_dir).as_posix(),
+        "sha256": file_sha256(path),
+        "index": int(last["index"]),
+        "to_evidence_semantics_sha256": str(last["to_evidence_semantics_sha256"]),
+    }
+
+
+def _verify_failed_run_reconciled(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    ledger_dir: Path,
+    failed: Mapping[str, Any],
+    *,
+    head: Mapping[str, Any],
+) -> dict[str, Any]:
+    """apply 的账本前提：失败父 run 已由 reconcile-supervisor-run 对账入账且 receipt_passed 存在。"""
+
+    operations = head.get("operations", {})
+    try:
+        reconciled = codex_upgrade_supervisor.verify_supervisor_run_reconciliation_binding(
+            campaign_dir,
+            campaign_id=str(manifest["campaign_id"]),
+            run_id=str(failed["run_id"]),
+            phase=str(failed["phase"]),
+            batch_sequence=int(failed["batch_sequence"]),
+            batch_sha256=str(failed["batch_sha256"]),
+            label="evaluation-recover",
+        )
+    except codex_upgrade_supervisor.SupervisorError as error:
+        raise ConfigurationError(str(error)) from error
+    if reconciled["operation_id"] not in operations:
+        raise ConfigurationError(
+            f"失败父 run {failed['run_id']} 尚未对账入账；先执行 reconcile-supervisor-run。"
+        )
+    events = codex_upgrade_timing_ledger._load_events(ledger_dir)
+    expected_event_id = f"reconcile-run-passed-{failed['run_id']}"
+    matches = [event for event, _raw in events if event.get("event_id") == expected_event_id]
+    if len(matches) != 1 or matches[0].get("event_type") != "receipt_passed":
+        raise ConfigurationError(
+            f"失败父 run {failed['run_id']} 的 receipt_passed 事件不存在或不唯一；对账尚未恢复账本。"
+        )
+    return reconciled
+
+
+def evaluation_recover(arguments: argparse.Namespace) -> dict[str, Any]:
+    """evaluation-recover preview／apply／abandon：候选证据封存后离线评估失败的分类与局部恢复（零请求）。
+
+    preview：admission → 候选属当前 revision → 当前基线与失败父 run 定位 → 失败来源／复用授权／
+    failure-scope → 诊断草案（绑定总账 head）→ review_sha256；不落盘。
+    apply：复验 review_sha256 → 账本 active 且失败 run 已对账（receipt_passed）→ 类别准入 →
+    ① diagnosis.json＋recovery.json＋PREPARED → ② outbox 根因事件（请求 0）→ 推总账 → 二次判定
+    （停线即现有停线合同，基线停在 prepared）→ ③ AUTHORIZATION → ④ COMMIT（stage_sources）→
+    ⑤ 账本 evaluation_baseline。每步 write-once 幂等，续作收敛。
+    abandon：未 COMMIT 的 PREPARED 基线显式作废（编号不复用）。
+    """
+
+    from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+    action = str(getattr(arguments, "recover_action", ""))
+    if action not in {"preview", "apply", "abandon"}:
+        raise ConfigurationError("evaluation-recover 只接受 preview、apply 或 abandon。")
+    campaign_dir = Path(arguments.campaign_dir)
+    manifest = _require_formal_campaign(campaign_dir)
+    if not _requires_complete_vc_artifacts(manifest):
+        raise ConfigurationError("evaluation-recover 只用于 0.154.0 起的完整 VC 链 Campaign。")
+    candidate_id = str(arguments.candidate_id)
+    if not SAFE_ID_RE.fullmatch(candidate_id):
+        raise ConfigurationError("--candidate-id 格式非法。")
+    reviewer = str(getattr(arguments, "reviewer", "") or "").strip()
+    if not reviewer:
+        raise ConfigurationError("--reviewer 不能为空。")
+    approve_sha256 = getattr(arguments, "approve_sha256", None)
+    root_cause_class = getattr(arguments, "root_cause_class", None)
+    if action == "apply":
+        if not (isinstance(approve_sha256, str) and SHA256_RE.fullmatch(approve_sha256)):
+            raise ConfigurationError("apply 必须给出 preview 输出的 --approve-sha256。")
+        if root_cause_class not in codex_upgrade_vc_artifacts.ROOT_CAUSE_CLASSES:
+            raise ConfigurationError("apply 必须以 --root-cause-class 给出人工裁定的类别。")
+    admission = _assert_revision_admission(campaign_dir, manifest, command=EVALUATION_RECOVER_COMMAND)
+    ledger_dir = _campaign_timing_ledger_dir(campaign_dir, manifest)
+    campaign_root = campaign_dir.resolve(strict=True)
+    try:
+        return _evaluation_recover_locked(
+            arguments, action, campaign_dir, campaign_root, manifest, candidate_id, reviewer, approve_sha256, root_cause_class, admission, ledger_dir, reconciler
+        )
+    except codex_upgrade_vc_artifacts.VCArtifactError as error:
+        raise ConfigurationError(f"评估基线制品非法：{error}") from error
+
+
+def _evaluation_recover_locked(
+    arguments: argparse.Namespace,
+    action: str,
+    campaign_dir: Path,
+    campaign_root: Path,
+    manifest: dict[str, Any],
+    candidate_id: str,
+    reviewer: str,
+    approve_sha256: Any,
+    root_cause_class: Any,
+    admission: dict[str, Any] | None,
+    ledger_dir: Path,
+    reconciler: Any,
+) -> dict[str, Any]:
+    with _campaign_lock(campaign_dir):
+        summary = codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)
+        status = str(summary.get("status"))
+        allowed = {"active", "recovery_required"} if action == "preview" else {"active"}
+        if status not in allowed:
+            raise ConfigurationError(
+                f"evaluation-recover {action} 拒绝：账本状态 {status}"
+                + ("；先执行 reconcile-supervisor-run 使账本回到 active" if status == "recovery_required" else "")
+                + "。"
+            )
+        revision, record = _current_candidate_revision_record(campaign_dir, manifest)
+        if revision is None:
+            raise ConfigurationError("没有 active 候选 revision。")
+        current_candidate = record["candidate_id"] if record is not None else _implicit_r1_candidate_id(campaign_dir, manifest)
+        if current_candidate != candidate_id:
+            raise ConfigurationError(
+                f"候选 {candidate_id} 不是当前 revision r{revision} 的候选（当前 {current_candidate}）。"
+            )
+        current_baseline, current_commit = _current_evaluation_baseline(campaign_dir, candidate_id)
+        states = _evaluation_baseline_states(campaign_dir, candidate_id)
+        # 续作对象：PREPARED 且未 ABANDON，且尚未成为当前基线（无 COMMIT，或 COMMIT 已写但账本未引用＝E5）。
+        pending = sorted(
+            number
+            for number, flags in states.items()
+            if flags["prepared"] and not flags["abandon"] and (not flags["commit"] or number > current_baseline)
+        )
+        if action == "abandon":
+            abandonable = [number for number in pending if not states[number]["commit"]]
+            if not abandonable:
+                raise ConfigurationError("没有未 COMMIT 的 PREPARED 评估基线可作废。")
+            number = abandonable[-1]
+            baseline_dir = _evaluation_baseline_dir(campaign_dir, candidate_id, number)
+            recovery = codex_upgrade_vc_artifacts.validate_evaluation_recovery(
+                _read_json(baseline_dir / EVALUATION_BASELINE_RECOVERY_FILENAME, "评估基线 recovery")
+            )
+            reason = str(getattr(arguments, "reason", "") or "").strip() or "operator-abandoned"
+            abandon = codex_upgrade_vc_artifacts.build_evaluation_baseline_abandon(
+                campaign_id=str(manifest["campaign_id"]),
+                candidate_id=candidate_id,
+                candidate_revision=revision,
+                evaluation_baseline=number,
+                recovery_sha256=str(recovery["recovery_sha256"]),
+                reason=reason,
+                abandoned_at_utc=_utc_now(),
+            )
+            _secure_write_json_once(baseline_dir / EVALUATION_BASELINE_ABANDON_FILENAME, abandon)
+            return {
+                "status": "abandoned",
+                "campaign_id": manifest["campaign_id"],
+                "candidate_id": candidate_id,
+                "evaluation_baseline": number,
+                "abandon_sha256": abandon["abandon_sha256"],
+                "current_evaluation_baseline": current_baseline,
+                "live_request_count": 0,
+            }
+        candidate = _load_stage_result(campaign_dir, "capture-candidate", candidate_id)
+        if candidate.get("status") != "complete":
+            raise ConfigurationError("当前基线的候选阶段结果不是 complete；封存前的失败走 resume --rerun-failed。")
+        attempt_root, attempt = _capture_stage_attempt_context(
+            campaign_dir, candidate, phase="candidate", candidate_id=candidate_id
+        )
+        classification = _load_stage_result(campaign_dir, "classify")
+        rules = _approved_rules(campaign_dir, manifest, require_approved=True)
+        project_root = reconciler._project_root(campaign_root)
+        plan, head = reconciler._project_facts(project_root)
+        # 续作：已有 PREPARED 未 COMMIT 的基线以其落盘诊断为准（head 绑定的是当时的总账）。
+        resume_number = pending[-1] if pending else None
+        if len(pending) > 1:
+            raise ConfigurationError(f"存在多个未 COMMIT 的 PREPARED 评估基线：{pending}，状态不可信。")
+        facts = _evaluation_failure_diagnosis_facts(
+            campaign_dir, manifest, candidate_id, revision, current_baseline,
+            candidate=candidate, attempt=attempt, classification=classification, rules=rules,
+        )
+        existing_diagnosis: dict[str, Any] | None = None
+        if resume_number is not None:
+            diagnosis_path = _evaluation_baseline_dir(campaign_dir, candidate_id, resume_number) / EVALUATION_BASELINE_DIAGNOSIS_FILENAME
+            existing_diagnosis = codex_upgrade_vc_artifacts.validate_evaluation_failure_diagnosis(
+                _read_json(diagnosis_path, "评估失败诊断")
+            )
+            diagnosis = existing_diagnosis
+        else:
+            try:
+                diagnosis = codex_upgrade_vc_artifacts.build_evaluation_failure_diagnosis(
+                    campaign_id=str(manifest["campaign_id"]),
+                    campaign_manifest_sha256=file_sha256(campaign_dir / "campaign.json"),
+                    candidate_id=candidate_id,
+                    candidate_revision=revision,
+                    evaluation_baseline=current_baseline,
+                    failure_source=facts["failure_source"],
+                    reuse_authority=facts["reuse_authority"],
+                    failed_step=facts["failed_step"],
+                    failed_run=facts["failed_run"],
+                    action_outputs=facts["action_outputs"],
+                    evaluation_run=facts["evaluation_run"],
+                    failure_scope=facts["failure_scope"],
+                    failed_evaluator_digests=facts["failed_evaluator_digests"],
+                    current_evaluator_digests=facts["current_evaluator_digests"],
+                    admissible_classes=facts["admissible_classes"],
+                    project_ledger_head_sequence=int(head["sequence"]),
+                    project_ledger_head_sha256=str(head["head_sha256"]),
+                    reviewer=reviewer,
+                    reviewed_at_utc=_utc_now(),
+                )
+            except codex_upgrade_vc_artifacts.VCArtifactError as error:
+                raise ConfigurationError(f"诊断草案无法生成：{error}") from error
+        review_sha256 = str(diagnosis["review_sha256"])
+        preview_payload = {
+            "status": "preview",
+            "campaign_id": manifest["campaign_id"],
+            "candidate_id": candidate_id,
+            "revision": revision,
+            "current_evaluation_baseline": current_baseline,
+            "pending_baseline": resume_number,
+            "ledger_status": status,
+            "failed_run": facts["failed_run"],
+            "failure_source": facts["failure_source"],
+            "reuse_authority": facts["reuse_authority"],
+            "failed_step": facts["failed_step"],
+            "failure_scope": facts["failure_scope"],
+            "admissible_classes": facts["admissible_classes"],
+            "diagnosis": diagnosis,
+            "review_sha256": review_sha256,
+            "project_ledger": admission,
+            "live_request_count": 0,
+        }
+        if action == "preview":
+            return preview_payload
+        if approve_sha256 != review_sha256:
+            raise ConfigurationError(
+                "apply 的批准摘要与当前草案不一致（总账 head、失败事实或评估摘要已变化），请重新 preview。"
+            )
+        if root_cause_class not in facts["admissible_classes"]:
+            raise ConfigurationError(f"类别 {root_cause_class} 不在本次失败允许的裁定集合 {facts['admissible_classes']} 内。")
+        if root_cause_class == "candidate-source":
+            return {**preview_payload, "status": "redirect", "next_command": f"invalidate-candidate preview --candidate-id {candidate_id}"}
+        if root_cause_class == "approval-inputs":
+            return {**preview_payload, "status": "redirect", "next_command": "close-campaign-ledger（显式停线）后从 VC-2 建后继 Campaign"}
+        _verify_failed_run_reconciled(campaign_dir, manifest, ledger_dir, facts["failed"], head=head)
+        transient: dict[str, Any] | None = None
+        defect: dict[str, Any] | None = None
+        if root_cause_class == "transient-environment":
+            # 改造 5 M2（T5.17）：临时环境／Job 故障 → attempt-recovery 基线，零请求裁定，段本身才发请求。
+            transient = _transient_environment_admission(campaign_dir, manifest, facts, attempt_root=attempt_root, attempt=attempt)
+            baseline_kind = "attempt-recovery"
+            cause_component, cause_code, cause_step = "reconciler", "attempt.job-transient-failure", str(transient["failed_step"])
+        else:
+            defect = _evaluation_defect_admission(arguments, campaign_dir, manifest, facts, attempt_root=attempt_root)
+            baseline_kind = "evaluator-only"
+            cause_component, cause_code, cause_step = "evaluator", "evaluation.rule-failed", str(facts["failed_step"])
+        # ① 编号与 recovery.json／PREPARED（write-once；续作即校验一致）。
+        number = resume_number if resume_number is not None else (max(states) + 1 if states else 1)
+        if number <= current_baseline:
+            raise ConfigurationError("新评估基线编号必须大于当前基线。")
+        baseline_dir = _evaluation_baseline_dir(campaign_dir, candidate_id, number)
+        ensure_private_directory(baseline_dir.parent, campaign_dir)
+        ensure_private_directory(baseline_dir, campaign_dir)
+        diagnosis_path = baseline_dir / EVALUATION_BASELINE_DIAGNOSIS_FILENAME
+        if existing_diagnosis is None:
+            _secure_write_json_once(diagnosis_path, diagnosis)
+        # 执行集合（三稿 3.2.5）：前序 fail／pending ∪ 逐规则依赖变化。evaluator-only 下投影不变，
+        # checker／builder 任一变化即全部规则的依赖摘要变化 → 全部重跑；只有 reader 变化时只重跑
+        # 非 pass 行，其余引用复用（须 anchored）。builder 执行时仍按判据逐条复核，这里是冻结的预计。
+        evaluation_run_document = facts["evaluation_run_document"]
+        all_rules = sorted(rules)
+        if transient is not None:
+            # attempt-recovery：重采 J* 后其证据变化，引用 J* 的规则（含失败规则）进入 execute；其余 pass 行
+            # 在 anchored 下复用。builder 执行时仍按逐规则依赖判据逐条复核。
+            if facts["reuse_authority"] != "anchored" or evaluation_run_document is None:
+                execute_rules = all_rules
+                reuse_rules: list[str] = []
+            else:
+                execute_rules = sorted(
+                    set(transient["affected_rules"])
+                    | {str(row["rule"]) for row in evaluation_run_document["rules"] if row["status"] != "pass"}
+                    | (set(all_rules) - {str(row["rule"]) for row in evaluation_run_document["rules"]})
+                )
+                reuse_rules = sorted(set(all_rules) - set(execute_rules))
+        elif (
+            facts["reuse_authority"] != "anchored"
+            or evaluation_run_document is None
+            or {"checker_sha256", "builder_sha256"} & set(defect["changed_items"])
+        ):
+            execute_rules = all_rules
+            reuse_rules = []
+        else:
+            execute_rules = sorted(
+                {str(row["rule"]) for row in evaluation_run_document["rules"] if row["status"] != "pass"}
+                | (set(all_rules) - {str(row["rule"]) for row in evaluation_run_document["rules"]})
+            )
+            reuse_rules = sorted(set(all_rules) - set(execute_rules))
+        try:
+            root_cause_id = codex_upgrade_root_cause.structured_root_cause(
+                component=cause_component,
+                stable_error_code=cause_code,
+                failed_step=cause_step,
+                stable_dimensions={"phase": "VC-5"},
+            )
+        except codex_upgrade_root_cause.RootCauseError as error:
+            raise ConfigurationError(f"根因编码失败：{error}") from error
+        recovery_path = baseline_dir / EVALUATION_BASELINE_RECOVERY_FILENAME
+        if recovery_path.is_file():
+            recovery = codex_upgrade_vc_artifacts.validate_evaluation_recovery(_read_json(recovery_path, "评估基线 recovery"))
+        else:
+            try:
+                recovery = codex_upgrade_vc_artifacts.build_evaluation_recovery(
+                    campaign_id=str(manifest["campaign_id"]),
+                    candidate_id=candidate_id,
+                    candidate_revision=revision,
+                    evaluation_baseline=number,
+                    kind=baseline_kind,
+                    diagnosis={"path": diagnosis_path.relative_to(campaign_dir).as_posix(), "sha256": file_sha256(diagnosis_path)},
+                    failure_source=facts["failure_source"],
+                    reuse_authority=facts["reuse_authority"],
+                    root_cause_class=root_cause_class,
+                    root_cause_id=root_cause_id,
+                    failed_step=cause_step,
+                    previous_baseline=current_baseline,
+                    previous_baseline_commit_sha256=(str(current_commit["commit_sha256"]) if current_commit is not None else None),
+                    execute_rules=execute_rules,
+                    reuse_rules=reuse_rules,
+                    execute_jobs=list(transient["execute_jobs"]) if transient is not None else [],
+                    reuse_jobs=(
+                        list(transient["reuse_jobs"])
+                        if transient is not None
+                        else sorted(str(result.get("id")) for result in attempt.get("results", []) if isinstance(result, Mapping) and isinstance(result.get("id"), str))
+                    ),
+                    attempt_id=str(transient["attempt_id"]) if transient is not None else None,
+                    recovery_revision=str(transient["recovery_revision"]) if transient is not None else None,
+                    fix_commit=defect["fix_commit"] if defect is not None else None,
+                    deployment_receipt=defect["deployment_receipt"] if defect is not None else None,
+                    evaluation_epoch=defect["evaluation_epoch"] if defect is not None else None,
+                    failed_evaluator_digests=facts["failed_evaluator_digests"],
+                    current_evaluator_digests=facts["current_evaluator_digests"],
+                    reviewer=reviewer,
+                    approved_at_utc=_utc_now(),
+                )
+            except codex_upgrade_vc_artifacts.VCArtifactError as error:
+                raise ConfigurationError(f"recovery.json 无法生成：{error}") from error
+            _secure_write_json_once(recovery_path, recovery)
+        prepared_path = baseline_dir / EVALUATION_BASELINE_PREPARED_FILENAME
+        if prepared_path.is_file():
+            prepared = codex_upgrade_vc_artifacts.validate_evaluation_baseline_prepared(_read_json(prepared_path, "评估基线 PREPARED"))
+            if prepared["recovery_sha256"] != recovery["recovery_sha256"]:
+                raise ConfigurationError("PREPARED 绑定的 recovery 摘要与 recovery.json 不一致。")
+        else:
+            prepared = codex_upgrade_vc_artifacts.build_evaluation_baseline_prepared(
+                campaign_id=str(manifest["campaign_id"]),
+                candidate_id=candidate_id,
+                candidate_revision=revision,
+                evaluation_baseline=number,
+                recovery_sha256=str(recovery["recovery_sha256"]),
+                project_ledger_head_sequence=int(head["sequence"]),
+                project_ledger_head_sha256=str(head["head_sha256"]),
+                prepared_at_utc=_utc_now(),
+            )
+            _secure_write_json_once(prepared_path, prepared)
+        # ② outbox 根因事件（请求 0）→ 推总账 → 重放 → 二次判定。
+        receipt_binding = reconciler._binding(campaign_root, recovery_path, "reconciliation")
+        cause = codex_upgrade_root_cause.describe_root_cause(
+            component=cause_component,
+            stable_error_code=cause_code,
+            failed_step=cause_step,
+            stable_dimensions={"phase": "VC-5"},
+        )
+        operation_id = f"evaluation-recover:{candidate_id}:r{revision}:b{number}"
+        try:
+            batch = reconciler._commit_batch(
+                campaign_root,
+                operation_id=operation_id,
+                event_type="reconciliation_committed",
+                payload={
+                    "campaign_id": str(manifest["campaign_id"]),
+                    "subject_kind": "evaluation_baseline",
+                    "subject_id": f"{candidate_id}:r{revision}:b{number}",
+                    "phase": "VC-5",
+                    "request": dict(reconciler.ZERO_REQUEST_PART),
+                    "root_cause": {
+                        "root_cause_id": cause["root_cause_id"],
+                        "stable_error_code": cause["stable_error_code"],
+                        "failed_step": cause["failed_step"],
+                        "stable_dimensions": cause["stable_dimensions"],
+                        "component": cause["component"],
+                    },
+                    "reconciliation_receipt_sha256": receipt_binding["sha256"],
+                    "attempt_failed_event_sha256": None,
+                },
+                source={"kind": "evaluation_baseline", "sha256": receipt_binding["sha256"]},
+                receipt_bindings=[receipt_binding],
+            )
+            observed = _utc_now()
+            pushed, head_after = reconciler._push_and_replay(project_root, campaign_root, now=observed)
+            identity = reconciler._identity_facts(campaign_root, manifest, reconciler._current_identity())
+            ledger_facts = reconciler._ledger_facts(ledger_dir, now=observed)
+            contamination = _campaign_contamination_records(campaign_dir, _manifest=manifest)
+            decision = reconciler._decide(
+                head=head_after,
+                plan=plan,
+                ledger=ledger_facts,
+                identity=identity,
+                environment_status="contaminated" if contamination else "restored",
+                campaign_deadline_at_utc=_campaign_plan_deadline(campaign_dir),
+                root_cause_id=cause["root_cause_id"],
+                request_status="resolved",
+                now=observed,
+            )
+        except reconciler.ReconcilerError as error:
+            raise ConfigurationError(f"评估基线根因入账失败：{error}") from error
+        result: dict[str, Any] = {
+            "status": "applied",
+            "campaign_id": manifest["campaign_id"],
+            "candidate_id": candidate_id,
+            "revision": revision,
+            "evaluation_baseline": number,
+            "kind": baseline_kind,
+            "recovery_sha256": recovery["recovery_sha256"],
+            "execute_rules": execute_rules,
+            "reuse_rules": reuse_rules,
+            "execute_jobs": list(recovery["execute_jobs"]),
+            "reuse_jobs": list(recovery["reuse_jobs"]),
+            "attempt_id": recovery["attempt_id"],
+            "recovery_revision": recovery["recovery_revision"],
+            "root_cause_id": cause["root_cause_id"],
+            "batch": batch,
+            "project_push": pushed,
+            "decision": decision,
+            "live_request_count": 0,
+        }
+        if decision["decision"] != reconciler.DECISION_RECOVERABLE:
+            try:
+                stop = reconciler._permanent_stop(
+                    campaign_root,
+                    manifest,
+                    ledger_dir,
+                    subject_id=f"evaluation-baseline-{candidate_id}-r{revision}-b{number}",
+                    root_cause_id=cause["root_cause_id"],
+                    terminal_reason=str(decision["terminal_reason"]),
+                    receipt_bindings=[receipt_binding],
+                    ledger_receipts=[],
+                    live_request_count=0,
+                    reconciliation_receipt_sha256=receipt_binding["sha256"],
+                    ledger_facts=ledger_facts,
+                )
+                pushed_terminal, head_terminal = reconciler._push_and_replay(project_root, campaign_root, now=observed)
+            except reconciler.ReconcilerError as error:
+                raise ConfigurationError(f"评估基线二次判定停线收口失败：{error}") from error
+            result["status"] = "permanent_stop"
+            result["permanent_stop"] = {**stop, "project_push": pushed_terminal, "head_sha256": head_terminal.get("head_sha256")}
+            result["next_command"] = stop["next_action"]
+            return result
+        # ③ AUTHORIZATION（绑定 outbox 事件摘要、head 与判定）。
+        authorization_path = baseline_dir / EVALUATION_BASELINE_AUTHORIZATION_FILENAME
+        batch_commit_path = Path(str(batch["batch_dir"])) / "COMMIT"
+        if authorization_path.is_file():
+            authorization = codex_upgrade_vc_artifacts.validate_evaluation_baseline_authorization(
+                _read_json(authorization_path, "评估基线 AUTHORIZATION")
+            )
+            if authorization["recovery_sha256"] != recovery["recovery_sha256"]:
+                raise ConfigurationError("AUTHORIZATION 绑定的 recovery 摘要与 recovery.json 不一致。")
+        else:
+            authorization = codex_upgrade_vc_artifacts.build_evaluation_baseline_authorization(
+                campaign_id=str(manifest["campaign_id"]),
+                candidate_id=candidate_id,
+                candidate_revision=revision,
+                evaluation_baseline=number,
+                recovery_sha256=str(recovery["recovery_sha256"]),
+                ledger_operation_id=operation_id,
+                ledger_event_sha256=file_sha256(batch_commit_path),
+                project_ledger_head_sequence=int(head_after["sequence"]),
+                project_ledger_head_sha256=str(head_after["head_sha256"]),
+                root_cause_id=cause["root_cause_id"],
+                root_cause_count=int(decision.get("root_cause_count", 0)),
+                authorized_at_utc=_utc_now(),
+            )
+            _secure_write_json_once(authorization_path, authorization)
+        # ④ COMMIT（stage_sources：capture 恒 reused；compare 按 compare-reader 是否变化；断言／accept local）。
+        commit_path = baseline_dir / EVALUATION_BASELINE_COMMIT_FILENAME
+        if commit_path.is_file():
+            commit = codex_upgrade_vc_artifacts.validate_evaluation_baseline_commit(_read_json(commit_path, "评估基线 COMMIT"))
+        else:
+            capture_source = _stage_read_source(campaign_dir, candidate_id, current_baseline, "capture-candidate")
+            compare_source = _stage_read_source(campaign_dir, candidate_id, current_baseline, "compare")
+            stage_sources: dict[str, Any] = {
+                "capture-candidate": (
+                    # attempt-recovery：本基线增量封存出新的候选阶段结果（local）。
+                    {"source": "local", "target": f"candidates/{candidate_id}/revisions/b{number}/result.json"}
+                    if transient is not None
+                    else {
+                        "source": "reused",
+                        "baseline": int(capture_source["baseline_of_record"]),
+                        "path": Path(capture_source["path"]).relative_to(campaign_dir).as_posix(),
+                        "sha256": str(capture_source["sha256"]),
+                    }
+                ),
+                "assertions": {"source": "local", "target": f"assertions/{candidate_id}/revisions/b{number}"},
+                "accept": {"source": "local", "target": f"acceptance/{candidate_id}/revisions/b{number}/result.json"},
+            }
+            if (
+                transient is not None
+                or "compare_reader_sha256" in defect["changed_items"]
+                or compare_source["status"] != "complete"
+            ):
+                stage_sources["compare"] = {"source": "local", "target": f"comparisons/{candidate_id}/revisions/b{number}/result.json"}
+            else:
+                stage_sources["compare"] = {
+                    "source": "reused",
+                    "baseline": int(compare_source["baseline_of_record"]),
+                    "path": Path(compare_source["path"]).relative_to(campaign_dir).as_posix(),
+                    "sha256": str(compare_source["sha256"]),
+                }
+            commit = codex_upgrade_vc_artifacts.build_evaluation_baseline_commit(
+                campaign_id=str(manifest["campaign_id"]),
+                candidate_id=candidate_id,
+                candidate_revision=revision,
+                evaluation_baseline=number,
+                kind=baseline_kind,
+                recovery_sha256=str(recovery["recovery_sha256"]),
+                authorization_sha256=str(authorization["authorization_sha256"]),
+                stage_sources=stage_sources,
+                committed_at_utc=_utc_now(),
+            )
+            _secure_write_json_once(commit_path, commit)
+        # ⑤ 账本 evaluation_baseline（幂等：最后一条已引用本 COMMIT 即 appended=false）。
+        last = _ledger_last_event_of_type(ledger_dir, "evaluation_baseline")
+        if (
+            last is not None
+            and last[0].get("candidate_id") == candidate_id
+            and last[0].get("evaluation_baseline") == number
+            and last[0].get("baseline_commit_sha256") == commit["commit_sha256"]
+        ):
+            result["ledger_event"] = {"event_type": "evaluation_baseline", "appended": False}
+        else:
+            try:
+                appended = codex_upgrade_timing_ledger.append_event(
+                    ledger_dir,
+                    event_id=f"evaluation-baseline-{candidate_id}-r{revision}-b{number}",
+                    phase="VC-5",
+                    event_type="evaluation_baseline",
+                    revision=revision,
+                    candidate_id=candidate_id,
+                    evaluation_baseline=number,
+                    baseline_commit_sha256=str(commit["commit_sha256"]),
+                    baseline_kind=baseline_kind,
+                    recovery_revision=recovery["recovery_revision"],
+                    next_action=(
+                        f"capture-candidate run --attempt-recovery {recovery['recovery_revision']}（评估基线 b{number}）"
+                        if transient is not None
+                        else f"compile-and-run-vc-batch --phase VC-5（评估基线 b{number}）"
+                    ),
+                )
+            except codex_upgrade_timing_ledger.TimingLedgerError as error:
+                raise ConfigurationError(f"UpgradeTimingLedger 拒绝 evaluation_baseline：{error}") from error
+            result["ledger_event"] = {
+                "event_type": "evaluation_baseline",
+                "appended": True,
+                "head_sequence": appended["head_sequence"],
+                "head_sha256": appended["head_sha256"],
+            }
+        result["commit_sha256"] = commit["commit_sha256"]
+        result["stage_sources"] = commit["stage_sources"]
+        if transient is not None:
+            result["next_command"] = (
+                f"compile-and-run-vc-batch --phase VC-5（评估基线 b{number}：capture-candidate run --attempt-recovery "
+                f"{recovery['recovery_revision']} 只补跑 {'、'.join(recovery['execute_jobs'])} → account-sealed-candidate "
+                f"--attempt-recovery → capture-candidate seal --attempt-recovery → 断言 builder --evaluation-baseline {number}"
+                + (f" --reuse-from …/evaluation-run.json --reuse-authority anchored" if reuse_rules else "")
+                + "）"
+            )
+            return result
+        result["next_command"] = f"compile-and-run-vc-batch --phase VC-5（评估基线 b{number}：断言 builder --evaluation-baseline {number}"
+        if reuse_rules:
+            result["next_command"] += f" --reuse-from assertions/{candidate_id}[/revisions/b{current_baseline}]/evaluation-run.json --reuse-authority anchored"
+        result["next_command"] += "）"
+        return result
+
+
+def _publish_ledger_receipt_copies(
+    ledger_dir: Path,
+    subject: str,
+    sources: Mapping[str, Path],
+) -> list[dict[str, str]]:
+    """把收据逐字节发布到账本目录内（write-once），供账本事件 receipts 绑定。"""
+
+    target_dir = ledger_dir / "receipts" / "reconciliation" / subject
+    if target_dir.is_symlink():
+        raise ConfigurationError("账本收据目录不可信。")
+    target_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    for directory in (ledger_dir / "receipts", ledger_dir / "receipts" / "reconciliation", target_dir):
+        if stat.S_IMODE(directory.stat().st_mode) != 0o700:
+            directory.chmod(0o700)
+    bindings: list[dict[str, str]] = []
+    for role, source in sorted(sources.items()):
+        payload = _read_json(source, f"{role} 收据")
+        target = target_dir / f"{role}.json"
+        try:
+            codex_upgrade_timing_ledger._publish_once(target, payload, f"{role} 账本副本")
+        except codex_upgrade_timing_ledger.TimingLedgerError as error:
+            raise ConfigurationError(str(error)) from error
+        bindings.append(
+            {"role": role, "path": target.relative_to(ledger_dir).as_posix(), "sha256": file_sha256(target)}
+        )
+    return bindings
+
+
+def _existing_candidate_revisions(campaign_dir: Path) -> list[int]:
+    root = _candidate_revisions_root(campaign_dir)
+    if root.is_symlink():
+        raise ConfigurationError("候选 revisions 目录不得是符号链接。")
+    if not root.is_dir():
+        return []
+    found: list[int] = []
+    for child in root.iterdir():
+        match = re.fullmatch(r"^r([1-9][0-9]*)$", child.name)
+        if match is None or child.is_symlink() or not child.is_dir():
+            raise ConfigurationError(f"候选 revisions 目录含非法条目：{child.name}")
+        found.append(int(match.group(1)))
+    return sorted(found)
 
 
 def _project_ledger_required(campaign_mode: Any, target_version: Any) -> bool:
@@ -15831,6 +20740,148 @@ def _copy_successor_binding(
     return {"path": destination_relative, "sha256": expected_sha256}
 
 
+def _candidate_build_projection_campaign_binding_matches(
+    predecessor_manifest: Mapping[str, Any],
+    *,
+    predecessor_manifest_sha256: str,
+    receipt: Mapping[str, Any],
+    candidate_id: str,
+    attempt_id: str,
+) -> bool:
+    """校验 VC-4 投影保留的 Campaign 身份是否属于冻结闭集。"""
+
+    accepted_campaign_bindings = {
+        (
+            predecessor_manifest.get("campaign_id"),
+            predecessor_manifest_sha256,
+        )
+    }
+    if _is_c0154_a15_post_run_seal_source(
+        predecessor_manifest,
+        candidate_id=candidate_id,
+        attempt_id=attempt_id,
+    ):
+        # A15 来源的 VC-4 收据是从原始 v7 Campaign 逐字投影而来。它不能
+        # 为了 metadata-only 后继而改写 Campaign 绑定；这里只额外接受已经
+        # 冻结的原始 v7 ID 与清单摘要，其他历史或同名对象仍全部拒绝。
+        accepted_campaign_bindings.add(
+            (
+                C0154_V7_RECOVERY_SOURCE["campaign_id"],
+                C0154_V7_RECOVERY_SOURCE["campaign_manifest_sha256"],
+            )
+        )
+    return (
+        receipt.get("campaign_id"),
+        receipt.get("campaign_manifest_sha256"),
+    ) in accepted_campaign_bindings
+
+
+def _copy_candidate_build_projection(
+    predecessor_dir: Path,
+    staging_dir: Path,
+    predecessor_manifest: Mapping[str, Any],
+    *,
+    candidate_id: str,
+    attempt_id: str,
+    copied_files: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """逐字复制失败 attempt 已绑定的 VC-4 收据；不生成新的构建事实。"""
+
+    _attempt_root, attempt = _load_capture_attempt(
+        predecessor_dir,
+        "candidate",
+        candidate_id,
+        attempt_id,
+    )
+    identity = attempt.get("identity")
+    build_binding = identity.get("build_receipt") if isinstance(identity, Mapping) else None
+    expected_path = _candidate_build_receipt_path(predecessor_dir, candidate_id)
+    expected_relative = expected_path.relative_to(predecessor_dir).as_posix()
+    if (
+        not isinstance(build_binding, Mapping)
+        or set(build_binding) != {"path", "sha256", "bytes"}
+        or build_binding.get("path") != expected_relative
+        or expected_path.is_symlink()
+        or not expected_path.is_file()
+        or file_sha256(expected_path) != build_binding.get("sha256")
+        or expected_path.stat().st_size != build_binding.get("bytes")
+    ):
+        raise ConfigurationError("前序失败 attempt 的 VC-4 构建收据绑定漂移。")
+    try:
+        receipt = codex_upgrade_vc_artifacts.validate_candidate_build_receipt(
+            _read_json(expected_path, "前序 Candidate 构建收据"),
+            allow_legacy=(
+                _is_c0154_v7_failed_core_source(
+                    predecessor_manifest,
+                    candidate_id=candidate_id,
+                    attempt_id=attempt_id,
+                )
+                or _is_c0154_a15_post_run_seal_source(
+                    predecessor_manifest,
+                    candidate_id=candidate_id,
+                    attempt_id=attempt_id,
+                )
+            ),
+        )
+    except codex_upgrade_vc_artifacts.VCArtifactError as error:
+        raise ConfigurationError(str(error)) from error
+    if (
+        not _candidate_build_projection_campaign_binding_matches(
+            predecessor_manifest,
+            predecessor_manifest_sha256=file_sha256(
+                predecessor_dir / "campaign.json"
+            ),
+            receipt=receipt,
+            candidate_id=candidate_id,
+            attempt_id=attempt_id,
+        )
+        or receipt.get("candidate_id") != candidate_id
+        or receipt.get("candidate_purpose")
+        != predecessor_manifest.get("campaign_purpose")
+        or receipt.get("target_version") != predecessor_manifest.get("target_version")
+    ):
+        raise ConfigurationError("前序 VC-4 构建收据身份漂移。")
+    copied = _copy_successor_binding(
+        predecessor_dir,
+        staging_dir,
+        {"path": expected_relative, "sha256": str(build_binding["sha256"])},
+        kind="candidate_build_projection",
+        copied_files=copied_files,
+    )
+    for name in (
+        "build_inventory",
+        "frontend_provenance",
+        "image_inspection",
+        "capability_probe",
+    ):
+        machine = receipt.get(name)
+        if machine is None:
+            continue
+        if (
+            not isinstance(machine, Mapping)
+            or not isinstance(machine.get("path"), str)
+            or not SHA256_RE.fullmatch(str(machine.get("sha256", "")))
+            or not isinstance(machine.get("bytes"), int)
+            or isinstance(machine.get("bytes"), bool)
+        ):
+            raise ConfigurationError(f"前序 Candidate {name} 机器收据绑定非法。")
+        _copy_successor_binding(
+            predecessor_dir,
+            staging_dir,
+            {"path": str(machine["path"]), "sha256": str(machine["sha256"])},
+            kind="candidate_build_projection_machine_receipt",
+            copied_files=copied_files,
+        )
+        projected_machine = _campaign_file(staging_dir, str(machine["path"]))
+        if projected_machine.stat().st_size != machine["bytes"]:
+            raise ConfigurationError(f"前序 Candidate {name} 机器收据大小漂移。")
+    return {
+        "path": copied["path"],
+        "sha256": copied["sha256"],
+        "bytes": expected_path.stat().st_size,
+    }
+
+
 def _successor_uses_reclassified_historical_plan_binding(
     staging_dir: Path,
     manifest: dict[str, Any],
@@ -15900,8 +20951,10 @@ def _successor_uses_reclassified_historical_plan_binding(
         isinstance(manifest.get("predecessor"), Mapping)
         and manifest["predecessor"].get("reason")
         in {
+            "candidate_failed_job_tool_recovery",
             "candidate_recovery_control_refresh",
             "candidate_recovery_control_replacement",
+            POST_RUN_SEAL_RECOVERY_REASON,
         }
     )
     if (
@@ -16010,44 +21063,569 @@ def _successor_abandoned_attempt(
     }
 
 
-def _validate_failed_job_tool_recovery_source(
+def _is_c0154_a15_post_run_seal_source(
+    predecessor_manifest: Mapping[str, Any],
+    *,
+    candidate_id: str,
+    attempt_id: str,
+) -> bool:
+    """只识别已经审计冻结的 0.154 A15 九项完成来源。"""
+
+    frozen = C0154_A15_POST_RUN_SEAL_SOURCE
+    tool_identity = predecessor_manifest.get("tool_identity")
+    return bool(
+        predecessor_manifest.get("campaign_id") == frozen["campaign_id"]
+        and predecessor_manifest.get("target_version") == frozen["target_version"]
+        and candidate_id == frozen["candidate_id"]
+        and attempt_id == frozen["attempt_id"]
+        and isinstance(tool_identity, Mapping)
+        and tool_identity.get("files_sha256") == frozen["tool_files_sha256"]
+    )
+
+
+def _validated_c0154_a15_post_run_seal_source_scope(
+    predecessor_dir: Path,
+    predecessor_manifest: Mapping[str, Any],
+    *,
+    candidate_id: str,
+    attempt_id: str,
+) -> dict[str, Any]:
+    """逐字重放 A15 Campaign 与九项完成 attempt。"""
+
+    frozen = C0154_A15_POST_RUN_SEAL_SOURCE
+    expected_dir = Path(str(frozen["campaign_dir"]))
+    try:
+        resolved_dir = predecessor_dir.resolve(strict=True)
+    except (OSError, RuntimeError) as error:
+        raise ConfigurationError("A15 seal 恢复的直接前序路径不可信。") from error
+    if (
+        not predecessor_dir.is_absolute()
+        or predecessor_dir.is_symlink()
+        or not predecessor_dir.is_dir()
+        or resolved_dir != predecessor_dir
+        or predecessor_dir != expected_dir
+    ):
+        raise ConfigurationError("A15 seal 恢复的直接前序路径不可信。")
+    manifest_path = predecessor_dir / "campaign.json"
+    if (
+        manifest_path.is_symlink()
+        or not manifest_path.is_file()
+        or file_sha256(manifest_path) != frozen["campaign_manifest_sha256"]
+        or _read_json(manifest_path, "A15 seal 恢复前序清单")
+        != dict(predecessor_manifest)
+        or not _is_c0154_a15_post_run_seal_source(
+            predecessor_manifest,
+            candidate_id=candidate_id,
+            attempt_id=attempt_id,
+        )
+    ):
+        raise ConfigurationError("A15 seal 恢复的前序清单身份或摘要漂移。")
+    attempt_path = (
+        predecessor_dir
+        / "candidates"
+        / candidate_id
+        / "attempts"
+        / attempt_id
+        / "attempt.json"
+    )
+    _reject_symlink_components(attempt_path, predecessor_dir, "A15 seal 恢复源 attempt")
+    if (
+        attempt_path.is_symlink()
+        or not attempt_path.is_file()
+        or file_sha256(attempt_path) != frozen["attempt_sha256"]
+    ):
+        raise ConfigurationError("A15 seal 恢复的源 attempt 文件摘要漂移。")
+    attempt = _read_json(attempt_path, "A15 seal 恢复源 attempt")
+    unsigned = dict(attempt)
+    attempt_digest = unsigned.pop("attempt_digest", None)
+    identity = attempt.get("identity")
+    sorted_results = sorted(
+        (dict(item) for item in attempt.get("results", []) if isinstance(item, Mapping)),
+        key=lambda item: str(item.get("id", "")),
+    )
+    job_roots = _classification_candidate_job_evidence_roots(
+        attempt,
+        require_existing=True,
+    )
+    if (
+        attempt.get("schema_version") != CAPTURE_ATTEMPT_SCHEMA
+        or attempt.get("campaign_id") != frozen["campaign_id"]
+        or attempt.get("campaign_manifest_sha256")
+        != frozen["campaign_manifest_sha256"]
+        or attempt.get("phase") != "candidate"
+        or attempt.get("candidate_id") != candidate_id
+        or attempt.get("attempt_id") != attempt_id
+        or attempt.get("status") != "awaiting_receipts"
+        or attempt_digest != frozen["attempt_digest"]
+        or _fingerprint(unsigned) != attempt_digest
+        or not isinstance(identity, Mapping)
+        or _fingerprint(dict(identity)) != frozen["identity_sha256"]
+        or _fingerprint({"results": sorted_results})
+        != frozen["sorted_results_sha256"]
+        or _fingerprint({"evidence_roots": [str(root) for root in job_roots]})
+        != frozen["job_evidence_roots_sha256"]
+    ):
+        raise ConfigurationError("A15 seal 恢复源不是冻结的九项完成 attempt。")
+    return {
+        "predecessor_manifest": dict(predecessor_manifest),
+        "source_attempt": attempt,
+        "job_evidence_roots": [str(root) for root in job_roots],
+    }
+
+
+def _require_c0154_a15_formal_post_run_seal_source(
+    arguments: argparse.Namespace,
+    predecessor_manifest: Mapping[str, Any],
+) -> dict[str, Any]:
+    """把正式 post-run seal 入口锁死到 A15 唯一来源。"""
+
+    candidate_id = getattr(arguments, "predecessor_candidate_id", None)
+    attempt_id = getattr(arguments, "predecessor_attempt_id", None)
+    predecessor_dir = getattr(arguments, "predecessor_campaign_dir", None)
+    if (
+        not isinstance(candidate_id, str)
+        or not isinstance(attempt_id, str)
+        or not isinstance(predecessor_dir, Path)
+        or not _is_c0154_a15_post_run_seal_source(
+            predecessor_manifest,
+            candidate_id=candidate_id,
+            attempt_id=attempt_id,
+        )
+    ):
+        raise ConfigurationError(
+            "正式 post-run seal 恢复只允许已审计的 0.154 A15 九项完成来源。"
+        )
+    return _validated_c0154_a15_post_run_seal_source_scope(
+        predecessor_dir,
+        predecessor_manifest,
+        candidate_id=candidate_id,
+        attempt_id=attempt_id,
+    )
+
+
+def _require_c0154_a15_post_run_seal_source_binding(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    *,
+    candidate_id: str,
+    attempt_id: str,
+) -> dict[str, Any]:
+    """从后继的不可变 predecessor 绑定重放 A15 seal 恢复来源。"""
+
+    frozen = C0154_A15_POST_RUN_SEAL_SOURCE
+    predecessor = manifest.get("predecessor")
+    if (
+        manifest.get("target_version") != frozen["target_version"]
+        or not isinstance(predecessor, Mapping)
+        or set(predecessor)
+        != {
+            "campaign_dir",
+            "campaign_id",
+            "campaign_manifest_sha256",
+            "reason",
+        }
+        or predecessor.get("reason") != POST_RUN_SEAL_RECOVERY_REASON
+        or predecessor.get("campaign_dir") != frozen["campaign_dir"]
+        or predecessor.get("campaign_id") != frozen["campaign_id"]
+        or predecessor.get("campaign_manifest_sha256")
+        != frozen["campaign_manifest_sha256"]
+        or candidate_id != frozen["candidate_id"]
+        or attempt_id != frozen["attempt_id"]
+    ):
+        raise ConfigurationError("A15 seal 恢复的直接前序绑定不匹配。")
+    predecessor_dir = Path(str(predecessor["campaign_dir"]))
+    if (
+        campaign_dir.exists()
+        and predecessor_dir == campaign_dir.resolve(strict=True)
+    ):
+        raise ConfigurationError("A15 seal 恢复的直接前序路径不可信。")
+    predecessor_manifest = _read_json(
+        predecessor_dir / "campaign.json",
+        "A15 seal 恢复前序清单",
+    )
+    return _validated_c0154_a15_post_run_seal_source_scope(
+        predecessor_dir,
+        predecessor_manifest,
+        candidate_id=candidate_id,
+        attempt_id=attempt_id,
+    )
+
+
+def _published_c0154_a15_post_run_seal_coordinates(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+) -> tuple[str, str]:
+    """从已发布后继的 v6 导入收据重放 A15 Candidate／attempt。"""
+
+    import_path = campaign_dir / "predecessor-import.json"
+    if import_path.is_symlink() or not import_path.is_file():
+        raise ConfigurationError("A15 seal 恢复缺少可信前序导入收据。")
+    imported = _read_json(import_path, "A15 seal 恢复前序导入收据")
+    expected_fields = {
+        "schema_version",
+        "created_at_utc",
+        "reason",
+        "successor_campaign_id",
+        "successor_campaign_manifest_sha256",
+        "predecessor_campaign",
+        "stages",
+        "copied_files",
+        "configuration_transition",
+        "abandoned_candidate_attempt",
+        "job_rehearsal_transition",
+        "recovery_control_transition",
+        "receipt_digest",
+    }
+    unsigned = dict(imported)
+    receipt_digest = unsigned.pop("receipt_digest", None)
+    predecessor = manifest.get("predecessor")
+    predecessor_binding = imported.get("predecessor_campaign")
+    abandoned = imported.get("abandoned_candidate_attempt")
+    frozen = C0154_A15_POST_RUN_SEAL_SOURCE
+    expected_abandoned = {
+        "candidate_id": frozen["candidate_id"],
+        "attempt_id": frozen["attempt_id"],
+        "path": (
+            f"candidates/{frozen['candidate_id']}/attempts/"
+            f"{frozen['attempt_id']}/attempt.json"
+        ),
+        "sha256": frozen["attempt_sha256"],
+        "attempt_digest": frozen["attempt_digest"],
+        "identity_sha256": frozen["identity_sha256"],
+        "status": "awaiting_receipts",
+    }
+    manifest_path = campaign_dir / "campaign.json"
+    if (
+        set(imported) != expected_fields
+        or imported.get("schema_version") != PREDECESSOR_RECOVERY_IMPORT_SCHEMA
+        or not _is_rfc3339_timestamp(imported.get("created_at_utc"))
+        or imported.get("reason") != POST_RUN_SEAL_RECOVERY_REASON
+        or imported.get("successor_campaign_id") != manifest.get("campaign_id")
+        or manifest_path.is_symlink()
+        or not manifest_path.is_file()
+        or imported.get("successor_campaign_manifest_sha256")
+        != file_sha256(manifest_path)
+        or not SHA256_RE.fullmatch(str(receipt_digest or ""))
+        or _fingerprint(unsigned) != receipt_digest
+        or not isinstance(predecessor_binding, Mapping)
+        or predecessor
+        != {
+            **dict(predecessor_binding),
+            "reason": POST_RUN_SEAL_RECOVERY_REASON,
+        }
+        or abandoned != expected_abandoned
+        or not isinstance(imported.get("stages"), Mapping)
+        or not isinstance(imported.get("copied_files"), list)
+        or not isinstance(imported.get("configuration_transition"), Mapping)
+        or not isinstance(imported.get("job_rehearsal_transition"), Mapping)
+        or not isinstance(imported.get("recovery_control_transition"), Mapping)
+    ):
+        raise ConfigurationError("A15 seal 恢复的导入身份或自摘要漂移。")
+    candidate_id = str(frozen["candidate_id"])
+    attempt_id = str(frozen["attempt_id"])
+    _require_c0154_a15_post_run_seal_source_binding(
+        campaign_dir,
+        manifest,
+        candidate_id=candidate_id,
+        attempt_id=attempt_id,
+    )
+    return candidate_id, attempt_id
+
+
+def _is_c0154_v7_failed_core_source(
+    predecessor_manifest: Mapping[str, Any],
+    *,
+    candidate_id: str,
+    attempt_id: str,
+) -> bool:
+    """只识别已经审计冻结的 0.154 v7 A15 单点失败来源。"""
+
+    tool_identity = predecessor_manifest.get("tool_identity")
+    return bool(
+        predecessor_manifest.get("campaign_id")
+        == C0154_V7_RECOVERY_SOURCE["campaign_id"]
+        and predecessor_manifest.get("target_version")
+        == C0154_V7_RECOVERY_SOURCE["target_version"]
+        and candidate_id == C0154_V7_RECOVERY_SOURCE["candidate_id"]
+        and attempt_id == C0154_V7_RECOVERY_SOURCE["attempt_id"]
+        and isinstance(tool_identity, Mapping)
+        and tool_identity.get("files_sha256")
+        == C0154_V7_RECOVERY_SOURCE["tool_files_sha256"]
+    )
+
+
+def _validated_c0154_v7_recovery_source_scope(
+    predecessor_dir: Path,
+    predecessor_manifest: Mapping[str, Any],
+    *,
+    candidate_id: str,
+    attempt_id: str,
+) -> dict[str, Any]:
+    """重放已冻结的 v7 Campaign 与失败 attempt，返回完整来源绑定。"""
+
+    expected_dir = Path(str(C0154_V7_RECOVERY_SOURCE["campaign_dir"]))
+    try:
+        resolved_predecessor_dir = predecessor_dir.resolve(strict=True)
+    except (OSError, RuntimeError) as error:
+        raise ConfigurationError("v7 失败 Job 恢复的直接前序路径不可信。") from error
+    if (
+        not predecessor_dir.is_absolute()
+        or predecessor_dir.is_symlink()
+        or not predecessor_dir.is_dir()
+        or resolved_predecessor_dir != predecessor_dir
+        or predecessor_dir != expected_dir
+    ):
+        raise ConfigurationError("v7 失败 Job 恢复的直接前序路径不可信。")
+
+    predecessor_manifest_path = predecessor_dir / "campaign.json"
+    if (
+        predecessor_manifest_path.is_symlink()
+        or not predecessor_manifest_path.is_file()
+        or file_sha256(predecessor_manifest_path)
+        != C0154_V7_RECOVERY_SOURCE["campaign_manifest_sha256"]
+    ):
+        raise ConfigurationError("v7 失败 Job 恢复的前序清单摘要漂移。")
+    replayed_manifest = _read_json(
+        predecessor_manifest_path,
+        "v7 失败 Job 恢复前序清单",
+    )
+    if replayed_manifest != dict(predecessor_manifest) or not (
+        _is_c0154_v7_failed_core_source(
+            replayed_manifest,
+            candidate_id=candidate_id,
+            attempt_id=attempt_id,
+        )
+    ):
+        raise ConfigurationError(
+            "v7 失败 Job 恢复的版本、工具、Candidate 或 attempt 身份漂移。"
+        )
+    attempt_path = (
+        predecessor_dir
+        / "candidates"
+        / candidate_id
+        / "attempts"
+        / attempt_id
+        / "attempt.json"
+    )
+    _reject_symlink_components(attempt_path, predecessor_dir, "v7 恢复源 attempt")
+    if (
+        attempt_path.is_symlink()
+        or not attempt_path.is_file()
+        or file_sha256(attempt_path)
+        != C0154_V7_RECOVERY_SOURCE["attempt_sha256"]
+    ):
+        raise ConfigurationError("v7 失败 Job 恢复的源 attempt 文件摘要漂移。")
+    attempt = _read_json(attempt_path, "v7 失败 Job 恢复源 attempt")
+    unsigned_attempt = dict(attempt)
+    attempt_digest = unsigned_attempt.pop("attempt_digest", None)
+    identity = attempt.get("identity")
+    if (
+        attempt.get("schema_version") != CAPTURE_ATTEMPT_SCHEMA
+        or attempt.get("campaign_id") != C0154_V7_RECOVERY_SOURCE["campaign_id"]
+        or attempt.get("campaign_manifest_sha256")
+        != C0154_V7_RECOVERY_SOURCE["campaign_manifest_sha256"]
+        or attempt.get("phase") != "candidate"
+        or attempt.get("candidate_id") != candidate_id
+        or attempt.get("attempt_id") != attempt_id
+        or attempt.get("status") != "failed"
+        or attempt_digest != C0154_V7_RECOVERY_SOURCE["attempt_digest"]
+        or _fingerprint(unsigned_attempt) != attempt_digest
+        or not isinstance(identity, Mapping)
+        or _fingerprint(identity)
+        != C0154_V7_RECOVERY_SOURCE["identity_sha256"]
+    ):
+        raise ConfigurationError("v7 失败 Job 恢复的源 attempt 完整身份漂移。")
+    abandoned = {
+        "candidate_id": candidate_id,
+        "attempt_id": attempt_id,
+        "path": attempt_path.relative_to(predecessor_dir).as_posix(),
+        "sha256": C0154_V7_RECOVERY_SOURCE["attempt_sha256"],
+        "attempt_digest": str(attempt_digest),
+        "identity_sha256": C0154_V7_RECOVERY_SOURCE["identity_sha256"],
+        "status": "failed",
+    }
+    return {
+        "predecessor_manifest": replayed_manifest,
+        "abandoned_candidate_attempt": abandoned,
+    }
+
+
+def _require_c0154_v7_recovery_source_binding(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    *,
+    candidate_id: str,
+    attempt_id: str,
+) -> dict[str, Any]:
+    """重放 v7 直接前序的不可变清单绑定。
+
+    该函数同时用于后继创建和已发布 Campaign 重载；只读取固定前序的
+    清单与 attempt 字节，不递归加载当前后继或其控制收据。
+    """
+
+    predecessor = manifest.get("predecessor")
+    if (
+        manifest.get("target_version")
+        != C0154_V7_RECOVERY_SOURCE["target_version"]
+        or not isinstance(predecessor, Mapping)
+        or set(predecessor)
+        != {
+            "campaign_dir",
+            "campaign_id",
+            "campaign_manifest_sha256",
+            "reason",
+        }
+        or predecessor.get("reason") != "candidate_failed_job_tool_recovery"
+        or predecessor.get("campaign_dir")
+        != C0154_V7_RECOVERY_SOURCE["campaign_dir"]
+        or predecessor.get("campaign_id")
+        != C0154_V7_RECOVERY_SOURCE["campaign_id"]
+        or predecessor.get("campaign_manifest_sha256")
+        != C0154_V7_RECOVERY_SOURCE["campaign_manifest_sha256"]
+    ):
+        raise ConfigurationError("v7 失败 Job 恢复的直接前序绑定不匹配。")
+    predecessor_dir = Path(str(predecessor["campaign_dir"]))
+    if campaign_dir.exists() and predecessor_dir == campaign_dir.resolve(strict=True):
+        raise ConfigurationError("v7 失败 Job 恢复的直接前序路径不可信。")
+    predecessor_manifest = _read_json(
+        predecessor_dir / "campaign.json",
+        "v7 失败 Job 恢复前序清单",
+    )
+    return _validated_c0154_v7_recovery_source_scope(
+        predecessor_dir,
+        predecessor_manifest,
+        candidate_id=candidate_id,
+        attempt_id=attempt_id,
+    )
+
+
+def _published_c0154_v7_recovery_coordinates(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+) -> tuple[str, str]:
+    """从已发布后继的严格 v6 导入收据重放 Candidate／attempt。"""
+
+    import_path = campaign_dir / "predecessor-import.json"
+    if import_path.is_symlink() or not import_path.is_file():
+        raise ConfigurationError("v7 失败 Job 恢复缺少可信前序导入收据。")
+    imported = _read_json(import_path, "v7 失败 Job 恢复前序导入收据")
+    expected_fields = {
+        "schema_version",
+        "created_at_utc",
+        "reason",
+        "successor_campaign_id",
+        "successor_campaign_manifest_sha256",
+        "predecessor_campaign",
+        "stages",
+        "copied_files",
+        "configuration_transition",
+        "abandoned_candidate_attempt",
+        "job_rehearsal_transition",
+        "recovery_control_transition",
+        "receipt_digest",
+    }
+    unsigned = dict(imported)
+    receipt_digest = unsigned.pop("receipt_digest", None)
+    predecessor = manifest.get("predecessor")
+    predecessor_binding = imported.get("predecessor_campaign")
+    abandoned = imported.get("abandoned_candidate_attempt")
+    manifest_path = campaign_dir / "campaign.json"
+    if (
+        set(imported) != expected_fields
+        or imported.get("schema_version") != PREDECESSOR_RECOVERY_IMPORT_SCHEMA
+        or not _is_rfc3339_timestamp(imported.get("created_at_utc"))
+        or imported.get("reason") != "candidate_failed_job_tool_recovery"
+        or imported.get("successor_campaign_id") != manifest.get("campaign_id")
+        or manifest_path.is_symlink()
+        or not manifest_path.is_file()
+        or imported.get("successor_campaign_manifest_sha256")
+        != file_sha256(manifest_path)
+        or not SHA256_RE.fullmatch(str(receipt_digest or ""))
+        or _fingerprint(unsigned) != receipt_digest
+        or not isinstance(predecessor_binding, Mapping)
+        or set(predecessor_binding)
+        != {"campaign_dir", "campaign_id", "campaign_manifest_sha256"}
+        or predecessor
+        != {
+            **dict(predecessor_binding),
+            "reason": "candidate_failed_job_tool_recovery",
+        }
+        or not isinstance(abandoned, Mapping)
+        or set(abandoned)
+        != {
+            "candidate_id",
+            "attempt_id",
+            "path",
+            "sha256",
+            "attempt_digest",
+            "identity_sha256",
+            "status",
+        }
+        or abandoned.get("candidate_id")
+        != C0154_V7_RECOVERY_SOURCE["candidate_id"]
+        or abandoned.get("attempt_id")
+        != C0154_V7_RECOVERY_SOURCE["attempt_id"]
+        or abandoned.get("status") != "failed"
+        or not isinstance(imported.get("stages"), Mapping)
+        or not isinstance(imported.get("copied_files"), list)
+        or not isinstance(imported.get("configuration_transition"), Mapping)
+        or not isinstance(imported.get("job_rehearsal_transition"), Mapping)
+        or not isinstance(imported.get("recovery_control_transition"), Mapping)
+    ):
+        raise ConfigurationError("v7 失败 Job 恢复的导入身份或自摘要漂移。")
+    candidate_id = str(abandoned["candidate_id"])
+    attempt_id = str(abandoned["attempt_id"])
+    source_scope = _require_c0154_v7_recovery_source_binding(
+        campaign_dir,
+        manifest,
+        candidate_id=candidate_id,
+        attempt_id=attempt_id,
+    )
+    if dict(abandoned) != source_scope.get("abandoned_candidate_attempt"):
+        raise ConfigurationError("v7 失败 Job 恢复的源 attempt 完整绑定漂移。")
+    return candidate_id, attempt_id
+
+
+def _require_c0154_v7_formal_recovery_source(
+    arguments: argparse.Namespace,
+    predecessor_manifest: Mapping[str, Any],
+) -> dict[str, Any]:
+    """把正式恢复入口锁死到已审计的 v7 A15 单点失败坐标。"""
+
+    candidate_id = getattr(arguments, "predecessor_candidate_id", None)
+    attempt_id = getattr(arguments, "predecessor_attempt_id", None)
+    predecessor_dir = getattr(arguments, "predecessor_campaign_dir", None)
+    if (
+        not isinstance(candidate_id, str)
+        or not isinstance(attempt_id, str)
+        or not isinstance(predecessor_dir, Path)
+        or not _is_c0154_v7_failed_core_source(
+            predecessor_manifest,
+            candidate_id=candidate_id,
+            attempt_id=attempt_id,
+        )
+    ):
+        raise ConfigurationError(
+            "正式失败 Job 恢复入口只允许已审计的 0.154 v7 A15 单点失败来源。"
+        )
+    return _validated_c0154_v7_recovery_source_scope(
+        predecessor_dir,
+        predecessor_manifest,
+        candidate_id=candidate_id,
+        attempt_id=attempt_id,
+    )
+
+
+def _failed_job_recovery_high_risk_paths(
     predecessor_dir: Path,
     predecessor_manifest: Mapping[str, Any],
     successor_manifest: Mapping[str, Any],
     *,
     candidate_id: str,
     attempt_id: str,
-    reason: str,
-) -> None:
-    """确认产出工具修复只影响前序 Candidate 的失败 Job 闭集。"""
+) -> set[str]:
+    """把产出侧漂移收窄到真正会改变本轮失败 Job 字节的文件。"""
 
-    attempt_root, attempt = _load_capture_attempt(
-        predecessor_dir,
-        "candidate",
-        candidate_id,
-        attempt_id,
-    )
-    scope = _phase_evaluation_recovery_scope(
-        predecessor_dir,
-        predecessor_manifest,
-        phase="candidate",
-        candidate_id=candidate_id,
-        attempt_root=attempt_root,
-        attempt=attempt,
-        allow_empty=False,
-        allow_awaiting_failures=True,
-    )
-    failed_ids = set(scope.get("failed_job_ids", []))
-    execute_ids = set(scope.get("execute_job_ids", []))
-    if reason == "candidate_recovery_control_refresh":
-        if attempt.get("status") != "failed" or not failed_ids:
-            raise ConfigurationError(
-                "控制刷新只接受已批准 transition 所属的 failed Candidate attempt。"
-            )
-    elif attempt.get("status") != "awaiting_receipts" or not failed_ids:
-        raise ConfigurationError(
-            "失败 Job 工具恢复只接受含可选失败项的 awaiting_receipts Candidate attempt。"
-        )
     source_tool = predecessor_manifest.get("tool_identity")
     successor_tool = successor_manifest.get("tool_identity")
     if not isinstance(source_tool, Mapping) or not isinstance(
@@ -16070,6 +21648,106 @@ def _validate_failed_job_tool_recovery_source(
         )
     ):
         high_risk_paths.remove(target_scenario_path)
+
+    if not _is_c0154_v7_failed_core_source(
+        predecessor_manifest,
+        candidate_id=candidate_id,
+        attempt_id=attempt_id,
+    ):
+        return high_risk_paths
+
+    allowed = {
+        "codex_upgrade_candidate_readiness.py",
+        "codex_upgrade_scenarios_0_154_0.json",
+        "codex_upgrade_timing_ledger.schema.json",
+        "run_candidate_core_capture.sh",
+    }
+    unknown = high_risk_paths - allowed
+    if unknown:
+        raise ConfigurationError(
+            "0.154 v7 恢复含未审计的产出侧工具变化："
+            + "、".join(sorted(unknown))
+        )
+    if "run_candidate_core_capture.sh" not in high_risk_paths:
+        raise ConfigurationError("0.154 v7 恢复没有绑定 A15 产出脚本修复。")
+    if "codex_upgrade_scenarios_0_154_0.json" in high_risk_paths:
+        reference = predecessor_manifest.get("inputs", {}).get(
+            "target_discovery_scenarios"
+        )
+        _require_file_binding(reference, "0.154 v7 前序目标场景")
+        assert isinstance(reference, Mapping)
+        frozen_path = _campaign_file(predecessor_dir, str(reference["path"]))
+        current_path = Path(__file__).resolve().with_name(
+            "codex_upgrade_scenarios_0_154_0.json"
+        )
+        if (
+            frozen_path.is_symlink()
+            or not frozen_path.is_file()
+            or file_sha256(frozen_path) != reference["sha256"]
+            or current_path.is_symlink()
+            or not current_path.is_file()
+            or _scenario_job_execution_contract(
+                _read_json(frozen_path, "0.154 v7 前序目标场景")
+            )
+            != _scenario_job_execution_contract(
+                _read_json(current_path, "0.154 当前目标场景")
+            )
+        ):
+            raise ConfigurationError(
+                "0.154 v7 场景变化触及 Job 执行合同，禁止复用成功 Job。"
+            )
+    # readiness 与 timing schema 只约束本次启动前控制链；场景变化经上面的
+    # 执行合同比较证明只改 A15 说明。真正改变请求字节的唯一文件是失败的
+    # candidate-frozen-core 脚本。
+    return {"run_candidate_core_capture.sh"}
+
+
+def _validate_failed_job_tool_recovery_source(
+    predecessor_dir: Path,
+    predecessor_manifest: Mapping[str, Any],
+    successor_manifest: Mapping[str, Any],
+    *,
+    candidate_id: str,
+    attempt_id: str,
+    reason: str,
+) -> dict[str, Any]:
+    """确认产出工具修复只影响前序 Candidate 的失败 Job 闭集。"""
+
+    attempt_root, attempt = _load_capture_attempt(
+        predecessor_dir,
+        "candidate",
+        candidate_id,
+        attempt_id,
+        _verified_campaign_manifest=predecessor_manifest,
+    )
+    scope = _phase_evaluation_recovery_scope(
+        predecessor_dir,
+        predecessor_manifest,
+        phase="candidate",
+        candidate_id=candidate_id,
+        attempt_root=attempt_root,
+        attempt=attempt,
+        allow_empty=False,
+        allow_awaiting_failures=True,
+    )
+    failed_ids = set(scope.get("failed_job_ids", []))
+    execute_ids = set(scope.get("execute_job_ids", []))
+    if reason == "candidate_recovery_control_refresh":
+        if attempt.get("status") != "failed" or not failed_ids:
+            raise ConfigurationError(
+                "控制刷新只接受已批准 transition 所属的 failed Candidate attempt。"
+            )
+    elif attempt.get("status") not in {"failed", "awaiting_receipts"} or not failed_ids:
+        raise ConfigurationError(
+            "失败 Job 工具恢复只接受含失败项的 failed／awaiting_receipts Candidate attempt。"
+        )
+    high_risk_paths = _failed_job_recovery_high_risk_paths(
+        predecessor_dir,
+        predecessor_manifest,
+        successor_manifest,
+        candidate_id=candidate_id,
+        attempt_id=attempt_id,
+    )
     unknown_paths = high_risk_paths - set(
         RUNTIME_SUCCESSOR_CHANGED_TOOL_PATH_JOB_IDS
     )
@@ -16091,6 +21769,41 @@ def _validate_failed_job_tool_recovery_source(
         )
     if not failed_ids.issubset(execute_ids):
         raise ConfigurationError("失败 Job 工具恢复遗漏前序失败项。")
+    if _is_c0154_v7_failed_core_source(
+        predecessor_manifest,
+        candidate_id=candidate_id,
+        attempt_id=attempt_id,
+    ):
+        expected_planned = {
+            "candidate-compact-direct",
+            "candidate-compact-mitm",
+            "candidate-core-direct",
+            "candidate-core-mitm",
+            "candidate-frozen-aux",
+            "candidate-frozen-core",
+            "candidate-h1-wire",
+            "candidate-images-wire",
+            "candidate-ws-handshake-repeat",
+        }
+        if (
+            set(scope.get("planned_job_ids", [])) != expected_planned
+            or set(scope.get("completed_job_ids", []))
+            != expected_planned - {"candidate-frozen-core"}
+            or failed_ids != {"candidate-frozen-core"}
+            or set(scope.get("pending_job_ids", []))
+            or execute_ids != {"candidate-frozen-core"}
+        ):
+            raise ConfigurationError("0.154 v7 恢复源不是 8 成功／A15 单点失败闭集。")
+    return {
+        "planned_job_ids": sorted(set(scope.get("planned_job_ids", []))),
+        "reused_job_ids": sorted(set(scope.get("completed_job_ids", []))),
+        "execute_job_ids": sorted(execute_ids),
+        "failed_job_ids": sorted(failed_ids),
+        "pending_job_ids": sorted(set(scope.get("pending_job_ids", []))),
+        "reservation_exists": False,
+        "live_request_count": 0,
+        "scanned_bytes": 0,
+    }
 
 
 def _target_scenario_source_spec_only_drift(
@@ -16473,6 +22186,139 @@ def _approved_scenario_with_formal_execution_contract(
     ):
         raise ConfigurationError("批准语义与 Formal 执行合同合成失败。")
     return effective
+
+
+def _official_reuse_target_scenario_transition(
+    arguments: argparse.Namespace,
+    staging_dir: Path,
+    successor_manifest: dict[str, Any],
+    copied_files: dict[str, dict[str, Any]],
+) -> dict[str, Any] | None:
+    """官方证据只读复用时，让后继的 target 场景跟随当前受管场景的候选侧演进。
+
+    2026-09-18：受管场景在同一目标版本内新增了零请求候选 Job
+    ``candidate-trace-test``。reuse-official-evidence 建出的 Formal 若继续逐字
+    承接前序冻结的 target 场景，其 ``jobs`` 就少一项，而 VC-2 批准的目标场景与
+    ``capture-candidate run`` 已按受管场景执行十项 Job，seal／对账的 provenance
+    核算会因 Job 收据身份不在 Campaign Job 闭集内而失败关闭。这里只在
+    ``_recovery_rehearsal_target_scenario_override(official_only_reuse=True)`` 判定
+    official Job 执行合同逐字一致时，把后继 staging 的 target 场景替换为
+    完整 Job 演练绑定的 preflight 快照（即创建当时的受管场景原文件），并返回
+    可复算的过渡记录写入 predecessor-import。官方证据仍按 §5.3.3 只读复用，
+    候选侧差异由新 Campaign 自己的 VC-2 重分类与 VC-5 全量执行承担。
+    """
+
+    if getattr(arguments, "reason", None) != OFFICIAL_EVIDENCE_REUSE_REASON:
+        return None
+    rehearsal_root = getattr(arguments, "job_rehearsal_root", None)
+    rehearsal_receipt = getattr(arguments, "job_rehearsal_receipt", None)
+    if rehearsal_root is None or rehearsal_receipt is None:
+        return None
+    rehearsal_relative = _control_receipt_relative(
+        rehearsal_root,
+        rehearsal_receipt,
+        "官方证据复用完整 Job 演练收据",
+    )
+    try:
+        rehearsal = codex_upgrade_job_rehearsal_receipt.replay(
+            rehearsal_root,
+            rehearsal_relative,
+        )
+    except (OSError, codex_upgrade_job_rehearsal_receipt.JobRehearsalReceiptError) as error:
+        raise ConfigurationError(
+            f"官方证据复用完整 Job 演练收据无法重放：{error}"
+        ) from error
+    preflight_dir, preflight_manifest = _recovery_rehearsal_preflight_from_receipt(
+        rehearsal,
+        successor_manifest,
+    )
+    override = _recovery_rehearsal_target_scenario_override(
+        staging_dir,
+        successor_manifest,
+        preflight_dir,
+        preflight_manifest,
+        official_only_reuse=True,
+    )
+    if override is None:
+        return None
+    inputs = successor_manifest.get("inputs")
+    reference = (
+        inputs.get("target_discovery_scenarios") if isinstance(inputs, dict) else None
+    )
+    _require_file_binding(reference, "官方证据复用前序 target 场景")
+    assert isinstance(reference, dict)
+    preflight_inputs = preflight_manifest.get("inputs")
+    preflight_reference = (
+        preflight_inputs.get("target_discovery_scenarios")
+        if isinstance(preflight_inputs, Mapping)
+        else None
+    )
+    _require_file_binding(preflight_reference, "官方证据复用 preflight target 场景")
+    assert isinstance(preflight_reference, dict)
+    source = _campaign_file(preflight_dir, str(preflight_reference["path"]))
+    if (
+        source.is_symlink()
+        or not source.is_file()
+        or file_sha256(source) != preflight_reference["sha256"]
+        or _read_json(source, "官方证据复用 preflight target 场景") != override
+    ):
+        raise ConfigurationError("官方证据复用 preflight target 场景原文件与判定结果不一致。")
+    target_relative = str(reference["path"])
+    destination = _campaign_file(staging_dir, target_relative)
+    if (
+        destination.is_symlink()
+        or not destination.is_file()
+        or file_sha256(destination) != reference["sha256"]
+    ):
+        raise ConfigurationError("官方证据复用前序 target 场景副本摘要漂移。")
+    frozen = _read_json(destination, "官方证据复用前序 target 场景副本")
+    frozen_jobs = {
+        str(job.get("id")): job
+        for job in frozen.get("capture_jobs", [])
+        if isinstance(job, dict)
+    }
+    managed_jobs = {
+        str(job.get("id")): job
+        for job in override.get("capture_jobs", [])
+        if isinstance(job, dict)
+    }
+    added = sorted(set(managed_jobs) - set(frozen_jobs))
+    removed = sorted(set(frozen_jobs) - set(managed_jobs))
+    changed = sorted(
+        job_id
+        for job_id in set(managed_jobs) & set(frozen_jobs)
+        if managed_jobs[job_id] != frozen_jobs[job_id]
+    )
+    if any(
+        (managed_jobs.get(job_id) or frozen_jobs.get(job_id) or {}).get("phase") != "candidate"
+        for job_id in (*added, *removed, *changed)
+    ):
+        raise ConfigurationError("官方证据复用只允许候选侧 Job 演进；official Job 不得增删改。")
+    if not (added or removed or changed):
+        return None
+    destination.unlink()
+    copied = _secure_copy_file_once(source, destination)
+    successor_reference = {"path": target_relative, "sha256": copied["sha256"]}
+    inputs["target_discovery_scenarios"] = successor_reference
+    copied_files[target_relative] = {
+        "kind": "official_reuse_target_scenario",
+        "source_path": target_relative,
+        "target_path": target_relative,
+        "sha256": copied["sha256"],
+        "bytes": copied["bytes"],
+    }
+    return {
+        "reason": OFFICIAL_REUSE_TARGET_SCENARIO_TRANSITION_REASON,
+        "predecessor": dict(reference),
+        "successor": successor_reference,
+        "preflight_campaign": {
+            "campaign_id": str(preflight_manifest["campaign_id"]),
+            "manifest_sha256": file_sha256(preflight_dir / "campaign.json"),
+        },
+        "added_job_ids": added,
+        "removed_job_ids": removed,
+        "changed_job_ids": changed,
+    }
 
 
 def _successor_target_scenario_transition(
@@ -17195,6 +23041,17 @@ def _control_epoch_required_phase(source: Mapping[str, Any]) -> str:
     return "VC-2" if _is_official_sealed_control_epoch_source(source) else "VC-4"
 
 
+def _control_epoch_stop_required_phase(
+    manifest: Mapping[str, Any],
+    source: Mapping[str, Any],
+) -> str:
+    """返回旧 Ledger 停线阶段；唯一 VC-5 恢复后继允许从 VC-0 承接。"""
+
+    if _is_c0154_vc5_failed_job_control_epoch_source(manifest, source):
+        return "VC-0"
+    return _control_epoch_required_phase(source)
+
+
 def _control_epoch_previous_controls(
     manifest: Mapping[str, Any],
     source: Mapping[str, Any],
@@ -17216,6 +23073,169 @@ def _control_epoch_previous_controls(
     return json.loads(json.dumps(controls, ensure_ascii=False))
 
 
+def _is_c0154_vc5_failed_job_control_epoch_campaign(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+) -> bool:
+    """精确识别唯一获准从 VC-0 停线续接控制链的正式后继。"""
+
+    predecessor = manifest.get("predecessor")
+    manifest_path = campaign_dir / "campaign.json"
+    if (
+        campaign_dir.name
+        != C0154_VC5_FAILED_JOB_CONTROL_EPOCH["campaign_id"]
+        or campaign_dir.is_symlink()
+        or not campaign_dir.is_dir()
+        or manifest_path.is_symlink()
+        or not manifest_path.is_file()
+        or manifest.get("campaign_id")
+        != C0154_VC5_FAILED_JOB_CONTROL_EPOCH["campaign_id"]
+        or manifest.get("campaign_mode") != "formal"
+        or manifest.get("target_version")
+        != C0154_VC5_FAILED_JOB_CONTROL_EPOCH["target_version"]
+        or not isinstance(predecessor, Mapping)
+        or predecessor.get("reason")
+        != C0154_VC5_FAILED_JOB_CONTROL_EPOCH["predecessor_reason"]
+    ):
+        return False
+    return (
+        file_sha256(manifest_path)
+        == C0154_VC5_FAILED_JOB_CONTROL_EPOCH["campaign_manifest_sha256"]
+    )
+
+
+def _is_c0154_vc5_failed_job_control_epoch_source(
+    manifest: Mapping[str, Any],
+    source: Mapping[str, Any],
+) -> bool:
+    """确认 control epoch 源仍是 9/8/1 的唯一 A15 恢复闭集。"""
+
+    planned = list(C0154_VC5_FAILED_JOB_CONTROL_EPOCH["planned_job_ids"])
+    execute = [str(C0154_VC5_FAILED_JOB_CONTROL_EPOCH["execute_job_id"])]
+    reused = sorted(set(planned) - set(execute))
+    predecessor = manifest.get("predecessor")
+    return bool(
+        manifest.get("campaign_id")
+        == C0154_VC5_FAILED_JOB_CONTROL_EPOCH["campaign_id"]
+        and manifest.get("target_version")
+        == C0154_VC5_FAILED_JOB_CONTROL_EPOCH["target_version"]
+        and isinstance(predecessor, Mapping)
+        and predecessor.get("reason")
+        == C0154_VC5_FAILED_JOB_CONTROL_EPOCH["predecessor_reason"]
+        and source.get("candidate_id")
+        == C0154_VC5_FAILED_JOB_CONTROL_EPOCH["candidate_id"]
+        and source.get("attempt_id")
+        == C0154_VC5_FAILED_JOB_CONTROL_EPOCH["attempt_id"]
+        and source.get("planned_job_ids") == planned
+        and source.get("execute_job_ids") == execute
+        and source.get("reused_job_ids") == reused
+        and source.get("failed_job_ids") == execute
+        and source.get("pending_job_ids") == []
+        and source.get("production_paths")
+        == [C0154_VC5_FAILED_JOB_CONTROL_EPOCH["production_path"]]
+    )
+
+
+def _c0154_vc5_failed_job_control_epoch_source_context(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    *,
+    candidate_id: str | None,
+    attempt_id: str | None,
+) -> dict[str, Any]:
+    """重放唯一已发布恢复后继的 9/8/1 来源，不引入新执行事实。"""
+
+    if not _is_c0154_vc5_failed_job_control_epoch_campaign(
+        campaign_dir,
+        manifest,
+    ):
+        raise ConfigurationError("VC-5 控制续期 Campaign 身份或清单摘要不匹配。")
+    source_candidate_id, source_attempt_id = (
+        _published_c0154_v7_recovery_coordinates(campaign_dir, manifest)
+    )
+    if (
+        source_candidate_id
+        != C0154_VC5_FAILED_JOB_CONTROL_EPOCH["candidate_id"]
+        or source_attempt_id
+        != C0154_VC5_FAILED_JOB_CONTROL_EPOCH["attempt_id"]
+        or (candidate_id is not None and candidate_id != source_candidate_id)
+        or (attempt_id is not None and attempt_id != source_attempt_id)
+    ):
+        raise ConfigurationError("VC-5 控制续期 Candidate／attempt 身份不匹配。")
+    source_binding = _require_c0154_v7_recovery_source_binding(
+        campaign_dir,
+        manifest,
+        candidate_id=source_candidate_id,
+        attempt_id=source_attempt_id,
+    )
+    predecessor_manifest = source_binding.get("predecessor_manifest")
+    abandoned = source_binding.get("abandoned_candidate_attempt")
+    predecessor = manifest.get("predecessor")
+    if (
+        not isinstance(predecessor_manifest, Mapping)
+        or not isinstance(abandoned, Mapping)
+        or not isinstance(predecessor, Mapping)
+    ):
+        raise ConfigurationError("VC-5 控制续期的前序来源绑定不完整。")
+    predecessor_dir = Path(str(predecessor.get("campaign_dir", ""))).resolve(
+        strict=True
+    )
+    scope = _validate_failed_job_tool_recovery_source(
+        predecessor_dir,
+        predecessor_manifest,
+        manifest,
+        candidate_id=source_candidate_id,
+        attempt_id=source_attempt_id,
+        reason="candidate_failed_job_tool_recovery",
+    )
+    planned = list(C0154_VC5_FAILED_JOB_CONTROL_EPOCH["planned_job_ids"])
+    execute = [str(C0154_VC5_FAILED_JOB_CONTROL_EPOCH["execute_job_id"])]
+    reused = sorted(set(planned) - set(execute))
+    expected_scope = {
+        "planned_job_ids": planned,
+        "reused_job_ids": reused,
+        "execute_job_ids": execute,
+        "failed_job_ids": execute,
+        "pending_job_ids": [],
+        "reservation_exists": False,
+        "live_request_count": 0,
+        "scanned_bytes": 0,
+    }
+    if scope != expected_scope:
+        raise ConfigurationError("VC-5 控制续期来源不是精确的 9/8/1 零执行闭集。")
+    scenario = manifest.get("inputs", {}).get("target_discovery_scenarios")
+    _require_file_binding(scenario, "VC-5 控制续期 target 场景")
+    assert isinstance(scenario, Mapping)
+    import_path = campaign_dir / "predecessor-import.json"
+    source = {
+        "candidate_id": source_candidate_id,
+        "attempt_id": source_attempt_id,
+        "attempt_digest": str(abandoned.get("attempt_digest", "")),
+        "candidate_identity_sha256": str(
+            abandoned.get("identity_sha256", "")
+        ),
+        # 该精确例外没有 evaluation transition；v6 前序导入收据本身就是
+        # 对直接前序、失败 attempt 与 9/8/1 闭集的不可变授权绑定。
+        "source_transition": {
+            "path": "predecessor-import.json",
+            "sha256": file_sha256(import_path),
+        },
+        "recovery_scope_sha256": _fingerprint(scope),
+        "planned_job_ids": planned,
+        "execute_job_ids": execute,
+        "reused_job_ids": reused,
+        "failed_job_ids": execute,
+        "pending_job_ids": [],
+        "production_paths": [
+            str(C0154_VC5_FAILED_JOB_CONTROL_EPOCH["production_path"])
+        ],
+        "target_scenario": dict(scenario),
+    }
+    if not _is_c0154_vc5_failed_job_control_epoch_source(manifest, source):
+        raise ConfigurationError("VC-5 控制续期来源闭集发生漂移。")
+    return source
+
+
 def _control_epoch_source_context(
     campaign_dir: Path,
     manifest: Mapping[str, Any],
@@ -17230,6 +23250,13 @@ def _control_epoch_source_context(
     predecessor_reason = (
         predecessor.get("reason") if isinstance(predecessor, Mapping) else None
     )
+    if predecessor_reason == "candidate_failed_job_tool_recovery":
+        return _c0154_vc5_failed_job_control_epoch_source_context(
+            campaign_dir,
+            manifest,
+            candidate_id=candidate_id,
+            attempt_id=attempt_id,
+        )
     if (
         candidate_id is None
         and attempt_id is None
@@ -17640,6 +23667,7 @@ def _control_epoch_stop_checkpoint(
         or summary.get("active_phase") != expected_stop_phase
         or summary.get("upgrade_id") != timing.get("upgrade_id")
         or summary.get("evidence_decision") != timing.get("evidence_decision")
+        or summary.get("total_live_request_count") != 0
         or str(ledger_root.resolve(strict=True)) != str(timing.get("ledger_dir"))
         or not current_head_valid
     ):
@@ -17665,6 +23693,32 @@ def _control_epoch_stop_checkpoint(
     return binding, dict(summary)
 
 
+def _preserve_c0154_vc0_control_receipts(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    controls: dict[str, Any],
+) -> None:
+    """VC-0～VC-4 已完成，续期只替换时钟／环境／no-op，不重做 P0。"""
+
+    if not _is_c0154_vc5_failed_job_control_epoch_campaign(
+        campaign_dir,
+        manifest,
+    ):
+        return
+    frozen_controls = manifest.get("control_receipts")
+    if not isinstance(frozen_controls, Mapping):
+        raise ConfigurationError("VC-5 控制续期缺少冻结的 VC-0 控制绑定。")
+    preserved_names = {"p0_gate"}
+    if _release_certification_required(manifest, frozen_controls):
+        preserved_names.add("release_certification")
+    if not preserved_names.issubset(frozen_controls):
+        raise ConfigurationError("VC-5 控制续期缺少 P0 或发布认证绑定。")
+    for name in preserved_names:
+        controls[name] = json.loads(
+            json.dumps(frozen_controls[name], ensure_ascii=False)
+        )
+
+
 def _build_control_epoch_successor_controls(
     arguments: argparse.Namespace,
     campaign_dir: Path,
@@ -17686,6 +23740,11 @@ def _build_control_epoch_successor_controls(
         arm64_environment_receipt=arguments.recovery_arm64_environment_receipt,
     )
     controls = _plan_control_receipts(control_arguments)
+    _preserve_c0154_vc0_control_receipts(
+        campaign_dir,
+        manifest,
+        controls,
+    )
     proxy_manifest = json.loads(json.dumps(manifest, ensure_ascii=False))
     proxy_manifest["tool_identity"] = dict(current_tool)
     proxy_manifest["control_receipts"] = controls
@@ -17698,6 +23757,10 @@ def _build_control_epoch_successor_controls(
         manifest,
         preflight_dir,
         preflight_manifest,
+        official_only_reuse=(
+            getattr(arguments, "reason", None)
+            in {OFFICIAL_EVIDENCE_REUSE_REASON, CLASSIFICATION_FACT_CORRECTION_REASON}
+        ),
     )
     expected_contract = _job_rehearsal_contract_from_manifest(
         campaign_dir,
@@ -17879,6 +23942,15 @@ def _control_epoch_failed_scope_production_paths(
         raise ConfigurationError(
             "official control epoch 检测到产出侧工具变化，必须永久停线。"
         )
+    if _is_c0154_vc5_failed_job_control_epoch_source(manifest, source):
+        expected_path = str(
+            C0154_VC5_FAILED_JOB_CONTROL_EPOCH["production_path"]
+        )
+        if production_paths != {expected_path}:
+            raise ConfigurationError(
+                "VC-5 控制续期只允许 candidate-frozen-core 的已授权产出脚本变化。"
+            )
+        return production_paths
     scope = _control_epoch_final_execution_scope(source)
     unknown_paths = production_paths - set(
         RUNTIME_SUCCESSOR_CHANGED_TOOL_PATH_JOB_IDS
@@ -18052,6 +24124,18 @@ def _load_control_epoch_receipt(
         manifest,
         _enforce_prepublication_boundary=False,
     )
+    c0154_vc5_failed_job_epoch = bool(
+        _is_c0154_vc5_failed_job_control_epoch_campaign(campaign_dir, manifest)
+        and _is_c0154_vc5_failed_job_control_epoch_source(manifest, source)
+    )
+    if c0154_vc5_failed_job_epoch and (
+        len(paths) != 1
+        or has_runtime_repair
+        or has_runtime_repair_amendment
+    ):
+        raise ConfigurationError(
+            "VC-5 控制续期只允许一份 control epoch，禁止 runtime repair 或第二纪元。"
+        )
     official_sealed_epoch = _is_official_sealed_control_epoch_source(source)
     if official_sealed_epoch and (
         len(paths) != 1 or has_runtime_repair_amendment
@@ -18151,8 +24235,8 @@ def _load_control_epoch_receipt(
             raise ConfigurationError("control epoch 历史链的产出侧冻结身份不连续。")
         if frozen_production_sha256 is None:
             frozen_production_sha256 = str(frozen_production)
-        authorized_production_drift = (
-            control_replacement_epoch and bool(allowed_production_paths)
+        authorized_production_drift = bool(allowed_production_paths) and (
+            control_replacement_epoch or c0154_vc5_failed_job_epoch
         )
         historical_runtime = (
             _allow_unrepaired_tool_drift
@@ -18208,7 +24292,10 @@ def _load_control_epoch_receipt(
             raise ConfigurationError("control epoch 旧 Ledger 停线绑定非法。")
         if not isinstance(old_timing, Mapping):
             raise ConfigurationError("control epoch 前序 Ledger 控制绑定非法。")
-        stop_required_phase = required_phase
+        stop_required_phase = _control_epoch_stop_required_phase(
+            manifest,
+            source,
+        )
         if (
             _historical_ledger_heads
             and control_replacement_epoch
@@ -18787,6 +24874,9 @@ def create_control_epoch(arguments: argparse.Namespace) -> dict[str, Any]:
         campaign_dir,
         load_campaign_manifest(campaign_dir, _control_epoch_bootstrap=True),
     )
+    c0154_vc5_failed_job_epoch = (
+        _is_c0154_vc5_failed_job_control_epoch_campaign(campaign_dir, manifest)
+    )
     phase = str(getattr(arguments, "phase", "candidate"))
     official_sealed_epoch = phase == "official"
     candidate_coordinates = (
@@ -18804,6 +24894,15 @@ def create_control_epoch(arguments: argparse.Namespace) -> dict[str, Any]:
         )
     with _campaign_lock(campaign_dir):
         existing = _control_epoch_files(campaign_dir)
+        if c0154_vc5_failed_job_epoch and (
+            official_sealed_epoch
+            or existing
+            or bool(arguments.repair_runtime_authorization)
+            or bool(getattr(arguments, "final_execution_epoch", False))
+        ):
+            raise ConfigurationError(
+                "VC-5 控制续期只允许 candidate 阶段的第一份且唯一一份 control epoch。"
+            )
         if (
             official_sealed_epoch
             and existing
@@ -18895,12 +24994,16 @@ def create_control_epoch(arguments: argparse.Namespace) -> dict[str, Any]:
             previous_epoch,
         )
         required_phase = _control_epoch_required_phase(source)
+        stop_required_phase = _control_epoch_stop_required_phase(
+            manifest,
+            source,
+        )
         stop, stop_summary = _control_epoch_stop_checkpoint(
             manifest,
             arguments.predecessor_stop_ledger_dir,
             arguments.predecessor_stop_receipt,
             expected_timing=previous_controls.get("upgrade_timing"),
-            required_phase=required_phase,
+            required_phase=stop_required_phase,
         )
         current_tool = (
             replacement_current_tool
@@ -19177,12 +25280,12 @@ def _control_replacement_supervisor_audit(run_dir: Path) -> dict[str, Any]:
     events_path = resolved / "events.ndjson"
     minute_path = resolved / "minute-ledger.ndjson"
     state = _read_json(state_path, "控制替代父监督器状态")
-    stop = _read_json(stop_path, "控制替代父监督器停线收据")
-    unsigned_stop = dict(stop)
-    stop_digest = unsigned_stop.pop("receipt_sha256", None)
-    expected_stop_digest = codex_upgrade_supervisor._sha256(
-        codex_upgrade_supervisor._canonical(unsigned_stop)
-    )
+    if stop_path.is_symlink() or not stop_path.is_file():
+        raise ConfigurationError("控制替代父监督器停线收据不存在或不可信。")
+    try:
+        stop = codex_upgrade_supervisor.read_stop_receipt(resolved)
+    except codex_upgrade_supervisor.SupervisorError as error:
+        raise ConfigurationError(f"控制替代父监督器停线收据无法校验：{error}") from error
     terminal_states = {"stopped", "failed"}
     if (
         audit.get("audit_incomplete") is not False
@@ -19191,10 +25294,6 @@ def _control_replacement_supervisor_audit(run_dir: Path) -> dict[str, Any]:
         or state.get("state") != audit.get("state")
         or state.get("state") not in terminal_states
         or not _is_rfc3339_timestamp(state.get("terminal_at_utc"))
-        or stop.get("schema_version")
-        != codex_upgrade_supervisor.STOP_SCHEMA
-        or not SHA256_RE.fullmatch(str(stop_digest))
-        or expected_stop_digest != stop_digest
         or stop.get("campaign_id") != state.get("campaign_id")
         or stop.get("phase") != state.get("phase")
         or stop.get("owner_pid") != state.get("owner_pid")
@@ -19716,8 +25815,18 @@ def _recovery_rehearsal_target_scenario_override(
     manifest: Mapping[str, Any],
     preflight_dir: Path,
     preflight_manifest: Mapping[str, Any],
+    *,
+    recovery_candidate_id: str | None = None,
+    recovery_attempt_id: str | None = None,
+    official_only_reuse: bool = False,
 ) -> dict[str, Any] | None:
-    """只允许当前受管场景承接 Formal 的历史规格章节摘要。"""
+    """只允许当前受管场景承接 Formal 的历史规格章节摘要。
+
+    ``official_only_reuse`` 为真（或 manifest 的 predecessor 原因属于 official-only
+    复用）时，Formal 历史场景与当前受管场景只需 official Job 执行合同一致：
+    官方证据按 §5.3.3 只读复用，候选侧 Job 的新增或变化由新 Campaign 自己的
+    VC-2 重分类与全量执行承担。
+    """
 
     target_version = str(manifest.get("target_version", ""))
     if not VERSION_RE.fullmatch(target_version):
@@ -19764,9 +25873,92 @@ def _recovery_rehearsal_target_scenario_override(
         raise ConfigurationError("当前受管版本化 target 场景不存在或不可信。")
     managed = _read_json(managed_path, "当前受管版本化 target 场景")
     _validate_scenario_manifest_shape(managed)
-    if managed.get("codex_version") != target_version or preflight != managed:
+    if managed.get("codex_version") != target_version:
         raise ConfigurationError(
             "恢复 preflight 必须使用当前受管版本化 target 场景原文件。"
+        )
+    if preflight != managed:
+        # 2026-09-18：受管场景可以在同一目标版本内演进（如新增零请求 Job
+        # candidate-trace-test）。已建立的恢复后继 Campaign 其 preflight 是创建
+        # 当时的受管场景快照；只读加载与对账按该快照承接 Formal 历史场景复算
+        # 执行合同，结果与 preflight 收据绑定的摘要一致。preflight 与 Formal
+        # 冻结场景相同时直接按历史场景复算。是否允许按历史场景派发由 wire
+        # producer 身份门禁另行裁定（场景文件属 wire_producer 层）。创建后继时
+        # preflight 由当前受管场景生成，此分支不会触发。
+        if preflight == frozen:
+            return None
+        managed = preflight
+    predecessor = manifest.get("predecessor")
+    c0154_metadata_source_verified = False
+    failed_job_recovery = bool(
+        isinstance(predecessor, Mapping)
+        and predecessor.get("reason") == "candidate_failed_job_tool_recovery"
+    )
+    post_run_seal_recovery = bool(
+        isinstance(predecessor, Mapping)
+        and predecessor.get("reason") == POST_RUN_SEAL_RECOVERY_REASON
+    )
+    explicit_candidate = recovery_candidate_id is not None
+    explicit_attempt = recovery_attempt_id is not None
+    if explicit_candidate != explicit_attempt:
+        raise ConfigurationError(
+            "恢复的创建来源必须同时提供 Candidate 与 attempt。"
+        )
+    explicit_creation_source = explicit_candidate and explicit_attempt
+    if explicit_creation_source and (
+        not isinstance(recovery_candidate_id, str)
+        or not isinstance(recovery_attempt_id, str)
+    ):
+        raise ConfigurationError("恢复的创建来源坐标非法。")
+    import_path = campaign_dir / "predecessor-import.json"
+    published_runtime_source = import_path.exists() or import_path.is_symlink()
+    if failed_job_recovery:
+        if explicit_creation_source == published_runtime_source:
+            raise ConfigurationError(
+                "v7 失败 Job 恢复必须且只能选择创建来源或已发布导入收据之一。"
+            )
+        if explicit_creation_source:
+            assert isinstance(recovery_candidate_id, str)
+            assert isinstance(recovery_attempt_id, str)
+            _require_c0154_v7_recovery_source_binding(
+                campaign_dir,
+                manifest,
+                candidate_id=recovery_candidate_id,
+                attempt_id=recovery_attempt_id,
+            )
+        else:
+            recovery_candidate_id, recovery_attempt_id = (
+                _published_c0154_v7_recovery_coordinates(
+                    campaign_dir,
+                    manifest,
+                )
+            )
+        c0154_metadata_source_verified = True
+    elif post_run_seal_recovery:
+        if explicit_creation_source == published_runtime_source:
+            raise ConfigurationError(
+                "A15 seal 恢复必须且只能选择创建来源或已发布导入收据之一。"
+            )
+        if explicit_creation_source:
+            assert isinstance(recovery_candidate_id, str)
+            assert isinstance(recovery_attempt_id, str)
+            _require_c0154_a15_post_run_seal_source_binding(
+                campaign_dir,
+                manifest,
+                candidate_id=recovery_candidate_id,
+                attempt_id=recovery_attempt_id,
+            )
+        else:
+            recovery_candidate_id, recovery_attempt_id = (
+                _published_c0154_a15_post_run_seal_coordinates(
+                    campaign_dir,
+                    manifest,
+                )
+            )
+        c0154_metadata_source_verified = True
+    elif explicit_creation_source:
+        raise ConfigurationError(
+            "Candidate／attempt 创建来源只允许 v7 失败 Job 或 A15 seal 恢复使用。"
         )
     if frozen == managed:
         return None
@@ -19797,6 +25989,26 @@ def _recovery_rehearsal_target_scenario_override(
         raise ConfigurationError("Formal 历史 target 场景缺少 source_spec。")
     normalized_source["sha256"] = managed_binding.source_spec_sha256
     if normalized_frozen != managed:
+        c0154_metadata_only_drift = bool(
+            c0154_metadata_source_verified
+            and isinstance(recovery_candidate_id, str)
+            and isinstance(recovery_attempt_id, str)
+            and _scenario_job_execution_contract(frozen)
+            == _scenario_job_execution_contract(managed)
+        )
+        if c0154_metadata_only_drift:
+            return managed
+        predecessor_reason = (
+            predecessor.get("reason") if isinstance(predecessor, Mapping) else None
+        )
+        official_only = official_only_reuse or predecessor_reason in {
+            OFFICIAL_EVIDENCE_REUSE_REASON,
+            CLASSIFICATION_FACT_CORRECTION_REASON,
+        }
+        if official_only and _fingerprint(
+            _official_scenario_execution_contract(dict(frozen))
+        ) == _fingerprint(_official_scenario_execution_contract(dict(managed))):
+            return managed
         raise ConfigurationError(
             "Formal 历史 target 场景除 source_spec.sha256 外发生变化。"
         )
@@ -19824,8 +26036,10 @@ def _successor_rehearsal_target_scenario_override(
             reclassification_successor
             or arguments.reason
             in {
+                "candidate_failed_job_tool_recovery",
                 "candidate_recovery_control_refresh",
                 "candidate_recovery_control_replacement",
+                POST_RUN_SEAL_RECOVERY_REASON,
             }
         )
     )
@@ -19856,11 +26070,29 @@ def _successor_rehearsal_target_scenario_override(
         preflight_dir, preflight_manifest = bound_preflight
     else:
         return None
+    recovery_coordinates: dict[str, str | None] = {}
+    if arguments.reason in {
+        "candidate_failed_job_tool_recovery",
+        POST_RUN_SEAL_RECOVERY_REASON,
+    }:
+        recovery_coordinates = {
+            "recovery_candidate_id": getattr(
+                arguments,
+                "predecessor_candidate_id",
+                None,
+            ),
+            "recovery_attempt_id": getattr(
+                arguments,
+                "predecessor_attempt_id",
+                None,
+            ),
+        }
     return _recovery_rehearsal_target_scenario_override(
         staging_dir,
         successor_manifest,
         preflight_dir,
         preflight_manifest,
+        **recovery_coordinates,
     )
 
 
@@ -21387,12 +27619,16 @@ def _create_successor_campaign_unadmitted(arguments: argparse.Namespace) -> dict
     control_replacement_successor = (
         arguments.reason == "candidate_recovery_control_replacement"
     )
+    post_run_seal_recovery = arguments.reason == POST_RUN_SEAL_RECOVERY_REASON
     failed_job_tool_recovery = arguments.reason in {
         "candidate_failed_job_tool_recovery",
         "candidate_recovery_control_refresh",
         "candidate_recovery_control_replacement",
     }
-    if failed_job_tool_recovery:
+    candidate_controlled_recovery = (
+        failed_job_tool_recovery or post_run_seal_recovery
+    )
+    if candidate_controlled_recovery:
         required = (
             arguments.predecessor_candidate_id,
             arguments.predecessor_attempt_id,
@@ -21491,6 +27727,16 @@ def _create_successor_campaign_unadmitted(arguments: argparse.Namespace) -> dict
             _control_epoch_bootstrap=control_replacement_successor,
         ),
     )
+    if getattr(arguments, "command", None) == FORMAL_FAILED_JOB_RECOVERY_COMMAND:
+        _require_c0154_v7_formal_recovery_source(
+            arguments,
+            predecessor_manifest,
+        )
+    if getattr(arguments, "command", None) == FORMAL_POST_RUN_SEAL_RECOVERY_COMMAND:
+        _require_c0154_a15_formal_post_run_seal_source(
+            arguments,
+            predecessor_manifest,
+        )
     _reject_repeated_successor_reason(
         predecessor_dir,
         predecessor_manifest,
@@ -21607,6 +27853,23 @@ def _create_successor_campaign_unadmitted(arguments: argparse.Namespace) -> dict
             arguments.predecessor_attempt_id,
         )
     )
+    candidate_vc_recovery = bool(
+        arguments.reason
+        in {"candidate_failed_job_tool_recovery", POST_RUN_SEAL_RECOVERY_REASON}
+        and _requires_complete_vc_artifacts(predecessor_manifest)
+    )
+    predecessor_vc_checkpoints: dict[str, dict[str, Any]] = {}
+    if candidate_vc_recovery:
+        predecessor_plan = _vc_campaign_plan(predecessor_dir, predecessor_manifest)
+        predecessor_revision = _current_candidate_revision(predecessor_dir, predecessor_manifest)
+        for phase in ("VC-0", "VC-1", "VC-2", "VC-3", "VC-4"):
+            _, predecessor_checkpoint = _replay_vc_checkpoint(
+                predecessor_dir,
+                predecessor_plan,
+                phase,
+                revision=predecessor_revision if phase in CANDIDATE_VC_PHASES else None,
+            )
+            predecessor_vc_checkpoints[phase] = predecessor_checkpoint
 
     if successor_dir.parent.exists():
         if successor_dir.parent.is_symlink() or not successor_dir.parent.is_dir():
@@ -21641,6 +27904,22 @@ def _create_successor_campaign_unadmitted(arguments: argparse.Namespace) -> dict
                     kind=f"plan_{group_name}",
                     copied_files=copied_files,
                 )
+
+        candidate_build_projection: dict[str, Any] | None = None
+        if candidate_vc_recovery:
+            if (
+                arguments.predecessor_candidate_id is None
+                or arguments.predecessor_attempt_id is None
+            ):
+                raise ConfigurationError("Candidate VC 恢复缺少前序 Candidate／attempt。")
+            candidate_build_projection = _copy_candidate_build_projection(
+                predecessor_dir,
+                staging_dir,
+                predecessor_manifest,
+                candidate_id=str(arguments.predecessor_candidate_id),
+                attempt_id=str(arguments.predecessor_attempt_id),
+                copied_files=copied_files,
+            )
 
         target_scenario_transition = _successor_target_scenario_transition(
             arguments,
@@ -21811,7 +28090,7 @@ def _create_successor_campaign_unadmitted(arguments: argparse.Namespace) -> dict
         )
         if recovery_scenario_override is not None:
             rehearsal_scenario_override = recovery_scenario_override
-        if failed_job_tool_recovery:
+        if candidate_controlled_recovery:
             _assert_recovery_rehearsal_uses_successor_controls(
                 arguments,
                 successor_manifest,
@@ -21827,10 +28106,11 @@ def _create_successor_campaign_unadmitted(arguments: argparse.Namespace) -> dict
             successor_manifest,
             target_scenario_override=rehearsal_scenario_override,
         )
+        recovery_source_scope: dict[str, Any] | None = None
         if failed_job_tool_recovery and not control_replacement_successor:
             assert arguments.predecessor_candidate_id is not None
             assert arguments.predecessor_attempt_id is not None
-            _validate_failed_job_tool_recovery_source(
+            recovery_source_scope = _validate_failed_job_tool_recovery_source(
                 predecessor_dir,
                 predecessor_manifest,
                 successor_manifest,
@@ -21838,8 +28118,37 @@ def _create_successor_campaign_unadmitted(arguments: argparse.Namespace) -> dict
                 attempt_id=arguments.predecessor_attempt_id,
                 reason=arguments.reason,
             )
+        elif post_run_seal_recovery:
+            assert arguments.predecessor_candidate_id is not None
+            assert arguments.predecessor_attempt_id is not None
+            source_scope = _validated_c0154_a15_post_run_seal_source_scope(
+                predecessor_dir,
+                predecessor_manifest,
+                candidate_id=str(arguments.predecessor_candidate_id),
+                attempt_id=str(arguments.predecessor_attempt_id),
+            )
+            source_attempt = source_scope["source_attempt"]
+            planned_ids = sorted(CLASSIFICATION_CANDIDATE_REUSE_JOB_IDS)
+            if sorted(str(item.get("id")) for item in source_attempt["results"]) != planned_ids:
+                raise ConfigurationError("A15 seal 恢复来源九项 Job 闭集漂移。")
+            recovery_source_scope = {
+                "planned_job_ids": planned_ids,
+                "reused_job_ids": planned_ids,
+                "execute_job_ids": [],
+                "failed_job_ids": [],
+                "pending_job_ids": [],
+                "reservation_exists": False,
+                "live_request_count": 0,
+                "scanned_bytes": 0,
+            }
         if sealed_stage_recovery_successor and job_rehearsal_transition is None:
             raise ConfigurationError("已封存阶段控制恢复没有形成新的 Job 演练绑定。")
+        official_reuse_scenario_transition = _official_reuse_target_scenario_transition(
+            arguments,
+            staging_dir,
+            successor_manifest,
+            copied_files,
+        )
         _rebuild_successor_plan(
             staging_dir,
             successor_dir,
@@ -21847,13 +28156,14 @@ def _create_successor_campaign_unadmitted(arguments: argparse.Namespace) -> dict
             historical_source_spec_binding=historical_source_spec_binding,
         )
         if (
-            arguments.reason == OFFICIAL_EVIDENCE_REUSE_REASON
+            (official_only_successor or candidate_vc_recovery)
             and _requires_complete_vc_artifacts(successor_manifest)
         ):
             # 0.154.0 起不能继承前序 vc_control：其中的 Campaign ID、总计划
-            # 摘要和 checkpoint 都属于前序。官方证据复用是一个零请求的
-            # Campaign 引导命令，因此在新目录重建 VC-0，并把全部 official
-            # Job 作为 reuse 编译到首个 VC-1 no-op 批次。
+            # 摘要和 checkpoint 都属于前序。official-only 后继是一个零请求的
+            # Campaign 引导过程，因此在新目录重建 VC-0，并把全部 official
+            # Job 作为 reuse 编译到首个 VC-1 no-op 批次。Candidate 定向恢复
+            # 同样只重签控制链，绝不重跑已经完成的 VC-0～VC-4。
             vc_arguments = argparse.Namespace(
                 campaign_id=successor_manifest["campaign_id"],
                 campaign_mode=successor_manifest["campaign_mode"],
@@ -21972,6 +28282,10 @@ def _create_successor_campaign_unadmitted(arguments: argparse.Namespace) -> dict
             import_receipt["target_scenario_transition"] = (
                 target_scenario_transition
             )
+        if official_reuse_scenario_transition is not None:
+            import_receipt["official_reuse_target_scenario_transition"] = (
+                official_reuse_scenario_transition
+            )
         if recovery_control_transition is not None:
             import_receipt["recovery_control_transition"] = (
                 recovery_control_transition
@@ -22042,20 +28356,26 @@ def _create_successor_campaign_unadmitted(arguments: argparse.Namespace) -> dict
                 _successor_manifest=successor_manifest,
             )
             if (
-                arguments.reason == OFFICIAL_EVIDENCE_REUSE_REASON
+                (official_only_successor or candidate_vc_recovery)
                 and _requires_complete_vc_artifacts(successor_manifest)
             ):
-                official_job_ids = sorted(
-                    str(job["id"])
-                    for job in successor_manifest.get("jobs", [])
-                    if isinstance(job, Mapping) and job.get("phase") == "official"
+                vc1_reuse_ids = (
+                    _vc_checkpoint_completed_item_ids(
+                        predecessor_vc_checkpoints["VC-1"]
+                    )
+                    if candidate_vc_recovery
+                    else sorted(
+                        str(job["id"])
+                        for job in successor_manifest.get("jobs", [])
+                        if isinstance(job, Mapping) and job.get("phase") == "official"
+                    )
                 )
                 _complete_vc_phase(
                     staging_dir,
                     successor_manifest,
                     phase="VC-1",
                     stage_receipt_path=official_stage_path.resolve(strict=True),
-                    reuse_item_ids=official_job_ids,
+                    reuse_item_ids=vc1_reuse_ids,
                     live_request_count=0,
                     scanned_bytes=0,
                 )
@@ -22078,12 +28398,75 @@ def _create_successor_campaign_unadmitted(arguments: argparse.Namespace) -> dict
                 "official_diff_sha256",
             ):
                 imported_classification[field] = classification[field]
-            save_stage_result(
+            classification_stage_path = save_stage_result(
                 staging_dir,
                 "classify",
                 imported_classification,
                 _successor_manifest=successor_manifest,
             )
+            if candidate_vc_recovery:
+                _complete_vc_phase(
+                    staging_dir,
+                    successor_manifest,
+                    phase="VC-2",
+                    stage_receipt_path=classification_stage_path.resolve(strict=True),
+                    reuse_item_ids=_vc_checkpoint_completed_item_ids(
+                        predecessor_vc_checkpoints["VC-2"]
+                    ),
+                    live_request_count=0,
+                    scanned_bytes=0,
+                )
+                source_vc3_binding = predecessor_vc_checkpoints["VC-3"].get(
+                    "stage_receipt"
+                )
+                if not isinstance(source_vc3_binding, Mapping):
+                    raise ConfigurationError("前序 VC-3 checkpoint 阶段绑定非法。")
+                source_vc3_raw = Path(str(source_vc3_binding.get("path", "")))
+                source_vc3_path = (
+                    source_vc3_raw
+                    if source_vc3_raw.is_absolute()
+                    else _campaign_file(predecessor_dir, str(source_vc3_binding["path"]))
+                )
+                _complete_vc_phase(
+                    staging_dir,
+                    successor_manifest,
+                    phase="VC-3",
+                    stage_receipt_path=source_vc3_path.resolve(strict=True),
+                    reuse_item_ids=_vc_checkpoint_completed_item_ids(
+                        predecessor_vc_checkpoints["VC-3"]
+                    ),
+                    live_request_count=0,
+                    scanned_bytes=0,
+                )
+                if candidate_build_projection is None:
+                    raise ConfigurationError("Candidate VC 恢复缺少 VC-4 构建投影。")
+                projected_build_path = _campaign_file(
+                    staging_dir,
+                    str(candidate_build_projection["path"]),
+                )
+                # 改造 2：导入的 VC-4 属于后继 Campaign 的 r1。这里只在暂存区建立
+                # pending 的 r1 目录（revision.json + COMMIT），账本 stage_revision 由
+                # 发布后的 revision-open --initial 补写（幂等分支），避免暂存区发布失败
+                # 时恢复账本引用一个已被清理的 COMMIT。
+                _write_candidate_revision_pending(
+                    staging_dir,
+                    successor_manifest,
+                    revision=1,
+                    candidate_id=str(arguments.predecessor_candidate_id),
+                    supersedes=None,
+                )
+                _complete_vc_phase(
+                    staging_dir,
+                    successor_manifest,
+                    phase="VC-4",
+                    stage_receipt_path=projected_build_path.resolve(strict=True),
+                    reuse_item_ids=_vc_checkpoint_completed_item_ids(
+                        predecessor_vc_checkpoints["VC-4"]
+                    ),
+                    live_request_count=0,
+                    scanned_bytes=0,
+                    revision=1,
+                )
 
         if successor_dir.exists():
             raise ConfigurationError("后继 Campaign 目录在发布前已被占用。")
@@ -22122,12 +28505,21 @@ def _create_successor_campaign_unadmitted(arguments: argparse.Namespace) -> dict
         "classification_reapproval_required": reclassification_successor,
         "sealed_stage_control_recovered": sealed_stage_recovery_successor,
         "control_replaced": control_replacement_successor,
+        "candidate_id": (
+            str(arguments.predecessor_candidate_id)
+            if candidate_vc_recovery
+            else None
+        ),
+        "candidate_build_projected": candidate_vc_recovery,
+        "vc_reused_through": "VC-4" if candidate_vc_recovery else None,
+        "recovery_scope": recovery_source_scope,
         "executed_job_count": (
             0
             if (
                 sealed_stage_recovery_successor
                 or control_replacement_successor
-                or arguments.reason == OFFICIAL_EVIDENCE_REUSE_REASON
+                or candidate_vc_recovery
+                or arguments.reason in OFFICIAL_STAGE_REUSE_SUCCESSOR_REASONS
             )
             else None
         ),
@@ -22136,7 +28528,8 @@ def _create_successor_campaign_unadmitted(arguments: argparse.Namespace) -> dict
             if (
                 sealed_stage_recovery_successor
                 or control_replacement_successor
-                or arguments.reason == OFFICIAL_EVIDENCE_REUSE_REASON
+                or candidate_vc_recovery
+                or arguments.reason in OFFICIAL_STAGE_REUSE_SUCCESSOR_REASONS
             )
             else None
         ),
@@ -22145,7 +28538,8 @@ def _create_successor_campaign_unadmitted(arguments: argparse.Namespace) -> dict
             if (
                 sealed_stage_recovery_successor
                 or control_replacement_successor
-                or arguments.reason == OFFICIAL_EVIDENCE_REUSE_REASON
+                or candidate_vc_recovery
+                or arguments.reason in OFFICIAL_STAGE_REUSE_SUCCESSOR_REASONS
             )
             else None
         ),
@@ -22260,33 +28654,348 @@ def _require_formal_campaign(
     return current
 
 
-def _stage_path(
+_STAGE_ALIASES = {
+    "official": "capture-official",
+    "candidate": "capture-candidate",
+    "classification": "classify",
+    "comparison": "compare",
+    "acceptance": "accept",
+}
+_CANDIDATE_STAGE_ROOTS = {
+    "capture-candidate": "candidates",
+    "compare": "comparisons",
+    "accept": "acceptance",
+}
+
+
+def _legacy_stage_path(
     campaign_dir: Path,
     stage: str,
     candidate_id: str | None = None,
 ) -> tuple[str, Path]:
-    aliases = {
-        "official": "capture-official",
-        "candidate": "capture-candidate",
-        "classification": "classify",
-        "comparison": "compare",
-        "acceptance": "accept",
-    }
-    canonical = aliases.get(stage, stage)
+    """改造 5 之前的固定阶段路径（b0 原路径）；候选级三阶段按当前基线解析见 ``_stage_path``。"""
+
+    canonical = _STAGE_ALIASES.get(stage, stage)
     if canonical == "capture-official":
         return canonical, campaign_dir / "official" / "result.json"
     if canonical == "classify":
         return canonical, campaign_dir / "classification" / "result.json"
-    if canonical in {"capture-candidate", "compare", "accept"}:
+    if canonical in _CANDIDATE_STAGE_ROOTS:
         if not candidate_id or not SAFE_ID_RE.fullmatch(candidate_id):
             raise ConfigurationError(f"{canonical} 必须提供合法 candidate-id。")
-        roots = {
-            "capture-candidate": "candidates",
-            "compare": "comparisons",
-            "accept": "acceptance",
-        }
-        return canonical, campaign_dir / roots[canonical] / candidate_id / "result.json"
+        return canonical, campaign_dir / _CANDIDATE_STAGE_ROOTS[canonical] / candidate_id / "result.json"
     raise ConfigurationError(f"未知 Campaign 阶段：{stage}")
+
+
+# ---------------------------------------------------------------------------
+# 改造 5：评估基线 b<K>——当前基线判定、stage_sources 读写分离
+# ---------------------------------------------------------------------------
+
+EVALUATION_BASELINE_RECOVERY_FILENAME = "recovery.json"
+EVALUATION_BASELINE_PREPARED_FILENAME = "PREPARED"
+EVALUATION_BASELINE_AUTHORIZATION_FILENAME = "AUTHORIZATION"
+EVALUATION_BASELINE_COMMIT_FILENAME = "COMMIT"
+EVALUATION_BASELINE_ABANDON_FILENAME = "ABANDON"
+_EVALUATION_BASELINE_DIR_RE = re.compile(r"^b([1-9][0-9]*)$")
+
+
+def _evaluation_baseline_dir(campaign_dir: Path, candidate_id: str, baseline: int) -> Path:
+    """b<K>（K≥1）的目录；b0 隐含为原路径，没有目录。"""
+
+    if not isinstance(baseline, int) or isinstance(baseline, bool) or baseline < 1:
+        raise ConfigurationError("评估基线编号必须是正整数。")
+    if not candidate_id or not SAFE_ID_RE.fullmatch(candidate_id):
+        raise ConfigurationError("评估基线必须提供合法 candidate-id。")
+    return campaign_dir / "candidates" / candidate_id / "revisions" / f"b{baseline}"
+
+
+def _read_evaluation_baseline_commit(
+    campaign_dir: Path, candidate_id: str, baseline: int
+) -> dict[str, Any]:
+    """读取并校验 b<K>/COMMIT（自摘要、候选与编号身份）。"""
+
+    commit_path = _evaluation_baseline_dir(campaign_dir, candidate_id, baseline) / EVALUATION_BASELINE_COMMIT_FILENAME
+    if commit_path.is_symlink() or not commit_path.is_file():
+        raise ConfigurationError(f"评估基线 b{baseline} 没有 COMMIT。")
+    try:
+        commit = codex_upgrade_vc_artifacts.validate_evaluation_baseline_commit(
+            _read_json(commit_path, f"评估基线 b{baseline} COMMIT")
+        )
+    except codex_upgrade_vc_artifacts.VCArtifactError as error:
+        raise ConfigurationError(f"评估基线 b{baseline} COMMIT 无法校验：{error}") from error
+    if commit["candidate_id"] != candidate_id or commit["evaluation_baseline"] != baseline:
+        raise ConfigurationError(f"评估基线 b{baseline} COMMIT 的候选或编号身份不一致。")
+    return commit
+
+
+def _campaign_ledger_summary_for_baseline(campaign_dir: Path) -> dict[str, Any] | None:
+    """轻量读取 Campaign 绑定的时间账本摘要；无 Campaign／无账本绑定返回 None，账本损坏失败关闭。"""
+
+    manifest_path = campaign_dir / "campaign.json"
+    if manifest_path.is_symlink() or not manifest_path.is_file():
+        return None
+    manifest = _read_json(manifest_path, "Campaign 核心清单")
+    controls = manifest.get("control_receipts")
+    epoch = _load_control_epoch_receipt(campaign_dir, manifest)
+    if isinstance(epoch, Mapping):
+        controls = epoch.get("successor_controls")
+    timing = controls.get("upgrade_timing") if isinstance(controls, Mapping) else None
+    if not isinstance(timing, Mapping) or not isinstance(timing.get("ledger_dir"), str):
+        return None
+    ledger_dir = _campaign_timing_ledger_dir(campaign_dir, manifest)
+    try:
+        return codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)
+    except (OSError, codex_upgrade_timing_ledger.TimingLedgerError) as error:
+        raise ConfigurationError(f"Campaign 时间账本无法重放：{error}") from error
+
+
+def _current_evaluation_baseline(
+    campaign_dir: Path,
+    candidate_id: str,
+) -> tuple[int, dict[str, Any] | None]:
+    """当前评估基线：只由账本最后一条 ``evaluation_baseline`` 事件决定。
+
+    返回 ``(K, COMMIT | None)``：无事件或事件属于其他候选（已作废 revision）恒为 ``(0, None)``；
+    有事件时 ``b<K>/COMMIT`` 必须存在且自摘要等于事件绑定的 ``baseline_commit_sha256``，否则
+    失败关闭。PREPARED／ABANDON 目录不影响当前基线。
+    """
+
+    summary = _campaign_ledger_summary_for_baseline(campaign_dir)
+    if summary is None:
+        return 0, None
+    current = summary.get("current_evaluation_baseline")
+    if not isinstance(current, Mapping) or current.get("candidate_id") != candidate_id:
+        return 0, None
+    baseline = int(current["evaluation_baseline"])
+    commit = _read_evaluation_baseline_commit(campaign_dir, candidate_id, baseline)
+    if commit["commit_sha256"] != current.get("baseline_commit_sha256"):
+        raise ConfigurationError(
+            f"账本引用的评估基线 b{baseline} COMMIT 摘要与目录内 COMMIT 不一致。"
+        )
+    return baseline, commit
+
+
+def _load_evaluation_baseline_recovery(
+    campaign_dir: Path, candidate_id: str, baseline: int
+) -> dict[str, Any]:
+    """读取并校验 b<K>/recovery.json（自摘要、候选与编号身份）。"""
+
+    recovery_path = _evaluation_baseline_dir(campaign_dir, candidate_id, baseline) / EVALUATION_BASELINE_RECOVERY_FILENAME
+    if recovery_path.is_symlink() or not recovery_path.is_file():
+        raise ConfigurationError(f"评估基线 b{baseline} 没有 recovery.json。")
+    try:
+        recovery = codex_upgrade_vc_artifacts.validate_evaluation_recovery(
+            _read_json(recovery_path, f"评估基线 b{baseline} recovery")
+        )
+    except codex_upgrade_vc_artifacts.VCArtifactError as error:
+        raise ConfigurationError(f"评估基线 b{baseline} recovery 无法校验：{error}") from error
+    if recovery["candidate_id"] != candidate_id or recovery["evaluation_baseline"] != baseline:
+        raise ConfigurationError(f"评估基线 b{baseline} recovery 的候选或编号身份不一致。")
+    return recovery
+
+
+def _plan_evaluator_entry_digests(manifest: Mapping[str, Any]) -> dict[str, str]:
+    """plan 冻结的 ``tool_identity.entries`` 中 checker／builder 各有且仅有一个规范 entry 的摘要。
+
+    这是 b0 评估批次的起点防伪口径：编译冻结值、当前文件、plan entry 三者必须相等，任一不等
+    即失败关闭，不做归一化。
+    """
+
+    identity = manifest.get("tool_identity")
+    entries = identity.get("entries") if isinstance(identity, Mapping) else None
+    if not isinstance(entries, list):
+        raise ConfigurationError("plan 工具身份缺少 entries，无法冻结 b0 evaluator 摘要。")
+    digests: dict[str, str] = {}
+    for field, relative in (
+        ("checker_sha256", codex_upgrade_tool_identity_policy.EVALUATOR_CHECKER_RELATIVE),
+        ("builder_sha256", codex_upgrade_tool_identity_policy.EVALUATOR_BUILDER_RELATIVE),
+    ):
+        matches = [
+            entry for entry in entries if isinstance(entry, Mapping) and entry.get("path") == relative
+        ]
+        if len(matches) != 1:
+            raise ConfigurationError(f"plan 工具身份中 {relative} 必须有且仅有一个规范 entry（实际 {len(matches)} 个）。")
+        value = matches[0].get("sha256")
+        if not isinstance(value, str) or not SHA256_RE.fullmatch(value):
+            raise ConfigurationError(f"plan 工具身份中 {relative} 的摘要非法。")
+        digests[field] = value
+    return digests
+
+
+def _authorized_evaluator_digests(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    candidate_id: str,
+    baseline: int,
+) -> dict[str, str]:
+    """评估基线授权的 evaluator 摘要口径。
+
+    b≥1：该基线 ``recovery.json.current_evaluator_digests`` 四项（apply 时以当前树与部署收据
+    冻结）；b0：plan ``tool_identity`` 中 checker／builder 两项（compare／accept 读侧闭包在 plan
+    没有登记，b0 不对其设口径）。
+    """
+
+    if baseline == 0:
+        return _plan_evaluator_entry_digests(manifest)
+    recovery = _load_evaluation_baseline_recovery(campaign_dir, candidate_id, baseline)
+    return {
+        field: str(recovery["current_evaluator_digests"][field])
+        for field in codex_upgrade_vc_artifacts.EVALUATOR_DIGEST_FIELDS
+    }
+
+
+def _verify_evaluator_digests_authorized(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    candidate_id: str,
+    baseline: int,
+    digests: Mapping[str, Any],
+    *,
+    label: str,
+) -> None:
+    """``digests``（编译冻结值或 evaluation-run 记录值）必须等于基线授权口径，不等即失败关闭。"""
+
+    authorized = _authorized_evaluator_digests(campaign_dir, manifest, candidate_id, baseline)
+    drift = sorted(field for field, value in authorized.items() if str(digests.get(field)) != value)
+    if drift:
+        origin = "plan 工具身份" if baseline == 0 else f"b{baseline} recovery.json 授权"
+        raise ConfigurationError(
+            f"{label}：evaluator 摘要与{origin}不一致（{'、'.join(drift)}）；"
+            + ("当前树已偏离 plan，b0 评估批次不能再编译或接受。" if baseline == 0 else "先以 evaluation-recover 开新基线或恢复授权时的工具树。")
+        )
+
+
+def _stage_read_source(
+    campaign_dir: Path,
+    candidate_id: str,
+    baseline: int,
+    stage: str,
+) -> dict[str, Any]:
+    """按 ``stage_sources`` 递归解析阶段结果的读来源，直到 local 或 b0。
+
+    返回 ``{baseline_of_record, path, sha256 | None, status: complete | pending}``；``reused``
+    的合法性（更小编号、已 committed、规范解析路径、摘要相等）在每次读取时都校验。
+    """
+
+    canonical = _STAGE_ALIASES.get(stage, stage)
+    if canonical not in codex_upgrade_vc_artifacts.EVALUATION_STAGES:
+        raise ConfigurationError(f"{stage} 不是评估阶段。")
+    if baseline == 0:
+        if canonical == "assertions":
+            path = campaign_dir / "assertions" / candidate_id / "results.json"
+        else:
+            _, path = _legacy_stage_path(campaign_dir, canonical, candidate_id)
+        exists = path.is_file() and not path.is_symlink()
+        return {
+            "baseline_of_record": 0,
+            "path": path,
+            "sha256": file_sha256(path) if exists else None,
+            "status": "complete" if exists else "pending",
+        }
+    commit = _read_evaluation_baseline_commit(campaign_dir, candidate_id, baseline)
+    source = commit["stage_sources"][canonical]
+    if source["source"] == "local":
+        target = campaign_dir / source["target"]
+        if canonical == "assertions":
+            target = target / "results.json"
+        exists = target.is_file() and not target.is_symlink()
+        return {
+            "baseline_of_record": baseline,
+            "path": target,
+            "sha256": file_sha256(target) if exists else None,
+            "status": "complete" if exists else "pending",
+        }
+    reused_baseline = int(source["baseline"])
+    if reused_baseline >= baseline:
+        raise ConfigurationError(f"评估基线 b{baseline} 的 {canonical} 只能引用更小编号的基线。")
+    resolved = _stage_read_source(campaign_dir, candidate_id, reused_baseline, canonical)
+    if resolved["path"] != campaign_dir / source["path"]:
+        raise ConfigurationError(
+            f"评估基线 b{baseline} 的 {canonical} reused 路径不是 b{reused_baseline} 的规范解析结果。"
+        )
+    if resolved["status"] != "complete" or resolved["sha256"] != source["sha256"]:
+        raise ConfigurationError(
+            f"评估基线 b{baseline} 的 {canonical} reused 引用的文件缺失或摘要漂移。"
+        )
+    return resolved
+
+
+def _stage_write_target(
+    campaign_dir: Path,
+    candidate_id: str,
+    baseline: int,
+    stage: str,
+) -> Path:
+    """只返回 local 写目标；b0 为原路径，reused 阶段拒绝写入。"""
+
+    canonical = _STAGE_ALIASES.get(stage, stage)
+    if canonical not in codex_upgrade_vc_artifacts.EVALUATION_STAGES:
+        raise ConfigurationError(f"{stage} 不是评估阶段。")
+    if baseline == 0:
+        if canonical == "assertions":
+            return campaign_dir / "assertions" / candidate_id
+        return _legacy_stage_path(campaign_dir, canonical, candidate_id)[1]
+    commit = _read_evaluation_baseline_commit(campaign_dir, candidate_id, baseline)
+    source = commit["stage_sources"][canonical]
+    if source["source"] != "local":
+        raise ConfigurationError(
+            f"评估基线 b{baseline} 的 {canonical} 阶段引用前序基线（reused），禁止写入。"
+        )
+    return campaign_dir / source["target"]
+
+
+def _assertions_root(campaign_dir: Path, candidate_id: str) -> Path:
+    """当前基线的断言目录（b0：assertions/<cid>/；b≥1：COMMIT 冻结的 local 目标）。"""
+
+    baseline, _commit = _current_evaluation_baseline(campaign_dir, candidate_id)
+    return _stage_write_target(campaign_dir, candidate_id, baseline, "assertions")
+
+
+def _stage_path(
+    campaign_dir: Path,
+    stage: str,
+    candidate_id: str | None = None,
+    *,
+    mode: str = "read",
+) -> tuple[str, Path]:
+    """阶段结果路径。
+
+    Campaign 级阶段（capture-official／classify）路径固定。候选级三阶段（capture-candidate／
+    compare／accept）改造 5 起按当前评估基线解析：``mode="read"`` 走 ``_stage_read_source``
+    （reused 递归到 local 或 b0），``mode="write"`` 走 ``_stage_write_target``（reused 拒绝）。
+    """
+
+    canonical, legacy_path = _legacy_stage_path(campaign_dir, stage, candidate_id)
+    if canonical not in _CANDIDATE_STAGE_ROOTS:
+        return canonical, legacy_path
+    if mode not in {"read", "write"}:
+        raise ConfigurationError("阶段路径解析模式只能是 read 或 write。")
+    assert candidate_id is not None
+    baseline, _commit = _current_evaluation_baseline(campaign_dir, candidate_id)
+    if baseline == 0:
+        return canonical, legacy_path
+    if mode == "write":
+        return canonical, _stage_write_target(campaign_dir, candidate_id, baseline, canonical)
+    return canonical, _stage_read_source(campaign_dir, candidate_id, baseline, canonical)["path"]
+
+
+def _require_recovery_binding(value: Any) -> None:
+    """增量封存结果的 ``recovery`` 绑定：文件绑定两字段之外还带段号、基线与 recovery_sha256（闭集）。"""
+
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"path", "sha256", "recovery_revision", "evaluation_baseline", "recovery_sha256"}
+        or not isinstance(value.get("path"), str)
+        or not value["path"]
+        or not SHA256_RE.fullmatch(str(value.get("sha256")))
+        or not isinstance(value.get("recovery_revision"), str)
+        or not codex_upgrade_vc_artifacts.RECOVERY_REVISION_RE.fullmatch(value["recovery_revision"])
+        or isinstance(value.get("evaluation_baseline"), bool)
+        or not isinstance(value.get("evaluation_baseline"), int)
+        or int(value["evaluation_baseline"]) < 1
+        or not SHA256_RE.fullmatch(str(value.get("recovery_sha256")))
+    ):
+        raise ConfigurationError("恢复段 run-summary 绑定非法。")
 
 
 def _require_file_binding(value: Any, label: str) -> None:
@@ -22623,23 +29332,49 @@ def _validate_stage_contract(document: dict[str, Any]) -> None:
         ):
             raise ConfigurationError("验收阶段缺少 candidate 外部门禁绑定。")
         identity = document.get("candidate_identity")
+        identity_fields = {
+            "source_tree_sha256",
+            "image_id",
+            "image_reference",
+            "build_id",
+            "deployed_version",
+            "candidate_purpose",
+        }
+        complete_vc_artifacts = _requires_complete_vc_artifacts(
+            str(document.get("target_version", ""))
+        )
+        if complete_vc_artifacts:
+            # accept_campaign 自完整 VC 制品链起在身份投影里同时冻结门禁执行计划
+            # 与 VC-4 构建收据摘要；读侧闭集必须与写侧一致，否则合法验收结果永远
+            # 无法封存。
+            identity_fields |= {"gate_plan", "build_receipt_digest"}
         if (
             not isinstance(identity, dict)
-            or set(identity)
-            != {
-                "source_tree_sha256",
-                "image_id",
-                "image_reference",
-                "build_id",
-                "deployed_version",
-                "candidate_purpose",
-            }
+            or set(identity) != identity_fields
             or not SHA256_RE.fullmatch(str(identity.get("source_tree_sha256", "")))
             or not IMAGE_ID_RE.fullmatch(str(identity.get("image_id", "")))
             or not IMMUTABLE_IMAGE_RE.fullmatch(str(identity.get("image_reference", "")))
             or identity.get("candidate_purpose") != document.get("candidate_purpose")
         ):
             raise ConfigurationError("验收阶段 candidate 身份投影非法。")
+        if complete_vc_artifacts:
+            gate_plan_binding = identity.get("gate_plan")
+            if (
+                not isinstance(gate_plan_binding, dict)
+                or set(gate_plan_binding)
+                != {"path", "sha256", "plan_sha256", "requirements_sha256"}
+                or not isinstance(gate_plan_binding.get("path"), str)
+                or not all(
+                    SHA256_RE.fullmatch(str(gate_plan_binding.get(field, "")))
+                    for field in ("sha256", "plan_sha256", "requirements_sha256")
+                )
+                or not SHA256_RE.fullmatch(
+                    str(identity.get("build_receipt_digest", ""))
+                )
+            ):
+                raise ConfigurationError(
+                    "验收阶段 candidate 身份投影缺少合法的门禁计划或构建收据摘要绑定。"
+                )
         build_reference = document.get("candidate_build_receipt")
         if _requires_complete_vc_artifacts(
             str(document.get("target_version", ""))
@@ -22658,6 +29393,51 @@ def _validate_stage_contract(document: dict[str, Any]) -> None:
             raise ConfigurationError("历史验收阶段不得新增 VC-4 构建收据字段。")
         if document.get("production_state") != "accepted_not_activated":
             raise ConfigurationError("验收阶段必须显式记录 accepted_not_activated。")
+
+
+def _stage_result_document(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    canonical: str,
+    payload: Mapping[str, Any],
+    *,
+    candidate_id: str | None,
+) -> dict[str, Any]:
+    """阶段结果的规范文档（封存前形态）：payload 加 Campaign 信封字段。
+
+    ``save_stage_result`` 在此之上再补证据清单、``sealed_at_utc`` 与 ``package_digest``；
+    accept 的 C1 续跑用同一构造与既有封存文档做整份比较，两处不得各写一份。
+    """
+
+    document = dict(payload)
+    for field in ("campaign_mode", "campaign_purpose"):
+        provided = document.get(field)
+        if provided is not None and provided != manifest[field]:
+            raise ConfigurationError(f"阶段收据 {field} 与 Campaign 不一致。")
+        document[field] = manifest[field]
+    expected_candidate_purpose = (
+        manifest["campaign_purpose"]
+        if canonical in {"capture-candidate", "compare", "accept"}
+        else None
+    )
+    if document.get("candidate_purpose") not in {
+        None,
+        expected_candidate_purpose,
+    }:
+        raise ConfigurationError("阶段收据 candidate purpose 与 Campaign 不一致。")
+    document["candidate_purpose"] = expected_candidate_purpose
+    result_schema = document.pop("schema_version", None)
+    document["schema_version"] = STAGE_SCHEMA
+    if result_schema and result_schema != STAGE_SCHEMA:
+        document["result_schema_version"] = result_schema
+    document["stage"] = canonical
+    document["campaign_id"] = manifest["campaign_id"]
+    if candidate_id is not None:
+        document["candidate_id"] = candidate_id
+    document["campaign_manifest_sha256"] = file_sha256(
+        campaign_dir / "campaign.json"
+    )
+    return document
 
 
 def save_stage_result(
@@ -22689,30 +29469,16 @@ def save_stage_result(
             campaign_dir,
             _successor_manifest,
         )
-    canonical, path = _stage_path(campaign_dir, stage, candidate_id)
+    canonical, path = _stage_path(campaign_dir, stage, candidate_id, mode="write")
     _reject_symlink_components(path.parent, campaign_dir, f"{canonical} 阶段目录")
     if path.exists():
         raise ConfigurationError(f"阶段结果已存在，禁止覆盖：{path}")
     if path.parent.exists() and path.parent.is_symlink():
         raise ConfigurationError(f"阶段目录不可信：{path.parent}")
     ensure_private_directory(path.parent, campaign_dir)
-    document = dict(payload)
-    for field in ("campaign_mode", "campaign_purpose"):
-        provided = document.get(field)
-        if provided is not None and provided != manifest[field]:
-            raise ConfigurationError(f"阶段收据 {field} 与 Campaign 不一致。")
-        document[field] = manifest[field]
-    expected_candidate_purpose = (
-        manifest["campaign_purpose"]
-        if canonical in {"capture-candidate", "compare", "accept"}
-        else None
+    document = _stage_result_document(
+        campaign_dir, manifest, canonical, payload, candidate_id=candidate_id
     )
-    if document.get("candidate_purpose") not in {
-        None,
-        expected_candidate_purpose,
-    }:
-        raise ConfigurationError("阶段收据 candidate purpose 与 Campaign 不一致。")
-    document["candidate_purpose"] = expected_candidate_purpose
     evidence_roots = [Path(value) for value in document.get("evidence_roots", [])]
     has_evidence_manifest = isinstance(document.get("evidence_manifest"), dict)
     if canonical in {"capture-official", "capture-candidate"} and evidence_roots:
@@ -22727,17 +29493,6 @@ def save_stage_result(
             security = document.setdefault("security", _evidence_security(evidence_roots))
             if not security.get("known_secret_scan_passed"):
                 raise ConfigurationError(f"{canonical} 证据秘密扫描未通过。")
-    result_schema = document.pop("schema_version", None)
-    document["schema_version"] = STAGE_SCHEMA
-    if result_schema and result_schema != STAGE_SCHEMA:
-        document["result_schema_version"] = result_schema
-    document["stage"] = canonical
-    document["campaign_id"] = manifest["campaign_id"]
-    if candidate_id is not None:
-        document["candidate_id"] = candidate_id
-    document["campaign_manifest_sha256"] = file_sha256(
-        campaign_dir / "campaign.json"
-    )
     with _campaign_lock(campaign_dir):
         _reject_contaminated_campaign(campaign_dir)
         _reject_symlink_components(path.parent, campaign_dir, f"{canonical} 阶段目录")
@@ -22791,8 +29546,15 @@ def _successor_copy_expectations(
     *,
     include_classification: bool = True,
     replace_target_scenario: bool = False,
+    official_reuse_target_scenario: bool = False,
+    abandoned_candidate_attempt: Mapping[str, Any] | None = None,
 ) -> dict[str, dict[str, Any]]:
-    """重建后继 Campaign 必须逐字复制的完整文件闭集。"""
+    """重建后继 Campaign 必须逐字复制的完整文件闭集。
+
+    ``official_reuse_target_scenario`` 为真时，target 场景不再逐字来自前序，而是
+    官方证据复用后继按候选侧演进采用的 preflight 快照（kind
+    ``official_reuse_target_scenario``），其摘要以后继清单绑定为准。
+    """
 
     expected: dict[str, dict[str, Any]] = {}
 
@@ -22833,13 +29595,13 @@ def _successor_copy_expectations(
         for field, reference in predecessor_manifest[group_name].items():
             if reference is not None:
                 if (
-                    replace_target_scenario
+                    (replace_target_scenario or official_reuse_target_scenario)
                     and group_name == "inputs"
                     and field == "target_discovery_scenarios"
                 ):
                     continue
                 add(reference, f"plan_{group_name}")
-    if replace_target_scenario:
+    if replace_target_scenario or official_reuse_target_scenario:
         reference = manifest.get("inputs", {}).get(
             "target_discovery_scenarios"
         )
@@ -22854,7 +29616,11 @@ def _successor_copy_expectations(
         ):
             raise ConfigurationError("后继运行时 target 场景摘要漂移。")
         expected[relative] = {
-            "kind": "runtime_target_scenario",
+            "kind": (
+                "runtime_target_scenario"
+                if replace_target_scenario
+                else "official_reuse_target_scenario"
+            ),
             "source_path": relative,
             "target_path": relative,
             "sha256": reference["sha256"],
@@ -22870,6 +29636,72 @@ def _successor_copy_expectations(
         "official_surface",
         target_relative=_SUCCESSOR_OFFICIAL_SURFACE_PATH,
     )
+    predecessor = manifest.get("predecessor")
+    if (
+        isinstance(predecessor, Mapping)
+        and predecessor.get("reason") in CANDIDATE_VC_PROJECTION_SUCCESSOR_REASONS
+        and _requires_complete_vc_artifacts(manifest)
+    ):
+        abandoned = abandoned_candidate_attempt
+        candidate_id = (
+            abandoned.get("candidate_id") if isinstance(abandoned, Mapping) else None
+        )
+        if not isinstance(candidate_id, str) or not SAFE_ID_RE.fullmatch(candidate_id):
+            raise ConfigurationError("Candidate 恢复复制闭集缺少失败 Candidate 身份。")
+        build_path = _candidate_build_receipt_path(predecessor_dir, candidate_id)
+        build_relative = build_path.relative_to(predecessor_dir).as_posix()
+        if build_path.is_symlink() or not build_path.is_file():
+            raise ConfigurationError("Candidate 恢复复制闭集缺少前序 VC-4 收据。")
+        add(
+            {"path": build_relative, "sha256": file_sha256(build_path)},
+            "candidate_build_projection",
+        )
+        try:
+            build_receipt = codex_upgrade_vc_artifacts.validate_candidate_build_receipt(
+                _read_json(build_path, "前序 Candidate 构建收据"),
+                allow_legacy=(
+                    isinstance(abandoned_candidate_attempt, Mapping)
+                    and isinstance(
+                        abandoned_candidate_attempt.get("attempt_id"), str
+                    )
+                    and (
+                        _is_c0154_v7_failed_core_source(
+                            predecessor_manifest,
+                            candidate_id=candidate_id,
+                            attempt_id=str(
+                                abandoned_candidate_attempt["attempt_id"]
+                            ),
+                        )
+                        or _is_c0154_a15_post_run_seal_source(
+                            predecessor_manifest,
+                            candidate_id=candidate_id,
+                            attempt_id=str(
+                                abandoned_candidate_attempt["attempt_id"]
+                            ),
+                        )
+                    )
+                ),
+            )
+        except codex_upgrade_vc_artifacts.VCArtifactError as error:
+            raise ConfigurationError(str(error)) from error
+        for name in (
+            "build_inventory",
+            "frontend_provenance",
+            "image_inspection",
+            "capability_probe",
+        ):
+            machine = build_receipt.get(name)
+            if machine is None:
+                continue
+            if not isinstance(machine, Mapping):
+                raise ConfigurationError(f"前序 Candidate {name} 机器收据绑定非法。")
+            add(
+                {
+                    "path": str(machine.get("path", "")),
+                    "sha256": str(machine.get("sha256", "")),
+                },
+                "candidate_build_projection_machine_receipt",
+            )
     return expected
 
 
@@ -22923,6 +29755,101 @@ def _validate_direct_predecessor_official_attempt(
         raise ConfigurationError("前序官方任务未按原子预约完整执行或结果漂移。")
 
 
+def _validate_official_reuse_target_scenario_import(
+    receipt: Mapping[str, Any],
+    *,
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    predecessor_dir: Path,
+    predecessor_manifest: Mapping[str, Any],
+) -> bool:
+    """复算官方证据复用后继的候选侧 target 场景过渡；返回是否存在该过渡。"""
+
+    transition = receipt.get("official_reuse_target_scenario_transition")
+    if transition is None:
+        return False
+    if receipt.get("reason") != OFFICIAL_EVIDENCE_REUSE_REASON:
+        raise ConfigurationError("只有官方证据复用后继可携带候选侧 target 场景过渡。")
+    predecessor_reference = predecessor_manifest.get("inputs", {}).get(
+        "target_discovery_scenarios"
+    )
+    successor_reference = manifest.get("inputs", {}).get(
+        "target_discovery_scenarios"
+    )
+    if (
+        not isinstance(transition, Mapping)
+        or set(transition)
+        != {
+            "reason",
+            "predecessor",
+            "successor",
+            "preflight_campaign",
+            "added_job_ids",
+            "removed_job_ids",
+            "changed_job_ids",
+        }
+        or transition.get("reason") != OFFICIAL_REUSE_TARGET_SCENARIO_TRANSITION_REASON
+        or transition.get("predecessor") != predecessor_reference
+        or transition.get("successor") != successor_reference
+    ):
+        raise ConfigurationError("官方证据复用候选侧 target 场景过渡收据非法。")
+    _require_file_binding(predecessor_reference, "官方证据复用场景过渡的前序绑定")
+    _require_file_binding(successor_reference, "官方证据复用场景过渡的当前绑定")
+    assert isinstance(predecessor_reference, dict)
+    assert isinstance(successor_reference, dict)
+    predecessor_path = _campaign_file(predecessor_dir, str(predecessor_reference["path"]))
+    successor_path = _campaign_file(campaign_dir, str(successor_reference["path"]))
+    if (
+        predecessor_path.is_symlink()
+        or not predecessor_path.is_file()
+        or file_sha256(predecessor_path) != predecessor_reference["sha256"]
+        or successor_path.is_symlink()
+        or not successor_path.is_file()
+        or file_sha256(successor_path) != successor_reference["sha256"]
+    ):
+        raise ConfigurationError("官方证据复用场景过渡文件摘要漂移。")
+    frozen = _read_json(predecessor_path, "官方证据复用场景过渡的前序文件")
+    managed = _read_json(successor_path, "官方证据复用场景过渡的当前文件")
+    _validate_scenario_manifest_shape(frozen)
+    _validate_scenario_manifest_shape(managed)
+    if _fingerprint(_official_scenario_execution_contract(dict(frozen))) != _fingerprint(
+        _official_scenario_execution_contract(dict(managed))
+    ):
+        raise ConfigurationError("官方证据复用场景过渡改变了 official Job 执行合同。")
+    frozen_jobs = {
+        str(job.get("id")): job for job in frozen.get("capture_jobs", []) if isinstance(job, dict)
+    }
+    managed_jobs = {
+        str(job.get("id")): job for job in managed.get("capture_jobs", []) if isinstance(job, dict)
+    }
+    expected = {
+        "added_job_ids": sorted(set(managed_jobs) - set(frozen_jobs)),
+        "removed_job_ids": sorted(set(frozen_jobs) - set(managed_jobs)),
+        "changed_job_ids": sorted(
+            job_id
+            for job_id in set(managed_jobs) & set(frozen_jobs)
+            if managed_jobs[job_id] != frozen_jobs[job_id]
+        ),
+    }
+    if any(transition.get(key) != value for key, value in expected.items()):
+        raise ConfigurationError("官方证据复用场景过渡 Job 集漂移。")
+    if not any(expected.values()) or any(
+        (managed_jobs.get(job_id) or frozen_jobs.get(job_id) or {}).get("phase") != "candidate"
+        for key in expected
+        for job_id in expected[key]
+    ):
+        raise ConfigurationError("官方证据复用场景过渡只允许候选侧 Job 演进。")
+    preflight = transition.get("preflight_campaign")
+    if (
+        not isinstance(preflight, Mapping)
+        or set(preflight) != {"campaign_id", "manifest_sha256"}
+        or not SAFE_ID_RE.fullmatch(str(preflight.get("campaign_id")))
+        or not SHA256_RE.fullmatch(str(preflight.get("manifest_sha256")))
+    ):
+        raise ConfigurationError("官方证据复用场景过渡缺少 preflight Campaign 绑定。")
+    return True
+
+
 def _validate_predecessor_import_receipt(
     campaign_dir: Path,
     manifest: dict[str, Any],
@@ -22974,6 +29901,14 @@ def _validate_predecessor_import_receipt(
         expected_receipt_fields.add("job_rehearsal_transition")
     if receipt_schema == PREDECESSOR_RUNTIME_SCENARIO_IMPORT_SCHEMA:
         expected_receipt_fields.add("target_scenario_transition")
+    if (
+        receipt.get("reason") == OFFICIAL_EVIDENCE_REUSE_REASON
+        and "official_reuse_target_scenario_transition" in receipt
+    ):
+        # 官方证据复用后继的候选侧 target 场景过渡（可选，见
+        # _official_reuse_target_scenario_transition）；内容由
+        # _validate_official_reuse_target_scenario_import 按两端文件复算。
+        expected_receipt_fields.add("official_reuse_target_scenario_transition")
     if (
         receipt_schema
         in {
@@ -23113,6 +30048,13 @@ def _validate_predecessor_import_receipt(
 
     runtime_scenario_import = (
         receipt_schema == PREDECESSOR_RUNTIME_SCENARIO_IMPORT_SCHEMA
+    )
+    official_reuse_scenario_import = _validate_official_reuse_target_scenario_import(
+        receipt,
+        campaign_dir=campaign_dir,
+        manifest=manifest,
+        predecessor_dir=predecessor_dir,
+        predecessor_manifest=predecessor_manifest,
     )
     if runtime_scenario_import:
         transition = receipt.get("target_scenario_transition")
@@ -23604,11 +30546,12 @@ def _validate_predecessor_import_receipt(
         raise ConfigurationError("同版本后继 Campaign 输入绑定不是对象。")
     predecessor_fixed_inputs = dict(predecessor_inputs)
     successor_fixed_inputs = dict(successor_inputs)
-    if runtime_scenario_import:
+    scenario_import = runtime_scenario_import or official_reuse_scenario_import
+    if scenario_import:
         predecessor_fixed_inputs.pop("target_discovery_scenarios", None)
         successor_fixed_inputs.pop("target_discovery_scenarios", None)
     if predecessor_fixed_inputs != successor_fixed_inputs or (
-        not runtime_scenario_import and predecessor_inputs != successor_inputs
+        not scenario_import and predecessor_inputs != successor_inputs
     ):
         raise ConfigurationError("同版本后继 Campaign 改变了未授权的输入绑定。")
 
@@ -23820,6 +30763,8 @@ def _validate_predecessor_import_receipt(
         replace_target_scenario=(
             receipt_schema == PREDECESSOR_RUNTIME_SCENARIO_IMPORT_SCHEMA
         ),
+        official_reuse_target_scenario=official_reuse_scenario_import,
+        abandoned_candidate_attempt=receipt.get("abandoned_candidate_attempt"),
     )
     copied_index: dict[str, dict[str, Any]] = {}
     for row in copied:
@@ -24119,9 +31064,12 @@ def _load_stage_result(
     _skip_evidence_scan: bool = False,
     _historical_manifest_controls: bool = False,
     _verified_campaign_manifest: Mapping[str, Any] | None = None,
+    _baseline: int | None = None,
 ) -> dict[str, Any]:
     # control epoch 的源上下文由外层清单校验触发。重放已写入 epoch 时若在这里
     # 再加载同一清单，会重新进入 control receipt 校验并形成无限递归。
+    # 改造 5：``_baseline`` 显式给出时按该评估基线的 stage_sources 递归解析读来源
+    # （accept 复用行的历史 inventory），否则按当前基线。
     campaign_manifest = _require_formal_campaign(
         campaign_dir,
         (
@@ -24134,6 +31082,9 @@ def _load_stage_result(
         ),
     )
     canonical, path = _stage_path(campaign_dir, stage, candidate_id)
+    if _baseline is not None and canonical in _CANDIDATE_STAGE_ROOTS:
+        assert candidate_id is not None
+        path = Path(_stage_read_source(campaign_dir, candidate_id, _baseline, canonical)["path"])
     _reject_symlink_components(path, campaign_dir, f"{canonical} 阶段结果")
     if not path.is_file() or path.is_symlink():
         raise ConfigurationError(f"阶段尚未封存：{canonical}")
@@ -24365,6 +31316,21 @@ def _verify_capture_seal_preview(
         attempt_id,
         _historical_manifest_controls=_historical_manifest_controls,
     )
+    recovery_reference = stage.get("recovery")
+    if phase == "candidate" and isinstance(recovery_reference, Mapping):
+        # 改造 5 M2：增量封存结果的 seal 预览／草案落在恢复段目录，预览绑定的是段 run-summary 的
+        # attempt_recovery_digest（seal 时以段视图作为 attempt 参与预览）。
+        _require_recovery_binding(recovery_reference)
+        segment_root, _segment_reservation, segment_summary = _load_attempt_recovery_segment(
+            campaign_dir, str(candidate_id), attempt_id, str(recovery_reference.get("recovery_revision", ""))
+        )
+        if file_sha256(segment_root / ATTEMPT_RECOVERY_SUMMARY_FILENAME) != recovery_reference.get("sha256"):
+            raise ConfigurationError("阶段结果绑定的恢复段 run-summary 摘要漂移。")
+        attempt_root = segment_root
+        attempt = {
+            **{key: value for key, value in segment_summary.items() if key != "attempt_recovery_digest"},
+            "attempt_digest": str(segment_summary["attempt_recovery_digest"]),
+        }
     preview_path = _campaign_file(
         campaign_dir,
         str(stage["seal_preview"]["path"]),
@@ -25187,7 +32153,11 @@ def campaign_status(
                             current_candidate_id,
                         )
                         if delivery is not None:
-                            vc6_path = _vc_checkpoint_path(campaign_dir, "VC-6")
+                            vc6_path = _vc_checkpoint_path(
+                                campaign_dir,
+                                "VC-6",
+                                revision=_current_candidate_revision(campaign_dir, manifest),
+                            )
                             if vc6_path.exists() or vc6_path.is_symlink():
                                 _replay_vc_completion(
                                     campaign_dir,
@@ -25402,7 +32372,7 @@ def campaign_status(
                 "项目总账 blocked：只允许 accounting_resolved／root_cause_repaired／"
                 "reconciliation_committed／campaign_terminal，禁止注册、派发、resume、复用与 seal"
             )
-    return {
+    result = {
         "schema_version": "codex-upgrade-status/v2",
         "verification_mode": "shallow",
         "raw_evidence_scanned_bytes": 0,
@@ -25434,6 +32404,126 @@ def campaign_status(
         "project_ledger": project_ledger_status,
         "next_command": next_command,
     }
+    revisions_status = _candidate_revisions_status(campaign_dir, manifest)
+    if revisions_status is not None:
+        result["candidate_revisions"] = revisions_status
+    if candidate_id is not None:
+        baselines_status = _evaluation_baselines_status(campaign_dir, manifest, candidate_id)
+        if baselines_status is not None:
+            result["evaluation_baselines"] = baselines_status
+    return result
+
+
+def _evaluation_baselines_status(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    candidate_id: str,
+) -> dict[str, Any] | None:
+    """改造 5：只读列出候选各评估基线的 kind／状态／stage_sources／pending 阶段与执行／复用规则数。"""
+
+    if not _requires_complete_vc_artifacts(manifest) or not SAFE_ID_RE.fullmatch(candidate_id):
+        return None
+    try:
+        states = _evaluation_baseline_states(campaign_dir, candidate_id)
+        current, _commit = _current_evaluation_baseline(campaign_dir, candidate_id)
+    except ConfigurationError as error:
+        return {"current_evaluation_baseline": None, "error": str(error)[:500], "baselines": {}}
+    baselines: dict[str, Any] = {}
+    for number in sorted(states):
+        flags = states[number]
+        directory = _evaluation_baseline_dir(campaign_dir, candidate_id, number)
+        state = (
+            "abandoned" if flags["abandon"]
+            else "committed" if flags["commit"]
+            else "authorized" if flags["authorization"]
+            else "prepared" if flags["prepared"]
+            else "empty"
+        )
+        entry: dict[str, Any] = {"state": state, "current": number == current}
+        recovery_path = directory / EVALUATION_BASELINE_RECOVERY_FILENAME
+        if recovery_path.is_file():
+            try:
+                recovery = codex_upgrade_vc_artifacts.validate_evaluation_recovery(_read_json(recovery_path, "评估基线 recovery"))
+                entry.update(
+                    {
+                        "kind": recovery["kind"],
+                        "failure_source": recovery["failure_source"],
+                        "reuse_authority": recovery["reuse_authority"],
+                        "execute_rule_count": len(recovery["execute_rules"]),
+                        "reuse_rule_count": len(recovery["reuse_rules"]),
+                        "execute_job_count": len(recovery["execute_jobs"]),
+                    }
+                )
+            except (ConfigurationError, codex_upgrade_vc_artifacts.VCArtifactError) as error:
+                entry["error"] = str(error)[:300]
+        if flags["commit"]:
+            try:
+                commit = _read_evaluation_baseline_commit(campaign_dir, candidate_id, number)
+                entry["stage_sources"] = commit["stage_sources"]
+                entry["stages"] = {
+                    stage: _stage_read_source(campaign_dir, candidate_id, number, stage)["status"]
+                    for stage in codex_upgrade_vc_artifacts.EVALUATION_STAGES
+                }
+            except ConfigurationError as error:
+                entry["error"] = str(error)[:300]
+        baselines[f"b{number}"] = entry
+    if not baselines and current == 0:
+        return None
+    return {"current_evaluation_baseline": current, "baselines": baselines}
+
+
+def _candidate_revisions_status(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """改造 2：只读列出各 revision 的候选状态；没有 revision 目录的历史 Campaign 返回 None。"""
+
+    if not _requires_complete_vc_artifacts(manifest):
+        return None
+    revisions_root = _candidate_revisions_root(campaign_dir)
+    if not revisions_root.is_dir() or revisions_root.is_symlink():
+        return None
+    try:
+        current, _record = _current_candidate_revision_record(campaign_dir, manifest)
+    except ConfigurationError as error:
+        return {"current_revision": None, "error": str(error)[:500], "revisions": {}}
+    revisions: dict[str, Any] = {}
+    for revision in _existing_candidate_revisions(campaign_dir):
+        record, commit = _read_candidate_revision_record(campaign_dir, revision)
+        directory = _candidate_revision_dir(campaign_dir, revision)
+        candidate = record.get("candidate_id") if record is not None else None
+        superseded_marker = (
+            campaign_dir / "candidates" / str(candidate) / "superseded-by.json"
+            if isinstance(candidate, str)
+            else None
+        )
+        invalidation = (
+            campaign_dir / "candidates" / str(candidate) / CANDIDATE_INVALIDATION_FILENAME
+            if isinstance(candidate, str)
+            else None
+        )
+        # 作废／取代标记优先：revision_required 窗口里旧候选虽仍是"当前 revision"，但只读。
+        if superseded_marker is not None and superseded_marker.exists():
+            state = "superseded"
+        elif invalidation is not None and invalidation.exists():
+            state = "invalidated"
+        elif current == revision:
+            state = "active"
+        elif commit is None:
+            state = "opening"
+        else:
+            state = "pending"
+        revisions[f"r{revision}"] = {
+            "candidate_id": candidate,
+            "state": state,
+            "sealed": (directory / "seal.json").is_file(),
+            "checkpoints": sorted(
+                path.name
+                for path in directory.glob("vc-*-checkpoint.json")
+                if path.is_file()
+            ),
+        }
+    return {"current_revision": current, "revisions": revisions}
 
 
 def _campaign_arguments(
@@ -31131,6 +38221,288 @@ def _parse_client_evidence(
     return bindings
 
 
+def _candidate_readiness_checks(
+    *,
+    manifest: Mapping[str, Any],
+    candidate_id: str,
+    identity: Mapping[str, Any],
+    build_receipt_sha256: str,
+    jobs: Sequence[Job],
+) -> list[dict[str, Any]]:
+    """采集紧贴 VC-5 的零请求静态门禁事实。
+
+    可写路径探针本身是环境检查；它失败时仍要形成固定 ``storage`` 失败项，
+    让父监督器得到可复算的 ``failure_observations``。结构／程序错误则继续抛出，
+    不能被误包装成可恢复环境故障。
+    """
+
+    configuration = manifest.get("configuration")
+    if not isinstance(configuration, Mapping):
+        raise ConfigurationError("Candidate 就绪门禁缺少冻结 configuration。")
+    try:
+        storage_probe = (
+            codex_upgrade_job_rehearsal_receipt.capture_storage_probe(
+                jobs,
+                configuration,
+            )
+        )
+    except (
+        OSError,
+        RuntimeError,
+        subprocess.SubprocessError,
+        codex_upgrade_job_rehearsal_receipt.JobRehearsalReceiptError,
+    ):
+        # ``collect_static_checks`` 会把该固定失败事实写成 storage 检查；错误
+        # 文本不进入收据，避免命令输出或路径细节泄漏。
+        storage_probe = {"status": "failed"}
+    return codex_upgrade_candidate_readiness.collect_static_checks(
+        configuration=configuration,
+        target_version=str(manifest.get("target_version", "")),
+        candidate_id=candidate_id,
+        identity=identity,
+        build_receipt_sha256=build_receipt_sha256,
+        storage_probe=storage_probe,
+    )
+
+
+def _candidate_readiness_file_binding(
+    campaign_dir: Path,
+    path: Path,
+    payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    """为 Campaign 内不可变就绪收据生成稳定绑定。"""
+
+    _reject_symlink_components(path, campaign_dir, "Candidate 就绪收据")
+    if path.is_symlink() or not path.is_file():
+        raise ConfigurationError("Candidate 就绪收据不存在或不可信。")
+    try:
+        relative = path.resolve(strict=True).relative_to(
+            campaign_dir.resolve(strict=True)
+        )
+    except (OSError, ValueError) as error:
+        raise ConfigurationError("Candidate 就绪收据越出 Campaign 边界。") from error
+    digest = payload.get("receipt_digest")
+    if not isinstance(digest, str) or not SHA256_RE.fullmatch(digest):
+        raise ConfigurationError("Candidate 就绪收据缺少合法自摘要。")
+    return {
+        "path": relative.as_posix(),
+        "sha256": file_sha256(path),
+        "bytes": path.stat().st_size,
+        "receipt_digest": digest,
+    }
+
+
+def _candidate_readiness_bound_file(
+    campaign_dir: Path,
+    candidate_id: str,
+    value: Any,
+    *,
+    label: str,
+) -> tuple[Path, dict[str, Any]]:
+    """重放一份 reservation 内的就绪文件绑定。"""
+
+    if (
+        not isinstance(value, Mapping)
+        or set(value) != {"path", "sha256", "bytes", "receipt_digest"}
+        or not isinstance(value.get("path"), str)
+        or not value["path"]
+        or not SHA256_RE.fullmatch(str(value.get("sha256", "")))
+        or isinstance(value.get("bytes"), bool)
+        or not isinstance(value.get("bytes"), int)
+        or int(value["bytes"]) <= 0
+        or not SHA256_RE.fullmatch(str(value.get("receipt_digest", "")))
+    ):
+        raise ConfigurationError(f"{label}绑定字段不闭合。")
+    raw_path = str(value["path"])
+    parsed = PurePosixPath(raw_path)
+    expected_prefix = PurePosixPath(
+        "control", "candidate-readiness", candidate_id
+    )
+    if (
+        parsed.is_absolute()
+        or str(parsed) != raw_path
+        or "\\" in raw_path
+        or any(part in {"", ".", ".."} for part in parsed.parts)
+        or not parsed.is_relative_to(expected_prefix)
+    ):
+        raise ConfigurationError(f"{label}路径非法。")
+    path = _campaign_file(campaign_dir, raw_path)
+    _reject_symlink_components(path, campaign_dir, label)
+    if (
+        path.is_symlink()
+        or not path.is_file()
+        or path.stat().st_size != value["bytes"]
+        or file_sha256(path) != value["sha256"]
+    ):
+        raise ConfigurationError(f"{label}文件缺失或摘要漂移。")
+    payload = _read_json(path, label)
+    unsigned = dict(payload)
+    recorded_digest = unsigned.pop("receipt_digest", None)
+    if (
+        recorded_digest != value["receipt_digest"]
+        or recorded_digest
+        != codex_upgrade_candidate_readiness._digest(unsigned)
+    ):
+        raise ConfigurationError(f"{label}自摘要漂移。")
+    return path, payload
+
+
+def _validate_candidate_readiness_binding(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    candidate_id: str,
+    value: Any,
+) -> dict[str, Any]:
+    """验证 Candidate v3 reservation 所绑定的静态、probe 与总账 CAS。"""
+
+    required = {
+        "schema_version",
+        "image_id",
+        "build_receipt_sha256",
+        "static_receipt",
+        "models_probe_receipt",
+        "project_head_sequence",
+        "project_head_sha256",
+    }
+    if not isinstance(value, Mapping) or set(value) != required:
+        raise ConfigurationError("Candidate reservation 就绪绑定字段不闭合。")
+    sequence = value.get("project_head_sequence")
+    head_sha256 = value.get("project_head_sha256")
+    if (
+        value.get("schema_version") != CANDIDATE_READINESS_BINDING_SCHEMA
+        or isinstance(sequence, bool)
+        or not isinstance(sequence, int)
+        or sequence < 0
+        or not SHA256_RE.fullmatch(str(head_sha256))
+    ):
+        raise ConfigurationError("Candidate reservation 项目总账 CAS 身份非法。")
+    build_sha256 = value.get("build_receipt_sha256")
+    image_id = value.get("image_id")
+    if (
+        not isinstance(build_sha256, str)
+        or not SHA256_RE.fullmatch(build_sha256)
+        or not isinstance(image_id, str)
+        or not IMAGE_ID_RE.fullmatch(image_id)
+    ):
+        raise ConfigurationError("Candidate reservation 缺少构建或镜像身份。")
+    _static_path, static_receipt = _candidate_readiness_bound_file(
+        campaign_dir,
+        candidate_id,
+        value.get("static_receipt"),
+        label="Candidate 静态就绪收据",
+    )
+    try:
+        static_receipt = (
+            codex_upgrade_candidate_readiness.validate_static_receipt(
+                static_receipt,
+                campaign_id=str(manifest.get("campaign_id", "")),
+                candidate_id=candidate_id,
+                image_id=image_id,
+                build_receipt_sha256=build_sha256,
+                require_fresh=False,
+            )
+        )
+        codex_upgrade_candidate_readiness.assert_static_passed(
+            _static_path,
+            static_receipt,
+        )
+    except (ValueError, codex_upgrade_candidate_readiness.CandidateReadinessError) as error:
+        raise ConfigurationError(f"Candidate 静态就绪绑定无法重放：{error}") from error
+    _probe_path, probe_receipt = _candidate_readiness_bound_file(
+        campaign_dir,
+        candidate_id,
+        value.get("models_probe_receipt"),
+        label="Candidate models probe 收据",
+    )
+    configuration = manifest.get("configuration")
+    if not isinstance(configuration, Mapping):
+        raise ConfigurationError("Candidate models probe 缺少冻结 configuration。")
+    if _probe_path.name != "receipt.json":
+        raise ConfigurationError("Candidate models probe 绑定路径不是规范 receipt.json。")
+    try:
+        project_ledger_root = codex_upgrade_project_ledger.find_project_ledger(
+            campaign_dir
+        )
+        if project_ledger_root is None:
+            raise codex_upgrade_project_ledger.ProjectLedgerError(
+                "Candidate models probe 缺少项目总账"
+            )
+        # 历史 reservation 会在 Campaign 锁内被重放，这里不得
+        # 再获取项目锁，否则与新预约的“项目锁 → Campaign 锁”形成
+        # 反向等待。事件是原子追加且不可变，只读快照仅用于证明
+        # reservation head 仍为链上祖先；并发边界最多安全失败。
+        project_history = (
+            codex_upgrade_project_ledger.read_project_history_snapshot(
+                project_ledger_root
+            )
+        )
+        probe_bundle = (
+            codex_upgrade_candidate_readiness.replay_models_probe_bundle(
+                _probe_path.parent,
+                service_container=str(configuration.get("service_container", "")),
+                image_id=image_id,
+                project_ledger_history=project_history,
+                reservation_head_sequence=sequence,
+                reservation_head_sha256=str(head_sha256),
+                current_time=datetime.now(timezone.utc),
+            )
+        )
+        session = probe_bundle["session"]
+        replayed_probe_receipt = probe_bundle["receipt"]
+        if replayed_probe_receipt != probe_receipt:
+            raise ValueError("Candidate models probe 绑定文件与 bundle 重放结果不一致")
+        probe_receipt = replayed_probe_receipt
+    except (
+        KeyError,
+        OSError,
+        ValueError,
+        codex_upgrade_candidate_readiness.CandidateReadinessError,
+        codex_upgrade_project_ledger.ProjectLedgerError,
+    ) as error:
+        raise ConfigurationError(f"Candidate models probe 绑定无法重放：{error}") from error
+    cache_isolation = probe_receipt.get("cache_isolation")
+    receipt_sequence = probe_receipt.get("project_head_sequence")
+    expected_account_id = configuration.get("codex_account_id")
+    expected_api_key_id = configuration.get("api_key_id")
+    if (
+        not isinstance(session, Mapping)
+        or probe_receipt.get("schema_version")
+        != codex_upgrade_candidate_readiness.PROBE_RECEIPT_SCHEMA
+        or probe_receipt.get("campaign_id") != manifest.get("campaign_id")
+        or probe_receipt.get("candidate_id") != candidate_id
+        or probe_receipt.get("image_id") != image_id
+        or probe_receipt.get("build_receipt_sha256") != build_sha256
+        or probe_receipt.get("static_receipt_digest")
+        != static_receipt.get("receipt_digest")
+        or probe_receipt.get("target_version") != manifest.get("target_version")
+        or isinstance(expected_account_id, bool)
+        or not isinstance(expected_account_id, int)
+        or expected_account_id <= 0
+        or probe_receipt.get("codex_account_id") != expected_account_id
+        or isinstance(expected_api_key_id, bool)
+        or not isinstance(expected_api_key_id, int)
+        or expected_api_key_id <= 0
+        or probe_receipt.get("api_key_id") != expected_api_key_id
+        or probe_receipt.get("status") != "passed"
+        or probe_receipt.get("accounting_category")
+        != codex_upgrade_candidate_readiness.ACCOUNTING_CATEGORY
+        or probe_receipt.get("failure_observations") != []
+        or isinstance(receipt_sequence, bool)
+        or not isinstance(receipt_sequence, int)
+        or receipt_sequence < 1
+        or receipt_sequence > sequence
+        or not isinstance(cache_isolation, Mapping)
+        or cache_isolation.get("restart_after_probe") is not True
+    ):
+        raise ConfigurationError("Candidate models probe 收据身份或缓存隔离非法。")
+    if (
+        receipt_sequence == sequence
+        and probe_receipt.get("project_head_sha256") != head_sha256
+    ):
+        raise ConfigurationError("Candidate models probe 与 reservation 总账 CAS 漂移。")
+    return dict(value)
+
+
 def _load_capture_reservation(
     campaign_dir: Path,
     attempt_root: Path,
@@ -31163,6 +38535,10 @@ def _load_capture_reservation(
         "planned_jobs",
         "reservation_digest",
     }
+    schema_version = payload.get("schema_version")
+    optional_fields = {"campaign_lease"}
+    if schema_version == CAPTURE_RESERVATION_SCHEMA:
+        optional_fields.add("candidate_readiness")
     digest = payload.get("reservation_digest")
     unsigned = dict(payload)
     unsigned.pop("reservation_digest", None)
@@ -31175,9 +38551,10 @@ def _load_capture_reservation(
         )
     )
     if (
-        not set(payload).issubset(required | {"campaign_lease"})
+        schema_version
+        not in {LEGACY_CAPTURE_RESERVATION_SCHEMA, CAPTURE_RESERVATION_SCHEMA}
+        or not set(payload).issubset(required | optional_fields)
         or not required.issubset(set(payload))
-        or payload.get("schema_version") != CAPTURE_RESERVATION_SCHEMA
         or payload.get("campaign_id") != manifest["campaign_id"]
         or payload.get("campaign_mode") != manifest["campaign_mode"]
         or payload.get("campaign_purpose") != manifest["campaign_purpose"]
@@ -31196,6 +38573,17 @@ def _load_capture_reservation(
         or _fingerprint(unsigned) != digest
     ):
         raise ConfigurationError("抓包预约身份或摘要不一致。")
+    if schema_version == CAPTURE_RESERVATION_SCHEMA:
+        if phase != "candidate" or candidate_id is None:
+            raise ConfigurationError("v3 抓包预约只能用于 Candidate。")
+        _validate_candidate_readiness_binding(
+            campaign_dir,
+            manifest,
+            candidate_id,
+            payload.get("candidate_readiness"),
+        )
+    elif payload.get("candidate_readiness") is not None:
+        raise ConfigurationError("历史 v2 抓包预约不得携带 Candidate 就绪绑定。")
     lease_binding = payload.get("campaign_lease")
     if lease_binding is not None:
         if (
@@ -31309,7 +38697,7 @@ def _historical_result_metadata_matches(
         _tool_component_for_path(path) for path in allowed_high_risk_paths
     }
     if not allowed_high_risk.issubset(
-        {"producer", "relay", "runtime", "shared", "scenario"}
+        _RUNTIME_SUCCESSOR_ALLOWED_REBASE_COMPONENTS
     ):
         return False
     historical_raw = _tool_component_digest_map(frozen_tool)
@@ -31443,13 +38831,20 @@ def _rebase_reused_result(
     *,
     identity: Mapping[str, Any],
     tool_identity: Mapping[str, Any],
+    incremental_metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """把承接结果绑定到本轮 Job 摘要，历史收据本身保持只读。"""
 
-    incremental = _job_incremental_metadata(
-        job,
-        identity=identity,
-        tool_identity=tool_identity,
+    # 调用方若已用同一 Job、身份和工具快照算过元数据，直接复用该结果。
+    # 这避免跨 Campaign rebase 对同一个工具依赖闭包做第二次完整解析。
+    incremental = (
+        dict(incremental_metadata)
+        if incremental_metadata is not None
+        else _job_incremental_metadata(
+            job,
+            identity=identity,
+            tool_identity=tool_identity,
+        )
     )
     rebased = dict(result)
     rebased.update(
@@ -31477,6 +38872,7 @@ def _reserve_capture_attempt(
     allow_failed_rerun: bool = False,
     deadline: incremental_recovery.WallClockDeadline | None = None,
     lease: CampaignLease | None = None,
+    candidate_readiness: Mapping[str, Any] | None = None,
 ) -> tuple[Path, dict[str, Any]]:
     """在跨进程锁内原子发布预约，关闭 check-then-create 与空目录窗口。"""
 
@@ -31519,6 +38915,26 @@ def _reserve_capture_attempt(
             raise ConfigurationError(
                 "候选预约身份用途与 Campaign 冻结用途不一致。"
             )
+        readiness_binding: dict[str, Any] | None = None
+        if candidate_readiness is not None:
+            if phase != "candidate" or candidate_id is None:
+                raise ConfigurationError("Candidate 就绪绑定不能用于 official reservation。")
+            readiness_binding = _validate_candidate_readiness_binding(
+                campaign_dir,
+                manifest,
+                candidate_id,
+                candidate_readiness,
+            )
+            build_binding = identity.get("build_receipt")
+            if (
+                identity.get("image_id") != readiness_binding.get("image_id")
+                or not isinstance(build_binding, Mapping)
+                or build_binding.get("sha256")
+                != readiness_binding.get("build_receipt_sha256")
+            ):
+                raise ConfigurationError(
+                    "Candidate 就绪绑定与 reservation 身份不一致。"
+                )
         lease_binding: dict[str, str] | None = None
         if lease is not None:
             if not lease.acquired:
@@ -31556,7 +38972,11 @@ def _reserve_capture_attempt(
             raise ConfigurationError("随机 attempt-id 发生冲突。")
         run_nonce = secrets.token_hex(32)
         reservation: dict[str, Any] = {
-            "schema_version": CAPTURE_RESERVATION_SCHEMA,
+            "schema_version": (
+                CAPTURE_RESERVATION_SCHEMA
+                if readiness_binding is not None
+                else LEGACY_CAPTURE_RESERVATION_SCHEMA
+            ),
             "campaign_id": manifest["campaign_id"],
             "campaign_mode": manifest["campaign_mode"],
             "campaign_purpose": manifest["campaign_purpose"],
@@ -31581,6 +39001,8 @@ def _reserve_capture_attempt(
                 for job in jobs
             ],
         }
+        if readiness_binding is not None:
+            reservation["candidate_readiness"] = readiness_binding
         if lease_binding is not None:
             reservation["campaign_lease"] = lease_binding
         reservation["reservation_digest"] = _fingerprint(reservation)
@@ -31615,6 +39037,160 @@ def _reserve_capture_attempt(
         if deadline is not None:
             deadline.check("attempt:reserve:complete")
         return final_root, reservation
+
+
+def _reserve_candidate_capture_attempt(
+    campaign_dir: Path,
+    *,
+    manifest: Mapping[str, Any],
+    candidate_id: str,
+    identity: dict[str, Any],
+    jobs: list[Job],
+    build_receipt_binding: Mapping[str, Any],
+    allow_failed_rerun: bool,
+    deadline: incremental_recovery.WallClockDeadline,
+    lease: CampaignLease | None,
+) -> tuple[Path, dict[str, Any], dict[str, Any]]:
+    """在项目锁内完成静态门禁、受控 probe、总账 CAS 与 reservation。
+
+    锁顺序固定为项目锁 → Campaign 锁。静态失败不会产生 wire、attempt 或
+    reservation；probe 的每次真实 dispatch 先形成本地 result，再逐条幂等入账。
+    """
+
+    build_receipt_sha256 = build_receipt_binding.get("sha256")
+    image_id = identity.get("image_id")
+    if (
+        not isinstance(build_receipt_sha256, str)
+        or not SHA256_RE.fullmatch(build_receipt_sha256)
+        or not isinstance(image_id, str)
+        or not IMAGE_ID_RE.fullmatch(image_id)
+    ):
+        raise ConfigurationError("Candidate 就绪门禁缺少构建收据或镜像身份。")
+    configuration = manifest.get("configuration")
+    if not isinstance(configuration, Mapping):
+        raise ConfigurationError("Candidate 就绪门禁缺少冻结 configuration。")
+    if not allow_failed_rerun:
+        failed = [
+            item
+            for item in _failed_capture_attempts(campaign_dir, "candidate")
+            if item.partition(":")[0] == candidate_id
+        ]
+        if failed:
+            raise ConfigurationError(
+                "存在失败 Candidate attempt；必须先走已批准的恢复路径，"
+                f"禁止在 probe 前直接重派：{failed}"
+            )
+    require_ledger = _project_ledger_required(
+        manifest.get("campaign_mode"),
+        manifest.get("target_version"),
+    )
+    with codex_upgrade_project_ledger.runtime_admission_scope(
+        campaign_dir,
+        require=require_ledger,
+        command="capture-candidate-readiness",
+    ) as admission:
+        if admission is None:
+            raise ConfigurationError("Candidate 就绪 probe 缺少项目总账作用域。")
+        deadline.check("candidate-readiness:static:start")
+        checks = _candidate_readiness_checks(
+            manifest=manifest,
+            candidate_id=candidate_id,
+            identity=identity,
+            build_receipt_sha256=build_receipt_sha256,
+            jobs=jobs,
+        )
+        static_path, static_receipt = (
+            codex_upgrade_candidate_readiness.write_static_receipt(
+                campaign_dir
+                / "control"
+                / "candidate-readiness"
+                / candidate_id
+                / "static-receipts",
+                campaign_id=str(manifest.get("campaign_id", "")),
+                candidate_id=candidate_id,
+                image_id=image_id,
+                build_receipt_sha256=build_receipt_sha256,
+                checks=checks,
+            )
+        )
+        static_receipt = (
+            codex_upgrade_candidate_readiness.validate_static_receipt(
+                static_receipt,
+                campaign_id=str(manifest.get("campaign_id", "")),
+                candidate_id=candidate_id,
+                image_id=image_id,
+                build_receipt_sha256=build_receipt_sha256,
+            )
+        )
+        codex_upgrade_candidate_readiness.assert_static_passed(
+            static_path,
+            static_receipt,
+        )
+        deadline.check("candidate-readiness:probe:start")
+        probe_receipt = codex_upgrade_candidate_readiness.ensure_models_probe(
+            campaign_dir,
+            campaign_id=str(manifest.get("campaign_id", "")),
+            candidate_id=candidate_id,
+            image_id=image_id,
+            build_receipt_sha256=build_receipt_sha256,
+            static_receipt_digest=str(static_receipt["receipt_digest"]),
+            target_version=str(manifest.get("target_version", "")),
+            configuration=configuration,
+            admission=admission,
+        )
+        deadline.check("candidate-readiness:probe:accounted")
+        reservation_head = admission.reservation_cas(
+            expected_sequence=admission.head_sequence,
+            expected_head_sha256=admission.head_sha256,
+        )
+        session_id = probe_receipt.get("session_id")
+        if not isinstance(session_id, str) or not SAFE_ID_RE.fullmatch(session_id):
+            raise ConfigurationError("Candidate models probe session ID 非法。")
+        probe_path = (
+            campaign_dir
+            / "control"
+            / "candidate-readiness"
+            / candidate_id
+            / "models-probes"
+            / f"session-{session_id}"
+            / "receipt.json"
+        )
+        readiness_binding = {
+            "schema_version": CANDIDATE_READINESS_BINDING_SCHEMA,
+            "image_id": image_id,
+            "build_receipt_sha256": build_receipt_sha256,
+            "static_receipt": _candidate_readiness_file_binding(
+                campaign_dir,
+                static_path,
+                static_receipt,
+            ),
+            "models_probe_receipt": _candidate_readiness_file_binding(
+                campaign_dir,
+                probe_path,
+                probe_receipt,
+            ),
+            "project_head_sequence": reservation_head["sequence"],
+            "project_head_sha256": reservation_head["head_sha256"],
+        }
+        readiness_binding = _validate_candidate_readiness_binding(
+            campaign_dir,
+            manifest,
+            candidate_id,
+            readiness_binding,
+        )
+        deadline.check("candidate-readiness:reservation")
+        attempt_root, reservation = _reserve_capture_attempt(
+            campaign_dir,
+            phase="candidate",
+            candidate_id=candidate_id,
+            identity=identity,
+            jobs=jobs,
+            allow_failed_rerun=allow_failed_rerun,
+            deadline=deadline,
+            lease=lease,
+            candidate_readiness=readiness_binding,
+        )
+        return attempt_root, reservation, static_receipt
 
 
 def _prior_complete_results(
@@ -31741,19 +39317,38 @@ def _prior_complete_results(
     global_tool_unchanged = _tool_signature_matches(frozen_tool, current_tool)
     changed_production_paths: list[str] = []
     path_job_map: dict[str, set[str]] = {}
+    strict_c0154_v7_replay = bool(
+        explicit_historical_source
+        and isinstance(history_candidate_id, str)
+        and isinstance(source_attempt_id, str)
+        and _is_c0154_v7_failed_core_source(
+            frozen_manifest,
+            candidate_id=history_candidate_id,
+            attempt_id=source_attempt_id,
+        )
+    )
     if isinstance(frozen_tool, Mapping):
         (
             exact_affected_job_ids,
             changed_production_paths,
             unmapped_production_paths,
-        ) = _exact_tool_path_impact(jobs, frozen_tool, current_tool)
+        ) = _exact_tool_path_impact(
+            jobs,
+            frozen_tool,
+            current_tool,
+            allow_phase_evaluation_hybrid_drift=strict_c0154_v7_replay,
+        )
         if unmapped_production_paths:
             raise ConfigurationError(
                 "历史结果复用发现未登记的产出侧工具变化："
                 + "、".join(unmapped_production_paths)
                 + "；禁止扩大为全量重跑。"
             )
-        path_job_map = _tool_path_job_map(jobs, frozen_tool, current_tool)
+        path_job_map = (
+            _tool_path_job_map(jobs, frozen_tool, current_tool)
+            if changed_production_paths
+            else {}
+        )
     else:
         exact_affected_job_ids = []
     allowed_statuses = {str(value) for value in allowed_source_statuses}
@@ -31936,6 +39531,7 @@ def _prior_complete_results(
                     expected_job,
                     identity=identity,
                     tool_identity=current_tool,
+                    incremental_metadata=expected_incremental,
                 )
                 if relocated or needs_rebase
                 else dict(item)
@@ -32384,7 +39980,7 @@ def _validate_attempt_incremental_fields(
             or not isinstance(environment.get("evidence_root"), str)
             or not Path(str(environment["evidence_root"])).is_absolute()
             or any(
-                environment.get(name) is not None
+                environment.get(name) is None
                 for name in expected_environment_fields - {"evidence_root"}
             )
             or not isinstance(plan, Mapping)
@@ -32411,6 +40007,23 @@ def _validate_attempt_incremental_fields(
             )
         ):
             raise ConfigurationError("metadata-only attempt 的零执行边界不闭合。")
+        expected_environment_paths = {
+            "before_probe": "environment/before/probe-manifest.json",
+            "after_probe": "environment/after/probe-manifest.json",
+            "restoration_report": "receipts/restoration-report.json",
+            "arm64_before_receipt": "environment/arm64-before/receipt.json",
+            "arm64_after_receipt": "environment/arm64-after/receipt.json",
+        }
+        for name, expected_path in expected_environment_paths.items():
+            actual_path = _validate_attempt_file_binding(
+                environment.get(name),
+                label=f"metadata-only attempt {name}",
+                allow_null=False,
+            )
+            if actual_path != PurePosixPath(expected_path):
+                raise ConfigurationError(
+                    f"metadata-only attempt {name} 路径非法。"
+                )
     _validate_attempt_watchdog_fields(payload, planned_job_ids)
 
 
@@ -32517,6 +40130,17 @@ def _write_capture_attempt(
         "identity_sha256"
     ):
         raise ConfigurationError("抓包 attempt 身份与原子预约不一致。")
+    if reservation.get("schema_version") == CAPTURE_RESERVATION_SCHEMA:
+        readiness = reservation.get("candidate_readiness")
+        build_binding = identity.get("build_receipt")
+        if (
+            not isinstance(readiness, Mapping)
+            or identity.get("image_id") != readiness.get("image_id")
+            or not isinstance(build_binding, Mapping)
+            or build_binding.get("sha256")
+            != readiness.get("build_receipt_sha256")
+        ):
+            raise ConfigurationError("抓包 attempt 身份与 Candidate 就绪绑定不一致。")
     planned = {
         item["id"]: item["execution_sha256"]
         for item in reservation["planned_jobs"]
@@ -32546,6 +40170,12 @@ def _write_capture_attempt(
         "path": str((attempt_root / "reservation.json").relative_to(campaign_dir)),
         "sha256": file_sha256(attempt_root / "reservation.json"),
     }
+    failure_observations, root_causes = _attempt_failure_facts(document)
+    supplied_causes = document.get("root_causes")
+    if supplied_causes is not None and supplied_causes != root_causes:
+        raise ConfigurationError("抓包 attempt 调用方提供的根因数组与观测不一致。")
+    document["failure_observations"] = failure_observations
+    document["root_causes"] = root_causes
     _replay_attempt_evidence_permissions(attempt_root, document)
     document["attempt_digest"] = _fingerprint(document)
     _secure_write_json_once(attempt_root / "attempt.json", document)
@@ -32634,6 +40264,7 @@ def _load_capture_attempt(
         "environment_contaminated",
     }:
         raise ConfigurationError("抓包 attempt 状态非法。")
+    _validate_attempt_failure_facts(payload)
     _replay_attempt_evidence_permissions(attempt_root, payload)
     _validate_attempt_incremental_fields(
         payload,
@@ -32841,8 +40472,14 @@ def _active_unsealed_attempts(
     phase: str,
     *,
     _manifest: Mapping[str, Any] | None = None,
+    _baseline: int | None = None,
 ) -> list[str]:
-    """列出未完成预约或未被阶段结果绑定的 attempt。"""
+    """列出未完成预约或未被阶段结果绑定的 attempt。
+
+    改造 5 M2：attempt 恢复段进行期间，当前评估基线 b<K> 的 capture-candidate 读来源是尚未写出的
+    local 目标；已封存 attempt 的绑定要按 ``_baseline``（前序基线）的读来源解析，否则会误报
+    「阶段尚未封存」。普通调用不传即按当前基线。
+    """
 
     scopes: list[tuple[str | None, Path]] = []
     if phase == "official":
@@ -32872,6 +40509,8 @@ def _active_unsealed_attempts(
             }
             if _manifest is not None:
                 stage_kwargs["_verified_campaign_manifest"] = _manifest
+            if _baseline is not None and phase == "candidate":
+                stage_kwargs["_baseline"] = _baseline
             stage = _load_stage_result(
                 campaign_dir,
                 "capture-official" if phase == "official" else "capture-candidate",
@@ -33320,6 +40959,36 @@ def _candidate_identity_for_run(
     return result
 
 
+def _candidate_identity_for_incremental_execution(
+    arguments: argparse.Namespace,
+    manifest: dict[str, Any],
+    classification: dict[str, Any],
+    *,
+    candidate_build_receipt: Mapping[str, Any] | None,
+    candidate_build_binding: Mapping[str, Any] | None,
+    deadline: incremental_recovery.WallClockDeadline | None,
+) -> dict[str, Any]:
+    """重验增量执行身份，并恢复计划阶段已经绑定的 VC-4 构建字段。"""
+
+    verified = _candidate_identity_for_run(
+        arguments,
+        manifest,
+        classification,
+        verify_image=True,
+        deadline=deadline,
+    )
+    if candidate_build_receipt is not None:
+        if candidate_build_binding is None:
+            raise ConfigurationError("Candidate 执行前重验缺少 VC-4 构建收据绑定。")
+        verified = _bind_candidate_identity_to_build_receipt(
+            arguments,
+            verified,
+            candidate_build_receipt,
+            candidate_build_binding,
+        )
+    return verified
+
+
 def _verify_candidate_attempt_identity(
     manifest: dict[str, Any], identity: dict[str, Any]
 ) -> None:
@@ -33519,41 +41188,48 @@ def _finalize_attempt_restoration(
     return output, receipt
 
 
-def _materialize_metadata_only_after_snapshot(
+def _materialize_metadata_only_probe_snapshot(
     source_evidence_root: Path,
     target_evidence_root: Path,
     source_environment: Mapping[str, Any],
+    *,
+    snapshot_name: str,
 ) -> None:
-    """把来源 attempt 的 after 快照复制到 metadata-only attempt。
+    """逐绑定投影来源 before／after 快照，不复制来源 attempt 根。"""
 
-    metadata-only attempt 没有重新执行环境探针，不能把来源快照冒充为本轮
-    探针。这里仅按来源 attempt 的不可变绑定逐文件复制，目标已存在时只接受
-    字节级相同的文件；任何缺失、漂移、额外文件或符号链接都 fail-close。
-    """
-
-    source_after = source_evidence_root / "environment" / "after"
-    target_after = target_evidence_root / "environment" / "after"
+    if snapshot_name not in {"before", "after"}:
+        raise ConfigurationError("metadata-only 环境快照名称非法。")
+    source_after = source_evidence_root / "environment" / snapshot_name
+    target_after = target_evidence_root / "environment" / snapshot_name
     expected_names = {
         "probe-manifest.json",
         *ENVIRONMENT_STATE_FILES.values(),
     }
     if source_after.is_symlink() or not source_after.is_dir():
-        raise ConfigurationError("metadata-only 来源 after 目录不存在或不可信。")
+        raise ConfigurationError(
+            f"metadata-only 来源 {snapshot_name} 目录不存在或不可信。"
+        )
     names = sorted(entry.name for entry in os.scandir(source_after))
     if names != sorted(expected_names):
-        raise ConfigurationError("metadata-only 来源 after 目录内容不完整或包含额外文件。")
+        raise ConfigurationError(
+            f"metadata-only 来源 {snapshot_name} 目录内容不完整或包含额外文件。"
+        )
 
-    after_binding = source_environment.get("after_probe")
+    binding_name = f"{snapshot_name}_probe"
+    after_binding = source_environment.get(binding_name)
+    expected_path = f"environment/{snapshot_name}/probe-manifest.json"
     if (
         not isinstance(after_binding, Mapping)
         or set(after_binding) != {"path", "sha256", "bytes"}
-        or after_binding.get("path") != "environment/after/probe-manifest.json"
+        or after_binding.get("path") != expected_path
         or not SHA256_RE.fullmatch(str(after_binding.get("sha256", "")))
         or not isinstance(after_binding.get("bytes"), int)
         or isinstance(after_binding.get("bytes"), bool)
         or int(after_binding.get("bytes", 0)) <= 0
     ):
-        raise ConfigurationError("metadata-only 来源缺少可信 after 探针绑定。")
+        raise ConfigurationError(
+            f"metadata-only 来源缺少可信 {snapshot_name} 探针绑定。"
+        )
     source_probe = source_after / "probe-manifest.json"
     if (
         source_probe.is_symlink()
@@ -33561,17 +41237,25 @@ def _materialize_metadata_only_after_snapshot(
         or source_probe.stat().st_size != after_binding["bytes"]
         or file_sha256(source_probe) != after_binding["sha256"]
     ):
-        raise ConfigurationError("metadata-only 来源 after 探针摘要漂移。")
-    probe = _read_json(source_probe, "metadata-only 来源 after 探针")
-    if probe.get("phase") != "after" or not _is_rfc3339_timestamp(
+        raise ConfigurationError(
+            f"metadata-only 来源 {snapshot_name} 探针摘要漂移。"
+        )
+    probe = _read_json(
+        source_probe, f"metadata-only 来源 {snapshot_name} 探针"
+    )
+    if probe.get("phase") != snapshot_name or not _is_rfc3339_timestamp(
         probe.get("observed_at_utc")
     ):
-        raise ConfigurationError("metadata-only 来源 after 探针身份或时间非法。")
+        raise ConfigurationError(
+            f"metadata-only 来源 {snapshot_name} 探针身份或时间非法。"
+        )
     snapshots = probe.get("snapshots")
     if not isinstance(snapshots, list) or len(snapshots) != len(
         ENVIRONMENT_STATE_FILES
     ):
-        raise ConfigurationError("metadata-only 来源 after 快照清单不完整。")
+        raise ConfigurationError(
+            f"metadata-only 来源 {snapshot_name} 快照清单不完整。"
+        )
     snapshot_bindings: dict[str, Mapping[str, Any]] = {}
     for snapshot in snapshots:
         if (
@@ -33587,21 +41271,29 @@ def _materialize_metadata_only_after_snapshot(
             or int(snapshot.get("bytes", 0)) <= 0
             or not SHA256_RE.fullmatch(str(snapshot.get("sha256", "")))
         ):
-            raise ConfigurationError("metadata-only 来源 after 快照绑定非法。")
+            raise ConfigurationError(
+                f"metadata-only 来源 {snapshot_name} 快照绑定非法。"
+            )
         snapshot_bindings[str(snapshot["kind"])] = snapshot
     if set(snapshot_bindings) != set(ENVIRONMENT_STATE_FILES):
-        raise ConfigurationError("metadata-only 来源 after 快照种类不完整。")
+        raise ConfigurationError(
+            f"metadata-only 来源 {snapshot_name} 快照种类不完整。"
+        )
 
     if target_after.exists() or target_after.is_symlink():
         if target_after.is_symlink() or not target_after.is_dir():
-            raise ConfigurationError("metadata-only 当前 after 目录不可信。")
+            raise ConfigurationError(
+                f"metadata-only 当前 {snapshot_name} 目录不可信。"
+            )
     else:
         ensure_private_directory(target_after, target_evidence_root)
     for name in sorted(expected_names):
         source = source_after / name
         destination = target_after / name
         if source.is_symlink() or not source.is_file():
-            raise ConfigurationError(f"metadata-only 来源 after 文件不可信：{name}")
+            raise ConfigurationError(
+                f"metadata-only 来源 {snapshot_name} 文件不可信：{name}"
+            )
         source_digest = file_sha256(source)
         source_bytes = source.stat().st_size
         if name != "probe-manifest.json":
@@ -33609,12 +41301,9 @@ def _materialize_metadata_only_after_snapshot(
                 key for key, value in ENVIRONMENT_STATE_FILES.items() if value == name
             )
             snapshot = snapshot_bindings[kind]
-            if (
-                source_bytes != snapshot["bytes"]
-                or source_digest != snapshot["sha256"]
-            ):
+            if source_bytes != snapshot["bytes"] or source_digest != snapshot["sha256"]:
                 raise ConfigurationError(
-                    f"metadata-only 来源 after 快照摘要漂移：{name}"
+                    f"metadata-only 来源 {snapshot_name} 快照摘要漂移：{name}"
                 )
         if destination.exists() or destination.is_symlink():
             if (
@@ -33624,10 +41313,165 @@ def _materialize_metadata_only_after_snapshot(
                 or file_sha256(destination) != source_digest
             ):
                 raise ConfigurationError(
-                    f"metadata-only 当前 after 文件与来源不一致：{name}"
+                    f"metadata-only 当前 {snapshot_name} 文件与来源不一致：{name}"
                 )
             continue
         _secure_copy_file_once(source, destination)
+
+
+def _materialize_metadata_only_after_snapshot(
+    source_evidence_root: Path,
+    target_evidence_root: Path,
+    source_environment: Mapping[str, Any],
+) -> None:
+    """兼容旧调用：把来源 attempt 的 after 快照逐绑定投影到当前 attempt。
+
+    metadata-only attempt 没有重新执行环境探针，不能把来源快照冒充为本轮
+    探针。这里仅按来源 attempt 的不可变绑定逐文件复制，目标已存在时只接受
+    字节级相同的文件；任何缺失、漂移、额外文件或符号链接都 fail-close。
+    """
+    _materialize_metadata_only_probe_snapshot(
+        source_evidence_root,
+        target_evidence_root,
+        source_environment,
+        snapshot_name="after",
+    )
+
+
+def _materialize_metadata_only_arm64_snapshot(
+    source_evidence_root: Path,
+    target_evidence_root: Path,
+    source_environment: Mapping[str, Any],
+    *,
+    snapshot_name: str,
+    source_attempt_id: str,
+) -> None:
+    """逐字投影 ARM64 facts/receipt，并按来源 attempt 身份重放。"""
+
+    if snapshot_name not in {"before", "after"}:
+        raise ConfigurationError("metadata-only ARM64 快照名称非法。")
+    role = f"arm64_{snapshot_name}_receipt"
+    directory = f"arm64-{snapshot_name}"
+    reference = source_environment.get(role)
+    if (
+        not isinstance(reference, Mapping)
+        or set(reference) != {"path", "sha256", "bytes"}
+        or reference.get("path") != f"environment/{directory}/receipt.json"
+    ):
+        raise ConfigurationError(f"metadata-only 来源缺少可信 {role} 绑定。")
+    source_root = source_evidence_root / "environment" / directory
+    target_root = target_evidence_root / "environment" / directory
+    if source_root.is_symlink() or not source_root.is_dir():
+        raise ConfigurationError(f"metadata-only 来源 {directory} 目录不可信。")
+    names = sorted(entry.name for entry in os.scandir(source_root))
+    if names != ["facts.json", "receipt.json"]:
+        raise ConfigurationError(f"metadata-only 来源 {directory} 内容不闭合。")
+    source_receipt = source_root / "receipt.json"
+    if (
+        source_receipt.is_symlink()
+        or not source_receipt.is_file()
+        or source_receipt.stat().st_size != reference.get("bytes")
+        or file_sha256(source_receipt) != reference.get("sha256")
+    ):
+        raise ConfigurationError(f"metadata-only 来源 {role} 摘要漂移。")
+    try:
+        replayed = codex_upgrade_arm64_environment_receipt.replay(
+            source_root,
+            "receipt.json",
+        )
+    except (
+        OSError,
+        codex_upgrade_arm64_environment_receipt.Arm64EnvironmentReceiptError,
+    ) as error:
+        raise ConfigurationError(f"metadata-only 来源 {role} 无法重放：{error}") from error
+    if (
+        replayed.get("status") != "passed"
+        or replayed.get("phase") != f"attempt_{snapshot_name}"
+        or replayed.get("subject_id") != source_attempt_id
+    ):
+        raise ConfigurationError(f"metadata-only 来源 {role} 身份不一致。")
+    ensure_private_directory(target_root, target_evidence_root)
+    for name in names:
+        source = source_root / name
+        destination = target_root / name
+        if source.is_symlink() or not source.is_file():
+            raise ConfigurationError(f"metadata-only 来源 {directory}/{name} 不可信。")
+        if destination.exists() or destination.is_symlink():
+            if (
+                destination.is_symlink()
+                or not destination.is_file()
+                or destination.read_bytes() != source.read_bytes()
+            ):
+                raise ConfigurationError(
+                    f"metadata-only 当前 {directory}/{name} 与来源不一致。"
+                )
+        else:
+            _secure_copy_file_once(source, destination)
+
+
+def _materialize_metadata_only_environment_projection(
+    source_evidence_root: Path,
+    target_evidence_root: Path,
+    source_environment: Mapping[str, Any],
+    *,
+    source_attempt_id: str,
+    candidate_id: str,
+) -> dict[str, Any]:
+    """投影环境输入并在新 evidence root 内重新生成恢复收据。"""
+
+    try:
+        bound_source_root = Path(str(source_environment.get("evidence_root", ""))).resolve(
+            strict=True
+        )
+    except (OSError, RuntimeError) as error:
+        raise ConfigurationError("metadata-only 来源环境 evidence_root 不可信。") from error
+    if bound_source_root != source_evidence_root.resolve(strict=True):
+        raise ConfigurationError("metadata-only 来源环境 evidence_root 绑定漂移。")
+    for snapshot_name in ("before", "after"):
+        _materialize_metadata_only_probe_snapshot(
+            source_evidence_root,
+            target_evidence_root,
+            source_environment,
+            snapshot_name=snapshot_name,
+        )
+        _materialize_metadata_only_arm64_snapshot(
+            source_evidence_root,
+            target_evidence_root,
+            source_environment,
+            snapshot_name=snapshot_name,
+            source_attempt_id=source_attempt_id,
+        )
+    restoration_path, restoration = _finalize_attempt_restoration(
+        target_evidence_root,
+        phase="candidate",
+        candidate_id=candidate_id,
+    )
+    if restoration.get("status") != "restored":
+        raise ConfigurationError("metadata-only 新恢复收据未通过。")
+    environment_root = target_evidence_root / "environment"
+    return {
+        "evidence_root": str(target_evidence_root.resolve(strict=True)),
+        "before_probe": _attempt_evidence_binding(
+            target_evidence_root,
+            environment_root / "before" / "probe-manifest.json",
+        ),
+        "after_probe": _attempt_evidence_binding(
+            target_evidence_root,
+            environment_root / "after" / "probe-manifest.json",
+        ),
+        "restoration_report": _attempt_evidence_binding(
+            target_evidence_root,
+            restoration_path,
+        ),
+        "arm64_before_receipt": _attempt_evidence_binding(
+            target_evidence_root,
+            environment_root / "arm64-before" / "receipt.json",
+        ),
+        "arm64_after_receipt": _attempt_evidence_binding(
+            target_evidence_root,
+            environment_root / "arm64-after" / "receipt.json",
+        ),
+    }
 
 
 def _candidate_post_client_restoration(
@@ -33976,7 +41820,7 @@ def _stage_evidence_manifest(
                 roots,
             )
         except codex_upgrade_evidence_manifest.EvidenceManifestError as error:
-            raise ConfigurationError(str(error)) from error
+            raise _evidence_manifest_configuration_error(error) from error
     return manifest
 
 
@@ -34141,7 +41985,7 @@ def _materialize_stage_evidence_manifest(
                 roots,
             )
         except codex_upgrade_evidence_manifest.EvidenceManifestError as error:
-            raise ConfigurationError(str(error)) from error
+            raise _evidence_manifest_configuration_error(error) from error
     else:
         try:
             evidence_manifest = codex_upgrade_evidence_manifest.build_evidence_manifest(
@@ -34288,8 +42132,9 @@ def deep_verify_campaign(
                     attempt,
                 )
             )
-            source_roots = _deduplicate_evidence_roots(
-                Path(value) for value in source_attempt.get("evidence_roots", [])
+            source_roots = _classification_candidate_job_evidence_roots(
+                source_attempt,
+                require_existing=True,
             )
             historical_manifest_path = _evidence_manifest_path(source_root)
             local_manifest_path = (
@@ -34327,7 +42172,7 @@ def deep_verify_campaign(
                     source_roots,
                 )
             except codex_upgrade_evidence_manifest.EvidenceManifestError as error:
-                raise ConfigurationError(str(error)) from error
+                raise _evidence_manifest_configuration_error(error) from error
             if scan["full_scan_count"] == 0:
                 scan["reused_bytes"] = int(source_manifest["total_bytes"])
                 scan["total_bytes"] = int(source_manifest["total_bytes"])
@@ -34614,6 +42459,1761 @@ def _seal_preview(
     return preview, True
 
 
+# ---------------------------------------------------------------------------
+# 改造 5 M2（T5.12）：attempt 恢复段 ar<k>
+#
+# 同一 attempt 只补跑 ``recovery.json.execute_jobs``；段目录
+# ``attempts/<attempt_id>/recovery/ar<k>/`` 自成闭包（段预约、只有 execute_jobs 的
+# ``job-*.json``、新的 checkpoint 链、``logs/``、``evidence/``（自身 before／after 探针、
+# 恢复收据、run 末权限收口）、段级 run-summary ``attempt-recovery.json``）；
+# 旧 attempt 目录与旧 Job 证据根只读不触碰。证据根重定位：真实 Job 的输出目录由
+# ``RUN_ID``／``RUN_ID_PREFIX`` 与 ``CAPTURE_ROOT/runs`` 拼出、RUN_ID 不能含路径分隔符，
+# 因此新根取 ``<原根父目录>/<原根名>-recovery-ar<k>``（同级新目录），Job 定义里出现的
+# 根名（证据根模式、argv、环境值）一并替换，执行摘要随之变化并在段预约里逐 Job 绑定
+# 原预约的执行摘要。
+# ---------------------------------------------------------------------------
+
+ATTEMPT_RECOVERY_RESERVATION_SCHEMA = "codex-upgrade-attempt-recovery-reservation/v1"
+ATTEMPT_RECOVERY_SUMMARY_SCHEMA = "codex-upgrade-attempt-recovery/v1"
+ATTEMPT_RECOVERY_DIRNAME = "recovery"
+ATTEMPT_RECOVERY_RESERVATION_FILENAME = "recovery-reservation.json"
+ATTEMPT_RECOVERY_SUMMARY_FILENAME = "attempt-recovery.json"
+ATTEMPT_RECOVERY_SUCCESS_STATUS = "awaiting_receipts"
+
+
+def _require_recovery_revision(value: Any) -> str:
+    if not isinstance(value, str) or not codex_upgrade_vc_artifacts.RECOVERY_REVISION_RE.fullmatch(value):
+        raise ConfigurationError("--attempt-recovery 必须是 ar<k>（k≥1）形式的恢复段编号。")
+    return value
+
+
+def _attempt_recovery_segment_root(attempt_root: Path, recovery_revision: str) -> Path:
+    return attempt_root / ATTEMPT_RECOVERY_DIRNAME / recovery_revision
+
+
+def _recovery_root_suffix(recovery_revision: str) -> str:
+    return f"-recovery-{recovery_revision}"
+
+
+def _job_recovery_root_keys(job: Job) -> list[str]:
+    """Job 证据根模式的稳定目录名（glob 之前的最后一段），作为段重定位的替换键。"""
+
+    keys: list[str] = []
+    for pattern in job.evidence_roots:
+        stem = str(pattern).split("*", 1)[0].rstrip("-")
+        name = Path(stem).name
+        if not name or "/" in name:
+            raise ConfigurationError(f"Job {job.job_id} 的证据根模式无法推导稳定目录名：{pattern}")
+        if name not in keys:
+            keys.append(name)
+    if not keys:
+        raise ConfigurationError(f"Job {job.job_id} 没有证据根模式，无法进入恢复段。")
+    return keys
+
+
+def _relocate_job_for_recovery(job: Job, recovery_revision: str) -> Job:
+    """把 Job 的证据根与命令里出现的根名改写为 ``<根名>-recovery-ar<k>``（同级新目录）。"""
+
+    keys = _job_recovery_root_keys(job)
+    suffix = _recovery_root_suffix(recovery_revision)
+    for key in keys:
+        if key.endswith(suffix):
+            raise ConfigurationError(f"Job {job.job_id} 的证据根已带恢复段后缀，禁止嵌套：{key}")
+
+    def relocate_component(part: str) -> str:
+        # 只改写整段等于根名、或以根名开头且紧跟 glob 尾巴（如 <名>-*-run）的路径分量／取值；
+        # 子串命中（runs 含 run）一律不动。
+        for key in keys:
+            if part == key:
+                return f"{key}{suffix}"
+            remainder = part[len(key):]
+            if part.startswith(key) and remainder.startswith("-*"):
+                return f"{key}{suffix}{remainder}"
+        return part
+
+    def relocate(value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        return "/".join(relocate_component(part) for part in value.split("/"))
+
+    steps: list[dict[str, Any]] = []
+    for raw_step in job.steps:
+        step = dict(raw_step)
+        argv = raw_step.get("argv")
+        if isinstance(argv, (list, tuple)):
+            step["argv"] = [relocate(item) for item in argv]
+        environment = raw_step.get("environment")
+        if isinstance(environment, Mapping):
+            step["environment"] = {str(k): relocate(v) for k, v in environment.items()}
+        steps.append(step)
+    relocated = replace(
+        job,
+        steps=tuple(steps),
+        evidence_roots=tuple(relocate(pattern) for pattern in job.evidence_roots),
+    )
+    if relocated.evidence_roots == job.evidence_roots:
+        raise ConfigurationError(f"Job {job.job_id} 的证据根未被重定位到恢复段。")
+    return relocated
+
+
+def _current_attempt_recovery_baseline(
+    campaign_dir: Path,
+    candidate_id: str,
+    recovery_revision: str,
+    *,
+    allow_successor: bool = False,
+    recovery_preview: Path | None = None,
+    require_preview: bool = False,
+) -> tuple[int, dict[str, Any], dict[str, Any]]:
+    """当前基线必须是 committed 的 attempt-recovery 基线且恢复段编号相符。
+
+    改造 5 M2（崩溃矩阵 A1）：``allow_successor`` 时段编号也可以是基线冻结段的后继段——前提是冻结段与
+    其后的每个既有段都已失败终态并经 ``reconcile-attempt --recovery-revision`` 对账入账；后继段以同一
+    基线冻结的 ``execute_jobs`` 全量补跑，不重复裁定根因。
+    """
+
+    baseline, commit = _current_evaluation_baseline(campaign_dir, candidate_id)
+    if baseline == 0 or commit is None:
+        raise ConfigurationError("当前评估基线是 b0，没有已 COMMIT 的 attempt-recovery 基线，禁止开恢复段。")
+    recovery = _load_evaluation_baseline_recovery(campaign_dir, candidate_id, baseline)
+    if str(recovery.get("recovery_sha256")) != str(commit.get("recovery_sha256")):
+        # P1（授权闭包）：recovery.json 自摘要合法但不是 COMMIT 绑定的那一份，J* 不可信。
+        raise ConfigurationError(
+            f"评估基线 b{baseline} 的 recovery.json 自摘要与 COMMIT 绑定的 recovery_sha256 不一致。"
+        )
+    if recovery["kind"] != "attempt-recovery":
+        raise ConfigurationError(f"当前评估基线 b{baseline} 不是 attempt-recovery 基线，禁止开恢复段。")
+    frozen_revision = str(recovery["recovery_revision"])
+    if frozen_revision != recovery_revision:
+        if not allow_successor:
+            raise ConfigurationError(
+                f"当前评估基线 b{baseline} 冻结的恢复段是 {frozen_revision}，不是 {recovery_revision}。"
+            )
+        _require_attempt_recovery_successor_segment(
+            campaign_dir, candidate_id=candidate_id, recovery=recovery, recovery_revision=recovery_revision,
+            recovery_preview=recovery_preview, require_preview=require_preview,
+        )
+    return baseline, commit, recovery
+
+
+def _authoritative_recovery_execute_jobs(
+    campaign_dir: Path,
+    candidate_id: str,
+    reservation: Mapping[str, Any],
+) -> tuple[int, dict[str, Any], dict[str, Any]]:
+    """改造 5 M2（P1 授权闭包）：从恢复段预约三元组沿唯一权威链取 J*。
+
+    链：段 reservation（``evaluation_baseline``／``baseline_commit_sha256``／``recovery_sha256``）→ ``b<K>/COMMIT``
+    （``commit_sha256`` 等于预约值，且 COMMIT 绑定的 ``recovery_sha256`` 等于预约值）→ ``recovery.json``
+    （自摘要等于 COMMIT 的 ``recovery_sha256``、kind 与 attempt 身份一致）→ ``execute_jobs``。
+    预览生成、CLI 开后继段与监督器后继协议都只认这条链，任一环不等即失败关闭。返回 ``(K, COMMIT, recovery)``。
+    """
+
+    try:
+        baseline = int(reservation["evaluation_baseline"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise ConfigurationError("恢复段预约缺少 evaluation_baseline。") from error
+    commit = _read_evaluation_baseline_commit(campaign_dir, candidate_id, baseline)
+    if str(commit.get("commit_sha256")) != str(reservation.get("baseline_commit_sha256")):
+        raise ConfigurationError(f"恢复段预约绑定的基线 COMMIT 与 b{baseline}/COMMIT 不一致。")
+    if str(commit.get("recovery_sha256")) != str(reservation.get("recovery_sha256")):
+        raise ConfigurationError(f"恢复段预约绑定的 recovery_sha256 与 b{baseline}/COMMIT 不一致。")
+    recovery = _load_evaluation_baseline_recovery(campaign_dir, candidate_id, baseline)
+    if str(recovery.get("recovery_sha256")) != str(commit.get("recovery_sha256")):
+        raise ConfigurationError(
+            f"评估基线 b{baseline} 的 recovery.json 自摘要与 COMMIT 绑定的 recovery_sha256 不一致。"
+        )
+    if recovery.get("kind") != "attempt-recovery" or str(recovery.get("attempt_id")) != str(reservation.get("attempt_id")):
+        raise ConfigurationError(f"评估基线 b{baseline} 的 recovery 不是该 attempt 的 attempt-recovery 基线。")
+    return baseline, commit, recovery
+
+
+def _require_recovery_preview_scope_equals_frozen_jobs(
+    preview: Mapping[str, Any],
+    execute_jobs: Sequence[str],
+    *,
+    label: str,
+) -> None:
+    """P1（授权闭包）：后继段预览批准的范围与请求估算必须恰好覆盖权威链取得的 J*，且不复用任何段内 Job
+    （与监督器第七种协议共用 ``recovery_preview_scope_violation``）。"""
+
+    violation = codex_upgrade_supervisor.recovery_preview_scope_violation(preview, list(execute_jobs))
+    if violation is not None:
+        raise ConfigurationError(f"{label}：恢复预览{violation}，拒绝开后继段。")
+
+
+def _attempt_recovery_segment_reconciled(
+    campaign_dir: Path,
+    *,
+    candidate_id: str,
+    segment_root: Path,
+) -> dict[str, Any] | None:
+    """恢复段是否已由 ``reconcile-attempt --recovery-revision`` 对账入账（收据、总账绑定完整重放）。"""
+
+    manifest = load_campaign_manifest(campaign_dir)
+    try:
+        return codex_upgrade_supervisor.verify_attempt_reconciliation_binding(
+            campaign_dir,
+            campaign_id=str(manifest["campaign_id"]),
+            candidate_id=candidate_id,
+            attempt_root=segment_root,
+            label=f"恢复段 {segment_root.name} 对账",
+        )
+    except codex_upgrade_supervisor.SupervisorError:
+        return None
+
+
+def _attempt_recovery_segment_terminal_failed(
+    campaign_dir: Path,
+    *,
+    candidate_id: str,
+    attempt_id: str,
+    segment_root: Path,
+) -> bool:
+    """段处于失败终态：摘要缺失（中断）或 status 非 awaiting_receipts／有失败 Job，且已对账入账。"""
+
+    summary_path = segment_root / ATTEMPT_RECOVERY_SUMMARY_FILENAME
+    if summary_path.exists() or summary_path.is_symlink():
+        _segment, _reservation, summary = _load_attempt_recovery_segment(
+            campaign_dir, candidate_id, attempt_id, segment_root.name
+        )
+        if summary.get("status") == ATTEMPT_RECOVERY_SUCCESS_STATUS and not _failed_job_ids(summary.get("results")):
+            return False
+    return _attempt_recovery_segment_reconciled(campaign_dir, candidate_id=candidate_id, segment_root=segment_root) is not None
+
+
+def _require_attempt_recovery_successor_segment(
+    campaign_dir: Path,
+    *,
+    candidate_id: str,
+    recovery: Mapping[str, Any],
+    recovery_revision: str,
+    recovery_preview: Path | None = None,
+    require_preview: bool = False,
+) -> None:
+    """后继段编号必须紧接该 attempt 已有的最大段号，且冻结段与其后每个既有段都是已对账的失败终态；
+    开段（``require_preview``）还必须持有直接前序失败段已批准的零请求恢复预览（B0：人工批准后才补跑）。"""
+
+    frozen_revision = str(recovery["recovery_revision"])
+    attempt_id = str(recovery["attempt_id"])
+    attempt_root = campaign_dir / "candidates" / candidate_id / "attempts" / attempt_id
+    recovery_root = attempt_root / ATTEMPT_RECOVERY_DIRNAME
+    if recovery_root.is_symlink() or not recovery_root.is_dir():
+        raise ConfigurationError(f"当前评估基线冻结的恢复段 {frozen_revision} 尚未开段，禁止直接开后继段 {recovery_revision}。")
+    existing = sorted(
+        (int(entry.name[2:]), entry)
+        for entry in recovery_root.iterdir()
+        if entry.is_dir() and not entry.is_symlink() and codex_upgrade_vc_artifacts.RECOVERY_REVISION_RE.fullmatch(entry.name)
+    )
+    numbers = [number for number, _entry in existing]
+    frozen_number = int(frozen_revision[2:])
+    target_number = int(recovery_revision[2:])
+    if frozen_number not in numbers:
+        raise ConfigurationError(f"当前评估基线冻结的恢复段 {frozen_revision} 尚未开段，禁止直接开后继段 {recovery_revision}。")
+    # 开段前后继段编号紧接已有最大段号；段已开（seal／入账读取）时它本身就是最大段号。
+    if target_number <= frozen_number or target_number not in {max(numbers) + 1, max(numbers)}:
+        raise ConfigurationError(
+            f"后继恢复段编号必须紧接已有段：已有 {[f'ar{n}' for n in numbers]}，收到 {recovery_revision}。"
+        )
+    for number, entry in existing:
+        if number < frozen_number or number >= target_number:
+            continue
+        if not _attempt_recovery_segment_terminal_failed(
+            campaign_dir, candidate_id=candidate_id, attempt_id=attempt_id, segment_root=entry
+        ):
+            raise ConfigurationError(
+                f"恢复段 {entry.name} 不是已对账的失败终态（成功段禁止再开后继段；中断／失败段须先 "
+                f"reconcile-attempt --recovery-revision {entry.name}）。"
+            )
+    if require_preview:
+        previous_revision = f"ar{max(numbers)}"
+        if recovery_preview is None:
+            raise ConfigurationError(
+                f"开后继恢复段 {recovery_revision} 必须提供前序失败段 {previous_revision} 已批准的恢复预览："
+                "--recovery-preview <control/reconciliation/attempt-<id>-ar<k>/recovery-preview-NN.json>。"
+            )
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        try:
+            preview = reconciler.load_approved_recovery_preview(
+                campaign_dir, recovery_preview, phase="candidate", candidate_id=candidate_id, recovery_revision=previous_revision
+            )
+        except reconciler.ReconcilerError as error:
+            raise ConfigurationError(f"后继恢复段的恢复预览不可用：{error}") from error
+        if str(preview.get("source_attempt_id")) != attempt_id:
+            raise ConfigurationError("恢复预览绑定的 attempt 与当前 attempt-recovery 基线不一致。")
+        # P1（授权闭包）：J* 只从前序失败段预约的三元组沿权威链取（COMMIT → recovery.json），不直接信任
+        # 调用方传入的 recovery；预览批准范围必须恰好等于 J* 且 reuse 为空，否则"批准 1 个、执行 2 个"。
+        previous_root = _attempt_recovery_segment_root(attempt_root, previous_revision)
+        previous_reservation = _load_attempt_recovery_reservation(
+            campaign_dir, previous_root, candidate_id=candidate_id, attempt_id=attempt_id, recovery_revision=previous_revision
+        )
+        _baseline, _commit, authoritative = _authoritative_recovery_execute_jobs(
+            campaign_dir, candidate_id, previous_reservation
+        )
+        if str(authoritative.get("recovery_sha256")) != str(recovery.get("recovery_sha256")):
+            raise ConfigurationError("前序失败段预约绑定的基线 recovery 与当前 attempt-recovery 基线不一致。")
+        _require_recovery_preview_scope_equals_frozen_jobs(
+            preview, list(authoritative["execute_jobs"]), label=f"后继恢复段 {recovery_revision}"
+        )
+
+
+def _load_attempt_recovery_reservation(
+    campaign_dir: Path,
+    segment_root: Path,
+    *,
+    candidate_id: str,
+    attempt_id: str,
+    recovery_revision: str,
+) -> dict[str, Any]:
+    path = segment_root / ATTEMPT_RECOVERY_RESERVATION_FILENAME
+    _reject_symlink_components(path, campaign_dir, "恢复段预约")
+    if not path.is_file():
+        raise ConfigurationError(f"恢复段 {recovery_revision} 没有预约收据。")
+    payload = _read_json(path, "恢复段预约")
+    unsigned = dict(payload)
+    digest = unsigned.pop("reservation_digest", None)
+    if (
+        payload.get("schema_version") != ATTEMPT_RECOVERY_RESERVATION_SCHEMA
+        or payload.get("candidate_id") != candidate_id
+        or payload.get("attempt_id") != attempt_id
+        or payload.get("recovery_revision") != recovery_revision
+        or digest != _fingerprint(unsigned)
+    ):
+        raise ConfigurationError(f"恢复段 {recovery_revision} 预约身份或自摘要不一致。")
+    return payload
+
+
+def _reserve_attempt_recovery(
+    campaign_dir: Path,
+    *,
+    manifest: Mapping[str, Any],
+    candidate_id: str,
+    attempt_root: Path,
+    original_attempt: Mapping[str, Any],
+    original_reservation: Mapping[str, Any],
+    recovery: Mapping[str, Any],
+    recovery_revision: str,
+    baseline: int,
+    baseline_commit_sha256: str,
+    jobs: Sequence[Job],
+    source_jobs: Mapping[str, Job],
+    identity: Mapping[str, Any],
+    lease: CampaignLease | None,
+    deadline: incremental_recovery.WallClockDeadline,
+) -> tuple[Path, dict[str, Any]]:
+    """在 Campaign 锁内原子发布恢复段预约：段目录不存在、同 attempt 无其它 active 恢复段。
+    ``recovery_revision`` 是本段实际编号（基线冻结的首段或其失败段的后继段）。"""
+
+    deadline.check("attempt-recovery:reserve:start")
+    with _campaign_lock(campaign_dir, deadline=deadline):
+        _reject_contaminated_campaign(campaign_dir)
+        recovery_root = attempt_root / ATTEMPT_RECOVERY_DIRNAME
+        segment_root = _attempt_recovery_segment_root(attempt_root, recovery_revision)
+        if segment_root.exists() or segment_root.is_symlink():
+            raise ConfigurationError(
+                f"恢复段 {recovery_revision} 已存在，禁止重开；成功段由逐字重派幂等返回，失败段先 "
+                f"reconcile-attempt --recovery-revision {recovery_revision} 对账，再以后继段 ar<k+1> "
+                "--rerun-failed --recovery-preview 承接。"
+            )
+        if recovery_root.exists():
+            if recovery_root.is_symlink() or not recovery_root.is_dir():
+                raise ConfigurationError("attempt 恢复段目录不可信。")
+            for existing in sorted(recovery_root.iterdir()):
+                if existing.is_symlink() or not existing.is_dir():
+                    raise ConfigurationError("attempt 恢复段目录含不可信条目。")
+                # 既有段只能是已对账的失败终态（中断段先 reconcile-attempt --recovery-revision）；成功段
+                # 意味着本基线已有可封存结果，禁止再开段。
+                if not _attempt_recovery_segment_terminal_failed(
+                    campaign_dir, candidate_id=candidate_id, attempt_id=attempt_root.name, segment_root=existing
+                ):
+                    raise ConfigurationError(
+                        f"attempt 存在未收口或未对账的恢复段 {existing.name}，禁止并行开段"
+                        f"（中断／失败段先 reconcile-attempt --recovery-revision {existing.name}）。"
+                    )
+        # 当前基线 b<K> 的候选阶段目标要等段 seal 才写出：已封存 attempt 按前序基线的读来源解析。
+        active = _active_unsealed_attempts(
+            campaign_dir, "candidate", _manifest=manifest, _baseline=int(recovery["previous_baseline"])
+        )
+        if active:
+            raise ConfigurationError(f"Campaign 存在未封存预约或 attempt，禁止开恢复段：{active}")
+        expected_execution = {
+            str(item.get("id")): str(item.get("execution_sha256"))
+            for item in original_reservation.get("planned_jobs", [])
+            if isinstance(item, Mapping)
+        }
+        planned_jobs: list[dict[str, Any]] = []
+        for job in jobs:
+            source = source_jobs.get(job.job_id)
+            if source is None or expected_execution.get(job.job_id) != _job_execution_sha256(source):
+                raise ConfigurationError(f"恢复段 Job {job.job_id} 的原执行摘要与原预约不一致。")
+            planned_jobs.append(
+                {
+                    "id": job.job_id,
+                    "required": job.required,
+                    "execution_sha256": _job_execution_sha256(job),
+                    "source_execution_sha256": expected_execution[job.job_id],
+                }
+            )
+        run_nonce = secrets.token_hex(32)
+        reservation: dict[str, Any] = {
+            "schema_version": ATTEMPT_RECOVERY_RESERVATION_SCHEMA,
+            "campaign_id": manifest["campaign_id"],
+            "campaign_mode": manifest["campaign_mode"],
+            "campaign_purpose": manifest["campaign_purpose"],
+            "campaign_manifest_sha256": file_sha256(campaign_dir / "campaign.json"),
+            "phase": "candidate",
+            "candidate_id": candidate_id,
+            "candidate_purpose": manifest["campaign_purpose"],
+            "attempt_id": attempt_root.name,
+            "recovery_revision": recovery_revision,
+            "evaluation_baseline": baseline,
+            "baseline_commit_sha256": baseline_commit_sha256,
+            "recovery_sha256": str(recovery["recovery_sha256"]),
+            "run_nonce": run_nonce,
+            "started_at_utc": _utc_now(),
+            "identity_sha256": _fingerprint(dict(identity)),
+            "original_reservation": {
+                "path": str((attempt_root / "reservation.json").relative_to(campaign_dir)),
+                "sha256": file_sha256(attempt_root / "reservation.json"),
+                "run_nonce": str(original_reservation["run_nonce"]),
+            },
+            "original_attempt": {
+                "path": str((attempt_root / "attempt.json").relative_to(campaign_dir)),
+                "sha256": file_sha256(attempt_root / "attempt.json"),
+                "attempt_digest": str(original_attempt["attempt_digest"]),
+            },
+            "planned_jobs": planned_jobs,
+            "reuse_jobs": list(recovery["reuse_jobs"]),
+        }
+        if lease is not None:
+            if not lease.acquired:
+                raise ConfigurationError("恢复段预约缺少 active Campaign lease。")
+            owner_nonce = lease.payload.get("owner_nonce")
+            if lease.payload.get("campaign_id") != manifest.get("campaign_id") or not isinstance(owner_nonce, str):
+                raise ConfigurationError("恢复段预约与 Campaign lease 身份不一致。")
+            reservation["campaign_lease"] = {
+                "path": CAMPAIGN_LEASE_FILENAME,
+                "owner_nonce": owner_nonce,
+                "deadline_at_utc": str(lease.payload.get("deadline_at_utc")),
+            }
+        reservation["reservation_digest"] = _fingerprint(reservation)
+        ensure_private_directory(recovery_root, campaign_dir)
+        temporary_root = Path(tempfile.mkdtemp(prefix=f".{recovery_revision}-", dir=recovery_root))
+        temporary_root.chmod(0o700)
+        try:
+            _secure_write_json_once(temporary_root / ATTEMPT_RECOVERY_RESERVATION_FILENAME, reservation)
+            os.rename(temporary_root, segment_root)
+            descriptor = os.open(recovery_root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0))
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+        except BaseException:
+            if temporary_root.exists() and not temporary_root.is_symlink():
+                (temporary_root / ATTEMPT_RECOVERY_RESERVATION_FILENAME).unlink(missing_ok=True)
+                try:
+                    temporary_root.rmdir()
+                except OSError:
+                    pass
+            raise
+    deadline.check("attempt-recovery:reserve:complete")
+    return segment_root, reservation
+
+
+def _backfill_original_attempt_ledger_events(
+    ledger_dir: Path,
+    *,
+    attempt_id: str,
+    live_request_count: int,
+) -> list[dict[str, Any]]:
+    """账本追认原 attempt：正常 run 不写 attempt 事件，而 attempt_recovery_started 要求原 attempt 已 completed。"""
+
+    state = codex_upgrade_timing_ledger.phase_ledger_state(ledger_dir)
+    recorded: str | None = None
+    for event, _raw in codex_upgrade_timing_ledger._load_events(ledger_dir):
+        if event.get("attempt_id") != attempt_id:
+            continue
+        event_type = event.get("event_type")
+        if event_type == "attempt_started":
+            recorded = "active"
+        elif event_type == "attempt_completed":
+            recorded = "completed"
+        elif event_type == "attempt_failed":
+            recorded = "failed"
+    written: list[dict[str, Any]] = []
+    if recorded is not None:
+        if recorded != "completed":
+            raise ConfigurationError(f"账本中原 attempt {attempt_id} 的状态是 {recorded}，不能开恢复段。")
+        return written
+    phase = str(state.get("active_phase"))
+    for event_type, extra in (
+        ("attempt_started", {}),
+        ("attempt_completed", {"live_request_count": int(live_request_count)}),
+    ):
+        summary = codex_upgrade_timing_ledger.append_event(
+            ledger_dir,
+            event_id=f"attempt-{attempt_id}-{event_type.split('_', 1)[1]}-backfill",
+            phase=phase,
+            event_type=event_type,
+            attempt_id=attempt_id,
+            next_action="恢复段开段前追认已封存的原 attempt",
+            **extra,
+        )
+        written.append({"event_type": event_type, "head_sequence": summary["head_sequence"], "head_sha256": summary["head_sha256"]})
+    return written
+
+
+def _append_attempt_recovery_ledger_event(
+    ledger_dir: Path,
+    *,
+    event_type: str,
+    attempt_id: str,
+    recovery_revision: str,
+    candidate_id: str,
+    revision: int | None,
+    root_cause_id: str | None = None,
+    live_request_count: int | None = None,
+    next_action: str,
+) -> dict[str, Any]:
+    extra: dict[str, Any] = {}
+    if root_cause_id is not None:
+        extra["root_cause_id"] = root_cause_id
+    if live_request_count is not None:
+        extra["live_request_count"] = int(live_request_count)
+    if revision is not None:
+        extra["revision"] = int(revision)
+    summary = codex_upgrade_timing_ledger.append_event(
+        ledger_dir,
+        event_id=f"attempt-recovery-{attempt_id}-{recovery_revision}-{event_type.rsplit('_', 1)[1]}",
+        phase="VC-5",
+        event_type=event_type,
+        attempt_id=attempt_id,
+        recovery_revision=recovery_revision,
+        candidate_id=candidate_id,
+        next_action=next_action,
+        **extra,
+    )
+    return {"event_type": event_type, "head_sequence": summary["head_sequence"], "head_sha256": summary["head_sha256"]}
+
+
+def _write_attempt_recovery_summary(
+    campaign_dir: Path,
+    segment_root: Path,
+    reservation: Mapping[str, Any],
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """只写一次恢复段 run-summary（形同 attempt.json，绑定段预约）。"""
+
+    planned = {item["id"]: item["execution_sha256"] for item in reservation["planned_jobs"]}
+    for result in payload.get("results", []):
+        if (
+            not isinstance(result, dict)
+            or result.get("id") not in planned
+            or result.get("execution_sha256") != planned[result["id"]]
+        ):
+            raise ConfigurationError("恢复段任务不在段预约内或执行摘要漂移。")
+    document = dict(payload)
+    document["schema_version"] = ATTEMPT_RECOVERY_SUMMARY_SCHEMA
+    document["campaign_mode"] = reservation["campaign_mode"]
+    document["campaign_purpose"] = reservation["campaign_purpose"]
+    document["candidate_purpose"] = reservation["candidate_purpose"]
+    document["campaign_manifest_sha256"] = file_sha256(campaign_dir / "campaign.json")
+    document["attempt_id"] = reservation["attempt_id"]
+    document["recovery_revision"] = reservation["recovery_revision"]
+    document["evaluation_baseline"] = reservation["evaluation_baseline"]
+    document["baseline_commit_sha256"] = reservation["baseline_commit_sha256"]
+    document["run_nonce"] = reservation["run_nonce"]
+    document["started_at_utc"] = reservation["started_at_utc"]
+    document["completed_at_utc"] = _utc_now()
+    document["reservation"] = {
+        "path": str((segment_root / ATTEMPT_RECOVERY_RESERVATION_FILENAME).relative_to(campaign_dir)),
+        "sha256": file_sha256(segment_root / ATTEMPT_RECOVERY_RESERVATION_FILENAME),
+    }
+    document["original_attempt"] = dict(reservation["original_attempt"])
+    failure_observations, root_causes = _attempt_failure_facts(document)
+    document["failure_observations"] = failure_observations
+    document["root_causes"] = root_causes
+    _replay_attempt_recovery_evidence_permissions(segment_root, document)
+    document["attempt_recovery_digest"] = _fingerprint(document)
+    _secure_write_json_once(segment_root / ATTEMPT_RECOVERY_SUMMARY_FILENAME, document)
+    return document
+
+
+def _replay_attempt_recovery_evidence_permissions(
+    segment_root: Path,
+    payload: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """重放恢复段的权限收口（同 v3 Attempt 口径：awaiting_receipts 必须有通过的收口收据）。"""
+
+    binding = payload.get("evidence_permission_closeout")
+    permission_error = payload.get("evidence_permission_error")
+    if payload.get("status") == ATTEMPT_RECOVERY_SUCCESS_STATUS and (
+        not isinstance(binding, Mapping) or permission_error is not None
+    ):
+        raise ConfigurationError("awaiting_receipts 恢复段缺少通过的证据权限收口收据。")
+    if binding is None:
+        return None
+    raw_roots = payload.get("evidence_roots")
+    if not isinstance(raw_roots, list) or not raw_roots or any(not isinstance(value, str) for value in raw_roots):
+        raise ConfigurationError("恢复段权限收口缺少证据根。")
+    try:
+        return _replay_evidence_permission_closeout(segment_root, [Path(value) for value in raw_roots], binding)
+    except (OSError, codex_upgrade_evidence_permissions.EvidencePermissionError) as error:
+        raise ConfigurationError(f"恢复段证据权限收口收据未通过：{error}") from error
+
+
+def _replay_evidence_permission_closeout(
+    attempt_root: Path,
+    evidence_roots: Sequence[Path],
+    binding: Mapping[str, Any],
+) -> dict[str, Any]:
+    """权限收口重放的单一入口（测试可在此注入 runs 别名，不改合同常量）。"""
+
+    return codex_upgrade_evidence_permissions.replay_evidence_permission_closeout(
+        attempt_root, list(evidence_roots), binding
+    )
+
+
+def _load_attempt_recovery_segment(
+    campaign_dir: Path,
+    candidate_id: str,
+    attempt_id: str,
+    recovery_revision: str,
+) -> tuple[Path, dict[str, Any], dict[str, Any]]:
+    """读取并重验恢复段（预约 + run-summary）。"""
+
+    attempt_root = _capture_attempt_path(campaign_dir, "candidate", candidate_id, attempt_id)
+    segment_root = _attempt_recovery_segment_root(attempt_root, _require_recovery_revision(recovery_revision))
+    if segment_root.is_symlink() or not segment_root.is_dir():
+        raise ConfigurationError(f"恢复段不存在或不可信：{recovery_revision}")
+    reservation = _load_attempt_recovery_reservation(
+        campaign_dir, segment_root, candidate_id=candidate_id, attempt_id=attempt_id, recovery_revision=recovery_revision
+    )
+    path = segment_root / ATTEMPT_RECOVERY_SUMMARY_FILENAME
+    _reject_symlink_components(path, campaign_dir, "恢复段 run-summary")
+    payload = _read_json(path, "恢复段 run-summary")
+    unsigned = dict(payload)
+    digest = unsigned.pop("attempt_recovery_digest", None)
+    if (
+        payload.get("schema_version") != ATTEMPT_RECOVERY_SUMMARY_SCHEMA
+        or payload.get("attempt_id") != attempt_id
+        or payload.get("recovery_revision") != recovery_revision
+        or payload.get("candidate_id") != candidate_id
+        or payload.get("run_nonce") != reservation["run_nonce"]
+        or digest != _fingerprint(unsigned)
+        or payload.get("reservation", {}).get("sha256") != file_sha256(segment_root / ATTEMPT_RECOVERY_RESERVATION_FILENAME)
+    ):
+        raise ConfigurationError(f"恢复段 {recovery_revision} run-summary 身份、预约绑定或自摘要不一致。")
+    _replay_attempt_recovery_evidence_permissions(segment_root, payload)
+    return segment_root, reservation, payload
+
+
+# ---------------------------------------------------------------------------
+# 改造 5 M2（T5.16）：effective-results、五类根集合与恢复段的增量封存
+# ---------------------------------------------------------------------------
+
+EFFECTIVE_RESULTS_SCHEMA = "codex-upgrade-effective-results/v1"
+EFFECTIVE_RESULTS_FILENAME = "effective-results.json"
+MANIFEST_PROJECTION_FILENAME = "manifest-projection.json"
+
+
+BASELINE_PRIVATE_EVIDENCE_DIRNAME = "baseline-evidence"
+
+
+def _baseline_private_root(campaign_dir: Path, candidate_id: str, baseline: int) -> Path:
+    """本基线私有证据根（bundle 与增量封存的 delta 根之一）。目录名不能叫 ``evidence``：EvidenceManifest
+    的逻辑前缀取根目录名，与恢复段的 ``evidence`` 根同名会退化为编号前缀，收据绑定（按单根前缀
+    ``evidence/…``）就对不上封存清单。"""
+
+    return _evaluation_baseline_dir(campaign_dir, candidate_id, baseline) / BASELINE_PRIVATE_EVIDENCE_DIRNAME
+
+
+def _previous_capture_facts(
+    campaign_dir: Path,
+    candidate_id: str,
+    previous_baseline: int,
+) -> tuple[dict[str, Any], Path, dict[str, Any], Path]:
+    """前序基线的候选阶段结果、其绑定的 EvidenceManifest 与每 Job 结果（b0＝attempt.json.results）。"""
+
+    source = _stage_read_source(campaign_dir, candidate_id, previous_baseline, "capture-candidate")
+    if source["status"] != "complete":
+        raise ConfigurationError(f"前序基线 b{previous_baseline} 的候选阶段尚未封存。")
+    stage_path = Path(source["path"])
+    stage = _read_json(stage_path, f"前序基线 b{previous_baseline} 候选阶段结果")
+    binding = stage.get("evidence_manifest")
+    _require_file_binding(binding, "前序 EvidenceManifest")
+    manifest_path = _campaign_file(campaign_dir, str(binding["path"]))
+    if manifest_path.is_symlink() or not manifest_path.is_file() or file_sha256(manifest_path) != binding["sha256"]:
+        raise ConfigurationError("前序 EvidenceManifest 文件绑定漂移。")
+    previous_manifest = _load_evidence_manifest(manifest_path)
+    return stage, stage_path, previous_manifest, manifest_path
+
+
+def _effective_results_document(
+    campaign_dir: Path,
+    *,
+    manifest: Mapping[str, Any],
+    candidate_id: str,
+    baseline: int,
+    recovery: Mapping[str, Any],
+    previous_stage: Mapping[str, Any],
+    previous_stage_path: Path,
+    segment_root: Path,
+    segment_summary: Mapping[str, Any],
+) -> dict[str, Any]:
+    """每个候选 Job 恰一条：reused 引用前序阶段结果里的 Job 结果（不复制证据），recovered 指向 ar<k> 结果。"""
+
+    previous_results = {
+        str(item.get("id")): item
+        for item in previous_stage.get("results", [])
+        if isinstance(item, Mapping) and isinstance(item.get("id"), str)
+    }
+    segment_results = {
+        str(item.get("id")): item
+        for item in segment_summary.get("results", [])
+        if isinstance(item, Mapping) and isinstance(item.get("id"), str)
+    }
+    execute_jobs = list(recovery["execute_jobs"])
+    reuse_jobs = list(recovery["reuse_jobs"])
+    if set(execute_jobs) != set(segment_results):
+        raise ConfigurationError("恢复段的 Job 结果集合与基线冻结的 execute_jobs 不一致。")
+    missing = sorted(set(reuse_jobs) - set(previous_results))
+    if missing:
+        raise ConfigurationError(f"前序阶段结果缺少复用 Job：{missing}")
+    previous_binding = {
+        "path": previous_stage_path.relative_to(campaign_dir).as_posix(),
+        "sha256": file_sha256(previous_stage_path),
+    }
+    summary_path = segment_root / ATTEMPT_RECOVERY_SUMMARY_FILENAME
+    segment_binding = {"path": summary_path.relative_to(campaign_dir).as_posix(), "sha256": file_sha256(summary_path)}
+    entries: list[dict[str, Any]] = []
+    for job_id in sorted(set(execute_jobs) | set(reuse_jobs)):
+        if job_id in segment_results:
+            result = segment_results[job_id]
+            entries.append(
+                {
+                    "job_id": job_id,
+                    "source": "recovered",
+                    "recovery_revision": segment_root.name,
+                    "result": segment_binding,
+                    "result_sha256": incremental_recovery.digest(result),
+                    "disposition": str(result.get("disposition", "executed")),
+                    "status": str(result.get("status")),
+                    "evidence_roots": [str(root) for root in result.get("evidence_roots", [])],
+                }
+            )
+        else:
+            result = previous_results[job_id]
+            entries.append(
+                {
+                    "job_id": job_id,
+                    "source": "reused",
+                    "baseline": int(recovery["previous_baseline"]),
+                    "result": previous_binding,
+                    "result_sha256": incremental_recovery.digest(result),
+                    "disposition": "reused",
+                    "status": str(result.get("status")),
+                    "evidence_roots": [str(root) for root in result.get("evidence_roots", [])],
+                }
+            )
+        if entries[-1]["status"] != "complete" or not entries[-1]["evidence_roots"]:
+            raise ConfigurationError(f"effective-results 中 Job {job_id} 不是 complete 或缺少证据根。")
+    document = {
+        "schema_version": EFFECTIVE_RESULTS_SCHEMA,
+        "campaign_id": str(manifest["campaign_id"]),
+        "candidate_id": candidate_id,
+        "evaluation_baseline": baseline,
+        "recovery_sha256": str(recovery["recovery_sha256"]),
+        "attempt_id": str(recovery["attempt_id"]),
+        "recovery_revision": segment_root.name,
+        "entries": entries,
+    }
+    document["effective_results_sha256"] = _fingerprint(document)
+    return document
+
+
+def _validate_effective_results(document: Mapping[str, Any], *, expected_job_ids: Iterable[str]) -> dict[str, Any]:
+    """集合恰等于候选 Job 全集、无重复、自摘要一致。"""
+
+    unsigned = dict(document)
+    digest = unsigned.pop("effective_results_sha256", None)
+    if document.get("schema_version") != EFFECTIVE_RESULTS_SCHEMA or digest != _fingerprint(unsigned):
+        raise ConfigurationError("effective-results schema 或自摘要非法。")
+    entries = document.get("entries")
+    if not isinstance(entries, list):
+        raise ConfigurationError("effective-results entries 非数组。")
+    ids = [str(item.get("job_id")) for item in entries if isinstance(item, Mapping)]
+    if len(ids) != len(entries) or len(set(ids)) != len(ids):
+        raise ConfigurationError("effective-results 存在重复或非法条目。")
+    if set(ids) != set(expected_job_ids):
+        raise ConfigurationError(
+            f"effective-results 的 Job 集合与候选 Job 全集不相等：{sorted(set(ids) ^ set(expected_job_ids))}"
+        )
+    return dict(document)
+
+
+def _recovery_root_sets(
+    *,
+    previous_manifest: Mapping[str, Any],
+    previous_job_roots: Mapping[str, Sequence[str]],
+    execute_jobs: Sequence[str],
+    segment_summary: Mapping[str, Any],
+    segment_root: Path,
+    baseline_private_root: Path,
+) -> dict[str, list[str]]:
+    """五稿 3.7 的根集合（精确根路径）：dropped = 重采 Job 根 ∪ superseded；delta = recovered ∪ control ∪ {private}。"""
+
+    previous_roots = [str(row["path"]) for row in previous_manifest["roots"]]
+    all_previous_job_roots = sorted({root for roots in previous_job_roots.values() for root in roots})
+    missing = sorted(set(all_previous_job_roots) - set(previous_roots))
+    if missing:
+        raise ConfigurationError(f"前序 Job 证据根不在前序 EvidenceManifest 内：{missing}")
+    reexecuted_job_roots = sorted({root for job_id in execute_jobs for root in previous_job_roots.get(job_id, [])})
+    reused_job_roots = sorted(set(all_previous_job_roots) - set(reexecuted_job_roots))
+    superseded_stage_roots = sorted(set(previous_roots) - set(all_previous_job_roots))
+    recovered_job_roots = sorted(
+        {str(root) for item in segment_summary.get("results", []) if isinstance(item, Mapping) for root in item.get("evidence_roots", [])}
+    )
+    recovery_control_roots = sorted({str((segment_root / "evidence").resolve(strict=True)), str((segment_root / "logs").resolve(strict=True))})
+    private_root = str(baseline_private_root.resolve(strict=True))
+    dropped = sorted(set(reexecuted_job_roots) | set(superseded_stage_roots))
+    delta = sorted(set(recovered_job_roots) | set(recovery_control_roots) | {private_root})
+    if set(reused_job_roots) & set(delta):
+        raise ConfigurationError("复用根与增量根相交。")
+    return {
+        "previous_roots": sorted(previous_roots),
+        "previous_job_roots": all_previous_job_roots,
+        "reused_job_roots": reused_job_roots,
+        "reexecuted_job_roots": reexecuted_job_roots,
+        "superseded_stage_roots": superseded_stage_roots,
+        "recovered_job_roots": recovered_job_roots,
+        "recovery_control_roots": recovery_control_roots,
+        "baseline_private_root": [private_root],
+        "dropped_roots": dropped,
+        "delta_roots": delta,
+        "final_roots": sorted(set(reused_job_roots) | set(delta)),
+    }
+
+
+def _seal_attempt_recovery_segment(
+    arguments: argparse.Namespace,
+) -> dict[str, Any]:
+    """``capture-candidate seal --attempt-id <id> --attempt-recovery ar<k>``：增量封存出 b<K> 的候选阶段结果。
+
+    四阶段同普通候选 seal：① Kilo 后检查点（段证据根内）→ ``client_checkpoint_created``；② 受管 finalizer 以
+    effective-results 生成本基线 bundle／capture manifest／observed-profile／Kilo 收据（收据落在段证据根，bundle
+    落在 ``revisions/b<K>/baseline-evidence``）；③ 投影＋delta＋保留前缀合并生成 ``revisions/b<K>/evidence-manifest.json``
+    与投影收据，``scanned_bytes`` 只计 delta；④ 预览批准后写 ``revisions/b<K>/result.json``（``stage_sources``
+    的 local 目标），绑定原 attempt、段 run-summary、effective-results、投影收据与五类根。
+    """
+
+    campaign_dir = arguments.campaign_dir
+    manifest = _require_formal_campaign(campaign_dir)
+    candidate_id = str(getattr(arguments, "candidate_id", "") or "")
+    recovery_revision = _require_recovery_revision(getattr(arguments, "attempt_recovery", None))
+    attempt_id = getattr(arguments, "attempt_id", None)
+    if not attempt_id:
+        raise ConfigurationError("seal 必须提供 --attempt-id。")
+    if not _requires_complete_vc_artifacts(manifest):
+        raise ConfigurationError("恢复段增量封存只用于 0.154.0 起的完整 VC 链 Campaign。")
+    _guard_candidate_revision_write(campaign_dir, manifest, candidate_id, action="capture-candidate seal")
+    manifest = _apply_candidate_runtime_override(campaign_dir, manifest, candidate_id)
+    _reject_contaminated_campaign(campaign_dir)
+    baseline, commit, recovery = _current_attempt_recovery_baseline(
+        campaign_dir, candidate_id, recovery_revision, allow_successor=True
+    )
+    if str(recovery["attempt_id"]) != str(attempt_id):
+        raise ConfigurationError(f"当前 attempt-recovery 基线绑定的原 attempt 是 {recovery['attempt_id']}，不是 {attempt_id}。")
+    attempt_root, original_attempt = _load_capture_attempt(campaign_dir, "candidate", candidate_id, str(attempt_id))
+    segment_root, segment_reservation, segment_summary = _load_attempt_recovery_segment(
+        campaign_dir, candidate_id, str(attempt_id), recovery_revision
+    )
+    if segment_summary.get("status") != ATTEMPT_RECOVERY_SUCCESS_STATUS:
+        raise ConfigurationError(f"恢复段 {recovery_revision} 状态为 {segment_summary.get('status')}，禁止增量封存。")
+    failed_result_ids = _failed_job_ids(segment_summary.get("results"))
+    if failed_result_ids:
+        raise ConfigurationError("恢复段仍有失败 Job，禁止增量封存：" + "、".join(failed_result_ids))
+    # 段预约逐 Job 绑定：execution_sha256（重定位后）→ source_execution_sha256（Campaign 冻结原定义）。
+    planned_source_execution: dict[str, str] = {}
+    for planned in segment_reservation.get("planned_jobs", []):
+        if not isinstance(planned, Mapping):
+            raise ConfigurationError("恢复段预约的 planned_jobs 非法。")
+        planned_source_execution[str(planned.get("id"))] = str(planned.get("source_execution_sha256"))
+    for row in segment_summary.get("results", []):
+        if isinstance(row, Mapping) and str(row.get("id")) in planned_source_execution:
+            planned_row = next(item for item in segment_reservation["planned_jobs"] if item.get("id") == row.get("id"))
+            if row.get("execution_sha256") != planned_row.get("execution_sha256"):
+                raise ConfigurationError(f"恢复段 Job {row.get('id')} 的结果执行摘要与段预约不一致。")
+    if segment_reservation.get("baseline_commit_sha256") != commit["commit_sha256"]:
+        raise ConfigurationError("恢复段预约绑定的基线 COMMIT 与当前基线不一致。")
+    stage_target = _stage_write_target(campaign_dir, candidate_id, baseline, "capture-candidate")
+    if stage_target.exists() or stage_target.is_symlink():
+        raise ConfigurationError(f"评估基线 b{baseline} 的候选阶段已封存，禁止覆盖。")
+    identity = original_attempt.get("identity")
+    if not isinstance(identity, dict):
+        raise ConfigurationError("原 attempt 缺少候选身份。")
+    build_receipt, build_binding = _replay_candidate_build_receipt(
+        campaign_dir, manifest, candidate_id, getattr(arguments, "build_receipt", None)
+    )
+    expected_build_identity = {
+        "build_receipt": build_binding,
+        "build_receipt_digest": build_receipt["receipt_digest"],
+        "binary": build_receipt["binary"],
+        "target_architecture": build_receipt["target_architecture"],
+        "gate_plan": build_receipt["gate_plan"],
+    }
+    if any(identity.get(field) != expected for field, expected in expected_build_identity.items()):
+        raise ConfigurationError("原 attempt 未逐项绑定 VC-4 构建收据。")
+    _verify_candidate_attempt_identity(manifest, identity)
+    classification = _load_stage_result(campaign_dir, "classify")
+    if classification.get("status") != "complete":
+        raise ConfigurationError("目标画像尚未批准，禁止候选 seal。")
+    if getattr(arguments, "candidate_purpose", None) is None:
+        raise ConfigurationError("候选 seal 必须重申 --candidate-purpose。")
+    if arguments.candidate_purpose != identity.get("candidate_purpose"):
+        raise ConfigurationError("seal 参数 --candidate-purpose 与 run 身份不一致。")
+    approved_profile_id, approved_profile_digest = _profile_binding_from_manifest(campaign_dir, classification)
+    if identity.get("profile_id") != approved_profile_id or identity.get("profile_digest") != approved_profile_digest:
+        raise ConfigurationError("候选 attempt 与当前批准画像不一致。")
+    tool_impact = _verify_plan_identity(
+        campaign_dir, manifest, operation="capture-candidate-seal", attempt_root=attempt_root, attempt=original_attempt
+    )
+    evaluation_transition = _stage_evaluation_transition_binding(tool_impact)
+
+    # ---- effective-results（write-once）与五类根集合 ----
+    previous_baseline = int(recovery["previous_baseline"])
+    previous_stage, previous_stage_path, previous_manifest, _previous_manifest_path = _previous_capture_facts(
+        campaign_dir, candidate_id, previous_baseline
+    )
+    baseline_dir = _evaluation_baseline_dir(campaign_dir, candidate_id, baseline)
+    # 本基线 private 根是 delta 根之一（EvidenceManifest 记录其 stat 边界）：已存在时只校验不 chmod，
+    # 否则 preview → approve 两次 seal 之间目录 ctime 漂移会让不可变 stat 边界校验失败。
+    private_root = _baseline_private_root(campaign_dir, candidate_id, baseline)
+    if private_root.exists() or private_root.is_symlink():
+        _reject_symlink_components(private_root, campaign_dir, "评估基线 evidence 根")
+        if not private_root.is_dir() or stat.S_IMODE(private_root.stat().st_mode) != 0o700:
+            raise ConfigurationError("评估基线 evidence 根必须是 0700 目录。")
+    else:
+        private_root = ensure_private_directory(private_root, campaign_dir)
+    effective_path = baseline_dir / EFFECTIVE_RESULTS_FILENAME
+    effective = _effective_results_document(
+        campaign_dir,
+        manifest=manifest,
+        candidate_id=candidate_id,
+        baseline=baseline,
+        recovery=recovery,
+        previous_stage=previous_stage,
+        previous_stage_path=previous_stage_path,
+        segment_root=segment_root,
+        segment_summary=segment_summary,
+    )
+    job_ids = [job.job_id for job in _campaign_jobs(
+        campaign_dir,
+        manifest,
+        "candidate",
+        candidate_id=candidate_id,
+        runtime_image=str(identity.get("image_reference", "")),
+        profile_id=str(identity.get("profile_id", "")),
+        profile_digest=str(identity.get("profile_digest", "")),
+        build_id=str(identity.get("build_id", "")),
+        deployed_version=str(identity.get("deployed_version", "")),
+        candidate_image_id=str(identity.get("image_id", "")),
+        source_tree_sha256=str(identity.get("source_tree_sha256", "")),
+        candidate_purpose=str(identity.get("candidate_purpose", "")),
+    )]
+    expected_job_ids = [job_id for job_id in job_ids if job_id in set(recovery["execute_jobs"]) | set(recovery["reuse_jobs"])]
+    if set(expected_job_ids) != set(recovery["execute_jobs"]) | set(recovery["reuse_jobs"]):
+        raise ConfigurationError("基线冻结的 Job 集合不在候选 Job 全集内。")
+    _validate_effective_results(effective, expected_job_ids=expected_job_ids)
+    _write_or_verify_json(effective_path, effective)
+    previous_job_roots = {
+        str(item.get("id")): [str(root) for root in item.get("evidence_roots", [])]
+        for item in previous_stage.get("results", [])
+        if isinstance(item, Mapping) and isinstance(item.get("id"), str)
+    }
+    root_sets = _recovery_root_sets(
+        previous_manifest=previous_manifest,
+        previous_job_roots=previous_job_roots,
+        execute_jobs=list(recovery["execute_jobs"]),
+        segment_summary=segment_summary,
+        segment_root=segment_root,
+        baseline_private_root=private_root,
+    )
+    roots = _deduplicate_evidence_roots(Path(value) for value in root_sets["final_roots"])
+    segment_evidence_root = Path(str(segment_summary.get("environment", {}).get("evidence_root", "")))
+    if not segment_evidence_root.is_absolute() or segment_evidence_root.resolve(strict=True) not in roots:
+        raise ConfigurationError("恢复段的环境证据根未纳入增量封存。")
+    for role in ("arm64_before_receipt", "arm64_after_receipt", "after_probe"):
+        if not isinstance(segment_summary.get("environment", {}).get(role), Mapping):
+            raise ConfigurationError(f"恢复段缺少 {role} 环境绑定。")
+    restoration_reference = segment_summary.get("environment", {}).get("restoration_report")
+    if not isinstance(restoration_reference, dict) or set(restoration_reference) != {"path", "sha256", "bytes"}:
+        raise ConfigurationError("恢复段缺少恢复收据绑定。")
+    restoration_path = segment_evidence_root / str(restoration_reference.get("path", ""))
+    if (
+        restoration_path.is_symlink()
+        or not restoration_path.is_file()
+        or restoration_path.stat().st_size != restoration_reference.get("bytes")
+        or file_sha256(restoration_path) != restoration_reference.get("sha256")
+    ):
+        raise ConfigurationError("恢复段的恢复收据绑定漂移。")
+
+    # ---- ① Kilo 后检查点（段证据根） ----
+    segment_view: dict[str, Any] = {
+        **{key: value for key, value in segment_summary.items() if key not in {"attempt_recovery_digest"}},
+        "attempt_digest": str(segment_summary["attempt_recovery_digest"]),
+        "evidence_roots": [str(root) for root in roots],
+    }
+    try:
+        with _campaign_lock(campaign_dir):
+            _reject_contaminated_campaign(campaign_dir)
+            post_client_path, _, client_checkpoint_at, client_checkpoint_created = _candidate_post_client_restoration(
+                manifest, segment_evidence_root, candidate_id
+            )
+        if _rfc3339_datetime(client_checkpoint_at, "Kilo 后检查点时间") < _rfc3339_datetime(
+            segment_summary["completed_at_utc"], "attempt-recovery.completed_at_utc"
+        ):
+            raise ConfigurationError("Kilo 后检查点早于恢复段完成时间。")
+    except (ConfigurationError, EnvironmentProbeError, ReceiptFinalizerError, OSError, ValueError) as error:
+        raise RuntimeError("Kilo 后环境恢复门禁失败。") from error
+    if client_checkpoint_created:
+        return {
+            "status": "client_checkpoint_created",
+            "phase": "candidate",
+            "campaign_id": segment_summary["campaign_id"],
+            "candidate_id": candidate_id,
+            "attempt_id": str(attempt_id),
+            "recovery_revision": recovery_revision,
+            "evaluation_baseline": baseline,
+            "run_nonce": segment_summary["run_nonce"],
+            "attempt_started_at_utc": segment_summary["started_at_utc"],
+            "client_checkpoint_at_utc": client_checkpoint_at,
+            "evidence_root": str(segment_evidence_root),
+            "effective_results": str(effective_path),
+            "baseline_private_root": str(private_root),
+            "next_command": (
+                "以 effective-results 生成本基线 assertion bundle（prepare_assertion_bundle.sh BASELINE=b<K>）、"
+                "observed-profile 与两份 Kilo 收据（落在恢复段证据根）后重新执行 capture-candidate seal --attempt-recovery。"
+            ),
+        }
+
+    # ---- ② finalizer 产物：恢复收据、断言上下文、观测画像、Kilo 收据 ----
+    restoration = _validate_restoration_report(restoration_path, roots, phase="candidate", candidate_id=candidate_id)
+    assertion_context = _capture_assertion_context(
+        getattr(arguments, "capture_manifest", None),
+        getattr(arguments, "assertion_evidence_root", None),
+        roots,
+        target_version=manifest["target_version"],
+    )
+    bundle_root = Path(str(assertion_context.get("evidence_root", "")))
+    if not bundle_root.is_absolute() or private_root.resolve(strict=True) not in bundle_root.resolve(strict=True).parents:
+        raise ConfigurationError("恢复段增量封存的断言证据包必须位于本基线 baseline-evidence 目录内。")
+    assertion_gate = _run_seal_assertion_gate(assertion_context, roots, phase="candidate", target_version=manifest["target_version"])
+    if post_client_path is None or client_checkpoint_at is None:
+        raise ConfigurationError("恢复段增量封存缺少 Kilo 后检查点。")
+    receipt_identity = dict(
+        campaign_id=segment_summary["campaign_id"],
+        attempt_id=str(segment_summary["attempt_id"]),
+        run_nonce=str(segment_summary["run_nonce"]),
+        attempt_started_at_utc=str(segment_summary["started_at_utc"]),
+        client_checkpoint_at_utc=client_checkpoint_at,
+        candidate_id=candidate_id,
+        target_version=manifest["target_version"],
+    )
+    observed_profile, observed_receipt = _validate_observed_profile_receipt(
+        getattr(arguments, "observed_profile_receipt", None),
+        [segment_evidence_root],
+        expected_profile_id=str(identity["profile_id"]),
+        expected_profile_digest=str(identity["profile_digest"]),
+        image_id=str(identity["image_id"]),
+        image_reference=str(identity["image_reference"]),
+        source_tree_sha256=str(identity["source_tree_sha256"]),
+        build_id=str(identity["build_id"]),
+        deployed_version=str(identity["deployed_version"]),
+        **receipt_identity,
+    )
+    if observed_receipt.get("profile_id") != identity["profile_id"] or observed_receipt.get("profile_digest") != identity["profile_digest"]:
+        raise ConfigurationError("运行画像收据与 attempt 身份不一致。")
+    client_bindings = _parse_client_evidence(
+        arguments.client_evidence,
+        [segment_evidence_root],
+        model=_third_party_client_model(manifest["configuration"]),
+        identity=identity,
+        **receipt_identity,
+    )
+    required_clients = _required_client_bindings(campaign_dir, classification)
+    observed_clients = {item["client_id"] for item in client_bindings}
+    if not required_clients.issubset(observed_clients):
+        raise ConfigurationError(
+            f"候选 seal 缺少目标场景要求的第三方客户端收据：{sorted(required_clients - observed_clients)}"
+        )
+    restoration["post_client"] = _validate_restoration_report(post_client_path, roots, phase="candidate", candidate_id=candidate_id)
+
+    # ---- ③ 投影 + delta + 保留前缀合并（唯一一次深度扫描只覆盖 delta 根） ----
+    manifest_path = _evidence_manifest_path(baseline_dir)
+    projection_path = baseline_dir / MANIFEST_PROJECTION_FILENAME
+    if manifest_path.exists() or manifest_path.is_symlink():
+        evidence_manifest = _load_evidence_manifest(manifest_path)
+        projection_receipt = _read_json(projection_path, "投影收据")
+        try:
+            codex_upgrade_evidence_manifest.verify_manifest_boundary(evidence_manifest, list(roots))
+        except codex_upgrade_evidence_manifest.EvidenceManifestError as error:
+            raise _evidence_manifest_configuration_error(error) from error
+    else:
+        try:
+            projected, projection_receipt = codex_upgrade_evidence_manifest.project_evidence_manifest(
+                previous_manifest, keep_roots=root_sets["reused_job_roots"]
+            )
+            codex_upgrade_evidence_manifest.validate_projection_receipt(
+                projection_receipt,
+                source_manifest=previous_manifest,
+                projected_manifest=projected,
+                expected_dropped_roots=root_sets["dropped_roots"],
+            )
+            delta_manifest = codex_upgrade_evidence_manifest.build_evidence_manifest(
+                [Path(value) for value in root_sets["delta_roots"]],
+                checkpoint_path=_evidence_manifest_checkpoint_path(baseline_dir),
+                secret_env_names=_secret_environment_names(),
+            )
+            evidence_manifest = codex_upgrade_evidence_manifest.merge_evidence_manifests(
+                projected, delta_manifest, preserve_prefixes=True
+            )
+            codex_upgrade_evidence_manifest.verify_manifest_boundary(evidence_manifest, list(roots))
+        except codex_upgrade_evidence_manifest.EvidenceManifestError as error:
+            raise _evidence_manifest_configuration_error(error) from error
+        merged_roots = sorted(str(row["path"]) for row in evidence_manifest["roots"])
+        if merged_roots != root_sets["final_roots"]:
+            raise ConfigurationError(
+                f"合并清单的根集合不等于 reused ∪ delta：多={sorted(set(merged_roots) - set(root_sets['final_roots']))}，"
+                f"少={sorted(set(root_sets['final_roots']) - set(merged_roots))}"
+            )
+        _write_or_verify_json(projection_path, projection_receipt)
+        _write_or_verify_json(manifest_path, evidence_manifest)
+    evidence_inventory = evidence_manifest["inventory"]
+    security = evidence_manifest["security"]
+    if not security["known_secret_scan_passed"]:
+        raise ConfigurationError(f"候选证据秘密扫描失败：{len(security['findings'])} 个命中。")
+    sealed_surface, surface_binding = _load_or_build_attempt_surface(
+        campaign_dir, segment_root, segment_view, evidence_manifest, label="target-sub2api"
+    )
+    payload: dict[str, Any] = {
+        "status": "complete",
+        "campaign_mode": manifest["campaign_mode"],
+        "campaign_purpose": manifest["campaign_purpose"],
+        "candidate_purpose": identity.get("candidate_purpose"),
+        "identity": {key: value for key, value in identity.items() if key != "source_root"},
+        "attempt": {
+            "path": str((attempt_root / "attempt.json").relative_to(campaign_dir)),
+            "sha256": file_sha256(attempt_root / "attempt.json"),
+        },
+        "recovery": {
+            "path": str((segment_root / ATTEMPT_RECOVERY_SUMMARY_FILENAME).relative_to(campaign_dir)),
+            "sha256": file_sha256(segment_root / ATTEMPT_RECOVERY_SUMMARY_FILENAME),
+            "recovery_revision": recovery_revision,
+            "evaluation_baseline": baseline,
+            "recovery_sha256": str(recovery["recovery_sha256"]),
+        },
+        "effective_results": {
+            "path": str(effective_path.relative_to(campaign_dir)),
+            "sha256": file_sha256(effective_path),
+        },
+        # results 展开为每 Job 的结果对象（compare／provenance／bundle 按 results[].evidence_roots 读取）；
+        # 复用 Job 按结果合同带 source_receipt（前序阶段结果文件的 path／sha256／bytes）。
+        "results": [
+            (
+                {
+                    **next(item for item in segment_summary["results"] if item.get("id") == entry["job_id"]),
+                    "disposition": entry["disposition"],
+                    "source_execution_sha256": planned_source_execution[entry["job_id"]],
+                }
+                if entry["source"] == "recovered"
+                else {
+                    **next(item for item in previous_stage["results"] if item.get("id") == entry["job_id"]),
+                    "disposition": "reused",
+                    "source_receipt": {
+                        "path": str(previous_stage_path.relative_to(campaign_dir)),
+                        "sha256": file_sha256(previous_stage_path),
+                        "bytes": previous_stage_path.stat().st_size,
+                    },
+                }
+            )
+            for entry in effective["entries"]
+        ],
+        "evidence_roots": [str(root) for root in roots],
+        "root_sets": root_sets,
+        "manifest_projection": {
+            "path": str(projection_path.relative_to(campaign_dir)),
+            "sha256": file_sha256(projection_path),
+        },
+        "evidence_inventory": evidence_inventory,
+        "evidence_manifest": {
+            "path": str(manifest_path.relative_to(campaign_dir)),
+            "sha256": file_sha256(manifest_path),
+        },
+        "scan_summary": evidence_manifest["scan"],
+        "surface": surface_binding,
+        "client_bindings": client_bindings,
+        "assertion_context": assertion_context,
+        "assertion_gate": assertion_gate,
+        "restoration": restoration,
+        "observed_profile": observed_profile,
+        "security": {"raw_evidence_private": True, **security},
+    }
+    if evaluation_transition is not None:
+        payload["evaluation_transition"] = evaluation_transition
+    preview, approved = _seal_preview(
+        campaign_dir,
+        segment_root,
+        phase="candidate",
+        candidate_id=candidate_id,
+        attempt=segment_view,
+        stage_payload=payload,
+        approve_sha256=getattr(arguments, "approve_seal_sha256", None),
+    )
+    preview_path = _seal_preview_path(segment_root, _seal_transition_index(payload.get("evaluation_transition")))
+    if not approved:
+        return {
+            "status": "approval_required",
+            "phase": "candidate",
+            "candidate_id": candidate_id,
+            "attempt_id": str(attempt_id),
+            "recovery_revision": recovery_revision,
+            "evaluation_baseline": baseline,
+            "seal_preview": str(preview_path),
+            "review_sha256": preview["review_sha256"],
+            "scan_summary": evidence_manifest["scan"],
+            "message": "复核机器 finalizer 事实后，以同一摘要再次执行 seal --attempt-recovery。",
+        }
+    payload["seal_preview"] = {"path": str(preview_path.relative_to(campaign_dir)), "sha256": file_sha256(preview_path)}
+    stage_path = save_stage_result(campaign_dir, "capture-candidate", payload, candidate_id=candidate_id)
+    return {**payload, "status": "complete", "review_sha256": preview["review_sha256"], "stage_result": str(stage_path)}
+
+
+
+def _replay_sealed_attempt_recovery_segment(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    *,
+    candidate_id: str,
+    attempt_id: str,
+    recovery_revision: str,
+    baseline: int,
+) -> dict[str, Any]:
+    """同段目录已存在时的幂等重派：只有 awaiting_receipts 且无失败 Job 的段才按既有摘要返回；账本段状态
+    仍 active（摘要已写、completed 事件未写的崩溃窗口）时补写 completed；其余情况失败关闭。"""
+
+    segment_root = _attempt_recovery_segment_root(
+        campaign_dir / "candidates" / candidate_id / "attempts" / attempt_id, recovery_revision
+    )
+    summary_path = segment_root / ATTEMPT_RECOVERY_SUMMARY_FILENAME
+    if not summary_path.is_file() or summary_path.is_symlink():
+        raise ConfigurationError(
+            f"恢复段 {recovery_revision} 已预约但未收口（中断），禁止同段续跑：先 reconcile-attempt "
+            f"--recovery-revision {recovery_revision} 对账，再 capture-candidate run --attempt-recovery ar<k+1> --rerun-failed。"
+        )
+    _segment_root, reservation, summary = _load_attempt_recovery_segment(campaign_dir, candidate_id, attempt_id, recovery_revision)
+    if summary.get("status") != ATTEMPT_RECOVERY_SUCCESS_STATUS or _failed_job_ids(summary.get("results")):
+        raise ConfigurationError(
+            f"恢复段 {recovery_revision} 状态为 {summary.get('status')}，禁止重开：先 reconcile-attempt "
+            f"--recovery-revision {recovery_revision} 对账，再开后继段。"
+        )
+    if int(summary.get("evaluation_baseline", -1)) != baseline:
+        raise ConfigurationError(f"恢复段 {recovery_revision} 摘要绑定的评估基线与当前基线 b{baseline} 不一致。")
+    ledger_dir = _campaign_timing_ledger_dir(campaign_dir, manifest)
+    ledger_events: list[dict[str, Any]] = []
+    key = f"{attempt_id}:{recovery_revision}"
+    try:
+        with codex_upgrade_supervisor._timing_closeout_lock(ledger_dir):
+            state = codex_upgrade_timing_ledger.phase_ledger_state(ledger_dir)
+            segment_state = dict(state.get("attempt_recoveries", {})).get(key)
+            status = segment_state.get("status") if isinstance(segment_state, Mapping) else None
+            if status == "active":
+                ledger_events.append(
+                    _append_attempt_recovery_ledger_event(
+                        ledger_dir,
+                        event_type="attempt_recovery_completed",
+                        attempt_id=attempt_id,
+                        recovery_revision=recovery_revision,
+                        candidate_id=candidate_id,
+                        revision=_current_candidate_revision(campaign_dir, manifest),
+                        live_request_count=0,
+                        next_action="恢复段完成（幂等重派补写）；入账后增量封存",
+                    )
+                )
+            elif status != "completed":
+                raise ConfigurationError(f"账本中恢复段 {recovery_revision} 的状态是 {status}，与已收口的段摘要不一致。")
+    except (codex_upgrade_timing_ledger.TimingLedgerError, codex_upgrade_supervisor.SupervisorError) as error:
+        raise ConfigurationError(f"UpgradeTimingLedger 拒绝幂等承接恢复段：{error}") from error
+    return {
+        "status": ATTEMPT_RECOVERY_SUCCESS_STATUS,
+        "phase": "candidate",
+        "candidate_id": candidate_id,
+        "attempt_id": attempt_id,
+        "recovery_revision": recovery_revision,
+        "evaluation_baseline": baseline,
+        "segment": str(segment_root),
+        "attempt_recovery_digest": summary["attempt_recovery_digest"],
+        "run_nonce": reservation["run_nonce"],
+        "started_at_utc": reservation["started_at_utc"],
+        "execute_jobs": list(summary.get("execute_jobs", [])),
+        "reuse_jobs": list(summary.get("reuse_jobs", [])),
+        "results": list(summary.get("results", [])),
+        "ledger_events": ledger_events,
+        "idempotent_replay": True,
+        "live_request_count": 0,
+        "next_command": f"account-sealed-candidate --candidate-id {candidate_id} --attempt-recovery {recovery_revision}",
+    }
+
+
+def _run_attempt_recovery_segment(
+    arguments: argparse.Namespace,
+    *,
+    _lease: CampaignLease | None = None,
+    _manifest: dict[str, Any] | None = None,
+    _deadline: incremental_recovery.WallClockDeadline | None = None,
+) -> dict[str, Any]:
+    """``capture-candidate run --attempt-recovery ar<k>``：当前 attempt-recovery 基线的恢复段。"""
+
+    recovery_revision = _require_recovery_revision(getattr(arguments, "attempt_recovery", None))
+    campaign_dir = arguments.campaign_dir
+    candidate_id = str(getattr(arguments, "candidate_id", "") or "")
+    if _lease is None and _ACTIVE_CAMPAIGN_LEASE is not None:
+        active = _ACTIVE_CAMPAIGN_LEASE
+        if not _lease_identity_matches(active, campaign_dir, phase="candidate", candidate_id=candidate_id):
+            raise ConfigurationError("恢复段与当前 Campaign lease 的 phase／candidate 不一致。")
+        _lease = active
+        _manifest = _manifest or _require_formal_campaign(campaign_dir)
+        _deadline = _bind_attempt_deadline_metadata(_deadline or active.deadline, "candidate")
+    if _lease is None:
+        manifest = _manifest or _require_formal_campaign(campaign_dir)
+        deadline = _deadline or _attempt_deadline(arguments, "candidate")
+        with CampaignLease(
+            campaign_dir,
+            phase="candidate",
+            candidate_id=candidate_id,
+            deadline=deadline,
+            command="capture-candidate",
+            allow_stale_recovery=bool(getattr(arguments, "rerun_failed", False)),
+            campaign_id=str(manifest.get("campaign_id", "")),
+        ) as lease:
+            return _run_attempt_recovery_segment(arguments, _lease=lease, _manifest=manifest, _deadline=deadline)
+
+    manifest = _manifest or _require_formal_campaign(campaign_dir)
+    if not _requires_complete_vc_artifacts(manifest):
+        raise ConfigurationError("attempt 恢复段只用于 0.154.0 起的完整 VC 链 Campaign。")
+    # 恢复段的 job 收据与账本段状态都是 write-once：同段目录不能续跑。段中断／失败先
+    # reconcile-attempt --recovery-revision 对账入账，再以 --rerun-failed 开后继段 ar<k+1>（同一基线冻结的
+    # execute_jobs 全量补跑；--rerun-failed 同时接管中断留下的过期 Campaign lease，不重复裁定根因）。
+    # 后继段先消费已批准的恢复预览（账本 recovery_required → recovery_authorized → active），再过候选级写入门。
+    rerun_failed = bool(getattr(arguments, "rerun_failed", False))
+    baseline, commit, recovery = _current_attempt_recovery_baseline(
+        campaign_dir, candidate_id, recovery_revision, allow_successor=rerun_failed,
+        recovery_preview=getattr(arguments, "recovery_preview", None), require_preview=rerun_failed,
+    )
+    _guard_candidate_revision_write(campaign_dir, manifest, candidate_id, action="capture-candidate run")
+    manifest = _apply_candidate_runtime_override(campaign_dir, manifest, candidate_id)
+    _reject_contaminated_campaign(campaign_dir)
+    deadline = _bind_attempt_deadline_metadata(_deadline or _attempt_deadline(arguments, "candidate"), "candidate")
+    if rerun_failed and str(recovery["recovery_revision"]) == recovery_revision:
+        raise ConfigurationError(
+            f"--rerun-failed 只用于开失败段的后继段：{recovery_revision} 是当前基线冻结的首段，"
+            "请直接 capture-candidate run --attempt-recovery（首段）或改用后继段编号。"
+        )
+    attempt_id = str(recovery["attempt_id"])
+    attempt_root, original_attempt = _load_capture_attempt(campaign_dir, "candidate", candidate_id, attempt_id)
+    existing_segment = _attempt_recovery_segment_root(attempt_root, recovery_revision)
+    if existing_segment.exists() or existing_segment.is_symlink():
+        # 同段目录已存在：成功收口的段按幂等重派返回（父 run 在动作退出后崩溃、环境恢复重派同一批次，
+        # 崩溃矩阵 R2 的 attempt-recovery 变体，零请求）；未收口的段禁止续跑。
+        return _replay_sealed_attempt_recovery_segment(
+            campaign_dir, manifest, candidate_id=candidate_id, attempt_id=attempt_id, recovery_revision=recovery_revision,
+            baseline=baseline,
+        )
+    original_reservation = _load_capture_reservation(
+        campaign_dir, attempt_root, phase="candidate", candidate_id=candidate_id, _manifest=manifest
+    )
+    if original_attempt.get("status") != ATTEMPT_RECOVERY_SUCCESS_STATUS:
+        raise ConfigurationError(f"原 attempt {attempt_id} 状态为 {original_attempt.get('status')}，只有 awaiting_receipts 且已封存的 attempt 可开恢复段。")
+    previous_source = _stage_read_source(campaign_dir, candidate_id, int(recovery["previous_baseline"]), "capture-candidate")
+    if previous_source["status"] != "complete":
+        raise ConfigurationError("前序基线的 capture-candidate 阶段尚未封存，禁止开恢复段。")
+    identity = original_attempt.get("identity")
+    if not isinstance(identity, dict):
+        raise ConfigurationError("原 attempt 缺少候选身份。")
+    _verify_candidate_attempt_identity(manifest, identity)
+    tool_identity = _tool_identity(include_git=False)
+
+    all_jobs = _campaign_jobs(
+        campaign_dir,
+        manifest,
+        "candidate",
+        candidate_id=candidate_id,
+        runtime_image=identity.get("image_reference"),
+        profile_id=identity.get("profile_id"),
+        profile_digest=identity.get("profile_digest"),
+        build_id=identity.get("build_id"),
+        deployed_version=identity.get("deployed_version"),
+        candidate_image_id=identity.get("image_id"),
+        source_tree_sha256=identity.get("source_tree_sha256"),
+        candidate_purpose=identity.get("candidate_purpose"),
+    )
+    source_jobs = {job.job_id: job for job in all_jobs}
+    execute_ids = list(recovery["execute_jobs"])
+    missing = sorted(set(execute_ids) - set(source_jobs))
+    if missing:
+        raise ConfigurationError(f"恢复基线冻结的 execute_jobs 不在候选 Job 全集内：{missing}")
+    original_results = {
+        str(item.get("id")): item for item in original_attempt.get("results", []) if isinstance(item, Mapping)
+    }
+    if set(execute_ids) | set(recovery["reuse_jobs"]) != set(original_results):
+        raise ConfigurationError("恢复基线的 execute_jobs ∪ reuse_jobs 必须恰好等于原 attempt 的 Job 全集。")
+    jobs = [_relocate_job_for_recovery(source_jobs[job_id], recovery_revision) for job_id in execute_ids]
+    if not getattr(arguments, "acknowledge_live_requests", False):
+        raise ConfigurationError("恢复段补跑会产生真实请求，必须同时确认 --acknowledge-live-requests。")
+    _verify_execution_tree(getattr(arguments, "capture_root", None))
+    _validate_candidate_admin_credential(jobs)
+    _require_capture_budget_before_data_action(deadline, operation="attempt-recovery:reservation-admission", reservation=True)
+    segment_root, reservation = _reserve_attempt_recovery(
+        campaign_dir,
+        manifest=manifest,
+        candidate_id=candidate_id,
+        attempt_root=attempt_root,
+        original_attempt=original_attempt,
+        original_reservation=original_reservation,
+        recovery=recovery,
+        recovery_revision=recovery_revision,
+        baseline=baseline,
+        baseline_commit_sha256=str(commit["commit_sha256"]),
+        jobs=jobs,
+        source_jobs=source_jobs,
+        identity=identity,
+        lease=_lease,
+        deadline=deadline,
+    )
+    ledger_dir = _campaign_timing_ledger_dir(campaign_dir, manifest)
+    revision = _current_candidate_revision(campaign_dir, manifest)
+    previous_stage = _read_json(Path(previous_source["path"]), "前序 capture-candidate 阶段结果")
+    ledger_events: list[dict[str, Any]] = []
+    try:
+        with codex_upgrade_supervisor._timing_closeout_lock(ledger_dir):
+            ledger_events.extend(
+                _backfill_original_attempt_ledger_events(
+                    ledger_dir,
+                    attempt_id=attempt_id,
+                    live_request_count=int(previous_stage.get("live_request_count", 0) or 0),
+                )
+            )
+            ledger_events.append(
+                _append_attempt_recovery_ledger_event(
+                    ledger_dir,
+                    event_type="attempt_recovery_started",
+                    attempt_id=attempt_id,
+                    recovery_revision=recovery_revision,
+                    candidate_id=candidate_id,
+                    revision=revision,
+                    root_cause_id=str(recovery["root_cause_id"]),
+                    next_action=f"执行恢复段 {recovery_revision}：{'、'.join(execute_ids)}",
+                )
+            )
+    except (codex_upgrade_timing_ledger.TimingLedgerError, codex_upgrade_supervisor.SupervisorError) as error:
+        raise ConfigurationError(f"UpgradeTimingLedger 拒绝登记恢复段开段：{error}") from error
+
+    log_root = ensure_private_directory(segment_root / "logs", campaign_dir)
+    evidence_root = ensure_private_directory(segment_root / "evidence", campaign_dir)
+    environment_root = ensure_private_directory(evidence_root / "environment", evidence_root)
+    heartbeat_path = segment_root / "watchdog-heartbeat.json"
+    checkpoint_store = _job_checkpoint_store(segment_root)
+    _write_attempt_heartbeat(heartbeat_path, deadline, operation="attempt-recovery:reserved", force=True, attempt_root=segment_root)
+
+    def heartbeat(operation: str) -> None:
+        _write_attempt_heartbeat(heartbeat_path, deadline, operation=operation, attempt_root=segment_root)
+
+    results: list[dict[str, Any]] = []
+    execution_error: BaseException | None = None
+    restoration_error: BaseException | None = None
+    before_manifest: dict[str, Any] | None = None
+    after_manifest: dict[str, Any] | None = None
+    restoration_path: Path | None = None
+    restoration_receipt: dict[str, Any] | None = None
+    arm64_before_path: Path | None = None
+    arm64_before_receipt: dict[str, Any] | None = None
+    arm64_after_path: Path | None = None
+    arm64_after_receipt: dict[str, Any] | None = None
+    timeout_checkpoint_path: Path | None = None
+    try:
+        deadline.check("attempt-recovery:before")
+        arm64_before_path, arm64_before_receipt = _invoke_with_optional_deadline(
+            _capture_arm64_environment_receipt,
+            environment_root / "arm64-before",
+            phase="attempt_before",
+            subject_id=f"{attempt_id}.{recovery_revision}",
+            deadline=deadline,
+            heartbeat=heartbeat,
+        )
+        deadline.check("attempt-recovery:before-probe")
+        before_manifest = _invoke_with_optional_deadline(
+            _probe_capture_environment, manifest, environment_root / "before", "before", deadline=deadline, heartbeat=heartbeat
+        )
+        scenario_context = ScenarioReceiptContext(
+            campaign_id=str(manifest["campaign_id"]),
+            attempt_id=f"{attempt_id}.{recovery_revision}",
+            run_nonce=str(reservation["run_nonce"]),
+            evidence_root=evidence_root,
+            campaign_dir=campaign_dir,
+        )
+        for job in jobs:
+            _require_capture_budget_before_data_action(deadline, operation=f"job:{job.job_id}:admission")
+            heartbeat(f"job:{job.job_id}:start")
+            result = _run_job_with_retry(
+                job, log_root, scenario_context, identity=identity, tool_identity=tool_identity, deadline=deadline, heartbeat=heartbeat
+            )
+            results.append(result)
+            records = checkpoint_store.records()
+            checkpoint_store.append(
+                {
+                    "checkpoint_schema_version": JOB_CHECKPOINT_SCHEMA,
+                    "campaign_id": manifest["campaign_id"],
+                    "phase": "candidate",
+                    "attempt_id": f"{attempt_id}.{recovery_revision}",
+                    "run_nonce": reservation["run_nonce"],
+                    "item_id": job.job_id,
+                    "status": "complete" if result.get("status") == "complete" else "failed",
+                    "disposition": result.get("disposition", "executed"),
+                    "result_sha256": incremental_recovery.digest(result),
+                    "result_key": result.get("incremental_result_key"),
+                    "result": result,
+                    "previous_checkpoint_sha256": records[-1].get("checkpoint_sha256") if records else None,
+                }
+            )
+            _secure_write_json_once(segment_root / f"job-{job.job_id}.json", result)
+            _write_attempt_heartbeat(
+                heartbeat_path, deadline, operation=f"job:{job.job_id}:complete", last_completed_job_id=job.job_id, force=True, attempt_root=segment_root
+            )
+            if result.get("error") == CAMPAIGN_GLOBAL_PRECONDITION_ERROR:
+                raise CampaignGlobalPreconditionError("Campaign 全局前置条件失败，已停止恢复段后续 Job。")
+    except BaseException as error:
+        if execution_error is None:
+            execution_error = error
+    finally:
+        try:
+            if not deadline.expired:
+                deadline.check("attempt-recovery:after-probe")
+                after_manifest = _invoke_with_optional_deadline(
+                    _probe_capture_environment, manifest, environment_root / "after", "after", deadline=deadline, heartbeat=heartbeat
+                )
+                deadline.check("attempt-recovery:restoration")
+                restoration_path, restoration_receipt = _finalize_attempt_restoration(
+                    evidence_root, phase="candidate", candidate_id=candidate_id
+                )
+        except BaseException as error:
+            restoration_error = error
+        try:
+            if not deadline.expired:
+                deadline.check("attempt-recovery:arm64-after")
+                arm64_after_path, arm64_after_receipt = _invoke_with_optional_deadline(
+                    _capture_arm64_environment_receipt,
+                    environment_root / "arm64-after",
+                    phase="attempt_after",
+                    subject_id=f"{attempt_id}.{recovery_revision}",
+                    deadline=deadline,
+                    heartbeat=heartbeat,
+                )
+                if (
+                    arm64_before_receipt is None
+                    or arm64_before_receipt.get("continuity_identity_sha256") != arm64_after_receipt.get("continuity_identity_sha256")
+                ):
+                    raise ConfigurationError("恢复段前后 ARM64 网络或运行身份漂移。")
+        except BaseException as error:
+            if restoration_error is None:
+                restoration_error = error
+
+    if isinstance(execution_error, incremental_recovery.WallClockTimeoutError) or deadline.expired:
+        try:
+            _write_attempt_heartbeat(heartbeat_path, deadline, operation="attempt-recovery:timeout", force=True, allow_expired=True, attempt_root=segment_root)
+            timeout_checkpoint_path = _write_timeout_checkpoint(
+                segment_root,
+                deadline,
+                operation=(
+                    execution_error.operation
+                    if isinstance(execution_error, incremental_recovery.WallClockTimeoutError)
+                    else "attempt-recovery:deadline"
+                ),
+                last_completed_job_id=getattr(deadline, "last_completed_job_id", None),
+            )
+        except BaseException as error:
+            if execution_error is None:
+                execution_error = error
+
+    result_by_id = {item.get("id"): item for item in results if isinstance(item, dict)}
+    required_jobs_ok = execution_error is None and all(
+        result_by_id.get(job.job_id, {}).get("status") == "complete"
+        and result_by_id[job.job_id].get("execution_sha256") == _job_execution_sha256(job)
+        for job in jobs
+    )
+    try:
+        job_evidence_roots = _deduplicate_evidence_roots(
+            (Path(root) for item in results for root in item.get("evidence_roots", [])),
+            require_nonempty=required_jobs_ok,
+        )
+    except ConfigurationError as error:
+        if execution_error is None:
+            execution_error = error
+        required_jobs_ok = False
+        job_evidence_roots = []
+    evidence_roots = _deduplicate_evidence_roots([*job_evidence_roots, evidence_root, log_root], require_nonempty=False)
+    environment: dict[str, Any] = {
+        "evidence_root": str(evidence_root.resolve(strict=True)),
+        "before_probe": _attempt_evidence_binding(evidence_root, environment_root / "before" / "probe-manifest.json") if before_manifest is not None else None,
+        "after_probe": _attempt_evidence_binding(evidence_root, environment_root / "after" / "probe-manifest.json") if after_manifest is not None else None,
+        "restoration_report": _attempt_evidence_binding(evidence_root, restoration_path) if restoration_path is not None and restoration_receipt is not None else None,
+        "arm64_before_receipt": _attempt_evidence_binding(evidence_root, arm64_before_path) if arm64_before_path is not None and arm64_before_receipt is not None else None,
+        "arm64_after_receipt": _attempt_evidence_binding(evidence_root, arm64_after_path) if arm64_after_path is not None and arm64_after_receipt is not None else None,
+    }
+    contamination: dict[str, Any] | None = None
+    if before_manifest is not None and restoration_error is not None:
+        contamination = {
+            "schema_version": "codex-upgrade-environment-contamination/v1",
+            "phase": "candidate",
+            "candidate_id": candidate_id,
+            "attempt_id": f"{attempt_id}.{recovery_revision}",
+            "reason": f"恢复段独立 after 探针或恢复 finalizer 未通过：{type(restoration_error).__name__}",
+        }
+    checkpoint_records = checkpoint_store.records()
+    job_checkpoint = {
+        "schema_version": JOB_CHECKPOINT_SCHEMA,
+        "campaign_id": manifest["campaign_id"],
+        "phase": "candidate",
+        "attempt_id": f"{attempt_id}.{recovery_revision}",
+        "run_nonce": reservation["run_nonce"],
+        "path": str(checkpoint_store.root.resolve(strict=True).relative_to(campaign_dir.resolve(strict=True))),
+        "record_count": len(checkpoint_records),
+        "last_sequence": checkpoint_records[-1].get("checkpoint_sequence") if checkpoint_records else None,
+        "last_sha256": checkpoint_records[-1].get("checkpoint_sha256") if checkpoint_records else None,
+    }
+    watchdog = {
+        "schema_version": WATCHDOG_HEARTBEAT_SCHEMA,
+        "budget_seconds": deadline.budget_seconds,
+        "heartbeat_seconds": getattr(deadline, "heartbeat_seconds", DEFAULT_HEARTBEAT_SECONDS),
+        "elapsed_seconds": round(deadline.elapsed_seconds, 3),
+        "remaining_seconds": round(deadline.remaining_seconds, 3),
+        "heartbeat": (
+            {"path": str(heartbeat_path.relative_to(campaign_dir)), "sha256": file_sha256(heartbeat_path), "bytes": heartbeat_path.stat().st_size}
+            if heartbeat_path.is_file() and not heartbeat_path.is_symlink()
+            else None
+        ),
+        "timeout_checkpoint": (
+            {"path": str(timeout_checkpoint_path.relative_to(campaign_dir)), "sha256": file_sha256(timeout_checkpoint_path), "bytes": timeout_checkpoint_path.stat().st_size}
+            if timeout_checkpoint_path is not None and timeout_checkpoint_path.is_file()
+            else None
+        ),
+        "last_completed_job_id": getattr(deadline, "last_completed_job_id", None),
+    }
+    failed_result_ids = _failed_job_ids(results)
+    status = (
+        "environment_contaminated"
+        if contamination is not None
+        else ATTEMPT_RECOVERY_SUCCESS_STATUS
+        if required_jobs_ok and not failed_result_ids and restoration_receipt is not None
+        else "failed"
+    )
+    evidence_permission_closeout: dict[str, Any] | None = None
+    evidence_permission_error: BaseException | None = None
+    try:
+        evidence_permission_closeout = _close_attempt_evidence_permissions(segment_root, evidence_roots)
+    except BaseException as error:
+        evidence_permission_error = error
+        if execution_error is None:
+            execution_error = error
+        if status != "environment_contaminated":
+            status = "failed"
+    summary = _write_attempt_recovery_summary(
+        campaign_dir,
+        segment_root,
+        reservation,
+        {
+            "campaign_id": manifest["campaign_id"],
+            "phase": "candidate",
+            "candidate_id": candidate_id,
+            "status": status,
+            "tool_components": tool_identity.get("components") if isinstance(tool_identity, Mapping) else None,
+            "identity": identity,
+            "execute_jobs": list(execute_ids),
+            "reuse_jobs": list(recovery["reuse_jobs"]),
+            "results": results,
+            "evidence_roots": [str(root) for root in evidence_roots],
+            "evidence_permission_closeout": evidence_permission_closeout,
+            "evidence_permission_error": (
+                {"type": type(evidence_permission_error).__name__, "message": str(evidence_permission_error)[:1000]}
+                if evidence_permission_error is not None
+                else None
+            ),
+            "environment": environment,
+            "watchdog": watchdog,
+            "job_checkpoint": job_checkpoint,
+            "ledger_events": ledger_events,
+            "execution_error": (
+                {"type": type(execution_error).__name__, "message": str(execution_error)[:1000]} if execution_error is not None else None
+            ),
+            "restoration_error": (
+                {"type": type(restoration_error).__name__, "message": str(restoration_error)[:1000]} if restoration_error is not None else None
+            ),
+            "next_gate": (
+                "account-sealed-candidate --attempt-recovery 后执行 capture-candidate seal --attempt-recovery（增量封存）。"
+                if status == ATTEMPT_RECOVERY_SUCCESS_STATUS
+                else "reconcile-attempt --recovery-revision 对账后按判定续跑或停线。"
+            ),
+        },
+    )
+    if status == ATTEMPT_RECOVERY_SUCCESS_STATUS:
+        try:
+            with codex_upgrade_supervisor._timing_closeout_lock(ledger_dir):
+                ledger_events.append(
+                    _append_attempt_recovery_ledger_event(
+                        ledger_dir,
+                        event_type="attempt_recovery_completed",
+                        attempt_id=attempt_id,
+                        recovery_revision=recovery_revision,
+                        candidate_id=candidate_id,
+                        revision=revision,
+                        live_request_count=0,
+                        next_action="恢复段完成；入账后增量封存",
+                    )
+                )
+        except (codex_upgrade_timing_ledger.TimingLedgerError, codex_upgrade_supervisor.SupervisorError) as error:
+            raise ConfigurationError(f"UpgradeTimingLedger 拒绝登记恢复段完成：{error}") from error
+    if contamination is not None:
+        try:
+            _secure_write_json_once(campaign_dir / "environment-contaminated.json", contamination)
+        except (ConfigurationError, OSError):
+            pass
+        raise RuntimeError(contamination["reason"])
+    if execution_error is not None:
+        raise execution_error
+    return {
+        "status": status,
+        "phase": "candidate",
+        "candidate_id": candidate_id,
+        "attempt_id": attempt_id,
+        "recovery_revision": recovery_revision,
+        "evaluation_baseline": baseline,
+        "segment": str(segment_root),
+        "attempt_recovery_digest": summary["attempt_recovery_digest"],
+        "run_nonce": reservation["run_nonce"],
+        "started_at_utc": reservation["started_at_utc"],
+        "execute_jobs": list(execute_ids),
+        "reuse_jobs": list(recovery["reuse_jobs"]),
+        "results": results,
+        "ledger_events": ledger_events,
+        "next_command": (
+            f"account-sealed-candidate --candidate-id {candidate_id} --attempt-recovery {recovery_revision}"
+            if status == ATTEMPT_RECOVERY_SUCCESS_STATUS
+            else f"reconcile-attempt --attempt-id {attempt_id} --recovery-revision {recovery_revision}"
+        ),
+    }
+
+
+
 def _run_capture_attempt(
     arguments: argparse.Namespace,
     phase: str,
@@ -34623,6 +44223,10 @@ def _run_capture_attempt(
     _deadline: incremental_recovery.WallClockDeadline | None = None,
 ) -> dict[str, Any]:
     """执行真实抓包，并以独立前后探针自动证明环境恢复。"""
+
+    # 改造 5 M2：恢复段入口（同 attempt 只补跑 execute_jobs），与普通 run 互斥。
+    if phase == "candidate" and getattr(arguments, "attempt_recovery", None):
+        return _run_attempt_recovery_segment(arguments, _lease=_lease, _manifest=_manifest, _deadline=_deadline)
 
     # main/resume 已经取得 Campaign lease 时，递归入口必须复用同一 owner；
     # 再次 acquire 会在同一进程内触发 flock 死锁/误报，并破坏单一 deadline。
@@ -34681,6 +44285,12 @@ def _run_capture_attempt(
     if phase == "official":
         _assert_initial_vc1_handoff_window(arguments.campaign_dir, manifest)
     if phase == "candidate":
+        _guard_candidate_revision_write(
+            arguments.campaign_dir,
+            manifest,
+            str(getattr(arguments, "candidate_id", "") or ""),
+            action="capture-candidate run",
+        )
         # 候选层运行坐标覆盖在这里一次性生效；后续 Job 模板、环境探针、二进制
         # 校验和容器身份都只读这份副本，run 与 seal 因此看到同一组坐标。
         manifest = _apply_candidate_runtime_override(
@@ -35454,23 +45064,12 @@ def _run_capture_attempt(
     ):
         # 计划阶段故意不触碰 Docker；只有 scope 与 transition 完全一致后，
         # 才冻结并重验当前运行容器身份。任何漂移都停线，不得混入旧 attempt。
-        verified_identity = _candidate_identity_for_run(
+        verified_identity = _candidate_identity_for_incremental_execution(
             arguments,
             manifest,
             classification or {},
-            verify_image=True,
-            source_tree_sha256_override=(
-                str(classification_candidate_reuse_context["identity"][
-                    "source_tree_sha256"
-                ])
-                if classification_candidate_reuse_context is not None
-                else None
-            ),
-            git_commit_override=(
-                str(classification_candidate_reuse_context["identity"]["git_commit"])
-                if classification_candidate_reuse_context is not None
-                else None
-            ),
+            candidate_build_receipt=candidate_build_receipt,
+            candidate_build_binding=candidate_build_binding,
             deadline=deadline,
         )
         if verified_identity != identity:
@@ -35486,25 +45085,51 @@ def _run_capture_attempt(
         )
 
     if phase == "candidate" and jobs:
-        # 辅助场景排在多个耗时 Job 之后；凭据缺失或即将过期必须在 reservation
-        # 和首个真实请求之前失败，不能等十几分钟后才发现。
-        _validate_candidate_admin_credential(planned_jobs)
+        # 只校验本轮实际执行集合：已完成并只读复用的 aux 不得再次要求凭据；
+        # aux 确实待执行时，凭据缺失或即将过期仍必须在 reservation 和首个
+        # 真实请求之前失败，不能等十几分钟后才发现。
+        _validate_candidate_admin_credential(jobs)
 
     _require_capture_budget_before_data_action(
         deadline,
         operation="attempt:reservation-admission",
         reservation=True,
     )
-    attempt_root, reservation = _reserve_capture_attempt(
-        campaign_dir,
-        phase=phase,
-        candidate_id=candidate_id,
-        identity=identity,
-        jobs=planned_jobs,
-        allow_failed_rerun=bool(getattr(arguments, "rerun_failed", False)),
-        deadline=deadline,
-        lease=_lease,
-    )
+    candidate_readiness_static_receipt: dict[str, Any] | None = None
+    if (
+        phase == "candidate"
+        and candidate_id is not None
+        and jobs
+        and _requires_complete_vc_artifacts(manifest)
+    ):
+        if candidate_build_binding is None:
+            raise ConfigurationError("Candidate 就绪门禁缺少 VC-4 构建收据绑定。")
+        (
+            attempt_root,
+            reservation,
+            candidate_readiness_static_receipt,
+        ) = _reserve_candidate_capture_attempt(
+            campaign_dir,
+            manifest=manifest,
+            candidate_id=candidate_id,
+            identity=identity,
+            jobs=planned_jobs,
+            build_receipt_binding=candidate_build_binding,
+            allow_failed_rerun=bool(getattr(arguments, "rerun_failed", False)),
+            deadline=deadline,
+            lease=_lease,
+        )
+    else:
+        attempt_root, reservation = _reserve_capture_attempt(
+            campaign_dir,
+            phase=phase,
+            candidate_id=candidate_id,
+            identity=identity,
+            jobs=planned_jobs,
+            allow_failed_rerun=bool(getattr(arguments, "rerun_failed", False)),
+            deadline=deadline,
+            lease=_lease,
+        )
     log_root = ensure_private_directory(attempt_root / "logs", campaign_dir)
     evidence_root = ensure_private_directory(
         attempt_root / "evidence", campaign_dir
@@ -35565,18 +45190,23 @@ def _run_capture_attempt(
             raise setup_error
         if checkpoint_store is None:
             raise ConfigurationError("metadata-only attempt 缺少 Job checkpoint 存储。")
-        source_evidence_roots = recovery_source_attempt.get("evidence_roots") if isinstance(
-            recovery_source_attempt, Mapping
-        ) else None
-        if (
-            not isinstance(source_evidence_roots, list)
-            or not source_evidence_roots
-            or any(
-                not isinstance(value, str) or not Path(value).is_absolute()
-                for value in source_evidence_roots
-            )
-        ):
-            raise ConfigurationError("metadata-only attempt 的来源证据根不完整。")
+        if not isinstance(recovery_source_attempt, Mapping):
+            raise ConfigurationError("metadata-only attempt 缺少来源 attempt。")
+        source_job_evidence_roots = _classification_candidate_job_evidence_roots(
+            recovery_source_attempt,
+            require_existing=True,
+        )
+        source_environment = recovery_source_attempt.get("environment")
+        if not isinstance(source_environment, Mapping):
+            raise ConfigurationError("metadata-only attempt 来源环境绑定不完整。")
+        try:
+            source_environment_root = Path(
+                str(source_environment.get("evidence_root", ""))
+            ).resolve(strict=True)
+        except (OSError, RuntimeError) as error:
+            raise ConfigurationError(
+                "metadata-only attempt 来源环境根不可信。"
+            ) from error
         _write_attempt_heartbeat(
             heartbeat_path,
             deadline,
@@ -35619,19 +45249,18 @@ def _run_capture_attempt(
         }
         metadata_evidence_roots = _deduplicate_evidence_roots(
             [
-                *(Path(value) for value in source_evidence_roots),
+                *source_job_evidence_roots,
                 evidence_root,
             ],
             require_nonempty=True,
         )
-        metadata_environment = {
-            "evidence_root": str(evidence_root.resolve(strict=True)),
-            "before_probe": None,
-            "after_probe": None,
-            "restoration_report": None,
-            "arm64_before_receipt": None,
-            "arm64_after_receipt": None,
-        }
+        metadata_environment = _materialize_metadata_only_environment_projection(
+            source_environment_root,
+            evidence_root,
+            source_environment,
+            source_attempt_id=str(recovery_source_attempt.get("attempt_id", "")),
+            candidate_id=str(candidate_id),
+        )
         metadata_permission_closeout: dict[str, Any] | None = None
         metadata_permission_error: BaseException | None = None
         try:
@@ -35802,6 +45431,35 @@ def _run_capture_attempt(
                     deadline,
                     operation=f"job:{job.job_id}:admission",
                 )
+                if candidate_readiness_static_receipt is not None:
+                    if candidate_id is None:
+                        raise ConfigurationError(
+                            "Candidate Job 就绪复核缺少 candidate-id。"
+                        )
+                    deadline.check(f"job:{job.job_id}:readiness-recheck")
+                    _write_attempt_heartbeat(
+                        heartbeat_path,
+                        deadline,
+                        operation=f"job:{job.job_id}:readiness-recheck",
+                        attempt_root=attempt_root,
+                    )
+                    fresh_checks = _candidate_readiness_checks(
+                        manifest=manifest,
+                        candidate_id=candidate_id,
+                        identity=identity,
+                        build_receipt_sha256=str(
+                            candidate_readiness_static_receipt[
+                                "build_receipt_sha256"
+                            ]
+                        ),
+                        jobs=planned_jobs,
+                    )
+                    codex_upgrade_candidate_readiness.write_job_recheck(
+                        environment_root / "candidate-readiness-rechecks",
+                        initial=candidate_readiness_static_receipt,
+                        fresh_checks=fresh_checks,
+                        job_id=job.job_id,
+                    )
                 _write_attempt_heartbeat(
                     heartbeat_path,
                     deadline,
@@ -36201,6 +45859,11 @@ def _run_capture_attempt(
             "binary_verification": binary_verification,
             "watchdog": watchdog,
             "job_checkpoint": job_checkpoint,
+            "failure_observations": (
+                list(getattr(execution_error, "failure_observations", []) or [])
+                if execution_error is not None
+                else []
+            ),
             "execution_error": (
                 {
                     "type": type(execution_error).__name__,
@@ -36498,6 +46161,9 @@ def _seal_capture_attempt(
 ) -> dict[str, Any]:
     """从不可变 attempt 与机器收据构建预览，并经摘要复核后封存阶段。"""
 
+    # 改造 5 M2：恢复段增量封存（b<K> 的候选阶段结果）与普通 seal 互斥。
+    if phase == "candidate" and getattr(arguments, "attempt_recovery", None):
+        return _seal_attempt_recovery_segment(arguments)
     campaign_dir = arguments.campaign_dir
     manifest = _require_formal_campaign(campaign_dir)
     attempt_id = getattr(arguments, "attempt_id", None)
@@ -36505,6 +46171,7 @@ def _seal_capture_attempt(
         raise ConfigurationError("seal 必须提供 --attempt-id。")
     candidate_id = arguments.candidate_id if phase == "candidate" else None
     if candidate_id:
+        _guard_candidate_revision_write(campaign_dir, manifest, str(candidate_id), action="capture-candidate seal")
         manifest = _apply_candidate_runtime_override(campaign_dir, manifest, candidate_id)
     attempt_root, attempt = _load_capture_attempt(
         campaign_dir, phase, candidate_id, attempt_id
@@ -36718,31 +46385,43 @@ def _seal_capture_attempt(
     metadata_source_evidence_root: Path | None = None
     if metadata_source is not None:
         _source_dir, _source_root, source_attempt, _transition = metadata_source
-        if any(
-            environment.get(name) is not None
-            for name in (
-                "before_probe",
-                "after_probe",
-                "restoration_report",
-                "arm64_before_receipt",
-                "arm64_after_receipt",
-            )
-        ):
-            raise ConfigurationError("metadata-only attempt 不得伪造本轮环境探针。")
         source_environment = source_attempt.get("environment")
         if not isinstance(source_environment, dict):
             raise ConfigurationError("metadata-only attempt 来源缺少环境恢复绑定。")
-        restoration_environment = source_environment
         restoration_subject_id = str(source_attempt.get("attempt_id", ""))
-        restoration_evidence_root = Path(
-            str(source_environment.get("evidence_root", ""))
+        environment_roles = (
+            "before_probe",
+            "after_probe",
+            "restoration_report",
+            "arm64_before_receipt",
+            "arm64_after_receipt",
         )
-        if (
-            not restoration_evidence_root.is_absolute()
-            or restoration_evidence_root.resolve(strict=True) not in roots
-        ):
-            raise ConfigurationError("metadata-only attempt 来源环境根未纳入 seal。")
-        metadata_source_evidence_root = restoration_evidence_root
+        if metadata_source_kind == "classification_candidate":
+            if any(
+                not isinstance(environment.get(name), Mapping)
+                for name in environment_roles
+            ):
+                raise ConfigurationError(
+                    "Candidate metadata-only attempt 缺少新 evidence root 内的完整环境投影。"
+                )
+            # before/after 与 ARM64 facts/receipt 已在 run 阶段逐绑定投影，
+            # restoration-report 也已针对当前绝对 evidence root 重建。ARM64
+            # 收据的 subject_id 保持来源 attempt，首次 seal 则真实采集 client-after。
+            restoration_environment = environment
+            restoration_evidence_root = attempt_evidence_root
+        else:
+            if any(environment.get(name) is not None for name in environment_roles):
+                raise ConfigurationError("官方 metadata-only attempt 不得伪造本轮环境探针。")
+            restoration_environment = source_environment
+            restoration_evidence_root = Path(
+                str(source_environment.get("evidence_root", ""))
+            )
+            if (
+                not restoration_evidence_root.is_absolute()
+                or restoration_evidence_root.resolve(strict=True) not in roots
+            ):
+                raise ConfigurationError("metadata-only attempt 来源环境根未纳入 seal。")
+            metadata_source_evidence_root = restoration_evidence_root
     arm64_receipts: dict[str, dict[str, Any]] = {}
     for role, expected_phase in (
         ("arm64_before_receipt", "attempt_before"),
@@ -36959,12 +46638,13 @@ def _seal_capture_attempt(
                 roots,
             )
         except codex_upgrade_evidence_manifest.EvidenceManifestError as error:
-            raise ConfigurationError(str(error)) from error
+            raise _evidence_manifest_configuration_error(error) from error
     else:
         if metadata_source is not None and metadata_source_kind == "classification_candidate":
             _source_dir, source_root, source_attempt, _transition = metadata_source
-            source_roots = _deduplicate_evidence_roots(
-                Path(value) for value in source_attempt.get("evidence_roots", [])
+            source_roots = _classification_candidate_job_evidence_roots(
+                source_attempt,
+                require_existing=True,
             )
             source_manifest_path = _evidence_manifest_path(source_root)
             if not source_manifest_path.is_file() or source_manifest_path.is_symlink():
@@ -37005,7 +46685,7 @@ def _seal_capture_attempt(
                     roots,
                 )
             except codex_upgrade_evidence_manifest.EvidenceManifestError as error:
-                raise ConfigurationError(str(error)) from error
+                raise _evidence_manifest_configuration_error(error) from error
         else:
             try:
                 evidence_manifest = (
@@ -38382,6 +48062,119 @@ def _canonical_file_binding(
     return {"path": relative, "sha256": file_sha256(resolved), "bytes": size}
 
 
+# canonical 导入批准摘要只散列 approval_projection：完整 canonical subject 减去
+# 本次父 run 的易变时间坐标。campaign-run 每个批次父 run 的 campaign_started_at_epoch
+# 都是本批次启动时间，budget_seconds 又由它派生，两者随父 run 变化；原始绝对
+# deadline 由 Campaign 总计划冻结、所有批次相同，保留在摘要内。这样离线预览、
+# 父 run B 批准、父 run C 幂等重放得到同一 review_sha256。
+CANONICAL_APPROVAL_VOLATILE_DEADLINE_FIELDS = frozenset(
+    {"started_at_epoch", "budget_seconds"}
+)
+
+
+def _canonical_approval_projection(subject: Mapping[str, Any]) -> dict[str, Any]:
+    """返回 canonical subject 的批准投影：减法定义，新增字段默认进入摘要。"""
+
+    projection = json.loads(json.dumps(dict(subject), ensure_ascii=False))
+    deadline = projection.get("deadline")
+    if not isinstance(deadline, Mapping) or "deadline_at_epoch" not in deadline:
+        raise ConfigurationError("canonical subject 缺少原始 deadline。")
+    projection["deadline"] = {
+        key: value
+        for key, value in deadline.items()
+        if key not in CANONICAL_APPROVAL_VOLATILE_DEADLINE_FIELDS
+    }
+    return projection
+
+
+def _canonical_time_anchor(
+    arguments: argparse.Namespace,
+    campaign_dir: Path,
+) -> dict[str, Any]:
+    """解析 canonical 导入的时间锚与父 run 事实。
+
+    来源按优先级：显式 ``--supervisor-run-dir``（campaign-run 下必须就是派发本
+    命令的父 run）；campaign-run 父上下文（与 state.json 交叉验证 Campaign、
+    phase、owner nonce 与 deadline）；都没有时只允许离线预览，deadline 取
+    Campaign 总计划冻结的 original_deadline_at_utc。有总计划的 Campaign 无论
+    来源如何，deadline 都必须与总计划一致。
+    """
+
+    explicit = getattr(arguments, "supervisor_run_dir", None)
+    in_campaign_run = (
+        os.environ.get(codex_upgrade_supervisor.CAMPAIGN_RUN_CONTEXT_ENV) == "1"
+    )
+    raw_env_run_dir = os.environ.get(codex_upgrade_supervisor.CAMPAIGN_RUN_DIR_ENV)
+    plan_deadline_utc = _campaign_plan_deadline(campaign_dir)
+    plan_deadline_epoch: float | None = None
+    if plan_deadline_utc is not None:
+        try:
+            plan_deadline_epoch = datetime.fromisoformat(
+                plan_deadline_utc.replace("Z", "+00:00")
+            ).timestamp()
+        except ValueError as error:
+            raise ConfigurationError("Campaign 总计划的原始 deadline 非法。") from error
+    run_dir: Path | None
+    if explicit is not None:
+        run_dir = Path(explicit)
+        source = "explicit"
+        if in_campaign_run and (
+            not raw_env_run_dir
+            or not run_dir.is_absolute()
+            or run_dir.is_symlink()
+            or not run_dir.is_dir()
+            or Path(raw_env_run_dir).resolve() != run_dir.resolve()
+        ):
+            raise ConfigurationError(
+                "campaign-run 下 canonical 时间锚必须是派发本命令的父监督器 run 目录。"
+            )
+    elif in_campaign_run:
+        if not raw_env_run_dir:
+            raise ConfigurationError("campaign-run 上下文缺少父 run_dir。")
+        run_dir = Path(raw_env_run_dir)
+        source = "campaign-run"
+    else:
+        run_dir = None
+        source = "campaign-plan"
+    run_facts: dict[str, Any] | None = None
+    if run_dir is not None:
+        deadline: dict[str, Any] = dict(_canonical_supervisor_deadline(run_dir))
+        state = _read_json(run_dir / "state.json", "父监督器状态")
+        if in_campaign_run and (
+            state.get("campaign_id")
+            != os.environ.get(codex_upgrade_supervisor.CAMPAIGN_RUN_ID_ENV)
+            or state.get("phase")
+            != os.environ.get(codex_upgrade_supervisor.CAMPAIGN_RUN_PHASE_ENV)
+            or state.get("owner_nonce")
+            != os.environ.get(codex_upgrade_supervisor.CAMPAIGN_RUN_OWNER_NONCE_ENV)
+            or str(state.get("deadline_at_epoch"))
+            != os.environ.get(codex_upgrade_supervisor.CAMPAIGN_RUN_DEADLINE_ENV)
+        ):
+            raise ConfigurationError("campaign-run 父监督器上下文与 state.json 身份不一致。")
+        owner_nonce = state.get("owner_nonce")
+        if not isinstance(owner_nonce, str) or not owner_nonce:
+            raise ConfigurationError("父监督器 state.json 缺少 owner nonce。")
+        run_facts = {
+            "supervisor_run_dir": str(run_dir),
+            "owner_nonce": owner_nonce,
+        }
+    else:
+        if plan_deadline_epoch is None:
+            raise ConfigurationError(
+                "离线 canonical 预览需要 Campaign 总计划冻结的原始 deadline，"
+                "或显式 --supervisor-run-dir。"
+            )
+        deadline = {"deadline_at_epoch": plan_deadline_epoch}
+    if (
+        plan_deadline_epoch is not None
+        and abs(float(deadline["deadline_at_epoch"]) - plan_deadline_epoch) > 0.001
+    ):
+        raise ConfigurationError(
+            "canonical 时间锚的 deadline 与 Campaign 总计划冻结的原始 deadline 不一致。"
+        )
+    return {"deadline": deadline, "run": run_facts, "source": source}
+
+
 def _canonical_supervisor_deadline(
     supervisor_run_dir: Path,
 ) -> dict[str, float]:
@@ -38763,14 +48556,14 @@ def _canonical_import_verified_vc5_subject(
         or build_path.stat().st_size != build_reference.get("bytes")
     ):
         raise ConfigurationError("AcceptanceFact 的 VC-4 构建收据摘要漂移。")
-    try:
-        build_receipt = codex_upgrade_vc_artifacts.validate_candidate_build_receipt(
-            _read_json(build_path, "Candidate 构建收据")
-        )
-    except codex_upgrade_vc_artifacts.VCArtifactError as error:
-        raise ConfigurationError(str(error)) from error
+    build_receipt, replayed_build_reference = _replay_candidate_build_receipt(
+        campaign_dir,
+        manifest,
+        candidate_id,
+        build_path,
+    )
     if (
-        build_receipt.get("campaign_id") != manifest.get("campaign_id")
+        replayed_build_reference != build_reference
         or build_receipt.get("candidate_id") != candidate_id
         or build_receipt.get("target_version") != manifest.get("target_version")
         or candidate.get("identity", {}).get("build_receipt") != build_reference
@@ -38856,7 +48649,7 @@ def _canonical_import_verified_vc5_subject(
         },
         "items": sorted(items, key=lambda item: item["item_id"]),
         "evidence_manifest": evidence_manifest,
-        "deadline": _canonical_supervisor_deadline(arguments.supervisor_run_dir),
+        "deadline": _canonical_time_anchor(arguments, campaign_dir)["deadline"],
         "source": {
             "kind": "native",
             "legacy_object_types": [],
@@ -38904,6 +48697,9 @@ def _canonical_import_subject(arguments: argparse.Namespace) -> dict[str, Any]:
         manifest = _require_formal_campaign(campaign_dir)
         if arguments.phase != "VC-5":
             raise ConfigurationError("0.154.0 起 canonical-import 必须固定使用 phase=VC-5。")
+        _require_candidate_in_current_revision(
+            campaign_dir, manifest, str(arguments.candidate_id), action="canonical-import"
+        )
         return _canonical_import_verified_vc5_subject(
             arguments,
             manifest,
@@ -39218,7 +49014,7 @@ def _canonical_import_subject(arguments: argparse.Namespace) -> dict[str, Any]:
         },
         "items": sorted(items, key=lambda item: item["item_id"]),
         "evidence_manifest": evidence_manifest,
-        "deadline": _canonical_supervisor_deadline(arguments.supervisor_run_dir),
+        "deadline": _canonical_time_anchor(arguments, campaign_dir)["deadline"],
         "source": {
             "kind": source_kind,
             "legacy_object_types": legacy_types,
@@ -39232,12 +49028,15 @@ def import_canonical_checkpoint(arguments: argparse.Namespace) -> dict[str, Any]
     """预览或封存一次性初始化；执行过程中不发请求、不扫证据。"""
 
     subject = _canonical_import_subject(arguments)
-    review_sha256 = _fingerprint(subject)
+    review_sha256 = _fingerprint(_canonical_approval_projection(subject))
     summary = {
         **subject["migration"],
         **subject["plan"],
         "source_kind": subject["source"]["kind"],
         "review_sha256": review_sha256,
+        "approval_projection_excluded": sorted(
+            f"deadline.{field}" for field in CANONICAL_APPROVAL_VOLATILE_DEADLINE_FIELDS
+        ),
         "scanned_bytes": 0,
         "live_request_count": 0,
     }
@@ -39245,6 +49044,20 @@ def import_canonical_checkpoint(arguments: argparse.Namespace) -> dict[str, Any]
         return {"status": "approval_required", **summary}
     if arguments.approve_import_sha256 != review_sha256:
         raise ConfigurationError("canonical 导入批准摘要不匹配。")
+    anchor = _canonical_time_anchor(arguments, arguments.campaign_dir)
+    if anchor["run"] is None:
+        raise ConfigurationError(
+            "canonical 导入批准必须由 campaign-run 父监督器派发，或显式给出 --supervisor-run-dir。"
+        )
+    # 批准写入的 checkpoint 记录本次父 run 的完整时间坐标（运行事实）；它们不在
+    # 批准摘要内，因此换一个父 run 重放同一批准仍然幂等。
+    subject = {**subject, "deadline": dict(anchor["deadline"])}
+    approval_run = {
+        **anchor["run"],
+        "started_at_epoch": subject["deadline"]["started_at_epoch"],
+        "budget_seconds": subject["deadline"]["budget_seconds"],
+        "deadline_at_epoch": subject["deadline"]["deadline_at_epoch"],
+    }
 
     canonical_root = arguments.campaign_dir / CANONICAL_DIRECTORY
     ensure_private_directory(canonical_root, arguments.campaign_dir)
@@ -39275,7 +49088,9 @@ def import_canonical_checkpoint(arguments: argparse.Namespace) -> dict[str, Any]
                 "recorded_at_utc",
             }
         }
-        if _fingerprint(unsigned_existing) != review_sha256:
+        # 幂等恢复：从既有 checkpoint 重建同一 approval_projection 再比较，
+        # 首个批准 run 的 started_at／budget 只留在 checkpoint 的运行事实里。
+        if _fingerprint(_canonical_approval_projection(unsigned_existing)) != review_sha256:
             raise ConfigurationError("canonical checkpoint 已存在且导入主题不同。")
         checkpoint = existing
     receipt = {
@@ -39283,6 +49098,7 @@ def import_canonical_checkpoint(arguments: argparse.Namespace) -> dict[str, Any]
         "status": "complete",
         "review_sha256": review_sha256,
         "imported_at_utc": checkpoint["recorded_at_utc"],
+        "approval_run": approval_run,
         "checkpoint": {
             "path": (
                 Path(CANONICAL_CHECKPOINT_DIRECTORY)
@@ -39295,8 +49111,14 @@ def import_canonical_checkpoint(arguments: argparse.Namespace) -> dict[str, Any]
         "live_request_count": 0,
     }
     if receipt_path.exists():
-        if _read_json(receipt_path, "canonical 导入收据") != receipt:
+        existing_receipt = _read_json(receipt_path, "canonical 导入收据")
+        # 导入收据 write-once：只允许后续父 run 幂等重放同一批准，approval_run
+        # 永远记录首个批准 run，不被重放改写。
+        if {key: value for key, value in existing_receipt.items() if key != "approval_run"} != {
+            key: value for key, value in receipt.items() if key != "approval_run"
+        }:
             raise ConfigurationError("canonical 导入收据已经存在且内容不同。")
+        receipt = existing_receipt
     else:
         _secure_write_json_once(receipt_path, receipt)
     return {"status": "complete", **summary, "checkpoint": receipt["checkpoint"]}
@@ -39372,7 +49194,9 @@ def _ensure_production_vc5_completion(
         raise ConfigurationError("生产 VC-5 完成器只接受 production_replacement。")
     candidate_id = str(campaign.get("candidate_id", ""))
     attempt_id = str(campaign.get("attempt_id", ""))
-    existing_checkpoint = _vc_checkpoint_path(campaign_dir, "VC-5")
+    existing_checkpoint = _vc_checkpoint_path(
+        campaign_dir, "VC-5", revision=_current_candidate_revision(campaign_dir, manifest)
+    )
     if existing_checkpoint.exists() or existing_checkpoint.is_symlink():
         return _replay_vc_completion(
             campaign_dir,
@@ -40261,6 +50085,7 @@ def deliver_candidate(arguments: argparse.Namespace) -> dict[str, Any]:
         str(arguments.attempt_id)
     ):
         raise ConfigurationError("Candidate 交付的 candidate-id 或 attempt-id 非法。")
+    _require_candidate_in_current_revision(campaign_dir, manifest, candidate_id, action="deliver-candidate")
     candidate = _load_stage_result(
         campaign_dir,
         "capture-candidate",
@@ -41282,6 +51107,9 @@ def plan_candidate_gates(arguments: argparse.Namespace) -> dict[str, Any]:
         raise ConfigurationError("--candidate-id 格式非法。")
     if campaign_status(campaign_dir).get("status") != "profile_approved":
         raise ConfigurationError("门禁执行计划只能从 profile_approved 状态生成。")
+    _require_candidate_in_current_revision(
+        campaign_dir, manifest, str(arguments.candidate_id), action="plan-candidate-gates"
+    )
     source_root = arguments.candidate_source
     if not source_root.is_absolute() or source_root.is_symlink() or not source_root.is_dir():
         raise ConfigurationError("--candidate-source 必须是可信绝对目录。")
@@ -41355,6 +51183,11 @@ def record_candidate_build(arguments: argparse.Namespace) -> dict[str, Any]:
         raise ConfigurationError("Candidate 构建收据只能从 profile_approved 状态生成。")
     if _active_unsealed_attempts(campaign_dir, "candidate"):
         raise ConfigurationError("VC-4 已出现 Candidate attempt，禁止补写构建收据。")
+    # 改造 2：候选必须属于当前 active revision；有 revision 记录时在同一事务内执行
+    # revision-seal（VC-3 字节一致 + r≥2 同一性变化证明）。历史隐含 r1 不追溯。
+    revision, revision_record = _require_candidate_in_current_revision(
+        campaign_dir, manifest, candidate_id, action="record-candidate-build"
+    )
 
     source_root = arguments.candidate_source
     if not source_root.is_absolute() or source_root.is_symlink() or not source_root.is_dir():
@@ -41374,6 +51207,48 @@ def record_candidate_build(arguments: argparse.Namespace) -> dict[str, Any]:
         arguments.build_parameters,
         "Candidate 构建参数",
     )
+    build_tree = arguments.build_tree
+    docker_context = arguments.docker_context
+    frontend_dist_source = arguments.frontend_dist_source
+    for value, label in (
+        (build_tree, "--build-tree"),
+        (docker_context, "--docker-context"),
+        (frontend_dist_source, "--frontend-dist-source"),
+    ):
+        if not value.is_absolute() or value.is_symlink() or not value.is_dir():
+            raise ConfigurationError(f"{label} 必须是可信绝对目录。")
+    build_tree = build_tree.resolve(strict=True)
+    docker_context = docker_context.resolve(strict=True)
+    frontend_dist_source = frontend_dist_source.resolve(strict=True)
+    build_roots = (source_root, build_tree, docker_context, frontend_dist_source)
+    if len(set(build_roots)) != len(build_roots) or any(
+        left.is_relative_to(right) or right.is_relative_to(left)
+        for index, left in enumerate(build_roots)
+        for right in build_roots[index + 1 :]
+    ):
+        raise ConfigurationError(
+            "源码树、build tree、Docker context 与原始 dist 必须是互不嵌套的独立目录。"
+        )
+    binary_path = Path(binary_binding["path"])
+    if stat.S_IMODE(binary_path.stat().st_mode) != 0o755:
+        raise ConfigurationError("Candidate 二进制必须严格为 0755。")
+    try:
+        build_parameters = codex_upgrade_candidate_build.validate_build_parameters(
+            build_parameters,
+            candidate_id=candidate_id,
+            source_root=source_root,
+            git_commit=git_commit,
+            binary_path=binary_path,
+            binary_sha256=binary_binding["sha256"],
+            binary_bytes=binary_binding["bytes"],
+            build_tree=build_tree,
+            docker_context=docker_context,
+            frontend_dist_source=frontend_dist_source,
+            target_architecture=str(arguments.target_architecture),
+            image_id=str(arguments.candidate_image_id),
+        )
+    except (OSError, codex_upgrade_candidate_build.CandidateBuildError) as error:
+        raise ConfigurationError(f"Candidate 严格构建参数未通过：{error}") from error
     catalog_root = _path_in_candidate_source(
         arguments.catalog_stage_dir,
         source_root,
@@ -41384,6 +51259,15 @@ def record_candidate_build(arguments: argparse.Namespace) -> dict[str, Any]:
     catalog_receipt_path = catalog_root / "catalog-stage-receipt.json"
     catalog_receipt = _read_json(catalog_receipt_path, "候选 Catalog stage 收据")
     _verify_catalog_stage_output(catalog_root, catalog_receipt)
+    if revision_record is not None:
+        # revision-seal 第 2 步：候选树内 Catalog stage 收据必须与 revision 绑定的
+        # Campaign 级 VC-3 阶段收据逐字节相同；不一致属于规则分类或目标画像变化。
+        expected_vc3_sha256 = str(revision_record["vc3_stage_receipt"]["sha256"])
+        if file_sha256(catalog_receipt_path) != expected_vc3_sha256:
+            raise ConfigurationError(
+                "revision-seal 拒绝：候选树内 catalog-stage-receipt.json 与 Campaign VC-3 阶段收据"
+                "不一致；这属于规则分类或目标画像变化，按 §5.3.4 建立后继 Campaign。"
+            )
     source_transition, source_transition_binding = _external_json_object(
         arguments.source_transition,
         "Candidate source transition",
@@ -41500,6 +51384,63 @@ def record_candidate_build(arguments: argparse.Namespace) -> dict[str, Any]:
         },
         "receipt_digest": implementation_receipt["receipt_digest"],
     }
+    try:
+        build_inventory_receipt = codex_upgrade_candidate_build.build_inventory_receipt(
+            build_parameters,
+            candidate_id=candidate_id,
+            image_id=str(arguments.candidate_image_id),
+            source_root=source_root,
+            build_tree=build_tree,
+            docker_context=docker_context,
+            binary_path=binary_path,
+        )
+        frontend_provenance_receipt = (
+            codex_upgrade_candidate_build.build_frontend_provenance(
+                build_parameters,
+                candidate_id=candidate_id,
+                image_id=str(arguments.candidate_image_id),
+                source_root=source_root,
+                git_commit=git_commit,
+                build_tree=build_tree,
+                frontend_dist_source=frontend_dist_source,
+            )
+        )
+        image_inspection_receipt = codex_upgrade_candidate_build.build_image_inspection(
+            build_parameters,
+            candidate_id=candidate_id,
+            runtime_image=str(arguments.runtime_image),
+            image_id=str(arguments.candidate_image_id),
+            binary_path=binary_path,
+            docker_context=docker_context,
+            git_commit=git_commit,
+            target_architecture=str(arguments.target_architecture),
+        )
+        capability_probe_receipt = codex_upgrade_candidate_build.build_capability_probe(
+            candidate_id=candidate_id,
+            image_id=str(arguments.candidate_image_id),
+        )
+    except (OSError, codex_upgrade_candidate_build.CandidateBuildError) as error:
+        raise ConfigurationError(f"Candidate 构建实物复算未通过：{error}") from error
+
+    output = _candidate_build_receipt_path(campaign_dir, candidate_id)
+    evidence_root = output.parent / "build-evidence"
+    ensure_private_directory(evidence_root, campaign_dir)
+    machine_receipts = {
+        "build_inventory": ("build-inventory.json", build_inventory_receipt),
+        "frontend_provenance": ("frontend-provenance.json", frontend_provenance_receipt),
+        "image_inspection": ("image-inspection.json", image_inspection_receipt),
+        "capability_probe": ("capability-probe.json", capability_probe_receipt),
+    }
+    machine_bindings: dict[str, dict[str, Any]] = {}
+    for name, (filename, payload) in machine_receipts.items():
+        path = evidence_root / filename
+        _write_or_verify_json(path, payload)
+        machine_bindings[name] = {
+            "path": path.relative_to(campaign_dir).as_posix(),
+            "sha256": file_sha256(path),
+            "bytes": path.stat().st_size,
+            "receipt_digest": payload["receipt_digest"],
+        }
     receipt = codex_upgrade_vc_artifacts.build_candidate_build_receipt(
         campaign_id=str(manifest["campaign_id"]),
         campaign_manifest_sha256=file_sha256(campaign_dir / "campaign.json"),
@@ -41548,27 +51489,141 @@ def record_candidate_build(arguments: argparse.Namespace) -> dict[str, Any]:
             "requirements_sha256": gate_plan["requirements_sha256"],
         },
         implementation_tests=implementation_binding,
+        build_inventory=machine_bindings["build_inventory"],
+        frontend_provenance=machine_bindings["frontend_provenance"],
+        image_inspection=machine_bindings["image_inspection"],
+        capability_probe=machine_bindings["capability_probe"],
         built_at_utc=_utc_now(),
     )
-    output = _candidate_build_receipt_path(campaign_dir, candidate_id)
     ensure_private_directory(output.parent, campaign_dir)
-    _secure_write_json_once(output, receipt)
+    seal: dict[str, Any] | None = None
+    if revision_record is not None:
+        # revision-seal 第 3～4 步：r≥2 以 invalidation.json 冻结的旧候选身份快照为基准
+        # 证明同一性变化（commit／tree 任一可比字段变化即通过，全同拒绝；image 不强制），
+        # 先写 seal.json（write-once + 内容核对），再写 build receipt 与 VC-4 checkpoint。
+        seal = _seal_candidate_revision(
+            campaign_dir,
+            revision_record,
+            candidate_commit=git_commit,
+            source_tree_sha256=source_tree_sha256,
+            image_id=str(arguments.candidate_image_id),
+            build_receipt_sha256=codex_upgrade_vc_artifacts.digest(
+                {key: value for key, value in receipt.items() if key not in {"built_at_utc", "receipt_digest"}}
+            ),
+            vc3_stage_receipt_sha256=str(revision_record["vc3_stage_receipt"]["sha256"]),
+        )
+    _write_or_verify_json_ignoring(output, receipt, volatile=("built_at_utc", "receipt_digest"))
+    receipt = _read_json(output, "Candidate 构建收据")
     _complete_vc_phase(
         campaign_dir,
         manifest,
         phase="VC-4",
         stage_receipt_path=output.resolve(strict=True),
         reuse_item_ids=requirements.get("inherited_rule_ids", ()),
+        revision=revision,
     )
     return {
         "status": "complete",
         "candidate_id": candidate_id,
+        "candidate_revision": revision,
+        "revision_seal": seal,
         "build_receipt": str(output),
         "receipt_digest": receipt["receipt_digest"],
         "source_tree_sha256": source_tree_sha256,
         "image_reference": receipt["image"]["reference"],
         "live_request_count": 0,
     }
+
+
+def _write_or_verify_json_ignoring(
+    path: Path,
+    payload: Mapping[str, Any],
+    *,
+    volatile: Iterable[str],
+) -> None:
+    """write-once + 内容核对：已存在时只豁免易变字段（时间戳、自摘要），其余逐字段一致。"""
+
+    skip = set(volatile)
+    if path.exists() or path.is_symlink():
+        if path.is_symlink() or not path.is_file():
+            raise ConfigurationError(f"派生封存文件路径不可信：{path}")
+        existing = _read_json(path, "派生封存文件")
+        left = {key: value for key, value in existing.items() if key not in skip}
+        right = {key: value for key, value in payload.items() if key not in skip}
+        if left != right:
+            raise ConfigurationError(f"派生封存文件已经存在且内容不一致：{path}")
+        return
+    _secure_write_json_once(path, dict(payload))
+
+
+def _seal_candidate_revision(
+    campaign_dir: Path,
+    revision_record: Mapping[str, Any],
+    *,
+    candidate_commit: str | None,
+    source_tree_sha256: str,
+    image_id: str | None,
+    build_receipt_sha256: str,
+    vc3_stage_receipt_sha256: str,
+) -> dict[str, Any]:
+    """写当前 revision 的 seal.json（同一性变化证明），已存在时按内容核对。"""
+
+    revision = int(revision_record["revision"])
+    superseded: dict[str, Any] | None = None
+    supersedes = revision_record.get("supersedes")
+    if isinstance(supersedes, Mapping):
+        old_candidate_id = str(supersedes["candidate_id"])
+        invalidation_path = campaign_dir / "candidates" / old_candidate_id / "invalidation.json"
+        if invalidation_path.is_symlink() or not invalidation_path.is_file():
+            raise ConfigurationError(f"被取代候选 {old_candidate_id} 缺少 invalidation.json。")
+        try:
+            invalidation = codex_upgrade_vc_artifacts.validate_candidate_invalidation(
+                _read_json(invalidation_path, "候选作废记录")
+            )
+        except codex_upgrade_vc_artifacts.VCArtifactError as error:
+            raise ConfigurationError(str(error)) from error
+        if file_sha256(invalidation_path) != str(supersedes["invalidation_receipt"]["sha256"]):
+            raise ConfigurationError("被取代候选的 invalidation.json 与 revision 记录绑定漂移。")
+        snapshot = invalidation["identity_snapshot"]
+        superseded = {
+            "revision": int(supersedes["revision"]),
+            "candidate_id": old_candidate_id,
+            "git_commit": snapshot.get("git_commit"),
+            "source_tree_sha256": snapshot.get("source_tree_sha256"),
+            "image_id": snapshot.get("image_id"),
+        }
+    try:
+        seal = codex_upgrade_vc_artifacts.build_candidate_revision_seal(
+            campaign_id=str(revision_record["campaign_id"]),
+            revision=revision,
+            candidate_id=str(revision_record["candidate_id"]),
+            candidate_commit=candidate_commit,
+            source_tree_sha256=source_tree_sha256,
+            image_id=image_id,
+            build_receipt_sha256=build_receipt_sha256,
+            vc3_stage_receipt_sha256=vc3_stage_receipt_sha256,
+            superseded=superseded,
+            sealed_at_utc=_utc_now(),
+        )
+    except codex_upgrade_vc_artifacts.VCArtifactError as error:
+        raise ConfigurationError(f"revision-seal 拒绝：{error}") from error
+    seal_path = _candidate_revision_dir(campaign_dir, revision) / "seal.json"
+    _write_or_verify_json_ignoring(seal_path, seal, volatile=("sealed_at_utc", "seal_sha256"))
+    stored = _read_json(seal_path, "候选 revision seal")
+    if isinstance(supersedes, Mapping):
+        marker = campaign_dir / "candidates" / str(supersedes["candidate_id"]) / "superseded-by.json"
+        _write_or_verify_json(
+            marker,
+            {
+                "schema_version": "codex-upgrade-candidate-superseded/v1",
+                "candidate_id": str(supersedes["candidate_id"]),
+                "superseded_by": {
+                    "revision": revision,
+                    "candidate_id": str(revision_record["candidate_id"]),
+                },
+            },
+        )
+    return stored
 
 
 def _resolve_candidate_build_binding_path(campaign_dir: Path, value: Any) -> Path:
@@ -41578,11 +51633,202 @@ def _resolve_candidate_build_binding_path(campaign_dir: Path, value: Any) -> Pat
     return candidate if candidate.is_absolute() else _campaign_file(campaign_dir, value)
 
 
+def _require_c0154_v7_frozen_legacy_build_receipt(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    candidate_id: str,
+    receipt_path: Path,
+    receipt: Mapping[str, Any],
+) -> dict[str, Any]:
+    """只授权逐字冻结的 v7 构建收据跳过后来新增的 v2 实物校验。"""
+
+    frozen = C0154_V7_RECOVERY_SOURCE
+    _validated_c0154_v7_recovery_source_scope(
+        campaign_dir,
+        manifest,
+        candidate_id=candidate_id,
+        attempt_id=str(frozen["attempt_id"]),
+    )
+    build = receipt.get("build")
+    receipt_sha256 = file_sha256(receipt_path)
+    receipt_bytes = receipt_path.stat().st_size
+    if (
+        receipt.get("schema_version")
+        != codex_upgrade_vc_artifacts.LEGACY_CANDIDATE_BUILD_SCHEMA
+        or receipt.get("campaign_id") != frozen["campaign_id"]
+        or receipt.get("campaign_manifest_sha256")
+        != frozen["campaign_manifest_sha256"]
+        or candidate_id != frozen["candidate_id"]
+        or receipt.get("candidate_id") != frozen["candidate_id"]
+        or receipt.get("target_version") != frozen["target_version"]
+        or receipt_sha256 != frozen["build_receipt_sha256"]
+        or receipt_bytes != frozen["build_receipt_bytes"]
+        or receipt.get("receipt_digest") != frozen["build_receipt_digest"]
+        or not isinstance(build, Mapping)
+        or build.get("parameters_sha256")
+        != frozen["build_parameters_sha256"]
+    ):
+        raise ConfigurationError("Candidate v7 历史构建收据字节或摘要漂移。")
+    return {
+        "path": receipt_path.relative_to(campaign_dir).as_posix(),
+        "sha256": receipt_sha256,
+        "bytes": receipt_bytes,
+    }
+
+
+def _replay_projected_candidate_build_receipt(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    candidate_id: str,
+    expected_path: Path,
+    receipt: Mapping[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """重放由直接前序逐字投影的 VC-4 收据，不把旧事实伪装成新构建。"""
+
+    predecessor = manifest.get("predecessor")
+    if (
+        not isinstance(predecessor, Mapping)
+        or predecessor.get("reason") not in CANDIDATE_VC_PROJECTION_SUCCESSOR_REASONS
+    ):
+        raise ConfigurationError("跨 Campaign VC-4 收据没有受管失败恢复绑定。")
+    transitive_post_run_projection = (
+        predecessor.get("reason") == POST_RUN_SEAL_RECOVERY_REASON
+    )
+    classification = _load_stage_result(campaign_dir, "classify")
+    import_binding = classification.get("predecessor_import")
+    _require_file_binding(import_binding, "Candidate 构建投影的前序导入收据")
+    assert isinstance(import_binding, Mapping)
+    if import_binding.get("path") != "predecessor-import.json":
+        raise ConfigurationError("Candidate 构建投影的前序导入路径非法。")
+    import_path = _campaign_file(campaign_dir, str(import_binding["path"]))
+    imported = _read_json(import_path, "Candidate 构建投影的前序导入收据")
+    abandoned = imported.get("abandoned_candidate_attempt")
+    predecessor_binding = imported.get("predecessor_campaign")
+    if (
+        imported.get("schema_version") != PREDECESSOR_RECOVERY_IMPORT_SCHEMA
+        or imported.get("reason") not in CANDIDATE_VC_PROJECTION_SUCCESSOR_REASONS
+        or not isinstance(abandoned, Mapping)
+        or abandoned.get("candidate_id") != candidate_id
+        or not isinstance(abandoned.get("attempt_id"), str)
+        or not isinstance(predecessor_binding, Mapping)
+        or predecessor
+        != {**dict(predecessor_binding), "reason": imported.get("reason")}
+    ):
+        raise ConfigurationError("Candidate 构建投影的恢复来源绑定非法。")
+    source_dir = Path(str(predecessor_binding.get("campaign_dir", "")))
+    if (
+        not source_dir.is_absolute()
+        or source_dir.is_symlink()
+        or not source_dir.is_dir()
+        or source_dir.resolve(strict=True) == campaign_dir.resolve(strict=True)
+    ):
+        raise ConfigurationError("Candidate 构建投影的直接前序路径不可信。")
+    source_dir = source_dir.resolve(strict=True)
+    source_manifest = load_campaign_manifest(
+        source_dir,
+        _control_epoch_bootstrap=True,
+    )
+    if (
+        predecessor_binding.get("campaign_id") != source_manifest.get("campaign_id")
+        or predecessor_binding.get("campaign_manifest_sha256")
+        != file_sha256(source_dir / "campaign.json")
+        or (
+            not transitive_post_run_projection
+            and receipt.get("campaign_id") != source_manifest.get("campaign_id")
+        )
+        or (
+            not transitive_post_run_projection
+            and receipt.get("campaign_manifest_sha256")
+            != file_sha256(source_dir / "campaign.json")
+        )
+        or receipt.get("candidate_id") != candidate_id
+        or receipt.get("candidate_purpose") != manifest.get("campaign_purpose")
+        or receipt.get("target_version") != manifest.get("target_version")
+    ):
+        raise ConfigurationError("Candidate 构建投影的前序 Campaign 身份漂移。")
+    source_path = _candidate_build_receipt_path(source_dir, candidate_id)
+    if (
+        source_path.is_symlink()
+        or not source_path.is_file()
+        or source_path.read_bytes() != expected_path.read_bytes()
+    ):
+        raise ConfigurationError("Candidate VC-4 收据投影不是前序文件的逐字副本。")
+    copied_index = {
+        str(row.get("target_path")): row
+        for row in imported.get("copied_files", [])
+        if isinstance(row, Mapping)
+    }
+    expected_relative = expected_path.relative_to(campaign_dir).as_posix()
+    copied_build = copied_index.get(expected_relative)
+    if (
+        not isinstance(copied_build, Mapping)
+        or copied_build.get("kind") != "candidate_build_projection"
+        or copied_build.get("source_path")
+        != source_path.relative_to(source_dir).as_posix()
+        or copied_build.get("sha256") != file_sha256(expected_path)
+        or copied_build.get("bytes") != expected_path.stat().st_size
+    ):
+        raise ConfigurationError("Candidate VC-4 收据投影未进入前序导入复制闭集。")
+    for name in (
+        "build_inventory",
+        "frontend_provenance",
+        "image_inspection",
+        "capability_probe",
+    ):
+        machine = receipt.get(name)
+        if machine is None:
+            continue
+        if not isinstance(machine, Mapping):
+            raise ConfigurationError(f"Candidate {name} 投影绑定非法。")
+        relative = str(machine.get("path", ""))
+        source_machine = _campaign_file(source_dir, relative)
+        current_machine = _campaign_file(campaign_dir, relative)
+        copied_machine = copied_index.get(relative)
+        if (
+            source_machine.is_symlink()
+            or not source_machine.is_file()
+            or current_machine.is_symlink()
+            or not current_machine.is_file()
+            or source_machine.read_bytes() != current_machine.read_bytes()
+            or not isinstance(copied_machine, Mapping)
+            or copied_machine.get("kind")
+            != "candidate_build_projection_machine_receipt"
+            or copied_machine.get("sha256") != machine.get("sha256")
+            or copied_machine.get("bytes") != machine.get("bytes")
+        ):
+            raise ConfigurationError(f"Candidate {name} 机器收据投影漂移。")
+    source_receipt, source_binding = _replay_candidate_build_receipt(
+        source_dir,
+        source_manifest,
+        candidate_id,
+        source_path,
+        _allow_legacy_v7_source=(
+            receipt.get("schema_version")
+            == codex_upgrade_vc_artifacts.LEGACY_CANDIDATE_BUILD_SCHEMA
+            and _is_c0154_v7_failed_core_source(
+                source_manifest,
+                candidate_id=candidate_id,
+                attempt_id=str(C0154_V7_RECOVERY_SOURCE["attempt_id"]),
+            )
+        ),
+    )
+    current_binding = {
+        "path": expected_relative,
+        "sha256": file_sha256(expected_path),
+        "bytes": expected_path.stat().st_size,
+    }
+    if source_receipt != dict(receipt) or source_binding != current_binding:
+        raise ConfigurationError("Candidate VC-4 投影与前序完整重放结果不一致。")
+    return dict(receipt), current_binding
+
+
 def _replay_candidate_build_receipt(
     campaign_dir: Path,
     manifest: Mapping[str, Any],
     candidate_id: str,
     receipt_argument: Path | None,
+    *,
+    _allow_legacy_v7_source: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """在 VC-5 请求前或 seal 前完整重放 VC-4 构建收据。"""
 
@@ -41596,15 +51842,63 @@ def _replay_candidate_build_receipt(
         raise ConfigurationError("Candidate 构建收据不存在。") from error
     if supplied_path != canonical_path or supplied_path.is_symlink() or not supplied_path.is_file():
         raise ConfigurationError("--build-receipt 必须指向本 candidate 的规范构建收据。")
+    raw_receipt = _read_json(supplied_path, "Candidate 构建收据")
+    predecessor = manifest.get("predecessor")
+    managed_v7_projection = bool(
+        isinstance(predecessor, Mapping)
+        and predecessor.get("reason") == "candidate_failed_job_tool_recovery"
+        and predecessor.get("campaign_id")
+        == C0154_V7_RECOVERY_SOURCE["campaign_id"]
+        and candidate_id == C0154_V7_RECOVERY_SOURCE["candidate_id"]
+        and raw_receipt.get("campaign_id")
+        == C0154_V7_RECOVERY_SOURCE["campaign_id"]
+        and raw_receipt.get("candidate_id")
+        == C0154_V7_RECOVERY_SOURCE["candidate_id"]
+        and raw_receipt.get("schema_version")
+        == codex_upgrade_vc_artifacts.LEGACY_CANDIDATE_BUILD_SCHEMA
+    )
+    managed_post_run_projection = bool(
+        isinstance(predecessor, Mapping)
+        and predecessor.get("reason") == POST_RUN_SEAL_RECOVERY_REASON
+        and predecessor.get("campaign_id")
+        == C0154_A15_POST_RUN_SEAL_SOURCE["campaign_id"]
+        and predecessor.get("campaign_manifest_sha256")
+        == C0154_A15_POST_RUN_SEAL_SOURCE["campaign_manifest_sha256"]
+        and candidate_id == C0154_A15_POST_RUN_SEAL_SOURCE["candidate_id"]
+        and raw_receipt.get("campaign_id") == C0154_V7_RECOVERY_SOURCE["campaign_id"]
+        and raw_receipt.get("candidate_id") == C0154_V7_RECOVERY_SOURCE["candidate_id"]
+        and raw_receipt.get("schema_version")
+        == codex_upgrade_vc_artifacts.LEGACY_CANDIDATE_BUILD_SCHEMA
+    )
+    if _allow_legacy_v7_source and not _is_c0154_v7_failed_core_source(
+        manifest,
+        candidate_id=candidate_id,
+        attempt_id=str(C0154_V7_RECOVERY_SOURCE["attempt_id"]),
+    ):
+        raise ConfigurationError(
+            "Candidate v1 构建收据来源不属于已审计 v7 恢复坐标。"
+        )
     try:
         receipt = codex_upgrade_vc_artifacts.validate_candidate_build_receipt(
-            _read_json(supplied_path, "Candidate 构建收据")
+            raw_receipt,
+            allow_legacy=(
+                managed_v7_projection
+                or managed_post_run_projection
+                or _allow_legacy_v7_source
+            ),
         )
     except codex_upgrade_vc_artifacts.VCArtifactError as error:
         raise ConfigurationError(str(error)) from error
+    if receipt.get("campaign_id") != manifest.get("campaign_id"):
+        return _replay_projected_candidate_build_receipt(
+            campaign_dir,
+            manifest,
+            candidate_id,
+            expected_path,
+            receipt,
+        )
     if (
-        receipt.get("campaign_id") != manifest.get("campaign_id")
-        or receipt.get("campaign_manifest_sha256")
+        receipt.get("campaign_manifest_sha256")
         != file_sha256(campaign_dir / "campaign.json")
         or receipt.get("candidate_id") != candidate_id
         or receipt.get("candidate_purpose") != manifest.get("campaign_purpose")
@@ -41769,6 +52063,112 @@ def _replay_candidate_build_receipt(
         raise ConfigurationError(
             "VC-4 实现测试收据与 Candidate 构建身份或 affected 门禁闭集不一致。"
         )
+
+    build_parameters = receipt["build"]["parameters"]
+    binary_path = Path(receipt["binary"]["path"])
+    frozen_v7_legacy_build = bool(
+        _allow_legacy_v7_source is True
+        and receipt.get("schema_version")
+        == codex_upgrade_vc_artifacts.LEGACY_CANDIDATE_BUILD_SCHEMA
+    )
+    if frozen_v7_legacy_build:
+        frozen_binding = _require_c0154_v7_frozen_legacy_build_receipt(
+            campaign_dir,
+            manifest,
+            candidate_id,
+            expected_path,
+            receipt,
+        )
+        return dict(receipt), frozen_binding
+    else:
+        try:
+            build_tree = Path(build_parameters["build_tree"]["root"]).resolve(strict=True)
+            docker_context = Path(
+                build_parameters["docker_build"]["context_root"]
+            ).resolve(strict=True)
+            frontend_dist_source = Path(
+                build_parameters["frontend"]["dist_source_root"]
+            ).resolve(strict=True)
+            build_parameters = codex_upgrade_candidate_build.validate_build_parameters(
+                build_parameters,
+                candidate_id=candidate_id,
+                source_root=resolved_source,
+                git_commit=str(receipt["source"]["git_commit"]),
+                binary_path=binary_path,
+                binary_sha256=str(receipt["binary"]["sha256"]),
+                binary_bytes=int(receipt["binary"]["bytes"]),
+                build_tree=build_tree,
+                docker_context=docker_context,
+                frontend_dist_source=frontend_dist_source,
+                target_architecture=str(receipt["target_architecture"]),
+                image_id=str(receipt["image"]["image_id"]),
+            )
+        except (
+            KeyError,
+            OSError,
+            codex_upgrade_candidate_build.CandidateBuildError,
+        ) as error:
+            raise ConfigurationError(
+                f"Candidate 严格构建参数无法重放：{error}"
+            ) from error
+
+    machine_payloads: dict[str, dict[str, Any]] = {}
+    for name in (
+        "build_inventory",
+        "frontend_provenance",
+        "image_inspection",
+        "capability_probe",
+    ):
+        binding = receipt[name]
+        path = _campaign_file(campaign_dir, str(binding["path"]))
+        _reject_symlink_components(path, campaign_dir, f"Candidate {name} 机器收据")
+        if path.is_symlink() or not path.is_file():
+            raise ConfigurationError(f"Candidate {name} 机器收据不存在或不可信。")
+        if path.stat().st_size != binding["bytes"] or file_sha256(path) != binding["sha256"]:
+            raise ConfigurationError(f"Candidate {name} 机器收据大小或摘要漂移。")
+        payload = _read_json(path, f"Candidate {name} 机器收据")
+        if payload.get("receipt_digest") != binding["receipt_digest"]:
+            raise ConfigurationError(f"Candidate {name} 机器收据自摘要绑定漂移。")
+        machine_payloads[name] = payload
+    try:
+        codex_upgrade_candidate_build.replay_inventory_receipt(
+            machine_payloads["build_inventory"],
+            build_parameters,
+            candidate_id=candidate_id,
+            image_id=str(receipt["image"]["image_id"]),
+            source_root=resolved_source,
+            build_tree=build_tree,
+            docker_context=docker_context,
+            binary_path=binary_path,
+        )
+        codex_upgrade_candidate_build.replay_frontend_provenance(
+            machine_payloads["frontend_provenance"],
+            build_parameters,
+            candidate_id=candidate_id,
+            image_id=str(receipt["image"]["image_id"]),
+            source_root=resolved_source,
+            git_commit=str(receipt["source"]["git_commit"]),
+            build_tree=build_tree,
+            frontend_dist_source=frontend_dist_source,
+        )
+        codex_upgrade_candidate_build.replay_image_inspection(
+            machine_payloads["image_inspection"],
+            build_parameters,
+            candidate_id=candidate_id,
+            runtime_image=str(receipt["image"]["reference"]),
+            image_id=str(receipt["image"]["image_id"]),
+            binary_path=binary_path,
+            docker_context=docker_context,
+            git_commit=str(receipt["source"]["git_commit"]),
+            target_architecture=str(receipt["target_architecture"]),
+        )
+        codex_upgrade_candidate_build.replay_capability_probe(
+            machine_payloads["capability_probe"],
+            candidate_id=candidate_id,
+            image_id=str(receipt["image"]["image_id"]),
+        )
+    except (OSError, codex_upgrade_candidate_build.CandidateBuildError) as error:
+        raise ConfigurationError(f"Candidate 构建实物收据无法重放：{error}") from error
     return receipt, {
         "path": expected_path.relative_to(campaign_dir).as_posix(),
         "sha256": file_sha256(expected_path),
@@ -41947,6 +52347,7 @@ def compare_campaign(campaign_dir: Path, candidate_id: str) -> dict[str, Any]:
 
     _reject_contaminated_campaign(campaign_dir)
     manifest = _require_formal_campaign(campaign_dir)
+    _guard_candidate_revision_write(campaign_dir, manifest, candidate_id, action="compare")
     candidate = _load_stage_result(
         campaign_dir, "capture-candidate", candidate_id
     )
@@ -42068,7 +52469,7 @@ def compare_campaign(campaign_dir: Path, candidate_id: str) -> dict[str, Any]:
         "offline_only": True,
     }
     assertion_root = ensure_private_directory(
-        campaign_dir / "assertions" / candidate_id, campaign_dir
+        _assertions_root(campaign_dir, candidate_id), campaign_dir
     )
     skeleton_path = assertion_root / "results.template.json"
     _, comparison_path = _stage_path(campaign_dir, "compare", candidate_id)
@@ -42411,12 +52812,22 @@ def _candidate_stage_receipt_boundary(
     attempt_relative = Path(str(attempt_reference["path"]))
     attempt_id = attempt_relative.parent.name
     candidate_id = str(stage.get("candidate_id", ""))
-    _, attempt = _load_capture_attempt(
-        campaign_dir,
-        "candidate",
-        candidate_id,
-        attempt_id,
-    )
+    recovery_reference = stage.get("recovery")
+    if isinstance(recovery_reference, Mapping):
+        # 改造 5 M2：增量封存结果的收据根与 Kilo 后检查点来自恢复段（段 run-summary 的环境证据根）。
+        _require_recovery_binding(recovery_reference)
+        _segment_root, _segment_reservation, attempt = _load_attempt_recovery_segment(
+            campaign_dir, candidate_id, attempt_id, str(recovery_reference.get("recovery_revision", ""))
+        )
+        if file_sha256(_segment_root / ATTEMPT_RECOVERY_SUMMARY_FILENAME) != recovery_reference.get("sha256"):
+            raise ConfigurationError("阶段结果绑定的恢复段 run-summary 摘要漂移。")
+    else:
+        _, attempt = _load_capture_attempt(
+            campaign_dir,
+            "candidate",
+            candidate_id,
+            attempt_id,
+        )
     environment = attempt.get("environment")
     if not isinstance(environment, dict):
         raise ConfigurationError("候选 attempt 缺少环境证据边界。")
@@ -42609,8 +53020,23 @@ def _campaign_machine_command(
     rule: str,
     output: Path,
     side: str,
+    projection: Path | None = None,
+    context_override: Mapping[str, Any] | None = None,
 ) -> list[str]:
-    context = capture_stage.get("assertion_context")
+    """重建 accept 期望的 checker 命令。
+
+    改造 5：``projection`` 给出时追加 ``--capture-manifest-projection``；``context_override``
+    （历史 checkpoint 的 ``context``：capture_manifest.path／evidence_root）给出时代替当前
+    capture 阶段的 assertion_context，用于复用行以历史 context 重建命令。
+    """
+
+    if context_override is not None:
+        context = {
+            "capture_manifest_path": str(context_override["capture_manifest"]["path"]),
+            "evidence_root": str(context_override["evidence_root"]),
+        }
+    else:
+        context = capture_stage.get("assertion_context")
     if not isinstance(context, dict):
         raise ConfigurationError("抓包阶段缺少 assertion_context。")
     profile_reference = classification.get("assertion_profile_manifest")
@@ -42628,6 +53054,7 @@ def _campaign_machine_command(
         expected_codex_version=manifest["target_version"],
         expected_profile_sha256=str(profile_reference.get("sha256", "")),
         side=side,
+        capture_manifest_projection=(str(projection.resolve()) if projection is not None else None),
         output=str(output.resolve()),
     )
 
@@ -42697,7 +53124,21 @@ def _validate_machine_assertion(
     bound_paths: set[str],
     *,
     side: str,
+    checkpoint: Mapping[str, Any] | None = None,
+    reused: bool = False,
+    expected_checker_sha256: str | None = None,
 ) -> set[str]:
+    """校验一侧机器结果。
+
+    改造 5：``checkpoint`` 给出时期望命令带该 checkpoint 的投影输入；``reused`` 行以历史
+    checkpoint 的 context 重建命令、比摘要、校验文档 sha，**不重放 checker**（防伪依据是
+    write-once checkpoint 链＋父 run 绑定＋锚点链，由调用方先行验证）。
+
+    ``expected_checker_sha256``：评估基线授权的 checker 口径（b≥1 为该基线 recovery.json 的
+    ``current_evaluator_digests.checker_sha256``）；为 None 时沿用 plan 冻结的工具身份（b0）。
+    文档记录的 checker 摘要与当前 checker 文件都必须等于该口径。
+    """
+
     label = "官方" if side == "official" else "候选"
     reference = row.get(f"{side}_machine_result")
     if not isinstance(reference, dict) or set(reference) != {"path", "sha256"}:
@@ -42729,6 +53170,18 @@ def _validate_machine_assertion(
     context = capture_stage.get("assertion_context")
     if not isinstance(context, dict):
         raise ConfigurationError(f"{label}抓包阶段缺少 assertion_context。")
+    projection_path: Path | None = None
+    if checkpoint is not None:
+        projection_path = _campaign_file(campaign_dir, str(checkpoint["input_projection"]["path"]))
+        if (
+            not projection_path.is_file()
+            or projection_path.is_symlink()
+            or file_sha256(projection_path) != checkpoint["input_projection"]["sha256"]
+            or result.get("projection_sha256") != checkpoint["projection_sha256"]
+            or checkpoint["document"]["sha256"] != reference.get("sha256")
+            or _campaign_file(campaign_dir, str(checkpoint["document"]["path"])) != result_path
+        ):
+            raise ConfigurationError(f"逐规则断言 {rule} {label}机器结果未绑定 checkpoint 的投影输入或文档。")
     expected_command = _campaign_machine_command(
         campaign_dir,
         manifest,
@@ -42737,22 +53190,28 @@ def _validate_machine_assertion(
         rule=rule,
         output=result_path,
         side=side,
+        projection=projection_path,
+        context_override=(checkpoint["context"] if reused and checkpoint is not None else None),
     )
     if command != expected_command:
         raise ConfigurationError(f"逐规则断言 {rule} {label}机器命令未精确绑定当前版本 Campaign。")
     if machine_command_sha256(command) != result.get("command_sha256"):
         raise ConfigurationError(f"逐规则断言 {rule} {label}命令摘要不一致。")
-    pinned_checkers = {
-        entry.get("path"): entry.get("sha256")
-        for entry in manifest.get("tool_identity", {}).get("entries", [])
-        if isinstance(entry, dict)
-    }
-    checker_sha = pinned_checkers.get("candidate_rule_assertion.py")
-    if not checker_sha or checker_sha != result.get("checker_sha256"):
-        raise ConfigurationError(f"逐规则断言 {rule} checker 未绑定 plan 工具摘要。")
+    if checkpoint is not None and checkpoint["command_sha256"] != result.get("command_sha256"):
+        raise ConfigurationError(f"逐规则断言 {rule} {label}checkpoint 命令摘要与文档不一致。")
+    if expected_checker_sha256 is None:
+        checker_sha = _plan_evaluator_entry_digests(manifest)["checker_sha256"]
+        origin = "plan 工具摘要"
+    else:
+        checker_sha = expected_checker_sha256
+        origin = "评估基线授权的 checker 摘要"
+    if checker_sha != result.get("checker_sha256"):
+        raise ConfigurationError(f"逐规则断言 {rule} checker 未绑定{origin}。")
+    if checkpoint is not None and checkpoint.get("checker_sha256") != checker_sha:
+        raise ConfigurationError(f"逐规则断言 {rule} {label}checkpoint 记录的 checker 摘要与{origin}不一致。")
     checker_path = Path(__file__).resolve().parent / "candidate_rule_assertion.py"
     if not checker_path.is_file() or file_sha256(checker_path) != checker_sha:
-        raise ConfigurationError(f"逐规则断言 {rule} checker 文件在 plan 后漂移。")
+        raise ConfigurationError(f"逐规则断言 {rule} checker 文件与{origin}不一致（授权后漂移）。")
     checks = result.get("checks")
     if not isinstance(checks, list) or not checks:
         raise ConfigurationError(f"逐规则断言 {rule} 没有机器检查项。")
@@ -42781,8 +53240,231 @@ def _validate_machine_assertion(
         if len(logical_paths) != len(evidence_paths) or not logical_paths.issubset(bound_paths):
             raise ConfigurationError(f"逐规则断言 {rule} {label}机器检查未精确引用封存证据。")
         check_ids.add(check_id)
-    _rerun_machine_assertion(command, result, rule=rule, label=label)
+    if not reused:
+        _rerun_machine_assertion(command, result, rule=rule, label=label)
     return check_ids
+
+
+EVALUATION_RUN_FILENAME = "evaluation-run.json"
+EVALUATION_CHECKPOINTS_DIRNAME = "checkpoints"
+
+
+def _assertions_root_for_baseline(campaign_dir: Path, candidate_id: str, baseline: int) -> Path:
+    root = campaign_dir / "assertions" / candidate_id
+    return root / "revisions" / f"b{baseline}" if baseline > 0 else root
+
+
+def _replay_evaluation_checkpoint_chain(assertions_root: Path) -> list[dict[str, Any]]:
+    """重放 checkpoints 目录链（自摘要、previous 链接、序号连续、文件名一致）。"""
+
+    directory = assertions_root / EVALUATION_CHECKPOINTS_DIRNAME
+    if directory.is_symlink():
+        raise ConfigurationError("checkpoints 目录不得是符号链接。")
+    if not directory.is_dir():
+        return []
+    files = sorted(
+        path for path in directory.iterdir()
+        if path.suffix == ".json" and not path.name.endswith("-input.json") and path.is_file() and not path.is_symlink()
+    )
+    chain: list[dict[str, Any]] = []
+    previous: str | None = None
+    for index, path in enumerate(files, 1):
+        try:
+            checkpoint = codex_upgrade_vc_artifacts.validate_evaluation_checkpoint(_read_json(path, "评估 checkpoint"))
+        except codex_upgrade_vc_artifacts.VCArtifactError as error:
+            raise ConfigurationError(f"评估 checkpoint 无法校验：{path.name}：{error}") from error
+        if (
+            checkpoint["sequence"] != index
+            or checkpoint["previous_checkpoint_sha256"] != previous
+            or path.name != f"{index:04d}-{checkpoint['rule']}-{checkpoint['side']}.json"
+        ):
+            raise ConfigurationError(f"评估 checkpoint 链断裂：{path.name}")
+        previous = str(checkpoint["checkpoint_sha256"])
+        chain.append(checkpoint)
+    return chain
+
+
+def _load_evaluation_run_index(
+    campaign_dir: Path, candidate_id: str, baseline: int
+) -> tuple[dict[str, Any], dict[tuple[str, str], dict[str, Any]]] | None:
+    """读取 b<K> 的 evaluation-run.json 并重放其 checkpoint 链；b0 没有索引时返回 None。"""
+
+    assertions_root = _assertions_root_for_baseline(campaign_dir, candidate_id, baseline)
+    index_path = assertions_root / EVALUATION_RUN_FILENAME
+    if index_path.is_symlink():
+        raise ConfigurationError("evaluation-run.json 不得是符号链接。")
+    if not index_path.is_file():
+        if baseline > 0:
+            raise ConfigurationError(f"评估基线 b{baseline} 缺少 evaluation-run.json。")
+        return None
+    try:
+        run = codex_upgrade_vc_artifacts.validate_evaluation_run(_read_json(index_path, "evaluation-run.json"))
+    except codex_upgrade_vc_artifacts.VCArtifactError as error:
+        raise ConfigurationError(f"evaluation-run.json 无法校验：{error}") from error
+    if run["candidate_id"] != candidate_id or run["evaluation_baseline"] != baseline:
+        raise ConfigurationError("evaluation-run.json 的候选或基线身份不一致。")
+    chain = _replay_evaluation_checkpoint_chain(assertions_root)
+    head = str(chain[-1]["checkpoint_sha256"]) if chain else None
+    if run["checkpoint_head_sha256"] != head:
+        raise ConfigurationError("evaluation-run.json 的 checkpoint head 与 checkpoints 目录不一致。")
+    by_side: dict[tuple[str, str], dict[str, Any]] = {}
+    for checkpoint in chain:
+        by_side[(str(checkpoint["rule"]), str(checkpoint["side"]))] = checkpoint
+    for row in run["rules"]:
+        for side in ("candidate", "official"):
+            binding = row.get(f"{side}_checkpoint")
+            if binding is None:
+                continue
+            checkpoint = by_side.get((str(row["rule"]), side))
+            path = _campaign_file(campaign_dir, str(binding["path"]))
+            if (
+                checkpoint is None
+                or file_sha256(path) != binding["sha256"]
+                or path != assertions_root / EVALUATION_CHECKPOINTS_DIRNAME / f"{int(checkpoint['sequence']):04d}-{row['rule']}-{side}.json"
+            ):
+                raise ConfigurationError(f"evaluation-run.json 引用的 {row['rule']} {side} checkpoint 漂移。")
+    return run, by_side
+
+
+def _verify_baseline_evaluation_epoch(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    candidate_id: str,
+    baseline: int,
+    *,
+    candidate: Mapping[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """回读 b<K> recovery.json 冻结的 evaluation-epoch 绑定并与 attempt 链末、当前树 evidence 摘要复核。
+
+    recovery → AUTHORIZATION → COMMIT 的 ``recovery_sha256`` 链已把该绑定传递到当前基线；这里核对
+    绑定文件仍在且摘要一致、序号与 attempt 链末相同、目标 evidence 摘要等于当前受管树。绑定为
+    None 时要求 attempt 没有 epoch 链且当前 evidence 摘要等于 Campaign 冻结值。
+    """
+
+    recovery = _load_evaluation_baseline_recovery(campaign_dir, candidate_id, baseline)
+    epoch = recovery.get("evaluation_epoch")
+    current_evidence = str(_tool_identity(include_git=False)["evidence_semantics_sha256"])
+    identity = manifest.get("tool_identity") if isinstance(manifest.get("tool_identity"), Mapping) else {}
+    frozen_evidence = identity.get("evidence_semantics_sha256")
+    if candidate is None:
+        candidate = _load_stage_result(campaign_dir, "capture-candidate", candidate_id)
+    attempt_root, _attempt = _capture_stage_attempt_context(
+        campaign_dir, dict(candidate), phase="candidate", candidate_id=candidate_id
+    )
+    try:
+        chain = codex_upgrade_wire_transition.load_epochs(attempt_root)
+    except codex_upgrade_wire_transition.WireTransitionError as error:
+        raise ConfigurationError(f"候选 attempt 的 evaluation-epoch 链无法重放：{error}") from error
+    if epoch is None:
+        if chain or (frozen_evidence is not None and current_evidence != str(frozen_evidence)):
+            raise ConfigurationError(
+                f"评估基线 b{baseline} 授权时没有 evaluation-epoch，但候选 attempt 现有 epoch 链或当前 evidence 摘要已偏离 Campaign 冻结值；需要新的评估基线。"
+            )
+        return None
+    path = _campaign_file(campaign_dir, str(epoch["path"]))
+    if path.is_symlink() or not path.is_file() or file_sha256(path) != epoch["sha256"]:
+        raise ConfigurationError(f"评估基线 b{baseline} 绑定的 evaluation-epoch 文件缺失或摘要漂移。")
+    if path.parent != attempt_root:
+        raise ConfigurationError(f"评估基线 b{baseline} 绑定的 evaluation-epoch 不属于当前候选 attempt。")
+    last = chain[-1] if chain else None
+    if (
+        last is None
+        or int(last["index"]) != int(epoch["index"])
+        or str(last["to_evidence_semantics_sha256"]) != epoch["to_evidence_semantics_sha256"]
+    ):
+        raise ConfigurationError(
+            f"评估基线 b{baseline} 绑定的 evaluation-epoch 不再是候选 attempt 链末；evidence 已再次变化，需要新的评估基线。"
+        )
+    if epoch["to_evidence_semantics_sha256"] != current_evidence:
+        raise ConfigurationError(
+            f"评估基线 b{baseline} 授权的 evidence 摘要与当前受管树不一致；恢复授权时的工具树或开新基线。"
+        )
+    return dict(epoch)
+
+
+def _verify_reuse_anchor_chain(
+    campaign_dir: Path,
+    candidate_id: str,
+    current_baseline: int,
+    current_commit: Mapping[str, Any],
+    reused_baseline: int,
+) -> dict[str, Any]:
+    """复用行的锚点链：账本事件 → COMMIT → AUTHORIZATION → recovery.json → 诊断 → 失败 run 动作输出绑定。
+
+    要求 recovery 冻结 ``reuse_authority=anchored`` 且 ``previous_baseline`` 等于被复用基线；诊断绑定的
+    动作输出绑定文件当前自摘要等于 stop-receipt 记录值，其中 ``evaluation_run`` 摘要与
+    ``checkpoint_head_sha256`` 必须等于被复用基线当前的索引摘要与链 head。返回 recovery。
+    """
+
+    baseline_dir = _evaluation_baseline_dir(campaign_dir, candidate_id, current_baseline)
+    try:
+        recovery = codex_upgrade_vc_artifacts.validate_evaluation_recovery(
+            _read_json(baseline_dir / EVALUATION_BASELINE_RECOVERY_FILENAME, "评估基线 recovery")
+        )
+        authorization = codex_upgrade_vc_artifacts.validate_evaluation_baseline_authorization(
+            _read_json(baseline_dir / EVALUATION_BASELINE_AUTHORIZATION_FILENAME, "评估基线 AUTHORIZATION")
+        )
+    except codex_upgrade_vc_artifacts.VCArtifactError as error:
+        raise ConfigurationError(f"评估基线 b{current_baseline} 锚点链无法校验：{error}") from error
+    if (
+        recovery["recovery_sha256"] != current_commit["recovery_sha256"]
+        or authorization["authorization_sha256"] != current_commit["authorization_sha256"]
+        or authorization["recovery_sha256"] != recovery["recovery_sha256"]
+        or recovery["reuse_authority"] != "anchored"
+        or recovery["previous_baseline"] != reused_baseline
+    ):
+        raise ConfigurationError(
+            f"评估基线 b{current_baseline} 的复用授权或前序绑定与复用行不一致。"
+        )
+    diagnosis_path = _campaign_file(campaign_dir, str(recovery["diagnosis"]["path"]))
+    if file_sha256(diagnosis_path) != recovery["diagnosis"]["sha256"]:
+        raise ConfigurationError("评估失败诊断收据摘要漂移。")
+    try:
+        diagnosis = codex_upgrade_vc_artifacts.validate_evaluation_failure_diagnosis(
+            _read_json(diagnosis_path, "评估失败诊断")
+        )
+    except codex_upgrade_vc_artifacts.VCArtifactError as error:
+        raise ConfigurationError(f"评估失败诊断无法校验：{error}") from error
+    outputs = diagnosis.get("action_outputs")
+    failed_run = diagnosis["failed_run"]
+    if (
+        diagnosis["reuse_authority"] != "anchored"
+        or diagnosis["evaluation_baseline"] != reused_baseline
+        or not isinstance(outputs, Mapping)
+        or failed_run["action_outputs_sha256"] is None
+        or outputs["evaluation_run"] is None
+    ):
+        raise ConfigurationError("评估失败诊断没有可锚定的动作输出绑定。")
+    binding_path = Path(str(failed_run["run_dir"])) / "action-outputs" / f"{failed_run['action_id']}.json"
+    try:
+        binding = codex_upgrade_supervisor.read_action_output_binding(Path(str(failed_run["run_dir"])), str(failed_run["action_id"]))
+    except codex_upgrade_supervisor.SupervisorError as error:
+        raise ConfigurationError(f"失败父 run 的动作输出绑定无法读取：{error}") from error
+    if binding["binding_sha256"] != failed_run["action_outputs_sha256"] or file_sha256(binding_path) != outputs["sha256"]:
+        raise ConfigurationError("失败父 run 的动作输出绑定摘要与诊断不一致。")
+    previous_root = _assertions_root_for_baseline(campaign_dir, candidate_id, reused_baseline)
+    previous_index = previous_root / EVALUATION_RUN_FILENAME
+    previous_chain = _replay_evaluation_checkpoint_chain(previous_root)
+    previous_head = str(previous_chain[-1]["checkpoint_sha256"]) if previous_chain else None
+    if (
+        _campaign_file(campaign_dir, str(outputs["evaluation_run"]["path"])) != previous_index
+        or file_sha256(previous_index) != outputs["evaluation_run"]["sha256"]
+    ):
+        raise ConfigurationError("动作输出绑定记录的 evaluation-run 摘要与被复用基线不一致。")
+    # checkpoint head：断言动作的绑定直接记录 checkpoints 目录的链 head；compare／accept 动作的绑定
+    # 不含 checkpoints 目录（冻结声明只绑定其输入 evaluation-run.json），此时以 write-once 索引内
+    # 记录的 head 为准——索引摘要已被绑定锁定，索引内 head 与目录链一致由 _load_evaluation_run_index 保证。
+    bound_head = outputs["checkpoint_head_sha256"]
+    if bound_head is None:
+        try:
+            bound_head = codex_upgrade_vc_artifacts.validate_evaluation_run(
+                _read_json(previous_index, "evaluation-run.json")
+            )["checkpoint_head_sha256"]
+        except codex_upgrade_vc_artifacts.VCArtifactError as error:
+            raise ConfigurationError(f"被复用基线的 evaluation-run.json 无法校验：{error}") from error
+    if bound_head != previous_head:
+        raise ConfigurationError("动作输出绑定记录的 checkpoint head 与被复用基线不一致。")
+    return recovery
 
 
 def _validate_assertion_results(
@@ -42852,6 +53534,37 @@ def _validate_assertion_results(
         campaign_dir, classification, rules
     )
     official_authority = _classification_official_authority(classification)
+    # 改造 5：先读当前基线的 evaluation-run.json 判定行类型（executed／reused）；
+    # b0 没有索引时全部按 executed 走既有流程。
+    current_baseline, current_commit = _current_evaluation_baseline(campaign_dir, candidate_id)
+    loaded_index = _load_evaluation_run_index(campaign_dir, candidate_id, current_baseline)
+    # 评估基线授权的 evaluator 口径：b≥1 取 recovery.json 授权四项（并回读其冻结的 evaluation-epoch），
+    # b0 取 plan 工具身份的 checker／builder entry。索引、checkpoint、单规则文档记录的 checker 摘要
+    # 与当前 checker 文件都必须等于该口径。
+    authorized_digests = _authorized_evaluator_digests(campaign_dir, manifest, candidate_id, current_baseline)
+    expected_checker_sha256 = authorized_digests["checker_sha256"] if current_baseline else None
+    if current_baseline:
+        _verify_baseline_evaluation_epoch(campaign_dir, manifest, candidate_id, current_baseline, candidate=candidate)
+    index_rows: dict[str, dict[str, Any]] = {}
+    checkpoints_by_side: dict[tuple[str, str], dict[str, Any]] = {}
+    if loaded_index is not None:
+        evaluation_run, checkpoints_by_side = loaded_index
+        _verify_evaluator_digests_authorized(
+            campaign_dir, manifest, candidate_id, current_baseline, evaluation_run["evaluator"],
+            label="当前评估基线 evaluation-run.json",
+        )
+        for (checkpoint_rule, checkpoint_side), checkpoint in checkpoints_by_side.items():
+            if checkpoint["checker_sha256"] != evaluation_run["evaluator"]["checker_sha256"]:
+                raise ConfigurationError(
+                    f"逐规则断言 {checkpoint_rule} {checkpoint_side} checkpoint 的 checker 摘要与 evaluation-run.json 不一致。"
+                )
+        index_rows = {str(item["rule"]): dict(item) for item in evaluation_run["rules"]}
+        if any(item["status"] != "pass" for item in index_rows.values()):
+            raise ConfigurationError("当前评估基线的 evaluation-run.json 含未通过或未完成规则，不得接受。")
+    historical_inventories: dict[int, dict[str, str]] = {}
+    historical_stages: dict[int, dict[str, Any]] = {}
+    historical_indexes: dict[int, dict[str, dict[str, Any]]] = {}
+    anchored_baselines: set[int] = set()
     seen: list[str] = []
     passed = 0
     for index, row in enumerate(rows, 1):
@@ -42861,6 +53574,68 @@ def _validate_assertion_results(
         if rule not in rules:
             raise ConfigurationError(f"逐规则断言 {index} 引用清单外规则。")
         mode = validation_modes[str(rule)]
+        index_row = index_rows.get(str(rule)) if index_rows else None
+        if index_rows and index_row is None:
+            raise ConfigurationError(f"逐规则断言 {rule} 不在当前评估基线的 evaluation-run.json 内。")
+        reused_from = index_row.get("reused_from") if index_row is not None else None
+        row_checkpoints: dict[str, dict[str, Any]] = {}
+        if index_row is not None:
+            for side in ("candidate", "official"):
+                if index_row.get(f"{side}_checkpoint") is not None:
+                    row_checkpoints[side] = checkpoints_by_side[(str(rule), side)]
+        row_candidate_inventory = candidate_inventory
+        # 改造 5 M2：复用行的候选证据（引用、前缀、机器命令 context）都属于被复用基线的候选阶段——
+        # attempt-recovery 基线的候选证据前缀与被复用基线不同，机器检查的逻辑路径按历史阶段映射。
+        row_candidate_stage = candidate
+        if reused_from is not None:
+            reused_baseline = int(reused_from["baseline"])
+            assert current_commit is not None
+            if reused_baseline not in anchored_baselines:
+                _verify_reuse_anchor_chain(campaign_dir, candidate_id, current_baseline, current_commit, reused_baseline)
+                anchored_baselines.add(reused_baseline)
+            if reused_baseline not in historical_indexes:
+                previous = _load_evaluation_run_index(campaign_dir, candidate_id, reused_baseline)
+                if previous is None:
+                    raise ConfigurationError(f"被复用的评估基线 b{reused_baseline} 没有 evaluation-run.json。")
+                # 被复用基线的索引也必须与其自身授权口径一致，且 checker 与当前基线相同（复用判据）。
+                _verify_evaluator_digests_authorized(
+                    campaign_dir, manifest, candidate_id, reused_baseline, previous[0]["evaluator"],
+                    label=f"被复用评估基线 b{reused_baseline} evaluation-run.json",
+                )
+                if previous[0]["evaluator"]["checker_sha256"] != authorized_digests["checker_sha256"]:
+                    raise ConfigurationError(f"被复用评估基线 b{reused_baseline} 的 checker 与当前基线授权不同，复用无效。")
+                historical_indexes[reused_baseline] = {str(item["rule"]): dict(item) for item in previous[0]["rules"]}
+                historical_stage = _load_stage_result(
+                    campaign_dir, "capture-candidate", candidate_id, _baseline=reused_baseline
+                )
+                historical_inventories[reused_baseline] = _inventory_index(historical_stage, f"b{reused_baseline} 候选")
+                historical_stages[reused_baseline] = historical_stage
+            previous_row = historical_indexes[reused_baseline].get(str(rule))
+            if (
+                previous_row is None
+                or previous_row["status"] != "pass"
+                or previous_row["dependency_projection_sha256"] != index_row["dependency_projection_sha256"]
+            ):
+                raise ConfigurationError(f"逐规则断言 {rule} 的复用行与被复用基线的依赖摘要不一致。")
+            for side, checkpoint in row_checkpoints.items():
+                past_binding = previous_row.get(f"{side}_checkpoint")
+                if (
+                    checkpoint["reused_from"] is None
+                    or checkpoint["reused_from"]["baseline"] != reused_baseline
+                    or checkpoint["reused_from"]["checkpoint_sha256"] != reused_from["checkpoint_sha256"] and side == "candidate"
+                    or past_binding is None
+                ):
+                    raise ConfigurationError(f"逐规则断言 {rule} {side} 复用 checkpoint 未绑定被复用基线。")
+                past_path = _campaign_file(campaign_dir, str(past_binding["path"]))
+                past = _read_json(past_path, "历史 checkpoint")
+                if (
+                    past.get("checkpoint_sha256") != checkpoint["reused_from"]["checkpoint_sha256"]
+                    or past.get("document") != checkpoint["document"]
+                    or past.get("status") != "pass"
+                ):
+                    raise ConfigurationError(f"逐规则断言 {rule} {side} 复用 checkpoint 与历史 checkpoint 不一致。")
+            row_candidate_inventory = historical_inventories[reused_baseline]
+            row_candidate_stage = historical_stages[reused_baseline]
         if row.get("validation_mode") != mode:
             raise ConfigurationError(
                 f"逐规则断言 {rule} 的 validation_mode 与验收契约不一致。"
@@ -42899,7 +53674,7 @@ def _validate_assertion_results(
         )
         candidate_paths = _validate_evidence_bindings(
             row.get("candidate_evidence_refs"),
-            candidate_inventory,
+            row_candidate_inventory,
             rule=str(rule),
             label="候选",
         )
@@ -42907,11 +53682,14 @@ def _validate_assertion_results(
             campaign_dir,
             manifest,
             classification,
-            candidate,
+            row_candidate_stage,
             row,
             str(rule),
             candidate_paths,
             side="candidate",
+            checkpoint=row_checkpoints.get("candidate"),
+            reused=reused_from is not None,
+            expected_checker_sha256=expected_checker_sha256,
         )
         if candidate_check_ids != candidate_expected_check_ids:
             raise ConfigurationError(
@@ -42933,6 +53711,9 @@ def _validate_assertion_results(
                 str(rule),
                 official_paths,
                 side="official",
+                checkpoint=row_checkpoints.get("official"),
+                reused=reused_from is not None,
+                expected_checker_sha256=expected_checker_sha256,
             )
             official_expected_check_ids = set(
                 _acceptance_expected_check_ids(
@@ -42952,6 +53733,8 @@ def _validate_assertion_results(
         passed += 1
     if sorted(seen) != sorted(rules) or len(seen) != len(set(seen)):
         raise ConfigurationError("逐规则断言未使目标规则全集唯一闭环。")
+    if index_rows and sorted(index_rows) != sorted(seen):
+        raise ConfigurationError("逐规则断言与当前评估基线 evaluation-run.json 的规则集合不一致。")
     return {
         "complete": True,
         "rule_count": len(rules),
@@ -42996,7 +53779,7 @@ def _write_blocked_acceptance_attempt(
     if not SAFE_ID_RE.fullmatch(candidate_id):
         raise ConfigurationError("accept candidate-id 格式非法。")
     attempts_root = ensure_private_directory(
-        campaign_dir / "acceptance" / candidate_id / "attempts",
+        _stage_path(campaign_dir, "accept", candidate_id, mode="write")[1].parent / "attempts",
         campaign_dir,
     )
     attempt_id = (
@@ -43107,6 +53890,53 @@ def _replay_bound_candidate_external_gate(
     return payload
 
 
+def _verify_sealed_acceptance_identical(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    candidate_id: str,
+    acceptance_path: Path,
+    result: Mapping[str, Any],
+) -> None:
+    """C1 续跑：既有封存验收结果必须与本次重放构成的规范文档**整份**相等。
+
+    规范文档由 ``_stage_result_document`` 按 ``save_stage_result`` 的同一构造得出；既有文档只允许
+    多出封存步骤自己附加的两个字段（``sealed_at_utc``、``package_digest``），且 ``package_digest``
+    必须等于按封存算法对既有文档复算的摘要。任何字段缺失、多出、不同（含 ``campaign_manifest_sha256``）
+    或封存摘要不自洽都失败关闭，不做逐字段放宽。
+    """
+
+    existing = _read_json(acceptance_path, "已封存验收结果")
+    expected = _stage_result_document(
+        campaign_dir,
+        manifest,
+        "accept",
+        json.loads(json.dumps(result, ensure_ascii=False, sort_keys=True)),
+        candidate_id=candidate_id,
+    )
+    sealed_at = existing.get("sealed_at_utc")
+    package_digest = existing.get("package_digest")
+    if not isinstance(sealed_at, str) or not isinstance(package_digest, str):
+        raise ConfigurationError("验收结果已经封存但缺少封存时间或 package digest，禁止续跑。")
+    stripped = {
+        key: value
+        for key, value in existing.items()
+        if key not in {"sealed_at_utc", "package_digest"}
+    }
+    if _fingerprint({**stripped, "sealed_at_utc": sealed_at}) != package_digest:
+        raise ConfigurationError("验收结果已经封存但 package digest 与内容不符，禁止续跑。")
+    if stripped != expected:
+        missing = sorted(set(expected) - set(stripped))
+        extra = sorted(set(stripped) - set(expected))
+        changed = sorted(
+            key for key in set(expected) & set(stripped) if expected[key] != stripped[key]
+        )
+        raise ConfigurationError(
+            "验收结果已经封存且与本次重放不完全一致，禁止续跑："
+            f"缺失={missing[:8]}，多余={extra[:8]}，不同={changed[:8]}"
+        )
+    _validate_stage_contract(existing)
+
+
 def accept_campaign(
     campaign_dir: Path,
     candidate_id: str,
@@ -43120,6 +53950,7 @@ def accept_campaign(
     if assertions_path.is_symlink() or not assertions_path.is_file():
         raise ConfigurationError("逐规则断言结果必须是非符号链接普通文件。")
     manifest = _require_formal_campaign(campaign_dir)
+    _guard_candidate_revision_write(campaign_dir, manifest, candidate_id, action="accept")
     candidate = _load_stage_result(
         campaign_dir, "capture-candidate", candidate_id
     )
@@ -43392,9 +54223,9 @@ def accept_campaign(
         result["candidate_build_receipt"] = candidate_build_binding
     if accepted:
         acceptance_root = ensure_private_directory(
-            campaign_dir / "acceptance" / candidate_id, campaign_dir
+            _stage_path(campaign_dir, "accept", candidate_id, mode="write")[1].parent, campaign_dir
         )
-        canonical_assertions = campaign_dir / "assertions" / candidate_id / "results.json"
+        canonical_assertions = _assertions_root(campaign_dir, candidate_id) / "results.json"
         if assertions_path.resolve(strict=True) != canonical_assertions.resolve(strict=False):
             if canonical_assertions.exists():
                 existing_assertions = _read_json(
@@ -43437,12 +54268,21 @@ def accept_campaign(
             "path": seal_path.relative_to(campaign_dir).as_posix(),
             "sha256": file_sha256(seal_path),
         }
-        acceptance_path = save_stage_result(
-            campaign_dir,
-            "accept",
-            result,
-            candidate_id=candidate_id,
-        )
+        # 改造 5（C1）：验收结果已封存而 VC-5 completion 尚未写出（写出前崩溃）时续跑——
+        # 全部封存事实重放一致即复用既有文件、不重写，只补下面的 completion；任一字段不同
+        # 仍失败关闭。
+        _, acceptance_path = _stage_path(campaign_dir, "accept", candidate_id, mode="write")
+        if acceptance_path.is_file() and not acceptance_path.is_symlink():
+            _verify_sealed_acceptance_identical(
+                campaign_dir, manifest, candidate_id, acceptance_path, result
+            )
+        else:
+            acceptance_path = save_stage_result(
+                campaign_dir,
+                "accept",
+                result,
+                candidate_id=candidate_id,
+            )
         if (
             _requires_complete_vc_artifacts(manifest)
             and manifest["campaign_purpose"] == "validation_only"
@@ -43476,6 +54316,8 @@ def _normalize_legacy_argv(argv: list[str]) -> tuple[list[str], str | None]:
         "canonical-import",
         "canonical-advance",
         "successor",
+        FORMAL_FAILED_JOB_RECOVERY_COMMAND,
+        FORMAL_POST_RUN_SEAL_RECOVERY_COMMAND,
         "capture-official",
         "classify",
         "prepare-profile",
@@ -43490,6 +54332,9 @@ def _normalize_legacy_argv(argv: list[str]) -> tuple[list[str], str | None]:
         "compare",
         "accept",
         "deliver-candidate",
+        "revision-open",
+        "invalidate-candidate",
+        "evaluation-recover",
         "all",
         "status",
         "resume",
@@ -43515,6 +54360,9 @@ def _reject_canonical_legacy_write(
 
     if command not in {
         "successor",
+        FORMAL_FAILED_JOB_RECOVERY_COMMAND,
+        FORMAL_POST_RUN_SEAL_RECOVERY_COMMAND,
+        "reuse-official-evidence",
         "control-epoch",
         "evaluation-transition",
         "terminal-transition-preflight",
@@ -43578,6 +54426,18 @@ def _reject_campaign_run_legacy_write(
                 predecessor_manifest = _read_json(predecessor_path, "前序 Campaign 清单")
             except ConfigurationError:
                 predecessor_manifest = None
+    if (
+        command == "control-epoch"
+        and isinstance(campaign_dir, Path)
+        and isinstance(manifest, Mapping)
+        and _is_c0154_vc5_failed_job_control_epoch_campaign(
+            campaign_dir,
+            manifest,
+        )
+    ):
+        # 仅该冻结对象允许从直接 CLI 写入一份零执行 control epoch；
+        # campaign-run 上下文已在上方无条件拒绝，其他 Formal 对象继续 fail-close。
+        return
     # 0.149.1 起的正式 Campaign（含所有未来版本）不再允许旧写入；只有更早的
     # 历史版本目录保留给只读回放和离线兼容测试，避免篡改历史收据语义。
     candidates = [item for item in (manifest, predecessor_manifest) if item]
@@ -43606,7 +54466,7 @@ def _reject_unparented_formal_write(
 
     in_campaign_run = (
         os.environ.get(codex_upgrade_supervisor.CAMPAIGN_RUN_CONTEXT_ENV) == "1"
-    )
+    ) or _in_isolated_seal_rehearsal(arguments, command)
     # 0.154.0 起，普通 Formal plan 的创建和首批派发必须由 VC-0 原子收口
     # 工具在同一进程内完成。这里拦住操作员直接执行 CLI plan；原子收口通过
     # Python API 调用 create_campaign，不经过这个命令行边界。历史版本和
@@ -43628,10 +54488,13 @@ def _reject_unparented_formal_write(
             )
         return
     direct_control_commands = {
+        FORMAL_FAILED_JOB_RECOVERY_COMMAND,
+        FORMAL_POST_RUN_SEAL_RECOVERY_COMMAND,
         "reuse-official-evidence",
         "harden-evidence-permissions",
         "reconcile-supervisor-run",
         "reconcile-attempt",
+        "rehearse-candidate-seal",
         "wire-transition-intent",
         "wire-transition-final",
         "evaluation-epoch",
@@ -43639,6 +54502,11 @@ def _reject_unparented_formal_write(
         "compile-vc-batch",
         "compile-and-run-vc-batch",
         "compile-vc-interrupted-recovery-batch",
+        # 改造 2：revision 登记与候选作废是两个 campaign-run 之间的控制面命令。
+        "revision-open",
+        "invalidate-candidate",
+        # 改造 5：评估失败分类与评估基线状态机同样是批次之间的控制面命令。
+        "evaluation-recover",
     }
     if command in direct_control_commands:
         if in_campaign_run:
@@ -43665,6 +54533,15 @@ def _reject_unparented_formal_write(
         return
     if command not in FORMAL_CAMPAIGN_RUN_COMMANDS:
         return
+    if (
+        command == "canonical-import"
+        and getattr(arguments, "approve_import_sha256", None) is None
+    ):
+        # 不带批准摘要的 canonical-import 只读预览：不写 checkpoint、不发请求，
+        # 只输出 review_sha256 供随后由 campaign-run 派发的批准动作回传。摘要
+        # 只散列 approval_projection，不含父 run 的时间坐标，因此离线预览与
+        # 父批次批准得到同一摘要。
+        return
     campaign_dir = getattr(arguments, "campaign_dir", None)
     if not isinstance(campaign_dir, Path):
         return
@@ -43683,6 +54560,57 @@ def _reject_unparented_formal_write(
         raise ConfigurationError(
             f"目标 {target_version} 的正式命令必须由 campaign-run 派发：{command}"
         )
+
+
+SEAL_REHEARSAL_CONTEXT_ENV = "CODEX_UPGRADE_SEAL_REHEARSAL_ACTIVE"
+SEAL_REHEARSAL_COMMANDS = frozenset({"capture-candidate", "compare", "accept"})
+
+
+def _mount_source_of(path: Path) -> tuple[str, str] | None:
+    """返回覆盖 ``path`` 的最长挂载点的 (fstype, mount_point)，读不到时为 None。"""
+
+    try:
+        rows = Path("/proc/self/mountinfo").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    resolved = str(path.resolve(strict=False))
+    best: tuple[str, str] | None = None
+    for row in rows:
+        left, _, right = row.partition(" - ")
+        fields = left.split()
+        if len(fields) < 5:
+            continue
+        mount_point = fields[4].replace("\\040", " ")
+        fstype = right.split()[0] if right.split() else ""
+        if resolved == mount_point or resolved.startswith(mount_point.rstrip("/") + "/"):
+            # 同一挂载点后挂载的覆盖先挂载的（namespace 内把别名重新 bind 到 overlay），取最后一条。
+            if best is None or len(mount_point) >= len(best[1]):
+                best = (fstype, mount_point)
+    return best
+
+
+def _in_isolated_seal_rehearsal(arguments: argparse.Namespace, command: str) -> bool:
+    """rehearse-candidate-seal 的 namespace 内动作视同 campaign-run 派发。
+
+    2026-09-18：预演在私有 mount namespace 的 OverlayFS 副本上执行与正式批次同一份
+    动作，正式派发门禁却要求 campaign-run 父监督器上下文（预演没有父 run，也不得
+    attach）。只有同时满足以下条件才放行：预演标记为 1、命令属于零请求的 post-run
+    阶段项命令（seal／compare／accept；capture-candidate run 不在其中，seal 子动作由
+    调用方保证不带 run）、且 Campaign 目录所在挂载点确为 overlay。正式目录（ext4 等）
+    上带着该标记直接执行仍然失败关闭。
+    """
+
+    if os.environ.get(SEAL_REHEARSAL_CONTEXT_ENV) != "1":
+        return False
+    if command not in SEAL_REHEARSAL_COMMANDS:
+        return False
+    if command == "capture-candidate" and getattr(arguments, "capture_action", None) != "seal":
+        return False
+    campaign_dir = getattr(arguments, "campaign_dir", None)
+    if not isinstance(campaign_dir, Path):
+        return False
+    mount = _mount_source_of(campaign_dir)
+    return mount is not None and mount[0] == "overlay"
 
 
 def build_formal_campaign_run_manifest(
@@ -43796,7 +54724,7 @@ def _resolve_classification_inputs(
 
 
 def _default_assertions_path(campaign_dir: Path, candidate_id: str) -> Path:
-    return campaign_dir / "assertions" / candidate_id / "results.json"
+    return _assertions_root(campaign_dir, candidate_id) / "results.json"
 
 
 def _require_candidate_launch_arguments(
@@ -43879,7 +54807,18 @@ def _wire_transition_final_command(arguments: argparse.Namespace) -> dict[str, A
 def _evaluation_epoch_command(arguments: argparse.Namespace) -> dict[str, Any]:
     campaign_dir = arguments.campaign_dir
     manifest = _require_formal_campaign(campaign_dir)
-    attempt_root, _attempt = _load_capture_attempt(campaign_dir, "official", None, arguments.attempt_id)
+    candidate_id = getattr(arguments, "candidate_id", None)
+    # 2026-09-18：seal／compare／accept 对 Candidate attempt 同样要求 evidence semantics
+    # 变化后先追加 evaluation epoch（同一 current_evidence_semantics 判据），此前该命令
+    # 只能定位 official attempt，候选侧无路可走。
+    if candidate_id is not None:
+        if not SAFE_ID_RE.fullmatch(str(candidate_id)):
+            raise ConfigurationError("--candidate-id 格式非法。")
+        attempt_root, _attempt = _load_capture_attempt(
+            campaign_dir, "candidate", str(candidate_id), arguments.attempt_id
+        )
+    else:
+        attempt_root, _attempt = _load_capture_attempt(campaign_dir, "official", None, arguments.attempt_id)
     try:
         path = codex_upgrade_wire_transition.append_epoch(
             attempt_root,
@@ -43960,17 +54899,66 @@ def _reconcile_supervisor_run_command(arguments: argparse.Namespace) -> dict[str
         raise ConfigurationError(str(error)) from error
 
 
+def _rehearse_candidate_seal_command(arguments: argparse.Namespace) -> dict[str, Any]:
+    """在 OverlayFS 隔离副本上跑通 Candidate seal 零请求后处理链并写收据。"""
+
+    from tools.official_client_capture import codex_upgrade_seal_rehearsal as rehearsal
+
+    campaign_dir = Path(arguments.campaign_dir).resolve(strict=True)
+    status_command = [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        "status",
+        "--campaign-dir",
+        str(campaign_dir),
+    ]
+    skip = arguments.skip_action
+    try:
+        actions = rehearsal._load_action_plan(Path(arguments.action_plan))
+        result = rehearsal.rehearse(
+            campaign_dir=campaign_dir,
+            candidate_id=str(arguments.candidate_id),
+            attempt_id=str(arguments.attempt_id),
+            actions=actions,
+            data_root=Path(arguments.data_root).resolve(),
+            alias_roots=[Path(item).resolve() for item in arguments.alias_root],
+            upper_root=Path(arguments.upper_root).resolve(),
+            status_command=status_command,
+            skip_action_ids=(
+                list(skip) if skip else list(rehearsal.DEFAULT_SKIP_ACTION_IDS)
+            ),
+        )
+    except rehearsal.SealRehearsalError as error:
+        raise ConfigurationError(str(error)) from error
+    return {
+        key: value
+        for key, value in result.items()
+        if key not in {"lower_snapshot_before", "lower_snapshot_after"}
+    }
+
+
 def _reconcile_attempt_command(arguments: argparse.Namespace) -> dict[str, Any]:
     """B0：attempt 对账（自身零请求）；可恢复时产出或批准恢复预览。"""
 
     from tools.official_client_capture import codex_upgrade_reconciler as reconciler
 
     try:
+        authorize = getattr(arguments, "authorize_recovery_preview", None)
+        if authorize is not None:
+            if getattr(arguments, "approve_recovery_sha256", None) is not None:
+                raise ConfigurationError("--authorize-recovery-preview 与 --approve-recovery-sha256 不能同时使用。")
+            return reconciler.authorize_recovery_preview(
+                arguments.campaign_dir,
+                str(arguments.attempt_id),
+                Path(authorize),
+                recovery_revision=getattr(arguments, "recovery_revision", None),
+            )
         return reconciler.reconcile_attempt(
             arguments.campaign_dir,
             str(arguments.attempt_id),
             control_root=getattr(arguments, "control_root", None),
             approve_recovery_sha256=getattr(arguments, "approve_recovery_sha256", None),
+            recovery_revision=getattr(arguments, "recovery_revision", None),
         )
     except reconciler.ReconcilerError as error:
         raise ConfigurationError(str(error)) from error
@@ -43983,6 +54971,21 @@ def _account_sealed_official_command(arguments: argparse.Namespace) -> dict[str,
 
     try:
         return reconciler.account_sealed_official(arguments.campaign_dir)
+    except reconciler.ReconcilerError as error:
+        raise ConfigurationError(str(error)) from error
+
+
+def _account_sealed_candidate_command(arguments: argparse.Namespace) -> dict[str, Any]:
+    """已封存 Candidate 阶段的模型请求入总账（零请求、幂等）。"""
+
+    from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+    try:
+        return reconciler.account_sealed_candidate(
+            arguments.campaign_dir,
+            str(arguments.candidate_id),
+            recovery_revision=getattr(arguments, "attempt_recovery", None),
+        )
     except reconciler.ReconcilerError as error:
         raise ConfigurationError(str(error)) from error
 
@@ -44136,9 +55139,19 @@ def _record_campaign_run_action_failure(
     """尽力写入脱敏诊断；诊断失败不得覆盖原始控制流。"""
 
     try:
+        failure_class = getattr(error, "failure_class", "execution-failure")
+        if isinstance(
+            error,
+            (
+                CampaignCleanupRequested,
+                incremental_recovery.WallClockTimeoutError,
+            ),
+        ):
+            failure_class = "deadline-expired"
         codex_upgrade_supervisor.write_campaign_run_action_diagnostic(
             failure_kind=failure_kind,
             error=error,
+            failure_class=str(failure_class),
         )
     except BaseException:
         pass
@@ -44215,12 +55228,27 @@ def _main_without_campaign_lease(argv: list[str] | None = None) -> int:
                 **preflight_invalidation,
             }
             return_code = 0
+        elif command == FORMAL_FAILED_JOB_RECOVERY_COMMAND:
+            if getattr(arguments, "reason", None) != "candidate_failed_job_tool_recovery":
+                raise ConfigurationError("正式失败 Job 恢复入口的 reason 已被篡改。")
+            result = create_successor_campaign(arguments)
+            return_code = 0
+        elif command == FORMAL_POST_RUN_SEAL_RECOVERY_COMMAND:
+            if getattr(arguments, "reason", None) != POST_RUN_SEAL_RECOVERY_REASON:
+                raise ConfigurationError("正式 post-run seal 恢复入口的 reason 已被篡改。")
+            result = create_successor_campaign(arguments)
+            return_code = 0
         elif command == "reuse-official-evidence":
             # §5.3.3：官方证据一旦可信封存就只读复用。这里复用 successor 实现里
             # 的 official-only 导入分支，但走正式命令名，不属于旧写入入口；
-            # 原因由子解析器固定为 official_evidence_reuse。
-            if getattr(arguments, "reason", None) != OFFICIAL_EVIDENCE_REUSE_REASON:
-                raise ConfigurationError("reuse-official-evidence 的原因不可更改。")
+            # 原因只允许默认复用或显式分类事实纠正两种 official-only 模式。
+            if getattr(arguments, "reason", None) not in {
+                OFFICIAL_EVIDENCE_REUSE_REASON,
+                CLASSIFICATION_FACT_CORRECTION_REASON,
+            }:
+                raise ConfigurationError(
+                    "reuse-official-evidence 的原因超出正式 official-only 边界。"
+                )
             result = create_successor_campaign(arguments)
             return_code = 0
         elif command in LEGACY_WRITE_COMMANDS:
@@ -44296,11 +55324,8 @@ def _main_without_campaign_lease(argv: list[str] | None = None) -> int:
         elif command == "compile-vc-interrupted-recovery-batch":
             result = compile_vc_interrupted_recovery_batch(arguments)
             return_code = 0
-            return_code = 0
-            return_code = 0
         elif command == "recover-vc1-interruption":
             result = recover_vc1_interruption(arguments)
-            return_code = 0
             return_code = 0
         elif command == "plan-candidate-gates":
             result = plan_candidate_gates(arguments)
@@ -44379,11 +55404,26 @@ def _main_without_campaign_lease(argv: list[str] | None = None) -> int:
         elif command == "reconcile-supervisor-run":
             result = _reconcile_supervisor_run_command(arguments)
             return_code = 0 if result.get("status") == "recoverable" else 3
+        elif command == "revision-open":
+            result = open_candidate_revision(arguments)
+            return_code = 0
+        elif command == "invalidate-candidate":
+            result = invalidate_candidate(arguments)
+            return_code = 0 if result.get("status") in {"preview", "applied"} else 3
+        elif command == "evaluation-recover":
+            result = evaluation_recover(arguments)
+            return_code = 0 if result.get("status") in {"preview", "applied", "abandoned", "redirect"} else 3
         elif command == "reconcile-attempt":
             result = _reconcile_attempt_command(arguments)
-            return_code = 0 if result.get("status") == "recoverable" else 3
+            return_code = 0 if result.get("status") in {"recoverable", "authorized"} else 3
+        elif command == "rehearse-candidate-seal":
+            result = _rehearse_candidate_seal_command(arguments)
+            return_code = 0 if result.get("status") == "passed" else 3
         elif command == "account-sealed-official":
             result = _account_sealed_official_command(arguments)
+            return_code = 0
+        elif command == "account-sealed-candidate":
+            result = _account_sealed_candidate_command(arguments)
             return_code = 0
         elif command == "status":
             result = campaign_status(arguments.campaign_dir, arguments.candidate_id)
@@ -44417,6 +55457,19 @@ def _main_without_campaign_lease(argv: list[str] | None = None) -> int:
         return 1
 
 
+def _reject_capture_candidate_rerun_without_segment(arguments: argparse.Namespace, command: str) -> None:
+    """``capture-candidate --rerun-failed`` 只属于恢复段后继段；失败 attempt 的补跑仍走 ``resume --rerun-failed``
+    （B0：已批准的零请求恢复预览冻结闭集）。在取得 Campaign lease 之前拒绝，避免无谓接管过期 lease。"""
+
+    if command != "capture-candidate" or not getattr(arguments, "rerun_failed", False):
+        return
+    if getattr(arguments, "capture_action", None) != "run" or not getattr(arguments, "attempt_recovery", None):
+        raise ConfigurationError(
+            "capture-candidate --rerun-failed 只用于 run --attempt-recovery ar<k+1>（失败段的后继段）；"
+            "失败 attempt 的补跑请用 resume --rerun-failed。"
+        )
+
+
 def _main_with_campaign_lease(argv: list[str] | None = None) -> int:
     """带 Campaign lease 的 CLI 入口。
 
@@ -44438,6 +55491,7 @@ def _main_with_campaign_lease(argv: list[str] | None = None) -> int:
     try:
         _reject_campaign_run_legacy_write(arguments, str(arguments.command))
         _reject_unparented_formal_write(arguments, str(arguments.command))
+        _reject_capture_candidate_rerun_without_segment(arguments, str(arguments.command))
     except ConfigurationError as error:
         _record_campaign_run_action_failure("handled-error", error)
         print(f"升级审计失败：{error}", file=sys.stderr)

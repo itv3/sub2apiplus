@@ -1,0 +1,204 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-candidate-revision-v1.json",
+  "title": "候选级 revision 登记记录（control/vc/revisions/r<N>/revision.json，write-once）",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "campaign_id",
+    "revision",
+    "candidate_id",
+    "opened_at_utc",
+    "previous_revision_sha256",
+    "vc3_checkpoint",
+    "vc3_stage_receipt",
+    "supersedes",
+    "record_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "codex-upgrade-candidate-revision/v1"
+    },
+    "campaign_id": {
+      "$ref": "#/$defs/safeId"
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "candidate_id": {
+      "$ref": "#/$defs/safeId"
+    },
+    "opened_at_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "previous_revision_sha256": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/sha256"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "vc3_checkpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256",
+        "phase",
+        "checkpoint_sha256"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "phase": {
+          "const": "VC-3"
+        },
+        "checkpoint_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "vc3_stage_receipt": {
+      "$ref": "#/$defs/binding"
+    },
+    "supersedes": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "revision",
+            "candidate_id",
+            "invalidation_receipt",
+            "candidate_invalidated_event_sha256"
+          ],
+          "properties": {
+            "revision": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "candidate_id": {
+              "$ref": "#/$defs/safeId"
+            },
+            "invalidation_receipt": {
+              "$ref": "#/$defs/binding"
+            },
+            "candidate_invalidated_event_sha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        }
+      ]
+    },
+    "record_sha256": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "safeId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "gitCommit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "identitySnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "git_commit",
+        "source_tree_sha256",
+        "image_id",
+        "build_receipt_sha256",
+        "snapshot_sources"
+      ],
+      "properties": {
+        "git_commit": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/gitCommit"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source_tree_sha256": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "image_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "build_receipt_sha256": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "snapshot_sources": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "build_receipt",
+              "attempt_candidate_identity",
+              "candidate_source"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

@@ -36,6 +36,10 @@ type officialCodexAttemptConditions struct {
 	AttestationPresent  bool
 	CookiePresent       bool
 	CompressionEligible bool
+	// LunaReservePresent 由网关自身的 WHAM 配额请求声明：官方 TUI 读取账号
+	// rate-limit 时对 /wham/usage 追加 x-openai-codex-luna-reserve，网关作为
+	// backend-client 复刻同一行为；settings/user、credit details 与 consume 不带。
+	LunaReservePresent bool
 }
 
 // officialCodexInvocationIdentityInput 是 service 向 Executor 身份权威提交的
@@ -183,6 +187,7 @@ func prepareOfficialCodexSemanticAttempt(
 			AttestationPresent:  strings.TrimSpace(attestation) != "",
 			CookiePresent:       strings.TrimSpace(cookie) != "",
 			CompressionEligible: headerContainsToken(headers, "Content-Encoding", "zstd"),
+			LunaReservePresent:  strings.TrimSpace(headers.Get("x-openai-codex-luna-reserve")) != "",
 		},
 	)
 	if err != nil {
@@ -430,6 +435,7 @@ func buildOfficialCodexIdentityFacts(
 		CompressionEligible:     compressionEligible,
 		ModelSupportsLite:       hasEgressContext && egressContext.responsesLite,
 		BetaFeaturesPresent:     conditionalField("x-codex-beta-features") != "",
+		LunaReservePresent:      attemptConditions.LunaReservePresent,
 	}
 	managedRaw, _ := json.Marshal(struct {
 		Residency string

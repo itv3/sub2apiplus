@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-capture-reservation-v2.json",
+  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-capture-reservation-v3.json",
   "title": "Codex 出站抓包原子预约",
   "description": "run 发出请求前在 Campaign 锁内原子发布，用于关闭并发竞态和进程中断空目录窗口。",
   "type": "object",
@@ -19,11 +19,12 @@
     "started_at_utc",
     "identity_sha256",
     "planned_jobs",
+    "candidate_readiness",
     "reservation_digest"
   ],
   "properties": {
     "schema_version": {
-      "const": "codex-upgrade-capture-reservation/v2"
+      "const": "codex-upgrade-capture-reservation/v3"
     },
     "campaign_id": {
       "$ref": "#/$defs/safeId"
@@ -38,19 +39,13 @@
       "$ref": "#/$defs/sha256"
     },
     "phase": {
-      "enum": ["official", "candidate"]
+      "const": "candidate"
     },
     "candidate_id": {
-      "oneOf": [
-        {"$ref": "#/$defs/safeId"},
-        {"type": "null"}
-      ]
+      "$ref": "#/$defs/safeId"
     },
     "candidate_purpose": {
-      "oneOf": [
-        {"$ref": "#/$defs/candidatePurpose"},
-        {"type": "null"}
-      ]
+      "$ref": "#/$defs/candidatePurpose"
     },
     "attempt_id": {
       "$ref": "#/$defs/attemptId"
@@ -83,36 +78,13 @@
       "description": "创建预约时绑定的 Campaign 持久租约摘要；不复制可变租约正文。",
       "$ref": "#/$defs/campaignLeaseBinding"
     },
+    "candidate_readiness": {
+      "$ref": "#/$defs/candidateReadinessBinding"
+    },
     "reservation_digest": {
       "$ref": "#/$defs/sha256"
     }
   },
-  "allOf": [
-    {
-      "if": {
-        "properties": {"phase": {"const": "official"}},
-        "required": ["phase"]
-      },
-      "then": {
-        "properties": {
-          "candidate_id": {"const": null},
-          "candidate_purpose": {"const": null}
-        }
-      }
-    },
-    {
-      "if": {
-        "properties": {"phase": {"const": "candidate"}},
-        "required": ["phase"]
-      },
-      "then": {
-        "properties": {
-          "candidate_id": {"$ref": "#/$defs/safeId"},
-          "candidate_purpose": {"$ref": "#/$defs/candidatePurpose"}
-        }
-      }
-    }
-  ],
   "$defs": {
     "safeId": {
       "type": "string",
@@ -147,6 +119,47 @@
         "deadline_at_utc": {
           "$ref": "#/$defs/rfc3339"
         }
+      }
+    },
+    "receiptBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "bytes", "receipt_digest"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^control/candidate-readiness/[A-Za-z0-9][A-Za-z0-9._-]{0,127}/.+\\.json$"
+        },
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "bytes": {"type": "integer", "minimum": 1},
+        "receipt_digest": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "candidateReadinessBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "image_id",
+        "build_receipt_sha256",
+        "static_receipt",
+        "models_probe_receipt",
+        "project_head_sequence",
+        "project_head_sha256"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "codex-upgrade-candidate-readiness-binding/v1"
+        },
+        "image_id": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "build_receipt_sha256": {"$ref": "#/$defs/sha256"},
+        "static_receipt": {"$ref": "#/$defs/receiptBinding"},
+        "models_probe_receipt": {"$ref": "#/$defs/receiptBinding"},
+        "project_head_sequence": {"type": "integer", "minimum": 0},
+        "project_head_sha256": {"$ref": "#/$defs/sha256"}
       }
     }
   }

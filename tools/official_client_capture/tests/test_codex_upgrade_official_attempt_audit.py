@@ -170,6 +170,14 @@ class AttemptAuditFixture:
             ],
         }
         _canonical_file(self.attempt_root / "attempt.json", attempt)
+        # provenance 只从不可变 Job 收据 `job-<id>.json` 读取实际证据根，
+        # attempt.json 的 results 仅是汇总；固定数据按真实 attempt 目录同时落两份。
+        for result in attempt["results"]:
+            evidence_root = "/capture/runs/c1-main" if result["track"] == "main" else "/capture/runs/c1-lite"
+            _canonical_file(
+                self.attempt_root / f"job-{result['id']}.json",
+                dict(result, phase="official", evidence_roots=[evidence_root]),
+            )
         _chmod_tree(self.data)
 
     def run(self, **kwargs: object) -> dict:

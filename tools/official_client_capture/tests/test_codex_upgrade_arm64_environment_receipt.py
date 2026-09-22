@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import re
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -13,6 +15,74 @@ from tools.official_client_capture import codex_upgrade_arm64_environment_receip
 from tools.official_client_capture.tests.control_receipt_fixtures import (
     create_arm_receipt,
 )
+
+
+V6_FIXTURE_ROOT = Path(__file__).resolve().parent / "fixtures" / "arm64_environment_receipt_v6"
+ROOT_MIN_AVAILABLE_BYTES = 30 * 1024**3
+
+
+def _schema_accepts(schema: dict, value: object, node: object | None = None) -> bool:
+    """最小 JSON Schema 求值器：只覆盖本收据 schema 用到的关键字，供离线双分支测试。"""
+
+    node = schema if node is None else node
+    if node is True:
+        return True
+    if node is False:
+        return False
+    assert isinstance(node, dict), node
+    if "$ref" in node:
+        target = schema
+        for part in node["$ref"].lstrip("#/").split("/"):
+            target = target[part]
+        if not _schema_accepts(schema, value, target):
+            return False
+    if "const" in node and value != node["const"]:
+        return False
+    if "enum" in node and value not in node["enum"]:
+        return False
+    if "type" in node:
+        expected = node["type"]
+        checks = {
+            "object": lambda item: isinstance(item, dict),
+            "string": lambda item: isinstance(item, str),
+            "integer": lambda item: isinstance(item, int) and not isinstance(item, bool),
+            "boolean": lambda item: isinstance(item, bool),
+        }
+        if not checks[expected](value):
+            return False
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if "minimum" in node and value < node["minimum"]:
+            return False
+        if "maximum" in node and value > node["maximum"]:
+            return False
+    if isinstance(value, str):
+        if "minLength" in node and len(value) < node["minLength"]:
+            return False
+        if "pattern" in node and not re.search(node["pattern"], value):
+            return False
+    if isinstance(value, dict):
+        for name in node.get("required", []):
+            if name not in value:
+                return False
+        properties = node.get("properties", {})
+        for name, child in properties.items():
+            if name in value and not _schema_accepts(schema, value[name], child):
+                return False
+        if node.get("additionalProperties") is False and set(value) - set(properties):
+            return False
+    for child in node.get("allOf", []):
+        if not _schema_accepts(schema, value, child):
+            return False
+    if "anyOf" in node and not any(_schema_accepts(schema, value, c) for c in node["anyOf"]):
+        return False
+    if "oneOf" in node and sum(_schema_accepts(schema, value, c) for c in node["oneOf"]) != 1:
+        return False
+    if "not" in node and _schema_accepts(schema, value, node["not"]):
+        return False
+    if "if" in node and _schema_accepts(schema, value, node["if"]):
+        if "then" in node and not _schema_accepts(schema, value, node["then"]):
+            return False
+    return True
 
 
 class Arm64EnvironmentReceiptTests(unittest.TestCase):
@@ -511,6 +581,164 @@ class Arm64EnvironmentReceiptTests(unittest.TestCase):
                 ):
                     receipt.build_receipt(root, "p0-facts.json")
 
+    def test_after_phase_below_watermark_records_degraded_receipt(self) -> None:
+        """v7：收尾阶段低于水位只记 degraded，收据通过、可重放、连续性身份不变。"""
+
+        for field, value in (
+            ("used_percent", 72),
+            ("available_bytes", ROOT_MIN_AVAILABLE_BYTES - 2_500_000),
+        ):
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                root.chmod(0o700)
+                create_arm_receipt(
+                    root, phase="attempt_before", subject_id="attempt-x", prefix="before"
+                )
+                before = json.loads((root / "before-receipt.json").read_text("utf-8"))
+                create_arm_receipt(
+                    root, phase="attempt_after", subject_id="attempt-x", prefix="after"
+                )
+                after_facts_path = root / "after-facts.json"
+                facts = json.loads(after_facts_path.read_text(encoding="utf-8"))
+                facts["root_filesystem"][field] = value
+                self._rewrite(after_facts_path, facts)
+                (root / "after-receipt.json").unlink()
+
+                built = receipt.finalize(root, "after-facts.json", "after-receipt.json")
+                self.assertEqual(built["status"], "passed")
+                self.assertEqual(built["producer"]["version"], "7")
+                self.assertEqual(
+                    built["resource_gate"],
+                    {
+                        "used_percent": facts["root_filesystem"]["used_percent"],
+                        "available_bytes": facts["root_filesystem"]["available_bytes"],
+                        "passed": False,
+                        "degraded": True,
+                    },
+                )
+                self.assertEqual(
+                    built["continuity_identity_sha256"],
+                    before["continuity_identity_sha256"],
+                )
+                self.assertEqual(receipt.replay(root, "after-receipt.json"), built)
+
+    def test_before_phases_below_watermark_still_fail_closed(self) -> None:
+        """准入阶段（p0／*_before）任何版本都不允许降级。"""
+
+        for phase in ("p0", "attempt_before", "kilo_before", "gate_before", "deployment_before"):
+            with self.subTest(phase=phase), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                root.chmod(0o700)
+                create_arm_receipt(root, phase=phase, subject_id="subject-x", prefix="x")
+                facts_path = root / "x-facts.json"
+                facts = json.loads(facts_path.read_text(encoding="utf-8"))
+                facts["root_filesystem"]["available_bytes"] = ROOT_MIN_AVAILABLE_BYTES - 1
+                self._rewrite(facts_path, facts)
+                with self.assertRaisesRegex(
+                    receipt.Arm64EnvironmentReceiptError, "停线水位"
+                ):
+                    receipt.build_receipt(root, "x-facts.json")
+
+    def test_schema_branches_by_producer_version_and_phase(self) -> None:
+        """schema 按 producer.version × phase 二维分支：v6 全阶段硬门禁，v7 只有 *_after 可降级。"""
+
+        schema = json.loads(
+            Path(receipt.__file__)
+            .with_name("codex_upgrade_arm64_environment_receipt.schema.json")
+            .read_text(encoding="utf-8")
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            root.chmod(0o700)
+            create_arm_receipt(root, phase="attempt_after", subject_id="s", prefix="s")
+            base = json.loads((root / "s-receipt.json").read_text(encoding="utf-8"))
+        passed_gate = {"used_percent": 55, "available_bytes": 47 * 1024**3, "passed": True}
+        degraded_gate = {
+            "used_percent": 72,
+            "available_bytes": 28 * 1024**3,
+            "passed": False,
+            "degraded": True,
+        }
+
+        def variant(version: str, phase: str, gate: dict) -> dict:
+            payload = json.loads(json.dumps(base))
+            payload["producer"]["version"] = version
+            payload["phase"] = phase
+            payload["resource_gate"] = gate
+            return payload
+
+        self.assertTrue(_schema_accepts(schema, base))
+        self.assertTrue(_schema_accepts(schema, variant("6", "attempt_after", passed_gate)))
+        self.assertTrue(_schema_accepts(schema, variant("7", "p0", passed_gate)))
+        self.assertTrue(_schema_accepts(schema, variant("7", "attempt_after", degraded_gate)))
+        self.assertTrue(_schema_accepts(schema, variant("7", "deployment_after", degraded_gate)))
+        self.assertFalse(_schema_accepts(schema, variant("6", "attempt_after", degraded_gate)))
+        self.assertFalse(_schema_accepts(schema, variant("6", "p0", degraded_gate)))
+        self.assertFalse(_schema_accepts(schema, variant("7", "p0", degraded_gate)))
+        self.assertFalse(_schema_accepts(schema, variant("7", "attempt_before", degraded_gate)))
+        self.assertFalse(_schema_accepts(schema, variant("5", "p0", passed_gate)))
+        # degraded 必须与真实低水位一致：水位正常却声称 degraded，或低水位却声称通过，都不合法。
+        self.assertFalse(
+            _schema_accepts(schema, variant("7", "attempt_after", {**passed_gate, "passed": False, "degraded": True}))
+        )
+        self.assertFalse(
+            _schema_accepts(schema, variant("7", "attempt_after", {**degraded_gate, "passed": True}))
+        )
+        self.assertFalse(
+            _schema_accepts(schema, variant("7", "attempt_after", {"used_percent": 72, "available_bytes": 28 * 1024**3, "passed": True}))
+        )
+
+    def test_replays_real_v6_receipts_after_producer_upgrade(self) -> None:
+        """冻结夹具：v14 P0 与 v13 attempt_before 的真实 v6 收据在 v7 下只读重放通过。"""
+
+        for name in ("p0", "attempt_before"):
+            with self.subTest(fixture=name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                root.chmod(0o700)
+                for file_name in ("facts.json", "receipt.json"):
+                    shutil.copyfile(V6_FIXTURE_ROOT / name / file_name, root / file_name)
+                    (root / file_name).chmod(0o600)
+                original = json.loads((root / "receipt.json").read_text(encoding="utf-8"))
+                self.assertEqual(original["producer"]["version"], "6")
+                self.assertIn(
+                    original["producer"]["tool_sha256"],
+                    receipt.REGISTERED_REPLAY_PRODUCER_HASHES["6"],
+                )
+                self.assertEqual(
+                    original["contract_sha256"],
+                    receipt.LEGACY_V6_NETWORK_CONTRACT_SHA256,
+                )
+                self.assertNotEqual(original["contract_sha256"], receipt.contract_sha256())
+
+                replayed = receipt.replay(root, "receipt.json")
+                self.assertEqual(replayed, original)
+                self.assertEqual(replayed["phase"], name)
+                self.assertEqual(replayed["resource_gate"]["passed"], True)
+                # v6 事实不能由 v7 生成新收据：采集器身份已漂移。
+                with self.assertRaisesRegex(
+                    receipt.Arm64EnvironmentReceiptError, "身份漂移"
+                ):
+                    receipt.build_receipt(root, "facts.json")
+
+    def test_v6_after_phase_keeps_hard_watermark_gate(self) -> None:
+        """降级只对 v7 生效：v6 收尾阶段低于水位仍按生成时的硬门禁失败。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            root.chmod(0o700)
+            shutil.copyfile(V6_FIXTURE_ROOT / "attempt_before" / "facts.json", root / "facts.json")
+            (root / "facts.json").chmod(0o600)
+            facts = json.loads((root / "facts.json").read_text(encoding="utf-8"))
+            facts["phase"] = "attempt_after"
+            facts["root_filesystem"]["available_bytes"] = ROOT_MIN_AVAILABLE_BYTES - 1
+            self._rewrite(root / "facts.json", facts)
+            with self.assertRaisesRegex(
+                receipt.Arm64EnvironmentReceiptError, "停线水位"
+            ):
+                receipt._build_receipt(
+                    root, "facts.json", replay_producer=facts["collector"]
+                )
+
     def test_continuity_ignores_docker_restart_ephemeral_identity(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -749,10 +977,12 @@ class Arm64EnvironmentReceiptTests(unittest.TestCase):
             schema["properties"]["schema_version"]["const"],
             receipt.RECEIPT_SCHEMA,
         )
+        # v7 生成、v6 只读重放：schema 同时接受两个版本，且当前版本必须在其中。
         self.assertEqual(
-            schema["properties"]["producer"]["properties"]["version"]["const"],
-            receipt.PRODUCER_VERSION,
+            schema["properties"]["producer"]["properties"]["version"]["enum"],
+            ["6", receipt.PRODUCER_VERSION],
         )
+        self.assertEqual(len(schema["allOf"]), 3)
 
 
 if __name__ == "__main__":
