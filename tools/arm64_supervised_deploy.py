@@ -182,6 +182,11 @@ from typing import Any, Callable, Mapping
 # 不相交、known_total == Σknown）与范围等式合并为 recovery_preview_scope_violation（CLI 与第七种协议共用）；
 # parent-finalize-lost 的段摘要重验改用与幂等重派相同强度的段加载校验并要求结果 Job 集合恰等于权威链 J*。
 # 监督器随之变化；断言预处理器未变。
+# 2026-09-22（EvidenceManifest 边界漂移分类）：verify_manifest_boundary 的不可变 stat 边界漂移由生产者给出
+# failure_class=evidence-integrity 与观测 evidence-manifest.boundary／stat-boundary-drift，codex_upgrade 原样携带到
+# 动作诊断，reconciler 固定终态 integrity_mismatch；0.151 评估恢复台账随 evidence_manifest 重签；ARM64 抓包驱动链
+# 入库（tools/arm64_capture_driver，非受管目录，组合安装收据绑定本部署收据）。受管工具树与 evidence 层摘要随之
+# 变化；监督器与断言预处理器未变。
 DEFAULT_SUPERVISOR_DIGEST = (
     "30dacdbd8dfb7c7955e2b396a23fef91b2363a67e70c6d784efa63444101990f"
 )
@@ -330,6 +335,9 @@ MANAGED_RUNTIME_DOCUMENTS = (
     "egress/maintenance/upstream-codex-0154-vc5-deploy-manifest-20-20260921-freeze-successor.json",
     "egress/maintenance/upstream-codex-0154-vc5-tooling-batch3-m3-guide-fix2-20260921-freeze-successor.json",
     "egress/maintenance/upstream-codex-0154-vc5-deploy-manifest-21-20260921-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-evidence-integrity-20260922-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-ledger-resign-evidence-integrity-20260922-freeze-successor.json",
+    "egress/maintenance/upstream-codex-0154-vc5-deploy-manifest-22-20260922-freeze-successor.json",
 )
 MANAGED_ASSERTION_PREPARER = "prepare_assertion_bundle.sh"
 TARGET_SCENARIO_MANIFEST = "codex_upgrade_scenarios_0_154_0.json"
