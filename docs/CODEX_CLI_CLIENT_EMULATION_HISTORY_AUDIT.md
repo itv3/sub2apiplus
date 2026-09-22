@@ -104,6 +104,8 @@ seal preview；同时变化只能属于 `control／evaluator／orchestrator`。�
 
 ### 5.2 VC-1 `KeyboardInterrupt` 孤儿的单次恢复（原公共执行约定）
 
+> 指南正文自 2026-09-22 起不再重复登记本条款的只读指针，统一指向本节。
+
 只有同时满足下列条件才使用本分支：失败父批次是 v2 且终态为 `failed/KeyboardInterrupt`；官方 attempt
 已有同一 reservation 和可重放 checkpoint，但没有 `attempt.json`；checkpoint 同时包含已完成项和
 失败／待执行项；Campaign、目标产物、账号权限、模型可见性、环境语义及原始 deadline 未变化。工具变化
@@ -142,3 +144,50 @@ v3 恰好包含一个 `recover-vc1-interruption` 动作。它只补齐原 attemp
 `resume --rerun-failed --acknowledge-live-requests` 执行冻结的 execute 闭集；复用项继续只读承接。
 合同、transition、源 attempt、失败 v2 和预览 v3 均只写追加，任一摘要、owner nonce、Ledger head、部署
 工具或闭集漂移都停线，不得重编同一序号或新建 reservation 试探。
+
+### 5.3 legacy 批次模型的预派发停线收据（原公共执行约定，2026-09-22 自指南移入）
+
+
+以下条款只对总计划没有 `batch_model` 字段的历史 Campaign 有效：原子入口能捕获的失败会自动写收据；只有
+进程被 `SIGKILL` 等不可捕获方式终止、且两个编译制品已经完整落盘而父 run 尚不存在时，才允许在原 Campaign
+上补写一次。命令固定为：
+
+```bash
+CAMPAIGN_DIR=/绝对路径/campaign
+STATE_DIR=/绝对路径/本轮Campaign-supervisor
+BATCH_NAME=0002-vc-2.json
+
+python3 -m tools.official_client_capture.codex_upgrade_predispatch_stop record \
+  --campaign-dir "$CAMPAIGN_DIR" \
+  --state-dir "$STATE_DIR" \
+  --batch "$CAMPAIGN_DIR/control/vc/batches/$BATCH_NAME" \
+  --manifest "$CAMPAIGN_DIR/control/vc/run-manifests/$BATCH_NAME" \
+  --failure-kind operator-recovery \
+  --error-type ProcessExit
+
+python3 -m tools.official_client_capture.codex_upgrade_predispatch_stop replay \
+  --campaign-dir "$CAMPAIGN_DIR" \
+  --state-dir "$STATE_DIR" \
+  --receipt "$CAMPAIGN_DIR/control/vc/predispatch-stops/$BATCH_NAME"
+```
+
+`BATCH_NAME` 的序号必须使用四位十进制，阶段使用小写形式。`record`
+会非阻塞取得同一把 `.campaign-run.lock`，验证 Campaign plan、batch、manifest 和全部既有父 run；任何字段、
+路径、摘要、历史或锁状态不一致均拒绝写入。补写和重放均不得运行 action，也不得恢复当前 Campaign。
+
+`campaign-run` 必须向动作注入父 `run_dir`、Campaign 身份、owner nonce 和原始 deadline；动作内的
+`codex_upgrade.py` 只能附加到该父监督器，不能再创建 `CampaignLease`、`.supervisor/run-*` 或重置计时。
+清单分别声明 `execute_items` 和 `reuse_items`。普通执行／恢复批次的前者为空时，必须在 reservation 前
+写入 `incremental-noop`，并以 `scanned_bytes=0`、`live_request_count=0` 退出；唯一不创建 reservation 的
+情况是 `reuse-official-evidence` 引导出的首个 VC-1 no-op 批次，它由导入收据和 VC-1 checkpoint 直接证明
+全部 official Job 已复用且请求、扫描、执行均为零。正式上下文在取得 lease 前拒绝 `successor`、
+`control-epoch`、`evaluation-transition`、`terminal-transition-preflight` 和旧写入入口；0.151 formal 的
+capture、classify、profile、compare、accept、resume 及 canonical 写命令没有父上下文时同样拒绝。
+
+0.154.0 首轮事故链留下的两条过渡恢复条款（metadata-only seal 例外、`permanent-stop-*` 来源 Ledger 的
+只读承接）已于 2026-09-16 移入[历史审计](CODEX_CLI_CLIENT_EMULATION_HISTORY_AUDIT.md#codex-0154-transitional-recovery-clauses)，
+只作只读解释，不是新 Campaign 的执行入口。
+
+旧恢复机制及 Kilo 历史事实只按
+[历史审计](CODEX_CLI_CLIENT_EMULATION_HISTORY_AUDIT.md#codex-0151-historical-recovery)读取，不得成为新 Campaign
+的前置条件。
