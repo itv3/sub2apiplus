@@ -442,7 +442,7 @@ class CodexUpgradeVCArtifactsTests(unittest.TestCase):
         else:
             command += ["--canonical-step", step]
         action = {
-            "action_id": f"canonical-{artifacts.CANONICAL_ITEM_ORDER.index(item_id) + 1}-{step or 'import'}",
+            "action_id": f"canonical-{artifacts.CANONICAL_VC5_ITEM_ORDER.index(item_id) + 1}-{step or 'import'}",
             "operation": f"VC-5:{item_id}",
             "timeout_seconds": 1800,
             "command": command,
@@ -462,13 +462,13 @@ class CodexUpgradeVCArtifactsTests(unittest.TestCase):
     def test_canonical_actions_follow_frozen_item_command_mapping(self) -> None:
         """canonical 四项与子命令一一对应，动作绑定从命令冻结提取，套名双向拒绝。"""
 
-        items = sorted(artifacts.CANONICAL_ITEM_IDS)
+        items = sorted(artifacts.CANONICAL_VC5_ITEM_COMMANDS)
         plan = artifacts.validate_action_plan(
             self._canonical_plan([self._canonical_action(item) for item in items], items)
         )
         self.assertEqual(
             [action["item_ids"][0] for action in plan["actions"]],
-            list(artifacts.CANONICAL_ITEM_ORDER),
+            list(artifacts.CANONICAL_VC5_ITEM_ORDER),
         )
         binding = artifacts.canonical_batch_binding(
             plan["actions"], execute_item_ids=plan["execute_item_ids"]
@@ -480,6 +480,7 @@ class CodexUpgradeVCArtifactsTests(unittest.TestCase):
                 "candidate_id": "cand-1",
                 "attempt_id": "20260918T201610Z-2cd24cb43d446278",
                 "phase": "VC-5",
+                "group": "VC-5",
                 "item_ids": items,
             },
         )

@@ -2576,7 +2576,7 @@ raise SystemExit(9)
 
     @staticmethod
     def _canonical_action(campaign_dir: Path, item_id: str, *, attempt_id: str) -> dict[str, object]:
-        subcommand, step = vc_artifacts.CANONICAL_ITEM_COMMANDS[item_id]
+        subcommand, step = vc_artifacts.CANONICAL_VC5_ITEM_COMMANDS[item_id]
         command = [
             sys.executable,
             str(Path(supervisor.__file__).with_name("codex_upgrade.py")),
@@ -2608,7 +2608,7 @@ raise SystemExit(9)
         else:
             command += ["--canonical-step", step]
         return {
-            "action_id": f"canonical-{vc_artifacts.CANONICAL_ITEM_ORDER.index(item_id) + 1}-{step or 'import'}",
+            "action_id": f"canonical-{vc_artifacts.CANONICAL_VC5_ITEM_ORDER.index(item_id) + 1}-{step or 'import'}",
             "operation": f"VC-5:{item_id}",
             "timeout_seconds": 30.0,
             "command": command,
@@ -2623,10 +2623,10 @@ raise SystemExit(9)
             root.chmod(0o700)
             campaign_dir, _ledger_root, seed, attempt_root = self._post_run_tooling_fixture(root)
             attempt_id = attempt_root.name
-            items = sorted(vc_artifacts.CANONICAL_ITEM_IDS)
+            items = sorted(vc_artifacts.CANONICAL_VC5_ITEM_COMMANDS)
             actions = [
                 self._canonical_action(campaign_dir, item, attempt_id=attempt_id)
-                for item in vc_artifacts.CANONICAL_ITEM_ORDER
+                for item in vc_artifacts.CANONICAL_VC5_ITEM_ORDER
             ]
             manifest = supervisor.build_batched_campaign_run_manifest(
                 campaign_id="campaign-closeout",
@@ -2672,7 +2672,7 @@ raise SystemExit(9)
             # 指定的 attempt 不存在。
             missing_actions = [
                 self._canonical_action(campaign_dir, item, attempt_id="20260918T111111Z-1111111111111111")
-                for item in vc_artifacts.CANONICAL_ITEM_ORDER
+                for item in vc_artifacts.CANONICAL_VC5_ITEM_ORDER
             ]
             missing = supervisor.post_run_tooling_facts(
                 campaign_dir, {**manifest, "actions": missing_actions}, run_started_at_utc=run_started
@@ -2741,7 +2741,7 @@ raise SystemExit(9)
             campaign_dir, ledger_root, seed, attempt_root = self._post_run_tooling_fixture(
                 root, kilo_window_offset_seconds=-120.0
             )
-            items = sorted(vc_artifacts.CANONICAL_ITEM_IDS)
+            items = sorted(vc_artifacts.CANONICAL_VC5_ITEM_COMMANDS)
             manifest = supervisor.build_batched_campaign_run_manifest(
                 campaign_id="campaign-closeout",
                 campaign_plan_sha256=str(seed["campaign_plan_sha256"]),
@@ -2755,7 +2755,7 @@ raise SystemExit(9)
                 original_deadline_at_utc="2099-09-15T08:12:43Z",
                 actions=[
                     self._canonical_action(campaign_dir, item, attempt_id=attempt_root.name)
-                    for item in vc_artifacts.CANONICAL_ITEM_ORDER
+                    for item in vc_artifacts.CANONICAL_VC5_ITEM_ORDER
                 ],
                 execute_items=items,
                 reuse_items=list(self._POST_RUN_JOB_IDS),

@@ -146,20 +146,81 @@ PUBLIC_GATES: tuple[tuple[str, str], ...] = (
 # 不得挂在别的 item 名下。父监督器把动作失败升级为 post-run-tooling 时按同一
 # 映射从命令里提取 Candidate／attempt，只检查该指定 attempt，不再要求全
 # Campaign 恰好一个等待收据的 attempt。
-CANONICAL_ITEM_COMMANDS: dict[str, tuple[str, str | None]] = {
+CANONICAL_VC5_ITEM_COMMANDS: dict[str, tuple[str, str | None]] = {
     "canonical-import": ("canonical-import", None),
     "canonical-seal": ("canonical-advance", "seal"),
     "canonical-compare": ("canonical-advance", "compare"),
     "canonical-accept": ("canonical-advance", "accept"),
 }
+# VC-6 步骤（§4.6.7 生产激活链）同样是零请求 canonical 项：两个静态项由固定
+# ``--canonical-step`` 承载，退休项的 item 名带版本（``retire-<版本>``），必须与
+# ``--retire-version`` 精确一致，才能防止把别的版本的退休挂到冻结计划项下。
+CANONICAL_VC6_ITEM_COMMANDS: dict[str, tuple[str, str | None]] = {
+    "production-activation": ("canonical-advance", "production-activation"),
+    "rollback-verification": ("canonical-advance", "rollback-verification"),
+}
+CANONICAL_RETIRE_ITEM_RE = re.compile(r"^retire-([0-9]+\.[0-9]+\.[0-9]+)$")
+CANONICAL_RETIRE_STEP = "retire"
+CANONICAL_ITEM_COMMANDS: dict[str, tuple[str, str | None]] = {
+    **CANONICAL_VC5_ITEM_COMMANDS,
+    **CANONICAL_VC6_ITEM_COMMANDS,
+}
+# 只含静态项；退休项是动态 item 名，判定一律走 ``canonical_item_phase``。
 CANONICAL_ITEM_IDS = frozenset(CANONICAL_ITEM_COMMANDS)
-# 父监督器按动作清单顺序执行，而清单又必须按 action_id 排序；canonical 四步有
-# 严格前后依赖（import → seal → compare → accept），编译期就按这个顺序校验动作
-# 的相对次序，操作员必须用带序号的 action_id（例如 canonical-1-import）表达它。
-CANONICAL_ITEM_ORDER: tuple[str, ...] = tuple(CANONICAL_ITEM_COMMANDS)
+# 父监督器按动作清单顺序执行，而清单又必须按 action_id 排序；canonical 各阶段有
+# 严格前后依赖（VC-5：import → seal → compare → accept；VC-6：生产激活 → 回滚
+# 验证 → 退休），编译期就按这个顺序校验动作的相对次序，操作员必须用带序号的
+# action_id（例如 canonical-1-import、canonical-5-production-activation）表达它。
+CANONICAL_VC5_ITEM_ORDER: tuple[str, ...] = tuple(CANONICAL_VC5_ITEM_COMMANDS)
+CANONICAL_VC6_ITEM_ORDER: tuple[str, ...] = (
+    "production-activation",
+    "rollback-verification",
+)
+CANONICAL_ITEM_ORDER: tuple[str, ...] = CANONICAL_VC5_ITEM_ORDER
+CANONICAL_ITEM_PHASES: dict[str, str] = {
+    **{item: "VC-5" for item in CANONICAL_VC5_ITEM_COMMANDS},
+    **{item: "VC-6" for item in CANONICAL_VC6_ITEM_COMMANDS},
+}
 CANONICAL_SUBCOMMANDS = frozenset(
     subcommand for subcommand, _step in CANONICAL_ITEM_COMMANDS.values()
 )
+
+
+def canonical_item_phase(item_id: Any) -> str | None:
+    """返回 canonical item 所属的 VC 阶段；不是 canonical item 时返回 None。"""
+
+    if not isinstance(item_id, str) or not item_id:
+        return None
+    phase = CANONICAL_ITEM_PHASES.get(item_id)
+    if phase is not None:
+        return phase
+    return "VC-6" if CANONICAL_RETIRE_ITEM_RE.fullmatch(item_id) else None
+
+
+def is_canonical_item(item_id: Any) -> bool:
+    """item 名是否落在 canonical 冻结闭集（含动态退休项）。"""
+
+    return canonical_item_phase(item_id) is not None
+
+
+def canonical_item_command(item_id: str) -> tuple[str, str | None, str | None]:
+    """返回 canonical item 冻结的 ``(子命令, --canonical-step, 退休版本)``。"""
+
+    match = CANONICAL_RETIRE_ITEM_RE.fullmatch(item_id)
+    if match is not None:
+        return "canonical-advance", CANONICAL_RETIRE_STEP, match.group(1)
+    subcommand, step = CANONICAL_ITEM_COMMANDS[item_id]
+    return subcommand, step, None
+
+
+def _canonical_item_rank(item_id: str) -> int:
+    """同组内的冻结执行序位；退休项永远排在 VC-6 组末尾。"""
+
+    if item_id in CANONICAL_VC5_ITEM_ORDER:
+        return CANONICAL_VC5_ITEM_ORDER.index(item_id)
+    if item_id in CANONICAL_VC6_ITEM_ORDER:
+        return CANONICAL_VC6_ITEM_ORDER.index(item_id)
+    return len(CANONICAL_VC6_ITEM_ORDER)
 UPGRADE_CLI_BASENAMES = frozenset({"codex_upgrade.py", "codex-upgrade"})
 
 
@@ -531,6 +592,7 @@ def build_vc_batch(
             [json.loads(json.dumps(dict(item), ensure_ascii=False)) for item in actions],
             execute_item_ids=sorted(set(execute_item_ids)),
             allow_output_bindings=True,
+            phase=phase,
         ),
         "compiled_at_utc": _timestamp(compiled_at_utc, "compiled_at_utc"),
         "must_start_by_utc": _timestamp(must_start_by_utc, "must_start_by_utc"),
@@ -676,6 +738,7 @@ def validate_vc_batch(
         payload.get("actions"),
         execute_item_ids=payload["execute_item_ids"],
         allow_output_bindings=(schema_version == VC_BATCH_SCHEMA),
+        phase=str(phase),
     )
     if payload["execute_item_ids"] and not actions:
         raise VCArtifactError("VC batch 有 execute 项却没有动作")
@@ -2850,7 +2913,7 @@ def canonical_action_binding(action: Mapping[str, Any]) -> dict[str, Any] | None
 
     command = [str(item) for item in action.get("command", [])]
     item_ids = [str(item) for item in action.get("item_ids", [])]
-    canonical_items = sorted(set(item_ids) & CANONICAL_ITEM_IDS)
+    canonical_items = sorted(item for item in set(item_ids) if is_canonical_item(item))
     subcommand = _upgrade_cli_subcommand(command)
     if not canonical_items:
         if subcommand in CANONICAL_SUBCOMMANDS:
@@ -2861,7 +2924,8 @@ def canonical_action_binding(action: Mapping[str, Any]) -> dict[str, Any] | None
     if len(canonical_items) != 1 or item_ids != canonical_items:
         raise VCArtifactError("canonical 动作只能精确承载一个 canonical item")
     item_id = canonical_items[0]
-    expected_subcommand, expected_step = CANONICAL_ITEM_COMMANDS[item_id]
+    group = canonical_item_phase(item_id)
+    expected_subcommand, expected_step, retire_version = canonical_item_command(item_id)
     if subcommand != expected_subcommand:
         raise VCArtifactError(
             f"canonical item {item_id} 只能由子命令 {expected_subcommand} 承载"
@@ -2871,6 +2935,31 @@ def canonical_action_binding(action: Mapping[str, Any]) -> dict[str, Any] | None
         raise VCArtifactError(
             f"canonical item {item_id} 的 --canonical-step 必须是 {expected_step!r}"
         )
+    # 退休项的版本只认 item 名里冻结的那一个：缺参数、写成别的版本或挂到非退休的
+    # canonical-advance 上都拒绝，防止把冻结计划外的运行画像退休记到本项下。
+    # canonical-import 是例外——它用 --retire-version 把退休项冻结进计划本身。
+    declared_retire = _command_option(command, "--retire-version")
+    if retire_version is not None:
+        if declared_retire != retire_version:
+            raise VCArtifactError(
+                f"canonical item {item_id} 的 --retire-version 必须是 {retire_version!r}"
+            )
+    elif item_id == "canonical-import":
+        if declared_retire is None or not VERSION_RE.fullmatch(declared_retire):
+            raise VCArtifactError("canonical-import 动作 --retire-version 非法")
+    elif declared_retire is not None:
+        raise VCArtifactError(
+            f"canonical item {item_id} 不接受 --retire-version"
+        )
+    # VC-6 三步只从已生成并可独立重放的收据推进，必须逐字带上它；VC-5 四步反之。
+    step_receipt = _command_option(command, "--step-receipt")
+    if group == "VC-6":
+        if step_receipt is None or not PurePosixPath(step_receipt).is_absolute():
+            raise VCArtifactError(
+                f"canonical item {item_id} 必须带绝对路径的 --step-receipt"
+            )
+    elif step_receipt is not None:
+        raise VCArtifactError(f"canonical item {item_id} 不接受 --step-receipt")
     if _command_option(command, "--supervisor-run-dir") is not None:
         raise VCArtifactError(
             "批次内 canonical 动作不得自带 --supervisor-run-dir；时间锚只能来自父监督器"
@@ -2887,6 +2976,10 @@ def canonical_action_binding(action: Mapping[str, Any]) -> dict[str, Any] | None
     phase = _command_option(command, "--phase")
     if phase is not None and phase not in VC_PHASES:
         raise VCArtifactError("canonical 动作 --phase 非法")
+    if phase is not None and group is not None and phase != group:
+        raise VCArtifactError(
+            f"canonical item {item_id} 的 --phase 必须是 {group}"
+        )
     approval = _command_option(command, "--approve-import-sha256")
     if item_id == "canonical-import":
         _sha256(approval, "canonical-import 动作 --approve-import-sha256")
@@ -2894,8 +2987,11 @@ def canonical_action_binding(action: Mapping[str, Any]) -> dict[str, Any] | None
         raise VCArtifactError("canonical-advance 动作不接受 --approve-import-sha256")
     return {
         "item_id": item_id,
+        "group": group,
         "subcommand": expected_subcommand,
         "canonical_step": expected_step,
+        "retire_version": retire_version,
+        "step_receipt": step_receipt,
         "campaign_dir": campaign_dir,
         "candidate_id": candidate_id,
         "attempt_id": attempt_id,
@@ -2907,12 +3003,14 @@ def canonical_batch_binding(
     actions: Sequence[Mapping[str, Any]],
     *,
     execute_item_ids: Sequence[str],
+    phase: str | None = None,
 ) -> dict[str, Any] | None:
     """返回一个批次的 canonical 绑定；批次不含 canonical item 时返回 None。
 
     含 canonical item 的批次必须是纯 canonical 批次：execute 项全部落在冻结
     映射内，每项恰由一个动作承载，全部动作指向同一 Campaign 目录、Candidate
-    与 attempt。
+    与 attempt。VC-5 与 VC-6 是两个独立的冻结组，不得同批；给出 ``phase`` 时，
+    该组还必须与批次阶段一致。
     """
 
     bindings = [
@@ -2920,17 +3018,26 @@ def canonical_batch_binding(
         for binding in (canonical_action_binding(action) for action in actions)
         if binding is not None
     ]
-    canonical_execute = sorted(set(execute_item_ids) & CANONICAL_ITEM_IDS)
+    canonical_execute = sorted(
+        item for item in set(execute_item_ids) if is_canonical_item(item)
+    )
     if not bindings and not canonical_execute:
         return None
     if sorted(set(execute_item_ids)) != canonical_execute:
         raise VCArtifactError("canonical 批次不得混入其它 execute 项")
     if sorted(binding["item_id"] for binding in bindings) != canonical_execute:
         raise VCArtifactError("canonical execute 项必须各由恰好一个冻结动作承载")
-    expected_order = [item for item in CANONICAL_ITEM_ORDER if item in canonical_execute]
+    groups = {canonical_item_phase(item) for item in canonical_execute}
+    if len(groups) != 1:
+        raise VCArtifactError("canonical 批次不得混合 VC-5 与 VC-6 的冻结项")
+    group = next(iter(groups))
+    if phase is not None and phase != group:
+        raise VCArtifactError(f"{group} 的 canonical 项不得编入 {phase} 批次")
+    expected_order = sorted(canonical_execute, key=_canonical_item_rank)
     if [binding["item_id"] for binding in bindings] != expected_order:
         raise VCArtifactError(
-            "canonical 动作必须按 import → seal → compare → accept 的次序排列（用带序号的 action_id）"
+            "canonical 动作必须按冻结次序排列（VC-5：import → seal → compare → accept；"
+            "VC-6：生产激活 → 回滚验证 → 退休；用带序号的 action_id）"
         )
     identities = {
         (binding["campaign_dir"], binding["candidate_id"], binding["attempt_id"])
@@ -2947,6 +3054,7 @@ def canonical_batch_binding(
         "candidate_id": candidate_id,
         "attempt_id": attempt_id,
         "phase": next(iter(phases)) if phases else None,
+        "group": group,
         "item_ids": canonical_execute,
     }
 
@@ -2976,6 +3084,7 @@ def _actions(
     *,
     execute_item_ids: Sequence[str],
     allow_output_bindings: bool = True,
+    phase: str | None = None,
 ) -> list[dict[str, Any]]:
     """校验动作对 execute 项的无重叠完整覆盖，以及 canonical 项的冻结映射。
 
@@ -3034,12 +3143,18 @@ def _actions(
         raise VCArtifactError("VC batch actions 必须按 action_id 唯一排序")
     if len(covered) != len(set(covered)) or sorted(covered) != list(execute_item_ids):
         raise VCArtifactError("VC batch actions 未无重叠地精确覆盖 execute_item_ids")
-    canonical_batch_binding(normalized, execute_item_ids=execute_item_ids)
+    canonical_batch_binding(
+        normalized, execute_item_ids=execute_item_ids, phase=phase
+    )
     return normalized
 
 
-def validate_action_plan(value: Any) -> dict[str, Any]:
-    """校验操作员为下一批次声明的 execute／reuse 和动作映射。"""
+def validate_action_plan(value: Any, *, phase: str | None = None) -> dict[str, Any]:
+    """校验操作员为下一批次声明的 execute／reuse 和动作映射。
+
+    给出 ``phase`` 时，canonical 项所属的冻结组必须与该批次阶段一致——编译入口
+    一律传入，避免把 VC-5 的交接项编进 VC-6 批次（或反过来）。
+    """
 
     if not isinstance(value, Mapping) or set(value) != {
         "schema_version",
@@ -3064,6 +3179,7 @@ def validate_action_plan(value: Any) -> dict[str, Any]:
     payload["actions"] = _actions(
         payload.get("actions"),
         execute_item_ids=payload["execute_item_ids"],
+        phase=phase,
     )
     return payload
 

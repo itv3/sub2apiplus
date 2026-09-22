@@ -16515,7 +16515,8 @@ def compile_vc_batch(
         raise ConfigurationError("--action-plan 必须是可信绝对普通文件。")
     try:
         action_plan = codex_upgrade_vc_artifacts.validate_action_plan(
-            _read_json(arguments.action_plan, "VC action plan")
+            _read_json(arguments.action_plan, "VC action plan"),
+            phase=phase,
         )
     except codex_upgrade_vc_artifacts.VCArtifactError as error:
         raise ConfigurationError(str(error)) from error

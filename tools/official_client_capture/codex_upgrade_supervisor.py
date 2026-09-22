@@ -160,6 +160,8 @@ POST_RUN_TOOLING_UPGRADABLE_FAILURE_KINDS = frozenset(
 # 映射由 vc_artifacts.CANONICAL_ITEM_COMMANDS 冻结）。批次的 execute_items
 # 必须完全落在这个集合内，reuse_items 必须覆盖候选 attempt 的全部 Job；
 # 集合由工具冻结，不接受动作清单里工程师自定的 action_id。
+# 静态项闭集；动态退休项（``retire-<版本>``）由 _post_run_tooling_item_allowed
+# 按 vc_artifacts 的冻结判定放行。
 POST_RUN_TOOLING_ITEM_IDS = (
     frozenset({"candidate-seal", "compare", "acceptance"})
     | vc_artifacts.CANONICAL_ITEM_IDS
@@ -895,6 +897,11 @@ def _post_run_tooling_item_allowed(item_id: Any) -> bool:
     if not isinstance(item_id, str) or not item_id:
         return False
     if item_id in POST_RUN_TOOLING_ITEM_IDS:
+        return True
+    # 退休项的 item 名带版本（``retire-<版本>``），闭集判定走冻结映射本身，
+    # 不按前缀放行：VC-6 的三步都是零请求后处理，失败后必须能按 post-run-tooling
+    # 恢复重派，不能被记成执行失败而把 Campaign 推向永久停线。
+    if vc_artifacts.is_canonical_item(item_id):
         return True
     return any(item_id.startswith(prefix) for prefix in POST_RUN_TOOLING_ITEM_PREFIXES)
 
