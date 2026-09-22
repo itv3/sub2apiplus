@@ -8,7 +8,9 @@
   stat（按 manifest 动态条目集比较，不写死条目数）全等且 chmod/chown 调用为 0；manifest 存在时发现
   不合规条目只报告不修改；manifest 生成前中断可续作；
 * 漂移后读侧诊断为 evidence-integrity（模块层，端到端见 test_codex_upgrade_evidence_integrity）；
-* vc5-all 按阶段状态续跑：compare／acceptance 结果存在时不再进入 seal／accept 链，目标平台门禁重跑不进 seal 链。
+* vc5-all 按阶段状态续跑：compare／acceptance 结果存在时不再进入 seal／accept 链，目标平台门禁重跑不进 seal 链；
+* 2026-09-22 审核三条：参数文件经 parse_env.py 安全解析（命令替换／反引号／分号／未知键／缺键一律拒绝且不执行）；
+  manifest 存在时 vc5-seal.sh 不再派发任何写动作、前置缺失即失败关闭；install.py 顶层精确闭合、manifest 自身 0600。
 
 bash 用例只调用脚本本身，chmod／chown 经 PATH 注入的计数包装（记录调用后转调真实命令）。
 """
@@ -181,6 +183,24 @@ class DriverInstallTests(unittest.TestCase):
                 with self.assertRaisesRegex(driver.DriverError, "不闭合"):
                     driver.verify_install(target, data_root)
                 stray.unlink()
+                self.assertEqual(driver.verify_install(target, data_root)["status"], "verified")
+                # 顶层多余文件（审核 P2：清单之外的 unexpected.py）→ verify 失败
+                unexpected = target / "unexpected.py"
+                unexpected.write_text("print('x')\n", encoding="utf-8")
+                with self.assertRaisesRegex(driver.DriverError, "清单之外的顶层条目"):
+                    driver.verify_install(target, data_root)
+                unexpected.unlink()
+                stray_dir = target / "__pycache__"
+                stray_dir.mkdir()
+                with self.assertRaisesRegex(driver.DriverError, "清单之外的顶层条目"):
+                    driver.verify_install(target, data_root)
+                stray_dir.rmdir()
+                # manifest 自身模式（审核 P2：安装态必须 0600）
+                self.assertEqual(stat.S_IMODE((target / "manifest.json").stat().st_mode), 0o600)
+                (target / "manifest.json").chmod(0o644)
+                with self.assertRaisesRegex(driver.DriverError, "驱动清单模式不是 0600"):
+                    driver.verify_install(target, data_root)
+                (target / "manifest.json").chmod(0o600)
                 self.assertEqual(driver.verify_install(target, data_root)["status"], "verified")
 
 
@@ -392,7 +412,7 @@ class Vc5AllResumeTests(unittest.TestCase):
     def _stub_driver(self, root: Path, fixture: _DriverFixture, *, accept_creates_result: bool) -> tuple[Path, Path]:
         drv = root / "drv"
         drv.mkdir(mode=0o700)
-        for name in ("lib.sh", "vc5-all.sh"):
+        for name in ("lib.sh", "parse_env.py", "vc5-all.sh"):
             (drv / name).write_bytes((SCRIPTS / name).read_bytes())
         calls = root / "stub-calls.log"
         calls.touch()
@@ -461,7 +481,180 @@ class Vc5AllResumeTests(unittest.TestCase):
             drv, _calls = self._stub_driver(root, fixture, accept_creates_result=False)
             result = _run(drv / "vc5-all.sh", env=fixture.env, cwd=root)
             self.assertEqual(result.returncode, 2)
-            self.assertIn("含非赋值行", result.stdout + result.stderr)
+            self.assertIn("参数文件拒绝加载", result.stdout + result.stderr)
+
+
+class EnvFileParserTests(unittest.TestCase):
+    """parse_env.py：绝不执行参数文件里的任何内容（审核 P1）。"""
+
+    PARSER = SCRIPTS / "parse_env.py"
+
+    def _parse(self, text: str) -> subprocess.CompletedProcess[str]:
+        with tempfile.NamedTemporaryFile("w", suffix=".sh", delete=False, encoding="utf-8") as handle:
+            handle.write(text)
+            path = handle.name
+        try:
+            return subprocess.run([sys.executable, str(self.PARSER), path], capture_output=True, text=True)
+        finally:
+            os.unlink(path)
+
+    def test_template_parses_and_expands_references(self) -> None:
+        result = subprocess.run([sys.executable, str(self.PARSER), str(SCRIPTS / "env.example.sh")], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        exported = dict(line[len("export "):].split("=", 1) for line in result.stdout.splitlines())
+        self.assertEqual(set(exported), set(driver_keys()))
+        self.assertEqual(exported["NEW"], "c0154-formal-vc5-v14r5-20260922t000000z")
+        self.assertEqual(exported["B"], "/root/docker/capture-cli/data/candidates/c0154-candidate-v14r5")
+        self.assertTrue(exported["STAGE_BUDGETS"].startswith("'VC-0=45 "))
+        # 输出的每一行都是可安全 eval 的单一赋值
+        for line in result.stdout.splitlines():
+            self.assertRegex(line, r"^export [A-Z_][A-Z0-9_]*=('[^']*'|[A-Za-z0-9_./:@%+=,-]+)$")
+
+    def test_rejects_command_forms_without_executing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "marker"
+            template = (SCRIPTS / "env.example.sh").read_text(encoding="utf-8")
+            cases = {
+                "命令替换": template.replace("ROUND=v14r5", f"ROUND=$(touch {marker})"),
+                "反引号": template.replace("ROUND=v14r5", f"ROUND=`touch {marker}`"),
+                "分号": template.replace("ROUND=v14r5", f"ROUND=v14r5; touch {marker}"),
+                "算术展开": template.replace("MIN_FREE_GIB=40", "MIN_FREE_GIB=$((40))"),
+                "未知键": template + f"EXTRA=$(touch {marker})\n",
+                "缺键": template.replace("KILO_VERSION=7.7.501\n", ""),
+                "引用未定义键": template.replace("ROUND=v14r5", "ROUND=$LATER"),
+                "非赋值行": template + f"touch {marker}\n",
+                "内嵌引号": template.replace("ROUND=v14r5", "ROUND=v14'r5"),
+                "重复键": template + "ROUND=v14r6\n",
+                "错误 sha": template.replace("C=0000000000000000000000000000000000000000", "C=abc"),
+            }
+            for name, text in cases.items():
+                result = self._parse(text)
+                self.assertEqual(result.returncode, 2, f"{name} 应被拒绝：{result.stdout}")
+                self.assertIn("参数文件拒绝加载", result.stderr, name)
+                self.assertFalse(marker.exists(), f"{name} 不得执行参数文件内容")
+
+    def test_lib_never_executes_env_file(self) -> None:
+        """端到端：任何一个驱动脚本 source lib.sh 时，参数文件里的命令也绝不会跑。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            marker = root / "marker"
+            drv = root / "drv"
+            drv.mkdir(mode=0o700)
+            for name in ("lib.sh", "parse_env.py", "vc5-permission-closeout.sh"):
+                (drv / name).write_bytes((SCRIPTS / name).read_bytes())
+            probe = drv / "probe.sh"
+            probe.write_text("#!/bin/bash\nset -Eeuo pipefail\nsource \"$(dirname \"${BASH_SOURCE[0]}\")/lib.sh\"\necho \"PROBE_OK ROUND=$ROUND\"\n", encoding="utf-8")
+            fixture = _DriverFixture(root)
+            with fixture.env_file.open("a", encoding="utf-8") as handle:
+                handle.write(f"EXTRA=$(touch {marker})\n")
+            result = _run(probe, env=fixture.env, cwd=root)
+            self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+            self.assertIn("参数文件拒绝加载", result.stdout + result.stderr)
+            self.assertFalse(marker.exists())
+            # 合法文件：正常加载并展开引用
+            fixture2 = _DriverFixture(root / "second")
+            ok = _run(probe, env=fixture2.env, cwd=root)
+            self.assertEqual(ok.returncode, 0, ok.stdout + ok.stderr)
+            self.assertIn("PROBE_OK ROUND=vtest", ok.stdout)
+
+
+def driver_keys() -> tuple[str, ...]:
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("arm64_capture_driver_parse_env", SCRIPTS / "parse_env.py")
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return tuple(module.REQUIRED_KEYS)
+
+
+class Vc5SealReadOnlyTests(unittest.TestCase):
+    """vc5-seal.sh：evidence-manifest.json 存在后不再派发任何写动作（审核 P1）。"""
+
+    WRITE_STUBS = ("vc-batch.sh", "vc5-kilo.sh")
+
+    def _stub_driver(self, root: Path) -> tuple[Path, Path]:
+        drv = root / "drv"
+        drv.mkdir(mode=0o700)
+        for name in ("lib.sh", "parse_env.py", "vc5-seal.sh"):
+            (drv / name).write_bytes((SCRIPTS / name).read_bytes())
+        calls = root / "stub-calls.log"
+        calls.touch()
+        for name in (*self.WRITE_STUBS, "vc5-seal-receipts.sh"):
+            (drv / name).write_text(f"#!/bin/bash\necho \"{name} $*\" >> '{calls}'\necho STUB_OK\n", encoding="utf-8")
+            (drv / name).chmod(0o700)
+        (drv / "gen_vc5_plans.py").write_text(
+            "import os, sys\n"
+            f"open('{calls}', 'a').write('gen_vc5_plans.py ' + ' '.join(sys.argv[1:]) + '\\n')\n"
+            "os.makedirs(sys.argv[1], exist_ok=True)\n"
+            "open(os.path.join(sys.argv[1], 'action-plan-vc5-stub.json'), 'w').write('{}\\n')\n"
+            "print('plans stub')\n",
+            encoding="utf-8",
+        )
+        (drv / "gen_vc5_plans.py").chmod(0o700)
+        return drv, calls
+
+    def _attempt(self, fixture: _DriverFixture, *, sealed: bool, complete: bool) -> Path:
+        attempt = fixture.newdir / "candidates" / fixture.cand / "attempts" / "20260922T000000Z-0123456789abcdef"
+        evidence = attempt / "evidence"
+        (evidence / "client" / "raw").mkdir(parents=True)
+        _write_json(attempt / "attempt.json", {"status": "awaiting_receipts", "attempt_id": attempt.name})
+        _write_json(fixture.candidate_dir / "artifacts" / "build-parameters.json", {"docker_build": {"image_id": "sha256:" + "0" * 64}})
+        _write_json(fixture.newdir / "candidates" / fixture.cand / "build-receipt.json", {"build": {"build_id": "b1"}})
+        (fixture.data_root / "control" / fixture.inputs).mkdir(parents=True, exist_ok=True)
+        _write_json(evidence / "client" / "raw" / "kilo-facts.json", {"observations": {}})
+        if complete:
+            _write_json(evidence / "environment" / "client-after" / "probe-manifest.json", {"observed_at_utc": "2026-09-22T00:10:00Z"})
+            _write_json(evidence / "assertion-bundle" / "capture-manifest.json", {"m": 1})
+            _write_json(attempt / "seal-preview.json", {"review_sha256": "r" * 64})
+            _write_json(fixture.newdir / "candidates" / fixture.cand / "result.json", {"status": "sealed", "package_digest": "p", "attempt_id": attempt.name, "candidate_id": fixture.cand})
+            _write_json(fixture.newdir / "comparisons" / fixture.cand / "result.json", {"status": "complete"})
+        if sealed:
+            _write_json(attempt / "evidence-manifest.json", {"schema_version": "codex-upgrade-evidence-manifest/v1"})
+        return attempt
+
+    def test_sealed_attempt_with_missing_prerequisite_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            fixture = _DriverFixture(root)
+            drv, calls = self._stub_driver(root)
+            attempt = self._attempt(fixture, sealed=True, complete=False)
+            result = _run(drv / "vc5-seal.sh", attempt.name, env=fixture.env, cwd=root)
+            self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+            self.assertIn("SEAL_ABORT: manifest 已存在但前置产物缺失", result.stdout)
+            self.assertEqual(calls.read_text(encoding="utf-8"), "", "失败关闭之前不得调用任何写动作或生成计划")
+
+    def test_sealed_attempt_only_reverifies_and_never_dispatches_writes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            fixture = _DriverFixture(root)
+            drv, calls = self._stub_driver(root)
+            attempt = self._attempt(fixture, sealed=True, complete=True)
+            result = _run(drv / "vc5-seal.sh", attempt.name, env=fixture.env, cwd=root)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            called = [line.split()[0] for line in calls.read_text(encoding="utf-8").splitlines()]
+            self.assertEqual([name for name in called if name in self.WRITE_STUBS], [], "manifest 存在后不得派发 seal checkpoint／assertion／preview／Kilo")
+            self.assertIn("vc5-seal-receipts.sh", called)
+            self.assertIn("SEAL_DONE", result.stdout)
+            self.assertIn("SEALED=1", result.stdout)
+
+    def test_unsealed_attempt_dispatches_missing_steps(self) -> None:
+        """对照：manifest 不存在时按产物缺失逐步派发（stub 不产生产物，脚本在 seal checkpoint 之后读取 probe-manifest 失败即停）。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            fixture = _DriverFixture(root)
+            drv, calls = self._stub_driver(root)
+            attempt = self._attempt(fixture, sealed=False, complete=False)
+            result = _run(drv / "vc5-seal.sh", attempt.name, env=fixture.env, cwd=root)
+            called = [line.split()[0] for line in calls.read_text(encoding="utf-8").splitlines()]
+            self.assertIn("vc-batch.sh", called, result.stdout + result.stderr)
+            self.assertNotIn("SEAL_ABORT: manifest 已存在", result.stdout)
 
 
 if __name__ == "__main__":

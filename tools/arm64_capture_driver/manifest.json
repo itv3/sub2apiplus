@@ -1,12 +1,12 @@
 {
   "schema_version": "arm64-capture-driver-manifest/v1",
-  "file_count": 39,
+  "file_count": 40,
   "files": [
     {
       "path": "README.md",
-      "sha256": "af295b90c44e7052af504e3358747d89f3fb6d5efbfc5d2fc1f6d9d6ae941b88",
+      "sha256": "03242677a850c0980e491dc305d13a6673d9d80cb18e3ef49283bfcee5ab5373",
       "mode": "0600",
-      "bytes": 2928
+      "bytes": 3611
     },
     {
       "path": "driver/align-ledger.sh",
@@ -34,9 +34,9 @@
     },
     {
       "path": "driver/env.example.sh",
-      "sha256": "b9c3808749289ccd674f2957b8323d394191cd57e7bc41621c847c4d0b930866",
+      "sha256": "c544be261b730b5fe4fd76ea4fb0143fc78486963a986bde2f6cda80bd5e09c5",
       "mode": "0700",
-      "bytes": 3429
+      "bytes": 3903
     },
     {
       "path": "driver/frontend.sh",
@@ -76,9 +76,9 @@
     },
     {
       "path": "driver/lib.sh",
-      "sha256": "83efd0eae54086b876000d863e3f4c25a4b630309202e2357e7d66afe75fb555",
+      "sha256": "fc573df487934ef0d4563c9e333343989dc18715bd4c3ec1a790cb7d98fa216f",
       "mode": "0700",
-      "bytes": 2451
+      "bytes": 1750
     },
     {
       "path": "driver/local/local-candidate-chain.sh",
@@ -103,6 +103,12 @@
       "sha256": "856a4a499c297edd6295115345be3cd6a676ef6a35996477d96e332f2831b2c8",
       "mode": "0700",
       "bytes": 978
+    },
+    {
+      "path": "driver/parse_env.py",
+      "sha256": "e1463acfa7f95c06dc65333e35020313e3994c3b00f79ceeccba780902d97b40",
+      "mode": "0700",
+      "bytes": 4582
     },
     {
       "path": "driver/pre-all.sh",
@@ -214,9 +220,9 @@
     },
     {
       "path": "driver/vc5-seal.sh",
-      "sha256": "e7eb16936cb673e4c188b495286a9f8991cb95ea7f3f5ed966b8b6fc442c132d",
+      "sha256": "da2aa2bf99cfefb6f741f2f4409bf21f0d055a510590cea13309c3b02e62420a",
       "mode": "0700",
-      "bytes": 5827
+      "bytes": 6798
     },
     {
       "path": "driver/vc5-start.sh",
@@ -232,10 +238,10 @@
     },
     {
       "path": "install.py",
-      "sha256": "e9ead660b38995bba90bc86adada12ac8eac56836f8cfbd94b4af591d8d2cb6c",
+      "sha256": "ab8f41b210f7e139041710adf12dc0823c01c079d8e4b543fc311b22e200df58",
       "mode": "0700",
-      "bytes": 19983
+      "bytes": 21635
     }
   ],
-  "manifest_sha256": "b0b44b1fb593f5c29b1a50926f0c714e31f0076ef1912e0ad6f65c5234626ea6"
+  "manifest_sha256": "f653a457821f364201d8f04f80495a7484471266dbb841c4f65129baf8dd832b"
 }

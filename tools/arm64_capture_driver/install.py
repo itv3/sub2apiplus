@@ -17,7 +17,8 @@
   ``control/`` 下**当前最新**的受管工具部署收据（``codex-0154-supervisor-enable-*.json`` 的路径、
   sha256、``tool_files_sha256``）——这就是老板所说的组合部署收据。
 * ``verify --target <安装目标> --data-root <数据根>``：guard 执行前复验。安装目标内 manifest 自摘要
-  合法；逐文件 sha256／mode／属主 root 与清单一致、无多余文件；存在一份安装收据其 manifest_sha256
+  合法且自身 0600／root；顶层恰好只有 install.py／README.md／manifest.json／driver/；逐文件 sha256／mode／
+  属主 root 与清单一致、无多余文件；存在一份安装收据其 manifest_sha256
   等于当前清单且其绑定的部署收据仍是 ``control/`` 下最新的一份（受管工具重新部署后必须重新
   ``install`` 确认，否则 guard 失败）。
 """
@@ -45,9 +46,11 @@ INSTALL_RECEIPT_PREFIX = "arm64-capture-driver-install-"
 # 安装模式：可执行脚本 0700，其余 0600；目录 0700。
 EXECUTABLE_SUFFIXES = {".sh", ".py"}
 INSTALL_ROOT_MODE = 0o700
-# 清单只登记这些顶层条目；其余文件（如 __pycache__）一律视为多余。
+# 顶层闭合：根目录只允许恰好这些条目——两份登记文件、清单自身与 driver/ 目录；其余任何文件或目录
+#（包括 __pycache__、编辑器残留、unexpected.py）一律拒绝（2026-09-22 审核 P2）。
 TOP_LEVEL_FILES = ("install.py", "README.md")
 SCRIPTS_DIR = "driver"
+MANIFEST_MODE = 0o600
 
 
 class DriverError(RuntimeError):
@@ -94,10 +97,22 @@ def _install_mode(relative: str) -> str:
 
 
 def _enumerate(root: Path) -> list[str]:
-    """闭合枚举：driver/ 下全部普通文件 + 顶层 install.py／README.md，按路径排序。"""
+    """闭合枚举：driver/ 下全部普通文件 + 顶层 install.py／README.md，按路径排序。
+
+    根目录的条目集合必须恰好是 ``{install.py, README.md, manifest.json, driver/}``（manifest.json 在
+    build-manifest 之前允许尚不存在）；任何额外顶层文件或目录都让枚举失败，避免"清单只看自己登记的
+    路径、旁边多出一个 unexpected.py 也验证通过"。
+    """
 
     root = Path(root)
     rows: list[str] = []
+    allowed_top = {*TOP_LEVEL_FILES, MANIFEST_NAME, SCRIPTS_DIR}
+    unexpected = sorted(entry.name for entry in root.iterdir() if entry.name not in allowed_top)
+    if unexpected:
+        raise DriverError(f"驱动根目录含清单之外的顶层条目：{unexpected}")
+    manifest_path = root / MANIFEST_NAME
+    if manifest_path.exists() and (manifest_path.is_symlink() or not manifest_path.is_file()):
+        raise DriverError(f"驱动清单不是普通文件：{manifest_path}")
     scripts = root / SCRIPTS_DIR
     if not scripts.is_dir() or scripts.is_symlink():
         raise DriverError(f"缺少 {SCRIPTS_DIR}/ 目录：{root}")
@@ -206,6 +221,13 @@ def verify_tree(root: Path, manifest: Mapping[str, Any], *, check_mode: bool, re
                 raise DriverError(f"驱动目录模式不是 0700：{directory}")
             if require_root_owner and (dst.st_uid != 0 or dst.st_gid != 0):
                 raise DriverError(f"驱动目录属主不是 root:root：{directory}")
+        # 清单自身不在 files 里，但安装态同样要求 0600／root（2026-09-22 审核 P2）。
+        manifest_path = root / MANIFEST_NAME
+        mst = manifest_path.stat()
+        if stat.S_IMODE(mst.st_mode) != MANIFEST_MODE:
+            raise DriverError(f"驱动清单模式不是 0600：{manifest_path} 实际 {stat.S_IMODE(mst.st_mode):04o}")
+        if require_root_owner and (mst.st_uid != 0 or mst.st_gid != 0):
+            raise DriverError(f"驱动清单属主不是 root:root：{manifest_path}")
     return rows
 
 
@@ -268,6 +290,7 @@ def _apply_install_modes(target: Path, manifest: Mapping[str, Any]) -> None:
         os.chmod(directory, INSTALL_ROOT_MODE)
     for row in manifest["files"]:
         os.chmod(target / row["path"], int(row["mode"], 8))
+    os.chmod(target / MANIFEST_NAME, MANIFEST_MODE)
 
 
 def cmd_build_manifest(arguments: argparse.Namespace) -> int:

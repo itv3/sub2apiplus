@@ -14,6 +14,10 @@
   `install`（安装收据绑定的部署收据不再是最新时 `verify` 失败、guard 停止）。
 * 开发侧改动脚本后必须 `python3 tools/arm64_capture_driver/install.py build-manifest --root tools/arm64_capture_driver`
   刷新清单；`tests/test_arm64_capture_driver.py` 以 `--check` 门禁清单与目录一致。
+* 顶层精确闭合：根目录只允许 `install.py`、`README.md`、`manifest.json`、`driver/`，多任何一项（含 `__pycache__`）
+  清单生成与复验都失败；安装态 `manifest.json` 自身 0600／root 也在复验范围内。
+* 参数文件不 `source`：`lib.sh` 经 `driver/parse_env.py` 解析（精确键集合、值只允许引用已定义键、任何命令形态拒绝），
+  只 `eval` 引号化后的赋值。
 
 ## 每轮流程（参数全部来自 `$ARM64_VC_ENV`，模板 `driver/env.example.sh`）
 
@@ -31,4 +35,6 @@
 * 权限收口只在 `vc5-permission-closeout.sh`：manifest（`evidence-manifest.json`）不存在时只对不合规条目
   chmod／chown（重复执行零调用）；manifest 存在后只核对、绝不修改——即使模式不变，chmod 也会让 ctime 漂移，
   读侧判 `evidence-integrity` 永久停线。
+* `vc5-seal.sh` 在 manifest 存在时不再派发 Kilo／seal checkpoint／assertion bundle／seal 预览任何写动作；四项前置
+  产物缺一即失败关闭（退出 3，需人工裁定），只允许读侧复核与批准 + compare。
 * attempt 根外或未纳入 manifest 的控制制品（门禁目录、断言目录）仍按各自合同 write-once，不因此禁止写入。

@@ -1,5 +1,6 @@
 # ARM64 抓包驱动链：每轮 Campaign 的参数文件模板（复制为 $RUNROOT/env.sh 后按本轮填写；各脚本以
-# ARM64_VC_ENV=<该文件> 读取）。只允许出现变量赋值，不得执行命令；注释以 # 开头。
+# ARM64_VC_ENV=<该文件> 经 parse_env.py 安全解析，绝不 source）。只允许精确键集合的 KEY=VALUE（整值可加一对双引号），
+# 值里只能引用本文件前面已定义的键（$NAME 或 ${NAME}）；$(…)、反引号、; & | < > ( ) \ 一律拒绝；注释以 # 开头。
 # 命名约定：ROUND 是本轮标签（如 v14r5），STAMP 是 stage1 开始时的 UTC 时间戳（%Y%m%dt%H%M%Sz）。
 ROUND=v14r5
 STAMP=20260922t000000z
@@ -37,8 +38,8 @@ PROJECT_DEADLINE_UTC=2026-09-28T15:59:00Z
 STAGE_BUDGETS="VC-0=45 VC-1=10 VC-2=30 VC-3=15 VC-4=90 VC-5=600 VC-6=60"
 # 派发前磁盘检查的操作员阈值（GiB，固定最低 40，只能设更高）
 MIN_FREE_GIB=40
-# 前端 builder 偏差批准（record-candidate-build 严格合同要求的批准人／理由摘要）
-FRONTEND_DEVIATION_APPROVED_BY="老板（YYYY-MM-DD 指令：…）"
+# 前端 builder 偏差批准：必须是本轮的明确授权（批准人、日期、"仅限 ARM64 隔离抓包候选、不得发布"），不得复用旧轮次文案
+FRONTEND_DEVIATION_APPROVED_BY="老板 YYYY-MM-DD 批准本轮 v14rN：候选镜像仅限 ARM64 隔离抓包（candidatecapture 构建标签），不得发布；前端 dist 在 ARM64 以 docker node:20-slim 按发版流水线同一命令构建，仅 builder 身份偏离 release_pipeline"
 # 目标画像（VC-3 stage-profile 的画像 id 与摘要，来自 classify 批准的 profile.json）
 PROFILE_ID=codex-0.154.0-official-r154-v2
 PROFILE_DIGEST=31d8654f6892d37129a2639f1bb48e87b7b8648d67ce754f4ae9379a671b99e3
