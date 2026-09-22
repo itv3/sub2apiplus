@@ -1,0 +1,53 @@
+{
+  "schema_version": "codex-runtime-profile-removal/v1",
+  "status": "complete",
+  "campaign_id": "c0154-formal-vc5-v14r5-20260922t073614z",
+  "completed_at_utc": "2026-09-22T14:40:00Z",
+  "active_version": "0.154.0",
+  "rollback_version": "0.151.0",
+  "removed_version": "0.149.1",
+  "production_activation_sha256": "4faccbcaaa8236ecb57a6882644d9e72a231f6511ed88a4ac798a5b56288c2b5",
+  "consumer_scan": {
+    "catalog_references": 0,
+    "selector_references": 0,
+    "unknown_references": 0
+  },
+  "consumer_scan_method": {
+    "catalog_references": "selector 指向的 active release graph b9066de2… 与 active snapshot catalog 434f41b3… 中 0.149.1 的条目数",
+    "selector_references": "catalogdata/runtime/release-catalog.json 中 0.149.1 的出现次数",
+    "unknown_references": "backend/ 与 frontend/ 的 .go/.ts/.vue/.yaml/.yml/.json 中对 catalogdata/runtime/profiles/0.149.1/ 路径或两份画像 blob 摘要（a8ec3ccf…／39e29520…）的引用数，历史 snapshot-catalog 归档除外",
+    "runtime_projection": "cmd/egressruntimedump 导出的运行 Catalog 闭集由 32 个文件降为 31 个，profiles 仅剩 0.151.0 与 0.154.0"
+  },
+  "runtime_catalog_removed": true,
+  "historical_evidence_preserved": true,
+  "historical_archive_references": {
+    "historical_snapshot_catalogs": 6,
+    "historical_release_graphs": 4,
+    "note": "历史 snapshot catalog 与 release graph 逐字保留，仍按内容寻址引用 0.149.1；与 0.147 退休先例一致，不计入 consumer_scan"
+  },
+  "retired_runtime_profiles": [
+    {
+      "deleted_in_commit": "8f4a4ba9c",
+      "path": "backend/internal/officialegress/catalogdata/runtime/profiles/0.149.1/8c22d3b18b16d249ac041a97efad1b6703c11ef290622b0b1642679a3c010ec3.json",
+      "sha256_before_deletion": "a8ec3ccf43748bd225a9bd753fb2a240d3f5667da76ccd344e370294178ec2df",
+      "state": "absent"
+    },
+    {
+      "deleted_in_commit": "8f4a4ba9c",
+      "path": "backend/internal/officialegress/catalogdata/runtime/profiles/0.149.1/8e59b38e2ad90a1fd4eb7520c2c54f01fc62f802690d45a2cdab5f91f249fb60.json",
+      "sha256_before_deletion": "39e29520a4f10dc55c14f1b259c09d0058f3444d56824e5988850e4660e9123a",
+      "state": "absent"
+    }
+  ],
+  "runtime_catalog_after_removal": {
+    "catalog": {
+      "path": "backend/internal/officialegress/catalogdata/runtime/release-catalog.json",
+      "source": "campaign:c0154-formal-vc5-v14r5-20260922t073614z/retirement:codex-legacy-profile"
+    },
+    "release_graph_sha256": "b9066de2d47e6efba0df07691be0777d7c2de87cf7a3d2490f803b8fe89202da",
+    "snapshot_catalog_sha256": "434f41b3d0d546ac702c2d7ca5e3507c1bd4463bf29181fbebc8c60671c290aa",
+    "promotion_intermediate_snapshot_catalog_sha256": "e072a7d38d166795dff603d0e3316155da7b13c4b448985ab93e0bd896911479"
+  },
+  "historical_route_profile_preserved": false,
+  "historical_route_receipt_references": 0
+}

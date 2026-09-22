@@ -15,6 +15,59 @@ import (
 
 const codex01491TerminalStatePath = "docs/egress/maintenance/CODEX_CLI_0147_TO_01491_TERMINAL_STATE_RECEIPT.json"
 
+// 0.151→0.154 的运行画像退休收据：0.149.1 的两份运行画像在 VC-6 §4.6.7 被移出运行
+// Catalog，文件按设计不再存在于运行画像目录，字节保留在 git 历史与 Campaign 证据中。
+// 历史终态收据仍按原路径冻结它们的摘要，因此这里按退休收据逐条放行缺失的制品。
+const codex0154RuntimeProfileRemovalPath = "docs/egress/maintenance/CODEX_CLI_0151_TO_0154_RUNTIME_PROFILE_REMOVAL_RECEIPT.json"
+
+type codex0154RetiredRuntimeProfile struct {
+	DeletedInCommit      string `json:"deleted_in_commit"`
+	Path                 string `json:"path"`
+	SHA256BeforeDeletion string `json:"sha256_before_deletion"`
+	State                string `json:"state"`
+}
+
+type codex0154RuntimeProfileRemovalReceipt struct {
+	SchemaVersion          string                           `json:"schema_version"`
+	Status                 string                           `json:"status"`
+	RemovedVersion         string                           `json:"removed_version"`
+	RetiredRuntimeProfiles []codex0154RetiredRuntimeProfile `json:"retired_runtime_profiles"`
+}
+
+var (
+	codex0154RemovalOnce   sync.Once
+	codex0154RemovalCached codex0154RuntimeProfileRemovalReceipt
+)
+
+// codex0154RuntimeProfileRetired 报告 path 是否已由 0.151→0.154 的 RemovalReceipt
+// 登记为退休画像，且删除前摘要等于历史终态收据冻结的摘要。收据缺失、状态不完整或
+// 摘要不符一律返回 false（失败关闭），不得用它放行任何未登记的缺失制品。
+func codex0154RuntimeProfileRetired(path, frozenDigest string) bool {
+	codex0154RemovalOnce.Do(func() {
+		raw, err := os.ReadFile(codex01491TerminalRepoPath(codex0154RuntimeProfileRemovalPath))
+		if err != nil {
+			return
+		}
+		var receipt codex0154RuntimeProfileRemovalReceipt
+		if json.Unmarshal(raw, &receipt) != nil {
+			return
+		}
+		codex0154RemovalCached = receipt
+	})
+	receipt := codex0154RemovalCached
+	if receipt.SchemaVersion != "codex-runtime-profile-removal/v1" ||
+		receipt.Status != "complete" || receipt.RemovedVersion != "0.149.1" {
+		return false
+	}
+	for _, profile := range receipt.RetiredRuntimeProfiles {
+		if profile.Path == path && profile.State == "absent" &&
+			profile.SHA256BeforeDeletion == frozenDigest && len(frozenDigest) == 64 {
+			return true
+		}
+	}
+	return false
+}
+
 type codex01491TerminalArtifact struct {
 	Path   string `json:"path"`
 	SHA256 string `json:"sha256"`
@@ -69,6 +122,10 @@ func validateCodex01491TerminalArtifact(artifact codex01491TerminalArtifact) err
 		return errors.New("0.149.1 终态制品坐标非法")
 	}
 	raw, err := os.ReadFile(codex01491TerminalRepoPath(artifact.Path))
+	if err != nil && os.IsNotExist(err) &&
+		codex0154RuntimeProfileRetired(artifact.Path, artifact.SHA256) {
+		return nil
+	}
 	currentDigest := upstreamMergeFrameworkDigest(raw)
 	if err != nil || (currentDigest != artifact.SHA256 &&
 		!codex0151FormalRecoverySourceTransitionSupersedes(
