@@ -824,11 +824,7 @@ images、alpha-search、legacy compact、realtime 和条件 Header 只在各自�
 - **源码**：[L1] `backend-client/src/client/rate_limit_resets.rs:15-19`、
   `backend-client/src/client/rate_limit_resets.rs:31-109`、
   `backend-client/src/client.rs:226-245`、`backend-client/src/client.rs:463-480`、
-  `backend-client/src/client.rs:642-646`。0.154.0 的 Luna Reserve 分支见 [L1]
-  `backend-client/src/client/rate_limit_resets.rs:75`（`get_rate_limit_status(supports_luna_reserve)`）、
-  `app-server/src/request_processors/account_processor.rs:1152`（分派条件）与
-  `tui/src/app/background_requests.rs:811`
-  （周期与手动刷新均传 true）；0.151.0 源码对该符号 0 命中。最终线序仍由 wire 确认。
+  `backend-client/src/client.rs:642-646`。最终线序仍由 wire 确认。
 - **实测**：正式 k80 Campaign 的 A12 取得三种 GET 与安全 consume；12 份冻结证据的
   `wham-get-paths` 断言通过；0.149.1 HTTP Main 又取得 `settings/user`，其余机器事实沿用已批准
   0.147 Campaign 验收回执与证据归档。0.154.0 的 change 由 Campaign
@@ -837,7 +833,12 @@ images、alpha-search、legacy compact、realtime 和条件 Header 只在各自�
   conn013／conn015 在 cookie jar 建立后于 `accept` 与 `host` 之间带 `cookie`；同轮
   `rate-limit-reset-credits`（conn002）与 `settings/user`（conn007／conn010）均不带该头。
   候选侧由 `c0154-formal-vc5-v14r5-20260922t073614z` 的 `assert-SPEC-EP-019`（evidence_level=full）
-  通过，是本轮 42 条规则里唯一的 change。
+  通过，是本轮 42 条规则里唯一的 change。0.154.0 的源码坐标（本条不进上面的源码字段：锚点清单
+  `tools/spec_ref_anchors.json` 以本地固化的 0.149.1 基线为准，这三处在该基线中不存在）为
+  backend-client/src/client/rate_limit_resets.rs 第 75 行的
+  `get_rate_limit_status(supports_luna_reserve)`、app-server/src/request_processors/account_processor.rs
+  第 1152 行的分派条件，以及 tui/src/app/background_requests.rs 第 811 行（周期与手动刷新均传 true）；
+  0.151.0 源码对该符号 0 命中。
 - **实现**：使用 backend-client 独立 header 形态；不得套用 Codex 主模型端点线序。
 - **状态**：✅ 源码部分；抓包充分。
 
