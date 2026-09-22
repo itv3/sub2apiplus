@@ -11,12 +11,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/handler"
 	adminhandler "github.com/Wei-Shaw/sub2api/internal/handler/admin"
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/usagestats"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
@@ -952,7 +954,7 @@ func TestAPIContracts(t *testing.T) {
 					"openai_codex_user_agent":           "",
 					"openai_codex_client_version":       "",
 					"openai_codex_client_version_synced": "",
-					"openai_codex_verified_client_version": "0.151.0",
+					"openai_codex_verified_client_version": "__ACTIVE_CODEX_VERSION__",
 					"openai_codex_version_auto_sync_enabled": true,
 					"openai_fast_policy_settings": {
 						"rules": []
@@ -1269,7 +1271,7 @@ func TestAPIContracts(t *testing.T) {
 					"openai_codex_user_agent":           "",
 					"openai_codex_client_version":       "",
 					"openai_codex_client_version_synced": "",
-					"openai_codex_verified_client_version": "0.151.0",
+					"openai_codex_verified_client_version": "__ACTIVE_CODEX_VERSION__",
 					"openai_codex_version_auto_sync_enabled": true,
 					"openai_fast_policy_settings": {
 						"rules": []
@@ -1410,7 +1412,7 @@ func TestAPIContracts(t *testing.T) {
 
 			status, body := doRequest(t, deps.router, tt.method, tt.path, tt.body, tt.headers)
 			require.Equal(t, tt.wantStatus, status)
-			require.JSONEq(t, tt.wantJSON, body)
+			require.JSONEq(t, withActiveCodexVersion(t, tt.wantJSON), body)
 		})
 	}
 }
@@ -2954,3 +2956,20 @@ var (
 	_ service.UsageLogRepository         = (*stubUsageLogRepo)(nil)
 	_ service.SettingRepository          = (*stubSettingRepo)(nil)
 )
+
+// activeCodexVersionPlaceholder 标记期望 JSON 中"当前 Active Codex 版本"的位置。
+// 服务端 openai_codex_verified_client_version 取自 active ReleaseBundle（只读展示），
+// 契约测试若写死版本号，每次升级晋升后都会过期；这里改为与服务端同源地动态解析。
+const activeCodexVersionPlaceholder = "__ACTIVE_CODEX_VERSION__"
+
+func withActiveCodexVersion(t *testing.T, wantJSON string) string {
+	t.Helper()
+	if !strings.Contains(wantJSON, activeCodexVersionPlaceholder) {
+		return wantJSON
+	}
+	active, err := officialegress.DefaultReleaseCatalog().Resolve(officialegress.ReleaseModeActive)
+	require.NoError(t, err)
+	version := active.Version()
+	require.NotEmpty(t, version)
+	return strings.ReplaceAll(wantJSON, activeCodexVersionPlaceholder, version)
+}
