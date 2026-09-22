@@ -139,7 +139,13 @@ GO_TOOLCHAIN_BIN = Path("/usr/local/go/bin")
 
 
 def execution_tree_binding_required() -> bool:
-    return PRODUCTION_EXECUTION_TREE.is_dir()
+    # CI runner 等非 root 环境里 /root 存在但权限为 700：pathlib 的 is_dir() 只吞"不存在"类
+    # 错误，PermissionError 会直接抛出。无权进入即说明本机没有可用的生产执行副本，按不需要
+    # 绑定处理；有副本的机器（ARM64 以 root 运行）仍照常走绑定分支。
+    try:
+        return PRODUCTION_EXECUTION_TREE.is_dir()
+    except PermissionError:
+        return False
 
 
 def execution_tree_binding_available() -> bool:
