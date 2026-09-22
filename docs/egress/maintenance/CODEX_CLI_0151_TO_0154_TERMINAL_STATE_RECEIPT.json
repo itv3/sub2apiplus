@@ -1,8 +1,22 @@
 {
   "audit_index": {
-    "bytes": 10655,
+    "bytes": 1394348,
     "path": "docs/egress/maintenance/CODEX_CLI_0151_TO_0154_AUDIT_INDEX.json",
-    "sha256": "bb9996bc2a22fe37fcdd0b005af8753a1c00d8761e6c99b11e579ce42575e110"
+    "sha256": "d08a36edab3f6bdf4a44260605f949823deed8a537d16f7a20bae3a549a8f829"
+  },
+  "audit_index_identity_sha256": "5faa302cb184c8e4d67d39492a271bea12818b2c28de31ddcc69a5a181855657",
+  "audit_index_note": "索引由受管工具 tools/codex_audit_index.py generate 以 --no-replay 生成：只登记账本与 run 的逐文件摘要、私有归档坐标与总量，未执行 UpgradeTimingLedger 重放与监督器 audit（重放需各收据 producer.tool 记录的工具副本，属后续维护事项）。",
+  "audit_index_totals": {
+    "byte_count": 9389863,
+    "file_count": 3137,
+    "ledgers_by_kind": {
+      "campaign_run": 342
+    },
+    "runs_audited": 0,
+    "runs_not_audited": 0,
+    "timing_ledger_stop_the_line_events": 0,
+    "timing_ledgers_not_replayable": 0,
+    "timing_ledgers_replayed": 0
   },
   "campaign_chain": [
     {
@@ -48,7 +62,7 @@
   "evidence_host": "ARM64",
   "evidence_root": "/root/docker/capture-cli/data",
   "identity_algorithm": "sha256(json.dumps(payload_without_identity_sha256, ensure_ascii=False, sort_keys=True, separators=(',', ':')))",
-  "identity_sha256": "9b440cd9cf45a00d5df23419afb2dafa05f267336ec49a44aca3281a8810a136",
+  "identity_sha256": "b1555f30c329e2a31bdd266edd547cc404a49ea20b023aa7f2ed96e2e6d15a68",
   "post_promotion_gate": {
     "bytes": 7197,
     "path": "docs/egress/maintenance/CODEX_CLI_0151_TO_0154_POST_PROMOTION_GATE_RECEIPT.json",
@@ -75,7 +89,7 @@
     "sha256": "e072a7d38d166795dff603d0e3316155da7b13c4b448985ab93e0bd896911479"
   },
   "result": "passed",
-  "retired_runtime_profiles": [
+  "retained_runtime_profiles": [
     {
       "path": "backend/internal/officialegress/catalogdata/runtime/profiles/0.149.1/8c22d3b18b16d249ac041a97efad1b6703c11ef290622b0b1642679a3c010ec3.json",
       "removed_from_runtime_projection_in_commit": "8f4a4ba9c",
@@ -89,6 +103,8 @@
       "state": "retained_as_frozen_terminal_artifact"
     }
   ],
+  "retained_runtime_profiles_note": "0.149.1 的两份运行画像被 0.147→0.149.1 终态收据登记为逐文件校验制品，按指南 §4.6.7 第 1 类保留字节、只移出 Catalog／selector／运行投影；它们不属于 retired_runtime_profiles（该字段按门禁语义要求路径已不存在）。",
+  "retired_runtime_profiles": [],
   "runtime_catalog": {
     "active_profile": {
       "bytes": 52924,

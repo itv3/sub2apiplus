@@ -3287,6 +3287,13 @@ active SnapshotCatalog 的裁剪必须是确定性的：以退休前的快照为
 第 1 类的判定优先于操作员偏好：历史终态收据与冻结源码台账的护栏不因一次退休而重签，凡需要改写它们
 才能删除的画像一律按第 1 类处置。
 
+写入 §4.6.8 终态收据时，`retired_runtime_profiles` 只登记第 3 类（已删除）画像——通用终态门禁会逐条
+断言该清单里的路径**已不存在**；第 1 类与第 2 类分别用 `retained_runtime_profiles` 与
+`relocated_runtime_profiles` 登记，退休事实以 RemovalReceipt 为准。审计索引必须由
+`tools/codex_audit_index.py generate` 产出（schema `codex-upgrade-audit-index/v1`），终态收据登记它的
+坐标并以 `audit_index_identity_sha256` 绑定其自摘要；手工编造的索引会被 `codex_audit_index.py check`
+在 `check-egress-spec` 内拒绝。
+
 ### 4.6.8 私有归档与远端清理
 
 归档前必须把原始抓包、Campaign、AcceptanceFact、promotion、post-promotion、activation 和
