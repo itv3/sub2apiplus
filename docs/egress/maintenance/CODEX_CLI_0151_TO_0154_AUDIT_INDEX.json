@@ -1,0 +1,227 @@
+{
+  "archive": {
+    "bytes": 10491543,
+    "inventory_sha256": "673f1aeb4ce43685ffcef62bb8dbddd92218f72aab07a19af11d4c09511bf707",
+    "path": "/root/private-archives/codex-0.154.0-c0154-formal-vc5-v14r5-20260922t073614z-20260922t142751z.tar.gz",
+    "restore_replay_sha256": "5b98b87de7b84a183879ee54fc62359adc348f5c52cf324de22bbad6694622b6",
+    "sha256": "e8238382119964a1f8cf0817ff503ea2d17709b51406660dcdc00dc07ef39c9d"
+  },
+  "baseline_version": "0.151.0",
+  "campaign_id": "c0154-formal-vc5-v14r5-20260922t073614z",
+  "canonical": {
+    "checkpoint_count": 8,
+    "final_checkpoint": {
+      "bytes": 35237,
+      "path": "canonical/checkpoints/00000008.json",
+      "sha256": "63cc3f161a7bafb88395e2ffeff0ae779318b9c3f8d22036b3d95a0bb19a7c85"
+    }
+  },
+  "evidence_host": "ARM64",
+  "evidence_root": "/root/docker/capture-cli/data",
+  "identity_algorithm": "sha256(json.dumps(payload_without_identity_sha256, ensure_ascii=False, sort_keys=True, separators=(',', ':')))",
+  "identity_sha256": "af125e61af4a8184a503ccb5c85682c79fd57679bbe3420ecc0690c95299b29b",
+  "issued_at_utc": "2026-09-22T14:33:32Z",
+  "ledgers": [
+    {
+      "byte_count": 11808,
+      "event_head": {
+        "event_count": 15,
+        "last_event": {
+          "event_id": "vc-batch-0021-vc-6-completed",
+          "event_type": "stage_completed",
+          "file": "000015.json",
+          "file_sha256": "e209855627a118953c465ba8599e68965c89ef59e8412fc4cc732148d5260ee4",
+          "phase": "VC-6",
+          "sequence": 15
+        }
+      },
+      "file_count": 18,
+      "kind": "upgrade_timing_ledger",
+      "root": "/root/docker/capture-cli/data/control/codex-0151-to-0154-vc5-v14r5-20260922t073614z-timing-ledger"
+    }
+  ],
+  "policy": {
+    "note": "本索引只登记本轮 Campaign 的账本、父监督器 run、canonical checkpoint 与阶段收据坐标；官方证据由 reuse 源 Campaign 在其自身轮次归档，未在此重复打包。"
+  },
+  "schema_version": "official-client-codex-0151-to-0154-audit-index/v1",
+  "supervisor_runs": {
+    "count": 21,
+    "runs": [
+      {
+        "batch_id": "vc-6-0020",
+        "manifest_sha256": "1e9a241fbf58942168e17c260bbd20155227df587b726cbe4a214a6074cf3a15",
+        "phase": "VC-6",
+        "run_dir": "run-0be14aa9b1900cb6a0cdbc0fe03abe9f8364227dc0a3fae7c646ca31c5e8b97c",
+        "stop_receipt_sha256": "97fab72d7ebd7c31cb0dbe192c3fb821b7e8fe7f9573950b72b6bbc1303032fe"
+      },
+      {
+        "batch_id": "vc-1-0001",
+        "manifest_sha256": "306e75702e33476556c571e8c6815539b2450ae6e9d582ddfce287f584e0613a",
+        "phase": "VC-1",
+        "run_dir": "run-1eddc482a7d73ec9ff7d7986fc20dba8316b6b1ff8f309dffbe50635be0b36d6",
+        "stop_receipt_sha256": "01f68af3a6e8604db4be920cfd0c9773f00f53076e230af4f43ffd58b12cc755"
+      },
+      {
+        "batch_id": "vc-6-0018",
+        "manifest_sha256": "7093ac7e507fde82535a225b6052c6f5724980f32ff12c92bccb584ed7beea91",
+        "phase": "VC-6",
+        "run_dir": "run-21fd50ebc77c47c32be05efebbaca627e41fe2e156eda374adeca189dffb3855",
+        "stop_receipt_sha256": "563ddb49f3aefd2fca7870ae0b1c66aad4c0841639091f054fd2de2e4d04eb94"
+      },
+      {
+        "batch_id": "vc-5-0010",
+        "manifest_sha256": "ced0266f2f64ac8134e164a27a4a1c0e1c4e2d56317a09e7ed19849d4f89de0d",
+        "phase": "VC-5",
+        "run_dir": "run-2d0d25591d1418846af28163f1004ecf7856f6efb8bd3126ad62d896c7d7c6fd",
+        "stop_receipt_sha256": "f0e7257553b3e2b92498acd890232ed4f160e1f4a7febf8956630076a53007a1"
+      },
+      {
+        "batch_id": "vc-5-0013",
+        "manifest_sha256": "5fa48e30dd76bedfa536d8bfea6326a6c8e43317a1ca0f1710d966f76b24957a",
+        "phase": "VC-5",
+        "run_dir": "run-71ccd2253cb898ae2a68a7ac36cc8279ea1fdaacc998089f99c7efe09873b56e",
+        "stop_receipt_sha256": "d9da6ed68cb560e78fee1837605c233c37611c543af52ca07b8807f847975d23"
+      },
+      {
+        "batch_id": "vc-2-0005",
+        "manifest_sha256": "67369674a3fe4cfae94132f34f6063c9ee0ab8b67b3a555ca58b7bcbef5c53c0",
+        "phase": "VC-2",
+        "run_dir": "run-7d9eb724dc4e574c83ce35ac8a69ca4ef5802cf68523aaae72e13e6bdc221603",
+        "stop_receipt_sha256": "3a3adf7035f5e4e926151fab3a7c518eca4eec00aef8391a20b7ade4d4ec3883"
+      },
+      {
+        "batch_id": "vc-5-0014",
+        "manifest_sha256": "71ce219a76f4851363620222d97c6fbd0a262a26265f8684ea52d4cba98d68d5",
+        "phase": "VC-5",
+        "run_dir": "run-82150d452a75f2eb69fde1fc4f943e18bf0d668e936c0d2ee238dfe38f768ed6",
+        "stop_receipt_sha256": "30a3406662bec8d8d2c2784dcf79b4240a187f3a405ed53cb81779bd5e8e0a08"
+      },
+      {
+        "batch_id": "vc-4-0008",
+        "manifest_sha256": "1370e8f35c6c11dfb117440cdb9121dd35924d7f8425dec5c8dbe990d6438094",
+        "phase": "VC-4",
+        "run_dir": "run-8c5550ca8c694b05506b7141b22f15dfd75376901663a891db686d4ad8a3ad75",
+        "stop_receipt_sha256": "4d9dc1a7293b55ffaf2ac83c40640259821cb3c2b1c266629be9b1146a0ef5ce"
+      },
+      {
+        "batch_id": "vc-5-0017",
+        "manifest_sha256": "1acdc7373bb3227a684839cb83781362f3c2bc2037fd7a7878bcf132d5cc88b7",
+        "phase": "VC-5",
+        "run_dir": "run-8d15dc309cea58af07a7835b00d72313ba7b38fa75c6701268a37000e09b04b4",
+        "stop_receipt_sha256": "5fa8b8e8fecb807a1a49bc9b19ccc175aab9cbba40f3668c559cf50dfff9e354"
+      },
+      {
+        "batch_id": "vc-5-0012",
+        "manifest_sha256": "d7e3cc1e7da921fa1c2d756b7ad555537ce78fc388875c471bdbed60a94bd6f0",
+        "phase": "VC-5",
+        "run_dir": "run-8d5356876667179d50f414bc56382740ecdb170d5922ff64c1a038394f33cd20",
+        "stop_receipt_sha256": "959ea4fef824c19fe25995414ec6d46c4ba70767623a2a43e165227a7f0945fe"
+      },
+      {
+        "batch_id": "vc-4-0007",
+        "manifest_sha256": "99dc64e1f3b75442c3b64de2aec27528e485e449b63528f2853d83d283cbd7ec",
+        "phase": "VC-4",
+        "run_dir": "run-8dbf109a06745582a0298613abb351fc58bd20e11453063ec18a52a0af8113f8",
+        "stop_receipt_sha256": "69c4b5b4b39d84343011556cbacb373169f6d3c95ee364537cfe8337a1102e88"
+      },
+      {
+        "batch_id": "vc-5-0015",
+        "manifest_sha256": "35498674f11241e77ceee738c30de1b045ef1ad1ee1591a8e2a38c467e2e6fbf",
+        "phase": "VC-5",
+        "run_dir": "run-91c4c69b70d26bf85f022fcdd8ac28eb5a007d818052f7d9f2c9ca8f1a299307",
+        "stop_receipt_sha256": "252c20cef76c1853bd63fa4a61e08230761ff778a7311a0a6173adbc133f5a60"
+      },
+      {
+        "batch_id": "vc-2-0004",
+        "manifest_sha256": "1a8fcf0d01ed452c50359ac074ab466a6fde6b2f23cd30d22903bc85d437ef91",
+        "phase": "VC-2",
+        "run_dir": "run-9b8cd6afb30f8c1a54f6a28b23596640d644468c15eeb3a10874e6752a40e075",
+        "stop_receipt_sha256": "6ed61b258893caf38a5d60a5709b4965e92c5c014b7c861cfe2937e271b92cbb"
+      },
+      {
+        "batch_id": "vc-3-0006",
+        "manifest_sha256": "5f7c67a0a6bdf5b723af886ba1d2b2f8d25d8aa9a7b2baa8b4707f934081a824",
+        "phase": "VC-3",
+        "run_dir": "run-ac47c45acba6830fa9456d69e9595a9e5abf3608d454d577fb6091380da39686",
+        "stop_receipt_sha256": "46521d62e6dcedff65bd4c35fb22e008e2d193bc7b3dd6ad1b65f18268f22bbb"
+      },
+      {
+        "batch_id": "vc-6-0019",
+        "manifest_sha256": "70dfbf488d0c645821cab96210f3f82e1cf4e2d694397e4d4cf180f50745e621",
+        "phase": "VC-6",
+        "run_dir": "run-b8ecee8817cf78308a1d31557112543dd0b620ab12334ea5739922beddb593b5",
+        "stop_receipt_sha256": "e1c1db2ce967e300411352cc19ea7598951b1dad2ad4acea787a4a3350e22023"
+      },
+      {
+        "batch_id": "vc-5-0009",
+        "manifest_sha256": "0c2b2463971a2ba292d1f0cbb755a78e52c16e812bf2970fa082779be55fd71c",
+        "phase": "VC-5",
+        "run_dir": "run-b9e526e89ce9ff5d8f63c83f548687de820a1423ad1cd3dafe9464572e0eeff8",
+        "stop_receipt_sha256": "d96f60676103beff3b043260fa4e1e128800c675fda93df39a9738fa25b2b567"
+      },
+      {
+        "batch_id": "vc-6-0021",
+        "manifest_sha256": "764966ddc9d7a97b923f65e1fd6236b0c81b511dd4f73d9462e0668155866e4e",
+        "phase": "VC-6",
+        "run_dir": "run-cb39011bc6c783c489f2d59a9f9e5388991687bca6d23f6618d5311dc19dcb90",
+        "stop_receipt_sha256": "1bf6f6f2056dd1f8ba4b82290b53db839c76a28fa1db3d15d1fff69e772f9c76"
+      },
+      {
+        "batch_id": "vc-5-0016",
+        "manifest_sha256": "fafe81727c613c658615d554c98570955ecbf32534eab40b7a158ff5ede8e962",
+        "phase": "VC-5",
+        "run_dir": "run-ce0f4a9fc0a1eff146264bf873db038f81f36a09c7c26b3ebe8f85eb50b747a9",
+        "stop_receipt_sha256": "46b7f3736fc3931493b166f6a5597d4b6f1d3db21c2bacaf1eb379fc2f0042e5"
+      },
+      {
+        "batch_id": "vc-2-0003",
+        "manifest_sha256": "397a89ce10832126abef239abb2436969d8732f5efbd64cc329f27837e7ebe68",
+        "phase": "VC-2",
+        "run_dir": "run-d7a244bf5b7852e5cdd6f7ef0227ed7bee9091354ecb388d303848b4db1c61d0",
+        "stop_receipt_sha256": "7d5bcb3d9439c2509024c417614ff52f9fa537af8f2b88ab55c2b470467f5ce3"
+      },
+      {
+        "batch_id": "vc-2-0002",
+        "manifest_sha256": "5e72d7093f301f1a3bab691419f92efaaadd792ecadce3082c4066a73ba52b6e",
+        "phase": "VC-2",
+        "run_dir": "run-d8c1b4ce2bf1f907f779afe27a8189172b74ade8e7e8c7d8ac6d28d1b2545297",
+        "stop_receipt_sha256": "b8e376fdd8247e585b2fb11511259a35a9f12c6f9af786a4d05daa6fc061f586"
+      },
+      {
+        "batch_id": "vc-5-0011",
+        "manifest_sha256": "95684ed0b81fa5a3631d0a529f567ce491e566cf098eb35cbf0e5e5fd8f39234",
+        "phase": "VC-5",
+        "run_dir": "run-ea9deb77d203ab3a995d7b05773d7b2779f125fb8faf25ea4175d3726897a647",
+        "stop_receipt_sha256": "cc27921015f8f150db6dae9bc289ce396f53b01a71e6470e3234b33bc329b1f2"
+      }
+    ]
+  },
+  "target_version": "0.154.0",
+  "totals": {
+    "batches_committed": 21,
+    "campaign_byte_count": 29947373,
+    "campaign_file_count": 780
+  },
+  "vc_receipts": {
+    "cleanup-decision": {
+      "bytes": 1742,
+      "path": "control/vc/receipts/c0154-candidate-v14r5/cleanup-decision.json",
+      "sha256": "61cc447ee0dd4cad6b2a10ab304894acad08f56218a860e3b91d79148237ac31"
+    },
+    "private-archive": {
+      "bytes": 1587,
+      "path": "control/vc/receipts/c0154-candidate-v14r5/private-archive.json",
+      "sha256": "eafa6ae1fe7861ee1fea6390548dd13d0d66d9ebe9ad90bca0fdca5f7f834372"
+    },
+    "vc5-completion": {
+      "bytes": 1169,
+      "path": "control/vc/receipts/c0154-candidate-v14r5/vc5-completion.json",
+      "sha256": "0a86b9171644e62680a272e638c63062670fb65b2c8d4deca7b2085c95fe5350"
+    },
+    "vc6-completion": {
+      "bytes": 1498,
+      "path": "control/vc/receipts/c0154-candidate-v14r5/vc6-completion.json",
+      "sha256": "03426f14e1316b6638b52c5c2d0571aa062c7e9aaff9692be5e219544db426d2"
+    }
+  }
+}
