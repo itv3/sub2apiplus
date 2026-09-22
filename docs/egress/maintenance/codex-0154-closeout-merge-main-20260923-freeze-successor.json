@@ -1,0 +1,57 @@
+{
+  "base_commit": "16757e5a5f0cfd54a645ec5eb6b0a4a64e7906c8",
+  "changed_path_count": 3,
+  "current_commit": "ae8cc26daa02862975227987749bc6f9a6c04343",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 3985,
+  "frozen_path_count": 1399,
+  "identity_sha256": "1bb82cbc675d6633cff5d97b35ca05dbb36c03ae987a48e7949f624a8402a410",
+  "issued_at_utc": "2026-09-22T21:40:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-0154-closeout-merge-main-20260923-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/cmd/server/VERSION",
+      "predecessor_sha256s": [
+        "144deccc69a5c173dc3efcbadbef2e7ea551b322ff4d30ed0860800686419792"
+      ],
+      "reason": "登记 codex/vc5-framework-closure 合并进 main（合并提交 ae8cc26da）带入的主干变化：发版 bot 回写 backend/cmd/server/VERSION 至 0.2.4-6（e5b37b01c、2b248af2b）与 keeper 保活修复（b97406615、cbd857212）；不改画像、Persona、wire 或出站代码 path=backend/cmd/server/VERSION",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-doc-trim-20260911-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-version-sync-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-2-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-3-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-4-version-sync-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json",
+        "docs/egress/maintenance/version-sync-0.2.3-3-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "a36c1876c0aa44dec37d7bc176ba44e0a6960de4b170ae30111a96bb83c9a2dc"
+    }
+  ],
+  "unregistered_path_count": 2,
+  "unregistered_paths": [
+    "keeper/main.go",
+    "keeper/main_test.go"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
