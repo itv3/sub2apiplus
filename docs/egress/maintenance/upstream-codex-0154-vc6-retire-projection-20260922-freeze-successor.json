@@ -1,0 +1,58 @@
+{
+  "base_commit": "f3be99c5519383a64f8f6203dd833fb6d8ce0090",
+  "changed_path_count": 4,
+  "current_commit": "d7d16d65427e454a966c14c17fc322a539c75171",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 3954,
+  "frozen_path_count": 1399,
+  "identity_sha256": "93e6109cf803b80ef7813dfd0ebd0897fbd60aa81b693f769cd6a79560b46269",
+  "issued_at_utc": "2026-09-22T14:16:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-upstream-codex-0154-vc6-retire-projection-20260922-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/codex_01491_terminal_state_test.go",
+      "predecessor_sha256s": [
+        "0dadecf3faff09c103c029f71beecef3d42471462e563006ce82b0241001f846"
+      ],
+      "reason": "登记退休口径修正（提交 d7d16d654）：恢复 0.149.1 两份画像字节与 codex_01491_terminal_state_test.go 原状，退休按运行投影口径执行（Catalog／selector／运行闭集均不含 0.149.1），RemovalReceipt 同步记录保留理由 path=backend/internal/officialegress/codex_01491_terminal_state_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-c2pa-capture-tool-successor-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-container-path-recovery-tool-successor-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-formal-recovery-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-tool-readiness-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/openai-replay-oom-repair-source-transition.json",
+        "docs/egress/maintenance/openai-ws-compatibility-guard-repair-source-transition.json",
+        "docs/egress/maintenance/openai-ws-empty-terminal-output-repair-source-transition.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc6-removal-receipt-20260922-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.3-post-bootstrap-source-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "3eba74a44008cb03b9af658a1f2a195f64fcfa6b87e0fa3ce79225fbe6987554"
+    }
+  ],
+  "unregistered_path_count": 3,
+  "unregistered_paths": [
+    "backend/internal/officialegress/catalogdata/runtime/profiles/0.149.1/8c22d3b18b16d249ac041a97efad1b6703c11ef290622b0b1642679a3c010ec3.json",
+    "backend/internal/officialegress/catalogdata/runtime/profiles/0.149.1/8e59b38e2ad90a1fd4eb7520c2c54f01fc62f802690d45a2cdab5f91f249fb60.json",
+    "docs/egress/maintenance/CODEX_CLI_0151_TO_0154_RUNTIME_PROFILE_REMOVAL_RECEIPT.json"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
