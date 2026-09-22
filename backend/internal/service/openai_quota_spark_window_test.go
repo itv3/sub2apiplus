@@ -874,6 +874,13 @@ func TestCodexWhamRequestsUseClosedBackendClientProfile(t *testing.T) {
 		if index == 0 {
 			expectedHeaders = append(expectedHeaders, "cache-control")
 		}
+		if index == 1 {
+			// SPEC-EP-019 的 0.154.0 change：只有 /wham/usage 带 Luna Reserve 条件头。
+			expectedHeaders = append(expectedHeaders, "x-openai-codex-luna-reserve")
+			require.Equal(t, "1", request.Header.Get("X-Openai-Codex-Luna-Reserve"))
+		} else {
+			require.Empty(t, request.Header.Get("X-Openai-Codex-Luna-Reserve"))
+		}
 		if index == 3 {
 			expectedHeaders = append(expectedHeaders, "content-type")
 			require.Equal(t, "application/json", request.Header.Get("Content-Type"))

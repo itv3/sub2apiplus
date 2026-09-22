@@ -2,7 +2,7 @@
 
 > **适用范围**：Sub2API 使用 OpenAI OAuth 账号的 Codex CLI 客户端仿真
 >
-> **当前版本**：Active 为 `codex-cli 0.151.0`，Previous 为 `codex-cli 0.149.1`；`0.147.0` 已退出 Runtime Catalog。完整生产身份见本文 §3.2。
+> **当前版本**：Active 为 `codex-cli 0.154.0`，Previous 为 `codex-cli 0.151.0`；`0.149.1` 已退出 Runtime Catalog（运行投影已移除，画像字节按 §4.6.7 第 1 类保留为冻结历史制品）。完整生产身份见本文 §3.2。
 >
 > **权威入口**：共享目标、证据生命周期、升级、发布与回滚以
 > [`OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md`](OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md) 为准；依赖基线见
@@ -51,9 +51,10 @@ Campaign，兼容边界见附录 A。
 
 # 第二部分 Codex CLI 客户端规则画像
 
-本部分定义规则成立所需的证据标准、观测边界和 53 个编号项。当前生产 active 为 0.151.0，
-previous 为 0.149.1；本轮差异规则、ARM64 身份事实和 Files C2PA 条件分支均已完成生产激活、
-精确回滚、目标恢复和 0.147 Runtime Catalog 退休。
+本部分定义规则成立所需的证据标准、观测边界和 53 个编号项。当前生产 active 为 0.154.0，
+previous 为 0.151.0；本轮唯一的差异规则 SPEC-EP-019（`/backend-api/wham/usage` 的 Luna Reserve 条件头）
+与 ARM64 身份事实均已完成生产激活、精确回滚、目标恢复和 0.149.1 Runtime Catalog 退休，机器事实见
+[`0.154 终态收据`](egress/maintenance/CODEX_CLI_0151_TO_0154_TERMINAL_STATE_RECEIPT.json)。
 
 ## 2.1 规则证据与准入标准
 
@@ -93,7 +94,7 @@ previous 为 0.149.1；本轮差异规则、ARM64 身份事实和 Files C2PA 条
 - 自定义 CA、代理和受控失败等条件样本不能外推为默认路径或自然成功链；
 - 全集、缺失和连接完整性结论必须基于无预设过滤的完整双向样本。
 
-**遥测零流量判定（当前 active 0.151.0）。** Framework §1.2、§3.2 的公共规则适用；只有下列配置和
+**遥测零流量判定（当前 active 0.154.0）。** Framework §1.2、§3.2 的公共规则适用；只有下列配置和
 源码链均已冻结时，未产生的遥测才可排除在 strict 分母之外：
 
 | 组件 | 关闭条件与源码闭环 |
@@ -813,13 +814,29 @@ images、alpha-search、legacy compact、realtime 和条件 Header 只在各自�
   settings/user 在 account-id 后增加 `cache-control: no-cache, no-store`，并在有会话
   cookie 时于 `accept` 后发送 `cookie`；
   consume 再含 `content-type, content-length` 与 `redeem_request_id` body。
+  **0.154.0 change**：`/backend-api/wham/usage` 在 `x-openai-fedramp` 之后追加条件头
+  `x-openai-codex-luna-reserve: 1`（画像 Slot 34，constant，条件 `luna_reserve_present`）；
+  分派条件是 `params.supports_luna_reserve && auth_mode == Chatgpt && !is_fedramp_account`，
+  TUI 的周期刷新与手动刷新都传 `supports_luna_reserve=true`。该头只出现在 usage，
+  `rate-limit-reset-credits` 与 `settings/user` 都不带；0.151.0 及更早画像无此槽位，
+  回滚到 previous 时不得泄漏该头。会话 cookie 建立后 usage 与 settings/user 一样在
+  `accept` 与 `host` 之间发送 `cookie`（settings/user 的 cookie 规则见上，画像 Slot 45）。
 - **源码**：[L1] `backend-client/src/client/rate_limit_resets.rs:15-19`、
   `backend-client/src/client/rate_limit_resets.rs:31-109`、
   `backend-client/src/client.rs:226-245`、`backend-client/src/client.rs:463-480`、
-  `backend-client/src/client.rs:642-646`。最终线序仍由 wire 确认。
+  `backend-client/src/client.rs:642-646`。0.154.0 的 Luna Reserve 分支见 [L1]
+  `backend-client/src/client/rate_limit_resets.rs:75`（`get_rate_limit_status(supports_luna_reserve)`）、
+  `app-server/src/account_processor.rs:1152`（分派条件）与 `tui/src/background_requests.rs:811`
+  （周期与手动刷新均传 true）；0.151.0 源码对该符号 0 命中。最终线序仍由 wire 确认。
 - **实测**：正式 k80 Campaign 的 A12 取得三种 GET 与安全 consume；12 份冻结证据的
   `wham-get-paths` 断言通过；0.149.1 HTTP Main 又取得 `settings/user`，其余机器事实沿用已批准
-  0.147 Campaign 验收回执与证据归档。
+  0.147 Campaign 验收回执与证据归档。0.154.0 的 change 由 Campaign
+  `c0154-formal-vc1-recapture-20260915t230327z` 的 `official-wham-wire` 三份 `/wham/usage`
+  样本（conn003／conn013／conn015）闭环：三者都带 `x-openai-codex-luna-reserve: 1`，
+  conn013／conn015 在 cookie jar 建立后于 `accept` 与 `host` 之间带 `cookie`；同轮
+  `rate-limit-reset-credits`（conn002）与 `settings/user`（conn007／conn010）均不带该头。
+  候选侧由 `c0154-formal-vc5-v14r5-20260922t073614z` 的 `assert-SPEC-EP-019`（evidence_level=full）
+  通过，是本轮 42 条规则里唯一的 change。
 - **实现**：使用 backend-client 独立 header 形态；不得套用 Codex 主模型端点线序。
 - **状态**：✅ 源码部分；抓包充分。
 
@@ -924,7 +941,7 @@ Key、Group、账号路由和计费沿用 Framework §1.3 的业务所有权；�
 | 版本发现与入口归一化 | GitHub `/releases/latest`／列表回退、6 小时节流与启动防抖、UA/version 配对和账号 UA 兼容、`openai_codex_client_version_synced`、管理端候选值、客户端名和环境指纹 | active ReleaseCatalog、画像摘要、最终 version 和 wire 契约 |
 | 生产 strict wire | ReleaseCatalog、ReleaseBundle、Compiler、Executor 和受信 adapter 定型 URL、Header、Body、顺序、压缩、传输、状态与连接 | 被候选版本、管理员／账号 UA 或入站身份覆盖 |
 
-当前 active strict wire 是 Codex CLI 0.151.0；自动同步只更新候选值，active ReleaseCatalog 只能经证据验收后显式发布。
+当前 active strict wire 是 Codex CLI 0.154.0；自动同步只更新候选值，active ReleaseCatalog 只能经证据验收后显式发布。
 
 | persona／状态 | 端点范围 | 逻辑出口 | 约束 |
 |---|---|---|---|
@@ -968,27 +985,35 @@ MCP，就原样进入官方 Persona wire。接入时必须冻结第三方产品�
 顺序或条件变化即视为新目录，未重新批准前 fail-close。该路径只能主张“目标 Codex CLI + 冻结 MCP
 配置”的等价性，不能冒充默认无 MCP 的官方客户端，也不是 Codex Persona 上线的前置条件。
 
-## 3.2 Codex 0.151.0 active 画像与发布执行契约
+## 3.2 Codex 0.154.0 active 画像与发布执行契约
 
 active／previous 画像均以内容寻址 Snapshot 保存 exec／TUI 身份、feature、端点、Header／Body
 闭集与顺序、压缩、TLS、连接、条件状态和文件上传编排：
 
 | mode | 版本与画像摘要 | 端点闭集 | 用途 |
 |---|---|---|---|
-| active | 0.151.0；`dbc65378c80a2ad843ce1ba6253a2e47f0dd5d8bc812bb536a2d24ddb7a59e39` | 16 个静态端点（含 `wham_settings_user`）+ 1 个 ReturnedURL 动态端点 | 生产默认 |
-| previous | 0.149.1；`8c22d3b18b16d249ac041a97efad1b6703c11ef290622b0b1642679a3c010ec3` | 16 个静态端点（含 `wham_settings_user`）+ 1 个 ReturnedURL 动态端点 | 受控回滚和历史复算 |
+| active | 0.154.0；`31d8654f6892d37129a2639f1bb48e87b7b8648d67ce754f4ae9379a671b99e3` | 16 个静态端点（含 `wham_settings_user`）+ 1 个 ReturnedURL 动态端点 | 生产默认 |
+| previous | 0.151.0；`dbc65378c80a2ad843ce1ba6253a2e47f0dd5d8bc812bb536a2d24ddb7a59e39` | 16 个静态端点（含 `wham_settings_user`）+ 1 个 ReturnedURL 动态端点 | 受控回滚和历史复算 |
 
-当前 Active 的官方目标身份为 tag `rust-v0.151.0`（commit
-`78c290807ce710180111df227df3b7a4fe845452`）、`aarch64-unknown-linux-musl` 包和 ARM64 二进制
-SHA-256 `56f026015ccc3ebc12895282200d89c216892bf6fa15fa7f228e6e0c6ad6ce76`。原始证据源为 Campaign
-`c0151-formal-20260831t0220z-r8` 的 attempt `20260831T022126Z-901dd6612631b7bf`；29 个 Job、权限、
-秘密扫描、环境恢复及 `172.30.0.10／172.25.0.3 → 179.255.100.158` 出口门禁均已封存。后续分类纠正、
-验收和生产激活统一由 `c0151-formal-rule-correction-20260905t0033z` 的 canonical 链承接。
+当前 Active 的官方目标身份为 tag `rust-v0.154.0`（commit
+`6b9826e3aa83b1a5947db50f4332cb9c65f1b340`）、`aarch64-unknown-linux-musl` 包
+SHA-256 `97d93e11df72d3c26772db019e6ea8bb72c246500d46b98c760839f3240355e6` 和 ARM64 二进制
+SHA-256 `9b7c1c7abdc26fc3c4f47c77656a8e9121def5483dbae830ef1ee561758448a9`。原始证据源为 Campaign
+`c0154-formal-vc1-recapture-20260915t230327z` 的 attempt `20260915T231339Z-1e2ec44a775a2970`；
+29 个 Job 全部 complete，权限、秘密扫描、环境恢复及 ARM64 经 DMIT 的出口门禁均已封存。该 Campaign
+的官方证据由 `reuse-official-evidence` 只读导入，后续分类、验收、生产激活与 0.149.1 退休统一由
+`c0154-formal-vc5-v14r5-20260922t073614z` 的 canonical 链承接（候选 `c0154-candidate-v14r5`，
+attempt `20260922T081201Z-6b19d215a302dbd4`，42 条规则中 41 条 inherit、1 条 change）。
 
-当前生产镜像 ID 为 `sha256:2589b419055073fc0d9f3b0c47d3efe3e0f0f93fac798604c91355d9a9e088ae`；
-canonical checkpoint 为 `00000009`，执行集合为空。机器事实分别见
-[`0.147 Runtime Profile 退休收据`](egress/maintenance/CODEX_CLI_01491_TO_0151_RUNTIME_PROFILE_REMOVAL_RECEIPT.json)
-和 [`0.151 终态收据`](egress/maintenance/CODEX_CLI_01491_TO_0151_TERMINAL_STATE_RECEIPT.json)。
+当前生产镜像 ID 为 `sha256:3429200a5cb9d75edcb4115c515132bd3af9c94d5f85d8ef1716842020b56cf1`
+（退休 0.149.1 运行投影后重建；四阶段激活演练所用镜像为
+`sha256:d3da9a8a7ec7313e18dfae02675506d36198d8b60ca7f4a6961b1aa9dad49a90`，固定回滚镜像为
+`ghcr.io/itv3/sub2apiplus@sha256:298b5933740a379c1f18816adfb662e780c960e1641953e44c8b0ce4657b74ec`）；
+canonical checkpoint 为 `00000008`，执行集合为空。机器事实分别见
+[`0.149.1 Runtime Profile 退休收据`](egress/maintenance/CODEX_CLI_0151_TO_0154_RUNTIME_PROFILE_REMOVAL_RECEIPT.json)
+和 [`0.154 终态收据`](egress/maintenance/CODEX_CLI_0151_TO_0154_TERMINAL_STATE_RECEIPT.json)。
+0.149.1 按 §4.6.7 第 1 类退休：Catalog、selector 与运行投影均已移除，两份画像字节因被
+`0.147→0.149.1` 终态收据登记为逐文件校验制品而原地保留，不得据此认为文件已删除。
 
 启动期解码、结构校验或摘要核对失败即阻止启动；运行时只读不可变快照，需改写的数据按次深拷贝。
 
@@ -1105,7 +1130,7 @@ make check-egress-spec
 | 路径组 | 责任 |
 |---|---|
 | `backend/internal/officialegress/` | ReleaseCatalog、RouteCatalog、Scope、Compiler、Executor、Guard、FinalizationToken 与画像契约 |
-| `backend/internal/service/official_egress_codex_*`、`official_client_profile_registry.go` | 0.149.1／0.151.0 不可变 Snapshot、可信 release Build 运行态投影、发布投影、端点编排、Files 与模型能力 |
+| `backend/internal/service/official_egress_codex_*`、`official_client_profile_registry.go` | 0.151.0／0.154.0 不可变 Snapshot、可信 release Build 运行态投影、发布投影、端点编排、Files 与模型能力 |
 | `backend/internal/service/official_egress_openai_http.go`、`official_egress_openai_ws.go` | HTTP／WS 统一入口归一化：保留业务语义，重建动态身份，禁止官方／第三方入口形成两套 wire 权威 |
 | `backend/internal/service/official_egress_*invocation.go`、`official_egress_transport_adapters.go` | HTTP／WS invocation、attempt 和受信 terminal adapter |
 | `backend/internal/service/official_egress_upstream_identity_bridge.go` | 把上游身份设施的 canonical/version 读取源单向桥接到 active 已验收 ReleaseBundle |

@@ -28,9 +28,11 @@ func TestCodexQuotaUsageHeadersDeclareLunaReserveForNonFedRAMP(t *testing.T) {
 	require.NotNil(t, codexQuotaUsageHeaders(nil, false))
 }
 
-// 画像没有 wham_usage 的 Luna Reserve 槽位时（当前 active 画像），该条件头只作为事实
-// 进入 compiler，不得以普通 Header 身份泄漏到 wire；周期入口 QueryUsageOnly 与管理端
-// QueryUsage 都遵守画像闭集。
+// 画像没有 wham_usage 的 Luna Reserve 槽位时，该条件头只作为事实进入 compiler，不得以
+// 普通 Header 身份泄漏到 wire；周期入口 QueryUsageOnly 与管理端 QueryUsage 都遵守画像闭集。
+// 0.154.0 起 active 画像已带该槽位（SPEC-EP-019 的 change），因此这条负例固定跑 previous
+// 0.151.0——回滚到 previous 时同样不得泄漏。正例见
+// TestCodexWhamRequestsUseClosedBackendClientProfile。
 func TestCodexWhamUsageLunaReserveDoesNotLeakWithoutProfileSlot(t *testing.T) {
 	account := &Account{
 		ID:       711,
@@ -53,8 +55,20 @@ func TestCodexWhamUsageLunaReserveDoesNotLeakWithoutProfileSlot(t *testing.T) {
 
 	upstream := newQuotaRedirectingUpstream(server)
 	service := NewOpenAIQuotaService(repo, nil, tokenProvider, upstream)
+	// 配额链路的画像由发布指针（runtime.CodexReleaseMode）解析，不读入站 ProfileMode；
+	// 负例必须真正跑在没有 Luna Reserve 槽位的 previous 0.151.0 画像上。
+	guard, guardErr := officialegress.NewGuard(
+		officialegress.DefaultGuard().Config(), officialegress.DefaultSinkCatalog(),
+		officialegress.DefaultOfficialRouteCatalog(), officialegress.DefaultGuard().Recorder(),
+	)
+	require.NoError(t, guardErr)
+	previousRuntime, runtimeErr := newOfficialEgressTransitionRuntimeWithExecutor(
+		guard, upstream, officialCodexExecutorID, officialegress.ReleaseModePrevious,
+	)
+	require.NoError(t, runtimeErr)
+	service.officialEgress = previousRuntime
 	runtimeState := defaultOfficialCodexRuntimeState()
-	runtimeState.ProfileMode = officialClientProfileModeActive
+	runtimeState.ProfileMode = officialClientProfileModePrevious
 	runtimeState.SurfaceID = officialCodexSurfaceTUI
 	runtimeState.Originator = "codex-tui"
 	runtimeState.TerminalToken = "xterm-256color"
@@ -73,7 +87,7 @@ func TestCodexWhamUsageLunaReserveDoesNotLeakWithoutProfileSlot(t *testing.T) {
 			usageSeen++
 		}
 		require.Empty(t, request.Header.Get("x-openai-codex-luna-reserve"),
-			"%s：active 画像没有 Luna Reserve 槽位，条件头不得进入 wire", request.URL.Path)
+			"%s：previous 0.151.0 画像没有 Luna Reserve 槽位，条件头不得进入 wire", request.URL.Path)
 	}
 	require.Equal(t, 2, usageSeen, "QueryUsageOnly 与 QueryUsage 各发一次 /wham/usage")
 }
