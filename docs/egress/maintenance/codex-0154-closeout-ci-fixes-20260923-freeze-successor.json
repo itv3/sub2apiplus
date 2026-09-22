@@ -1,0 +1,51 @@
+{
+  "base_commit": "29e5dedc998f8e78affbb13ddddcdfa6c7076697",
+  "changed_path_count": 3,
+  "current_commit": "f1e46c3597fe94e0daa0e0bbc1827c06162a4d6c",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 3987,
+  "frozen_path_count": 1399,
+  "identity_sha256": "062b32c4957a65d7eb347a0ddb1114e1126b57c0e5a45ddd41800c19e633e52c",
+  "issued_at_utc": "2026-09-22T22:26:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-0154-closeout-ci-fixes-20260923-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/internal/server/api_contract_test.go",
+      "predecessor_sha256s": [
+        "84311d339375296e4a3c7dc86bf4790576f3c10b668b3ce89009a3e2b522a98c"
+      ],
+      "reason": "登记合并后 CI 暴露的两处修复（49d86a852：admin settings 契约测试按当前 Active 动态解析 Codex 版本；f1e46c359：执行副本绑定判定在无权进入 /root 时视为本机无生产副本）的冻结承接边；只改测试与测试辅助，不改画像、Persona、wire 或出站代码 path=backend/internal/server/api_contract_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "7aa1996cf38985d135bd0ea2e654657f003c8889e11d7edb486bed70b4411d8c"
+    }
+  ],
+  "unregistered_path_count": 2,
+  "unregistered_paths": [
+    "tools/official_client_capture/tests/managed_tree_copy.py",
+    "tools/official_client_capture/tests/test_managed_tree_copy_binding.py"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
