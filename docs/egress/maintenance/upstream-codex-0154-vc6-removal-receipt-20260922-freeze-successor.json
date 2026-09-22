@@ -1,0 +1,55 @@
+{
+  "base_commit": "6f311cbc04363b0b65f7074732b3f9e327b81080",
+  "changed_path_count": 2,
+  "current_commit": "4cad918d09680253bab3852df44c9f79cf64685e",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 3952,
+  "frozen_path_count": 1399,
+  "identity_sha256": "353fdc1b63217834e95bd3586333af1e324bd3672c3893f2a43fa40fefdb0af1",
+  "issued_at_utc": "2026-09-22T14:14:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-upstream-codex-0154-vc6-removal-receipt-20260922-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/codex_01491_terminal_state_test.go",
+      "predecessor_sha256s": [
+        "3eba74a44008cb03b9af658a1f2a195f64fcfa6b87e0fa3ce79225fbe6987554"
+      ],
+      "reason": "登记 0.149.1 运行画像退休收据入库与历史终态冻结按收据放行（validateCodex01491TerminalArtifact 的 os.IsNotExist 分支）的冻结承接边；不改变任何画像、Persona、wire 或生产代码 path=backend/internal/officialegress/codex_01491_terminal_state_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-c2pa-capture-tool-successor-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-container-path-recovery-tool-successor-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-formal-recovery-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-tool-readiness-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/openai-replay-oom-repair-source-transition.json",
+        "docs/egress/maintenance/openai-ws-compatibility-guard-repair-source-transition.json",
+        "docs/egress/maintenance/openai-ws-empty-terminal-output-repair-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-post-bootstrap-source-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "0dadecf3faff09c103c029f71beecef3d42471462e563006ce82b0241001f846"
+    }
+  ],
+  "unregistered_path_count": 1,
+  "unregistered_paths": [
+    "docs/egress/maintenance/CODEX_CLI_0151_TO_0154_RUNTIME_PROFILE_REMOVAL_RECEIPT.json"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
