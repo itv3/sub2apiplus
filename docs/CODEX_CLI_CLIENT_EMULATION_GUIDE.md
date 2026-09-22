@@ -3267,6 +3267,26 @@ RemovalReceipt 必须证明 Catalog、selector 和未知消费者均为零、运
 最新 checkpoint 的 `plan.execute_item_ids=[]` 后，生产激活链才完成并进入 §4.6.8；这仍不授权删除远端
 升级文件，也不是 VC-6 的最终完成事件。
 
+“运行投影已移除”指被退休版本不再出现在 selector、其指向的 ReleaseGraph 与 SnapshotCatalog，以及
+`cmd/egressruntimedump` 导出的运行闭集中；它不等于删除画像字节。退休当轮的处置按下面的闭集判定，
+RemovalReceipt 必须逐份登记被退休画像的路径、删除前摘要与处置状态：
+
+1. 被任一历史终态收据（`docs/egress/maintenance/CODEX_CLI_*_TERMINAL_STATE_RECEIPT.json`）登记为
+   `runtime_catalog.active_profile` 或其它逐文件校验制品的画像，**不得删除、不得改名、不得移动**，
+   只从 Catalog、selector 与运行投影中移除，状态记为 `retained_as_frozen_terminal_artifact`；
+2. 未被历史终态收据引用、但被 `catalogdata/version-route-migration-receipts.json` 的
+   `profile_digests` 引用的画像，迁入 `catalogdata/version-route-migration-artifacts/frozen-profiles/`
+   并在收据中记 `historical_route_profile_preserved=true` 与引用数（0.147 退休即此形态）；
+3. 两类引用都没有的画像才允许直接删除，状态记为 `absent` 并给出 `deleted_in_commit`。
+
+active SnapshotCatalog 的裁剪必须是确定性的：以退休前的快照为输入，仅去掉被退休版本的条目，其余条目
+逐字保留，按 `json.dumps(sort_keys=False, separators=(",", ":"), ensure_ascii=False)` 加尾换行重新
+编码，文件名取其 SHA-256；同轮的历史 ReleaseGraph 与历史 SnapshotCatalog 一律逐字不变。晋升时产出的
+中间快照仍含被退休版本，必须以 `promotion_intermediate_snapshot_catalog` 单列，不得回改。
+
+第 1 类的判定优先于操作员偏好：历史终态收据与冻结源码台账的护栏不因一次退休而重签，凡需要改写它们
+才能删除的画像一律按第 1 类处置。
+
 ### 4.6.8 私有归档与远端清理
 
 归档前必须把原始抓包、Campaign、AcceptanceFact、promotion、post-promotion、activation 和
