@@ -1,0 +1,148 @@
+{
+  "schema_version": "codex-upgrade-improvement-validation/v1",
+  "item": "R13-1、R13-3",
+  "source_commit": "c7b38a357c714e808ca94cbf4f6826ae0d988cc2",
+  "status": "development_self_check_passed",
+  "scope": "独立夹具、开发验证和发布认证合同；正式发布认证在阶段 1 统一部署后签发",
+  "production_deployed": false,
+  "live_request_count": 0,
+  "layer_diff": {
+    "policy_sha256": {
+      "before": "796dac4b48c2c54009e101be1e1f56569a76fdc89c037378245796ec5dab2ad9",
+      "after": "796dac4b48c2c54009e101be1e1f56569a76fdc89c037378245796ec5dab2ad9",
+      "changed": false
+    },
+    "wire_producer_sha256": {
+      "before": "4e47d232b66903ea76565a084bc0d86b8f5f61ece6a118f1be9f068cee03c2cf",
+      "after": "4e47d232b66903ea76565a084bc0d86b8f5f61ece6a118f1be9f068cee03c2cf",
+      "changed": false
+    },
+    "evidence_semantics_sha256": {
+      "before": "529f95f3c678c3ce7eead8384ed0eeb77ba8f2553b0ea5dfbbd8afbd539ef4d2",
+      "after": "529f95f3c678c3ce7eead8384ed0eeb77ba8f2553b0ea5dfbbd8afbd539ef4d2",
+      "changed": false
+    },
+    "control_sha256": {
+      "before": "a7d6eae2641d1297e220ca1a7c3a20803962f69ef4df98d9dd749b967667c0cb",
+      "after": "03924c21ad8e4adcfc559ddb73b0e4590f0c8c1444c23aaa3ec527ab76f6e424",
+      "changed": true
+    }
+  },
+  "validation": [
+    {
+      "name": "ARM64 validation_only 连续链",
+      "status": "passed",
+      "seconds": 288.845,
+      "batch_count": 8,
+      "duplicate_dispatch_requests": 0,
+      "note": "正式 CLI 完成复用导入、三批分类、stage-profile、候选构建事实、比较、断言、accept、VC-6；严格核对 8 批 execute/reuse 清单。首批重复引导和第 2～8 批重复派发均无新增账本事件、无封存字节变化、无新增请求。"
+    },
+    {
+      "name": "ARM64 既有检查器缺陷恢复真实链",
+      "status": "passed",
+      "seconds": 946.271
+    },
+    {
+      "name": "六类故障基线",
+      "status": "passed",
+      "count": 6,
+      "note": "记录 R2、R3、R4、R6、R8、R12 改造前的拒绝或停线；相应改造完成后必须翻转恢复断言。"
+    },
+    {
+      "name": "认证单元测试",
+      "status": "passed",
+      "count": 8
+    },
+    {
+      "name": "部署与测试分层单元测试",
+      "status": "passed",
+      "count": 17
+    },
+    {
+      "name": "Go 冻结及承接检查（officialegress、service）",
+      "status": "passed"
+    },
+    {
+      "name": "make check-egress-spec-ci",
+      "status": "passed"
+    }
+  ],
+  "manual_actions_resolution": {
+    "tool_tree_digest": "整树摘要已由暂存工具树自动计算，无 DEFAULT_TOOL_DIGEST 常量；无需重引入硬编码。",
+    "tool_files_sha256": "9a8862e91d307bbb1847af3da54ab641eabbe3603875a9112fbcc75c569a4bcf",
+    "supervisor_digest_matches": true,
+    "assertion_preparer_digest_matches": true,
+    "deployment_tests": "13 项通过，另含分层 4 项；冻结承接收据列出的两个常量核验待办已完成。"
+  },
+  "limitations": [
+    "零请求演练不替代目标版本首次正式取证、当次账号模型准入或生产网络保护验收。"
+  ],
+  "logs": [
+    {
+      "file": "r13-full-self-check-passed.log",
+      "sha256": "10680634f7b962af2efd0a28cf2aa071f996e440374ece6c55f8cd3543a72234"
+    },
+    {
+      "file": "r13-legacy-chain-passed.log",
+      "sha256": "00f9d95d8c98ebbaf603d4aee1d93fc4e56045cf0ecb6a5dcac96c41fb5ef6fb"
+    },
+    {
+      "file": "r13-self-check-certification.log",
+      "sha256": "d6dc563cd12dc441d7f650b29f29e6b2350e5ac168b16c07ca207f56996059ac"
+    },
+    {
+      "file": "r13-self-check-local.log",
+      "sha256": "7905d1f7833091d4f0eeb1c65ca6ebdd8de23b090d8ead857de075580a9cb530"
+    },
+    {
+      "file": "r13-self-check-egress-ci.log",
+      "sha256": "90fac03403b6309456de15ce4868a5ee12c7ff8e42ae7e6faa032fbe712bba42"
+    },
+    {
+      "file": "r13-self-check-go-officialegress.log",
+      "sha256": "00f87b1f63eacad6eb65e63296a945dce9855a1d7ee1fceee89f68d60664764a"
+    },
+    {
+      "file": "r13-self-check-go-service.log",
+      "sha256": "bfe2b57b87989bfb45403361947d620592f28631d1cee679c998b36ee623e797"
+    }
+  ],
+  "self_checked_at_utc": "2026-09-23T13:05:34.349985+00:00",
+  "self_check": [
+    {
+      "item": "R13-1 连续链",
+      "result": "passed",
+      "evidence": "ARM64 288.845 秒，8 批，VC-0～VC-6 完成；真实 Go 与 Docker 候选身份，合成外部 producer，fixture_only 总账复算请求 0"
+    },
+    {
+      "item": "R13-1 幂等与计量",
+      "result": "passed",
+      "evidence": "每批精确校验 execute/reuse；首批按真实引导器入口核验，第 2～8 批按正式批次入口核验；比较 Campaign、计时账本字节和总账历史"
+    },
+    {
+      "item": "R13-3 故障基线",
+      "result": "passed",
+      "evidence": "R2/R3/R4/R6/R8/R12 六项均再现改造前拒绝或停线；此处不表示对应改造已完成"
+    },
+    {
+      "item": "发布覆盖及历史兼容",
+      "result": "passed",
+      "evidence": "pre-A3 冻结 real_chain_registration，发布认证绑定 real_chain_coverage；登记链缺失、重复、失败、skip、入口错配均拒签；未登记链不阻塞。新增后续链后旧包仍按原登记集合回放，无覆盖字段历史也可读取"
+    },
+    {
+      "item": "默认门禁隔离",
+      "result": "passed",
+      "evidence": "独立 Makefile 目标精确登记所有真实链模块；默认 unittest discover 不递归 real_chains，无 __init__.py"
+    },
+    {
+      "item": "冻结承接及分层",
+      "result": "passed",
+      "evidence": "freeze-successor 已生成；部署摘要核验、Go 冻结承接测试、make check-egress-spec-ci 通过；仅 control 改变"
+    },
+    {
+      "item": "正式发布认证",
+      "result": "scheduled_stage_1_release",
+      "evidence": "按已批准实施顺序在阶段 1 统一受监督部署后运行正式 pre-A3 并签发；本次隔离验证不冒充生产发布"
+    }
+  ]
+}
