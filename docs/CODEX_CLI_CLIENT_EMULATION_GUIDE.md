@@ -1718,9 +1718,6 @@ python3 tools/official_client_capture/codex_upgrade.py classify \
   --assertion-profile-manifest /绝对路径/assertion-profile.json \
   --active-profile /绝对路径/production-active-profile.json \
   --profile-patch-manifest /绝对路径/profile-rule-patches.json
-
-# 人工核对第一次返回的联合摘要后，原命令追加：
-# --approve-manifest-sha256 <joint_manifest_sha256>
 ~~~
 
 上面的命令是批次动作体，不能直接执行：每个动作单独编译成一个 VC-2 批次，经 `compile-and-run-vc-batch`
