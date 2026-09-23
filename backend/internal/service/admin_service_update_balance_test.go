@@ -29,15 +29,15 @@ func (s *balanceUserRepoStub) apply(next func(current float64) float64) (Balance
 	if s.adjustErr != nil {
 		return BalanceChange{}, s.adjustErr
 	}
-	if s.userRepoStub == nil || s.userRepoStub.user == nil {
+	if s.userRepoStub == nil || s.user == nil {
 		return BalanceChange{}, ErrUserNotFound
 	}
-	change := BalanceChange{Old: s.userRepoStub.user.Balance}
+	change := BalanceChange{Old: s.user.Balance}
 	change.New = next(change.Old)
 	if change.New < 0 {
 		return change, ErrBalanceNegative
 	}
-	s.userRepoStub.user.Balance = change.New
+	s.user.Balance = change.New
 	s.changes = append(s.changes, change)
 	return change, nil
 }
@@ -140,7 +140,7 @@ func TestAdminService_UpdateUserBalance_RejectsNegativeResult(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "balance cannot be negative")
 	require.Empty(t, repo.changes, "refused adjustment must not be applied")
-	require.Equal(t, 3.0, repo.userRepoStub.user.Balance)
+	require.Equal(t, 3.0, repo.user.Balance)
 }
 
 func TestAdminService_UpdateUserBalance_RejectsUnknownOperation(t *testing.T) {

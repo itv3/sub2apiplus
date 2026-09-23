@@ -62,12 +62,12 @@ func TestGetOIDCConnectOAuthConfig_ResolvesEndpointsFromIssuerDiscovery(t *testi
 		}
 		discoveryHits++
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(fmt.Sprintf(`{
+		_, _ = fmt.Fprintf(w, `{
 			"authorization_endpoint":"%s/issuer/protocol/openid-connect/auth",
 			"token_endpoint":"%s/issuer/protocol/openid-connect/token",
 			"userinfo_endpoint":"%s/issuer/protocol/openid-connect/userinfo",
 			"jwks_uri":"%s/issuer/protocol/openid-connect/certs"
-		}`, baseURL, baseURL, baseURL, baseURL)))
+		}`, baseURL, baseURL, baseURL, baseURL)
 	}))
 	defer srv.Close()
 	baseURL = srv.URL

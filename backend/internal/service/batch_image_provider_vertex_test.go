@@ -86,15 +86,15 @@ func TestBuildVertexBatchJSONL_WritesReferenceImages(t *testing.T) {
 
 	var got map[string]any
 	require.NoError(t, json.Unmarshal([]byte(lines[0]), &got))
-	request := got["request"].(map[string]any)
-	contents := request["contents"].([]any)
-	parts := contents[0].(map[string]any)["parts"].([]any)
+	request := requireType[map[string]any](t, got["request"])
+	contents := requireType[[]any](t, request["contents"])
+	parts := requireType[[]any](t, requireType[map[string]any](t, contents[0])["parts"])
 	require.Len(t, parts, 3)
-	require.Equal(t, "A clean product hero image", parts[0].(map[string]any)["text"])
-	inlineData := parts[1].(map[string]any)["inlineData"].(map[string]any)
+	require.Equal(t, "A clean product hero image", requireType[map[string]any](t, parts[0])["text"])
+	inlineData := requireType[map[string]any](t, requireType[map[string]any](t, parts[1])["inlineData"])
 	require.Equal(t, "image/png", inlineData["mimeType"])
 	require.Equal(t, "cG5nLWJ5dGVz", inlineData["data"])
-	fileData := parts[2].(map[string]any)["fileData"].(map[string]any)
+	fileData := requireType[map[string]any](t, requireType[map[string]any](t, parts[2])["fileData"])
 	require.Equal(t, "image/jpeg", fileData["mimeType"])
 	require.Equal(t, "gs://bucket/refs/style.jpg", fileData["fileUri"])
 }
@@ -188,7 +188,7 @@ func TestVertexProvider_OpenResultReturnsCombinedJSONLStream(t *testing.T) {
 	provider := newTestVertexProvider(&fakeVertexBatchClient{}, store)
 	r, contentType, err := provider.OpenResult(context.Background(), &BatchImageJob{ProviderOutputRef: &output}, vertexServiceAccount())
 	require.NoError(t, err)
-	defer r.Close()
+	defer func() { _ = r.Close() }()
 
 	body, err := io.ReadAll(r)
 	require.NoError(t, err)
@@ -280,12 +280,12 @@ func requireVertexJSONLLine(t *testing.T, line, wantKey, wantPrompt string) {
 	var got map[string]any
 	require.NoError(t, json.Unmarshal([]byte(line), &got))
 	require.Equal(t, wantKey, got["key"])
-	request := got["request"].(map[string]any)
-	contents := request["contents"].([]any)
-	require.Equal(t, "user", contents[0].(map[string]any)["role"])
-	parts := contents[0].(map[string]any)["parts"].([]any)
-	require.Equal(t, wantPrompt, parts[0].(map[string]any)["text"])
-	config := request["generationConfig"].(map[string]any)
+	request := requireType[map[string]any](t, got["request"])
+	contents := requireType[[]any](t, request["contents"])
+	require.Equal(t, "user", requireType[map[string]any](t, contents[0])["role"])
+	parts := requireType[[]any](t, requireType[map[string]any](t, contents[0])["parts"])
+	require.Equal(t, wantPrompt, requireType[map[string]any](t, parts[0])["text"])
+	config := requireType[map[string]any](t, request["generationConfig"])
 	require.Equal(t, []any{"TEXT", "IMAGE"}, config["responseModalities"])
 }
 

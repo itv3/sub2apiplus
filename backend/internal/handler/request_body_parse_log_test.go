@@ -27,7 +27,7 @@ func loggedFields(t *testing.T, logs *observer.ObservedLogs) map[string]any {
 		case "body_len":
 			fields[f.Key] = int(f.Integer)
 		case "error":
-			fields[f.Key] = f.Interface.(error).Error()
+			fields[f.Key] = requireType[error](t, f.Interface).Error()
 		default:
 			fields[f.Key] = f.String
 		}
@@ -56,7 +56,7 @@ func TestLogRequestBodyParseFailure_ShortBodyHasNoTail(t *testing.T) {
 	fields := loggedFields(t, logs)
 	require.Contains(t, fields, "body_head")
 	require.NotContains(t, fields, "body_tail")
-	require.Contains(t, fields["body_head"].(string), `{\"broken\":`)
+	require.Contains(t, requireType[string](t, fields["body_head"]), `{\"broken\":`)
 }
 
 func TestLogRequestBodyParseFailure_LargeBodyBoundedSnippets(t *testing.T) {
@@ -69,8 +69,8 @@ func TestLogRequestBodyParseFailure_LargeBodyBoundedSnippets(t *testing.T) {
 
 	fields := loggedFields(t, logs)
 	require.Equal(t, len(body), fields["body_len"])
-	head := fields["body_head"].(string)
-	tail := fields["body_tail"].(string)
+	head := requireType[string](t, fields["body_head"])
+	tail := requireType[string](t, fields["body_tail"])
 	require.Contains(t, head, "claude-sonnet-4-6")
 	require.Contains(t, tail, "AAA")
 	require.NotContains(t, tail, "claude-sonnet-4-6")
@@ -86,7 +86,7 @@ func TestLogRequestBodyParseFailure_EscapesControlCharacters(t *testing.T) {
 	logRequestBodyParseFailure(log, body, nil)
 
 	fields := loggedFields(t, logs)
-	head := fields["body_head"].(string)
+	head := requireType[string](t, fields["body_head"])
 	require.NotContains(t, head, "\n")
 	require.NotContains(t, head, "\x01")
 	require.Contains(t, head, `\n`)

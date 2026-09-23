@@ -84,7 +84,7 @@ func TestBatchUpdateCredentials_PartialFailure(t *testing.T) {
 
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	data := resp["data"].(map[string]any)
+	data := requireType[map[string]any](t, resp["data"])
 	require.Equal(t, float64(2), data["success"], "应有 2 个成功")
 	require.Equal(t, float64(1), data["failed"], "应有 1 个失败")
 

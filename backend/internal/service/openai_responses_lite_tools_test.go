@@ -45,17 +45,17 @@ func TestNormalizeOpenAIResponsesLiteTools_MovesNamespacesAndKeepsSupportedTools
 
 	require.NoError(t, err)
 	require.True(t, changed)
-	tools := reqBody["tools"].([]any)
+	tools := requireType[[]any](t, reqBody["tools"])
 	require.Len(t, tools, 3)
-	require.Equal(t, "function", tools[0].(map[string]any)["type"])
-	require.Equal(t, "custom", tools[1].(map[string]any)["type"])
-	require.Equal(t, "tool_search", tools[2].(map[string]any)["type"])
-	input := reqBody["input"].([]any)
+	require.Equal(t, "function", requireType[map[string]any](t, tools[0])["type"])
+	require.Equal(t, "custom", requireType[map[string]any](t, tools[1])["type"])
+	require.Equal(t, "tool_search", requireType[map[string]any](t, tools[2])["type"])
+	input := requireType[[]any](t, reqBody["input"])
 	require.Len(t, input, 2)
-	additional := input[1].(map[string]any)["tools"].([]any)
+	additional := requireType[[]any](t, requireType[map[string]any](t, input[1])["tools"])
 	require.Len(t, additional, 2)
-	require.Equal(t, "image_gen", additional[0].(map[string]any)["name"])
-	require.Equal(t, "collaboration", additional[1].(map[string]any)["name"], "existing namespace must not be duplicated")
+	require.Equal(t, "image_gen", requireType[map[string]any](t, additional[0])["name"])
+	require.Equal(t, "collaboration", requireType[map[string]any](t, additional[1])["name"], "existing namespace must not be duplicated")
 	require.Equal(t, map[string]any{"type": "namespace", "name": "collaboration"}, reqBody["tool_choice"])
 }
 
@@ -69,9 +69,9 @@ func TestNormalizeOpenAIResponsesLiteTools_PreservesDeferredFlagsWithToolSearch(
 
 	_, err := normalizeOpenAIResponsesLiteTools(reqBody)
 	require.NoError(t, err)
-	tools := reqBody["tools"].([]any)
-	require.Equal(t, "tool_search", tools[0].(map[string]any)["type"])
-	require.Equal(t, true, tools[1].(map[string]any)["defer_loading"])
+	tools := requireType[[]any](t, reqBody["tools"])
+	require.Equal(t, "tool_search", requireType[map[string]any](t, tools[0])["type"])
+	require.Equal(t, true, requireType[map[string]any](t, tools[1])["defer_loading"])
 }
 
 func TestNormalizeOpenAIResponsesLiteTools_RejectsConflictingAdditionalTool(t *testing.T) {
@@ -123,9 +123,9 @@ func TestNormalizeOpenAIResponsesLiteTools_DeduplicatesAcrossAdditionalToolItems
 	require.NoError(t, err)
 	require.True(t, changed)
 	require.NotContains(t, reqBody, "tools")
-	input := reqBody["input"].([]any)
-	require.Len(t, input[0].(map[string]any)["tools"], 1)
-	require.Len(t, input[1].(map[string]any)["tools"], 1)
+	input := requireType[[]any](t, reqBody["input"])
+	require.Len(t, requireType[map[string]any](t, input[0])["tools"], 1)
+	require.Len(t, requireType[map[string]any](t, input[1])["tools"], 1)
 }
 
 func TestNormalizeOpenAIResponsesLiteTools_ConvertsStringInput(t *testing.T) {
@@ -142,11 +142,11 @@ func TestNormalizeOpenAIResponsesLiteTools_ConvertsStringInput(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, changed)
 	require.NotContains(t, reqBody, "tools")
-	input := reqBody["input"].([]any)
+	input := requireType[[]any](t, reqBody["input"])
 	require.Len(t, input, 2)
-	require.Equal(t, "message", input[0].(map[string]any)["type"])
-	require.Equal(t, "hello", input[0].(map[string]any)["content"])
-	require.Equal(t, "additional_tools", input[1].(map[string]any)["type"])
+	require.Equal(t, "message", requireType[map[string]any](t, input[0])["type"])
+	require.Equal(t, "hello", requireType[map[string]any](t, input[0])["content"])
+	require.Equal(t, "additional_tools", requireType[map[string]any](t, input[1])["type"])
 }
 
 func TestNormalizeOpenAIResponsesLiteTools_KeepsSupportedTopLevelTools(t *testing.T) {
@@ -291,10 +291,10 @@ func TestNormalizeOpenAIResponsesLiteTools_EnsuresReasoningContext(t *testing.T)
 
 			require.NoError(t, err)
 			require.True(t, changed)
-			reasoning := reqBody["reasoning"].(map[string]any)
+			reasoning := requireType[map[string]any](t, reqBody["reasoning"])
 			require.Equal(t, "all_turns", reasoning["context"])
 			if tt.name != "missing" {
-				require.Equal(t, tt.reasoning.(map[string]any)["effort"], reasoning["effort"])
+				require.Equal(t, requireType[map[string]any](t, tt.reasoning)["effort"], reasoning["effort"])
 			}
 		})
 	}

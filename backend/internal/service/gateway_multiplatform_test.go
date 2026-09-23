@@ -2111,40 +2111,6 @@ func TestAccount_IsMixedSchedulingEnabled(t *testing.T) {
 	}
 }
 
-// mockConcurrencyService for testing
-type mockConcurrencyService struct {
-	accountLoads      map[int64]*AccountLoadInfo
-	accountWaitCounts map[int64]int
-	acquireResults    map[int64]bool
-}
-
-func (m *mockConcurrencyService) GetAccountsLoadBatch(ctx context.Context, accounts []AccountWithConcurrency) (map[int64]*AccountLoadInfo, error) {
-	if m.accountLoads == nil {
-		return map[int64]*AccountLoadInfo{}, nil
-	}
-	result := make(map[int64]*AccountLoadInfo)
-	for _, acc := range accounts {
-		if load, ok := m.accountLoads[acc.ID]; ok {
-			result[acc.ID] = load
-		} else {
-			result[acc.ID] = &AccountLoadInfo{
-				AccountID:          acc.ID,
-				CurrentConcurrency: 0,
-				WaitingCount:       0,
-				LoadRate:           0,
-			}
-		}
-	}
-	return result, nil
-}
-
-func (m *mockConcurrencyService) GetAccountWaitingCount(ctx context.Context, accountID int64) (int, error) {
-	if m.accountWaitCounts == nil {
-		return 0, nil
-	}
-	return m.accountWaitCounts[accountID], nil
-}
-
 type mockConcurrencyCache struct {
 	acquireAccountCalls int
 	loadBatchCalls      int

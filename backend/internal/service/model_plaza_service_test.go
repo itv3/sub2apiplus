@@ -357,14 +357,6 @@ func newPlazaServiceWithBilling(channels []Channel, groups []Group, groupPlatfor
 	return NewModelPlazaService(repo, &stubGroupRepoForAvailable{activeGroups: groups}, catalog, bs, NewModelPricingResolver(cs, bs))
 }
 
-func plazaModelsByName(models []PlazaModel) map[string]PlazaModel {
-	out := make(map[string]PlazaModel, len(models))
-	for _, m := range models {
-		out[m.Name] = m
-	}
-	return out
-}
-
 func TestListGroups_TokenLadderFollowsGroupToggle(t *testing.T) {
 	// 同一渠道挂开启/关闭阶梯的两个分组：实付档位随分组开关，官方阶梯不受影响。
 	channels := []Channel{{

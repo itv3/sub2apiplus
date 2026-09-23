@@ -88,7 +88,7 @@ func TestUpdateSettings_StoresAccountSchedulingThresholds(t *testing.T) {
 	require.NoError(t, err)
 
 	got := svc.parseSettings(map[string]string{
-		SettingKeyAccountSchedulingThresholds: svc.settingRepo.(*mockSettingRepo).data[SettingKeyAccountSchedulingThresholds],
+		SettingKeyAccountSchedulingThresholds: requireType[*mockSettingRepo](t, svc.settingRepo).data[SettingKeyAccountSchedulingThresholds],
 	})
 	require.Equal(t, 92, got.AccountSchedulingThresholds[PlatformOpenAI])
 	require.Equal(t, 89, got.AccountSchedulingThresholds[PlatformAnthropic])
@@ -111,7 +111,7 @@ func TestGetAccountSchedulingThresholds_ReadsStoredValue(t *testing.T) {
 
 func TestGetAccountSchedulingThresholds_MissingSettingUsesDefaultsAndNormalCacheTTL(t *testing.T) {
 	svc := newSettingServiceForPlatformThresholdTest(nil)
-	repo := svc.settingRepo.(*mockSettingRepo)
+	repo := requireType[*mockSettingRepo](t, svc.settingRepo)
 	repo.getValueErr = ErrSettingNotFound
 
 	got := svc.GetAccountSchedulingThresholds(context.Background())

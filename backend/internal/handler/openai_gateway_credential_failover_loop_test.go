@@ -836,7 +836,12 @@ var handlerRefresherStarted sync.Map
 
 func findHandlerRefresherStarted(router *gin.Engine) <-chan struct{} {
 	value, _ := handlerRefresherStarted.Load(router)
-	return value.(chan struct{})
+	started, ok := value.(chan struct{})
+	if !ok {
+		// 与原单值断言一致：路由没有登记 refresher 启动信号属于测试装配错误，直接 panic。
+		panic("测试路由未登记 refresher 启动信号")
+	}
+	return started
 }
 
 func newGrokCredentialFailoverHandler(t *testing.T, mode string) (*OpenAIGatewayHandler, *grokCredentialHandlerRepo, *grokCredentialHandlerUpstream, *gin.Engine, func()) {

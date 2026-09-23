@@ -293,7 +293,7 @@ func TestAdminServiceBulkUpdateAccounts_ResolvesIDsFromFilters(t *testing.T) {
 
 	filtersField := reflect.ValueOf(input).Elem().FieldByName("Filters")
 	require.True(t, filtersField.IsValid(), "BulkUpdateAccountsInput should expose Filters for filter-target bulk update")
-	require.Equal(t, reflect.Ptr, filtersField.Kind(), "BulkUpdateAccountsInput.Filters should be a pointer field")
+	require.Equal(t, reflect.Pointer, filtersField.Kind(), "BulkUpdateAccountsInput.Filters should be a pointer field")
 
 	filtersValue := reflect.New(filtersField.Type().Elem())
 	filtersValue.Elem().FieldByName("Platform").SetString(PlatformOpenAI)

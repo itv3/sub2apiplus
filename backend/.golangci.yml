@@ -42,6 +42,11 @@ linters:
       - path: '_test\.go$'
         linters: [ gosec ]
         text: 'G70[34]'
+      # 以下 unit 测试用 enttest+sqlite 或 miniredis 驱动真实的 repository 实现，验证
+      # handler/service 与存储层的配合；repository、redis 依赖只出现在这些测试构建里，
+      # 不改变生产代码的依赖方向。按文件精确豁免 depguard，其余测试文件仍受约束。
+      - path: 'internal/(handler/auth_wechat_oauth|service/(api_key_service_cache|auth_service_email_bind|auth_service_identity_sync|batch_image_worker_runtime_redis))_test\.go$'
+        linters: [ depguard ]
 
   settings:
     depguard:

@@ -43,7 +43,7 @@ func TestWeChatOAuthStartRedirectsAndSetsPendingCookies(t *testing.T) {
 		service.SettingKeyWeChatConnectRedirectURL:         "https://api.example.com/api/v1/auth/oauth/wechat/callback",
 		service.SettingKeyWeChatConnectFrontendRedirectURL: "/auth/wechat/callback",
 	})
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/auth/oauth/wechat/start?mode=open&redirect=/billing", nil)
@@ -78,7 +78,7 @@ func TestWeChatOAuthStart_AllowsOpenModeWhenBothCapabilitiesEnabled(t *testing.T
 		service.SettingKeyWeChatConnectRedirectURL:         "https://api.example.com/api/v1/auth/oauth/wechat/callback",
 		service.SettingKeyWeChatConnectFrontendRedirectURL: "/auth/wechat/callback",
 	})
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
@@ -120,7 +120,7 @@ func TestWeChatOAuthCallbackCreatesPendingSessionForUnifiedFlow(t *testing.T) {
 	wechatOAuthUserInfoURL = upstream.URL + "/sns/userinfo"
 
 	handler, client := newWeChatOAuthTestHandler(t, false)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
@@ -180,7 +180,7 @@ func TestWeChatOAuthCallbackFallsBackToOpenIDWhenUnionIDMissingInSingleChannelMo
 	wechatOAuthUserInfoURL = upstream.URL + "/sns/userinfo"
 
 	handler, client := newWeChatOAuthTestHandlerWithSettings(t, false, wechatOAuthTestSettings("open", "wx-open-app", "wx-open-secret", "https://app.example.com/auth/wechat/callback"))
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
@@ -208,7 +208,7 @@ func TestWeChatOAuthCallbackFallsBackToOpenIDWhenUnionIDMissingInSingleChannelMo
 	require.Equal(t, "openid-123", session.ProviderSubject)
 	require.Equal(t, wechatSyntheticEmail("openid-123"), session.ResolvedEmail)
 
-	completion := session.LocalFlowState[oauthCompletionResponseKey].(map[string]any)
+	completion := requireType[map[string]any](t, session.LocalFlowState[oauthCompletionResponseKey])
 	require.Equal(t, oauthPendingChoiceStep, completion["step"])
 	require.Equal(t, "third_party_signup", completion["choice_reason"])
 }
@@ -238,7 +238,7 @@ func TestWeChatOAuthCallbackCreatesLoginPendingSessionForExistingIdentityUserWit
 	wechatOAuthUserInfoURL = upstream.URL + "/sns/userinfo"
 
 	handler, client := newWeChatOAuthTestHandlerWithSettings(t, false, wechatOAuthTestSettings("open", "wx-open-app", "wx-open-secret", "https://app.example.com/auth/wechat/callback"))
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	ctx := context.Background()
 	existingUser, err := client.User.Create().
@@ -285,7 +285,7 @@ func TestWeChatOAuthCallbackCreatesLoginPendingSessionForExistingIdentityUserWit
 	require.Equal(t, existingUser.ID, *session.TargetUserID)
 	require.Equal(t, existingUser.Email, session.ResolvedEmail)
 
-	completion := session.LocalFlowState[oauthCompletionResponseKey].(map[string]any)
+	completion := requireType[map[string]any](t, session.LocalFlowState[oauthCompletionResponseKey])
 	require.Equal(t, "/dashboard", completion["redirect"])
 	_, hasAccessToken := completion["access_token"]
 	require.False(t, hasAccessToken)
@@ -318,7 +318,7 @@ func TestWeChatOAuthCallbackRejectsDisabledExistingIdentityUser(t *testing.T) {
 	wechatOAuthUserInfoURL = upstream.URL + "/sns/userinfo"
 
 	handler, client := newWeChatOAuthTestHandler(t, false)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	ctx := context.Background()
 	existingUser, err := client.User.Create().
@@ -376,7 +376,7 @@ func TestWeChatPaymentOAuthCallbackRedirectsWithOpaqueResumeToken(t *testing.T) 
 	wechatOAuthAccessTokenURL = upstream.URL + "/sns/oauth2/access_token"
 
 	handler, client := newWeChatOAuthTestHandlerWithSettings(t, false, wechatOAuthTestSettings("mp", "wx-mp-app", "wx-mp-secret", "/auth/wechat/callback"))
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	handler.cfg.Totp.EncryptionKey = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	handler.cfg.Totp.EncryptionKeyConfigured = true
 
@@ -434,7 +434,7 @@ func TestWeChatPaymentOAuthCallbackUsesExplicitPaymentResumeSigningKeyWhenMixedK
 	wechatOAuthAccessTokenURL = upstream.URL + "/sns/oauth2/access_token"
 
 	handler, client := newWeChatOAuthTestHandlerWithSettings(t, false, wechatOAuthTestSettings("mp", "wx-mp-app", "wx-mp-secret", "/auth/wechat/callback"))
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	legacyKeyHex := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 	explicitSigningKey := "explicit-payment-resume-signing-key"
@@ -527,7 +527,7 @@ func TestWeChatOAuthCallbackBindUsesUnionCanonicalIdentityAcrossChannels(t *test
 			wechatOAuthUserInfoURL = upstream.URL + "/sns/userinfo"
 
 			handler, client := newWeChatOAuthTestHandlerWithSettings(t, false, wechatOAuthTestSettings(tc.mode, tc.appID, tc.appSecret, "/auth/wechat/callback"))
-			defer client.Close()
+			defer func() { _ = client.Close() }()
 
 			currentUser, err := client.User.Create().
 				SetEmail("current@example.com").
@@ -574,7 +574,7 @@ func TestWeChatOAuthCallbackBindUsesUnionCanonicalIdentityAcrossChannels(t *test
 			require.Equal(t, tc.appID, session.UpstreamIdentityClaims["channel_app_id"])
 			require.Equal(t, tc.openID, session.UpstreamIdentityClaims["channel_subject"])
 
-			completionResponse := session.LocalFlowState[oauthCompletionResponseKey].(map[string]any)
+			completionResponse := requireType[map[string]any](t, session.LocalFlowState[oauthCompletionResponseKey])
 			require.Equal(t, "/dashboard", completionResponse["redirect"])
 			_, hasAccessToken := completionResponse["access_token"]
 			require.False(t, hasAccessToken)
@@ -607,7 +607,7 @@ func TestWeChatOAuthCallbackBindRejectsCanonicalOwnershipConflict(t *testing.T) 
 	wechatOAuthUserInfoURL = upstream.URL + "/sns/userinfo"
 
 	handler, client := newWeChatOAuthTestHandler(t, false)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	ctx := context.Background()
 	owner, err := client.User.Create().
@@ -685,7 +685,7 @@ func TestWeChatOAuthCallbackBindRejectsChannelOwnershipConflict(t *testing.T) {
 	wechatOAuthUserInfoURL = upstream.URL + "/sns/userinfo"
 
 	handler, client := newWeChatOAuthTestHandler(t, false)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	ctx := context.Background()
 	owner, err := client.User.Create().
@@ -774,7 +774,7 @@ func TestWeChatOAuthCallbackBindRejectsLegacyProviderKeyOwnershipConflict(t *tes
 	wechatOAuthUserInfoURL = upstream.URL + "/sns/userinfo"
 
 	handler, client := newWeChatOAuthTestHandler(t, false)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	ctx := context.Background()
 	owner, err := client.User.Create().
@@ -852,7 +852,7 @@ func TestCompleteWeChatOAuthRegistrationAfterInvitationPendingSessionReturnsPend
 	wechatOAuthUserInfoURL = upstream.URL + "/sns/userinfo"
 
 	handler, client := newWeChatOAuthTestHandler(t, true)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	ctx := context.Background()
 	redeemRepo := repository.NewRedeemCodeRepository(client)
@@ -885,7 +885,7 @@ func TestCompleteWeChatOAuthRegistrationAfterInvitationPendingSessionReturnsPend
 		Where(pendingauthsession.SessionTokenEQ(sessionToken)).
 		Only(ctx)
 	require.NoError(t, err)
-	require.Equal(t, oauthPendingChoiceStep, pendingSession.LocalFlowState[oauthCompletionResponseKey].(map[string]any)["step"])
+	require.Equal(t, oauthPendingChoiceStep, requireType[map[string]any](t, pendingSession.LocalFlowState[oauthCompletionResponseKey])["step"])
 
 	body := bytes.NewBufferString(`{"invitation_code":"invite-1","adopt_display_name":true,"adopt_avatar":true}`)
 	completeRecorder := httptest.NewRecorder()
@@ -1036,7 +1036,7 @@ func TestWeChatOAuthCallbackRepairsLegacyOpenIDOnlyIdentity(t *testing.T) {
 	wechatOAuthUserInfoURL = upstream.URL + "/sns/userinfo"
 
 	handler, client := newWeChatOAuthTestHandler(t, false)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	ctx := context.Background()
 	legacyUser, err := client.User.Create().
@@ -1119,7 +1119,7 @@ func TestWeChatOAuthCallbackRepairsLegacyOpenIDOnlyIdentity(t *testing.T) {
 
 func TestCompleteWeChatOAuthRegistrationRejectsAdoptExistingUserSession(t *testing.T) {
 	handler, client := newWeChatOAuthTestHandler(t, false)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	ctx := context.Background()
 	existingUser, err := client.User.Create().
@@ -1172,7 +1172,7 @@ func TestCompleteWeChatOAuthRegistrationRejectsAdoptExistingUserSession(t *testi
 
 func TestCompleteWeChatOAuthRegistrationReturnsPendingSessionWhenChoiceStillRequired(t *testing.T) {
 	handler, client := newWeChatOAuthTestHandler(t, false)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	ctx := context.Background()
 	session, err := client.PendingAuthSession.Create().
@@ -1251,7 +1251,7 @@ func TestWeChatOAuthCallbackRepairsLegacyProviderKeyCanonicalIdentity(t *testing
 	wechatOAuthUserInfoURL = upstream.URL + "/sns/userinfo"
 
 	handler, client := newWeChatOAuthTestHandler(t, false)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	ctx := context.Background()
 	legacyUser, err := client.User.Create().

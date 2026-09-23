@@ -41,7 +41,7 @@ func (s *sparkShadowRepoStub) Create(_ context.Context, account *Account) error 
 	account.ID = s.nextID
 	cp := *account
 	s.accounts[account.ID] = &cp
-	s.mockAccountRepoForGemini.accountsByID[account.ID] = &cp
+	s.accountsByID[account.ID] = &cp
 	return nil
 }
 
@@ -98,13 +98,13 @@ func (s *sparkShadowRepoStub) Update(_ context.Context, account *Account) error 
 	}
 	cp := *account
 	s.accounts[account.ID] = &cp
-	s.mockAccountRepoForGemini.accountsByID[account.ID] = &cp
+	s.accountsByID[account.ID] = &cp
 	return nil
 }
 
 func (s *sparkShadowRepoStub) Delete(_ context.Context, id int64) error {
 	delete(s.accounts, id)
-	delete(s.mockAccountRepoForGemini.accountsByID, id)
+	delete(s.accountsByID, id)
 	return nil
 }
 func (s *sparkShadowRepoStub) BatchUpdateLastUsed(_ context.Context, _ map[int64]time.Time) error {
@@ -737,10 +737,10 @@ type raceCreateRepoStub struct {
 func (s *raceCreateRepoStub) Create(ctx context.Context, account *Account) error {
 	if account.ParentAccountID != nil {
 		// 模拟另一并发请求已抢先建成影子:注入底层 map,本次 Create 撞唯一索引失败。
-		s.sparkShadowRepoStub.nextID++
+		s.nextID++
 		phantom := *account
-		phantom.ID = s.sparkShadowRepoStub.nextID
-		s.sparkShadowRepoStub.accounts[phantom.ID] = &phantom
+		phantom.ID = s.nextID
+		s.accounts[phantom.ID] = &phantom
 		return errors.New(`duplicate key value violates unique constraint "uq_accounts_spark_shadow_per_parent"`)
 	}
 	return s.sparkShadowRepoStub.Create(ctx, account)

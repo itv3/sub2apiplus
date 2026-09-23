@@ -14,7 +14,7 @@ import (
 func TestGetErrorLogByID_APIKeyPrefixAndUpstreamStatus(t *testing.T) {
 	ctx := context.Background()
 	_, _ = integrationDB.ExecContext(ctx, "TRUNCATE ops_error_logs RESTART IDENTITY CASCADE")
-	repo := NewOpsRepository(integrationDB).(*opsRepository)
+	repo := requireType[*opsRepository](t, NewOpsRepository(integrationDB))
 
 	var plainID int64
 	err := integrationDB.QueryRowContext(ctx, `

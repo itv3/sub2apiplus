@@ -47,7 +47,7 @@ func encryptWebhookProviderConfig(t *testing.T, config map[string]string) string
 	data, err := json.Marshal(config)
 	require.NoError(t, err)
 
-	encrypted, err := payment.Encrypt(string(data), []byte(webhookProviderTestEncryptionKey))
+	encrypted, err := payment.Encrypt(string(data), []byte(webhookProviderTestEncryptionKey)) //nolint:staticcheck // SA1019：Encrypt 只保留给测试构造旧版密文，此处正是该用途
 	require.NoError(t, err)
 	return encrypted
 }

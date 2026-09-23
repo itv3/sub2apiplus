@@ -47,7 +47,7 @@ func TestOpenAIImagesResponsesDriverAndImageModels(t *testing.T) {
 				req := map[string]any{"model": model, "input": "draw a red cup"}
 				require.True(t, normalizeOpenAIResponsesImageOnlyModel(req))
 				require.Equal(t, driver, req["model"])
-				require.Equal(t, model, req["tools"].([]any)[0].(map[string]any)["model"])
+				require.Equal(t, model, requireType[map[string]any](t, requireType[[]any](t, req["tools"])[0])["model"])
 				require.False(t, normalizeOpenAIResponsesImageOnlyModel(req), "a valid driver must not be overwritten")
 			}
 			req := map[string]any{"model": "gpt-6-astra", "tools": []any{map[string]any{"type": "image_generation", "model": "gpt-image-2.5-sunburst"}}}

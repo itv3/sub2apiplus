@@ -231,20 +231,6 @@ func testEntTx(t *testing.T) *dbent.Tx {
 	return tx
 }
 
-// testEntSQLTx 已弃用：不要在新测试中使用此函数。
-// 基于 *sql.Tx 创建的 ent client 在调用 client.Tx() 时会 panic。
-// 对于需要测试内部使用事务的代码，请使用 testEntClient。
-// 对于需要事务隔离的测试，请使用 testEntTx。
-//
-// Deprecated: Use testEntClient or testEntTx instead.
-func testEntSQLTx(t *testing.T) (*dbent.Client, *sql.Tx) {
-	t.Helper()
-
-	// 直接失败，避免旧测试误用导致的事务嵌套 panic。
-	t.Fatalf("testEntSQLTx 已弃用：请使用 testEntClient 或 testEntTx")
-	return nil, nil
-}
-
 func testRedis(t *testing.T) *redisclient.Client {
 	t.Helper()
 

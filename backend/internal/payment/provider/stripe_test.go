@@ -5,6 +5,7 @@ package provider
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/payment"
@@ -17,8 +18,16 @@ type stripeRefundBackend struct {
 }
 
 func (b *stripeRefundBackend) Call(_ string, _ string, _ string, params stripe.ParamsContainer, v stripe.LastResponseSetter) error {
-	b.params = append(b.params, params.(*stripe.RefundCreateParams))
-	refund := v.(*stripe.Refund)
+	// Backend 接口签名里没有 testing.TB：类型不符时返回错误，让被测的退款调用失败并由用例断言捕获。
+	createParams, ok := params.(*stripe.RefundCreateParams)
+	if !ok {
+		return fmt.Errorf("stripeRefundBackend 只支持退款创建参数，收到 %T", params)
+	}
+	b.params = append(b.params, createParams)
+	refund, ok := v.(*stripe.Refund)
+	if !ok {
+		return fmt.Errorf("stripeRefundBackend 只能回填 *stripe.Refund，收到 %T", v)
+	}
 	refund.ID = "re_123"
 	refund.Status = stripe.RefundStatusSucceeded
 	return nil

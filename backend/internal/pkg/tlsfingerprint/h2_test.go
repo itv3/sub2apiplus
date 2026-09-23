@@ -71,10 +71,10 @@ func TestNewH2TransportDisableCompressionOmitsAcceptEncodingOnWire(t *testing.T)
 	if err != nil {
 		t.Fatalf("direct h2 transport 构建失败: %v", err)
 	}
-	transport := rt.(*http2.Transport)
+	transport := requireType[*http2.Transport](t, rt)
 	transport.DialTLSContext = func(ctx context.Context, network, addr string, _ *tls.Config) (net.Conn, error) {
 		dialer := &tls.Dialer{Config: &tls.Config{
-			InsecureSkipVerify: true, // 测试服务器使用临时自签名证书。
+			InsecureSkipVerify: true, //nolint:gosec // G402：测试服务器使用临时自签名证书。
 			NextProtos:         []string{"h2"},
 		}}
 		return dialer.DialContext(ctx, network, addr)
@@ -88,7 +88,7 @@ func TestNewH2TransportDisableCompressionOmitsAcceptEncodingOnWire(t *testing.T)
 	if err != nil {
 		t.Fatalf("执行 h2 请求失败: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if <-headerSeen {
 		t.Fatal("关闭自动压缩后，wire 上不应出现 accept-encoding")

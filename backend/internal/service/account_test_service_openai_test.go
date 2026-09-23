@@ -783,7 +783,7 @@ func TestAccountTestService_OpenAIAPIKeyCodexMimicUsesResponsesProbe(t *testing.
 	require.Equal(t, "https://compat-upstream.example/v1/responses", upstream.lastReq.URL.String())
 	require.Equal(t, officialOpenAIHTTPUserAgent, upstream.lastReq.Header.Get("User-Agent"))
 	require.Equal(t, officialOpenAIHTTPOriginator, upstream.lastReq.Header.Get("originator"))
-	require.Equal(t, []string{"kept"}, upstream.lastReq.Header["x-request-id"])
+	require.Equal(t, []string{"kept"}, upstream.lastReq.Header["x-request-id"]) //nolint:staticcheck // SA1008：断言透传头保留小写原样键
 	require.Empty(t, upstream.lastReq.Header.Get("OpenAI-Beta"))
 	require.Empty(t, upstream.lastReq.Header.Get("version"))
 	require.Empty(t, upstream.lastReq.Header.Get("session_id"))

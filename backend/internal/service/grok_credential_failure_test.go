@@ -1158,8 +1158,8 @@ func TestGetRequestCredentialLockHeldTimeoutDoesNotQuarantineAccount(t *testing.
 				require.Zero(t, countingRepo.setErrorCalls)
 				require.Zero(t, countingRepo.setTempUnschedCalls)
 			case *grokCredentialRereadFailureRepo:
-				require.Zero(t, countingRepo.tokenRefreshAccountRepo.setErrorCalls)
-				require.Zero(t, countingRepo.tokenRefreshAccountRepo.setTempUnschedCalls)
+				require.Zero(t, countingRepo.setErrorCalls)
+				require.Zero(t, countingRepo.setTempUnschedCalls)
 			}
 			require.Empty(t, cache.deletedKeys)
 			require.False(t, svc.isOpenAIAccountRuntimeBlocked(account))

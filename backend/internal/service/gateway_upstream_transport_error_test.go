@@ -105,7 +105,7 @@ func TestHandleUpstreamTransportError_AttributesEventTimeProxy(t *testing.T) {
 			if !ok {
 				t.Fatal("no upstream events recorded")
 			}
-			events := raw.([]*OpsUpstreamErrorEvent)
+			events := requireType[[]*OpsUpstreamErrorEvent](t, raw)
 			if len(events) != 1 {
 				t.Fatalf("events = %d, want 1", len(events))
 			}

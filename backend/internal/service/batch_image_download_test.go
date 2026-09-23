@@ -24,7 +24,7 @@ func TestBatchImageDownloadService_OpenItemContent(t *testing.T) {
 
 		stream, err := svc.OpenItemContent(ctx, testBatchImageOwner(), "imgbatch_download", "cover/../001", 1)
 		require.NoError(t, err)
-		defer stream.Reader.Close()
+		defer func() { _ = stream.Reader.Close() }()
 
 		body, err := io.ReadAll(stream.Reader)
 		require.NoError(t, err)

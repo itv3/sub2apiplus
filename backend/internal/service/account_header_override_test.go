@@ -146,10 +146,10 @@ func TestApplyHeaderOverrides(t *testing.T) {
 	// user-agent 覆盖且只有一个值（已知头恢复 wire casing）
 	require.Equal(t, []string{"override-agent/2.0"}, h["User-Agent"])
 	// anthropic-beta：非 canonical 旧值被清除，写入 wire casing（小写）
-	require.Equal(t, []string{"custom-beta-1"}, h["anthropic-beta"])
+	require.Equal(t, []string{"custom-beta-1"}, h["anthropic-beta"]) //nolint:staticcheck // SA1008：断言已知头恢复的小写 wire casing 原样键，不能按规范键读取
 	require.Empty(t, h["Anthropic-Beta"])
 	// 新增头（未知头以小写原样键写入，与转发链路 wire casing 约定一致）
-	require.Equal(t, []string{"custom-value"}, h["x-custom"])
+	require.Equal(t, []string{"custom-value"}, h["x-custom"]) //nolint:staticcheck // SA1008：未知头按小写原样键写入，需按写入形态断言
 	require.Equal(t, "custom-value", getHeaderRaw(h, "x-custom"))
 	// 未覆写的头不受影响
 	require.Equal(t, "application/json", h.Get("Content-Type"))

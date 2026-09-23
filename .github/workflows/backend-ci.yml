@@ -138,3 +138,19 @@ jobs:
           version: v2.13
           args: --timeout=30m
           working-directory: backend
+      # test job 用 -tags=unit、-tags=integration 编译测试，不带标签的 lint 看不到这两类
+      # 测试文件；按同样的标签各补跑一次，让 lint 覆盖与测试集合对齐。
+      - name: golangci-lint (unit)
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.13
+          args: --timeout=30m --build-tags=unit
+          working-directory: backend
+          skip-save-cache: true
+      - name: golangci-lint (integration)
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.13
+          args: --timeout=30m --build-tags=integration
+          working-directory: backend
+          skip-save-cache: true

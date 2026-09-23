@@ -119,15 +119,15 @@ func TestToModelPlazaGroupDTO_UserRateAndFieldWhitelist(t *testing.T) {
 		_, exists := decoded[key]
 		require.Truef(t, exists, "plaza group DTO must expose %q", key)
 	}
-	require.InDelta(t, 0.5, decoded["user_rate_multiplier"].(float64), 1e-9)
+	require.InDelta(t, 0.5, requireType[float64](t, decoded["user_rate_multiplier"]), 1e-9)
 
 	// 模型条目:pricing + official_pricing 并存;official 缺失字段输出 null 而非省略
-	models := decoded["models"].([]any)
+	models := requireType[[]any](t, decoded["models"])
 	require.Len(t, models, 1)
-	model := models[0].(map[string]any)
+	model := requireType[map[string]any](t, models[0])
 	require.Contains(t, model, "pricing")
 	require.Contains(t, model, "official_pricing")
-	official := model["official_pricing"].(map[string]any)
+	official := requireType[map[string]any](t, model["official_pricing"])
 	require.Contains(t, official, "input_price")
 	require.Contains(t, official, "cache_read_price")
 	_, has1h := official["cache_write_1h_price"]
@@ -186,20 +186,20 @@ func TestToModelPlazaGroupDTO_LongContextTiersAndBasis(t *testing.T) {
 	require.NoError(t, json.Unmarshal(raw, &decoded))
 	require.Equal(t, true, decoded["long_context_pricing_enabled"])
 
-	model := decoded["models"].([]any)[0].(map[string]any)
+	model := requireType[map[string]any](t, requireType[[]any](t, decoded["models"])[0])
 	require.Equal(t, "whole_request", model["long_context_basis"])
 
-	pricing := model["pricing"].(map[string]any)
-	paidTiers := pricing["intervals"].([]any)
+	pricing := requireType[map[string]any](t, model["pricing"])
+	paidTiers := requireType[[]any](t, pricing["intervals"])
 	require.Len(t, paidTiers, 2)
-	require.Equal(t, ">272K", paidTiers[1].(map[string]any)["tier_label"])
+	require.Equal(t, ">272K", requireType[map[string]any](t, paidTiers[1])["tier_label"])
 
-	official := model["official_pricing"].(map[string]any)
-	officialTiers := official["intervals"].([]any)
+	official := requireType[map[string]any](t, model["official_pricing"])
+	officialTiers := requireType[[]any](t, official["intervals"])
 	require.Len(t, officialTiers, 2)
-	first := officialTiers[0].(map[string]any)
+	first := requireType[map[string]any](t, officialTiers[0])
 	require.Equal(t, "≤272K", first["tier_label"])
-	require.InDelta(t, 272000, first["max_tokens"].(float64), 0)
+	require.InDelta(t, 272000, requireType[float64](t, first["max_tokens"]), 0)
 	require.Contains(t, first, "cache_write_price", "区间 DTO 字段齐全（nil 输出 null）")
 }
 
@@ -228,20 +228,20 @@ func TestToModelPlazaGroupDTO_TimePricing(t *testing.T) {
 	require.NoError(t, err)
 	var decoded map[string]any
 	require.NoError(t, json.Unmarshal(raw, &decoded))
-	model := decoded["models"].([]any)[0].(map[string]any)
-	tp := model["time_pricing"].(map[string]any)
+	model := requireType[map[string]any](t, requireType[[]any](t, decoded["models"])[0])
+	tp := requireType[map[string]any](t, model["time_pricing"])
 	require.Equal(t, "Asia/Shanghai", tp["timezone"])
 	_, hasWeekdaysOnly := tp["weekdays_only"]
 	require.False(t, hasWeekdaysOnly, "未开启仅工作日时字段省略")
-	periods := tp["periods"].([]any)
+	periods := requireType[[]any](t, tp["periods"])
 	require.Len(t, periods, 1)
-	first := periods[0].(map[string]any)
+	first := requireType[map[string]any](t, periods[0])
 	require.Equal(t, "00:30", first["start_time"])
 	require.Equal(t, "08:30", first["end_time"])
-	require.InDelta(t, 0.5, first["multiplier"].(float64), 1e-12)
+	require.InDelta(t, 0.5, requireType[float64](t, first["multiplier"]), 1e-12)
 
-	weekdaysModel := decoded["models"].([]any)[1].(map[string]any)
-	weekdaysTP := weekdaysModel["time_pricing"].(map[string]any)
+	weekdaysModel := requireType[map[string]any](t, requireType[[]any](t, decoded["models"])[1])
+	weekdaysTP := requireType[map[string]any](t, weekdaysModel["time_pricing"])
 	require.Equal(t, true, weekdaysTP["weekdays_only"])
 }
 

@@ -25,7 +25,7 @@ func (s *UserSubscriptionRepoSuite) SetupTest() {
 	s.ctx = context.Background()
 	tx := testEntTx(s.T())
 	s.client = tx.Client()
-	s.repo = NewUserSubscriptionRepository(s.client).(*userSubscriptionRepository)
+	s.repo = requireType[*userSubscriptionRepository](s.T(), NewUserSubscriptionRepository(s.client))
 }
 
 func TestUserSubscriptionRepoSuite(t *testing.T) {

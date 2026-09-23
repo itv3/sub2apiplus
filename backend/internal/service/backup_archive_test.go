@@ -25,7 +25,7 @@ func TestSplitBackupFile_ReassemblesExactBytes(t *testing.T) {
 		data, readErr := os.ReadFile(part.Path)
 		require.NoError(t, readErr)
 		require.Equal(t, fmt.Sprintf("%x", sha256.Sum256(data)), part.SHA256)
-		got.Write(data)
+		_, _ = got.Write(data)
 	}
 	require.Equal(t, []byte("0123456789abcdefg"), got.Bytes())
 }

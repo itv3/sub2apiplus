@@ -131,6 +131,6 @@ func TestNewGrokOAuthClient_UnvalidatedTokenURLFallsBackToDefault(t *testing.T) 
 	t.Setenv(xai.EnvAllowUnsafeURLOverrides, "")
 	t.Setenv(xai.EnvTokenURL, "https://evil.example/oauth/token")
 
-	client := NewGrokOAuthClient().(*grokOAuthClient)
+	client := requireType[*grokOAuthClient](t, NewGrokOAuthClient())
 	require.Equal(t, xai.DefaultTokenURL, client.tokenURL)
 }

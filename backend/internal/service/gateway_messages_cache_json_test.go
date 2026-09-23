@@ -14,7 +14,7 @@ import (
 func TestAddMessageCacheBreakpoints_JSONStringEscaping(t *testing.T) {
 	var controls strings.Builder
 	for r := rune(0); r <= 0x9f; r++ {
-		controls.WriteRune(r)
+		_, _ = controls.WriteRune(r)
 	}
 	tests := []struct{ name, text string }{
 		{"delete_character", "before\x7fafter"},

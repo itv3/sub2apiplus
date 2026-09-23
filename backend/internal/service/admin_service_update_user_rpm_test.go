@@ -23,7 +23,7 @@ func (s *rpmUserRepoStub) Update(_ context.Context, user *User, _ UserUpdateFiel
 	clone := *user
 	s.lastUpdated = &clone
 	if s.userRepoStub != nil {
-		s.userRepoStub.user = &clone
+		s.user = &clone
 	}
 	return nil
 }

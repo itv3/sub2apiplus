@@ -281,7 +281,7 @@ func TestOllamaCloudUsageGroupWritesAreAtomicAcrossPlatformsAndURLVariants(t *te
 	secondLoaded, err = repo.GetByID(ctx, second.ID)
 	require.NoError(t, err)
 	require.Equal(t, service.OllamaCloudUsageStatusOK,
-		secondLoaded.Extra[service.OllamaCloudUsageSnapshotExtraKey].(map[string]any)["status"])
+		requireType[map[string]any](t, secondLoaded.Extra[service.OllamaCloudUsageSnapshotExtraKey])["status"])
 
 	staleSecond := secondLoaded
 	require.NoError(t, repo.UpdateCredentials(ctx, second.ID, map[string]any{

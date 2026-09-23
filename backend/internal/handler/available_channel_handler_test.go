@@ -143,7 +143,7 @@ func TestUserAvailableChannel_FieldWhitelist(t *testing.T) {
 	} {
 		got, exists := ivDecoded[key]
 		require.Truef(t, exists, "user pricing interval must expose %q", key)
-		require.InDelta(t, want, got.(float64), 1e-12)
+		require.InDelta(t, want, requireType[float64](t, got), 1e-12)
 	}
 }
 

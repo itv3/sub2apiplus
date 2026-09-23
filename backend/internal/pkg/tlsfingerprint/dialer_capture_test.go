@@ -214,7 +214,7 @@ func fetchCapturedFingerprint(t *testing.T, captureURL string, profile *Profile)
 		t.Fatalf("request failed: %v", err)
 		return nil
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
