@@ -16,6 +16,7 @@ import re
 import secrets
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.error
@@ -1317,7 +1318,8 @@ def _probe_identity_key(
 
 def _default_restart(service_container: str, runner: CommandRunner) -> dict[str, Any]:
     _run_checked(
-        ["docker", "restart", service_container],
+        [sys.executable, str(Path(__file__).with_name("codex_upgrade_supervisor.py")),
+         "egress-transition", "--container", service_container, "--", "docker", "restart", service_container],
         "Candidate 服务清理 models 缓存",
         runner,
     )

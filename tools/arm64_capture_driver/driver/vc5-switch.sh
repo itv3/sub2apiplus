@@ -22,7 +22,10 @@ s = s.replace(anchor, anchor + f"      # Codex 0.154 候选（VC-5）：以 prev
 p.write_text(s); print("compose 已切换到", tag)
 PY
 fi
-docker compose config --quiet; docker compose up -d sub2api 2>&1 | tail -n 1
+docker compose config --quiet
+maintenance_args=(); [ "$MODE" != restore ] || maintenance_args+=(--cleanup)
+python3 "$TOOLS/codex_upgrade_supervisor.py" egress-transition --container sub2apiplus --compose-service sub2api \
+  "${maintenance_args[@]}" -- docker compose -f "$COMPOSE_DIR/docker-compose.yml" up -d sub2api
 st=unknown; for i in $(seq 1 36); do st=$(docker inspect sub2apiplus --format "{{.State.Health.Status}}"); [ "$st" = healthy ] && break; sleep 5; done
 echo "health=$st image=$(docker inspect sub2apiplus --format '{{.Config.Image}}') image_id=$(docker inspect sub2apiplus --format '{{.Image}}')"
 [ "$st" = healthy ]

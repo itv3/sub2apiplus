@@ -105,7 +105,11 @@ wait_healthy() {
 }
 
 restart_service() {
-  docker restart "$service_container" >/dev/null
+  local -a maintenance_args=()
+  [[ ${1:-} != cleanup ]] || maintenance_args+=(--cleanup)
+  # 重建期间由内核闭锁；只有双容器重新准入后才继续下一个采集场景。
+  python3 "$script_dir/codex_upgrade_supervisor.py" egress-transition --container "$service_container" \
+    "${maintenance_args[@]}" -- docker restart "$service_container" >/dev/null
   wait_healthy
 }
 
@@ -387,7 +391,7 @@ restore_environment() {
     ca_installed=0
   fi
   if [[ $service_restart_needed == 1 ]]; then
-    restart_service || restore_failed=1
+    restart_service cleanup || restore_failed=1
   fi
 
   if [[ -s $runtime_dir/hosts.before ]]; then

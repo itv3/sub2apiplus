@@ -16943,6 +16943,12 @@ class CodexUpgradeTest(unittest.TestCase):
                         "replay",
                         side_effect=replay_arm64,
                     ),
+                    mock.patch.object(
+                        codex_upgrade.codex_upgrade_arm64_environment_receipt,
+                        "receipts_equivalent",
+                        side_effect=lambda left_root, left, right_root, right:
+                        left["continuity_identity_sha256"] == right["continuity_identity_sha256"],
+                    ),
                 ):
                     preview = codex_upgrade._seal_capture_attempt(seal_arguments, "official")
                     self.assertEqual(preview["status"], "approval_required")
@@ -19404,6 +19410,11 @@ class CodexUpgradeTest(unittest.TestCase):
         这正是 reuse-official-evidence 建出的恢复 Campaign 在 VC-2 开工前的真实状态。
         """
 
+        # 本 helper 只用于本文件的合成子命令；独立 real_chains 使用受限 staging 夹具总账。
+        guard = mock.patch.object(codex_upgrade.codex_upgrade_arm64_environment_receipt,
+                                  "campaign_requires_runtime_egress", return_value=False)
+        guard.start()
+        self.addCleanup(guard.stop)
         original = codex_upgrade._create_initial_vc_control_artifacts
 
         def as_reuse(*args: object, **kwargs: object) -> dict[str, object]:

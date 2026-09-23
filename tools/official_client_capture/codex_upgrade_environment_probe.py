@@ -950,6 +950,11 @@ def _run_probe(arguments: ProbeArguments) -> dict[str, Any]:
     if arguments.phase not in {"before", "after"}:
         raise EnvironmentProbeError("phase 只能是 before 或 after")
     _validate_output_targets(arguments.output_dir)
+    from tools.official_client_capture import codex_upgrade_arm64_environment_receipt as arm64
+    try:
+        arm64.require_runtime_egress()
+    except (OSError, ValueError) as error:
+        raise EnvironmentProbeError(f"环境探针的实时出口准入失败：{error}") from error
 
     container_names = {
         "service": arguments.service_container,
@@ -989,6 +994,10 @@ def _run_probe(arguments: ProbeArguments) -> dict[str, Any]:
         "configuration": _configuration_state(arguments, container_ids),
     }
     payloads = {kind: normalize_state(state) for kind, state in states.items()}
+    try:
+        arm64.require_runtime_egress()
+    except (OSError, ValueError) as error:
+        raise EnvironmentProbeError(f"环境采集期间指定出口失去合规状态：{error}") from error
 
     _prepare_output_directory(arguments.output_dir)
     bindings: list[dict[str, Any]] = []

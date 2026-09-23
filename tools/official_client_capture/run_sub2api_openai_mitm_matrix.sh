@@ -192,7 +192,10 @@ wait_healthy() {
 }
 
 restart_service() {
-  docker restart "$service_container" >/dev/null
+  local -a maintenance_args=()
+  [[ ${1:-} != cleanup ]] || maintenance_args+=(--cleanup)
+  python3 "$(dirname "${BASH_SOURCE[0]}")/codex_upgrade_supervisor.py" egress-transition --container "$service_container" \
+    "${maintenance_args[@]}" -- docker restart "$service_container" >/dev/null
   wait_healthy
 }
 
@@ -270,7 +273,7 @@ restore_environment() {
   if [[ $backup_created == 1 && -f $backup_path ]]; then
     docker cp "$backup_path" "$service_container:/etc/ssl/certs/ca-certificates.crt" || restore_failed=1
   fi
-  restart_service || restore_failed=1
+  restart_service cleanup || restore_failed=1
   if [[ $keeper_was_running == true ]]; then
     docker start "$keeper_container" >/dev/null || restore_failed=1
   fi

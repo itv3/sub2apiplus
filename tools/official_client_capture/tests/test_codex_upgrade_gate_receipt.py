@@ -32,6 +32,12 @@ class CodexUpgradeGateReceiptTests(unittest.TestCase):
             side_effect=self._replay_environment,
         )
         self.environment_patcher.start()
+        # 本类使用极简环境 API 替身；完整原 producer 重放及投影在环境收据测试中验证。
+        equivalent = mock.patch.object(receipt.codex_upgrade_arm64_environment_receipt, "receipts_equivalent",
+                                       side_effect=lambda left_root, left, right_root, right:
+                                       left["continuity_identity_sha256"] == right["continuity_identity_sha256"])
+        equivalent.start()
+        self.addCleanup(equivalent.stop)
 
     def tearDown(self) -> None:
         self.environment_patcher.stop()

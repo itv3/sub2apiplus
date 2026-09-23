@@ -32,12 +32,14 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Iterator, Mapping, Sequence
 
 if __package__ in {None, ""}:
+    import codex_upgrade_arm64_environment_receipt as arm64_environment
     import codex_upgrade_evidence_permissions as evidence_permissions
     import codex_upgrade_project_ledger as project_ledger
     import codex_upgrade_root_cause as root_cause
     import codex_upgrade_timing_ledger as timing_ledger
     import codex_upgrade_vc_artifacts as vc_artifacts
 else:
+    from . import codex_upgrade_arm64_environment_receipt as arm64_environment
     from . import codex_upgrade_evidence_permissions as evidence_permissions
     from . import codex_upgrade_project_ledger as project_ledger
     from . import codex_upgrade_root_cause as root_cause
@@ -290,6 +292,244 @@ class SupervisorError(RuntimeError):
 
 class SupervisorTimeout(SupervisorError):
     """统一命令入口达到单步或全局墙钟预算。"""
+
+
+class RuntimeEgressPaused(SupervisorError):
+    """网络内核已闭锁；升级停止派发，后继必须先通过实时准入及既有恢复判据。"""
+
+    failure_class = "environment-prerequisite"
+
+
+def _egress_pause(run_dir: Path, state: Mapping[str, Any], reason: str) -> dict[str, Any]:
+    """追加首个出口暂停窗口；不改写旧证据，也不把窗口内未证明的请求自动判为可信。"""
+
+    with _state_lock(run_dir):
+        path = run_dir / "egress-pause.json"
+        if path.exists():
+            return _read_json(path)
+        last_path = run_dir / "egress-last-valid.json"
+        last = _read_json(last_path) if last_path.exists() else {}
+        observations = [item.get("observed_at_epoch") for service in last.get("runtime", {}).get("services", {}).values()
+                        for item in service.get("observations", []) if item.get("status") == "passed"]
+        verified = [float(value) for value in observations if isinstance(value, (int, float)) and not isinstance(value, bool)]
+        now = time.time()
+        payload = {"schema_version": "codex-upgrade-egress-pause/v1", "campaign_id": state["campaign_id"],
+                   "owner_nonce": state["owner_nonce"], "detected_at_epoch": now,
+                   "detected_at_monotonic_ns": time.monotonic_ns(),
+                   "uncertain_window_start_epoch": max(state["started_at_epoch"], min(verified)) if verified else state["started_at_epoch"],
+                   "last_valid_status_sha256": _sha256(_canonical(last)) if last else None,
+                   "reason": reason, "next_action": "修复指定出口并重新准入；先对账受影响窗口与 Job，再从合法 checkpoint 继续"}
+        payload["pause_sha256"] = _sha256(_canonical(payload))
+        _write_json(path, payload, replace=False)
+        return payload
+
+
+def _process_descends_from(pid: int, ancestor: int) -> bool:
+    """维护等待只覆盖实际运行该命令的进程祖先，不能授权并发的新采集。"""
+
+    seen: set[int] = set()
+    while pid > 1 and pid not in seen and len(seen) < 64:
+        if pid == ancestor:
+            return True
+        seen.add(pid)
+        try:
+            pid = int(Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[1])
+        except (OSError, ValueError, IndexError):
+            return False
+    return False
+
+
+def _egress_transition_status(policy_sha256: str, container: str) -> None:
+    """只检查本地维护等待条件，不能代替普通运行准入或签发收据。"""
+
+    policy = arm64_environment.load_egress_policy()
+    if policy_sha256 != arm64_environment.egress_policy_sha256(policy) or container not in policy["services"]:
+        raise RuntimeEgressPaused("容器维护期间指定出口策略发生变化")
+    status = arm64_environment._read_egress_runtime_json(arm64_environment.EGRESS_STATUS_PATH, private=False)
+    arm64_environment.validate_egress_status(
+        policy, status, now_epoch=time.time(), now_monotonic_ns=time.monotonic_ns(),
+        boot_id=Path("/proc/sys/kernel/random/boot_id").read_text().strip(), _transitioning_service=container,
+    )
+
+
+def _egress_transition_waiting(run_dir: Path, state: Mapping[str, Any], *, command_pid: int | None) -> bool:
+    """已声明重建期间仅容许等待缺失／探测状态；共享故障和不合规出口仍立即暂停。
+
+    此接口不放行网络，不改变内核租期，不允许新派发或生成环境收据；本地维护命令
+    返回前必须通过普通双容器准入。维护声明与独立存档、存活 PID、创建时间和 deadline 同时绑定。
+    """
+
+    try:
+        with _state_lock(run_dir):
+            record = _read_json(run_dir / "egress-transition.json")
+            nonce = record.get("transition_id")
+            fields = {"schema_version", "transition_id", "campaign_id", "owner_nonce", "actor_pid", "start_ticks",
+                      "started_at_epoch", "started_at_monotonic_ns", "deadline_monotonic_ns", "container",
+                      "command_sha256", "policy_sha256", "before_sha256"}
+            if (set(record) != fields or not isinstance(nonce, str) or not re.fullmatch(r"[0-9a-f]{32}", nonce)
+                    or _read_json(run_dir / "egress-transitions" / f"{nonce}.json") != record
+                    or (run_dir / "egress-transitions" / f"{nonce}.finish.json").exists()
+                    or (run_dir / "egress-pause.json").exists()):
+                return False
+        if (record["schema_version"] != "codex-upgrade-egress-transition/v1"
+                or record.get("owner_nonce") != state["owner_nonce"] or record.get("campaign_id") != state["campaign_id"]
+                or type(record["actor_pid"]) is not int or record["actor_pid"] <= 1
+                or not isinstance(record["start_ticks"], str) or not record["start_ticks"].isdigit()
+                or record["start_ticks"] != _process_start_ticks(record["actor_pid"])
+                or not _process_descends_from(record["actor_pid"], state["owner_pid"])
+                or type(record["started_at_monotonic_ns"]) is not int or type(record["deadline_monotonic_ns"]) is not int
+                or not 0 < record["started_at_monotonic_ns"] <= time.monotonic_ns() < record["deadline_monotonic_ns"] <= state["deadline_monotonic_ns"]
+                or record["deadline_monotonic_ns"] - record["started_at_monotonic_ns"] > 60 * 10**9
+                or _parse_epoch(record["started_at_epoch"], "出口维护起点") < state["started_at_epoch"]
+                or any(not isinstance(record[key], str) or not re.fullmatch(r"[0-9a-f]{64}", record[key])
+                       for key in ("command_sha256", "policy_sha256", "before_sha256"))):
+            return False
+        if command_pid is not None and not _process_descends_from(record["actor_pid"], command_pid):
+            return False
+        _egress_transition_status(record["policy_sha256"], record["container"])
+        return True
+    except (OSError, ValueError, KeyError, TypeError, SupervisorError):
+        return False
+
+
+def _check_runtime_egress(run_dir: Path, state: Mapping[str, Any], *, monitor: bool = False,
+                          command_pid: int | None = None) -> None:
+    """执行端与独立监督器共用同一门禁；不把旧环境收据或工具认证当成当前网络证明。"""
+
+    if state.get("egress_guard") is None:
+        return
+    if (run_dir / "egress-pause.json").exists():
+        raise RuntimeEgressPaused("当前 run 已因出口异常暂停，禁止原进程继续派发")
+    if not monitor and command_pid is None and (run_dir / "egress-transition.json").exists():
+        raise RuntimeEgressPaused("受控容器维护尚未完成，禁止派发新命令")
+    if (monitor or command_pid is not None) and (run_dir / "egress-transition.json").exists():
+        if _egress_transition_waiting(run_dir, state, command_pid=command_pid):
+            return
+        # 正常结束会在同一锁内写 finish 并删除当前声明；已消失时转普通准入复核。
+        if (run_dir / "egress-transition.json").exists():
+            _egress_pause(run_dir, state, "受控容器维护声明失效、超时或进程已结束")
+            raise RuntimeEgressPaused("受控容器维护已失效，升级必须暂停并对账")
+    try:
+        current = arm64_environment.require_runtime_egress()
+    except (OSError, ValueError) as error:
+        if (monitor or command_pid is not None) and _egress_transition_waiting(run_dir, state, command_pid=command_pid):
+            return
+        _egress_pause(run_dir, state, str(error))
+        raise RuntimeEgressPaused("运行时出口不合规或无法确证，升级已暂停") from error
+    with _state_lock(run_dir):
+        # 读取状态期间其他执行端可能已经发现故障；暂停记录一旦存在就不可恢复本 run。
+        if (run_dir / "egress-pause.json").exists():
+            raise RuntimeEgressPaused("当前 run 已因出口异常暂停，禁止原进程继续派发")
+        if monitor:
+            _write_json(run_dir / "egress-last-valid.json", current, replace=True)
+
+
+def _process_start_ticks(pid: int) -> str | None:
+    """信号前绑定 Linux PID 的创建时间，拒绝对复用 PID 发信号。"""
+
+    try:
+        return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19]
+    except (OSError, IndexError):
+        return None
+
+
+def job_egress_binding(client: "SupervisorClient | None", *, started_at_epoch: float) -> dict[str, Any] | None:
+    """把 Job 的真实执行时段绑定到父监督器，供后续暂停窗口逐 Job 对账。"""
+
+    if client is None:
+        return None
+    run_dir = client._require_started()
+    state = _read_state(run_dir)
+    if state.get("egress_guard") is None:
+        return None
+    _check_runtime_egress(run_dir, state)
+    return {"schema_version": "codex-upgrade-job-egress/v1", "run_dir": str(run_dir),
+            "campaign_id": state["campaign_id"], "owner_nonce": state["owner_nonce"],
+            "started_at_epoch": started_at_epoch, "finished_at_epoch": time.time()}
+
+
+def job_egress_trusted(result: Mapping[str, Any]) -> bool:
+    """旧结果按原合同读取；新结果只有在暂停影响窗口之外才可封存或复用。
+
+    当前网络恢复不能改变这个判定。窗口内的已完成结果保留原始字节，由对账归入
+    indeterminate 并补采；窗口前完成的结果仍须通过既有身份、环境与证据门禁。
+    """
+
+    binding = result.get("runtime_egress")
+    if binding is None:
+        return True
+    fields = {"schema_version", "run_dir", "campaign_id", "owner_nonce", "started_at_epoch", "finished_at_epoch"}
+    if not isinstance(binding, dict) or set(binding) != fields or binding["schema_version"] != "codex-upgrade-job-egress/v1":
+        raise SupervisorError("Job 出口时段绑定格式非法")
+    run_dir = _validate_state_dir(Path(binding["run_dir"]), create=False)
+    state = _read_state(run_dir)
+    started = _parse_epoch(binding["started_at_epoch"], "Job 出口起点")
+    finished = _parse_epoch(binding["finished_at_epoch"], "Job 出口终点")
+    if (state.get("egress_guard") is None or binding["campaign_id"] != state["campaign_id"]
+            or binding["owner_nonce"] != state["owner_nonce"]
+            or not state["started_at_epoch"] <= started <= finished <= state["deadline_at_epoch"]
+            or finished > state.get("terminal_at_epoch", state["deadline_at_epoch"])):
+        raise SupervisorError("Job 出口时段没有绑定原父任务")
+    pause_path = run_dir / "egress-pause.json"
+    if not pause_path.exists():
+        return True
+    pause = _read_json(pause_path)
+    unsigned = {key: value for key, value in pause.items() if key != "pause_sha256"}
+    if (pause.get("schema_version") != "codex-upgrade-egress-pause/v1"
+            or pause.get("campaign_id") != state["campaign_id"] or pause.get("owner_nonce") != state["owner_nonce"]
+            or pause.get("pause_sha256") != _sha256(_canonical(unsigned))):
+        raise SupervisorError("Job 引用的出口暂停记录被修改")
+    window_start = _parse_epoch(pause.get("uncertain_window_start_epoch"), "出口不确定窗口起点")
+    detected = _parse_epoch(pause.get("detected_at_epoch"), "出口暂停检测时间")
+    if not state["started_at_epoch"] <= window_start <= detected:
+        raise SupervisorError("Job 引用的出口暂停窗口非法")
+    last_path = run_dir / "egress-last-valid.json"
+    last = _read_json(last_path) if last_path.exists() else None
+    if pause.get("last_valid_status_sha256") != (_sha256(_canonical(last)) if last is not None else None):
+        raise SupervisorError("出口暂停引用的最后可信状态发生漂移")
+    return finished < window_start
+
+
+def _request_egress_cleanup(run_dir: Path, state: Mapping[str, Any], path: Path) -> None:
+    """owner 和 monitor 共用一次性信号记录，避免重复 SIGUSR1 再次打断 finally。"""
+
+    with _state_lock(run_dir):
+        record = _read_json(path)
+        pid = int(record["pid"])
+        ticks = record["start_ticks"]
+        if (record["owner_nonce"] != state["owner_nonce"] or path.name != f"{pid}.json"
+                or not isinstance(ticks, str) or ticks != _process_start_ticks(pid) or os.getpgid(pid) != pid):
+            return
+        signalled = path.with_name(f"{pid}.signalled.json")
+        if not signalled.exists():
+            os.kill(pid, signal.SIGUSR1 if record["cleanup_grace_seconds"] > 0 else signal.SIGTERM)
+            _write_json(signalled, {"pid": pid, "requested_at_monotonic_ns": time.monotonic_ns()}, replace=False)
+
+
+def _interrupt_egress_commands(run_dir: Path, state: Mapping[str, Any], now: float) -> None:
+    """owner 未及时响应时由独立进程请求清理；超过原清理预算才终止对应进程组。"""
+
+    pause = _read_json(run_dir / "egress-pause.json")
+    age = (time.monotonic_ns() - int(pause["detected_at_monotonic_ns"])) / 1e9
+    if age < 1:
+        return
+    directory = run_dir / "egress-commands"
+    if not directory.is_dir() or directory.is_symlink():
+        return
+    for path in directory.glob("*.json"):
+        if path.name.endswith(".signalled.json"):
+            continue
+        try:
+            record = _read_json(path)
+            pid = int(record["pid"])
+            if (record["owner_nonce"] != state["owner_nonce"] or path.name != f"{pid}.json" or not isinstance(record["start_ticks"], str)
+                    or record["start_ticks"] != _process_start_ticks(pid) or os.getpgid(pid) != pid):
+                continue
+            _request_egress_cleanup(run_dir, state, path)
+            if age >= max(2, float(record["cleanup_grace_seconds"]) + 1):
+                os.killpg(pid, signal.SIGKILL)
+        except (OSError, ValueError, KeyError, SupervisorError):
+            continue
 
 
 def _canonical(value: Mapping[str, Any]) -> bytes:
@@ -1403,6 +1643,10 @@ def _read_state(run_dir: Path) -> dict[str, Any]:
         _validate_staging_binding(binding)
     if state.get("state") == PREPARED_STATE and binding is None:
         raise SupervisorError("prepared 父监督器必须携带 staging_binding。")
+    guard = state.get("egress_guard")
+    if guard is not None and (not isinstance(guard, dict) or set(guard) != {"campaign_dir", "required"}
+                              or guard["required"] is not True or not Path(str(guard["campaign_dir"])).is_absolute()):
+        raise SupervisorError("监督器实时出口保护绑定非法")
     return state
 
 
@@ -2966,6 +3210,10 @@ def _monitor_impl(args: argparse.Namespace) -> int:
             break
         now = time.time()
         now_monotonic_ns = time.monotonic_ns()
+        try:
+            _check_runtime_egress(run_dir, state, monitor=True)
+        except RuntimeEgressPaused:
+            _interrupt_egress_commands(run_dir, state, now)
         heartbeat: dict[str, Any] | None = None
         try:
             heartbeat = _read_latest_heartbeat(
@@ -3340,6 +3588,7 @@ class SupervisorClient:
         watchdog_timeout_seconds: int | float = DEFAULT_WATCHDOG_TIMEOUT_SECONDS,
         ledger_interval_seconds: int | float = DEFAULT_LEDGER_INTERVAL_SECONDS,
         terminate_owner: bool = True,
+        campaign_dir: Path | None = None,
     ) -> None:
         self.base_dir = Path(state_dir)
         self.campaign_id = _safe_id(campaign_id, "campaign_id")
@@ -3360,6 +3609,7 @@ class SupervisorClient:
         # 正式运行由调用方固定为 5/20/60 秒；这里不强制 heartbeat 小于
         # timeout，以便用几十毫秒的短预算做确定性的离线回归测试。
         self.terminate_owner = bool(terminate_owner)
+        self.campaign_dir = Path(campaign_dir).resolve(strict=True) if campaign_dir is not None else None
         self.owner_nonce = (
             _safe_id(owner_nonce, "owner_nonce", maximum=128)
             if owner_nonce is not None
@@ -3528,7 +3778,13 @@ class SupervisorClient:
         }
         if binding is not None:
             state["staging_binding"] = binding
+        egress_snapshot = None
+        if self.campaign_dir is not None and arm64_environment.campaign_requires_runtime_egress(self.campaign_dir):
+            egress_snapshot = arm64_environment.require_runtime_egress()
+            state["egress_guard"] = {"campaign_dir": str(self.campaign_dir), "required": True}
         _write_json(run_dir / "state.json", state, replace=False)
+        if egress_snapshot is not None:
+            _write_json(run_dir / "egress-last-valid.json", egress_snapshot, replace=False)
         self.run_dir = run_dir
         self._prepared = prepared
         # prepared 期间心跳与 watchdog 与 running 同等对待：心跳合同不新增状态值。
@@ -3910,6 +4166,9 @@ class SupervisorClient:
             raise SupervisorError("统一命令入口 cleanup grace 非法。")
         cleanup_grace = float(cleanup_grace_seconds)
         self._ensure_monitor_alive()
+        run_dir = self._require_started()
+        runtime_state = _read_state(run_dir)
+        _check_runtime_egress(run_dir, runtime_state)
         if self._deadline_monotonic_ns is None:
             raise SupervisorError("监督器单调 deadline 尚未初始化。")
         remaining_wall = (
@@ -3975,6 +4234,7 @@ class SupervisorClient:
                 pass
             raise
         started = time.monotonic()
+        egress_command_path = None
         # 同时受单步 timeout 和 Campaign 的绝对墙钟截止约束；绝不因为
         # 子命令重试而重新起算全局预算。batched Campaign 会把执行截止提前，
         # 到点先用 SIGUSR1 请求 Python worker 展开 finally；只有清理窗口耗尽
@@ -3988,14 +4248,22 @@ class SupervisorClient:
             global_deadline - terminal_drain,
             execution_deadline + max(0.0, cleanup_grace - terminal_drain),
         )
-        interval = min(float(self.heartbeat_seconds), 1.0)
+        interval = min(float(self.heartbeat_seconds), 0.5)
         try:
+            if runtime_state.get("egress_guard") is not None:
+                directory = _validate_state_dir(run_dir / "egress-commands", create=True)
+                egress_command_path = directory / f"{process.pid}.json"
+                _write_json(egress_command_path, {"pid": process.pid, "start_ticks": _process_start_ticks(process.pid),
+                                                "owner_nonce": self.owner_nonce, "cleanup_grace_seconds": cleanup_grace,
+                                                "operation": operation, "job_id": job_id}, replace=False)
             while True:
+                _check_runtime_egress(run_dir, runtime_state, command_pid=process.pid)
                 remaining = execution_deadline - time.monotonic()
                 if remaining <= 0:
                     raise SupervisorTimeout(f"统一命令超时：{operation}")
                 try:
                     stdout, stderr = process.communicate(timeout=max(0.05, min(interval, remaining)))
+                    _check_runtime_egress(run_dir, runtime_state)
                     result = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
                     if result.returncode:
                         self._command_failed = True
@@ -4016,12 +4284,21 @@ class SupervisorClient:
                     if heartbeat_callback is not None:
                         heartbeat_callback(operation)
         except BaseException as error:
+            self._command_failed = True
+            if isinstance(error, RuntimeEgressPaused):
+                cleanup_deadline = min(cleanup_deadline, time.monotonic() + max(0, cleanup_grace - terminal_drain))
             if (
-                isinstance(error, SupervisorTimeout)
+                isinstance(error, (SupervisorTimeout, RuntimeEgressPaused))
                 and cleanup_grace > 0
                 and process.poll() is None
             ):
-                _request_process_cleanup(process)
+                if isinstance(error, RuntimeEgressPaused) and egress_command_path is not None:
+                    try:
+                        _request_egress_cleanup(run_dir, runtime_state, egress_command_path)
+                    except (OSError, ValueError, SupervisorError):
+                        _terminate_process_group(process)
+                else:
+                    _request_process_cleanup(process)
                 cleanup_operation = f"{operation}:cleanup"
                 while process.poll() is None and time.monotonic() < cleanup_deadline:
                     remaining_cleanup = cleanup_deadline - time.monotonic()
@@ -4055,6 +4332,12 @@ class SupervisorClient:
             except BaseException:
                 pass
             raise
+        finally:
+            if egress_command_path is not None:
+                egress_command_path.unlink(missing_ok=True)
+            for stream in (process.stdout, process.stderr):
+                if stream is not None:
+                    stream.close()
 
     def stop(self, *, reason: str = "normal-completion", status: str = "stopped") -> None:
         if self._stop_completed:
@@ -9352,6 +9635,7 @@ def _campaign_run_locked(
             heartbeat_seconds=args.heartbeat_seconds,
             watchdog_timeout_seconds=args.watchdog_timeout_seconds,
             ledger_interval_seconds=args.ledger_interval_seconds,
+            campaign_dir=campaign_dir,
         )
         client.start(prepared=commit is not None, staging_binding=staging_binding)
         if client.run_dir is None:
@@ -9504,6 +9788,7 @@ def _campaign_run_locked(
                             owner_pid=client.owner_pid,
                             owner_nonce=client.owner_nonce,
                             failure_kind="unexpected-error",
+                            failure_class=getattr(error, "failure_class", "execution-failure"),
                             error_type=type(error).__name__,
                             message="子命令未正常返回。",
                         )
@@ -9707,7 +9992,7 @@ def _campaign_run_locked(
                 payload["recovery_mode"] = manifest["recovery_mode"]
         return (0 if status == "stopped" else 1), payload
     except BaseException as error:
-        reason = f"{type(error).__name__}"
+        reason = f"action-failed:{active_action_id}" if isinstance(error, RuntimeEgressPaused) and active_action_id is not None else f"{type(error).__name__}"
         closeout_error: BaseException | None = None
         if campaign_dir is not None and active_action_id is not None:
             try:
@@ -9757,6 +10042,11 @@ def _assert_campaign_run_admitted(campaign_dir: Path | None) -> None:
     if manifest_path.is_symlink() or not manifest_path.is_file():
         return
     campaign_manifest = _read_json(manifest_path)
+    if arm64_environment.campaign_requires_runtime_egress(campaign_dir):
+        try:
+            arm64_environment.require_runtime_egress()
+        except (OSError, ValueError) as error:
+            raise RuntimeEgressPaused("运行时出口准入拒绝派发，须修复后从合法 checkpoint 继续") from error
     try:
         project_ledger.assert_campaign_admitted(
             campaign_dir,
@@ -9788,9 +10078,170 @@ def _campaign_run_command(args: argparse.Namespace) -> tuple[int, dict[str, Any]
         os.close(lock_descriptor)
 
 
+def _egress_local_command(arguments: argparse.Namespace) -> list[str]:
+    """维护入口仅接受指定容器 restart 或明确 compose 文件的单服务 up，不运行任意 shell。"""
+
+    command = list(arguments.command_argv)
+    if command[:1] == ["--"]:
+        command.pop(0)
+    name = _safe_id(arguments.container, "维护容器")
+    if command == ["docker", "restart", name]:
+        return command
+    if command[:2] != ["docker", "compose"] or not arguments.compose_service:
+        raise SupervisorError("出口维护只允许指定容器 restart 或 compose 单服务 up")
+    index = 2
+    while index + 1 < len(command) and command[index] in {"-f", "--file"}:
+        path = Path(command[index + 1])
+        if not path.is_absolute() or path.is_symlink() or not path.is_file():
+            raise SupervisorError("出口维护 compose 必须使用既有普通文件的绝对路径")
+        index += 2
+    if index == 2 or command[index:] not in (["up", "-d", arguments.compose_service],
+                                            ["up", "-d", "--no-deps", arguments.compose_service]):
+        raise SupervisorError("出口维护 compose 只允许明确文件和单个服务，禁止其他 Docker 动作")
+    return command
+
+
+def _egress_transition_command(arguments: argparse.Namespace) -> int:
+    """有界执行本地容器维护，再等待普通准入；故障清理可恢复本地配置但不恢复原 run。"""
+
+    command = _egress_local_command(arguments)
+    timeout = _positive_seconds(arguments.timeout_seconds, "出口维护 timeout")
+    if timeout > 60:
+        raise SupervisorError("出口维护等待不得超过 60 秒，也不得越过原 Campaign 截止")
+    run_dir, state = None, None
+    if os.environ.get(CAMPAIGN_RUN_CONTEXT_ENV) == "1":
+        run_dir = _validate_state_dir(Path(os.environ.get(CAMPAIGN_RUN_DIR_ENV, "")), create=False)
+        state = _read_state(run_dir)
+        if (state.get("state") != "running" or state.get("egress_guard") is None
+                or str(state["owner_pid"]) != os.environ.get(CAMPAIGN_RUN_OWNER_PID_ENV)
+                or state["owner_nonce"] != os.environ.get(CAMPAIGN_RUN_OWNER_NONCE_ENV)
+                or state["campaign_id"] != os.environ.get(CAMPAIGN_RUN_ID_ENV)
+                or not _process_descends_from(os.getpid(), state["owner_pid"])
+                or not _owner_alive(state["monitor_pid"])):
+            raise SupervisorError("出口维护未绑定存活的正式父监督器")
+    started_monotonic_ns = time.monotonic_ns()
+    deadline = started_monotonic_ns + int(timeout * 1e9)
+    if state is not None:
+        deadline = min(deadline, state["deadline_monotonic_ns"])
+    cleanup = bool(arguments.cleanup and (run_dir is None or (run_dir / "egress-pause.json").exists()))
+    before = None
+    if not cleanup:
+        if run_dir is not None:
+            _check_runtime_egress(run_dir, state)
+        try:
+            before = arm64_environment.require_runtime_egress()
+        except (OSError, ValueError) as error:
+            if run_dir is not None:
+                _egress_pause(run_dir, state, "维护开始前指定出口无法确认")
+            raise RuntimeEgressPaused("维护开始前指定出口无法确认") from error
+        if arguments.container not in before["policy"]["services"]:
+            raise SupervisorError("维护容器不在当前指定出口策略内")
+    else:
+        # 已进入清理的本地 restart/up 不能再次发放过渡许可；原暂停事实始终保留。
+        policy = arm64_environment.load_egress_policy()
+        if arguments.container not in policy["services"]:
+            raise SupervisorError("清理容器不在当前指定出口策略内")
+    transition = None
+    if run_dir is not None and not cleanup:
+        transition = {"schema_version": "codex-upgrade-egress-transition/v1", "transition_id": secrets.token_hex(16),
+                      "campaign_id": state["campaign_id"], "owner_nonce": state["owner_nonce"],
+                      "actor_pid": os.getpid(), "start_ticks": _process_start_ticks(os.getpid()),
+                      "started_at_epoch": time.time(), "started_at_monotonic_ns": started_monotonic_ns,
+                      "deadline_monotonic_ns": deadline,
+                      "container": arguments.container, "command_sha256": _sha256(_canonical({"argv": command})),
+                      "policy_sha256": before["policy_sha256"], "before_sha256": _sha256(_canonical(before))}
+        with _state_lock(run_dir):
+            if (run_dir / "egress-transition.json").exists() or (run_dir / "egress-pause.json").exists():
+                raise RuntimeEgressPaused("已有维护操作或暂停，拒绝并行维护")
+            _validate_state_dir(run_dir / "egress-transitions", create=True)
+            _write_json(run_dir / "egress-transitions" / f"{transition['transition_id']}.json", transition, replace=False)
+            _write_json(run_dir / "egress-transition.json", transition, replace=False)
+    process, result, after = None, "failed", None
+    previous_handler = signal.getsignal(signal.SIGUSR1)
+    def interrupt(*_args: Any) -> None:
+        raise RuntimeEgressPaused("容器维护收到父监督器清理请求")
+    signal.signal(signal.SIGUSR1, interrupt)
+    try:
+        if time.monotonic_ns() >= deadline:
+            raise RuntimeEgressPaused("本地维护派发前原有界等待期限已到")
+        process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, shell=False)
+        while process.poll() is None:
+            if time.monotonic_ns() >= deadline:
+                raise RuntimeEgressPaused("容器维护超过有界等待期限")
+            if run_dir is not None and not cleanup:
+                _check_runtime_egress(run_dir, state, command_pid=os.getpid())
+            time.sleep(.1)
+        if process.returncode:
+            raise SupervisorError(f"本地容器维护失败，退出码 {process.returncode}")
+        if not cleanup:
+            while True:
+                if time.monotonic_ns() >= deadline:
+                    raise RuntimeEgressPaused("维护后重新准入超过原有界等待期限")
+                if run_dir is not None:
+                    _check_runtime_egress(run_dir, state, command_pid=os.getpid())
+                try:
+                    after = arm64_environment.require_runtime_egress()
+                    if after["policy_sha256"] != before["policy_sha256"]:
+                        raise RuntimeEgressPaused("容器维护期间指定出口策略发生变化")
+                    break
+                except (OSError, ValueError) as error:
+                    allowed = False
+                    if run_dir is not None:
+                        allowed = _egress_transition_waiting(run_dir, state, command_pid=os.getpid())
+                    else:
+                        try:
+                            _egress_transition_status(before["policy_sha256"], arguments.container)
+                            allowed = True
+                        except (OSError, ValueError, SupervisorError):
+                            pass
+                    if time.monotonic_ns() >= deadline or not allowed:
+                        raise RuntimeEgressPaused("维护后指定出口无法重新准入") from error
+                    time.sleep(.1)
+        result = "local-cleanup-complete" if cleanup else "passed"
+    except BaseException:
+        if run_dir is not None and not cleanup:
+            _egress_pause(run_dir, state, "受控容器维护发生出口故障或超时，必须按原恢复协议对账")
+        raise
+    finally:
+        signal.signal(signal.SIGUSR1, signal.SIG_IGN)
+        try:
+            if process is not None and process.poll() is None:
+                try:
+                    process.terminate()
+                    process.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=1)
+                except ProcessLookupError:
+                    pass
+        finally:
+            try:
+                if transition is not None:
+                    with _state_lock(run_dir):
+                        if (run_dir / "egress-pause.json").exists():
+                            result = "failed"
+                        finish = {"schema_version": "codex-upgrade-egress-transition-finish/v1",
+                                  "transition_id": transition["transition_id"], "transition_sha256": _sha256(_canonical(transition)),
+                                  "status": result, "finished_at_epoch": time.time(),
+                                  "after_sha256": _sha256(_canonical(after)) if after is not None and result == "passed" else None}
+                        _write_json(run_dir / "egress-transitions" / f"{transition['transition_id']}.finish.json", finish, replace=False)
+                        (run_dir / "egress-transition.json").unlink(missing_ok=True)
+            finally:
+                signal.signal(signal.SIGUSR1, previous_handler)
+    if result == "failed":
+        raise RuntimeEgressPaused("维护结束时父任务已暂停，禁止继续原 run")
+    return 0
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
+    transition = commands.add_parser("egress-transition", help="受控容器维护与实时出口重新准入")
+    transition.add_argument("--container", required=True)
+    transition.add_argument("--compose-service")
+    transition.add_argument("--timeout-seconds", type=float, default=60)
+    transition.add_argument("--cleanup", action="store_true")
+    transition.add_argument("command_argv", nargs=argparse.REMAINDER)
     monitor = commands.add_parser("monitor", help="内部：运行独立监督器")
     monitor.add_argument("--state-dir", required=True, type=Path)
     monitor.add_argument("--heartbeat-seconds", type=float, default=DEFAULT_HEARTBEAT_SECONDS)
@@ -9995,6 +10446,8 @@ def main(argv: list[str] | None = None) -> int:
             )
         if arguments.command == "monitor":
             return _monitor(arguments)
+        if arguments.command == "egress-transition":
+            return _egress_transition_command(arguments)
         if arguments.command == "status":
             print(json.dumps(_status_command(arguments.state_dir), ensure_ascii=False, sort_keys=True))
             return 0
@@ -10109,7 +10562,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
             )
             return int(result.returncode)
-    except (OSError, SupervisorError, subprocess.SubprocessError) as error:
+    except (OSError, SupervisorError, arm64_environment.Arm64EnvironmentReceiptError, subprocess.SubprocessError) as error:
         print(f"Codex 升级监督器失败：{error}", file=sys.stderr)
         return 1
 

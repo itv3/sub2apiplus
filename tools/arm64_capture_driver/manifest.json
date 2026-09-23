@@ -70,9 +70,9 @@
     },
     {
       "path": "driver/guard.sh",
-      "sha256": "e0fd248480f422bbd352632280f532e79bd478cee44d2b65ce408df71270cd66",
+      "sha256": "23bf1eb9c54d0278486fd3f387c629eec797e80385ece88fbdc3cfc129ebab31",
       "mode": "0700",
-      "bytes": 5292
+      "bytes": 5586
     },
     {
       "path": "driver/lib.sh",
@@ -232,9 +232,9 @@
     },
     {
       "path": "driver/vc5-switch.sh",
-      "sha256": "41d47e279deb1ba81d4b5ca453cf515ae303822014cba65a5c140d84d16287eb",
+      "sha256": "1f958c0b4bdbae0b9f07446b00b659581543014e1c1c1e02cceb1bde1d88a971",
       "mode": "0700",
-      "bytes": 2855
+      "bytes": 3096
     },
     {
       "path": "install.py",
@@ -243,5 +243,5 @@
       "bytes": 21635
     }
   ],
-  "manifest_sha256": "f653a457821f364201d8f04f80495a7484471266dbb841c4f65129baf8dd832b"
+  "manifest_sha256": "af3cd637b2f2f1354af702574f1897d400aa6781e1a5e73dba7f5308e6f841dd"
 }

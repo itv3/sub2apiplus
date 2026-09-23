@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/codex-runtime-egress-install-v1.json",
+  "title": "出口保护安装事实",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "policy_sha256",
+    "role",
+    "installed_at_utc",
+    "firewall_sha256",
+    "parents",
+    "pins",
+    "kernel_artifacts"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "codex-runtime-egress-install/v1"
+    },
+    "policy_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "role": {
+      "enum": [
+        "origin",
+        "exit"
+      ]
+    },
+    "installed_at_utc": {
+      "type": "string",
+      "minLength": 1
+    },
+    "firewall_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "parents": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "pins": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "kernel_artifacts": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$"
+      }
+    }
+  }
+}

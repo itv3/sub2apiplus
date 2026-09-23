@@ -41,6 +41,12 @@ IMMEDIATE_DETECTION_SECONDS = 2.0
 
 
 class SupervisorTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # 本类只构造离线父动作与账本；实时出口的拒绝、竞态及清理在独立测试类验证。
+        patcher = mock.patch.object(supervisor.arm64_environment, "campaign_requires_runtime_egress", return_value=False)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     @staticmethod
     def _write_json(path: Path, payload: dict[str, object]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)

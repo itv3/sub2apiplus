@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://sub2apiplus.local/schemas/codex-upgrade-arm64-environment-receipt-v1.json",
-  "title": "Codex 升级 ARM64 网络与磁盘硬门禁收据（producer v6 只读重放／v7 生成）",
+  "title": "Codex 升级 ARM64 环境收据（v6／v7 只读重放，v8 外部出口策略与等价投影）",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -103,8 +103,41 @@
         "version": {
           "enum": [
             "6",
-            "7"
+            "7",
+            "8"
           ]
+        }
+      }
+    },
+    "environment_equivalence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "sha256"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "codex-arm64-environment-equivalence/v2"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "runtime_egress": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "policy_sha256",
+        "status_sha256"
+      ],
+      "properties": {
+        "policy_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "status_sha256": {
+          "$ref": "#/$defs/sha256"
         }
       }
     }
@@ -179,13 +212,16 @@
       }
     },
     {
-      "$comment": "producer v7 准入阶段（p0／*_before）：硬门禁。",
+      "$comment": "producer v7／v8 准入阶段（p0／*_before）：硬门禁。",
       "if": {
         "properties": {
           "producer": {
             "properties": {
               "version": {
-                "const": "7"
+                "enum": [
+                  "7",
+                  "8"
+                ]
               }
             }
           },
@@ -225,13 +261,16 @@
       }
     },
     {
-      "$comment": "producer v7 收尾阶段（*_after）：低于水位记 degraded，收据仍通过。",
+      "$comment": "producer v7／v8 收尾阶段（*_after）：低于水位记 degraded，收据仍通过。",
       "if": {
         "properties": {
           "producer": {
             "properties": {
               "version": {
-                "const": "7"
+                "enum": [
+                  "7",
+                  "8"
+                ]
               }
             }
           },
@@ -299,6 +338,57 @@
               }
             ]
           }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "producer": {
+            "properties": {
+              "version": {
+                "const": "8"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "environment_equivalence",
+          "runtime_egress"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "producer": {
+            "properties": {
+              "version": {
+                "enum": [
+                  "6",
+                  "7"
+                ]
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "environment_equivalence"
+              ]
+            },
+            {
+              "required": [
+                "runtime_egress"
+              ]
+            }
+          ]
         }
       }
     }

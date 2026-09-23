@@ -24,6 +24,35 @@ def _write(path: Path, value: object) -> Path:
     return path
 
 
+def create_runtime_egress_fact(containers: list[dict], observed_at_utc: str) -> dict:
+    """只供离线夹具生成合规运维状态；正式运行入口不存在对应跳过开关。"""
+
+    policy = json.loads((Path(__file__).parent / "fixtures/runtime_egress_policy.json").read_text())
+    epoch = datetime.fromisoformat(observed_at_utc).timestamp()
+    digest = arm._sha256_bytes(arm._canonical(policy))
+    services = {}
+    for index, container in enumerate(containers, 1):
+        container["public_egress"]["ip_address"] = policy["allowed_public_ipv4"][0]
+        services[container["name"]] = {
+            "status": "compliant", "admission_state": "ready", "container_id": container["container_id"],
+            "network_bindings": [{"ifindex": offset + 2, "host_ifindex": index * 10 + offset,
+                                  "source_ipv4": binding["ipv4_address"]}
+                                 for offset, binding in enumerate(container["network_bindings"])],
+            "observations": [{"url": url, "status": "passed", "ip_address": policy["allowed_public_ipv4"][0],
+                              "observed_at_epoch": epoch, "response_sha256": "e" * 64} for url in policy["probe_urls"]],
+            "reason": "", "blocked_at_epoch": None,
+        }
+    return {"policy": policy, "policy_sha256": digest, "runtime": {
+        "schema_version": arm.EGRESS_STATUS_SCHEMA, "policy_sha256": digest, "role": "origin",
+        "boot_id": "00000000-0000-0000-0000-000000000001", "observed_at_epoch": epoch,
+        "observed_at_monotonic_ns": 1,
+        "valid_until_monotonic_ns": 1000000000,
+        "shared_protection": {"status": "compliant", "checks": {
+            key: True for key in ("kernel_filter", "firewall", "wireguard", "routes", "remote_guard")}, "reason": ""},
+        "services": services,
+    }}
+
+
 def create_arm_receipt(
     root: Path,
     *,
@@ -154,6 +183,8 @@ def create_arm_receipt(
     }
     facts_name = f"{prefix}-facts.json"
     receipt_name = f"{prefix}-receipt.json"
+    facts.pop("wireguard")
+    facts["runtime_egress"] = create_runtime_egress_fact(containers, facts["observed_at_utc"])
     _write(root / facts_name, facts)
     arm.finalize(root, facts_name, receipt_name)
     return root / receipt_name

@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest import mock
 
 from tools.official_client_capture import codex_upgrade_environment_probe as probe
+from tools.official_client_capture import codex_upgrade_arm64_environment_receipt as arm
 from tools.official_client_capture import codex_upgrade_receipt_finalizer as finalizer
 
 
@@ -203,6 +204,25 @@ class DockerFixture:
 
 
 class EnvironmentProbeTest(unittest.TestCase):
+    def setUp(self) -> None:
+        # Docker 为零请求合成夹具；网络准入单独验证，不能读取开发机上的生产配置。
+        patcher = mock.patch.object(arm, "require_runtime_egress", return_value={})
+        self.egress = patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_runtime_egress_rejects_before_and_after_probe_without_publishing(self) -> None:
+        for during in (False, True):
+            with self.subTest(during=during), tempfile.TemporaryDirectory() as temporary:
+                output = Path(temporary) / "probe"
+                error = arm.Arm64EnvironmentReceiptError("隔离夹具：指定出口无法确认")
+                self.egress.side_effect = [{}, error] if during else error
+                fixture = DockerFixture()
+                with mock.patch.object(probe.subprocess, "run", side_effect=fixture):
+                    with self.assertRaisesRegex(probe.EnvironmentProbeError, "出口"):
+                        probe.run_probe(self._arguments(output))
+                self.assertFalse(output.exists())
+                self.assertEqual(bool(fixture.calls), during)
+
     def _arguments(
         self,
         output_dir: Path,

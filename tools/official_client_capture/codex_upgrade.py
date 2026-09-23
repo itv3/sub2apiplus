@@ -3524,6 +3524,7 @@ def run_job(
 
     lease = _ACTIVE_CAMPAIGN_LEASE
     operation = f"job:{job.job_id}:attempt-{attempt_index}"
+    egress_started_at_epoch = time.time()
     event_started = False
     if lease is not None:
         lease.event_start(operation, job_id=job.job_id)
@@ -3539,6 +3540,11 @@ def run_job(
             deadline=deadline,
             heartbeat=heartbeat,
         )
+        runtime_egress = codex_upgrade_supervisor.job_egress_binding(
+            getattr(lease, "_supervisor", None), started_at_epoch=egress_started_at_epoch
+        )
+        if runtime_egress is not None:
+            result["runtime_egress"] = runtime_egress
     except BaseException as error:
         if event_started and lease is not None:
             lease.event_fail(
@@ -7360,6 +7366,8 @@ def _validate_capture_job_results(
             raise ConfigurationError(f"{phase} 抓包任务收据身份非法或重复。")
         seen.add(job_id)
         _validate_incremental_job_result(result, label=f"{phase}:{job_id}")
+        if not codex_upgrade_supervisor.job_egress_trusted(result):
+            raise ConfigurationError(f"{phase} 抓包任务 {job_id} 与出口暂停窗口相交，须先对账补采。")
         if job_id in expected:
             expected_job = expected[job_id]
             # 改造 5 M2：恢复段补跑的 Job 按重定位后的定义执行（execution_sha256 属于段预约），其
@@ -15716,8 +15724,10 @@ def _validate_deadline_orphan_attempt_bindings(
         or arm64_after.get("status") != "passed"
         or arm64_after.get("phase") != "attempt_after"
         or arm64_after.get("subject_id") != attempt_root.name
-        or arm64_before.get("continuity_identity_sha256")
-        != arm64_after.get("continuity_identity_sha256")
+        or not codex_upgrade_arm64_environment_receipt.receipts_equivalent(
+            expected_paths["arm64_before_receipt"].parent, arm64_before,
+            expected_paths["arm64_after_receipt"].parent, arm64_after,
+        )
         or restoration.get("schema_version") != RESTORATION_SCHEMA
         or restoration.get("status") != "restored"
         or restoration.get("phase") != "official"
@@ -15845,9 +15855,8 @@ def _close_interrupted_recovery_attempt(
         deadline=deadline,
         heartbeat=lambda operation: active.heartbeat(operation, force=True),
     )
-    if (
-        arm64_before.get("continuity_identity_sha256")
-        != arm64_after.get("continuity_identity_sha256")
+    if not codex_upgrade_arm64_environment_receipt.receipts_equivalent(
+        arm64_before_path.parent, arm64_before, arm64_after_path.parent, arm64_after,
     ):
         raise ConfigurationError("孤儿 attempt 前后 ARM64 网络或运行身份漂移。")
 
@@ -35167,9 +35176,9 @@ def _phase_evaluation_environment_boundary(
         ):
             raise ConfigurationError(f"失败 attempt 的 {name} 身份不一致。")
         arm64_values[name] = receipt
-    if (
-        arm64_values["arm64_before_receipt"].get("continuity_identity_sha256")
-        != arm64_values["arm64_after_receipt"].get("continuity_identity_sha256")
+    if not codex_upgrade_arm64_environment_receipt.receipts_equivalent(
+        paths["arm64_before_receipt"].parent, arm64_values["arm64_before_receipt"],
+        paths["arm64_after_receipt"].parent, arm64_values["arm64_after_receipt"],
     ):
         raise ConfigurationError("失败 attempt 前后 ARM64 环境身份不连续。")
 
@@ -39390,6 +39399,8 @@ def _prior_complete_results(
         affected.update(exact_affected_job_ids)
         for item in results:
             if not isinstance(item, dict) or item.get("status") != "complete":
+                continue
+            if not codex_upgrade_supervisor.job_egress_trusted(item):
                 continue
             job_id = item.get("id")
             if not isinstance(job_id, str) or job_id not in expected_jobs:
@@ -44021,7 +44032,9 @@ def _run_attempt_recovery_segment(
                 )
                 if (
                     arm64_before_receipt is None
-                    or arm64_before_receipt.get("continuity_identity_sha256") != arm64_after_receipt.get("continuity_identity_sha256")
+                    or not codex_upgrade_arm64_environment_receipt.receipts_equivalent(
+                        arm64_before_path.parent, arm64_before_receipt, arm64_after_path.parent, arm64_after_receipt,
+                    )
                 ):
                     raise ConfigurationError("恢复段前后 ARM64 网络或运行身份漂移。")
         except BaseException as error:
@@ -45576,8 +45589,9 @@ def _run_capture_attempt(
                 )
                 if (
                     arm64_before_receipt is None
-                    or arm64_before_receipt.get("continuity_identity_sha256")
-                    != arm64_after_receipt.get("continuity_identity_sha256")
+                    or not codex_upgrade_arm64_environment_receipt.receipts_equivalent(
+                        arm64_before_path.parent, arm64_before_receipt, arm64_after_path.parent, arm64_after_receipt,
+                    )
                 ):
                     raise ConfigurationError("attempt 前后 ARM64 网络或运行身份漂移。")
         except BaseException as error:
@@ -46423,6 +46437,7 @@ def _seal_capture_attempt(
                 raise ConfigurationError("metadata-only attempt 来源环境根未纳入 seal。")
             metadata_source_evidence_root = restoration_evidence_root
     arm64_receipts: dict[str, dict[str, Any]] = {}
+    arm64_receipt_roots: dict[str, Path] = {}
     for role, expected_phase in (
         ("arm64_before_receipt", "attempt_before"),
         ("arm64_after_receipt", "attempt_after"),
@@ -46458,13 +46473,10 @@ def _seal_capture_attempt(
         ):
             raise ConfigurationError(f"抓包 attempt 的 {role} 身份不一致。")
         arm64_receipts[role] = replayed
-    if (
-        arm64_receipts["arm64_before_receipt"].get(
-            "continuity_identity_sha256"
-        )
-        != arm64_receipts["arm64_after_receipt"].get(
-            "continuity_identity_sha256"
-        )
+        arm64_receipt_roots[role] = receipt_path.parent
+    if not codex_upgrade_arm64_environment_receipt.receipts_equivalent(
+        arm64_receipt_roots["arm64_before_receipt"], arm64_receipts["arm64_before_receipt"],
+        arm64_receipt_roots["arm64_after_receipt"], arm64_receipts["arm64_after_receipt"],
     ):
         raise ConfigurationError("抓包 attempt 前后 ARM64 环境身份不连续。")
     restoration_reference = restoration_environment.get("restoration_report")
@@ -55178,6 +55190,15 @@ def _campaign_cleanup_signal_guard() -> Iterable[None]:
     previous = signal.getsignal(signal.SIGUSR1)
 
     def request_cleanup(_signum: int, _frame: Any) -> None:
+        run_dir = Path(os.environ.get(codex_upgrade_supervisor.CAMPAIGN_RUN_DIR_ENV, ""))
+        if (run_dir / "egress-pause.json").exists():
+            state = codex_upgrade_supervisor._read_state(run_dir)
+            if (state["owner_nonce"] != os.environ.get(codex_upgrade_supervisor.CAMPAIGN_RUN_OWNER_NONCE_ENV)
+                    or state["campaign_id"] != os.environ.get(codex_upgrade_supervisor.CAMPAIGN_RUN_ID_ENV)):
+                raise ConfigurationError("出口清理信号与正式父任务身份不一致。")
+            raise codex_upgrade_supervisor.RuntimeEgressPaused(
+                "父监督器因指定出口异常暂停，正在原清理预算内恢复环境。"
+            )
         raise CampaignCleanupRequested(
             "父监督器数据面截止已到，正在原始 deadline 内执行 attempt 清理。"
         )

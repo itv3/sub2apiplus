@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-job-egress-v1.json",
+  "title": "Job 执行时段与父出口监督绑定",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_dir",
+    "campaign_id",
+    "owner_nonce",
+    "started_at_epoch",
+    "finished_at_epoch"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "codex-upgrade-job-egress/v1"
+    },
+    "run_dir": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "campaign_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "owner_nonce": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "started_at_epoch": {
+      "type": "number"
+    },
+    "finished_at_epoch": {
+      "type": "number"
+    }
+  }
+}

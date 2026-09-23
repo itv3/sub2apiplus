@@ -16,6 +16,8 @@ MODE="${1:-}"; CAMPAIGN="${2:-}"
 case "$MODE" in pre-plan|pre-vc4|pre-vc5) ;; *) echo "guard: MODE 只能是 pre-plan|pre-vc4|pre-vc5（收到 '$MODE'）"; exit 2;; esac
 if [ "$MODE" != pre-plan ] && [ -z "$CAMPAIGN" ]; then echo "guard: $MODE 需要 <campaign_dir>"; exit 2; fi
 python3 "$DRV/../install.py" verify --target "$(dirname "$DRV")" --data-root "$D" || { echo "guard/driver: FAIL — 驱动安装复验未通过，停止"; exit 1; }
+# 出口准入必须来自持续守护的当前状态；旧环境收据或发布认证不能替代它。
+python3 -m tools.official_client_capture.codex_upgrade_arm64_environment_receipt egress-check || { echo "guard/egress: FAIL — 指定出口未通过实时准入，停止派发"; exit 1; }
 MIN_FREE_GIB=$(python3 -c "
 import sys
 raw = sys.argv[1]

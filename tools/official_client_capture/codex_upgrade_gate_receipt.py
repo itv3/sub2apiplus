@@ -676,10 +676,7 @@ def _validate_environment(
             )
         normalized[role] = binding
         receipts[role] = receipt
-    if (
-        receipts["before"].get("continuity_identity_sha256")
-        != receipts["after"].get("continuity_identity_sha256")
-    ):
+    if not codex_upgrade_arm64_environment_receipt.receipts_equivalent(root, receipts["before"], root, receipts["after"]):
         raise GateReceiptError("gate attempt 前后 ARM64 环境身份漂移")
     normalized["continuity_identity_sha256"] = receipts["after"][
         "continuity_identity_sha256"
@@ -806,8 +803,10 @@ def build_receipt(
         previous_environment = previous.get("environment")
         if (
             not isinstance(previous_environment, dict)
-            or previous_environment.get("continuity_identity_sha256")
-            != environment["continuity_identity_sha256"]
+            or not codex_upgrade_arm64_environment_receipt.receipts_equivalent(
+                root, codex_upgrade_arm64_environment_receipt.replay(root, previous_environment["after"]["path"]),
+                root, codex_upgrade_arm64_environment_receipt.replay(root, environment["before"]["path"]),
+            )
         ):
             raise GateReceiptError("前序 after 与本次 before 的 ARM64 环境连续性无法证明")
         expected_executed_ids = list(previous["failed_gate_ids"])

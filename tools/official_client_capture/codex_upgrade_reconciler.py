@@ -1030,7 +1030,8 @@ def _classify_jobs(
         execution_ok = (
             isinstance(result, Mapping) and result.get("execution_sha256") == execution[job_id]
         )
-        if checkpoint_status == "complete" and result_status == "complete" and execution_ok:
+        egress_trusted = supervisor.job_egress_trusted(result) if isinstance(result, Mapping) else False
+        if checkpoint_status == "complete" and result_status == "complete" and execution_ok and egress_trusted:
             state = "complete"
         elif result_status == "failed" or checkpoint_status == "failed":
             state = "failed"
@@ -1045,6 +1046,7 @@ def _classify_jobs(
             "result_status": result_status,
             "execution_sha256_matches": execution_ok,
             "disposition": result.get("disposition") if isinstance(result, Mapping) else None,
+            **({"runtime_egress_trusted": egress_trusted} if isinstance(result, Mapping) and result.get("runtime_egress") is not None else {}),
         }
     grouped = {state: sorted(j for j, s in states.items() if s == state) for state in JOB_STATES}
     return {"planned_job_ids": sorted(planned), "states": states, "groups": grouped, "details": details}

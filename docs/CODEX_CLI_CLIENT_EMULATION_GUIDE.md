@@ -1310,7 +1310,8 @@ VC-0 只回答“本次升级是否具备安全开工条件”，不收集目标
 
 `plan` 与各收据会冻结：目标与基线版本及官方产物、Campaign 用途、账号／API Key／模型可见性、ARM64 环境、
 预算与同根因重试上限，以及受管工具身份。受管工具变化按 §4.7“工具身份策略 v2”分层处理，其余任一变化都是
-身份漂移。
+身份漂移。出口选择采用 §4.0.3 的外部运维策略：用户明确改选后重新核验当前路径，不因此改变工具身份或
+使已可信完成的历史结果失效；镜像、客户端、账号／模型、抓包拓扑、代理和 CA 等真实依赖仍逐项核对。
 
 预检 Campaign（`plan --campaign-mode preflight_only`）只做离线计划与演练：不得发送真实请求，也不能直接转为
 Formal Campaign，工具会拒绝人工执行 `plan --campaign-mode formal`。`plan --rule-manifest` 用 baseline 的
@@ -1328,19 +1329,30 @@ passed／failed／approved_skip／unexpected_skip 分类登记为 P0 门禁收�
 
 ### 4.0.3 ARM64 环境
 
-取证、测试、构建和部署统一在 ARM64 完成。下列坐标进入 ARM64 环境收据的冻结身份，Campaign 期间不得改动：
+取证、测试、构建和部署统一在 ARM64 完成。下列真实依赖进入 ARM64 环境等价身份；出口策略独立管理：
 
 | 坐标 | 值 |
 |---|---|
 | 固定容器 IP | Sub2API `172.25.0.3`、`capture-cli` `172.30.0.10`；`sub2apiplus_sub2api-network` 上五个容器 sub2api `172.20.0.2`、redis `.3`、postgres `.4`、keeper `.5`、capture-cli `.6` 全部静态固定（未固定的地址在 compose 重建后会漂移，被判环境污染） |
-| 公网出口 | 以当次环境收据冻结的出口为准（2026-09-23 为 `144.34.230.210`，经 BWG） |
+| 公网出口 | 受限运维配置 `/etc/sub2api-egress/policy.json` 指定；本轮 `sub2apiplus` 与 `capture-cli` 均只允许 DMIT `69.63.195.102`，禁止自动学习当前出口、回退直连或切换服务商 |
 | 数据根 | 宿主 `/root/docker/capture-cli/data`（`0700`；`runs` 放 Job 证据，`runtime` 放临时文件），容器运行根 `/root/oauth-capture`；下文的 `$CAPTURE_HOST_DATA_ROOT` 即宿主数据根 |
 | 其余 | 两个运行镜像的 digest、`/opt/codex-<target>/bin/codex` 摘要、`docker compose config` 渲染摘要、挂载与抓包拓扑、代理与 CA |
 
-网络还必须满足：`wg1` MTU 为 `1420`；Endpoint 用固定 IPv4（当前 `144.34.230.210:51830`），禁止域名解析或漫游回
-IPv6；双向四条 MSS 规则——`172.25.0.3/32` 与 `172.30.0.0/16` 出 `wg1` 的 SYN 执行 `TCPMSS --clamp-mss-to-pmtu`，
-回程 SYN／SYN-ACK 在 MSS 大于 `1380` 时执行 `TCPMSS --set-mss 1380`。环境收据会逐项核对上述坐标，并做连续三次
-连通性探针和目标版本 `codex doctor` 无凭据 TLS 探针；脚本不得修改网络去迁就检查。
+源宿主和出口宿主读取同一份策略，显式登记公钥、固定 IPv4 Endpoint、专用接口、MTU、物理出口、DNS 和精确内网依赖。
+业务使用专用 WireGuard 通道，其他监控接口的 Peer 不参与判定。源宿主的父 cgroup 首包默认拒绝，按真实网卡和源地址
+发放短租期；bridge 与 inet 防火墙限制所有网卡的转发及私网代理路径，晚期 hook 复核实际出口和 SNAT。出口宿主同样
+限制业务来源、物理出接口和允许公网源地址。IPv6 业务不放行；DNS 只能通过策略服务器和专用出口。
+
+启动、重建和网络重连先闭锁；两端规则更新使用原子事务，守护停止不撤销保护，内核租期自行失效。守护分别从两个容器
+执行独立 HTTPS 出口探针：单个来源故障可由其他独立来源满足 quorum，任一成功观测冲突均拒绝。单容器异常只撤销
+该容器业务租期，另一容器须共享保护有效且自身独立验证合规才可继续；共享路径、策略、防火墙或守护不可确认时全部闭锁。
+新环境 producer v8 读取 `/run/sub2api-egress/status.json` 并验证策略摘要、boot ID 和单调时钟租期；旧环境收据不能替代
+本次准入。保留连通性和无凭据 Rust TLS 探针，禁止修改网络去迁就检查。
+
+策略更新必须保留用户授权人、时间、原因和 revision，只更新运维配置及网络，重新准入后恢复；无需修改工具、重签工具
+发布认证或重建 Campaign。v1～v7 收据先按原 producer 完整重放，再按版本化投影比较真实依赖；不改写历史事实、不用旧
+BWG 事实检查当前 DMIT 策略，未知 producer、篡改和缺失事实仍拒绝。安装与迁移步骤见
+[运行时出口运维说明](egress/maintenance/runtime-egress-operations.md)。
 
 本轮数据全部放在数据根下，不得在 `/root` 直接建目录；往 ARM64 传文件只能解包到数据根下的子目录再 `chown`，
 禁止解包到 `/root`（macOS 打的 tar 包带 `.` 条目，会把 `/root` 属主改成 501，sshd 随即拒绝所有公钥登录）。
@@ -1354,7 +1366,7 @@ IPv6；双向四条 MSS 规则——`172.25.0.3/32` 与 `172.30.0.0/16` 出 `wg1
 ### 4.0.4 退出条件与建 Campaign
 
 ```text
-P0 收据通过 ∧ MSS 规则与目标版本 Codex Rust TLS 探针通过 ∧ 工具阻断为零
+P0 收据通过 ∧ 两端路径保护、实时指定出口与 Codex Rust TLS 探针通过 ∧ 工具阻断为零
 ∧ 发布认证有效且五摘要等于当前部署收据 ∧ 网络、目录、资源水位和回退点有效
 ∧ live_request_count = 0
 ⇒ 建 Formal Campaign
@@ -2451,8 +2463,8 @@ GitHub 发版成功也不等于生产已经更新。
 
 ### 4.6.6 原子生产切换
 
-部署前复核 `docker compose config` 或等价结果，并在 ARM64 上复核固定容器 IP、冻结出口和 wg1 持久
-配置／运行时 MTU；MTU 以 VC-0 冻结值为准（当前为 1420）。
+部署前复核 `docker compose config` 或等价结果，并在 ARM64 上复核固定容器 IP、专用 cgroup、直接 DNS、
+两端保护和当前指定出口；接口与 MTU 从受限运维策略读取。
 应用服务必须绑定切换镜像的 `repository@sha256:<manifest-digest>`，数据库、Redis、keeper、挂载和网络保持
 不变。冻结动作体为：
 
@@ -2464,7 +2476,7 @@ docker compose -f /绝对路径/production-compose.yml \
 远端 registry 尚未缓存固定 digest 时才先执行定向 `pull`；本机 registry 已有精确 digest 时不得
 为形式完整重复拉取。两种情况都必须在切换前后复核实际 image ID／RepoDigest。
 
-禁止 `compose down` 和无范围 `prune`。部署后复核 wg1 配置／运行时 MTU、固定容器 IP／出口、
+禁止 `compose down` 和无范围 `prune`。部署后重新验证两端保护、逐容器指定出口、固定容器 IP、
 容器 digest、compose、health、日志、依赖、
 挂载和 activation fact，确认 Active version、profile／release digest 与 promotion receipt
 一致且没有强制 override。发现身份、安全、数据、恢复、旧画像兜底、跨 Bundle fallback 或
@@ -2642,6 +2654,17 @@ python3 tools/official_client_capture/codex_upgrade.py deliver-candidate \
 
 <a id="codex-4-7"></a>
 ## 4.7 公共控制面与恢复约定
+
+**指定出口的持续准入与暂停**：正式父监督器与命令执行端持续读取当前守护状态；异常时停止派发并请求正在执行的
+采集按既有清理预算退出，超时才终止对应进程组。`egress-pause.json` 不可覆盖，绑定 Campaign、owner nonce、首次检测
+时间、最后可信状态摘要与不确定窗口；原 run 不因网络修好而自行恢复。必须先恢复两容器及共享保护，按窗口对账受影响
+Job／请求，再由既有恢复协议从合法 checkpoint 继续。当前出口恢复正确不证明窗口内旧请求可信，也不能据此作废窗口外
+的可信结果。故障测试只在隔离夹具中执行，不切换生产出口。
+
+正常重启或重建必须走 `egress-transition` 的受控本地维护入口：不可覆盖声明绑定父 run、存活进程、指定容器、命令和
+策略，等待最多 60 秒且不延长原 deadline。只允许该容器缺失／重新探测期间等待，内核业务闭锁继续生效；共享或另一
+容器故障、配置错误、出口冲突和超时仍暂停。维护期间不派发新任务，结束前必须重新通过双容器普通准入；该机制不允许
+故障 run 自动恢复，也不允许用过渡状态签发环境收据。
 
 本节是第四部分全部阶段共用的控制面合同（非独立阶段），从 VC-0 前移到这里，以免读者在进入 VC-0 之前先翻过全部公共条款；进入阶段前的四条前提见第四部分开头的摘要。已删除的入口和历史只读条款不在本节，统一见[历史审计 §4～§7](CODEX_CLI_CLIENT_EMULATION_HISTORY_AUDIT.md#codex-0154-retired-entrypoints)。
 

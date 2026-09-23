@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-egress-transition-v1.json",
+  "title": "受控本地容器维护声明",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "transition_id",
+    "campaign_id",
+    "owner_nonce",
+    "actor_pid",
+    "start_ticks",
+    "started_at_epoch",
+    "started_at_monotonic_ns",
+    "deadline_monotonic_ns",
+    "container",
+    "command_sha256",
+    "policy_sha256",
+    "before_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "codex-upgrade-egress-transition/v1"
+    },
+    "transition_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$"
+    },
+    "campaign_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "owner_nonce": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "actor_pid": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "start_ticks": {
+      "type": "string",
+      "minLength": 1
+    },
+    "started_at_epoch": {
+      "type": "number"
+    },
+    "started_at_monotonic_ns": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "deadline_monotonic_ns": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "container": {
+      "type": "string",
+      "minLength": 1
+    },
+    "command_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "policy_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "before_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

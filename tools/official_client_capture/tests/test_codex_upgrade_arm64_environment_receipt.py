@@ -96,6 +96,14 @@ class Arm64EnvironmentReceiptTests(unittest.TestCase):
         facts_path = root / "p0-facts.json"
         return facts_path, json.loads(facts_path.read_text(encoding="utf-8"))
 
+    def _legacy_base_fixture(self, root: Path) -> tuple[Path, dict[str, object]]:
+        """读取由原始 v7 源码生成的夹具，不用当前 producer 追认旧事实。"""
+        source = Path(__file__).parent / "fixtures/arm64_environment_receipt_v7/p0/legacy-facts.json"
+        facts = json.loads(source.read_text())
+        path = root / "p0-facts.json"
+        self._rewrite(path, facts)
+        return path, facts
+
     @staticmethod
     def _rewrite(path: Path, value: object) -> None:
         path.write_text(
@@ -107,7 +115,7 @@ class Arm64EnvironmentReceiptTests(unittest.TestCase):
     def _legacy_v1_fixture(
         self, root: Path
     ) -> tuple[Path, Path, dict[str, object]]:
-        facts_path, facts = self._fixture(root)
+        facts_path, facts = self._legacy_base_fixture(root)
         producer = {
             "schema_version": receipt.PRODUCER_SCHEMA,
             "tool": str(Path(receipt.__file__).resolve()),
@@ -138,7 +146,7 @@ class Arm64EnvironmentReceiptTests(unittest.TestCase):
     ) -> tuple[Path, Path, dict[str, object]]:
         """构造切换 BWG 前由 v3 生成的 DMIT 环境收据。"""
 
-        facts_path, facts = self._fixture(root)
+        facts_path, facts = self._legacy_base_fixture(root)
         producer = {
             "schema_version": receipt.PRODUCER_SCHEMA,
             "tool": str(Path(receipt.__file__).resolve()),
@@ -179,7 +187,7 @@ class Arm64EnvironmentReceiptTests(unittest.TestCase):
     ) -> tuple[Path, Path, dict[str, object]]:
         """构造增强 Endpoint／TLS 门禁前由 v4 生成的 BWG 收据。"""
 
-        facts_path, facts = self._fixture(root)
+        facts_path, facts = self._legacy_base_fixture(root)
         producer = {
             "schema_version": receipt.PRODUCER_SCHEMA,
             "tool": str(Path(receipt.__file__).resolve()),
@@ -221,7 +229,7 @@ class Arm64EnvironmentReceiptTests(unittest.TestCase):
     ) -> tuple[Path, Path, dict[str, object]]:
         """构造仅校验出站 MSS 与 curl TLS 的 v5 BWG 收据。"""
 
-        facts_path, facts = self._fixture(root)
+        facts_path, facts = self._legacy_base_fixture(root)
         producer = {
             "schema_version": receipt.PRODUCER_SCHEMA,
             "tool": str(Path(receipt.__file__).resolve()),
@@ -334,14 +342,14 @@ class Arm64EnvironmentReceiptTests(unittest.TestCase):
             with self.subTest(field=field), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 root.chmod(0o700)
-                path, facts = self._fixture(root)
+                path, facts = self._legacy_base_fixture(root)
                 facts["wireguard"][field] = value
                 self._rewrite(path, facts)
                 with self.assertRaisesRegex(
                     receipt.Arm64EnvironmentReceiptError,
                     "MTU",
                 ):
-                    receipt.build_receipt(root, "p0-facts.json")
+                    receipt.validate_facts(facts, allow_legacy_replay=True)
 
     def test_wg1_endpoint_and_tcpmss_must_match_frozen_bwg_value(self) -> None:
         mutations = (
@@ -358,14 +366,14 @@ class Arm64EnvironmentReceiptTests(unittest.TestCase):
             with self.subTest(field=field), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 root.chmod(0o700)
-                path, facts = self._fixture(root)
+                path, facts = self._legacy_base_fixture(root)
                 facts["wireguard"][field] = value
                 self._rewrite(path, facts)
                 with self.assertRaisesRegex(
                     receipt.Arm64EnvironmentReceiptError,
                     "Endpoint、MTU 或双向 TCPMSS",
                 ):
-                    receipt.build_receipt(root, "p0-facts.json")
+                    receipt.validate_facts(facts, allow_legacy_replay=True)
 
     def test_tls_readiness_requires_three_successes_per_container_and_endpoint(
         self,
@@ -552,7 +560,7 @@ class Arm64EnvironmentReceiptTests(unittest.TestCase):
                 ):
                     receipt.build_receipt(root, "p0-facts.json")
 
-    def test_current_bwg_contract_rejects_previous_dmit_egress(self) -> None:
+    def test_current_runtime_policy_rejects_unapproved_legacy_egress(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             root.chmod(0o700)
@@ -606,7 +614,7 @@ class Arm64EnvironmentReceiptTests(unittest.TestCase):
 
                 built = receipt.finalize(root, "after-facts.json", "after-receipt.json")
                 self.assertEqual(built["status"], "passed")
-                self.assertEqual(built["producer"]["version"], "7")
+                self.assertEqual(built["producer"]["version"], receipt.PRODUCER_VERSION)
                 self.assertEqual(
                     built["resource_gate"],
                     {
@@ -665,6 +673,9 @@ class Arm64EnvironmentReceiptTests(unittest.TestCase):
             payload["producer"]["version"] = version
             payload["phase"] = phase
             payload["resource_gate"] = gate
+            if version != "8":
+                payload.pop("environment_equivalence", None)
+                payload.pop("runtime_egress", None)
             return payload
 
         self.assertTrue(_schema_accepts(schema, base))
@@ -750,6 +761,7 @@ class Arm64EnvironmentReceiptTests(unittest.TestCase):
                 item for item in facts["containers"] if item["name"] == "sub2apiplus"
             )
             container["container_id"] = "f" * 64
+            facts["runtime_egress"]["runtime"]["services"]["sub2apiplus"]["container_id"] = "f" * 64
             container["default_route"]["interface"] = "eth9"
             container["selected_network"]["endpoint_id"] = "e" * 64
             for binding in container["network_bindings"]:
@@ -898,7 +910,7 @@ class Arm64EnvironmentReceiptTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             root.chmod(0o700)
-            facts_path, _ = self._fixture(root)
+            facts_path, _ = self._legacy_base_fixture(root)
             producer = {
                 "schema_version": receipt.PRODUCER_SCHEMA,
                 "tool": (
@@ -954,6 +966,99 @@ class Arm64EnvironmentReceiptTests(unittest.TestCase):
             ):
                 receipt.validate_facts(facts, allow_legacy_replay=True)
 
+    def test_r15_policy_switch_preserves_equivalence_and_history_without_runtime_reads(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            root.chmod(0o700)
+            _, facts = self._fixture(root)
+            expected = receipt.validate_facts(facts)["equivalence_identity_sha256"]
+            source = Path(__file__).parent / "fixtures/arm64_environment_receipt_v7/p0"
+            legacy_root = root / "history"
+            shutil.copytree(source, legacy_root)
+            legacy_root.chmod(0o700)
+            for path in legacy_root.iterdir():
+                path.chmod(0o600)
+            frozen = {path.name: path.read_bytes() for path in legacy_root.iterdir()}
+            with mock.patch.object(receipt, "require_runtime_egress", side_effect=AssertionError("历史重放不得读取当前出口")):
+                old = receipt.replay(legacy_root, "legacy-receipt.json")
+                self.assertEqual(receipt.receipt_equivalence_sha256(legacy_root, old), expected)
+                for address, mtu in (("144.34.230.210", 1420), ("69.63.195.102", 1360), ("1.0.0.1", 1380)):
+                    changed = json.loads(json.dumps(facts))
+                    runtime = changed["runtime_egress"]
+                    policy = runtime["policy"]
+                    policy["allowed_public_ipv4"] = [address]
+                    policy["revision"] += 1
+                    policy["nodes"]["exit"]["endpoint"]["ipv4"] = address
+                    for node in policy["nodes"].values():
+                        node["mtu"] = mtu
+                    digest = receipt._sha256_bytes(receipt._canonical(policy))
+                    runtime["policy_sha256"] = runtime["runtime"]["policy_sha256"] = digest
+                    for service in runtime["runtime"]["services"].values():
+                        for observation in service["observations"]:
+                            observation["ip_address"] = address
+                    for container in changed["containers"]:
+                        container["public_egress"]["ip_address"] = address
+                    self.assertEqual(receipt.validate_facts(changed)["equivalence_identity_sha256"], expected)
+            self.assertEqual(frozen, {path.name: path.read_bytes() for path in legacy_root.iterdir()})
+
+    def test_r15_registered_v7_after_phase_keeps_original_degraded_semantics(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "history"
+            shutil.copytree(Path(__file__).parent / "fixtures/arm64_environment_receipt_v7/attempt_after", root)
+            root.chmod(0o700)
+            for path in root.iterdir():
+                path.chmod(0o600)
+            replayed = receipt.replay(root, "legacy-receipt.json")
+            self.assertTrue(replayed["resource_gate"]["degraded"])
+            facts = json.loads((root / "legacy-facts.json").read_text())
+            facts["phase"] = "attempt_before"
+            with self.assertRaisesRegex(receipt.Arm64EnvironmentReceiptError, "根文件系统"):
+                receipt.validate_facts(facts, allow_legacy_replay=True)
+
+    def test_r15_probe_quorum_conflict_staleness_and_individual_failures(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            _, facts = self._fixture(Path(directory))
+            runtime = facts["runtime_egress"]
+            policy, status = runtime["policy"], runtime["runtime"]
+            now = status["observed_at_epoch"]
+            first = status["services"]["capture-cli"]["observations"][0]
+            first.update({"status": "failed", "ip_address": None, "response_sha256": None})
+            receipt.validate_egress_status(policy, status, now_epoch=now)
+            status["services"]["capture-cli"]["observations"][1]["ip_address"] = "8.8.8.8"
+            with self.assertRaisesRegex(receipt.Arm64EnvironmentReceiptError, "capture-cli"):
+                receipt.validate_egress_status(policy, status, now_epoch=now)
+            self.assertTrue(receipt.egress_observations_compliant(policy, status["services"]["sub2apiplus"]["observations"], now_epoch=now))
+            for service in status["services"].values():
+                for observation in service["observations"]:
+                    observation.update({"status": "passed", "ip_address": policy["allowed_public_ipv4"][0], "response_sha256": "a" * 64})
+            with self.assertRaisesRegex(receipt.Arm64EnvironmentReceiptError, "过期"):
+                receipt.validate_egress_status(policy, status, now_epoch=now + policy["lease_seconds"] + .01)
+            with self.assertRaisesRegex(receipt.Arm64EnvironmentReceiptError, "租期"):
+                receipt.validate_egress_status(policy, status, now_epoch=now, now_monotonic_ns=status["valid_until_monotonic_ns"] + 1)
+            with self.assertRaisesRegex(receipt.Arm64EnvironmentReceiptError, "启动周期"):
+                receipt.validate_egress_status(policy, status, now_epoch=now, boot_id="another-boot")
+            status["shared_protection"]["checks"]["remote_guard"] = False
+            with self.assertRaisesRegex(receipt.Arm64EnvironmentReceiptError, "两个容器"):
+                receipt.validate_egress_status(policy, status, now_epoch=now)
+
+    def test_r15_equivalence_rejects_tampering_and_keeps_real_dependencies(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _, facts = self._fixture(root)
+            current = receipt.replay(root, "p0-receipt.json")
+            original = receipt.receipt_equivalence_sha256(root, current)
+            changed = json.loads(json.dumps(current))
+            changed["continuity_identity_sha256"] = "f" * 64
+            with self.assertRaisesRegex(receipt.Arm64EnvironmentReceiptError, "原 producer"):
+                receipt.receipt_equivalence_sha256(root, changed)
+            for key, value in (("image_id", "sha256:" + "a" * 64), ("image_id", "sha256:" + "b" * 64)):
+                changed_facts = json.loads(json.dumps(facts))
+                changed_facts["containers"][0][key] = value
+                self.assertNotEqual(receipt.validate_facts(changed_facts)["equivalence_identity_sha256"], original)
+            facts["containers"][0]["selected_network"]["network_id"] = "b" * 64
+            facts["containers"][0]["network_bindings"][0]["network_id"] = "b" * 64
+            self.assertNotEqual(receipt.validate_facts(facts)["equivalence_identity_sha256"], original)
+
     def test_contract_has_no_network_override_arguments(self) -> None:
         parser = receipt.build_parser()
         destinations = {
@@ -980,9 +1085,9 @@ class Arm64EnvironmentReceiptTests(unittest.TestCase):
         # v7 生成、v6 只读重放：schema 同时接受两个版本，且当前版本必须在其中。
         self.assertEqual(
             schema["properties"]["producer"]["properties"]["version"]["enum"],
-            ["6", receipt.PRODUCER_VERSION],
+            ["6", "7", receipt.PRODUCER_VERSION],
         )
-        self.assertEqual(len(schema["allOf"]), 3)
+        self.assertEqual(len(schema["allOf"]), 5)
 
 
 if __name__ == "__main__":

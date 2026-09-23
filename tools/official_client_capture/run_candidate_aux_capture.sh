@@ -174,7 +174,10 @@ wait_healthy() {
 }
 
 restart_service() {
-  docker restart "$service_container" >/dev/null
+  local -a maintenance_args=()
+  [[ ${1:-} != cleanup ]] || maintenance_args+=(--cleanup)
+  python3 "$script_dir/codex_upgrade_supervisor.py" egress-transition --container "$service_container" \
+    "${maintenance_args[@]}" -- docker restart "$service_container" >/dev/null
   wait_healthy
 }
 
@@ -253,7 +256,8 @@ services:
 YML
   chmod 600 "$capture_root/runtime/live-attestation/$run_id.override.yml"
   live_attestation_armed=1
-  (cd "$LIVE_ATTESTATION_COMPOSE_DIR" && docker compose "${live_attestation_compose_args[@]}" \
+  (cd "$LIVE_ATTESTATION_COMPOSE_DIR" && python3 "$script_dir/codex_upgrade_supervisor.py" egress-transition \
+    --container "$service_container" --compose-service sub2api -- docker compose "${live_attestation_compose_args[@]}" \
     -f "$capture_root/runtime/live-attestation/$run_id.override.yml" up -d sub2api) >/dev/null || return 1
   wait_healthy || return 1
   # compose 重建的是全新容器，之前 docker cp 进去的抓包 CA 随旧容器一起消失；
@@ -266,7 +270,8 @@ YML
 restore_deploy_without_live_attestation() {
   [[ $live_attestation_armed == 1 ]] || return 0
   live_attestation_armed=0
-  (cd "$LIVE_ATTESTATION_COMPOSE_DIR" && docker compose \
+  (cd "$LIVE_ATTESTATION_COMPOSE_DIR" && python3 "$script_dir/codex_upgrade_supervisor.py" egress-transition \
+    --container "$service_container" --compose-service sub2api --cleanup -- docker compose \
     "${live_attestation_compose_args[@]}" up -d sub2api) >/dev/null || return 1
   wait_healthy || return 1
   # 恢复部署同样是新容器：CA 由 EXIT 钩子按基线清理，这里只需保证服务已就绪。
@@ -610,7 +615,7 @@ restore_environment() {
     ca_installed=0
   fi
   if [[ $service_restart_needed == 1 ]]; then
-    restart_service || restore_failed=1
+    restart_service cleanup || restore_failed=1
   fi
 
   # Docker restart 会重建 /etc/hosts；最后按字节恢复运行前快照，随后不再重启。

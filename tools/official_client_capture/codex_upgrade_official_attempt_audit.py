@@ -15,7 +15,7 @@
    模型端点请求判失败。最后与各轨道由收据冻结的模型目录交叉验证，可选地与
    调用方给出的期望轨道模型对照。
 4. **环境恢复链**：before／after 探针、ARM64 前后收据、恢复报告五份绑定文件存在、
-   大小与摘要一致，前后 ARM64 环境 ``continuity_identity_sha256`` 连续。
+   大小与摘要一致，前后 ARM64 收据按原 producer 重放后，真实依赖的版本化投影连续。
 5. **证据完整性**：checkpoint 链由 ``CheckpointStore.records`` 重放（序号连续、
    前序摘要、自摘要），尾部与 attempt 的 ``job_checkpoint`` 一致；对全部
    evidence roots 生成逐文件 inventory（realpath、大小、SHA-256）。
@@ -39,6 +39,7 @@ from tools.official_client_capture import (
     codex_upgrade_live_request_provenance as provenance,
 )
 from tools.official_client_capture import codex_upgrade_vc0_closeout as closeout
+from tools.official_client_capture import codex_upgrade_arm64_environment_receipt as arm64
 from tools.official_client_capture import incremental_recovery
 
 SCHEMA_VERSION = "official-attempt-audit/v1"
@@ -455,8 +456,12 @@ def _check_environment(attempt: Mapping[str, Any], attempt_root: Path) -> dict[s
         }
         if before.get("status") != "passed" or after.get("status") != "passed":
             problems.append("ARM64 环境收据状态不是 passed")
-        if before.get("continuity_identity_sha256") != after.get("continuity_identity_sha256"):
-            problems.append("前后 ARM64 环境身份不连续")
+        try:
+            if not arm64.receipts_equivalent(Path(files["arm64_before_receipt"]["path"]).parent, before,
+                                             Path(files["arm64_after_receipt"]["path"]).parent, after):
+                problems.append("前后 ARM64 环境身份不连续")
+        except (OSError, ValueError, KeyError) as error:
+            problems.append(f"ARM64 环境收据缺少可信的原 producer 重放证明：{type(error).__name__}")
     if "restoration_report" in files:
         report, _r = closeout._load_json(Path(files["restoration_report"]["path"]), "恢复报告")
         continuity["restoration_status"] = report.get("status")

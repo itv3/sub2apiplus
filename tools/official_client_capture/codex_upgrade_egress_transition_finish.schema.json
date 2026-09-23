@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-egress-transition-finish-v1.json",
+  "title": "受控维护结束与重新准入事实",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "transition_id",
+    "transition_sha256",
+    "status",
+    "finished_at_epoch",
+    "after_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "codex-upgrade-egress-transition-finish/v1"
+    },
+    "transition_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "transition_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "status": {
+      "enum": [
+        "passed",
+        "failed",
+        "local-cleanup-complete"
+      ]
+    },
+    "finished_at_epoch": {
+      "type": "number"
+    },
+    "after_sha256": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  }
+}

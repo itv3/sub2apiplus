@@ -1,0 +1,214 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/codex-runtime-egress-status-v1.json",
+  "title": "出口保护的当前逐容器状态",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "policy_sha256",
+    "role",
+    "boot_id",
+    "observed_at_epoch",
+    "observed_at_monotonic_ns",
+    "valid_until_monotonic_ns",
+    "shared_protection",
+    "services"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "codex-runtime-egress-status/v1"
+    },
+    "policy_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "role": {
+      "enum": [
+        "origin",
+        "exit"
+      ]
+    },
+    "boot_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "observed_at_epoch": {
+      "type": "number"
+    },
+    "observed_at_monotonic_ns": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "valid_until_monotonic_ns": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "shared_protection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "checks",
+        "reason"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "compliant",
+            "blocked"
+          ]
+        },
+        "checks": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kernel_filter",
+            "firewall",
+            "wireguard",
+            "routes",
+            "remote_guard"
+          ],
+          "properties": {
+            "kernel_filter": {
+              "type": "boolean"
+            },
+            "firewall": {
+              "type": "boolean"
+            },
+            "wireguard": {
+              "type": "boolean"
+            },
+            "routes": {
+              "type": "boolean"
+            },
+            "remote_guard": {
+              "type": "boolean"
+            }
+          }
+        },
+        "reason": {
+          "type": "string"
+        }
+      }
+    },
+    "services": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "status",
+          "admission_state",
+          "container_id",
+          "network_bindings",
+          "observations",
+          "reason",
+          "blocked_at_epoch"
+        ],
+        "properties": {
+          "status": {
+            "enum": [
+              "compliant",
+              "blocked"
+            ]
+          },
+          "container_id": {
+            "type": "string",
+            "pattern": "^(?:[0-9a-f]{64})?$"
+          },
+          "network_bindings": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "ifindex",
+                "host_ifindex",
+                "source_ipv4"
+              ],
+              "properties": {
+                "ifindex": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "host_ifindex": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "source_ipv4": {
+                  "type": "string",
+                  "format": "ipv4"
+                }
+              }
+            }
+          },
+          "observations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "url",
+                "status",
+                "ip_address",
+                "observed_at_epoch",
+                "response_sha256"
+              ],
+              "properties": {
+                "url": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "status": {
+                  "enum": [
+                    "passed",
+                    "failed"
+                  ]
+                },
+                "ip_address": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "ipv4"
+                },
+                "observed_at_epoch": {
+                  "type": "number"
+                },
+                "response_sha256": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "reason": {
+            "type": "string"
+          },
+          "blocked_at_epoch": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "admission_state": {
+            "enum": [
+              "ready",
+              "probing",
+              "missing",
+              "invalid"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

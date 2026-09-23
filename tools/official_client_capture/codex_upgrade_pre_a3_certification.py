@@ -39,6 +39,62 @@ REAL_CHAIN_IDS = ("vc-chain.full-validation-only",)
 # (场景名, 说明, 测试模块, 测试类, 测试方法)
 SCENARIOS: tuple[tuple[str, str, str, str, str], ...] = (
     (
+        "runtime-egress.kernel-faults",
+        "隔离双端内核：指定路径、分别阻断、路由与 NAT 漂移、新旧连接及重建首包",
+        "tools.official_client_capture.tests.real_chains.test_codex_upgrade_fault_fixtures",
+        "RuntimeEgressKernelTests",
+        "test_r15_isolated_kernel_failure_and_recovery_chain",
+    ),
+    (
+        "runtime-egress.guard-recovery",
+        "两端真实守护逻辑驱动内核租期，共享修复后重新逐容器验证",
+        "tools.official_client_capture.tests.real_chains.test_codex_upgrade_fault_fixtures",
+        "RuntimeEgressKernelTests",
+        "test_r15_guard_drives_real_kernel_leases_and_requires_fresh_recovery",
+    ),
+    (
+        "runtime-egress.capture-pause",
+        "运行中出口故障停止采集并在原清理预算内结束",
+        "tools.official_client_capture.tests.test_codex_runtime_egress",
+        "EgressSupervisorTests",
+        "test_active_capture_cleans_up_without_waiting_for_original_deadline",
+    ),
+    (
+        "runtime-egress.immutable-pause",
+        "修复网络不能自行恢复原 run，暂停事实不可覆盖",
+        "tools.official_client_capture.tests.test_codex_runtime_egress",
+        "EgressSupervisorTests",
+        "test_pause_is_immutable_and_repair_does_not_resume_same_run",
+    ),
+    (
+        "runtime-egress.history-equivalence",
+        "同一工具包读取多个出口策略，旧 v7 收据只读回放并保持等价",
+        "tools.official_client_capture.tests.test_codex_upgrade_arm64_environment_receipt",
+        "Arm64EnvironmentReceiptTests",
+        "test_r15_policy_switch_preserves_equivalence_and_history_without_runtime_reads",
+    ),
+    (
+        "runtime-egress.docker-supervisor",
+        "真实父监督器与 Docker 重启重建等待，故障清理后原 run 不可恢复",
+        "tools.official_client_capture.tests.real_chains.test_codex_upgrade_fault_fixtures",
+        "EgressProcessTests",
+        "test_real_parent_waits_for_docker_restart_rebuild_and_never_resumes_after_fault",
+    ),
+    (
+        "runtime-egress.job-window",
+        "按暂停窗口逐 Job 对账，保留窗口外结果并拒绝追认窗口内请求",
+        "tools.official_client_capture.tests.test_codex_runtime_egress",
+        "EgressSupervisorTests",
+        "test_reconciliation_keeps_only_completed_jobs_before_uncertain_window",
+    ),
+    (
+        "runtime-egress.reconcile-resume",
+        "出口暂停后沿真实 checkpoint 与两本账对账，批准后仅派发窗口内任务",
+        "tools.official_client_capture.tests.real_chains.test_codex_upgrade_fault_fixtures",
+        "RuntimeEgressRecoveryTests",
+        "test_pause_reconciliation_approval_preserves_only_trusted_job",
+    ),
+    (
         "vc-chain.full-validation-only",
         "VC-0 复用导入、VC-2 三批、候选构建、真实评估与 VC-6 只读交付连续链",
         "tools.official_client_capture.tests.real_chains.test_codex_upgrade_full_chain",

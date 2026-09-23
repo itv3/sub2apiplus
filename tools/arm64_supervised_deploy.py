@@ -13,20 +13,27 @@ import argparse
 import ctypes
 import hashlib
 import importlib.util
+import ipaddress
 import json
 import os
 import platform
 import re
 import secrets
+import shlex
 import shutil
+import socket
 import stat
+import struct
 import subprocess
 import sys
 import time
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
+from urllib.parse import urlsplit
 
 
 # 2026-09-09：candidate_test_fact_map_0_151_0.json 与 candidate_test_trace.py 在合并
@@ -192,7 +199,7 @@ from typing import Any, Callable, Mapping
 # 回滚验证 → 退休；监督器 post-run-tooling 闭集按冻结判定接纳 VC-6 三项，使退休动作失败仍归可恢复类。
 # 受管工具树与监督器随之变化；断言预处理器未变。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "1d0525b3082188ecd4102cd0a73c30e710ccb93c07bac55451d11fd7b2bc52f7"
+    "628516955f435edea8c9c5560253d563d5d6b2bfbe726eef0db3d2a0cf2da6bc"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "c8020cadd3ee08f67236313a0913dbc3730805b46c3f6b720cdf7ace77f9fec1"
@@ -343,6 +350,8 @@ MANAGED_RUNTIME_DOCUMENTS = (
     "egress/maintenance/upstream-codex-0154-vc5-ledger-resign-evidence-integrity-20260922-freeze-successor.json",
     "egress/maintenance/upstream-codex-0154-vc5-deploy-manifest-22-20260922-freeze-successor.json",
     "egress/maintenance/upstream-codex-01561-r13-20260923-freeze-successor.json",
+    "egress/maintenance/runtime-egress-operations.md",
+    "egress/maintenance/upstream-codex-01561-r15-20260923-freeze-successor.json",
 )
 MANAGED_ASSERTION_PREPARER = "prepare_assertion_bundle.sh"
 TARGET_SCENARIO_MANIFEST = "codex_upgrade_scenarios_0_154_0.json"
@@ -351,14 +360,1190 @@ SOURCE_SPEC_HEADINGS = {
     "第二部分": "# 第二部分 Codex CLI 客户端规则画像",
     "第二部分-规则": "# 第二部分 Codex CLI 客户端规则画像",
 }
-WG1_CONFIG = Path("/etc/wireguard/wg1.conf")
-WG1_RUNTIME_MTU = Path("/sys/class/net/wg1/mtu")
-EXPECTED_EGRESS_PROVIDER = "BWG"
-EXPECTED_WG1_MTU = 1420
+
+# R15：过滤器挂在受保护容器的父 cgroup；容器创建时即继承默认拒绝。
+# 放行键同时绑定 cgroup、容器侧接口和源 IPv4，重新创建／加网卡没有首包放行窗口。
+# 内核自行检查单调时钟租期；守护退出或被冻结时，无须用户态清理即可停止出网。
+EGRESS_FILTER_SOURCE = r'''
+#include <linux/bpf.h>
+#include <bpf/bpf_helpers.h>
+#include <bpf/bpf_endian.h>
+
+struct lease_key { __u64 cgroup_id; __u32 ifindex; __u32 source_ipv4; };
+struct lease_value { __u64 expires_at_ns; __u32 mark; __u32 probe_only; };
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 4096);
+    __type(key, struct lease_key);
+    __type(value, struct lease_value);
+} leases SEC(".maps");
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 256);
+    __type(key, __u32);
+    __type(value, __u32);
+} probes SEC(".maps");
+
+SEC("cgroup_skb/egress")
+int egress_gate(struct __sk_buff *skb) {
+    __u8 version = 0;
+    if (bpf_skb_load_bytes(skb, 0, &version, sizeof(version))) return 0;
+    if ((version >> 4) == 6) {
+        /* 仅保留进程间 IPv6 loopback；业务 IPv6 不得绕过指定 IPv4 通道。 */
+        __u32 source[4] = {}, destination[4] = {};
+        if (bpf_skb_load_bytes(skb, 8, source, sizeof(source)) ||
+            bpf_skb_load_bytes(skb, 24, destination, sizeof(destination))) return 0;
+        return source[0] == 0 && source[1] == 0 && source[2] == 0 && source[3] == bpf_htonl(1) &&
+               destination[0] == 0 && destination[1] == 0 && destination[2] == 0 && destination[3] == bpf_htonl(1);
+    }
+    if ((version >> 4) != 4) return 0;
+    __u32 source = 0, destination = 0;
+    if (bpf_skb_load_bytes(skb, 12, &source, sizeof(source)) ||
+        bpf_skb_load_bytes(skb, 16, &destination, sizeof(destination))) return 0;
+    if ((bpf_ntohl(source) >> 24) == 127 && (bpf_ntohl(destination) >> 24) == 127) return 1;
+    struct lease_key key = { .cgroup_id = bpf_skb_cgroup_id(skb), .ifindex = skb->ifindex, .source_ipv4 = source };
+    struct lease_value *lease = bpf_map_lookup_elem(&leases, &key);
+    if (!lease || bpf_ktime_get_ns() >= lease->expires_at_ns) return 0;
+    if (lease->probe_only && !bpf_map_lookup_elem(&probes, &destination)) return 0;
+    skb->mark = lease->mark;
+    return 1;
+}
+char LICENSE[] SEC("license") = "GPL";
+'''
+
+EGRESS_FILTER_LOADER = r'''
+#include <bpf/bpf.h>
+#include <bpf/libbpf.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+/* 仅负责首次加载、挂载与 pin；重启不会解除既有保护或复用未核验对象。 */
+int main(int argc, char **argv) {
+    if (argc != 4) return 2;
+    struct bpf_object *object = bpf_object__open_file(argv[1], NULL);
+    if (libbpf_get_error(object)) return 3;
+    if (bpf_object__load(object)) return 4;
+    struct bpf_program *program = bpf_object__find_program_by_name(object, "egress_gate");
+    if (!program) return 5;
+    int group = open(argv[2], O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (group < 0) return 6;
+    struct bpf_link *link = bpf_program__attach_cgroup(program, group);
+    if (libbpf_get_error(link)) return 7;
+    char path[4096];
+    snprintf(path, sizeof(path), "%s/link", argv[3]);
+    if (bpf_link__pin(link, path)) return 8;
+    struct bpf_map *map;
+    bpf_object__for_each_map(map, object) {
+        if (strcmp(bpf_map__name(map), "leases") && strcmp(bpf_map__name(map), "probes")) continue;
+        snprintf(path, sizeof(path), "%s/%s", argv[3], bpf_map__name(map));
+        if (bpf_map__pin(map, path)) return 9;
+    }
+    snprintf(path, sizeof(path), "%s/program", argv[3]);
+    if (bpf_obj_pin(bpf_program__fd(program), path)) return 10;
+    printf("{\"program_id_fd\":%d,\"status\":\"attached\"}\n", bpf_program__fd(program));
+    close(group);
+    bpf_object__close(object);
+    return 0;
+}
+'''
+
+
+def build_egress_filter(output_root: Path) -> dict[str, str]:
+    """在隔离目录编译可复算的内核过滤器与最小加载器，不挂载、不放行任何业务。"""
+
+    output_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    filter_source = output_root / "egress-filter.bpf.c"
+    loader_source = output_root / "egress-filter-loader.c"
+    for path, source in ((filter_source, EGRESS_FILTER_SOURCE), (loader_source, EGRESS_FILTER_LOADER)):
+        if path.exists() and path.read_text(encoding="utf-8") != source:
+            raise DeploymentError("出口过滤器构建目录包含其他版本，须使用新目录")
+        path.write_text(source, encoding="utf-8")
+    architecture = subprocess.check_output(["gcc", "-dumpmachine"], text=True, timeout=10).strip()
+    subprocess.run(["clang", "-O2", "-g", "-target", "bpf", "-Wall", "-Werror",
+                    "-I", f"/usr/include/{architecture}", "-c", str(filter_source), "-o", str(output_root / "egress-filter.bpf.o")],
+                   check=True, timeout=60)
+    subprocess.run(["gcc", "-O2", "-Wall", "-Werror", str(loader_source), "-lbpf", "-lelf", "-lz",
+                    "-o", str(output_root / "egress-filter-loader")], check=True, timeout=60)
+    return {path.name: sha256_bytes(path.read_bytes()) for path in sorted(output_root.iterdir()) if path.is_file()}
+
+
+class EgressKernelMaps:
+    """直接使用 libbpf 访问已 pin 的对象；仅刷新精确键，不执行外部 shell 或扩展范围。"""
+
+    def __init__(self, pin_root: Path):
+        self.pin_root = pin_root
+        self.library = ctypes.CDLL("libbpf.so.1", use_errno=True)
+        self.library.bpf_obj_get.argtypes = [ctypes.c_char_p]
+        self.library.bpf_obj_get.restype = ctypes.c_int
+        self.library.bpf_map_update_elem.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_ulonglong]
+        self.library.bpf_map_update_elem.restype = ctypes.c_int
+        self.library.bpf_map_delete_elem.argtypes = [ctypes.c_int, ctypes.c_void_p]
+        self.library.bpf_map_delete_elem.restype = ctypes.c_int
+
+    def _descriptor(self, name: str) -> int:
+        descriptor = self.library.bpf_obj_get(os.fsencode(self.pin_root / name))
+        if descriptor < 0:
+            raise DeploymentError(f"出口内核对象不可读：{name}，errno={ctypes.get_errno()}")
+        return descriptor
+
+    def update(self, name: str, key: bytes, value: bytes) -> None:
+        descriptor = self._descriptor(name)
+        try:
+            if self.library.bpf_map_update_elem(descriptor, ctypes.create_string_buffer(key), ctypes.create_string_buffer(value), 0) != 0:
+                raise DeploymentError(f"出口内核放行租期写入失败：errno={ctypes.get_errno()}")
+        finally:
+            os.close(descriptor)
+
+    def lease(self, cgroup_id: int, ifindex: int, source_ipv4: str, *, expires_at_ns: int, mark: int, probe_only: bool) -> None:
+        import socket
+
+        self.update("leases", struct.pack("=QI4s", cgroup_id, ifindex, socket.inet_aton(source_ipv4)),
+                    struct.pack("=QII", expires_at_ns, mark, int(probe_only)))
+
+    def probe(self, address: str) -> None:
+        import socket
+
+        self.update("probes", socket.inet_aton(address), struct.pack("=I", 1))
+
+    def revoke(self, cgroup_id: int, ifindex: int, source_ipv4: str) -> None:
+        """故障时立即删除精确放行键；守护消失时仍由内核租期提供兜底。"""
+
+        descriptor = self._descriptor("leases")
+        try:
+            key = struct.pack("=QI4s", cgroup_id, ifindex, socket.inet_aton(source_ipv4))
+            result = self.library.bpf_map_delete_elem(descriptor, ctypes.create_string_buffer(key))
+            if result and ctypes.get_errno() != 2:
+                raise DeploymentError("出口内核租期撤销失败")
+        finally:
+            os.close(descriptor)
+
+    def verify_attachment(self, group: Path) -> dict[str, int]:
+        """核对 pin 的 link 指向本次父 cgroup，且程序仍在有效挂载列表内。"""
+
+        self.library.bpf_obj_get_info_by_fd.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint)]
+        self.library.bpf_obj_get_info_by_fd.restype = ctypes.c_int
+        def info(name: str) -> bytes:
+            descriptor = self._descriptor(name)
+            try:
+                data = ctypes.create_string_buffer(256)
+                size = ctypes.c_uint(len(data))
+                if self.library.bpf_obj_get_info_by_fd(descriptor, data, ctypes.byref(size)):
+                    raise DeploymentError("出口内核对象身份不可核验")
+                return data.raw
+            finally:
+                os.close(descriptor)
+        program_id = struct.unpack_from("=I", info("program"), 4)[0]
+        link = info("link")
+        if struct.unpack_from("=I", link, 8)[0] != program_id or struct.unpack_from("=Q", link, 16)[0] != group.stat().st_ino:
+            raise DeploymentError("出口过滤器的 link、程序或 cgroup 身份不一致")
+        self.library.bpf_prog_query.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint,
+                                               ctypes.POINTER(ctypes.c_uint), ctypes.POINTER(ctypes.c_uint), ctypes.POINTER(ctypes.c_uint)]
+        self.library.bpf_prog_query.restype = ctypes.c_int
+        descriptor = os.open(group, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            count, flags = ctypes.c_uint(64), ctypes.c_uint()
+            ids = (ctypes.c_uint * 64)()
+            if self.library.bpf_prog_query(descriptor, 1, 1, ctypes.byref(flags), ids, ctypes.byref(count)):
+                raise DeploymentError("出口 cgroup 的有效程序列表不可核验")
+            if program_id not in list(ids)[:count.value]:
+                raise DeploymentError("出口内核过滤器已被解除")
+        finally:
+            os.close(descriptor)
+        return {"program_id": program_id, "cgroup_id": group.stat().st_ino}
 
 
 class DeploymentError(RuntimeError):
     """部署前提或发布后校验失败。"""
+
+
+# 网络运维入口与工具发布入口共用本文件；策略、私钥和实时租期均留在工具树外。
+EGRESS_TABLE = "sub2api_egress"
+EGRESS_MARK = 0xCE000000
+EGRESS_REPLY_MARK = 0xCF000000
+EGRESS_WG_MARK = 0xDA150001
+EGRESS_PRIVATE_NETWORKS = (
+    "0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16",
+    "172.16.0.0/12", "192.0.0.0/24", "192.0.2.0/24", "192.168.0.0/16",
+    "198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24", "224.0.0.0/3",
+)
+
+
+def egress_contract() -> Any:
+    """沿受管包的正常导入路径取得策略合同，不接受环境变量注入跳过检查。"""
+
+    root = Path(__file__).resolve().parent.parent
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+    from tools.official_client_capture import codex_upgrade_arm64_environment_receipt
+
+    return codex_upgrade_arm64_environment_receipt
+
+
+def egress_command(argv: list[str], *, input_text: str | None = None, timeout: float = 3) -> str:
+    """网络守护命令全部有界；错误不输出 inspect 原文或 WireGuard 密钥。"""
+
+    try:
+        result = subprocess.run(argv, input=input_text, text=True, capture_output=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise DeploymentError(f"出口命令未完成：{Path(argv[0]).name}") from error
+    if result.returncode:
+        raise DeploymentError(f"出口命令失败：{Path(argv[0]).name}，退出码 {result.returncode}")
+    return result.stdout.strip()
+
+
+def egress_service_marks(policy: dict[str, Any]) -> dict[str, int]:
+    """同一策略中的容器标记固定排序，不使用可能重用的 IP 作为服务身份。"""
+
+    if len(policy["services"]) > 128:
+        raise DeploymentError("出口策略的服务数量超过内核登记上限")
+    return {name: EGRESS_MARK + index for index, name in enumerate(sorted(policy["services"]), 1)}
+
+
+def render_egress_firewall(policy: dict[str, Any], role: str) -> str:
+    """生成默认闭锁的两端规则；动态身份与放行集只由持续守护按短租期填充。
+
+    源宿主 bridge hook 在 Docker 转发规则之前约束所有桥端口，inet 的末尾 hook
+    再约束路由和 SNAT 后的实际路径。出口宿主同样在 NAT 后检查真实公网源地址。
+    已建立连接每包仍须经过租期、身份和路径检查，不能以 established 整体放行。
+    """
+
+    egress_contract().validate_egress_policy(policy)
+    if role not in {"origin", "exit"}:
+        raise DeploymentError("出口节点角色非法")
+    node = policy["nodes"][role]
+    peer = policy["nodes"]["exit" if role == "origin" else "origin"]
+    local_ip = str(ipaddress.IPv4Interface(node["tunnel_ipv4"]).ip)
+    remote_ip = str(ipaddress.IPv4Interface(peer["tunnel_ipv4"]).ip)
+    wg = json.dumps(node["interface"])
+    physical = json.dumps(node["public_interface"])
+    endpoint = peer["endpoint"]
+    prefix = [
+        f"table inet {EGRESS_TABLE} {{",
+        " set shared { typeof numgen inc mod 1; flags timeout; }",
+        " set private4 { type ipv4_addr; flags interval; elements = { " + ", ".join(EGRESS_PRIVATE_NETWORKS) + " }; }",
+    ]
+    if role == "origin":
+        prefix += [
+            " set protected_ports { type iface_index; }",
+            " set identities { type iface_index . ipv4_addr . mark; flags timeout; }",
+            " set dependencies { type mark . ipv4_addr . inet_proto . inet_service; flags timeout; }",
+            " set ingress { type mark . inet_service; flags timeout; }",
+            " set dns { type mark . ipv4_addr; flags timeout; }",
+            " set probes { type ipv4_addr; flags timeout; }",
+            " chain check {",
+            "  numgen inc mod 1 @shared jump live",
+            "  counter drop",
+            " }",
+            " chain live {",
+            "  meta nfproto != ipv4 counter drop",
+            "  meta mark . tcp sport @ingress ct direction reply ct state established,related accept",
+            "  meta mark . ip daddr . meta l4proto . th dport @dependencies accept",
+            "  ip daddr @private4 counter drop",
+            "  meta l4proto { tcp, udp } th dport 53 meta mark . ip daddr @dns jump tunnel",
+            "  meta l4proto { tcp, udp } th dport 53 counter drop",
+            "  meta mark & 0x00010000 != 0 ip daddr @probes tcp dport 443 jump tunnel",
+            "  meta mark & 0x00010000 != 0 counter drop",
+            "  jump tunnel",
+            " }",
+            " chain tunnel {",
+            f"  oifname {wg} accept",
+            "  counter drop",
+            " }",
+            " chain forward { type filter hook forward priority 300; policy accept;",
+            "  meta mark & 0xff000000 == 0xce000000 jump check",
+            "  iif @protected_ports counter drop",
+            " }",
+            " chain input { type filter hook input priority 300; policy accept;",
+            "  iif @protected_ports counter drop",
+            "  meta mark & 0xff000000 == 0xce000000 counter drop",
+            " }",
+            " chain prerouting { type filter hook prerouting priority -145; policy accept;",
+            "  meta mark & 0xff000000 == 0xce000000 meta mark . tcp sport @ingress ct direction reply ct state established,related meta mark set meta mark | 0x01000000",
+            " }",
+            " chain translate_src { type nat hook postrouting priority 90; policy accept;",
+            f"  meta mark & 0xff000000 == 0xce000000 oifname {wg} snat ip to {local_ip}",
+            " }",
+            " chain late { type filter hook postrouting priority 310; policy accept;",
+            f"  meta mark {EGRESS_WG_MARK} oifname {physical} ip daddr {endpoint['ipv4']} udp dport {endpoint['port']} accept",
+            "  ct direction original ct mark & 0xff000000 == 0xce000000 meta mark & 0xff000000 != 0xce000000 counter drop",
+            "  ct direction reply ct mark & 0xff000000 == 0xcf000000 meta mark & 0xff000000 != 0xcf000000 counter drop",
+            f"  meta mark & 0xff000000 == 0xce000000 oifname {wg} ip saddr != {local_ip} counter drop",
+            "  meta mark & 0xff000000 == 0xce000000 jump check",
+            "  meta mark & 0xff000000 == 0xcf000000 numgen inc mod 1 @shared ct direction reply ct state established,related accept",
+            "  meta mark & 0xff000000 == 0xcf000000 counter drop",
+            " }",
+        ]
+    else:
+        allowed = ", ".join(policy["allowed_public_ipv4"])
+        prefix += [
+            " chain forward { type filter hook forward priority 310; policy accept;",
+            f"  iifname {wg} ip saddr {remote_ip} oifname {physical} ip daddr != @private4 numgen inc mod 1 @shared meta mark set {EGRESS_MARK} ct mark set {EGRESS_MARK} accept",
+            f"  iifname {wg} counter drop",
+            f"  oifname {wg} iifname {physical} ip daddr {remote_ip} ct direction reply ct state established,related numgen inc mod 1 @shared accept",
+            f"  oifname {wg} counter drop",
+            " }",
+            " chain input { type filter hook input priority 310; policy accept;",
+            f"  iifname {wg} ip saddr {remote_ip} ip daddr {local_ip} tcp dport {policy['control_port']} accept",
+            f"  iifname {wg} counter drop",
+            " }",
+            " chain translate_src { type nat hook postrouting priority 90; policy accept;",
+            f"  iifname {wg} ip saddr {remote_ip} oifname {physical} snat ip to {policy['allowed_public_ipv4'][0]}",
+            " }",
+            " chain late { type filter hook postrouting priority 310; policy accept;",
+            f"  meta mark {EGRESS_WG_MARK} oifname {physical} ip daddr {endpoint['ipv4']} udp dport {endpoint['port']} accept",
+            f"  ct direction original ct mark == {EGRESS_MARK} meta mark != {EGRESS_MARK} counter drop",
+            f"  meta mark == {EGRESS_MARK} oifname {physical} ip saddr {{ {allowed} }} numgen inc mod 1 @shared accept",
+            f"  meta mark == {EGRESS_MARK} counter drop",
+            f"  iifname {wg} counter drop",
+            " }",
+        ]
+    # 外层 UDP 与内层 TCP 均在各自的末尾 hook 核验，端点不能随 DNS 或 peer 漫游改变。
+    prefix += [
+        " chain output { type filter hook output priority 310; policy accept;",
+        f"  meta mark {EGRESS_WG_MARK} oifname {physical} ip daddr {endpoint['ipv4']} udp dport {endpoint['port']} accept",
+        f"  meta mark {EGRESS_WG_MARK} counter drop",
+        f"  udp sport {node['listen_port']} oifname {physical} ip daddr {endpoint['ipv4']} udp dport {endpoint['port']} accept",
+        f"  udp sport {node['listen_port']} counter drop",
+        " }",
+        " chain mss { type filter hook forward priority -140; policy accept;",
+        f"  oifname {wg} tcp flags syn tcp option maxseg size > {node['mtu']-40} tcp option maxseg size set {node['mtu']-40}",
+        f"  iifname {wg} tcp flags syn tcp option maxseg size > {node['mtu']-40} tcp option maxseg size set {node['mtu']-40}",
+        " }",
+        "}",
+    ]
+    if role == "origin":
+        prefix += [
+            f"table bridge {EGRESS_TABLE} {{",
+            " set shared { typeof numgen inc mod 1; flags timeout; }",
+            " set bypass { type iface_index; }",
+            " map classification { type iface_index . ipv4_addr : mark; flags timeout; }",
+            " set identities { type iface_index . ipv4_addr . mark; flags timeout; }",
+            " set dependencies { type mark . ipv4_addr . inet_proto . inet_service; flags timeout; }",
+            " set ingress { type mark . inet_service; flags timeout; }",
+            " set dns { type mark . ipv4_addr; flags timeout; }",
+            " set probes { type ipv4_addr; flags timeout; }",
+            " set private4 { type ipv4_addr; flags interval; elements = { " + ", ".join(EGRESS_PRIVATE_NETWORKS) + " }; }",
+            " chain ingress { type filter hook prerouting priority -150; policy accept;",
+            "  ether type arp accept",
+            "  meta iif @bypass accept",
+            "  numgen inc mod 1 @shared meta mark set meta iif . ip saddr map @classification",
+            "  numgen inc mod 1 @shared meta iif . ip saddr . meta mark @identities jump live",
+            "  counter drop",
+            " }",
+            " chain live {",
+            "  ether type != ip counter drop",
+            "  ct direction original ct mark set meta mark",
+            "  ct direction reply ct mark set meta mark | 0x01000000",
+            "  meta mark . tcp sport @ingress ct direction reply ct state established,related accept",
+            "  meta mark . ip daddr . meta l4proto . th dport @dependencies accept",
+            "  ip daddr @private4 counter drop",
+            "  meta l4proto { tcp, udp } th dport 53 meta mark . ip daddr @dns accept",
+            "  meta l4proto { tcp, udp } th dport 53 counter drop",
+            "  meta mark & 0x00010000 != 0 ip daddr @probes tcp dport 443 accept",
+            "  meta mark & 0x00010000 != 0 counter drop",
+            "  accept",
+            " }",
+            "}",
+        ]
+    return "\n".join(prefix) + "\n"
+
+
+def egress_firewall_identity(role: str) -> str:
+    """只排除内核动态计数、句柄与租期元素，规则、集合类型和 hook 次序都进入身份。"""
+
+    records: list[Any] = []
+    for family in (["inet", "bridge"] if role == "origin" else ["inet"]):
+        value = json.loads(egress_command(["nft", "-j", "list", "table", family, EGRESS_TABLE]))
+        for entry in value["nftables"]:
+            if "metainfo" in entry:
+                continue
+            entry = json.loads(json.dumps(entry))
+            if "element" in entry and entry["element"].get("name") != "private4":
+                continue
+            for kind in ("set", "map"):
+                if kind in entry and entry[kind].get("name") != "private4":
+                    entry[kind].pop("elem", None)
+            def project(item: Any) -> Any:
+                if isinstance(item, dict):
+                    return {key: (None if key == "counter" else project(child))
+                            for key, child in item.items() if key != "handle"}
+                if isinstance(item, list):
+                    return [project(child) for child in item]
+                return item
+            records.append(project(entry))
+    return sha256_bytes(canonical({"records": records}))
+
+
+def egress_lease_transaction(policy: dict[str, Any], role: str, inventory: dict[str, Any],
+                             service_states: dict[str, str], probes: list[str], *, shared: bool) -> str:
+    """以单个 nft 事务替换全部动态租期；未知网卡从未进入集合，过期连接不能绕过。"""
+
+    lines: list[str] = []
+    lifetime = int(policy["lease_seconds"] * 1000)
+    families = ["inet", "bridge"] if role == "origin" else ["inet"]
+    marks = egress_service_marks(policy)
+    for family in families:
+        values: dict[str, list[str]] = {"shared": ["0"] if shared else []}
+        classification: list[str] = []
+        if role == "origin":
+            values.update({key: [] for key in ("identities", "dependencies", "ingress", "dns", "probes")})
+            values["probes"] = probes if shared else []
+            if family == "bridge":
+                # 非保护容器也须重新登记 host ifindex；不按可能复用的 veth 名或整个网段放行。
+                values["bypass"] = [str(value) for value in inventory.get("bypass_ifindices", [])]
+            else:
+                ports = {item["host_ifindex"] for service in inventory.get("services", {}).values()
+                         for item in service.get("bindings", [])}
+                lines.append(f"flush set {family} {EGRESS_TABLE} protected_ports")
+                if ports:
+                    lines.append(f"add element {family} {EGRESS_TABLE} protected_ports {{ " + ", ".join(map(str, sorted(ports))) + " }")
+            for name, service in inventory.get("services", {}).items():
+                state = service_states.get(name, "blocked")
+                if not shared or state not in {"compliant", "probing"}:
+                    continue
+                mark = marks[name] | (0x10000 if state == "probing" else 0)
+                classification += [f"{binding['host_ifindex']} . {binding['source_ipv4']} timeout {lifetime}ms : {mark}" for binding in service["bindings"]]
+                values["identities"] += [f"{binding['host_ifindex']} . {binding['source_ipv4']} . {mark}" for binding in service["bindings"]]
+                values["dns"] += [f"{mark} . {address}" for address in policy["services"][name]["dns_servers"]]
+                if state == "compliant":
+                    values["dependencies"] += [f"{mark} . {item['ipv4']} . {item['protocol']} . {item['port']}" for item in service["dependencies"]]
+                    values["ingress"] += [f"{mark} . {port}" for port in policy["services"][name]["ingress_tcp_ports"]]
+        if family == "bridge":
+            # veth 跨网络命名空间会清除 skb mark，宿主按同一份短租期身份重新分类。
+            # 此处不从源网段推断服务身份；必须精确匹配已核验的 host ifindex 与源地址。
+            lines.append(f"flush map {family} {EGRESS_TABLE} classification")
+            if classification:
+                lines.append(f"add element {family} {EGRESS_TABLE} classification {{ " + ", ".join(sorted(set(classification))) + " }")
+        for key, elements in values.items():
+            lines.append(f"flush set {family} {EGRESS_TABLE} {key}")
+            if elements:
+                suffix = "" if key == "bypass" else f" timeout {lifetime}ms"
+                lines.append(f"add element {family} {EGRESS_TABLE} {key} {{ " + ", ".join(f"{element}{suffix}" for element in sorted(set(elements))) + " }")
+    return "\n".join(lines) + "\n"
+
+
+def egress_container_bindings(item: dict[str, Any]) -> list[dict[str, Any]]:
+    """从真实 netns 读取每块网卡，再与 Docker 登记交叉核对；附加未登记网卡不能获租期。"""
+
+    pid = int(item["State"]["Pid"])
+    links = json.loads(egress_command(["nsenter", "-t", str(pid), "-n", "ip", "-j", "addr", "show"]))
+    registered = {network["IPAddress"] for network in item["NetworkSettings"]["Networks"].values() if network.get("IPAddress")}
+    bindings = []
+    for link in links:
+        if link["ifname"] == "lo":
+            continue
+        if link.get("link_type") != "ether" or not isinstance(link.get("link_index"), int):
+            raise DeploymentError("受保护容器出现非受管的网络接口")
+        addresses = [address["local"] for address in link.get("addr_info", []) if address["family"] == "inet"]
+        if not addresses or any(address not in registered for address in addresses):
+            raise DeploymentError("受保护容器出现未登记的源 IPv4")
+        for address in addresses:
+            bindings.append({"ifindex": link["ifindex"], "host_ifindex": link["link_index"], "source_ipv4": address})
+    if not bindings or {binding["source_ipv4"] for binding in bindings} != registered:
+        raise DeploymentError("容器网络登记与真实网卡不闭合")
+    return sorted(bindings, key=lambda item: (item["ifindex"], item["source_ipv4"]))
+
+
+def egress_inventory(policy: dict[str, Any], parents: dict[str, str]) -> dict[str, Any]:
+    """逐服务隔离发现错误；仅精确确认的其他容器端口进入 bypass，宿主代理从不放行。"""
+
+    identifiers = egress_command(["docker", "ps", "-q", "--no-trunc"]).split()
+    items = json.loads(egress_command(["docker", "inspect", *identifiers])) if identifiers else []
+    by_name = {item["Name"].lstrip("/"): item for item in items}
+    result: dict[str, Any] = {"services": {}, "bypass_ifindices": []}
+    for name, item in by_name.items():
+        if name in policy["services"]:
+            continue
+        try:
+            bindings = egress_container_bindings(item)
+            result["bypass_ifindices"].extend(binding["host_ifindex"] for binding in bindings)
+        except (OSError, ValueError, KeyError, DeploymentError):
+            # host／none 网络没有桥端口；未知接口维持默认拒绝，不能扩大 bypass。
+            continue
+    for name, settings in policy["services"].items():
+        service: dict[str, Any] = {"container_id": "", "bindings": [], "dependencies": [], "reason": "", "valid": False}
+        result["services"][name] = service
+        try:
+            item = by_name[name]
+            pid = int(item["State"]["Pid"])
+            if not item["State"].get("Running") or pid <= 0:
+                raise DeploymentError("受保护容器尚未运行")
+            service["container_id"] = item["Id"]
+            service["pid"] = pid
+            service["started_at_utc"] = item["State"]["StartedAt"]
+            service["bindings"] = egress_container_bindings(item)
+            if item["HostConfig"].get("CgroupParent") != settings["cgroup_parent"]:
+                raise DeploymentError("容器没有继承策略指定的默认闭锁 slice")
+            group_lines = Path(f"/proc/{pid}/cgroup").read_text(encoding="ascii").splitlines()
+            group_relative = next(line[3:] for line in group_lines if line.startswith("0::"))
+            parent = Path(parents[settings["cgroup_parent"]])
+            group = Path("/sys/fs/cgroup") / group_relative.lstrip("/")
+            if not group.is_relative_to(parent) or group == parent:
+                raise DeploymentError("容器进程的真实 cgroup 未继承受保护父组")
+            service.update({"cgroup_id": group.stat().st_ino, "cgroup_path": str(group), "parent": settings["cgroup_parent"]})
+            resolver = Path(f"/proc/{pid}/root/etc/resolv.conf").read_text(encoding="ascii")
+            servers = [line.split()[1] for line in resolver.splitlines() if line.strip().startswith("nameserver ")]
+            if servers != settings["dns_servers"]:
+                raise DeploymentError("容器 DNS 未直接绑定策略服务器，不能使用宿主转发解析")
+            for dependency in settings["dependencies"]:
+                other = by_name[dependency["container"]]
+                shared_networks = set(item["NetworkSettings"]["Networks"]) & set(other["NetworkSettings"]["Networks"])
+                if not shared_networks:
+                    raise DeploymentError("必要内网依赖没有共同的受管网络")
+                for network in sorted(shared_networks):
+                    address = other["NetworkSettings"]["Networks"][network]["IPAddress"]
+                    if not address or ipaddress.IPv4Address(address).is_global:
+                        raise DeploymentError("内网依赖地址不合规")
+                    service["dependencies"].extend({"ipv4": address, "protocol": dependency["protocol"], "port": port} for port in dependency["ports"])
+            service["valid"] = True
+        except (OSError, ValueError, KeyError, StopIteration, DeploymentError) as error:
+            # restart 的采样竞争只可降为缺失状态，不能把消失进程的网卡或观测交给新进程。
+            if service.get("pid") and not Path(f"/proc/{service['pid']}").is_dir():
+                service["container_id"], service["bindings"] = "", []
+            service["reason"] = str(error) if isinstance(error, DeploymentError) else "容器或必要依赖身份不可验证"
+    protected_ports = {binding["host_ifindex"] for service in result["services"].values() for binding in service["bindings"]}
+    result["bypass_ifindices"] = sorted(set(result["bypass_ifindices"]) - protected_ports)
+    return result
+
+
+def egress_service_identity(service: dict[str, Any]) -> str:
+    """容器 restart 可能保留 ID／网卡，进程启动周期和 cgroup 也必须使旧探针失效。"""
+
+    return sha256_bytes(canonical({key: service.get(key) for key in
+                                  ("container_id", "bindings", "cgroup_id", "pid", "started_at_utc")}))
+
+
+def egress_wireguard_observation(policy: dict[str, Any], role: str) -> dict[str, Any]:
+    """仅查询公开配置；专用通道严格绑定业务 peer，其他监控接口的 peer 不参与判定。"""
+
+    node = policy["nodes"][role]
+    peer = policy["nodes"]["exit" if role == "origin" else "origin"]
+    interface = node["interface"]
+    observed = {field: egress_command(["wg", "show", interface, field]) for field in ("public-key", "peers", "endpoints", "allowed-ips", "listen-port", "fwmark")}
+    expected_allowed = "0.0.0.0/0" if role == "origin" else str(ipaddress.IPv4Interface(peer["tunnel_ipv4"]).ip) + "/32"
+    if (observed["public-key"] != node["public_key"] or observed["peers"].splitlines() != [peer["public_key"]]
+            or observed["endpoints"].split() != [peer["public_key"], f"{peer['endpoint']['ipv4']}:{peer['endpoint']['port']}"]
+            or observed["allowed-ips"].split() != [peer["public_key"], expected_allowed]
+            or observed["listen-port"] != str(node["listen_port"])
+            or int(observed["fwmark"], 0) != EGRESS_WG_MARK):
+        raise DeploymentError("专用 WireGuard 公钥、端点、AllowedIPs 或外层标记发生漂移")
+    link = json.loads(egress_command(["ip", "-j", "addr", "show", "dev", interface]))[0]
+    ipv4 = [f"{item['local']}/{item['prefixlen']}" for item in link.get("addr_info", []) if item["family"] == "inet"]
+    if link["mtu"] != node["mtu"] or ipv4 != [node["tunnel_ipv4"]] or "UP" not in link["flags"]:
+        raise DeploymentError("专用通道的地址、MTU 或运行状态漂移")
+    return {"interface": interface, "mtu": link["mtu"], "public_key": observed["public-key"],
+            "peer_public_key": peer["public_key"], "endpoint": peer["endpoint"], "ifindex": link["ifindex"]}
+
+
+def egress_verify_routes(policy: dict[str, Any], role: str) -> None:
+    """分别验证内层与外层查路结果；晚期防火墙负责在两次检查之间拒绝错误路径。"""
+
+    node = policy["nodes"][role]
+    peer = policy["nodes"]["exit" if role == "origin" else "origin"]
+    outer = json.loads(egress_command(["ip", "-j", "route", "get", peer["endpoint"]["ipv4"], "mark", str(EGRESS_WG_MARK)]))[0]
+    if outer.get("dev") != node["public_interface"]:
+        raise DeploymentError("WireGuard 外层路由未走策略指定物理接口")
+    if role == "origin":
+        for mark in egress_service_marks(policy).values():
+            route = json.loads(egress_command(["ip", "-j", "route", "get", policy["services"][next(iter(policy["services"]))]["dns_servers"][0], "mark", str(mark)]))[0]
+            if route.get("dev") != node["interface"] or str(route.get("table")) != str(policy["route_table"]):
+                raise DeploymentError("受保护业务的策略路由未进入专用通道")
+    else:
+        for address in policy["services"][next(iter(policy["services"]))]["dns_servers"]:
+            route = json.loads(egress_command(["ip", "-j", "route", "get", address, "from", str(ipaddress.IPv4Interface(peer["tunnel_ipv4"]).ip), "iif", node["interface"]]))[0]
+            if route.get("dev") != node["public_interface"]:
+                raise DeploymentError("出口宿主的业务转发路由发生漂移")
+
+
+def egress_resolve_probes(policy: dict[str, Any]) -> dict[str, str]:
+    """解析结果只提供探针目的地址，不作为允许出口的来源；HTTPS 仍验证原主机证书。"""
+
+    resolved: dict[str, str] = {}
+    for url in policy["probe_urls"]:
+        host = urlsplit(url).hostname
+        try:
+            lines = egress_command(["getent", "ahostsv4", str(host)], timeout=3).splitlines()
+            addresses = [line.split()[0] for line in lines if line.split()]
+            resolved[url] = next(address for address in addresses if ipaddress.IPv4Address(address).is_global)
+        except (ValueError, StopIteration, DeploymentError):
+            continue
+    return resolved
+
+
+def egress_probe_service(policy: dict[str, Any], name: str, resolved: dict[str, str]) -> list[dict[str, Any]]:
+    """从每个容器的真实 curl 路径独立观测；无代理、无重定向、不发送官方模型请求。"""
+
+    def probe(url: str) -> dict[str, Any]:
+        observation: dict[str, Any] = {"url": url, "status": "failed", "ip_address": None,
+                                       "observed_at_epoch": time.time(), "response_sha256": None}
+        address = resolved.get(url)
+        if not address:
+            return observation
+        try:
+            raw = egress_command(["docker", "exec", name, "/usr/bin/curl", "--noproxy", "*", "--proto", "=https",
+                                  "--tlsv1.2", "--silent", "--show-error", "--fail", "--connect-timeout", "2",
+                                  "--max-time", "3", "--max-filesize", "1024", "--resolve", f"{urlsplit(url).hostname}:443:{address}", url], timeout=4)
+            ip = str(ipaddress.IPv4Address(raw.strip()))
+            observation.update({"status": "passed", "ip_address": ip, "response_sha256": sha256_bytes(raw.encode("ascii"))})
+        except (ValueError, DeploymentError):
+            pass
+        observation["observed_at_epoch"] = time.time()
+        return observation
+    with ThreadPoolExecutor(max_workers=len(policy["probe_urls"])) as pool:
+        return list(pool.map(probe, policy["probe_urls"]))
+
+
+def egress_remote_status(policy: dict[str, Any]) -> dict[str, Any]:
+    """经专用 WireGuard 访问出口守护；不读取本地缓存充当远端当前状态。"""
+
+    import http.client
+
+    address = str(ipaddress.IPv4Interface(policy["nodes"]["exit"]["tunnel_ipv4"]).ip)
+    connection = http.client.HTTPConnection(address, policy["control_port"], timeout=min(0.8, policy["lease_seconds"] / 3))
+    try:
+        connection.request("GET", "/health")
+        response = connection.getresponse()
+        raw = response.read(65537)
+        if response.status != 200 or len(raw) > 65536:
+            raise DeploymentError("出口守护未返回当前合规状态")
+        value = json.loads(raw)
+        if (value.get("schema_version") != "codex-runtime-egress-exit-health/v1"
+                or value.get("policy_sha256") != egress_contract().egress_policy_sha256(policy)
+                or value.get("status") != "compliant" or value.get("lease_remaining_ms", 0) <= 0
+                or value["lease_remaining_ms"] > policy["lease_seconds"] * 1000):
+            raise DeploymentError("出口守护健康响应没有绑定当前策略和有效租期")
+        return value
+    except (OSError, ValueError, KeyError, http.client.HTTPException) as error:
+        raise DeploymentError("出口宿主当前保护不可确认") from error
+    finally:
+        connection.close()
+
+
+class EgressGuard:
+    """同时维护内核短租期与可审计状态；进程停止不会删除已有保护规则。"""
+
+    def __init__(self, policy_path: Path, role: str, runtime_root: Path):
+        self.contract = egress_contract()
+        self.policy_path, self.role, self.runtime_root = policy_path, role, runtime_root
+        self.policy = self.contract.load_egress_policy(policy_path)
+        self.policy_sha256 = self.contract.egress_policy_sha256(self.policy)
+        self.manifest = self.contract._read_egress_runtime_json(runtime_root / "installed.json", private=True)
+        if self.manifest["policy_sha256"] != self.policy_sha256 or self.manifest["role"] != role:
+            raise DeploymentError("出口保护安装记录未绑定当前策略；须显式重新安装")
+        self.parents = self.manifest["parents"]
+        self.maps = {name: EgressKernelMaps(Path(value)) for name, value in self.manifest["pins"].items()}
+        self.inventory: dict[str, Any] = {"services": {}, "bypass_ifindices": []}
+        self.probes = egress_resolve_probes(self.policy) if role == "origin" else {}
+        self.observations: dict[str, Any] = {}
+        self.pending: dict[str, Any] = {}
+        self.next_probe: dict[str, float] = {}
+        self.blocked_since: dict[str, float] = {}
+        self.last_compliant: dict[str, float] = {}
+        self.lease_states: dict[str, str] = {}
+        self.pool = ThreadPoolExecutor(max_workers=max(1, len(self.policy["services"])))
+        self.resolver_pool = ThreadPoolExecutor(max_workers=1)
+        self.resolver_pending: Any | None = None
+        self.next_resolution = time.time() + self.policy["probe_refresh_seconds"]
+        self.boot_id = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="ascii").strip()
+        self.previous_state: str | None = None
+        self.health: dict[str, Any] = {}
+        self.health_expiry = 0
+        self.status_path = Path("/run/sub2api-egress/status.json")
+        self.status_path.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+
+    def revoke(self, inventory: dict[str, Any]) -> None:
+        for service in inventory.get("services", {}).values():
+            if "parent" not in service:
+                continue
+            for binding in service["bindings"]:
+                self.maps[service["parent"]].revoke(service["cgroup_id"], binding["ifindex"], binding["source_ipv4"])
+
+    def shared_checks(self) -> tuple[dict[str, bool], str]:
+        checks = {key: False for key in ("kernel_filter", "firewall", "wireguard", "routes", "remote_guard")}
+        try:
+            current = self.contract.load_egress_policy(self.policy_path)
+            if self.contract.egress_policy_sha256(current) != self.policy_sha256:
+                raise DeploymentError("授权出口策略发生变更，须重新安装并验证后恢复")
+            for name, maps in self.maps.items():
+                maps.verify_attachment(Path(self.parents[name]))
+            checks["kernel_filter"] = True
+            if egress_firewall_identity(self.role) != self.manifest["firewall_sha256"]:
+                raise DeploymentError("两端路径保护中的本端规则发生漂移")
+            checks["firewall"] = True
+            egress_wireguard_observation(self.policy, self.role)
+            checks["wireguard"] = True
+            egress_verify_routes(self.policy, self.role)
+            checks["routes"] = True
+            if self.role == "origin":
+                egress_remote_status(self.policy)
+            checks["remote_guard"] = True
+            return checks, ""
+        except (OSError, ValueError, KeyError, DeploymentError) as error:
+            return checks, str(error)
+
+    def step(self) -> dict[str, Any]:
+        started_ns, now = time.monotonic_ns(), time.time()
+        expiry = started_ns + int(self.policy["lease_seconds"] * 10**9)
+        checks, reason = self.shared_checks()
+        shared = all(checks.values())
+        if self.role == "origin":
+            if self.resolver_pending is not None and self.resolver_pending.done():
+                try:
+                    self.probes = self.resolver_pending.result()
+                except Exception:
+                    self.probes = {}
+                self.resolver_pending = None
+                self.next_resolution = now + self.policy["probe_refresh_seconds"]
+            if self.resolver_pending is None and now >= self.next_resolution:
+                self.resolver_pending = self.resolver_pool.submit(egress_resolve_probes, self.policy)
+        previous = self.inventory
+        if self.role == "origin":
+            try:
+                self.inventory = egress_inventory(self.policy, self.parents)
+            except (OSError, ValueError, KeyError, DeploymentError):
+                shared, reason = False, "容器清单不可完整核验"
+                checks["kernel_filter"] = False
+        states: dict[str, str] = {}
+        services: dict[str, Any] = {}
+        for name, service in self.inventory.get("services", {}).items():
+            old = previous.get("services", {}).get(name, {})
+            if (not shared or not service["valid"]
+                    or egress_service_identity(old) != egress_service_identity(service)):
+                self.observations.pop(name, None)
+                self.next_probe[name] = 0
+                # 旧探针即使随后返回，也不能为新容器或附加网卡签发准入。
+                pending = self.pending.pop(name, None)
+                if pending:
+                    pending[1].cancel()
+            pending = self.pending.get(name)
+            identity = egress_service_identity(service)
+            if pending and pending[1].done():
+                self.pending.pop(name)
+                if pending[0] == identity:
+                    try:
+                        self.observations[name] = pending[1].result()
+                    except Exception:
+                        self.observations.pop(name, None)
+                    self.next_probe[name] = now + self.policy["probe_refresh_seconds"]
+            observations = self.observations.get(name, [])
+            compliant = shared and service["valid"] and self.contract.egress_observations_compliant(self.policy, observations, now_epoch=time.time())
+            states[name] = "compliant" if compliant else ("probing" if shared and service["valid"] else "blocked")
+            if compliant:
+                self.blocked_since.pop(name, None)
+                self.last_compliant[name] = now
+            else:
+                self.blocked_since.setdefault(name, now)
+            services[name] = {"status": "compliant" if compliant else "blocked",
+                              "admission_state": "ready" if compliant else "probing" if shared and service["valid"] else "missing" if not service["container_id"] else "invalid",
+                              "container_id": service["container_id"],
+                              "network_bindings": service["bindings"], "observations": observations,
+                              "reason": "" if compliant else reason or service["reason"] or "等待独立出口验证",
+                              "blocked_at_epoch": self.blocked_since.get(name)}
+        # 先撤销受影响的旧 BPF 身份，再原子换 nft 租期，最后才向新身份发放短租期。
+        for name, old in previous.get("services", {}).items():
+            current = self.inventory.get("services", {}).get(name)
+            if not shared or states.get(name) != self.lease_states.get(name) or current != old:
+                self.revoke({"services": {name: old}})
+        if not shared:
+            self.revoke(self.inventory)
+        transaction = egress_lease_transaction(self.policy, self.role, self.inventory, states, sorted(set(self.probes.values())), shared=shared)
+        egress_command(["nft", "-f", "-"], input_text=transaction)
+        if time.monotonic_ns() >= expiry:
+            self.revoke(self.inventory)
+            raise DeploymentError("出口守护一轮核验超过内核租期，不得签发迟到状态")
+        marks = egress_service_marks(self.policy)
+        for name, service in self.inventory.get("services", {}).items():
+            if states[name] == "blocked":
+                continue
+            maps = self.maps[service["parent"]]
+            probing = states[name] == "probing"
+            for address in self.probes.values():
+                maps.probe(address)
+            for binding in service["bindings"]:
+                maps.lease(service["cgroup_id"], binding["ifindex"], binding["source_ipv4"], expires_at_ns=expiry,
+                           mark=marks[name] | (0x10000 if probing else 0), probe_only=probing)
+            if name not in self.pending and time.time() >= self.next_probe.get(name, 0):
+                identity = egress_service_identity(service)
+                self.pending[name] = (identity, self.pool.submit(egress_probe_service, self.policy, name, self.probes))
+        status = {"schema_version": self.contract.EGRESS_STATUS_SCHEMA, "policy_sha256": self.policy_sha256,
+                  "role": self.role, "boot_id": self.boot_id, "observed_at_epoch": time.time(),
+                  "observed_at_monotonic_ns": time.monotonic_ns(),
+                  "valid_until_monotonic_ns": expiry, "shared_protection": {
+                      "status": "compliant" if shared else "blocked", "checks": checks, "reason": reason}, "services": services}
+        write_json_atomic(self.status_path, status)
+        self.health = {"schema_version": "codex-runtime-egress-exit-health/v1", "policy_sha256": self.policy_sha256,
+                       "status": "compliant" if shared else "blocked", "boot_id": self.boot_id}
+        self.health_expiry = expiry if shared else 0
+        transition = {"shared": status["shared_protection"], "services": {
+            name: {key: value[key] for key in ("status", "container_id", "network_bindings", "reason")}
+            for name, value in services.items()}}
+        digest = sha256_bytes(canonical(transition))
+        if digest != self.previous_state:
+            record = {"observed_at_utc": utc_stamp(), "observed_at_epoch": now, "policy_sha256": self.policy_sha256,
+                      "role": self.role, "last_compliant_at_epoch": self.last_compliant, **transition}
+            descriptor = os.open(self.runtime_root / "events.jsonl", os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
+            try:
+                os.write(descriptor, canonical(record) + b"\n")
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+            self.previous_state = digest
+        self.lease_states = states
+        return status
+
+    def run(self) -> None:
+        server = None
+        if self.role == "exit":
+            from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+            guard = self
+            class HealthHandler(BaseHTTPRequestHandler):
+                def do_GET(self) -> None:
+                    remaining = max(0, (guard.health_expiry - time.monotonic_ns()) // 10**6)
+                    valid = self.path == "/health" and remaining > 0 and guard.health.get("status") == "compliant"
+                    payload = canonical({**guard.health, "lease_remaining_ms": remaining})
+                    self.send_response(200 if valid else 503)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(payload)))
+                    self.end_headers()
+                    self.wfile.write(payload)
+
+                def log_message(self, *_args: Any) -> None:
+                    return
+
+            address = str(ipaddress.IPv4Interface(self.policy["nodes"]["exit"]["tunnel_ipv4"]).ip)
+            server = ThreadingHTTPServer((address, self.policy["control_port"]), HealthHandler)
+            server.daemon_threads = True
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            while True:
+                start = time.monotonic()
+                try:
+                    self.step()
+                except Exception:
+                    self.health_expiry = 0
+                    self.revoke(self.inventory)
+                    # 异常记录不得包含子命令原文；即使用户态再次失败，内核租期仍会自行失效。
+                    print("出口守护本轮失败，已闭锁；等待下一轮重新核验", file=sys.stderr, flush=True)
+                time.sleep(max(0.05, self.policy["poll_seconds"] - (time.monotonic() - start)))
+        finally:
+            self.health_expiry = 0
+            self.revoke(self.inventory)
+            if server:
+                server.shutdown()
+            self.pool.shutdown(wait=False, cancel_futures=True)
+            self.resolver_pool.shutdown(wait=False, cancel_futures=True)
+
+
+def egress_apply_firewall(policy: dict[str, Any], role: str) -> str:
+    """规则替换是单个内核事务；失败保留旧表，成功时新表的动态放行集为空。"""
+
+    tables = json.loads(egress_command(["nft", "-j", "list", "tables"]))["nftables"]
+    existing = {(item["table"]["family"], item["table"]["name"]) for item in tables if "table" in item}
+    families = ["inet", "bridge"] if role == "origin" else ["inet"]
+    deletion = "".join(f"delete table {family} {EGRESS_TABLE}\n" for family in families if (family, EGRESS_TABLE) in existing)
+    bypass = ""
+    if role == "origin":
+        # 首次安装也精确保留无关容器的桥端口，不能等待编译／握手期间切断数据库等已有流量。
+        # 开机 bootstrap 先于 Docker；此时不能查询 socket 触发 Docker 启动，形成依赖环。
+        active = subprocess.run(["systemctl", "is-active", "--quiet", "docker.service"],
+                                capture_output=True, timeout=3).returncode == 0
+        ports = egress_inventory(policy, {})["bypass_ifindices"] if active else []
+        if ports:
+            bypass = f"add element bridge {EGRESS_TABLE} bypass {{ " + ", ".join(map(str, ports)) + " }\n"
+    egress_command(["nft", "-f", "-"], input_text=deletion + render_egress_firewall(policy, role) + bypass)
+    return egress_firewall_identity(role)
+
+
+def egress_bootstrap(policy_path: Path, role: str, runtime_root: Path) -> dict[str, Any]:
+    """先闭锁路径，再加载父 cgroup 过滤器；此入口绝不添加业务放行租期。"""
+
+    contract = egress_contract()
+    policy = contract.load_egress_policy(policy_path)
+    runtime_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    old_manifest = None
+    manifest_path = runtime_root / "installed.json"
+    if manifest_path.exists():
+        old_manifest = contract._read_egress_runtime_json(manifest_path, private=True)
+    firewall_sha256 = egress_apply_firewall(policy, role)
+    parents: dict[str, str] = {}
+    pins: dict[str, str] = {}
+    interrupted_pins: list[Path] = []
+    artifacts: dict[str, str] = {}
+    if role == "origin":
+        source_identity = sha256_bytes((EGRESS_FILTER_SOURCE + EGRESS_FILTER_LOADER).encode("utf-8"))
+        build_root = runtime_root / ("kernel-" + source_identity[:16])
+        artifacts = build_egress_filter(build_root)
+        for name in sorted({service["cgroup_parent"] for service in policy["services"].values()}):
+            egress_command(["systemctl", "start", name], timeout=10)
+            relative = egress_command(["systemctl", "show", "--value", "-p", "ControlGroup", name])
+            parent = Path("/sys/fs/cgroup") / relative.lstrip("/")
+            if not relative.startswith("/") or parent == Path("/sys/fs/cgroup") or not parent.is_dir():
+                raise DeploymentError("出口专用 slice 未取得可信 cgroup")
+            pin = Path("/sys/fs/bpf/sub2api-egress") / (name + "-" + source_identity[:16])
+            if pin.exists():
+                try:
+                    EgressKernelMaps(pin).verify_attachment(parent)
+                except (OSError, DeploymentError):
+                    # 上次可能只 pin 了 link 就中断；先挂新的默认拒绝程序，再清理半成品。
+                    interrupted_pins.append(pin)
+                    pin = pin.with_name(pin.name + "-repair-" + secrets.token_hex(4))
+            if not pin.exists():
+                pin.mkdir(mode=0o700, parents=True)
+                egress_command([str(build_root / "egress-filter-loader"), str(build_root / "egress-filter.bpf.o"), str(parent), str(pin)])
+            EgressKernelMaps(pin).verify_attachment(parent)
+            parents[name], pins[name] = str(parent), str(pin)
+        # 换内核程序时新程序先挂载并默认拒绝，随后才解除本工具以前登记的旧 link。
+        old_paths = {Path(value) for value in (old_manifest or {}).get("pins", {}).values()} | set(interrupted_pins)
+        for path in old_paths:
+            if str(path) not in pins.values():
+                if path.parent != Path("/sys/fs/bpf/sub2api-egress"):
+                    raise DeploymentError("历史内核 pin 路径不属于本工具，拒绝清理")
+                for entry in ("link", "program", "leases", "probes"):
+                    (path / entry).unlink(missing_ok=True)
+                if path.exists():
+                    path.rmdir()
+    manifest = {"schema_version": "codex-runtime-egress-install/v1", "policy_sha256": contract.egress_policy_sha256(policy),
+                "role": role, "installed_at_utc": utc_stamp(), "firewall_sha256": firewall_sha256,
+                "parents": parents, "pins": pins, "kernel_artifacts": artifacts}
+    write_json_atomic(manifest_path, manifest)
+    return manifest
+
+
+def egress_setup_routes(policy: dict[str, Any], role: str) -> None:
+    """仅配置专用表和精确 mark 规则；其他出口和现有 WireGuard 监控通道保持独立。"""
+
+    node = policy["nodes"][role]
+    if role == "origin":
+        table = str(policy["route_table"])
+        egress_command(["ip", "route", "replace", "table", table, "default", "dev", node["interface"]])
+        for network in EGRESS_PRIVATE_NETWORKS:
+            egress_command(["ip", "route", "replace", "throw", network, "table", table])
+        rules = json.loads(egress_command(["ip", "-j", "rule", "show"]))
+        matches = [rule for rule in rules if rule.get("priority") == policy["rule_priority"]]
+        if matches:
+            expected = {"fwmark": hex(EGRESS_MARK), "fwmask": "0xff000000", "table": policy["route_table"]}
+            if len(matches) != 1 or any(str(matches[0].get(key)) != str(value) for key, value in expected.items()):
+                raise DeploymentError("策略路由优先级已被其他规则使用，拒绝覆盖")
+        else:
+            egress_command(["ip", "rule", "add", "priority", str(policy["rule_priority"]), "fwmark", f"{EGRESS_MARK}/0xff000000", "lookup", table])
+    egress_command(["sysctl", "-w", f"net.ipv4.conf.{node['interface']}.rp_filter=0"])
+
+
+def egress_write_atomic(path: Path, data: bytes, *, mode: int = 0o600) -> None:
+    """先持久化完整新文件再替换；中断只留下完整旧版或新版，不截断私钥配置。"""
+
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        raise DeploymentError("出口配置目标不是普通文件")
+    temporary = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
+    try:
+        with temporary.open("xb") as stream:
+            os.fchmod(stream.fileno(), mode)
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        fsync_directory(path.parent)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def egress_runtime_bundle(runtime_root: Path) -> Path:
+    """持久化按内容寻址的最小运行闭包；systemd 不依赖会清理或覆盖的 staging 目录。"""
+
+    source_root = Path(__file__).resolve().parent.parent
+    names = ("tools/arm64_supervised_deploy.py",
+             "tools/official_client_capture/codex_upgrade_arm64_environment_receipt.py",
+             "tools/official_client_capture/incremental_recovery.py")
+    sources = {name: (source_root / name).read_bytes() for name in names}
+    identity = sha256_bytes(canonical({name: sha256_bytes(data) for name, data in sources.items()}))
+    directory = runtime_root / "bundles"
+    directory.mkdir(mode=0o700, exist_ok=True)
+    bundle = directory / identity
+    if bundle.exists():
+        if bundle.is_symlink() or any((bundle / name).is_symlink() or (bundle / name).read_bytes() != data
+                                     for name, data in sources.items()):
+            raise DeploymentError("已登记的出口运行包被修改，拒绝覆盖")
+        return bundle / names[0]
+    temporary = directory / (".install-" + secrets.token_hex(8))
+    try:
+        temporary.mkdir(mode=0o700)
+        for name, data in sources.items():
+            path = temporary / name
+            path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            egress_write_atomic(path, data, mode=0o400)
+        write_json_atomic(temporary / "bundle.json", {"schema_version": "codex-runtime-egress-bundle/v1",
+                          "bundle_sha256": identity, "files": {name: sha256_bytes(data) for name, data in sources.items()}})
+        os.rename(temporary, bundle)
+        fsync_directory(directory)
+    finally:
+        if temporary.exists():
+            shutil.rmtree(temporary)
+    return bundle / names[0]
+
+
+def egress_compose_settings(policy: dict[str, Any], name: str, items: list[dict[str, Any]], resolver: Path) -> dict[str, Any]:
+    """生成可审核的 compose 服务保护字段；精确补全必要依赖的 hosts，不绑定只读 /etc/hosts。"""
+
+    settings = policy["services"][name]
+    by_name = {item["Name"].lstrip("/"): item for item in items}
+    item = by_name[name]
+    aliases: dict[str, str] = {}
+    for dependency in settings["dependencies"]:
+        other = by_name[dependency["container"]]
+        shared = sorted(set(item["NetworkSettings"]["Networks"]) & set(other["NetworkSettings"]["Networks"]))
+        if not shared:
+            raise DeploymentError("compose 必要依赖没有共同网络，拒绝猜测地址")
+        network = other["NetworkSettings"]["Networks"][shared[0]]
+        address = network["IPAddress"]
+        if not ipaddress.IPv4Address(address).is_private:
+            raise DeploymentError("compose 必要依赖必须使用私网地址")
+        for alias in {dependency["container"], *(network.get("Aliases") or [])}:
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", alias):
+                raise DeploymentError("compose 依赖别名非法")
+            if alias in aliases and aliases[alias] != address:
+                raise DeploymentError("compose 依赖别名存在地址冲突")
+            aliases[alias] = address
+    return {"cgroup_parent": settings["cgroup_parent"], "dns": settings["dns_servers"],
+            "volumes": [{"type": "bind", "source": str(resolver), "target": "/etc/resolv.conf", "read_only": True}],
+            "extra_hosts": dict(sorted(aliases.items()))}
+
+
+def egress_prepare_compose(policy: dict[str, Any], output: Path, name: str, compose_service: str) -> dict[str, Any]:
+    """只生成保护覆盖文件和摘要，不重建容器；生产 compose 须在维护窗口审核合并。"""
+
+    if name not in policy["services"] or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", compose_service):
+        raise DeploymentError("compose 服务映射必须显式指定受保护容器及合法服务名")
+    if not output.is_absolute() or output.exists():
+        raise DeploymentError("compose 保护制品必须写入新的绝对路径目录")
+    identifiers = egress_command(["docker", "ps", "-a", "-q", "--no-trunc"]).split()
+    items = json.loads(egress_command(["docker", "inspect", *identifiers])) if identifiers else []
+    resolver = output / "resolv.conf"
+    settings = egress_compose_settings(policy, name, items, resolver)
+    output.mkdir(mode=0o700, parents=True)
+    egress_write_atomic(resolver, ("".join(f"nameserver {address}\n" for address in policy["services"][name]["dns_servers"])
+                                  + "options timeout:2 attempts:2\n").encode("ascii"), mode=0o644)
+    override = output / "compose.override.json"
+    write_json_atomic(override, {"services": {compose_service: settings}})
+    result = {"schema_version": "codex-runtime-egress-compose/v1", "policy_sha256": egress_contract().egress_policy_sha256(policy),
+              "container": name, "compose_service": compose_service,
+              "files": {path.name: file_sha256(path) for path in (resolver, override)}}
+    write_json_atomic(output / "manifest.json", result)
+    return result
+
+
+def egress_install(policy_path: Path, role: str, runtime_root: Path, key_path: Path) -> dict[str, Any]:
+    """安装持久保护与启动顺序；必须在维护窗口使用，业务恢复由守护逐容器验证决定。"""
+
+    contract = egress_contract()
+    policy = contract.load_egress_policy(policy_path)
+    node = policy["nodes"][role]
+    peer = policy["nodes"]["exit" if role == "origin" else "origin"]
+    runtime_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if key_path.is_symlink() or not key_path.is_file():
+        raise DeploymentError("专用通道私钥文件不是可信普通文件")
+    metadata = key_path.stat()
+    if metadata.st_uid != 0 or metadata.st_gid != 0 or stat.S_IMODE(metadata.st_mode) != 0o600:
+        raise DeploymentError("专用通道私钥必须为 root:root 0600")
+    private = key_path.read_text(encoding="ascii").strip()
+    if egress_command(["wg", "pubkey"], input_text=private + "\n") != node["public_key"]:
+        raise DeploymentError("专用通道私钥不对应授权策略公钥")
+    script = egress_runtime_bundle(runtime_root)
+    # 在生成规则和闭锁之前不触碰已有接口；新安装不能接管未登记的 wg1 等通道。
+    interfaces = json.loads(egress_command(["ip", "-j", "link", "show"]))
+    if not (runtime_root / "installed.json").exists() and any(link["ifname"] == node["interface"] for link in interfaces):
+        raise DeploymentError("策略接口已存在但未登记为本工具专用通道，拒绝接管")
+    if (runtime_root / "installed.json").exists():
+        egress_command(["systemctl", "stop", "sub2api-egress-guard.service"], timeout=20)
+    # 配置替换前闭锁，后续任何写入或服务启动失败也不会沿旧租期继续业务。
+    egress_apply_firewall(policy, role)
+    parents = sorted({service["cgroup_parent"] for service in policy["services"].values()}) if role == "origin" else []
+    for name in parents:
+        path = Path("/etc/systemd/system") / name
+        egress_write_atomic(path, "[Unit]\nDescription=Sub2API 专用出口受保护容器组\n[Slice]\n".encode("utf-8"), mode=0o644)
+    common = f"--policy {shlex.quote(str(policy_path))} --role {role} --runtime-root {shlex.quote(str(runtime_root))}"
+    execute = f"/usr/bin/python3 {shlex.quote(str(script))}"
+    unit_root = Path("/etc/systemd/system")
+    bootstrap = "[Unit]\nDescription=Sub2API 出口启动默认闭锁\nAfter=local-fs.target systemd-modules-load.service\nRequiresMountsFor=/sys/fs/bpf /sys/fs/cgroup\n"
+    if parents:
+        bootstrap += "Requires=" + " ".join(parents) + "\nAfter=" + " ".join(parents) + "\n"
+    bootstrap += f"Before=docker.service wg-quick@{node['interface']}.service\n[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart={execute} egress-bootstrap {common}\n[Install]\nWantedBy=multi-user.target\n"
+    guard = f"[Unit]\nDescription=Sub2API 出口持续核验与短租期守护\nRequires=sub2api-egress-bootstrap.service wg-quick@{node['interface']}.service\nAfter=sub2api-egress-bootstrap.service wg-quick@{node['interface']}.service"
+    if role == "origin":
+        guard += " docker.service"
+    guard += f"\n[Service]\nType=simple\nExecStartPre={execute} egress-routes {common}\nExecStart={execute} egress-guard {common}\nRestart=on-failure\nRestartSec=1\nTimeoutStopSec=8\nUMask=0077\n[Install]\nWantedBy=multi-user.target\n"
+    for name, source in (("sub2api-egress-bootstrap.service", bootstrap), ("sub2api-egress-guard.service", guard)):
+        egress_write_atomic(unit_root / name, source.encode("utf-8"), mode=0o644)
+    dependents = [f"wg-quick@{node['interface']}.service"] + (["docker.service"] if role == "origin" else [])
+    for name in dependents:
+        directory = unit_root / (name + ".d")
+        directory.mkdir(mode=0o755, exist_ok=True)
+        egress_write_atomic(directory / "sub2api-egress.conf", b"[Unit]\nRequires=sub2api-egress-bootstrap.service\nAfter=sub2api-egress-bootstrap.service\n", mode=0o644)
+    allowed = "0.0.0.0/0" if role == "origin" else str(ipaddress.IPv4Interface(peer["tunnel_ipv4"]).ip) + "/32"
+    configuration = (f"[Interface]\nPrivateKey = {private}\nAddress = {node['tunnel_ipv4']}\nListenPort = {node['listen_port']}\n"
+                     f"MTU = {node['mtu']}\nFwMark = {EGRESS_WG_MARK}\nTable = off\nSaveConfig = false\n\n[Peer]\nPublicKey = {peer['public_key']}\n"
+                     f"Endpoint = {peer['endpoint']['ipv4']}:{peer['endpoint']['port']}\nAllowedIPs = {allowed}\nPersistentKeepalive = 15\n")
+    config_path = Path("/etc/wireguard") / (node["interface"] + ".conf")
+    config_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    egress_write_atomic(config_path, configuration.encode("ascii"))
+    egress_command(["systemctl", "daemon-reload"], timeout=15)
+    egress_command(["systemctl", "enable", "sub2api-egress-bootstrap.service", f"wg-quick@{node['interface']}.service", "sub2api-egress-guard.service"], timeout=15)
+    active = subprocess.run(["systemctl", "is-active", "--quiet", "sub2api-egress-bootstrap.service"],
+                            capture_output=True, timeout=3).returncode == 0
+    if active:
+        # 不 restart 被 Docker Requires 的 oneshot，避免 systemd 连带停止无关容器。
+        egress_bootstrap(policy_path, role, runtime_root)
+    else:
+        egress_command(["systemctl", "start", "sub2api-egress-bootstrap.service"], timeout=90)
+    egress_command(["systemctl", "restart", f"wg-quick@{node['interface']}.service"], timeout=20)
+    egress_command(["systemctl", "restart", "sub2api-egress-guard.service"], timeout=20)
+    return contract._read_egress_runtime_json(runtime_root / "installed.json", private=True)
+
+
+def egress_main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(description="R15 通用出口保护运维入口；策略保留在工具树外")
+    parser.add_argument("command", choices=("egress-render", "egress-build", "egress-bootstrap", "egress-routes", "egress-guard", "egress-install", "egress-check", "egress-compose"))
+    parser.add_argument("--policy", type=Path, default=Path("/etc/sub2api-egress/policy.json"))
+    parser.add_argument("--role", choices=("origin", "exit"), default="origin")
+    parser.add_argument("--runtime-root", type=Path, default=Path("/var/lib/sub2api-egress"))
+    parser.add_argument("--key", type=Path, default=Path("/etc/sub2api-egress/private.key"))
+    parser.add_argument("--output-dir", type=Path)
+    parser.add_argument("--container")
+    parser.add_argument("--compose-service")
+    arguments = parser.parse_args(argv)
+    os.umask(0o077)
+    if arguments.command == "egress-build":
+        result = build_egress_filter(arguments.runtime_root)
+    else:
+        if os.geteuid() != 0 or sys.platform != "linux":
+            raise DeploymentError("实时出口运维必须在 Linux 宿主由 root 执行")
+        contract = egress_contract()
+        policy = contract.load_egress_policy(arguments.policy)
+        if arguments.command == "egress-render":
+            print(render_egress_firewall(policy, arguments.role), end="")
+            return 0
+        if arguments.command == "egress-compose":
+            if arguments.output_dir is None or arguments.container is None or arguments.compose_service is None:
+                parser.error("egress-compose 必须指定 --output-dir、--container 和 --compose-service")
+            result = egress_prepare_compose(policy, arguments.output_dir, arguments.container, arguments.compose_service)
+        elif arguments.command == "egress-bootstrap":
+            result = egress_bootstrap(arguments.policy, arguments.role, arguments.runtime_root)
+        elif arguments.command == "egress-routes":
+            egress_setup_routes(policy, arguments.role)
+            result = {"status": "configured"}
+        elif arguments.command == "egress-install":
+            result = egress_install(arguments.policy, arguments.role, arguments.runtime_root, arguments.key)
+        elif arguments.command == "egress-guard":
+            EgressGuard(arguments.policy, arguments.role, arguments.runtime_root).run()
+            return 0
+        else:
+            result = contract.require_runtime_egress(arguments.policy)
+    print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+    return 0
 
 
 def utc_stamp() -> str:
@@ -832,63 +2017,14 @@ def parse_container_network(output: str, name: str) -> str:
     return ",".join(sorted(addresses))
 
 
-def verify_wg1_mtu() -> dict[str, Any]:
-    """验证 ARM64 wg1 的持久配置和运行时值均匹配 BWG。"""
+def verify_runtime_egress() -> dict[str, Any]:
+    """部署前后都读取当前受限策略和持续守护，不冻结服务商、出口地址或链路参数。"""
 
-    if WG1_CONFIG.is_symlink() or not WG1_CONFIG.is_file():
-        raise DeploymentError("ARM64 wg1 配置不是可信普通文件。")
-    metadata = WG1_CONFIG.stat()
-    if (
-        metadata.st_uid != 0
-        or metadata.st_gid != 0
-        or stat.S_IMODE(metadata.st_mode) != 0o600
-    ):
-        raise DeploymentError("ARM64 wg1 配置必须为 root:root 0600。")
-    try:
-        raw = WG1_CONFIG.read_bytes()
-        lines = raw.decode("utf-8").splitlines()
-    except (OSError, UnicodeError) as error:
-        raise DeploymentError("ARM64 wg1 配置不可读。") from error
-    section: str | None = None
-    configured_values: list[int] = []
-    for raw_line in lines:
-        line = raw_line.strip()
-        if not line or line.startswith(("#", ";")):
-            continue
-        if line.startswith("[") and line.endswith("]"):
-            section = line[1:-1].strip().lower()
-            continue
-        if section != "interface" or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        if key.strip().lower() != "mtu":
-            continue
-        try:
-            configured_values.append(int(value.strip()))
-        except ValueError as error:
-            raise DeploymentError("ARM64 wg1 配置 MTU 非整数。") from error
-    try:
-        runtime_mtu = int(WG1_RUNTIME_MTU.read_text(encoding="ascii").strip())
-    except (OSError, UnicodeError, ValueError) as error:
-        raise DeploymentError("ARM64 wg1 运行时 MTU 不可读。") from error
-    if configured_values != [EXPECTED_WG1_MTU]:
-        raise DeploymentError(
-            f"ARM64 wg1 配置 MTU 必须唯一且等于 "
-            f"{EXPECTED_EGRESS_PROVIDER} {EXPECTED_WG1_MTU}。"
-        )
-    if runtime_mtu != EXPECTED_WG1_MTU:
-        raise DeploymentError(
-            f"ARM64 wg1 运行时 MTU 与 "
-            f"{EXPECTED_EGRESS_PROVIDER} {EXPECTED_WG1_MTU} 不一致。"
-        )
-    return {
-        "interface": "wg1",
-        "egress_provider": EXPECTED_EGRESS_PROVIDER,
-        "configured_mtu": configured_values[0],
-        "runtime_mtu": runtime_mtu,
-        "expected_mtu": EXPECTED_WG1_MTU,
-        "config_sha256": sha256_bytes(raw),
-    }
+    value = egress_contract().require_runtime_egress()
+    return {"policy_sha256": value["policy_sha256"],
+            "status_sha256": sha256_bytes(canonical(value["runtime"])),
+            "nodes": value["policy"]["nodes"],
+            "services": sorted(value["runtime"]["services"])}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -925,6 +2061,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     os.umask(0o077)
+    selected = list(sys.argv[1:] if argv is None else argv)
+    if selected and selected[0].startswith("egress-"):
+        return egress_main(selected)
     arguments = build_parser().parse_args(argv)
     staging_root = arguments.staging_root.resolve(strict=True)
     production_root = arguments.production_root.resolve(strict=True)
@@ -1291,7 +2430,7 @@ def _preflight(
     routes = run_checked(client, "enable:inspect-route", ["ip", "-4", "route", "show", "table", "51830"])
     if "172.30.0.10" not in rules or "172.25.0.3" not in rules or "default dev wg1" not in routes:
         raise DeploymentError("固定 BWG 出口路由策略不完整。")
-    wireguard = verify_wg1_mtu()
+    wireguard = verify_runtime_egress()
     repository_docs = staging_root / "docs" / "repository-docs"
     if repository_docs.is_symlink() or not repository_docs.is_dir():
         raise DeploymentError("暂存文档归档目录不存在或不可信。")
@@ -1695,7 +2834,7 @@ def _post_switch_verify(
         production_doc_root.parent,
         production,
     )
-    wireguard = verify_wg1_mtu()
+    wireguard = verify_runtime_egress()
     run_checked(
         client,
         "enable:compile-production-supervisor",
