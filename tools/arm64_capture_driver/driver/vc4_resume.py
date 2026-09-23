@@ -153,11 +153,14 @@ def inputs(*, prepare: bool = False) -> dict:
 def outputs(evidence: Path, current: dict) -> dict:
     base = Path(os.environ["B"])
     log = evidence / "logs/implementation.log"
-    text = log.read_text()
+    receipt = check_receipt(evidence, current) if (evidence / "receipt.json").exists() else None
+    reuse = receipt["assertions"].get("reuse") if receipt else None
+    reuse_all = bool(reuse and reuse["mode"] == "all")
+    text = "" if reuse_all else log.read_text()
     successes = re.findall(r"^exit_code=(\d+)$", text, re.M)
     tree = current["tree_sha256"]["source"]
     _, _, _, requirements = context()
-    if (successes != ["0"] * len(requirements["requirements"]) or not re.search(r"^GATES_DONE ", text, re.M)
+    if not reuse_all and (successes != ["0"] * len(requirements["requirements"]) or not re.search(r"^GATES_DONE ", text, re.M)
             or f"commit={current['git_commit']}\n" not in text
             or f"gate_tree_sha256={tree}\n" not in text
             or f"gate_tree_sha256_after={tree}\n" not in text):
@@ -179,10 +182,73 @@ def outputs(evidence: Path, current: dict) -> dict:
         image_id=actual_image["image_id"], source_root=base / "source", git_commit=os.environ["C"],
         build_tree=base / "build-tree", frontend_dist_source=base / "frontend-dist")
     return {"parameters_sha256": artifacts.digest(params), "image_id": actual_image["image_id"],
-            "implementation_log": binding(log), "binary": binding(binary),
+            "implementation_log": None if reuse_all else binding(log), "binary": binding(binary),
             "build_inventory_sha256": artifacts.digest(inventory), "frontend_provenance_sha256": artifacts.digest(frontend),
             "source_transition": binding(base / "artifacts/source-transition.json"),
             "built_at_utc": binding(base / "artifacts/built-at-utc.txt")}
+
+
+def open_revision() -> None:
+    """账本已允许新 revision 才承接；候选仍待审核时保持拒绝，不代替作废审核。"""
+
+    _, campaign, manifest, _ = context()
+    _, current = upgrade._current_candidate_revision_record(campaign, manifest)
+    if current is None:
+        initial, supersedes = True, None
+    elif current["candidate_id"] == os.environ["CAND"]:
+        initial = current["revision"] == 1
+        supersedes = current["supersedes"]["candidate_id"] if current["supersedes"] else None
+    else:
+        initial, supersedes = False, current["candidate_id"]
+    result = upgrade.open_candidate_revision(argparse.Namespace(campaign_dir=campaign,
+        candidate_id=os.environ["CAND"], initial=initial, supersedes=supersedes))
+    print(f"REVISION_OPENED r{result['revision']} {result['candidate_id']}")
+
+
+def build_flags(evidence: Path, default: str) -> str:
+    """只换制品且源码相同，保留原 ldflags，避免构建日期本身导致实现测试输入失效。"""
+
+    _, campaign, manifest, _ = context()
+    _, revision = upgrade._current_candidate_revision_record(campaign, manifest)
+    if revision is None or revision["supersedes"] is None:
+        return default
+    path = campaign / "candidates" / revision["supersedes"]["candidate_id"] / "build-receipt.json"
+    if not path.exists():
+        return default
+    previous = artifacts.validate_candidate_build_receipt(read(path))
+    current = bound(evidence / "pre-build.json")["inputs"]
+    if (previous["source"]["git_commit"] != current["git_commit"]
+            or previous["source"]["tree_sha256"] != current["tree_sha256"]["source"]):
+        return default
+    command = previous["build"]["parameters"]["go_build"]["command"]
+    if command.count("-ldflags") != 1 or command.index("-ldflags") + 1 >= len(command):
+        return default
+    return command[command.index("-ldflags") + 1]
+
+
+def early_test_mode(evidence: Path) -> str:
+    """确定必然全量重跑时保留前端／门禁并行；可能复用时等真实构建参数齐全再裁定。"""
+
+    _, campaign, manifest, requirements = context()
+    _, revision = upgrade._current_candidate_revision_record(campaign, manifest)
+    if revision is None or revision["supersedes"] is None:
+        return "full"
+    path = campaign / "candidates" / revision["supersedes"]["candidate_id"] / "build-receipt.json"
+    if not path.exists():
+        return "full"
+    previous = artifacts.validate_candidate_build_receipt(read(path))["build"].get("inputs")
+    if previous is None:
+        return "full"
+    current = bound(evidence / "pre-build.json")["inputs"]
+    known = {"source_tree_sha256": current["tree_sha256"]["source"],
+        "go_mod_sha256": current["dependencies"]["go_mod"]["sha256"],
+        "go_sum_sha256": current["dependencies"]["go_sum"]["sha256"],
+        "vendor_sha256": current["dependencies"]["vendor_sha256"],
+        "go_version": current["toolchain"]["go_version"].split()[2],
+        "node_version": current["toolchain"]["node_version"],
+        "base_images": {key: row["repo_digests"][0] for key, row in current["base_images"].items()},
+        "target_architecture": current["target_architecture"], "requirements_sha256": requirements["requirements_sha256"]}
+    return "full" if any(value != previous[key] for key, value in known.items()) else "deferred"
 
 
 def check_receipt(evidence: Path, current: dict) -> dict:
@@ -214,12 +280,22 @@ def verify(evidence: Path, mode: str) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("prepare", "record-upload-wait", "check"))
+    parser.add_argument("action", choices=("prepare", "record-upload-wait", "check", "open-revision", "build-flags", "early-test-mode"))
     parser.add_argument("--evidence-root", type=Path, required=True)
     parser.add_argument("--mode", choices=("upload-wait", "full"), default="full")
+    parser.add_argument("--default", default="")
     args = parser.parse_args()
     try:
         evidence = args.evidence_root.resolve(strict=True)
+        if args.action == "open-revision":
+            open_revision()
+            return 0
+        if args.action == "build-flags":
+            print(build_flags(evidence, args.default))
+            return 0
+        if args.action == "early-test-mode":
+            print(early_test_mode(evidence))
+            return 0
         if args.action == "prepare":
             write_once(evidence / "pre-build.json", {"schema_version": SCHEMA, "stage": "pre-build",
                                                      "inputs": inputs(prepare=True)})

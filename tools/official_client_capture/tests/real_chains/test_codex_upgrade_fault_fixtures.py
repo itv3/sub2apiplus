@@ -155,16 +155,17 @@ class RuntimeEgressRecoveryTests(unittest.TestCase):
 
 
 class UpgradeFaultFixtureTests(unittest.TestCase):
-    def test_r2_image_only_revision_is_currently_rejected(self):
-        with self.assertRaisesRegex(artifacts.VCArtifactError, "全部相同"):
-            artifacts.build_candidate_revision_seal(
+    def test_r2_image_only_revision_is_accepted_as_build_change(self):
+        seal = artifacts.build_candidate_revision_seal(
                 campaign_id="fixture-upgrade", revision=2, candidate_id="candidate-r2",
                 candidate_commit="a" * 40, source_tree_sha256="1" * 64,
                 image_id="sha256:" + "3" * 64, build_receipt_sha256="c" * 64,
                 vc3_stage_receipt_sha256="d" * 64, sealed_at_utc="2026-09-23T00:00:00Z",
                 superseded={"revision": 1, "candidate_id": "candidate-r1", "git_commit": "a" * 40,
                             "source_tree_sha256": "1" * 64, "image_id": "sha256:" + "2" * 64},
-            )
+        )
+        self.assertEqual(seal["changed_layers"], ["build"])
+        self.assertTrue(seal["identity_change"]["image_changed"])
 
     def test_r3_metadata_only_drift_is_currently_permanent(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -1119,7 +1119,8 @@ def _identity_snapshot(value: Any, label: str) -> dict[str, Any]:
     """旧候选身份快照：git_commit 与 source_tree_sha256 至少一项必须取得。"""
 
     fields = {"git_commit", "source_tree_sha256", "image_id", "build_receipt_sha256", "snapshot_sources"}
-    if not isinstance(value, Mapping) or set(value) != fields:
+    build_fields = {"binary_sha256", "image_digest", "build_parameters_sha256", "build_parameters_input_sha256", "build_inputs"}
+    if not isinstance(value, Mapping) or set(value) not in (fields, fields | build_fields):
         raise VCArtifactError(f"{label} 身份快照字段不闭合")
     commit = value.get("git_commit")
     if commit is not None and (not isinstance(commit, str) or not re.fullmatch(r"^[0-9a-f]{40}$", commit)):
@@ -1139,13 +1140,26 @@ def _identity_snapshot(value: Any, label: str) -> dict[str, Any]:
         raise VCArtifactError(f"{label}.snapshot_sources 非法")
     if commit is None and tree is None:
         raise VCArtifactError(f"{label} 身份快照必须至少含 git_commit 或 source_tree_sha256")
-    return {
+    result = {
         "git_commit": commit,
         "source_tree_sha256": tree,
         "image_id": image,
         "build_receipt_sha256": build,
         "snapshot_sources": list(sources),
     }
+    if build_fields.issubset(value):
+        for field in ("binary_sha256", "build_parameters_sha256", "build_parameters_input_sha256"):
+            _optional_sha256(value[field], f"{label}.{field}")
+        if value["image_digest"] is not None and not IMAGE_ID_RE.fullmatch(str(value["image_digest"])):
+            raise VCArtifactError(f"{label}.image_digest 非法")
+        if value["build_inputs"] is not None:
+            from . import codex_upgrade_candidate_build as candidate_build
+            try:
+                candidate_build.validate_implementation_inputs(value["build_inputs"])
+            except candidate_build.CandidateBuildError as error:
+                raise VCArtifactError(f"{label}.build_inputs 非法：{error}") from error
+        result.update({field: value[field] for field in build_fields})
+    return result
 
 
 def build_candidate_revision(
@@ -1274,6 +1288,28 @@ def validate_candidate_revision_commit(value: Any) -> dict[str, Any]:
     return payload
 
 
+def _revision_identity_diff(current: Mapping[str, Any], previous: Mapping[str, Any]) -> dict[str, Any]:
+    """只比较双方都已取得的实物身份；缺失旧字段不能被解释成身份变化。"""
+
+    return {
+        field: {"before": previous.get(field), "after": current.get(field),
+                "changed": None if previous.get(field) is None or current.get(field) is None
+                else previous[field] != current[field]}
+        for field in ("git_commit", "source_tree_sha256", "image_id", "binary_sha256",
+                      "image_digest", "build_parameters_sha256", "build_parameters_input_sha256")
+    }
+
+
+def _revision_changed_layers(diff: Mapping[str, Any]) -> list[str]:
+    """有输入投影时不把候选改名或目录迁移算成真实参数变化；原始参数 diff 仍完整保留。"""
+
+    parameter_key = ("build_parameters_input_sha256" if diff.get("build_parameters_input_sha256", {}).get("changed") is not None
+                     else "build_parameters_sha256")
+    return [layer for layer, fields in (("source", ("git_commit", "source_tree_sha256")),
+            ("build", ("image_id", "binary_sha256", "image_digest", parameter_key)))
+            if any(diff.get(field, {}).get("changed") is True for field in fields)]
+
+
 def build_candidate_revision_seal(
     *,
     campaign_id: str,
@@ -1286,6 +1322,10 @@ def build_candidate_revision_seal(
     vc3_stage_receipt_sha256: str,
     superseded: Mapping[str, Any] | None,
     sealed_at_utc: str,
+    binary_sha256: str | None = None,
+    image_digest: str | None = None,
+    build_parameters_sha256: str | None = None,
+    build_parameters_input_sha256: str | None = None,
 ) -> dict[str, Any]:
     """seal.json：revision-seal 的结论——新候选最终身份、VC-3 字节一致与同一性变化证明。"""
 
@@ -1298,6 +1338,10 @@ def build_candidate_revision_seal(
             "git_commit": superseded.get("git_commit"),
             "source_tree_sha256": _optional_sha256(superseded.get("source_tree_sha256"), "superseded.source_tree_sha256"),
             "image_id": superseded.get("image_id"),
+            "binary_sha256": superseded.get("binary_sha256"),
+            "image_digest": superseded.get("image_digest"),
+            "build_parameters_sha256": superseded.get("build_parameters_sha256"),
+            "build_parameters_input_sha256": superseded.get("build_parameters_input_sha256"),
         }
         identity_change = {
             "git_commit_changed": (
@@ -1324,12 +1368,28 @@ def build_candidate_revision_seal(
         "candidate_commit": candidate_commit,
         "source_tree_sha256": _sha256(source_tree_sha256, "source_tree_sha256"),
         "image_id": image_id,
+        "binary_sha256": binary_sha256,
+        "image_digest": image_digest,
+        "build_parameters_sha256": build_parameters_sha256,
+        "build_parameters_input_sha256": build_parameters_input_sha256,
         "build_receipt_sha256": _sha256(build_receipt_sha256, "build_receipt_sha256"),
         "vc3_stage_receipt_sha256": _sha256(vc3_stage_receipt_sha256, "vc3_stage_receipt_sha256"),
         "superseded": superseded_payload,
         "identity_change": identity_change,
         "sealed_at_utc": _timestamp(sealed_at_utc, "sealed_at_utc"),
     }
+    field_diff = _revision_identity_diff(
+        {**payload, "git_commit": candidate_commit}, superseded_payload
+    ) if superseded_payload is not None else {}
+    if identity_change is not None:
+        identity_change.update({
+            "binary_sha256_changed": field_diff["binary_sha256"]["changed"],
+            "image_digest_changed": field_diff["image_digest"]["changed"],
+            "build_parameters_changed": field_diff["build_parameters_sha256"]["changed"],
+            "build_parameter_inputs_changed": field_diff["build_parameters_input_sha256"]["changed"],
+        })
+    payload["field_diff"] = field_diff
+    payload["changed_layers"] = _revision_changed_layers(field_diff)
     payload["seal_sha256"] = digest(payload)
     return validate_candidate_revision_seal(payload)
 
@@ -1350,9 +1410,11 @@ def validate_candidate_revision_seal(value: Any) -> dict[str, Any]:
         "sealed_at_utc",
         "seal_sha256",
     }
-    if not isinstance(value, Mapping) or set(value) != required:
+    extended = {"binary_sha256", "image_digest", "build_parameters_sha256", "build_parameters_input_sha256", "field_diff", "changed_layers"}
+    if not isinstance(value, Mapping) or set(value) not in (required, required | extended):
         raise VCArtifactError("候选 revision seal 字段不闭合")
     payload = dict(value)
+    is_extended = extended.issubset(payload)
     if payload.get("schema_version") != CANDIDATE_REVISION_SEAL_SCHEMA:
         raise VCArtifactError("候选 revision seal schema_version 非法")
     _safe_id(payload.get("campaign_id"), "seal campaign_id")
@@ -1365,6 +1427,11 @@ def validate_candidate_revision_seal(value: Any) -> dict[str, Any]:
     image = payload.get("image_id")
     if image is not None and (not isinstance(image, str) or not image):
         raise VCArtifactError("seal image_id 非法")
+    if is_extended:
+        for field in ("binary_sha256", "build_parameters_sha256", "build_parameters_input_sha256"):
+            _optional_sha256(payload[field], f"seal {field}")
+        if payload["image_digest"] is not None and not IMAGE_ID_RE.fullmatch(str(payload["image_digest"])):
+            raise VCArtifactError("seal image_digest 非法")
     _sha256(payload.get("build_receipt_sha256"), "seal build_receipt_sha256")
     _sha256(payload.get("vc3_stage_receipt_sha256"), "seal vc3_stage_receipt_sha256")
     superseded = payload.get("superseded")
@@ -1373,25 +1440,44 @@ def validate_candidate_revision_seal(value: Any) -> dict[str, Any]:
         if superseded is not None or change is not None:
             raise VCArtifactError("r1 seal 不得携带被取代候选")
     else:
-        if not isinstance(superseded, Mapping) or set(superseded) != {
+        old_fields = {
             "revision",
             "candidate_id",
             "git_commit",
             "source_tree_sha256",
             "image_id",
-        }:
+        }
+        if is_extended:
+            old_fields |= {"binary_sha256", "image_digest", "build_parameters_sha256", "build_parameters_input_sha256"}
+        if not isinstance(superseded, Mapping) or set(superseded) != old_fields:
             raise VCArtifactError("r≥2 seal 必须登记被取代候选身份")
         if superseded.get("revision") != revision - 1:
             raise VCArtifactError("seal 被取代的 revision 必须是直接前序")
-        if not isinstance(change, Mapping) or set(change) != {
+        flag_fields = {
             "git_commit_changed",
             "source_tree_changed",
             "image_changed",
-        }:
+        }
+        if is_extended:
+            flag_fields |= {"binary_sha256_changed", "image_digest_changed", "build_parameters_changed", "build_parameter_inputs_changed"}
+        if not isinstance(change, Mapping) or set(change) != flag_fields:
             raise VCArtifactError("r≥2 seal 必须登记同一性变化证明")
-        comparable = [flag for flag in (change.get("git_commit_changed"), change.get("source_tree_changed")) if flag is not None]
-        if not comparable or not any(comparable):
-            raise VCArtifactError("被取代候选的 git_commit／source_tree_sha256 全部相同或不可比：不是新候选")
+        diff = _revision_identity_diff({**payload, "git_commit": commit}, superseded)
+        flags = dict(zip(("git_commit_changed", "source_tree_changed", "image_changed",
+                         "binary_sha256_changed", "image_digest_changed", "build_parameters_changed", "build_parameter_inputs_changed"),
+                        (row["changed"] for row in diff.values())))
+        if any(change[key] is not flags[key] for key in flag_fields):
+            raise VCArtifactError("seal 变化标志与逐字段实物身份不一致")
+        comparable = [change[key] for key in flag_fields if change[key] is not None]
+        if not is_extended:
+            comparable = [change[key] for key in ("git_commit_changed", "source_tree_changed") if change[key] is not None]
+        if (is_extended and not _revision_changed_layers(diff)) or (not is_extended and (not comparable or not any(comparable))):
+            raise VCArtifactError("被取代候选的源码层／构建层全部相同或不可比：不是新候选")
+    if is_extended:
+        diff = _revision_identity_diff({**payload, "git_commit": commit}, superseded) if superseded is not None else {}
+        layers = _revision_changed_layers(diff)
+        if payload["field_diff"] != diff or payload["changed_layers"] != layers:
+            raise VCArtifactError("seal 逐字段 diff 或变化层与实物身份不一致")
     _timestamp(payload.get("sealed_at_utc"), "seal sealed_at_utc")
     _self_digest(payload, "seal_sha256", "候选 revision seal")
     return payload
@@ -3709,6 +3795,7 @@ def build_candidate_build_receipt(
     image_inspection: Mapping[str, Any],
     capability_probe: Mapping[str, Any],
     built_at_utc: str,
+    build_inputs: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """生成 VC-4 Candidate 构建收据并冻结完整身份。"""
 
@@ -3744,6 +3831,8 @@ def build_candidate_build_receipt(
         "capability_probe": dict(capability_probe),
         "built_at_utc": built_at_utc,
     }
+    if build_inputs is not None:
+        payload["build"]["inputs"] = dict(build_inputs)
     payload["receipt_digest"] = digest(payload)
     return validate_candidate_build_receipt(payload)
 
@@ -3863,7 +3952,9 @@ def validate_candidate_build_receipt(
         or not reference.endswith(f"@{manifest_digest}")
     ):
         raise VCArtifactError("Candidate image reference 非法")
-    if not isinstance(build, Mapping) or set(build) != {"build_id", "parameters", "parameters_sha256"}:
+    if not isinstance(build, Mapping) or set(build) not in (
+        {"build_id", "parameters", "parameters_sha256"}, {"build_id", "parameters", "parameters_sha256", "inputs"}
+    ):
         raise VCArtifactError("Candidate build 身份不闭合")
     _safe_id(build.get("build_id"), "Candidate build_id")
     if not isinstance(build.get("parameters"), Mapping) or digest(build["parameters"]) != build.get("parameters_sha256"):
@@ -3935,6 +4026,28 @@ def validate_candidate_build_receipt(
         implementation_tests.get("receipt_digest"),
         "Candidate implementation_tests.receipt_digest",
     )
+    if "inputs" in build:
+        # 承接收据必须与本构建收据绑定同一组输入。此检查位于 control 制品层，
+        # 既有 evidence 读侧仍要求当前 Candidate 和原始实现测试证据完整可重放。
+        from . import codex_upgrade_candidate_build as candidate_build
+        from . import codex_upgrade_vc_receipt as vc_receipt
+        try:
+            inputs = candidate_build.validate_implementation_inputs(build["inputs"])
+            implementation = vc_receipt.validate_build_input_binding(implementation_tests, inputs)
+            if (inputs["source_tree_sha256"] != source["tree_sha256"]
+                    or inputs["target_architecture"] != payload["target_architecture"]
+                    or inputs["requirements_sha256"] != gate_requirements["requirements_sha256"]
+                    or inputs["parameters_sha256"] != digest(candidate_build.implementation_parameter_projection(build["parameters"]))
+                    or inputs["go_version"] != build["parameters"]["input_provenance"]["go_version"]
+                    or inputs["base_images"] != build["parameters"]["input_provenance"]["base_images"]
+                    or inputs["node_version"] != build["parameters"]["frontend"]["node_version"]
+                    or inputs["pnpm_version"] != build["parameters"]["frontend"]["pnpm_version"]
+                    or implementation["subject"]["candidate_id"] != payload["candidate_id"]):
+                raise VCArtifactError("实现测试构建输入与当前构建身份不一致")
+        except (candidate_build.CandidateBuildError, vc_receipt.VCReceiptError, OSError, KeyError) as error:
+            raise VCArtifactError(f"实现测试输入绑定未通过：{error}") from error
+    elif "input_provenance" in build["parameters"]:
+        raise VCArtifactError("新版构建参数缺少实现测试输入证明")
     for name, machine_receipt in machine_receipts.items():
         if not isinstance(machine_receipt, Mapping) or set(machine_receipt) != {
             "path",

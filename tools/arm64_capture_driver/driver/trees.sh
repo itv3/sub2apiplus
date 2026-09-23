@@ -18,9 +18,15 @@ for t in source gate-tree build-tree plan-source; do
 done
 # 承接收据所在提交也必须在 source 仓库对象里（build 阶段从对象取 source-transition 原文）
 git -C "$B/source" cat-file -e "$DC:$RECEIPT" && echo "receipt object present in $DC"
-# 与前序候选的 go.mod/go.sum 逐字一致才复用 vendor
-cmp "$B/source/backend/go.mod" "$PREV_CANDIDATE/source/backend/go.mod"; cmp "$B/source/backend/go.sum" "$PREV_CANDIDATE/source/backend/go.sum"
-cp -a "$PREV_CANDIDATE/build-tree/backend/vendor" "$B/build-tree/backend/vendor"
+# 依赖不变才复用 vendor；依赖变化时重新物化，新输入摘要使实现门禁全部重跑。
+if cmp -s "$B/source/backend/go.mod" "$PREV_CANDIDATE/source/backend/go.mod" && \
+   cmp -s "$B/source/backend/go.sum" "$PREV_CANDIDATE/source/backend/go.sum"; then
+  cp -a "$PREV_CANDIDATE/build-tree/backend/vendor" "$B/build-tree/backend/vendor"
+else
+  ( cd "$B/build-tree/backend" && go mod vendor )
+  test -z "$(git -C "$B/build-tree" status --porcelain --untracked-files=all)"
+  echo '依赖变化：vendor 已重新生成，本轮实现门禁须全量执行'
+fi
 echo "vendor modules.txt sha256=$(sha256sum $B/build-tree/backend/vendor/modules.txt | cut -d' ' -f1)"
 stat -c "%a %n" "$B/source/deploy/docker-entrypoint.sh" "$B/source/deploy/container-healthcheck.sh" "$B/build-tree/deploy/docker-entrypoint.sh" "$B/build-tree/Dockerfile.goreleaser"
 echo "TREES_DONE $(utc_now)"

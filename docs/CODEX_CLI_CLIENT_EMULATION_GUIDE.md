@@ -1652,8 +1652,8 @@ VC-3 只生成未入库的候选 Catalog；纳入同源 candidate 树并构建�
 - **产物**：候选源码树、版本专属测试资产、post-promotion 门禁执行计划、source transition、构建收据和完整 Candidate 身份元组。
 - **完成标志**：实现闭集通过，源码、构建、镜像和 Profile 身份可复算，生产 Active 未改变且尚未发起候选请求。
 - **失败恢复**：固定后的源码、构建、镜像或 Profile 发生变化时建立新 candidate，只重做受影响闭集。
-  只有候选源码变化时，新 candidate 才能在同一 Campaign 内开新 revision 承接，VC-0～VC-3 全部保留（见
-  §4.4.3）；只换构建参数或镜像会被 revision-seal 拒绝，Profile／Catalog 变化要建后继 Campaign。
+  源码层或构建层有真实变化且画像不变时，新 candidate 可在同一 Campaign 内开新 revision，保留 VC-0～VC-3
+  （见 §4.4.3）；只改 `build_id` 不算新候选。Profile／Catalog 变化按批准输入修订流程处理，未支持时建立后继 Campaign。
 
 ### 4.4.1 入库与实现边界
 
@@ -1795,8 +1795,17 @@ checkpoint（r1 为 `control/vc/vc-4-checkpoint.json`，r≥2 为 `control/vc/re
 
 同一命令还做 **revision-seal**：候选必须属于当前 active revision 且账本 active；候选树内的
 `catalog-stage-receipt.json` 必须与 VC-3 阶段收据逐字节相同，不同说明规则分类或目标画像变了，要建后继
-Campaign；r≥2 的候选必须源码层身份（`git_commit` 或 `source_tree_sha256`）有变化，只换镜像会被拒绝。中途断点
-重跑同一命令即可收敛。2026-09-19 之前建立的 Campaign 的隐含 r1 不追溯字节校验。
+Campaign；r≥2 必须源码层或构建层至少一项可比实物身份变化。构建层比较二进制 SHA-256、image ID、镜像 digest
+及构建参数，`seal.json` 保存 `changed_layers`、`identity_change` 和逐字段 `field_diff`；缺失旧字段只记为不可比。
+原始参数摘要保留审计，同时比较剔除候选名称、输出路径和输出摘要后的输入投影，避免目录迁移或改标签冒充真实变化。
+seal 已写但 build receipt／VC-4 checkpoint 未写时，重跑原命令按原字节续作；已有 checkpoint 不重复生成。
+2026-09-19 之前建立的 Campaign 的隐含 r1 不追溯字节校验。
+
+实现测试输入键冻结源码树、go.mod／go.sum／vendor、构建参数输入投影、Go／Node／pnpm 版本、基础镜像 digest、
+架构和批准门禁需求。全部相同才复用前序 revision 的测试；仅构建参数变化时重跑批准的目标平台门禁，复用本机
+`check-egress-spec`；源码、依赖、工具链、基础镜像或门禁需求变化时全部重跑。旧收据没有完整输入证明时也全部重跑。
+复用通过绑定当前 Candidate 的显式承接收据登记 `reused_from=r<N>` 和 execute／reuse 集合，逐级重放原始测试收据，
+不会把旧日志改名为本轮执行。镜像、Docker context、前端 dist 装配和零网络 capability 检查仍实际执行。
 
 ### 4.4.3 Candidate 身份冻结与 VC-5 交接
 
@@ -1811,11 +1820,13 @@ Campaign；r≥2 的候选必须源码层身份（`git_commit` 或 `source_tree_
 | 画像 | `profile_id`、`profile_digest` |
 
 任一字段变化都表示原 Candidate 已失去同一性，必须建立新 candidate；不得通过改写收据维持旧 ID。
-新 candidate 只在源码层身份（`git_commit`／`source_tree_sha256`）变化且画像层身份不变时才能在同一 Campaign
+新 candidate 在源码层或构建层身份真实变化且画像层身份不变时可在同一 Campaign
 内以候选 revision 建立：旧候选先经 `invalidate-candidate preview／apply` 作废（作废收据冻结旧身份快照），再
-`revision-open --candidate-id <新> --supersedes <旧>`；仅构建层或镜像层变化的候选会被 revision-seal 拒绝，
+`revision-open --candidate-id <新> --supersedes <旧>`；仅构建层或镜像层变化也可承接，全部身份相同仍拒绝，
 画像层变化必须建立后继 Campaign。被作废与被取代的候选只读，`compare`／`accept`／`deliver-candidate` 等
 写入口一律拒绝。
+
+新候选的 VC-5 必须从新 attempt 完整执行批准的全部候选 Job，不引用旧镜像的 Job 证据；实现测试的复用不扩展到抓包。
 
 仅容器名、Codex 二进制路径或 Compose 坐标与 Campaign 冻结值不同时，才允许在该 candidate 首个
 attempt 前登记一份写一次的运行坐标覆盖收据；`run` 与 `seal` 必须从同一收据读取生效值，磁盘清单与

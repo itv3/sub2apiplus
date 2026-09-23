@@ -4,15 +4,15 @@
   "files": [
     {
       "path": "README.md",
-      "sha256": "5ceac7882bad63805c76e1f7390a1d7d438ac7fb900ef45aa0e6673fab4f4425",
+      "sha256": "06b3e964d2a7159986c84041f54d766ddce15a63fd67c37a8dc1e419b0c95c0e",
       "mode": "0600",
-      "bytes": 7879
+      "bytes": 8932
     },
     {
       "path": "driver/build.sh",
-      "sha256": "d900c94778929c722c7cbe6a8f6e8fd0da0ba58d75b82de404be2062c7d43076",
+      "sha256": "7b90b22a51b22aed41f314932763ab37ccab58a910954847c161b0e369b767d2",
       "mode": "0700",
-      "bytes": 8982
+      "bytes": 9468
     },
     {
       "path": "driver/build_assertion_config.py",
@@ -82,9 +82,9 @@
     },
     {
       "path": "driver/implementation_gates.py",
-      "sha256": "ee5ae0ad78c83943441e6f67f14dbdde00e2e3a32f6d030fdc3f8ec363e9f2d0",
+      "sha256": "f2246f45935fe57a304c07e23f1bcaa5ecea9ab0f2d39f4647be1e19f1e3ce9e",
       "mode": "0700",
-      "bytes": 6521
+      "bytes": 10497
     },
     {
       "path": "driver/lib.sh",
@@ -142,9 +142,9 @@
     },
     {
       "path": "driver/trees.sh",
-      "sha256": "e9894e3f624872fb81ac403e466ce1e355fbfb1d71eee7c23dc835bd47a77e19",
+      "sha256": "f290673e807899a777e87c068b71cf864190d63923ce8f77eb10da917f00255f",
       "mode": "0700",
-      "bytes": 1883
+      "bytes": 2172
     },
     {
       "path": "driver/upload-manifest.schema.json",
@@ -172,9 +172,9 @@
     },
     {
       "path": "driver/vc4-all.sh",
-      "sha256": "9283873c5bb392ab487afe4d5dc536bca8465a3411d2edf27c60b4e01bc6d415",
+      "sha256": "3ef87f716a5a1662944048c046512cdf6244745d24467612befe2efee8146b37",
       "mode": "0700",
-      "bytes": 4095
+      "bytes": 5096
     },
     {
       "path": "driver/vc4-facts.sh",
@@ -196,15 +196,15 @@
     },
     {
       "path": "driver/vc4.sh",
-      "sha256": "ac61ffd7b5993d4c7f0075be1ddc74798d66b5f46d6eeccd99672b5e0c0e8b17",
+      "sha256": "2664e924290a5473fcb5eea329a941d31c67bc5b398396500be010c90a870673",
       "mode": "0700",
-      "bytes": 8246
+      "bytes": 8287
     },
     {
       "path": "driver/vc4_resume.py",
-      "sha256": "b9b91fcca21d3411093f90965fe2300702b6fc491588f33c7e4fd16e4295b43f",
+      "sha256": "e1dab110432aaf43e859df24bab5e7add4131f85a3d647da094b5a0d8f5f26a3",
       "mode": "0700",
-      "bytes": 13329
+      "bytes": 17389
     },
     {
       "path": "driver/vc5-accept.sh",
@@ -285,5 +285,5 @@
       "bytes": 21976
     }
   ],
-  "manifest_sha256": "ebd6ac95aab2a0ac7cfeb92b14b58309ec3ad58dd163c083e427f9e2eeb20a08"
+  "manifest_sha256": "762fd994cc7850d752aca5a5e75b048c949480b2e9e226cf56855b8d9367b212"
 }

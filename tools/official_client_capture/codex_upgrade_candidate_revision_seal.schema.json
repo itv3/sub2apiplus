@@ -108,7 +108,73 @@
                 "null"
               ],
               "minLength": 1
+            },
+            "binary_sha256": {
+              "oneOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "image_digest": {
+              "oneOf": [
+                {
+                  "type": "string",
+                  "pattern": "^sha256:[0-9a-f]{64}$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "build_parameters_sha256": {
+              "oneOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "build_parameters_input_sha256": {
+              "oneOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
+          },
+          "dependentRequired": {
+            "binary_sha256": [
+              "image_digest",
+              "build_parameters_sha256",
+              "build_parameters_input_sha256"
+            ],
+            "image_digest": [
+              "binary_sha256",
+              "build_parameters_sha256",
+              "build_parameters_input_sha256"
+            ],
+            "build_parameters_sha256": [
+              "binary_sha256",
+              "image_digest",
+              "build_parameters_input_sha256"
+            ],
+            "build_parameters_input_sha256": [
+              "binary_sha256",
+              "image_digest",
+              "build_parameters_sha256"
+            ]
           }
         }
       ]
@@ -144,7 +210,53 @@
                 "boolean",
                 "null"
               ]
+            },
+            "binary_sha256_changed": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "image_digest_changed": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "build_parameters_changed": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "build_parameter_inputs_changed": {
+              "type": [
+                "boolean",
+                "null"
+              ]
             }
+          },
+          "dependentRequired": {
+            "binary_sha256_changed": [
+              "image_digest_changed",
+              "build_parameters_changed",
+              "build_parameter_inputs_changed"
+            ],
+            "image_digest_changed": [
+              "binary_sha256_changed",
+              "build_parameters_changed",
+              "build_parameter_inputs_changed"
+            ],
+            "build_parameters_changed": [
+              "binary_sha256_changed",
+              "image_digest_changed",
+              "build_parameter_inputs_changed"
+            ],
+            "build_parameter_inputs_changed": [
+              "binary_sha256_changed",
+              "image_digest_changed",
+              "build_parameters_changed"
+            ]
           }
         }
       ]
@@ -155,6 +267,269 @@
     },
     "seal_sha256": {
       "$ref": "#/$defs/sha256"
+    },
+    "binary_sha256": {
+      "oneOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "image_digest": {
+      "oneOf": [
+        {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "build_parameters_sha256": {
+      "oneOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "changed_layers": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "source",
+          "build"
+        ]
+      }
+    },
+    "field_diff": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "git_commit": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "before",
+            "after",
+            "changed"
+          ],
+          "properties": {
+            "before": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "after": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "changed": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          }
+        },
+        "source_tree_sha256": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "before",
+            "after",
+            "changed"
+          ],
+          "properties": {
+            "before": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "after": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "changed": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          }
+        },
+        "image_id": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "before",
+            "after",
+            "changed"
+          ],
+          "properties": {
+            "before": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "after": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "changed": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          }
+        },
+        "binary_sha256": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "before",
+            "after",
+            "changed"
+          ],
+          "properties": {
+            "before": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "after": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "changed": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          }
+        },
+        "image_digest": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "before",
+            "after",
+            "changed"
+          ],
+          "properties": {
+            "before": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "after": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "changed": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          }
+        },
+        "build_parameters_sha256": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "before",
+            "after",
+            "changed"
+          ],
+          "properties": {
+            "before": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "after": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "changed": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          }
+        },
+        "build_parameters_input_sha256": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "before",
+            "after",
+            "changed"
+          ],
+          "properties": {
+            "before": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "after": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "changed": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "build_parameters_input_sha256": {
+      "oneOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "$defs": {
@@ -249,5 +624,49 @@
         }
       }
     }
+  },
+  "dependentRequired": {
+    "binary_sha256": [
+      "image_digest",
+      "build_parameters_sha256",
+      "build_parameters_input_sha256",
+      "changed_layers",
+      "field_diff"
+    ],
+    "image_digest": [
+      "binary_sha256",
+      "build_parameters_sha256",
+      "build_parameters_input_sha256",
+      "changed_layers",
+      "field_diff"
+    ],
+    "build_parameters_sha256": [
+      "binary_sha256",
+      "image_digest",
+      "build_parameters_input_sha256",
+      "changed_layers",
+      "field_diff"
+    ],
+    "changed_layers": [
+      "binary_sha256",
+      "image_digest",
+      "build_parameters_sha256",
+      "build_parameters_input_sha256",
+      "field_diff"
+    ],
+    "field_diff": [
+      "binary_sha256",
+      "image_digest",
+      "build_parameters_sha256",
+      "build_parameters_input_sha256",
+      "changed_layers"
+    ],
+    "build_parameters_input_sha256": [
+      "binary_sha256",
+      "image_digest",
+      "build_parameters_sha256",
+      "changed_layers",
+      "field_diff"
+    ]
   }
 }

@@ -75,7 +75,87 @@
       "properties": {
         "build_id": {"$ref": "#/$defs/safeId"},
         "parameters": {"type": "object"},
-        "parameters_sha256": {"$ref": "#/$defs/sha256"}
+        "parameters_sha256": {"$ref": "#/$defs/sha256"},
+        "inputs": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "source_tree_sha256",
+            "go_mod_sha256",
+            "go_sum_sha256",
+            "vendor_sha256",
+            "parameters_sha256",
+            "requirements_sha256",
+            "go_version",
+            "node_version",
+            "pnpm_version",
+            "base_images",
+            "target_architecture"
+          ],
+          "properties": {
+            "source_tree_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "go_mod_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "go_sum_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "vendor_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "parameters_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "requirements_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "go_version": {
+              "type": "string",
+              "pattern": "^go[0-9]+\\.[0-9]+(?:\\.[0-9]+)?(?:[a-z0-9.-]+)?$"
+            },
+            "node_version": {
+              "type": "string"
+            },
+            "pnpm_version": {
+              "type": "string"
+            },
+            "base_images": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "ALPINE_IMAGE",
+                "POSTGRES_IMAGE",
+                "NODE_IMAGE"
+              ],
+              "properties": {
+                "ALPINE_IMAGE": {
+                  "type": "string",
+                  "pattern": "^.+@sha256:[0-9a-f]{64}$"
+                },
+                "POSTGRES_IMAGE": {
+                  "type": "string",
+                  "pattern": "^.+@sha256:[0-9a-f]{64}$"
+                },
+                "NODE_IMAGE": {
+                  "type": "string",
+                  "pattern": "^.+@sha256:[0-9a-f]{64}$"
+                }
+              }
+            },
+            "target_architecture": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$"
+            }
+          }
+        }
       }
     },
     "profile": {

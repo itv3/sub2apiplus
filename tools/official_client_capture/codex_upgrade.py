@@ -18599,6 +18599,11 @@ def _candidate_identity_snapshot(
         "git_commit": None,
         "source_tree_sha256": None,
         "image_id": None,
+        "binary_sha256": None,
+        "image_digest": None,
+        "build_parameters_sha256": None,
+        "build_parameters_input_sha256": None,
+        "build_inputs": None,
         "build_receipt_sha256": None,
         "snapshot_sources": [],
     }
@@ -18617,6 +18622,18 @@ def _candidate_identity_snapshot(
         if isinstance(image_id, str) and image_id:
             snapshot["image_id"] = image_id
         snapshot["build_receipt_sha256"] = file_sha256(build_path)
+        # 有完整构建收据时先复核自摘要；不重启已作废镜像，也不修改历史证据。
+        try:
+            receipt = codex_upgrade_vc_artifacts.validate_candidate_build_receipt(receipt)
+        except codex_upgrade_vc_artifacts.VCArtifactError as error:
+            raise ConfigurationError(f"旧候选构建收据不可信：{error}") from error
+        snapshot["binary_sha256"] = receipt["binary"]["sha256"]
+        snapshot["image_digest"] = receipt["image"]["manifest_digest"]
+        snapshot["build_parameters_sha256"] = receipt["build"]["parameters_sha256"]
+        snapshot["build_inputs"] = receipt["build"].get("inputs")
+        if receipt["build"]["parameters"].get("schema_version") == codex_upgrade_candidate_build.BUILD_PARAMETERS_SCHEMA:
+            snapshot["build_parameters_input_sha256"] = codex_upgrade_candidate_build.digest(
+                codex_upgrade_candidate_build.implementation_parameter_projection(receipt["build"]["parameters"]))
         snapshot["snapshot_sources"].append("build_receipt")
     if snapshot["git_commit"] is None or snapshot["source_tree_sha256"] is None:
         attempts_root = campaign_dir / "candidates" / candidate_id / "attempts"
@@ -51782,6 +51799,20 @@ def record_candidate_build(arguments: argparse.Namespace) -> dict[str, Any]:
     except (OSError, codex_upgrade_candidate_build.CandidateBuildError) as error:
         raise ConfigurationError(f"Candidate 构建实物复算未通过：{error}") from error
 
+    build_inputs = None
+    if "input_provenance" in build_parameters:
+        try:
+            build_inputs = codex_upgrade_candidate_build.collect_implementation_inputs(
+                build_parameters, source_tree_sha256=source_tree_sha256,
+                requirements_sha256=requirements["requirements_sha256"],
+                go_version=image_inspection_receipt["go_build_info"]["go_version"],
+            )
+            codex_upgrade_vc_receipt.validate_build_input_binding(implementation_binding, build_inputs)
+        except (OSError, codex_upgrade_candidate_build.CandidateBuildError, codex_upgrade_vc_receipt.VCReceiptError) as error:
+            raise ConfigurationError(f"实现测试构建输入复核未通过：{error}") from error
+    elif "reuse" in implementation_assertions:
+        raise ConfigurationError("复用实现测试的候选必须冻结完整构建输入来源。")
+
     output = _candidate_build_receipt_path(campaign_dir, candidate_id)
     evidence_root = output.parent / "build-evidence"
     ensure_private_directory(evidence_root, campaign_dir)
@@ -51854,12 +51885,13 @@ def record_candidate_build(arguments: argparse.Namespace) -> dict[str, Any]:
         image_inspection=machine_bindings["image_inspection"],
         capability_probe=machine_bindings["capability_probe"],
         built_at_utc=_utc_now(),
+        build_inputs=build_inputs,
     )
     ensure_private_directory(output.parent, campaign_dir)
     seal: dict[str, Any] | None = None
     if revision_record is not None:
         # revision-seal 第 3～4 步：r≥2 以 invalidation.json 冻结的旧候选身份快照为基准
-        # 证明同一性变化（commit／tree 任一可比字段变化即通过，全同拒绝；image 不强制），
+        # 证明源码层或构建层至少一项实物身份变化，全同仍拒绝，build_id 不参与比较；
         # 先写 seal.json（write-once + 内容核对），再写 build receipt 与 VC-4 checkpoint。
         seal = _seal_candidate_revision(
             campaign_dir,
@@ -51867,6 +51899,11 @@ def record_candidate_build(arguments: argparse.Namespace) -> dict[str, Any]:
             candidate_commit=git_commit,
             source_tree_sha256=source_tree_sha256,
             image_id=str(arguments.candidate_image_id),
+            binary_sha256=binary_binding["sha256"],
+            image_digest=receipt["image"]["manifest_digest"],
+            build_parameters_sha256=receipt["build"]["parameters_sha256"],
+            build_parameters_input_sha256=codex_upgrade_candidate_build.digest(
+                codex_upgrade_candidate_build.implementation_parameter_projection(build_parameters)),
             build_receipt_sha256=codex_upgrade_vc_artifacts.digest(
                 {key: value for key, value in receipt.items() if key not in {"built_at_utc", "receipt_digest"}}
             ),
@@ -51925,6 +51962,10 @@ def _seal_candidate_revision(
     image_id: str | None,
     build_receipt_sha256: str,
     vc3_stage_receipt_sha256: str,
+    binary_sha256: str | None = None,
+    image_digest: str | None = None,
+    build_parameters_sha256: str | None = None,
+    build_parameters_input_sha256: str | None = None,
 ) -> dict[str, Any]:
     """写当前 revision 的 seal.json（同一性变化证明），已存在时按内容核对。"""
 
@@ -51951,6 +51992,10 @@ def _seal_candidate_revision(
             "git_commit": snapshot.get("git_commit"),
             "source_tree_sha256": snapshot.get("source_tree_sha256"),
             "image_id": snapshot.get("image_id"),
+            "binary_sha256": snapshot.get("binary_sha256"),
+            "image_digest": snapshot.get("image_digest"),
+            "build_parameters_sha256": snapshot.get("build_parameters_sha256"),
+            "build_parameters_input_sha256": snapshot.get("build_parameters_input_sha256"),
         }
     try:
         seal = codex_upgrade_vc_artifacts.build_candidate_revision_seal(
@@ -51960,6 +52005,10 @@ def _seal_candidate_revision(
             candidate_commit=candidate_commit,
             source_tree_sha256=source_tree_sha256,
             image_id=image_id,
+            binary_sha256=binary_sha256,
+            image_digest=image_digest,
+            build_parameters_sha256=build_parameters_sha256,
+            build_parameters_input_sha256=build_parameters_input_sha256,
             build_receipt_sha256=build_receipt_sha256,
             vc3_stage_receipt_sha256=vc3_stage_receipt_sha256,
             superseded=superseded,

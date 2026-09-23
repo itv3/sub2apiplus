@@ -4,7 +4,9 @@
 set -Eeuo pipefail; umask 077
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
 E="$1"; C9=${C:0:9}
-test -f "$E/logs/check-egress-spec.log"; test -f "$E/logs/implementation.log"
+if [ ! -f "$E/receipt.json" ]; then
+  test -f "$E/logs/check-egress-spec.log"; test -f "$E/logs/implementation.log"
+fi
 TREE=$(python3 -c "
 from pathlib import Path
 from tools.official_client_capture import codex_upgrade as cu
