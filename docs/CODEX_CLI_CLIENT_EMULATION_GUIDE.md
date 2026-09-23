@@ -1279,13 +1279,30 @@ Framework §5.3 是升级总操作入口并规定 `VC-0～VC-6` 顺序；本部�
 ## 4.0 VC-0 冻结升级输入
 
 - **输入**：当前 Active／Previous、目标版本及官方产物、账号与 API Key 身份、ARM64 环境、用途、预算和回退点。
-- **操作与工具**：完成 DOC-PRE，执行 `preflight_only` plan、P0 离线门禁和 `campaign-run` 分批演练；随后只通过 `codex_upgrade_vc0_closeout.py` 原子冻结 Formal Campaign 总计划并立即派发首批。
-- **产物**：DOC-PRE／P0 收据、时间账本、工具与环境摘要、Campaign 总计划和首个 Formal 批次清单。
+- **操作与工具**：按下方执行顺序完成离线准备和发布认证，再建 Formal Campaign：官方证据能复用就一律用 `reuse-official-evidence`，证据失效时才用 `codex_upgrade_vc0_closeout.py` 原子新建并立即派发 VC-1 首批。
+- **产物**：时间账本、ARM64 环境收据、Job 与 atomic-double 演练收据、发布认证、Campaign 总计划和首个 Formal 批次清单。
 - **完成标志**：工具阻断为零、网络与目录有效、live 请求为零、回退点可用。
-- **失败恢复**：正式 Campaign 前停线，工具缺口拆成独立变更；修复后只重跑 VC-0。
+- **失败恢复**：哪一步失败修哪一步，修好后从该步接着做；已通过且绑定身份未变的收据不重做。
 
 VC-0 只回答“本次升级是否具备安全开工条件”。本阶段不收集目标 wire、不修改画像或实现、不创建
 candidate，也不改生产 selector；这些工作分别从 VC-1、VC-3、VC-4 和 VC-6 开始。
+
+执行顺序如下。第 1～8 步由 ARM64 驱动链 `tools/arm64_capture_driver` 的 `stage1.sh` 完成，第 9～10 步由
+`stage2.sh` 完成；参数全部来自驱动链参数文件，用法见驱动链 README。
+
+| 步骤 | 做什么 | 命令或脚本 |
+|---:|---|---|
+| 0 | 受管工具已受监督部署到 ARM64，驱动链已按当前部署收据安装 | `tools/arm64_supervised_deploy.py`、`tools/arm64_capture_driver/install.py install` |
+| 1 | 派发前检查：驱动安装复验、磁盘水位、项目总账 | `guard.sh pre-plan` |
+| 2 | 零请求 smoke | `codex_upgrade_zero_request_smoke` |
+| 3 | 建时间账本，总预算不超过项目总账截止时间 | `codex_upgrade_timing_ledger create` |
+| 4 | ARM64 环境收据（§4.0.3） | `codex_upgrade_arm64_environment_receipt collect／finalize --phase p0` |
+| 5 | 时间账本 checkpoint | `codex_upgrade_timing_ledger checkpoint` |
+| 6 | 预检 Campaign | `codex_upgrade plan --campaign-mode preflight_only` |
+| 7 | 完整 Job 演练（§4.0.3） | `codex_upgrade_job_rehearsal_receipt collect／finalize` |
+| 8 | atomic-double 演练：在两个互相独立的空根里各跑一遍 VC-0→VC-1 原子闭环 | 在 `capture-cli` 容器内执行 `codex_upgrade_campaign_run_rehearsal_receipt atomic-double-collect` |
+| 9 | 签发发布认证（§4.0.5） | 策略兼容认证 → 策略激活认证 → pre-A3 路径认证 → `certify_release issue／verify` |
+| 10 | 建 Formal Campaign（§4.0.4） | 默认 `reuse-official-evidence`，随后用 `align-ledger.sh` 对齐账本；证据失效时改用 `codex_upgrade_vc0_closeout`，并先按 §4.0.1 生成 P0 门禁收据 |
 
 ### 4.0.1 DOC-PRE 与 P0：冻结清单和执行边界
 
@@ -1293,7 +1310,8 @@ candidate，也不改生产 selector；这些工作分别从 VC-1、VC-3、VC-4 
 和 §5.3.5 为准；Codex 监督器规则见 [§4.7](#codex-4-7)，固定 ARM64 坐标见 §4.0.3。本节只列 Codex
 Campaign 在 P0 中必须落盘的具体输入。
 
-DOC-PRE 先登记并审核本次 maintenance transition；合并后从干净 HEAD 执行 P0。路径级
+DOC-PRE 是开工前的文档登记：先登记并审核本次 maintenance transition，合并后从干净 HEAD 执行 P0。P0 是
+VC-0 的离线门禁，包括本节的冻结清单与离线验证和 §4.0.3 的环境检查。路径级
 `from_sha256` 必须承接上一份机器 transition 的 `to_sha256`，`base_commit` 不能代替这条摘要链。
 `UpgradeTimingLedger` 从 DOC-PRE 首项开始，不能在正式取证时重新起算。
 
@@ -1324,30 +1342,34 @@ python3 tools/official_client_capture/codex_upgrade.py plan \
 `plan --rule-manifest` 绑定 baseline 的 `codex_upgrade_rules_<baseline>.json`；目标版本的
 `candidate_rule_expectations_<target>.json` 只用于候选断言预检，不能代替 baseline 规则清单。
 
-最低离线验证固定为：
+最低离线验证固定为（走复用入口建 Campaign 时，P0 门禁收据沿用前序 Campaign 冻结的绑定，第 1 项不必重跑）：
 
 1. 在干净 HEAD 运行 `make test-capture-tools` 和 `make check-egress-spec`，记录命令、摘要、退出码及
-   passed／failed／approved_skip／unexpected_skip；正式结果要求 `unexpected_skip=0`。
+   passed／failed／approved_skip／unexpected_skip；正式结果要求 `unexpected_skip=0`。在 ARM64 上后台运行时
+   必须用 `setsid -f … < /dev/null` 启动，不能用 `nohup`：子进程会继承“忽略 SIGHUP”，监督器的挂断检测用例
+   必然失败。
 2. 核对受管工具树、ARM64 执行副本、测试树和 finalizer 同源；目标版本、场景或证据标签中的旧版本硬编码
    必须被门禁识别。
 3. 冻结 Campaign 总计划，并从当前已知输入编译首个不可变 Formal 批次，明确本批次的
    `execute_items`、`reuse_items`、输入摘要和直接依赖；后续批次只能从前序封存输出生成。执行集合为空时
    必须生成 `incremental-noop`。
 
-历史夹具回归、ARM64 实规模成本检查与全部冻结 Job 的离线 rehearsal、以及 `/capture/staging` 内的
-atomic-double 双跑，自 C 阶段起不再是 P0 逐项输入：它们由 §4.0.5 的受管工具发布认证在签发时重放并
-合成，P0 收据只以 `release_certification` 角色绑定发布认证文件。
+历史夹具回归、ARM64 实规模 Job 演练和 `/capture/staging` 内的 atomic-double 双跑不逐项作为 P0 输入：
+它们由 §4.0.5 的发布认证在签发时重放并合成，P0 收据只以 `release_certification` 角色绑定发布认证文件。
 
-所有 P0 输出都必须携带输入、工具摘要、原始错误、退出码和临时资产 inventory。受管工具在 Campaign 期间
-的变化按策略 v2 分层处置：`wire_producer` 变化只经两阶段 transition 补跑受影响 Job，全部受影响则建普通
-Formal 后继；`evidence_semantics` 变化追加 evaluation epoch，只重跑离线处理；`policy` 变化建新 Campaign；
-`control` 变化只重跑控制门禁。整树版本不再直接作为失效判据，但工具功能缺口仍必须在 Formal Campaign
-前拆成独立变更、重新签发发布认证并重新执行 P0；不得在正式 Campaign 上边运行边修工具。
+所有 P0 输出都必须携带输入、工具摘要、原始错误、退出码和临时资产 inventory。
+
+Campaign 进行中发现受管工具缺陷：一律走正式变更修复（提交、承接、受监督部署），禁止直接改 ARM64 上的
+受管工具文件；修好后按工具身份策略 v2 的分层只重跑受影响部分，在原 Campaign 上接着跑。`wire_producer`
+变化经两阶段 transition 补跑受影响 Job（全部受影响时建普通 Formal 后继）；`evidence_semantics` 变化追加
+evaluation epoch，只重跑离线处理；`control` 变化只重跑控制门禁。例外是 `policy` 层：工具拒绝在原 Campaign
+上继续，必须先签策略兼容认证与激活认证，再以新 Campaign 承接。发布认证绑定的是签发时的部署收据，工具
+重新部署后，下次建 Campaign 前要重新签发。
 
 ### 4.0.2 Codex 专用身份、用途与检查点
 
 Campaign、ApprovalFact、candidate、attempt 和 evaluator run 的通用身份边界只以 Framework §3.3、
-§5.3.4 为准。Codex 轨道补充三项约束：五份批准清单及其联合摘要属于 ApprovalFact 身份；
+§5.3.4 为准。Codex 轨道补充三项约束：五份批准清单（见 [§4.2](#codex-vc-2)）及其联合摘要属于 ApprovalFact 身份；
 `candidate-runtime-override` 只能在首个 attempt 前改变已登记的容器名、Codex 二进制路径或 Compose 坐标；
 该接口若接受账号、API Key、权限、模型可见性、源码、镜像、Profile 或证据根字段，必须在 P0 记为工具阻断，
 不得依靠操作员“不传这些参数”规避。
@@ -1369,7 +1391,7 @@ planned → official_sealed → profile_approved → candidate_sealed → compar
 
 `ready` 不代表生产 Active。生产状态由 §4.6 的 activation、运行镜像和 selector 事实独立证明；历史
 Campaign／candidate／attempt／收据只读，不得覆盖。旧 `successor／control-epoch／evaluation-transition`
-仅按附录 A 的审计说明读取，新 Campaign 禁止执行。
+仅按[历史审计 §2](CODEX_CLI_CLIENT_EMULATION_HISTORY_AUDIT.md#codex-0151-historical-recovery)读取，新 Campaign 禁止执行。
 
 ### 4.0.3 ARM64 参数与离线预演
 
@@ -1384,7 +1406,8 @@ Campaign，也不进入证据身份。
 |---|---|
 | Sub2API 容器 IP | `172.25.0.3` |
 | `capture-cli` 容器 IP | `172.30.0.10` |
-| 公网出口与实际出口路由 | `144.34.230.210`，经 BWG；以两个容器的实际出口探针为准 |
+| 其余容器 IP | `sub2apiplus_sub2api-network` 上五个容器全部静态固定：sub2api `172.20.0.2`、redis `.3`、postgres `.4`、keeper `.5`、capture-cli `.6`。环境收据把每个网络的 IPv4 都计入连续性身份，未固定的地址在 compose 重建后会漂移，被判环境污染 |
+| 公网出口与实际出口路由 | 以当次 ARM64 环境收据冻结的出口为准（2026-09-23 为 `144.34.230.210`，经 BWG）；以两个容器的实际出口探针为准 |
 | TLS 栈探针 | `capture-cli` 内 `codex doctor --json --no-color` 无凭据探针的检查状态与报告摘要 |
 | 容器镜像 digest | `capture-cli` 与 `sub2apiplus` 运行镜像的 OCI digest |
 | Codex 二进制 | `/opt/codex-<target>/bin/codex` 与 `codex-code-mode-host` 的 SHA-256 |
@@ -1405,11 +1428,13 @@ P0 健康检查（不影响证据字节，不进入冻结身份）：
 | 宿主临时运行子树 | `/root/docker/capture-cli/data/runtime`，只承载可恢复的运行期临时文件 |
 | 挂载 inode | 四个可写目标与对应宿主子树的设备号、inode、所有者和权限一致 |
 | `wg1` MTU | `1420`；同时核对宿主持久值、运行值和对端值 |
-| `wg1` Endpoint | `144.34.230.210:51830`；必须使用固定 IPv4，禁止域名解析或对端漫游回 IPv6 |
+| `wg1` Endpoint | 以当次环境收据为准（2026-09-23 为 `144.34.230.210:51830`）；必须使用固定 IPv4，禁止域名解析或对端漫游回 IPv6 |
 | 转发 TCP MSS | 双向共四条：`172.25.0.3/32` 与 `172.30.0.0/16` 出 `wg1` 的 SYN 执行 `TCPMSS --clamp-mss-to-pmtu`；由 `wg1` 回到两个目标的 SYN／SYN-ACK 在 MSS 大于 `1380` 时执行 `TCPMSS --set-mss 1380` |
 
 宿主的 state、runtime、work、evidence、control、audit、staging 和 archive 全部位于数据根；不得直接在
-`/root` 创建源码树、bundle、patch、worktree、恢复树或抓包目录。后续宿主命令统一先声明：
+`/root` 创建源码树、bundle、patch、worktree、恢复树或抓包目录。往 ARM64 传文件只能解包到数据根下的子目录
+再 `chown`，禁止解包到 `/root`：macOS 打的 tar 包带 `.` 条目，会把 `/root` 属主改成 501，sshd 随即拒绝所有
+公钥登录。后续宿主命令统一先声明：
 
 ```bash
 export CAPTURE_HOST_PROJECT_ROOT=/root/docker/capture-cli
@@ -1418,11 +1443,11 @@ export CAPTURE_CONTAINER_ROOT=/root/oauth-capture
 ```
 
 P0 必须从 Compose 渲染结果和 `docker inspect capture-cli` 同时验证挂载、镜像、固定 IP、默认路由、
-BWG 公网出口，以及 `wg1` 的持久／运行时 MTU、固定 IPv4 Endpoint 和四条双向持久／运行时 MSS 规则；
+冻结的公网出口，以及 `wg1` 的持久／运行时 MTU、固定 IPv4 Endpoint 和四条双向持久／运行时 MSS 规则；
 脚本不得修改网络、NAT／iptables、WireGuard 或容器地址来迁就测试。两个容器还必须分别对
 `/backend-api/wham/config/bundle` 与 `/v1/models` 连续完成三次 DNS／TCP／TLS／HTTP 探针；单次 ipify
 成功不能替代这组启动前就绪性门禁。出站 curl 成功也不能代替 Codex Rust TLS 栈：P0 还必须在
-`capture-cli` 内以 `/opt/codex-0.154.0/bin/codex doctor --json --no-color` 执行一次实际探针，使用
+`capture-cli` 内以 `/opt/codex-<target>/bin/codex doctor --json --no-color` 执行一次实际探针，使用
 `/root/docker/capture-cli/data/runtime` 到 `/capture/runtime` 的临时 `0700` 空 `CODEX_HOME`，并以
 `env -i` 清空继承环境。该探针不得携带账号或凭据、不得发送模型请求；其整体退出码／状态应仅因
 `auth.credentials=fail` 而为 `1／fail`，同时必须满足 `config.load=ok`、
@@ -1440,34 +1465,29 @@ TypeScript；禁止临时安装依赖、复制 `node_modules` 或切换工具链
 | P0 检查 | 必须证明 |
 |---|---|
 | 目录与挂载 | build context、env file、业务 bind source 和全部写入均在登记根内；`/root` 第一层无本轮污染 |
-| 网络与 TLS | `sub2apiplus` 与 `capture-cli` 使用本节固定地址并经 BWG 同一出口；DNS、证书和 MTU 可复算 |
+| 网络与 TLS | `sub2apiplus` 与 `capture-cli` 使用本节固定地址并经同一冻结出口；DNS、证书和 MTU 可复算 |
 | 运行隔离 | 每个 attempt 使用独立、权限为 `0700` 的 `HOME／CODEX_HOME`，不读取其他账号或前序缓存 |
 | 模型目录 | Main／Lite 仅各执行一次 initialize-only；不得用 thread、turn、Responses 或 WS 请求预热 |
 | 环境恢复 | 端口、hosts、CA、模型映射、relay、容器和托管字段具备 before／after 恢复语义 |
 
-旧分批演练的 `campaign_run_rehearsal_receipt.py collect` 从 preflight VC-0 checkpoint 连续编译两个真实
-VC batch，在两个独立父监督器中执行零网络
-合成动作并封存 checkpoint；第三批只漂移原始 deadline，必须在创建父 run 和执行动作前失败关闭。
-`replay` 会重新核对批次、checkpoint、实际执行 manifest、动作事实、父监督器终态和完整临时资产清单。
+Job 演练（`codex_upgrade_job_rehearsal_receipt.py collect／finalize／replay`）必须证明：
 
-Job 演练的 `codex_upgrade_job_rehearsal_receipt.py collect` 检查路径、依赖、语法、二进制、bubblewrap 和
-zstd，并在 `runs／runtime` 内创建唯一临时对象，
-从两个容器别名交叉验证写入和同源映射；另以 P0 强制门禁执行真实
-`campaign-run v2 → 父 CampaignLease → Job 首次失败加两次重试` 生命周期。每轮 Job 都在
-`capture-cli` 内通过 `bwrap --unshare-net` 使用同一固定证据根并以非零码退出，宿主编排器必须依次生成
-`.failed-attempt1／2／3`，再从宿主路径、`/capture` 和 `/root/oauth-capture` 校验 device、inode 与 marker，
-最后由父监督器有界清理本轮随机目录。父 run 必须为 `stopped`、`audit_incomplete=false`，三轮 Job／step
-事件全部闭合且 `live_request_count=0`。收据必须携带
-`failure_lifecycle_probe_sha256`；只有 storage 探针的历史收据仍可只读重放，但不得用于新 Formal。
-任一 Job 失败都必须先能形成失败收据并独立重放；失败、缺项、环境漂移或目标场景／工具摘要不一致时
-禁止创建 Formal Campaign。上述三份 rehearsal receipt 由 §4.0.5 的发布认证在签发时重放并绑定；
-Formal 创建只绑定发布认证，并从其中恢复 Job rehearsal 绑定再次独立重放。
-Codex 0.154 的 Cloud Config Bundle 属于全部 Job 共享的启动前置条件；若 stderr 出现其 15 秒等待超时，
-编排器必须在首个 Job 的首次失败后将其标记为 Campaign 全局前置条件，封存该失败项并把其余项保持为
-`pending`，随后立即停线。禁止继续当前 Job 的内部重试或启动后续 Job。
+- 路径、依赖、语法、二进制、bubblewrap 和 zstd 齐全；在 `runs／runtime` 内创建的临时对象能从两个容器别名
+  交叉验证写入与同源映射；
+- 真实走通 `campaign-run v2 → 父 CampaignLease → Job 首次失败加两次重试`：Job 在 `capture-cli` 内经
+  `bwrap --unshare-net` 故意失败，宿主依次生成 `.failed-attempt1／2／3`，并从宿主路径、`/capture` 和
+  `/root/oauth-capture` 核对 device、inode 与 marker；父 run 必须为 `stopped`、`audit_incomplete=false`，三轮
+  事件全部闭合且 `live_request_count=0`，收据带 `failure_lifecycle_probe_sha256`。
 
-创建运行目录前，ARM64 根文件系统须同时满足使用率低于 70% 且可用空间不少于 30 GiB。达到水位后只能
-按 manifest 清理未被收据引用的可再生缓存、worktree、镜像层和 staging，禁止删除证据或无界扫描。
+campaign-run 分批演练（`campaign_run_rehearsal_receipt.py collect`）是可选项：连续编译两个真实批次，在两个
+独立父监督器中零网络执行；第三批只漂移原始 deadline，必须在动作前失败关闭。
+
+任一演练失败、缺项、环境漂移或目标场景／工具摘要不一致时，禁止建 Formal Campaign。上述演练收据都由
+§4.0.5 的发布认证在签发时重放并绑定；建 Formal Campaign 时只绑定发布认证。
+
+创建运行目录前，ARM64 根文件系统须同时满足已用 ≤69% 且可用 ≥30 GiB（工具门禁
+`root-69-percent-and-30-gib/v1`），驱动链派发前另要求可用 ≥40 GiB。达到水位后只能按 manifest 清理未被
+收据引用的可再生缓存、worktree、镜像层和 staging，禁止删除证据或无界扫描。
 
 ### 4.0.4 退出条件与阻断处置
 
@@ -1475,17 +1495,42 @@ VC-0 的机器退出条件固定为：
 
 ```text
 P0 收据通过
-∧ 双向四条 MSS 与 Codex 0.154 Rust TLS 无凭据探针通过
+∧ 双向四条 MSS 与目标版本 Codex Rust TLS 无凭据探针通过
 ∧ 工具阻断为零
 ∧ 发布认证收据有效，且当前受管工具部署收据的五摘要与之一致
 ∧ 网络、目录、资源水位和回退点有效
 ∧ live_request_count = 0
-⇒ 由原子收口工具创建新的 Formal Campaign，封存总计划并在同一进程内启动 VC-1 首批动作
+⇒ 建 Formal Campaign：官方证据可复用时用 reuse-official-evidence；证据失效时由原子收口工具新建，
+  封存总计划并在同一进程内启动 VC-1 首批动作
 ```
 
 工具、Schema、场景、依赖、账号、权限、模型可见性、官方产物、环境、成本、磁盘或时间预算任一不满足，
 均不得创建 Formal Campaign；按 Framework §5.3.4 给出最后 checkpoint、根因和唯一下一动作。全部通过后，
-使用唯一入口：
+按官方证据能否复用选择入口：
+
+| 情况 | 入口 |
+|---|---|
+| 官方证据可复用（默认） | `reuse-official-evidence`：只读导入前序 Campaign 已封存的官方证据，VC-1 零请求完成 |
+| 目标版本、官方产物、平台、账号权限、模型可见性或证据语义有变化 | `codex_upgrade_vc0_closeout`：原子新建 Formal Campaign 并启动 VC-1 取证 |
+
+复用入口（驱动链 `stage2.sh` 的实际形态）：
+
+```bash
+python3 -m tools.official_client_capture.codex_upgrade reuse-official-evidence \
+  --predecessor-campaign-dir "$PREDECESSOR_CAMPAIGN" \
+  --campaign-dir "$FORMAL_CAMPAIGN" --campaign-id "$FORMAL_CAMPAIGN_ID" \
+  --codex-account-id <Codex 账号 ID> \
+  --job-rehearsal-root "$JOB_REHEARSAL_ROOT" --job-rehearsal-receipt receipt.json \
+  --recovery-timing-ledger-dir "$TIMING_LEDGER" --recovery-timing-receipt <时间账本 checkpoint> \
+  --recovery-arm64-environment-root "$ARM64_ENVIRONMENT_ROOT" --recovery-arm64-environment-receipt receipt.json \
+  --predecessor-stop-ledger-dir "$PREDECESSOR_STOP_LEDGER" --predecessor-stop-receipt <前序停线收据>
+```
+
+复用入口沿用前序 Campaign 冻结的 P0 与发布认证绑定，只换新的时间账本（新目录、新 upgrade-id）、ARM64
+环境收据和完整 Job 演练收据，并校验新账本与前序停线账本精确衔接。导入后时间账本仍停在 active VC-0，
+要用驱动链 `align-ledger.sh` 追加“VC-0 完成、VC-1 开始、VC-1 完成”三条事件，才能进入 VC-2。
+
+重新取证入口：
 
 ```bash
 python3 -m tools.official_client_capture.codex_upgrade_vc0_closeout \
@@ -1521,21 +1566,20 @@ VC-1 开始事件，再在同一 Python 进程调用一次 `campaign-run`。任�
 
 ### 4.0.5 受管工具发布认证
 
-自 C 阶段起，受管工具树的每次发布都必须签发 `tool-release-certification/v1`（`certify_release.py`），
-它替换 A2.6 的 `policy-activation-certification/v1`，是 VC-0 收口、Formal `plan` 与
-`reuse-official-evidence` 唯一接受的工具就绪证明。签发时逐项重放并绑定：
+受管工具每次受监督部署后，都要签发一份发布认证 `tool-release-certification/v1`（`certify_release.py`）。
+它是建 Formal Campaign 时接受的工具就绪证明，绑定当前部署收据的策略版本和五摘要：`policy_sha256`、
+`wire_producer_sha256`、`evidence_semantics_sha256`、`control_sha256`、`tool_files_sha256`。签发链：
 
-1. 当前 ARM64 受管工具部署收据（五摘要与 `policy_version` 必须等于当前工具树）；
-2. `pre-a3-path-certification/v1`（§4.0.1 的历史夹具回归：reconciler 两个分支、先入账后判定、恢复预览
-   与批准、batch 补齐、`accounting_resolved`、两阶段 wire transition、evaluation epoch、策略 v2 seal 分支、
-   从 `awaiting_receipts` 只读导入、两步式权限收口，以及 2026-09-16 增补的 VC-2～VC-6 派发链：只读导入
-   Campaign 的 no-op 首批引导、总账 admission、账本阶段事件、checkpoint 链、停线账本拒绝与失败停线），且其绑定的
-   部署收据必须就是本次发布认证的部署收据；发布认证据此把 `authorized_scopes` 扩展到 VC-2～VC-6；
-3. ARM64 全量 Job rehearsal 收据（`codex_upgrade_job_rehearsal_receipt.py collect／finalize／replay`，
-   必须带 `failure_lifecycle_probe_sha256`）；
-4. `/capture/staging` 内的 atomic-double 双跑收据（`campaign_run_rehearsal_receipt.py atomic-double-collect／
-   atomic-double-replay`，工具身份必须来自当前树）；
-5. 可选的 campaign-run 分批演练收据（需给出 preflight Campaign 目录）。
+1. 策略兼容认证：`codex_upgrade_policy_certification compatibility --previous-policy …`。只在工具身份策略版本
+   变化时签一次，之后各轮复用；
+2. 策略激活认证：`codex_upgrade_policy_certification activation --deployment-receipt … --compatibility-receipt …`。
+   每次部署签一次；
+3. pre-A3 路径认证：`codex_upgrade_pre_a3_certification run --deployment-receipt … --policy-activation …`。重放
+   reconciler、对账、恢复预览、两阶段 wire transition、evaluation epoch、只读导入、权限收口和 VC-2～VC-6
+   派发链等历史夹具回归，并把 `authorized_scopes` 扩展到 VC-2～VC-6；其绑定的部署收据必须就是本次部署收据；
+4. 发布认证：签发时逐项重放并绑定部署收据、pre-A3 认证、完整 Job 演练收据（必须带
+   `failure_lifecycle_probe_sha256`）、atomic-double 收据（工具身份必须来自当前树），以及可选的 campaign-run
+   分批演练收据（需给出预检 Campaign 目录）。
 
 ```bash
 python3 -m tools.official_client_capture.certify_release issue \
@@ -1544,20 +1588,22 @@ python3 -m tools.official_client_capture.certify_release issue \
   --policy-activation "$POLICY_ACTIVATION" \
   --job-rehearsal-root "$JOB_REHEARSAL_ROOT" --job-rehearsal-receipt receipt.json \
   --atomic-rehearsal-root "$ATOMIC_REHEARSAL_HOST_ROOT" --atomic-rehearsal-receipt receipt.json \
+  --atomic-container capture-cli --data-root "$CAPTURE_HOST_DATA_ROOT" \
   --output "$RELEASE_CERTIFICATION"
 
 python3 -m tools.official_client_capture.certify_release verify \
   --certification "$RELEASE_CERTIFICATION"
 ```
 
+ARM64 宿主无法直接复算容器挂载合同，所以要用 `--atomic-container` 与 `--data-root` 在 `capture-cli` 容器内
+重放 atomic-double。
+
 收据只写一次，`superseded_by` 非空即失效；`verify` 只核对自摘要、五摘要与各绑定文件摘要，不重跑演练。
 P0 门禁收据的 evidence 角色固定为 `check_egress_spec`、`release_certification`、`rollback`、
 `test_capture_tools` 四个，`assertions.release_certification_sha256` 与 `release_certification` 角色文件
 都必须等于发布认证文件的 SHA-256。任一绑定文件漂移、部署收据五摘要变化或受管树再次变化，都必须重新部署、
-重新签发发布认证并重新执行 P0。C3 之前签发的历史 P0 收据（断言为 `job_rehearsal_sha256` 与
-`campaign_run_rehearsal`，角色含 `job_rehearsal` 与 `campaign_run_rehearsal`）只能由 `replay` 只读重放，用于
-加载策略 v5 之前创建的 0.154 首轮 Formal Campaign 的冻结控制；`finalize` 不再签发该形状，策略 v5 起创建的
-Formal Campaign 一律要求 `release_certification` 绑定。
+重新签发发布认证；走重新取证入口时还要重新执行 P0。更早形状的历史收据只按
+[历史审计 §6](CODEX_CLI_CLIENT_EMULATION_HISTORY_AUDIT.md#codex-0154-release-certification-history)只读解释。
 
 <a id="codex-vc-1"></a>
 ## 4.1 VC-1 收集目标证据
@@ -3149,6 +3195,10 @@ legacy 批次模型的预派发停线收据补写条款，以及 0.154.0 首轮�
 v3 单次恢复条款，都只对历史 Campaign 有效，已于 2026-09-22 移入
 [历史审计 §5.3／§5.4](CODEX_CLI_CLIENT_EMULATION_HISTORY_AUDIT.md#codex-0154-transitional-recovery-clauses)；
 新 Campaign 的中断统一由 `reconcile-attempt` 对账承接。
+
+自 0.154 起，Codex 的 Cloud Config Bundle 是全部 Job 共享的启动前置条件。stderr 出现其 15 秒等待超时时，
+编排器在首个 Job 的首次失败后把它标记为 Campaign 全局前置条件，封存该失败项、其余项保持 `pending`，随后
+立即停线；禁止继续当前 Job 的内部重试或启动后续 Job。
 
 ### Codex 评估失败局部恢复与断点续跑（2026-09-20 改造 5）
 

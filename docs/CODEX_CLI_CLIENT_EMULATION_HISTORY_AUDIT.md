@@ -191,3 +191,20 @@ capture、classify、profile、compare、accept、resume 及 canonical 写命令
 旧恢复机制及 Kilo 历史事实只按
 [历史审计](CODEX_CLI_CLIENT_EMULATION_HISTORY_AUDIT.md#codex-0151-historical-recovery)读取，不得成为新 Campaign
 的前置条件。
+
+<a id="codex-0154-release-certification-history"></a>
+## 6. 0.154 工具改造期的发布认证沿革（只读，2026-09-23 自指南移入）
+
+下列是 0.154 工具改造期间（改造阶段 A2.5～C3、工具身份策略 v5 之前）的认证形状，只用于读懂历史收据，
+不是新 Campaign 的执行条件：
+
+- 改造 C 阶段起，历史夹具回归、ARM64 实规模 Job 演练和 atomic-double 双跑不再逐项作为 P0 输入，改由发布认证
+  在签发时重放合成。发布认证 `tool-release-certification/v1` 替换了 A2.6 的 `policy-activation-certification/v1`，
+  成为 VC-0 收口、Formal `plan` 与 `reuse-official-evidence` 接受的工具就绪证明；策略激活认证此后只作为
+  pre-A3 与发布认证的输入签发。
+- C3 之前签发的历史 P0 收据（断言为 `job_rehearsal_sha256` 与 `campaign_run_rehearsal`，角色含
+  `job_rehearsal` 与 `campaign_run_rehearsal`）只能由 `replay` 只读重放，用于加载策略 v5 之前创建的 0.154
+  首轮 Formal Campaign 的冻结控制；`finalize` 不再签发该形状，策略 v5 起创建的 Formal Campaign 一律要求
+  `release_certification` 绑定。
+- 只有 storage 探针、不带 `failure_lifecycle_probe_sha256` 的历史 Job 演练收据仍可只读重放，但不得用于新
+  Formal Campaign。
