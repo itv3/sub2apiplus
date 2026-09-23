@@ -1780,7 +1780,8 @@ VC-2 的机器终点是第二次 `classify` 成功写入 `classification/result.
    ~~~
 
    `--output` 的父目录须预先设为 `0700`，输出本身必须位于 Campaign 外且尚不存在。
-   命令成功时自动生成 VC-3 checkpoint；不得再单独手写阶段完成事件。
+   命令成功时自动生成 VC-3 checkpoint；不得再单独手写阶段完成事件。该命令同样是批次动作体，编译成
+   VC-3 批次经 `compile-and-run-vc-batch` 派发（驱动链 `vc23.sh` 紧接 VC-2 四批之后执行）。
 
 | 清单 | 审核内容 |
 |---|---|
