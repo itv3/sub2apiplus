@@ -2347,9 +2347,7 @@ go run ./cmd/egresscatalogpromote \
 ~~~
 
 工具只离线交换已验收 Release mode，生成 production RuntimeCatalog、release contract graph
-和 `catalog-promotion-receipt.json`。输出路径必须绝对、尚不存在且不经过符号链接。收据必须
-绑定 acceptance、目标／回滚版本与 profile digest、两个 release digest、selector 变化和完整
-inventory。
+和 `catalog-promotion-receipt.json`。输出路径必须绝对、尚不存在且不经过符号链接。
 
 production tree 只允许三类变化：promotion inventory 声明的 Catalog／contract；candidate
 冻结 Git 基线中已存在且摘要一致的通用 promotion 命令与实现；为 Active／Previous 互换而作的
@@ -2405,7 +2403,7 @@ python3 tools/official_client_capture/codex_upgrade_gate_receipt.py replay \
 production tree 和 gate plan；candidate 身份、目标架构、Profile、package、源码树和镜像必须与验收阶段
 完全一致。失败 attempt 只读保留并按 v4 合同仅补跑 `failed_gate_ids`；最终收据不是 `status=passed`、
 仍有失败或跳过、输入或计划摘要漂移、production tree 不一致，均禁止构建切换镜像或开始
-canary。v3 facts 禁止再签发新收据，仅允许既有 v3 receipt 历史重放。
+canary。
 
 补跑统一遵守 Framework §5.1.2 和 §5.3.4，只执行失败、待执行或依赖变化的下游闭集；同根因第二次
 仍失败即停线。失败时保持旧 Active，不得为通过门禁修改 production tree。
@@ -2475,9 +2473,7 @@ Active Release、profile、activation fact、业务事件、完整性计数和 G
 
 生产激活证据必须绑定 Campaign／acceptance、promotion／inventory、production tree、终态门禁、
 切换镜像，以及 canary、正式切换、旧版回滚和目标恢复四阶段的时间、compose、各类 digest、
-activation fact、完整性、业务事件和日志结论。v2 收据强制接收 acceptance、promotion receipt 和
-`post_promotion` gate receipt 的文件绑定，校验目标架构与 production tree，并要求终态门禁完成时间
-早于 canary；缺少任一输入时不得用历史 v1 收据替代。
+activation fact、完整性、业务事件和日志结论；终态门禁必须在 canary 之前完成。
 
 四阶段事实必须写入权限为 `0700` 的独立 evidence root，文件权限为 `0600`，再由受管工具生成
 并重放不可覆盖收据：
