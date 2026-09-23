@@ -1,0 +1,94 @@
+{
+  "schema_version": "codex-upgrade-improvement-validation/v1",
+  "item": "R12",
+  "source_commit": "7d40dedaaad10de3439f2a3f88f9809eb74a0ec7",
+  "status": "development_self_check_passed",
+  "production_deployed": false,
+  "scope": "开发自查；驱动安装与正式发布在阶段 1 统一进行。真实 shell、子进程、Git 树、文件摘要、装配和统一收据 producer 已测试；编译、镜像与 Campaign 业务动作使用零请求替身。",
+  "self_checked_at_utc": "2026-09-23T16:59:11.306474+00:00",
+  "freeze_successor": "docs/egress/maintenance/upstream-codex-01561-r12-20260924-freeze-successor.json",
+  "freeze_successor_sha256": "07f739b184b13f28f503d48d7f220aa06bfe43bddb89fb68335b0b7d984d4f8b",
+  "tool_identity": {
+    "files_sha256": "f16f2c761045b06d1ef67570adac5b388ba1c2269ca1738a8c0034f1eb2011cd",
+    "policy_version": 7,
+    "policy_sha256": "796dac4b48c2c54009e101be1e1f56569a76fdc89c037378245796ec5dab2ad9",
+    "wire_producer_sha256": "3beefc77f5887fa3ef9ff6d3ea032a6c325d578177cc33912569b092189c66ec",
+    "evidence_semantics_sha256": "fb514301c47fe5d9bc9e63c84ce7643751d8b1252e5e9ef5cbdc1205951af9ca",
+    "control_sha256": "c2f3460d35bc3df2723c2aaf64993691fdf05bbea9cdb2787159645556bad4dc"
+  },
+  "managed_tool_identity_changed": false,
+  "driver_manifest_sha256": "d55b7145ea221e28afe9630d26bf7ce8ee2b43765049b51652be8eb15c65f620",
+  "arm64_driver_manifest_matches": true,
+  "self_check": [
+    {
+      "item": "有界等待与日志",
+      "result": "passed",
+      "evidence": "真实死亡子进程、并行子进程、缺失／过期心跳及总时限均退出 3；日志只打印尾 200 行。ARM64 子进程死亡检测 0.047318466 秒，Campaign 字节未变。"
+    },
+    {
+      "item": "本机上传心跳与完成校验",
+      "result": "passed",
+      "evidence": "实际上传脚本通过私有本地 SSH 替身验证 tar 流、周期 touch、READY 和后台清理；默认周期 30 秒、过期 300 秒，完成后心跳停止；完整文件清单及候选／承接提交必须匹配。"
+    },
+    {
+      "item": "VC-5 实际 run 与监督器双判据",
+      "result": "passed",
+      "evidence": "run 脚本首先写自身 PID；实际 run 退出或本次监督器心跳过期都使 vc5-all 退出 3，后续派发数为 0。批次 CLI 退出码传递到包装器，失败不写完成标记。"
+    },
+    {
+      "item": "五类构建输入及产物绑定",
+      "result": "passed",
+      "evidence": "实际 Git 四树、源码摘要、架构、affected、go.sum／vendor、parameters_sha256、Go／Node 和基础镜像 digest 复算；严格 binary／dist／context 装配与正式 implementation_tests replay。输入或产物变动、未知旧凭证和篡改均拒绝。"
+    },
+    {
+      "item": "上传等待中断恢复",
+      "result": "passed",
+      "evidence": "初次四个构建阶段执行 4 次；上传超时后 --resume-from upload-wait 执行构建阶段 0 次、完整收据复用执行 0 次；等待前凭证与原收据字节保持不变。参数变化时显式续跑拒绝且执行 0 次，普通重起执行构建阶段 4 次。"
+    },
+    {
+      "item": "schema、旧记录与分层",
+      "result": "passed",
+      "evidence": "两份 schema 校验三类实际 producer 制品；旧记录缺少中间凭证时不追认旧日志，普通执行会生成新凭证；默认测试仍不进入 real_chains，四项分层测试通过。"
+    },
+    {
+      "item": "逐项回归与冻结",
+      "result": "passed",
+      "evidence": "本机 29 项 17.194 秒、干净 ARM64 staging 29 项 21.273 秒全部通过，真实请求 0；驱动闭合清单一致，冻结承接和 check-egress-spec-ci 通过。"
+    }
+  ],
+  "live_request_count": 0,
+  "staging_hygiene": "首次 ARM64 安装测试发现继承的驱动 __pycache__，仅清理 R12 隔离副本生成缓存后全部复验；未放宽清单。",
+  "scheduled_release_checks": [
+    "阶段 1 受监督发布后安装最新驱动并按最新部署收据复验"
+  ],
+  "logs": [
+    {
+      "file": "r12-final-regression.log",
+      "sha256": "4d0e2c4b6beef644f2042af5bc92eaffd69f86b2dddebb600854786c228ca4a3"
+    },
+    {
+      "file": "r12-arm64-clean-regression.log",
+      "sha256": "e9e69cf0680fae4a214c390a34d0f8dcf1bf63eded2ec7a7657959dfc39445cf"
+    },
+    {
+      "file": "r12-arm64-manifest.log",
+      "sha256": "9bed28a016f31c30229fc02a88a61f52a747f789441d43034d8322bbeca0f67e"
+    },
+    {
+      "file": "r12-schema-check.log",
+      "sha256": "3c204d57e982540283cbc27bc3916c4bae85241449442a3af7f12bfb8e87ac26"
+    },
+    {
+      "file": "r12-layering.log",
+      "sha256": "7415e4386b67368dc1b916892d8aa3d87787185cb0b79cf9fa2a375f9a1d31fc"
+    },
+    {
+      "file": "r12-egress-ci.log",
+      "sha256": "4c030f89765fac88a1c725d1d1da78883fdb68a66620ec9db099217b6a59ad11"
+    },
+    {
+      "file": "r12-freeze-generation.log",
+      "sha256": "34a847be6f3a98e3a6d6d921c79213e0323eca99390c040298cd695ffd5c14f8"
+    }
+  ]
+}
