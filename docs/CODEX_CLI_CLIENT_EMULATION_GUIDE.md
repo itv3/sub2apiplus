@@ -13,7 +13,7 @@
 `reuse-official-evidence` 和 `compile-and-run-vc-batch` 是三个受限的 Campaign 引导／批次控制命令；
 `compile-vc-batch` 仅保留给历史读取和内部测试，0.154.0 起 Formal CLI 会失败关闭。适用边界见
 第四部分开头的公共执行约定摘要、[§4.7](#codex-4-7) 与 Framework §5.1.2、§5.3.2～§5.3.4。历史恢复入口仅供解释旧收据，不得用于新
-Campaign，兼容边界见附录 A。
+Campaign，兼容边界见[历史审计 §2](CODEX_CLI_CLIENT_EMULATION_HISTORY_AUDIT.md#codex-0151-historical-recovery)。
 
 ---
 
@@ -1007,11 +1007,13 @@ SHA-256 `9b7c1c7abdc26fc3c4f47c77656a8e9121def5483dbae830ef1ee561758448a9`。原
 `c0154-formal-vc5-v14r5-20260922t073614z` 的 canonical 链承接（候选 `c0154-candidate-v14r5`，
 attempt `20260922T081201Z-6b19d215a302dbd4`，42 条规则中 41 条 inherit、1 条 change）。
 
-当前生产镜像 ID 为 `sha256:3429200a5cb9d75edcb4115c515132bd3af9c94d5f85d8ef1716842020b56cf1`
-（退休 0.149.1 运行投影后重建；四阶段激活演练所用镜像为
+VC-6 切换演练在 ARM64 上完成：退休 0.149.1 运行投影后重建的切换镜像 ID 为
+`sha256:3429200a5cb9d75edcb4115c515132bd3af9c94d5f85d8ef1716842020b56cf1`，四阶段激活演练所用镜像为
 `sha256:d3da9a8a7ec7313e18dfae02675506d36198d8b60ca7f4a6961b1aa9dad49a90`，固定回滚镜像为
-`ghcr.io/itv3/sub2apiplus@sha256:298b5933740a379c1f18816adfb662e780c960e1641953e44c8b0ce4657b74ec`）；
-canonical checkpoint 为 `00000008`，执行集合为空。机器事实分别见
+`ghcr.io/itv3/sub2apiplus@sha256:298b5933740a379c1f18816adfb662e780c960e1641953e44c8b0ce4657b74ec`；
+canonical checkpoint 为 `00000008`，执行集合为空。VC-6 收口后发版 v0.2.4-7，BWG 与 ARM64 已于
+2026-09-22 按标准部署流程切到 `ghcr.io/itv3/sub2apiplus:0.2.4-7`（多架构 index
+`sha256:85f977225263905d5d9d1d684bb2cf505a20013b9960d6d1bdcdc821d47cfdf1`），这是当前生产镜像。机器事实分别见
 [`0.149.1 Runtime Profile 退休收据`](egress/maintenance/CODEX_CLI_0151_TO_0154_RUNTIME_PROFILE_REMOVAL_RECEIPT.json)
 和 [`0.154 终态收据`](egress/maintenance/CODEX_CLI_0151_TO_0154_TERMINAL_STATE_RECEIPT.json)。
 0.149.1 按 §4.6.7 第 1 类退休：Catalog、selector 与运行投影均已移除，两份画像字节因被
@@ -1235,7 +1237,7 @@ models、images、files、alpha-search、WHAM 和 OAuth refresh 都进入统一 
 | service 画像 DTO／projection | 保留 | API Key mimic 和业务读取面仍有生产消费者 |
 | unsigned `LegacyCompiledDispatcher` HTTP 执行路径 | 禁止执行 | 当前 Codex Runtime Catalog 全部 enforced，旧上下文进入通用发送入口时 fail-close |
 
-兼容代码的完整删除条件和顺序见 Framework §5.5.2 和本手册 §5.1。
+兼容代码的完整删除条件和顺序见 Framework §5.5.2 和本手册第五部分。
 
 ---
 
