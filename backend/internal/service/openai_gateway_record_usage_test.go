@@ -9,6 +9,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 	"github.com/stretchr/testify/require"
 )
 
@@ -453,6 +454,10 @@ func TestOpenAIGatewayServiceRecordUsage_PeakRateAffectsTokenModeImageOutputToke
 	subRepo := &openAIRecordUsageSubRepoStub{}
 	svc := newOpenAIRecordUsageServiceForTest(usageRepo, userRepo, subRepo, nil)
 	svc.resolver = newOpenAITokenImageChannelPricingResolverForTest(t, groupID, "gpt-5.1")
+	// 显式注入请求级定价时刻（系统时区当日 12:00），不依赖真实时钟：高峰窗口按
+	// 左闭右开 [PeakStart, PeakEnd) 判定，若回退 timezone.Now()，每天 23:59 这一
+	// 分钟会落在 [00:00, 23:59) 之外而按 1 倍计费，断言必然失败。
+	pricingAt := time.Date(2026, time.January, 15, 12, 0, 0, 0, timezone.Location())
 
 	err := svc.RecordUsage(context.Background(), &OpenAIRecordUsageInput{
 		Result: &OpenAIForwardResult{
@@ -475,8 +480,9 @@ func TestOpenAIGatewayServiceRecordUsage_PeakRateAffectsTokenModeImageOutputToke
 				PeakRateMultiplier: 3.0,
 			},
 		},
-		User:    &User{ID: 2004},
-		Account: &Account{ID: 3004},
+		User:      &User{ID: 2004},
+		Account:   &Account{ID: 3004},
+		PricingAt: pricingAt,
 	})
 
 	require.NoError(t, err)
@@ -495,6 +501,7 @@ func TestOpenAIGatewayServiceRecordUsage_PeakRateAffectsTokenModeImageOutputToke
 		},
 		RateMultiplier: 1.0,
 		Resolver:       svc.resolver,
+		PricingAt:      pricingAt,
 	})
 	require.NoError(t, err)
 	expectedActual := expected.TotalCost * 3.0

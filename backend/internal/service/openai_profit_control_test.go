@@ -94,9 +94,15 @@ func TestResolveOpenAIProfitControlGate(t *testing.T) {
 		group.PeakStart = "00:00"
 		group.PeakEnd = "23:59"
 		group.PeakRateMultiplier = 3.0
-		gate := svc.resolveOpenAIProfitControlGate(profitControlTestCtx(group), &groupID)
+		// 经 ctx 注入请求级定价时刻（系统时区当日 12:00），让阈值与期望值同源同刻，
+		// 不再各自读取真实时钟：否则 23:59 这一分钟落在左闭右开窗口外，两边的高峰
+		// 因子都退化为 1，用例不再验证高峰叠加；两次取时跨分钟边界时还会偶发失败。
+		pricingAt := time.Date(2026, time.January, 15, 12, 0, 0, 0, timezone.Location())
+		require.Equal(t, 3.0, group.PeakMultiplierAt(pricingAt), "构造前提：pricingAt 在高峰窗口内")
+		ctx := context.WithValue(profitControlTestCtx(group), openAIPricingAtCtxKey{}, pricingAt)
+		gate := svc.resolveOpenAIProfitControlGate(ctx, &groupID)
 		require.NotNil(t, gate)
-		expected := group.RateMultiplier * group.PeakMultiplierAt(timezone.Now()) * 0.5
+		expected := group.RateMultiplier * group.PeakMultiplierAt(pricingAt) * 0.5
 		require.InDelta(t, expected, gate.threshold, 1e-9)
 		require.Equal(t, PlatformOpenAI, gate.platform)
 	})

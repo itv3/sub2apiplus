@@ -11,6 +11,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 	"github.com/stretchr/testify/require"
 )
 
@@ -379,6 +380,10 @@ func TestGatewayServiceRecordUsage_PeakRateAffectsTokenModeImageOutputTokens(t *
 	userRepo := &openAIRecordUsageUserRepoStub{}
 	svc := newGatewayRecordUsageServiceForTest(usageRepo, userRepo, &openAIRecordUsageSubRepoStub{})
 	svc.resolver = newOpenAITokenImageChannelPricingResolverForTest(t, groupID, "gemini-image")
+	// 显式注入请求级定价时刻（系统时区当日 12:00），不依赖真实时钟：高峰窗口按
+	// 左闭右开 [PeakStart, PeakEnd) 判定，若回退 timezone.Now()，每天 23:59 这一
+	// 分钟会落在 [00:00, 23:59) 之外而按 1 倍计费，断言必然失败。
+	pricingAt := time.Date(2026, time.January, 15, 12, 0, 0, 0, timezone.Location())
 
 	err := svc.RecordUsage(context.Background(), &RecordUsageInput{
 		Result: &ForwardResult{
@@ -405,8 +410,9 @@ func TestGatewayServiceRecordUsage_PeakRateAffectsTokenModeImageOutputTokens(t *
 				PeakRateMultiplier: 3.0,
 			},
 		},
-		User:    &User{ID: 602},
-		Account: &Account{ID: 702},
+		User:      &User{ID: 602},
+		Account:   &Account{ID: 702},
+		PricingAt: pricingAt,
 	})
 
 	require.NoError(t, err)
