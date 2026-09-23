@@ -106,8 +106,9 @@ class AttemptRecoveryTests(recovery_tests._EvaluationChainMixin, unittest.TestCa
             return document
 
         def restoration(evidence_root: Path, *, phase: str, candidate_id: str | None) -> tuple[Path, dict]:
-            path = evidence_root / "restoration-report.json"
-            receipt = {"status": "passed", "phase": phase, "candidate_id": candidate_id}
+            path = evidence_root / "receipts/restoration-report.json"
+            path.parent.mkdir(mode=0o700, exist_ok=True)
+            receipt = {"status": "restored", "phase": phase, "candidate_id": candidate_id}
             path.write_text(json.dumps(receipt) + "\n", encoding="utf-8")
             path.chmod(0o600)
             return path, receipt
@@ -135,6 +136,9 @@ class AttemptRecoveryTests(recovery_tests._EvaluationChainMixin, unittest.TestCa
             mock.patch.object(codex_upgrade, "_verify_candidate_attempt_identity"),
             mock.patch.object(codex_upgrade, "_validate_candidate_admin_credential"),
             mock.patch.object(codex_upgrade, "_capture_arm64_environment_receipt", side_effect=arm64_receipt),
+            # 零请求外部环境替身只提供 continuity 字段，不能交给真实 v8 收据 reader。
+            mock.patch.object(codex_upgrade.codex_upgrade_arm64_environment_receipt, "receipts_equivalent",
+                              side_effect=lambda _a, before, _b, after: before["continuity_identity_sha256"] == after["continuity_identity_sha256"]),
             mock.patch.object(codex_upgrade, "_probe_capture_environment", side_effect=probe),
             mock.patch.object(codex_upgrade, "_finalize_attempt_restoration", side_effect=restoration),
         )
@@ -241,7 +245,7 @@ class AttemptRecoveryTests(recovery_tests._EvaluationChainMixin, unittest.TestCa
             self.assertTrue((segment / "logs").is_dir())
             self.assertTrue((segment / "evidence" / "environment" / "before" / "probe-manifest.json").is_file())
             self.assertTrue((segment / "evidence" / "environment" / "after" / "probe-manifest.json").is_file())
-            self.assertTrue((segment / "evidence" / "restoration-report.json").is_file())
+            self.assertTrue((segment / "evidence" / "receipts" / "restoration-report.json").is_file())
             reservation = _read(segment / "recovery-reservation.json")
             self.assertEqual([item["id"] for item in reservation["planned_jobs"]], [job_ids[0]])
             self.assertEqual(reservation["reuse_jobs"], sorted(job_ids[1:]))
@@ -413,8 +417,9 @@ class AttemptRecoveryTests(recovery_tests._EvaluationChainMixin, unittest.TestCa
     # 不一致（合法自摘要）都被 CLI／reconciler／监督器三处拒绝。
     # ------------------------------------------------------------------
 
-    def test_segment_preview_scope_is_full_frozen_jobs_even_with_mixed_results(self) -> None:
-        """段内一个 complete、一个 failed：预览仍批准完整 J*（不复用段内 complete Job），估算覆盖两 Job；
+    @mock.patch.object(reconciler, 'segment_reuse_proofs', return_value={})
+    def test_segment_preview_scope_requires_proof_even_with_mixed_results(self, _proofs) -> None:
+        """段内一个 complete、一个 failed，但缺少四项证明时仍执行完整 J*；
         段预约 planned 与 J* 不一致、缺 J* 都失败关闭。"""
 
         with tempfile.TemporaryDirectory() as directory:
@@ -441,7 +446,7 @@ class AttemptRecoveryTests(recovery_tests._EvaluationChainMixin, unittest.TestCa
             preview = reconciler._recovery_preview(root, receipt_dir, jobs=jobs, recovery_execute_jobs=["job-b", "job-a"], **common)
             self.assertEqual((preview["planned_job_ids"], preview["execute_job_ids"], preview["reuse_job_ids"]), (["job-a", "job-b"], ["job-a", "job-b"], []))
             self.assertEqual(preview["complete_job_ids"], ["job-a"])
-            self.assertIn("整段重做", preview["reuse_basis"])
+            self.assertIn("四项", preview["reuse_basis"])
             self.assertEqual((preview["expected_new_requests"]["known_total"], preview["expected_new_requests"]["known_by_job"]), (5, {"job-a": 2, "job-b": 3}))
             self.assertEqual(preview["expected_new_requests"]["unknown_job_ids"], [])
             # 普通 attempt 路径不变：complete Job 复用。
@@ -522,9 +527,9 @@ class AttemptRecoveryTests(recovery_tests._EvaluationChainMixin, unittest.TestCa
                 codex_upgrade._require_recovery_preview_scope_equals_frozen_jobs(drifted, frozen, label="核对")
             # 篡改 2：known_total 与 Σknown 不等 → 函数级双拒绝。
             wrong_total, _ = write_tampered(int(preview["index"]) + 2, expected_new_requests={**estimate, "known_total": int(estimate["known_total"]) + 1})
-            with self.assertRaisesRegex(supervisor.SupervisorError, r"请求估算未覆盖完整 J\*"):
+            with self.assertRaisesRegex(supervisor.SupervisorError, r"请求估算未覆盖完整执行集合"):
                 supervisor._require_segment_preview_scope_matches_frozen_jobs(campaign_dir, prior_manifest, attempt_id=attempt_root.name, prior_revision="ar1", preview=wrong_total)
-            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, r"请求估算未覆盖完整 J\*"):
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, r"请求估算未覆盖完整执行集合"):
                 codex_upgrade._require_recovery_preview_scope_equals_frozen_jobs(wrong_total, frozen, label="核对")
             # 篡改 3（批准并走 CLI 端到端）：Job 范围正确但估算少一项（known 与 unknown 都不含该 Job）。
             missing_estimate, tampered_path = write_tampered(
@@ -535,10 +540,10 @@ class AttemptRecoveryTests(recovery_tests._EvaluationChainMixin, unittest.TestCa
             with self._segment_patches_started(context, failing_jobs), mock.patch.object(reconciler, "_deployment_receipt", return_value=None):
                 approval = reconciler.approve_recovery_preview(campaign_dir, attempt_root.name, approve_sha256=missing_estimate["review_sha256"], recovery_revision="ar1")
             self.assertEqual(approval["approved_sha256"], missing_estimate["review_sha256"])
-            with self.assertRaisesRegex(supervisor.SupervisorError, r"请求估算未覆盖完整 J\*"):
+            with self.assertRaisesRegex(supervisor.SupervisorError, r"请求估算未覆盖完整执行集合"):
                 supervisor._require_segment_preview_scope_matches_frozen_jobs(campaign_dir, prior_manifest, attempt_id=attempt_root.name, prior_revision="ar1", preview=missing_estimate)
             with self._segment_patches_started(context, failing_jobs):
-                with self.assertRaisesRegex(codex_upgrade.ConfigurationError, r"请求估算未覆盖完整 J\*"):
+                with self.assertRaisesRegex(codex_upgrade.ConfigurationError, r"请求估算未覆盖完整执行集合"):
                     codex_upgrade._run_capture_attempt(
                         argparse.Namespace(**{**vars(self._run_arguments(campaign_dir, "ar2")), "rerun_failed": True, "recovery_preview": tampered_path}),
                         "candidate",

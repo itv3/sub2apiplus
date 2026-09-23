@@ -180,7 +180,8 @@ class RealAttemptRecoveryChainTests(unittest.TestCase):
             self.skipTest(f"本机存在固定采集执行副本 {mtc.PRODUCTION_EXECUTION_TREE}，但无法建立 mount namespace 绑定（需要 root 与 unshare）")
         self._temporary = tempfile.TemporaryDirectory(prefix="eval-ar-chain-")
         self.addCleanup(self._temporary.cleanup)
-        self.work = Path(self._temporary.name).resolve()
+        self.work = Path(self._temporary.name).resolve() / "staging"
+        self.work.mkdir(mode=0o700)
         self.harness = _AttemptRecoveryHarness(self, self.work)
 
     def _segment_stage_available(self) -> bool:

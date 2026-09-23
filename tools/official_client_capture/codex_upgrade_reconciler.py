@@ -1233,6 +1233,183 @@ def _merge_root_causes(
     return merged
 
 
+def recovery_job_inventory(roots: Sequence[str], *, scan_stats: dict[str, int] | None = None) -> dict[str, Any]:
+    """R11：在 Job 完成 checkpoint 中冻结逐文件内容；复用时重新读取，不能只信元数据。"""
+
+    files = []
+    normalized = sorted(set(str(value) for value in roots))
+    if not normalized:
+        raise ReconcilerError("恢复段 Job 没有证据根")
+    for value in normalized:
+        root = Path(value)
+        if not root.is_absolute() or root.is_symlink() or not root.is_dir():
+            raise ReconcilerError("恢复段 Job 证据根不可信")
+        codex_upgrade._reject_symlink_components(root, Path(root.anchor), "恢复段复用证据")
+        for path in sorted(root.rglob("*")):
+            if path.is_symlink() or not (path.is_dir() or path.is_file()):
+                raise ReconcilerError("恢复段 Job 证据含非普通条目")
+            if path.is_file():
+                before = path.stat()
+                digest = _file_sha256(path)
+                if scan_stats is not None:
+                    scan_stats["scanned_bytes"] = scan_stats.get("scanned_bytes", 0) + before.st_size
+                after = path.stat()
+                if (before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
+                    after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns
+                ):
+                    raise ReconcilerError("恢复段证据在复算期间变化")
+                files.append({"path": str(path), "bytes": after.st_size, "sha256": digest})
+    if not files or len({item["path"] for item in files}) != len(files):
+        raise ReconcilerError("恢复段 Job 证据为空或重复")
+    return {"roots": normalized, "files": files, "content_sha256": _fingerprint(files)}
+
+
+def recovery_segment_summary(
+    campaign_dir: Path, candidate_id: str, attempt_id: str, recovery_revision: str,
+) -> tuple[Path, dict[str, Any], dict[str, Any] | None]:
+    """失败段只读对账：严格校验控制摘要；证据边界是否可复用逐 Job 判定，不把坏证据当完成。"""
+
+    attempt_root = codex_upgrade._capture_attempt_path(campaign_dir, "candidate", candidate_id, attempt_id)
+    segment = codex_upgrade._attempt_recovery_segment_root(attempt_root, recovery_revision)
+    reservation = codex_upgrade._load_attempt_recovery_reservation(
+        campaign_dir, segment, candidate_id=candidate_id, attempt_id=attempt_id, recovery_revision=recovery_revision,
+    )
+    path = segment / codex_upgrade.ATTEMPT_RECOVERY_SUMMARY_FILENAME
+    if not path.exists() and not path.is_symlink():
+        return segment, reservation, None
+    codex_upgrade._reject_symlink_components(path, campaign_dir, "恢复段摘要")
+    payload = _read_json(path, "恢复段摘要")
+    unsigned = {key: value for key, value in payload.items() if key != "attempt_recovery_digest"}
+    if (payload.get("schema_version") != codex_upgrade.ATTEMPT_RECOVERY_SUMMARY_SCHEMA
+            or payload.get("attempt_id") != attempt_id or payload.get("candidate_id") != candidate_id
+            or payload.get("recovery_revision") != recovery_revision
+            or payload.get("run_nonce") != reservation.get("run_nonce")
+            or payload.get("attempt_recovery_digest") != _fingerprint(unsigned)
+            or payload.get("reservation", {}).get("sha256") != _file_sha256(segment / codex_upgrade.ATTEMPT_RECOVERY_RESERVATION_FILENAME)):
+        raise ReconcilerError("恢复段摘要身份、预约绑定或自摘要不一致")
+    return segment, reservation, payload
+
+
+def segment_reuse_proofs(
+    campaign_dir: Path, candidate_id: str, attempt_id: str, recovery_revision: str,
+    frozen_job_ids: Sequence[str],
+    *, scan_stats: dict[str, int] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """R11 四项复用判据的唯一实现；失败／证明不足返回 execute，控制链损坏仍拒绝。"""
+
+    segment, reservation, summary = recovery_segment_summary(campaign_dir, candidate_id, attempt_id, recovery_revision)
+    _, _, recovery = codex_upgrade._authoritative_recovery_execute_jobs(campaign_dir, candidate_id, reservation)
+    if sorted(recovery["execute_jobs"]) != sorted(frozen_job_ids):
+        raise ReconcilerError("恢复段复用范围与基线冻结的 J* 不一致")
+    planned = {row["id"]: row for row in reservation["planned_jobs"]}
+    if sorted(planned) != sorted(frozen_job_ids):
+        raise ReconcilerError("恢复段预约 planned_jobs 与基线冻结的 J* 不一致")
+    original = codex_upgrade._load_capture_reservation(
+        campaign_dir, segment.parent.parent, phase="candidate", candidate_id=candidate_id,
+    )
+    expected = {row["id"]: row["execution_sha256"] for row in original["planned_jobs"]}
+    _, checkpoints, _ = _checkpoint_facts(segment)
+    # SIGKILL 后没有摘要时，可从已发布的权限收口与实际 after／restoration 文件取得边界。
+    permission_path = segment / codex_upgrade.codex_upgrade_evidence_permissions.RECEIPT_FILENAME
+    after = segment / "evidence/environment/after/probe-manifest.json"
+    restoration = segment / "evidence/receipts/restoration-report.json"
+    if (not after.is_file() or not restoration.is_file() or not permission_path.is_file()
+            or (summary is not None and (summary.get("restoration_error") is not None
+                                        or summary.get("status") == "environment_contaminated"))):
+        return {}
+    try:
+        if _read_json(restoration, "恢复段恢复报告").get("status") != "restored":
+            return {}
+        permission = _read_json(permission_path, "恢复段权限收口")
+        binding = codex_upgrade.codex_upgrade_evidence_permissions.receipt_binding(segment, permission_path)
+        if summary is not None and summary.get("evidence_permission_closeout") != binding:
+            return {}
+        roots = [Path(value) for value in permission["evidence_roots"]]
+        codex_upgrade._replay_evidence_permission_closeout(segment, roots, binding)
+        if summary is not None:
+            for key, path in (("after_probe", after), ("restoration_report", restoration)):
+                if summary.get("environment", {}).get(key) != codex_upgrade._attempt_evidence_binding(segment / "evidence", path):
+                    return {}
+    except (OSError, KeyError, ValueError, codex_upgrade.ConfigurationError,
+            codex_upgrade.codex_upgrade_evidence_permissions.EvidencePermissionError):
+        return {}
+    previous_proofs = reservation.get("reuse_proofs", {})
+    inherited = set(reservation.get("reuse_job_ids", []))
+    if inherited:
+        previous_revision = f"ar{int(recovery_revision[2:]) - 1}"
+        prior = segment_reuse_proofs(campaign_dir, candidate_id, attempt_id, previous_revision, frozen_job_ids, scan_stats=scan_stats)
+    else:
+        prior = {}
+    proofs = {}
+    results = {row["id"]: row for row in summary.get("results", [])} if summary else {}
+    for job_id in sorted(frozen_job_ids):
+        checkpoint = checkpoints.get(job_id)
+        path = segment / f"job-{job_id}.json"
+        try:
+            if not checkpoint or checkpoint.get("status") != "complete" or not path.is_file() or path.is_symlink():
+                continue
+            result = _read_json(path, "恢复段 Job")
+            source_execution = result.get("source_execution_sha256", planned[job_id].get("source_execution_sha256", result.get("execution_sha256")))
+            if (result.get("status") != "complete" or result.get("id") != job_id
+                    or checkpoint.get("run_nonce") != reservation["run_nonce"]
+                    or checkpoint.get("attempt_id") != f"{attempt_id}.{recovery_revision}"
+                    or checkpoint.get("phase") != "candidate"
+                    or result.get("execution_sha256") != planned[job_id]["execution_sha256"]
+                    or source_execution != expected.get(job_id)
+                    or checkpoint.get("result_sha256") != incremental_recovery.digest(result)
+                    or checkpoint.get("result") != result or (summary and results.get(job_id) != result)
+                    or not supervisor.job_egress_trusted(result)):
+                continue
+            if job_id in inherited and (previous_proofs.get(job_id) != prior.get(job_id) or job_id not in prior):
+                continue
+            if any(Path(root) not in roots for root in result.get("evidence_roots", [])):
+                continue
+            inventory = recovery_job_inventory(result.get("evidence_roots", []), scan_stats=scan_stats)
+            if checkpoint.get("recovery_evidence") != inventory:
+                continue
+            checkpoint_path = segment / "checkpoints" / f"{checkpoint['checkpoint_sequence']:08d}.json"
+            def bound(file: Path) -> dict[str, Any]:
+                return {"path": file.relative_to(campaign_dir).as_posix(), "sha256": _file_sha256(file), "bytes": file.stat().st_size}
+            proofs[job_id] = {
+                "recovered_from": recovery_revision, "source_execution_sha256": source_execution,
+                "result": bound(path), "checkpoint": bound(checkpoint_path),
+                "permission_closeout": bound(permission_path), "after_probe": bound(after),
+                "restoration_report": bound(restoration), "content_sha256": inventory["content_sha256"],
+            }
+        except (OSError, ValueError, KeyError, ReconcilerError, codex_upgrade.ConfigurationError):
+            continue
+    return proofs
+
+
+def validate_segment_reuse_preview(campaign_dir: Path, preview: Mapping[str, Any]) -> None:
+    """批准和派发读侧重放四项判据；证明必须与预览逐字段相同。旧空复用预览保持兼容。"""
+
+    reuse = preview.get("reuse_job_ids", [])
+    supplied = preview.get("reuse_proofs", {})
+    if not isinstance(supplied, Mapping) or set(supplied) != set(reuse):
+        raise ReconcilerError("恢复预览复用集合与判据证明不一致")
+    if not reuse:
+        return
+    actual = segment_reuse_proofs(campaign_dir, str(preview["candidate_id"]), str(preview["source_attempt_id"]),
+                                 str(preview["recovery_revision"]), preview["planned_job_ids"])
+    if any(job_id not in actual or actual[job_id] != supplied[job_id] for job_id in reuse):
+        raise ReconcilerError("恢复预览的 Job 复用判据漂移或证明不足")
+
+
+def reused_segment_job_result(campaign_dir: Path, proof: Mapping[str, Any]) -> dict[str, Any]:
+    """显式引用来源，不伪装成本段新执行；读写两端使用完全相同的投影。"""
+
+    binding = proof["result"]
+    path = codex_upgrade._campaign_file(campaign_dir, binding["path"])
+    if _file_sha256(path) != binding["sha256"] or path.stat().st_size != binding["bytes"]:
+        raise ReconcilerError("恢复段复用来源收据漂移")
+    source = _read_json(path, "恢复段复用 Job")
+    result = {key: value for key, value in source.items() if key not in {"started_at_utc", "completed_at_utc"}}
+    result.update(disposition="reused", recovered_from=proof["recovered_from"], source_receipt=dict(binding),
+                  recovery_checkpoint=dict(proof["checkpoint"]), source_execution_sha256=proof["source_execution_sha256"])
+    return result
+
+
 def _recovery_preview(
     campaign_dir: Path,
     receipt_dir: Path,
@@ -1255,12 +1432,11 @@ def _recovery_preview(
 ) -> dict[str, Any]:
     """零请求恢复预览：冻结四类 Job 闭集与预计新增请求数，等待操作员批准（段模式携带 recovery_revision）。
 
-    段模式（P1 授权闭包）：后继段整段重做基线冻结的 J*，段内 complete Job 不复用——预览的 ``planned_job_ids``
-    与 ``execute_job_ids`` 必须都等于权威链（段预约 → COMMIT → recovery.json）取得的 ``execute_jobs``，
-    ``reuse_job_ids`` 恒空，请求估算覆盖完整 J*；否则会出现"批准 1 个请求、实际执行 2 个"的授权边界错误。
+    段模式：execute 与 reuse 不相交且并集恰为权威链 J*；reuse 必须逐项通过四项判据，估算只覆盖 execute。
     """
 
     groups = jobs["groups"]
+    scan_stats = {"scanned_bytes": 0}
     if recovery_revision is not None:
         if recovery_execute_jobs is None:
             raise ReconcilerError("恢复段预览必须提供权威链取得的 execute_jobs")
@@ -1269,8 +1445,9 @@ def _recovery_preview(
             raise ReconcilerError(
                 f"恢复段预约的 planned_jobs {sorted(jobs['planned_job_ids'])} 与基线冻结的 J* {frozen} 不一致"
             )
-        reusable = []
-        execute = list(frozen)
+        proofs = segment_reuse_proofs(campaign_dir, str(candidate_id), attempt_id, recovery_revision, frozen, scan_stats=scan_stats)
+        reusable = sorted(set(groups["complete"]) & set(proofs))
+        execute = sorted(set(frozen) - set(reusable))
     else:
         reusable = list(groups["complete"]) if (attempt_exists and environment_status == "restored") else []
         execute = sorted(set(jobs["planned_job_ids"]) - set(reusable))
@@ -1305,7 +1482,7 @@ def _recovery_preview(
         "reuse_job_ids": reusable,
         "execute_job_ids": execute,
         "reuse_basis": (
-            "失败段不可变，后继段整段重做基线冻结的 J*；段内 complete Job 不复用"
+            "失败段不可变；仅复用 result/checkpoint、权限边界与逐文件摘要、执行身份、after 环境四项均通过的 Job"
             if recovery_revision is not None
             else "source attempt 环境已恢复，complete Job 只读复用"
             if reusable
@@ -1324,8 +1501,10 @@ def _recovery_preview(
         },
         "reservation_exists": False,
         "live_request_count": 0,
-        "scanned_bytes": 0,
+        "scanned_bytes": scan_stats["scanned_bytes"],
     }
+    if recovery_revision is not None:
+        preview["reuse_proofs"] = {job_id: proofs[job_id] for job_id in reusable}
     index, latest = _latest_indexed(receipt_dir, PREVIEW_RE)
     if latest is not None:
         existing = _read_json(latest, "既有恢复预览")
@@ -1451,6 +1630,8 @@ def load_approved_recovery_preview(
                 approval_path = child
     if approved is None or approval_path is None:
         raise ReconcilerError("恢复预览尚未批准；先执行 reconcile-attempt --approve-recovery-sha256 <review_sha256>")
+    if recovery_revision is not None:
+        validate_segment_reuse_preview(campaign_dir, preview)
     current = _current_identity()
     identity = preview.get("tool_identity") or {}
     if (
@@ -1605,8 +1786,8 @@ def reconcile_attempt(
 
     改造 5 M2：``recovery_revision=ar<k>`` 时对账的是该 attempt 的恢复段（段预约之后中断／失败）：
     定位 ``recovery/ar<k>/``，收据带 ``recovery_revision``，operation ``reconcile-attempt:<id>:ar<k>``，
-    账本写 ``attempt_recovery_failed``（原 attempt 事件不动），恢复预览按基线冻结的 J* 全量生成（reuse 恒空），
-    批准后由后继段 ar<k+1> 整段重做。
+    账本写 ``attempt_recovery_failed``（原 attempt 事件不动），恢复预览按四项判据分割基线冻结的 J*，
+    批准后由后继段 ar<k+1> 只执行 execute 集合。
     """
 
     campaign_dir = Path(campaign_dir).resolve(strict=True)
@@ -1637,7 +1818,7 @@ def reconcile_attempt(
         recovery_execute_jobs = [str(item) for item in authoritative_recovery["execute_jobs"]]
         summary_path = segment_root / codex_upgrade.ATTEMPT_RECOVERY_SUMMARY_FILENAME
         if summary_path.exists() or summary_path.is_symlink():
-            _segment, _reservation, attempt = codex_upgrade._load_attempt_recovery_segment(
+            _segment, _reservation, attempt = recovery_segment_summary(
                 campaign_dir, candidate_id, attempt_id, recovery_revision
             )
             if attempt.get("status") == "awaiting_receipts" and not codex_upgrade._failed_job_ids(attempt.get("results")):
@@ -1970,9 +2151,10 @@ def reconcile_attempt(
             recovery_execute_jobs=recovery_execute_jobs,
         )
         result["recovery_preview"] = preview
+        result["scanned_bytes"] = preview["scanned_bytes"]
         result["recovery_preview_path"] = str(receipt_dir / f"recovery-preview-{int(preview['index']):02d}.json")
         if recovery_revision is not None:
-            # 改造 5 M2：中断／失败的恢复段不同段续跑，批准后以后继段 ar<k+1> 全量补跑同一基线冻结的 J*。
+            # R11：失败段不原地续跑，后继段仅启动批准的 execute，可信 complete Job 明确引用复用。
             number = int(recovery_revision[2:])
             resume_command = f"capture-candidate run --attempt-recovery ar{number + 1} --rerun-failed"
         else:

@@ -700,6 +700,9 @@ class attempt_recovery_environment_patches:
             mock.patch.object(codex_upgrade, "_verify_candidate_attempt_identity"),
             mock.patch.object(codex_upgrade, "_validate_candidate_admin_credential"),
             mock.patch.object(codex_upgrade, "_capture_arm64_environment_receipt", side_effect=arm64_receipt),
+            # 本夹具的环境收据是明确的零请求外部替身，按其固定 continuity 字段模拟相等。
+            mock.patch.object(codex_upgrade.codex_upgrade_arm64_environment_receipt, "receipts_equivalent",
+                              side_effect=lambda _a, before, _b, after: before["continuity_identity_sha256"] == after["continuity_identity_sha256"]),
             mock.patch.object(codex_upgrade, "_probe_capture_environment", side_effect=probe),
             mock.patch.object(codex_upgrade, "_close_attempt_evidence_permissions", side_effect=closeout),
             mock.patch.object(codex_upgrade, "_replay_evidence_permission_closeout", side_effect=replay),

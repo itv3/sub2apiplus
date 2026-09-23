@@ -9551,7 +9551,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--rerun-failed",
         action="store_true",
         help="改造 5 M2（崩溃矩阵 A1）：中断／失败的恢复段经 reconcile-attempt --recovery-revision 对账后，"
-        "开其后继段 ar<k+1> 全量补跑并接管过期的 Campaign lease；只与 --attempt-recovery 组合使用。",
+        "开其后继段 ar<k+1> 按批准的执行集合补跑并接管过期的 Campaign lease；只与 --attempt-recovery 组合使用。",
     )
     candidate.add_argument(
         "--recovery-preview",
@@ -43056,7 +43056,7 @@ def _current_attempt_recovery_baseline(
 
     改造 5 M2（崩溃矩阵 A1）：``allow_successor`` 时段编号也可以是基线冻结段的后继段——前提是冻结段与
     其后的每个既有段都已失败终态并经 ``reconcile-attempt --recovery-revision`` 对账入账；后继段以同一
-    基线冻结的 ``execute_jobs`` 全量补跑，不重复裁定根因。
+    基线冻结的 J* 由 execute／reuse 分割，复用四项判据通过的 Job，不重复裁定根因。
     """
 
     baseline, commit = _current_evaluation_baseline(campaign_dir, candidate_id)
@@ -43121,7 +43121,7 @@ def _require_recovery_preview_scope_equals_frozen_jobs(
     *,
     label: str,
 ) -> None:
-    """P1（授权闭包）：后继段预览批准的范围与请求估算必须恰好覆盖权威链取得的 J*，且不复用任何段内 Job
+    """R11：后继段 execute／reuse 必须分割 J*，请求估算只覆盖 execute
     （与监督器第七种协议共用 ``recovery_preview_scope_violation``）。"""
 
     violation = codex_upgrade_supervisor.recovery_preview_scope_violation(preview, list(execute_jobs))
@@ -43161,7 +43161,9 @@ def _attempt_recovery_segment_terminal_failed(
 
     summary_path = segment_root / ATTEMPT_RECOVERY_SUMMARY_FILENAME
     if summary_path.exists() or summary_path.is_symlink():
-        _segment, _reservation, summary = _load_attempt_recovery_segment(
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        _segment, _reservation, summary = reconciler.recovery_segment_summary(
             campaign_dir, candidate_id, attempt_id, segment_root.name
         )
         if summary.get("status") == ATTEMPT_RECOVERY_SUCCESS_STATUS and not _failed_job_ids(summary.get("results")):
@@ -43213,7 +43215,7 @@ def _require_attempt_recovery_successor_segment(
                 f"reconcile-attempt --recovery-revision {entry.name}）。"
             )
     if require_preview:
-        previous_revision = f"ar{max(numbers)}"
+        previous_revision = f"ar{target_number - 1}"
         if recovery_preview is None:
             raise ConfigurationError(
                 f"开后继恢复段 {recovery_revision} 必须提供前序失败段 {previous_revision} 已批准的恢复预览："
@@ -43221,6 +43223,21 @@ def _require_attempt_recovery_successor_segment(
             )
         from tools.official_client_capture import codex_upgrade_reconciler as reconciler
 
+        target_root = _attempt_recovery_segment_root(attempt_root, recovery_revision)
+        if target_root.is_dir():
+            # 已收口后逐字重派不重新消费旧 head 的许可；预约保留批准摘要，读侧仍重放复用证明。
+            reservation = _load_attempt_recovery_reservation(
+                campaign_dir, target_root, candidate_id=candidate_id, attempt_id=attempt_id, recovery_revision=recovery_revision,
+            )
+            frozen_preview = _read_json(recovery_preview, "已消费的恢复预览")
+            unsigned_preview = {key: value for key, value in frozen_preview.items() if key not in {"created_at_utc", "review_sha256"}}
+            if (reservation.get("recovery_review_sha256") != frozen_preview.get("review_sha256")
+                    or _fingerprint(unsigned_preview) != frozen_preview.get("review_sha256")
+                    or frozen_preview.get("source_attempt_id") != attempt_id
+                    or frozen_preview.get("candidate_id") != candidate_id
+                    or frozen_preview.get("recovery_revision") != previous_revision):
+                raise ConfigurationError("已存在恢复段的批准预览不一致。")
+            return
         try:
             preview = reconciler.load_approved_recovery_preview(
                 campaign_dir, recovery_preview, phase="candidate", candidate_id=candidate_id, recovery_revision=previous_revision
@@ -43230,7 +43247,7 @@ def _require_attempt_recovery_successor_segment(
         if str(preview.get("source_attempt_id")) != attempt_id:
             raise ConfigurationError("恢复预览绑定的 attempt 与当前 attempt-recovery 基线不一致。")
         # P1（授权闭包）：J* 只从前序失败段预约的三元组沿权威链取（COMMIT → recovery.json），不直接信任
-        # 调用方传入的 recovery；预览批准范围必须恰好等于 J* 且 reuse 为空，否则"批准 1 个、执行 2 个"。
+        # 调用方传入的 recovery；execute／reuse 必须分割 J*，复用许可由已批准预览逐项复核。
         previous_root = _attempt_recovery_segment_root(attempt_root, previous_revision)
         previous_reservation = _load_attempt_recovery_reservation(
             campaign_dir, previous_root, candidate_id=candidate_id, attempt_id=attempt_id, recovery_revision=previous_revision
@@ -43268,6 +43285,16 @@ def _load_attempt_recovery_reservation(
         or digest != _fingerprint(unsigned)
     ):
         raise ConfigurationError(f"恢复段 {recovery_revision} 预约身份或自摘要不一致。")
+    reuse_fields = {"execute_job_ids", "reuse_job_ids", "reuse_proofs", "reuse_proofs_sha256", "recovery_review_sha256"}
+    if reuse_fields & set(payload):
+        planned = [row["id"] for row in payload["planned_jobs"]]
+        execute, reuse, proofs = payload.get("execute_job_ids"), payload.get("reuse_job_ids"), payload.get("reuse_proofs")
+        if (not reuse_fields <= set(payload) or not isinstance(execute, list) or not isinstance(reuse, list)
+                or not isinstance(proofs, Mapping) or len(set(execute)) != len(execute) or len(set(reuse)) != len(reuse)
+                or set(execute) & set(reuse) or set(execute) | set(reuse) != set(planned)
+                or set(proofs) != set(reuse) or payload["reuse_proofs_sha256"] != _fingerprint(proofs)
+                or not SHA256_RE.fullmatch(str(payload["recovery_review_sha256"]))):
+            raise ConfigurationError("恢复段预约的执行／复用集合或判据摘要非法。")
     return payload
 
 
@@ -43288,6 +43315,7 @@ def _reserve_attempt_recovery(
     identity: Mapping[str, Any],
     lease: CampaignLease | None,
     deadline: incremental_recovery.WallClockDeadline,
+    reuse_preview: Mapping[str, Any] | None = None,
 ) -> tuple[Path, dict[str, Any]]:
     """在 Campaign 锁内原子发布恢复段预约：段目录不存在、同 attempt 无其它 active 恢复段。
     ``recovery_revision`` 是本段实际编号（基线冻结的首段或其失败段的后继段）。"""
@@ -43329,6 +43357,14 @@ def _reserve_attempt_recovery(
             for item in original_reservation.get("planned_jobs", [])
             if isinstance(item, Mapping)
         }
+        reuse_proofs = dict(reuse_preview.get("reuse_proofs", {})) if reuse_preview else {}
+        if reuse_preview is not None:
+            from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+            _require_recovery_preview_scope_equals_frozen_jobs(reuse_preview, recovery["execute_jobs"], label="恢复段预约")
+            reconciler.validate_segment_reuse_preview(campaign_dir, reuse_preview)
+        if set(job.job_id for job in jobs) != set(recovery["execute_jobs"]):
+            raise ConfigurationError("恢复段预约必须覆盖基线 J*。")
         planned_jobs: list[dict[str, Any]] = []
         for job in jobs:
             source = source_jobs.get(job.job_id)
@@ -43338,7 +43374,10 @@ def _reserve_attempt_recovery(
                 {
                     "id": job.job_id,
                     "required": job.required,
-                    "execution_sha256": _job_execution_sha256(job),
+                    "execution_sha256": (
+                        _read_json(campaign_dir / reuse_proofs[job.job_id]["result"]["path"], "复用 Job")["execution_sha256"]
+                        if job.job_id in reuse_proofs else _job_execution_sha256(job)
+                    ),
                     "source_execution_sha256": expected_execution[job.job_id],
                 }
             )
@@ -43373,6 +43412,13 @@ def _reserve_attempt_recovery(
             "planned_jobs": planned_jobs,
             "reuse_jobs": list(recovery["reuse_jobs"]),
         }
+        if reuse_preview is not None:
+            reservation.update(
+                execute_job_ids=list(reuse_preview["execute_job_ids"]),
+                reuse_job_ids=list(reuse_preview["reuse_job_ids"]), reuse_proofs=reuse_proofs,
+                reuse_proofs_sha256=_fingerprint(reuse_proofs),
+                recovery_review_sha256=reuse_preview["review_sha256"],
+            )
         if lease is not None:
             if not lease.acquired:
                 raise ConfigurationError("恢复段预约缺少 active Campaign lease。")
@@ -43500,6 +43546,17 @@ def _write_attempt_recovery_summary(
             or result.get("execution_sha256") != planned[result["id"]]
         ):
             raise ConfigurationError("恢复段任务不在段预约内或执行摘要漂移。")
+    if "execute_job_ids" in reservation:
+        expected_execute = set(reservation["execute_job_ids"])
+        expected_reuse = set(reservation["reuse_job_ids"])
+        results = payload.get("results", [])
+        actual_reuse = {row["id"] for row in results if row.get("recovered_from") is not None}
+        actual_execute = {row["id"] for row in results if row.get("recovered_from") is None}
+        if (expected_execute & expected_reuse or expected_execute | expected_reuse != set(planned)
+                or actual_reuse != expected_reuse or not actual_execute <= expected_execute
+                or payload.get("execute_jobs") != reservation["execute_job_ids"]
+                or (payload.get("status") == ATTEMPT_RECOVERY_SUCCESS_STATUS and actual_execute != expected_execute)):
+            raise ConfigurationError("恢复段实际启动／复用集合与预约批准不一致。")
     document = dict(payload)
     document["schema_version"] = ATTEMPT_RECOVERY_SUMMARY_SCHEMA
     document["campaign_mode"] = reservation["campaign_mode"]
@@ -43593,6 +43650,19 @@ def _load_attempt_recovery_segment(
     ):
         raise ConfigurationError(f"恢复段 {recovery_revision} run-summary 身份、预约绑定或自摘要不一致。")
     _replay_attempt_recovery_evidence_permissions(segment_root, payload)
+    if reservation.get("reuse_job_ids"):
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        previous_revision = f"ar{int(recovery_revision[2:]) - 1}"
+        reconciler.validate_segment_reuse_preview(campaign_dir, {
+            "candidate_id": candidate_id, "source_attempt_id": attempt_id, "recovery_revision": previous_revision,
+            "planned_job_ids": [row["id"] for row in reservation["planned_jobs"]],
+            "reuse_job_ids": reservation["reuse_job_ids"], "reuse_proofs": reservation["reuse_proofs"],
+        })
+        results = {row["id"]: row for row in payload["results"]}
+        for job_id in reservation["reuse_job_ids"]:
+            if results.get(job_id) != reconciler.reused_segment_job_result(campaign_dir, reservation["reuse_proofs"][job_id]):
+                raise ConfigurationError("恢复段复用结果与批准来源不一致。")
     return segment_root, reservation, payload
 
 
@@ -43690,6 +43760,9 @@ def _effective_results_document(
                     "evidence_roots": [str(root) for root in result.get("evidence_roots", [])],
                 }
             )
+            if result.get("recovered_from") is not None:
+                entries[-1].update(recovered_from=result["recovered_from"],
+                                   checkpoint={key: result["recovery_checkpoint"][key] for key in ("path", "sha256")})
         else:
             result = previous_results[job_id]
             entries.append(
@@ -43737,6 +43810,14 @@ def _validate_effective_results(document: Mapping[str, Any], *, expected_job_ids
         raise ConfigurationError(
             f"effective-results 的 Job 集合与候选 Job 全集不相等：{sorted(set(ids) ^ set(expected_job_ids))}"
         )
+    for row in entries:
+        if "recovered_from" in row or "checkpoint" in row:
+            source = row.get("recovered_from")
+            if (not isinstance(source, str) or not codex_upgrade_vc_artifacts.RECOVERY_REVISION_RE.fullmatch(source)
+                    or row.get("source") != "recovered" or row.get("disposition") != "reused"
+                    or int(source[2:]) >= int(str(document["recovery_revision"])[2:])):
+                raise ConfigurationError("effective-results 的恢复段复用来源非法。")
+            _require_file_binding(row.get("checkpoint"), "恢复段复用 checkpoint")
     return dict(document)
 
 
@@ -44291,7 +44372,7 @@ def _run_attempt_recovery_segment(
         raise ConfigurationError("attempt 恢复段只用于 0.154.0 起的完整 VC 链 Campaign。")
     # 恢复段的 job 收据与账本段状态都是 write-once：同段目录不能续跑。段中断／失败先
     # reconcile-attempt --recovery-revision 对账入账，再以 --rerun-failed 开后继段 ar<k+1>（同一基线冻结的
-    # execute_jobs 全量补跑；--rerun-failed 同时接管中断留下的过期 Campaign lease，不重复裁定根因）。
+    # J* 中仅补跑预览批准的 execute；--rerun-failed 同时接管过期 Campaign lease，不重复裁定根因）。
     # 后继段先消费已批准的恢复预览（账本 recovery_required → recovery_authorized → active），再过候选级写入门。
     rerun_failed = bool(getattr(arguments, "rerun_failed", False))
     baseline, commit, recovery = _current_attempt_recovery_baseline(
@@ -44356,6 +44437,16 @@ def _run_attempt_recovery_segment(
     if set(execute_ids) | set(recovery["reuse_jobs"]) != set(original_results):
         raise ConfigurationError("恢复基线的 execute_jobs ∪ reuse_jobs 必须恰好等于原 attempt 的 Job 全集。")
     jobs = [_relocate_job_for_recovery(source_jobs[job_id], recovery_revision) for job_id in execute_ids]
+    reuse_preview = None
+    if rerun_failed:
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        reuse_preview = reconciler.load_approved_recovery_preview(
+            campaign_dir, arguments.recovery_preview, phase="candidate", candidate_id=candidate_id,
+            recovery_revision=f"ar{int(recovery_revision[2:]) - 1}",
+        )
+        _require_recovery_preview_scope_equals_frozen_jobs(reuse_preview, execute_ids, label="恢复段执行")
+        execute_ids = list(reuse_preview["execute_job_ids"])
     if not getattr(arguments, "acknowledge_live_requests", False):
         raise ConfigurationError("恢复段补跑会产生真实请求，必须同时确认 --acknowledge-live-requests。")
     _verify_execution_tree(getattr(arguments, "capture_root", None))
@@ -44377,6 +44468,7 @@ def _run_attempt_recovery_segment(
         identity=identity,
         lease=_lease,
         deadline=deadline,
+        reuse_preview=reuse_preview,
     )
     ledger_dir = _campaign_timing_ledger_dir(campaign_dir, manifest)
     revision = _current_candidate_revision(campaign_dir, manifest)
@@ -44411,12 +44503,29 @@ def _run_attempt_recovery_segment(
     environment_root = ensure_private_directory(evidence_root / "environment", evidence_root)
     heartbeat_path = segment_root / "watchdog-heartbeat.json"
     checkpoint_store = _job_checkpoint_store(segment_root)
+    from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+    reused_results = []
+    for job_id in reservation.get("reuse_job_ids", []):
+        proof = reservation["reuse_proofs"][job_id]
+        reused = reconciler.reused_segment_job_result(campaign_dir, proof)
+        records = checkpoint_store.records()
+        checkpoint_store.append({
+            "checkpoint_schema_version": JOB_CHECKPOINT_SCHEMA, "campaign_id": manifest["campaign_id"],
+            "phase": "candidate", "attempt_id": f"{attempt_id}.{recovery_revision}", "run_nonce": reservation["run_nonce"],
+            "item_id": job_id, "status": "complete", "disposition": "reused", "result_sha256": incremental_recovery.digest(reused),
+            "result": reused, "recovery_evidence": reconciler.recovery_job_inventory(reused["evidence_roots"]),
+            "previous_checkpoint_sha256": records[-1].get("checkpoint_sha256") if records else None,
+        })
+        _secure_write_json_once(segment_root / f"job-{job_id}.json", reused)
+        reused_results.append(reused)
+    jobs = [job for job in jobs if job.job_id in execute_ids]
     _write_attempt_heartbeat(heartbeat_path, deadline, operation="attempt-recovery:reserved", force=True, attempt_root=segment_root)
 
     def heartbeat(operation: str) -> None:
         _write_attempt_heartbeat(heartbeat_path, deadline, operation=operation, attempt_root=segment_root)
 
-    results: list[dict[str, Any]] = []
+    results: list[dict[str, Any]] = list(reused_results)
     execution_error: BaseException | None = None
     restoration_error: BaseException | None = None
     before_manifest: dict[str, Any] | None = None
@@ -44452,9 +44561,12 @@ def _run_attempt_recovery_segment(
         for job in jobs:
             _require_capture_budget_before_data_action(deadline, operation=f"job:{job.job_id}:admission")
             heartbeat(f"job:{job.job_id}:start")
+            job_started_at = _utc_now()
             result = _run_job_with_retry(
                 job, log_root, scenario_context, identity=identity, tool_identity=tool_identity, deadline=deadline, heartbeat=heartbeat
             )
+            result["started_at_utc"] = job_started_at
+            recovery_evidence = reconciler.recovery_job_inventory(result["evidence_roots"]) if result.get("status") == "complete" else None
             results.append(result)
             records = checkpoint_store.records()
             checkpoint_store.append(
@@ -44470,6 +44582,7 @@ def _run_attempt_recovery_segment(
                     "result_sha256": incremental_recovery.digest(result),
                     "result_key": result.get("incremental_result_key"),
                     "result": result,
+                    "recovery_evidence": recovery_evidence,
                     "previous_checkpoint_sha256": records[-1].get("checkpoint_sha256") if records else None,
                 }
             )
@@ -44628,7 +44741,7 @@ def _run_attempt_recovery_segment(
             "tool_components": tool_identity.get("components") if isinstance(tool_identity, Mapping) else None,
             "identity": identity,
             "execute_jobs": list(execute_ids),
-            "reuse_jobs": list(recovery["reuse_jobs"]),
+            "reuse_jobs": sorted(set(recovery["reuse_jobs"]) | set(reservation.get("reuse_job_ids", []))),
             "results": results,
             "evidence_roots": [str(root) for root in evidence_roots],
             "evidence_permission_closeout": evidence_permission_closeout,
@@ -44691,7 +44804,7 @@ def _run_attempt_recovery_segment(
         "run_nonce": reservation["run_nonce"],
         "started_at_utc": reservation["started_at_utc"],
         "execute_jobs": list(execute_ids),
-        "reuse_jobs": list(recovery["reuse_jobs"]),
+        "reuse_jobs": sorted(set(recovery["reuse_jobs"]) | set(reservation.get("reuse_job_ids", []))),
         "results": results,
         "ledger_events": ledger_events,
         "next_command": (

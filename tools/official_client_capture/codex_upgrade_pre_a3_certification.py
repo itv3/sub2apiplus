@@ -250,6 +250,13 @@ SCENARIOS: tuple[tuple[str, str, str, str, str], ...] = (
         "test_classify_commit_failure_reconciles_and_redispatches",
     ),
     (
+        "segment-recovery.completed-job-reuse",
+        "三段连续恢复只执行 2、1、0 个 Job，复用 0、1、2 个；真实 SIGKILL 后批准续作及增量封存",
+        "tools.official_client_capture.tests.real_chains.test_codex_upgrade_segment_reuse",
+        "SegmentReuseChainTests",
+        "test_three_segments_reuse_completed_jobs_and_seal",
+    ),
+    (
         "stage-recovery.interrupted-closeout",
         "stage_abandoned 后 SIGKILL，重入只补一条 stage_review_required",
         "tools.official_client_capture.tests.test_codex_upgrade_stage_recovery",

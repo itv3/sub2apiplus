@@ -3128,8 +3128,14 @@ recovery_control_roots(段 evidence／logs) ∪ baseline_private_root`、`reused
 恢复段 run 动作在正式批次里失败不是候选级失败（对象是环境瞬态而非候选源码）：阶段保持 active、账本
 `recovery_required`，父 run 对账被分流到段对账。对账生成的零请求 `recovery-preview/v1`（段模式）**按权威链取
 J\*：段预约三元组 → `b<K>/COMMIT`（`commit_sha256` 与 `recovery_sha256` 等于预约值）→ `recovery.json`（自摘要等于
-COMMIT 绑定值）→ `execute_jobs`**；预览 `planned_job_ids == execute_job_ids == J*`、`reuse_job_ids` 恒空（段内
-complete Job 不复用，后继段整段重做），请求估算 `known_by_job` 的键 ∪ `unknown_job_ids` == J*、不相交、
+COMMIT 绑定值）→ `execute_jobs`**；预览 `planned_job_ids == J*`，`execute_job_ids ∪ reuse_job_ids == J*`，
+两者不相交。段内 complete Job 仅在四项同时通过时复用：① result 与追加式 checkpoint 齐全且摘要一致；
+②证据根在该段权限收口边界内，checkpoint 冻结的逐文件内容摘要全部复算一致；③原执行摘要
+（优先 `source_execution_sha256`）等于原预约冻结值；④after 探针与恢复报告存在且绑定有效，无
+`restoration_error`。旧 checkpoint 缺少逐文件证明时保守进入 execute。摘要发布前中断的段若上述证明已完整
+发布，亦可复用。复用判据、来源 Job、checkpoint、权限收口及环境收据摘要写入 `reuse_proofs`；后继预约
+冻结 `execute_job_ids`、`reuse_job_ids`、判据摘要与已批准 review 摘要。请求估算只覆盖 execute：
+`known_by_job` 的键 ∪ `unknown_job_ids` == `execute_job_ids`、不相交、
 `known_total == Σknown`。批准（`--approve-recovery-sha256`）后以
 `reconcile-attempt … --authorize-recovery-preview <path>` 消费（账本 `recovery_required → recovery_authorized →
 active`），再开紧接编号的后继段：
@@ -3141,8 +3147,11 @@ python3 -m tools.official_client_capture.codex_upgrade capture-candidate run …
 
 CLI 开后继段与监督器的后继协议（失败段批次只能由同 attempt 的后继段批次承接：除失败动作外逐字相同，失败
 动作只允许换段号并追加 `--rerun-failed --recovery-preview`，预览须被账本 `recovery_authorized` 绑定）都重放
-上述范围与估算等式，任一不等即拒绝；后继段以同一基线冻结的 J* 全量补跑，不重复裁定根因，段 seal／入账用实际
-段号（基线 `recovery.json` 仍记首段）。段对账根因两次即按上限停线。
+上述范围、估算等式和逐项复用证明，任一不等即拒绝；后继段只启动已批准 execute 内的 Job，复用 Job 的
+启动次数为 0，结果显式记录 `recovered_from=ar<k-1>` 与来源 checkpoint 摘要，不带本轮 `started_at_utc`。
+连续中断逐段承接，证明不足的 Job 重新进入 execute；所有 Job 已完成时允许零 Job 执行的后继段收口。
+effective-results 与增量 seal 保留这些来源绑定，段 seal／入账只认实际段号和新增请求（基线 `recovery.json`
+仍记首段）。根因上限保持不变。失败段原字节和已可信的证据不改写，历史无复用字段的段按原合同读取。
 
 **崩溃矩阵。** R2（失败动作退出后、post-run-tooling 收据前 owner 丢失）：monitor 按四层判定确定性封存为普通
 `failed`／`action-failed:<id>`（a. 唯一动作失败诊断且末条动作生命周期事件为该动作 `action-failed`、动作属冻结清单；

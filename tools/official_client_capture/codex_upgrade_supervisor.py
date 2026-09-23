@@ -2623,7 +2623,8 @@ def verify_attempt_recovery_orphan_output(
         "sha256": facts["output_sha256"],
         "status": str(summary["status"]),
         "job_count": len(results),
-        "execute_jobs": frozen,
+        "execute_jobs": list(reservation.get("execute_job_ids", frozen)),
+        **({"reuse_job_ids": list(reservation["reuse_job_ids"])} if "reuse_job_ids" in reservation else {}),
         "attempt_recovery_digest": str(summary.get("attempt_recovery_digest")),
     }
 
@@ -8030,8 +8031,8 @@ def _successor_segment_normalized_command(
 def recovery_preview_scope_violation(preview: Mapping[str, Any], execute_jobs: Sequence[str]) -> str | None:
     """P1（授权闭包）：后继段预览的批准范围与请求估算必须恰好覆盖权威链取得的 J*（CLI 与监督器共用）。
 
-    范围：``planned_job_ids == execute_job_ids == J*``（无重复）、``reuse_job_ids == []``；
-    估算：``expected_new_requests.known_by_job`` 的键 ∪ ``unknown_job_ids`` == J*、两者不相交且无重复、
+    范围：planned 等于 J*，execute 与 reuse 无交集且并集等于 J*；reuse 必须带逐项证明。
+    估算：``expected_new_requests.known_by_job`` 的键 ∪ ``unknown_job_ids`` == execute、两者不相交且无重复、
     ``known_total == sum(known_by_job.values())``、计数为非负整数。返回违规说明，合法返回 ``None``。
     """
 
@@ -8046,10 +8047,14 @@ def recovery_preview_scope_violation(preview: Mapping[str, Any], execute_jobs: S
         or not isinstance(execute, list)
         or not isinstance(reuse, list)
         or sorted(str(item) for item in planned) != frozen
-        or sorted(str(item) for item in execute) != frozen
+        or any(not isinstance(item, str) for item in planned + execute + reuse)
         or len(set(planned)) != len(planned)
         or len(set(execute)) != len(execute)
-        or reuse != []
+        or len(set(reuse)) != len(reuse)
+        or set(execute) & set(reuse)
+        or sorted(set(execute) | set(reuse)) != frozen
+        or not isinstance(preview.get("reuse_proofs", {}), Mapping)
+        or set(preview.get("reuse_proofs", {})) != set(reuse)
     ):
         return f"批准的执行范围（planned={planned}，execute={execute}，reuse={reuse}）不等于基线冻结的 J*={frozen}"
     estimate = preview.get("expected_new_requests")
@@ -8066,13 +8071,13 @@ def recovery_preview_scope_violation(preview: Mapping[str, Any], execute_jobs: S
         or any(not isinstance(item, str) for item in unknown)
         or len(set(unknown)) != len(unknown)
         or set(known) & set(unknown)
-        or sorted(set(known) | set(unknown)) != frozen
+        or set(known) | set(unknown) != set(execute)
         or isinstance(known_total, bool)
         or not isinstance(known_total, int)
         or known_total != sum(int(value) for value in known.values())
     ):
         return (
-            f"请求估算未覆盖完整 J*={frozen}（known_by_job={dict(known) if isinstance(known, Mapping) else known}，"
+            f"请求估算未覆盖完整执行集合 execute={execute}（known_by_job={dict(known) if isinstance(known, Mapping) else known}，"
             f"unknown_job_ids={unknown}，known_total={known_total}）"
         )
     return None
@@ -8086,7 +8091,7 @@ def _require_segment_preview_scope_matches_frozen_jobs(
     prior_revision: str,
     preview: Mapping[str, Any],
 ) -> list[str]:
-    """P1（授权闭包）：后继段预览批准的范围必须等于权威链取得的 J*，且不复用任何段内 Job。
+    """R11：后继段预览的 execute／reuse 分割 J*，复用证明必须逐项重放。
 
     权威链与 CLI／reconciler 完全相同：失败段预约（``evaluation_baseline``／``baseline_commit_sha256``／
     ``recovery_sha256`` 三元组，自摘要重放）→ ``b<K>/COMMIT``（``commit_sha256`` 与 ``recovery_sha256``
@@ -8151,6 +8156,12 @@ def _require_segment_preview_scope_matches_frozen_jobs(
     violation = recovery_preview_scope_violation(preview, frozen)
     if violation is not None:
         raise SupervisorError(f"后继恢复段批次的恢复预览{violation}。")
+    from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+    try:
+        reconciler.validate_segment_reuse_preview(campaign_dir, preview)
+    except (reconciler.ReconcilerError, ValueError, OSError) as error:
+        raise SupervisorError(f"后继恢复段复用证明不成立：{error}") from error
     return frozen
 
 
@@ -8196,11 +8207,13 @@ def _validate_attempt_recovery_segment_successor(
         raise SupervisorError("后继恢复段批次的动作数量与失败批次不一致。")
     preview_argument: str | None = None
     normalized_actions: list[Any] = []
+    normalized_prior_actions: list[Any] = []
     for prior_action, successor_action in zip(prior_actions, successor_actions):
         if not isinstance(prior_action, Mapping) or not isinstance(successor_action, Mapping):
             raise SupervisorError("后继恢复段批次的动作非法。")
         if successor_action.get("action_id") != action_id:
             normalized_actions.append(successor_action)
+            normalized_prior_actions.append(prior_action)
             continue
         command = successor_action.get("command")
         if not isinstance(command, list) or not all(isinstance(token, str) for token in command):
@@ -8209,6 +8222,13 @@ def _validate_attempt_recovery_segment_successor(
             command, prior_revision=prior_revision, successor_revision=successor_revision
         )
         normalized_action = {**successor_action, "command": normalized_command}
+        prior_command = prior_action.get("command", [])
+        if "--rerun-failed" in prior_command:
+            # 连续中断时前序本身也是后继段；两侧仅剥离各自的已批准恢复参数后比较原动作。
+            prior_command, _ = _successor_segment_normalized_command(
+                prior_command, prior_revision=prior_revision, successor_revision=prior_revision,
+            )
+        normalized_prior_actions.append({**prior_action, "command": prior_command})
         bindings = successor_action.get("output_bindings")
         if isinstance(bindings, list):
             # 动作输出绑定（段 run-summary 路径）随段号变化：按同一映射归一化回前序段。
@@ -8234,7 +8254,8 @@ def _validate_attempt_recovery_segment_successor(
         "baseline_commit_sha256",
         "evaluator_digests",
     )
-    drifted = [field for field in immutable_fields if normalized_manifest.get(field) != prior_manifest.get(field)]
+    normalized_prior = {**prior_manifest, "actions": normalized_prior_actions}
+    drifted = [field for field in immutable_fields if normalized_manifest.get(field) != normalized_prior.get(field)]
     if drifted:
         raise SupervisorError("后继恢复段批次只允许失败动作换段号并追加恢复预览，漂移字段：" + "、".join(drifted))
     if preview_argument is None:
@@ -8289,7 +8310,7 @@ def _validate_attempt_recovery_segment_successor(
                 bound = True
     if not bound:
         raise SupervisorError("后继恢复段批次携带的恢复预览与账本 recovery_authorized 绑定的预览不一致。")
-    # P1（授权闭包）：预览批准的执行范围必须恰好等于权威链取得的 J*（reuse 恒空），与 CLI 开段口径一致。
+    # R11：执行与复用集合必须分割权威链 J*，并重放复用判据，与 CLI 开段口径一致。
     _require_segment_preview_scope_matches_frozen_jobs(
         campaign_dir, prior_manifest, attempt_id=str(attempt_id), prior_revision=prior_revision, preview=preview_document
     )
