@@ -1,0 +1,120 @@
+{
+  "schema_version": "codex-upgrade-improvement-validation/v1",
+  "item": "R6",
+  "source_commit": "9e10c6b25ca55b3a081c5775f0d9fd208533726f",
+  "status": "development_self_check_passed",
+  "production_deployed": false,
+  "self_checked_at_utc": "2026-09-23T18:07:22.025870+00:00",
+  "scope": "官方复用控制事务与驱动链开发自查。合成来源证据、真实文件发布和账本重放，12 个断点使用 SIGKILL 杀子进程；未发送真实上游请求。生产发布仍在阶段 1 统一进行。",
+  "tool_identity": {
+    "files_sha256": "a0a4756ca480d6fc25d8629679549fedcdb2456afcd78e519bcc1ca5ed153d7a",
+    "policy_version": 7,
+    "policy_sha256": "796dac4b48c2c54009e101be1e1f56569a76fdc89c037378245796ec5dab2ad9",
+    "wire_producer_sha256": "3beefc77f5887fa3ef9ff6d3ea032a6c325d578177cc33912569b092189c66ec",
+    "evidence_semantics_sha256": "fb514301c47fe5d9bc9e63c84ce7643751d8b1252e5e9ef5cbdc1205951af9ca",
+    "control_sha256": "12e6458969a772acceef189c212f11ba2656dbe52b9a3acad770411b78c643af"
+  },
+  "identity_layer_changed": "control",
+  "arm64_tool_identity_matches": true,
+  "driver_manifest_sha256": "c8e35b468c27dd8035a3ecd8111412ab9471637cea76493920df48bf4d951004",
+  "live_request_count": 0,
+  "self_check": [
+    {
+      "item": "已封存官方导入自动对齐",
+      "result": "passed",
+      "evidence": "重放新 VC-0／VC-1 checkpoint 后在同一 Campaign 锁与时间账本锁中补三条固定事件。账本 active、active_phase 为空、已完成阶段为 VC-0 和 VC-1；VC-2 派发前账本门禁返回单条 stage_started。"
+    },
+    {
+      "item": "已发布目录严格续作",
+      "result": "passed",
+      "evidence": "发布前冻结完整请求、输入文件与不可变产物；manifest/hash、前序、账号、控制坐标及原产物一致才允许续作。拒绝参数和字节漂移，不复制证据、不重建目录。"
+    },
+    {
+      "item": "已封存导入的六个真实中断点",
+      "result": "passed",
+      "evidence": "目录 rename 后、注册后、事件 0／1／2／3 条后逐次 SIGKILL。原命令恢复，最终固定事件恰为 3 条，重复重入没有新增，原产物字节和 mode 不变。"
+    },
+    {
+      "item": "awaiting_receipts 的六个真实中断点",
+      "result": "passed",
+      "evidence": "目录 rename 后、预约后、权限收口后、attempt 写后、物化后、注册后逐次 SIGKILL。恢复始终只有一个预约和一个 metadata-only attempt；原证据字节和 mode 不变。物化完成标记存在但原 attempt 丢失时拒绝重新生成。"
+    },
+    {
+      "item": "未封存、冲突和到期边界",
+      "result": "passed",
+      "evidence": "awaiting_receipts 不提前记 VC-1 完成；seal 后原命令可补齐事件。固定 event_id 内容冲突拒绝且不补其他事件；stop_required 在发布前拒绝、时间账本不变。"
+    },
+    {
+      "item": "执行租约与历史兼容",
+      "result": "passed",
+      "evidence": "零请求导入自持项目 admission 与 Campaign 锁，重入不另建执行租约和监督器；已有未释放租约仍拒绝。无续作绑定的历史目录可读取，续作拒绝猜测身份。"
+    },
+    {
+      "item": "驱动和分层收口",
+      "result": "passed",
+      "evidence": "删除 align-ledger.sh 及 stage2 调用，刷新驱动 manifest；指南三处及 README 同步。wire、evidence、policy 摘要均不变，仅 control 与全树摘要改变；Bash／Python 语法及 diff 检查通过。"
+    },
+    {
+      "item": "本机与 ARM64 回归",
+      "result": "passed",
+      "evidence": "本机最终 47 项 38.844 秒、ARM64 私有挂载命名空间 47 项 83.380 秒全部通过。部署 13 项 7.840 秒、check-egress-spec-ci、service 冻结承接检查全部通过。"
+    }
+  ],
+  "self_check_findings_resolved": [
+    "恢复入口原先会为已有目录创建执行监督器，参数错误可能留下停线记录；已将自持控制锁的零请求入口移出执行租约分派，并保留未释放租约拒绝检查。",
+    "物化完成后原 attempt 丢失不能被误当成未完成预约重建；已增加完成标记与原产物一致性门禁。",
+    "旧测试要求物化失败后删除已发布目录，与 R6 恢复要求冲突；已改为验证目录保留、未注册、原预约复用及原证据不变，发布前非法输入仍全部拒绝。",
+    "ARM64 首次直接运行测试被真实执行位置校验拒绝；改用仓库既有 managed_tree_copy 私有挂载命名空间绑定隔离副本，未修改生产别名或放宽门禁。",
+    "首次出站门禁因 R6 源码尚未登记冻结承接失败；生成承接与脚本删除证明后复验通过。"
+  ],
+  "manual_actions_resolution": {
+    "tool_tree_digest": "冻结注册表仍提示 DEFAULT_TOOL_DIGEST；该常量已按既有实现移除，整树摘要由 staging 自算，本轮未重新引入硬编码。",
+    "supervisor_digest_matches": true,
+    "assertion_preparer_digest_matches": true,
+    "deployment_tests": "13 项通过；两个固定组件文件本轮未变化，常量与实际文件摘要一致。",
+    "deleted_script": "最终承接收据含 deletion-proof/v1；Python、shell 和 JSON 执行引用均为零。"
+  },
+  "freeze_successors": [
+    {
+      "path": "docs/egress/maintenance/upstream-codex-01561-r6-20260924-freeze-successor.json",
+      "sha256": "c093f873e0b79f38558009f8052ee9dc0979cec8b494f5e2d1e2af641b116866"
+    },
+    {
+      "path": "docs/egress/maintenance/upstream-codex-01561-r6-final-20260924-freeze-successor.json",
+      "sha256": "961c928d469a0edfdd5c788754612e1c77294dad36ebf0bd1291cb2e433ff5bb"
+    }
+  ],
+  "logs": [
+    {
+      "file": "r6-final-regression-v2.log",
+      "sha256": "5b7cfcd002f72643990c3a88eb2f12abc4d0b54e54431aa858d15c282697cd86"
+    },
+    {
+      "file": "r6-arm64-regression-v2.log",
+      "sha256": "808764c31d4a1e4bc0845704ecbd99b8d873846ec2dd7b3f34fe633458cc49a7"
+    },
+    {
+      "file": "r6-deployment-digests.log",
+      "sha256": "b24319cb8987e13224af56caeaf98e8d85d0676139e9a8ed419442e59c054e3c"
+    },
+    {
+      "file": "r6-egress-ci-v2.log",
+      "sha256": "275faab6b8ab05fde4d9e7f0cec94f04ad8b42e96342f838ab2018a4f19a91e0"
+    },
+    {
+      "file": "r6-service-freeze.log",
+      "sha256": "f0eff4eda98ae7ff17e601102d7041faa283aef3e4c487d889d5a3109c4a6dbf"
+    },
+    {
+      "file": "r6-final-freeze-generation.log",
+      "sha256": "d6163ed0821ac6a210d9f5bee2c4c0dd761903537bb7fc05bf7d53c42e6e0aa4"
+    },
+    {
+      "file": "r6-arm64-identity.json",
+      "sha256": "db742a4885ef78ba60d97769ab6a1772f68e770aef7c843ab894baac025802a2"
+    }
+  ],
+  "scheduled_release_checks": [
+    "阶段 1 统一受监督发布受管工具，并重新安装绑定本轮部署收据的驱动；当前仅隔离副本通过。"
+  ]
+}
