@@ -61,32 +61,45 @@ def fixture_cli(arguments):
         return upgrade.main(arguments)
 
 
-def assert_duplicate_dispatch_unchanged(namespace):
-    """已提交批次重派必须在执行前拒绝，Campaign 与两个账本均不得增加或改写字节。"""
+def campaign_snapshot(campaign):
+    """读取 Campaign、计时账本字节和总账历史，供重复执行前后精确比较。"""
 
     from tools.official_client_capture import codex_upgrade as upgrade
     from tools.official_client_capture import codex_upgrade_project_ledger as project
 
-    campaign = namespace.campaign_dir
     manifest = upgrade.load_campaign_manifest(campaign)
     ledger = upgrade._campaign_timing_ledger_dir(campaign, manifest)
     project_root = project.find_project_ledger(campaign)
     if project_root is None:
         raise RuntimeError("连续链缺少 fixture 总账")
 
-    def snapshot():
-        files = {str(path): path.read_bytes() for root in (campaign, ledger)
-                 for path in root.rglob("*") if path.is_file()}
-        return files, project.read_project_history_snapshot(project_root)
+    files = {str(path): path.read_bytes() for root in (campaign, ledger)
+             for path in root.rglob("*") if path.is_file()}
+    return files, project.read_project_history_snapshot(project_root)
 
-    before = snapshot()
+
+def assert_duplicate_import_unchanged(case, campaign, arguments):
+    """VC-1 复用导入再次执行必须拒绝，且不写账、不改变任何已封存文件。"""
+
+    before = campaign_snapshot(campaign)
+    code, _stdout, _stderr = case._run_main(arguments)
+    if code == 0 or campaign_snapshot(campaign) != before:
+        raise RuntimeError("重复复用导入未拒绝或改变了 Campaign／账本")
+
+
+def assert_duplicate_dispatch_unchanged(namespace):
+    """已提交批次重派必须在执行前拒绝，Campaign 与两个账本均不得增加或改写字节。"""
+
+    from tools.official_client_capture import codex_upgrade as upgrade
+
+    before = campaign_snapshot(namespace.campaign_dir)
     try:
         upgrade.compile_and_run_vc_batch(namespace)
     except upgrade.ConfigurationError:
         pass
     else:
         raise RuntimeError("已提交批次被重复派发")
-    if snapshot() != before:
+    if campaign_snapshot(namespace.campaign_dir) != before:
         raise RuntimeError("重复派发改变了 Campaign 或账本字节")
 
 
@@ -261,7 +274,20 @@ class FullValidationOnlyChainTests(unittest.TestCase):
                             for path in sorted((harness.campaign_dir() / "control/vc/batches").glob("*.json"))
                             for batch in [driver._read(path)]],
             }
-            self.assertTrue(self.real_chain_metrics["batches"])
+            expected = [
+                ("VC-1", [], ["official-core"]),
+                ("VC-2", ["classify-draft"], []),
+                ("VC-2", ["classify-preview"], []),
+                ("VC-2", ["classify-approve"], []),
+                ("VC-3", ["stage-profile"], []),
+                ("VC-5", ["compare"], ["candidate-frozen-core"]),
+                ("VC-5", ["acceptance", "assert-rules"], ["candidate-frozen-core"]),
+                ("VC-6", ["deliver"], []),
+            ]
+            self.assertEqual(self.real_chain_metrics["batches"], [
+                {"phase": phase, "sequence": index, "execute": execute, "reuse": reuse, "live_request_count": 0}
+                for index, (phase, execute, reuse) in enumerate(expected, 1)
+            ])
             self.assertLess(self.real_chain_metrics["seconds"], 900, "ARM64 连续链超过 15 分钟验收上限")
             print(json.dumps({"chain": "vc-chain.full-validation-only", **self.real_chain_metrics}, ensure_ascii=False), file=sys.stderr)
 

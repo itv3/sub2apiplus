@@ -280,16 +280,20 @@ def init_campaign_to_vc4(arguments: argparse.Namespace, case: Any) -> dict[str, 
     )
     if full_chain:
         successor = Path(fixture["data"]) / "evidence" / "campaigns" / arguments.campaign_id
-        code, stdout, stderr = case._run_main([
+        import_arguments = [
             "reuse-official-evidence", "--predecessor-campaign-dir", str(campaign_dir),
             "--campaign-dir", str(successor), "--campaign-id", arguments.campaign_id,
             "--codex-account-id", str(manifest["configuration"]["codex_account_id"]),
-        ])
+        ]
+        code, stdout, stderr = case._run_main(import_arguments)
         if code != 0:
             raise RuntimeError(f"连续链复用导入失败：{stderr}")
         imported = json.loads(stdout)
         if imported["live_request_count"] != 0 or imported["executed_job_count"] != 0:
             raise RuntimeError("连续链复用导入不满足零请求、零执行边界")
+        from tools.official_client_capture.tests.real_chains.test_codex_upgrade_full_chain import assert_duplicate_import_unchanged
+
+        assert_duplicate_import_unchanged(case, successor, import_arguments)
         campaign_dir = successor
         manifest = codex_upgrade.load_campaign_manifest(campaign_dir)
         fixture = {**fixture, "campaign_dir": campaign_dir, "manifest": manifest}
