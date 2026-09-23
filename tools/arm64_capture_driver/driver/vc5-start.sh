@@ -19,11 +19,14 @@ echo "=== 切换候选网关"; bash "$DRV/vc5-switch.sh" candidate "$TAG" "$IMAG
 echo "=== 预检"; bash "$DRV/vc5-precheck.sh" "$IMAGE_ID" "$BUILD_ID" 2>&1 | tail -n 6 | cut -c1-240
 cat > "$RUNROOT/vc5-run-batch.sh" <<RUN
 #!/bin/bash
+echo \$\$ > "$RUNROOT/vc5-run-batch.pid"
+set -Eeuo pipefail
 export ARM64_VC_ENV=$ARM64_VC_ENV ADMIN_BEARER_TOKEN_FILE=$D/state/$UP/admin-token
 SEQ=\$(python3 -c "import glob,os; print(max(int(os.path.basename(p).split('-')[0]) for p in glob.glob('$NEWDIR/control/vc/batches/*.json'))+1)"); echo "VC-5 run 批次序号=\$SEQ"
 bash "$DRV/vc-batch.sh" $NEW $IN VC-5 \$SEQ VC-4 action-plan-vc5-run.json
 echo "RUN_BATCH_DONE \$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 RUN
 chmod 700 "$RUNROOT/vc5-run-batch.sh"
+rm -f "$RUNROOT/vc5-run-batch.pid"
 echo "--- 残留检查"; pgrep -af "mitmdum[p]|tcpdum[p]" | cut -c1-100 || echo "无 mitmdump/tcpdump"; docker exec capture-cli sh -c "ls /run/oauth-capture/ 2>/dev/null | grep -v stopped || true"
 setsid -f bash "$RUNROOT/vc5-run-batch.sh" > "$RUNROOT/vc5-run-batch.out" 2>&1 < /dev/null; echo "run 批次后台启动于 $(utc_now)"

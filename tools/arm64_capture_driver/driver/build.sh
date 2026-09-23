@@ -25,11 +25,17 @@ cp -a "$B/build-tree/backend/resources" "$CTX/backend/resources"
 cp -a "$B/build-tree/deploy/docker-entrypoint.sh" "$B/build-tree/deploy/container-healthcheck.sh" "$CTX/deploy/"
 cp -a "$B/build-tree/Dockerfile.goreleaser" "$CTX/Dockerfile"
 find "$CTX" -type d -empty -print -delete
-docker build --platform linux/arm64 --label "org.opencontainers.image.revision=$C" --label "org.opencontainers.image.version=$VERSION_LABEL" -t "$TAG" "$CTX" > "$B/artifacts/docker-build.log" 2>&1
+E=$(cat "$RUNROOT/E.txt")
+BASE_ARGS=()
+for name in ALPINE_IMAGE POSTGRES_IMAGE; do
+  digest=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["inputs"]["base_images"][sys.argv[2]]["repo_digests"][0])' "$E/pre-build.json" "$name")
+  BASE_ARGS+=(--build-arg "$name=$digest")
+done
+docker build --platform linux/arm64 "${BASE_ARGS[@]}" --label "org.opencontainers.image.revision=$C" --label "org.opencontainers.image.version=$VERSION_LABEL" -t "$TAG" "$CTX" > "$B/artifacts/docker-build.log" 2>&1
 IMAGE_ID=$(docker inspect --format '{{.Id}}' "$TAG")
 docker image inspect --format '{{json .RepoDigests}}' "$IMAGE_ID" | grep -q "sub2apiplus-c0154-candidate@$IMAGE_ID"
 NODE_VERSION=$(tr -d '[:space:]' < "$B/frontend-build/node-version.txt"); PNPM_VERSION=$(tr -d '[:space:]' < "$B/frontend-build/pnpm-version.txt")
-NODE_IMAGE_ID=$(docker inspect --format '{{.Id}}' node:20-slim)
+NODE_IMAGE_ID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["inputs"]["base_images"]["NODE_IMAGE"]["image_id"])' "$E/pre-build.json")
 # ---------- 三份收据 ----------
 python3 - "$B" "$C" "$DATE" "$LDFLAGS" "$IMAGE_ID" "$VERSION_LABEL" "$NODE_VERSION" "$PNPM_VERSION" "$NODE_IMAGE_ID" "$CAND" "$FRONTEND_DEVIATION_APPROVED_BY" <<'PY'
 import json, sys, hashlib, platform, datetime

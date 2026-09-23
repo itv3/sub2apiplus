@@ -33,6 +33,7 @@ from tools.official_client_capture import codex_upgrade_vc_artifacts as artifact
 from tools.official_client_capture.tests import evaluation_chain_driver as driver
 from tools.official_client_capture.tests import managed_tree_copy
 from tools.official_client_capture.tests import test_arm64_capture_driver as driver_tests
+from tools.official_client_capture.tests import test_arm64_driver_wait as wait_tests
 from tools.official_client_capture.tests import test_codex_upgrade as upgrade_tests
 from tools.official_client_capture.tests import test_codex_upgrade_evidence_integrity as integrity_tests
 from tools.official_client_capture.tests import test_codex_upgrade_timing_ledger as timing_tests
@@ -216,28 +217,200 @@ class UpgradeFaultFixtureTests(unittest.TestCase):
             summary = timing.inspect_ledger(root, now=helper._at(45))
             self.assertEqual(summary["status"], "stop_required")
 
-    def test_r12_dead_child_currently_leaves_driver_waiting(self):
+    def test_r12_dead_child_exits_bounded_without_campaign_mutation(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             fixture = driver_tests._DriverFixture(root)
             scripts = root / "driver"
             scripts.mkdir()
-            for name in ("vc4-all.sh", "lib.sh", "parse_env.py"):
+            for name in ("vc4-all.sh", "lib.sh", "parse_env.py", "wait_state.py"):
                 shutil.copy2(driver_tests.SCRIPTS / name, scripts / name)
-            for name, source in {"trees.sh": "exit 0\n", "frontend.sh": "echo FRONTEND_DONE\n", "vc4-gates.sh": "exit 7\n"}.items():
+            # 本例只验证父子进程与等待控制，构建前置用零请求替身；输入合同由专项测试实际复算。
+            (scripts / "vc4_resume.py").write_text("print('fixture pre-build inputs')\n")
+            for name, source in {"trees.sh": "exit 0\n", "frontend.sh": "exec sleep 30\n",
+                                 "vc4-gates.sh": f"echo $$ > '{root}/gates.pid'\nexec sleep 30\n"}.items():
                 (scripts / name).write_text(source)
+            before = {path: path.read_bytes() for path in fixture.newdir.rglob("*") if path.is_file()}
             process = subprocess.Popen(["bash", str(scripts / "vc4-all.sh")],
                                        env={**os.environ, **fixture.env}, cwd=root,
                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                                        start_new_session=True)
             try:
-                with self.assertRaises(subprocess.TimeoutExpired):
-                    process.communicate(timeout=2)
+                deadline = time.monotonic() + 5
+                while not (root / "gates.pid").exists() and time.monotonic() < deadline:
+                    time.sleep(.05)
+                self.assertTrue((root / "gates.pid").is_file())
+                started = time.monotonic()
+                os.kill(int((root / "gates.pid").read_text()), signal.SIGTERM)
+                stdout, stderr = process.communicate(timeout=5)
+                self.assertEqual(process.returncode, 3, stdout + stderr)
+                self.assertIn("子进程已退出", stderr)
+                elapsed = time.monotonic() - started
+                self.assertLess(elapsed, 5)
             finally:
                 if process.poll() is None:
                     os.killpg(process.pid, signal.SIGTERM)
                 process.communicate(timeout=5)
             self.assertEqual((fixture.runroot / "gates.out").read_text(), "")
+            self.assertEqual(before, {path: path.read_bytes() for path in fixture.newdir.rglob("*") if path.is_file()})
+            print(json.dumps({"fixture": "r12-dead-child", "exit_code": 3, "detection_seconds": elapsed,
+                              "execute_jobs": 0, "reuse_jobs": 0, "live_request_count": 0,
+                              "campaign_bytes_unchanged": True}), flush=True)
+
+
+class DriverResumeChainTests(unittest.TestCase):
+    """实际 VC-4 shell 与续跑 producer 连跑；编译／镜像／Campaign 动作由零请求替身提供。"""
+
+    def test_vc5_actual_run_death_or_stale_heartbeat_stops_waiter(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = driver_tests._DriverFixture(root)
+            case = driver_tests.Vc5AllResumeTests()
+            scripts, calls = case._stub_driver(root, fixture, accept_creates_result=False)
+            case._prepare_stage(fixture, compare_done=True, acceptance_done=True)
+            log = fixture.runroot / "vc5-run-batch.out"
+            log.write_text("run started\n")
+            for fault in ("dead-run", "stale-heartbeat"):
+                with self.subTest(fault=fault):
+                    child = subprocess.Popen(["sleep", "30"])
+                    try:
+                        pid = fixture.runroot / "vc5-run-batch.pid"
+                        pid.write_text(str(child.pid))
+                        launched = time.time()-61
+                        os.utime(pid, (launched, launched))
+                        state = fixture.data_root / "control" / (fixture.new + "-supervisor") / "run-fixture"
+                        state.mkdir(parents=True, exist_ok=True)
+                        (state / "state.json").write_text(json.dumps({"started_at_epoch": launched,
+                            "owner_pid": child.pid, "owner_nonce": "fixture", "watchdog_timeout_seconds": .1}))
+                        (state / "heartbeat.json").write_text(json.dumps({"schema_version": supervisor.HEARTBEAT_SCHEMA,
+                            "owner_pid": child.pid, "owner_nonce": "fixture", "state": "running", "updated_at_epoch": time.time()-1}))
+                        if fault == "dead-run":
+                            child.terminate()
+                            child.wait()
+                        result = subprocess.run(["bash", str(scripts / "vc5-all.sh")], env={**os.environ, **fixture.env},
+                                                capture_output=True, text=True, timeout=6)
+                        self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+                        self.assertEqual(calls.read_text(), "")
+                        self.assertIn("子进程已退出" if fault == "dead-run" else "监督器心跳", result.stderr)
+                    finally:
+                        if child.poll() is None:
+                            child.terminate()
+                            child.wait()
+            print(json.dumps({"fixture": "r12-vc5-wait", "fault_cases": 2, "exit_code": 3,
+                              "execute_stages": 0, "live_request_count": 0}), flush=True)
+
+    def test_upload_timeout_resume_and_changed_inputs_rerun_only_required_stages(self):
+        helper = wait_tests.ResumeInputTests()
+        helper.setUp()
+        self.addCleanup(helper.doCleanups)
+        root = helper.root
+        fixture = driver_tests._DriverFixture(root / "harness")
+        values = wait_tests.load("parse_env").parse(fixture.env_file.read_text())
+        values.update(B=str(root), C=helper.commit, CAND=wait_tests.build_tests.CANDIDATE_ID,
+                      UP="fixture-upgrade", NEW=helper.manifest["campaign_id"], STAGE_BUDGETS="VC-4=0.02 VC-5=1",
+                      FRONTEND_DEVIATION_APPROVED_BY="测试授权")
+        fixture.env_file.write_text("".join(f'{key}="{value}"\n' for key, value in values.items()))
+        scripts = root / "driver-fixture"
+        scripts.mkdir()
+        for name in ("vc4-all.sh", "lib.sh", "parse_env.py", "wait_state.py", "upload_manifest.py"):
+            shutil.copy2(driver_tests.SCRIPTS / name, scripts / name)
+        calls = root / "stage-calls.log"
+        calls.touch()
+        golden_parameters = root / "parameters.original.json"
+        golden_parameters.write_bytes((root / "artifacts/build-parameters.json").read_bytes())
+        # 只替换外部 Campaign 身份读取和镜像／工具链查询，真实 Git／文件与统一收据代码直接运行。
+        wrapper = (
+            "import importlib.util,json,sys\nfrom pathlib import Path\n"
+            f"sys.path.insert(0, {str(driver_tests.REPO_ROOT)!r})\n"
+            f"spec=importlib.util.spec_from_file_location('real_resume', {str(driver_tests.SCRIPTS / 'vc4_resume.py')!r})\n"
+            "module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module)\n"
+            f"module.context=lambda: (Path({str(root)!r}), Path({str(root / 'campaign')!r}), {helper.manifest!r}, {helper.requirements!r})\n"
+            "real_run=module.run\n"
+            "def run(*args, **kwargs):\n"
+            "    if args[0]=='docker':\n"
+            "        if args[1:3]==('image','inspect'):\n"
+            f"            return json.dumps([{{'Id':{wait_tests.build_tests.IMAGE_ID!r},'Os':'linux','Architecture':'arm64','RepoDigests':['fixture@sha256:'+'7'*64]}}])\n"
+            f"        return {helper.node_version!r}\n"
+            f"    if args[0]=='go': return {helper.go_version!r}\n"
+            "    return real_run(*args, **kwargs)\n"
+            "module.run=run\n"
+        )
+        (scripts / "vc4_resume.py").write_text(wrapper + "if __name__=='__main__': raise SystemExit(module.main())\n")
+        bodies = {
+            "trees.sh": "echo TREES_DONE\n",
+            "frontend.sh": "echo 'FRONTEND_DONE now'\n",
+            "vc4-gates.sh": f'mkdir -p "$1/logs"\ncp "{helper.evidence}/logs/implementation.log" "$1/logs/implementation.log"\necho "GATES_DONE now"\n',
+            "build.sh": f'cp "{golden_parameters}" "{root}/artifacts/build-parameters.json"\necho BUILD_DONE\n',
+            "guard.sh": "echo GUARD_OK\n",
+        }
+        for name, body in bodies.items():
+            (scripts / name).write_text(f'#!/bin/bash\nset -e\necho {name} >> "{calls}"\n' + body)
+        fake_upgrade = fixture.data_root / "tools/official_client_capture/codex_upgrade.py"
+        fake_upgrade.write_text("import json\nprint(json.dumps({'revision':1,'status':'opened'}))\n")
+        finalize = wrapper + (
+            "from tools.official_client_capture import codex_upgrade_vc_receipt as receipts\n"
+            "root=Path(sys.argv[1]); current=module.inputs()\n"
+            "if not (root/'receipt.json').exists():\n"
+            "    gates=[{'gate_id':name,'kind':kind,'command':command,'exit_code':0,'passed':1,'failed':0,'approved_skip':0,'unexpected_skip':0} "
+            "for name,kind,command in [('affected-rule','affected',['go','test','./fixture']),('check-egress-spec','public',['make','check-egress-spec'])]]\n"
+            "    facts={'schema_version':receipts.FACTS_SCHEMA,'kind':'implementation_tests','subject':current['subject'],"
+            "'assertions':{'git_commit':current['git_commit'],'source_tree_sha256':current['tree_sha256']['source'],'target_architecture':'linux/arm64','gates':gates},"
+            "'evidence':[{'role':'check_egress_spec','path':'logs/check-egress-spec.log'},{'role':'implementation_tests','path':'logs/implementation.log'}]}\n"
+            "    (root/'facts.json').write_text(json.dumps(facts)); receipts.finalize(root,'facts.json','receipt.json')\n"
+            "module.verify(root,'full'); print('VC4_DONE')\n"
+        )
+        (scripts / "finalize.py").write_text(finalize)
+        (scripts / "vc4.sh").write_text(f'#!/bin/bash\nset -e\npython3 "{scripts}/finalize.py" "$1"\n')
+        # macOS 开发机不执行 root chown；ARM64 上仍可按实际 chown 跑本夹具。
+        path_bin = root / "fixture-bin"
+        path_bin.mkdir()
+        (path_bin / "chown").write_text("#!/bin/sh\nexit 0\n")
+        (path_bin / "chown").chmod(0o755)
+        environment = {**os.environ, **fixture.env, "PATH": str(path_bin) + ":" + os.environ["PATH"], "PYTHONDONTWRITEBYTECODE": "1"}
+        def invoke(*args):
+            return subprocess.run(["bash", str(scripts / "vc4-all.sh"), *args], env=environment,
+                                  capture_output=True, text=True, timeout=45)
+        interrupted = invoke()
+        self.assertEqual(interrupted.returncode, 3, interrupted.stdout + interrupted.stderr)
+        self.assertIn("等待超过总时限", interrupted.stderr)
+        evidence_root = Path((fixture.runroot / "E.txt").read_text().strip())
+        self.assertFalse((evidence_root / "receipt.json").exists())
+        checkpoint_before = (evidence_root / "upload-wait.json").read_bytes()
+        first_calls = calls.read_text().splitlines()
+        self.assertEqual(sorted(first_calls), sorted(["trees.sh", "frontend.sh", "vc4-gates.sh", "build.sh"]))
+        impl = fixture.runroot / "impl-logs"
+        (impl / "cross-check").mkdir(parents=True)
+        (fixture.runroot / "local-gates").mkdir()
+        (impl / "check-egress-spec.log").write_text(f"candidate_commit={helper.commit}（夹具）\nexecuted_on_commit={values['DC']}（夹具）\nexit_code=0\n")
+        (impl / "cross-check/check-egress-spec.C-only.local.log").write_text(f"commit={helper.commit}\nexit_code=0\n")
+        upload = wait_tests.load("upload_manifest")
+        (impl / "upload-manifest.json").write_text(json.dumps(upload.manifest(fixture.runroot)))
+        (impl / "READY").touch()
+        recovered = invoke("--resume-from", "upload-wait")
+        self.assertEqual(recovered.returncode, 0, recovered.stdout + recovered.stderr)
+        self.assertIn("VC4_REUSED", recovered.stdout)
+        self.assertEqual(calls.read_text().splitlines(), first_calls + ["guard.sh"])
+        self.assertEqual((evidence_root / "upload-wait.json").read_bytes(), checkpoint_before)
+        receipt_bytes = (evidence_root / "receipt.json").read_bytes()
+        complete = invoke()
+        self.assertEqual(complete.returncode, 0, complete.stdout + complete.stderr)
+        self.assertEqual((evidence_root / "receipt.json").read_bytes(), receipt_bytes)
+        params = root / "artifacts/build-parameters.json"
+        value = json.loads(params.read_text())
+        value["go_build"]["environment"]["CGO_ENABLED"] = "1"
+        params.write_text(json.dumps(value))
+        rejected = invoke("--resume-from", "upload-wait")
+        self.assertEqual(rejected.returncode, 3, rejected.stdout + rejected.stderr)
+        self.assertEqual(calls.read_text().splitlines(), first_calls + ["guard.sh"]*2)
+        rebuilt = invoke()
+        self.assertEqual(rebuilt.returncode, 0, rebuilt.stdout + rebuilt.stderr)
+        final_calls = calls.read_text().splitlines()
+        for name in first_calls:
+            self.assertEqual(final_calls.count(name), 2, final_calls)
+        print(json.dumps({"fixture": "r12-upload-resume", "initial_build_stages": 4, "resume_build_stages": 0,
+                          "full_receipt_reuse_build_stages": 0, "changed_parameters_build_stages": 4,
+                          "rejected_resume_build_stages": 0, "live_request_count": 0,
+                          "checkpoint_and_receipt_bytes_preserved": True}), flush=True)
 
 
 @unittest.skipUnless(sys.platform == "linux" and os.geteuid() == 0, "R15 内核夹具要求隔离 Linux root 环境")

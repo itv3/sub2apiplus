@@ -412,7 +412,7 @@ class Vc5AllResumeTests(unittest.TestCase):
     def _stub_driver(self, root: Path, fixture: _DriverFixture, *, accept_creates_result: bool) -> tuple[Path, Path]:
         drv = root / "drv"
         drv.mkdir(mode=0o700)
-        for name in ("lib.sh", "parse_env.py", "vc5-all.sh"):
+        for name in ("lib.sh", "parse_env.py", "wait_state.py", "vc5-all.sh"):
             (drv / name).write_bytes((SCRIPTS / name).read_bytes())
         calls = root / "stub-calls.log"
         calls.touch()

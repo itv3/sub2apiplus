@@ -1658,6 +1658,14 @@ VC-3 只生成未入库的候选 Catalog；纳入同源 candidate 树并构建�
 - **ARM64**：`setsid -f bash vc4-all.sh` 一条龙完成源码树准备、前端构建与外部门禁、镜像构建、派发前检查、
   `revision-open --initial`，以及实现测试收据、`plan-candidate-gates` 和 `record-candidate-build`。
 
+驱动等待均有界：前端／门禁子进程退出立即失败，上传每 30 秒续心跳、5 分钟过期，总等待受阶段预算和项目截止约束；
+失败打印日志尾 200 行并退出 3，不改变 Campaign 状态。上传超时后用 `vc4-all.sh --resume-from upload-wait` 续跑，
+先核对四树 HEAD 与实际源码摘要、架构和 affected 闭集、go.sum／vendor、构建参数摘要、Go／Node 版本及基础镜像 digest，
+再核验五项成功门禁及镜像、二进制、dist、context 产物；该入口不要求上传后才会生成的完整实现测试收据。
+已有完整收据的普通重起还须正式 replay 并核对同一输入绑定，才可跳过四树、门禁与构建。仅日志成功或镜像存在不构成复用。
+VC-5 等待的是后台 `vc5-run-batch.sh` 写出的实际 PID，且本次监督器 heartbeat 必须新鲜；任一失效同样退出 3，
+不会因 `setsid -f` 启动器正常退出而误判，也不会把失败批次写成完成。
+
 重建 Campaign 时 A／C／D 必须重做：catalog-stage 与门禁映射绑定本轮 `campaign_id`，不能直接沿用上一轮的
 候选提交。
 

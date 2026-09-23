@@ -11,6 +11,7 @@ from tools.official_client_capture import codex_upgrade as cu
 print(cu._directory_tree_digest(Path('$B/source')))"); echo "TREE=$TREE"
 echo "=== 实现测试收据"; if [ -f "$E/receipt.json" ]; then echo "receipt 已存在，跳过 facts/finalize"; else bash "$DRV/vc4-facts.sh" "$E" "$TREE" 2>&1 | tail -n 2; fi; test -f "$E/receipt.json"
 python3 -m tools.official_client_capture.codex_upgrade_vc_receipt replay --evidence-root "$E" --receipt receipt.json > "$RUNROOT/vc4-replay.json"; python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print("replay:", d.get("kind"), d.get("status"))' "$RUNROOT/vc4-replay.json"
+python3 "$DRV/vc4_resume.py" check --evidence-root "$E" --mode full || exit 3
 echo "=== 批次 plan-candidate-gates：计划 + 预演 + 派发"
 python3 - "$W/action-plan-vc4-plan-gates.json" "$NEW" "$CAND" "$B" "$D" <<'PY'
 import json, sys

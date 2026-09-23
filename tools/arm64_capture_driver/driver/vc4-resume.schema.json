@@ -1,0 +1,511 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "VC-4 构建与上传续跑凭证",
+  "description": "旧轮次无此凭证时重新执行，不追认旧成功日志；输入和产物均由实际工具重算。",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "stage",
+        "inputs",
+        "binding_sha256"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "arm64-vc4-resume/v1"
+        },
+        "stage": {
+          "const": "pre-build"
+        },
+        "inputs": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "subject",
+            "git_commit",
+            "tree_sha256",
+            "target_architecture",
+            "affected_gates",
+            "requirements_sha256",
+            "dependencies",
+            "toolchain",
+            "base_images",
+            "driver_build_sha256",
+            "frontend_deviation_approved_by"
+          ],
+          "properties": {
+            "subject": {
+              "type": "object"
+            },
+            "git_commit": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{40}$"
+            },
+            "tree_sha256": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "source",
+                "gate-tree",
+                "build-tree",
+                "plan-source"
+              ],
+              "properties": {
+                "source": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "gate-tree": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "build-tree": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "plan-source": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                }
+              }
+            },
+            "target_architecture": {
+              "const": "linux/arm64"
+            },
+            "affected_gates": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "string"
+              }
+            },
+            "requirements_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "dependencies": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "go_mod",
+                "go_sum",
+                "vendor_sha256"
+              ],
+              "properties": {
+                "go_mod": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "sha256",
+                    "bytes"
+                  ],
+                  "properties": {
+                    "sha256": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    },
+                    "bytes": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  }
+                },
+                "go_sum": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "sha256",
+                    "bytes"
+                  ],
+                  "properties": {
+                    "sha256": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    },
+                    "bytes": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  }
+                },
+                "vendor_sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                }
+              }
+            },
+            "toolchain": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "go_version",
+                "node_version"
+              ],
+              "properties": {
+                "go_version": {
+                  "type": "string"
+                },
+                "node_version": {
+                  "type": "string"
+                }
+              }
+            },
+            "base_images": {
+              "type": "object",
+              "required": [
+                "ALPINE_IMAGE",
+                "POSTGRES_IMAGE",
+                "NODE_IMAGE"
+              ],
+              "additionalProperties": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "reference",
+                  "image_id",
+                  "repo_digests"
+                ],
+                "properties": {
+                  "reference": {
+                    "type": "string"
+                  },
+                  "image_id": {
+                    "type": "string"
+                  },
+                  "repo_digests": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            },
+            "driver_build_sha256": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            },
+            "frontend_deviation_approved_by": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "binding_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "stage",
+        "inputs",
+        "outputs",
+        "binding_sha256"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "arm64-vc4-resume/v1"
+        },
+        "stage": {
+          "const": "upload-wait"
+        },
+        "inputs": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "subject",
+            "git_commit",
+            "tree_sha256",
+            "target_architecture",
+            "affected_gates",
+            "requirements_sha256",
+            "dependencies",
+            "toolchain",
+            "base_images",
+            "driver_build_sha256",
+            "frontend_deviation_approved_by"
+          ],
+          "properties": {
+            "subject": {
+              "type": "object"
+            },
+            "git_commit": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{40}$"
+            },
+            "tree_sha256": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "source",
+                "gate-tree",
+                "build-tree",
+                "plan-source"
+              ],
+              "properties": {
+                "source": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "gate-tree": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "build-tree": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "plan-source": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                }
+              }
+            },
+            "target_architecture": {
+              "const": "linux/arm64"
+            },
+            "affected_gates": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "string"
+              }
+            },
+            "requirements_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "dependencies": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "go_mod",
+                "go_sum",
+                "vendor_sha256"
+              ],
+              "properties": {
+                "go_mod": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "sha256",
+                    "bytes"
+                  ],
+                  "properties": {
+                    "sha256": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    },
+                    "bytes": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  }
+                },
+                "go_sum": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "sha256",
+                    "bytes"
+                  ],
+                  "properties": {
+                    "sha256": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    },
+                    "bytes": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  }
+                },
+                "vendor_sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                }
+              }
+            },
+            "toolchain": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "go_version",
+                "node_version"
+              ],
+              "properties": {
+                "go_version": {
+                  "type": "string"
+                },
+                "node_version": {
+                  "type": "string"
+                }
+              }
+            },
+            "base_images": {
+              "type": "object",
+              "required": [
+                "ALPINE_IMAGE",
+                "POSTGRES_IMAGE",
+                "NODE_IMAGE"
+              ],
+              "additionalProperties": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "reference",
+                  "image_id",
+                  "repo_digests"
+                ],
+                "properties": {
+                  "reference": {
+                    "type": "string"
+                  },
+                  "image_id": {
+                    "type": "string"
+                  },
+                  "repo_digests": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            },
+            "driver_build_sha256": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            },
+            "frontend_deviation_approved_by": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "outputs": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "parameters_sha256",
+            "image_id",
+            "implementation_log",
+            "binary",
+            "build_inventory_sha256",
+            "frontend_provenance_sha256",
+            "source_transition",
+            "built_at_utc"
+          ],
+          "properties": {
+            "parameters_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "image_id": {
+              "type": "string"
+            },
+            "implementation_log": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "sha256",
+                "bytes"
+              ],
+              "properties": {
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "bytes": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            },
+            "binary": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "sha256",
+                "bytes"
+              ],
+              "properties": {
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "bytes": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            },
+            "build_inventory_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "frontend_provenance_sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "source_transition": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "sha256",
+                "bytes"
+              ],
+              "properties": {
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "bytes": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            },
+            "built_at_utc": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "sha256",
+                "bytes"
+              ],
+              "properties": {
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "bytes": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          }
+        },
+        "binding_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    }
+  ]
+}

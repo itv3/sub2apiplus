@@ -21,3 +21,26 @@ AS=$D/control/$NEW-assertions
 # 下一批次序号：按 control/vc/batches 中已 COMMIT 的最大序号 +1
 next_seq() { python3 -c "import glob,os,sys; xs=[int(os.path.basename(p).split('-')[0]) for p in glob.glob(sys.argv[1]+'/control/vc/batches/*.json')]; print(max(xs)+1 if xs else 1)" "$NEWDIR"; }
 utc_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+# 等待失败统一退出 3；只退出当前驱动，不改 Campaign／账本或猜测恢复分支。
+wait_for_marker() {
+  local file="$1" regex="$2" max_seconds="$3" pid="${4:-}"
+  shift 3; if [ "$#" -gt 0 ]; then shift; fi
+  local args=(marker "$file" --regex "$regex" --max-seconds "$max_seconds")
+  if [ -n "$pid" ]; then args+=(--pid "$pid"); fi
+  python3 "$DRV/wait_state.py" "${args[@]}" "$@" || exit 3
+}
+wait_for_heartbeat() {
+  local file="$1" stale_seconds="$2" max_seconds="$3"
+  shift 3
+  python3 "$DRV/wait_state.py" heartbeat "$file" --stale-seconds "$stale_seconds" --max-seconds "$max_seconds" "$@" || exit 3
+}
+# 沿用参数文件中的阶段预算，并在每次重起时仍受项目绝对截止约束。
+wait_budget() {
+  python3 - "$1" "$STAGE_BUDGETS" "$PROJECT_DEADLINE_UTC" <<'PY'
+import datetime, sys, time
+phase, budgets, deadline = sys.argv[1:]
+minutes = dict(item.split('=', 1) for item in budgets.split())
+remaining = datetime.datetime.fromisoformat(deadline.replace('Z', '+00:00')).timestamp() - time.time()
+print(max(1, int(min(float(minutes.get(phase, '90'))*60, remaining))))
+PY
+}
