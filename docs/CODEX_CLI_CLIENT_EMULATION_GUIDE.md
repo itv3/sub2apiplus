@@ -1882,9 +1882,8 @@ python3 tools/official_client_capture/codex_upgrade.py capture-candidate run \
 生成 `attempt_id` 与 `run_nonce`。attempt、activation fact、镜像构建证明和实测源码摘要必须指向同一
 源码树。任一身份不一致时不得创建 reservation 或发送请求，应按 Framework §5.3.4 返回相应阶段。
 
-Campaign 与 candidate ID 会和场景后缀、主体及 16 字符 UTC 窗口拼成 direct／mitm 运行坐标，最终值
-不得超过 128 字符。编排器必须在 reservation 前复算完整坐标并失败关闭，不得留下必败 attempt。run 与
-seal 之间不得修改 candidate 源码树；`runs/` 及 evidence root 的目录权限至多 `0700`、文件至多
+Campaign 与 candidate ID 会和场景后缀、主体及时间窗口拼成运行坐标，拼接后不得超过 128 字符，起 ID 时
+不要太长（超长会在 reservation 前被拒）。run 与 seal 之间不得修改 candidate 源码树；`runs/` 及 evidence root 的目录权限至多 `0700`、文件至多
 `0600`。确认必败时执行受管停止和环境恢复，不得强杀并丢失 after 探针。
 
 失败从哪里接着跑，按候选证据是否已封存分界：**封存前**（reservation 之后、`capture-candidate seal` 之前）
@@ -2095,36 +2094,16 @@ selector 选择的 `record_type` 可能承载多个事实时，必须在 `where`
 收据重放。每条规则最终均为 `status=pass`、`evidence_level=full`；不允许 fail、N／A、手写通过、
 未绑定 inventory 的证据路径，或把继承规则伪装成本轮执行。
 
-**checker 投影输入模式与 `evaluation-run.json`。** builder 对每条规则、每一侧先由
-`candidate_rule_assertion.project_capture_manifest` 从完整 capture manifest 构造 per-rule 投影（A0 为与规则
-场景相交的 artifact，再沿结构化 artifact 记录的 `source_artifacts` 闭包并入引用条目；顶层字段逐字沿用，
-条目按原顺序，不加新顶层字段），写为 checkpoint 绑定的 `input_projection` 文件，checker 以
-`--capture-manifest-projection <投影路径>` 执行——checker 按同一函数从完整 manifest 重算期望投影，不等即
-`projection-mismatch` 失败关闭，`projection_sha256` 只记录在 checkpoint 与单规则结果里。每条规则每一侧一份
-`codex-upgrade-evaluation-checkpoint/v1`（write-once、链式自摘要，绑定投影摘要、命令摘要、checker 摘要、
-`dependency_projection_sha256`＝规则 id＋validation_mode＋候选／官方投影摘要＋官方权威＋规则契约摘要＋
-checker 摘要＋builder 摘要），批次结束写 `evaluation-run.json`（`codex-upgrade-evaluation-run/v1`，逐规则
-`status／reused_from／dependency_projection_sha256` 与 evaluator 四项摘要）。路径按基线分两种：b0 为
-`assertions/<candidate-id>/`（`results.json`、`checkpoints/`、`evaluation-run.json`），b≥1 为
-`assertions/<candidate-id>/revisions/b<K>/`。`--reuse-from <前序基线 evaluation-run.json>` 且
-`reuse_authority=anchored` 时，`dependency_projection_sha256` 相等的 pass 规则引用式复用（行记
-`reused_from={baseline, checkpoint_sha256}`，checker 调用数为 0）；checker、规则契约或投影任一变化即该规则
-重跑。同基线重入：已有 `evaluation-run.json` 即视为完成，校验各行 checkpoint 与链 head 后按其状态退出、
-不覆盖、零 checker。失败后从哪里接着跑见 §4.5.8。
+**checker 投影与逐规则复用。** builder 对每条规则、每一侧先从完整 capture manifest 构造投影，checker 只读投影；
+每条规则每侧写一份链式 checkpoint，批次结束写 `evaluation-run.json`。后继评估基线以 `--reuse-from` 引用前序基线时，
+依赖投影摘要相等的 pass 规则直接复用（零 checker），其余重跑；同基线重入按已有结果退出、不覆盖。投影构造、
+checkpoint 与路径细节见 §4.7，失败后从哪里接着跑见 §4.5.8。
 
 ### 4.5.6 外部门禁与 accept
 
-**accept 对逐规则断言行的两种校验。** 当前评估基线有 `evaluation-run.json` 时，accept
-先核对其 evaluator 摘要属该基线授权（b0 只核 checker／builder 等于 plan `tool_identity` 规范 entry，
-b≥1 四项等于 `recovery.json.current_evaluator_digests`）、各 checkpoint 的 checker 摘要与之
-一致、全部规则 `status=pass`，再逐行分两类：**executed 行**（`reused_from=null`）在当前基线的候选阶段与
-inventory 上核对——机器命令必须等于 `build_assertion_command` 权威构造器按当前投影复算的期望命令、
-checkpoint 绑定的文档摘要与结果行一致、证据引用落在当前候选 inventory；**reused 行**
-（`reused_from={baseline, checkpoint_sha256}`）先重放复用锚链（被复用基线 b<J> 到当前基线的 COMMIT 链），
-再核对被复用基线的 `evaluation-run.json` 同样经其自身授权、checker 与当前基线相同、该规则在 b<J> 为 pass
-且 `dependency_projection_sha256` 相等、两侧复用 checkpoint 逐字绑定 b<J> 的历史 checkpoint（摘要、文档、
-状态），并把候选证据引用、前缀与机器命令 context 全部映射到 b<J> 的候选阶段与 inventory（attempt-recovery
-基线的候选前缀与被复用基线不同，不得用当前阶段核对复用行）。任一不成立即拒绝，不得以“历史通过”代替。
+**accept 对断言行的校验。** 当前评估基线有 `evaluation-run.json` 时，accept 先核对它已获该基线授权且全部规则
+`status=pass`；本基线执行的行按当前候选证据与机器命令核对，复用的行沿复用锚链回到被复用基线核对。任一不成立
+即拒绝，不得以“历史通过”代替；逐项校验内容见 §4.7。
 
 在同一 candidate 源码树执行 `make check-egress-spec`、`make test` 和目标平台测试。首次 attempt 必须
 执行全部三项；每次 attempt 均在首项门禁前和末项门禁后生成 `gate_before／gate_after` ARM64 环境
@@ -2214,9 +2193,8 @@ python3 tools/official_client_capture/codex_upgrade.py canonical-import \
 ~~~
 
 预览必须逐项给出 affected／inherited、execute／reuse、来源类型和 `review_sha256`，同时保持
-`scanned_bytes=0`、`live_request_count=0`。`review_sha256` 只散列 approval projection：完整导入主题减去
-派发它的父 run 的 `started_at_epoch` 与派生的 `budget_seconds`，原始绝对 deadline 保留；因此离线预览、
-父批次批准与换一个父 run 重放同一批准得到同一摘要，checkpoint 已存在时按同一投影比较即幂等。复核后
+`scanned_bytes=0`、`live_request_count=0`。`review_sha256` 与派发它的父 run 无关，离线预览、父批次批准和
+换一个父 run 重放都得到同一摘要，重复执行幂等。复核后
 以完全相同参数追加 `--approve-import-sha256 <review_sha256>`，只写一次初始化 checkpoint；不得复制证据
 或修改既有 attempt。批准必须由 `campaign-run` 派发：时间锚从父 run 上下文解析并与其 `state.json`
 交叉验证，批次内动作不得自带 `--supervisor-run-dir`。
@@ -2254,78 +2232,32 @@ rollback 收据完成前不得宣称升级完成。
 
 ### 4.5.8 评估失败的分类与局部恢复
 
-本节是 §4.5.5～§4.5.7 之后“坏在哪里、从哪里接着跑”的操作合同；机制细节见 [§4.7](#codex-4-7)
-“Codex 评估失败局部恢复与断点续跑”。适用对象只有候选证据封存之后的离线评估失败（compare、逐规则断言、
-accept）；封存前的 Job 失败按 §4.5.1 走 `reconcile-attempt` + `resume --rerun-failed --recovery-preview`。
+适用于候选证据封存之后的离线评估失败（compare、逐规则断言、accept）；封存前的 Job 失败按 §4.5.1 走
+`reconcile-attempt` + `resume --rerun-failed --recovery-preview`。复用授权规则、评估基线状态机、恢复段增量封存和
+各类崩溃处理等机制细节见 [§4.7](#codex-4-7)“Codex 评估失败局部恢复与断点续跑”。
 
-**1. 失败来源与复用授权。** 失败父 run 的动作推出三者互斥的 `failure_source`：`assertion-failed`（断言
-动作，builder 已落 `evaluation-run.json` 含 fail 行；b0 首批未落时由 preview／apply 按 b0 批准清单派生并固定
-`reuse_authority=none`）、
-`offline-compare-failed`、`offline-accept-failed`。`reuse_authority` 由该失败 run 推出，四条规则：
-①`offline-compare-failed` 恒为 `none`；②`assertion-failed`／`offline-accept-failed` 只有在 stop-receipt
-`action_outputs_sha256` 非 `null`、且该输出绑定的条目指向一份存在的 `evaluation-run.json`（`exists=true`、摘要
-非空）时才为 `anchored`，允许下一基线引用式复用——绑定缺失（O1／R2-b：绑定未写即崩溃）或绑定中没有该
-索引为 `none`，下一基线全部规则重跑；③绑定记录的索引摘要与当前 `evaluation-run.json` 不一致直接失败关闭；
-④b0 首批未落索引、由批准清单派生的索引强制 `none`。失败 run 必须先
-`reconcile-supervisor-run` 对账到 `receipt_passed`，`evaluation-recover apply` 才受理。
+1. 先用 `reconcile-supervisor-run` 把失败父 run 对账到 `receipt_passed`。
+2. 执行 `evaluation-recover preview`：工具从失败规则沿证据链定位到产出该证据的候选 Job 集合 J*，并给出可选的
+   根因类别 `admissible_classes`。
+3. 选其中一类执行 `evaluation-recover apply --root-cause-class <类别>`：
 
-**2. failure-scope 定位链。** 从失败规则→失败 check→check 引用的证据 artifact→provenance 条目（派生观测
-`derived/…` 沿派生收据的 source 回到原始条目）→产出该证据的候选 Job；官方侧引用只记录不入 J*。定位不到
-Job 的失败（如 compare／accept 工具异常）没有 `transient-environment` 准入。
+| 类别 | 适用情况 | 之后怎么做 |
+|---|---|---|
+| `evaluator-defect` | checker／builder／compare reader／accept reader 有缺陷 | 先修工具并受监督部署（`--fix-commit`／`--deployment-receipt`）；新评估基线复用全部采集证据，只重跑受缺陷影响的评估步骤和规则 |
+| `transient-environment` | 临时环境故障，且能定位到 Job（J* 非空） | 开恢复段 `ar<k>` 只补跑 J*，增量封存后重跑 compare，断言只重跑引用 J* 证据的规则 |
+| `candidate-source` | 候选源码问题 | 转 `invalidate-candidate`，开新候选 revision（§4.4.3） |
+| `approval-inputs` | 画像、场景或规则等批准输入有误 | 显式停线，从 VC-2 建后继 Campaign |
 
-**3. 四类裁定与出口。** `evaluation-recover preview` 给出 `admissible_classes`，`apply --root-cause-class`
-只能取其中之一：
-- `evaluator-defect`：checker／builder／compare reader／accept reader 缺陷。前提：四项摘要至少一项变化且覆盖
-  缺陷项、修复提交已受监督部署（`--fix-commit`／`--deployment-receipt`）、候选 attempt 的 `evaluation-epoch`
-  链已覆盖当前 evidence 摘要。出口：`evaluator-only` 基线 b<K>，根因 `evaluation.rule-failed`；
-  `stage_sources` 中 capture 恒 `reuse`，compare 按 compare reader 是否变化，断言／accept `local`。
-- `transient-environment`：failure-scope 定位到的 Job 集合 J* 非空。出口：`attempt-recovery` 基线 b<K>
-  （`recovery_revision=ar<k>` 由 apply 按已有段最大编号 + 1 返回，首次才是 `ar1`；`execute_jobs=J*`、`reuse_jobs` 其余、
-  `execute_rules` 为引用 J* 证据的规则），
-  根因 `attempt.job-transient-failure`；随后走第 6 项恢复段。
-- `candidate-source`：候选源码问题，`redirect` 到 `invalidate-candidate preview`（候选级 revision 三分支，见 §4.4.3）。
-- `approval-inputs`：批准输入（画像、场景、规则）问题，`redirect` 到显式停线后从 VC-2 建后继 Campaign。
-两类真实出口的根因在同阶段跨基线／跨恢复段累计，达 `same_root_cause_retry_limit` 即在 apply 二次判定中
-永久停线（基线停在 prepared，可 `abandon`）。
+4. 恢复段：`capture-candidate run --attempt-recovery ar<k> --acknowledge-live-requests` 补跑 J*，
+   `capture-candidate seal --attempt-id <id> --attempt-recovery ar<k>` 增量封存，
+   `account-sealed-candidate --attempt-recovery ar<k>` 入账。段内失败或中断时，
+   `reconcile-attempt --attempt-id <id> --recovery-revision ar<k>` 对账，批准零请求预览后以 `ar<k+1>` 整段重做 J*。
 
-**4. 基线状态机与 `stage_sources`。** `revisions/b<K>/`：`PREPARED`（diagnosis＋recovery 已写）→
-`AUTHORIZATION`（根因事件已推入项目总账）→ `COMMIT`（`stage_sources` 冻结、账本 `evaluation_baseline`
-激活）；未 COMMIT 的基线只能 `evaluation-recover abandon`（写 `ABANDON`，编号不复用）。当前基线只由账本
-最后一条 `evaluation_baseline` 事件决定；读入口按 `stage_sources` 逐级回溯（`reuse` 只接受已封存的规范结果）；
-批次清单成对携带 `evaluation_baseline／baseline_commit_sha256／evaluator_digests`，评估基线的历史链后继协议
-按账本 `evaluation_baseline` 事件历史核对。
+同一根因在同一阶段跨基线、跨恢复段累计，达到 `same_root_cause_retry_limit` 即永久停线。
 
-**5. 投影输入与逐规则复用。** 见 §4.5.5：b<K> 的断言批次以 `--reuse-from b<K-1>/evaluation-run.json`
-派发，`anchored` 下依赖投影摘要相等的 pass 规则复用、其余重跑；accept 对 executed／reused 行的校验见
-§4.5.6。C1（accept 动作崩溃）：环境恢复后逐字重派同一批次，builder 零 checker、accept 已封存一致才放行到
-completion。
-
-**6. 恢复段 ar<k> 与增量封存。** `capture-candidate run --attempt-recovery ar<k> --acknowledge-live-requests`
-只补跑 J*（证据根 `<原根>-recovery-ar<k>`，原 attempt 不变），成功段 `awaiting_receipts`，同段逐字重派幂等；
-`capture-candidate seal --attempt-id <id> --attempt-recovery ar<k>` 做增量封存，五类根等式必须成立：
-`dropped_roots = reexecuted_job_roots ∪ superseded_stage_roots`、`delta_roots = recovered_job_roots ∪
-recovery_control_roots(段 evidence／logs) ∪ baseline_private_root`、`reused_job_roots ∩ delta_roots = ∅`、
-`final_roots = reused_job_roots ∪ delta_roots`、投影收据 `dropped_roots` 与基线冻结集合精确相等；S1（投影已
-写、delta 扫描中断）续作不重读已完成条目，S2（合并清单已写、result 未写）直接进第 4 阶段。
-`account-sealed-candidate --attempt-recovery ar<k>` 段级入账后，b<K> 的 compare 重跑（local），断言按第 5 项
-复用，completion 绑定 b<K>。
-
-**7. 段失败与后继段。** 段内 Job 失败或段预约之后中断：`reconcile-attempt --attempt-id <id>
---recovery-revision ar<k>`（账本 `attempt_recovery_failed`，根因 `attempt.interrupted`）→ 零请求预览按权威链
-（段预约三元组 → `b<K>/COMMIT` → `recovery.json`）取 J*，`planned == execute == J*`、`reuse` 恒空、请求估算
-`known_by_job ∪ unknown_job_ids == J*` 且 `known_total = Σknown` → `--approve-recovery-sha256` 批准 →
-`--authorize-recovery-preview <path>` 消费（`recovery_required → recovery_authorized → active`）→
-`capture-candidate run … --attempt-recovery ar<k+1> --rerun-failed --recovery-preview <path>` 整段重做 J*。
-CLI 与监督器后继协议都重放上述等式。R2 的 attempt-recovery 变体（段动作已成功、父 run 终态前 owner 丢失，
-monitor 封存 `failed／parent-finalize-lost`）：`reconcile-supervisor-run` 可恢复后按 N+1 逐字重派同一批次，段 run
-幂等返回（零请求），再继续段 seal。
-
-**8. 不在本合同内。** `failed_gates` 与 §4.5.6 的外部门禁失败不是评估失败：门禁收据以 attempt 为主体、
-按 §4.5.6 重新执行门禁并生成新收据，不开评估基线、不进入 `evaluation-recover`；同样不在本合同内的还有
-候选源码问题（`invalidate-candidate`／`revision-open`，见 §4.4.3）与取得执行权前的父 run 失败（见 §4.7）。
-历史只读入口 `recover-candidate-failed-jobs` 不得用于新 Campaign，说明见
-[历史审计 §7](CODEX_CLI_CLIENT_EMULATION_HISTORY_AUDIT.md#codex-0154-historical-recovery-entrypoints)；
-临时环境故障一律走本节第 3／6 项的恢复段。
+不走本流程的：外部门禁失败（`failed_gates`）按 §4.5.6 重跑门禁并生成新收据；候选源码问题走 §4.4.3；取得执行权前的
+父 run 失败见 §4.7。历史只读入口 `recover-candidate-failed-jobs` 不得用于新 Campaign，说明见
+[历史审计 §7](CODEX_CLI_CLIENT_EMULATION_HISTORY_AUDIT.md#codex-0154-historical-recovery-entrypoints)。
 
 <a id="codex-vc-6"></a>
 ## 4.6 VC-6 交付或生产激活
@@ -3079,6 +3011,24 @@ manifest 投影（`--capture-manifest-projection`）；`--reuse-from <前序基�
 且绑定条目指向一份存在的 `evaluation-run.json`（`exists=true`、摘要非空）时才为 `anchored`，绑定缺失
 （O1／R2-b）或未绑定该索引为 `none`；绑定记录的索引摘要与当前文件不一致直接失败关闭；b0 首批未落索引时由
 批准清单派生的索引（`derived=true`）强制 `none`。
+投影由 `candidate_rule_assertion.project_capture_manifest` 按规则、按侧从完整 capture manifest 构造：取与规则场景
+相交的 artifact，再沿结构化 artifact 记录的 `source_artifacts` 闭包并入引用条目，顶层字段逐字沿用、条目保持
+原顺序、不加新顶层字段；投影写为 checkpoint 绑定的 `input_projection` 文件，checker 按同一函数从完整 manifest
+重算，不等即 `projection-mismatch` 失败关闭。`dependency_projection_sha256` 由规则 id、validation_mode、候选与
+官方投影摘要、官方权威、规则契约摘要、checker 摘要和 builder 摘要组成。结果路径按基线分两种：b0 为
+`assertions/<cid>/`（`results.json`、`checkpoints/`、`evaluation-run.json`），b≥1 为 `assertions/<cid>/revisions/b<K>/`。
+
+**accept 对逐规则断言行的两种校验。** 当前评估基线有 `evaluation-run.json` 时，accept
+先核对其 evaluator 摘要属该基线授权（b0 只核 checker／builder 等于 plan `tool_identity` 规范 entry，
+b≥1 四项等于 `recovery.json.current_evaluator_digests`）、各 checkpoint 的 checker 摘要与之
+一致、全部规则 `status=pass`，再逐行分两类：**executed 行**（`reused_from=null`）在当前基线的候选阶段与
+inventory 上核对——机器命令必须等于 `build_assertion_command` 权威构造器按当前投影复算的期望命令、
+checkpoint 绑定的文档摘要与结果行一致、证据引用落在当前候选 inventory；**reused 行**
+（`reused_from={baseline, checkpoint_sha256}`）先重放复用锚链（被复用基线 b<J> 到当前基线的 COMMIT 链），
+再核对被复用基线的 `evaluation-run.json` 同样经其自身授权、checker 与当前基线相同、该规则在 b<J> 为 pass
+且 `dependency_projection_sha256` 相等、两侧复用 checkpoint 逐字绑定 b<J> 的历史 checkpoint（摘要、文档、
+状态），并把候选证据引用、前缀与机器命令 context 全部映射到 b<J> 的候选阶段与 inventory（attempt-recovery
+基线的候选前缀与被复用基线不同，不得用当前阶段核对复用行）。任一不成立即拒绝，不得以“历史通过”代替。
 
 **失败分类与局部恢复（零请求）。** 失败父 run 对账（`reconcile-supervisor-run`，`receipt_passed`）之后：
 
@@ -3143,7 +3093,10 @@ EvidenceManifest 按**整根**投影（只保留复用 Job 的根，零扫描，
 （重采 Job 根、段 `evidence`／`logs`、基线私有根）做唯一一次深度扫描（逐文件 checkpoint 续作，S1：中断后已完成条目
 不重读）并以 `preserve_prefixes` 合并，`scanned_bytes` 只计 delta；合并清单已写而 result 未写时（S2）直接进
 第 4 阶段；④ seal 预演（`rehearse-candidate-seal`，与普通 seal 同一门禁）通过后写 `revisions/b<K>/result.json`
-（`stage_sources` 的 local 目标，绑定原 attempt、段 run-summary、effective-results、投影收据与五类根）。段级
+（`stage_sources` 的 local 目标，绑定原 attempt、段 run-summary、effective-results、投影收据与五类根）。五类根
+必须满足：`dropped_roots = reexecuted_job_roots ∪ superseded_stage_roots`、`delta_roots = recovered_job_roots ∪
+recovery_control_roots(段 evidence／logs) ∪ baseline_private_root`、`reused_job_roots ∩ delta_roots = ∅`、
+`final_roots = reused_job_roots ∪ delta_roots`，且投影收据的 `dropped_roots` 与基线冻结集合精确相等。段级
 入账 `account-sealed-candidate --attempt-recovery ar<k>` 只记本段新增请求。随后 b<K> 的 `compare` 为 local
 须重跑，逐规则断言以 `--reuse-from` 前序基线的 `evaluation-run.json`：只有引用 J* 证据的规则重跑，其余复用
 （builder 配置 `reuse_candidate_evidence_prefix` 指向被复用基线的候选前缀，accept 的复用行按被复用基线阶段
