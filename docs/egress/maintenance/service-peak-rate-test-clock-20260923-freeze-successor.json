@@ -1,0 +1,60 @@
+{
+  "base_commit": "a393b1fd1099ee242b5764faeadbd3f499370f7b",
+  "changed_path_count": 3,
+  "current_commit": "bcb696db95b5953af4ff224677cfe56b3aac0819",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 3991,
+  "frozen_path_count": 1399,
+  "identity_sha256": "5108f9950530178f2940a03bc4f10b3c621217ad5a83be1dc95cd062a8c193a2",
+  "issued_at_utc": "2026-09-23T00:16:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-service-peak-rate-test-clock-20260923-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/internal/service/gateway_record_usage_test.go",
+      "predecessor_sha256s": [
+        "ab65701e00638f3dc9cfe2990152dc76722cd1bf1e23e4b102fe850775a05c2b"
+      ],
+      "reason": "登记分组峰时倍率测试改为显式注入定价时刻、消除 23:59 真实时钟时间炸弹（bcb696db9）的冻结承接边；仅改测试，不改计费逻辑、画像、Persona、wire 或出站代码 path=backend/internal/service/gateway_record_usage_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "d57aac3fc7ffafc7bc3cf51f78170c8c5b6a408169bf481af7681c2082e00fbd"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_record_usage_test.go",
+      "predecessor_sha256s": [
+        "fbf82bf7073b3a71428732fb52386f4a5099068a70d9ff04f4ae4ad8d9df1078"
+      ],
+      "reason": "登记分组峰时倍率测试改为显式注入定价时刻、消除 23:59 真实时钟时间炸弹（bcb696db9）的冻结承接边；仅改测试，不改计费逻辑、画像、Persona、wire 或出站代码 path=backend/internal/service/openai_gateway_record_usage_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "2e255ff1ed3861e228fe9b02cf43e9ad4f5a05db523633985fb05375328f3d3d"
+    }
+  ],
+  "unregistered_path_count": 1,
+  "unregistered_paths": [
+    "backend/internal/service/openai_profit_control_test.go"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
