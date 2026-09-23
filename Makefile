@@ -250,7 +250,9 @@ test-capture-tools:
 # 执行；不删除、不 skip。防回流由 tests/test_capture_test_layering.py 保证。
 CAPTURE_REAL_CHAIN_MODULES := \
 	tools.official_client_capture.tests.real_chains.test_codex_upgrade_evaluation_real_chain \
-	tools.official_client_capture.tests.real_chains.test_codex_upgrade_evaluation_attempt_recovery_real_chain
+	tools.official_client_capture.tests.real_chains.test_codex_upgrade_evaluation_attempt_recovery_real_chain \
+	tools.official_client_capture.tests.real_chains.test_codex_upgrade_full_chain \
+	tools.official_client_capture.tests.real_chains.test_codex_upgrade_fault_fixtures
 test-capture-real-chains:
 	@CLAUDE_AST_TYPESCRIPT_MODULE="$(CAPTURE_TYPESCRIPT_MODULE)" \
 		PYTHONDONTWRITEBYTECODE=1 python3 -m unittest $(CAPTURE_REAL_CHAIN_MODULES)

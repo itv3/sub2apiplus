@@ -1412,8 +1412,14 @@ Formal Campaign 时的工具就绪证明。它绑定部署收据的策略版本�
 
 1. 策略兼容认证 `codex_upgrade_policy_certification compatibility`：只在工具身份策略版本变化时签一次；
 2. 策略激活认证 `codex_upgrade_policy_certification activation`：每次部署签一次；
-3. pre-A3 路径认证 `codex_upgrade_pre_a3_certification run`：重放历史夹具回归和 VC-2～VC-6 派发链；
+3. pre-A3 路径认证 `codex_upgrade_pre_a3_certification run`：重放历史夹具回归和 VC-2～VC-6 派发链；阶段 1 还登记
+   `vc-chain.full-validation-only`，在隔离副本中连续验证复用导入、三批分类、候选构建、评估验收和 VC-6 只读交付。
+   真实链只在 pre-A3 中执行一次；开发机与 CI 可手动运行 `make test-capture-real-chains`，不把它加入候选默认门禁；
 4. 发布认证：重放并绑定部署收据、pre-A3 认证、完整 Job 演练收据和 atomic-double 收据（分批演练收据可选）。
+
+发布认证在具备 Go 与 Docker 的 Linux ARM64 上签发，并以 `real_chain_coverage` 记录本发布包登记的真实链及其测试入口。
+已登记的链失败、重复、缺失或 skip 均不得签发；未登记的后续链不阻塞当前发布。历史认证保留原字节，缺少该字段时
+按原合同只读重放，不据此签发新的发布认证。
 
 ```bash
 python3 -m tools.official_client_capture.certify_release issue \

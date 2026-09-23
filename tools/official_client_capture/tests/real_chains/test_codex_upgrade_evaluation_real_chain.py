@@ -115,6 +115,8 @@ class _RealChainHarness:
             extra_env={TREE_ROOT_ENV: str(tree_root)},
             timeout=timeout,
         )
+        # 连续链失败时保留工具实际诊断，避免只剩父监督器的动作退出状态。
+        self.last_stdout, self.last_stderr = completed.stdout, completed.stderr
         self.case.assertEqual(
             completed.returncode, expect_exit,
             f"driver {' '.join(arguments)} rc={completed.returncode}\nSTDERR:\n{completed.stderr[-4000:]}\nSTDOUT:\n{completed.stdout[-2000:]}",

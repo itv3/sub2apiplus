@@ -34,8 +34,17 @@ from tools.official_client_capture.tests import project_ledger_fixture
 
 SCHEMA_VERSION = "pre-a3-path-certification/v1"
 FIXTURE_ONLY_ENV = project_ledger_fixture.FIXTURE_ONLY_ENV
+# R13 分阶段登记：阶段 1 只要求 validation_only 连续链，后续再追加取证与生产替换链。
+REAL_CHAIN_IDS = ("vc-chain.full-validation-only",)
 # (场景名, 说明, 测试模块, 测试类, 测试方法)
 SCENARIOS: tuple[tuple[str, str, str, str, str], ...] = (
+    (
+        "vc-chain.full-validation-only",
+        "VC-0 复用导入、VC-2 三批、候选构建、真实评估与 VC-6 只读交付连续链",
+        "tools.official_client_capture.tests.real_chains.test_codex_upgrade_full_chain",
+        "FullValidationOnlyChainTests",
+        "test_full_validation_only_chain",
+    ),
     (
         "reconcile-attempt.recoverable-preview-approve-resume",
         "孤儿 attempt 先入账后判定为可恢复，零请求预览、批准与 resume 门禁",
@@ -264,7 +273,30 @@ def run_scenario(scenario: tuple[str, str, str, str, str]) -> dict[str, Any]:
         record["error"] = problems[0][-2000:]
     if result.skipped:
         record["error"] = "场景被跳过"
+        if name in REAL_CHAIN_IDS:
+            record["status"] = "uncertified"
+    if hasattr(case, "real_chain_metrics"):
+        record["metrics"] = case.real_chain_metrics
     return record
+
+
+def real_chain_coverage(payload: Mapping[str, Any], *, required: tuple[str, ...] = REAL_CHAIN_IDS) -> list[dict[str, Any]]:
+    """从已签名的逐场景结果提取覆盖；缺失、重复和 skip 均不等价于通过。"""
+
+    rows = payload.get("scenarios")
+    if not isinstance(rows, list):
+        raise CertificationError("路径认证缺少逐场景结果")
+    coverage: list[dict[str, Any]] = []
+    for name in required:
+        matches = [row for row in rows if isinstance(row, Mapping) and row.get("name") == name]
+        if len(matches) != 1 or matches[0].get("status") != "passed":
+            raise CertificationError(f"已登记的真实链未认证：{name}")
+        scenario = next(item for item in SCENARIOS if item[0] == name)
+        expected_test = f"{scenario[2]}:{scenario[3]}.{scenario[4]}"
+        if matches[0].get("test") != expected_test:
+            raise CertificationError(f"真实链测试入口与登记不一致：{name}")
+        coverage.append({"id": name, "test": expected_test, "status": "passed"})
+    return coverage
 
 
 def _accounting_resolved_scenario(staging_root: Path) -> dict[str, Any]:

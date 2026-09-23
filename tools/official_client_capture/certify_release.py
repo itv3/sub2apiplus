@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import platform
+import shutil
 import subprocess
 import sys
 from collections.abc import Mapping
@@ -219,6 +220,7 @@ def compose_certification(
     atomic_double_rehearsal: Mapping[str, Any],
     campaign_run_rehearsal: Mapping[str, Any] | None,
     issued_at_utc: str | None = None,
+    real_chain_coverage: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """按固定字段组装并自签发布认证；各绑定由调用方（签发或测试夹具）提供。"""
 
@@ -238,7 +240,29 @@ def compose_certification(
         "authorized_scopes": ["VC-0", "A3b", "VC-2", "VC-3", "VC-4", "VC-5", "VC-6"],
         "superseded_by": None,
     }
+    # 历史夹具不补字段、不改旧自摘要；本次正式签发必须从 pre-A3 结果提取覆盖。
+    if real_chain_coverage is not None:
+        core["real_chain_coverage"] = real_chain_coverage
     return {**core, "receipt_sha256": _fingerprint(core)}
+
+
+def _require_release_platform() -> None:
+    """只在能实际验证夹具镜像及 Go 制品的 Linux ARM64 主机签发发布认证。"""
+
+    if platform.system() != "Linux" or platform.machine() not in {"aarch64", "arm64"}:
+        raise ReleaseCertificationError("发布认证只能在 Linux ARM64 上签发")
+    for name, arguments in (("go", ["version"]), ("docker", ["info", "--format", "{{.Architecture}}"] )):
+        executable = shutil.which(name)
+        if executable is None:
+            raise ReleaseCertificationError(f"发布认证缺少 {name}")
+        try:
+            completed = subprocess.run([executable, *arguments], capture_output=True, text=True, timeout=15, check=False)
+        except (OSError, subprocess.SubprocessError) as error:
+            raise ReleaseCertificationError(f"发布认证无法验证 {name}") from error
+        if completed.returncode != 0:
+            raise ReleaseCertificationError(f"发布认证的 {name} 不可用")
+        if name == "docker" and completed.stdout.strip() not in {"aarch64", "arm64"}:
+            raise ReleaseCertificationError("Docker 服务端不是 ARM64")
 
 
 def build_certification(
@@ -261,9 +285,11 @@ def build_certification(
     """逐项重放输入并组装发布认证；给出 ``atomic_container`` 时在容器内重放 atomic-double。"""
 
     identity = policy_certification.current_identity()
+    _require_release_platform()
     try:
         deployment = policy_certification.load_deployment_receipt(deployment_receipt, expected_identity=identity)
         pre_a3_payload = pre_a3.verify_certification(pre_a3_certification, expected_identity=identity)
+        coverage = pre_a3.real_chain_coverage(pre_a3_payload)
     except (policy_certification.PolicyCertificationError, pre_a3.CertificationError) as error:
         raise ReleaseCertificationError(str(error)) from error
     pre_a3_deployment = pre_a3_payload.get("deployment_receipt") or {}
@@ -296,6 +322,7 @@ def build_certification(
     else:
         atomic_binding = replay_atomic_double(atomic_rehearsal_root, atomic_rehearsal_receipt, require_arm64=enforce)
     return compose_certification(
+        real_chain_coverage=coverage,
         identity=identity,
         deployment_receipt={**deployment_binding, "created_at_utc": deployment.get("created_at_utc")},
         pre_a3_certification={
@@ -329,6 +356,14 @@ def verify(path: Path, *, expected_identity: Mapping[str, Any] | None = None) ->
         raise ReleaseCertificationError("发布认证五摘要或策略版本与当前工具身份不一致")
     _check_binding(payload.get("deployment_receipt"), "发布认证绑定的部署收据")
     _check_binding(payload.get("pre_a3_certification"), "发布认证绑定的 pre-A3 路径认证")
+    if "real_chain_coverage" in payload:
+        try:
+            paths = policy_certification._read_json(Path(payload["pre_a3_certification"]["path"]), "pre-A3 路径认证")
+            expected_coverage = pre_a3.real_chain_coverage(paths)
+        except pre_a3.CertificationError as error:
+            raise ReleaseCertificationError(str(error)) from error
+        if payload["real_chain_coverage"] != expected_coverage:
+            raise ReleaseCertificationError("发布认证真实链覆盖与已绑定的 pre-A3 结果不一致")
     for label, key in (("Job rehearsal 收据", "job_rehearsal"), ("atomic-double 收据", "atomic_double_rehearsal")):
         section = payload.get(key)
         if not isinstance(section, Mapping):
