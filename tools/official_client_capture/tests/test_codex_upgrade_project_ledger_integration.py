@@ -61,6 +61,12 @@ def _fake_create(campaign_dir: Path, *, mode: str = "formal", version: str = "0.
 
 
 class ProjectLedgerIntegrationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        # 本组只验证总账消费者；出口数据来自零请求替身，R15 专项独立验证实际门禁。
+        runtime = mock.patch.object(supervisor.arm64_environment, 'require_runtime_egress', return_value={})
+        runtime.start()
+        self.addCleanup(runtime.stop)
+
     def test_plan_registers_campaign_with_frozen_deadline(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = _data_root(directory, with_ledger=True)

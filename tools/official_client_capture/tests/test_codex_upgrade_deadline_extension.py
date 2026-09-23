@@ -177,6 +177,7 @@ class DeadlineExtensionTests(unittest.TestCase):
             with self.subTest(command=command), self.assertRaisesRegex(project.ProjectLedgerError, '显式放弃'):
                 project.assert_campaign_admitted(self.campaign, command=command, require=True, now=self.moment(21))
         with mock.patch.object(upgrade, 'campaign_status', return_value={'status':'active', 'project_ledger':{}}), \
+             mock.patch.object(timing, '_utc_now', return_value=self.at(21)), \
              mock.patch.object(artifacts, 'datetime', wraps=datetime) as clock:
             clock.now.return_value = self.moment(21)
             self.assertEqual(upgrade._campaign_status_with_deadlines(self.campaign, None)['status'], 'abandoned')
@@ -277,7 +278,8 @@ class DeadlineExtensionTests(unittest.TestCase):
     def test_four_consumers_share_deadlines_and_extension_keeps_other_limits(self):
         self.apply(self.preview('stage',now=20,new=900),now=21)
         self.apply(self.preview('campaign',now=22,new=1200),now=23)
-        with mock.patch.object(artifacts, 'datetime', wraps=datetime) as clock:
+        with mock.patch.object(artifacts, 'datetime', wraps=datetime) as clock, \
+             mock.patch.object(timing, '_utc_now', return_value=self.at(24)):
             clock.now.return_value=self.moment(24)
             deadlines=artifacts.effective_deadlines(self.campaign)
             self.assertEqual(upgrade._campaign_plan_deadline(self.campaign),self.at(1200))
@@ -295,10 +297,27 @@ class DeadlineExtensionTests(unittest.TestCase):
                 root_cause_id='fixture',request_status='resolved',now=self.at(24))
             self.assertEqual(decision['decision'],'permanent_stop')
 
+    def test_live_deadline_read_does_not_precede_concurrent_event_snapshot(self):
+        inspect = timing.inspect_ledger
+        def read_after_append(root, *, now=None, **kwargs):
+            with mock.patch.object(timing, 'inspect_ledger', side_effect=inspect):
+                timing.append_event(root, event_id='concurrent-metadata', phase='VC-0', event_type='receipt_passed',
+                    recorded_at_utc=self.at(21), next_action='模拟读取前刚追加的事件')
+            return inspect(root, now=now, **kwargs)
+        with mock.patch.object(artifacts, 'datetime', wraps=datetime) as clock, \
+             mock.patch.object(timing, '_utc_now', return_value=self.at(22)), \
+             mock.patch.object(timing, 'inspect_ledger', side_effect=read_after_append):
+            clock.now.return_value = self.moment(20)
+            result = artifacts.effective_deadlines(self.campaign)
+        self.assertEqual(result['total_elapsed_seconds'], 22)
+        with self.assertRaisesRegex(timing.TimingLedgerError, '早于最新 event'):
+            artifacts.effective_deadlines(self.campaign, now=self.moment(20))
+
     def test_stopped_status_is_not_overwritten_by_later_budget_expiry(self):
         timing.append_event(self.ledger,event_id='stop',phase='VC-0',event_type='stop_the_line',
                             root_cause_id='integrity',recorded_at_utc=self.at(20),next_action='保留完整性停线')
         with mock.patch.object(upgrade,'campaign_status',return_value={'status':'stopped','project_ledger':{}}), \
+             mock.patch.object(timing, '_utc_now', return_value=self.at(900)), \
              mock.patch.object(artifacts,'datetime',wraps=datetime) as clock:
             clock.now.return_value=self.moment(900)
             self.assertEqual(upgrade._campaign_status_with_deadlines(self.campaign,None)['status'],'stopped')

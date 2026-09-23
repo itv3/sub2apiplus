@@ -380,7 +380,6 @@ def effective_deadlines(
     else:
         from . import codex_upgrade_project_ledger as project, codex_upgrade_timing_ledger as timing
     campaign_dir = Path(campaign_dir)
-    observed = now or datetime.now(timezone.utc)
     plan_path = campaign_dir / "control/vc/campaign-plan.json"
     campaign_id = campaign_dir.name
     if plan_path.exists():
@@ -393,7 +392,10 @@ def effective_deadlines(
     if manifest_path.is_file():
         campaign_id = json.loads(manifest_path.read_text(encoding="utf-8")).get("campaign_id", campaign_id)
     ledger_root = campaign_timing_ledger(campaign_dir)
-    summary = timing.inspect_ledger(ledger_root, now=observed.isoformat()) if ledger_root is not None else {}
+    # 实时读取由计时账本在取完事件快照后采样时间，避免先取时、后读到新事件的
+    # 微秒竞态误触发 watchdog。显式历史检查仍严格使用调用者给定的时间。
+    summary = timing.inspect_ledger(ledger_root, now=now.isoformat() if now is not None else None) if ledger_root is not None else {}
+    observed = now or datetime.now(timezone.utc)
     root = project.find_project_ledger(campaign_dir)
     if root is not None and (project_head is None or project_plan is None):
         project_plan, _raw = project._load_plan(root)

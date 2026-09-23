@@ -428,6 +428,12 @@ PRODUCER_FREEZE_SUCCESSORS = (
         "scope": "upstream-codex-01561-r8-20260924-freeze-successor",
         "result": "manual_actions_required",
     },
+    {
+        "path": "docs/egress/maintenance/upstream-codex-01561-r8-final-20260924-freeze-successor.json",
+        "base_commit": "3b4df92c191126944bad73e991076285608eee25",
+        "scope": "upstream-codex-01561-r8-final-20260924-freeze-successor",
+        "result": "manual_actions_required",
+    },
 )
 
 
@@ -2147,6 +2153,9 @@ def append_event(
         or (event_type in {"stage_abandoned", "stop_the_line"} and root_cause_id is None)
     ):
         raise TimingLedgerError("预算暂停不能冒充普通完成或无根因停线；需要批准延期或显式放弃")
+    if (current["status"] == "deadline_paused" and event_type in {"attempt_failed", "attempt_recovery_failed"}
+            and (receipts or live_request_count != 0)):
+        raise TimingLedgerError("预算暂停只允许元数据失败登记；请求计量必须由后续对账收据承接")
     if phase in CANDIDATE_PHASES and event_type in CANDIDATE_STAGE_EVENT_TYPES:
         # 候选级阶段事件必须绑定 revision：未显式给出时取当前 revision；没有当前
         # revision 的新 Campaign 必须先 revision-open --initial。
