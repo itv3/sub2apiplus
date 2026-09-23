@@ -708,14 +708,14 @@ class DriverParameterizationTests(unittest.TestCase):
         patterns = {
             '版本': r'0[._]15[0-9]|c015[0-9]|codex-015[0-9]',
             '摘要': r'(?<![a-f0-9])[a-f0-9]{64}(?![a-f0-9])',
-            '账号': r'(?:--(?:codex-account-id|api-key-id)\s+|(?:CODEX_ACCOUNT_ID|API_KEY_ID)\s*=\s*[\"\x27]?|WHERE\s+id\s*=\s*)[0-9]+',
+            '账号': r'(?:--(?:codex-account-id|api-key-id)\s+|(?:CODEX_ACCOUNT_ID|API_KEY_ID)\s*=\s*[\"\x27]?|WHERE\s+id\s*=\s*|sched:acc:|账号\s+)[0-9]+',
         }
         for kind, pattern in patterns.items():
             for path in SCRIPTS.rglob('*'):
                 if path.is_file():
                     with self.subTest(kind=kind, path=path.name):
                         self.assertIsNone(re.search(pattern, path.read_text(), re.I))
-        for kind, sample in [('版本', 'codex-0.154.0'), ('摘要', 'a' * 64), ('账号', '--api-key-id 91')]:
+        for kind, sample in [('版本', 'codex-0.154.0'), ('摘要', 'a' * 64), ('账号', '--api-key-id 91'), ('账号', 'sched:acc:22'), ('账号', '账号 22 调度投影')]:
             self.assertIsNotNone(re.search(patterns[kind], sample, re.I))
 
     def test_target_parameters_generate_vc2_vc4_and_vc5_commands(self):

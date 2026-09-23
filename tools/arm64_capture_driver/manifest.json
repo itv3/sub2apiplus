@@ -262,9 +262,9 @@
     },
     {
       "path": "driver/vc5-seal.sh",
-      "sha256": "da2aa2bf99cfefb6f741f2f4409bf21f0d055a510590cea13309c3b02e62420a",
+      "sha256": "925e5c855618dad1b81acc51bbbb47ca162096e57cf25f37498f8137481e523a",
       "mode": "0700",
-      "bytes": 6798
+      "bytes": 6832
     },
     {
       "path": "driver/vc5-start.sh",
@@ -291,5 +291,5 @@
       "bytes": 21976
     }
   ],
-  "manifest_sha256": "8413ec336325f48186ecef0781d2078c2a59c443c1369def9ca5ccd30245ef8b"
+  "manifest_sha256": "3e7d6d90d264f6bbd1aabd7810f627771124a9f8ef527d761970d8befb3afd4c"
 }
