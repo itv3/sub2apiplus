@@ -1586,37 +1586,24 @@ python3 tools/official_client_capture/codex_upgrade.py classify \
 
 ### 4.3.1 执行步骤
 
-1. 重放 VC-2 checkpoint、`classification/result.json`、五份批准清单、
-   `profile-derivation.json` 和 post-promotion 门禁需求；要求 `blocked=0`、联合摘要一致且
-   `profile_diff_paths ⊆ version_identity_paths ∪ rule_field_paths[affected_rules]`。
-2. 复用 VC-0 冻结的 Go 环境生成候选 Catalog：
+用 VC-0 冻结的 Go 环境生成候选 Catalog：
 
-   ~~~bash
-   python3 tools/official_client_capture/codex_upgrade.py stage-profile \
-     --campaign-dir /绝对路径/campaign \
-     --output /绝对路径/candidate-catalog
-   ~~~
+~~~bash
+python3 tools/official_client_capture/codex_upgrade.py stage-profile \
+  --campaign-dir /绝对路径/campaign \
+  --output /绝对路径/candidate-catalog
+~~~
 
-   `--output` 的父目录须预先设为 `0700`，输出本身必须位于 Campaign 外且尚不存在。
-   命令成功时自动生成 VC-3 checkpoint；不得再单独手写阶段完成事件。该命令同样是批次动作体，编译成
-   VC-3 批次经 `compile-and-run-vc-batch` 派发（驱动链 `vc23.sh` 紧接 VC-2 四批之后执行）。
-
-| 清单 | 审核内容 |
-|---|---|
-| `target-rules.json` | 重放 VC-2 目标规则全集与第二部分的绑定 |
-| `rule-migration.json` | 重放 VC-2 迁移决定、discovery 分类和证据引用 |
-| `scenarios.json` | 重放官方／candidate 场景、规则覆盖和目标画像绑定 |
-| `profile.json` | 重放 Active 派生的完整目标 Snapshot、profile ID／digest 和补丁映射 |
-| `assertion-profile.json` | 重放原子断言、场景选择、画像和第二部分摘要绑定 |
-
-规则、场景、画像、断言和端点集合必须跨清单一致；所有 discovery 具有唯一分类和证据引用，
-`rule-migration.json` 必须为 `approved`。
+该命令同样是批次动作体，编译成 VC-3 批次经 `compile-and-run-vc-batch` 派发（驱动链 `vc23.sh` 紧接 VC-2
+四批之后执行）。它先重放 VC-2 checkpoint、五份批准清单和画像派生绑定，要求 `blocked=0`、联合摘要一致、
+五份清单之间的规则／场景／画像／断言／端点集合一致，且画像差异只落在版本身份字段和受影响规则字段内
+（`profile_diff_paths ⊆ version_identity_paths ∪ rule_field_paths[affected_rules]`）。`--output` 的父目录须预先设为
+`0700`，输出本身必须位于 Campaign 外且尚不存在；命令成功时自动生成 VC-3 checkpoint，不得另行手写阶段完成事件。
 
 ### 4.3.2 暂存收据与退出条件
 
-`stage-profile` 从五份批准清单生成包含目标 Snapshot、ReleaseGraph 和 SnapshotCatalog 的候选
-RuntimeCatalog，不修改仓库或生产 selector。收据必须绑定 Campaign、联合摘要、目标版本、profile digest
-和 post-promotion 门禁需求摘要，且 inventory 精确覆盖输出目录、逐文件摘要和大小可复算。
+`stage-profile` 只在 Campaign 外生成候选 RuntimeCatalog（含目标 Snapshot、ReleaseGraph 和 SnapshotCatalog）
+和可复算的 `catalog-stage-receipt.json`，不修改仓库或生产 selector。
 
 ```text
 Campaign = profile_approved ∧ blocked = 0 ∧ post-promotion 门禁需求闭合
