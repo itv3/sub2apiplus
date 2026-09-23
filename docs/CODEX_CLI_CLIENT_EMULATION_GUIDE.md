@@ -1436,6 +1436,8 @@ Formal Campaign 时的工具就绪证明。它绑定部署收据的策略版本�
 3. pre-A3 路径认证 `codex_upgrade_pre_a3_certification run`：重放历史夹具回归和 VC-2～VC-6 派发链；阶段 1 还登记
    `vc-chain.full-validation-only`，在隔离副本中连续验证复用导入、三批分类、候选构建、评估验收和 VC-6 只读交付。
    真实链只在 pre-A3 中执行一次；开发机与 CI 可手动运行 `make test-capture-real-chains`，不把它加入候选默认门禁；
+   该目标结束时逐条列出因环境缺失被跳过的链，ARM64 自查设置 `CAPTURE_REAL_CHAINS_REQUIRE_EXECUTION=1` 使跳过按失败处理；
+   受监督部署预检按 AST 核对 pre-A3 场景表的全部测试入口（含登记链）随工具树部署，入口缺失或改名即拒绝部署；
 4. 发布认证：重放并绑定部署收据、pre-A3 认证、完整 Job 演练收据和 atomic-double 收据（分批演练收据可选）。
 
 发布认证在具备 Go 与 Docker 的 Linux ARM64 上签发，并以 `real_chain_coverage` 记录本发布包登记的真实链及其测试入口。

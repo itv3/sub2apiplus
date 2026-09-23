@@ -78,18 +78,57 @@ def campaign_snapshot(campaign):
     return files, project.read_project_history_snapshot(project_root)
 
 
+def ledger_request_counts(campaign):
+    """按实际产物计量：逐批次汇总 Campaign 时间账本事件的新增请求数，并与账本汇总、项目总账交叉核对。
+
+    返回 (逐批次请求数, Campaign 账本请求总数, 项目总账精确＋估算总数)。三个来源任一不一致即失败，
+    不以常量代替实测。
+    """
+
+    from tools.official_client_capture import codex_upgrade as upgrade
+    from tools.official_client_capture import codex_upgrade_project_ledger as project
+    from tools.official_client_capture import codex_upgrade_timing_ledger as timing
+
+    manifest = upgrade.load_campaign_manifest(campaign)
+    ledger = upgrade._campaign_timing_ledger_dir(campaign, manifest)
+    events = [event for event, _raw in timing._load_events(ledger)]
+    per_batch: dict[int, int] = {}
+    for event in events:
+        if event["event_id"].startswith("vc-batch-"):
+            sequence = int(event["event_id"].split("-")[2])
+            per_batch[sequence] = per_batch.get(sequence, 0) + int(event["live_request_count"])
+    ledger_total = sum(int(event["live_request_count"]) for event in events)
+    if ledger_total != timing.inspect_ledger(ledger)["total_live_request_count"]:
+        raise RuntimeError("Campaign 时间账本逐事件请求数与账本汇总不一致")
+    project_root = project.find_project_ledger(campaign)
+    if project_root is None:
+        raise RuntimeError("连续链缺少 fixture 总账")
+    head = project.replay_head(project_root)
+    return per_batch, ledger_total, head["precise_total"] + head["estimated_total"]
+
+
+def _record_duplicate_check(root, tag, before, after):
+    """记录一次重复派发（或重复引导）前后的实测请求增量。"""
+
+    requests = (after[1] - before[1]) + (after[2] - before[2])
+    driver._write(Path(root) / f"duplicate-{tag}.json", {"tag": tag, "duplicate_dispatch_requests": requests})
+    return requests
+
+
 def assert_duplicate_bootstrap_unchanged(campaign, manifest, state_dir):
     """导入的 VC-1 首批由 VC-2 引导器派发；重复引导不得产生新的执行与账本记录。"""
 
     from tools.official_client_capture import codex_upgrade as upgrade
 
     before = campaign_snapshot(campaign)
+    counts_before = ledger_request_counts(campaign)
     result = upgrade._bootstrap_noop_first_batch(
         campaign, manifest, sequence=2, state_dir=state_dir,
         run_arguments=argparse.Namespace(heartbeat_seconds=0.2, watchdog_timeout_seconds=5.0, ledger_interval_seconds=0.2),
     )
     if result is not None or campaign_snapshot(campaign) != before:
         raise RuntimeError("重复引导 VC-1 首批产生了执行或改变了 Campaign／账本")
+    return counts_before, ledger_request_counts(campaign)
 
 
 def assert_duplicate_dispatch_unchanged(namespace):
@@ -98,6 +137,7 @@ def assert_duplicate_dispatch_unchanged(namespace):
     from tools.official_client_capture import codex_upgrade as upgrade
 
     before = campaign_snapshot(namespace.campaign_dir)
+    counts_before = ledger_request_counts(Path(namespace.campaign_dir))
     try:
         upgrade.compile_and_run_vc_batch(namespace)
     except upgrade.ConfigurationError:
@@ -106,6 +146,7 @@ def assert_duplicate_dispatch_unchanged(namespace):
         raise RuntimeError("已提交批次被重复派发")
     if campaign_snapshot(namespace.campaign_dir) != before:
         raise RuntimeError("重复派发改变了 Campaign 或账本字节")
+    return counts_before, ledger_request_counts(Path(namespace.campaign_dir))
 
 
 def dispatch_cli(case, root, fixture, state_dir, phase, sequence, tag, arguments):
@@ -147,10 +188,12 @@ def dispatch_cli(case, root, fixture, state_dir, phase, sequence, tag, arguments
         details = [driver._read(path).get("message") for path in run_dir.glob("action-diagnostics/*.json")]
         raise RuntimeError(f"连续链 {tag} 失败：{result['campaign_run']['reason']}；诊断={details}")
     payload = driver._read(output)
-    assert_duplicate_dispatch_unchanged(namespace)
+    per_batch, _ledger_total, _project_total = ledger_request_counts(campaign)
+    duplicate = _record_duplicate_check(root, tag, *assert_duplicate_dispatch_unchanged(namespace))
     driver._write(root / f"metrics-{tag}.json", {
         "phase": phase, "sequence": sequence, "execute": [tag], "reuse": [],
-        "live_request_count": 0, "duplicate_dispatch_requests": 0, "result_status": payload.get("status"),
+        "live_request_count": per_batch.get(sequence, 0), "duplicate_dispatch_requests": duplicate,
+        "result_status": payload.get("status"),
     })
     return payload
 
@@ -177,7 +220,7 @@ def classify_full_chain(case, root, fixture, state_dir, manifests):
     draft = dispatch_cli(case, root, fixture, state_dir, "VC-2", 2, "classify-draft", [
         "classify", "--campaign-dir", str(campaign),
     ])
-    assert_duplicate_bootstrap_unchanged(campaign, manifest, state_dir)
+    _record_duplicate_check(root, "vc1-bootstrap", *assert_duplicate_bootstrap_unchanged(campaign, manifest, state_dir))
     target, migration, scenario, profile, assertion = manifests
     migration_payload = driver._read(Path(draft["path"]) / "rule-migration.json")
     migration_payload["status"] = "approved"
@@ -231,7 +274,10 @@ def deliver_full_chain(arguments):
         if result.get("vc6_status") != "complete":
             raise RuntimeError(f"VC-6 交付没有完成：{result}")
         ledger = upgrade._campaign_timing_ledger_dir(campaign, manifest)
-        return {"status": "complete", "live_request_count": 0, "duplicate_dispatch_requests": 0,
+        _per_batch, ledger_total, project_total = ledger_request_counts(campaign)
+        duplicate = driver._read(root / "duplicate-deliver.json")["duplicate_dispatch_requests"]
+        return {"status": "complete", "live_request_count": ledger_total + project_total,
+                "duplicate_dispatch_requests": duplicate,
                 "completed_phases": timing.phase_ledger_state(ledger)["completed_phases"],
                 "delivery": result}
     finally:
@@ -270,16 +316,27 @@ class FullValidationOnlyChainTests(unittest.TestCase):
             self.assertIs(driver._read(ledger / "plan.json")["fixture_only"], True)
             head = project.replay_head(ledger)
             self.assertEqual((head["precise_total"], head["estimated_total"]), (0, 0))
+            per_batch, ledger_total, project_total = ledger_request_counts(harness.campaign_dir())
+            self.assertEqual((ledger_total, project_total), (0, 0))
+            duplicate_checks = {driver._read(path)["tag"]: driver._read(path)["duplicate_dispatch_requests"]
+                                for path in sorted(harness.root.glob("duplicate-*.json"))}
+            # VC-1 首批重复引导、VC-2 三批、VC-3、VC-5 两批与 VC-6 共 8 次重复派发均须实测。
+            self.assertEqual(sorted(duplicate_checks), sorted([
+                "vc1-bootstrap", "classify-draft", "classify-preview", "classify-approve",
+                "stage-profile", "full-compare", "full-accept", "deliver"]))
             self.real_chain_metrics = {
-                "live_request_count": head["precise_total"] + head["estimated_total"],
-                "duplicate_dispatch_requests": 0,
+                "live_request_count": project_total,
+                "ledger_live_request_count": ledger_total,
+                "duplicate_dispatch_requests": sum(duplicate_checks.values()),
+                "duplicate_dispatch_checks": len(duplicate_checks),
                 "seconds": round(time.monotonic() - started, 3),
                 "batches": [{"phase": batch["phase"], "sequence": batch["sequence"],
                              "execute": batch["execute_item_ids"], "reuse": batch["reuse_item_ids"],
-                             "live_request_count": 0}
+                             "live_request_count": per_batch.get(batch["sequence"], 0)}
                             for path in sorted((harness.campaign_dir() / "control/vc/batches").glob("*.json"))
                             for batch in [driver._read(path)]],
             }
+            self.assertEqual(self.real_chain_metrics["duplicate_dispatch_requests"], 0)
             expected = [
                 ("VC-1", [], ["official-core"]),
                 ("VC-2", ["classify-draft"], []),

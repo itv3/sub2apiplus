@@ -1417,9 +1417,11 @@ def stage_dispatch(arguments: argparse.Namespace) -> dict[str, Any]:
         patcher.start()
     result, returncode = codex_upgrade.compile_and_run_vc_batch(namespace)
     if returncode == 0 and (Path(state["root"]) / "full-chain-import.json").is_file():
-        from tools.official_client_capture.tests.real_chains.test_codex_upgrade_full_chain import assert_duplicate_dispatch_unchanged
+        from tools.official_client_capture.tests.real_chains.test_codex_upgrade_full_chain import (
+            _record_duplicate_check, assert_duplicate_dispatch_unchanged,
+        )
 
-        assert_duplicate_dispatch_unchanged(namespace)
+        _record_duplicate_check(state["root"], arguments.tag, *assert_duplicate_dispatch_unchanged(namespace))
     summary = {
         "returncode": returncode,
         "status": result.get("status"),

@@ -155,6 +155,16 @@ class RuntimeEgressRecoveryTests(unittest.TestCase):
 
 
 class UpgradeFaultFixtureTests(unittest.TestCase):
+    def _assert_delegate_recovers(self, module_name, class_name, method):
+        """翻转后的夹具委托对应改造项的恢复成功用例，确认故障现象之后的合法恢复实际走通。"""
+
+        module = __import__(module_name, fromlist=[class_name])
+        result = unittest.TestResult()
+        getattr(module, class_name)(method).run(result)
+        self.assertEqual(result.testsRun, 1)
+        self.assertFalse(result.skipped, f"恢复用例被跳过：{module_name}.{class_name}.{method}")
+        self.assertTrue(result.wasSuccessful(), str(result.errors + result.failures))
+
     def test_r2_image_only_revision_is_accepted_as_build_change(self):
         seal = artifacts.build_candidate_revision_seal(
                 campaign_id="fixture-upgrade", revision=2, candidate_id="candidate-r2",
@@ -166,6 +176,10 @@ class UpgradeFaultFixtureTests(unittest.TestCase):
         )
         self.assertEqual(seal["changed_layers"], ["build"])
         self.assertTrue(seal["identity_change"]["image_changed"])
+        # 同一源码只换镜像时，前序 revision 的实现测试收据按完整输入证明复用，原收据字节不变。
+        self._assert_delegate_recovers("tools.official_client_capture.tests.test_codex_upgrade_build_revision",
+                                       "BuildRevisionTests",
+                                       "test_same_inputs_reuse_source_receipt_and_preserve_original_bytes")
 
     def test_r3_metadata_only_drift_is_currently_permanent(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -180,12 +194,14 @@ class UpgradeFaultFixtureTests(unittest.TestCase):
             self.assertEqual(caught.exception.failure_class, "evidence-integrity")
 
     def test_r4_parent_failure_requires_review_before_redispatch(self):
-        case = upgrade_tests.CodexUpgradeTest("test_vc_chain_failed_batch_abandons_stage_and_blocks_next_batch")
-        result = unittest.TestResult()
-        case.run(result)
-        self.assertEqual(result.testsRun, 1)
-        self.assertFalse(result.skipped)
-        self.assertTrue(result.wasSuccessful(), str(result.errors + result.failures))
+        # 故障现象：父动作失败写 stage_review_required，对账前后续批次被拒（不再 stop_the_line）。
+        self._assert_delegate_recovers("tools.official_client_capture.tests.test_codex_upgrade",
+                                       "CodexUpgradeTest",
+                                       "test_vc_chain_failed_batch_abandons_stage_and_blocks_next_batch")
+        # 恢复：classify COMMIT 后失败，原 Campaign 对账后 N+1 逐字重派成功，新增请求为零。
+        self._assert_delegate_recovers("tools.official_client_capture.tests.real_chains.test_codex_upgrade_stage_recovery",
+                                       "StageRecoveryChainTests",
+                                       "test_classify_commit_failure_reconciles_and_redispatches")
 
     def test_r6_import_completes_vc0_vc1_without_live_requests(self):
         case = driver.new_real_chain_case()
@@ -220,6 +236,10 @@ class UpgradeFaultFixtureTests(unittest.TestCase):
             self.assertEqual(summary["status"], "deadline_paused")
             self.assertEqual(summary["paused_scopes"], ["stage"])
             self.assertEqual(len(timing._load_events(root)), 1)
+        # 恢复：批准延期后回到暂停前状态，累计墙钟与请求不清零，原始字节不变。
+        self._assert_delegate_recovers("tools.official_client_capture.tests.test_codex_upgrade_deadline_extension",
+                                       "DeadlineExtensionTests",
+                                       "test_stage_pause_extend_preserves_counters_and_original_bytes")
 
     def test_r12_dead_child_exits_bounded_without_campaign_mutation(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -230,8 +250,12 @@ class UpgradeFaultFixtureTests(unittest.TestCase):
             for name in ("vc4-all.sh", "lib.sh", "parse_env.py", "wait_state.py"):
                 shutil.copy2(driver_tests.SCRIPTS / name, scripts / name)
             # 本例只验证父子进程与等待控制，构建前置用零请求替身；输入合同由专项测试实际复算。
-            (scripts / "vc4_resume.py").write_text("print('fixture pre-build inputs')\n")
+            # 首个 revision 的真实裁定是 early-test-mode=full（门禁与前端并行）；guard.sh 准入与
+            # open-revision 登记各有专项测试，这里只保留其在驱动中的调用位置。
+            (scripts / "vc4_resume.py").write_text(
+                "import sys\nprint('full' if sys.argv[1:2] == ['early-test-mode'] else 'fixture pre-build inputs')\n")
             for name, source in {"trees.sh": "exit 0\n", "frontend.sh": "exec sleep 30\n",
+                                 "guard.sh": "echo GUARD_OK\n",
                                  "vc4-gates.sh": f"echo $$ > '{root}/gates.pid'\nexec sleep 30\n"}.items():
                 (scripts / name).write_text(source)
             before = {path: path.read_bytes() for path in fixture.newdir.rglob("*") if path.is_file()}
@@ -338,6 +362,11 @@ class DriverResumeChainTests(unittest.TestCase):
             f"    if args[0]=='go': return {helper.go_version!r}\n"
             "    return real_run(*args, **kwargs)\n"
             "module.run=run\n"
+            # revision 登记、复用预判与 ldflags 沿用都读取真实 Campaign；本链只验证等待、续跑与输入复算，
+            # 按首个 revision 的真实结果替换：登记 r1、门禁提前全量执行、使用默认 ldflags。
+            "module.open_revision=lambda: print('REVISION_OPENED r1 fixture')\n"
+            "module.early_test_mode=lambda evidence: 'full'\n"
+            "module.build_flags=lambda evidence, default: default\n"
         )
         (scripts / "vc4_resume.py").write_text(wrapper + "if __name__=='__main__': raise SystemExit(module.main())\n")
         bodies = {
@@ -349,8 +378,11 @@ class DriverResumeChainTests(unittest.TestCase):
         }
         for name, body in bodies.items():
             (scripts / name).write_text(f'#!/bin/bash\nset -e\necho {name} >> "{calls}"\n' + body)
-        fake_upgrade = fixture.data_root / "tools/official_client_capture/codex_upgrade.py"
-        fake_upgrade.write_text("import json\nprint(json.dumps({'revision':1,'status':'opened'}))\n")
+        # 首个 revision 没有前序构建收据，正式 plan-retest 的裁定恒为 full；该裁定逻辑由 R2 专项测试复算。
+        (scripts / "implementation_gates.py").write_text(
+            "import json,sys\nfrom pathlib import Path\n"
+            "assert sys.argv[1] == 'plan-retest'\n"
+            "(Path(sys.argv[2]) / 'retest-plan.json').write_text(json.dumps({'decision': {'mode': 'full'}, 'inputs': {}}))\n")
         finalize = wrapper + (
             "from tools.official_client_capture import codex_upgrade_vc_receipt as receipts\n"
             "root=Path(sys.argv[1]); current=module.inputs()\n"
@@ -381,7 +413,10 @@ class DriverResumeChainTests(unittest.TestCase):
         self.assertFalse((evidence_root / "receipt.json").exists())
         checkpoint_before = (evidence_root / "upload-wait.json").read_bytes()
         first_calls = calls.read_text().splitlines()
-        self.assertEqual(sorted(first_calls), sorted(["trees.sh", "frontend.sh", "vc4-gates.sh", "build.sh"]))
+        build_stages = ["trees.sh", "frontend.sh", "vc4-gates.sh", "build.sh"]
+        # 每次启动先执行 guard.sh pre-plan；进入派发前再执行 guard.sh pre-vc4。
+        self.assertEqual(sorted(first_calls), sorted(["guard.sh", *build_stages]))
+        self.assertEqual(first_calls[0], "guard.sh")
         impl = fixture.runroot / "impl-logs"
         (impl / "cross-check").mkdir(parents=True)
         (fixture.runroot / "local-gates").mkdir()
@@ -393,24 +428,27 @@ class DriverResumeChainTests(unittest.TestCase):
         recovered = invoke("--resume-from", "upload-wait")
         self.assertEqual(recovered.returncode, 0, recovered.stdout + recovered.stderr)
         self.assertIn("VC4_REUSED", recovered.stdout)
-        self.assertEqual(calls.read_text().splitlines(), first_calls + ["guard.sh"])
+        self.assertEqual(calls.read_text().splitlines(), first_calls + ["guard.sh", "guard.sh"])
         self.assertEqual((evidence_root / "upload-wait.json").read_bytes(), checkpoint_before)
         receipt_bytes = (evidence_root / "receipt.json").read_bytes()
         complete = invoke()
         self.assertEqual(complete.returncode, 0, complete.stdout + complete.stderr)
         self.assertEqual((evidence_root / "receipt.json").read_bytes(), receipt_bytes)
+        self.assertEqual(calls.read_text().splitlines(), first_calls + ["guard.sh"] * 4)
         params = root / "artifacts/build-parameters.json"
         value = json.loads(params.read_text())
         value["go_build"]["environment"]["CGO_ENABLED"] = "1"
         params.write_text(json.dumps(value))
         rejected = invoke("--resume-from", "upload-wait")
         self.assertEqual(rejected.returncode, 3, rejected.stdout + rejected.stderr)
-        self.assertEqual(calls.read_text().splitlines(), first_calls + ["guard.sh"]*2)
+        # 显式续跑在复算输入时拒绝：只执行准入检查，构建阶段执行 0 次。
+        self.assertEqual(calls.read_text().splitlines(), first_calls + ["guard.sh"] * 5)
         rebuilt = invoke()
         self.assertEqual(rebuilt.returncode, 0, rebuilt.stdout + rebuilt.stderr)
         final_calls = calls.read_text().splitlines()
-        for name in first_calls:
+        for name in build_stages:
             self.assertEqual(final_calls.count(name), 2, final_calls)
+        self.assertEqual(final_calls.count("guard.sh"), 8, final_calls)
         print(json.dumps({"fixture": "r12-upload-resume", "initial_build_stages": 4, "resume_build_stages": 0,
                           "full_receipt_reuse_build_stages": 0, "changed_parameters_build_stages": 4,
                           "rejected_resume_build_stages": 0, "live_request_count": 0,

@@ -248,6 +248,8 @@ test-capture-tools:
 # 候选 target-platform 门禁在 ARM64 上跑到 5 小时、必然超出 VC-5 阶段预算。它们放在
 # tests/real_chains/（无 __init__.py，unittest discover 不会递归进入），由本目标显式逐模块
 # 执行；不删除、不 skip。防回流由 tests/test_capture_test_layering.py 保证。
+# 缺少 Linux／root／Docker 等条件的链会被跳过：执行入口逐条列出，ARM64 自查设置
+# CAPTURE_REAL_CHAINS_REQUIRE_EXECUTION=1 使任一跳过按失败处理，避免跳过被误读为通过。
 CAPTURE_REAL_CHAIN_MODULES := \
 	tools.official_client_capture.tests.real_chains.test_codex_upgrade_evaluation_real_chain \
 	tools.official_client_capture.tests.real_chains.test_codex_upgrade_evaluation_attempt_recovery_real_chain \
@@ -260,7 +262,7 @@ CAPTURE_REAL_CHAIN_MODULES := \
 	tools.official_client_capture.tests.real_chains.test_codex_upgrade_segment_reuse
 test-capture-real-chains:
 	@CLAUDE_AST_TYPESCRIPT_MODULE="$(CAPTURE_TYPESCRIPT_MODULE)" \
-		PYTHONDONTWRITEBYTECODE=1 python3 -m unittest $(CAPTURE_REAL_CHAIN_MODULES)
+		PYTHONDONTWRITEBYTECODE=1 python3 -m tools.official_client_capture.tests.real_chain_gate $(CAPTURE_REAL_CHAIN_MODULES)
 
 # FW-D 通用受管工具链只使用当前 Codex 不可变制品和合成 Persona 数据，
 # 不联网、不读取凭据、不查询或生成任何新 Persona 的官方画像。

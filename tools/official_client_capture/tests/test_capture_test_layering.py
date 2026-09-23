@@ -106,8 +106,12 @@ class CaptureTestLayeringTests(unittest.TestCase):
         listed = sorted(_makefile_variable("CAPTURE_REAL_CHAIN_MODULES"))
         self.assertEqual(listed, expected, "CAPTURE_REAL_CHAIN_MODULES 必须与 tests/real_chains/ 目录逐一对应")
         recipe = _makefile_recipe("test-capture-real-chains")
-        self.assertIn("python3 -m unittest $(CAPTURE_REAL_CHAIN_MODULES)", recipe)
+        self.assertIn(
+            "python3 -m tools.official_client_capture.tests.real_chain_gate $(CAPTURE_REAL_CHAIN_MODULES)", recipe
+        )
         self.assertNotIn("discover", recipe)
+        gate = importlib.util.find_spec("tools.official_client_capture.tests.real_chain_gate")
+        self.assertIsNotNone(gate, "真实链执行入口不可导入")
         for name in expected:
             spec = importlib.util.find_spec(name)
             self.assertIsNotNone(spec, f"真实链模块不可导入：{name}")

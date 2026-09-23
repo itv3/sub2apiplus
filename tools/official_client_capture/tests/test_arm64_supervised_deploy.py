@@ -556,6 +556,45 @@ class Arm64SupervisedDeployTest(unittest.TestCase):
                 with self.assertRaisesRegex(deploy.DeploymentError, "第二章摘要"):
                     deploy.verify_scenario_source_spec(root, tool_root)
 
+    def test_pre_a3_scenario_entries_ship_with_current_tree(self) -> None:
+        from tools.official_client_capture import codex_upgrade_pre_a3_certification as pre_a3
+
+        tool_root = Path(deploy.__file__).resolve().parent / "official_client_capture"
+        result = deploy.verify_pre_a3_scenario_entries(tool_root)
+        self.assertEqual(result["scenario_count"], len(pre_a3.SCENARIOS))
+        self.assertEqual(
+            [{key: row[key] for key in ("id", "test")} for row in result["real_chain_registration"]],
+            pre_a3.real_chain_registration(),
+        )
+        for row in result["real_chain_registration"]:
+            self.assertRegex(row["sha256"], "^[0-9a-f]{64}$")
+
+    def test_missing_or_renamed_pre_a3_entry_blocks_deploy(self) -> None:
+        import shutil
+
+        source_root = Path(deploy.__file__).resolve().parent / "official_client_capture"
+        from tools.official_client_capture import codex_upgrade_pre_a3_certification as pre_a3
+
+        with tempfile.TemporaryDirectory() as directory:
+            tool_root = Path(directory) / "official_client_capture"
+            (tool_root / "tests").mkdir(parents=True)
+            shutil.copy2(source_root / deploy.PRE_A3_CERTIFICATION_MODULE, tool_root)
+            for module in {row[2] for row in pre_a3.SCENARIOS}:
+                relative = Path(*module[len(deploy.MANAGED_TEST_MODULE_PREFIX):].split(".")).with_suffix(".py")
+                (tool_root / relative).parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source_root / relative, tool_root / relative)
+            self.assertEqual(deploy.verify_pre_a3_scenario_entries(tool_root)["scenario_count"], len(pre_a3.SCENARIOS))
+
+            chain = tool_root / "tests/real_chains/test_codex_upgrade_full_chain.py"
+            original = chain.read_text(encoding="utf-8")
+            chain.write_text(original.replace("def test_full_validation_only_chain", "def test_renamed_chain"),
+                             encoding="utf-8")
+            with self.assertRaisesRegex(deploy.DeploymentError, "类或方法缺失：vc-chain.full-validation-only"):
+                deploy.verify_pre_a3_scenario_entries(tool_root)
+            chain.unlink()
+            with self.assertRaisesRegex(deploy.DeploymentError, "未随暂存树部署：vc-chain.full-validation-only"):
+                deploy.verify_pre_a3_scenario_entries(tool_root)
+
 
 if __name__ == "__main__":
     unittest.main()

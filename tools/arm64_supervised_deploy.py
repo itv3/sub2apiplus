@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import ctypes
 import hashlib
 import importlib.util
@@ -1844,6 +1845,78 @@ def verify_scenario_source_spec(
     }
 
 
+PRE_A3_CERTIFICATION_MODULE = "codex_upgrade_pre_a3_certification.py"
+MANAGED_TEST_MODULE_PREFIX = "tools.official_client_capture."
+
+
+def verify_pre_a3_scenario_entries(tool_root: Path) -> dict[str, Any]:
+    """发布流程保障：pre-A3 场景表的每个测试入口（含本包登记的真实链）都随暂存树部署。
+
+    pre-A3 在 staging 根下逐个执行这些入口；入口文件缺失、测试类或方法改名会让认证在 ARM64
+    上失败，登记链还会被记为未认证。这里只按 AST 核对模块文件、测试类与方法并记录文件摘要，
+    不导入测试模块、不执行任何测试；属主与写权限由调用方的整树检查负责。
+    """
+
+    source_path = tool_root / PRE_A3_CERTIFICATION_MODULE
+    if source_path.is_symlink() or not source_path.is_file():
+        raise DeploymentError(f"暂存树缺少 pre-A3 认证模块：{source_path}")
+    try:
+        module = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
+    except (OSError, UnicodeDecodeError, SyntaxError) as error:
+        raise DeploymentError("无法解析 pre-A3 认证模块。") from error
+    literals: dict[str, Any] = {}
+    for node in module.body:
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.value is not None:
+            name, value = node.target.id, node.value
+        elif isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            name, value = node.targets[0].id, node.value
+        else:
+            continue
+        if name in {"SCENARIOS", "REAL_CHAIN_IDS"}:
+            try:
+                literals[name] = ast.literal_eval(value)
+            except ValueError as error:
+                raise DeploymentError(f"pre-A3 {name} 不是可静态核对的字面量。") from error
+    scenarios, registered_ids = literals.get("SCENARIOS"), literals.get("REAL_CHAIN_IDS")
+    if (
+        not isinstance(scenarios, tuple)
+        or not scenarios
+        or any(not isinstance(row, tuple) or len(row) != 5 or not all(isinstance(item, str) and item for item in row)
+               for row in scenarios)
+        or len({row[0] for row in scenarios}) != len(scenarios)
+        or not isinstance(registered_ids, tuple)
+        or not registered_ids
+        or len(set(registered_ids)) != len(registered_ids)
+    ):
+        raise DeploymentError("pre-A3 场景表或真实链登记集合非法。")
+    parsed: dict[Path, ast.Module] = {}
+    entries: list[dict[str, str]] = []
+    for name, _description, module_name, class_name, method in scenarios:
+        if not module_name.startswith(MANAGED_TEST_MODULE_PREFIX):
+            raise DeploymentError(f"pre-A3 场景入口不在受管工具包内：{name}")
+        relative = Path(*module_name[len(MANAGED_TEST_MODULE_PREFIX):].split(".")).with_suffix(".py")
+        if relative.parts[0] != "tests" or ".." in relative.parts:
+            raise DeploymentError(f"pre-A3 场景入口不是受管测试模块：{name}")
+        path = tool_root / relative
+        if path.is_symlink() or not path.is_file():
+            raise DeploymentError(f"pre-A3 场景入口未随暂存树部署：{name} -> {relative.as_posix()}")
+        if path not in parsed:
+            try:
+                parsed[path] = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            except (OSError, UnicodeDecodeError, SyntaxError) as error:
+                raise DeploymentError(f"无法解析 pre-A3 场景入口：{relative.as_posix()}") from error
+        classes = [node for node in parsed[path].body if isinstance(node, ast.ClassDef) and node.name == class_name]
+        methods = [node for cls in classes for node in cls.body
+                   if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == method]
+        if len(classes) != 1 or len(methods) != 1:
+            raise DeploymentError(f"pre-A3 场景入口类或方法缺失：{name} -> {class_name}.{method}")
+        entries.append({"id": name, "test": f"{module_name}:{class_name}.{method}", "sha256": file_sha256(path)})
+    registration = [entry for entry in entries if entry["id"] in registered_ids]
+    if sorted(entry["id"] for entry in registration) != sorted(registered_ids):
+        raise DeploymentError("pre-A3 真实链登记项在场景表中缺失或重复。")
+    return {"scenario_count": len(entries), "real_chain_registration": registration}
+
+
 def project_ledger_summary(supervisor: Any, data_root: Path) -> dict[str, Any] | None:
     """B9：部署收据只读记录生产数据根下项目总账 head 的两层预算事实；没有总账时为 None。"""
 
@@ -2462,6 +2535,7 @@ def _preflight(
             {"path": name, "sha256": file_sha256(runtime_document)}
         )
     source_spec = verify_scenario_source_spec(staging_root, staging_tool)
+    pre_a3_scenarios = verify_pre_a3_scenario_entries(staging_tool)
     return {
         "staging_file_count": staging_count,
         "staging_tool_sha256": staging_digest,
@@ -2473,6 +2547,7 @@ def _preflight(
         "document_sha256": document_sha256,
         "runtime_document_bindings": runtime_document_bindings,
         "scenario_source_spec": source_spec,
+        "pre_a3_scenarios": pre_a3_scenarios,
         "legacy_production_documents": legacy_document_facts,
         "legacy_runtime_documents": legacy_runtime_document_facts,
     }
