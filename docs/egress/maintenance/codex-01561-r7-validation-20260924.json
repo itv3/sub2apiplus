@@ -1,0 +1,111 @@
+{
+  "schema_version": "codex-upgrade-improvement-validation/v1",
+  "item": "R7",
+  "source_commit": "487ebcdd84a10fe4d9e5ca87a3faa89de14e2cc3",
+  "source_commits": [
+    "69de00cc19d18021d7702e592881ae084f4411a7",
+    "487ebcdd84a10fe4d9e5ca87a3faa89de14e2cc3"
+  ],
+  "status": "development_self_check_passed",
+  "production_deployed": false,
+  "self_checked_at_utc": "2026-09-23T17:32:16.046986+00:00",
+  "scope": "逐轮驱动参数化开发自查；真实解析器、场景 Job 解析、进程门禁、Catalog inventory、收据 producer 和 R12 shell 恢复链均已验证。Campaign 读取、编译和镜像使用零请求夹具；生产安装在阶段 1 统一发布。",
+  "freeze_successors": [
+    {
+      "path": "docs/egress/maintenance/upstream-codex-01561-r7-20260924-freeze-successor.json",
+      "sha256": "ac2dc5b8c9e3a2f9d33717cf5c88fdc35cc023c668b9b691ca7fab7f7a3b12b5"
+    },
+    {
+      "path": "docs/egress/maintenance/upstream-codex-01561-r7-final-20260924-freeze-successor.json",
+      "sha256": "ddd560d8d41f4ff33e9c444f08e10d77f846af3db227f7d1690a62053d3dcb76"
+    }
+  ],
+  "tool_identity": {
+    "files_sha256": "f16f2c761045b06d1ef67570adac5b388ba1c2269ca1738a8c0034f1eb2011cd",
+    "policy_version": 7,
+    "policy_sha256": "796dac4b48c2c54009e101be1e1f56569a76fdc89c037378245796ec5dab2ad9",
+    "wire_producer_sha256": "3beefc77f5887fa3ef9ff6d3ea032a6c325d578177cc33912569b092189c66ec",
+    "evidence_semantics_sha256": "fb514301c47fe5d9bc9e63c84ce7643751d8b1252e5e9ef5cbdc1205951af9ca",
+    "control_sha256": "c2f3460d35bc3df2723c2aaf64993691fdf05bbea9cdb2787159645556bad4dc"
+  },
+  "managed_tool_identity_changed": false,
+  "driver_manifest_sha256": "3e7d6d90d264f6bbd1aabd7810f627771124a9f8ef527d761970d8befb3afd4c",
+  "arm64_driver_manifest_matches": true,
+  "live_request_count": 0,
+  "self_check": [
+    {
+      "item": "逐轮身份参数",
+      "result": "passed",
+      "evidence": "14 个新增必填键逐一缺失均拒绝；版本、SHA、账号正整数、目标画像一致性和目录标识校验通过。Python 与 shell 共用派生路径；来源、模型、认证和退役版本不从旧轮次推断。"
+    },
+    {
+      "item": "硬编码与计划生成",
+      "result": "passed",
+      "evidence": "驱动目录旧版本、64 位摘要、账号常量扫描为零；扫描覆盖 CLI、配置赋值、SQL、Redis sched:acc 和中文账号标签。v0.156.1 的 VC-2、VC-4、VC-5 命令路径与镜像坐标正确；全部 Bash／Python 语法通过。"
+    },
+    {
+      "item": "批准集合动态闭合",
+      "result": "passed",
+      "evidence": "候选 Job 由正式场景加载器读取；变更批准 Job 名反映到集合，未批准和摘要漂移拒绝。两个 affected 加公共门禁实际运行、生成统一收据并 replay；命令／mapping／集合／日志篡改与进程失败拒绝。"
+    },
+    {
+      "item": "候选源码链",
+      "result": "passed",
+      "evidence": "Catalog 按正式 inventory 校验后装入，新增版本资产无需固定摘要；重复装配逐字一致，已有 blob 内容不同拒绝；测试快照索引纳入 A 段，两份冻结指针保留 C 段。"
+    },
+    {
+      "item": "中断与历史恢复边界",
+      "result": "passed",
+      "evidence": "facts 写入后重入只核对不重写；R12 上传超时后的构建执行 0，完整收据复用执行 0，输入变动普通重起执行 4、显式续跑拒绝执行 0，原凭证和收据字节保持。已有无新字段的历史 Campaign 数据不被驱动改写；Campaign 存储 schema 未变。"
+    },
+    {
+      "item": "本机与 ARM64 复验",
+      "result": "passed",
+      "evidence": "本机全组 41 项 18.234 秒，facts 修正后 12 项 2.993 秒，Redis 绑定修正后驱动 25 项 4.386 秒；ARM64 最终完整 41 项 27.403 秒通过。分层检查、schema、check-egress-spec-ci 和冻结承接均通过。"
+    }
+  ],
+  "self_check_findings_resolved": [
+    "补齐 Redis 调度投影中遗漏的账号常量并扩充防回归扫描",
+    "门禁实现移出 shell 后将新 helper 摘要加入 R12 构建凭证",
+    "facts 写后中断改为相同字节可续跑、不同字节仍拒绝",
+    "ARM64 分层检查首次失败因隔离副本缺少 check_ledger_completeness 和 official_client_control；仅补齐隔离副本后全组通过，未放宽测试"
+  ],
+  "scheduled_release_checks": [
+    "阶段 1 发布后 install 驱动，绑定当前受管工具部署收据",
+    "本轮正式 env 对 OFFICIAL_CAMPAIGN 按重新取证／恢复路径填写，首次目标证据不得来自旧版本"
+  ],
+  "logs": [
+    {
+      "file": "r7-final-regression.log",
+      "sha256": "a93959a692b3085eb83492b18422c6332662ee8dffd099c5925722c551c32c6c"
+    },
+    {
+      "file": "r7-final-delta-regression.log",
+      "sha256": "b73de0462289e70c994df955a71ebdb9c411f99c990d6914f2896dd558687ba2"
+    },
+    {
+      "file": "r7-account-binding-regression.log",
+      "sha256": "932045944c925d79bd08dcb6b57fcc9c83b4e8bb25f0050e93bba1c38b113e73"
+    },
+    {
+      "file": "r7-arm64-final-regression.log",
+      "sha256": "97fdb57b8e5c1f2f7f20e175030931523d414efe312e3d0df9411c1779252cdd"
+    },
+    {
+      "file": "r7-arm64-manifest.log",
+      "sha256": "f5efe5c8b17315100556792112c07340be77325a3e2bbc28338b4fff71cb1042"
+    },
+    {
+      "file": "r7-schema-check.log",
+      "sha256": "10d890466705e1547091c5c718a5edc8783a51e1f0bc8d537b039331a5d4f683"
+    },
+    {
+      "file": "r7-egress-ci.log",
+      "sha256": "e349e54bd90b1d2200363f816863d97239fa88ddc9a93222b6af44d095024faf"
+    },
+    {
+      "file": "r7-final-freeze-generation.log",
+      "sha256": "cd87e0df89b50c36f26de52aa657a9b5069ca9a23aa39df636b41f35f742b5ea"
+    }
+  ]
+}
