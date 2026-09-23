@@ -1,0 +1,424 @@
+{
+  "base_commit": "3355441bdda7d63104a50add75265f71a117ca41",
+  "changed_path_count": 81,
+  "current_commit": "1d0cc65d5e2e3ffbcb3bc04a1b1493ae79dd1bce",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 3993,
+  "frozen_path_count": 1399,
+  "identity_sha256": "ed8d64667f4bd77e8db524f61e00f12cea2c25eb666aa8963c13a05ac0503695",
+  "issued_at_utc": "2026-09-23T01:11:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-backend-lint-build-tags-20260923-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": ".github/workflows/backend-ci.yml",
+      "predecessor_sha256s": [
+        "5f8887cdcfcbcf0f490c4777388a4f2eabce889038c95d9ddb048357d784a036"
+      ],
+      "reason": "登记带构建标签测试文件存量 lint 修复与 CI lint 标签覆盖（1d0cc65d5）的冻结承接边；只改测试代码与 lint/CI 配置，不改生产代码、画像、Persona、wire 或出站代码 path=.github/workflows/backend-ci.yml",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-release-ci-repair-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "087bd7c74f21841633c550f6fec6ab9356fd224644e03156f6ecbef1a8e69ac0"
+    },
+    {
+      "old_path": "",
+      "path": "backend/.golangci.yml",
+      "predecessor_sha256s": [
+        "eb6de8696f50aa57a8e03e58b75e297d9d2310c60c6b17da7d4a4e79bba9ec23"
+      ],
+      "reason": "登记带构建标签测试文件存量 lint 修复与 CI lint 标签覆盖（1d0cc65d5）的冻结承接边；只改测试代码与 lint/CI 配置，不改生产代码、画像、Persona、wire 或出站代码 path=backend/.golangci.yml",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "efaa9a8636e4293d905a8c9be56af9b62b33652be7c0d4d18fa55e064cf82901"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/handler/available_channel_handler_test.go",
+      "predecessor_sha256s": [
+        "c50f2d2048dd41339aa360a7863e7fcb5d45f212c0d5e0dcbe3e66a863bfff04"
+      ],
+      "reason": "登记带构建标签测试文件存量 lint 修复与 CI lint 标签覆盖（1d0cc65d5）的冻结承接边；只改测试代码与 lint/CI 配置，不改生产代码、画像、Persona、wire 或出站代码 path=backend/internal/handler/available_channel_handler_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "b8ba78f16b0b14feaf1280f1f197075647e941297d832ff45232a999f041e477"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/handler/model_plaza_handler_test.go",
+      "predecessor_sha256s": [
+        "4d601227f6ace31b3a592978bf7017c7b9cf1e9498cb3bb2e2fac51a2a244c61"
+      ],
+      "reason": "登记带构建标签测试文件存量 lint 修复与 CI lint 标签覆盖（1d0cc65d5）的冻结承接边；只改测试代码与 lint/CI 配置，不改生产代码、画像、Persona、wire 或出站代码 path=backend/internal/handler/model_plaza_handler_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "4113fce32fa13e451eb7a58de0684f5c7bdbec1d32d3f7457191057fcfbfc202"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/repository/account_repo_ollama_cloud_usage_integration_test.go",
+      "predecessor_sha256s": [
+        "7097dc8af736c83f7b38edb4e87983b0f6bd74095ff05609520ad1ea3f02ca7c"
+      ],
+      "reason": "登记带构建标签测试文件存量 lint 修复与 CI lint 标签覆盖（1d0cc65d5）的冻结承接边；只改测试代码与 lint/CI 配置，不改生产代码、画像、Persona、wire 或出站代码 path=backend/internal/repository/account_repo_ollama_cloud_usage_integration_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "9d57fe65877322c81beca5d0029783a1ced120d4353f3b1aa4a66b47462de607"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/repository/fixtures_integration_test.go",
+      "predecessor_sha256s": [
+        "34b4d877fa3ceb17e866588f68da96a940a6f9c967fa3ac0c17fb52cb4dd164a"
+      ],
+      "reason": "登记带构建标签测试文件存量 lint 修复与 CI lint 标签覆盖（1d0cc65d5）的冻结承接边；只改测试代码与 lint/CI 配置，不改生产代码、画像、Persona、wire 或出站代码 path=backend/internal/repository/fixtures_integration_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "70fd4798b235761f12f7c49416fae661fac18f0d0923a04367dc73da852d9513"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/repository/redeem_cache_integration_test.go",
+      "predecessor_sha256s": [
+        "233e9f4cf2d208a45735b9a95eca9a84f5353dd824cc2e531892a9372148268b"
+      ],
+      "reason": "登记带构建标签测试文件存量 lint 修复与 CI lint 标签覆盖（1d0cc65d5）的冻结承接边；只改测试代码与 lint/CI 配置，不改生产代码、画像、Persona、wire 或出站代码 path=backend/internal/repository/redeem_cache_integration_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "158647081c708e29556a7d7746fc53179db500363100a9a2af359aa57e6b1bee"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/repository/usage_log_session_id_unit_test.go",
+      "predecessor_sha256s": [
+        "c718e954eb6861833cc0cf5dddfe53e52410b9d0183ee7ee1043bbbb3f86a738"
+      ],
+      "reason": "登记带构建标签测试文件存量 lint 修复与 CI lint 标签覆盖（1d0cc65d5）的冻结承接边；只改测试代码与 lint/CI 配置，不改生产代码、画像、Persona、wire 或出站代码 path=backend/internal/repository/usage_log_session_id_unit_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "f455f74ae2794cfca0716ea7ff7bad4ba03211c17ec32fb477140cf9835ed3bb"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/account_test_service_cn_adaptive_test.go",
+      "predecessor_sha256s": [
+        "fa4f2647a5d7475f90b865a47fb09c9b1c4bc9dcd4be7fb24eb7e3a32c80d694"
+      ],
+      "reason": "登记带构建标签测试文件存量 lint 修复与 CI lint 标签覆盖（1d0cc65d5）的冻结承接边；只改测试代码与 lint/CI 配置，不改生产代码、画像、Persona、wire 或出站代码 path=backend/internal/service/account_test_service_cn_adaptive_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "7d082e66b67c0156b4aa2a8de9dfaa510bb5ed52c5002580a2f143b92f2e47e3"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/account_test_service_openai_test.go",
+      "predecessor_sha256s": [
+        "98a7192bccac99709800cbf7a88835b37837049f0a00766338f8a4f8ae37c4a8"
+      ],
+      "reason": "登记带构建标签测试文件存量 lint 修复与 CI lint 标签覆盖（1d0cc65d5）的冻结承接边；只改测试代码与 lint/CI 配置，不改生产代码、画像、Persona、wire 或出站代码 path=backend/internal/service/account_test_service_openai_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "70c75c92b11b380fc39fe0168a75bab15b7d20c023d84dd28613b16c0403bad1"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/admin_service_duplicate_account_test.go",
+      "predecessor_sha256s": [
+        "723181d7af0675df63849902c5a0590093bce48fdab2554df1d5aa1198367025"
+      ],
+      "reason": "登记带构建标签测试文件存量 lint 修复与 CI lint 标签覆盖（1d0cc65d5）的冻结承接边；只改测试代码与 lint/CI 配置，不改生产代码、画像、Persona、wire 或出站代码 path=backend/internal/service/admin_service_duplicate_account_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "436a7a86d7977a5716aeed514def0de92a0411c728bd8df576cfc2f859d04af3"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/antigravity_rate_limit_test.go",
+      "predecessor_sha256s": [
+        "2cb9a8f7e5d5de62c62a8c50d4b02340c402c2f5cd9f22866442821ba0eb9f19"
+      ],
+      "reason": "登记带构建标签测试文件存量 lint 修复与 CI lint 标签覆盖（1d0cc65d5）的冻结承接边；只改测试代码与 lint/CI 配置，不改生产代码、画像、Persona、wire 或出站代码 path=backend/internal/service/antigravity_rate_limit_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-post-merge-test-drift-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "2a0c362266f9e30e1de7ce45458a66f5767040756ca9bf32075e562ab1443f1c"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/gateway_channel_restriction_load_aware_test.go",
+      "predecessor_sha256s": [
+        "20fb139436c7cbffcb5b037a13583b6bdc986ae2431b69c5041f1ae0f99a4afe"
+      ],
+      "reason": "登记带构建标签测试文件存量 lint 修复与 CI lint 标签覆盖（1d0cc65d5）的冻结承接边；只改测试代码与 lint/CI 配置，不改生产代码、画像、Persona、wire 或出站代码 path=backend/internal/service/gateway_channel_restriction_load_aware_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "123d41c2e599285f01c00f04046656146407cb58f1ad142cd7b0aa617960c9d9"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/gateway_forward_as_responses_test.go",
+      "predecessor_sha256s": [
+        "a1b707741307eb3c4a19d335ba0242beec165520636def8058b780d8e9efebe9"
+      ],
+      "reason": "登记带构建标签测试文件存量 lint 修复与 CI lint 标签覆盖（1d0cc65d5）的冻结承接边；只改测试代码与 lint/CI 配置，不改生产代码、画像、Persona、wire 或出站代码 path=backend/internal/service/gateway_forward_as_responses_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "a5668d6aa2fe0b7f41632efa0d6ba587a8e469c03b23e6c69b48d64faf561ca3"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/gateway_messages_cache_json_test.go",
+      "predecessor_sha256s": [
+        "d8e7f13401409748136850f161a6c93660dc90254aa5cbd49cce736dcb937bbc"
+      ],
+      "reason": "登记带构建标签测试文件存量 lint 修复与 CI lint 标签覆盖（1d0cc65d5）的冻结承接边；只改测试代码与 lint/CI 配置，不改生产代码、画像、Persona、wire 或出站代码 path=backend/internal/service/gateway_messages_cache_json_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "eeac160d48531e5b2e20b37a1c5d2c7065cae9bbf3bb174a44defa5ef7f2bc0e"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/gateway_multiplatform_test.go",
+      "predecessor_sha256s": [
+        "36999b25486bc0ffe581c8e201205c75d6396507fba31bef53962e87972a7d56"
+      ],
+      "reason": "登记带构建标签测试文件存量 lint 修复与 CI lint 标签覆盖（1d0cc65d5）的冻结承接边；只改测试代码与 lint/CI 配置，不改生产代码、画像、Persona、wire 或出站代码 path=backend/internal/service/gateway_multiplatform_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "61ee27a297163801e62ce6a14308a9c201818f564ea374ddfd6c7a58620434e5"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/gateway_request_test.go",
+      "predecessor_sha256s": [
+        "1073d33fb3eb31f3996e248ab2fa5a23d2bd2635cdbcf97b22ac10444e5df00c"
+      ],
+      "reason": "登记带构建标签测试文件存量 lint 修复与 CI lint 标签覆盖（1d0cc65d5）的冻结承接边；只改测试代码与 lint/CI 配置，不改生产代码、画像、Persona、wire 或出站代码 path=backend/internal/service/gateway_request_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "004fabbbc43fee18127c5f40c69e903c09c3a85bf1a929dfd76b5fb441db3882"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/gateway_upstream_transport_error_test.go",
+      "predecessor_sha256s": [
+        "a2ff958d67ab5b531840428e2caba407b5cec0a719dba710180f12f7260b79cc"
+      ],
+      "reason": "登记带构建标签测试文件存量 lint 修复与 CI lint 标签覆盖（1d0cc65d5）的冻结承接边；只改测试代码与 lint/CI 配置，不改生产代码、画像、Persona、wire 或出站代码 path=backend/internal/service/gateway_upstream_transport_error_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "1640ca340cfd008ba1ff7a5327e7d406df7a8c3817012c5ad483e9b466c0d6c6"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/grok_credential_failure_test.go",
+      "predecessor_sha256s": [
+        "533213a1a299e87a1d76f792f8f83d5a9029d69d192604a5e3161f2f91d0fb9c"
+      ],
+      "reason": "登记带构建标签测试文件存量 lint 修复与 CI lint 标签覆盖（1d0cc65d5）的冻结承接边；只改测试代码与 lint/CI 配置，不改生产代码、画像、Persona、wire 或出站代码 path=backend/internal/service/grok_credential_failure_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "c69714b88c4535d479f21e32e9e87c7895ab2dc328fe6d43c49d3c4447d65842"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/model_plaza_service_test.go",
+      "predecessor_sha256s": [
+        "5c15488e88ee21d2b9c341271bb186451e033e87d106dcc709503cf5ecc08bd9"
+      ],
+      "reason": "登记带构建标签测试文件存量 lint 修复与 CI lint 标签覆盖（1d0cc65d5）的冻结承接边；只改测试代码与 lint/CI 配置，不改生产代码、画像、Persona、wire 或出站代码 path=backend/internal/service/model_plaza_service_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "0ebbbc771ce43d507caaffeacc04c515bb8cc4b880d5712242031b5c31d0dcd0"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_chat_completions_raw_test.go",
+      "predecessor_sha256s": [
+        "279d67f51837863caf329ea07189711290c6ed38e0bb144a6de707360d8eb730"
+      ],
+      "reason": "登记带构建标签测试文件存量 lint 修复与 CI lint 标签覆盖（1d0cc65d5）的冻结承接边；只改测试代码与 lint/CI 配置，不改生产代码、画像、Persona、wire 或出站代码 path=backend/internal/service/openai_gateway_chat_completions_raw_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "2a59fbcd8121b95510481c83f8d3db7b64aef3412eda85e62f915cc3c52b58e9"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_grok_test.go",
+      "predecessor_sha256s": [
+        "1d713276b130c6a166383d851d7f96bfb33c9e2cd4c1f83fd2e74e85c9c9bdcc"
+      ],
+      "reason": "登记带构建标签测试文件存量 lint 修复与 CI lint 标签覆盖（1d0cc65d5）的冻结承接边；只改测试代码与 lint/CI 配置，不改生产代码、画像、Persona、wire 或出站代码 path=backend/internal/service/openai_gateway_grok_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "f2b76b149678bb02e2da6abf41cdfc9218265fa914d980f81e437074ec18f869"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_images_model_test.go",
+      "predecessor_sha256s": [
+        "bb0b2105355e5d5e9a8701ca38c90576c1a128dd9635aed5ae91bd657b7741d1"
+      ],
+      "reason": "登记带构建标签测试文件存量 lint 修复与 CI lint 标签覆盖（1d0cc65d5）的冻结承接边；只改测试代码与 lint/CI 配置，不改生产代码、画像、Persona、wire 或出站代码 path=backend/internal/service/openai_images_model_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "37e9d740a634fc8360c1eb185062a042b04d50708c71f6952887b3da60bd7053"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_responses_lite_tools_test.go",
+      "predecessor_sha256s": [
+        "70b8926fa430dfa999b9e40613ac36d8de48617bd59221274df3f87fba879c9d"
+      ],
+      "reason": "登记带构建标签测试文件存量 lint 修复与 CI lint 标签覆盖（1d0cc65d5）的冻结承接边；只改测试代码与 lint/CI 配置，不改生产代码、画像、Persona、wire 或出站代码 path=backend/internal/service/openai_responses_lite_tools_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "8e85b6d315a4b06f2e1c094ce5664422a70537acd286120ce2e0af9f1537c54e"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/scheduler_snapshot_full_rebuild_lifecycle_test.go",
+      "predecessor_sha256s": [
+        "af12d63f3c2cb016403a60fcf0ece24d177c34a085ec79287b22f1408e6ead0f"
+      ],
+      "reason": "登记带构建标签测试文件存量 lint 修复与 CI lint 标签覆盖（1d0cc65d5）的冻结承接边；只改测试代码与 lint/CI 配置，不改生产代码、画像、Persona、wire 或出站代码 path=backend/internal/service/scheduler_snapshot_full_rebuild_lifecycle_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "16b646692e912ab6471bc17755ed1cdd3ff6753e01329d9eb16b594a60c5f2e5"
+    }
+  ],
+  "unregistered_path_count": 56,
+  "unregistered_paths": [
+    "backend/internal/config/env_reachability_test.go",
+    "backend/internal/handler/admin/batch_update_credentials_test.go",
+    "backend/internal/handler/admin/require_type_test.go",
+    "backend/internal/handler/auth_wechat_oauth_test.go",
+    "backend/internal/handler/gateway_handler_warmup_intercept_unit_test.go",
+    "backend/internal/handler/openai_gateway_credential_failover_loop_test.go",
+    "backend/internal/handler/request_body_parse_log_test.go",
+    "backend/internal/handler/require_type_test.go",
+    "backend/internal/handler/user_platform_quotas_handler_test.go",
+    "backend/internal/payment/provider/stripe_test.go",
+    "backend/internal/pkg/antigravity/client_test.go",
+    "backend/internal/pkg/tlsfingerprint/dialer_capture_test.go",
+    "backend/internal/pkg/tlsfingerprint/h2_test.go",
+    "backend/internal/pkg/tlsfingerprint/require_type_test.go",
+    "backend/internal/repository/aes_encryptor_test.go",
+    "backend/internal/repository/api_key_repo_integration_test.go",
+    "backend/internal/repository/concurrency_cache_integration_test.go",
+    "backend/internal/repository/grok_oauth_client_test.go",
+    "backend/internal/repository/identity_cache_integration_test.go",
+    "backend/internal/repository/integration_harness_test.go",
+    "backend/internal/repository/ops_repo_args_test.go",
+    "backend/internal/repository/ops_repo_get_error_log_by_id_integration_test.go",
+    "backend/internal/repository/ops_write_pressure_integration_test.go",
+    "backend/internal/repository/redeem_code_repo_integration_test.go",
+    "backend/internal/repository/require_type_test.go",
+    "backend/internal/repository/setting_repo_integration_test.go",
+    "backend/internal/repository/update_cache_integration_test.go",
+    "backend/internal/repository/user_msg_queue_cache_integration_test.go",
+    "backend/internal/repository/user_platform_quota_adapter_test.go",
+    "backend/internal/repository/user_subscription_repo_integration_test.go",
+    "backend/internal/service/account_header_override_test.go",
+    "backend/internal/service/admin_service_bulk_update_test.go",
+    "backend/internal/service/admin_service_spark_shadow_test.go",
+    "backend/internal/service/admin_service_update_balance_test.go",
+    "backend/internal/service/admin_service_update_user_rpm_test.go",
+    "backend/internal/service/antigravity_credits_overages_test.go",
+    "backend/internal/service/auth_service_identity_sync_test.go",
+    "backend/internal/service/auth_service_register_test.go",
+    "backend/internal/service/backup_archive_test.go",
+    "backend/internal/service/backup_service_test.go",
+    "backend/internal/service/batch_image_download_test.go",
+    "backend/internal/service/batch_image_provider_gemini_test.go",
+    "backend/internal/service/batch_image_provider_vertex_test.go",
+    "backend/internal/service/batch_image_public_test.go",
+    "backend/internal/service/billing_cache_service_user_platform_quota_test.go",
+    "backend/internal/service/channel_monitor_duplicate_test.go",
+    "backend/internal/service/concurrency_service_test.go",
+    "backend/internal/service/email_service_smtp_test.go",
+    "backend/internal/service/openai_codex_function_call_id_test.go",
+    "backend/internal/service/openai_gateway_grok_tool_protocol_test.go",
+    "backend/internal/service/payment_webhook_provider_test.go",
+    "backend/internal/service/require_type_test.go",
+    "backend/internal/service/scheduler_snapshot_batch_query_test.go",
+    "backend/internal/service/setting_service_oidc_config_test.go",
+    "backend/internal/service/setting_service_platform_threshold_test.go",
+    "backend/internal/service/testhelpers_test.go"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
