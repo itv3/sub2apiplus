@@ -1622,12 +1622,13 @@ VC-1 只回答“目标版本实际会产生什么行为”，不判定相对基
 |---|---|
 | 同版本、同产物／平台／账号权限／模型可见性且语义未变的可信证据 | 以 `reuse-official-evidence` 只读导入 `official_sealed` |
 | 可信证据只缺少某项目标事实 | 只对该事实及直接依赖场景定向取证 |
-| target、官方产物、平台、账号身份／权限／模型可见性或证据语义变化 | 返回 VC-0 建立新 Campaign，重新取得受影响证据 |
+| target、官方产物、平台、账号身份／权限／模型可见性或证据语义变化 | 返回 VC-0 用 `vc0_closeout` 建立新 Campaign，重新取得受影响证据 |
 
 导入命令必须为新 Campaign 重建总计划和 VC-0 checkpoint，将全部 official Job 登记为 `reuse_items`，
 生成无动作的首个 VC-1 no-op 批次，并以 `executed_job_count=0`、`scanned_bytes=0`、
 `live_request_count=0` 封存 VC-1 checkpoint。它不得复制或改写原始证据，也不得承接旧分类；分类仍在
-VC-2 重新审核。工具、报告或 candidate 变化本身不能成为重发官方请求的理由。
+VC-2 重新审核。工具、报告或 candidate 变化本身不能成为重发官方请求的理由。导入后要补三条账本事件，
+见 §4.0.4。
 
 官方 Release 下载前，由 `codex_upgrade_official_asset_receipt.py` 预连接 metadata 中的 CDN IPv4，
 冻结成功地址、证书、asset 大小和 SHA-256；收据离线重放通过后只能从该地址下载。地址全部失败、
@@ -1647,12 +1648,14 @@ metadata 漂移或摘要不符时停线，不得改路由或使用未登记镜�
 | 1 | 重放 VC-0 Formal plan 并执行首批 | 确认 target source、source diff、baseline surface 和 target 场景执行合同未漂移 |
 | 2 | 源码与依赖分析 | 形成目标发现和待验证事实 |
 | 3 | `capture-official run` | 仅为目标事实采集 HTTP、WS、TLS、状态和错误分支 |
-| 4 | `SIDE=official prepare_assertion_bundle.sh` | 从冻结 Job 根生成 capture manifest |
+| 4 | `SIDE=official tools/prepare_assertion_bundle.sh` | 从冻结 Job 根生成 capture manifest |
 | 5 | `capture-official seal` | 校验恢复、权限、秘密扫描、inventory 和 finalizer，写入 `official_sealed` |
 
 目标 CLI Job 只能来自 Formal 冻结的 target 场景。assertion bundle 必须绑定 Campaign、attempt 和
 目标版本证据标签；标签缺失或残留旧版本时返回 VC-0 修复，不能现场手写 manifest。Job 结束后、生成
-bundle 前，将证据目录／文件权限收口为 `0700／0600`；任何身份或执行合同漂移都不得 seal。
+bundle 前，将证据目录／文件权限收口为 `0700／0600`，且只收口这一次：证据 manifest 生成后一律不得再
+chmod／chown，即便模式不变，ctime 也会漂移并被判 `evidence-integrity`（同 §4.5.3）。任何身份或执行合同
+漂移都不得 seal。
 
 ### 4.1.3 目标事实整理与退出
 
