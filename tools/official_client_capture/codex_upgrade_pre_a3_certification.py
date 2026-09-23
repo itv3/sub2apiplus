@@ -280,19 +280,36 @@ def run_scenario(scenario: tuple[str, str, str, str, str]) -> dict[str, Any]:
     return record
 
 
-def real_chain_coverage(payload: Mapping[str, Any], *, required: tuple[str, ...] = REAL_CHAIN_IDS) -> list[dict[str, Any]]:
-    """从已签名的逐场景结果提取覆盖；缺失、重复和 skip 均不等价于通过。"""
+def real_chain_registration() -> list[dict[str, str]]:
+    """冻结本发布包登记的链集合；后续增加链不得改变历史包的回放要求。"""
+
+    return [{"id": name, "test": f"{scenario[2]}:{scenario[3]}.{scenario[4]}"}
+            for name in REAL_CHAIN_IDS
+            for scenario in SCENARIOS if scenario[0] == name]
+
+
+def real_chain_coverage(payload: Mapping[str, Any], *, historical: bool = False) -> list[dict[str, Any]]:
+    """新签发要求当前登记；历史回放只核验当时绑定的集合，缺失与 skip 均拒绝。"""
 
     rows = payload.get("scenarios")
     if not isinstance(rows, list):
         raise CertificationError("路径认证缺少逐场景结果")
+    registration = payload.get("real_chain_registration")
+    if (not isinstance(registration, list) or not registration
+            or any(not isinstance(item, Mapping) or set(item) != {"id", "test"}
+                   or not isinstance(item["id"], str) or not item["id"].startswith("vc-chain.")
+                   or not isinstance(item["test"], str) or not item["test"] for item in registration)
+            or len({item["id"] for item in registration}) != len(registration)):
+        raise CertificationError("真实链登记集合缺失或非法")
+    if not historical and registration != real_chain_registration():
+        raise CertificationError("真实链登记集合与当前发布包不一致")
     coverage: list[dict[str, Any]] = []
-    for name in required:
+    for entry in registration:
+        name = entry["id"]
         matches = [row for row in rows if isinstance(row, Mapping) and row.get("name") == name]
         if len(matches) != 1 or matches[0].get("status") != "passed":
             raise CertificationError(f"已登记的真实链未认证：{name}")
-        scenario = next(item for item in SCENARIOS if item[0] == name)
-        expected_test = f"{scenario[2]}:{scenario[3]}.{scenario[4]}"
+        expected_test = entry["test"]
         if matches[0].get("test") != expected_test:
             raise CertificationError(f"真实链测试入口与登记不一致：{name}")
         coverage.append({"id": name, "test": expected_test, "status": "passed"})
@@ -453,6 +470,7 @@ def run_certification(
             "policy_sha256": activation.get("policy_sha256"),
         },
         "campaign_run_rehearsal_receipt": rehearsal_binding,
+        "real_chain_registration": real_chain_registration(),
         "scenarios": report,
         "scenario_count": len(report),
         "failed_scenarios": failed,

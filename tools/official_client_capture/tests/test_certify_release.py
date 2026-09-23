@@ -135,6 +135,14 @@ class CertifyReleaseTests(unittest.TestCase):
             self.assertIsNone(certification["campaign_run_rehearsal"])
             verified = certify_release.verify(output)
             self.assertEqual(verified["receipt_sha256"], certification["receipt_sha256"])
+            # 后续发布包增加登记链时，旧包仍按绑定的 pre-A3 登记集合只读回放。
+            future = ("vc-chain.future", "后续链", "fixture.future", "FutureChain", "test_future")
+            with mock.patch.object(pre_a3, "REAL_CHAIN_IDS", (*pre_a3.REAL_CHAIN_IDS, future[0])), \
+                 mock.patch.object(pre_a3, "SCENARIOS", (*pre_a3.SCENARIOS, future)):
+                self.assertEqual(certify_release.verify(output)["real_chain_coverage"],
+                                 certification["real_chain_coverage"])
+                with self.assertRaisesRegex(certify_release.ReleaseCertificationError, "登记集合"):
+                    certify_release.build_certification(**inputs, require_arm64=False)
             self.assertEqual(certify_release.main(["verify", "--certification", str(output)]), 0)
             # 无覆盖字段的既有认证仍只读回放；新增字段必须与已绑定的 pre-A3 逐项一致。
             historical = {key: value for key, value in certification.items() if key not in {"receipt_sha256", "real_chain_coverage"}}

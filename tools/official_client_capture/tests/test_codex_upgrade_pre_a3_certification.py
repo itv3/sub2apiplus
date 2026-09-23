@@ -89,10 +89,15 @@ class PreA3CertificationTests(unittest.TestCase):
     def test_registered_real_chain_requires_one_passed_matching_entry(self) -> None:
         scenario = next(row for row in certification.SCENARIOS if row[0] == certification.REAL_CHAIN_IDS[0])
         passed = {"name": scenario[0], "test": f"{scenario[2]}:{scenario[3]}.{scenario[4]}", "status": "passed"}
-        self.assertEqual(certification.real_chain_coverage({"scenarios": [passed]})[0]["id"], scenario[0])
+        bound = {"scenarios": [passed], "real_chain_registration": certification.real_chain_registration()}
+        self.assertEqual(certification.real_chain_coverage(bound)[0]["id"], scenario[0])
+        self.assertEqual(certification.real_chain_coverage(bound, historical=True)[0]["id"], scenario[0])
+        for registration in (None, [], [{}], [bound["real_chain_registration"][0]] * 2):
+            with self.subTest(registration=registration), self.assertRaises(certification.CertificationError):
+                certification.real_chain_coverage({**bound, "real_chain_registration": registration}, historical=True)
         for rows in ([], [passed, passed], [{**passed, "status": "uncertified"}], [{**passed, "status": "failed"}], [{**passed, "test": "无关入口"}]):
             with self.subTest(rows=rows), self.assertRaises(certification.CertificationError):
-                certification.real_chain_coverage({"scenarios": rows})
+                certification.real_chain_coverage({**bound, "scenarios": rows})
 
     def test_registered_real_chain_skip_is_uncertified(self) -> None:
         class SkippedChain(unittest.TestCase):

@@ -359,7 +359,7 @@ def verify(path: Path, *, expected_identity: Mapping[str, Any] | None = None) ->
     if "real_chain_coverage" in payload:
         try:
             paths = policy_certification._read_json(Path(payload["pre_a3_certification"]["path"]), "pre-A3 路径认证")
-            expected_coverage = pre_a3.real_chain_coverage(paths)
+            expected_coverage = pre_a3.real_chain_coverage(paths, historical=True)
         except pre_a3.CertificationError as error:
             raise ReleaseCertificationError(str(error)) from error
         if payload["real_chain_coverage"] != expected_coverage:

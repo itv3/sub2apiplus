@@ -1420,6 +1420,7 @@ Formal Campaign 时的工具就绪证明。它绑定部署收据的策略版本�
 发布认证在具备 Go 与 Docker 的 Linux ARM64 上签发，并以 `real_chain_coverage` 记录本发布包登记的真实链及其测试入口。
 已登记的链失败、重复、缺失或 skip 均不得签发；未登记的后续链不阻塞当前发布。历史认证保留原字节，缺少该字段时
 按原合同只读重放，不据此签发新的发布认证。
+pre-A3 的 `real_chain_registration` 冻结当时登记的链与入口；发布认证回放按该绑定集合校验，后续增加链不追溯要求旧包补跑。新签发仍要求当前发布包的完整登记集合。
 
 ```bash
 python3 -m tools.official_client_capture.certify_release issue \
