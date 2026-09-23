@@ -208,3 +208,11 @@ capture、classify、profile、compare、accept、resume 及 canonical 写命令
   `release_certification` 绑定。
 - 只有 storage 探针、不带 `failure_lifecycle_probe_sha256` 的历史 Job 演练收据仍可只读重放，但不得用于新
   Formal Campaign。
+
+<a id="codex-0154-historical-recovery-entrypoints"></a>
+## 7. 0.154 首轮的历史恢复入口（只读，2026-09-23 自指南移入）
+
+`recover-candidate-failed-jobs` 是 0.154.0 首轮 v7 失败 Job 的后继 Campaign 恢复入口，只接受代码冻结的那一次
+历史直接来源：Campaign `c0154-formal-vc5-recovery-20260916t122646z`、候选 `c0154-candidate-v7`；
+`c0154-formal-vc5-failed-job-recovery-20260917t0527z` 是它生成的后继／control epoch。该入口只用于读懂这组历史
+收据，不得用于新 Campaign；新 Campaign 的临时环境故障一律走指南 §4.5.8 的恢复段。

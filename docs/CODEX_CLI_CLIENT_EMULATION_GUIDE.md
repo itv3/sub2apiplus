@@ -2062,7 +2062,8 @@ VC-4 只在构建收据中冻结最终制品，不调用“只落盘身份”的
 - 复核不可变镜像 RepoDigest、挂载与 PID namespace、实际执行工具副本、目标 Codex 绝对路径及
   `codex-cli <target-version>`，禁止通过 `codex-capture`、`PATH` 或默认值选中旧版本；
 - 复核账号、API Key、模型可见性、Live／WS／compact 开关、熔断与配额、activation 身份、采集端口、
-  run-root、属主和权限，以及 §4.0.3 的固定容器 IP、BWG 出口和 MTU；
+  run-root、属主和权限，以及 §4.0.3 的固定容器 IP、冻结出口和 MTU；目标账号必须能提供两条模型轨道的
+  模型（0.154 的 VC-5 曾因账号缺 Lite 模型映射而失败）；
 - `candidate-frozen-aux` 在修改环境前确认隔离分组只含目标账号且已启用 Live 和图片生成；合并解析全部
   Compose 文件，必须指向同一 candidate 镜像并设置 `candidate_release_mode=previous`。拒绝相对路径、
   符号链接、其他 Compose 选项和 shell `eval`；`production_replacement` 不允许缺少 Compose 坐标；
@@ -2127,16 +2128,17 @@ candidate 只读保留。
 | Kilo Compatible | `kilo-compatible` 收据绑定模型、账号、请求、响应、usage、candidate 和 profile |
 | Kilo Responses | `kilo-responses` 收据绑定相同 candidate 身份和 profile |
 
-模型轨道必须从 `capturelib/model.py` 的目标版本政策和正式 `/models` 证据共同确认，不能用历史版本或
-全版本并集替代。0.151.0→0.154.0 的冻结坐标为：
+模型轨道必须从 `capturelib/model.py` 的目标版本政策和正式 `/models` 证据共同确认，并在 Campaign 中冻结，
+不能用历史版本或全版本并集替代。0.151.0→0.154.0 的冻结坐标（示例）：
 
 | 轨道 | 模型 | 必须验证 | 用途 |
 |---|---|---|---|
 | main | `gpt-5.5` | `use_responses_lite=false` | 官方／Candidate 主场景 |
 | lite | `gpt-6-astra` | `use_responses_lite=true` | Lite 专项及 Kilo 双入口 |
 
-正式 initialize-only 模型目录证据必须同时确认两项。不得把 `gpt-6-astra` 放入 main 轨，也不得沿用
-0.151.0 的 `gpt-5.6-terra` 作为 0.154.0 Lite 模型；缺失、互换或模型元数据不符均在请求前失败关闭。
+正式 initialize-only 模型目录证据必须同时确认两项。不得把 Lite 模型放入 main 轨，也不得沿用上一版本的
+Lite 模型（例如 0.151.0 的 `gpt-5.6-terra` 不能用作 0.154.0 的 Lite）；缺失、互换或模型元数据不符均在请求前
+失败关闭。
 
 Candidate MITM 矩阵不得继承 `capture-cli` 的 `CODEX_HOME`。每次 Job 必须创建独占空目录，只放入
 `features.plugins=false`、禁更新和禁遥测配置，不复制 `auth.json`，结束时受控删除。目标版本未批准的
@@ -2157,10 +2159,15 @@ realtime sideband、A13 OAuth refresh、A14 Files 三跳等高风险场景只有
 
 `run` 完成后、首次 `seal` 前，必须完成两条真实 Kilo 请求；其 ingress、runtime、response 和
 usage 必须绑定本次 Campaign／attempt／`run_nonce`，并位于 attempt 开始与 client checkpoint
-之间。两条入口统一使用 Campaign 已冻结的 `lite_model`；对 0.154.0 即 `gpt-6-astra`。主轨 `model`
+之间。两条入口统一使用 Campaign 已冻结的 `lite_model`（0.154.0 为 `gpt-6-astra`）。主轨 `model`
 只用于官方／候选主场景，不得被 seal 隐式复用于 Kilo；历史 Campaign 未记录 `lite_model` 时，仅只读
 重放允许回退主轨模型。
 两条请求之后不得再发送本 attempt 的客户端验证请求。
+
+Kilo 实操要点：`candidate-frozen-aux` 恢复数据库后，Redis 调度投影要几分钟才刷新，立刻发 Kilo 会被判
+`model_not_supported`，发送前要轮询到该账号的投影里已没有临时 `model_mapping`；Kilo 用数据根下的不可变
+副本，脚本在账号请求前核对路径、`--version` 和 sha256，不符即失败；VC-5 完成前不要重连 VS Code（它会
+自动升级扩展，换掉 Kilo 的路径）；Kilo 日志写到 `control/` 下。
 Kilo runner 在写入任何检查点或请求前必须把 `evidence/client` 及其全部新建子目录显式设为 `0700`；不得只收紧 `client/raw` 而留下可被 group/other 遍历的父目录。
 Kilo Responses 的 `@ai-sdk/openai` provider 必须显式设置 `options.websocket=true`；首次 `seal`
 前必须同时核验 Compatible 入站为 `POST/200`、Responses 入站为 `GET/101`，以及两条 usage 的
@@ -2211,8 +2218,8 @@ Kilo Responses 的 `@ai-sdk/openai` provider 必须显式设置 `options.websock
 
    工具先检查路径、符号链接、权限、属主、磁盘、身份和必需收据；任何廉价检查失败时不得读取原始
    内容。通过后只进行一次完整扫描，生成只写一次的 `evidence-manifest.json`、`seal-draft.json` 和
-   `seal-preview.json`，记录扫描字节、耗时和根摘要并返回 `review_sha256`。扫描中断时从逐文件
-   checkpoint 继续，已完成且边界未变的条目不得重新读取。
+   `seal-preview.json`，记录扫描字节、耗时和根摘要并返回 `review_sha256`。预览成功时退出码为 2，
+   表示等待批准，不是失败。扫描中断时从逐文件 checkpoint 继续，已完成且边界未变的条目不得重新读取。
 4. **批准封存**：人工复核预览后，只用 Campaign、candidate、attempt、用途和
    `review_sha256` 批准：
 
@@ -2228,6 +2235,9 @@ Kilo Responses 的 `@ai-sdk/openai` provider 必须显式设置 `options.websock
 
    批准阶段只验证冻结草案、manifest 根摘要和不可变 stat 边界，`scanned_bytes=0`；不得重新生成
    surface、inventory 或 secret scan。通过后 Campaign 进入 `candidate_sealed`。
+
+批次内动作按 `action_id` 排序执行，且必须无重叠地精确覆盖 `execute_item_ids`：assertion bundle 与预览各自
+一批，批准与 compare 可以合为一批。
 
 普通 `status`、compare 和 accept 只重放 manifest／摘要链。`deep-verify` 只用于缺少 manifest 的历史
 导入边界，或人工明确要求的独立审计；不得由恢复判断隐式触发，也不覆盖历史文件。
@@ -2299,7 +2309,7 @@ selector 选择的 `record_type` 可能承载多个事实时，必须在 `where`
 收据重放。每条规则最终均为 `status=pass`、`evidence_level=full`；不允许 fail、N／A、手写通过、
 未绑定 inventory 的证据路径，或把继承规则伪装成本轮执行。
 
-**checker 投影输入模式与 `evaluation-run.json`（2026-09-20 改造 5）。** builder 对每条规则、每一侧先由
+**checker 投影输入模式与 `evaluation-run.json`。** builder 对每条规则、每一侧先由
 `candidate_rule_assertion.project_capture_manifest` 从完整 capture manifest 构造 per-rule 投影（A0 为与规则
 场景相交的 artifact，再沿结构化 artifact 记录的 `source_artifacts` 闭包并入引用条目；顶层字段逐字沿用，
 条目按原顺序，不加新顶层字段），写为 checkpoint 绑定的 `input_projection` 文件，checker 以
@@ -2318,7 +2328,7 @@ checker 摘要＋builder 摘要），批次结束写 `evaluation-run.json`（`co
 
 ### 4.5.6 外部门禁与 accept
 
-**accept 对逐规则断言行的两种校验（2026-09-20 改造 5）。** 当前评估基线有 `evaluation-run.json` 时，accept
+**accept 对逐规则断言行的两种校验。** 当前评估基线有 `evaluation-run.json` 时，accept
 先核对其 evaluator 摘要属该基线授权（b0 只核 checker／builder 等于 plan `tool_identity` 规范 entry，
 b≥1 四项等于 `recovery.json.current_evaluator_digests`）、各 checkpoint 的 checker 摘要与之
 一致、全部规则 `status=pass`，再逐行分两类：**executed 行**（`reused_from=null`）在当前基线的候选阶段与
@@ -2487,7 +2497,7 @@ Job 的失败（如 compare／accept 工具异常）没有 `transient-environmen
   （`recovery_revision=ar<k>` 由 apply 按已有段最大编号 + 1 返回，首次才是 `ar1`；`execute_jobs=J*`、`reuse_jobs` 其余、
   `execute_rules` 为引用 J* 证据的规则），
   根因 `attempt.job-transient-failure`；随后走第 6 项恢复段。
-- `candidate-source`：候选源码问题，`redirect` 到 `invalidate-candidate preview`（改造 2 三分支）。
+- `candidate-source`：候选源码问题，`redirect` 到 `invalidate-candidate preview`（候选级 revision 三分支，见 §4.4.3）。
 - `approval-inputs`：批准输入（画像、场景、规则）问题，`redirect` 到显式停线后从 VC-2 建后继 Campaign。
 两类真实出口的根因在同阶段跨基线／跨恢复段累计，达 `same_root_cause_retry_limit` 即在 apply 二次判定中
 永久停线（基线停在 prepared，可 `abandon`）。
@@ -2526,11 +2536,9 @@ monitor 封存 `failed／parent-finalize-lost`）：`reconcile-supervisor-run` �
 
 **8. 不在本合同内。** `failed_gates` 与 §4.5.6 的外部门禁失败不是评估失败：门禁收据以 attempt 为主体、
 按 §4.5.6 重新执行门禁并生成新收据，不开评估基线、不进入 `evaluation-recover`；同样不在本合同内的还有
-候选源码问题（改造 2 `invalidate-candidate`／`revision-open`）与取得执行权前的父 run 失败（改造 4）。
-`recover-candidate-failed-jobs`（0.154.0 首轮 v7 失败 Job 的后继 Campaign 恢复入口）只接受代码冻结的那一次
-历史直接来源（Campaign `c0154-formal-vc5-recovery-20260916t122646z`、候选 `c0154-candidate-v7`；
-`c0154-formal-vc5-failed-job-recovery-20260917t0527z` 是它生成的后继／control epoch），是历史只读入口，
-不得用于新 Campaign；
+候选源码问题（`invalidate-candidate`／`revision-open`，见 §4.4.3）与取得执行权前的父 run 失败（见 §4.7）。
+历史只读入口 `recover-candidate-failed-jobs` 不得用于新 Campaign，说明见
+[历史审计 §7](CODEX_CLI_CLIENT_EMULATION_HISTORY_AUDIT.md#codex-0154-historical-recovery-entrypoints)；
 临时环境故障一律走本节第 3／6 项的恢复段。
 
 <a id="codex-vc-6"></a>
