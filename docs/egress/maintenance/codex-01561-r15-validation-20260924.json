@@ -1,0 +1,157 @@
+{
+  "schema_version": "codex-upgrade-improvement-validation/v1",
+  "item": "R15",
+  "source_commit": "e30ed6f82ec771846f16ad1798813cc0709f6d85",
+  "status": "development_self_check_passed",
+  "scope": "开发自查；生产迁移、宿主重启和功能性能验收按已批准阶段 1 发布流程执行。",
+  "freeze_successor": "docs/egress/maintenance/upstream-codex-01561-r15-20260923-freeze-successor.json",
+  "layer_diff": {
+    "policy_changed": false,
+    "wire_changed": true,
+    "evidence_changed": true,
+    "control_changed": true
+  },
+  "tool_identity": {
+    "files_sha256": "f16f2c761045b06d1ef67570adac5b388ba1c2269ca1738a8c0034f1eb2011cd",
+    "policy_version": 7,
+    "policy_sha256": "796dac4b48c2c54009e101be1e1f56569a76fdc89c037378245796ec5dab2ad9",
+    "wire_producer_sha256": "3beefc77f5887fa3ef9ff6d3ea032a6c325d578177cc33912569b092189c66ec",
+    "evidence_semantics_sha256": "fb514301c47fe5d9bc9e63c84ce7643751d8b1252e5e9ef5cbdc1205951af9ca",
+    "control_sha256": "c2f3460d35bc3df2723c2aaf64993691fdf05bbea9cdb2787159645556bad4dc"
+  },
+  "arm64_identity_matches_local": true,
+  "self_check": [
+    {
+      "item": "出口策略与工具身份解耦",
+      "result": "passed",
+      "evidence": "同一工具读取 BWG、DMIT、第三出口合成策略，实时准入只认授权策略；历史重放不读取当前出口，版本化等价投影保留镜像和抓包拓扑依赖。"
+    },
+    {
+      "item": "两端内核路径约束与分别／共同阻断",
+      "result": "passed",
+      "evidence": "隔离 cgroup/netns、真实 BPF/nft/WireGuard：错 Peer、两端路由／NAT 改写、附加网卡／IPv6、DNS／代理绕路、守护租期失效、新旧连接与新 cgroup 闭锁通过；非授权出口业务包 0。"
+    },
+    {
+      "item": "独立监督器与受控 Docker 重建",
+      "result": "passed",
+      "evidence": "真实父进程、monitor、Docker restart 与 compose 重建；状态适配器按实际容器身份生成等待状态，维护最多 60 秒且不超原 deadline；故障暂停不可逆。该链容器无网络，不冒充完整生产数据面验收。"
+    },
+    {
+      "item": "影响窗口与合法恢复",
+      "result": "passed",
+      "evidence": "原 run 不恢复派发；逐 Job 对账、复用与封存消费暂停窗口。恢复链执行范围 1、复用 1、真实请求 0，原证据字节不变。合成生产者与采集入口替身只验证控制流程。"
+    },
+    {
+      "item": "旧历史兼容与回退读侧",
+      "result": "passed",
+      "evidence": "旧 producer 白名单按原始语义重放，篡改及未知 producer 拒绝；前序 b03248432 的 v7 读侧对新 v8 收据只读回放拒绝且不改字节。写出新事实后不得回退不兼容工具，保持保护并最小向前修复。"
+    },
+    {
+      "item": "安装持久性、更新中断与 schema",
+      "result": "passed",
+      "evidence": "持久 bundle 不依赖 staging；bootstrap 先于 Docker；配置原子写入失败保留旧字节；换保护先闭锁；10 份新 schema 经 jsonschema 实际制品校验。"
+    },
+    {
+      "item": "源码、冻结与消费者",
+      "result": "passed",
+      "evidence": "347 项消费者回归、60 项部署／专项／pre-A3 和 28 项恢复回归通过（套件有重叠，不合计为独立用例数）；Go、check-egress-spec-ci 和部署测试通过。"
+    },
+    {
+      "item": "R13 完整连续链与旧评估恢复链",
+      "result": "passed",
+      "evidence": "最终受管摘要一致的 ARM64 staging：完整链 267.877 秒、8 批、重复派发零请求且字节不变；旧评估恢复链 897.386 秒通过。"
+    },
+    {
+      "item": "生产迁移及实际发布认证",
+      "result": "scheduled_stage_1_release",
+      "evidence": "按已批准流程统一部署。尚未改变生产 compose、路由、出口、工具或镜像；真实宿主重启、生产服务依赖、抓包和性能验收尚未执行。"
+    },
+    {
+      "item": "归档依赖边界",
+      "result": "passed",
+      "evidence": "既有私有归档为操作员登记及另一位置恢复重放合同，没有自动打包实现；运维说明明确包含 Job 引用的父 run、暂停记录和最后可信状态。正式 VC-6 须按该依赖集合归档并实际重放，未宣称本次已完成生产归档。"
+    }
+  ],
+  "measured": {
+    "runtime_fixture_tests": 4,
+    "runtime_fixture_seconds": 61.873,
+    "individual_detection_seconds": 1.159333998017246,
+    "shared_detection_seconds": 0.15085574498516507,
+    "unauthorized_business_packets": 0,
+    "docker_restarts": 1,
+    "docker_rebuilds": 1,
+    "recovery_execute_scope": 1,
+    "recovery_reuse_jobs": 1,
+    "live_request_count": 0,
+    "full_chain_seconds": 267.877,
+    "full_chain_batches": 8,
+    "legacy_evaluation_chain_seconds": 897.386
+  },
+  "remaining": [],
+  "production_deployed": false,
+  "self_checked_at_utc": "2026-09-23T16:28:27.635031+00:00",
+  "scheduled_release_checks": [
+    "两端保护持久安装、生产 compose 与实时准入",
+    "生产宿主真实重启、依赖连通性、抓包、证据写入与性能检查",
+    "受监督部署、兼容／激活／pre-A3／发布认证",
+    "实际 rollback_backup 读侧兼容验证",
+    "VC-6 归档父 run 依赖并在另一存储位置恢复重放"
+  ],
+  "manual_actions_resolution": {
+    "tool_tree_digest": "整树摘要由暂存工具树自动计算，不存在 DEFAULT_TOOL_DIGEST 常量，无需重新引入。",
+    "supervisor_digest_matches": true,
+    "assertion_preparer_digest_matches": true,
+    "deployment_tests": "13 项通过，9.566 秒。"
+  },
+  "logs": [
+    {
+      "file": "r15-clean-runtime-chains.log",
+      "sha256": "4088010e6d11ee23123f0037de0610a0705f01c2cd7a8705d0623d96d14bebc2"
+    },
+    {
+      "file": "r15-clean-full-chain.log",
+      "sha256": "51f6f39377e0f5187952547536959d7df932021a8456472f005dbb5d1e420f69"
+    },
+    {
+      "file": "r15-clean-evaluation-chain.log",
+      "sha256": "68fb0f2cff23816c005412edb07aa860b24f55001efddb3bef8210a477cd7579"
+    },
+    {
+      "file": "r15-full-consumers-current.log",
+      "sha256": "46cb55b1b6070954904e00d2d564ae6dd4e0bfd0536042d3fa7e8b9b1e15f985"
+    },
+    {
+      "file": "r15-final-unit.log",
+      "sha256": "5ff2ba62e8767b243a2527dd7c0681be5f8a1f311a7259fde13147119983671d"
+    },
+    {
+      "file": "r15-recovery-final.log",
+      "sha256": "3d6e745fe3c48d0fc3104f937e04621fdabf11b30d372ec89ff49a40616fbaaf"
+    },
+    {
+      "file": "r15-schema-check.log",
+      "sha256": "470cc1bfb1f403ef34f70443bfcb312ce45f422429eadbd096bcdb06f7c2a4ce"
+    },
+    {
+      "file": "r15-rollback-reader-check.log",
+      "sha256": "f0e3815e9db0943fd2f0bf26753ce07546979f4084f11986f017f4153af7e0cb"
+    },
+    {
+      "file": "r15-self-check-egress-ci-fixed.log",
+      "sha256": "2caee1fdf9a6155b3c800156fc0e1593728d887fc2a8c89020691405ef4d8d7a"
+    },
+    {
+      "file": "r15-self-check-go-officialegress-fixed.log",
+      "sha256": "56bba29c1a8a12d574193b0170880c9f9744f1659bd5c6c5816a2e1cd06222d0"
+    },
+    {
+      "file": "r15-self-check-go-service.log",
+      "sha256": "1ef0c469e5df7fa0f8fa72e2f84e742271be4d813ee4558001c987df774f6363"
+    },
+    {
+      "file": "r15-self-check-deployment-fixed.log",
+      "sha256": "a07e082dd0ac5cf3c2bd6e30a671582d855d101690c4ed809234e1d02f3fe75e"
+    }
+  ],
+  "freeze_successor_sha256": "e8ace596b633940100e145c3d2aee6a054f05686be0a2acb50e9c7e6780924dd"
+}
