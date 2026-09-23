@@ -1690,24 +1690,16 @@ python3 -m tools.upstream_merge freeze-successor-generate \
   --reason "Codex <target> Candidate 同源实现"
 ~~~
 
-Candidate 源码树与 Campaign 目录必须彼此独立；source transition 也不得放入源码树，否则会形成
-自引用摘要。源码、测试、文档或 Catalog 后续再变化，原 transition 即失效，必须重建；不得累积多个
-未登记提交后再进入 ARM64 门禁。transition 必须满足
-`required_manual_actions=[]`、`unregistered_paths=[]`，且 `verification` 明确包含 `make check-egress-spec`；
-`deleted_frozen_paths=[]` 时 `result=passed_local_evidence_successor`，删除了冻结路径时必须是
-`result=passed_with_deletions` 并携带 `deletion_proof`（非空删除原因、每个被删路径的
-`reference-scan/v1` 无引用扫描——Python import／属性引用、Shell 调用、JSON 动作命令字段均为空——以及
-仍存在于源码树且摘要一致的历史读取模块）。其 `safety` 还必须同时明确
-`deployment_performed=false`、`live_account_used=false`、`official_egress_profile_changed=false`、
-`production_config_changed=false` 和 `wire_or_persona_selection_changed=false`；任一条件不满足都不得封存 Candidate。
+Candidate 源码树与 Campaign 目录必须彼此独立；source transition 放在源码树外，放进去会形成自引用摘要。
+源码、测试、文档或 Catalog 后续再变化，原 transition 即失效，必须重建；不得累积多个未登记提交后再进入
+ARM64 门禁。`record-candidate-build` 会校验 transition：没有人工待办和未登记路径、`verification` 含
+`make check-egress-spec`、删除冻结路径时带无引用证明、各项安全字段均为 `false`，任一不满足即拒绝封存。
 
 ### 4.4.2 同源构建
 
 以 4.4.1 确定的同一最终源码树为唯一构建输入，依次生成前端产物、运行资源、ARM64 二进制和不可变镜像；
-禁止分别从不同提交或未登记工作树拼装。构建收据至少记录 Git commit、源码树摘要、build ID、部署版本、
-二进制 SHA-256、目标架构、构建参数、image ID、OCI manifest digest、Profile ID／digest，以及各产物
-的来源关系，并绑定 post-promotion 门禁需求与执行计划摘要。镜像交接使用
-`registry/repository@sha256:<manifest-digest>`，不能只写可变 tag。
+禁止分别从不同提交或未登记工作树拼装。镜像交接使用 `registry/repository@sha256:<manifest-digest>`，不能只写
+可变 tag；构建收据冻结的身份字段见 §4.4.3。
 
 Go 必须离线编译；ARM64 缺少前端依赖时，只允许通过 `capture-cli` 的冻结出口取得依赖，然后将
 前端产物、ARM64 二进制和运行资源叠加到冻结的 ARM64 基础镜像。证据机和低资源生产机不承担 Go／Node
@@ -1717,10 +1709,8 @@ Go 必须离线编译；ARM64 缺少前端依赖时，只允许通过 `capture-c
 `cp -a` 保留模式，入口脚本必须是 git 记录的 100755；二进制必须出自干净树（`vcs.modified=false`）；外部门禁在
 不含 vendor 的测试树上跑；前序候选的 vendor 只在 `go.mod`／`go.sum` 逐字相同时复用。
 
-在最终干净 commit 上运行实现闭集和 `make check-egress-spec`，将两类结果分别作为
-`implementation_tests` 和 `check_egress_spec` 证据，生成 `kind=implementation_tests`的统一收据。
-收据主体必须绑定本轮 Campaign、candidate、Git commit、源码树摘要和目标架构，且
-affected gate 集合必须与 VC-3 需求精确相等：
+在最终干净 commit 上运行实现闭集和 `make check-egress-spec`，两类结果作为证据生成
+`kind=implementation_tests` 的统一收据（其中 affected gate 集合必须与 VC-3 需求完全相等）：
 
 ~~~bash
 python3 tools/official_client_capture/codex_upgrade_vc_receipt.py finalize \
@@ -1760,21 +1750,16 @@ python3 tools/official_client_capture/codex_upgrade.py record-candidate-build \
   --implementation-test-receipt /绝对路径/implementation-tests/implementation-tests.receipt.json
 ~~~
 
-工具复算干净 Git commit、源码树、二进制、不可变镜像、Catalog、画像派生、动态需求、执行计划和
-source transition，逐项扫描 build tree、Docker context 与前端 dist 的内容、权限和装配关系（三者都是必需参数，
-前端 dist 必须与注入 build tree 的完全一致），并独立重放实现测试收据及其两份证据后，只写一次生成
-`<campaign>/candidates/<candidate-id>/build-receipt.json`；失败时不得创建 attempt 或发送请求。
-成功时同时封存当前 revision 的 VC-4 checkpoint（r1 为 `control/vc/vc-4-checkpoint.json`，r≥2 为
-`control/vc/revisions/r<N>/vc-4-checkpoint.json`）。
+工具复算源码、二进制、镜像、Catalog、门禁计划、source transition，以及 build tree、Docker context 与前端
+dist 三个目录的内容、权限和装配关系（前端 dist 必须与注入 build tree 的完全一致），并重放实现测试收据；
+全部一致才只写一次生成 `<campaign>/candidates/<candidate-id>/build-receipt.json` 和当前 revision 的 VC-4
+checkpoint（r1 为 `control/vc/vc-4-checkpoint.json`，r≥2 为 `control/vc/revisions/r<N>/vc-4-checkpoint.json`）。
+失败时不得创建 attempt 或发送请求。
 
-`record-candidate-build` 在同一事务内执行 **revision-seal**：候选必须属于当前 active revision 且账本
-active；候选树内的 `catalog-stage-receipt.json` 必须与 revision 记录绑定的 Campaign 级 VC-3 阶段收据逐字节
-相同（不一致属于规则分类或目标画像变化，按 Framework §5.3.4 建立后继 Campaign，不能靠 revision 承接）；
-r≥2 还要以旧候选 `invalidation.json` 冻结的身份快照为基准证明同一性变化——`git_commit` 与
-`source_tree_sha256` 任一可比字段变化即通过，全部相同（只换 image）拒绝——先写 write-once 的
-`revisions/r<N>/seal.json` 与旧候选目录的 `superseded-by.json`，再写构建收据与 VC-4 checkpoint；
-`seal.json` 已写但收据未写、收据已写但 checkpoint 未写两种断点重跑同一命令都幂等收敛。2026-09-19 之前
-建立的 Campaign 的隐含 r1 不追溯执行字节校验。
+同一命令还做 **revision-seal**：候选必须属于当前 active revision 且账本 active；候选树内的
+`catalog-stage-receipt.json` 必须与 VC-3 阶段收据逐字节相同，不同说明规则分类或目标画像变了，要建后继
+Campaign；r≥2 的候选必须源码层身份（`git_commit` 或 `source_tree_sha256`）有变化，只换镜像会被拒绝。中途断点
+重跑同一命令即可收敛。2026-09-19 之前建立的 Campaign 的隐含 r1 不追溯字节校验。
 
 ### 4.4.3 Candidate 身份冻结与 VC-5 交接
 
@@ -1799,8 +1784,7 @@ r≥2 还要以旧候选 `invalidation.json` 冻结的身份快照为基准证�
 attempt 前登记一份写一次的运行坐标覆盖收据；`run` 与 `seal` 必须从同一收据读取生效值，磁盘清单与
 `campaign.sha256` 保持不变。覆盖前必须证明二进制摘要、账号与 API Key 身份、权限、模型可见性和环境
 语义均未变化。账号、权限、模型可见性、目标源码树、官方包、运行镜像、模型或证据根变化属于身份漂移，
-按 Framework §5.3.4 处理。该命令只允许坐标字段白名单；如果工具接受 `codex_account_id`、`api_key_id`
-或其他身份字段，VC-0 必须已经失败关闭。candidate 一旦已有 attempt 或已封存，也不得再登记坐标覆盖。
+按 Framework §5.3.4 处理，不能用坐标覆盖承接。candidate 一旦已有 attempt 或已封存，也不得再登记坐标覆盖。
 
 ~~~bash
 python3 tools/official_client_capture/codex_upgrade.py candidate-runtime-override \
@@ -1810,9 +1794,7 @@ python3 tools/official_client_capture/codex_upgrade.py candidate-runtime-overrid
   --set service_container=<容器名>
 ~~~
 
-VC-4 只在构建收据中冻结最终制品，不调用“只落盘身份”的写入命令；VC-5 首次执行
-`capture-candidate run` 时再复算上述身份并原子写入机器状态。VC-4 不得提前创建 attempt、reservation、
-`attempt_id` 或 `run_nonce`，也不得发送候选真实请求。
+VC-4 只在构建收据中冻结最终制品；上述身份由 VC-5 首次 `capture-candidate run` 复算并写入机器状态。
 
 退出条件固定为：
 
