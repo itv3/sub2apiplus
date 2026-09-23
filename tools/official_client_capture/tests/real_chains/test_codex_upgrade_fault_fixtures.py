@@ -31,6 +31,7 @@ from tools.official_client_capture import codex_upgrade_supervisor as supervisor
 from tools.official_client_capture import codex_upgrade_reconciler as reconciler
 from tools.official_client_capture import codex_upgrade_vc_artifacts as artifacts
 from tools.official_client_capture.tests import evaluation_chain_driver as driver
+from tools.official_client_capture.tests import managed_tree_copy
 from tools.official_client_capture.tests import test_arm64_capture_driver as driver_tests
 from tools.official_client_capture.tests import test_codex_upgrade as upgrade_tests
 from tools.official_client_capture.tests import test_codex_upgrade_evidence_integrity as integrity_tests
@@ -40,6 +41,18 @@ from tools.official_client_capture.tests import test_codex_runtime_egress as egr
 
 class RuntimeEgressRecoveryTests(unittest.TestCase):
     def test_pause_reconciliation_approval_preserves_only_trusted_job(self):
+        """在独立挂载命名空间绑定受测工具树，保留正式执行位置校验。"""
+
+        tree = Path(upgrade.__file__).resolve().parents[2]
+        result = managed_tree_copy.run_python(tree, [
+            "-m", "unittest", "-v",
+            __name__ + ".RuntimeEgressRecoveryTests._exercise_pause_reconciliation",
+        ], timeout=180)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("skipped=", result.stderr)
+        print(result.stdout, end="", flush=True)
+
+    def _exercise_pause_reconciliation(self):
         """合成 Job 与环境事实，真实暂停、checkpoint、对账、批准和 resume 门禁；没有上游请求。"""
 
         case = upgrade_tests.CodexUpgradeTest()
