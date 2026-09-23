@@ -2547,7 +2547,8 @@ monitor 封存 `failed／parent-finalize-lost`）：`reconcile-supervisor-run` �
 - **输入**：VC-5 AcceptanceFact、固定 candidate 和 `campaign_purpose`；生产替换另需最新 canonical
   checkpoint、当前 Active／Previous 和 rollback。
 - **操作与工具**：`validation_only` 只读核验并登记候选交付完成；`production_replacement` 生成 production
-  Release 和最终发布镜像，再执行 canary、切流、实际回滚、目标恢复、归档和清理判定。
+  Release，在 ARM64 上用 production tree 构建的切换镜像执行 canary、切换、实际回滚和目标恢复，再归档和
+  清理判定；VC-6 收口后推送 GitHub、正式发版，生产服务器按标准部署流程更新（§4.6.4）。
 - **产物**：候选交付收据，或 promotion、post-promotion、正式发布、activation、rollback、restoration、
   RemovalReceipt、私有归档和清理决定；两个用途最终都生成 `vc6-completion.json` 与 VC-6 checkpoint。
 - **完成标志**：`validation_only` 达到 `ready_for_operator_release`；`production_replacement` 的
@@ -2566,11 +2567,13 @@ monitor 封存 `failed／parent-finalize-lost`）：`reconcile-supervisor-run` �
 | 1 | 分流用途：只读交付候选，或冻结生产现状和真实回滚点 | 交付完成事件，或 production snapshot／rollback 可复算 |
 | 2 | 晋升 Catalog 并生成受限 production tree | promotion receipt 与逐文件差异闭合 |
 | 3 | 执行 affected-rule 和公共 post-promotion 门禁 | `post_promotion` 收据通过 |
-| 4 | 同步权威源码、正式发版并构建最终镜像 | Git／Release／最终镜像摘要一致 |
-| 5 | 用最终镜像执行隔离 Active canary | `canary_passed` |
-| 6 | 原子替换生产应用容器 | `active` |
+| 4 | 同步权威源码，在 ARM64 构建切换镜像 | Git 与切换镜像摘要一致 |
+| 5 | 用切换镜像执行隔离 Active canary | `canary_passed` |
+| 6 | 在 ARM64 原子替换应用容器 | `active` |
 | 7 | 实际回滚、恢复、签收并推进 canonical；首次登记生产交付 | `restored_active`、canonical 待执行项为零，`vc6_status=production_archive_pending` |
 | 8 | 归档证据、登记清理决定，再次登记交付 | 两张统一收据可重放，VC-6 完成收据与 checkpoint 封存 |
+
+第 8 步完成即 VC-6 结束；之后推送 GitHub、正式发版和更新生产服务器见 §4.6.4，不属于 VC-6 检查点。
 
 ### 4.6.1 用途分流、生产快照与回滚点
 
@@ -2656,7 +2659,7 @@ affected rule 必须映射到明确测试；继承规则、已复用 Candidate J
 VC-6 不重新计算或修改门禁集合。它必须逐项核对 VC-3 的门禁需求、VC-4 的执行计划、ApprovalFact、
 candidate 源码树和当前 production tree；门禁 ID、规则映射、命令或摘要任一不一致都不得执行。若工具
 只能接受固定历史门禁、会自动加入未批准规则或遗漏 affected 规则，说明 VC-0 能力演练失真：停止当前
-Campaign，将工具修复拆成独立变更并从 VC-0 重新开始，禁止在 VC-6 现场改清单。
+批次，走正式变更修好工具并受监督部署后，从最新 canonical checkpoint 接着跑；禁止在 VC-6 现场改清单。
 
 首次 attempt 必须执行 VC-4 计划中的全部门禁。执行前，把已验收的 gate plan 按原字节复制到权限
 `0700` 的独立 evidence root 内，文件权限设为 `0600`；不得从 production tree 重新生成计划。
@@ -2683,34 +2686,38 @@ python3 tools/official_client_capture/codex_upgrade_gate_receipt.py replay \
 该阶段新收据为 `codex-upgrade-external-gate-receipt/v4`，额外绑定 AcceptanceFact、promotion receipt、
 production tree 和 gate plan；candidate 身份、目标架构、Profile、package、源码树和镜像必须与验收阶段
 完全一致。失败 attempt 只读保留并按 v4 合同仅补跑 `failed_gate_ids`；最终收据不是 `status=passed`、
-仍有失败或跳过、输入或计划摘要漂移、production tree 不一致，均禁止正式发版、构建最终镜像或开始
+仍有失败或跳过、输入或计划摘要漂移、production tree 不一致，均禁止构建切换镜像或开始
 canary。v3 facts 禁止再签发新收据，仅允许既有 v3 receipt 历史重放。
 
 补跑统一遵守 Framework §5.1.2 和 §5.3.4，只执行失败、待执行或依赖变化的下游闭集；同根因第二次
 仍失败即停线。失败时保持旧 Active，不得为通过门禁修改 production tree。
 
-### 4.6.4 权威源码、正式发版与最终镜像
+### 4.6.4 权威源码、切换镜像与正式发版
 
-post-promotion 通过后，先把 production tree 按逐文件 manifest 同步到本地权威仓库，再提交、打 tag、
-正式发版和构建最终镜像；不得先激活临时镜像，发版后再重复一轮生产切换。同步至少校验：
+post-promotion 通过后，先把 production tree 按逐文件 manifest 同步到本地权威仓库并提交，再在 ARM64 上
+从该提交构建切换镜像。同步至少校验：
 
 1. production Catalog 的 Campaign／acceptance 与 promotion receipt 一致，ReleaseGraph、SnapshotCatalog、
    Active／Previous 和 profile／release digest 均可从仓库复算；
 2. 本地最终树与 production tree 的每项差异均已分类；后继维护变化须另行验收，未分类差异禁止提交；
-3. Git commit／tag、源码树、构建参数和 amd64／arm64 镜像 digest 相互绑定；发版过程若改写 VERSION 或
-   其他受管文件，原 post-promotion 收据立即失效，必须重新生成 production tree 并重跑受影响闭集。
+3. Git commit、源码树、构建参数和切换镜像 digest 相互绑定。
 
-最终 production 镜像必须绑定 candidate／production tree digest、AcceptanceFact、promotion receipt、
-inventory、post-promotion 收据和构建输入，并使用 `repository@sha256:<manifest-digest>` 交接。
-构建不得携带 `candidatecapture`，也不得复用候选镜像。后续 canary、生产切换、回滚和目标恢复必须使用
-同一最终发布 digest；任一摘要不一致时禁止部署。
+切换镜像必须绑定 candidate／production tree digest、AcceptanceFact、promotion receipt、inventory、
+post-promotion 收据和构建输入，并使用 `repository@sha256:<manifest-digest>` 交接。构建不得携带
+`candidatecapture`，也不得复用候选镜像。canary、正式切换、回滚和目标恢复必须使用同一切换镜像 digest；
+任一摘要不一致时禁止部署。
+
+ARM64 是正式切换测试服务器（2026-09-22 定）：VC-6 的切换演练不要求与之后的发版镜像同 digest。VC-6 收口
+后，把权威源码推送 GitHub，CI 全绿后打注释 tag 正式发版（GHCR 多架构镜像）；发版 bot 回写 VERSION 后只补
+冻结承接收据，不重跑 post-promotion；生产服务器按标准部署流程（拉 GHCR 镜像、备份数据库与 compose、改
+image、`up -d`）更新到发版镜像。
 
 GitHub 只保存可公开源码和发布制品，不能替代原始抓包、Campaign、acceptance 或生产激活证据；
 GitHub 发版成功也不等于生产已经更新。
 
 ### 4.6.5 独立 Active canary
 
-使用 4.6.4 的最终发布镜像 digest 建立与生产隔离的 canary，独立使用账号、`CODEX_HOME`、数据库、Redis、
+使用 4.6.4 的切换镜像 digest 建立与生产隔离的 canary，独立使用账号、`CODEX_HOME`、数据库、Redis、
 配置、网络和证据目录。canary 必须按晋升后 Catalog 的默认 `active` 运行，禁止以强制 mode
 命中目标画像，也禁止直接复用 activation fact 显示 `profile_mode=previous` 的候选验证镜像。
 
@@ -2720,9 +2727,9 @@ GitHub 发版成功也不等于生产已经更新。
 
 ### 4.6.6 原子生产切换
 
-部署前复核 `docker compose config` 或等价结果，并在 VC-0／P0 冻结的生产主机上复核固定
-容器 IP、BWG 出口和 wg1 持久配置／运行时 MTU；当前 ARM64 基线为 1420，实际判定以 VC-0 冻结值为准。
-应用服务必须绑定最终 `repository@sha256:<manifest-digest>`，数据库、Redis、keeper、挂载和网络保持
+部署前复核 `docker compose config` 或等价结果，并在 ARM64 上复核固定容器 IP、冻结出口和 wg1 持久
+配置／运行时 MTU；MTU 以 VC-0 冻结值为准（当前为 1420）。
+应用服务必须绑定切换镜像的 `repository@sha256:<manifest-digest>`，数据库、Redis、keeper、挂载和网络保持
 不变。冻结动作体为：
 
 ~~~bash
@@ -2749,7 +2756,7 @@ Active Release、profile、activation fact、业务事件、完整性计数和 G
 简写；只改 mode 不能替代演练。回滚不得删除 Campaign、覆盖 Snapshot 或销毁证据。
 
 生产激活证据必须绑定 Campaign／acceptance、promotion／inventory、production tree、终态门禁、
-最终发布镜像，以及 canary、正式切换、旧版回滚和目标恢复四阶段的时间、compose、各类 digest、
+切换镜像，以及 canary、正式切换、旧版回滚和目标恢复四阶段的时间、compose、各类 digest、
 activation fact、完整性、业务事件和日志结论。v2 收据强制接收 acceptance、promotion receipt 和
 `post_promotion` gate receipt 的文件绑定，校验目标架构与 production tree，并要求终态门禁完成时间
 早于 canary；缺少任一输入时不得用历史 v1 收据替代。
@@ -2806,6 +2813,10 @@ python3 tools/official_client_capture/codex_upgrade.py canonical-advance \
   --step-receipt <removal-receipt>
 ~~~
 
+上面三条都是批次动作体：0.151 起的正式命令必须由 `campaign-run` 派发，以冻结的 canonical item
+（`production-activation`、`rollback-verification`、`retire-<版本>`）编译成 VC-6 批次；`--step-receipt` 必须是
+绝对路径，`--phase` 若给出只能是 `VC-6`，退休项的 `--retire-version` 必须等于 item 里的版本。
+
 RemovalReceipt 必须证明 Catalog、selector 和未知消费者均为零、运行投影已移除且历史证据保留。退休失败
 只保留该项待执行，不得影响已恢复的目标 Active、删除 rollback，或回退重跑 VC-0～VC-5。全部三项完成且
 最新 checkpoint 的 `plan.execute_item_ids=[]` 后，生产激活链才完成并进入 §4.6.8；这仍不授权删除远端
@@ -2850,13 +2861,13 @@ active SnapshotCatalog 的裁剪必须是确定性的：以退休前的快照为
 
 归档前必须把原始抓包、Campaign、AcceptanceFact、promotion、post-promotion、activation 和
 RemovalReceipt 写入受控私有归档。含凭据或未脱敏字节的内容不得提交 GitHub。归档须提供逐文件路径、
-大小和 SHA-256 清单，并在另一存储位置完成解包、摘要复算及关键收据重放。只有权威仓库、最终发布镜像
+大小和 SHA-256 清单，并在另一存储位置完成解包、摘要复算及关键收据重放。只有权威仓库、切换镜像
 和私有证据归档三者均可独立恢复，才允许清理采集服务器。
 
 清理前生成机器可读的保留／删除清单，并完成以下检查：
 
-1. VC-0／P0 冻结的生产主机正在运行最终发布镜像的固定 digest；正式 compose／override
-   已迁出升级临时目录，固定 rollback 镜像和配置仍可用；
+1. ARM64 正在运行切换镜像的固定 digest；正式 compose／override 已迁出升级临时目录，固定 rollback
+   镜像和配置仍可用；
 2. `capture-cli-*` 和候选 Sub2API 容器不再被生产、归档或收据重放使用，停止后生产健康、网络和
    依赖状态不变；
 3. 删除目标只包含已归档的 Campaign、candidate、run、临时源码、构建缓存和候选镜像；不得包含
@@ -2867,7 +2878,7 @@ RemovalReceipt 写入受控私有归档。含凭据或未脱敏字节的内容�
 只有其 `data` 下已归档且不再被收据引用的本轮 Campaign／run 和临时缓存才能进入删除清单。实际删除
 尚未获批时，必须登记延期原因、精确保留清单和磁盘水位，不能把“未清理”伪装成已执行。
 
-VC-6 的最终条件是 production tree 与权威提交差异闭合、最终镜像完成生产复验、私有归档可恢复重放，
+VC-6 的最终条件是 production tree 与权威提交差异闭合、切换镜像完成 ARM64 复验、私有归档可恢复重放，
 且清理决定具有不可覆盖收据：已批准的删除必须证明目标不存在生产依赖或唯一副本并完成复验；未批准或
 条件不足时必须明确延期。满足这些条件后才写 VC-6 完成事件。
 
@@ -2895,6 +2906,8 @@ python3 tools/official_client_capture/codex_upgrade.py deliver-candidate \
   --private-archive-receipt /绝对路径/campaign/control/vc/receipts/<candidate-id>/private-archive.json \
   --cleanup-decision-receipt /绝对路径/campaign/control/vc/receipts/<candidate-id>/cleanup-decision.json
 ~~~
+
+`deliver-candidate` 是正式命令，0.151 起必须由 `campaign-run` 派发；§4.6.1 的第一次调用同样如此。
 
 生产用途第一次不携归档／清理收据调用 `deliver-candidate` 时，合法终止于
 `production_archive_pending`，且不得生成 VC-6 checkpoint。第二次必须同时携带两张收据；只给一张、
