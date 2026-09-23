@@ -25,7 +25,7 @@ PY
 )"
 cd "$COMPOSE_DIR" && set -a && . ./.env && set +a; cd /tmp
 dbq() { docker exec sub2apiplus-postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -qAtc "$1"; }
-API_KEY=$(dbq "select key from api_keys where id = 4 and status = 'active' and deleted_at is null"); test -n "$API_KEY"
+API_KEY=$(dbq "select key from api_keys where id = $API_KEY_ID and status = 'active' and deleted_at is null"); test -n "$API_KEY"
 PRE_ID=$(dbq "select coalesce(max(id),0) from usage_logs"); PRE_AT=$(utc_now)
 python3 -c "import json,sys; json.dump({'schema_version':'kilo-usage-checkpoint/v1','campaign_id':sys.argv[1],'attempt_id':sys.argv[2],'run_nonce':sys.argv[3],'usage_logs_max_id_before_kilo':int(sys.argv[4]),'observed_at_utc':sys.argv[5]}, open(sys.argv[6],'w'), ensure_ascii=False, indent=2)" "$CID" "$ATT" "$RUN_NONCE" "$PRE_ID" "$PRE_AT" "$RAW/pre-kilo-usage-checkpoint.json"; chmod 600 "$RAW/pre-kilo-usage-checkpoint.json"
 cp /root/.config/kilo/kilo.jsonc /root/.config/kilo/kilo.jsonc.pre-kilo-run; trap 'cp /root/.config/kilo/kilo.jsonc.pre-kilo-run /root/.config/kilo/kilo.jsonc' EXIT
@@ -34,18 +34,18 @@ cat > /root/.config/kilo/kilo.jsonc <<EOF2
   "\$schema": "https://app.kilo.ai/config.json",
   "disabled_providers": [],
   "provider": {
-    "sub2api-compat": {"npm": "@ai-sdk/openai-compatible", "name": "sub2api candidate compat", "options": {"baseURL": "http://127.0.0.1:28080/v1", "apiKey": "$API_KEY"}, "models": {"gpt-6-astra": {"name": "gpt-6-astra"}}},
-    "sub2api-responses": {"npm": "@ai-sdk/openai", "name": "sub2api candidate responses", "options": {"baseURL": "http://127.0.0.1:28080/v1", "apiKey": "$API_KEY", "websocket": true}, "models": {"gpt-6-astra": {"name": "gpt-6-astra"}}}
+    "sub2api-compat": {"npm": "@ai-sdk/openai-compatible", "name": "sub2api candidate compat", "options": {"baseURL": "http://127.0.0.1:28080/v1", "apiKey": "$API_KEY"}, "models": {"$LITE_MODEL": {"name": "$LITE_MODEL"}}},
+    "sub2api-responses": {"npm": "@ai-sdk/openai", "name": "sub2api candidate responses", "options": {"baseURL": "http://127.0.0.1:28080/v1", "apiKey": "$API_KEY", "websocket": true}, "models": {"$LITE_MODEL": {"name": "$LITE_MODEL"}}}
   },
   "permission": {"bash": "allow"},
   "agent": {"orchestrator": {"disable": true, "hidden": true}}
 }
 EOF2
 chmod 600 /root/.config/kilo/kilo.jsonc
-echo "--- Kilo compat 请求"; set +e; timeout 240 "$K" run --pure --format json -m sub2api-compat/gpt-6-astra "Reply with exactly one word: pong" > "$LOG/kilo-compatible.out" 2>&1; echo "rc=$?"; tail -c 300 "$LOG/kilo-compatible.out"; echo
-echo "--- Kilo responses(WS) 请求"; timeout 240 "$K" run --pure --format json -m sub2api-responses/gpt-6-astra "Reply with exactly one word: pong" > "$LOG/kilo-responses.out" 2>&1; echo "rc=$?"; tail -c 300 "$LOG/kilo-responses.out"; echo; set -e
+echo "--- Kilo compat 请求"; set +e; timeout 240 "$K" run --pure --format json -m sub2api-compat/$LITE_MODEL "Reply with exactly one word: pong" > "$LOG/kilo-compatible.out" 2>&1; echo "rc=$?"; tail -c 300 "$LOG/kilo-compatible.out"; echo
+echo "--- Kilo responses(WS) 请求"; timeout 240 "$K" run --pure --format json -m sub2api-responses/$LITE_MODEL "Reply with exactly one word: pong" > "$LOG/kilo-responses.out" 2>&1; echo "rc=$?"; tail -c 300 "$LOG/kilo-responses.out"; echo; set -e
 cp /root/.config/kilo/kilo.jsonc.pre-kilo-run /root/.config/kilo/kilo.jsonc; trap - EXIT
-echo "--- 服务端 usage_logs（api_key 4，id > ${PRE_ID}）"; dbq "select id, request_id, model, account_id, created_at, duration_ms, coalesce(user_agent,''), coalesce(inbound_endpoint,''), coalesce(upstream_endpoint,''), openai_ws_mode from usage_logs where api_key_id = 4 and id > $PRE_ID order by id" > "$LOG/usage_rows.txt"; cat "$LOG/usage_rows.txt"
+echo "--- 服务端 usage_logs（api_key ${API_KEY_ID}，id > ${PRE_ID}）"; dbq "select id, request_id, model, account_id, created_at, duration_ms, coalesce(user_agent,''), coalesce(inbound_endpoint,''), coalesce(upstream_endpoint,''), openai_ws_mode from usage_logs where api_key_id = $API_KEY_ID and id > $PRE_ID order by id" > "$LOG/usage_rows.txt"; cat "$LOG/usage_rows.txt"
 docker logs sub2apiplus --since "$PRE_AT" 2>&1 | grep '"component": "http.access"' | grep -E '"path": "/v1/(chat/completions|responses)"' > "$LOG/access_rows.txt" || true; wc -l < "$LOG/access_rows.txt"
 KILO_VERSION="$KILO_VERSION" python3 - "$LOG/usage_rows.txt" "$LOG/access_rows.txt" "$RAW/kilo-facts.json" "$K" "$CID" "$ATT" "$RUN_NONCE" "$CAND" "$PROFILE_ID" "$PROFILE_DIGEST" "$IMAGE_ID" "$TREE" "$BUILD_ID" "$DEPLOYED" <<'PY'
 import json, sys, hashlib, re, datetime, os
@@ -89,7 +89,7 @@ assert set(obs) == {"kilo-compatible", "kilo-responses"}, list(obs)
 assert obs["kilo-compatible"]["http_status"] == 200 and obs["kilo-responses"]["http_status"] == 101, {k: v["http_status"] for k, v in obs.items()}
 sha = hashlib.sha256(open(kilo, "rb").read()).hexdigest()
 facts = {
-    "identity": {"campaign_id": cid, "attempt_id": att, "run_nonce": nonce, "candidate_id": cand, "target_version": "0.154.0", "profile_id": pid, "profile_digest": pdig, "candidate_image_id": image, "source_tree_sha256": tree, "build_id": build, "deployed_version": deployed},
+    "identity": {"campaign_id": cid, "attempt_id": att, "run_nonce": nonce, "candidate_id": cand, "target_version": os.environ["TARGET_VERSION"], "profile_id": pid, "profile_digest": pdig, "candidate_image_id": image, "source_tree_sha256": tree, "build_id": build, "deployed_version": deployed},
     # installation 观察时间取请求前的 usage checkpoint 时刻：finalizer 要求 installed_at <= ingress_at。
     "installation": {"executable_path": kilo, "executable_sha256": sha, "client_version": os.environ["KILO_VERSION"], "display_name": "Kilo Code", "observed_at_utc": json.load(open(out.replace("kilo-facts.json", "pre-kilo-usage-checkpoint.json")))["observed_at_utc"]},
     "observations": obs,

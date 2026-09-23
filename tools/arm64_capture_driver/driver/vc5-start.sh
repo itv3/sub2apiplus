@@ -7,7 +7,7 @@ if [ -f "$RUNROOT/vc5-run-batch.out" ]; then echo "VC5_START_SKIP: $RUNROOT/vc5-
 echo "=== 派发前检查（驱动/磁盘/总账/账本/VC-4 checkpoint）"; bash "$DRV/guard.sh" pre-vc5 "$NEWDIR" 2>&1 | tee -a "$RUNROOT/guard-pre-vc5.out"
 IMAGE_ID=$(python3 -c "import json; print(json.load(open('$B/artifacts/build-parameters.json'))['docker_build']['image_id'])")
 BUILD_ID=$(python3 -c "import json; print(json.load(open('$NEWDIR/candidates/$CAND/build-receipt.json'))['build']['build_id'])")
-test "$(git -C "$B/source" rev-parse HEAD)" = "$C"; TAG=sub2apiplus-c0154-candidate:$ROUND-${C:0:9}
+test "$(git -C "$B/source" rev-parse HEAD)" = "$C"; TAG=$CANDIDATE_IMAGE_REPOSITORY:$ROUND-${C:0:9}
 TREE=$(python3 -c "
 from pathlib import Path
 from tools.official_client_capture import codex_upgrade as cu

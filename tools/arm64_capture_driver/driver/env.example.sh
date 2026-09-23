@@ -1,53 +1,68 @@
-# ARM64 抓包驱动链：每轮 Campaign 的参数文件模板（复制为 $RUNROOT/env.sh 后按本轮填写；各脚本以
-# ARM64_VC_ENV=<该文件> 经 parse_env.py 安全解析，绝不 source）。只允许精确键集合的 KEY=VALUE（整值可加一对双引号），
-# 值里只能引用本文件前面已定义的键（$NAME 或 ${NAME}）；$(…)、反引号、; & | < > ( ) \ 一律拒绝；注释以 # 开头。
-# 命名约定：ROUND 是本轮标签（如 v14r5），STAMP 是 stage1 开始时的 UTC 时间戳（%Y%m%dt%H%M%Sz）。
-ROUND=v14r5
-STAMP=20260922t000000z
-# 采集主机数据根（受管工具树、Campaign、总账、候选实物都在其下）
+# 每轮参数模板：复制后填写 ARM64_VC_ENV；parse_env.py 只解析赋值，不执行文件。
+# 只允许必填／可选键及对前面已定义键的引用。REPLACE_* 必须替换，模板原样执行会拒绝。
+# 下面版本仅演示目录关系，实际版本、模型、账号、摘要、认证与来源由本轮批准输入确定。
+ROUND=round1
+STAMP=YYYYMMDDtHHMMSSz
+BASELINE_VERSION=9.0.0
+TARGET_VERSION=9.1.0
+TARGET_PROFILE_ID=codex-$TARGET_VERSION-official
 D=/root/docker/capture-cli/data
-# 本轮日志／状态根：所有脚本的 .out／状态文件、本机上传的门禁日志都落在这里，不再散落 /root
 RUNROOT=/root/vc-rounds/$ROUND
-# Campaign／输入目录／账本标识（与 ROUND、STAMP 绑定）
-NEW=c0154-formal-vc5-$ROUND-$STAMP
-IN=c0154-vc5-$ROUND-inputs-$STAMP
-UP=codex-0151-to-0154-vc5-$ROUND-$STAMP
-# 候选实物目录（candidate_id 与目录同名）
-CAND=c0154-candidate-$ROUND
+NEW=codex-$TARGET_VERSION-formal-$ROUND-$STAMP
+IN=codex-$TARGET_VERSION-inputs-$ROUND-$STAMP
+UP=codex-$BASELINE_VERSION-to-$TARGET_VERSION-$ROUND-$STAMP
+CAND=codex-$TARGET_VERSION-candidate-$ROUND
 B=$D/candidates/$CAND
-# 前序候选目录：vendor（go.mod/go.sum 逐字相同才复用）与 source 对象从这里取
-PREV_CANDIDATE=$D/candidates/c0154-candidate-v14r4
-# 完整历史的测试树来源（上游合并／历史漂移冻结测试要读基准提交）
-HISTORY_TEST_TREE=$D/candidates/c0154-candidate-v14/test-tree
-# 候选提交链：C 只改冻结路径的第二段提交，DC 是描述 A→C 的承接收据所在提交，RECEIPT 是收据相对路径
+PREV_CANDIDATE=$D/candidates/REPLACE_PREVIOUS_CANDIDATE
+HISTORY_TEST_TREE=$D/candidates/REPLACE_HISTORY_CANDIDATE/test-tree
+# C 是候选提交，DC 是其冻结承接提交；不得使用缩写。
 C=0000000000000000000000000000000000000000
 DC=0000000000000000000000000000000000000000
-RECEIPT=docs/egress/maintenance/upstream-codex-0154-candidate-$ROUND-YYYYMMDD-freeze-successor.json
-# 本机推送的 git bundle 与分支
+RECEIPT=docs/egress/maintenance/REPLACE_FREEZE_SUCCESSOR.json
 BUNDLE=$D/staging/$ROUND.bundle
-BUNDLE_BRANCH=codex/vc5-framework-closure
-# 官方证据 Campaign（reuse-official-evidence 的前序）与其停线账本／收据
-OFFICIAL_CAMPAIGN=$D/evidence/campaigns/c0154-formal-vc1-recapture-20260915t230327z
-OFFICIAL_STOP_LEDGER=$D/control/codex-0151-to-0154-bwg-recapture-vc0-20260915t230327z-timing-ledger
-OFFICIAL_STOP_RECEIPT=receipts/stop-checkpoint-20260916t005113z.json
-# VC-2 输入（规则迁移草案与目标快照输入；由老板批准的版本）
-INPUT_RULE_MIGRATION=/root/v9-rule-migration.json
-INPUT_TARGET_SNAPSHOT=/root/v9-target-snapshot-input.json
-# 项目总账绝对截止（总预算按它设上限，留 5 分钟余量）与各阶段预算（分钟）
-PROJECT_DEADLINE_UTC=2026-09-28T15:59:00Z
-STAGE_BUDGETS="VC-0=45 VC-1=10 VC-2=30 VC-3=15 VC-4=90 VC-5=600 VC-6=60"
-# 派发前磁盘检查的操作员阈值（GiB，固定最低 40，只能设更高）
+BUNDLE_BRANCH=codex/REPLACE_CANDIDATE_BRANCH
+# 新目标首次取证必须 recapture。reuse 仅限同一目标的可信官方证据恢复。
+EVIDENCE_DECISION=recapture
+PREDECESSOR_CAMPAIGN=$D/evidence/campaigns/REPLACE_PREDECESSOR
+OFFICIAL_CAMPAIGN=$PREDECESSOR_CAMPAIGN
+OFFICIAL_STOP_LEDGER=$D/control/REPLACE_PREDECESSOR-timing-ledger
+OFFICIAL_STOP_RECEIPT=receipts/REPLACE_STOP_RECEIPT.json
+INPUT_RULE_MIGRATION=$D/control/$IN/rule-migration-approved.json
+INPUT_TARGET_SNAPSHOT=$D/control/$IN/target-snapshot-approved.json
+PROJECT_DEADLINE_UTC=REPLACE_APPROVED_DEADLINE_UTC
+STAGE_BUDGETS="VC-0=45 VC-1=60 VC-2=30 VC-3=15 VC-4=90 VC-5=600 VC-6=60"
 MIN_FREE_GIB=40
-# 前端 builder 偏差批准：必须是本轮的明确授权（批准人、日期、"仅限 ARM64 隔离抓包候选、不得发布"），不得复用旧轮次文案
-FRONTEND_DEVIATION_APPROVED_BY="老板 YYYY-MM-DD 批准本轮 v14rN：候选镜像仅限 ARM64 隔离抓包（candidatecapture 构建标签），不得发布；前端 dist 在 ARM64 以 docker node:20-slim 按发版流水线同一命令构建，仅 builder 身份偏离 release_pipeline"
-# 目标画像（VC-3 stage-profile 的画像 id 与摘要，来自 classify 批准的 profile.json）
-PROFILE_ID=codex-0.154.0-official-r154-v2
-PROFILE_DIGEST=31d8654f6892d37129a2639f1bb48e87b7b8648d67ce754f4ae9379a671b99e3
-# Kilo 不可变副本（0500，root）：路径／版本／sha256 三项 fail-fast
-KILO_BIN=$D/private-tools/kilo-7.7.501-cdadeea1/bin/kilo
-KILO_VERSION=7.7.501
-KILO_SHA256=cdadeea18400a3a603753f2a15b7b6c34de3161a7a5a1a8255bc5f2da977a612
-# 网关 compose 与切换前备份（固定 IP 版）
+FRONTEND_DEVIATION_APPROVED_BY="REPLACE_本轮批准人日期和ARM64隔离候选适用范围"
+PROFILE_ID=$TARGET_PROFILE_ID
+PROFILE_DIGEST=REPLACE_APPROVED_PROFILE_SHA256
+CODEX_BIN=/opt/codex-$TARGET_VERSION/bin/codex
+CODEX_BIN_SHA256=REPLACE_OFFICIAL_CODEX_SHA256
+OFFICIAL_ASSET_SHA256=REPLACE_OFFICIAL_PACKAGE_SHA256
+MAIN_MODEL=REPLACE_MAIN_MODEL
+LITE_MODEL=REPLACE_LITE_MODEL
+CODEX_ACCOUNT_ID=REPLACE_CODEX_ACCOUNT_ID
+API_KEY_ID=REPLACE_API_KEY_ID
+POLICY_COMPAT_RECEIPT=$D/control/policy-certification/REPLACE_COMPATIBILITY.json
+POLICY_ACTIVATION=$D/control/policy-certification/REPLACE_ACTIVATION.json
+RELEASE_CERTIFICATION=$D/control/policy-certification/REPLACE_RELEASE.json
+KILO_BIN=$D/private-tools/REPLACE_KILO/bin/kilo
+KILO_VERSION=REPLACE_KILO_VERSION
+KILO_SHA256=REPLACE_KILO_SHA256
 COMPOSE_DIR=/root/docker/sub2apiplus/app
-COMPOSE_BACKUP=/root/backups/docker-compose.yml.pre-c0154-20260916
-PRODUCTION_IMAGE=ghcr.io/itv3/sub2apiplus:0.2.4-3
+COMPOSE_BACKUP=/root/backups/REPLACE_COMPOSE_BACKUP.yml
+PRODUCTION_IMAGE=REPLACE_VERIFIED_PRODUCTION_IMAGE
+# 可选键：来源路径可覆盖默认布局；以下不可推导身份在对应入口使用前必须填好。
+# stage1 必须提供官方包中 code-mode-host 的摘要与固定 digest 的采集镜像。
+# TARGET_CODE_MODE_HOST_SHA256=REPLACE_CODE_MODE_HOST_SHA256
+# CAPTURE_RUNTIME_IMAGE=REPLACE_PINNED_CAPTURE_IMAGE
+# BASELINE_SOURCE=$D/official/codex-$BASELINE_VERSION/source-rust-v$BASELINE_VERSION/codex-rs
+# TARGET_SOURCE=$D/official/codex-$TARGET_VERSION/source-rust-v$TARGET_VERSION/codex-rs
+# TARGET_PACKAGE=$D/official/codex-$TARGET_VERSION/assets/codex-package-aarch64-unknown-linux-musl.tar.gz
+# ACTIVE_PROFILE=$D/control/$IN/baseline-profile.json
+# PREVIOUS_POLICY=$D/control/policy-certification/REPLACE_PREVIOUS_POLICY.json
+# PRE_A3_CERTIFICATION=$D/control/policy-certification/REPLACE_PRE_A3.json
+# 本机候选提交链要求本轮完整、已绑定 VC-3 需求的映射；canonical 要求明确退役版本。
+# GATE_MAPPING_INPUT=/absolute/local/path/gate-mapping.json
+# RETIRE_VERSION=8.0.0
+# HISTORICAL_SOURCE_ROOT=/absolute/path/to/historical/gate/source
+# JWTGEN_BIN=$D/private-tools/jwtgen

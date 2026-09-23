@@ -4,13 +4,14 @@
 set -Eeuo pipefail; umask 022
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
 rm -rf "$B"; mkdir -p "$B"; chmod 700 "$B"
+SOURCE_ORIGIN=$(git -C "$PREV_CANDIDATE/source" remote get-url origin)
 git clone -q --no-checkout "$PREV_CANDIDATE/source" "$B/source"
 git -C "$B/source" fetch -q "$BUNDLE" "$BUNDLE_BRANCH"
 git -C "$B/source" checkout -q --detach "$C"
-git -C "$B/source" remote set-url origin file:///Users/czs/Developer/sub2apiplus
+git -C "$B/source" remote set-url origin "$SOURCE_ORIGIN"
 for t in gate-tree build-tree plan-source; do
   git clone -q --no-checkout "$B/source" "$B/$t"; git -C "$B/$t" checkout -q --detach "$C"
-  git -C "$B/$t" remote set-url origin file:///Users/czs/Developer/sub2apiplus
+  git -C "$B/$t" remote set-url origin "$SOURCE_ORIGIN"
 done
 for t in source gate-tree build-tree plan-source; do
   echo "$t HEAD=$(git -C $B/$t rev-parse HEAD) status=[$(git -C $B/$t status --porcelain --untracked-files=all)]"

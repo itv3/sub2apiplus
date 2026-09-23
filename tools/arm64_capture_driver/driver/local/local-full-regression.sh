@@ -5,7 +5,8 @@
 set -u
 DC="$1"; OUTROOT="$2"; OUT=$OUTROOT/local-gates
 REPO=${REPO:-$HOME/Developer/sub2apiplus}; GATES_ROOT=${GATES_ROOT:-$HOME/Developer/.sub2apiplus-gates}; T=$GATES_ROOT/wt-D
-export CODEX_0_149_1_SOURCE_ROOT=${CODEX_0_149_1_SOURCE_ROOT:-$REPO/local-analysis/sources/codex-cli-0.149.1}
+: "${HISTORICAL_SOURCE_ROOT:?请显式提供本机历史门禁源码路径}"
+export CODEX_0_149_1_SOURCE_ROOT="$HISTORICAL_SOURCE_ROOT"
 TS=$REPO/frontend/node_modules/typescript/lib/typescript.js
 mkdir -p "$OUT"
 test "$(git -C $T rev-parse HEAD)" = "$DC"; test -z "$(git -C $T status --porcelain --untracked-files=all)"

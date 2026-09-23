@@ -23,7 +23,7 @@ if [ "$MODE" = full-regression-isolated ]; then
   # 采集主机上 /root/oauth-capture 是真实受管工具树的 bind 别名，候选测试树按默认
   # --capture-root 会把它当执行副本比对而整批报「执行位置与受管工具树不一致」；
   # 在私有挂载命名空间里用空 tmpfs 遮住别名根，与 CI/本机（无此路径）环境一致。
-  export CODEX_0_149_1_SOURCE_ROOT=$D/candidates/c0154-candidate-v1/local-analysis-sources/codex-cli-0.149.1
+  export CODEX_0_149_1_SOURCE_ROOT=$HISTORICAL_SOURCE_ROOT
   export CAPTURE_TYPESCRIPT_MODULE=$T/frontend/node_modules/typescript/lib/typescript.js PYTHONPYCACHEPREFIX=$RUNROOT/pycache
   cd "$T"; START=$(utc_now); set +e
   unshare -m --propagation private bash -c 'mount -t tmpfs -o ro,size=64k,mode=0755 tmpfs /root/oauth-capture && exec make test' > "$G/local/full-regression.stdout.log" 2> "$G/local/full-regression.stderr.log"; RC=$?; set -e; END=$(utc_now)

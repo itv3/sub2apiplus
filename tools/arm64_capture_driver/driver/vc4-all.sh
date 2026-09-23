@@ -1,5 +1,5 @@
 #!/bin/bash
-# VC-4 一条龙：四树 → 前端构建 + 五门禁并行 → 构建 → 等待并注入本机 check-egress-spec 日志 → 派发前检查（pre-vc4）
+# VC-4 一条龙：四树 → 前端构建 + 本轮门禁并行 → 构建 → 等待并注入本机 check-egress-spec 日志 → 派发前检查（pre-vc4）
 #   → revision-open --initial → vc4.sh（实现测试收据 + plan-candidate-gates + record-candidate-build）。
 # 用法：ARM64_VC_ENV=… setsid -f bash vc4-all.sh > $RUNROOT/vc4-all.out 2>&1 < /dev/null
 #   本机随后把实现测试日志上传到 $RUNROOT/impl-logs/（check-egress-spec.log、cross-check/、READY）。
@@ -27,7 +27,7 @@ fi
 if [ "$REUSE" = 0 ]; then
   bash "$DRV/trees.sh" 2>&1 | tail -4
   rm -f "$RUNROOT/frontend.out" "$RUNROOT/gates.out"
-  E=$(mktemp -d "$D/control/c0154-vc4-implementation-tests-$(date -u +%Y%m%dt%H%M%Sz)-XXXXXX")
+  E=$(mktemp -d "$D/control/${CAMPAIGN_PREFIX}-vc4-implementation-tests-$(date -u +%Y%m%dt%H%M%Sz)-XXXXXX")
   echo "$E" > "$RUNROOT/E.txt"
   python3 "$DRV/vc4_resume.py" prepare --evidence-root "$E" || exit 3
   # 独立进程组保证失败时 Go／Docker 等后代也收到终止信号，不遗留仍在改写构建树的工作。
@@ -41,7 +41,6 @@ if [ "$REUSE" = 0 ]; then
     --peer-log "$RUNROOT/frontend.out" --peer-regex '^FRONTEND_DONE ' --peer-pid "$FRONTEND_PID" --log "$E/logs/implementation.log"
   wait "$FRONTEND_PID" && wait "$GATES_PID" || { tail -n 200 "$RUNROOT/frontend.out" "$RUNROOT/gates.out"; exit 3; }
   trap - EXIT
-  test "$(grep -c '^exit_code=0' "$E/logs/implementation.log")" = 5 || { tail -n 200 "$E/logs/implementation.log"; exit 3; }
   bash "$DRV/build.sh" "$C" 2>&1 | tail -3
   python3 "$DRV/vc4_resume.py" record-upload-wait --evidence-root "$E" || exit 3
 else

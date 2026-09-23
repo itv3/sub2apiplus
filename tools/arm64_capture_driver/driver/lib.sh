@@ -6,12 +6,12 @@
 #   3. 建立 ${RUNROOT}，导出 D／PYTHONPATH／PATH
 # 用法：source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 if [ -z "${BASH_SOURCE[1]:-}" ]; then echo "lib.sh 只能被 source"; exit 2; fi
-DRV=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+export DRV=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 : "${ARM64_VC_ENV:?ARM64_VC_ENV 未设置（指向本轮 env.sh，见 env.example.sh）}"
 ARM64_VC_ENV_EXPORTS=$(python3 "$DRV/parse_env.py" "$ARM64_VC_ENV") || { echo "参数文件拒绝加载：$ARM64_VC_ENV"; exit 2; }
 eval "$ARM64_VC_ENV_EXPORTS"; unset ARM64_VC_ENV_EXPORTS
 [ -d "$RUNROOT" ] || mkdir -p "$RUNROOT"; [ "$(python3 -c "import os,stat,sys; print(oct(stat.S_IMODE(os.stat(sys.argv[1]).st_mode)))" "$RUNROOT")" = 0o700 ] || chmod 700 "$RUNROOT"
-export D PYTHONPATH=. PATH=/usr/local/go/bin:/opt/node-v20/bin:$PATH
+export D PYTHONPATH=. PYTHONDONTWRITEBYTECODE=1 PATH=/usr/local/go/bin:/opt/node-v20/bin:$PATH
 NEWDIR=$D/evidence/campaigns/$NEW
 W=$D/control/$IN
 TOOLS=$D/tools/official_client_capture

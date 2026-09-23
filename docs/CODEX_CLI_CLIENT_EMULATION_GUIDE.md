@@ -1290,7 +1290,14 @@ VC-0 只回答“本次升级是否具备安全开工条件”，不收集目标
 生产 selector。
 
 执行顺序如下。第 1～8 步由 ARM64 驱动链 `tools/arm64_capture_driver` 的 `stage1.sh` 完成，第 9～10 步由
-`stage2.sh` 完成，参数全部来自驱动链参数文件（用法见驱动链 README）。
+`stage2.sh` 完成；其中 `stage2.sh` 的导入分支只用于同目标的官方证据恢复。新目标首次 VC-1 必须通过
+`codex_upgrade_vc0_closeout` 重新取证，再进入 `vc23.sh`。参数全部来自每轮一份 `ARM64_VC_ENV`（见驱动链 README）。
+
+驱动要求明确的基线／目标版本、目标画像、官方 binary／package 摘要、主／Lite 模型、账号／API Key 与三份发布认证路径；
+缺任一新身份键就拒绝，不沿用旧升级的版本、摘要、账号或认证。规则／场景／补丁路径、候选镜像仓库和 lifecycle 目录
+按版本派生，源码及制品位置可以显式覆盖。VC-4 门禁由本轮 VC-3 需求和候选源码中的完整 mapping／plan 决定，
+VC-5 Job 由 Campaign 批准场景完整解析，不固定门禁数或 Job 名。`GATE_MAPPING_INPUT`、目标 code-mode-host 摘要、
+固定采集镜像和 `RETIRE_VERSION` 等不可推导输入必须在对应阶段提供。
 
 | 步骤 | 做什么 | 命令或脚本 |
 |---:|---|---|
@@ -1304,7 +1311,7 @@ VC-0 只回答“本次升级是否具备安全开工条件”，不收集目标
 | 7 | 完整 Job 演练（§4.0.3） | `codex_upgrade_job_rehearsal_receipt collect／finalize` |
 | 8 | atomic-double 演练：在两个互相独立的空根里各跑一遍 VC-0→VC-1 原子闭环 | 在 `capture-cli` 容器内执行 `codex_upgrade_campaign_run_rehearsal_receipt atomic-double-collect` |
 | 9 | 签发发布认证（§4.0.5） | 策略兼容认证 → 策略激活认证 → pre-A3 路径认证 → `certify_release issue／verify` |
-| 10 | 建 Formal Campaign（§4.0.4） | 默认 `reuse-official-evidence`，随后用 `align-ledger.sh` 对齐账本；证据失效时改用 `codex_upgrade_vc0_closeout`，并先按 §4.0.1 生成 P0 门禁收据 |
+| 10 | 建 Formal Campaign（§4.0.4） | 同目标恢复用 `reuse-official-evidence`，随后用 `align-ledger.sh` 对齐账本；新目标或证据失效时用 `codex_upgrade_vc0_closeout`，并先按 §4.0.1 生成 P0 门禁收据 |
 
 ### 4.0.1 DOC-PRE 与 P0：冻结清单与离线验证
 
@@ -1651,7 +1658,7 @@ VC-3 只生成未入库的候选 Catalog；纳入同源 candidate 树并构建�
 实际执行分本机和 ARM64 两段，由驱动链完成：
 
 - **本机**：`driver/local/local-candidate-chain.sh` 把本轮 VC-3 Catalog 与门禁需求拉回仓库，按三段提交——
-  A 段新增 release graph 与本轮 lifecycle 目录（catalog-stage、门禁映射与执行计划）；C 段只改
+  A 段按已核验 inventory 纳入所有新 blob、测试快照索引与本轮 lifecycle 目录（catalog-stage、显式门禁映射与执行计划）；C 段只改
   `release-catalog.json` 与 `releasecontract/testdata/release-graph.json` 两个冻结路径，切换候选 RuntimeCatalog；
   D 段是 C 段的冻结承接收据——再打 git bundle 传到 ARM64。同时用 `local-gate.sh`（check-egress-spec）和
   `local-full-regression.sh`（make test）跑本机门禁，`local-upload.sh` 把结果上传到 ARM64。
@@ -1661,7 +1668,7 @@ VC-3 只生成未入库的候选 Catalog；纳入同源 candidate 树并构建�
 驱动等待均有界：前端／门禁子进程退出立即失败，上传每 30 秒续心跳、5 分钟过期，总等待受阶段预算和项目截止约束；
 失败打印日志尾 200 行并退出 3，不改变 Campaign 状态。上传超时后用 `vc4-all.sh --resume-from upload-wait` 续跑，
 先核对四树 HEAD 与实际源码摘要、架构和 affected 闭集、go.sum／vendor、构建参数摘要、Go／Node 版本及基础镜像 digest，
-再核验五项成功门禁及镜像、二进制、dist、context 产物；该入口不要求上传后才会生成的完整实现测试收据。
+再核验本轮批准的全部成功门禁及镜像、二进制、dist、context 产物；该入口不要求上传后才会生成的完整实现测试收据。
 已有完整收据的普通重起还须正式 replay 并核对同一输入绑定，才可跳过四树、门禁与构建。仅日志成功或镜像存在不构成复用。
 VC-5 等待的是后台 `vc5-run-batch.sh` 写出的实际 PID，且本次监督器 heartbeat 必须新鲜；任一失效同样退出 3，
 不会因 `setsid -f` 启动器正常退出而误判，也不会把失败批次写成完成。

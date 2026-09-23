@@ -6,7 +6,7 @@
 set -Eeuo pipefail; umask 022
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
 test "$1" = "$C"; C9=${C:0:9}
-TAG=sub2apiplus-c0154-candidate:$ROUND-$C9; VERSION_LABEL="$(cat $B/source/backend/cmd/server/VERSION)-$CAND"
+TAG=$CANDIDATE_IMAGE_REPOSITORY:$ROUND-$C9; VERSION_LABEL="$(cat $B/source/backend/cmd/server/VERSION)-$CAND"
 mkdir -p "$B/artifacts"; chmod 700 "$B/artifacts"
 test "$(git -C $B/build-tree rev-parse HEAD)" = "$C"
 test -z "$(git -C $B/build-tree status --porcelain --untracked-files=all)"
@@ -33,7 +33,7 @@ for name in ALPINE_IMAGE POSTGRES_IMAGE; do
 done
 docker build --platform linux/arm64 "${BASE_ARGS[@]}" --label "org.opencontainers.image.revision=$C" --label "org.opencontainers.image.version=$VERSION_LABEL" -t "$TAG" "$CTX" > "$B/artifacts/docker-build.log" 2>&1
 IMAGE_ID=$(docker inspect --format '{{.Id}}' "$TAG")
-docker image inspect --format '{{json .RepoDigests}}' "$IMAGE_ID" | grep -q "sub2apiplus-c0154-candidate@$IMAGE_ID"
+docker image inspect --format '{{json .RepoDigests}}' "$IMAGE_ID" | grep -q "$CANDIDATE_IMAGE_REPOSITORY@$IMAGE_ID"
 NODE_VERSION=$(tr -d '[:space:]' < "$B/frontend-build/node-version.txt"); PNPM_VERSION=$(tr -d '[:space:]' < "$B/frontend-build/pnpm-version.txt")
 NODE_IMAGE_ID=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["inputs"]["base_images"]["NODE_IMAGE"]["image_id"])' "$E/pre-build.json")
 # ---------- 三份收据 ----------

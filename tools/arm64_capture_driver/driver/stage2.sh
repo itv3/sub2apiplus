@@ -1,21 +1,27 @@
 #!/bin/bash
-# 前阶段 2：策略 v6→v7 兼容/激活认证 → pre-A3 路径认证 → 发布认证 → reuse-official-evidence 建 Formal Campaign → 账本对齐。
+# 前阶段 2：本轮兼容/激活认证 → pre-A3 路径认证 → 发布认证 → reuse-official-evidence 建 Formal Campaign → 账本对齐。
 # 读取 $RUNROOT/stage1.env（stage1 产物坐标）。
 set -Eeuo pipefail; umask 077
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
 # shellcheck disable=SC1091
 source "$RUNROOT/stage1.env"
-PC="$D/control/policy-certification"
-PREV_POLICY="$PC/tool_identity_policy_v6_previous.json"
-[ -f "$PREV_POLICY" ] || { cp "$D/control/managed-tools-backup-before-de2e16889794-20260917t222001z-488bba78/tool_identity_policy_v2.json" "$PREV_POLICY"; chmod 600 "$PREV_POLICY"; }
-python3 -c "import json; print(\"previous policy_version:\", json.load(open(\"$PREV_POLICY\"))[\"policy_version\"])"
-[ -f "$PC/policy-compatibility-v6-to-v7-20260918t104926z.json" ] || python3 -m tools.official_client_capture.codex_upgrade_policy_certification compatibility --previous-policy "$PREV_POLICY" --output "$PC/policy-compatibility-v6-to-v7-20260918t104926z.json" | cut -c1-160
-[ -f "$PC/policy-activation-v7-$STAMP.json" ] || python3 -m tools.official_client_capture.codex_upgrade_policy_certification activation --deployment-receipt "$DEPLOY" --compatibility-receipt "$PC/policy-compatibility-v6-to-v7-20260918t104926z.json" --output "$PC/policy-activation-v7-$STAMP.json" | cut -c1-160
-[ -f "$PC/pre-a3-path-certification-$STAMP.json" ] || python3 -m tools.official_client_capture.codex_upgrade_pre_a3_certification run --staging-root "$D/staging/pre-a3-certification-$STAMP" --deployment-receipt "$DEPLOY" --policy-activation "$PC/policy-activation-v7-$STAMP.json" --output "$PC/pre-a3-path-certification-$STAMP.json" | cut -c1-300
-[ -f "$PC/tool-release-certification-v7-$ROUND-$STAMP.json" ] || python3 -m tools.official_client_capture.certify_release issue --deployment-receipt "$DEPLOY" --pre-a3-certification "$PC/pre-a3-path-certification-$STAMP.json" --policy-activation "$PC/policy-activation-v7-$STAMP.json" --job-rehearsal-root "$JR" --job-rehearsal-receipt receipt.json --atomic-rehearsal-root "$D/staging/$AT" --atomic-rehearsal-receipt receipt.json --atomic-container capture-cli --data-root "$D" --output "$PC/tool-release-certification-v7-$ROUND-$STAMP.json" | cut -c1-200
-python3 -m tools.official_client_capture.certify_release verify --certification "$PC/tool-release-certification-v7-$ROUND-$STAMP.json" | cut -c1-160
+[ -f "$POLICY_COMPAT_RECEIPT" ] || python3 -m tools.official_client_capture.codex_upgrade_policy_certification compatibility --previous-policy "${PREVIOUS_POLICY:?缺少前序策略文件}" --output "$POLICY_COMPAT_RECEIPT" | cut -c1-160
+[ -f "$POLICY_ACTIVATION" ] || python3 -m tools.official_client_capture.codex_upgrade_policy_certification activation --deployment-receipt "$DEPLOY" --compatibility-receipt "$POLICY_COMPAT_RECEIPT" --output "$POLICY_ACTIVATION" | cut -c1-160
+[ -f "$PRE_A3_CERTIFICATION" ] || python3 -m tools.official_client_capture.codex_upgrade_pre_a3_certification run --staging-root "$D/staging/pre-a3-certification-$STAMP" --deployment-receipt "$DEPLOY" --policy-activation "$POLICY_ACTIVATION" --output "$PRE_A3_CERTIFICATION" | cut -c1-300
+[ -f "$RELEASE_CERTIFICATION" ] || python3 -m tools.official_client_capture.certify_release issue --deployment-receipt "$DEPLOY" --pre-a3-certification "$PRE_A3_CERTIFICATION" --policy-activation "$POLICY_ACTIVATION" --job-rehearsal-root "$JR" --job-rehearsal-receipt receipt.json --atomic-rehearsal-root "$D/staging/$AT" --atomic-rehearsal-receipt receipt.json --atomic-container capture-cli --data-root "$D" --output "$RELEASE_CERTIFICATION" | cut -c1-200
+python3 -m tools.official_client_capture.certify_release verify --certification "$RELEASE_CERTIFICATION" | cut -c1-160
+# 此入口只用于同一目标版本的证据恢复；新版本首次 VC-1 必须从正式 closeout 入口重新取证。
+[ "$EVIDENCE_DECISION" = reuse ] || { echo '新目标首次取证：使用 codex_upgrade_vc0_closeout 正式入口完成 VC-1 后再进入 vc23.sh'; exit 3; }
+python3 - "$PREDECESSOR_CAMPAIGN" "$TARGET_VERSION" <<'PYVERSION'
+import sys
+from pathlib import Path
+from tools.official_client_capture import codex_upgrade as cu
+manifest=cu.load_campaign_manifest(Path(sys.argv[1]))
+if manifest['target_version'] != sys.argv[2]:
+    raise SystemExit('前序官方证据目标版本不一致，禁止跨版本复用')
+PYVERSION
 PL="$D/evidence/campaigns/upgrade-project-ledger"
-python3 -m tools.official_client_capture.codex_upgrade reuse-official-evidence --predecessor-campaign-dir "$OFFICIAL_CAMPAIGN" --campaign-dir "$NEWDIR" --campaign-id "$NEW" --codex-account-id 22 --job-rehearsal-root "$JR" --job-rehearsal-receipt receipt.json --recovery-timing-ledger-dir "$L" --recovery-timing-receipt "receipts/vc0-input-$ROUND-preflight-$STAMP.json" --recovery-arm64-environment-root "$ENV" --recovery-arm64-environment-receipt receipt.json --predecessor-stop-ledger-dir "$OFFICIAL_STOP_LEDGER" --predecessor-stop-receipt "$OFFICIAL_STOP_RECEIPT" 2>&1 | python3 -c "
+python3 -m tools.official_client_capture.codex_upgrade reuse-official-evidence --predecessor-campaign-dir "$PREDECESSOR_CAMPAIGN" --campaign-dir "$NEWDIR" --campaign-id "$NEW" --codex-account-id "$CODEX_ACCOUNT_ID" --job-rehearsal-root "$JR" --job-rehearsal-receipt receipt.json --recovery-timing-ledger-dir "$L" --recovery-timing-receipt "receipts/vc0-input-$ROUND-preflight-$STAMP.json" --recovery-arm64-environment-root "$ENV" --recovery-arm64-environment-receipt receipt.json --predecessor-stop-ledger-dir "$OFFICIAL_STOP_LEDGER" --predecessor-stop-receipt "$OFFICIAL_STOP_RECEIPT" 2>&1 | python3 -c "
 import sys,json
 t=sys.stdin.read()
 try:

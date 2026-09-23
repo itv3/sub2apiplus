@@ -204,7 +204,8 @@ class ResumeInputTests(unittest.TestCase):
         self.addCleanup(env_patch.stop)
         self.manifest = {"campaign_id": "fixture-campaign", "campaign_purpose": "production_replacement",
                          "baseline_version": "0.151.0", "target_version": "0.154.0"}
-        requirements = {"requirements": [{"kind": "affected_rule", "gate_id": "affected-rule"}]}
+        requirements = {"requirements": [{"kind": "affected_rule", "gate_id": "affected-rule"}] +
+                        [{"kind": "public", "gate_id": "public-" + str(index)} for index in range(4)]}
         self.requirements = requirements
         context_patch = mock.patch.object(resume, "context", return_value=(root, root / "campaign", self.manifest, requirements))
         context_patch.start()

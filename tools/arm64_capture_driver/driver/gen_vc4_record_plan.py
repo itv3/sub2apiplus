@@ -2,6 +2,9 @@
 """生成 record-candidate-build（严格 v2 合同）动作计划：
 gen_vc4_record_plan.py <image_id sha256:…> <build_id> <evidence_root> <输出文件> <campaign_id> <candidate_id> <候选目录>（数据根由环境变量 D 给出）"""
 import json, os, pathlib, sys
+sys.dont_write_bytecode = True
+from driver_config import load_config
+CONFIG = load_config()
 
 image_id, build_id, evidence_root, out, cid, cand, bdir = sys.argv[1:]
 assert image_id.startswith("sha256:") and len(image_id) == 71
@@ -15,18 +18,18 @@ command = [
     "--candidate-purpose", "production_replacement",
     "--candidate-source", f"{B}/source",
     "--candidate-binary", f"{B}/artifacts/sub2api",
-    "--runtime-image", f"sub2apiplus-c0154-candidate@{image_id}",
+    "--runtime-image", f"{CONFIG['CANDIDATE_IMAGE_REPOSITORY']}@{image_id}",
     "--candidate-image-id", image_id,
     "--build-id", build_id,
-    "--deployed-version", "0.154.0",
+    "--deployed-version", CONFIG["TARGET_VERSION"],
     "--target-architecture", "linux/arm64",
     "--build-parameters", f"{B}/artifacts/build-parameters.json",
     "--build-tree", f"{B}/build-tree",
     "--docker-context", f"{B}/artifacts/ctx",
     "--frontend-dist-source", f"{B}/frontend-dist",
-    "--catalog-stage-dir", f"{B}/source/docs/egress/lifecycle/codex-0154-candidate/catalog-stage",
+    "--catalog-stage-dir", f"{B}/source/{CONFIG['LIFECYCLE_DIR']}/catalog-stage",
     "--source-transition", f"{B}/artifacts/source-transition.json",
-    "--gate-plan", f"{B}/source/docs/egress/lifecycle/codex-0154-candidate/gate-plan.json",
+    "--gate-plan", f"{B}/source/{CONFIG['LIFECYCLE_DIR']}/gate-plan.json",
     "--implementation-test-root", evidence_root,
     "--implementation-test-receipt", "receipt.json",
 ]

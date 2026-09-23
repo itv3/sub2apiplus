@@ -2,7 +2,7 @@
 # 派发前检查（老板 2026-09-22 拍板：写进脚本、失败自动停止，不靠人工记忆；同日审核修正三处 P1 与四点小修；
 # 2026-09-22 驱动脚本入库后新增第 0 项：驱动安装复验）
 #   driver    以安装目标内的 install.py verify 复验驱动脚本清单：逐文件 SHA／权限／属主与安装收据绑定的部署收据
-#             必须是 control/ 下当前最新的 codex-0154-supervisor-enable 收据（工具重新部署后驱动必须重新安装确认）
+#             必须是 control/ 下当前最新的 codex-*-supervisor-enable 收据（工具重新部署后驱动必须重新安装确认）
 #   disk      根盘：used ≤ 69% 且 available ≥ 30 GiB（候选就绪门禁策略 root-69-percent-and-30-gib/v1）且 available ≥ 操作员阈值
 #             操作员阈值固定最低 40 GiB，参数文件 MIN_FREE_GIB 只能把它设得更高
 #   project   项目总账：blocked=false、root_causes_at_limit=[]；remaining_live_requests 为 null（本项目无固定请求上限）合法，非空且 ≤0 拒绝

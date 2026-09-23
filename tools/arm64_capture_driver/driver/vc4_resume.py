@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""VC-4 续跑凭证：实际构建输入、五项成功门禁及产物一致才复用。
+"""VC-4 续跑凭证：实际构建输入、本轮批准的成功门禁及产物一致才复用。
 
 upload-wait 检查构建结束时冻结的中间凭证；full 还必须重放完整实现测试收据。
 旧轮次没有凭证时不根据成功日志猜测可复用，重新执行后自然生成新版凭证。
@@ -145,7 +145,7 @@ def inputs(*, prepare: bool = False) -> dict:
                          "vendor_sha256": build.scan_tree_inventory(base / "build-tree/backend/vendor")["inventory_sha256"]},
         "toolchain": {"go_version": go_version, "node_version": node}, "base_images": images,
         "driver_build_sha256": {name: binding(Path(__file__).parent / name)["sha256"]
-                                for name in ("trees.sh", "frontend.sh", "vc4-gates.sh", "build.sh", "vc4-facts.sh")},
+                                for name in ("trees.sh", "frontend.sh", "vc4-gates.sh", "implementation_gates.py", "build.sh", "vc4-facts.sh")},
         "frontend_deviation_approved_by": os.environ["FRONTEND_DEVIATION_APPROVED_BY"],
     }
 
@@ -156,11 +156,12 @@ def outputs(evidence: Path, current: dict) -> dict:
     text = log.read_text()
     successes = re.findall(r"^exit_code=(\d+)$", text, re.M)
     tree = current["tree_sha256"]["source"]
-    if (successes != ["0"] * 5 or not re.search(r"^GATES_DONE ", text, re.M)
+    _, _, _, requirements = context()
+    if (successes != ["0"] * len(requirements["requirements"]) or not re.search(r"^GATES_DONE ", text, re.M)
             or f"commit={current['git_commit']}\n" not in text
             or f"gate_tree_sha256={tree}\n" not in text
             or f"gate_tree_sha256_after={tree}\n" not in text):
-        raise ValueError("五项实现门禁未成功或没有绑定实际 TREE")
+        raise ValueError("本轮实现门禁未全部成功或没有绑定实际 TREE")
     params = read(base / "artifacts/build-parameters.json")
     binary = base / "artifacts/sub2api"
     build.validate_build_parameters(params, candidate_id=os.environ["CAND"], source_root=base / "source",
