@@ -1675,7 +1675,7 @@ VC-2 若发现分类仍缺事实，只返回 VC-1 补采该项；其他已封存
 
 - **输入**：VC-1 checkpoint、封存的目标发现、当前基线规则、Active 画像和两版本可比证据。
 - **操作与工具**：生成分类草案，逐规则判定 `inherit/change/condition_change/add/delete`，定稿迁移、原子断言、场景和目标画像草案，再通过 `classify` 双调用封存联合批准。
-- **产物**：五份已批准清单、`classification/result.json`、`profile-derivation.json`、post-promotion 门禁需求和 VC-2 checkpoint。
+- **产物**：五份已批准清单（`target-rules.json`、`rule-migration.json`、`scenarios.json`、`profile.json`、`assertion-profile.json`）、`classification/result.json`、`profile-derivation.json`、post-promotion 门禁需求和 VC-2 checkpoint。
 - **完成标志**：所有发现具有唯一处置，五份清单联合摘要已批准，`blocked`和其他未决项均为零。
 - **失败恢复**：事实不足返回 VC-1 定向补证；不得提前修改画像或实现。
 
@@ -1719,6 +1719,15 @@ python3 tools/official_client_capture/codex_upgrade.py classify \
 # 人工核对第一次返回的联合摘要后，原命令追加：
 # --approve-manifest-sha256 <joint_manifest_sha256>
 ~~~
+
+上面的命令是批次动作体，不能直接执行：每个动作单独编译成一个 VC-2 批次，经 `compile-and-run-vc-batch`
+派发。驱动链 `vc23.sh` 按 prepare-profile → classify 草案 → 批准预览 → 批准四个批次执行，动作清单由
+`gen_vc2_plans.py` 生成。
+
+同一目标版本重建 Campaign 时，五份清单直接复用已审核的文件，只重跑这四个批次（零请求）：`target-rules`
+用仓库 `codex_upgrade_rules_<target>.json`，`scenarios` 用仓库 `codex_upgrade_scenarios_<target>.json`（写入本轮
+`profile_id`），`assertion-profile` 用仓库 `candidate_rule_expectations_<target>.json`，`profile` 由 prepare-profile
+按仓库 `profile_rule_patches_<target>.json` 重新生成，`rule-migration` 用上一轮已审核的文件。
 
 `prepare-profile --output` 必须位于 Campaign 外、尚不存在，其父目录权限为 `0700`。
 缺少任一画像派生输入时，工具必须在读取官方证据前失败。
