@@ -1,18 +1,12 @@
 {
   "schema_version": "arm64-capture-driver-manifest/v1",
-  "file_count": 48,
+  "file_count": 47,
   "files": [
     {
       "path": "README.md",
-      "sha256": "c986d83b03698334a8f803376ba92b7c5c7102fcc47e007b7f6077bf906280e8",
+      "sha256": "5ceac7882bad63805c76e1f7390a1d7d438ac7fb900ef45aa0e6673fab4f4425",
       "mode": "0600",
-      "bytes": 7464
-    },
-    {
-      "path": "driver/align-ledger.sh",
-      "sha256": "5d0531cd35da5ce463bf3ad0179dce6901a0639d939d079f2b47585424ffb4ec",
-      "mode": "0700",
-      "bytes": 1068
+      "bytes": 7879
     },
     {
       "path": "driver/build.sh",
@@ -142,9 +136,9 @@
     },
     {
       "path": "driver/stage2.sh",
-      "sha256": "c23bdf64e3b707f7d86ffe85814fd3e579aa3f642e4f60535c665e22fa5997b8",
+      "sha256": "9c5fbc6d055533c2fde9cd85ae56b8a539a29895f3b5abde9b30f1aae4c1934d",
       "mode": "0700",
-      "bytes": 3989
+      "bytes": 3953
     },
     {
       "path": "driver/trees.sh",
@@ -291,5 +285,5 @@
       "bytes": 21976
     }
   ],
-  "manifest_sha256": "3e7d6d90d264f6bbd1aabd7810f627771124a9f8ef527d761970d8befb3afd4c"
+  "manifest_sha256": "ebd6ac95aab2a0ac7cfeb92b14b58309ec3ad58dd163c083e427f9e2eeb20a08"
 }

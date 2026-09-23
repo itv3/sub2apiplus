@@ -1311,7 +1311,7 @@ VC-5 Job 由 Campaign 批准场景完整解析，不固定门禁数或 Job 名�
 | 7 | 完整 Job 演练（§4.0.3） | `codex_upgrade_job_rehearsal_receipt collect／finalize` |
 | 8 | atomic-double 演练：在两个互相独立的空根里各跑一遍 VC-0→VC-1 原子闭环 | 在 `capture-cli` 容器内执行 `codex_upgrade_campaign_run_rehearsal_receipt atomic-double-collect` |
 | 9 | 签发发布认证（§4.0.5） | 策略兼容认证 → 策略激活认证 → pre-A3 路径认证 → `certify_release issue／verify` |
-| 10 | 建 Formal Campaign（§4.0.4） | 同目标恢复用 `reuse-official-evidence`，随后用 `align-ledger.sh` 对齐账本；新目标或证据失效时用 `codex_upgrade_vc0_closeout`，并先按 §4.0.1 生成 P0 门禁收据 |
+| 10 | 建 Formal Campaign（§4.0.4） | 同目标恢复用 `reuse-official-evidence`，导入已封存证据后自动对齐账本；新目标或证据失效时用 `codex_upgrade_vc0_closeout`，并先按 §4.0.1 生成 P0 门禁收据 |
 
 ### 4.0.1 DOC-PRE 与 P0：冻结清单与离线验证
 
@@ -1400,9 +1400,11 @@ python3 -m tools.official_client_capture.codex_upgrade reuse-official-evidence \
 ```
 
 复用入口沿用前序 Campaign 冻结的 P0 与发布认证，只换新的时间账本（新目录、新 upgrade-id）、ARM64 环境收据和
-完整 Job 演练收据。导入后时间账本停在 active VC-0，VC-0 阶段预算（未另行规定时 45 分钟）继续计时。VC-2 首批
-虽会自动补齐 VC-0／VC-1，但只要到期前没派发，账本就转 `stop_required`，VC-2 无法派发。所以导入后要立即用驱动链
-`align-ledger.sh` 补“VC-0 完成、VC-1 开始、VC-1 完成”三条事件，让账本停在阶段之间（阶段之间不计阶段墙钟）。
+完整 Job 演练收据。已封存证据导入后，工具在同一 Campaign 锁内注册总账并补齐“VC-0 完成、VC-1 开始、
+VC-1 完成”三条零请求事件，账本为 active、active_phase 为空，VC-2 可继续派发，阶段之间不计阶段墙钟。
+目录发布后中断可重跑原命令；工具逐项核对不可变导入绑定、原产物、前序、账号与控制输入，只补缺失步骤，
+不新建 attempt、不重写证据。相同 event_id 的内容不同或账本已经要求停线仍拒绝。旧目录没有续作绑定时只读
+兼容保持不变，续作需用新目录。awaiting_receipts 导入仍须先 seal，再重跑同一导入命令对齐账本，不提前声明 VC-1 完成。
 
 重新取证入口：
 
@@ -3158,8 +3160,8 @@ b. 绑定文件不存在 → `action_outputs_sha256=null`、仍可恢复但 `reu
 
 除 VC-0 收口或 `reuse-official-evidence` 已生成的首个 VC-1 批次外，每次交接先由操作员审核下一阶段的
 `codex-upgrade-vc-action-plan/v1`，再直接运行下面的原子入口；账本的阶段推进（前序 `stage_completed`、本阶段
-`stage_started`／`stage_completed`）由该入口按本部分“VC-2～VC-6 原子入口治理”写入，操作员只在复用导入后
-（`align-ledger.sh`，见 §4.0.4）、对账与停线恢复时人工 `append`：
+`stage_started`／`stage_completed`）由该入口按本部分“VC-2～VC-6 原子入口治理”写入；复用导入的事件由
+`reuse-official-evidence` 自动补齐（见 §4.0.4），对账与停线恢复才按相应协议人工 `append`：
 
 ~~~bash
 python3 tools/official_client_capture/codex_upgrade.py compile-and-run-vc-batch \

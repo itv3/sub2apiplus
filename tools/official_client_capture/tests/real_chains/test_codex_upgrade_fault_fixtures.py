@@ -186,7 +186,7 @@ class UpgradeFaultFixtureTests(unittest.TestCase):
         self.assertFalse(result.skipped)
         self.assertTrue(result.wasSuccessful(), str(result.errors + result.failures))
 
-    def test_r6_import_currently_leaves_vc0_active(self):
+    def test_r6_import_completes_vc0_vc1_without_live_requests(self):
         case = driver.new_real_chain_case()
         self.addCleanup(case.doCleanups)
         with tempfile.TemporaryDirectory() as directory:
@@ -206,8 +206,9 @@ class UpgradeFaultFixtureTests(unittest.TestCase):
             imported = json.loads(stdout)
             self.assertEqual((imported["executed_job_count"], imported["live_request_count"]), (0, 0))
             summary = timing.phase_ledger_state(fixture["timing_ledger"])
-            self.assertEqual(summary["active_phase"], "VC-0")
-            self.assertNotIn("VC-1", summary["completed_phases"])
+            self.assertEqual(summary["status"], "active")
+            self.assertIsNone(summary["active_phase"])
+            self.assertEqual(summary["completed_phases"], ["VC-0", "VC-1"])
 
     def test_r8_expired_budget_currently_requires_stop(self):
         helper = timing_tests.TimingLedgerTests()

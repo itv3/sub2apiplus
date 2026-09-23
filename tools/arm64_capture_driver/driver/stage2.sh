@@ -1,5 +1,5 @@
 #!/bin/bash
-# 前阶段 2：本轮兼容/激活认证 → pre-A3 路径认证 → 发布认证 → reuse-official-evidence 建 Formal Campaign → 账本对齐。
+# 前阶段 2：本轮兼容/激活认证 → pre-A3 路径认证 → 发布认证 → reuse-official-evidence 原子导入并自动对齐账本。
 # 读取 $RUNROOT/stage1.env（stage1 产物坐标）。
 set -Eeuo pipefail; umask 077
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
@@ -28,7 +28,6 @@ try:
     d=json.loads(t); print({k:d.get(k) for k in (\"status\",\"campaign_id\",\"next_command\")})
 except Exception: print(t[-1200:])"
 test -d "$NEWDIR" || { echo "REUSE_FAILED"; exit 1; }
-bash "$DRV/align-ledger.sh" "$L"
 python3 -m tools.official_client_capture.codex_upgrade status --campaign-dir "$NEWDIR" 2>&1 | python3 -c "
 import sys,json
 t=sys.stdin.read()

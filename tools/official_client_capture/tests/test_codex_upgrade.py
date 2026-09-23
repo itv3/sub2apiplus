@@ -16978,6 +16978,18 @@ class CodexUpgradeTest(unittest.TestCase):
                 self.assertEqual(checkpoint["reuse_item_ids"], ["official-test"])
                 self.assertEqual(checkpoint["metrics"]["live_request_count"], 0)
                 self.assertEqual(checkpoint["stage_receipt"]["path"], "official/result.json")
+                # R6：seal 产生派生清单和 preview 后仍可重入原导入命令，自动结束 VC-0／VC-1。
+                sealed_before = self._tree_digests(successor_dir)
+                code, stdout, stderr = self._run_main(
+                    self._official_attempt_import_argv(fixture, successor_dir)
+                )
+                self.assertEqual(code, 0, stderr)
+                self.assertEqual(json.loads(stdout)["official_attempt_id"], attempt_id)
+                self.assertEqual(self._tree_digests(successor_dir), sealed_before)
+                timing_dir = codex_upgrade._campaign_timing_ledger_dir(successor_dir, manifest)
+                timing_state = codex_upgrade_timing_ledger.phase_ledger_state(timing_dir)
+                self.assertIsNone(timing_state["active_phase"])
+                self.assertEqual(timing_state["completed_phases"], ["VC-0", "VC-1"])
                 # seal 之后前序仍然逐字节不变，总账请求计数增量为 0。
                 self.assertEqual(self._tree_digests(predecessor_dir), before)
                 head_sealed = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
@@ -16987,7 +16999,7 @@ class CodexUpgradeTest(unittest.TestCase):
                 )
 
     def test_0154_official_attempt_import_rejects_broken_bindings(self) -> None:
-        """A3a：任一收据缺失、未通过、未绑定该 attempt 或证据漂移都拒绝导入且不留半成品。"""
+        """A3a：非法输入发布前拒绝；R6 物化失败保留已发布事务，原命令可继续。"""
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
@@ -17095,18 +17107,6 @@ class CodexUpgradeTest(unittest.TestCase):
                 surface_path.write_bytes(surface_backup)
                 surface_path.chmod(0o600)
                 self.assertEqual(self._tree_digests(predecessor_dir), before)
-                # 物化失败（权限收口拒绝）时整个后继目录被清理，总账不留注册。
-                with mock.patch.object(
-                    codex_upgrade,
-                    "_close_official_reuse_evidence_permissions",
-                    side_effect=codex_upgrade.ConfigurationError("前序证据仍有 1 个条目未达到 0700/0600"),
-                ):
-                    expect_rejection(
-                        self._official_attempt_import_argv(fixture, successor_dir),
-                        "未达到 0700/0600",
-                    )
-                head = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
-                self.assertNotIn("upgrade-0154-official-reuse", head["registered_campaigns"])
                 # 前序未封存却不提供导入参数。
                 expect_rejection(
                     self._official_attempt_import_argv(
@@ -17125,12 +17125,30 @@ class CodexUpgradeTest(unittest.TestCase):
                     ),
                     "前序官方阶段尚未封存",
                 )
+                # R6：物化失败不删除已发布事务；总账尚未注册，原预约保留供原命令续作。
+                with mock.patch.object(
+                    codex_upgrade,
+                    "_close_official_reuse_evidence_permissions",
+                    side_effect=codex_upgrade.ConfigurationError("前序证据仍有 1 个条目未达到 0700/0600"),
+                ):
+                    code, _, stderr = self._run_main(
+                        self._official_attempt_import_argv(fixture, successor_dir)
+                    )
+                    self.assertNotEqual(code, 0)
+                    self.assertIn("未达到 0700/0600", stderr)
+                self.assertTrue((successor_dir / "control/official-reuse-resume.json").is_file())
+                published = self._tree_digests(successor_dir)
+                head = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
+                self.assertNotIn("upgrade-0154-official-reuse", head["registered_campaigns"])
                 # 修好全部绑定后仍能成功导入，证明上面的拒绝没有污染前序。
                 return_code, stdout, stderr = self._run_main(
                     self._official_attempt_import_argv(fixture, successor_dir)
                 )
                 self.assertEqual(return_code, 0, stderr)
                 self.assertEqual(json.loads(stdout)["status"], "official_awaiting_receipts")
+                resumed = self._tree_digests(successor_dir)
+                self.assertEqual({key: resumed[key] for key in published}, published)
+                self.assertEqual(self._tree_digests(predecessor_dir), before)
 
     def test_0154_official_attempt_import_arguments_rejected_for_sealed_predecessor(
         self,
