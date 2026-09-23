@@ -1288,7 +1288,8 @@ VC-0 只回答“本次升级是否具备安全开工条件”。本阶段不收
 candidate，也不改生产 selector；这些工作分别从 VC-1、VC-3、VC-4 和 VC-6 开始。
 
 执行顺序如下。第 1～8 步由 ARM64 驱动链 `tools/arm64_capture_driver` 的 `stage1.sh` 完成，第 9～10 步由
-`stage2.sh` 完成；参数全部来自驱动链参数文件，用法见驱动链 README。
+`stage2.sh` 完成；参数全部来自驱动链参数文件，用法见驱动链 README。驱动链脚本目前写死了 0.151→0.154 的
+版本号、路径、Campaign 命名和分支名，下次升级前要先参数化。
 
 | 步骤 | 做什么 | 命令或脚本 |
 |---:|---|---|
@@ -1818,14 +1819,23 @@ VC-3 只生成未入库的候选 Catalog；纳入同源 candidate 树并构建�
 - **产物**：候选源码树、版本专属测试资产、post-promotion 门禁执行计划、source transition、构建收据和完整 Candidate 身份元组。
 - **完成标志**：实现闭集通过，源码、构建、镜像和 Profile 身份可复算，生产 Active 未改变且尚未发起候选请求。
 - **失败恢复**：固定后的源码、构建、镜像或 Profile 发生变化时建立新 candidate，只重做受影响闭集。
-  2026-09-19 改造 2 起，**只有候选源码变化**（新候选的 `git_commit` 或 `source_tree_sha256` 至少一项与作废
-  收据冻结的旧快照不同）且候选树内 Catalog stage 收据与 Campaign 级 VC-3 阶段收据逐字节一致时，新 candidate
-  才在同一 Campaign 内以候选 revision 承接（`invalidate-candidate` 作废旧候选 → `revision-open --supersedes`
-  开 r(N+1) → 从 VC-4 首批重来，VC-0～VC-3 的证据、账本与总账全部保留）；源码不变而只换构建参数或镜像
-  的候选在 `record-candidate-build` 的 revision-seal 被拒绝（"不是新候选"），Profile／Catalog 变化属于
-  VC-3 输出变化，按 Framework §5.3.4 建立后继 Campaign，都不能靠 revision 承接。
+  只有候选源码变化时，新 candidate 才能在同一 Campaign 内开新 revision 承接，VC-0～VC-3 全部保留（见
+  §4.4.3）；只换构建参数或镜像会被 revision-seal 拒绝，Profile／Catalog 变化要建后继 Campaign。
 
 ### 4.4.1 入库与实现边界
+
+实际执行分本机和 ARM64 两段，由驱动链完成：
+
+- **本机**：`driver/local/local-candidate-chain.sh` 把本轮 VC-3 Catalog 与门禁需求拉回仓库，按三段提交——
+  A 段新增 release graph 与本轮 lifecycle 目录（catalog-stage、门禁映射与执行计划）；C 段只改
+  `release-catalog.json` 与 `releasecontract/testdata/release-graph.json` 两个冻结路径，切换候选 RuntimeCatalog；
+  D 段是 C 段的冻结承接收据——再打 git bundle 传到 ARM64。同时用 `local-gate.sh`（check-egress-spec）和
+  `local-full-regression.sh`（make test）跑本机门禁，`local-upload.sh` 把结果上传到 ARM64。
+- **ARM64**：`setsid -f bash vc4-all.sh` 一条龙完成源码树准备、前端构建与外部门禁、镜像构建、派发前检查、
+  `revision-open --initial`，以及实现测试收据、`plan-candidate-gates` 和 `record-candidate-build`。
+
+重建 Campaign 时 A／C／D 必须重做：catalog-stage 与门禁映射绑定本轮 `campaign_id`，不能直接沿用上一轮的
+候选提交。
 
 将 VC-3 暂存的 Snapshot、ReleaseGraph 和 RuntimeCatalog 纳入 candidate 源码树，只实现
 `affected_rules` 及其直接依赖。每项代码、测试和画像变化都必须能回指 `target-rules.json` 与
@@ -1871,9 +1881,9 @@ python3 -m tools.upstream_merge freeze-successor-generate \
   --repository /绝对路径/candidate-source \
   --before <base-commit> \
   --after <final-commit> \
-  --tag codex-0-154-candidate \
+  --tag codex-<target>-candidate-<round>-<date> \
   --output /源码树外/source-transition.json \
-  --reason "Codex 0.154.0 Candidate 同源实现"
+  --reason "Codex <target> Candidate 同源实现"
 ~~~
 
 Candidate 源码树与 Campaign 目录必须彼此独立；source transition 也不得放入源码树，否则会形成
@@ -1895,9 +1905,13 @@ Candidate 源码树与 Campaign 目录必须彼此独立；source transition 也
 的来源关系，并绑定 post-promotion 门禁需求与执行计划摘要。镜像交接使用
 `registry/repository@sha256:<manifest-digest>`，不能只写可变 tag。
 
-Go 必须离线编译；ARM64 缺少前端依赖时，只允许通过 `capture-cli` 的固定 BWG 出口取得依赖，然后将
+Go 必须离线编译；ARM64 缺少前端依赖时，只允许通过 `capture-cli` 的冻结出口取得依赖，然后将
 前端产物、ARM64 二进制和运行资源叠加到冻结的 ARM64 基础镜像。证据机和低资源生产机不承担 Go／Node
 编译，也不得用现场重编译产物替代构建收据中的制品。
+
+构建的已知坑：准备 Docker context 时不能在 `umask 077` 下复制（入口脚本会变成 0711，容器起不来），要用
+`cp -a` 保留模式，入口脚本必须是 git 记录的 100755；二进制必须出自干净树（`vcs.modified=false`）；外部门禁在
+不含 vendor 的测试树上跑；前序候选的 vendor 只在 `go.mod`／`go.sum` 逐字相同时复用。
 
 在最终干净 commit 上运行实现闭集和 `make check-egress-spec`，将两类结果分别作为
 `implementation_tests` 和 `check_egress_spec` 证据，生成 `kind=implementation_tests`的统一收据。
@@ -1932,6 +1946,9 @@ python3 tools/official_client_capture/codex_upgrade.py record-candidate-build \
   --deployed-version <deployed-version> \
   --target-architecture <os/architecture> \
   --build-parameters /绝对路径/build-parameters.json \
+  --build-tree /绝对路径/build-tree \
+  --docker-context /绝对路径/docker-context \
+  --frontend-dist-source /绝对路径/frontend-dist \
   --catalog-stage-dir /绝对路径/candidate-source/path/candidate-catalog \
   --source-transition /源码树外/source-transition.json \
   --gate-plan /绝对路径/candidate-source/path/gate-plan.json \
@@ -1940,19 +1957,20 @@ python3 tools/official_client_capture/codex_upgrade.py record-candidate-build \
 ~~~
 
 工具复算干净 Git commit、源码树、二进制、不可变镜像、Catalog、画像派生、动态需求、执行计划和
-source transition，并独立重放实现测试收据及其两份证据后，只写一次生成
+source transition，逐项扫描 build tree、Docker context 与前端 dist 的内容、权限和装配关系（三者都是必需参数，
+前端 dist 必须与注入 build tree 的完全一致），并独立重放实现测试收据及其两份证据后，只写一次生成
 `<campaign>/candidates/<candidate-id>/build-receipt.json`；失败时不得创建 attempt 或发送请求。
 成功时同时封存当前 revision 的 VC-4 checkpoint（r1 为 `control/vc/vc-4-checkpoint.json`，r≥2 为
 `control/vc/revisions/r<N>/vc-4-checkpoint.json`）。
 
-`record-candidate-build` 在同一事务内执行 **revision-seal**（改造 2）：候选必须属于当前 active revision且账本
+`record-candidate-build` 在同一事务内执行 **revision-seal**：候选必须属于当前 active revision 且账本
 active；候选树内的 `catalog-stage-receipt.json` 必须与 revision 记录绑定的 Campaign 级 VC-3 阶段收据逐字节
 相同（不一致属于规则分类或目标画像变化，按 Framework §5.3.4 建立后继 Campaign，不能靠 revision 承接）；
 r≥2 还要以旧候选 `invalidation.json` 冻结的身份快照为基准证明同一性变化——`git_commit` 与
 `source_tree_sha256` 任一可比字段变化即通过，全部相同（只换 image）拒绝——先写 write-once 的
 `revisions/r<N>/seal.json` 与旧候选目录的 `superseded-by.json`，再写构建收据与 VC-4 checkpoint；
-`seal.json` 已写但收据未写、收据已写但 checkpoint 未写两种断点重跑同一命令都幂等收敛。历史隐含 r1
-（改造前的 Campaign）不追溯执行字节校验。
+`seal.json` 已写但收据未写、收据已写但 checkpoint 未写两种断点重跑同一命令都幂等收敛。2026-09-19 之前
+建立的 Campaign 的隐含 r1 不追溯执行字节校验。
 
 ### 4.4.3 Candidate 身份冻结与 VC-5 交接
 
