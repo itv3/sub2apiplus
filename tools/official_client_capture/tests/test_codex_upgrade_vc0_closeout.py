@@ -997,8 +997,20 @@ class VC0CloseoutTests(unittest.TestCase):
         }
         return ledger_root, manifest
 
+    @staticmethod
+    def _ledger_event_time(now: datetime) -> str:
+        """把用例的 now 截到整秒，作为显式事件时间。
+
+        账本默认按秒截断记录真实时钟：事件若在取 now 之后跨过整秒才写入，就会晚于
+        检查时间 now，先抛"检查时间早于最新 event"，走不到用例真正要测的判定。钉在
+        now 所在的整秒，既不晚于 now，也不晚于同一秒内按秒截断的 checkpoint 检查时间。
+        """
+
+        return now.replace(microsecond=0).isoformat()
+
     def test_ledger_must_be_active_vc0(self) -> None:
         now = datetime.now(timezone.utc)
+        recorded_at = self._ledger_event_time(now)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             root.chmod(0o700)
@@ -1011,6 +1023,7 @@ class VC0CloseoutTests(unittest.TestCase):
                 event_id="vc0-already-complete",
                 phase="VC-0",
                 event_type="stage_completed",
+                recorded_at_utc=recorded_at,
             )
             with self.assertRaisesRegex(
                 closeout.VC0CloseoutError,
@@ -1046,6 +1059,7 @@ class VC0CloseoutTests(unittest.TestCase):
         """新 VC-0 保留历史请求累计，但冻结后新增请求必须失败关闭。"""
 
         now = datetime.now(timezone.utc)
+        recorded_at = self._ledger_event_time(now)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             root.chmod(0o700)
@@ -1058,12 +1072,14 @@ class VC0CloseoutTests(unittest.TestCase):
                 event_id="vc0-complete-before-restart",
                 phase="VC-0",
                 event_type="stage_completed",
+                recorded_at_utc=recorded_at,
             )
             timing.append_event(
                 ledger_root,
                 event_id="vc1-start-before-restart",
                 phase="VC-1",
                 event_type="stage_started",
+                recorded_at_utc=recorded_at,
             )
             timing.append_event(
                 ledger_root,
@@ -1071,6 +1087,7 @@ class VC0CloseoutTests(unittest.TestCase):
                 phase="VC-1",
                 event_type="receipt_passed",
                 live_request_count=8,
+                recorded_at_utc=recorded_at,
             )
             timing.append_event(
                 ledger_root,
@@ -1079,12 +1096,14 @@ class VC0CloseoutTests(unittest.TestCase):
                 event_type="stage_abandoned",
                 root_cause_id="control-tool-gap",
                 next_action="修复控制工具后从新 VC-0 承接",
+                recorded_at_utc=recorded_at,
             )
             timing.append_event(
                 ledger_root,
                 event_id="vc0-restarted",
                 phase="VC-0",
                 event_type="stage_started",
+                recorded_at_utc=recorded_at,
             )
             checkpoint = timing.checkpoint(
                 ledger_root,
@@ -1117,6 +1136,7 @@ class VC0CloseoutTests(unittest.TestCase):
                 phase="VC-0",
                 event_type="receipt_passed",
                 live_request_count=1,
+                recorded_at_utc=recorded_at,
             )
             with self.assertRaisesRegex(closeout.VC0CloseoutError, "active VC-0"):
                 closeout._validate_timing_and_arm64(
