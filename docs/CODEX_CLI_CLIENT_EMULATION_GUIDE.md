@@ -1306,7 +1306,7 @@ VC-0 只回答“本次升级是否具备安全开工条件”，不收集目标
 | 9 | 签发发布认证（§4.0.5） | 策略兼容认证 → 策略激活认证 → pre-A3 路径认证 → `certify_release issue／verify` |
 | 10 | 建 Formal Campaign（§4.0.4） | 默认 `reuse-official-evidence`，随后用 `align-ledger.sh` 对齐账本；证据失效时改用 `codex_upgrade_vc0_closeout`，并先按 §4.0.1 生成 P0 门禁收据 |
 
-### 4.0.1 冻结清单与离线验证
+### 4.0.1 DOC-PRE 与 P0：冻结清单与离线验证
 
 `plan` 与各收据会冻结：目标与基线版本及官方产物、Campaign 用途、账号／API Key／模型可见性、ARM64 环境、
 预算与同根因重试上限，以及受管工具身份。受管工具变化按 §4.7“工具身份策略 v2”分层处理，其余任一变化都是
@@ -1381,8 +1381,9 @@ python3 -m tools.official_client_capture.codex_upgrade reuse-official-evidence \
 ```
 
 复用入口沿用前序 Campaign 冻结的 P0 与发布认证，只换新的时间账本（新目录、新 upgrade-id）、ARM64 环境收据和
-完整 Job 演练收据。导入后时间账本停在 active VC-0，要用驱动链 `align-ledger.sh` 补“VC-0 完成、VC-1 开始、
-VC-1 完成”三条事件，才能进入 VC-2。
+完整 Job 演练收据。导入后时间账本停在 active VC-0，VC-0 阶段预算（未另行规定时 45 分钟）继续计时。VC-2 首批
+虽会自动补齐 VC-0／VC-1，但只要到期前没派发，账本就转 `stop_required`，VC-2 无法派发。所以导入后要立即用驱动链
+`align-ledger.sh` 补“VC-0 完成、VC-1 开始、VC-1 完成”三条事件，让账本停在阶段之间（阶段之间不计阶段墙钟）。
 
 重新取证入口：
 
