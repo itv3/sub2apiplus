@@ -1519,8 +1519,9 @@ VC-2 若发现分类仍缺事实，只返回 VC-1 补采该项；其他已封存
    只是 VC-2 联合判定的必需输入；尚未生成候选 RuntimeCatalog。
 7. 将 `rule-migration.json` 和 `profile.json` 置为 `approved`，使用五份清单、当前
    Active 画像和画像补丁执行第一次 `classify`。人工核对返回的 `joint_manifest_sha256`
-   后，以完全相同输入追加 `--approve-manifest-sha256` 再执行一次。批准调用自动
-   封存五份清单、画像派生收据、动态门禁需求和 VC-2 checkpoint。
+   后，以完全相同输入追加 `--approve-manifest-sha256` 再执行一次。这次批准调用才是 VC-2 完成：它封存
+   五份清单、画像派生收据和动态门禁需求，写出 `classification/result.json` 与 VC-2 checkpoint；草案、
+   prepare-profile 和第一次预览都不算完成。
 
 对应动作体为：
 
@@ -1552,7 +1553,6 @@ python3 tools/official_client_capture/codex_upgrade.py classify \
 按仓库 `profile_rule_patches_<target>.json` 重新生成，`rule-migration` 用上一轮已审核的文件。
 
 `prepare-profile --output` 必须位于 Campaign 外、尚不存在，其父目录权限为 `0700`。
-缺少任一画像派生输入时，工具必须在读取官方证据前失败。
 
 ### 4.2.2 分类口径与阶段边界
 
@@ -1574,10 +1574,6 @@ python3 tools/official_client_capture/codex_upgrade.py classify \
 `rule-migration/v1` 中 `entries[].classification` 表示规则迁移结论；
 `discovery_classifications[].classification` 只表示本轮扫描形态的终态处置。后者标为 `change`
 不等于对应规则必然变化，规则结论仍以 `entries` 为准；不得从 discovery 数量生成新规则。
-
-VC-2 的机器终点是第二次 `classify` 成功写入 `classification/result.json` 和
-`control/vc/vc-2-checkpoint.json`。草案生成、`prepare-profile` 或第一次批准预览都不是阶段完成；
-五份清单任一摘要漂移，就不得编译 VC-3 批次。
 
 <a id="codex-vc-3"></a>
 ## 4.3 VC-3 生成目标画像
