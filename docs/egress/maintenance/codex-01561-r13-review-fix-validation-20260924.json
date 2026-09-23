@@ -1,0 +1,199 @@
+{
+  "schema_version": "codex-upgrade-improvement-validation/v1",
+  "item": "R13-1、R13-3（审核修正）",
+  "source_commit": "51f7390d928be5a82951ef958a4bd584b2753c0b",
+  "review_basis": "桌面《Codex仿真升级阶段1审核结论-20260924.md》第一节第 3 条、第二节第 8 条及分项审核意见",
+  "status": "development_self_check_passed",
+  "production_deployed": false,
+  "live_request_count": 0,
+  "self_checked_at_utc": "2026-09-23T23:28:10.738014+00:00",
+  "fixes": [
+    {
+      "finding": "R12 死亡子进程夹具与上传续跑链在 HEAD 必红（R2 给 vc4-all.sh 新增 guard.sh pre-plan、open-revision、early-test-mode、plan-retest，夹具未同步）",
+      "resolution": "夹具按首个 revision 的真实裁定替换读取 Campaign 的四个入口，其余真实 Git、摘要、装配与统一收据照常运行；调用序列断言按实际流程计入 guard.sh 的 pre-plan 与 pre-vc4 两次准入"
+    },
+    {
+      "finding": "全链每批 live_request_count 与重复派发请求数是常量 0",
+      "resolution": "逐批汇总 Campaign 时间账本事件请求数，并与账本汇总、项目总账三方核对；VC-1 首批重复引导及 VC-2～VC-6 七批重复派发各记录一次实测增量，共 8 次"
+    },
+    {
+      "finding": "故障夹具 R2、R4、R8 翻转后只断言不再拒绝，缺恢复成功断言",
+      "resolution": "三条夹具分别委托同输入复用实现测试收据、classify COMMIT 后失败对账 N+1 重派、批准延期后恢复且计数不清零的专项用例"
+    },
+    {
+      "finding": "make test-capture-real-chains 只看退出码，本机跳过的链显示为通过",
+      "resolution": "新增 tests/real_chain_gate.py 执行入口：结束时逐条列出被跳过的链；CAPTURE_REAL_CHAINS_REQUIRE_EXECUTION=1 时任一跳过即失败，ARM64 自查统一使用该开关；Makefile 与分层防回流测试同步"
+    },
+    {
+      "finding": "tools/arm64_supervised_deploy.py 未把 pre-A3 登记链纳入发布流程",
+      "resolution": "pre-A3 的 run_certification 已强制在 staging 根下执行全部场景（含登记链）；部署预检新增 verify_pre_a3_scenario_entries，按 AST 核对场景表全部 40 个测试入口（含登记链）随工具树部署，入口缺失或改名即拒绝部署；预检结果记录登记链入口文件摘要"
+    }
+  ],
+  "clarifications": [
+    "审核报告第二节第 8 条称 pre-A3 场景表只登记 1 条：方案 R13 要求按阶段登记，阶段 1 发布包只绑定 vc-chain.full-validation-only，vc1-capture 与 vc6-production 属 R13-2（阶段 2），当前登记符合方案。",
+    "工程师 R13 报告中的 946.271 秒是既有检查器缺陷恢复真实链，不属于方案验收的三条登记链；该链超过 15 分钟，特此标注。登记的全链本次 ARM64 实测 269.323 秒，低于 15 分钟上限。"
+  ],
+  "real_chain_metrics": {
+    "chain": "vc-chain.full-validation-only",
+    "live_request_count": 0,
+    "ledger_live_request_count": 0,
+    "duplicate_dispatch_requests": 0,
+    "duplicate_dispatch_checks": 8,
+    "seconds": 269.323,
+    "batches": [
+      {
+        "phase": "VC-1",
+        "sequence": 1,
+        "execute": [],
+        "reuse": [
+          "official-core"
+        ],
+        "live_request_count": 0
+      },
+      {
+        "phase": "VC-2",
+        "sequence": 2,
+        "execute": [
+          "classify-draft"
+        ],
+        "reuse": [],
+        "live_request_count": 0
+      },
+      {
+        "phase": "VC-2",
+        "sequence": 3,
+        "execute": [
+          "classify-preview"
+        ],
+        "reuse": [],
+        "live_request_count": 0
+      },
+      {
+        "phase": "VC-2",
+        "sequence": 4,
+        "execute": [
+          "classify-approve"
+        ],
+        "reuse": [],
+        "live_request_count": 0
+      },
+      {
+        "phase": "VC-3",
+        "sequence": 5,
+        "execute": [
+          "stage-profile"
+        ],
+        "reuse": [],
+        "live_request_count": 0
+      },
+      {
+        "phase": "VC-5",
+        "sequence": 6,
+        "execute": [
+          "compare"
+        ],
+        "reuse": [
+          "candidate-frozen-core"
+        ],
+        "live_request_count": 0
+      },
+      {
+        "phase": "VC-5",
+        "sequence": 7,
+        "execute": [
+          "acceptance",
+          "assert-rules"
+        ],
+        "reuse": [
+          "candidate-frozen-core"
+        ],
+        "live_request_count": 0
+      },
+      {
+        "phase": "VC-6",
+        "sequence": 8,
+        "execute": [
+          "deliver"
+        ],
+        "reuse": [],
+        "live_request_count": 0
+      }
+    ]
+  },
+  "regression": {
+    "local_targeted": {
+      "tests": 40,
+      "seconds": 72.869,
+      "result": "FAILED",
+      "detail": "errors=3, skipped=4",
+      "note": "3 项错误为 test_certify_release 的 issue 用例，根因是 R4 与 atomic-double 演练合同冲突，归 R4 修复；4 项跳过需要 Linux root 或 Docker"
+    },
+    "local_fault_fixtures": {
+      "tests": 12,
+      "seconds": 59.768,
+      "result": "OK",
+      "detail": "skipped=3",
+      "note": "3 项跳过为 R15 内核链与 Docker 进程链，需要 Linux root"
+    },
+    "arm64_targeted": {
+      "tests": 36,
+      "seconds": 469.844,
+      "result": "FAILED",
+      "detail": "failures=1",
+      "note": "CAPTURE_REAL_CHAINS_REQUIRE_EXECUTION=1，零跳过；唯一失败为 R15 隔离内核链第 723 行间歇失败，归 R15 修复"
+    },
+    "arm64_kernel_rerun": {
+      "runs": 3,
+      "passed": 2,
+      "failed": 1,
+      "note": "同一断言间歇失败，确认为 R15 夹具或实现的不稳定项"
+    }
+  },
+  "gates": {
+    "officialegress_frozen": "passed",
+    "service_frozen": "passed",
+    "check_egress_spec_ci": "passed"
+  },
+  "open_dependencies": [
+    "R15：隔离内核链 test_r15_isolated_kernel_failure_and_recovery_chain 第 723 行间歇失败（pre-A3 场景 runtime-egress.kernel-faults），在 R15 审核修正中定位并修复后复验。",
+    "R4：test_certify_release 三个 issue 用例因 atomic-double 演练合同与 R4 三分支冲突失败，在 R4 审核修正中修复后复验。",
+    "阶段 1 全部项修正完成后，本机与 ARM64 统一跑全量 make test-capture-tools 与 make test-capture-real-chains。"
+  ],
+  "freeze_successors": [
+    {
+      "path": "docs/egress/maintenance/upstream-codex-01561-r13-review-fix-20260924-freeze-successor.json",
+      "sha256": "4ff650edd8a11081d192dbe9e588f96065f256dd9841a0a7dec396d99d25db15"
+    }
+  ],
+  "logs_directory": "/Users/czs/Developer/codex-01561-upgrade-work",
+  "logs": [
+    {
+      "file": "review-fix-r13-local-targeted.log",
+      "sha256": "18ea4053a3e1e07f81fc68b3ccd0f899b7a69ce60a9802d41121ba5de67ac2f6"
+    },
+    {
+      "file": "review-fix-r13-local-fault-fixtures.log",
+      "sha256": "96101d1be9c1fa404bcc4238ea7ba033a982c06d1b84474f8267a2bef74f825a"
+    },
+    {
+      "file": "review-fix-r13-arm64.log",
+      "sha256": "b91078c55d695a828e35032beece13e7b083e97dec7f43e38ca3d15b8fd4f0cf"
+    },
+    {
+      "file": "review-fix-r13-arm64-kernel-rerun-1.log",
+      "sha256": "66b4c657b06f8c5b162cbb26e79c1c2dda9cff98cd0fdf30fff767ee6573d4f7"
+    },
+    {
+      "file": "review-fix-r13-arm64-kernel-rerun-2.log",
+      "sha256": "0b95dd86b81868bc020093ed6ac6ac8022666706becffa6de156d68a8d11526d"
+    },
+    {
+      "file": "review-fix-r13-arm64-kernel-rerun-3.log",
+      "sha256": "ef5fd9347c5eea66512ac90c7fdb31d64c6ea1675e1ec74fd5919a3260ae1af9"
+    },
+    {
+      "file": "review-fix-r13-gates.log",
+      "sha256": "35ffa5da9c0d0a5d650f3b076ca4ad7215b9d9f54ccfa52253a3adc176d65730"
+    }
+  ]
+}
