@@ -350,7 +350,7 @@ MANAGED_RUNTIME_DOCUMENTS = (
     "egress/maintenance/upstream-codex-0154-vc5-ledger-resign-evidence-integrity-20260922-freeze-successor.json",
     "egress/maintenance/upstream-codex-0154-vc5-deploy-manifest-22-20260922-freeze-successor.json",
     "egress/maintenance/upstream-codex-01561-r13-20260923-freeze-successor.json",
-    "egress/maintenance/runtime-egress-operations.md",
+    "egress/runtime-egress-operations.md",
     "egress/maintenance/upstream-codex-01561-r15-20260923-freeze-successor.json",
 )
 MANAGED_ASSERTION_PREPARER = "prepare_assertion_bundle.sh"

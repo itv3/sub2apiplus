@@ -1352,7 +1352,7 @@ passed／failed／approved_skip／unexpected_skip 分类登记为 P0 门禁收�
 策略更新必须保留用户授权人、时间、原因和 revision，只更新运维配置及网络，重新准入后恢复；无需修改工具、重签工具
 发布认证或重建 Campaign。v1～v7 收据先按原 producer 完整重放，再按版本化投影比较真实依赖；不改写历史事实、不用旧
 BWG 事实检查当前 DMIT 策略，未知 producer、篡改和缺失事实仍拒绝。安装与迁移步骤见
-[运行时出口运维说明](egress/maintenance/runtime-egress-operations.md)。
+[运行时出口运维说明](egress/runtime-egress-operations.md)。
 
 本轮数据全部放在数据根下，不得在 `/root` 直接建目录；往 ARM64 传文件只能解包到数据根下的子目录再 `chown`，
 禁止解包到 `/root`（macOS 打的 tar 包带 `.` 条目，会把 `/root` 属主改成 501，sshd 随即拒绝所有公钥登录）。
