@@ -78,13 +78,18 @@ def campaign_snapshot(campaign):
     return files, project.read_project_history_snapshot(project_root)
 
 
-def assert_duplicate_import_unchanged(case, campaign, arguments):
-    """VC-1 复用导入再次执行必须拒绝，且不写账、不改变任何已封存文件。"""
+def assert_duplicate_bootstrap_unchanged(campaign, manifest, state_dir):
+    """导入的 VC-1 首批由 VC-2 引导器派发；重复引导不得产生新的执行与账本记录。"""
+
+    from tools.official_client_capture import codex_upgrade as upgrade
 
     before = campaign_snapshot(campaign)
-    code, _stdout, _stderr = case._run_main(arguments)
-    if code == 0 or campaign_snapshot(campaign) != before:
-        raise RuntimeError("重复复用导入未拒绝或改变了 Campaign／账本")
+    result = upgrade._bootstrap_noop_first_batch(
+        campaign, manifest, sequence=2, state_dir=state_dir,
+        run_arguments=argparse.Namespace(heartbeat_seconds=0.2, watchdog_timeout_seconds=5.0, ledger_interval_seconds=0.2),
+    )
+    if result is not None or campaign_snapshot(campaign) != before:
+        raise RuntimeError("重复引导 VC-1 首批产生了执行或改变了 Campaign／账本")
 
 
 def assert_duplicate_dispatch_unchanged(namespace):
@@ -172,6 +177,7 @@ def classify_full_chain(case, root, fixture, state_dir, manifests):
     draft = dispatch_cli(case, root, fixture, state_dir, "VC-2", 2, "classify-draft", [
         "classify", "--campaign-dir", str(campaign),
     ])
+    assert_duplicate_bootstrap_unchanged(campaign, manifest, state_dir)
     target, migration, scenario, profile, assertion = manifests
     migration_payload = driver._read(Path(draft["path"]) / "rule-migration.json")
     migration_payload["status"] = "approved"
