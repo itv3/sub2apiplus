@@ -2706,7 +2706,7 @@ Job／请求，再由既有恢复协议从合法 checkpoint 继续。当前出�
    `codex_upgrade_vc0_closeout.py` 在原子收口进程内调用；`reuse-official-evidence` 创建全新 Campaign，
    以零请求导入已封存官方证据，并生成“全部 official Job 为 reuse”的 VC-1 no-op 批次及 checkpoint；
    `compile-and-run-vc-batch` 在同一个非阻塞 state-dir 锁内编译下一批并立即创建父 run。这些入口都不得
-   放入 `campaign-run` 动作队列，不得延长原始 deadline 或执行阶段数据面动作。`compile-vc-batch`、
+   放入 `campaign-run` 动作队列，不得改写原始 deadline 或执行阶段数据面动作。预算延期只由下述批准收据追加。`compile-vc-batch`、
    `compile-vc-interrupted-recovery-batch` 与 `recover-vc1-interruption` 只保留给历史读取、回归和内部测试，
    不得用于新 Campaign；新 Campaign 的中断统一由 reconciler 承接。
 3. 身份变化、失败恢复和 `execute／reuse` 计算统一执行 Framework §5.1.2、§5.3.2～§5.3.4；各阶段只写
@@ -2718,27 +2718,55 @@ Job／请求，再由既有恢复协议从合法 checkpoint 继续。当前出�
 
 下列行为自 0.154.0 起对 Formal Campaign 强制生效，早于 0.154.0 的 Campaign 只按各自冻结的历史合同只读回放。
 
-**两层预算与项目总账。** 每个升级项目在宿主数据根建立追加式项目总账 `upgrade-project-ledger/`：
+**两本账与三层墙钟预算。** 每个升级项目在宿主数据根建立追加式项目总账 `upgrade-project-ledger/`：
 `plan.json` 一次写死 `absolute_deadline_utc`（老板批准，记录批准人与时间）、可选 `live_request_budget`、
 `same_root_cause_retry_limit`、`root_cause_codes_sha256` 与算法版本、`estimation_policy`、`fixture_only`、
 初始精确／估计请求数、初始身份键清单摘要、初始根因计数、`bootstrap_cutover` 与已关闭 Campaign 账本
-head；`events/NNNNNN.json` 只有六种事件：`campaign_registered`、`campaign_registration_rejected`、
-`reconciliation_committed`、`accounting_resolved`、`root_cause_repaired`、`campaign_terminal`
-（`terminal_reason` 只能是 `deadline_wall_clock`、`deadline_live_requests`、`root_cause_limit`、
+head；`events/NNNNNN.json` 登记注册、账务、根因修复、历史更正与候选探针事件，并新增非终态
+`campaign_paused` 和 `deadline_extended`。`campaign_terminal` 的 `terminal_reason` 包括
+`operator_abandoned`（必须有批准人、时间与理由）、`deadline_live_requests`、`root_cause_limit`、
 `accounting_unresolved`、`environment_contaminated`、`identity_changed`、`superseded`、
 `prior_stop_the_line`、`prior_upgrade_complete`，以及 `integrity_mismatch`——
 不可变控制或证据制品完整性异常：COMMIT／父 run 制品完整性异常，2026-09-22 起还包括已封存
 EvidenceManifest 的不可变 stat 边界漂移，即动作诊断 `failure_class=evidence-integrity`）。权威数据是
-plan 加 events，`head.json` 只是缓存：写入时在目录锁内完整重放并以 head sha 做 CAS，缓存缺失或落后可
+`deadline_wall_clock` 仅供旧事件读取，新写入禁止。plan 加 events，`head.json` 只是缓存：写入时在目录锁内完整重放并以 head sha 做 CAS，缓存缺失或落后可
 重建，超前或同序号摘要不符失败关闭。Campaign 账本（`UpgradeTimingLedger`）继续记录本 Campaign 的阶段、
 attempt 与停线；跨账本事务由 Campaign 目录 `ledger/outbox/batch-NNNNNN/` 承担：若干 `entry-NN.json`
 是同一项目事件 payload 的分片，`COMMIT` 绑定 `entry_count`、末项 SHA 与 batch SHA，**一个 batch 严格
 对应一个项目事件**；补齐器 `reconcile-project-ledger` 只推送带 `COMMIT` 的 batch，缺项、断链、篡改、
 COMMIT 后追加 entry 即失败关闭，`bootstrap_cutover` 已吸收的 batch 不再推送。锁顺序固定先项目锁后
 Campaign 账本锁。`plan`、`reuse-official-evidence` 在项目锁内做 admission（总账 blocked、剩余预算为 0、
-根因达上限、超过 `formal_open_limit`、Campaign deadline 超过绝对截止即拒绝并追加拒绝事件）；
+根因达上限、超过 `formal_open_limit`、新 Campaign 初始 deadline 超过项目有效截止即拒绝并追加拒绝事件）；
 `campaign-run`、`resume`、`capture-official seal` 开始前先执行补齐器再锁内重放，本 Campaign 必须有注册
-事件且无拒绝、终态事件。`fixture_only` 总账只允许 staging 路径内的 Campaign。
+事件且无拒绝、终态事件；预算暂停拒绝派发、恢复、复用和封存。`fixture_only` 总账只允许 staging 路径内的 Campaign。
+
+**R8 预算暂停与批准延期。** 项目、Campaign、阶段三层到期都变为 `deadline_paused`，不自动追加
+`stage_abandoned`、`stop_the_line` 或 `campaign_terminal`。`status` 和 `inspect_ledger` 显示
+`paused_since_utc`、`paused_hours`；持续暂停超过 72 小时且期间没有新的延期批准时，只提示
+`review_reminder=true`，不会自动终态。部分延期只解除对应层，累计墙钟与请求不清零。
+
+延期是两个父批次之间的直接控制入口，运行中拒绝修改预算。先冻结可审核预览，再回传其摘要和批准人：
+
+~~~bash
+python3 tools/official_client_capture/codex_upgrade.py deadline-extend preview \
+  --campaign-dir /绝对路径/campaign --scope campaign \
+  --new-deadline-at-utc '<新截止 RFC3339>' --reason '<延期理由>'
+python3 tools/official_client_capture/codex_upgrade.py deadline-extend apply \
+  --campaign-dir /绝对路径/campaign --preview /绝对路径/preview-摘要.json \
+  --approve-sha256 '<review_sha256>' --approved-by '<批准人>'
+~~~
+
+`--scope project` 延长项目预算；`--scope stage --phase VC-N` 延长当前阶段，三层逐份独立批准。
+`deadline-extension/v1` 冻结原有效截止、新截止、理由、批准人、批准时间及两账 head；head 过期或收据
+不完整即拒绝。原项目计划、总计划、批次中的 `original_deadline_at_utc` 均保持原字节，后续批次附带批准收据。
+所有执行期读取统一使用 `effective_deadlines(campaign_dir)`；原始字段仍用于历史身份一致性校验。
+
+批准收据先只写一次，再追加项目和 Campaign 的 `deadline_extended`。两账间进程死亡时保持关闭，重派
+原 `apply` 只补缺失事件，不重复入账；项目层的未完成事务同时阻止其他 Campaign 放行。延期后恢复暂停前
+状态，派发仍走既有 admission、根因／请求上限、环境收据和证据边界复验，不自动启动任务。
+只有明确执行 `campaign-abandon --campaign-dir … --approved-by … --reason …` 才因预算放弃产生
+`campaign_terminal(operator_abandoned)`；其它完整性或请求／根因上限的永久停线规则仍然有效。
+新预算控制事件写入后，旧工具无法理解这些事件，回退必须先只读验证兼容性；不兼容时保持暂停并前进修复。
 
 **统一计量单位与账务状态。** 官方请求只由 `live-request-provenance/v2` 逐请求核算：计量单位是 HTTP
 POST 模型端点或 client 方向 WebSocket `response.create`；身份键为 producer run ID、来源类别与原生记录
@@ -2849,8 +2877,8 @@ VC-5／VC-6 的前序为同 revision 的上一阶段；账本 `completed_phases`
 ctime 漂移；ctime 无法回写、manifest 只写一次，该 attempt 不可恢复，只能停线、修复后重建 Campaign）。
 
 候选级阶段的父动作失败按三分支收口：可恢复类（环境前提、零请求后处理、父启动失败）保持
-`recovery_required` 不变；命中永久条件（身份／策略漂移、环境污染、恢复失败、deadline、请求预算、根因
-上限、证据完整性，或账本已 `stop_required`／总账 blocked／账务未决／绝对截止已到／根因已达上限）走
+`recovery_required` 不变；预算到期按 R8 暂停；命中永久条件（身份／策略漂移、环境污染、恢复失败、请求预算、根因
+上限、证据完整性，或账本已 `stop_required`／总账 blocked／账务未决／根因已达上限）走
 现有停线合同；其余写 `stage_abandoned`＋`candidate_review_required`（不写 `stop_the_line`），账本进入
 只读等待：禁止派发与新 attempt，只允许对账、候选作废、`stage_abandoned` 与 `stop_the_line`。对账按
 reservation 分流：父 run 期间为该候选发布过 reservation 的只认 `reconcile-attempt`，否则只认
@@ -2878,11 +2906,11 @@ outbox COMMIT 副本）进入 `revision_required`，只允许幂等重复的 `ca
 `same_root_cause_retry_limit` 即在第二次 `apply` 的二次判定中永久停线；`campaign_status` 以
 `candidate_revisions` 列出各 revision 的候选与状态（`active`／`invalidated`／`superseded`／`pending`／`opening`）。
 
-Campaign 账本自 0.154.0 起可在 `create` 时以 `--project-ledger-dir` 绑定项目总账：绑定后总预算上限是账本开始到总账
-绝对截止的整分钟数，阶段预算由 Campaign 计划在总预算内以 `--stage-budget-minutes VC-N=分钟` 规定；未绑定的账本沿用
+Campaign 账本自 0.154.0 起可在 `create` 时以 `--project-ledger-dir` 绑定项目总账：总预算上限按账本开始时间到项目有效截止的整分钟数计算，
+只采用账本创建时已批准的项目延期。阶段预算由 Campaign 计划在总预算内以 `--stage-budget-minutes VC-N=分钟` 规定；未绑定的账本沿用
 总 360 分钟与各阶段默认上限。VC-2 起的人工核对（分类草案、联合摘要、比较结果）发生在批次之间，阶段之间账本
 `active_phase` 为空、不计阶段墙钟，因此阶段预算按含人工核对的实际节奏设置，不得为同一工作对象新建账本重置计时
-（框架 §5.3.5：数值由客户端指南或已批准的 Campaign 计划规定，先到即停线）。项目总账的消费者门禁除
+（框架 §5.3.5：数值由客户端指南或已批准的 Campaign 计划规定，到期先暂停）。项目总账的消费者门禁除
 `plan`、`reuse-official-evidence`、`campaign-run`、`resume`、official seal、`compare`、`accept` 外，还包括候选
 `capture-candidate seal` 与 `canonical-advance`（其 seal／compare／accept 步骤映射到同名消费者，VC-6 生产步骤按
 `canonical-advance` 本身准入），不得成为绕开门禁的旁路。
@@ -2918,14 +2946,15 @@ attempt（run 期间已产生 reservation 时拒绝并指向 attempt 入口）�
 4. 锁内重放总账，得到根因计数、累计请求、剩余预算与 blocked。
 5. 判定：总账 blocked 或本次账务 `unresolved` → 永久停线；身份不变（当前有效 wire 身份与
    `policy_sha256` 相等）、环境已恢复或可恢复（无污染记录、无 restoration_error）、Campaign 账本仍
-   active、Campaign 与项目 deadline 未到、剩余请求预算大于 0、该根因累计未达上限 → 可恢复；否则
-   永久停线，`terminal_reason` 按首个命中的条件取值。
+   合法可恢复、剩余请求预算大于 0、该根因累计未达上限时：三层有效截止任一到期 → `decision=paused`；
+   三层均未到期 → 可恢复。完整性、账务和根因等永久条件优先，`terminal_reason` 按首个永久条件取值。
 6. 可恢复：supervisor-run 在 Campaign 账本追加 `receipt_passed` 绑定账本内收据副本，phase 保持
    active，可重新派发同一批次；attempt 生成零请求 `recovery-preview/v1`（冻结
    `complete／failed／indeterminate／pending` 四类闭集、`reuse／execute` 集合、按 provenance 逐 Job 给出
    的预计新增请求数、`reservation_exists=false`、`live_request_count=0`、`scanned_bytes=0`），操作员以
    `reconcile-attempt --approve-recovery-sha256 <review_sha256>` 批准后才能
-   `resume --rerun-failed --recovery-preview <path>`。永久停线：账本 `stage_abandoned` 与
+   `resume --rerun-failed --recovery-preview <path>`。预算暂停：账本 `deadline_paused` 与项目 `campaign_paused`，
+   保留阶段、checkpoint 和请求计数，批准延期后重新对账。永久停线：账本 `stage_abandoned` 与
    `stop_the_line`（绑定账本内收据副本），再写 `campaign_terminal` batch 并推入总账。
 
 来源 attempt 没有 after 探针或环境未恢复时，`complete` Job 也不复用，恢复预览的 execute 为全部计划
@@ -3205,9 +3234,10 @@ python3 tools/official_client_capture/codex_upgrade.py compile-and-run-vc-batch 
 原子入口从取得 `.campaign-run.lock` 到父 run 取得执行权始终持有同一把锁，只接受规范直接前序 checkpoint
 （候选级阶段按当前 revision 解析：VC-4 前序是 Campaign 级 VC-3，VC-5／VC-6 前序是同 revision 的上一阶段，
 r≥2 时 `--predecessor-checkpoint` 指向 `control/vc/revisions/r<N>/vc-{4,5}-checkpoint.json`），
-且本阶段在当前 revision 尚未存在 checkpoint；不允许跳号、延长 deadline、重编已封存批次或由 `campaign-run`
+且本阶段在当前 revision 尚未存在 checkpoint；不允许跳号、无批准延期、重编已封存批次或由 `campaign-run`
 内部调用。该入口不创建外层 `CampaignLease`，也不接受第二个相对 `--max-wall-seconds`；唯一监督器是它立即
-启动的父 `campaign-run`，唯一墙钟边界是 Campaign plan 已冻结的原始绝对 deadline。
+启动的父 `campaign-run`。父时间锚使用批准后的 Campaign 总截止；动作执行和 watchdog 同时受项目、Campaign、
+阶段三层中最早截止约束。阶段在 COMMIT 时启动后，watchdog 继续收紧边界，不改写父 run 时间锚。
 入口先扫描并对账本序号的孤儿（无父 run 的 staging 中止、`prepared`／`committed` 后 owner 丢失的父 run），
 再按“批次 staging／WAL 与唯一提交点”编译、提交并启动父 run。候选级阶段（VC-4～VC-6）派发前还要求存在 active
 的候选 revision（新 Campaign 先 `revision-open --initial`）。动作返回

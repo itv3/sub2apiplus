@@ -631,7 +631,7 @@ class CodexUpgradeVCArtifactsTests(unittest.TestCase):
         summary = ledger_schema["properties"]["summary"]["properties"]
         self.assertEqual(
             summary["status"]["enum"],
-            ["active", "recovery_required", "candidate_review_required", "revision_required", "stop_required", "stopped", "complete"],
+            ["active", "recovery_required", "candidate_review_required", "stage_review_required", "revision_required", "stop_required", "stopped", "complete", "deadline_paused", "abandoned"],
         )
         for field in ("current_revision", "revision_phase_state", "campaign_completed_phases"):
             self.assertIn(field, summary)

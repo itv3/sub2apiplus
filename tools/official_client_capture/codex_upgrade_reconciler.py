@@ -22,12 +22,13 @@
    ``attempt_failed`` 事件 SHA；写 ``COMMIT``。
 3. ``reconcile-project-ledger`` 把整个 batch 推成一个项目事件。
 4. 锁内重放总账，得到根因计数、累计请求、剩余预算、blocked。
-5. 判定：总账 blocked 永久停线；身份不变、环境已恢复或可恢复、Campaign deadline 与
-   总账剩余大于 0、根因累计未达上限则可恢复；否则永久停线。
+5. 判定：总账 blocked、完整性异常和重试／请求上限仍永久停线；三层时间预算到期
+   只暂停，等批准延期；身份与环境满足既有规则且预算有效时可恢复。
 6. 可恢复：supervisor-run 追加 ``receipt_passed`` 绑定收据；attempt 生成零请求
    ``recovery-preview/v1``，操作员 ``--approve-recovery-sha256`` 后才能
    ``resume --rerun-failed --recovery-preview``。永久停线：``stage_abandoned`` 与
-   ``stop_the_line``，再写 ``campaign_terminal`` batch 并推入总账。
+   ``stop_the_line``，再写 ``campaign_terminal`` batch 并推入总账。预算暂停只追加
+   ``deadline_paused``／``campaign_paused``，保留阶段和恢复状态。
 
 R4 的 ``stage_review_required`` 先完成同样的账务判定，再核验动作幂等合同；无法
 证明的半成品继续只读等待，不能因账务可恢复就重派。可证明时单独写 stage-replay
@@ -70,6 +71,7 @@ APPROVAL_RE = re.compile(r"^recovery-approval-(\d{2})\.json$")
 COMPONENT = "reconciler"
 DECISION_RECOVERABLE = "recoverable"
 DECISION_STOP = "permanent_stop"
+DECISION_PAUSED = "paused"
 # 改造 4：父 run 取得执行权之前的失败分类（无动作诊断，按 state／stop reason 判定）。
 PARENT_PREPARE_ABANDONED_CLASS = "parent-prepare-abandoned"
 PARENT_START_FAILED_CLASS = supervisor.PARENT_START_FAILED_REASON
@@ -762,6 +764,7 @@ def _decide(
     current = _timestamp(now, "now")
     reasons: list[str] = []
     terminal_reason: str | None = None
+    deadline_paused = False
 
     def stop(reason: str, note: str) -> None:
         nonlocal terminal_reason
@@ -780,6 +783,8 @@ def _decide(
     if environment_status == "contaminated":
         stop("environment_contaminated", "环境恢复失败或前后环境身份不连续")
     ledger_status = ledger.get("status")
+    if ledger_status == "abandoned":
+        raise ReconcilerError("Campaign 已显式放弃，不再生成恢复批准；两账未闭合时重跑原 campaign-abandon")
     # 已经写入 stop_the_line 的旧 Campaign 不能被后续工具或策略身份变化改写终态。
     # 身份漂移仍加入 reasons，供审计判断当前工具为何不能恢复旧 attempt。
     if ledger_status == "stopped":
@@ -787,13 +792,18 @@ def _decide(
     if not identity.get("unchanged"):
         stop("identity_changed", "当前有效 wire 身份或策略摘要已变化")
     if ledger_status == "stop_required":
-        stop("deadline_wall_clock", "Campaign 账本已要求停线，禁止继续执行 Job")
+        stop("root_cause_limit", "Campaign 账本重试上限已要求停线，禁止继续执行 Job")
+    elif ledger_status == "deadline_paused":
+        deadline_paused = True
+        reasons.append("Campaign 计时预算已暂停")
     elif ledger_status == "complete":
         stop("prior_upgrade_complete", "Campaign 账本此前已完成，禁止再对账旧 attempt")
     if campaign_deadline_at_utc is not None and current >= _timestamp(campaign_deadline_at_utc, "Campaign deadline"):
-        stop("deadline_wall_clock", "Campaign 总计划 deadline 已到")
-    if current >= _timestamp(plan["absolute_deadline_utc"], "absolute_deadline_utc"):
-        stop("deadline_wall_clock", "项目绝对截止时间已到")
+        deadline_paused = True
+        reasons.append("Campaign 总预算有效截止已到")
+    if current >= _timestamp(head.get("effective_absolute_deadline_utc", plan["absolute_deadline_utc"]), "absolute_deadline_utc"):
+        deadline_paused = True
+        reasons.append("项目绝对有效截止已到")
     remaining = head.get("remaining_live_requests")
     if remaining is not None and int(remaining) <= 0:
         stop("deadline_live_requests", "项目请求预算已耗尽")
@@ -806,7 +816,7 @@ def _decide(
     )
     if at_limit:
         stop("root_cause_limit", f"根因 {at_limit} 累计失败已达上限")
-    decision = DECISION_STOP if terminal_reason is not None else DECISION_RECOVERABLE
+    decision = DECISION_STOP if terminal_reason is not None else DECISION_PAUSED if deadline_paused else DECISION_RECOVERABLE
     root_cause_counts = {
         cause_id: int(
             dict(head.get("root_cause_counts", {})).get(cause_id, 0)
@@ -1148,6 +1158,7 @@ def _attempt_deadline_expired(
     plan: Mapping[str, Any],
     campaign_deadline_at_utc: str | None,
     now: str,
+    project_ledger_root: Path | None = None,
 ) -> bool:
     """只用 attempt 当时的时间或 timeout 收据识别根因，不能从 stopped 倒推。
 
@@ -1174,7 +1185,8 @@ def _attempt_deadline_expired(
         campaign_deadline_at_utc,
         ledger.get("total_deadline_at_utc"),
         ledger.get("stage_deadline_at_utc"),
-        plan.get("absolute_deadline_utc"),
+        (project_ledger.effective_project_deadline(project_ledger_root, as_of=reference)
+         if project_ledger_root is not None else plan.get("absolute_deadline_utc")),
     ]
     return any(
         isinstance(value, str) and reference >= _timestamp(value, "deadline")
@@ -1883,6 +1895,7 @@ def reconcile_attempt(
             plan=plan,
             campaign_deadline_at_utc=campaign_deadline,
             now=observed,
+            project_ledger_root=project_root,
         ),
         request_status=request_part["status"],
         jobs=jobs,
@@ -1986,7 +1999,7 @@ def reconcile_attempt(
             segment_state = timing_ledger.inspect_ledger(ledger_dir, now=observed).get("attempt_recoveries", {}).get(
                 f"{attempt_id}:{recovery_revision}", {}
             )
-            if segment_state.get("status") == "active" and ledger["status"] in {"active", "recovery_required"}:
+            if segment_state.get("status") == "active" and ledger["status"] in {"active", "recovery_required", "deadline_paused"}:
                 ledger_events.append(
                     _append_ledger_event(
                         ledger_dir,
@@ -2004,7 +2017,7 @@ def reconcile_attempt(
                 ledger_note = f"skipped:recovery_segment_{segment_state.get('status') or 'unknown'}"
         elif ledger["status"] == "active" and ledger.get("active_phase") is None:
             ledger_note = "skipped:ledger_active_without_phase"
-        elif ledger["status"] in {"active", "recovery_required", "stage_review_required"}:
+        elif ledger["status"] in {"active", "recovery_required", "stage_review_required"} or (ledger["status"] == "deadline_paused" and attempt_id in active_ids):
             if attempt_id not in active_ids:
                 ledger_events.append(
                     _append_ledger_event(
@@ -2168,6 +2181,11 @@ def reconcile_attempt(
                 campaign_dir, attempt_id, approve_sha256=approve_recovery_sha256, recovery_revision=recovery_revision
             )
             result["next_command"] = f"{resume_command} --recovery-preview {result['recovery_preview_path']}"
+    elif decision["decision"] == DECISION_PAUSED:
+        if approve_recovery_sha256 is not None:
+            raise ReconcilerError("预算暂停期间不接受恢复批准；必须先批准延期")
+        result["deadline_pause"] = project_ledger.pause_campaign_deadline(campaign_dir, now=_timestamp(observed, "now"))
+        result["next_command"] = "deadline-extend preview/apply；批准延期后从原对账 checkpoint 继续"
     else:
         if approve_recovery_sha256 is not None:
             raise ReconcilerError("判定为永久停线，不接受恢复批准")
@@ -3048,6 +3066,9 @@ def reconcile_supervisor_run(
             )
         else:
             result["next_command"] = "phase 保持 active：以 compile-and-run-vc-batch 重新派发同一批次"
+    elif decision["decision"] == DECISION_PAUSED:
+        result["deadline_pause"] = project_ledger.pause_campaign_deadline(campaign_dir, now=_timestamp(observed, "now"))
+        result["next_command"] = "deadline-extend preview/apply；批准延期后从原对账 checkpoint 继续"
     else:
         with codex_upgrade._campaign_lock(campaign_dir):
             stop = _permanent_stop(
@@ -3210,6 +3231,9 @@ def reconcile_staging_abort(
     }
     if decision["decision"] == DECISION_RECOVERABLE:
         result["next_command"] = "序号未占：以 compile-and-run-vc-batch 同序号重新 prepare 新 staging attempt"
+    elif decision["decision"] == DECISION_PAUSED:
+        result["deadline_pause"] = project_ledger.pause_campaign_deadline(campaign_dir, now=_timestamp(observed, "now"))
+        result["next_command"] = "deadline-extend preview/apply；批准延期后从原 staging checkpoint 继续"
     else:
         with codex_upgrade._campaign_lock(campaign_dir):
             stop = _permanent_stop(

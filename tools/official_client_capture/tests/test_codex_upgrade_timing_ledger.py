@@ -307,13 +307,13 @@ class TimingLedgerTests(unittest.TestCase):
             with self.assertRaisesRegex(ledger.TimingLedgerError, "生成器身份漂移"):
                 ledger.inspect_ledger(root, now=self._at(1))
 
-    def test_stage_deadline_requires_stop_the_line(self) -> None:
+    def test_stage_deadline_pauses_without_automatic_terminal(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "UpgradeTimingLedger"
             self._create(root)
             status = ledger.inspect_ledger(root, now=self._at(45))
-            self.assertEqual(status["status"], "stop_required")
-            with self.assertRaisesRegex(ledger.TimingLedgerError, "要求停线"):
+            self.assertEqual(status["status"], "deadline_paused")
+            with self.assertRaisesRegex(ledger.TimingLedgerError, "预算暂停"):
                 ledger.append_event(
                     root,
                     event_id="illegal-work",
@@ -321,15 +321,10 @@ class TimingLedgerTests(unittest.TestCase):
                     event_type="receipt_passed",
                     recorded_at_utc=self._at(46),
                 )
-            stopped = ledger.append_event(
-                root,
-                event_id="vc0-timeout-stop",
-                phase="VC-0",
-                event_type="stop_the_line",
-                next_action="拆分工具修复并重新执行干净 P0",
-                recorded_at_utc=self._at(46),
-            )
-            self.assertEqual(stopped["status"], "stopped")
+            with self.assertRaisesRegex(ledger.TimingLedgerError, "显式放弃"):
+                ledger.append_event(root, event_id="vc0-timeout-stop", phase="VC-0", event_type="stop_the_line",
+                    next_action="旧自动停线路径必须拒绝", recorded_at_utc=self._at(46))
+            self.assertEqual(len(ledger._load_events(root)), 1)
 
     def test_stage_abandoned_returns_to_vc0_without_resetting_total_budget(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

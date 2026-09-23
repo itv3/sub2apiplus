@@ -18833,8 +18833,8 @@ class CodexUpgradeTest(unittest.TestCase):
             self.assertEqual(len(result["root_causes"]), 1)
             self.assertEqual(attempt_path.read_bytes(), before)
 
-    def test_late_reconcile_stops_but_does_not_relabel_a15_as_deadline(self) -> None:
-        """逾期对账仍永久停线，但 attempt 根因固定在其完成时的 A15。"""
+    def test_late_reconcile_pauses_but_does_not_relabel_a15_as_deadline(self) -> None:
+        """逾期对账只暂停，attempt 根因仍固定在其完成时的 A15。"""
 
         from tools.official_client_capture import codex_upgrade_reconciler as reconciler
 
@@ -18853,13 +18853,13 @@ class CodexUpgradeTest(unittest.TestCase):
             result = reconciler.reconcile_attempt(
                 fixture["campaign_dir"], attempt_id, now=later
             )
-            self.assertEqual(result["status"], "permanent_stop")
+            self.assertEqual(result["status"], "paused")
             self.assertEqual(
                 result["root_cause"]["stable_error_code"],
                 "campaign-run.action-failed",
             )
             self.assertEqual(result["root_cause"]["root_cause_id"], a15_cause_id)
-            self.assertEqual(result["decision"]["terminal_reason"], "deadline_wall_clock")
+            self.assertIsNone(result["decision"]["terminal_reason"])
             cause_ids = [item["root_cause_id"] for item in result["root_causes"]]
             self.assertEqual(cause_ids, [a15_cause_id])
             head = codex_upgrade_project_ledger.replay_head(fixture["ledger"])
@@ -19143,8 +19143,8 @@ class CodexUpgradeTest(unittest.TestCase):
             with self.assertRaisesRegex(codex_upgrade_project_ledger.ProjectLedgerError, "blocked|已终态"):
                 codex_upgrade_project_ledger.assert_campaign_admitted(campaign_dir, command="seal", require=True)
 
-    def test_b0_reconcile_attempt_deadline_expired_fails_attempt_before_abandoning_stage(self) -> None:
-        """deadline 到期时账本 stop_required：先 metadata-only attempt_failed，再 stage_abandoned、stop_the_line。"""
+    def test_b0_reconcile_attempt_deadline_expired_records_failure_and_pauses(self) -> None:
+        """deadline 到期仍先 metadata-only 入账，再暂停；不废弃阶段、不自动终态。"""
 
         from tools.official_client_capture import codex_upgrade_reconciler as reconciler
 
@@ -19167,18 +19167,21 @@ class CodexUpgradeTest(unittest.TestCase):
                 datetime.fromisoformat(deadline.replace("Z", "+00:00")) + timedelta(hours=1)
             ).isoformat(timespec="milliseconds").replace("+00:00", "Z")
             result = reconciler.reconcile_attempt(campaign_dir, attempt_id, now=later)
-            self.assertEqual(result["status"], "permanent_stop")
-            self.assertEqual(result["decision"]["terminal_reason"], "deadline_wall_clock")
+            self.assertEqual(result["status"], "paused")
+            self.assertIsNone(result["decision"]["terminal_reason"])
             self.assertEqual(result["root_cause"]["stable_error_code"], "attempt.deadline-expired")
             types = [item[0] for item in self._b0_ledger_events(ledger_dir)]
-            self.assertEqual(types[-3:], ["attempt_failed", "stage_abandoned", "stop_the_line"])
+            self.assertEqual(types[-2:], ["attempt_failed", "deadline_paused"])
+            self.assertNotIn("stage_abandoned", types)
+            self.assertNotIn("stop_the_line", types)
+            self.assertFalse(codex_upgrade_project_ledger.replay_head(fixture["ledger"])["terminal_campaigns"])
             failed_event = next(
                 event for event, _raw in codex_upgrade_timing_ledger._load_events(ledger_dir)
                 if event["event_id"] == f"reconcile-attempt-failed-{attempt_id}"
             )
             self.assertEqual(failed_event["receipts"], [])
             self.assertEqual(failed_event["live_request_count"], 0)
-            self.assertEqual(codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)["status"], "stopped")
+            self.assertEqual(codex_upgrade_timing_ledger.inspect_ledger(ledger_dir, now=later)["status"], "deadline_paused")
 
     def test_b0_reconcile_attempt_precise_requests_enter_ledger_once(self) -> None:
         """有权威来源的证据按身份键精确入账；同一证据两次对账只计一次。"""

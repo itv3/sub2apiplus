@@ -4952,6 +4952,8 @@ def _mutable_command_coordinates(
         "invalidate-candidate",
         # 改造 5：评估失败的分类与评估基线状态机同样自持 Campaign 排他锁与账本锁。
         "evaluation-recover",
+        "deadline-extend",
+        "campaign-abandon",
         # R6：零请求导入／续作自持项目 admission 锁及 Campaign 锁，不启动执行监督器。
         "reuse-official-evidence",
         # seal 预演在私有 mount namespace 的 OverlayFS 副本上执行，正式目录只读；
@@ -9760,6 +9762,21 @@ def _build_parser() -> argparse.ArgumentParser:
     add_campaign_reference(status)
     status.add_argument("--candidate-id")
 
+    deadline_extend = subparsers.add_parser("deadline-extend", help="预算延期：先冻结预览，再按批准摘要写入两本账")
+    deadline_extend.add_argument("deadline_action", choices=("preview", "apply"))
+    add_campaign_reference(deadline_extend)
+    deadline_extend.add_argument("--scope", choices=("project", "campaign", "stage"))
+    deadline_extend.add_argument("--phase", choices=codex_upgrade_vc_artifacts.VC_PHASES)
+    deadline_extend.add_argument("--new-deadline-at-utc")
+    deadline_extend.add_argument("--reason")
+    deadline_extend.add_argument("--preview", type=Path)
+    deadline_extend.add_argument("--approve-sha256")
+    deadline_extend.add_argument("--approved-by")
+    campaign_abandon = subparsers.add_parser("campaign-abandon", help="按明确批准显式放弃 Campaign，保留全部历史证据")
+    add_campaign_reference(campaign_abandon)
+    campaign_abandon.add_argument("--approved-by", required=True)
+    campaign_abandon.add_argument("--reason", required=True)
+
     wire_intent = subparsers.add_parser(
         "wire-transition-intent", help="签发两阶段 wire transition 的 intent（先预览再批准）"
     )
@@ -14287,7 +14304,7 @@ def compile_vc_interrupted_recovery_batch(arguments: argparse.Namespace) -> dict
         or ledger.get("target_version") != manifest.get("target_version")
         or ledger.get("baseline_version") != manifest.get("baseline_version")
         or ledger.get("campaign_purpose") != manifest.get("campaign_purpose")
-        or ledger.get("total_deadline_at_utc") != plan["original_deadline_at_utc"]
+        or ledger.get("original_total_deadline_at_utc", ledger.get("total_deadline_at_utc")) != plan["original_deadline_at_utc"]
         or int(ledger.get("total_live_request_count", 0)) < 1
     ):
         raise ConfigurationError("中断恢复时间账本身份、状态、deadline 或请求计数非法。")
@@ -14324,7 +14341,10 @@ def compile_vc_interrupted_recovery_batch(arguments: argparse.Namespace) -> dict
         reuse_job_ids=source["reuse_job_ids"],
     )
     now = datetime.now(timezone.utc)
-    deadline = _rfc3339_datetime(plan["original_deadline_at_utc"], "Campaign 总截止")
+    deadlines = codex_upgrade_vc_artifacts.effective_deadlines(campaign_dir)
+    if deadlines["paused_scopes"]:
+        raise ConfigurationError("预算暂停期间不得编译恢复批次，必须先批准延期")
+    deadline = _rfc3339_datetime(deadlines["total_deadline_at_utc"], "Campaign 有效总截止")
     if now >= deadline:
         raise ConfigurationError("Campaign 原始绝对 deadline 已到期。")
     must_start = min(now + timedelta(seconds=120), deadline)
@@ -14339,6 +14359,7 @@ def compile_vc_interrupted_recovery_batch(arguments: argparse.Namespace) -> dict
             tool_transition=tool_transition,
             compiled_at_utc=now.isoformat(timespec="seconds"),
             must_start_by_utc=must_start.isoformat(timespec="seconds"),
+            deadline_extension=deadlines["campaign_extension"],
         )
     except codex_upgrade_vc_artifacts.VCArtifactError as error:
         raise ConfigurationError(str(error)) from error
@@ -14387,6 +14408,7 @@ def compile_vc_interrupted_recovery_batch(arguments: argparse.Namespace) -> dict
             actions=[action],
             compiled_at_utc=contract["compiled_at_utc"],
             must_start_by_utc=contract["must_start_by_utc"],
+            deadline_extension=deadlines["campaign_extension"],
         )
     except codex_upgrade_vc_artifacts.VCArtifactError as error:
         raise ConfigurationError(str(error)) from error
@@ -16683,9 +16705,10 @@ def compile_vc_batch(
             f"{existing_sequences}，请求序号={sequence}。"
         )
     now = datetime.now(timezone.utc)
-    deadline = datetime.fromisoformat(
-        str(plan["original_deadline_at_utc"]).replace("Z", "+00:00")
-    )
+    deadlines = codex_upgrade_vc_artifacts.effective_deadlines(campaign_dir)
+    if deadlines["paused_scopes"]:
+        raise ConfigurationError("预算暂停期间不得编译新批次，必须先批准延期")
+    deadline = datetime.fromisoformat(str(deadlines["total_deadline_at_utc"]).replace("Z", "+00:00"))
     if deadline <= now:
         raise ConfigurationError("Campaign 原始绝对 deadline 已过期，禁止生成新批次。")
     must_start = min(now + timedelta(seconds=60), deadline)
@@ -16710,6 +16733,7 @@ def compile_vc_batch(
             evaluation_baseline=evaluation_baseline,
             baseline_commit_sha256=baseline_commit_sha256,
             evaluator_digests=evaluator_digests,
+            deadline_extension=deadlines["campaign_extension"],
         )
     except codex_upgrade_vc_artifacts.VCArtifactError as error:
         raise ConfigurationError(str(error)) from error
@@ -17348,7 +17372,7 @@ def _compile_and_run_vc_batch_legacy(
             elif batch is not None:
                 now = datetime.now(timezone.utc)
                 deadline = datetime.fromisoformat(
-                    str(batch["original_deadline_at_utc"]).replace("Z", "+00:00")
+                    str(codex_upgrade_vc_artifacts.effective_deadlines(campaign_dir)["total_deadline_at_utc"]).replace("Z", "+00:00")
                 )
                 start_by = datetime.fromisoformat(
                     str(batch["must_start_by_utc"]).replace("Z", "+00:00")
@@ -20569,13 +20593,45 @@ def _project_ledger_required(campaign_mode: Any, target_version: Any) -> bool:
 
 
 def _campaign_plan_deadline(campaign_dir: Path) -> str | None:
-    """读取 Campaign 总计划冻结的原始 deadline；没有 VC 制品的 Campaign 返回 None。"""
+    """读取批准后的 Campaign 有效截止；原始总计划及各批次中的冻结字段保持不变。"""
 
     path = campaign_dir / "control" / "vc" / "campaign-plan.json"
     if path.is_symlink() or not path.is_file():
         return None
-    value = _read_json(path, "Campaign 总计划").get("original_deadline_at_utc")
-    return value if isinstance(value, str) else None
+    return codex_upgrade_vc_artifacts.effective_deadlines(campaign_dir)["total_deadline_at_utc"]
+
+
+def _deadline_extend_command(arguments: argparse.Namespace) -> dict[str, Any]:
+    """预算控制不申请执行租约；批准仅解除对应一层预算，不替代恢复准入。"""
+    if arguments.deadline_action == "preview":
+        if not arguments.scope or not arguments.new_deadline_at_utc or not arguments.reason:
+            raise ConfigurationError("延期预览必须提供 scope、new-deadline-at-utc 和 reason")
+        return codex_upgrade_project_ledger.preview_deadline_extension(arguments.campaign_dir,
+            scope=arguments.scope, phase=arguments.phase, new_deadline_at_utc=arguments.new_deadline_at_utc,
+            reason=arguments.reason)
+    if not arguments.preview or not arguments.approve_sha256 or not arguments.approved_by:
+        raise ConfigurationError("延期 apply 必须绑定预览、批准摘要与批准人")
+    return codex_upgrade_project_ledger.apply_deadline_extension(arguments.campaign_dir,
+        preview_path=arguments.preview, approve_sha256=arguments.approve_sha256, approved_by=arguments.approved_by)
+
+
+def _campaign_status_with_deadlines(campaign_dir: Path, candidate_id: str | None) -> dict[str, Any]:
+    """R8 状态命令的控制投影；保留旧证据读取函数的内容和摘要。"""
+    result = campaign_status(campaign_dir, candidate_id)
+    deadlines = codex_upgrade_vc_artifacts.effective_deadlines(campaign_dir)
+    result["effective_deadlines"] = deadlines
+    for field in ("paused_since_utc", "paused_hours", "review_reminder"):
+        result[field] = deadlines[field]
+    terminal = (result.get("project_ledger") or {}).get("campaign_terminal")
+    if deadlines["status_before_pause"] == "abandoned":
+        result["status"] = "abandoned"
+        result["next_command"] = "只读保留证据；显式放弃两账未闭合时重跑原 campaign-abandon"
+    elif (deadlines["paused_scopes"] and terminal is None
+            and deadlines["status_before_pause"] not in {"stopped", "stop_required", "complete", "abandoned"}):
+        result["status_before_pause"] = result["status"]
+        result["status"] = "deadline_paused"
+        result["next_command"] = "deadline-extend preview/apply；明确放弃时使用 campaign-abandon"
+    return result
 
 
 def _assert_project_ledger_consumer(command: str, arguments: argparse.Namespace) -> None:
@@ -48738,8 +48794,8 @@ def _canonical_time_anchor(
     来源按优先级：显式 ``--supervisor-run-dir``（campaign-run 下必须就是派发本
     命令的父 run）；campaign-run 父上下文（与 state.json 交叉验证 Campaign、
     phase、owner nonce 与 deadline）；都没有时只允许离线预览，deadline 取
-    Campaign 总计划冻结的 original_deadline_at_utc。有总计划的 Campaign 无论
-    来源如何，deadline 都必须与总计划一致。
+    Campaign 已批准的有效总截止。父 run 的时间锚必须与这个批准坐标一致；
+    运行中的三层最早截止另由监督器执行，原始总计划字段保持不变。
     """
 
     explicit = getattr(arguments, "supervisor_run_dir", None)
@@ -55183,6 +55239,8 @@ def _reject_unparented_formal_write(
         "invalidate-candidate",
         # 改造 5：评估失败分类与评估基线状态机同样是批次之间的控制面命令。
         "evaluation-recover",
+        "deadline-extend",
+        "campaign-abandon",
     }
     if command in direct_control_commands:
         if in_campaign_run:
@@ -56098,6 +56156,13 @@ def _main_without_campaign_lease(argv: list[str] | None = None) -> int:
         elif command == "evaluation-recover":
             result = evaluation_recover(arguments)
             return_code = 0 if result.get("status") in {"preview", "applied", "abandoned", "redirect"} else 3
+        elif command == "deadline-extend":
+            result = _deadline_extend_command(arguments)
+            return_code = 0
+        elif command == "campaign-abandon":
+            result = codex_upgrade_project_ledger.abandon_campaign(arguments.campaign_dir,
+                approved_by=arguments.approved_by, reason=arguments.reason)
+            return_code = 0
         elif command == "reconcile-attempt":
             result = _reconcile_attempt_command(arguments)
             return_code = 0 if result.get("status") in {"recoverable", "authorized"} else 3
@@ -56111,7 +56176,7 @@ def _main_without_campaign_lease(argv: list[str] | None = None) -> int:
             result = _account_sealed_candidate_command(arguments)
             return_code = 0
         elif command == "status":
-            result = campaign_status(arguments.campaign_dir, arguments.candidate_id)
+            result = _campaign_status_with_deadlines(arguments.campaign_dir, arguments.candidate_id)
             return_code = 0
         elif command == "resume":
             result, return_code = _resume_campaign(arguments)

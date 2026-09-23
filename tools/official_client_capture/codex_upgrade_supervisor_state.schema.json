@@ -168,6 +168,12 @@
         }
       }
     },
+    "budget_guard": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["campaign_dir"],
+      "properties": {"campaign_dir": {"type": "string", "pattern": "^/"}}
+    },
     "egress_guard": {
       "type": "object",
       "additionalProperties": false,

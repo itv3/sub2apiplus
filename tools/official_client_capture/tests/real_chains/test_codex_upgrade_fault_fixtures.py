@@ -211,13 +211,15 @@ class UpgradeFaultFixtureTests(unittest.TestCase):
             self.assertIsNone(summary["active_phase"])
             self.assertEqual(summary["completed_phases"], ["VC-0", "VC-1"])
 
-    def test_r8_expired_budget_currently_requires_stop(self):
+    def test_r8_expired_budget_pauses_without_terminal(self):
         helper = timing_tests.TimingLedgerTests()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "ledger"
             helper._create(root)
             summary = timing.inspect_ledger(root, now=helper._at(45))
-            self.assertEqual(summary["status"], "stop_required")
+            self.assertEqual(summary["status"], "deadline_paused")
+            self.assertEqual(summary["paused_scopes"], ["stage"])
+            self.assertEqual(len(timing._load_events(root)), 1)
 
     def test_r12_dead_child_exits_bounded_without_campaign_mutation(self):
         with tempfile.TemporaryDirectory() as directory:

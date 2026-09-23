@@ -3212,6 +3212,15 @@ def _monitor_impl(args: argparse.Namespace) -> int:
         now = time.time()
         now_monotonic_ns = time.monotonic_ns()
         try:
+            budget_deadline = _runtime_budget_deadline(state)
+            # UTC 截止映射到父 run 的单调时钟；新阶段只可收紧本 run 的
+            # 执行边界，不能因为系统时钟回拨或阶段结束重新获得预算。
+            deadline_monotonic_ns = min(deadline_monotonic_ns, started_monotonic_ns
+                + int((budget_deadline - started_epoch) * 1_000_000_000))
+        except (SupervisorError, ValueError, OSError) as error:
+            abort(f"budget-state-invalid-{type(error).__name__}", operation="supervisor:budget", now=now)
+            continue
+        try:
             _check_runtime_egress(run_dir, state, monitor=True)
         except RuntimeEgressPaused:
             _interrupt_egress_commands(run_dir, state, now)
@@ -3779,6 +3788,8 @@ class SupervisorClient:
         }
         if binding is not None:
             state["staging_binding"] = binding
+        if self.campaign_dir is not None and vc_artifacts.campaign_timing_ledger(self.campaign_dir) is not None:
+            state["budget_guard"] = {"campaign_dir": str(self.campaign_dir.resolve(strict=True))}
         egress_snapshot = None
         if self.campaign_dir is not None and arm64_environment.campaign_requires_runtime_egress(self.campaign_dir):
             egress_snapshot = arm64_environment.require_runtime_egress()
@@ -4175,6 +4186,10 @@ class SupervisorClient:
         remaining_wall = (
             self._deadline_monotonic_ns - time.monotonic_ns()
         ) / 1_000_000_000
+        budget_deadline_epoch = _runtime_budget_deadline(runtime_state)
+        budget_deadline_monotonic = int(runtime_state["started_monotonic_ns"]) / 1_000_000_000 + (
+            budget_deadline_epoch - float(runtime_state["started_at_epoch"]))
+        remaining_wall = min(remaining_wall, budget_deadline_monotonic - time.monotonic())
         terminal_drain = (
             min(DEFAULT_TERMINAL_DRAIN_SECONDS, cleanup_grace / 4.0)
             if cleanup_grace > 0
@@ -4202,7 +4217,7 @@ class SupervisorClient:
             )
         )
         process_environment = dict(env) if env is not None else None
-        execution_deadline_epoch = self.deadline_at_epoch - cleanup_grace
+        execution_deadline_epoch = min(self.deadline_at_epoch, budget_deadline_epoch) - cleanup_grace
         if cleanup_grace > 0:
             if process_environment is None:
                 process_environment = os.environ.copy()
@@ -4240,7 +4255,7 @@ class SupervisorClient:
         # 子命令重试而重新起算全局预算。batched Campaign 会把执行截止提前，
         # 到点先用 SIGUSR1 请求 Python worker 展开 finally；只有清理窗口耗尽
         # 才强杀进程组。原始 Campaign deadline 从未改变。
-        global_deadline = self._deadline_monotonic_ns / 1_000_000_000
+        global_deadline = min(self._deadline_monotonic_ns / 1_000_000_000, budget_deadline_monotonic)
         execution_deadline = min(
             started + timeout_seconds,
             global_deadline - cleanup_grace,
@@ -9104,12 +9119,31 @@ PERMANENT_ACTION_FAILURE_CLASSES = frozenset(
         "policy-drift",
         "environment-contaminated",
         "restoration-failed",
-        "deadline-expired",
         "request-budget-exhausted",
         "root-cause-limit",
         "evidence-integrity",
     }
 )
+
+
+def _runtime_budget_deadline(state: Mapping[str, Any]) -> float:
+    """三层最早截止约束执行；父 run 时间锚和原始清单不因阶段切换改写。"""
+    parent_deadline = _parse_epoch(state["deadline_at_epoch"], "deadline_at_epoch")
+    binding = state.get("budget_guard")
+    if binding is None:
+        return parent_deadline
+    if not isinstance(binding, Mapping) or set(binding) != {"campaign_dir"}:
+        raise SupervisorError("预算执行边界绑定非法")
+    campaign_dir = Path(binding["campaign_dir"])
+    if not campaign_dir.is_absolute() or campaign_dir.is_symlink():
+        raise SupervisorError("预算执行边界必须绑定可信 Campaign 路径")
+    try:
+        deadlines = vc_artifacts.effective_deadlines(campaign_dir)
+    except (vc_artifacts.VCArtifactError, project_ledger.ProjectLedgerError, timing_ledger.TimingLedgerError) as error:
+        raise SupervisorError(f"三层预算无法重放：{error}") from error
+    if "extension_pending" in deadlines["paused_scopes"]:
+        raise SupervisorError("延期双账事务尚未闭合，禁止执行")
+    return min(parent_deadline, datetime.fromisoformat(deadlines["execution_deadline_at_utc"].replace("Z", "+00:00")).timestamp())
 
 
 def _candidate_failure_hits_permanent_condition(
@@ -9118,8 +9152,7 @@ def _candidate_failure_hits_permanent_condition(
     *,
     failure_class: str,
 ) -> bool:
-    """改造 2 三分支的"永久条件"：总账 blocked／账务未决／绝对截止／预算／根因上限，
-    账本 deadline（stop_required），以及诊断给出的身份或环境类不可恢复分类。"""
+    """永久条件保留账务、请求预算、根因与完整性门禁；墙钟到期单独暂停。"""
 
     if failure_class in PERMANENT_ACTION_FAILURE_CLASSES:
         return True
@@ -9141,11 +9174,6 @@ def _candidate_failure_hits_permanent_condition(
         return True
     if head.get("root_causes_at_limit"):
         return True
-    absolute = plan.get("absolute_deadline_utc")
-    if isinstance(absolute, str):
-        expiry = datetime.fromisoformat(absolute.replace("Z", "+00:00"))
-        if datetime.now(timezone.utc) >= expiry:
-            return True
     return False
 
 
@@ -9330,6 +9358,13 @@ def _close_failed_campaign_timing_ledger(
         "resume-from-checkpoint：先执行 reconcile-supervisor-run／reconcile-attempt 对账，"
         "本失败分类不可自动恢复；完成请求与根因入账后永久停线。"
     )
+
+    budget_state = timing_ledger.inspect_ledger(ledger_dir)
+    deadlines = vc_artifacts.effective_deadlines(campaign_dir)
+    if deadlines["paused_scopes"] and not _candidate_failure_hits_permanent_condition(campaign_dir, budget_state, failure_class=failure_class):
+        paused = project_ledger.pause_campaign_deadline(campaign_dir)
+        return {"status": "passed", "ledger_status": "deadline_paused", "ledger_dir": str(ledger_dir),
+                "failure_class": failure_class, "next_action": "deadline-extend preview/apply", "deadline_pause": paused}
 
     with _timing_closeout_lock(ledger_dir):
         try:
@@ -9657,7 +9692,19 @@ def _commit_prepared_run(
     }
 
 
-def _campaign_run_locked(
+def _campaign_run_locked(args: argparse.Namespace, *, manifest: Mapping[str, Any], state_dir: Path,
+                         campaign_dir: Path | None = None, commit: Any | None = None,
+                         owner_nonce: str | None = None, staging_binding: Mapping[str, Any] | None = None) -> tuple[int, dict[str, Any]]:
+    """父动作队列运行期间禁止并发延期和显式放弃；进程退出自动释放执行锁。"""
+    arguments = dict(manifest=manifest, state_dir=state_dir, campaign_dir=campaign_dir,
+                     commit=commit, owner_nonce=owner_nonce, staging_binding=staging_binding)
+    if campaign_dir is None:
+        return _campaign_run_with_budget_lock(args, **arguments)
+    with project_ledger.deadline_control_scope(campaign_dir, executing=True):
+        return _campaign_run_with_budget_lock(args, **arguments)
+
+
+def _campaign_run_with_budget_lock(
     args: argparse.Namespace,
     *,
     manifest: Mapping[str, Any],
@@ -9726,9 +9773,12 @@ def _campaign_run_locked(
                 campaign_dir=campaign_dir,
                 staging_model=staging_model,
             )
-            deadline = datetime.fromisoformat(
-                str(manifest["original_deadline_at_utc"]).replace("Z", "+00:00")
-            ).timestamp()
+            deadlines = (vc_artifacts.effective_deadlines(campaign_dir,
+                original_deadline_at_utc=str(manifest["original_deadline_at_utc"])) if campaign_dir is not None else
+                {"paused_scopes": [], "total_deadline_at_utc": manifest["original_deadline_at_utc"]})
+            if deadlines["paused_scopes"]:
+                raise SupervisorError("预算已暂停，批准延期前不得派发")
+            deadline = datetime.fromisoformat(str(deadlines["total_deadline_at_utc"]).replace("Z", "+00:00")).timestamp()
             if deadline <= time.time():
                 raise SupervisorError(
                     "Campaign 原始绝对 deadline 已经过期，禁止重新计时。"

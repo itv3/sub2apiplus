@@ -22,6 +22,7 @@
     "contract_sha256"
   ],
   "properties": {
+    "deadline_extension": {"$ref": "https://sub2apiplus.local/schemas/deadline-extension-v1.json"},
     "schema_version": {"const": "codex-upgrade-interrupted-recovery-contract/v1"},
     "campaign_id": {"$ref": "#/$defs/safeId"},
     "campaign_plan_sha256": {"$ref": "#/$defs/sha256"},

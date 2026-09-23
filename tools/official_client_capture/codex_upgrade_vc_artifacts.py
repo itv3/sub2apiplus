@@ -11,8 +11,8 @@ import hashlib
 import json
 import re
 from collections.abc import Mapping, Sequence
-from datetime import datetime
-from pathlib import PurePosixPath
+from datetime import datetime, timezone
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 
@@ -284,6 +284,167 @@ def _self_digest(payload: Mapping[str, Any], field: str, label: str) -> None:
     unsigned.pop(field)
     if digest(unsigned) != recorded:
         raise VCArtifactError(f"{label}自摘要不一致")
+
+
+DEADLINE_EXTENSION_SCHEMA = "deadline-extension/v1"
+DEADLINE_EXTENSION_PREVIEW_SCHEMA = "deadline-extension-preview/v1"
+DEADLINE_PREVIEW_FIELDS = frozenset({
+    "schema_version", "campaign_id", "scope", "phase", "original_deadline_at_utc",
+    "new_deadline_at_utc", "reason", "project_ledger_path", "project_ledger_head", "campaign_ledger_head", "review_sha256",
+})
+
+
+def validate_deadline_extension(value: Any, *, preview: bool = False) -> dict[str, Any]:
+    """R8：延期只能携带明确批准、独立层级与两本账的冻结 head；原计划不参与重写。"""
+
+    required = set(DEADLINE_PREVIEW_FIELDS)
+    if not preview:
+        required.update({"approved_by", "approved_at_utc", "receipt_sha256"})
+    if not isinstance(value, Mapping) or set(value) != required:
+        raise VCArtifactError("延期收据字段不闭合，必须提供批准收据")
+    result = dict(value)
+    expected = DEADLINE_EXTENSION_PREVIEW_SCHEMA if preview else DEADLINE_EXTENSION_SCHEMA
+    if result["schema_version"] != expected or result["scope"] not in {"project", "campaign", "stage"}:
+        raise VCArtifactError("延期收据 schema 或预算层级非法")
+    _safe_id(result["campaign_id"], "延期 Campaign")
+    _absolute_path(result["project_ledger_path"], "延期项目总账")
+    if (result["scope"] == "stage" and result["phase"] not in VC_PHASES) or (
+        result["scope"] != "stage" and result["phase"] is not None
+    ):
+        raise VCArtifactError("只有阶段预算延期可以指定阶段")
+    before = _timestamp(result["original_deadline_at_utc"], "原有效截止")
+    after = _timestamp(result["new_deadline_at_utc"], "新截止")
+    if datetime.fromisoformat(after.replace("Z", "+00:00")) <= datetime.fromisoformat(before.replace("Z", "+00:00")):
+        raise VCArtifactError("延期的新截止必须晚于该层原有效截止")
+    if not isinstance(result["reason"], str) or not result["reason"].strip():
+        raise VCArtifactError("延期理由不得为空")
+    for field in ("project_ledger_head", "campaign_ledger_head"):
+        head = result[field]
+        if not isinstance(head, Mapping) or set(head) != {"sequence", "sha256"}:
+            raise VCArtifactError("延期必须绑定完整账本 head")
+        if not isinstance(head["sequence"], int) or isinstance(head["sequence"], bool) or head["sequence"] < 0:
+            raise VCArtifactError("延期账本序号非法")
+        _sha256(head["sha256"], field)
+    review = {key: result[key] for key in DEADLINE_PREVIEW_FIELDS if key != "review_sha256"}
+    review["schema_version"] = DEADLINE_EXTENSION_PREVIEW_SCHEMA
+    if result["review_sha256"] != digest(review):
+        raise VCArtifactError("延期预览摘要不一致")
+    if not preview:
+        if not isinstance(result["approved_by"], str) or not result["approved_by"].strip():
+            raise VCArtifactError("延期必须指定批准人")
+        approved = _timestamp(result["approved_at_utc"], "延期批准时间")
+        if datetime.fromisoformat(approved.replace("Z", "+00:00")) >= datetime.fromisoformat(after.replace("Z", "+00:00")):
+            raise VCArtifactError("延期批准时新截止已经到期")
+        _self_digest(result, "receipt_sha256", "延期收据")
+    return result
+
+
+def campaign_timing_ledger(campaign_dir: Path) -> Path | None:
+    """从既有 Campaign 控制绑定定位计时账本；缺失旧绑定不凭空创建账本。"""
+
+    path = Path(campaign_dir) / "campaign.json"
+    if not path.exists():
+        return None
+    if path.is_symlink():
+        raise VCArtifactError("Campaign 清单不得为软链接")
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    controls = manifest.get("control_receipts", {})
+    timing = controls.get("upgrade_timing", {})
+    value = timing.get("ledger_dir")
+    if value is None:
+        return None
+    root = Path(value)
+    if not root.is_absolute() or root.is_symlink() or not root.is_dir():
+        raise VCArtifactError("Campaign 计时账本路径不可信")
+    plan = root / "ledger.json"
+    expected = timing.get("ledger_plan_sha256")
+    if plan.is_symlink() or not plan.is_file() or (expected is not None and hashlib.sha256(plan.read_bytes()).hexdigest() != expected):
+        raise VCArtifactError("Campaign 计时计划绑定漂移")
+    return root
+
+
+def effective_deadlines(
+    campaign_dir: Path, *, original_deadline_at_utc: str | None = None,
+    now: datetime | None = None, project_head: Mapping[str, Any] | None = None,
+    project_plan: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """统一读取三层有效截止；只读重放批准事件，不改写任何原始时间坐标。
+
+    项目已写延期、Campaign 尚未补齐时保持暂停；这段双账事务不能成为临时放行窗口。
+    历史无延期事件时，返回原始字段。调用者可传入锁内项目快照避免反向取锁。
+    """
+
+    if __package__ in {None, ""}:
+        import codex_upgrade_project_ledger as project
+        import codex_upgrade_timing_ledger as timing
+    else:
+        from . import codex_upgrade_project_ledger as project, codex_upgrade_timing_ledger as timing
+    campaign_dir = Path(campaign_dir)
+    observed = now or datetime.now(timezone.utc)
+    plan_path = campaign_dir / "control/vc/campaign-plan.json"
+    campaign_id = campaign_dir.name
+    if plan_path.exists():
+        if plan_path.is_symlink():
+            raise VCArtifactError("Campaign 总计划不得为软链接")
+        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+        original_deadline_at_utc = plan["original_deadline_at_utc"]
+        campaign_id = plan.get("campaign_id", campaign_id)
+    manifest_path = campaign_dir / "campaign.json"
+    if manifest_path.is_file():
+        campaign_id = json.loads(manifest_path.read_text(encoding="utf-8")).get("campaign_id", campaign_id)
+    ledger_root = campaign_timing_ledger(campaign_dir)
+    summary = timing.inspect_ledger(ledger_root, now=observed.isoformat()) if ledger_root is not None else {}
+    root = project.find_project_ledger(campaign_dir)
+    if root is not None and (project_head is None or project_plan is None):
+        project_plan, _raw = project._load_plan(root)
+        project_head = project._replay(root, project_plan, project._load_events(root), rebuild_cache=False)
+    head, plan = project_head or {}, project_plan or {}
+    values = {
+        "project": head.get("effective_absolute_deadline_utc", plan.get("absolute_deadline_utc")),
+        "campaign": summary.get("total_deadline_at_utc", original_deadline_at_utc),
+        "stage": summary.get("stage_deadline_at_utc"),
+    }
+    parsed = {key: datetime.fromisoformat(_timestamp(value, key).replace("Z", "+00:00"))
+              for key, value in values.items() if value is not None}
+    expired = sorted(key for key, value in parsed.items() if observed >= value)
+    applied = {row["receipt_sha256"] for row in summary.get("deadline_extensions", [])}
+    relevant_extensions = [row for row in head.get("deadline_extensions", [])
+                          if row["campaign_id"] == campaign_id or row["scope"] == "project"]
+    pending = [row for row in relevant_extensions
+               if row["campaign_id"] == campaign_id and row["receipt_sha256"] not in applied]
+    for extension in relevant_extensions:
+        if extension["scope"] != "project" or extension["campaign_id"] == campaign_id:
+            continue
+        if not project.deadline_extension_applied(extension, head):
+            pending.append(extension)
+    if pending:
+        expired.append("extension_pending")
+    pause = head.get("paused_campaigns", {}).get(campaign_id)
+    if pause and not expired:
+        expired.extend(pause["scopes"])
+    starts = [parsed[key] for key in expired if key in parsed]
+    starts.extend(datetime.fromisoformat(row["approved_at_utc"].replace("Z", "+00:00")) for row in pending)
+    if summary.get("paused_since_utc") is not None:
+        starts.append(datetime.fromisoformat(summary["paused_since_utc"].replace("Z", "+00:00")))
+    if pause:
+        starts.append(datetime.fromisoformat(pause["paused_since_utc"].replace("Z", "+00:00")))
+    since = min(starts) if starts and expired else None
+    hours = max(0.0, (observed - since).total_seconds() / 3600) if since else 0.0
+    review_since = max([since] + [datetime.fromisoformat(row["approved_at_utc"].replace("Z", "+00:00"))
+                                 for row in relevant_extensions]) if since else None
+    extensions = [row for row in summary.get("deadline_extensions", []) if row["scope"] == "campaign"]
+    return {
+        "project_deadline_at_utc": values["project"], "total_deadline_at_utc": values["campaign"],
+        "stage_deadline_at_utc": values["stage"], "original_deadline_at_utc": original_deadline_at_utc,
+        "execution_deadline_at_utc": min(parsed.values()).isoformat() if parsed else None,
+        "phase": summary.get("active_phase") or summary.get("review_phase"),
+        "paused_scopes": sorted(set(expired)), "paused_since_utc": since.isoformat() if since else None,
+        "paused_hours": hours, "review_reminder": bool(review_since and (observed - review_since).total_seconds() >= 72 * 3600),
+        "status_before_pause": summary.get("status_before_pause", summary.get("status")),
+        "campaign_extension": extensions[-1] if extensions else None,
+        "total_elapsed_seconds": summary.get("total_elapsed_seconds"),
+        "total_live_request_count": summary.get("total_live_request_count"),
+    }
 
 
 def build_campaign_plan(
@@ -565,6 +726,7 @@ def build_vc_batch(
     evaluation_baseline: int | None = None,
     baseline_commit_sha256: str | None = None,
     evaluator_digests: Mapping[str, Any] | None = None,
+    deadline_extension: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """从前序 checkpoint 编译同一 Campaign 的一个不可变执行批次（v3）。
 
@@ -607,6 +769,8 @@ def build_vc_batch(
             else None
         ),
     }
+    if deadline_extension is not None:
+        payload["deadline_extension"] = validate_deadline_extension(deadline_extension)
     payload["batch_sha256"] = digest(payload)
     return validate_vc_batch(payload, plan)
 
@@ -685,6 +849,8 @@ def validate_vc_batch(
         required = required | {"candidate_revision", "candidate_id"}
     elif schema_version != VC_BATCH_LEGACY_SCHEMA:
         raise VCArtifactError("VC batch schema、阶段、序号或身份非法")
+    if "deadline_extension" in value:
+        required.add("deadline_extension")
     if set(value) != required:
         raise VCArtifactError("VC batch 字段不闭合")
     payload = dict(value)
@@ -722,7 +888,13 @@ def validate_vc_batch(
     compiled_at = datetime.fromisoformat(compiled.replace("Z", "+00:00"))
     start_by = datetime.fromisoformat(must_start.replace("Z", "+00:00"))
     original_deadline = datetime.fromisoformat(deadline.replace("Z", "+00:00"))
-    if not compiled_at < start_by <= original_deadline:
+    effective_deadline = original_deadline
+    if payload.get("deadline_extension") is not None:
+        extension = validate_deadline_extension(payload["deadline_extension"])
+        if extension["scope"] != "campaign" or extension["campaign_id"] != payload["campaign_id"]:
+            raise VCArtifactError("批次延期不是本 Campaign 的总预算批准")
+        effective_deadline = datetime.fromisoformat(extension["new_deadline_at_utc"].replace("Z", "+00:00"))
+    if not compiled_at < start_by <= effective_deadline:
         raise VCArtifactError("VC batch 启动时限未承接原始 deadline")
     for field in ("execute_item_ids", "reuse_item_ids"):
         values = payload.get(field)
@@ -2556,6 +2728,7 @@ def build_interrupted_recovery_contract(
     tool_transition: Mapping[str, Any],
     compiled_at_utc: str,
     must_start_by_utc: str,
+    deadline_extension: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """生成 VC-1 中断恢复的单次使用控制合同。
 
@@ -2596,6 +2769,8 @@ def build_interrupted_recovery_contract(
         ),
         "original_deadline_at_utc": plan["original_deadline_at_utc"],
     }
+    if deadline_extension is not None:
+        payload["deadline_extension"] = validate_deadline_extension(deadline_extension)
     payload["contract_sha256"] = digest(payload)
     return validate_interrupted_recovery_contract(payload, plan)
 
@@ -2634,6 +2809,8 @@ def validate_interrupted_recovery_contract(
         "original_deadline_at_utc",
         "contract_sha256",
     }
+    if isinstance(value, Mapping) and "deadline_extension" in value:
+        required.add("deadline_extension")
     if not isinstance(value, Mapping) or set(value) != required:
         raise VCArtifactError("中断恢复合同字段不闭合")
     payload = dict(value)
@@ -2871,13 +3048,19 @@ def validate_interrupted_recovery_contract(
         payload.get("original_deadline_at_utc"),
         "恢复合同 original_deadline_at_utc",
     )
+    effective_deadline = deadline
+    if payload.get("deadline_extension") is not None:
+        extension = validate_deadline_extension(payload["deadline_extension"])
+        if extension["scope"] != "campaign" or extension["campaign_id"] != payload["campaign_id"]:
+            raise VCArtifactError("恢复合同延期不是当前 Campaign 总预算")
+        effective_deadline = extension["new_deadline_at_utc"]
     if not (
         datetime.fromisoformat(compiled.replace("Z", "+00:00"))
         < datetime.fromisoformat(start_by.replace("Z", "+00:00"))
-        <= datetime.fromisoformat(deadline.replace("Z", "+00:00"))
+        <= datetime.fromisoformat(effective_deadline.replace("Z", "+00:00"))
     ):
         raise VCArtifactError("中断恢复合同启动时限未承接原始 deadline")
-    if ledger["total_deadline_at_utc"] != deadline:
+    if datetime.fromisoformat(ledger["total_deadline_at_utc"].replace("Z", "+00:00")) != datetime.fromisoformat(effective_deadline.replace("Z", "+00:00")):
         raise VCArtifactError("中断恢复 Ledger 与 Campaign 总 deadline 不一致")
     if deployment["tool_files_sha256"] != transition["to_tool_files_sha256"]:
         raise VCArtifactError("中断恢复部署摘要与目标工具身份不一致")

@@ -12,6 +12,7 @@
     "evaluation_baseline", "baseline_commit_sha256", "evaluator_digests"
   ],
   "properties": {
+    "deadline_extension": {"$ref": "https://sub2apiplus.local/schemas/deadline-extension-v1.json"},
     "schema_version": {"const": "codex-upgrade-vc-batch/v3"},
     "candidate_revision": {"oneOf": [{"type": "integer", "minimum": 1}, {"type": "null"}]},
     "candidate_id": {"oneOf": [{"$ref": "#/$defs/safeId"}, {"type": "null"}]},
