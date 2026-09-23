@@ -8359,13 +8359,16 @@ def _validate_reconciled_redispatch_binding(
         raise SupervisorError(f"{label}尚未形成唯一的原批次重派许可。")
     recovery_index, recovery_event = matches[0]
     receipts = recovery_event.get("receipts")
+    expected_roles = ["provenance", "reconciliation"]
+    if isinstance(receipts, list) and any(item.get("role") == "stage_replay" for item in receipts):
+        expected_roles.append("stage_replay")
     if (
         recovery_event.get("event_type") != "receipt_passed"
         or recovery_event.get("next_action") != "redispatch-same-batch"
         or recovery_event.get("phase") != prior_manifest.get("phase")
         or not isinstance(receipts, list)
         or [item.get("role") for item in receipts if isinstance(item, Mapping)]
-        != ["provenance", "reconciliation"]
+        != expected_roles
     ):
         raise SupervisorError(f"{label}尚未形成唯一的原批次重派许可。")
     if recovery_index == len(raw_events) - 1:
@@ -8471,6 +8474,66 @@ def _validate_reconciled_redispatch_binding(
             "reservation 前环境恢复只允许原批次内容重派，漂移字段："
             + "、".join(drifted)
         )
+    return True
+
+
+def _validate_batched_stage_review_successor(
+    prior_state: Mapping[str, Any],
+    prior_manifest: Mapping[str, Any],
+    prior_dir: Path,
+    successor_manifest: Mapping[str, Any],
+    *,
+    campaign_dir: Path | None,
+) -> bool:
+    """R4：复核阶段审核的幂等证明；直接重派还复算实物，历史后继只重放冻结许可。"""
+
+    if campaign_dir is None or prior_manifest.get("phase") not in {"VC-1", "VC-2", "VC-3"}:
+        return False
+    proof_path = campaign_dir / "control" / "reconciliation" / f"run-{prior_dir.name}" / "stage-replay.json"
+    if not proof_path.exists():
+        return False
+    proof = _read_json(proof_path)
+    facts = campaign_run_failure_facts(prior_dir, campaign_dir=campaign_dir)
+    if facts is None or prior_state.get("state") != "failed":
+        raise SupervisorError("阶段重派缺少可信失败父动作")
+    commit = _staging_commit_for_run(campaign_dir, prior_state, prior_manifest, prior_dir)
+    if (commit is None or proof.get("commit_sha256") != commit["commit_sha256"]
+            or proof.get("schema_version") != "codex-upgrade-stage-replay/v1"
+            or proof.get("decision") != "recoverable" or proof.get("allowed") is not True
+            or proof.get("run_id") != prior_dir.name or proof.get("campaign_id") != prior_manifest.get("campaign_id")
+            or proof.get("phase") != prior_manifest.get("phase") or proof.get("next_action") != "redispatch-same-batch"):
+        raise SupervisorError("阶段重派证明与 COMMIT 或失败批次不一致")
+    campaign = _read_json(campaign_dir / "campaign.json")
+    ledger_dir = Path(campaign["control_receipts"]["upgrade_timing"]["ledger_dir"])
+    events = timing_ledger._load_events(ledger_dir)
+    expected_review = f"{CANDIDATE_REVIEW_EVENT_PREFIX}{facts['failure_digest'][:FAILURE_DIGEST_PREFIX_LENGTH]}-stage-review-required"
+    reviews = [event for event, _ in events if event.get("event_id") == expected_review]
+    if (len(reviews) != 1 or proof.get("review_event_id") != expected_review
+            or proof.get("review_root_cause_id") != reviews[0].get("root_cause_id")):
+        raise SupervisorError("阶段重派证明与 review 根因不一致")
+    passes = [event for event, _ in events if event.get("event_id") == f"reconcile-run-passed-{prior_dir.name}"]
+    if len(passes) != 1:
+        raise SupervisorError("阶段重派尚无唯一对账许可")
+    bindings = [item for item in passes[0]["receipts"] if item.get("role") == "stage_replay"]
+    if (len(bindings) != 1 or bindings[0]["sha256"] != _sha256((ledger_dir / bindings[0]["path"]).read_bytes())
+            or _read_json(ledger_dir / bindings[0]["path"]) != proof):
+        raise SupervisorError("阶段重派证明与账本副本漂移")
+    receipt = _read_json(proof_path.parent / "supervisor-run-reconciliation.json")
+    if proof["reconciliation_receipt_sha256"] != _sha256((proof_path.parent / "supervisor-run-reconciliation.json").read_bytes()):
+        raise SupervisorError("阶段重派的对账收据摘要漂移")
+    accounted = _project_ledger_operation_payload(campaign_dir, f"reconcile-supervisor-run:{prior_dir.name}", label="阶段重派")
+    if accounted.get("reconciliation_receipt_sha256") != proof["reconciliation_receipt_sha256"]:
+        raise SupervisorError("阶段重派的对账尚未入账")
+    _validate_reconciled_redispatch_binding(
+        prior_state, prior_manifest, prior_dir, successor_manifest, campaign_dir=campaign_dir,
+        effective_class=str(receipt["failure_class"]), label="阶段审核",
+    )
+    if events[-1][0]["event_id"] == passes[0]["event_id"]:
+        from tools.official_client_capture import codex_upgrade as upgrade
+
+        current = upgrade._campaign_stage_replay_facts(campaign_dir, prior_manifest)
+        if any(current.get(key) != proof.get(key) for key in ("phase", "allowed", "actions", "reasons")):
+            raise SupervisorError("阶段动作的输入或半成品在对账后漂移，禁止重派")
     return True
 
 
@@ -8805,6 +8868,14 @@ def _validate_batched_campaign_history(
         if (
             prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
             and successor_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
+            and _validate_batched_stage_review_successor(
+                state, prior_manifest, _run_dir, successor_manifest, campaign_dir=campaign_dir,
+            )
+        ):
+            continue
+        if (
+            prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
+            and successor_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
             and _validate_batched_parent_start_redispatch_successor(
                 state,
                 prior_manifest,
@@ -9115,7 +9186,7 @@ def _close_failed_campaign_timing_ledger(
     failed_action_id: str,
     failure_class: str = "execution-failure",
 ) -> dict[str, Any]:
-    """按机器失败分类把父动作失败映射为暂停恢复或永久停线。"""
+    """按机器失败分类收口为可恢复暂停、阶段审核或永久停线。"""
 
     campaign_dir = Path(campaign_dir)
     campaign = _read_json(campaign_dir / "campaign.json")
@@ -9298,6 +9369,9 @@ def _close_failed_campaign_timing_ledger(
                 or recovery_segment is not None
             )
             and before.get("status") == "active"
+            and not _candidate_failure_hits_permanent_condition(
+                campaign_dir, before, failure_class=failure_class
+            )
         ):
             if before.get("active_phase") != phase:
                 raise SupervisorError(
@@ -9342,9 +9416,8 @@ def _close_failed_campaign_timing_ledger(
 
         next_action = permanent_next_action
 
-        # 改造 2：候选级阶段（VC-4～VC-6）的不可恢复动作失败，在永久条件未命中时不停线，
-        # 而是 stage_abandoned + candidate_review_required（只读等待人工：对账入账后
-        # invalidate-candidate 或显式停线）。VC-1～VC-3 与 legacy 清单保持现状。
+        # R4：Campaign 级与候选级都保留三分支；普通失败不再自动销毁 Campaign。
+        # 是否能重派由对账复核动作 checkpoint 与幂等条件，COMMIT 只决定序号占用。
         candidate_id = manifest.get("candidate_id")
         review_event_id = candidate_review_event_id(failure_digest)
         review_next_action = (
@@ -9360,13 +9433,26 @@ def _close_failed_campaign_timing_ledger(
                 campaign_dir, before, failure_class=failure_class
             )
         )
-        if candidate_review:
-            if before.get("status") == "candidate_review_required":
+        stage_review = (
+            phase in {"VC-1", "VC-2", "VC-3"}
+            and not _candidate_failure_hits_permanent_condition(
+                campaign_dir, before, failure_class=failure_class
+            )
+        )
+        review_status = "candidate_review_required" if candidate_review else "stage_review_required"
+        if stage_review:
+            review_event_id = f"{event_prefix}-stage-review-required"
+            review_next_action = (
+                "stage_review_required：先按 reservation 分流对账；已发布预约只允许 reconcile-attempt、"
+                "recovery-preview 和 resume；无预约须核验 COMMIT、checkpoint 与动作幂等条件后逐字重派。"
+            )
+        if candidate_review or stage_review:
+            if before.get("status") == review_status:
                 if before.get("last_event_id") != review_event_id:
-                    raise SupervisorError("UpgradeTimingLedger 已由其他根因进入 candidate_review_required。")
+                    raise SupervisorError(f"UpgradeTimingLedger 已由其他根因进入 {review_status}。")
                 return {
                     "status": "passed",
-                    "ledger_status": "candidate_review_required",
+                    "ledger_status": review_status,
                     "idempotent": True,
                     "ledger_dir": str(ledger_dir),
                     "head_sequence": before["head_sequence"],
@@ -9405,27 +9491,27 @@ def _close_failed_campaign_timing_ledger(
                 or middle.get("active_phase") is not None
             ):
                 raise SupervisorError("UpgradeTimingLedger stage_abandoned 未稳定落盘。")
-            if candidate_review:
+            if candidate_review or stage_review:
                 timing_ledger.append_event(
                     ledger_dir,
                     event_id=review_event_id,
                     phase=phase,
-                    event_type="candidate_review_required",
-                    candidate_id=str(candidate_id),
+                    event_type=review_status,
+                    candidate_id=str(candidate_id) if candidate_review else None,
                     root_cause_id=root_cause_id,
                     live_request_count=0,
                     next_action=review_next_action,
                 )
                 final = timing_ledger.inspect_ledger(ledger_dir)
                 if (
-                    final.get("status") != "candidate_review_required"
+                    final.get("status") != review_status
                     or final.get("active_phase") is not None
                     or final.get("last_event_id") != review_event_id
                 ):
-                    raise SupervisorError("UpgradeTimingLedger candidate_review_required 未闭合。")
+                    raise SupervisorError(f"UpgradeTimingLedger {review_status} 未闭合。")
                 return {
                     "status": "passed",
-                    "ledger_status": "candidate_review_required",
+                    "ledger_status": review_status,
                     "idempotent": False,
                     "ledger_dir": str(ledger_dir),
                     "head_sequence": final["head_sequence"],

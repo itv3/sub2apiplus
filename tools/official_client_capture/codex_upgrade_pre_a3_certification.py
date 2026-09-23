@@ -237,10 +237,24 @@ SCENARIOS: tuple[tuple[str, str, str, str, str], ...] = (
     ),
     (
         "vc-chain.failed-batch-abandons-stage",
-        "动作失败：父 run 写 stage_abandoned＋stop_the_line，后续批次被拒",
+        "动作失败：父 run 写 stage_abandoned＋stage_review_required，对账前后续批次被拒",
         "tools.official_client_capture.tests.test_codex_upgrade",
         "CodexUpgradeTest",
         "test_vc_chain_failed_batch_abandons_stage_and_blocks_next_batch",
+    ),
+    (
+        "stage-recovery.committed-classify",
+        "classify COMMIT 后失败，原 Campaign 对账后 N+1 重派并复用草案，新增请求为零",
+        "tools.official_client_capture.tests.real_chains.test_codex_upgrade_stage_recovery",
+        "StageRecoveryChainTests",
+        "test_classify_commit_failure_reconciles_and_redispatches",
+    ),
+    (
+        "stage-recovery.interrupted-closeout",
+        "stage_abandoned 后 SIGKILL，重入只补一条 stage_review_required",
+        "tools.official_client_capture.tests.test_codex_upgrade_stage_recovery",
+        "StageRecoveryTests",
+        "test_sigkill_between_abandon_and_review_appends_once",
     ),
     (
         "vc-chain.admission-before-any-write",

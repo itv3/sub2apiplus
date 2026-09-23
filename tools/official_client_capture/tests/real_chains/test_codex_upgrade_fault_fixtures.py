@@ -179,7 +179,7 @@ class UpgradeFaultFixtureTests(unittest.TestCase):
                 evidence.verify_manifest_boundary(manifest, [evidence_root])
             self.assertEqual(caught.exception.failure_class, "evidence-integrity")
 
-    def test_r4_classify_parent_failure_currently_stops_campaign(self):
+    def test_r4_parent_failure_requires_review_before_redispatch(self):
         case = upgrade_tests.CodexUpgradeTest("test_vc_chain_failed_batch_abandons_stage_and_blocks_next_batch")
         result = unittest.TestResult()
         case.run(result)

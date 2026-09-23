@@ -14461,6 +14461,12 @@ class CodexUpgradeTest(unittest.TestCase):
             )
             status = codex_upgrade.campaign_status(campaign_dir)
             self.assertEqual(status["stages"]["classify"], "complete")
+            frozen = {path: path.read_bytes() for path in (campaign_dir / "classification").rglob("*") if path.is_file()}
+            return_code, _, stderr = self._approve_classification(
+                campaign_dir, (target, migration, scenario, profile, assertion_profile),
+            )
+            self.assertEqual(return_code, 0, stderr)
+            self.assertEqual(frozen, {path: path.read_bytes() for path in frozen})
 
     def test_classify_rejects_target_scenario_execution_contract_drift(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -14907,6 +14913,13 @@ class CodexUpgradeTest(unittest.TestCase):
             command = run.call_args.args[0]
             self.assertIn("./cmd/egresscatalogstage", command)
             self.assertIn(str(output), command)
+
+            frozen = {path: path.read_bytes() for path in output.rglob("*") if path.is_file()}
+            with mock.patch.object(codex_upgrade, "_run_external_command") as repeat:
+                result = codex_upgrade.stage_profile_catalog(campaign_dir, output.resolve())
+            repeat.assert_not_called()
+            self.assertTrue(result["active_unchanged"])
+            self.assertEqual(frozen, {path: path.read_bytes() for path in frozen})
 
     def test_classify_supports_explicit_rule_add_delete_and_change(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -19635,7 +19648,7 @@ class CodexUpgradeTest(unittest.TestCase):
             self.assertEqual(list(fixture["state_dir"].glob("run-*")), [])
 
     def test_vc_chain_failed_batch_abandons_stage_and_blocks_next_batch(self) -> None:
-        """动作失败：父 run 把账本推成 stage_abandoned＋stop_the_line，后续批次被拒。"""
+        """动作失败：父 run 把账本推成 stage_abandoned＋stage_review_required，后续批次被拒。"""
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
@@ -19650,10 +19663,10 @@ class CodexUpgradeTest(unittest.TestCase):
             self.assertEqual(result["campaign_run"]["timing_closeout"]["status"], "passed", result["campaign_run"]["timing_closeout"])
             self.assertIsNone(result["timing_ledger"]["completion"])
             state = codex_upgrade_timing_ledger.phase_ledger_state(ledger_dir)
-            self.assertEqual(state["status"], "stopped")
+            self.assertEqual(state["status"], "stage_review_required")
             self.assertIsNone(state["active_phase"])
             self.assertFalse((campaign_dir / "control" / "vc" / "vc-2-checkpoint.json").exists())
-            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "当前状态为 stopped"):
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "当前状态为 stage_review_required"):
                 codex_upgrade.compile_and_run_vc_batch(
                     self._vc_chain_arguments(fixture, "VC-2", 3, self._vc_chain_action_plan(root / "retry", campaign_dir, "VC-2"))
                 )

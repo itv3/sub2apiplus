@@ -71,6 +71,7 @@
             "active",
             "recovery_required",
             "candidate_review_required",
+            "stage_review_required",
             "revision_required",
             "stop_required",
             "stopped",
@@ -288,6 +289,8 @@
             }
           ]
         },
+        "review_phase": {"type": ["string", "null"], "enum": ["VC-1", "VC-2", "VC-3", null]},
+        "review_root_cause_id": {"type": ["string", "null"]},
         "head_sequence": {
           "type": "integer",
           "minimum": 1

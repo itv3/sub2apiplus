@@ -1531,7 +1531,7 @@ VC-2 若发现分类仍缺事实，只返回 VC-1 补采该项；其他已封存
 - **操作与工具**：生成分类草案，逐规则判定 `inherit/change/condition_change/add/delete`，定稿迁移、原子断言、场景和目标画像草案，再通过 `classify` 双调用封存联合批准。
 - **产物**：五份已批准清单（`target-rules.json`、`rule-migration.json`、`scenarios.json`、`profile.json`、`assertion-profile.json`）、`classification/result.json`、`profile-derivation.json`、post-promotion 门禁需求和 VC-2 checkpoint。
 - **完成标志**：所有发现具有唯一处置，五份清单联合摘要已批准，`blocked`和其他未决项均为零。
-- **失败恢复**：事实不足返回 VC-1 定向补证；不得提前修改画像或实现。
+- **失败恢复**：事实不足返回 VC-1 定向补证；普通父动作失败进入 `stage_review_required`，完成对账并证明命令可幂等续作后，在同一 Campaign 重派。草案与批准结果完整时只读复用；批准目录没有完整结果的半成品继续 review。不得提前修改画像或实现。
 
 ### 4.2.1 执行步骤
 
@@ -1611,7 +1611,7 @@ python3 tools/official_client_capture/codex_upgrade.py classify \
 - **操作与工具**：重放联合批准与画像派生绑定，用 `stage-profile` 把完整目标 Snapshot 编译为不切换 Active 的候选 RuntimeCatalog。
 - **产物**：候选 Snapshot、ReleaseGraph、RuntimeCatalog、`catalog-stage-receipt.json` 和 VC-3 checkpoint。
 - **完成标志**：画像差异和门禁需求全部可追溯，stage receipt 可复算，生产 selector 未改变。
-- **失败恢复**：批准内容或派生绑定错误返回 VC-2；仅暂存环境或输出失败时留在 VC-3，保持批准内容不变后重试。
+- **失败恢复**：批准内容或派生绑定错误返回 VC-2；暂存环境或输出失败时留在 VC-3，保持批准内容不变后对账。完整 Catalog 收据与逐文件 inventory 验证通过才可只读复用、补齐 checkpoint；无法验证的半成品保持 review，不覆盖目录。
 
 ### 4.3.1 执行步骤
 
@@ -2787,8 +2787,17 @@ Campaign 会在 VC-2 首批一次补齐 VC-0／VC-1），随后发布正式产�
 重派，不再产生预派发停线收据；（4）父 run 成功且本阶段 checkpoint 已封存则写 `stage_completed`，同阶段
 多批时只在封存批写一次，幂等。只读导入的 Campaign 第 2 批派发前，入口在同一锁内先把零请求 no-op 首批跑成父 run
 历史，满足监督器“batch_sequence 从 1 连续”的要求；首批含真实动作时不代跑。父动作失败的账本收口按
-阶段分层：VC-1～VC-3（Campaign 级阶段）仍由监督器写 `stage_abandoned`＋`stop_the_line`，此后本 Campaign
-的任何批次都被拒绝，唯一下一动作是对账；VC-4～VC-6（候选级阶段）按下文“候选级 revision”的三分支收口。
+三分支收口：环境前提、零请求后处理和父启动失败写 `recovery_required`；完整性异常、账本要求停线、
+根因上限及有效预算到期仍永久停线；其余 VC-1～VC-3 失败写 `stage_abandoned`＋`stage_review_required`。
+review 期间只读等待对账，不能跳过缺 checkpoint 的阶段。无 reservation 的父 run 经对账入账、判定可恢复后，
+还须核验每个动作的输入、已有产物及幂等条件，生成 `codex-upgrade-stage-replay/v1` 证明并绑定时间账本。
+未 COMMIT 仍用同序号重新 prepare；已 COMMIT 以 N+1 逐字重派。COMMIT 只决定序号，不证明整批可重放。
+当前可复核的 Campaign 动作是受管 CLI 的 `classify` 与 `stage-profile`：完整结果只读复用，合法缺失
+checkpoint 可补齐；未知脚本、未闭合批准目录或 Catalog 半成品留在 review。直接后继派发前再核对输入和
+产物摘要，漂移即拒绝；恢复保留原阶段起点，不重置预算。VC-1 已发布 reservation 的仅允许
+`reconcile-attempt` → 批准 `recovery-preview` → `resume`，禁止改走父 run 重派。
+VC-4～VC-6（候选级阶段）沿用下文“候选级 revision”三分支。新事件写入后，回退必须先验证旧工具读侧；
+旧工具拒绝时保持暂停并继续最小修复，不能删除事件或改写历史字节。
 
 **批次 staging／WAL 与唯一提交点。** 0.154.0 起总计划以 `batch_model=staging`
 创建的 Campaign（历史 plan 无该字段即 `legacy`，只读回放不变），VC-2～VC-6 每批的编译产物先落到

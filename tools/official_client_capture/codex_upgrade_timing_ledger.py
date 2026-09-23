@@ -57,6 +57,7 @@ EVENT_TYPES = frozenset(
         "upgrade_completed",
         # 改造 2（候选级 revision）：候选动作失败后的只读等待、显式作废与新 revision 激活。
         "candidate_review_required",
+        "stage_review_required",
         "candidate_invalidated",
         "stage_revision",
         # 改造 5（评估失败局部恢复）：评估基线 b<K> 激活与 attempt 恢复段 ar<k> 的三个事件；
@@ -143,6 +144,9 @@ def _attempt_recovery_revision_admissible(
 RECOVERY_REVISION_RE = re.compile(r"^ar[1-9][0-9]*$")
 REVIEW_REQUIRED_ALLOWED_EVENTS = frozenset(
     {"attempt_failed", "receipt_passed", "candidate_invalidated", "stage_abandoned", "stop_the_line"}
+)
+STAGE_REVIEW_ALLOWED_EVENTS = frozenset(
+    {"attempt_started", "attempt_failed", "receipt_passed", "stage_abandoned", "stop_the_line", "recovery_authorized"}
 )
 REVISION_REQUIRED_ALLOWED_EVENTS = frozenset(
     {"candidate_invalidated", "stage_revision", "stop_the_line"}
@@ -396,6 +400,12 @@ PRODUCER_FREEZE_SUCCESSORS = (
         "path": "docs/egress/maintenance/upstream-codex-0154-vc5-tooling-batch3-m2-t518-20260921-freeze-successor.json",
         "base_commit": "932111bc7b6a69b24fc986180e9da3f6c93da3c1",
         "scope": "upstream-codex-0154-vc5-tooling-batch3-m2-t518-20260921-freeze-successor",
+        "result": "manual_actions_required",
+    },
+    {
+        "path": "docs/egress/maintenance/upstream-codex-01561-r4-20260924-freeze-successor.json",
+        "base_commit": "a15f5c74f9e591a4bc3cf7f479d44e5d04ec5259",
+        "scope": "upstream-codex-01561-r4-20260924-freeze-successor",
         "result": "manual_actions_required",
     },
 )
@@ -1159,6 +1169,8 @@ def _validate_event_revision_fields(event: dict[str, Any], sequence: int) -> Non
         raise TimingLedgerError(f"event {sequence}.supersedes_revision 必须是正整数或 null")
     event_type = event.get("event_type")
     phase = event.get("phase")
+    if event_type == "stage_review_required" and phase not in {"VC-1", "VC-2", "VC-3"}:
+        raise TimingLedgerError("stage_review_required 只用于 VC-1～VC-3")
     # 改造 5：四个评估基线／恢复段字段只属于对应事件；其他事件出现即拒绝。
     baseline = event.get("evaluation_baseline")
     if baseline is not None and (isinstance(baseline, bool) or not isinstance(baseline, int) or baseline < 1):
@@ -1328,6 +1340,10 @@ def _summarize(
     revision_phase_state: dict[int, dict[str, str]] = {}
     phase_elapsed: dict[tuple[int | None, str], int] = {}
     review_required = False
+    stage_review_required = False
+    review_phase: str | None = None
+    review_root_cause_id: str | None = None
+    abandoned_started: datetime | None = None
     revision_required = False
     last_invalidated: tuple[int, str] | None = None
     revision_commits: dict[int, str] = {}
@@ -1408,6 +1424,8 @@ def _summarize(
             raise TimingLedgerError(
                 "candidate_review_required 期间只允许对账、候选作废、stage_abandoned 或 stop_the_line"
             )
+        if stage_review_required and event_type not in STAGE_REVIEW_ALLOWED_EVENTS:
+            raise TimingLedgerError("stage_review_required 期间只允许对账、停线或已批准恢复")
         if event_type == "stage_started":
             if active_phase is not None or normalized["attempt_id"] is not None or normalized["root_cause_id"] is not None:
                 raise TimingLedgerError("stage_started 身份或阶段状态非法")
@@ -1449,10 +1467,27 @@ def _summarize(
             if candidate_level:
                 assert event_revision is not None
                 revision_phase_state.setdefault(event_revision, {})[phase] = "abandoned"
+            abandoned_started = active_phase_started
             close_active_phase(recorded)
             recovery_required = False
             recovery_phase = None
             recovery_root_cause_id = None
+        elif event_type == "stage_review_required":
+            if (
+                stage_review_required
+                or active_phase is not None
+                or last_event is None
+                or last_event["event_type"] != "stage_abandoned"
+                or last_event["phase"] != phase
+                or last_event["root_cause_id"] != normalized["root_cause_id"]
+                or normalized["attempt_id"] is not None
+                or normalized["root_cause_id"] is None
+                or not normalized["next_action"]
+            ):
+                raise TimingLedgerError("stage_review_required 必须紧接同阶段同根因的 stage_abandoned")
+            stage_review_required = True
+            review_phase = phase
+            review_root_cause_id = normalized["root_cause_id"]
         elif event_type == "candidate_review_required":
             if (
                 active_phase is not None
@@ -1596,7 +1631,8 @@ def _summarize(
                     attempt_recoveries[key]["status"] = "completed"
         elif event_type == "attempt_started":
             attempt_id = normalized["attempt_id"]
-            if active_phase != phase or attempt_id is None or attempt_id in attempts:
+            if (attempt_id is None or attempt_id in attempts
+                    or (active_phase != phase and not (stage_review_required and phase == review_phase == "VC-1"))):
                 raise TimingLedgerError("attempt_started 与当前阶段或 attempt 身份不一致")
             cause = normalized["root_cause_id"]
             if cause is not None and failure_counts.get(cause, 0) >= plan["same_root_cause_retry_limit"]:
@@ -1631,6 +1667,40 @@ def _summarize(
             recovery_phase = phase
             recovery_root_cause_id = cause
         elif event_type == "receipt_passed":
+            if stage_review_required:
+                roles = tuple(item["role"] for item in normalized["receipts"])
+                if (
+                    phase != review_phase
+                    or normalized["attempt_id"] is not None
+                    or normalized["root_cause_id"] is not None
+                    or roles != ("provenance", "reconciliation", "stage_replay")
+                    or normalized["next_action"] not in {"redispatch-same-sequence", "redispatch-same-batch"}
+                    or abandoned_started is None
+                ):
+                    raise TimingLedgerError("阶段 review 恢复必须绑定同阶段的对账许可")
+                reference = next(item for item in normalized["receipts"] if item["role"] == "reconciliation")
+                reconciliation, _ = _load_json(root / reference["path"], "阶段恢复对账收据")
+                proof = next(item for item in normalized["receipts"] if item["role"] == "stage_replay")
+                replay, _ = _load_json(root / proof["path"], "阶段幂等重派证明")
+                if (
+                    replay.get("schema_version") != "codex-upgrade-stage-replay/v1"
+                    or replay.get("decision") != "recoverable"
+                    or replay.get("allowed") is not True
+                    or replay.get("reconciliation_receipt_sha256") != _sha256_bytes(
+                        (json.dumps(reconciliation, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
+                    )
+                    or replay.get("phase") != phase
+                    or replay.get("review_root_cause_id") != review_root_cause_id
+                    or replay.get("next_action") != normalized["next_action"]
+                    or reconciliation.get("reservation_exists") is not False
+                ):
+                    raise TimingLedgerError("阶段恢复对账未证明动作可幂等重派")
+                stage_review_required = False
+                review_phase = None
+                review_root_cause_id = None
+                active_phase = phase
+                # review 与恢复都不重置阶段时钟；保留失败前的起点。
+                active_phase_started = abandoned_started
             if recovery_required:
                 roles = tuple(item["role"] for item in normalized["receipts"])
                 if (
@@ -1649,6 +1719,18 @@ def _summarize(
                 recovery_root_cause_id = None
         elif event_type == "recovery_authorized":
             cause = normalized["root_cause_id"]
+            if stage_review_required:
+                if (phase != review_phase or phase != "VC-1" or cause != review_root_cause_id
+                        or any(item["status"] == "active" for item in attempts.values())
+                        or normalized["next_action"] != "resume-rerun-failed"):
+                    raise TimingLedgerError("阶段 review 的预约恢复必须完成对账并绑定恢复批准")
+                active_phase = phase
+                active_phase_started = abandoned_started
+                recovery_required = True
+                recovery_root_cause_id = review_root_cause_id
+                stage_review_required = False
+                review_phase = None
+                review_root_cause_id = None
             if (
                 not recovery_required
                 or active_phase != phase
@@ -1670,6 +1752,9 @@ def _summarize(
             recovery_required = False
             recovery_phase = None
             recovery_root_cause_id = None
+            stage_review_required = False
+            review_phase = None
+            review_root_cause_id = None
         elif event_type == "recovery_verified":
             cause = normalized["root_cause_id"]
             if not stopped or cause is None or failure_counts.get(cause, 0) < plan["same_root_cause_retry_limit"]:
@@ -1713,6 +1798,10 @@ def _summarize(
         stage_deadline = active_phase_started + timedelta(
             minutes=plan["stage_budgets_minutes"][active_phase]
         ) - timedelta(seconds=carried)
+    elif stage_review_required and review_phase is not None and abandoned_started is not None:
+        # 阶段 review 仍沿原起点计时；对账等待不能规避阶段预算。
+        stage_elapsed = max(0, int((as_of - abandoned_started).total_seconds()))
+        stage_deadline = abandoned_started + timedelta(minutes=plan["stage_budgets_minutes"][review_phase])
     budget_exceeded = as_of >= total_deadline or (
         stage_deadline is not None and as_of >= stage_deadline
     )
@@ -1732,6 +1821,8 @@ def _summarize(
         if revision_required
         else "candidate_review_required"
         if review_required
+        else "stage_review_required"
+        if stage_review_required
         else "active"
     )
     return {
@@ -1744,6 +1835,8 @@ def _summarize(
         "active_phase": active_phase,
         "recovery_phase": recovery_phase,
         "recovery_root_cause_id": recovery_root_cause_id,
+        "review_phase": review_phase,
+        "review_root_cause_id": review_root_cause_id,
         "current_revision": current_revision,
         "revision_phase_state": {
             str(revision): dict(sorted(states.items()))
@@ -1949,6 +2042,8 @@ def append_event(
         raise TimingLedgerError(
             "candidate_review_required 期间只允许对账、候选作废、stage_abandoned 或 stop_the_line"
         )
+    if current["status"] == "stage_review_required" and event_type not in STAGE_REVIEW_ALLOWED_EVENTS:
+        raise TimingLedgerError("stage_review_required 期间只允许对账、停线或已批准恢复")
     sequence = len(raw_events) + 1
     event = {
         "schema_version": EVENT_SCHEMA,
@@ -2061,6 +2156,11 @@ def replay(root: Path, receipt_relative: str) -> dict[str, Any]:
     )
     expected_summary = dict(summary)
     frozen_summary = receipt.get("summary")
+    legacy_review_fields = ("review_phase", "review_root_cause_id")
+    if (isinstance(frozen_summary, dict) and all(field not in frozen_summary for field in legacy_review_fields)
+            and all(expected_summary.get(field) is None for field in legacy_review_fields)):
+        for field in legacy_review_fields:
+            expected_summary.pop(field)
     legacy_recovery_fields = ("recovery_phase", "recovery_root_cause_id")
     if (
         isinstance(frozen_summary, dict)

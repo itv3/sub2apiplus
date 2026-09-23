@@ -16433,6 +16433,111 @@ def _freeze_evaluation_output_bindings(
     return frozen
 
 
+def _campaign_stage_replay_facts(campaign_dir: Path, run_manifest: Mapping[str, Any]) -> dict[str, Any]:
+    """R4：仅为已有实现能够安全续作的 Campaign 级动作提供重派证明。
+
+    这里不执行命令、不补写产物。任意脚本、未知动作、未闭合的批准目录和 Catalog
+    均留在 review；输出及输入按当前实物绑定，派发直接后继时还须逐字复核。
+    """
+
+    phase = str(run_manifest.get("phase"))
+    result: dict[str, Any] = {"phase": phase, "allowed": False, "actions": [], "reasons": []}
+    if phase not in {"VC-2", "VC-3"}:
+        result["reasons"].append("VC-1 已发布预约只能走 attempt 恢复；无已知幂等动作合同")
+        return result
+    try:
+        for action in run_manifest.get("actions", []):
+            command = list(action["command"])
+            if len(command) > 3 and command[1:3] == ["-m", "tools.official_client_capture.codex_upgrade"]:
+                argv = command[3:]
+            elif len(command) > 2 and Path(command[1]).resolve() == Path(__file__).resolve():
+                argv = command[2:]
+            else:
+                raise ConfigurationError("不是受管 codex_upgrade 的直接调用，不能证明幂等")
+            if Path(command[0]).resolve(strict=True) != Path(sys.executable).resolve(strict=True):
+                raise ConfigurationError("阶段动作解释器不是当前受管 Python")
+            expected = "classify" if phase == "VC-2" else "stage-profile"
+            if not argv or argv[0] != expected or len(argv[1:]) % 2:
+                raise ConfigurationError("阶段动作或参数形态没有幂等合同")
+            flags = dict(zip(argv[1::2], argv[2::2]))
+            if len(flags) * 2 != len(argv) - 1 or flags.get("--campaign-dir") != str(campaign_dir):
+                raise ConfigurationError("阶段动作 Campaign 参数重复或漂移")
+            inputs: dict[str, str] = {}
+            outputs: dict[str, str] = {}
+            if expected == "classify":
+                allowed = {"--campaign-dir", "--target-rule-manifest", "--migration-manifest",
+                           "--scenario-manifest", "--profile-manifest", "--assertion-profile-manifest",
+                           "--active-profile", "--profile-patch-manifest", "--approve-manifest-sha256"}
+                if set(flags) - allowed:
+                    raise ConfigurationError("classify 含未登记的恢复参数")
+                for flag, value in flags.items():
+                    if flag not in {"--campaign-dir", "--approve-manifest-sha256"}:
+                        path = Path(value)
+                        if not path.is_absolute() or path.is_symlink() or not path.is_file():
+                            raise ConfigurationError("classify 输入文件不可信")
+                        inputs[flag] = file_sha256(path)
+                approved = campaign_dir / "classification" / "approved"
+                if approved.exists() or approved.is_symlink():
+                    classification = _load_stage_result(campaign_dir, "classify")
+                    if (classification.get("status") != "complete"
+                            or flags.get("--approve-manifest-sha256") != classification.get("joint_manifest_sha256")):
+                        raise ConfigurationError("分类批准半成品或联合摘要不一致，不能重派")
+                    for key, flag in (("target_rule_manifest", "--target-rule-manifest"),
+                                      ("migration_manifest", "--migration-manifest"),
+                                      ("scenario_manifest", "--scenario-manifest"),
+                                      ("profile_manifest", "--profile-manifest"),
+                                      ("assertion_profile_manifest", "--assertion-profile-manifest")):
+                        if _normalized_json_sha256(_read_json(Path(flags[flag]), key)) != classification[key]["sha256"]:
+                            raise ConfigurationError("分类批准输入与封存收据不一致")
+                output_root = campaign_dir / "classification"
+                for draft in (output_root / "draft").glob("*"):
+                    if draft.is_symlink() or not (draft / "draft.json").is_file():
+                        raise ConfigurationError("分类草案含未闭合半成品，需先 review")
+                    _verify_classification_draft(draft)
+            else:
+                if set(flags) != {"--campaign-dir", "--output"}:
+                    raise ConfigurationError("stage-profile 参数没有精确闭合")
+                output_root = Path(flags["--output"])
+                if not output_root.is_absolute() or output_root.is_symlink():
+                    raise ConfigurationError("Catalog 输出路径不可信")
+                if output_root.exists():
+                    receipt = _read_json(output_root / "catalog-stage-receipt.json", "Catalog 收据")
+                    _verify_catalog_stage_output(output_root, receipt)
+                    classification = _load_stage_result(campaign_dir, "classify")
+                    if (receipt.get("campaign_id") != run_manifest.get("campaign_id")
+                            or receipt.get("classification_sha256") != classification.get("joint_manifest_sha256")):
+                        raise ConfigurationError("Catalog 半成品未绑定当前批准分类")
+            if output_root.exists():
+                for path in sorted(output_root.rglob("*")):
+                    if path.is_symlink():
+                        raise ConfigurationError("阶段产物包含符号链接")
+                    if path.is_file():
+                        outputs[path.relative_to(output_root).as_posix()] = file_sha256(path)
+            checkpoint = _vc_checkpoint_path(campaign_dir, phase)
+            if checkpoint.exists():
+                _replay_vc_checkpoint(campaign_dir, _campaign_vc_plan(campaign_dir), phase)
+                outputs["checkpoint"] = file_sha256(checkpoint)
+            result["actions"].append({"action_id": action["action_id"], "command": command,
+                                      "inputs": inputs, "outputs": outputs})
+        if not result["actions"]:
+            raise ConfigurationError("失败批次没有可核验动作")
+        result["allowed"] = True
+    except (OSError, ValueError, KeyError, ConfigurationError) as error:
+        result["reasons"].append(str(error))
+    return result
+
+
+def _campaign_vc_plan(campaign_dir: Path) -> dict[str, Any]:
+    """读取已由 Campaign 绑定的总计划，供阶段恢复重放 checkpoint。"""
+
+    manifest = _require_formal_campaign(campaign_dir)
+    binding = manifest["vc_control"]["campaign_plan"]
+    path = _campaign_file(campaign_dir, binding["path"])
+    if file_sha256(path) != binding["sha256"]:
+        raise ConfigurationError("Campaign 总计划绑定漂移")
+    return codex_upgrade_vc_artifacts.validate_campaign_plan(_read_json(path, "Campaign 总计划"))
+
+
 def compile_vc_batch(
     arguments: argparse.Namespace,
     *,
@@ -16516,7 +16621,13 @@ def compile_vc_batch(
         )
     completed_path = _vc_checkpoint_path(campaign_dir, phase, revision=candidate_revision)
     if completed_path.exists() or completed_path.is_symlink():
-        raise ConfigurationError(f"{phase} 已有 checkpoint，禁止再编译执行批次。")
+        ledger_dir = _campaign_timing_ledger_dir(campaign_dir, manifest)
+        ledger = codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)
+        # 只允许已对账且尚未完成父批次的同阶段逐字重派；正式后继协议再绑定原 run。
+        if (phase not in {"VC-2", "VC-3"} or ledger.get("active_phase") != phase
+                or ledger.get("next_action") != "redispatch-same-batch"):
+            raise ConfigurationError(f"{phase} 已有 checkpoint，禁止再编译执行批次。")
+        _replay_vc_checkpoint(campaign_dir, plan, phase)
     if (
         not arguments.action_plan.is_absolute()
         or arguments.action_plan.is_symlink()
@@ -47775,12 +47886,37 @@ def _apply_assertion_profile_overrides(
     return updated, len(operations)
 
 
+def _verify_classification_draft(root: Path) -> dict[str, Any]:
+    """核验草案闭合；旧草案可读，新草案额外复核逐文件摘要。"""
+
+    receipt = _read_json(root / "draft.json", "分类草案收据")
+    if receipt.get("status") != "draft" or receipt.get("path") != str(root):
+        raise ConfigurationError("分类草案收据身份不一致")
+    names = {"target-rules.json", "rule-migration.json", "scenarios.json", "profile.json", "assertion-profile.json"}
+    for name in names:
+        path = root / name
+        if path.is_symlink() or not path.is_file():
+            raise ConfigurationError("分类草案尚未完整落盘")
+    if root.is_symlink() or {path.name for path in root.iterdir()} != names | {"draft.json"}:
+        raise ConfigurationError("分类草案文件集合不闭合")
+    if "files" in receipt and receipt["files"] != {name: file_sha256(root / name) for name in sorted(names)}:
+        raise ConfigurationError("分类草案文件摘要漂移")
+    return receipt
+
+
 def _write_classification_draft(
     campaign_dir: Path,
     manifest: dict[str, Any],
     source_diff: dict[str, Any],
     official_diff: dict[str, Any],
 ) -> dict[str, Any]:
+    inputs_sha256 = _fingerprint({"manifest": manifest, "source_diff": source_diff, "official_diff": official_diff})
+    for existing in sorted((campaign_dir / "classification" / "draft").glob("*")):
+        if existing.is_symlink() or not (existing / "draft.json").is_file():
+            raise ConfigurationError("分类草案含未闭合半成品，须先 review")
+        previous = _verify_classification_draft(existing)
+        if previous.get("inputs_sha256") == inputs_sha256:
+            return previous
     revision = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime()) + f"-{time.time_ns() % 1_000_000_000:09d}"
     draft_root = ensure_private_directory(
         campaign_dir / "classification" / "draft" / revision, campaign_dir
@@ -47892,6 +48028,10 @@ def _write_classification_draft(
     secure_write_json(draft_root / "assertion-profile.json", assertion_profile)
     receipt = {
         "status": "draft",
+        "inputs_sha256": inputs_sha256,
+        "files": {name: file_sha256(draft_root / name) for name in (
+            "target-rules.json", "rule-migration.json", "scenarios.json", "profile.json", "assertion-profile.json"
+        )},
         "revision": revision,
         "path": str(draft_root),
         "source_added": source_diff.get("added_count", 0),
@@ -48343,7 +48483,19 @@ def classify_campaign(
     if approve_manifest_sha256 != joint_digest:
         raise ConfigurationError("批准联合摘要与清单内容不一致。")
     if approved_root.exists():
-        raise ConfigurationError("分类批准目录已经存在，禁止覆盖。")
+        # 结果已封存而父动作尚未成功时，只读复核原结果并补齐合法 checkpoint。
+        # 只有目录、没有完整 result 的半成品仍由既有读侧拒绝，不覆盖任何文件。
+        stored = _load_stage_result(campaign_dir, "classify")
+        if (stored.get("status") != "complete" or stored.get("joint_manifest_sha256") != joint_digest
+                or any(stored.get(key) != value for key, value in references.items())):
+            raise ConfigurationError("分类批准目录已经存在，且结果不能幂等重放。")
+        for original, name in ((active_profile, "active-profile.json"), (profile_patch_manifest, "profile-rule-patches.json")):
+            if original is not None and file_sha256(original) != file_sha256(approved_root / name):
+                raise ConfigurationError("分类批准的 Active 或画像补丁输入漂移。")
+        _complete_vc_phase(campaign_dir, manifest, phase="VC-2",
+                           stage_receipt_path=(campaign_dir / "classification" / "result.json").resolve(strict=True),
+                           reuse_item_ids=rule_partition["inherited_rule_ids"] if rule_partition else ())
+        return stored
     ensure_private_directory(approved_root.parent, campaign_dir)
     try:
         approved_root.mkdir(mode=0o700)
@@ -50906,8 +51058,6 @@ def stage_profile_catalog(campaign_dir: Path, output: Path) -> dict[str, Any]:
         Path("/tmp").resolve(),
     }:
         raise ConfigurationError("--output 不能是根目录、HOME 或 /tmp 本身。")
-    if output.exists():
-        raise ConfigurationError("--output 已存在，禁止覆盖候选目录。")
     try:
         resolved_output.relative_to(campaign_dir.resolve(strict=True))
     except ValueError:
@@ -50915,43 +51065,47 @@ def stage_profile_catalog(campaign_dir: Path, output: Path) -> dict[str, Any]:
     else:
         raise ConfigurationError("候选 RuntimeCatalog 不得写入不可变 Campaign 目录。")
 
-    repository_root = Path(__file__).resolve().parents[2]
-    backend_root = repository_root / "backend"
-    command = [
-        "go",
-        "run",
-        "./cmd/egresscatalogstage",
-        "-profile-manifest",
-        str(profile_path),
-        "-campaign-id",
-        str(manifest["campaign_id"]),
-        "-classification-sha256",
-        joint_digest,
-        "-profile-derivation-sha256",
-        profile_derivation_sha256,
-        "-gate-requirements-sha256",
-        gate_requirements_sha256,
-        "-output",
-        str(output),
-    ]
-    completed = _run_external_command(
-        command,
-        cwd=backend_root,
-        timeout_seconds=PROFILE_GENERATOR_TIMEOUT_SECONDS,
-        check=False,
-        capture_output=True,
-        text=True,
-        operation="stage-profile:generator",
-    )
-    if completed.returncode != 0:
-        detail = (completed.stderr or "").strip() or (completed.stdout or "").strip()
-        raise ConfigurationError(
-            "候选 RuntimeCatalog 生成器失败：" + (detail or "无错误输出")
+    if output.exists():
+        # 生成器已完整落盘时只读核验并补 checkpoint；没有有效收据的半成品继续拒绝。
+        receipt = _read_json(output / "catalog-stage-receipt.json", "候选 RuntimeCatalog 收据")
+    else:
+        repository_root = Path(__file__).resolve().parents[2]
+        backend_root = repository_root / "backend"
+        command = [
+            "go",
+            "run",
+            "./cmd/egresscatalogstage",
+            "-profile-manifest",
+            str(profile_path),
+            "-campaign-id",
+            str(manifest["campaign_id"]),
+            "-classification-sha256",
+            joint_digest,
+            "-profile-derivation-sha256",
+            profile_derivation_sha256,
+            "-gate-requirements-sha256",
+            gate_requirements_sha256,
+            "-output",
+            str(output),
+        ]
+        completed = _run_external_command(
+            command,
+            cwd=backend_root,
+            timeout_seconds=PROFILE_GENERATOR_TIMEOUT_SECONDS,
+            check=False,
+            capture_output=True,
+            text=True,
+            operation="stage-profile:generator",
         )
-    try:
-        receipt = json.loads(completed.stdout)
-    except json.JSONDecodeError as error:
-        raise ConfigurationError("候选 RuntimeCatalog 生成器未返回合法收据。") from error
+        if completed.returncode != 0:
+            detail = (completed.stderr or "").strip() or (completed.stdout or "").strip()
+            raise ConfigurationError(
+                "候选 RuntimeCatalog 生成器失败：" + (detail or "无错误输出")
+            )
+        try:
+            receipt = json.loads(completed.stdout)
+        except json.JSONDecodeError as error:
+            raise ConfigurationError("候选 RuntimeCatalog 生成器未返回合法收据。") from error
     if (
         not isinstance(receipt, dict)
         or receipt.get("campaign_id") != manifest["campaign_id"]

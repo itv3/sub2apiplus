@@ -2130,13 +2130,13 @@ raise SystemExit(9)
             )
             self.assertEqual(result["status"], "passed")
             summary = timing_ledger.inspect_ledger(ledger_root)
-            self.assertEqual(summary["status"], "stopped")
+            self.assertEqual(summary["status"], "stage_review_required")
             self.assertIsNone(summary["active_phase"])
             events = [
                 event["event_type"]
                 for event, _raw in timing_ledger._load_events(ledger_root)
             ]
-            self.assertEqual(events[-2:], ["stage_abandoned", "stop_the_line"])
+            self.assertEqual(events[-2:], ["stage_abandoned", "stage_review_required"])
 
     def test_environment_prerequisite_pauses_without_abandoning_stage(self) -> None:
         """机器分类为环境前提失败时只写 recovery_required，保留当前阶段。"""
@@ -2866,13 +2866,13 @@ raise SystemExit(9)
             self.assertEqual(returncode, 1)
             self.assertEqual(payload["timing_closeout"]["status"], "passed")
             summary = timing_ledger.inspect_ledger(ledger_root)
-            self.assertEqual(summary["status"], "stopped")
+            self.assertEqual(summary["status"], "stage_review_required")
             self.assertIsNone(summary["active_phase"])
             events = [
                 event["event_type"]
                 for event, _raw in timing_ledger._load_events(ledger_root)
             ]
-            self.assertEqual(events[-2:], ["stage_abandoned", "stop_the_line"])
+            self.assertEqual(events[-2:], ["stage_abandoned", "stage_review_required"])
 
     def test_timing_closeout_recovers_partial_stage_abandoned(self) -> None:
         """首个事件已落盘而第二个事件失败时，重入只能确定性补齐。"""
@@ -2913,7 +2913,7 @@ raise SystemExit(9)
                 failed_action_id="failing-action",
             )
             self.assertEqual(result["status"], "passed")
-            self.assertEqual(timing_ledger.inspect_ledger(ledger_root)["status"], "stopped")
+            self.assertEqual(timing_ledger.inspect_ledger(ledger_root)["status"], "stage_review_required")
 
     def test_parent_reports_timing_closeout_failure(self) -> None:
         """账本闭合失败必须进入父结果，不能只留下 action-failed。"""

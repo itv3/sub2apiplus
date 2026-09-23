@@ -14,6 +14,7 @@ import unittest
 import unittest.mock
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest import mock
 
 from tools.official_client_capture import codex_upgrade_reconciler as reconciler
 from tools.official_client_capture import codex_upgrade_supervisor as supervisor
@@ -318,15 +319,17 @@ class StagingSupervisorTests(unittest.TestCase):
         state_dir = root / "supervisor"
         state_dir.mkdir(mode=0o700, exist_ok=True)
         binding = self._binding(campaign_dir, sequence=1)
-        return supervisor._campaign_run_locked(
-            self._run_arguments(),
-            manifest=self._v2_manifest(plan),
-            state_dir=state_dir,
-            campaign_dir=campaign_dir,
-            commit=commit,
-            owner_nonce=owner_nonce,
-            staging_binding=binding,
-        )
+        # 本 helper 只有合成总计划和零请求动作；真实出口准入由独立 R15 链验收。
+        with mock.patch.object(supervisor.arm64_environment, "campaign_requires_runtime_egress", return_value=False):
+            return supervisor._campaign_run_locked(
+                self._run_arguments(),
+                manifest=self._v2_manifest(plan),
+                state_dir=state_dir,
+                campaign_dir=campaign_dir,
+                commit=commit,
+                owner_nonce=owner_nonce,
+                staging_binding=binding,
+            )
 
     def test_commit_failure_before_commit_is_aborted_prepared_with_step(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

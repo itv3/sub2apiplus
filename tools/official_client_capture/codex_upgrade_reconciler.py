@@ -29,6 +29,10 @@
    ``resume --rerun-failed --recovery-preview``。永久停线：``stage_abandoned`` 与
    ``stop_the_line``，再写 ``campaign_terminal`` batch 并推入总账。
 
+R4 的 ``stage_review_required`` 先完成同样的账务判定，再核验动作幂等合同；无法
+证明的半成品继续只读等待，不能因账务可恢复就重派。可证明时单独写 stage-replay
+收据，与原对账收据一并绑定时间账本，再按 COMMIT 状态裁定序号。
+
 两个 reconciler 自身的模型请求数为零。
 """
 
@@ -309,6 +313,8 @@ def _ledger_receipt_bindings(
     subject_id: str,
     receipt_path: Path,
     provenance_path: Path,
+    *,
+    stage_replay_path: Path | None = None,
 ) -> list[dict[str, str]]:
     """账本事件只能绑定账本目录内的收据：把对账收据与 provenance 副本一次性发布进账本。"""
 
@@ -320,7 +326,10 @@ def _ledger_receipt_bindings(
         if stat.S_IMODE(directory.stat().st_mode) != 0o700:
             directory.chmod(0o700)
     bindings: list[dict[str, str]] = []
-    for role, source in (("reconciliation", receipt_path), ("provenance", provenance_path)):
+    sources = [("reconciliation", receipt_path), ("provenance", provenance_path)]
+    if stage_replay_path is not None:
+        sources.append(("stage_replay", stage_replay_path))
+    for role, source in sources:
         payload = _read_json(source, f"{role} 收据")
         target = target_dir / f"{role}.json"
         try:
@@ -385,6 +394,9 @@ def _ledger_facts(ledger_dir: Path, *, now: str) -> dict[str, Any]:
         "active_phase": summary.get("active_phase"),
         "recovery_phase": summary.get("recovery_phase"),
         "recovery_root_cause_id": summary.get("recovery_root_cause_id"),
+        "review_phase": summary.get("review_phase"),
+        "review_root_cause_id": summary.get("review_root_cause_id"),
+        "last_event_id": summary.get("last_event_id"),
         "head_sequence": summary.get("head_sequence"),
         "head_sha256": summary.get("head_sha256"),
         "total_deadline_at_utc": summary.get("total_deadline_at_utc"),
@@ -1482,7 +1494,7 @@ def load_approved_recovery_preview(
             or frozen_campaign_head.get("status") != campaign_head.get("status")
         ):
             raise ReconcilerError("恢复预览绑定的 Campaign 账本 head 已漂移")
-        if campaign_head.get("status") == "recovery_required":
+        if campaign_head.get("status") in {"recovery_required", "stage_review_required"}:
             event_id = (
                 f"recovery-authorized-{attempt_id}-{int(preview['index']):02d}"
                 if recovery_revision is None
@@ -1491,7 +1503,7 @@ def load_approved_recovery_preview(
             with codex_upgrade._campaign_lock(campaign_dir):
                 current_campaign_head = _ledger_facts(ledger_dir, now=_utc_now())
                 existing_sha256 = _ledger_event_sha256(ledger_dir, event_id)
-                if current_campaign_head.get("status") == "recovery_required":
+                if current_campaign_head.get("status") in {"recovery_required", "stage_review_required"}:
                     if (
                         current_campaign_head.get("head_sequence") != sequence
                         or current_campaign_head.get("head_sha256")
@@ -1510,10 +1522,10 @@ def load_approved_recovery_preview(
                     authorization_event = _append_ledger_event(
                         ledger_dir,
                         event_id=event_id,
-                        phase=str(current_campaign_head["active_phase"]),
+                        phase=str(current_campaign_head.get("active_phase") or current_campaign_head["review_phase"]),
                         event_type="recovery_authorized",
                         root_cause_id=str(
-                            current_campaign_head["recovery_root_cause_id"]
+                            current_campaign_head.get("recovery_root_cause_id") or current_campaign_head["review_root_cause_id"]
                         ),
                         receipts=receipts,
                         next_action="resume-rerun-failed",
@@ -1811,13 +1823,13 @@ def reconcile_attempt(
                 ledger_note = f"skipped:recovery_segment_{segment_state.get('status') or 'unknown'}"
         elif ledger["status"] == "active" and ledger.get("active_phase") is None:
             ledger_note = "skipped:ledger_active_without_phase"
-        elif ledger["status"] in {"active", "recovery_required"}:
+        elif ledger["status"] in {"active", "recovery_required", "stage_review_required"}:
             if attempt_id not in active_ids:
                 ledger_events.append(
                     _append_ledger_event(
                         ledger_dir,
                         event_id=f"reconcile-attempt-started-{attempt_id}",
-                        phase=str(ledger["active_phase"]),
+                        phase=str(ledger.get("active_phase") or ledger["review_phase"]),
                         event_type="attempt_started",
                         attempt_id=attempt_id,
                         next_action="reconcile-attempt",
@@ -1827,7 +1839,7 @@ def reconcile_attempt(
                 _append_ledger_event(
                     ledger_dir,
                     event_id=f"reconcile-attempt-failed-{attempt_id}",
-                    phase=str(ledger["active_phase"]),
+                    phase=str(ledger.get("active_phase") or ledger["review_phase"]),
                     event_type="attempt_failed",
                     attempt_id=attempt_id,
                     root_cause_id=cause["root_cause_id"],
@@ -2775,20 +2787,59 @@ def reconcile_supervisor_run(
             if isinstance(staging, Mapping) and staging.get("next_action")
             else NEXT_ACTION_SAME_BATCH
         )
-        if ledger.get("active_phase") is not None:
+        stage_replay_path = receipt_dir / "stage-replay.json"
+        stage_review = ledger.get("status") == "stage_review_required"
+        if stage_review or stage_replay_path.exists():
+            facts = supervisor.campaign_run_failure_facts(resolved_run_dir, campaign_dir=campaign_dir)
+            if facts is None:
+                raise ReconcilerError("阶段 review 无法绑定失败父动作")
+            review_event_id = f"{supervisor.CANDIDATE_REVIEW_EVENT_PREFIX}{facts['failure_digest'][:supervisor.FAILURE_DIGEST_PREFIX_LENGTH]}-stage-review-required"
+            reviews = [event for event, _ in timing_ledger._load_events(ledger_dir)
+                       if event.get("event_id") == review_event_id and event.get("event_type") == "stage_review_required"]
+            if len(reviews) != 1 or (stage_review and ledger.get("last_event_id") != review_event_id):
+                raise ReconcilerError("阶段 review 与本次失败父 run 不一致")
+            inner = supervisor._read_json(resolved_run_dir / "campaign-run-manifest.json")["manifest"]
+            state = supervisor._read_state(resolved_run_dir)
+            if state.get("staging_binding") is not None:
+                commit = supervisor._staging_commit_for_run(campaign_dir, state, inner, resolved_run_dir)
+                ledger_next_action = NEXT_ACTION_SAME_BATCH if commit is not None else NEXT_ACTION_SAME_SEQUENCE
+            else:
+                commit = None
+                # 历史批次无 COMMIT 合同，保持原规则，不能用新协议自动重派。
+                ledger_next_action = "review-required"
+            replay = codex_upgrade._campaign_stage_replay_facts(campaign_dir, inner)
+            if ledger_next_action == "review-required" or not replay["allowed"]:
+                result.update(status="stage_review_required", stage_replay=replay,
+                              next_command="保持 stage_review_required：先修复不可幂等半成品或补齐受支持的恢复合同")
+                result["decision"] = {**decision, "decision": "review_required", "reasons": replay["reasons"]}
+                return result
+            proof = {
+                "schema_version": "codex-upgrade-stage-replay/v1", "decision": "recoverable",
+                "campaign_id": manifest["campaign_id"], "run_id": run["run_id"],
+                "review_event_id": review_event_id, "review_root_cause_id": reviews[0]["root_cause_id"],
+                "reconciliation_receipt_sha256": receipt_binding["sha256"],
+                "commit_sha256": commit["commit_sha256"] if commit else None,
+                "next_action": ledger_next_action, **replay,
+            }
+            _write_or_verify(stage_replay_path, proof, volatile=())
+            result["stage_replay"] = proof
+        if ledger.get("active_phase") is not None or stage_review:
             with codex_upgrade._campaign_lock(campaign_dir):
                 event = _append_ledger_event(
                     ledger_dir,
                     event_id=f"reconcile-run-passed-{run['run_id']}",
-                    phase=str(ledger["active_phase"]),
+                    phase=str(ledger.get("active_phase") or ledger["review_phase"]),
                     event_type="receipt_passed",
                     receipts=_ledger_receipt_bindings(
-                        ledger_dir, f"run-{run['run_id']}", receipt_path, provenance_copy_path
+                        ledger_dir, f"run-{run['run_id']}", receipt_path, provenance_copy_path,
+                        stage_replay_path=stage_replay_path if stage_replay_path.exists() else None,
                     ),
                     next_action=ledger_next_action,
                 )
             result["ledger_events"] = [event]
-        if ledger.get("status") == "candidate_review_required":
+        if stage_review:
+            result["next_command"] = f"{ledger_next_action}：按原命令与合法 checkpoint 重派，禁止跳阶段"
+        elif ledger.get("status") == "candidate_review_required":
             # 改造 2：候选级动作失败已把阶段关闭并进入只读等待，对账只负责入账；
             # 下一步由人工裁定：候选源码问题走 invalidate-candidate，否则显式停线。
             result["next_command"] = (
