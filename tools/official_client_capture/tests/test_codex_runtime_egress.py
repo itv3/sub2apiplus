@@ -853,7 +853,8 @@ class EgressInstallTests(unittest.TestCase):
             bpffs.mkdir(parents=True)
             runtime.mkdir()
             identity = deploy.sha256_bytes((deploy.EGRESS_FILTER_SOURCE + deploy.EGRESS_FILTER_LOADER).encode())
-            old = bpffs / ("sub2api_egress.slice-" + identity[:16])
+            # 真实 bpffs 拒绝含点号的名称（EPERM），固定对象目录名把 slice 名中的点号转写为下划线。
+            old = bpffs / ("sub2api_egress_slice-" + identity[:16])
             old.mkdir()
             (old / "link").touch()
             path_class = Path
@@ -880,6 +881,7 @@ class EgressInstallTests(unittest.TestCase):
                 result = deploy.egress_bootstrap(root / "policy.json", "origin", runtime)
             self.assertFalse(old.exists())
             self.assertTrue(Path(result["pins"]["sub2api_egress.slice"]).is_dir())
+            self.assertNotIn(".", Path(result["pins"]["sub2api_egress.slice"]).name)
             self.assertEqual(result["policy_sha256"], arm.egress_policy_sha256(policy_fixture()))
 
     def test_bootstrap_does_not_contact_docker_before_service_start(self):

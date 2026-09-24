@@ -1342,7 +1342,9 @@ def egress_bootstrap(policy_path: Path, role: str, runtime_root: Path) -> dict[s
             parent = Path("/sys/fs/cgroup") / relative.lstrip("/")
             if not relative.startswith("/") or parent == Path("/sys/fs/cgroup") or not parent.is_dir():
                 raise DeploymentError("出口专用 slice 未取得可信 cgroup")
-            pin = Path("/sys/fs/bpf/sub2api-egress") / (name + "-" + source_identity[:16])
+            # bpffs 保留含点号的名称（内核 bpf_lookup 对含 "." 的目录名返回 EPERM），slice 名的 ".slice" 须转写。
+            # 策略只允许 [A-Za-z0-9_-] 加唯一的 ".slice" 后缀，把点号换成下划线后与 slice 仍一一对应。
+            pin = Path("/sys/fs/bpf/sub2api-egress") / (name.replace(".", "_") + "-" + source_identity[:16])
             if pin.exists():
                 try:
                     EgressKernelMaps(pin).verify_attachment(parent)
