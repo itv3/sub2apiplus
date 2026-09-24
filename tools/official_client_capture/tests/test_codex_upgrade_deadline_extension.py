@@ -489,11 +489,11 @@ class DeadlineExtensionTests(unittest.TestCase):
         with self.assertRaisesRegex(timing.TimingLedgerError, '计划摘要'):
             timing._locate_project_root(self.ledger, recorded_path=str(self.project), plan_sha256=None)
 
-    def test_unbound_timing_ledger_cannot_extend(self):
-        """R8 复审修正：没有总账绑定的计时账本可以注册，但不支持延期。
+    def test_unbound_timing_ledger_extension_is_located_by_commit_proof(self):
+        """R8 复审修正：指南允许不绑定总账的计时账本，它的延期按"含这次延期提交证明"唯一定位总账。
 
-        延期事件重放时要按绑定里的计划摘要唯一定位总账；修改前无绑定账本也能预览并写入延期，
-        写入后该事件在重放时无法确认总账身份。
+        无绑定账本可以注册、延期并正常重放；数据根被复制、旧位置仍在时，两份总账都含同一份证明，写路径失败
+        关闭、只读入口降级，不再像修改前那样接受第一个命中。
         """
 
         ledger = self.root / 'unbound-timing'
@@ -506,12 +506,28 @@ class DeadlineExtensionTests(unittest.TestCase):
             'target_version': '0.156.1', 'control_receipts': {'upgrade_timing': {'ledger_dir': str(ledger)}}})
         self.write(campaign / 'control/vc/campaign-plan.json', {'campaign_id': 'unbound-campaign', 'original_deadline_at_utc': self.at(300)})
         project.register_existing_campaign(campaign)
-        before = self._ledger_bytes(ledger)
-        with self.assertRaisesRegex(project.ProjectLedgerError, '没有绑定本项目总账'):
-            project.preview_deadline_extension(campaign, scope='campaign', phase=None, new_deadline_at_utc=self.at(1200),
-                                               reason='隔离测试：无绑定账本', now=self.moment(20))
-        self.assertEqual(self._ledger_bytes(ledger), before)
-        self.assertEqual(list((campaign / 'control').rglob('*preview*')), [])
+        preview = project.preview_deadline_extension(campaign, scope='campaign', phase=None, new_deadline_at_utc=self.at(1200),
+                                                     reason='隔离测试：无绑定账本延期', now=self.moment(20))
+        project.apply_deadline_extension(campaign, preview_path=Path(preview['preview_path']),
+            approve_sha256=preview['review_sha256'], approved_by='fixture-reviewer', now=self.moment(21))
+        summary = timing.inspect_ledger(ledger, now=self.at(30))
+        self.assertEqual(summary['total_deadline_at_utc'], self.at(1200))
+        self.assertNotIn('project_ledger_unreachable', summary)
+        copied = self.root.parent / 'copied'
+        shutil.copytree(self.root, copied)
+        copied_ledger = copied / 'unbound-timing'
+        with self.assertRaisesRegex(timing.TimingLedgerError, '多份'):
+            timing.inspect_ledger(copied_ledger, now=self.at(30))
+        before = self._ledger_bytes(copied_ledger)
+        with self.assertRaisesRegex(timing.TimingLedgerError, '多份'):
+            timing.append_event(copied_ledger, event_id='copied-unbound-stop', phase='VC-0', event_type='stop_the_line',
+                                root_cause_id='integrity', recorded_at_utc=self.at(31), next_action='副本树写入')
+        self.assertEqual(self._ledger_bytes(copied_ledger), before)
+        degraded = timing.inspect_ledger(copied_ledger, now=self.at(30), project_ledger_optional=True)
+        marker = degraded.pop('project_ledger_unreachable')
+        self.assertRegex(marker['reason'], '多份')
+        self.assertEqual(marker['unverified_deadline_extensions'], [summary['deadline_extensions'][0]['receipt_sha256']])
+        self.assertEqual(degraded, summary)
 
     def _archive_project(self):
         archived = self.root / 'archived-project-ledger'

@@ -471,6 +471,10 @@ class TimingLedgerError(ValueError):
     """计时台账不完整、超时、发生漂移或违反重试纪律。"""
 
 
+class _ProjectLedgerUnreachable(TimingLedgerError):
+    """R8 复审修正：项目总账无法唯一定位（不在记录位置、被移走或出现多份）。只读入口据此降级，写路径失败关闭。"""
+
+
 def _canonical(value: Any) -> bytes:
     return (
         json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -1543,22 +1547,22 @@ def _summarize(
             extension = normalized["deadline_control"]
             _artifacts, project = _deadline_modules()
             binding = plan.get(PROJECT_LEDGER_BINDING_FIELD)
-            # R8 审核修正：不按收据内嵌的绝对路径直接打开总账，迁移后按计划摘要重新定位。
+            # R8 审核修正：不按收据内嵌的绝对路径直接打开总账，迁移后重新定位。R8 复审修正：有总账绑定时按计划摘要
+            # 唯一定位后核对提交证明；指南允许不绑定总账的账本，它的延期按"含这次延期提交证明"唯一定位，定位即核对。
             try:
-                project_root = _locate_project_root(
-                    root,
-                    recorded_path=str(binding["path"] if isinstance(binding, Mapping) else extension["project_ledger_path"]),
-                    plan_sha256=binding["plan_sha256"] if isinstance(binding, Mapping) else None,
-                )
-            except TimingLedgerError as error:
+                if isinstance(binding, Mapping):
+                    project_root = _locate_project_root(root, recorded_path=str(binding["path"]),
+                                                        plan_sha256=binding["plan_sha256"])
+                    project.verify_committed_deadline_extension(extension, root=project_root)
+                else:
+                    _locate_extension_project_root(root, extension)
+            except _ProjectLedgerUnreachable as error:
                 if not project_ledger_optional:
                     raise
                 # 只读降级：无法到总账核对提交证明，记为未核实；下面与本账本 head、批准时间和
                 # 原截止承接相关的校验照常执行。总账可达而证明缺失属于完整性问题，仍然报错。
                 project_unreachable = project_unreachable or {"reason": str(error)}
                 unverified_extensions.append(str(extension["receipt_sha256"]))
-            else:
-                project.verify_committed_deadline_extension(extension, root=project_root)
             expected_head = {"sequence": sequence - 1, "sha256": normalized["previous_event_sha256"]}
             if extension["campaign_ledger_head"] != expected_head:
                 raise TimingLedgerError("延期批准绑定的 Campaign 账本 head 已过期")
@@ -2219,7 +2223,7 @@ def _locate_project_root(ledger_root: Path, *, recorded_path: str, plan_sha256: 
     """
 
     if plan_sha256 is None:
-        raise TimingLedgerError("计时账本没有绑定总账计划摘要，无法确认总账身份，不接受任何候选总账")
+        raise _ProjectLedgerUnreachable("计时账本没有绑定总账计划摘要，无法确认总账身份，不接受任何候选总账")
     _artifacts, project = _deadline_modules()
     candidates = [Path(recorded_path)]
     candidates.extend(parent / project.LEDGER_DIR_NAME for parent in Path(ledger_root).resolve().parents)
@@ -2235,12 +2239,49 @@ def _locate_project_root(ledger_root: Path, *, recorded_path: str, plan_sha256: 
         except OSError:
             continue
     if len(matches) > 1:
-        raise TimingLedgerError(
+        raise _ProjectLedgerUnreachable(
             "同一计划的项目总账存在多份，无法确定正在推进的总账（复制迁移须移走旧位置，"
             "staging 副本与备份不得位于账本的祖先目录）：" + "、".join(sorted(str(path) for path in matches))
         )
     if not matches:
-        raise TimingLedgerError("项目总账不在记录的路径，且无法在数据根内按计划摘要重新定位（数据根迁移须整体移动）")
+        raise _ProjectLedgerUnreachable("项目总账不在记录的路径，且无法在数据根内按计划摘要重新定位（数据根迁移须整体移动）")
+    return next(iter(matches.values()))
+
+
+def _locate_extension_project_root(ledger_root: Path, extension: Mapping[str, Any]) -> Path:
+    """R8 复审修正：定位不绑定总账的计时账本里某次延期所在的项目总账，定位即核对提交证明。
+
+    指南允许 Campaign 账本不绑定项目总账（沿用默认预算），这类账本同样可以延期。没有绑定的计划摘要时，以
+    "包含这次延期的提交证明"作为总账身份：候选为延期收据记录的路径与账本目录逐级向上的同名总账目录，按真实
+    路径去重后必须恰好一份包含证明。多于一份（复制迁移后仍在的旧位置、祖先目录下的副本）或一份候选总账都
+    没有时视为不可达；有候选总账却都没有这份证明属于完整性问题，照常报错。
+    """
+
+    _artifacts, project = _deadline_modules()
+    candidates = [Path(str(extension["project_ledger_path"]))]
+    candidates.extend(parent / project.LEDGER_DIR_NAME for parent in Path(ledger_root).resolve().parents)
+    present: set[Path] = set()
+    matches: dict[Path, Path] = {}
+    for candidate in candidates:
+        plan_path = candidate / "plan.json"
+        try:
+            if candidate.is_symlink() or plan_path.is_symlink() or not plan_path.is_file():
+                continue
+            resolved = candidate.resolve(strict=True)
+            present.add(resolved)
+            project.verify_committed_deadline_extension(extension, root=candidate)
+        except (OSError, project.ProjectLedgerError):
+            continue
+        matches.setdefault(resolved, candidate)
+    if len(matches) > 1:
+        raise _ProjectLedgerUnreachable(
+            "同一延期的提交证明出现在多份项目总账中，无法确定正在推进的总账（复制迁移须移走旧位置，"
+            "staging 副本与备份不得位于账本的祖先目录）：" + "、".join(sorted(str(path) for path in matches))
+        )
+    if not matches:
+        if present:
+            raise TimingLedgerError("候选项目总账都没有这次延期的提交证明：" + "、".join(sorted(str(path) for path in present)))
+        raise _ProjectLedgerUnreachable("项目总账不在延期收据记录的路径，且无法在数据根内按延期提交证明重新定位（数据根迁移须整体移动）")
     return next(iter(matches.values()))
 
 
