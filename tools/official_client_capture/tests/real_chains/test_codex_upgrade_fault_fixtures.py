@@ -982,12 +982,24 @@ class EgressProcessTests(unittest.TestCase):
         def publish():
             try:
                 while not halt.is_set():
-                    items = {item["Name"].lstrip("/"): item for item in json.loads(docker("inspect", *names))}
+                    # Compose 重建容器时，旧容器删除到新容器改名之间名字会短暂不存在；docker inspect 对缺失对象
+                    # 返回非零，但仍在标准输出给出其余存在的对象。按真实守护的口径把缺失容器登记为 missing，
+                    # 不能让发布线程把这个正常窗口当成致命错误退出。
+                    listed = subprocess.run(["docker", "inspect", *names], capture_output=True, text=True, timeout=30)
+                    items = {item["Name"].lstrip("/"): item for item in json.loads(listed.stdout or "[]")}
+                    if listed.returncode != 0 and not all(
+                            name in items or "no such object" in listed.stderr for name in names):
+                        raise AssertionError(listed.stderr[:800])
                     snapshot = egress_tests.runtime_fixture()["runtime"]
                     snapshot.update(policy_sha256=arm.egress_policy_sha256(policy), boot_id=boot)
                     snapshot["services"] = {name: value for name, value in zip(names, snapshot["services"].values())}
                     for name, service in snapshot["services"].items():
-                        item = items[name]
+                        item = items.get(name)
+                        if item is None:
+                            identities.pop(name, None)
+                            service.update(status="blocked", admission_state="missing", container_id="", network_bindings=[], observations=[])
+                            seen.append(service["admission_state"])
+                            continue
                         identity = (item["Id"], item["State"]["Pid"], item["State"]["StartedAt"])
                         if identities.get(name) != identity:
                             identities[name], changed_at[name] = identity, time.monotonic()
