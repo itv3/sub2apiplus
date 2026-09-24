@@ -226,19 +226,60 @@ class OfficialReuseResumeTests(unittest.TestCase):
             self.assertEqual(self.case._tree_digests(target), tampered)
             self.assertEqual(self.case._tree_digests(ledger), events)
 
-    def test_stop_required_prevents_publish_and_event_writes(self):
+    def _project_head(self, root):
+        """总账的事件序号、头摘要与已注册 Campaign，用于证明没有发生注册。"""
+
+        head = project.replay_head(root / project.LEDGER_DIR_NAME)
+        return head["sequence"], head["head_sha256"], sorted(head["registered_campaigns"])
+
+    def test_deadline_pause_prevents_publish_and_event_writes(self):
+        """R8 之后预算到期是可延期的 deadline_paused；导入仍在发布与任何写入之前拒绝。"""
+
         with tempfile.TemporaryDirectory() as directory:
-            _, target, ledger, argv = self._sealed_fixture(Path(directory).resolve())
+            root = Path(directory).resolve()
+            _, target, ledger, argv = self._sealed_fixture(root)
             before = self.case._tree_digests(ledger)
+            project_before = self._project_head(root)
             deadline = timing.inspect_ledger(ledger)["total_deadline_at_utc"]
             expired = (datetime.fromisoformat(deadline.replace("Z", "+00:00"))
                        + timedelta(seconds=1)).isoformat().replace("+00:00", "Z")
             with mock.patch.object(timing, "_utc_now", return_value=expired):
                 code, _, stderr = self.case._run_main(argv)
             self.assertNotEqual(code, 0)
+            self.assertIn("deadline_paused", stderr)
+            self.assertNotIn("stop_required", stderr)
+            self.assertFalse(target.exists())
+            self.assertEqual(self.case._tree_digests(ledger), before)
+            self.assertEqual(self._project_head(root), project_before)
+
+    def test_stop_required_ledger_prevents_publish_and_event_writes(self):
+        """同一根因失败达到上限的 stop_required 账本仍在发布与任何写入之前拒绝导入。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            _, target, ledger, argv = self._sealed_fixture(root)
+            for index in (1, 2):
+                timing.append_event(
+                    ledger, event_id=f"r6-stop-attempt-{index}-started", phase="VC-0",
+                    event_type="attempt_started", attempt_id=f"r6-stop-attempt-{index}",
+                    root_cause_id="r6-same-cause" if index == 2 else None,
+                )
+                timing.append_event(
+                    ledger, event_id=f"r6-stop-attempt-{index}-failed", phase="VC-0",
+                    event_type="attempt_failed", attempt_id=f"r6-stop-attempt-{index}",
+                    root_cause_id="r6-same-cause",
+                )
+            self.assertEqual(timing.phase_ledger_state(ledger)["status"], "stop_required")
+            with upgrade.codex_upgrade_supervisor._timing_closeout_lock(ledger):
+                pass
+            before = self.case._tree_digests(ledger)
+            project_before = self._project_head(root)
+            code, _, stderr = self.case._run_main(argv)
+            self.assertNotEqual(code, 0)
             self.assertIn("stop_required", stderr)
             self.assertFalse(target.exists())
             self.assertEqual(self.case._tree_digests(ledger), before)
+            self.assertEqual(self._project_head(root), project_before)
 
     def test_materialized_attempt_missing_rejects_instead_of_regenerating(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -273,9 +314,12 @@ class OfficialReuseResumeTests(unittest.TestCase):
             self.assertEqual(self.case._tree_digests(target), before)
             self.assertEqual(self.case._tree_digests(ledger), events)
 
-    def test_fixed_event_id_conflict_is_rejected_before_any_missing_event(self):
+    def test_fixed_event_id_conflict_is_rejected_before_publish_or_registration(self):
+        """固定事件编号已被不同内容占用时，在目录发布与总账注册之前拒绝，不留下永远无法续作的目录。"""
+
         with tempfile.TemporaryDirectory() as directory:
-            _, target, ledger, argv = self._sealed_fixture(Path(directory).resolve())
+            root = Path(directory).resolve()
+            _, target, ledger, argv = self._sealed_fixture(root)
             timing.append_event(
                 ledger, event_id="recovery-import-vc0-completed", phase="VC-0",
                 event_type="stage_completed", next_action="冲突内容",
@@ -284,15 +328,51 @@ class OfficialReuseResumeTests(unittest.TestCase):
             with upgrade.codex_upgrade_supervisor._timing_closeout_lock(ledger):
                 pass
             before = self.case._tree_digests(ledger)
+            project_before = self._project_head(root)
+            for _ in range(2):
+                code, _, stderr = self.case._run_main(argv)
+                self.assertNotEqual(code, 0)
+                self.assertIn("内容冲突", stderr)
+                self.assertFalse(target.exists(), "冲突时不得发布目标目录")
+                self.assertEqual(sorted(path.name for path in target.parent.iterdir()
+                                        if path.name.startswith(target.name)), [])
+                self.assertEqual(self.case._tree_digests(ledger), before)
+                self.assertEqual(self._project_head(root), project_before)
+
+    def test_conflict_written_after_publish_is_caught_by_locked_recheck_and_resume_writes_nothing(self):
+        """预检之后、补齐事件之前被并发写入冲突事件时，锁内复检拒绝；续作在物化与注册之前即拒绝。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            _, target, ledger, argv = self._sealed_fixture(root)
+            original = upgrade.os.rename
+
+            def rename(source, destination, *args, **kwargs):
+                result = original(source, destination, *args, **kwargs)
+                if Path(destination) == target:
+                    # 账本此时处于 VC-0 进行中，同编号的 VC-0 完成事件是状态机允许的并发写入。
+                    timing.append_event(
+                        ledger, event_id="recovery-import-vc0-completed", phase="VC-0",
+                        event_type="stage_completed", next_action="并发写入的冲突内容",
+                    )
+                return result
+
+            with mock.patch.object(upgrade.os, "rename", side_effect=rename):
+                code, _, stderr = self.case._run_main(argv)
+            self.assertNotEqual(code, 0)
+            self.assertIn("内容冲突", stderr)
+            self.assertTrue(target.is_dir(), "锁内复检只能在发布后拒绝，已发布目录保留供审计")
+            with upgrade.codex_upgrade_supervisor._timing_closeout_lock(ledger):
+                pass
+            target_before = self.case._tree_digests(target)
+            ledger_before = self.case._tree_digests(ledger)
+            project_before = self._project_head(root)
             code, _, stderr = self.case._run_main(argv)
             self.assertNotEqual(code, 0)
             self.assertIn("内容冲突", stderr)
-            self.assertEqual(self.case._tree_digests(ledger), before)
-            self.assertTrue(target.is_dir())
-            code, _, stderr = self.case._run_main(argv)
-            self.assertNotEqual(code, 0)
-            self.assertIn("内容冲突", stderr)
-            self.assertEqual(self.case._tree_digests(ledger), before)
+            self.assertEqual(self.case._tree_digests(target), target_before)
+            self.assertEqual(self.case._tree_digests(ledger), ledger_before)
+            self.assertEqual(self._project_head(root), project_before)
 
 
 if __name__ == "__main__":

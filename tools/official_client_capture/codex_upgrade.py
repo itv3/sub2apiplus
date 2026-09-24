@@ -27974,6 +27974,49 @@ def _official_reuse_timing_state(
     return ledger_dir, state
 
 
+def _official_reuse_expected_events() -> list[dict[str, Any]]:
+    """reuse-official-evidence 补齐的三条固定零请求事件，编号、阶段、类型与动作逐字段固定。"""
+
+    specifications = [
+        ("recovery-import-vc0-completed", "VC-0", "stage_completed",
+         "只读导入已封存 VC-0/VC-1 checkpoint；对齐账本至阶段之间"),
+        ("recovery-import-vc1-started", "VC-1", "stage_started",
+         "VC-1 由 reuse-official-evidence 零请求导入"),
+        ("recovery-import-vc1-completed", "VC-1", "stage_completed", "等待 VC-2 批次"),
+    ]
+    return [
+        {
+            "event_id": event_id, "phase": phase, "event_type": event_type,
+            "next_action": action, "live_request_count": 0, "receipts": [],
+            **{key: None for key in (
+                "attempt_id", "root_cause_id", "revision", "candidate_id",
+                "revision_commit_sha256", "supersedes_revision", "evaluation_baseline",
+                "baseline_commit_sha256", "baseline_kind", "recovery_revision",
+            )},
+        }
+        for event_id, phase, event_type, action in specifications
+    ]
+
+
+def _check_official_reuse_event_conflicts(
+    ledger_dir: Path,
+) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
+    """只读核对三条固定事件：同编号已存在时必须逐字段相同，否则拒绝；返回已有事件与期望事件。
+
+    目录发布与总账注册之前先调用一次，冲突时不留下已发布、已注册却永远无法续作的目录；
+    补齐事件时在时间账本收口锁内再调用一次，覆盖两次检查之间的并发写入。
+    """
+
+    existing = {event["event_id"]: event for event, _ in
+                codex_upgrade_timing_ledger._load_events(ledger_dir)}
+    expected_events = _official_reuse_expected_events()
+    for expected in expected_events:
+        actual = existing.get(expected["event_id"])
+        if actual is not None and any(actual.get(key) != value for key, value in expected.items()):
+            raise TimingLedgerGateError(f"官方复用事件 {expected['event_id']} 已存在但内容冲突。")
+    return existing, expected_events
+
+
 def _align_official_reuse_timing(
     campaign_dir: Path, manifest: Mapping[str, Any],
 ) -> None:
@@ -27989,30 +28032,7 @@ def _align_official_reuse_timing(
     ledger_dir, _ = timing
     with codex_upgrade_supervisor._timing_closeout_lock(ledger_dir):
         _official_reuse_timing_state(campaign_dir, manifest)
-        specifications = [
-            ("recovery-import-vc0-completed", "VC-0", "stage_completed",
-             "只读导入已封存 VC-0/VC-1 checkpoint；对齐账本至阶段之间"),
-            ("recovery-import-vc1-started", "VC-1", "stage_started",
-             "VC-1 由 reuse-official-evidence 零请求导入"),
-            ("recovery-import-vc1-completed", "VC-1", "stage_completed", "等待 VC-2 批次"),
-        ]
-        existing = {event["event_id"]: event for event, _ in
-                    codex_upgrade_timing_ledger._load_events(ledger_dir)}
-        expected_events = []
-        for event_id, phase, event_type, action in specifications:
-            expected = {
-                "event_id": event_id, "phase": phase, "event_type": event_type,
-                "next_action": action, "live_request_count": 0, "receipts": [],
-                **{key: None for key in (
-                    "attempt_id", "root_cause_id", "revision", "candidate_id",
-                    "revision_commit_sha256", "supersedes_revision", "evaluation_baseline",
-                    "baseline_commit_sha256", "baseline_kind", "recovery_revision",
-                )},
-            }
-            actual = existing.get(event_id)
-            if actual is not None and any(actual.get(key) != value for key, value in expected.items()):
-                raise TimingLedgerGateError(f"官方复用事件 {event_id} 已存在但内容冲突。")
-            expected_events.append(expected)
+        existing, expected_events = _check_official_reuse_event_conflicts(ledger_dir)
         official_path = _stage_path(campaign_dir, "capture-official")[1]
         if not official_path.exists() and not official_path.is_symlink():
             return
@@ -28083,7 +28103,10 @@ def _resume_official_reuse(arguments: argparse.Namespace) -> dict[str, Any]:
             or imported.get("successor_campaign_manifest_sha256") != file_sha256(campaign_dir / "campaign.json")
         ):
             raise ConfigurationError("官方复用续作的 Campaign、前序或账号身份不一致。")
-        _official_reuse_timing_state(campaign_dir, manifest)
+        resume_timing = _official_reuse_timing_state(campaign_dir, manifest)
+        if resume_timing is not None:
+            # 固定事件冲突时这个目录永远无法补齐账本；在物化与总账注册之前拒绝，不做任何写入。
+            _check_official_reuse_event_conflicts(resume_timing[0])
         attempt_import = imported.get("import_mode") == OFFICIAL_ATTEMPT_IMPORT_MODE
         _validate_official_attempt_import_arguments(arguments, attempt_import)
         if not attempt_import or _stage_path(campaign_dir, "capture-official")[1].exists():
@@ -29042,7 +29065,10 @@ def _create_successor_campaign_unadmitted(arguments: argparse.Namespace) -> dict
                 )
 
         if getattr(arguments, "command", None) == "reuse-official-evidence":
-            _official_reuse_timing_state(staging_dir, successor_manifest)
+            reuse_timing = _official_reuse_timing_state(staging_dir, successor_manifest)
+            if reuse_timing is not None:
+                # 发布目录与总账注册之前先核对固定事件编号；冲突时暂存区随 finally 清理，不留下目录。
+                _check_official_reuse_event_conflicts(reuse_timing[0])
             _write_official_reuse_resume_binding(arguments, staging_dir)
         if successor_dir.exists():
             raise ConfigurationError("后继 Campaign 目录在发布前已被占用。")
