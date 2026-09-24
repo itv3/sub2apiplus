@@ -46,8 +46,9 @@
     "evidence_semantics_sha256": "unchanged",
     "control_sha256": {
       "before": "279f438519668ccedc921cb74573d9770a4e6f1ef6dcfd2e74812041bd5be285",
-      "after": "d174185f948dafccf38f61402322fc973e389d5c9e36e4c3d23964370a3dd4c1"
-    }
+      "after": "05a50663658b1da91d847970c7ee94dde2c9f43b7657a9855b74fde6be4fc47f"
+    },
+    "correction": "2026-09-24 更正：修改后 control 摘要原记为 d174185f…，那是提交前、演练合同模块尚未最终修改时的中间工作区状态；按提交 427a465b0 的干净导出复算为 05a50663…（与 1c669a5cc 相同），policy／wire／evidence 不变。"
   },
   "regression": {
     "local_full": {

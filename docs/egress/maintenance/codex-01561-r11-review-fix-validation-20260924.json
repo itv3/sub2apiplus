@@ -1,0 +1,200 @@
+{
+  "schema_version": "codex-upgrade-improvement-validation/v1",
+  "item": "R11（审核修正）",
+  "source_commit": "00290bfdc1c42781ca4acf2a1603d70678ce5704",
+  "source_commits": [
+    "00290bfdc1c42781ca4acf2a1603d70678ce5704"
+  ],
+  "review_basis": "桌面《Codex仿真升级阶段1审核结论-20260924.md》第二节第 4 条（判据④在收口后、摘要前 SIGKILL 路径退化为存在性检查）、第二节第 10 条（每次读段递归重扫前序复用证据且不计入 scanned_bytes；attempt_recovery_reservation schema 零引用）、第一节第 5 条末项（R11 回退用例只在仓库外）；方案 R11“改哪里”中请求计量与预约、段 seal 三处同步核对 execute ∪ reuse == J*",
+  "status": "development_self_check_passed",
+  "production_deployed": false,
+  "live_request_count": 0,
+  "self_checked_at_utc": "2026-09-24T11:15:08.879735+00:00",
+  "fixes": [
+    {
+      "finding": "判据④在“权限收口后、段摘要写出前被杀”路径只核对 after 探针与恢复报告存在；同大小改写并恢复 mtime 的篡改不可检出，自查声称的“after 内容改变拒绝复用”在此路径不成立",
+      "resolution": "摘要缺失时改以机器 finalizer 重放过的恢复报告为准：重放按原输入重算五类 after 快照并逐字段比对，报告中 role=after 的引用即快照内容的可信摘要；after 探针清单（schema、phase、五类快照）必须与这些引用逐项相同，且清单列出的快照复算摘要与字节数一致，否则不复用。修改前本机复现：摘要缺失时改写快照、快照与清单一起改写、清单错列三种篡改均被复用"
+    },
+    {
+      "finding": "每次读段都沿前序段递归重扫全部复用证据，且这些字节不计入 scanned_bytes",
+      "resolution": "同一次复验内按证据根集合缓存逐文件清单，递归各层同一份复用证据只读取、只计数一次；validate_segment_reuse_preview 返回本次实际读取字节并可累加进调用方统计；段预约新增 reuse_validation_scanned_bytes（schema 同步）。ARM64 段复用真实链断言 ar3 预约记录的字节数恰等于两份复用证据各计一次"
+    },
+    {
+      "finding": "方案要求请求计量与预约、段 seal 同步核对 execute ∪ reuse == J*，恢复段入账（_account_sealed_capture）没有显式核对",
+      "resolution": "恢复段入账前核对：预约执行与复用集合不相交、并集等于基线冻结 J*，段摘要绑定的预约摘要一致，段结果中标为 reused 与 executed 的 Job 分别逐项等于预约的复用与执行集合；历史预约无复用字段时按全部执行核对。ARM64 段复用真实链走完完整 seal 与入账"
+    },
+    {
+      "finding": "R11 自查声称的额外核验（摘要一致但越出权限边界、after 内容改变、证据软链接）只在仓库外做过",
+      "resolution": "三条负例入库：证据根在权限收口边界外即使清单摘要一致也不复用（附只差证据根位置的对照组）；摘要在场与缺失两条路径的 after 改写；证据根内软链接由逐文件清单拒绝且复验不复用"
+    },
+    {
+      "finding": "attempt_recovery_reservation schema 生产代码零引用、离线校验不在门禁内",
+      "resolution": "登记进构建制品 schema 映射用例（版本常量取编排器，由恢复段读写两端共用）；段复用真实链对实际写出的预约做结构校验（必填、常量、复用字段成组、复用证明字段闭合、新字段类型）"
+    },
+    {
+      "finding": "R11 的 rollback_backup 旧工具只读回放用例只在仓库外",
+      "resolution": "回退兼容模块新增恢复段复用许可用例：用 main 基线工具树（git archive）运行旧监督器的范围判定，历史空复用许可新旧工具都接受，新复用许可旧工具拒绝（回退后不会被静默执行，需按全量执行重新对账批准）"
+    }
+  ],
+  "clarifications": [
+    "evidence 层读段路径（段 seal、段重放、候选收据边界、监督器孤儿输出核验）的复验同样按证据根去重，但不把复验字节并入证据清单的 delta 口径 scanned_bytes：该口径由 evidence 层证据清单模块产出并与历史台账绑定，改动需要重签台账并追加评估 epoch，超出本项范围；复验成本在预约与恢复预览两个 control 入口可审计。",
+    "评估链驱动的环境探针替身此前只写 schema、phase、observed_at_utc，现按真实探针格式写出五类快照绑定，否则判据④在真实链的摘要缺失路径无法核对；真实恢复 finalizer 本就不替换。",
+    "R4 报告中 control 修改后摘要原记为 d174185f…，是提交前演练合同模块尚未最终修改时的中间状态；按 427a465b0 干净导出复算为 05a50663…，已在 R4 报告中更正并注明。",
+    "15:58 主工作区被切到 main（非本会话操作），此后阶段 1 改在独立 worktree（/Users/czs/Developer/.sub2apiplus-01561/worktree）继续；R11 门禁与 ARM64 第一段均在切换前基于分支 00290bfdc 完成，工具身份按提交号干净导出复算。",
+    "ARM64 评估恢复真实链 8 个用例约 75 分钟，第一段运行在评估恢复链结束后主动结束以避开 120 分钟硬超时（结束码 241 为收到 TERM），legacy 评估链与单测模块在第二段单独运行。"
+  ],
+  "tool_identity": {
+    "policy_sha256": "unchanged",
+    "wire_producer_sha256": "unchanged",
+    "evidence_semantics_sha256": "unchanged",
+    "control_sha256": {
+      "before": "05a50663658b1da91d847970c7ee94dde2c9f43b7657a9855b74fde6be4fc47f",
+      "after": "b9d3c3968c75b878ea56b9a7a0da12ff006939f9025af893294343b8c747b0ef"
+    },
+    "method": "按提交号 git archive 干净导出复算"
+  },
+  "regression": {
+    "local_modules": {
+      "commit": "00290bfdc1c42781ca4acf2a1603d70678ce5704",
+      "tests": 403,
+      "seconds": 397.014,
+      "result": "FAILED",
+      "detail": "failures=1",
+      "modules": [
+        "test_codex_upgrade_segment_reuse",
+        "test_codex_upgrade_evaluation_attempt_recovery",
+        "test_codex_upgrade_rollback_readback",
+        "test_codex_upgrade_vc_artifacts",
+        "test_codex_upgrade_time_reconciliation",
+        "test_codex_upgrade_stage_recovery",
+        "test_codex_upgrade_supervisor",
+        "test_codex_upgrade"
+      ],
+      "note": "唯一失败为 R8 命令闭集"
+    },
+    "local_real_chains": {
+      "commit": "00290bfdc1c42781ca4acf2a1603d70678ce5704",
+      "tests": 9,
+      "seconds": 1752.996,
+      "result": "OK",
+      "detail": "skipped=6",
+      "note": "段复用真实链在本机完整执行（不含需要 Linux arm64 的 seal 段）；评估恢复链 6 项需要 docker 与 go（linux/arm64），本机跳过，由 ARM64 执行"
+    },
+    "red_green_r11": {
+      "old": "FAILED (failures=3, errors=2)",
+      "new": "OK",
+      "tests": 10,
+      "note": "修改前（1c669a5cc）摘要缺失时三种篡改均被复用；扫描字节去重与入账集合核对两条因函数不存在报错；摘要在场的探针改写、边界对照与负例、软链接、摘要缺失正例新旧均通过（补覆盖）"
+    },
+    "arm64_chains": {
+      "commit": "00290bfdc1c42781ca4acf2a1603d70678ce5704",
+      "tests": 9,
+      "result": "OK",
+      "modules": [
+        "real_chains.test_codex_upgrade_segment_reuse",
+        "real_chains.test_codex_upgrade_evaluation_attempt_recovery_real_chain"
+      ],
+      "note": "CAPTURE_REAL_CHAINS_REQUIRE_EXECUTION=1，零跳过；段复用链 full_seal=true（含入账集合核对、扫描字节去重与预约结构断言）；评估恢复链 8 个用例全部通过，约 75 分钟。随后为避开 120 分钟硬超时主动结束本次运行（结束码 241），legacy 链移到下一段"
+    },
+    "arm64_legacy_and_units_part1": {
+      "commit": "00290bfdc1c42781ca4acf2a1603d70678ce5704",
+      "result": "INTERRUPTED",
+      "detail": "33 项通过、0 失败后超时（exit=124）",
+      "note": "legacy 评估真实链 9 项与段复用单测 18 项全部通过；test_codex_upgrade_evaluation_attempt_recovery 模块级引用 EvaluationRecoveryIntegrationTests，整类被重复收集，其中 test_evaluator_digest_drift_after_compile_aborts_before_commit_and_same_sequence_recompiles 在该次运行中无输出直至 90 分钟超时"
+    },
+    "arm64_units_part2": {
+      "commit": "00290bfdc1c42781ca4acf2a1603d70678ce5704",
+      "tests": 372,
+      "seconds": 329.556,
+      "result": "FAILED",
+      "detail": "failures=1",
+      "modules": [
+        "test_codex_upgrade_vc_artifacts",
+        "test_codex_upgrade_time_reconciliation",
+        "test_codex_upgrade_stage_recovery",
+        "test_codex_upgrade_supervisor",
+        "test_codex_upgrade"
+      ],
+      "note": "唯一失败为 R8 命令闭集"
+    },
+    "arm64_diagnosis_single": {
+      "tests": 1,
+      "seconds": 93.658,
+      "result": "OK",
+      "note": "卡住的用例在带 faulthandler 的诊断副本中单独运行 94 秒通过（本机 35 秒）"
+    },
+    "arm64_diagnosis_modules": {
+      "tests": 12,
+      "seconds": 677.869,
+      "result": "OK",
+      "modules": [
+        "test_codex_upgrade_evaluation_recovery",
+        "test_codex_upgrade_evaluation_attempt_recovery"
+      ],
+      "note": "带周期性调用栈输出的诊断副本中完整运行两个评估恢复模块，全部通过，未复现卡住"
+    }
+  },
+  "gates": {
+    "officialegress_frozen": "passed",
+    "service_frozen": "passed",
+    "check_egress_spec_ci": "passed",
+    "codex_0151_worktree_successor": "passed",
+    "arm64_supervised_deploy_tests": "passed",
+    "freeze_successor": "1 条承接边（编排器）；3 项人工动作均为部署脚本受管摘要：R11 未改监督器与断言预处理器，部署脚本常量无需变化",
+    "maintenance_markdown_count": 0
+  },
+  "open_dependencies": [
+    "ARM64 上 EvaluationRecoveryIntegrationTests 的 test_evaluator_digest_drift_after_compile_aborts_before_commit_and_same_sequence_recompiles 曾在“同一进程先跑 legacy 评估真实链”后无输出直至超时；单独运行与按模块运行均通过、未复现。定性为顺序相关或偶发的既有问题（该用例不经过 R11 改动路径），阶段 1 最后的 ARM64 全量按原顺序复验并带调用栈诊断。",
+    "R8 命令闭集用例在 R8 修正。",
+    "回退兼容用例需要 git 历史，ARM64 全量改用带完整历史的检出时执行。"
+  ],
+  "freeze_successors": [
+    {
+      "path": "docs/egress/maintenance/upstream-codex-01561-r11-review-fix-20260924-freeze-successor.json",
+      "sha256": "fc738a062a43a0627864a31b6f08cce07908f8010ec20ed92dea8306e2c58713"
+    }
+  ],
+  "logs_directory": "/Users/czs/Developer/codex-01561-upgrade-work",
+  "logs": [
+    {
+      "file": "review-fix-r11-red-green.log",
+      "sha256": "b71ceb621318a2ddac8cf9e3c2519bd019ccb09f4784e08ae42ccbfde0ae0263"
+    },
+    {
+      "file": "review-fix-r11-local-modules.log",
+      "sha256": "69e14cfd9ef63315a844ad1b1810baafc6a8876195887c7aff049599e64ceb26"
+    },
+    {
+      "file": "review-fix-r11-local-real-chains.log",
+      "sha256": "19193251b177a8462306e81c0f6265f1940d5e7c0693f5c2d33bbfcb5667f59c"
+    },
+    {
+      "file": "review-fix-r11-freeze-generation.log",
+      "sha256": "f605bccd96941e11513fd755f31ec9d7a15469c84a6df023bb098bf7928c564e"
+    },
+    {
+      "file": "review-fix-r11-gates.log",
+      "sha256": "a8ce8397d0632c0005ec646a17b21a1f7e63ed303ab7b8ec274fa89132426c88"
+    },
+    {
+      "file": "review-fix-r11-arm64-chains.log",
+      "sha256": "51b637cbe064ad1f322fb9431202658a5335216fa65f01673e22f2149bd8f6ef"
+    },
+    {
+      "file": "review-fix-r11-arm64-rest.log",
+      "sha256": "3c7109171be0ba33133d774849fd01df126c996eede19dcc9bf51fe9c66dcbd1"
+    },
+    {
+      "file": "review-fix-r11-arm64-units.log",
+      "sha256": "d1c9f69905b1d779922431d64e80c944a270ce315e52d973a9e4dac1c4de6c81"
+    },
+    {
+      "file": "review-fix-r11-arm64-diag-single.log",
+      "sha256": "5a420ea803d2ba4854cdc40493528baa617742fb1955f8ef574cd9db5276a948"
+    },
+    {
+      "file": "review-fix-r11-arm64-diag-modules.log",
+      "sha256": "192c420fcfd11c5ad9e35f4ee025bad463fead1ef3343c1cffb5d649831c352a"
+    }
+  ]
+}
