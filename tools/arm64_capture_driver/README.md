@@ -57,6 +57,8 @@
 * VC-4 的前端和门禁等待均监视实际子进程；任一死亡或超过阶段／项目时限，打印相关日志尾 200 行并退出 3。
   上传方每 30 秒更新 `impl-logs/HEARTBEAT`；等待方在 5 分钟无心跳或总时限到期时退出 3。心跳只判断存活，
   完成必须有 `READY`，并逐文件核验上传清单及日志中的候选／承接提交。
+  `lib.sh` 的 `wait_for_marker` 第 4 个参数是可选 PID：不以 `--` 开头时才按 PID 取走（空串表示不绑定），
+  省略 PID 直接跟 `--log` 等选项时选项原样交给等待器；非空 PID 不是正整数时直接退出 3。
 * 上传中断后执行 `bash vc4-all.sh --resume-from upload-wait`。工具先核验 `E.txt` 指向的 `upload-wait.json`：
   四树 HEAD、实际源码摘要、架构、affected 闭集、go.sum／vendor、Go／Node、基础镜像 digest、构建参数、本轮批准门禁的成功
   日志与镜像／二进制／dist／context 产物。完整实现测试收据尚未生成时不要求它存在；上传后生成并正式 replay。

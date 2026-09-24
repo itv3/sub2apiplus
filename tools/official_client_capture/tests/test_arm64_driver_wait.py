@@ -116,6 +116,69 @@ class DriverWaitTests(unittest.TestCase):
                     child.wait()
 
 
+class LibWaitForMarkerArgumentTests(unittest.TestCase):
+    """lib.sh 的 wait_for_marker：PID 位置参数可选，省略时选项原样交给 wait_state.py。"""
+
+    def _probe(self, root: Path) -> tuple[Path, dict[str, str]]:
+        fixture = driver_tests._DriverFixture(root)
+        drv = root / "drv"
+        drv.mkdir(mode=0o700)
+        for name in ("lib.sh", "parse_env.py", "wait_state.py"):
+            (drv / name).write_bytes((SCRIPTS / name).read_bytes())
+        probe = drv / "probe.sh"
+        probe.write_text(
+            "#!/bin/bash\nset -Eeuo pipefail\n"
+            "source \"$(dirname \"${BASH_SOURCE[0]}\")/lib.sh\"\n"
+            "wait_for_marker \"$@\"\necho WAIT_OK\n",
+            encoding="utf-8",
+        )
+        return probe, fixture.env
+
+    def test_pid_is_optional_and_options_are_passed_through(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            probe, env = self._probe(root)
+            done = root / "done.log"
+            done.write_text("DONE\n")
+            extra = root / "extra.log"
+            extra.write_text("EXTRA-TAIL\n")
+            pending = root / "pending.log"
+            pending.write_text("still running\n")
+            # 省略 PID 直接跟 --log：标记已出现即成功，选项不会被当成 PID。
+            ok = driver_tests._run(probe, str(done), "^DONE$", "5", "--log", str(extra), env=env, cwd=root)
+            self.assertEqual(ok.returncode, 0, ok.stdout + ok.stderr)
+            self.assertIn("WAIT_OK", ok.stdout)
+            # 省略 PID 且标记未出现：总时限到期退出 3，--log 指定文件的日志尾被打印，证明选项确实交给了等待器。
+            late = driver_tests._run(probe, str(pending), "^DONE$", ".3", "--log", str(extra), env=env, cwd=root)
+            self.assertEqual(late.returncode, 3, late.stdout + late.stderr)
+            self.assertIn("等待超过总时限", late.stderr)
+            self.assertIn("EXTRA-TAIL", late.stderr)
+            self.assertNotIn("WAIT_OK", late.stdout)
+            # 空串 PID（vc5-all.sh 的用法）：不绑定 PID，后续选项照常生效。
+            empty = driver_tests._run(probe, str(done), "^DONE$", "5", "", "--log", str(extra), env=env, cwd=root)
+            self.assertEqual(empty.returncode, 0, empty.stdout + empty.stderr)
+
+    def test_positional_pid_binds_child_and_invalid_pid_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            probe, env = self._probe(root)
+            pending = root / "pending.log"
+            pending.write_text("still running\n")
+            dead = subprocess.Popen(["true"])
+            dead.wait()
+            exited = driver_tests._run(probe, str(pending), "^DONE$", "5", str(dead.pid), env=env, cwd=root)
+            self.assertEqual(exited.returncode, 3, exited.stdout + exited.stderr)
+            self.assertIn("子进程已退出", exited.stderr)
+            for invalid in ("abc", "0", "-5", "12x"):
+                with self.subTest(pid=invalid):
+                    result = driver_tests._run(probe, str(pending), "^DONE$", "5", invalid, env=env, cwd=root)
+                    self.assertEqual(result.returncode, 3, result.stdout + result.stderr)
+                    self.assertIn("PID 必须是正整数", result.stderr)
+                    self.assertNotIn("WAIT_OK", result.stdout)
+
+
 class UploadHeartbeatTests(unittest.TestCase):
     def test_real_upload_loop_pulses_and_stops_after_ready(self):
         """SSH 替身只把流解到私有临时目录；tar、周期心跳与退出清理执行实际脚本。"""

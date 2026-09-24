@@ -4,9 +4,9 @@
   "files": [
     {
       "path": "README.md",
-      "sha256": "06b3e964d2a7159986c84041f54d766ddce15a63fd67c37a8dc1e419b0c95c0e",
+      "sha256": "523881cbc37b1284d7c014106eb6a47de226498e8acf55187d74205858ccea14",
       "mode": "0600",
-      "bytes": 8932
+      "bytes": 9185
     },
     {
       "path": "driver/build.sh",
@@ -88,9 +88,9 @@
     },
     {
       "path": "driver/lib.sh",
-      "sha256": "a4175705ac49b120f0279c0a4c4a4216eb2a05e3db1f59dab909486cf601e8f1",
+      "sha256": "4960e6ecff31119aa05eb856e329c4d265955d9cf77ced54dc12699442c6ab24",
       "mode": "0700",
-      "bytes": 2899
+      "bytes": 3429
     },
     {
       "path": "driver/local/local-candidate-chain.sh",
@@ -285,5 +285,5 @@
       "bytes": 21976
     }
   ],
-  "manifest_sha256": "38ef95b78076f3758a43e1c646e817cb9aeac05eb0a7356fb5d1b7b335a28e9b"
+  "manifest_sha256": "9aa9bbe7a23e1daee4e3b4889a61a60b27a70a5fe8561ded55f88189734e10ab"
 }

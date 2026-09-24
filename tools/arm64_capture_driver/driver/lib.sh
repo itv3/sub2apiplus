@@ -22,9 +22,17 @@ AS=$D/control/$NEW-assertions
 next_seq() { python3 -c "import glob,os,sys; xs=[int(os.path.basename(p).split('-')[0]) for p in glob.glob(sys.argv[1]+'/control/vc/batches/*.json')]; print(max(xs)+1 if xs else 1)" "$NEWDIR"; }
 utc_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 # 等待失败统一退出 3；只退出当前驱动，不改 Campaign／账本或猜测恢复分支。
+# 用法：wait_for_marker <文件> <正则> <总秒数> [PID] [wait_state.py 选项…]
+# PID 可选：第 4 个参数不以 -- 开头时才按 PID 取走（空串表示不绑定 PID）；省略 PID 直接跟 --log 等选项时，
+# 选项原样交给 wait_state.py，不会被误当成 PID。非空 PID 必须是正整数，否则直接按等待失败退出 3。
 wait_for_marker() {
-  local file="$1" regex="$2" max_seconds="$3" pid="${4:-}"
-  shift 3; if [ "$#" -gt 0 ]; then shift; fi
+  local file="$1" regex="$2" max_seconds="$3" pid=""
+  shift 3
+  if [ "$#" -gt 0 ] && [ "${1#--}" = "$1" ]; then pid="$1"; shift; fi
+  if [ -n "$pid" ] && ! [[ "$pid" =~ ^[1-9][0-9]*$ ]]; then
+    echo "等待失败：PID 必须是正整数：$pid" >&2
+    exit 3
+  fi
   local args=(marker "$file" --regex "$regex" --max-seconds "$max_seconds")
   if [ -n "$pid" ]; then args+=(--pid "$pid"); fi
   python3 "$DRV/wait_state.py" "${args[@]}" "$@" || exit 3
