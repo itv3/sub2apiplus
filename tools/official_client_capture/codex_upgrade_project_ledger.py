@@ -1358,6 +1358,19 @@ def _deadline_assert_registered(head: Mapping[str, Any], campaign_id: str) -> No
         raise ProjectLedgerError("预算控制拒绝未注册或已终态 Campaign")
 
 
+def _deadline_require_timing_binding(timing: Any, ledger: Path, project_plan_raw: bytes) -> None:
+    """R8 复审修正：延期事件重放时要按计时账本绑定的计划摘要唯一定位总账。
+
+    没有绑定本总账的旧计时账本仍可注册、暂停与放弃（这些事件重放时不定位总账），但不支持延期，
+    否则写入的延期事件在重放时无法确认总账身份。
+    """
+
+    plan, _raw = timing._load_plan(ledger)
+    binding = plan.get(timing.PROJECT_LEDGER_BINDING_FIELD)
+    if not isinstance(binding, Mapping) or binding.get("plan_sha256") != hashlib.sha256(project_plan_raw).hexdigest():
+        raise ProjectLedgerError("计时账本没有绑定本项目总账，不支持延期：延期事件重放时无法确认总账身份")
+
+
 def pause_campaign_deadline(campaign_dir: Path, *, now: datetime | None = None) -> dict[str, Any]:
     """到期只记录两本账的暂停事实，不关闭阶段、不生成终态；可重复补齐。"""
 
@@ -1395,9 +1408,10 @@ def preview_deadline_extension(campaign_dir: Path, *, scope: str, phase: str | N
     root, ledger, manifest, artifacts, upgrade, timing = _deadline_context(campaign_dir)
     observed = now or datetime.now(timezone.utc)
     with deadline_control_scope(campaign_dir), project_lock(root), upgrade._campaign_lock(campaign_dir), _flock(ledger / ".vc0-closeout.lock", "延期预览"):
-        plan, _raw = _load_plan(root)
+        plan, plan_raw = _load_plan(root)
         head = _replay(root, plan, _load_events(root), rebuild_cache=False)
         _deadline_assert_registered(head, manifest["campaign_id"])
+        _deadline_require_timing_binding(timing, ledger, plan_raw)
         current = timing.inspect_ledger(ledger, now=observed.isoformat())
         if current["status_before_pause"] in {"stopped", "stop_required", "complete", "abandoned"}:
             raise ProjectLedgerError("既有停线、根因上限或终态不能用延期解除")
@@ -1436,9 +1450,10 @@ def apply_deadline_extension(campaign_dir: Path, *, preview_path: Path, approve_
             or Path(preview["project_ledger_path"]) != root.resolve() or not approved_by.strip()):
         raise ProjectLedgerError("延期批准摘要、Campaign、项目或批准人不一致")
     with deadline_control_scope(campaign_dir), project_lock(root), upgrade._campaign_lock(campaign_dir), _flock(ledger / ".vc0-closeout.lock", "延期写入"):
-        plan, _raw = _load_plan(root)
+        plan, plan_raw = _load_plan(root)
         head = _replay(root, plan, _load_events(root), rebuild_cache=False)
         _deadline_assert_registered(head, manifest["campaign_id"])
+        _deadline_require_timing_binding(timing, ledger, plan_raw)
         directory = _private_dir(campaign_dir / "control/deadlines", "预算控制目录", create=True)
         path = directory / f"extension-{approve_sha256}.json"
         if path.exists():

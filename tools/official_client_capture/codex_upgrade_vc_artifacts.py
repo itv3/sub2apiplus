@@ -368,12 +368,15 @@ def campaign_timing_ledger(campaign_dir: Path) -> Path | None:
 def effective_deadlines(
     campaign_dir: Path, *, original_deadline_at_utc: str | None = None,
     now: datetime | None = None, project_head: Mapping[str, Any] | None = None,
-    project_plan: Mapping[str, Any] | None = None,
+    project_plan: Mapping[str, Any] | None = None, project_ledger_optional: bool = False,
 ) -> dict[str, Any]:
     """统一读取三层有效截止；只读重放批准事件，不改写任何原始时间坐标。
 
     项目已写延期、Campaign 尚未补齐时保持暂停；这段双账事务不能成为临时放行窗口。
     历史无延期事件时，返回原始字段。调用者可传入锁内项目快照避免反向取锁。
+    project_ledger_optional 只供 Campaign status 等人工只读入口使用（R8 复审修正，选项 B）：总账无法定位
+    或读取时降级，项目层截止取计时账本绑定里冻结的开始时刻有效截止，返回值附加 project_ledger_unreachable；
+    准入与写入路径保持默认，总账不可达即失败关闭。
     """
 
     if __package__ in {None, ""}:
@@ -396,15 +399,27 @@ def effective_deadlines(
     ledger_root = campaign_timing_ledger(campaign_dir)
     # 实时读取由计时账本在取完事件快照后采样时间，避免先取时、后读到新事件的
     # 微秒竞态误触发 watchdog。显式历史检查仍严格使用调用者给定的时间。
-    summary = timing.inspect_ledger(ledger_root, now=now.isoformat() if now is not None else None) if ledger_root is not None else {}
+    summary = timing.inspect_ledger(
+        ledger_root, now=now.isoformat() if now is not None else None, project_ledger_optional=project_ledger_optional,
+    ) if ledger_root is not None else {}
+    unreachable = summary.get("project_ledger_unreachable")
     observed = now or datetime.now(timezone.utc)
     root = project.find_project_ledger(campaign_dir)
     if root is not None and (project_head is None or project_plan is None):
-        project_plan, _raw = project._load_plan(root)
-        project_head = project._replay(root, project_plan, project._load_events(root), rebuild_cache=False)
+        try:
+            project_plan, _raw = project._load_plan(root)
+            project_head = project._replay(root, project_plan, project._load_events(root), rebuild_cache=False)
+        except (OSError, project.ProjectLedgerError) as error:
+            if not project_ledger_optional:
+                raise
+            project_plan = project_head = None
+            unreachable = unreachable or {"reason": str(error), "project_deadline_at_utc": None}
     head, plan = project_head or {}, project_plan or {}
+    project_deadline = head.get("effective_absolute_deadline_utc", plan.get("absolute_deadline_utc"))
+    if project_deadline is None and unreachable is not None:
+        project_deadline = unreachable.get("project_deadline_at_utc")
     values = {
-        "project": head.get("effective_absolute_deadline_utc", plan.get("absolute_deadline_utc")),
+        "project": project_deadline,
         "campaign": summary.get("total_deadline_at_utc", original_deadline_at_utc),
         "stage": summary.get("stage_deadline_at_utc"),
     }
@@ -437,7 +452,7 @@ def effective_deadlines(
     review_since = max([since] + [datetime.fromisoformat(row["approved_at_utc"].replace("Z", "+00:00"))
                                  for row in relevant_extensions]) if since else None
     extensions = [row for row in summary.get("deadline_extensions", []) if row["scope"] == "campaign"]
-    return {
+    result = {
         "project_deadline_at_utc": values["project"], "total_deadline_at_utc": values["campaign"],
         "stage_deadline_at_utc": values["stage"], "original_deadline_at_utc": original_deadline_at_utc,
         "execution_deadline_at_utc": min(parsed.values()).isoformat() if parsed else None,
@@ -449,6 +464,9 @@ def effective_deadlines(
         "total_elapsed_seconds": summary.get("total_elapsed_seconds"),
         "total_live_request_count": summary.get("total_live_request_count"),
     }
+    if unreachable is not None:
+        result["project_ledger_unreachable"] = dict(unreachable)
+    return result
 
 
 def build_campaign_plan(

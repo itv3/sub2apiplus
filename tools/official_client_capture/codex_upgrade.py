@@ -20666,8 +20666,12 @@ def _deadline_extend_command(arguments: argparse.Namespace) -> dict[str, Any]:
 def _campaign_status_with_deadlines(campaign_dir: Path, candidate_id: str | None) -> dict[str, Any]:
     """R8 状态命令的控制投影；保留旧证据读取函数的内容和摘要。"""
     result = campaign_status(campaign_dir, candidate_id)
-    deadlines = codex_upgrade_vc_artifacts.effective_deadlines(campaign_dir)
+    # R8 复审修正（选项 B）：status 是人工只读入口，总账不可达时降级并透出标注（main 上 campaign_status
+    # 此时返回 project_ledger=None 而不失败）；准入、派发与写入路径仍按默认调用失败关闭。
+    deadlines = codex_upgrade_vc_artifacts.effective_deadlines(campaign_dir, project_ledger_optional=True)
     result["effective_deadlines"] = deadlines
+    if "project_ledger_unreachable" in deadlines:
+        result["project_ledger_unreachable"] = deadlines["project_ledger_unreachable"]
     for field in ("paused_since_utc", "paused_hours", "review_reminder"):
         result[field] = deadlines[field]
     terminal = (result.get("project_ledger") or {}).get("campaign_terminal")

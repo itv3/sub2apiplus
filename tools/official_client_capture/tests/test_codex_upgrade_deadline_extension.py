@@ -457,6 +457,154 @@ class DeadlineExtensionTests(unittest.TestCase):
         self.assertTrue(expired(350))
         self.assertFalse(expired(450))
 
+    def _ledger_bytes(self, ledger):
+        return {path.relative_to(ledger): path.read_bytes() for path in sorted(ledger.rglob('*'))
+                if path.is_file() and not path.name.endswith('.lock')}
+
+    def test_copied_data_root_refuses_ambiguous_project_ledger(self):
+        """R8 复审修正：数据根被复制、旧位置仍在时，同一计划的总账有两份，定位失败关闭而不是取第一个命中。
+
+        修改前按记录路径优先，副本树里的计时账本会定位回旧位置的总账，按它的事件流判定截止与延期，
+        写入也会落到旧位置。
+        """
+
+        plan, _raw = timing._load_plan(self.ledger)
+        binding = plan['project_ledger_binding']
+        copied = self.root.parent / 'copied'
+        shutil.copytree(self.root, copied)
+        copied_ledger = copied / 'timing'
+        with self.assertRaisesRegex(timing.TimingLedgerError, '存在多份'):
+            timing._locate_project_root(copied_ledger, recorded_path=binding['path'], plan_sha256=binding['plan_sha256'])
+        before = self._ledger_bytes(copied_ledger)
+        original_project = self._ledger_bytes(self.project)
+        with self.assertRaisesRegex(timing.TimingLedgerError, '存在多份'):
+            timing.append_event(copied_ledger, event_id='copied-stop', phase='VC-0', event_type='stop_the_line',
+                                root_cause_id='integrity', recorded_at_utc=self.at(20), next_action='副本树写入')
+        self.assertEqual(self._ledger_bytes(copied_ledger), before)
+        self.assertEqual(self._ledger_bytes(self.project), original_project)
+
+    def test_missing_plan_digest_accepts_no_candidate(self):
+        """R8 复审修正：没有计划摘要就无法确认总账身份，记录路径与祖先链上的候选一律不接受。"""
+
+        with self.assertRaisesRegex(timing.TimingLedgerError, '计划摘要'):
+            timing._locate_project_root(self.ledger, recorded_path=str(self.project), plan_sha256=None)
+
+    def test_unbound_timing_ledger_cannot_extend(self):
+        """R8 复审修正：没有总账绑定的计时账本可以注册，但不支持延期。
+
+        延期事件重放时要按绑定里的计划摘要唯一定位总账；修改前无绑定账本也能预览并写入延期，
+        写入后该事件在重放时无法确认总账身份。
+        """
+
+        ledger = self.root / 'unbound-timing'
+        timing.create_ledger(ledger, upgrade_id='unbound-campaign', baseline_version='0.154.0',
+            target_version='0.156.1', campaign_purpose='validation_only', evidence_decision='recapture',
+            started_at_utc=self.at(0), total_budget_minutes=5,
+            stage_budgets_minutes={phase: 5 for phase in timing.PHASE_ORDER})
+        campaign = self.campaign.with_name('unbound-campaign')
+        self.write(campaign / 'campaign.json', {'campaign_id': 'unbound-campaign', 'campaign_mode': 'formal',
+            'target_version': '0.156.1', 'control_receipts': {'upgrade_timing': {'ledger_dir': str(ledger)}}})
+        self.write(campaign / 'control/vc/campaign-plan.json', {'campaign_id': 'unbound-campaign', 'original_deadline_at_utc': self.at(300)})
+        project.register_existing_campaign(campaign)
+        before = self._ledger_bytes(ledger)
+        with self.assertRaisesRegex(project.ProjectLedgerError, '没有绑定本项目总账'):
+            project.preview_deadline_extension(campaign, scope='campaign', phase=None, new_deadline_at_utc=self.at(1200),
+                                               reason='隔离测试：无绑定账本', now=self.moment(20))
+        self.assertEqual(self._ledger_bytes(ledger), before)
+        self.assertEqual(list((campaign / 'control').rglob('*preview*')), [])
+
+    def _archive_project(self):
+        archived = self.root / 'archived-project-ledger'
+        self.project.rename(archived)
+        self.addCleanup(lambda: archived.exists() and archived.rename(self.project))
+        return archived
+
+    def test_read_only_inspect_degrades_when_project_ledger_unreachable(self):
+        """R8 复审修正（选项 B）：总账不可达时只读 inspect 降级而不失败，写入仍失败关闭。
+
+        项目层截止改用绑定里冻结的开始时刻有效截止，本账本延期照常计入但记为未核实，摘要标注
+        project_ledger_unreachable；默认调用（写路径与准入前置）在定位失败时仍抛错。
+        """
+
+        self.apply(self.preview('campaign', now=20, new=1200), now=21)
+        expected = timing.inspect_ledger(self.ledger, now=self.at(30))
+        self.assertNotIn('project_ledger_unreachable', expected)
+        self._archive_project()
+        with self.assertRaisesRegex(timing.TimingLedgerError, '重新定位'):
+            timing.inspect_ledger(self.ledger, now=self.at(30))
+        degraded = timing.inspect_ledger(self.ledger, now=self.at(30), project_ledger_optional=True)
+        marker = degraded.pop('project_ledger_unreachable')
+        self.assertEqual(degraded, expected)
+        self.assertRegex(marker['reason'], '重新定位')
+        self.assertEqual(marker['project_deadline_source'], 'binding_frozen_at_start')
+        self.assertEqual(marker['unverified_deadline_extensions'],
+                         [row['receipt_sha256'] for row in expected['deadline_extensions']])
+        before = self._ledger_bytes(self.ledger)
+        with self.assertRaisesRegex(timing.TimingLedgerError, '重新定位'):
+            timing.append_event(self.ledger, event_id='write-while-unreachable', phase='VC-0', event_type='stop_the_line',
+                                root_cause_id='integrity', recorded_at_utc=self.at(31), next_action='总账不可达时写入')
+        with self.assertRaisesRegex(timing.TimingLedgerError, '重新定位'):
+            timing.build_checkpoint(self.ledger, observed_at_utc=self.at(31))
+        self.assertEqual(self._ledger_bytes(self.ledger), before)
+
+    def test_read_only_replay_degrades_when_project_ledger_unreachable(self):
+        """R8 复审修正（选项 B）：历史 checkpoint 在总账不可达时可只读回放，依赖总账的摘要字段登记为未核实。
+
+        计划绑定、事件头与不依赖总账的摘要字段仍逐字节比对，篡改照样失败；程序内的默认回放仍失败关闭。
+        命令行 replay 与 status 是人工只读入口，同样降级并在输出里标注。
+        """
+
+        self.apply(self.preview('campaign', now=20, new=1200), now=21)
+        with mock.patch.object(timing, '_utc_now', return_value=self.at(30)):
+            timing.checkpoint(self.ledger, 'receipts/r8-review2.json')
+        self._archive_project()
+        with self.assertRaisesRegex(timing.TimingLedgerError, '重新定位'):
+            timing.replay(self.ledger, 'receipts/r8-review2.json')
+        receipt = timing.replay(self.ledger, 'receipts/r8-review2.json', project_ledger_optional=True)
+        marker = receipt['project_ledger_unreachable']
+        self.assertRegex(marker['reason'], '重新定位')
+        self.assertEqual(marker['unverified_summary_fields'], [])
+        for argv in (['replay', '--ledger-dir', str(self.ledger), '--receipt', 'receipts/r8-review2.json'],
+                     ['status', '--ledger-dir', str(self.ledger)]):
+            output = io.StringIO()
+            with self.subTest(command=argv[0]), redirect_stdout(output), redirect_stderr(io.StringIO()), \
+                    mock.patch.object(timing, '_utc_now', return_value=self.at(30)):
+                self.assertEqual(timing.main(argv), 0)
+                self.assertIn('project_ledger_unreachable', json.loads(output.getvalue()))
+        tampered = json.loads((self.ledger / 'receipts/r8-review2.json').read_bytes())
+        tampered['summary']['total_live_request_count'] += 1
+        forged = self.ledger / 'receipts/r8-review2-tampered.json'
+        forged.write_bytes(timing._canonical(tampered))
+        forged.chmod(0o600)
+        with self.assertRaisesRegex(timing.TimingLedgerError, '重放结果不一致'):
+            timing.replay(self.ledger, 'receipts/r8-review2-tampered.json', project_ledger_optional=True)
+
+    def test_campaign_status_survives_unreachable_project_ledger(self):
+        """R8 复审修正（选项 B）：main 上 status 在总账不可达时返回 project_ledger=None 而不失败，R8 的截止投影
+        让它改为抛错，属于回归。只读投影降级并透出标注；准入与写入路径的默认调用仍失败关闭。
+        """
+
+        self._archive_project()
+        with self.assertRaisesRegex(timing.TimingLedgerError, '重新定位'):
+            artifacts.effective_deadlines(self.campaign, now=self.moment(30))
+        deadlines = artifacts.effective_deadlines(self.campaign, now=self.moment(30), project_ledger_optional=True)
+        self.assertRegex(deadlines['project_ledger_unreachable']['reason'], '重新定位')
+        with mock.patch.object(upgrade, 'campaign_status', return_value={'status': 'planned', 'project_ledger': None}), \
+             mock.patch.object(timing, '_utc_now', return_value=self.at(30)), \
+             mock.patch.object(artifacts, 'datetime', wraps=datetime) as clock:
+            clock.now.return_value = self.moment(30)
+            result = upgrade._campaign_status_with_deadlines(self.campaign, None)
+        self.assertEqual(result['status'], 'planned')
+        self.assertRegex(result['project_ledger_unreachable']['reason'], '重新定位')
+
+    def test_ambiguous_project_ledger_degrades_read_only(self):
+        """R8 复审修正：同一计划的总账有多份也属于无法确认总账，只读入口同样降级，写入在小目标 1 的用例里被拒。"""
+
+        copied = self.root.parent / 'copied'
+        shutil.copytree(self.root, copied)
+        degraded = timing.inspect_ledger(copied / 'timing', now=self.at(30), project_ledger_optional=True)
+        self.assertRegex(degraded['project_ledger_unreachable']['reason'], '存在多份')
+
 
 class PausedPredecessorTests(unittest.TestCase):
     """R8：前任 Campaign 预算暂停时，复用或后继新建不能借新 Campaign 取得新预算（含真实 CLI 路径）。"""
