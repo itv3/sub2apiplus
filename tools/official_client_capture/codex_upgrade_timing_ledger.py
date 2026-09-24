@@ -434,6 +434,12 @@ PRODUCER_FREEZE_SUCCESSORS = (
         "scope": "upstream-codex-01561-r8-final-20260924-freeze-successor",
         "result": "manual_actions_required",
     },
+    {
+        "path": "docs/egress/maintenance/upstream-codex-01561-r2-review-fix-20260924-freeze-successor.json",
+        "base_commit": "4cad7d625573de351245d424d7efad18ae9529d2",
+        "scope": "upstream-codex-01561-r2-review-fix-20260924-freeze-successor",
+        "result": "manual_actions_required",
+    },
 )
 
 
