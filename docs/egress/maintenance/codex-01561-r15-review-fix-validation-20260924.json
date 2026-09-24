@@ -1,0 +1,232 @@
+{
+  "schema_version": "codex-upgrade-improvement-validation/v1",
+  "item": "R15（审核修正）",
+  "source_commit": "5d218b93166cb8911f4deced596052cf579e6bd8",
+  "source_commits": [
+    "44c015e78a1ebfbbb17409b9e43ecf4c394d89d6",
+    "5d218b93166cb8911f4deced596052cf579e6bd8"
+  ],
+  "review_basis": "桌面《Codex仿真升级阶段1审核结论-20260924.md》第一节第 2 条（R15 消费者读侧、R8 与 R15 交叉的夹具字段、R15 测试隔离）与第 4 条，第二节第 1、6、7、9 条及第 10 条中 egress-transition 一项，第三节第 3 条（多监控 Peer 无测试）",
+  "status": "development_self_check_passed",
+  "production_deployed": false,
+  "live_request_count": 0,
+  "self_checked_at_utc": "2026-09-24T00:43:42.452728+00:00",
+  "fixes": [
+    {
+      "finding": "受监督部署预检残留 BWG 固定路由判定（ip rule 两个容器 IP、表 51830 default dev wg1），停用旧 killswitch 后下一次部署会被拒",
+      "resolution": "删除该判定，预检与切换后核验只按运行时出口策略与守护状态（verify_runtime_egress）核验；切换后客户端核验改为枚举容器内全部 /opt/codex-<版本>/bin/codex，不再写死 0.154.0"
+    },
+    {
+      "finding": "改用 receipts_equivalent 后消费者读侧红（生产激活收据 9 项等），等价比较要求完整 facts 与 producer，合成夹具没有；且未明确目录只有 receipt 没有 facts 时的行为",
+      "resolution": "生产激活收据测试改用正式 finalizer 封存的完整环境收据，去掉重放与等价比较替身，新增真实重放、只剩收据失败关闭、门禁前后漂移拒绝三条用例；等价比较接口写明缺 facts／producer、facts 缺失或被改动时抛出而不返回真假，环境收据专项新增对应用例；门禁收据把等价比较与补跑连续性重放的环境错误统一包装为门禁错误；捕获生命周期与 VC 合同两组流程单测连采集入口都是替身，改用统一的合成等价替身"
+    },
+    {
+      "finding": "R15 测试隔离：监督器启动无条件读取 /etc/sub2api-egress，评估基线、预派发停线等本机失败，各测试各自打补丁、写法不统一",
+      "resolution": "策略、守护状态与宿主启动身份三个读取位置改为调用时解析模块常量，生产调用仍只读固定位置；新增 tests/runtime_egress_fixtures.py 统一夹具（读取位置重定向到私有临时目录下不存在的子目录，并按场景提供离线不要求准入、准入替身、合成等价替身），十个测试文件改用统一夹具；新增用例证明路径可注入且夹具退出后恢复默认"
+    },
+    {
+      "finding": "R8 之后监督器读取 state['deadline_at_epoch']，R15 监督器测试夹具缺该字段",
+      "resolution": "R15 监督器测试夹具补齐 deadline_at_epoch 与 started_monotonic_ns；_runtime_budget_deadline 缺字段按状态合同报 SupervisorError 属 R8 修正项"
+    },
+    {
+      "finding": "BPF 探针目的表只增不删，探针域名 IP 轮换累积到 256 上限后每轮 E2BIG，业务永久闭锁",
+      "resolution": "每轮按内核实际键与当前解析集合对账（sync_probes），删除不在当前集合的旧键，共享保护失效时清空；新增轮换 300 次不累积、实际键对账、共享失效清空三条用例"
+    },
+    {
+      "finding": "v8 环境合同写死 RUST_TLS_PROBE_CODEX_VERSION=0.154.0，升级 0.156.1 时 TLS 探针仍绑定旧二进制",
+      "resolution": "探针目标版本改由采集参数 --rust-tls-codex-version 给出，二进制按 /opt/codex-{版本}/bin/codex 模板派生；v8 收据记录 rust_tls_probe 摘要，v6～v7 历史按冻结的 0.154.0 重放；编排器五处采集与驱动 stage1.sh、vc5-gate-target.sh 传入本轮目标版本；新建或承接 Campaign 的 P0 必须由当前 producer 采集且探针版本等于目标版本"
+    },
+    {
+      "finding": "守护状态 3 秒租期边界竞争：采集用实时钟通过准入，重放以 observed_at_utc 为 now 再要求状态年龄不超过租期",
+      "resolution": "实时准入与事实采集共用同一校验时刻，observed_at_utc 取该时刻（微秒精度），重放按完全相同的时刻复算"
+    },
+    {
+      "finding": "egress-transition 写记录到安装 SIGUSR1 处理器之间被杀会残留记录；维护命令输出全丢只剩退出码",
+      "resolution": "先安装清理信号处理器再写声明；并行维护被拒时不触碰他人声明、不写暂停；维护命令输出写入父 run 的 egress-transitions/<id>.log（0600），失败时错误附带日志尾部"
+    },
+    {
+      "finding": "验收项多监控 Peer 不误报没有任何测试",
+      "resolution": "新增专用接口多监控 Peer 用例：只忽略监控 Peer，额外业务 Peer 仍判失败"
+    },
+    {
+      "finding": "Job 出口绑定无法核验（父 run 目录缺失等）时抛出未归一的 SupervisorError",
+      "resolution": "编排器与对账器在 control 调用点把核验异常转为 ConfigurationError／ReconcilerError，按失败关闭处理"
+    },
+    {
+      "finding": "R13 审核修正遗留：隔离内核链第 723 行间歇失败",
+      "resolution": "根因是测试网桥未固定 MAC，新端口加入改变网桥 MAC 使网关邻居失效；固定网桥 MAC 后 ARM64 连续 10 次通过"
+    }
+  ],
+  "clarifications": [
+    "审核第二节第 6 条（probing 期间放行策略内登记的内网依赖）评估后保持先闭锁：BPF 程序对 probe_only 租期只放行探针目的地址，只改 nft 规则无法放行数据库与 Redis；要放行必须给 BPF 增加依赖目的表，属于网络数据面变更并扩大 probing 状态的放行面。第 3 步真机验收观察 probing 期间应用启动；若出现依赖不可达导致的重启循环，再按审核建议单独立项。",
+    "Codex 0.156.1 的 doctor 源码核对：新增的文件系统路径检查只产生 Ok 或 Warning，network 检查没有变化，报告 schema_version 仍为 1；Rust TLS 探针参数化后与 0.156.1 兼容，真机实测在第 3 步。",
+    "目录只有 receipt 没有 facts 时的行为：环境模块重放与等价比较抛出“facts不是可信普通文件”，门禁收据包装为 GateReceiptError，生产激活收据包装为 ProductionReceiptError，官方 attempt 审计记为问题项；四处都失败关闭，不会当作等价或不等价返回。",
+    "编排器内六处等价比较调用位于 evidence 闭包函数中，本轮不改；环境模块抛出的异常同样使调用中止，属于失败关闭。",
+    "ARM64 共两次定向运行：第一次在 44c015e78 工作树（执行入口为 f49e188a7 之前版本，272 项）；最终一次在 5d218b931 工作树（656 项，追加本轮改动涉及的测试模块与编排器主测试）。内核链十次重复在 44c015e78 工作树上执行；5d218b931 没有改动内核链、守护与 BPF 相关代码，最终定向集中内核链、守护内核链、Docker 重建链与隐私探针再次执行并通过。"
+  ],
+  "decisions_requested": [
+    "probing 期间是否放行策略内登记的内网依赖（审核第二节第 6 条原文请拍板）：本轮保持先闭锁，理由见说明第 1 条。"
+  ],
+  "tool_identity": {
+    "before_commit": "f49e188a7819cdcb95d5c677c947c4d42fe446ce",
+    "after_commit": "5d218b93166cb8911f4deced596052cf579e6bd8",
+    "policy_sha256": "unchanged",
+    "wire_producer_sha256": "unchanged",
+    "evidence_semantics_sha256": "unchanged",
+    "control_sha256": {
+      "before": "bc26302081a32b6282b52db9b7fa2c44185c7900c2c29e6957d6461242bddc04",
+      "after": "eb336ff8588908ed802f5b9f6c380ce2bdf60e7874c41c5fcbb94c842cf029b2"
+    }
+  },
+  "regression": {
+    "local_full_final": {
+      "commit": "5d218b93166cb8911f4deced596052cf579e6bd8",
+      "tests": 2141,
+      "seconds": 844.79,
+      "result": "FAILED",
+      "detail": "failures=4, errors=13, skipped=4",
+      "note": "17 项全部属于其他改造项或待本收据承接：R4 atomic-double 演练合同 10 项（含 certify_release 3 项）；R8 6 项（旧批次路径截止为空 3 项、命令闭集 1 项、收口 append-only 1 项、收口锁内复检时刻截到毫秒 1 项）；0151 worktree 承接 1 项在本收据生成后单独复跑通过。4 项跳过需要 Linux root 或 Docker。"
+    },
+    "local_full_first": {
+      "commit": "44c015e78a1ebfbbb17409b9e43ecf4c394d89d6",
+      "tests": 2135,
+      "seconds": 926.157,
+      "result": "FAILED",
+      "detail": "failures=4, errors=13, skipped=4",
+      "note": "补充修正前的同口径运行，失败归属与最终运行相同"
+    },
+    "arm64_targeted_final": {
+      "commit": "5d218b93166cb8911f4deced596052cf579e6bd8",
+      "tests": 656,
+      "seconds": 781.024,
+      "result": "FAILED",
+      "detail": "failures=2",
+      "note": "CAPTURE_REAL_CHAINS_REQUIRE_EXECUTION=1，零跳过；两项失败均属 R8（命令闭集、收口 append-only）；R15 隔离内核链、守护内核链、Docker 重建链与隐私探针均执行通过"
+    },
+    "arm64_targeted_first": {
+      "commit": "44c015e78a1ebfbbb17409b9e43ecf4c394d89d6",
+      "tests": 272,
+      "seconds": 264.007,
+      "result": "FAILED",
+      "detail": "failures=1, skipped=1",
+      "note": "失败为 R8 收口 append-only；跳过的隐私探针因推送包未含服务端源码，补推后单独执行 12 项通过"
+    },
+    "arm64_environment_probe": {
+      "tests": 12,
+      "seconds": 0.406,
+      "result": "OK"
+    },
+    "arm64_kernel_repeat": {
+      "runs": 10,
+      "passed": 10,
+      "failed": 0,
+      "commit": "44c015e78a1ebfbbb17409b9e43ecf4c394d89d6"
+    }
+  },
+  "gates": {
+    "officialegress_frozen": "passed",
+    "service_frozen": "passed",
+    "check_egress_spec_ci": "passed",
+    "codex_0151_worktree_successor": "passed",
+    "arm64_supervised_deploy_tests": "passed",
+    "driver_manifest": "unchanged 38ef95b78076f3758a43e1c646e817cb9aeac05eb0a7356fb5d1b7b335a28e9b",
+    "maintenance_markdown_count": 0
+  },
+  "open_dependencies": [
+    "R4：atomic-double 演练合同与 R4 阶段失败收口冲突（10 项，含 certify_release 3 项），在 R4 审核修正中修复后复验。",
+    "R8：旧批次路径截止为空、命令闭集、收口 append-only 与锁内复检时刻精度（6 项），在 R8 审核修正中修复后复验；_runtime_budget_deadline 缺字段报 SupervisorError 同属 R8。",
+    "阶段 1 全部项修正完成后，本机与 ARM64 统一跑全量 make test-capture-tools 与 make test-capture-real-chains。"
+  ],
+  "release_verification": [
+    "存量 v14r5 只读回放（receipts_equivalent 对 v7 收据）",
+    "BPF／nft 每包检查与租期闭锁，探针目的表在真实 DNS 轮换下不累积",
+    "exit 端 SNAT 校验与多监控 Peer",
+    "宿主重启时 unit 顺序与 /run/sub2api-egress 父目录权限",
+    "守护单轮耗时低于 3 秒",
+    "egress-transition 在 60 秒内完成 compose 重建与首次探针，维护日志落在父 run 目录",
+    "probing 期间应用启动行为（见待拍板项）",
+    "旧 wg1／51830 判定删除后受监督部署的实际结果",
+    "0.156.1 二进制的 Rust TLS 探针（doctor 报告）实测"
+  ],
+  "freeze_successors": [
+    {
+      "path": "docs/egress/maintenance/upstream-codex-01561-r15-review-fix-20260924-freeze-successor.json",
+      "sha256": "738a96cca6ac28f5a44fe7e8ed65d3815c8707b716e5585be6ef09a41eb1f1d3"
+    }
+  ],
+  "logs_directory": "/Users/czs/Developer/codex-01561-upgrade-work",
+  "logs": [
+    {
+      "file": "review-fix-r15-local-full-5d218b931.log",
+      "sha256": "e352349b23b2b66600e70058b16d7635d4e68d4369b452fdf053403f6c89c03c"
+    },
+    {
+      "file": "review-fix-r15-local-full-44c015e78.log",
+      "sha256": "75216ac6755fed4782da20121f4e189774beb19778446b4feb2e632a9e291ce3"
+    },
+    {
+      "file": "review-fix-r15-arm64-targeted-5d218b931.log",
+      "sha256": "c0ee4dfbea438084d3908208eef341b8ef4dfc96d5f3f23cdc163e236e094b31"
+    },
+    {
+      "file": "review-fix-r15-arm64-targeted-44c015e78.log",
+      "sha256": "5bb96eb0d0edb73c2ba27e9b8ec4a001349459a1e5995ee46adb847f0f65a9ad"
+    },
+    {
+      "file": "review-fix-r15-arm64-environment-probe.log",
+      "sha256": "0c81b96184338fe091b616a21fa99a94a8544138f24cf868b3796653e350e42c"
+    },
+    {
+      "file": "review-fix-r15-arm64-kernel-repeat.log",
+      "sha256": "6a57bd7cec750da5bf8a48e07f908e9419629a82dca5b18b07d2463d2546f900"
+    },
+    {
+      "file": "review-fix-r15-arm64-kernel-repeat-1.log",
+      "sha256": "2a51d9c4ce3b41b41e9dc730c8d831b65d9bd38916a23bc9342f033969fdea6a"
+    },
+    {
+      "file": "review-fix-r15-arm64-kernel-repeat-2.log",
+      "sha256": "60e68f0f1ff089e5ebe40d23a966b1511ceb4a4d38d94aec3f79fb1c3f0d28e1"
+    },
+    {
+      "file": "review-fix-r15-arm64-kernel-repeat-3.log",
+      "sha256": "9b290c8354ca07c9112a5d0fca8bdf91afee9c8536f28d1e8e150a350e5256fa"
+    },
+    {
+      "file": "review-fix-r15-arm64-kernel-repeat-4.log",
+      "sha256": "a59281cc66c28caa2a7bee1013851f3187376d94dee15200c448992612f01694"
+    },
+    {
+      "file": "review-fix-r15-arm64-kernel-repeat-5.log",
+      "sha256": "58f15f09c1e4ec0c44769c100eb3b4d37882f5fd68154e3b5cab09c81e8d4772"
+    },
+    {
+      "file": "review-fix-r15-arm64-kernel-repeat-6.log",
+      "sha256": "ca010adfe933b3bb8c38194e7de82e2f70f4273226e24529b76212e5b294a0e2"
+    },
+    {
+      "file": "review-fix-r15-arm64-kernel-repeat-7.log",
+      "sha256": "26b0174a4656570aec68d8be2f7bcd96d1d6ef11bd7d67d45524eb97e5ea1c69"
+    },
+    {
+      "file": "review-fix-r15-arm64-kernel-repeat-8.log",
+      "sha256": "72d0d567f9f76d033b58ad50bef9e749ca2925ebb91639d28608f5be6785d176"
+    },
+    {
+      "file": "review-fix-r15-arm64-kernel-repeat-9.log",
+      "sha256": "9b9705cf5cbc7dacc2fe516131185259e8b705c0d9614318440cbcc1a319216e"
+    },
+    {
+      "file": "review-fix-r15-arm64-kernel-repeat-10.log",
+      "sha256": "31e4cf77b6f8fba10f8907610ed9e5213892e6ba687f3cc9cab749cb158cd6b1"
+    },
+    {
+      "file": "review-fix-r15-freeze-generation.log",
+      "sha256": "fc019820eeaead5ec49624e4eff85ec4ef5bfc58c7f73ef368bf62925e51a2ca"
+    },
+    {
+      "file": "review-fix-r15-gates.log",
+      "sha256": "575206c6a5e5c94bbb55513e48cfe05353b3837c6dbf07f11c2934011a05248b"
+    }
+  ]
+}
