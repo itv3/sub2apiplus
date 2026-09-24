@@ -176,6 +176,135 @@ class EgressGuardTests(unittest.TestCase):
         self.guard.maps["sub2api_egress.slice"].lease.assert_not_called()
         self.assertFalse(self.guard.status_path.exists())
 
+    def test_other_protected_container_rebuild_keeps_dependent_lease_and_probes(self):
+        # 真实拓扑中 capture-cli 依赖 sub2apiplus:8080。sub2apiplus 受控重建期间，capture-cli 只暂缓这一项
+        # 依赖放行（nft 集合随之收缩），内核租期不撤销、探针不清空，维护入口要求的"另一容器持续合规"才能成立。
+        self.guard.inventory["services"]["capture-cli"]["dependencies"] = [{"ipv4": "172.31.1.1", "protocol": "tcp", "port": 8080}]
+        self.guard.step()
+        maps = self.guard.maps["sub2api_egress.slice"]
+        maps.reset_mock()
+        # 守护每轮把库存替换为新对象；重建窗口的库存须另建候选，不能原地改上一轮对象。
+        candidate = copy.deepcopy(self.guard.inventory)
+        candidate["services"]["sub2apiplus"] = {"container_id": "", "bindings": [], "dependencies": [],
+                                                "reason": "容器或必要依赖身份不可验证", "valid": False}
+        candidate["services"]["capture-cli"]["dependencies"] = []
+        self.inventory.side_effect = lambda *args: copy.deepcopy(candidate)
+        status = self.guard.step()
+        self.assertEqual(status["services"]["sub2apiplus"]["admission_state"], "missing")
+        self.assertEqual(status["services"]["capture-cli"]["admission_state"], "ready")
+        self.assertEqual([call.args for call in maps.revoke.call_args_list], [(1, 2, "172.31.1.1")])
+        self.assertEqual(len(status["services"]["capture-cli"]["observations"]), len(self.guard.policy["probe_urls"]))
+        arm.validate_egress_status(self.guard.policy, status, now_epoch=time.time(), _transitioning_service="sub2apiplus")
+
+
+class EgressInventoryTests(unittest.TestCase):
+    """真实库存函数：依赖容器不在运行时只暂缓该项依赖放行；依赖配置错误仍使本服务不合规并闭锁。"""
+
+    PARENT = "/sys/fs/cgroup/sub2api_egress.slice"
+
+    def setUp(self):
+        self.policy = policy_fixture()
+        # 与 ARM64 实际策略同构：网关依赖数据库和抓包容器，抓包容器反向依赖网关，两者互相牵连。
+        self.policy["services"]["sub2apiplus"]["dependencies"].append(
+            {"container": "capture-cli", "protocol": "tcp", "ports": [18080, 18443]})
+        arm.validate_egress_policy(self.policy)
+        self.items = {
+            "sub2apiplus": self.container("sub2apiplus", 1, {"app": "172.31.2.2"}, protected=True),
+            "capture-cli": self.container("capture-cli", 2, {"app": "172.31.2.6", "capture": "172.31.3.10"}, protected=True),
+            "postgres": self.container("postgres", 3, {"app": "172.31.2.4"}),
+        }
+        self.enterContext(mock.patch.object(deploy, "egress_command", side_effect=self.command))
+        self.enterContext(mock.patch.object(deploy, "egress_container_bindings", side_effect=self.bindings))
+        original_read, original_stat = Path.read_text, Path.stat
+
+        def read_text(path, *args, **kwargs):
+            text = str(path)
+            if text.startswith("/proc/") and text.endswith("/cgroup"):
+                return f"0::/sub2api_egress.slice/docker-{text.split('/')[2]}.scope\n"
+            if text.startswith("/proc/") and text.endswith("/root/etc/resolv.conf"):
+                return "nameserver 1.1.1.1\nnameserver 9.9.9.9\noptions timeout:2 attempts:2\n"
+            return original_read(path, *args, **kwargs)
+
+        def fake_stat(path, *args, **kwargs):
+            if str(path).startswith(self.PARENT + "/"):
+                return os.stat_result((0o40755, 5000 + len(str(path)), 0, 1, 0, 0, 0, 0, 0, 0))
+            return original_stat(path, *args, **kwargs)
+        self.enterContext(mock.patch.object(Path, "read_text", autospec=True, side_effect=read_text))
+        self.enterContext(mock.patch.object(Path, "stat", autospec=True, side_effect=fake_stat))
+
+    @staticmethod
+    def container(name, index, networks, *, protected=False):
+        return {"Name": "/" + name, "Id": f"{index:x}" * 64,
+                "State": {"Pid": 1000 + index, "Running": True, "Restarting": False, "StartedAt": "2026-09-25T00:00:00Z"},
+                "HostConfig": {"CgroupParent": "sub2api_egress.slice" if protected else ""},
+                "NetworkSettings": {"Networks": {key: {"IPAddress": value} for key, value in networks.items()}}}
+
+    def command(self, argv, **_kwargs):
+        # docker ps 只列出运行中与 restarting 的容器；停止或重建窗口内已删除的容器不出现。
+        if argv[:2] == ["docker", "ps"]:
+            return "\n".join(item["Id"] for item in self.items.values())
+        if argv[:2] == ["docker", "inspect"]:
+            return json.dumps([item for item in self.items.values() if item["Id"] in argv[2:]])
+        raise AssertionError(argv)
+
+    @staticmethod
+    def bindings(item):
+        return [{"ifindex": offset + 2, "host_ifindex": 100 * item["State"]["Pid"] + offset, "source_ipv4": network["IPAddress"]}
+                for offset, network in enumerate(item["NetworkSettings"]["Networks"].values())]
+
+    def inventory(self):
+        return deploy.egress_inventory(self.policy, {"sub2api_egress.slice": self.PARENT})
+
+    @staticmethod
+    def rules(service):
+        return sorted((item["ipv4"], item["port"]) for item in service["dependencies"])
+
+    def test_all_running_admits_exact_dependencies(self):
+        services = self.inventory()["services"]
+        self.assertTrue(services["sub2apiplus"]["valid"] and services["capture-cli"]["valid"])
+        self.assertEqual(self.rules(services["sub2apiplus"]), [("172.31.2.4", 5432), ("172.31.2.6", 18080), ("172.31.2.6", 18443)])
+        self.assertEqual(self.rules(services["capture-cli"]), [("172.31.2.2", 8080)])
+
+    def test_rebuilding_protected_dependency_keeps_other_service_admissible(self):
+        original = copy.deepcopy(self.items)
+        for state in ("absent", "restarting"):
+            with self.subTest(state=state):
+                self.items = copy.deepcopy(original)
+                if state == "absent":
+                    del self.items["sub2apiplus"]
+                else:
+                    self.items["sub2apiplus"]["State"].update(Running=False, Restarting=True)
+                    self.items["sub2apiplus"]["NetworkSettings"]["Networks"]["app"]["IPAddress"] = ""
+                services = self.inventory()["services"]
+                self.assertFalse(services["sub2apiplus"]["valid"])
+                self.assertTrue(services["capture-cli"]["valid"], services["capture-cli"]["reason"])
+                self.assertEqual(services["capture-cli"]["reason"], "")
+                self.assertEqual(self.rules(services["capture-cli"]), [])
+
+    def test_missing_database_dependency_keeps_gateway_egress_admissible(self):
+        del self.items["postgres"]
+        gateway = self.inventory()["services"]["sub2apiplus"]
+        self.assertTrue(gateway["valid"], gateway["reason"])
+        self.assertEqual(self.rules(gateway), [("172.31.2.6", 18080), ("172.31.2.6", 18443)])
+
+    def test_dependency_configuration_errors_still_close_the_service(self):
+        cases = {
+            "没有共同网络": ("必要内网依赖没有共同的受管网络",
+                       lambda items: items["postgres"]["NetworkSettings"].update(Networks={"other": {"IPAddress": "172.31.9.4"}})),
+            "公网地址": ("内网依赖地址不合规",
+                     lambda items: items["postgres"]["NetworkSettings"]["Networks"]["app"].update(IPAddress="8.8.8.8")),
+            "运行中缺地址": ("内网依赖地址不合规",
+                       lambda items: items["postgres"]["NetworkSettings"]["Networks"]["app"].update(IPAddress="")),
+        }
+        original = copy.deepcopy(self.items)
+        for label, (reason, mutate) in cases.items():
+            with self.subTest(label=label):
+                self.items = copy.deepcopy(original)
+                mutate(self.items)
+                gateway = self.inventory()["services"]["sub2apiplus"]
+                self.assertFalse(gateway["valid"])
+                self.assertEqual(gateway["reason"], reason)
+
 
 class _FakeLibbpf:
     """模拟 libbpf 对已固定 HASH 表的读写、删除与迭代；fd 使用真实 /dev/null 句柄以便正常关闭。"""

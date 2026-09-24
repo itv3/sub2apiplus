@@ -931,7 +931,12 @@ def egress_inventory(policy: dict[str, Any], parents: dict[str, str]) -> dict[st
             if servers != settings["dns_servers"]:
                 raise DeploymentError("容器 DNS 未直接绑定策略服务器，不能使用宿主转发解析")
             for dependency in settings["dependencies"]:
-                other = by_name[dependency["container"]]
+                other = by_name.get(dependency["container"])
+                if other is None or not other["State"].get("Running") or other["State"].get("Restarting"):
+                    # 依赖容器受控重建、停止或处于 restarting 时没有可放行的地址：只暂缓这一项依赖，
+                    # 本服务自身的出口准入、探针与内核租期保持不变。否则另一受保护容器的正常重建会把
+                    # 本容器连带判为不合规，维护入口要求的"另一容器持续合规"永远无法成立。
+                    continue
                 shared_networks = set(item["NetworkSettings"]["Networks"]) & set(other["NetworkSettings"]["Networks"])
                 if not shared_networks:
                     raise DeploymentError("必要内网依赖没有共同的受管网络")
@@ -949,6 +954,16 @@ def egress_inventory(policy: dict[str, Any], parents: dict[str, str]) -> dict[st
     protected_ports = {binding["host_ifindex"] for service in result["services"].values() for binding in service["bindings"]}
     result["bypass_ifindices"] = sorted(set(result["bypass_ifindices"]) - protected_ports)
     return result
+
+
+def egress_lease_view(service: dict[str, Any] | None) -> dict[str, Any]:
+    """内核租期只由网卡、cgroup、进程周期与准入状态决定；依赖放行只在 nft 集合中生效。
+
+    依赖容器重建会让本服务的依赖列表暂时收缩，但不能因此撤销本服务的内核租期，
+    否则另一受保护容器的受控重建会让本容器短暂断网。
+    """
+
+    return {key: value for key, value in (service or {}).items() if key != "dependencies"}
 
 
 def egress_service_identity(service: dict[str, Any]) -> str:
@@ -1187,7 +1202,7 @@ class EgressGuard:
         # 先撤销受影响的旧 BPF 身份，再原子换 nft 租期，最后才向新身份发放短租期。
         for name, old in previous.get("services", {}).items():
             current = self.inventory.get("services", {}).get(name)
-            if not shared or states.get(name) != self.lease_states.get(name) or current != old:
+            if not shared or states.get(name) != self.lease_states.get(name) or egress_lease_view(current) != egress_lease_view(old):
                 self.revoke({"services": {name: old}})
         if not shared:
             self.revoke(self.inventory)
