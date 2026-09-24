@@ -7,9 +7,11 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from tools.official_client_capture import codex_upgrade_arm64_environment_receipt as arm
 from tools.official_client_capture import codex_upgrade_gate_receipt as gate_receipt
 from tools.official_client_capture import codex_upgrade_vc_artifacts as vc_artifacts
 from tools.official_client_capture import production_activation_receipt as receipt
+from tools.official_client_capture.tests import control_receipt_fixtures
 
 
 class ProductionActivationReceiptTests(unittest.TestCase):
@@ -24,16 +26,8 @@ class ProductionActivationReceiptTests(unittest.TestCase):
         self.candidate_source_tree = "8" * 64
         self.candidate_image = f"sha256:{'9' * 64}"
         self.candidate_image_reference = f"registry/candidate@{self.candidate_image}"
-        # 门禁收据的环境收据是零请求合成替身：replay 返回固定连续性摘要，等价投影按同一摘要
-        # 比较；真实 v8 投影由环境收据专项测试覆盖。先注册清理再启动，setUp 中途失败也不泄漏替身。
-        for patcher in (
-            mock.patch.object(gate_receipt.codex_upgrade_arm64_environment_receipt, "replay",
-                              side_effect=self._replay_environment),
-            mock.patch.object(gate_receipt.codex_upgrade_arm64_environment_receipt, "receipt_equivalence_sha256",
-                              side_effect=lambda _root, receipt: receipt["continuity_identity_sha256"]),
-        ):
-            patcher.start()
-            self.addCleanup(patcher.stop)
+        # 门禁前后的 ARM64 环境收据由正式 finalizer 封存（facts＋producer 齐全），门禁收据与
+        # 激活收据按原 producer 真实重放并比较等价投影，不替身重放或等价比较。
         self.acceptance = self._write(
             "inputs/acceptance.json",
             {
@@ -64,15 +58,23 @@ class ProductionActivationReceiptTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
-    @staticmethod
-    def _replay_environment(root: Path, relative: str) -> dict[str, object]:
-        del root
-        return {
-            "status": "passed",
-            "phase": "gate_before" if "before" in relative else "gate_after",
-            "subject_id": "post-gate-attempt",
-            "continuity_identity_sha256": "c" * 64,
-        }
+    def _environment_receipt(
+        self, role: str, *, continuity_seed: str = "a", prefix: str | None = None,
+    ) -> dict[str, str]:
+        """封存门禁 attempt 的前或后完整环境收据，返回门禁事实中的文件绑定。
+
+        收据与 facts 直接写在证据根下：门禁收据按证据根重放环境收据，facts 路径相对同一根解析。
+        ``continuity_seed`` 决定网络标识，不同取值得到等价投影不同的环境。
+        """
+
+        path = control_receipt_fixtures.create_arm_receipt(
+            self.root,
+            phase=f"gate_{role}",
+            subject_id="post-gate-attempt",
+            prefix=prefix or f"post-gate-{role}",
+            continuity_seed=continuity_seed,
+        )
+        return {"path": path.relative_to(self.root).as_posix(), "sha256": self._digest(path)}
 
     def _write(self, relative: str, payload: object) -> Path:
         path = self.root / relative
@@ -193,14 +195,7 @@ class ProductionActivationReceiptTests(unittest.TestCase):
             "gates": [],
         }
         for role in ("before", "after"):
-            environment = self._write(
-                f"inputs/post-gate-{role}.json",
-                {"role": role, "attempt_id": "post-gate-attempt"},
-            )
-            gate_facts["environment"][role] = {
-                "path": environment.relative_to(self.root).as_posix(),
-                "sha256": self._digest(environment),
-            }
+            gate_facts["environment"][role] = self._environment_receipt(role)
         for index, contract in enumerate(gate_plan["gates"]):
             gate_id = contract["gate_id"]
             evidence = self._write(
@@ -303,6 +298,43 @@ class ProductionActivationReceiptTests(unittest.TestCase):
         replayed = receipt.replay(self.root, "receipt.json")
         self.assertEqual(finalized, replayed)
         self.assertEqual(finalized["campaign"]["candidate_id"], "k83-dmit")
+
+    def test_gate_environment_is_replayed_and_compared_from_complete_receipts(self) -> None:
+        """门禁前后环境收据按原 producer 真实重放，等价投影一致时激活收据才可封存。"""
+
+        before = arm.replay(self.root, "post-gate-before-receipt.json")
+        after = arm.replay(self.root, "post-gate-after-receipt.json")
+        self.assertEqual((before["phase"], after["phase"]), ("gate_before", "gate_after"))
+        self.assertTrue(arm.receipts_equivalent(self.root, before, self.root, after))
+        with mock.patch.object(arm, "receipt_equivalence_sha256", wraps=arm.receipt_equivalence_sha256) as spy:
+            receipt.finalize(self.root, "facts.json", "receipt.json")
+        self.assertEqual(
+            sorted(call.args[1]["phase"] for call in spy.call_args_list), ["gate_after", "gate_before"],
+        )
+
+    def test_environment_directory_with_only_receipts_fails_closed(self) -> None:
+        """证据根里只剩环境收据、facts 已缺失时，门禁与激活收据都必须拒绝，不能当作等价放行。"""
+
+        (self.root / "post-gate-before-facts.json").unlink()
+        with self.assertRaisesRegex(arm.Arm64EnvironmentReceiptError, "facts不是可信普通文件"):
+            arm.replay(self.root, "post-gate-before-receipt.json")
+        with self.assertRaisesRegex(gate_receipt.GateReceiptError, "environment.before 无法独立重放"):
+            gate_receipt.replay(self.root, "inputs/post-gate-receipt.json")
+        with self.assertRaisesRegex(receipt.ProductionReceiptError, "门禁收据无法独立重放"):
+            receipt.finalize(self.root, "facts.json", "receipt.json")
+        self.assertFalse((self.root / "receipt.json").exists())
+
+    def test_gate_environment_drift_between_before_and_after_is_rejected(self) -> None:
+        """门禁后环境的网络标识与门禁前不同，真实等价投影不一致，门禁收据拒绝封存。"""
+
+        facts = json.loads((self.root / "inputs/post-gate-facts.json").read_text(encoding="utf-8"))
+        facts["environment"]["after"] = self._environment_receipt(
+            "after", continuity_seed="b", prefix="post-gate-after-drift",
+        )
+        self._write("inputs/post-gate-facts-drift.json", facts)
+        with self.assertRaisesRegex(gate_receipt.GateReceiptError, "环境身份漂移"):
+            gate_receipt.finalize(self.root, "inputs/post-gate-facts-drift.json", "inputs/post-gate-receipt-drift.json")
+        self.assertFalse((self.root / "inputs/post-gate-receipt-drift.json").exists())
 
     def test_canonical_acceptance_binds_explicit_candidate_identity(self) -> None:
         self._write(

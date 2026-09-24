@@ -7,7 +7,6 @@ import json
 import os
 import tempfile
 import unittest
-import unittest.mock
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -15,6 +14,7 @@ from tools.official_client_capture import codex_upgrade_predispatch_stop as stop
 from tools.official_client_capture import codex_upgrade_supervisor as supervisor
 from tools.official_client_capture import codex_upgrade_vc_artifacts as artifacts
 from tools.official_client_capture.tests import project_ledger_fixture
+from tools.official_client_capture.tests import runtime_egress_fixtures
 
 
 class PredispatchStopTests(unittest.TestCase):
@@ -232,7 +232,7 @@ class PredispatchStopTests(unittest.TestCase):
                 },
             )()
             # 本例只验证预派发停线对已有父 run 的拒绝；真实出口准入由独立 R15 链验收。
-            with unittest.mock.patch.object(supervisor.arm64_environment, "campaign_requires_runtime_egress", return_value=False):
+            with runtime_egress_fixtures.offline_campaign_egress():
                 returncode, _result = supervisor._campaign_run_command(arguments)
             self.assertEqual(returncode, 0)
             with self.assertRaisesRegex(stop.PredispatchStopError, "已有父 run"):

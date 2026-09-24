@@ -32,6 +32,8 @@ class CodexUpgradeGateReceiptTests(unittest.TestCase):
             side_effect=self._replay_environment,
         )
         self.environment_patcher.start()
+        # 启动后立即登记清理，setUp 后续步骤失败也不会把替身泄漏给其他测试模块。
+        self.addCleanup(self.environment_patcher.stop)
         # 本类使用极简环境 API 替身；完整原 producer 重放及投影在环境收据测试中验证。
         equivalent = mock.patch.object(receipt.codex_upgrade_arm64_environment_receipt, "receipts_equivalent",
                                        side_effect=lambda left_root, left, right_root, right:
@@ -40,7 +42,6 @@ class CodexUpgradeGateReceiptTests(unittest.TestCase):
         self.addCleanup(equivalent.stop)
 
     def tearDown(self) -> None:
-        self.environment_patcher.stop()
         self.temporary.cleanup()
 
     def _replay_environment(self, root: Path, relative: str) -> dict[str, object]:
@@ -491,6 +492,40 @@ class CodexUpgradeGateReceiptTests(unittest.TestCase):
         self._write("drift.json", second)
         with self.assertRaisesRegex(receipt.GateReceiptError, "连续性无法证明"):
             receipt.build_receipt(self.root, "drift.json")
+
+    def test_environment_comparison_errors_surface_as_gate_errors(self) -> None:
+        """等价比较无法完成（环境模块抛出）时，单次 attempt 与补跑连续性都统一按门禁错误失败关闭。"""
+
+        environment = receipt.codex_upgrade_arm64_environment_receipt
+        failure = environment.Arm64EnvironmentReceiptError("facts不是可信普通文件")
+        self._write("single.json", self._facts(receipt.CANDIDATE_PHASE))
+        with mock.patch.object(environment, "receipts_equivalent", side_effect=failure):
+            with self.assertRaisesRegex(receipt.GateReceiptError, "无法完成等价比较：facts不是可信普通文件"):
+                receipt.build_receipt(self.root, "single.json")
+
+        first = self._facts(receipt.CANDIDATE_PHASE, root_cause_id="root-cause-a")
+        first["gates"][0].update({"status": "failed", "exit_code": 1, "failed_count": 1})
+        failed_id = first["gates"][0]["gate_id"]
+        self._write("first-facts.json", first)
+        receipt.finalize(self.root, "first-facts.json", "first-receipt.json")
+        second = self._facts(
+            receipt.CANDIDATE_PHASE,
+            attempt_id="gate-attempt-002",
+            root_cause_id="root-cause-a",
+            previous_receipt="first-receipt.json",
+        )
+        second["gates"] = [item for item in second["gates"] if item["gate_id"] == failed_id]
+        self._write("retry.json", second)
+
+        def cross_attempt_failure(left_root, left, right_root, right):
+            del left_root, right_root
+            if left["subject_id"] != right["subject_id"]:
+                raise failure
+            return left["continuity_identity_sha256"] == right["continuity_identity_sha256"]
+
+        with mock.patch.object(environment, "receipts_equivalent", side_effect=cross_attempt_failure):
+            with self.assertRaisesRegex(receipt.GateReceiptError, "连续性无法证明：facts不是可信普通文件"):
+                receipt.build_receipt(self.root, "retry.json")
 
     def test_schema_matches_runtime_version(self) -> None:
         schema_path = Path(receipt.__file__).with_name(

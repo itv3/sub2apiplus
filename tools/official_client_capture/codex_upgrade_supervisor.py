@@ -348,7 +348,7 @@ def _egress_transition_status(policy_sha256: str, container: str) -> None:
     status = arm64_environment._read_egress_runtime_json(arm64_environment.EGRESS_STATUS_PATH, private=False)
     arm64_environment.validate_egress_status(
         policy, status, now_epoch=time.time(), now_monotonic_ns=time.monotonic_ns(),
-        boot_id=Path("/proc/sys/kernel/random/boot_id").read_text().strip(), _transitioning_service=container,
+        boot_id=Path(arm64_environment.EGRESS_BOOT_ID_PATH).read_text().strip(), _transitioning_service=container,
     )
 
 

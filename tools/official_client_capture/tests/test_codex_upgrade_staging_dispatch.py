@@ -42,6 +42,7 @@ from tools.official_client_capture import codex_upgrade
 from tools.official_client_capture import codex_upgrade_supervisor as supervisor
 from tools.official_client_capture import codex_upgrade_reconciler as reconciler
 from tools.official_client_capture import codex_upgrade_job_rehearsal_receipt as rehearsal
+from tools.official_client_capture.tests import runtime_egress_fixtures
 modules = {"codex_upgrade": codex_upgrade, "supervisor": supervisor, "reconciler": reconciler}
 for item in config["patches"]:
     module = modules[item["module"]]
@@ -69,7 +70,7 @@ for item in config["patches"]:
 path_keys = {"campaign_dir", "state_dir", "predecessor_checkpoint", "action_plan"}
 args = argparse.Namespace(**{k: (Path(v) if k in path_keys else v) for k, v in config["arguments"].items()})
 with mock.patch.object(rehearsal, "_target_evidence_label_declaration_sha256", return_value="d" * 64), \
-     mock.patch.object(supervisor.arm64_environment, "campaign_requires_runtime_egress", return_value=False):
+     runtime_egress_fixtures.offline_campaign_egress():
     # 与父测试 _vc_chain_fixture 一致：纯零请求故障夹具不读取生产出口策略。
     try:
         result, returncode = codex_upgrade.compile_and_run_vc_batch(args)

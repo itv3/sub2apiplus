@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest import mock
 
 from tools.official_client_capture import codex_upgrade
+from tools.official_client_capture.tests import runtime_egress_fixtures
 
 
 class CodexUpgrade0154VCContractTests(unittest.TestCase):
@@ -514,12 +515,8 @@ class CodexUpgrade0154VCContractTests(unittest.TestCase):
                     "replay",
                     return_value={"continuity_identity_sha256": "1" * 64},
                 ),
-                mock.patch.object(
-                    codex_upgrade.codex_upgrade_arm64_environment_receipt,
-                    "receipt_equivalence_sha256",
-                    # 合成环境收据只有连续性摘要；真实 v8 等价投影由环境收据专项测试覆盖。
-                    side_effect=lambda _root, receipt: receipt["continuity_identity_sha256"],
-                ),
+                # 合成环境收据只有连续性摘要；真实 v8 等价投影由环境收据专项测试覆盖。
+                runtime_egress_fixtures.synthetic_environment_equivalence(),
                 mock.patch.object(
                     codex_upgrade,
                     "_probe_capture_environment",
@@ -575,12 +572,8 @@ class CodexUpgrade0154VCContractTests(unittest.TestCase):
                     "replay",
                     return_value={"continuity_identity_sha256": "1" * 64},
                 ),
-                mock.patch.object(
-                    codex_upgrade.codex_upgrade_arm64_environment_receipt,
-                    "receipt_equivalence_sha256",
-                    # 合成环境收据只有连续性摘要；真实 v8 等价投影由环境收据专项测试覆盖。
-                    side_effect=lambda _root, receipt: receipt["continuity_identity_sha256"],
-                ),
+                # 合成环境收据只有连续性摘要；真实 v8 等价投影由环境收据专项测试覆盖。
+                runtime_egress_fixtures.synthetic_environment_equivalence(),
                 mock.patch.object(codex_upgrade, "_probe_capture_environment"),
                 mock.patch.object(
                     codex_upgrade,

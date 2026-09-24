@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest import mock
 
 from tools.official_client_capture import codex_upgrade_arm64_environment_receipt as receipt
+from tools.official_client_capture.tests import runtime_egress_fixtures
 from tools.official_client_capture.tests.control_receipt_fixtures import (
     create_arm_receipt,
 )
@@ -1101,6 +1102,65 @@ class Arm64EnvironmentReceiptTests(unittest.TestCase):
             facts["containers"][0]["selected_network"]["network_id"] = "b" * 64
             facts["containers"][0]["network_bindings"][0]["network_id"] = "b" * 64
             self.assertNotEqual(receipt.validate_facts(facts)["equivalence_identity_sha256"], original)
+
+    def test_equivalence_requires_complete_replayable_receipts(self) -> None:
+        """缺 facts／producer 字段、证据根只剩收据、facts 被改动时，等价比较抛出而不返回真假。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            facts_path, facts = self._fixture(root)
+            current = receipt.replay(root, "p0-receipt.json")
+            self.assertTrue(receipt.receipts_equivalent(root, current, root, current))
+            for field in ("facts", "producer"):
+                partial = {key: value for key, value in current.items() if key != field}
+                with self.subTest(missing=field), self.assertRaisesRegex(
+                    receipt.Arm64EnvironmentReceiptError, "缺少完整的 facts／producer 收据",
+                ):
+                    receipt.receipts_equivalent(root, current, root, partial)
+            facts["host"]["hostname"] = "arm64-changed"
+            self._rewrite(facts_path, facts)
+            with self.assertRaisesRegex(receipt.Arm64EnvironmentReceiptError, "未经原 producer 完整重放"):
+                receipt.receipts_equivalent(root, current, root, current)
+            facts_path.unlink()
+            with self.assertRaisesRegex(receipt.Arm64EnvironmentReceiptError, "facts不是可信普通文件"):
+                receipt.receipts_equivalent(root, current, root, current)
+
+    def test_runtime_egress_read_locations_are_resolved_at_call_time(self) -> None:
+        """准入的三个读取位置在调用时解析：统一夹具重定向后，无参调用只读私有临时目录并失败关闭。"""
+
+        defaults = (receipt.EGRESS_POLICY_PATH, receipt.EGRESS_STATUS_PATH, receipt.EGRESS_BOOT_ID_PATH)
+        self.assertEqual(defaults, (
+            Path("/etc/sub2api-egress/policy.json"),
+            Path("/run/sub2api-egress/status.json"),
+            Path("/proc/sys/kernel/random/boot_id"),
+        ))
+        original = receipt._read_egress_runtime_json
+        with runtime_egress_fixtures.isolated_runtime_egress_paths() as absent:
+            seen: list[Path] = []
+
+            def spy(path: Path, *, private: bool) -> dict[str, object]:
+                seen.append(Path(path))
+                return original(path, private=private)
+
+            with mock.patch.object(receipt, "_read_egress_runtime_json", side_effect=spy):
+                with self.assertRaisesRegex(receipt.Arm64EnvironmentReceiptError, "运行时出口准入拒绝"):
+                    receipt.require_runtime_egress()
+                with self.assertRaises(OSError):
+                    receipt.load_egress_policy()
+                with mock.patch.object(receipt, "load_egress_policy", return_value={}), \
+                        self.assertRaisesRegex(receipt.Arm64EnvironmentReceiptError, "运行时出口准入拒绝"):
+                    receipt.require_runtime_egress()
+            self.assertEqual(seen, [absent / "policy.json", absent / "policy.json", absent / "status.json"])
+            absent.mkdir()
+            (absent / "boot_id").write_text("00000000-0000-0000-0000-000000000009\n", encoding="ascii")
+            with mock.patch.object(receipt, "load_egress_policy", return_value={}), \
+                    mock.patch.object(receipt, "_read_egress_runtime_json", return_value={"policy_sha256": "0" * 64}), \
+                    mock.patch.object(receipt, "validate_egress_status") as validate:
+                receipt.require_runtime_egress()
+            self.assertEqual(validate.call_args.kwargs["boot_id"], "00000000-0000-0000-0000-000000000009")
+        self.assertEqual(
+            (receipt.EGRESS_POLICY_PATH, receipt.EGRESS_STATUS_PATH, receipt.EGRESS_BOOT_ID_PATH), defaults,
+        )
 
     def test_contract_has_no_network_override_arguments(self) -> None:
         parser = receipt.build_parser()

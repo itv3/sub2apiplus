@@ -188,8 +188,12 @@ MAX_JSON_BYTES = 4 * 1024 * 1024
 EGRESS_POLICY_SCHEMA = "codex-runtime-egress-policy/v1"
 EGRESS_STATUS_SCHEMA = "codex-runtime-egress-status/v1"
 EGRESS_EQUIVALENCE_SCHEMA = "codex-arm64-environment-equivalence/v2"
+# 运行时出口的三个读取位置。读取函数在调用时才解析这些模块常量（而不是在定义时绑定为默认参数），
+# 离线测试因此可以统一把它们重定向到私有临时目录，确保任何测试都不会读到开发机或 ARM64 上的真实配置；
+# 生产调用不传参数，始终读取这里的固定位置，没有环境变量或命令行开关可以改写。
 EGRESS_POLICY_PATH = Path("/etc/sub2api-egress/policy.json")
 EGRESS_STATUS_PATH = Path("/run/sub2api-egress/status.json")
+EGRESS_BOOT_ID_PATH = Path("/proc/sys/kernel/random/boot_id")
 
 
 class Arm64EnvironmentReceiptError(ValueError):
@@ -344,10 +348,13 @@ def egress_policy_sha256(policy: dict[str, Any]) -> str:
     return _sha256_bytes(_canonical(policy))
 
 
-def load_egress_policy(path: Path = EGRESS_POLICY_PATH) -> dict[str, Any]:
-    """只接受 root 专有策略；切换须由运维显式替换配置，守护不得自行回写。"""
+def load_egress_policy(path: Path | None = None) -> dict[str, Any]:
+    """只接受 root 专有策略；切换须由运维显式替换配置，守护不得自行回写。
 
-    payload = _read_egress_runtime_json(Path(path), private=True)
+    ``path`` 省略时在调用时读取 ``EGRESS_POLICY_PATH``。
+    """
+
+    payload = _read_egress_runtime_json(Path(EGRESS_POLICY_PATH if path is None else path), private=True)
     try:
         return validate_egress_policy(payload)
     except (TypeError, ValueError, KeyError) as error:
@@ -481,21 +488,22 @@ def validate_egress_status(
 
 
 def _checked_runtime_egress(
-    policy_path: Path = EGRESS_POLICY_PATH, status_path: Path = EGRESS_STATUS_PATH,
+    policy_path: Path | None = None, status_path: Path | None = None,
 ) -> tuple[dict[str, Any], datetime]:
     """读取当前策略与守护状态，并用读取之后的同一时刻完成实时校验；返回准入值与校验时刻。
 
     事实采集把这一时刻原样写成 ``observed_at_utc``，重放时按完全相同的时刻复算状态年龄与
-    观测时效，避免"实时通过、重放因晚取时间而判过期"的边界不一致。
+    观测时效，避免"实时通过、重放因晚取时间而判过期"的边界不一致。路径省略时在调用时读取
+    ``EGRESS_POLICY_PATH``、``EGRESS_STATUS_PATH`` 与 ``EGRESS_BOOT_ID_PATH``。
     """
 
     try:
-        policy = load_egress_policy(policy_path)
-        status = _read_egress_runtime_json(Path(status_path), private=False)
+        policy = load_egress_policy(EGRESS_POLICY_PATH if policy_path is None else policy_path)
+        status = _read_egress_runtime_json(Path(EGRESS_STATUS_PATH if status_path is None else status_path), private=False)
         checked_at = datetime.now(timezone.utc)
         validate_egress_status(
             policy, status, now_epoch=checked_at.timestamp(), now_monotonic_ns=time.monotonic_ns(),
-            boot_id=Path("/proc/sys/kernel/random/boot_id").read_text(encoding="ascii").strip(),
+            boot_id=Path(EGRESS_BOOT_ID_PATH).read_text(encoding="ascii").strip(),
         )
     except (OSError, ValueError, KeyError, TypeError) as error:
         raise Arm64EnvironmentReceiptError(f"运行时出口准入拒绝：{error}") from error
@@ -503,7 +511,7 @@ def _checked_runtime_egress(
 
 
 def require_runtime_egress(
-    policy_path: Path = EGRESS_POLICY_PATH, status_path: Path = EGRESS_STATUS_PATH,
+    policy_path: Path | None = None, status_path: Path | None = None,
 ) -> dict[str, Any]:
     """每次准入读取持续守护的当前状态；内核租期过期会自行闭锁，旧认证不能替代此检查。"""
 
@@ -2237,7 +2245,12 @@ def receipt_equivalence_sha256(root: Path, receipt: dict[str, Any]) -> str:
 
 
 def receipts_equivalent(before_root: Path, before: dict[str, Any], after_root: Path, after: dict[str, Any]) -> bool:
-    """统一跨时间环境比较入口；两侧必须各自具备可按原合同重放的完整事实。"""
+    """统一跨时间环境比较入口；两侧必须各自具备可按原合同重放的完整事实。
+
+    只有两侧都能完成完整重放时才返回真假。收据缺少 facts 或 producer 字段、证据根里只剩收据而
+    facts 文件缺失、facts 在读取期间被改动、收据不能被原 producer 逐字重建时一律抛出
+    ``Arm64EnvironmentReceiptError``（不会当作"不等价"或"等价"返回），调用方必须按失败关闭处理。
+    """
 
     return receipt_equivalence_sha256(before_root, before) == receipt_equivalence_sha256(after_root, after)
 

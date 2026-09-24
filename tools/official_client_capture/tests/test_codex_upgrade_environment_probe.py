@@ -14,6 +14,7 @@ from unittest import mock
 from tools.official_client_capture import codex_upgrade_environment_probe as probe
 from tools.official_client_capture import codex_upgrade_arm64_environment_receipt as arm
 from tools.official_client_capture import codex_upgrade_receipt_finalizer as finalizer
+from tools.official_client_capture.tests import runtime_egress_fixtures
 
 
 class DockerFixture:
@@ -206,9 +207,7 @@ class DockerFixture:
 class EnvironmentProbeTest(unittest.TestCase):
     def setUp(self) -> None:
         # Docker 为零请求合成夹具；网络准入单独验证，不能读取开发机上的生产配置。
-        patcher = mock.patch.object(arm, "require_runtime_egress", return_value={})
-        self.egress = patcher.start()
-        self.addCleanup(patcher.stop)
+        self.egress = self.enterContext(runtime_egress_fixtures.stubbed_runtime_egress_admission())
 
     def test_runtime_egress_rejects_before_and_after_probe_without_publishing(self) -> None:
         for during in (False, True):

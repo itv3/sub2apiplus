@@ -15,6 +15,7 @@ from pathlib import Path
 from unittest import mock
 
 from tools.official_client_capture import codex_upgrade
+from tools.official_client_capture.tests import runtime_egress_fixtures
 
 
 def _reserve_capture_attempt_in_child(
@@ -236,14 +237,8 @@ class CaptureLifecycleTest(unittest.TestCase):
                 side_effect=self._arm64_receipt,
             )
         )
-        stack.enter_context(
-            mock.patch.object(
-                codex_upgrade.codex_upgrade_arm64_environment_receipt,
-                "receipt_equivalence_sha256",
-                # 合成环境收据只有连续性摘要；真实 v8 等价投影由环境收据专项测试覆盖。
-                side_effect=lambda _root, receipt: receipt["continuity_identity_sha256"],
-            )
-        )
+        # 合成环境收据只有连续性摘要；真实 v8 等价投影由环境收据专项测试覆盖。
+        stack.enter_context(runtime_egress_fixtures.synthetic_environment_equivalence())
         stack.enter_context(
             mock.patch.object(
                 codex_upgrade,
@@ -1733,12 +1728,8 @@ class CaptureLifecycleTest(unittest.TestCase):
                         "continuity_identity_sha256": "a" * 64,
                     },
                 ),
-                mock.patch.object(
-                    codex_upgrade.codex_upgrade_arm64_environment_receipt,
-                    "receipt_equivalence_sha256",
-                    # 合成环境收据只有连续性摘要；真实 v8 等价投影由环境收据专项测试覆盖。
-                    side_effect=lambda _root, receipt: receipt["continuity_identity_sha256"],
-                ),
+                # 合成环境收据只有连续性摘要；真实 v8 等价投影由环境收据专项测试覆盖。
+                runtime_egress_fixtures.synthetic_environment_equivalence(),
                 mock.patch.object(
                     codex_upgrade,
                     "_campaign_lock",

@@ -24,6 +24,7 @@ from unittest import mock
 from tools.official_client_capture import candidate_evidence_guard
 from tools.official_client_capture import codex_upgrade
 from tools.official_client_capture.tests import project_ledger_fixture
+from tools.official_client_capture.tests import runtime_egress_fixtures
 from tools.official_client_capture import codex_upgrade_evidence_manifest
 from tools.official_client_capture import codex_upgrade_gate_receipt
 from tools.official_client_capture import codex_upgrade_job_rehearsal_receipt
@@ -19492,10 +19493,7 @@ class CodexUpgradeTest(unittest.TestCase):
         """
 
         # 本 helper 只用于本文件的合成子命令；独立 real_chains 使用受限 staging 夹具总账。
-        guard = mock.patch.object(codex_upgrade.codex_upgrade_arm64_environment_receipt,
-                                  "campaign_requires_runtime_egress", return_value=False)
-        guard.start()
-        self.addCleanup(guard.stop)
+        self.enterContext(runtime_egress_fixtures.offline_campaign_egress())
         original = codex_upgrade._create_initial_vc_control_artifacts
 
         def as_reuse(*args: object, **kwargs: object) -> dict[str, object]:

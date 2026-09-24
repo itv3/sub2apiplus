@@ -676,7 +676,15 @@ def _validate_environment(
             )
         normalized[role] = binding
         receipts[role] = receipt
-    if not codex_upgrade_arm64_environment_receipt.receipts_equivalent(root, receipts["before"], root, receipts["after"]):
+    # 等价比较要求两侧都能按原 producer 完整重放；缺少 facts／producer 或读取期间被改动时，
+    # 环境模块抛出而不是返回真假，这里统一转成门禁错误，任何下游都按失败关闭处理。
+    try:
+        equivalent = codex_upgrade_arm64_environment_receipt.receipts_equivalent(
+            root, receipts["before"], root, receipts["after"],
+        )
+    except (OSError, codex_upgrade_arm64_environment_receipt.Arm64EnvironmentReceiptError) as error:
+        raise GateReceiptError(f"gate attempt 前后 ARM64 环境无法完成等价比较：{error}") from error
+    if not equivalent:
         raise GateReceiptError("gate attempt 前后 ARM64 环境身份漂移")
     normalized["continuity_identity_sha256"] = receipts["after"][
         "continuity_identity_sha256"
@@ -801,13 +809,21 @@ def build_receipt(
         if prior_failure_count >= SAME_ROOT_CAUSE_RETRY_LIMIT:
             raise GateReceiptError("同一根因已连续失败两次，禁止第三次门禁 attempt")
         previous_environment = previous.get("environment")
-        if (
-            not isinstance(previous_environment, dict)
-            or not codex_upgrade_arm64_environment_receipt.receipts_equivalent(
+        if not isinstance(previous_environment, dict):
+            raise GateReceiptError("前序 after 与本次 before 的 ARM64 环境连续性无法证明")
+        # 前序 after 与本次 before 都必须能按原 producer 完整重放后再比较；重放或比较无法完成
+        # （收据缺失、facts 缺失或被改动、绑定结构不全）与比较结果不等价同样拒绝补跑。
+        try:
+            continuous = codex_upgrade_arm64_environment_receipt.receipts_equivalent(
                 root, codex_upgrade_arm64_environment_receipt.replay(root, previous_environment["after"]["path"]),
                 root, codex_upgrade_arm64_environment_receipt.replay(root, environment["before"]["path"]),
             )
-        ):
+        except (
+            OSError, KeyError, TypeError,
+            codex_upgrade_arm64_environment_receipt.Arm64EnvironmentReceiptError,
+        ) as error:
+            raise GateReceiptError(f"前序 after 与本次 before 的 ARM64 环境连续性无法证明：{error}") from error
+        if not continuous:
             raise GateReceiptError("前序 after 与本次 before 的 ARM64 环境连续性无法证明")
         expected_executed_ids = list(previous["failed_gate_ids"])
         carried = [
