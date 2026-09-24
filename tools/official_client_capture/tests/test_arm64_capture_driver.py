@@ -718,6 +718,19 @@ class DriverParameterizationTests(unittest.TestCase):
         for kind, sample in [('版本', 'codex-0.154.0'), ('摘要', 'a' * 64), ('账号', '--api-key-id 91'), ('账号', 'sched:acc:22'), ('账号', '账号 22 调度投影')]:
             self.assertIsNotNone(re.search(patterns[kind], sample, re.I))
 
+    def test_environment_collect_binds_round_target_version(self):
+        """每一处环境事实采集都必须把本轮参数 TARGET_VERSION 交给 Rust TLS 探针，不能写死或省略。"""
+
+        calls = []
+        for path in sorted(SCRIPTS.rglob('*.sh')):
+            for number, line in enumerate(path.read_text().splitlines(), 1):
+                if 'codex_upgrade_arm64_environment_receipt collect' in line:
+                    calls.append((path.name, number, line))
+        self.assertGreaterEqual(len(calls), 3, calls)
+        for name, number, line in calls:
+            with self.subTest(script=name, line=number):
+                self.assertIn('--rust-tls-codex-version "$TARGET_VERSION"', line)
+
     def test_target_parameters_generate_vc2_vc4_and_vc5_commands(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
