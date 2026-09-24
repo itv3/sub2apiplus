@@ -446,6 +446,74 @@ class TimingLedgerTests(unittest.TestCase):
                 "2026-08-30T06:00:00+00:00",
             )
 
+    def _vc1_active(self, root: Path) -> None:
+        self._create(root)
+        ledger.append_event(root, event_id="vc0-done", phase="VC-0", event_type="stage_completed",
+                            next_action="启动 VC-1", recorded_at_utc=self._at(1))
+        ledger.append_event(root, event_id="vc1-start", phase="VC-1", event_type="stage_started",
+                            next_action="运行父批次", recorded_at_utc=self._at(2))
+
+    def _abandon(self, root: Path, minute: int, cause: str = "rc-review") -> None:
+        ledger.append_event(root, event_id=f"vc1-abandoned-{minute}", phase="VC-1", event_type="stage_abandoned",
+                            root_cause_id=cause, next_action="stage_review_required：先对账",
+                            recorded_at_utc=self._at(minute))
+
+    def _review(self, root: Path, minute: int, cause: str = "rc-review") -> dict:
+        return ledger.append_event(root, event_id=f"vc1-review-{minute}", phase="VC-1",
+                                   event_type="stage_review_required", root_cause_id=cause,
+                                   next_action="stage_review_required：先对账", recorded_at_utc=self._at(minute))
+
+    def test_stage_review_follows_abandon_across_budget_control_events_only(self) -> None:
+        """审核必须紧接同阶段同根因的放弃；中间只允许预算控制事件，其他实质事件仍拒绝。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "UpgradeTimingLedger"
+            self._vc1_active(root)
+            self._abandon(root, 10)
+            ledger.append_event(root, event_id="vc1-paused", phase="VC-1", event_type="deadline_paused",
+                                next_action="deadline-extend preview/apply", recorded_at_utc=self._at(11),
+                                deadline_control={"scopes": ["stage"], "paused_since_utc": self._at(11)})
+            summary = self._review(root, 12)
+            self.assertEqual(summary["status"], "stage_review_required")
+            self.assertEqual(summary["review_phase"], "VC-1")
+        for label, between in (("根因不同", "cause"), ("中间有实质事件", "restart")):
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory) / "UpgradeTimingLedger"
+                self._vc1_active(root)
+                self._abandon(root, 10)
+                if between == "restart":
+                    ledger.append_event(root, event_id="vc1-restart", phase="VC-1", event_type="stage_started",
+                                        next_action="重开阶段", recorded_at_utc=self._at(11))
+                with self.assertRaisesRegex(ledger.TimingLedgerError, "必须紧接同阶段同根因的 stage_abandoned"):
+                    self._review(root, 12, cause="rc-other" if between == "cause" else "rc-review")
+
+    def test_stage_review_is_allowed_as_metadata_closeout_during_budget_pause(self) -> None:
+        """总预算到期暂停后仍可补齐放弃与审核这两条元数据收口；启动类事件照旧拒绝。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "UpgradeTimingLedger"
+            self._vc1_active(root)
+            self.assertEqual(ledger.inspect_ledger(root, now=self._at(361))["status"], "deadline_paused")
+            self._abandon(root, 361)
+            summary = self._review(root, 362)
+            self.assertEqual(summary["status"], "deadline_paused")
+            self.assertEqual(summary["status_before_pause"], "stage_review_required")
+            with self.assertRaisesRegex(ledger.TimingLedgerError, "预算已暂停"):
+                ledger.append_event(root, event_id="vc1-illegal-restart", phase="VC-1", event_type="stage_started",
+                                    next_action="重开阶段", recorded_at_utc=self._at(363))
+
+    def test_stage_review_only_admits_listed_events(self) -> None:
+        """审核等待期间只允许对账、停线或已批准恢复；重开阶段等推进动作拒绝。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "UpgradeTimingLedger"
+            self._vc1_active(root)
+            self._abandon(root, 10)
+            self._review(root, 11)
+            with self.assertRaisesRegex(ledger.TimingLedgerError, "stage_review_required 期间只允许"):
+                ledger.append_event(root, event_id="vc1-restart", phase="VC-1", event_type="stage_started",
+                                    next_action="重开阶段", recorded_at_utc=self._at(12))
+
     def test_stage_abandoned_requires_root_cause_and_next_action(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "UpgradeTimingLedger"

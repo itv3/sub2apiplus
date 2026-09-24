@@ -16456,6 +16456,45 @@ def _freeze_evaluation_output_bindings(
     return frozen
 
 
+def _require_stage_replay_proof_for_checkpoint(ledger_dir: Path, phase: str, checkpoint_path: Path) -> dict[str, Any]:
+    """已有 checkpoint 的 VC-2／VC-3 逐字重派前，核对放行它的账本事件确实绑定了阶段幂等重派证明。
+
+    放行事件取最后一条非预算控制事件：必须是本阶段、下一动作为逐字重派的 receipt_passed，且恰好绑定
+    一份 stage_replay 收据；该证明判定可重派，并且每个动作记录的 checkpoint 摘要都等于当前 checkpoint。
+    """
+
+    event = codex_upgrade_timing_ledger.last_substantive_event(ledger_dir)
+    if (
+        event is None
+        or event.get("event_type") != "receipt_passed"
+        or event.get("phase") != phase
+        or event.get("next_action") != "redispatch-same-batch"
+    ):
+        raise ConfigurationError(f"{phase} 已有 checkpoint，只允许阶段审核对账证明后的逐字重派。")
+    bindings = [item for item in event.get("receipts", []) if item.get("role") == "stage_replay"]
+    if len(bindings) != 1:
+        raise ConfigurationError(f"{phase} 已有 checkpoint，但放行事件没有绑定阶段幂等重派证明。")
+    proof_path = ledger_dir / str(bindings[0].get("path", ""))
+    if proof_path.is_symlink() or not proof_path.is_file() or file_sha256(proof_path) != bindings[0].get("sha256"):
+        raise ConfigurationError("阶段幂等重派证明的账本副本漂移。")
+    proof = _read_json(proof_path, "阶段幂等重派证明")
+    checkpoint_sha256 = file_sha256(checkpoint_path)
+    actions = proof.get("actions")
+    if (
+        proof.get("schema_version") != codex_upgrade_vc_artifacts.STAGE_REPLAY_SCHEMA
+        or proof.get("decision") != "recoverable"
+        or proof.get("allowed") is not True
+        or proof.get("phase") != phase
+        or proof.get("next_action") != "redispatch-same-batch"
+        or not isinstance(actions, list)
+        or not actions
+        or any(not isinstance(action, Mapping) or not isinstance(action.get("outputs"), Mapping)
+               or action["outputs"].get("checkpoint") != checkpoint_sha256 for action in actions)
+    ):
+        raise ConfigurationError(f"{phase} 的阶段幂等重派证明与当前 checkpoint 不一致，禁止再编译。")
+    return proof
+
+
 def _campaign_stage_replay_facts(campaign_dir: Path, run_manifest: Mapping[str, Any]) -> dict[str, Any]:
     """R4：仅为已有实现能够安全续作的 Campaign 级动作提供重派证明。
 
@@ -16651,6 +16690,9 @@ def compile_vc_batch(
                 or ledger.get("next_action") != "redispatch-same-batch"):
             raise ConfigurationError(f"{phase} 已有 checkpoint，禁止再编译执行批次。")
         _replay_vc_checkpoint(campaign_dir, plan, phase)
+        # R4：同一 next_action 也可能来自环境恢复等其他对账；已有 checkpoint 的阶段只允许凭阶段审核对账
+        # 写入账本的幂等重派证明逐字重派，且证明记录的 checkpoint 必须就是当前这份。
+        _require_stage_replay_proof_for_checkpoint(ledger_dir, phase, completed_path)
     if (
         not arguments.action_plan.is_absolute()
         or arguments.action_plan.is_symlink()

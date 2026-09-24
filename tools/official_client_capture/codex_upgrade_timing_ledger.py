@@ -440,6 +440,12 @@ PRODUCER_FREEZE_SUCCESSORS = (
         "scope": "upstream-codex-01561-r2-review-fix-20260924-freeze-successor",
         "result": "manual_actions_required",
     },
+    {
+        "path": "docs/egress/maintenance/upstream-codex-01561-r4-review-fix-20260924-freeze-successor.json",
+        "base_commit": "69f37a1da95eea876fc8fc85dcb07f506968b137",
+        "scope": "upstream-codex-01561-r4-review-fix-20260924-freeze-successor",
+        "result": "manual_actions_required",
+    },
 )
 
 
@@ -1425,6 +1431,8 @@ def _summarize(
     previous_raw: bytes | None = None
     last_successful_receipt: dict[str, Any] | None = None
     last_event: dict[str, Any] | None = None
+    # 最后一条非预算控制事件：预算暂停、延期与显式放弃只记录预算控制，业务步骤的先后按实质事件判断。
+    last_substantive_event: dict[str, Any] | None = None
     deadline_extensions: list[dict[str, Any]] = []
     pause_facts: list[dict[str, Any]] = []
     campaign_extension: datetime | None = None
@@ -1583,10 +1591,10 @@ def _summarize(
             if (
                 stage_review_required
                 or active_phase is not None
-                or last_event is None
-                or last_event["event_type"] != "stage_abandoned"
-                or last_event["phase"] != phase
-                or last_event["root_cause_id"] != normalized["root_cause_id"]
+                or last_substantive_event is None
+                or last_substantive_event["event_type"] != "stage_abandoned"
+                or last_substantive_event["phase"] != phase
+                or last_substantive_event["root_cause_id"] != normalized["root_cause_id"]
                 or normalized["attempt_id"] is not None
                 or normalized["root_cause_id"] is None
                 or not normalized["next_action"]
@@ -1882,6 +1890,8 @@ def _summarize(
         last_time = recorded
         previous_raw = raw
         last_event = normalized
+        if event_type not in DEADLINE_CONTROL_EVENTS:
+            last_substantive_event = normalized
     assert last_event is not None and last_time is not None and previous_raw is not None
     if as_of < last_time:
         raise TimingLedgerError("检查时间早于最新 event")
@@ -2127,6 +2137,18 @@ def phase_ledger_state(root: Path, *, now: str | None = None) -> dict[str, Any]:
     return {**summary, "completed_phases": completed}
 
 
+def last_substantive_event(root: Path) -> dict[str, Any] | None:
+    """返回最后一条非预算控制事件（预算暂停、延期与显式放弃之外）；没有时返回 None。
+
+    预算控制事件不改变父失败收口等业务步骤的进度，判断收口已写到哪一步时必须跳过它们。
+    """
+
+    for event, _raw in reversed(_load_events(Path(root))):
+        if event.get("event_type") not in DEADLINE_CONTROL_EVENTS:
+            return event
+    return None
+
+
 def append_event(
     root: Path,
     *,
@@ -2158,6 +2180,8 @@ def append_event(
     if current["status"] == "deadline_paused" and event_type not in DEADLINE_CONTROL_EVENTS | {
         # 到期后的元数据对账允许关闭死亡进程并记账；不得借此启动、复用或封存。
         "attempt_failed", "attempt_recovery_failed", "receipt_passed", "stage_abandoned", "stop_the_line",
+        # R4×R8：stage_abandoned 之后补齐的阶段／候选审核同属元数据收口，不启动、复用或封存任何动作。
+        "stage_review_required", "candidate_review_required",
     }:
         raise TimingLedgerError("预算已暂停；批准延期前禁止继续执行或封存")
     if current["status"] == "deadline_paused" and (

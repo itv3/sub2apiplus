@@ -63,6 +63,8 @@ CANDIDATE_PHASES = ("VC-4", "VC-5", "VC-6")
 CANDIDATE_REVISION_SCHEMA = "codex-upgrade-candidate-revision/v1"
 CANDIDATE_REVISION_COMMIT_SCHEMA = "codex-upgrade-candidate-revision-commit/v1"
 CANDIDATE_REVISION_SEAL_SCHEMA = "codex-upgrade-candidate-revision-seal/v1"
+# R4：阶段幂等重派证明（对账器写出，账本、监督器与编译入口重放）。
+STAGE_REPLAY_SCHEMA = "codex-upgrade-stage-replay/v1"
 CANDIDATE_INVALIDATION_SCHEMA = "codex-upgrade-candidate-invalidation/v1"
 CANDIDATE_INVALIDATION_DIAGNOSIS_SCHEMA = "candidate-invalidation-diagnosis/v1"
 CANDIDATE_INVALIDATION_CONCLUSION = "candidate_source_change_required"

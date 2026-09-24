@@ -293,9 +293,18 @@ class CampaignRunRehearsalReceiptTests(unittest.TestCase):
                 self.assertTrue(
                     item["permission_closeout"]["receipt_replayed"]
                 )
+                # R4：VC-1 普通失败进入阶段审核（放弃后接 stage_review_required），不再停线。
                 self.assertEqual(
                     item["timing_failure_closeout"]["status"],
-                    "stopped",
+                    "stage_review_required",
+                )
+                self.assertEqual(
+                    item["timing_failure_closeout"]["event_types"][-2:],
+                    ["stage_abandoned", "stage_review_required"],
+                )
+                self.assertIn(
+                    "已由其他根因进入 stage_review_required",
+                    item["timing_failure_closeout"]["closeout_failure_parent"]["timing_closeout"]["message"],
                 )
                 self.assertIsNone(
                     item["timing_failure_closeout"]["active_phase"]

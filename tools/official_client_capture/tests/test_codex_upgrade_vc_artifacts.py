@@ -582,6 +582,8 @@ class CodexUpgradeVCArtifactsTests(unittest.TestCase):
             "codex_upgrade_action_output_binding.schema.json": artifacts.ACTION_OUTPUT_BINDING_SCHEMA,
             "codex_upgrade_manifest_projection.schema.json": artifacts.MANIFEST_PROJECTION_SCHEMA,
             "codex_upgrade_effective_results.schema.json": artifacts.EFFECTIVE_RESULTS_SCHEMA,
+            # R4：阶段幂等重派证明。
+            "codex_upgrade_stage_replay.schema.json": artifacts.STAGE_REPLAY_SCHEMA,
         }
         for name, schema_version in expected.items():
             with self.subTest(name=name):

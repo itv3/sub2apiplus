@@ -9361,16 +9361,38 @@ def _close_failed_campaign_timing_ledger(
 
     budget_state = timing_ledger.inspect_ledger(ledger_dir)
     deadlines = vc_artifacts.effective_deadlines(campaign_dir)
-    if deadlines["paused_scopes"] and not _candidate_failure_hits_permanent_condition(campaign_dir, budget_state, failure_class=failure_class):
+    budget_paused = bool(deadlines["paused_scopes"]) and not _candidate_failure_hits_permanent_condition(
+        campaign_dir, budget_state, failure_class=failure_class
+    )
+    # R4×R8：本次失败的 stage_abandoned 已写、后续 review 未写（中途被杀）时，先在收口锁内补齐 review
+    # 再登记暂停；否则阶段层延期找不到 review 阶段，账本永久卡在“已放弃、未审核”。
+    abandon_pending = (timing_ledger.last_substantive_event(ledger_dir) or {}).get("event_id") == abandon_event_id
+
+    def budget_pause_result() -> dict[str, Any]:
+        # 暂停入口自行取总账、Campaign 与收口锁，只能在离开收口锁之后调用。
         paused = project_ledger.pause_campaign_deadline(campaign_dir)
         return {"status": "passed", "ledger_status": "deadline_paused", "ledger_dir": str(ledger_dir),
                 "failure_class": failure_class, "next_action": "deadline-extend preview/apply", "deadline_pause": paused}
 
+    if budget_paused and not abandon_pending:
+        return budget_pause_result()
+
+    review_result: dict[str, Any] | None = None
     with _timing_closeout_lock(ledger_dir):
         try:
             before = timing_ledger.inspect_ledger(ledger_dir)
         except (OSError, timing_ledger.TimingLedgerError) as error:
             raise SupervisorError(f"UpgradeTimingLedger 无法重放：{error}") from error
+        # 预算暂停／延期事件只记录预算控制，不改变父失败收口进度：判断已写到哪一步时跳过它们，
+        # 账本状态按暂停前状态判断。
+        substantive = timing_ledger.last_substantive_event(ledger_dir) or {}
+        last_id = substantive.get("event_id")
+        last_next_action = substantive.get("next_action")
+        ledger_status = (
+            before.get("status_before_pause")
+            if before.get("status") == "deadline_paused"
+            else before.get("status")
+        )
         if (
             before.get("upgrade_id") != timing.get("upgrade_id")
             or before.get("campaign_purpose") != campaign.get("campaign_purpose")
@@ -9378,10 +9400,10 @@ def _close_failed_campaign_timing_ledger(
             or before.get("target_version") != campaign.get("target_version")
         ):
             raise SupervisorError("UpgradeTimingLedger 与 Campaign 版本或用途漂移。")
-        if before.get("status") == "recovery_required":
+        if ledger_status == "recovery_required":
             if (
-                before.get("last_event_id") != recovery_event_id
-                or before.get("next_action") != recovery_next_action
+                last_id != recovery_event_id
+                or last_next_action != recovery_next_action
                 or before.get("recovery_root_cause_id") != root_cause_id
             ):
                 raise SupervisorError(
@@ -9398,10 +9420,10 @@ def _close_failed_campaign_timing_ledger(
                 "failure_class": failure_class,
                 "next_action": recovery_next_action,
             }
-        if before.get("status") == "stopped":
+        if ledger_status == "stopped":
             if (
-                before.get("last_event_id") != stop_event_id
-                or before.get("next_action") != permanent_next_action
+                last_id != stop_event_id
+                or last_next_action != permanent_next_action
             ):
                 raise SupervisorError("UpgradeTimingLedger 已由其他根因停线。")
             return {
@@ -9503,8 +9525,8 @@ def _close_failed_campaign_timing_ledger(
                 "recovery-preview 和 resume；无预约须核验 COMMIT、checkpoint 与动作幂等条件后逐字重派。"
             )
         if candidate_review or stage_review:
-            if before.get("status") == review_status:
-                if before.get("last_event_id") != review_event_id:
+            if ledger_status == review_status:
+                if last_id != review_event_id:
                     raise SupervisorError(f"UpgradeTimingLedger 已由其他根因进入 {review_status}。")
                 return {
                     "status": "passed",
@@ -9519,7 +9541,7 @@ def _close_failed_campaign_timing_ledger(
                 }
             next_action = review_next_action
 
-        if before.get("last_event_id") == abandon_event_id:
+        if last_id == abandon_event_id:
             if before.get("active_phase") is not None:
                 raise SupervisorError("stage_abandoned 部分终态仍残留 active 阶段。")
         elif before.get("active_phase") == phase:
@@ -9543,7 +9565,7 @@ def _close_failed_campaign_timing_ledger(
         try:
             middle = timing_ledger.inspect_ledger(ledger_dir)
             if (
-                middle.get("last_event_id") != abandon_event_id
+                (timing_ledger.last_substantive_event(ledger_dir) or {}).get("event_id") != abandon_event_id
                 or middle.get("active_phase") is not None
             ):
                 raise SupervisorError("UpgradeTimingLedger stage_abandoned 未稳定落盘。")
@@ -9559,13 +9581,18 @@ def _close_failed_campaign_timing_ledger(
                     next_action=review_next_action,
                 )
                 final = timing_ledger.inspect_ledger(ledger_dir)
+                final_status = (
+                    final.get("status_before_pause")
+                    if final.get("status") == "deadline_paused"
+                    else final.get("status")
+                )
                 if (
-                    final.get("status") != review_status
+                    final_status != review_status
                     or final.get("active_phase") is not None
-                    or final.get("last_event_id") != review_event_id
+                    or (timing_ledger.last_substantive_event(ledger_dir) or {}).get("event_id") != review_event_id
                 ):
                     raise SupervisorError(f"UpgradeTimingLedger {review_status} 未闭合。")
-                return {
+                review_result = {
                     "status": "passed",
                     "ledger_status": review_status,
                     "idempotent": False,
@@ -9576,38 +9603,46 @@ def _close_failed_campaign_timing_ledger(
                     "failure_class": failure_class,
                     "next_action": review_next_action,
                 }
-            timing_ledger.append_event(
-                ledger_dir,
-                event_id=stop_event_id,
-                phase=phase,
-                event_type="stop_the_line",
-                root_cause_id=root_cause_id,
-                live_request_count=0,
-                next_action=next_action,
-            )
-            final = timing_ledger.inspect_ledger(ledger_dir)
+            else:
+                timing_ledger.append_event(
+                    ledger_dir,
+                    event_id=stop_event_id,
+                    phase=phase,
+                    event_type="stop_the_line",
+                    root_cause_id=root_cause_id,
+                    live_request_count=0,
+                    next_action=next_action,
+                )
+                final = timing_ledger.inspect_ledger(ledger_dir)
         except (OSError, timing_ledger.TimingLedgerError) as error:
             raise SupervisorError(
                 f"UpgradeTimingLedger stop_the_line 写入失败：{error}"
             ) from error
-        if (
-            final.get("status") != "stopped"
-            or final.get("active_phase") is not None
-            or final.get("last_event_id") != stop_event_id
-            or final.get("next_action") != next_action
-        ):
-            raise SupervisorError("UpgradeTimingLedger 父失败终态未闭合。")
-        return {
-            "status": "passed",
-            "ledger_status": "stopped",
-            "idempotent": False,
-            "ledger_dir": str(ledger_dir),
-            "head_sequence": final["head_sequence"],
-            "head_sha256": final["head_sha256"],
-            "root_cause_id": root_cause_id,
-            "failure_class": failure_class,
-            "next_action": next_action,
-        }
+        if review_result is None:
+            if (
+                final.get("status") != "stopped"
+                or final.get("active_phase") is not None
+                or final.get("last_event_id") != stop_event_id
+                or final.get("next_action") != next_action
+            ):
+                raise SupervisorError("UpgradeTimingLedger 父失败终态未闭合。")
+            return {
+                "status": "passed",
+                "ledger_status": "stopped",
+                "idempotent": False,
+                "ledger_dir": str(ledger_dir),
+                "head_sequence": final["head_sequence"],
+                "head_sha256": final["head_sha256"],
+                "root_cause_id": root_cause_id,
+                "failure_class": failure_class,
+                "next_action": next_action,
+            }
+    # 收口锁内补齐的 review 已落盘。“已放弃、未审核”中间态既无 active 阶段也无 review 阶段，账本推算不出
+    # 阶段截止，入口处的预算判定看不到阶段层到期；因此离开收口锁后按落盘后的账本重新判定，
+    # 仍有到期层（或总账已登记暂停）则按原协议登记暂停。
+    if vc_artifacts.effective_deadlines(campaign_dir)["paused_scopes"]:
+        return budget_pause_result()
+    return review_result
 
 
 def _commit_prepared_run(

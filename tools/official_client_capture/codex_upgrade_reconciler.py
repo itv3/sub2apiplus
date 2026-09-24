@@ -324,6 +324,29 @@ def _ledger_event_sha256(ledger_dir: Path, event_id: str) -> str | None:
     return None
 
 
+def build_stage_replay_proof(
+    *,
+    campaign_id: Any,
+    run_id: Any,
+    review_event_id: Any,
+    review_root_cause_id: Any,
+    reconciliation_receipt_sha256: Any,
+    commit_sha256: Any,
+    next_action: Any,
+    replay: Mapping[str, Any],
+) -> dict[str, Any]:
+    """按固定字段顺序构造阶段幂等重派证明；与历史写出的证明逐字节一致，重复对账可原样核对。"""
+
+    return {
+        "schema_version": vc_artifacts.STAGE_REPLAY_SCHEMA, "decision": "recoverable",
+        "campaign_id": campaign_id, "run_id": run_id,
+        "review_event_id": review_event_id, "review_root_cause_id": review_root_cause_id,
+        "reconciliation_receipt_sha256": reconciliation_receipt_sha256,
+        "commit_sha256": commit_sha256,
+        "next_action": next_action, **replay,
+    }
+
+
 def _ledger_receipt_bindings(
     ledger_dir: Path,
     subject_id: str,
@@ -3027,14 +3050,13 @@ def reconcile_supervisor_run(
                               next_command="保持 stage_review_required：先修复不可幂等半成品或补齐受支持的恢复合同")
                 result["decision"] = {**decision, "decision": "review_required", "reasons": replay["reasons"]}
                 return result
-            proof = {
-                "schema_version": "codex-upgrade-stage-replay/v1", "decision": "recoverable",
-                "campaign_id": manifest["campaign_id"], "run_id": run["run_id"],
-                "review_event_id": review_event_id, "review_root_cause_id": reviews[0]["root_cause_id"],
-                "reconciliation_receipt_sha256": receipt_binding["sha256"],
-                "commit_sha256": commit["commit_sha256"] if commit else None,
-                "next_action": ledger_next_action, **replay,
-            }
+            proof = build_stage_replay_proof(
+                campaign_id=manifest["campaign_id"], run_id=run["run_id"],
+                review_event_id=review_event_id, review_root_cause_id=reviews[0]["root_cause_id"],
+                reconciliation_receipt_sha256=receipt_binding["sha256"],
+                commit_sha256=commit["commit_sha256"] if commit else None,
+                next_action=ledger_next_action, replay=replay,
+            )
             _write_or_verify(stage_replay_path, proof, volatile=())
             result["stage_replay"] = proof
         if ledger.get("active_phase") is not None or stage_review:

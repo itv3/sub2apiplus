@@ -2914,6 +2914,113 @@ raise SystemExit(9)
             self.assertEqual(result["status"], "passed")
             self.assertEqual(timing_ledger.inspect_ledger(ledger_root)["status"], "stage_review_required")
 
+    def _budget_bound_closeout_fixture(self, root: Path):
+        """VC-1 已开始且阶段预算已到期的正式 Campaign；账本绑定项目总账，可真实暂停与批准延期。"""
+
+        from datetime import datetime, timedelta, timezone
+        from tools.official_client_capture import codex_upgrade_project_ledger as project_ledger
+
+        start = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(minutes=10)
+
+        def at(seconds: int) -> str:
+            return (start + timedelta(seconds=seconds)).isoformat()
+
+        # 仅供夹具的总账必须位于 staging 目录树内。
+        data_root = root / "staging"
+        data_root.mkdir(mode=0o700)
+        project_root = data_root / project_ledger.LEDGER_DIR_NAME
+        project_ledger.create_project_ledger(
+            project_root, project_id="r4r8-fixture", absolute_deadline_utc=at(24 * 3600),
+            deadline_approved_by="fixture", estimation_policy="none", estimation_policy_approved_by="fixture",
+            fixture_only=True, started_at_utc=at(0), initial_precise_count=0,
+        )
+        campaign_dir = data_root / "evidence" / "campaigns" / "campaign-closeout"
+        campaign_dir.mkdir(parents=True, mode=0o700)
+        for parent in (data_root / "evidence", data_root / "evidence" / "campaigns"):
+            parent.chmod(0o700)
+        ledger_root = data_root / "control" / "timing-ledger"
+        ledger_root.parent.mkdir(mode=0o700)
+        timing_ledger.create_ledger(
+            ledger_root, upgrade_id="campaign-closeout", baseline_version="0.151.0", target_version="0.154.0",
+            campaign_purpose="production_replacement", evidence_decision="recapture", started_at_utc=at(0),
+            total_budget_minutes=600, stage_budgets_minutes={phase: 1 for phase in timing_ledger.PHASE_ORDER},
+            project_ledger_dir=project_root,
+        )
+        timing_ledger.append_event(ledger_root, event_id="fixture-vc0-completed", phase="VC-0",
+                                   event_type="stage_completed", next_action="启动 VC-1", recorded_at_utc=at(1))
+        timing_ledger.append_event(ledger_root, event_id="fixture-vc1-started", phase="VC-1",
+                                   event_type="stage_started", next_action="运行父批次", recorded_at_utc=at(2))
+        self._write_json(campaign_dir / "campaign.json", {
+            "campaign_id": "campaign-closeout", "campaign_mode": "formal",
+            "campaign_purpose": "production_replacement", "baseline_version": "0.151.0", "target_version": "0.154.0",
+            "control_receipts": {"upgrade_timing": {
+                "ledger_dir": str(ledger_root), "upgrade_id": "campaign-closeout",
+                "ledger_plan_sha256": supervisor._sha256((ledger_root / "ledger.json").read_bytes()),
+            }},
+        })
+        (campaign_dir / "control" / "vc").mkdir(parents=True, mode=0o700)
+        (campaign_dir / "control").chmod(0o700)
+        self._write_json(campaign_dir / "control" / "vc" / "campaign-plan.json",
+                         {"campaign_id": "campaign-closeout", "original_deadline_at_utc": at(600 * 60)})
+        project_ledger.register_existing_campaign(campaign_dir)
+        manifest = build_campaign_run_manifest(
+            "campaign-closeout", "VC-1", 30,
+            actions=[{"action_id": "failing-action", "operation": "VC-1:failing-action", "timeout_seconds": 5,
+                      "command": [sys.executable, "-c", "raise SystemExit(7)"]}],
+        )
+        return campaign_dir, ledger_root, manifest
+
+    def test_abandon_then_budget_pause_completes_review_before_pausing(self) -> None:
+        """R4×R8：放弃已写、审核未写时被杀且预算随后到期；重入先补齐审核再登记暂停，阶段层延期随后可用。"""
+
+        from datetime import datetime, timedelta, timezone
+        from tools.official_client_capture import codex_upgrade_project_ledger as project_ledger
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            campaign_dir, ledger_root, manifest = self._budget_bound_closeout_fixture(root)
+            real_append = timing_ledger.append_event
+            calls = 0
+
+            def fail_second(*args: object, **kwargs: object) -> dict[str, object]:
+                nonlocal calls
+                calls += 1
+                if calls == 2:
+                    raise timing_ledger.TimingLedgerError("模拟写入 review 之前进程被杀")
+                return real_append(*args, **kwargs)
+
+            # 首次收口发生在预算到期之前：替身只让这一次看不到暂停，从而落到“已放弃、未审核”的中间态。
+            not_yet_paused = {**vc_artifacts.effective_deadlines(campaign_dir), "paused_scopes": []}
+            with (
+                mock.patch.object(supervisor.timing_ledger, "append_event", side_effect=fail_second),
+                mock.patch.object(supervisor.vc_artifacts, "effective_deadlines", return_value=not_yet_paused),
+                self.assertRaisesRegex(supervisor.SupervisorError, "stop_the_line"),
+            ):
+                supervisor._close_failed_campaign_timing_ledger(campaign_dir, manifest, failed_action_id="failing-action")
+            events = [event["event_type"] for event, _ in timing_ledger._load_events(ledger_root)]
+            self.assertEqual(events[-1], "stage_abandoned")
+
+            result = supervisor._close_failed_campaign_timing_ledger(campaign_dir, manifest, failed_action_id="failing-action")
+            self.assertEqual(result["ledger_status"], "deadline_paused")
+            events = [event["event_type"] for event, _ in timing_ledger._load_events(ledger_root)]
+            self.assertEqual(events[-3:], ["stage_abandoned", "stage_review_required", "deadline_paused"])
+            summary = timing_ledger.inspect_ledger(ledger_root)
+            self.assertEqual((summary["status"], summary["status_before_pause"]), ("deadline_paused", "stage_review_required"))
+
+            preview = project_ledger.preview_deadline_extension(
+                campaign_dir, scope="stage", phase="VC-1",
+                new_deadline_at_utc=(datetime.now(timezone.utc) + timedelta(hours=2)).isoformat(),
+                reason="隔离测试：补齐审核后继续人工对账",
+            )
+            project_ledger.apply_deadline_extension(
+                campaign_dir, preview_path=Path(preview["preview_path"]),
+                approve_sha256=preview["review_sha256"], approved_by="fixture-reviewer",
+            )
+            self.assertEqual(timing_ledger.inspect_ledger(ledger_root)["status"], "stage_review_required")
+            again = supervisor._close_failed_campaign_timing_ledger(campaign_dir, manifest, failed_action_id="failing-action")
+            self.assertEqual((again["ledger_status"], again["idempotent"]), ("stage_review_required", True))
+
     def test_parent_reports_timing_closeout_failure(self) -> None:
         """账本闭合失败必须进入父结果，不能只留下 action-failed。"""
 

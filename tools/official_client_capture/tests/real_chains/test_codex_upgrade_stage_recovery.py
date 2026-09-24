@@ -85,6 +85,17 @@ class StageRecoveryChainTests(unittest.TestCase):
             self.assertEqual(reconciled["status"], "recoverable", reconciled)
             self.assertTrue(reconciled["stage_replay"]["allowed"])
             self.assertEqual(reconciled["stage_replay"]["next_action"], "redispatch-same-batch")
+            # 实际产出的证明样本按 schema 做结构校验（字段闭合、常量与枚举），不再只打印供离线核对。
+            schema = json.loads(Path(upgrade.__file__).with_name("codex_upgrade_stage_replay.schema.json").read_text(encoding="utf-8"))
+            sample = reconciled["stage_replay"]
+            self.assertEqual(set(sample), set(schema["required"]))
+            for key, rule in schema["properties"].items():
+                if "const" in rule:
+                    self.assertEqual(sample[key], rule["const"], key)
+                if "enum" in rule:
+                    self.assertIn(sample[key], rule["enum"], key)
+            for action in sample["actions"]:
+                self.assertEqual(set(action), set(schema["properties"]["actions"]["items"]["required"]))
             inner = supervisor._read_json(run_dir / "campaign-run-manifest.json")["manifest"]
             changed = draft_paths[0].parent / "profile.json"
             original = changed.read_bytes()

@@ -1729,6 +1729,15 @@ def _atomic_failing_parent(
     }
 
 
+# R4：失败父 run（VC-1 普通动作失败）的账本收口是阶段审核：stage_abandoned 后接 stage_review_required；
+# 第二个失败父 run 换了动作即换了根因，闭合必须以下面的文案失败。原子演练收据绑定原子入口及其
+# producer／consumer 的字节身份（_atomic_tool_identity），R4 之前的停线收口收据在身份核对处即被拒，
+# 不会进入这里的合同核对，因此记录与重放都只接受当前合同。
+_ATOMIC_FAILURE_CLOSEOUT_STATUS = "stage_review_required"
+_ATOMIC_FAILURE_CLOSEOUT_EVENTS = ["stage_abandoned", "stage_review_required"]
+_ATOMIC_CLOSEOUT_NEGATIVE_MESSAGE = "已由其他根因进入 stage_review_required"
+
+
 def _atomic_timing_failure_closeout(
     root: Path,
     *,
@@ -1755,11 +1764,11 @@ def _atomic_timing_failure_closeout(
         for event, _raw in codex_upgrade_timing_ledger._load_events(ledger_root)
     ]
     if (
-        stopped.get("status") != "stopped"
+        stopped.get("status") != _ATOMIC_FAILURE_CLOSEOUT_STATUS
         or stopped.get("active_phase") is not None
-        or events[-2:] != ["stage_abandoned", "stop_the_line"]
+        or events[-2:] != _ATOMIC_FAILURE_CLOSEOUT_EVENTS
     ):
-        raise CampaignRunRehearsalError("原子演练父失败后时间账本仍为 active")
+        raise CampaignRunRehearsalError("原子演练父失败后时间账本未关闭 active 阶段并进入阶段审核")
     closeout_failure_parent = _atomic_failing_parent(
         root,
         campaign_dir=campaign_dir,
@@ -1773,8 +1782,8 @@ def _atomic_timing_failure_closeout(
         closeout_failure.get("status") != "failed"
         or closeout_failure.get("error_type")
         != "SupervisorError"
-        or "已由其他根因停线" not in str(closeout_failure.get("message", ""))
-        or after_negative.get("status") != "stopped"
+        or _ATOMIC_CLOSEOUT_NEGATIVE_MESSAGE not in str(closeout_failure.get("message", ""))
+        or after_negative.get("status") != stopped.get("status")
         or after_negative.get("active_phase") is not None
         or after_negative.get("head_sequence") != stopped.get("head_sequence")
         or after_negative.get("head_sha256") != stopped.get("head_sha256")
@@ -1784,7 +1793,7 @@ def _atomic_timing_failure_closeout(
     return {
         "ledger_dir": ledger_root.relative_to(root).as_posix(),
         "ledger_plan_sha256": _sha256_file(ledger_root / "ledger.json"),
-        "status": "stopped",
+        "status": stopped["status"],
         "active_phase": None,
         "head_sequence": stopped["head_sequence"],
         "head_sha256": stopped["head_sha256"],
@@ -2295,9 +2304,9 @@ def _replay_atomic_timing_failure_closeout(
         or closeout.get("last_event_id") != summary.get("last_event_id")
         or closeout.get("next_action") != summary.get("next_action")
         or closeout.get("event_types") != event_types
-        or summary.get("status") != "stopped"
+        or summary.get("status") != _ATOMIC_FAILURE_CLOSEOUT_STATUS
         or summary.get("active_phase") is not None
-        or event_types[-2:] != ["stage_abandoned", "stop_the_line"]
+        or event_types[-2:] != _ATOMIC_FAILURE_CLOSEOUT_EVENTS
         or closeout.get("live_request_count") != 0
         or closeout.get("scanned_bytes") != 0
         or closeout.get("network_used") is not False
@@ -2366,6 +2375,8 @@ def _atomic_expected_inventory_paths(
     paths = {
         "campaign",
         "campaign/campaign.json",
+        # R8：父批次执行期间持有 Campaign 目录内的预算控制共享锁（deadline_control_scope），锁文件随之创建。
+        "campaign/.deadline-control.lock",
         # 项目总账门禁：实例根内的 fixture_only 总账与 Campaign 侧注册 batch。
         "upgrade-project-ledger",
         "upgrade-project-ledger/.project-ledger.lock",
