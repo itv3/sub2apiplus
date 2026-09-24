@@ -635,11 +635,16 @@ EVENT_FIELDS = {
 }
 
 
+# 写入中的事件临时文件（".<序号>.json.<随机>.tmp"，原子改名前短暂存在）不是事件，读取时忽略；
+# 其他任何额外文件仍按篡改拒绝。
+INFLIGHT_EVENT_TEMP_RE = re.compile(r"^\.[0-9]{6}\.json\.[A-Za-z0-9_]+\.tmp$")
+
+
 def _load_events(root: Path) -> list[dict[str, Any]]:
     events_root = root / "events"
     if events_root.is_symlink() or not events_root.is_dir():
         raise ProjectLedgerError("events 目录缺失或不可信")
-    paths = sorted(events_root.iterdir())
+    paths = sorted(path for path in events_root.iterdir() if not INFLIGHT_EVENT_TEMP_RE.fullmatch(path.name))
     if any(path.is_symlink() or not path.is_file() for path in paths):
         raise ProjectLedgerError("events 目录只能包含普通文件")
     expected = [f"{index:06d}.json" for index in range(1, len(paths) + 1)]
@@ -1109,9 +1114,9 @@ def _read_project_history_snapshot(root: Path) -> dict[str, Any]:
     """不取锁地重放一份只读项目历史快照。
 
     event 以同目录临时文件加硬链接原子发布，且发布后不可变；
-    因此并发追加时本函数要么看到旧前缀，要么看到新前缀。若列目录恰好
-    观测到尚未发布的临时文件，``_load_events`` 会失败关闭；本函数不会
-    删除临时文件、刷新 head 缓存或追加事件。
+    因此并发追加时本函数要么看到旧前缀，要么看到新前缀。列目录恰好
+    观测到尚未发布的临时文件时，``_load_events`` 把它排除在事件链之外（得到旧前缀）；
+    本函数不会删除临时文件、刷新 head 缓存或追加事件。
 
     这份快照只适合证明历史 head 仍是事件链祖先，不能作为新写入的
     CAS 基准。

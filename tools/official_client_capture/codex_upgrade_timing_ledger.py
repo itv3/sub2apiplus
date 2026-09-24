@@ -1167,11 +1167,17 @@ def _validate_binding(root: Path, value: Any, label: str) -> dict[str, Any]:
     }
 
 
+# 写入中的事件临时文件：_write_once 在事件目录内 mkstemp（".<序号>.json.<随机>.tmp"）后原子改名。
+# 并发读取方（例如监督器看门狗每周期重算预算）可能在改名前列到它；它不是事件，读取时忽略，
+# 写入进程中途被杀遗留的同名临时文件也不会让账本永久不可读。其他任何额外文件仍按篡改拒绝。
+INFLIGHT_EVENT_TEMP_RE = re.compile(r"^\.[0-9]{6}\.json\.[A-Za-z0-9_]+\.tmp$")
+
+
 def _load_events(root: Path, *, limit: int | None = None) -> list[tuple[dict[str, Any], bytes]]:
     events_root = root / "events"
     if not events_root.is_dir() or events_root.is_symlink():
         raise TimingLedgerError("events 目录缺失或不可信")
-    paths = sorted(events_root.iterdir())
+    paths = sorted(path for path in events_root.iterdir() if not INFLIGHT_EVENT_TEMP_RE.fullmatch(path.name))
     if any(path.is_symlink() or not path.is_file() for path in paths):
         raise TimingLedgerError("events 目录只能包含普通文件")
     expected_names = [f"{index:06d}.json" for index in range(1, len(paths) + 1)]

@@ -31,6 +31,60 @@ class TimingLedgerTests(unittest.TestCase):
         started = datetime(2026, 8, 30, tzinfo=timezone.utc)
         return (started + timedelta(minutes=minutes, seconds=seconds)).isoformat()
 
+    def test_inflight_event_temp_file_is_ignored_but_other_extra_files_reject(self) -> None:
+        """事件写入先在事件目录内建临时文件再原子改名；读取方列到它时必须忽略，其他额外文件仍拒绝。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "UpgradeTimingLedger"
+            self._create(root)
+            inflight = root / "events" / ".000002.json.abc_12XY.tmp"
+            inflight.write_bytes(b"{")
+            inflight.chmod(0o600)
+            self.assertEqual(ledger.inspect_ledger(root, now=self._at(1))["head_sequence"], 1)
+            appended = ledger.append_event(root, event_id="vc0-done", phase="VC-0", event_type="stage_completed",
+                                           next_action="启动 VC-1", recorded_at_utc=self._at(2))
+            self.assertEqual(appended["head_sequence"], 2)
+            self.assertTrue((root / "events" / "000002.json").is_file())
+            for name in ("junk.json", ".000003.json.tmp", "000003.json.abc.tmp"):
+                with self.subTest(name=name):
+                    extra = root / "events" / name
+                    extra.write_bytes(b"{}")
+                    with self.assertRaisesRegex(ledger.TimingLedgerError, "存在额外文件"):
+                        ledger.inspect_ledger(root, now=self._at(3))
+                    extra.unlink()
+
+    def test_concurrent_reads_never_fail_while_events_are_appended(self) -> None:
+        """看门狗等读取方与事件追加并发时，不得因改名前的临时文件误判账本被篡改。"""
+
+        import threading
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "UpgradeTimingLedger"
+            self._create(root)
+            errors: list[str] = []
+            done = threading.Event()
+
+            def read_loop() -> None:
+                while not done.is_set():
+                    try:
+                        ledger._load_events(root)
+                    except ledger.TimingLedgerError as error:
+                        errors.append(str(error))
+
+            reader = threading.Thread(target=read_loop)
+            reader.start()
+            try:
+                for index in range(1, 61):
+                    ledger.append_event(root, event_id=f"attempt-{index}", phase="VC-0", event_type="attempt_started",
+                                        attempt_id=f"attempt-{index}", recorded_at_utc=self._at(1, index * 2))
+                    ledger.append_event(root, event_id=f"attempt-{index}-passed", phase="VC-0",
+                                        event_type="attempt_failed", attempt_id=f"attempt-{index}",
+                                        root_cause_id=f"cause-{index}", recorded_at_utc=self._at(1, index * 2 + 1))
+            finally:
+                done.set()
+                reader.join(timeout=30)
+            self.assertEqual(errors, [])
+
     def test_checkpoint_replays_after_later_events_are_appended(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "UpgradeTimingLedger"

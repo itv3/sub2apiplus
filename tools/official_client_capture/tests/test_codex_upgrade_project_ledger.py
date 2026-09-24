@@ -100,6 +100,27 @@ class ProjectLedgerTests(unittest.TestCase):
             with self.assertRaisesRegex(ledger.ProjectLedgerError, "批准人"):
                 ledger.create_project_ledger(root / "other", project_id="p", absolute_deadline_utc=_future(), deadline_approved_by=" ", estimation_policy="none", estimation_policy_approved_by="老板", fixture_only=False)
 
+    def test_inflight_event_temp_file_is_ignored_but_other_extra_files_reject(self) -> None:
+        """总账事件写入中的临时文件（原子改名前短暂存在）读取时忽略；其他额外文件仍拒绝。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            ledger_root = _create(root)
+            campaign_dir = _campaign(root, "c1")
+            _register(root, campaign_dir, "c1", deadline=_future(24))
+            head = ledger.replay_head(ledger_root)
+            inflight = ledger_root / "events" / f".{head['sequence'] + 1:06d}.json.abc_12XY.tmp"
+            inflight.write_bytes(b"{")
+            inflight.chmod(0o600)
+            self.assertEqual(ledger.replay_head(ledger_root)["sequence"], head["sequence"])
+            for name in ("junk.json", ".000009.json.tmp"):
+                with self.subTest(name=name):
+                    extra = ledger_root / "events" / name
+                    extra.write_bytes(b"{}")
+                    with self.assertRaisesRegex(ledger.ProjectLedgerError, "存在额外文件"):
+                        ledger.replay_head(ledger_root)
+                    extra.unlink()
+
     def test_registration_batch_and_event_then_consumers_pass(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
@@ -332,10 +353,10 @@ class ProjectLedgerTests(unittest.TestCase):
             self.assertFalse(cache.exists())
             self.assertEqual(inventory(), before)
 
-    def test_project_history_snapshot_safely_fails_on_concurrent_temp_event(
+    def test_project_history_snapshot_returns_old_prefix_on_concurrent_temp_event(
         self,
     ) -> None:
-        """并发追加的临时 event 最多使快照失败，不得触碰任何文件。"""
+        """并发追加中尚未发布的临时 event 不属于事件链：快照返回旧前缀，且不得触碰任何文件。"""
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
@@ -353,11 +374,8 @@ class ProjectLedgerTests(unittest.TestCase):
                 for path in sorted(ledger_root.rglob("*"))
                 if path.is_file()
             }
-            with self.assertRaisesRegex(
-                ledger.ProjectLedgerError,
-                "event 序号不连续或存在额外文件",
-            ):
-                ledger.read_project_history_snapshot(ledger_root)
+            snapshot = ledger.read_project_history_snapshot(ledger_root)
+            self.assertEqual((snapshot["head_sequence"], snapshot["events"]), (0, []))
             after = {
                 str(path.relative_to(ledger_root)): (
                     path.read_bytes(),
