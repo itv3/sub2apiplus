@@ -52,6 +52,11 @@
     },
     "recovery_review_sha256": {
       "$ref": "#/$defs/sha256"
+    },
+    "reuse_validation_scanned_bytes": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "预约时复验复用证明实际读取的证据字节数（同一证据根只计一次）；修正前写出的预约没有该字段"
     }
   },
   "dependentRequired": {

@@ -625,18 +625,22 @@ class attempt_recovery_environment_patches:
             return path, receipt
 
         def probe(_manifest: Any, target: Path, phase: str, **_kwargs: Any) -> dict[str, Any]:
-            # 环境探针替身：写探针清单与五份 guard 规范化状态快照（与真实探针同一目录布局、同一文件名），
+            # 环境探针替身：写五份 guard 规范化状态快照与探针清单（与真实探针同一目录布局、同一文件名、同一快照绑定），
             # 恢复 finalizer（真实 _finalize_attempt_restoration → receipts/restoration-report.json）不再替换。
+            # 清单逐项列出快照摘要：R11 判据④在段摘要缺失时要拿它与恢复报告的 after 引用逐项核对。
             from tools.official_client_capture import codex_upgrade_environment_probe as probe_module
             from tools.official_client_capture.tests import test_codex_upgrade
 
             fixture = test_codex_upgrade.CodexUpgradeTest
             target.mkdir(parents=True, exist_ok=True, mode=0o700)
-            document = {"schema_version": "codex-upgrade-environment-probe/v1", "phase": phase, "observed_at_utc": _utc_now()}
-            _write(target / "probe-manifest.json", document)
+            snapshots = []
             for key, filename in probe_module.STATE_FILES.items():
                 state_payload = fixture._database_state(after=True) if key == "database" else {"probe_kind": f"attempt_recovery_{key}", "stable_value": "restored"}
                 fixture._write_state_snapshot(target / filename, state_payload)
+                snapshots.append(probe_module._snapshot_binding(target / filename, (target / filename).read_bytes(), key))
+            document = {"schema_version": "codex-upgrade-environment-probe/v1", "phase": phase, "observed_at_utc": _utc_now(),
+                        "snapshots": snapshots}
+            _write(target / "probe-manifest.json", document)
             return document
 
         def closeout(attempt_root: Path, roots: list[Path]) -> dict[str, Any]:

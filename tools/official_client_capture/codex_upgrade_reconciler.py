@@ -597,6 +597,58 @@ def _request_part(
     return part, binding, copy_path
 
 
+def _require_segment_accounting_scope(
+    campaign_dir: Path, summary_path: Path, *, candidate_id: str, attempt_id: str, recovery_revision: str,
+) -> None:
+    """R11 请求计量：恢复段入账前核对执行集合与复用集合不相交、并集等于基线冻结的 J*，且段结果的执行／复用
+    标记与预约逐项一致；复用 Job 的请求已在来源段入账，本段只能按实际执行的 Job 计量。没有复用字段的历史
+    预约按“全部执行”核对。"""
+
+    segment_root = summary_path.parent
+    try:
+        reservation = codex_upgrade._load_attempt_recovery_reservation(
+            campaign_dir, segment_root, candidate_id=candidate_id, attempt_id=attempt_id,
+            recovery_revision=recovery_revision,
+        )
+        frozen = sorted(str(item) for item in codex_upgrade._authoritative_recovery_execute_jobs(
+            campaign_dir, candidate_id, reservation)[2].get("execute_jobs", []))
+    except codex_upgrade.ConfigurationError as error:
+        raise ReconcilerError(f"恢复段入账无法取得预约或冻结 J*：{error}") from error
+    planned = sorted(str(row.get("id")) for row in reservation.get("planned_jobs", []) if isinstance(row, Mapping))
+    execute = [str(item) for item in reservation.get("execute_job_ids", planned)]
+    reuse = [str(item) for item in reservation.get("reuse_job_ids", [])]
+    if (
+        not frozen
+        or planned != frozen
+        or set(execute) & set(reuse)
+        or sorted(set(execute) | set(reuse)) != frozen
+        or len(set(execute)) != len(execute)
+        or len(set(reuse)) != len(reuse)
+    ):
+        raise ReconcilerError(
+            f"恢复段入账的执行／复用集合非法：execute={sorted(execute)}，reuse={sorted(reuse)}，J*={frozen}"
+        )
+    summary = _read_json(summary_path, "恢复段摘要")
+    reservation_path = segment_root / codex_upgrade.ATTEMPT_RECOVERY_RESERVATION_FILENAME
+    if not isinstance(summary.get("reservation"), Mapping) or summary["reservation"].get("sha256") != _file_sha256(reservation_path):
+        raise ReconcilerError("恢复段摘要与预约绑定漂移，不能按段入账")
+    results = summary.get("results")
+    if not isinstance(results, list) or not all(isinstance(row, Mapping) for row in results):
+        raise ReconcilerError("恢复段摘要 results 非法")
+    dispositions: dict[str, str] = {}
+    for row in results:
+        job_id = str(row.get("id"))
+        if job_id in dispositions:
+            raise ReconcilerError(f"恢复段摘要 Job 重复：{job_id}")
+        dispositions[job_id] = str(row.get("disposition", "executed"))
+    if (
+        sorted(dispositions) != frozen
+        or sorted(job for job, kind in dispositions.items() if kind == "reused") != sorted(reuse)
+        or sorted(job for job, kind in dispositions.items() if kind != "reused") != sorted(execute)
+    ):
+        raise ReconcilerError("恢复段结果的执行／复用标记与预约不一致，不能按段入账")
+
+
 def _account_sealed_capture(
     campaign_dir: Path,
     *,
@@ -658,6 +710,10 @@ def _account_sealed_capture(
         recovery_path = codex_upgrade._campaign_file(campaign_dir, str(recovery_binding.get("path", "")))
         if not recovery_path.is_file() or _file_sha256(recovery_path) != recovery_binding.get("sha256"):
             raise ReconcilerError("阶段结果绑定的 attempt-recovery.json 摘要漂移")
+        _require_segment_accounting_scope(
+            campaign_dir, recovery_path, candidate_id=str(candidate_id), attempt_id=attempt_id,
+            recovery_revision=recovery_revision,
+        )
     elif isinstance(recovery_binding, Mapping):
         raise ReconcilerError("当前候选阶段结果是恢复段的增量封存结果，请以 --attempt-recovery ar<k> 入账")
     observed = now or _utc_now()
@@ -1339,13 +1395,62 @@ def recovery_segment_summary(
     return segment, reservation, payload
 
 
+def _after_probe_bound_by_restoration(segment: Path, after: Path, restoration: Path, candidate_id: str) -> bool:
+    """判据④（摘要缺失路径）：权限收口后、段摘要写出前被杀时，after 探针与恢复报告没有摘要里的绑定。
+
+    改以机器 finalizer 重放过的恢复报告为准：重放按原输入重算五类 after 快照并逐字段比对，报告里 role=after 的
+    引用就是快照内容的可信摘要。after 探针清单必须与这些引用逐项相同，清单列出的快照复算摘要与字节数一致；
+    同大小改写并恢复 mtime 的篡改会让重放或复算不一致，不再只核对文件存在。
+    """
+
+    evidence_root = segment / "evidence"
+    report = codex_upgrade._validate_restoration_report(
+        restoration, [evidence_root], phase="candidate", candidate_id=candidate_id,
+    )
+    referenced: dict[str, str] = {}
+    for check in report["checks"]:
+        refs = [ref for ref in check.get("evidence_refs", []) if isinstance(ref, Mapping) and ref.get("role") == "after"]
+        if len(refs) != 1 or str(refs[0].get("path")) in referenced:
+            return False
+        referenced[str(refs[0].get("path"))] = str(refs[0].get("sha256"))
+    probe = _read_json(after, "恢复段 after 探针")
+    snapshots = probe.get("snapshots")
+    state_files = codex_upgrade.ENVIRONMENT_STATE_FILES
+    if (
+        probe.get("schema_version") != codex_upgrade.codex_upgrade_environment_probe.PROBE_MANIFEST_SCHEMA
+        or probe.get("phase") != "after"
+        or not isinstance(snapshots, list)
+        or len(snapshots) != len(state_files)
+    ):
+        return False
+    listed: dict[str, str] = {}
+    for item in snapshots:
+        if not isinstance(item, Mapping) or state_files.get(str(item.get("kind"))) != item.get("path"):
+            return False
+        path = after.parent / str(item["path"])
+        if (
+            path.is_symlink()
+            or not path.is_file()
+            or path.stat().st_size != item.get("bytes")
+            or _file_sha256(path) != item.get("sha256")
+        ):
+            return False
+        listed[path.relative_to(evidence_root).as_posix()] = str(item["sha256"])
+    return len(listed) == len(state_files) and listed == referenced
+
+
 def segment_reuse_proofs(
     campaign_dir: Path, candidate_id: str, attempt_id: str, recovery_revision: str,
     frozen_job_ids: Sequence[str],
     *, scan_stats: dict[str, int] | None = None,
+    _inventory_memo: dict[tuple[str, ...], dict[str, Any]] | None = None,
 ) -> dict[str, dict[str, Any]]:
-    """R11 四项复用判据的唯一实现；失败／证明不足返回 execute，控制链损坏仍拒绝。"""
+    """R11 四项复用判据的唯一实现；失败／证明不足返回 execute，控制链损坏仍拒绝。
 
+    同一次复验内按证据根集合缓存逐文件清单：沿前序段递归时，同一份复用证据只读取、只计入扫描字节一次。
+    """
+
+    memo = {} if _inventory_memo is None else _inventory_memo
     segment, reservation, summary = recovery_segment_summary(campaign_dir, candidate_id, attempt_id, recovery_revision)
     _, _, recovery = codex_upgrade._authoritative_recovery_execute_jobs(campaign_dir, candidate_id, reservation)
     if sorted(recovery["execute_jobs"]) != sorted(frozen_job_ids):
@@ -1379,6 +1484,8 @@ def segment_reuse_proofs(
             for key, path in (("after_probe", after), ("restoration_report", restoration)):
                 if summary.get("environment", {}).get(key) != codex_upgrade._attempt_evidence_binding(segment / "evidence", path):
                     return {}
+        elif not _after_probe_bound_by_restoration(segment, after, restoration, candidate_id):
+            return {}
     except (OSError, KeyError, ValueError, codex_upgrade.ConfigurationError,
             codex_upgrade.codex_upgrade_evidence_permissions.EvidencePermissionError):
         return {}
@@ -1386,7 +1493,8 @@ def segment_reuse_proofs(
     inherited = set(reservation.get("reuse_job_ids", []))
     if inherited:
         previous_revision = f"ar{int(recovery_revision[2:]) - 1}"
-        prior = segment_reuse_proofs(campaign_dir, candidate_id, attempt_id, previous_revision, frozen_job_ids, scan_stats=scan_stats)
+        prior = segment_reuse_proofs(campaign_dir, candidate_id, attempt_id, previous_revision, frozen_job_ids,
+                                     scan_stats=scan_stats, _inventory_memo=memo)
     else:
         prior = {}
     proofs = {}
@@ -1413,7 +1521,11 @@ def segment_reuse_proofs(
                 continue
             if any(Path(root) not in roots for root in result.get("evidence_roots", [])):
                 continue
-            inventory = recovery_job_inventory(result.get("evidence_roots", []), scan_stats=scan_stats)
+            memo_key = tuple(sorted(set(str(value) for value in result.get("evidence_roots", []))))
+            inventory = memo.get(memo_key)
+            if inventory is None:
+                inventory = recovery_job_inventory(result.get("evidence_roots", []), scan_stats=scan_stats)
+                memo[memo_key] = inventory
             if checkpoint.get("recovery_evidence") != inventory:
                 continue
             checkpoint_path = segment / "checkpoints" / f"{checkpoint['checkpoint_sequence']:08d}.json"
@@ -1430,19 +1542,29 @@ def segment_reuse_proofs(
     return proofs
 
 
-def validate_segment_reuse_preview(campaign_dir: Path, preview: Mapping[str, Any]) -> None:
-    """批准和派发读侧重放四项判据；证明必须与预览逐字段相同。旧空复用预览保持兼容。"""
+def validate_segment_reuse_preview(
+    campaign_dir: Path, preview: Mapping[str, Any], *, scan_stats: dict[str, int] | None = None,
+) -> int:
+    """批准和派发读侧重放四项判据；证明必须与预览逐字段相同。旧空复用预览保持兼容。
+
+    返回本次复验实际读取的证据字节数（同一证据根在递归各层只读一次），并累加进 ``scan_stats``；
+    调用方据此把复验成本记入自己的扫描统计。
+    """
 
     reuse = preview.get("reuse_job_ids", [])
     supplied = preview.get("reuse_proofs", {})
     if not isinstance(supplied, Mapping) or set(supplied) != set(reuse):
         raise ReconcilerError("恢复预览复用集合与判据证明不一致")
     if not reuse:
-        return
+        return 0
+    stats = {"scanned_bytes": 0}
     actual = segment_reuse_proofs(campaign_dir, str(preview["candidate_id"]), str(preview["source_attempt_id"]),
-                                 str(preview["recovery_revision"]), preview["planned_job_ids"])
+                                 str(preview["recovery_revision"]), preview["planned_job_ids"], scan_stats=stats)
+    if scan_stats is not None:
+        scan_stats["scanned_bytes"] = scan_stats.get("scanned_bytes", 0) + stats["scanned_bytes"]
     if any(job_id not in actual or actual[job_id] != supplied[job_id] for job_id in reuse):
         raise ReconcilerError("恢复预览的 Job 复用判据漂移或证明不足")
+    return stats["scanned_bytes"]
 
 
 def reused_segment_job_result(campaign_dir: Path, proof: Mapping[str, Any]) -> dict[str, Any]:

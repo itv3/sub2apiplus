@@ -11,6 +11,21 @@ from tools.official_client_capture.tests.real_chains import test_codex_upgrade_e
 
 
 class SegmentReuseChainTests(unittest.TestCase):
+    def _assert_reservation_schema(self, reservation):
+        """实际写出的恢复段预约按 schema 做结构校验：必填、常量、复用字段成组出现、复用证明字段闭合。"""
+
+        schema = json.loads((Path(__file__).resolve().parents[2]
+                             / 'codex_upgrade_attempt_recovery_reservation.schema.json').read_text(encoding='utf-8'))
+        self.assertTrue(set(schema['required']) <= set(reservation))
+        self.assertEqual(reservation['schema_version'], schema['properties']['schema_version']['const'])
+        for field, group in schema['dependentRequired'].items():
+            if field in reservation:
+                self.assertTrue(set(group) <= set(reservation), field)
+        for proof in reservation['reuse_proofs'].values():
+            self.assertEqual(set(proof), set(schema['$defs']['proof']['required']))
+        scanned = reservation['reuse_validation_scanned_bytes']
+        self.assertTrue(isinstance(scanned, int) and not isinstance(scanned, bool) and scanned >= 0)
+
     def test_three_segments_reuse_completed_jobs_and_seal(self):
         with tempfile.TemporaryDirectory(prefix='r11-staging-') as directory:
             root = Path(directory).resolve() / 'staging'
@@ -59,6 +74,13 @@ class SegmentReuseChainTests(unittest.TestCase):
             third = harness.ar_run(tree, 'ar3', successor, recovery_preview=reconciled2['recovery_preview_path'],
                                    crash_at='after-binding', expect_exit=137)
             self.assertEqual(third['returncode'], 137, third)
+            # R11：预约记录复验实际读取的证据字节。ar3 复验沿 ar2→ar1 递归，JOB_A 的证据在两层都出现，只读一次。
+            reservation3 = json.loads((harness.segment_root('ar3') / 'recovery-reservation.json').read_text())
+            reused_roots = sorted({root for row in second_jobs for root in row.get('evidence_roots', [])})
+            self.assertEqual(len(reused_roots), 2, reused_roots)
+            self.assertEqual(reservation3['reuse_validation_scanned_bytes'],
+                             sum(path.stat().st_size for root in reused_roots for path in Path(root).rglob('*') if path.is_file()))
+            self._assert_reservation_schema(reservation3)
             run_dir = max((path for path in Path(state['state_dir']).iterdir() if path.name.startswith('run-')),
                           key=lambda path: path.stat().st_mtime)
             self.assertEqual(harness.wait_run_state(str(run_dir), {'failed', 'watchdog-aborted'})['state'], 'failed')

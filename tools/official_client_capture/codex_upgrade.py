@@ -43548,7 +43548,8 @@ def _reserve_attempt_recovery(
             from tools.official_client_capture import codex_upgrade_reconciler as reconciler
 
             _require_recovery_preview_scope_equals_frozen_jobs(reuse_preview, recovery["execute_jobs"], label="恢复段预约")
-            reconciler.validate_segment_reuse_preview(campaign_dir, reuse_preview)
+            # R11：复验读取的证据字节记入预约，复用前的成本可审计。
+            reuse_validation_scanned_bytes = reconciler.validate_segment_reuse_preview(campaign_dir, reuse_preview)
         if set(job.job_id for job in jobs) != set(recovery["execute_jobs"]):
             raise ConfigurationError("恢复段预约必须覆盖基线 J*。")
         planned_jobs: list[dict[str, Any]] = []
@@ -43604,6 +43605,7 @@ def _reserve_attempt_recovery(
                 reuse_job_ids=list(reuse_preview["reuse_job_ids"]), reuse_proofs=reuse_proofs,
                 reuse_proofs_sha256=_fingerprint(reuse_proofs),
                 recovery_review_sha256=reuse_preview["review_sha256"],
+                reuse_validation_scanned_bytes=reuse_validation_scanned_bytes,
             )
         if lease is not None:
             if not lease.acquired:

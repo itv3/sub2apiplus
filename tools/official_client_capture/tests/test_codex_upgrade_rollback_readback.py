@@ -5,6 +5,8 @@
 - 引入新事件或新 schema 的变更集，要用 rollback_backup 里的旧工具副本，对写入新事件后的账本与收据做只读回放；
 - 旧工具读不了新数据时不回退，保持暂停，用最小修复继续前进。
 
+覆盖：R4 计时账本审核事件（TimingLedgerRollbackReadbackTests）、R11 恢复段复用许可（SegmentReuseRollbackReadbackTests）。
+
 阶段 1 发布时 ARM64 的 rollback_backup 就是 main 基线的受管工具树。这里用 git archive 按固定提交导出同一棵树，
 旧工具只在子进程里以 ``-m`` 运行，不与当前模块混用。CI 以 fetch-depth: 0 检出，基线提交必然可读；
 没有 .git 的传输副本（ARM64 staging 定向运行）无法取历史，只在这种情况下跳过。
@@ -22,6 +24,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from tools.official_client_capture import codex_upgrade_supervisor as supervisor
 from tools.official_client_capture import codex_upgrade_timing_ledger as timing_ledger
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
@@ -48,8 +51,8 @@ def export_rollback_tool_tree(destination: Path, commit: str = ROLLBACK_BASELINE
     return destination
 
 
-def run_rollback_tool(tree: Path, module: str, *argv: str) -> subprocess.CompletedProcess[str]:
-    """在隔离环境里以旧工具副本运行一个模块入口；只继承最小环境，不读当前仓库。"""
+def run_rollback_python(tree: Path, *argv: str, stdin: str | None = None) -> subprocess.CompletedProcess[str]:
+    """在隔离环境里以旧工具副本运行 Python（``-m 模块`` 或 ``-c 脚本``）；只继承最小环境，不读当前仓库。"""
 
     environment = {
         "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
@@ -58,14 +61,38 @@ def run_rollback_tool(tree: Path, module: str, *argv: str) -> subprocess.Complet
         "PYTHONPATH": str(tree),
     }
     return subprocess.run(
-        [sys.executable, "-B", "-m", module, *argv],
+        [sys.executable, "-B", *argv],
         cwd=tree,
         env=environment,
+        input=stdin,
         capture_output=True,
         text=True,
         timeout=120,
         check=False,
     )
+
+
+_TREE_DIRECTORY: tempfile.TemporaryDirectory[str] | None = None
+ROLLBACK_TREE: Path | None = None
+
+
+def setUpModule() -> None:
+    """整个模块只导出一次基线工具树，各改造项的回退用例共用。"""
+
+    global _TREE_DIRECTORY, ROLLBACK_TREE
+    if not (REPOSITORY_ROOT / ".git").exists():
+        return
+    _TREE_DIRECTORY = tempfile.TemporaryDirectory()
+    root = Path(_TREE_DIRECTORY.name).resolve()
+    root.chmod(0o700)
+    ROLLBACK_TREE = root / "rollback-tool"
+    ROLLBACK_TREE.mkdir(mode=0o700)
+    export_rollback_tool_tree(ROLLBACK_TREE)
+
+
+def tearDownModule() -> None:
+    if _TREE_DIRECTORY is not None:
+        _TREE_DIRECTORY.cleanup()
 
 
 def ledger_snapshot(ledger_root: Path) -> dict[str, bytes]:
@@ -85,19 +112,6 @@ def ledger_snapshot(ledger_root: Path) -> dict[str, bytes]:
 class TimingLedgerRollbackReadbackTests(unittest.TestCase):
     """R4：stage_review_required 进入计时账本后，旧工具与新工具各自能读什么、读不了时如何失败。"""
 
-    @classmethod
-    def setUpClass(cls) -> None:
-        cls._directory = tempfile.TemporaryDirectory()
-        root = Path(cls._directory.name).resolve()
-        root.chmod(0o700)
-        cls.tool_tree = root / "rollback-tool"
-        cls.tool_tree.mkdir(mode=0o700)
-        export_rollback_tool_tree(cls.tool_tree)
-
-    @classmethod
-    def tearDownClass(cls) -> None:
-        cls._directory.cleanup()
-
     def setUp(self) -> None:
         self._work = tempfile.TemporaryDirectory()
         root = Path(self._work.name).resolve()
@@ -111,7 +125,8 @@ class TimingLedgerRollbackReadbackTests(unittest.TestCase):
         self._work.cleanup()
 
     def _legacy(self, *argv: str) -> subprocess.CompletedProcess[str]:
-        return run_rollback_tool(self.tool_tree, TIMING_LEDGER_MODULE, *argv)
+        assert ROLLBACK_TREE is not None
+        return run_rollback_python(ROLLBACK_TREE, "-m", TIMING_LEDGER_MODULE, *argv)
 
     def _legacy_ok(self, *argv: str) -> dict[str, object]:
         completed = self._legacy(*argv)
@@ -178,6 +193,54 @@ class TimingLedgerRollbackReadbackTests(unittest.TestCase):
         replay = self._legacy_ok("replay", "--ledger-dir", str(self.ledger_root), "--receipt", "receipts/before-r4.json")
         self.assertEqual(replay, legacy_replay)
         self.assertEqual(ledger_snapshot(self.ledger_root), before)
+
+
+@unittest.skipUnless(
+    (REPOSITORY_ROOT / ".git").exists(),
+    "传输副本没有 .git，无法导出回退基线；CI 与本机全历史检出必跑",
+)
+class SegmentReuseRollbackReadbackTests(unittest.TestCase):
+    """R11：恢复段复用许可（reuse_job_ids 非空）只能由当前工具执行；历史空复用许可新旧工具都接受。
+
+    回退边界落在后继段派发前的范围核对：基线监督器要求执行集合等于冻结 J*、复用为空，
+    因此回退后既有复用许可会被拒绝，需按全量执行重新对账批准，不会被静默执行。
+    """
+
+    FROZEN = ["candidate-frozen-aux", "candidate-frozen-core"]
+
+    def _preview(self, *, reuse: list[str]) -> dict[str, object]:
+        execute = [job for job in self.FROZEN if job not in reuse]
+        return {
+            "planned_job_ids": list(self.FROZEN),
+            "execute_job_ids": execute,
+            "reuse_job_ids": list(reuse),
+            "reuse_proofs": {job: {"recovered_from": "ar1"} for job in reuse},
+            "expected_new_requests": {"known_total": 0, "known_by_job": {job: 0 for job in execute}, "unknown_job_ids": []},
+        }
+
+    def _rollback_violation(self, preview: dict[str, object]) -> object:
+        assert ROLLBACK_TREE is not None
+        script = (
+            "import json, sys\n"
+            "from tools.official_client_capture import codex_upgrade_supervisor as supervisor\n"
+            "payload = json.loads(sys.stdin.read())\n"
+            "print(json.dumps(supervisor.recovery_preview_scope_violation(payload['preview'], payload['frozen']),"
+            " ensure_ascii=False))\n"
+        )
+        completed = run_rollback_python(ROLLBACK_TREE, "-c", script,
+                                        stdin=json.dumps({"preview": preview, "frozen": self.FROZEN}))
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        return json.loads(completed.stdout)
+
+    def test_historical_empty_reuse_permission_is_accepted_by_both_tools(self) -> None:
+        preview = self._preview(reuse=[])
+        self.assertIsNone(supervisor.recovery_preview_scope_violation(preview, self.FROZEN))
+        self.assertIsNone(self._rollback_violation(preview))
+
+    def test_new_reuse_permission_is_refused_by_rollback_tool(self) -> None:
+        preview = self._preview(reuse=["candidate-frozen-aux"])
+        self.assertIsNone(supervisor.recovery_preview_scope_violation(preview, self.FROZEN))
+        self.assertIn("不等于基线冻结的 J*", str(self._rollback_violation(preview)))
 
 
 if __name__ == "__main__":
