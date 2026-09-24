@@ -587,6 +587,8 @@ class CodexUpgradeVCArtifactsTests(unittest.TestCase):
             "codex_upgrade_stage_replay.schema.json": artifacts.STAGE_REPLAY_SCHEMA,
             # R11：恢复段预约（执行／复用边界）；版本常量定义在编排器，由恢复段读写两端共用。
             "codex_upgrade_attempt_recovery_reservation.schema.json": upgrade.ATTEMPT_RECOVERY_RESERVATION_SCHEMA,
+            # R8：三层预算的批准延期收据。
+            "codex_upgrade_deadline_extension.schema.json": artifacts.DEADLINE_EXTENSION_SCHEMA,
         }
         for name, schema_version in expected.items():
             with self.subTest(name=name):

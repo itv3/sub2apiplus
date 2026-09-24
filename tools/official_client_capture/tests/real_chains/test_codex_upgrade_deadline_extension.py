@@ -117,6 +117,26 @@ class DeadlineExtensionChainTests(unittest.TestCase):
             before = project.replay_head(fixture['ledger'])
             before_requests = timing.inspect_ledger(ledger)['total_live_request_count']
             cli = ['-m', 'tools.official_client_capture.codex_upgrade']
+            marker = root/'executed.txt'
+            action = root/'action-plan.json'
+            driver._write(action, {'schema_version':artifacts.VC_ACTION_PLAN_SCHEMA,
+                'execute_item_ids':['budget-resumed'], 'reuse_item_ids':[], 'actions':[{
+                    'action_id':'budget-resumed','operation':'VC-2:budget-resumed','timeout_seconds':30,
+                    'command':[sys.executable,'-c','from pathlib import Path; import sys; Path(sys.argv[1]).write_text("executed once")',str(marker)],
+                    'item_ids':['budget-resumed']}]})
+            dispatch_args = [*cli, 'compile-and-run-vc-batch','--campaign-dir',str(campaign),
+                '--state-dir',str(state_dir),'--phase','VC-2','--sequence','2','--predecessor-checkpoint',
+                str(campaign/'control/vc/vc-1-checkpoint.json'),'--action-plan',str(action),
+                '--heartbeat-seconds','1','--watchdog-timeout-seconds','5','--ledger-interval-seconds','1']
+            # R8：暂停期间消费者走真实命令路径同样被拒：不编译批次、不派发动作、不改两本账。
+            ledger_head = timing.inspect_ledger(ledger)['head_sha256']
+            blocked = trees.run_python(tree, dispatch_args, timeout=90)
+            self.assertNotEqual(blocked.returncode, 0, blocked.stdout+blocked.stderr)
+            self.assertIn('暂停', blocked.stdout+blocked.stderr)
+            self.assertFalse((campaign/'control/vc/batches/0002-vc-2.json').exists())
+            self.assertFalse(marker.exists())
+            self.assertEqual(timing.inspect_ledger(ledger)['head_sha256'], ledger_head)
+            self.assertEqual(project.replay_head(fixture['ledger'])['head_sha256'], before['head_sha256'])
             preview_result = trees.run_python(tree, [*cli, 'deadline-extend', 'preview', '--campaign-dir', str(campaign),
                 '--scope', 'campaign', '--new-deadline-at-utc', (datetime.now(timezone.utc)+timedelta(minutes=10)).isoformat(),
                 '--reason', '隔离验收：真实到期后在原 Campaign 继续'], timeout=90)
@@ -150,17 +170,7 @@ class DeadlineExtensionChainTests(unittest.TestCase):
             self.assertEqual(timing.inspect_ledger(ledger)['total_live_request_count'], before_requests)
             self.assertEqual(sum(row['event_type']=='deadline_extended' for row in project._load_events(fixture['ledger'])), 1)
             self.assertEqual(sum(row['event_type']=='deadline_extended' for row,_ in timing._load_events(ledger)), 1)
-            marker = root/'executed.txt'
-            action = root/'action-plan.json'
-            driver._write(action, {'schema_version':artifacts.VC_ACTION_PLAN_SCHEMA,
-                'execute_item_ids':['budget-resumed'], 'reuse_item_ids':[], 'actions':[{
-                    'action_id':'budget-resumed','operation':'VC-2:budget-resumed','timeout_seconds':30,
-                    'command':[sys.executable,'-c','from pathlib import Path; import sys; Path(sys.argv[1]).write_text("executed once")',str(marker)],
-                    'item_ids':['budget-resumed']}]})
-            dispatched = trees.run_python(tree, [*cli, 'compile-and-run-vc-batch','--campaign-dir',str(campaign),
-                '--state-dir',str(state_dir),'--phase','VC-2','--sequence','2','--predecessor-checkpoint',
-                str(campaign/'control/vc/vc-1-checkpoint.json'),'--action-plan',str(action),
-                '--heartbeat-seconds','1','--watchdog-timeout-seconds','5','--ledger-interval-seconds','1'], timeout=90)
+            dispatched = trees.run_python(tree, dispatch_args, timeout=90)
             self.assertEqual(dispatched.returncode, 0, dispatched.stdout+dispatched.stderr)
             dispatch_result = json.loads(dispatched.stdout)
             self.assertEqual(marker.read_text(),'executed once')

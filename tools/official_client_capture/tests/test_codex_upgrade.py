@@ -9465,6 +9465,9 @@ class CodexUpgradeTest(unittest.TestCase):
                 "revision-open",
                 "invalidate-candidate",
                 "evaluation-recover",
+                # R8：预算延期与显式放弃是批次之间的控制面命令。
+                "deadline-extend",
+                "campaign-abandon",
                 "status",
                 "resume",
             },

@@ -9128,7 +9128,8 @@ PERMANENT_ACTION_FAILURE_CLASSES = frozenset(
 
 def _runtime_budget_deadline(state: Mapping[str, Any]) -> float:
     """三层最早截止约束执行；父 run 时间锚和原始清单不因阶段切换改写。"""
-    parent_deadline = _parse_epoch(state["deadline_at_epoch"], "deadline_at_epoch")
+    # R8：缺字段按状态合同报 SupervisorError，而不是 KeyError。
+    parent_deadline = _parse_epoch(state.get("deadline_at_epoch"), "deadline_at_epoch")
     binding = state.get("budget_guard")
     if binding is None:
         return parent_deadline
@@ -9143,7 +9144,11 @@ def _runtime_budget_deadline(state: Mapping[str, Any]) -> float:
         raise SupervisorError(f"三层预算无法重放：{error}") from error
     if "extension_pending" in deadlines["paused_scopes"]:
         raise SupervisorError("延期双账事务尚未闭合，禁止执行")
-    return min(parent_deadline, datetime.fromisoformat(deadlines["execution_deadline_at_utc"].replace("Z", "+00:00")).timestamp())
+    execution = deadlines.get("execution_deadline_at_utc")
+    if execution is None:
+        # 三层都没有可解析的截止（例如历史 Campaign 无计时账本）时只受父 run 自身时间锚约束。
+        return parent_deadline
+    return min(parent_deadline, datetime.fromisoformat(str(execution).replace("Z", "+00:00")).timestamp())
 
 
 def _candidate_failure_hits_permanent_condition(
@@ -9361,7 +9366,15 @@ def _close_failed_campaign_timing_ledger(
 
     budget_state = timing_ledger.inspect_ledger(ledger_dir)
     deadlines = vc_artifacts.effective_deadlines(campaign_dir)
-    budget_paused = bool(deadlines["paused_scopes"]) and not _candidate_failure_hits_permanent_condition(
+    # R8：只有真正到期的层才按预算暂停。其他 Campaign 的延期双账事务未闭合（extension_pending）时本账本同样
+    # 被暂停拦截，既不能写 recovery_required，也不能冒报 deadline_paused；明确失败，事务闭合后经对账重入。
+    expired_scopes = set(deadlines["paused_scopes"]) - {"extension_pending"}
+    if "extension_pending" in deadlines["paused_scopes"] and not expired_scopes:
+        raise SupervisorError(
+            "其他 Campaign 的延期双账事务尚未闭合（extension_pending），本次父失败暂不收口；"
+            "事务闭合后以 reconcile-supervisor-run 对账重入。"
+        )
+    budget_paused = bool(expired_scopes) and not _candidate_failure_hits_permanent_condition(
         campaign_dir, budget_state, failure_class=failure_class
     )
     # R4×R8：本次失败的 stage_abandoned 已写、后续 review 未写（中途被杀）时，先在收口锁内补齐 review
@@ -9371,6 +9384,9 @@ def _close_failed_campaign_timing_ledger(
     def budget_pause_result() -> dict[str, Any]:
         # 暂停入口自行取总账、Campaign 与收口锁，只能在离开收口锁之后调用。
         paused = project_ledger.pause_campaign_deadline(campaign_dir)
+        if paused.get("status") != "deadline_paused":
+            # 判定与登记之间预算状态变化（例如延期刚批准）：不冒报暂停，交由重入按当时状态收口。
+            raise SupervisorError(f"预算状态在收口期间变化（{paused.get('status')}），请重入收口。")
         return {"status": "passed", "ledger_status": "deadline_paused", "ledger_dir": str(ledger_dir),
                 "failure_class": failure_class, "next_action": "deadline-extend preview/apply", "deadline_pause": paused}
 
@@ -9640,7 +9656,7 @@ def _close_failed_campaign_timing_ledger(
     # 收口锁内补齐的 review 已落盘。“已放弃、未审核”中间态既无 active 阶段也无 review 阶段，账本推算不出
     # 阶段截止，入口处的预算判定看不到阶段层到期；因此离开收口锁后按落盘后的账本重新判定，
     # 仍有到期层（或总账已登记暂停）则按原协议登记暂停。
-    if vc_artifacts.effective_deadlines(campaign_dir)["paused_scopes"]:
+    if set(vc_artifacts.effective_deadlines(campaign_dir)["paused_scopes"]) - {"extension_pending"}:
         return budget_pause_result()
     return review_result
 

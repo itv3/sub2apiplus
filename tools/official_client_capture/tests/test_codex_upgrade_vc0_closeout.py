@@ -389,8 +389,16 @@ class VC0CloseoutTests(unittest.TestCase):
         )
 
     def test_failed_closeout_closure_repair_is_append_only(self) -> None:
-        """计数器修复只能承接原 closure-failed 诊断并追加阶段终态。"""
+        """计数器修复只能承接原 closure-failed 诊断并追加阶段终态：同根因失败达上限（stop_required）时停线。"""
 
+        self._failed_closeout_repair_case(retry_limit_stop=True)
+
+    def test_failed_closeout_closure_repair_on_budget_paused_ledger_abandons_stage(self) -> None:
+        """R8：阶段预算到期只暂停；修复按暂停前 active 关闭残留阶段，不再永久停线，请求计数不变。"""
+
+        self._failed_closeout_repair_case(retry_limit_stop=False)
+
+    def _failed_closeout_repair_case(self, *, retry_limit_stop: bool) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             data_root, campaign_dir = self._live_request_fixture(root)
@@ -427,6 +435,26 @@ class VC0CloseoutTests(unittest.TestCase):
                 event_type="stage_started",
                 recorded_at_utc=(now - timedelta(minutes=187)).isoformat(),
             )
+            if retry_limit_stop:
+                # R8 起阶段预算到期只暂停；stop_required 由同根因失败达到重试上限产生。
+                for index, minutes in ((0, 186.8), (1, 186.6)):
+                    timing.append_event(
+                        ledger_root,
+                        event_id=f"formal-live-attempt-{index}-started",
+                        phase="VC-1",
+                        event_type="attempt_started",
+                        attempt_id=f"attempt-{index}",
+                        recorded_at_utc=(now - timedelta(minutes=minutes)).isoformat(),
+                    )
+                    timing.append_event(
+                        ledger_root,
+                        event_id=f"formal-live-attempt-{index}-failed",
+                        phase="VC-1",
+                        event_type="attempt_failed",
+                        attempt_id=f"attempt-{index}",
+                        root_cause_id="vc1-same-cause",
+                        recorded_at_utc=(now - timedelta(minutes=minutes - 0.1)).isoformat(),
+                    )
             timing_summary = timing.inspect_ledger(
                 ledger_root,
                 now=(now - timedelta(minutes=186)).isoformat(),
@@ -481,7 +509,10 @@ class VC0CloseoutTests(unittest.TestCase):
                 "其他未批准的闭合失败"
             )
             self._write(forged_audit / "failure.json", forged_failure)
-            before_forged = timing.inspect_ledger(ledger_root)
+            # 账本此时已处于预算暂停，paused_hours 随墙钟增长；前后用同一时刻读取，只比较确定性结果。
+            probe_now = datetime.now(timezone.utc).isoformat()
+            before_forged = timing.inspect_ledger(ledger_root, now=probe_now)
+            self.assertEqual(before_forged["status"], "stop_required" if retry_limit_stop else "deadline_paused")
             with self.assertRaisesRegex(
                 closeout.VC0CloseoutError,
                 "不属于可追加修复",
@@ -492,7 +523,7 @@ class VC0CloseoutTests(unittest.TestCase):
                     source_audit_dir=forged_audit,
                     audit_dir=repair_parent / "forged-repair",
                 )
-            self.assertEqual(timing.inspect_ledger(ledger_root), before_forged)
+            self.assertEqual(timing.inspect_ledger(ledger_root, now=probe_now), before_forged)
 
             receipt = closeout.repair_failed_closeout_closure(
                 formal_campaign_dir=campaign_dir,
@@ -505,12 +536,16 @@ class VC0CloseoutTests(unittest.TestCase):
             self.assertEqual(receipt["status"], "complete")
             self.assertEqual(
                 receipt["closure"]["status"],
-                "stop-the-line-recorded",
+                "stop-the-line-recorded" if retry_limit_stop else "stage-abandoned-recorded",
             )
             self.assertEqual(receipt["live_request_count"], 0)
             self.assertEqual(receipt["total_live_request_count"], 8)
-            self.assertEqual(summary["status"], "stopped")
-            self.assertEqual(summary["active_phase"], "VC-1")
+            if retry_limit_stop:
+                self.assertEqual(summary["status"], "stopped")
+                self.assertEqual(summary["active_phase"], "VC-1")
+            else:
+                self.assertNotEqual(summary["status_before_pause"], "stopped")
+                self.assertIsNone(summary["active_phase"])
             self.assertEqual(summary["total_live_request_count"], 8)
 
             with self.assertRaisesRegex(

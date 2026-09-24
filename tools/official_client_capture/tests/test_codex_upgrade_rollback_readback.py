@@ -5,7 +5,8 @@
 - 引入新事件或新 schema 的变更集，要用 rollback_backup 里的旧工具副本，对写入新事件后的账本与收据做只读回放；
 - 旧工具读不了新数据时不回退，保持暂停，用最小修复继续前进。
 
-覆盖：R4 计时账本审核事件（TimingLedgerRollbackReadbackTests）、R11 恢复段复用许可（SegmentReuseRollbackReadbackTests）。
+覆盖：R4 计时账本审核事件（TimingLedgerRollbackReadbackTests）、R11 恢复段复用许可（SegmentReuseRollbackReadbackTests）、
+R8 预算暂停事件与总账暂停登记（DeadlineControlRollbackReadbackTests）。
 
 阶段 1 发布时 ARM64 的 rollback_backup 就是 main 基线的受管工具树。这里用 git archive 按固定提交导出同一棵树，
 旧工具只在子进程里以 ``-m`` 运行，不与当前模块混用。CI 以 fetch-depth: 0 检出，基线提交必然可读；
@@ -21,9 +22,12 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import textwrap
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from tools.official_client_capture import codex_upgrade_project_ledger as project_ledger
 from tools.official_client_capture import codex_upgrade_supervisor as supervisor
 from tools.official_client_capture import codex_upgrade_timing_ledger as timing_ledger
 
@@ -31,6 +35,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 # main 基线：阶段 1 分支的合并基点，也是阶段 1 发布前 ARM64 受管工具的来源。
 ROLLBACK_BASELINE_COMMIT = "e6d53c1e9ccaf406f3bb2159ef2bac5c4cd7666e"
 TIMING_LEDGER_MODULE = "tools.official_client_capture.codex_upgrade_timing_ledger"
+PROJECT_LEDGER_MODULE = "tools.official_client_capture.codex_upgrade_project_ledger"
 
 
 def export_rollback_tool_tree(destination: Path, commit: str = ROLLBACK_BASELINE_COMMIT) -> Path:
@@ -241,6 +246,103 @@ class SegmentReuseRollbackReadbackTests(unittest.TestCase):
         preview = self._preview(reuse=["candidate-frozen-aux"])
         self.assertIsNone(supervisor.recovery_preview_scope_violation(preview, self.FROZEN))
         self.assertIn("不等于基线冻结的 J*", str(self._rollback_violation(preview)))
+
+
+@unittest.skipUnless(
+    (REPOSITORY_ROOT / ".git").exists(),
+    "传输副本没有 .git，无法导出回退基线；CI 与本机全历史检出必跑",
+)
+class DeadlineControlRollbackReadbackTests(unittest.TestCase):
+    """R8：预算暂停写进计时账本或项目总账后，基线工具只能失败关闭且不改字节；此前封存的 checkpoint 仍可由旧工具重放。
+
+    回退边界同 R4：账本一旦写入 R8 预算控制事件就不能直接回退，保持暂停并向前修复。
+    """
+
+    def setUp(self) -> None:
+        self._work = tempfile.TemporaryDirectory()
+        root = Path(self._work.name).resolve()
+        root.chmod(0o700)
+        self.staging = root / "staging"
+        (self.staging / "control").mkdir(parents=True, mode=0o700)
+        self.staging.chmod(0o700)
+        self.start = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(minutes=10)
+
+    def tearDown(self) -> None:
+        self._work.cleanup()
+
+    def at(self, minutes: int) -> str:
+        return (self.start + timedelta(minutes=minutes)).isoformat()
+
+    def _rollback(self, *argv: str) -> subprocess.CompletedProcess[str]:
+        assert ROLLBACK_TREE is not None
+        return run_rollback_python(ROLLBACK_TREE, *argv)
+
+    def test_rollback_tool_refuses_timing_deadline_pause_without_touching_bytes(self) -> None:
+        ledger = self.staging / "control" / "timing-ledger"
+        script = textwrap.dedent(f"""
+            from pathlib import Path
+            from tools.official_client_capture import codex_upgrade_timing_ledger as timing
+            root = Path({str(ledger)!r})
+            timing.create_ledger(root, upgrade_id="upgrade-r8-rollback", baseline_version="0.154.0",
+                                 target_version="0.156.1", campaign_purpose="validation_only",
+                                 evidence_decision="recapture", started_at_utc={self.at(0)!r},
+                                 stage_budgets_minutes={{phase: 1 for phase in timing.PHASE_ORDER}})
+            timing.append_event(root, event_id="vc0-completed", phase="VC-0", event_type="stage_completed",
+                                next_action="启动 VC-1", recorded_at_utc={self.at(1)!r})
+            timing.append_event(root, event_id="vc1-started", phase="VC-1", event_type="stage_started",
+                                next_action="运行父批次", recorded_at_utc={self.at(2)!r})
+            timing.checkpoint(root, "receipts/before-r8.json")
+        """)
+        created = self._rollback("-c", script)
+        self.assertEqual(created.returncode, 0, created.stderr)
+        replay_args = ("-m", TIMING_LEDGER_MODULE, "replay", "--ledger-dir", str(ledger), "--receipt", "receipts/before-r8.json")
+        legacy_replay = self._rollback(*replay_args)
+        self.assertEqual(legacy_replay.returncode, 0, legacy_replay.stderr)
+
+        # 当前工具按 R8 登记阶段层到期暂停（VC-1 阶段预算 1 分钟，早已到期）。
+        timing_ledger.append_event(ledger, event_id="vc1-deadline-paused", phase="VC-1", event_type="deadline_paused",
+                                   deadline_control={"scopes": ["stage"], "paused_since_utc": self.at(3)},
+                                   next_action="deadline-extend preview/apply 或 campaign-abandon")
+        self.assertEqual(timing_ledger.inspect_ledger(ledger)["status"], "deadline_paused")
+        before = ledger_snapshot(ledger)
+        status = self._rollback("-m", TIMING_LEDGER_MODULE, "status", "--ledger-dir", str(ledger))
+        self.assertEqual(status.returncode, 1, status.stdout)
+        self.assertIn("event_type 非法", status.stderr)
+        replay = self._rollback(*replay_args)
+        self.assertEqual((replay.returncode, replay.stdout), (0, legacy_replay.stdout), replay.stderr)
+        self.assertEqual(ledger_snapshot(ledger), before)
+
+    def test_rollback_tool_refuses_project_pause_registration_without_touching_bytes(self) -> None:
+        project_root = self.staging / project_ledger.LEDGER_DIR_NAME
+        created = self._rollback(
+            "-m", PROJECT_LEDGER_MODULE, "create-project-ledger", "--ledger-dir", str(project_root),
+            "--project-id", "r8-rollback", "--absolute-deadline-utc", self.at(24 * 60),
+            "--deadline-approved-by", "fixture", "--estimation-policy", "none",
+            "--estimation-policy-approved-by", "fixture", "--fixture-only",
+        )
+        self.assertEqual(created.returncode, 0, created.stderr)
+        project_ledger.append_project_event(
+            project_root, operation_id="register-r8-rollback", event_type="campaign_registered",
+            payload={"campaign_id": "r8-rollback", "campaign_dir": str(self.staging / "campaign"), "campaign_mode": "formal",
+                     "target_version": "0.156.1", "deadline_at_utc": self.at(600), "registration_batch_sha256": None},
+            source_batch_sha256=None, recorded_at_utc=self.at(5),
+        )
+        status_args = ("-m", PROJECT_LEDGER_MODULE, "status", "--ledger-dir", str(project_root))
+        compatible = self._rollback(*status_args)
+        self.assertEqual(compatible.returncode, 0, compatible.stderr)
+
+        project_ledger.append_project_event(
+            project_root, operation_id="deadline-paused:r8-rollback", event_type="campaign_paused",
+            payload={"campaign_id": "r8-rollback", "scopes": ["campaign"], "paused_since_utc": self.at(6),
+                     "status_before_pause": "active"},
+            source_batch_sha256=None, recorded_at_utc=self.at(7),
+        )
+        self.assertIn("r8-rollback", project_ledger.replay_head(project_root)["paused_campaigns"])
+        before = ledger_snapshot(project_root)
+        refused = self._rollback(*status_args)
+        self.assertNotEqual(refused.returncode, 0, refused.stdout)
+        self.assertIn("事件类型非法", refused.stderr + refused.stdout)
+        self.assertEqual(ledger_snapshot(project_root), before)
 
 
 if __name__ == "__main__":

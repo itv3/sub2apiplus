@@ -108,6 +108,8 @@ EVENT_TYPES = (
     "candidate_probe_accounted",
     "campaign_paused",
     "deadline_extended",
+    # R8 审核修正：延期的 Campaign 计时事件落盘后追加，证明双账已提交；此后判定不再读取发起方 Campaign。
+    "deadline_extension_committed",
 )
 TERMINAL_REASONS = (
     "deadline_wall_clock",
@@ -137,6 +139,7 @@ BLOCKED_ALLOWED_EVENTS = frozenset(
         "root_cause_repair_corrected",
         "campaign_paused",
         "deadline_extended",
+        "deadline_extension_committed",
     }
 )
 # B9：compare／accept 也是总账消费者，写收据前先经准入门禁。
@@ -912,6 +915,7 @@ def _replay(root: Path, plan: Mapping[str, Any], events: list[dict[str, Any]], *
         "effective_campaign_deadlines": {},
         "effective_stage_deadlines": {},
         "deadline_extensions": [],
+        "committed_deadline_extensions": {},
         "unresolved_operation_ids": [],
         "operations": {},
         "repaired_root_causes": [],
@@ -1044,6 +1048,22 @@ def _replay(root: Path, plan: Mapping[str, Any], events: list[dict[str, Any]], *
                     pause["scopes"] = [name for name in pause["scopes"] if name != scope]
                     if not pause["scopes"]:
                         del state["paused_campaigns"][paused_id]
+        elif event_type == "deadline_extension_committed":
+            receipt = payload.get("receipt_sha256")
+            campaign_event = payload.get("campaign_event")
+            if (
+                not isinstance(receipt, str)
+                or not any(row["receipt_sha256"] == receipt for row in state["deadline_extensions"])
+                or receipt in state["committed_deadline_extensions"]
+                or not isinstance(campaign_event, dict)
+                or set(campaign_event) != {"sequence", "sha256"}
+                or not isinstance(campaign_event["sequence"], int)
+                or isinstance(campaign_event["sequence"], bool)
+                or campaign_event["sequence"] < 1
+                or not SHA256_RE.fullmatch(str(campaign_event["sha256"]))
+            ):
+                raise ProjectLedgerError("延期提交证明必须承接总账中已登记且尚未证明的延期收据")
+            state["committed_deadline_extensions"][receipt] = dict(campaign_event)
     _codes_sha256, _algorithm, mapping = _effective_codes_identity(plan, _code_migrations(root))
     if mapping:
         migrated: dict[str, int] = {}
@@ -1085,6 +1105,9 @@ def _replay(root: Path, plan: Mapping[str, Any], events: list[dict[str, Any]], *
         "failure_observations": state["failure_observations"],
         "event_corrections": correction_audit,
     }
+    if state["committed_deadline_extensions"]:
+        # 只在出现过提交证明时写入 head，历史总账的 head 字节保持不变。
+        head["committed_deadline_extensions"] = state["committed_deadline_extensions"]
     cache_path = root / "head.json"
     if cache_path.exists() or cache_path.is_symlink():
         cached, _raw = _read_json(cache_path, "head 缓存")
@@ -1229,9 +1252,12 @@ def _deadline_write_once(path: Path, payload: Mapping[str, Any]) -> None:
     _write_once(path, payload)
 
 
-def verify_committed_deadline_extension(extension: Mapping[str, Any]) -> None:
-    """Campaign 计时事件只能承接已经进入项目权威链的同一批准收据。"""
-    root = Path(extension["project_ledger_path"])
+def verify_committed_deadline_extension(extension: Mapping[str, Any], *, root: Path | None = None) -> None:
+    """Campaign 计时事件只能承接已经进入项目权威链的同一批准收据。
+
+    ``root`` 由调用方按计划摘要定位；未给出时才退回收据记录的路径（迁移后可能已不存在）。
+    """
+    root = Path(root) if root is not None else Path(extension["project_ledger_path"])
     plan, _raw = _load_plan(root)
     head = _replay(root, plan, _load_events(root), rebuild_cache=False)
     if not any(row == extension for row in head["deadline_extensions"]):
@@ -1256,6 +1282,9 @@ def deadline_extension_applied(extension: Mapping[str, Any], head: Mapping[str, 
     项目延期影响所有 Campaign，项目事件先落盘后的短窗口仍须对全项目关闭。
     批准绑定的计时前序 head、下一序号和原始摘要链共同证明双账提交完成。
     """
+    if extension["receipt_sha256"] in head.get("committed_deadline_extensions", {}):
+        # R8 审核修正：双账提交证明已进入总账，不再读取发起方 Campaign（其目录可能已清理）。
+        return True
     if __package__ in {None, ""}:
         import codex_upgrade_timing_ledger as timing
     else:
@@ -1448,6 +1477,17 @@ def apply_deadline_extension(campaign_dir: Path, *, preview_path: Path, approve_
             timing.append_event(ledger, event_id=operation, phase=current["active_phase"] or current["review_phase"] or "VC-0",
                 event_type="deadline_extended", deadline_control=extension, recorded_at_utc=extension["approved_at_utc"],
                 next_action="按原 checkpoint 重新通过 admission 与环境、证据边界复验后继续")
+        if extension["receipt_sha256"] not in after.get("committed_deadline_extensions", {}):
+            # 双账提交证明：记下 Campaign 计时事件的序号与原始字节摘要，之后判定不再依赖发起方目录。
+            campaign_event = next(((event, raw) for event, raw in timing._load_events(ledger) if event["event_id"] == operation), None)
+            if campaign_event is None:
+                raise ProjectLedgerError("延期的 Campaign 计时事件未落盘，不能登记提交证明")
+            after, _committed = append_project_event(
+                root, operation_id=f"deadline-extension-committed-{approve_sha256}", event_type="deadline_extension_committed",
+                payload={"receipt_sha256": extension["receipt_sha256"],
+                         "campaign_event": {"sequence": campaign_event[0]["sequence"],
+                                            "sha256": hashlib.sha256(campaign_event[1]).hexdigest()}},
+                source_batch_sha256=None, recorded_at_utc=observed.isoformat())
         effective = artifacts.effective_deadlines(campaign_dir, now=observed, project_head=after, project_plan=plan)
         return {"status": "extended", "receipt_path": str(path), "receipt_sha256": extension["receipt_sha256"],
                 "project_event": result, "campaign_event": "duplicate" if applied else "appended", "effective_deadlines": effective}

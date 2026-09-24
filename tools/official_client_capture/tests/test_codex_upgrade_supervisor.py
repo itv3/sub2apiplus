@@ -3021,6 +3021,49 @@ raise SystemExit(9)
             again = supervisor._close_failed_campaign_timing_ledger(campaign_dir, manifest, failed_action_id="failing-action")
             self.assertEqual((again["ledger_status"], again["idempotent"]), ("stage_review_required", True))
 
+    def test_runtime_budget_deadline_missing_anchor_is_state_contract_error(self) -> None:
+        """R8：父 run 状态缺 deadline_at_epoch 时按状态合同报 SupervisorError，而不是 KeyError。"""
+
+        with self.assertRaisesRegex(supervisor.SupervisorError, "deadline_at_epoch"):
+            supervisor._runtime_budget_deadline({})
+
+    def test_runtime_budget_deadline_without_parsable_layers_uses_parent_anchor(self) -> None:
+        """三层都没有可解析截止（历史 Campaign 无计时账本）时只受父 run 自身时间锚约束。"""
+
+        state = {"deadline_at_epoch": 1_900_000_000.0, "budget_guard": {"campaign_dir": "/nonexistent/campaign"}}
+        with mock.patch.object(supervisor.vc_artifacts, "effective_deadlines",
+                               return_value={"paused_scopes": [], "execution_deadline_at_utc": None}):
+            self.assertEqual(supervisor._runtime_budget_deadline(state), 1_900_000_000.0)
+
+    def test_closeout_with_only_extension_pending_fails_explicitly_without_writes(self) -> None:
+        """R8：只有其他 Campaign 的延期未闭合（extension_pending）时不冒报 deadline_paused，明确失败且不写账本。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            campaign_dir, ledger_root, manifest = self._timing_closeout_fixture(root)
+            before = {path.name: path.read_bytes() for path in (ledger_root / "events").iterdir()}
+            pending = {**vc_artifacts.effective_deadlines(campaign_dir), "paused_scopes": ["extension_pending"]}
+            with mock.patch.object(supervisor.vc_artifacts, "effective_deadlines", return_value=pending):
+                with self.assertRaisesRegex(supervisor.SupervisorError, "extension_pending"):
+                    supervisor._close_failed_campaign_timing_ledger(campaign_dir, manifest, failed_action_id="failing-action")
+            self.assertEqual(before, {path.name: path.read_bytes() for path in (ledger_root / "events").iterdir()})
+
+    def test_closeout_reports_budget_race_instead_of_claiming_pause(self) -> None:
+        """判定到期后、登记暂停前预算状态变化（登记返回 not_expired）时明确失败，不冒报 deadline_paused。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            root.chmod(0o700)
+            campaign_dir, ledger_root, manifest = self._timing_closeout_fixture(root)
+            expired = {**vc_artifacts.effective_deadlines(campaign_dir), "paused_scopes": ["stage"]}
+            with (
+                mock.patch.object(supervisor.vc_artifacts, "effective_deadlines", return_value=expired),
+                mock.patch.object(supervisor.project_ledger, "pause_campaign_deadline", return_value={"status": "not_expired"}),
+                self.assertRaisesRegex(supervisor.SupervisorError, "收口期间变化"),
+            ):
+                supervisor._close_failed_campaign_timing_ledger(campaign_dir, manifest, failed_action_id="failing-action")
+
     def test_parent_reports_timing_closeout_failure(self) -> None:
         """账本闭合失败必须进入父结果，不能只留下 action-failed。"""
 

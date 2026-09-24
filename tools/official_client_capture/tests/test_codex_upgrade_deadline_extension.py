@@ -1,7 +1,10 @@
 """R8 三层预算、批准闭集、两账中断补齐与历史回放；全部使用隔离零请求文件。"""
 import hashlib
+import io
 import json
+import shutil
 import tempfile
+from contextlib import redirect_stderr, redirect_stdout
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -363,6 +366,124 @@ class DeadlineExtensionTests(unittest.TestCase):
         event['event_sha256']=project._digest(event)
         result=project._replay(self.project,plan,[*events,event],rebuild_cache=False)
         self.assertEqual(result['terminal_campaigns']['r8-campaign']['terminal_reason'],'deadline_wall_clock')
+
+
+    def test_plan_validation_reads_only_binding_fields(self):
+        """R8 审核修正：计划校验只用绑定字段，不打开总账；新绑定冻结开始时刻的项目有效截止。"""
+
+        plan, _raw = timing._load_plan(self.ledger)
+        binding = plan['project_ledger_binding']
+        self.assertEqual(binding['effective_deadline_at_start_utc'], self.at(600))
+        archived = self.root / 'archived-project-ledger'
+        self.project.rename(archived)
+        self.addCleanup(lambda: archived.exists() and archived.rename(self.project))
+        timing._load_plan(self.ledger)
+        with self.assertRaisesRegex(timing.TimingLedgerError, '重新定位'):
+            timing.inspect_ledger(self.ledger, now=self.at(20))
+        legacy = {**plan, 'project_ledger_binding': {key: value for key, value in binding.items()
+                                                     if key != 'effective_deadline_at_start_utc'}}
+        timing._validate_plan(legacy)
+        tampered = {**plan, 'project_ledger_binding': {**binding, 'effective_deadline_at_start_utc': self.at(500)}}
+        with self.assertRaisesRegex(timing.TimingLedgerError, '不得早于总账原绝对截止'):
+            timing._validate_plan(tampered)
+
+    def test_whole_data_root_move_keeps_ledger_and_extension_replayable(self):
+        """数据根整体迁移后，绑定与延期收据里的旧绝对路径不再存在，账本仍按计划摘要定位总账并可重放。"""
+
+        self.apply(self.preview('campaign', now=20, new=1200), now=21)
+        # 夹具事件时间领先真实时钟，前后都用同一固定时刻重放全部事件再比对。
+        expected = timing.inspect_ledger(self.ledger, now=self.at(30))
+        moved = self.root.parent / 'moved'
+        moved.mkdir(mode=0o700)
+        shutil.move(str(self.root), str(moved / 'staging'))
+        ledger = moved / 'staging' / 'timing'
+        self.assertFalse(self.project.exists())
+        replayed = timing.inspect_ledger(ledger, now=self.at(30))
+        for key in ('status', 'head_sequence', 'head_sha256', 'total_deadline_at_utc', 'stage_deadline_at_utc', 'deadline_extensions'):
+            self.assertEqual(replayed[key], expected[key], key)
+        self.assertEqual(replayed['total_deadline_at_utc'], self.at(1200))
+
+    def test_committed_proof_closes_project_extension_after_owner_directory_removed(self):
+        """项目延期写完两本账后追加提交证明；发起方目录被清理后，其他 Campaign 的准入与截止仍可判定。"""
+
+        other = self.campaign.with_name('other-campaign')
+        other_ledger = self.root / 'other-timing'
+        timing.create_ledger(other_ledger, upgrade_id='other-campaign', baseline_version='0.154.0',
+            target_version='0.156.1', campaign_purpose='validation_only', evidence_decision='recapture',
+            started_at_utc=self.at(0), total_budget_minutes=5, project_ledger_dir=self.project,
+            stage_budgets_minutes={phase: 5 for phase in timing.PHASE_ORDER})
+        self.write(other / 'campaign.json', {'campaign_id': 'other-campaign', 'campaign_mode': 'formal',
+            'target_version': '0.156.1', 'control_receipts': {'upgrade_timing': {'ledger_dir': str(other_ledger)}}})
+        self.write(other / 'control/vc/campaign-plan.json', {'campaign_id': 'other-campaign', 'original_deadline_at_utc': self.at(300)})
+        project.register_existing_campaign(other)
+        result = self.apply(self.preview('project', now=20, new=1200), now=21)
+        head = project.replay_head(self.project)
+        self.assertIn(result['receipt_sha256'], head['committed_deadline_extensions'])
+        shutil.rmtree(self.campaign)
+        self.assertNotIn('extension_pending', artifacts.effective_deadlines(other, now=self.moment(22))['paused_scopes'])
+        project.assert_campaign_admitted(other, command='campaign-run', require=True, now=self.moment(22))
+
+    def test_own_extension_pending_detected_when_upgrade_id_differs_from_campaign_id(self):
+        """计时账本按批准时绑定的本账本 head 认领延期；upgrade_id 与 campaign_id 不同时也能报出未闭合事务。"""
+
+        campaign = self.campaign.with_name('mismatch-campaign')
+        ledger = self.root / 'mismatch-timing'
+        timing.create_ledger(ledger, upgrade_id='upgrade-mismatch', baseline_version='0.154.0',
+            target_version='0.156.1', campaign_purpose='validation_only', evidence_decision='recapture',
+            started_at_utc=self.at(0), total_budget_minutes=5, project_ledger_dir=self.project,
+            stage_budgets_minutes={phase: 5 for phase in timing.PHASE_ORDER})
+        self.write(campaign / 'campaign.json', {'campaign_id': 'mismatch-campaign', 'campaign_mode': 'formal',
+            'target_version': '0.156.1', 'control_receipts': {'upgrade_timing': {'ledger_dir': str(ledger)}}})
+        self.write(campaign / 'control/vc/campaign-plan.json', {'campaign_id': 'mismatch-campaign', 'original_deadline_at_utc': self.at(300)})
+        project.register_existing_campaign(campaign)
+        preview = project.preview_deadline_extension(campaign, scope='campaign', phase=None, new_deadline_at_utc=self.at(1200),
+                                                     reason='隔离测试：账本 upgrade_id 与 Campaign 不同', now=self.moment(20))
+        with mock.patch.object(timing, 'append_event', side_effect=RuntimeError('模拟总账后进程中断')):
+            with self.assertRaisesRegex(RuntimeError, '进程中断'):
+                project.apply_deadline_extension(campaign, preview_path=Path(preview['preview_path']),
+                    approve_sha256=preview['review_sha256'], approved_by='fixture-reviewer', now=self.moment(21))
+        self.assertEqual(timing.inspect_ledger(ledger, now=self.at(22))['status'], 'deadline_paused')
+
+    def test_attempt_expiry_ignores_extensions_approved_after_reference(self):
+        """先延期后对账：attempt 当时的到期只按参考时刻之前已批准的延期判断，根因不随后续延期漂移。"""
+
+        extension = {'scope': 'campaign', 'phase': None, 'approved_at_utc': self.at(400),
+                     'original_deadline_at_utc': self.at(300), 'new_deadline_at_utc': self.at(1200)}
+        ledger = {'total_deadline_at_utc': self.at(1200), 'stage_deadline_at_utc': None, 'deadline_extensions': [extension]}
+        plan = {'absolute_deadline_utc': self.at(99999)}
+        def expired(completed):
+            return reconciler._attempt_deadline_expired(attempt={'completed_at_utc': self.at(completed)}, ledger=ledger,
+                plan=plan, campaign_deadline_at_utc=self.at(1200), now=self.at(900), project_ledger_root=None)
+        self.assertTrue(expired(350))
+        self.assertFalse(expired(450))
+
+
+class PausedPredecessorTests(unittest.TestCase):
+    """R8：前任 Campaign 预算暂停时，复用或后继新建不能借新 Campaign 取得新预算（含真实 CLI 路径）。"""
+
+    def setUp(self):
+        self.case = DeadlineExtensionTests('test_paused_consumers_all_reject')
+        # 起点 120 秒前：阶段预算 1 分钟已到期，Campaign 预算 5 分钟与项目截止 10 分钟都未到。
+        self.case.initial_age_seconds = 120
+        self.case.setUp()
+        self.addCleanup(self.case.doCleanups)
+
+    def test_paused_or_expired_predecessor_is_refused_until_explicit_terminal(self):
+        with self.assertRaisesRegex(upgrade.ConfigurationError, '前任 Campaign 处于预算暂停'):
+            upgrade._require_predecessor_not_budget_paused(self.case.campaign)
+        project.pause_campaign_deadline(self.case.campaign, now=self.case.moment(90))
+        with self.assertRaisesRegex(upgrade.ConfigurationError, '前任 Campaign 处于预算暂停'):
+            upgrade._require_predecessor_not_budget_paused(self.case.campaign)
+        successor = self.case.root / 'evidence/campaigns/successor'
+        stderr = io.StringIO()
+        with redirect_stdout(io.StringIO()), redirect_stderr(stderr):
+            code = upgrade.main(['reuse-official-evidence', '--predecessor-campaign-dir', str(self.case.campaign),
+                                 '--campaign-dir', str(successor), '--campaign-id', 'successor', '--codex-account-id', '1'])
+        self.assertEqual(code, 1)
+        self.assertIn('前任 Campaign 处于预算暂停', stderr.getvalue())
+        self.assertFalse((successor / 'campaign.json').exists())
+        project.abandon_campaign(self.case.campaign, approved_by='fixture-reviewer', reason='隔离测试：显式放弃后允许新建')
+        upgrade._require_predecessor_not_budget_paused(self.case.campaign)
 
 
 if __name__ == '__main__':

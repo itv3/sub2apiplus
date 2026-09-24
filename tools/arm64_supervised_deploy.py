@@ -200,7 +200,7 @@ from urllib.parse import urlsplit
 # 回滚验证 → 退休；监督器 post-run-tooling 闭集按冻结判定接纳 VC-6 三项，使退休动作失败仍归可恢复类。
 # 受管工具树与监督器随之变化；断言预处理器未变。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "e5b0e17af0fc51cde64ef5ea75fe3f154f49d3ee6de9f28c751862ee78bb4ab3"
+    "ecaad15eae39240fc9afe9c0f81ab2426ea55ea4a87c64fa39d2c2d795a4c520"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "c8020cadd3ee08f67236313a0913dbc3730805b46c3f6b720cdf7ace77f9fec1"

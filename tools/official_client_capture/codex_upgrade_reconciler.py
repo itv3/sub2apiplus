@@ -1274,10 +1274,20 @@ def _attempt_deadline_expired(
         str(reference_value),
         "attempt.completed_at_utc" if attempt is not None else "now",
     )
+    # R8 审核修正：Campaign 层与阶段层只计参考时刻之前已批准的延期。某层在参考时刻之后第一份延期记录的
+    # original_deadline_at_utc 就是该层在参考时刻的有效截止；先延期后对账不得把当时的到期改判成别的根因。
+    extensions = [row for row in ledger.get("deadline_extensions") or [] if isinstance(row, Mapping)]
+    later = [row for row in extensions if _timestamp(str(row.get("approved_at_utc")), "延期批准时间") > reference]
+    current_phase = ledger.get("active_phase") or ledger.get("review_phase")
+
+    def as_of_reference(value: Any, scope: str) -> Any:
+        rows = [row for row in later if row.get("scope") == scope and (scope != "stage" or row.get("phase") == current_phase)]
+        return rows[0].get("original_deadline_at_utc") if rows else value
+
     deadlines = [
-        campaign_deadline_at_utc,
-        ledger.get("total_deadline_at_utc"),
-        ledger.get("stage_deadline_at_utc"),
+        as_of_reference(campaign_deadline_at_utc, "campaign"),
+        as_of_reference(ledger.get("total_deadline_at_utc"), "campaign"),
+        as_of_reference(ledger.get("stage_deadline_at_utc"), "stage"),
         (project_ledger.effective_project_deadline(project_ledger_root, as_of=reference)
          if project_ledger_root is not None else plan.get("absolute_deadline_utc")),
     ]

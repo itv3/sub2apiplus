@@ -38,6 +38,9 @@ DEFAULT_TOTAL_BUDGET_MINUTES = 360
 UNBOUND_TOTAL_BUDGET_CEILING_MINUTES = 360
 PROJECT_LEDGER_BINDING_FIELD = "project_ledger_binding"
 PROJECT_LEDGER_BINDING_FIELDS = {"path", "plan_sha256", "absolute_deadline_utc"}
+# R8：新账本在创建时冻结开始时刻的项目有效截止（含此前已批准的项目延期），读侧据此计算预算上限，
+# 不再为校验计划而打开并重放总账；没有该字段的历史绑定按原绝对截止计算（与 main 相同）。
+PROJECT_LEDGER_FROZEN_DEADLINE_FIELD = "effective_deadline_at_start_utc"
 DEFAULT_RETRY_LIMIT = 2
 PURPOSES = frozenset({"validation_only", "production_replacement"})
 EVIDENCE_DECISIONS = frozenset({"reuse", "recapture"})
@@ -444,6 +447,12 @@ PRODUCER_FREEZE_SUCCESSORS = (
         "path": "docs/egress/maintenance/upstream-codex-01561-r4-review-fix-20260924-freeze-successor.json",
         "base_commit": "69f37a1da95eea876fc8fc85dcb07f506968b137",
         "scope": "upstream-codex-01561-r4-review-fix-20260924-freeze-successor",
+        "result": "manual_actions_required",
+    },
+    {
+        "path": "docs/egress/maintenance/upstream-codex-01561-r8-review-fix-20260924-freeze-successor.json",
+        "base_commit": "fc071b4b263204d80d24d4152c6c743211e53c9a",
+        "scope": "upstream-codex-01561-r8-review-fix-20260924-freeze-successor",
         "result": "manual_actions_required",
     },
 )
@@ -1081,7 +1090,10 @@ def _budget_ceilings(plan: dict[str, Any]) -> tuple[int, dict[str, int]]:
     binding = plan.get(PROJECT_LEDGER_BINDING_FIELD)
     if binding is None:
         return UNBOUND_TOTAL_BUDGET_CEILING_MINUTES, dict(DEFAULT_STAGE_BUDGETS)
-    _expect(binding, set(PROJECT_LEDGER_BINDING_FIELDS), "project_ledger_binding")
+    fields = set(PROJECT_LEDGER_BINDING_FIELDS)
+    if isinstance(binding, dict) and PROJECT_LEDGER_FROZEN_DEADLINE_FIELD in binding:
+        fields.add(PROJECT_LEDGER_FROZEN_DEADLINE_FIELD)
+    _expect(binding, fields, "project_ledger_binding")
     path = binding.get("path")
     if not isinstance(path, str) or not path or not PurePosixPath(path).is_absolute():
         raise TimingLedgerError("project_ledger_binding.path 必须是绝对路径")
@@ -1090,13 +1102,13 @@ def _budget_ceilings(plan: dict[str, Any]) -> tuple[int, dict[str, int]]:
         raise TimingLedgerError("project_ledger_binding.plan_sha256 非法")
     deadline = _timestamp(binding.get("absolute_deadline_utc"), "project_ledger_binding.absolute_deadline_utc")
     started = _timestamp(plan.get("started_at_utc"), "started_at_utc")
-    # 原绑定字段保持不变；只使用本账本创建时已经批准的项目延期计算上限，
-    # 后续延期不得反过来扩大历史计划的初始预算。
-    _artifacts, project = _deadline_modules()
-    project_plan, raw = project._load_plan(Path(path))
-    if hashlib.sha256(raw).hexdigest() != plan_sha256 or project_plan["absolute_deadline_utc"] != binding["absolute_deadline_utc"]:
-        raise TimingLedgerError("项目总账原计划绑定漂移")
-    deadline = _timestamp(project.effective_project_deadline(Path(path), as_of=started), "创建时项目有效截止")
+    # R8 审核修正：读侧只用绑定字段，不打开总账（总账迁移、归档或权限变化不影响计划校验）。
+    # 创建时已经批准的项目延期由 _project_ledger_binding 冻结进绑定；后续延期不得反过来扩大初始预算。
+    if PROJECT_LEDGER_FROZEN_DEADLINE_FIELD in binding:
+        frozen = _timestamp(binding[PROJECT_LEDGER_FROZEN_DEADLINE_FIELD], "project_ledger_binding.effective_deadline_at_start_utc")
+        if frozen < deadline:
+            raise TimingLedgerError("创建时冻结的项目有效截止不得早于总账原绝对截止")
+        deadline = frozen
     minutes = int((deadline - started).total_seconds() // 60)
     if minutes < 1:
         raise TimingLedgerError("项目总账绝对截止早于账本开始时间，无法冻结预算")
@@ -1510,7 +1522,14 @@ def _summarize(
         if event_type == "deadline_extended":
             extension = normalized["deadline_control"]
             _artifacts, project = _deadline_modules()
-            project.verify_committed_deadline_extension(extension)
+            binding = plan.get(PROJECT_LEDGER_BINDING_FIELD)
+            # R8 审核修正：不按收据内嵌的绝对路径直接打开总账，迁移后按计划摘要重新定位。
+            project_root = _locate_project_root(
+                root,
+                recorded_path=str(binding["path"] if isinstance(binding, Mapping) else extension["project_ledger_path"]),
+                plan_sha256=binding["plan_sha256"] if isinstance(binding, Mapping) else None,
+            )
+            project.verify_committed_deadline_extension(extension, root=project_root)
             expected_head = {"sequence": sequence - 1, "sha256": normalized["previous_event_sha256"]}
             if extension["campaign_ledger_head"] != expected_head:
                 raise TimingLedgerError("延期批准绑定的 Campaign 账本 head 已过期")
@@ -1927,17 +1946,28 @@ def _summarize(
         deadlines["stage"] = stage_deadline
     project_binding = plan.get(PROJECT_LEDGER_BINDING_FIELD)
     relevant_extensions = list(deadline_extensions)
+
+    def owns_extension(extension: Mapping[str, Any]) -> bool:
+        """R8 审核修正：按批准时绑定的本账本 head 判断延期是否属于本账本，不依赖 upgrade_id 等于 campaign_id。"""
+
+        head = extension.get("campaign_ledger_head")
+        sequence = head.get("sequence") if isinstance(head, Mapping) else None
+        if not isinstance(sequence, int) or isinstance(sequence, bool) or not 1 <= sequence <= len(raw_events):
+            return False
+        return _sha256_bytes(raw_events[sequence - 1][1]) == head.get("sha256")
+
     if isinstance(project_binding, Mapping):
         _artifacts, project = _deadline_modules()
-        deadlines["project"] = _timestamp(project.effective_project_deadline(Path(project_binding["path"]), as_of=as_of), "项目有效截止")
-        project_plan, _raw = project._load_plan(Path(project_binding["path"]))
-        project_head = project._replay(Path(project_binding["path"]), project_plan,
-                                      project._load_events(Path(project_binding["path"])), rebuild_cache=False)
+        project_root = _locate_project_root(root, recorded_path=str(project_binding["path"]),
+                                            plan_sha256=str(project_binding["plan_sha256"]))
+        deadlines["project"] = _timestamp(project.effective_project_deadline(project_root, as_of=as_of), "项目有效截止")
+        project_plan, _raw = project._load_plan(project_root)
+        project_head = project._replay(project_root, project_plan, project._load_events(project_root), rebuild_cache=False)
         relevant_extensions.extend(row for row in project_head["deadline_extensions"]
                                    if row["scope"] == "project" and _timestamp(row["approved_at_utc"], "批准时间") <= as_of)
         applied = {row["receipt_sha256"] for row in deadline_extensions}
         for extension in project_head["deadline_extensions"]:
-            if (extension["campaign_id"] == plan["upgrade_id"] or extension["scope"] == "project") and _timestamp(extension["approved_at_utc"], "批准时间") <= as_of:
+            if (owns_extension(extension) or extension["scope"] == "project") and _timestamp(extension["approved_at_utc"], "批准时间") <= as_of:
                 if extension["receipt_sha256"] not in applied and not project.deadline_extension_applied(extension, project_head):
                     deadlines["extension_pending"] = _timestamp(extension["approved_at_utc"], "待补齐批准时间")
     expired = sorted(key for key, expiry in deadlines.items() if as_of >= expiry)
@@ -1971,7 +2001,7 @@ def _summarize(
             # 本 Campaign 用事件序号判断前后；另一 Campaign 的项目延期按批准时间
             # 生效。部分延期保留连续暂停起点，所有层解除后才开始新的暂停周期。
             follows = (extension["campaign_ledger_head"]["sequence"] >= fact["sequence"]
-                       if extension["campaign_id"] == plan["upgrade_id"]
+                       if owns_extension(extension)
                        else _timestamp(extension["approved_at_utc"], "批准时间") >= _timestamp(fact["recorded_at_utc"], "暂停事件时间"))
             if follows:
                 remaining.discard(extension["scope"])
@@ -2050,7 +2080,7 @@ def create_ledger(
     root = _private_ledger(root, must_exist=False)
     started = started_at_utc or _utc_now()
     binding = (
-        _project_ledger_binding(project_ledger_dir)
+        _project_ledger_binding(project_ledger_dir, started_at_utc=started)
         if project_ledger_dir is not None
         else None
     )
@@ -2094,8 +2124,11 @@ def create_ledger(
     return inspect_ledger(root, now=started)
 
 
-def _project_ledger_binding(project_ledger_dir: Path) -> dict[str, Any]:
-    """只读绑定项目总账 plan：绝对路径、plan 摘要与绝对截止时间。"""
+def _project_ledger_binding(project_ledger_dir: Path, *, started_at_utc: str) -> dict[str, Any]:
+    """绑定项目总账 plan：绝对路径、plan 摘要、绝对截止时间，以及账本开始时刻的项目有效截止。
+
+    创建是写路径，这里按总账重放取开始时刻已批准的项目延期并冻结；此后读侧只用这些字段。
+    """
 
     directory = Path(project_ledger_dir)
     if not directory.is_absolute() or directory.is_symlink() or not directory.is_dir():
@@ -2108,11 +2141,37 @@ def _project_ledger_binding(project_ledger_dir: Path) -> dict[str, Any]:
         raise TimingLedgerError("项目总账 plan schema 非法")
     deadline = payload.get("absolute_deadline_utc")
     _timestamp(deadline, "项目总账 absolute_deadline_utc")
+    _artifacts, project = _deadline_modules()
+    effective = project.effective_project_deadline(
+        directory.resolve(strict=True), as_of=_timestamp(started_at_utc, "started_at_utc"),
+    )
     return {
         "path": str(directory.resolve(strict=True)),
         "plan_sha256": _sha256_file(plan_path),
         "absolute_deadline_utc": str(deadline),
+        PROJECT_LEDGER_FROZEN_DEADLINE_FIELD: str(effective),
     }
+
+
+def _locate_project_root(ledger_root: Path, *, recorded_path: str, plan_sha256: str | None) -> Path:
+    """定位项目总账：先用记录的路径；数据根整体迁移后，从计时账本目录逐级向上查找同名总账目录。
+
+    有计划摘要时以摘要确认是同一总账；收据与绑定里的绝对路径只作提示。找不到时失败关闭，不静默跳过预算层。
+    """
+
+    _artifacts, project = _deadline_modules()
+    candidates = [Path(recorded_path)]
+    candidates.extend(parent / project.LEDGER_DIR_NAME for parent in Path(ledger_root).resolve().parents)
+    for candidate in candidates:
+        plan_path = candidate / "plan.json"
+        try:
+            if candidate.is_symlink() or plan_path.is_symlink() or not plan_path.is_file():
+                continue
+            if plan_sha256 is None or _sha256_file(plan_path) == plan_sha256:
+                return candidate
+        except OSError:
+            continue
+    raise TimingLedgerError("项目总账不在记录的路径，且无法在数据根内按计划摘要重新定位（数据根迁移须整体移动）")
 
 
 def phase_ledger_state(root: Path, *, now: str | None = None) -> dict[str, Any]:

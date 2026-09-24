@@ -16753,7 +16753,9 @@ def compile_vc_batch(
         raise ConfigurationError("预算暂停期间不得编译新批次，必须先批准延期")
     deadline = datetime.fromisoformat(str(deadlines["total_deadline_at_utc"]).replace("Z", "+00:00"))
     if deadline <= now:
-        raise ConfigurationError("Campaign 原始绝对 deadline 已过期，禁止生成新批次。")
+        raise ConfigurationError(
+            "Campaign 有效截止（含已批准延期）已到期，禁止生成新批次；先 deadline-extend 或 campaign-abandon。"
+        )
     must_start = min(now + timedelta(seconds=60), deadline)
     compiled_at = now.isoformat(timespec="seconds")
     try:
@@ -17414,9 +17416,11 @@ def _compile_and_run_vc_batch_legacy(
                 failure_kind = "compile-failed-after-artifact-write"
             elif batch is not None:
                 now = datetime.now(timezone.utc)
-                deadline = datetime.fromisoformat(
-                    str(codex_upgrade_vc_artifacts.effective_deadlines(campaign_dir)["total_deadline_at_utc"]).replace("Z", "+00:00")
-                )
+                # R8：没有 Campaign 计时账本的历史批次读不到有效截止，回退批次冻结的原始截止（main 的读法）。
+                effective_total = codex_upgrade_vc_artifacts.effective_deadlines(
+                    campaign_dir, original_deadline_at_utc=batch["original_deadline_at_utc"],
+                )["total_deadline_at_utc"]
+                deadline = datetime.fromisoformat(str(effective_total).replace("Z", "+00:00"))
                 start_by = datetime.fromisoformat(
                     str(batch["must_start_by_utc"]).replace("Z", "+00:00")
                 )
@@ -28220,6 +28224,37 @@ def _resume_official_reuse(arguments: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def _require_predecessor_not_budget_paused(predecessor_dir: Path) -> None:
+    """R8：前任 Campaign 处于预算暂停时，禁止以复用或后继新建 Campaign 取得一份新预算。
+
+    暂停包括计时账本处于 deadline_paused、总账登记了暂停，以及账本仍非终态但三层截止已到期（尚未有人
+    登记暂停）。应先 deadline-extend 在原 Campaign 继续，或 campaign-abandon 显式终止后再新建。已停线、
+    完成或放弃的前任不受影响；没有计时账本的历史前任也不受影响。
+    """
+
+    ledger_dir = codex_upgrade_vc_artifacts.campaign_timing_ledger(predecessor_dir)
+    if ledger_dir is None:
+        return
+    try:
+        summary = codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)
+        deadlines = codex_upgrade_vc_artifacts.effective_deadlines(predecessor_dir)
+    except (
+        OSError,
+        ValueError,
+        codex_upgrade_timing_ledger.TimingLedgerError,
+        codex_upgrade_vc_artifacts.VCArtifactError,
+        codex_upgrade_project_ledger.ProjectLedgerError,
+    ) as error:
+        raise ConfigurationError(f"前任 Campaign 预算状态无法重放：{error}") from error
+    terminal = summary.get("status_before_pause", summary.get("status")) in {"stopped", "stop_required", "complete", "abandoned"}
+    if not terminal and (summary.get("status") == "deadline_paused" or deadlines["paused_scopes"]):
+        raise ConfigurationError(
+            "前任 Campaign 处于预算暂停（"
+            + "、".join(deadlines["paused_scopes"] or ["deadline_paused"])
+            + "），不得以复用或后继新建 Campaign 重置预算；先 deadline-extend 在原 Campaign 继续，或 campaign-abandon 显式终止。"
+        )
+
+
 def create_successor_campaign(arguments: argparse.Namespace) -> dict[str, Any]:
     """在项目总账 admission 作用域内创建后继 Campaign 并注册（A0a-11／A0a-12）。"""
 
@@ -28240,6 +28275,8 @@ def create_successor_campaign(arguments: argparse.Namespace) -> dict[str, Any]:
         if official_reuse and (campaign_dir.exists() or campaign_dir.is_symlink()):
             result = _resume_official_reuse(arguments)
         else:
+            # R8：只拦全新创建；续作已开始的导入不拦，避免留下半建的后继。
+            _require_predecessor_not_budget_paused(Path(arguments.predecessor_campaign_dir))
             result = _create_successor_campaign_unadmitted(arguments)
         with _campaign_lock(campaign_dir):
             manifest = _read_json(campaign_dir / "campaign.json", "后继 Campaign 清单")
