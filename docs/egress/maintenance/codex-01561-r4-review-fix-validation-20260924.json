@@ -1,0 +1,195 @@
+{
+  "schema_version": "codex-upgrade-improvement-validation/v1",
+  "item": "R4（审核修正）",
+  "source_commit": "977e1e449459d4f08e1a370ea70f794c04452486",
+  "source_commits": [
+    "427a465b07d0d88b5c2c006b49b05dd776a43daa",
+    "977e1e449459d4f08e1a370ea70f794c04452486"
+  ],
+  "review_basis": "桌面《Codex仿真升级阶段1审核结论-20260924.md》第一节第 2 条首项（R4 破坏 atomic-double 演练合同，含 certify_release）、第一节第 5 条末项（每项自带历史兼容与 rollback_backup 旧工具只读回放用例）、第二节第 2 条（R4×R8 交互卡死）、第二节第 5 条（已有 checkpoint 编译只看 next_action）、第二节第 10 条（stage_replay schema 零引用）",
+  "status": "development_self_check_passed",
+  "production_deployed": false,
+  "live_request_count": 0,
+  "self_checked_at_utc": "2026-09-24T06:48:41.126458+00:00",
+  "fixes": [
+    {
+      "finding": "atomic-double 演练合同要求失败父 run 后账本 stopped、末两事件为 stage_abandoned→stop_the_line，R4 后实为 stage_review_required，演练与 certify_release 共 10 项失败；审核要求先确认演练失败父 run 的阶段",
+      "resolution": "确认演练失败父 run 的 manifest 阶段为 VC-1，属 R4 范围，按审核的第一种改法修改演练合同：记录与重放都只接受 stage_abandoned→stage_review_required 收口，第二个失败父 run 的闭合失败负例文案改为「已由其他根因进入 stage_review_required」。原子收据绑定原子入口及其 producer／consumer 的字节身份（_atomic_tool_identity），R4 之前的停线收口收据在身份核对处即被拒，因此不保留旧合同分支。复验中还发现 R8 让父批次持有 Campaign 预算控制锁、每次都生成 campaign/.deadline-control.lock，已列入预期 inventory，inventory 仍按完全相等比较"
+    },
+    {
+      "finding": "R4 与 R8 交互卡死：stage_abandoned 已写、stage_review_required 未写时进程被杀且恰好到期写入 deadline_paused，延期后重入报“当前阶段与父失败阶段不一致”，手工补 review 又被“必须紧接 stage_abandoned”拒绝",
+      "resolution": "计时账本增加“最后一条实质事件”（跳过 deadline_paused、deadline_extended、campaign_abandoned 三类预算控制事件），stage_review_required 的前置判定据此跨过预算控制事件；暂停期允许追加 stage／candidate review 这类元数据收口（不启动、复用或封存）。失败收口按最后一条实质事件与暂停前状态判断已写到哪一步：“已放弃、未审核”中间态重入时先在收口锁内补齐 review，再按原协议登记暂停；延期批准后再次重入幂等返回 review 状态"
+    },
+    {
+      "finding": "自查中新发现：上述中间态既无 active 阶段也无 review 阶段，计时账本推算不出阶段截止，失败收口入口的预算判定看不到阶段层已到期，补齐 review 后直接返回而不登记暂停",
+      "resolution": "离开收口锁后按落盘后的账本重新判定三层预算，仍有到期层（或总账已登记暂停）才登记暂停。集成用例在修改前复现：期望 deadline_paused，实际停在 stage_review_required"
+    },
+    {
+      "finding": "已有 checkpoint 的 VC-2／VC-3 再编译只看账本 next_action，环境恢复等其他对账写出同一 next_action 的 receipt_passed 也能放行",
+      "resolution": "compile_vc_batch 在已有 checkpoint 时追加核对：最后一条实质事件必须是本阶段、下一动作为逐字重派的 receipt_passed，且恰好绑定一份 stage_replay 证明；证明判定可重派，每个动作记录的 checkpoint 摘要都等于当前 checkpoint。证明构造抽成 reconciler.build_stage_replay_proof（字段顺序与历史逐字节一致），schema 常量 STAGE_REPLAY_SCHEMA 登记到制品层与 schema 映射用例。新增 4 条用例：证明绑定当前 checkpoint 时放行；checkpoint 变化或阶段不符拒绝；环境恢复无证明拒绝；证明结构与 schema、历史字段顺序一致。stage_recovery 真实链对实际写出的证明做 schema 结构校验。另补一条衔接用例（977e1e449）：借 VC 链夹具真实完成 VC-2 写出 checkpoint，用真实生成器 _campaign_stage_replay_facts 生成证明交给核对：对账时 checkpoint 已在则证明带其摘要并放行；对账时尚不存在、编译前才出现则证明无摘要，拒绝再编译"
+    },
+    {
+      "finding": "方案通用约定要求引入新事件的变更集自带“rollback_backup 旧工具只读回放”与“无该字段的历史 Campaign 仍可 status／replay”用例；R4 原先只在仓库外脚本（r4-rollback-check.py，且是新旧模块混用）",
+      "resolution": "新增 test_codex_upgrade_rollback_readback：用 git archive 导出 main 基线（e6d53c1e9）整棵工具树，旧工具只在子进程里运行自己的 CLI。旧工具建账本并封存 checkpoint，当前工具 status 可读、重放结果与旧工具逐字段一致，并可继续按 R4 收口；当前工具写入 R4 事件后，旧工具 status 失败关闭（event 5 phase 或 event_type 非法）且账本字节不变，写入前封存的 checkpoint 仍可由旧工具重放。导出与运行函数供 R11、R8 复用。CI 全历史检出必跑；没有 .git 的传输副本（ARM64 staging 定向运行）跳过"
+    }
+  ],
+  "clarifications": [
+    "回退边界：账本一旦写入 stage_review_required，基线工具只能失败关闭、不能读取，按方案“不兼容时不回退，保持暂停，用最小修复继续前进”。阶段 1 发布时仍需对实际 rollback_backup 复验。",
+    "审核第二节第 10 条所列零引用 schema 中属于 R4 的 stage_replay 已在本项登记；R11 的 attempt_recovery_reservation 与 R8 的 deadline_extension 在对应项登记。",
+    "回退兼容用例依赖 git 历史：CI 以 fetch-depth: 0 检出；ARM64 staging 定向运行用 tar 传输副本，没有 .git，该模块在 ARM64 定向运行中不纳入，由本机执行；阶段 1 最后的 ARM64 全量改用带完整历史的检出。",
+    "ARM64 第一次启动时测试名写成了短名，16 个模块全部导入失败；结束标记在 ssh 双引号内嵌套双引号，被写成 nexit=1n，等待脚本无法识别，发现后立即停止等待。已改为完整点分路径与两行 echo 标记，失败日志留档（review-fix-r4-arm64-import-error.log）。",
+    "第一次正式运行里 test_codex_upgrade_reconciler 报导入错误：仓库没有这个模块，是我列错了名字，不是代码问题；随即在 ARM64 补跑真正覆盖对账器的 test_codex_upgrade_time_reconciliation、段复用单测与段复用真实链，20 项通过。"
+  ],
+  "tool_identity": {
+    "policy_sha256": "unchanged",
+    "wire_producer_sha256": "unchanged",
+    "evidence_semantics_sha256": "unchanged",
+    "control_sha256": {
+      "before": "279f438519668ccedc921cb74573d9770a4e6f1ef6dcfd2e74812041bd5be285",
+      "after": "d174185f948dafccf38f61402322fc973e389d5c9e36e4c3d23964370a3dd4c1"
+    }
+  },
+  "regression": {
+    "local_full": {
+      "commit": "427a465b07d0d88b5c2c006b49b05dd776a43daa",
+      "command": "make test-capture-tools",
+      "tests": 2161,
+      "seconds": 854.599,
+      "result": "FAILED",
+      "detail": "failures=2, errors=3, skipped=4",
+      "note": "五项均为 R8 遗留：atomic_dispatch 三项（旧批次路径截止为 None）、命令闭集缺 deadline-extend／campaign-abandon、vc0_closeout append-only 比较受实时暂停时长影响；跳过 4 项与此前各次全量相同（环境依赖），回退兼容用例在本机真实执行"
+    },
+    "local_after_linkage_test": {
+      "commit": "977e1e449459d4f08e1a370ea70f794c04452486",
+      "tests": 5,
+      "result": "OK",
+      "module": "test_codex_upgrade_stage_replay_binding"
+    },
+    "red_green_r4": {
+      "old": "FAILED (errors=17)",
+      "new": "OK",
+      "tests": 20,
+      "note": "修改前（69f37a1da）叠加新用例：R4×R8 集成、审核状态机两条、证明绑定四条、atomic-double 与 certify_release 全部报错；只有补覆盖的审核事件闭集负例新旧均通过"
+    },
+    "red_green_linkage": {
+      "old": "FAILED (errors=1)",
+      "new": "OK"
+    },
+    "arm64_final": {
+      "commit": "427a465b07d0d88b5c2c006b49b05dd776a43daa",
+      "tests": 489,
+      "seconds": 1163.312,
+      "result": "FAILED",
+      "detail": "failures=1, errors=1, skipped=0",
+      "modules": [
+        "real_chains.test_codex_upgrade_stage_recovery",
+        "real_chains.test_codex_upgrade_fault_fixtures",
+        "real_chains.test_codex_upgrade_deadline_extension",
+        "real_chains.test_codex_upgrade_official_reuse_resume",
+        "real_chains.test_codex_upgrade_full_chain",
+        "test_codex_upgrade_supervisor",
+        "test_codex_upgrade_timing_ledger",
+        "test_codex_upgrade_vc_artifacts",
+        "test_codex_upgrade_campaign_run_rehearsal_receipt",
+        "test_certify_release",
+        "test_codex_upgrade_stage_replay_binding",
+        "test_codex_upgrade_project_ledger",
+        "test_codex_upgrade_deadline_extension",
+        "test_codex_upgrade",
+        "test_arm64_supervised_deploy"
+      ],
+      "note": "CAPTURE_REAL_CHAINS_REQUIRE_EXECUTION=1，零跳过；五条真实链（含 R4 故障夹具、全链 accept）、atomic-double 与 certify_release 全部通过；失败为 R8 命令闭集，错误为列错的模块名"
+    },
+    "arm64_supplement": {
+      "commit": "427a465b07d0d88b5c2c006b49b05dd776a43daa",
+      "tests": 20,
+      "seconds": 882.197,
+      "result": "OK",
+      "modules": [
+        "test_codex_upgrade_time_reconciliation",
+        "test_codex_upgrade_segment_reuse",
+        "real_chains.test_codex_upgrade_segment_reuse"
+      ]
+    },
+    "arm64_linkage": {
+      "commit": "977e1e449459d4f08e1a370ea70f794c04452486",
+      "tests": 5,
+      "seconds": 23.697,
+      "result": "OK",
+      "modules": [
+        "test_codex_upgrade_stage_replay_binding"
+      ]
+    },
+    "arm64_interrupted": [
+      {
+        "run": "第一次启动（427a465b0）",
+        "result": "测试名未写完整点分路径，16 个模块导入失败；结束标记引号错误，等待任务已停止",
+        "log": "review-fix-r4-arm64-import-error.log"
+      }
+    ]
+  },
+  "gates": {
+    "officialegress_frozen": "passed",
+    "service_frozen": "passed",
+    "check_egress_spec_ci": "passed",
+    "codex_0151_worktree_successor": "passed",
+    "arm64_supervised_deploy_tests": "passed",
+    "freeze_successor": "4 条承接边（部署脚本、编排器、计时账本及其测试）；6 项人工动作均为部署脚本受管摘要：监督器摘要已更新为 e5b0e17a…，断言预处理器未改，部署脚本自身作为承接边登记在本收据内",
+    "maintenance_markdown_count": 0,
+    "note": "在 977e1e449 与重新生成的收据上重跑，全部通过；427a465b0 上的第一次门禁与收据生成日志以 superseded 后缀留档"
+  },
+  "open_dependencies": [
+    "两条评估真实链（legacy、attempt-recovery）在阶段 1 最后的全量真实链验证中执行。",
+    "R8 遗留五项（命令闭集、vc0_closeout、atomic_dispatch）在 R8 修正。",
+    "回退兼容用例需要 git 历史，阶段 1 最后的 ARM64 全量改用带完整历史的检出，届时一并执行。"
+  ],
+  "freeze_successors": [
+    {
+      "path": "docs/egress/maintenance/upstream-codex-01561-r4-review-fix-20260924-freeze-successor.json",
+      "sha256": "4a39e48f0d8ad5e1615d28c98b8e96e5fc6f3358db3ff9e9000661a24d6d1cf1"
+    }
+  ],
+  "logs_directory": "/Users/czs/Developer/codex-01561-upgrade-work",
+  "logs": [
+    {
+      "file": "review-fix-r4-red-green.log",
+      "sha256": "33633d598a83a2615db75df464e3a9bd742427d6a7b4c293de6466f6ee02f23c"
+    },
+    {
+      "file": "review-fix-r4-local-full.log",
+      "sha256": "9a91e2734aa0a9200de35740ce2b90328c40ac7f738a9476dfc11407f15d0b3f"
+    },
+    {
+      "file": "review-fix-r4-freeze-generation.log",
+      "sha256": "10a7e18bf5fd627af9afd425e3a92cce2bba23f14b430cf300baa9999e499c22"
+    },
+    {
+      "file": "review-fix-r4-freeze-generation-superseded-427a465b0.log",
+      "sha256": "b87fdf9b6f4144613bff5750f6fafebd3da1481314b1c98b63bd9d6eda731975"
+    },
+    {
+      "file": "review-fix-r4-gates.log",
+      "sha256": "b4864cc24f9c8a5293ba7030c983ba393581e6fca1368996054c2a7e9829d565"
+    },
+    {
+      "file": "review-fix-r4-gates-superseded-427a465b0.log",
+      "sha256": "1c7ed48ee6a7f728fc394fea9c3d3ef3ec344d20c431d6194f9e3e1c3f22c0f6"
+    },
+    {
+      "file": "review-fix-r4-arm64-import-error.log",
+      "sha256": "24d15f88a34ccd6b6dcd037f1047476d51e478b95076bec261943717c9bb226c"
+    },
+    {
+      "file": "review-fix-r4-arm64.log",
+      "sha256": "f143300922dab3cbfeeeb048351051c50ef84d6f17558440bfa99921556926e7"
+    },
+    {
+      "file": "review-fix-r4-arm64-supplement.log",
+      "sha256": "4d635c43aa5a47a89fe2a61140759bf4ab321b78e7e4986b61937620736831be"
+    },
+    {
+      "file": "review-fix-r4-arm64-binding.log",
+      "sha256": "04f7392f34eb22d7c40ea9d2a990e772ab3ee8a8573a0d38b46e3e60280f86b0"
+    }
+  ]
+}
