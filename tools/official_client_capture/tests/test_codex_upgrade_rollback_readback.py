@@ -5,8 +5,8 @@
 - 引入新事件或新 schema 的变更集，要用 rollback_backup 里的旧工具副本，对写入新事件后的账本与收据做只读回放；
 - 旧工具读不了新数据时不回退，保持暂停，用最小修复继续前进。
 
-覆盖：R4 计时账本审核事件（TimingLedgerRollbackReadbackTests）、R11 恢复段复用许可（SegmentReuseRollbackReadbackTests）、
-R8 预算暂停事件与总账暂停登记（DeadlineControlRollbackReadbackTests）。
+覆盖：R4 计时账本审核事件（TimingLedgerRollbackReadbackTests）、R11 恢复段复用许可与落盘预约（SegmentReuseRollbackReadbackTests）、
+R8 预算暂停、延期（两本账）、显式放弃事件与两本账事件闭集（DeadlineControlRollbackReadbackTests）。
 
 阶段 1 发布时 ARM64 的 rollback_backup 就是 main 基线的受管工具树。这里用 git archive 按固定提交导出同一棵树，
 旧工具只在子进程里以 ``-m`` 运行，不与当前模块混用。CI 以 fetch-depth: 0 检出，基线提交必然可读；
@@ -247,6 +247,52 @@ class SegmentReuseRollbackReadbackTests(unittest.TestCase):
         self.assertIsNone(supervisor.recovery_preview_scope_violation(preview, self.FROZEN))
         self.assertIn("不等于基线冻结的 J*", str(self._rollback_violation(preview)))
 
+    def test_rollback_tool_reads_reuse_reservation_but_scope_check_refuses_without_touching_bytes(self) -> None:
+        """R11 复审补充：带复用许可的恢复段预约按真实格式落盘，旧工具只核对 schema、身份与自摘要，能读入新字段；
+        拒绝发生在后继段派发前的范围核对（执行集合须等于冻结 J*、复用为空），读取前后预约字节不变。
+        """
+
+        from tools.official_client_capture import codex_upgrade
+
+        assert ROLLBACK_TREE is not None
+        with tempfile.TemporaryDirectory() as directory:
+            campaign_dir = Path(directory).resolve() / "campaign"
+            segment_root = campaign_dir / "candidates" / "c1" / "attempts" / "a1" / "recovery" / "ar2"
+            segment_root.mkdir(parents=True, mode=0o700)
+            preview = self._preview(reuse=["candidate-frozen-aux"])
+            reservation = {
+                "schema_version": codex_upgrade.ATTEMPT_RECOVERY_RESERVATION_SCHEMA,
+                "candidate_id": "c1", "attempt_id": "a1", "recovery_revision": "ar2",
+                "planned_jobs": list(self.FROZEN),
+                "execute_job_ids": preview["execute_job_ids"], "reuse_job_ids": preview["reuse_job_ids"],
+                "reuse_proofs": preview["reuse_proofs"],
+                "reuse_proofs_sha256": codex_upgrade._fingerprint(preview["reuse_proofs"]),
+                "reuse_validation_scanned_bytes": 4096,
+            }
+            reservation["reservation_digest"] = codex_upgrade._fingerprint(reservation)
+            path = segment_root / codex_upgrade.ATTEMPT_RECOVERY_RESERVATION_FILENAME
+            path.write_text(json.dumps(reservation, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
+            path.chmod(0o600)
+            before = path.read_bytes()
+            script = (
+                "import json, sys\n"
+                "from pathlib import Path\n"
+                "from tools.official_client_capture import codex_upgrade as upgrade\n"
+                "from tools.official_client_capture import codex_upgrade_supervisor as supervisor\n"
+                "payload = upgrade._load_attempt_recovery_reservation(Path(sys.argv[1]), Path(sys.argv[2]),\n"
+                "    candidate_id='c1', attempt_id='a1', recovery_revision='ar2')\n"
+                "preview = json.loads(sys.stdin.read())\n"
+                "print(json.dumps({'loaded': sorted(payload), 'violation': supervisor.recovery_preview_scope_violation(\n"
+                "    preview, payload['planned_jobs'])}, ensure_ascii=False))\n"
+            )
+            completed = run_rollback_python(ROLLBACK_TREE, "-c", script, str(campaign_dir), str(segment_root),
+                                            stdin=json.dumps(preview))
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            result = json.loads(completed.stdout)
+            self.assertIn("reuse_job_ids", result["loaded"])
+            self.assertIn("不等于基线冻结的 J*", str(result["violation"]))
+            self.assertEqual(path.read_bytes(), before)
+
 
 @unittest.skipUnless(
     (REPOSITORY_ROOT / ".git").exists(),
@@ -344,6 +390,112 @@ class DeadlineControlRollbackReadbackTests(unittest.TestCase):
         self.assertNotEqual(refused.returncode, 0, refused.stdout)
         self.assertIn("事件类型非法", refused.stderr + refused.stdout)
         self.assertEqual(ledger_snapshot(project_root), before)
+
+    def _bound_campaign(self) -> tuple[Path, Path, Path]:
+        """旧工具建总账与带总账绑定的计时账本（历史格式），当前工具补 Campaign 文件并注册；注册后旧工具仍可读两本账。"""
+
+        project_root = self.staging / project_ledger.LEDGER_DIR_NAME
+        created = self._rollback(
+            "-m", PROJECT_LEDGER_MODULE, "create-project-ledger", "--ledger-dir", str(project_root),
+            "--project-id", "r8-rollback", "--absolute-deadline-utc", self.at(24 * 60),
+            "--deadline-approved-by", "fixture", "--estimation-policy", "none",
+            "--estimation-policy-approved-by", "fixture", "--fixture-only",
+        )
+        self.assertEqual(created.returncode, 0, created.stderr)
+        ledger = self.staging / "timing"
+        script = textwrap.dedent(f"""
+            from pathlib import Path
+            from tools.official_client_capture import codex_upgrade_timing_ledger as timing
+            timing.create_ledger(Path({str(ledger)!r}), upgrade_id="r8-rollback", baseline_version="0.154.0",
+                                 target_version="0.156.1", campaign_purpose="validation_only",
+                                 evidence_decision="recapture", started_at_utc={self.at(0)!r},
+                                 project_ledger_dir=Path({str(project_root)!r}))
+        """)
+        created = self._rollback("-c", script)
+        self.assertEqual(created.returncode, 0, created.stderr)
+        campaign = self.staging / "evidence" / "campaigns" / "r8-rollback"
+        for relative, payload in (
+            ("campaign.json", {"campaign_id": "r8-rollback", "campaign_mode": "formal", "target_version": "0.156.1",
+                               "control_receipts": {"upgrade_timing": {"ledger_dir": str(ledger)}}}),
+            ("control/vc/campaign-plan.json", {"campaign_id": "r8-rollback", "original_deadline_at_utc": self.at(360)}),
+        ):
+            path = campaign / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            for parent in path.parents:
+                if parent == self.staging:
+                    break
+                parent.chmod(0o700)
+            path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+            path.chmod(0o600)
+        project_ledger.register_existing_campaign(campaign)
+        for args in (("-m", TIMING_LEDGER_MODULE, "status", "--ledger-dir", str(ledger)),
+                     ("-m", PROJECT_LEDGER_MODULE, "status", "--ledger-dir", str(project_root))):
+            compatible = self._rollback(*args)
+            self.assertEqual(compatible.returncode, 0, compatible.stderr)
+        return project_root, ledger, campaign
+
+    def _first_refused_event_type(self, ledger: Path, stderr: str) -> str:
+        """旧工具报错里的 event 序号对应当前账本中的事件类型，证明拒绝点正是预期的 R8 事件。"""
+
+        import re
+
+        match = re.search(r"event (\d+)", stderr)
+        self.assertIsNotNone(match, stderr)
+        events = timing_ledger._load_events(ledger)
+        return events[int(match.group(1)) - 1][0]["event_type"]
+
+    def test_rollback_tool_refuses_extension_events_in_both_ledgers_without_touching_bytes(self) -> None:
+        """R8 复审补充：真实延期流程写入计时账本 deadline_extended 与总账 deadline_extended、deadline_extension_committed 后，
+        基线工具读两本账都失败关闭且不改字节。"""
+
+        project_root, ledger, campaign = self._bound_campaign()
+        now = datetime.now(timezone.utc) + timedelta(seconds=5)
+        preview = project_ledger.preview_deadline_extension(campaign, scope="campaign", phase=None,
+                                                            new_deadline_at_utc=self.at(720), reason="回退兼容：延期写入两本账", now=now)
+        project_ledger.apply_deadline_extension(campaign, preview_path=Path(preview["preview_path"]),
+                                                approve_sha256=preview["review_sha256"], approved_by="fixture-reviewer",
+                                                now=now + timedelta(seconds=1))
+        self.assertEqual(len(project_ledger.replay_head(project_root)["committed_deadline_extensions"]), 1)
+        before = (ledger_snapshot(ledger), ledger_snapshot(project_root))
+        timing_status = self._rollback("-m", TIMING_LEDGER_MODULE, "status", "--ledger-dir", str(ledger))
+        self.assertEqual(timing_status.returncode, 1, timing_status.stdout)
+        self.assertEqual(self._first_refused_event_type(ledger, timing_status.stderr), "deadline_extended")
+        project_status = self._rollback("-m", PROJECT_LEDGER_MODULE, "status", "--ledger-dir", str(project_root))
+        self.assertNotEqual(project_status.returncode, 0, project_status.stdout)
+        self.assertIn("事件类型非法", project_status.stderr + project_status.stdout)
+        self.assertEqual((ledger_snapshot(ledger), ledger_snapshot(project_root)), before)
+
+    def test_rollback_tool_refuses_abandon_event_without_touching_bytes(self) -> None:
+        """R8 复审补充：显式放弃写入计时账本 campaign_abandoned 后，基线工具在该事件处失败关闭且不改字节。"""
+
+        project_root, ledger, campaign = self._bound_campaign()
+        project_ledger.abandon_campaign(campaign, approved_by="fixture", reason="回退兼容：显式放弃",
+                                        now=datetime.now(timezone.utc) + timedelta(seconds=5))
+        before = (ledger_snapshot(ledger), ledger_snapshot(project_root))
+        timing_status = self._rollback("-m", TIMING_LEDGER_MODULE, "status", "--ledger-dir", str(ledger))
+        self.assertEqual(timing_status.returncode, 1, timing_status.stdout)
+        self.assertEqual(self._first_refused_event_type(ledger, timing_status.stderr), "campaign_abandoned")
+        project_status = self._rollback("-m", PROJECT_LEDGER_MODULE, "status", "--ledger-dir", str(project_root))
+        self.assertNotEqual(project_status.returncode, 0, project_status.stdout)
+        self.assertEqual((ledger_snapshot(ledger), ledger_snapshot(project_root)), before)
+
+    def test_rollback_tool_event_closures_exclude_every_new_event(self) -> None:
+        """真实流程里总账 deadline_extension_committed 总跟在 deadline_extended 之后，旧工具读不到它；这里核对基线工具的
+        两本账事件闭集，证明 R4、R8 新增的每种事件一旦出现在旧工具面前都会被拒绝，而不是被静默接受。"""
+
+        script = ("import json\n"
+                  "from tools.official_client_capture import codex_upgrade_timing_ledger as timing\n"
+                  "from tools.official_client_capture import codex_upgrade_project_ledger as project\n"
+                  "print(json.dumps({'timing': sorted(timing.EVENT_TYPES), 'project': sorted(project.EVENT_TYPES)}))\n")
+        completed = self._rollback("-c", script)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        closures = json.loads(completed.stdout)
+        new_timing = sorted(set(timing_ledger.EVENT_TYPES) - set(closures["timing"]))
+        new_project = sorted(set(project_ledger.EVENT_TYPES) - set(closures["project"]))
+        self.assertEqual(new_timing, ["campaign_abandoned", "deadline_extended", "deadline_paused", "stage_review_required"])
+        self.assertEqual(new_project, ["campaign_paused", "deadline_extended", "deadline_extension_committed"])
+        self.assertLessEqual(set(closures["timing"]), set(timing_ledger.EVENT_TYPES))
+        self.assertLessEqual(set(closures["project"]), set(project_ledger.EVENT_TYPES))
 
 
 if __name__ == "__main__":
