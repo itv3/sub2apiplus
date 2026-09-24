@@ -4019,7 +4019,10 @@ def build_candidate_build_receipt(
     if build_inputs is not None:
         payload["build"]["inputs"] = dict(build_inputs)
     payload["receipt_digest"] = digest(payload)
-    return validate_candidate_build_receipt(payload)
+    receipt = validate_candidate_build_receipt(payload)
+    # record 入口：新构建收据必须证明实现测试证据确实绑定本构建的完整输入与当前 Candidate。
+    verify_candidate_build_implementation_evidence(receipt)
+    return receipt
 
 
 def validate_candidate_build_receipt(
@@ -4212,13 +4215,13 @@ def validate_candidate_build_receipt(
         "Candidate implementation_tests.receipt_digest",
     )
     if "inputs" in build:
-        # 承接收据必须与本构建收据绑定同一组输入。此检查位于 control 制品层，
-        # 既有 evidence 读侧仍要求当前 Candidate 和原始实现测试证据完整可重放。
+        # 构建输入证明必须与本构建收据的源码、平台、门禁需求和构建参数一致。这里只核对收据内摘要，
+        # 不读取实现测试证据根：status／replay、作废快照与驱动读取字段都经过本函数，证据根迁移或
+        # 清理后仍须可读。读取证据根、核对实现测试收据确实绑定本构建完整输入与当前 Candidate 的检查
+        # 只在 record 与 accept 入口显式执行（verify_candidate_build_implementation_evidence）。
         from . import codex_upgrade_candidate_build as candidate_build
-        from . import codex_upgrade_vc_receipt as vc_receipt
         try:
             inputs = candidate_build.validate_implementation_inputs(build["inputs"])
-            implementation = vc_receipt.validate_build_input_binding(implementation_tests, inputs)
             if (inputs["source_tree_sha256"] != source["tree_sha256"]
                     or inputs["target_architecture"] != payload["target_architecture"]
                     or inputs["requirements_sha256"] != gate_requirements["requirements_sha256"]
@@ -4226,10 +4229,9 @@ def validate_candidate_build_receipt(
                     or inputs["go_version"] != build["parameters"]["input_provenance"]["go_version"]
                     or inputs["base_images"] != build["parameters"]["input_provenance"]["base_images"]
                     or inputs["node_version"] != build["parameters"]["frontend"]["node_version"]
-                    or inputs["pnpm_version"] != build["parameters"]["frontend"]["pnpm_version"]
-                    or implementation["subject"]["candidate_id"] != payload["candidate_id"]):
+                    or inputs["pnpm_version"] != build["parameters"]["frontend"]["pnpm_version"]):
                 raise VCArtifactError("实现测试构建输入与当前构建身份不一致")
-        except (candidate_build.CandidateBuildError, vc_receipt.VCReceiptError, OSError, KeyError) as error:
+        except (candidate_build.CandidateBuildError, KeyError) as error:
             raise VCArtifactError(f"实现测试输入绑定未通过：{error}") from error
     elif "input_provenance" in build["parameters"]:
         raise VCArtifactError("新版构建参数缺少实现测试输入证明")
@@ -4256,6 +4258,29 @@ def validate_candidate_build_receipt(
     if digest(unsigned) != recorded:
         raise VCArtifactError("Candidate 构建收据自摘要不一致")
     return payload
+
+
+def verify_candidate_build_implementation_evidence(payload: Mapping[str, Any]) -> dict[str, Any] | None:
+    """record 与 accept 入口专用：读取实现测试证据根，核对其收据绑定本构建完整输入与当前 Candidate。
+
+    调用方须先经 validate_candidate_build_receipt 校验构建收据。只读路径（status／replay、作废快照、
+    驱动读取字段）不调用本函数，证据根迁移或清理不会让它们失败；新登记与正式验收则必须通过本核对。
+    历史构建收据没有 build.inputs 时返回 None，沿用原有读侧。
+    """
+
+    build = payload.get("build")
+    if not isinstance(build, Mapping) or "inputs" not in build:
+        return None
+    from . import codex_upgrade_candidate_build as candidate_build
+    from . import codex_upgrade_vc_receipt as vc_receipt
+    try:
+        inputs = candidate_build.validate_implementation_inputs(build["inputs"])
+        implementation = vc_receipt.validate_build_input_binding(payload["implementation_tests"], inputs)
+    except (candidate_build.CandidateBuildError, vc_receipt.VCReceiptError, OSError, KeyError) as error:
+        raise VCArtifactError(f"实现测试输入绑定未通过：{error}") from error
+    if implementation["subject"]["candidate_id"] != payload.get("candidate_id"):
+        raise VCArtifactError("实现测试构建输入与当前构建身份不一致")
+    return implementation
 
 
 def build_candidate_delivery_receipt(

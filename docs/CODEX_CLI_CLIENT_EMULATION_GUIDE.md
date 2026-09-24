@@ -1812,6 +1812,9 @@ seal 已写但 build receipt／VC-4 checkpoint 未写时，重跑原命令按原
 `check-egress-spec`；源码、依赖、工具链、基础镜像或门禁需求变化时全部重跑。旧收据没有完整输入证明时也全部重跑。
 复用通过绑定当前 Candidate 的显式承接收据登记 `reused_from=r<N>` 和 execute／reuse 集合，逐级重放原始测试收据，
 不会把旧日志改名为本轮执行。镜像、Docker context、前端 dist 装配和零网络 capability 检查仍实际执行。
+构建收据的只读读取（status／replay、作废快照与驱动读取字段）只核对收据内的输入摘要，不读取实现测试证据根，
+证据根迁移或清理后仍可读；`record-candidate-build` 与 `accept` 入口重新读取证据根，核对实现测试收据绑定本构建的
+完整输入与当前 Candidate，缺失或不符即拒绝。缺少四份机器收据的历史 v1 候选同样可以作废。
 
 ### 4.4.3 Candidate 身份冻结与 VC-5 交接
 

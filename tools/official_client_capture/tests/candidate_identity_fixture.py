@@ -458,7 +458,9 @@ class CandidateIdentityFixture:
         output.chmod(0o644)
         return output
 
-    def record_build(self, campaign_dir: Path, manifest: Mapping[str, Any], *, build_parameters: Path, implementation_root: Path, implementation_receipt: Path) -> dict[str, Any]:
+    def record_build(self, campaign_dir: Path, manifest: Mapping[str, Any], *, build_parameters: Path, implementation_root: Path, implementation_receipt: Path, build_id: str | None = None) -> dict[str, Any]:
+        """以正式入口登记构建；``build_id`` 省略时使用本夹具固定的构建标识。"""
+
         from tools.official_client_capture import codex_upgrade
 
         assert self.image_id and self.runtime_image and self.current_commit
@@ -469,7 +471,7 @@ class CandidateIdentityFixture:
                 candidate_purpose=manifest["campaign_purpose"],
                 deployed_version=manifest["target_version"],
                 target_architecture=TARGET_ARCHITECTURE,
-                build_id=f"build-eval-{self.nonce}",
+                build_id=build_id or f"build-eval-{self.nonce}",
                 runtime_image=self.runtime_image,
                 candidate_image_id=self.image_id,
                 candidate_source=self.source.resolve(),

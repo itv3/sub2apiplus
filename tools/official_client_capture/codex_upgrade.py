@@ -18758,9 +18758,10 @@ def _candidate_identity_snapshot(
         if isinstance(image_id, str) and image_id:
             snapshot["image_id"] = image_id
         snapshot["build_receipt_sha256"] = file_sha256(build_path)
-        # 有完整构建收据时先复核自摘要；不重启已作废镜像，也不修改历史证据。
+        # 有完整构建收据时先复核自摘要；不重启已作废镜像，也不修改历史证据。作废只读取身份字段，
+        # 缺少四份机器收据的历史 v1 构建收据同样可以作废。
         try:
-            receipt = codex_upgrade_vc_artifacts.validate_candidate_build_receipt(receipt)
+            receipt = codex_upgrade_vc_artifacts.validate_candidate_build_receipt(receipt, allow_legacy=True)
         except codex_upgrade_vc_artifacts.VCArtifactError as error:
             raise ConfigurationError(f"旧候选构建收据不可信：{error}") from error
         snapshot["binary_sha256"] = receipt["binary"]["sha256"]
@@ -54876,6 +54877,11 @@ def accept_campaign(
             != identity.get("build_receipt_digest")
         ):
             raise ConfigurationError("Candidate 阶段与 VC-4 构建收据绑定不一致。")
+        # accept 入口：正式验收前重新读取实现测试证据根，核对其绑定本构建完整输入与当前 Candidate。
+        try:
+            codex_upgrade_vc_artifacts.verify_candidate_build_implementation_evidence(build_receipt)
+        except codex_upgrade_vc_artifacts.VCArtifactError as error:
+            raise ConfigurationError(f"验收前实现测试证据核对失败：{error}") from error
     attempt, receipt_root, client_checkpoint_at = (
         _candidate_stage_receipt_boundary(campaign_dir, candidate)
     )

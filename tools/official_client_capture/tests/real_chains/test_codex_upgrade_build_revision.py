@@ -174,6 +174,14 @@ class BuildRevisionRealChainTests(_ChainMixin, unittest.TestCase):
             before = checkpoint.read_bytes()
             self.assertEqual(record()["receipt_digest"], result["receipt_digest"])
             self.assertEqual(checkpoint.read_bytes(), before)
+            # 负例：同一候选只改 --build-id 再登记。构建标识进入 seal 绑定的构建收据摘要，seal 先于收据核对，
+            # 必须拒绝，且已登记的构建收据、seal 与 VC-4 checkpoint 字节不变。
+            receipt_path = Path(result["build_receipt"])
+            frozen = {path: path.read_bytes() for path in (receipt_path, seal_path, checkpoint)}
+            with self.assertRaisesRegex(upgrade.ConfigurationError, "已经存在且内容不一致"):
+                new.record_build(campaign, manifest, build_parameters=parameters_path, implementation_root=evidence,
+                                 implementation_receipt=evidence / "receipt.json", build_id=f"build-eval-{new.nonce}-other")
+            self.assertEqual({path: path.read_bytes() for path in frozen}, frozen)
             # 正式读侧仍要求当前 Candidate，并且重跑镜像／context／dist 装配校验。
             upgrade._replay_candidate_build_receipt(campaign, manifest, R2, Path(result["build_receipt"]))
             continued, code = self._dispatch(fixture, root, "VC-5", next_sequence + 3, tag="r2-image-pass")

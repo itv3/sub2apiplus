@@ -175,6 +175,66 @@ class BuildRevisionTests(unittest.TestCase):
         with self.assertRaisesRegex(receipts.VCReceiptError, "作废时冻结"):
             receipts.plan_implementation_reuse(self.target_path, self.inputs)
 
+    def test_read_only_validation_survives_moved_evidence_root_but_entries_verify_it(self):
+        """只读校验与作废快照不读实现测试证据根；record 与 accept 入口的显式核对在证据根缺失时拒绝。"""
+
+        moved = self.source_root.with_name("tests-r1-moved")
+        self.source_root.rename(moved)
+        self.addCleanup(lambda: moved.exists() and moved.rename(self.source_root))
+        self.assertEqual(artifacts.validate_candidate_build_receipt(self.previous_build), self.previous_build)
+        snapshot = upgrade._candidate_identity_snapshot(self.campaign, self.candidate, None)
+        self.assertEqual(snapshot["build_receipt_sha256"], receipts.file_sha256(self.build_path))
+        with self.assertRaisesRegex(artifacts.VCArtifactError, "实现测试输入绑定未通过"):
+            artifacts.verify_candidate_build_implementation_evidence(self.previous_build)
+        moved.rename(self.source_root)
+        implementation = artifacts.verify_candidate_build_implementation_evidence(self.previous_build)
+        self.assertEqual(implementation["receipt_digest"], self.original["receipt_digest"])
+
+    def test_entry_verification_rejects_implementation_receipt_of_another_candidate(self):
+        """实现测试收据属于别的 Candidate 时，只读校验照常通过，入口核对拒绝。"""
+
+        other = json.loads(json.dumps(self.previous_build))
+        other["candidate_id"] = "candidate-other"
+        other = artifacts.validate_candidate_build_receipt(resign(other, "receipt_digest"))
+        with self.assertRaisesRegex(artifacts.VCArtifactError, "身份不一致"):
+            artifacts.verify_candidate_build_implementation_evidence(other)
+
+    def test_replay_rejects_tampered_reuse_declaration(self):
+        """封存只校验事实结构；篡改过的承接声明能被封存，但重放按真实输入重算后必须拒绝。"""
+
+        for field in ("reused_from", "source_build_receipt"):
+            with self.subTest(field=field):
+                root = self.root / f"tests-tampered-{field.replace('_', '-')}"
+                root.mkdir(mode=0o700)
+                facts = receipts.build_reused_implementation_facts(self.target_path, self.inputs)
+                reuse = facts["assertions"]["reuse"]
+                if field == "reused_from":
+                    reuse["reused_from"] = "r3"
+                else:
+                    reuse["source_build_receipt"] = {**reuse["source_build_receipt"], "sha256": "e" * 64}
+                if facts["evidence"]:
+                    (root / "logs").mkdir(exist_ok=True)
+                    (root / "logs/implementation.log").write_text("当前目标平台隔离测试通过\n")
+                write(root / "facts.json", facts)
+                receipts.finalize(root, "facts.json", "receipt.json")
+                with self.assertRaisesRegex(receipts.VCReceiptError, "复用声明"):
+                    receipts.replay(root, "receipt.json")
+
+    def test_legacy_v1_candidate_can_be_invalidated(self):
+        """缺少四份机器收据的历史 v1 构建收据只读取身份字段，作废快照必须可取得。"""
+
+        legacy = artifact_tests.CodexUpgradeVCArtifactsTests()._candidate_build_receipt()
+        legacy["candidate_id"] = "candidate-legacy-v1"
+        legacy["schema_version"] = artifacts.LEGACY_CANDIDATE_BUILD_SCHEMA
+        for field in ("build_inventory", "frontend_provenance", "image_inspection", "capability_probe"):
+            legacy.pop(field)
+        legacy = resign(legacy, "receipt_digest")
+        path = write(self.campaign / "candidates" / "candidate-legacy-v1" / "build-receipt.json", legacy)
+        snapshot = upgrade._candidate_identity_snapshot(self.campaign, "candidate-legacy-v1", None)
+        self.assertEqual(snapshot["build_receipt_sha256"], receipts.file_sha256(path))
+        self.assertEqual(snapshot["binary_sha256"], legacy["binary"]["sha256"])
+        self.assertEqual(snapshot["image_digest"], legacy["image"]["manifest_digest"])
+
     def test_build_input_binding_cannot_be_replaced_with_different_inputs(self):
         current = {**self.inputs, "parameters_sha256": "f" * 64}
         with self.assertRaisesRegex(receipts.VCReceiptError, "完整输入"):
