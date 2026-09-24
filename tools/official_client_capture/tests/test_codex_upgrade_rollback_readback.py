@@ -286,7 +286,7 @@ class DeadlineControlRollbackReadbackTests(unittest.TestCase):
             timing.create_ledger(root, upgrade_id="upgrade-r8-rollback", baseline_version="0.154.0",
                                  target_version="0.156.1", campaign_purpose="validation_only",
                                  evidence_decision="recapture", started_at_utc={self.at(0)!r},
-                                 stage_budgets_minutes={{phase: 1 for phase in timing.PHASE_ORDER}})
+                                 stage_budgets_minutes={{phase: 1 if phase == "VC-1" else 5 for phase in timing.PHASE_ORDER}})
             timing.append_event(root, event_id="vc0-completed", phase="VC-0", event_type="stage_completed",
                                 next_action="启动 VC-1", recorded_at_utc={self.at(1)!r})
             timing.append_event(root, event_id="vc1-started", phase="VC-1", event_type="stage_started",
@@ -299,7 +299,7 @@ class DeadlineControlRollbackReadbackTests(unittest.TestCase):
         legacy_replay = self._rollback(*replay_args)
         self.assertEqual(legacy_replay.returncode, 0, legacy_replay.stderr)
 
-        # 当前工具按 R8 登记阶段层到期暂停（VC-1 阶段预算 1 分钟，早已到期）。
+        # 当前工具按 R8 登记阶段层到期暂停（VC-1 阶段预算 1 分钟，早已到期；基线工具会把同一到期判为停线）。
         timing_ledger.append_event(ledger, event_id="vc1-deadline-paused", phase="VC-1", event_type="deadline_paused",
                                    deadline_control={"scopes": ["stage"], "paused_since_utc": self.at(3)},
                                    next_action="deadline-extend preview/apply 或 campaign-abandon")
@@ -307,7 +307,8 @@ class DeadlineControlRollbackReadbackTests(unittest.TestCase):
         before = ledger_snapshot(ledger)
         status = self._rollback("-m", TIMING_LEDGER_MODULE, "status", "--ledger-dir", str(ledger))
         self.assertEqual(status.returncode, 1, status.stdout)
-        self.assertIn("event_type 非法", status.stderr)
+        # 基线工具在第一条 R8 事件（第 4 条）处拒绝：新增的 deadline_control 字段或事件类型都不在它的闭集内。
+        self.assertRegex(status.stderr, "event 4 (字段不闭合|phase 或 event_type 非法)")
         replay = self._rollback(*replay_args)
         self.assertEqual((replay.returncode, replay.stdout), (0, legacy_replay.stdout), replay.stderr)
         self.assertEqual(ledger_snapshot(ledger), before)
