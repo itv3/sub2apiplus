@@ -27893,6 +27893,28 @@ def _official_evidence_reuse_attempt_source(
     return source_dir.resolve(strict=True), source_root, source_attempt, receipt
 
 
+# 续作身份不比较的运行控制参数：墙钟上限与心跳间隔只决定本次命令的执行租约，不影响导入内容与证据。
+# 因墙钟上限中断后，可以放宽上限用同一目录续作，而不必新建 Campaign。
+OFFICIAL_REUSE_RUN_CONTROL_ARGUMENTS = frozenset({"max_wall_seconds", "heartbeat_seconds"})
+
+
+def _official_reuse_request_identity(request: Any) -> Any:
+    """续作比较用的请求身份：去掉运行控制参数，其余参数与输入文件字节逐字段比较。
+
+    写入的续作绑定仍保存完整请求；比较时两侧同样投影，旧绑定无需迁移。
+    """
+
+    if not isinstance(request, Mapping) or not isinstance(request.get("arguments"), Mapping):
+        return request
+    return {
+        **request,
+        "arguments": {
+            key: value for key, value in request["arguments"].items()
+            if key not in OFFICIAL_REUSE_RUN_CONTROL_ARGUMENTS
+        },
+    }
+
+
 def _official_reuse_request(arguments: argparse.Namespace) -> dict[str, Any]:
     """冻结完整导入参数与输入文件字节；账本 head 和重验时刻不属于请求身份。"""
 
@@ -28072,7 +28094,8 @@ def _resume_official_reuse(arguments: argparse.Namespace) -> dict[str, Any]:
             set(unsigned) != {"schema_version", "request", "published_files"}
             or receipt.get("schema_version") != "codex-upgrade-official-reuse-resume/v1"
             or _fingerprint(unsigned) != digest
-            or receipt.get("request") != _official_reuse_request(arguments)
+            or _official_reuse_request_identity(receipt.get("request"))
+            != _official_reuse_request_identity(_official_reuse_request(arguments))
             or not isinstance(receipt.get("published_files"), list)
             or not receipt["published_files"]
         ):

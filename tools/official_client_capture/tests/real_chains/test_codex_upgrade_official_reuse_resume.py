@@ -226,6 +226,25 @@ class OfficialReuseResumeTests(unittest.TestCase):
             self.assertEqual(self.case._tree_digests(target), tampered)
             self.assertEqual(self.case._tree_digests(ledger), events)
 
+    def test_reentry_may_change_only_run_control_limits(self):
+        """墙钟上限与心跳间隔只控制本次运行；放宽后用同一目录续作被接受，且不改写任何产物与事件。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            _, target, ledger, argv = self._sealed_fixture(root)
+            self._run(argv)
+            with upgrade.codex_upgrade_supervisor._timing_closeout_lock(ledger):
+                pass
+            before = self.case._tree_digests(target)
+            events = self.case._tree_digests(ledger)
+            project_before = self._project_head(root)
+            result = self._run([*argv, "--max-wall-seconds", "7200", "--heartbeat-seconds", "5"])
+            self.assertEqual(result["official_imported"], True)
+            self.assertEqual(result["live_request_count"], 0)
+            self.assertEqual(self.case._tree_digests(target), before)
+            self.assertEqual(self.case._tree_digests(ledger), events)
+            self.assertEqual(self._project_head(root), project_before)
+
     def _project_head(self, root):
         """总账的事件序号、头摘要与已注册 Campaign，用于证明没有发生注册。"""
 
