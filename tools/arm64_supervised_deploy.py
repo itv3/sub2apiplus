@@ -200,7 +200,7 @@ from urllib.parse import urlsplit
 # 回滚验证 → 退休；监督器 post-run-tooling 闭集按冻结判定接纳 VC-6 三项，使退休动作失败仍归可恢复类。
 # 受管工具树与监督器随之变化；断言预处理器未变。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "0c044bef103a2d38fe965c522126267e0a6a296577128a9a62b921124c6acc59"
+    "98a0b5c86e936a282f5295cb98a076033ca7f2dccad4976bbfe823c856701e8b"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "c8020cadd3ee08f67236313a0913dbc3730805b46c3f6b720cdf7ace77f9fec1"
@@ -505,10 +505,50 @@ class EgressKernelMaps:
         self.update("leases", struct.pack("=QI4s", cgroup_id, ifindex, socket.inet_aton(source_ipv4)),
                     struct.pack("=QII", expires_at_ns, mark, int(probe_only)))
 
-    def probe(self, address: str) -> None:
-        import socket
+    def keys(self, name: str, key_size: int) -> list[bytes]:
+        """只读枚举已固定表的全部键，供守护按内核中的实际状态对账。"""
 
-        self.update("probes", socket.inet_aton(address), struct.pack("=I", 1))
+        self.library.bpf_map_get_next_key.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p]
+        self.library.bpf_map_get_next_key.restype = ctypes.c_int
+        descriptor = self._descriptor(name)
+        try:
+            found: list[bytes] = []
+            current: Any = None
+            while True:
+                following = ctypes.create_string_buffer(key_size)
+                if self.library.bpf_map_get_next_key(descriptor, current, following) != 0:
+                    if ctypes.get_errno() == 2:
+                        return found
+                    raise DeploymentError(f"出口内核表枚举失败：{name}，errno={ctypes.get_errno()}")
+                key = following.raw[:key_size]
+                if key in found or len(found) >= 65536:
+                    raise DeploymentError(f"出口内核表枚举未收敛：{name}")
+                found.append(key)
+                current = ctypes.create_string_buffer(key, key_size)
+        finally:
+            os.close(descriptor)
+
+    def sync_probes(self, addresses: set[str]) -> dict[str, int]:
+        """探针目的表与当前解析结果对账：先删除不在当前集合的旧地址，再写入当前地址。
+
+        BPF 表没有 nft 集合那样的元素超时；只写不删会随探针域名 IP 轮换累积到上限，之后每轮写入
+        失败、业务永久闭锁。守护重启会接管已固定的旧表，因此以内核中的实际键为准，不依赖进程内记忆。
+        """
+
+        desired = {socket.inet_aton(address) for address in addresses}
+        stale = [key for key in self.keys("probes", 4) if key not in desired]
+        if stale:
+            descriptor = self._descriptor("probes")
+            try:
+                for key in stale:
+                    result = self.library.bpf_map_delete_elem(descriptor, ctypes.create_string_buffer(key, 4))
+                    if result and ctypes.get_errno() != 2:
+                        raise DeploymentError("出口探针表旧地址删除失败")
+            finally:
+                os.close(descriptor)
+        for key in sorted(desired):
+            self.update("probes", key, struct.pack("=I", 1))
+        return {"removed": len(stale), "current": len(desired)}
 
     def revoke(self, cgroup_id: int, ifindex: int, source_ipv4: str) -> None:
         """故障时立即删除精确放行键；守护消失时仍由内核租期提供兜底。"""
@@ -1157,13 +1197,15 @@ class EgressGuard:
             self.revoke(self.inventory)
             raise DeploymentError("出口守护一轮核验超过内核租期，不得签发迟到状态")
         marks = egress_service_marks(self.policy)
+        # 探针目的表按当前解析结果对账；共享保护失效时清空（此时全部服务已闭锁）。
+        current_probes = set(self.probes.values()) if shared else set()
+        for maps in self.maps.values():
+            maps.sync_probes(current_probes)
         for name, service in self.inventory.get("services", {}).items():
             if states[name] == "blocked":
                 continue
             maps = self.maps[service["parent"]]
             probing = states[name] == "probing"
-            for address in self.probes.values():
-                maps.probe(address)
             for binding in service["bindings"]:
                 maps.lease(service["cgroup_id"], binding["ifindex"], binding["source_ipv4"], expires_at_ns=expiry,
                            mark=marks[name] | (0x10000 if probing else 0), probe_only=probing)
@@ -1845,6 +1887,37 @@ def verify_scenario_source_spec(
     }
 
 
+# 部署后冒烟：枚举容器内全部已安装的 Codex 客户端逐个执行 --version，不写死某一版本，
+# 升级收口、旧版本退役后下一次部署无需修改工具。
+CODEX_BINARY_PROBE = (
+    "import glob,json,re,subprocess\n"
+    "rows=[]\n"
+    "for path in sorted(glob.glob('/opt/codex-*/bin/codex')):\n"
+    "    match=re.fullmatch(r'/opt/codex-((?:0|[1-9][0-9]*)[.](?:0|[1-9][0-9]*)[.](?:0|[1-9][0-9]*))/bin/codex',path)\n"
+    "    done=subprocess.run([path,'--version'],capture_output=True,text=True,timeout=30)\n"
+    "    rows.append({'path':path,'version':match.group(1) if match else None,'returncode':done.returncode,'stdout':done.stdout.strip()[:200]})\n"
+    "print(json.dumps(rows))\n"
+)
+
+
+def verify_container_codex_binaries(output: str) -> list[dict[str, str]]:
+    """至少一个客户端，且每个二进制都能执行并自报与安装目录一致的版本。"""
+
+    try:
+        rows = json.loads(output)
+    except json.JSONDecodeError as error:
+        raise DeploymentError("容器内 Codex 客户端清单无法解析。") from error
+    if not isinstance(rows, list) or not rows:
+        raise DeploymentError("容器内没有可用的 Codex 客户端。")
+    verified: list[dict[str, str]] = []
+    for row in rows:
+        if (not isinstance(row, dict) or not isinstance(row.get("version"), str) or row.get("returncode") != 0
+                or not isinstance(row.get("stdout"), str) or row["version"] not in row["stdout"].split()):
+            raise DeploymentError(f"容器内 Codex 客户端不可执行或版本不符：{row.get('path') if isinstance(row, dict) else row}")
+        verified.append({"path": str(row["path"]), "version": row["version"]})
+    return verified
+
+
 PRE_A3_CERTIFICATION_MODULE = "codex_upgrade_pre_a3_certification.py"
 MANAGED_TEST_MODULE_PREFIX = "tools.official_client_capture."
 
@@ -2499,11 +2572,8 @@ def _preflight(
         ),
         "sub2apiplus",
     )
-    rules = run_checked(client, "enable:inspect-policy", ["ip", "-4", "rule", "show"])
-    routes = run_checked(client, "enable:inspect-route", ["ip", "-4", "route", "show", "table", "51830"])
-    if "172.30.0.10" not in rules or "172.25.0.3" not in rules or "default dev wg1" not in routes:
-        raise DeploymentError("固定 BWG 出口路由策略不完整。")
-    wireguard = verify_runtime_egress()
+    # 出口路径只按受限运维策略与持续守护的实时状态核验，不再比对固定服务商、隧道接口或路由表。
+    runtime_egress = verify_runtime_egress()
     repository_docs = staging_root / "docs" / "repository-docs"
     if repository_docs.is_symlink() or not repository_docs.is_dir():
         raise DeploymentError("暂存文档归档目录不存在或不可信。")
@@ -2542,8 +2612,8 @@ def _preflight(
         "staging_assertion_preparer_sha256": expected_assertion_preparer_digest,
         "capture_ip": capture_network,
         "service_ip": service_network,
-        "network_policy": "fixed-bwg",
-        "wireguard": wireguard,
+        "network_policy": "runtime-egress-policy",
+        "runtime_egress": runtime_egress,
         "document_sha256": document_sha256,
         "runtime_document_bindings": runtime_document_bindings,
         "scenario_source_spec": source_spec,
@@ -2909,7 +2979,7 @@ def _post_switch_verify(
         production_doc_root.parent,
         production,
     )
-    wireguard = verify_runtime_egress()
+    runtime_egress = verify_runtime_egress()
     run_checked(
         client,
         "enable:compile-production-supervisor",
@@ -2943,10 +3013,12 @@ def _post_switch_verify(
         raise DeploymentError("容器内工具校验输出无法解析。") from error
     if not isinstance(container_payload, dict) or container_payload.get("uid") != 0 or container_payload.get("gid") != 0 or int(container_payload.get("mode", 0)) & 0o022:
         raise DeploymentError("容器内抓包执行源属主或权限不安全。")
-    run_checked(
-        client,
-        "enable:verify-0154-binary",
-        ["docker", "exec", "capture-cli", "/opt/codex-0.154.0/bin/codex", "--version"],
+    codex_binaries = verify_container_codex_binaries(
+        run_checked(
+            client,
+            "enable:verify-codex-binaries",
+            ["docker", "exec", "capture-cli", "python3", "-c", CODEX_BINARY_PROBE],
+        )
     )
     return {
         "production_file_count": count,
@@ -2954,7 +3026,8 @@ def _post_switch_verify(
         "production_assertion_preparer_sha256": expected_assertion_preparer_digest,
         "container_capture_sha256": container_payload.get("sha256"),
         "supervisor_help_bytes": len(version.encode("utf-8")),
-        "wireguard": wireguard,
+        "runtime_egress": runtime_egress,
+        "codex_binaries": codex_binaries,
         "document_sha256": document_sha256,
         "runtime_document_bindings": runtime_document_bindings,
         "scenario_source_spec": source_spec,

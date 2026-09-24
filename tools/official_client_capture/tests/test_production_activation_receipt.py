@@ -24,12 +24,16 @@ class ProductionActivationReceiptTests(unittest.TestCase):
         self.candidate_source_tree = "8" * 64
         self.candidate_image = f"sha256:{'9' * 64}"
         self.candidate_image_reference = f"registry/candidate@{self.candidate_image}"
-        self.environment_patcher = mock.patch.object(
-            gate_receipt.codex_upgrade_arm64_environment_receipt,
-            "replay",
-            side_effect=self._replay_environment,
-        )
-        self.environment_patcher.start()
+        # 门禁收据的环境收据是零请求合成替身：replay 返回固定连续性摘要，等价投影按同一摘要
+        # 比较；真实 v8 投影由环境收据专项测试覆盖。先注册清理再启动，setUp 中途失败也不泄漏替身。
+        for patcher in (
+            mock.patch.object(gate_receipt.codex_upgrade_arm64_environment_receipt, "replay",
+                              side_effect=self._replay_environment),
+            mock.patch.object(gate_receipt.codex_upgrade_arm64_environment_receipt, "receipt_equivalence_sha256",
+                              side_effect=lambda _root, receipt: receipt["continuity_identity_sha256"]),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
         self.acceptance = self._write(
             "inputs/acceptance.json",
             {
@@ -58,7 +62,6 @@ class ProductionActivationReceiptTests(unittest.TestCase):
         self._write("facts.json", self.facts)
 
     def tearDown(self) -> None:
-        self.environment_patcher.stop()
         self.temporary.cleanup()
 
     @staticmethod

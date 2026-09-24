@@ -113,8 +113,12 @@ EXPECTED_TCPMSS_SOURCES = ("172.25.0.3/32", "172.30.0.0/16")
 EXPECTED_TCPMSS_DESTINATIONS = EXPECTED_TCPMSS_SOURCES
 EXPECTED_TCPMSS_MATCH_RANGE = f"{EXPECTED_TCP_MSS + 1}:65535"
 RUST_TLS_PROBE_CONTAINER = "capture-cli"
-RUST_TLS_PROBE_BINARY = "/opt/codex-0.154.0/bin/codex"
-RUST_TLS_PROBE_CODEX_VERSION = "0.154.0"
+# v6～v7 合同冻结的 0.154.0 探针目标，只供历史收据按原 producer 重放；v8 起探针目标由采集
+# 参数给出本轮目标版本，二进制路径按固定模板派生，工具不随客户端版本修改。
+LEGACY_RUST_TLS_PROBE_BINARY = "/opt/codex-0.154.0/bin/codex"
+LEGACY_RUST_TLS_PROBE_CODEX_VERSION = "0.154.0"
+RUST_TLS_PROBE_BINARY_TEMPLATE = "/opt/codex-{codex_version}/bin/codex"
+CODEX_VERSION_RE = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 RUST_TLS_PROBE_HOST_RUNTIME_ROOT = Path("/root/docker/capture-cli/data/runtime")
 RUST_TLS_PROBE_CONTAINER_RUNTIME_ROOT = PurePosixPath("/capture/runtime")
 RUST_TLS_PROBE_TIMEOUT_SECONDS = 30
@@ -476,21 +480,35 @@ def validate_egress_status(
     return value
 
 
+def _checked_runtime_egress(
+    policy_path: Path = EGRESS_POLICY_PATH, status_path: Path = EGRESS_STATUS_PATH,
+) -> tuple[dict[str, Any], datetime]:
+    """读取当前策略与守护状态，并用读取之后的同一时刻完成实时校验；返回准入值与校验时刻。
+
+    事实采集把这一时刻原样写成 ``observed_at_utc``，重放时按完全相同的时刻复算状态年龄与
+    观测时效，避免"实时通过、重放因晚取时间而判过期"的边界不一致。
+    """
+
+    try:
+        policy = load_egress_policy(policy_path)
+        status = _read_egress_runtime_json(Path(status_path), private=False)
+        checked_at = datetime.now(timezone.utc)
+        validate_egress_status(
+            policy, status, now_epoch=checked_at.timestamp(), now_monotonic_ns=time.monotonic_ns(),
+            boot_id=Path("/proc/sys/kernel/random/boot_id").read_text(encoding="ascii").strip(),
+        )
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise Arm64EnvironmentReceiptError(f"运行时出口准入拒绝：{error}") from error
+    return {"policy": policy, "policy_sha256": status["policy_sha256"], "runtime": status}, checked_at
+
+
 def require_runtime_egress(
     policy_path: Path = EGRESS_POLICY_PATH, status_path: Path = EGRESS_STATUS_PATH,
 ) -> dict[str, Any]:
     """每次准入读取持续守护的当前状态；内核租期过期会自行闭锁，旧认证不能替代此检查。"""
 
-    try:
-        policy = load_egress_policy(policy_path)
-        status = _read_egress_runtime_json(Path(status_path), private=False)
-        validate_egress_status(
-            policy, status, now_epoch=time.time(), now_monotonic_ns=time.monotonic_ns(),
-            boot_id=Path("/proc/sys/kernel/random/boot_id").read_text(encoding="ascii").strip(),
-        )
-    except (OSError, ValueError, KeyError, TypeError) as error:
-        raise Arm64EnvironmentReceiptError(f"运行时出口准入拒绝：{error}") from error
-    return {"policy": policy, "policy_sha256": status["policy_sha256"], "runtime": status}
+    value, _checked_at = _checked_runtime_egress(policy_path, status_path)
+    return value
 
 
 def campaign_requires_runtime_egress(campaign_dir: Path) -> bool:
@@ -727,8 +745,8 @@ def _legacy_v7_contract_sha256() -> str:
                 },
                 "rust_tls_readiness": {
                     "container": RUST_TLS_PROBE_CONTAINER,
-                    "binary": RUST_TLS_PROBE_BINARY,
-                    "codex_version": RUST_TLS_PROBE_CODEX_VERSION,
+                    "binary": LEGACY_RUST_TLS_PROBE_BINARY,
+                    "codex_version": LEGACY_RUST_TLS_PROBE_CODEX_VERSION,
                     "isolated_empty_codex_home": True,
                     "expected_process_exit_code": 1,
                     "expected_overall_status": "fail",
@@ -761,8 +779,9 @@ def contract_sha256() -> str:
         "equivalence_schema": EGRESS_EQUIVALENCE_SCHEMA,
         "tls_readiness": TLS_READINESS_PROBES,
         "tls_readiness_attempts": TLS_READINESS_ATTEMPTS,
-        "rust_tls_readiness": {"container": RUST_TLS_PROBE_CONTAINER, "binary": RUST_TLS_PROBE_BINARY,
-                               "codex_version": RUST_TLS_PROBE_CODEX_VERSION},
+        "rust_tls_readiness": {"container": RUST_TLS_PROBE_CONTAINER,
+                               "binary_template": RUST_TLS_PROBE_BINARY_TEMPLATE,
+                               "codex_version_source": "collect 参数：本轮目标版本"},
         "root_max_used_percent": ROOT_MAX_USED_PERCENT,
         "root_min_available_bytes": ROOT_MIN_AVAILABLE_BYTES,
         "resource_gate_degradable_phase_suffix": RESOURCE_GATE_DEGRADABLE_PHASE_SUFFIX,
@@ -941,8 +960,20 @@ def _tls_readiness_observation(container: str) -> list[dict[str, Any]]:
     return observations
 
 
-def _rust_tls_readiness_observation() -> dict[str, Any]:
-    """用无凭据 Codex 0.154 Doctor 验证实际 Rust TLS 请求路径。"""
+def rust_tls_probe_target(codex_version: str) -> dict[str, str]:
+    """v8 探针目标：本轮目标版本与按固定模板派生的容器内二进制路径。"""
+
+    if not isinstance(codex_version, str) or not CODEX_VERSION_RE.fullmatch(codex_version):
+        raise Arm64EnvironmentReceiptError("Rust TLS 探针目标版本必须是 x.y.z 形式的目标客户端版本")
+    return {
+        "container": RUST_TLS_PROBE_CONTAINER,
+        "binary": RUST_TLS_PROBE_BINARY_TEMPLATE.format(codex_version=codex_version),
+        "codex_version": codex_version,
+    }
+
+
+def _rust_tls_readiness_observation(target: dict[str, str]) -> dict[str, Any]:
+    """用本轮目标版本的无凭据 Codex Doctor 验证实际 Rust TLS 请求路径。"""
 
     runtime_root = RUST_TLS_PROBE_HOST_RUNTIME_ROOT
     if runtime_root.is_symlink() or not runtime_root.is_dir():
@@ -958,7 +989,7 @@ def _rust_tls_readiness_observation() -> dict[str, Any]:
         )
 
     with tempfile.TemporaryDirectory(
-        prefix="codex-0154-doctor-",
+        prefix="codex-doctor-",
         dir=runtime_root,
     ) as temporary_name:
         temporary = Path(temporary_name)
@@ -981,14 +1012,14 @@ def _rust_tls_readiness_observation() -> dict[str, Any]:
                 f"CODEX_HOME={container_home}",
                 f"HOME={container_home}",
                 "PATH=/usr/bin:/bin",
-                RUST_TLS_PROBE_BINARY,
+                target["binary"],
                 "doctor",
                 "--json",
                 "--no-color",
             ],
-            "capture-cli Codex 0.154 Rust TLS 就绪探针",
+            f"capture-cli Codex {target['codex_version']} Rust TLS 就绪探针",
             timeout=RUST_TLS_PROBE_TIMEOUT_SECONDS,
-            operation="arm64:rust-tls:codex-0154-doctor",
+            operation="arm64:rust-tls:codex-doctor",
             allowed_returncodes=frozenset({1}),
         )
         duration_seconds = time.monotonic() - started
@@ -1038,7 +1069,7 @@ def _rust_tls_readiness_observation() -> dict[str, Any]:
         )
     if (
         report.get("schemaVersion") != 1
-        or report.get("codexVersion") != RUST_TLS_PROBE_CODEX_VERSION
+        or report.get("codexVersion") != target["codex_version"]
         or report.get("overallStatus") != "fail"
         or not 0 < duration_seconds <= RUST_TLS_PROBE_TIMEOUT_SECONDS
     ):
@@ -1046,9 +1077,9 @@ def _rust_tls_readiness_observation() -> dict[str, Any]:
             "Codex Rust TLS Doctor 版本、终态或耗时与冻结合同不一致"
         )
     return {
-        "container": RUST_TLS_PROBE_CONTAINER,
-        "binary": RUST_TLS_PROBE_BINARY,
-        "codex_version": RUST_TLS_PROBE_CODEX_VERSION,
+        "container": target["container"],
+        "binary": target["binary"],
+        "codex_version": target["codex_version"],
         "isolated_empty_codex_home": True,
         "process_exit_code": completed.returncode,
         "overall_status": report["overallStatus"],
@@ -1431,12 +1462,16 @@ def _wireguard_observation() -> dict[str, Any]:
     }
 
 
-def _collect_facts(*, phase: str, subject_id: str) -> dict[str, Any]:
-    """只读采集真实抓包拓扑与资源，并在前后核验当前授权出口策略。"""
+def _collect_facts(*, phase: str, subject_id: str, rust_tls_codex_version: str) -> dict[str, Any]:
+    """只读采集真实抓包拓扑与资源，并在前后核验当前授权出口策略。
+
+    Rust TLS 探针使用调用方给出的本轮目标版本；探针目标先于任何宿主读取完成校验。
+    """
 
     if phase not in PHASES:
         raise Arm64EnvironmentReceiptError(f"phase 必须属于 {sorted(PHASES)}")
     _safe_id(subject_id, "subject_id")
+    rust_tls_target = rust_tls_probe_target(rust_tls_codex_version)
     machine = platform.machine().lower()
     if machine not in {"aarch64", "arm64"}:
         raise Arm64EnvironmentReceiptError("本门禁只能在 ARM64 宿主机执行")
@@ -1453,8 +1488,8 @@ def _collect_facts(*, phase: str, subject_id: str) -> dict[str, Any]:
     if not set(CONTAINER_CONTRACTS).issubset(before["policy"]["services"]):
         raise Arm64EnvironmentReceiptError("运行时出口策略未保护升级所需的两个容器")
     containers = [_container_observation(name, runtime_egress=before) for name in sorted(CONTAINER_CONTRACTS)]
-    rust_tls = _rust_tls_readiness_observation()
-    after = require_runtime_egress()
+    rust_tls = _rust_tls_readiness_observation(rust_tls_target)
+    after, checked_at = _checked_runtime_egress()
     if before["policy_sha256"] != after["policy_sha256"] or any(
         item["container_id"] != after["runtime"]["services"][item["name"]]["container_id"] for item in containers
     ):
@@ -1464,7 +1499,7 @@ def _collect_facts(*, phase: str, subject_id: str) -> dict[str, Any]:
         "schema_version": FACTS_SCHEMA,
         "phase": phase,
         "subject_id": subject_id,
-        "observed_at_utc": datetime.now(timezone.utc).isoformat(timespec="microseconds"),
+        "observed_at_utc": checked_at.isoformat(timespec="microseconds"),
         "contract_sha256": contract_sha256(),
         "host": {
             "hostname": socket.gethostname(),
@@ -1493,6 +1528,7 @@ def collect_facts(
     *,
     phase: str,
     subject_id: str,
+    rust_tls_codex_version: str,
     deadline: incremental_recovery.WallClockDeadline | None = None,
     heartbeat: Any | None = None,
 ) -> dict[str, Any]:
@@ -1504,7 +1540,7 @@ def collect_facts(
     _ACTIVE_DEADLINE = deadline
     _ACTIVE_HEARTBEAT = heartbeat
     try:
-        return _collect_facts(phase=phase, subject_id=subject_id)
+        return _collect_facts(phase=phase, subject_id=subject_id, rust_tls_codex_version=rust_tls_codex_version)
     finally:
         _ACTIVE_DEADLINE = previous_deadline
         _ACTIVE_HEARTBEAT = previous_heartbeat
@@ -1666,8 +1702,12 @@ def _validate_container(
     return container
 
 
-def _validate_rust_tls_readiness(value: Any) -> dict[str, Any]:
-    """校验无凭据 Codex Doctor 留下的最小、无秘密 Rust TLS 事实。"""
+def _validate_rust_tls_readiness(value: Any, *, producer_version: str) -> dict[str, Any]:
+    """校验无凭据 Codex Doctor 留下的最小、无秘密 Rust TLS 事实。
+
+    v8 的探针目标来自采集参数（本轮目标版本），此处只核对版本形态与派生路径；v6～v7 历史事实
+    按原合同冻结的 0.154.0 目标重放。
+    """
 
     observation = _expect(
         value,
@@ -1698,10 +1738,15 @@ def _validate_rust_tls_readiness(value: Any) -> dict[str, Any]:
     )
     duration = observation.get("duration_seconds")
     report_bytes = observation.get("report_bytes")
+    if producer_version == PRODUCER_VERSION:
+        expected_target = rust_tls_probe_target(observation.get("codex_version"))
+    else:
+        expected_target = {"container": RUST_TLS_PROBE_CONTAINER, "binary": LEGACY_RUST_TLS_PROBE_BINARY,
+                           "codex_version": LEGACY_RUST_TLS_PROBE_CODEX_VERSION}
     if (
-        observation.get("container") != RUST_TLS_PROBE_CONTAINER
-        or observation.get("binary") != RUST_TLS_PROBE_BINARY
-        or observation.get("codex_version") != RUST_TLS_PROBE_CODEX_VERSION
+        observation.get("container") != expected_target["container"]
+        or observation.get("binary") != expected_target["binary"]
+        or observation.get("codex_version") != expected_target["codex_version"]
         or observation.get("isolated_empty_codex_home") is not True
         or observation.get("process_exit_code") != 1
         or observation.get("overall_status") != "fail"
@@ -1843,7 +1888,7 @@ def validate_facts(
         for item, name in zip(containers, expected_names, strict=True)
     ]
     if producer_version in RUST_TLS_READINESS_PRODUCER_VERSIONS:
-        _validate_rust_tls_readiness(facts.get("rust_tls_readiness"))
+        _validate_rust_tls_readiness(facts.get("rust_tls_readiness"), producer_version=producer_version)
     wireguard: dict[str, Any] | None = None
     if producer_version == "3":
         wireguard = _expect(
@@ -2105,6 +2150,10 @@ def _build_receipt(
             "policy_sha256": facts["runtime_egress"]["policy_sha256"],
             "status_sha256": _sha256_bytes(_canonical(facts["runtime_egress"]["runtime"])),
         }
+        receipt["rust_tls_probe"] = {
+            "binary": facts["rust_tls_readiness"]["binary"],
+            "codex_version": facts["rust_tls_readiness"]["codex_version"],
+        }
     return receipt
 
 
@@ -2120,6 +2169,7 @@ def collect(
     *,
     phase: str,
     subject_id: str,
+    rust_tls_codex_version: str,
     deadline: incremental_recovery.WallClockDeadline | None = None,
     heartbeat: Any | None = None,
 ) -> dict[str, Any]:
@@ -2128,6 +2178,7 @@ def collect(
     facts = collect_facts(
         phase=phase,
         subject_id=subject_id,
+        rust_tls_codex_version=rust_tls_codex_version,
         deadline=deadline,
         heartbeat=heartbeat,
     )
@@ -2199,6 +2250,8 @@ def build_parser() -> argparse.ArgumentParser:
     collect_parser.add_argument("--output", required=True)
     collect_parser.add_argument("--phase", choices=sorted(PHASES), required=True)
     collect_parser.add_argument("--subject-id", required=True)
+    collect_parser.add_argument("--rust-tls-codex-version", required=True,
+                                help="Rust TLS 就绪探针使用的本轮目标客户端版本（x.y.z）")
     finalize_parser = commands.add_parser("finalize", help="封存 ARM64 环境收据")
     finalize_parser.add_argument("--evidence-root", type=Path, required=True)
     finalize_parser.add_argument("--facts", required=True)
@@ -2224,6 +2277,7 @@ def main(argv: list[str] | None = None) -> int:
                 arguments.output,
                 phase=arguments.phase,
                 subject_id=arguments.subject_id,
+                rust_tls_codex_version=arguments.rust_tls_codex_version,
             )
         elif arguments.command == "finalize":
             result = finalize(

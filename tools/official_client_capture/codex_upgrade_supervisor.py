@@ -10258,6 +10258,18 @@ def _egress_local_command(arguments: argparse.Namespace) -> list[str]:
     return command
 
 
+def _egress_transition_log_tail(path: Path | None, limit: int = 2000) -> str:
+    """维护失败时附带输出尾部（有界），便于审计失败原因；日志不可读时不影响失败收口。"""
+
+    if path is None:
+        return ""
+    try:
+        text = path.read_bytes()[-limit:].decode("utf-8", "replace").strip()
+    except OSError:
+        return ""
+    return f"；输出尾部：{text}" if text else ""
+
+
 def _egress_transition_command(arguments: argparse.Namespace) -> int:
     """有界执行本地容器维护，再等待普通准入；故障清理可恢复本地配置但不恢复原 run。"""
 
@@ -10299,29 +10311,45 @@ def _egress_transition_command(arguments: argparse.Namespace) -> int:
         if arguments.container not in policy["services"]:
             raise SupervisorError("清理容器不在当前指定出口策略内")
     transition = None
-    if run_dir is not None and not cleanup:
-        transition = {"schema_version": "codex-upgrade-egress-transition/v1", "transition_id": secrets.token_hex(16),
-                      "campaign_id": state["campaign_id"], "owner_nonce": state["owner_nonce"],
-                      "actor_pid": os.getpid(), "start_ticks": _process_start_ticks(os.getpid()),
-                      "started_at_epoch": time.time(), "started_at_monotonic_ns": started_monotonic_ns,
-                      "deadline_monotonic_ns": deadline,
-                      "container": arguments.container, "command_sha256": _sha256(_canonical({"argv": command})),
-                      "policy_sha256": before["policy_sha256"], "before_sha256": _sha256(_canonical(before))}
-        with _state_lock(run_dir):
-            if (run_dir / "egress-transition.json").exists() or (run_dir / "egress-pause.json").exists():
-                raise RuntimeEgressPaused("已有维护操作或暂停，拒绝并行维护")
-            _validate_state_dir(run_dir / "egress-transitions", create=True)
-            _write_json(run_dir / "egress-transitions" / f"{transition['transition_id']}.json", transition, replace=False)
-            _write_json(run_dir / "egress-transition.json", transition, replace=False)
     process, result, after = None, "failed", None
+    # record_written：本进程已写入维护记录；declared：本进程已写入当前维护声明。拒绝并行维护时两者都为
+    # 假，收口既不写暂停也不触碰其他维护进程的声明。
+    record_written = declared = False
+    log_path: Path | None = None
+    log_stream: Any = None
     previous_handler = signal.getsignal(signal.SIGUSR1)
     def interrupt(*_args: Any) -> None:
         raise RuntimeEgressPaused("容器维护收到父监督器清理请求")
+    # 先安装父监督器清理信号处理器，再写不可覆盖的维护声明：两者之间到达的信号同样走下方统一收口，
+    # 不会按默认动作终止进程而遗留无人清理的维护声明。
     signal.signal(signal.SIGUSR1, interrupt)
     try:
+        if run_dir is not None and not cleanup:
+            transition = {"schema_version": "codex-upgrade-egress-transition/v1", "transition_id": secrets.token_hex(16),
+                          "campaign_id": state["campaign_id"], "owner_nonce": state["owner_nonce"],
+                          "actor_pid": os.getpid(), "start_ticks": _process_start_ticks(os.getpid()),
+                          "started_at_epoch": time.time(), "started_at_monotonic_ns": started_monotonic_ns,
+                          "deadline_monotonic_ns": deadline,
+                          "container": arguments.container, "command_sha256": _sha256(_canonical({"argv": command})),
+                          "policy_sha256": before["policy_sha256"], "before_sha256": _sha256(_canonical(before))}
+            with _state_lock(run_dir):
+                if (run_dir / "egress-transition.json").exists() or (run_dir / "egress-pause.json").exists():
+                    raise RuntimeEgressPaused("已有维护操作或暂停，拒绝并行维护")
+                _validate_state_dir(run_dir / "egress-transitions", create=True)
+                _write_json(run_dir / "egress-transitions" / f"{transition['transition_id']}.json", transition, replace=False)
+                record_written = True
+                _write_json(run_dir / "egress-transition.json", transition, replace=False)
+                declared = True
+        if run_dir is not None:
+            # 维护命令输出进入父 run 的维护日志（0600、只写一次），失败原因可审计；日志随父 run 一并归档。
+            log_directory = _validate_state_dir(run_dir / "egress-transitions", create=True)
+            log_path = log_directory / (f"{transition['transition_id']}.log" if transition is not None
+                                        else f"cleanup-{secrets.token_hex(8)}.log")
+            log_stream = os.fdopen(os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600), "wb")
         if time.monotonic_ns() >= deadline:
             raise RuntimeEgressPaused("本地维护派发前原有界等待期限已到")
-        process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, shell=False)
+        process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=log_stream,
+                                   stderr=subprocess.STDOUT if log_stream is not None else None, shell=False)
         while process.poll() is None:
             if time.monotonic_ns() >= deadline:
                 raise RuntimeEgressPaused("容器维护超过有界等待期限")
@@ -10329,7 +10357,7 @@ def _egress_transition_command(arguments: argparse.Namespace) -> int:
                 _check_runtime_egress(run_dir, state, command_pid=os.getpid())
             time.sleep(.1)
         if process.returncode:
-            raise SupervisorError(f"本地容器维护失败，退出码 {process.returncode}")
+            raise SupervisorError(f"本地容器维护失败，退出码 {process.returncode}{_egress_transition_log_tail(log_path)}")
         if not cleanup:
             while True:
                 if time.monotonic_ns() >= deadline:
@@ -10356,11 +10384,13 @@ def _egress_transition_command(arguments: argparse.Namespace) -> int:
                     time.sleep(.1)
         result = "local-cleanup-complete" if cleanup else "passed"
     except BaseException:
-        if run_dir is not None and not cleanup:
+        if run_dir is not None and not cleanup and declared:
             _egress_pause(run_dir, state, "受控容器维护发生出口故障或超时，必须按原恢复协议对账")
         raise
     finally:
         signal.signal(signal.SIGUSR1, signal.SIG_IGN)
+        if log_stream is not None:
+            log_stream.close()
         try:
             if process is not None and process.poll() is None:
                 try:
@@ -10373,7 +10403,7 @@ def _egress_transition_command(arguments: argparse.Namespace) -> int:
                     pass
         finally:
             try:
-                if transition is not None:
+                if transition is not None and record_written:
                     with _state_lock(run_dir):
                         if (run_dir / "egress-pause.json").exists():
                             result = "failed"
@@ -10382,7 +10412,8 @@ def _egress_transition_command(arguments: argparse.Namespace) -> int:
                                   "status": result, "finished_at_epoch": time.time(),
                                   "after_sha256": _sha256(_canonical(after)) if after is not None and result == "passed" else None}
                         _write_json(run_dir / "egress-transitions" / f"{transition['transition_id']}.finish.json", finish, replace=False)
-                        (run_dir / "egress-transition.json").unlink(missing_ok=True)
+                        if declared:
+                            (run_dir / "egress-transition.json").unlink(missing_ok=True)
             finally:
                 signal.signal(signal.SIGUSR1, previous_handler)
     if result == "failed":

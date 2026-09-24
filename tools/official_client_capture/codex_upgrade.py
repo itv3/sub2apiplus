@@ -15875,6 +15875,7 @@ def _close_interrupted_recovery_attempt(
         environment_root / "arm64-after",
         phase="attempt_after",
         subject_id=attempt_root.name,
+        rust_tls_codex_version=str(manifest["target_version"]),
         deadline=deadline,
         heartbeat=lambda operation: active.heartbeat(operation, force=True),
     )
@@ -20699,11 +20700,37 @@ def create_campaign(arguments: argparse.Namespace) -> dict[str, Any]:
     return manifest
 
 
+def _require_current_p0_environment(arguments: argparse.Namespace) -> None:
+    """新建或承接 Campaign 的 P0 环境收据必须由当前 producer 采集，且 Rust TLS 探针使用本轮目标版本。
+
+    已建 Campaign 的控制收据只读重放（``_verify_control_receipts``）继续按原 producer 接受历史收据；
+    这里只约束新的执行准入：旧收据不能证明当前指定出口，也不能替代本轮目标客户端的 TLS 就绪探针。
+    """
+
+    arm_root = Path(arguments.arm64_environment_root)
+    relative = _control_receipt_relative(
+        arm_root, Path(arguments.arm64_environment_receipt), "ARM64 P0 环境收据"
+    )
+    try:
+        receipt = codex_upgrade_arm64_environment_receipt.replay(arm_root, relative)
+    except (OSError, codex_upgrade_arm64_environment_receipt.Arm64EnvironmentReceiptError) as error:
+        raise ConfigurationError(f"ARM64 P0 环境收据未通过：{error}") from error
+    producer = receipt.get("producer")
+    if not isinstance(producer, dict) or producer.get("version") != codex_upgrade_arm64_environment_receipt.PRODUCER_VERSION:
+        raise ConfigurationError(
+            "新建或承接 Campaign 必须使用当前环境 producer 采集的 P0 收据；历史收据只能只读回放。"
+        )
+    probe = receipt.get("rust_tls_probe")
+    if not isinstance(probe, dict) or probe.get("codex_version") != str(arguments.target_version):
+        raise ConfigurationError("P0 环境收据的 Rust TLS 探针版本与本轮目标版本不一致。")
+
+
 def _create_campaign_unadmitted(arguments: argparse.Namespace) -> dict[str, Any]:
     """创建只写一次的 Campaign 核心清单和计划期分析产物。"""
 
     _validate_arguments(arguments)
     control_receipts = _plan_control_receipts(arguments)
+    _require_current_p0_environment(arguments)
     rules = load_rule_manifest(arguments.rule_manifest, arguments.baseline_version)
     jobs, scenario_manifest, target_scenario_manifest = _load_plan_jobs(
         arguments, rules
@@ -23934,6 +23961,7 @@ def _build_control_epoch_successor_controls(
         arm64_environment_receipt=arguments.recovery_arm64_environment_receipt,
     )
     controls = _plan_control_receipts(control_arguments)
+    _require_current_p0_environment(control_arguments)
     _preserve_c0154_vc0_control_receipts(
         campaign_dir,
         manifest,
@@ -25887,6 +25915,7 @@ def _successor_recovery_control_transition(
         ],
     )
     successor_controls = _plan_control_receipts(recovery_arguments)
+    _require_current_p0_environment(recovery_arguments)
     successor_timing = successor_controls["upgrade_timing"]
     if (
         successor_timing["ledger_dir"] == predecessor_timing.get("ledger_dir")
@@ -26893,6 +26922,7 @@ def _sealed_stage_active_controls(
         ],
     )
     current_controls = _plan_control_receipts(current_arguments)
+    _require_current_p0_environment(current_arguments)
     predecessor_timing = effective_controls.get("upgrade_timing")
     predecessor_arm = effective_controls.get("arm64_environment")
     if not isinstance(predecessor_timing, Mapping) or not isinstance(
@@ -39932,7 +39962,13 @@ def _prior_complete_results(
         for item in results:
             if not isinstance(item, dict) or item.get("status") != "complete":
                 continue
-            if not codex_upgrade_supervisor.job_egress_trusted(item):
+            try:
+                egress_trusted = codex_upgrade_supervisor.job_egress_trusted(item)
+            except codex_upgrade_supervisor.SupervisorError as error:
+                raise ConfigurationError(
+                    f"先前 attempt 的 Job 出口时段绑定无法核验（父 run 记录与暂停事实须随 attempt 完整保留）：{error}"
+                ) from error
+            if not egress_trusted:
                 continue
             job_id = item.get("id")
             if not isinstance(job_id, str) or job_id not in expected_jobs:
@@ -41665,10 +41701,11 @@ def _capture_arm64_environment_receipt(
     *,
     phase: str,
     subject_id: str,
+    rust_tls_codex_version: str,
     deadline: incremental_recovery.WallClockDeadline | None = None,
     heartbeat: Any | None = None,
 ) -> tuple[Path, dict[str, Any]]:
-    """只读采集并立即重放一次 ARM64 固定网络与磁盘收据。"""
+    """只读采集并立即重放一次 ARM64 固定网络与磁盘收据；Rust TLS 探针使用本轮目标版本。"""
 
     if deadline is not None:
         deadline.check(f"arm64-receipt:{phase}:start")
@@ -41678,6 +41715,7 @@ def _capture_arm64_environment_receipt(
         "facts.json",
         phase=phase,
         subject_id=subject_id,
+        rust_tls_codex_version=rust_tls_codex_version,
         deadline=deadline,
         heartbeat=heartbeat,
     )
@@ -44600,6 +44638,7 @@ def _run_attempt_recovery_segment(
             environment_root / "arm64-before",
             phase="attempt_before",
             subject_id=f"{attempt_id}.{recovery_revision}",
+            rust_tls_codex_version=str(manifest["target_version"]),
             deadline=deadline,
             heartbeat=heartbeat,
         )
@@ -44672,6 +44711,7 @@ def _run_attempt_recovery_segment(
                     environment_root / "arm64-after",
                     phase="attempt_after",
                     subject_id=f"{attempt_id}.{recovery_revision}",
+                    rust_tls_codex_version=str(manifest["target_version"]),
                     deadline=deadline,
                     heartbeat=heartbeat,
                 )
@@ -46035,6 +46075,7 @@ def _run_capture_attempt(
                 environment_root / "arm64-before",
                 phase="attempt_before",
                 subject_id=attempt_root.name,
+                rust_tls_codex_version=str(manifest["target_version"]),
                 deadline=deadline,
                 heartbeat=lambda operation: _write_attempt_heartbeat(
                     heartbeat_path,
@@ -46224,6 +46265,7 @@ def _run_capture_attempt(
                     environment_root / "arm64-after",
                     phase="attempt_after",
                     subject_id=attempt_root.name,
+                    rust_tls_codex_version=str(manifest["target_version"]),
                     deadline=deadline,
                     heartbeat=lambda operation: _write_attempt_heartbeat(
                         heartbeat_path,

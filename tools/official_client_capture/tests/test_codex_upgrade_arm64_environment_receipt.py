@@ -464,6 +464,9 @@ class Arm64EnvironmentReceiptTests(unittest.TestCase):
         self,
     ) -> None:
         observed_argv: list[str] = []
+        # v8 探针目标来自采集参数：本轮目标版本 0.156.1 派生容器内二进制路径。
+        target = receipt.rust_tls_probe_target("0.156.1")
+        reported_version = "0.156.1"
 
         def doctor(
             argv: list[str],
@@ -478,7 +481,7 @@ class Arm64EnvironmentReceiptTests(unittest.TestCase):
             )
             report = {
                 "schemaVersion": 1,
-                "codexVersion": receipt.RUST_TLS_PROBE_CODEX_VERSION,
+                "codexVersion": reported_version,
                 "overallStatus": "fail",
                 "checks": {
                     "auth.credentials": {
@@ -512,8 +515,20 @@ class Arm64EnvironmentReceiptTests(unittest.TestCase):
                 mock.patch.object(receipt, "_run_completed", side_effect=doctor),
                 mock.patch.object(receipt.time, "monotonic", side_effect=[10.0, 12.5]),
             ):
-                observed = receipt._rust_tls_readiness_observation()
+                observed = receipt._rust_tls_readiness_observation(target)
             self.assertEqual(list(runtime_root.iterdir()), [])
+            # 二进制自报版本与本轮目标不一致时拒绝，不能用旧客户端冒充目标版本的 TLS 就绪。
+            reported_version = "0.154.0"
+            with (
+                mock.patch.object(receipt, "RUST_TLS_PROBE_HOST_RUNTIME_ROOT", runtime_root),
+                mock.patch.object(receipt, "_run_completed", side_effect=doctor),
+                mock.patch.object(receipt.time, "monotonic", side_effect=[10.0, 12.5]),
+                self.assertRaisesRegex(receipt.Arm64EnvironmentReceiptError, "版本"),
+            ):
+                receipt._rust_tls_readiness_observation(target)
+
+        self.assertIn("/opt/codex-0.156.1/bin/codex", observed_argv)
+        self.assertEqual((observed["binary"], observed["codex_version"]), ("/opt/codex-0.156.1/bin/codex", "0.156.1"))
 
         self.assertEqual(observed["process_exit_code"], 1)
         self.assertEqual(observed["duration_seconds"], 2.5)
@@ -530,6 +545,26 @@ class Arm64EnvironmentReceiptTests(unittest.TestCase):
             )
         )
 
+    def test_rust_tls_probe_target_comes_from_collect_argument(self) -> None:
+        """v8 收据记录采集参数给出的目标版本；非法版本在采集前拒绝，历史常量只供 v6～v7 重放。"""
+
+        self.assertEqual(
+            receipt.rust_tls_probe_target("0.156.1"),
+            {"container": "capture-cli", "binary": "/opt/codex-0.156.1/bin/codex", "codex_version": "0.156.1"},
+        )
+        for invalid in ("0.156", "v0.156.1", "0.156.1-alpha", "", None):
+            with self.subTest(version=invalid), self.assertRaisesRegex(receipt.Arm64EnvironmentReceiptError, "Rust TLS"):
+                receipt.rust_tls_probe_target(invalid)
+        self.assertNotIn("0.154.0", json.dumps(receipt.contract_sha256()))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            root.chmod(0o700)
+            path = create_arm_receipt(root, phase="p0", subject_id="upgrade-x", prefix="p0",
+                                      rust_tls_codex_version="0.156.1")
+            built = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(built["rust_tls_probe"], {"binary": "/opt/codex-0.156.1/bin/codex", "codex_version": "0.156.1"})
+            self.assertEqual(receipt.replay(root, path.name), built)
+
     def test_rust_tls_readiness_rejects_missing_network_or_present_credentials(
         self,
     ) -> None:
@@ -543,6 +578,8 @@ class Arm64EnvironmentReceiptTests(unittest.TestCase):
                 ["auth.credentials", "network.provider_reachability"],
             ),
             ("root", "codex_version", "0.151.0"),
+            ("root", "codex_version", "0.156"),
+            ("root", "binary", "/opt/codex-0.156.1/bin/codex"),
         )
         for group, field, value in mutations:
             with self.subTest(field=field), tempfile.TemporaryDirectory() as directory:
@@ -676,6 +713,7 @@ class Arm64EnvironmentReceiptTests(unittest.TestCase):
             if version != "8":
                 payload.pop("environment_equivalence", None)
                 payload.pop("runtime_egress", None)
+                payload.pop("rust_tls_probe", None)
             return payload
 
         self.assertTrue(_schema_accepts(schema, base))
@@ -688,6 +726,11 @@ class Arm64EnvironmentReceiptTests(unittest.TestCase):
         self.assertFalse(_schema_accepts(schema, variant("7", "p0", degraded_gate)))
         self.assertFalse(_schema_accepts(schema, variant("7", "attempt_before", degraded_gate)))
         self.assertFalse(_schema_accepts(schema, variant("5", "p0", passed_gate)))
+        # v8 必须携带 Rust TLS 探针目标摘要；历史 v6～v7 收据不得出现该字段。
+        missing_probe = json.loads(json.dumps(base))
+        missing_probe.pop("rust_tls_probe")
+        self.assertFalse(_schema_accepts(schema, missing_probe))
+        self.assertFalse(_schema_accepts(schema, {**variant("7", "p0", passed_gate), "rust_tls_probe": base["rust_tls_probe"]}))
         # degraded 必须与真实低水位一致：水位正常却声称 degraded，或低水位却声称通过，都不合法。
         self.assertFalse(
             _schema_accepts(schema, variant("7", "attempt_after", {**passed_gate, "passed": False, "degraded": True}))

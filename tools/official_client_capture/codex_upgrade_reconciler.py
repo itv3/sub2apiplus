@@ -106,6 +106,20 @@ class ReconcilerError(ValueError):
     """对账输入不可信、事实互相矛盾或账本／总账拒绝写入。"""
 
 
+def _job_egress_trusted(result: Mapping[str, Any]) -> bool:
+    """Job 出口时段绑定核验；父 run 记录或暂停事实缺失、被改动时明确失败关闭。
+
+    不把无法核验的绑定静默改判为可复用或补跑：父 run、暂停记录与最后可信状态必须随 attempt 完整保留。
+    """
+
+    try:
+        return supervisor.job_egress_trusted(result)
+    except supervisor.SupervisorError as error:
+        raise ReconcilerError(
+            f"Job 出口时段绑定无法核验（父 run 记录与暂停事实须随 attempt 完整保留）：{error}"
+        ) from error
+
+
 # ---------------------------------------------------------------------------
 # 小工具
 # ---------------------------------------------------------------------------
@@ -1052,7 +1066,7 @@ def _classify_jobs(
         execution_ok = (
             isinstance(result, Mapping) and result.get("execution_sha256") == execution[job_id]
         )
-        egress_trusted = supervisor.job_egress_trusted(result) if isinstance(result, Mapping) else False
+        egress_trusted = _job_egress_trusted(result) if isinstance(result, Mapping) else False
         if checkpoint_status == "complete" and result_status == "complete" and execution_ok and egress_trusted:
             state = "complete"
         elif result_status == "failed" or checkpoint_status == "failed":
@@ -1370,7 +1384,7 @@ def segment_reuse_proofs(
                     or source_execution != expected.get(job_id)
                     or checkpoint.get("result_sha256") != incremental_recovery.digest(result)
                     or checkpoint.get("result") != result or (summary and results.get(job_id) != result)
-                    or not supervisor.job_egress_trusted(result)):
+                    or not _job_egress_trusted(result)):
                 continue
             if job_id in inherited and (previous_proofs.get(job_id) != prior.get(job_id) or job_id not in prior):
                 continue

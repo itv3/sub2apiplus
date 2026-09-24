@@ -7,6 +7,7 @@ import json
 import os
 import tempfile
 import unittest
+import unittest.mock
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -230,7 +231,9 @@ class PredispatchStopTests(unittest.TestCase):
                     "ledger_interval_seconds": 0.05,
                 },
             )()
-            returncode, _result = supervisor._campaign_run_command(arguments)
+            # 本例只验证预派发停线对已有父 run 的拒绝；真实出口准入由独立 R15 链验收。
+            with unittest.mock.patch.object(supervisor.arm64_environment, "campaign_requires_runtime_egress", return_value=False):
+                returncode, _result = supervisor._campaign_run_command(arguments)
             self.assertEqual(returncode, 0)
             with self.assertRaisesRegex(stop.PredispatchStopError, "已有父 run"):
                 stop.record(

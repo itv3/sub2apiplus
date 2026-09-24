@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import argparse
 import json
 import os
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -107,6 +109,15 @@ class EgressGuardTests(unittest.TestCase):
         # 路径修好不能复用故障前的观测放行，须重新从每个容器完成独立探针。
         self.assertEqual({item["status"] for item in self.guard.step()["services"].values()}, {"blocked"})
 
+    def test_step_reconciles_probe_table_and_clears_it_on_shared_fault(self):
+        maps = self.guard.maps["sub2api_egress.slice"]
+        self.guard.step()
+        maps.sync_probes.assert_called_with({"1.1.1.1"})
+        maps.probe.assert_not_called()
+        with mock.patch.object(deploy, "egress_remote_status", side_effect=deploy.DeploymentError("隔离故障")):
+            self.guard.step()
+        maps.sync_probes.assert_called_with(set())
+
     def test_probe_resolution_failure_is_retried_without_blocking_lease_loop(self):
         self.guard.next_resolution = 0
         future = Future()
@@ -166,13 +177,144 @@ class EgressGuardTests(unittest.TestCase):
         self.assertFalse(self.guard.status_path.exists())
 
 
+class _FakeLibbpf:
+    """模拟 libbpf 对已固定 HASH 表的读写、删除与迭代；fd 使用真实 /dev/null 句柄以便正常关闭。"""
+
+    def __init__(self, keys):
+        import ctypes
+
+        self._ctypes = ctypes
+        self.table = {key: (1).to_bytes(4, "little") for key in keys}
+
+        def obj_get(_path):
+            return os.open(os.devnull, os.O_RDONLY)
+
+        def get_next_key(_fd, current, following):
+            ordered = sorted(self.table)
+            if current is None:
+                candidates = ordered
+            else:
+                key = bytes(current)[:4]
+                candidates = [item for item in ordered if item > key]
+            if not candidates:
+                ctypes.set_errno(2)
+                return -2
+            ctypes.memmove(following, candidates[0], 4)
+            return 0
+
+        def delete(_fd, key):
+            self.table.pop(bytes(key)[:4], None)
+            return 0
+
+        def update(_fd, key, value, _flags):
+            self.table[bytes(key)[:4]] = bytes(value)[:4]
+            return 0
+
+        self.bpf_obj_get = obj_get
+        self.bpf_map_get_next_key = get_next_key
+        self.bpf_map_delete_elem = delete
+        self.bpf_map_update_elem = update
+
+
+class RuntimeEgressReviewFixTests(unittest.TestCase):
+    """阶段 1 审核修正：探针表对账、probing 依赖、专用接口 Peer 与部署核验不写死。"""
+
+    def _maps(self, keys):
+        import socket
+
+        maps = deploy.EgressKernelMaps.__new__(deploy.EgressKernelMaps)
+        maps.pin_root = Path("/fixture/pin")
+        maps.library = _FakeLibbpf([socket.inet_aton(item) for item in keys])
+        return maps
+
+    def test_probe_table_is_reconciled_against_actual_kernel_keys(self):
+        import socket
+
+        maps = self._maps(["203.0.113.1", "203.0.113.2", "203.0.113.3"])
+        result = maps.sync_probes({"203.0.113.2", "198.51.100.9"})
+        self.assertEqual(result, {"removed": 2, "current": 2})
+        self.assertEqual(sorted(maps.library.table), sorted(socket.inet_aton(item) for item in ("203.0.113.2", "198.51.100.9")))
+        # 守护重启后进程内没有旧记忆，仍以内核实际键为准；空集合清空全部探针目的。
+        self.assertEqual(maps.sync_probes(set()), {"removed": 2, "current": 0})
+        self.assertEqual(maps.library.table, {})
+
+    def test_probe_rotation_never_accumulates_toward_table_limit(self):
+        maps = self._maps([])
+        for index in range(600):
+            maps.sync_probes({f"198.51.{index // 250}.{index % 250 + 1}"})
+            self.assertLessEqual(len(maps.library.table), 1)
+
+    def test_probing_keeps_dependencies_closed_until_admission(self):
+        """重建后 probing 期间只发探针租期：内网依赖与入站业务均闭锁，完成准入后才放行（方案"先闭锁"）。"""
+
+        policy = policy_fixture()
+        inventory = {"services": {
+            "sub2apiplus": {"bindings": [{"ifindex": 2, "host_ifindex": 11, "source_ipv4": "172.20.0.2"}],
+                            "dependencies": [{"ipv4": "172.20.0.4", "protocol": "tcp", "port": 5432}]},
+            "capture-cli": {"bindings": [{"ifindex": 2, "host_ifindex": 12, "source_ipv4": "172.20.0.6"}],
+                            "dependencies": [{"ipv4": "172.20.0.2", "protocol": "tcp", "port": 8080}]},
+        }, "bypass_ifindices": []}
+        marks = deploy.egress_service_marks(policy)
+        text = deploy.egress_lease_transaction(policy, "origin", inventory,
+                                               {"sub2apiplus": "probing", "capture-cli": "compliant"}, [], shared=True)
+        self.assertNotIn("172.20.0.4 . tcp . 5432", text)
+        self.assertNotIn(f"{marks['sub2apiplus'] | 0x10000} . 8080", text)
+        self.assertIn(f"{marks['capture-cli']} . 172.20.0.2 . tcp . 8080", text)
+
+    def test_wireguard_observation_ignores_monitor_peers_and_rejects_extra_business_peer(self):
+        policy = policy_fixture()
+        node, peer = policy["nodes"]["origin"], policy["nodes"]["exit"]
+        endpoint = f"{peer['endpoint']['ipv4']}:{peer['endpoint']['port']}"
+        extra = {"peers": ""}
+        def command(argv, **_kwargs):
+            if argv[:2] == ["wg", "show"]:
+                # 既有 wg1 等监控接口可以有任意多个 Peer，但守护只允许查询策略的专用接口。
+                self.assertEqual(argv[2], node["interface"])
+                values = {"public-key": node["public_key"], "peers": peer["public_key"] + extra["peers"],
+                          "endpoints": f"{peer['public_key']}\t{endpoint}", "allowed-ips": f"{peer['public_key']}\t0.0.0.0/0",
+                          "listen-port": str(node["listen_port"]), "fwmark": hex(deploy.EGRESS_WG_MARK)}
+                return values[argv[3]]
+            if argv[:4] == ["ip", "-j", "addr", "show"]:
+                return json.dumps([{"mtu": node["mtu"], "flags": ["UP"], "ifindex": 7, "addr_info": [
+                    {"family": "inet", "local": node["tunnel_ipv4"].split("/")[0], "prefixlen": int(node["tunnel_ipv4"].split("/")[1])}]}])
+            raise AssertionError(argv)
+        with mock.patch.object(deploy, "egress_command", side_effect=command):
+            observed = deploy.egress_wireguard_observation(policy, "origin")
+            self.assertEqual(observed["peer_public_key"], peer["public_key"])
+            extra["peers"] = "\nmonitor-peer-public-key="
+            with self.assertRaisesRegex(deploy.DeploymentError, "专用 WireGuard"):
+                deploy.egress_wireguard_observation(policy, "origin")
+
+    def test_container_codex_binaries_are_enumerated_not_pinned(self):
+        rows = [{"path": "/opt/codex-0.154.0/bin/codex", "version": "0.154.0", "returncode": 0, "stdout": "codex-cli 0.154.0"},
+                {"path": "/opt/codex-0.156.1/bin/codex", "version": "0.156.1", "returncode": 0, "stdout": "codex-cli 0.156.1"}]
+        self.assertEqual([row["version"] for row in deploy.verify_container_codex_binaries(json.dumps(rows))], ["0.154.0", "0.156.1"])
+        for broken in ([], [{**rows[1], "returncode": 1}], [{**rows[1], "stdout": "codex-cli 0.154.0"}], [{**rows[1], "version": None}]):
+            with self.subTest(broken=broken), self.assertRaises(deploy.DeploymentError):
+                deploy.verify_container_codex_binaries(json.dumps(broken))
+
+    def test_deploy_checks_do_not_pin_provider_routes_or_client_version(self):
+        import ast
+
+        source = Path(deploy.__file__).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        functions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
+        forbidden = ("wg1", "51830", "fixed-bwg", "0.154.0", "144.34.230.210", "69.63.195.102", "BWG", "DMIT")
+        for name in ("_preflight", "_post_switch_verify", "egress_wireguard_observation", "verify_runtime_egress"):
+            literals = [node.value for node in ast.walk(functions[name]) if isinstance(node, ast.Constant) and isinstance(node.value, str)]
+            with self.subTest(function=name):
+                self.assertFalse([item for item in literals for word in forbidden if word in item])
+
+
 class EgressSupervisorTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name).resolve()
+        # 父 run 状态包含 R8 预算执行所需的时间锚：截止与单调时钟起点对应同一启动时刻。
         self.state = {"campaign_id": "egress-fixture", "owner_nonce": "a" * 64,
-                      "started_at_epoch": time.time() - 10,
+                      "started_at_epoch": time.time() - 10, "deadline_at_epoch": time.time() + 20,
+                      "started_monotonic_ns": time.monotonic_ns() - 10 * 10**9,
                       "egress_guard": {"required": True, "campaign_dir": str(self.root)}}
 
     def client(self):
@@ -372,6 +514,94 @@ class EgressSupervisorTests(unittest.TestCase):
               mock.patch.object(supervisor.subprocess, "Popen", return_value=process)):
             with self.assertRaisesRegex(supervisor.RuntimeEgressPaused, "策略发生变化"):
                 supervisor._egress_transition_command(args)
+
+    def _transition_context(self, readiness):
+        """正式父 run 上下文中的维护入口；出口准入按给定序列返回，其余身份核验为已绑定。"""
+
+        self.state.update(state="running", owner_pid=os.getppid(), monitor_pid=os.getpid(),
+                          deadline_monotonic_ns=time.monotonic_ns() + 20 * 10**9)
+        environment = {supervisor.CAMPAIGN_RUN_CONTEXT_ENV: "1", supervisor.CAMPAIGN_RUN_DIR_ENV: str(self.root),
+                       supervisor.CAMPAIGN_RUN_OWNER_PID_ENV: str(self.state["owner_pid"]),
+                       supervisor.CAMPAIGN_RUN_OWNER_NONCE_ENV: self.state["owner_nonce"],
+                       supervisor.CAMPAIGN_RUN_ID_ENV: self.state["campaign_id"]}
+        stack = contextlib.ExitStack()
+        stack.enter_context(mock.patch.dict(os.environ, environment))
+        stack.enter_context(mock.patch.object(supervisor, "_read_state", return_value=self.state))
+        stack.enter_context(mock.patch.object(supervisor, "_process_start_ticks", return_value="11"))
+        stack.enter_context(mock.patch.object(supervisor, "_process_descends_from", return_value=True))
+        stack.enter_context(mock.patch.object(supervisor, "_owner_alive", return_value=True))
+        stack.enter_context(mock.patch.object(arm, "require_runtime_egress", side_effect=readiness))
+        # 维护进行中执行端核验声明绑定时读取守护状态：按首个准入快照提供合规状态与本机启动身份。
+        snapshot = readiness[0]
+        read_text = Path.read_text
+        stack.enter_context(mock.patch.object(arm, "load_egress_policy", return_value=snapshot["policy"]))
+        stack.enter_context(mock.patch.object(arm, "_read_egress_runtime_json", return_value=snapshot["runtime"]))
+        stack.enter_context(mock.patch.object(Path, "read_text", autospec=True, side_effect=lambda path, *args, **kwargs:
+                                              snapshot["runtime"]["boot_id"] if str(path) == "/proc/sys/kernel/random/boot_id"
+                                              else read_text(path, *args, **kwargs)))
+        return stack
+
+    @staticmethod
+    def _restart_arguments():
+        return argparse.Namespace(container="sub2apiplus", compose_service=None, timeout_seconds=10, cleanup=False,
+                                  command_argv=["docker", "restart", "sub2apiplus"])
+
+    def test_cleanup_signal_handler_is_installed_before_transition_declaration(self):
+        snapshot = runtime_fixture()
+        observed = []
+        real_write = supervisor._write_json
+        def write(path, *args, **kwargs):
+            if Path(path).name == "egress-transition.json":
+                observed.append(signal.getsignal(signal.SIGUSR1))
+            return real_write(path, *args, **kwargs)
+        process = mock.Mock(returncode=0)
+        process.poll.return_value = 0
+        with self._transition_context([snapshot] * 4), mock.patch.object(supervisor, "_write_json", side_effect=write), \
+                mock.patch.object(supervisor.subprocess, "Popen", return_value=process):
+            self.assertEqual(supervisor._egress_transition_command(self._restart_arguments()), 0)
+        self.assertEqual(len(observed), 1)
+        self.assertNotIn(observed[0], (signal.SIG_DFL, signal.SIG_IGN, None))
+        self.assertFalse((self.root / "egress-transition.json").exists())
+
+    def test_failed_maintenance_command_output_is_logged_and_reported(self):
+        snapshot = runtime_fixture()
+        def launch(command, *, stdin, stdout, stderr, shell):
+            stdout.write(b"Error response from daemon: fixture restart failure\n")
+            stdout.flush()
+            self.assertEqual(stderr, subprocess.STDOUT)
+            process = mock.Mock(returncode=1)
+            process.poll.return_value = 1
+            return process
+        with self._transition_context([snapshot] * 2), mock.patch.object(supervisor.subprocess, "Popen", side_effect=launch):
+            with self.assertRaisesRegex(supervisor.SupervisorError, "fixture restart failure"):
+                supervisor._egress_transition_command(self._restart_arguments())
+        logs = list((self.root / "egress-transitions").glob("*.log"))
+        self.assertEqual(len(logs), 1)
+        self.assertEqual(stat.S_IMODE(logs[0].stat().st_mode), 0o600)
+        # 声明之后的失败仍按原合同写暂停并收口声明。
+        self.assertTrue((self.root / "egress-pause.json").exists())
+        self.assertFalse((self.root / "egress-transition.json").exists())
+
+    def test_parallel_maintenance_rejection_keeps_other_declaration_and_does_not_pause(self):
+        snapshot = runtime_fixture()
+        supervisor._write_json(self.root / "egress-transition.json", {"transition_id": "f" * 32, "marker": "other"}, replace=False)
+        before = (self.root / "egress-transition.json").read_bytes()
+        with self._transition_context([snapshot] * 2), mock.patch.object(supervisor.subprocess, "Popen") as launched:
+            with self.assertRaises(supervisor.RuntimeEgressPaused):
+                supervisor._egress_transition_command(self._restart_arguments())
+            launched.assert_not_called()
+        self.assertEqual((self.root / "egress-transition.json").read_bytes(), before)
+        self.assertFalse((self.root / "egress-pause.json").exists())
+        self.assertFalse(list((self.root / "egress-transitions").glob("*.finish.json")) if (self.root / "egress-transitions").exists() else [])
+
+    def test_unverifiable_job_egress_binding_fails_closed_with_explicit_reason(self):
+        binding = {"schema_version": "codex-upgrade-job-egress/v1", "run_dir": str(self.root / "missing-parent-run"),
+                   "campaign_id": self.state["campaign_id"], "owner_nonce": self.state["owner_nonce"],
+                   "started_at_epoch": time.time() - 5, "finished_at_epoch": time.time() - 1}
+        with self.assertRaisesRegex(reconciler.ReconcilerError, "出口时段绑定无法核验"):
+            reconciler._job_egress_trusted({"id": "job", "status": "complete", "runtime_egress": binding})
+        # 没有出口绑定的历史结果按原合同读取，不因父 run 归档规则改判。
+        self.assertTrue(reconciler._job_egress_trusted({"id": "legacy", "status": "complete"}))
 
     def test_cleanup_signal_preserves_egress_failure_class(self):
         supervisor._egress_pause(self.root, self.state, "父监督器已确认出口异常")

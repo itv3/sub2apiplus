@@ -60,8 +60,12 @@ def create_arm_receipt(
     subject_id: str,
     prefix: str,
     continuity_seed: str = "a",
+    rust_tls_codex_version: str = "0.154.0",
 ) -> Path:
-    """写入不联网的合成 ARM64 facts，并经正式 finalizer 封存。"""
+    """写入不联网的合成 ARM64 facts，并经正式 finalizer 封存。
+
+    ``rust_tls_codex_version`` 对应采集时给出的本轮目标版本；夹具 Campaign 默认目标为 0.154.0。
+    """
 
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     root.chmod(0o700)
@@ -158,9 +162,7 @@ def create_arm_receipt(
         },
         "containers": containers,
         "rust_tls_readiness": {
-            "container": arm.RUST_TLS_PROBE_CONTAINER,
-            "binary": arm.RUST_TLS_PROBE_BINARY,
-            "codex_version": arm.RUST_TLS_PROBE_CODEX_VERSION,
+            **arm.rust_tls_probe_target(rust_tls_codex_version),
             "isolated_empty_codex_home": True,
             "process_exit_code": 1,
             "overall_status": "fail",

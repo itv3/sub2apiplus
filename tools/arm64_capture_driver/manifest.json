@@ -130,9 +130,9 @@
     },
     {
       "path": "driver/stage1.sh",
-      "sha256": "48ddeab1e5e981b666784b113d497cd6485fc870079f31e738f4d15f7c83f05c",
+      "sha256": "01526065f6b5ab16caddc49c0c0e71ad6f7aed129469b68be2608a8b0ba547d2",
       "mode": "0700",
-      "bytes": 5560
+      "bytes": 5603
     },
     {
       "path": "driver/stage2.sh",
@@ -226,9 +226,9 @@
     },
     {
       "path": "driver/vc5-gate-target.sh",
-      "sha256": "af52eadf0c1bcb97f0088d057bba829dc922d7053edcaf982227a1f305841105",
+      "sha256": "395a4c8a3a8f2293834dfcb6c4e0a4b37f8a9e09aaeeccac0a36b4561bc5be6f",
       "mode": "0700",
-      "bytes": 2748
+      "bytes": 2834
     },
     {
       "path": "driver/vc5-kilo.sh",
@@ -285,5 +285,5 @@
       "bytes": 21976
     }
   ],
-  "manifest_sha256": "762fd994cc7850d752aca5a5e75b048c949480b2e9e226cf56855b8d9367b212"
+  "manifest_sha256": "38ef95b78076f3758a43e1c646e817cb9aeac05eb0a7356fb5d1b7b335a28e9b"
 }

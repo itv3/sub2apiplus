@@ -5,7 +5,7 @@ set -Eeuo pipefail; umask 077
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
 ATT="$1"; GATE="$2"; T="$3"; SRC1491=$HISTORICAL_SOURCE_ROOT
 mkdir -p "$GATE/environment" "$GATE/logs"; chmod 700 "$GATE" "$GATE/environment" "$GATE/logs"
-python3 -m tools.official_client_capture.codex_upgrade_arm64_environment_receipt collect --evidence-root "$GATE" --output "environment/$ATT-before-facts.json" --phase gate_before --subject-id "$ATT" | cut -c1-160
+python3 -m tools.official_client_capture.codex_upgrade_arm64_environment_receipt collect --evidence-root "$GATE" --output "environment/$ATT-before-facts.json" --phase gate_before --subject-id "$ATT" --rust-tls-codex-version "$TARGET_VERSION" | cut -c1-160
 python3 -m tools.official_client_capture.codex_upgrade_arm64_environment_receipt finalize --evidence-root "$GATE" --facts "environment/$ATT-before-facts.json" --output "environment/$ATT-before.json" | cut -c1-160
 export PYTHONPYCACHEPREFIX=$RUNROOT/pycache
 export CODEX_0_149_1_SOURCE_ROOT="$SRC1491"
@@ -14,7 +14,7 @@ export CAPTURE_TYPESCRIPT_MODULE="$T/frontend/node_modules/typescript/lib/typesc
 # 私有挂载命名空间里用空 tmpfs 遮住别名根，与 CI/本机环境一致。
 cd "$T"; START=$(utc_now); set +e; unshare -m --propagation private bash -c 'mount -t tmpfs -o ro,size=64k,mode=0755 tmpfs /root/oauth-capture && exec make test' > "$GATE/logs/target-platform.stdout.log" 2> "$GATE/logs/target-platform.stderr.log"; RC=$?; set -e; END=$(utc_now)
 echo "make test rc=$RC $START -> $END"; tail -n 3 "$GATE/logs/target-platform.stdout.log"
-cd "$D"; python3 -m tools.official_client_capture.codex_upgrade_arm64_environment_receipt collect --evidence-root "$GATE" --output "environment/$ATT-after-facts.json" --phase gate_after --subject-id "$ATT" | cut -c1-160
+cd "$D"; python3 -m tools.official_client_capture.codex_upgrade_arm64_environment_receipt collect --evidence-root "$GATE" --output "environment/$ATT-after-facts.json" --phase gate_after --subject-id "$ATT" --rust-tls-codex-version "$TARGET_VERSION" | cut -c1-160
 python3 -m tools.official_client_capture.codex_upgrade_arm64_environment_receipt finalize --evidence-root "$GATE" --facts "environment/$ATT-after-facts.json" --output "environment/$ATT-after.json" | cut -c1-160
 python3 - "$GATE/logs/target-platform.gate.json" "$START" "$END" "$RC" "$T" <<'PY'
 import json, sys, socket

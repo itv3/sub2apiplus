@@ -28,7 +28,7 @@ python3 -m tools.official_client_capture.codex_upgrade_timing_ledger create --le
 python3 -c "import json; p=json.load(open(\"$L/ledger.json\")); print(\"budgets:\", p[\"total_budget_minutes\"], p[\"stage_budgets_minutes\"]); print(\"binding:\", p.get(\"project_ledger_binding\",{}).get(\"absolute_deadline_utc\"))"
 ENV="$D/environment/$UP-p0"
 mkdir -m 0700 "$ENV"
-python3 -m tools.official_client_capture.codex_upgrade_arm64_environment_receipt collect --evidence-root "$ENV" --output facts.json --phase p0 --subject-id "$UP" | cut -c1-120
+python3 -m tools.official_client_capture.codex_upgrade_arm64_environment_receipt collect --evidence-root "$ENV" --output facts.json --phase p0 --subject-id "$UP" --rust-tls-codex-version "$TARGET_VERSION" | cut -c1-120
 python3 -m tools.official_client_capture.codex_upgrade_arm64_environment_receipt finalize --evidence-root "$ENV" --facts facts.json --output receipt.json | cut -c1-120
 python3 -m tools.official_client_capture.codex_upgrade_timing_ledger checkpoint --ledger-dir "$L" --output "receipts/vc0-input-$ROUND-preflight-$STAMP.json" | cut -c1-120
 HEADSHA=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))[\"tool_files_sha256\"][:9])" "$DEPLOY")

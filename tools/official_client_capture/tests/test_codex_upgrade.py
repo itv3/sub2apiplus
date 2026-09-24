@@ -428,6 +428,7 @@ class CodexUpgradeTest(unittest.TestCase):
                 phase="p0",
                 subject_id=recovery_id,
                 prefix="p0",
+                rust_tls_codex_version="0.147.0",
             )
 
             preflight_arguments = self._campaign_arguments(
@@ -7536,6 +7537,48 @@ class CodexUpgradeTest(unittest.TestCase):
             updated["capture_jobs"].append(job)
         return updated
 
+    def test_new_campaign_requires_current_p0_producer_and_target_probe_version(self) -> None:
+        """R15：新建或承接 Campaign 的 P0 必须由当前 producer 采集，Rust TLS 探针使用本轮目标版本。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            (root / "p0-receipt.json").write_text("{}\n", encoding="utf-8")
+            arguments = argparse.Namespace(arm64_environment_root=root, arm64_environment_receipt=root / "p0-receipt.json",
+                                           target_version="0.156.1")
+            current = {"producer": {"version": codex_upgrade.codex_upgrade_arm64_environment_receipt.PRODUCER_VERSION},
+                       "rust_tls_probe": {"binary": "/opt/codex-0.156.1/bin/codex", "codex_version": "0.156.1"}}
+            cases = (
+                (current, None),
+                ({**current, "producer": {"version": "7"}}, "当前环境 producer"),
+                ({**current, "rust_tls_probe": {"binary": "/opt/codex-0.154.0/bin/codex", "codex_version": "0.154.0"}},
+                 "Rust TLS 探针版本"),
+                ({"producer": current["producer"]}, "Rust TLS 探针版本"),
+            )
+            for receipt, message in cases:
+                with self.subTest(message=message), mock.patch.object(
+                    codex_upgrade.codex_upgrade_arm64_environment_receipt, "replay", return_value=receipt,
+                ):
+                    if message is None:
+                        codex_upgrade._require_current_p0_environment(arguments)
+                    else:
+                        with self.assertRaisesRegex(codex_upgrade.ConfigurationError, message):
+                            codex_upgrade._require_current_p0_environment(arguments)
+
+    def test_plan_rejects_p0_probe_for_other_client_version(self) -> None:
+        """P0 探针用了非本轮目标版本的客户端时，建 Campaign 在写入任何产物前拒绝。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            arguments = self._campaign_arguments(root, campaign_mode="preflight_only")
+            mismatched = create_arm_receipt(root / "control" / "arm64-p0-other", phase="p0",
+                                            subject_id=arguments.campaign_id, prefix="p0",
+                                            rust_tls_codex_version="0.145.0")
+            arguments.arm64_environment_root = mismatched.parent
+            arguments.arm64_environment_receipt = mismatched
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "Rust TLS 探针版本"):
+                codex_upgrade.create_campaign(arguments)
+            self.assertFalse((arguments.campaign_dir / "campaign.json").exists())
+
     def _campaign_arguments(
         self,
         root: Path,
@@ -7665,6 +7708,8 @@ class CodexUpgradeTest(unittest.TestCase):
             phase="p0",
             subject_id=campaign_id,
             prefix="p0",
+            # P0 由当前 producer 采集，Rust TLS 探针使用本轮目标版本。
+            rust_tls_codex_version=target_version,
         )
         runtime_image = f"capture-runtime@sha256:{'b' * 64}"
         target_sha256 = hashlib.sha256(binary_bytes).hexdigest()
@@ -11815,6 +11860,7 @@ class CodexUpgradeTest(unittest.TestCase):
                 phase="p0",
                 subject_id=preflight_arguments.campaign_id,
                 prefix="recovery-p0",
+                rust_tls_codex_version=preflight_arguments.target_version,
             )
             preflight_manifest = codex_upgrade.create_campaign(
                 preflight_arguments
@@ -12694,6 +12740,7 @@ class CodexUpgradeTest(unittest.TestCase):
                 phase="p0",
                 subject_id=recovery_id,
                 prefix="recovery-p0",
+                rust_tls_codex_version=predecessor_manifest["target_version"],
             )
             preflight_arguments = self._campaign_arguments(
                 root / "sealed-stopped-preflight",

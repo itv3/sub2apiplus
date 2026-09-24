@@ -140,6 +140,24 @@
           "$ref": "#/$defs/sha256"
         }
       }
+    },
+    "rust_tls_probe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "binary",
+        "codex_version"
+      ],
+      "properties": {
+        "binary": {
+          "type": "string",
+          "pattern": "^/opt/codex-(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)/bin/codex$"
+        },
+        "codex_version": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+        }
+      }
     }
   },
   "$defs": {
@@ -356,7 +374,8 @@
       "then": {
         "required": [
           "environment_equivalence",
-          "runtime_egress"
+          "runtime_egress",
+          "rust_tls_probe"
         ]
       }
     },
@@ -386,6 +405,11 @@
             {
               "required": [
                 "runtime_egress"
+              ]
+            },
+            {
+              "required": [
+                "rust_tls_probe"
               ]
             }
           ]

@@ -11,6 +11,7 @@ import copy
 import os
 import shutil
 import signal
+import socket
 import selectors
 import subprocess
 import sys
@@ -490,9 +491,11 @@ class RuntimeEgressKernelTests(unittest.TestCase):
             self.inside(role, "sysctl", "-w", "net.ipv4.conf.default.rp_filter=0")
             self.inside(role, "sysctl", "-w", "net.ipv4.conf.all.arp_ignore=1")
             self.inside(role, "sysctl", "-w", "net.ipv4.conf.all.arp_announce=2")
-        for role, bridge, addresses in (("origin", "br0", ["172.31.200.1/24"]),
-                                         ("wan", "brw", ["213.35.102.1/24", "69.63.195.1/24"])):
-            self.inside(role, "ip", "link", "add", bridge, "type", "bridge")
+        for role, bridge, mac, addresses in (("origin", "br0", "02:15:00:00:00:01", ["172.31.200.1/24"]),
+                                              ("wan", "brw", "02:15:00:00:00:02", ["213.35.102.1/24", "69.63.195.1/24"])):
+            # 网桥显式固定 MAC：未设置时 Linux 取全部端口中最小的 MAC，后续加入端口（附加网卡夹具）可能
+            # 改变网桥 MAC，使容器已缓存的网关邻居失效，造成与出口判定无关的间歇丢包。Docker 网桥同样是固定 MAC。
+            self.inside(role, "ip", "link", "add", bridge, "address", mac, "type", "bridge")
             self.inside(role, "ip", "link", "set", bridge, "up")
             for address in addresses:
                 self.inside(role, "ip", "addr", "add", address, "dev", bridge)
@@ -863,10 +866,28 @@ for line in sys.stdin:
         worker.start()
         compliant = {"sub2apiplus": "compliant", "capture-cli": "compliant"}
         blocked = {name: "blocked" for name in compliant}
+        def await_probe_table(expected, limit=3):
+            start = time.monotonic()
+            wanted = sorted(socket.inet_aton(item) for item in expected)
+            while time.monotonic() - start < limit:
+                self.assertFalse(guard_errors, guard_errors)
+                if sorted(self.maps.keys("probes", 4)) == wanted:
+                    return
+                time.sleep(.05)
+            self.fail("真实 BPF 探针表未与当前解析结果对账：" + repr(sorted(self.maps.keys("probes", 4))))
+
         try:
             await_status(compliant)
             self.assertTrue(self.request("app"))
             self.assertTrue(self.request("capture"))
+            # 探针目的轮换：每轮以内核实际键对账，旧地址删除、不向表上限累积；合规业务不受影响。
+            await_probe_table({"84.1.1.1"})
+            for rotated in ("84.1.2.1", "84.1.2.2", "84.1.2.3"):
+                guards["origin"].probes = {url: rotated for url in guards["origin"].policy["probe_urls"]}
+                await_probe_table({rotated})
+                self.assertTrue(self.request("app"))
+            guards["origin"].probes = {url: "84.1.1.1" for url in guards["origin"].policy["probe_urls"]}
+            await_probe_table({"84.1.1.1"})
             probe_fault.add("capture-cli")
             individual_seconds = await_status({"sub2apiplus": "compliant", "capture-cli": "blocked"})
             self.assertFalse(self.request("capture"))
@@ -928,7 +949,9 @@ class EgressProcessTests(unittest.TestCase):
     """
 
     def test_real_parent_waits_for_docker_restart_rebuild_and_never_resumes_after_fault(self):
-        root = Path(tempfile.mkdtemp(prefix=".r15-process-", dir=Path(supervisor.__file__).resolve().parents[2]))
+        # 策略与状态文件要求父目录链 root 独占且无组／其他写权限，系统临时目录不满足；放在仓库根的上一级
+        # （ARM64 上为同样 root 独占的 staging 目录），中断时的残留不会落进 git 工作树影响出站规范门禁。
+        root = Path(tempfile.mkdtemp(prefix=".r15-process-", dir=Path(supervisor.__file__).resolve().parents[3]))
         self.addCleanup(lambda: __import__("shutil").rmtree(root))
         names = [f"r15process{os.getpid()}app", f"r15process{os.getpid()}capture"]
         def docker(*args):
