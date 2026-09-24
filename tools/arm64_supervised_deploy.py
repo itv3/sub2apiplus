@@ -1887,35 +1887,71 @@ def verify_scenario_source_spec(
     }
 
 
-# 部署后冒烟：枚举容器内全部已安装的 Codex 客户端逐个执行 --version，不写死某一版本，
-# 升级收口、旧版本退役后下一次部署无需修改工具。
+# 部署后冒烟：枚举容器内全部已安装的 Codex 客户端逐个执行 --version 并记录结果。任一二进制执行异常
+# 只记录、不让探针失败；是否放行由 verify_container_codex_binaries 按本轮目标版本判定。
 CODEX_BINARY_PROBE = (
     "import glob,json,re,subprocess\n"
     "rows=[]\n"
     "for path in sorted(glob.glob('/opt/codex-*/bin/codex')):\n"
     "    match=re.fullmatch(r'/opt/codex-((?:0|[1-9][0-9]*)[.](?:0|[1-9][0-9]*)[.](?:0|[1-9][0-9]*))/bin/codex',path)\n"
-    "    done=subprocess.run([path,'--version'],capture_output=True,text=True,timeout=30)\n"
-    "    rows.append({'path':path,'version':match.group(1) if match else None,'returncode':done.returncode,'stdout':done.stdout.strip()[:200]})\n"
+    "    row={'path':path,'version':match.group(1) if match else None}\n"
+    "    try:\n"
+    "        done=subprocess.run([path,'--version'],capture_output=True,text=True,timeout=30)\n"
+    "        row.update(returncode=done.returncode,stdout=done.stdout.strip()[:200])\n"
+    "    except Exception as error:\n"
+    "        row.update(returncode=None,stdout='',error=type(error).__name__)\n"
+    "    rows.append(row)\n"
     "print(json.dumps(rows))\n"
 )
+CODEX_VERSION_PATTERN = r"(?:0|[1-9][0-9]*)[.](?:0|[1-9][0-9]*)[.](?:0|[1-9][0-9]*)"
 
 
-def verify_container_codex_binaries(output: str) -> list[dict[str, str]]:
-    """至少一个客户端，且每个二进制都能执行并自报与安装目录一致的版本。"""
+def read_target_codex_version(tool_root: Path) -> str:
+    """本轮目标 Codex 版本取自已部署工具树的目标场景清单，部署脚本里不写死版本。"""
+
+    manifest_path = tool_root / TARGET_SCENARIO_MANIFEST
+    reject_untrusted_file(manifest_path, label="目标场景清单")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise DeploymentError("无法读取目标场景清单。") from error
+    version = manifest.get("codex_version") if isinstance(manifest, dict) else None
+    if not isinstance(version, str) or not re.fullmatch(CODEX_VERSION_PATTERN, version):
+        raise DeploymentError("目标场景清单缺少合法的 codex_version。")
+    return version
+
+
+def verify_container_codex_binaries(output: str, target_version: str) -> list[dict[str, Any]]:
+    """本轮目标版本的客户端必须存在、可执行并自报与安装目录一致的版本；其余目录只记录不判定。
+
+    R15 复审修正：原先只要求"至少一个客户端且每个都可用"，目标版本缺失也能通过，非 x.y.z 命名或
+    执行失败的其他目录反而拒掉整个部署。清单本身格式非法仍失败关闭。
+    """
 
     try:
         rows = json.loads(output)
     except json.JSONDecodeError as error:
         raise DeploymentError("容器内 Codex 客户端清单无法解析。") from error
-    if not isinstance(rows, list) or not rows:
-        raise DeploymentError("容器内没有可用的 Codex 客户端。")
-    verified: list[dict[str, str]] = []
+    if not isinstance(rows, list):
+        raise DeploymentError("容器内 Codex 客户端清单格式非法。")
+    target_path = f"/opt/codex-{target_version}/bin/codex"
+    recorded: list[dict[str, Any]] = []
+    target_verified = False
     for row in rows:
-        if (not isinstance(row, dict) or not isinstance(row.get("version"), str) or row.get("returncode") != 0
-                or not isinstance(row.get("stdout"), str) or row["version"] not in row["stdout"].split()):
-            raise DeploymentError(f"容器内 Codex 客户端不可执行或版本不符：{row.get('path') if isinstance(row, dict) else row}")
-        verified.append({"path": str(row["path"]), "version": row["version"]})
-    return verified
+        if not isinstance(row, dict) or not isinstance(row.get("path"), str):
+            raise DeploymentError(f"容器内 Codex 客户端清单行非法：{row}")
+        version = row.get("version") if isinstance(row.get("version"), str) else None
+        verified = False
+        if row["path"] == target_path:
+            stdout = row.get("stdout")
+            if (version != target_version or row.get("returncode") != 0 or not isinstance(stdout, str)
+                    or target_version not in stdout.split()):
+                raise DeploymentError(f"本轮目标版本 {target_version} 的 Codex 客户端不可执行或版本不符：{target_path}")
+            verified = target_verified = True
+        recorded.append({"path": row["path"], "version": version, "verified": verified})
+    if not target_verified:
+        raise DeploymentError(f"容器内缺少本轮目标版本 {target_version} 的 Codex 客户端：{target_path}")
+    return recorded
 
 
 PRE_A3_CERTIFICATION_MODULE = "codex_upgrade_pre_a3_certification.py"
@@ -3013,12 +3049,14 @@ def _post_switch_verify(
         raise DeploymentError("容器内工具校验输出无法解析。") from error
     if not isinstance(container_payload, dict) or container_payload.get("uid") != 0 or container_payload.get("gid") != 0 or int(container_payload.get("mode", 0)) & 0o022:
         raise DeploymentError("容器内抓包执行源属主或权限不安全。")
+    codex_target_version = read_target_codex_version(production)
     codex_binaries = verify_container_codex_binaries(
         run_checked(
             client,
             "enable:verify-codex-binaries",
             ["docker", "exec", "capture-cli", "python3", "-c", CODEX_BINARY_PROBE],
-        )
+        ),
+        codex_target_version,
     )
     return {
         "production_file_count": count,
@@ -3027,6 +3065,7 @@ def _post_switch_verify(
         "container_capture_sha256": container_payload.get("sha256"),
         "supervisor_help_bytes": len(version.encode("utf-8")),
         "runtime_egress": runtime_egress,
+        "codex_target_version": codex_target_version,
         "codex_binaries": codex_binaries,
         "document_sha256": document_sha256,
         "runtime_document_bindings": runtime_document_bindings,

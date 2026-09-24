@@ -285,13 +285,76 @@ class RuntimeEgressReviewFixTests(unittest.TestCase):
             with self.assertRaisesRegex(deploy.DeploymentError, "专用 WireGuard"):
                 deploy.egress_wireguard_observation(policy, "origin")
 
-    def test_container_codex_binaries_are_enumerated_not_pinned(self):
-        rows = [{"path": "/opt/codex-0.154.0/bin/codex", "version": "0.154.0", "returncode": 0, "stdout": "codex-cli 0.154.0"},
-                {"path": "/opt/codex-0.156.1/bin/codex", "version": "0.156.1", "returncode": 0, "stdout": "codex-cli 0.156.1"}]
-        self.assertEqual([row["version"] for row in deploy.verify_container_codex_binaries(json.dumps(rows))], ["0.154.0", "0.156.1"])
-        for broken in ([], [{**rows[1], "returncode": 1}], [{**rows[1], "stdout": "codex-cli 0.154.0"}], [{**rows[1], "version": None}]):
-            with self.subTest(broken=broken), self.assertRaises(deploy.DeploymentError):
-                deploy.verify_container_codex_binaries(json.dumps(broken))
+    def test_post_switch_requires_target_client_and_only_records_others(self):
+        """R15 复审修正：本轮目标版本的客户端必须存在、可执行且自报版本一致；其余目录只记录不判定。
+
+        修改前只要求"至少一个客户端且每个都可用"：目标版本缺失照样通过，非 x.y.z 命名或执行失败的
+        其他目录反而拒掉整个部署。
+        """
+
+        target = {"path": "/opt/codex-0.156.1/bin/codex", "version": "0.156.1", "returncode": 0, "stdout": "codex-cli 0.156.1"}
+        other = {"path": "/opt/codex-0.154.0/bin/codex", "version": "0.154.0", "returncode": 0, "stdout": "codex-cli 0.154.0"}
+        nightly = {"path": "/opt/codex-nightly/bin/codex", "version": None, "returncode": 0, "stdout": "codex-cli 0.157.0-alpha"}
+        broken_other = {"path": "/opt/codex-0.155.0/bin/codex", "version": "0.155.0", "returncode": 1, "stdout": ""}
+        unexecutable = {"path": "/opt/codex-0.149.1/bin/codex", "version": "0.149.1", "returncode": None, "stdout": "",
+                        "error": "PermissionError"}
+        rows = deploy.verify_container_codex_binaries(
+            json.dumps([unexecutable, other, broken_other, target, nightly]), "0.156.1")
+        self.assertEqual([(row["path"], row["verified"]) for row in rows],
+                         [(unexecutable["path"], False), (other["path"], False), (broken_other["path"], False),
+                          (target["path"], True), (nightly["path"], False)])
+        for label, broken in (("目标缺失", [other]), ("空清单", []), ("目标不可执行", [{**target, "returncode": 1}]),
+                              ("目标自报不符", [{**target, "stdout": "codex-cli 0.154.0"}]),
+                              ("目标执行异常", [{**target, "returncode": None, "stdout": "", "error": "TimeoutExpired"}])):
+            with self.subTest(case=label), self.assertRaisesRegex(deploy.DeploymentError, "0[.]156[.]1"):
+                deploy.verify_container_codex_binaries(json.dumps(broken), "0.156.1")
+        for malformed in ("{}", json.dumps([target, "not-a-row"]), json.dumps([{**target, "path": None}]), "not-json"):
+            with self.subTest(malformed=malformed), self.assertRaises(deploy.DeploymentError):
+                deploy.verify_container_codex_binaries(malformed, "0.156.1")
+
+    def test_target_codex_version_comes_from_deployed_scenario_manifest(self):
+        """R15 复审修正：目标版本取自已部署工具树的目标场景清单，部署脚本里不写死版本。"""
+
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch.object(deploy, "reject_untrusted_file") as trusted:
+            tool_root = Path(directory).resolve()
+            manifest = tool_root / deploy.TARGET_SCENARIO_MANIFEST
+            for value in ("0.156.1", "0.154.0"):
+                manifest.write_text(json.dumps({"codex_version": value}), encoding="utf-8")
+                self.assertEqual(deploy.read_target_codex_version(tool_root), value)
+            trusted.assert_called_with(manifest, label="目标场景清单")
+            for bad in ({}, {"codex_version": "0.156"}, {"codex_version": "v0.156.1"}, {"codex_version": 156}, []):
+                manifest.write_text(json.dumps(bad), encoding="utf-8")
+                with self.subTest(bad=bad), self.assertRaises(deploy.DeploymentError):
+                    deploy.read_target_codex_version(tool_root)
+            repository_tool_root = Path(deploy.__file__).resolve().parent / "official_client_capture"
+            expected = json.loads((repository_tool_root / deploy.TARGET_SCENARIO_MANIFEST).read_text(encoding="utf-8"))
+            self.assertEqual(deploy.read_target_codex_version(repository_tool_root), expected["codex_version"])
+
+    def test_binary_probe_records_failures_instead_of_aborting(self):
+        """R15 复审修正：容器内探针对任一二进制的执行异常只记录，是否放行由目标版本判定决定。
+
+        修改前一个不可执行的旧版本目录就让整个探针脚本异常退出，部署在核验目标版本之前失败。
+        """
+
+        with tempfile.TemporaryDirectory() as directory:
+            prefix = Path(directory).resolve()
+
+            def install(name: str, body: str, mode: int) -> None:
+                binary = prefix / f"codex-{name}" / "bin" / "codex"
+                binary.parent.mkdir(parents=True)
+                binary.write_text(body, encoding="utf-8")
+                binary.chmod(mode)
+
+            install("0.156.1", "#!/bin/sh\necho 'codex-cli 0.156.1'\n", 0o755)
+            install("0.149.1", "#!/bin/sh\necho 'codex-cli 0.149.1'\n", 0o644)
+            probe = deploy.CODEX_BINARY_PROBE.replace("/opt/codex-", f"{prefix}/codex-")
+            done = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, timeout=60, check=True)
+            rows = json.loads(done.stdout.replace(str(prefix), "/opt"))
+        self.assertEqual([row["path"] for row in rows], ["/opt/codex-0.149.1/bin/codex", "/opt/codex-0.156.1/bin/codex"])
+        self.assertIsNone(rows[0]["returncode"])
+        verified = deploy.verify_container_codex_binaries(json.dumps(rows), "0.156.1")
+        self.assertEqual([row["verified"] for row in verified], [False, True])
 
     def test_deploy_checks_do_not_pin_provider_routes_or_client_version(self):
         import ast
