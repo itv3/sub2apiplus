@@ -1,0 +1,52 @@
+{
+  "base_commit": "34c9299b7ec8172b9626fe5583b6e8df7c34ace0",
+  "changed_path_count": 2,
+  "current_commit": "759fef53774fbac5d07503804cc0f7a43d619ca6",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 4224,
+  "frozen_path_count": 1399,
+  "identity_sha256": "608f4c64ad622d130301262be8f18e4cebab24d2704e23a5f48d19808e05d1db",
+  "issued_at_utc": "2026-09-25T22:14:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-0157-known-flaky-tests-20260926-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": ".gitignore",
+      "predecessor_sha256s": [
+        "61f1bbcb2918d97eac250858c34bf0496427b5cd87f417aaf3523f28ea92e301"
+      ],
+      "reason": "新建已知不稳定测试清单：.gitignore 的 docs 放行清单加入 docs/KNOWN_FLAKY_TESTS.md path=.gitignore",
+      "source_receipts": [
+        "docs/egress/maintenance/client-vc-stage-navigation-20260912-freeze-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-codex-vc-final-alignment-20260913-freeze-successor.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "070b1a734f3f42d930e8b56abd178e91f2cf26a7d4099239b176c14e33cca160"
+    }
+  ],
+  "unregistered_path_count": 1,
+  "unregistered_paths": [
+    "docs/KNOWN_FLAKY_TESTS.md"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
