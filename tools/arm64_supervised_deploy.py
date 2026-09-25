@@ -2277,28 +2277,39 @@ def record_step(
 
 
 def _bounded_event_metadata(value: Mapping[str, Any]) -> dict[str, Any]:
-    """把超长数组压成可复算摘要，避免部署规模增长击穿监督器事件上限。"""
+    """把超长数组与过深嵌套压成可复算摘要，避免部署规模增长击穿监督器事件上限。
 
-    def compact(item: Any) -> Any:
+    监督器事件 metadata 以顶层对象为第 0 层，第 4 层出现任何值都会拒绝。R15 起预检与切换后
+    核验都带运行时出口策略的节点（runtime_egress→nodes→角色→endpoint），第 3 层再出现
+    非空容器就越界，部署在记录预检事件时失败。这里把第 3 层的非空容器改写成规范 JSON 的
+    摘要字符串；完整事实仍原样写入部署收据，原本就能通过的 metadata 保持不变。
+    """
+
+    def canonical_sha256(item: Any) -> str:
+        return sha256_bytes(
+            json.dumps(
+                item,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
+
+    def compact(item: Any, depth: int) -> Any:
+        if isinstance(item, (list, Mapping)) and item and depth >= 3:
+            return "sha256:" + canonical_sha256(item)
         if isinstance(item, list):
             if len(item) > 32:
                 return {
                     "item_count": len(item),
-                    "items_sha256": sha256_bytes(
-                        json.dumps(
-                            item,
-                            ensure_ascii=False,
-                            sort_keys=True,
-                            separators=(",", ":"),
-                        ).encode("utf-8")
-                    ),
+                    "items_sha256": canonical_sha256(item),
                 }
-            return [compact(child) for child in item]
+            return [compact(child, depth + 1) for child in item]
         if isinstance(item, Mapping):
-            return {str(key): compact(child) for key, child in item.items()}
+            return {str(key): compact(child, depth + 1) for key, child in item.items()}
         return item
 
-    return {str(key): compact(child) for key, child in value.items()}
+    return {str(key): compact(child, 1) for key, child in value.items()}
 
 
 def parse_container_network(output: str, name: str) -> str:

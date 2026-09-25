@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import stat
 import sys
@@ -428,6 +429,52 @@ class Arm64SupervisedDeployTest(unittest.TestCase):
                     label="测试运行时文档",
                     allow_missing=True,
                 )
+
+    def test_runtime_egress_nodes_are_digested_before_supervisor_event(self) -> None:
+        """预检与切换后核验带出口策略节点，第 3 层起的容器必须压成摘要才能写入事件。
+
+        2026-09-25 首次在装有 R15 策略的 ARM64 上部署 0.156.1 时，预检事件因
+        runtime_egress→nodes→origin→endpoint 嵌套过深被监督器拒绝，部署在切换前失败。
+        """
+
+        node = {
+            "interface": "wg-egress",
+            "tunnel_ipv4": "10.79.32.1/30",
+            "public_key": "p" * 44,
+            "endpoint": {"ipv4": "203.0.113.10", "port": 51820},
+            "listen_port": 51821,
+            "mtu": 1380,
+            "public_interface": "eth0",
+        }
+        runtime_egress = {
+            "policy_sha256": "a" * 64,
+            "status_sha256": "b" * 64,
+            "nodes": {"origin": node, "exit": dict(node, interface="wg-egress-exit")},
+            "services": ["capture-cli", "sub2apiplus"],
+        }
+        result = {"staging_file_count": 3, "runtime_egress": runtime_egress}
+        with self.assertRaisesRegex(supervisor.SupervisorError, "嵌套过深"):
+            supervisor._metadata(result)
+        metadata = deploy._bounded_event_metadata(result)
+        self.assertEqual(supervisor._metadata(metadata), metadata)
+        self.assertEqual(metadata["staging_file_count"], 3)
+        compact = metadata["runtime_egress"]
+        self.assertEqual(compact["policy_sha256"], "a" * 64)
+        self.assertEqual(compact["services"], ["capture-cli", "sub2apiplus"])
+        expected = hashlib.sha256(
+            json.dumps(node, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        self.assertEqual(compact["nodes"]["origin"], "sha256:" + expected)
+        self.assertTrue(compact["nodes"]["exit"].startswith("sha256:"))
+        self.assertNotEqual(compact["nodes"]["origin"], compact["nodes"]["exit"])
+
+    def test_metadata_within_depth_limit_is_unchanged(self) -> None:
+        payload = {
+            "runtime_document_bindings": [{"path": "a", "sha256": "c" * 64}],
+            "legacy_production_documents": {"GUIDE.md": {"status": "present", "size": 1}},
+            "empty": {"nested": {"list": []}},
+        }
+        self.assertEqual(deploy._bounded_event_metadata(payload), payload)
 
     def test_runtime_document_metadata_uses_path_values(self) -> None:
         """带斜杠的仓库坐标只能作为值写入监督器 metadata。"""
