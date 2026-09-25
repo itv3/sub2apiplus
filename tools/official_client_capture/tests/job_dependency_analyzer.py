@@ -134,7 +134,13 @@ def strip_shell_comments(text: str) -> str:
 
 
 class _ReferenceIndex:
-    """与运行时旧算法相同的引用匹配：完整路径、唯一文件名、限定模块名。"""
+    """与运行时旧算法相同的引用匹配：完整路径、唯一文件名、限定模块名。
+
+    旧算法对每个 token 单独跑一次带边界的正则（约 900 次／文件）。这里把全部 token 合成一个
+    零宽前瞻交替正则一次扫完，长 token 在前；同一起点只取一个 token，因此若某个 token 是另一个
+    token 在非单词字符处截断的前缀（两者可能在同一位置同时成立），这些 token 退回逐个匹配，
+    保证与逐 token 语义逐项相等。
+    """
 
     def __init__(self, index: Mapping[str, str]) -> None:
         self.index = dict(index)
@@ -146,6 +152,42 @@ class _ReferenceIndex:
                 module = path[:-3].replace("/", ".")
                 self.modules[module] = path
                 self.modules[f"tools.official_client_capture.{module}"] = path
+        tokens: dict[str, str] = {}
+
+        def register(token: str, path: str) -> None:
+            if tokens.get(token, path) != path:
+                raise ValueError(f"引用 token 同时指向两个文件：{token}")
+            tokens[token] = path
+
+        for path in self.index:
+            register(path, path)
+        for basename, paths in self.basenames.items():
+            if len(paths) == 1:
+                register(basename, paths[0])
+        for module, path in self.modules.items():
+            if "." in module:
+                register(module, path)
+        self.tokens = tokens
+        ordered = sorted(tokens, key=len, reverse=True)
+        overlapping = {
+            shorter
+            for shorter in ordered
+            for longer in ordered
+            if len(longer) > len(shorter)
+            and longer.startswith(shorter)
+            and not re.match(r"[A-Za-z0-9_]", longer[len(shorter)])
+        }
+        self._slow_tokens = sorted(overlapping)
+        fast = [token for token in ordered if token not in overlapping]
+        self._pattern = (
+            re.compile(
+                r"(?=(?<![A-Za-z0-9_])("
+                + "|".join(re.escape(token) for token in fast)
+                + r")(?![A-Za-z0-9_]))"
+            )
+            if fast
+            else None
+        )
 
     @staticmethod
     def _contains(text: str, token: str) -> bool:
@@ -157,6 +199,17 @@ class _ReferenceIndex:
         )
 
     def references(self, text: str) -> set[str]:
+        found: set[str] = set()
+        if self._pattern is not None:
+            found.update(self.tokens[match.group(1)] for match in self._pattern.finditer(text))
+        found.update(
+            self.tokens[token] for token in self._slow_tokens if self._contains(text, token)
+        )
+        return found
+
+    def references_slow(self, text: str) -> set[str]:
+        """逐 token 的旧语义，只供等价性核对。"""
+
         found = {path for path in self.index if self._contains(text, path)}
         for basename, paths in self.basenames.items():
             if len(paths) == 1 and self._contains(text, basename):
@@ -167,55 +220,77 @@ class _ReferenceIndex:
         return found
 
 
+class DependencyAnalyzer:
+    """逐作业依赖分析；同一文件的剔除注释、引用与 import 结果只算一次，供整份清单共用。"""
+
+    def __init__(self, index: Mapping[str, str], tool_root: Path = TOOL_ROOT) -> None:
+        self.references = _ReferenceIndex(index)
+        self.tool_root = tool_root
+        self._edges: dict[str, frozenset[str]] = {}
+
+    def file_edges(self, path: str) -> frozenset[str]:
+        cached = self._edges.get(path)
+        if cached is not None:
+            return cached
+        edges: set[str] = set()
+        source = self.tool_root / path
+        if not source.is_symlink() and source.is_file() and source.suffix in {".py", ".sh"}:
+            content = source.read_text(encoding="utf-8")
+            cleaned = (
+                strip_python_comments(content)
+                if source.suffix == ".py"
+                else strip_shell_comments(content)
+            )
+            edges.update(self.references.references(cleaned))
+            if source.suffix == ".py":
+                for node in ast.walk(ast.parse(content, filename=path)):
+                    names: list[str] = []
+                    if isinstance(node, ast.ImportFrom) and node.module:
+                        names = [node.module]
+                    elif isinstance(node, ast.Import):
+                        names = [alias.name for alias in node.names]
+                    for name in names:
+                        matched = self.references.modules.get(name)
+                        if matched is not None:
+                            edges.add(matched)
+        result = frozenset(edges)
+        self._edges[path] = result
+        return result
+
+    def analyze_steps(self, steps: Iterable[Mapping[str, Any]]) -> list[str]:
+        """按剔除注释后的引用与 import 计算一个作业的真实工具依赖（排序去重）。"""
+
+        seed = json.dumps(
+            [
+                {
+                    "argv": step.get("argv", []),
+                    "environment": step.get("environment", {}),
+                }
+                for step in steps
+                if isinstance(step, Mapping)
+            ],
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        pending = list(self.references.references(seed))
+        dependencies: set[str] = set()
+        while pending:
+            path = pending.pop()
+            if path in dependencies:
+                continue
+            dependencies.add(path)
+            pending.extend(self.file_edges(path) - dependencies)
+        return sorted(dependencies)
+
+
 def analyze_steps(
     steps: Iterable[Mapping[str, Any]],
     index: Mapping[str, str],
     tool_root: Path = TOOL_ROOT,
 ) -> list[str]:
-    """按剔除注释后的引用与 import 计算一个作业的真实工具依赖（排序去重）。"""
+    """单个作业的便捷入口；整份清单请复用同一个 DependencyAnalyzer。"""
 
-    references = _ReferenceIndex(index)
-    seed = json.dumps(
-        [
-            {
-                "argv": step.get("argv", []),
-                "environment": step.get("environment", {}),
-            }
-            for step in steps
-            if isinstance(step, Mapping)
-        ],
-        ensure_ascii=False,
-        sort_keys=True,
-    )
-    pending = list(references.references(seed))
-    dependencies: set[str] = set()
-    while pending:
-        path = pending.pop()
-        if path in dependencies:
-            continue
-        dependencies.add(path)
-        source = tool_root / path
-        if source.is_symlink() or not source.is_file() or source.suffix not in {".py", ".sh"}:
-            continue
-        content = source.read_text(encoding="utf-8")
-        cleaned = (
-            strip_python_comments(content)
-            if source.suffix == ".py"
-            else strip_shell_comments(content)
-        )
-        pending.extend(references.references(cleaned) - dependencies)
-        if source.suffix == ".py":
-            for node in ast.walk(ast.parse(content, filename=path)):
-                names: list[str] = []
-                if isinstance(node, ast.ImportFrom) and node.module:
-                    names = [node.module]
-                elif isinstance(node, ast.Import):
-                    names = [alias.name for alias in node.names]
-                for name in names:
-                    matched = references.modules.get(name)
-                    if matched is not None and matched not in dependencies:
-                        pending.append(matched)
-    return sorted(dependencies)
+    return DependencyAnalyzer(index, tool_root).analyze_steps(steps)
 
 
 def current_tool_index() -> dict[str, str]:
@@ -230,9 +305,9 @@ def analyze_manifest(path: Path, index: Mapping[str, str] | None = None) -> dict
     """对场景清单的全部作业计算真实依赖；键为作业 id。"""
 
     payload = json.loads(path.read_text(encoding="utf-8"))
-    tool_index = dict(index) if index is not None else current_tool_index()
+    analyzer = DependencyAnalyzer(dict(index) if index is not None else current_tool_index())
     return {
-        str(job["id"]): analyze_steps(job.get("steps", []), tool_index)
+        str(job["id"]): analyzer.analyze_steps(job.get("steps", []))
         for job in payload.get("capture_jobs", [])
         if isinstance(job, Mapping)
     }

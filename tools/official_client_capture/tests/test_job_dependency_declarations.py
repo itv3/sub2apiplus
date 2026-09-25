@@ -114,7 +114,7 @@ class DeclaredDependencyGateTest(unittest.TestCase):
     def test_declared_scenario_manifests_match_analysis(self) -> None:
         """声明了依赖的场景清单：全部作业都声明，且逐项等于分析结果。"""
 
-        index = analyzer.current_tool_index()
+        shared = analyzer.DependencyAnalyzer(analyzer.current_tool_index())
         for manifest in sorted(TOOL_ROOT.glob("codex_upgrade_scenarios_*.json")):
             payload = json.loads(manifest.read_text(encoding="utf-8"))
             jobs = payload.get("capture_jobs", [])
@@ -126,7 +126,7 @@ class DeclaredDependencyGateTest(unittest.TestCase):
                 for job in jobs:
                     self.assertEqual(
                         job["tool_dependencies"],
-                        analyzer.analyze_steps(job["steps"], index),
+                        shared.analyze_steps(job["steps"]),
                         f"{manifest.name} 的 {job['id']} 声明与实际依赖不一致",
                     )
 
