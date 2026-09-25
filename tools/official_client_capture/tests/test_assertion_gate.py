@@ -430,6 +430,178 @@ class AssertionGatePassTest(GateFixture):
         self.assertIn("optional-missing-covered", str(raised.exception))
 
 
+def _path_check(check_id: str, where: list[dict]) -> dict:
+    """构造一个按 data.path 选择 http_request 的正向 check。"""
+
+    return {
+        "id": check_id,
+        "description": check_id,
+        "select": {"record_type": "http_request", "where": where},
+        "assertion": {"operator": "all_equal", "path": "data.method", "value": "POST"},
+    }
+
+
+class AbsentEndpointDeferralTest(GateFixture):
+    """官方 seal 遇到目标版本整体删除的端点：只延后该类未命中，其余仍当场失败。
+
+    0.156.1 删除 legacy compact 后，仓库冻结画像里钉死 ``/responses/compact`` 的
+    check 在官方证据上结构性不可达。门禁只在"select 以 data.path 钉死且该路径在
+    全部官方观测中零出现"时延后，并把延后项写进收据交给 VC-2 批准画像裁决。
+    """
+
+    COMPACT = "/backend-api/codex/responses/compact"
+
+    def _profile_with(self, *checks: dict) -> dict:
+        profile = _profile()
+        profile["rules"][0]["checks"].extend(checks)
+        return profile
+
+    def _run_deferred(self, profile: dict, *, side: str = "official") -> dict:
+        return gate.run_assertion_gate(
+            bundle_dir=self.bundle_dir,
+            source_roots=self.roots,
+            side=side,
+            profile=profile,
+            contract=contract_module.build_contract_payload(profile),
+            target_version=TARGET_VERSION,
+            defer_absent_endpoints=True,
+        )
+
+    def test_absent_endpoint_is_deferred_into_receipt(self) -> None:
+        self._build_bundle(include_candidate_trace=False)
+        self._write_manifest(include_candidate_trace=False)
+        profile = self._profile_with(
+            _path_check(
+                "legacy-compact-endpoint",
+                [{"path": "data.path", "operator": "equal", "value": self.COMPACT}],
+            ),
+            _path_check(
+                "legacy-in-list",
+                [
+                    {
+                        "path": "data.path",
+                        "operator": "in",
+                        "value": [self.COMPACT, "/backend-api/codex/responses/legacy"],
+                    }
+                ],
+            ),
+        )
+        receipt = self._run_deferred(profile)
+        self.assertEqual(
+            receipt[gate.DEFERRED_UNREACHABLE_FIELD],
+            [
+                {
+                    "rule_id": "SPEC-H1-001",
+                    "check_id": "legacy-compact-endpoint",
+                    "absent_paths": [self.COMPACT],
+                },
+                {
+                    "rule_id": "SPEC-H1-001",
+                    "check_id": "legacy-in-list",
+                    "absent_paths": [
+                        "/backend-api/codex/responses/compact",
+                        "/backend-api/codex/responses/legacy",
+                    ],
+                },
+            ],
+        )
+        # 延后项计入已核对 check 数：原 2 个 wire check + 2 个延后项。
+        self.assertEqual(receipt["checked_check_count"], 4)
+        gate.validate_gate_receipt(receipt, side="official")
+
+    def test_receipt_shape_unchanged_when_nothing_deferred(self) -> None:
+        self._build_bundle(include_candidate_trace=False)
+        self._write_manifest(include_candidate_trace=False)
+        receipt = self._run_deferred(_profile())
+        self.assertNotIn(gate.DEFERRED_UNREACHABLE_FIELD, receipt)
+        self.assertEqual(receipt, self._run("official"))
+
+    def test_label_miss_on_present_endpoint_still_fails(self) -> None:
+        """路径在官方观测中存在、只是标签没选中：属于标签语义错位，不得延后。"""
+
+        self._build_bundle(include_candidate_trace=False)
+        self._write_manifest(include_candidate_trace=False)
+        profile = self._profile_with(
+            _path_check(
+                "responses-direct",
+                [
+                    {
+                        "path": "data.path",
+                        "operator": "equal",
+                        "value": "/backend-api/codex/responses",
+                    },
+                    {"path": "labels.transport", "operator": "equal", "value": "direct"},
+                ],
+            )
+        )
+        with self.assertRaises(gate.AssertionGateError) as raised:
+            self._run_deferred(profile)
+        self.assertIn("responses-direct", str(raised.exception))
+
+    def test_partially_present_path_list_still_fails(self) -> None:
+        """in 列表里只要有一个路径出现在官方观测中，就不是端点整体缺席。"""
+
+        self._build_bundle(include_candidate_trace=False)
+        self._write_manifest(include_candidate_trace=False)
+        profile = self._profile_with(
+            _path_check(
+                "mixed-paths",
+                [
+                    {
+                        "path": "data.path",
+                        "operator": "in",
+                        "value": [self.COMPACT, "/backend-api/codex/responses"],
+                    },
+                    {"path": "labels.transport", "operator": "equal", "value": "direct"},
+                ],
+            )
+        )
+        with self.assertRaises(gate.AssertionGateError) as raised:
+            self._run_deferred(profile)
+        self.assertIn("mixed-paths", str(raised.exception))
+
+    def test_unpinned_selector_miss_still_fails(self) -> None:
+        """select 没有用 data.path 钉死端点时，未命中一律按证据缺失处理。"""
+
+        self._build_bundle(include_candidate_trace=False)
+        self._write_manifest(include_candidate_trace=False)
+        profile = self._profile_with(
+            _path_check(
+                "variant-only",
+                [{"path": "labels.variant", "operator": "equal", "value": "beta"}],
+            )
+        )
+        with self.assertRaises(gate.AssertionGateError) as raised:
+            self._run_deferred(profile)
+        self.assertIn("variant-only", str(raised.exception))
+
+    def test_default_gate_does_not_defer(self) -> None:
+        """不打开延后开关时（候选侧与既有调用），端点缺席照旧失败关闭。"""
+
+        self._build_bundle(include_candidate_trace=False)
+        self._write_manifest(include_candidate_trace=False)
+        profile = self._profile_with(
+            _path_check(
+                "legacy-compact-endpoint",
+                [{"path": "data.path", "operator": "equal", "value": self.COMPACT}],
+            )
+        )
+        with self.assertRaises(gate.AssertionGateError) as raised:
+            self._run(
+                "official",
+                profile=profile,
+                contract=contract_module.build_contract_payload(profile),
+            )
+        self.assertIn("legacy-compact-endpoint", str(raised.exception))
+
+    def test_candidate_side_cannot_defer(self) -> None:
+        self._build_bundle(include_candidate_trace=True)
+        self._write_manifest(include_candidate_trace=True)
+        with self.assertRaises(gate.AssertionGateError) as raised:
+            self._run_deferred(_profile(), side="candidate")
+        self.assertIn("只适用于官方侧", str(raised.exception))
+
+
 class CandidateTraceGateTest(GateFixture):
     """``candidate-trace/`` 被排除在收口 provenance 之外，必须由收据自证。
 
@@ -648,6 +820,57 @@ class GateReceiptContractTest(unittest.TestCase):
         gate.validate_gate_receipt(receipt, side="official")
         with self.assertRaises(gate.AssertionGateError):
             gate.validate_gate_receipt(receipt, side="candidate")
+
+    def _receipt(self, side: str = "official") -> dict:
+        return {
+            "side": side,
+            "bundle_dir_name": gate.BUNDLE_DIR_NAME,
+            "bundle_provenance_sha256": "0" * 64,
+            "bundle_entry_count": 1,
+            "derived_provenance_sha256": None,
+            "candidate_trace_receipt_sha256": None,
+            "capture_manifest": {"path": gate.MANIFEST_FILENAME, "sha256": "0" * 64},
+            "acceptance_contract_sha256": "0" * 64,
+            "artifact_count": 1,
+            "observation_count": 1,
+            "checked_rule_count": 1,
+            "checked_check_count": 1,
+        }
+
+    def test_deferred_entries_accepted_only_on_official_side(self) -> None:
+        entry = {
+            "rule_id": "SPEC-EP-007",
+            "check_id": "legacy-compact-endpoint",
+            "absent_paths": ["/backend-api/codex/responses/compact"],
+        }
+        official = self._receipt()
+        official[gate.DEFERRED_UNREACHABLE_FIELD] = [entry]
+        gate.validate_gate_receipt(official, side="official")
+        candidate = self._receipt("candidate")
+        candidate[gate.DEFERRED_UNREACHABLE_FIELD] = [entry]
+        with self.assertRaises(gate.AssertionGateError):
+            gate.validate_gate_receipt(candidate, side="candidate")
+
+    def test_malformed_deferred_entries_rejected(self) -> None:
+        good = {
+            "rule_id": "SPEC-EP-007",
+            "check_id": "legacy-compact-endpoint",
+            "absent_paths": ["/backend-api/codex/responses/compact"],
+        }
+        malformed = [
+            [],
+            [{**good, "extra": 1}],
+            [{**good, "absent_paths": []}],
+            [{**good, "absent_paths": ["relative/path"]}],
+            [{**good, "absent_paths": ["/b", "/a"]}],
+            [{**good, "rule_id": ""}],
+            [good, dict(good)],
+        ]
+        for value in malformed:
+            receipt = self._receipt()
+            receipt[gate.DEFERRED_UNREACHABLE_FIELD] = value
+            with self.subTest(value=value), self.assertRaises(gate.AssertionGateError):
+                gate.validate_gate_receipt(receipt, side="official")
 
 
 if __name__ == "__main__":

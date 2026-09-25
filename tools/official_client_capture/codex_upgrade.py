@@ -38672,16 +38672,39 @@ def _run_seal_assertion_gate(
     *,
     phase: str,
     target_version: str,
+    campaign_dir: Path | None = None,
+    classification: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """ACC-03：seal 前按分侧验收契约执行断言门禁，任一失败拒绝封存。"""
+    """ACC-03：seal 前按分侧验收契约执行断言门禁，任一失败拒绝封存。
+
+    画像权威随阶段走：
+
+    - 官方 seal 在 classify 之前，没有批准画像，只能用仓库冻结画像并证明其契约未漂移；
+      目标版本整体删除的端点在官方证据上结构性不可达，按
+      ``assertion_gate._verify_selector_reachability`` 的条件登记为延后项，由 VC-2
+      批准画像裁决。
+    - 候选 seal 在 classify 之后，与 compare／accept 同一权威：本 Campaign 批准并摘要
+      绑定的断言画像。继续用仓库冻结画像会把目标版本已删除或改判的基线 check
+      （如 legacy compact）强加给候选，候选按目标行为实现后必然无法封存。
+    """
 
     bundle_dir = Path(assertion_context["evidence_root"])
     # provenance 里的 source_root 名即封存 inventory 的逻辑前缀，重放时按同一
     # 映射回到真实目录；bundle 是某个根内的子目录，不单独充当来源根。
     source_roots = {prefix: root for root, prefix in _evidence_root_map(roots)}
     try:
-        profile = load_acceptance_profile(acceptance_profile_path())
-        contract = verify_frozen_contract(profile)
+        if phase == "official":
+            profile = load_acceptance_profile(acceptance_profile_path())
+            contract = verify_frozen_contract(profile)
+        else:
+            if campaign_dir is None or classification is None:
+                raise ConfigurationError(
+                    "候选 seal 断言门禁必须绑定本 Campaign 的批准分类。"
+                )
+            profile = load_acceptance_profile(
+                _approved_assertion_profile_path(campaign_dir, classification)
+            )
+            contract = build_acceptance_contract(profile)
         return run_assertion_gate(
             bundle_dir=bundle_dir,
             source_roots=source_roots,
@@ -38689,6 +38712,7 @@ def _run_seal_assertion_gate(
             profile=profile,
             contract=contract,
             target_version=target_version,
+            defer_absent_endpoints=phase == "official",
         )
     except (AcceptanceContractError, AssertionGateError) as error:
         raise ConfigurationError(
@@ -44314,7 +44338,14 @@ def _seal_attempt_recovery_segment(
     bundle_root = Path(str(assertion_context.get("evidence_root", "")))
     if not bundle_root.is_absolute() or private_root.resolve(strict=True) not in bundle_root.resolve(strict=True).parents:
         raise ConfigurationError("恢复段增量封存的断言证据包必须位于本基线 baseline-evidence 目录内。")
-    assertion_gate = _run_seal_assertion_gate(assertion_context, roots, phase="candidate", target_version=manifest["target_version"])
+    assertion_gate = _run_seal_assertion_gate(
+        assertion_context,
+        roots,
+        phase="candidate",
+        target_version=manifest["target_version"],
+        campaign_dir=campaign_dir,
+        classification=classification,
+    )
     if post_client_path is None or client_checkpoint_at is None:
         raise ConfigurationError("恢复段增量封存缺少 Kilo 后检查点。")
     receipt_identity = dict(
@@ -47415,6 +47446,8 @@ def _seal_capture_attempt(
         roots,
         phase=phase,
         target_version=manifest["target_version"],
+        campaign_dir=campaign_dir,
+        classification=classification,
     )
     client_bindings: list[dict[str, Any]] = []
     observed_profile: dict[str, str] | None = None
@@ -53881,16 +53914,11 @@ def _compare_result_exit_code(result: Mapping[str, Any]) -> int:
     return 2
 
 
-def _acceptance_contract(
+def _approved_assertion_profile_path(
     campaign_dir: Path,
     classification: dict[str, Any],
-) -> dict[str, Any]:
-    """从本 Campaign **批准的**断言画像机器推导验收契约。
-
-    权威是 classify 阶段人工批准并摘要绑定的 `assertion-profile.json`，不是仓库
-    冻结画像——目标规则集允许相对基线增删，契约必须随批准画像走。仓库冻结摘要
-    只用于 seal 前预检与工具自检（见 `acceptance_contract.FROZEN_CONTRACT_SHA256`）。
-    """
+) -> Path:
+    """返回分类收据绑定的批准断言画像路径，并核对文件仍与批准摘要逐字一致。"""
 
     reference = classification.get("assertion_profile_manifest")
     if not isinstance(reference, dict):
@@ -53900,6 +53928,22 @@ def _acceptance_contract(
         "sha256"
     ):
         raise ConfigurationError("批准断言画像在封存后漂移或丢失。")
+    return path
+
+
+def _acceptance_contract(
+    campaign_dir: Path,
+    classification: dict[str, Any],
+) -> dict[str, Any]:
+    """从本 Campaign **批准的**断言画像机器推导验收契约。
+
+    权威是 classify 阶段人工批准并摘要绑定的 `assertion-profile.json`，不是仓库
+    冻结画像——目标规则集允许相对基线增删，契约必须随批准画像走。仓库冻结摘要
+    只用于官方 seal 预检与工具自检（见 `acceptance_contract.FROZEN_CONTRACT_SHA256`）；
+    候选 seal 预检同样以批准画像为权威（见 `_run_seal_assertion_gate`）。
+    """
+
+    path = _approved_assertion_profile_path(campaign_dir, classification)
     try:
         return build_acceptance_contract(load_acceptance_profile(path))
     except AcceptanceContractError as error:
