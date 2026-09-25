@@ -214,8 +214,11 @@ from urllib.parse import urlsplit
 # 变化（wire／evidence／policy 摘要不变）；受管工具树与监督器摘要随之变化；断言预处理器未变。
 # 2026-09-25（classify 证据语义判定）：classify 以已封存官方 attempt 的 evaluation epoch 链判定 evidence
 # semantics（control 层，wire／evidence／policy 摘要不变）；受管工具树随之变化；监督器与断言预处理器未变。
+# 2026-09-25（VC-1 补跑失败后继）：监督器新增“按预览真实补跑失败 → N+1 普通零请求预览”后继协议，两个重派
+# 协议共用父 run 失败核验（control 层，wire／evidence／policy 摘要不变）；受管工具树与监督器摘要随之变化；
+# 断言预处理器未变。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "cadf61e0c45433ee39654890bd08878570b5fe5af46c98260eee4bd2e7f41acd"
+    "c4276d7c4108b66994c44d93688244e456cb5d5c91d5aaadae2fafc634aa52eb"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "c8020cadd3ee08f67236313a0913dbc3730805b46c3f6b720cdf7ace77f9fec1"
