@@ -2562,6 +2562,15 @@ def _validate_scenario_manifest_shape(payload: dict[str, Any]) -> None:
                     f"候选场景任务 {index} 步骤 {step_index} 必须从 Campaign "
                     "target_version 注入 CODEX_VERSION。"
                 )
+    # R16：一份清单要么全部作业声明显式依赖，要么全部不声明；半迁移会让未声明的
+    # 作业继续走旧的引用扫描，重新引入注释依赖与慢路径。
+    declared_jobs = sum(
+        1 for job in jobs if isinstance(job, dict) and "tool_dependencies" in job
+    )
+    if declared_jobs and declared_jobs != len(jobs):
+        raise ConfigurationError(
+            "场景清单的 tool_dependencies 必须覆盖全部作业，或全部不声明。"
+        )
 
     clients = payload.get("required_client_bindings")
     if (
@@ -13101,6 +13110,27 @@ def _vc_checkpoint_reference(
     }
 
 
+# R16：首个 VC-1 capture-official 批次的动作超时按官方作业数估算，不再写死 3600 秒。
+# 240 秒按 0.156.1 实测标定：首批 30 个作业自身耗时平均 117 秒，其中 relay 作业约 74 秒
+# 是依赖计算，R16 后约 51 秒；按 31 个作业约 2 小时，既给预计约 30 分钟的首批留约 4 倍
+# 余量，也能容下单个作业跑满最长步骤超时（5400 秒）。不用“各步骤超时之和”：0.156.1
+# 合计约 20.3 小时，起不到安全网作用。批次动作字段是闭集，依据不另存，可由冻结作业复算。
+FIRST_OFFICIAL_BATCH_MIN_TIMEOUT_SECONDS = 3600
+FIRST_OFFICIAL_BATCH_SECONDS_PER_JOB = 240
+
+
+def _first_official_batch_timeout_seconds(job_count: int, *, remaining_seconds: int) -> int:
+    """首批动作超时：max(下限, 作业数 × 单作业预算)，且不超过距 Campaign 截止的剩余时间。"""
+
+    timeout = max(
+        FIRST_OFFICIAL_BATCH_MIN_TIMEOUT_SECONDS,
+        job_count * FIRST_OFFICIAL_BATCH_SECONDS_PER_JOB,
+    )
+    if remaining_seconds > 0:
+        timeout = min(timeout, remaining_seconds)
+    return max(60, timeout)
+
+
 def _create_initial_vc_control_artifacts(
     campaign_dir: Path,
     arguments: argparse.Namespace,
@@ -13211,6 +13241,10 @@ def _create_initial_vc_control_artifacts(
         created = datetime.fromisoformat(created_at_utc.replace("Z", "+00:00"))
         deadline = datetime.fromisoformat(original_deadline.replace("Z", "+00:00"))
         must_start = min(created + timedelta(seconds=60), deadline)
+        first_batch_timeout = _first_official_batch_timeout_seconds(
+            len(official_job_ids),
+            remaining_seconds=int((deadline - must_start).total_seconds()),
+        )
         try:
             execute_item_ids = [] if reuse_official_jobs else official_job_ids
             reuse_item_ids = official_job_ids if reuse_official_jobs else []
@@ -13220,7 +13254,7 @@ def _create_initial_vc_control_artifacts(
                     {
                         "action_id": "capture-official",
                         "operation": "VC-1:capture-official",
-                        "timeout_seconds": 3600,
+                        "timeout_seconds": first_batch_timeout,
                         "command": [
                             sys.executable,
                             str(Path(__file__).resolve()),

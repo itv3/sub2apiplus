@@ -11302,10 +11302,22 @@ class CodexUpgradeTest(unittest.TestCase):
         )
         self.assertIn("tool_dependencies", codex_upgrade.SCENARIO_JOB_EXECUTION_FIELDS)
 
+    def test_first_official_batch_timeout_scales_with_job_count(self) -> None:
+        """R16：首批动作超时 = max(3600, 作业数 × 240)，不超过距截止的剩余时间，下限 60 秒。
+
+        0.156.1 首批 31 个官方作业撞上写死的 3600 秒；步骤超时之和约 20.3 小时，太宽。
+        """
+
+        timeout = codex_upgrade._first_official_batch_timeout_seconds
+        self.assertEqual(timeout(31, remaining_seconds=10**6), 31 * 240)
+        self.assertEqual(timeout(10, remaining_seconds=10**6), 3600)
+        self.assertEqual(timeout(31, remaining_seconds=4000), 4000)
+        self.assertEqual(timeout(31, remaining_seconds=30), 60)
+
     def test_scenario_manifest_carries_tool_dependencies_into_jobs(self) -> None:
         """R16：场景清单可选声明 tool_dependencies；加载进 Job，并随执行契约冻结。
 
-        未声明的作业保持空声明（旧算法）；声明非法时场景加载失败关闭。
+        声明须覆盖全部作业（全有或全无）；声明非法时场景加载失败关闭。
         """
 
         tool_root = Path(codex_upgrade.__file__).resolve().parent
@@ -11314,6 +11326,8 @@ class CodexUpgradeTest(unittest.TestCase):
                 encoding="utf-8"
             )
         )
+        for job in source["capture_jobs"]:
+            job["tool_dependencies"] = ["run_official_relay_scenario.sh"]
         official = next(
             job for job in source["capture_jobs"] if job["phase"] == "official"
         )
@@ -11345,7 +11359,7 @@ class CodexUpgradeTest(unittest.TestCase):
             )
             self.assertTrue(
                 all(
-                    job.tool_dependencies == ()
+                    job.tool_dependencies == ("run_official_relay_scenario.sh",)
                     for job_id, job in jobs.items()
                     if job_id != official["id"]
                 )
