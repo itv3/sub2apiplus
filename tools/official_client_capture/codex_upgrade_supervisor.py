@@ -7347,23 +7347,43 @@ def _validate_batched_official_recovery_preview_retry_successor(
     ):
         raise SupervisorError("VC-1 恢复预览重派必须以 N+1 逐字沿用父预览批次。")
 
-    _permission_compensation_private_directory(
+    _verify_failed_official_recovery_parent(
+        prior_state,
         prior_dir,
-        "VC-1 恢复预览重派前序 run 目录",
+        campaign_id=successor_manifest.get("campaign_id"),
+        action_id=_OFFICIAL_RECOVERY_PREVIEW_ACTION_ID,
+        label="VC-1 恢复预览重派",
     )
+    return True
+
+
+
+def _verify_failed_official_recovery_parent(
+    prior_state: Mapping[str, Any],
+    prior_dir: Path,
+    *,
+    campaign_id: Any,
+    action_id: str,
+    label: str,
+) -> None:
+    """核验 VC-1 恢复链父 run：私有落盘、终态 failed、唯一动作以处理型错误失败。
+
+    预览重派与补跑失败后的预览两条协议共用：父 run 目录与 state／stop receipt 必须私有且
+    逐字自洽，stop 原因是该动作失败，动作诊断只能是处理型失败（ConfigurationError 或子进程
+    非零退出）；截止清理、中断等不在协议内，仍由 reconciler 判定。
+    """
+
+    _permission_compensation_private_directory(prior_dir, f"{label}前序 run 目录")
     recorded_state = _permission_compensation_json(
-        _permission_compensation_private_file(
-            prior_dir / "state.json",
-            "VC-1 恢复预览重派前序 state",
-        ),
-        "VC-1 恢复预览重派前序 state",
+        _permission_compensation_private_file(prior_dir / "state.json", f"{label}前序 state"),
+        f"{label}前序 state",
     )
     owner_pid = prior_state.get("owner_pid")
     owner_nonce = prior_state.get("owner_nonce")
     if (
         recorded_state != dict(prior_state)
         or prior_state.get("state") != "failed"
-        or prior_state.get("campaign_id") != successor_manifest.get("campaign_id")
+        or prior_state.get("campaign_id") != campaign_id
         or prior_state.get("phase") != "VC-1"
         or isinstance(owner_pid, bool)
         or not isinstance(owner_pid, int)
@@ -7371,34 +7391,27 @@ def _validate_batched_official_recovery_preview_retry_successor(
         or not isinstance(owner_nonce, str)
         or not owner_nonce
     ):
-        raise SupervisorError("VC-1 恢复预览重派的父终态或 owner 身份漂移。")
-    _permission_compensation_private_file(
-        prior_dir / "stop-receipt.json",
-        "VC-1 恢复预览重派前序 stop receipt",
-    )
+        raise SupervisorError(f"{label}的父终态或 owner 身份漂移。")
+    _permission_compensation_private_file(prior_dir / "stop-receipt.json", f"{label}前序 stop receipt")
     try:
         stop = read_stop_receipt(prior_dir)
     except SupervisorError as error:
-        raise SupervisorError(f"VC-1 恢复预览重派的父 stop receipt 漂移：{error}") from error
+        raise SupervisorError(f"{label}的父 stop receipt 漂移：{error}") from error
     if (
         stop.get("event_type") != "failed"
-        or stop.get("reason") != f"action-failed:{_OFFICIAL_RECOVERY_PREVIEW_ACTION_ID}"
+        or stop.get("reason") != f"action-failed:{action_id}"
         or stop.get("campaign_id") != prior_state.get("campaign_id")
         or stop.get("phase") != "VC-1"
         or stop.get("owner_pid") != owner_pid
         or stop.get("owner_nonce") != owner_nonce
     ):
-        raise SupervisorError("VC-1 恢复预览重派的父 stop receipt 漂移。")
+        raise SupervisorError(f"{label}的父 stop receipt 漂移。")
     diagnostic = _validate_action_diagnostic(
-        _action_diagnostic_path(
-            prior_dir,
-            _OFFICIAL_RECOVERY_PREVIEW_ACTION_ID,
-            create_directory=False,
-        ),
+        _action_diagnostic_path(prior_dir, action_id, create_directory=False),
         run_dir=prior_dir,
         campaign_id=str(prior_state["campaign_id"]),
         phase="VC-1",
-        action_id=_OFFICIAL_RECOVERY_PREVIEW_ACTION_ID,
+        action_id=action_id,
         owner_pid=owner_pid,
         owner_nonce=owner_nonce,
     )
@@ -7406,7 +7419,114 @@ def _validate_batched_official_recovery_preview_retry_successor(
         diagnostic.get("failure_kind"),
         diagnostic.get("error_type"),
     ) not in _OFFICIAL_RECOVERY_PREVIEW_RETRY_FAILURES:
-        raise SupervisorError("VC-1 恢复预览重派的父动作诊断不是处理型失败。")
+        raise SupervisorError(f"{label}的父动作诊断不是处理型失败。")
+
+
+# 按已批准恢复预览真实补跑的动作（resume --rerun-failed --recovery-preview … --acknowledge-live-requests）。
+_OFFICIAL_RECOVERY_RUN_ACTION_ID = "run-official-recovery"
+
+
+def _validate_batched_official_recovery_run_retry_successor(
+    prior_state: Mapping[str, Any],
+    prior_manifest: Mapping[str, Any],
+    prior_dir: Path,
+    successor_manifest: Mapping[str, Any],
+) -> bool:
+    """真实补跑批次失败后，允许以 N+1 派发新的普通零请求恢复预览。
+
+    补跑批次按已批准预览执行 ``resume --rerun-failed --recovery-preview <预览>
+    --acknowledge-live-requests``；作业失败时新 attempt 以失败状态封口、预约已入账，
+    须 reconcile-attempt 生成新恢复预览再补跑。原协议只接“采集失败 → 序号 2 预览”，
+    补跑再失败（0.156.1：guardian 审阅作业卡在目录信任确认）后 Campaign 无路可走。
+    本层只核对：父批次确为补跑且唯一动作以处理型错误失败；后继是 N+1 的普通零请求预览，
+    命令前缀与 Campaign 目录与父批次相同；execute 只能是父批次 execute 的非空子集、
+    execute∪reuse 与父批次一致（补跑中已通过的 Job 转入复用，不得扩大执行集合）。
+    恢复闭集仍由动作内的恢复器逐字复算。
+    """
+
+    prior_actions = prior_manifest.get("actions")
+    if (
+        prior_manifest.get("schema_version") != CAMPAIGN_RUN_BATCHED_SCHEMA
+        or successor_manifest.get("schema_version") != CAMPAIGN_RUN_BATCHED_SCHEMA
+        or prior_manifest.get("phase") != "VC-1"
+        or not isinstance(prior_actions, list)
+        or len(prior_actions) != 1
+        or not isinstance(prior_actions[0], Mapping)
+        or prior_actions[0].get("action_id") != _OFFICIAL_RECOVERY_RUN_ACTION_ID
+    ):
+        return False
+    prior_action = prior_actions[0]
+    command = prior_action.get("command")
+    if (
+        not isinstance(command, list)
+        or command.count("resume") != 1
+        or command.count("--recovery-preview") != 1
+        or "--preview-recovery" in command
+    ):
+        raise SupervisorError("VC-1 补跑失败后的预览：父动作不是按预览的真实补跑。")
+    resume_index = command.index("resume")
+    prefix = command[:resume_index]
+    tail = command[resume_index:]
+    if (
+        len(tail) != 7
+        or tail[1] != "--campaign-dir"
+        or not Path(str(tail[2])).is_absolute()
+        or tail[3:5] != ["--rerun-failed", "--recovery-preview"]
+        or not Path(str(tail[5])).is_absolute()
+        or tail[6] != "--acknowledge-live-requests"
+        or prior_action.get("operation") != _OFFICIAL_RECOVERY_PREVIEW_OPERATION
+    ):
+        raise SupervisorError("VC-1 补跑失败后的预览：父动作不是按预览的真实补跑。")
+    prior_sequence = prior_manifest.get("batch_sequence")
+    successor_actions = successor_manifest.get("actions")
+    prior_execute = prior_manifest.get("execute_items")
+    prior_reuse = prior_manifest.get("reuse_items")
+    successor_execute = successor_manifest.get("execute_items")
+    successor_reuse = successor_manifest.get("reuse_items")
+    expected_action = {
+        "action_id": _OFFICIAL_RECOVERY_PREVIEW_ACTION_ID,
+        "operation": _OFFICIAL_RECOVERY_PREVIEW_OPERATION,
+        "command": [*prefix, "resume", "--campaign-dir", str(tail[2]), "--rerun-failed", "--preview-recovery"],
+        "item_ids": successor_execute,
+    }
+    if (
+        isinstance(prior_sequence, bool)
+        or not isinstance(prior_sequence, int)
+        or prior_sequence < 2
+        or successor_manifest.get("phase") != "VC-1"
+        or successor_manifest.get("batch_sequence") != prior_sequence + 1
+        or any(
+            successor_manifest.get(field) != prior_manifest.get(field)
+            for field in (
+                "campaign_id",
+                "campaign_plan_sha256",
+                "original_deadline_at_utc",
+                "predecessor_checkpoint",
+                "no_op",
+            )
+        )
+        or not isinstance(successor_actions, list)
+        or len(successor_actions) != 1
+        or not isinstance(successor_actions[0], Mapping)
+        or {key: successor_actions[0].get(key) for key in expected_action} != expected_action
+        or not all(isinstance(items, list) for items in (prior_execute, prior_reuse, successor_execute, successor_reuse))
+        or not successor_execute
+        or len(set(successor_execute)) != len(successor_execute)
+        or len(set(successor_reuse)) != len(successor_reuse)
+        or set(successor_execute) & set(successor_reuse)
+        or not set(successor_execute).issubset(set(prior_execute))
+        or set(successor_execute) | set(successor_reuse) != set(prior_execute) | set(prior_reuse)
+    ):
+        raise SupervisorError(
+            "VC-1 补跑失败后的预览必须是 N+1 的普通零请求预览，且不得扩大父补跑的执行集合。"
+        )
+    _verify_failed_official_recovery_parent(
+        prior_state,
+        prior_dir,
+        campaign_id=successor_manifest.get("campaign_id"),
+        action_id=_OFFICIAL_RECOVERY_RUN_ACTION_ID,
+        label="VC-1 补跑失败后的预览",
+    )
     return True
 
 
@@ -9146,6 +9266,17 @@ def _validate_batched_campaign_history(
             prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
             and successor_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
             and _validate_batched_official_recovery_preview_retry_successor(
+                state,
+                prior_manifest,
+                _run_dir,
+                successor_manifest,
+            )
+        ):
+            continue
+        if (
+            prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
+            and successor_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
+            and _validate_batched_official_recovery_run_retry_successor(
                 state,
                 prior_manifest,
                 _run_dir,

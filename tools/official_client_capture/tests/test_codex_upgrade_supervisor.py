@@ -1452,6 +1452,218 @@ class SupervisorTests(unittest.TestCase):
             with self.assertRaisesRegex(SupervisorError, "不是处理型失败"):
                 supervisor._validate_batched_campaign_history(retry, history)
 
+    def test_failed_recovery_run_is_followed_by_a_new_zero_request_preview(self) -> None:
+        """真实补跑失败后，以 N+1 派发新的普通零请求预览，执行集合不得扩大。
+
+        0.156.1 VC-1：序号 4 补跑中 guardian 审阅作业卡在目录信任确认而失败，新 attempt
+        按失败封口。后继只能是 N+1 的普通预览（同命令前缀、同 Campaign 目录），execute 为
+        父补跑 execute 的非空子集且 execute∪reuse 不变；直接再补跑、扩大执行集合、父补跑以
+        截止清理失败一律拒绝。
+        """
+
+        def build(root: Path, *, run_failure: tuple[str, str, str]) -> tuple[
+            list[tuple[dict[str, object], dict[str, object], Path]], dict[str, object]
+        ]:
+            campaign_dir = root / "campaign"
+            campaign_dir.mkdir(mode=0o700)
+            campaign_id = "campaign-official-run-retry"
+            checkpoint = {
+                "path": "control/vc/vc-0-checkpoint.json",
+                "sha256": "3" * 64,
+                "phase": "VC-0",
+                "checkpoint_sha256": "4" * 64,
+            }
+            prefix = ["/usr/bin/python3", "/managed/codex_upgrade.py"]
+
+            def manifest(sequence: int, actions: list, execute: list, reuse: list) -> dict[str, object]:
+                return {
+                    "schema_version": supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA,
+                    "campaign_id": campaign_id,
+                    "campaign_plan_sha256": "1" * 64,
+                    "batch_id": f"vc-1-{sequence:04d}",
+                    "batch_sequence": sequence,
+                    "batch_sha256": str(sequence + 4) * 64,
+                    "phase": "VC-1",
+                    "predecessor_checkpoint": checkpoint,
+                    "original_deadline_at_utc": "2099-09-14T12:00:00Z",
+                    "no_op": False,
+                    "actions": actions,
+                    "execute_items": execute,
+                    "reuse_items": reuse,
+                }
+
+            def run(name: str, owner_nonce: str, state_name: str, reason: str | None) -> tuple[dict[str, object], Path]:
+                run_dir = root / name
+                run_dir.mkdir(mode=0o700)
+                state: dict[str, object] = {
+                    "state": state_name,
+                    "campaign_id": campaign_id,
+                    "phase": "VC-1",
+                    "owner_pid": os.getpid(),
+                    "owner_nonce": owner_nonce,
+                    "terminal_at_utc": "2026-09-25T09:13:09.000Z",
+                }
+                self._write_json(run_dir / "state.json", state)
+                if reason is not None:
+                    stop: dict[str, object] = {
+                        "schema_version": supervisor.STOP_SCHEMA,
+                        "campaign_id": campaign_id,
+                        "detected_at_epoch": 1005.0,
+                        "detected_at_utc": "2026-09-25T09:13:09.251Z",
+                        "event_type": "failed",
+                        "owner_nonce": owner_nonce,
+                        "owner_pid": os.getpid(),
+                        "phase": "VC-1",
+                        "reason": reason,
+                    }
+                    stop["receipt_sha256"] = supervisor._sha256(supervisor._canonical(stop))
+                    self._write_json(run_dir / "stop-receipt.json", stop)
+                return state, run_dir
+
+            capture_manifest = manifest(
+                1,
+                [
+                    {
+                        "action_id": "capture-official",
+                        "operation": "VC-1:capture-official",
+                        "timeout_seconds": 3600.0,
+                        "command": [
+                            *prefix,
+                            "capture-official",
+                            "run",
+                            "--campaign-dir",
+                            str(campaign_dir),
+                            "--acknowledge-live-requests",
+                        ],
+                        "item_ids": ["passed-job", "pending-job"],
+                    }
+                ],
+                ["passed-job", "pending-job"],
+                [],
+            )
+            capture_state, capture_dir = run("run-capture", "8" * 64, "failed", "action-failed:capture-official")
+            supervisor._write_action_diagnostic(
+                supervisor._action_diagnostic_path(capture_dir, "capture-official", create_directory=True),
+                campaign_id=campaign_id,
+                phase="VC-1",
+                action_id="capture-official",
+                owner_pid=os.getpid(),
+                owner_nonce="8" * 64,
+                failure_kind="child-returncode",
+                error_type="ChildProcessError",
+                message="子命令以非零状态退出，未提供进一步的脱敏诊断。",
+            )
+            preview_command = [
+                *prefix,
+                "resume",
+                "--campaign-dir",
+                str(campaign_dir),
+                "--rerun-failed",
+                "--preview-recovery",
+            ]
+            preview_manifest = manifest(
+                2,
+                [
+                    {
+                        "action_id": "preview-official-recovery",
+                        "operation": "VC-1:official-recovery",
+                        "timeout_seconds": 3600.0,
+                        "command": preview_command,
+                        "item_ids": ["pending-job"],
+                    }
+                ],
+                ["pending-job"],
+                ["passed-job"],
+            )
+            preview_state, preview_dir = run("run-preview", "9" * 64, "stopped", None)
+            run_manifest = manifest(
+                3,
+                [
+                    {
+                        "action_id": "run-official-recovery",
+                        "operation": "VC-1:official-recovery",
+                        "timeout_seconds": 5400.0,
+                        "command": [
+                            *prefix,
+                            "resume",
+                            "--campaign-dir",
+                            str(campaign_dir),
+                            "--rerun-failed",
+                            "--recovery-preview",
+                            str(campaign_dir / "control" / "recovery-preview-01.json"),
+                            "--acknowledge-live-requests",
+                        ],
+                        "item_ids": ["pending-job"],
+                    }
+                ],
+                ["pending-job"],
+                ["passed-job"],
+            )
+            run_state, run_dir = run("run-recovery", "a" * 64, "failed", "action-failed:run-official-recovery")
+            failure_kind, error_type, failure_class = run_failure
+            supervisor._write_action_diagnostic(
+                supervisor._action_diagnostic_path(run_dir, "run-official-recovery", create_directory=True),
+                campaign_id=campaign_id,
+                phase="VC-1",
+                action_id="run-official-recovery",
+                owner_pid=os.getpid(),
+                owner_nonce="a" * 64,
+                failure_kind=failure_kind,
+                failure_class=failure_class,
+                error_type=error_type,
+                message="子命令以非零状态退出，未提供进一步的脱敏诊断。",
+            )
+            history = [
+                (capture_state, capture_manifest, capture_dir),
+                (preview_state, preview_manifest, preview_dir),
+                (run_state, run_manifest, run_dir),
+            ]
+            successor = manifest(
+                4,
+                [
+                    {
+                        "action_id": "preview-official-recovery",
+                        "operation": "VC-1:official-recovery",
+                        "timeout_seconds": 3600.0,
+                        "command": list(preview_command),
+                        "item_ids": ["pending-job"],
+                    }
+                ],
+                ["pending-job"],
+                ["passed-job"],
+            )
+            return history, successor
+
+        handled = ("child-returncode", "ChildProcessError", "execution-failure")
+        with tempfile.TemporaryDirectory() as directory:
+            history, successor = build(Path(directory).resolve(), run_failure=handled)
+            ordered = supervisor._validate_batched_campaign_history(successor, history)
+            self.assertEqual([item[1]["batch_sequence"] for item in ordered], [1, 2, 3])
+
+            # 补跑失败后直接再补跑：不是普通零请求预览，拒绝。
+            live = copy.deepcopy(successor)
+            live["actions"][0]["action_id"] = "run-official-recovery"
+            live["actions"][0]["command"] = history[2][1]["actions"][0]["command"]
+            with self.assertRaisesRegex(SupervisorError, "普通零请求预览"):
+                supervisor._validate_batched_campaign_history(live, history)
+
+            # 扩大执行集合（把已复用的 Job 放回执行）：拒绝。
+            widened = copy.deepcopy(successor)
+            widened["execute_items"] = ["passed-job", "pending-job"]
+            widened["reuse_items"] = []
+            widened["actions"][0]["item_ids"] = ["passed-job", "pending-job"]
+            with self.assertRaisesRegex(SupervisorError, "不得扩大父补跑的执行集合"):
+                supervisor._validate_batched_campaign_history(widened, history)
+
+        # 父补跑以截止清理失败：不属于处理型失败，拒绝。
+        with tempfile.TemporaryDirectory() as directory:
+            history, successor = build(
+                Path(directory).resolve(),
+                run_failure=("handled-error", "CampaignCleanupRequested", "deadline-expired"),
+            )
+            with self.assertRaisesRegex(SupervisorError, "不是处理型失败"):
+                supervisor._validate_batched_campaign_history(successor, history)
+
     def test_environment_recovery_only_redispatches_exact_prior_batch(self) -> None:
         """reservation 前环境失败须有对账许可，且后继只能逐字重派原批次。"""
 
