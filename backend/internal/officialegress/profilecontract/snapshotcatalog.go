@@ -177,6 +177,24 @@ func PrepareSnapshotForManifest(snapshot SnapshotDoc) (SnapshotDoc, error) {
 		}
 		*field = raw
 	}
+	for index, field := range snapshot.optionalSectionFields() {
+		if *field == nil {
+			continue
+		}
+		name := OptionalSectionNames[index]
+		if _, err := DecodeOptionalSection(name, *field); err != nil {
+			return SnapshotDoc{}, err
+		}
+		var value any
+		if err := json.Unmarshal(*field, &value); err != nil {
+			return SnapshotDoc{}, err
+		}
+		raw, err := json.Marshal(value)
+		if err != nil {
+			return SnapshotDoc{}, err
+		}
+		*field = raw
+	}
 	snapshot.Digest = ""
 	digest, err := OfficialSnapshotDigest(snapshot)
 	if err != nil {

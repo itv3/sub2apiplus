@@ -200,8 +200,23 @@ type ExecutableProfile struct {
 	toolPresentation ToolPresentationProfile
 	subagents        SubagentProfile
 	files            FilesProfile
+	optional         OptionalSections
 	digest           string
 }
+
+// OptionalSections 汇总可选节的执行投影；nil 表示该版本画像没有这项行为。
+type OptionalSections struct {
+	CookieJar             *CookieJarSection             `json:",omitempty"`
+	WorkspaceRouting      *WorkspaceRoutingSection      `json:",omitempty"`
+	TurnMetadata          *TurnMetadataSection          `json:",omitempty"`
+	ClientMetadata        *ClientMetadataSection        `json:",omitempty"`
+	TurnState             *TurnStateSection             `json:",omitempty"`
+	WebSocketRetry        *WebSocketRetrySection        `json:",omitempty"`
+	WebSocketContinuation *WebSocketContinuationSection `json:",omitempty"`
+}
+
+// Optional 返回可选节投影的副本。
+func (p ExecutableProfile) Optional() OptionalSections { return p.optional }
 
 func (p ExecutableProfile) Version() string { return p.version }
 func (p ExecutableProfile) Digest() string  { return p.digest }
@@ -484,7 +499,26 @@ func compileCrossSections(profile ProfileSpec, compiled *ExecutableProfile) erro
 				return fmt.Errorf("编译 Files: %w", err)
 			}
 		default:
-			return fmt.Errorf("跨端点段没有执行消费者: %s", section.Name)
+			decoded, err := DecodeOptionalSection(section.Name, section.RawJSON)
+			if err != nil {
+				return fmt.Errorf("跨端点段没有执行消费者: %s: %w", section.Name, err)
+			}
+			switch value := decoded.(type) {
+			case *CookieJarSection:
+				compiled.optional.CookieJar = value
+			case *WorkspaceRoutingSection:
+				compiled.optional.WorkspaceRouting = value
+			case *TurnMetadataSection:
+				compiled.optional.TurnMetadata = value
+			case *ClientMetadataSection:
+				compiled.optional.ClientMetadata = value
+			case *TurnStateSection:
+				compiled.optional.TurnState = value
+			case *WebSocketRetrySection:
+				compiled.optional.WebSocketRetry = value
+			case *WebSocketContinuationSection:
+				compiled.optional.WebSocketContinuation = value
+			}
 		}
 	}
 	for _, required := range []string{"Surfaces", "ToolPresentation", "Subagents", "Files"} {
@@ -560,6 +594,14 @@ func validateExecutableCrossReferences(
 		}
 		seenMappings[mapping.ID] = true
 	}
+	// 工作区路由节引用的发现端点与受路由端点必须存在于同一画像，避免开关指向不存在的端点而静默失效。
+	if routing := profile.optional.WorkspaceRouting; routing != nil {
+		for _, endpointID := range append([]string{routing.DiscoveryEndpointID}, routing.RoutedEndpointIDs...) {
+			if _, ok := endpointIDs[endpointID]; !ok {
+				return fmt.Errorf("WorkspaceRouting 引用了未知 endpoint: %s", endpointID)
+			}
+		}
+	}
 	return nil
 }
 
@@ -619,10 +661,25 @@ func executableProfileDigest(profile ExecutableProfile) (string, error) {
 		ToolPresentation ToolPresentationProfile
 		Subagents        SubagentProfile
 		Files            FilesProfile
+		// 可选节逐项 omitempty：旧版本画像没有这些节，投影字节与 executable 摘要不变。
+		CookieJar             *CookieJarSection             `json:",omitempty"`
+		WorkspaceRouting      *WorkspaceRoutingSection      `json:",omitempty"`
+		TurnMetadata          *TurnMetadataSection          `json:",omitempty"`
+		ClientMetadata        *ClientMetadataSection        `json:",omitempty"`
+		TurnState             *TurnStateSection             `json:",omitempty"`
+		WebSocketRetry        *WebSocketRetrySection        `json:",omitempty"`
+		WebSocketContinuation *WebSocketContinuationSection `json:",omitempty"`
 	}{
 		Version: profile.version, Endpoints: profile.endpoints, Transports: profile.transports,
 		Features: profile.features, Surfaces: profile.surfaces,
 		ToolPresentation: profile.toolPresentation, Subagents: profile.subagents, Files: profile.files,
+		CookieJar:             profile.optional.CookieJar,
+		WorkspaceRouting:      profile.optional.WorkspaceRouting,
+		TurnMetadata:          profile.optional.TurnMetadata,
+		ClientMetadata:        profile.optional.ClientMetadata,
+		TurnState:             profile.optional.TurnState,
+		WebSocketRetry:        profile.optional.WebSocketRetry,
+		WebSocketContinuation: profile.optional.WebSocketContinuation,
 	}
 	raw, err := json.Marshal(projection)
 	if err != nil {
