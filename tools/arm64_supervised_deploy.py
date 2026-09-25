@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""在 ARM64 上受独立监督器保护地启用 Codex 0.156.1 工具和文档。
+"""在 ARM64 上受独立监督器保护地启用 Codex 0.157.0 工具和文档。
 
 本脚本只负责受管工具和活动文档的同一部署事务，不执行官方请求，也不读取证据。
 所有外部命令都经由 ``codex_upgrade_supervisor.SupervisorClient``，文件操作前后均
@@ -235,6 +235,10 @@ from urllib.parse import urlsplit
 # 2026-09-26（R18 VC-1 录制回放链）：pre-A3 登记 vc-chain.vc1-capture 与 vc-chain.vc1-recovery-chain（0.156.1 录制官方证据
 # 零请求回放，测试夹具在 tests/）。仅 control 层（pre-A3 场景表）变化，wire／evidence／policy 不变；受管工具树随之变化；
 # 监督器与断言预处理器未变。
+# 2026-09-26（F6：目标改为 0.157.0，放弃 0.156.1）：新增 0.157.0 目标版本清单（场景清单含 A17 daemon 路径作业，
+# 全部作业声明 R16 逐作业依赖）与 0.154.0→0.157.0 升级对，目标场景清单切到 0.157.0，部署命名改为 01570（与驱动
+# 按目标版本推导的前缀一致）；中继脚本新增 daemon-tui 场景、daemon 残留清扫与 drive_codex_daemon.py。wire 层
+# 变化；受管工具树随之变化；监督器与断言预处理器未变。
 DEFAULT_SUPERVISOR_DIGEST = (
     "8de72959d3c2b6ef3b8a24b6a80764fd6777dc8fccee068343803cfa43865b26"
 )
@@ -402,7 +406,7 @@ MANAGED_RUNTIME_DOCUMENTS = (
     "egress/maintenance/upstream-codex-0157-r18-candidate-stage-replay-20260926-freeze-successor.json",
 )
 MANAGED_ASSERTION_PREPARER = "prepare_assertion_bundle.sh"
-TARGET_SCENARIO_MANIFEST = "codex_upgrade_scenarios_0_156_1.json"
+TARGET_SCENARIO_MANIFEST = "codex_upgrade_scenarios_0_157_0.json"
 SOURCE_SPEC_HEADINGS = {
     "第二章": "# 第二部分 Codex CLI 客户端规则画像",
     "第二部分": "# 第二部分 Codex CLI 客户端规则画像",
@@ -2382,7 +2386,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--staging-root",
         type=Path,
-        default=Path("/root/docker/capture-cli/data/staging/codex-0.156.1-managed-tools"),
+        default=Path("/root/docker/capture-cli/data/staging/codex-0.157.0-managed-tools"),
     )
     parser.add_argument(
         "--production-root",
@@ -2442,7 +2446,7 @@ def main(argv: list[str] | None = None) -> int:
         raise DeploymentError("生产工具树不存在或不可信。")
     supervisor = load_supervisor(staging_root)
     stamp = utc_stamp().lower()
-    campaign_id = f"c01561-supervisor-enable-{stamp}-{secrets.token_hex(4)}"
+    campaign_id = f"c01570-supervisor-enable-{stamp}-{secrets.token_hex(4)}"
     attached_client = supervisor.SupervisorClient.attach_from_environment()
     client = attached_client or supervisor.SupervisorClient(
         control_root,
@@ -2464,7 +2468,7 @@ def main(argv: list[str] | None = None) -> int:
     installed_documents: list[str] = []
     tool_switched = False
     assertion_preparer_switched = False
-    receipt_path = control_root / f"codex-01561-supervisor-enable-{stamp}.json"
+    receipt_path = control_root / f"codex-01570-supervisor-enable-{stamp}.json"
 
     def switch_tool_tree() -> Mapping[str, Any]:
         """在事件结束写入失败时也保留已经发生的交换状态。"""
@@ -2510,7 +2514,7 @@ def main(argv: list[str] | None = None) -> int:
                 ),
             )
             candidate = control_root / (
-                f"codex-01561-tool-candidate-{stamp}-{secrets.token_hex(4)}"
+                f"codex-01570-tool-candidate-{stamp}-{secrets.token_hex(4)}"
             )
             record_step(
                 client,
@@ -2544,7 +2548,7 @@ def main(argv: list[str] | None = None) -> int:
                 ),
             )
             transaction_root = production_doc_root / (
-                f".codex-01561-deploy-{stamp}-{secrets.token_hex(4)}"
+                f".codex-01570-deploy-{stamp}-{secrets.token_hex(4)}"
             )
             record_step(
                 client,

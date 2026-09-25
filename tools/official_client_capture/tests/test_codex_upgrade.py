@@ -4446,7 +4446,7 @@ class CodexUpgradeTest(unittest.TestCase):
     def test_current_scenario_manifests_are_additive_and_model_parameterized(self) -> None:
         tool_root = Path(__file__).resolve().parents[1]
         repo_root = tool_root.parents[1]
-        for version in ("0.147.0", "0.149.1", "0.151.0", "0.154.0", "0.156.1"):
+        for version in ("0.147.0", "0.149.1", "0.151.0", "0.154.0", "0.156.1", "0.157.0"):
             suffix = version.replace(".", "_")
             scenario_path = tool_root / f"codex_upgrade_scenarios_{suffix}.json"
             scenario = json.loads(scenario_path.read_text(encoding="utf-8"))
@@ -4494,7 +4494,7 @@ class CodexUpgradeTest(unittest.TestCase):
             self.assertEqual(
                 core["steps"][0]["environment"]["LITE_MODEL"], "{lite_model}"
             )
-            if version in {"0.149.1", "0.151.0", "0.154.0", "0.156.1"}:
+            if version in {"0.149.1", "0.151.0", "0.154.0", "0.156.1", "0.157.0"}:
                 auxiliary = next(
                     job
                     for job in scenario["capture_jobs"]
@@ -4512,7 +4512,7 @@ class CodexUpgradeTest(unittest.TestCase):
                 wham_command = wham_job["steps"][1]["argv"][2]
                 self.assertIn("--entrypoint python3", wham_command)
                 self.assertNotIn("{runtime_image} python3 ", wham_command)
-                if version in {"0.154.0", "0.156.1"}:
+                if version in {"0.154.0", "0.156.1", "0.157.0"}:
                     self.assertIn(
                         "run_root={repo_root}/runs/{campaign_id}-official-wham-safe",
                         wham_command,
@@ -14984,6 +14984,51 @@ class CodexUpgradeTest(unittest.TestCase):
                     message,
                 ):
                     codex_upgrade._validate_upgrade_pair_models(**values)
+
+    def test_0157_upgrade_pair_model_policy_mutations_fail_closed(self) -> None:
+        """0.157.0 沿用 gpt-5.5 主线与 Astra Lite 轨；升级对只登记自 0.154.0 起跳。"""
+
+        codex_upgrade._validate_upgrade_pair_models(
+            baseline_version="0.154.0",
+            target_version="0.157.0",
+            model="gpt-5.5",
+            lite_model="gpt-6-astra",
+        )
+
+        mutations = (
+            ({"baseline_version": "0.156.1"}, "不支持的 Codex 升级对"),
+            ({"target_version": "0.157.1"}, "不支持的 Codex 升级对"),
+            ({"model": "gpt-6-sol"}, "主升级线只能使用 gpt-5.5"),
+            ({"lite_model": "gpt-6-luna"}, "Lite 专项只能使用 gpt-6-astra"),
+        )
+        baseline = {
+            "baseline_version": "0.154.0",
+            "target_version": "0.157.0",
+            "model": "gpt-5.5",
+            "lite_model": "gpt-6-astra",
+        }
+        for mutation, message in mutations:
+            with self.subTest(mutation=mutation):
+                values = {**baseline, **mutation}
+                with self.assertRaisesRegex(
+                    codex_upgrade.ConfigurationError,
+                    message,
+                ):
+                    codex_upgrade._validate_upgrade_pair_models(**values)
+
+    def test_0157_label_vocabulary_adds_daemon_mode_without_new_retirements(self) -> None:
+        """0.157.0 标签声明新增 A17 的 tui_mode=daemon；相对 0.154.0 的弃用取值与 0.156.1 相同。"""
+
+        vocabulary, digest = codex_upgrade._official_label_vocabulary("0.157.0")
+        tool_root = Path(codex_upgrade.__file__).resolve().parent
+        self.assertEqual(
+            digest,
+            codex_upgrade.file_sha256(tool_root / "codex_upgrade_evidence_labels_0_157_0.json"),
+        )
+        self.assertEqual(vocabulary["tui_mode"], frozenset({"daemon"}))
+        retired_0157, _ = codex_upgrade._retired_official_label_values("0.154.0", "0.157.0")
+        retired_0156, _ = codex_upgrade._retired_official_label_values("0.154.0", "0.156.1")
+        self.assertEqual(retired_0157, retired_0156)
 
     def test_plan_rejects_package_helper_digest_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

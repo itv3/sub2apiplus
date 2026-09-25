@@ -1,0 +1,7 @@
+{
+  "schema_version": "codex-upgrade-profile-rule-patches/v1",
+  "baseline_version": "0.154.0",
+  "target_version": "0.157.0",
+  "active_profile_sha256": "53a946932759a183296c2848106ebd4c881d14a98dc96fb85054060e0e53b66b",
+  "rule_patches": []
+}

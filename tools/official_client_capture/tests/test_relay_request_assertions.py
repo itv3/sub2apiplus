@@ -492,6 +492,47 @@ class ScenarioManifestParameterTest(unittest.TestCase):
         self.assertGreaterEqual(int(environment["EXPECT_CONNECTIONS"]), 16)
 
 
+class Scenario0157ManifestParameterTest(unittest.TestCase):
+    """0.157.0 清单：沿用 0.156.1 的全部作业参数，并新增 daemon 路径作业。"""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.manifest = json.loads(
+            (TOOL_ROOT / "codex_upgrade_scenarios_0_157_0.json").read_text(encoding="utf-8")
+        )
+        previous = json.loads(
+            (TOOL_ROOT / "codex_upgrade_scenarios_0_156_1.json").read_text(encoding="utf-8")
+        )
+        cls.previous_jobs = {job["id"]: job for job in previous["capture_jobs"]}
+        cls.jobs = {job["id"]: job for job in cls.manifest["capture_jobs"]}
+
+    def test_沿用作业的执行参数与_0156_逐字相同(self) -> None:
+        self.assertEqual(set(self.jobs) - set(self.previous_jobs), {"official-relay-tui-daemon"})
+        self.assertEqual(set(self.previous_jobs) - set(self.jobs), set())
+        for job_id, previous in self.previous_jobs.items():
+            with self.subTest(job_id=job_id):
+                current = self.jobs[job_id]
+                for field in ("phase", "suites", "scenario_ids", "steps", "evidence_roots", "covers"):
+                    self.assertEqual(current[field], previous[field], field)
+
+    def test_daemon_作业用默认功能开关并以启动期_models_为目标请求(self) -> None:
+        job = self.jobs["official-relay-tui-daemon"]
+        self.assertEqual(job["scenario_ids"], ["A17"])
+        environment = job["steps"][0]["environment"]
+        self.assertEqual(environment["SCENARIO"], "daemon-tui")
+        self.assertEqual(environment["CODEX_BIN"], "{relay_codex_bin}")
+        self.assertEqual(environment["REQUIRE_REQUEST_METHOD"], "GET")
+        self.assertEqual(environment["REQUIRE_REQUEST_PATH"], "/backend-api/codex/models")
+        # 不覆盖 DISABLE_FEATURES：默认 plugins/apps 由脚本写进独立 home 的 config.toml。
+        for absent in ("DISABLE_FEATURES", "TUI_ENABLE", "TUI_DISABLE"):
+            self.assertNotIn(absent, environment)
+        self.assertEqual(job["evidence_roots"], ["{capture_root}/runs/{campaign_id}-official-tui-daemon"])
+        self.assertTrue(environment["RUN_ID"].endswith("-official-tui-daemon"))
+        self.assertIn("drive_codex_daemon.py", job["tool_dependencies"])
+        scenario = next(item for item in self.manifest["evidence_scenarios"] if item["scenario_id"] == "A17")
+        self.assertEqual(scenario["covers"], job["covers"])
+
+
 class HttpFallbackGateTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:

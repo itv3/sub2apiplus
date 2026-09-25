@@ -34,10 +34,10 @@ OBSERVATION_SCHEMA_VERSION = "codex-candidate-observation/v1"
 RECEIPT_SCHEMA_VERSION = "codex-candidate-test-trace-receipt/v1"
 FACT_PREFIX = "CANDIDATE_TRACE_FACT "
 DEFAULT_MAPPING_RELATIVE_PATH = (
-    "tools/official_client_capture/candidate_test_fact_map_0_156_1.json"
+    "tools/official_client_capture/candidate_test_fact_map_0_157_0.json"
 )
 DEFAULT_PROFILE_RELATIVE_PATH = (
-    "tools/official_client_capture/candidate_rule_expectations_0_156_1.json"
+    "tools/official_client_capture/candidate_rule_expectations_0_157_0.json"
 )
 # 冻结映射内容完成后由离线测试固定；任何修改都必须显式更新并重新审核。
 #
@@ -77,8 +77,10 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
 # 源码快照，不改变候选测试、事实宇宙或断言规则。
 # 2026-09-25：目标升级到 0.156.1；映射按先例由 0.154.0 版逐字替换版本号得到，测试、事实宇宙
 # 与源码快照不变，VC-2／VC-4 定稿后按承接收据修订。
+# 2026-09-26：目标改为 0.157.0（放弃 0.156.1）；映射同样由 0.156.1 版逐字替换版本号得到，测试、
+# 事实宇宙与源码快照不变。
 FROZEN_MAPPING_SHA256 = (
-    "fe6981d7ae2910e8a7b02d6dd554f6abaf3e079fd8b6562eb5e48aa2ad3c3934"
+    "4bb0de176895729c55ef1835576125dc7604b0666178aef2c317b0eaae92ebb7"
 )
 # 2026-08-11（R8）：与双轨 selector 修订后的冻结断言画像保持同一摘要，
 # 含 BODY-006/nonlite-* 两条补 method=POST 与 responses 路径约束的修订。
@@ -124,8 +126,11 @@ FROZEN_MAPPING_SHA256 = (
 # 2026-09-25：断言画像升级为 0.156.1，按先例由 0.154.0 版逐字替换版本号得到；验收契约
 # 载荷不含版本号，现算摘要仍为 7aa0c0fc…（dual_wire=25／candidate_profile=17）。三条 legacy
 # compact delete 规则与新增出站面的判据由 VC-2 修订。
+# 2026-09-26：断言画像升级为 0.157.0，由 0.156.1 版逐字替换版本号得到，另把 A15 两条启动 models
+# suffix 正则里逐字替换漏掉的转义版本号（0\.154\.0）改为 0\.157\.0；验收契约现算仍为
+# 7aa0c0fc…（dual_wire=25／candidate_profile=17）。新增 A17（daemon 路径）暂无判据，VC-2 修订。
 FROZEN_PROFILE_SHA256 = (
-    "b124d7ad1efa3fd83bc54c9feb493ffd185a1c49988f8fed27b8ee41ff83db8b"
+    "ad691d79bb923949436690cce9ee90f56ff4c0d0b5d4a83717c9af97c31c0d76"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
