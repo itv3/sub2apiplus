@@ -14730,6 +14730,46 @@ class CodexUpgradeTest(unittest.TestCase):
             self.assertEqual(return_code, 1)
             self.assertIn("断言画像 codex_version 不一致", stderr)
 
+    def test_classify_verifies_evidence_against_sealed_official_attempt(self) -> None:
+        """classify 以已封存官方 attempt 的 epoch 链判定 evidence semantics。
+
+        seal 前部署的 evidence 层修复已由该 attempt 的 evaluation epoch 承接；classify 若仍比
+        Campaign 冻结值，VC-2 会永远无法分类。只读导入维持原口径，attempt 绑定漂移失败关闭。
+        """
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            campaign_dir, manifest = self._create_campaign(root)
+            self._seal_official_stage(root, campaign_dir, manifest)
+            official = codex_upgrade._load_stage_result(
+                campaign_dir, "capture-official", _shallow=True
+            )
+            expected_root = (campaign_dir / official["attempt"]["path"]).parent
+            with mock.patch.object(
+                codex_upgrade,
+                "_verify_plan_identity",
+                side_effect=codex_upgrade._verify_plan_identity,
+            ) as verify:
+                receipt = codex_upgrade.classify_campaign(campaign_dir)
+            self.assertEqual(receipt["status"], "draft")
+            self.assertEqual(verify.call_args.kwargs["operation"], "classify")
+            self.assertEqual(verify.call_args.kwargs["attempt_root"], expected_root)
+
+            imported = {**official, "predecessor_import": {"campaign_id": "x"}}
+            self.assertIsNone(
+                codex_upgrade._classification_official_attempt_root(
+                    campaign_dir, imported
+                )
+            )
+            drifted = {
+                **official,
+                "attempt": {**official["attempt"], "sha256": "0" * 64},
+            }
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "attempt 绑定"):
+                codex_upgrade._classification_official_attempt_root(
+                    campaign_dir, drifted
+                )
+
     def test_classify_draft_rewrites_every_nested_version_coordinate(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

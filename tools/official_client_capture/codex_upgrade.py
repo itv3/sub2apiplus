@@ -48626,6 +48626,34 @@ def _approved_reference(
     }
 
 
+def _classification_official_attempt_root(
+    campaign_dir: Path,
+    official: Mapping[str, Any],
+) -> Path | None:
+    """classify 评估的是已封存官方 attempt，evidence semantics 以该 attempt 的 epoch 链为准。
+
+    seal 前为 attempt 追加的 evaluation epoch 证明了封存时采用的证据语义；classify
+    若仍拿 Campaign 冻结值比较，seal 前任何合法的 evidence 层修复都会让 VC-2 永远无法分类
+    （0.156.1：seal 断言门禁修复在 VC-1 封存前部署）。只读导入的官方证据位于前序 Campaign，
+    维持原口径，不取 attempt。
+    """
+
+    if official.get("predecessor_import") is not None:
+        return None
+    binding = official.get("attempt")
+    if not isinstance(binding, Mapping):
+        raise ConfigurationError("官方封存收据缺少 attempt 绑定。")
+    attempt_path = _campaign_file(campaign_dir, str(binding.get("path", "")))
+    if (
+        attempt_path.name != "attempt.json"
+        or attempt_path.is_symlink()
+        or not attempt_path.is_file()
+        or file_sha256(attempt_path) != binding.get("sha256")
+    ):
+        raise ConfigurationError("官方封存收据的 attempt 绑定不可信或已漂移。")
+    return attempt_path.parent
+
+
 def classify_campaign(
     campaign_dir: Path,
     *,
@@ -48665,16 +48693,19 @@ def classify_campaign(
             "0.154.0 起批准画像必须同时提供 --active-profile 和 "
             "--profile-patch-manifest。"
         )
-    _verify_plan_identity(
-        campaign_dir,
-        manifest,
-        operation="classify",
-        allow_stopped_classification_draft_approval=approval_mode,
-    )
     official_summary = _load_stage_result(
         campaign_dir,
         "capture-official",
         _shallow=True,
+    )
+    _verify_plan_identity(
+        campaign_dir,
+        manifest,
+        operation="classify",
+        attempt_root=_classification_official_attempt_root(
+            campaign_dir, official_summary
+        ),
+        allow_stopped_classification_draft_approval=approval_mode,
     )
     official = _load_stage_result(
         campaign_dir,
