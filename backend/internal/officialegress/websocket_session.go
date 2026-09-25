@@ -162,6 +162,7 @@ func (s *ExecutorWebSocketSession) PrepareFrame(
 		payload, eventType, err = compileWebSocketFrame(
 			s.endpoint, body, plan.EventType, facts, plan.BodyConditions,
 			s.bundle.release.ExecutableProfile().Features(),
+			s.bundle.release.ExecutableProfile().Optional(),
 		)
 		if err != nil {
 			return PreparedWebSocketFrame{}, err
@@ -233,6 +234,7 @@ func compileWebSocketFrame(
 	facts CodexIdentityFacts,
 	bodyConditions BodyRuntimeConditions,
 	features profilecontract.FeatureDefaults,
+	optional profilecontract.OptionalSections,
 ) ([]byte, string, error) {
 	profile := endpoint.template.endpoint
 	if profile.Body.Encoding != profilecontract.BodyWebsocketJson &&
@@ -273,8 +275,11 @@ func compileWebSocketFrame(
 			return nil, "", errors.New("WebSocket 帧不匹配 Endpoint discriminator")
 		}
 	}
+	// response.create 帧与 HTTP 请求体共用同一注入逻辑：prompt_cache_key、由身份事实
+	// 重建的 client_metadata，以及画像 ClientMetadata 节按条件追加的常量。
 	if err := injectCompilerOwnedBodyFields(
 		profile, document, AttemptAuthenticationInput{}, facts,
+		codexClientMetadataConstants{section: optional.ClientMetadata, features: features},
 	); err != nil {
 		return nil, "", err
 	}

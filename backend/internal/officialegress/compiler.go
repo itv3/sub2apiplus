@@ -199,6 +199,7 @@ func (c *Compiler) Compile(
 	body, err := compileEndpointBody(
 		endpointPlan.template.endpoint,
 		bundle.release.ExecutableProfile().Features(),
+		bundle.release.ExecutableProfile().Optional(),
 		headers,
 		plan.Body,
 		plan.BodyPolicy.Conditions,
@@ -989,6 +990,7 @@ func IsProtectedCodexHeader(name string) bool { return protectedOfficialHeader(n
 func compileEndpointBody(
 	endpoint profilecontract.ExecutableEndpointProfile,
 	features profilecontract.FeatureDefaults,
+	optional profilecontract.OptionalSections,
 	headers http.Header,
 	body RequestBody,
 	bodyConditions BodyRuntimeConditions,
@@ -1036,7 +1038,12 @@ func compileEndpointBody(
 				return nil, fmt.Errorf("解析 JSON Body: %w", err)
 			}
 		}
-		if err = injectCompilerOwnedBodyFields(endpoint, document, authentication, identityFacts); err != nil {
+		if err = injectCompilerOwnedBodyFields(
+			endpoint, document, authentication, identityFacts,
+			codexClientMetadataConstants{
+				section: optional.ClientMetadata, features: features, authentication: authentication,
+			},
+		); err != nil {
 			return nil, err
 		}
 		compiled, err = orderJSONDocumentWithPolicy(
@@ -1074,16 +1081,53 @@ func compileEndpointBody(
 	return out, nil
 }
 
+// codexClientMetadataConstants 是 ClientMetadata 可选节在一次编译中的求值输入。
+// section 为 nil 表示当前画像没有该节，client_metadata 只由身份事实重建（旧逻辑）。
+type codexClientMetadataConstants struct {
+	section        *profilecontract.ClientMetadataSection
+	features       profilecontract.FeatureDefaults
+	authentication AttemptAuthenticationInput
+}
+
+// apply 按画像条件把常量写入 client_metadata。常量键与身份事实键冲突属于画像错误，
+// 失败关闭；条件不成立的键不写入。
+func (c codexClientMetadataConstants) apply(
+	metadata map[string]string,
+	conditions CodexRequestConditions,
+) error {
+	if c.section == nil {
+		return nil
+	}
+	keys := make([]string, 0, len(c.section.Constants))
+	for key := range c.section.Constants {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if _, exists := metadata[key]; exists {
+			return fmt.Errorf("ClientMetadata 常量键与身份事实冲突：%s", key)
+		}
+		if !codexHeaderConditionEnabled(
+			c.section.ConditionFor(key), c.features, conditions, c.authentication,
+		) {
+			continue
+		}
+		metadata[key] = c.section.Constants[key]
+	}
+	return nil
+}
+
 func injectCompilerOwnedBodyFields(
 	endpoint profilecontract.ExecutableEndpointProfile,
 	document *orderedJSONDocument,
 	authentication AttemptAuthenticationInput,
 	identityFacts CodexIdentityFacts,
+	constants codexClientMetadataConstants,
 ) error {
 	if endpoint.ID != "oauth_refresh" {
 		if endpoint.ID == "responses_http" || endpoint.ID == "responses_compact" ||
 			endpoint.ID == "responses_ws" {
-			return injectCodexResponsesOwnedBodyFields(endpoint, document, identityFacts)
+			return injectCodexResponsesOwnedBodyFields(endpoint, document, identityFacts, constants)
 		}
 		return nil
 	}
@@ -1105,6 +1149,7 @@ func injectCodexResponsesOwnedBodyFields(
 	endpoint profilecontract.ExecutableEndpointProfile,
 	document *orderedJSONDocument,
 	facts CodexIdentityFacts,
+	constants codexClientMetadataConstants,
 ) error {
 	if _, present := document.value("prompt_cache_key"); present {
 		return errors.New("Responses 语义 Body 禁止携带 compiler-owned prompt_cache_key")
@@ -1147,6 +1192,11 @@ func injectCodexResponsesOwnedBodyFields(
 	}
 	if len(metadata) == 0 {
 		return errors.New("Responses compiler 缺少 client_metadata 身份事实")
+	}
+	// 画像 ClientMetadata 节声明的客户端固定常量（如 guardian_credits_requested、
+	// mcp_attribution）在身份事实之后按条件追加；画像没有该节时保持旧逻辑。
+	if err := constants.apply(metadata, facts.Conditions); err != nil {
+		return err
 	}
 	metadataRaw, err := json.Marshal(metadata)
 	if err != nil {
@@ -1231,6 +1281,10 @@ func orderJSONDocumentWithPolicy(
 		}
 		if !enabled {
 			if present {
+				if codexBodyConditionOmitsPresentField(field.Condition) {
+					document.omit(field.Name)
+					continue
+				}
 				return nil, fmt.Errorf("JSON Body 条件字段未启用: %s", field.Name)
 			}
 			continue
@@ -1278,6 +1332,22 @@ func orderJSONDocumentWithPolicy(
 		}
 	}
 	return document.encodeNames(ordered), nil
+}
+
+// codexBodyConditionOmitsPresentField 列出“条件不成立时省略语义体中已有字段”的条件。
+//
+// guardian 审阅与否是请求级事实：官方客户端在构造审阅请求时自行删除 service_tier
+// 等字段，而网关收到的语义体来自下游，可能照常携带这些字段。对这类条件，编译器按
+// 画像省略字段，而不是像其他条件那样把“字段存在但条件未启用”当成调用方错误拒绝。
+// 旧版本画像不引用这两个条件，其余条件仍保持失败关闭。
+func codexBodyConditionOmitsPresentField(condition profilecontract.ConditionKind) bool {
+	switch condition {
+	case profilecontract.ConditionGuardianReviewRequest,
+		profilecontract.ConditionNotGuardianReviewRequest:
+		return true
+	default:
+		return false
+	}
 }
 
 func codexBodyFieldConditionEnabled(
