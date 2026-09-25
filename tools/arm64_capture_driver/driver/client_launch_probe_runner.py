@@ -74,6 +74,13 @@ SECRET_RE = re.compile(
 )
 TOKEN_RE = re.compile(r"^[A-Z]{16,64}$")
 MUTATION_RE = re.compile(r"^(untrust|unack_migration):([A-Za-z0-9_./-]+)$")
+# daemon 场景（daemon_auto_start 默认开启后的默认路径）的独立 CODEX_HOME：放在覆盖层 /work 下而不是 /tmp——客户端拒绝在临时目录
+# 下的 CODEX_HOME 里建 helper 别名并告警，与作业路径（容器 /root/.codex-daemon-<run_id>）不一致。建立、模式判定
+# 与停止都调用受管 drive_codex_daemon.py，与作业同一实现。
+DAEMON_HOMES_PARENT = Path("/work")
+DAEMON_HOME = DAEMON_HOMES_PARENT / ".codex-daemon-launch-probe"
+DAEMON_TOOL = "drive_codex_daemon.py"
+FEATURE_RE = re.compile(r"^[a-z0-9_]+$")
 
 
 class ProbeError(RuntimeError):
@@ -316,7 +323,7 @@ def validate_config(config: Any, *, codex_home: Path | None = None) -> dict[str,
     expected = {
         "combo_id", "tool_root", "codex_bin", "model", "cwd", "drive_options", "token",
         "prompt_hold_seconds", "deadline_seconds", "overlay_targets", "stub_hosts",
-        "test_mutations", "diagnostic_window",
+        "test_mutations", "diagnostic_window", "daemon",
     }
     if not isinstance(config, dict) or set(config) != expected:
         raise ProbeError("运行器参数键集合非法")
@@ -343,7 +350,20 @@ def validate_config(config: Any, *, codex_home: Path | None = None) -> dict[str,
         or not all(isinstance(item, int) and not isinstance(item, bool) and 10 <= item <= 500 for item in window)
     ):
         raise ProbeError("诊断窗口必须是 [行, 列]")
-    for label, path in (("工作目录", config["cwd"]), ("CODEX_HOME", str(codex_home or CODEX_HOME))):
+    daemon = config["daemon"]
+    if daemon is not None:
+        features = daemon.get("features") if isinstance(daemon, dict) else None
+        if (
+            set(daemon) != {"features"}
+            or not isinstance(features, list)
+            or not all(isinstance(item, str) and FEATURE_RE.fullmatch(item) for item in features)
+            or len(set(features)) != len(features)
+        ):
+            raise ProbeError("daemon 参数必须是 {\"features\": [功能开关名…]}")
+    homes = [("工作目录", config["cwd"]), ("CODEX_HOME", str(codex_home or CODEX_HOME))]
+    if daemon is not None:
+        homes.append(("daemon CODEX_HOME", str(DAEMON_HOME)))
+    for label, path in homes:
         if not any(path == target or path.startswith(target.rstrip("/") + "/") for target in config["overlay_targets"]):
             raise ProbeError(f"{label}不在覆盖层保护范围内：{path}")
     return config
@@ -555,6 +575,24 @@ def _visible_text(tool_root: str, raw: bytes) -> tuple[str, str]:
         sys.path.remove(tool_root)
 
 
+def _daemon_tool(tool_root: str, *arguments: str) -> dict[str, Any]:
+    """在命名空间内调用受管 daemon 生命周期工具（与作业同一实现），返回其单行 JSON 与退出码。"""
+
+    completed = subprocess.run(
+        ["python3", "-B", f"{tool_root}/{DAEMON_TOOL}", "--homes-parent", str(DAEMON_HOMES_PARENT), *arguments],
+        capture_output=True, text=True, timeout=180, check=False,
+    )
+    payload: dict[str, Any] = {}
+    for line in reversed(completed.stdout.splitlines()):
+        if line.startswith("{"):
+            try:
+                payload = json.loads(line)
+            except ValueError:
+                continue
+            break
+    return {**payload, "exit_code": completed.returncode}
+
+
 def _stop(process: subprocess.Popen[bytes]) -> int:
     if process.poll() is None:
         # SIGINT 让驱动走 finally → tui.close()（与作业结束方式一致），再兜底 SIGKILL。
@@ -599,6 +637,19 @@ def main() -> int:
         drive_path = Path(config["tool_root"]) / "drive_codex_tui.py"
         result["drive_codex_tui_sha256"] = hashlib.sha256(drive_path.read_bytes()).hexdigest()
         models_payload, models_etag, result["models_catalog"] = _load_models_catalog()
+        daemon = config["daemon"]
+        drive_env = dict(os.environ)
+        if daemon is not None:
+            prepared = _daemon_tool(
+                config["tool_root"], "prepare", "--home", str(DAEMON_HOME),
+                "--disable-features", " ".join(daemon["features"]),
+            )
+            result["daemon_prepare"] = {
+                key: prepared.get(key) for key in ("status", "copied_files", "features", "error", "exit_code")
+            }
+            if prepared.get("status") != "passed":
+                raise ProbeError("daemon 场景的独立 CODEX_HOME 建立失败")
+            drive_env["CODEX_HOME"] = str(DAEMON_HOME)
         stub = Stub(cert, key, config["token"], started, models_payload, models_etag)
         codex_bin = config["codex_bin"]
         result["diagnostic_window"] = config["diagnostic_window"]
@@ -606,7 +657,7 @@ def main() -> int:
             codex_bin = str(_window_shim(codex_bin, *config["diagnostic_window"]))
         drive = build_drive_argv(config, codex_bin, str(SCRATCH / "tui.log"))
         with (SCRATCH / "drive.out").open("wb") as drive_out:
-            process = subprocess.Popen(drive, stdout=drive_out, stderr=subprocess.STDOUT, env=dict(os.environ))
+            process = subprocess.Popen(drive, stdout=drive_out, stderr=subprocess.STDOUT, env=drive_env)
             deadline = started + config["deadline_seconds"]
             outcome = "timeout"
             while time.monotonic() < deadline:
@@ -620,6 +671,22 @@ def main() -> int:
                 time.sleep(0.25)
             result["drive_exit_code"] = _stop(process)
         hit = stub.token_request()
+        daemon_ok = True
+        if daemon is not None:
+            # 口令经 daemon 发出才算 daemon 路径成立：模式由 daemon version 与进程表判定，随后停止 daemon。
+            status = _daemon_tool(
+                config["tool_root"], "status", "--home", str(DAEMON_HOME),
+                "--codex-bin", config["codex_bin"], "--require-mode", "daemon",
+            )
+            stopped = _daemon_tool(config["tool_root"], "stop", "--home", str(DAEMON_HOME), "--codex-bin", config["codex_bin"])
+            result["daemon"] = {
+                "mode": status.get("mode"),
+                "status": status.get("status"),
+                "app_server_version": (status.get("daemon") or {}).get("appServerVersion"),
+                "stop_status": stopped.get("status"),
+                "error": status.get("error") or stopped.get("error"),
+            }
+            daemon_ok = status.get("status") == "passed" and stopped.get("status") == "passed"
         result["stub_requests"] = stub.snapshot()
         result["token_request"] = hit
         raw = (SCRATCH / "tui.log").read_bytes() if (SCRATCH / "tui.log").exists() else b""
@@ -628,8 +695,11 @@ def main() -> int:
         result["tui_log_bytes"] = len(raw)
         result["tui_visible_tail"] = redact(text[-1500:])
         result["drive_output_tail"] = redact((SCRATCH / "drive.out").read_bytes().decode("utf-8", "replace")[-1500:])
-        result["status"] = "passed" if hit is not None else "failed"
-        result["reason"] = "token_request_observed" if hit is not None else outcome
+        result["status"] = "passed" if hit is not None and daemon_ok else "failed"
+        if hit is not None and daemon_ok:
+            result["reason"] = "token_request_observed"
+        else:
+            result["reason"] = "daemon_mode_not_established" if hit is not None else outcome
     except (ProbeError, OSError, KeyError, TypeError, ValueError, subprocess.SubprocessError) as error:
         result["reason"] = "probe_error"
         result["error"] = redact(f"{type(error).__name__}: {error}")[:600]

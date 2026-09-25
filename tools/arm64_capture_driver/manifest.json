@@ -34,15 +34,15 @@
     },
     {
       "path": "driver/client_launch_probe.py",
-      "sha256": "1e787b332101460ee72eced685f3dcace83b09fb886dc11f242a23aa7bb32f73",
+      "sha256": "7a7b2a82f5fc6478f3d0b1e588e2d25bc0838610c7d816f9ecbaa6e14b965469",
       "mode": "0700",
-      "bytes": 26793
+      "bytes": 28293
     },
     {
       "path": "driver/client_launch_probe_runner.py",
-      "sha256": "2438ea5961d6508b8235556531dcdc814d5bf2a473dcb6bbb0a793fb08d6145f",
+      "sha256": "f3067d1d5ac95b55c1f7dbc80b41dcc2332819fba66cd696aa38c0330be82b7f",
       "mode": "0700",
-      "bytes": 28938
+      "bytes": 32599
     },
     {
       "path": "driver/driver_config.py",
@@ -303,5 +303,5 @@
       "bytes": 21976
     }
   ],
-  "manifest_sha256": "40813fd67d26c4035e59b59b86b4518578e101f39a4d5da0166acedeef5cc536"
+  "manifest_sha256": "2277ce70e2d07119b74bd8c688034198d05ef81157c8f545a44602217b10aa84"
 }

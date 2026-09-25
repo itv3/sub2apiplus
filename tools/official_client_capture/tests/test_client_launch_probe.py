@@ -106,9 +106,10 @@ def _drive_call(body: list[str]) -> tuple[list[str], list[str]]:
     drive_index = next(index for index, line in enumerate(body) if "drive_codex_tui.py" in line)
     start = max(index for index in range(drive_index + 1) if "docker exec" in body[index])
     end = next(index for index in range(drive_index, len(body)) if "--log " in body[index])
+    # 只取字面量赋值：命令替换（如 daemon 分支建 home 的 daemon_tool 调用）不影响驱动参数，也不能在夹具里执行。
     prelude = [
         line for line in body[:start]
-        if re.match(r"^\s*[a-z_]+=", line) or re.match(r"^\s*\[\[ .* \]\] && [a-z_]+=", line)
+        if (re.match(r"^\s*[a-z_]+=", line) or re.match(r"^\s*\[\[ .* \]\] && [a-z_]+=", line)) and "$(" not in line
     ]
     command = body[start:end + 1]
     command[-1] = re.sub(r"\s*2>&1 \| tail -[0-9]+ \|\| true\s*$", "", command[-1])
@@ -121,7 +122,8 @@ def _expand_call_site(marker: str, environment: dict[str, str]) -> list[str]:
     text = _relay_text()
     prelude, command = _drive_call(_marker_blocks(text)[marker])
     default_line = next(line for line in text.splitlines() if line.startswith("DISABLE_FEATURES="))
-    command[0] = command[0].replace('docker exec "$capture_container" python3', "__probe_capture", 1)
+    # daemon 分支以 -e CODEX_HOME=... 指定独立 home（探测用运行器自己的 daemon home 复刻，另有用例核对）。
+    command[0] = re.sub(r'docker exec (?:-e \S+ )*"\$capture_container" python3', "__probe_capture", command[0], count=1)
     self_check = "__probe_capture" in command[0]
     assert self_check, command[0]
     script = "\n".join([
@@ -197,10 +199,28 @@ class CallSiteCoverageTests(unittest.TestCase):
         for scenario, spec in probe.TUI_SCENARIOS.items():
             prelude, command = _drive_call(_marker_blocks(text)[spec["marker"]])
             names = set(re.findall(r"\$\{?([A-Za-z_][A-Za-z0-9_]*)", "\n".join(prelude + command)))
-            interactive_only = {"TUI_WARMUP", "TUI_SLASH", "TUI_READY", "TUI_HOLD", "guardian_probe_path"}
-            derived = {"ctx_opt", "work"}
+            interactive_only = {"TUI_WARMUP", "TUI_SLASH", "TUI_READY", "TUI_HOLD", "TUI_PROMPT", "guardian_probe_path"}
+            derived = {"ctx_opt", "work", "daemon_home"}
             with self.subTest(scenario=scenario):
                 self.assertLessEqual(names, allowed_common | interactive_only | derived | set(spec["variables"]))
+
+    def test_daemon_call_site_uses_independent_home_without_overrides(self) -> None:
+        """daemon 调用点经 -e CODEX_HOME 指向独立 home、命令行零覆盖；功能开关与探测的 daemon_features 同源。"""
+
+        text = _relay_text()
+        prelude, command = _drive_call(_marker_blocks(text)["__DAEMON_TUI__"])
+        self.assertIn('daemon_home="/root/.codex-daemon-$run_id"', "\n".join(prelude))
+        self.assertTrue(command[0].strip().startswith('docker exec -e CODEX_HOME="$daemon_home" "$capture_container" python3'))
+        self.assertIn('daemon_tool prepare --home "$daemon_home" --disable-features "$DISABLE_FEATURES"', text)
+        for environment in ({}, {"DISABLE_FEATURES": ""}, {"DISABLE_FEATURES": "plugins"}):
+            with self.subTest(environment=environment):
+                self.assertEqual(probe.drive_options("daemon-tui", environment), [])
+        self.assertEqual(probe.daemon_features("daemon-tui", {}), ["plugins", "apps"])
+        self.assertEqual(probe.daemon_features("daemon-tui", {"DISABLE_FEATURES": "plugins"}), ["plugins"])
+        self.assertIsNone(probe.daemon_features("compact-tui", {}))
+        # 探测的独立 home 同样不在临时目录下（客户端对 temp_dir 下的 CODEX_HOME 拒建 helper 别名）。
+        self.assertFalse(str(runner.DAEMON_HOME).startswith(("/tmp/", "/var/tmp/")))
+        self.assertTrue(str(runner.DAEMON_HOME).startswith("/work/"))
 
     def test_drive_option_set_is_pinned(self) -> None:
         options = set(re.findall(r'add_argument\("(--[a-z-]+)"', DRIVE_SCRIPT.read_text(encoding="utf-8")))
@@ -252,7 +272,7 @@ def _runner_config(**overrides):
         "codex_bin": "/opt/codex/bin/codex", "model": "m", "cwd": "/work", "drive_options": ["--disable", "apps"],
         "token": "ZQXPROBEABCDEFGHIJKLMNOPQRST", "prompt_hold_seconds": 20, "deadline_seconds": 90,
         "overlay_targets": list(probe.OVERLAY_TARGETS), "stub_hosts": list(probe.STUB_HOSTS),
-        "test_mutations": [], "diagnostic_window": None,
+        "test_mutations": [], "diagnostic_window": None, "daemon": None,
     }
     config.update(overrides)
     return config
@@ -370,10 +390,32 @@ class RunnerFunctionTests(unittest.TestCase):
             "多余键": {**_runner_config(), "extra": 1},
             "诊断窗口非法": _runner_config(diagnostic_window=[1, 2]),
             "保持时间非整数": _runner_config(prompt_hold_seconds=True),
+            "缺 daemon 键": {key: value for key, value in _runner_config().items() if key != "daemon"},
+            "daemon 多余键": _runner_config(daemon={"features": ["plugins"], "home": "/tmp/x"}),
+            "daemon 功能名非法": _runner_config(daemon={"features": ["Plugins"]}),
+            "daemon 功能名重复": _runner_config(daemon={"features": ["apps", "apps"]}),
+            "daemon home 不在覆盖层": _runner_config(daemon={"features": ["apps"]}, overlay_targets=["/root/.codex", "/tmp"]),
         }
         for label, config in bad.items():
             with self.subTest(label=label), self.assertRaises(runner.ProbeError):
                 runner.validate_config(config, codex_home=CONTAINER_CODEX_HOME)
+
+    def test_daemon_config_and_tool_invocation(self) -> None:
+        daemon = _runner_config(daemon={"features": ["plugins", "apps"]})
+        self.assertEqual(runner.validate_config(daemon, codex_home=CONTAINER_CODEX_HOME)["daemon"], {"features": ["plugins", "apps"]})
+        calls = []
+
+        def fake_run(argv, **kwargs):
+            calls.append(argv)
+            return subprocess.CompletedProcess(argv, 3, stdout='noise\n{"status": "failed", "mode": "embedded"}\n', stderr="")
+
+        with mock.patch.object(runner.subprocess, "run", side_effect=fake_run):
+            payload = runner._daemon_tool("/tool", "status", "--home", str(runner.DAEMON_HOME))
+        self.assertEqual(payload, {"status": "failed", "mode": "embedded", "exit_code": 3})
+        self.assertEqual(
+            calls[0][:6],
+            ["python3", "-B", "/tool/drive_codex_daemon.py", "--homes-parent", "/work", "status"],
+        )
 
     def test_drive_argv_replaces_prompt_only(self) -> None:
         config = _runner_config(drive_options=["--no-bypass", "--config", 'approvals_reviewer="auto_review"', "--disable", "apps"])
@@ -402,10 +444,21 @@ class ComboExtractionTests(unittest.TestCase):
             _job("e-image", {**BASE_ENV, "SCENARIO": "image"}),
             _job("f-core", {**BASE_ENV}, argv=["docker", "exec", "capture-cli", "python3", "/x/capture.py"]),
             _job("g-review-defaults", {"SCENARIO": "review-tui"}),
+            _job("h-daemon", {**BASE_ENV, "SCENARIO": "daemon-tui", "RUN_ID": "r3"}),
         ]
         combos = probe.tui_combos(jobs)
         by_jobs = {tuple(combo["job_ids"]): combo for combo in combos}
-        self.assertEqual(set(by_jobs), {("a-compact", "b-compact-wham"), ("c-compact-v2",), ("d-guardian",), ("g-review-defaults",)})
+        self.assertEqual(
+            set(by_jobs),
+            {("a-compact", "b-compact-wham"), ("c-compact-v2",), ("d-guardian",), ("g-review-defaults",), ("h-daemon",)},
+        )
+        daemon = by_jobs[("h-daemon",)]
+        self.assertEqual((daemon["cwd"], daemon["drive_options"], daemon["daemon_features"]), ("/tmp/tui-probe", [], ["plugins", "apps"]))
+        self.assertEqual(probe.runner_config(daemon, token="T", test_mutations=[], diagnostic_window=None)["daemon"], {"features": ["plugins", "apps"]})
+        self.assertNotIn("daemon_features", by_jobs[("a-compact", "b-compact-wham")])
+        self.assertIsNone(
+            probe.runner_config(by_jobs[("a-compact", "b-compact-wham")], token="T", test_mutations=[], diagnostic_window=None)["daemon"]
+        )
         self.assertEqual(by_jobs[("a-compact", "b-compact-wham")]["drive_options"], ["--disable", "plugins", "--disable", "apps"])
         self.assertEqual(by_jobs[("c-compact-v2",)]["drive_options"][-2:], ["--disable", "remote_compaction_v2"])
         guardian = by_jobs[("d-guardian",)]

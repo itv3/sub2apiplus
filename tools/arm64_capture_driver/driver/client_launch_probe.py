@@ -88,6 +88,16 @@ TUI_SCENARIOS: dict[str, dict[str, Any]] = {
         "fixed": [],
         "variables": ("DISABLE_FEATURES",),
     },
+    # daemon_auto_start 默认开启后的 daemon 路径：命令行不带任何覆盖（带了会退回内嵌模式），DISABLE_FEATURES 由
+    # 受管 drive_codex_daemon.py 写进独立 CODEX_HOME 的 config.toml [features]；运行器按同一工具
+    # 建 home、判定 daemon 模式并停止 daemon。
+    "daemon-tui": {
+        "marker": "__DAEMON_TUI__",
+        "cwd": "/tmp/tui-probe",
+        "fixed": [],
+        "variables": ("DISABLE_FEATURES",),
+        "daemon": True,
+    },
 }
 STUB_HOSTS = ["chatgpt.com", "api.openai.com", "auth.openai.com", "ab.chatgpt.com"]
 # 覆盖层目标：CODEX_HOME、各 TUI 工作目录所在树与系统证书目录（运行器再核对 cwd 与 CODEX_HOME 被覆盖）。
@@ -149,6 +159,9 @@ def drive_options(scenario: str, environment: Mapping[str, str]) -> list[str]:
     """
 
     spec = TUI_SCENARIOS[scenario]
+    if spec.get("daemon"):
+        # daemon 场景的调用点不传 --disable／--enable／--config：功能开关进独立 home 的配置（见 daemon_features）。
+        return list(spec["fixed"])
     options: list[str] = []
     if scenario == "compact-tui":
         # ctx_opt="--context-window $CONTEXT_WINDOW"，调用点未加引号展开
@@ -164,6 +177,14 @@ def drive_options(scenario: str, environment: Mapping[str, str]) -> list[str]:
     for feature in _features(environment.get("DISABLE_FEATURES") or RELAY_DEFAULTS["DISABLE_FEATURES"], "DISABLE_FEATURES"):
         options += ["--disable", feature]
     return options
+
+
+def daemon_features(scenario: str, environment: Mapping[str, str]) -> list[str] | None:
+    """daemon 场景写进独立 CODEX_HOME [features] 的关闭项（与调用点 ``--disable-features "$DISABLE_FEATURES"`` 一致）。"""
+
+    if not TUI_SCENARIOS[scenario].get("daemon"):
+        return None
+    return _features(environment.get("DISABLE_FEATURES") or RELAY_DEFAULTS["DISABLE_FEATURES"], "DISABLE_FEATURES")
 
 
 def _relay_step(step: Mapping[str, Any]) -> bool:
@@ -198,6 +219,10 @@ def tui_combos(jobs: Iterable[Any]) -> list[dict[str, Any]]:
                 "cwd": TUI_SCENARIOS[scenario]["cwd"],
                 "drive_options": drive_options(scenario, env),
             }
+            features = daemon_features(scenario, env)
+            if features is not None:
+                # 只有 daemon 组合带该键，其余组合的身份与组合编号保持不变。
+                identity["daemon_features"] = features
             for key in ("container", "model"):
                 if not SAFE_VALUE_RE.fullmatch(identity[key]):
                     raise ProbeConfigError(f"{job.job_id} 的 {key} 含非法字符：{identity[key]!r}")
@@ -245,6 +270,7 @@ def runner_config(combo: Mapping[str, Any], *, token: str, test_mutations: list[
         "stub_hosts": list(STUB_HOSTS),
         "test_mutations": list(test_mutations),
         "diagnostic_window": diagnostic_window,
+        "daemon": {"features": list(combo["daemon_features"])} if "daemon_features" in combo else None,
     }
 
 
@@ -360,7 +386,7 @@ def _summarize_run(result: Mapping[str, Any]) -> dict[str, Any]:
         "status", "reason", "error", "duration_seconds", "network_interfaces", "overlays", "test_mutations",
         "drive_codex_tui_sha256", "models_catalog", "diagnostic_window", "drive_exit_code", "token_request",
         "stub_requests", "detected_screens", "tui_log_bytes", "tui_visible_tail", "drive_output_tail",
-        "exit_code", "stderr_tail",
+        "exit_code", "stderr_tail", "daemon_prepare", "daemon",
     )
     return {key: result[key] for key in keys if key in result}
 
