@@ -219,6 +219,9 @@ from urllib.parse import urlsplit
 # 断言预处理器未变。
 # 2026-09-25（VC-1 再次承接）：已被承接过的结果再次承接时，沿同一 Campaign 的承接链按原始执行结果验证
 # 元数据（control 层，wire／evidence／policy 摘要不变）；受管工具树随之变化；监督器与断言预处理器未变。
+# 2026-09-25（R16 逐作业显式依赖）：场景清单可逐作业声明 tool_dependencies，声明后依赖只按清单取摘要；
+# 首个 VC-1 批次动作超时按官方作业数估算。wire 与 evidence 层变化（计划外的 wire 变化，发布认证须重签），
+# control 随之变化，policy 不变；受管工具树随之变化；监督器与断言预处理器未变。
 DEFAULT_SUPERVISOR_DIGEST = (
     "c4276d7c4108b66994c44d93688244e456cb5d5c91d5aaadae2fafc634aa52eb"
 )
