@@ -1,0 +1,237 @@
+package service
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/Wei-Shaw/sub2api/internal/officialegress/profilecontract"
+	"github.com/stretchr/testify/require"
+)
+
+// 工作区路由发现（VC-4 第 6 项）：
+//   - accounts/check 判定与官方一致：条目缺失／重复、缺少 origin 或 override 均为非默认；
+//     origin 与 override 都落在画像接受取值内才是默认；
+//   - 发现请求走 WHAM 配额同一出口，是管理端完整配额查询的首个 backend client 请求；
+//     周期入口 QueryUsageOnly 不发出；画像没有 WorkspaceRouting 节时不发出；
+//   - 判定为非默认后，画像 RoutedEndpointIDs 中的端点失败关闭，其余端点不受影响。
+
+func workspaceRoutingTargetSection() profilecontract.WorkspaceRoutingSection {
+	return profilecontract.WorkspaceRoutingSection{
+		DiscoveryEndpointID:    "wham_accounts_check",
+		DefaultOrigin:          "https://chatgpt.com",
+		AcceptedOriginValues:   []string{"NO_CONSTRAINT", "https://chatgpt.com"},
+		AcceptedOverrideValues: []string{"NO_CONSTRAINT"},
+		OverrideHeader:         "x-openai-account-routing-override",
+		NonDefaultAction:       "fail_closed",
+		RoutedEndpointIDs:      []string{officialCodexEndpointResponsesHTTP, officialCodexEndpointResponsesWS},
+	}
+}
+
+// workspaceRoutingTargetMutation 追加目标画像的发现端点（按 wham_settings_user 的 backend
+// client 画像复制，路径改为 accounts/check）与 WorkspaceRouting 节。
+func workspaceRoutingTargetMutation(t *testing.T) func(*profilecontract.SnapshotDoc) {
+	return func(doc *profilecontract.SnapshotDoc) {
+		discovery := *syntheticServiceSnapshotEndpoint(t, doc, officialCodexEndpointWhamSettingsUser)
+		discovery.ID = "wham_accounts_check"
+		discovery.Path = "/backend-api/wham/accounts/check"
+		doc.Endpoints = append(doc.Endpoints, discovery)
+		doc.WorkspaceRouting = syntheticServiceRawSection(t, workspaceRoutingTargetSection())
+	}
+}
+
+func resetOfficialCodexWorkspaceRoutingResults(t *testing.T) {
+	t.Helper()
+	clear := func() {
+		officialCodexWorkspaceRoutingResults.Range(func(key, _ any) bool {
+			officialCodexWorkspaceRoutingResults.Delete(key)
+			return true
+		})
+	}
+	clear()
+	t.Cleanup(clear)
+}
+
+func TestDecideOfficialCodexWorkspaceRouting(t *testing.T) {
+	section := workspaceRoutingTargetSection()
+	cases := []struct {
+		name        string
+		body        string
+		wantDefault bool
+		wantReason  string
+	}{
+		{name: "两个字段均为 NO_CONSTRAINT", wantDefault: true,
+			body: `{"accounts":[{"id":"acct","workspace_backend_origin":"NO_CONSTRAINT","account_routing_override":"NO_CONSTRAINT"}],"account_ordering":["acct"],"default_account_id":"acct"}`},
+		{name: "显式默认 origin", wantDefault: true,
+			body: `{"accounts":[{"id":"other","workspace_backend_origin":"https://eu.chatgpt.com","account_routing_override":"us"},{"id":"acct","workspace_backend_origin":"https://chatgpt.com","account_routing_override":"NO_CONSTRAINT"}]}`},
+		{name: "非默认 origin", wantReason: "非默认工作区路由",
+			body: `{"accounts":[{"id":"acct","workspace_backend_origin":"https://us.chatgpt.com","account_routing_override":"NO_CONSTRAINT"}]}`},
+		{name: "需要 override", wantReason: "非默认工作区路由",
+			body: `{"accounts":[{"id":"acct","workspace_backend_origin":"NO_CONSTRAINT","account_routing_override":"us_cr"}]}`},
+		{name: "缺少当前工作区", wantReason: "不含当前工作区",
+			body: `{"accounts":[{"id":"other","workspace_backend_origin":"NO_CONSTRAINT","account_routing_override":"NO_CONSTRAINT"}]}`},
+		{name: "重复出现当前工作区", wantReason: "重复出现当前工作区",
+			body: `{"accounts":[{"id":"acct","workspace_backend_origin":"NO_CONSTRAINT","account_routing_override":"NO_CONSTRAINT"},{"id":"acct","workspace_backend_origin":"NO_CONSTRAINT","account_routing_override":"NO_CONSTRAINT"}]}`},
+		{name: "缺少 origin", wantReason: "缺少 workspace_backend_origin",
+			body: `{"accounts":[{"id":"acct","account_routing_override":"NO_CONSTRAINT"}]}`},
+		{name: "缺少 override", wantReason: "缺少 account_routing_override",
+			body: `{"accounts":[{"id":"acct","workspace_backend_origin":"NO_CONSTRAINT"}]}`},
+		{name: "ChatGPT 映射形态不带路由字段", wantReason: "缺少 workspace_backend_origin",
+			body: `{"accounts":{"acct":{"account":{"account_id":"acct"}}},"account_ordering":["acct"]}`},
+		{name: "非法 JSON", wantReason: "不是合法 JSON", body: `not-json`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := decideOfficialCodexWorkspaceRouting(&section, "acct", []byte(tc.body))
+			require.Equal(t, tc.wantDefault, result.Default, result.Reason)
+			if tc.wantReason != "" {
+				require.Contains(t, result.Reason, tc.wantReason)
+			}
+		})
+	}
+	require.True(t, decideOfficialCodexWorkspaceRouting(nil, "acct", []byte(`{}`)).Default, "画像没有该节时恒为默认")
+}
+
+func TestOfficialCodexWorkspaceRoutingGateFollowsProfileAndDiscovery(t *testing.T) {
+	resetOfficialCodexWorkspaceRoutingResults(t)
+	account := &Account{ID: 190, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
+		Credentials: map[string]any{"chatgpt_account_id": "acct-gate"}}
+	recordOfficialCodexWorkspaceRouting(officialCodexWorkspaceRoutingResult{
+		ChatGPTAccountID: "acct-gate", Reason: "非默认工作区路由",
+	})
+
+	// 旧画像没有 WorkspaceRouting 节：即使缓存了非默认判定也放行。
+	require.NoError(t, officialCodexWorkspaceRoutingGate(officialClientProfileModeActive, account, officialCodexEndpointResponsesHTTP))
+
+	withOfficialCodexSyntheticProfile(t, workspaceRoutingTargetMutation(t))
+	err := officialCodexWorkspaceRoutingGate(officialClientProfileModeActive, account, officialCodexEndpointResponsesHTTP)
+	require.True(t, errors.Is(err, ErrOfficialCodexWorkspaceRoutingNonDefault), "受路由端点必须失败关闭：%v", err)
+	require.Error(t, officialCodexWorkspaceRoutingGate(officialClientProfileModeActive, account, officialCodexEndpointResponsesWS))
+	require.NoError(t, officialCodexWorkspaceRoutingGate(officialClientProfileModeActive, account, officialCodexEndpointWhamUsage),
+		"不在 RoutedEndpointIDs 的端点不受影响")
+
+	recordOfficialCodexWorkspaceRouting(officialCodexWorkspaceRoutingResult{ChatGPTAccountID: "acct-gate", Default: true})
+	require.NoError(t, officialCodexWorkspaceRoutingGate(officialClientProfileModeActive, account, officialCodexEndpointResponsesHTTP))
+
+	unknown := &Account{ID: 191, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
+		Credentials: map[string]any{"chatgpt_account_id": "acct-unknown"}}
+	require.NoError(t, officialCodexWorkspaceRoutingGate(officialClientProfileModeActive, unknown, officialCodexEndpointResponsesHTTP),
+		"尚未发现的工作区首期放行")
+}
+
+type workspaceRoutingDiscoveryCall struct {
+	endpointID       codexEndpointID
+	authorization    string
+	chatGPTAccountID string
+	upstreamRequests int
+}
+
+func stubOfficialCodexWorkspaceRoutingDiscovery(
+	t *testing.T,
+	upstream *quotaRedirectingUpstream,
+	body string,
+	status int,
+) *[]workspaceRoutingDiscoveryCall {
+	t.Helper()
+	calls := &[]workspaceRoutingDiscoveryCall{}
+	previous := doOfficialCodexWorkspaceRoutingDiscovery
+	doOfficialCodexWorkspaceRoutingDiscovery = func(
+		_ *OpenAIQuotaService, _ context.Context, _ int64, _ string, endpointID codexEndpointID, headers http.Header,
+	) (int, []byte, error) {
+		*calls = append(*calls, workspaceRoutingDiscoveryCall{
+			endpointID: endpointID, authorization: headers.Get("authorization"),
+			chatGPTAccountID: headers.Get("chatgpt-account-id"), upstreamRequests: len(upstream.requests),
+		})
+		return status, []byte(body), nil
+	}
+	t.Cleanup(func() { doOfficialCodexWorkspaceRoutingDiscovery = previous })
+	return calls
+}
+
+func TestOpenAIQuotaQueryUsageDiscoversWorkspaceRoutingFirst(t *testing.T) {
+	resetOfficialCodexWorkspaceRoutingResults(t)
+	account := &Account{
+		ID: 192, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive,
+		Credentials: map[string]any{"chatgpt_account_id": "acct-routing"},
+	}
+	repo := &stubQuotaAccountRepo{accounts: map[int64]*Account{account.ID: account}}
+	tokenProvider := NewOpenAITokenProvider(repo, &stubQuotaTokenCache{tokens: map[string]string{
+		OpenAITokenCacheKey(account): "token-routing",
+	}}, nil)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("content-type", "application/json")
+		_, _ = writer.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+	upstream := newQuotaRedirectingUpstream(server)
+	service := NewOpenAIQuotaService(repo, nil, tokenProvider, upstream)
+	calls := stubOfficialCodexWorkspaceRoutingDiscovery(t, upstream,
+		`{"accounts":[{"id":"acct-routing","workspace_backend_origin":"https://us.chatgpt.com","account_routing_override":"us"}]}`,
+		http.StatusOK)
+
+	// 旧画像：不发出发现请求。
+	_, err := service.QueryUsage(context.Background(), account.ID)
+	require.NoError(t, err)
+	require.Empty(t, *calls, "画像没有 WorkspaceRouting 节时不得发出发现请求")
+
+	withOfficialCodexSyntheticProfile(t, workspaceRoutingTargetMutation(t))
+	_, err = service.QueryUsageOnly(context.Background(), account.ID)
+	require.NoError(t, err)
+	require.Empty(t, *calls, "周期入口只产生一次官方请求，不发出发现请求")
+
+	before := len(upstream.requests)
+	_, err = service.QueryUsage(context.Background(), account.ID)
+	require.NoError(t, err, "发现判定只影响受路由端点，不影响配额查询本身")
+	require.Len(t, *calls, 1)
+	call := (*calls)[0]
+	require.Equal(t, codexEndpointID("wham_accounts_check"), call.endpointID, "发现端点取自画像节")
+	require.Equal(t, before, call.upstreamRequests, "发现请求必须是本次 backend client 的首个请求")
+	require.Equal(t, "Bearer token-routing", call.authorization)
+	require.Equal(t, "acct-routing", call.chatGPTAccountID)
+
+	result, found := lookupOfficialCodexWorkspaceRouting("acct-routing")
+	require.True(t, found)
+	require.False(t, result.Default)
+	require.Equal(t, "https://us.chatgpt.com", result.BackendOrigin)
+	require.Equal(t, "us", result.RoutingOverride)
+	require.Error(t, officialCodexWorkspaceRoutingGate(officialClientProfileModeActive, account, officialCodexEndpointResponsesHTTP))
+}
+
+func TestOpenAIQuotaWorkspaceRoutingDiscoveryFailureIsNotCached(t *testing.T) {
+	resetOfficialCodexWorkspaceRoutingResults(t)
+	withOfficialCodexSyntheticProfile(t, workspaceRoutingTargetMutation(t))
+	upstream := &quotaRedirectingUpstream{}
+	stubOfficialCodexWorkspaceRoutingDiscovery(t, upstream, `{"error":"unavailable"}`, http.StatusServiceUnavailable)
+	service := &OpenAIQuotaService{}
+	_, performed, err := service.discoverOfficialCodexWorkspaceRouting(
+		context.Background(), officialClientProfileModeActive, 193, "acct-failure", "", http.Header{},
+	)
+	require.True(t, performed)
+	require.Error(t, err)
+	_, found := lookupOfficialCodexWorkspaceRouting("acct-failure")
+	require.False(t, found, "发现失败不缓存判定，下次发现重试")
+}
+
+// HTTP 出站上下文挂载处的闸门：非默认判定使 /v1/responses 失败关闭，旧画像不受影响。
+func TestAttachOfficialEgressHTTPContextAppliesWorkspaceRoutingGate(t *testing.T) {
+	resetOfficialCodexWorkspaceRoutingResults(t)
+	account := newOfficialOpenAIHTTPTestAccount(194)
+	recordOfficialCodexWorkspaceRouting(officialCodexWorkspaceRoutingResult{
+		ChatGPTAccountID: "chatgpt-test-account", Reason: "非默认工作区路由",
+	})
+	attach := func(t *testing.T) error {
+		t.Helper()
+		body := newOfficialOpenAIHTTPTestBody(t, false, false, false)
+		c := newOfficialOpenAIHTTPTestContext(body, "/v1/responses")
+		req := httptest.NewRequest(http.MethodPost, "https://chatgpt.com/backend-api/codex/responses", nil)
+		_, err := attachOfficialEgressHTTPContextWithMode(req, c, account, PlatformOpenAI, officialClientProfileModeActive)
+		return err
+	}
+	require.NoError(t, attach(t), "旧画像没有 WorkspaceRouting 节，挂载不受缓存判定影响")
+
+	withOfficialCodexSyntheticProfile(t, workspaceRoutingTargetMutation(t))
+	err := attach(t)
+	require.True(t, errors.Is(err, ErrOfficialCodexWorkspaceRoutingNonDefault), "非默认路由必须失败关闭：%v", err)
+}

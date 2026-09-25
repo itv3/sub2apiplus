@@ -221,12 +221,22 @@ func (s *OpenAIQuotaService) queryUsage(
 		mode, codexEndpointID(officialCodexEndpointWhamSettingsUser),
 	)
 	settingsSupported := settingsProfileErr == nil
+	routingDiscovered := false
 	for recovered := false; ; {
 		quotaHeaders, expectedTaskID, headerErr := s.buildCodexQuotaHeaders(
 			callCtx, mode, accountID, accessToken, chatGPTAccountID,
 		)
 		if headerErr != nil {
 			return nil, infraerrors.Newf(http.StatusBadGateway, "OPENAI_QUOTA_AUTH_FAILED", "failed to build upstream authentication: %v", headerErr)
+		}
+		if includeResetCreditDetails && !routingDiscovered {
+			// 画像声明 WorkspaceRouting 节时，工作区路由发现是 backend client 的首个请求
+			// （官方启动窗口的线序）。判定只影响受路由端点，发现失败不影响配额查询本身；
+			// 周期入口 QueryUsageOnly 不发出发现请求，保持“只产生一次官方请求”的约束。
+			routingDiscovered = true
+			_, _, _ = s.discoverOfficialCodexWorkspaceRouting(
+				callCtx, mode, accountID, chatGPTAccountID, proxyURL, quotaHeaders,
+			)
 		}
 		if includeResetCreditDetails && settingsSupported && !settingsQueried {
 			// 官方 WHAM 客户端在配额链路前先读一次用户设置（0.147 受控出站面实测
