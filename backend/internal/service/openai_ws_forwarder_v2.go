@@ -779,7 +779,11 @@ readLoop:
 			if errMessage == "" {
 				errMessage = "OpenAI servers are temporarily overloaded"
 			}
-			return nil, wrapOpenAIWSFallback("upstream_capacity_shed", errors.New(errMessage))
+			// 保留上游 error.code（slow_down／server_is_overloaded），供画像 WebSocketRetry 节
+			// 判定是否计入 stream 重试预算；错误文本不变。
+			return nil, wrapOpenAIWSFallback("upstream_capacity_shed", withOpenAIWSUpstreamErrorCode(
+				openAIStreamFailedEventErrorCode(message), errors.New(errMessage),
+			))
 		}
 
 		if eventType == "error" {

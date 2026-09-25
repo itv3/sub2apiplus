@@ -166,10 +166,11 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 				errMessage,
 			)
 			lease.MarkBroken()
+			// 保留上游 error.code，供画像 WebSocketRetry 节判定；错误文本不变。
 			if canFallback {
-				return wrapOpenAIWSFallback("prewarm_"+fallbackReason, errors.New(errMsg))
+				return wrapOpenAIWSFallback("prewarm_"+fallbackReason, withOpenAIWSUpstreamErrorCode(errCodeRaw, errors.New(errMsg)))
 			}
-			return wrapOpenAIWSFallback("prewarm_error_event", errors.New(errMsg))
+			return wrapOpenAIWSFallback("prewarm_error_event", withOpenAIWSUpstreamErrorCode(errCodeRaw, errors.New(errMsg)))
 		}
 
 		if isOpenAIWSTerminalEvent(eventType) {

@@ -989,6 +989,10 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			hasPreviousResponseID,
 		)
 		maxAttempts := openAIWSReconnectRetryLimit + 1
+		// 画像 WebSocketRetry 节：节中声明的上游错误码计入 stream 重试预算，耗尽后按节
+		// 改走 HTTP；画像没有该节时策略为 nil，以下循环保持旧逻辑。
+		wsRetryPolicy := newOfficialCodexWebSocketRetryPolicy(account, codexReleaseMode)
+		maxAttempts = wsRetryPolicy.maxAttempts(maxAttempts)
 		wsAttempts := 0
 		var wsResult *OpenAIForwardResult
 		var wsErr error
@@ -1161,7 +1165,25 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				)
 				break
 			}
-			if reason == "upstream_capacity_shed" {
+			profileRetryHandled := false
+			if handled, retry, fallbackHTTP := wsRetryPolicy.observe(wsErr); handled {
+				profileRetryHandled = true
+				if !retry {
+					forceHTTPFallback = fallbackHTTP
+					s.recordOpenAIWSRetryExhausted()
+					logOpenAIWSModeInfo(
+						"reconnect_budget_exhausted account_id=%d attempts=%d reason=%s code=%s action=profile_fallback_http fallback=%v",
+						account.ID,
+						attempt,
+						normalizeOpenAIWSLogValue(reason),
+						normalizeOpenAIWSLogValue(openAIWSUpstreamErrorCode(wsErr)),
+						fallbackHTTP,
+					)
+					break
+				}
+				retryable = true
+			}
+			if reason == "upstream_capacity_shed" && !profileRetryHandled {
 				if wsCapacityRetryUsed {
 					retryable = false
 					logOpenAIWSModeInfo(
@@ -1177,7 +1199,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			if retryable && attempt < maxAttempts {
 				backoff := s.openAIWSRetryBackoff(attempt)
 				if retryBudget > 0 && time.Since(retryStartedAt)+backoff > retryBudget {
-					forceHTTPFallback = account.IsOpenAIOAuth() && reason != "upstream_capacity_shed"
+					forceHTTPFallback = account.IsOpenAIOAuth() && (reason != "upstream_capacity_shed" || profileRetryHandled)
 					s.recordOpenAIWSRetryExhausted()
 					logOpenAIWSModeInfo(
 						"reconnect_budget_exhausted account_id=%d attempts=%d max_retries=%d reason=%s elapsed_ms=%d budget_ms=%d",
@@ -1214,7 +1236,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				continue
 			}
 			if retryable {
-				forceHTTPFallback = account.IsOpenAIOAuth() && reason != "upstream_capacity_shed"
+				forceHTTPFallback = account.IsOpenAIOAuth() && (reason != "upstream_capacity_shed" || profileRetryHandled)
 				s.recordOpenAIWSRetryExhausted()
 				logOpenAIWSModeInfo(
 					"reconnect_exhausted account_id=%d attempts=%d max_retries=%d reason=%s",
