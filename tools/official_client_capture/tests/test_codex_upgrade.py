@@ -11193,6 +11193,181 @@ class CodexUpgradeTest(unittest.TestCase):
             with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "无法安全复用"):
                 run(campaign_dir, attempt_ids[1], second_payload)
 
+    def test_declared_tool_dependencies_replace_reference_scan(self) -> None:
+        """R16：作业声明显式依赖后只按清单取摘要，参数或注释里的文件名不再算依赖。
+
+        0.156.1 的 relay 作业经注释引用把编排器、监督器拉进依赖（26 → 176 个文件），
+        控制面一改就作废已完成结果。声明清单后依赖以清单为准；未知路径与缺少文件
+        清单都失败关闭；执行摘要不随声明变化，演练文档只在声明时写入该字段。
+        """
+
+        import dataclasses
+
+        from tools.official_client_capture import (
+            codex_upgrade_job_rehearsal_receipt as rehearsal,
+        )
+
+        tool = {
+            "entries": [
+                {"path": "capturelib/model.py", "sha256": "1" * 64},
+                {"path": "codex_upgrade.py", "sha256": "2" * 64},
+                {"path": "codex_upgrade_supervisor.py", "sha256": "3" * 64},
+                {"path": "run_h1_wire_probe.sh", "sha256": "4" * 64},
+            ]
+        }
+        legacy = Job(
+            job_id="official-relay-declared",
+            phase="official",
+            suites=("full",),
+            description="relay",
+            steps=(
+                {
+                    "argv": [
+                        "bash",
+                        "/repo/tools/official_client_capture/run_h1_wire_probe.sh",
+                        "codex_upgrade.py",
+                    ],
+                    "environment": {},
+                    "timeout": 60,
+                },
+            ),
+            evidence_roots=("/capture/relay",),
+            covers=(),
+        )
+        declared = dataclasses.replace(
+            legacy,
+            tool_dependencies=("capturelib/model.py", "run_h1_wire_probe.sh"),
+        )
+        # 旧算法：参数里出现的文件名即算依赖。
+        self.assertIn(
+            "codex_upgrade.py",
+            codex_upgrade._job_tool_dependency_files(legacy, tool),
+        )
+        self.assertEqual(
+            codex_upgrade._job_tool_dependency_files(declared, tool),
+            {"capturelib/model.py": "1" * 64, "run_h1_wire_probe.sh": "4" * 64},
+        )
+        self.assertEqual(
+            codex_upgrade._job_execution_sha256(legacy),
+            codex_upgrade._job_execution_sha256(declared),
+        )
+        with self.assertRaisesRegex(
+            codex_upgrade.ConfigurationError, "不在受管工具清单中"
+        ):
+            codex_upgrade._job_tool_dependency_files(
+                dataclasses.replace(declared, tool_dependencies=("missing.py",)),
+                tool,
+            )
+        with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "缺少文件清单"):
+            codex_upgrade._job_tool_dependency_files(declared, {"entries": []})
+        self.assertNotIn("tool_dependencies", rehearsal._job_document(legacy))
+        self.assertEqual(
+            rehearsal._job_document(declared)["tool_dependencies"],
+            ["capturelib/model.py", "run_h1_wire_probe.sh"],
+        )
+
+    def test_tool_dependency_declaration_validation(self) -> None:
+        """R16：显式依赖清单必须非空、排序去重、相对工具根的安全路径；schema 与校验器一致。"""
+
+        valid = ["capturelib/model.py", "run_h1_wire_probe.sh"]
+        self.assertEqual(
+            codex_upgrade._tool_dependency_declaration(valid, "测试"),
+            tuple(valid),
+        )
+        for invalid in (
+            [],
+            "run_h1_wire_probe.sh",
+            ["run_h1_wire_probe.sh", "capturelib/model.py"],
+            ["a.sh", "a.sh"],
+            ["/abs.sh"],
+            ["../escape.sh"],
+            ["capturelib/../escape.sh"],
+            ["./relative.sh"],
+            ["capturelib\\model.py"],
+            [1],
+        ):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(
+                codex_upgrade.ConfigurationError, "tool_dependencies"
+            ):
+                codex_upgrade._tool_dependency_declaration(invalid, "测试")
+        schema = json.loads(
+            (
+                Path(codex_upgrade.__file__).resolve().parent
+                / "codex_upgrade_scenarios.schema.json"
+            ).read_text(encoding="utf-8")
+        )
+        declared = schema["$defs"]["captureJob"]["properties"]["tool_dependencies"]
+        self.assertEqual(
+            declared["items"]["pattern"], codex_upgrade.TOOL_DEPENDENCY_PATH_RE.pattern
+        )
+        self.assertIn("tool_dependencies", codex_upgrade.SCENARIO_JOB_EXECUTION_FIELDS)
+
+    def test_scenario_manifest_carries_tool_dependencies_into_jobs(self) -> None:
+        """R16：场景清单可选声明 tool_dependencies；加载进 Job，并随执行契约冻结。
+
+        未声明的作业保持空声明（旧算法）；声明非法时场景加载失败关闭。
+        """
+
+        tool_root = Path(codex_upgrade.__file__).resolve().parent
+        source = json.loads(
+            (tool_root / "codex_upgrade_scenarios_0_156_1.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        official = next(
+            job for job in source["capture_jobs"] if job["phase"] == "official"
+        )
+        official["tool_dependencies"] = [
+            "capturelib/model.py",
+            "run_h1_wire_probe.sh",
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            # _campaign_arguments 会在目录里写自己的 scenarios.json 夹具，这里用独立文件名。
+            arguments = self._campaign_arguments(Path(directory))
+            arguments.target_version = "0.156.1"
+            arguments.campaign_dir = Path(directory).resolve() / "campaign"
+            arguments.output = arguments.campaign_dir
+            context = codex_upgrade._job_context(arguments)
+            path = Path(directory) / "r16-scenarios-0-156-1.json"
+            path.write_text(json.dumps(source, ensure_ascii=False), encoding="utf-8")
+            jobs = {
+                job.job_id: job
+                for job in codex_upgrade.load_scenario_jobs(
+                    path,
+                    context,
+                    expected_version="0.156.1",
+                    require_bindings=True,
+                )
+            }
+            self.assertEqual(
+                jobs[official["id"]].tool_dependencies,
+                ("capturelib/model.py", "run_h1_wire_probe.sh"),
+            )
+            self.assertTrue(
+                all(
+                    job.tool_dependencies == ()
+                    for job_id, job in jobs.items()
+                    if job_id != official["id"]
+                )
+            )
+            contract = codex_upgrade._scenario_job_execution_contract(source)
+            frozen = next(job for job in contract["jobs"] if job["id"] == official["id"])
+            self.assertEqual(frozen["tool_dependencies"], official["tool_dependencies"])
+            official["tool_dependencies"] = [
+                "run_h1_wire_probe.sh",
+                "capturelib/model.py",
+            ]
+            path.write_text(json.dumps(source, ensure_ascii=False), encoding="utf-8")
+            with self.assertRaisesRegex(
+                codex_upgrade.ConfigurationError, "tool_dependencies"
+            ):
+                codex_upgrade.load_scenario_jobs(
+                    path,
+                    context,
+                    expected_version="0.156.1",
+                    require_bindings=True,
+                )
+
     def test_v7_preview_replays_hybrid_and_evaluator_drift(self) -> None:
         """v7 严格预览应承接旧结果，不得把混合文件或 timing schema 判成重跑。"""
 

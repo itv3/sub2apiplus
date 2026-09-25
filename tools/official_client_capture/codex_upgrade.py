@@ -489,7 +489,15 @@ SCENARIO_JOB_EXECUTION_FIELDS = frozenset(
         "model_id",
         "expected_use_responses_lite",
         "required_model_receipt",
+        # R16：官方作业的显式依赖清单以 Formal 冻结值为准，VC-2 批准场景不得改动。
+        # 旧场景清单没有该键时契约投影不变。
+        "tool_dependencies",
     }
+)
+# R16：显式依赖清单的路径格式——相对工具根，每段以字母、数字或下划线开头，
+# 因而天然排除绝对路径、``.`` 与 ``..`` 段。
+TOOL_DEPENDENCY_PATH_RE = re.compile(
+    r"^[A-Za-z0-9_][A-Za-z0-9._-]*(?:/[A-Za-z0-9_][A-Za-z0-9._-]*)*$"
 )
 # v9 运行时纠正允许承接历史通过结果时，产出侧变化必须逐文件映射到本轮
 # execute 闭集。历史 attempt 只记录了粗粒度组件摘要，不能因为一个 relay
@@ -708,6 +716,11 @@ class Job:
     model_id: str = ""
     expected_use_responses_lite: bool = False
     required_model_receipt: bool = False
+    # R16：逐作业显式工具依赖（相对工具根的路径，排序去重），由目标版本场景清单声明、
+    # 随清单冻结。非空时依赖只按清单取摘要，不再递归扫描文件引用（旧算法把注释里的
+    # 文件名也算依赖，0.156.1 的 relay 作业因此从 26 个文件涨到 176 个）；为空时沿用
+    # 旧算法，历史 Campaign 的回放与复用判定口径不变。
+    tool_dependencies: tuple[str, ...] = ()
 
 
 def _job_tool_components(job: Job) -> tuple[str, ...]:
@@ -773,13 +786,47 @@ def _tool_entry_digest_map(identity: Mapping[str, Any]) -> dict[str, str]:
     return dict(sorted(output.items()))
 
 
+def _tool_dependency_declaration(value: Any, label: str) -> tuple[str, ...]:
+    """校验场景清单逐作业声明的工具依赖（R16）：非空、排序去重、相对工具根的安全路径。"""
+
+    if (
+        not isinstance(value, list)
+        or not value
+        or not all(
+            isinstance(item, str) and TOOL_DEPENDENCY_PATH_RE.fullmatch(item)
+            for item in value
+        )
+        or value != sorted(set(value))
+    ):
+        raise ConfigurationError(
+            f"{label} 的 tool_dependencies 必须是非空、排序去重的相对工具路径列表。"
+        )
+    return tuple(value)
+
+
 def _job_tool_dependency_files(
     job: Job,
     tool_identity: Mapping[str, Any],
 ) -> dict[str, str]:
-    """解析 Job 启动器及其受管传递引用，生成逐文件依赖。"""
+    """解析 Job 启动器及其受管传递引用，生成逐文件依赖。
+
+    作业声明了 ``tool_dependencies``（R16）时只按清单取摘要：清单是审核过的权威，
+    任一路径不在受管工具清单中即失败关闭。未声明时沿用下方的引用扫描旧算法。
+    """
 
     index = _tool_entry_digest_map(tool_identity)
+    declared = tuple(getattr(job, "tool_dependencies", ()) or ())
+    if declared:
+        if not index:
+            raise ConfigurationError(
+                f"Job {job.job_id} 声明了工具依赖，但工具身份缺少文件清单，无法核对。"
+            )
+        missing = [path for path in declared if path not in index]
+        if missing:
+            raise ConfigurationError(
+                f"Job {job.job_id} 声明的工具依赖不在受管工具清单中：" + "、".join(missing)
+            )
+        return {path: index[path] for path in sorted(declared)}
     if not index:
         return {}
     basename_index: dict[str, list[str]] = {}
@@ -2443,13 +2490,17 @@ def _validate_scenario_manifest_shape(payload: dict[str, Any]) -> None:
             "expected_use_responses_lite",
             "required_model_receipt",
         }
+        # R16：可选的逐作业显式工具依赖；出现时必须合法，缺省时沿用旧算法。
+        dependency_fields = {"tool_dependencies"}
         if (
             not isinstance(job, dict)
             or not required.issubset(job)
-            or set(job) - required - model_fields
+            or set(job) - required - model_fields - dependency_fields
             or (set(job) & model_fields and not model_fields.issubset(job))
         ):
             raise ConfigurationError(f"场景任务 {index} 字段不闭合。")
+        if "tool_dependencies" in job:
+            _tool_dependency_declaration(job["tool_dependencies"], f"场景任务 {index}")
         if model_fields.issubset(job):
             if (
                 job["track"] not in {"main", "lite"}
@@ -2839,6 +2890,11 @@ def load_scenario_jobs(
                 ),
                 required_model_receipt=bool(
                     raw.get("required_model_receipt", False)
+                ),
+                tool_dependencies=(
+                    _tool_dependency_declaration(raw["tool_dependencies"], job_id)
+                    if "tool_dependencies" in raw
+                    else ()
                 ),
             )
         )
@@ -10282,6 +10338,12 @@ def _safe_plan(
                 "model_id": job.model_id,
                 "expected_use_responses_lite": job.expected_use_responses_lite,
                 "required_model_receipt": job.required_model_receipt,
+                # R16：只在声明时写入，未声明作业的计划字节与旧版一致。
+                **(
+                    {"tool_dependencies": list(job.tool_dependencies)}
+                    if job.tool_dependencies
+                    else {}
+                ),
             }
             for job in jobs
         ],
