@@ -29,7 +29,7 @@ import subprocess
 import sys
 import time
 import threading
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait as wait_futures
 from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1053,13 +1053,14 @@ def egress_probe_service(policy: dict[str, Any], name: str, resolved: dict[str, 
         return list(pool.map(probe, policy["probe_urls"]))
 
 
-def egress_remote_status(policy: dict[str, Any]) -> dict[str, Any]:
+def egress_remote_status(policy: dict[str, Any], *, timeout: float | None = None) -> dict[str, Any]:
     """经专用 WireGuard 访问出口守护；不读取本地缓存充当远端当前状态。"""
 
     import http.client
 
     address = str(ipaddress.IPv4Interface(policy["nodes"]["exit"]["tunnel_ipv4"]).ip)
-    connection = http.client.HTTPConnection(address, policy["control_port"], timeout=min(0.8, policy["lease_seconds"] / 3))
+    limit = min(0.8, policy["lease_seconds"] / 3) if timeout is None else timeout
+    connection = http.client.HTTPConnection(address, policy["control_port"], timeout=limit)
     try:
         connection.request("GET", "/health")
         response = connection.getresponse()
@@ -1077,6 +1078,19 @@ def egress_remote_status(policy: dict[str, Any]) -> dict[str, Any]:
         raise DeploymentError("出口宿主当前保护不可确认") from error
     finally:
         connection.close()
+
+
+# 源端每轮并行发出的出口健康请求数与同时在途上限；跨洋链路偶发丢包时，
+# 较慢但成功的请求仍可在后续轮次收取，避免单次超时即判共享失效。
+EGRESS_REMOTE_ATTEMPTS_PER_ROUND = 2
+EGRESS_REMOTE_INFLIGHT = 8
+
+
+def egress_remote_attempt(policy: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+    """后台单次出口健康请求；同时返回请求发出时的单调时钟，信任窗口从这一刻起算。"""
+
+    started = time.monotonic_ns()
+    return started, egress_remote_status(policy, timeout=float(policy["lease_seconds"]))
 
 
 class EgressGuard:
@@ -1104,6 +1118,9 @@ class EgressGuard:
         self.resolver_pool = ThreadPoolExecutor(max_workers=1)
         self.resolver_pending: Any | None = None
         self.next_resolution = time.time() + self.policy["probe_refresh_seconds"]
+        self.remote_pool = ThreadPoolExecutor(max_workers=EGRESS_REMOTE_INFLIGHT) if role == "origin" else None
+        self.remote_pending: list[Any] = []
+        self.remote_valid_until_ns = 0
         self.boot_id = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="ascii").strip()
         self.previous_state: str | None = None
         self.health: dict[str, Any] = {}
@@ -1117,6 +1134,41 @@ class EgressGuard:
                 continue
             for binding in service["bindings"]:
                 self.maps[service["parent"]].revoke(service["cgroup_id"], binding["ifindex"], binding["source_ipv4"])
+
+    def confirm_remote_guard(self) -> None:
+        """源端核对出口守护：只采信出口响应中声明的剩余租期，并从请求发出时刻起算。
+
+        跨洋链路偶发丢包会让单次请求因 TCP 重传超过超时。每轮并行发出两个请求，并继续收取此前仍在
+        进行的请求；最近一次合规响应所担保的剩余租期内不判共享失效。窗口不超过出口自身的内核租期：
+        出口守护失效时出口端先自行闭锁，源端最迟在窗口结束时闭锁，仍满足"守护失联的业务闭锁上界为租期"。
+        """
+
+        for _ in range(EGRESS_REMOTE_ATTEMPTS_PER_ROUND):
+            if len(self.remote_pending) < EGRESS_REMOTE_INFLIGHT:
+                self.remote_pending.append(self.remote_pool.submit(egress_remote_attempt, self.policy))
+        wait_until = time.monotonic() + min(0.8, self.policy["lease_seconds"] / 3)
+        while True:
+            extended, unfinished = False, []
+            for future in self.remote_pending:
+                if not future.done():
+                    unfinished.append(future)
+                    continue
+                try:
+                    started, value = future.result()
+                except Exception:
+                    continue
+                valid_until = started + int(value["lease_remaining_ms"]) * 10**6
+                if valid_until > self.remote_valid_until_ns:
+                    self.remote_valid_until_ns, extended = valid_until, True
+            self.remote_pending = unfinished
+            remaining = wait_until - time.monotonic()
+            # 窗口仍有 1 秒以上余量时不等待在途请求，避免拖长本轮核验；首轮或窗口将尽时最多等待到本轮上限。
+            if (extended or remaining <= 0 or not unfinished
+                    or self.remote_valid_until_ns - time.monotonic_ns() > 10**9):
+                break
+            wait_futures(unfinished, timeout=remaining, return_when=FIRST_COMPLETED)
+        if time.monotonic_ns() >= self.remote_valid_until_ns:
+            raise DeploymentError("出口宿主当前保护不可确认")
 
     def shared_checks(self) -> tuple[dict[str, bool], str]:
         checks = {key: False for key in ("kernel_filter", "firewall", "wireguard", "routes", "remote_guard")}
@@ -1135,7 +1187,7 @@ class EgressGuard:
             egress_verify_routes(self.policy, self.role)
             checks["routes"] = True
             if self.role == "origin":
-                egress_remote_status(self.policy)
+                self.confirm_remote_guard()
             checks["remote_guard"] = True
             return checks, ""
         except (OSError, ValueError, KeyError, DeploymentError) as error:
@@ -1295,6 +1347,8 @@ class EgressGuard:
                 server.shutdown()
             self.pool.shutdown(wait=False, cancel_futures=True)
             self.resolver_pool.shutdown(wait=False, cancel_futures=True)
+            if self.remote_pool:
+                self.remote_pool.shutdown(wait=False, cancel_futures=True)
 
 
 def egress_apply_firewall(policy: dict[str, Any], role: str) -> str:

@@ -14,7 +14,7 @@ import sys
 import tempfile
 import time
 import unittest
-from concurrent.futures import Future
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
@@ -43,6 +43,26 @@ def runtime_fixture():
     snapshot = control_receipt_fixtures.create_runtime_egress_fact(containers, datetime.now(timezone.utc).isoformat())
     snapshot["runtime"].update(observed_at_monotonic_ns=time.monotonic_ns(), valid_until_monotonic_ns=time.monotonic_ns() + 2500000000)
     return snapshot
+
+
+class _ImmediateExecutor:
+    """同步执行的替身线程池：守护每轮的出口健康请求在本轮内确定完成，便于断言窗口与状态。"""
+
+    def submit(self, function, *args):
+        future = Future()
+        try:
+            future.set_result(function(*args))
+        except BaseException as error:
+            future.set_exception(error)
+        return future
+
+    def shutdown(self, **_kwargs):
+        return None
+
+
+def exit_health(lease_remaining_ms=2500):
+    return {"schema_version": "codex-runtime-egress-exit-health/v1", "status": "compliant",
+            "lease_remaining_ms": lease_remaining_ms}
 
 
 class EgressGuardTests(unittest.TestCase):
@@ -74,11 +94,12 @@ class EgressGuardTests(unittest.TestCase):
         guard.pool = mock.Mock()
         guard.pool.submit.side_effect = lambda *args: Future()
         guard.resolver_pool, guard.resolver_pending, guard.next_resolution = mock.Mock(), None, time.time() + 60
+        guard.remote_pool, guard.remote_pending, guard.remote_valid_until_ns = _ImmediateExecutor(), [], 0
         self.enterContext(mock.patch.object(arm, "load_egress_policy", return_value=guard.policy))
         self.enterContext(mock.patch.object(deploy, "egress_firewall_identity", return_value="f" * 64))
         self.enterContext(mock.patch.object(deploy, "egress_wireguard_observation"))
         self.enterContext(mock.patch.object(deploy, "egress_verify_routes"))
-        self.enterContext(mock.patch.object(deploy, "egress_remote_status"))
+        self.remote = self.enterContext(mock.patch.object(deploy, "egress_remote_status", side_effect=lambda *args, **kwargs: exit_health()))
         self.inventory = self.enterContext(mock.patch.object(deploy, "egress_inventory", side_effect=lambda *args: copy.deepcopy(guard.inventory)))
         self.command = self.enterContext(mock.patch.object(deploy, "egress_command", return_value=""))
 
@@ -114,9 +135,49 @@ class EgressGuardTests(unittest.TestCase):
         self.guard.step()
         maps.sync_probes.assert_called_with({"1.1.1.1"})
         maps.probe.assert_not_called()
+        # 出口此前担保的剩余租期已过期，且本轮请求全部失败，才判共享失效。
+        self.guard.remote_valid_until_ns = 0
         with mock.patch.object(deploy, "egress_remote_status", side_effect=deploy.DeploymentError("隔离故障")):
             self.guard.step()
         maps.sync_probes.assert_called_with(set())
+
+    def test_remote_guard_tolerates_transient_failure_within_exit_lease(self):
+        # 跨洋链路偶发丢包使单次健康请求超时：出口担保的剩余租期内不判共享失效，也不清空探针。
+        self.assertEqual(self.guard.step()["shared_protection"]["status"], "compliant")
+        with mock.patch.object(deploy, "egress_remote_status", side_effect=deploy.DeploymentError("隔离丢包")):
+            status = self.guard.step()
+            self.assertEqual(status["shared_protection"]["status"], "compliant")
+            self.assertEqual({item["admission_state"] for item in status["services"].values()}, {"ready"})
+            # 担保窗口结束后仍无合规响应，立即判共享失效并闭锁两个容器。
+            self.guard.remote_valid_until_ns = time.monotonic_ns()
+            status = self.guard.step()
+        self.assertEqual(status["shared_protection"]["status"], "blocked")
+        self.assertEqual(status["shared_protection"]["reason"], "出口宿主当前保护不可确认")
+        self.assertEqual({item["status"] for item in status["services"].values()}, {"blocked"})
+
+    def test_remote_guard_window_counts_from_request_start_and_never_exceeds_exit_lease(self):
+        before = time.monotonic_ns()
+        self.remote.side_effect = lambda *args, **kwargs: exit_health(1200)
+        self.guard.step()
+        self.assertGreaterEqual(self.guard.remote_valid_until_ns, before + 1200 * 10**6)
+        self.assertLessEqual(self.guard.remote_valid_until_ns, time.monotonic_ns() + 1200 * 10**6)
+        self.assertEqual(self.remote.call_args.kwargs["timeout"], float(self.guard.policy["lease_seconds"]))
+
+    def test_slow_remote_responses_are_collected_in_later_rounds(self):
+        # 真实线程池：首轮请求因重传变慢、超过本轮等待上限，下一轮收取后恢复共享合规。
+        pool = ThreadPoolExecutor(max_workers=deploy.EGRESS_REMOTE_INFLIGHT)
+        self.addCleanup(pool.shutdown, wait=True, cancel_futures=True)
+        self.guard.remote_pool = pool
+
+        def slow(*args, **kwargs):
+            time.sleep(1.1)
+            return exit_health()
+        self.remote.side_effect = slow
+        first = self.guard.step()
+        self.assertEqual(first["shared_protection"]["status"], "blocked")
+        time.sleep(0.5)
+        second = self.guard.step()
+        self.assertEqual(second["shared_protection"]["status"], "compliant")
 
     def test_probe_resolution_failure_is_retried_without_blocking_lease_loop(self):
         self.guard.next_resolution = 0

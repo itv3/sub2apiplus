@@ -813,6 +813,8 @@ for line in sys.stdin:
             self.addCleanup(guard.pool.shutdown, wait=True, cancel_futures=True)
             self.addCleanup(guard.resolver_pool.shutdown, wait=True, cancel_futures=True)
             guard.resolver_pending, guard.next_resolution = None, time.time() + 3600
+            # 出口健康请求在本轮内同步完成，避免后台线程越出本轮的替身作用域去访问真实地址。
+            guard.remote_pool, guard.remote_pending, guard.remote_valid_until_ns = egress_tests._ImmediateExecutor(), [], 0
             guard.boot_id = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
             guard.previous_state, guard.health, guard.health_expiry = None, {}, 0
             guards[role] = guard
@@ -830,10 +832,10 @@ for line in sys.stdin:
                      "observed_at_epoch": time.time(), "response_sha256": "e" * 64 if passed else None}
                     for url in policy["probe_urls"]]
 
-        def remote(policy):
+        def remote(policy, **_kwargs):
             if guards["exit"].health_expiry <= time.monotonic_ns():
                 raise deploy.DeploymentError("隔离出口守护已失效")
-            return guards["exit"].health
+            return {**guards["exit"].health, "lease_remaining_ms": (guards["exit"].health_expiry - time.monotonic_ns()) // 10**6}
 
         def run():
             try:
