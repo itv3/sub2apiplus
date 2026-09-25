@@ -205,6 +205,10 @@ from urllib.parse import urlsplit
 # 只改 control 层（wire／evidence／policy 摘要不变）。受管工具树摘要随之变化；监督器与断言预处理器未变。
 # 2026-09-25（VC-1 超时清理后继）：监督器的普通恢复预览后继额外接纳 capture-official 动作执行截止后
 # 在清理宽限内自行封口的父失败（control 层）。受管工具树与监督器摘要随之变化；断言预处理器未变。
+# 2026-09-25（seal 断言门禁画像权威）：官方 seal 预检把目标版本整体删除的端点（select 以 data.path 钉死、
+# 全部官方观测零出现）登记为延后项交 VC-2 裁决；候选 seal 预检改用本 Campaign 批准断言画像。evidence 与
+# control 层变化（wire／policy 摘要不变，seal 前须追加 evaluation epoch）；受管工具树随之变化；监督器与
+# 断言预处理器未变。
 DEFAULT_SUPERVISOR_DIGEST = (
     "f0777fa70f3010b8a4583825515813a28dbdda87cbdc8c77c26af1b09a1108df"
 )
