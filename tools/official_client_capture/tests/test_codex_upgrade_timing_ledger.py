@@ -12,6 +12,42 @@ from pathlib import Path
 from tools.official_client_capture import codex_upgrade_timing_ledger as ledger
 
 
+class DriverStageBudgetCalibrationTests(unittest.TestCase):
+    """R20：驱动示例的阶段预算 = 顺利路径估算上限 × 1.5 + 30 分钟，向上取整到 15 分钟。
+
+    预算只经驱动参数生效：驱动建账本时总是显式传入 STAGE_BUDGETS，绑定项目总账后各阶段上限
+    是到项目截止的总分钟数。代码默认值（未绑定总账时的上限）刻意不改：改本模块会改变计时
+    账本生成器身份，已有账本都要登记后继边。
+    """
+
+    ESTIMATES = {"VC-0": 15, "VC-1": 60, "VC-2": 120, "VC-3": 30, "VC-4": 90, "VC-5": 120, "VC-6": 90}
+
+    def test_driver_example_follows_calibration_formula(self) -> None:
+        example = (
+            Path(ledger.__file__).resolve().parents[1]
+            / "arm64_capture_driver"
+            / "driver"
+            / "env.example.sh"
+        ).read_text(encoding="utf-8")
+        line = next(
+            item for item in example.splitlines() if item.startswith("STAGE_BUDGETS=")
+        )
+        pairs = dict(
+            item.split("=", 1) for item in line.split("=", 1)[1].strip('"').split()
+        )
+        expected = {
+            phase: -(-(minutes * 3 + 60) // 30) * 15
+            for phase, minutes in self.ESTIMATES.items()
+        }
+        self.assertEqual({phase: int(value) for phase, value in pairs.items()}, expected)
+        self.assertEqual(tuple(pairs), ledger.PHASE_ORDER)
+        # 驱动参数经 _stage_budget_arguments 覆盖默认值；各值须能通过参数解析。
+        self.assertEqual(
+            ledger._stage_budget_arguments([f"{k}={v}" for k, v in pairs.items()]),
+            expected,
+        )
+
+
 class TimingLedgerTests(unittest.TestCase):
     START = "2026-08-30T00:00:00+00:00"
 

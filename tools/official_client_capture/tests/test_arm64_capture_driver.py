@@ -522,7 +522,8 @@ class EnvFileParserTests(unittest.TestCase):
         self.assertEqual(set(exported), set(values) | set(parser.derive(values)))
         self.assertEqual(exported["NEW"], "codex-9.1.0-formal-round1-YYYYMMDDtHHMMSSz")
         self.assertEqual(exported["B"], "/root/docker/capture-cli/data/candidates/codex-9.1.0-candidate-round1")
-        self.assertTrue(exported["STAGE_BUDGETS"].startswith("'VC-0=45 "))
+        # R20：示例阶段预算按实测标定（VC-0 60 分钟起）；这里只验证带空格的值被原样加引号导出。
+        self.assertTrue(exported["STAGE_BUDGETS"].startswith("'VC-0=60 "))
         # 输出的每一行都是可安全 eval 的单一赋值
         for line in result.stdout.splitlines():
             self.assertRegex(line, r"^export [A-Z_][A-Z0-9_]*=('[^']*'|[A-Za-z0-9_./:@%+=,-]+)$")

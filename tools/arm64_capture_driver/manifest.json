@@ -40,9 +40,9 @@
     },
     {
       "path": "driver/env.example.sh",
-      "sha256": "8d763b16ce70000a684a491a6344d3a259dd8aa220aad98691ed72bd920c73d0",
+      "sha256": "78420c036241a792d83eac26e6b8052b705dc8256f18dc027b980912b77a58a8",
       "mode": "0700",
-      "bytes": 3872
+      "bytes": 4099
     },
     {
       "path": "driver/frontend.sh",
@@ -285,5 +285,5 @@
       "bytes": 21976
     }
   ],
-  "manifest_sha256": "9aa9bbe7a23e1daee4e3b4889a61a60b27a70a5fe8561ded55f88189734e10ab"
+  "manifest_sha256": "5d40df5467fd840014e835a3da0765afa690129b3cf3c5beb58c8cbe469df24b"
 }
