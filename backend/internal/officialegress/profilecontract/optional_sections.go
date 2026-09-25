@@ -94,6 +94,9 @@ type TurnMetadataSection struct {
 // ClientMetadataSection 声明请求体 client_metadata 中客户端固定写入的常量键。
 type ClientMetadataSection struct {
 	Constants map[string]string `json:"Constants"`
+	// Condition：常量的写入条件，取引擎支持的请求条件闭集；恒定写入时为 always。
+	// 0.156.1 的 guardian 审阅请求不写 guardian_credits_requested，取 not_guardian_review_request。
+	Condition ConditionKind `json:"Condition"`
 }
 
 // TurnStateSection 声明 turn-state 的清空条件。
@@ -215,6 +218,10 @@ func validateOptionalSection(name string, value any) error {
 			if !sectionTokenPattern.MatchString(key) || entry == "" {
 				return fmt.Errorf("Constants 键或值非法: %q", key)
 			}
+		}
+		// 条件必须显式给出：空串在条件闭集里表示“无条件”，这里不允许省略，恒定写入写 always。
+		if section.Condition == "" || !EngineSupportedEnumValues().Contains(EnumDomainConditionKind, string(section.Condition)) {
+			return fmt.Errorf("Condition 未受支持: %q", section.Condition)
 		}
 		return nil
 	case *TurnStateSection:

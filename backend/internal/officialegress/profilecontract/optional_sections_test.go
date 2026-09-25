@@ -32,7 +32,7 @@ func withAllOptionalSections(t *testing.T) (SnapshotDoc, SnapshotDoc) {
 	extended.CookieJar = json.RawMessage(`{"AllowedNames":["__cf_bm","__oailb","_cfuvid"],"AllowedPrefixes":["cf_chl_"],"WebSocketHandshakeWriteBack":true}`)
 	extended.WorkspaceRouting = json.RawMessage(`{"DiscoveryEndpointID":"wham_usage","DefaultOrigin":"https://chatgpt.com","AcceptedOriginValues":["NO_CONSTRAINT","https://chatgpt.com"],"AcceptedOverrideValues":["NO_CONSTRAINT"],"OverrideHeader":"x-openai-account-routing-override","NonDefaultAction":"fail_closed","RoutedEndpointIDs":["responses_http","responses_ws"]}`)
 	extended.TurnMetadata = json.RawMessage(`{"Keys":["analytics_enabled","model","session_id"],"AnalyticsEnabled":true,"CompactionImplementations":["responses","responses_compaction_v2"],"CompactionPhases":["mid_turn","post_turn","pre_turn","standalone_turn"]}`)
-	extended.ClientMetadata = json.RawMessage(`{"Constants":{"guardian_credits_requested":"true"}}`)
+	extended.ClientMetadata = json.RawMessage(`{"Condition":"not_guardian_review_request","Constants":{"guardian_credits_requested":"true"}}`)
 	extended.TurnState = json.RawMessage(`{"ResetOnAccountOwnerChange":true}`)
 	extended.WebSocketRetry = json.RawMessage(`{"RetryableErrorCodes":["slow_down"],"RetryBudget":5,"FallbackTransport":"http"}`)
 	extended.WebSocketContinuation = json.RawMessage(`{"ResetOn":["account_owner","auth_revision"]}`)
@@ -167,7 +167,9 @@ func TestOptionalSectionsStrictDecoding(t *testing.T) {
 		"重复取值":        {SectionWebSocketRetry, `{"RetryableErrorCodes":["slow_down","slow_down"],"RetryBudget":5,"FallbackTransport":"http"}`},
 		"非法处置":        {SectionWorkspaceRouting, `{"DiscoveryEndpointID":"x","DefaultOrigin":"https://chatgpt.com","AcceptedOriginValues":["NO_CONSTRAINT"],"AcceptedOverrideValues":["NO_CONSTRAINT"],"OverrideHeader":"x-h","NonDefaultAction":"rewrite","RoutedEndpointIDs":["responses_http"]}`},
 		"非法续接条件":      {SectionWebSocketContinuation, `{"ResetOn":["unknown_kind"]}`},
-		"空常量":         {SectionClientMetadata, `{"Constants":{}}`},
+		"空常量":         {SectionClientMetadata, `{"Condition":"always","Constants":{}}`},
+		"常量缺条件":       {SectionClientMetadata, `{"Constants":{"guardian_credits_requested":"true"}}`},
+		"常量未知条件":      {SectionClientMetadata, `{"Condition":"sometimes","Constants":{"guardian_credits_requested":"true"}}`},
 		"TurnState 假": {SectionTurnState, `{"ResetOnAccountOwnerChange":false}`},
 		"未知节名":        {"UnknownSection", `{}`},
 		"尾随数据":        {SectionTurnState, `{"ResetOnAccountOwnerChange":true}{}`},
