@@ -499,19 +499,29 @@ def _dispatch_recovery(tree: Path, name: str, *, preview: str | None) -> dict[st
         "actions": actions,
     })
     started = __import__("time").monotonic()
-    result, code = codex_upgrade.compile_and_run_vc_batch(argparse.Namespace(
+    namespace = argparse.Namespace(
         campaign_dir=campaign, state_dir=tree / "supervisor" / "vc1", phase="VC-1", sequence=sequence,
         predecessor_checkpoint=campaign / "control" / "vc" / "vc-0-checkpoint.json", action_plan=plan,
         heartbeat_seconds=0.5, watchdog_timeout_seconds=30.0, ledger_interval_seconds=0.5,
-    ))
+    )
+    result, code = codex_upgrade.compile_and_run_vc_batch(namespace)
     run = result.get("campaign_run") or {}
     diagnostics = []
     if code != 0 and run.get("run_dir"):
         diagnostics = [_read(path).get("message") for path in sorted(Path(run["run_dir"]).glob("action-diagnostics/*.json"))]
+    seconds = round(__import__("time").monotonic() - started, 3)
+    duplicate = None
+    if code == 0:
+        # 与 dispatch() 同一检查：已提交的恢复批次逐字重派必须在执行前拒绝，Campaign、计时账本与总账字节不变、
+        # 请求增量为 0（恢复批次的承接判定与补跑派发同样不得被重放）。
+        from tools.official_client_capture.tests.real_chains import test_codex_upgrade_full_chain as full_chain
+
+        before, after = full_chain.assert_duplicate_dispatch_unchanged(namespace)
+        duplicate = (after[1] - before[1]) + (after[2] - before[2])
     batch = {"status": "passed" if code == 0 else "failed", "sequence": sequence, "returncode": code,
              "reason": run.get("reason"), "run_dir": run.get("run_dir"), "diagnostics": diagnostics,
-             "execute": execute, "reuse_count": len(reuse), "seconds": round(__import__("time").monotonic() - started, 3),
-             "attempts": _attempt_summaries(campaign)}
+             "execute": execute, "reuse_count": len(reuse), "seconds": seconds,
+             "attempts": _attempt_summaries(campaign), "duplicate_dispatch_requests": duplicate}
     _write(_chain_dir(tree) / f"{sequence:04d}-{name}.json", batch)
     return batch
 

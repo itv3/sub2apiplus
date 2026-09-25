@@ -194,9 +194,16 @@ class VC1RecordedRecoveryChainTests(unittest.TestCase):
             classified = step("classify", harness.run("classify"))
             self.assertEqual(classified["status"], "passed", f"{json.dumps(classified, ensure_ascii=False)[:6000]}")
             harness.assert_production_untouched()
+            # 成功提交的批次（两次恢复预览、补跑、封存预览与批准、分类）逐字重派都在执行前被拒绝、零增量。
+            duplicates = [redispatched["duplicate_dispatch_requests"], fresh_preview["duplicate_dispatch_requests"],
+                          rerun["duplicate_dispatch_requests"], sealed["preview"]["duplicate_dispatch_requests"],
+                          sealed["approve"]["duplicate_dispatch_requests"], classified["batch"]["duplicate_dispatch_requests"]]
+            self.assertEqual(duplicates, [0] * 6)
             seconds = round(time.monotonic() - started, 3)
             self.real_chain_metrics = {"network_isolated": True, "live_request_count": 0, "seconds": seconds,
-                                       "steps": steps, "batches": classified["batches"]}
+                                       "steps": steps, "batches": classified["batches"],
+                                       "duplicate_dispatch_requests": sum(duplicates),
+                                       "duplicate_dispatch_checks": len(duplicates)}
             print(json.dumps({"chain": "vc-chain.vc1-recovery-chain", **self.real_chain_metrics}, ensure_ascii=False), file=sys.stderr)
             self.assertLess(seconds, 900, "ARM64 VC-1 恢复链超过 15 分钟验收上限")
 
