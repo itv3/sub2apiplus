@@ -218,6 +218,7 @@ class ProvenanceFixture:
         manifest = {
             "campaign_id": self.campaign_id,
             "campaign_mode": "formal",
+            "target_version": "0.154.0",
             "created_at_utc": "2026-09-14T23:14:19Z",
             "configuration": {"capture_root": "/capture"},
             "jobs": [
@@ -600,6 +601,48 @@ class LiveRequestProvenanceTests(unittest.TestCase):
             _write_json(root / "run-summary.json", summary)
             with self.assertRaisesRegex(provenance.ProvenanceError, "零请求的离线 go test"):
                 provenance._root_branches(root)
+
+    def test_frozen_candidate_summary_binds_campaign_target_version(self) -> None:
+        """frozen 采集摘要按本 Campaign 目标版本校验，不再写死 0.154.0；缺目标版本失败关闭。"""
+
+        import hashlib
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "runs" / "c01561-candidate-frozen-core"
+            pcap = root / "scenarios" / "A03" / "egress.pcap"
+            pcap.parent.mkdir(parents=True)
+            pcap.write_bytes(b"frozen-pcap-bytes" * 4)
+            relay = pcap.parent / "relay"
+            relay.mkdir()
+            (relay / "conn001.client_to_upstream.bin").write_bytes(
+                _h1_post(RESPONSES, {"model": "gpt-5.5"})
+            )
+            _write_json(
+                root / "run-summary.json",
+                {
+                    "schema_version": "candidate-core-capture/v1",
+                    "codex_version": "0.156.1",
+                    "run_id": root.name,
+                    "status": "complete",
+                    "explicit_gate": True,
+                    "production_forwarding_enabled": False,
+                    "scenarios": [
+                        {
+                            "scenario_id": "A03",
+                            "actions": {"responses_http_success": 1},
+                            "production_forwarded": False,
+                            "pcap_bytes": pcap.stat().st_size,
+                            "pcap_sha256": hashlib.sha256(pcap.read_bytes()).hexdigest(),
+                        }
+                    ],
+                },
+            )
+            kind, branches = provenance._root_branches(root, target_version="0.156.1")
+            self.assertEqual(kind, "candidate_frozen")
+            self.assertTrue(branches)
+            for version in ("0.154.0", None):
+                with self.subTest(target_version=version):
+                    with self.assertRaisesRegex(provenance.ProvenanceError, "run-summary 形状或状态非法"):
+                        provenance._root_branches(root, target_version=version)
 
     def test_compact_driver_fact_without_error_type_stays_unresolved(self) -> None:
         """turn 0 但驱动没有记录错误类型或协议记录数时，不能当零。"""
