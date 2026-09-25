@@ -10990,6 +10990,209 @@ class CodexUpgradeTest(unittest.TestCase):
         forged["tool_dependency_files"]["codex_upgrade_supervisor.py"] = "7" * 64
         self.assertFalse(matches(forged, low_risk_drift))
 
+    def test_rereused_result_is_validated_against_original_execution(self) -> None:
+        """再次承接已复用的结果时，沿承接链用原始执行结果验证元数据。
+
+        0.156.1 VC-1 第三轮：第二轮承接把 relay 结果的逐文件依赖重绑为当时的编排器、
+        监督器摘要；控制面再次修复后，这些结果对不上 Campaign 冻结摘要，27 个已完成的
+        官方结果全部无法复用。原始执行结果仍由冻结工具产出，应回溯验证；承接结果与
+        原始结果的证据字段不一致、或出处收据被改动时仍必须拒绝。
+        """
+
+        job = Job(
+            job_id="official-relay-ws-default",
+            phase="official",
+            suites=("full",),
+            description="relay",
+            steps=(
+                {
+                    "argv": [
+                        "bash",
+                        "/repo/tools/official_client_capture/run_h1_wire_probe.sh",
+                        "codex_upgrade.py",
+                        "codex_upgrade_supervisor.py",
+                    ],
+                    "environment": {},
+                    "timeout": 60,
+                },
+            ),
+            evidence_roots=("/capture/relay",),
+            covers=(),
+        )
+
+        def tool(**changed: str) -> dict[str, object]:
+            digests = {
+                "codex_upgrade.py": "3" * 64,
+                "codex_upgrade_supervisor.py": "8" * 64,
+                "run_h1_wire_probe.sh": "1" * 64,
+            }
+            digests.update(
+                {name.replace("__", "."): value for name, value in changed.items()}
+            )
+            entries = [
+                {"path": path, "sha256": digest}
+                for path, digest in sorted(digests.items())
+            ]
+            components = codex_upgrade._tool_component_identities(entries)
+            return {
+                "entry_count": len(entries),
+                "files_sha256": codex_upgrade._fingerprint({"entries": entries}),
+                "entries": entries,
+                "components": components["components"],
+                **codex_upgrade._tool_identity_sides(entries),
+                "orchestrator_closures": {
+                    "wire_producer": {"closure_sha256": "7" * 64}
+                },
+            }
+
+        frozen = tool()
+        # 第二、三轮承接时的工具：编排器、监督器先后为控制面修复改动，产出侧不变。
+        second = tool(
+            codex_upgrade__py="5" * 64, codex_upgrade_supervisor__py="9" * 64
+        )
+        third = tool(
+            codex_upgrade__py="6" * 64, codex_upgrade_supervisor__py="9" * 64
+        )
+        current = tool(
+            codex_upgrade__py="4" * 64, codex_upgrade_supervisor__py="2" * 64
+        )
+        identity = {"runtime": "same"}
+        metadata = codex_upgrade._job_incremental_metadata(
+            job, identity=identity, tool_identity=frozen
+        )
+        original = {
+            "id": job.job_id,
+            "status": "complete",
+            "disposition": "executed",
+            "evidence_sha256": "a" * 64,
+            "execution_sha256": metadata["input_sha256"],
+            "tool_components": metadata["components"],
+            "tool_component_digests": metadata["component_digests"],
+            "tool_dependency_files": metadata["tool_dependency_files"],
+            "input_sha256": metadata["input_sha256"],
+            "environment_sha256": metadata["environment_sha256"],
+            "dependency_sha256": metadata["dependency_sha256"],
+            "incremental_result_key": metadata["result_key"],
+        }
+        attempt_ids = (
+            "20260925T050731Z-aaaaaaaaaaaaaaaa",
+            "20260925T090527Z-bbbbbbbbbbbbbbbb",
+            "20260925T101500Z-cccccccccccccccc",
+        )
+        manifest = {"campaign_id": "c-same", "tool_identity": frozen}
+
+        def run(campaign_dir: Path, attempt_id: str, payload: dict) -> list[dict]:
+            root = campaign_dir / "official" / "attempts" / attempt_id
+            with (
+                mock.patch.object(
+                    codex_upgrade,
+                    "load_campaign_manifest",
+                    side_effect=[manifest, manifest],
+                ),
+                mock.patch.object(
+                    codex_upgrade,
+                    "_ordered_capture_attempts",
+                    return_value=[(root, {})],
+                ),
+                mock.patch.object(
+                    codex_upgrade,
+                    "_load_capture_attempt",
+                    return_value=(root, payload),
+                ),
+            ):
+                return codex_upgrade._prior_complete_results(
+                    campaign_dir,
+                    Path("official"),
+                    [job],
+                    phase="official",
+                    candidate_id=None,
+                    identity=identity,
+                    tool_identity=current,
+                    expected_reuse_job_ids=[job.job_id],
+                    source_attempt_id=attempt_id,
+                )
+
+        def write_attempt(campaign_dir: Path, attempt_id: str, result: dict) -> Path:
+            root = campaign_dir / "official" / "attempts" / attempt_id
+            root.mkdir(parents=True)
+            receipt = root / "attempt.json"
+            receipt.write_text(
+                json.dumps(
+                    {"status": "failed", "identity": identity, "results": [result]}
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            return receipt
+
+        def carry(result: dict, receipt: Path, attempt_id: str, tool_identity: dict) -> dict:
+            carried = codex_upgrade._rebase_reused_result(
+                result, job, identity=identity, tool_identity=tool_identity
+            )
+            carried.update(
+                {
+                    "carried_from_attempt": attempt_id,
+                    "disposition": "reused",
+                    "source_receipt": {
+                        "path": f"official/attempts/{attempt_id}/attempt.json",
+                        "sha256": codex_upgrade.file_sha256(receipt),
+                        "bytes": receipt.stat().st_size,
+                    },
+                }
+            )
+            return carried
+
+        with tempfile.TemporaryDirectory() as directory:
+            campaign_dir = Path(directory)
+            first_receipt = write_attempt(campaign_dir, attempt_ids[0], original)
+            second_result = carry(original, first_receipt, attempt_ids[0], second)
+            second_receipt = write_attempt(campaign_dir, attempt_ids[1], second_result)
+            second_payload = json.loads(second_receipt.read_text(encoding="utf-8"))
+
+            # 前提：承接结果的逐文件依赖已是第二轮工具摘要，直接按冻结身份验证会被拒绝。
+            self.assertFalse(
+                codex_upgrade._historical_result_metadata_matches(
+                    second_result,
+                    job,
+                    identity,
+                    frozen,
+                    str(second_result["execution_sha256"]),
+                    current_tool=current,
+                )
+            )
+            reused = run(campaign_dir, attempt_ids[1], second_payload)
+            self.assertEqual([item["id"] for item in reused], [job.job_id])
+            self.assertEqual(reused[0]["carried_from_attempt"], attempt_ids[1])
+            self.assertEqual(reused[0]["evidence_sha256"], "a" * 64)
+            self.assertEqual(
+                reused[0]["incremental_result_key"],
+                codex_upgrade._job_incremental_metadata(
+                    job, identity=identity, tool_identity=current
+                )["result_key"],
+            )
+
+            # 两跳承接链同样回溯到原始执行结果。
+            third_result = carry(second_result, second_receipt, attempt_ids[1], third)
+            third_receipt = write_attempt(campaign_dir, attempt_ids[2], third_result)
+            third_payload = json.loads(third_receipt.read_text(encoding="utf-8"))
+            self.assertEqual(
+                [item["id"] for item in run(campaign_dir, attempt_ids[2], third_payload)],
+                [job.job_id],
+            )
+
+            # 承接结果与原始结果的证据字段不一致：不能借用原始结果的出处。
+            tampered = json.loads(json.dumps(second_payload))
+            tampered["results"][0]["evidence_sha256"] = "b" * 64
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "无法安全复用"):
+                run(campaign_dir, attempt_ids[1], tampered)
+
+            # 出处收据被改动（摘要不符）：回溯失败，按承接结果本身验证而拒绝。
+            first_receipt.write_text(
+                first_receipt.read_text(encoding="utf-8") + "\n", encoding="utf-8"
+            )
+            with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "无法安全复用"):
+                run(campaign_dir, attempt_ids[1], second_payload)
+
     def test_v7_preview_replays_hybrid_and_evaluator_drift(self) -> None:
         """v7 严格预览应承接旧结果，不得把混合文件或 timing schema 判成重跑。"""
 

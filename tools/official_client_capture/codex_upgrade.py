@@ -39607,6 +39607,94 @@ def _rebase_reused_result(
     return rebased
 
 
+# _rebase_reused_result 承接时改写的元数据字段，以及承接时追加的出处标记。
+_REUSED_RESULT_REBOUND_FIELDS = frozenset(
+    {
+        "execution_sha256",
+        "tool_components",
+        "tool_component_digests",
+        "tool_dependency_files",
+        "input_sha256",
+        "environment_sha256",
+        "dependency_sha256",
+        "incremental_result_key",
+    }
+)
+_REUSED_RESULT_CARRY_FIELDS = frozenset(
+    {"carried_from_attempt", "disposition", "source_receipt"}
+)
+# 同一 Campaign 承接链的回溯上限；正常恢复每轮只加一跳，超过即视为无法证明出处。
+_REUSED_RESULT_ORIGIN_MAX_DEPTH = 32
+
+
+def _reused_result_origin(
+    campaign_dir: Path,
+    relative: Path,
+    result: Mapping[str, Any],
+) -> Mapping[str, Any] | None:
+    """沿同一 Campaign 的承接链找到复用结果的原始执行结果；任何一跳无法证明即返回 None。
+
+    _rebase_reused_result 承接结果时，把组件摘要与逐文件依赖改写为承接当时的
+    工具摘要，好让新 attempt 的结果键自洽；代价是该结果再次被承接时，逐文件依赖
+    已不等于 Campaign 冻结摘要，无法再证明“由冻结工具产出”。0.156.1 VC-1 第三轮
+    实测：第二轮承接的 27 个 relay 结果记录的是承接当时的编排器、监督器与断言门禁
+    摘要，控制面修复跨越两次恢复后，这些已完成的官方结果全部无法再复用。
+
+    原始执行结果的元数据仍是冻结工具写下的，因此再次承接时改用它来验证。每一跳
+    都必须满足：source_receipt 指向同一 attempts 根下 carried_from_attempt 的
+    attempt.json，且摘要与字节数一致；来源中同一 Job 恰有一个已完成结果；两者除
+    重绑字段与出处标记外逐字段相同（证据、出口时段绑定等都不能变）。
+    """
+
+    ignored = _REUSED_RESULT_REBOUND_FIELDS | _REUSED_RESULT_CARRY_FIELDS
+    current: Mapping[str, Any] = result
+    for _ in range(_REUSED_RESULT_ORIGIN_MAX_DEPTH):
+        if current.get("disposition") != "reused":
+            return current
+        carried = current.get("carried_from_attempt")
+        binding = current.get("source_receipt")
+        if (
+            not isinstance(carried, str)
+            or not SAFE_ID_RE.fullmatch(carried)
+            or not isinstance(binding, Mapping)
+        ):
+            return None
+        receipt_path = (relative / "attempts" / carried / "attempt.json").as_posix()
+        if binding.get("path") != receipt_path:
+            return None
+        receipt = campaign_dir / receipt_path
+        try:
+            if (
+                receipt.is_symlink()
+                or not receipt.is_file()
+                or receipt.stat().st_size != binding.get("bytes")
+                or file_sha256(receipt) != binding.get("sha256")
+            ):
+                return None
+            payload = json.loads(receipt.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        results = payload.get("results") if isinstance(payload, Mapping) else None
+        if not isinstance(results, list):
+            return None
+        sources = [
+            item
+            for item in results
+            if isinstance(item, Mapping)
+            and item.get("id") == current.get("id")
+            and item.get("status") == "complete"
+        ]
+        if len(sources) != 1:
+            return None
+        source = sources[0]
+        if {key: value for key, value in current.items() if key not in ignored} != {
+            key: value for key, value in source.items() if key not in ignored
+        }:
+            return None
+        current = source
+    return None
+
+
 def _reserve_capture_attempt(
     campaign_dir: Path,
     *,
@@ -40228,6 +40316,15 @@ def _prior_complete_results(
             }
             permitted_rebase_paths = set(allowed_high_risk_path_changes)
             permitted_rebase_paths.update(unrelated_changed_paths)
+            # 已被承接过的结果，元数据是承接当时的工具摘要；同一 Campaign 内再次承接时
+            # 改用原始执行结果验证“由冻结工具产出”（无法证明出处时仍按当前结果验证）。
+            # 重绑仍以当前结果为基础，后继 attempt 与来源的逐字段比对口径不变。
+            metadata_item: Mapping[str, Any] = item
+            if not cross_campaign_source and item.get("disposition") == "reused":
+                metadata_item = (
+                    _reused_result_origin(history_campaign_dir, history_relative, item)
+                    or item
+                )
             recorded_key = item.get("incremental_result_key")
             needs_rebase = False
             if recorded_key is None:
@@ -40238,7 +40335,7 @@ def _prior_complete_results(
                 # 先按冻结身份验证历史键，成功后只在新 attempt 中重绑当前
                 # execution／component／result key，绝不回写历史收据。
                 if not _historical_result_metadata_matches(
-                    item,
+                    metadata_item,
                     expected_job,
                     identity,
                     frozen_tool if isinstance(frozen_tool, Mapping) else None,
@@ -40264,7 +40361,7 @@ def _prior_complete_results(
                     "dependency_sha256",
                 }.issubset(item):
                     if not _historical_result_metadata_matches(
-                        item,
+                        metadata_item,
                         expected_job,
                         identity,
                         frozen_tool if isinstance(frozen_tool, Mapping) else None,
