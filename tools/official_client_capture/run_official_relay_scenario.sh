@@ -271,9 +271,9 @@ write_observation() {
 }
 
 daemon_tool() {
-  # Codex app-server daemon 生命周期工具（codex_daemon_lifecycle.py）在采集容器内执行，
+  # Codex app-server daemon 生命周期工具（drive_codex_daemon.py）在采集容器内执行，
   # stdout 是一行不含凭据的 JSON，退出码 0 成功、3 条件不成立、2 参数非法。
-  docker exec "$capture_container" python3 "$capture_tool_root/codex_daemon_lifecycle.py" "$@"
+  docker exec "$capture_container" python3 "$capture_tool_root/drive_codex_daemon.py" "$@"
 }
 
 stop_relay() {

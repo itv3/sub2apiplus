@@ -1,4 +1,4 @@
-"""codex_daemon_lifecycle：采集容器内 Codex app-server daemon 的生命周期（0.157.0 起 TUI 默认经 daemon）。
+"""drive_codex_daemon：采集容器内 Codex app-server daemon 的生命周期（0.157.0 起 TUI 默认经 daemon）。
 
 进程表用临时目录伪造的 /proc 表示；发信号换成改写伪进程表的替身，不会触碰真实进程。客户端命令用
 假 codex 脚本模拟 ``app-server daemon version／stop`` 的 JSON 输出。
@@ -20,7 +20,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
-from tools.official_client_capture import codex_daemon_lifecycle as lifecycle
+from tools.official_client_capture import drive_codex_daemon as lifecycle
 
 FAKE_CODEX = textwrap.dedent(
     """\

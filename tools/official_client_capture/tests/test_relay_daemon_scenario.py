@@ -40,7 +40,7 @@ FAKE_DOCKER = textwrap.dedent(
     with open(os.environ["FAKE_DOCKER_LOG"], "a", encoding="utf-8") as log:
         log.write(json.dumps({"env": env, "container": container, "command": command}, ensure_ascii=False) + "\\n")
     tool = command[1].rsplit("/", 1)[-1] if len(command) > 1 else ""
-    if tool == "codex_daemon_lifecycle.py":
+    if tool == "drive_codex_daemon.py":
         sub = command[2]
         code = int(os.environ.get(f"FAKE_{sub.upper()}_CODE", "0"))
         payload = {"schema_version": "codex-daemon-lifecycle/v1", "command": sub,
@@ -115,7 +115,7 @@ class DaemonScenarioWiringTest(unittest.TestCase):
     def test_daemon_工具在容器内以受管路径执行(self) -> None:
         tool = function_source(self.source, "daemon_tool")
         self.assertIn(
-            'docker exec "$capture_container" python3 "$capture_tool_root/codex_daemon_lifecycle.py" "$@"', tool
+            'docker exec "$capture_container" python3 "$capture_tool_root/drive_codex_daemon.py" "$@"', tool
         )
 
     def test_场景分支不带任何_CLI_覆盖并经独立_home_启动(self) -> None:
@@ -193,7 +193,7 @@ class DaemonScenarioBranchTest(unittest.TestCase):
         result = []
         for call in self.calls():
             tool = call["command"][1].rsplit("/", 1)[-1]
-            result.append(call["command"][2] if tool == "codex_daemon_lifecycle.py" else tool)
+            result.append(call["command"][2] if tool == "drive_codex_daemon.py" else tool)
         return result
 
     def test_成功时依次建_home_驱动_判定_停止并留三份观测(self) -> None:
