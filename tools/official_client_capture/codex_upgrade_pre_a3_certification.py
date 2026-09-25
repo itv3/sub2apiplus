@@ -34,8 +34,8 @@ from tools.official_client_capture.tests import project_ledger_fixture
 
 SCHEMA_VERSION = "pre-a3-path-certification/v1"
 FIXTURE_ONLY_ENV = project_ledger_fixture.FIXTURE_ONLY_ENV
-# R13 分阶段登记：阶段 1 只要求 validation_only 连续链，后续再追加取证与生产替换链。
-REAL_CHAIN_IDS = ("vc-chain.full-validation-only",)
+# R13 分阶段登记：阶段 1 只要求 validation_only 连续链；R18 追加后段父失败注入链（VC-2／VC-4／VC-5）。
+REAL_CHAIN_IDS = ("vc-chain.full-validation-only", "vc-chain.late-stage-faults")
 # (场景名, 说明, 测试模块, 测试类, 测试方法)
 SCENARIOS: tuple[tuple[str, str, str, str, str], ...] = (
     (
@@ -100,6 +100,13 @@ SCENARIOS: tuple[tuple[str, str, str, str, str], ...] = (
         "tools.official_client_capture.tests.real_chains.test_codex_upgrade_full_chain",
         "FullValidationOnlyChainTests",
         "test_full_validation_only_chain",
+    ),
+    (
+        "vc-chain.late-stage-faults",
+        "连续链在 VC-2 分类、VC-4 构建登记、VC-5 验收各注入一次父失败，逐次对账恢复直至 VC-6 交付",
+        "tools.official_client_capture.tests.real_chains.test_codex_upgrade_late_stage_faults",
+        "LateStageFaultChainTests",
+        "test_late_stage_parent_failures_recover_to_delivery",
     ),
     (
         "reconcile-attempt.recoverable-preview-approve-resume",

@@ -405,6 +405,45 @@ def _prepare_synthetic_classification(campaign_dir, manifest, approved_root, tar
     return classify_payload, references, joint, requirements
 
 
+def _record_build_batch(case, root, fixture, state_dir, manifest, identity_fixture, parameters_path, implementation_root, implementation_receipt):
+    """以 VC-4 正式批次派发 record-candidate-build（参数与候选身份夹具的进程内调用逐项相同）。"""
+
+    from tools.official_client_capture.tests import candidate_identity_fixture as cif
+    from tools.official_client_capture.tests.real_chains.test_codex_upgrade_full_chain import dispatch_cli
+
+    fixture_identity = identity_fixture
+    campaign_dir = Path(fixture["campaign_dir"])
+    arguments = [
+        "record-candidate-build", "--campaign-dir", str(campaign_dir), "--candidate-id", fixture_identity.candidate_id,
+        "--candidate-purpose", str(manifest["campaign_purpose"]),
+        "--candidate-source", str(fixture_identity.source.resolve()),
+        "--candidate-binary", str(fixture_identity.binary.resolve()),
+        "--runtime-image", str(fixture_identity.runtime_image),
+        "--candidate-image-id", str(fixture_identity.image_id),
+        "--build-id", f"build-eval-{fixture_identity.nonce}",
+        "--deployed-version", str(manifest["target_version"]),
+        "--target-architecture", cif.TARGET_ARCHITECTURE,
+        "--build-parameters", str(parameters_path.resolve()),
+        "--build-tree", str(fixture_identity.build_tree.resolve()),
+        "--docker-context", str(fixture_identity.context.resolve()),
+        "--frontend-dist-source", str(fixture_identity.dist_source.resolve()),
+        "--catalog-stage-dir", str((fixture_identity.source / "catalog").resolve()),
+        "--source-transition", str(fixture_identity.transition_path.resolve()),
+        "--gate-plan", str((fixture_identity.source / "gates" / "gate-plan.json").resolve()),
+        "--implementation-test-root", str(implementation_root.resolve()),
+        "--implementation-test-receipt", str(implementation_receipt.resolve()),
+    ]
+    candidate_id = fixture_identity.candidate_id
+
+    def recorded(campaign):
+        from tools.official_client_capture import codex_upgrade
+
+        return {"status": "complete", "build_receipt": str(codex_upgrade._candidate_build_receipt_path(Path(campaign), candidate_id))}
+
+    return dispatch_cli(case, root, fixture, state_dir, "VC-4", None, "record-candidate-build", arguments,
+                        timeout_seconds=900, payload=recorded)
+
+
 def _finish_candidate_identity(arguments, case, root, fixture, campaign_dir, manifest, state_dir, identity_fixture, requirements):
     """按共享候选夹具建立真实制品；保留旧链的无 Docker 开发机分支。"""
 
@@ -428,9 +467,19 @@ def _finish_candidate_identity(arguments, case, root, fixture, campaign_dir, man
             upgrade_id=str(timing["upgrade_id"]), campaign_id=str(manifest["campaign_id"]), campaign_purpose=str(manifest["campaign_purpose"]),
             source_tree_sha256=codex_upgrade._directory_tree_digest(identity_fixture.source),
         )
-        recorded = identity_fixture.record_build(
-            campaign_dir, manifest, build_parameters=parameters_path, implementation_root=implementation_root, implementation_receipt=implementation_receipt
-        )
+        from tools.official_client_capture.tests.real_chains.test_codex_upgrade_full_chain import late_stage_faults
+
+        if "record-candidate-build" in late_stage_faults():
+            # R18 后段注入链：与生产 vc4.sh 同形，经 VC-4 批次派发 record-candidate-build，
+            # 便于注入父批次失败并走对账与同批重派；其余链保持进程内调用不变。
+            recorded = _record_build_batch(
+                case, root, {**fixture, "campaign_dir": campaign_dir}, state_dir, manifest, identity_fixture,
+                parameters_path, implementation_root, implementation_receipt,
+            )
+        else:
+            recorded = identity_fixture.record_build(
+                campaign_dir, manifest, build_parameters=parameters_path, implementation_root=implementation_root, implementation_receipt=implementation_receipt
+            )
         receipt_path = Path(str(recorded["build_receipt"]))
         receipt = _read(receipt_path)
         identity = {

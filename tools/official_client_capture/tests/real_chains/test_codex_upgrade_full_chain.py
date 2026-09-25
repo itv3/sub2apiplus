@@ -149,13 +149,95 @@ def assert_duplicate_dispatch_unchanged(namespace):
     return counts_before, ledger_request_counts(Path(namespace.campaign_dir))
 
 
-def dispatch_cli(case, root, fixture, state_dir, phase, sequence, tag, arguments):
-    """以正式批次派发 CLI 并保留输出，预览的退出语义仍由当前工具决定。"""
+# R18 后段父失败注入表（JSON 文件路径）：tag → 副本树里要撤回的注入 {file, anchor, injection}。
+# 只有后段注入链设置；未设置时连续链行为与原来逐字相同。
+LATE_STAGE_FAULTS_ENV = "CODEX_R18_LATE_STAGE_FAULTS"
+
+
+def late_stage_faults() -> dict:
+    path = os.environ.get(LATE_STAGE_FAULTS_ENV)
+    return driver._read(Path(path)) if path else {}
+
+
+def next_vc_sequence(campaign) -> int:
+    """按既有 COMMIT 推算下一个全局批次序号（失败批次也占序号）。"""
+
+    from tools.official_client_capture import codex_upgrade as upgrade
+
+    manifest = upgrade._require_formal_campaign(Path(campaign))
+    return max(upgrade._committed_vc_sequences(Path(campaign), manifest), default=0) + 1
+
+
+def recover_stage_fault(case, root, fixture, state_dir, phase, sequence, tag, plan, failed, fault):
+    """父批次按注入失败后：撤回副本树注入（修复 control 函数）→ 对账 → 同批 N+1 逐字重派。
+
+    失败批次已写的产物（COMMIT、草案、构建收据等）原样保留，重派必须在其上幂等完成；对账必须给出
+    同批重派。返回 (成功结果, 成功批次的派发参数)。
+    """
+
+    from tools.official_client_capture import codex_upgrade as upgrade
+    from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+    from tools.official_client_capture import codex_upgrade_timing_ledger as timing
+
+    campaign = Path(fixture["campaign_dir"])
+    manifest = upgrade._require_formal_campaign(campaign)
+    ledger = upgrade._campaign_timing_ledger_dir(campaign, manifest)
+    failed_status = timing.inspect_ledger(ledger)["status"]
+    run_dir = Path(failed["campaign_run"]["run_dir"])
+    diagnostics = [driver._read(path).get("message") for path in run_dir.glob("action-diagnostics/*.json")]
+    # 失败批次已写的产物必须存在，且恢复后字节不变（重派在其上幂等完成，不得改写）。
+    preserved = {
+        path.relative_to(campaign).as_posix(): path.read_bytes()
+        for pattern in fault.get("preserve", []) for path in sorted(campaign.glob(pattern)) if path.is_file()
+    }
+    if fault.get("preserve") and not preserved:
+        raise RuntimeError(f"{tag} 失败批次没有留下应保留的产物：{fault['preserve']}")
+    target = Path(upgrade.__file__).resolve().parent / fault["file"]
+    source = target.read_text(encoding="utf-8")
+    if source.count(fault["injection"]) != 1:
+        raise RuntimeError(f"{tag} 的注入不在副本树中，无法撤回")
+    target.write_text(source.replace(fault["injection"], fault["anchor"]), encoding="utf-8")
+    reconciled = reconciler.reconcile_supervisor_run(run_dir, campaign)
+    replay = reconciled.get("stage_replay") or {}
+    if (
+        reconciled.get("status") != "recoverable"
+        or not replay.get("allowed")
+        or replay.get("next_action") != "redispatch-same-batch"
+    ):
+        raise RuntimeError(f"{tag} 对账没有给出同批重派：{reconciled}")
+    namespace = case._vc_chain_arguments({**fixture, "state_dir": state_dir}, phase, sequence + 1, plan)
+    result, code = upgrade.compile_and_run_vc_batch(namespace)
+    if code != 0:
+        run_dir = Path(result["campaign_run"]["run_dir"])
+        details = [driver._read(path).get("message") for path in run_dir.glob("action-diagnostics/*.json")]
+        raise RuntimeError(f"{tag} 修复后同批重派失败：{result['campaign_run']['reason']}；诊断={details}")
+    changed = sorted(relative for relative, data in preserved.items() if (campaign / relative).read_bytes() != data)
+    if changed:
+        raise RuntimeError(f"{tag} 恢复改写了失败批次已写的产物：{changed}")
+    driver._write(root / f"fault-{tag}.json", {
+        "preserved_files": sorted(preserved),
+        "tag": tag, "phase": phase, "failed_sequence": sequence, "failed_reason": failed["campaign_run"]["reason"],
+        "failed_diagnostics": diagnostics, "ledger_status_after_failure": failed_status,
+        "reconcile_status": reconciled["status"], "next_action": replay["next_action"],
+        "recovered_sequence": sequence + 1, "ledger_status_after_recovery": timing.inspect_ledger(ledger)["status"],
+    })
+    return result, namespace
+
+
+def dispatch_cli(case, root, fixture, state_dir, phase, sequence, tag, arguments, *, timeout_seconds=120, payload=None):
+    """以正式批次派发 CLI 并保留输出，预览的退出语义仍由当前工具决定。
+
+    ``sequence`` 为 None 时按既有 COMMIT 推算；注入表登记了本 tag 时，首次派发必须失败并经
+    ``recover_stage_fault`` 修复后同批重派。注入批次与生产计划生成器同形，直接调用受管
+    ``codex_upgrade.py``（阶段幂等重派证明只认受管直接调用），结果由 ``payload(campaign)`` 从产物读回。
+    """
 
     from tools.official_client_capture import codex_upgrade as upgrade
     from tools.official_client_capture import codex_upgrade_vc_artifacts as artifacts
 
     campaign = Path(fixture["campaign_dir"])
+    if sequence is None:
+        sequence = next_vc_sequence(campaign)
     output = campaign / "control" / "vc-chain" / f"{tag}.json"
     script = (
         "import contextlib,io,sys\n"
@@ -168,6 +250,14 @@ def dispatch_cli(case, root, fixture, state_dir, phase, sequence, tag, arguments
         "print(stream.getvalue())\n"
         "raise SystemExit(code)\n"
     )
+    fault = late_stage_faults().get(tag)
+    if fault is not None and payload is None:
+        raise RuntimeError(f"{tag} 登记了注入，必须给出从产物读回结果的 payload")
+    command = (
+        [sys.executable, str(Path(upgrade.__file__).resolve()), *arguments]
+        if fault is not None
+        else [sys.executable, "-c", script, str(output), *arguments]
+    )
     plan = root / "action-plans" / f"{tag}.json"
     plan.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     driver._write(plan, {
@@ -176,18 +266,23 @@ def dispatch_cli(case, root, fixture, state_dir, phase, sequence, tag, arguments
         "reuse_item_ids": [],
         "actions": [{
             "action_id": tag, "operation": f"{phase}:{arguments[0]}",
-            "timeout_seconds": 120,
-            "command": [sys.executable, "-c", script, str(output), *arguments],
+            "timeout_seconds": timeout_seconds,
+            "command": command,
             "item_ids": [tag],
         }],
     })
     namespace = case._vc_chain_arguments({**fixture, "state_dir": state_dir}, phase, sequence, plan)
     result, code = upgrade.compile_and_run_vc_batch(namespace)
-    if code != 0:
+    if code != 0 and fault is not None:
+        result, namespace = recover_stage_fault(case, root, fixture, state_dir, phase, sequence, tag, plan, result, fault)
+        sequence = namespace.sequence
+    elif code != 0:
         run_dir = Path(result["campaign_run"]["run_dir"])
         details = [driver._read(path).get("message") for path in run_dir.glob("action-diagnostics/*.json")]
         raise RuntimeError(f"连续链 {tag} 失败：{result['campaign_run']['reason']}；诊断={details}")
-    payload = driver._read(output)
+    elif fault is not None:
+        raise RuntimeError(f"{tag} 登记了注入，首次派发却没有失败")
+    payload = payload(campaign) if fault is not None else driver._read(output)
     per_batch, _ledger_total, _project_total = ledger_request_counts(campaign)
     duplicate = _record_duplicate_check(root, tag, *assert_duplicate_dispatch_unchanged(namespace))
     driver._write(root / f"metrics-{tag}.json", {
@@ -202,7 +297,7 @@ def stage_full_chain(case, root, fixture, state_dir, identity_fixture):
     """真实 stage-profile 消费零请求 Catalog producer；生成收据逐字进入候选源码树。"""
 
     output = root / "full-chain-catalog"
-    dispatch_cli(case, root, fixture, state_dir, "VC-3", 5, "stage-profile", [
+    dispatch_cli(case, root, fixture, state_dir, "VC-3", None, "stage-profile", [
         "stage-profile", "--campaign-dir", str(fixture["campaign_dir"]), "--output", str(output),
     ])
     if identity_fixture is not None:
@@ -217,9 +312,15 @@ def classify_full_chain(case, root, fixture, state_dir, manifests):
 
     campaign = Path(fixture["campaign_dir"])
     manifest = fixture["manifest"]
+    def draft_written(campaign_dir):
+        drafts = sorted((Path(campaign_dir) / "classification" / "draft").glob("*/draft.json"))
+        if len(drafts) != 1:
+            raise RuntimeError(f"分类草案应恰好一份：{drafts}")
+        return {"status": "draft", "path": str(drafts[0].parent)}
+
     draft = dispatch_cli(case, root, fixture, state_dir, "VC-2", 2, "classify-draft", [
         "classify", "--campaign-dir", str(campaign),
-    ])
+    ], payload=draft_written)
     _record_duplicate_check(root, "vc1-bootstrap", *assert_duplicate_bootstrap_unchanged(campaign, manifest, state_dir))
     target, migration, scenario, profile, assertion = manifests
     migration_payload = driver._read(Path(draft["path"]) / "rule-migration.json")
@@ -244,10 +345,11 @@ def classify_full_chain(case, root, fixture, state_dir, manifests):
     })
     argv = [*case._classification_arguments(campaign, manifests),
             "--active-profile", str(active), "--profile-patch-manifest", str(patches)]
-    preview = dispatch_cli(case, root, fixture, state_dir, "VC-2", 3, "classify-preview", argv)
+    # 草案批次首次派发同时引导 VC-1 首批（序号 1），固定为 2；其后按既有 COMMIT 推算（注入失败的批次也占序号）。
+    preview = dispatch_cli(case, root, fixture, state_dir, "VC-2", None, "classify-preview", argv)
     if preview.get("status") != "approval_required":
         raise RuntimeError(f"分类预览未停在预期边界：{preview}")
-    approved = dispatch_cli(case, root, fixture, state_dir, "VC-2", 4, "classify-approve", [
+    approved = dispatch_cli(case, root, fixture, state_dir, "VC-2", None, "classify-approve", [
         *argv, "--approve-manifest-sha256", preview["joint_manifest_sha256"],
     ])
     if approved.get("status") != "complete":
