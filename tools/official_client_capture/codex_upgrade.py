@@ -49196,6 +49196,352 @@ def _profile_diff_paths(before: Any, after: Any, path: tuple[str, ...] = ()) -> 
     return [] if before == after else [_json_pointer(path)]
 
 
+# ---------------------------------------------------------------------------
+# 画像规则补丁 v2
+#
+# v1 只能替换 Active 副本中已经存在的路径，数组长度一变差异就收敛成整个数组，且一个
+# 路径只能归一条规则。目标版本新增端点、下线端点、给对象加新字段、多条规则共同由
+# “删除某个端点”表达时，v1 无法逐规则归属。v2 在不改变 v1 任何行为的前提下补齐：
+#
+# 1. 列表键控寻址：元素全是对象、且 ``ID``（其次 ``Name``）在全部元素上取值唯一的
+#    列表按键寻址，路径段写成 ``ID=<值>``；键控列表禁止再用下标寻址，保证补丁路径与
+#    差异路径是同一套坐标。
+# 2. 显式操作：``op`` 取 ``add``／``remove``／``replace``。``add`` 要求路径原本不存在且
+#    ``before`` 为 null；``remove`` 要求 ``after`` 为 null；新增的键控元素按它在目标画像
+#    中的相对顺序插入（插在目标里最近一个已存在前驱之后）。
+# 3. 多规则归属：``rule_ids`` 是有序去重的规则数组，同一处画像变化可以同时实现多条
+#    规则（例如删除 legacy compact 端点同时是 EP-007 删除与若干规则的适用范围收缩）。
+#
+# 差异校验先对 Active 做版本字面替换得到基准副本，再用键控语义比较基准副本与目标
+# 画像；差异路径集合必须与补丁路径集合完全相等，任何未登记的变化都会失败关闭。
+# ---------------------------------------------------------------------------
+
+PROFILE_RULE_PATCH_SCHEMA_V1 = "codex-upgrade-profile-rule-patches/v1"
+PROFILE_RULE_PATCH_SCHEMA_V2 = "codex-upgrade-profile-rule-patches/v2"
+# 键控字段按优先级尝试；第一个在全部元素上存在且唯一的字段就是该列表的键。
+PROFILE_KEYED_LIST_FIELDS = ("ID", "Name")
+PROFILE_PATCH_OPS_V2 = frozenset({"add", "remove", "replace"})
+
+
+def _profile_list_key_field(values: Any) -> str | None:
+    """返回列表的键控字段；空列表、含非对象元素或键值不唯一时返回 None（按下标比较）。"""
+
+    if (
+        not isinstance(values, list)
+        or not values
+        or not all(isinstance(item, dict) for item in values)
+    ):
+        return None
+    for field in PROFILE_KEYED_LIST_FIELDS:
+        keys = [item.get(field) for item in values]
+        if all(isinstance(key, str) and key for key in keys) and len(set(keys)) == len(keys):
+            return field
+    return None
+
+
+def _profile_keyed_segment(part: str) -> tuple[str, str] | None:
+    """把 ``ID=<值>``／``Name=<值>`` 路径段拆成（字段, 值）；其他形式返回 None。"""
+
+    field, separator, value = part.partition("=")
+    if separator and field in PROFILE_KEYED_LIST_FIELDS and value:
+        return field, value
+    return None
+
+
+def _profile_v2_child(container: Any, part: str, pointer: str) -> Any:
+    """按 v2 规则取中间节点；中间节点必须存在。"""
+
+    if isinstance(container, dict):
+        if part not in container:
+            raise ConfigurationError(f"画像补丁路径不存在：{pointer}")
+        return container[part]
+    if isinstance(container, list):
+        field = _profile_list_key_field(container)
+        keyed = _profile_keyed_segment(part)
+        if field is not None:
+            if keyed is None or keyed[0] != field:
+                raise ConfigurationError(
+                    f"画像补丁路径必须按键控字段 {field} 寻址：{pointer}"
+                )
+            matches = [item for item in container if item.get(field) == keyed[1]]
+            if len(matches) != 1:
+                raise ConfigurationError(f"画像补丁路径不存在：{pointer}")
+            return matches[0]
+        if not part.isdigit() or int(part) >= len(container):
+            raise ConfigurationError(f"画像补丁路径不存在：{pointer}")
+        return container[int(part)]
+    raise ConfigurationError(f"画像补丁路径不存在：{pointer}")
+
+
+def _profile_v2_resolve_parent(document: Any, pointer: str) -> tuple[Any, str]:
+    """返回路径的父容器与叶子段；不允许替换文档根。"""
+
+    parts = _profile_pointer_parts(pointer)
+    if not parts or parts == [""]:
+        raise ConfigurationError("画像补丁不得替换文档根。")
+    parent = document
+    for part in parts[:-1]:
+        parent = _profile_v2_child(parent, part, pointer)
+    return parent, parts[-1]
+
+
+def _profile_v2_list_position(
+    container: list[Any],
+    leaf: str,
+    pointer: str,
+) -> tuple[str | None, str | None, int | None]:
+    """定位列表叶子：返回（键控字段, 键值, 下标或 None=不存在）。"""
+
+    field = _profile_list_key_field(container)
+    keyed = _profile_keyed_segment(leaf)
+    if keyed is not None:
+        if field is not None and keyed[0] != field:
+            raise ConfigurationError(f"画像补丁路径必须按键控字段 {field} 寻址：{pointer}")
+        if field is None and container:
+            raise ConfigurationError(f"画像补丁路径指向的列表不可键控：{pointer}")
+        for index, item in enumerate(container):
+            if isinstance(item, dict) and item.get(keyed[0]) == keyed[1]:
+                return keyed[0], keyed[1], index
+        return keyed[0], keyed[1], None
+    if field is not None:
+        raise ConfigurationError(f"画像补丁路径必须按键控字段 {field} 寻址：{pointer}")
+    if not leaf.isdigit():
+        raise ConfigurationError(f"画像补丁路径不存在：{pointer}")
+    index = int(leaf)
+    return None, None, index if index < len(container) else None
+
+
+def _profile_v2_insert_index(
+    derived_list: list[Any],
+    target_list: Any,
+    field: str,
+    key: str,
+    pointer: str,
+) -> int:
+    """新增键控元素按目标画像的相对顺序插入：插在最近一个已存在前驱之后，没有则插在最前。"""
+
+    if not isinstance(target_list, list):
+        raise ConfigurationError(f"新增元素在目标画像中没有对应列表：{pointer}")
+    target_keys = [
+        item.get(field) for item in target_list if isinstance(item, dict)
+    ]
+    if target_keys.count(key) != 1:
+        raise ConfigurationError(f"新增元素在目标画像中不存在或不唯一：{pointer}")
+    present = {
+        item.get(field): index
+        for index, item in enumerate(derived_list)
+        if isinstance(item, dict)
+    }
+    for previous in reversed(target_keys[: target_keys.index(key)]):
+        if previous in present:
+            return present[previous] + 1
+    return 0
+
+
+def _profile_v2_apply(derived: Any, target: Any, patch: Mapping[str, Any]) -> None:
+    """把一条 v2 补丁应用到派生副本；每一步都要求 before 与当前值精确一致。"""
+
+    op = patch["op"]
+    pointer = patch["path"]
+    before = patch["before"]
+    after = patch["after"]
+    parent, leaf = _profile_v2_resolve_parent(derived, pointer)
+    if isinstance(parent, dict):
+        exists = leaf in parent
+        current = parent.get(leaf)
+        if op == "add":
+            if exists or before is not None:
+                raise ConfigurationError(f"画像补丁 add 的路径已存在或 before 非 null：{pointer}")
+            parent[leaf] = json.loads(json.dumps(after, ensure_ascii=False))
+            return
+        if not exists or current != before:
+            raise ConfigurationError(f"画像补丁 before 不匹配 active 副本：{pointer}")
+        if op == "remove":
+            if after is not None:
+                raise ConfigurationError(f"画像补丁 remove 的 after 必须为 null：{pointer}")
+            del parent[leaf]
+            return
+        parent[leaf] = json.loads(json.dumps(after, ensure_ascii=False))
+        return
+    if not isinstance(parent, list):
+        raise ConfigurationError(f"画像补丁路径不存在：{pointer}")
+    field, key, index = _profile_v2_list_position(parent, leaf, pointer)
+    if op == "add":
+        if (
+            index is not None
+            or before is not None
+            or field is None
+            or not isinstance(after, dict)
+            or after.get(field) != key
+        ):
+            raise ConfigurationError(
+                f"画像补丁 add 只能按键新增不存在的对象元素，且元素键值须与路径一致：{pointer}"
+            )
+        target_parent, _ = _profile_v2_resolve_parent(target, pointer)
+        position = _profile_v2_insert_index(parent, target_parent, field, str(key), pointer)
+        parent.insert(position, json.loads(json.dumps(after, ensure_ascii=False)))
+        if _profile_list_key_field(parent) != field:
+            raise ConfigurationError(f"画像补丁 add 破坏了列表键控唯一性：{pointer}")
+        return
+    if index is None or parent[index] != before:
+        raise ConfigurationError(f"画像补丁 before 不匹配 active 副本：{pointer}")
+    if op == "remove":
+        if after is not None:
+            raise ConfigurationError(f"画像补丁 remove 的 after 必须为 null：{pointer}")
+        del parent[index]
+        return
+    if field is not None and (not isinstance(after, dict) or after.get(field) != key):
+        raise ConfigurationError(f"画像补丁 replace 不得改变键控元素的键值：{pointer}")
+    parent[index] = json.loads(json.dumps(after, ensure_ascii=False))
+
+
+def _profile_v2_diff_paths(
+    before: Any,
+    after: Any,
+    path: tuple[str, ...] = (),
+) -> list[str]:
+    """键控语义的差异路径：对象按键的存在性区分增删，键控列表按键逐元素比较。
+
+    键控列表中共同元素的相对顺序变化记为整个列表的差异；新增／删除元素记为
+    ``<列表>/<字段>=<键值>``；其余列表沿用 v1 的下标与长度语义。
+    """
+
+    if type(before) is not type(after):
+        return [_json_pointer(path)]
+    if isinstance(before, dict):
+        paths: list[str] = []
+        for key in sorted(set(before) | set(after)):
+            child = (*path, str(key))
+            if key not in before or key not in after:
+                paths.append(_json_pointer(child))
+            else:
+                paths.extend(_profile_v2_diff_paths(before[key], after[key], child))
+        return paths
+    if isinstance(before, list):
+        field = _profile_list_key_field(before)
+        if field is not None and field == _profile_list_key_field(after):
+            before_map = {item[field]: item for item in before}
+            after_map = {item[field]: item for item in after}
+            paths = []
+            common_before = [item[field] for item in before if item[field] in after_map]
+            common_after = [item[field] for item in after if item[field] in before_map]
+            if common_before != common_after:
+                paths.append(_json_pointer(path))
+            for key in sorted(set(before_map) | set(after_map)):
+                child = (*path, f"{field}={key}")
+                if key not in before_map or key not in after_map:
+                    paths.append(_json_pointer(child))
+                else:
+                    paths.extend(
+                        _profile_v2_diff_paths(before_map[key], after_map[key], child)
+                    )
+            return paths
+        if len(before) != len(after):
+            return [_json_pointer(path)]
+        return [
+            pointer
+            for index, (left, right) in enumerate(zip(before, after))
+            for pointer in _profile_v2_diff_paths(left, right, (*path, str(index)))
+        ]
+    return [] if before == after else [_json_pointer(path)]
+
+
+def _profile_v2_keyed_pointer(document: Any, pointer: str) -> str:
+    """把 v1 下标坐标（版本字面替换产生）换算成 v2 键控坐标。"""
+
+    parts = _profile_pointer_parts(pointer)
+    current = document
+    keyed_parts: list[str] = []
+    for part in parts:
+        if isinstance(current, list):
+            index = int(part)
+            field = _profile_list_key_field(current)
+            keyed_parts.append(
+                f"{field}={current[index][field]}" if field is not None else part
+            )
+            current = current[index]
+        else:
+            keyed_parts.append(part)
+            current = current[part]
+    return _json_pointer(tuple(keyed_parts))
+
+
+def _validate_profile_derivation_v2(
+    *,
+    active: dict[str, Any],
+    target: dict[str, Any],
+    patches: Any,
+    partition: Mapping[str, Any],
+    baseline_version: str,
+    target_version: str,
+) -> tuple[list[str], list[str], dict[str, list[str]]]:
+    """v2 派生：返回（版本坐标, 画像差异路径, 规则到路径的映射）。"""
+
+    derived, index_version_paths = _replace_json_string_literal(
+        json.loads(json.dumps(active, ensure_ascii=False)),
+        baseline_version,
+        target_version,
+    )
+    baseline = json.loads(json.dumps(derived, ensure_ascii=False))
+    version_paths = sorted(
+        {_profile_v2_keyed_pointer(baseline, pointer) for pointer in index_version_paths}
+    )
+    if not isinstance(patches, list):
+        raise ConfigurationError("画像规则补丁清单 rule_patches 必须是数组。")
+    affected = set(partition["affected_rule_ids"])
+    if not patches and affected:
+        raise ConfigurationError("存在 affected rule 时 rule_patches 不能为空。")
+    rule_paths: dict[str, list[str]] = {}
+    seen_paths: set[str] = set()
+    reserved = {"/Digest", "/Version", *version_paths}
+    for index, patch in enumerate(patches, 1):
+        if not isinstance(patch, Mapping) or set(patch) != {
+            "rule_ids",
+            "op",
+            "path",
+            "before",
+            "after",
+        }:
+            raise ConfigurationError(f"画像规则补丁 {index} 字段不闭合。")
+        rule_ids = patch.get("rule_ids")
+        pointer = patch.get("path")
+        if (
+            not isinstance(rule_ids, list)
+            or not rule_ids
+            or rule_ids != sorted(set(rule_ids))
+            or not all(isinstance(rule_id, str) and rule_id in affected for rule_id in rule_ids)
+            or patch.get("op") not in PROFILE_PATCH_OPS_V2
+            or not isinstance(pointer, str)
+            or pointer in seen_paths
+            or pointer in reserved
+        ):
+            raise ConfigurationError(f"画像规则补丁 {index} 规则、操作或路径非法。")
+        _profile_v2_apply(derived, target, patch)
+        seen_paths.add(pointer)
+        for rule_id in rule_ids:
+            rule_paths.setdefault(rule_id, []).append(pointer)
+    if set(rule_paths) != affected:
+        raise ConfigurationError("每条 affected rule 必须至少绑定一个画像路径。")
+    if not isinstance(target.get("Digest"), str) or not SHA256_RE.fullmatch(target["Digest"]):
+        raise ConfigurationError("目标画像 Digest 非法。")
+    derived["Digest"] = target["Digest"]
+    if derived != target:
+        unexpected = _profile_v2_diff_paths(derived, target)
+        raise ConfigurationError(
+            "目标画像不是 active 副本加批准补丁；未映射路径="
+            + ",".join(unexpected[:12])
+        )
+    rule_diff_paths = set(_profile_v2_diff_paths(baseline, target)) - {"/Digest"}
+    if rule_diff_paths != seen_paths:
+        raise ConfigurationError("profile_diff_paths 与版本字段/规则补丁集合不一致。")
+    profile_diff_paths = sorted({"/Digest", *version_paths, *seen_paths})
+    return (
+        sorted({"/Digest", *version_paths}),
+        profile_diff_paths,
+        {rule_id: sorted(paths) for rule_id, paths in sorted(rule_paths.items())},
+    )
+
+
 def validate_profile_derivation(
     *,
     active_profile_path: Path,
@@ -49230,7 +49576,10 @@ def validate_profile_derivation(
         "target_version",
         "active_profile_sha256",
         "rule_patches",
-    } or patch_manifest.get("schema_version") != "codex-upgrade-profile-rule-patches/v1":
+    } or patch_manifest.get("schema_version") not in {
+        PROFILE_RULE_PATCH_SCHEMA_V1,
+        PROFILE_RULE_PATCH_SCHEMA_V2,
+    }:
         raise ConfigurationError("画像规则补丁清单字段或 schema_version 非法。")
     baseline_version = patch_manifest.get("baseline_version")
     target_version = patch_manifest.get("target_version")
@@ -49242,6 +49591,42 @@ def validate_profile_derivation(
         != file_sha256(active_profile_path)
     ):
         raise ConfigurationError("画像规则补丁清单版本或 active 摘要不一致。")
+
+    if patch_manifest["schema_version"] == PROFILE_RULE_PATCH_SCHEMA_V2:
+        # v2：键控寻址、显式增删与多规则归属；v1 分支保持原逻辑逐字不变，历史派生收据照常重放。
+        version_identity_paths, profile_diff_paths, rule_field_paths = (
+            _validate_profile_derivation_v2(
+                active=active,
+                target=target,
+                patches=patch_manifest.get("rule_patches"),
+                partition=partition,
+                baseline_version=str(baseline_version),
+                target_version=str(target_version),
+            )
+        )
+        return {
+            "schema_version": "codex-upgrade-profile-diff/v1",
+            "status": "complete",
+            "patch_schema_version": PROFILE_RULE_PATCH_SCHEMA_V2,
+            "active_profile": {
+                "path": str(active_profile_path.resolve(strict=True)),
+                "sha256": file_sha256(active_profile_path),
+            },
+            "target_profile": {
+                "path": str(target_profile_path.resolve(strict=True)),
+                "sha256": file_sha256(target_profile_path),
+                "profile_digest": target["Digest"],
+            },
+            "patch_manifest_sha256": file_sha256(patch_manifest_path),
+            "total_rule_count": partition["total_rule_count"],
+            "affected_rule_ids": partition["affected_rule_ids"],
+            "inherited_rule_ids": partition["inherited_rule_ids"],
+            "profile_diff_paths": profile_diff_paths,
+            "version_identity_paths": version_identity_paths,
+            "rule_field_paths": rule_field_paths,
+            "scanned_bytes": 0,
+            "live_request_count": 0,
+        }
 
     derived, version_paths = _replace_json_string_literal(
         json.loads(json.dumps(active, ensure_ascii=False)),
