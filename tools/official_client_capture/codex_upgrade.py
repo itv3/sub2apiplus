@@ -16600,16 +16600,146 @@ def _require_stage_replay_proof_for_checkpoint(ledger_dir: Path, phase: str, che
     return proof
 
 
+# R18：VC-4 两个零请求动作的重派参数闭集（必需参数，可选的 watchdog 参数）。
+CANDIDATE_STAGE_REPLAY_FLAGS: dict[str, tuple[frozenset[str], frozenset[str]]] = {
+    "plan-candidate-gates": (
+        frozenset({"--campaign-dir", "--candidate-id", "--candidate-source", "--mapping", "--output"}),
+        frozenset({"--max-wall-seconds", "--heartbeat-seconds"}),
+    ),
+    "record-candidate-build": (
+        frozenset({
+            "--campaign-dir", "--candidate-id", "--candidate-purpose", "--candidate-source", "--candidate-binary",
+            "--runtime-image", "--candidate-image-id", "--build-id", "--deployed-version", "--target-architecture",
+            "--build-parameters", "--build-tree", "--docker-context", "--frontend-dist-source", "--catalog-stage-dir",
+            "--source-transition", "--gate-plan", "--implementation-test-root", "--implementation-test-receipt",
+        }),
+        frozenset({"--max-wall-seconds", "--heartbeat-seconds"}),
+    ),
+}
+
+
+def _stage_replay_input_file(path: Path, label: str) -> str:
+    if not path.is_absolute() or path.is_symlink() or not path.is_file():
+        raise ConfigurationError(f"{label} 输入文件不可信")
+    return file_sha256(path)
+
+
+def _stage_replay_input_directory(path: Path, label: str) -> str:
+    if not path.is_absolute() or path.is_symlink() or not path.is_dir():
+        raise ConfigurationError(f"{label} 输入目录不可信")
+    return _directory_tree_digest(path)
+
+
+def _candidate_stage_replay_action_facts(
+    campaign_dir: Path,
+    run_manifest: Mapping[str, Any],
+    argv: Sequence[str],
+) -> tuple[dict[str, str], dict[str, str]]:
+    """R18：VC-4 零请求动作的幂等重派合同，只读核验，不执行命令、不补写产物。
+
+    plan-candidate-gates 的输出 write-once 且命令拒绝覆盖，只有输出尚不存在时逐字重派才会成功；
+    record-candidate-build 的 build-evidence、revision seal、构建收据与 VC-4 checkpoint 都是写入或逐字核对，
+    已写半成品按摘要绑定并核对候选与构建标识，逐字重派在其上续作。候选须属当前 revision、未作废、
+    未被取代，且尚无候选 attempt；否则留在候选审核（作废开新 revision 或停线）。
+    """
+
+    action = argv[0] if argv else ""
+    if action not in CANDIDATE_STAGE_REPLAY_FLAGS or len(argv[1:]) % 2:
+        raise ConfigurationError("阶段动作或参数形态没有幂等合同")
+    required, optional = CANDIDATE_STAGE_REPLAY_FLAGS[action]
+    flags = dict(zip(argv[1::2], argv[2::2]))
+    if (
+        len(flags) * 2 != len(argv) - 1
+        or not required <= set(flags)
+        or set(flags) - required - optional
+        or flags["--campaign-dir"] != str(campaign_dir)
+    ):
+        raise ConfigurationError(f"{action} 参数没有精确闭合或 Campaign 参数漂移")
+    manifest = _require_formal_campaign(campaign_dir)
+    revision, record = _require_candidate_revision(campaign_dir, manifest, action=f"{action} 重派证明")
+    candidate_id = flags["--candidate-id"]
+    expected_candidate = (
+        str(record["candidate_id"]) if record is not None else _implicit_r1_candidate_id(campaign_dir, manifest)
+    )
+    if (
+        candidate_id != expected_candidate
+        or run_manifest.get("candidate_id", candidate_id) != candidate_id
+        or run_manifest.get("candidate_revision", revision) != revision
+    ):
+        raise ConfigurationError("重派动作的候选不属于当前 revision 或与失败批次绑定不一致")
+    candidate_root = campaign_dir / "candidates" / candidate_id
+    for marker in (CANDIDATE_INVALIDATION_FILENAME, "superseded-by.json"):
+        if (candidate_root / marker).exists() or (candidate_root / marker).is_symlink():
+            raise ConfigurationError(f"候选 {candidate_id} 已作废或被取代，只能开新 revision")
+    if _active_unsealed_attempts(campaign_dir, "candidate", _manifest=manifest):
+        raise ConfigurationError("VC-4 已出现 Candidate attempt，构建动作不能重派")
+    source = Path(flags["--candidate-source"])
+    if not source.is_absolute() or source.is_symlink() or not source.is_dir():
+        raise ConfigurationError("候选源码树不可信")
+    source = source.resolve(strict=True)
+    inputs: dict[str, str] = {}
+    outputs: dict[str, str] = {}
+    if action == "plan-candidate-gates":
+        output = Path(flags["--output"])
+        if not output.is_absolute():
+            raise ConfigurationError("门禁执行计划输出路径不可信")
+        if output.exists() or output.is_symlink():
+            raise ConfigurationError("门禁执行计划输出已存在，逐字重派会被命令拒绝覆盖")
+        inputs["--mapping"] = file_sha256(_path_in_candidate_source(Path(flags["--mapping"]), source, "门禁映射"))
+    else:
+        for flag in ("--candidate-binary", "--build-parameters", "--source-transition"):
+            inputs[flag] = _stage_replay_input_file(Path(flags[flag]), flag)
+        implementation_root = Path(flags["--implementation-test-root"])
+        implementation_receipt = Path(flags["--implementation-test-receipt"])
+        if not implementation_receipt.is_absolute():
+            implementation_receipt = implementation_root / implementation_receipt
+        inputs["--implementation-test-receipt"] = _stage_replay_input_file(
+            implementation_receipt, "--implementation-test-receipt"
+        )
+        inputs["--gate-plan"] = file_sha256(_path_in_candidate_source(Path(flags["--gate-plan"]), source, "门禁执行计划"))
+        for flag in (
+            "--candidate-source", "--build-tree", "--docker-context", "--frontend-dist-source",
+            "--catalog-stage-dir", "--implementation-test-root",
+        ):
+            inputs[flag] = _stage_replay_input_directory(Path(flags[flag]), flag)
+        receipt_path = _candidate_build_receipt_path(campaign_dir, candidate_id)
+        written = [receipt_path, *sorted((receipt_path.parent / "build-evidence").glob("*"))]
+        if record is not None:
+            written.append(_candidate_revision_dir(campaign_dir, revision) / "seal.json")
+        for path in written:
+            if not path.exists() and not path.is_symlink():
+                continue
+            if path.is_symlink() or not path.is_file():
+                raise ConfigurationError("VC-4 已写半成品包含符号链接或非普通文件")
+            outputs[path.relative_to(campaign_dir).as_posix()] = file_sha256(path)
+        if receipt_path.exists():
+            receipt = _read_json(receipt_path, "Candidate 构建收据")
+            build = receipt.get("build") if isinstance(receipt.get("build"), Mapping) else {}
+            image = receipt.get("image") if isinstance(receipt.get("image"), Mapping) else {}
+            if (
+                receipt.get("candidate_id") != candidate_id
+                or build.get("build_id") != flags["--build-id"]
+                or image.get("image_id") != flags["--candidate-image-id"]
+            ):
+                raise ConfigurationError("已写构建收据与重派动作的候选或构建标识不一致")
+    checkpoint = _vc_checkpoint_path(campaign_dir, "VC-4", revision=revision)
+    if checkpoint.exists() or checkpoint.is_symlink():
+        _replay_vc_checkpoint(campaign_dir, _campaign_vc_plan(campaign_dir), "VC-4", revision=revision)
+        outputs["checkpoint"] = file_sha256(checkpoint)
+    return inputs, outputs
+
+
 def _campaign_stage_replay_facts(campaign_dir: Path, run_manifest: Mapping[str, Any]) -> dict[str, Any]:
     """R4：仅为已有实现能够安全续作的 Campaign 级动作提供重派证明。
 
     这里不执行命令、不补写产物。任意脚本、未知动作、未闭合的批准目录和 Catalog
     均留在 review；输出及输入按当前实物绑定，派发直接后继时还须逐字复核。
+    R18：候选级 VC-4 的两个零请求动作按同一证明格式提供合同（见 ``_candidate_stage_replay_action_facts``）。
     """
 
     phase = str(run_manifest.get("phase"))
     result: dict[str, Any] = {"phase": phase, "allowed": False, "actions": [], "reasons": []}
-    if phase not in {"VC-2", "VC-3"}:
+    if phase not in {"VC-2", "VC-3", *codex_upgrade_timing_ledger.CANDIDATE_STAGE_REPLAY_PHASES}:
         result["reasons"].append("VC-1 已发布预约只能走 attempt 恢复；无已知幂等动作合同")
         return result
     try:
@@ -16623,6 +16753,11 @@ def _campaign_stage_replay_facts(campaign_dir: Path, run_manifest: Mapping[str, 
                 raise ConfigurationError("不是受管 codex_upgrade 的直接调用，不能证明幂等")
             if Path(command[0]).resolve(strict=True) != Path(sys.executable).resolve(strict=True):
                 raise ConfigurationError("阶段动作解释器不是当前受管 Python")
+            if phase in codex_upgrade_timing_ledger.CANDIDATE_STAGE_REPLAY_PHASES:
+                inputs, outputs = _candidate_stage_replay_action_facts(campaign_dir, run_manifest, argv)
+                result["actions"].append({"action_id": action["action_id"], "command": command,
+                                          "inputs": inputs, "outputs": outputs})
+                continue
             expected = "classify" if phase == "VC-2" else "stage-profile"
             if not argv or argv[0] != expected or len(argv[1:]) % 2:
                 raise ConfigurationError("阶段动作或参数形态没有幂等合同")
@@ -16791,10 +16926,12 @@ def compile_vc_batch(
         ledger_dir = _campaign_timing_ledger_dir(campaign_dir, manifest)
         ledger = codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)
         # 只允许已对账且尚未完成父批次的同阶段逐字重派；正式后继协议再绑定原 run。
-        if (phase not in {"VC-2", "VC-3"} or ledger.get("active_phase") != phase
+        # R18：候选审核下 VC-4 凭同一种阶段幂等重派证明重开，checkpoint 按当前 revision 定位。
+        if (phase not in {"VC-2", "VC-3", *codex_upgrade_timing_ledger.CANDIDATE_STAGE_REPLAY_PHASES}
+                or ledger.get("active_phase") != phase
                 or ledger.get("next_action") != "redispatch-same-batch"):
             raise ConfigurationError(f"{phase} 已有 checkpoint，禁止再编译执行批次。")
-        _replay_vc_checkpoint(campaign_dir, plan, phase)
+        _replay_vc_checkpoint(campaign_dir, plan, phase, revision=candidate_revision)
         # R4：同一 next_action 也可能来自环境恢复等其他对账；已有 checkpoint 的阶段只允许凭阶段审核对账
         # 写入账本的幂等重派证明逐字重派，且证明记录的 checkpoint 必须就是当前这份。
         _require_stage_replay_proof_for_checkpoint(ledger_dir, phase, completed_path)

@@ -15,7 +15,7 @@
     "reconciliation_receipt_sha256": {"$ref": "#/$defs/sha256"},
     "commit_sha256": {"oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
     "next_action": {"enum": ["redispatch-same-sequence", "redispatch-same-batch"]},
-    "phase": {"enum": ["VC-1", "VC-2", "VC-3"]},
+    "phase": {"enum": ["VC-1", "VC-2", "VC-3", "VC-4"]},
     "allowed": {"const": true},
     "actions": {
       "type": "array", "minItems": 1,

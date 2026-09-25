@@ -3204,14 +3204,34 @@ def reconcile_supervisor_run(
         )
         stage_replay_path = receipt_dir / "stage-replay.json"
         stage_review = ledger.get("status") == "stage_review_required"
-        if stage_review or stage_replay_path.exists():
+        # R18：候选审核下失败阶段属于有幂等动作合同的候选级阶段（VC-4）时，同样核验并可凭证明重开阶段。
+        candidate_review = (
+            ledger.get("status") == "candidate_review_required"
+            and run.get("phase") in timing_ledger.CANDIDATE_STAGE_REPLAY_PHASES
+        )
+        candidate_replay_allowed = False
+        candidate_scope = False
+        if stage_review or candidate_review or stage_replay_path.exists():
             facts = supervisor.campaign_run_failure_facts(resolved_run_dir, campaign_dir=campaign_dir)
             if facts is None:
                 raise ReconcilerError("阶段 review 无法绑定失败父动作")
-            review_event_id = f"{supervisor.CANDIDATE_REVIEW_EVENT_PREFIX}{facts['failure_digest'][:supervisor.FAILURE_DIGEST_PREFIX_LENGTH]}-stage-review-required"
-            reviews = [event for event, _ in timing_ledger._load_events(ledger_dir)
-                       if event.get("event_id") == review_event_id and event.get("event_type") == "stage_review_required"]
-            if len(reviews) != 1 or (stage_review and ledger.get("last_event_id") != review_event_id):
+            ledger_events = [event for event, _ in timing_ledger._load_events(ledger_dir)]
+            stage_review_event_id = f"{supervisor.CANDIDATE_REVIEW_EVENT_PREFIX}{facts['failure_digest'][:supervisor.FAILURE_DIGEST_PREFIX_LENGTH]}-stage-review-required"
+            candidate_review_event_id = supervisor.candidate_review_event_id(str(facts["failure_digest"]))
+            # 重复对账时阶段可能已重开（账本 active），按失败摘要对应的审核事件判定属于哪一类审核。
+            candidate_scope = candidate_review or (
+                not stage_review
+                and run.get("phase") in timing_ledger.CANDIDATE_STAGE_REPLAY_PHASES
+                and any(event.get("event_id") == candidate_review_event_id for event in ledger_events)
+            )
+            review_event_id, review_type, current_review = (
+                (candidate_review_event_id, "candidate_review_required", candidate_review)
+                if candidate_scope
+                else (stage_review_event_id, "stage_review_required", stage_review)
+            )
+            reviews = [event for event in ledger_events
+                       if event.get("event_id") == review_event_id and event.get("event_type") == review_type]
+            if len(reviews) != 1 or (current_review and ledger.get("last_event_id") != review_event_id):
                 raise ReconcilerError("阶段 review 与本次失败父 run 不一致")
             inner = supervisor._read_json(resolved_run_dir / "campaign-run-manifest.json")["manifest"]
             state = supervisor._read_state(resolved_run_dir)
@@ -3223,26 +3243,34 @@ def reconcile_supervisor_run(
                 # 历史批次无 COMMIT 合同，保持原规则，不能用新协议自动重派。
                 ledger_next_action = "review-required"
             replay = codex_upgrade._campaign_stage_replay_facts(campaign_dir, inner)
-            if ledger_next_action == "review-required" or not replay["allowed"]:
+            if (ledger_next_action == "review-required" or not replay["allowed"]) and candidate_scope:
+                # 候选审核：证明不了幂等时维持原规则只入账，由人工裁定作废候选或停线（或修复半成品后重新对账）。
+                # 证明已写出（阶段已重开）后再对账却不再许可，说明输入或半成品在许可后漂移，失败关闭。
+                if stage_replay_path.exists():
+                    raise ReconcilerError("VC-4 阶段幂等重派证明已写出，但动作输入或半成品已漂移，禁止重派")
+                result["stage_replay"] = replay
+            elif ledger_next_action == "review-required" or not replay["allowed"]:
                 result.update(status="stage_review_required", stage_replay=replay,
                               next_command="保持 stage_review_required：先修复不可幂等半成品或补齐受支持的恢复合同")
                 result["decision"] = {**decision, "decision": "review_required", "reasons": replay["reasons"]}
                 return result
-            proof = build_stage_replay_proof(
-                campaign_id=manifest["campaign_id"], run_id=run["run_id"],
-                review_event_id=review_event_id, review_root_cause_id=reviews[0]["root_cause_id"],
-                reconciliation_receipt_sha256=receipt_binding["sha256"],
-                commit_sha256=commit["commit_sha256"] if commit else None,
-                next_action=ledger_next_action, replay=replay,
-            )
-            _write_or_verify(stage_replay_path, proof, volatile=())
-            result["stage_replay"] = proof
-        if ledger.get("active_phase") is not None or stage_review:
+            else:
+                proof = build_stage_replay_proof(
+                    campaign_id=manifest["campaign_id"], run_id=run["run_id"],
+                    review_event_id=review_event_id, review_root_cause_id=reviews[0]["root_cause_id"],
+                    reconciliation_receipt_sha256=receipt_binding["sha256"],
+                    commit_sha256=commit["commit_sha256"] if commit else None,
+                    next_action=ledger_next_action, replay=replay,
+                )
+                _write_or_verify(stage_replay_path, proof, volatile=())
+                result["stage_replay"] = proof
+                candidate_replay_allowed = candidate_scope
+        if ledger.get("active_phase") is not None or stage_review or (candidate_review and candidate_replay_allowed):
             with codex_upgrade._campaign_lock(campaign_dir):
                 event = _append_ledger_event(
                     ledger_dir,
                     event_id=f"reconcile-run-passed-{run['run_id']}",
-                    phase=str(ledger.get("active_phase") or ledger["review_phase"]),
+                    phase=str(ledger.get("active_phase") or ledger.get("review_phase") or run["phase"]),
                     event_type="receipt_passed",
                     receipts=_ledger_receipt_bindings(
                         ledger_dir, f"run-{run['run_id']}", receipt_path, provenance_copy_path,
@@ -3253,12 +3281,20 @@ def reconcile_supervisor_run(
             result["ledger_events"] = [event]
         if stage_review:
             result["next_command"] = f"{ledger_next_action}：按原命令与合法 checkpoint 重派，禁止跳阶段"
+        elif candidate_review and candidate_replay_allowed:
+            # R18：VC-4 零请求动作的工具缺陷已修复并部署，证明动作可幂等续作，同一 revision 重开 VC-4。
+            result["next_command"] = (
+                f"{ledger_next_action}：VC-4 已在同一 revision 重开，按原命令逐字重派同一批次；"
+                "若判为候选源码问题，仍以 invalidate-candidate preview/apply 作废并开新 revision"
+            )
         elif ledger.get("status") == "candidate_review_required":
             # 改造 2：候选级动作失败已把阶段关闭并进入只读等待，对账只负责入账；
             # 下一步由人工裁定：候选源码问题走 invalidate-candidate，否则显式停线。
+            # R18：VC-4 动作证明不了幂等时（如已写半成品），修复半成品后可重新对账取得重派许可。
             result["next_command"] = (
                 "candidate_review_required：对账已入账；判为候选源码问题则 invalidate-candidate "
                 "preview/apply，否则以 close-campaign-ledger 显式停线"
+                + ("；VC-4 工具缺陷须先修复不可幂等半成品再重新对账" if candidate_scope else "")
             )
         elif run.get("failure_class") == "post-run-tooling":
             result["next_command"] = (

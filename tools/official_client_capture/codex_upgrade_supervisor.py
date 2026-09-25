@@ -8815,9 +8815,14 @@ def _validate_batched_stage_review_successor(
     *,
     campaign_dir: Path | None,
 ) -> bool:
-    """R4：复核阶段审核的幂等证明；直接重派还复算实物，历史后继只重放冻结许可。"""
+    """R4：复核阶段审核的幂等证明；直接重派还复算实物，历史后继只重放冻结许可。
 
-    if campaign_dir is None or prior_manifest.get("phase") not in {"VC-1", "VC-2", "VC-3"}:
+    R18：候选审核下的 VC-4（零请求构建动作的工具缺陷）按同一证明格式承接，审核事件取候选审核事件。
+    """
+
+    phase = prior_manifest.get("phase")
+    candidate_stage = phase in timing_ledger.CANDIDATE_STAGE_REPLAY_PHASES
+    if campaign_dir is None or (phase not in {"VC-1", "VC-2", "VC-3"} and not candidate_stage):
         return False
     proof_path = campaign_dir / "control" / "reconciliation" / f"run-{prior_dir.name}" / "stage-replay.json"
     if not proof_path.exists():
@@ -8836,7 +8841,11 @@ def _validate_batched_stage_review_successor(
     campaign = _read_json(campaign_dir / "campaign.json")
     ledger_dir = Path(campaign["control_receipts"]["upgrade_timing"]["ledger_dir"])
     events = timing_ledger._load_events(ledger_dir)
-    expected_review = f"{CANDIDATE_REVIEW_EVENT_PREFIX}{facts['failure_digest'][:FAILURE_DIGEST_PREFIX_LENGTH]}-stage-review-required"
+    expected_review = (
+        candidate_review_event_id(str(facts["failure_digest"]))
+        if candidate_stage
+        else f"{CANDIDATE_REVIEW_EVENT_PREFIX}{facts['failure_digest'][:FAILURE_DIGEST_PREFIX_LENGTH]}-stage-review-required"
+    )
     reviews = [event for event, _ in events if event.get("event_id") == expected_review]
     if (len(reviews) != 1 or proof.get("review_event_id") != expected_review
             or proof.get("review_root_cause_id") != reviews[0].get("root_cause_id")):
@@ -9835,6 +9844,13 @@ def _close_failed_campaign_timing_ledger(
             "有：reconcile-attempt）入账；判为候选源码问题则 invalidate-candidate preview/apply，"
             "否则以 close-campaign-ledger 显式停线。"
         )
+        if phase in timing_ledger.CANDIDATE_STAGE_REPLAY_PHASES:
+            # R18：VC-4 零请求构建动作的工具缺陷可修好接着跑，不必作废候选或停线。
+            review_next_action = (
+                "candidate_review_required：先 reconcile-supervisor-run 入账；VC-4 工具缺陷修复并部署后，"
+                "对账证明动作可幂等即在同一 revision 重开 VC-4 并逐字重派；判为候选源码问题则 "
+                "invalidate-candidate preview/apply，否则以 close-campaign-ledger 显式停线。"
+            )
         candidate_review = (
             phase in vc_artifacts.CANDIDATE_PHASES
             and isinstance(candidate_id, str)

@@ -168,6 +168,10 @@ REVIEW_REQUIRED_ALLOWED_EVENTS = frozenset(
 STAGE_REVIEW_ALLOWED_EVENTS = frozenset(
     {"attempt_started", "attempt_failed", "receipt_passed", "stage_abandoned", "stop_the_line", "recovery_authorized"}
 )
+# R18：候选级阶段里只有 VC-4 的两个零请求动作（plan-candidate-gates、record-candidate-build）有幂等重派合同。
+# 候选审核期间，对账写入的阶段幂等重派证明可在同一 revision 重开该阶段（工具缺陷修好后逐字重派）；
+# 判为候选源码问题时仍走 invalidate-candidate。VC-5／VC-6 的零请求后处理走 post-run-tooling，不在此列。
+CANDIDATE_STAGE_REPLAY_PHASES = frozenset({"VC-4"})
 REVISION_REQUIRED_ALLOWED_EVENTS = frozenset(
     {"candidate_invalidated", "stage_revision", "stop_the_line"}
 )
@@ -1411,6 +1415,37 @@ def _validate_event_shape(root: Path, event: dict[str, Any], sequence: int) -> d
     return {**event, "receipts": normalized}
 
 
+def _verify_stage_replay_receipts(
+    root: Path,
+    normalized: Mapping[str, Any],
+    *,
+    phase: str,
+    review_root_cause_id: str | None,
+) -> None:
+    """审核后重开阶段的 receipt_passed：阶段幂等重派证明须绑定同一份对账收据、同阶段、同审核根因与同一下一动作。
+
+    阶段审核（VC-1～VC-3）与候选审核下的 VC-4（R18）共用这组核对；角色闭集等入口条件由调用方先判定。
+    """
+
+    reference = next(item for item in normalized["receipts"] if item["role"] == "reconciliation")
+    reconciliation, _ = _load_json(root / reference["path"], "阶段恢复对账收据")
+    proof = next(item for item in normalized["receipts"] if item["role"] == "stage_replay")
+    replay, _ = _load_json(root / proof["path"], "阶段幂等重派证明")
+    if (
+        replay.get("schema_version") != "codex-upgrade-stage-replay/v1"
+        or replay.get("decision") != "recoverable"
+        or replay.get("allowed") is not True
+        or replay.get("reconciliation_receipt_sha256") != _sha256_bytes(
+            (json.dumps(reconciliation, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
+        )
+        or replay.get("phase") != phase
+        or replay.get("review_root_cause_id") != review_root_cause_id
+        or replay.get("next_action") != normalized["next_action"]
+        or reconciliation.get("reservation_exists") is not False
+    ):
+        raise TimingLedgerError("阶段恢复对账未证明动作可幂等重派")
+
+
 def _summarize(
     root: Path,
     plan: dict[str, Any],
@@ -1450,6 +1485,9 @@ def _summarize(
     revision_phase_state: dict[int, dict[str, str]] = {}
     phase_elapsed: dict[tuple[int | None, str], int] = {}
     review_required = False
+    # R18：候选审核的阶段与根因，只在 VC-4 凭阶段幂等重派证明重开阶段时核对，不进入输出摘要。
+    candidate_review_phase: str | None = None
+    candidate_review_root_cause_id: str | None = None
     stage_review_required = False
     review_phase: str | None = None
     review_root_cause_id: str | None = None
@@ -1667,6 +1705,8 @@ def _summarize(
                     "candidate_review_required 必须在阶段已关闭后登记根因与唯一下一动作"
                 )
             review_required = True
+            candidate_review_phase = phase
+            candidate_review_root_cause_id = normalized["root_cause_id"]
         elif event_type == "candidate_invalidated":
             if (
                 active_phase is not None
@@ -1685,6 +1725,8 @@ def _summarize(
             last_invalidated = key
             revision_required = True
             review_required = False
+            candidate_review_phase = None
+            candidate_review_root_cause_id = None
         elif event_type == "stage_revision":
             revision = int(normalized["revision"])
             supersedes = normalized.get("supersedes_revision")
@@ -1845,29 +1887,40 @@ def _summarize(
                     or abandoned_started is None
                 ):
                     raise TimingLedgerError("阶段 review 恢复必须绑定同阶段的对账许可")
-                reference = next(item for item in normalized["receipts"] if item["role"] == "reconciliation")
-                reconciliation, _ = _load_json(root / reference["path"], "阶段恢复对账收据")
-                proof = next(item for item in normalized["receipts"] if item["role"] == "stage_replay")
-                replay, _ = _load_json(root / proof["path"], "阶段幂等重派证明")
-                if (
-                    replay.get("schema_version") != "codex-upgrade-stage-replay/v1"
-                    or replay.get("decision") != "recoverable"
-                    or replay.get("allowed") is not True
-                    or replay.get("reconciliation_receipt_sha256") != _sha256_bytes(
-                        (json.dumps(reconciliation, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
-                    )
-                    or replay.get("phase") != phase
-                    or replay.get("review_root_cause_id") != review_root_cause_id
-                    or replay.get("next_action") != normalized["next_action"]
-                    or reconciliation.get("reservation_exists") is not False
-                ):
-                    raise TimingLedgerError("阶段恢复对账未证明动作可幂等重派")
+                _verify_stage_replay_receipts(root, normalized, phase=phase, review_root_cause_id=review_root_cause_id)
                 stage_review_required = False
                 review_phase = None
                 review_root_cause_id = None
                 active_phase = phase
                 # review 与恢复都不重置阶段时钟；保留失败前的起点。
                 active_phase_started = abandoned_started
+            elif review_required and any(item["role"] == "stage_replay" for item in normalized["receipts"]):
+                # R18：候选审核期间，VC-4 零请求动作的工具缺陷修好后，凭对账写入的阶段幂等重派证明在同一
+                # revision 重开该阶段；不带证明的 receipt_passed 仍按原规则只记录、不改变审核状态。
+                roles = tuple(item["role"] for item in normalized["receipts"])
+                if (
+                    phase not in CANDIDATE_STAGE_REPLAY_PHASES
+                    or phase != candidate_review_phase
+                    or current_revision is None
+                    or normalized["attempt_id"] is not None
+                    or normalized["root_cause_id"] is not None
+                    or roles != ("provenance", "reconciliation", "stage_replay")
+                    or normalized["next_action"] not in {"redispatch-same-sequence", "redispatch-same-batch"}
+                    or abandoned_started is None
+                    or any(item["status"] == "active" for item in attempts.values())
+                ):
+                    raise TimingLedgerError("候选审核的阶段重派只允许 VC-4 且必须绑定同阶段的对账许可")
+                _verify_stage_replay_receipts(
+                    root, normalized, phase=phase, review_root_cause_id=candidate_review_root_cause_id
+                )
+                review_required = False
+                candidate_review_phase = None
+                candidate_review_root_cause_id = None
+                active_phase = phase
+                # 同阶段审核：阶段时钟沿用放弃前的起点，阶段仍归当前 revision。
+                active_phase_started = abandoned_started
+                active_phase_revision = current_revision
+                revision_phase_state.setdefault(current_revision, {})[phase] = "started"
             if recovery_required:
                 roles = tuple(item["role"] for item in normalized["receipts"])
                 if (
