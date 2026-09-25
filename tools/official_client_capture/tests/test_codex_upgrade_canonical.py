@@ -748,6 +748,67 @@ class CanonicalImportTests(unittest.TestCase):
             )
             self.assertEqual(result["live_request_count"], 0)
 
+    def test_01561_patch_manifest_binds_real_active_profile(self) -> None:
+        """0.156.1 补丁清单必须绑定当前 active 的 0.154.0 画像文件本身的摘要。
+
+        0.154 初版曾把画像 Digest（文件名）误当成文件摘要，派生校验直接拒绝；
+        active 以发布图 active 节点引用的 0.154.0 快照为准。
+        """
+
+        active_profile = (
+            ROOT
+            / "backend/internal/officialegress/catalogdata/runtime/profiles/0.154.0"
+            / "31d8654f6892d37129a2639f1bb48e87b7b8648d67ce754f4ae9379a671b99e3.json"
+        )
+        patch_manifest = (
+            ROOT / "tools/official_client_capture/profile_rule_patches_0_156_1.json"
+        )
+        patch_payload = json.loads(patch_manifest.read_text(encoding="utf-8"))
+        self.assertEqual(
+            patch_payload["active_profile_sha256"],
+            codex_upgrade.file_sha256(active_profile),
+        )
+        self.assertEqual(patch_payload["rule_patches"], [])
+
+        with tempfile.TemporaryDirectory() as directory:
+            fixture_root = Path(directory)
+            active_payload = json.loads(active_profile.read_text(encoding="utf-8"))
+            target_payload, _ = codex_upgrade._replace_json_string_literal(
+                active_payload,
+                "0.154.0",
+                "0.156.1",
+            )
+            target_payload["Digest"] = "e" * 64
+            target_profile = fixture_root / "target-profile.json"
+            migration = fixture_root / "rule-migration.json"
+            self._write(
+                target_profile,
+                {"codex_version": "0.156.1", "profile_payload": target_payload},
+            )
+            self._write(
+                migration,
+                {
+                    "status": "approved",
+                    "entries": [
+                        {
+                            "classification": "inherit",
+                            "baseline_rule": "SPEC-CODEX-IDENTITY",
+                            "target_rule": "SPEC-CODEX-IDENTITY",
+                        }
+                    ],
+                },
+            )
+
+            result = codex_upgrade.validate_profile_derivation(
+                active_profile_path=active_profile,
+                target_profile_path=target_profile,
+                migration_path=migration,
+                patch_manifest_path=patch_manifest,
+            )
+            self.assertEqual(result["status"], "complete")
+            self.assertEqual(result["affected_rule_ids"], [])
+            self.assertEqual(result["live_request_count"], 0)
+
     def test_advance_seals_compares_and_accepts_only_affected_rules(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             arguments = self._fixture(Path(directory))

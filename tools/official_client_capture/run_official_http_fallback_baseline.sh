@@ -110,4 +110,26 @@ for _ in $(seq 1 60); do
   sleep 1
 done
 docker exec "$capture_container" cat "/capture/runs/$run_id/h1-wire.json"
+
+# 降级后的 POST /responses 才是本场景的目标请求，缺失即失败。0.154 recapture 实测
+# h1-wire.json 只有 plugins／models 三条 GET：--expect 3 在降级之前就被启动期请求占满，
+# 探针提前退出，POST 从未被记录，脚本却照常退出 0。0.156.1 还多一条 accounts/check，
+# WS 每次重试也各占一条记录，清单须给足 EXPECT_CONNECTIONS，由探针的空闲超时收尾。
+if ! docker exec -i "$capture_container" python3 - "/capture/runs/$run_id/h1-wire.json" <<'PY'
+import json
+import sys
+
+document = json.load(open(sys.argv[1], encoding="utf-8"))
+hits = 0
+for record in document.get("requests") or []:
+    parts = str(record.get("request_line", "")).split(" ")
+    if len(parts) == 3 and parts[0] == "POST" and parts[1].split("?", 1)[0] == "/backend-api/codex/responses":
+        hits += 1
+print(f"降级后的 POST /backend-api/codex/responses 记录 {hits} 条", file=sys.stderr)
+sys.exit(0 if hits else 1)
+PY
+then
+  echo "❌ 探针没有记录到降级后的 POST /backend-api/codex/responses，样本不成立。" >&2
+  exit 1
+fi
 printf 'run_id=%s\n' "$run_id"

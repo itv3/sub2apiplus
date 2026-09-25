@@ -81,9 +81,75 @@ WS_REJECT = (
 )
 
 
-def build_response(request_line: str, header_names: list[str] | None = None) -> bytes:
+# 0.156.1 起官方客户端在首个 Responses 请求之前必须先完成工作区路由发现
+# （app-server workspace_routing.rs 的 get_accounts_check）。探针若对它回 SSE，JSON
+# 解析失败得到 DiscoveryFailed，之后既不发 WS 握手也不发 POST，HTTP 降级形态就采不到。
+# 这里按官方反序列化结构回最小的 List 形态（backend-client types.rs 的 RawAccounts::List；
+# Map 形态会把两个路由字段解析成 None，得到 MissingBackendOrigin）：
+# workspace_backend_origin 与 account_routing_override 都是 NO_CONSTRAINT，即沿用
+# chatgpt_base_url、不加路由覆盖头。这是按个人测试账号预期取的值，VC-1 以真实
+# accounts/check 返回值核对，不一致时必须同步修改这里。
+# 条目 id 必须等于请求头里的账号 ID，客户端按它筛选条目；该值只回写给客户端，不落盘。
+ACCOUNTS_CHECK_PATH = "/backend-api/wham/accounts/check"
+ACCOUNTS_CHECK_MISSING_ACCOUNT = (
+    b"HTTP/1.1 400 Bad Request\r\n"
+    b"content-length: 0\r\n"
+    b"connection: close\r\n"
+    b"\r\n"
+)
+
+
+def request_path(request_line: str) -> str:
+    parts = request_line.split(" ")
+    return parts[1].split("?", 1)[0] if len(parts) >= 2 else ""
+
+
+def accounts_check_response(account_id: str | None) -> bytes:
+    # 缺少账号头时无法构造与客户端一致的条目，回 400 让作业失败关闭。
+    if not account_id:
+        return ACCOUNTS_CHECK_MISSING_ACCOUNT
+    body = json.dumps(
+        {
+            "accounts": [
+                {
+                    "id": account_id,
+                    "workspace_backend_origin": "NO_CONSTRAINT",
+                    "account_routing_override": "NO_CONSTRAINT",
+                }
+            ],
+            "account_ordering": [account_id],
+            "default_account_id": account_id,
+        },
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return (
+        b"HTTP/1.1 200 OK\r\n"
+        b"content-type: application/json\r\n"
+        b"content-length: " + str(len(body)).encode() + b"\r\n"
+        b"connection: close\r\n"
+        b"\r\n" + body
+    )
+
+
+def raw_header_value(head_bytes: bytes, header_name: str) -> str | None:
+    """从未脱敏的原始请求头取值；只用于构造响应，不进入记录。"""
+
+    for line in head_bytes.decode("latin-1").split("\r\n")[1:]:
+        name, separator, value = line.partition(":")
+        if separator and name.strip().lower() == header_name:
+            return value.strip()
+    return None
+
+
+def build_response(
+    request_line: str,
+    header_names: list[str] | None = None,
+    account_id: str | None = None,
+) -> bytes:
     if header_names and any(name.strip().lower() == "upgrade" for name in header_names):
         return WS_REJECT
+    if request_path(request_line) == ACCOUNTS_CHECK_PATH:
+        return accounts_check_response(account_id)
     if "/codex/models" in request_line:
         return (
             b"HTTP/1.1 200 OK\r\n"
@@ -265,7 +331,13 @@ def handle(
             # 断连后官方会打印 Falling back from WebSockets to HTTPS transport，
             # 随后的 POST /responses 才采得到。
             return
-        connection.sendall(build_response(record.get("request_line", ""), names))
+        connection.sendall(
+            build_response(
+                record.get("request_line", ""),
+                names,
+                account_id=raw_header_value(head_bytes, "chatgpt-account-id"),
+            )
+        )
     except (OSError, ssl.SSLError):
         pass
     finally:
