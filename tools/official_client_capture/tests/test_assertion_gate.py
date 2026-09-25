@@ -602,6 +602,112 @@ class AbsentEndpointDeferralTest(GateFixture):
         self.assertIn("只适用于官方侧", str(raised.exception))
 
 
+class RetiredLabelDeferralTest(GateFixture):
+    """R21：目标版本官方侧声明删掉了冻结画像所选的标签值时，官方 seal 只延后这一类未命中。
+
+    弃用集合 = 基线版本官方侧声明有、目标版本官方侧声明已删的取值。0.156.1 相对 0.154.0
+    删去了 variant=optional_missing（改为 v2_config_disabled）与只描述 legacy 请求的
+    session_header_scope，冻结画像按旧取值选择必然零命中（D8 及其后的 SPEC-HDR-007）。
+    """
+
+    DIGESTS = {"baseline": "a" * 64, "target": "b" * 64}
+
+    def _profile_with(self, *checks: dict) -> dict:
+        profile = _profile()
+        profile["rules"][0]["checks"].extend(checks)
+        return profile
+
+    def _run(self, profile: dict, retired, *, side: str = "official", digests=DIGESTS) -> dict:
+        return gate.run_assertion_gate(
+            bundle_dir=self.bundle_dir,
+            source_roots=self.roots,
+            side=side,
+            profile=profile,
+            contract=contract_module.build_contract_payload(profile),
+            target_version=TARGET_VERSION,
+            defer_absent_endpoints=side == "official",
+            retired_label_values=retired,
+            label_declaration_sha256=digests,
+        )
+
+    def _bundle(self) -> None:
+        self._build_bundle(include_candidate_trace=False)
+        self._write_manifest(include_candidate_trace=False)
+
+    def test_retired_label_value_is_deferred_with_declaration_digests(self) -> None:
+        self._bundle()
+        profile = self._profile_with(
+            _path_check(
+                "optional-missing-covered",
+                [{"path": "labels.variant", "operator": "equal", "value": "optional_missing"}],
+            )
+        )
+        receipt = self._run(profile, {"variant": frozenset({"optional_missing"})})
+        self.assertEqual(
+            receipt[gate.DEFERRED_UNREACHABLE_FIELD],
+            [
+                {
+                    "rule_id": "SPEC-H1-001",
+                    "check_id": "optional-missing-covered",
+                    "retired_labels": [{"key": "variant", "value": "optional_missing"}],
+                    "baseline_label_declaration_sha256": "a" * 64,
+                    "target_label_declaration_sha256": "b" * 64,
+                }
+            ],
+        )
+        gate.validate_gate_receipt(receipt, side="official")
+
+    def test_value_not_retired_still_fails(self) -> None:
+        """取值不在弃用集合（仍在目标声明里，或从未在基线声明过）却零命中：不得延后。"""
+
+        self._bundle()
+        profile = self._profile_with(
+            _path_check(
+                "direct-transport",
+                [{"path": "labels.transport", "operator": "equal", "value": "direct"}],
+            )
+        )
+        with self.assertRaises(gate.AssertionGateError) as raised:
+            self._run(profile, {"variant": frozenset({"optional_missing"})})
+        self.assertIn("direct-transport", str(raised.exception))
+
+    def test_partially_retired_in_list_still_fails(self) -> None:
+        """in 列表里只要还有一个取值未弃用，就不是整体弃用。"""
+
+        self._bundle()
+        profile = self._profile_with(
+            _path_check(
+                "mixed-variants",
+                [
+                    {
+                        "path": "labels.variant",
+                        "operator": "in",
+                        "value": ["optional_missing", "default"],
+                    }
+                ],
+            )
+        )
+        with self.assertRaises(gate.AssertionGateError) as raised:
+            self._run(profile, {"variant": frozenset({"optional_missing"})})
+        self.assertIn("mixed-variants", str(raised.exception))
+
+    def test_retired_values_are_official_only_and_digest_bound(self) -> None:
+        self._bundle()
+        retired = {"variant": frozenset({"optional_missing"})}
+        with self.assertRaisesRegex(gate.AssertionGateError, "只适用于官方侧"):
+            self._run(_profile(), retired, side="candidate")
+        for digests in (None, {"target": "b" * 64}, {"baseline": "short", "target": "b" * 64}):
+            with self.subTest(digests=digests), self.assertRaisesRegex(
+                gate.AssertionGateError, "两份标签声明摘要"
+            ):
+                self._run(_profile(), retired, digests=digests)
+
+    def test_receipt_shape_unchanged_without_retired_hits(self) -> None:
+        self._bundle()
+        receipt = self._run(_profile(), {"variant": frozenset({"optional_missing"})})
+        self.assertNotIn(gate.DEFERRED_UNREACHABLE_FIELD, receipt)
+
+
 class CandidateTraceGateTest(GateFixture):
     """``candidate-trace/`` 被排除在收口 provenance 之外，必须由收据自证。
 
@@ -865,6 +971,49 @@ class GateReceiptContractTest(unittest.TestCase):
             [{**good, "absent_paths": ["/b", "/a"]}],
             [{**good, "rule_id": ""}],
             [good, dict(good)],
+        ]
+        for value in malformed:
+            receipt = self._receipt()
+            receipt[gate.DEFERRED_UNREACHABLE_FIELD] = value
+            with self.subTest(value=value), self.assertRaises(gate.AssertionGateError):
+                gate.validate_gate_receipt(receipt, side="official")
+
+    def test_retired_label_entries_validated(self) -> None:
+        """R21：弃用标签值形态的延后项与端点缺席形态并存；畸形一律拒绝。"""
+
+        absent = {
+            "rule_id": "SPEC-EP-007",
+            "check_id": "legacy-compact-endpoint",
+            "absent_paths": ["/backend-api/codex/responses/compact"],
+        }
+        retired = {
+            "rule_id": "SPEC-WS-002",
+            "check_id": "optional-missing-covered",
+            "retired_labels": [{"key": "variant", "value": "optional_missing"}],
+            "baseline_label_declaration_sha256": "a" * 64,
+            "target_label_declaration_sha256": "b" * 64,
+        }
+        receipt = self._receipt()
+        receipt[gate.DEFERRED_UNREACHABLE_FIELD] = [absent, retired]
+        gate.validate_gate_receipt(receipt, side="official")
+        malformed = [
+            [{**retired, "absent_paths": ["/x"]}],
+            [{**retired, "retired_labels": []}],
+            [{**retired, "retired_labels": [{"key": "variant"}]}],
+            [{**retired, "retired_labels": [{"key": "bad key", "value": "x"}]}],
+            [{**retired, "retired_labels": [{"key": "variant", "value": ""}]}],
+            [
+                {
+                    **retired,
+                    "retired_labels": [
+                        {"key": "variant", "value": "z"},
+                        {"key": "variant", "value": "a"},
+                    ],
+                }
+            ],
+            [{**retired, "target_label_declaration_sha256": "short"}],
+            [{k: v for k, v in retired.items() if k != "baseline_label_declaration_sha256"}],
+            [retired, {**absent, "check_id": "optional-missing-covered", "rule_id": "SPEC-WS-002"}],
         ]
         for value in malformed:
             receipt = self._receipt()

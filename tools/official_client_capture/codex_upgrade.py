@@ -84,6 +84,7 @@ from tools.official_client_capture.codex_upgrade_environment_probe import (
     STATE_FILES as ENVIRONMENT_STATE_FILES,
     run_probe as run_environment_probe,
 )
+from tools.official_client_capture import build_evidence_catalog
 from tools.official_client_capture import codex_upgrade_environment_probe
 from tools.official_client_capture import codex_upgrade_arm64_environment_receipt
 from tools.official_client_capture import codex_upgrade_evidence_permissions
@@ -38762,6 +38763,63 @@ def _capture_assertion_context(
     }
 
 
+def _official_label_vocabulary(
+    target_version: str,
+) -> tuple[dict[str, frozenset[str]], str]:
+    """目标版本证据标签声明中官方侧各标签键的全部取值，以及声明文件摘要（R21）。
+
+    声明位于受管工具树，内容已由工具身份（evidence 层）约束；这里按编目阶段同一个
+    ``load_label_declaration`` 校验后取官方侧条目的标签取值，缺失或非法即失败关闭。
+    """
+
+    path = (
+        Path(__file__).resolve().parent
+        / f"codex_upgrade_evidence_labels_{target_version.replace('.', '_')}.json"
+    )
+    if path.is_symlink() or not path.is_file():
+        raise ConfigurationError(f"目标版本 {target_version} 缺少证据标签声明：{path.name}")
+    try:
+        declaration = build_evidence_catalog.load_label_declaration(
+            path, expected_codex_version=target_version
+        )
+    except (OSError, build_evidence_catalog.EvidenceCatalogError) as error:
+        raise ConfigurationError(
+            f"目标版本 {target_version} 证据标签声明非法：{error}"
+        ) from error
+    values: dict[str, set[str]] = {}
+    for entry in declaration.get("entries", []):
+        if not isinstance(entry, Mapping) or entry.get("side") != "official":
+            continue
+        for rule in entry.get("rules", []):
+            labels = rule.get("labels") if isinstance(rule, Mapping) else None
+            if not isinstance(labels, Mapping):
+                continue
+            for key, value in labels.items():
+                if isinstance(key, str) and isinstance(value, str) and value:
+                    values.setdefault(key, set()).add(value)
+    return {key: frozenset(items) for key, items in values.items()}, file_sha256(path)
+
+
+def _retired_official_label_values(
+    baseline_version: str,
+    target_version: str,
+) -> tuple[dict[str, frozenset[str]], dict[str, str]]:
+    """基线版本官方侧声明有、目标版本官方侧声明已删的标签取值，以及两份声明摘要（R21）。
+
+    0.156.1 相对 0.154.0：variant 删去 optional_missing（改为 v2_config_disabled），
+    session_header_scope 等只描述 legacy 请求的标签整键删除。
+    """
+
+    baseline, baseline_sha256 = _official_label_vocabulary(baseline_version)
+    target, target_sha256 = _official_label_vocabulary(target_version)
+    retired = {
+        key: frozenset(values - target.get(key, frozenset()))
+        for key, values in baseline.items()
+        if values - target.get(key, frozenset())
+    }
+    return retired, {"baseline": baseline_sha256, "target": target_sha256}
+
+
 def _run_seal_assertion_gate(
     assertion_context: dict[str, Any],
     roots: list[Path],
@@ -38770,15 +38828,16 @@ def _run_seal_assertion_gate(
     target_version: str,
     campaign_dir: Path | None = None,
     classification: dict[str, Any] | None = None,
+    baseline_version: str | None = None,
 ) -> dict[str, Any]:
     """ACC-03：seal 前按分侧验收契约执行断言门禁，任一失败拒绝封存。
 
     画像权威随阶段走：
 
     - 官方 seal 在 classify 之前，没有批准画像，只能用仓库冻结画像并证明其契约未漂移；
-      目标版本整体删除的端点在官方证据上结构性不可达，按
-      ``assertion_gate._verify_selector_reachability`` 的条件登记为延后项，由 VC-2
-      批准画像裁决。
+      目标版本整体删除的端点、以及目标版本标签声明弃用的标签取值（R21）在官方证据上
+      结构性不可达，按 ``assertion_gate._verify_selector_reachability`` 的条件登记为
+      延后项，由 VC-2 批准画像裁决。
     - 候选 seal 在 classify 之后，与 compare／accept 同一权威：本 Campaign 批准并摘要
       绑定的断言画像。继续用仓库冻结画像会把目标版本已删除或改判的基线 check
       （如 legacy compact）强加给候选，候选按目标行为实现后必然无法封存。
@@ -38788,10 +38847,17 @@ def _run_seal_assertion_gate(
     # provenance 里的 source_root 名即封存 inventory 的逻辑前缀，重放时按同一
     # 映射回到真实目录；bundle 是某个根内的子目录，不单独充当来源根。
     source_roots = {prefix: root for root, prefix in _evidence_root_map(roots)}
+    retired_label_values: dict[str, frozenset[str]] | None = None
+    label_declaration_sha256: dict[str, str] | None = None
     try:
         if phase == "official":
             profile = load_acceptance_profile(acceptance_profile_path())
             contract = verify_frozen_contract(profile)
+            if not baseline_version:
+                raise ConfigurationError("官方 seal 断言门禁必须提供 Campaign 基线版本。")
+            retired_label_values, label_declaration_sha256 = (
+                _retired_official_label_values(baseline_version, target_version)
+            )
         else:
             if campaign_dir is None or classification is None:
                 raise ConfigurationError(
@@ -38809,6 +38875,8 @@ def _run_seal_assertion_gate(
             contract=contract,
             target_version=target_version,
             defer_absent_endpoints=phase == "official",
+            retired_label_values=retired_label_values,
+            label_declaration_sha256=label_declaration_sha256,
         )
     except (AcceptanceContractError, AssertionGateError) as error:
         raise ConfigurationError(
@@ -47650,6 +47718,7 @@ def _seal_capture_attempt(
         target_version=manifest["target_version"],
         campaign_dir=campaign_dir,
         classification=classification,
+        baseline_version=str(manifest.get("baseline_version") or "") or None,
     )
     client_bindings: list[dict[str, Any]] = []
     observed_profile: dict[str, str] | None = None

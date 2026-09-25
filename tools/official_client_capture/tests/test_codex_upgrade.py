@@ -11302,6 +11302,36 @@ class CodexUpgradeTest(unittest.TestCase):
         )
         self.assertIn("tool_dependencies", codex_upgrade.SCENARIO_JOB_EXECUTION_FIELDS)
 
+    def test_official_label_vocabulary_reflects_target_declaration(self) -> None:
+        """R21：官方 seal 用目标版本标签声明的官方侧取值判定弃用值；缺声明失败关闭。
+
+        0.156.1 的声明把 variant=optional_missing 改为 v2_config_disabled（D8），0.154.0 仍保留。
+        """
+
+        vocabulary_0154, digest_0154 = codex_upgrade._official_label_vocabulary("0.154.0")
+        vocabulary_0156, digest_0156 = codex_upgrade._official_label_vocabulary("0.156.1")
+        self.assertIn("optional_missing", vocabulary_0154["variant"])
+        self.assertNotIn("optional_missing", vocabulary_0156["variant"])
+        self.assertIn("v2_config_disabled", vocabulary_0156["variant"])
+        tool_root = Path(codex_upgrade.__file__).resolve().parent
+        self.assertEqual(
+            digest_0156,
+            codex_upgrade.file_sha256(tool_root / "codex_upgrade_evidence_labels_0_156_1.json"),
+        )
+        self.assertNotEqual(digest_0154, digest_0156)
+        with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "缺少证据标签声明"):
+            codex_upgrade._official_label_vocabulary("9.9.9")
+        retired, digests = codex_upgrade._retired_official_label_values("0.154.0", "0.156.1")
+        self.assertEqual(retired["variant"], frozenset({"optional_missing"}))
+        self.assertEqual(
+            retired["session_header_scope"], frozenset({"responses_or_compact"})
+        )
+        self.assertNotIn("v2_config_disabled", retired.get("variant", frozenset()))
+        self.assertEqual(digests, {"baseline": digest_0154, "target": digest_0156})
+        self.assertEqual(
+            codex_upgrade._retired_official_label_values("0.156.1", "0.156.1")[0], {}
+        )
+
     def test_first_official_batch_timeout_scales_with_job_count(self) -> None:
         """R16：首批动作超时 = max(3600, 作业数 × 240)，不超过距截止的剩余时间，下限 60 秒。
 
