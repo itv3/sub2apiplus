@@ -65,6 +65,8 @@ class PreA3CertificationTests(unittest.TestCase):
                 [
                     "vc-chain.full-validation-only",
                     "vc-chain.late-stage-faults",
+                    "vc-chain.vc1-capture",
+                    "vc-chain.vc1-recovery-chain",
                     "vc-chain.batches-through-vc6",
                     "vc-chain.stopped-ledger-rejected-before-write",
                     "vc-chain.failed-batch-abandons-stage",

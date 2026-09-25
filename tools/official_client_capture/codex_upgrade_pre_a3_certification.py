@@ -34,8 +34,14 @@ from tools.official_client_capture.tests import project_ledger_fixture
 
 SCHEMA_VERSION = "pre-a3-path-certification/v1"
 FIXTURE_ONLY_ENV = project_ledger_fixture.FIXTURE_ONLY_ENV
-# R13 分阶段登记：阶段 1 只要求 validation_only 连续链；R18 追加后段父失败注入链（VC-2／VC-4／VC-5）。
-REAL_CHAIN_IDS = ("vc-chain.full-validation-only", "vc-chain.late-stage-faults")
+# R13 分阶段登记：阶段 1 只要求 validation_only 连续链；R18 追加后段父失败注入链（VC-2／VC-4／VC-5）、
+# 0.156.1 录制证据零请求回放的 VC-1 取证链与 VC-1 连续恢复链。
+REAL_CHAIN_IDS = (
+    "vc-chain.full-validation-only",
+    "vc-chain.late-stage-faults",
+    "vc-chain.vc1-capture",
+    "vc-chain.vc1-recovery-chain",
+)
 # (场景名, 说明, 测试模块, 测试类, 测试方法)
 SCENARIOS: tuple[tuple[str, str, str, str, str], ...] = (
     (
@@ -107,6 +113,20 @@ SCENARIOS: tuple[tuple[str, str, str, str, str], ...] = (
         "tools.official_client_capture.tests.real_chains.test_codex_upgrade_late_stage_faults",
         "LateStageFaultChainTests",
         "test_late_stage_parent_failures_recover_to_delivery",
+    ),
+    (
+        "vc-chain.vc1-capture",
+        "VC-0 收口真实建 Formal Campaign，0.156.1 录制官方证据零请求回放首批，断言包、seal 门禁（含延后项）、入账与 VC-2 分类草案",
+        "tools.official_client_capture.tests.real_chains.test_codex_upgrade_vc1_recorded_chain",
+        "VC1RecordedCaptureChainTests",
+        "test_vc1_capture_from_recorded_evidence",
+    ),
+    (
+        "vc-chain.vc1-recovery-chain",
+        "录制回放连续恢复：首批超时、预览失败重派、补跑失败、控制面与证据语义修复部署、epoch、封存与分类",
+        "tools.official_client_capture.tests.real_chains.test_codex_upgrade_vc1_recorded_chain",
+        "VC1RecordedRecoveryChainTests",
+        "test_vc1_recovery_chain_from_recorded_evidence",
     ),
     (
         "reconcile-attempt.recoverable-preview-approve-resume",
