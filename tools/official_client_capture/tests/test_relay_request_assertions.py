@@ -327,6 +327,18 @@ class RequestAssertionWrapperTest(unittest.TestCase):
         result = self.run_block(require_path="/backend-api/codex/responses/compact")
         self.assertEqual(result.returncode, 1)
         self.assertIn("命中 0 条 POST /backend-api/codex/responses/compact", result.stderr)
+        self.assertIn(
+            "本轮未发出目标请求 POST /backend-api/codex/responses/compact，样本不成立",
+            result.stderr,
+        )
+
+    def test_只有反向断言失败时不误报目标请求缺失(self) -> None:
+        (self.relay / "conn001.client_to_upstream.bin").write_bytes(
+            http_request("POST", "/backend-api/codex/responses/compact", [("host", "chatgpt.com")], b"{}")
+        )
+        result = self.run_block(forbid="/backend-api/codex/responses/compact")
+        self.assertEqual(result.returncode, 1)
+        self.assertNotIn("未发出目标请求", result.stderr)
 
     def test_未声明任何断言时整段跳过(self) -> None:
         result = self.run_block()

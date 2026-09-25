@@ -1616,6 +1616,10 @@ PY
   fi
   write_observation "request-assertions.json" "$request_assertions"
   if (( request_assertion_status != 0 )); then
+    # 正向门禁沿用原提示，作业日志的检索方式不变。
+    if [[ $request_assertions == *'"required-request-missing"'* ]]; then
+      echo "❌ 本轮未发出目标请求 ${REQUIRE_REQUEST_METHOD:-POST} ${REQUIRE_REQUEST_PATH:-}，样本不成立。" >&2
+    fi
     echo "❌ 请求断言不成立：$request_assertions" >&2
     exit 1
   fi
