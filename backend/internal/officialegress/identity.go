@@ -155,6 +155,19 @@ type CodexRequestConditions struct {
 	// 官方只在 account/rateLimits/read 以 supports_luna_reserve=true、ChatGPT 认证且
 	// 非 fedramp 时对 /wham/usage 追加该头，出站按画像槽位以常量值复刻。
 	LunaReservePresent bool
+	// GuardianReviewRequest 表示本次请求是 guardian 同步审阅请求：入站受信的
+	// x-codex-guardian 取值为 reviewer，且同一请求的受信子代理身份为 guardian。
+	// 画像以 guardian_review_request／not_guardian_review_request 两个条件消费它
+	// （审阅请求追加 x-codex-guardian、省略 service_tier 与 routing hint、不写
+	// guardian_credits_requested）；画像不引用这两个条件时它不影响任何出站字节。
+	//
+	// 新增字段一律 omitempty：取 false 时 JSON 形态与旧结构逐字节相同，旧版本画像
+	// 下的 CodexIdentityFacts 摘要（FinalizationToken 身份证明）保持不变。
+	GuardianReviewRequest bool `json:",omitempty"`
+	// AccountRoutingOverridePresent 表示工作区路由发现要求追加 account routing
+	// override。首期对非默认路由一律失败关闭（请求不出站），因此该条件恒为 false，
+	// 画像中以 account_routing_override_present 为条件的槽位不会进入 wire。
+	AccountRoutingOverridePresent bool `json:",omitempty"`
 }
 
 // CodexIdentityFacts 是 invocation 级不可变身份投影。它没有 map、service.Account、

@@ -436,6 +436,12 @@ func buildOfficialCodexIdentityFacts(
 		ModelSupportsLite:       hasEgressContext && egressContext.responsesLite,
 		BetaFeaturesPresent:     conditionalField("x-codex-beta-features") != "",
 		LunaReservePresent:      attemptConditions.LunaReservePresent,
+		// 运行态冻结时已要求 reviewer 与受信 guardian 子代理同时成立；这里再核对
+		// 本次身份事实里的子代理，避免后续身份归一化改写子代理后残留审阅标记。
+		GuardianReviewRequest: conditionalField(officialCodexGuardianHeader) == officialCodexGuardianReviewerValue &&
+			facts.Subagent.Value == officialCodexGuardianSubagentValue,
+		// 工作区路由首期对非默认结果失败关闭，请求不会带着 override 出站。
+		AccountRoutingOverridePresent: false,
 	}
 	managedRaw, _ := json.Marshal(struct {
 		Residency string

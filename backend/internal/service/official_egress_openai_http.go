@@ -1714,6 +1714,11 @@ func normalizeOfficialCodexConditionalIdentity(
 	if strings.TrimSpace(parentThreadID) != "" {
 		egressContext.codexRuntimeState.ConditionalHeaders["x-codex-parent-thread-id"] = strings.TrimSpace(parentThreadID)
 	}
+	// guardian 审阅标记依附于 guardian 子代理身份：身份派生把请求降级为根线程或
+	// 其他子代理时，审阅标记同步失效，避免出现官方客户端不会产生的组合。
+	if strings.TrimSpace(subagent) != officialCodexGuardianSubagentValue {
+		delete(egressContext.codexRuntimeState.ConditionalHeaders, officialCodexGuardianHeader)
+	}
 }
 
 // resolveDerivedOfficialOpenAICompactionMetadata 把第三方请求能表达的压缩语义收敛为

@@ -84,6 +84,11 @@ const (
 	officialCodexConditionAttestation        = "attestation_present"
 	officialCodexConditionFedRAMP            = "fedramp_account"
 	officialCodexConditionLunaReserve        = "luna_reserve_present"
+	// guardian 同步审阅请求及其补集、工作区路由 override：只有声明了对应槽位的
+	// 画像才会引用；旧版本画像没有这些条件，求值结果不进入任何出站字节。
+	officialCodexConditionGuardianReview    = "guardian_review_request"
+	officialCodexConditionNotGuardianReview = "not_guardian_review_request"
+	officialCodexConditionRoutingOverride   = "account_routing_override_present"
 
 	officialCodexSourceConstant       = "constant"
 	officialCodexSourceAuthentication = "authentication"

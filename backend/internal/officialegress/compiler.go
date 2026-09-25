@@ -792,6 +792,18 @@ func codexHeaderConditionEnabled(
 		return conditions.TurnStatePresent
 	case profilecontract.ConditionLunaReservePresent:
 		return conditions.LunaReservePresent
+	case profilecontract.ConditionGuardianReviewRequest:
+		// guardian 同步审阅请求：只由 service 边界已验证的请求条件决定，
+		// 与 feature 默认值和认证材料无关。
+		return conditions.GuardianReviewRequest
+	case profilecontract.ConditionNotGuardianReviewRequest:
+		// 与上一条严格互补：画像用它表达“仅普通请求才有”的槽位（routing hint、
+		// service_tier、guardian_credits_requested 等）。
+		return !conditions.GuardianReviewRequest
+	case profilecontract.ConditionAccountRoutingOverridePresent:
+		// 首期非默认工作区路由失败关闭，service 永不置位；这里只按事实求值，
+		// 不做任何推断。
+		return conditions.AccountRoutingOverridePresent
 	default:
 		return false
 	}
@@ -1250,7 +1262,10 @@ func codexBodyFieldConditionEnabled(
 		profilecontract.ConditionSessionIdPresent,
 		profilecontract.ConditionSubagentPresent,
 		profilecontract.ConditionTurnStatePresent,
-		profilecontract.ConditionLunaReservePresent:
+		profilecontract.ConditionLunaReservePresent,
+		profilecontract.ConditionGuardianReviewRequest,
+		profilecontract.ConditionNotGuardianReviewRequest,
+		profilecontract.ConditionAccountRoutingOverridePresent:
 		return codexHeaderConditionEnabled(
 			condition, features, requestConditions, authentication,
 		), nil
