@@ -225,6 +225,9 @@ from urllib.parse import urlsplit
 # 2026-09-25（R21 弃用标签值延后）：官方 seal 断言门禁按基线与目标两份标签声明算弃用取值，零命中且
 # 限定取值全部弃用的 check 登记延后交 VC-2 裁决。evidence 与 control 层变化（wire／policy 不变）；受管
 # 工具树随之变化；监督器与断言预处理器未变。
+# 2026-09-26（R17 恢复预览复用复算）：reconcile-attempt 的 official 恢复预览按 resume 同一复用判定只读
+# 复算，不一致不可批准。仅 control 层变化（wire／evidence／policy 不变）；受管工具树随之变化；监督器与
+# 断言预处理器未变。
 DEFAULT_SUPERVISOR_DIGEST = (
     "c4276d7c4108b66994c44d93688244e456cb5d5c91d5aaadae2fafc634aa52eb"
 )
