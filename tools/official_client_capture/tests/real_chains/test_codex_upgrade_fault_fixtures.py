@@ -33,23 +33,39 @@ from tools.official_client_capture import codex_upgrade_reconciler as reconciler
 from tools.official_client_capture import codex_upgrade_vc_artifacts as artifacts
 from tools.official_client_capture.tests import evaluation_chain_driver as driver
 from tools.official_client_capture.tests import managed_tree_copy
-from tools.official_client_capture.tests import test_arm64_capture_driver as driver_tests
-from tools.official_client_capture.tests import test_arm64_driver_wait as wait_tests
 from tools.official_client_capture.tests import test_codex_upgrade as upgrade_tests
 from tools.official_client_capture.tests import test_codex_upgrade_evidence_integrity as integrity_tests
 from tools.official_client_capture.tests import test_codex_upgrade_timing_ledger as timing_tests
 from tools.official_client_capture.tests import test_codex_runtime_egress as egress_tests
 
 
+
+def _driver_test_modules():
+    """驱动脚本相关的测试夹具只在驱动用例里按需导入。
+
+    test_arm64_capture_driver 与 test_arm64_driver_wait 在导入时就按仓库根加载
+    tools/arm64_capture_driver 下的脚本；pre-A3 从部署后的数据根运行本模块的 R15 链时没有
+    该目录（驱动另装在 /root/arm64-capture-driver），顶层导入会让整个模块导入失败，
+    连不依赖驱动的 R15 链一起失败（2026-09-25 首次在生产布局跑 pre-A3 时实测）。
+    """
+
+    from tools.official_client_capture.tests import test_arm64_capture_driver
+    from tools.official_client_capture.tests import test_arm64_driver_wait
+
+    return test_arm64_capture_driver, test_arm64_driver_wait
+
 class RuntimeEgressRecoveryTests(unittest.TestCase):
     def test_pause_reconciliation_approval_preserves_only_trusted_job(self):
         """在独立挂载命名空间绑定受测工具树，保留正式执行位置校验。"""
 
         tree = Path(upgrade.__file__).resolve().parents[2]
+        # pre-A3 在父进程内把 tempfile.tempdir 指向 staging 并开启仅夹具模式；子进程只继承环境
+        # 变量、不继承 tempfile.tempdir，夹具总账会建到 /tmp 而被仅夹具模式拒绝（总账必须位于
+        # staging 目录树内）。显式传递父进程的临时目录，平时它就是默认临时目录，行为不变。
         result = managed_tree_copy.run_python(tree, [
             "-m", "unittest", "-v",
             __name__ + ".RuntimeEgressRecoveryTests._exercise_pause_reconciliation",
-        ], timeout=180)
+        ], extra_env={"TMPDIR": tempfile.gettempdir()}, timeout=180)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertNotIn("skipped=", result.stderr)
         print(result.stdout, end="", flush=True)
@@ -243,6 +259,7 @@ class UpgradeFaultFixtureTests(unittest.TestCase):
                                        "test_stage_pause_extend_preserves_counters_and_original_bytes")
 
     def test_r12_dead_child_exits_bounded_without_campaign_mutation(self):
+        driver_tests, wait_tests = _driver_test_modules()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             fixture = driver_tests._DriverFixture(root)
@@ -291,6 +308,7 @@ class DriverResumeChainTests(unittest.TestCase):
     """实际 VC-4 shell 与续跑 producer 连跑；编译／镜像／Campaign 动作由零请求替身提供。"""
 
     def test_vc5_actual_run_death_or_stale_heartbeat_stops_waiter(self):
+        driver_tests, wait_tests = _driver_test_modules()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             fixture = driver_tests._DriverFixture(root)
@@ -329,6 +347,7 @@ class DriverResumeChainTests(unittest.TestCase):
                               "execute_stages": 0, "live_request_count": 0}), flush=True)
 
     def test_upload_timeout_resume_and_changed_inputs_rerun_only_required_stages(self):
+        driver_tests, wait_tests = _driver_test_modules()
         helper = wait_tests.ResumeInputTests()
         helper.setUp()
         self.addCleanup(helper.doCleanups)
