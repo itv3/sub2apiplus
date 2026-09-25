@@ -228,8 +228,12 @@ from urllib.parse import urlsplit
 # 2026-09-26（R17 恢复预览复用复算）：reconcile-attempt 的 official 恢复预览按 resume 同一复用判定只读
 # 复算，不一致不可批准。仅 control 层变化（wire／evidence／policy 不变）；受管工具树随之变化；监督器与
 # 断言预处理器未变。
+# 2026-09-26（R18 VC-4 修好接着跑与后段注入链）：候选审核下 VC-4 的 plan-candidate-gates／record-candidate-build
+# 凭对账写入的阶段幂等重派证明在同一 revision 重开并逐字重派（编排器、对账器、计时账本、证明 schema）；监督器的
+# 阶段审核后继协议放开到 VC-4；pre-A3 登记后段父失败注入链。control 层变化（wire／evidence／policy 摘要不变）；
+# 受管工具树与监督器摘要随之变化；断言预处理器未变。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "c4276d7c4108b66994c44d93688244e456cb5d5c91d5aaadae2fafc634aa52eb"
+    "8de72959d3c2b6ef3b8a24b6a80764fd6777dc8fccee068343803cfa43865b26"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "c8020cadd3ee08f67236313a0913dbc3730805b46c3f6b720cdf7ace77f9fec1"
@@ -391,6 +395,8 @@ MANAGED_RUNTIME_DOCUMENTS = (
     "egress/maintenance/upstream-codex-01561-r8-final-20260924-freeze-successor.json",
     "egress/maintenance/upstream-codex-01561-r8-review-fix-20260924-freeze-successor.json",
     "egress/maintenance/upstream-codex-01561-review2-fix-20260924-freeze-successor.json",
+    # 2026-09-26：R18 改过计时账本，其承接收据登记进计时账本来源链，须随工具树部署。
+    "egress/maintenance/upstream-codex-0157-r18-candidate-stage-replay-20260926-freeze-successor.json",
 )
 MANAGED_ASSERTION_PREPARER = "prepare_assertion_bundle.sh"
 TARGET_SCENARIO_MANIFEST = "codex_upgrade_scenarios_0_156_1.json"
