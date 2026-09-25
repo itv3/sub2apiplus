@@ -100,6 +100,12 @@ if [[ ! $codex_version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   exit 2
 fi
 IFS=. read -r codex_major codex_minor _ <<<"$codex_version"
+# daemon-tui 取的是 0.157.0 起默认开启的 daemon 路径；更早的版本默认不拉起 daemon，
+# 跑下去只会得到内嵌模式样本，在任何请求之前拒绝。
+if [[ $scenario == "daemon-tui" ]] && (( codex_major == 0 && codex_minor < 157 )); then
+  echo "daemon-tui 需要 Codex >=0.157.0（daemon_auto_start 默认开启）。" >&2
+  exit 2
+fi
 a14_c2pa_expectation=${A14_C2PA_EXPECTATION:-}
 if [[ $scenario == "file-upload" ]]; then
   # 0.151 起 uploaded Body 受 create 响应中的 pdf_c2pa_reservation 控制。
@@ -249,6 +255,8 @@ memgen_home=""
 file_upload_home=""
 file_upload_path=""
 model_catalog_home=""
+# daemon-tui 的独立 CODEX_HOME（容器内路径）；非空即表示本作业可能拉起过 daemon。
+daemon_home=""
 auth_backup=""
 auth_before_sha256=""
 # SCN-REALITY-01：目标场景的原始观测落在这里，供 build_scenario_facts.py 解析。
@@ -260,6 +268,12 @@ write_observation() {
   install -d -m 0700 "$observation_dir" 2>/dev/null || return 0
   printf '%s\n' "$payload" > "$observation_dir/$name" || return 0
   chmod 600 "$observation_dir/$name" 2>/dev/null || true
+}
+
+daemon_tool() {
+  # Codex app-server daemon 生命周期工具（codex_daemon_lifecycle.py）在采集容器内执行，
+  # stdout 是一行不含凭据的 JSON，退出码 0 成功、3 条件不成立、2 参数非法。
+  docker exec "$capture_container" python3 "$capture_tool_root/codex_daemon_lifecycle.py" "$@"
 }
 
 stop_relay() {
@@ -567,7 +581,13 @@ cleanup() {
   # 容器的 /etc/hosts 因此一直残留着劫持，中继停掉后所有出站都打向 127.0.0.1 被拒。
   # 这个残留会静默污染此后一切在该容器里的观测——A13 的首次手工复现就栽在这上面。
   set +e
-  # hosts 与临时 CA 最先还原：它们是污染后续采集的唯一途径，必须排在最前面。
+  # 唯一排在 hosts 还原之前的是停 daemon：hosts 与 CA 一旦还原，驻留的 daemon 下一次定时
+  # 模型刷新就会绕过中继直连真实上游。停止本身零请求（ARM64 实测 0.06 秒），工具在
+  # 宽限期满后兜底 SIGKILL，最坏约两分钟。作业正常结束时场景分支已停过，这里幂等。
+  if [[ -n $daemon_home ]]; then
+    daemon_tool stop --home "$daemon_home" --codex-bin "$codex_bin" >/dev/null 2>&1 || true
+  fi
+  # 其余环境中，hosts 与临时 CA 最先还原：它们是污染后续采集的唯一途径，必须排在最前面。
   for h in ${RELAY_HOSTS:-chatgpt.com}; do
     docker exec "$capture_container" sh -c \
       "grep -v \" $h\$\" /etc/hosts > /tmp/.hr && cat /tmp/.hr > /etc/hosts && rm -f /tmp/.hr" \
@@ -596,6 +616,10 @@ cleanup() {
   if [[ -n $model_catalog_home ]]; then
     docker exec "$capture_container" rm -rf -- "$model_catalog_home" >/dev/null 2>&1 || true
   fi
+  if [[ -n $daemon_home ]]; then
+    # home 内有 auth.json 副本与约 330 MB 的 daemon 客户端包；工具先核验无残留进程再删除。
+    daemon_tool remove --home "$daemon_home" >/dev/null 2>&1 || true
+  fi
   restore_auth_json
   # 探针文件只可能落在两个白名单位置之一；两处都清，避免模型改写到另一处后残留。
   docker exec "$capture_container" rm -f /tmp/codex-guardian-probe.txt \
@@ -608,6 +632,16 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 install -d -m 0700 "$work_dir" "$tls_dir"
+
+# 0.157.0 起 TUI 默认拉起常驻 daemon。先前作业若异常退出留下 daemon，它的定时模型刷新会在
+# 本作业劫持 hosts 后混进中继样本，所以每个作业都在启动中继、改动 hosts 之前清扫：采集作业自己
+# 留下的按进程终止并删除 home；归属其它 CODEX_HOME 的 daemon 说明有人手工启动过客户端，失败关闭
+# 交人工核查。
+echo "=== daemon 残留清扫 ==="
+if ! daemon_tool sweep; then
+  echo "❌ 采集容器存在无法自动清理的 Codex daemon，拒绝发送请求。" >&2
+  exit 1
+fi
 
 # 中继面向客户端的证书——**多域名 SAN**。
 # 验 SPEC-EP-002（域名全集）与 SPEC-EP-012（live 双出站：chatgpt.com 建会话 +
@@ -962,6 +996,13 @@ case "$scenario" in
     # guardian 只在非 bypass 的真实审批链里触发。让模型请求在工作区外创建一个
     # 无害探针文件，auto_review 会启动 guardian 子代理审核该动作。
     prompt='__GUARDIAN_TUI__' ;;
+  daemon-tui)
+    # 0.157.0 起 TUI 默认经常驻 app-server daemon 发请求（daemon_auto_start 转为默认开启）。
+    # 其余 TUI 场景都带 --disable plugins/apps，属白名单外 CLI 覆盖，一律退回内嵌模式，
+    # 默认路径因此没有样本。本场景用独立的冷启动 CODEX_HOME、不带任何 CLI 覆盖启动 TUI，
+    # 功能开关改写进该 home 的 config.toml；daemon 在 TUI initialize 之前发出的 models 与
+    # accounts/check 即 SPEC-HDR-005 的 daemon 条件样本。daemon 在停中继之前停止并核验无残留。
+    prompt='__DAEMON_TUI__' ;;
   memgen)
     # 同一 app-server 内先构造持久线程 A，再由线程 B 启动 memories pipeline。
     # 使用专用临时 CODEX_HOME，避免历史 session/memory 污染候选集合；只在容器内部
@@ -1234,6 +1275,40 @@ elif [[ $prompt == "__GUARDIAN_TUI__" ]]; then
     --prompt-hold "${TUI_HOLD:-240}" \
     ${DISABLE_FEATURES:+$(for f in $DISABLE_FEATURES; do printf -- '--disable %s ' "$f"; done)} \
     --log "/capture/runs/$run_id/tui.log" 2>&1 | tail -16 || true
+elif [[ $prompt == "__DAEMON_TUI__" ]]; then
+  # home 放在 /root 而不是 /tmp：客户端拒绝在临时目录下的 CODEX_HOME 里建 helper 别名并告警，
+  # 与默认用户路径不一致。赋值先于 prepare，prepare 半途失败时 cleanup 同样会清掉 home。
+  daemon_home="/root/.codex-daemon-$run_id"
+  daemon_prepare=$(daemon_tool prepare --home "$daemon_home" --disable-features "$DISABLE_FEATURES") || {
+    echo "❌ daemon 作业的独立 CODEX_HOME 建立失败：$daemon_prepare" >&2
+    exit 1
+  }
+  write_observation "daemon-home.json" "$daemon_prepare"
+  # 不传 --disable／--enable／--config：任何白名单外覆盖都会让 TUI 退回内嵌模式。
+  docker exec -e CODEX_HOME="$daemon_home" "$capture_container" python3 \
+    "$capture_tool_root/drive_codex_tui.py" \
+    --codex-bin "$codex_bin" \
+    --model "$model" --cwd /tmp/tui-probe \
+    --prompt "${TUI_PROMPT:-请只回复 OK，不要做任何其他事。}" \
+    --prompt-hold "${TUI_HOLD:-90}" \
+    --log "/capture/runs/$run_id/tui.log" 2>&1 | tail -16 || true
+  # 模式与版本在停 daemon 之前判定；判定失败也先停 daemon、留下观测，再以失败退出。
+  daemon_status_code=0
+  daemon_status=$(daemon_tool status --home "$daemon_home" --codex-bin "$codex_bin" \
+    --require-mode daemon --expect-version "$codex_version") || daemon_status_code=$?
+  write_observation "daemon-mode.json" "$daemon_status"
+  daemon_stop_code=0
+  daemon_stop=$(daemon_tool stop --home "$daemon_home" --codex-bin "$codex_bin") || daemon_stop_code=$?
+  write_observation "daemon-lifecycle.json" "$daemon_stop"
+  if (( daemon_status_code != 0 )); then
+    echo "❌ 本作业要求 TUI 经 daemon 发请求，模式或版本不符：$daemon_status" >&2
+    exit 1
+  fi
+  if (( daemon_stop_code != 0 )); then
+    echo "❌ daemon 未能在停中继之前干净停止：$daemon_stop" >&2
+    exit 1
+  fi
+  echo "daemon 模式已确认并已停止：$daemon_status"
 elif [[ $prompt == "__MEMGEN__" ]]; then
   memgen_home="/tmp/codex-memgen-$run_id"
   docker exec "$capture_container" sh -c \
