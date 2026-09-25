@@ -1,0 +1,61 @@
+{
+  "base_commit": "24adbf6d1ff666df24d5cbee2af9c6340ef1b3e4",
+  "changed_path_count": 4,
+  "current_commit": "bb82a4b98bea186b3accd84050b9361131bf8fa7",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 4196,
+  "frozen_path_count": 1399,
+  "identity_sha256": "3bdac86bab91073e290b9e5ff71a8b22ba870b6243f589e626c058b960a61781",
+  "issued_at_utc": "2026-09-25T15:06:00Z",
+  "mode": "commit",
+  "required_manual_actions": [],
+  "result": "passed_local_evidence_successor",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-0157-r20-stage-budgets-20260925-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/tests/test_codex_upgrade_timing_ledger.py",
+      "predecessor_sha256s": [
+        "f453cdb38f78bb55d50fad035c1ad6bfcaac4748e5c5c923406bcac3acf17ebb"
+      ],
+      "reason": "R20 驱动阶段预算按实测标定（驱动参数与测试） path=tools/official_client_capture/tests/test_codex_upgrade_timing_ledger.py",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-container-path-recovery-tool-successor-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-timing-producer-replay-tool-successor-source-transition.json",
+        "docs/egress/maintenance/upstream-codex-0154-b-cleanup-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-b1-deletion-proof-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-c-release-certification-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc2-vc6-governance-20260916-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-framework-closure-20260917-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-provenance-pcap-owner-20260917-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-tooling-batch1-20260919-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-tooling-batch2-m2-20260919-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r2-review-fix-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r4-review-fix-20260924-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-r8-20260924-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "4449a6f166316ea008d9c89467060d31aaf49de1733708ebc03bb88cd93e8c3a"
+    }
+  ],
+  "unregistered_path_count": 3,
+  "unregistered_paths": [
+    "tools/arm64_capture_driver/driver/env.example.sh",
+    "tools/arm64_capture_driver/manifest.json",
+    "tools/official_client_capture/tests/test_arm64_capture_driver.py"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci"
+  ]
+}
