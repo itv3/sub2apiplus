@@ -164,6 +164,7 @@ docs/egress/**/.DS_Store
 !docs/COMPOSITE_GROUPS.md
 !docs/PLUGIN_DEVELOPMENT.md
 !docs/channel-monitor-v2-safe-defaults.md
+!docs/KNOWN_FLAKY_TESTS.md
 !docs/legal/
 !docs/legal/*.md
 !docs/screenshots/
