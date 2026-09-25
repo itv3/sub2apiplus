@@ -1,0 +1,216 @@
+{
+  "schema_version": "codex-upgrade-improvement-validation/v1",
+  "item": "R15 首次实装修正（依赖容器重建不连带阻断、bpffs 固定对象命名、远端核验信任出口担保租期、探针有效期内成功观测）",
+  "source_commit": "ea204a470315df7113d6964c251127a72da4a940",
+  "source_commits": [
+    "aa05fd521e1a808242498fa52071bfc64cf548c5",
+    "7e7e53b247d0d216f7b75974eda1a836134559a2",
+    "5319cf448ec75df7f618a464191f90e1b3b6cb67",
+    "ea204a470315df7113d6964c251127a72da4a940"
+  ],
+  "review_basis": "2026-09-25 第 3 步实装：老板授权 CI 全绿后先装 DMIT 出口端、再切换 ARM64 两个容器，要求哪里失败就修哪里、中途不再审核（直到生产切换再通知）；四项缺陷均为真实实装与现场故障测试发现",
+  "status": "development_self_check_passed",
+  "production_deployed": false,
+  "live_request_count": 0,
+  "self_checked_at_utc": "2026-09-25T01:19:37.768250+00:00",
+  "fixes": [
+    {
+      "finding": "受保护容器互为依赖（网关依赖 capture-cli 18080/18443，capture-cli 依赖网关 8080）时，依赖容器不在 docker ps（受控重建窗口）或处于 restarting 即被判 invalid、撤销租期并清空探针；维护入口要求另一容器持续合规，采集脚本 docker restart 网关必然触发不可逆暂停。离线守护用例整体替换库存函数、真实 Docker 链把依赖设为空，均未覆盖。",
+      "resolution": "依赖容器未运行或 restarting 时只暂缓该项依赖放行，本服务出口准入不变；共同网络缺失、运行中无地址或公网地址仍闭锁。仅依赖列表变化时不撤销内核租期。修复前 4 条新用例失败；ARM64 现场重启 capture-cli／网关时另一容器全程就绪。"
+    },
+    {
+      "finding": "bpffs 保留含点号的名称（内核 bpf_lookup 返回 EPERM），策略要求 cgroup 父组以 .slice 结尾，固定对象目录 sub2api_egress.slice-<摘要> 在真实内核上必然创建失败；真实内核链自建无点号目录并直接调用加载器，从未经过 egress_bootstrap。",
+      "resolution": "目录名把 slice 名中的点号转写为下划线（策略只允许唯一的 .slice 后缀，仍一一对应）；离线用例改用转写名并断言不含点号。ARM64 首次实装即在 bootstrap 失败，修复后重装成功。"
+    },
+    {
+      "finding": "源端每 0.5 秒只发一次出口健康请求、超时 0.8 秒，单次失败即判共享失效并清空全部探针；ARM64 与 DMIT 之间约一成 TCP 握手丢包（直连 DMIT 443 同样复现），实装后共享保护每 3～7 秒翻转 82 次，数据库反复断连，网关因启动期连不上数据库重启 4 次。",
+      "resolution": "每轮并行发出两个请求（单次超时放宽到租期），未返回的在后续轮次收取；只采信出口声明的剩余租期并从请求发出时刻起算，窗口不超过出口内核租期。修复前 3 条新用例 2 失败 1 报错；10 分钟实测健康请求成功 1985 次、失败 15 次，相邻成功发出间隔最长 0.6 秒。"
+    },
+    {
+      "finding": "探针每轮整体替换观测，一轮两个来源超时即不满足 3 选 2，等下一个 15 秒周期；链路丢包使三个来源各有两到三成请求 3 秒内超时，单个容器每一两分钟掉回探测 16～36 秒，期间内网依赖同样闭锁。",
+      "resolution": "逐来源采用有效期内最近一次成功、否则最近一次真实结果（不生成替代记录，最近一次成功冲突仍以它为准）；任一来源失败 3 秒后重探；curl 建连 3 秒、总时长 5 秒。修复前 1 失败 1 报错；重装后 15 分钟内无单容器掉探测。"
+    }
+  ],
+  "clarifications": [
+    "DMIT 出口宿主的两项前置条件属人工运维、不改工具：/etc/nftables.conf 的 inet filter input 默认丢弃，加 wg-egress 来源 10.79.32.1 到 10.79.32.2:38181 的放行（注释 sub2api-egress-health）；Docker 使 iptables FORWARD 默认 DROP，用 wg-quick@wg-egress 的 dmit-forward.conf 插删两条放行（注释 sub2api-egress-forward）。两项均只匹配专用接口，生产实例前后 3001 均返回 200。",
+    "15 分钟稳定性内仍有一次持续约 2 秒以上的链路延迟高峰（响应普遍 3～5 秒）导致共享失效约 6 秒，属 3 秒租期下的设计闭锁；策略 revision 2 把 lease_seconds 调到允许上限 5 秒，并把按地理解析、在 ARM64 宿主解析到新加坡节点的 checkip.amazonaws.com 换为任播 ipv4.icanhazip.com，随 CI 通过后的最终重装两端同时下发。",
+    "实装过程中 ARM64（测试服务器）依次安装过 7e7e53b24、5319cf448、ea204a470 的开发提交做现场验证；DMIT（生产宿主）只装过 CI 验证通过的 ae74eea18，出口端不使用本批修改的源端代码路径。",
+    "systemd 以 SIGTERM 停止守护时 Python 不执行 finally 中的撤销，已发放租期自然到期后闭锁（实测停止后约 1～3 秒内业务仍可出网），符合“守护退出不删除保护、闭锁上界为租期”。",
+    "离线与真实内核链均不覆盖 egress_bootstrap、真实库存、远端健康核验与真实探针；本批以实装现场验证补足，改动守护后须在 ARM64 做稳定性观察与四项故障用例。",
+    "切换后受保护容器 DNS 直连 1.1.1.1／9.9.9.9 经隧道、无本地缓存，新建连接多约 200 ms 解析；已建立连接时延与 10 MB 吞吐（约 2.5 MB/s）不变。"
+  ],
+  "tool_identity": {
+    "policy_sha256": "unchanged",
+    "wire_producer_sha256": "unchanged",
+    "evidence_semantics_sha256": "unchanged",
+    "control_sha256": "unchanged",
+    "values": {
+      "policy": "796dac4b48c2c54009e101be1e1f56569a76fdc89c037378245796ec5dab2ad9",
+      "wire_producer": "3beefc77f5887fa3ef9ff6d3ea032a6c325d578177cc33912569b092189c66ec",
+      "evidence_semantics": "615b4bb141480ecb6c1501b32155f0da04c0f6c0115ffbf7205ec18c3fd5dc49",
+      "control": "06ed7fd70d4ac4fcb50533b222de0ddd17235db587d58bdb126a01324b97d6fa"
+    },
+    "method": "git archive 分别导出 ae74eea18 与 ea204a470 的 tools、docs，以 codex_upgrade._tool_identity(include_git=False) 逐层复算一致；改动集中在受管工具树外的 tools/arm64_supervised_deploy.py 与测试"
+  },
+  "regression": {
+    "red": {
+      "dependency": "r15-depfix-red-20260924T233505Z.log、r15-depfix-red2-20260924T233528Z.log：ae74eea18 上依赖缺失、restarting、数据库缺失与守护租期撤销共 4 条失败",
+      "remote_window": "r15-remote-window-red-20260925T000734Z.log：7e7e53b24 部署脚本上 3 条远端核验用例 2 失败 1 报错",
+      "probe_merge": "r15-probe-merge-red-20260925T002055Z.log：5319cf448 部署脚本上探针用例 1 失败（probing != ready）1 报错",
+      "bpffs_name": "ARM64 实装日志 arm64-s1-20260924T234606Z.log：bootstrap 创建 sub2api_egress.slice-<摘要> 返回 EPERM"
+    },
+    "local_full": {
+      "tree": "45ccd7041b06f197e01a5c7d765ef0aad77892b3",
+      "units": {
+        "log": "gate-capture-tools-45ccd7041.log",
+        "tests": 2209,
+        "skipped": 22,
+        "seconds": 886.212,
+        "result": "OK"
+      },
+      "go_and_spec": {
+        "log": "gate-go-egress-45ccd7041.log",
+        "officialegress_frozen": "passed",
+        "service_frozen": "passed",
+        "check_egress_spec_ci": "passed"
+      }
+    },
+    "arm64": {
+      "tree": "45ccd7041b06f197e01a5c7d765ef0aad77892b3",
+      "units": {
+        "log": "r15fix-arm64-B1.log",
+        "tests": 2209,
+        "skipped": 21,
+        "seconds": 1958.751,
+        "result": "OK"
+      },
+      "fault_fixture_chains": {
+        "log": "r15fix-arm64-C.log",
+        "tests": 12,
+        "seconds": 196.091,
+        "result": "OK",
+        "r15_real_guard_kernel": {
+          "individual_detection_seconds": 2.115,
+          "shared_detection_seconds": 2.875,
+          "unauthorized_business_packets": 0
+        }
+      },
+      "note": "真实链中只有 test_codex_upgrade_fault_fixtures 引用部署脚本；其余真实链模块不受本批改动影响"
+    }
+  },
+  "field_validation": {
+    "dmit_exit": "2026-09-24T23:39:51Z 安装 ae74eea18 出口端，守护此后无状态变化；守护单元含子进程约占单核 2.5%、内存约 23 MB；1081 轮相邻间隔最大 0.52 秒",
+    "arm64_origin": "ea204a470 于 2026-09-25T00:21:20Z 重装；两容器 5 秒内准入；egress-check、出口 IP、DNS、TLS 握手、入站三路、应用到 capture-cli 18080/18443、反向拒绝三项、抓包与证据目录均通过；守护约占单核 18%、内存约 30 MB",
+    "fault_cases": "重启 capture-cli 与重启网关时另一容器全程就绪（3.6 秒内恢复）；停源端守护后闭锁、重启 4.9 秒恢复；停出口守护 2.2 秒后两容器闭锁、恢复后 3.4 秒重新就绪"
+  },
+  "gates": {
+    "tree": "45ccd7041b06f197e01a5c7d765ef0aad77892b3",
+    "officialegress_frozen": "passed",
+    "service_frozen": "passed",
+    "check_egress_spec_ci": "passed",
+    "codex_0151_worktree_successor": "passed",
+    "maintenance_markdown_count": 0,
+    "freeze_successor": "区间 ae74eea18..ea204a470，1 条承接边（部署脚本），无人工待办"
+  },
+  "freeze_successors": [
+    {
+      "path": "docs/egress/maintenance/upstream-codex-01561-r15-install-fix-20260925-freeze-successor.json",
+      "sha256": "3693e8fa1755ed6fb0faa216e8bc5dc3c8f19a559627d5506b3a1b42a723c017"
+    }
+  ],
+  "logs_directory": "/Users/czs/Developer/codex-01561-upgrade-work",
+  "logs": [
+    {
+      "file": "r15-depfix-red-20260924T233505Z.log",
+      "sha256": "2291ad8478e5137c4afdd7179ee7f068b8bb5932a2b142d53ec824aabf62a3a4"
+    },
+    {
+      "file": "r15-depfix-red2-20260924T233528Z.log",
+      "sha256": "578c36016c41e69beda387019f328eca82f0f67ae1447c880e820fbbce9d9218"
+    },
+    {
+      "file": "r15-depfix-green-20260924T233548Z.log",
+      "sha256": "e34167825cdd521bacaf8403b08669b4e9f437776bd44ee24f8a78b3d5f73a4f"
+    },
+    {
+      "file": "r15-remote-window-red-20260925T000734Z.log",
+      "sha256": "dd0e702c94d0864bd31631e8c74eca6c9beea40bf23a83780754068baf06e195"
+    },
+    {
+      "file": "r15-probe-merge-red-20260925T002055Z.log",
+      "sha256": "c98fe7a51702df21a1e194e2f7d702d60c752826988bf6e3548d4cd3b7be961d"
+    },
+    {
+      "file": "gate-capture-tools-45ccd7041.log",
+      "sha256": "782e29c2da722d8f7db1924a98e76f98aa37e3629e6471ce5250629acddbfb9f"
+    },
+    {
+      "file": "gate-go-egress-45ccd7041.log",
+      "sha256": "987078eacc58ee66ba47bf27baeffc8e5fbc25fd0b8a08aa8b47f9da732cdf77"
+    },
+    {
+      "file": "r15fix-arm64-B1.log",
+      "sha256": "aa56eac1c7aa102f84fb413fbc362b89b5c8ee807844979a5ce2018793835931"
+    },
+    {
+      "file": "r15fix-arm64-C.log",
+      "sha256": "ec02b31aeb66bd50f38d7563f1d87d56996610704794e951577e21f99f288bd3"
+    },
+    {
+      "file": "r15-install/dmit-prep-20260924T233928Z.log",
+      "sha256": "859d06e5340197dc186af327964701f167f8da0758c550b6819f942b9165fc0d"
+    },
+    {
+      "file": "r15-install/dmit-exit-install-20260924T233949Z.log",
+      "sha256": "389b07af3e4f9ef534d2fc9d66258d1a78e2a07890ec9220749b9d665bab7f1d"
+    },
+    {
+      "file": "r15-install/arm64-prep-20260924T234340Z.log",
+      "sha256": "7fd5dbdb17db9ae9bbf9e4199fb29a7bd1e0b65496b856ee0a0509aabc2b718a"
+    },
+    {
+      "file": "r15-install/arm64-s1-20260924T234606Z.log",
+      "sha256": "dd5ddb81295da46236ce2b789a0c14ac54c19b356536d0ed237dddf3e0cd7e05"
+    },
+    {
+      "file": "r15-install/arm64-s1-safe-state-20260924T234731Z.log",
+      "sha256": "32176f73a301601b75563ef8db746bce0efb9690242f7723b9485c7baa183583"
+    },
+    {
+      "file": "r15-install/arm64-s1b-20260924T235011Z.log",
+      "sha256": "f3bc2e505217fc6b27ad2582fa62af3bb1247559a9949933a257cac61f708bc7"
+    },
+    {
+      "file": "r15-install/arm64-s2-20260924T235056Z.log",
+      "sha256": "edbea02ab3cc0a2a15239d66959c3687f3b8633696cd53fec738cfc327f6565a"
+    },
+    {
+      "file": "r15-install/arm64-s3-20260924T235119Z.log",
+      "sha256": "cc98600e58ca0b39fc5fca56d10761c127b6682fccb97a7eed291c4791c981ad"
+    },
+    {
+      "file": "r15-install/arm64-s4-20260924T235217Z.log",
+      "sha256": "5ec7d9b9807e63fb7d5ce8d91fc907d78fbbd1c8db0e102d4cacac4b60ce09b0"
+    },
+    {
+      "file": "r15-install/arm64-s5-20260924T235426Z.log",
+      "sha256": "4092c963561aeaaf0cfe27541780c96c9158e69309d7402c61db43cc909292b7"
+    },
+    {
+      "file": "r15-install/arm64-stability-20260925T000815Z.log",
+      "sha256": "d524f99f36c97e5825d1481d8f7ce1cbda5882c144c9717ada8b8bf341945954"
+    },
+    {
+      "file": "r15-install/arm64-s5b-20260925T003904Z.log",
+      "sha256": "9503568295a604de38f6b0e9ef63b1c56e38c3e8d2fe204cdb81cab1019d9305"
+    },
+    {
+      "file": "r15-install/arm64-perf-before-20260924T234220Z.log",
+      "sha256": "2363a2e8d4a0c20033874d1b999b4b6498474d911e2a1d38d3d64727b2f2d859"
+    },
+    {
+      "file": "r15-install/arm64-perf-after-20260924T235323Z.log",
+      "sha256": "d7d94b8b492d2b3935bd93d4e1e89010b2fd371fa42e1738a83ea79eebae4f15"
+    }
+  ]
+}
