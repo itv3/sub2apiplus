@@ -209,8 +209,11 @@ from urllib.parse import urlsplit
 # 全部官方观测零出现）登记为延后项交 VC-2 裁决；候选 seal 预检改用本 Campaign 批准断言画像。evidence 与
 # control 层变化（wire／policy 摘要不变，seal 前须追加 evaluation epoch）；受管工具树随之变化；监督器与
 # 断言预处理器未变。
+# 2026-09-25（VC-1 恢复复用与预览重派）：历史结果复用的逐文件依赖校验豁免低风险组件（编排器、评估器、
+# 控制面、环境面，只核冻结摘要）；监督器新增“失败的零请求恢复预览以 N+1 逐字重派”后继协议。control 层
+# 变化（wire／evidence／policy 摘要不变）；受管工具树与监督器摘要随之变化；断言预处理器未变。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "f0777fa70f3010b8a4583825515813a28dbdda87cbdc8c77c26af1b09a1108df"
+    "cadf61e0c45433ee39654890bd08878570b5fe5af46c98260eee4bd2e7f41acd"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "c8020cadd3ee08f67236313a0913dbc3730805b46c3f6b720cdf7ace77f9fec1"
