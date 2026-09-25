@@ -203,8 +203,10 @@ from urllib.parse import urlsplit
 # 部署命名改为 01561。受管工具树摘要随之变化；监督器与断言预处理器未变。
 # 2026-09-25（画像规则补丁 v2）：validate_profile_derivation 新增 v2（键控寻址、显式增删、多规则归属），
 # 只改 control 层（wire／evidence／policy 摘要不变）。受管工具树摘要随之变化；监督器与断言预处理器未变。
+# 2026-09-25（VC-1 超时清理后继）：监督器的普通恢复预览后继额外接纳 capture-official 动作执行截止后
+# 在清理宽限内自行封口的父失败（control 层）。受管工具树与监督器摘要随之变化；断言预处理器未变。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "ecaad15eae39240fc9afe9c0f81ab2426ea55ea4a87c64fa39d2c2d795a4c520"
+    "f0777fa70f3010b8a4583825515813a28dbdda87cbdc8c77c26af1b09a1108df"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "c8020cadd3ee08f67236313a0913dbc3730805b46c3f6b720cdf7ace77f9fec1"
