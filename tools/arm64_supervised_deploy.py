@@ -353,6 +353,15 @@ MANAGED_RUNTIME_DOCUMENTS = (
     "egress/maintenance/upstream-codex-01561-r13-20260923-freeze-successor.json",
     "egress/runtime-egress-operations.md",
     "egress/maintenance/upstream-codex-01561-r15-20260923-freeze-successor.json",
+    # 2026-09-25：阶段 1 的 R2／R4／R8 与复审修正改过计时账本，其承接收据已登记进计时账本来源链，
+    # 但此前漏登这里，部署后重放历史账本会因找不到收据而阻断；按时间顺序补齐。
+    "egress/maintenance/upstream-codex-01561-r2-review-fix-20260924-freeze-successor.json",
+    "egress/maintenance/upstream-codex-01561-r4-20260924-freeze-successor.json",
+    "egress/maintenance/upstream-codex-01561-r4-review-fix-20260924-freeze-successor.json",
+    "egress/maintenance/upstream-codex-01561-r8-20260924-freeze-successor.json",
+    "egress/maintenance/upstream-codex-01561-r8-final-20260924-freeze-successor.json",
+    "egress/maintenance/upstream-codex-01561-r8-review-fix-20260924-freeze-successor.json",
+    "egress/maintenance/upstream-codex-01561-review2-fix-20260924-freeze-successor.json",
 )
 MANAGED_ASSERTION_PREPARER = "prepare_assertion_bundle.sh"
 TARGET_SCENARIO_MANIFEST = "codex_upgrade_scenarios_0_154_0.json"

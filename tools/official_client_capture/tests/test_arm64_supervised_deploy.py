@@ -15,6 +15,20 @@ from tools import arm64_supervised_deploy as deploy
 from tools.official_client_capture import codex_upgrade_supervisor as supervisor
 
 
+class ManagedRuntimeDocumentsTest(unittest.TestCase):
+    def test_timing_ledger_runtime_sources_are_deployed_with_tool_tree(self):
+        # 计时账本重放历史 producer 摘要时会从部署后的仓库根逐份读取登记的来源链文档，缺一份即
+        # 失败关闭；这些文档必须全部随工具树进入同一部署事务，否则 ARM64 上的历史回放必然阻断。
+        import re
+
+        ledger = Path(deploy.__file__).resolve().parent / "official_client_capture" / "codex_upgrade_timing_ledger.py"
+        referenced = set(re.findall(r'"docs/(egress/maintenance/[^"]+)"', ledger.read_text(encoding="utf-8")))
+        self.assertTrue(referenced)
+        self.assertEqual(sorted(referenced - set(deploy.MANAGED_RUNTIME_DOCUMENTS)), [])
+        repository = Path(deploy.__file__).resolve().parents[1] / "docs"
+        self.assertEqual([name for name in deploy.MANAGED_RUNTIME_DOCUMENTS if not (repository / name).is_file()], [])
+
+
 class Arm64SupervisedDeployTest(unittest.TestCase):
     @staticmethod
     def _write_documents(root: Path, prefix: str) -> None:
