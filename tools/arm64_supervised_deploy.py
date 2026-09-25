@@ -201,6 +201,8 @@ from urllib.parse import urlsplit
 # 受管工具树与监督器随之变化；断言预处理器未变。
 # 2026-09-25（0.156.1）：新增 0.156.1 目标版本清单与 0.154.0→0.156.1 升级对，目标场景清单切到 0.156.1，
 # 部署命名改为 01561。受管工具树摘要随之变化；监督器与断言预处理器未变。
+# 2026-09-25（画像规则补丁 v2）：validate_profile_derivation 新增 v2（键控寻址、显式增删、多规则归属），
+# 只改 control 层（wire／evidence／policy 摘要不变）。受管工具树摘要随之变化；监督器与断言预处理器未变。
 DEFAULT_SUPERVISOR_DIGEST = (
     "ecaad15eae39240fc9afe9c0f81ab2426ea55ea4a87c64fa39d2c2d795a4c520"
 )
