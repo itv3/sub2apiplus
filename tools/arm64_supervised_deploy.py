@@ -232,6 +232,9 @@ from urllib.parse import urlsplit
 # 凭对账写入的阶段幂等重派证明在同一 revision 重开并逐字重派（编排器、对账器、计时账本、证明 schema）；监督器的
 # 阶段审核后继协议放开到 VC-4；pre-A3 登记后段父失败注入链。control 层变化（wire／evidence／policy 摘要不变）；
 # 受管工具树与监督器摘要随之变化；断言预处理器未变。
+# 2026-09-26（R18 VC-1 录制回放链）：pre-A3 登记 vc-chain.vc1-capture 与 vc-chain.vc1-recovery-chain（0.156.1 录制官方证据
+# 零请求回放，测试夹具在 tests/）。仅 control 层（pre-A3 场景表）变化，wire／evidence／policy 不变；受管工具树随之变化；
+# 监督器与断言预处理器未变。
 DEFAULT_SUPERVISOR_DIGEST = (
     "8de72959d3c2b6ef3b8a24b6a80764fd6777dc8fccee068343803cfa43865b26"
 )
