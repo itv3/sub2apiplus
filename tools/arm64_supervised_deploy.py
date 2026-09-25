@@ -222,6 +222,9 @@ from urllib.parse import urlsplit
 # 2026-09-25（R16 逐作业显式依赖）：场景清单可逐作业声明 tool_dependencies，声明后依赖只按清单取摘要；
 # 首个 VC-1 批次动作超时按官方作业数估算。wire 与 evidence 层变化（计划外的 wire 变化，发布认证须重签），
 # control 随之变化，policy 不变；受管工具树随之变化；监督器与断言预处理器未变。
+# 2026-09-25（R21 弃用标签值延后）：官方 seal 断言门禁按基线与目标两份标签声明算弃用取值，零命中且
+# 限定取值全部弃用的 check 登记延后交 VC-2 裁决。evidence 与 control 层变化（wire／policy 不变）；受管
+# 工具树随之变化；监督器与断言预处理器未变。
 DEFAULT_SUPERVISOR_DIGEST = (
     "c4276d7c4108b66994c44d93688244e456cb5d5c91d5aaadae2fafc634aa52eb"
 )
