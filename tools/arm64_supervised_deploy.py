@@ -30,7 +30,7 @@ import sys
 import time
 import threading
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait as wait_futures
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -2193,11 +2193,14 @@ def project_ledger_summary(supervisor: Any, data_root: Path) -> dict[str, Any] |
     ledger_module = getattr(supervisor, "project_ledger", None)
     if ledger_module is None:
         return None
-    root = ledger_module.find_project_ledger(data_root / "evidence" / "campaigns")
-    if root is None:
-        return None
-    head = ledger_module.replay_head(root)
-    plan, _raw = ledger_module._load_plan(root)
+    # 总账回放遇到延期事件（deadline_extended）时才在函数体内裸名导入 codex_upgrade_vc_artifacts；
+    # 2026-09-25 项目总账写入延期事件后，部署预检在这里 ModuleNotFoundError。
+    with staging_sibling_imports(supervisor):
+        root = ledger_module.find_project_ledger(data_root / "evidence" / "campaigns")
+        if root is None:
+            return None
+        head = ledger_module.replay_head(root)
+        plan, _raw = ledger_module._load_plan(root)
     return {
         "path": str(root),
         "head_sequence": head["sequence"],
@@ -2208,30 +2211,53 @@ def project_ledger_summary(supervisor: Any, data_root: Path) -> dict[str, Any] |
     }
 
 
+# 监督器同目录直接依赖：模块名 → 监督器上的属性名。加载暂存监督器与之后调用这些暂存模块共用同一张表。
+SUPERVISOR_SIBLING_MODULES = {
+    "codex_upgrade_evidence_permissions": "evidence_permissions",
+    "codex_upgrade_project_ledger": "project_ledger",
+    "codex_upgrade_root_cause": "root_cause",
+    "codex_upgrade_timing_ledger": "timing_ledger",
+    "codex_upgrade_vc_artifacts": "vc_artifacts",
+}
+
+
+@contextmanager
+def staging_sibling_imports(supervisor: Any):
+    """调用暂存监督器的同级模块时，复现 load_supervisor 加载期的导入环境。
+
+    暂存模块在函数体内按“无包即裸名导入”延迟导入同级模块，而 load_supervisor 结束时已恢复 sys.path
+    并移除同名模块，直接调用会 ModuleNotFoundError。调用期间把暂存工具目录放回 sys.path 首位，并把
+    加载时绑定的同级模块对象按原名放回 sys.modules（不重新从磁盘导入，也不混入进程内的同名旧模块），
+    结束后原样恢复。
+    """
+
+    module_root = str(Path(supervisor.__file__).resolve().parent)
+    original_sys_path = list(sys.path)
+    previous_modules = {
+        name: sys.modules[name]
+        for name in SUPERVISOR_SIBLING_MODULES
+        if name in sys.modules
+    }
+    try:
+        sys.path.insert(0, module_root)
+        for name, attribute in SUPERVISOR_SIBLING_MODULES.items():
+            loaded = getattr(supervisor, attribute, None)
+            if loaded is not None:
+                sys.modules[name] = loaded
+        yield
+    finally:
+        sys.path[:] = original_sys_path
+        for name in SUPERVISOR_SIBLING_MODULES:
+            sys.modules.pop(name, None)
+        sys.modules.update(previous_modules)
+
+
 def load_supervisor(staging_root: Path) -> Any:
     module_root = staging_root / "tools" / "official_client_capture"
     module_path = module_root / "codex_upgrade_supervisor.py"
     sibling_modules = {
-        "codex_upgrade_evidence_permissions": (
-            "evidence_permissions",
-            module_root / "codex_upgrade_evidence_permissions.py",
-        ),
-        "codex_upgrade_project_ledger": (
-            "project_ledger",
-            module_root / "codex_upgrade_project_ledger.py",
-        ),
-        "codex_upgrade_root_cause": (
-            "root_cause",
-            module_root / "codex_upgrade_root_cause.py",
-        ),
-        "codex_upgrade_timing_ledger": (
-            "timing_ledger",
-            module_root / "codex_upgrade_timing_ledger.py",
-        ),
-        "codex_upgrade_vc_artifacts": (
-            "vc_artifacts",
-            module_root / "codex_upgrade_vc_artifacts.py",
-        ),
+        name: (attribute, module_root / f"{name}.py")
+        for name, attribute in SUPERVISOR_SIBLING_MODULES.items()
     }
     if module_path.is_symlink() or not module_path.is_file():
         raise DeploymentError("暂存监督器文件不存在或不可信。")

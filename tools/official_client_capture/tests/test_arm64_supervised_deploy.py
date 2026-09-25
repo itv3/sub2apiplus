@@ -340,6 +340,61 @@ class Arm64SupervisedDeployTest(unittest.TestCase):
                     self.assertIs(sys.modules[name], old_module)
             self.assertEqual(sys.path, original_path)
 
+    def test_project_ledger_summary_resolves_lazy_sibling_imports(self) -> None:
+        """总账回放延期事件时在函数体内裸名导入同级模块；部署器调用暂存总账时须复现加载期的导入环境。
+
+        2026-09-26 部署 0.157.0：项目总账已有 deadline_extended 事件，回放走到
+        ``import codex_upgrade_vc_artifacts``，而 load_supervisor 结束后已恢复 sys.path 并移除同名模块，
+        部署预检 ModuleNotFoundError。
+        """
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            module_root = root / "tools" / "official_client_capture"
+            module_root.mkdir(parents=True)
+            for name in deploy.SUPERVISOR_SIBLING_MODULES:
+                (module_root / f"{name}.py").write_text(f"SOURCE = 'staged:{name}'\n", encoding="utf-8")
+            (module_root / "codex_upgrade_project_ledger.py").write_text(
+                "from pathlib import Path\n"
+                "SOURCE = 'staged:codex_upgrade_project_ledger'\n"
+                "def find_project_ledger(path):\n"
+                "    return Path(path) / 'upgrade-project-ledger'\n"
+                "def replay_head(root):\n"
+                "    import codex_upgrade_vc_artifacts as artifacts\n"
+                "    return {'sequence': 7, 'head_sha256': artifacts.SOURCE, 'blocked': False,"
+                " 'remaining_live_requests': None}\n"
+                "def _load_plan(root):\n"
+                "    return {'absolute_deadline_utc': '2026-10-02T15:59:00Z'}, b''\n",
+                encoding="utf-8",
+            )
+            (module_root / "codex_upgrade_supervisor.py").write_text(
+                "".join(
+                    f"import {name} as {attribute}\n"
+                    for name, attribute in deploy.SUPERVISOR_SIBLING_MODULES.items()
+                ),
+                encoding="utf-8",
+            )
+            cached = types.ModuleType("codex_upgrade_vc_artifacts")
+            cached.SOURCE = "cached:codex_upgrade_vc_artifacts"
+            original_path = list(sys.path)
+            with mock.patch.dict(sys.modules, {"codex_upgrade_vc_artifacts": cached}):
+                loaded = deploy.load_supervisor(root)
+                summary = deploy.project_ledger_summary(loaded, root / "data")
+                self.assertEqual(summary["head_sha256"], "staged:codex_upgrade_vc_artifacts")
+                self.assertEqual(
+                    (summary["head_sequence"], summary["absolute_deadline_utc"]),
+                    (7, "2026-10-02T15:59:00Z"),
+                )
+                self.assertIs(sys.modules["codex_upgrade_vc_artifacts"], cached)
+            self.assertEqual(sys.path, original_path)
+            # 反证：不经上下文直接调用，复现部署时的 ModuleNotFoundError。
+            with mock.patch.object(
+                sys, "path", [item for item in sys.path if "official_client_capture" not in item]
+            ), mock.patch.dict(sys.modules):
+                sys.modules.pop("codex_upgrade_vc_artifacts", None)
+                with self.assertRaises(ModuleNotFoundError):
+                    loaded.project_ledger.replay_head(root)
+
     def test_assertion_preparer_switch_and_joint_rollback_are_atomic(self) -> None:
         """主工具树外的 bundle 入口必须随事务切换并可共同回滚。"""
 
