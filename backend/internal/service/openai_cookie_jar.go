@@ -282,9 +282,9 @@ func isAllowedChatGPTCookieURL(target *url.URL) bool {
 // 编译期断言：官方 jar 支持按画像名单读取。
 var _ officialCodexPolicyCookieJar = (*chatGPTCloudflareCookieJar)(nil)
 
-// officialCodexWebSocketCookieMode 返回 WS 握手所用的 release mode（与
+// officialCodexWebSocketReleaseMode 返回 WS 握手所用的 release mode（与
 // attachOfficialEgressWebSocketContext 的选择一致）。
-func officialCodexWebSocketCookieMode(s *OpenAIGatewayService) string {
+func officialCodexWebSocketReleaseMode(s *OpenAIGatewayService) string {
 	if s != nil && s.cfg != nil {
 		return officialClientProfileModeFromConfig(s.cfg)
 	}

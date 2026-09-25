@@ -96,7 +96,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	}
 	firstPayload := payloadAsJSONBytes(payload)
 	ctx = s.bindOpenAIResponsesLiteCapability(ctx, account, firstPayload)
-	ctx = s.bindOfficialCodexWebSocketCookieJar(ctx, account, officialCodexWebSocketCookieMode(s))
+	ctx = s.bindOfficialCodexWebSocketCookieJar(ctx, account, officialCodexWebSocketReleaseMode(s))
 	ctx, err = attachOfficialEgressWebSocketContext(
 		ctx,
 		c,

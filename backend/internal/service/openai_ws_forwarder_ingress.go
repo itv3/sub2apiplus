@@ -173,7 +173,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		if buildErr != nil {
 			return fmt.Errorf("build official egress ws url: %w", buildErr)
 		}
-		ctx = s.bindOfficialCodexWebSocketCookieJar(ctx, account, officialCodexWebSocketCookieMode(s))
+		ctx = s.bindOfficialCodexWebSocketCookieJar(ctx, account, officialCodexWebSocketReleaseMode(s))
 		ctx, buildErr = attachOfficialEgressWebSocketContext(
 			ctx,
 			c,
@@ -646,6 +646,13 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 
 	useHTTPBridge := forceHTTPBridge || s.shouldBridgeOpenAIWSHTTP(account, firstPayload.payloadBytes, firstPayload.previousResponseID)
 	turnState := strings.TrimSpace(c.GetHeader(openAIWSTurnStateHeader))
+	// 画像声明 turn-state 按账号 owner 隔离时：客户端回带的 turn-state 若已知由其他账号
+	// 铸造则丢弃，也不采纳无法归属账号的会话级缓存值，账号切换后旧值不再回送。
+	turnStateOwnerIsolation := officialEgressEnabled &&
+		officialCodexTurnStateOwnerIsolation(officialCodexWebSocketReleaseMode(s))
+	if turnStateOwnerIsolation {
+		turnState = s.isolateOfficialCodexIngressTurnState(c, account, turnState)
+	}
 	stateStore := s.getOpenAIWSStateStore()
 	groupID := getOpenAIGroupIDFromContext(c)
 	storeDisabledConnMode := s.openAIWSStoreDisabledConnMode()
@@ -661,7 +668,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			// inherit another connection's native WS turn state or socket binding.
 			return
 		}
-		if turnState == "" && stateStore != nil && sessionHash != "" {
+		if turnState == "" && stateStore != nil && sessionHash != "" && !turnStateOwnerIsolation {
 			if savedTurnState, ok := stateStore.GetSessionTurnState(groupID, sessionHash); ok {
 				turnState = savedTurnState
 			}
@@ -1142,6 +1149,10 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		turnState = handshakeTurnState
 		if handshakeTurnState != "" && c != nil {
 			c.Header(http.CanonicalHeaderKey(openAIWSTurnStateHeader), handshakeTurnState)
+			if turnStateOwnerIsolation {
+				// 记录本连接账号铸造了该 turn-state，供后续 failover 时识别跨账号回带值。
+				s.noteOpenAICodexTurnStateProvenance(c, account)
+			}
 		}
 		logOpenAIWSModeInfo(
 			"ingress_ws_upstream_connected account_id=%d turn=%d conn_id=%s conn_reused=%v conn_pick_ms=%d queue_wait_ms=%d preferred_conn_id=%s",
