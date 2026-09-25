@@ -11,6 +11,8 @@ import (
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/officialegress"
+	"github.com/Wei-Shaw/sub2api/internal/officialegress/profilecontract"
+	"github.com/tidwall/gjson"
 )
 
 // officialCodexSemanticAttempt 是 service 业务语义与 Executor 线协议权威之间的
@@ -189,6 +191,7 @@ func prepareOfficialCodexSemanticAttempt(
 			CompressionEligible: headerContainsToken(headers, "Content-Encoding", "zstd"),
 			LunaReservePresent:  strings.TrimSpace(headers.Get("x-openai-codex-luna-reserve")) != "",
 		},
+		body,
 	)
 	if err != nil {
 		return officialCodexSemanticAttempt{}, err
@@ -234,6 +237,7 @@ func buildOfficialCodexIdentityFacts(
 	endpointID string,
 	identitySeed string,
 	attemptConditions officialCodexAttemptConditions,
+	semanticBody []byte,
 ) (officialegress.CodexIdentityFacts, error) {
 	facts := officialegress.CodexIdentityFacts{}
 	structuredIdentity := officialCodexInvocationIdentityFromContext(request.Context())
@@ -408,6 +412,11 @@ func buildOfficialCodexIdentityFacts(
 	}
 	if err := completeOfficialCodexGeneratedIdentityFacts(
 		&facts, endpointID, identitySeed,
+		officialCodexFallbackTurnMetadataInput{
+			profileMode:      runtimeState.ProfileMode,
+			semanticBody:     semanticBody,
+			memoryGeneration: strings.EqualFold(conditionalField("x-openai-memgen-request"), "true"),
+		},
 	); err != nil {
 		return officialegress.CodexIdentityFacts{}, err
 	}
@@ -468,10 +477,27 @@ func buildOfficialCodexIdentityFacts(
 	return facts, nil
 }
 
+// officialCodexFallbackTurnMetadataInput 是兜底生成 turn metadata 时读取画像节与新键
+// 取值所需的输入。profileMode 为空（调用未冻结 release mode）时不读画像，保持旧逻辑，
+// 不默认退化为 active。
+type officialCodexFallbackTurnMetadataInput struct {
+	profileMode      string
+	semanticBody     []byte
+	memoryGeneration bool
+}
+
+func (in officialCodexFallbackTurnMetadataInput) section() *profilecontract.TurnMetadataSection {
+	if strings.TrimSpace(in.profileMode) == "" {
+		return nil
+	}
+	return officialCodexOptionalSectionsForMode(in.profileMode).TurnMetadata
+}
+
 func completeOfficialCodexGeneratedIdentityFacts(
 	facts *officialegress.CodexIdentityFacts,
 	endpointID string,
 	identitySeed string,
+	fallbackTurnMetadata officialCodexFallbackTurnMetadataInput,
 ) error {
 	if facts == nil {
 		return errors.New("Codex 身份事实为空")
@@ -527,6 +553,35 @@ func completeOfficialCodexGeneratedIdentityFacts(
 		}
 	}
 	if needsTurnMetadata && facts.TurnMetadata.Value == "" {
+		if section := fallbackTurnMetadata.section(); section != nil {
+			// 画像声明 TurnMetadata 节：与旧结构同一组基础键，外加节中声明且有可信取值
+			// 的新键；model 与 reasoning_effort 取语义请求体。
+			values := map[string]any{
+				"installation_id": facts.InstallationID.Value,
+				"session_id":      facts.SessionID.Value, "thread_id": facts.ThreadID.Value,
+				"turn_id": facts.TurnID.Value, "window_id": facts.WindowID.Value,
+				"request_kind": "turn", "thread_source": "user", "sandbox": "seccomp",
+			}
+			body := fallbackTurnMetadata.semanticBody
+			if err := applyOfficialCodexTurnMetadataSection(values, section, officialCodexTurnMetadataExtension{
+				Model:           strings.TrimSpace(gjson.GetBytes(body, "model").String()),
+				ReasoningEffort: strings.TrimSpace(gjson.GetBytes(body, "reasoning.effort").String()),
+				TurnTrigger: officialCodexTurnTrigger(
+					facts.ProcessSurface.Value, facts.Subagent.Value, fallbackTurnMetadata.memoryGeneration,
+				),
+			}); err != nil {
+				return err
+			}
+			turnMetadata, err := marshalOfficialOpenAITurnMetadata(values)
+			if err != nil {
+				return err
+			}
+			facts.TurnMetadata, err = officialegress.NewCodexIdentityValue(
+				string(turnMetadata), officialegress.IdentitySourceTurn,
+				officialegress.IdentityLifecycleTurn,
+			)
+			return err
+		}
 		turnMetadata, err := json.Marshal(struct {
 			InstallationID string `json:"installation_id"`
 			SessionID      string `json:"session_id"`

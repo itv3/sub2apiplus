@@ -608,6 +608,22 @@ func prepareOpenAIOfficialEgressSemanticHTTPRequest(
 			OfficialEgressModification{Kind: "body", Field: "instructions"},
 		)
 	}
+	// turn metadata 新键取自定型后的请求体（payload 已被就地改写为最终形态），保证
+	// model、reasoning_effort 与实际出站请求体一致；画像没有 TurnMetadata 节时原样保留。
+	identity.turnMetadata, err = extendOfficialOpenAITurnMetadataJSON(
+		identity.turnMetadata,
+		officialCodexOptionalSectionsForMode(egressContext.ProfileMode()).TurnMetadata,
+		officialCodexTurnMetadataExtension{
+			Model:           officialOpenAIString(payload, "model"),
+			ReasoningEffort: officialOpenAIEffectiveReasoningEffort(payload, officialOpenAIReasoningDefaultsFromContext(egressContext)),
+			TurnTrigger: officialCodexTurnTrigger(
+				egressContext.codexRuntimeState.SurfaceID, identity.subagent, identity.memoryGenerate,
+			),
+		},
+	)
+	if err != nil {
+		return nil, result, err
+	}
 
 	if err := registerOfficialOpenAIHTTPIdentity(egressContext, identity, plan.IsCompact); err != nil {
 		return nil, result, err

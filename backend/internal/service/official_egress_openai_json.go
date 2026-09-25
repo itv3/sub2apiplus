@@ -58,10 +58,15 @@ func marshalOfficialOpenAIWSJSONFromProfile(
 	return marshalOfficialOrderedJSONObjectPreservingRaw(payload, order, nil)
 }
 
+// officialOpenAITurnMetadataFieldOrder 对齐官方 turn metadata 结构体的声明序：
+// turn_trigger 位于 thread_source 与 sandbox 之间，analytics_enabled 位于
+// turn_started_at_unix_ms 与 compaction 之间，model、reasoning_effort 属于结构体末尾
+// 按键名排序展开的附加表。新键只在画像 TurnMetadata 节声明时写入，旧画像的键集中
+// 不含它们，插入这些位置不改变旧画像的输出字节。
 var officialOpenAITurnMetadataFieldOrder = []string{
 	"installation_id", "session_id", "thread_id", "turn_id", "window_id",
-	"request_kind", "thread_source", "sandbox", "turn_started_at_unix_ms",
-	"compaction",
+	"request_kind", "thread_source", "turn_trigger", "sandbox", "turn_started_at_unix_ms",
+	"analytics_enabled", "compaction", "model", "reasoning_effort",
 }
 
 func marshalOfficialOpenAITurnMetadata(payload map[string]any) ([]byte, error) {
