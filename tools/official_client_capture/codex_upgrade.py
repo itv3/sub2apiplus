@@ -39507,10 +39507,19 @@ def _historical_result_metadata_matches(
             current_files = _tool_entry_digest_map(current_tool)
         except ConfigurationError:
             return False
+        # 逐文件依赖与上方组件级校验同一口径：低风险组件（编排器、评估器、控制面、
+        # 环境面）的文件只要求等于冻结摘要，证明结果确由冻结工具产出；当前摘要允许
+        # 变化——它们不改变已经生成的请求字节。其余文件仍要求当前摘要逐字不变；编排器
+        # 自身 wire 闭包的变化另由 plan identity 的 wire 身份比较拦截。
+        # 依赖闭包按文件引用扫描，只在注释里提到的监督器、编排器也会被计入 relay 类
+        # Job（0.156.1 VC-1 实测 27 个 Job 各 176 个文件），不按组件豁免时，任何
+        # 控制面修复都会作废全部已完成的官方结果。
         if any(
             frozen_files.get(str(path)) != digest
             or (
                 str(path) not in allowed_high_risk_paths
+                and _tool_component_for_path(str(path))
+                not in _LOW_RISK_TOOL_COMPONENTS
                 and current_files.get(str(path)) != digest
             )
             for path, digest in recorded_dependency_files.items()

@@ -10892,6 +10892,104 @@ class CodexUpgradeTest(unittest.TestCase):
             )
         )
 
+    def test_historical_result_file_dependencies_exempt_low_risk_components(self) -> None:
+        """逐文件依赖对低风险组件只核冻结摘要，当前摘要变化不作废已完成结果。
+
+        0.156.1 VC-1：relay 类 Job 的依赖闭包经注释引用计入编排器与监督器，采集后
+        control 层修复改了这两个文件，逐文件比对不豁免低风险组件时 27 个已完成
+        官方结果全部无法复用。产出侧文件变化仍必须拒绝。
+        """
+
+        job = Job(
+            job_id="official-relay-ws-default",
+            phase="official",
+            suites=("full",),
+            description="relay",
+            steps=(
+                {
+                    "argv": [
+                        "bash",
+                        "/repo/tools/official_client_capture/run_h1_wire_probe.sh",
+                        "codex_upgrade.py",
+                        "codex_upgrade_supervisor.py",
+                    ],
+                    "environment": {},
+                    "timeout": 60,
+                },
+            ),
+            evidence_roots=("/capture/relay",),
+            covers=(),
+        )
+
+        def identity(**changed: str) -> dict[str, object]:
+            digests = {
+                "codex_upgrade.py": "3" * 64,
+                "codex_upgrade_supervisor.py": "8" * 64,
+                "run_h1_wire_probe.sh": "1" * 64,
+                "run_sub2api_direct_matrix.sh": "2" * 64,
+            }
+            digests.update(
+                {name.replace("__", ".").replace("_dash_", "-"): value for name, value in changed.items()}
+            )
+            entries = [
+                {"path": path, "sha256": digest}
+                for path, digest in sorted(digests.items())
+            ]
+            components = codex_upgrade._tool_component_identities(entries)
+            return {
+                "entries": entries,
+                "components": components["components"],
+                **codex_upgrade._tool_identity_sides(entries),
+            }
+
+        frozen = identity()
+        runtime_identity = {"runtime": "same"}
+        metadata = codex_upgrade._job_incremental_metadata(
+            job,
+            identity=runtime_identity,
+            tool_identity=frozen,
+        )
+        self.assertTrue(
+            {"codex_upgrade.py", "codex_upgrade_supervisor.py"}.issubset(
+                metadata["tool_dependency_files"]
+            )
+        )
+        result = {
+            "execution_sha256": metadata["input_sha256"],
+            "tool_components": metadata["components"],
+            "tool_component_digests": metadata["component_digests"],
+            "tool_dependency_files": metadata["tool_dependency_files"],
+            "input_sha256": metadata["input_sha256"],
+            "environment_sha256": metadata["environment_sha256"],
+            "dependency_sha256": metadata["dependency_sha256"],
+            "incremental_result_key": metadata["result_key"],
+        }
+
+        def matches(result_value: dict, current: dict) -> bool:
+            return codex_upgrade._historical_result_metadata_matches(
+                result_value,
+                job,
+                runtime_identity,
+                frozen,
+                metadata["input_sha256"],
+                current_tool=current,
+            )
+
+        # 编排器与监督器（低风险组件）在采集后变化：已完成结果仍可复用。
+        low_risk_drift = identity(
+            codex_upgrade__py="5" * 64, codex_upgrade_supervisor__py="9" * 64
+        )
+        self.assertTrue(matches(result, low_risk_drift))
+        # 产出侧脚本变化：必须拒绝。
+        producer_drift = identity(
+            codex_upgrade__py="5" * 64, run_h1_wire_probe__sh="4" * 64
+        )
+        self.assertFalse(matches(result, producer_drift))
+        # 低风险文件也必须证明结果来自冻结工具：记录摘要与冻结摘要不一致即拒绝。
+        forged = json.loads(json.dumps(result))
+        forged["tool_dependency_files"]["codex_upgrade_supervisor.py"] = "7" * 64
+        self.assertFalse(matches(forged, low_risk_drift))
+
     def test_v7_preview_replays_hybrid_and_evaluator_drift(self) -> None:
         """v7 严格预览应承接旧结果，不得把混合文件或 timing schema 判成重跑。"""
 
