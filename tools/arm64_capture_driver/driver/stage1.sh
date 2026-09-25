@@ -1,10 +1,16 @@
 #!/bin/bash
 # 前阶段 1：派发前检查（pre-plan）→ 零请求 smoke → 新账本（总预算按项目总账绝对截止设上限，留 5 分钟余量）
-#   → ARM64 环境收据（p0）→ 账本 checkpoint → preflight plan → Job 演练收据 → atomic-double 收据。
+#   → ARM64 环境收据（p0）→ 账本 checkpoint → preflight plan → 写 stage1.partial.env
+#   → stage1-finish.sh（Job 演练收据 → 客户端启动探测 → atomic-double 收据 → 写 stage1.env）。
 # 全部参数来自 $ARM64_VC_ENV；产物坐标写入 $RUNROOT/stage1.env 供 stage2 使用。
+# 收尾段失败时修复环境后单独重跑 stage1-finish.sh 即可续跑（R19），不要重跑本脚本（会新建账本）。
 set -Eeuo pipefail; umask 077
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
 echo "ROUND=$ROUND STAMP=$STAMP"
+# 旧坐标先改名留档：本次任何一步失败都不能让上一次的 stage1.env／stage1.partial.env 被当成本次结果。
+for old in stage1.env stage1.partial.env; do
+  if [ -f "$RUNROOT/$old" ]; then mv "$RUNROOT/$old" "$RUNROOT/$old.superseded-$(date -u +%Y%m%dt%H%M%Sz)"; fi
+done
 bash "$DRV/guard.sh" pre-plan
 DEPLOY=$(python3 -B - "$DRV/../install.py" "$D" <<'PYDEPLOY'
 import importlib.util, sys
@@ -47,20 +53,12 @@ python3 -m tools.official_client_capture.codex_upgrade plan \
   --capture-codex-bin "$CODEX_BIN" --relay-codex-bin "$CODEX_BIN" --suite full --model "$MAIN_MODEL" --lite-model "$LITE_MODEL" \
   --codex-account-id "$CODEX_ACCOUNT_ID" --api-key-id "$API_KEY_ID" --live-attestation-compose-dir "$COMPOSE_DIR" \
   --live-attestation-compose-files "$COMPOSE_DIR/docker-compose.yml" 2>&1 | tail -1 | cut -c1-160
-JR="$D/control/${CAMPAIGN_PREFIX}-job-rehearsal-vc5-$ROUND-$STAMP"
-mkdir -m 0700 "$JR"
-python3 -m tools.official_client_capture.codex_upgrade_job_rehearsal_receipt collect --campaign-dir "$PRE" --evidence-root "$JR" --output facts.json | cut -c1-160
-python3 -m tools.official_client_capture.codex_upgrade_job_rehearsal_receipt finalize --evidence-root "$JR" --facts facts.json --output receipt.json | cut -c1-160
-AT="codex-atomic-vc0-vc1-$ROUND-$STAMP"
-mkdir -m 0700 "$D/staging/$AT"
-docker exec --env PYTHONPATH=/capture --workdir /capture capture-cli python3 -m tools.official_client_capture.codex_upgrade_campaign_run_rehearsal_receipt atomic-double-collect --evidence-root "/capture/staging/$AT" --output receipt.json | cut -c1-160
-cat > "$RUNROOT/stage1.env" <<ENV
+# 收尾段（可单独续跑）：坐标先落盘，再交给 stage1-finish.sh。
+cat > "$RUNROOT/stage1.partial.env" <<PARTIALENV
 DEPLOY=$DEPLOY
 ENV=$ENV
 PRECID=$PRECID
 PRE=$PRE
-JR=$JR
-AT=$AT
-ENV
-chmod 600 "$RUNROOT/stage1.env"
-echo "STAGE1_DONE $RUNROOT/stage1.env"
+PARTIALENV
+chmod 600 "$RUNROOT/stage1.partial.env"
+bash "$DRV/stage1-finish.sh"

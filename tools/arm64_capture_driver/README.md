@@ -24,6 +24,31 @@
 1. 本机：`cp driver/env.example.sh` → 填写 ROUND／STAMP／C／DC／RECEIPT 等 → 传到采集主机 `$RUNROOT/env.sh`。
 2. 采集主机：`ARM64_VC_ENV=$RUNROOT/env.sh bash driver/stage1.sh` 完成预检与演练。新目标首次取证按指南
    `codex_upgrade_vc0_closeout` 完成 Formal VC-0／VC-1 后进入 `vc23.sh`；同目标恢复才用 `pre-all.sh`（stage2 + vc23）。
+   closeout 编排必须先执行 `client_launch_probe.py verify --output-dir "$PROBE" --campaign-dir "$PRE"`（坐标取自
+   `stage1.env`），通过后才能调用 `codex_upgrade_vc0_closeout`；`stage2.sh` 已内置同一复核。
+
+## 前阶段 1 的收尾段与客户端启动探测（R19）
+
+* `stage1.sh` 建好账本与预检 Campaign 后写 `$RUNROOT/stage1.partial.env`，再调用 `stage1-finish.sh`：
+  Job 演练收据 → 客户端启动探测 → atomic-double 收据 → 写 `stage1.env`（新增 `PROBE` 坐标）。两个脚本开头都把
+  旧的 `stage1.env` 改名留档，任何一步失败都不会留下可被误用的旧坐标。
+* 收尾段任一步失败：修复环境后单独执行 `ARM64_VC_ENV=$RUNROOT/env.sh bash driver/stage1-finish.sh` 续跑，不要重跑
+  `stage1.sh`（会新建账本）。已有收据的 Job 演练与 atomic-double 直接沿用；半途中断的目录原样保留，换带时间后缀的
+  新目录重做；启动探测每次都重跑，反映修复后的环境。
+* 启动探测（`client_launch_probe.py`）从预检 Campaign 展开全部作业（与 Job 演练同一入口），挑出经
+  `run_official_relay_scenario.sh` 运行 TUI 场景的步骤，按调用点的展开规则算出受管 `drive_codex_tui.py` 的参数，
+  逐组合在采集容器的私有命名空间（`unshare --net --mount --pid`）里启动目标客户端：只有回环网络，本地替身终结
+  全部请求（零真实请求）；CODEX_HOME、/tmp、/var/tmp、/work 与证书目录全部叠加 tmpfs 覆盖层（零副作用）。
+  提示词换成只含大写字母的口令，替身收到正文含口令的首个 turn 请求才算通过；信任目录、模型迁移、登录、hooks
+  审查等交互屏拦住首帧即失败。失败组合在新命名空间里以 48×160 窗口复跑一次，只用于识别是哪类交互屏。
+  探测前后在命名空间外比对容器状态指纹并检查残留进程。报告在 `$PROBE/report.json`（每次运行另存
+  `attempts/<时间>/`），`verify` 拒绝未通过、自摘要不符、Campaign 不符或带验收参数的报告。
+* 替身只做 TUI 引导必需的最小应答：`accounts/check` 回显请求头里的账号（与真实上游同构）、`/models` 用
+  CODEX_HOME 中客户端自己缓存的最近一次真实目录（新版本首次探测时目录来自上一版本的缓存，迁移屏判断以此为准，
+  报告 `models_catalog` 记录来源）、WebSocket 升级回 426（客户端立即回退 HTTP）、`POST …/responses` 回 400、
+  其余 404。报告只记录请求的主机、方法、路径与头部名称，不记录任何头部取值。
+* 验收参数：`--test-mutation untrust:<目录>`／`unack_migration:<模型>` 只改覆盖层里的 config.toml 副本，
+  `--only-scenario` 只探测指定场景；带这两类参数的报告一律不能作为放行依据。
 3. 本机：候选提交链（A／C／D 三段，见 `driver/local/`）→ `git bundle` 推到 `$BUNDLE`。
 4. 采集主机：`setsid -f bash driver/vc4-all.sh > $RUNROOT/vc4-all.out 2>&1 < /dev/null`；本机同时跑
    `driver/local/local-gate.sh` 与 `local-full-regression.sh`，产物由 `local-upload.sh` 上传到 `$RUNROOT/`。

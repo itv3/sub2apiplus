@@ -5,6 +5,9 @@ set -Eeuo pipefail; umask 077
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
 # shellcheck disable=SC1091
 source "$RUNROOT/stage1.env"
+# R19：客户端启动探测必须已通过且属于本轮预检 Campaign，否则不进入认证与导入。
+: "${PROBE:?stage1.env 缺少客户端启动探测坐标（先跑 stage1-finish.sh）}"
+python3 -B "$DRV/client_launch_probe.py" verify --output-dir "$PROBE" --campaign-dir "$PRE" | cut -c1-200
 [ -f "$POLICY_COMPAT_RECEIPT" ] || python3 -m tools.official_client_capture.codex_upgrade_policy_certification compatibility --previous-policy "${PREVIOUS_POLICY:?缺少前序策略文件}" --output "$POLICY_COMPAT_RECEIPT" | cut -c1-160
 [ -f "$POLICY_ACTIVATION" ] || python3 -m tools.official_client_capture.codex_upgrade_policy_certification activation --deployment-receipt "$DEPLOY" --compatibility-receipt "$POLICY_COMPAT_RECEIPT" --output "$POLICY_ACTIVATION" | cut -c1-160
 [ -f "$PRE_A3_CERTIFICATION" ] || python3 -m tools.official_client_capture.codex_upgrade_pre_a3_certification run --staging-root "$D/staging/pre-a3-certification-$STAMP" --deployment-receipt "$DEPLOY" --policy-activation "$POLICY_ACTIVATION" --output "$PRE_A3_CERTIFICATION" | cut -c1-300
