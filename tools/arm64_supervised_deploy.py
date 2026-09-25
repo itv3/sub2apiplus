@@ -1030,6 +1030,31 @@ def egress_resolve_probes(policy: dict[str, Any]) -> dict[str, str]:
     return resolved
 
 
+# 探针单次请求的建连与总时长上限，以及任一来源失败后的重探间隔。跨洋链路丢包时个别来源会偶发超时，
+# 有效期内最近一次成功仍能证明出口；失败来源尽快重探补齐，不等常规刷新周期。
+EGRESS_PROBE_CONNECT_SECONDS = 3
+EGRESS_PROBE_MAX_SECONDS = 5
+EGRESS_PROBE_RETRY_SECONDS = 3
+
+
+def egress_effective_observations(policy: dict[str, Any], latest: list[dict[str, Any]],
+                                  passes: dict[str, dict[str, Any]], *, now_epoch: float) -> list[dict[str, Any]]:
+    """逐来源选取用于准入的观测：有效期内最近一次成功优先，否则取最近一次真实结果。
+
+    一轮中个别来源因丢包超时，不应让有效期内的成功观测失效；所有条目都是真实探针结果，不生成替代记录。
+    最近一次成功若地址冲突，照样作为该来源的观测参与判定，冲突不会被更早的成功结果掩盖。
+    """
+
+    chosen = []
+    for item in latest:
+        best = passes.get(item["url"])
+        if best is not None and 0 <= now_epoch - best["observed_at_epoch"] <= policy["probe_max_age_seconds"]:
+            chosen.append(best)
+        else:
+            chosen.append(item)
+    return chosen
+
+
 def egress_probe_service(policy: dict[str, Any], name: str, resolved: dict[str, str]) -> list[dict[str, Any]]:
     """从每个容器的真实 curl 路径独立观测；无代理、无重定向、不发送官方模型请求。"""
 
@@ -1041,8 +1066,9 @@ def egress_probe_service(policy: dict[str, Any], name: str, resolved: dict[str, 
             return observation
         try:
             raw = egress_command(["docker", "exec", name, "/usr/bin/curl", "--noproxy", "*", "--proto", "=https",
-                                  "--tlsv1.2", "--silent", "--show-error", "--fail", "--connect-timeout", "2",
-                                  "--max-time", "3", "--max-filesize", "1024", "--resolve", f"{urlsplit(url).hostname}:443:{address}", url], timeout=4)
+                                  "--tlsv1.2", "--silent", "--show-error", "--fail", "--connect-timeout", str(EGRESS_PROBE_CONNECT_SECONDS),
+                                  "--max-time", str(EGRESS_PROBE_MAX_SECONDS), "--max-filesize", "1024",
+                                  "--resolve", f"{urlsplit(url).hostname}:443:{address}", url], timeout=EGRESS_PROBE_MAX_SECONDS + 1)
             ip = str(ipaddress.IPv4Address(raw.strip()))
             observation.update({"status": "passed", "ip_address": ip, "response_sha256": sha256_bytes(raw.encode("ascii"))})
         except (ValueError, DeploymentError):
@@ -1109,6 +1135,7 @@ class EgressGuard:
         self.inventory: dict[str, Any] = {"services": {}, "bypass_ifindices": []}
         self.probes = egress_resolve_probes(self.policy) if role == "origin" else {}
         self.observations: dict[str, Any] = {}
+        self.passes: dict[str, dict[str, Any]] = {}
         self.pending: dict[str, Any] = {}
         self.next_probe: dict[str, float] = {}
         self.blocked_since: dict[str, float] = {}
@@ -1222,6 +1249,7 @@ class EgressGuard:
             if (not shared or not service["valid"]
                     or egress_service_identity(old) != egress_service_identity(service)):
                 self.observations.pop(name, None)
+                self.passes.pop(name, None)
                 self.next_probe[name] = 0
                 # 旧探针即使随后返回，也不能为新容器或附加网卡签发准入。
                 pending = self.pending.pop(name, None)
@@ -1233,11 +1261,22 @@ class EgressGuard:
                 self.pending.pop(name)
                 if pending[0] == identity:
                     try:
-                        self.observations[name] = pending[1].result()
+                        results = pending[1].result()
                     except Exception:
+                        results = None
+                    if results is None:
                         self.observations.pop(name, None)
-                    self.next_probe[name] = now + self.policy["probe_refresh_seconds"]
-            observations = self.observations.get(name, [])
+                        self.passes.pop(name, None)
+                    else:
+                        self.observations[name] = results
+                        self.passes.setdefault(name, {}).update(
+                            {item["url"]: item for item in results if item["status"] == "passed"})
+                    # 任一来源失败即尽快重探；全部成功才按常规周期刷新。
+                    complete = results is not None and all(item["status"] == "passed" for item in results)
+                    self.next_probe[name] = now + (self.policy["probe_refresh_seconds"] if complete
+                                                   else min(EGRESS_PROBE_RETRY_SECONDS, self.policy["probe_refresh_seconds"]))
+            observations = egress_effective_observations(self.policy, self.observations.get(name, []),
+                                                         self.passes.get(name, {}), now_epoch=time.time())
             compliant = shared and service["valid"] and self.contract.egress_observations_compliant(self.policy, observations, now_epoch=time.time())
             states[name] = "compliant" if compliant else ("probing" if shared and service["valid"] else "blocked")
             if compliant:

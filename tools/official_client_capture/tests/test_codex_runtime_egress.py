@@ -85,6 +85,7 @@ class EgressGuardTests(unittest.TestCase):
                    "bindings": [{"ifindex": 2, "host_ifindex": index + 10, "source_ipv4": f"172.31.1.{index}"}]}
             for index, name in enumerate(guard.policy["services"], 1)}, "bypass_ifindices": [100]}
         guard.observations = {name: observations(guard.policy) for name in guard.policy["services"]}
+        guard.passes = {}
         guard.pending, guard.blocked_since, guard.last_compliant = {}, {}, {}
         guard.next_probe = {name: time.time() + 60 for name in guard.policy["services"]}
         guard.lease_states = {name: "compliant" for name in guard.policy["services"]}
@@ -237,6 +238,30 @@ class EgressGuardTests(unittest.TestCase):
         self.guard.maps["sub2api_egress.slice"].lease.assert_not_called()
         self.assertFalse(self.guard.status_path.exists())
 
+    def test_probe_round_with_timeouts_keeps_admission_and_retries_quickly(self):
+        # 跨洋丢包使一轮中两个来源超时：有效期内最近一次成功仍证明出口，准入不变，失败来源 3 秒后重探。
+        policy = self.guard.policy
+        self.guard.passes["capture-cli"] = {item["url"]: item for item in observations(policy)}
+        results = observations(policy)
+        for item in results[1:]:
+            item.update(status="failed", ip_address=None, response_sha256=None)
+        future = Future()
+        future.set_result(results)
+        identity = deploy.egress_service_identity(self.guard.inventory["services"]["capture-cli"])
+        self.guard.pending["capture-cli"] = (identity, future)
+        before = time.time()
+        status = self.guard.step()
+        self.assertEqual(status["services"]["capture-cli"]["admission_state"], "ready")
+        self.assertEqual([item["status"] for item in status["services"]["capture-cli"]["observations"]], ["passed"] * 3)
+        self.assertLessEqual(self.guard.next_probe["capture-cli"], before + deploy.EGRESS_PROBE_RETRY_SECONDS + 1)
+        # 成功观测超过有效期后，只剩最近一次真实结果（两个失败），不再满足法定数。
+        for item in self.guard.passes["capture-cli"].values():
+            if item is not results[0]:
+                item["observed_at_epoch"] -= policy["probe_max_age_seconds"] + 1
+        status = self.guard.step()
+        self.assertEqual(status["services"]["capture-cli"]["admission_state"], "probing")
+        self.assertEqual(status["services"]["sub2apiplus"]["admission_state"], "ready")
+
     def test_other_protected_container_rebuild_keeps_dependent_lease_and_probes(self):
         # 真实拓扑中 capture-cli 依赖 sub2apiplus:8080。sub2apiplus 受控重建期间，capture-cli 只暂缓这一项
         # 依赖放行（nft 集合随之收缩），内核租期不撤销、探针不清空，维护入口要求的"另一容器持续合规"才能成立。
@@ -256,6 +281,29 @@ class EgressGuardTests(unittest.TestCase):
         self.assertEqual([call.args for call in maps.revoke.call_args_list], [(1, 2, "172.31.1.1")])
         self.assertEqual(len(status["services"]["capture-cli"]["observations"]), len(self.guard.policy["probe_urls"]))
         arm.validate_egress_status(self.guard.policy, status, now_epoch=time.time(), _transitioning_service="sub2apiplus")
+
+
+class EgressEffectiveObservationTests(unittest.TestCase):
+    def test_recent_pass_replaces_timeout_but_never_masks_conflict(self):
+        policy, now = policy_fixture(), time.time()
+        older = {item["url"]: item for item in observations(policy)}
+        for item in older.values():
+            item["observed_at_epoch"] = now - 10
+        latest = observations(policy)
+        latest[0].update(status="failed", ip_address=None, response_sha256=None)
+        chosen = deploy.egress_effective_observations(policy, latest, older, now_epoch=now)
+        self.assertIs(chosen[0], older[policy["probe_urls"][0]])
+        self.assertTrue(arm.egress_observations_compliant(policy, chosen, now_epoch=now))
+        # 最近一次成功出现地址冲突：以它为准，更早的正确结果不能掩盖冲突。
+        conflict = dict(latest[1], ip_address="8.8.8.8")
+        chosen = deploy.egress_effective_observations(policy, [latest[0], conflict, latest[2]],
+                                                      {**older, conflict["url"]: conflict}, now_epoch=now)
+        self.assertEqual(chosen[1]["ip_address"], "8.8.8.8")
+        self.assertFalse(arm.egress_observations_compliant(policy, chosen, now_epoch=now))
+        # 过期的成功观测不再采用，取最近一次真实结果；不生成替代记录。
+        stale = {url: dict(item, observed_at_epoch=now - policy["probe_max_age_seconds"] - 1) for url, item in older.items()}
+        chosen = deploy.egress_effective_observations(policy, latest, stale, now_epoch=now)
+        self.assertIs(chosen[0], latest[0])
 
 
 class EgressInventoryTests(unittest.TestCase):

@@ -806,7 +806,7 @@ for line in sys.stdin:
             with mock.patch.object(deploy, "egress_command", side_effect=lambda argv, role=role, **kw: self.inside(role, *argv, input_text=kw.get("input_text"))):
                 guard.manifest = {"firewall_sha256": deploy.egress_firewall_identity(role)}
             guard.inventory = {"services": {}, "bypass_ifindices": []}
-            guard.observations, guard.pending, guard.next_probe = {}, {}, {}
+            guard.observations, guard.pending, guard.next_probe, guard.passes = {}, {}, {}, {}
             guard.blocked_since, guard.last_compliant, guard.lease_states = {}, {}, {}
             guard.probes = {url: "84.1.1.1" for url in guard.policy["probe_urls"]}
             guard.pool, guard.resolver_pool = ThreadPoolExecutor(max_workers=2), ThreadPoolExecutor(max_workers=1)
