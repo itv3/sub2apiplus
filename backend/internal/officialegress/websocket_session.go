@@ -211,6 +211,9 @@ func validateWebSocketFrameIdentity(base, current CodexIdentityFacts) error {
 		{"conversation", base.ConversationID, current.ConversationID},
 		{"thread", base.ThreadID, current.ThreadID},
 		{"window", base.WindowID, current.WindowID},
+		// prompt cache 亲和键决定 session-id 头（画像声明该来源时）与请求体
+		// prompt_cache_key，同一连接内的帧不得改写。
+		{"prompt-cache-key", base.PromptCacheKey, current.PromptCacheKey},
 	}
 	for _, field := range stable {
 		if field.base != field.now {

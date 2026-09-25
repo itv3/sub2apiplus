@@ -411,6 +411,19 @@ func buildOfficialCodexIdentityFacts(
 	); err != nil {
 		return officialegress.CodexIdentityFacts{}, err
 	}
+	// prompt cache 亲和键只对 Responses 端点有意义，且只取本次调用已登记的派生值：
+	// 根会话等于 session_id，guardian 子代理为 guardian:<parent>，画像声明
+	// prompt_cache_key 来源时临时 fork 为源会话键。compiler 只在画像声明该来源的端点
+	// 上消费它，旧画像仍按 SessionID 推导。
+	if officialCodexEndpointUsesResponsesSession(endpointID) {
+		facts.PromptCacheKey, err = officialCodexIdentityValue(
+			registeredField(OfficialEgressFieldPromptCacheKey),
+			officialegress.IdentitySourceInvocation, officialegress.IdentityLifecycleSession,
+		)
+		if err != nil {
+			return officialegress.CodexIdentityFacts{}, err
+		}
+	}
 	compressionEligible := attemptConditions.CompressionEligible || runtimeState.RequestCompressionEnabled
 	if ingress, captured := officialCodexIngressRuntimeSnapshotFromContext(request.Context()); captured {
 		// body 解压会删除 Content-Encoding；只有解压前已冻结的官方客户端
@@ -467,9 +480,7 @@ func completeOfficialCodexGeneratedIdentityFacts(
 	if identitySeed == "" {
 		return errors.New("Codex 身份事实缺少 invocation seed")
 	}
-	needsResponsesSession := endpointID == officialCodexEndpointResponsesHTTP ||
-		endpointID == officialCodexEndpointResponsesCompact ||
-		endpointID == officialCodexEndpointResponsesWS
+	needsResponsesSession := officialCodexEndpointUsesResponsesSession(endpointID)
 	needsTurnMetadata := needsResponsesSession || endpointID == officialCodexEndpointAlphaSearch
 	setGenerated := func(target *officialegress.CodexIdentityValue, suffix string, lifecycle officialegress.IdentityFactLifecycle) error {
 		if target.Value != "" {
@@ -543,6 +554,14 @@ func completeOfficialCodexGeneratedIdentityFacts(
 		}
 	}
 	return nil
+}
+
+// officialCodexEndpointUsesResponsesSession 判断端点是否携带 Responses 会话身份
+// （session/thread/window/turn 与 prompt cache 亲和键）。
+func officialCodexEndpointUsesResponsesSession(endpointID string) bool {
+	return endpointID == officialCodexEndpointResponsesHTTP ||
+		endpointID == officialCodexEndpointResponsesCompact ||
+		endpointID == officialCodexEndpointResponsesWS
 }
 
 func officialCodexIdentityValue(

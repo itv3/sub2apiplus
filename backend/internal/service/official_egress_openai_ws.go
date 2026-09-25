@@ -227,7 +227,10 @@ func resolveExplicitOfficialOpenAIWSIdentity(
 		)
 	}
 
-	if strings.TrimSpace(c.GetHeader("session-id")) != identity.sessionID ||
+	forkAllowed := officialOpenAIExplicitForkAllowed(c)
+	if !officialOpenAIIngressSessionHeaderMatches(
+		strings.TrimSpace(c.GetHeader("session-id")), identity.sessionID, identity.promptCacheKey, forkAllowed,
+	) ||
 		strings.TrimSpace(c.GetHeader("thread-id")) != identity.threadID ||
 		strings.TrimSpace(c.GetHeader("x-codex-window-id")) != identity.windowID ||
 		strings.TrimSpace(c.GetHeader(openAIWSTurnMetadataHeader)) != identity.turnMetadata {
@@ -256,9 +259,10 @@ func resolveExplicitOfficialOpenAIWSIdentity(
 		metadata,
 		turnMetadata,
 		officialOpenAIIngressIdentityValues{
-			sessionID:      identity.sessionID,
-			threadID:       identity.threadID,
-			promptCacheKey: identity.promptCacheKey,
+			sessionID:                 identity.sessionID,
+			threadID:                  identity.threadID,
+			promptCacheKey:            identity.promptCacheKey,
+			forkPromptCacheKeyAllowed: forkAllowed,
 		},
 		false,
 	); err != nil {

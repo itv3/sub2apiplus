@@ -907,8 +907,56 @@ func codexHeaderValue(
 		}
 	case profilecontract.SourceModelManifest:
 		return "true", false, nil
+	case profilecontract.SourcePromptCacheKey:
+		switch name {
+		case "session-id", "x-session-id":
+			return codexResponsesSessionHeaderValue(facts), false, nil
+		}
 	}
 	return "", false, errors.New("结构化事实未覆盖 ProfileSpec Header source")
+}
+
+// codexResponsesSessionHeaderValue 是 session-id 头在 prompt_cache_key 来源下的取值：
+// 根会话取 prompt cache 亲和键（通常等于 SessionID，临时 fork 时为源会话键），
+// 子代理与内部会话（x-openai-subagent 存在）仍取本会话真实 SessionID，
+// 不能取带 guardian: 等前缀的 prompt cache 键。
+func codexResponsesSessionHeaderValue(facts CodexIdentityFacts) string {
+	if facts.Subagent.present() {
+		return facts.SessionID.Value
+	}
+	value, _ := codexPromptCacheKeyValue(facts, true)
+	return value
+}
+
+// codexPromptCacheKeyValue 返回 compiler 独占的 prompt_cache_key 取值。
+//
+// useFact 只在端点画像声明了 prompt_cache_key 来源时为 true：此时以 service 边界已
+// 验证的 PromptCacheKey 事实为准（支持临时 fork 的源会话键）；否则保持旧逻辑，
+// 按 SessionID 推导（guardian 子代理为 guardian:<parent>），旧画像出站字节不变。
+func codexPromptCacheKeyValue(facts CodexIdentityFacts, useFact bool) (string, bool) {
+	if useFact && facts.PromptCacheKey.present() {
+		return facts.PromptCacheKey.Value, true
+	}
+	if !facts.SessionID.present() {
+		return "", false
+	}
+	if facts.Subagent.Value == "guardian" && facts.ParentThreadID.present() {
+		return "guardian:" + facts.ParentThreadID.Value, true
+	}
+	return facts.SessionID.Value, true
+}
+
+// endpointDeclaresValueSource 判断端点画像是否有 Header 槽位使用指定取值来源。
+func endpointDeclaresValueSource(
+	endpoint profilecontract.ExecutableEndpointProfile,
+	source profilecontract.ValueSource,
+) bool {
+	for _, slot := range endpoint.Headers {
+		if slot.Source == source {
+			return true
+		}
+	}
+	return false
 }
 
 func endpointHasHeader(endpoint profilecontract.ExecutableEndpointProfile, want string) bool {
@@ -1035,7 +1083,7 @@ func injectCompilerOwnedBodyFields(
 	if endpoint.ID != "oauth_refresh" {
 		if endpoint.ID == "responses_http" || endpoint.ID == "responses_compact" ||
 			endpoint.ID == "responses_ws" {
-			return injectCodexResponsesOwnedBodyFields(endpoint.ID, document, identityFacts)
+			return injectCodexResponsesOwnedBodyFields(endpoint, document, identityFacts)
 		}
 		return nil
 	}
@@ -1054,25 +1102,25 @@ func injectCompilerOwnedBodyFields(
 }
 
 func injectCodexResponsesOwnedBodyFields(
-	endpointID string,
+	endpoint profilecontract.ExecutableEndpointProfile,
 	document *orderedJSONDocument,
 	facts CodexIdentityFacts,
 ) error {
 	if _, present := document.value("prompt_cache_key"); present {
 		return errors.New("Responses 语义 Body 禁止携带 compiler-owned prompt_cache_key")
 	}
-	if facts.SessionID.present() {
-		promptCacheValue := facts.SessionID.Value
-		if facts.Subagent.Value == "guardian" && facts.ParentThreadID.present() {
-			promptCacheValue = "guardian:" + facts.ParentThreadID.Value
-		}
+	// “先头后体”：session-id 头（prompt_cache_key 来源）与请求体 prompt_cache_key
+	// 共用同一取值函数，保证两处一致。
+	if promptCacheValue, ok := codexPromptCacheKeyValue(
+		facts, endpointDeclaresValueSource(endpoint, profilecontract.SourcePromptCacheKey),
+	); ok {
 		promptCacheKey, err := json.Marshal(promptCacheValue)
 		if err != nil {
 			return err
 		}
 		document.set("prompt_cache_key", promptCacheKey)
 	}
-	if endpointID == "responses_compact" {
+	if endpoint.ID == "responses_compact" {
 		return nil
 	}
 	if _, present := document.value("client_metadata"); present {

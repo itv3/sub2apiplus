@@ -194,6 +194,13 @@ type CodexIdentityFacts struct {
 	ManagedResidency           CodexIdentityValue
 	ManagedConfigurationDigest string
 	Conditions                 CodexRequestConditions
+	// PromptCacheKey 是本次 Responses 请求的 prompt cache 亲和键（请求体 prompt_cache_key
+	// 的权威取值）：根会话通常等于 SessionID，临时 fork 时为源会话键，guardian 子代理为
+	// guardian:<parent>。只有画像声明了 prompt_cache_key 来源的端点才消费它（session-id
+	// 头与请求体注入），其余端点保持按 SessionID 推导的旧逻辑。
+	//
+	// omitzero：未登记该事实的调用（非 Responses 端点等）序列化形态与旧结构逐字节相同。
+	PromptCacheKey CodexIdentityValue `json:",omitzero"`
 }
 
 func (f CodexIdentityFacts) Validate() error {
@@ -202,7 +209,7 @@ func (f CodexIdentityFacts) Validate() error {
 		f.ProcessSurface, f.ProcessPhase, f.TerminalToken, f.InstallationID, f.SessionID,
 		f.ConversationID, f.ThreadID, f.WindowID, f.ClientRequestID,
 		f.TurnID, f.TurnMetadata, f.ParentThreadID, f.Subagent,
-		f.ManagedResidency,
+		f.ManagedResidency, f.PromptCacheKey,
 	}
 	for _, value := range values {
 		if err := value.validate(); err != nil {
@@ -260,12 +267,15 @@ func (f CodexIdentityFacts) invocationDigest() string {
 		ManagedResidency           CodexIdentityValue
 		ManagedConfigurationDigest string
 		FedRAMPAccount             bool
+		// prompt cache 亲和键与会话同生命周期，跨 attempt 必须稳定；omitzero 保证
+		// 未登记该事实时 invocation 摘要与旧结构相同。
+		PromptCacheKey CodexIdentityValue `json:",omitzero"`
 	}{
 		f.AccountIdentityProjection, f.ChatGPTAccountID, f.WorkspaceID,
 		f.ProcessSurface, f.ProcessPhase, f.TerminalToken, f.UserAgentSuffixEnabled,
 		f.InstallationID, f.SessionID,
 		f.ConversationID, f.ThreadID, f.WindowID, f.ManagedResidency,
-		f.ManagedConfigurationDigest, f.Conditions.FedRAMPAccount,
+		f.ManagedConfigurationDigest, f.Conditions.FedRAMPAccount, f.PromptCacheKey,
 	})
 	if err != nil {
 		return ""
