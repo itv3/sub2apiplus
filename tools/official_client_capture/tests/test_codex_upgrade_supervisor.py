@@ -1109,6 +1109,166 @@ class SupervisorTests(unittest.TestCase):
                     [(prior_state, prior_manifest, prior_dir)],
                 )
 
+    def test_failed_official_timeout_cleanup_allows_normal_v2_recovery_preview(self) -> None:
+        """动作执行截止到期、子进程在清理宽限内自行封口时，同样以普通 v2 预览承接。
+
+        宽限耗尽被强杀（cleanup-window-expired）或诊断不是截止清理时仍失败关闭。
+        """
+
+        def build(root: Path, *, event_reason: str, failure_class: str) -> tuple[
+            dict[str, object], dict[str, object], Path, dict[str, object]
+        ]:
+            campaign_dir = root / "campaign"
+            campaign_dir.mkdir(mode=0o700)
+            prior_dir = root / "run-prior"
+            prior_dir.mkdir(mode=0o700)
+            campaign_id = "campaign-official-timeout"
+            owner_nonce = "8" * 64
+            checkpoint = {
+                "path": "control/vc/vc-0-checkpoint.json",
+                "sha256": "3" * 64,
+                "phase": "VC-0",
+                "checkpoint_sha256": "4" * 64,
+            }
+            prefix = ["/usr/bin/python3", "/managed/codex_upgrade.py"]
+            prior_manifest: dict[str, object] = {
+                "schema_version": supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA,
+                "campaign_id": campaign_id,
+                "campaign_plan_sha256": "1" * 64,
+                "batch_id": "vc-1-0001",
+                "batch_sequence": 1,
+                "batch_sha256": "5" * 64,
+                "phase": "VC-1",
+                "predecessor_checkpoint": checkpoint,
+                "original_deadline_at_utc": "2099-09-14T12:00:00Z",
+                "no_op": False,
+                "actions": [
+                    {
+                        "action_id": "capture-official",
+                        "operation": "VC-1:capture-official",
+                        "timeout_seconds": 3600.0,
+                        "command": [
+                            *prefix,
+                            "capture-official",
+                            "run",
+                            "--campaign-dir",
+                            str(campaign_dir),
+                            "--acknowledge-live-requests",
+                        ],
+                        "item_ids": ["passed-job", "pending-job"],
+                    }
+                ],
+                "execute_items": ["passed-job", "pending-job"],
+                "reuse_items": [],
+            }
+            prior_state: dict[str, object] = {
+                "state": "failed",
+                "campaign_id": campaign_id,
+                "phase": "VC-1",
+                "owner_pid": os.getpid(),
+                "owner_nonce": owner_nonce,
+                "terminal_at_utc": "2026-09-25T06:07:17.000Z",
+            }
+            self._write_json(prior_dir / "state.json", prior_state)
+            stop: dict[str, object] = {
+                "schema_version": supervisor.STOP_SCHEMA,
+                "campaign_id": campaign_id,
+                "detected_at_epoch": 1005.0,
+                "detected_at_utc": "2026-09-25T06:07:17.000Z",
+                "event_type": "failed",
+                "owner_nonce": owner_nonce,
+                "owner_pid": os.getpid(),
+                "phase": "VC-1",
+                "reason": "SupervisorTimeout",
+            }
+            stop["receipt_sha256"] = supervisor._sha256(supervisor._canonical(stop))
+            self._write_json(prior_dir / "stop-receipt.json", stop)
+            supervisor._write_action_diagnostic(
+                supervisor._action_diagnostic_path(
+                    prior_dir, "capture-official", create_directory=True
+                ),
+                campaign_id=campaign_id,
+                phase="VC-1",
+                action_id="capture-official",
+                owner_pid=os.getpid(),
+                owner_nonce=owner_nonce,
+                failure_kind="handled-error",
+                failure_class=failure_class,
+                error_type="CampaignCleanupRequested",
+                message="父监督器数据面截止已到，正在原始 deadline 内执行 attempt 清理。",
+            )
+            # 最小合法事件链：只含父动作的失败事件，序号、自摘要与链摘要成立。
+            event: dict[str, object] = {
+                "sequence": 1,
+                "event_type": "action-failed",
+                "operation": "VC-1:capture-official",
+                "reason": event_reason,
+                "previous_event_sha256": None,
+            }
+            event["event_sha256"] = supervisor._sha256(supervisor._canonical(event))
+            (prior_dir / "events.ndjson").write_text(
+                json.dumps(event, ensure_ascii=False) + "\n", encoding="utf-8"
+            )
+            (prior_dir / "events.ndjson").chmod(0o600)
+            successor: dict[str, object] = {
+                "schema_version": supervisor.CAMPAIGN_RUN_BATCHED_SCHEMA,
+                "campaign_id": campaign_id,
+                "campaign_plan_sha256": "1" * 64,
+                "batch_id": "vc-1-0002",
+                "batch_sequence": 2,
+                "batch_sha256": "6" * 64,
+                "phase": "VC-1",
+                "predecessor_checkpoint": checkpoint,
+                "original_deadline_at_utc": "2099-09-14T12:00:00Z",
+                "no_op": False,
+                "actions": [
+                    {
+                        "action_id": "preview-official-recovery",
+                        "operation": "VC-1:official-recovery",
+                        "timeout_seconds": 3600.0,
+                        "command": [
+                            *prefix,
+                            "resume",
+                            "--campaign-dir",
+                            str(campaign_dir),
+                            "--rerun-failed",
+                            "--preview-recovery",
+                        ],
+                        "item_ids": ["pending-job"],
+                    }
+                ],
+                "execute_items": ["pending-job"],
+                "reuse_items": ["passed-job"],
+            }
+            return prior_state, prior_manifest, prior_dir, successor
+
+        with tempfile.TemporaryDirectory() as directory:
+            prior_state, prior_manifest, prior_dir, successor = build(
+                Path(directory).resolve(),
+                event_reason="cleanup-requested-timeout",
+                failure_class="deadline-expired",
+            )
+            ordered = supervisor._validate_batched_campaign_history(
+                successor, [(prior_state, prior_manifest, prior_dir)]
+            )
+            self.assertEqual([item[1]["batch_sequence"] for item in ordered], [1])
+
+        for event_reason, failure_class in (
+            ("cleanup-window-expired", "deadline-expired"),
+            ("cleanup-requested-timeout", "execution-failure"),
+        ):
+            with self.subTest(event_reason=event_reason, failure_class=failure_class):
+                with tempfile.TemporaryDirectory() as directory:
+                    prior_state, prior_manifest, prior_dir, successor = build(
+                        Path(directory).resolve(),
+                        event_reason=event_reason,
+                        failure_class=failure_class,
+                    )
+                    with self.assertRaisesRegex(SupervisorError, "父动作诊断漂移|恢复后继"):
+                        supervisor._validate_batched_campaign_history(
+                            successor, [(prior_state, prior_manifest, prior_dir)]
+                        )
+
     def test_environment_recovery_only_redispatches_exact_prior_batch(self) -> None:
         """reservation 前环境失败须有对账许可，且后继只能逐字重派原批次。"""
 

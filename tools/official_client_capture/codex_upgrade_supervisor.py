@@ -7203,9 +7203,14 @@ def _validate_batched_official_recovery_preview_successor(
         stop = read_stop_receipt(prior_dir)
     except SupervisorError as error:
         raise SupervisorError(f"VC-1 普通恢复预览的父 stop receipt 漂移：{error}") from error
+    # 两种父失败都产生“完整失败 attempt”：capture-official 以非零状态退出；或动作执行截止到期，
+    # 父监督器发出清理信号后 capture-official 在清理宽限内自行封口 attempt 并退出（stop reason
+    # 为 SupervisorTimeout）。宽限耗尽被强杀时 attempt 可能未封口，不属于本协议。
+    timeout_cleanup = stop.get("reason") == "SupervisorTimeout"
     if (
         stop.get("event_type") != "failed"
-        or stop.get("reason") != "action-failed:capture-official"
+        or stop.get("reason")
+        not in {"action-failed:capture-official", "SupervisorTimeout"}
         or stop.get("campaign_id") != prior_state.get("campaign_id")
         or stop.get("phase") != "VC-1"
         or stop.get("owner_pid") != owner_pid
@@ -7226,6 +7231,17 @@ def _validate_batched_official_recovery_preview_successor(
         owner_pid=owner_pid,
         owner_nonce=owner_nonce,
     )
+    if timeout_cleanup:
+        if (
+            diagnostic.get("failure_kind") != "handled-error"
+            or diagnostic.get("error_type") != "CampaignCleanupRequested"
+            or diagnostic.get("failure_class") != "deadline-expired"
+            or diagnostic.get("message")
+            != "父监督器数据面截止已到，正在原始 deadline 内执行 attempt 清理。"
+            or not _official_capture_cleanup_completed(prior_dir)
+        ):
+            raise SupervisorError("VC-1 普通恢复预览的父动作诊断漂移。")
+        return True
     if (
         diagnostic.get("failure_kind") != "child-returncode"
         or diagnostic.get("error_type") != "ChildProcessError"
@@ -7234,6 +7250,23 @@ def _validate_batched_official_recovery_preview_successor(
     ):
         raise SupervisorError("VC-1 普通恢复预览的父动作诊断漂移。")
     return True
+
+
+def _official_capture_cleanup_completed(prior_dir: Path) -> bool:
+    """父 run 事件链中 capture-official 恰好一次以“清理宽限内退出”失败。
+
+    ``cleanup-requested-timeout`` 表示执行截止到期后子进程在清理宽限内自行退出（已按原
+    deadline 封口 attempt）；``cleanup-window-expired`` 表示宽限耗尽被强杀，attempt 可能
+    未封口，返回 False 让恢复预览失败关闭，改由 reconciler 判定。
+    """
+
+    failures = [
+        event
+        for event in load_events(prior_dir)
+        if event.get("event_type") == "action-failed"
+        and event.get("operation") == "VC-1:capture-official"
+    ]
+    return len(failures) == 1 and failures[0].get("reason") == "cleanup-requested-timeout"
 
 
 def _validate_batched_environment_redispatch_successor(
