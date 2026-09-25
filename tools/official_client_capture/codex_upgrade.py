@@ -40579,6 +40579,173 @@ def _prior_complete_results(
     raise ConfigurationError("--rerun-failed 找不到同身份失败 attempt。")
 
 
+def official_recovery_reuse_check(
+    campaign_dir: Path,
+    *,
+    source_attempt_id: str,
+    reuse_job_ids: Iterable[str],
+    execute_job_ids: Iterable[str],
+) -> dict[str, Any]:
+    """R17：只读复算 ``resume --rerun-failed`` 对 official 失败 attempt 的复用判定。
+
+    reconcile-attempt 生成非段模式恢复预览后、批准之前调用。按 resume（``_run_capture_attempt``
+    的 official 失败重跑默认路径）同样的顺序调用同一组函数：污染与待封存检查 → 廉价工具影响
+    → 失败源 attempt 选取 → 冻结恢复闭集 → 与预览闭集逐项比对 → 产出侧路径授权与中断
+    transition 校验（仅执行集非空）→ 签名交接或带期望集合的 ``_prior_complete_results``。
+    resume 会拒绝的任何情形在这里原样抛 ConfigurationError，使预览阶段就失败，不再批准
+    resume 执行不了的闭集（0.156.1 预览 02 显示复用 30，零请求预览批次跑了 36 分钟才发现
+    只能复用 3，且失败批次计入根因次数）。
+
+    不取租约、不写文件、不发请求。测试钉住 resume 失败重跑代码块的摘要与调用顺序，resume
+    的判定逻辑变化时测试变红，必须同步本函数。
+    """
+
+    campaign_dir = campaign_dir.resolve(strict=True)
+    manifest = _require_formal_campaign(campaign_dir)
+    _reject_contaminated_campaign(campaign_dir)
+    try:
+        _load_stage_result(campaign_dir, "capture-official")
+    except ConfigurationError as error:
+        if "尚未封存" not in str(error):
+            raise
+    else:
+        raise ConfigurationError("官方证据已经封存，禁止重复抓包。")
+    active_attempts = _active_unsealed_attempts(campaign_dir, "official")
+    if active_attempts:
+        raise ConfigurationError(
+            f"官方存在待封存 attempt，禁止再次 run：{active_attempts}"
+        )
+    planned_jobs = list(_campaign_jobs(campaign_dir, manifest, "official"))
+    identity = dict(manifest["official_identity"])
+    tool_identity = _tool_identity(include_git=False)
+    cheap_impact = _cheap_capture_tool_impact(manifest, planned_jobs, tool_identity)
+    if cheap_impact.get("kind") == "unmapped_production_paths":
+        raise ConfigurationError(
+            "产出侧工具变化缺少逐文件 Job 依赖映射："
+            + "、".join(cheap_impact.get("unmapped_production_paths", []))
+            + "；禁止退化为全量重跑。"
+        )
+    source = _latest_failed_attempt_for_identity(
+        campaign_dir,
+        phase="official",
+        candidate_id=None,
+        identity=identity,
+    )
+    if source is None:
+        raise ConfigurationError(
+            "resume --rerun-failed 没有唯一可验证的失败源 attempt；"
+            "禁止重新计算执行集合或全量重跑。"
+        )
+    source_root, source_attempt = source
+    if source_root.name != str(source_attempt_id):
+        raise ConfigurationError(
+            f"resume 会承接的失败源 attempt 是 {source_root.name}，"
+            f"不是恢复预览的 {source_attempt_id}。"
+        )
+    allow_awaiting_failures = source_attempt.get("status") == "awaiting_receipts"
+    recovery_scope = _phase_evaluation_recovery_scope(
+        campaign_dir,
+        manifest,
+        phase="official",
+        candidate_id=None,
+        attempt_root=source_root,
+        attempt=source_attempt,
+        allow_awaiting_failures=allow_awaiting_failures,
+    )
+    completed_ids, execute_ids = _validate_recovery_scope_plan(
+        campaign_dir,
+        phase="official",
+        candidate_id=None,
+        source_root=source_root,
+        scope=recovery_scope,
+        planned_jobs=planned_jobs,
+        allow_empty=True,
+    )
+    preview_reuse = {str(item) for item in reuse_job_ids}
+    preview_execute = {str(item) for item in execute_job_ids}
+    if preview_reuse != completed_ids or preview_execute != execute_ids:
+        raise ConfigurationError(
+            "恢复预览与源 attempt 冻结闭集不一致："
+            f"预览复用 {sorted(preview_reuse)}、执行 {sorted(preview_execute)}；"
+            f"resume 复用 {sorted(completed_ids)}、执行 {sorted(execute_ids)}"
+        )
+    allowed_paths: set[str] = set()
+    if execute_ids:
+        allowed_paths = _authorize_phase_recovery_production_paths(
+            campaign_dir,
+            manifest,
+            phase="official",
+            candidate_id=None,
+            attempt_root=source_root,
+            attempt=source_attempt,
+            current_tool=tool_identity,
+            recovery_scope=recovery_scope,
+        )
+        interrupted_transition: dict[str, Any] | None = None
+        interrupted_path = _interrupted_recovery_transition_path(source_root)
+        if interrupted_path.is_file() and not interrupted_path.is_symlink():
+            interrupted_transition = _validate_interrupted_recovery_transition(
+                campaign_dir,
+                manifest,
+                source_root=source_root,
+                source_attempt=source_attempt,
+                current_tool=tool_identity,
+            )
+        _phase_recovery_exact_affected_job_ids(
+            allowed_paths,
+            planned_job_ids=(job.job_id for job in planned_jobs),
+            recovery_scope=recovery_scope,
+            explicit_affected_job_ids=(
+                interrupted_transition["affected_job_ids"]
+                if interrupted_transition is not None
+                else None
+            ),
+        )
+    handoff = _load_recovery_execution_handoff(
+        campaign_dir,
+        manifest,
+        source_root=source_root,
+        source_attempt=source_attempt,
+        planned_jobs=planned_jobs,
+        execute_job_ids=execute_ids,
+        reuse_job_ids=completed_ids,
+        recovery_scope=recovery_scope,
+        tool_identity=tool_identity,
+    )
+    if handoff is not None:
+        prior_results = [dict(item) for item in handoff["reused_results"]]
+    else:
+        prior_results = _prior_complete_results(
+            campaign_dir,
+            _capture_attempt_relative("official", None),
+            planned_jobs,
+            phase="official",
+            candidate_id=None,
+            identity=identity,
+            tool_identity=tool_identity,
+            affected_job_ids=(),
+            expected_reuse_job_ids=completed_ids,
+            source_attempt_id=source_root.name,
+            allowed_high_risk_path_changes=allowed_paths,
+            allowed_source_statuses=(
+                ("failed", "awaiting_receipts")
+                if allow_awaiting_failures
+                else ("failed",)
+            ),
+        )
+    reused_ids = {str(item.get("id")) for item in prior_results}
+    if reused_ids != completed_ids:
+        raise ConfigurationError("恢复 transition 的已完成 Job 未被完整只读承接。")
+    return {
+        "status": "consistent",
+        "source_attempt_id": source_root.name,
+        "reuse_job_ids": sorted(reused_ids),
+        "execute_job_ids": sorted(execute_ids),
+        "allowed_production_paths": sorted(allowed_paths),
+        "handoff_used": handoff is not None,
+    }
+
+
 # 承接旧结果时要求逐字相同的探针种类。database 必然随采集增长（usage_logs 等水位表），
 # 由 restoration 的 before_subset 规则单独覆盖，不在此处比较。
 CONTINUITY_PROBE_KINDS = ("service", "containers", "account", "configuration")

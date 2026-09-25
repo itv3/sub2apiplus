@@ -19475,6 +19475,38 @@ class CodexUpgradeTest(unittest.TestCase):
             self.assertEqual(len(result["root_causes"]), 1)
             self.assertEqual(attempt_path.read_bytes(), before)
 
+    def test_reconcile_refuses_approval_when_resume_would_reject_reuse(self) -> None:
+        """R17：恢复预览按 resume 同一复用判定只读复算（真实函数，不用替身）。
+
+        失败 attempt 没有已完成 Job 时 resume --rerun-failed 会拒绝原地 transition：对账记账照常、
+        预览照常落盘，但复算标记 inconsistent、提示不可批准；带批准参数时拒绝批准且不产生批准记录。
+        """
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            attempt_id, _attempt = self._b0_failed_attempt(fixture)
+            result = reconciler.reconcile_attempt(fixture["campaign_dir"], attempt_id)
+            self.assertEqual(result["status"], "recoverable")
+            check = result["resume_reuse_check"]
+            self.assertEqual(check["status"], "inconsistent")
+            self.assertIn("没有已完成 Job", check["reason"])
+            self.assertIn("不可批准", result["next_command"])
+            preview_path = Path(result["recovery_preview_path"])
+            self.assertTrue(preview_path.is_file())
+            with self.assertRaisesRegex(reconciler.ReconcilerError, "拒绝批准：.*没有已完成 Job"):
+                reconciler.reconcile_attempt(
+                    fixture["campaign_dir"],
+                    attempt_id,
+                    approve_recovery_sha256=result["recovery_preview"]["review_sha256"],
+                )
+            self.assertEqual(
+                [path.name for path in preview_path.parent.iterdir() if reconciler.APPROVAL_RE.match(path.name)],
+                [],
+            )
+
     def test_late_reconcile_pauses_but_does_not_relabel_a15_as_deadline(self) -> None:
         """逾期对账只暂停，attempt 根因仍固定在其完成时的 A15。"""
 

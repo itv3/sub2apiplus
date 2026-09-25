@@ -1699,6 +1699,37 @@ def _recovery_preview(
     return preview
 
 
+def _resume_reuse_check(
+    campaign_dir: Path,
+    *,
+    phase: str,
+    recovery_revision: str | None,
+    preview: Mapping[str, Any],
+) -> dict[str, Any]:
+    """R17：批准前按 resume 同一复用判定只读复算恢复预览，返回 consistent／inconsistent／not_applicable。
+
+    resume 会拒绝的情形（ConfigurationError）记为 inconsistent，由调用方拒绝批准。只覆盖非段模式的
+    official 恢复（VC-1）：恢复段逐项携带复用证明、由段合同校验；候选阶段非段模式沿用原有判定；
+    孤儿 attempt 没有 attempt.json，resume 按预览执行集合重跑、不复用。
+    """
+
+    if recovery_revision is not None:
+        return {"status": "not_applicable", "reason": "恢复段预览逐项携带复用证明，由段合同校验"}
+    if phase != "official":
+        return {"status": "not_applicable", "reason": "候选阶段非段模式沿用原有判定（R17 只覆盖 official 恢复）"}
+    if not preview.get("source_attempt_receipt_exists"):
+        return {"status": "not_applicable", "reason": "孤儿 attempt 没有 attempt.json，resume 按预览执行集合重跑、不复用"}
+    try:
+        return codex_upgrade.official_recovery_reuse_check(
+            campaign_dir,
+            source_attempt_id=str(preview["source_attempt_id"]),
+            reuse_job_ids=preview["reuse_job_ids"],
+            execute_job_ids=preview["execute_job_ids"],
+        )
+    except codex_upgrade.ConfigurationError as error:
+        return {"status": "inconsistent", "reason": str(error)}
+
+
 def approve_recovery_preview(
     campaign_dir: Path,
     attempt_id: str,
@@ -2345,7 +2376,22 @@ def reconcile_attempt(
             f"reconcile-attempt --approve-recovery-sha256 {preview['review_sha256']} 后 "
             f"{resume_command} --recovery-preview <preview path>"
         )
+        # R17：批准前按 resume 同一复用判定只读复算。不一致的预览照常落盘留痕（对账记账不受影响），
+        # 但不可批准：不派批次、不计根因次数，按原因修复后重新对账。
+        result["resume_reuse_check"] = _resume_reuse_check(
+            campaign_dir, phase=phase, recovery_revision=recovery_revision, preview=preview
+        )
+        if result["resume_reuse_check"]["status"] == "inconsistent":
+            result["next_command"] = (
+                "恢复预览与 resume 复用判定不一致（见 resume_reuse_check.reason），不可批准；"
+                "按原因修复后重新执行 reconcile-attempt"
+            )
         if approve_recovery_sha256 is not None:
+            if result["resume_reuse_check"]["status"] == "inconsistent":
+                raise ReconcilerError(
+                    "恢复预览与 resume 复用判定不一致，拒绝批准："
+                    + str(result["resume_reuse_check"]["reason"])
+                )
             result["recovery_approval"] = approve_recovery_preview(
                 campaign_dir, attempt_id, approve_sha256=approve_recovery_sha256, recovery_revision=recovery_revision
             )
