@@ -212,6 +212,8 @@ from urllib.parse import urlsplit
 # 2026-09-25（VC-1 恢复复用与预览重派）：历史结果复用的逐文件依赖校验豁免低风险组件（编排器、评估器、
 # 控制面、环境面，只核冻结摘要）；监督器新增“失败的零请求恢复预览以 N+1 逐字重派”后继协议。control 层
 # 变化（wire／evidence／policy 摘要不变）；受管工具树与监督器摘要随之变化；断言预处理器未变。
+# 2026-09-25（classify 证据语义判定）：classify 以已封存官方 attempt 的 evaluation epoch 链判定 evidence
+# semantics（control 层，wire／evidence／policy 摘要不变）；受管工具树随之变化；监督器与断言预处理器未变。
 DEFAULT_SUPERVISOR_DIGEST = (
     "cadf61e0c45433ee39654890bd08878570b5fe5af46c98260eee4bd2e7f41acd"
 )
