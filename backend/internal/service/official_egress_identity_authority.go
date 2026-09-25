@@ -215,6 +215,9 @@ func prepareOfficialCodexSemanticAttempt(
 // 补 Cookie，该时点已经晚于 Executor 签名，terminal Guard 会将这种合法补充
 // 误判为 request_modified_after_finalize。提前固化后，Cookie 的名称、值与顺序
 // 都进入 Compiler 和最终请求摘要，Guard 仍保持 fail-close。
+//
+// Cookie 名单按请求冻结的 release mode 对应画像读取（CookieJar 节缺席时为旧名单）；
+// WS 握手 URL 映射为同站点的 HTTPS URL 查询 jar。
 func materializeOfficialCodexCookieJar(request *http.Request) {
 	if request == nil || request.URL == nil {
 		return
@@ -223,7 +226,14 @@ func materializeOfficialCodexCookieJar(request *http.Request) {
 	if jar == nil {
 		return
 	}
-	for _, cookie := range jar.Cookies(request.URL) {
+	target := officialCodexCookieJarURL(request.URL)
+	var cookies []*http.Cookie
+	if policyJar, ok := jar.(officialCodexPolicyCookieJar); ok {
+		cookies = policyJar.CookiesForPolicy(target, officialCodexCookiePolicyForRequest(request.Context()))
+	} else {
+		cookies = jar.Cookies(target)
+	}
+	for _, cookie := range cookies {
 		if cookie != nil {
 			request.AddCookie(cookie)
 		}

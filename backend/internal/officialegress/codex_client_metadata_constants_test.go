@@ -192,3 +192,59 @@ func TestCompilerOmitsGuardianConditionedServiceTier(t *testing.T) {
 		t.Fatalf("guardian 审阅请求必须省略 service_tier：%s", fields["service_tier"])
 	}
 }
+
+// WS 握手 Cookie（VC-4 第 5 项，编译器侧）：画像为 responses_ws 声明 cookie 槽位并把它
+// 追加到 HeaderMap 插入序后，携带 Cookie 的握手在签名前进入编译产物，H1 线序规则同步
+// 包含 cookie；旧画像没有该槽位，即使 attempt 携带 Cookie 也不会出站。
+func TestCompilerWebSocketHandshakeCookieFollowsProfileSlot(t *testing.T) {
+	base, _ := staticClosurePlanForEndpoint(t, ReleaseModeActive, "responses_ws")
+	compile := func(bundle ReleaseBundle, invocationID string) (CompiledExecution, error) {
+		t.Helper()
+		plan := syntheticPlanForEndpoint(t, bundle, "responses_ws")
+		egressPlan := staticClosureEgressPlan(t, bundle, plan, staticClosureLegalTarget(plan.template), invocationID)
+		authentication, err := NewAttemptAuthentication(AttemptAuthenticationInput{
+			BearerToken: "ws-cookie-token", Cookie: "__oailb=lb; __cf_bm=bm",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		egressPlan.Authentication = authentication
+		egressPlan.IdentityFacts.Conditions.CookiePresent = true
+		egressPlan.Body = NewReplayableRequestBody(nil)
+		return NewCompiler().Compile(context.Background(), bundle, egressPlan, EndpointDynamicInputs{})
+	}
+
+	legacy, err := compile(base, "ws-cookie-legacy")
+	if err != nil {
+		t.Fatalf("旧画像 WS 握手编译失败：%v", err)
+	}
+	if legacy.request.Headers().Get("cookie") != "" {
+		t.Fatal("旧画像的 WS 握手没有 cookie 槽位，不得出站 Cookie")
+	}
+
+	synthetic := syntheticCodexBundle(t, base, func(doc *profilecontract.SnapshotDoc) {
+		syntheticAddHeaderSlot(t, doc, "responses_ws", profilecontract.SnapshotHeaderSlot{
+			Slot: 195, Name: "cookie", WireName: "cookie",
+			Source:    string(profilecontract.SourceSession),
+			Condition: string(profilecontract.ConditionCookiePresent),
+		})
+	})
+	target, err := compile(synthetic, "ws-cookie-target")
+	if err != nil {
+		t.Fatalf("目标画像 WS 握手编译失败：%v", err)
+	}
+	if got := target.request.Headers().Get("cookie"); got != "__oailb=lb; __cf_bm=bm" {
+		t.Fatalf("WS 握手 Cookie 必须在签名前进入编译产物：%q", got)
+	}
+	found := false
+	for _, rule := range target.transport.TLS.H1HeaderOrders {
+		if rule.Mode == "swap_remove" && rule.Path == "/backend-api/codex/responses" {
+			for _, name := range rule.Order {
+				found = found || name == "cookie"
+			}
+		}
+	}
+	if !found {
+		t.Fatal("WS swap_remove 线序规则必须包含画像插入序中的 cookie")
+	}
+}

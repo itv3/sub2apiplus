@@ -173,6 +173,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		if buildErr != nil {
 			return fmt.Errorf("build official egress ws url: %w", buildErr)
 		}
+		ctx = s.bindOfficialCodexWebSocketCookieJar(ctx, account, officialCodexWebSocketCookieMode(s))
 		ctx, buildErr = attachOfficialEgressWebSocketContext(
 			ctx,
 			c,
