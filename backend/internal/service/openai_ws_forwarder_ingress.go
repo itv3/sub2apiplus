@@ -652,6 +652,12 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		officialCodexTurnStateOwnerIsolation(officialCodexWebSocketReleaseMode(s))
 	if turnStateOwnerIsolation {
 		turnState = s.isolateOfficialCodexIngressTurnState(c, account, turnState)
+		if turnState == "" && c.Request != nil {
+			// HTTP 桥接轮次直接读取本连接请求头作为回送值（proxyOpenAIWSHTTPBridgeTurn）；
+			// 被隔离丢弃的跨账号值必须同步从请求头移除，否则仍会经桥接出站。handler 在
+			// 账号 failover 时复用同一 gin 上下文，这里同时清掉上一账号桥接轮次写回的值。
+			c.Request.Header.Del(openAIWSTurnStateHeader)
+		}
 	}
 	stateStore := s.getOpenAIWSStateStore()
 	groupID := getOpenAIGroupIDFromContext(c)
@@ -910,6 +916,11 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				// Follow-up turns on this bridge retain their own upstream state;
 				// publishing it by session hash would leak it to independent bridges.
 				turnState = bridgeTurnState
+				if turnStateOwnerIsolation {
+					// 下一轮会把该值写回本连接请求头；handler 账号 failover 复用同一 gin 上下文时，
+					// 它会被当作客户端回带值读取。记入本连接账号，换号后才能被入口隔离识别并丢弃。
+					s.noteOpenAICodexTurnStateProvenance(c, account)
+				}
 			}
 			responseID := strings.TrimSpace(result.RequestID)
 			if responseID != "" && stateStore != nil {
@@ -1246,6 +1257,11 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			if officialEgressEnabled {
 				if eventTurnState := extractOpenAIWSTurnStateFromUpstreamEvent(upstreamMessage); eventTurnState != "" {
 					turnState = eventTurnState
+					if turnStateOwnerIsolation {
+						// 事件流下发的值随 response.metadata 转发给下游，客户端可能在新连接回带；
+						// 与握手下发同样记入本连接账号，换号后才能被入口隔离识别并丢弃。
+						s.noteOpenAICodexTurnStateProvenance(c, account)
+					}
 				}
 			}
 			if eventType != "" {

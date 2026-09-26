@@ -1104,6 +1104,10 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	if !ok {
 		return errors.New("openai ws passthrough upstream connection does not support frame relay")
 	}
+	// 画像声明 turn-state 按账号 owner 隔离时，事件流下发的值随帧转发给下游，客户端可能在
+	// 新连接回带并被调度到其他账号；与 ctx_pool 入口同一口径记入本连接账号，供入口隔离识别。
+	turnStateOwnerIsolation := officialEgressEnabled &&
+		officialCodexTurnStateOwnerIsolation(officialCodexWebSocketReleaseMode(s))
 	relayUpstreamFrameConn := &openAIWSPassthroughFirstOutputFrameConn{
 		inner: upstreamFrameConn,
 		onUpstreamFrame: func(payload []byte) {
@@ -1112,6 +1116,9 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			}
 			if eventTurnState := extractOpenAIWSTurnStateFromUpstreamEvent(payload); eventTurnState != "" {
 				upstreamTurnState.Store(eventTurnState)
+				if turnStateOwnerIsolation {
+					s.noteOpenAICodexTurnStateProvenance(c, account)
+				}
 			}
 		},
 		activeReadTimeout: s.openAIWSPassthroughIdleTimeout(),
