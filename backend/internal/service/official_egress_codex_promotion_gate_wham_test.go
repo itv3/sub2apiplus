@@ -14,7 +14,8 @@ import (
 // SPEC-EP-019 的晋升后门禁：WHAM backend-client 请求形态。
 //
 // 驱动的是生产 OpenAIQuotaService：管理端完整配额查询 QueryUsage（官方启动窗口：
-// accounts/check 是 backend client 首个请求，随后 usage 与 reset-credits）、周期入口
+// accounts/check 是 backend client 首个请求，其余 usage、rate-limit-reset-credits、settings/user
+// 只按集合比较、不约束先后）、周期入口
 // QueryUsageOnly（FedRAMP 账号）与安全 consume（ResetCredit）。请求经 WHAM 统一出口
 // doCodexQuotaRequest 进入正式 Compiler/Executor，本地 TLS 终端观测真实 wire。
 // 先例 TestCodexWhamUsageLunaReserveReplaysApprovedSemanticsOnTargetRelease 只覆盖
@@ -42,8 +43,10 @@ func codexGateWhamResponse(request codexGateWireRequest) codexGateWireResponse {
 // FedRAMP 时携带 Luna Reserve 头。
 //
 // 检查项与网关观测（真实 wire）：
-//   - wham-get-paths：管理端完整配额查询发出的 WHAM GET 路径全集恰为 accounts/check、usage、
-//     rate-limit-reset-credits，且 accounts/check 是第一个；
+//   - wham-get-paths：管理端完整配额查询发出的 WHAM GET 路径全集（按集合比较）恰为
+//     accounts/check、usage、rate-limit-reset-credits、settings/user 四条，与官方实测一致且
+//     没有额外 WHAM GET；accounts/check 是第一个。settings/user 只在路径全集中出现，批准
+//     判据没有它的线序检查项，这里也不单独断言其线序；
 //   - wham-accounts-check-headers：accounts/check 使用 backend-client 线序，不带 Luna Reserve；
 //   - wham-usage-headers / wham-usage-luna-reserve-value：usage 在 chatgpt-account-id 之后携带
 //     x-openai-codex-luna-reserve: 1（FedRAMP 账号不带）；
@@ -121,7 +124,8 @@ func TestCodexWhamBackendClientReplaysApprovedSemanticsOnTargetRelease(t *testin
 	}
 	require.ElementsMatch(t, []string{
 		"/backend-api/wham/accounts/check", "/backend-api/wham/usage", "/backend-api/wham/rate-limit-reset-credits",
-	}, paths, "完整配额查询的 WHAM GET 路径全集必须与官方一致且无额外 WHAM GET")
+		"/backend-api/wham/settings/user",
+	}, paths, "完整配额查询的 WHAM GET 路径全集必须与官方一致（含 settings/user）且无额外 WHAM GET")
 	require.Equal(t, "/backend-api/wham/accounts/check", whamGets[0].path, "accounts/check 必须是 backend client 首个请求")
 
 	backendClient := []string{"user-agent", "authorization", "chatgpt-account-id", "accept", "cookie", "host"}
