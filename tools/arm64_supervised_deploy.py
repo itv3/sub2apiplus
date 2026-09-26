@@ -246,8 +246,11 @@ from urllib.parse import urlsplit
 # 2026-09-26（0.157.0 VC-5 批次 9）：监督器受控维护的重新准入只采用观测起点晚于维护命令结束的守护状态（修复重启
 # 后读到命令开始前发布的陈旧就绪、提前撤销维护声明，致父监督器判出口异常暂停）。control 层变化；受管工具树与
 # 监督器摘要随之变化；断言预处理器未变；本脚本 egress-guard 逻辑未变，出口守护无需重装。
+# 2026-09-26（0.157.0 VC-5 批次 10 编译拒绝）：reservation 前逐字重派在 b0 下只核评估器 checker／builder 摘要（修复上一
+# 修复改变 compare／accept 读侧闭包后，环境前提失败无法重派的缺口）。control 层变化；受管工具树与监督器摘要随之变化；
+# 断言预处理器与 egress-guard 逻辑未变。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "0fb4e9fd33f08596e3d56203868443872e00543a6d6235d3b96a87f1452db776"
+    "742f88171a93d560803486d85d1bccc9a4aabf4017bf7c06aa8a6949f3b1e685"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "c8020cadd3ee08f67236313a0913dbc3730805b46c3f6b720cdf7ace77f9fec1"
