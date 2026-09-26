@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -239,6 +240,102 @@ func TestH1WireConnPassesWebSocketFramesAfterUpgrade(t *testing.T) {
 		t.Fatalf("Upgrade 后业务帧被改写：实际=%x 期望=%x", gotFrame, frame)
 	}
 	if err := <-writeDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
+// h1WireHoldConn 在第一次 Write 把字节交给对端之后、返回之前挂住，模拟 http.Transport 的 writeLoop
+// 协程刚写完 Upgrade 请求头就被调度走：此时对端已能回 101，调用方可能已经开始写第一帧。
+type h1WireHoldConn struct {
+	net.Conn
+	once      sync.Once
+	delivered chan struct{}
+	release   chan struct{}
+}
+
+func (c *h1WireHoldConn) Write(p []byte) (int, error) {
+	n, err := c.Conn.Write(p)
+	first := false
+	c.once.Do(func() { first = true })
+	if first {
+		close(c.delivered)
+		<-c.release
+	}
+	return n, err
+}
+
+// 回归（ARM64 VC-4 门禁 TestCodexTurnStateRoundTripReplaysApprovedSemanticsOnTargetRelease 约 1/7 超时）：
+// Upgrade 请求头的 Write 尚未返回时，另一协程写入的第一帧不得被当作请求头缓冲，必须等切换为透传后原样送出。
+func TestH1WireConnFirstFrameWaitsForConcurrentUpgradeWrite(t *testing.T) {
+	client, server := net.Pipe()
+	defer func() { _ = client.Close() }()
+	defer func() { _ = server.Close() }()
+	if err := server.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	preserve := map[string]string{
+		"host": "Host", "connection": "Connection", "upgrade": "Upgrade",
+		"sec-websocket-version": "Sec-WebSocket-Version",
+		"sec-websocket-key":     "Sec-WebSocket-Key",
+	}
+	rule := H1HeaderOrderRule{
+		Method: http.MethodGet,
+		Path:   "/backend-api/codex/responses",
+		Order: []string{
+			"host", "connection", "upgrade", "sec-websocket-version",
+			"sec-websocket-key", "authorization",
+		},
+		RejectUnlisted: true,
+	}
+	hold := &h1WireHoldConn{Conn: client, delivered: make(chan struct{}), release: make(chan struct{})}
+	wrapper := newH1WireConnWithMode(hold, []H1HeaderOrderRule{rule}, preserve, true)
+	head := []byte("GET /backend-api/codex/responses HTTP/1.1\r\n" +
+		"Host: chatgpt.com\r\nConnection: keep-alive, Upgrade\r\n" +
+		"Upgrade: websocket\r\nSec-WebSocket-Version: 13\r\n" +
+		"Sec-WebSocket-Key: key==\r\nauthorization: Bearer token\r\n\r\n")
+	frame := []byte{0x81, 0x05, 'h', 'e', 'l', 'l', 'o'}
+
+	headDone := make(chan error, 1)
+	go func() {
+		_, err := wrapper.Write(head)
+		headDone <- err
+	}()
+	reader := bufio.NewReader(server)
+	var wireHead []byte
+	for !bytes.HasSuffix(wireHead, []byte("\r\n\r\n")) {
+		line, err := reader.ReadBytes('\n')
+		if err != nil {
+			t.Fatal(err)
+		}
+		wireHead = append(wireHead, line...)
+	}
+	if !bytes.Contains(wireHead, []byte("Upgrade: websocket\r\n")) {
+		t.Fatalf("WS 握手未按画像写出：\n%s", wireHead)
+	}
+	<-hold.delivered
+
+	frameDone := make(chan error, 1)
+	go func() {
+		_, err := wrapper.Write(frame)
+		frameDone <- err
+	}()
+	select {
+	case err := <-frameDone:
+		t.Fatalf("请求头的 Write 返回前第一帧已写完（err=%v）：帧被当作请求头缓冲，不会送出", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(hold.release)
+	if err := <-headDone; err != nil {
+		t.Fatal(err)
+	}
+	gotFrame := make([]byte, len(frame))
+	if _, err := io.ReadFull(reader, gotFrame); err != nil {
+		t.Fatalf("Upgrade 后第一帧未送出：%v", err)
+	}
+	if !bytes.Equal(gotFrame, frame) {
+		t.Fatalf("Upgrade 后第一帧被改写：实际=%x 期望=%x", gotFrame, frame)
+	}
+	if err := <-frameDone; err != nil {
 		t.Fatal(err)
 	}
 }
