@@ -1,0 +1,192 @@
+{
+  "base_commit": "f9f88bff4202852f07d996724a10c94f4961ea89",
+  "changed_path_count": 30,
+  "current_commit": "551f51c01d27604dedd98ecc4fb0686eb2ec4948",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 4257,
+  "frozen_path_count": 1399,
+  "identity_sha256": "036e885ca199b4c1d4c14e5aee236326e63f46e552a21ed4e4344edd754bef4f",
+  "issued_at_utc": "2026-09-26T06:17:00Z",
+  "mode": "commit",
+  "required_manual_actions": [
+    {
+      "action_kind": "script_constant",
+      "file": "tools/arm64_supervised_deploy.py",
+      "instruction": "用 tools/arm64_supervised_deploy.py 的 tool_digest() 与 file_sha256() 重算 DEFAULT_TOOL_DIGEST、DEFAULT_SUPERVISOR_DIGEST、DEFAULT_ASSERTION_PREPARER_DIGEST 并更新常量；脚本自身随之变化，须在同一收据或后续收据中登记其后继摘要。",
+      "path": "tools/official_client_capture/candidate_test_fact_map_0_157_0.json",
+      "rule_id": "arm64-managed-tool-digests",
+      "verification": [
+        "python3 -m unittest tools.official_client_capture.tests.test_arm64_supervised_deploy"
+      ]
+    }
+  ],
+  "result": "manual_actions_required",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-01570-candidate-r1-integration-20260926-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/compiler_static_url_closure_test.go",
+      "predecessor_sha256s": [
+        "797307dc2adc2125967be63e9e779fe163978b278c51c5f2efe4e21453bde5da"
+      ],
+      "reason": "Codex 0.157.0 候选 VC-4 集成：accounts/check 版本新增 route 与配额尝试预算、候选 trace 事实与 turn-state 隔离补齐、25 条晋升后门禁测试与 lint 修正、随目标画像进入 previous 槽位失效的五条既有用例适配 path=backend/internal/officialegress/compiler_static_url_closure_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-formal-recovery-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "7200468509a3fe4cc1bea8a12238e00f8eb1c64570f4a4ad53c3f3fe0b914494"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/compositioncontract/composition_test.go",
+      "predecessor_sha256s": [
+        "24af76f8b9bdb43df7cf626de7a99fc5ccd271f0b46dcafd9190ba23402a6977"
+      ],
+      "reason": "Codex 0.157.0 候选 VC-4 集成：accounts/check 版本新增 route 与配额尝试预算、候选 trace 事实与 turn-state 隔离补齐、25 条晋升后门禁测试与 lint 修正、随目标画像进入 previous 槽位失效的五条既有用例适配 path=backend/internal/officialegress/compositioncontract/composition_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/historical-source-drift-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "30cb2a900f23a29a666572f99cc08e60d1648c172042016d1ab0ad7c2fcc7775"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/version_route_receipts_test.go",
+      "predecessor_sha256s": [
+        "c8b07694f1dce7d9970b1a7caefd35f33e20b68d186649b177a9d316c538abf5"
+      ],
+      "reason": "Codex 0.157.0 候选 VC-4 集成：accounts/check 版本新增 route 与配额尝试预算、候选 trace 事实与 turn-state 隔离补齐、25 条晋升后门禁测试与 lint 修正、随目标画像进入 previous 槽位失效的五条既有用例适配 path=backend/internal/officialegress/version_route_receipts_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-formal-recovery-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "dc4e166a422c47536fbbb36548627f3e586c11cdd02551e3e8d7bf1c200efeb9"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/official_egress_codex_candidate_trace_acceptance_test.go",
+      "predecessor_sha256s": [
+        "9a155f84634652927c879eac53b0abf6919d515a48653125410daa43e9e323eb"
+      ],
+      "reason": "Codex 0.157.0 候选 VC-4 集成：accounts/check 版本新增 route 与配额尝试预算、候选 trace 事实与 turn-state 隔离补齐、25 条晋升后门禁测试与 lint 修正、随目标画像进入 previous 槽位失效的五条既有用例适配 path=backend/internal/service/official_egress_codex_candidate_trace_acceptance_test.go",
+      "source_receipts": [
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-framework-closure-20260917-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "26619bdc0e1702c4b1c9f32a4f83f4038b89c48f4bad868c31988c74d62dc63c"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_quota_service.go",
+      "predecessor_sha256s": [
+        "0cd0faeebbd60595795d8f696f4a7de1157b55e2c798e3ea3343b79f3f517469"
+      ],
+      "reason": "Codex 0.157.0 候选 VC-4 集成：accounts/check 版本新增 route 与配额尝试预算、候选 trace 事实与 turn-state 隔离补齐、25 条晋升后门禁测试与 lint 修正、随目标画像进入 previous 槽位失效的五条既有用例适配 path=backend/internal/service/openai_quota_service.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-codex-0154-vc5-minimal-fix-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01570-candidate-r1-impl-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "273ea821b1e41851997c9221282834cc614e7b93aa2ea03c82ee9207dab820ea"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_ws_forwarder_ingress.go",
+      "predecessor_sha256s": [
+        "3aa8b4e2237fd47dcef54237c31ff59936ed436203f25408c0d032582b4e218f"
+      ],
+      "reason": "Codex 0.157.0 候选 VC-4 集成：accounts/check 版本新增 route 与配额尝试预算、候选 trace 事实与 turn-state 隔离补齐、25 条晋升后门禁测试与 lint 修正、随目标画像进入 previous 槽位失效的五条既有用例适配 path=backend/internal/service/openai_ws_forwarder_ingress.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/openai-replay-oom-repair-source-transition.json",
+        "docs/egress/maintenance/openai-ws-reconnect-repair-source-transition.json",
+        "docs/egress/maintenance/sub2api-runtime-stability-source-transition.json",
+        "docs/egress/maintenance/upstream-codex-01570-candidate-r1-impl-20260926-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "70e5aaca15b95a9220cdf4dd3ebd7201f20736870bbaeaf0c6afb713c0819973"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_ws_v2_passthrough_adapter.go",
+      "predecessor_sha256s": [
+        "ff4b237f9d372245f31fc31356a24903dfd3415b3aa8f86e8f872cd150c66028"
+      ],
+      "reason": "Codex 0.157.0 候选 VC-4 集成：accounts/check 版本新增 route 与配额尝试预算、候选 trace 事实与 turn-state 隔离补齐、25 条晋升后门禁测试与 lint 修正、随目标画像进入 previous 槽位失效的五条既有用例适配 path=backend/internal/service/openai_ws_v2_passthrough_adapter.go",
+      "source_receipts": [
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.177-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "8e009d7b9a505261f005dc24df92665191496afe0a299d54551c79595a88cb9c"
+    },
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/tests/test_candidate_test_trace.py",
+      "predecessor_sha256s": [
+        "70063de57d186f66338826dfb39d1a1d94acfc35acd3398890dfb26a16ffe6c3"
+      ],
+      "reason": "Codex 0.157.0 候选 VC-4 集成：accounts/check 版本新增 route 与配额尝试预算、候选 trace 事实与 turn-state 隔离补齐、25 条晋升后门禁测试与 lint 修正、随目标画像进入 previous 槽位失效的五条既有用例适配 path=tools/official_client_capture/tests/test_candidate_test_trace.py",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-formal-recovery-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-test-trace-preflight-tool-successor-source-transition.json",
+        "docs/egress/maintenance/upstream-codex-0154-emulation-upgrade-20260911-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-framework-closure-20260917-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-01561-tool-upgrade-20260925-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0157-f6-daemon-version-files-20260926-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "af9006f4362aca560bb0355ab2455b9179c3664a9046d9d35422bdbabe784a2d"
+    }
+  ],
+  "unregistered_path_count": 22,
+  "unregistered_paths": [
+    "backend/internal/officialegress/catalogdata/version-route-migration-artifacts/codex_quota_wham/wham_accounts_check/execution-verification.json",
+    "backend/internal/officialegress/catalogdata/version-route-migration-artifacts/codex_quota_wham/wham_accounts_check/wire.json",
+    "backend/internal/officialegress/catalogdata/version-route-migration-receipts.json",
+    "backend/internal/officialegress/codex_guardian_conditions_test.go",
+    "backend/internal/officialegress/compiler_luna_reserve_test.go",
+    "backend/internal/officialegress/compositioncontract/testdata/release-graph-same-version.json",
+    "backend/internal/officialegress/version_route_receipts.go",
+    "backend/internal/officialegress/version_route_receipts_generate_test.go",
+    "backend/internal/service/official_egress_codex_promotion_gate_auxiliary_test.go",
+    "backend/internal/service/official_egress_codex_promotion_gate_compact_test.go",
+    "backend/internal/service/official_egress_codex_promotion_gate_harness_test.go",
+    "backend/internal/service/official_egress_codex_promotion_gate_origins_test.go",
+    "backend/internal/service/official_egress_codex_promotion_gate_responses_test.go",
+    "backend/internal/service/official_egress_codex_promotion_gate_websocket_test.go",
+    "backend/internal/service/official_egress_codex_promotion_gate_wham_test.go",
+    "backend/internal/service/official_egress_openai_turn_metadata_section_test.go",
+    "backend/internal/service/openai_codex_turn_state_owner_ingress_test.go",
+    "backend/internal/service/openai_cookie_jar_profile_test.go",
+    "backend/internal/service/openai_quota_luna_reserve_test.go",
+    "backend/internal/service/openai_workspace_routing_test.go",
+    "backend/internal/service/openai_ws_retry_policy_test.go",
+    "tools/official_client_capture/candidate_test_fact_map_0_157_0.json"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci",
+    "python3 -m unittest tools.official_client_capture.tests.test_arm64_supervised_deploy"
+  ]
+}
