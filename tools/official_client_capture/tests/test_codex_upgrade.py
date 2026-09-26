@@ -18851,6 +18851,87 @@ class CodexUpgradeTest(unittest.TestCase):
                     campaign_dir=campaign_dir,
                 )
 
+            # b0 下受监督部署的工具修复只改变 compare／accept reader 摘要（2026-09-26 c01570 VC-5 批次 9）：
+            # 仍按逐字重派放行；checker／builder 变化失败关闭。前后清单补上同一候选绑定与 b0 评估三字段后核对。
+            binding = {
+                "candidate_revision": 1,
+                "candidate_id": "cand-1",
+                "evaluation_baseline": None,
+                "baseline_commit_sha256": None,
+                "evaluator_digests": {
+                    "checker_sha256": "1" * 64,
+                    "builder_sha256": "2" * 64,
+                    "compare_reader_sha256": "3" * 64,
+                    "accept_reader_sha256": "4" * 64,
+                },
+            }
+            prior_b0 = {**inner, **binding}
+            reader_only = {
+                **successor,
+                **binding,
+                "evaluator_digests": dict(
+                    binding["evaluator_digests"],
+                    compare_reader_sha256="5" * 64,
+                    accept_reader_sha256="6" * 64,
+                ),
+            }
+            self.assertTrue(
+                supervisor._validate_reconciled_redispatch_binding(
+                    prior_state,
+                    prior_b0,
+                    run_dir,
+                    reader_only,
+                    campaign_dir=campaign_dir,
+                    effective_class="post-run-tooling",
+                    label="零请求后处理失败",
+                )
+            )
+            checker_drift = {
+                **reader_only,
+                "evaluator_digests": dict(reader_only["evaluator_digests"], checker_sha256="7" * 64),
+            }
+            with self.assertRaisesRegex(supervisor.SupervisorError, "只允许原批次内容重派.*evaluator_digests"):
+                supervisor._validate_reconciled_redispatch_binding(
+                    prior_state,
+                    prior_b0,
+                    run_dir,
+                    checker_drift,
+                    campaign_dir=campaign_dir,
+                    effective_class="post-run-tooling",
+                    label="零请求后处理失败",
+                )
+
+    def test_redispatch_evaluator_digest_drift_only_exempts_b0_reader_changes(self) -> None:
+        """reservation 前逐字重派：只有 b0 下 compare／accept reader 的变化不算漂移，其余一律失败关闭。"""
+
+        supervisor = codex_upgrade.codex_upgrade_supervisor
+        drifted = supervisor._redispatch_evaluator_digests_drifted
+        digests = {
+            "checker_sha256": "1" * 64,
+            "builder_sha256": "2" * 64,
+            "compare_reader_sha256": "3" * 64,
+            "accept_reader_sha256": "4" * 64,
+        }
+
+        def manifest(evaluator, *, baseline=None, commit=None):
+            return {"evaluation_baseline": baseline, "baseline_commit_sha256": commit, "evaluator_digests": evaluator}
+
+        prior = manifest(dict(digests))
+        self.assertFalse(drifted(prior, manifest(dict(digests))))
+        readers = dict(digests, compare_reader_sha256="5" * 64, accept_reader_sha256="6" * 64)
+        self.assertFalse(drifted(prior, manifest(readers)))
+        for key in ("checker_sha256", "builder_sha256"):
+            with self.subTest(changed=key):
+                self.assertTrue(drifted(prior, manifest(dict(readers, **{key: "7" * 64}))))
+        # 键集合不同、一侧缺失：失败关闭。
+        self.assertTrue(drifted(prior, manifest({k: v for k, v in readers.items() if k != "accept_reader_sha256"})))
+        self.assertTrue(drifted(prior, manifest(None)))
+        self.assertTrue(drifted(manifest(None), manifest(dict(digests))))
+        # 已有评估基线（b≥1）或基线提交：reader 变化同样按漂移处理，只能经 evaluation-recover 承接。
+        self.assertTrue(drifted(manifest(dict(digests), baseline="b1", commit="8" * 64),
+                                manifest(readers, baseline="b1", commit="8" * 64)))
+        self.assertTrue(drifted(manifest(dict(digests), commit="8" * 64), manifest(readers, commit="8" * 64)))
+
     def test_post_run_tooling_receipt_cannot_revive_stopped_ledger(self) -> None:
         """账本已 stop_the_line 的旧 run 即便带 post-run-tooling 收据也只能永久停线。"""
 

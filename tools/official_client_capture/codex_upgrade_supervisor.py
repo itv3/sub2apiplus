@@ -8794,17 +8794,56 @@ def _validate_reconciled_redispatch_binding(
         if successor_manifest.get(field) != prior_manifest.get(field)
     ]
     # 改造 5：同基线逐字重派还要求候选绑定与评估基线三字段逐字相等——工具变化后的重派不是
-    # "逐字"，只能经 evaluation-recover 开新基线承接。
-    for field in ("candidate_revision", "candidate_id", "evaluation_baseline", "baseline_commit_sha256", "evaluator_digests"):
+    # "逐字"，只能经 evaluation-recover 开新基线承接。evaluator_digests 的唯一例外见
+    # _redispatch_evaluator_digests_drifted（b0 下只核 checker／builder）。
+    for field in ("candidate_revision", "candidate_id", "evaluation_baseline", "baseline_commit_sha256"):
         if field in prior_manifest or field in successor_manifest:
             if successor_manifest.get(field) != prior_manifest.get(field):
                 drifted.append(field)
+    if ("evaluator_digests" in prior_manifest or "evaluator_digests" in successor_manifest) and (
+            _redispatch_evaluator_digests_drifted(prior_manifest, successor_manifest)):
+        drifted.append("evaluator_digests")
     if drifted:
         raise SupervisorError(
             "reservation 前环境恢复只允许原批次内容重派，漂移字段："
             + "、".join(drifted)
         )
     return True
+
+
+# b0（评估基线为 plan entry）只对这两项设授权口径；compare／accept reader 在 plan 未登记，b0 不设口径。
+EVALUATOR_B0_AUTHORIZED_DIGESTS = ("checker_sha256", "builder_sha256")
+
+
+def _redispatch_evaluator_digests_drifted(
+    prior_manifest: Mapping[str, Any],
+    successor_manifest: Mapping[str, Any],
+) -> bool:
+    """reservation 前逐字重派时，评估器摘要是否构成漂移。
+
+    默认四项必须逐字相等（改造 5）。唯一例外：前后批次都处于 b0（evaluation_baseline 与
+    baseline_commit_sha256 均为空）、四项键集合相同且 checker／builder 逐字相等时，compare／accept
+    reader 的变化不算漂移——b0 本就不对 reader 设授权口径，reservation 前失败时尚无任何评估产物，
+    reader 闭包随受监督部署的工具修复变化并不绕过评估基线；其余任何情形（有基线、键集合不同、
+    checker／builder 变化、一侧缺失）仍按漂移失败关闭。2026-09-26 c01570 VC-5 批次 9：修复监督器
+    受控维护竞态只改变两项 reader 摘要，逐字重派被拒、evaluation-recover 又因候选尚未封存不适用。
+    """
+
+    prior = prior_manifest.get("evaluator_digests")
+    successor = successor_manifest.get("evaluator_digests")
+    if prior == successor:
+        return False
+    if (
+        prior_manifest.get("evaluation_baseline") is not None
+        or successor_manifest.get("evaluation_baseline") is not None
+        or prior_manifest.get("baseline_commit_sha256") is not None
+        or successor_manifest.get("baseline_commit_sha256") is not None
+        or not isinstance(prior, Mapping)
+        or not isinstance(successor, Mapping)
+        or set(prior) != set(successor)
+    ):
+        return True
+    return any(successor.get(key) != prior.get(key) for key in EVALUATOR_B0_AUTHORIZED_DIGESTS)
 
 
 def _validate_batched_stage_review_successor(
