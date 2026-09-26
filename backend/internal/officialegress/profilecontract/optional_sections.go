@@ -97,6 +97,20 @@ type ClientMetadataSection struct {
 	// Condition：常量的写入条件，取引擎支持的请求条件闭集；恒定写入时为 always。
 	// 0.156.1 的 guardian 审阅请求不写 guardian_credits_requested，取 not_guardian_review_request。
 	Condition ConditionKind `json:"Condition"`
+	// KeyConditions：按键覆盖 Condition 的写入条件（可选）。同一节里的常量写入条件
+	// 不同时使用，例如较新版本的 mcp_attribution 对 guardian 审阅请求同样写入（always），
+	// 而 guardian_credits_requested 仍取 Condition。键必须出现在 Constants 中，条件取
+	// 引擎支持的闭集且不得为空串；存在时不能为空表。omitempty 保证未使用该字段的节
+	// 序列化形态与摘要不变。
+	KeyConditions map[string]ConditionKind `json:"KeyConditions,omitempty"`
+}
+
+// ConditionFor 返回常量键的写入条件：KeyConditions 覆盖优先，其余键取 Condition。
+func (s ClientMetadataSection) ConditionFor(key string) ConditionKind {
+	if condition, ok := s.KeyConditions[key]; ok {
+		return condition
+	}
+	return s.Condition
 }
 
 // TurnStateSection 声明 turn-state 的清空条件。
@@ -222,6 +236,19 @@ func validateOptionalSection(name string, value any) error {
 		// 条件必须显式给出：空串在条件闭集里表示“无条件”，这里不允许省略，恒定写入写 always。
 		if section.Condition == "" || !EngineSupportedEnumValues().Contains(EnumDomainConditionKind, string(section.Condition)) {
 			return fmt.Errorf("Condition 未受支持: %q", section.Condition)
+		}
+		if section.KeyConditions != nil {
+			if len(section.KeyConditions) == 0 {
+				return errors.New("KeyConditions 存在时不能为空")
+			}
+			for key, condition := range section.KeyConditions {
+				if _, declared := section.Constants[key]; !declared {
+					return fmt.Errorf("KeyConditions 引用了未声明的常量键: %q", key)
+				}
+				if condition == "" || !EngineSupportedEnumValues().Contains(EnumDomainConditionKind, string(condition)) {
+					return fmt.Errorf("KeyConditions 的条件未受支持: %q=%q", key, condition)
+				}
+			}
 		}
 		return nil
 	case *TurnStateSection:
