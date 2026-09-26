@@ -26,7 +26,7 @@
     "SPEC-WS-002",
     "SPEC-WS-005"
   ],
-  "campaign_id": "c01570-formal-vc1-r2-20260926t084354z",
+  "campaign_id": "c01570-formal-vc1-r2-20260926t134445z",
   "gate_count": 29,
   "gates": [
     {
@@ -452,10 +452,10 @@
     "SPEC-WS-001",
     "SPEC-WS-004"
   ],
-  "joint_manifest_sha256": "7a3b8636f8abe5e45dcd3151730be46bf2c4d01351c27a647f176379e946655d",
-  "mapping_sha256": "28426309f8dbd14f1047ba824f679cfc0163ff08b99ddc3a05f154f8c47c0933",
-  "plan_sha256": "3865c3b9eeb111197a36ad52b57a07c447a84d188d3df87613e116135269039f",
-  "requirements_sha256": "dda4d0228908beaab18b1544c45ee1a61c1a4c9ed19506e1089c9f07e944dd11",
+  "joint_manifest_sha256": "5a30a5ca84b8b3b072fc31fe3ec07b4baca425e93a74ac8ef041b33dda0cc5bc",
+  "mapping_sha256": "5ed0677ad60c9e3512d8f79345fbdc6df46dec3bd272e941b58a825ffbba1f86",
+  "plan_sha256": "b3e95f6da914a1f7a4b1f4c93838f75bc9a68cc5d4a1a09ce4383766b0c72fdd",
+  "requirements_sha256": "9a555ff70ef9f8d69ac26b466390fc52a4b1a080b36bc01c1ff23461d11045a4",
   "schema_version": "codex-post-promotion-gate-plan/v1",
   "target_version": "0.157.0"
 }
