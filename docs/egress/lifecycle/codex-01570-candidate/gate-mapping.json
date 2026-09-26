@@ -400,6 +400,6 @@
       "working_directory": "."
     }
   ],
-  "requirements_sha256": "886e7d16dc02fa6bb8dbb35b0c74ec1043ab4599f130695a8c94b1c22a71d47d",
+  "requirements_sha256": "bc9307346f803007bec91366ccc0ef2be112de927a9e48a4c9f3fc436edfd654",
   "schema_version": "codex-post-promotion-gate-mapping/v2"
 }
