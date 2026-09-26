@@ -57,13 +57,49 @@ func TestChangeset1BReceiptArtifactsReplayProductionExecutor(t *testing.T) {
 	})
 
 	upstream := &changeset1BExecutorUpstream{}
-	runtimeState, err := newOfficialEgressTransitionRuntimeWithExecutor(
-		guard,
-		upstream,
-		officialCodexExecutorID,
-		officialegress.ReleaseModeActive,
-	)
-	require.NoError(t, err)
+	// 每条已迁移路径按结构事实选择重放槽位：Active 优先；Active 画像未声明该路径的端点时
+	// （VC-6 晋升后目标画像删除了 legacy compact），取仍声明它的 Previous 旧画像。冻结制品只
+	// 保存最终请求的头名与字段形状，同一份旧画像在哪个槽位重放结果都相同；候选期四条路径
+	// 都落在 Active，与改动前共用同一个 Active runtime 完全一致。
+	runtimes := map[string]*OfficialEgressTransitionRuntime{}
+	runtimeForEndpoint := func(t *testing.T, endpointID string) *OfficialEgressTransitionRuntime {
+		t.Helper()
+		mode := ""
+		for _, candidate := range officialCodexFormalModes {
+			for _, endpoint := range officialCodexFormalExecutableProfile(t, candidate).Endpoints() {
+				if endpoint.ID == endpointID {
+					mode = candidate
+				}
+			}
+			if mode != "" {
+				break
+			}
+		}
+		require.NotEmpty(t, mode, "Active/Previous 画像都未声明端点 %s", endpointID)
+		if cached, ok := runtimes[mode]; ok {
+			return cached
+		}
+		runtimeGuard := guard
+		if len(runtimes) > 0 {
+			// 同一 Guard 不允许重复登记同一 ExecutorID：第二个槽位改用同配置（100% canary）的
+			// 独立 Guard。候选期只用到 Active 一个槽位，仍是上面配置的进程默认 Guard。
+			var guardErr error
+			runtimeGuard, guardErr = officialegress.NewGuard(
+				guard.Config(), officialegress.DefaultSinkCatalog(),
+				officialegress.DefaultOfficialRouteCatalog(), guard.Recorder(),
+			)
+			require.NoError(t, guardErr)
+		}
+		runtimeState, runtimeErr := newOfficialEgressTransitionRuntimeWithExecutor(
+			runtimeGuard,
+			upstream,
+			officialCodexExecutorID,
+			officialegress.ReleaseMode(mode),
+		)
+		require.NoError(t, runtimeErr)
+		runtimes[mode] = runtimeState
+		return runtimeState
+	}
 
 	testCases := []changeset1BReceiptArtifactCase{
 		{officialEgressSinkAdminTestCompact, officialCodexEndpointResponsesCompact, "/backend-api/codex/responses/compact"},
@@ -75,7 +111,7 @@ func TestChangeset1BReceiptArtifactsReplayProductionExecutor(t *testing.T) {
 		t.Run(string(testCase.sinkID), func(t *testing.T) {
 			wireRaw, verificationRaw := replayChangeset1BReceiptArtifact(
 				t,
-				runtimeState,
+				runtimeForEndpoint(t, testCase.endpointID),
 				upstream,
 				testCase,
 			)

@@ -2,9 +2,11 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/officialegress"
@@ -31,10 +33,51 @@ func workspaceRoutingTargetSection() profilecontract.WorkspaceRoutingSection {
 	}
 }
 
+// officialCodexProfileDeclaresWorkspaceRouting 判断画像是否声明工作区路由相关结构：
+// WorkspaceRouting 节，或目标画像形态的发现端点（workspaceRoutingTargetMutation 追加的正是这两项）。
+func officialCodexProfileDeclaresWorkspaceRouting(profile profilecontract.ExecutableProfile) bool {
+	if profile.Optional().WorkspaceRouting != nil {
+		return true
+	}
+	discoveryID := workspaceRoutingTargetSection().DiscoveryEndpointID
+	for _, endpoint := range profile.Endpoints() {
+		if endpoint.ID == discoveryID {
+			return true
+		}
+	}
+	return false
+}
+
+// workspaceRoutingLegacyMutation 去掉 WorkspaceRouting 节与它声明的发现端点（节缺席时按目标
+// 画像形态的发现端点 ID 删除），还原为未声明工作区路由的旧画像形态；底稿本就没有时为空操作。
+func workspaceRoutingLegacyMutation(t *testing.T) func(*profilecontract.SnapshotDoc) {
+	return func(doc *profilecontract.SnapshotDoc) {
+		discoveryID := workspaceRoutingTargetSection().DiscoveryEndpointID
+		if len(doc.WorkspaceRouting) > 0 {
+			var section profilecontract.WorkspaceRoutingSection
+			require.NoError(t, json.Unmarshal(doc.WorkspaceRouting, &section))
+			if section.DiscoveryEndpointID != "" {
+				discoveryID = section.DiscoveryEndpointID
+			}
+		}
+		doc.WorkspaceRouting = nil
+		kept := make([]profilecontract.SnapshotEndpoint, 0, len(doc.Endpoints))
+		for _, endpoint := range doc.Endpoints {
+			if endpoint.ID != discoveryID {
+				kept = append(kept, endpoint)
+			}
+		}
+		doc.Endpoints = kept
+	}
+}
+
 // workspaceRoutingTargetMutation 追加目标画像的发现端点（按 wham_settings_user 的 backend
 // client 画像复制，路径改为 accounts/check）与 WorkspaceRouting 节。
 func workspaceRoutingTargetMutation(t *testing.T) func(*profilecontract.SnapshotDoc) {
 	return func(doc *profilecontract.SnapshotDoc) {
+		// 先还原为旧形态再追加：VC-6 晋升后合成底稿（Active）就是已声明发现端点与该节的目标
+		// 画像，直接追加会出现重复端点。候选期底稿是旧画像，还原是空操作。
+		workspaceRoutingLegacyMutation(t)(doc)
 		discovery := *syntheticServiceSnapshotEndpoint(t, doc, officialCodexEndpointWhamSettingsUser)
 		discovery.ID = "wham_accounts_check"
 		discovery.Path = "/backend-api/wham/accounts/check"
@@ -95,6 +138,10 @@ func TestDecideOfficialCodexWorkspaceRouting(t *testing.T) {
 	require.True(t, decideOfficialCodexWorkspaceRouting(nil, "acct", []byte(`{}`)).Default, "画像没有该节时恒为默认")
 }
 
+// TestOfficialCodexWorkspaceRoutingGateFollowsProfileAndDiscovery 改动前直接把 Active 当作旧画像；
+// VC-6 晋升后 Active 是已声明 WorkspaceRouting 节的目标画像。现先在正式目录逐槽位核验“缓存了
+// 非默认判定时，受路由端点失败关闭当且仅当该槽位画像声明该节且端点在 RoutedEndpointIDs 中”，
+// 再以 Active 为底稿去掉／追加该节做旧画像与目标画像对照（候选期去节是空操作）。
 func TestOfficialCodexWorkspaceRoutingGateFollowsProfileAndDiscovery(t *testing.T) {
 	resetOfficialCodexWorkspaceRoutingResults(t)
 	account := &Account{ID: 190, Platform: PlatformOpenAI, Type: AccountTypeOAuth,
@@ -103,7 +150,20 @@ func TestOfficialCodexWorkspaceRoutingGateFollowsProfileAndDiscovery(t *testing.
 		ChatGPTAccountID: "acct-gate", Reason: "非默认工作区路由",
 	})
 
+	for _, mode := range officialCodexFormalModes {
+		section := officialCodexFormalExecutableProfile(t, mode).Optional().WorkspaceRouting
+		err := officialCodexWorkspaceRoutingGate(mode, account, officialCodexEndpointResponsesHTTP)
+		if section != nil && slices.Contains(section.RoutedEndpointIDs, officialCodexEndpointResponsesHTTP) {
+			require.True(t, errors.Is(err, ErrOfficialCodexWorkspaceRoutingNonDefault),
+				"%s 槽位声明了路由节，受路由端点必须失败关闭：%v", mode, err)
+		} else {
+			require.NoError(t, err, "%s 槽位未声明路由节，缓存的非默认判定不得影响出站", mode)
+		}
+	}
+
 	// 旧画像没有 WorkspaceRouting 节：即使缓存了非默认判定也放行。
+	withOfficialCodexLegacySyntheticProfile(t, "WorkspaceRouting 节与发现端点",
+		officialCodexProfileDeclaresWorkspaceRouting, workspaceRoutingLegacyMutation(t))
 	require.NoError(t, officialCodexWorkspaceRoutingGate(officialClientProfileModeActive, account, officialCodexEndpointResponsesHTTP))
 
 	withOfficialCodexSyntheticProfile(t, workspaceRoutingTargetMutation(t))
@@ -172,7 +232,10 @@ func TestOpenAIQuotaQueryUsageDiscoversWorkspaceRoutingFirst(t *testing.T) {
 		`{"accounts":[{"id":"acct-routing","workspace_backend_origin":"https://us.chatgpt.com","account_routing_override":"us"}]}`,
 		http.StatusOK)
 
-	// 旧画像：不发出发现请求。
+	// 旧画像：不发出发现请求。改动前直接用 Active 充当旧画像；VC-6 晋升后 Active 是已声明
+	// WorkspaceRouting 节的目标画像，改为以 Active 为底稿去掉该节与发现端点（候选期是空操作）。
+	withOfficialCodexLegacySyntheticProfile(t, "WorkspaceRouting 节与发现端点",
+		officialCodexProfileDeclaresWorkspaceRouting, workspaceRoutingLegacyMutation(t))
 	_, err := service.QueryUsage(context.Background(), account.ID)
 	require.NoError(t, err)
 	require.Empty(t, *calls, "画像没有 WorkspaceRouting 节时不得发出发现请求")
@@ -329,17 +392,32 @@ func TestAttachOfficialEgressHTTPContextAppliesWorkspaceRoutingGate(t *testing.T
 	recordOfficialCodexWorkspaceRouting(officialCodexWorkspaceRoutingResult{
 		ChatGPTAccountID: "chatgpt-test-account", Reason: "非默认工作区路由",
 	})
-	attach := func(t *testing.T) error {
+	attach := func(t *testing.T, mode string) error {
 		t.Helper()
 		body := newOfficialOpenAIHTTPTestBody(t, false, false, false)
 		c := newOfficialOpenAIHTTPTestContext(body, "/v1/responses")
 		req := httptest.NewRequest(http.MethodPost, "https://chatgpt.com/backend-api/codex/responses", nil)
-		_, err := attachOfficialEgressHTTPContextWithMode(req, c, account, PlatformOpenAI, officialClientProfileModeActive)
+		_, err := attachOfficialEgressHTTPContextWithMode(req, c, account, PlatformOpenAI, mode)
 		return err
 	}
-	require.NoError(t, attach(t), "旧画像没有 WorkspaceRouting 节，挂载不受缓存判定影响")
+	// 正式目录逐槽位：挂载处失败关闭当且仅当该槽位画像声明 WorkspaceRouting 节且 /responses
+	// 在受路由端点中。改动前只断言 Active 是旧画像，VC-6 晋升后 Active 换成目标画像。
+	for _, mode := range officialCodexFormalModes {
+		section := officialCodexFormalExecutableProfile(t, mode).Optional().WorkspaceRouting
+		err := attach(t, mode)
+		if section != nil && slices.Contains(section.RoutedEndpointIDs, officialCodexEndpointResponsesHTTP) {
+			require.True(t, errors.Is(err, ErrOfficialCodexWorkspaceRoutingNonDefault),
+				"%s 槽位声明了路由节，非默认路由必须失败关闭：%v", mode, err)
+		} else {
+			require.NoError(t, err, "%s 槽位未声明路由节，挂载不受缓存判定影响", mode)
+		}
+	}
+
+	withOfficialCodexLegacySyntheticProfile(t, "WorkspaceRouting 节与发现端点",
+		officialCodexProfileDeclaresWorkspaceRouting, workspaceRoutingLegacyMutation(t))
+	require.NoError(t, attach(t, officialClientProfileModeActive), "旧画像没有 WorkspaceRouting 节，挂载不受缓存判定影响")
 
 	withOfficialCodexSyntheticProfile(t, workspaceRoutingTargetMutation(t))
-	err := attach(t)
+	err := attach(t, officialClientProfileModeActive)
 	require.True(t, errors.Is(err, ErrOfficialCodexWorkspaceRoutingNonDefault), "非默认路由必须失败关闭：%v", err)
 }

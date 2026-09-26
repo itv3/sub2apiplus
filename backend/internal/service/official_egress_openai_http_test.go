@@ -580,7 +580,11 @@ func TestOpenAIGatewayForwardOfficialEgressHTTPCompactNormalizesExplicitContract
 		`{"id":"resp_compact","model":"gpt-5.6-luna","output":[],"usage":{"input_tokens":2,"output_tokens":1}}`,
 	)}
 
-	result, err := newOfficialOpenAIHTTPTestService(upstream).Forward(
+	svc := newOfficialOpenAIHTTPTestService(upstream)
+	// legacy compact 只在仍声明该端点的画像槽位上可用：候选期是 Active，晋升后是 Previous
+	// 中的旧画像（目标画像已删除该端点，显式 compact 按批准语义失败关闭，由晋升后门禁覆盖）。
+	withOfficialCodexLegacyCompactRelease(t, svc)
+	result, err := svc.Forward(
 		context.Background(),
 		c,
 		newOfficialOpenAIHTTPTestAccount(94),
@@ -630,7 +634,11 @@ func TestOpenAIGatewayForwardOfficialEgressHTTPCompactRestoresOnlyCapturedSeed(t
 				`{"id":"resp_compact_seed","model":"gpt-5.6-luna","output":[],"usage":{"input_tokens":2,"output_tokens":1}}`,
 			)}
 
-			result, forwardErr := newOfficialOpenAIHTTPTestService(upstream).Forward(
+			svc := newOfficialOpenAIHTTPTestService(upstream)
+			// legacy compact 只在仍声明该端点的画像槽位上可用：候选期是 Active，晋升后是
+			// Previous 中的旧画像（目标画像已删除该端点，显式 compact 失败关闭由晋升后门禁覆盖）。
+			withOfficialCodexLegacyCompactRelease(t, svc)
+			result, forwardErr := svc.Forward(
 				context.Background(),
 				c,
 				newOfficialOpenAIHTTPTestAccount(94),

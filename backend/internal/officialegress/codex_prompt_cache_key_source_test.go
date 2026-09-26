@@ -80,8 +80,35 @@ func withForkPromptCacheKey(t *testing.T) func(*CodexIdentityFacts) {
 	}
 }
 
+// codexSessionHeaderUsesPromptCacheKey 判断画像是否把 responses_http 的 session-id 头来源
+// 声明为 prompt_cache_key。
+func codexSessionHeaderUsesPromptCacheKey(profile profilecontract.ExecutableProfile) bool {
+	for _, endpoint := range profile.Endpoints() {
+		if endpoint.ID != "responses_http" {
+			continue
+		}
+		for _, slot := range endpoint.Headers {
+			if strings.EqualFold(slot.Name, "session-id") {
+				return slot.Source == profilecontract.SourcePromptCacheKey
+			}
+		}
+	}
+	return false
+}
+
+// TestCompilerPromptCacheKeySourceFollowsProfile 的“旧画像”一侧改动前直接取 Active 画像；
+// 晋升后 Active 是已把 session-id 来源声明为 prompt_cache_key 的目标画像，旧画像前提失效。
+// 现按结构事实选出 session-id 仍取会话来源的真实发布作为旧画像（候选期是 Active，晋升后是
+// Previous 中同一份旧画像）；都已改为 prompt_cache_key 时把 Responses 两端点的来源改回
+// session 合成旧形态。目标一侧仍在旧画像上改来源，断言原样保留。
 func TestCompilerPromptCacheKeySourceFollowsProfile(t *testing.T) {
-	base, _ := staticClosurePlanForEndpoint(t, ReleaseModeActive, "responses_http")
+	base := syntheticLegacyBundleForEndpoint(t, "responses_http", "session-id 的 prompt_cache_key 来源",
+		codexSessionHeaderUsesPromptCacheKey,
+		func(doc *profilecontract.SnapshotDoc) {
+			for _, endpointID := range []string{"responses_http", "responses_ws"} {
+				syntheticSetHeaderSource(t, doc, endpointID, "session-id", profilecontract.SourceSession)
+			}
+		})
 
 	// 旧画像：PromptCacheKey 事实不改变任何出站字节。
 	plainHeaders, plainBody := compilePromptCacheKeyTestRequest(t, base, nil, "pck-legacy-plain")

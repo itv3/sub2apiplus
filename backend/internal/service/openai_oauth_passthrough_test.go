@@ -964,6 +964,10 @@ func TestOpenAIGatewayService_OAuthPassthrough_CompactUsesJSONAndKeepsNonStreami
 		cfg:          &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
 		httpUpstream: upstream,
 	}
+	// legacy compact 只在仍声明该端点的画像槽位上可用：候选期是 Active，晋升后是 Previous
+	// 中的旧画像（目标画像已删除该端点，显式 compact 按批准语义失败关闭，由晋升后门禁覆盖）。
+	compactMode := withOfficialCodexLegacyCompactRelease(t, svc)
+	compactVersion, _ := officialCodexBuildIdentityForMode(t, compactMode)
 	account := &Account{
 		ID:          123,
 		Name:        "acc",
@@ -994,8 +998,9 @@ func TestOpenAIGatewayService_OAuthPassthrough_CompactUsesJSONAndKeepsNonStreami
 	require.Equal(t, "local-test-instructions", strings.TrimSpace(gjson.GetBytes(upstream.lastBody, "instructions").String()))
 	// 同上：compact 的 accept 为 */*，此前 Del 会导致出站彻底缺该头。
 	require.Equal(t, "*/*", upstream.lastReq.Header.Get("Accept"))
-	// 官方 OAuth 画像携带当前 Codex version，旧 session_id 改用 session-id。
-	require.Equal(t, codexCLIVersion, upstream.lastReq.Header.Get("Version"))
+	// 官方 OAuth 画像携带所在槽位的 Codex version（候选期即 Active 的 codexCLIVersion），
+	// 旧 session_id 改用 session-id。
+	require.Equal(t, compactVersion, upstream.lastReq.Header.Get("Version"))
 	require.NotEmpty(t, upstream.lastReq.Header.Get("session-id"))
 	require.Empty(t, upstream.lastReq.Header.Get("x-client-request-id"))
 	require.Equal(t, "chatgpt.com", upstream.lastReq.Host)
@@ -1078,6 +1083,11 @@ func TestOpenAIGatewayService_OAuthPassthrough_CodexMissingInstructionsGetsDefau
 				Body:       io.NopCloser(strings.NewReader(responseBody)),
 			}}
 			svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+			if !stream {
+				// 非流式子用例走 legacy compact，只在仍声明该端点的画像槽位上可用：候选期是
+				// Active，晋升后是 Previous 中的旧画像；流式子用例仍走 Active 的普通 Responses。
+				withOfficialCodexLegacyCompactRelease(t, svc)
+			}
 			svc.openaiModelCapabilities.replaceFromManifest(
 				123,
 				[]byte(`{"models":[{"slug":"gpt-5.1-codex-max","visibility":"list","use_responses_lite":false}]}`),
@@ -2156,6 +2166,9 @@ func TestOpenAIGatewayService_OpenAIPassthrough_CompactNetworkErrorsTriggerFailo
 				cfg:          &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
 				httpUpstream: upstream,
 			}
+			// legacy compact 只在仍声明该端点的画像槽位上可用：候选期是 Active，晋升后是
+			// Previous 中的旧画像（目标画像已删除该端点，显式 compact 失败关闭由晋升后门禁覆盖）。
+			withOfficialCodexLegacyCompactRelease(t, svc)
 			account := &Account{
 				ID:             123,
 				Name:           "acc",
@@ -2427,6 +2440,9 @@ func TestOpenAIGatewayService_CodexFingerprintCompactDoesNotRewriteBodyCacheKeyO
 		httpUpstream:  upstream,
 		toolCorrector: NewCodexToolCorrector(),
 	}
+	// legacy compact 只在仍声明该端点的画像槽位上可用：候选期是 Active，晋升后是 Previous
+	// 中的旧画像（目标画像已删除该端点，显式 compact 按批准语义失败关闭，由晋升后门禁覆盖）。
+	withOfficialCodexLegacyCompactRelease(t, svc)
 	account := newTestOAuthAccount(4403, map[string]any{codexFingerprintModeExtraKey: "session"})
 	account.Name = "oauth-compact"
 	account.Status = StatusActive

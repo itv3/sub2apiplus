@@ -45,12 +45,25 @@ func TestOpenAIWSUpstreamErrorCodeKeepsErrorTextAndCode(t *testing.T) {
 	require.Equal(t, "slow_down", openAIWSUpstreamErrorCode(handshake), "握手拒绝体中的 error.code 同样可识别")
 }
 
+// TestOfficialCodexWebSocketRetryPolicyFollowsProfile 改动前直接把 Active 当作旧画像；VC-6 晋升后
+// Active 是已声明 WebSocketRetry 节的目标画像。现先在正式目录逐槽位核验“有节才启用画像重试
+// 策略”（直接读正式目录推导期望），再以 Active 为底稿去掉／追加该节做旧画像与目标画像对照
+// （候选期去节是空操作，与改动前一致）。
 func TestOfficialCodexWebSocketRetryPolicyFollowsProfile(t *testing.T) {
 	oauth := &Account{ID: 301, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
 	apiKey := &Account{ID: 302, Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
 	slowDown := wrapOpenAIWSFallback("upstream_capacity_shed", withOpenAIWSUpstreamErrorCode("slow_down", errors.New("slow down")))
 	overloaded := wrapOpenAIWSFallback("upstream_capacity_shed", withOpenAIWSUpstreamErrorCode("server_is_overloaded", errors.New("overloaded")))
 
+	for _, mode := range officialCodexFormalModes {
+		section := officialCodexFormalExecutableProfile(t, mode).Optional().WebSocketRetry
+		require.Equal(t, section != nil, newOfficialCodexWebSocketRetryPolicy(oauth, mode) != nil,
+			"%s 槽位是否启用画像重试策略必须由 WebSocketRetry 节决定", mode)
+	}
+
+	withOfficialCodexLegacySyntheticProfile(t, "WebSocketRetry 节",
+		func(profile profilecontract.ExecutableProfile) bool { return profile.Optional().WebSocketRetry != nil },
+		func(doc *profilecontract.SnapshotDoc) { doc.WebSocketRetry = nil })
 	require.Nil(t, newOfficialCodexWebSocketRetryPolicy(oauth, officialClientProfileModeActive), "旧画像没有 WebSocketRetry 节")
 	var nilPolicy *officialCodexWebSocketRetryPolicy
 	handled, _, _ := nilPolicy.observe(slowDown)

@@ -340,8 +340,59 @@ func compileGuardianTestRequest(
 	return execution.request.Headers()
 }
 
+// stripGuardianReviewConditions 把画像还原为未声明 guardian 审阅槽位的旧形态：删去以
+// guardian_review_request 为条件的 header 槽位（同步移出 HeaderMap 插入序）与 body 字段，
+// 把 not_guardian_review_request 条件恢复为无条件写入（header 为 always，body 字段为空条件，
+// 与旧画像原文一致）；ClientMetadata 节的写入条件依附于审阅语义，一并去掉。
+func stripGuardianReviewConditions(doc *profilecontract.SnapshotDoc) {
+	guardian := string(profilecontract.ConditionGuardianReviewRequest)
+	notGuardian := string(profilecontract.ConditionNotGuardianReviewRequest)
+	for endpointIndex := range doc.Endpoints {
+		endpoint := &doc.Endpoints[endpointIndex]
+		removed := map[string]bool{}
+		headers := make([]profilecontract.SnapshotHeaderSlot, 0, len(endpoint.Headers))
+		for _, slot := range endpoint.Headers {
+			switch slot.Condition {
+			case guardian:
+				removed[strings.ToLower(slot.Name)] = true
+				continue
+			case notGuardian:
+				slot.Condition = string(profilecontract.ConditionAlways)
+			}
+			headers = append(headers, slot)
+		}
+		endpoint.Headers = headers
+		if len(removed) > 0 && len(endpoint.HeaderMapInsertionOrder) > 0 {
+			order := make([]string, 0, len(endpoint.HeaderMapInsertionOrder))
+			for _, name := range endpoint.HeaderMapInsertionOrder {
+				if !removed[strings.ToLower(name)] {
+					order = append(order, name)
+				}
+			}
+			endpoint.HeaderMapInsertionOrder = order
+		}
+		fields := make([]profilecontract.SnapshotBodyField, 0, len(endpoint.Body.Fields))
+		for _, field := range endpoint.Body.Fields {
+			switch field.Condition {
+			case guardian:
+				continue
+			case notGuardian:
+				field.Condition = ""
+			}
+			fields = append(fields, field)
+		}
+		endpoint.Body.Fields = fields
+	}
+	doc.ClientMetadata = nil
+}
+
+// TestCompilerGuardianSlotsFollowProfileConditions 的“旧画像”一侧改动前直接取 Active 画像；
+// 晋升后 Active 是已声明 guardian 审阅槽位的目标画像，旧画像前提失效。现按结构事实选出未声明
+// 审阅槽位的真实发布作为旧画像（候选期是 Active，晋升后是 Previous 中同一份旧画像，见
+// syntheticLegacyBundleForEndpoint），目标一侧仍在该旧画像上按设计稿追加槽位，断言原样保留。
 func TestCompilerGuardianSlotsFollowProfileConditions(t *testing.T) {
-	base, _ := staticClosurePlanForEndpoint(t, ReleaseModeActive, "responses_http")
+	base := syntheticLegacyBundleForEndpoint(t, "responses_http", "guardian 审阅槽位",
+		codexProfileDeclaresGuardianReviewSlot, stripGuardianReviewConditions)
 
 	// 旧画像：无论条件取值如何，出站 Header 完全一致，且没有 x-codex-guardian。
 	legacyNormal := compileGuardianTestRequest(t, base, false, "guardian-legacy-normal")

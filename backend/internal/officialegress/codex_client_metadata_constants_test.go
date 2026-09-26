@@ -74,8 +74,56 @@ func decodeClientMetadata(t *testing.T, fields map[string]json.RawMessage) map[s
 	return metadata
 }
 
+// codexProfileDeclaresClientMetadata 判断画像是否声明 ClientMetadata 节（即是否有客户端
+// 固定常量要写入 client_metadata）。
+func codexProfileDeclaresClientMetadata(profile profilecontract.ExecutableProfile) bool {
+	return profile.Optional().ClientMetadata != nil
+}
+
+// stripClientMetadataSection 去掉画像的 ClientMetadata 节，还原为未声明常量的旧画像形态。
+func stripClientMetadataSection(doc *profilecontract.SnapshotDoc) {
+	doc.ClientMetadata = nil
+}
+
+// codexServiceTierFollowsGuardianCondition 判断画像 responses_http 的 service_tier 字段是否以
+// guardian 审阅条件决定写入（审阅请求与普通请求对 service_tier 的处理因此不同）。
+func codexServiceTierFollowsGuardianCondition(profile profilecontract.ExecutableProfile) bool {
+	for _, endpoint := range profile.Endpoints() {
+		if endpoint.ID != "responses_http" {
+			continue
+		}
+		for _, field := range endpoint.Body.Fields {
+			if field.Name == "service_tier" {
+				return field.Condition == profilecontract.ConditionGuardianReviewRequest ||
+					field.Condition == profilecontract.ConditionNotGuardianReviewRequest
+			}
+		}
+	}
+	return false
+}
+
+// codexWebSocketHandshakeDeclaresCookie 判断画像是否为 responses_ws 握手声明 cookie 槽位。
+func codexWebSocketHandshakeDeclaresCookie(profile profilecontract.ExecutableProfile) bool {
+	for _, endpoint := range profile.Endpoints() {
+		if endpoint.ID != "responses_ws" {
+			continue
+		}
+		for _, slot := range endpoint.Headers {
+			if strings.EqualFold(slot.Name, "cookie") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// TestCompilerClientMetadataConstantsFollowProfile 的“旧画像”一侧改动前直接取 Active 画像；
+// 晋升后 Active 是目标画像、自带 ClientMetadata 节，旧画像前提失效。现按结构事实选出未声明
+// ClientMetadata 节的真实发布作为对照组（候选期是 Active，晋升后是 Previous 中同一份旧画像，
+// 见 syntheticLegacyBundleForEndpoint），目标一侧仍在该旧画像上追加节，断言原样保留。
 func TestCompilerClientMetadataConstantsFollowProfile(t *testing.T) {
-	base, _ := staticClosurePlanForEndpoint(t, ReleaseModeActive, "responses_http")
+	base := syntheticLegacyBundleForEndpoint(t, "responses_http", "ClientMetadata 节",
+		codexProfileDeclaresClientMetadata, stripClientMetadataSection)
 
 	legacyNormal := decodeClientMetadata(t, compileClientMetadataTestHTTP(t, base, nil, false, "cm-legacy-normal"))
 	legacyReview := decodeClientMetadata(t, compileClientMetadataTestHTTP(t, base, nil, true, "cm-legacy-review"))
@@ -131,8 +179,11 @@ func TestCompilerRejectsClientMetadataConstantCollidingWithIdentity(t *testing.T
 	}
 }
 
+// TestWebSocketFrameClientMetadataConstantsFollowProfile 的旧画像对照组同样按结构事实选出
+// （未声明 ClientMetadata 节的真实发布），原因与 HTTP 用例相同。
 func TestWebSocketFrameClientMetadataConstantsFollowProfile(t *testing.T) {
-	base, _ := staticClosurePlanForEndpoint(t, ReleaseModeActive, "responses_ws")
+	base := syntheticLegacyBundleForEndpoint(t, "responses_ws", "ClientMetadata 节",
+		codexProfileDeclaresClientMetadata, stripClientMetadataSection)
 	synthetic := syntheticCodexBundle(t, base, func(doc *profilecontract.SnapshotDoc) {
 		doc.ClientMetadata = syntheticRawSection(t, clientMetadataTargetSection())
 	})
@@ -169,8 +220,15 @@ func TestWebSocketFrameClientMetadataConstantsFollowProfile(t *testing.T) {
 	}
 }
 
+// TestCompilerOmitsGuardianConditionedServiceTier 的旧画像对照组按结构事实选出：service_tier
+// 字段不带 guardian 审阅条件的真实发布（晋升后 Active 的目标画像已把该字段设为
+// not_guardian_review_request，不能再充当“无条件”的旧画像）。都带条件时去掉条件合成旧形态。
 func TestCompilerOmitsGuardianConditionedServiceTier(t *testing.T) {
-	base, _ := staticClosurePlanForEndpoint(t, ReleaseModeActive, "responses_http")
+	base := syntheticLegacyBundleForEndpoint(t, "responses_http", "service_tier 字段的 guardian 审阅条件",
+		codexServiceTierFollowsGuardianCondition,
+		func(doc *profilecontract.SnapshotDoc) {
+			syntheticSetBodyFieldCondition(t, doc, "responses_http", "service_tier", "")
+		})
 	body := []byte(`{"model":"gpt-test","input":[],"tool_choice":"auto","parallel_tool_calls":false,"reasoning":{},"store":false,"stream":true,"include":[],"service_tier":"priority"}`)
 
 	// 旧画像：service_tier 无条件，审阅与否都保留。
@@ -196,8 +254,13 @@ func TestCompilerOmitsGuardianConditionedServiceTier(t *testing.T) {
 // WS 握手 Cookie（VC-4 第 5 项，编译器侧）：画像为 responses_ws 声明 cookie 槽位并把它
 // 追加到 HeaderMap 插入序后，携带 Cookie 的握手在签名前进入编译产物，H1 线序规则同步
 // 包含 cookie；旧画像没有该槽位，即使 attempt 携带 Cookie 也不会出站。
+//
+// 旧画像对照组按结构事实选出：responses_ws 未声明 cookie 槽位的真实发布（晋升后 Active 的
+// 目标画像已声明该槽位）；都已声明时删去该槽位合成旧形态。目标一侧在旧画像上追加槽位。
 func TestCompilerWebSocketHandshakeCookieFollowsProfileSlot(t *testing.T) {
-	base, _ := staticClosurePlanForEndpoint(t, ReleaseModeActive, "responses_ws")
+	base := syntheticLegacyBundleForEndpoint(t, "responses_ws", "responses_ws 的 cookie 槽位",
+		codexWebSocketHandshakeDeclaresCookie,
+		func(doc *profilecontract.SnapshotDoc) { syntheticRemoveHeaderSlot(t, doc, "responses_ws", "cookie") })
 	compile := func(bundle ReleaseBundle, invocationID string) (CompiledExecution, error) {
 		t.Helper()
 		plan := syntheticPlanForEndpoint(t, bundle, "responses_ws")

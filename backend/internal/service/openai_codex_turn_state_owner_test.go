@@ -21,7 +21,26 @@ func turnStateTargetMutation(t *testing.T) func(*profilecontract.SnapshotDoc) {
 	}
 }
 
+// turnStateLegacyMutation 去掉画像的 TurnState 节，还原为未声明 owner 隔离的旧画像形态。
+func turnStateLegacyMutation(doc *profilecontract.SnapshotDoc) {
+	doc.TurnState = nil
+}
+
+// TestOfficialCodexTurnStateOwnerIsolationFollowsProfile 改动前直接把 Active 当作旧画像；VC-6 晋升后
+// Active 是已声明 TurnState 节的目标画像。现分两部分保持原意：
+//   - 正式目录逐槽位：是否启用 owner 隔离恰由该槽位画像的 TurnState 节决定（直接读正式目录
+//     推导期望），晋升前后都覆盖两份真实画像；
+//   - 旧画像对照组与目标画像：以 Active 为底稿去掉／追加该节合成（候选期去节是空操作）。
 func TestOfficialCodexTurnStateOwnerIsolationFollowsProfile(t *testing.T) {
+	for _, mode := range officialCodexFormalModes {
+		section := officialCodexFormalExecutableProfile(t, mode).Optional().TurnState
+		require.Equal(t, section != nil && section.ResetOnAccountOwnerChange,
+			officialCodexTurnStateOwnerIsolation(mode), "%s 槽位的 owner 隔离必须由 TurnState 节决定", mode)
+	}
+
+	withOfficialCodexLegacySyntheticProfile(t, "TurnState 节",
+		func(profile profilecontract.ExecutableProfile) bool { return profile.Optional().TurnState != nil },
+		turnStateLegacyMutation)
 	require.False(t, officialCodexTurnStateOwnerIsolation(officialClientProfileModeActive),
 		"旧画像没有 TurnState 节，不改变 WS 入口 turn-state 行为")
 	withOfficialCodexSyntheticProfile(t, turnStateTargetMutation(t))

@@ -31,6 +31,9 @@ func TestOpenAIGatewayService_Forward_CompactOnlyModelMappingOverridesOAuthUpstr
 	}}
 
 	svc := &OpenAIGatewayService{httpUpstream: upstream}
+	// legacy compact 只在仍声明该端点的画像槽位上可用：候选期是 Active，晋升后是 Previous
+	// 中的旧画像（目标画像已删除该端点，显式 compact 按批准语义失败关闭，由晋升后门禁覆盖）。
+	withOfficialCodexLegacyCompactRelease(t, svc)
 	account := &Account{
 		ID:          1,
 		Name:        "openai-oauth",
@@ -194,6 +197,9 @@ func TestOpenAIGatewayService_OAuthPassthrough_CompactOnlyModelMappingOverridesU
 	}}
 
 	svc := &OpenAIGatewayService{httpUpstream: upstream}
+	// legacy compact 只在仍声明该端点的画像槽位上可用：候选期是 Active，晋升后是 Previous
+	// 中的旧画像（目标画像已删除该端点，显式 compact 按批准语义失败关闭，由晋升后门禁覆盖）。
+	withOfficialCodexLegacyCompactRelease(t, svc)
 	account := &Account{
 		ID:          3,
 		Name:        "openai-oauth-pass",

@@ -127,7 +127,9 @@ func TestMarshalOfficialOpenAICompactJSONUsesCompactionOrder(t *testing.T) {
 		"input":            []any{},
 		"model":            "gpt-5.6",
 	}
-	body, err := marshalOfficialOpenAIHTTPJSON(officialClientProfileModeActive, payload, true)
+	// compact 字段序取自画像的 responses_compact 端点，只在仍声明该端点的槽位上存在：候选期
+	// 是 Active，晋升后是 Previous 中的旧画像（目标画像已删除该端点）。
+	body, err := marshalOfficialOpenAIHTTPJSON(officialCodexLegacyCompactProfileMode(t), payload, true)
 	require.NoError(t, err)
 	require.Equal(t, `{"model":"gpt-5.6","input":[],"instructions":"compact","prompt_cache_key":"cache","text":{"verbosity":"low"}}`, string(body))
 }

@@ -2,6 +2,7 @@ package officialegress
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/officialegress/profilecontract"
@@ -163,4 +164,74 @@ func syntheticRawSection(t *testing.T, value any) json.RawMessage {
 		t.Fatal(err)
 	}
 	return raw
+}
+
+// syntheticRemoveHeaderSlot 删除端点上指定名字的全部 header 槽位，并同步从
+// HeaderMapInsertionOrder 中去掉该名字；端点本来没有该槽位时为空操作。用于把画像
+// 还原成“未声明某个槽位”的旧形态。
+func syntheticRemoveHeaderSlot(
+	t *testing.T,
+	doc *profilecontract.SnapshotDoc,
+	endpointID string,
+	headerName string,
+) {
+	t.Helper()
+	endpoint := syntheticSnapshotEndpoint(t, doc, endpointID)
+	kept := make([]profilecontract.SnapshotHeaderSlot, 0, len(endpoint.Headers))
+	for _, slot := range endpoint.Headers {
+		if !strings.EqualFold(slot.Name, headerName) {
+			kept = append(kept, slot)
+		}
+	}
+	endpoint.Headers = kept
+	if len(endpoint.HeaderMapInsertionOrder) > 0 {
+		order := make([]string, 0, len(endpoint.HeaderMapInsertionOrder))
+		for _, name := range endpoint.HeaderMapInsertionOrder {
+			if !strings.EqualFold(name, headerName) {
+				order = append(order, name)
+			}
+		}
+		endpoint.HeaderMapInsertionOrder = order
+	}
+}
+
+// syntheticLegacyBundleForEndpoint 为“旧画像不受新结构影响、目标画像按新结构出站”一类
+// 用例选出旧画像对照组，并返回承载 endpointID 的 Bundle。
+//
+// 这类用例改动前一律以正式目录的 Active 画像充当“旧画像”：候选期 Active 确实是旧画像，
+// 目标画像只在 previous 槽位。VC-6 晋升后 Active 换成目标画像，它本身已经声明了被测的
+// 新结构，“旧画像”前提随之失效。这里改为按结构事实选择，不写死槽位名或版本号：
+//   - declares 判断画像是否声明了被测结构（可选节、槽位、条件、取值来源、传输参数等）；
+//   - 按 Active、Previous 的顺序取正式目录中第一个未声明该结构的发布，原样返回它的真实
+//     Bundle。候选期取到的是 Active，与改动前完全相同；晋升后取到的是 Previous 中的同一份
+//     旧画像，对照组仍是真实旧画像，判别力不变；
+//   - 两个槽位都已声明（旧画像随版本退休后）才以 Active 为底稿，用 strip 去掉该结构合成
+//     旧形态，并要求合成结果确实不再声明，防止 strip 与 declares 口径漂移后对照组悄悄失效。
+//
+// 用例的“目标画像”一侧继续用 syntheticCodexBundle 在本函数返回的旧画像上追加新结构，
+// 与改动前以 Active 旧画像为底稿的做法一致。
+func syntheticLegacyBundleForEndpoint(
+	t *testing.T,
+	endpointID string,
+	feature string,
+	declares func(profilecontract.ExecutableProfile) bool,
+	strip func(*profilecontract.SnapshotDoc),
+) ReleaseBundle {
+	t.Helper()
+	for _, mode := range []ReleaseMode{ReleaseModeActive, ReleaseModePrevious} {
+		release, err := DefaultReleaseCatalog().Resolve(mode)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !declares(release.ExecutableProfile()) {
+			bundle, _ := staticClosurePlanForEndpoint(t, mode, endpointID)
+			return bundle
+		}
+	}
+	base, _ := staticClosurePlanForEndpoint(t, ReleaseModeActive, endpointID)
+	legacy := syntheticCodexBundle(t, base, strip)
+	if declares(legacy.release.executable) {
+		t.Fatalf("以 Active 为底稿去掉「%s」后合成画像仍声明该结构：strip 与判定口径不一致，旧画像对照组无效", feature)
+	}
+	return legacy
 }

@@ -13,8 +13,45 @@ import (
 // 携带；旧画像的 WS 传输列表不变，HTTP 传输（已含 2308～2310）不受影响。
 var mlDSASignatureAlgorithms = []uint16{2308, 2309, 2310}
 
+// codexWebSocketTransportDeclaresMLDSA 判断画像的 WS 传输是否已在签名算法中声明任一 ML-DSA。
+func codexWebSocketTransportDeclaresMLDSA(profile profilecontract.ExecutableProfile) bool {
+	for _, transport := range profile.Transports() {
+		if transport.Protocol != "websocket" {
+			continue
+		}
+		for _, value := range mlDSASignatureAlgorithms {
+			if slices.Contains(transport.SignatureAlgorithms, value) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// stripWebSocketMLDSA 从画像的 WS 传输签名算法中去掉 ML-DSA，其余算法与顺序不变。
+func stripWebSocketMLDSA(doc *profilecontract.SnapshotDoc) {
+	for index := range doc.Transports {
+		if doc.Transports[index].Protocol != "websocket" {
+			continue
+		}
+		kept := make([]uint16, 0, len(doc.Transports[index].SignatureAlgorithms))
+		for _, value := range doc.Transports[index].SignatureAlgorithms {
+			if !slices.Contains(mlDSASignatureAlgorithms, value) {
+				kept = append(kept, value)
+			}
+		}
+		doc.Transports[index].SignatureAlgorithms = kept
+	}
+}
+
+// TestWebSocketTransportSignatureAlgorithmsFollowProfile 的“旧画像”一侧改动前直接取 Active
+// 画像；晋升后 Active 是 WS 传输已含 ML-DSA 的目标画像，旧画像前提失效。现按结构事实选出
+// WS 传输未声明 ML-DSA 的真实发布作为旧画像（候选期是 Active，晋升后是 Previous 中同一份
+// 旧画像）；都已声明时去掉 ML-DSA 合成旧形态。目标一侧仍在旧画像上追加，断言原样保留，
+// 末尾“HTTP 传输不受影响”的对照同样以该旧画像为基准。
 func TestWebSocketTransportSignatureAlgorithmsFollowProfile(t *testing.T) {
-	base, _ := staticClosurePlanForEndpoint(t, ReleaseModeActive, "responses_ws")
+	base := syntheticLegacyBundleForEndpoint(t, "responses_ws", "WS 传输的 ML-DSA 签名算法",
+		codexWebSocketTransportDeclaresMLDSA, stripWebSocketMLDSA)
 	legacyPlan := syntheticPlanForEndpoint(t, base, "responses_ws")
 	legacy := append([]uint16(nil), legacyPlan.template.transport.SignatureAlgorithms...)
 	if len(legacy) == 0 {

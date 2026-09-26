@@ -504,10 +504,27 @@ func TestEndpointDynamicInputsCloneDetachesServerResponseQuery(t *testing.T) {
 // 动态 ReturnedURL 端点：ServerResponseQuery 可信通道互斥
 // ----------------------------------------------------------------------------
 
+// TestValidateCompilerTargetRejectsServerResponseQueryForDynamicEndpoint 只需在 Active 中找到
+// 一个 ReturnedURL 动态端点。改动前逐个解析全部 Codex Sink 的 Active Bundle，默认每个 Sink
+// 都能在 Active 成包；晋升后 Active 的目标画像删除了 legacy compact 端点，只绑定该端点的
+// Sink 在 Active 下本就无法成包（版本 route 口径）。现按结构事实跳过 Active 画像未声明其任一
+// route 的 Sink，口径与 staticClosurePlanForEndpoint 相同；其余 Sink 解析失败仍直接报错，
+// 找不到动态端点仍失败，断言与改动前一致。
 func TestValidateCompilerTargetRejectsServerResponseQueryForDynamicEndpoint(t *testing.T) {
+	release, err := DefaultReleaseCatalog().Resolve(ReleaseModeActive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	physical, err := NewPhysicalRouteCatalog(DefaultSinkCatalog())
+	if err != nil {
+		t.Fatal(err)
+	}
 	var dynamicPlan ResolvedEndpointPlan
 	found := false
 	for _, binding := range codexProfileSinkBindings(t) {
+		if !staticClosureProfileDeclaresAnyRoute(t, release.ExecutableProfile(), physical, binding) {
+			continue
+		}
 		bundle := staticClosureBundle(t, ReleaseModeActive, binding.ID())
 		for _, plan := range bundle.EndpointPlans() {
 			if plan.DynamicTarget() {
@@ -559,23 +576,40 @@ func staticClosureProfileDeclaresAnyRoute(
 ) bool {
 	t.Helper()
 	for _, route := range binding.Routes() {
-		_, key, ok := physical.ResolveRoute(route)
-		if !ok {
-			t.Fatalf("Sink %s 的 route 缺少物理路由", binding.ID())
+		if staticClosureProfileDeclaresRoute(t, profile, physical, binding.ID(), route) {
+			return true
 		}
-		for _, endpoint := range profile.Endpoints() {
-			protocol := WireProtocolHTTP
-			if strings.EqualFold(strings.TrimSpace(endpoint.Upgrade), "websocket") {
-				protocol = WireProtocolWebSocket
-			}
-			path := endpoint.Path
-			if !strings.HasPrefix(path, "/") {
-				path = "/" + path
-			}
-			if endpoint.Method == key.Method && protocol == key.Protocol &&
-				normalizeRouteHost(endpoint.Host) == normalizeRouteHost(key.Host) && path == key.Path {
-				return true
-			}
+	}
+	return false
+}
+
+// staticClosureProfileDeclaresRoute 是 staticClosureProfileDeclaresAnyRoute 的单条 route 版本：
+// 画像是否声明了与该 route 同 method、host、path 与协议的端点。需要“Sink 的全部 route 都有
+// 端点”这类判定的调用方（例如合成回滚矩阵选底稿）逐条调用它。
+func staticClosureProfileDeclaresRoute(
+	t *testing.T,
+	profile profilecontract.ExecutableProfile,
+	physical PhysicalRouteCatalog,
+	sinkID SinkID,
+	route CatalogRoute,
+) bool {
+	t.Helper()
+	_, key, ok := physical.ResolveRoute(route)
+	if !ok {
+		t.Fatalf("Sink %s 的 route 缺少物理路由", sinkID)
+	}
+	for _, endpoint := range profile.Endpoints() {
+		protocol := WireProtocolHTTP
+		if strings.EqualFold(strings.TrimSpace(endpoint.Upgrade), "websocket") {
+			protocol = WireProtocolWebSocket
+		}
+		path := endpoint.Path
+		if !strings.HasPrefix(path, "/") {
+			path = "/" + path
+		}
+		if endpoint.Method == key.Method && protocol == key.Protocol &&
+			normalizeRouteHost(endpoint.Host) == normalizeRouteHost(key.Host) && path == key.Path {
+			return true
 		}
 	}
 	return false

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/officialegress/profilecontract"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
@@ -35,6 +36,25 @@ func turnMetadataTargetMutation(t *testing.T) func(*profilecontract.SnapshotDoc)
 	return func(doc *profilecontract.SnapshotDoc) {
 		doc.TurnMetadata = syntheticServiceRawSection(t, turnMetadataTargetSection())
 	}
+}
+
+// officialCodexProfileDeclaresTurnMetadata 判断画像是否声明 TurnMetadata 节。
+func officialCodexProfileDeclaresTurnMetadata(profile profilecontract.ExecutableProfile) bool {
+	return profile.Optional().TurnMetadata != nil
+}
+
+// turnMetadataLegacyMutation 去掉画像的 TurnMetadata 节，还原为未声明新键的旧画像形态。
+func turnMetadataLegacyMutation(doc *profilecontract.SnapshotDoc) {
+	doc.TurnMetadata = nil
+}
+
+// withTurnMetadataLegacyProfile 提供旧画像对照组。四个生成点的用例改动前都直接把 Active 当作
+// 旧画像；VC-6 晋升后 Active 是已声明 TurnMetadata 节的目标画像，改为以 Active 为底稿去掉该节
+// 合成（候选期去节是空操作，与改动前一致）。
+func withTurnMetadataLegacyProfile(t *testing.T) {
+	t.Helper()
+	withOfficialCodexLegacySyntheticProfile(t, "TurnMetadata 节",
+		officialCodexProfileDeclaresTurnMetadata, turnMetadataLegacyMutation)
 }
 
 func jsonTopLevelKeys(t *testing.T, raw string) []string {
@@ -128,14 +148,23 @@ func TestOfficialCodexTurnTriggerAndEffectiveEffort(t *testing.T) {
 }
 
 // HTTP 生成点：旧画像无新键；目标画像在登记的 turn metadata 中写入四个新键。
+//
+// 先在正式目录逐槽位核验“新键出现当且仅当该槽位画像声明 TurnMetadata 节”（晋升前后都覆盖
+// 两份真实画像），再做合成的旧画像／目标画像对照（见 withTurnMetadataLegacyProfile）。
 func TestOfficialOpenAIHTTPTurnMetadataFollowsProfileSection(t *testing.T) {
-	build := func(t *testing.T) string {
+	buildForMode := func(t *testing.T, mode string) string {
 		t.Helper()
 		body := newOfficialOpenAIHTTPTestBody(t, false, false, false)
 		contract, err := captureOfficialOpenAIHTTPBodyContract(body)
 		require.NoError(t, err)
 		c := newOfficialOpenAIHTTPTestContext(body, "/v1/responses")
-		req, err := (&OpenAIGatewayService{}).buildUpstreamRequest(
+		// Active 与改动前一样不带配置；其他槽位经画像配置指向（生产上与 Executor 同源）。
+		svc := &OpenAIGatewayService{}
+		if mode != officialClientProfileModeActive {
+			svc.cfg = &config.Config{}
+			svc.cfg.Gateway.OfficialClientProfiles.Mode = mode
+		}
+		req, err := svc.buildUpstreamRequest(
 			c.Request.Context(), c, newOfficialOpenAIHTTPTestAccount(94), body, "oauth-token",
 			openAIUpstreamRequestPlan{
 				IsStream: true, PromptCacheKey: testOfficialOpenAISessionID, IsCodexCLI: true,
@@ -147,7 +176,25 @@ func TestOfficialOpenAIHTTPTurnMetadataFollowsProfileSection(t *testing.T) {
 		require.True(t, ok)
 		return mustOfficialEgressField(t, egressContext, OfficialEgressFieldTurnMetadata).Value()
 	}
+	build := func(t *testing.T) string {
+		t.Helper()
+		return buildForMode(t, officialClientProfileModeActive)
+	}
 
+	for _, mode := range officialCodexFormalModes {
+		metadata := buildForMode(t, mode)
+		if officialCodexProfileDeclaresTurnMetadata(officialCodexFormalExecutableProfile(t, mode)) {
+			require.True(t, gjson.Get(metadata, "analytics_enabled").Exists(), "%s 槽位声明了该节", mode)
+			require.NotEmpty(t, gjson.Get(metadata, "model").String(), "%s 槽位声明了该节", mode)
+			require.Equal(t, "exec", gjson.Get(metadata, "turn_trigger").String(), "%s 槽位声明了该节", mode)
+			continue
+		}
+		for _, key := range []string{"analytics_enabled", "model", "reasoning_effort", "turn_trigger"} {
+			require.False(t, gjson.Get(metadata, key).Exists(), "%s 槽位未声明该节，不得出现 %s", mode, key)
+		}
+	}
+
+	withTurnMetadataLegacyProfile(t)
 	legacy := build(t)
 	for _, key := range []string{"analytics_enabled", "model", "reasoning_effort", "turn_trigger"} {
 		require.False(t, gjson.Get(legacy, key).Exists(), "旧画像 turn metadata 不得出现 %s", key)
@@ -173,11 +220,18 @@ func TestOfficialOpenAIHTTPTurnMetadataFollowsProfileSection(t *testing.T) {
 
 func newTurnMetadataWSTestContext(t *testing.T) *OfficialEgressContext {
 	t.Helper()
+	return newTurnMetadataWSTestContextForMode(t, officialClientProfileModeActive)
+}
+
+// newTurnMetadataWSTestContextForMode 与 newTurnMetadataWSTestContext 相同，只是冻结在 mode 槽位，
+// 供正式目录逐槽位断言使用。
+func newTurnMetadataWSTestContextForMode(t *testing.T, mode string) *OfficialEgressContext {
+	t.Helper()
 	state := defaultOfficialCodexRuntimeState()
-	state.ProfileMode = officialClientProfileModeActive
+	state.ProfileMode = mode
 	egressContext := NewOfficialEgressContext(OfficialEgressContextInput{
 		AccountID: 157, TargetPlatform: PlatformOpenAI,
-		ProfileVersion: officialCodexVersion0145, ProfileMode: officialClientProfileModeActive,
+		ProfileVersion: officialCodexVersion0145, ProfileMode: mode,
 		Transport: OfficialEgressTransportWebSocket, UpstreamHost: "chatgpt.com",
 		DefaultReasoningLevel: "medium", ReasoningDefaultsKnown: true,
 		CodexRuntimeState: state,
@@ -207,6 +261,24 @@ func TestOfficialOpenAIWSFrameTurnMetadataFollowsProfileSection(t *testing.T) {
 			}},
 		}
 	}
+	// 正式目录逐槽位：普通帧的新键出现当且仅当该槽位画像声明 TurnMetadata 节。
+	for _, mode := range officialCodexFormalModes {
+		formalMetadata, _, formalErr := buildDerivedOfficialOpenAIWSFrameMetadataWithTurnPolicy(
+			newTurnMetadataWSTestContextForMode(t, mode), turnPayload(), false,
+		)
+		require.NoError(t, formalErr)
+		formal, ok := formalMetadata["x-codex-turn-metadata"].(string)
+		require.True(t, ok, "%s 槽位的 turn metadata 必须是字符串", mode)
+		if officialCodexProfileDeclaresTurnMetadata(officialCodexFormalExecutableProfile(t, mode)) {
+			require.True(t, gjson.Get(formal, "analytics_enabled").Exists(), "%s 槽位声明了该节", mode)
+			require.Equal(t, "exec", gjson.Get(formal, "turn_trigger").String(), "%s 槽位声明了该节", mode)
+		} else {
+			require.False(t, gjson.Get(formal, "analytics_enabled").Exists(), "%s 槽位未声明该节", mode)
+			require.False(t, gjson.Get(formal, "turn_trigger").Exists(), "%s 槽位未声明该节", mode)
+		}
+	}
+
+	withTurnMetadataLegacyProfile(t)
 	legacyMetadata, _, err := buildDerivedOfficialOpenAIWSFrameMetadataWithTurnPolicy(
 		newTurnMetadataWSTestContext(t), turnPayload(), false,
 	)
@@ -242,10 +314,10 @@ func TestOfficialOpenAIWSFrameTurnMetadataFollowsProfileSection(t *testing.T) {
 
 // 兜底生成点：未登记 turn metadata 的 Responses 请求。旧画像保持结构体序列化结果。
 func TestOfficialCodexFallbackTurnMetadataFollowsProfileSection(t *testing.T) {
-	build := func(t *testing.T) string {
+	buildForMode := func(t *testing.T, mode string) string {
 		t.Helper()
 		state := defaultOfficialCodexRuntimeState()
-		state.ProfileMode = officialClientProfileModeActive
+		state.ProfileMode = mode
 		body := `{"model":"gpt-5.6-luna","input":[],"reasoning":{"effort":"low"}}`
 		req := httptest.NewRequest(http.MethodPost, "https://chatgpt.com/backend-api/codex/responses", strings.NewReader(body))
 		ctx, err := withOfficialCodexRuntimeState(req.Context(), state)
@@ -258,6 +330,26 @@ func TestOfficialCodexFallbackTurnMetadataFollowsProfileSection(t *testing.T) {
 		require.NoError(t, err)
 		return attempt.IdentityFacts.TurnMetadata.Value
 	}
+	build := func(t *testing.T) string {
+		t.Helper()
+		return buildForMode(t, officialClientProfileModeActive)
+	}
+	legacyKeys := []string{
+		"installation_id", "session_id", "thread_id", "turn_id", "window_id", "request_kind", "thread_source", "sandbox",
+	}
+
+	// 正式目录逐槽位：未声明 TurnMetadata 节的槽位保持结构体序列化结果，声明了的槽位追加新键。
+	for _, mode := range officialCodexFormalModes {
+		formalKeys := jsonTopLevelKeys(t, buildForMode(t, mode))
+		if officialCodexProfileDeclaresTurnMetadata(officialCodexFormalExecutableProfile(t, mode)) {
+			require.Subset(t, formalKeys, []string{"turn_trigger", "analytics_enabled", "model", "reasoning_effort"},
+				"%s 槽位声明了该节", mode)
+			continue
+		}
+		require.Equal(t, legacyKeys, formalKeys, "%s 槽位未声明该节，必须保持结构体序列化结果", mode)
+	}
+
+	withTurnMetadataLegacyProfile(t)
 	legacy := build(t)
 	require.Equal(t, []string{
 		"installation_id", "session_id", "thread_id", "turn_id", "window_id", "request_kind", "thread_source", "sandbox",
@@ -279,11 +371,11 @@ func TestOfficialCodexFallbackTurnMetadataFollowsProfileSection(t *testing.T) {
 // WS 握手生成点：prewarm 形态，写 analytics_enabled、model、reasoning_effort，不写 turn_trigger。
 func TestOfficialOpenAIWSHandshakeTurnMetadataFollowsProfileSection(t *testing.T) {
 	firstFrame := []byte(`{"type":"response.create","model":"gpt-5.6-luna","reasoning":{"effort":"high"},"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}]}`)
-	handshake := func(t *testing.T) string {
+	handshakeForMode := func(t *testing.T, mode string) string {
 		t.Helper()
 		egressContext := NewOfficialEgressContext(OfficialEgressContextInput{
 			AccountID: 157, TargetPlatform: PlatformOpenAI,
-			ProfileVersion: officialCodexVersion0145, ProfileMode: officialClientProfileModeActive,
+			ProfileVersion: officialCodexVersion0145, ProfileMode: mode,
 			Transport: OfficialEgressTransportWebSocket, UpstreamHost: "chatgpt.com",
 		})
 		c := promptCacheTestContext(t, firstFrame)
@@ -292,6 +384,22 @@ func TestOfficialOpenAIWSHandshakeTurnMetadataFollowsProfileSection(t *testing.T
 		))
 		return mustOfficialEgressField(t, egressContext, OfficialEgressFieldTurnMetadata).Value()
 	}
+	handshake := func(t *testing.T) string {
+		t.Helper()
+		return handshakeForMode(t, officialClientProfileModeActive)
+	}
+
+	// 正式目录逐槽位：握手（prewarm 形态）的 model 出现当且仅当该槽位画像声明 TurnMetadata 节，
+	// 且无论是否声明都不写 turn_trigger。
+	for _, mode := range officialCodexFormalModes {
+		formal := handshakeForMode(t, mode)
+		require.Equal(t, "prewarm", gjson.Get(formal, "request_kind").String(), "%s 槽位", mode)
+		require.Equal(t, officialCodexProfileDeclaresTurnMetadata(officialCodexFormalExecutableProfile(t, mode)),
+			gjson.Get(formal, "model").Exists(), "%s 槽位的 model 必须由 TurnMetadata 节决定", mode)
+		require.False(t, gjson.Get(formal, "turn_trigger").Exists(), "%s 槽位", mode)
+	}
+
+	withTurnMetadataLegacyProfile(t)
 	legacy := handshake(t)
 	require.Equal(t, "prewarm", gjson.Get(legacy, "request_kind").String())
 	require.False(t, gjson.Get(legacy, "model").Exists())

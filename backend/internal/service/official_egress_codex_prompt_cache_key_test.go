@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/officialegress/profilecontract"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -56,18 +57,68 @@ func promptCacheTestBody(t *testing.T, promptCacheKey string, clientSession stri
 
 func derivePromptCacheTestIdentity(t *testing.T, promptCacheKey string, clientSession string) officialOpenAIHTTPIdentity {
 	t.Helper()
+	return derivePromptCacheTestIdentityForMode(t, officialClientProfileModeActive, promptCacheKey, clientSession)
+}
+
+// derivePromptCacheTestIdentityForMode 与 derivePromptCacheTestIdentity 相同，只是按 mode 槽位派生，
+// 供正式目录逐槽位断言使用。
+func derivePromptCacheTestIdentityForMode(
+	t *testing.T,
+	mode string,
+	promptCacheKey string,
+	clientSession string,
+) officialOpenAIHTTPIdentity {
+	t.Helper()
 	body := promptCacheTestBody(t, promptCacheKey, clientSession)
 	contract, err := captureOfficialOpenAIHTTPBodyContract(body)
 	require.NoError(t, err)
 	identity, err := deriveOfficialOpenAIHTTPIdentity(
 		promptCacheTestContext(t, body), newOfficialOpenAIHTTPTestAccount(157), body, contract,
-		officialClientProfileModeActive,
+		mode,
 	)
 	require.NoError(t, err)
 	return identity
 }
 
+// officialCodexProfileSessionFromPromptCacheKey 是测试侧独立实现的结构判定：画像的 Responses
+// 端点是否把 session-id 来源声明为 prompt_cache_key。
+func officialCodexProfileSessionFromPromptCacheKey(profile profilecontract.ExecutableProfile) bool {
+	for _, endpoint := range profile.Endpoints() {
+		if endpoint.ID != officialCodexEndpointResponsesHTTP && endpoint.ID != officialCodexEndpointResponsesWS {
+			continue
+		}
+		for _, slot := range endpoint.Headers {
+			if slot.Source == profilecontract.SourcePromptCacheKey {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// TestDeriveOfficialOpenAIHTTPIdentityIgnoresForkUnderLegacyProfile 改动前直接把 Active 当作旧画像；
+// VC-6 晋升后 Active 是已把 session-id 来源声明为 prompt_cache_key 的目标画像。现分两部分保持原意：
+//   - 正式目录逐槽位：fork 是否改用源会话缓存键，恰由该槽位画像是否声明该来源决定，晋升前后
+//     都覆盖两份真实画像；
+//   - 旧画像对照组：以 Active 为底稿把来源改回会话身份合成（候选期是空操作），断言原样保留。
+//
+// 声明该来源时的合成画像行为由 TestDeriveOfficialOpenAIHTTPIdentityForkUsesSourceCacheKeyWhenProfileDeclares 覆盖。
 func TestDeriveOfficialOpenAIHTTPIdentityIgnoresForkUnderLegacyProfile(t *testing.T) {
+	for _, mode := range officialCodexFormalModes {
+		formalSource := derivePromptCacheTestIdentityForMode(t, mode, promptCacheTestSourceSession, promptCacheTestSourceSession)
+		formalFork := derivePromptCacheTestIdentityForMode(t, mode, promptCacheTestSourceSession, promptCacheTestForkSession)
+		if officialCodexProfileSessionFromPromptCacheKey(officialCodexFormalExecutableProfile(t, mode)) {
+			require.Equal(t, formalSource.sessionID, formalFork.promptCacheKey,
+				"%s 槽位声明了该来源，fork 的 prompt cache 键等于源会话派生出的 session ID", mode)
+			require.NotEqual(t, formalFork.sessionID, formalFork.promptCacheKey, "%s 槽位", mode)
+			continue
+		}
+		require.Equal(t, formalFork.sessionID, formalFork.promptCacheKey, "%s 槽位未声明该来源，prompt cache 键恒等于 session ID", mode)
+		require.Equal(t, formalSource.sessionID, formalFork.sessionID, "%s 槽位未声明该来源，按请求体 prompt_cache_key 锚定会话", mode)
+	}
+
+	withOfficialCodexLegacySyntheticProfile(t, "session-id 的 prompt_cache_key 来源",
+		officialCodexProfileSessionFromPromptCacheKey, syntheticPromptCacheKeyLegacyMutation(t))
 	source := derivePromptCacheTestIdentity(t, promptCacheTestSourceSession, promptCacheTestSourceSession)
 	fork := derivePromptCacheTestIdentity(t, promptCacheTestSourceSession, promptCacheTestForkSession)
 	require.Equal(t, fork.sessionID, fork.promptCacheKey, "旧画像的 prompt cache 键恒等于 session ID")

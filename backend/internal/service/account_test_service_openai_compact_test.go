@@ -46,6 +46,11 @@ func TestAccountTestService_TestAccountConnection_OpenAICompactOAuthSuccessPersi
 		accountRepo:  repo,
 		httpUpstream: upstream,
 	}
+	// 管理端 legacy compact 探针只在仍声明该端点的画像槽位上可用：候选期是 Active，晋升后
+	// 是 Previous 中的旧画像（目标画像已删除该端点，只承载它的 admin_test.compact Sink 在目标
+	// 槽位无法成包，由晋升后门禁覆盖）。
+	compactMode := withOfficialCodexLegacyCompactAccountTestRelease(t, svc)
+	compactVersion, compactUserAgent := officialCodexBuildIdentityForMode(t, compactMode)
 	pluginManager := &PluginManager{}
 	pluginManager.route.Store(&pluginRoute{pluginID: 1, rolloutPercent: 100, unavailable: "官方画像不得进入插件"})
 	svc.pluginManager = pluginManager
@@ -60,7 +65,8 @@ func TestAccountTestService_TestAccountConnection_OpenAICompactOAuthSuccessPersi
 	require.Equal(t, chatgptCodexAPIURL+"/compact", upstream.lastReq.URL.String())
 	require.Equal(t, "chatgpt.com", upstream.lastReq.Host)
 	require.Equal(t, "*/*", upstream.lastReq.Header.Get("Accept"))
-	require.Equal(t, codexCLIVersion, upstream.lastReq.Header.Get("Version"))
+	// 版本与 UA 取探针所在槽位的发布身份（候选期即 Active 的 codexCLIVersion/codexCLIUserAgent）。
+	require.Equal(t, compactVersion, upstream.lastReq.Header.Get("Version"))
 	// 会话头必须是官方形态：连字符小写的 session-id / thread-id，且没有
 	// conversation-id（SPEC-HDR-007，官方 compact 16 项线序的第 5、6 位）。
 	require.NotEmpty(t, upstream.lastReq.Header.Get("session-id"))
@@ -69,7 +75,7 @@ func TestAccountTestService_TestAccountConnection_OpenAICompactOAuthSuccessPersi
 	require.Empty(t, upstream.lastReq.Header.Values(http.CanonicalHeaderKey("Conversation_ID")))
 	require.Empty(t, upstream.lastReq.Header.Get("Conversation-Id"))
 	require.Equal(t, HTTPUpstreamProfileOpenAI, HTTPUpstreamProfileFromContext(upstream.lastReq.Context()))
-	require.Equal(t, codexCLIUserAgent, upstream.lastReq.Header.Get("User-Agent"))
+	require.Equal(t, compactUserAgent, upstream.lastReq.Header.Get("User-Agent"))
 	require.Equal(t, "chatgpt-acc", upstream.lastReq.Header.Get("chatgpt-account-id"))
 	require.Equal(t, "true", upstream.lastReq.Header.Get("x-openai-fedramp"))
 	identity, ok := officialegress.AttemptIdentityFromContext(upstream.lastReq.Context())
@@ -115,6 +121,10 @@ func TestAccountTestService_TestAccountConnection_OpenAICompactOAuth404MarksUnsu
 		accountRepo:  repo,
 		httpUpstream: upstream,
 	}
+	// 管理端 legacy compact 探针只在仍声明该端点的画像槽位上可用：候选期是 Active，晋升后
+	// 是 Previous 中的旧画像（目标画像已删除该端点，只承载它的 admin_test.compact Sink 在目标
+	// 槽位无法成包，由晋升后门禁覆盖）。
+	withOfficialCodexLegacyCompactAccountTestRelease(t, svc)
 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -176,6 +186,10 @@ func TestAccountTestService_TestAccountConnection_OpenAICompactShadowUsesParentC
 		accountRepo:  repo,
 		httpUpstream: upstream,
 	}
+	// 管理端 legacy compact 探针只在仍声明该端点的画像槽位上可用：候选期是 Active，晋升后
+	// 是 Previous 中的旧画像（目标画像已删除该端点，只承载它的 admin_test.compact Sink 在目标
+	// 槽位无法成包，由晋升后门禁覆盖）。
+	withOfficialCodexLegacyCompactAccountTestRelease(t, svc)
 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -239,6 +253,11 @@ func TestAccountTestService_TestAccountConnection_OpenAICompactShadowMimicUsesLo
 		httpUpstream: upstream,
 		cfg:          &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
 	}
+	// 管理端 legacy compact 探针只在仍声明该端点的画像槽位上可用：候选期是 Active，晋升后
+	// 是 Previous 中的旧画像（目标画像已删除该端点，只承载它的 admin_test.compact Sink 在目标
+	// 槽位无法成包，由晋升后门禁覆盖）。
+	compactMode := withOfficialCodexLegacyCompactAccountTestRelease(t, svc)
+	compactVersion, compactUserAgent := officialCodexBuildIdentityForMode(t, compactMode)
 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -250,12 +269,13 @@ func TestAccountTestService_TestAccountConnection_OpenAICompactShadowMimicUsesLo
 	require.Equal(t, chatgptCodexAPIURL+"/compact", upstream.lastReq.URL.String())
 	require.Equal(t, "Bearer parent-token", upstream.lastReq.Header.Get("Authorization"))
 	require.Equal(t, "parent-chatgpt", upstream.lastReq.Header.Get("chatgpt-account-id"))
-	require.Equal(t, officialOpenAIHTTPUserAgent, upstream.lastReq.Header.Get("User-Agent"))
+	// 版本与 UA 取探针所在槽位的发布身份（候选期即 Active 的 officialOpenAIHTTPUserAgent/codexCLIVersion）。
+	require.Equal(t, compactUserAgent, upstream.lastReq.Header.Get("User-Agent"))
 	require.Equal(t, officialOpenAIHTTPOriginator, upstream.lastReq.Header.Get("originator"))
 	require.Empty(t, getHeaderRaw(upstream.lastReq.Header, "x-codex-beta-features"),
 		"官方 compact 画像不声明 Responses beta feature")
 	require.Empty(t, upstream.lastReq.Header.Get("OpenAI-Beta"))
-	require.Equal(t, codexCLIVersion, upstream.lastReq.Header.Get("Version"))
+	require.Equal(t, compactVersion, upstream.lastReq.Header.Get("Version"))
 
 	updates := <-updateCalls
 	require.Equal(t, true, updates["openai_compact_supported"])

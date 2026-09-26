@@ -584,7 +584,13 @@ func TestOpenAIGatewayService_OpenAIHTTPStripsInputNamespacesBeforeFirstForward(
 				c := newOpenAIRejectedFieldTestContext(body)
 				c.Request.URL.Path = path
 
-				result, err := newOpenAIRejectedFieldTestService(upstream).Forward(
+				svc := newOpenAIRejectedFieldTestService(upstream)
+				if tt.account.IsOpenAIOAuth() && path == "/v1/responses/compact" {
+					// OAuth 的 legacy compact 只在仍声明该端点的画像槽位上可用：候选期是 Active，
+					// 晋升后是 Previous 中的旧画像；API Key 与普通 Responses 不受画像槽位影响。
+					withOfficialCodexLegacyCompactRelease(t, svc)
+				}
+				result, err := svc.Forward(
 					context.Background(),
 					c,
 					tt.account,

@@ -465,6 +465,7 @@ func TestQueryUsageAgentIdentityUsesAssertionWithoutOAuthToken(t *testing.T) {
 
 func TestQueryUsageAgentIdentityRecoversInvalidTaskOnce(t *testing.T) {
 	configureObserveGuardForLocalHTTPTest(t)
+	resetOfficialCodexWorkspaceRoutingResults(t)
 	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	require.NoError(t, err)
 	der, err := x509.MarshalPKCS8PrivateKey(privateKey)
@@ -498,6 +499,13 @@ func TestQueryUsageAgentIdentityRecoversInvalidTaskOnce(t *testing.T) {
 		if strings.Contains(r.URL.Path, "/settings/user") {
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = w.Write([]byte(`{}`))
+			return
+		}
+		if strings.Contains(r.URL.Path, "/accounts/check") {
+			// 画像声明 WorkspaceRouting 节时（VC-6 晋升后的 Active 目标画像），完整配额查询先发出
+			// 工作区路由发现请求。改动前这里把其余路径一律计为 usage，发现请求会被误计并吃掉
+			// 首次 invalid_task_id 应答；它不是本用例的被测请求，应答默认路由后不计入 usage。
+			_, _ = w.Write([]byte(`{"accounts":[{"id":"account-quota-recovery","workspace_backend_origin":"NO_CONSTRAINT","account_routing_override":"NO_CONSTRAINT"}]}`))
 			return
 		}
 		usageCalls++
@@ -770,7 +778,15 @@ func TestCachePostResetSnapshot(t *testing.T) {
 	require.Equal(t, 0.0, repo.extraUpdates[100]["codex_7d_used_percent"])
 }
 
+// TestCodexWhamRequestsUseClosedBackendClientProfile 证明 WHAM 配额请求逐个使用闭合的 backend client
+// 画像。改动前按下标写死“QueryUsage 发出 settings/user、usage，ResetCredit 发出
+// rate-limit-reset-credits、consume”四个请求；VC-6 晋升后 Active 的目标画像声明了 WorkspaceRouting
+// 节，完整配额查询会先发出发现请求（取自该节的发现端点）。现改为按端点驱动期望：Active 画像
+// 声明该节时在首位加入发现请求，其余四个请求的 URL、端点、header 闭集与改动前逐项相同；每个
+// 请求（含发现请求）都按原口径校验 TLS 画像、H1 规则、attempt 身份与连接池。候选期 Active 未声明
+// 该节，期望序列与改动前完全一致。
 func TestCodexWhamRequestsUseClosedBackendClientProfile(t *testing.T) {
+	resetOfficialCodexWorkspaceRoutingResults(t)
 	account := &Account{
 		ID:       710,
 		Platform: PlatformOpenAI,
@@ -787,6 +803,9 @@ func TestCodexWhamRequestsUseClosedBackendClientProfile(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("content-type", "application/json")
 		switch request.URL.Path {
+		case "/backend-api/wham/accounts/check":
+			// 工作区路由发现请求：应答默认路由，不影响后续请求。
+			_, _ = writer.Write([]byte(`{"accounts":[{"id":"acct-wham-profile","workspace_backend_origin":"NO_CONSTRAINT","account_routing_override":"NO_CONSTRAINT"}]}`))
 		case "/backend-api/wham/settings/user":
 			_, _ = writer.Write([]byte(`{}`))
 		case "/backend-api/wham/usage":
@@ -816,23 +835,51 @@ func TestCodexWhamRequestsUseClosedBackendClientProfile(t *testing.T) {
 	_, err = service.ResetCredit(runtimeContext, account.ID)
 	require.NoError(t, err)
 
-	require.Len(t, upstream.requests, 4)
-	require.Len(t, upstream.tlsProfiles, 4)
-	expectedTargets := []string{
-		"https://chatgpt.com/backend-api/wham/settings/user",
-		"https://chatgpt.com/backend-api/wham/usage",
-		"https://chatgpt.com/backend-api/wham/rate-limit-reset-credits",
-		"https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume",
+	// whamExpectation 是一次 WHAM 请求的期望：目标 URL、端点 ID 与基础四头之外的专属 header。
+	type whamExpectation struct {
+		target       string
+		endpointID   string
+		extraHeaders []string
 	}
-	expectedEndpointIDs := []string{
-		officialCodexEndpointWhamSettingsUser,
-		officialCodexEndpointWhamUsage,
-		officialCodexEndpointWhamResetCredits,
-		officialCodexEndpointWhamConsumeResetCredit,
+	var expected []whamExpectation
+	activeProfile := officialCodexFormalExecutableProfile(t, officialClientProfileModeActive)
+	if section := activeProfile.Optional().WorkspaceRouting; section != nil {
+		discoveryPath := ""
+		for _, endpoint := range activeProfile.Endpoints() {
+			if endpoint.ID == section.DiscoveryEndpointID {
+				discoveryPath = endpoint.Path
+			}
+		}
+		require.NotEmpty(t, discoveryPath, "WorkspaceRouting 节的发现端点 %s 必须在画像中声明", section.DiscoveryEndpointID)
+		expected = append(expected, whamExpectation{
+			target: "https://chatgpt.com" + discoveryPath, endpointID: section.DiscoveryEndpointID,
+		})
 	}
+	expected = append(expected,
+		whamExpectation{
+			target:     "https://chatgpt.com/backend-api/wham/settings/user",
+			endpointID: officialCodexEndpointWhamSettingsUser, extraHeaders: []string{"cache-control"},
+		},
+		// SPEC-EP-019 的 0.154.0 change：只有 /wham/usage 带 Luna Reserve 条件头。
+		whamExpectation{
+			target:     "https://chatgpt.com/backend-api/wham/usage",
+			endpointID: officialCodexEndpointWhamUsage, extraHeaders: []string{"x-openai-codex-luna-reserve"},
+		},
+		whamExpectation{
+			target:     "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits",
+			endpointID: officialCodexEndpointWhamResetCredits,
+		},
+		whamExpectation{
+			target:     "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume",
+			endpointID: officialCodexEndpointWhamConsumeResetCredit, extraHeaders: []string{"content-type"},
+		},
+	)
+	require.Len(t, upstream.requests, len(expected))
+	require.Len(t, upstream.tlsProfiles, len(expected))
 	poolIDs := make([]string, 0, len(upstream.requests))
 	for index, request := range upstream.requests {
-		require.Equal(t, expectedTargets[index], request.URL.String())
+		want := expected[index]
+		require.Equal(t, want.target, request.URL.String())
 		require.Equal(t, "chatgpt.com", request.Host)
 		require.Equal(t, "Bearer token-wham-profile", request.Header.Get("Authorization"))
 		require.Equal(t, "acct-wham-profile", request.Header.Get("Chatgpt-Account-Id"))
@@ -853,7 +900,7 @@ func TestCodexWhamRequestsUseClosedBackendClientProfile(t *testing.T) {
 		require.True(t, upstream.tlsProfiles[index].Transport.StrictH1Wire)
 		attempt, ok := officialegress.AttemptIdentityFromContext(request.Context())
 		require.True(t, ok)
-		require.Equal(t, expectedEndpointIDs[index], attempt.EndpointID)
+		require.Equal(t, want.endpointID, attempt.EndpointID)
 		require.Equal(t, officialegress.SinkCodexQuotaWHAM, attempt.SinkID)
 		require.NotEmpty(t, attempt.BundleDigest)
 		poolIDs = append(poolIDs, attempt.ConnectionPoolDigest)
@@ -870,28 +917,22 @@ func TestCodexWhamRequestsUseClosedBackendClientProfile(t *testing.T) {
 		for name := range request.Header {
 			headerNames = append(headerNames, strings.ToLower(name))
 		}
-		expectedHeaders := []string{"user-agent", "authorization", "chatgpt-account-id", "accept"}
-		if index == 0 {
-			expectedHeaders = append(expectedHeaders, "cache-control")
-		}
-		if index == 1 {
-			// SPEC-EP-019 的 0.154.0 change：只有 /wham/usage 带 Luna Reserve 条件头。
-			expectedHeaders = append(expectedHeaders, "x-openai-codex-luna-reserve")
+		expectedHeaders := append([]string{"user-agent", "authorization", "chatgpt-account-id", "accept"}, want.extraHeaders...)
+		if want.endpointID == officialCodexEndpointWhamUsage {
 			require.Equal(t, "1", request.Header.Get("X-Openai-Codex-Luna-Reserve"))
 		} else {
 			require.Empty(t, request.Header.Get("X-Openai-Codex-Luna-Reserve"))
 		}
-		if index == 3 {
-			expectedHeaders = append(expectedHeaders, "content-type")
+		if want.endpointID == officialCodexEndpointWhamConsumeResetCredit {
 			require.Equal(t, "application/json", request.Header.Get("Content-Type"))
 		} else {
 			require.Empty(t, request.Header.Get("Content-Type"))
 		}
 		require.ElementsMatch(t, expectedHeaders, headerNames)
 	}
-	require.Equal(t, poolIDs[0], poolIDs[1])
-	require.Equal(t, poolIDs[1], poolIDs[2])
-	require.Equal(t, poolIDs[2], poolIDs[3])
+	for index := 1; index < len(poolIDs); index++ {
+		require.Equal(t, poolIDs[0], poolIDs[index], "全部 WHAM 请求必须复用同一账号级长连接池")
+	}
 	require.NotEmpty(t, poolIDs[0])
 	processRuntime, err := resolveOfficialEgressRuntime(nil, upstream)
 	require.NoError(t, err)
@@ -902,11 +943,12 @@ func TestCodexWhamRequestsUseClosedBackendClientProfile(t *testing.T) {
 		"QueryUsage 的两个 WHAM endpoint 必须共用一次解析；独立 ResetCredit 再解析一次",
 	)
 
-	require.Empty(t, upstream.bodies[0])
-	require.Empty(t, upstream.bodies[1])
-	require.Empty(t, upstream.bodies[2])
+	consumeIndex := len(expected) - 1
+	for index := 0; index < consumeIndex; index++ {
+		require.Empty(t, upstream.bodies[index], "%s 不带请求体", expected[index].endpointID)
+	}
 	var consumeBody map[string]string
-	require.NoError(t, json.Unmarshal(upstream.bodies[3], &consumeBody))
+	require.NoError(t, json.Unmarshal(upstream.bodies[consumeIndex], &consumeBody))
 	require.Len(t, consumeBody, 1)
 	require.NotEmpty(t, consumeBody["redeem_request_id"])
 }

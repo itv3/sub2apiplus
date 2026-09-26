@@ -2,6 +2,7 @@ package service
 
 import (
 	"net/http"
+	"slices"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/officialegress/profilecontract"
@@ -41,7 +42,23 @@ func bearerHeaders(token string) http.Header {
 	return headers
 }
 
+// TestOfficialEgressWebSocketPoolTransportKeyFollowsContinuationSection 改动前直接把 Active 当作
+// 旧画像；VC-6 晋升后 Active 是已声明 WebSocketContinuation 节（含 auth_revision）的目标画像。
+// 现先在正式目录逐槽位核验“是否把认证代次计入连接池键”恰由该节决定，再以 Active 为底稿
+// 去掉／追加该节做旧画像与目标画像对照（候选期去节是空操作，旧画像连接池键仍须逐字节相同）。
 func TestOfficialEgressWebSocketPoolTransportKeyFollowsContinuationSection(t *testing.T) {
+	for _, mode := range officialCodexFormalModes {
+		section := officialCodexFormalExecutableProfile(t, mode).Optional().WebSocketContinuation
+		require.Equal(t, section != nil && slices.Contains(section.ResetOn, "auth_revision"),
+			officialCodexWebSocketContinuationResetsOn(mode, "auth_revision"),
+			"%s 槽位是否按认证代次失效必须由 WebSocketContinuation 节决定", mode)
+	}
+
+	withOfficialCodexLegacySyntheticProfile(t, "WebSocketContinuation 节",
+		func(profile profilecontract.ExecutableProfile) bool {
+			return profile.Optional().WebSocketContinuation != nil
+		},
+		func(doc *profilecontract.SnapshotDoc) { doc.WebSocketContinuation = nil })
 	egressContext := newContinuationTestEgressContext(t)
 	legacy := egressContext.connectionPoolID +
 		"|proxy_state=" + officialEgressProxyStateKey("") +
