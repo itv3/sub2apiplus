@@ -814,7 +814,11 @@ for line in sys.stdin:
         for role in ("origin", "exit"):
             guard = deploy.EgressGuard.__new__(deploy.EgressGuard)
             guard.contract, guard.policy, guard.role = arm, copy.deepcopy(self.policy), role
-            guard.policy["probe_refresh_seconds"], guard.policy["probe_max_age_seconds"] = 1, 3
+            # 守护按租期末尾（签发时刻 + lease_seconds）判定观测年龄，签发当下可沿用的成功观测至多
+            # probe_max_age_seconds - lease_seconds 秒旧；最大年龄取 3 + lease_seconds，保持本链原有
+            # 3 秒新鲜度窗口（旧写法 3 秒不大于夹具租期 3 秒，任何观测在租期末尾都已过期，永远无法合规）。
+            guard.policy["probe_refresh_seconds"] = 1
+            guard.policy["probe_max_age_seconds"] = 3 + guard.policy["lease_seconds"]
             guard.policy_sha256 = arm.egress_policy_sha256(guard.policy)
             guard.policy_path = self.root / "policy.json"
             guard.runtime_root = self.root / role
