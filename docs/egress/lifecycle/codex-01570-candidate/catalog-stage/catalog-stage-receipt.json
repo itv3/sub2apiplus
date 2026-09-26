@@ -1,0 +1,70 @@
+{
+  "active_profile_digest": "31d8654f6892d37129a2639f1bb48e87b7b8648d67ce754f4ae9379a671b99e3",
+  "active_release_digest": "e2c65b722682dad7c2008444db4966728259522c10b4448651af05704eabb6b5",
+  "active_unchanged": true,
+  "active_version": "0.154.0",
+  "campaign_id": "c01570-formal-vc1-r2-20260926t084354z",
+  "candidate_release_digest": "9d52c6c974c4bb787cfd6237f1f05aa3bb7fbdde40b77196fd094b0b080d7e10",
+  "candidate_release_mode": "previous",
+  "classification_sha256": "7a3b8636f8abe5e45dcd3151730be46bf2c4d01351c27a647f176379e946655d",
+  "inventory": [
+    {
+      "path": "catalogdata/runtime/profiles/0.151.0/dbc65378c80a2ad843ce1ba6253a2e47f0dd5d8bc812bb536a2d24ddb7a59e39.json",
+      "sha256": "f99ffb49b17f34b4c017280acb60618f4f8b12564c6fde9a846b8a4d0156313d",
+      "size": 52594
+    },
+    {
+      "path": "catalogdata/runtime/profiles/0.154.0/31d8654f6892d37129a2639f1bb48e87b7b8648d67ce754f4ae9379a671b99e3.json",
+      "sha256": "53a946932759a183296c2848106ebd4c881d14a98dc96fb85054060e0e53b66b",
+      "size": 52924
+    },
+    {
+      "path": "catalogdata/runtime/profiles/0.154.0/33a537a32e6f059bb178b7af581de5c161a3091ed972b4a8aec215cbf977b563.json",
+      "sha256": "84fcb371ac392a0828e2a76bd601b69e70b7d50a3639403eca075164a6521f3f",
+      "size": 52594
+    },
+    {
+      "path": "catalogdata/runtime/profiles/0.157.0/3edd1c7bd487021469a932ff63599e581000402dd8633dfe02101a2ec4e3ae9d.json",
+      "sha256": "f0c410fcaf23e44d70e64204257747ee34f0db8ad8d0e9e57c9c97f0fbdaf06c",
+      "size": 51667
+    },
+    {
+      "path": "catalogdata/runtime/release-catalog.json",
+      "sha256": "7c5c51c0980065677de2b75dded28e0cc89d6bdeb57c04f9eaa95c5d70d89edf",
+      "size": 581
+    },
+    {
+      "path": "catalogdata/runtime/release-graphs/c97a273bb2d2817f3ed9857b4d376828a7e4b918e7350549cf07d7b7998b16b9.json",
+      "sha256": "c97a273bb2d2817f3ed9857b4d376828a7e4b918e7350549cf07d7b7998b16b9",
+      "size": 4657
+    },
+    {
+      "path": "catalogdata/runtime/snapshot-catalogs/cd8e263a073ea55394937a2e383a0cd6eba13d023cfeccf8e35026bfcaddb94c.json",
+      "sha256": "cd8e263a073ea55394937a2e383a0cd6eba13d023cfeccf8e35026bfcaddb94c",
+      "size": 1135
+    },
+    {
+      "path": "profilecontract/testdata/snapshot-catalog.json",
+      "sha256": "8430c02fa55565d32bb653ddb252a554a1bc99990ecd6647949f70e34d1079df",
+      "size": 815
+    },
+    {
+      "path": "profilecontract/testdata/snapshots/0.157.0/3edd1c7bd487021469a932ff63599e581000402dd8633dfe02101a2ec4e3ae9d.json",
+      "sha256": "f0c410fcaf23e44d70e64204257747ee34f0db8ad8d0e9e57c9c97f0fbdaf06c",
+      "size": 51667
+    },
+    {
+      "path": "releasecontract/testdata/release-graph.json",
+      "sha256": "c97a273bb2d2817f3ed9857b4d376828a7e4b918e7350549cf07d7b7998b16b9",
+      "size": 4657
+    }
+  ],
+  "inventory_sha256": "21d67e11d2a5ca5fddda8f96a42ab9de4ba21c7dadb6ef1600bcc3b351a2e6fe",
+  "post_promotion_gate_requirements_sha256": "dda4d0228908beaab18b1544c45ee1a61c1a4c9ed19506e1089c9f07e944dd11",
+  "production_selector_changed": false,
+  "profile_derivation_sha256": "125ba8ffc2eaf6c7ea2d5fffb0eeab92cd7e6f091bd5f6c094e3612cb2efa82a",
+  "profile_id": "codex-0.157.0-official-r1570-r1",
+  "schema_version": "official-egress-catalog-stage/v1",
+  "target_profile_digest": "3edd1c7bd487021469a932ff63599e581000402dd8633dfe02101a2ec4e3ae9d",
+  "target_version": "0.157.0"
+}
