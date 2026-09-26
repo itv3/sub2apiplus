@@ -1326,9 +1326,14 @@ class EgressGuard:
                     complete = results is not None and all(item["status"] == "passed" for item in results)
                     self.next_probe[name] = now + (self.policy["probe_refresh_seconds"] if complete
                                                    else min(EGRESS_PROBE_RETRY_SECONDS, self.policy["probe_refresh_seconds"]))
+            # 本轮签发的状态与内核租期要一直用到租期末尾，独立校验方按校验当下的时刻核对观测年龄。
+            # 因此按租期末尾挑选与判定：会在租期内过期的旧成功不再沿用，改取最近一次真实结果（失败
+            # 也如实计入法定数）。否则发布时 29.8 秒的成功观测会在 0.3 秒后被校验方判过期，触发整轮
+            # 采集暂停（2026-09-26 0.157.0 VC-1 即此）。
+            horizon = time.time() + self.policy["lease_seconds"]
             observations = egress_effective_observations(self.policy, self.observations.get(name, []),
-                                                         self.passes.get(name, {}), now_epoch=time.time())
-            compliant = shared and service["valid"] and self.contract.egress_observations_compliant(self.policy, observations, now_epoch=time.time())
+                                                         self.passes.get(name, {}), now_epoch=horizon)
+            compliant = shared and service["valid"] and self.contract.egress_observations_compliant(self.policy, observations, now_epoch=horizon)
             states[name] = "compliant" if compliant else ("probing" if shared and service["valid"] else "blocked")
             if compliant:
                 self.blocked_since.pop(name, None)

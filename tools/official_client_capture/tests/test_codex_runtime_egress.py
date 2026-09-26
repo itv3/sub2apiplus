@@ -117,6 +117,40 @@ class EgressGuardTests(unittest.TestCase):
         with self.assertRaisesRegex(arm.Arm64EnvironmentReceiptError, "升级必须暂停"):
             arm.validate_egress_status(self.guard.policy, status, now_epoch=time.time())
 
+    def _near_expiry_setup(self, fresh_statuses):
+        """sub2apiplus 最近一轮三个来源按给定状态新鲜落地，失败来源的上一次成功停在即将过期处。"""
+
+        policy, now = self.guard.policy, time.time()
+        latest = observations(policy)
+        about_to_expire = now - policy["probe_max_age_seconds"] + policy["lease_seconds"] / 2
+        passes = {}
+        for item, status in zip(latest, fresh_statuses):
+            if status == "failed":
+                passes[item["url"]] = dict(item, observed_at_epoch=about_to_expire)
+                item.update(status="failed", ip_address=None, response_sha256=None)
+        self.guard.observations["sub2apiplus"] = latest
+        self.guard.passes["sub2apiplus"] = passes
+        return latest
+
+    def test_published_status_stays_valid_until_lease_end(self):
+        """会在租期内过期的旧成功不再沿用：取新鲜失败结果，法定数仍满足，租期末尾独立校验仍通过。"""
+
+        latest = self._near_expiry_setup(["passed", "passed", "failed"])
+        status = self.guard.step()
+        service = status["services"]["sub2apiplus"]
+        self.assertEqual(service["status"], "compliant")
+        self.assertIs(service["observations"][2], latest[2])
+        lease_end = status["observed_at_epoch"] + self.guard.policy["lease_seconds"] - 0.05
+        arm.validate_egress_status(self.guard.policy, status, now_epoch=lease_end)
+
+    def test_pass_expiring_within_lease_cannot_carry_quorum(self):
+        """只剩即将过期的旧成功撑起法定数时，不得签发合规状态。"""
+
+        self._near_expiry_setup(["failed", "failed", "passed"])
+        status = self.guard.step()
+        self.assertEqual(status["services"]["sub2apiplus"]["status"], "blocked")
+        self.assertEqual(status["services"]["sub2apiplus"]["admission_state"], "probing")
+
     def test_shared_fault_revokes_both_and_cannot_reuse_cached_health(self):
         for function in ("egress_remote_status", "egress_wireguard_observation", "egress_verify_routes", "egress_firewall_identity"):
             with self.subTest(function=function), mock.patch.object(deploy, function, side_effect=deploy.DeploymentError("隔离故障")):
