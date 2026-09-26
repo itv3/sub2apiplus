@@ -47,6 +47,12 @@ def marker(path: Path, pattern: str) -> bool:
         return any(re.search(pattern, line) for line in stream)
 
 
+# 与监督器语义一致：state.json 的 state 运行中为 running／prepared，终态见监督器 TERMINAL_STATES；
+# heartbeat.json 的 state 只写 running 或 failed——作业某一步失败时 event_fail 先把心跳写成 failed，
+# 父进程约 0.5 秒内改回 running，作业照常重试（2026-09-26 194249z VC-5 批次 9 在此窗口被误判退出）。
+SUPERVISOR_ACTIVE_RUN_STATES = frozenset({"running", "prepared"})
+
+
 def supervisor_fresh(root: Path, launched: float, stale: float) -> bool:
     """只认本次派发之后的最新父 run，不能借前一批次的新鲜心跳续命。"""
 
@@ -64,9 +70,19 @@ def supervisor_fresh(root: Path, launched: float, stale: float) -> bool:
     heartbeat = json.loads(path.read_text())
     if (heartbeat.get("schema_version") != "codex-upgrade-supervisor-heartbeat/v1"
             or heartbeat.get("owner_pid") != state.get("owner_pid")
-            or heartbeat.get("owner_nonce") != state.get("owner_nonce")
-            or heartbeat.get("state") not in {"running", "stopped"}):
-        raise WaitError("监督器心跳身份或状态不匹配")
+            or heartbeat.get("owner_nonce") != state.get("owner_nonce")):
+        raise WaitError("监督器心跳身份不匹配")
+    heartbeat_state = heartbeat.get("state")
+    if heartbeat_state not in {"running", "stopped", "failed"}:
+        raise WaitError(f"监督器心跳状态非法：{heartbeat_state!r}")
+    # 心跳可能在读 state.json 之后才更新，终态判定以心跳之后重读的 state.json 为准。
+    run_state = json.loads((run / "state.json").read_text()).get("state")
+    if run_state == "stopped":
+        # 父 run 已正常结束：心跳不再更新，改等完成标记；子进程退出与总时限仍由调用方约束。
+        return True
+    if run_state is not None and run_state not in SUPERVISOR_ACTIVE_RUN_STATES:
+        raise WaitError(f"父 run 已结束：state={run_state!r}")
+    # 运行中的父 run 心跳为 failed 只说明某个作业步骤失败待重试，按新鲜度判断即可。
     return 0 <= time.time() - heartbeat["updated_at_epoch"] <= min(stale, state.get("watchdog_timeout_seconds", stale))
 
 

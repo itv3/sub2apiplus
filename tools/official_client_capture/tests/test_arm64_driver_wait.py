@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest import mock
@@ -36,6 +37,90 @@ class DriverWaitTests(unittest.TestCase):
     def _wait(self, root, *args, timeout=6):
         return subprocess.run([sys.executable, str(SCRIPTS / "wait_state.py"), *map(str, args)],
                               cwd=root, capture_output=True, text=True, timeout=timeout)
+
+    @staticmethod
+    def _supervisor_run(root, *, run_state="running", heartbeat_state="running", age=0.0, nonce="fixture"):
+        """按监督器真实形态写一个父 run：state.json 带 state，heartbeat.json 带 state 与更新时间。"""
+
+        state_dir = root / "supervisor" / "run-fixture"
+        state_dir.mkdir(parents=True)
+        now = time.time()
+        state = {"started_at_epoch": now, "owner_pid": 4242, "owner_nonce": "fixture", "watchdog_timeout_seconds": 20.0}
+        if run_state is not None:
+            state["state"] = run_state
+        (state_dir / "state.json").write_text(json.dumps(state))
+        heart = {"schema_version": "codex-upgrade-supervisor-heartbeat/v1", "owner_pid": 4242, "owner_nonce": nonce,
+                 "state": heartbeat_state, "updated_at_epoch": now - age}
+        (state_dir / "heartbeat.json").write_text(json.dumps(heart))
+        return state_dir.parent, now
+
+    def test_failed_heartbeat_while_job_retries_is_not_a_mismatch(self):
+        """2026-09-26 194249z VC-5 批次 9：作业失败待重试时心跳短暂为 failed、父 run 仍在运行，
+        等待逻辑曾判"身份或状态不匹配"而退出。现在按新鲜度判断，过期仍如实返回 False。"""
+
+        wait_state = load("wait_state")
+        with tempfile.TemporaryDirectory() as directory:
+            root, now = self._supervisor_run(Path(directory) / "fresh", heartbeat_state="failed")
+            self.assertTrue(wait_state.supervisor_fresh(root, now, 5))
+            root, now = self._supervisor_run(Path(directory) / "stale", heartbeat_state="failed", age=30)
+            self.assertFalse(wait_state.supervisor_fresh(root, now, 5))
+
+    def test_terminal_run_reports_run_ended_instead_of_mismatch(self):
+        wait_state = load("wait_state")
+        for run_state in ("failed", "watchdog-aborted", "audit-incomplete", "aborted_prepared"):
+            with self.subTest(run_state=run_state), tempfile.TemporaryDirectory() as directory:
+                root, now = self._supervisor_run(Path(directory), run_state=run_state, heartbeat_state="failed")
+                with self.assertRaisesRegex(wait_state.WaitError, "父 run 已结束"):
+                    wait_state.supervisor_fresh(root, now, 5)
+
+    def test_stopped_run_waits_for_marker_without_fresh_heartbeat(self):
+        """父 run 正常 stopped 后心跳不再更新，收尾到打出完成标记可能超过心跳窗口，不得误报过期。"""
+
+        wait_state = load("wait_state")
+        with tempfile.TemporaryDirectory() as directory:
+            root, now = self._supervisor_run(Path(directory), run_state="stopped", age=120)
+            self.assertTrue(wait_state.supervisor_fresh(root, now, 5))
+
+    def test_heartbeat_identity_and_unknown_state_still_fail_closed(self):
+        wait_state = load("wait_state")
+        with tempfile.TemporaryDirectory() as directory:
+            root, now = self._supervisor_run(Path(directory) / "a", nonce="other")
+            with self.assertRaisesRegex(wait_state.WaitError, "身份不匹配"):
+                wait_state.supervisor_fresh(root, now, 5)
+            root, now = self._supervisor_run(Path(directory) / "b", heartbeat_state="paused")
+            with self.assertRaisesRegex(wait_state.WaitError, "状态非法"):
+                wait_state.supervisor_fresh(root, now, 5)
+
+    def test_marker_wait_survives_failed_heartbeat_window(self):
+        """端到端：真实等待进程经历 failed 心跳窗口后，完成标记出现即成功返回。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            child = subprocess.Popen(["sleep", "30"])
+            try:
+                pid = root / "run.pid"
+                pid.write_text(str(child.pid))
+                log = root / "run.log"
+                state = root / "supervisor/run-fixture"
+                state.mkdir(parents=True)
+                (state / "state.json").write_text(json.dumps(
+                    {"started_at_epoch": time.time(), "owner_pid": child.pid, "owner_nonce": "fixture", "state": "running"}))
+                (state / "heartbeat.json").write_text(json.dumps(
+                    {"schema_version": "codex-upgrade-supervisor-heartbeat/v1", "owner_pid": child.pid,
+                     "owner_nonce": "fixture", "state": "failed", "updated_at_epoch": time.time()}))
+                timer = threading.Timer(1.0, lambda: log.write_text("RUN_BATCH_DONE x\n"))
+                timer.start()
+                try:
+                    result = self._wait(root, "marker", log, "--regex", "^RUN_BATCH_DONE ", "--pid-file", pid,
+                                        "--supervisor-root", state.parent, "--startup-seconds", ".1",
+                                        "--stale-seconds", "5", "--max-seconds", "4")
+                finally:
+                    timer.cancel()
+                self.assertEqual(result.returncode, 0, result.stderr)
+            finally:
+                if child.poll() is None:
+                    child.terminate()
+                    child.wait()
 
     def test_success_marker_total_timeout_and_tail_limit(self):
         with tempfile.TemporaryDirectory() as directory:
