@@ -159,11 +159,15 @@ class SyntheticAuxResponse:
 
     ``wire`` 是发给候选服务的完整 H1 响应。``terminal_ws_frame`` 只用于 realtime
     sideband：101 完成后立即发送 ``session.ended``，让生产 observer 走真实终止清理。
+    ``recorded_wire`` 非空时是落盘用的等长遮蔽副本：响应里回写了请求中的账号标识
+    （accounts/check 必须回显 chatgpt-account-id），发给候选服务的是 ``wire``，写进
+    证据的只能是遮蔽副本，与 OAuth refresh body 的等长遮蔽同一做法。
     """
 
     action: str
     wire: bytes
     terminal_ws_frame: bytes = b""
+    recorded_wire: bytes | None = None
 
 
 @dataclass(frozen=True)
@@ -679,6 +683,52 @@ def _redact_oauth_refresh_body(body: bytes) -> tuple[bytes, bool]:
     return redacted, changed
 
 
+_ACCOUNT_ID_HEADER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+
+
+def _synthetic_record_bytes(synthetic: object) -> bytes:
+    """合成响应的落盘字节：带遮蔽副本时写副本（必须与原文等长），否则写原文。"""
+
+    recorded = getattr(synthetic, "recorded_wire", None)
+    if recorded is None:
+        return synthetic.wire
+    if len(recorded) != len(synthetic.wire):
+        raise RuntimeError("合成响应的落盘遮蔽副本必须与原文等长")
+    return recorded
+
+
+def _single_account_id_header(head: bytes) -> str | None:
+    """从原始请求头取唯一的 chatgpt-account-id；缺失、重复或含非标识字符时返回 None。"""
+
+    values = []
+    for line in head.decode("latin-1").split("\r\n")[1:]:
+        name, separator, value = line.partition(":")
+        if separator and name.strip().lower() == "chatgpt-account-id":
+            values.append(value.strip())
+    if len(values) != 1 or not _ACCOUNT_ID_HEADER_RE.fullmatch(values[0]):
+        return None
+    return values[0]
+
+
+def _accounts_check_body(account_id: str) -> bytes:
+    """accounts/check 的最小 List 形态：唯一条目即当前工作区，路由字段取默认值。"""
+
+    return json.dumps(
+        {
+            "accounts": [
+                {
+                    "id": account_id,
+                    "workspace_backend_origin": "NO_CONSTRAINT",
+                    "account_routing_override": "NO_CONSTRAINT",
+                }
+            ],
+            "account_ordering": [account_id],
+            "default_account_id": account_id,
+        },
+        separators=(",", ":"),
+    ).encode("ascii")
+
+
 def _synthetic_aux_response(
     host: str,
     request_line: str,
@@ -694,7 +744,9 @@ def _synthetic_aux_response(
     连接真实上游；这个 fail-closed 边界是 consume、OAuth 与文件 PUT 的安全前提。
     """
 
-    del body  # 响应内容不由请求值派生，避免把凭据或预签名参数反射回产物。
+    # 响应内容不由请求值派生，避免把凭据或预签名参数反射回产物。唯一例外是
+    # accounts/check 回显 chatgpt-account-id（候选按它筛选工作区），其落盘副本等长遮蔽。
+    del body
     parts = request_line.split(" ")
     if len(parts) != 3 or parts[2] != "HTTP/1.1":
         return None
@@ -784,6 +836,22 @@ def _synthetic_aux_response(
                 b'"rate_limit_reset_credits":{"available_count":1}}'
             )
             return SyntheticAuxResponse("wham_usage", _h1_response(200, "OK", payload))
+        if method == "GET" and path == "/backend-api/wham/accounts/check" and not query_pairs:
+            # 目标画像声明 WorkspaceRouting 节时，QueryUsage 先发工作区路由发现。候选按
+            # 条目 id 等于请求头 chatgpt-account-id 筛选当前工作区，所以响应必须回显该账号
+            # 标识；取值按官方 List 形态给 NO_CONSTRAINT（默认路由，同 h1_wire_probe 的合成）。
+            # 账号头缺失、重复或格式异常时不在白名单内（调用方本地拒绝），与 h1 探针的
+            # 400 失败关闭一致。发给候选的是回显账号的响应，落盘副本等长遮蔽账号标识。
+            account_id = _single_account_id_header(head)
+            if account_id is None:
+                return None
+            return SyntheticAuxResponse(
+                "wham_accounts_check",
+                _h1_response(200, "OK", _accounts_check_body(account_id)),
+                recorded_wire=_h1_response(
+                    200, "OK", _accounts_check_body("0" * len(account_id))
+                ),
+            )
         if method == "GET" and path == "/backend-api/wham/settings/user" and not query_pairs:
             # 目标画像存在该端点时，配额链路会在 usage 前读取一次用户设置。
             # 生产侧只把这次调用作为官方客户端行为收据，不消费响应字段，因此
@@ -2484,7 +2552,8 @@ class Relay:
                         await asyncio.sleep(delay_seconds)
                     # 空响应代表受控断连／超时。仍显式建立 0 字节方向文件，
                     # 让 R 完整性门禁能区分“按计划没有响应”和“记录器漏写”。
-                    rec.write("upstream_to_client", synthetic.wire)
+                    # 回显了请求账号标识的合成响应只落盘等长遮蔽副本，发给候选的仍是原文。
+                    rec.write("upstream_to_client", _synthetic_record_bytes(synthetic))
                     writer.write(synthetic.wire)
                     terminal_ws_frame = getattr(synthetic, "terminal_ws_frame", b"")
                     if terminal_ws_frame:
