@@ -430,6 +430,92 @@ class EgressInventoryTests(unittest.TestCase):
     def rules(service):
         return sorted((item["ipv4"], item["port"]) for item in service["dependencies"])
 
+    def test_short_lived_container_vanishing_between_ps_and_inspect_is_dropped(self):
+        """2026-09-26 170805z VC-4 批次 8：record-candidate-build 的 docker run --rm 核验容器在 ps 与 inspect 之间销毁，
+        inspect 失败曾让守护判"容器清单不可完整核验"而闭锁两个受保护容器；现在只把消失的容器从本轮快照剔除。"""
+
+        transient = "e" * 64
+        calls = []
+        original = self.command
+
+        def command(argv, **kwargs):
+            calls.append(list(argv))
+            if argv[:2] == ["docker", "ps"]:
+                # 核验容器只在第一次列出时还在运行，随后即被 --rm 删除。
+                first = sum(1 for call in calls if call[:2] == ["docker", "ps"]) == 1
+                return original(argv, **kwargs) + ("\n" + transient if first else "")
+            if argv[:2] == ["docker", "inspect"] and transient in argv[2:]:
+                raise deploy.DeploymentError("出口命令失败：docker，退出码 1")
+            return original(argv, **kwargs)
+
+        with mock.patch.object(deploy, "egress_command", side_effect=command):
+            services = self.inventory()["services"]
+        self.assertTrue(services["sub2apiplus"]["valid"] and services["capture-cli"]["valid"])
+        inspects = [call[2:] for call in calls if call[:2] == ["docker", "inspect"]]
+        self.assertEqual(len(inspects), 2)
+        self.assertEqual(sorted(inspects[1]), sorted(item["Id"] for item in self.items.values()))
+
+    def test_dense_short_lived_containers_converge_without_admitting_later_ones(self):
+        """短命容器持续起落：每次列出都有一个新起的、到 inspect 时已销毁。整体重新列出每次都会撞上，只能在有限次后
+        失败关闭；只收缩的重试第二次 inspect 即成功，且首次列出之后才出现的容器不进入本轮快照。"""
+
+        transients = []
+        calls = []
+        original = self.command
+
+        def command(argv, **kwargs):
+            calls.append(list(argv))
+            if argv[:2] == ["docker", "ps"]:
+                transients.append(f"{len(transients) + 10:02x}" * 32)
+                return original(argv, **kwargs) + "\n" + transients[-1]
+            if argv[:2] == ["docker", "inspect"] and set(argv[2:]) & set(transients):
+                raise deploy.DeploymentError("出口命令失败：docker，退出码 1")
+            return original(argv, **kwargs)
+
+        with mock.patch.object(deploy, "egress_command", side_effect=command):
+            services = self.inventory()["services"]
+        self.assertTrue(services["sub2apiplus"]["valid"] and services["capture-cli"]["valid"])
+        self.assertEqual(len(transients), 2)
+        inspects = [call[2:] for call in calls if call[:2] == ["docker", "inspect"]]
+        self.assertEqual(sorted(inspects[-1]), sorted(item["Id"] for item in self.items.values()))
+
+    def test_protected_container_vanishing_between_ps_and_inspect_only_closes_that_service(self):
+        """受保护容器恰在 ps 与 inspect 之间被删除（重建窗口）：剔除后该服务按身份不可验证闭锁，不沿用列出时的身份；
+        另一受保护服务照常合规，只暂缓对它的那项依赖放行。"""
+
+        gateway = self.items["sub2apiplus"]["Id"]
+        original = self.command
+
+        def command(argv, **kwargs):
+            if argv[:2] == ["docker", "inspect"] and gateway in argv[2:] and "sub2apiplus" in self.items:
+                del self.items["sub2apiplus"]
+                raise deploy.DeploymentError("出口命令失败：docker，退出码 1")
+            return original(argv, **kwargs)
+
+        with mock.patch.object(deploy, "egress_command", side_effect=command):
+            services = self.inventory()["services"]
+        self.assertFalse(services["sub2apiplus"]["valid"])
+        self.assertEqual(services["sub2apiplus"]["container_id"], "")
+        self.assertEqual(services["sub2apiplus"]["reason"], "容器或必要依赖身份不可验证")
+        self.assertTrue(services["capture-cli"]["valid"], services["capture-cli"]["reason"])
+        self.assertEqual(self.rules(services["capture-cli"]), [])
+
+    def test_inspect_failing_without_any_container_vanishing_fails_closed(self):
+        """inspect 失败而重新列出发现没有任何容器消失时不再重试、不放宽：抛出，由守护按共享保护失效闭锁。"""
+
+        original = self.command
+
+        def command(argv, **kwargs):
+            if argv[:2] == ["docker", "inspect"]:
+                raise deploy.DeploymentError("出口命令失败：docker，退出码 1")
+            return original(argv, **kwargs)
+
+        with mock.patch.object(deploy, "egress_command", side_effect=command) as calls:
+            with self.assertRaises(deploy.DeploymentError):
+                self.inventory()
+        self.assertEqual([call.args[0][:2] for call in calls.call_args_list],
+                         [["docker", "ps"], ["docker", "inspect"], ["docker", "ps"]])
+
     def test_all_running_admits_exact_dependencies(self):
         services = self.inventory()["services"]
         self.assertTrue(services["sub2apiplus"]["valid"] and services["capture-cli"]["valid"])

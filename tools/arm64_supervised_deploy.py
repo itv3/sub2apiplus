@@ -950,11 +950,38 @@ def egress_container_bindings(item: dict[str, Any]) -> list[dict[str, Any]]:
     return sorted(bindings, key=lambda item: (item["ifindex"], item["source_ipv4"]))
 
 
+def egress_container_snapshot() -> list[dict[str, Any]]:
+    """列出并 inspect 当前运行中的容器；列出后消失的容器只从本轮快照剔除，不放宽任何判定。
+
+    2026-09-26 c01570 170805z VC-4 批次 8：record-candidate-build 用候选镜像起的临时核验容器存活不到 1 秒，
+    恰在 ps 与 inspect 之间销毁，inspect 对消失的 ID 返回非零，守护判共享保护失效闭锁两个受保护容器，父监督器
+    随即暂停。
+
+    重试只收缩、不扩大：inspect 失败后重新列出，与本轮快照取交集，只 inspect 仍在运行的容器。交集没有缩小
+    （没有容器消失，失败另有原因）立即抛出，由守护按"容器清单不可完整核验"失败关闭；每次重试至少剔除一个
+    已消失的 ID，因此在任何短命容器密度下都有限次收敛。首次列出之后才出现的容器不进入本轮快照，下一轮再按
+    常规纳入（此前也是如此，纳入前默认拒绝）；受保护容器若恰在此间消失，照常只按"受保护容器尚未运行"闭锁该
+    服务。不能改成"整体重新列出再试若干次"：ARM64 实测修前守护在串行 60 个短命容器、22 秒内共享保护失效
+    5 次（每轮约一成撞上），整体重列在同等密度下仍有按轮累积的残余失败。
+    """
+
+    identifiers = egress_command(["docker", "ps", "-q", "--no-trunc"]).split()
+    while identifiers:
+        try:
+            return json.loads(egress_command(["docker", "inspect", *identifiers]))
+        except DeploymentError:
+            running = set(egress_command(["docker", "ps", "-q", "--no-trunc"]).split())
+            remaining = [identifier for identifier in identifiers if identifier in running]
+            if len(remaining) == len(identifiers):
+                raise
+            identifiers = remaining
+    return []
+
+
 def egress_inventory(policy: dict[str, Any], parents: dict[str, str]) -> dict[str, Any]:
     """逐服务隔离发现错误；仅精确确认的其他容器端口进入 bypass，宿主代理从不放行。"""
 
-    identifiers = egress_command(["docker", "ps", "-q", "--no-trunc"]).split()
-    items = json.loads(egress_command(["docker", "inspect", *identifiers])) if identifiers else []
+    items = egress_container_snapshot()
     by_name = {item["Name"].lstrip("/"): item for item in items}
     result: dict[str, Any] = {"services": {}, "bypass_ifindices": []}
     for name, item in by_name.items():
