@@ -243,8 +243,11 @@ from urllib.parse import urlsplit
 # 任务被循环 GC 销毁、并在别的连接任务里误取消该连接）；本脚本 egress-guard 按租期末尾挑选与判定出口观测（修复
 # 签发后租期内过期导致的采集暂停，需随出口安装包重装生效）。wire 层变化；受管工具树随之变化；监督器与断言
 # 预处理器未变。
+# 2026-09-26（0.157.0 VC-5 批次 9）：监督器受控维护的重新准入只采用观测起点晚于维护命令结束的守护状态（修复重启
+# 后读到命令开始前发布的陈旧就绪、提前撤销维护声明，致父监督器判出口异常暂停）。control 层变化；受管工具树与
+# 监督器摘要随之变化；断言预处理器未变；本脚本 egress-guard 逻辑未变，出口守护无需重装。
 DEFAULT_SUPERVISOR_DIGEST = (
-    "8de72959d3c2b6ef3b8a24b6a80764fd6777dc8fccee068343803cfa43865b26"
+    "0fb4e9fd33f08596e3d56203868443872e00543a6d6235d3b96a87f1452db776"
 )
 DEFAULT_ASSERTION_PREPARER_DIGEST = (
     "c8020cadd3ee08f67236313a0913dbc3730805b46c3f6b720cdf7ace77f9fec1"
