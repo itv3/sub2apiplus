@@ -1,0 +1,105 @@
+{
+  "base_commit": "fcb0f29ff90959185111a332548ec85c0913a9d8",
+  "changed_path_count": 4,
+  "current_commit": "3d042dc665faee9bd59a84b7bfc7d5503835b194",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 4238,
+  "frozen_path_count": 1399,
+  "identity_sha256": "cd8a83a5581d603e00995f008d1beb322348bc9823600d87a8baa78eadc9d34e",
+  "issued_at_utc": "2026-09-26T12:55:00Z",
+  "mode": "commit",
+  "required_manual_actions": [
+    {
+      "action_kind": "script_constant",
+      "file": "tools/arm64_supervised_deploy.py",
+      "instruction": "用 tools/arm64_supervised_deploy.py 的 tool_digest() 与 file_sha256() 重算 DEFAULT_TOOL_DIGEST、DEFAULT_SUPERVISOR_DIGEST、DEFAULT_ASSERTION_PREPARER_DIGEST 并更新常量；脚本自身随之变化，须在同一收据或后续收据中登记其后继摘要。",
+      "path": "tools/official_client_capture/run_h1_wire_probe.sh",
+      "rule_id": "arm64-managed-tool-digests",
+      "verification": [
+        "python3 -m unittest tools.official_client_capture.tests.test_arm64_supervised_deploy"
+      ]
+    },
+    {
+      "action_kind": "script_constant",
+      "file": "tools/arm64_supervised_deploy.py",
+      "instruction": "用 tools/arm64_supervised_deploy.py 的 tool_digest() 与 file_sha256() 重算 DEFAULT_TOOL_DIGEST、DEFAULT_SUPERVISOR_DIGEST、DEFAULT_ASSERTION_PREPARER_DIGEST 并更新常量；脚本自身随之变化，须在同一收据或后续收据中登记其后继摘要。",
+      "path": "tools/official_client_capture/run_images_wire_probe.sh",
+      "rule_id": "arm64-managed-tool-digests",
+      "verification": [
+        "python3 -m unittest tools.official_client_capture.tests.test_arm64_supervised_deploy"
+      ]
+    },
+    {
+      "action_kind": "script_constant",
+      "file": "tools/arm64_supervised_deploy.py",
+      "instruction": "用 tools/arm64_supervised_deploy.py 的 tool_digest() 与 file_sha256() 重算 DEFAULT_TOOL_DIGEST、DEFAULT_SUPERVISOR_DIGEST、DEFAULT_ASSERTION_PREPARER_DIGEST 并更新常量；脚本自身随之变化，须在同一收据或后续收据中登记其后继摘要。",
+      "path": "tools/official_client_capture/run_sub2api_direct_matrix.sh",
+      "rule_id": "arm64-managed-tool-digests",
+      "verification": [
+        "python3 -m unittest tools.official_client_capture.tests.test_arm64_supervised_deploy"
+      ]
+    }
+  ],
+  "result": "manual_actions_required",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-0157-capture-restart-transition-20260926-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/run_h1_wire_probe.sh",
+      "predecessor_sha256s": [
+        "1fb3e9b39c7a7ada9b1c851012d12c3a0b25c9f7b581057c9b24372c5be117bc"
+      ],
+      "reason": "直连矩阵与 h1／images 探针的网关重启改走 R15 受控维护入口（egress-transition），补齐 0a888dadc 漏改的三个采集脚本。 path=tools/official_client_capture/run_h1_wire_probe.sh",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-managed-execution-root-recovery-tool-successor-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "4d736c8a390d9c6862c73fb001155b34d0dc9afec084491810df252f7772aa4b"
+    },
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/run_images_wire_probe.sh",
+      "predecessor_sha256s": [
+        "ca8682e383653d57a079617fe085a497b2edf451567fb409b411ac105716fecb"
+      ],
+      "reason": "直连矩阵与 h1／images 探针的网关重启改走 R15 受控维护入口（egress-transition），补齐 0a888dadc 漏改的三个采集脚本。 path=tools/official_client_capture/run_images_wire_probe.sh",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-managed-execution-root-recovery-tool-successor-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "b071a566f1348a9f3a45152be1ac8c4426f2114033833d6509fd2be248782e7f"
+    },
+    {
+      "old_path": "",
+      "path": "tools/official_client_capture/run_sub2api_direct_matrix.sh",
+      "predecessor_sha256s": [
+        "6cd0a9f9cff4d600ddfa39a572274638b86ecb9a9443519a5b114be08242219f"
+      ],
+      "reason": "直连矩阵与 h1／images 探针的网关重启改走 R15 受控维护入口（egress-transition），补齐 0a888dadc 漏改的三个采集脚本。 path=tools/official_client_capture/run_sub2api_direct_matrix.sh",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-managed-execution-root-recovery-tool-successor-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "3ae09fed2017ecc8010cac8d61f93ed9b36cbd465264020f9bcd52fba1188bb3"
+    }
+  ],
+  "unregistered_path_count": 1,
+  "unregistered_paths": [
+    "tools/official_client_capture/tests/test_codex_runtime_egress.py"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci",
+    "python3 -m unittest tools.official_client_capture.tests.test_arm64_supervised_deploy"
+  ]
+}
