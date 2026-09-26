@@ -846,8 +846,12 @@ def _decide(
     request_status: str,
     now: str,
     forced_terminal_reason: str | None = None,
+    campaign_id: str | None = None,
 ) -> dict[str, Any]:
     """步骤 5：先入账后判定。返回 decision 与 terminal_reason（停线时）。
+
+    ``campaign_id`` 用于按总账注册的目标版本取根因上限与计数（_ledger_facts 不含版本，不能只靠
+    ``ledger``）；缺省时才退回 ``ledger`` 中的 target_version，两者都没有即全局口径（失败关闭）。
 
     ``forced_terminal_reason`` 用于分类本身即不可恢复的对象（改造 4 的 COMMIT 完整性
     异常，以及 2026-09-22 起动作诊断 declared 为 evidence-integrity 的已封存证据完整性
@@ -904,7 +908,9 @@ def _decide(
         dict.fromkeys(root_cause_ids or [root_cause_id])
     )
     # 根因上限与计数按本 Campaign 的目标版本取：旧版本项目的同步骤记录不再累计进来。
-    target_version = ledger.get("target_version")
+    target_version = (
+        project_ledger.campaign_target_version(head, campaign_id) if campaign_id else None
+    ) or ledger.get("target_version")
     at_limit = sorted(
         set(evaluated_root_causes)
         & set(project_ledger.root_causes_at_limit_for(head, target_version))
@@ -2309,6 +2315,7 @@ def reconcile_attempt(
         root_cause_ids=[item["root_cause_id"] for item in root_causes],
         request_status=request_part["status"],
         now=observed,
+        campaign_id=str(manifest["campaign_id"]),
     )
     result: dict[str, Any] = {
         "schema_version": ATTEMPT_SCHEMA,
@@ -3163,6 +3170,7 @@ def reconcile_supervisor_run(
         root_cause_ids=[item["root_cause_id"] for item in root_causes],
         request_status=request_part["status"],
         now=observed,
+        campaign_id=str(manifest["campaign_id"]),
         forced_terminal_reason=(
             "integrity_mismatch"
             if run.get("failure_class") in INTEGRITY_MISMATCH_FAILURE_CLASSES
@@ -3457,6 +3465,7 @@ def reconcile_staging_abort(
         root_cause_id=cause["root_cause_id"],
         request_status="resolved",
         now=observed,
+        campaign_id=str(manifest["campaign_id"]),
     )
     result: dict[str, Any] = {
         "schema_version": STAGING_ABORT_RECONCILIATION_SCHEMA,

@@ -19568,6 +19568,7 @@ def invalidate_candidate(arguments: argparse.Namespace) -> dict[str, Any]:
                 root_cause_id=cause["root_cause_id"],
                 request_status="resolved",
                 now=observed,
+                campaign_id=str(manifest["campaign_id"]),
             )
         except reconciler.ReconcilerError as error:
             raise ConfigurationError(f"候选作废入账失败：{error}") from error
@@ -20670,6 +20671,7 @@ def _evaluation_recover_locked(
                 root_cause_id=cause["root_cause_id"],
                 request_status="resolved",
                 now=observed,
+                campaign_id=str(manifest["campaign_id"]),
             )
         except reconciler.ReconcilerError as error:
             raise ConfigurationError(f"评估基线根因入账失败：{error}") from error

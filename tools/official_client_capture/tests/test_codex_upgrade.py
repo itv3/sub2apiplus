@@ -20112,6 +20112,57 @@ class CodexUpgradeTest(unittest.TestCase):
             with self.assertRaisesRegex(reconciler.ReconcilerError, "未 COMMIT"):
                 reconciler.reconcile_attempt(campaign_dir, attempt_id)
 
+    def test_reconcile_supervisor_run_ignores_other_target_version_root_cause_limit(self) -> None:
+        """真实对账链按本 Campaign 注册的目标版本判根因上限：其他版本同根因已到上限，本版本第一次失败仍可恢复。
+
+        2026-09-27 复核发现：_decide 只读 ledger.get("target_version")，而 _ledger_facts 不含版本，真实对账退回
+        全局口径（单测直接构造 ledger 才未暴露）；现由调用方传 campaign_id、按总账注册版本取。
+        """
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+        from tools.official_client_capture import codex_upgrade_root_cause as root_cause
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._b0_fixture(root)
+            campaign_dir = fixture["campaign_dir"]
+            ledger_root = fixture["ledger"]
+            cause = root_cause.structured_root_cause(
+                component="reconciler",
+                stable_error_code="supervisor-run.interrupted",
+                failed_step="dispatch",
+                stable_dimensions={"phase": "VC-0"},
+            )
+            codex_upgrade_project_ledger.append_project_event(
+                ledger_root, operation_id="other-version-register", event_type="campaign_registered",
+                payload={"campaign_id": "upgrade-0153-other", "campaign_dir": "evidence/campaigns/upgrade-0153-other",
+                         "campaign_mode": "formal", "target_version": "0.153.0", "deadline_at_utc": None,
+                         "registration_batch_sha256": "e" * 64},
+                source_batch_sha256=None,
+            )
+            for index in (1, 2):
+                codex_upgrade_project_ledger.append_project_event(
+                    ledger_root, operation_id=f"other-version-reconcile-{index}", event_type="reconciliation_committed",
+                    payload={"campaign_id": "upgrade-0153-other",
+                             "request": {"status": "resolved", "identity_keys": [f"other-{index}"], "estimated_delta": 0,
+                                         "provenance_receipt_sha256": "b" * 64},
+                             "root_cause": {"root_cause_id": cause}},
+                    source_batch_sha256=None,
+                )
+            head = codex_upgrade_project_ledger.replay_head(ledger_root)
+            self.assertIn(cause, head["root_causes_at_limit"])  # 全局口径已到上限
+            self.assertEqual(codex_upgrade_project_ledger.root_causes_at_limit_for(head, "0.154.0"), [])
+            first = self._b0_run_dir(fixture, "b" * 64)
+            result = reconciler.reconcile_supervisor_run(first, campaign_dir)
+            self.assertEqual(result["root_cause"]["root_cause_id"], cause)
+            self.assertEqual(result["status"], "recoverable")
+            self.assertEqual(result["decision"]["decision"], reconciler.DECISION_RECOVERABLE)
+            self.assertEqual(result["project_head"]["root_cause_counts"], {cause: 1})
+            head = codex_upgrade_project_ledger.replay_head(ledger_root)
+            self.assertEqual(codex_upgrade_project_ledger.root_cause_counts_for(head, "0.154.0")[cause], 1)
+            self.assertNotIn(fixture["campaign_id"] if "campaign_id" in fixture else "upgrade-0154-b0",
+                             head["terminal_campaigns"])
+
     def test_b0_reconcile_supervisor_run_recoverable_then_limit_stops(self) -> None:
         """父监督器 run 对账：可恢复时账本 receipt_passed 且 phase 保持 active；同根因第二次停线。"""
 
