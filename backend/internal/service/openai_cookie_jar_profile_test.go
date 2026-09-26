@@ -5,10 +5,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	"github.com/Wei-Shaw/sub2api/internal/officialegress/profilecontract"
 	coderws "github.com/coder/websocket"
 	"github.com/stretchr/testify/require"
@@ -61,6 +63,31 @@ func TestOfficialCodexCookiePolicyFollowsProfileSection(t *testing.T) {
 	require.False(t, target.allows("codex_session"))
 }
 
+// cookieAllowedBySection 是测试侧独立实现的画像名单判定：有 CookieJar 节时按节的精确名与
+// 前缀，无节时按旧名单。期望值由它从 ReleaseCatalog 的画像事实推导，不调用被测的写入／
+// 读取名单函数。
+func cookieAllowedBySection(section *profilecontract.CookieJarSection, name string) bool {
+	if section == nil {
+		return legacyOfficialCodexCookiePolicy().allows(name)
+	}
+	if slices.Contains(section.AllowedNames, name) {
+		return true
+	}
+	for _, prefix := range section.AllowedPrefixes {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// TestChatGPTCookieJarStoresUnionAndReadsByPolicy 证明 jar 写入放宽到“旧名单 ∪ 主备画像
+// 名单”、读取按调用冻结的画像名单过滤。
+//
+// 正式目录部分改动前写死“主备画像都没有 CookieJar 节”；RuntimeCatalog 切换后 previous
+// 槽位的目标画像声明了该节（含 __oailb），这一前提不再成立。现逐槽位按画像事实推导期望：
+// 有 CookieJar 节的槽位按节的名单／前缀，无节的槽位按旧名单，jar 实际保存的集合是旧名单与
+// 两个槽位名单之并。两个槽位都无节时，期望与改动前的写死值完全一致。
 func TestChatGPTCookieJarStoresUnionAndReadsByPolicy(t *testing.T) {
 	chatGPTURL, err := url.Parse("https://chatgpt.com/backend-api/codex/responses")
 	require.NoError(t, err)
@@ -69,16 +96,57 @@ func TestChatGPTCookieJarStoresUnionAndReadsByPolicy(t *testing.T) {
 		{Name: "__oailb", Value: "lb", Secure: true},
 		{Name: "codex_session", Value: "secret", Secure: true},
 	}
+	incomingNames := cookieNames(incoming)
+
+	slots := []struct {
+		mode    string
+		release officialegress.ReleaseMode
+	}{
+		{mode: officialClientProfileModeActive, release: officialegress.ReleaseModeActive},
+		{mode: officialClientProfileModePrevious, release: officialegress.ReleaseModePrevious},
+	}
+	// 各槽位画像的 CookieJar 节（nil 表示该槽位画像没有该节）。
+	sections := make(map[string]*profilecontract.CookieJarSection, len(slots))
+	for _, slot := range slots {
+		release, resolveErr := officialegress.DefaultReleaseCatalog().Resolve(slot.release)
+		require.NoError(t, resolveErr)
+		sections[slot.mode] = release.ExecutableProfile().Optional().CookieJar
+	}
+	// jar 应保存的来信 Cookie：旧名单或任一槽位名单允许。
+	stored := make([]string, 0, len(incomingNames))
+	for _, name := range incomingNames {
+		allowed := cookieAllowedBySection(nil, name)
+		for _, slot := range slots {
+			allowed = allowed || cookieAllowedBySection(sections[slot.mode], name)
+		}
+		if allowed {
+			stored = append(stored, name)
+		}
+	}
+	require.NotContains(t, stored, "codex_session", "不在任何名单里的 Cookie 不得进入 jar")
 
 	legacyJar := (&OpenAIGatewayService{}).openAICookieJar(&Account{ID: 157, Platform: PlatformOpenAI, Type: AccountTypeOAuth})
 	legacyJar.SetCookies(chatGPTURL, incoming)
 	require.ElementsMatch(t, []string{"_cfuvid"}, cookieNames(legacyJar.Cookies(chatGPTURL)),
-		"主备画像都没有 CookieJar 节时写入名单就是旧名单")
+		"net/http 自动补 Cookie 的路径始终按旧名单读取，与画像是否声明 CookieJar 节无关")
 	policyJar, ok := legacyJar.(officialCodexPolicyCookieJar)
 	require.True(t, ok)
-	require.ElementsMatch(t, []string{"_cfuvid"}, cookieNames(policyJar.CookiesForPolicy(
-		chatGPTURL, newOfficialCodexCookiePolicy([]string{"_cfuvid", "__oailb"}, nil),
-	)), "未进入 jar 的 Cookie 不会被新名单读出")
+	// 用覆盖全部来信 Cookie 的名单读取，读出的就是 jar 实际保存的集合：写入名单恰为旧名单与
+	// 两个槽位名单之并，未进入 jar 的 Cookie（codex_session，以及无节时的 __oailb）读不出。
+	require.ElementsMatch(t, stored, cookieNames(policyJar.CookiesForPolicy(
+		chatGPTURL, newOfficialCodexCookiePolicy(incomingNames, nil),
+	)), "jar 写入名单必须是旧名单与主备画像名单之并，未进入 jar 的 Cookie 不会被任何名单读出")
+	for _, slot := range slots {
+		want := make([]string, 0, len(stored))
+		for _, name := range stored {
+			if cookieAllowedBySection(sections[slot.mode], name) {
+				want = append(want, name)
+			}
+		}
+		require.ElementsMatch(t, want, cookieNames(policyJar.CookiesForPolicy(
+			chatGPTURL, officialCodexCookiePolicyForMode(slot.mode),
+		)), "%s 槽位按该槽位画像名单读取（有 CookieJar 节按节，无节按旧名单）", slot.mode)
+	}
 
 	withOfficialCodexSyntheticProfile(t, cookieJarTargetMutation(t))
 	jar := (&OpenAIGatewayService{}).openAICookieJar(&Account{ID: 158, Platform: PlatformOpenAI, Type: AccountTypeOAuth})

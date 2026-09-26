@@ -142,6 +142,16 @@ func TestOAuthExchangeCannotMasqueradeAsRefreshEndpoint(t *testing.T) {
 func TestPurposeAndModeRemainExplicitCoordinates(t *testing.T) {
 	// 该性质必须在同版本、同 Snapshot 下验证，避免混版本夹具让 Build/Wire
 	// 身份差异天然成立而失去检出能力。
+	//
+	// 夹具维护说明：Composer 要从测试快照索引（profilecontract/testdata/snapshot-catalog.json）
+	// 解析发布节点引用的画像，而该索引由目录暂存工具按运行目录重建，画像随版本退休后即从
+	// 索引消失。夹具因此只引用索引中仍存在的画像：active 取当前 Active 发布的真实节点，
+	// previous 与之同版本、同画像快照、同 transport，只把终端 token 换成 xterm-256color
+	// 并使用显式标注为夹具来源的 Build/Wire 身份。被测语义与改动前完全一致——版本号和
+	// 画像快照都相同，唯一的差异来自 purpose+mode 坐标下的 Build 身份。该画像退休时按同一
+	// 方式换到索引中仍存在的画像即可，不得改成两份不同画像（那会让 Bundle digest 天然不同）。
+	// releasecontract 的同名夹具只做发布图解析、不查快照索引，保留为升级前冻结的历史夹具，
+	// 两份夹具不必同步。
 	composer := mustSameVersionComposer(t)
 	active, err := composer.Compose(c.CompositionRequest{
 		SinkID:         "codex.responses.forward",
@@ -161,6 +171,11 @@ func TestPurposeAndModeRemainExplicitCoordinates(t *testing.T) {
 	}
 	if active.Release().Build.Version != previous.Release().Build.Version {
 		t.Fatal("测试前提改变：active/previous 应当版本号相同")
+	}
+	// 同画像快照同样是本用例的前提（见上方说明）：锁定它，避免夹具被换成两份不同画像后
+	// 下面的 Bundle digest 断言因画像差异而天然成立。
+	if active.Release().Snapshot != previous.Release().Snapshot {
+		t.Fatal("测试前提改变：active/previous 应当引用同一画像快照")
 	}
 	if active.Release().Build.ID == previous.Release().Build.ID {
 		t.Fatal("purpose+mode 被错误折叠成版本号：active/previous BuildID 相同")

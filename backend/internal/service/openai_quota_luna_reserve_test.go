@@ -28,68 +28,132 @@ func TestCodexQuotaUsageHeadersDeclareLunaReserveForNonFedRAMP(t *testing.T) {
 	require.NotNil(t, codexQuotaUsageHeaders(nil, false))
 }
 
+// codexEndpointLunaReserveSlot 按结构事实读取 mode 对应画像中该端点的 Luna Reserve 槽位：
+// 声明时返回画像常量值与 true，未声明时返回 false。
+func codexEndpointLunaReserveSlot(t *testing.T, mode string, endpointID string) (string, bool) {
+	t.Helper()
+	endpoint, err := resolveCodexEndpointForMode(mode, codexEndpointID(endpointID))
+	require.NoError(t, err, "%s 画像缺少端点 %s", mode, endpointID)
+	for _, slot := range endpoint.OrderedHeaders() {
+		if strings.EqualFold(slot.Name, "x-openai-codex-luna-reserve") {
+			require.Equal(t, officialCodexConditionLunaReserve, slot.Condition)
+			return slot.Value, true
+		}
+	}
+	return "", false
+}
+
 // 画像没有 wham_usage 的 Luna Reserve 槽位时，该条件头只作为事实进入 compiler，不得以
 // 普通 Header 身份泄漏到 wire；周期入口 QueryUsageOnly 与管理端 QueryUsage 都遵守画像闭集。
-// 0.154.0 起 active 画像已带该槽位（SPEC-EP-019 的 change），因此这条负例固定跑 previous
-// 0.151.0——回滚到 previous 时同样不得泄漏。正例见
-// TestCodexWhamRequestsUseClosedBackendClientProfile。
+//
+// 改动前本用例把负例固定在 previous 槽位，前提是该槽位恰好装着没有该槽位的旧版本画像；
+// RuntimeCatalog 切换后两个槽位的画像都带该槽位，目录里不再有无槽位的发布。service 包又无法
+// 向配额链路注入合成 Bundle（BundleResolver 只能由正式 ReleaseCatalog 构造），因此：
+//   - “去掉该槽位”的合成发布负例在 officialegress 包
+//     TestCompilerLunaReserveReachesWireOnlyThroughProfileSlot 中证明（Compiler 层，条件事实
+//     成立也不出站，且出站 Header 与条件不成立时逐项一致）；
+//   - 本用例在 service 真实链路上逐槽位核验同一闭集语义，判定只依据该槽位画像的结构事实，
+//     不依赖目录里有哪个版本：
+//     1. 两个入口发出的每个请求，Luna Reserve 头出现当且仅当请求声明了该条件事实（只有
+//     usage 声明）且该槽位画像的对应端点声明了该槽位，出现时取画像常量值；若某个槽位
+//     的画像没有该槽位，这一条就是 usage 端点的端到端负例；
+//     2. 在同一链路上为该槽位画像未声明该槽位的 WHAM 端点显式声明条件事实，wire 上不得
+//     出现该头——这是任何目录状态下都成立的真实链路负例。
+//
+// 正例见 TestCodexWhamRequestsUseClosedBackendClientProfile，目标发布槽位上的批准断言语义与
+// 精确线序见 TestCodexWhamUsageLunaReserveReplaysApprovedSemanticsOnTargetRelease。
 func TestCodexWhamUsageLunaReserveDoesNotLeakWithoutProfileSlot(t *testing.T) {
-	account := &Account{
-		ID:       711,
-		Platform: PlatformOpenAI,
-		Type:     AccountTypeOAuth,
-		Status:   StatusActive,
-		Credentials: map[string]any{
-			"chatgpt_account_id": "acct-luna-reserve",
-		},
+	for _, mode := range []string{officialClientProfileModeActive, officialClientProfileModePrevious} {
+		t.Run(mode, func(t *testing.T) {
+			// 目标画像声明 WorkspaceRouting 节时 QueryUsage 会先做工作区路由发现并缓存结果。
+			resetOfficialCodexWorkspaceRoutingResults(t)
+			account := &Account{
+				ID:       711,
+				Platform: PlatformOpenAI,
+				Type:     AccountTypeOAuth,
+				Status:   StatusActive,
+				Credentials: map[string]any{
+					"chatgpt_account_id": "acct-luna-reserve",
+				},
+			}
+			repo := &stubQuotaAccountRepo{accounts: map[int64]*Account{account.ID: account}}
+			tokenProvider := NewOpenAITokenProvider(repo, &stubQuotaTokenCache{tokens: map[string]string{
+				OpenAITokenCacheKey(account): "token-luna-reserve",
+			}}, nil)
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				writer.Header().Set("content-type", "application/json")
+				_, _ = writer.Write([]byte(`{}`))
+			}))
+			defer server.Close()
+
+			upstream := newQuotaRedirectingUpstream(server)
+			service := NewOpenAIQuotaService(repo, nil, tokenProvider, upstream)
+			// 配额链路的画像由发布指针（runtime.CodexReleaseMode）解析，不读入站 ProfileMode；
+			// 两个槽位各自构造 runtime，保证请求真正跑在该槽位的画像上。
+			guard, guardErr := officialegress.NewGuard(
+				officialegress.DefaultGuard().Config(), officialegress.DefaultSinkCatalog(),
+				officialegress.DefaultOfficialRouteCatalog(), officialegress.DefaultGuard().Recorder(),
+			)
+			require.NoError(t, guardErr)
+			egressRuntime, runtimeErr := newOfficialEgressTransitionRuntimeWithExecutor(
+				guard, upstream, officialCodexExecutorID, officialegress.ReleaseMode(mode),
+			)
+			require.NoError(t, runtimeErr)
+			service.officialEgress = egressRuntime
+			runtimeState := defaultOfficialCodexRuntimeState()
+			runtimeState.ProfileMode = mode
+			runtimeState.SurfaceID = officialCodexSurfaceTUI
+			runtimeState.Originator = "codex-tui"
+			runtimeState.TerminalToken = "xterm-256color"
+			runtimeState.UserAgentSuffixEnabled = false
+			runtimeContext, err := withOfficialCodexRuntimeState(context.Background(), runtimeState)
+			require.NoError(t, err)
+
+			_, err = service.QueryUsageOnly(runtimeContext, account.ID)
+			require.NoError(t, err)
+			_, err = service.QueryUsage(runtimeContext, account.ID)
+			require.NoError(t, err)
+
+			usageSeen := 0
+			for _, request := range upstream.requests {
+				identity, ok := officialegress.AttemptIdentityFromContext(request.Context())
+				require.True(t, ok, "%s 缺少 attempt 身份", request.URL.Path)
+				want := ""
+				if identity.EndpointID == officialCodexEndpointWhamUsage {
+					usageSeen++
+					if value, declared := codexEndpointLunaReserveSlot(t, mode, identity.EndpointID); declared {
+						want = value
+					}
+				}
+				require.Equal(t, want, request.Header.Get("x-openai-codex-luna-reserve"),
+					"%s %s：Luna Reserve 头只能经该槽位画像声明的槽位出站", mode, request.URL.Path)
+			}
+			require.Equal(t, 2, usageSeen, "QueryUsageOnly 与 QueryUsage 各发一次 /wham/usage")
+
+			// 真实链路负例：rate-limit-reset-credits 与 usage 同属 WHAM 配额出口，但画像不为它
+			// 声明 Luna Reserve 槽位；在同一链路上为它显式声明条件事实，wire 上不得出现该头。
+			_, declared := codexEndpointLunaReserveSlot(t, mode, officialCodexEndpointWhamResetCredits)
+			require.False(t, declared, "负例前提：%s 画像的 rate-limit-reset-credits 不声明 Luna Reserve 槽位", mode)
+			accessToken, chatGPTAccountID, proxyURL, fedRAMP, err := service.prepareUpstreamCall(runtimeContext, account.ID)
+			require.NoError(t, err)
+			require.False(t, fedRAMP)
+			quotaHeaders, _, err := service.buildCodexQuotaHeaders(
+				runtimeContext, mode, account.ID, accessToken, chatGPTAccountID,
+			)
+			require.NoError(t, err)
+			factHeaders := codexQuotaUsageHeaders(quotaHeaders, false)
+			require.Equal(t, "1", factHeaders.Get("x-openai-codex-luna-reserve"), "负例请求必须真实声明条件事实")
+			before := len(upstream.requests)
+			status, _, err := service.doCodexQuotaRequest(
+				runtimeContext, account.ID, proxyURL, officialCodexEndpointWhamResetCredits, factHeaders, nil,
+			)
+			require.NoError(t, err)
+			require.Equal(t, http.StatusOK, status)
+			require.Len(t, upstream.requests, before+1)
+			require.Empty(t, upstream.requests[before].Header.Get("x-openai-codex-luna-reserve"),
+				"%s：画像未声明 Luna Reserve 槽位的端点，条件事实不得进入 wire", mode)
+		})
 	}
-	repo := &stubQuotaAccountRepo{accounts: map[int64]*Account{account.ID: account}}
-	tokenProvider := NewOpenAITokenProvider(repo, &stubQuotaTokenCache{tokens: map[string]string{
-		OpenAITokenCacheKey(account): "token-luna-reserve",
-	}}, nil)
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		writer.Header().Set("content-type", "application/json")
-		_, _ = writer.Write([]byte(`{}`))
-	}))
-	defer server.Close()
-
-	upstream := newQuotaRedirectingUpstream(server)
-	service := NewOpenAIQuotaService(repo, nil, tokenProvider, upstream)
-	// 配额链路的画像由发布指针（runtime.CodexReleaseMode）解析，不读入站 ProfileMode；
-	// 负例必须真正跑在没有 Luna Reserve 槽位的 previous 0.151.0 画像上。
-	guard, guardErr := officialegress.NewGuard(
-		officialegress.DefaultGuard().Config(), officialegress.DefaultSinkCatalog(),
-		officialegress.DefaultOfficialRouteCatalog(), officialegress.DefaultGuard().Recorder(),
-	)
-	require.NoError(t, guardErr)
-	previousRuntime, runtimeErr := newOfficialEgressTransitionRuntimeWithExecutor(
-		guard, upstream, officialCodexExecutorID, officialegress.ReleaseModePrevious,
-	)
-	require.NoError(t, runtimeErr)
-	service.officialEgress = previousRuntime
-	runtimeState := defaultOfficialCodexRuntimeState()
-	runtimeState.ProfileMode = officialClientProfileModePrevious
-	runtimeState.SurfaceID = officialCodexSurfaceTUI
-	runtimeState.Originator = "codex-tui"
-	runtimeState.TerminalToken = "xterm-256color"
-	runtimeState.UserAgentSuffixEnabled = false
-	runtimeContext, err := withOfficialCodexRuntimeState(context.Background(), runtimeState)
-	require.NoError(t, err)
-
-	_, err = service.QueryUsageOnly(runtimeContext, account.ID)
-	require.NoError(t, err)
-	_, err = service.QueryUsage(runtimeContext, account.ID)
-	require.NoError(t, err)
-
-	usageSeen := 0
-	for _, request := range upstream.requests {
-		if request.URL.Path == "/backend-api/wham/usage" {
-			usageSeen++
-		}
-		require.Empty(t, request.Header.Get("x-openai-codex-luna-reserve"),
-			"%s：previous 0.151.0 画像没有 Luna Reserve 槽位，条件头不得进入 wire", request.URL.Path)
-	}
-	require.Equal(t, 2, usageSeen, "QueryUsageOnly 与 QueryUsage 各发一次 /wham/usage")
 }
 
 // codexWhamGateReleaseMode 找出装载了 wham_usage Luna Reserve 槽位的发布槽位。晋升前
