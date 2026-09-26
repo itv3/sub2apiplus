@@ -10,12 +10,15 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	coderws "github.com/coder/websocket"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -322,20 +325,8 @@ func TestCandidateTraceCodex0145TurnStateFacts(t *testing.T) {
 	wsReturned := gjson.GetBytes(wsFrame, "client_metadata.x-codex-turn-state").String()
 	require.Equal(t, receivedTurnState, wsReturned)
 
-	compactHeaders := make(http.Header)
-	finalizeOfficialOpenAIHTTPHeaders(
-		compactHeaders,
-		officialCodexVersion0145,
-		"codex_exec/0.145.0",
-		"codex_exec",
-		identity,
-		true,
-		false,
-		receivedTurnState,
-	)
-	compactReturned := compactHeaders.Get(openAIWSTurnStateHeader)
-	require.Equal(t, receivedTurnState, compactReturned)
-
+	// legacy compact 端点已随目标版本删除，turn-state 只剩 HTTP 头与 WS client_metadata
+	// 两条回送通道（SPEC-BODY-004 turn-state-channels），不再产出 legacy compact 通道事实。
 	for _, fact := range []struct {
 		id       string
 		scenario string
@@ -344,7 +335,6 @@ func TestCandidateTraceCodex0145TurnStateFacts(t *testing.T) {
 	}{
 		{id: "a03.turn-state-http", scenario: "A03", channel: "http_header", value: httpReturned},
 		{id: "a05.turn-state-ws", scenario: "A05", channel: "websocket_client_metadata", value: wsReturned},
-		{id: "a09.turn-state-compact", scenario: "A09", channel: "legacy_compact_header", value: compactReturned},
 	} {
 		candidateTraceLogFact(t, fact.id, fact.scenario, "turn_state_chain", map[string]any{
 			"received_sha256": receivedSHA,
@@ -732,12 +722,9 @@ func TestCandidateTraceCodex0145RealtimeChain(t *testing.T) {
 }
 
 func TestCandidateTraceCodex0145CompactionDecisions(t *testing.T) {
-	legacyEndpoint, err := resolveCodexEndpoint(
-		officialCodexVersion0145,
-		codexEndpointID(officialCodexEndpointResponsesCompact),
-	)
-	require.NoError(t, err)
-	require.Equal(t, "/backend-api/codex/responses/compact", legacyEndpoint.Path)
+	// legacy compact 端点已随目标版本删除：压缩决策不再产出 implementation=legacy 的事实
+	// （SPEC-EP-023 no-legacy-implementation 要求其计数为 0）。remote_compaction_v2 字段
+	// 仍按既有事实口径记录。
 	legacyState := "disabled_explicitly"
 
 	triggerBody := []byte(`{"model":"gpt-5.6-luna","input":[{"type":"compaction_trigger"}]}`)
@@ -790,9 +777,310 @@ func TestCandidateTraceCodex0145CompactionDecisions(t *testing.T) {
 		"input_trigger_state":    "already_present",
 		"remote_compaction_v2":   legacyState,
 	})
-	candidateTraceLogFact(t, "a09.explicit-legacy", "A09", "compaction_decision", map[string]any{
-		"implementation":       "legacy",
-		"legacy_endpoint":      legacyEndpoint.Path,
-		"remote_compaction_v2": legacyState,
+}
+
+// candidateTraceTargetAccountID 是目标画像出站用例使用的隔离账号 ID。
+const candidateTraceTargetAccountID = 15700
+
+// candidateTraceTargetForward 在目标画像（previous 槽位）下走 OpenAIGatewayService.Forward 的
+// 真实 HTTP 出站，返回上游记录器看到的最终请求。
+//
+// 包内测试默认注入的 Codex Executor 固定按 active 发布模式组装，编译不出目标画像的 wire；
+// 这里改用生产 wiring 的同一入口 BuildOfficialEgressTransitionRuntime，按配置的 previous
+// 发布模式组装 Executor（与候选部署时进程级 runtime 的组装方式一致），service 层出站上下文
+// 与编译器因此读取同一份目标画像。
+func candidateTraceTargetForward(t *testing.T, c *gin.Context, body []byte) *httpUpstreamRecorder {
+	t.Helper()
+	upstream := &httpUpstreamRecorder{resp: newOfficialOpenAIHTTPSSECompletedResponse("resp_candidate_target")}
+	service := newOfficialOpenAIHTTPTestService(upstream)
+	service.cfg.Gateway.OfficialClientProfiles.Mode = officialClientProfileModePrevious
+	guard, err := officialegress.NewGuard(
+		officialegress.DefaultGuard().Config(),
+		officialegress.DefaultSinkCatalog(),
+		officialegress.DefaultOfficialRouteCatalog(),
+		nil,
+	)
+	require.NoError(t, err)
+	runtimeState, err := BuildOfficialEgressTransitionRuntime(guard, upstream, service.cfg, nil)
+	require.NoError(t, err)
+	require.Equal(t, officialegress.ReleaseModePrevious, runtimeState.CodexReleaseMode)
+	service.officialEgress = runtimeState
+	// A04 是非 Lite 场景：账号模型清单声明该模型不走 Responses Lite。
+	service.openaiModelCapabilities.replaceFromManifest(
+		candidateTraceTargetAccountID,
+		[]byte(`{"models":[{"slug":"gpt-5.4","use_responses_lite":false}]}`),
+	)
+	result, err := service.Forward(
+		context.Background(),
+		c,
+		newOfficialOpenAIHTTPTestAccount(candidateTraceTargetAccountID),
+		body,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotNil(t, upstream.lastReq)
+	return upstream
+}
+
+// candidateTraceA04Body 把 HTTP 测试入站改写为 A04 形态：非 Lite 模型、显式携带
+// service_tier，并去掉 Lite 专用的 additional_tools 载体；身份、client_metadata 与
+// turn metadata 保持原样。
+func candidateTraceA04Body(t *testing.T, body []byte) []byte {
+	t.Helper()
+	return mutateOfficialOpenAIHTTPTestBody(t, body, func(payload, _ map[string]any, _ map[string]any) {
+		payload["model"] = "gpt-5.4"
+		payload["service_tier"] = "priority"
+		input, _ := payload["input"].([]any)
+		kept := make([]any, 0, len(input))
+		for _, item := range input {
+			if typed, ok := item.(map[string]any); ok && typed["type"] == "additional_tools" {
+				continue
+			}
+			kept = append(kept, item)
+		}
+		payload["input"] = kept
+	})
+}
+
+// candidateTraceSkipUnlessTargetDeclares 在目标画像（previous 槽位）没有声明本事实所验证的
+// 行为时跳过测试。
+//
+// 候选源码树的 previous 槽位是待验收的目标画像：目标画像缺少声明时 trace 生成器会以
+// “冻结测试被跳过”失败关闭，候选验收不会因此放行。主仓库的 previous 槽位是上一版本画像，
+// 未声明新行为属正常情况，跳过只表示该画像没有这项行为可验证，不掩盖任何失败。
+func candidateTraceSkipUnlessTargetDeclares(t *testing.T, declared bool, behavior string) {
+	t.Helper()
+	if !declared {
+		t.Skipf("目标画像（previous 槽位）未声明%s，本事实只对声明该行为的目标画像产出", behavior)
+	}
+}
+
+// TestCandidateTraceCodexGuardianReviewConditionalHeader 在目标画像下产出 A04 的
+// a04.conditional-guardian 事实。
+//
+// guardian 同步审阅请求（入站 x-codex-guardian: reviewer，且同一请求的受信子代理身份为
+// guardian）出站必须携带 x-codex-guardian: reviewer、不生成 x-codex-routing-hint、请求体
+// 省略 service_tier；同一画像下的普通请求作对照，不带 x-codex-guardian，带 routing hint 与
+// service_tier。两次出站都走 OpenAIGatewayService.Forward 的真实编译链路。
+func TestCandidateTraceCodexGuardianReviewConditionalHeader(t *testing.T) {
+	profile := candidateTraceTargetProfile(t)
+	executable, err := officialCodexExecutableProfileForMode(officialClientProfileModePrevious)
+	require.NoError(t, err)
+	require.Equal(t, profile.Digest, executable.Digest())
+
+	// 画像前提：responses_http 声明 guardian 常量槽位，并以互补条件约束 routing hint 与
+	// service_tier。没有 guardian 槽位即目标画像未声明该行为；声明了但取值或条件不符则失败。
+	guardianDeclared := false
+	guardianValue, guardianCondition := "", ""
+	routingHintCondition, serviceTierCondition := "", ""
+	for _, endpoint := range executable.Endpoints() {
+		if endpoint.ID != officialCodexEndpointResponsesHTTP {
+			continue
+		}
+		for _, slot := range endpoint.Headers {
+			switch slot.Name {
+			case officialCodexGuardianHeader:
+				guardianDeclared = true
+				guardianValue, guardianCondition = slot.Value, string(slot.Condition)
+			case "x-codex-routing-hint":
+				routingHintCondition = string(slot.Condition)
+			}
+		}
+		for _, field := range endpoint.Body.Fields {
+			if field.Name == "service_tier" {
+				serviceTierCondition = string(field.Condition)
+			}
+		}
+	}
+	candidateTraceSkipUnlessTargetDeclares(t, guardianDeclared, " guardian 审阅条件头 x-codex-guardian")
+	require.Equal(t, officialCodexGuardianReviewerValue, guardianValue)
+	require.Equal(t, officialCodexConditionGuardianReview, guardianCondition)
+	require.Equal(t, officialCodexConditionNotGuardianReview, routingHintCondition)
+	require.Equal(t, officialCodexConditionNotGuardianReview, serviceTierCondition)
+
+	// 普通请求对照：根会话、exec 入口，入站显式携带 service_tier。
+	ordinaryBody := candidateTraceA04Body(t, newOfficialOpenAIHTTPTestBody(t, true, false, false))
+	ordinary := candidateTraceTargetForward(
+		t,
+		newOfficialOpenAIHTTPTestContext(ordinaryBody, "/v1/responses"),
+		ordinaryBody,
+	)
+	require.Equal(t, profile.Version, ordinary.lastReq.Header.Get("version"), "出站必须由目标画像编译")
+	require.Empty(t, ordinary.lastReq.Header.Values(officialCodexGuardianHeader))
+	require.Equal(t, []string{"model=gpt-5.4;tier=priority"}, ordinary.lastReq.Header.Values("x-codex-routing-hint"))
+	require.Equal(t, "priority", gjson.GetBytes(ordinary.lastBody, "service_tier").String())
+
+	// guardian 同步审阅请求：受信 guardian 子代理身份 + x-codex-guardian: reviewer，
+	// 入站同样携带 service_tier。
+	guardianBody := candidateTraceA04Body(t, newOfficialOpenAIGuardianHTTPBody(t))
+	guardianIngress := newOfficialOpenAIGuardianHTTPContext(t, guardianBody, "/v1/responses")
+	guardianIngress.Request.Header.Set(officialCodexGuardianHeader, officialCodexGuardianReviewerValue)
+	require.Equal(t, "priority", gjson.GetBytes(guardianBody, "service_tier").String())
+	guardian := candidateTraceTargetForward(t, guardianIngress, guardianBody)
+	require.Equal(t, profile.Version, guardian.lastReq.Header.Get("version"), "出站必须由目标画像编译")
+	require.Equal(t, officialCodexGuardianSubagentValue, guardian.lastReq.Header.Get("x-openai-subagent"))
+	guardianValues := guardian.lastReq.Header.Values(officialCodexGuardianHeader)
+	require.Equal(t, []string{officialCodexGuardianReviewerValue}, guardianValues)
+	guardianRoutingHint := guardian.lastReq.Header.Values("x-codex-routing-hint")
+	require.Empty(t, guardianRoutingHint)
+	require.False(t, gjson.GetBytes(guardian.lastBody, "service_tier").Exists())
+
+	candidateTraceLogFact(t, "a04.conditional-guardian", "A04", "conditional_header", map[string]any{
+		"name":                 officialCodexGuardianHeader,
+		"routing_hint_present": len(guardianRoutingHint) > 0,
+		"value":                guardianValues[0],
+	})
+}
+
+// TestCandidateTraceCodexTurnMetadataSerialization 在目标画像下产出 A04 的 a04.turn-metadata
+// 事实：普通请求经 OpenAIGatewayService.Forward 真实出站后，x-codex-turn-metadata 的实际键
+// 集合（排序后）与 analytics_enabled 取值。
+//
+// 键集合如实取自出站值，是否等于画像 TurnMetadata.Keys 由 SPEC-BODY-009 的断言画像判定；
+// 本测试只锁定出站键不越出画像闭集、目标版本新增的四个键齐全且取值与出站请求体一致、
+// analytics_enabled 等于画像取值。
+func TestCandidateTraceCodexTurnMetadataSerialization(t *testing.T) {
+	profile := candidateTraceTargetProfile(t)
+	executable, err := officialCodexExecutableProfileForMode(officialClientProfileModePrevious)
+	require.NoError(t, err)
+	require.Equal(t, profile.Digest, executable.Digest())
+	turnMetadataSection := executable.Optional().TurnMetadata
+	candidateTraceSkipUnlessTargetDeclares(t, turnMetadataSection != nil, " TurnMetadata 节")
+
+	ordinaryBody := candidateTraceA04Body(t, newOfficialOpenAIHTTPTestBody(t, true, false, false))
+	ordinary := candidateTraceTargetForward(
+		t,
+		newOfficialOpenAIHTTPTestContext(ordinaryBody, "/v1/responses"),
+		ordinaryBody,
+	)
+	require.Equal(t, profile.Version, ordinary.lastReq.Header.Get("version"), "出站必须由目标画像编译")
+
+	// 头与请求体 client_metadata 里的副本必须一致。
+	rawTurnMetadata := ordinary.lastReq.Header.Get("x-codex-turn-metadata")
+	require.Equal(
+		t,
+		rawTurnMetadata,
+		gjson.GetBytes(ordinary.lastBody, "client_metadata.x-codex-turn-metadata").String(),
+	)
+	turnMetadata := gjson.Parse(rawTurnMetadata)
+	require.True(t, turnMetadata.IsObject(), "turn metadata 必须是 JSON 对象：%s", rawTurnMetadata)
+	turnMetadataKeys := make([]string, 0)
+	turnMetadata.ForEach(func(key, _ gjson.Result) bool {
+		turnMetadataKeys = append(turnMetadataKeys, key.String())
+		return true
+	})
+	sort.Strings(turnMetadataKeys)
+	require.Subset(t, turnMetadataSection.Keys, turnMetadataKeys, "出站 turn metadata 不得出现画像闭集外的键")
+	for _, key := range []string{
+		officialCodexTurnMetadataKeyAnalyticsEnabled,
+		officialCodexTurnMetadataKeyModel,
+		officialCodexTurnMetadataKeyReasoningEffort,
+		officialCodexTurnMetadataKeyTurnTrigger,
+	} {
+		require.Contains(t, turnMetadataKeys, key)
+	}
+	analyticsEnabled := turnMetadata.Get(officialCodexTurnMetadataKeyAnalyticsEnabled)
+	require.True(t, analyticsEnabled.Type == gjson.True || analyticsEnabled.Type == gjson.False)
+	require.Equal(t, turnMetadataSection.AnalyticsEnabled, analyticsEnabled.Bool())
+	require.Equal(t, gjson.GetBytes(ordinary.lastBody, "model").String(),
+		turnMetadata.Get(officialCodexTurnMetadataKeyModel).String())
+	require.Equal(t, gjson.GetBytes(ordinary.lastBody, "reasoning.effort").String(),
+		turnMetadata.Get(officialCodexTurnMetadataKeyReasoningEffort).String())
+	require.Equal(t, officialCodexTurnTriggerExec, turnMetadata.Get(officialCodexTurnMetadataKeyTurnTrigger).String())
+	undeclared := make([]string, 0)
+	for _, key := range turnMetadataSection.Keys {
+		if !slices.Contains(turnMetadataKeys, key) {
+			undeclared = append(undeclared, key)
+		}
+	}
+	// 诊断输出：画像声明但本次出站未生成的键（不是事实，不参与 trace 生成）。
+	t.Logf("目标画像 TurnMetadata.Keys 中本次出站未生成的键：%v", undeclared)
+
+	candidateTraceLogFact(t, "a04.turn-metadata", "A04", "serialization_boundary", map[string]any{
+		"analytics_enabled": analyticsEnabled.Bool(),
+		"boundary":          "turn_metadata",
+		"keys":              turnMetadataKeys,
+	})
+}
+
+// TestCandidateTraceCodexTurnStateOwnerReset 在目标画像下产出 A05 的 turn-state owner 重置事实。
+//
+// 走 WS 入口的真实隔离链路：账号 A 的连接握手下发 turn-state，入口取握手值并记入铸造账号；
+// 账号 failover 到 B 后，下游客户端回带的旧值经 isolateOfficialCodexIngressTurnState 丢弃，
+// 下一次 response.create 不再回送 turn-state（return_channel=none）。同账号对照保留回带值，
+// 并按 websocket_client_metadata 通道回送。开关由 WS 发布模式对应画像的 TurnState 节决定。
+func TestCandidateTraceCodexTurnStateOwnerReset(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	profile := candidateTraceTargetProfile(t)
+	cfg := &config.Config{}
+	cfg.Gateway.OfficialClientProfiles.Mode = officialClientProfileModePrevious
+	service := &OpenAIGatewayService{cfg: cfg}
+	releaseMode := officialCodexWebSocketReleaseMode(service)
+	require.Equal(t, officialClientProfileModePrevious, releaseMode)
+	executable, err := officialCodexExecutableProfileForMode(releaseMode)
+	require.NoError(t, err)
+	require.Equal(t, profile.Digest, executable.Digest())
+	turnStateSection := executable.Optional().TurnState
+	candidateTraceSkipUnlessTargetDeclares(
+		t,
+		turnStateSection != nil && turnStateSection.ResetOnAccountOwnerChange,
+		" TurnState 节的账号 owner 变化重置",
+	)
+	require.True(t, officialCodexTurnStateOwnerIsolation(releaseMode))
+
+	sessionID := uuid.NewString()
+	newIngress := func(clientTurnState string) *gin.Context {
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest(http.MethodGet, "/openai/v1/responses", nil)
+		c.Request.Header.Set("session-id", sessionID)
+		if clientTurnState != "" {
+			c.Request.Header.Set(openAIWSTurnStateHeader, clientTurnState)
+		}
+		c.Set("api_key", &APIKey{ID: candidateTraceTargetAccountID})
+		return c
+	}
+	ownerA := &Account{ID: candidateTraceTargetAccountID + 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+	ownerB := &Account{ID: candidateTraceTargetAccountID + 2, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+	require.NotEqual(t, ownerA.ID, ownerB.ID)
+
+	// 账号 A 的连接握手下发 turn-state：WS 入口取握手值，并在隔离开启时记入铸造账号。
+	minted := "turn-state-" + uuid.NewString()
+	receivedTurnState := replaceOpenAIWSTurnStateFromLease(newOpenAIWSLeaseWithHandshakeTurnState(minted))
+	require.Equal(t, minted, receivedTurnState)
+	service.noteOpenAICodexTurnStateProvenance(newIngress(""), ownerA)
+
+	wsContext := WithOfficialEgressContext(
+		context.Background(),
+		NewOfficialEgressContext(OfficialEgressContextInput{ProfileMode: releaseMode}),
+	)
+	frame := []byte(`{"type":"response.create","model":"gpt-5.6-sol","input":[]}`)
+
+	// 同账号对照：下游回带的值保留，并经 websocket_client_metadata 通道回送。
+	sameOwner := service.isolateOfficialCodexIngressTurnState(newIngress(receivedTurnState), ownerA, receivedTurnState)
+	require.Equal(t, receivedTurnState, sameOwner)
+	sameOwnerFrame, err := injectOfficialOpenAIWSTurnState(wsContext, frame, sameOwner)
+	require.NoError(t, err)
+	require.Equal(t, receivedTurnState, gjson.GetBytes(sameOwnerFrame, "client_metadata.x-codex-turn-state").String())
+
+	// owner 变化：failover 到账号 B 后，下游回带的旧 turn-state 被丢弃，下一帧不回送。
+	resetIngress := newIngress(receivedTurnState)
+	clientTurnState := strings.TrimSpace(resetIngress.GetHeader(openAIWSTurnStateHeader))
+	require.Equal(t, receivedTurnState, clientTurnState)
+	returnedTurnState := service.isolateOfficialCodexIngressTurnState(resetIngress, ownerB, clientTurnState)
+	require.Empty(t, returnedTurnState)
+	resetFrame, err := injectOfficialOpenAIWSTurnState(wsContext, frame, returnedTurnState)
+	require.NoError(t, err)
+	require.Equal(t, frame, resetFrame, "不回送 turn-state 时 response.create 帧保持原样")
+	returnChannel := "none"
+	if gjson.GetBytes(resetFrame, "client_metadata.x-codex-turn-state").Exists() {
+		returnChannel = "websocket_client_metadata"
+	}
+	require.Equal(t, "none", returnChannel)
+
+	candidateTraceLogFact(t, "a05.turn-state-owner-reset", "A05", "turn_state_chain", map[string]any{
+		"received_sha256": candidateTraceSHA256(receivedTurnState),
+		"reset_reason":    "account_owner_changed",
+		"return_channel":  returnChannel,
+		"returned_sha256": candidateTraceSHA256(returnedTurnState),
 	})
 }
