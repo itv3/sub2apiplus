@@ -85,7 +85,8 @@ func TestChatGPTCookieJarStoresUnionAndReadsByPolicy(t *testing.T) {
 	jar.SetCookies(chatGPTURL, incoming)
 	require.ElementsMatch(t, []string{"_cfuvid"}, cookieNames(jar.Cookies(chatGPTURL)),
 		"net/http 自动补 Cookie 的路径始终按旧名单读取")
-	targetJar := jar.(officialCodexPolicyCookieJar)
+	targetJar, ok := jar.(officialCodexPolicyCookieJar)
+	require.True(t, ok, "账号 Cookie jar 必须支持按名单读取")
 	require.ElementsMatch(t, []string{"_cfuvid", "__oailb"}, cookieNames(targetJar.CookiesForPolicy(
 		chatGPTURL, officialCodexCookiePolicyForMode(officialClientProfileModeActive),
 	)))

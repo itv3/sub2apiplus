@@ -64,8 +64,9 @@ func TestOfficialCodexWebSocketRetryPolicyFollowsProfile(t *testing.T) {
 	require.NotNil(t, policy)
 	require.Equal(t, openAIWSReconnectRetryLimit+1, policy.maxAttempts(openAIWSReconnectRetryLimit+1))
 
-	handled, retry, fallback := policy.observe(overloaded)
+	handled, _, _ = policy.observe(overloaded)
 	require.False(t, handled, "server_is_overloaded 不在节中，交还旧逻辑")
+	var retry, fallback bool
 	for index := 0; index < 2; index++ {
 		handled, retry, fallback = policy.observe(slowDown)
 		require.True(t, handled)

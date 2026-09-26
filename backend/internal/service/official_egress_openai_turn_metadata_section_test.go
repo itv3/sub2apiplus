@@ -211,7 +211,8 @@ func TestOfficialOpenAIWSFrameTurnMetadataFollowsProfileSection(t *testing.T) {
 		newTurnMetadataWSTestContext(t), turnPayload(), false,
 	)
 	require.NoError(t, err)
-	legacy := legacyMetadata["x-codex-turn-metadata"].(string)
+	legacy, ok := legacyMetadata["x-codex-turn-metadata"].(string)
+	require.True(t, ok, "旧画像的 turn metadata 必须是字符串")
 	require.False(t, gjson.Get(legacy, "analytics_enabled").Exists())
 
 	withOfficialCodexSyntheticProfile(t, turnMetadataTargetMutation(t))
@@ -219,7 +220,8 @@ func TestOfficialOpenAIWSFrameTurnMetadataFollowsProfileSection(t *testing.T) {
 		newTurnMetadataWSTestContext(t), turnPayload(), false,
 	)
 	require.NoError(t, err)
-	turn := metadata["x-codex-turn-metadata"].(string)
+	turn, ok := metadata["x-codex-turn-metadata"].(string)
+	require.True(t, ok, "目标画像的 turn metadata 必须是字符串")
 	require.True(t, gjson.Get(turn, "analytics_enabled").Bool())
 	require.Equal(t, "gpt-5.6-luna", gjson.Get(turn, "model").String())
 	require.Equal(t, "medium", gjson.Get(turn, "reasoning_effort").String(), "缺省 effort 按模型默认值补齐")
@@ -231,7 +233,8 @@ func TestOfficialOpenAIWSFrameTurnMetadataFollowsProfileSection(t *testing.T) {
 		newTurnMetadataWSTestContext(t), prewarm, false,
 	)
 	require.NoError(t, err)
-	prewarmTurn := prewarmMetadata["x-codex-turn-metadata"].(string)
+	prewarmTurn, ok := prewarmMetadata["x-codex-turn-metadata"].(string)
+	require.True(t, ok, "prewarm 帧的 turn metadata 必须是字符串")
 	require.Equal(t, "prewarm", gjson.Get(prewarmTurn, "request_kind").String())
 	require.False(t, gjson.Get(prewarmTurn, "turn_trigger").Exists(), "prewarm 不属于某一轮")
 	require.True(t, gjson.Get(prewarmTurn, "analytics_enabled").Exists())
