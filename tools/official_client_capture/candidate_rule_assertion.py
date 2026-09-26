@@ -1051,6 +1051,48 @@ def _a15_parse_timestamp(value: Any, description: str) -> datetime:
     return parsed
 
 
+# TUI 启动 models 的合同入口：更早版本由 core 以 originator=codex_cli_rs 发出，UA 前缀是 codex-tui，
+# 两者属独立维度，UA 由 originator 派生即判伪。0.157 起 originator 头、UA 前缀与 suffix 都取自全局
+# originator／USER_AGENT_SUFFIX（官方源码 codex-rs/login/src/auth/default_client.rs 的
+# get_codex_user_agent），TUI initialize 时由 app-server/src/request_processors/initialize_processor.rs
+# 先改 originator、再设 suffix；启动 models 与 initialize 并发，因此该进程的第一个 models 请求可能在
+# initialize 之前（originator 与 UA 前缀均为 codex_cli_rs、无 suffix）、之中（originator 头仍为 codex_cli_rs
+# 而 UA 前缀已切到 codex-tui，或两者都已是 codex-tui）或之后发出。ARM64 真实 0.157.0 PTY 运行三种都实测到；
+# UA 前缀为 codex_cli_rs 时 suffix 必然尚未设置。
+A15_CORE_STARTUP_RACES_INITIALIZE_MIN_VERSION = (0, 157, 0)
+
+
+def _a15_core_startup_races_initialize(expected_codex_version: str) -> bool:
+    match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", expected_codex_version)
+    if match is None:
+        raise AssertionConfigurationError(
+            f"A15 目标 Codex 版本号非法：{expected_codex_version!r}"
+        )
+    return tuple(int(part) for part in match.groups()) >= A15_CORE_STARTUP_RACES_INITIALIZE_MIN_VERSION
+
+
+def _a15_tui_startup_ua_forms(expected_codex_version: str) -> dict[str, tuple[str, ...]]:
+    """返回目标版本下 TUI 启动 models 允许的 User-Agent 前缀 → suffix 集合。"""
+
+    forms: dict[str, tuple[str, ...]] = {
+        f"codex-tui/{expected_codex_version}": (
+            "",
+            f"(codex-tui; {expected_codex_version})",
+        )
+    }
+    if _a15_core_startup_races_initialize(expected_codex_version):
+        forms[f"codex_cli_rs/{expected_codex_version}"] = ("",)
+    return forms
+
+
+def _a15_tui_startup_originators(expected_codex_version: str) -> tuple[str, ...]:
+    """返回目标版本下 TUI 启动 models 允许的 originator 头。"""
+
+    if _a15_core_startup_races_initialize(expected_codex_version):
+        return ("codex_cli_rs", "codex-tui")
+    return ("codex_cli_rs",)
+
+
 def _validate_a15_real_entry_cache_contract(
     artifacts: Sequence[Mapping[str, Any]],
     resolved: Mapping[str, Path],
@@ -1165,14 +1207,19 @@ def _validate_a15_real_entry_cache_contract(
             "A15 必须恰好包含三条 surface_identity 和一条 connection_lifecycle"
         )
 
+    # ua_forms：允许的 User-Agent 前缀 → 该前缀下允许的 suffix。suffix 必须与实际前缀对应。
     expected_variants = {
         "exec-startup-models": {
             "record_id": "a15-exec-startup-models",
             "surface": "exec",
             "endpoint": "models",
-            "originator": "codex_exec",
-            "prefix": f"codex_exec/{expected_codex_version}",
-            "suffixes": ("", f"(codex_exec; {expected_codex_version})"),
+            "originators": ("codex_exec",),
+            "ua_forms": {
+                f"codex_exec/{expected_codex_version}": (
+                    "",
+                    f"(codex_exec; {expected_codex_version})",
+                ),
+            },
             "cache_result": "miss",
             "before": 0,
             "after": 1,
@@ -1184,9 +1231,10 @@ def _validate_a15_real_entry_cache_contract(
             "record_id": "a15-tui-startup-models",
             "surface": "tui",
             "endpoint": "models",
-            "originator": "codex_cli_rs",
-            "prefix": f"codex-tui/{expected_codex_version}",
-            "suffixes": ("", f"(codex-tui; {expected_codex_version})"),
+            # originator 与 UA 形态都按目标版本精确区分（见 _a15_core_startup_races_initialize），
+            # 早期版本仍只认 core 的 codex_cli_rs，且 UA 不得由 originator 派生。
+            "originators": _a15_tui_startup_originators(expected_codex_version),
+            "ua_forms": _a15_tui_startup_ua_forms(expected_codex_version),
             "cache_result": "fresh_hit",
             "before": 1,
             "after": 1,
@@ -1198,9 +1246,12 @@ def _validate_a15_real_entry_cache_contract(
             "record_id": "a15-tui-post-initialize-identity",
             "surface": "tui",
             "endpoint": "plugin_identity",
-            "originator": "codex-tui",
-            "prefix": f"codex-tui/{expected_codex_version}",
-            "suffixes": (f"(codex-tui; {expected_codex_version})",),
+            "originators": ("codex-tui",),
+            "ua_forms": {
+                f"codex-tui/{expected_codex_version}": (
+                    f"(codex-tui; {expected_codex_version})",
+                ),
+            },
             "cache_result": "not_applicable",
             "before": None,
             "after": None,
@@ -1233,8 +1284,6 @@ def _validate_a15_real_entry_cache_contract(
             "contract_version": A15_REAL_ENTRY_CACHE_LABEL,
             "surface": expected["surface"],
             "endpoint": expected["endpoint"],
-            "originator": expected["originator"],
-            "user_agent_prefix": expected["prefix"],
             "request_method": "GET",
             "version_header": expected["version"],
             "authorization_present": True,
@@ -1256,8 +1305,20 @@ def _validate_a15_real_entry_cache_contract(
                 f"A15 {variant} 入口合同不匹配：{mismatches}"
             )
 
+        if data.get("originator") not in expected["originators"]:
+            raise AssertionConfigurationError(
+                f"A15 {variant} 入口合同不匹配：originator {data.get('originator')!r} "
+                f"不在允许集合 {expected['originators']!r}"
+            )
+        user_agent_prefix = data.get("user_agent_prefix")
+        ua_forms = expected["ua_forms"]
+        if not isinstance(user_agent_prefix, str) or user_agent_prefix not in ua_forms:
+            raise AssertionConfigurationError(
+                f"A15 {variant} 入口合同不匹配：user_agent_prefix {user_agent_prefix!r} "
+                f"不在允许集合 {sorted(ua_forms)!r}"
+            )
         user_agent_suffix = data.get("user_agent_suffix")
-        expected_suffixes = expected["suffixes"]
+        expected_suffixes = ua_forms[user_agent_prefix]
         expected_suffix_state = "present" if user_agent_suffix else "absent"
         if (
             user_agent_suffix not in expected_suffixes
@@ -1270,7 +1331,7 @@ def _validate_a15_real_entry_cache_contract(
         user_agent = data.get("user_agent")
         if (
             not isinstance(user_agent, str)
-            or not user_agent.startswith(str(expected["prefix"]) + " ")
+            or not user_agent.startswith(str(user_agent_prefix) + " ")
             or (
                 user_agent_suffix
                 and not user_agent.endswith(str(user_agent_suffix))

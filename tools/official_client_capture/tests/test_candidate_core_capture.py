@@ -99,13 +99,53 @@ class CandidateCoreCaptureScriptTest(unittest.TestCase):
         self.assertIn('"codex_exec"', a15)
         self.assertIn('"codex-tui"', a15)
         self.assertIn('"codex_cli_rs"', a15)
-        self.assertIn('expected_suffixes=("", f"(codex_exec; {codex_version})")', a15)
-        self.assertIn('expected_suffixes=("", f"(codex-tui; {codex_version})")', a15)
+        self.assertIn('f"codex_exec/{codex_version}": (\n                            "",\n'
+                      '                            f"(codex_exec; {codex_version})",', a15)
+        # TUI 启动 models 的 UA 形态按目标版本精确区分，与 candidate_rule_assertion 同口径。
+        self.assertIn("ua_forms=tui_startup_ua_forms(),", a15)
+        self.assertIn("A15_CORE_STARTUP_RACES_INITIALIZE_MIN_VERSION = (0, 157, 0)", a15)
+        self.assertIn('forms = {f"codex-tui/{codex_version}": ("", f"(codex-tui; {codex_version})")}', a15)
+        self.assertIn('forms[f"codex_cli_rs/{codex_version}"] = ("",)', a15)
+        self.assertNotIn("expected_prefix", a15)
         self.assertNotIn('variant == "app-server"', a15)
         self.assertIn('"auth_mode": "chatgpt"', a15)
         self.assertNotIn('"auth_mode": "chatgptAuthTokens"', a15)
         self.assertIn("stdin=subprocess.DEVNULL", a15)
         self.assertNotIn("stdin=subprocess.PIPE", a15)
+
+    def test_a15_witness_is_https_and_answers_workspace_routing_locally(self) -> None:
+        """Codex 0.157 起 TUI 启动先做 workspace 路由发现：accounts/check 须含当前账号条目，
+        backend origin 须为 HTTPS，否则以 account/read 失败退出（194249z frozen-core 三连败）。
+
+        witness 改为临时 CA 签发的 HTTPS；accounts/check 在 localhost 受控应答 NO_CONSTRAINT，
+        不转发 Candidate；临时 CA 只经环境变量交给 codex 子进程，TLS 目录在任何退出路径删除。
+        """
+
+        start = self.source.index("# A15 要证明的是 exec 与 PTY TUI")
+        end = self.source.index("# 冻结动作和无生产转发门禁", start)
+        a15 = self.source[start:end]
+        self.assertIn("f'openai_base_url=\"https://127.0.0.1:{witness_port}/a15/{nonce}'", a15)
+        self.assertIn("f'chatgpt_base_url=\"https://127.0.0.1:{witness_port}/a15/{nonce}'", a15)
+        self.assertNotIn("http://127.0.0.1:{witness_port}", a15)
+        self.assertIn("server.socket = witness_context.wrap_socket(server.socket, server_side=True)", a15)
+        self.assertIn('environment["SSL_CERT_FILE"] = str(witness_ca_bundle)', a15)
+        self.assertIn('environment["CODEX_CA_CERTIFICATE"] = str(witness_ca_bundle)', a15)
+        self.assertNotIn("update-ca-certificates", a15[a15.index("def prepare_witness_tls"):])
+        branch = a15[
+            a15.index("if public_target == A15_ACCOUNTS_CHECK_TARGET:"):
+            a15.index("if public_target in TUI_PLUGIN_TARGETS | TUI_AUXILIARY_PLUGIN_TARGETS:")
+        ]
+        self.assertIn("return", branch)
+        self.assertNotIn("connection_type", branch)
+        self.assertNotIn("service_prefix", branch)
+        self.assertIn('A15_ACCOUNTS_CHECK_TARGET = "/backend-api/wham/accounts/check"', a15)
+        self.assertIn('"workspace_backend_origin": "NO_CONSTRAINT"', a15)
+        self.assertIn('"account_routing_override": "NO_CONSTRAINT"', a15)
+        self.assertIn('"default_account_id": A15_ACCOUNT_ID', a15)
+        self.assertIn('"account_id": A15_ACCOUNT_ID', a15)
+        self.assertIn("observed_account_checks.pop(nonce, None)", a15)
+        self.assertIn("for sample in all_samples + account_samples:", a15)
+        self.assertEqual(a15.count("shutil.rmtree(witness_tls_dir, ignore_errors=True)"), 3)
 
     def test_a15_witness_selects_contract_entry_by_originator(self) -> None:
         """A15 合同入口按登记的 originator 选样本，TUI 的 codex-tui 并发预取不再抢占首个样本。
@@ -118,10 +158,15 @@ class CandidateCoreCaptureScriptTest(unittest.TestCase):
         start = self.source.index("# A15 要证明的是 exec 与 PTY TUI")
         end = self.source.index("# 冻结动作和无生产转发门禁", start)
         a15 = self.source[start:end]
-        self.assertIn('"codex_exec" if variant == "exec" else "codex_cli_rs"', a15)
-        self.assertIn('expected_originator = str(known_entry.get("expected_originator", ""))', a15)
+        self.assertIn('("codex_exec",) if variant == "exec" else tui_startup_originators()', a15)
+        self.assertIn('expected_originators = tuple(known_entry.get("expected_originators", ()))', a15)
         self.assertIn(
-            'if not observations and observation["originator"] == expected_originator:',
+            'if not observations and observation["originator"] in expected_originators:',
+            a15,
+        )
+        # 0.157 起启动 models 与 TUI initialize 并发，入口 originator 可能已是 codex-tui；早期版本仍只认 core。
+        self.assertIn(
+            'return ("codex_cli_rs", "codex-tui") if core_startup_races_initialize() else ("codex_cli_rs",)',
             a15,
         )
         self.assertNotIn("if not observations:\n                observations.append(observation)", a15)
@@ -129,7 +174,8 @@ class CandidateCoreCaptureScriptTest(unittest.TestCase):
         self.assertIn('witness_path = trace_path.with_name("witness-observations.jsonl")', a15)
         self.assertIn('"contract_entry": sample in entry_samples', a15)
         # 合同入口的 originator 断言与"恰好一个入口样本"判定保持不变。
-        self.assertIn('expected_originator="codex_cli_rs"', a15)
+        self.assertIn("expected_originators=tui_startup_originators(),", a15)
+        self.assertIn("if originator not in expected_originators:", a15)
         self.assertIn("if len(models_requests) != 1:", a15)
 
     def test_a15_binds_nonce_digests_and_server_cache_counts(self) -> None:

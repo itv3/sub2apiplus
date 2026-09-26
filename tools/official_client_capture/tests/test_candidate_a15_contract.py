@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 from tools.official_client_capture.candidate_rule_assertion import (
     AssertionConfigurationError,
+    _a15_tui_startup_originators,
+    _a15_tui_startup_ua_forms,
     load_observations,
 )
 
@@ -510,6 +514,96 @@ class CandidateA15ContractTest(unittest.TestCase):
             self._write_manifest(fixture)
             with self.assertRaisesRegex(AssertionConfigurationError, "入口合同不匹配"):
                 self._load(fixture)
+
+    def _with_version(self, version: str) -> Any:
+        """把夹具的目标版本整体切到 version（函数内按全局名读取这些常量）。"""
+
+        return mock.patch.multiple(
+            sys.modules[type(self).__module__],
+            VERSION=version,
+            VERSION_OUTPUT=f"codex-cli {version}",
+        )
+
+    def _set_tui_startup_user_agent(
+        self, record: dict[str, Any], prefix: str, suffix: str, originator: str = "codex_cli_rs"
+    ) -> None:
+        data = record["data"]
+        data["originator"] = originator
+        data["user_agent_prefix"] = prefix
+        data["user_agent_suffix"] = suffix
+        data["suffix_state"] = "present" if suffix else "absent"
+        data["user_agent"] = f"{prefix} (Ubuntu 24.4.0; x86_64) unknown" + (f" {suffix}" if suffix else "")
+        self._refresh_surface_digests(record)
+
+    def test_core_startup_user_agent_form_is_selected_by_target_version(self) -> None:
+        """0.157 起启动 models 与 TUI initialize 并发：UA 前缀可能仍是 codex_cli_rs（无 suffix），也可能已是
+        codex-tui；更早版本只接受 codex-tui，UA 由 originator 派生即判伪；版本号非法失败关闭。"""
+
+        legacy = {"codex-tui/0.157.0": ("", "(codex-tui; 0.157.0)")}
+        self.assertEqual(
+            _a15_tui_startup_ua_forms("0.157.0"), {**legacy, "codex_cli_rs/0.157.0": ("",)}
+        )
+        self.assertEqual(
+            _a15_tui_startup_ua_forms("0.160.2"),
+            {"codex-tui/0.160.2": ("", "(codex-tui; 0.160.2)"), "codex_cli_rs/0.160.2": ("",)},
+        )
+        self.assertEqual(
+            _a15_tui_startup_ua_forms("0.156.1"),
+            {"codex-tui/0.156.1": ("", "(codex-tui; 0.156.1)")},
+        )
+        for invalid in ("0.157", "v0.157.0", "0.157.0-alpha.1", ""):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(AssertionConfigurationError, "版本号非法"):
+                _a15_tui_startup_ua_forms(invalid)
+        self.assertEqual(_a15_tui_startup_originators("0.157.0"), ("codex_cli_rs", "codex-tui"))
+        self.assertEqual(_a15_tui_startup_originators("0.156.1"), ("codex_cli_rs",))
+
+    def test_v0157_tui_startup_models_accepts_real_initialize_race_forms(self) -> None:
+        """三种形态均来自 ARM64 真实 0.157.0 PTY 运行：启动 models 与 TUI initialize 并发。"""
+
+        cases = {
+            "initialize 之前": ("codex_cli_rs", "codex_cli_rs/0.157.0", ""),
+            "originator 头早于 UA 读取": ("codex_cli_rs", "codex-tui/0.157.0", ""),
+            "originator 已切换、suffix 未设置": ("codex-tui", "codex-tui/0.157.0", ""),
+            "initialize 完成": ("codex-tui", "codex-tui/0.157.0", "(codex-tui; 0.157.0)"),
+        }
+        for label, (originator, prefix, suffix) in cases.items():
+            with self.subTest(label=label), self._with_version("0.157.0"), tempfile.TemporaryDirectory() as directory:
+                fixture = self._fixture(Path(directory))
+                self._set_tui_startup_user_agent(fixture["records"][1], prefix, suffix, originator)
+                self._write_manifest(fixture)
+                self._load(fixture)
+
+    def test_pre_v0157_tui_startup_models_still_rejects_tui_originator(self) -> None:
+        """早期版本的启动 models 入口只认 core 的 codex_cli_rs，codex-tui 预取不得冒充入口。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = self._fixture(Path(directory))
+            self._set_tui_startup_user_agent(fixture["records"][1], f"codex-tui/{VERSION}", "", "codex-tui")
+            self._write_manifest(fixture)
+            with self.assertRaisesRegex(AssertionConfigurationError, "入口合同不匹配：originator"):
+                self._load(fixture)
+
+    def test_v0157_tui_startup_models_rejects_impossible_forms(self) -> None:
+        cases = {
+            "core 前缀带 TUI suffix": ("codex_cli_rs/0.157.0", "(codex-tui; 0.157.0)", "suffix 不符合入口合同"),
+            "core 前缀带自身 suffix": ("codex_cli_rs/0.157.0", "(codex_cli_rs; 0.157.0)", "suffix 不符合入口合同"),
+            "TUI 前缀带 core suffix": ("codex-tui/0.157.0", "(codex_cli_rs; 0.157.0)", "suffix 不符合入口合同"),
+            "版本不符的 core 前缀": ("codex_cli_rs/0.154.0", "", "入口合同不匹配"),
+            "exec 前缀": ("codex_exec/0.157.0", "", "入口合同不匹配"),
+        }
+        with self.subTest(label="exec originator"), self._with_version("0.157.0"), tempfile.TemporaryDirectory() as directory:
+            fixture = self._fixture(Path(directory))
+            self._set_tui_startup_user_agent(fixture["records"][1], "codex_cli_rs/0.157.0", "", "codex_exec")
+            self._write_manifest(fixture)
+            with self.assertRaisesRegex(AssertionConfigurationError, "入口合同不匹配：originator"):
+                self._load(fixture)
+        for label, (prefix, suffix, message) in cases.items():
+            with self.subTest(label=label), self._with_version("0.157.0"), tempfile.TemporaryDirectory() as directory:
+                fixture = self._fixture(Path(directory))
+                self._set_tui_startup_user_agent(fixture["records"][1], prefix, suffix)
+                self._write_manifest(fixture)
+                with self.assertRaisesRegex(AssertionConfigurationError, message):
+                    self._load(fixture)
 
     def test_tui_post_initialize_identity_requires_suffix(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

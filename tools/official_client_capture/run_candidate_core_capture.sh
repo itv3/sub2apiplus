@@ -1168,6 +1168,8 @@ restart_service
 # A15：宿主机 witness 只转发真实 Codex 进程的 models GET；每个进程的随机 nonce
 # 同时出现在 argv 与实际请求路径中。witness 在转发时去掉 nonce 前缀，使两次
 # models 请求进入网关后仍具有完全相同的缓存键。API Key 只通过 fd 3 交给 harness。
+# 0.157 起 witness 使用临时 CA 签发的 HTTPS，并在 localhost 受控应答 wham/accounts/check
+# 的 NO_CONSTRAINT 路由（workspace 路由发现要求，见 A15_ACCOUNTS_CHECK_BODY 处说明）。
 start_capture A15
 trigger_root="$work_dir/scenarios/A15/trigger"
 python3 - \
@@ -1186,6 +1188,7 @@ import re
 import secrets
 import shutil
 import signal
+import ssl
 import struct
 import subprocess
 import sys
@@ -1317,6 +1320,58 @@ TUI_AUXILIARY_PLUGIN_TARGETS = {
     "/backend-api/plugins/featured?platform=codex",
 }
 
+# Codex 0.157 起 ChatGPT 认证在启动时先做 workspace 路由发现（官方源码
+# codex-rs/app-server/src/request_processors/account_processor/workspace_routing.rs）：
+# GET wham/accounts/check 必须恰好返回当前账号（auth.json 的 account_id）一条，
+# account_routing_override 只能是 NO_CONSTRAINT／us／us_cr；workspace_backend_origin
+# 为 NO_CONSTRAINT 时回退到 chatgpt_base_url 的 origin，而该 origin 必须是 HTTPS。
+# 不满足时 TUI 以 "account/read failed during TUI bootstrap" 退出码 1 退出
+# （2026-09-26 c01570 194249z candidate-frozen-core 三次尝试均如此）。因此 witness
+# 改为 HTTPS，并在 localhost 受控应答 NO_CONSTRAINT 路由：解析出的 backend origin
+# 就是 witness 自身，model-provider 的路由改写不会改变请求目的地；accounts/check
+# 不转发 Candidate，网关上游仍只有 models 一次。
+A15_ACCOUNT_ID = "candidate-core-a15"
+A15_ACCOUNTS_CHECK_TARGET = "/backend-api/wham/accounts/check"
+A15_ACCOUNTS_CHECK_BODY = json.dumps(
+    {
+        "accounts": [
+            {
+                "id": A15_ACCOUNT_ID,
+                "workspace_backend_origin": "NO_CONSTRAINT",
+                "account_routing_override": "NO_CONSTRAINT",
+            }
+        ],
+        "account_ordering": [A15_ACCOUNT_ID],
+        "default_account_id": A15_ACCOUNT_ID,
+    },
+    separators=(",", ":"),
+).encode("utf-8")
+# 每个 nonce 收到的 accounts/check 样本，只作原始证据落盘，不参与合同入口判定。
+observed_account_checks: dict[str, list[dict[str, object]]] = {}
+
+# 与 candidate_rule_assertion 的 _a15_tui_startup_originators／_a15_tui_startup_ua_forms 逐项同口径：
+# 早期版本启动 models 只认 core 的 originator=codex_cli_rs 且 UA 前缀为 codex-tui；0.157 起该请求与 TUI
+# initialize 并发，originator 可能已是 codex-tui，UA 前缀也可能仍是 codex_cli_rs（此时必无 suffix）。
+A15_CORE_STARTUP_RACES_INITIALIZE_MIN_VERSION = (0, 157, 0)
+
+
+def core_startup_races_initialize() -> bool:
+    match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", codex_version)
+    if match is None:
+        raise RuntimeError(f"A15 目标 Codex 版本号非法：{codex_version!r}")
+    return tuple(int(part) for part in match.groups()) >= A15_CORE_STARTUP_RACES_INITIALIZE_MIN_VERSION
+
+
+def tui_startup_originators() -> tuple[str, ...]:
+    return ("codex_cli_rs", "codex-tui") if core_startup_races_initialize() else ("codex_cli_rs",)
+
+
+def tui_startup_ua_forms() -> dict[str, tuple[str, ...]]:
+    forms = {f"codex-tui/{codex_version}": ("", f"(codex-tui; {codex_version})")}
+    if core_startup_races_initialize():
+        forms[f"codex_cli_rs/{codex_version}"] = ("",)
+    return forms
+
 
 class WitnessHandler(http.server.BaseHTTPRequestHandler):
     """仅向 Candidate 转发 models；插件 GET 在 localhost 受控应答。"""
@@ -1361,6 +1416,33 @@ class WitnessHandler(http.server.BaseHTTPRequestHandler):
             known = known_requests.get(nonce)
         if known is None:
             self._blocked()
+            return
+
+        if public_target == A15_ACCOUNTS_CHECK_TARGET:
+            body = A15_ACCOUNTS_CHECK_BODY
+            self.send_response(200)
+            self.send_header("content-type", "application/json")
+            self.send_header("content-length", str(len(body)))
+            self.send_header("connection", "close")
+            self.end_headers()
+            self.wfile.write(body)
+            observation = {
+                "kind": "account_routing",
+                "method": "GET",
+                "target": self.path,
+                "user_agent": self.headers.get("user-agent", ""),
+                "originator": self.headers.get("originator", ""),
+                "authorization_present": bool(self.headers.get("authorization")),
+                "chatgpt_account_id_matches": (
+                    self.headers.get("chatgpt-account-id") == A15_ACCOUNT_ID
+                ),
+                "http_status": 200,
+                "response_body_sha256": hashlib.sha256(body).hexdigest(),
+                "response_body_bytes": len(body),
+                "observed_at": utc_now(),
+            }
+            with state_lock:
+                observed_account_checks.setdefault(nonce, []).append(observation)
             return
 
         if public_target in TUI_PLUGIN_TARGETS | TUI_AUXILIARY_PLUGIN_TARGETS:
@@ -1483,15 +1565,17 @@ class WitnessHandler(http.server.BaseHTTPRequestHandler):
             # 2026-09-18：Codex 0.154 的 PTY TUI 会在 core 之前以
             # originator=codex-tui 预取同一 models 清单，与合同入口（core 的
             # codex_cli_rs）并发到达，按"首个样本"判定会间歇失败（两次 Campaign
-            # 首跑失败、重试通过）。合同入口改为按登记的 expected_originator
+            # 首跑失败、重试通过）。合同入口改为按登记的 expected_originators
             # 选取首个样本；其余样本逐条保留到 witness-observations.jsonl
-            # 作为原始证据，不丢弃也不伪装成入口。
+            # 作为原始证据，不丢弃也不伪装成入口。0.157 起启动 models 与 TUI
+            # initialize 并发，入口 originator 可能已是 codex-tui（见
+            # tui_startup_originators），此时该进程的第一个 models 请求即入口。
             known_entry = known_requests[nonce]
-            expected_originator = str(known_entry.get("expected_originator", ""))
+            expected_originators = tuple(known_entry.get("expected_originators", ()))
             observed_models_all.setdefault(nonce, []).append(observation)
             observations = observed_models.setdefault(nonce, [])
             event = None
-            if not observations and observation["originator"] == expected_originator:
+            if not observations and observation["originator"] in expected_originators:
                 observations.append(observation)
                 event = known_entry["models_event"]
         if isinstance(event, threading.Event):
@@ -1500,6 +1584,61 @@ class WitnessHandler(http.server.BaseHTTPRequestHandler):
 
 class WitnessServer(http.server.ThreadingHTTPServer):
     daemon_threads = True
+
+
+def prepare_witness_tls(tls_dir: Path) -> tuple[ssl.SSLContext, Path]:
+    """为 localhost witness 签发只在本场景存活的 TLS 身份，返回服务端上下文与 codex 用 CA 包。
+
+    临时 CA 只通过 SSL_CERT_FILE／CODEX_CA_CERTIFICATE 交给本场景启动的 codex 进程，不写入
+    系统信任库；私钥与 CA 包在场景结束时随目录删除。
+    """
+
+    tls_dir.mkdir(mode=0o700)
+    ca_key, ca_cert = tls_dir / "ca.key", tls_dir / "ca.crt"
+    server_key, server_csr, server_cert = (
+        tls_dir / "server.key",
+        tls_dir / "server.csr",
+        tls_dir / "server.crt",
+    )
+    extensions = tls_dir / "server.ext"
+    extensions.write_text(
+        "subjectAltName=IP:127.0.0.1\n"
+        "extendedKeyUsage=serverAuth\n"
+        "basicConstraints=critical,CA:FALSE\n",
+        encoding="ascii",
+    )
+    for argv in (
+        [
+            "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
+            "-subj", "/CN=candidate-core-a15-witness-ca",
+            "-addext", "basicConstraints=critical,CA:TRUE",
+            "-addext", "keyUsage=critical,keyCertSign,cRLSign",
+            "-keyout", str(ca_key), "-out", str(ca_cert),
+        ],
+        [
+            "openssl", "req", "-newkey", "rsa:2048", "-nodes",
+            "-subj", "/CN=127.0.0.1",
+            "-keyout", str(server_key), "-out", str(server_csr),
+        ],
+        [
+            "openssl", "x509", "-req", "-days", "1", "-in", str(server_csr),
+            "-CA", str(ca_cert), "-CAkey", str(ca_key), "-CAcreateserial",
+            "-extfile", str(extensions), "-out", str(server_cert),
+        ],
+    ):
+        subprocess.run(argv, check=True, capture_output=True, timeout=60)
+    bundle = tls_dir / "codex-ca-bundle.pem"
+    bundle.write_bytes(
+        Path("/etc/ssl/certs/ca-certificates.crt").read_bytes()
+        + b"\n"
+        + ca_cert.read_bytes()
+    )
+    for path in tls_dir.iterdir():
+        os.chmod(path, 0o600)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    context.load_cert_chain(server_cert, server_key)
+    return context, bundle
 
 
 def drain_pty(master_fd: int) -> None:
@@ -1550,7 +1689,7 @@ def write_codex_home(home: Path, workspace: Path) -> None:
             "id_token": id_token,
             "access_token": api_key,
             "refresh_token": "",
-            "account_id": "candidate-core-a15",
+            "account_id": A15_ACCOUNT_ID,
         },
         "last_refresh": utc_now(),
     }
@@ -1583,12 +1722,13 @@ def process_argv(
     workspace: Path,
     witness_port: int,
 ) -> tuple[list[str], bool]:
+    # 必须是 HTTPS：0.157 的 workspace 路由把 chatgpt_base_url 的 origin 当作 backend origin 校验。
     openai_base = (
-        f'openai_base_url="http://127.0.0.1:{witness_port}/a15/{nonce}'
+        f'openai_base_url="https://127.0.0.1:{witness_port}/a15/{nonce}'
         '/backend-api/codex"'
     )
     chatgpt_base = (
-        f'chatgpt_base_url="http://127.0.0.1:{witness_port}/a15/{nonce}'
+        f'chatgpt_base_url="https://127.0.0.1:{witness_port}/a15/{nonce}'
         '/backend-api"'
     )
     overrides = ["-c", openai_base, "-c", chatgpt_base]
@@ -1653,10 +1793,10 @@ def launch_one(
                 "models_event": models_event,
                 "identity_event": identity_event,
                 "variant": variant,
-                # 合同入口的 originator：exec 由 codex_exec 发起，TUI 启动由 core
-                # （codex_cli_rs）发起；TUI 自身的 codex-tui 预取不是入口。
-                "expected_originator": (
-                    "codex_exec" if variant == "exec" else "codex_cli_rs"
+                # 合同入口的 originator：exec 由 codex_exec 发起；TUI 启动在早期版本由
+                # core（codex_cli_rs）发起，codex-tui 预取不是入口；0.157 起见 tui_startup_originators。
+                "expected_originators": (
+                    ("codex_exec",) if variant == "exec" else tui_startup_originators()
                 ),
             }
             observed_models[nonce] = []
@@ -1668,6 +1808,9 @@ def launch_one(
         environment["TERM"] = "xterm-256color"
         environment["NO_PROXY"] = "127.0.0.1,localhost"
         environment["no_proxy"] = "127.0.0.1,localhost"
+        # 只对本进程追加信任 witness 的临时 CA；系统信任库不变。
+        environment["SSL_CERT_FILE"] = str(witness_ca_bundle)
+        environment["CODEX_CA_CERTIFICATE"] = str(witness_ca_bundle)
         for name in (
             "CODEX_API_KEY",
             "CODEX_APP_SERVER_CHATGPT_BASE_URL",
@@ -1779,9 +1922,8 @@ def launch_one(
             surface: str,
             endpoint: str,
             request: dict[str, object],
-            expected_originator: str,
-            expected_prefix: str,
-            expected_suffixes: tuple[str, ...],
+            expected_originators: tuple[str, ...],
+            ua_forms: dict[str, tuple[str, ...]],
             record_cache_result: str,
             record_before: int | None,
             record_after: int | None,
@@ -1790,10 +1932,10 @@ def launch_one(
 
             user_agent = str(request["user_agent"])
             originator = str(request["originator"])
-            if originator != expected_originator:
+            if originator not in expected_originators:
                 raise RuntimeError(
                     f"A15 {record_variant} Originator {originator!r} "
-                    f"!= {expected_originator!r}"
+                    f"不在允许集合 {expected_originators!r}"
                 )
             if endpoint == "models" and str(request["version"]) != codex_version:
                 raise RuntimeError(f"A15 {record_variant} Version 头与目标版本不一致")
@@ -1806,16 +1948,17 @@ def launch_one(
                 suffix_match.group(0).strip() if suffix_match else ""
             )
             suffix_state = "present" if suffix_match else "absent"
-            if user_agent_suffix not in expected_suffixes:
-                raise RuntimeError(
-                    f"A15 {record_variant} UA suffix {user_agent_suffix!r} "
-                    f"不在允许集合 {expected_suffixes!r}"
-                )
             user_agent_prefix = user_agent.split(" ", 1)[0]
-            if user_agent_prefix != expected_prefix:
+            if user_agent_prefix not in ua_forms:
                 raise RuntimeError(
                     f"A15 {record_variant} UA 前缀 {user_agent_prefix!r} "
-                    f"!= {expected_prefix!r}"
+                    f"不在允许集合 {sorted(ua_forms)!r}"
+                )
+            if user_agent_suffix not in ua_forms[user_agent_prefix]:
+                raise RuntimeError(
+                    f"A15 {record_variant} UA suffix {user_agent_suffix!r} "
+                    f"不在前缀 {user_agent_prefix!r} 的允许集合 "
+                    f"{ua_forms[user_agent_prefix]!r}"
                 )
             request_payload = {
                 "method": request["method"],
@@ -1897,9 +2040,13 @@ def launch_one(
                     surface="exec",
                     endpoint="models",
                     request=models_request,
-                    expected_originator="codex_exec",
-                    expected_prefix=f"codex_exec/{codex_version}",
-                    expected_suffixes=("", f"(codex_exec; {codex_version})"),
+                    expected_originators=("codex_exec",),
+                    ua_forms={
+                        f"codex_exec/{codex_version}": (
+                            "",
+                            f"(codex_exec; {codex_version})",
+                        ),
+                    },
                     record_cache_result=cache_result,
                     record_before=before,
                     record_after=after,
@@ -1912,9 +2059,8 @@ def launch_one(
                 surface="tui",
                 endpoint="models",
                 request=models_request,
-                expected_originator="codex_cli_rs",
-                expected_prefix=f"codex-tui/{codex_version}",
-                expected_suffixes=("", f"(codex-tui; {codex_version})"),
+                expected_originators=tui_startup_originators(),
+                ua_forms=tui_startup_ua_forms(),
                 record_cache_result=cache_result,
                 record_before=before,
                 record_after=after,
@@ -1925,9 +2071,10 @@ def launch_one(
                 surface="tui",
                 endpoint="plugin_identity",
                 request=identity_requests[0],
-                expected_originator="codex-tui",
-                expected_prefix=f"codex-tui/{codex_version}",
-                expected_suffixes=(f"(codex-tui; {codex_version})",),
+                expected_originators=("codex-tui",),
+                ua_forms={
+                    f"codex-tui/{codex_version}": (f"(codex-tui; {codex_version})",),
+                },
                 record_cache_result="not_applicable",
                 record_before=None,
                 record_after=None,
@@ -1948,13 +2095,15 @@ def launch_one(
         with state_lock:
             entry_samples = list(observed_models.get(nonce, []))
             all_samples = list(observed_models_all.get(nonce, []))
+            account_samples = list(observed_account_checks.get(nonce, []))
             known_requests.pop(nonce, None)
             observed_models.pop(nonce, None)
             observed_models_all.pop(nonce, None)
             observed_identities.pop(nonce, None)
+            observed_account_checks.pop(nonce, None)
         witness_path = trace_path.with_name("witness-observations.jsonl")
         with witness_path.open("a", encoding="utf-8") as witness_stream:
-            for sample in all_samples:
+            for sample in all_samples + account_samples:
                 witness_stream.write(
                     json.dumps(
                         {
@@ -1972,7 +2121,16 @@ def launch_one(
         shutil.rmtree(home, ignore_errors=True)
 
 
-server = WitnessServer(("127.0.0.1", 0), WitnessHandler)
+witness_tls_dir = runtime_dir / "a15-witness-tls"
+# 上一次尝试异常中断时可能残留；每次都从空目录重新签发。
+shutil.rmtree(witness_tls_dir, ignore_errors=True)
+try:
+    witness_context, witness_ca_bundle = prepare_witness_tls(witness_tls_dir)
+    server = WitnessServer(("127.0.0.1", 0), WitnessHandler)
+    server.socket = witness_context.wrap_socket(server.socket, server_side=True)
+except BaseException:
+    shutil.rmtree(witness_tls_dir, ignore_errors=True)
+    raise
 server_thread = threading.Thread(target=server.serve_forever, daemon=True)
 server_thread.start()
 records: list[dict[str, object]] = []
@@ -1984,6 +2142,7 @@ finally:
     server.shutdown()
     server.server_close()
     server_thread.join(timeout=2)
+    shutil.rmtree(witness_tls_dir, ignore_errors=True)
     api_key = ""
 
 trace_path.write_text(
