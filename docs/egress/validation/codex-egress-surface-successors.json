@@ -33,6 +33,12 @@
       "reason": "Codex 0.157.0 候选（VC-4）：共享 Cookie jar 名单改读画像 CookieJar 节（officialCodexCookiePolicy），由合并缝新增命中出站定型扫描；required_review_touchpoint 范围仍以封存台账为准。"
     },
     {
+      "path": "backend/internal/service/openai_legacy_compact_release_gate.go",
+      "file_type": "regular",
+      "kind": "surface_addition",
+      "reason": "Codex 0.157.0 候选（VC-6 前置）：按调用冻结的发布画像判定 responses_compact 是否仍被声明，未声明时在模型能力刷新等任何出站之前以 404 本地拒绝 legacy /responses/compact 入站，决定该入站是否产生官方出站。"
+    },
+    {
       "path": "backend/internal/service/openai_workspace_routing.go",
       "file_type": "regular",
       "kind": "surface_addition",
