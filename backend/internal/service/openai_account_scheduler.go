@@ -2423,6 +2423,11 @@ func (s *OpenAIGatewayService) ReportOpenAIAccountScheduleResult(account *Accoun
 	if account == nil {
 		return false
 	}
+	// 发布画像删除 legacy compact 的本地拒绝是请求级结果，发生在任何出站之前、与账号健康
+	// 无关：不计入调度失败（错误率 EWMA）与健康熔断，避免把健康账号判错。
+	if !success && len(observedErr) > 0 && errors.Is(observedErr[0], ErrOpenAILegacyCompactRemovedByRelease) {
+		return false
+	}
 	accountID := account.ID
 	healthTripped := false
 	if s != nil && s.rateLimitService != nil {

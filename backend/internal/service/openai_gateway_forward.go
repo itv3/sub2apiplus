@@ -111,6 +111,10 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		writeOpenAIForwardLocalError(c, http.StatusNotFound, "not_found_error", "Unsupported official OAuth responses subpath", "")
 		return nil, routeErr
 	}
+	// 冻结的发布画像已删除 legacy compact 时，在模型能力刷新等任何出站之前失败关闭。
+	if rejectErr := s.rejectOpenAILegacyCompactRemovedByRelease(c, account); rejectErr != nil {
+		return nil, rejectErr
+	}
 	if officialProfileEnabled && account.IsOpenAIOAuth() {
 		if capabilityErr := s.ensureOpenAIModelCapability(ctx, account, body); capabilityErr != nil {
 			return nil, capabilityErr
