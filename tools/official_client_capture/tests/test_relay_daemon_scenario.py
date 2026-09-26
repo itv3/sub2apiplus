@@ -4,12 +4,14 @@
 - daemon-tui 只接受 >=0.157.0，且在任何请求之前拒绝；
 - 每个作业在启动中继、劫持 hosts 之前清扫 daemon 残留，清扫失败即退出；
 - cleanup 先停 daemon 再还原 hosts／CA（还原后驻留 daemon 的定时刷新会直连真实上游），最后删 home；
-- 场景分支不带任何 CLI 覆盖、经独立 CODEX_HOME 启动 TUI，模式判定失败也先停 daemon 再失败退出。
+- 场景分支不带任何 CLI 覆盖、经独立 CODEX_HOME 启动 TUI，模式判定失败也先停 daemon 再失败退出；
+  home 名取 run_id 的 SHA-256 前 16 位，daemon 控制 socket 路径与 run_id 长度无关、不超过 Linux 上限。
 分支控制流用假 docker 真实执行脚本原文，不另写副本。
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -19,11 +21,16 @@ import textwrap
 import unittest
 from pathlib import Path
 
+from tools.official_client_capture import drive_codex_daemon as lifecycle
+
 TOOL_ROOT = Path(__file__).parents[1]
 RELAY_SCRIPT = TOOL_ROOT / "run_official_relay_scenario.sh"
 BASH = shutil.which("bash") or "/bin/bash"
 BRANCH_START = 'elif [[ $prompt == "__DAEMON_TUI__" ]]; then'
 BRANCH_END = 'elif [[ $prompt == "__MEMGEN__" ]]; then'
+HOME_ASSIGNMENT = 'daemon_home="/root/.codex-daemon-$(printf \'%s\' "$run_id" | sha256sum | cut -c1-16)"'
+# 2026-09-26 正式 Campaign 的 daemon 作业 run_id：旧命名 /root/.codex-daemon-<run_id> 让控制 socket 路径 120 字节。
+FORMAL_RUN_ID = "c01570-formal-vc1-r2-20260926t062738z-official-tui-daemon"
 
 FAKE_DOCKER = textwrap.dedent(
     """\
@@ -55,6 +62,13 @@ FAKE_DOCKER = textwrap.dedent(
     sys.exit(97)
     """
 )
+
+
+def expected_home(run_id: str) -> str:
+    return "/root/.codex-daemon-" + hashlib.sha256(run_id.encode("utf-8")).hexdigest()[:16]
+
+
+UNIT_HOME = expected_home("unit-run")
 
 
 def function_source(source: str, name: str) -> str:
@@ -120,8 +134,8 @@ class DaemonScenarioWiringTest(unittest.TestCase):
 
     def test_场景分支不带任何_CLI_覆盖并经独立_home_启动(self) -> None:
         branch = self.source[self.source.index(BRANCH_START) : self.source.index(BRANCH_END)]
-        self.assertIn('daemon_home="/root/.codex-daemon-$run_id"', branch)
-        self.assertLess(branch.index('daemon_home="/root/.codex-daemon-$run_id"'), branch.index("daemon_tool prepare"))
+        self.assertIn(HOME_ASSIGNMENT, branch)
+        self.assertLess(branch.index(HOME_ASSIGNMENT), branch.index("daemon_tool prepare"))
         self.assertIn('--disable-features "$DISABLE_FEATURES"', branch)
         drive = branch[branch.index('docker exec -e CODEX_HOME="$daemon_home"') : branch.index("--log ")]
         for forbidden in ("--disable", "--enable", "--config", "-c ", "TUI_ENABLE", "TUI_DISABLE"):
@@ -157,11 +171,11 @@ class DaemonScenarioBranchTest(unittest.TestCase):
         self.log = self.tmp / "docker.log"
         self.observations = self.tmp / "work" / "scenario-observations"
 
-    def run_branch(self, **codes: str) -> subprocess.CompletedProcess[str]:
+    def run_branch(self, run_id: str = "unit-run", **codes: str) -> subprocess.CompletedProcess[str]:
         script = "\n".join(
             [
                 "set -Eeuo pipefail",
-                "run_id=unit-run",
+                f"run_id={run_id}",
                 "capture_container=capture-cli",
                 "capture_tool_root=/root/oauth-capture/tools/official_client_capture",
                 "codex_bin=/opt/codex-0.157.0/bin/codex",
@@ -199,20 +213,20 @@ class DaemonScenarioBranchTest(unittest.TestCase):
     def test_成功时依次建_home_驱动_判定_停止并留三份观测(self) -> None:
         result = self.run_branch()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("BRANCH_DONE daemon_home=/root/.codex-daemon-unit-run", result.stdout)
+        self.assertIn(f"BRANCH_DONE daemon_home={UNIT_HOME}", result.stdout)
         self.assertEqual(self.steps(), ["prepare", "drive_codex_tui.py", "status", "stop"])
         calls = self.calls()
         self.assertEqual(
             calls[0]["command"][2:],
-            ["prepare", "--home", "/root/.codex-daemon-unit-run", "--disable-features", "plugins apps"],
+            ["prepare", "--home", UNIT_HOME, "--disable-features", "plugins apps"],
         )
         drive = calls[1]
-        self.assertEqual(drive["env"], ["CODEX_HOME=/root/.codex-daemon-unit-run"])
+        self.assertEqual(drive["env"], [f"CODEX_HOME={UNIT_HOME}"])
         self.assertFalse({"--disable", "--enable", "--config"} & set(drive["command"]))
         self.assertEqual(
             calls[2]["command"][2:],
             [
-                "status", "--home", "/root/.codex-daemon-unit-run", "--codex-bin", "/opt/codex-0.157.0/bin/codex",
+                "status", "--home", UNIT_HOME, "--codex-bin", "/opt/codex-0.157.0/bin/codex",
                 "--require-mode", "daemon", "--expect-version", "0.157.0",
             ],
         )
@@ -237,6 +251,32 @@ class DaemonScenarioBranchTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertEqual(self.steps(), ["prepare"])
         self.assertIn("独立 CODEX_HOME 建立失败", result.stderr)
+
+    def test_正式_run_id_的_home_为定长摘要名且控制_socket_不超限(self) -> None:
+        socket = "/" + str(lifecycle.CONTROL_SOCKET_RELATIVE)
+        legacy = f"/root/.codex-daemon-{FORMAL_RUN_ID}"
+        # 反例：旧命名超出 Linux 上限，prepare 的兜底核对拒绝它。
+        self.assertEqual(len((legacy + socket).encode("utf-8")), 120)
+        with self.assertRaises(ValueError):
+            lifecycle.validate_socket_path(Path(legacy))
+        result = self.run_branch(run_id=FORMAL_RUN_ID)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        home = expected_home(FORMAL_RUN_ID)
+        self.assertIn(f"BRANCH_DONE daemon_home={home}", result.stdout)
+        self.assertEqual(self.calls()[0]["command"][2:4], ["prepare", "--home"])
+        self.assertEqual(self.calls()[0]["command"][4], home)
+        self.assertEqual(len((home + socket).encode("utf-8")), 79)
+        self.assertEqual(lifecycle.validate_socket_path(Path(home)), Path(home + socket))
+        self.assertNotEqual(home, UNIT_HOME)
+
+    def test_摘要命令输出异常时不建_home_即失败(self) -> None:
+        fake = self.bin / "sha256sum"
+        fake.write_text("#!/bin/sh\ncat >/dev/null\necho 'not-a-digest  -'\n", encoding="utf-8")
+        fake.chmod(0o755)
+        result = self.run_branch()
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(self.steps(), [])
+        self.assertIn("daemon 作业的 home 名计算失败", result.stderr)
 
 
 if __name__ == "__main__":

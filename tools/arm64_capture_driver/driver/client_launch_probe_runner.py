@@ -75,7 +75,7 @@ SECRET_RE = re.compile(
 TOKEN_RE = re.compile(r"^[A-Z]{16,64}$")
 MUTATION_RE = re.compile(r"^(untrust|unack_migration):([A-Za-z0-9_./-]+)$")
 # daemon 场景（daemon_auto_start 默认开启后的默认路径）的独立 CODEX_HOME：放在覆盖层 /work 下而不是 /tmp——客户端拒绝在临时目录
-# 下的 CODEX_HOME 里建 helper 别名并告警，与作业路径（容器 /root/.codex-daemon-<run_id>）不一致。建立、模式判定
+# 下的 CODEX_HOME 里建 helper 别名并告警，与作业路径（容器 /root/.codex-daemon-<run_id 摘要前 16 位>）不一致。建立、模式判定
 # 与停止都调用受管 drive_codex_daemon.py，与作业同一实现。
 DAEMON_HOMES_PARENT = Path("/work")
 DAEMON_HOME = DAEMON_HOMES_PARENT / ".codex-daemon-launch-probe"

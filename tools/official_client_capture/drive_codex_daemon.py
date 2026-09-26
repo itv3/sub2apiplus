@@ -21,6 +21,7 @@ daemon 发出。TUI 退出后 daemon 仍驻留：每 270 秒刷新一次模型�
   version.json（更新检查缓存与其余 TUI 作业一致）与 .sandbox_migration（不触发一次性迁移）。
   功能开关写进 config.toml 的 ``[features]`` 表而不走 ``--disable``，因为白名单外的 CLI 覆盖会让
   TUI 退回内嵌模式；``app-server-daemon/settings.json`` 关闭自动更新并把停机宽限设为 10 秒。
+  建立任何文件之前先核对 daemon 控制 socket 路径长度（见下文），超限按参数非法失败关闭。
 * ``status``：以 ``codex app-server daemon version`` 与进程表判定本作业实际运行模式。
 * ``stop``：``codex app-server daemon stop`` 优雅停止后，再终止该 home 名下仍存活的全部进程
   （含 updater 进程组），核验无残留。
@@ -28,6 +29,12 @@ daemon 发出。TUI 退出后 daemon 仍驻留：每 270 秒刷新一次模型�
 
 home 选在 ``/root`` 而不是 ``/tmp``：客户端以 ``std::env::temp_dir()`` 为界，CODEX_HOME 落在临时目录下
 时拒绝创建 helper 别名并在 TUI 与 daemon 的 stderr 打印告警，与默认用户路径不一致。
+
+home 路径必须足够短：daemon 的控制 socket 固定在 ``<CODEX_HOME>/app-server-control/app-server-control.sock``
+（客户端先 canonicalize CODEX_HOME，没有任何配置或环境变量能改这个位置），Linux 的 ``sockaddr_un.sun_path``
+只有 108 字节且须以 NUL 结尾，socket 路径最多 107 字节。超限时 daemon 绑定失败（``path must be shorter than
+SUN_LEN``），TUI 打印错误后退回内嵌模式。2026-09-26 正式 Campaign 以 ``/root/.codex-daemon-<run_id>`` 为 home，
+socket 路径 120 字节，daemon 作业因此连续失败；调用方现在以 run_id 摘要的定长名作 home，``prepare`` 再兜底核对。
 
 每个子命令向 stdout 输出一行 JSON（不含任何凭据）。退出码：0 成功；3 生命周期条件不成立；
 2 参数非法。
@@ -58,6 +65,11 @@ FEATURE_NAME_RE = re.compile(r"^[a-z0-9_]+$")
 REQUIRED_FILES = ("auth.json",)
 OPTIONAL_FILES = ("installation_id", "version.json", ".sandbox_migration")
 DAEMON_SETTINGS = {"updater": {"autoUpdateEnabled": False}, "shutdownGraceSeconds": 10}
+# daemon 控制 socket 相对 CODEX_HOME 的固定位置（0.157.0 app-server-transport 的
+# APP_SERVER_CONTROL_SOCKET_DIR_NAME／APP_SERVER_CONTROL_SOCKET_FILE_NAME）。
+CONTROL_SOCKET_RELATIVE = Path("app-server-control") / "app-server-control.sock"
+# Linux sun_path 共 108 字节、须以 NUL 结尾，路径本身最多 107 字节（Rust 标准库长度 ≥108 即拒绝绑定）。
+SOCKET_PATH_MAX_BYTES = 107
 # daemon 包的安装位置固定在 CODEX_HOME 之下；进程 exe 落在这里即可反推所属 home。
 PACKAGE_MARKER = "/packages/app-server-daemon/"
 TERMINATE_GRACE_SECONDS = 15.0
@@ -233,6 +245,19 @@ def validate_home(home: Path, homes_parent: Path) -> Path:
     return home
 
 
+def validate_socket_path(home: Path) -> Path:
+    """daemon 控制 socket 路径超过 Linux 上限时 daemon 起不来、TUI 退回内嵌模式，按参数非法拒绝。"""
+
+    socket_path = home / CONTROL_SOCKET_RELATIVE
+    size = len(os.fsencode(socket_path))
+    if size > SOCKET_PATH_MAX_BYTES:
+        raise ValueError(
+            f"daemon 控制 socket 路径 {size} 字节，超过 Linux 上限 {SOCKET_PATH_MAX_BYTES} 字节，"
+            f"home 名必须更短：{socket_path}"
+        )
+    return socket_path
+
+
 def parse_features(text: str) -> list[str]:
     names = text.split()
     for name in names:
@@ -268,6 +293,8 @@ def _regular_file(path: Path) -> bool:
 
 
 def prepare(home: Path, source_home: Path, disabled: list[str]) -> dict[str, Any]:
+    # 长度核对先于一切文件系统动作：超限时不留下半建的 home。
+    socket_path = validate_socket_path(home)
     if home.exists() or home.is_symlink():
         raise LifecycleError(f"daemon home 已存在，拒绝复用：{home}")
     for name in (*REQUIRED_FILES, "config.toml"):
@@ -289,6 +316,7 @@ def prepare(home: Path, source_home: Path, disabled: list[str]) -> dict[str, Any
     )
     return {
         "home": str(home),
+        "control_socket": str(socket_path),
         "copied_files": copied,
         "features": {name: False for name in disabled},
         "settings": DAEMON_SETTINGS,

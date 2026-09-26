@@ -110,7 +110,9 @@ class FakeProc:
 
 class LifecycleTestBase(unittest.TestCase):
     def setUp(self) -> None:
-        self.tmp = Path(tempfile.mkdtemp())
+        # prepare 会核对 daemon 控制 socket 路径不超过 Linux 上限 107 字节；macOS 的默认临时目录
+        # （/var/folders/…/T）本身就近 50 字节，夹具 home 固定建在短路径 /tmp 下，与平台无关。
+        self.tmp = Path(tempfile.mkdtemp(prefix="cxd-", dir="/tmp"))
         self.addCleanup(shutil.rmtree, self.tmp)
         self.proc = FakeProc(self.tmp / "proc")
         self.parent = self.tmp / "root"
@@ -180,6 +182,7 @@ class PrepareTest(LifecycleTestBase):
             result["copied_files"], ["auth.json", "installation_id", "version.json", ".sandbox_migration"]
         )
         self.assertEqual(result["features"], {"plugins": False, "apps": False})
+        self.assertEqual(result["control_socket"], str(self.home / "app-server-control" / "app-server-control.sock"))
         # 模型缓存不复制：daemon 启动期的 models 请求正是要取的样本。
         self.assertFalse((self.home / "models_cache.json").exists())
         config = tomllib.loads((self.home / "config.toml").read_text())
@@ -225,6 +228,20 @@ class PrepareTest(LifecycleTestBase):
         code, result = self.run_main("prepare", "--home", str(self.home), "--source-home", str(self.source))
         self.assertEqual(code, 3)
         self.assertIn("解析失败", result["error"])
+
+    def test_控制_socket_路径超过_Linux_上限时以_2_退出且不建_home(self) -> None:
+        # 名字长度让 socket 路径分别恰为 108 字节（超 1 字节）与 107 字节（上限）。
+        fixed = len(os.fsencode(self.parent / ".codex-daemon-x" / lifecycle.CONTROL_SOCKET_RELATIVE)) - 1
+        over = self.parent / (".codex-daemon-" + "b" * (lifecycle.SOCKET_PATH_MAX_BYTES + 1 - fixed))
+        at_limit = self.parent / (".codex-daemon-" + "a" * (lifecycle.SOCKET_PATH_MAX_BYTES - fixed))
+        code, result = self.run_main("prepare", "--home", str(over), "--source-home", str(self.source))
+        self.assertEqual(code, 2, result)
+        self.assertIn("108 字节，超过 Linux 上限 107 字节", result["error"])
+        self.assertFalse(over.exists())
+        code, result = self.run_main("prepare", "--home", str(at_limit), "--source-home", str(self.source))
+        self.assertEqual(code, 0, result)
+        self.assertEqual(len(os.fsencode(result["control_socket"])), lifecycle.SOCKET_PATH_MAX_BYTES)
+        self.assertTrue((at_limit / "config.toml").is_file())
 
     def test_非法_home_与功能名以_2_退出(self) -> None:
         for home in (self.tmp / "elsewhere", self.parent / ".codex", self.parent / ".codex-daemon-a/b"):

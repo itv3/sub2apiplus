@@ -1535,9 +1535,12 @@ chmod／chown，即便模式不变，ctime 也会漂移并被判 `evidence-integ
 0.157.0 起 `daemon_auto_start` 默认开启：不带白名单外 CLI 覆盖（`--disable`、`--enable`、`-c`、`--search` 等；白名单只有少数
 `features.*` 与 `tui.fullscreen_transcript`）的 PTY TUI 会拉起常驻 `codex app-server --managed-daemon`，模型请求改由 daemon 发出，
 带覆盖的退回内嵌模式。现有 TUI 作业都带 `--disable plugins apps`，均为内嵌模式；场景清单另设 A17
-`official-relay-tui-daemon`（中继场景 `daemon-tui`）取默认路径样本：独立冷启动 CODEX_HOME 放在容器 `/root/.codex-daemon-<run_id>`
-（不能放 `/tmp`，客户端拒绝在临时目录下建 helper 别名并告警），只复制 auth.json、config.toml、installation_id、version.json 与
-.sandbox_migration，功能开关写进 config.toml `[features]`，`app-server-daemon/settings.json` 关闭自动更新；作业以
+`official-relay-tui-daemon`（中继场景 `daemon-tui`）取默认路径样本：独立冷启动 CODEX_HOME 放在容器
+`/root/.codex-daemon-<run_id 的 SHA-256 前 16 位>`（不能放 `/tmp`，客户端拒绝在临时目录下建 helper 别名并告警；也不能直接用
+run_id 命名：daemon 控制 socket 固定在 `<home>/app-server-control/app-server-control.sock`，Linux 路径上限 107 字节，正式 Campaign
+的 run_id 会让它超限，daemon 起不来、TUI 退回内嵌，`drive_codex_daemon.py prepare` 建 home 前另行核对长度），只复制 auth.json、
+config.toml、installation_id、version.json 与 .sandbox_migration，功能开关写进 config.toml `[features]`，
+`app-server-daemon/settings.json` 关闭自动更新；作业以
 `codex app-server daemon version` 与进程表判定 daemon 模式与版本（不成立即失败），在停中继、还原 hosts 之前停止 daemon 并核验
 无残留（`daemon stop` 不停 updater，残留按进程组终止），cleanup 同序兜底并删除 home。A17 暂无判据引用，VC-2 修订 SPEC-HDR-005
 的 daemon 条件判据时以 `labels.tui_mode` 选择。每个中继作业在启动中继、改动 hosts 之前执行 `drive_codex_daemon.py sweep`：

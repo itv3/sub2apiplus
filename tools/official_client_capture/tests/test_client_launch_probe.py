@@ -208,8 +208,13 @@ class CallSiteCoverageTests(unittest.TestCase):
         """daemon 调用点经 -e CODEX_HOME 指向独立 home、命令行零覆盖；功能开关与探测的 daemon_features 同源。"""
 
         text = _relay_text()
-        prelude, command = _drive_call(_marker_blocks(text)["__DAEMON_TUI__"])
-        self.assertIn('daemon_home="/root/.codex-daemon-$run_id"', "\n".join(prelude))
+        block = _marker_blocks(text)["__DAEMON_TUI__"]
+        prelude, command = _drive_call(block)
+        # home 名取 run_id 摘要（控制 socket 路径不超 Linux 上限）；含命令替换，不进入夹具里执行的字面量赋值，
+        # 字面量里只剩名字计算失败时的清空。
+        home_line = 'daemon_home="/root/.codex-daemon-$(printf \'%s\' "$run_id" | sha256sum | cut -c1-16)"'
+        self.assertIn(home_line, [line.strip() for line in block])
+        self.assertEqual([line.strip() for line in prelude if line.strip().startswith("daemon_home=")], ['daemon_home=""'])
         self.assertTrue(command[0].strip().startswith('docker exec -e CODEX_HOME="$daemon_home" "$capture_container" python3'))
         self.assertIn('daemon_tool prepare --home "$daemon_home" --disable-features "$DISABLE_FEATURES"', text)
         for environment in ({}, {"DISABLE_FEATURES": ""}, {"DISABLE_FEATURES": "plugins"}):

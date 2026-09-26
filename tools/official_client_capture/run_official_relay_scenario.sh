@@ -1278,7 +1278,16 @@ elif [[ $prompt == "__GUARDIAN_TUI__" ]]; then
 elif [[ $prompt == "__DAEMON_TUI__" ]]; then
   # home 放在 /root 而不是 /tmp：客户端拒绝在临时目录下的 CODEX_HOME 里建 helper 别名并告警，
   # 与默认用户路径不一致。赋值先于 prepare，prepare 半途失败时 cleanup 同样会清掉 home。
-  daemon_home="/root/.codex-daemon-$run_id"
+  # home 名取 run_id 的 SHA-256 前 16 位而不是 run_id 本身：daemon 控制 socket 固定在
+  # <home>/app-server-control/app-server-control.sock，Linux 的 socket 路径最多 107 字节，
+  # 正式 Campaign 的 run_id 会让它超限，daemon 起不来、TUI 退回内嵌模式（2026-09-26 实测 120 字节）。
+  # 定长名让路径长度与 run_id 无关（socket 路径 79 字节），prepare 另行兜底核对。
+  daemon_home="/root/.codex-daemon-$(printf '%s' "$run_id" | sha256sum | cut -c1-16)"
+  if [[ ! $daemon_home =~ ^/root/\.codex-daemon-[0-9a-f]{16}$ ]]; then
+    echo "❌ daemon 作业的 home 名计算失败：${daemon_home}" >&2
+    daemon_home=""
+    exit 1
+  fi
   daemon_prepare=$(daemon_tool prepare --home "$daemon_home" --disable-features "$DISABLE_FEATURES") || {
     echo "❌ daemon 作业的独立 CODEX_HOME 建立失败：$daemon_prepare" >&2
     exit 1
