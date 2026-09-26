@@ -5022,6 +5022,9 @@ def _mutable_command_coordinates(
         "evaluation-recover",
         "deadline-extend",
         "campaign-abandon",
+        # 工具演进登记在 Campaign 排他锁内核对静默并写一次演进收据；状态查询只读。
+        "tool-evolution",
+        "tool-evolution-status",
         # R6：零请求导入／续作自持项目 admission 锁及 Campaign 锁，不启动执行监督器。
         "reuse-official-evidence",
         # seal 预演在私有 mount namespace 的 OverlayFS 副本上执行，正式目录只读；
@@ -6691,10 +6694,22 @@ def _cheap_capture_tool_impact(
     manifest: Mapping[str, Any],
     jobs: Iterable[Job],
     tool_identity: Mapping[str, Any],
+    *,
+    campaign_dir: Path | None = None,
 ) -> dict[str, Any]:
-    """只用小型工具组件摘要计算影响闭集，不触发 package／容器／环境探针。"""
+    """只用小型工具组件摘要计算影响闭集，不触发 package／容器／环境探针。
+
+    给出 ``campaign_dir`` 时，v2 Campaign 以有效工具身份（最新工具演进）为基准：已登记演进
+    的变化由演进逐作业裁定，不能再按 plan 身份重算成「映射不到的产出变化」。
+    """
 
     expected = manifest.get("tool_identity")
+    if (
+        campaign_dir is not None
+        and isinstance(expected, Mapping)
+        and _is_policy_v2_identity(expected)
+    ):
+        expected = _campaign_effective_tool_identity(campaign_dir, manifest)["identity"]
     planned = list(jobs)
     if not isinstance(expected, Mapping):
         # 旧测试／旧 Campaign 没有组件摘要时不能假定未变化；把所有 Job
@@ -9844,6 +9859,25 @@ def _build_parser() -> argparse.ArgumentParser:
     add_campaign_reference(campaign_abandon)
     campaign_abandon.add_argument("--approved-by", required=True)
     campaign_abandon.add_argument("--reason", required=True)
+
+    tool_evolution = subparsers.add_parser(
+        "tool-evolution",
+        help="修好工具并受监督部署后，在原 Campaign 登记工具演进（不带 --approve-sha256 只预览）",
+    )
+    add_campaign_reference(tool_evolution)
+    tool_evolution.add_argument("--fix-commit", required=True, help="本次修复所在提交（40 位）")
+    tool_evolution.add_argument("--reason", required=True, help="修复了什么、为什么需要登记")
+    tool_evolution.add_argument(
+        "--control-root",
+        type=Path,
+        help="部署收据所在控制根；缺省为 Campaign 数据根下的 control",
+    )
+    tool_evolution.add_argument("--approve-sha256", help="批准预览的 review_sha256")
+    tool_evolution.add_argument("--approved-by", help="批准人（与 --approve-sha256 一起提供）")
+    tool_evolution_status = subparsers.add_parser(
+        "tool-evolution-status", help="只读：Campaign 有效工具身份、演进链与是否需要登记"
+    )
+    add_campaign_reference(tool_evolution_status)
 
     wire_intent = subparsers.add_parser(
         "wire-transition-intent", help="签发两阶段 wire transition 的 intent（先预览再批准）"
@@ -17412,11 +17446,12 @@ def _bootstrap_noop_first_batch(
 
 
 def _prepare_atomic_batch_governance(arguments: argparse.Namespace) -> dict[str, Any]:
-    """原子派发前的两层治理：项目总账 admission 与时间账本只读预检。
+    """原子派发前的三层治理：工具演进登记预检、项目总账 admission 与时间账本只读预检。
 
-    两者都在取 state-dir 锁与任何落盘之前完成：admission 与 ``campaign-run`` CLI
-    共用同一门禁（此前原子入口绕过了它）；账本预检只读，拒绝时不产生 batch、
-    manifest 或停线收据。
+    三者都在取 state-dir 锁与任何落盘之前完成：工具演进预检先行——修好工具部署后若尚未
+    登记工具演进，后面的孤儿对账会按当前身份把中断批次误判为身份变化并写永久终态，这里
+    零写入拒绝；admission 与 ``campaign-run`` CLI 共用同一门禁（此前原子入口绕过了它）；
+    账本预检只读，拒绝时不产生 batch、manifest 或停线收据。
     """
 
     campaign_dir = arguments.campaign_dir
@@ -17424,6 +17459,7 @@ def _prepare_atomic_batch_governance(arguments: argparse.Namespace) -> dict[str,
     manifest = _require_formal_campaign(campaign_dir)
     if not _requires_complete_vc_artifacts(manifest):
         raise ConfigurationError("compile-and-run-vc-batch 只用于 0.154.0 起的完整 VC 链。")
+    _require_tool_evolution_registered(campaign_dir, manifest, action="compile-and-run-vc-batch")
     # 与 campaign-run CLI（codex_upgrade_supervisor._assert_campaign_run_admitted）同一底层门禁：
     # 补齐器先行、锁内重放，0.154 formal 必须已注册且未 blocked／终态／超预算。
     try:
@@ -19387,9 +19423,15 @@ def invalidate_candidate(arguments: argparse.Namespace) -> dict[str, Any]:
     with _campaign_lock(campaign_dir):
         summary = codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)
         status = str(summary.get("status"))
-        if status not in {"active", "candidate_review_required", "revision_required"}:
+        # recovery_required：VC-5 候选采集失败对账后判为候选源码问题时同样可作废（入账核对照常要求
+        # 失败 attempt 已对账）；作废会先 stage_abandoned 关闭仍 active 的候选级阶段。
+        recovery_phase = summary.get("recovery_phase") or summary.get("active_phase")
+        if status == "recovery_required" and recovery_phase not in CANDIDATE_VC_PHASES:
+            raise ConfigurationError(
+                f"invalidate-candidate 拒绝：recovery_required 暂停的是 {recovery_phase}，不是候选级阶段。"
+            )
+        if status not in {"active", "candidate_review_required", "revision_required", "recovery_required"}:
             hint = {
-                "recovery_required": "先执行 reconcile-supervisor-run／reconcile-attempt 对账",
                 "stop_required": "账本已要求停线，按停线合同收口",
                 "stopped": "Campaign 已停线，只读",
                 "complete": "升级已完成，只读",
@@ -20120,10 +20162,13 @@ def _evaluation_defect_admission(
     if receipt.get("status") != "passed":
         raise ConfigurationError("部署收据 status 不是 passed。")
     frozen = manifest.get("tool_identity") if isinstance(manifest.get("tool_identity"), Mapping) else {}
+    # 基准是 Campaign 有效工具身份：登记过工具演进时为最新演进的 to 身份（wire 修复已逐作业裁定）。
+    if _is_policy_v2_identity(frozen):
+        frozen = _campaign_effective_tool_identity(campaign_dir, manifest)["identity"]
     for field in ("wire_producer_sha256", "policy_sha256"):
         frozen_value = frozen.get(field)
         if frozen_value is None or receipt.get(field) != frozen_value:
-            raise ConfigurationError(f"部署收据的 {field} 与 Campaign 冻结值不一致或缺失。")
+            raise ConfigurationError(f"部署收据的 {field} 与 Campaign 有效工具身份不一致或缺失。")
     # 部署收据必须就是当前运行工具树的那一份：五摘要等于当前受管身份（修复已部署且正在被使用）。
     current = _tool_identity(include_git=False)
     for field, current_field in (
@@ -29778,6 +29823,38 @@ def _plan_evaluator_entry_digests(manifest: Mapping[str, Any]) -> dict[str, str]
     return digests
 
 
+def _b0_evaluator_authorized_digests(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    candidate_id: str,
+) -> dict[str, str]:
+    """b0 的 checker／builder 授权口径：plan 冻结值，或随工具演进迁移后的值。
+
+    工具演进登记时，若该候选 b0 还没有任何评估产出，b0 授权迁到该演进 to 身份的 checker／builder
+    （``b0_authorization_moved``）；已有产出则不迁，改走 evaluation-recover 开新基线重评。登记时
+    还不存在（或已作废）的候选没有记录，也没有产出，同样取该演进的 to 值。按演进链从新到旧取
+    第一次适用的迁移；没有演进或都不适用时为 plan 冻结值。
+    """
+
+    frozen = manifest.get("tool_identity")
+    if isinstance(frozen, Mapping) and _is_policy_v2_identity(frozen):
+        for evolution in reversed(_campaign_tool_evolutions(campaign_dir, manifest)):
+            evaluator = evolution.get("evaluator")
+            if not isinstance(evaluator, Mapping) or not isinstance(evaluator.get("candidates"), Mapping):
+                raise ConfigurationError(f"evolution-{int(evolution['index']):02d} 的评估器记录形态非法。")
+            record = evaluator["candidates"].get(candidate_id)
+            if record is None or (isinstance(record, Mapping) and record.get("b0_authorization_moved") is True):
+                target = evaluator.get("to")
+                if (
+                    not isinstance(target, Mapping)
+                    or set(target) != {"checker_sha256", "builder_sha256"}
+                    or not all(isinstance(value, str) and SHA256_RE.fullmatch(value) for value in target.values())
+                ):
+                    raise ConfigurationError(f"evolution-{int(evolution['index']):02d} 的评估器 to 摘要非法。")
+                return {field: str(target[field]) for field in ("checker_sha256", "builder_sha256")}
+    return _plan_evaluator_entry_digests(manifest)
+
+
 def _authorized_evaluator_digests(
     campaign_dir: Path,
     manifest: Mapping[str, Any],
@@ -29792,7 +29869,7 @@ def _authorized_evaluator_digests(
     """
 
     if baseline == 0:
-        return _plan_evaluator_entry_digests(manifest)
+        return _b0_evaluator_authorized_digests(campaign_dir, manifest, candidate_id)
     recovery = _load_evaluation_baseline_recovery(campaign_dir, candidate_id, baseline)
     return {
         field: str(recovery["current_evaluator_digests"][field])
@@ -34009,14 +34086,18 @@ def _verify_plan_identity_v2(
     attempt_root: Path | None,
     attempt: Mapping[str, Any] | None,
     deadline: incremental_recovery.WallClockDeadline | None,
+    evolution_index: int = 0,
 ) -> dict[str, Any]:
     """A2 四层身份判定：只有 wire producer 层是重采判据。
 
+    ``expected_tool`` 是 Campaign 有效工具身份（最新工具演进的 to 身份，或 plan 冻结身份），
+    ``evolution_index`` 为其演进序号（0 表示没有演进）。
+
     * 策略摘要不等：拒绝，策略变化须经 A2.6 兼容收据并以新 Campaign 承接。
     * wire 身份不等：只有生效且指向当前 wire 的 intent 才放行执行类操作，并把
-      闭集交给调用方补跑；评估类操作在 intent 未 final 前一律拒绝。
+      闭集交给调用方补跑；评估类操作在 intent 未 final 前一律拒绝；其余情况提示先登记工具演进。
     * wire 身份相等：evidence semantics 变化时评估类操作要求当前 attempt 已追加
-      覆盖到当前摘要的 evaluation epoch；control 变化只留痕放行。
+      覆盖到当前摘要的 evaluation epoch，或当前摘要已由工具演进登记；control 变化只留痕放行。
     """
 
     if current_tool.get("policy_sha256") != expected_tool.get("policy_sha256"):
@@ -34039,6 +34120,10 @@ def _verify_plan_identity_v2(
         codex_upgrade_wire_transition.WireTransitionError,
     ) as error:
         raise ConfigurationError(f"策略 v2 身份判定失败：{error}") from error
+    # 工具演进登记等同一次 Campaign 级 evaluation epoch：登记后的 evidence 摘要对全部 attempt 有效。
+    accepted_evidence = {str(expected_evidence)}
+    if evolution_index:
+        accepted_evidence.add(str(expected_tool.get("evidence_semantics_sha256")))
     evaluation_operation = operation in _POLICY_V2_EVALUATION_OPERATIONS
     current_wire = str(current_tool.get("wire_producer_sha256"))
     changed_paths = {layer: paths for layer, paths in drift.items() if paths}
@@ -34073,16 +34158,17 @@ def _verify_plan_identity_v2(
                 "effective_wire_producer_sha256": effective["wire_producer_sha256"],
                 "current_wire_producer_sha256": current_wire,
             }
-        raise ConfigurationError(
+        raise ToolEvolutionRequired(
             "wire producer 身份漂移："
             + "、".join(drift["wire_producer"] or ["<编排器闭包或映射外变化>"])
-            + "；请签 wire transition intent 承接受影响 Job 闭集，或以普通 Formal 后继 Campaign 重新执行全部 Job。"
+            + "；修好工具并受监督部署后，先执行 tool-evolution 登记本次修复（逐作业计算受影响闭集），"
+            "再续跑受影响作业。"
         )
-    evidence_changed = str(current_tool.get("evidence_semantics_sha256")) != str(expected_evidence)
+    evidence_changed = str(current_tool.get("evidence_semantics_sha256")) not in accepted_evidence
     if evidence_changed and evaluation_operation:
-        raise ConfigurationError(
+        raise ToolEvolutionRequired(
             "evidence semantics 已变化：" + "、".join(drift["evidence_semantics"] or ["<编排器封存闭包>"])
-            + "；先对当前 attempt 追加 evaluation epoch，再执行 seal／评估。"
+            + "；先执行 tool-evolution 登记本次修复（或对当前 attempt 追加 evaluation epoch），再执行 seal／评估。"
         )
     _verify_control_receipts(campaign_dir, manifest, require_active=True)
     _record_evaluation_side_drift(
@@ -34228,7 +34314,14 @@ def _verify_plan_identity(
                         "kind": "stopped_classification_draft_approval",
                         "authorization": authorization,
                     }
-    if current_tool["files_sha256"] == expected_tool["files_sha256"]:
+    # v2 Campaign 的比较基准是有效工具身份：登记过工具演进时为最新演进的 to 身份，否则为 plan。
+    effective_index = 0
+    baseline_tool: Mapping[str, Any] = expected_tool
+    if _is_policy_v2_identity(expected_tool):
+        effective = _campaign_effective_tool_identity(campaign_dir, manifest)
+        effective_index = int(effective["index"])
+        baseline_tool = effective["identity"]
+    if current_tool["files_sha256"] == baseline_tool["files_sha256"]:
         _verify_control_receipts(campaign_dir, manifest, require_active=True)
         if deadline is not None:
             deadline.check("plan-identity:complete")
@@ -34239,11 +34332,12 @@ def _verify_plan_identity(
             campaign_dir,
             manifest,
             current_tool=current_tool,
-            expected_tool=expected_tool,
+            expected_tool=baseline_tool,
             operation=operation,
             attempt_root=attempt_root,
             attempt=attempt,
             deadline=deadline,
+            evolution_index=effective_index,
         )
     component_drift = _tool_component_drift(expected_tool, current_tool)
     changed_components = set(component_drift.get("changed_components", []))
@@ -35889,6 +35983,97 @@ def _phase_evaluation_failed_job_production_changes(
     return production_paths
 
 
+def _evolution_reuse_context(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    *,
+    phase: str,
+    candidate_id: str | None,
+    attempt_root: Path,
+    current_tool: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """源 attempt 生产序号之后登记过工具演进时，续跑复用所需的判定上下文；没有则返回 None。
+
+    * ``production_identity``：源 attempt 生产序号对应的完整工具身份（逐文件验真的冻结口径）；
+    * ``affected_job_ids``：序号之后全部演进对本阶段的累计受影响作业；
+    * ``allowed_paths``：生产身份到当前树之间变化、且属于高风险组件的路径（复用重绑时放行，
+      受影响作业已并入执行闭集，其余作业的声明依赖不含这些路径中的产出侧变化）；
+    * ``validated_current_production_sha256``：有效身份的产出侧摘要（排除混合文件），当前树必须等于它。
+    """
+
+    impact = _attempt_evolution_impact(
+        campaign_dir, manifest, attempt_root, phase=phase, candidate_id=candidate_id
+    )
+    if not impact["evolution_indexes"]:
+        return None
+    effective = _campaign_effective_tool_identity(campaign_dir, manifest)
+    drift_labels = _tool_evolution_unregistered_drift(effective["identity"], current_tool)
+    if drift_labels:
+        raise ToolEvolutionRequired(
+            "续跑拒绝：当前受管树的 " + "、".join(drift_labels)
+            + " 与最新工具演进不一致；先执行 tool-evolution 登记本次修复。"
+        )
+    chain = _campaign_tool_evolutions(campaign_dir, manifest)
+    try:
+        production_identity = codex_upgrade_wire_transition.evolution_identity_at(
+            chain, manifest, int(impact["index"])
+        )
+    except codex_upgrade_wire_transition.WireTransitionError as error:
+        raise ConfigurationError(f"源 attempt 生产身份无法取得：{error}") from error
+    before = _tool_entry_digest_map(production_identity)
+    after = _tool_entry_digest_map(current_tool)
+    changed = sorted(path for path in set(before) | set(after) if before.get(path) != after.get(path))
+    allowed = sorted(
+        path
+        for path in changed
+        if _tool_component_for_path(path) in _RUNTIME_SUCCESSOR_ALLOWED_REBASE_COMPONENTS
+    )
+    return {
+        "production_index": int(impact["index"]),
+        "production_identity": production_identity,
+        "affected_job_ids": list(impact["affected_job_ids"]),
+        "evolution_indexes": list(impact["evolution_indexes"]),
+        "allowed_paths": allowed,
+        "validated_current_production_sha256": _tool_identity_side_digest_excluding(
+            effective["identity"], "production", _PHASE_EVALUATION_HYBRID_FILES
+        ),
+    }
+
+
+def _evolution_authorized_production_paths(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    *,
+    phase: str,
+    candidate_id: str | None,
+    attempt_root: Path,
+    current_tool: Mapping[str, Any],
+    recovery_scope: Mapping[str, Any],
+) -> set[str] | None:
+    """工具演进链替代旧式 evaluation transition 授权续跑的产出侧变化；没有演进覆盖返回 None。
+
+    演进登记已逐作业裁定影响并把受影响作业并入冻结执行闭集；这里复核闭集确实包含它们。
+    """
+
+    context = _evolution_reuse_context(
+        campaign_dir,
+        manifest,
+        phase=phase,
+        candidate_id=candidate_id,
+        attempt_root=attempt_root,
+        current_tool=current_tool,
+    )
+    if context is None:
+        return None
+    planned = {str(item) for item in recovery_scope.get("planned_job_ids", [])}
+    execute = {str(item) for item in recovery_scope.get("execute_job_ids", [])}
+    completed = {str(item) for item in recovery_scope.get("completed_job_ids", [])}
+    affected = set(context["affected_job_ids"]) & planned
+    if not affected.issubset(execute) or affected & completed:
+        raise ConfigurationError("工具演进受影响作业未全部并入冻结执行闭集；重新对账生成恢复预览。")
+    return set(context["allowed_paths"])
+
+
 def _authorize_phase_recovery_production_paths(
     campaign_dir: Path,
     manifest: Mapping[str, Any],
@@ -35929,6 +36114,18 @@ def _authorize_phase_recovery_production_paths(
         if transition.get("recovery_scope") != recovery_scope:
             raise ConfigurationError("中断恢复 transition 的 recovery_scope 漂移。")
         return {str(path) for path in transition["allowed_production_paths"]}
+
+    evolution_paths = _evolution_authorized_production_paths(
+        campaign_dir,
+        manifest,
+        phase=phase,
+        candidate_id=candidate_id,
+        attempt_root=attempt_root,
+        current_tool=current_tool,
+        recovery_scope=recovery_scope,
+    )
+    if evolution_paths is not None:
+        return evolution_paths
 
     expected_tool = manifest.get("tool_identity")
     if not isinstance(expected_tool, Mapping):
@@ -36556,6 +36753,15 @@ def _phase_evaluation_recovery_scope(
     )
     if not completed_ids and not pre_job_failure:
         raise ConfigurationError("失败 attempt 没有已完成 Job，禁止原地 transition。")
+    # 工具演进：源 attempt 生产序号之后登记的演进使部分已完成作业失效，移入执行闭集重跑。
+    # 没有演进时不改变闭集，也不在 scope 里写 tool_evolution，旧 transition 摘要保持不变。
+    evolution_impact = _attempt_evolution_impact(
+        campaign_dir, manifest, attempt_root, phase=phase, candidate_id=candidate_id
+    )
+    evolved_ids = sorted(set(completed_ids) & set(evolution_impact["affected_job_ids"]))
+    if evolved_ids:
+        completed_ids = sorted(set(completed_ids) - set(evolved_ids))
+        execute_ids = sorted(set(execute_ids) | set(evolved_ids))
     if not execute_ids and not allow_empty:
         raise ConfigurationError("失败 attempt 没有可重跑 Job，禁止建立 transition。")
 
@@ -36628,6 +36834,15 @@ def _phase_evaluation_recovery_scope(
     }
     if pre_job_failure:
         scope["source_mode"] = "pre_job_failure"
+    if evolution_impact["evolution_indexes"]:
+        scope["tool_evolution"] = {
+            "source_index": int(evolution_impact["index"]),
+            "evolution_indexes": list(evolution_impact["evolution_indexes"]),
+            "affected_job_ids": sorted(
+                set(evolution_impact["affected_job_ids"]) & set(planned)
+            ),
+            "invalidated_job_ids": evolved_ids,
+        }
     return scope
 
 
@@ -36671,6 +36886,18 @@ def _validate_recovery_scope_plan(
     failed_ids = ids("failed_job_ids")
     pending_ids = ids("pending_job_ids")
     execute_ids = ids("execute_job_ids")
+    # 工具演进使失效的已完成作业（invalidated）并入执行闭集；没有演进时为空，原不变式不变。
+    evolved_ids: set[str] = set()
+    evolution = scope.get("tool_evolution")
+    if evolution is not None:
+        values = evolution.get("invalidated_job_ids") if isinstance(evolution, Mapping) else None
+        if (
+            not isinstance(values, list)
+            or values != sorted(set(values))
+            or not all(isinstance(value, str) and SAFE_ID_RE.fullmatch(value) for value in values)
+        ):
+            raise ConfigurationError("恢复 transition 的 tool_evolution 失效作业非法。")
+        evolved_ids = {str(value) for value in values}
     if (
         not planned_ids
         or (not execute_ids and not allow_empty)
@@ -36678,7 +36905,8 @@ def _validate_recovery_scope_plan(
         or completed_ids & pending_ids
         or failed_ids & completed_ids
         or failed_ids & pending_ids
-        or failed_ids | pending_ids != execute_ids
+        or evolved_ids & (failed_ids | pending_ids | completed_ids)
+        or failed_ids | pending_ids | evolved_ids != execute_ids
         or completed_ids | execute_ids != planned_ids
     ):
         raise ConfigurationError("恢复 transition 的 Job 闭集不一致。")
@@ -39586,7 +39814,8 @@ def _load_capture_reservation(
         "reservation_digest",
     }
     schema_version = payload.get("schema_version")
-    optional_fields = {"campaign_lease"}
+    # tool_evolution：工具演进登记之后新建的 attempt 记录生产序号（旧预约没有该字段）。
+    optional_fields = {"campaign_lease", "tool_evolution"}
     if schema_version == CAPTURE_RESERVATION_SCHEMA:
         optional_fields.add("candidate_readiness")
     digest = payload.get("reservation_digest")
@@ -39644,6 +39873,14 @@ def _load_capture_reservation(
             or not _is_rfc3339_timestamp(lease_binding.get("deadline_at_utc"))
         ):
             raise ConfigurationError("抓包预约 Campaign lease 绑定非法。")
+    if payload.get("tool_evolution") is not None:
+        try:
+            codex_upgrade_wire_transition.reservation_production_index(
+                payload,
+                codex_upgrade_wire_transition.load_evolutions(campaign_dir, manifest),
+            )
+        except codex_upgrade_wire_transition.WireTransitionError as error:
+            raise ConfigurationError(f"抓包预约的工具演进序号非法：{error}") from error
     planned_jobs = payload.get("planned_jobs")
     if not isinstance(planned_jobs, list) or not planned_jobs:
         raise ConfigurationError("抓包预约缺少计划任务。")
@@ -40150,6 +40387,15 @@ def _reserve_capture_attempt(
         }
         if readiness_binding is not None:
             reservation["candidate_readiness"] = readiness_binding
+        # 生产序号：登记过工具演进的 Campaign 记录本 attempt 在哪个有效身份下产出；
+        # 没有演进时不写字段，旧预约字节不变。
+        frozen_tool = manifest.get("tool_identity")
+        if isinstance(frozen_tool, Mapping) and _is_policy_v2_identity(frozen_tool):
+            evolution_binding = codex_upgrade_wire_transition.reservation_binding(
+                _campaign_effective_tool_identity(campaign_dir, manifest)
+            )
+            if evolution_binding is not None:
+                reservation["tool_evolution"] = evolution_binding
         if lease_binding is not None:
             reservation["campaign_lease"] = lease_binding
         reservation["reservation_digest"] = _fingerprint(reservation)
@@ -40360,12 +40606,17 @@ def _prior_complete_results(
     allowed_source_statuses: Iterable[str] = ("failed",),
     allow_unbound_cross_campaign_preview: bool = False,
     source_tool_identity: Mapping[str, Any] | None = None,
+    evolution_context: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """承接可复用结果，只返回未受影响且已经通过的 Job。
 
     旧收据没有组件键时仅在全局工具摘要完全相同的情况下承接；新收据按
     每个 Job 的组件依赖键判断。这样工具修复只会让失败项或真正受影响的
     Job 进入下一轮，已经通过且依赖未变的结果保持只读复用。
+
+    ``evolution_context``（``_evolution_reuse_context`` 的返回）只用于同 Campaign 的失败源：
+    冻结口径改为源 attempt 生产序号对应的完整身份，逐作业影响以工具演进登记为准（受影响
+    作业已不在期望复用集合内），不再按 plan 身份重算产出侧路径映射。
     """
 
     history_campaign_dir = (
@@ -40442,6 +40693,13 @@ def _prior_complete_results(
             "来源 attempt 工具身份只允许用于严格跨 Campaign 预览或已绑定来源 transition。"
         )
     historical_source_controls = explicit_historical_source
+    if evolution_context is not None and (
+        cross_campaign_source
+        or source_attempt_id is None
+        or expected_reuse is None
+        or source_tool_identity is not None
+    ):
+        raise ConfigurationError("工具演进复用只适用于同 Campaign、指定失败源且带冻结复用闭集的续跑。")
     frozen_manifest = load_campaign_manifest(
         history_campaign_dir,
         _control_epoch_bootstrap=historical_source_controls,
@@ -40453,8 +40711,18 @@ def _prior_complete_results(
     frozen_tool = (
         source_tool_identity
         if source_tool_identity is not None
+        else evolution_context["production_identity"]
+        if evolution_context is not None
         else frozen_manifest.get("tool_identity")
     )
+    if evolution_context is not None:
+        allowed_high_risk_path_changes = set(allowed_high_risk_path_changes) | set(
+            evolution_context["allowed_paths"]
+        )
+        if validated_current_production_sha256 is None:
+            validated_current_production_sha256 = str(
+                evolution_context["validated_current_production_sha256"]
+            )
     frozen_tool_files_sha256 = (
         frozen_tool.get("files_sha256")
         if isinstance(frozen_tool, Mapping)
@@ -40474,7 +40742,7 @@ def _prior_complete_results(
             attempt_id=source_attempt_id,
         )
     )
-    if isinstance(frozen_tool, Mapping):
+    if isinstance(frozen_tool, Mapping) and evolution_context is None:
         (
             exact_affected_job_ids,
             changed_production_paths,
@@ -40634,7 +40902,13 @@ def _prior_complete_results(
             # 改用原始执行结果验证“由冻结工具产出”（无法证明出处时仍按当前结果验证）。
             # 重绑仍以当前结果为基础，后继 attempt 与来源的逐字段比对口径不变。
             metadata_item: Mapping[str, Any] = item
-            if not cross_campaign_source and item.get("disposition") == "reused":
+            # 工具演进口径下冻结身份就是源 attempt 的生产身份，承接项在该 attempt 创建时已按
+            # 同一身份重绑，直接用它自身验真；原始出处可能早于中间的演进，不能再拿来比。
+            if (
+                not cross_campaign_source
+                and evolution_context is None
+                and item.get("disposition") == "reused"
+            ):
                 metadata_item = (
                     _reused_result_origin(history_campaign_dir, history_relative, item)
                     or item
@@ -40736,39 +41010,106 @@ def official_recovery_reuse_check(
     reuse_job_ids: Iterable[str],
     execute_job_ids: Iterable[str],
 ) -> dict[str, Any]:
-    """R17：只读复算 ``resume --rerun-failed`` 对 official 失败 attempt 的复用判定。
+    """R17：official 失败 attempt 的复用复算（``recovery_reuse_check`` 的 official 入口）。"""
+
+    return recovery_reuse_check(
+        campaign_dir,
+        phase="official",
+        candidate_id=None,
+        source_attempt_id=source_attempt_id,
+        reuse_job_ids=reuse_job_ids,
+        execute_job_ids=execute_job_ids,
+    )
+
+
+def recovery_reuse_check(
+    campaign_dir: Path,
+    *,
+    phase: str,
+    candidate_id: str | None,
+    source_attempt_id: str,
+    reuse_job_ids: Iterable[str],
+    execute_job_ids: Iterable[str],
+) -> dict[str, Any]:
+    """R17：只读复算 ``resume --rerun-failed`` 对失败 attempt（official 或候选）的复用判定。
 
     reconcile-attempt 生成非段模式恢复预览后、批准之前调用。按 resume（``_run_capture_attempt``
-    的 official 失败重跑默认路径）同样的顺序调用同一组函数：污染与待封存检查 → 廉价工具影响
+    的失败重跑默认路径）同样的顺序调用同一组函数：污染与待封存检查 → 廉价工具影响
     → 失败源 attempt 选取 → 冻结恢复闭集 → 与预览闭集逐项比对 → 产出侧路径授权与中断
     transition 校验（仅执行集非空）→ 签名交接或带期望集合的 ``_prior_complete_results``。
     resume 会拒绝的任何情形在这里原样抛 ConfigurationError，使预览阶段就失败，不再批准
     resume 执行不了的闭集（0.156.1 预览 02 显示复用 30，零请求预览批次跑了 36 分钟才发现
     只能复用 3，且失败批次计入根因次数）。
 
+    候选阶段（VC-5 采集续跑）：运行坐标覆盖同 resume，作业按源 attempt 记录的候选身份展开
+    （resume 要求显式身份参数与源 attempt 逐项相同，身份不一致由 resume 自身拒绝）；只覆盖同
+    Campaign 失败源，分类纠正与 runtime successor 等跨 Campaign 来源不在复算范围内。
+
     不取租约、不写文件、不发请求。测试钉住 resume 失败重跑代码块的摘要与调用顺序，resume
     的判定逻辑变化时测试变红，必须同步本函数。
     """
 
+    if phase not in {"official", "candidate"}:
+        raise ConfigurationError("恢复复算只支持 official 与 candidate 阶段。")
+    if phase == "candidate" and (not candidate_id or not SAFE_ID_RE.fullmatch(str(candidate_id))):
+        raise ConfigurationError("候选恢复复算缺少合法 candidate-id。")
     campaign_dir = campaign_dir.resolve(strict=True)
     manifest = _require_formal_campaign(campaign_dir)
+    if phase == "candidate":
+        manifest = _apply_candidate_runtime_override(campaign_dir, manifest, candidate_id)
     _reject_contaminated_campaign(campaign_dir)
-    try:
-        _load_stage_result(campaign_dir, "capture-official")
-    except ConfigurationError as error:
-        if "尚未封存" not in str(error):
-            raise
+    if phase == "official":
+        try:
+            _load_stage_result(campaign_dir, "capture-official")
+        except ConfigurationError as error:
+            if "尚未封存" not in str(error):
+                raise
+        else:
+            raise ConfigurationError("官方证据已经封存，禁止重复抓包。")
+        active_attempts = _active_unsealed_attempts(campaign_dir, "official")
+        if active_attempts:
+            raise ConfigurationError(
+                f"官方存在待封存 attempt，禁止再次 run：{active_attempts}"
+            )
+        planned_jobs = list(_campaign_jobs(campaign_dir, manifest, "official"))
+        identity = dict(manifest["official_identity"])
     else:
-        raise ConfigurationError("官方证据已经封存，禁止重复抓包。")
-    active_attempts = _active_unsealed_attempts(campaign_dir, "official")
-    if active_attempts:
-        raise ConfigurationError(
-            f"官方存在待封存 attempt，禁止再次 run：{active_attempts}"
+        _, candidate_result_path = _stage_path(campaign_dir, "capture-candidate", candidate_id)
+        if candidate_result_path.exists():
+            raise ConfigurationError("candidate-id 已封存，必须使用新编号。")
+        active_attempts = _active_unsealed_attempts(campaign_dir, "candidate")
+        if active_attempts:
+            raise ConfigurationError(
+                "Campaign 存在待封存候选 attempt，必须先完成其 Kilo 后恢复与 seal："
+                f"{active_attempts}"
+            )
+        _source_root, source_payload = _load_capture_attempt(
+            campaign_dir, "candidate", candidate_id, str(source_attempt_id)
         )
-    planned_jobs = list(_campaign_jobs(campaign_dir, manifest, "official"))
-    identity = dict(manifest["official_identity"])
+        source_identity = source_payload.get("identity")
+        if not isinstance(source_identity, Mapping):
+            raise ConfigurationError("候选失败源 attempt 缺少候选身份。")
+        identity = dict(source_identity)
+        planned_jobs = list(
+            _campaign_jobs(
+                campaign_dir,
+                manifest,
+                "candidate",
+                candidate_id=candidate_id,
+                runtime_image=identity.get("image_reference"),
+                profile_id=identity.get("profile_id"),
+                profile_digest=identity.get("profile_digest"),
+                build_id=identity.get("build_id"),
+                deployed_version=identity.get("deployed_version"),
+                candidate_image_id=identity.get("image_id"),
+                source_tree_sha256=identity.get("source_tree_sha256"),
+                candidate_purpose=identity.get("candidate_purpose"),
+            )
+        )
     tool_identity = _tool_identity(include_git=False)
-    cheap_impact = _cheap_capture_tool_impact(manifest, planned_jobs, tool_identity)
+    cheap_impact = _cheap_capture_tool_impact(
+        manifest, planned_jobs, tool_identity, campaign_dir=campaign_dir
+    )
     if cheap_impact.get("kind") == "unmapped_production_paths":
         raise ConfigurationError(
             "产出侧工具变化缺少逐文件 Job 依赖映射："
@@ -40777,8 +41118,8 @@ def official_recovery_reuse_check(
         )
     source = _latest_failed_attempt_for_identity(
         campaign_dir,
-        phase="official",
-        candidate_id=None,
+        phase=phase,
+        candidate_id=candidate_id,
         identity=identity,
     )
     if source is None:
@@ -40796,16 +41137,16 @@ def official_recovery_reuse_check(
     recovery_scope = _phase_evaluation_recovery_scope(
         campaign_dir,
         manifest,
-        phase="official",
-        candidate_id=None,
+        phase=phase,
+        candidate_id=candidate_id,
         attempt_root=source_root,
         attempt=source_attempt,
         allow_awaiting_failures=allow_awaiting_failures,
     )
     completed_ids, execute_ids = _validate_recovery_scope_plan(
         campaign_dir,
-        phase="official",
-        candidate_id=None,
+        phase=phase,
+        candidate_id=candidate_id,
         source_root=source_root,
         scope=recovery_scope,
         planned_jobs=planned_jobs,
@@ -40824,8 +41165,8 @@ def official_recovery_reuse_check(
         allowed_paths = _authorize_phase_recovery_production_paths(
             campaign_dir,
             manifest,
-            phase="official",
-            candidate_id=None,
+            phase=phase,
+            candidate_id=candidate_id,
             attempt_root=source_root,
             attempt=source_attempt,
             current_tool=tool_identity,
@@ -40848,6 +41189,8 @@ def official_recovery_reuse_check(
             explicit_affected_job_ids=(
                 interrupted_transition["affected_job_ids"]
                 if interrupted_transition is not None
+                else recovery_scope["tool_evolution"]["affected_job_ids"]
+                if isinstance(recovery_scope.get("tool_evolution"), Mapping)
                 else None
             ),
         )
@@ -40865,12 +41208,20 @@ def official_recovery_reuse_check(
     if handoff is not None:
         prior_results = [dict(item) for item in handoff["reused_results"]]
     else:
+        evolution_context = _evolution_reuse_context(
+            campaign_dir,
+            manifest,
+            phase=phase,
+            candidate_id=candidate_id,
+            attempt_root=source_root,
+            current_tool=tool_identity,
+        )
         prior_results = _prior_complete_results(
             campaign_dir,
-            _capture_attempt_relative("official", None),
+            _capture_attempt_relative(phase, candidate_id),
             planned_jobs,
-            phase="official",
-            candidate_id=None,
+            phase=phase,
+            candidate_id=candidate_id,
             identity=identity,
             tool_identity=tool_identity,
             affected_job_ids=(),
@@ -40882,12 +41233,15 @@ def official_recovery_reuse_check(
                 if allow_awaiting_failures
                 else ("failed",)
             ),
+            evolution_context=evolution_context,
         )
     reused_ids = {str(item.get("id")) for item in prior_results}
     if reused_ids != completed_ids:
         raise ConfigurationError("恢复 transition 的已完成 Job 未被完整只读承接。")
     return {
         "status": "consistent",
+        "phase": phase,
+        "candidate_id": candidate_id,
         "source_attempt_id": source_root.name,
         "reuse_job_ids": sorted(reused_ids),
         "execute_job_ids": sorted(execute_ids),
@@ -45933,7 +46287,7 @@ def _run_capture_attempt(
     # bubblewrap、环境探针或 live 请求的操作都必须晚于增量空集判断。
     tool_identity = _tool_identity(include_git=False)
     cheap_impact = _cheap_capture_tool_impact(
-        manifest, planned_jobs, tool_identity
+        manifest, planned_jobs, tool_identity, campaign_dir=campaign_dir
     )
     if cheap_impact.get("kind") == "unmapped_production_paths":
         raise ConfigurationError(
@@ -46152,6 +46506,8 @@ def _run_capture_attempt(
                         explicit_affected_job_ids=(
                             interrupted_transition["affected_job_ids"]
                             if interrupted_transition is not None
+                            else recovery_scope["tool_evolution"]["affected_job_ids"]
+                            if isinstance(recovery_scope.get("tool_evolution"), Mapping)
                             else None
                         ),
                     )
@@ -46200,6 +46556,21 @@ def _run_capture_attempt(
                 for item in recovery_execution_handoff["reused_results"]
             ]
         else:
+            # 工具演进：同 Campaign 失败源在其生产序号之后登记过演进时，复用按生产身份逐文件验真。
+            evolution_context = (
+                _evolution_reuse_context(
+                    campaign_dir,
+                    manifest,
+                    phase=phase,
+                    candidate_id=candidate_id,
+                    attempt_root=recovery_source_root,
+                    current_tool=tool_identity,
+                )
+                if recovery_source_root is not None
+                and recovery_source_campaign_dir is None
+                and runtime_successor_recovery is None
+                else None
+            )
             prior_results = _prior_complete_results(
                 campaign_dir,
                 attempt_relative,
@@ -46241,6 +46612,7 @@ def _run_capture_attempt(
                         else ("failed",)
                     )
                 ),
+                evolution_context=evolution_context,
             )
         completed_ids = {item["id"] for item in prior_results}
         if recovery_completed_ids is not None:
@@ -47697,6 +48069,14 @@ def _seal_capture_attempt(
         operation=f"capture-{phase}-seal",
         attempt_root=attempt_root,
         attempt=attempt,
+    )
+    _require_attempt_current_under_evolutions(
+        campaign_dir,
+        manifest,
+        attempt_root,
+        attempt,
+        phase=phase,
+        candidate_id=candidate_id,
     )
     evaluation_transition = _stage_evaluation_transition_binding(tool_impact)
     seal_transition_index = _seal_transition_index(evaluation_transition)
@@ -55507,7 +55887,13 @@ def _validate_assertion_results(
     # b0 取 plan 工具身份的 checker／builder entry。索引、checkpoint、单规则文档记录的 checker 摘要
     # 与当前 checker 文件都必须等于该口径。
     authorized_digests = _authorized_evaluator_digests(campaign_dir, manifest, candidate_id, current_baseline)
-    expected_checker_sha256 = authorized_digests["checker_sha256"] if current_baseline else None
+    # b0 且授权仍是 plan 冻结值时保持原口径（None）；工具演进迁移过 b0 授权时按迁移后的 checker 核对。
+    expected_checker_sha256 = (
+        authorized_digests["checker_sha256"]
+        if current_baseline
+        or authorized_digests["checker_sha256"] != _plan_evaluator_entry_digests(manifest)["checker_sha256"]
+        else None
+    )
     if current_baseline:
         _verify_baseline_evaluation_epoch(campaign_dir, manifest, candidate_id, current_baseline, candidate=candidate)
     index_rows: dict[str, dict[str, Any]] = {}
@@ -56465,6 +56851,8 @@ def _reject_unparented_formal_write(
         "reconcile-supervisor-run",
         "reconcile-attempt",
         "rehearse-candidate-seal",
+        "tool-evolution",
+        "tool-evolution-status",
         "wire-transition-intent",
         "wire-transition-final",
         "evaluation-epoch",
@@ -56729,6 +57117,596 @@ def _require_candidate_launch_arguments(
     missing = sorted(key for key, value in required.items() if not value)
     if missing:
         raise ConfigurationError(f"{label}缺少 Candidate 身份参数：{missing}")
+
+
+# ---------------------------------------------------------------------------
+# 工具演进登记（修好接着跑）
+# ---------------------------------------------------------------------------
+#
+# 升级途中修好任何层的工具并受监督部署后，用 ``tool-evolution`` 在原 Campaign 登记一次演进：
+# 绑定修复提交与部署收据，冻结演进后的完整工具身份，逐作业算出受修改影响的集合。之后
+# 身份门禁对照有效身份（最新演进），续跑只重跑失败与受影响作业，seal 逐结果核对生产序号。
+# 影响口径保守：变化路径 = v1 产出侧漂移（编排器 wire 闭包未变时排除混合文件）∪ v2 wire 层漂移；
+# 路径→作业取全部计划作业的声明依赖 ∪ 登记特例表；任何作业都映射不到的路径、或编排器 wire
+# 闭包变化，都按该阶段全部作业受影响处理——宁可多跑，不可漏跑。
+
+TOOL_EVOLUTION_FIX_COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
+# 登记前的静默判据：未写 attempt.json 的 attempt 在该时长内仍有看门狗心跳，视为可能仍在运行。
+TOOL_EVOLUTION_QUIESCENCE_SECONDS = 900
+
+
+class ToolEvolutionRequired(ConfigurationError):
+    """当前受管工具与 Campaign 有效身份不一致、尚未登记工具演进；报错之前不写任何文件。"""
+
+
+def _campaign_tool_evolutions(
+    campaign_dir: Path, manifest: Mapping[str, Any]
+) -> list[dict[str, Any]]:
+    """读取 Campaign 工具演进链；链损坏即失败关闭。"""
+
+    try:
+        return codex_upgrade_wire_transition.load_evolutions(campaign_dir, manifest)
+    except codex_upgrade_wire_transition.WireTransitionError as error:
+        raise ConfigurationError(f"工具演进链无法重放：{error}") from error
+
+
+def _campaign_effective_tool_identity(
+    campaign_dir: Path, manifest: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Campaign 当前有效工具身份：最新演进的 to 完整身份，没有演进时为 plan 冻结身份。"""
+
+    try:
+        return codex_upgrade_wire_transition.effective_tool_identity(campaign_dir, manifest)
+    except codex_upgrade_wire_transition.WireTransitionError as error:
+        raise ConfigurationError(f"工具演进链无法重放：{error}") from error
+
+
+def _tool_evolution_unregistered_drift(
+    effective_identity: Mapping[str, Any], current: Mapping[str, Any]
+) -> list[str]:
+    """当前受管树相对有效身份的差异项；非空即必须先登记工具演进才能继续派发。
+
+    不变式：Campaign 继续执行时，当前受管树必须恰好是有效身份（最新演进）的树。这样每个
+    attempt 的全部结果都能用其生产序号对应的完整身份逐文件验真，续跑与 seal 的判定才是精确的。
+    control 层单独变化同样要登记（影响为空，只是一次预览＋批准）。
+    """
+
+    drift: list[str] = []
+    for field, label in (
+        ("policy_sha256", "工具身份策略"),
+        ("wire_producer_sha256", "wire producer"),
+        ("evidence_semantics_sha256", "evidence semantics"),
+        ("control_sha256", "control"),
+    ):
+        if str(current.get(field)) != str(effective_identity.get(field)):
+            drift.append(label)
+    if not drift and str(current.get("files_sha256")) != str(effective_identity.get("files_sha256")):
+        drift.append("受管树（被忽略前缀的其它客户端文件）")
+    return drift
+
+
+def _require_tool_evolution_registered(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    *,
+    current: Mapping[str, Any] | None = None,
+    action: str,
+) -> dict[str, Any] | None:
+    """v2 Campaign 的零写入预检：未登记的 wire／evidence 变化立即报 ToolEvolutionRequired。
+
+    返回有效身份（v1 Campaign 返回 None，不做预检）。调用方必须在任何写入（staging、孤儿
+    对账、预约）之前调用，保证「先部署修复、后派发」不会被自动对账写成永久终态。
+    """
+
+    frozen = manifest.get("tool_identity")
+    if not isinstance(frozen, Mapping) or not _is_policy_v2_identity(frozen):
+        return None
+    effective = _campaign_effective_tool_identity(campaign_dir, manifest)
+    current_tool = current if current is not None else _tool_identity(include_git=False)
+    drift = _tool_evolution_unregistered_drift(effective["identity"], current_tool)
+    if drift:
+        raise ToolEvolutionRequired(
+            f"{action} 拒绝：当前受管工具的 {'、'.join(drift)} 与 Campaign 有效工具身份"
+            f"（{'plan' if not effective['index'] else 'evolution-%02d' % effective['index']}）不一致，"
+            "尚未登记工具演进。先执行 tool-evolution（预览→批准）登记本次修复，再继续；本次未写入任何文件。"
+        )
+    return effective
+
+
+def _attempt_evolution_impact(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    attempt_root: Path,
+    *,
+    phase: str,
+    candidate_id: str | None,
+) -> dict[str, Any]:
+    """attempt 生产序号之后全部工具演进对本阶段作业的累计影响。
+
+    attempt 内全部结果（新产出与只读承接）都在其生产序号下有效：承接时已核对过来源到该序号
+    之间的演进。因此只需看序号之后的演进。返回 ``index``、``affected_job_ids``、``changed_paths``。
+    v1 Campaign 或没有演进时影响为空。
+    """
+
+    frozen = manifest.get("tool_identity")
+    empty = {"index": 0, "affected_job_ids": [], "changed_paths": [], "evolution_indexes": []}
+    if not isinstance(frozen, Mapping) or not _is_policy_v2_identity(frozen):
+        return empty
+    chain = _campaign_tool_evolutions(campaign_dir, manifest)
+    if not chain:
+        return empty
+    reservation = _load_capture_reservation(
+        campaign_dir, attempt_root, phase=phase, candidate_id=candidate_id, _manifest=manifest
+    )
+    try:
+        index = codex_upgrade_wire_transition.reservation_production_index(reservation, chain)
+        impact = codex_upgrade_wire_transition.evolution_impact_since(
+            chain, index, phase=phase, candidate_id=candidate_id
+        )
+    except codex_upgrade_wire_transition.WireTransitionError as error:
+        raise ConfigurationError(f"attempt 工具演进影响无法判定：{error}") from error
+    return {"index": index, **impact}
+
+
+def _require_attempt_current_under_evolutions(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    attempt_root: Path,
+    attempt: Mapping[str, Any],
+    *,
+    phase: str,
+    candidate_id: str | None,
+) -> None:
+    """seal 前核对：attempt 内没有作业受其生产序号之后的工具演进影响，否则须先续跑。"""
+
+    impact = _attempt_evolution_impact(
+        campaign_dir, manifest, attempt_root, phase=phase, candidate_id=candidate_id
+    )
+    result_ids = {
+        str(item.get("id"))
+        for item in attempt.get("results", [])
+        if isinstance(item, Mapping)
+    }
+    stale = sorted(result_ids & set(impact["affected_job_ids"]))
+    if stale:
+        raise ConfigurationError(
+            f"attempt 在工具演进 {impact['evolution_indexes']} 之前产出，其中作业受修改影响、结果已失效："
+            + "、".join(stale)
+            + "；按 reconcile-attempt → 恢复预览 → resume --rerun-failed 只重跑受影响作业后再 seal。"
+        )
+
+
+def _tool_evolution_candidate_jobs(
+    campaign_dir: Path,
+    manifest: dict[str, Any],
+    candidate_id: str,
+) -> tuple[list[Job] | None, list[str]]:
+    """候选的计划作业：按最近一个带 attempt.json 的 attempt 身份展开。
+
+    只有孤儿预约（没有任何 attempt.json）时返回 ``(None, 预约计划作业)``，调用方按保守口径
+    把全部计划作业记为受影响。
+    """
+
+    planned_ids: list[str] = []
+    for attempt_root, reservation in _ordered_capture_attempts(
+        campaign_dir, "candidate", candidate_id, _manifest=manifest
+    ):
+        ids = sorted(str(row["id"]) for row in reservation["planned_jobs"])
+        if not planned_ids:
+            planned_ids = ids
+        attempt_path = attempt_root / "attempt.json"
+        if not attempt_path.is_file() or attempt_path.is_symlink():
+            continue
+        _root, payload = _load_capture_attempt(
+            campaign_dir,
+            "candidate",
+            candidate_id,
+            attempt_root.name,
+            _verified_campaign_manifest=manifest,
+        )
+        identity = payload.get("identity")
+        if not isinstance(identity, Mapping):
+            continue
+        candidate_manifest = _apply_candidate_runtime_override(
+            campaign_dir, manifest, candidate_id
+        )
+        jobs = _campaign_jobs(
+            campaign_dir,
+            candidate_manifest,
+            "candidate",
+            candidate_id=candidate_id,
+            runtime_image=identity.get("image_reference"),
+            profile_id=identity.get("profile_id"),
+            profile_digest=identity.get("profile_digest"),
+            build_id=identity.get("build_id"),
+            deployed_version=identity.get("deployed_version"),
+            candidate_image_id=identity.get("image_id"),
+            source_tree_sha256=identity.get("source_tree_sha256"),
+            candidate_purpose=identity.get("candidate_purpose"),
+        )
+        return jobs, sorted(job.job_id for job in jobs)
+    return None, planned_ids
+
+
+def _candidate_b0_evaluation_outputs(campaign_dir: Path, candidate_id: str) -> list[str]:
+    """候选 b0 已有的评估产出（断言目录内任何文件、compare／accept 结果）。"""
+
+    found: list[str] = []
+    assertions = _assertions_root(campaign_dir, candidate_id)
+    if assertions.is_symlink():
+        found.append(assertions.relative_to(campaign_dir).as_posix())
+    elif assertions.is_dir():
+        for path in sorted(assertions.rglob("*")):
+            if path.is_file() or path.is_symlink():
+                found.append(path.relative_to(campaign_dir).as_posix())
+                break
+    for stage in ("compare", "accept"):
+        _canonical, path = _legacy_stage_path(campaign_dir, stage, candidate_id)
+        if path.exists() or path.is_symlink():
+            found.append(path.relative_to(campaign_dir).as_posix())
+    return found
+
+
+def _tool_evolution_quiescence_problems(campaign_dir: Path) -> list[str]:
+    """登记演进前的静默核对：没有存活的 Campaign 租约，也没有仍在心跳的未收口 attempt。"""
+
+    problems: list[str] = []
+    lease = _read_campaign_lease(campaign_dir)
+    if isinstance(lease, Mapping) and lease.get("state") == "active":
+        stale, _reason, owner_alive, _expired = _campaign_lease_staleness(lease)
+        if owner_alive and not stale:
+            problems.append(f"Campaign 租约仍由存活进程持有（{lease.get('command')}）")
+    now = time.time()
+    for _phase, _candidate, attempt_root in _campaign_attempt_roots(campaign_dir):
+        if (attempt_root / "attempt.json").exists():
+            continue
+        heartbeat = attempt_root / "watchdog-heartbeat.json"
+        if heartbeat.is_file() and not heartbeat.is_symlink():
+            age = now - heartbeat.stat().st_mtime
+            if 0 <= age < TOOL_EVOLUTION_QUIESCENCE_SECONDS:
+                problems.append(
+                    f"attempt {attempt_root.name} 尚未收口且 {int(age)} 秒前仍有看门狗心跳"
+                )
+    return problems
+
+
+def _tool_evolution_preview(
+    campaign_dir: Path,
+    manifest: dict[str, Any],
+    *,
+    fix_commit: str,
+    reason: str,
+    control_root: Path | None,
+) -> dict[str, Any]:
+    """计算工具演进预览：变化路径、逐作业影响、评估器授权迁移与绑定；只读，不写文件。"""
+
+    from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+    frozen = manifest.get("tool_identity")
+    if not isinstance(frozen, Mapping) or not _is_policy_v2_identity(frozen):
+        raise ConfigurationError("只有策略 v2 身份的 Campaign 才能登记工具演进。")
+    if not TOOL_EVOLUTION_FIX_COMMIT_RE.fullmatch(str(fix_commit)):
+        raise ConfigurationError("--fix-commit 必须是 40 位小写十六进制提交号。")
+    if not isinstance(reason, str) or not reason.strip():
+        raise ConfigurationError("--reason 不能为空：写明修复了什么。")
+    chain = _campaign_tool_evolutions(campaign_dir, manifest)
+    effective = _campaign_effective_tool_identity(campaign_dir, manifest)
+    from_identity = effective["identity"]
+    current = _tool_identity(include_git=False)
+    if current.get("policy_sha256") != frozen.get("policy_sha256"):
+        raise ConfigurationError(
+            "工具身份策略文件已变化；策略变化不能用工具演进承接（须经 A2.6 兼容收据与新 Campaign）。"
+        )
+    from_summary = codex_upgrade_wire_transition.identity_summary(from_identity)
+    to_summary = codex_upgrade_wire_transition.identity_summary(current)
+    if from_summary != effective["summary"]:
+        raise ConfigurationError("有效工具身份摘要自相矛盾，拒绝登记。")
+    if to_summary == from_summary:
+        raise ConfigurationError("当前受管工具与 Campaign 有效工具身份相同，无需登记演进。")
+    quiet = _tool_evolution_quiescence_problems(campaign_dir)
+    if quiet:
+        raise ConfigurationError("登记工具演进要求 Campaign 静默：" + "；".join(quiet))
+    # 部署绑定：当前五摘要必须有通过的受监督部署收据，且晚于上一次演进绑定的部署。
+    try:
+        deployment = reconciler._deployment_receipt(
+            reconciler._control_root(campaign_dir, control_root), current, required=True
+        )
+    except (reconciler.ReconcilerError, reconciler.closeout.VC0CloseoutError) as error:
+        raise ConfigurationError(f"工具演进缺少部署绑定：{error}") from error
+    assert deployment is not None
+    if chain:
+        previous_deployment = chain[-1]["bindings"]["deployment_receipt"]
+        if _rfc3339_datetime(
+            str(deployment["created_at_utc"]), "部署收据 created_at_utc"
+        ) <= _rfc3339_datetime(
+            str(previous_deployment["created_at_utc"]), "上一演进部署收据 created_at_utc"
+        ):
+            raise ConfigurationError("当前部署收据不晚于上一次演进绑定的部署，拒绝登记。")
+    # 两个账本：Campaign 账本不得已终态；总账不得 blocked。
+    ledger_dir = _optional_campaign_timing_ledger_dir(campaign_dir, manifest)
+    if ledger_dir is None:
+        raise ConfigurationError("工具演进需要 Campaign 的 UpgradeTimingLedger 绑定。")
+    try:
+        ledger = codex_upgrade_timing_ledger.inspect_ledger(ledger_dir)
+    except codex_upgrade_timing_ledger.TimingLedgerError as error:
+        raise ConfigurationError(f"UpgradeTimingLedger 无法重放：{error}") from error
+    if ledger.get("status") in {"stopped", "complete", "abandoned"}:
+        raise ConfigurationError(f"Campaign 账本已是 {ledger.get('status')}，不能再登记工具演进。")
+    project_root = codex_upgrade_project_ledger.find_project_ledger(campaign_dir)
+    if project_root is not None:
+        try:
+            head = codex_upgrade_project_ledger.replay_head(project_root)
+        except codex_upgrade_project_ledger.ProjectLedgerError as error:
+            raise ConfigurationError(f"项目总账无法重放：{error}") from error
+        if head.get("blocked"):
+            raise ConfigurationError("项目总账 blocked，先核清请求账务再登记工具演进。")
+
+    # 变化路径：按 Campaign 冻结策略分层，另算 v1 产出侧漂移。
+    try:
+        policy = codex_upgrade_tool_identity_policy.load_policy()
+        drift = codex_upgrade_tool_identity_policy.layer_drift(
+            policy, list(from_identity["entries"]), list(current["entries"])
+        )
+        to_evaluator = codex_upgrade_tool_identity_policy.evaluator_dependency_digests()
+    except codex_upgrade_tool_identity_policy.ToolIdentityPolicyError as error:
+        raise ConfigurationError(f"工具身份策略计算失败：{error}") from error
+    wire_closure_changed = from_summary["wire_closure_sha256"] != to_summary["wire_closure_sha256"]
+    production = set(_tool_identity_drift(current, from_identity).get("production", []))
+    if not wire_closure_changed:
+        production -= set(_PHASE_EVALUATION_HYBRID_FILES)
+    impact_paths = sorted(production | set(drift["wire_producer"]))
+
+    # 逐作业影响：official 与每个活跃候选。已作废／已取代的候选只读，不再计入。
+    official_jobs = _campaign_jobs(campaign_dir, manifest, "official")
+    scopes: list[tuple[str, str | None, list[Job] | None, list[str]]] = [
+        ("official", None, official_jobs, sorted(job.job_id for job in official_jobs))
+    ]
+    inactive: list[str] = []
+    active_candidates: list[str] = []
+    candidates_root = campaign_dir / "candidates"
+    if candidates_root.is_dir() and not candidates_root.is_symlink():
+        for candidate_root in sorted(candidates_root.iterdir()):
+            if not candidate_root.is_dir() or candidate_root.is_symlink():
+                continue
+            candidate_id = candidate_root.name
+            if not SAFE_ID_RE.fullmatch(candidate_id):
+                raise ConfigurationError("候选目录包含非法 candidate-id。")
+            if any(
+                (candidate_root / marker).exists() or (candidate_root / marker).is_symlink()
+                for marker in (CANDIDATE_INVALIDATION_FILENAME, "superseded-by.json")
+            ):
+                inactive.append(candidate_id)
+                continue
+            active_candidates.append(candidate_id)
+            jobs, planned_ids = _tool_evolution_candidate_jobs(campaign_dir, manifest, candidate_id)
+            if planned_ids:
+                scopes.append(("candidate", candidate_id, jobs, planned_ids))
+    all_jobs = [job for _phase, _cid, jobs, _ids in scopes if jobs for job in jobs]
+    path_map = _tool_path_job_map(all_jobs, from_identity, current) if all_jobs else {}
+    unmapped = sorted(path for path in impact_paths if path not in path_map)
+    mapped_affected: set[str] = set()
+    for path in impact_paths:
+        mapped_affected.update(path_map.get(path, set()))
+    # ignored 前缀（其它客户端）的文件只在确属某作业声明依赖时计入，不因映射不到扩大影响。
+    for path in drift["ignored"]:
+        mapped_affected.update(path_map.get(path, set()))
+    all_affected = wire_closure_changed or bool(unmapped)
+    official_part: dict[str, Any] = {}
+    candidate_parts: dict[str, Any] = {}
+    for phase, candidate_id, jobs, planned_ids in scopes:
+        if jobs is None or all_affected:
+            affected = list(planned_ids)
+            basis = (
+                "只有孤儿预约、无法展开作业身份，按保守口径全部受影响"
+                if jobs is None
+                else "编排器 wire 闭包变化或存在映射不到作业的变化路径，全部受影响"
+            )
+        else:
+            affected = sorted(set(planned_ids) & mapped_affected)
+            basis = "变化路径 ∩ 作业声明依赖与登记特例表"
+        _stage, stage_path = _stage_path(
+            campaign_dir,
+            "capture-official" if phase == "official" else "capture-candidate",
+            candidate_id,
+        )
+        part = {
+            "planned_job_ids": list(planned_ids),
+            "affected_job_ids": affected,
+            "basis": basis,
+            "sealed": stage_path.exists(),
+        }
+        if phase == "official":
+            official_part = part
+        else:
+            candidate_parts[str(candidate_id)] = part
+    if official_part["sealed"] and official_part["affected_job_ids"]:
+        raise ConfigurationError(
+            "修改影响已封存的 official 作业，Campaign 内无法重采官方证据："
+            + "、".join(official_part["affected_job_ids"])
+            + (f"（映射不到作业的变化路径：{'、'.join(unmapped)}）" if unmapped else "")
+            + (" （编排器 wire 闭包变化）" if wire_closure_changed else "")
+            + "。请核对修改范围或补登依赖映射。"
+        )
+    for candidate_id, part in candidate_parts.items():
+        if part["sealed"] and part["affected_job_ids"]:
+            raise ConfigurationError(
+                f"修改影响候选 {candidate_id} 已封存的作业："
+                + "、".join(part["affected_job_ids"])
+                + "；已封存候选的补采须走评估失败局部恢复（evaluation-recover 开 attempt-recovery 基线）。"
+            )
+
+    # 评估器：checker／builder 变化时，b0 还没有评估产出的候选把 b0 授权迁到新摘要；
+    # 已有产出的候选 b0 授权不动，须以 evaluation-recover 开新基线重评。
+    from_evaluator = _evaluator_entry_digests(from_identity)
+    changed_fields = sorted(
+        field for field in ("checker_sha256", "builder_sha256")
+        if from_evaluator[field] != to_evaluator[field]
+    )
+    evaluator_candidates: dict[str, Any] = {}
+    for candidate_id in active_candidates:
+        baseline, _commit = _current_evaluation_baseline(campaign_dir, candidate_id)
+        outputs = _candidate_b0_evaluation_outputs(campaign_dir, candidate_id)
+        evaluator_candidates[candidate_id] = {
+            "current_evaluation_baseline": baseline,
+            "b0_evaluation_outputs": outputs,
+            "b0_authorization_moved": baseline == 0 and not outputs,
+        }
+    campaign_manifest_path = campaign_dir / "campaign.json"
+    preview: dict[str, Any] = {
+        "schema_version": codex_upgrade_wire_transition.EVOLUTION_SCHEMA,
+        "index": len(chain) + 1,
+        "campaign_id": str(manifest["campaign_id"]),
+        "campaign_manifest_sha256": file_sha256(campaign_manifest_path),
+        "previous_evolution_sha256": chain[-1]["receipt_sha256"] if chain else None,
+        "from_summary": from_summary,
+        "to_summary": to_summary,
+        "to_identity": current,
+        "to_evaluator_digests": dict(to_evaluator),
+        "changes": {
+            "paths_by_layer": {layer: list(paths) for layer, paths in sorted(drift.items())},
+            "impact_paths": impact_paths,
+            "unmapped_paths": unmapped,
+            "wire_closure_changed": wire_closure_changed,
+            "evidence_closure_changed": from_summary["evidence_closure_sha256"]
+            != to_summary["evidence_closure_sha256"],
+        },
+        "impact": {
+            "official": official_part,
+            "candidates": candidate_parts,
+            "inactive_candidates": inactive,
+        },
+        "evaluator": {
+            "from": from_evaluator,
+            "to": {field: to_evaluator[field] for field in ("checker_sha256", "builder_sha256")},
+            "changed_fields": changed_fields,
+            "candidates": evaluator_candidates,
+        },
+        "bindings": {
+            "fix_commit": str(fix_commit),
+            "deployment_receipt": dict(deployment),
+        },
+        "campaign_ledger_head": {
+            "sequence": ledger.get("head_sequence"),
+            "sha256": ledger.get("head_sha256"),
+            "status": ledger.get("status"),
+        },
+        "reason": reason.strip(),
+        "live_request_count": 0,
+    }
+    preview["review_sha256"] = _fingerprint(preview)
+    return preview
+
+
+def _evaluator_entry_digests(identity: Mapping[str, Any]) -> dict[str, str]:
+    """工具身份 entries 中 checker／builder 的规范摘要（各有且仅有一个 entry）。"""
+
+    entries = identity.get("entries")
+    if not isinstance(entries, list):
+        raise ConfigurationError("工具身份缺少 entries，无法取 evaluator 摘要。")
+    digests: dict[str, str] = {}
+    for field, relative in (
+        ("checker_sha256", codex_upgrade_tool_identity_policy.EVALUATOR_CHECKER_RELATIVE),
+        ("builder_sha256", codex_upgrade_tool_identity_policy.EVALUATOR_BUILDER_RELATIVE),
+    ):
+        matches = [
+            entry for entry in entries if isinstance(entry, Mapping) and entry.get("path") == relative
+        ]
+        if len(matches) != 1:
+            raise ConfigurationError(
+                f"工具身份中 {relative} 必须有且仅有一个规范 entry（实际 {len(matches)} 个）。"
+            )
+        value = matches[0].get("sha256")
+        if not isinstance(value, str) or not SHA256_RE.fullmatch(value):
+            raise ConfigurationError(f"工具身份中 {relative} 的摘要非法。")
+        digests[field] = value
+    return digests
+
+
+def _tool_evolution_command(arguments: argparse.Namespace) -> dict[str, Any]:
+    """登记工具演进：不带 --approve-sha256 只输出预览；带上且与重算预览一致才落盘。"""
+
+    campaign_dir = arguments.campaign_dir
+    manifest = _require_formal_campaign(campaign_dir)
+    with _campaign_lock(campaign_dir):
+        preview = _tool_evolution_preview(
+            campaign_dir,
+            manifest,
+            fix_commit=str(arguments.fix_commit),
+            reason=str(arguments.reason),
+            control_root=getattr(arguments, "control_root", None),
+        )
+        summary = {
+            "index": preview["index"],
+            "from_summary": preview["from_summary"],
+            "to_summary": preview["to_summary"],
+            "changes": preview["changes"],
+            "impact": preview["impact"],
+            "evaluator": preview["evaluator"],
+            "bindings": preview["bindings"],
+            "review_sha256": preview["review_sha256"],
+            "live_request_count": 0,
+        }
+        approval = getattr(arguments, "approve_sha256", None)
+        if approval is None:
+            return {"status": "approval_required", **summary}
+        if str(approval) != preview["review_sha256"]:
+            raise ConfigurationError("批准摘要与重算的工具演进预览不一致；重新预览后再批准。")
+        approved_by = str(getattr(arguments, "approved_by", "") or "").strip()
+        if not approved_by:
+            raise ConfigurationError("批准工具演进必须提供 --approved-by。")
+        payload = {key: value for key, value in preview.items() if key != "review_sha256"}
+        payload["approved_sha256"] = preview["review_sha256"]
+        payload["approved_by"] = approved_by
+        payload["approved_at_utc"] = _utc_now()
+        payload["receipt_sha256"] = _fingerprint(payload)
+        try:
+            path = codex_upgrade_wire_transition.write_evolution(campaign_dir, manifest, payload)
+        except codex_upgrade_wire_transition.WireTransitionError as error:
+            raise ConfigurationError(str(error)) from error
+    return {
+        "status": "evolution_applied",
+        "path": str(path),
+        "receipt_sha256": payload["receipt_sha256"],
+        **summary,
+    }
+
+
+def _tool_evolution_status_command(arguments: argparse.Namespace) -> dict[str, Any]:
+    """只读：有效工具身份、演进链与当前受管工具是否需要登记。"""
+
+    campaign_dir = arguments.campaign_dir
+    manifest = _require_formal_campaign(campaign_dir)
+    chain = _campaign_tool_evolutions(campaign_dir, manifest)
+    effective = _campaign_effective_tool_identity(campaign_dir, manifest)
+    current = _tool_identity(include_git=False)
+    frozen = manifest.get("tool_identity")
+    drift = (
+        _tool_evolution_unregistered_drift(effective["identity"], current)
+        if isinstance(frozen, Mapping) and _is_policy_v2_identity(frozen)
+        else []
+    )
+    return {
+        "status": "evolution_required" if drift else "registered",
+        "effective_index": effective["index"],
+        "effective_summary": effective["summary"],
+        "current_summary": codex_upgrade_wire_transition.identity_summary(current),
+        "unregistered_drift": drift,
+        "evolutions": [
+            {
+                "index": item["index"],
+                "receipt_sha256": item["receipt_sha256"],
+                "fix_commit": item["bindings"]["fix_commit"],
+                "approved_at_utc": item.get("approved_at_utc"),
+                "official_affected": item["impact"]["official"].get("affected_job_ids"),
+                "candidates_affected": {
+                    cid: part.get("affected_job_ids")
+                    for cid, part in item["impact"]["candidates"].items()
+                },
+            }
+            for item in chain
+        ],
+        "live_request_count": 0,
+    }
 
 
 def _wire_transition_intent_command(arguments: argparse.Namespace) -> dict[str, Any]:
@@ -57366,6 +58344,12 @@ def _main_without_campaign_lease(argv: list[str] | None = None) -> int:
                 candidate_id=arguments.candidate_id,
                 attempt_id=arguments.attempt_id,
             )
+            return_code = 0
+        elif command == "tool-evolution":
+            result = _tool_evolution_command(arguments)
+            return_code = 0
+        elif command == "tool-evolution-status":
+            result = _tool_evolution_status_command(arguments)
             return_code = 0
         elif command == "wire-transition-intent":
             result = _wire_transition_intent_command(arguments)

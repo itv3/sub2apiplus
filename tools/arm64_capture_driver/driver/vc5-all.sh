@@ -21,7 +21,7 @@ if [ ! -f "$RUNROOT/vc5-run-batch.out" ]; then
 fi
 echo "=== 等待 run 批次（candidate run）$(utc_now)"
 wait_for_marker "$RUNROOT/vc5-run-batch.out" '^RUN_BATCH_DONE ' "$(wait_budget VC-5)" '' \
-  --pid-file "$RUNROOT/vc5-run-batch.pid" --supervisor-root "$D/control/$NEW-supervisor" \
+  --pid-file "$RUNROOT/vc5-run-batch.pid" --supervisor-root "${VC_STATE_DIR:-$D/control/$NEW-supervisor}" \
   --log "$RUNROOT/vc5-all.out"
 grep -E "rc=|actions:|timing events|admission" "$RUNROOT/vc5-run-batch.out" | cut -c1-300
 ATT=$(ls -1t "$NEWDIR/candidates/$CAND/attempts/" | head -1); echo "ATT=$ATT"

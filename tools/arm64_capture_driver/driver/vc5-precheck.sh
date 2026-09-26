@@ -19,6 +19,6 @@ identity = cu._bind_candidate_identity_to_build_receipt(args, identity, build_re
 jobs = cu._campaign_jobs(campaign_dir, manifest, "candidate", candidate_id=CAND, runtime_image=identity["image_reference"], profile_id=identity["profile_id"], profile_digest=identity["profile_digest"], build_id=identity["build_id"], deployed_version=identity["deployed_version"], candidate_image_id=identity["image_id"], source_tree_sha256=identity["source_tree_sha256"], candidate_purpose=identity["candidate_purpose"])
 print("候选 Job:", [j.job_id for j in jobs])
 cu._validate_candidate_admin_credential(jobs); print("管理凭据通过")
-tool = cu._tool_identity(include_git=False); impact = cu._cheap_capture_tool_impact(manifest, list(jobs), tool); print("工具影响:", {k: impact.get(k) for k in ("kind","changed_components","affected_job_ids")})
+tool = cu._tool_identity(include_git=False); impact = cu._cheap_capture_tool_impact(manifest, list(jobs), tool, campaign_dir=campaign_dir); print("工具影响（相对有效身份）:", {k: impact.get(k) for k in ("kind","changed_components","affected_job_ids")})
 PY
 echo "PRECHECK_DONE"

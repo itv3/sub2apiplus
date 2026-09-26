@@ -78,6 +78,16 @@
       "description": "创建预约时绑定的 Campaign 持久租约摘要；不复制可变租约正文。",
       "$ref": "#/$defs/campaignLeaseBinding"
     },
+    "tool_evolution": {
+      "description": "工具演进登记之后新建的 attempt 记录生产序号：本 attempt 的全部结果在第 index 次演进的有效工具身份下产出；没有演进时不写该字段。",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["index", "receipt_sha256"],
+      "properties": {
+        "index": {"type": "integer", "minimum": 1, "maximum": 99},
+        "receipt_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
     "candidate_readiness": {
       "$ref": "#/$defs/candidateReadinessBinding"
     },

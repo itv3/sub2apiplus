@@ -163,8 +163,21 @@ def _attempt_recovery_revision_admissible(
 
 RECOVERY_REVISION_RE = re.compile(r"^ar[1-9][0-9]*$")
 REVIEW_REQUIRED_ALLOWED_EVENTS = frozenset(
-    {"attempt_failed", "receipt_passed", "candidate_invalidated", "stage_abandoned", "stop_the_line"}
+    {
+        "attempt_failed",
+        "receipt_passed",
+        "candidate_invalidated",
+        "stage_abandoned",
+        "stop_the_line",
+        # 候选审核（VC-5 采集失败）修好接着跑：对账登记失败 attempt，批准恢复预览后授权重开 VC-5。
+        # 两类事件的阶段、根因与前置在事件处理处严格限定（CANDIDATE_CAPTURE_RECOVERY_PHASES）。
+        "attempt_started",
+        "recovery_authorized",
+    }
 )
+# 候选审核期间允许「对账 → 恢复授权 → 同 revision 续跑」的阶段：VC-5 采集 attempt 有预约、checkpoint
+# 与逐作业结果，可按已批准的恢复预览只重跑失败与受工具演进影响的作业。
+CANDIDATE_CAPTURE_RECOVERY_PHASES = frozenset({"VC-5"})
 STAGE_REVIEW_ALLOWED_EVENTS = frozenset(
     {"attempt_started", "attempt_failed", "receipt_passed", "stage_abandoned", "stop_the_line", "recovery_authorized"}
 )
@@ -1846,8 +1859,15 @@ def _summarize(
                     attempt_recoveries[key]["status"] = "completed"
         elif event_type == "attempt_started":
             attempt_id = normalized["attempt_id"]
+            candidate_capture_review = (
+                review_required
+                and phase == candidate_review_phase
+                and phase in CANDIDATE_CAPTURE_RECOVERY_PHASES
+            )
             if (attempt_id is None or attempt_id in attempts
-                    or (active_phase != phase and not (stage_review_required and phase == review_phase == "VC-1"))):
+                    or (active_phase != phase
+                        and not (stage_review_required and phase == review_phase == "VC-1")
+                        and not candidate_capture_review)):
                 raise TimingLedgerError("attempt_started 与当前阶段或 attempt 身份不一致")
             cause = normalized["root_cause_id"]
             if cause is not None and failure_counts.get(cause, 0) >= plan["same_root_cause_retry_limit"]:
@@ -1957,6 +1977,30 @@ def _summarize(
                 stage_review_required = False
                 review_phase = None
                 review_root_cause_id = None
+            elif review_required:
+                # 候选审核（VC-5 采集失败）续跑授权：在当前 revision 重开审核阶段，阶段时钟沿用放弃前的起点，
+                # 与阶段审核恢复同一语义；随后按已批准的恢复预览只重跑失败与受影响作业。
+                if (
+                    phase != candidate_review_phase
+                    or phase not in CANDIDATE_CAPTURE_RECOVERY_PHASES
+                    or cause != candidate_review_root_cause_id
+                    or current_revision is None
+                    or abandoned_started is None
+                    or any(item["status"] == "active" for item in attempts.values())
+                    or normalized["next_action"] != "resume-rerun-failed"
+                ):
+                    raise TimingLedgerError(
+                        "候选审核的续跑授权只允许 VC-5 采集失败，且必须绑定审核根因、已对账的失败 attempt 与恢复批准"
+                    )
+                active_phase = phase
+                active_phase_started = abandoned_started
+                active_phase_revision = current_revision
+                revision_phase_state.setdefault(current_revision, {})[phase] = "started"
+                recovery_required = True
+                recovery_root_cause_id = candidate_review_root_cause_id
+                review_required = False
+                candidate_review_phase = None
+                candidate_review_root_cause_id = None
             if (
                 not recovery_required
                 or active_phase != phase

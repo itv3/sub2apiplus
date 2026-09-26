@@ -1,10 +1,12 @@
 #!/bin/bash
 # 派发一个 VC 批次：bash vc-batch.sh <campaign_id> <inputs 目录名> <phase> <sequence> <predecessor_phase> <action-plan 文件名>
+# 监督器状态目录缺省为 control/<campaign_id>-supervisor；VC-0 收口另建了状态目录的轮次（后继批次必须接在首批同一
+# 状态目录上，父批次 stop receipt 在其中）以环境变量 VC_STATE_DIR 指定。
 set -Eeuo pipefail; umask 077
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"; cd "$D"
 CID="$1"; INPUTS="$2"; PHASE="$3"; SEQ="$4"; PRED="$5"; PLAN="$6"
-CDIR="$D/evidence/campaigns/$CID"; WDIR="$D/control/$INPUTS"; STATE="$D/control/$CID-supervisor"
-[ -d "$STATE" ] || mkdir -m 0700 "$STATE"
+CDIR="$D/evidence/campaigns/$CID"; WDIR="$D/control/$INPUTS"; STATE="${VC_STATE_DIR:-$D/control/$CID-supervisor}"
+if [ -n "${VC_STATE_DIR:-}" ]; then test -d "$STATE" || { echo "VC_STATE_DIR 不存在：${STATE}"; exit 2; }; else [ -d "$STATE" ] || mkdir -m 0700 "$STATE"; fi
 PRED_LOWER=$(echo "$PRED" | tr "A-Z" "a-z")
 # 改造 2：候选级阶段（VC-4～VC-6）r≥2 的 checkpoint 落在 control/vc/revisions/r<N>/；有则取最大 revision 的，否则回落 Campaign 级路径
 PRED_CKPT="$CDIR/control/vc/$PRED_LOWER-checkpoint.json"

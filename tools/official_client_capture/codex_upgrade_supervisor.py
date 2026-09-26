@@ -7365,12 +7365,14 @@ def _verify_failed_official_recovery_parent(
     campaign_id: Any,
     action_id: str,
     label: str,
+    phase: str = "VC-1",
 ) -> None:
-    """核验 VC-1 恢复链父 run：私有落盘、终态 failed、唯一动作以处理型错误失败。
+    """核验恢复链父 run：私有落盘、终态 failed、唯一动作以处理型错误失败。
 
-    预览重派与补跑失败后的预览两条协议共用：父 run 目录与 state／stop receipt 必须私有且
-    逐字自洽，stop 原因是该动作失败，动作诊断只能是处理型失败（ConfigurationError 或子进程
-    非零退出）；截止清理、中断等不在协议内，仍由 reconciler 判定。
+    VC-1 的预览重派与补跑失败后的预览两条协议共用，VC-5 候选采集续跑的同构协议按 ``phase``
+    复用：父 run 目录与 state／stop receipt 必须私有且逐字自洽，stop 原因是该动作失败，动作
+    诊断只能是处理型失败（ConfigurationError 或子进程非零退出）；截止清理、中断等不在协议内，
+    仍由 reconciler 判定。
     """
 
     _permission_compensation_private_directory(prior_dir, f"{label}前序 run 目录")
@@ -7384,7 +7386,7 @@ def _verify_failed_official_recovery_parent(
         recorded_state != dict(prior_state)
         or prior_state.get("state") != "failed"
         or prior_state.get("campaign_id") != campaign_id
-        or prior_state.get("phase") != "VC-1"
+        or prior_state.get("phase") != phase
         or isinstance(owner_pid, bool)
         or not isinstance(owner_pid, int)
         or owner_pid <= 0
@@ -7401,7 +7403,7 @@ def _verify_failed_official_recovery_parent(
         stop.get("event_type") != "failed"
         or stop.get("reason") != f"action-failed:{action_id}"
         or stop.get("campaign_id") != prior_state.get("campaign_id")
-        or stop.get("phase") != "VC-1"
+        or stop.get("phase") != phase
         or stop.get("owner_pid") != owner_pid
         or stop.get("owner_nonce") != owner_nonce
     ):
@@ -7410,7 +7412,7 @@ def _verify_failed_official_recovery_parent(
         _action_diagnostic_path(prior_dir, action_id, create_directory=False),
         run_dir=prior_dir,
         campaign_id=str(prior_state["campaign_id"]),
-        phase="VC-1",
+        phase=phase,
         action_id=action_id,
         owner_pid=owner_pid,
         owner_nonce=owner_nonce,
@@ -7526,6 +7528,364 @@ def _validate_batched_official_recovery_run_retry_successor(
         campaign_id=successor_manifest.get("campaign_id"),
         action_id=_OFFICIAL_RECOVERY_RUN_ACTION_ID,
         label="VC-1 补跑失败后的预览",
+    )
+    return True
+
+
+# ---------------------------------------------------------------------------
+# VC-5 候选采集续跑（修好接着跑）
+# ---------------------------------------------------------------------------
+#
+# 与 VC-1 恢复链同构：失败的普通 ``capture-candidate run`` 批次 N 只能由 N+1 的零请求恢复预览
+# 承接；预览成功后再派发按已批准预览的真实补跑；预览失败 N+1 逐字重派；补跑失败 N+1 派发新的
+# 零请求预览。账本门禁保证预览批次只能在对账、批准与 recovery_authorized 之后编译；恢复闭集由
+# 动作内的恢复器按已批准预览逐字复算，本层只核对批次结构与候选身份参数逐字不变。
+
+CANDIDATE_RECOVERY_PREVIEW_ACTION_ID = "preview-candidate-recovery"
+CANDIDATE_RECOVERY_RUN_ACTION_ID = "run-candidate-recovery"
+CANDIDATE_RECOVERY_OPERATION = "VC-5:candidate-recovery"
+# 候选失败重跑必须逐字携带、且与父 capture-candidate run 同值的身份参数（按此顺序写入命令）。
+CANDIDATE_RECOVERY_IDENTITY_FLAGS = (
+    "--candidate-id",
+    "--build-receipt",
+    "--runtime-image",
+    "--candidate-image-id",
+    "--candidate-source",
+    "--build-id",
+    "--deployed-version",
+    "--profile-id",
+    "--profile-digest",
+    "--candidate-purpose",
+)
+# 父采集命令里除身份参数外允许出现、且不传给 resume 的参数。
+_CANDIDATE_CAPTURE_EXTRA_FLAGS = frozenset({"--max-wall-seconds"})
+# 续跑批次必须逐字沿用父批次的批次级字段。
+_CANDIDATE_RECOVERY_FROZEN_FIELDS = (
+    "campaign_id",
+    "campaign_plan_sha256",
+    "original_deadline_at_utc",
+    "predecessor_checkpoint",
+    "no_op",
+    "candidate_id",
+    "candidate_revision",
+    "evaluation_baseline",
+    "baseline_commit_sha256",
+    "execute_items",
+    "reuse_items",
+)
+
+
+def candidate_capture_run_identity(command: Any) -> tuple[list[str], str, dict[str, str]] | None:
+    """解析普通 ``capture-candidate run`` 命令：返回 (解释器前缀, Campaign 目录, 候选身份参数)。
+
+    恢复段（``--attempt-recovery``）、失败重跑或参数不闭合的命令返回 None。
+    """
+
+    if not isinstance(command, list) or not all(isinstance(token, str) and token for token in command):
+        return None
+    if command.count("capture-candidate") != 1:
+        return None
+    index = command.index("capture-candidate")
+    prefix = list(command[:index])
+    tail = command[index + 1:]
+    if not tail or tail[0] != "run" or not prefix:
+        return None
+    if not {Path(value).name for value in prefix} & {"codex_upgrade.py", "codex-upgrade"}:
+        return None
+    pairs: dict[str, str] = {}
+    acknowledged = 0
+    position = 1
+    while position < len(tail):
+        flag = tail[position]
+        if flag == "--acknowledge-live-requests":
+            acknowledged += 1
+            position += 1
+            continue
+        if not flag.startswith("--") or "=" in flag or position + 1 >= len(tail) or flag in pairs:
+            return None
+        pairs[flag] = tail[position + 1]
+        position += 2
+    campaign = pairs.pop("--campaign-dir", None)
+    for extra in _CANDIDATE_CAPTURE_EXTRA_FLAGS:
+        pairs.pop(extra, None)
+    if (
+        acknowledged != 1
+        or campaign is None
+        or not Path(campaign).is_absolute()
+        or set(pairs) != set(CANDIDATE_RECOVERY_IDENTITY_FLAGS)
+    ):
+        return None
+    return prefix, campaign, {flag: pairs[flag] for flag in CANDIDATE_RECOVERY_IDENTITY_FLAGS}
+
+
+def _candidate_identity_tokens(identity: Mapping[str, str]) -> list[str]:
+    tokens: list[str] = []
+    for flag in CANDIDATE_RECOVERY_IDENTITY_FLAGS:
+        tokens.extend([flag, str(identity[flag])])
+    return tokens
+
+
+def candidate_recovery_preview_command(
+    prefix: Sequence[str], campaign: str, identity: Mapping[str, str]
+) -> list[str]:
+    """VC-5 候选采集续跑的零请求恢复预览命令（驱动与后继协议共用同一构造）。"""
+
+    return [*prefix, "resume", "--campaign-dir", campaign, "--rerun-failed", "--preview-recovery", *_candidate_identity_tokens(identity)]
+
+
+def candidate_recovery_run_command(
+    prefix: Sequence[str], campaign: str, identity: Mapping[str, str], preview_path: str
+) -> list[str]:
+    """VC-5 候选采集续跑的真实补跑命令（按已批准的恢复预览，只执行预览冻结的执行集合）。"""
+
+    return [
+        *prefix, "resume", "--campaign-dir", campaign, "--rerun-failed", "--recovery-preview", preview_path,
+        "--acknowledge-live-requests", *_candidate_identity_tokens(identity),
+    ]
+
+
+def _candidate_recovery_command_identity(command: Any, *, preview: bool) -> tuple[list[str], str, dict[str, str], str | None] | None:
+    """解析 VC-5 续跑命令（预览或补跑）；形态不符返回 None。"""
+
+    if not isinstance(command, list) or not all(isinstance(token, str) and token for token in command):
+        return None
+    if command.count("resume") != 1:
+        return None
+    index = command.index("resume")
+    prefix = list(command[:index])
+    tail = command[index:]
+    # 头部词元：预览 resume --campaign-dir C --rerun-failed --preview-recovery（5 个）；
+    # 补跑 resume --campaign-dir C --rerun-failed --recovery-preview P --acknowledge-live-requests（7 个）。
+    head = 5 if preview else 7
+    if not prefix or len(tail) != head + 2 * len(CANDIDATE_RECOVERY_IDENTITY_FLAGS):
+        return None
+    if tail[1] != "--campaign-dir" or not Path(tail[2]).is_absolute() or tail[3] != "--rerun-failed":
+        return None
+    preview_path: str | None = None
+    if preview:
+        if tail[4] != "--preview-recovery":
+            return None
+    else:
+        if tail[4] != "--recovery-preview" or not Path(tail[5]).is_absolute() or tail[6] != "--acknowledge-live-requests":
+            return None
+        preview_path = tail[5]
+    identity: dict[str, str] = {}
+    for offset, flag in enumerate(CANDIDATE_RECOVERY_IDENTITY_FLAGS):
+        if tail[head + 2 * offset] != flag:
+            return None
+        identity[flag] = tail[head + 2 * offset + 1]
+    return prefix, tail[2], identity, preview_path
+
+
+def candidate_recovery_parent_identity(manifest: Mapping[str, Any]) -> tuple[list[str], str, dict[str, str]]:
+    """从失败的 VC-5 采集或续跑补跑批次清单取 (解释器前缀, Campaign 目录, 候选身份参数)。
+
+    驱动据此生成 N+1 零请求恢复预览与后续补跑命令；与后继协议核对用的是同一组解析函数，
+    生成的命令逐字满足协议。批次不是单动作的候选采集／续跑补跑即拒绝。
+    """
+
+    if manifest.get("phase") != "VC-5":
+        raise SupervisorError("候选采集续跑只适用于 VC-5 批次。")
+    actions = manifest.get("actions")
+    if not isinstance(actions, list) or len(actions) != 1 or not isinstance(actions[0], Mapping):
+        raise SupervisorError("候选采集续跑的父批次必须恰好一个动作。")
+    command = actions[0].get("command")
+    parsed = candidate_capture_run_identity(command)
+    if parsed is not None:
+        return parsed
+    if actions[0].get("action_id") == CANDIDATE_RECOVERY_RUN_ACTION_ID:
+        recovery = _candidate_recovery_command_identity(command, preview=False)
+        if recovery is not None:
+            prefix, campaign, identity, _preview = recovery
+            return prefix, campaign, identity
+    raise SupervisorError("父批次不是普通 capture-candidate run 或候选续跑补跑，不能生成续跑命令。")
+
+
+def candidate_capture_recovery_action(manifest: Mapping[str, Any], action_id: str) -> str | None:
+    """失败动作属于 VC-5 候选采集续跑链时返回其种类（capture／preview／run），否则 None。
+
+    ``capture`` 是普通 ``capture-candidate run``；``preview``／``run`` 是续跑的零请求恢复预览与
+    按已批准预览的真实补跑。三者失败都进入 recovery_required，对账后修好接着跑。
+    """
+
+    if manifest.get("phase") != "VC-5":
+        return None
+    actions = manifest.get("actions")
+    if not isinstance(actions, list):
+        return None
+    for action in actions:
+        if not isinstance(action, Mapping) or action.get("action_id") != action_id:
+            continue
+        command = action.get("command")
+        if candidate_capture_run_identity(command) is not None:
+            return "capture"
+        if (
+            action_id == CANDIDATE_RECOVERY_PREVIEW_ACTION_ID
+            and _candidate_recovery_command_identity(command, preview=True) is not None
+        ):
+            return "preview"
+        if (
+            action_id == CANDIDATE_RECOVERY_RUN_ACTION_ID
+            and _candidate_recovery_command_identity(command, preview=False) is not None
+        ):
+            return "run"
+        return None
+    return None
+
+
+def _candidate_recovery_batch_fields_match(
+    prior_manifest: Mapping[str, Any], successor_manifest: Mapping[str, Any]
+) -> bool:
+    prior_sequence = prior_manifest.get("batch_sequence")
+    return (
+        not isinstance(prior_sequence, bool)
+        and isinstance(prior_sequence, int)
+        and prior_sequence >= 1
+        and successor_manifest.get("schema_version") == CAMPAIGN_RUN_BATCHED_SCHEMA
+        and successor_manifest.get("phase") == "VC-5"
+        and successor_manifest.get("batch_sequence") == prior_sequence + 1
+        and prior_manifest.get("no_op") is False
+        and prior_manifest.get("execute_items") == ["candidate-run"]
+        and prior_manifest.get("reuse_items") == []
+        and all(
+            successor_manifest.get(field) == prior_manifest.get(field)
+            for field in _CANDIDATE_RECOVERY_FROZEN_FIELDS
+        )
+    )
+
+
+def _single_action(manifest: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    actions = manifest.get("actions")
+    if not isinstance(actions, list) or len(actions) != 1 or not isinstance(actions[0], Mapping):
+        return None
+    return actions[0]
+
+
+def _validate_batched_candidate_recovery_preview_successor(
+    prior_state: Mapping[str, Any],
+    prior_manifest: Mapping[str, Any],
+    prior_dir: Path,
+    successor_manifest: Mapping[str, Any],
+) -> bool:
+    """失败的普通 VC-5 ``capture-candidate run`` 批次 N 由 N+1 零请求恢复预览承接。
+
+    只核对结构：父批次唯一动作是普通候选采集且以处理型错误失败；后继 N+1 唯一动作是
+    ``resume --rerun-failed --preview-recovery`` 且候选身份参数与父命令逐字相同；批次级字段
+    （含候选 revision、评估基线与 execute／reuse）逐字不变。
+    """
+
+    prior_action = _single_action(prior_manifest)
+    successor_action = _single_action(successor_manifest)
+    if (
+        prior_manifest.get("schema_version") != CAMPAIGN_RUN_BATCHED_SCHEMA
+        or prior_manifest.get("phase") != "VC-5"
+        or prior_action is None
+        or successor_action is None
+        or successor_action.get("action_id") != CANDIDATE_RECOVERY_PREVIEW_ACTION_ID
+    ):
+        return False
+    parent = candidate_capture_run_identity(prior_action.get("command"))
+    if parent is None:
+        return False
+    prefix, campaign, identity = parent
+    expected = {
+        "action_id": CANDIDATE_RECOVERY_PREVIEW_ACTION_ID,
+        "operation": CANDIDATE_RECOVERY_OPERATION,
+        "command": candidate_recovery_preview_command(prefix, campaign, identity),
+        "item_ids": prior_action.get("item_ids"),
+    }
+    if (
+        not _candidate_recovery_batch_fields_match(prior_manifest, successor_manifest)
+        or {key: successor_action.get(key) for key in expected} != expected
+        or prior_action.get("item_ids") != ["candidate-run"]
+        or successor_manifest.get("candidate_id") != identity["--candidate-id"]
+    ):
+        raise SupervisorError("VC-5 候选采集续跑预览的批次结构或候选身份参数与父采集批次不一致。")
+    _verify_failed_official_recovery_parent(
+        prior_state,
+        prior_dir,
+        campaign_id=successor_manifest.get("campaign_id"),
+        action_id=str(prior_action.get("action_id")),
+        label="VC-5 候选采集续跑预览",
+        phase="VC-5",
+    )
+    return True
+
+
+def _validate_batched_candidate_recovery_preview_retry_successor(
+    prior_state: Mapping[str, Any],
+    prior_manifest: Mapping[str, Any],
+    prior_dir: Path,
+    successor_manifest: Mapping[str, Any],
+) -> bool:
+    """VC-5 零请求恢复预览批次失败后，以 N+1 逐字重派同一预览（不预约、不发请求，无副作用）。"""
+
+    prior_action = _single_action(prior_manifest)
+    if (
+        prior_manifest.get("schema_version") != CAMPAIGN_RUN_BATCHED_SCHEMA
+        or prior_manifest.get("phase") != "VC-5"
+        or prior_action is None
+        or prior_action.get("action_id") != CANDIDATE_RECOVERY_PREVIEW_ACTION_ID
+    ):
+        return False
+    if (
+        prior_action.get("operation") != CANDIDATE_RECOVERY_OPERATION
+        or _candidate_recovery_command_identity(prior_action.get("command"), preview=True) is None
+        or not _candidate_recovery_batch_fields_match(prior_manifest, successor_manifest)
+        or successor_manifest.get("actions") != prior_manifest.get("actions")
+    ):
+        raise SupervisorError("VC-5 候选采集续跑预览重派必须以 N+1 逐字沿用父预览批次。")
+    _verify_failed_official_recovery_parent(
+        prior_state,
+        prior_dir,
+        campaign_id=successor_manifest.get("campaign_id"),
+        action_id=CANDIDATE_RECOVERY_PREVIEW_ACTION_ID,
+        label="VC-5 候选采集续跑预览重派",
+        phase="VC-5",
+    )
+    return True
+
+
+def _validate_batched_candidate_recovery_run_retry_successor(
+    prior_state: Mapping[str, Any],
+    prior_manifest: Mapping[str, Any],
+    prior_dir: Path,
+    successor_manifest: Mapping[str, Any],
+) -> bool:
+    """VC-5 按预览真实补跑批次失败后，以 N+1 派发新的零请求恢复预览（须先对账新失败 attempt）。"""
+
+    prior_action = _single_action(prior_manifest)
+    successor_action = _single_action(successor_manifest)
+    if (
+        prior_manifest.get("schema_version") != CAMPAIGN_RUN_BATCHED_SCHEMA
+        or prior_manifest.get("phase") != "VC-5"
+        or prior_action is None
+        or prior_action.get("action_id") != CANDIDATE_RECOVERY_RUN_ACTION_ID
+    ):
+        return False
+    parsed = _candidate_recovery_command_identity(prior_action.get("command"), preview=False)
+    if parsed is None or prior_action.get("operation") != CANDIDATE_RECOVERY_OPERATION:
+        raise SupervisorError("VC-5 补跑失败后的预览：父动作不是按预览的候选真实补跑。")
+    prefix, campaign, identity, _preview_path = parsed
+    expected = {
+        "action_id": CANDIDATE_RECOVERY_PREVIEW_ACTION_ID,
+        "operation": CANDIDATE_RECOVERY_OPERATION,
+        "command": candidate_recovery_preview_command(prefix, campaign, identity),
+        "item_ids": prior_action.get("item_ids"),
+    }
+    if (
+        successor_action is None
+        or not _candidate_recovery_batch_fields_match(prior_manifest, successor_manifest)
+        or {key: successor_action.get(key) for key in expected} != expected
+    ):
+        raise SupervisorError("VC-5 补跑失败后的预览必须是 N+1 的零请求预览，且候选身份参数与父补跑逐字相同。")
+    _verify_failed_official_recovery_parent(
+        prior_state,
+        prior_dir,
+        campaign_id=successor_manifest.get("campaign_id"),
+        action_id=CANDIDATE_RECOVERY_RUN_ACTION_ID,
+        label="VC-5 补跑失败后的预览",
+        phase="VC-5",
     )
     return True
 
@@ -9335,6 +9695,39 @@ def _validate_batched_campaign_history(
         if (
             prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
             and successor_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
+            and _validate_batched_candidate_recovery_preview_successor(
+                state,
+                prior_manifest,
+                _run_dir,
+                successor_manifest,
+            )
+        ):
+            continue
+        if (
+            prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
+            and successor_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
+            and _validate_batched_candidate_recovery_preview_retry_successor(
+                state,
+                prior_manifest,
+                _run_dir,
+                successor_manifest,
+            )
+        ):
+            continue
+        if (
+            prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
+            and successor_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
+            and _validate_batched_candidate_recovery_run_retry_successor(
+                state,
+                prior_manifest,
+                _run_dir,
+                successor_manifest,
+            )
+        ):
+            continue
+        if (
+            prior_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
+            and successor_schema == CAMPAIGN_RUN_BATCHED_SCHEMA
             and _validate_candidate_revision_successor(
                 state,
                 prior_manifest,
@@ -9700,6 +10093,14 @@ def _close_failed_campaign_timing_ledger(
     # 不是候选级失败——它是 transient-environment 裁定后的补跑，失败对象是环境瞬态而非候选源码；
     # 阶段保持 active 进入 recovery_required，由段对账（同根因计数）与批准的恢复预览决定是否开后继段。
     recovery_segment = _attempt_recovery_run_revision(manifest, failed_action_id) if failure_class == "execution-failure" else None
+    # 修好接着跑：VC-5 候选采集（及其续跑预览／补跑）失败不再进候选审核，阶段保持 active 进入
+    # recovery_required；对账后按工具缺陷／环境／候选源码三类裁定，前两类修复部署、登记工具演进后
+    # 在原 revision 续跑，只有候选源码问题才作废候选。
+    candidate_capture = (
+        candidate_capture_recovery_action(manifest, failed_action_id)
+        if failure_class == "execution-failure" and recovery_segment is None
+        else None
+    )
     if recovery_segment is not None:
         try:
             successor = f"ar{int(recovery_segment[2:]) + 1}"
@@ -9709,6 +10110,12 @@ def _close_failed_campaign_timing_ledger(
             f"reconcile-attempt --recovery-revision {recovery_segment}：恢复段动作失败／中断，段对账入账并批准"
             f"恢复预览后，以 capture-candidate run --attempt-recovery {successor} --rerun-failed --recovery-preview 开后继段；"
             "同根因达上限即停线。"
+        )
+    elif candidate_capture is not None:
+        recovery_next_action = (
+            "VC-5 候选采集续跑：有预约的失败先 reconcile-attempt（无预约的预览失败用 reconcile-supervisor-run）入账；"
+            "修好工具并受监督部署、登记 tool-evolution 后批准恢复预览，以 resume --rerun-failed 只重跑失败与"
+            "受工具演进影响的作业；判为候选源码问题则 invalidate-candidate；同根因达上限即停线。"
         )
     elif failure_class == "post-run-tooling":
         # 数据面 Job 已闭合，失败的是零请求后处理动作：修复评估／控制工具并
@@ -9826,6 +10233,7 @@ def _close_failed_campaign_timing_ledger(
                 failure_class in RECOVERABLE_ACTION_FAILURE_CLASSES
                 or failure_class in RECOVERABLE_PARENT_FAILURE_CLASSES
                 or recovery_segment is not None
+                or candidate_capture is not None
             )
             and before.get("status") == "active"
             and not _candidate_failure_hits_permanent_condition(

@@ -264,6 +264,86 @@ def _identity_facts(campaign_dir: Path, manifest: Mapping[str, Any], current: Ma
     }
 
 
+def _last_candidate_review_event(ledger_dir: Path) -> dict[str, Any] | None:
+    """账本里最后一条 candidate_review_required 事件（候选审核的阶段与根因不进入摘要，只能从事件取）。"""
+
+    review: dict[str, Any] | None = None
+    for event, _raw in timing_ledger._load_events(ledger_dir):
+        if isinstance(event, Mapping) and event.get("event_type") == "candidate_review_required":
+            review = dict(event)
+    return review
+
+
+def _candidate_capture_review(
+    campaign_dir: Path,
+    manifest: Mapping[str, Any],
+    ledger_dir: Path,
+    ledger: Mapping[str, Any],
+    *,
+    phase: str,
+    candidate_id: str | None,
+    attempt_id: str,
+    strict: bool,
+) -> dict[str, Any] | None:
+    """候选审核下的 VC-5 采集续跑上下文；不适用时返回 None。
+
+    适用条件：账本处于 candidate_review_required、审核事件属于 VC-5 与本候选、审核事件唯一绑定的
+    失败父 run 窗口内发布了本 attempt 的预约。返回审核阶段、根因与失败父 run，供对账登记 attempt
+    事件和授权写 recovery_authorized。
+
+    ``strict=False``（对账）：绑定不成立时返回 None，按原规则只入账、不登记 attempt 事件——候选审核
+    下对账其它旧 attempt（作废前的账务核对需要）不能被续跑判定挡住。``strict=True``（授权）：绑定
+    不成立即拒绝，续跑授权只属于引起审核的那次失败采集。
+    """
+
+    if ledger.get("status") != "candidate_review_required" or phase != "candidate" or not candidate_id:
+        return None
+    review = _last_candidate_review_event(ledger_dir)
+    if review is None or review.get("phase") != "VC-5" or review.get("candidate_id") != candidate_id:
+        return None
+    try:
+        failed_run = codex_upgrade._candidate_failed_run_for_review(
+            campaign_dir, manifest, str(candidate_id), review
+        )
+    except codex_upgrade.ConfigurationError as error:
+        if not strict:
+            return None
+        raise ReconcilerError(f"候选审核无法绑定失败父 run：{error}") from error
+    window = supervisor.candidate_reservations_in_run_window(
+        campaign_dir, candidate_id=str(candidate_id), started_at_epoch=float(failed_run["started_at_epoch"])
+    )
+    if attempt_id not in {name for name, _root in window}:
+        if not strict:
+            return None
+        raise ReconcilerError(
+            f"attempt {attempt_id} 不是引起候选审核的失败父 run（{failed_run['run_id']}）窗口内发布的预约"
+        )
+    return {
+        "phase": "VC-5",
+        "root_cause_id": str(review["root_cause_id"]),
+        "review_event_id": str(review["event_id"]),
+        "failed_run_id": str(failed_run["run_id"]),
+    }
+
+
+def _require_registered_tool_identity(identity: Mapping[str, Any], ledger: Mapping[str, Any]) -> None:
+    """活 Campaign 的零写入前置：v2 身份与有效身份（最新工具演进）不一致时拒绝对账。
+
+    修好工具并部署后若还没登记工具演进，按当前身份对账会把失败判为身份变化并写永久终态；
+    这里在任何收据、账本或总账写入之前拒绝，提示先登记演进。已 stopped／complete 的旧
+    Campaign 不受影响：身份变化只作为不能恢复的原因之一记入对账收据。
+    """
+
+    if identity.get("policy_version") != "v2" or identity.get("unchanged"):
+        return
+    if ledger.get("status") in {"stopped", "complete"}:
+        return
+    raise ReconcilerError(
+        "当前受管工具的 wire／策略身份与 Campaign 有效工具身份（最新工具演进）不一致：修好工具并受监督"
+        "部署后，先执行 tool-evolution 登记本次修复，再对账；本次未写入任何文件"
+    )
+
+
 def _deployment_receipt(control_root: Path, current: Mapping[str, Any], *, required: bool) -> dict[str, Any] | None:
     """最近一份通过且五摘要等于当前工具身份的部署收据；生产总账下必须存在。"""
 
@@ -1638,6 +1718,19 @@ def _recovery_preview(
         execute = sorted(set(frozen) - set(reusable))
     else:
         reusable = list(groups["complete"]) if (attempt_exists and environment_status == "restored") else []
+        # 工具演进：源 attempt 生产序号之后登记的演进使部分已完成作业失效，与 resume 冻结闭集同一口径。
+        # 没有演进时不读预约（_attempt_evolution_impact 在空链时直接返回空影响）。
+        source_root = (
+            campaign_dir / codex_upgrade._capture_attempt_relative(phase, candidate_id) / "attempts" / attempt_id
+        )
+        try:
+            evolution_impact = codex_upgrade._attempt_evolution_impact(
+                campaign_dir, manifest, source_root, phase=phase, candidate_id=candidate_id
+            )
+        except codex_upgrade.ConfigurationError as error:
+            raise ReconcilerError(str(error)) from error
+        evolution_invalidated = sorted(set(reusable) & set(evolution_impact["affected_job_ids"]))
+        reusable = sorted(set(reusable) - set(evolution_invalidated))
         execute = sorted(set(jobs["planned_job_ids"]) - set(reusable))
     per_job: dict[str, int] = {}
     for job in provenance_copy.get("jobs", []):
@@ -1693,6 +1786,16 @@ def _recovery_preview(
     }
     if recovery_revision is not None:
         preview["reuse_proofs"] = {job_id: proofs[job_id] for job_id in reusable}
+    elif evolution_impact["evolution_indexes"]:
+        # 只在确有演进时写入，没有演进的预览字节不变。
+        preview["tool_evolution"] = {
+            "source_index": int(evolution_impact["index"]),
+            "evolution_indexes": list(evolution_impact["evolution_indexes"]),
+            "invalidated_job_ids": evolution_invalidated,
+        }
+        preview["reuse_basis"] = (
+            "source attempt 环境已恢复，complete Job 只读复用；工具演进受影响的已完成 Job 移入执行集合"
+        )
     index, latest = _latest_indexed(receipt_dir, PREVIEW_RE)
     if latest is not None:
         existing = _read_json(latest, "既有恢复预览")
@@ -1715,20 +1818,20 @@ def _resume_reuse_check(
 ) -> dict[str, Any]:
     """R17：批准前按 resume 同一复用判定只读复算恢复预览，返回 consistent／inconsistent／not_applicable。
 
-    resume 会拒绝的情形（ConfigurationError）记为 inconsistent，由调用方拒绝批准。只覆盖非段模式的
-    official 恢复（VC-1）：恢复段逐项携带复用证明、由段合同校验；候选阶段非段模式沿用原有判定；
+    resume 会拒绝的情形（ConfigurationError）记为 inconsistent，由调用方拒绝批准。覆盖非段模式的
+    official 恢复（VC-1）与候选采集续跑（VC-5）：恢复段逐项携带复用证明、由段合同校验；
     孤儿 attempt 没有 attempt.json，resume 按预览执行集合重跑、不复用。
     """
 
     if recovery_revision is not None:
         return {"status": "not_applicable", "reason": "恢复段预览逐项携带复用证明，由段合同校验"}
-    if phase != "official":
-        return {"status": "not_applicable", "reason": "候选阶段非段模式沿用原有判定（R17 只覆盖 official 恢复）"}
     if not preview.get("source_attempt_receipt_exists"):
         return {"status": "not_applicable", "reason": "孤儿 attempt 没有 attempt.json，resume 按预览执行集合重跑、不复用"}
     try:
-        return codex_upgrade.official_recovery_reuse_check(
+        return codex_upgrade.recovery_reuse_check(
             campaign_dir,
+            phase=phase,
+            candidate_id=preview.get("candidate_id") if phase == "candidate" else None,
             source_attempt_id=str(preview["source_attempt_id"]),
             reuse_job_ids=preview["reuse_job_ids"],
             execute_job_ids=preview["execute_job_ids"],
@@ -1894,7 +1997,8 @@ def load_approved_recovery_preview(
             or frozen_campaign_head.get("status") != campaign_head.get("status")
         ):
             raise ReconcilerError("恢复预览绑定的 Campaign 账本 head 已漂移")
-        if campaign_head.get("status") in {"recovery_required", "stage_review_required"}:
+        authorizable = {"recovery_required", "stage_review_required", "candidate_review_required"}
+        if campaign_head.get("status") in authorizable:
             event_id = (
                 f"recovery-authorized-{attempt_id}-{int(preview['index']):02d}"
                 if recovery_revision is None
@@ -1903,7 +2007,7 @@ def load_approved_recovery_preview(
             with codex_upgrade._campaign_lock(campaign_dir):
                 current_campaign_head = _ledger_facts(ledger_dir, now=_utc_now())
                 existing_sha256 = _ledger_event_sha256(ledger_dir, event_id)
-                if current_campaign_head.get("status") in {"recovery_required", "stage_review_required"}:
+                if current_campaign_head.get("status") in authorizable:
                     if (
                         current_campaign_head.get("head_sequence") != sequence
                         or current_campaign_head.get("head_sha256")
@@ -1911,6 +2015,31 @@ def load_approved_recovery_preview(
                     ):
                         raise ReconcilerError(
                             "恢复批准消费前 Campaign 账本 head 已推进，必须重新对账"
+                        )
+                    if current_campaign_head.get("status") == "candidate_review_required":
+                        # 候选审核（VC-5 采集失败）续跑：阶段与根因取审核事件；审核必须唯一绑定
+                        # 本 attempt 所在的失败父 run（同对账时的核对）。
+                        review = _candidate_capture_review(
+                            campaign_dir,
+                            manifest,
+                            ledger_dir,
+                            current_campaign_head,
+                            phase=phase,
+                            candidate_id=candidate_id,
+                            attempt_id=attempt_id,
+                            strict=True,
+                        )
+                        if review is None or recovery_revision is not None:
+                            raise ReconcilerError("候选审核只允许 VC-5 采集失败 attempt 的续跑授权")
+                        authorized_phase = review["phase"]
+                        authorized_cause = review["root_cause_id"]
+                    else:
+                        authorized_phase = str(
+                            current_campaign_head.get("active_phase") or current_campaign_head["review_phase"]
+                        )
+                        authorized_cause = str(
+                            current_campaign_head.get("recovery_root_cause_id")
+                            or current_campaign_head["review_root_cause_id"]
                         )
                     receipts = _ledger_recovery_authorization_bindings(
                         ledger_dir,
@@ -1922,11 +2051,9 @@ def load_approved_recovery_preview(
                     authorization_event = _append_ledger_event(
                         ledger_dir,
                         event_id=event_id,
-                        phase=str(current_campaign_head.get("active_phase") or current_campaign_head["review_phase"]),
+                        phase=authorized_phase,
                         event_type="recovery_authorized",
-                        root_cause_id=str(
-                            current_campaign_head.get("recovery_root_cause_id") or current_campaign_head["review_root_cause_id"]
-                        ),
+                        root_cause_id=authorized_cause,
                         receipts=receipts,
                         next_action="resume-rerun-failed",
                     )
@@ -2073,6 +2200,7 @@ def reconcile_attempt(
     identity = _identity_facts(campaign_dir, manifest, current)
     ledger_dir = _campaign_ledger_dir(manifest)
     ledger = _ledger_facts(ledger_dir, now=observed)
+    _require_registered_tool_identity(identity, ledger)
     project_root = _project_root(campaign_dir)
     plan, head = _project_facts(project_root)
     deployment = _deployment_receipt(
@@ -2201,6 +2329,21 @@ def reconcile_attempt(
         ledger_events: list[dict[str, Any]] = []
         ledger_note = "recorded"
         active_ids = {item["attempt_id"] for item in ledger["active_attempts"]}
+        # 候选审核（VC-5 采集失败）下的续跑：attempt 事件登记在审核阶段，之后可批准恢复预览。
+        capture_review = (
+            _candidate_capture_review(
+                campaign_dir,
+                manifest,
+                ledger_dir,
+                ledger,
+                phase=phase,
+                candidate_id=candidate_id,
+                attempt_id=attempt_id,
+                strict=False,
+            )
+            if recovery_revision is None
+            else None
+        )
         if recovery_revision is not None:
             # 恢复段失败／中断：原 attempt 事件不动，只把 active 的恢复段登记为 failed（带根因，计入同根因）。
             segment_state = timing_ledger.inspect_ledger(ledger_dir, now=observed).get("attempt_recoveries", {}).get(
@@ -2241,6 +2384,29 @@ def reconcile_attempt(
                     ledger_dir,
                     event_id=f"reconcile-attempt-failed-{attempt_id}",
                     phase=str(ledger.get("active_phase") or ledger["review_phase"]),
+                    event_type="attempt_failed",
+                    attempt_id=attempt_id,
+                    root_cause_id=cause["root_cause_id"],
+                    next_action="reconcile-attempt",
+                )
+            )
+        elif capture_review is not None:
+            if attempt_id not in active_ids:
+                ledger_events.append(
+                    _append_ledger_event(
+                        ledger_dir,
+                        event_id=f"reconcile-attempt-started-{attempt_id}",
+                        phase=capture_review["phase"],
+                        event_type="attempt_started",
+                        attempt_id=attempt_id,
+                        next_action="reconcile-attempt",
+                    )
+                )
+            ledger_events.append(
+                _append_ledger_event(
+                    ledger_dir,
+                    event_id=f"reconcile-attempt-failed-{attempt_id}",
+                    phase=capture_review["phase"],
                     event_type="attempt_failed",
                     attempt_id=attempt_id,
                     root_cause_id=cause["root_cause_id"],
@@ -2640,6 +2806,22 @@ def _run_facts(run_dir: Path, campaign_dir: Path, manifest: Mapping[str, Any]) -
             else []
         ),
     }
+
+
+def _candidate_capture_recovery_run(run_dir: Path, run: Mapping[str, Any]) -> bool:
+    """父 run 的失败动作属于 VC-5 候选采集续跑链（采集／续跑预览／补跑），其失败进入 recovery_required。"""
+
+    diagnostic = run.get("action_diagnostic")
+    if run.get("failure_class") != "execution-failure" or not isinstance(diagnostic, Mapping):
+        return False
+    manifest_path = Path(run_dir) / "campaign-run-manifest.json"
+    if manifest_path.is_symlink() or not manifest_path.is_file():
+        return False
+    inner = _read_json(manifest_path, "campaign-run 清单").get("manifest")
+    return (
+        isinstance(inner, Mapping)
+        and supervisor.candidate_capture_recovery_action(inner, str(diagnostic.get("action_id"))) is not None
+    )
 
 
 def _failed_action_operation(inner: Any, action_id: str) -> str | None:
@@ -3043,6 +3225,11 @@ def reconcile_supervisor_run(
         raise ReconcilerError("reconcile-supervisor-run 只用于 0.154.0 起的完整 VC 链 Campaign")
     observed = now or _utc_now()
     resolved_run_dir = Path(run_dir).resolve(strict=True)
+    # 身份前置先于孤儿 run 终态化与失败回填：未登记工具演进时零写入拒绝。
+    current = _current_identity()
+    identity = _identity_facts(campaign_dir, manifest, current)
+    ledger_dir = _campaign_ledger_dir(manifest)
+    _require_registered_tool_identity(identity, _ledger_facts(ledger_dir, now=observed))
     _finalize_orphaned_prepared_run(resolved_run_dir)
     orphan_backfill = _backfill_orphaned_action_failure(resolved_run_dir, campaign_dir, manifest)
     run = _run_facts(resolved_run_dir, campaign_dir, manifest)
@@ -3051,14 +3238,12 @@ def reconcile_supervisor_run(
         if isinstance(action_diagnostic, dict) and isinstance(action_diagnostic.get("post_run_tooling"), dict):
             action_diagnostic["post_run_tooling"]["backfilled"] = bool(orphan_backfill["backfilled"])
         run["orphan_facts"] = orphan_backfill["orphan_facts"]
-    current = _current_identity()
-    identity = _identity_facts(campaign_dir, manifest, current)
-    ledger_dir = _campaign_ledger_dir(manifest)
     ledger = _ledger_facts(ledger_dir, now=observed)
     if (
         ledger.get("status") == "recovery_required"
         and run.get("failure_class") not in supervisor.RECOVERABLE_ACTION_FAILURE_CLASSES
         and run.get("failure_class") not in supervisor.RECOVERABLE_PARENT_FAILURE_CLASSES
+        and not _candidate_capture_recovery_run(resolved_run_dir, run)
     ):
         raise ReconcilerError(
             "Campaign 账本处于 recovery_required，但父动作分类不可恢复"
@@ -3424,6 +3609,7 @@ def reconcile_staging_abort(
     identity = _identity_facts(campaign_dir, manifest, current)
     ledger_dir = _campaign_ledger_dir(manifest)
     ledger = _ledger_facts(ledger_dir, now=observed)
+    _require_registered_tool_identity(identity, ledger)
     project_root = _project_root(campaign_dir)
     plan, head = _project_facts(project_root)
     campaign_deadline = codex_upgrade._campaign_plan_deadline(campaign_dir)

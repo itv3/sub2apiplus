@@ -25,7 +25,7 @@ from tools.official_client_capture import codex_upgrade
 from tools.official_client_capture import codex_upgrade_reconciler as reconciler
 
 # resume 失败重跑代码块（从 rerun_failed 分支到承接集合比对之前）的摘要。
-RERUN_BLOCK_SHA256 = "95223d61cb7c77a77f9157708d11e8a61c57195fa5ade2fdc813213e5a5d195b"
+RERUN_BLOCK_SHA256 = "c9cfb143eed431989c93a3d7277a20399515eb3e67d11e948169cc183254caeb"
 # resume 与复算共同按序调用的内部函数（候选专用的 runtime successor 只在 resume 里）。
 SHARED_SEQUENCE = (
     "_latest_failed_attempt_for_identity(",
@@ -66,12 +66,12 @@ class ResumeMirrorPinTests(unittest.TestCase):
         digest = hashlib.sha256(_resume_rerun_block().encode("utf-8")).hexdigest()
         self.assertEqual(
             digest, RERUN_BLOCK_SHA256,
-            "resume 失败重跑判定已变化：先同步 codex_upgrade.official_recovery_reuse_check，再更新本摘要",
+            "resume 失败重跑判定已变化：先同步 codex_upgrade.recovery_reuse_check，再更新本摘要",
         )
 
     def test_check_calls_same_helpers_in_same_order(self) -> None:
         block = _resume_rerun_block()
-        check = inspect.getsource(codex_upgrade.official_recovery_reuse_check)
+        check = inspect.getsource(codex_upgrade.recovery_reuse_check)
         for label, text in (("resume", block), ("复算", check)):
             with self.subTest(side=label):
                 positions = _positions(text, SHARED_SEQUENCE)
@@ -80,7 +80,7 @@ class ResumeMirrorPinTests(unittest.TestCase):
 
     def test_prior_results_keyword_sets_match(self) -> None:
         block = _resume_rerun_block()
-        check = inspect.getsource(codex_upgrade.official_recovery_reuse_check)
+        check = inspect.getsource(codex_upgrade.recovery_reuse_check)
         resume_keywords = _call_keywords(block, "_prior_complete_results(")
         check_keywords = _call_keywords(check, "_prior_complete_results(")
         # 跨 Campaign 来源与候选 runtime successor 专用参数只在 resume 里（official 默认路径取默认值）。
@@ -194,28 +194,64 @@ class OfficialRecoveryReuseCheckTests(unittest.TestCase):
         self.assertEqual(self.patches["_phase_recovery_exact_affected_job_ids"].call_args.kwargs["explicit_affected_job_ids"], ["c"])
 
 
+    def test_candidate_capture_recheck_uses_source_attempt_identity(self) -> None:
+        """修好接着跑：VC-5 候选采集续跑的预览同样按 resume 同一判定复算；作业按源 attempt 的候选身份展开。"""
+
+        identity = {"image_reference": "repo@sha256:" + "1" * 64, "profile_id": "p", "profile_digest": "2" * 64, "build_id": "b",
+                    "deployed_version": "0.157.0", "image_id": "sha256:" + "1" * 64, "source_tree_sha256": "3" * 64,
+                    "candidate_purpose": "production_replacement"}
+        candidate_root = self.campaign_dir / "candidates" / "cand" / "attempts" / self.source_root.name
+        with mock.patch.object(codex_upgrade, "_apply_candidate_runtime_override", mock.Mock(side_effect=lambda _c, m, _cid: m)), \
+                mock.patch.object(codex_upgrade, "_stage_path", mock.Mock(return_value=("capture-candidate", self.campaign_dir / "missing.json"))), \
+                mock.patch.object(codex_upgrade, "_load_capture_attempt", mock.Mock(return_value=(candidate_root, {"identity": identity}))), \
+                mock.patch.object(codex_upgrade, "_latest_failed_attempt_for_identity", mock.Mock(return_value=(candidate_root, {"status": "failed"}))) as latest:
+            result = codex_upgrade.recovery_reuse_check(
+                self.campaign_dir, phase="candidate", candidate_id="cand", source_attempt_id=self.source_root.name,
+                reuse_job_ids=["b", "a"], execute_job_ids=["c"],
+            )
+        self.assertEqual((result["status"], result["phase"], result["candidate_id"]), ("consistent", "candidate", "cand"))
+        self.assertEqual(latest.call_args.kwargs, {"phase": "candidate", "candidate_id": "cand", "identity": identity})
+        job_kwargs = self.patches["_campaign_jobs"].call_args.kwargs
+        self.assertEqual((job_kwargs["candidate_id"], job_kwargs["build_id"], job_kwargs["candidate_image_id"]), ("cand", "b", identity["image_id"]))
+        prior = self.patches["_prior_complete_results"].call_args
+        self.assertEqual(prior.args[1], codex_upgrade._capture_attempt_relative("candidate", "cand"))
+        self.assertEqual((prior.kwargs["phase"], prior.kwargs["candidate_id"], prior.kwargs["identity"]), ("candidate", "cand", identity))
+        # 候选已封存或存在待封存 attempt：与 resume 一样拒绝。
+        with mock.patch.object(codex_upgrade, "_apply_candidate_runtime_override", mock.Mock(side_effect=lambda _c, m, _cid: m)), \
+                mock.patch.object(codex_upgrade, "_stage_path", mock.Mock(return_value=("capture-candidate", self.source_root))), \
+                self.assertRaisesRegex(codex_upgrade.ConfigurationError, "已封存"):
+            codex_upgrade.recovery_reuse_check(
+                self.campaign_dir, phase="candidate", candidate_id="cand", source_attempt_id=self.source_root.name,
+                reuse_job_ids=["a", "b"], execute_job_ids=["c"],
+            )
+
+
 class ReconcilerWiringTests(unittest.TestCase):
     PREVIEW = {"source_attempt_receipt_exists": True, "source_attempt_id": "att", "reuse_job_ids": ["a"], "execute_job_ids": ["b"]}
 
     def test_scope_of_recheck(self) -> None:
-        with mock.patch.object(codex_upgrade, "official_recovery_reuse_check") as check:
+        with mock.patch.object(codex_upgrade, "recovery_reuse_check") as check:
             self.assertEqual(reconciler._resume_reuse_check(Path("/c"), phase="candidate", recovery_revision="ar1", preview=self.PREVIEW)["status"], "not_applicable")
             segment = reconciler._resume_reuse_check(Path("/c"), phase="official", recovery_revision="ar1", preview=self.PREVIEW)
             self.assertEqual(segment["status"], "not_applicable")
             self.assertIn("恢复段", segment["reason"])
-            self.assertEqual(reconciler._resume_reuse_check(Path("/c"), phase="candidate", recovery_revision=None, preview=self.PREVIEW)["status"], "not_applicable")
             orphan = {**self.PREVIEW, "source_attempt_receipt_exists": False}
             self.assertEqual(reconciler._resume_reuse_check(Path("/c"), phase="official", recovery_revision=None, preview=orphan)["status"], "not_applicable")
             check.assert_not_called()
             check.return_value = {"status": "consistent"}
             self.assertEqual(reconciler._resume_reuse_check(Path("/c"), phase="official", recovery_revision=None, preview=self.PREVIEW), {"status": "consistent"})
-            check.assert_called_once_with(Path("/c"), source_attempt_id="att", reuse_job_ids=["a"], execute_job_ids=["b"])
+            check.assert_called_once_with(Path("/c"), phase="official", candidate_id=None, source_attempt_id="att", reuse_job_ids=["a"], execute_job_ids=["b"])
+            # 修好接着跑：候选采集续跑（VC-5 非段模式）同样复算，候选 ID 取自预览。
+            check.reset_mock()
+            candidate_preview = {**self.PREVIEW, "candidate_id": "cand"}
+            self.assertEqual(reconciler._resume_reuse_check(Path("/c"), phase="candidate", recovery_revision=None, preview=candidate_preview), {"status": "consistent"})
+            check.assert_called_once_with(Path("/c"), phase="candidate", candidate_id="cand", source_attempt_id="att", reuse_job_ids=["a"], execute_job_ids=["b"])
 
     def test_inconsistency_is_reported_not_raised(self) -> None:
-        with mock.patch.object(codex_upgrade, "official_recovery_reuse_check", side_effect=codex_upgrade.ConfigurationError("无法安全复用")):
+        with mock.patch.object(codex_upgrade, "recovery_reuse_check", side_effect=codex_upgrade.ConfigurationError("无法安全复用")):
             result = reconciler._resume_reuse_check(Path("/c"), phase="official", recovery_revision=None, preview=self.PREVIEW)
         self.assertEqual(result, {"status": "inconsistent", "reason": "无法安全复用"})
-        with mock.patch.object(codex_upgrade, "official_recovery_reuse_check", side_effect=KeyError("official_identity")), \
+        with mock.patch.object(codex_upgrade, "recovery_reuse_check", side_effect=KeyError("official_identity")), \
                 self.assertRaises(KeyError):
             reconciler._resume_reuse_check(Path("/c"), phase="official", recovery_revision=None, preview=self.PREVIEW)
 

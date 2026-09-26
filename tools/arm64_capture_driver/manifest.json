@@ -1,6 +1,6 @@
 {
   "schema_version": "arm64-capture-driver-manifest/v1",
-  "file_count": 50,
+  "file_count": 52,
   "files": [
     {
       "path": "README.md",
@@ -85,6 +85,12 @@
       "sha256": "827ac1589048933824c35c95490eff64a6dd3f046d9d9fb5182ac8bf48bb2a68",
       "mode": "0700",
       "bytes": 6863
+    },
+    {
+      "path": "driver/gen_vc5_recovery_plans.py",
+      "sha256": "7652e45b40354ebf4e8719866d2b2d6f5741d97fad10ea3daf3e6d730907f56c",
+      "mode": "0700",
+      "bytes": 3608
     },
     {
       "path": "driver/guard.sh",
@@ -178,9 +184,9 @@
     },
     {
       "path": "driver/vc-batch.sh",
-      "sha256": "b033f1ad8a6b500b64efbf1cb6af3a1f2247b92f550507349762607711b967af",
+      "sha256": "8b3f715fe82e117add6774169b44f84965eb492e1f527a8a93455d077acbf8a0",
       "mode": "0700",
-      "bytes": 2256
+      "bytes": 2636
     },
     {
       "path": "driver/vc23.sh",
@@ -232,9 +238,9 @@
     },
     {
       "path": "driver/vc5-all.sh",
-      "sha256": "49cc042972363c427a9a778a033ce303cfc42a9b363c8a07105a44bfc8174c9a",
+      "sha256": "38f522eac43562ad5e5243df71066cd5be8439cd0d3513ef2d1413025a99999e",
       "mode": "0700",
-      "bytes": 4234
+      "bytes": 4251
     },
     {
       "path": "driver/vc5-canonical2.sh",
@@ -262,9 +268,15 @@
     },
     {
       "path": "driver/vc5-precheck.sh",
-      "sha256": "ed14ad8c7dff547997e7853ac34b13a0a981f763f82bf53b27e97e5f35250891",
+      "sha256": "b8086195537e4a18e6e5ab12db9b8828b841c5e3ab03e6ac2b3ca82016781bf5",
       "mode": "0700",
-      "bytes": 2682
+      "bytes": 2733
+    },
+    {
+      "path": "driver/vc5-recover.sh",
+      "sha256": "4cd27575a11c89d9d743b9dbc5aa923fe899d94b0febd446430eda16215f3eb7",
+      "mode": "0700",
+      "bytes": 4059
     },
     {
       "path": "driver/vc5-seal-receipts.sh",
@@ -303,5 +315,5 @@
       "bytes": 21976
     }
   ],
-  "manifest_sha256": "2ad059da600fb8f73260719de084d5422a26998b507d351d883fb95010d27323"
+  "manifest_sha256": "2cbc7a4dc4248b17032bf14153ea3edbc7d3acd3e5cf102371fe0369af3efc76"
 }

@@ -528,6 +528,45 @@ class CandidateRevisionIntegrationTests(_ChainMixin, unittest.TestCase):
         target.chmod(0o600)
         return target
 
+    def test_vc5_capture_review_reconciles_attempt_and_authorizes_same_revision_recovery(self) -> None:
+        """修好接着跑：VC-5 候选采集预约后失败进入候选审核，对账登记 VC-5 attempt 事件，批准恢复预览并授权后
+        在同一 revision 重开 VC-5——不作废候选、不停线（2026-09-26 c01570 194249z 批次 9 的形态）。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture = self._fixture(root)
+            campaign_dir = Path(str(fixture["campaign_dir"]))
+            self._advance_to_vc3(fixture, root)
+            self._open(fixture, R1, initial=True)
+            result, returncode = self._dispatch(fixture, root, "VC-4", 4, tag="vc4-r1")
+            self.assertEqual(returncode, 0, result)
+            plan = self._reservation_fail_plan(root, campaign_dir, tag="vc5-r1-reservation", action_id="vc-5-capture-a", failed_job=False)
+            result, returncode = codex_upgrade.compile_and_run_vc_batch(self._arguments(fixture, "VC-5", 5, plan))
+            self.assertEqual((returncode, result["campaign_run"]["timing_closeout"]["ledger_status"]), (1, "candidate_review_required"), result)
+            attempt = sorted(path.name for path in (campaign_dir / "candidates" / R1 / "attempts").iterdir())[0]
+            outcome = reconciler.reconcile_attempt(campaign_dir, attempt)
+            self.assertEqual(outcome["status"], "recoverable", outcome)
+            self.assertEqual(
+                [item["event_id"] for item in outcome["ledger_events"]],
+                [f"reconcile-attempt-started-{attempt}", f"reconcile-attempt-failed-{attempt}"],
+            )
+            self.assertEqual(self._summary(fixture)["status"], "candidate_review_required")
+            preview = outcome["recovery_preview"]
+            self.assertEqual((preview["phase"], preview["candidate_id"], preview["reuse_job_ids"]), ("candidate", R1, []))
+            approved = reconciler.reconcile_attempt(campaign_dir, attempt, approve_recovery_sha256=preview["review_sha256"])
+            self.assertEqual(approved["recovery_approval"]["preview_index"], preview["index"])
+            authorized = reconciler.authorize_recovery_preview(campaign_dir, attempt, Path(approved["recovery_preview_path"]))
+            self.assertEqual(authorized["status"], "authorized")
+            self.assertTrue(authorized["timing_recovery_event"]["appended"])
+            summary = self._summary(fixture)
+            self.assertEqual((summary["status"], summary["active_phase"], summary["current_revision"]), ("active", "VC-5", 1))
+            # 幂等：再次授权不重复写事件。
+            again = reconciler.authorize_recovery_preview(campaign_dir, attempt, Path(approved["recovery_preview_path"]))
+            self.assertFalse(again["timing_recovery_event"]["appended"])
+            events = [event for event, _raw in timing_ledger._load_events(Path(str(fixture["timing_ledger"])))]
+            self.assertEqual(events[-1]["event_type"], "recovery_authorized")
+            self.assertEqual(events[-1]["phase"], "VC-5")
+
     def test_reservation_failure_reconciles_by_attempt_then_supersedes_and_continues_on_r2(self) -> None:
         """审核阻断（reservation 分流）：候选 Job 产生 reservation 后失败 → reconcile-attempt → invalidate → r2 → VC-4 续跑。"""
 
@@ -1006,11 +1045,14 @@ class CandidateRevisionUnitTests(_ChainMixin, unittest.TestCase):
                     with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "deadline 已到"):
                         codex_upgrade.invalidate_candidate(self._invalidate_arguments(fixture, R1, "apply", approve=str(preview["review_sha256"]), source=source))
                 self.assertFalse((campaign_dir / "candidates" / R1 / "invalidation.json").exists())
-                # 账本 recovery_required／stopped 时 preview 拒绝并给出提示。
+                # 修好接着跑：候选级阶段（VC-5）的 recovery_required 下对账后判为候选源码问题，preview 放行；
+                # stopped 仍拒绝并给出提示。
                 timing_ledger.append_event(ledger_dir, event_id="s5", phase="VC-5", event_type="stage_started", next_action="x")
                 timing_ledger.append_event(ledger_dir, event_id="pause", phase="VC-5", event_type="recovery_required", root_cause_id="rc-fixture", live_request_count=0, next_action="reconcile")
-                with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "recovery_required"):
-                    codex_upgrade.invalidate_candidate(self._invalidate_arguments(fixture, R1, "preview", source=source))
+                self.assertEqual(
+                    codex_upgrade.invalidate_candidate(self._invalidate_arguments(fixture, R1, "preview", source=source))["status"],
+                    "preview",
+                )
                 timing_ledger.append_event(ledger_dir, event_id="abandon", phase="VC-5", event_type="stage_abandoned", root_cause_id="rc-fixture", next_action="stop")
                 timing_ledger.append_event(ledger_dir, event_id="stop", phase="VC-5", event_type="stop_the_line", root_cause_id="rc-fixture", next_action="stop")
                 with self.assertRaisesRegex(codex_upgrade.ConfigurationError, "stopped"):
@@ -1019,6 +1061,51 @@ class CandidateRevisionUnitTests(_ChainMixin, unittest.TestCase):
     # ------------------------------------------------------------------
     # T2.7：候选级动作失败三分支
     # ------------------------------------------------------------------
+
+    def test_vc5_capture_failure_enters_recovery_required_and_invalidation_stays_available(self) -> None:
+        """修好接着跑：VC-5 候选采集（capture-candidate run）动作失败直接进入 recovery_required（阶段保持 active），
+        不再进候选审核；判为候选源码问题时 invalidate-candidate 在 recovery_required 下仍可预览。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            fixture, campaign_dir, manifest = self._r1_ready(root)
+            ledger_dir = Path(str(fixture["timing_ledger"]))
+            plan = codex_upgrade._vc_campaign_plan(campaign_dir, manifest)
+            identity = [
+                "--candidate-id", R1, "--build-receipt", str(campaign_dir / "candidates" / R1 / "build-receipt.json"),
+                "--runtime-image", "repo@sha256:" + "1" * 64, "--candidate-image-id", "sha256:" + "1" * 64,
+                "--candidate-source", str(root / "source"), "--build-id", "b1", "--deployed-version", "0.154.0",
+                "--profile-id", "p1", "--profile-digest", "2" * 64, "--candidate-purpose", "production_replacement",
+            ]
+            command = [sys.executable, str(Path(codex_upgrade.__file__).resolve()), "capture-candidate", "run",
+                       "--campaign-dir", str(campaign_dir), *identity, "--max-wall-seconds", "21600", "--acknowledge-live-requests"]
+            batch = artifacts.build_vc_batch(
+                campaign_plan=plan,
+                phase="VC-5",
+                sequence=5,
+                predecessor_checkpoint={"path": "control/vc/vc-4-checkpoint.json", "sha256": "5" * 64, "phase": "VC-4", "checkpoint_sha256": "6" * 64},
+                execute_item_ids=["candidate-run"],
+                reuse_item_ids=[],
+                actions=[{"action_id": "candidate-run", "operation": "VC-5:capture-candidate-run", "timeout_seconds": 5.0, "command": command, "item_ids": ["candidate-run"]}],
+                compiled_at_utc="2026-09-14T01:00:00Z",
+                must_start_by_utc=str(plan["original_deadline_at_utc"]),
+                candidate_revision=1,
+                candidate_id=R1,
+                evaluator_digests=EVALUATOR_DIGESTS,
+            )
+            run_manifest = codex_upgrade._vc_run_manifest_from_batch(batch, batch_model="staging")
+            timing_ledger.append_event(ledger_dir, event_id="s5", phase="VC-5", event_type="stage_started", next_action="x")
+            closed = supervisor._close_failed_campaign_timing_ledger(campaign_dir, run_manifest, failed_action_id="candidate-run", failure_class="execution-failure")
+            self.assertEqual((closed["ledger_status"], closed["idempotent"]), ("recovery_required", False))
+            self.assertIn("VC-5 候选采集续跑", closed["next_action"])
+            summary = self._summary(fixture)
+            self.assertEqual((summary["status"], summary["active_phase"]), ("recovery_required", "VC-5"))
+            replay = supervisor._close_failed_campaign_timing_ledger(campaign_dir, run_manifest, failed_action_id="candidate-run", failure_class="execution-failure")
+            self.assertEqual((replay["ledger_status"], replay["idempotent"]), ("recovery_required", True))
+            source = self._candidate_source(root, "r1")
+            with mock.patch.object(codex_upgrade, "_git_commit", return_value="a" * 40):
+                preview = codex_upgrade.invalidate_candidate(self._invalidate_arguments(fixture, R1, "preview", source=source))
+            self.assertEqual(preview["status"], "preview")
 
     def test_candidate_failure_three_branches_and_campaign_level_still_stops(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -164,11 +164,29 @@ def _load_transitions(campaign_dir: Path) -> list[dict[str, Any]]:
 
 
 def effective_wire_identity(campaign_dir: Path, manifest: Mapping[str, Any]) -> dict[str, Any]:
-    """返回当前有效 wire 身份、来源与是否存在未 final 的 intent；v1 Campaign 返回 None 字段。"""
+    """返回当前有效 wire 身份、来源与是否存在未 final 的 intent；v1 Campaign 返回 None 字段。
+
+    Campaign 登记过工具演进时，有效 wire 身份取最新演进的 to 身份（两条链不能并存）。
+    """
 
     base = _v2_identity(manifest)
     if base is None:
         return {"policy_version": 1, "wire_producer_sha256": None, "policy_sha256": None, "source": "v1", "pending_intent": None, "chain_length": 0}
+    evolutions = load_evolutions(campaign_dir, manifest)
+    if evolutions:
+        if _load_transitions(campaign_dir):
+            raise WireTransitionError("wire transition 链与工具演进链不能并存")
+        last = evolutions[-1]
+        return {
+            "policy_version": base["policy_version"],
+            "wire_producer_sha256": str(last["to_summary"]["wire_producer_sha256"]),
+            "policy_sha256": base["policy_sha256"],
+            "evidence_semantics_sha256": str(last["to_summary"]["evidence_semantics_sha256"]),
+            "source": f"evolution-{int(last['index']):02d}",
+            "pending_intent": None,
+            "chain_length": 0,
+            "evolution_index": int(last["index"]),
+        }
     chain = _load_transitions(campaign_dir)
     wire = base["wire_producer_sha256"]
     source = "manifest"
@@ -207,6 +225,8 @@ def build_intent_preview(
     effective = effective_wire_identity(campaign_dir, manifest)
     if effective["policy_version"] == 1:
         raise WireTransitionError("v1 Campaign 没有 wire 身份，不能签 wire transition")
+    if effective.get("evolution_index"):
+        raise WireTransitionError("Campaign 已登记工具演进，后续工具变化只能继续登记演进，不能再签 wire transition")
     if effective["pending_intent"] is not None:
         raise WireTransitionError(f"intent-{effective['pending_intent']['index']:02d} 尚未 final，不能再签新 intent")
     if current_identity.get("policy_sha256") != effective["policy_sha256"]:
@@ -311,6 +331,262 @@ def build_final(campaign_dir: Path, manifest: Mapping[str, Any], attempt: Mappin
     payload["receipt_sha256"] = _fingerprint(payload)
     path = campaign_dir / TRANSITIONS_DIR / f"final-{pending['index']:02d}.json"
     _write_once(path, payload)
+    return path
+
+
+# ---------------------------------------------------------------------------
+# 工具演进链（修好接着跑）
+# ---------------------------------------------------------------------------
+#
+# 升级途中修好工具（任何层）并受监督部署后，操作员在原 Campaign 登记一次工具演进：
+# 绑定修复提交与部署收据，冻结演进前后的完整工具身份，并算出受修改影响的作业。
+# 之后所有身份门禁对照「最新演进的 to 身份」（有效身份）；续跑只重跑失败作业与受影响作业，
+# 其余已完成结果只读复用；seal 逐结果核对作业不在其生产序号之后任何演进的受影响集合内。
+# 演进链只增不改：evolution-NN.json 写一次、自摘要、previous 成链，起点衔接 plan 身份。
+# 影响范围由编排器计算（需要作业定义），本模块只负责存储、校验与按序号查询。
+
+EVOLUTION_SCHEMA = "tool-evolution/v1"
+EVOLUTION_DIR = Path("control") / "tool-evolution"
+EVOLUTION_RE = re.compile(r"^evolution-(\d{2})\.json$")
+EVOLUTION_MAX_INDEX = 99
+
+
+def identity_summary(identity: Mapping[str, Any]) -> dict[str, Any]:
+    """演进链衔接比较用的身份摘要：五个摘要、策略版本与两个编排器闭包摘要。"""
+
+    closures = identity.get("orchestrator_closures")
+    closures = closures if isinstance(closures, Mapping) else {}
+
+    def closure(name: str) -> Any:
+        value = closures.get(name)
+        return value.get("closure_sha256") if isinstance(value, Mapping) else None
+
+    return {
+        "files_sha256": identity.get("files_sha256"),
+        "wire_producer_sha256": identity.get("wire_producer_sha256"),
+        "evidence_semantics_sha256": identity.get("evidence_semantics_sha256"),
+        "control_sha256": identity.get("control_sha256"),
+        "policy_sha256": identity.get("policy_sha256"),
+        "policy_version": identity.get("policy_version"),
+        "wire_closure_sha256": closure("wire_producer"),
+        "evidence_closure_sha256": closure("evidence_semantics"),
+    }
+
+
+def _campaign_manifest_file_sha256(campaign_dir: Path) -> str:
+    path = campaign_dir / "campaign.json"
+    if path.is_symlink() or not path.is_file():
+        raise WireTransitionError("Campaign 清单不是可信普通文件")
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def load_evolutions(campaign_dir: Path, manifest: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """读取并校验工具演进链；没有目录返回空链。
+
+    校验：文件名与编号连续、schema、自摘要、Campaign 身份与清单字节摘要、previous 成链、
+    from 摘要等于上一有效身份（首个等于 plan）、to 摘要由 to 完整身份重算、策略摘要不变。
+    """
+
+    root = Path(campaign_dir) / EVOLUTION_DIR
+    if not root.exists() and not root.is_symlink():
+        return []
+    if root.is_symlink() or not root.is_dir():
+        raise WireTransitionError("tool-evolution 目录不可信")
+    frozen = manifest.get("tool_identity")
+    if not isinstance(frozen, Mapping) or _v2_identity(manifest) is None:
+        raise WireTransitionError("只有策略 v2 身份的 Campaign 才能登记工具演进")
+    found: dict[int, dict[str, Any]] = {}
+    for child in sorted(root.iterdir()):
+        match = EVOLUTION_RE.fullmatch(child.name)
+        if not match:
+            raise WireTransitionError(f"tool-evolution 含非法文件：{child.name}")
+        payload = _read_json(child, f"工具演进 {child.name}")
+        index = int(match.group(1))
+        if payload.get("schema_version") != EVOLUTION_SCHEMA or payload.get("index") != index:
+            raise WireTransitionError(f"工具演进 {child.name} schema 或编号非法")
+        _self_check(payload, f"工具演进 {child.name}")
+        found[index] = payload
+    manifest_sha256 = _campaign_manifest_file_sha256(Path(campaign_dir))
+    chain: list[dict[str, Any]] = []
+    previous_sha: str | None = None
+    previous_summary = identity_summary(frozen)
+    for index in range(1, max(found, default=0) + 1):
+        payload = found.get(index)
+        if payload is None:
+            raise WireTransitionError(f"工具演进链缺少 evolution-{index:02d}")
+        _validate_evolution_payload(
+            payload,
+            manifest,
+            manifest_sha256=manifest_sha256,
+            previous_sha=previous_sha,
+            previous_summary=previous_summary,
+            label=f"evolution-{index:02d}",
+        )
+        previous_sha = str(payload["receipt_sha256"])
+        previous_summary = dict(payload["to_summary"])
+        chain.append(payload)
+    return chain
+
+
+def _validate_evolution_payload(
+    payload: Mapping[str, Any],
+    manifest: Mapping[str, Any],
+    *,
+    manifest_sha256: str,
+    previous_sha: str | None,
+    previous_summary: Mapping[str, Any],
+    label: str,
+) -> None:
+    """单条演进收据的衔接与形态校验（读链与写入前共用同一口径）。"""
+
+    frozen = manifest["tool_identity"]
+    if payload.get("campaign_id") != manifest.get("campaign_id"):
+        raise WireTransitionError(f"{label} 不属于本 Campaign")
+    if payload.get("campaign_manifest_sha256") != manifest_sha256:
+        raise WireTransitionError(f"{label} 绑定的 Campaign 清单摘要不一致")
+    if payload.get("previous_evolution_sha256") != previous_sha:
+        raise WireTransitionError(f"{label} 未衔接上一演进")
+    if payload.get("from_summary") != dict(previous_summary):
+        raise WireTransitionError(f"{label} 的起点不是上一有效工具身份")
+    to_identity = payload.get("to_identity")
+    if not isinstance(to_identity, Mapping) or not isinstance(to_identity.get("entries"), list):
+        raise WireTransitionError(f"{label} 缺少完整 to 工具身份")
+    if payload.get("to_summary") != identity_summary(to_identity):
+        raise WireTransitionError(f"{label} 的 to 摘要与完整身份不一致")
+    if payload.get("to_summary") == dict(previous_summary):
+        raise WireTransitionError(f"{label} 的 to 身份与起点相同，没有需要登记的演进")
+    if to_identity.get("policy_sha256") != frozen.get("policy_sha256"):
+        raise WireTransitionError(f"{label} 改变了工具身份策略；策略变化不能用演进承接")
+    if _fingerprint({"entries": list(to_identity["entries"])}) != to_identity.get("files_sha256"):
+        raise WireTransitionError(f"{label} 的 to 文件清单与整树摘要不一致")
+    impact = payload.get("impact")
+    changes = payload.get("changes")
+    if (
+        not isinstance(impact, Mapping)
+        or not isinstance(impact.get("official"), Mapping)
+        or not isinstance(impact.get("candidates"), Mapping)
+        or not isinstance(changes, Mapping)
+        or not isinstance(changes.get("paths_by_layer"), Mapping)
+    ):
+        raise WireTransitionError(f"{label} 的影响或变化记录形态非法")
+
+
+def effective_tool_identity(campaign_dir: Path, manifest: Mapping[str, Any]) -> dict[str, Any]:
+    """当前有效工具身份：最新演进的 to 完整身份；没有演进时是 plan 冻结身份。"""
+
+    chain = load_evolutions(campaign_dir, manifest)
+    if chain and _load_transitions(campaign_dir):
+        raise WireTransitionError("wire transition 链与工具演进链不能并存")
+    if not chain:
+        identity = dict(manifest["tool_identity"])
+        return {"index": 0, "receipt_sha256": None, "identity": identity, "summary": identity_summary(identity)}
+    last = chain[-1]
+    return {
+        "index": int(last["index"]),
+        "receipt_sha256": str(last["receipt_sha256"]),
+        "identity": dict(last["to_identity"]),
+        "summary": dict(last["to_summary"]),
+    }
+
+
+def evolution_identity_at(chain: list[Mapping[str, Any]], manifest: Mapping[str, Any], index: int) -> dict[str, Any]:
+    """生产序号 index 对应的完整工具身份：0 为 plan，k 为第 k 次演进的 to 身份。"""
+
+    if index == 0:
+        return dict(manifest["tool_identity"])
+    if index < 0 or index > len(chain):
+        raise WireTransitionError(f"生产序号 {index} 超出工具演进链长度 {len(chain)}")
+    return dict(chain[index - 1]["to_identity"])
+
+
+def evolution_impact_since(
+    chain: list[Mapping[str, Any]],
+    index: int,
+    *,
+    phase: str,
+    candidate_id: str | None,
+) -> dict[str, Any]:
+    """生产序号 index 之后（不含）全部演进对某阶段作业的累计影响。
+
+    返回受影响作业、全部变化路径与参与的演进编号。候选在某次演进里没有影响记录即失败关闭：
+    有 attempt 的活跃候选在演进登记时一定被记录，缺记录说明链与现场不一致。
+    """
+
+    if index < 0 or index > len(chain):
+        raise WireTransitionError(f"生产序号 {index} 超出工具演进链长度 {len(chain)}")
+    affected: set[str] = set()
+    paths: set[str] = set()
+    indexes: list[int] = []
+    for evolution in chain[index:]:
+        impact = evolution["impact"]
+        if phase == "official":
+            part = impact["official"]
+        else:
+            part = impact["candidates"].get(str(candidate_id))
+            if not isinstance(part, Mapping):
+                raise WireTransitionError(
+                    f"evolution-{int(evolution['index']):02d} 没有候选 {candidate_id} 的影响记录"
+                )
+        values = part.get("affected_job_ids")
+        if not isinstance(values, list) or any(not isinstance(item, str) for item in values):
+            raise WireTransitionError(f"evolution-{int(evolution['index']):02d} 的受影响作业非法")
+        affected.update(values)
+        for layer_paths in evolution["changes"].get("paths_by_layer", {}).values():
+            paths.update(str(path) for path in layer_paths)
+        indexes.append(int(evolution["index"]))
+    return {"affected_job_ids": sorted(affected), "changed_paths": sorted(paths), "evolution_indexes": indexes}
+
+
+def reservation_production_index(reservation: Mapping[str, Any], chain: list[Mapping[str, Any]]) -> int:
+    """attempt 预约记录的生产序号；旧预约没有该字段即 0（plan 身份下产出）。"""
+
+    binding = reservation.get("tool_evolution")
+    if binding is None:
+        return 0
+    if not isinstance(binding, Mapping) or set(binding) != {"index", "receipt_sha256"}:
+        raise WireTransitionError("预约的 tool_evolution 字段形态非法")
+    index = binding.get("index")
+    if isinstance(index, bool) or not isinstance(index, int) or index < 1 or index > len(chain):
+        raise WireTransitionError("预约的工具演进序号超出演进链")
+    if chain[index - 1].get("receipt_sha256") != binding.get("receipt_sha256"):
+        raise WireTransitionError("预约绑定的工具演进收据与演进链不一致")
+    return index
+
+
+def reservation_binding(effective: Mapping[str, Any]) -> dict[str, Any] | None:
+    """新预约写入的生产序号绑定；没有演进时不写字段，保持旧预约字节不变。"""
+
+    if not effective.get("index"):
+        return None
+    return {"index": int(effective["index"]), "receipt_sha256": str(effective["receipt_sha256"])}
+
+
+def write_evolution(campaign_dir: Path, manifest: Mapping[str, Any], payload: Mapping[str, Any]) -> Path:
+    """写入下一个演进收据（写一次）；编号、previous 与 from 摘要必须衔接现有链。"""
+
+    chain = load_evolutions(campaign_dir, manifest)
+    if _load_transitions(campaign_dir):
+        raise WireTransitionError("Campaign 已有 wire transition 链，不能再登记工具演进")
+    index = len(chain) + 1
+    if index > EVOLUTION_MAX_INDEX:
+        raise WireTransitionError("工具演进次数已达上限")
+    expected_previous = chain[-1]["receipt_sha256"] if chain else None
+    expected_from = dict(chain[-1]["to_summary"]) if chain else identity_summary(manifest["tool_identity"])
+    if payload.get("schema_version") != EVOLUTION_SCHEMA or payload.get("index") != index:
+        raise WireTransitionError("工具演进收据的 schema 或编号与现有链不衔接；重新生成预览")
+    _self_check(payload, "工具演进收据")
+    _validate_evolution_payload(
+        payload,
+        manifest,
+        manifest_sha256=_campaign_manifest_file_sha256(Path(campaign_dir)),
+        previous_sha=expected_previous,
+        previous_summary=expected_from,
+        label=f"evolution-{index:02d}",
+    )
+    path = Path(campaign_dir) / EVOLUTION_DIR / f"evolution-{index:02d}.json"
+    _write_once(path, payload)
+    # 写后立即整链重放，任何不一致都在返回前暴露。
+    load_evolutions(campaign_dir, manifest)
     return path
 
 
