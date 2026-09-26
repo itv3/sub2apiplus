@@ -1413,6 +1413,8 @@ class Relay:
         self._stop_requested = False
         self._stop_event: asyncio.Event | None = None
         self._active_client_writers: set[asyncio.StreamWriter] = set()
+        # 每条连接的处理任务由中继自己持有强引用，直到任务结束（见 _retain_handler_task）。
+        self._handler_tasks: set[asyncio.Task] = set()
         # CONN-001 受控 retry 探针的 attempt 计数必须跨 TCP 连接共享：
         # keepalive-500 预期 attempt 1/2 落在同一连接；disconnect 预期 attempt 1
         # 主动断开、attempt 2 落到新连接。锁用于避免两个并发连接抢到同一编号。
@@ -2101,7 +2103,27 @@ class Relay:
                 pass
         return None
 
+    def _retain_handler_task(self) -> asyncio.Task | None:
+        """把当前连接的处理任务登记为强引用，任务结束时自动移除。
+
+        asyncio 只以弱引用追踪任务。客户端断开时 ``StreamReaderProtocol.connection_lost``
+        会清掉协议对处理任务的唯一强引用，而 ``open_connection`` 建出的上游 StreamReader
+        也只被其协议弱引用；此时本任务若仍在等上游（保活连接迟迟不回 EOF），整组对象
+        就成为不可达引用环，会被循环 GC 当垃圾销毁。销毁发生在 GC 被触发的那一刻：协程
+        在别的任务里被关闭并执行 finally，其中 ``asyncio.wait_for`` 取到的 current_task
+        恰是正在运行的另一条连接，0.5 秒后把那条无辜连接取消。2026-09-26 0.157.0 VC-1
+        的 official file create 就这样在上游响应前被静默关闭（三次尝试都在 settings 连接
+        收尾后恰好 0.5 秒断开），0.156.1 同作业的 WS 连接也曾因此被切断一次。
+        """
+
+        task = asyncio.current_task()
+        if task is not None:
+            self._handler_tasks.add(task)
+            task.add_done_callback(self._handler_tasks.discard)
+        return task
+
     async def handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        self._retain_handler_task()
         self._active_client_writers.add(writer)
         self.conn_seq += 1
         conn_id = self.conn_seq

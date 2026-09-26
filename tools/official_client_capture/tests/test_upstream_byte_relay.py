@@ -185,6 +185,63 @@ class UpstreamByteRelayFileC2paTest(unittest.TestCase):
         self.assertIn("Codex >=0.151.0", result.stderr)
 
 
+class UpstreamByteRelayHandlerTaskRetentionTest(unittest.TestCase):
+    """客户端断开后仍在等上游的处理任务不得被循环 GC 销毁（2026-09-26 VC-1 file create 事故）。"""
+
+    @staticmethod
+    async def _block_on_self_referenced_future() -> None:
+        # 只被本协程栈帧与任务等待槽引用的 future：模拟上游 StreamReader 只被其协议弱引用、
+        # 客户端断开后协议又清掉了任务引用的情形——整组对象成为不可达引用环。
+        await asyncio.get_running_loop().create_future()
+
+    def _collect_pending_handler(self, *, retain: bool) -> tuple[bool, list[str]]:
+        import gc
+        import weakref
+
+        relay = object.__new__(Relay)
+        relay._handler_tasks = set()
+        destroyed_messages: list[str] = []
+
+        async def handler() -> None:
+            if retain:
+                relay._retain_handler_task()
+            await self._block_on_self_referenced_future()
+
+        async def exercise() -> bool:
+            loop = asyncio.get_running_loop()
+            loop.set_exception_handler(
+                lambda _loop, context: destroyed_messages.append(str(context.get("message")))
+            )
+            task = asyncio.ensure_future(handler())
+            await asyncio.sleep(0)
+            task_ref = weakref.ref(task)
+            del task
+            gc.collect()
+            alive = task_ref() is not None and not task_ref().done()
+            survivor = task_ref()
+            if survivor is not None:
+                survivor.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await survivor
+                await asyncio.sleep(0)
+                self.assertNotIn(survivor, relay._handler_tasks)
+            return alive
+
+        return asyncio.run(exercise()), destroyed_messages
+
+    def test_retained_handler_task_survives_gc_and_is_released_when_done(self) -> None:
+        alive, destroyed = self._collect_pending_handler(retain=True)
+        self.assertTrue(alive)
+        self.assertEqual(destroyed, [])
+
+    def test_unretained_pending_task_is_destroyed_by_gc(self) -> None:
+        """对照：不持有强引用时，同样的挂起任务会被 GC 当垃圾销毁（即事故形态）。"""
+
+        alive, destroyed = self._collect_pending_handler(retain=False)
+        self.assertFalse(alive)
+        self.assertTrue(any("Task was destroyed but it is pending" in item for item in destroyed))
+
+
 class UpstreamByteRelayWebSocketTest(unittest.TestCase):
     def test_preconnect_uses_the_same_default_upstream_ip_as_client_route(self) -> None:
         """Cloudflare 轮询 DNS 不得让预连接与客户端连接选中不同 IP。"""
