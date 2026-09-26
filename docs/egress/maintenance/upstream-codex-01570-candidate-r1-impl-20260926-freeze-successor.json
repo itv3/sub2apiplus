@@ -1,0 +1,394 @@
+{
+  "base_commit": "5433d845234e842721b48ee7a5962313708ee940",
+  "changed_path_count": 40,
+  "current_commit": "05e931200dcd250a61a3af1192760698c3251cfb",
+  "deleted_frozen_paths": [],
+  "extra_worktree_paths": [],
+  "frozen_edge_count": 4231,
+  "frozen_path_count": 1399,
+  "identity_sha256": "a816f7a64f25dbb5066cd1ddc7decf38c81fbc4217c32bad7d279a41e3913a53",
+  "issued_at_utc": "2026-09-26T03:18:00Z",
+  "mode": "commit",
+  "required_manual_actions": [
+    {
+      "action_kind": "manual_required",
+      "file": "tools/official_client_capture/candidate_test_fact_map_0_151_0.json",
+      "instruction": "工具不得自动登记；这些路径变化会改变 Campaign 工具身份，须老板确认后按官方客户端升级流程处理 fact map 与 trace 的快照。",
+      "path": "backend/internal/service/official_egress_codex_0145_profile.go",
+      "rule_id": "codex-0151-campaign-fact-map",
+      "verification": [
+        "python3 -m unittest tools.official_client_capture.tests.test_candidate_test_trace"
+      ]
+    },
+    {
+      "action_kind": "manual_required",
+      "file": "tools/official_client_capture/candidate_test_fact_map_0_151_0.json",
+      "instruction": "工具不得自动登记；这些路径变化会改变 Campaign 工具身份，须老板确认后按官方客户端升级流程处理 fact map 与 trace 的快照。",
+      "path": "backend/internal/service/official_egress_codex_integration.go",
+      "rule_id": "codex-0151-campaign-fact-map",
+      "verification": [
+        "python3 -m unittest tools.official_client_capture.tests.test_candidate_test_trace"
+      ]
+    },
+    {
+      "action_kind": "manual_required",
+      "file": "tools/official_client_capture/candidate_test_fact_map_0_151_0.json",
+      "instruction": "工具不得自动登记；这些路径变化会改变 Campaign 工具身份，须老板确认后按官方客户端升级流程处理 fact map 与 trace 的快照。",
+      "path": "backend/internal/service/official_egress_integration.go",
+      "rule_id": "codex-0151-campaign-fact-map",
+      "verification": [
+        "python3 -m unittest tools.official_client_capture.tests.test_candidate_test_trace"
+      ]
+    },
+    {
+      "action_kind": "manual_required",
+      "file": "tools/official_client_capture/candidate_test_fact_map_0_151_0.json",
+      "instruction": "工具不得自动登记；这些路径变化会改变 Campaign 工具身份，须老板确认后按官方客户端升级流程处理 fact map 与 trace 的快照。",
+      "path": "backend/internal/service/official_egress_openai_http.go",
+      "rule_id": "codex-0151-campaign-fact-map",
+      "verification": [
+        "python3 -m unittest tools.official_client_capture.tests.test_candidate_test_trace"
+      ]
+    },
+    {
+      "action_kind": "manual_required",
+      "file": "tools/official_client_capture/candidate_test_fact_map_0_151_0.json",
+      "instruction": "工具不得自动登记；这些路径变化会改变 Campaign 工具身份，须老板确认后按官方客户端升级流程处理 fact map 与 trace 的快照。",
+      "path": "backend/internal/service/official_egress_openai_ws.go",
+      "rule_id": "codex-0151-campaign-fact-map",
+      "verification": [
+        "python3 -m unittest tools.official_client_capture.tests.test_candidate_test_trace"
+      ]
+    },
+    {
+      "action_kind": "manual_required",
+      "file": "tools/official_client_capture/candidate_test_fact_map_0_151_0.json",
+      "instruction": "工具不得自动登记；这些路径变化会改变 Campaign 工具身份，须老板确认后按官方客户端升级流程处理 fact map 与 trace 的快照。",
+      "path": "backend/internal/service/openai_gateway_forward.go",
+      "rule_id": "codex-0151-campaign-fact-map",
+      "verification": [
+        "python3 -m unittest tools.official_client_capture.tests.test_candidate_test_trace"
+      ]
+    },
+    {
+      "action_kind": "manual_required",
+      "file": "tools/official_client_capture/candidate_test_fact_map_0_151_0.json",
+      "instruction": "工具不得自动登记；这些路径变化会改变 Campaign 工具身份，须老板确认后按官方客户端升级流程处理 fact map 与 trace 的快照。",
+      "path": "backend/internal/service/openai_ws_client.go",
+      "rule_id": "codex-0151-campaign-fact-map",
+      "verification": [
+        "python3 -m unittest tools.official_client_capture.tests.test_candidate_test_trace"
+      ]
+    }
+  ],
+  "result": "manual_actions_required",
+  "safety": {
+    "deployment_performed": false,
+    "live_account_used": false,
+    "official_egress_profile_changed": false,
+    "production_config_changed": false,
+    "wire_or_persona_selection_changed": false
+  },
+  "schema_version": "official-egress-upstream-freeze-successor/v1",
+  "scope": "upstream-codex-01570-candidate-r1-impl-20260926-freeze-successor",
+  "transitions": [
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/compiler.go",
+      "predecessor_sha256s": [
+        "4b50d47def1714dd707b799f98404860d95f78eeb6299ba3de5896aedff01572"
+      ],
+      "reason": "Codex 0.157.0 候选 VC-4 实现（guardian 审阅条件、prompt_cache_key 来源、client_metadata 常量、turn metadata、Cookie jar、工作区路由、TLS 签名算法回归、turn-state owner 隔离、WS 重试与续接失效）按画像节驱动，旧画像序列化逐字节不变 path=backend/internal/officialegress/compiler.go",
+      "source_receipts": [
+        "docs/egress/maintenance/ci-repair-source-transition.json",
+        "docs/egress/maintenance/compiler-static-url-closure-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/multi-persona-control-source-transition-v2.json",
+        "docs/egress/maintenance/multi-persona-control-source-transition.json",
+        "docs/egress/maintenance/upstream-codex-0154-candidate-v9-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-minimal-fix-20260918-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "c0d580d901c75568412642ee5cd97671ac871f1379e0a739dd8a29b3ba14d0c7"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/identity.go",
+      "predecessor_sha256s": [
+        "6facb95f888b0315be3c29c1f1585648d02bc31bc1a2235b6245b8f9ddc491a6"
+      ],
+      "reason": "Codex 0.157.0 候选 VC-4 实现（guardian 审阅条件、prompt_cache_key 来源、client_metadata 常量、turn metadata、Cookie jar、工作区路由、TLS 签名算法回归、turn-state owner 隔离、WS 重试与续接失效）按画像节驱动，旧画像序列化逐字节不变 path=backend/internal/officialegress/identity.go",
+      "source_receipts": [
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-minimal-fix-20260918-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "75db434b58a88ef271820ae0fed7e8f469ab13e7c40d3c42bd9baa7b5a744e71"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/officialegress/websocket_session.go",
+      "predecessor_sha256s": [
+        "a8f7c3d317a22159c74f6b1a0acde0f68d86da297c6ec8dd450fbdcdfdc0a792"
+      ],
+      "reason": "Codex 0.157.0 候选 VC-4 实现（guardian 审阅条件、prompt_cache_key 来源、client_metadata 常量、turn metadata、Cookie jar、工作区路由、TLS 签名算法回归、turn-state owner 隔离、WS 重试与续接失效）按画像节驱动，旧画像序列化逐字节不变 path=backend/internal/officialegress/websocket_session.go",
+      "source_receipts": [
+        "docs/egress/maintenance/historical-source-drift-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "30d9dad64954e0bce6d3feae3ff857071ddc46f62696ccfbaafd879caf3f04b5"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/official_egress_codex_0145_profile.go",
+      "predecessor_sha256s": [
+        "5f14e7a4f4b27f9a5d40e68f4f777deb0e7d34e974093daa55a9a392678d34d7"
+      ],
+      "reason": "Codex 0.157.0 候选 VC-4 实现（guardian 审阅条件、prompt_cache_key 来源、client_metadata 常量、turn metadata、Cookie jar、工作区路由、TLS 签名算法回归、turn-state owner 隔离、WS 重试与续接失效）按画像节驱动，旧画像序列化逐字节不变 path=backend/internal/service/official_egress_codex_0145_profile.go",
+      "source_receipts": [
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-minimal-fix-20260918-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "3bded68f52b2a150171b723b833e68fe9934c42cff1b8d08574823125a48502c"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/official_egress_codex_integration.go",
+      "predecessor_sha256s": [
+        "6f91c4e9ff10d267e856a79ba42084aeda13c34752357f7306f767c96b486bb4"
+      ],
+      "reason": "Codex 0.157.0 候选 VC-4 实现（guardian 审阅条件、prompt_cache_key 来源、client_metadata 常量、turn metadata、Cookie jar、工作区路由、TLS 签名算法回归、turn-state owner 隔离、WS 重试与续接失效）按画像节驱动，旧画像序列化逐字节不变 path=backend/internal/service/official_egress_codex_integration.go",
+      "source_receipts": [
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-minimal-fix-20260918-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "fbd3b31152371a1bdf29208ec081df6f0fbea03d5124c7c92ad4cc6c92718491"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/official_egress_identity_authority.go",
+      "predecessor_sha256s": [
+        "e2fed2fa5cdee297b0dab24e2b4d0375828f5f5529509231c23d16b65cf949aa"
+      ],
+      "reason": "Codex 0.157.0 候选 VC-4 实现（guardian 审阅条件、prompt_cache_key 来源、client_metadata 常量、turn metadata、Cookie jar、工作区路由、TLS 签名算法回归、turn-state owner 隔离、WS 重试与续接失效）按画像节驱动，旧画像序列化逐字节不变 path=backend/internal/service/official_egress_identity_authority.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-request-compression-source-transition.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/http-cookie-finalization-source-transition.json",
+        "docs/egress/maintenance/runtime-reliability-repair-source-transition.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-minimal-fix-20260918-freeze-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "528039901cddb1229ace74aca3c48fe129824983000942e6c94d7d3ba5e17979"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/official_egress_integration.go",
+      "predecessor_sha256s": [
+        "6564cec1ac6713c9e48a1fa28d795148943dfdfab82dbfac7c9f32174665e315"
+      ],
+      "reason": "Codex 0.157.0 候选 VC-4 实现（guardian 审阅条件、prompt_cache_key 来源、client_metadata 常量、turn metadata、Cookie jar、工作区路由、TLS 签名算法回归、turn-state owner 隔离、WS 重试与续接失效）按画像节驱动，旧画像序列化逐字节不变 path=backend/internal/service/official_egress_integration.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "9c6b2478dfd5191e5af45ed1f88aaf3e9348b9dd5bb382183f1569869d35a091"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/official_egress_openai_http.go",
+      "predecessor_sha256s": [
+        "38e21b8c9ad427ef24efc61f35950fc9d92e53bb94bc19e01648f9ea3b0cad76"
+      ],
+      "reason": "Codex 0.157.0 候选 VC-4 实现（guardian 审阅条件、prompt_cache_key 来源、client_metadata 常量、turn metadata、Cookie jar、工作区路由、TLS 签名算法回归、turn-state owner 隔离、WS 重试与续接失效）按画像节驱动，旧画像序列化逐字节不变 path=backend/internal/service/official_egress_openai_http.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-formal-recovery-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "f61c6438496f4f020f85b9c8ce73a9886c453f0e31b1be0ed5883bcf4dca6262"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/official_egress_openai_json.go",
+      "predecessor_sha256s": [
+        "095f623ccc2437a955ace9b22d97cdf0ee44e8b9adddaa365ccf2435c7153cf9"
+      ],
+      "reason": "Codex 0.157.0 候选 VC-4 实现（guardian 审阅条件、prompt_cache_key 来源、client_metadata 常量、turn metadata、Cookie jar、工作区路由、TLS 签名算法回归、turn-state owner 隔离、WS 重试与续接失效）按画像节驱动，旧画像序列化逐字节不变 path=backend/internal/service/official_egress_openai_json.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json"
+      ],
+      "status": "M",
+      "to_sha256": "b4af6b39829c3f42398ca863b386230604faf50f891ff5602b9efe409f511c92"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/official_egress_openai_ws.go",
+      "predecessor_sha256s": [
+        "9ab49b7bf5c9311f817435af0fcabfeac76d508abbe38f44c7d1d06f18e0b48d"
+      ],
+      "reason": "Codex 0.157.0 候选 VC-4 实现（guardian 审阅条件、prompt_cache_key 来源、client_metadata 常量、turn metadata、Cookie jar、工作区路由、TLS 签名算法回归、turn-state owner 隔离、WS 重试与续接失效）按画像节驱动，旧画像序列化逐字节不变 path=backend/internal/service/official_egress_openai_ws.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-formal-recovery-source-transition.json",
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/openai-ws-compatibility-guard-repair-source-transition.json",
+        "docs/egress/maintenance/openai-ws-reconnect-repair-source-transition.json",
+        "docs/egress/maintenance/runtime-reliability-repair-source-transition.json",
+        "docs/egress/maintenance/sub2api-runtime-stability-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "23fd82c1b5489ef7bf08a87ccb16e7694c6f350389c5681379fc2c6f89e87b47"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_gateway_forward.go",
+      "predecessor_sha256s": [
+        "8c684c60bc4c8240a610c9be283aaf737d67b40b4de16df864e81be953d12fb0"
+      ],
+      "reason": "Codex 0.157.0 候选 VC-4 实现（guardian 审阅条件、prompt_cache_key 来源、client_metadata 常量、turn metadata、Cookie jar、工作区路由、TLS 签名算法回归、turn-state owner 隔离、WS 重试与续接失效）按画像节驱动，旧画像序列化逐字节不变 path=backend/internal/service/openai_gateway_forward.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/openai-replay-oom-repair-source-transition.json",
+        "docs/egress/maintenance/openai-ws-reconnect-repair-source-transition.json",
+        "docs/egress/maintenance/upstream-capability-pin-freeze-successor.json",
+        "docs/egress/maintenance/upstream-codex-0154-vc5-minimal-fix-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "8db82b98b9b28146e407095f04fbb75da187a8126a4f6f147c9751af8f3e30f3"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_quota_service.go",
+      "predecessor_sha256s": [
+        "d3294a32c614ad69a372e14125c395324786f04889846fc3417c35835cb89824"
+      ],
+      "reason": "Codex 0.157.0 候选 VC-4 实现（guardian 审阅条件、prompt_cache_key 来源、client_metadata 常量、turn metadata、Cookie jar、工作区路由、TLS 签名算法回归、turn-state owner 隔离、WS 重试与续接失效）按画像节驱动，旧画像序列化逐字节不变 path=backend/internal/service/openai_quota_service.go",
+      "source_receipts": [
+        "docs/egress/maintenance/upstream-codex-0154-vc5-minimal-fix-20260918-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "0cd0faeebbd60595795d8f696f4a7de1157b55e2c798e3ea3343b79f3f517469"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_ws_forwarder_ingress.go",
+      "predecessor_sha256s": [
+        "f7dde387700f3a9977bcddde5c3c0c26f4580ec5b818768b620d7d93ec02bc2e"
+      ],
+      "reason": "Codex 0.157.0 候选 VC-4 实现（guardian 审阅条件、prompt_cache_key 来源、client_metadata 常量、turn metadata、Cookie jar、工作区路由、TLS 签名算法回归、turn-state owner 隔离、WS 重试与续接失效）按画像节驱动，旧画像序列化逐字节不变 path=backend/internal/service/openai_ws_forwarder_ingress.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/openai-replay-oom-repair-source-transition.json",
+        "docs/egress/maintenance/openai-ws-reconnect-repair-source-transition.json",
+        "docs/egress/maintenance/sub2api-runtime-stability-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "3aa8b4e2237fd47dcef54237c31ff59936ed436203f25408c0d032582b4e218f"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_ws_forwarder_support.go",
+      "predecessor_sha256s": [
+        "3dafae92840174bde098f53c70c431bd605e3dfaf511c849795988b12b2953c6"
+      ],
+      "reason": "Codex 0.157.0 候选 VC-4 实现（guardian 审阅条件、prompt_cache_key 来源、client_metadata 常量、turn metadata、Cookie jar、工作区路由、TLS 签名算法回归、turn-state owner 隔离、WS 重试与续接失效）按画像节驱动，旧画像序列化逐字节不变 path=backend/internal/service/openai_ws_forwarder_support.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/openai-ws-reconnect-repair-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "87715c64c1fc01a1eb78f358da081699c9e597472df25d80f15737f669b58eac"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_ws_forwarder_v2.go",
+      "predecessor_sha256s": [
+        "ae897854099de8ed3e51b07742eee2ebba4da266cc0efc567898678250284cc0"
+      ],
+      "reason": "Codex 0.157.0 候选 VC-4 实现（guardian 审阅条件、prompt_cache_key 来源、client_metadata 常量、turn metadata、Cookie jar、工作区路由、TLS 签名算法回归、turn-state owner 隔离、WS 重试与续接失效）按画像节驱动，旧画像序列化逐字节不变 path=backend/internal/service/openai_ws_forwarder_v2.go",
+      "source_receipts": [
+        "docs/egress/maintenance/codex-cli-0151-worktree-successor.json",
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/openai-ws-empty-terminal-output-repair-source-transition.json",
+        "docs/egress/maintenance/openai-ws-reconnect-repair-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.180-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.4-freeze-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.4-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "9985ed014948d60db75ebdaa3c6ab34c6b683e12d0bbd99b5a045c37c4b540a9"
+    },
+    {
+      "old_path": "",
+      "path": "backend/internal/service/openai_ws_pool.go",
+      "predecessor_sha256s": [
+        "183ce9acad08382551de8301580513f0bcba2fa7e685fa4715444c86f08f69bc"
+      ],
+      "reason": "Codex 0.157.0 候选 VC-4 实现（guardian 审阅条件、prompt_cache_key 来源、client_metadata 常量、turn metadata、Cookie jar、工作区路由、TLS 签名算法回归、turn-state owner 隔离、WS 重试与续接失效）按画像节驱动，旧画像序列化逐字节不变 path=backend/internal/service/openai_ws_pool.go",
+      "source_receipts": [
+        "docs/egress/maintenance/historical-source-drift-successor.json",
+        "docs/egress/maintenance/openai-ws-reconnect-repair-source-transition.json",
+        "docs/egress/maintenance/sub2api-runtime-stability-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v2-source-transition.json",
+        "docs/egress/maintenance/upstream-merge-framework-v3-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.177-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+        "docs/egress/maintenance/upstream-v0.2.3-framework-v3-successor.json",
+        "docs/egress/maintenance/upstream-v0.2.3-source-transition.json"
+      ],
+      "status": "M",
+      "to_sha256": "f36da589de20d93f6d15f804ef3fd8e7be0e88ef174324badde16d6e23e1e691"
+    }
+  ],
+  "unregistered_path_count": 24,
+  "unregistered_paths": [
+    "backend/internal/officialegress/codex_client_metadata_constants_test.go",
+    "backend/internal/officialegress/codex_guardian_conditions_test.go",
+    "backend/internal/officialegress/codex_prompt_cache_key_source_test.go",
+    "backend/internal/officialegress/codex_synthetic_profile_helpers_test.go",
+    "backend/internal/officialegress/codex_transport_signature_algorithms_test.go",
+    "backend/internal/pkg/tlsfingerprint/signature_algorithms_profile_test.go",
+    "backend/internal/service/official_egress_codex_guardian_runtime_test.go",
+    "backend/internal/service/official_egress_codex_profile_optional.go",
+    "backend/internal/service/official_egress_codex_prompt_cache_key_test.go",
+    "backend/internal/service/official_egress_codex_synthetic_profile_test.go",
+    "backend/internal/service/official_egress_openai_turn_metadata_section.go",
+    "backend/internal/service/official_egress_openai_turn_metadata_section_test.go",
+    "backend/internal/service/official_egress_transport_signature_algorithms_test.go",
+    "backend/internal/service/openai_codex_turn_state_owner.go",
+    "backend/internal/service/openai_codex_turn_state_owner_test.go",
+    "backend/internal/service/openai_cookie_jar.go",
+    "backend/internal/service/openai_cookie_jar_profile_test.go",
+    "backend/internal/service/openai_workspace_routing.go",
+    "backend/internal/service/openai_workspace_routing_test.go",
+    "backend/internal/service/openai_ws_client.go",
+    "backend/internal/service/openai_ws_continuation_reset.go",
+    "backend/internal/service/openai_ws_continuation_reset_test.go",
+    "backend/internal/service/openai_ws_retry_policy.go",
+    "backend/internal/service/openai_ws_retry_policy_test.go"
+  ],
+  "verification": [
+    "go test ./internal/officialegress -run 'Frozen|Transition|Successor|Drift|Retirement' -count=1",
+    "go test ./internal/service -run 'Frozen|Transition|Successor|Drift' -count=1",
+    "make check-egress-spec-ci",
+    "python3 -m unittest tools.official_client_capture.tests.test_candidate_test_trace"
+  ]
+}
