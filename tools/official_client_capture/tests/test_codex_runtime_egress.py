@@ -1135,5 +1135,55 @@ class EgressInstallTests(unittest.TestCase):
 
 
 
+class CaptureScriptControlledMaintenanceTests(unittest.TestCase):
+    """采集脚本对受保护网关的重启必须经 egress-transition 受控维护入口。
+
+    2026-09-26 c01570 r2 VC-5 批次 13：run_sub2api_direct_matrix.sh 以裸 docker restart 重启候选网关，
+    重启窗口内网关出口准入掉到未就绪，父监督器判指定出口异常、暂停并终止作业，attempt 判环境污染、
+    Campaign 终态。R15 已改造 core／mitm／aux，漏了直连矩阵与 h1／images 两个 wire 探针。
+    """
+
+    TRANSITION = 'codex_upgrade_supervisor.py" egress-transition --container "$service_container"'
+
+    def logical_lines(self, source: str) -> list[str]:
+        lines, current = [], ""
+        for raw in source.splitlines():
+            if raw.endswith("\\"):
+                current += raw[:-1] + " "
+                continue
+            lines.append(current + raw)
+            current = ""
+        if current:
+            lines.append(current)
+        return lines
+
+    def test_every_service_restart_goes_through_egress_transition(self):
+        root = Path(__file__).parents[1]
+        scripts = sorted([*root.glob("*.sh"), *root.glob("runtime_scripts/*.sh")])
+        checked = 0
+        for script in scripts:
+            for line in self.logical_lines(script.read_text(encoding="utf-8")):
+                if 'docker restart "$service_container"' not in line:
+                    continue
+                checked += 1
+                with self.subTest(script=script.name, line=line.strip()[:120]):
+                    self.assertIn(self.TRANSITION, line)
+                    self.assertIn('-- docker restart "$service_container"', line)
+        # 直连矩阵、h1／images 探针、core／mitm／aux 都会重启网关；计数下限防止扫描静默落空。
+        self.assertGreaterEqual(checked, 8)
+
+    def test_cleanup_restarts_use_cleanup_mode(self):
+        root = Path(__file__).parents[1]
+        for name in ("run_h1_wire_probe.sh", "run_images_wire_probe.sh"):
+            with self.subTest(script=name):
+                lines = self.logical_lines((root / name).read_text(encoding="utf-8"))
+                cleanup = [line for line in lines if 'docker restart "$service_container" >/dev/null 2>&1 || true' in line]
+                self.assertEqual(len(cleanup), 1)
+                self.assertIn("--cleanup", cleanup[0])
+        source = (root / "run_sub2api_direct_matrix.sh").read_text(encoding="utf-8")
+        self.assertIn("  restart_service cleanup || restore_failed=1\n", source)
+        self.assertIn("[[ ${1:-} != cleanup ]] || maintenance_args+=(--cleanup)", source)
+
+
 if __name__ == "__main__":
     unittest.main()
