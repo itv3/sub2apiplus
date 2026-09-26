@@ -1069,7 +1069,10 @@ class CandidateRevisionUnitTests(_ChainMixin, unittest.TestCase):
                 manifest_3 = codex_upgrade._vc_run_manifest_from_batch(batch3, batch_model="staging")
                 timing_ledger.append_event(ledger3, event_id="s5", phase="VC-5", event_type="stage_started", next_action="x")
                 real_head = project_ledger.replay_head
-                with mock.patch.object(project_ledger, "replay_head", side_effect=lambda r: dict(real_head(r), root_causes_at_limit=["rc-x"])):
+                # 根因上限按目标版本取：全局、共同底数与各版本桶一起注入到上限。
+                with mock.patch.object(project_ledger, "replay_head", side_effect=lambda r: dict(
+                        real_head(r), root_causes_at_limit=["rc-x"], root_causes_at_limit_base=["rc-x"],
+                        root_causes_at_limit_by_version={v: ["rc-x"] for v in real_head(r).get("root_causes_at_limit_by_version", {})})):
                     stopped = supervisor._close_failed_campaign_timing_ledger(campaign3, manifest_3, failed_action_id="seal", failure_class="execution-failure")
                 self.assertEqual(stopped["ledger_status"], "stopped")
             # 分支 3：其余 → stage_abandoned + candidate_review_required，幂等。

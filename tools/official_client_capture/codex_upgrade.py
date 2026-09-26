@@ -32928,7 +32928,10 @@ def _project_ledger_status(campaign_dir: Path, campaign_id: str) -> dict[str, An
         "absolute_deadline_utc": plan["absolute_deadline_utc"],
         "live_request_budget": head["live_request_budget"],
         "remaining_live_requests": head["remaining_live_requests"],
-        "root_causes_at_limit": head["root_causes_at_limit"],
+        # 与门禁同口径：按本 Campaign 注册的目标版本取（共同底数 + 该版本入账）。
+        "root_causes_at_limit": codex_upgrade_project_ledger.root_causes_at_limit_for(
+            head, codex_upgrade_project_ledger.campaign_target_version(head, campaign_id)
+        ),
         "campaign_registered": campaign_id in head["registered_campaigns"],
         "campaign_rejected": head["rejected_campaigns"].get(campaign_id),
         "campaign_terminal": head["terminal_campaigns"].get(campaign_id),

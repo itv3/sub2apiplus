@@ -903,17 +903,18 @@ def _decide(
     evaluated_root_causes = list(
         dict.fromkeys(root_cause_ids or [root_cause_id])
     )
+    # 根因上限与计数按本 Campaign 的目标版本取：旧版本项目的同步骤记录不再累计进来。
+    target_version = ledger.get("target_version")
     at_limit = sorted(
         set(evaluated_root_causes)
-        & set(head.get("root_causes_at_limit", []))
+        & set(project_ledger.root_causes_at_limit_for(head, target_version))
     )
     if at_limit:
         stop("root_cause_limit", f"根因 {at_limit} 累计失败已达上限")
     decision = DECISION_STOP if terminal_reason is not None else DECISION_PAUSED if deadline_paused else DECISION_RECOVERABLE
+    scoped_counts = project_ledger.root_cause_counts_for(head, target_version)
     root_cause_counts = {
-        cause_id: int(
-            dict(head.get("root_cause_counts", {})).get(cause_id, 0)
-        )
+        cause_id: int(scoped_counts.get(cause_id, 0))
         for cause_id in evaluated_root_causes
     }
     return {

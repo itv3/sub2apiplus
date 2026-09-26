@@ -9541,7 +9541,8 @@ def _candidate_failure_hits_permanent_condition(
     remaining = head.get("remaining_live_requests")
     if remaining is not None and int(remaining) <= 0:
         return True
-    if head.get("root_causes_at_limit"):
+    # 只看本 Campaign 目标版本的根因上限，其他版本项目的记录不再牵连。
+    if project_ledger.root_causes_at_limit_for(head, ledger_summary.get("target_version")):
         return True
     return False
 

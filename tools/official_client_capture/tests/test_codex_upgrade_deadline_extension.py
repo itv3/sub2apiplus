@@ -294,7 +294,10 @@ class DeadlineExtensionTests(unittest.TestCase):
         project.assert_campaign_admitted(self.campaign,command='campaign-run',require=True,now=self.moment(24))
         head=project.replay_head(self.project)
         plan,_=project._load_plan(self.project)
-        for changed in ({'blocked':True},{'remaining_live_requests':0},{'root_causes_at_limit':['fixture']}):
+        # 根因上限按目标版本取：注入时全局、共同底数与各版本桶一起到上限，保持"任一消费者都停线"的原意。
+        limit_everywhere={'root_causes_at_limit':['fixture'],'root_causes_at_limit_base':['fixture'],
+                          'root_causes_at_limit_by_version':{v:['fixture'] for v in head.get('root_causes_at_limit_by_version',{})}}
+        for changed in ({'blocked':True},{'remaining_live_requests':0},limit_everywhere):
             decision=reconciler._decide(head={**head,**changed},plan=plan,ledger=summary,identity={'unchanged':True},
                 environment_status='restored',campaign_deadline_at_utc=deadlines['total_deadline_at_utc'],
                 root_cause_id='fixture',request_status='resolved',now=self.at(24))

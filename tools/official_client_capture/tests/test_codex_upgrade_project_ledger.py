@@ -29,14 +29,14 @@ def _write_json(path: Path, value: object) -> None:
     path.chmod(0o600)
 
 
-def _campaign(root: Path, campaign_id: str, *, staging: bool = False) -> Path:
+def _campaign(root: Path, campaign_id: str, *, staging: bool = False, target_version: str = "0.154.0") -> Path:
     base = root / "staging" / "fixtures" if staging else root / "evidence" / "campaigns"
     campaign_dir = base / campaign_id
     campaign_dir.mkdir(parents=True, mode=0o700)
     for parent in (root / "staging", root / "staging" / "fixtures", root / "evidence", root / "evidence" / "campaigns"):
         if parent.exists():
             parent.chmod(0o700)
-    _write_json(campaign_dir / "campaign.json", {"campaign_id": campaign_id, "campaign_mode": "formal", "target_version": "0.154.0"})
+    _write_json(campaign_dir / "campaign.json", {"campaign_id": campaign_id, "campaign_mode": "formal", "target_version": target_version})
     return campaign_dir
 
 
@@ -57,10 +57,10 @@ def _create(root: Path, **overrides: object) -> Path:
     return ledger_root
 
 
-def _register(root: Path, campaign_dir: Path, campaign_id: str, *, mode: str = "formal", deadline: str | None = None, now: datetime | None = None) -> dict:
-    with ledger.admission_scope(campaign_dir, campaign_id=campaign_id, campaign_mode=mode, target_version="0.154.0", require=True, now=now) as admission:
+def _register(root: Path, campaign_dir: Path, campaign_id: str, *, mode: str = "formal", deadline: str | None = None, now: datetime | None = None, target_version: str = "0.154.0") -> dict:
+    with ledger.admission_scope(campaign_dir, campaign_id=campaign_id, campaign_mode=mode, target_version=target_version, require=True, now=now) as admission:
         assert admission is not None
-        return admission.register(campaign_dir, campaign_id=campaign_id, campaign_mode=mode, target_version="0.154.0", deadline_at_utc=deadline)
+        return admission.register(campaign_dir, campaign_id=campaign_id, campaign_mode=mode, target_version=target_version, deadline_at_utc=deadline)
 
 
 def _reconciliation(campaign_dir: Path, *, operation_id: str, keys: list[str], status: str = "resolved", root_cause_id: str | None = None, estimated: int = 0) -> None:
@@ -526,6 +526,120 @@ class ProjectLedgerTests(unittest.TestCase):
             report = ledger.reconcile_project_ledger(ledger_root)
             self.assertEqual([r["status"] for r in report["results"] if r["kind"] == "repairs"], ["appended"])
             self.assertEqual(ledger.replay_head(ledger_root)["root_cause_counts"]["rc1-a"], 0)
+
+    def test_root_cause_limit_is_scoped_by_target_version(self) -> None:
+        """2026-09-26 170805z：0.154 项目在同一步骤留下的一次记录，让 0.157 一次失败就永久停线。
+        计数按 Campaign 注册的目标版本分桶：旧版本到上限不挡新版本，同版本仍挡；修复清零所有版本桶。"""
+
+        repair_bindings = {"fix_commit_sha": "1" * 40, "regression_receipt_sha256": "2" * 64, "deployment_receipt_sha256": "3" * 64}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            ledger_root = _create(root)
+            old = _campaign(root, "c-old")
+            _register(root, old, "c-old")
+            _reconciliation(old, operation_id="rec-1", keys=["k1"], root_cause_id="rc1-a")
+            _reconciliation(old, operation_id="rec-2", keys=["k2"], root_cause_id="rc1-a")
+            ledger.reconcile_project_ledger(ledger_root, campaign_dir=old)
+            new = _campaign(root, "c-new", target_version="0.157.0")
+            # 注册门禁本身按新版本判定：旧版本同根因到上限不挡新版本注册。
+            _register(root, new, "c-new", target_version="0.157.0")
+            head = ledger.replay_head(ledger_root)
+            self.assertEqual(head["root_causes_at_limit"], ["rc1-a"])  # 全局展示口径不变
+            self.assertEqual(head["root_causes_at_limit_by_version"], {"0.154.0": ["rc1-a"], "0.157.0": []})
+            self.assertEqual(head["root_cause_counts_by_version"], {"0.154.0": {"rc1-a": 2}})
+            self.assertEqual(ledger.root_causes_at_limit_for(head, "0.157.0"), [])
+            self.assertEqual(ledger.root_cause_counts_for(head, "0.157.0"), {})
+            self.assertIsNotNone(ledger.assert_campaign_admitted(new, command="resume", require=True))
+            with self.assertRaisesRegex(ledger.ProjectLedgerError, "根因达上限"):
+                ledger.assert_campaign_admitted(old, command="resume", require=True)
+            # 新版本同根因第一次失败只计 1、不到上限。
+            _reconciliation(new, operation_id="rec-3", keys=["k3"], root_cause_id="rc1-a")
+            ledger.reconcile_project_ledger(ledger_root, campaign_dir=new)
+            head = ledger.replay_head(ledger_root)
+            self.assertEqual(ledger.root_cause_counts_for(head, "0.157.0"), {"rc1-a": 1})
+            self.assertEqual(ledger.root_causes_at_limit_for(head, "0.157.0"), [])
+            self.assertEqual(ledger.root_causes_at_limit_for(head, "0.154.0"), ["rc1-a"])
+            # 新版本同根因第二次失败即到上限，只挡新版本自己。
+            _reconciliation(new, operation_id="rec-4", keys=["k4"], root_cause_id="rc1-a")
+            ledger.reconcile_project_ledger(ledger_root, campaign_dir=new)
+            head = ledger.replay_head(ledger_root)
+            self.assertEqual(ledger.root_causes_at_limit_for(head, "0.157.0"), ["rc1-a"])
+            with self.assertRaisesRegex(ledger.ProjectLedgerError, "根因达上限"):
+                ledger.assert_campaign_admitted(new, command="resume", require=True)
+            # 修复（不限版本）清零全部版本桶。
+            ledger.record_root_cause_repair(ledger_root, root_cause_id="rc1-a", kind="code", bindings=repair_bindings)
+            head = ledger.replay_head(ledger_root)
+            self.assertEqual(head["root_causes_at_limit_by_version"], {"0.154.0": [], "0.157.0": []})
+            self.assertEqual(head["root_cause_counts_by_version"], {})
+            self.assertIsNotNone(ledger.assert_campaign_admitted(new, command="resume", require=True))
+            self.assertIsNotNone(ledger.assert_campaign_admitted(old, command="resume", require=True))
+
+    def test_initial_root_cause_counts_are_a_shared_base_for_every_version(self) -> None:
+        """计划初值没有版本归属，作为所有版本的共同底数（与分桶前的判定一致，不因分桶放宽）。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            ledger_root = _create(root, initial_root_cause_counts={"rc1-base": 1})
+            campaign_dir = _campaign(root, "c-new", target_version="0.157.0")
+            _register(root, campaign_dir, "c-new", target_version="0.157.0")
+            head = ledger.replay_head(ledger_root)
+            self.assertEqual(head["root_cause_counts_base"], {"rc1-base": 1})
+            self.assertEqual(ledger.root_cause_counts_for(head, "0.157.0"), {"rc1-base": 1})
+            _reconciliation(campaign_dir, operation_id="rec-1", keys=["k1"], root_cause_id="rc1-base")
+            ledger.reconcile_project_ledger(ledger_root, campaign_dir=campaign_dir)
+            head = ledger.replay_head(ledger_root)
+            self.assertEqual(ledger.root_cause_counts_for(head, "0.157.0"), {"rc1-base": 2})
+            self.assertEqual(ledger.root_causes_at_limit_for(head, "0.157.0"), ["rc1-base"])
+            # 从未出现过的版本也受共同底数约束。
+            self.assertEqual(ledger.root_cause_counts_for(head, "0.160.0"), {"rc1-base": 1})
+
+    def test_version_scoped_lookup_falls_back_to_global_for_old_heads(self) -> None:
+        """旧格式 head（无按版本字段）或无法确定版本时退回全局口径，保持失败关闭。"""
+
+        old_head = {"root_causes_at_limit": ["rc1-a"], "root_cause_counts": {"rc1-a": 2}}
+        self.assertEqual(ledger.root_causes_at_limit_for(old_head, "0.157.0"), ["rc1-a"])
+        self.assertEqual(ledger.root_cause_counts_for(old_head, "0.157.0"), {"rc1-a": 2})
+        new_head = {
+            "root_causes_at_limit": ["rc1-a"],
+            "root_cause_counts": {"rc1-a": 2},
+            "root_cause_counts_base": {},
+            "root_cause_counts_by_version": {"0.154.0": {"rc1-a": 2}},
+            "root_causes_at_limit_base": [],
+            "root_causes_at_limit_by_version": {"0.154.0": ["rc1-a"]},
+        }
+        self.assertEqual(ledger.root_causes_at_limit_for(new_head, None), ["rc1-a"])
+        self.assertEqual(ledger.root_causes_at_limit_for(new_head, ""), ["rc1-a"])
+        self.assertEqual(ledger.root_causes_at_limit_for(new_head, "0.157.0"), [])
+        self.assertEqual(ledger.root_causes_at_limit_for(new_head, "0.154.0"), ["rc1-a"])
+
+    def test_reconcile_decision_only_stops_on_the_campaign_target_version_limit(self) -> None:
+        """对账判定按本 Campaign 的目标版本取根因上限与计数：旧版本到上限不让新版本永久停线。"""
+
+        from tools.official_client_capture import codex_upgrade_reconciler as reconciler
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            ledger_root = _create(root)
+            old = _campaign(root, "c-old")
+            _register(root, old, "c-old")
+            _reconciliation(old, operation_id="rec-1", keys=["k1"], root_cause_id="rc1-a")
+            _reconciliation(old, operation_id="rec-2", keys=["k2"], root_cause_id="rc1-a")
+            ledger.reconcile_project_ledger(ledger_root, campaign_dir=old)
+            head = ledger.replay_head(ledger_root)
+            plan, _raw = ledger._load_plan(ledger_root)
+            now = _iso(datetime.now(timezone.utc))
+            decisions = {}
+            for version in ("0.157.0", "0.154.0"):
+                decisions[version] = reconciler._decide(
+                    head=head, plan=plan, ledger={"status": "active", "target_version": version},
+                    identity={"unchanged": True}, environment_status="restored", campaign_deadline_at_utc=None,
+                    root_cause_id="rc1-a", request_status="resolved", now=now,
+                )
+            self.assertEqual(decisions["0.157.0"]["decision"], reconciler.DECISION_RECOVERABLE)
+            self.assertEqual(decisions["0.157.0"]["root_cause_counts"], {"rc1-a": 0})
+            self.assertEqual(decisions["0.154.0"]["decision"], reconciler.DECISION_STOP)
+            self.assertEqual(decisions["0.154.0"]["terminal_reason"], "root_cause_limit")
+            self.assertEqual(decisions["0.154.0"]["root_cause_counts"], {"rc1-a": 2})
 
     def test_multiple_failure_observations_are_deduplicated_and_partial_repair_keeps_uncovered_cause(self) -> None:
         """同 attempt 同检查的 retry 只计一次；repair 只清零收据绑定的根因子集。"""

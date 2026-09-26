@@ -88,9 +88,9 @@
     },
     {
       "path": "driver/guard.sh",
-      "sha256": "c090e0f7795b34d1c9519b7175e783c2a8ca0860c59d234a6a99512ec76e52c7",
+      "sha256": "652c0931e64c393e522714d568b80d6d4716fb44a8a44e20189b265f8be750ed",
       "mode": "0700",
-      "bytes": 5583
+      "bytes": 5969
     },
     {
       "path": "driver/implementation_gates.py",
@@ -303,5 +303,5 @@
       "bytes": 21976
     }
   ],
-  "manifest_sha256": "4fd889041cba8a9b69e97f9a181027f4b4dee187d783493161f15bc631cd12ed"
+  "manifest_sha256": "2ad059da600fb8f73260719de084d5422a26998b507d351d883fb95010d27323"
 }

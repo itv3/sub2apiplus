@@ -907,6 +907,11 @@ def _replay(root: Path, plan: Mapping[str, Any], events: list[dict[str, Any]], *
         "duplicate_identity_keys": [],
         "accounted_estimated_sources": set(),
         "root_cause_counts": dict(plan["initial_root_cause_counts"]),
+        # 按目标版本隔离：计划初值没有版本归属，作为各版本共同底数；对账入账按 Campaign 注册时的
+        # target_version 分桶。旧版本项目的失败不再累计到新版本（2026-09-26 170805z 即因 0.154 的一次
+        # 同步骤记录，本次一次失败就永久停线）。全局 root_cause_counts 保留原口径只作展示与兼容。
+        "root_cause_counts_base": dict(plan["initial_root_cause_counts"]),
+        "root_cause_counts_by_version": {},
         "registered_campaigns": {},
         "rejected_campaigns": {},
         "terminal_campaigns": {},
@@ -963,8 +968,17 @@ def _replay(root: Path, plan: Mapping[str, Any], events: list[dict[str, Any]], *
             observations, cause_ids = _reconciliation_failures(payload, operation_id)
             for observation in observations:
                 state["failure_observations"].append({"operation_id": operation_id, **observation})
+            registered = state["registered_campaigns"].get(payload.get("campaign_id"))
+            target_version = registered.get("target_version") if isinstance(registered, dict) else None
+            # 找不到版本归属的入账（未带 campaign_id 或未注册）按共同底数计，对所有版本生效（保守）。
+            bucket = (
+                state["root_cause_counts_by_version"].setdefault(target_version, {})
+                if isinstance(target_version, str) and target_version
+                else state["root_cause_counts_base"]
+            )
             for rc in cause_ids:
                 state["root_cause_counts"][rc] = state["root_cause_counts"].get(rc, 0) + 1
+                bucket[rc] = bucket.get(rc, 0) + 1
         elif event_type == "accounting_resolved":
             resolved = payload.get("resolved_operation_id")
             if resolved not in state["unresolved_operation_ids"]:
@@ -977,6 +991,9 @@ def _replay(root: Path, plan: Mapping[str, Any], events: list[dict[str, Any]], *
         elif event_type == "root_cause_repaired":
             for rc in _repair_root_cause_ids(payload, "root_cause_repaired"):
                 state["root_cause_counts"][rc] = 0
+                state["root_cause_counts_base"][rc] = 0
+                for version_counts in state["root_cause_counts_by_version"].values():
+                    version_counts[rc] = 0
                 state["repaired_root_causes"].append({"root_cause_id": rc, "operation_id": operation_id})
         elif event_type == "candidate_probe_accounted":
             request = payload.get("request")
@@ -1065,14 +1082,39 @@ def _replay(root: Path, plan: Mapping[str, Any], events: list[dict[str, Any]], *
                 raise ProjectLedgerError("延期提交证明必须承接总账中已登记且尚未证明的延期收据")
             state["committed_deadline_extensions"][receipt] = dict(campaign_event)
     _codes_sha256, _algorithm, mapping = _effective_codes_identity(plan, _code_migrations(root))
-    if mapping:
+    def _migrate(counts: Mapping[str, int]) -> dict[str, int]:
         migrated: dict[str, int] = {}
-        for rc, count in state["root_cause_counts"].items():
+        for rc, count in counts.items():
             target = mapping.get(rc, rc)
             migrated[target] = migrated.get(target, 0) + count
-        state["root_cause_counts"] = migrated
+        return migrated
+
+    if mapping:
+        state["root_cause_counts"] = _migrate(state["root_cause_counts"])
+        state["root_cause_counts_base"] = _migrate(state["root_cause_counts_base"])
+        state["root_cause_counts_by_version"] = {
+            version: _migrate(counts) for version, counts in state["root_cause_counts_by_version"].items()
+        }
     head_sha256 = events[-1]["event_sha256"] if events else plan["plan_sha256"]
     limit = int(plan["same_root_cause_retry_limit"])
+    base_counts = {rc: n for rc, n in state["root_cause_counts_base"].items() if n}
+    version_counts = {
+        version: {rc: n for rc, n in counts.items() if n}
+        for version, counts in state["root_cause_counts_by_version"].items()
+    }
+    known_versions = set(version_counts) | {
+        item["target_version"]
+        for item in state["registered_campaigns"].values()
+        if isinstance(item.get("target_version"), str) and item["target_version"]
+    }
+    at_limit_by_version = {
+        version: sorted(
+            rc
+            for rc in set(base_counts) | set(version_counts.get(version, {}))
+            if base_counts.get(rc, 0) + version_counts.get(version, {}).get(rc, 0) >= limit
+        )
+        for version in sorted(known_versions)
+    }
     budget = plan["live_request_budget"]
     consumed = state["precise_total"] + state["estimated_total"]
     head = {
@@ -1088,6 +1130,14 @@ def _replay(root: Path, plan: Mapping[str, Any], events: list[dict[str, Any]], *
         "accounted_estimated_sources": sorted(state["accounted_estimated_sources"]),
         "root_cause_counts": dict(sorted(state["root_cause_counts"].items())),
         "root_causes_at_limit": sorted(rc for rc, n in state["root_cause_counts"].items() if n >= limit),
+        # 门禁与停线判定一律按本 Campaign 的目标版本取（root_causes_at_limit_for）；
+        # 某版本的有效计数 = 共同底数 + 该版本入账。
+        "root_cause_counts_base": dict(sorted(base_counts.items())),
+        "root_cause_counts_by_version": {
+            version: dict(sorted(counts.items())) for version, counts in sorted(version_counts.items()) if counts
+        },
+        "root_causes_at_limit_base": sorted(rc for rc, n in base_counts.items() if n >= limit),
+        "root_causes_at_limit_by_version": at_limit_by_version,
         "registered_campaigns": state["registered_campaigns"],
         "rejected_campaigns": state["rejected_campaigns"],
         "terminal_campaigns": state["terminal_campaigns"],
@@ -1525,6 +1575,40 @@ def abandon_campaign(campaign_dir: Path, *, approved_by: str, reason: str,
         return {"status": "abandoned", "terminal_reason": "operator_abandoned", "project_event": result}
 
 
+def campaign_target_version(head: Mapping[str, Any], campaign_id: str) -> str | None:
+    """从总账注册事件取 Campaign 的目标版本；未注册返回 None。"""
+
+    registered = head.get("registered_campaigns", {}).get(campaign_id)
+    version = registered.get("target_version") if isinstance(registered, Mapping) else None
+    return version if isinstance(version, str) and version else None
+
+
+def root_cause_counts_for(head: Mapping[str, Any], target_version: str | None) -> dict[str, int]:
+    """返回对该目标版本生效的根因计数（共同底数 + 该版本入账）；旧格式 head 退回全局计数。"""
+
+    by_version = head.get("root_cause_counts_by_version")
+    if not isinstance(by_version, Mapping) or not isinstance(target_version, str) or not target_version:
+        return {rc: int(n) for rc, n in dict(head.get("root_cause_counts", {})).items()}
+    counts = {rc: int(n) for rc, n in dict(head.get("root_cause_counts_base", {})).items()}
+    for rc, n in dict(by_version.get(target_version, {})).items():
+        counts[rc] = counts.get(rc, 0) + int(n)
+    return counts
+
+
+def root_causes_at_limit_for(head: Mapping[str, Any], target_version: str | None) -> list[str]:
+    """返回对该目标版本生效的达上限根因（共同底数 + 该版本入账）。
+
+    旧格式 head 或无法确定版本时退回全局清单，保持失败关闭。
+    """
+
+    by_version = head.get("root_causes_at_limit_by_version")
+    if not isinstance(by_version, Mapping) or not isinstance(target_version, str) or not target_version:
+        return list(head["root_causes_at_limit"])
+    if target_version in by_version:
+        return list(by_version[target_version])
+    return list(head.get("root_causes_at_limit_base", head["root_causes_at_limit"]))
+
+
 def admission_problems(
     plan: Mapping[str, Any],
     head: Mapping[str, Any],
@@ -1550,8 +1634,9 @@ def admission_problems(
         problems.append("Campaign 预算已暂停，必须批准延期或显式放弃")
     if head["remaining_live_requests"] is not None and head["remaining_live_requests"] <= 0:
         problems.append("项目请求预算已耗尽")
-    if head["root_causes_at_limit"]:
-        problems.append(f"根因已达同根因重试上限：{head['root_causes_at_limit']}")
+    at_limit = root_causes_at_limit_for(head, target_version)
+    if at_limit:
+        problems.append(f"根因已达同根因重试上限：{at_limit}")
     if campaign_id in head["registered_campaigns"] and not allow_registered:
         problems.append(f"Campaign 已注册：{campaign_id}")
     if campaign_id in head["rejected_campaigns"]:
@@ -2142,8 +2227,11 @@ class RuntimeAdmission:
         remaining = current.get("remaining_live_requests")
         if remaining is not None and remaining <= 0:
             raise ProjectLedgerError("probe 已耗尽项目请求预算，拒绝 reservation")
-        if current["root_causes_at_limit"]:
-            raise ProjectLedgerError("probe 入账后存在达到上限的根因，拒绝 reservation")
+        at_limit = root_causes_at_limit_for(
+            current, campaign_target_version(current, str(self.campaign_plan["campaign_id"]))
+        )
+        if at_limit:
+            raise ProjectLedgerError(f"probe 入账后存在达到上限的根因，拒绝 reservation：{at_limit}")
         return dict(current)
 
 
@@ -2171,8 +2259,9 @@ def _runtime_admission_problems(
     remaining = head.get("remaining_live_requests")
     if remaining is not None and remaining <= 0:
         problems.append("项目请求预算为 0")
-    if head["root_causes_at_limit"]:
-        problems.append(f"根因达上限：{head['root_causes_at_limit']}")
+    at_limit = root_causes_at_limit_for(head, campaign_target_version(head, campaign_id))
+    if at_limit:
+        problems.append(f"根因达上限：{at_limit}")
     current = now or datetime.now(timezone.utc)
     project_deadline = _timestamp(
         head.get("effective_absolute_deadline_utc", plan["absolute_deadline_utc"]), "absolute_deadline_utc"
@@ -2308,8 +2397,9 @@ def assert_campaign_admitted(campaign_dir: Path, *, command: str, require: bool,
             problems.append(f"总账 blocked：{head['unresolved_operation_ids']}")
         if head["remaining_live_requests"] is not None and head["remaining_live_requests"] <= 0:
             problems.append("项目请求预算为 0")
-        if head["root_causes_at_limit"]:
-            problems.append(f"根因达上限：{head['root_causes_at_limit']}")
+        at_limit = root_causes_at_limit_for(head, campaign_target_version(head, campaign_id))
+        if at_limit:
+            problems.append(f"根因达上限：{at_limit}")
         problems.extend(_campaign_deadline_problems(campaign_dir, plan, head, now=now))
         current = now or datetime.now(timezone.utc)
         if current >= _timestamp(head.get("effective_absolute_deadline_utc", plan["absolute_deadline_utc"]), "absolute_deadline_utc"):

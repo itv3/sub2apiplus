@@ -40,16 +40,20 @@ if used > 69 or free_gib < 30 or free_gib < need:
 PY
 python3 -m tools.official_client_capture.codex_upgrade_project_ledger status --ledger-dir "$D/evidence/campaigns/upgrade-project-ledger" | python3 -c "
 import sys, json
+from tools.official_client_capture import codex_upgrade_project_ledger as project_ledger
 d = json.loads(sys.stdin.read()); h = d.get('head', d)
 remaining = h.get('remaining_live_requests')
-print('guard/project:', {k: h.get(k) for k in ('sequence', 'blocked', 'root_causes_at_limit', 'remaining_live_requests')})
+# 根因上限按本轮目标版本取（共同底数 + 该版本入账）；变量缺失时退回全局口径，仍失败关闭。
+at_limit = project_ledger.root_causes_at_limit_for(h, sys.argv[1] or None)
+print('guard/project:', {'sequence': h.get('sequence'), 'blocked': h.get('blocked'), 'target_version': sys.argv[1] or None,
+      'root_causes_at_limit': at_limit, 'remaining_live_requests': remaining})
 if h.get('blocked'):
     sys.exit('guard/project: FAIL — 总账 blocked，停止')
-if h.get('root_causes_at_limit'):
-    sys.exit('guard/project: FAIL — 有根因达同根因重试上限，停止')
+if at_limit:
+    sys.exit('guard/project: FAIL — 本版本有根因达同根因重试上限，停止')
 if remaining is not None and (not isinstance(remaining, (int, float)) or isinstance(remaining, bool) or remaining <= 0):
     sys.exit('guard/project: FAIL — 剩余请求预算非空且 ≤0（或非数值），停止')
-"
+" "${TARGET_VERSION:-}"
 if [ "$MODE" = pre-vc4 ] || [ "$MODE" = pre-vc5 ]; then
   python3 - "$CAMPAIGN" "$MODE" <<'PY'
 import sys
